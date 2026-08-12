@@ -4,48 +4,17 @@ package agents
 
 import (
 	"bytes"
+	"os"
+	"testing"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
 )
 
-type DarwinProcSource struct{}
-
-func NewDarwinProcSource() ProcSource {
-	return &DarwinProcSource{}
-}
-
-func (d *DarwinProcSource) List() []ProcInfo {
-	kprocs, err := unix.SysctlKinfoProcSlice("kern.proc.all")
-	if err != nil {
-		return nil
-	}
-
-	res := make([]ProcInfo, 0, len(kprocs))
-	for _, kp := range kprocs {
-		res = append(res, ProcInfo{
-			PID:  kp.Proc.P_pid,
-			PPID: kp.Eproc.Ppid,
-			Exe:  "", // Lazy populated on demand by tagger
-		})
-	}
-	return res
-}
-
-func (d *DarwinProcSource) Info(pid int32) (ProcInfo, bool) {
-	exe := getProcPath(pid)
-	if exe == "" {
-		return ProcInfo{}, false
-	}
-	return ProcInfo{
-		PID: pid,
-		Exe: exe,
-	}, true
-}
-
-func getProcPath(pid int32) string {
+func getProcPathSysctl(pid int32) string {
 	mib := []int32{1 /* CTL_KERN */, 49 /* KERN_PROCARGS2 */, pid}
 	n := uintptr(0)
+	// Get buffer size needed
 	_, _, err := unix.Syscall6(
 		unix.SYS___SYSCTL,
 		uintptr(unsafe.Pointer(&mib[0])),
@@ -71,10 +40,20 @@ func getProcPath(pid int32) string {
 	if err != 0 || n <= 4 {
 		return ""
 	}
+	// KERN_PROCARGS2 returns argc (int32, 4 bytes) followed by null-terminated executable path
 	pathBuf := buf[4:]
 	idx := bytes.IndexByte(pathBuf, 0)
 	if idx > 0 {
 		return string(pathBuf[:idx])
 	}
 	return ""
+}
+
+func TestSysctlProcArgs2(t *testing.T) {
+	pid := int32(os.Getpid())
+	path := getProcPathSysctl(pid)
+	t.Logf("getProcPathSysctl(%d) = %q", pid, path)
+	if path == "" {
+		t.Fatalf("Failed to get path for self PID %d", pid)
+	}
 }

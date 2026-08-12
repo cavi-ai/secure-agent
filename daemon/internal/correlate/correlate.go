@@ -20,6 +20,12 @@ type readMark struct {
 	cat  sensitive.Category
 }
 
+type connMark struct {
+	at   time.Time
+	host string
+	port int
+}
+
 const window = 60 * time.Second
 
 type Correlator struct {
@@ -28,6 +34,7 @@ type Correlator struct {
 	classifier sensitive.Classifier
 	cfg        config.Config
 	marks      map[int32][]readMark
+	conns      map[int32][]connMark
 }
 
 func New(tagger *agents.Tagger, classifier sensitive.Classifier, cfg config.Config) *Correlator {
@@ -36,6 +43,7 @@ func New(tagger *agents.Tagger, classifier sensitive.Classifier, cfg config.Conf
 		classifier: classifier,
 		cfg:        cfg,
 		marks:      make(map[int32][]readMark),
+		conns:      make(map[int32][]connMark),
 	}
 }
 
@@ -48,11 +56,17 @@ func (c *Correlator) Observe(e event.Event) []model.Flag {
 		return nil
 	}
 
+	rootPID := e.PID
+	if len(info.Chain) > 0 {
+		rootPID = info.Chain[len(info.Chain)-1]
+	}
+
 	var flags []model.Flag
 
 	switch e.Kind {
-	case event.KindFileOpen, event.KindFileWrite:
+	case event.KindFileOpen, event.KindFileWrite, event.KindPluginAction:
 		if cat, ok := c.classifier.Classify(e.Path); ok {
+			c.rememberReadLocked(rootPID, readMark{at: e.TS, path: e.Path, cat: cat})
 			if cat == sensitive.CatKeychain {
 				// Rule 2: Keychain access flags immediately
 				flagID := hashFlagID("keychain-access", e.PID, e.TS)
@@ -69,16 +83,38 @@ func (c *Correlator) Observe(e event.Event) []model.Flag {
 					Evidence: evidence,
 				})
 			} else {
-				c.rememberLocked(e.PID, readMark{at: e.TS, path: e.Path, cat: cat})
+				// Check if there's already a recent foreign connection for this agent
+				recentConns := c.recentConnsLocked(rootPID, e.TS, window)
+				if len(recentConns) > 0 {
+					flagID := hashFlagID("sensitive-read-then-connect", e.PID, e.TS)
+					evidence := []string{
+						fmt.Sprintf("%s (pid %d) read %s at %s", info.Name, e.PID, e.Path, e.TS.Format(time.RFC3339)),
+					}
+					for _, cm := range recentConns {
+						evidence = append(evidence, fmt.Sprintf("then connected to %s:%d at %s", cm.host, cm.port, cm.at.Format(time.RFC3339)))
+					}
+					flags = append(flags, model.Flag{
+						ID:       flagID,
+						Rule:     "sensitive-read-then-connect",
+						Severity: 3,
+						TS:       e.TS,
+						PID:      e.PID,
+						Agent:    info.Name,
+						Evidence: evidence,
+					})
+				}
 			}
 		}
 
 	case event.KindConnOpen:
-		recent := c.recentReadsLocked(e.PID, e.TS, window)
-		if len(recent) == 0 {
+		if c.isVendorHost(info.Name, e.RemoteHost) {
 			return nil
 		}
-		if c.isVendorHost(info.Name, e.RemoteHost) {
+
+		c.rememberConnLocked(rootPID, connMark{at: e.TS, host: e.RemoteHost, port: e.RemotePort})
+
+		recent := c.recentReadsLocked(rootPID, e.TS, window)
+		if len(recent) == 0 {
 			return nil
 		}
 
@@ -104,10 +140,16 @@ func (c *Correlator) Observe(e event.Event) []model.Flag {
 	return flags
 }
 
-func (c *Correlator) rememberLocked(pid int32, rm readMark) {
+func (c *Correlator) rememberReadLocked(pid int32, rm readMark) {
 	list := c.marks[pid]
 	list = append(list, rm)
 	c.marks[pid] = list
+}
+
+func (c *Correlator) rememberConnLocked(pid int32, cm connMark) {
+	list := c.conns[pid]
+	list = append(list, cm)
+	c.conns[pid] = list
 }
 
 func (c *Correlator) recentReadsLocked(pid int32, now time.Time, win time.Duration) []readMark {
@@ -119,15 +161,36 @@ func (c *Correlator) recentReadsLocked(pid int32, now time.Time, win time.Durati
 	var valid []readMark
 	var recent []readMark
 	for _, m := range list {
-		if now.Sub(m.at) <= win && !m.at.After(now) {
+		diff := now.Sub(m.at)
+		if diff >= -15*time.Second && diff <= win {
 			valid = append(valid, m)
 			recent = append(recent, m)
-		} else if now.Sub(m.at) <= 10*time.Minute {
-			// keep marks up to 10 minutes to prevent unbounded growth
+		} else if diff <= 10*time.Minute {
 			valid = append(valid, m)
 		}
 	}
 	c.marks[pid] = valid
+	return recent
+}
+
+func (c *Correlator) recentConnsLocked(pid int32, now time.Time, win time.Duration) []connMark {
+	list := c.conns[pid]
+	if len(list) == 0 {
+		return nil
+	}
+
+	var valid []connMark
+	var recent []connMark
+	for _, cm := range list {
+		diff := now.Sub(cm.at)
+		if diff >= -15*time.Second && diff <= win {
+			valid = append(valid, cm)
+			recent = append(recent, cm)
+		} else if diff <= 10*time.Minute {
+			valid = append(valid, cm)
+		}
+	}
+	c.conns[pid] = valid
 	return recent
 }
 

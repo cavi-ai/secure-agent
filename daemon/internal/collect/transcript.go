@@ -28,9 +28,11 @@ func NewTranscriptScanner(b *bus.Bus, paths []string) *TranscriptScanner {
 }
 
 type pluginLogLine struct {
-	Tool string `json:"tool"`
-	PID  int32  `json:"pid"`
-	TS   string `json:"ts"`
+	Tool     string `json:"tool"`
+	PID      int32  `json:"pid"`
+	TS       string `json:"ts"`
+	Command  string `json:"command"`
+	FilePath string `json:"file_path"`
 }
 
 func ScanLine(line string) (event.Event, bool) {
@@ -59,10 +61,15 @@ func ScanLine(line string) (event.Event, bool) {
 					ts = t
 				}
 			}
+			path := pl.FilePath
+			if path == "" {
+				path = pl.Command
+			}
 			return event.Event{
 				Kind:   event.KindPluginAction,
 				TS:     ts,
 				PID:    pl.PID,
+				Path:   path,
 				Detail: pl.Tool,
 			}, true
 		}
