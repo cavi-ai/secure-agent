@@ -15,15 +15,17 @@ import (
 )
 
 type readMark struct {
-	at   time.Time
-	path string
-	cat  sensitive.Category
+	at       time.Time
+	path     string
+	cat      sensitive.Category
+	consumed bool
 }
 
 type connMark struct {
-	at   time.Time
-	host string
-	port int
+	at       time.Time
+	host     string
+	port     int
+	consumed bool
 }
 
 const window = 60 * time.Second
@@ -50,6 +52,8 @@ func New(tagger *agents.Tagger, classifier sensitive.Classifier, cfg config.Conf
 func (c *Correlator) Observe(e event.Event) []model.Flag {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
+	c.evictStaleLocked(e.TS)
 
 	info, isAgent := c.tagger.Tag(e.PID)
 	if !isAgent {
@@ -83,10 +87,10 @@ func (c *Correlator) Observe(e event.Event) []model.Flag {
 					Evidence: evidence,
 				})
 			} else {
-				// Check if there's already a recent foreign connection for this agent
+				// Check if there's already an unconsumed recent foreign connection for this agent
 				recentConns := c.recentConnsLocked(rootPID, e.TS, window)
 				if len(recentConns) > 0 {
-					flagID := hashFlagID("sensitive-read-then-connect", e.PID, e.TS)
+					flagID := hashFlagID("sensitive-read-then-connect", rootPID, recentConns[0].at)
 					evidence := []string{
 						fmt.Sprintf("%s (pid %d) read %s at %s", info.Name, e.PID, e.Path, e.TS.Format(time.RFC3339)),
 					}
@@ -102,6 +106,8 @@ func (c *Correlator) Observe(e event.Event) []model.Flag {
 						Agent:    info.Name,
 						Evidence: evidence,
 					})
+					c.markReadConsumedLocked(rootPID)
+					c.markConnConsumedLocked(rootPID)
 				}
 			}
 		}
@@ -119,7 +125,7 @@ func (c *Correlator) Observe(e event.Event) []model.Flag {
 		}
 
 		// Rule 1: sensitive-read-then-connect
-		flagID := hashFlagID("sensitive-read-then-connect", e.PID, recent[0].at)
+		flagID := hashFlagID("sensitive-read-then-connect", rootPID, recent[0].at)
 		var evidence []string
 		for _, m := range recent {
 			evidence = append(evidence, fmt.Sprintf("%s (pid %d) read %s at %s", info.Name, e.PID, m.path, m.at.Format(time.RFC3339)))
@@ -135,6 +141,8 @@ func (c *Correlator) Observe(e event.Event) []model.Flag {
 			Agent:    info.Name,
 			Evidence: evidence,
 		})
+		c.markReadConsumedLocked(rootPID)
+		c.markConnConsumedLocked(rootPID)
 	}
 
 	return flags
@@ -142,13 +150,35 @@ func (c *Correlator) Observe(e event.Event) []model.Flag {
 
 func (c *Correlator) rememberReadLocked(pid int32, rm readMark) {
 	list := c.marks[pid]
+	if len(list) >= 50 {
+		list = list[1:]
+	}
 	list = append(list, rm)
 	c.marks[pid] = list
 }
 
 func (c *Correlator) rememberConnLocked(pid int32, cm connMark) {
 	list := c.conns[pid]
+	if len(list) >= 50 {
+		list = list[1:]
+	}
 	list = append(list, cm)
+	c.conns[pid] = list
+}
+
+func (c *Correlator) markReadConsumedLocked(pid int32) {
+	list := c.marks[pid]
+	for i := range list {
+		list[i].consumed = true
+	}
+	c.marks[pid] = list
+}
+
+func (c *Correlator) markConnConsumedLocked(pid int32) {
+	list := c.conns[pid]
+	for i := range list {
+		list[i].consumed = true
+	}
 	c.conns[pid] = list
 }
 
@@ -164,7 +194,9 @@ func (c *Correlator) recentReadsLocked(pid int32, now time.Time, win time.Durati
 		diff := now.Sub(m.at)
 		if diff >= -15*time.Second && diff <= win {
 			valid = append(valid, m)
-			recent = append(recent, m)
+			if !m.consumed {
+				recent = append(recent, m)
+			}
 		} else if diff <= 10*time.Minute {
 			valid = append(valid, m)
 		}
@@ -185,13 +217,45 @@ func (c *Correlator) recentConnsLocked(pid int32, now time.Time, win time.Durati
 		diff := now.Sub(cm.at)
 		if diff >= -15*time.Second && diff <= win {
 			valid = append(valid, cm)
-			recent = append(recent, cm)
+			if !cm.consumed {
+				recent = append(recent, cm)
+			}
 		} else if diff <= 10*time.Minute {
 			valid = append(valid, cm)
 		}
 	}
 	c.conns[pid] = valid
 	return recent
+}
+
+func (c *Correlator) evictStaleLocked(now time.Time) {
+	for pid, list := range c.marks {
+		var valid []readMark
+		for _, m := range list {
+			if now.Sub(m.at) <= 10*time.Minute {
+				valid = append(valid, m)
+			}
+		}
+		if len(valid) == 0 {
+			delete(c.marks, pid)
+		} else {
+			c.marks[pid] = valid
+		}
+	}
+
+	for pid, list := range c.conns {
+		var valid []connMark
+		for _, cm := range list {
+			if now.Sub(cm.at) <= 10*time.Minute {
+				valid = append(valid, cm)
+			}
+		}
+		if len(valid) == 0 {
+			delete(c.conns, pid)
+		} else {
+			c.conns[pid] = valid
+		}
+	}
 }
 
 func (c *Correlator) isVendorHost(agentName, host string) bool {

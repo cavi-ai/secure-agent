@@ -64,6 +64,7 @@ type esEnvelope struct {
 			Service string `json:"service"`
 		} `json:"tcc_modify"`
 	} `json:"event"`
+	Time      string `json:"time"`
 	Timestamp string `json:"timestamp"`
 }
 
@@ -83,10 +84,14 @@ func ParseESLine(line []byte) (event.Event, bool) {
 	exe := env.Process.Executable.Path
 
 	ts := time.Now()
-	if env.Timestamp != "" {
-		if t, err := time.Parse(time.RFC3339Nano, env.Timestamp); err == nil {
+	tsStr := env.Time
+	if tsStr == "" {
+		tsStr = env.Timestamp
+	}
+	if tsStr != "" {
+		if t, err := time.Parse(time.RFC3339Nano, tsStr); err == nil {
 			ts = t
-		} else if t, err := time.Parse(time.RFC3339, env.Timestamp); err == nil {
+		} else if t, err := time.Parse(time.RFC3339, tsStr); err == nil {
 			ts = t
 		}
 	}

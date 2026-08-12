@@ -37,9 +37,14 @@ func (d *DarwinProcSource) Info(pid int32) (ProcInfo, bool) {
 	if exe == "" {
 		return ProcInfo{}, false
 	}
+	ppid := int32(0)
+	if kp, err := unix.SysctlKinfoProc("kern.proc.pid", int(pid)); err == nil {
+		ppid = kp.Eproc.Ppid
+	}
 	return ProcInfo{
-		PID: pid,
-		Exe: exe,
+		PID:  pid,
+		PPID: ppid,
+		Exe:  exe,
 	}, true
 }
 

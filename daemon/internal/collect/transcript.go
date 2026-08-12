@@ -2,6 +2,7 @@ package collect
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -99,9 +100,24 @@ func (ts *TranscriptScanner) Run(ctx context.Context) error {
 func (ts *TranscriptScanner) resolvePaths() []string {
 	var res []string
 	for _, p := range ts.paths {
+		fi, err := os.Stat(p)
+		if err == nil && fi.IsDir() {
+			_ = filepath.WalkDir(p, func(path string, d os.DirEntry, err error) error {
+				if err == nil && !d.IsDir() && strings.HasSuffix(path, ".jsonl") {
+					res = append(res, path)
+				}
+				return nil
+			})
+			continue
+		}
 		matches, err := filepath.Glob(p)
 		if err == nil && len(matches) > 0 {
-			res = append(res, matches...)
+			for _, m := range matches {
+				mFi, mErr := os.Stat(m)
+				if mErr == nil && !mFi.IsDir() {
+					res = append(res, m)
+				}
+			}
 		} else {
 			res = append(res, p)
 		}
@@ -133,18 +149,27 @@ func (ts *TranscriptScanner) tailFile(p string, offsets map[string]int64) {
 		return
 	}
 
-	scanner := bufio.NewScanner(f)
-	buf := make([]byte, 64*1024)
-	scanner.Buffer(buf, 64*1024)
+	r := bufio.NewReader(f)
+	newOffset := offset
 
-	var bytesRead int64
-	for scanner.Scan() {
-		line := scanner.Text()
-		bytesRead += int64(len(line)) + 1
-		if e, ok := ScanLine(line); ok {
-			ts.bus.Publish(e)
+	for {
+		lineBytes, err := r.ReadBytes('\n')
+		if len(lineBytes) > 0 {
+			if bytes.HasSuffix(lineBytes, []byte("\n")) {
+				newOffset += int64(len(lineBytes))
+				line := strings.TrimRight(string(lineBytes), "\r\n")
+				if e, ok := ScanLine(line); ok {
+					ts.bus.Publish(e)
+				}
+			} else {
+				// Partial line at EOF; wait for newline in next poll
+				break
+			}
+		}
+		if err != nil {
+			break
 		}
 	}
 
-	offsets[p] = offset + bytesRead
+	offsets[p] = newOffset
 }

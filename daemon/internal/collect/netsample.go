@@ -70,6 +70,23 @@ func (ns *NetSampler) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
+			if !ns.tagger.Any() {
+				if len(prevSnapshot) > 0 {
+					now := time.Now()
+					for k := range prevSnapshot {
+						ns.bus.Publish(event.Event{
+							Kind:       event.KindConnClose,
+							TS:         now,
+							PID:        k.PID,
+							RemoteHost: k.Host,
+							RemotePort: k.Port,
+						})
+					}
+					prevSnapshot = make(map[connKey]struct{})
+				}
+				continue
+			}
+
 			curSnapshot := make(map[connKey]struct{})
 			// Sample active sockets and filter against tagged agent process trees
 			allSocks := ns.lister.SocketsFor(-1)
