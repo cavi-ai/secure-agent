@@ -110,6 +110,7 @@ func main() {
 	home, _ := os.UserHomeDir()
 	tailTargets := []string{
 		filepath.Join(home, ".claude", "logs", "*.jsonl"),
+		filepath.Join(home, ".claude", "projects"),
 		filepath.Join(home, ".cursor", "logs", "*.jsonl"),
 		filepath.Join(home, ".local", "state", "secure-agent", "activity.jsonl"),
 	}
@@ -142,15 +143,5 @@ func main() {
 }
 
 func countActiveAgents(tg *agents.Tagger) int {
-	if !tg.Any() {
-		return 0
-	}
-	// count unique tagged PIDs
-	count := 0
-	for pid := int32(1); pid < 99999; pid++ {
-		if _, ok := tg.Tag(pid); ok {
-			count++
-		}
-	}
-	return count
+	return len(tg.TaggedPIDs())
 }

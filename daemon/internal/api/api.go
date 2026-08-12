@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
+	"golang.org/x/sys/unix"
 )
 
 type Killer interface {
@@ -48,13 +49,15 @@ func (a *API) Serve(ctx context.Context) error {
 		return errors.New("socket path cannot be empty")
 	}
 
-	if err := os.MkdirAll(filepath.Dir(a.socketPath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(a.socketPath), 0o700); err != nil {
 		return fmt.Errorf("failed to create socket dir: %w", err)
 	}
 
 	_ = os.Remove(a.socketPath) // remove stale socket file if present
 
+	oldMask := unix.Umask(0077)
 	listener, err := net.Listen("unix", a.socketPath)
+	unix.Umask(oldMask)
 	if err != nil {
 		return fmt.Errorf("failed to listen on unix socket: %w", err)
 	}

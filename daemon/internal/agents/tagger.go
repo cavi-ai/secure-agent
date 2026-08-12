@@ -61,6 +61,11 @@ func (t *Tagger) Refresh() {
 	// Invalidate cache
 	t.cache = make(map[int32]AgentInfo)
 	t.tagged = make(map[int32]bool)
+
+	// Pre-populate tagging for existing processes
+	for pid := range t.table {
+		t.tagLocked(pid)
+	}
 }
 
 func (t *Tagger) Tag(pid int32) (AgentInfo, bool) {
@@ -100,6 +105,9 @@ func (t *Tagger) tagLocked(pid int32) (AgentInfo, bool) {
 		pInfo, ok := t.table[curr]
 		if !ok || pInfo.Exe == "" {
 			if dynamicInfo, found := t.ps.Info(curr); found && dynamicInfo.Exe != "" {
+				if ok && dynamicInfo.PPID == 0 {
+					dynamicInfo.PPID = pInfo.PPID
+				}
 				pInfo = dynamicInfo
 				t.table[curr] = pInfo
 			} else if !ok {
@@ -137,23 +145,6 @@ func (t *Tagger) tagLocked(pid int32) (AgentInfo, bool) {
 }
 
 func (t *Tagger) Any() bool {
-	t.mu.RLock()
-	hasTagged := false
-	for _, isTagged := range t.tagged {
-		if isTagged {
-			hasTagged = true
-			break
-		}
-	}
-	t.mu.RUnlock()
-
-	if hasTagged {
-		return true
-	}
-
-	// Refresh table once to check if a new agent process spawned
-	t.Refresh()
-
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	for _, isTagged := range t.tagged {
