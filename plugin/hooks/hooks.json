@@ -1,0 +1,26 @@
+{
+  "PreToolUse": [
+    {
+      "matcher": {
+        "tool_name": "Bash"
+      },
+      "hooks": [
+        {
+          "type": "command",
+          "command": "python3 ${plugin_dir}/hooks/secret_guard.py"
+        }
+      ]
+    },
+    {
+      "matcher": {
+        "tool_name": "Write|Edit|MultiEdit|NotebookEdit"
+      },
+      "hooks": [
+        {
+          "type": "command",
+          "command": "python3 ${plugin_dir}/hooks/secret_guard.py"
+        }
+      ]
+    }
+  ]
+}
