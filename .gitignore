@@ -4,3 +4,6 @@
 *.jsonl
 
 **/__pycache__/
+menubar/.build/
+# Added by code-review-graph
+.code-review-graph/
