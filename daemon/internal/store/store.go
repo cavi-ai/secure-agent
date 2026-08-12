@@ -17,9 +17,10 @@ import (
 )
 
 type Store struct {
-	mu        sync.Mutex
-	db        *sql.DB
-	jsonlFile *os.File
+	mu          sync.Mutex
+	db          *sql.DB
+	jsonlFile   *os.File
+	insertCount uint64
 }
 
 func Open(dbPath, jsonlPath string) (*Store, error) {
@@ -128,8 +129,23 @@ func (s *Store) PutEvent(e event.Event) {
 		log.Printf("store: failed to insert event: %v", err)
 	}
 
-	// Ring buffer retention: cap events table at 10,000 entries
-	_, _ = s.db.Exec(`DELETE FROM events WHERE id NOT IN (SELECT id FROM events ORDER BY id DESC LIMIT 10000)`)
+	s.insertCount++
+	if s.insertCount%1000 == 0 {
+		s.pruneEventsLocked(10000)
+	}
+}
+
+func (s *Store) PruneEvents(maxKeep int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pruneEventsLocked(maxKeep)
+}
+
+func (s *Store) pruneEventsLocked(maxKeep int) {
+	if maxKeep <= 0 {
+		maxKeep = 10000
+	}
+	_, _ = s.db.Exec(`DELETE FROM events WHERE id NOT IN (SELECT id FROM events ORDER BY id DESC LIMIT ?)`, maxKeep)
 }
 
 func (s *Store) RecentFlags(limit int) []model.Flag {
