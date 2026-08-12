@@ -1,0 +1,8 @@
+{
+  "name": "secure-agent",
+  "description": "Blocks agent mutation of keychain and shell config, scans tool results for prompt injection, and logs agent activity for the secure-agent monitor.",
+  "version": "0.1.0",
+  "author": { "name": "cavi-ai" },
+  "license": "MIT",
+  "hooks": { "paths": ["./hooks/hooks.json"] }
+}
