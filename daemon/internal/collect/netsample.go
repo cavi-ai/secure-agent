@@ -2,6 +2,7 @@ package collect
 
 import (
 	"context"
+	"log"
 	"net"
 	"sync"
 	"time"
@@ -69,20 +70,15 @@ func (ns *NetSampler) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
-			// Zero-cost when idle guarantee
-			if !ns.tagger.Any() {
-				prevSnapshot = make(map[connKey]struct{})
-				continue
-			}
-
 			curSnapshot := make(map[connKey]struct{})
-			// Sample active sockets for all tagged agents
-			for pid := range ns.getTaggedPIDs() {
-				socks := ns.lister.SocketsFor(pid)
-				for _, s := range socks {
+			// Sample active sockets and filter against tagged agent process trees
+			allSocks := ns.lister.SocketsFor(-1)
+			for _, s := range allSocks {
+				if info, isAgent := ns.tagger.Tag(s.PID); isAgent {
 					resolvedHost := ns.resolveHost(s.Host)
-					k := connKey{PID: pid, Host: resolvedHost, Port: s.Port}
+					k := connKey{PID: s.PID, Host: resolvedHost, Port: s.Port}
 					curSnapshot[k] = struct{}{}
+					log.Printf("netsample: found agent socket pid=%d agent=%s host=%s port=%d", s.PID, info.Name, resolvedHost, s.Port)
 				}
 			}
 
@@ -115,11 +111,8 @@ func (ns *NetSampler) Run(ctx context.Context) error {
 
 func (ns *NetSampler) getTaggedPIDs() map[int32]struct{} {
 	pids := make(map[int32]struct{})
-	// Query common pids
-	for pid := int32(1); pid < 99999; pid++ {
-		if _, ok := ns.tagger.Tag(pid); ok {
-			pids[pid] = struct{}{}
-		}
+	for pid := range ns.tagger.TaggedPIDs() {
+		pids[pid] = struct{}{}
 	}
 	return pids
 }
