@@ -22,5 +22,22 @@
         }
       ]
     }
+  ],
+  "PostToolUse": [
+    {
+      "matcher": {
+        "tool_name": ".*"
+      },
+      "hooks": [
+        {
+          "type": "command",
+          "command": "python3 ${plugin_dir}/hooks/injection_scan.py"
+        },
+        {
+          "type": "command",
+          "command": "python3 ${plugin_dir}/hooks/activity_log.py"
+        }
+      ]
+    }
   ]
 }
