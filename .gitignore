@@ -1,0 +1,4 @@
+/daemon/secure-agentd
+*.db
+*.db-*
+*.jsonl
