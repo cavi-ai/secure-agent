@@ -127,6 +127,9 @@ func (s *Store) PutEvent(e event.Event) {
 	if err != nil {
 		log.Printf("store: failed to insert event: %v", err)
 	}
+
+	// Ring buffer retention: cap events table at 10,000 entries
+	_, _ = s.db.Exec(`DELETE FROM events WHERE id NOT IN (SELECT id FROM events ORDER BY id DESC LIMIT 10000)`)
 }
 
 func (s *Store) RecentFlags(limit int) []model.Flag {

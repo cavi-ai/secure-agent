@@ -8,12 +8,14 @@ import re
 import sys
 
 INJECTION_PATTERNS = [
-    re.compile(r"ignore\s+(all|any|the)\s+(previous|above)\s+(instructions|directives|prompts)", re.IGNORECASE),
-    re.compile(r"disregard\s+(all|any|the)\s+(previous|above)", re.IGNORECASE),
-    re.compile(r"system\s+prompt\s+(override|bypass)", re.IGNORECASE),
-    re.compile(r"new\s+(instruction|directive|rule)s?:", re.IGNORECASE),
-    re.compile(r"you\s+are\s+now\s+(in|a)\s+(developer|dan|unrestricted|jailbreak)", re.IGNORECASE),
-    re.compile(r"\[(system|assistant|user)\]\s*:", re.IGNORECASE),
+    re.compile(r"ignore\s+(?:all\s+|any\s+|the\s+)?(?:previous|prior|above|former)\s+(?:instructions?|directives?|prompts?|context|rules?)", re.IGNORECASE),
+    re.compile(r"ignore\s+(?:previous|prior|above|former)\s+(?:instructions?|directives?|prompts?|context|rules?)", re.IGNORECASE),
+    re.compile(r"disregard\s+(?:all\s+|any\s+|the\s+)?(?:previous|prior|above|former)", re.IGNORECASE),
+    re.compile(r"system\s+prompt\s+(?:override|bypass|injection)", re.IGNORECASE),
+    re.compile(r"new\s+(?:instruction|directive|rule|prompt)s?:", re.IGNORECASE),
+    re.compile(r"you\s+are\s+now\s+(?:in|a|an)?\s*(?:developer|dan|unrestricted|jailbreak|god\s+mode)", re.IGNORECASE),
+    re.compile(r"\[(?:system|assistant|user|im_start)\]\s*:", re.IGNORECASE),
+    re.compile(r"<\s*\|?\s*(?:im_start|im_end|system|user|assistant)\s*\|?\s*>", re.IGNORECASE),
 ]
 
 def scan_text(obj: any) -> list[str]:
@@ -29,8 +31,6 @@ def scan_text(obj: any) -> list[str]:
         for item in obj:
             hits.extend(scan_text(item))
     return hits
-
-func_mode = False
 
 def main():
     try:
