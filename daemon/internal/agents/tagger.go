@@ -10,6 +10,7 @@ import (
 type ProcInfo struct {
 	PID  int32
 	PPID int32
+	Comm string
 	Exe  string
 	CWD  string
 }
@@ -47,6 +48,37 @@ func New(cfg config.Config, ps ProcSource) *Tagger {
 	}
 }
 
+func (t *Tagger) isCandidateLocked(pid int32) bool {
+	curr := pid
+	visited := make(map[int32]bool)
+	for hops := 0; hops < 32 && curr > 0; hops++ {
+		if visited[curr] {
+			break
+		}
+		visited[curr] = true
+		pInfo, ok := t.table[curr]
+		if !ok {
+			break
+		}
+		targetStr := pInfo.Comm
+		if pInfo.Exe != "" {
+			targetStr = pInfo.Exe
+		}
+		if targetStr != "" {
+			targetLower := strings.ToLower(targetStr)
+			for _, agentDef := range t.cfg.Agents {
+				for _, matchStr := range agentDef.Match {
+					if strings.Contains(targetLower, strings.ToLower(matchStr)) {
+						return true
+					}
+				}
+			}
+		}
+		curr = pInfo.PPID
+	}
+	return false
+}
+
 func (t *Tagger) Refresh() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -62,9 +94,11 @@ func (t *Tagger) Refresh() {
 	t.cache = make(map[int32]AgentInfo)
 	t.tagged = make(map[int32]bool)
 
-	// Pre-populate tagging for existing processes
+	// Pre-populate tagging ONLY for candidate process trees
 	for pid := range t.table {
-		t.tagLocked(pid)
+		if t.isCandidateLocked(pid) {
+			t.tagLocked(pid)
+		}
 	}
 }
 
@@ -115,21 +149,32 @@ func (t *Tagger) tagLocked(pid int32) (AgentInfo, bool) {
 			}
 		}
 
-		for _, agentDef := range t.cfg.Agents {
-			for _, matchStr := range agentDef.Match {
-				if pInfo.Exe != "" && strings.Contains(pInfo.Exe, matchStr) {
-					targetProc, _ := t.table[pid]
-					res := AgentInfo{
-						Name:    agentDef.Name,
-						ExePath: targetProc.Exe,
-						CWD:     targetProc.CWD,
-						PID:     pid,
-						PPID:    targetProc.PPID,
-						Chain:   chain,
+		matchTarget := pInfo.Exe
+		if matchTarget == "" {
+			matchTarget = pInfo.Comm
+		}
+		if matchTarget != "" {
+			matchTargetLower := strings.ToLower(matchTarget)
+			for _, agentDef := range t.cfg.Agents {
+				for _, matchStr := range agentDef.Match {
+					if strings.Contains(matchTargetLower, strings.ToLower(matchStr)) {
+						targetProc, _ := t.table[pid]
+						exePath := targetProc.Exe
+						if exePath == "" {
+							exePath = targetProc.Comm
+						}
+						res := AgentInfo{
+							Name:    agentDef.Name,
+							ExePath: exePath,
+							CWD:     targetProc.CWD,
+							PID:     pid,
+							PPID:    targetProc.PPID,
+							Chain:   chain,
+						}
+						t.cache[pid] = res
+						t.tagged[pid] = true
+						return res, true
 					}
-					t.cache[pid] = res
-					t.tagged[pid] = true
-					return res, true
 				}
 			}
 		}

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 )
 
@@ -32,5 +33,24 @@ func TestPutFlagAlsoAppendsJSONL(t *testing.T) {
 	b, _ := os.ReadFile(jl)
 	if !strings.Contains(string(b), `"f1"`) {
 		t.Fatal("flag not mirrored to JSONL")
+	}
+}
+
+func TestEventRetentionBatchPruning(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(filepath.Join(dir, "e.db"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	for i := 0; i < 2500; i++ {
+		s.PutEvent(event.Event{Kind: event.KindExec, PID: int32(i)})
+	}
+
+	s.PruneEvents(100)
+	eventsAfterPrune := s.RecentEvents(2000)
+	if len(eventsAfterPrune) != 100 {
+		t.Fatalf("events count after explicit prune = %d, want 100", len(eventsAfterPrune))
 	}
 }

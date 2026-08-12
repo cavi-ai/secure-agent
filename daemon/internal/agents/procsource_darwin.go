@@ -23,10 +23,21 @@ func (d *DarwinProcSource) List() []ProcInfo {
 
 	res := make([]ProcInfo, 0, len(kprocs))
 	for _, kp := range kprocs {
+		commBuf := make([]byte, len(kp.Proc.P_comm))
+		for i, c := range kp.Proc.P_comm {
+			commBuf[i] = byte(c)
+		}
+		n := bytes.IndexByte(commBuf, 0)
+		commStr := string(commBuf)
+		if n >= 0 {
+			commStr = string(commBuf[:n])
+		}
+
 		res = append(res, ProcInfo{
 			PID:  kp.Proc.P_pid,
 			PPID: kp.Eproc.Ppid,
-			Exe:  "", // Lazy populated on demand by tagger
+			Comm: commStr,
+			Exe:  "", // Lazy populated on demand by tagger for candidates
 		})
 	}
 	return res
