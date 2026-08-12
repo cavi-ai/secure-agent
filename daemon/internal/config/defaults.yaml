@@ -1,0 +1,27 @@
+sensitive_globs:
+  - "**/.env"
+  - "**/.env.*"
+  - "~/.ssh/id_*"
+  - "~/.ssh/*_rsa"
+  - "~/.ssh/*_ed25519"
+  - "~/.aws/credentials"
+  - "~/.config/gh/hosts.yml"
+sensitive_paths:
+  - "~/.aws"
+  - "~/.ssh"
+keychain_markers:
+  - "library/keychains"
+  - ".keychain-db"
+  - "login.keychain"
+agents:
+  - { name: claude, match: ["claude"] }
+  - { name: cursor, match: ["Cursor Helper", "cursor"] }
+  - { name: codex,  match: ["codex"] }
+vendor_allowlist:
+  claude: ["anthropic.com", "claude.ai"]
+  cursor: ["cursor.sh", "cursor.com"]
+  codex:  ["openai.com", "api.openai.com"]
+net_sample_interval_ms: 2000
+socket_path: "~/.config/secure-agent/daemon.sock"
+db_path: "~/.local/state/secure-agent/events.db"
+jsonl_path: "~/.local/state/secure-agent/events.jsonl"
