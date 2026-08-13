@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/cavi-ai/secure-agent/daemon/internal/intel"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 	"golang.org/x/sys/unix"
 )
@@ -24,6 +25,8 @@ type Status struct {
 	Running      bool   `json:"running"`
 	Uptime       string `json:"uptime"`
 	ActiveAgents int    `json:"active_agents"`
+	ProxyEnabled bool   `json:"proxy_enabled"`
+	ProxyPort    int    `json:"proxy_port"`
 }
 
 type StatusFunc func() Status
@@ -72,6 +75,7 @@ func (a *API) Serve(ctx context.Context) error {
 	mux.HandleFunc("/status", a.handleStatus)
 	mux.HandleFunc("/flags", a.handleFlags)
 	mux.HandleFunc("/events", a.handleEvents)
+	mux.HandleFunc("/incidents", a.handleIncidents)
 	mux.HandleFunc("/kill", a.handleKill)
 
 	server := &http.Server{Handler: mux}
@@ -134,6 +138,42 @@ func (a *API) handleEvents(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	events := a.store.RecentEvents(limit)
 	json.NewEncoder(w).Encode(events)
+}
+
+func (a *API) handleIncidents(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	id := r.URL.Query().Get("id")
+	if id != "" {
+		inc, err := a.store.GetIncident(id)
+		if err != nil {
+			http.Error(w, "Incident not found", http.StatusNotFound)
+			return
+		}
+		format := r.URL.Query().Get("format")
+		if format == "markdown" || format == "md" {
+			w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
+			analyzer := intel.NewAnalyzer()
+			w.Write([]byte(analyzer.GenerateMarkdown(*inc)))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(inc)
+		return
+	}
+
+	limit := 50
+	if lStr := r.URL.Query().Get("limit"); lStr != "" {
+		if parsed, err := strconv.Atoi(lStr); err == nil && parsed > 0 {
+			limit = parsed
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	incidents := a.store.RecentIncidents(limit)
+	json.NewEncoder(w).Encode(incidents)
 }
 
 type killRequest struct {
