@@ -17,6 +17,8 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/collect"
 	"github.com/cavi-ai/secure-agent/daemon/internal/config"
 	"github.com/cavi-ai/secure-agent/daemon/internal/correlate"
+	"github.com/cavi-ai/secure-agent/daemon/internal/intel"
+	"github.com/cavi-ai/secure-agent/daemon/internal/proxy"
 	"github.com/cavi-ai/secure-agent/daemon/internal/sensitive"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 	"github.com/cavi-ai/secure-agent/daemon/internal/supervise"
@@ -64,6 +66,7 @@ func main() {
 
 	// Drain bus and correlate/persist
 	sub := b.Subscribe()
+	analyzer := intel.NewAnalyzer()
 	go func() {
 		for e := range sub {
 			st.PutEvent(e)
@@ -71,6 +74,11 @@ func main() {
 			for _, fl := range flags {
 				log.Printf("FLAG TRIGGERED [%d]: %s (pid %d agent %s)", fl.Severity, fl.Rule, fl.PID, fl.Agent)
 				st.PutFlag(fl)
+
+				recentEvs := st.RecentEvents(100)
+				report := analyzer.Analyze(fl, recentEvs)
+				st.PutIncident(report)
+				log.Printf("INCIDENT CREATED [%s]: %s (Risk: %s, %d rotate items)", report.ID, report.Summary, report.Risk, len(report.RotateList))
 			}
 		}
 	}()
@@ -89,12 +97,29 @@ func main() {
 		}
 	}()
 
+	var proxyServer *proxy.ProxyServer
+	if cfg.ProxyEnabled {
+		caMgr, err := proxy.NewCAManager(cfg.ProxyCACertPath, cfg.ProxyCAKeyPath)
+		if err != nil {
+			log.Printf("Failed to initialize Proxy CA Manager: %v", err)
+		} else {
+			proxyServer = proxy.NewProxyServer(cfg.ProxyPort, b, caMgr)
+		}
+	}
+
 	startTime := time.Now()
 	statusFn := func() api.Status {
+		proxyActive := proxyServer != nil
+		proxyPort := 0
+		if proxyServer != nil {
+			proxyPort = proxyServer.Port()
+		}
 		return api.Status{
 			Running:      true,
 			Uptime:       time.Since(startTime).Truncate(time.Second).String(),
 			ActiveAgents: countActiveAgents(tagger),
+			ProxyEnabled: proxyActive,
+			ProxyPort:    proxyPort,
 		}
 	}
 
@@ -114,8 +139,17 @@ func main() {
 		filepath.Join(home, ".cursor", "logs", "*.jsonl"),
 		filepath.Join(home, ".local", "state", "secure-agent", "activity.jsonl"),
 	}
+	if cfg.JSONLPath != "" {
+		tailTargets = append(tailTargets, cfg.JSONLPath)
+	}
 
 	// Supervised collectors
+	if proxyServer != nil {
+		go supervise.Run(ctx, "proxyserver", func(c context.Context) error {
+			return proxyServer.Serve(c)
+		})
+	}
+
 	go supervise.Run(ctx, "eslogger", func(c context.Context) error {
 		es := collect.NewESLogger(b)
 		return es.Run(c)

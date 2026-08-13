@@ -45,16 +45,31 @@ func (d *DarwinProcSource) List() []ProcInfo {
 
 func (d *DarwinProcSource) Info(pid int32) (ProcInfo, bool) {
 	exe := getProcPath(pid)
-	if exe == "" {
-		return ProcInfo{}, false
-	}
 	ppid := int32(0)
+	commStr := ""
 	if kp, err := unix.SysctlKinfoProc("kern.proc.pid", int(pid)); err == nil {
 		ppid = kp.Eproc.Ppid
+		commBuf := make([]byte, len(kp.Proc.P_comm))
+		for i, c := range kp.Proc.P_comm {
+			commBuf[i] = byte(c)
+		}
+		n := bytes.IndexByte(commBuf, 0)
+		commStr = string(commBuf)
+		if n >= 0 {
+			commStr = string(commBuf[:n])
+		}
+	} else if exe == "" {
+		return ProcInfo{}, false
 	}
+
+	if exe == "" && commStr == "" {
+		return ProcInfo{}, false
+	}
+
 	return ProcInfo{
 		PID:  pid,
 		PPID: ppid,
+		Comm: commStr,
 		Exe:  exe,
 	}, true
 }

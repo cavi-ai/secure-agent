@@ -81,7 +81,15 @@ func ScanLine(line string) (event.Event, bool) {
 
 func (ts *TranscriptScanner) Run(ctx context.Context) error {
 	offsets := make(map[string]int64)
-	ticker := time.NewTicker(500 * time.Millisecond)
+
+	// Seed pre-existing transcript log files to EOF on startup to avoid flooding bus buffer with old history
+	for _, p := range ts.resolvePaths() {
+		if fi, err := os.Stat(p); err == nil && !fi.IsDir() {
+			offsets[p] = fi.Size()
+		}
+	}
+
+	ticker := time.NewTicker(200 * time.Millisecond)
 	defer ticker.Stop()
 
 	for {
@@ -131,7 +139,12 @@ func (ts *TranscriptScanner) tailFile(p string, offsets map[string]int64) {
 		return
 	}
 
-	offset := offsets[p]
+	offset, tracked := offsets[p]
+	if !tracked {
+		// New file discovered after startup: tail from byte 0
+		offset = 0
+	}
+
 	if fi.Size() < offset {
 		offset = 0 // file truncated
 	}
@@ -162,7 +175,7 @@ func (ts *TranscriptScanner) tailFile(p string, offsets map[string]int64) {
 					ts.bus.Publish(e)
 				}
 			} else {
-				// Partial line at EOF; wait for newline in next poll
+				// Partial line at EOF; do not advance past partial line, retry on next poll
 				break
 			}
 		}
