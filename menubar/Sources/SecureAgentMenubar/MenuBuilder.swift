@@ -94,32 +94,48 @@ public final class MenuBuilder: @unchecked Sendable {
             menu.addItem(NSMenuItem.separator())
         }
 
-        // 4. Active Agents Summary
-        let activeCount = status?.activeAgents ?? 0
-        let agentsHeader = NSMenuItem(title: "ACTIVE AGENTS (\(activeCount))", action: nil, keyEquivalent: "")
+        // 4. Active Agents & Harness Tools Section
+        let activeAgentsList = status?.agents ?? []
+        let activeCount = max(status?.activeAgents ?? 0, activeAgentsList.count)
+        let agentsHeader = NSMenuItem(title: "ACTIVE AGENTS & HARNESS TOOLS (\(activeCount))", action: nil, keyEquivalent: "")
         agentsHeader.isEnabled = false
         menu.addItem(agentsHeader)
 
-        if activeCount == 0 {
-            let noneItem = NSMenuItem(title: "No active agent processes detected", action: nil, keyEquivalent: "")
+        if activeCount == 0 && events.filter({ $0.kind == 8 }).isEmpty {
+            let noneItem = NSMenuItem(title: "No active agent processes or tool activity", action: nil, keyEquivalent: "")
             noneItem.isEnabled = false
             menu.addItem(noneItem)
         } else {
-            var agentPIDs = Set<Int32>()
-            for ev in events {
-                if ev.kind == 8 /* KindPluginAction */ || ev.kind == 0 /* KindFileOpen */ {
-                    agentPIDs.insert(ev.pid)
+            if !activeAgentsList.isEmpty {
+                for agent in activeAgentsList {
+                    var title = "🤖 \(agent.name) — PID \(agent.pid)"
+                    if let cwd = agent.cwd, !cwd.isEmpty {
+                        title += " (\(cwd))"
+                    }
+                    let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+                    item.isEnabled = false
+                    menu.addItem(item)
+
+                    let killItem = NSMenuItem(title: "   ⚡ Kill \(agent.name) Process (PID \(agent.pid))", action: killAction, keyEquivalent: "")
+                    killItem.target = target
+                    killItem.tag = Int(agent.pid)
+                    menu.addItem(killItem)
                 }
             }
-            for pid in agentPIDs {
-                let item = NSMenuItem(title: "• Agent PID \(pid)", action: nil, keyEquivalent: "")
-                item.isEnabled = false
-                menu.addItem(item)
 
-                let killItem = NSMenuItem(title: "   ⚡ Kill PID \(pid)", action: killAction, keyEquivalent: "")
-                killItem.target = target
-                killItem.tag = Int(pid)
-                menu.addItem(killItem)
+            let pluginEvents = events.filter { $0.kind == 8 /* KindPluginAction */ }
+            if !pluginEvents.isEmpty {
+                let toolHeader = NSMenuItem(title: "   RECENT TOOL ACTIONS:", action: nil, keyEquivalent: "")
+                toolHeader.isEnabled = false
+                menu.addItem(toolHeader)
+
+                for ev in pluginEvents.prefix(5) {
+                    let toolName = ev.detail ?? "Tool"
+                    let targetPath = ev.path ?? ""
+                    let toolItem = NSMenuItem(title: "   🔨 \(toolName) → \(targetPath) (PID \(ev.pid))", action: nil, keyEquivalent: "")
+                    toolItem.isEnabled = false
+                    menu.addItem(toolItem)
+                }
             }
         }
 
