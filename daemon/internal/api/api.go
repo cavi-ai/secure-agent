@@ -21,12 +21,20 @@ type Killer interface {
 	Kill(pid int32) error
 }
 
+type AgentSummary struct {
+	PID     int32  `json:"pid"`
+	Name    string `json:"name"`
+	ExePath string `json:"exe_path,omitempty"`
+	CWD     string `json:"cwd,omitempty"`
+}
+
 type Status struct {
-	Running      bool   `json:"running"`
-	Uptime       string `json:"uptime"`
-	ActiveAgents int    `json:"active_agents"`
-	ProxyEnabled bool   `json:"proxy_enabled"`
-	ProxyPort    int    `json:"proxy_port"`
+	Running      bool           `json:"running"`
+	Uptime       string         `json:"uptime"`
+	ActiveAgents int            `json:"active_agents"`
+	Agents       []AgentSummary `json:"agents"`
+	ProxyEnabled bool           `json:"proxy_enabled"`
+	ProxyPort    int            `json:"proxy_port"`
 }
 
 type StatusFunc func() Status
