@@ -91,3 +91,18 @@ func TestKeychainAccessFlagsImmediately(t *testing.T) {
 		t.Fatalf("severity = %d, want 2", f[0].Severity)
 	}
 }
+
+func TestForeignConnectThenSensitiveReadFlags(t *testing.T) {
+	c := newTestCorrelator(t)
+	base := time.Unix(1_700_000_000, 0)
+
+	f := c.Observe(event.Event{Kind: event.KindConnOpen, PID: 200, TS: base, RemoteHost: "evil.example.com", RemotePort: 443})
+	if len(f) != 0 {
+		t.Fatalf("conn alone should not flag, got %v", f)
+	}
+
+	f = c.Observe(event.Event{Kind: event.KindPluginAction, PID: 200, TS: base.Add(2 * time.Second), Path: "/Users/x/proj/.env"})
+	if len(f) != 1 || f[0].Rule != "sensitive-read-then-connect" {
+		t.Fatalf("expected 1 sensitive-read-then-connect flag when conn arrives before read, got %+v", f)
+	}
+}
