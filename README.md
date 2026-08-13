@@ -25,14 +25,17 @@ As AI coding agents (Claude Code, Cursor, Codex, OpenClaw, Copilot, etc.) gain i
 - 🔗 **Sliding-Window Event Correlation Engine**  
   Correlates process file activity with network egress. Automatically raises security flags when an agent process reads a sensitive file (e.g. `~/.aws/credentials` or `.env`) followed by an outbound socket connection to a domain outside its pre-approved vendor allowlist.
 
-- 🔔 **Native macOS Menu Bar Interface (`secure-agent-menubar`)**  
-  A native Swift menu bar application (`NSStatusItem`) providing real-time visibility into active agent process trees, security flag feeds with complete evidence chains, desktop notifications, and a instant process kill switch.
+- 🚨 **Rotation Intel & Incident Containment**  
+  Analyzes compromised secret exposures, categorizes risk severity (`CRITICAL`, `HIGH`, `MEDIUM`, `LOW`), assesses blast radius, and generates ordered step-by-step remediation checklists with copy-paste shell commands via `/incidents` and a native Swift UI remediation modal.
+
+- 🌐 **Opt-In Local MITM Proxy & Payload Inspection (`127.0.0.1:8443`)**  
+  Features an inline HTTP/HTTPS proxy server with dynamic TLS certificate generation (`CAManager`) that inspects request streams for outbound credential leaks (`redact.Detect`) and response streams for prompt injection attacks (`injection.Detect`).
 
 - 🔌 **Local Control & Query API**  
-  Exposes a secure HTTP API over a Unix domain socket (`~/.config/secure-agent/daemon.sock`) for querying status, events, flags, and initiating process termination.
+  Exposes a secure HTTP API over a Unix domain socket (`~/.config/secure-agent/daemon.sock`) for querying status, events, flags, incidents, and initiating process termination.
 
 - ⚙️ **Extensible YAML Rules & Allowlists**  
-  Easily customize sensitive path patterns, agent binary matchers, and vendor network allowlists (`anthropic.com`, `cursor.sh`, `openai.com`).
+  Easily customize sensitive path patterns, agent binary matchers, vendor network allowlists (`anthropic.com`, `cursor.sh`, `openai.com`), and proxy settings.
 
 ---
 
@@ -158,6 +161,12 @@ net_sample_interval_ms: 2000
 socket_path: "~/.config/secure-agent/daemon.sock"
 db_path: "~/.local/state/secure-agent/events.db"
 jsonl_path: "~/.local/state/secure-agent/events.jsonl"
+
+# Opt-in local proxy configuration
+proxy_enabled: true
+proxy_port: 8443
+proxy_ca_cert_path: "~/.config/secure-agent/ca.crt"
+proxy_ca_key_path: "~/.config/secure-agent/ca.key"
 ```
 
 ---
@@ -170,9 +179,10 @@ The Go daemon listens on a local Unix domain socket (`~/.config/secure-agent/dae
 
 | Endpoint | Method | Description |
 |---|---|---|
-| `/status` | `GET` | Returns daemon running state, uptime, and active agent process count. |
+| `/status` | `GET` | Returns daemon running state, uptime, active agent count, and proxy status. |
 | `/flags` | `GET` | Returns recent security correlation flags (accepts optional `?limit=N`). |
 | `/events` | `GET` | Returns recent raw system events (accepts optional `?limit=N`). |
+| `/incidents` | `GET` | Returns rotation intel postmortem reports & checklists (`?id=ID`, `?format=markdown`). |
 | `/kill` | `POST` | Terminate an agent process tree by PID (`{"pid": 12345}`). |
 
 ### Example Query

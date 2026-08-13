@@ -4,11 +4,13 @@ public final class MenuBuilder: @unchecked Sendable {
     public static func buildMenu(
         status: StatusResponse?,
         flags: [FlagModel],
+        incidents: [IncidentReportModel],
         events: [EventModel],
         isPaused: Bool,
         target: AnyObject,
         refreshAction: Selector,
         killAction: Selector,
+        viewIncidentAction: Selector,
         pauseAction: Selector,
         quitAction: Selector
     ) -> NSMenu {
@@ -27,9 +29,44 @@ public final class MenuBuilder: @unchecked Sendable {
         statusItem.isEnabled = false
         menu.addItem(statusItem)
 
+        if let s = status, s.proxyEnabled == true, let port = s.proxyPort {
+            let proxyItem = NSMenuItem(title: "Opt-in Proxy: Active (127.0.0.1:\(port))", action: nil, keyEquivalent: "")
+            proxyItem.image = NSImage(systemSymbolName: "lock.shield.fill", accessibilityDescription: "Proxy Active")
+            proxyItem.isEnabled = false
+            menu.addItem(proxyItem)
+        }
+
         menu.addItem(NSMenuItem.separator())
 
-        // 2. Security Flags Section
+        // 2. Incident Containment & Rotation Section
+        if !incidents.isEmpty {
+            let incHeader = NSMenuItem(title: "INCIDENT CONTAINMENT & ROTATION (\(incidents.count))", action: nil, keyEquivalent: "")
+            incHeader.isEnabled = false
+            menu.addItem(incHeader)
+
+            for (idx, inc) in incidents.prefix(5).enumerated() {
+                let riskPrefix = inc.risk == "CRITICAL" ? "🚨 [CRITICAL]" : "⚠️ [HIGH]"
+                let incItem = NSMenuItem(title: "\(riskPrefix) \(inc.rule) — PID \(inc.pid) (\(inc.rotateList.count) Rotate Items)", action: nil, keyEquivalent: "")
+                incItem.isEnabled = false
+                menu.addItem(incItem)
+
+                for item in inc.rotateList {
+                    let rotItem = NSMenuItem(title: "   🔑 Rotate: \(item.name) (\(item.category))", action: nil, keyEquivalent: "")
+                    rotItem.isEnabled = false
+                    menu.addItem(rotItem)
+                }
+
+                let viewItem = NSMenuItem(title: "   📋 View Remediation Checklist & Actions...", action: viewIncidentAction, keyEquivalent: "")
+                viewItem.target = target
+                viewItem.tag = idx
+                viewItem.representedObject = inc.id
+                menu.addItem(viewItem)
+            }
+
+            menu.addItem(NSMenuItem.separator())
+        }
+
+        // 3. Security Flags Section
         if !flags.isEmpty {
             let flagsHeader = NSMenuItem(title: "SECURITY ALERTS (\(flags.count))", action: nil, keyEquivalent: "")
             flagsHeader.isEnabled = false
@@ -57,7 +94,7 @@ public final class MenuBuilder: @unchecked Sendable {
             menu.addItem(NSMenuItem.separator())
         }
 
-        // 3. Active Agents Summary
+        // 4. Active Agents Summary
         let activeCount = status?.activeAgents ?? 0
         let agentsHeader = NSMenuItem(title: "ACTIVE AGENTS (\(activeCount))", action: nil, keyEquivalent: "")
         agentsHeader.isEnabled = false
@@ -68,7 +105,6 @@ public final class MenuBuilder: @unchecked Sendable {
             noneItem.isEnabled = false
             menu.addItem(noneItem)
         } else {
-            // Group events by tagged PID
             var agentPIDs = Set<Int32>()
             for ev in events {
                 if ev.kind == 8 /* KindPluginAction */ || ev.kind == 0 /* KindFileOpen */ {
@@ -89,7 +125,7 @@ public final class MenuBuilder: @unchecked Sendable {
 
         menu.addItem(NSMenuItem.separator())
 
-        // 4. Controls & System Actions
+        // 5. Controls & System Actions
         let pauseTitle = isPaused ? "Resume Monitoring" : "Pause Monitoring"
         let pauseItem = NSMenuItem(title: pauseTitle, action: pauseAction, keyEquivalent: "")
         pauseItem.target = target
