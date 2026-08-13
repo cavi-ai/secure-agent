@@ -55,6 +55,33 @@ func (c *Correlator) Observe(e event.Event) []model.Flag {
 
 	c.evictStaleLocked(e.TS)
 
+	if e.Kind == event.KindProxyHit {
+		ruleName := "proxy-payload-inspection"
+		if strings.HasPrefix(e.Detail, "proxy-secret-leak") {
+			ruleName = "proxy-secret-leak"
+		} else if strings.HasPrefix(e.Detail, "proxy-prompt-injection") {
+			ruleName = "proxy-prompt-injection"
+		}
+		flagID := hashFlagID(ruleName, e.PID, e.TS)
+		agentName := "proxy"
+		if info, isAgent := c.tagger.Tag(e.PID); isAgent {
+			agentName = info.Name
+		}
+		return []model.Flag{
+			{
+				ID:       flagID,
+				Rule:     ruleName,
+				Severity: 3,
+				TS:       e.TS,
+				PID:      e.PID,
+				Agent:    agentName,
+				Evidence: []string{
+					fmt.Sprintf("Local proxy detected security violation '%s' while connecting to %s:%d", e.Detail, e.RemoteHost, e.RemotePort),
+				},
+			},
+		}
+	}
+
 	info, isAgent := c.tagger.Tag(e.PID)
 	if !isAgent {
 		return nil
@@ -70,7 +97,7 @@ func (c *Correlator) Observe(e event.Event) []model.Flag {
 	switch e.Kind {
 	case event.KindFileOpen, event.KindFileWrite, event.KindPluginAction:
 		if cat, ok := c.classifier.Classify(e.Path); ok {
-			c.rememberReadLocked(rootPID, readMark{at: e.TS, path: e.Path, cat: cat})
+			c.rememberReadLocked(rootPID, e.PID, readMark{at: e.TS, path: e.Path, cat: cat})
 			if cat == sensitive.CatKeychain {
 				// Rule 2: Keychain access flags immediately
 				flagID := hashFlagID("keychain-access", e.PID, e.TS)
@@ -88,7 +115,7 @@ func (c *Correlator) Observe(e event.Event) []model.Flag {
 				})
 			} else {
 				// Check if there's already an unconsumed recent foreign connection for this agent
-				recentConns := c.recentConnsLocked(rootPID, e.TS, window)
+				recentConns := c.recentConnsLocked(rootPID, e.PID, e.TS, window)
 				if len(recentConns) > 0 {
 					flagID := hashFlagID("sensitive-read-then-connect", rootPID, recentConns[0].at)
 					evidence := []string{
@@ -106,8 +133,8 @@ func (c *Correlator) Observe(e event.Event) []model.Flag {
 						Agent:    info.Name,
 						Evidence: evidence,
 					})
-					c.markReadConsumedLocked(rootPID)
-					c.markConnConsumedLocked(rootPID)
+					c.markReadConsumedLocked(rootPID, e.PID)
+					c.markConnConsumedLocked(rootPID, e.PID)
 				}
 			}
 		}
@@ -117,9 +144,9 @@ func (c *Correlator) Observe(e event.Event) []model.Flag {
 			return nil
 		}
 
-		c.rememberConnLocked(rootPID, connMark{at: e.TS, host: e.RemoteHost, port: e.RemotePort})
+		c.rememberConnLocked(rootPID, e.PID, connMark{at: e.TS, host: e.RemoteHost, port: e.RemotePort})
 
-		recent := c.recentReadsLocked(rootPID, e.TS, window)
+		recent := c.recentReadsLocked(rootPID, e.PID, e.TS, window)
 		if len(recent) == 0 {
 			return nil
 		}
@@ -141,49 +168,72 @@ func (c *Correlator) Observe(e event.Event) []model.Flag {
 			Agent:    info.Name,
 			Evidence: evidence,
 		})
-		c.markReadConsumedLocked(rootPID)
-		c.markConnConsumedLocked(rootPID)
+		c.markReadConsumedLocked(rootPID, e.PID)
+		c.markConnConsumedLocked(rootPID, e.PID)
 	}
 
 	return flags
 }
 
-func (c *Correlator) rememberReadLocked(pid int32, rm readMark) {
+func (c *Correlator) rememberReadLocked(pid int32, directPID int32, rm readMark) {
+	for _, p := range []int32{pid, directPID} {
+		if p == 0 {
+			continue
+		}
+		list := c.marks[p]
+		if len(list) >= 50 {
+			list = list[1:]
+		}
+		list = append(list, rm)
+		c.marks[p] = list
+	}
+}
+
+func (c *Correlator) rememberConnLocked(pid int32, directPID int32, cm connMark) {
+	for _, p := range []int32{pid, directPID} {
+		if p == 0 {
+			continue
+		}
+		list := c.conns[p]
+		if len(list) >= 50 {
+			list = list[1:]
+		}
+		list = append(list, cm)
+		c.conns[p] = list
+	}
+}
+
+func (c *Correlator) markReadConsumedLocked(pid int32, directPID int32) {
+	for _, p := range []int32{pid, directPID} {
+		if p == 0 {
+			continue
+		}
+		list := c.marks[p]
+		for i := range list {
+			list[i].consumed = true
+		}
+		c.marks[p] = list
+	}
+}
+
+func (c *Correlator) markConnConsumedLocked(pid int32, directPID int32) {
+	for _, p := range []int32{pid, directPID} {
+		if p == 0 {
+			continue
+		}
+		list := c.conns[p]
+		for i := range list {
+			list[i].consumed = true
+		}
+		c.conns[p] = list
+	}
+}
+
+func (c *Correlator) recentReadsLocked(pid int32, directPID int32, now time.Time, win time.Duration) []readMark {
 	list := c.marks[pid]
-	if len(list) >= 50 {
-		list = list[1:]
+	if len(list) == 0 && directPID != 0 && directPID != pid {
+		list = c.marks[directPID]
 	}
-	list = append(list, rm)
-	c.marks[pid] = list
-}
-
-func (c *Correlator) rememberConnLocked(pid int32, cm connMark) {
-	list := c.conns[pid]
-	if len(list) >= 50 {
-		list = list[1:]
-	}
-	list = append(list, cm)
-	c.conns[pid] = list
-}
-
-func (c *Correlator) markReadConsumedLocked(pid int32) {
-	list := c.marks[pid]
-	for i := range list {
-		list[i].consumed = true
-	}
-	c.marks[pid] = list
-}
-
-func (c *Correlator) markConnConsumedLocked(pid int32) {
-	list := c.conns[pid]
-	for i := range list {
-		list[i].consumed = true
-	}
-	c.conns[pid] = list
-}
-
-func (c *Correlator) recentReadsLocked(pid int32, now time.Time, win time.Duration) []readMark {
-	list := c.marks[pid]
 	if len(list) == 0 {
 		return nil
 	}
@@ -202,11 +252,17 @@ func (c *Correlator) recentReadsLocked(pid int32, now time.Time, win time.Durati
 		}
 	}
 	c.marks[pid] = valid
+	if directPID != 0 && directPID != pid {
+		c.marks[directPID] = valid
+	}
 	return recent
 }
 
-func (c *Correlator) recentConnsLocked(pid int32, now time.Time, win time.Duration) []connMark {
+func (c *Correlator) recentConnsLocked(pid int32, directPID int32, now time.Time, win time.Duration) []connMark {
 	list := c.conns[pid]
+	if len(list) == 0 && directPID != 0 && directPID != pid {
+		list = c.conns[directPID]
+	}
 	if len(list) == 0 {
 		return nil
 	}
@@ -225,6 +281,9 @@ func (c *Correlator) recentConnsLocked(pid int32, now time.Time, win time.Durati
 		}
 	}
 	c.conns[pid] = valid
+	if directPID != 0 && directPID != pid {
+		c.conns[directPID] = valid
+	}
 	return recent
 }
 

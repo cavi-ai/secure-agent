@@ -28,6 +28,10 @@ type rawConfig struct {
 	SocketPath           string              `yaml:"socket_path"`
 	DBPath               string              `yaml:"db_path"`
 	JSONLPath            string              `yaml:"jsonl_path"`
+	ProxyEnabled         bool                `yaml:"proxy_enabled"`
+	ProxyPort            int                 `yaml:"proxy_port"`
+	ProxyCACertPath      string              `yaml:"proxy_ca_cert_path"`
+	ProxyCAKeyPath       string              `yaml:"proxy_ca_key_path"`
 }
 
 type Config struct {
@@ -40,6 +44,10 @@ type Config struct {
 	SocketPath        string
 	DBPath            string
 	JSONLPath         string
+	ProxyEnabled      bool
+	ProxyPort         int
+	ProxyCACertPath   string
+	ProxyCAKeyPath    string
 }
 
 func Load(explicitPath string) (Config, error) {
@@ -76,6 +84,10 @@ func Load(explicitPath string) (Config, error) {
 		SocketPath:        expandPath(raw.SocketPath),
 		DBPath:            expandPath(raw.DBPath),
 		JSONLPath:         expandPath(raw.JSONLPath),
+		ProxyEnabled:      raw.ProxyEnabled,
+		ProxyPort:         raw.ProxyPort,
+		ProxyCACertPath:   expandPath(raw.ProxyCACertPath),
+		ProxyCAKeyPath:    expandPath(raw.ProxyCAKeyPath),
 	}
 
 	return cfg, nil

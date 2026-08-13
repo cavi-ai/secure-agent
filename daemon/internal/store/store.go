@@ -68,6 +68,14 @@ func Open(dbPath, jsonlPath string) (*Store, error) {
 			remote_port INT,
 			detail TEXT
 		);`,
+		`CREATE TABLE IF NOT EXISTS incidents (
+			id TEXT PRIMARY KEY,
+			flag_id TEXT,
+			pid INT,
+			risk TEXT,
+			report_json TEXT,
+			created_at TEXT
+		);`,
 	}
 
 	for _, q := range createQueries {
@@ -195,6 +203,67 @@ func (s *Store) RecentEvents(limit int) []event.Event {
 		}
 	}
 	return events
+}
+
+func (s *Store) PutIncident(inc model.IncidentReport) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	data, err := json.Marshal(inc)
+	if err != nil {
+		log.Printf("store: failed to marshal incident %s: %v", inc.ID, err)
+		return
+	}
+
+	tsStr := inc.Timestamp.Format(time.RFC3339Nano)
+	_, err = s.db.Exec(
+		`INSERT OR REPLACE INTO incidents (id, flag_id, pid, risk, report_json, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+		inc.ID, inc.FlagID, inc.PID, string(inc.Risk), string(data), tsStr,
+	)
+	if err != nil {
+		log.Printf("store: failed to insert incident %s: %v", inc.ID, err)
+	}
+}
+
+func (s *Store) GetIncident(id string) (*model.IncidentReport, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var reportJSON string
+	err := s.db.QueryRow(`SELECT report_json FROM incidents WHERE id = ? OR flag_id = ?`, id, id).Scan(&reportJSON)
+	if err != nil {
+		return nil, err
+	}
+
+	var inc model.IncidentReport
+	if err := json.Unmarshal([]byte(reportJSON), &inc); err != nil {
+		return nil, err
+	}
+	return &inc, nil
+}
+
+func (s *Store) RecentIncidents(limit int) []model.IncidentReport {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	rows, err := s.db.Query(`SELECT report_json FROM incidents ORDER BY created_at DESC LIMIT ?`, limit)
+	if err != nil {
+		log.Printf("store: query incidents error: %v", err)
+		return nil
+	}
+	defer rows.Close()
+
+	var list []model.IncidentReport
+	for rows.Next() {
+		var reportJSON string
+		if err := rows.Scan(&reportJSON); err == nil {
+			var inc model.IncidentReport
+			if err := json.Unmarshal([]byte(reportJSON), &inc); err == nil {
+				list = append(list, inc)
+			}
+		}
+	}
+	return list
 }
 
 func (s *Store) Close() error {

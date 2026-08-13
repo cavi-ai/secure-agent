@@ -14,6 +14,7 @@ const (
 	KindConnClose
 	KindTranscriptHit // secret pattern seen in transcript/plugin log
 	KindPluginAction  // harness tool-use reported by the plugin
+	KindProxyHit      // payload inspection match (secret leak or prompt injection in proxy stream)
 )
 
 // Event is the single payload type on the bus. Optional fields are zero when

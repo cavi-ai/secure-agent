@@ -90,11 +90,7 @@ func (t *Tagger) Refresh() {
 	}
 	t.table = newTable
 
-	// Invalidate cache
-	t.cache = make(map[int32]AgentInfo)
-	t.tagged = make(map[int32]bool)
-
-	// Pre-populate tagging ONLY for candidate process trees
+	// Pre-populate tagging for candidate process trees without discarding existing positively tagged agent cache
 	for pid := range t.table {
 		if t.isCandidateLocked(pid) {
 			t.tagLocked(pid)
@@ -182,7 +178,7 @@ func (t *Tagger) tagLocked(pid int32) (AgentInfo, bool) {
 		curr = pInfo.PPID
 	}
 
-	if targetProc, ok := t.table[pid]; ok && targetProc.Exe != "" {
+	if targetProc, ok := t.table[pid]; ok && (targetProc.Exe != "" || targetProc.Comm != "") {
 		t.tagged[pid] = false
 		t.cache[pid] = AgentInfo{}
 	}

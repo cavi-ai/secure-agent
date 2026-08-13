@@ -2,7 +2,6 @@ package collect
 
 import (
 	"context"
-	"log"
 	"net"
 	"sync"
 	"time"
@@ -91,11 +90,10 @@ func (ns *NetSampler) Run(ctx context.Context) error {
 			// Sample active sockets and filter against tagged agent process trees
 			allSocks := ns.lister.SocketsFor(-1)
 			for _, s := range allSocks {
-				if info, isAgent := ns.tagger.Tag(s.PID); isAgent {
+				if _, isAgent := ns.tagger.Tag(s.PID); isAgent {
 					resolvedHost := ns.resolveHost(s.Host)
 					k := connKey{PID: s.PID, Host: resolvedHost, Port: s.Port}
 					curSnapshot[k] = struct{}{}
-					log.Printf("netsample: found agent socket pid=%d agent=%s host=%s port=%d", s.PID, info.Name, resolvedHost, s.Port)
 				}
 			}
 
