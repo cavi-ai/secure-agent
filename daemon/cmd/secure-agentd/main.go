@@ -114,10 +114,12 @@ func main() {
 		if proxyServer != nil {
 			proxyPort = proxyServer.Port()
 		}
+		activeAgents := listActiveAgents(tagger)
 		return api.Status{
 			Running:      true,
 			Uptime:       time.Since(startTime).Truncate(time.Second).String(),
-			ActiveAgents: countActiveAgents(tagger),
+			ActiveAgents: len(activeAgents),
+			Agents:       activeAgents,
 			ProxyEnabled: proxyActive,
 			ProxyPort:    proxyPort,
 		}
@@ -176,6 +178,16 @@ func main() {
 	time.Sleep(200 * time.Millisecond)
 }
 
-func countActiveAgents(tg *agents.Tagger) int {
-	return len(tg.TaggedPIDs())
+func listActiveAgents(tg *agents.Tagger) []api.AgentSummary {
+	tagged := tg.TaggedPIDs()
+	res := make([]api.AgentSummary, 0, len(tagged))
+	for pid, info := range tagged {
+		res = append(res, api.AgentSummary{
+			PID:     pid,
+			Name:    info.Name,
+			ExePath: info.ExePath,
+			CWD:     info.CWD,
+		})
+	}
+	return res
 }
