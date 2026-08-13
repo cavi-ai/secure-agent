@@ -28,6 +28,16 @@ public final class DaemonClient: Sendable {
         return try JSONDecoder().decode([EventModel].self, from: body)
     }
 
+    public func fetchIncidents(limit: Int = 20) async throws -> [IncidentReportModel] {
+        let body = try await request(method: "GET", path: "/incidents?limit=\(limit)")
+        return try JSONDecoder().decode([IncidentReportModel].self, from: body)
+    }
+
+    public func fetchIncidentMarkdown(id: String) async throws -> String {
+        let body = try await request(method: "GET", path: "/incidents?id=\(id)&format=markdown")
+        return String(data: body, encoding: .utf8) ?? ""
+    }
+
     public func killProcess(pid: Int32) async throws -> Bool {
         let payload = ["pid": pid]
         let jsonData = try JSONSerialization.data(withJSONObject: payload)

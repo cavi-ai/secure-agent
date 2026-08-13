@@ -31,3 +31,17 @@ func TestScanLinePluginAction(t *testing.T) {
 		t.Fatalf("Detail = %q, want Bash", e.Detail)
 	}
 }
+
+func TestScanLineFakeCursorActivity(t *testing.T) {
+	line := `{"file_path":"/tmp/foo/.env","pid":12345,"tool":"Read"}`
+	e, ok := ScanLine(line)
+	if !ok || e.Kind != event.KindPluginAction {
+		t.Fatalf("ScanLine kind = %v, ok = %v; want KindPluginAction, true", e.Kind, ok)
+	}
+	if e.PID != 12345 {
+		t.Fatalf("PID = %d, want 12345", e.PID)
+	}
+	if e.Path != "/tmp/foo/.env" {
+		t.Fatalf("Path = %q, want /tmp/foo/.env", e.Path)
+	}
+}

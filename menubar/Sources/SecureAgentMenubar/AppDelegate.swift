@@ -10,13 +10,13 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var currentStatus: StatusResponse?
     private var currentFlags: [FlagModel] = []
+    private var currentIncidents: [IncidentReportModel] = []
     private var currentEvents: [EventModel] = []
     private var notifiedFlagIDs: Set<String> = []
 
     private var timer: Timer?
 
     public func applicationDidFinishLaunching(_ notification: Notification) {
-        // Run app in accessory mode (no Dock icon, status bar item only)
         NSApp.setActivationPolicy(.accessory)
 
         client = DaemonClient()
@@ -57,11 +57,13 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             do {
                 let status = try await client.fetchStatus()
                 let flags = try await client.fetchFlags(limit: 20)
+                let incidents = (try? await client.fetchIncidents(limit: 10)) ?? []
                 let events = try await client.fetchEvents(limit: 50)
 
                 await MainActor.run {
                     self.currentStatus = status
                     self.currentFlags = flags
+                    self.currentIncidents = incidents
                     self.currentEvents = events
                     self.processNewFlags(flags)
                     self.updateStatusIcon()
@@ -70,6 +72,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             } catch {
                 await MainActor.run {
                     self.currentStatus = nil
+                    self.currentIncidents = []
                     self.updateStatusIcon()
                     self.updateMenu()
                 }
@@ -89,9 +92,9 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     private func updateStatusIcon() {
         guard let button = statusItem.button else { return }
 
-        if currentFlags.contains(where: { $0.severity >= 3 }) {
+        if !currentIncidents.isEmpty || currentFlags.contains(where: { $0.severity >= 3 }) {
             button.image = NSImage(systemSymbolName: "exclamationmark.shield.fill", accessibilityDescription: "Flagged: Critical Security Alert")
-            button.title = " 🔴"
+            button.title = " 🚨"
         } else if let status = currentStatus, status.activeAgents > 0 {
             button.image = NSImage(systemSymbolName: "bolt.shield.fill", accessibilityDescription: "Agents Active")
             button.title = " \(status.activeAgents)"
@@ -105,11 +108,13 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         let menu = MenuBuilder.buildMenu(
             status: currentStatus,
             flags: currentFlags,
+            incidents: currentIncidents,
             events: currentEvents,
             isPaused: isPaused,
             target: self,
             refreshAction: #selector(refreshClicked),
             killAction: #selector(killClicked(_:)),
+            viewIncidentAction: #selector(viewIncidentClicked(_:)),
             pauseAction: #selector(pauseClicked),
             quitAction: #selector(quitClicked)
         )
@@ -137,6 +142,30 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             } catch {
                 print("[secure-agent-menubar] Error killing process PID \(pid): \(error)")
+            }
+        }
+    }
+
+    @objc private func viewIncidentClicked(_ sender: NSMenuItem) {
+        guard let incID = sender.representedObject as? String else { return }
+
+        Task {
+            do {
+                let md = try await client.fetchIncidentMarkdown(id: incID)
+                await MainActor.run {
+                    let alert = NSAlert()
+                    alert.messageText = "Incident Containment Report (\(incID))"
+                    alert.informativeText = md.isEmpty ? "No detailed markdown available." : md
+                    alert.addButton(withTitle: "Copy Markdown")
+                    alert.addButton(withTitle: "Close")
+                    let response = alert.runModal()
+                    if response == .alertFirstButtonReturn {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(md, forType: .string)
+                    }
+                }
+            } catch {
+                print("[secure-agent-menubar] Error fetching incident markdown: \(error)")
             }
         }
     }

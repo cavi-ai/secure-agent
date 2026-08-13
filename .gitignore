@@ -4,7 +4,7 @@
 *.jsonl
 
 **/__pycache__/
-docs/superpowers/
+docs/
 menubar/.build/
 # Added by code-review-graph
 .code-review-graph/
