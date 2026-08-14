@@ -8,3 +8,10 @@ docs/
 menubar/.build/
 # Added by code-review-graph
 .code-review-graph/
+.cursorrules
+.claude/
+GEMINI.md
+CLAUDE.md
+QODER.md
+.codebuddy/
+
