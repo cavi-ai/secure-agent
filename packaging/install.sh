@@ -4,14 +4,16 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BIN_DEST="${HOME}/.local/bin/secure-agentd"
 MENUBAR_DEST="${HOME}/.local/bin/secure-agent-menubar"
+CLI_DEST="${HOME}/.local/bin/secure-agent"
 PLIST_DEST="${HOME}/Library/LaunchAgents/com.cavi-ai.secure-agentd.plist"
 MENUBAR_PLIST_DEST="${HOME}/Library/LaunchAgents/com.cavi-ai.secure-agent-menubar.plist"
 
 mkdir -p "${HOME}/.local/bin" "${HOME}/Library/LaunchAgents"
 
-echo "Building secure-agentd daemon..."
+echo "Building secure-agentd daemon & CLI tool..."
 cd "${SCRIPT_DIR}"
 go build -o "${BIN_DEST}" ./daemon/cmd/secure-agentd
+go build -o "${CLI_DEST}" ./cmd/secure-agent
 
 echo "Building secure-agent-menubar..."
 cd "${SCRIPT_DIR}/menubar"
