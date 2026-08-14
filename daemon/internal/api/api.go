@@ -88,6 +88,7 @@ func (a *API) Serve(ctx context.Context) error {
 	mux.HandleFunc("/rotate", a.handleRotate)
 	mux.HandleFunc("/fleet", a.handleFleet)
 	mux.HandleFunc("/kill", a.handleKill)
+	a.setupWebDashboard(mux)
 
 	server := &http.Server{Handler: mux}
 
