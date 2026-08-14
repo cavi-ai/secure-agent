@@ -18,6 +18,7 @@ net_sample_interval_ms: 200
 socket_path: "$SOCKET_PATH"
 db_path: "$tmp/events.db"
 jsonl_path: "$tmp/events.jsonl"
+proxy_port: 0
 EOF
 
 # Build daemon

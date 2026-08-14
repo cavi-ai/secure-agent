@@ -1,9 +1,32 @@
 import Foundation
 
+public struct AgentSummaryModel: Codable, Identifiable, Sendable {
+    public var id: Int32 { pid }
+    public let pid: Int32
+    public let name: String
+    public let exePath: String?
+    public let cwd: String?
+
+    enum CodingKeys: String, CodingKey {
+        case pid
+        case name
+        case exePath = "exe_path"
+        case cwd
+    }
+
+    public init(pid: Int32, name: String, exePath: String? = nil, cwd: String? = nil) {
+        self.pid = pid
+        self.name = name
+        self.exePath = exePath
+        self.cwd = cwd
+    }
+}
+
 public struct StatusResponse: Codable, Sendable {
     public let running: Bool
     public let uptime: String
     public let activeAgents: Int
+    public let agents: [AgentSummaryModel]?
     public let proxyEnabled: Bool?
     public let proxyPort: Int?
 
@@ -11,14 +34,16 @@ public struct StatusResponse: Codable, Sendable {
         case running
         case uptime
         case activeAgents = "active_agents"
+        case agents
         case proxyEnabled = "proxy_enabled"
         case proxyPort = "proxy_port"
     }
 
-    public init(running: Bool, uptime: String, activeAgents: Int, proxyEnabled: Bool? = nil, proxyPort: Int? = nil) {
+    public init(running: Bool, uptime: String, activeAgents: Int, agents: [AgentSummaryModel]? = nil, proxyEnabled: Bool? = nil, proxyPort: Int? = nil) {
         self.running = running
         self.uptime = uptime
         self.activeAgents = activeAgents
+        self.agents = agents
         self.proxyEnabled = proxyEnabled
         self.proxyPort = proxyPort
     }
