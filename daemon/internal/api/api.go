@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/intel"
+	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 	"golang.org/x/sys/unix"
 )
@@ -84,6 +85,7 @@ func (a *API) Serve(ctx context.Context) error {
 	mux.HandleFunc("/flags", a.handleFlags)
 	mux.HandleFunc("/events", a.handleEvents)
 	mux.HandleFunc("/incidents", a.handleIncidents)
+	mux.HandleFunc("/rotate", a.handleRotate)
 	mux.HandleFunc("/kill", a.handleKill)
 
 	server := &http.Server{Handler: mux}
@@ -206,4 +208,66 @@ func (a *API) handleKill(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok", "pid": req.PID})
+}
+
+type rotateRequest struct {
+	IncidentID string `json:"incident_id"`
+	ItemID     string `json:"item_id"`
+}
+
+type rotateResponse struct {
+	Success bool   `json:"success"`
+	Message string `json:"message"`
+	ItemID  string `json:"item_id"`
+}
+
+func (a *API) handleRotate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req rotateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.IncidentID == "" || req.ItemID == "" {
+		http.Error(w, "Invalid payload: incident_id and item_id required", http.StatusBadRequest)
+		return
+	}
+
+	inc, err := a.store.GetIncident(req.IncidentID)
+	if err != nil || inc == nil {
+		http.Error(w, "Incident not found", http.StatusNotFound)
+		return
+	}
+
+	var targetItem *model.RotateItem
+	for _, item := range inc.RotateList {
+		if item.ID == req.ItemID {
+			targetItem = &item
+			break
+		}
+	}
+
+	if targetItem == nil {
+		http.Error(w, "Rotate item not found in incident", http.StatusNotFound)
+		return
+	}
+
+	rotator := intel.NewRotator()
+	msg, err := rotator.Execute(*targetItem)
+	w.Header().Set("Content-Type", "application/json")
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(rotateResponse{
+			Success: false,
+			Message: err.Error(),
+			ItemID:  req.ItemID,
+		})
+		return
+	}
+
+	json.NewEncoder(w).Encode(rotateResponse{
+		Success: true,
+		Message: msg,
+		ItemID:  req.ItemID,
+	})
 }
