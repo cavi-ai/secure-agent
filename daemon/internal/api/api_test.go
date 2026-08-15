@@ -2,13 +2,16 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
 
@@ -69,5 +72,52 @@ func TestKillEndpointInvokesKiller(t *testing.T) {
 	}
 	if fk.killed != 7 {
 		t.Fatalf("killer got pid %d, want 7", fk.killed)
+	}
+}
+
+func TestRotateEndpointExecutesRotation(t *testing.T) {
+	tmpDir := t.TempDir()
+	envPath := filepath.Join(tmpDir, ".env")
+	_ = os.WriteFile(envPath, []byte("MY_API_KEY=secret_val_123\n"), 0600)
+
+	st := testStore(t)
+	st.PutIncident(model.IncidentReport{
+		ID:        "inc-test-1",
+		FlagID:    "flag-1",
+		PID:       99,
+		Agent:     "cursor",
+		Timestamp: time.Now(),
+		Rule:      "sensitive-read-then-connect",
+		Summary:   "Test incident summary",
+		Risk:      model.RiskCritical,
+		RotateList: []model.RotateItem{
+			{
+				ID:       "rot-item-1",
+				Category: model.CategoryEnvSecrets,
+				Name:     ".env",
+				Path:     envPath,
+				Risk:     model.RiskCritical,
+			},
+		},
+	})
+
+	sock := fmt.Sprintf("/tmp/sa_test_rot_%d.sock", time.Now().UnixNano())
+	defer os.Remove(sock)
+	fk := &fakeKiller{}
+	a := New(sock, st, fk, func() Status { return Status{Running: true} })
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go a.Serve(ctx)
+	waitForSocket(t, sock)
+
+	cl := unixClient(sock)
+	resp, err := cl.Post("http://unix/rotate", "application/json", strings.NewReader(`{"incident_id":"inc-test-1","item_id":"rot-item-1"}`))
+	if err != nil || resp.StatusCode != 200 {
+		t.Fatalf("rotate post: %v status=%v", err, resp.StatusCode)
+	}
+
+	newBytes, _ := os.ReadFile(envPath)
+	if strings.Contains(string(newBytes), "secret_val_123") {
+		t.Fatal("secret value was not rotated via /rotate API endpoint!")
 	}
 }

@@ -14,7 +14,7 @@ echo "Removing LaunchAgent plists..."
 rm -f "${PLIST_DEST}" "${MENUBAR_PLIST_DEST}"
 
 echo "Removing installed binaries..."
-rm -f "${BIN_DEST}" "${MENUBAR_DEST}"
+rm -f "${BIN_DEST}" "${MENUBAR_DEST}" "${HOME}/.local/bin/secure-agent"
 
 echo "Unlinking plugin hooks..."
 rm -f "${HOME}/.claude/hooks/secret_guard.py"

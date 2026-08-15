@@ -1,4 +1,5 @@
 /daemon/secure-agentd
+/bin/
 *.db
 *.db-*
 *.jsonl

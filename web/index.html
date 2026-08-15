@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>secure-agent — Live AI Security Console</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+  <div class="app-container">
+    <!-- Top Navigation Header -->
+    <header class="top-header">
+      <div class="brand">
+        <div class="logo-shield">🛡️</div>
+        <div class="brand-text">
+          <h1>secure-agent <span class="badge-v1">v1.0</span></h1>
+          <span class="sub-label">Autonomous AI Agent Security & Payload Inspector</span>
+        </div>
+      </div>
+      <div class="header-status">
+        <div class="status-indicator active" id="system-status">
+          <span class="dot"></span>
+          <span id="status-text">Daemon Active</span>
+        </div>
+        <div class="metric-pill">
+          <span class="pill-label">Uptime</span>
+          <span class="pill-val" id="uptime-val">--</span>
+        </div>
+        <div class="metric-pill">
+          <span class="pill-label">Proxy (MITM)</span>
+          <span class="pill-val" id="proxy-status">127.0.0.1:8443</span>
+        </div>
+        <button class="btn-refresh" id="btn-refresh" title="Refresh Telemetry">🔄 Refresh</button>
+      </div>
+    </header>
+
+    <!-- System Quick Metrics Grid -->
+    <section class="metrics-grid">
+      <div class="metric-card">
+        <div class="metric-icon">🤖</div>
+        <div class="metric-body">
+          <span class="metric-title">Active AI Agents</span>
+          <span class="metric-number" id="count-agents">0</span>
+          <span class="metric-hint" id="hint-agents">Processes tagged in process tree</span>
+        </div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-icon">🚨</div>
+        <div class="metric-body">
+          <span class="metric-title">Security Correlation Flags</span>
+          <span class="metric-number" id="count-flags">0</span>
+          <span class="metric-hint">Sliding-window egress matches</span>
+        </div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-icon">📋</div>
+        <div class="metric-body">
+          <span class="metric-title">Containment Incidents</span>
+          <span class="metric-number" id="count-incidents">0</span>
+          <span class="metric-hint">Assessed secret exposures</span>
+        </div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-icon">🌐</div>
+        <div class="metric-body">
+          <span class="metric-title">Proxy Inspections</span>
+          <span class="metric-number" id="count-proxy">0</span>
+          <span class="metric-hint">Secret leaks & prompt injections</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Main Workspace Grid -->
+    <main class="dashboard-grid">
+      <!-- Left Column: Active Agents & Incident Containment -->
+      <div class="grid-col left-col">
+        <!-- Active Agent Process Tree Matrix -->
+        <div class="panel">
+          <div class="panel-header">
+            <h2>🤖 Active AI Agent Processes</h2>
+            <span class="count-badge" id="badge-agents-count">0</span>
+          </div>
+          <div class="panel-body" id="agents-container">
+            <div class="empty-state">No active AI agent processes detected</div>
+          </div>
+        </div>
+
+        <!-- Incident Containment & Auto-Rotation Hub -->
+        <div class="panel">
+          <div class="panel-header">
+            <h2>📋 Incident Reports & Auto-Rotation Hub</h2>
+            <span class="count-badge danger" id="badge-incidents-count">0</span>
+          </div>
+          <div class="panel-body" id="incidents-container">
+            <div class="empty-state">No security containment incidents recorded</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Right Column: Live Security Feed & Proxy Stream -->
+      <div class="grid-col right-col">
+        <!-- Security Flags & Alerts Feed -->
+        <div class="panel">
+          <div class="panel-header">
+            <h2>🚨 Real-Time Security Flags</h2>
+            <span class="count-badge warning" id="badge-flags-count">0</span>
+          </div>
+          <div class="panel-body" id="flags-container">
+            <div class="empty-state">No security correlation flags active</div>
+          </div>
+        </div>
+
+        <!-- Live Telemetry & Event Timeline -->
+        <div class="panel">
+          <div class="panel-header">
+            <h2>📡 System Event Timeline & Proxy Stream</h2>
+            <div class="filter-group">
+              <select id="event-filter" class="select-filter">
+                <option value="all">All Events</option>
+                <option value="8">Plugin Actions (Tool Use)</option>
+                <option value="9">Proxy Payload Hits</option>
+                <option value="5">Socket Connections</option>
+                <option value="0">File Opens</option>
+              </select>
+            </div>
+          </div>
+          <div class="panel-body timeline-body" id="events-container">
+            <div class="empty-state">No system events logged</div>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <!-- Notification Toast Container -->
+  <div id="toast-container" class="toast-container"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
