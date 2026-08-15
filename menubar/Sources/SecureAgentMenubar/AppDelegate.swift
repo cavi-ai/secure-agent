@@ -148,18 +148,45 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func viewIncidentClicked(_ sender: NSMenuItem) {
         guard let incID = sender.representedObject as? String else { return }
+        let matchingInc = currentIncidents.first(where: { $0.id == incID })
 
         Task {
             do {
                 let md = try await client.fetchIncidentMarkdown(id: incID)
                 await MainActor.run {
                     let alert = NSAlert()
-                    alert.messageText = "Incident Containment Report (\(incID))"
+                    alert.messageText = "Incident Containment & Remediation (\(incID))"
                     alert.informativeText = md.isEmpty ? "No detailed markdown available." : md
+                    alert.addButton(withTitle: "⚡ Auto-Rotate Secrets")
                     alert.addButton(withTitle: "Copy Markdown")
                     alert.addButton(withTitle: "Close")
                     let response = alert.runModal()
+
                     if response == .alertFirstButtonReturn {
+                        // Auto-Rotate Secrets clicked
+                        if let inc = matchingInc {
+                            Task {
+                                var logResults: [String] = []
+                                for item in inc.rotateList {
+                                    do {
+                                        let msg = try await self.client.executeRotation(incidentId: incID, itemId: item.id)
+                                        logResults.append("✅ \(item.name): \(msg)")
+                                    } catch {
+                                        logResults.append("❌ \(item.name): \(error.localizedDescription)")
+                                    }
+                                }
+                                await MainActor.run {
+                                    let resAlert = NSAlert()
+                                    resAlert.messageText = "Auto-Rotation Results"
+                                    resAlert.informativeText = logResults.isEmpty ? "No items to rotate." : logResults.joined(separator: "\n\n")
+                                    resAlert.addButton(withTitle: "OK")
+                                    resAlert.runModal()
+                                    self.fetchDaemonState()
+                                }
+                            }
+                        }
+                    } else if response == .alertSecondButtonReturn {
+                        // Copy Markdown clicked
                         NSPasteboard.general.clearContents()
                         NSPasteboard.general.setString(md, forType: .string)
                     }
