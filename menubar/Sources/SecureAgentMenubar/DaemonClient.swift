@@ -48,6 +48,17 @@ public final class DaemonClient: Sendable {
         return false
     }
 
+    public func executeRotation(incidentId: String, itemId: String) async throws -> String {
+        let payload: [String: String] = ["incident_id": incidentId, "item_id": itemId]
+        let jsonData = try JSONSerialization.data(withJSONObject: payload)
+        let body = try await request(method: "POST", path: "/rotate", body: jsonData)
+        if let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
+           let msg = json["message"] as? String {
+            return msg
+        }
+        return "Rotation action executed."
+    }
+
     private func request(method: String, path: String, body: Data? = nil) async throws -> Data {
         let socketPath = self.socketPath
         return try await Task.detached {

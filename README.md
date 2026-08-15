@@ -31,6 +31,12 @@ As AI coding agents (Claude Code, Cursor, Codex, OpenClaw, Copilot, etc.) gain i
 - 🌐 **Opt-In Local MITM Proxy & Payload Inspection (`127.0.0.1:8443`)**  
   Features an inline HTTP/HTTPS proxy server with dynamic TLS certificate generation (`CAManager`) that inspects request streams for outbound credential leaks (`redact.Detect`) and response streams for prompt injection attacks (`injection.Detect`).
 
+- 🖥️ **Live Web Security Console (`http://localhost:8443/dashboard/`)**  
+  Embedded dark-mode visual web console for real-time monitoring of active AI agent process trees, secret rotation incidents, sliding-window security flags, and proxy payload inspection streams.
+
+- 🛠️ **Native `secure-agent` CLI Tool**  
+  Pure-Go terminal utility (`secure-agent status`, `flags`, `incidents`, `rotate`, `kill`, `fleet`) for inspecting security posture and triggering 1-click secret rotation directly from terminal prompts.
+
 - 🔌 **Local Control & Query API**  
   Exposes a secure HTTP API over a Unix domain socket (`~/.config/secure-agent/daemon.sock`) for querying status, events, flags, incidents, and initiating process termination.
 
@@ -98,7 +104,15 @@ Run the provided installation script to build binaries, install LaunchAgents, an
 ```bash
 git clone https://github.com/cavi-ai/secure-agent.git
 cd secure-agent
-./packaging/install.sh
+
+# Build all binaries (daemon, menubar, CLI)
+make build
+
+# Run complete test suite
+make test
+
+# Install LaunchAgents and plugin hooks
+make install
 ```
 
 > **Note**: To enable full Endpoint Security telemetry via `eslogger`, grant Full Disk Access to `~/.local/bin/secure-agentd` under **System Settings → Privacy & Security → Full Disk Access**.
