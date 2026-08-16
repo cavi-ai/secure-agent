@@ -98,6 +98,17 @@
             <div class="empty-state">No security containment incidents recorded</div>
           </div>
         </div>
+
+        <!-- Tailnet Remote Fleet Status -->
+        <div class="panel">
+          <div class="panel-header">
+            <h2>🌐 Tailnet Fleet Node Status</h2>
+            <span class="count-badge" id="badge-fleet-count">0</span>
+          </div>
+          <div class="panel-body" id="fleet-container">
+            <div class="empty-state">No remote fleet nodes registered</div>
+          </div>
+        </div>
       </div>
 
       <!-- Right Column: Live Security Feed & Proxy Stream -->
@@ -134,6 +145,22 @@
       </div>
     </main>
   </div>
+
+  <!-- Incident Markdown Report Modal -->
+  <dialog id="report-modal" class="report-modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3 id="modal-title">📄 Security Incident Specification</h3>
+        <div class="modal-actions">
+          <button class="btn-copy-report" id="btn-copy-report">📋 Copy Markdown</button>
+          <button class="btn-close-modal" id="btn-close-modal">✕</button>
+        </div>
+      </div>
+      <div class="modal-body" id="modal-report-body">
+        <div class="loading-spinner">Loading incident specification report…</div>
+      </div>
+    </div>
+  </dialog>
 
   <!-- Notification Toast Container -->
   <div id="toast-container" class="toast-container"></div>

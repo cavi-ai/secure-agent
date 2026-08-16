@@ -1,6 +1,11 @@
 document.addEventListener('DOMContentLoaded', () => {
   const btnRefresh = document.getElementById('btn-refresh');
   const eventFilter = document.getElementById('event-filter');
+  const reportModal = document.getElementById('report-modal');
+  const btnCloseModal = document.getElementById('btn-close-modal');
+  const btnCopyReport = document.getElementById('btn-copy-report');
+
+  let currentRawMarkdown = '';
 
   btnRefresh.addEventListener('click', () => {
     fetchTelemetry();
@@ -11,20 +16,40 @@ document.addEventListener('DOMContentLoaded', () => {
     renderEvents();
   });
 
+  if (btnCloseModal && reportModal) {
+    btnCloseModal.addEventListener('click', () => {
+      reportModal.close();
+    });
+  }
+
+  if (btnCopyReport) {
+    btnCopyReport.addEventListener('click', async () => {
+      if (!currentRawMarkdown) return;
+      try {
+        await navigator.clipboard.writeText(currentRawMarkdown);
+        showToast('Incident report copied to clipboard!', 'success');
+      } catch (err) {
+        showToast('Failed to copy report: ' + err, 'danger');
+      }
+    });
+  }
+
   let telemetryData = {
     status: null,
     flags: [],
     incidents: [],
-    events: []
+    events: [],
+    fleet: []
   };
 
   async function fetchTelemetry() {
     try {
-      const [statusRes, flagsRes, incidentsRes, eventsRes] = await Promise.all([
+      const [statusRes, flagsRes, incidentsRes, eventsRes, fleetRes] = await Promise.all([
         fetch('/status').catch(() => null),
         fetch('/flags?limit=20').catch(() => null),
         fetch('/incidents?limit=10').catch(() => null),
-        fetch('/events?limit=50').catch(() => null)
+        fetch('/events?limit=50').catch(() => null),
+        fetch('/fleet').catch(() => null)
       ]);
 
       if (statusRes && statusRes.ok) {
@@ -39,6 +64,9 @@ document.addEventListener('DOMContentLoaded', () => {
       if (eventsRes && eventsRes.ok) {
         telemetryData.events = await eventsRes.json() || [];
       }
+      if (fleetRes && fleetRes.ok) {
+        telemetryData.fleet = await fleetRes.json() || [];
+      }
 
       renderAll();
     } catch (err) {
@@ -50,6 +78,7 @@ document.addEventListener('DOMContentLoaded', () => {
     renderStatus();
     renderAgents();
     renderIncidents();
+    renderFleet();
     renderFlags();
     renderEvents();
   }
@@ -115,13 +144,42 @@ document.addEventListener('DOMContentLoaded', () => {
           <span class="sub-label">${escapeHTML(inc.rule)} — PID ${inc.pid}</span>
         </div>
         <div class="incident-summary">${escapeHTML(inc.summary)}</div>
+        <div class="incident-actions">
+          <button class="btn-view-report" onclick="openIncidentReport('${escapeHTML(inc.id)}')">📄 View Full Spec Report</button>
+        </div>
         <div class="rotate-list">
           ${(inc.rotate_list || []).map(item => `
             <div class="rotate-item-row">
               <span>🔑 <strong>${escapeHTML(item.name)}</strong> (${escapeHTML(item.category)})</span>
-              <button class="btn-rotate-now" onclick="triggerRotation('${inc.id}', '${item.id}')">⚡ Auto-Rotate</button>
+              <button class="btn-rotate-now" onclick="triggerRotation('${escapeHTML(inc.id)}', '${escapeHTML(item.id)}')">⚡ Auto-Rotate</button>
             </div>
           `).join('')}
+        </div>
+      </div>
+    `).join('');
+  }
+
+  function renderFleet() {
+    const container = document.getElementById('fleet-container');
+    const badge = document.getElementById('badge-fleet-count');
+    const fleet = telemetryData.fleet || [];
+
+    badge.textContent = fleet.length;
+
+    if (fleet.length === 0) {
+      container.innerHTML = `<div class="empty-state">No remote fleet nodes registered</div>`;
+      return;
+    }
+
+    container.innerHTML = fleet.map(node => `
+      <div class="fleet-node-card">
+        <div class="fleet-node-header">
+          <span class="fleet-node-name">🖥️ ${escapeHTML(node.hostname || node.id || 'Fleet Node')}</span>
+          <span class="status-badge ${node.online ? 'online' : 'offline'}">${node.online ? 'ONLINE' : 'OFFLINE'}</span>
+        </div>
+        <div class="fleet-node-meta">
+          <span>IP: ${escapeHTML(node.ip || 'N/A')}</span>
+          <span>Version: ${escapeHTML(node.version || 'v1.0')}</span>
         </div>
       </div>
     `).join('');
@@ -185,6 +243,28 @@ document.addEventListener('DOMContentLoaded', () => {
     }).join('');
   }
 
+  window.openIncidentReport = async function(incidentId) {
+    if (!reportModal) return;
+    const bodyEl = document.getElementById('modal-report-body');
+    const titleEl = document.getElementById('modal-title');
+    titleEl.textContent = `📄 Incident Report Spec: ${incidentId}`;
+    bodyEl.innerHTML = `<div class="loading-spinner">Fetching incident report...</div>`;
+    reportModal.showModal();
+
+    try {
+      const res = await fetch(`/incidents?id=${encodeURIComponent(incidentId)}&format=markdown`);
+      if (res.ok) {
+        const text = await res.text();
+        currentRawMarkdown = text;
+        bodyEl.innerHTML = parseMarkdownToHTML(text);
+      } else {
+        bodyEl.innerHTML = `<div class="empty-state">Failed to load incident report specification.</div>`;
+      }
+    } catch (err) {
+      bodyEl.innerHTML = `<div class="empty-state">Error: ${escapeHTML(err.message)}</div>`;
+    }
+  };
+
   window.killProcess = async function(pid) {
     if (!confirm(`Are you sure you want to SIGKILL PID ${pid}?`)) return;
     try {
@@ -223,6 +303,29 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   };
 
+  function parseMarkdownToHTML(md) {
+    if (!md) return '';
+    let html = escapeHTML(md);
+
+    // Code blocks
+    html = html.replace(/```([\s\S]*?)```/g, (_, code) => `<pre class="md-codeblock"><code>${code}</code></pre>`);
+    // Inline code
+    html = html.replace(/`([^`]+)`/g, '<code class="md-inline-code">$1</code>');
+    // Headers
+    html = html.replace(/^### (.*$)/gim, '<h3>$1</h3>');
+    html = html.replace(/^## (.*$)/gim, '<h2>$1</h2>');
+    html = html.replace(/^# (.*$)/gim, '<h1>$1</h1>');
+    // Bold
+    html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    // Bullet lists
+    html = html.replace(/^\- (.*$)/gim, '<li>$1</li>');
+    html = html.replace(/(<li>.*<\/li>)/s, '<ul>$1</ul>');
+    // Paragraphs
+    html = html.replace(/\n\n/g, '<br/><br/>');
+
+    return `<div class="markdown-view">${html}</div>`;
+  }
+
   function showToast(msg, type = 'info') {
     const container = document.getElementById('toast-container');
     const toast = document.createElement('div');
@@ -243,6 +346,7 @@ document.addEventListener('DOMContentLoaded', () => {
       .replace(/"/g, '&quot;');
   }
 
+  // Initial fetch and poll every 2 seconds
   fetchTelemetry();
   setInterval(fetchTelemetry, 2000);
 });
