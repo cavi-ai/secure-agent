@@ -6,7 +6,7 @@
 
 **/__pycache__/
 docs/
-menubar/.build/
+.build/
 # Added by code-review-graph
 .code-review-graph/
 .cursorrules
