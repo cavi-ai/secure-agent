@@ -4,12 +4,22 @@ import UserNotifications
 public final class NotificationManager: NSObject, UNUserNotificationCenterDelegate, Sendable {
     public static let shared = NotificationManager()
 
+    private var isSupported: Bool {
+        return Bundle.main.bundleIdentifier != nil
+    }
+
     override private init() {
         super.init()
-        UNUserNotificationCenter.current().delegate = self
+        if Bundle.main.bundleIdentifier != nil {
+            UNUserNotificationCenter.current().delegate = self
+        }
     }
 
     public func requestAuthorization() {
+        guard isSupported else {
+            print("[secure-agent-menubar] Unbundled process context; skipping UNUserNotificationCenter auth.")
+            return
+        }
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, error in
             if let error = error {
                 print("[secure-agent-menubar] Notification auth error: \(error)")
@@ -18,6 +28,10 @@ public final class NotificationManager: NSObject, UNUserNotificationCenterDelega
     }
 
     public func sendNotification(for flag: FlagModel) {
+        guard isSupported else {
+            print("[secure-agent-menubar] Alert [\(flag.rule)]: \(flag.evidence.joined(separator: ", "))")
+            return
+        }
         let content = UNMutableNotificationContent()
         content.title = "[secure-agent] \(flag.rule)"
         content.subtitle = "Severity \(flag.severity) — \(flag.agent.capitalized) (PID \(flag.pid))"
@@ -42,7 +56,6 @@ public final class NotificationManager: NSObject, UNUserNotificationCenterDelega
         willPresent notification: UNNotification,
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
-        // Show banner and sound even when app is active
         completionHandler([.banner, .sound])
     }
 }
