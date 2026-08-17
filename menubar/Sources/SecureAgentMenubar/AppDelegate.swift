@@ -29,16 +29,12 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     private func setupStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = statusItem.button {
-            button.image = NSImage(systemSymbolName: "shield", accessibilityDescription: "secure-agent")
-            button.target = self
-            button.action = #selector(statusItemClicked)
+            let img = NSImage(systemSymbolName: "shield", accessibilityDescription: "secure-agent")
+            img?.isTemplate = true
+            button.image = img
+            button.title = " 🛡️"
         }
         updateMenu()
-    }
-
-    @objc private func statusItemClicked() {
-        updateMenu()
-        statusItem.button?.performClick(nil)
     }
 
     private func startPolling() {
@@ -93,14 +89,20 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let button = statusItem.button else { return }
 
         if !currentIncidents.isEmpty || currentFlags.contains(where: { $0.severity >= 3 }) {
-            button.image = NSImage(systemSymbolName: "exclamationmark.shield.fill", accessibilityDescription: "Flagged: Critical Security Alert")
+            let img = NSImage(systemSymbolName: "exclamationmark.shield.fill", accessibilityDescription: "Flagged: Critical Security Alert")
+            img?.isTemplate = true
+            button.image = img
             button.title = " 🚨"
         } else if let status = currentStatus, status.activeAgents > 0 {
-            button.image = NSImage(systemSymbolName: "bolt.shield.fill", accessibilityDescription: "Agents Active")
-            button.title = " \(status.activeAgents)"
+            let img = NSImage(systemSymbolName: "bolt.shield.fill", accessibilityDescription: "Agents Active")
+            img?.isTemplate = true
+            button.image = img
+            button.title = " 🛡️ \(status.activeAgents)"
         } else {
-            button.image = NSImage(systemSymbolName: "shield", accessibilityDescription: "Quiet: Monitoring Active")
-            button.title = ""
+            let img = NSImage(systemSymbolName: "shield", accessibilityDescription: "Quiet: Monitoring Active")
+            img?.isTemplate = true
+            button.image = img
+            button.title = " 🛡️"
         }
     }
 
