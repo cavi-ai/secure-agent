@@ -47,6 +47,7 @@ body {
   gap: 24px;
 }
 
+/* Top Header */
 .top-header {
   display: flex;
   align-items: center;
@@ -159,6 +160,7 @@ body {
   border-color: var(--color-blue);
 }
 
+/* Metrics Grid */
 .metrics-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
@@ -214,6 +216,7 @@ body {
   color: var(--text-dim);
 }
 
+/* Dashboard Workspace Grid */
 .dashboard-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -294,6 +297,7 @@ body {
   text-align: center;
 }
 
+/* Agent Card */
 .agent-card {
   background: var(--bg-card);
   border: 1px solid var(--border-color);
@@ -351,6 +355,7 @@ body {
   color: #fff;
 }
 
+/* Incident Card */
 .incident-card {
   background: var(--bg-card);
   border: 1px solid var(--border-color);
@@ -389,6 +394,28 @@ body {
   color: var(--text-main);
 }
 
+.incident-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.btn-view-report {
+  background: var(--color-blue-bg);
+  color: var(--color-blue);
+  border: 1px solid var(--color-blue);
+  padding: 6px 12px;
+  border-radius: 4px;
+  font-weight: 600;
+  font-size: 0.78rem;
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.btn-view-report:hover {
+  background: var(--color-blue);
+  color: #fff;
+}
+
 .rotate-item-row {
   background: var(--bg-surface);
   padding: 10px 12px;
@@ -416,6 +443,52 @@ body {
   color: #000;
 }
 
+/* Fleet Card */
+.fleet-node-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.fleet-node-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.status-badge {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.status-badge.online {
+  background: var(--color-emerald-bg);
+  color: var(--color-emerald);
+}
+
+.status-badge.offline {
+  background: var(--bg-surface);
+  color: var(--text-dim);
+}
+
+.fleet-node-meta {
+  display: flex;
+  gap: 16px;
+  font-size: 0.78rem;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+}
+
+/* Flag Card */
 .flag-card {
   background: var(--bg-card);
   border: 1px solid var(--border-color);
@@ -447,6 +520,7 @@ body {
   line-height: 1.4;
 }
 
+/* Timeline Events */
 .timeline-item {
   font-family: var(--font-mono);
   font-size: 0.78rem;
@@ -490,6 +564,135 @@ body {
   font-size: 0.8rem;
 }
 
+/* Modal Dialog */
+.report-modal {
+  border: none;
+  background: transparent;
+  padding: 0;
+  max-width: 800px;
+  width: 90vw;
+  margin: auto;
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.report-modal::backdrop {
+  background: rgba(0, 0, 0, 0.75);
+  backdrop-filter: blur(4px);
+}
+
+.modal-content {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  display: flex;
+  flex-direction: column;
+  max-height: 85vh;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.6);
+}
+
+.modal-header {
+  padding: 16px 24px;
+  border-bottom: 1px solid var(--border-color);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.modal-header h3 {
+  font-size: 1.1rem;
+  font-weight: 600;
+}
+
+.modal-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.btn-copy-report {
+  background: var(--bg-card);
+  color: var(--text-main);
+  border: 1px solid var(--border-color);
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.btn-copy-report:hover {
+  background: var(--bg-surface-hover);
+  border-color: var(--color-blue);
+}
+
+.btn-close-modal {
+  background: transparent;
+  color: var(--text-muted);
+  border: none;
+  font-size: 1.25rem;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+
+.btn-close-modal:hover {
+  color: var(--text-main);
+  background: var(--bg-card);
+}
+
+.modal-body {
+  padding: 24px;
+  overflow-y: auto;
+  font-size: 0.9rem;
+  line-height: 1.6;
+}
+
+.markdown-view {
+  font-family: var(--font-sans);
+  color: var(--text-main);
+}
+
+.markdown-view h1, .markdown-view h2, .markdown-view h3 {
+  margin-top: 16px;
+  margin-bottom: 8px;
+  font-weight: 700;
+}
+
+.markdown-view h1 { font-size: 1.3rem; }
+.markdown-view h2 { font-size: 1.15rem; color: var(--color-blue); }
+.markdown-view h3 { font-size: 1rem; color: var(--text-muted); }
+
+.md-codeblock {
+  background: var(--bg-dark);
+  border: 1px solid var(--border-color);
+  padding: 12px;
+  border-radius: 6px;
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  overflow-x: auto;
+  margin: 12px 0;
+  color: var(--color-emerald);
+}
+
+.md-inline-code {
+  font-family: var(--font-mono);
+  background: var(--bg-card);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 0.82rem;
+  color: var(--color-amber);
+}
+
+.loading-spinner {
+  text-align: center;
+  color: var(--text-muted);
+  font-style: italic;
+  padding: 32px;
+}
+
+/* Toast Notifications */
 .toast-container {
   position: fixed;
   bottom: 24px;
@@ -509,6 +712,14 @@ body {
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
   font-size: 0.85rem;
   animation: slideIn 0.25s ease-out;
+}
+
+.toast.success {
+  border-color: var(--color-emerald);
+}
+
+.toast.info {
+  border-color: var(--color-blue);
 }
 
 @keyframes slideIn {
