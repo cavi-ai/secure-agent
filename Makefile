@@ -1,4 +1,14 @@
-.PHONY: all build test install uninstall clean daemon menubar cli smoke
+.PHONY: all build test install uninstall clean daemon menubar cli smoke app dmg icon
+
+app:
+	./packaging/make_app.sh
+
+dmg:
+	./packaging/make_dmg.sh
+
+icon:
+	./packaging/make_icon.sh
+
 
 # Binaries
 BIN_DIR := $(HOME)/.local/bin

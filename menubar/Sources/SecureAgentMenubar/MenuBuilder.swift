@@ -12,6 +12,9 @@ public final class MenuBuilder: @unchecked Sendable {
         killAction: Selector,
         viewIncidentAction: Selector,
         pauseAction: Selector,
+        dashboardAction: Selector,
+        setupAction: Selector,
+        uninstallAction: Selector,
         quitAction: Selector
     ) -> NSMenu {
         let menu = NSMenu()
@@ -151,9 +154,23 @@ public final class MenuBuilder: @unchecked Sendable {
         refreshItem.target = target
         menu.addItem(refreshItem)
 
+        let dashItem = NSMenuItem(title: "Open Security Console", action: dashboardAction, keyEquivalent: "d")
+        dashItem.target = target
+        menu.addItem(dashItem)
+
         menu.addItem(NSMenuItem.separator())
 
-        let quitItem = NSMenuItem(title: "Quit secure-agent-menubar", action: quitAction, keyEquivalent: "q")
+        let setupItem = NSMenuItem(title: "Setup & Permissions…", action: setupAction, keyEquivalent: "")
+        setupItem.target = target
+        menu.addItem(setupItem)
+
+        let uninstallItem = NSMenuItem(title: "Uninstall…", action: uninstallAction, keyEquivalent: "")
+        uninstallItem.target = target
+        menu.addItem(uninstallItem)
+
+        menu.addItem(NSMenuItem.separator())
+
+        let quitItem = NSMenuItem(title: "Quit Secure Agent", action: quitAction, keyEquivalent: "q")
         quitItem.target = target
         menu.addItem(quitItem)
 
