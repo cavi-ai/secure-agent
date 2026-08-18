@@ -28,7 +28,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         Task {
             await SetupManager.shared.refreshState()
             if SetupManager.shared.needsSetup {
-                OnboardingWindowController.shared.show()
+                OnboardingWindowController.shared.showOnceIfNeeded()
             }
         }
     }
