@@ -24,6 +24,13 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
         setupStatusItem()
         startPolling()
+
+        Task {
+            await SetupManager.shared.refreshState()
+            if SetupManager.shared.needsSetup {
+                OnboardingWindowController.shared.show()
+            }
+        }
     }
 
     private func setupStatusItem() {
@@ -39,7 +46,12 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func startPolling() {
         fetchDaemonState()
-        timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+        scheduleTimer(interval: 1.0)
+    }
+
+    private func scheduleTimer(interval: TimeInterval) {
+        timer?.invalidate()
+        timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 self?.fetchDaemonState()
             }
@@ -57,18 +69,28 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
                 let events = try await client.fetchEvents(limit: 50)
 
                 await MainActor.run {
+                    let wasDisconnected = self.currentStatus == nil
                     self.currentStatus = status
                     self.currentFlags = flags
                     self.currentIncidents = incidents
                     self.currentEvents = events
+                    if wasDisconnected {
+                        // Daemon is back: restore fast polling.
+                        self.scheduleTimer(interval: 1.0)
+                    }
                     self.processNewFlags(flags)
                     self.updateStatusIcon()
                     self.updateMenu()
                 }
             } catch {
                 await MainActor.run {
+                    let wasConnected = self.currentStatus != nil
                     self.currentStatus = nil
                     self.currentIncidents = []
+                    if wasConnected {
+                        // Daemon went away: back off to reduce socket churn.
+                        self.scheduleTimer(interval: 5.0)
+                    }
                     self.updateStatusIcon()
                     self.updateMenu()
                 }
@@ -118,6 +140,9 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             killAction: #selector(killClicked(_:)),
             viewIncidentAction: #selector(viewIncidentClicked(_:)),
             pauseAction: #selector(pauseClicked),
+            dashboardAction: #selector(dashboardClicked),
+            setupAction: #selector(setupClicked),
+            uninstallAction: #selector(uninstallClicked),
             quitAction: #selector(quitClicked)
         )
         statusItem.menu = menu
@@ -202,6 +227,34 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func pauseClicked() {
         isPaused.toggle()
         updateMenu()
+    }
+
+    @objc private func dashboardClicked() {
+        let port = currentStatus?.proxyPort ?? 8443
+        if let url = URL(string: "http://localhost:\(port)/dashboard/") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    @objc private func setupClicked() {
+        OnboardingWindowController.shared.show()
+    }
+
+    @objc private func uninstallClicked() {
+        let alert = NSAlert()
+        alert.messageText = "Uninstall Secure Agent?"
+        alert.informativeText = "This stops the background daemon, removes harness hooks, the login item, and the CLI symlink. The app itself and your logs/config are left in place."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Uninstall")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        do {
+            try SetupManager.shared.uninstallAll()
+        } catch {
+            SetupManager.shared.report(error)
+        }
+        Task { await SetupManager.shared.refreshState() }
+        NSApp.terminate(nil)
     }
 
     @objc private func quitClicked() {
