@@ -90,32 +90,51 @@ flowchart TD
 
 ## 🚀 Quick Start
 
-### Prerequisites
+### DMG Installation (recommended)
 
-- **macOS**: 14.0 (Sonoma) or newer
-- **Go**: 1.22 or newer
-- **Swift**: 6.0 / Xcode Command Line Tools
-- **Python**: 3.10 or newer
+```bash
+# Generate the app icon (one-time, or after changing artwork)
+make icon
 
-### Automated Installation
+# Build universal binaries, assemble & sign "Secure Agent.app", package a DMG
+make dmg
+```
 
-Run the provided installation script to build binaries, install LaunchAgents, and set up plugin hooks:
+Open `dist/SecureAgent-<version>.dmg`, drag **Secure Agent.app** to **Applications**, and launch it.
+The first-run setup wizard walks you through:
+
+1. **Background daemon** — installs the `secure-agentd` LaunchAgent from inside the bundle.
+2. **Full Disk Access** — deep-links to System Settings → Privacy & Security → Full Disk Access.
+3. **Harness hooks** — copies `secret_guard.py`, `injection_scan.py`, `activity_log.py` into `~/.claude/hooks`, `~/.cursor/hooks`, and `~/.config/opencode/hooks`.
+4. **Extras** — Open at Login (`SMAppService`) and the `secure-agent` CLI symlink in `~/.local/bin`.
+
+Everything is also manageable later from the menu bar icon (**Setup & Permissions…**, **Uninstall…**, **Open Security Console**).
+
+#### Signing & notarization
+
+`make dmg` ad-hoc signs by default (fine for local use; recipients must right-click → Open).
+For proper Gatekeeper distribution:
+
+```bash
+export CODESIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)"
+xcrun notarytool store-credentials secure-agent-notary --apple-id you@example.com --team-id TEAMID
+export NOTARY_PROFILE=secure-agent-notary
+make dmg   # signs, notarizes, and staples both the app and the DMG
+```
+
+### Developer Installation (from source)
+
+Prerequisites: macOS 14+, Go 1.22+, Swift 6.0 / Xcode CLT, Python 3.10+.
 
 ```bash
 git clone https://github.com/cavi-ai/secure-agent.git
 cd secure-agent
-
-# Build all binaries (daemon, menubar, CLI)
-make build
-
-# Run complete test suite
-make test
-
-# Install LaunchAgents and plugin hooks
-make install
+make build      # daemon, menubar, CLI into bin/
+make test       # full Go + Swift + Python + E2E suites
+make install    # dev install into ~/.local/bin + LaunchAgents
 ```
 
-> **Note**: To enable full Endpoint Security telemetry via `eslogger`, grant Full Disk Access to `~/.local/bin/secure-agentd` under **System Settings → Privacy & Security → Full Disk Access**.
+> **Note**: To enable full Endpoint Security telemetry via `eslogger`, grant Full Disk Access to the daemon binary under **System Settings → Privacy & Security → Full Disk Access**.
 
 ### Plugin Hook Installation
 
@@ -248,14 +267,18 @@ secure-agent/
 ├── daemon/               # Go telemetry daemon (secure-agentd)
 │   ├── cmd/              # Main executable entrypoint
 │   └── internal/         # Collectors, bus, correlator, store, API, config
-├── plugin/               # Harness plugin hooks (Claude Code / Cursor)
+│   │       └── api/web_dist/  # Embedded web console assets (canonical source)
+├── plugin/               # Harness plugin hooks (Claude Code / Cursor / opencode)
 │   ├── hooks/            # secret_guard.py, injection_scan.py, activity_log.py
-│   └── install.sh        # Symlink installer script
-├── menubar/              # Native Swift menu bar app (secure-agent-menubar)
+│   └── install.sh        # Symlink installer script (dev flow)
+├── menubar/              # Native Swift menu bar app ("Secure Agent.app")
 │   ├── Package.swift     # SwiftPM manifest
-│   └── Sources/          # AppKit / SwiftUI NSStatusItem interface
-├── packaging/            # System deployment scripts and launchd plists
-│   ├── install.sh        # Build & LaunchAgent installer
+│   └── Sources/          # AppKit / SwiftUI NSStatusItem interface + setup wizard
+├── packaging/            # Distribution & deployment
+│   ├── make_app.sh       # Universal build → signed Secure Agent.app
+│   ├── make_dmg.sh       # Notarize (optional) → distributable DMG
+│   ├── make_icon.sh      # Generates AppIcon.icns
+│   ├── install.sh        # Dev LaunchAgent installer (~/.local/bin flow)
 │   └── test/             # E2E smoke testing harness
 ├── CONTRIBUTING.md       # Open-source contribution guidelines
 └── SECURITY.md           # Security disclosure policy
