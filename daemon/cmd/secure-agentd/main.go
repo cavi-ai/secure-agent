@@ -171,7 +171,33 @@ func main() {
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
-	<-sigCh
+
+	// Exit when orphaned. The menu bar app that launches this daemon owns its
+	// lifetime and sends SIGTERM on quit. If that app dies abruptly (even via
+	// SIGKILL, which cannot be caught by it), this process is reparented to
+	// launchd (pid 1). Watching for the parent changing guarantees the daemon
+	// never lingers as a hidden background process after its owner is gone.
+	// Skip the watch when launched directly by pid 1 (launchd or an already
+	// orphaned context), where there is no owning parent to outlive.
+	parentGone := make(chan struct{})
+	if initialPPID := os.Getppid(); initialPPID != 1 {
+		go func() {
+			ticker := time.NewTicker(2 * time.Second)
+			defer ticker.Stop()
+			for range ticker.C {
+				if os.Getppid() != initialPPID {
+					log.Printf("secure-agentd: owning parent (pid %d) exited; shutting down", initialPPID)
+					close(parentGone)
+					return
+				}
+			}
+		}()
+	}
+
+	select {
+	case <-sigCh:
+	case <-parentGone:
+	}
 
 	log.Println("secure-agentd shutting down...")
 	cancel()

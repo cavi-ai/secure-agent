@@ -16,6 +16,19 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/redact"
 )
 
+const (
+	// tailInterval is how often active transcript files are tailed for new lines.
+	tailInterval = 200 * time.Millisecond
+	// resolveInterval is how often the (expensive) recursive path discovery and
+	// the active-set recomputation run.
+	resolveInterval = 5 * time.Second
+	// activeWindow is how recently a file must have been modified to be tailed
+	// on the fast loop. Idle historical transcripts are skipped until they are
+	// appended to again; they rejoin the active set within one resolveInterval,
+	// and their byte offset is retained, so no appended lines are missed.
+	activeWindow = 2 * time.Minute
+)
+
 type TranscriptScanner struct {
 	bus   *bus.Bus
 	paths []string
@@ -82,51 +95,118 @@ func ScanLine(line string) (event.Event, bool) {
 func (ts *TranscriptScanner) Run(ctx context.Context) error {
 	offsets := make(map[string]int64)
 
-	// Seed pre-existing transcript log files to EOF on startup to avoid flooding bus buffer with old history
-	for _, p := range ts.resolvePaths() {
+	// Targets split two ways. Directory targets (e.g. ~/.claude/projects) need a
+	// recursive walk that is expensive when the tree holds thousands of files,
+	// so they are re-walked only on the slow resolve cadence and further limited
+	// to recently-modified files. File and glob targets (the hook activity log,
+	// session logs) are cheap to resolve and are refreshed on every fast tail
+	// tick, so real-time signals are picked up with low latency. Walking the
+	// whole tree on every tail tick previously pegged the CPU at ~20%+.
+	dirTargets, cheapTargets := ts.classifyTargets()
+	cheapPaths := resolveGlobs(cheapTargets)
+	dirPaths := activePaths(walkDirs(dirTargets))
+
+	// Seed everything present at startup to EOF so old history is not replayed;
+	// files that appear later are read from byte 0 (see tailFile), so genuinely
+	// new session transcripts are captured whole.
+	for _, p := range cheapPaths {
+		if fi, err := os.Stat(p); err == nil && !fi.IsDir() {
+			offsets[p] = fi.Size()
+		}
+	}
+	for _, p := range dirPaths {
 		if fi, err := os.Stat(p); err == nil && !fi.IsDir() {
 			offsets[p] = fi.Size()
 		}
 	}
 
-	ticker := time.NewTicker(200 * time.Millisecond)
-	defer ticker.Stop()
+	tailTicker := time.NewTicker(tailInterval)
+	defer tailTicker.Stop()
+	resolveTicker := time.NewTicker(resolveInterval)
+	defer resolveTicker.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-ticker.C:
-			expandedPaths := ts.resolvePaths()
-			for _, p := range expandedPaths {
+		case <-resolveTicker.C:
+			dirTargets, cheapTargets = ts.classifyTargets()
+			dirPaths = activePaths(walkDirs(dirTargets))
+		case <-tailTicker.C:
+			cheapPaths = resolveGlobs(cheapTargets)
+			for _, p := range cheapPaths {
+				ts.tailFile(p, offsets)
+			}
+			for _, p := range dirPaths {
 				ts.tailFile(p, offsets)
 			}
 		}
 	}
 }
 
-func (ts *TranscriptScanner) resolvePaths() []string {
-	var res []string
+// classifyTargets splits configured targets into directory targets (which need
+// a recursive walk) and cheap targets (explicit files or globs). A target that
+// does not currently exist is treated as cheap; it costs nothing until it
+// appears.
+func (ts *TranscriptScanner) classifyTargets() (dirs, cheap []string) {
 	for _, p := range ts.paths {
-		fi, err := os.Stat(p)
-		if err == nil && fi.IsDir() {
-			_ = filepath.WalkDir(p, func(path string, d os.DirEntry, err error) error {
-				if err == nil && !d.IsDir() && strings.HasSuffix(path, ".jsonl") {
-					res = append(res, path)
-				}
-				return nil
-			})
-			continue
+		if fi, err := os.Stat(p); err == nil && fi.IsDir() {
+			dirs = append(dirs, p)
+		} else {
+			cheap = append(cheap, p)
 		}
+	}
+	return dirs, cheap
+}
+
+// walkDirs returns every .jsonl file beneath the given directories.
+func walkDirs(dirs []string) []string {
+	var res []string
+	for _, d := range dirs {
+		_ = filepath.WalkDir(d, func(path string, de os.DirEntry, err error) error {
+			if err == nil && !de.IsDir() && strings.HasSuffix(path, ".jsonl") {
+				res = append(res, path)
+			}
+			return nil
+		})
+	}
+	return res
+}
+
+// resolveGlobs expands explicit-file and glob targets to the files that exist
+// now. A target with no match yet is returned as-is so tailFile can pick it up
+// the moment it appears.
+func resolveGlobs(targets []string) []string {
+	var res []string
+	for _, p := range targets {
 		matches, err := filepath.Glob(p)
 		if err == nil && len(matches) > 0 {
 			for _, m := range matches {
-				mFi, mErr := os.Stat(m)
-				if mErr == nil && !mFi.IsDir() {
+				if fi, mErr := os.Stat(m); mErr == nil && !fi.IsDir() {
 					res = append(res, m)
 				}
 			}
 		} else {
+			res = append(res, p)
+		}
+	}
+	return res
+}
+
+// activePaths returns the subset of paths modified within activeWindow. It runs
+// on the slow resolve cadence so the fast tail loop can skip the thousands of
+// idle historical transcripts that never change; an idle file rejoins the set
+// within one resolveInterval of being appended to, and its offset is retained,
+// so no appended lines are missed.
+func activePaths(paths []string) []string {
+	cutoff := time.Now().Add(-activeWindow)
+	res := make([]string, 0, len(paths))
+	for _, p := range paths {
+		fi, err := os.Stat(p)
+		if err != nil || fi.IsDir() {
+			continue
+		}
+		if fi.ModTime().After(cutoff) {
 			res = append(res, p)
 		}
 	}
