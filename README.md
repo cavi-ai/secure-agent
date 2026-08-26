@@ -103,7 +103,7 @@ make dmg
 Open `dist/SecureAgent-<version>.dmg`, drag **Secure Agent.app** to **Applications**, and launch it.
 The first-run setup wizard walks you through:
 
-1. **Background daemon** — installs the `secure-agentd` LaunchAgent from inside the bundle.
+1. **Background monitor** — the `secure-agentd` daemon runs automatically as a child process of the app. It starts when you launch Secure Agent and stops when you quit it; there is no LaunchAgent and nothing runs in the background afterwards.
 2. **Full Disk Access** — deep-links to System Settings → Privacy & Security → Full Disk Access.
 3. **Harness hooks** — copies `secret_guard.py`, `injection_scan.py`, `activity_log.py` into `~/.claude/hooks`, `~/.cursor/hooks`, and `~/.config/opencode/hooks`.
 4. **Extras** — Open at Login (`SMAppService`) and the `secure-agent` CLI symlink in `~/.local/bin`.
@@ -131,7 +131,7 @@ git clone https://github.com/cavi-ai/secure-agent.git
 cd secure-agent
 make build      # daemon, menubar, CLI into bin/
 make test       # full Go + Swift + Python + E2E suites
-make install    # dev install into ~/.local/bin + LaunchAgents
+make install    # build "Secure Agent.app" and launch it (no LaunchAgents)
 ```
 
 > **Note**: To enable full Endpoint Security telemetry via `eslogger`, grant Full Disk Access to the daemon binary under **System Settings → Privacy & Security → Full Disk Access**.
@@ -278,7 +278,8 @@ secure-agent/
 │   ├── make_app.sh       # Universal build → signed Secure Agent.app
 │   ├── make_dmg.sh       # Notarize (optional) → distributable DMG
 │   ├── make_icon.sh      # Generates AppIcon.icns
-│   ├── install.sh        # Dev LaunchAgent installer (~/.local/bin flow)
+│   ├── install.sh        # Dev helper: build Secure Agent.app and launch it
+│   ├── uninstall.sh      # Remove legacy LaunchAgents/binaries/hooks from older installs
 │   └── test/             # E2E smoke testing harness
 ├── CONTRIBUTING.md       # Open-source contribution guidelines
 └── SECURITY.md           # Security disclosure policy
