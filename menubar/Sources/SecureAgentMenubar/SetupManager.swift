@@ -2,15 +2,16 @@ import AppKit
 import Foundation
 import ServiceManagement
 
-/// Owns first-run setup and teardown: daemon LaunchAgent, harness hooks,
-/// login item, CLI symlink, and Full Disk Access guidance.
+/// Owns first-run setup and teardown: harness hooks, login item, CLI symlink,
+/// and Full Disk Access guidance. The daemon itself is not set up here — it is
+/// a child process of the app (see `DaemonSupervisor`), not a LaunchAgent, so
+/// it can never outlive the visible menu bar app.
 @MainActor
 public final class SetupManager: ObservableObject {
     public static let shared = SetupManager()
 
     public static let daemonLabel = "com.cavi-ai.secure-agentd"
 
-    @Published public private(set) var isDaemonInstalled = false
     @Published public private(set) var isDaemonRunning = false
     @Published public private(set) var areHooksInstalled = false
     @Published public private(set) var lastError: String?
@@ -19,8 +20,10 @@ public final class SetupManager: ObservableObject {
     private let home = NSHomeDirectory()
 
     private var launchAgentsDir: String { "\(home)/Library/LaunchAgents" }
+    /// Path of the legacy daemon LaunchAgent. Older versions installed a
+    /// KeepAlive=true agent here that respawned the daemon behind the user's
+    /// back; it is now migrated away on launch (see `migrateLegacyLaunchAgent`).
     private var daemonPlistPath: String { "\(launchAgentsDir)/\(Self.daemonLabel).plist" }
-    private var logsDir: String { "\(home)/Library/Logs/secure-agent" }
 
     /// Path to the daemon inside the app bundle. Nil when running unbundled
     /// (e.g. `swift run` during development).
@@ -49,46 +52,32 @@ public final class SetupManager: ObservableObject {
     // MARK: - State
 
     public func refreshState() async {
-        isDaemonInstalled = fm.fileExists(atPath: daemonPlistPath)
-        isDaemonRunning = (try? await DaemonClient().fetchStatus().running) ?? false
+        let statusReachable = (try? await DaemonClient().fetchStatus().running) ?? false
+        isDaemonRunning = DaemonSupervisor.shared.isRunning || statusReachable
         areHooksInstalled = Self.hookTargets.contains { target in
             fm.fileExists(atPath: "\(target)/secret_guard.py")
         }
     }
 
+    /// The only mandatory setup step is installing the harness hooks; the daemon
+    /// starts automatically with the app. FDA, login item, and the CLI are
+    /// optional extras and do not force the wizard open.
     public var needsSetup: Bool {
-        !isDaemonInstalled || !isDaemonRunning
+        isBundled && !areHooksInstalled
     }
 
-    // MARK: - Daemon LaunchAgent
+    // MARK: - Legacy LaunchAgent migration
 
-    public func installDaemon() throws {
-        guard let daemonPath = bundledDaemonPath else {
-            throw SetupError.notBundled
-        }
-        lastError = nil
-        try fm.createDirectory(atPath: launchAgentsDir, withIntermediateDirectories: true)
-        try fm.createDirectory(atPath: logsDir, withIntermediateDirectories: true)
-
-        let plist: [String: Any] = [
-            "Label": Self.daemonLabel,
-            "ProgramArguments": [daemonPath],
-            "RunAtLoad": true,
-            "KeepAlive": true,
-            "StandardOutPath": "\(logsDir)/daemon.log",
-            "StandardErrorPath": "\(logsDir)/daemon-err.log",
-        ]
-        let data = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
-        try data.write(to: URL(fileURLWithPath: daemonPlistPath), options: .atomic)
-
+    /// Remove the KeepAlive daemon LaunchAgent left by older versions. Those
+    /// versions ran the daemon under launchd, so it respawned when killed and
+    /// kept running after the menu bar app was quit. Now the app owns the
+    /// daemon's lifetime directly, so any leftover agent must be torn down.
+    public func migrateLegacyLaunchAgent() {
+        guard fm.fileExists(atPath: daemonPlistPath) else { return }
         let uid = getuid()
-        // Ignore failures here: bootout fails when the service isn't loaded yet.
         Self.run(["/bin/launchctl", "bootout", "gui/\(uid)/\(Self.daemonLabel)"])
-        let boot = Self.run(["/bin/launchctl", "bootstrap", "gui/\(uid)", daemonPlistPath])
-        if boot != 0 {
-            // Already registered from an older install: reload it.
-            Self.run(["/bin/launchctl", "kickstart", "-k", "gui/\(uid)/\(Self.daemonLabel)"])
-        }
+        try? fm.removeItem(atPath: daemonPlistPath)
+        NSLog("[secure-agent] removed legacy daemon LaunchAgent")
     }
 
     // MARK: - Harness hooks
@@ -151,6 +140,9 @@ public final class SetupManager: ObservableObject {
 
     public func uninstallAll() throws {
         lastError = nil
+        // Stop the child daemon this app is running.
+        DaemonSupervisor.shared.stop()
+        // Tear down any legacy LaunchAgent from an older install.
         let uid = getuid()
         Self.run(["/bin/launchctl", "bootout", "gui/\(uid)/\(Self.daemonLabel)"])
         if fm.fileExists(atPath: daemonPlistPath) {
