@@ -3,7 +3,7 @@ import SwiftUI
 
 /// First-run setup wizard shown when the daemon isn't installed or reachable.
 @MainActor
-public final class OnboardingWindowController {
+public final class OnboardingWindowController: NSObject, NSWindowDelegate {
     public static let shared = OnboardingWindowController()
 
     private var window: NSWindow?
@@ -22,13 +22,27 @@ public final class OnboardingWindowController {
         window.setContentSize(NSSize(width: 480, height: 560))
         window.center()
         window.isReleasedWhenClosed = false
+        window.delegate = self
         self.window = window
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
 
+    /// Auto-show the wizard at most once; afterwards it's only reachable
+    /// via the "Setup & Permissions…" menu item.
+    public func showOnceIfNeeded() {
+        guard !UserDefaults.standard.bool(forKey: "setupWizardDismissed") else { return }
+        show()
+    }
+
     public func close() {
+        UserDefaults.standard.set(true, forKey: "setupWizardDismissed")
         window?.close()
+        window = nil
+    }
+
+    public func windowWillClose(_ notification: Notification) {
+        UserDefaults.standard.set(true, forKey: "setupWizardDismissed")
         window = nil
     }
 }
@@ -57,14 +71,19 @@ struct OnboardingView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            GroupBox("1. Background Daemon") {
-                stepRow(
-                    done: setup.isDaemonRunning,
-                    installed: setup.isDaemonInstalled,
-                    title: setup.isDaemonRunning ? "Daemon running" : "Install and start secure-agentd",
-                    buttonTitle: setup.isDaemonInstalled ? "Running" : "Install Daemon",
-                    action: { try setup.installDaemon() }
-                )
+            GroupBox("1. Background Monitor") {
+                HStack {
+                    Image(systemName: setup.isDaemonRunning ? "checkmark.circle.fill" : "circle.dotted")
+                        .foregroundStyle(setup.isDaemonRunning ? .green : .secondary)
+                    Text(setup.isDaemonRunning
+                         ? "Monitor running — starts and stops with this app"
+                         : "Starting monitor…")
+                        .font(.callout)
+                    Spacer()
+                    Button("Recheck") { Task { await setup.refreshState() } }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 4)
             }
 
             GroupBox("2. Full Disk Access") {
@@ -111,9 +130,8 @@ struct OnboardingView: View {
 
             HStack {
                 Spacer()
-                Button("Done") { onDone() }
+                Button(setup.needsSetup ? "Finish Later" : "Done") { onDone() }
                     .keyboardShortcut(.defaultAction)
-                    .disabled(setup.needsSetup)
             }
         }
         .padding(24)
