@@ -19,6 +19,11 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     public func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
 
+        // Self-heal any legacy KeepAlive LaunchAgent, then run the daemon as a
+        // child of this app so it lives and dies with the visible menu bar icon.
+        SetupManager.shared.migrateLegacyLaunchAgent()
+        DaemonSupervisor.shared.start()
+
         client = DaemonClient()
         NotificationManager.shared.requestAuthorization()
 
@@ -31,6 +36,11 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
                 OnboardingWindowController.shared.showOnceIfNeeded()
             }
         }
+    }
+
+    public func applicationWillTerminate(_ notification: Notification) {
+        // Quitting the app must take the daemon with it — no hidden survivor.
+        DaemonSupervisor.shared.stop()
     }
 
     private func setupStatusItem() {

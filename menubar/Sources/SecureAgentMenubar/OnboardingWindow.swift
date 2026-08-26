@@ -71,14 +71,19 @@ struct OnboardingView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            GroupBox("1. Background Daemon") {
-                stepRow(
-                    done: setup.isDaemonRunning,
-                    installed: setup.isDaemonInstalled,
-                    title: setup.isDaemonRunning ? "Daemon running" : "Install and start secure-agentd",
-                    buttonTitle: setup.isDaemonInstalled ? "Running" : "Install Daemon",
-                    action: { try setup.installDaemon() }
-                )
+            GroupBox("1. Background Monitor") {
+                HStack {
+                    Image(systemName: setup.isDaemonRunning ? "checkmark.circle.fill" : "circle.dotted")
+                        .foregroundStyle(setup.isDaemonRunning ? .green : .secondary)
+                    Text(setup.isDaemonRunning
+                         ? "Monitor running — starts and stops with this app"
+                         : "Starting monitor…")
+                        .font(.callout)
+                    Spacer()
+                    Button("Recheck") { Task { await setup.refreshState() } }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 4)
             }
 
             GroupBox("2. Full Disk Access") {
