@@ -1,9 +1,14 @@
 package collect
 
 import (
+	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/cavi-ai/secure-agent/daemon/internal/bus"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 )
 
@@ -29,6 +34,47 @@ func TestScanLinePluginAction(t *testing.T) {
 	}
 	if e.Detail != "Bash" {
 		t.Fatalf("Detail = %q, want Bash", e.Detail)
+	}
+}
+
+// TestScannerTailsActiveFile locks the split-cadence refactor: a recently
+// modified file stays in the active set and lines appended after startup are
+// captured, while pre-existing content seeded past on startup is not replayed.
+func TestScannerTailsActiveFile(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "session.jsonl")
+
+	// Pre-existing content must be seeded past, not replayed onto the bus.
+	if err := os.WriteFile(logPath, []byte(`{"tool":"OldTool"}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	b := bus.New(16)
+	sub := b.Subscribe()
+	ts := NewTranscriptScanner(b, []string{filepath.Join(dir, "*.jsonl")})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go ts.Run(ctx)
+
+	// Append after the scanner has started and seeded existing content to EOF.
+	time.Sleep(250 * time.Millisecond)
+	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(`{"tool":"Bash","command":"whoami"}` + "\n"); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+
+	select {
+	case e := <-sub:
+		if e.Kind != event.KindPluginAction || e.Detail != "Bash" {
+			t.Fatalf("got kind=%v detail=%q, want KindPluginAction/Bash", e.Kind, e.Detail)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("scanner did not publish the appended transcript line")
 	}
 }
 
