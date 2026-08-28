@@ -48,6 +48,17 @@ func NewEngine(cfg config.FirewallConfig, salt []byte) (*Engine, error) {
 	}, nil
 }
 
+// SetRuleMode changes a rule's mode at runtime (promote monitor -> block, or
+// demote). Takes effect on the next Inspect.
+func (e *Engine) SetRuleMode(ruleID string, mode Mode) {
+	e.pol.SetMode(ruleID, mode)
+}
+
+// RuleMode returns the effective mode of a rule.
+func (e *Engine) RuleMode(ruleID string) Mode {
+	return e.pol.modeFor(ruleID)
+}
+
 // Stats returns a snapshot of the per-rule tallies.
 func (e *Engine) Stats() map[string]RuleStat {
 	e.mu.Lock()
