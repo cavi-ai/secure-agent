@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -94,7 +95,7 @@ func TestFirewallModeEndpointPromotesAndPersists(t *testing.T) {
 	modes := firewall.NewModeStore(filepath.Join(dir, "firewall-modes.json"))
 
 	a := New(sock, testStore(t), &fakeKiller{}, func() Status { return Status{Running: true} })
-	a.SetFirewall(eng, modes)
+	a.SetFirewall(FirewallControl{Engine: eng, Modes: modes})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go a.Serve(ctx)
@@ -110,6 +111,37 @@ func TestFirewallModeEndpointPromotesAndPersists(t *testing.T) {
 	}
 	if modes.Load()["aws-key"] != "block" {
 		t.Fatal("promotion was not persisted to the mode store")
+	}
+}
+
+func TestFingerprintIngestEndpointReturnsLabels(t *testing.T) {
+	sock := fmt.Sprintf("/tmp/sa_test_fping_%d.sock", time.Now().UnixNano())
+	defer os.Remove(sock)
+
+	called := false
+	a := New(sock, testStore(t), &fakeKiller{}, func() Status { return Status{Running: true} })
+	a.SetFirewall(FirewallControl{
+		Ingest: func() ([]string, error) {
+			called = true
+			return []string{"STRIPE (~/.env)"}, nil
+		},
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go a.Serve(ctx)
+	waitForSocket(t, sock)
+
+	cl := unixClient(sock)
+	resp, err := cl.Post("http://unix/firewall/fingerprints/ingest", "application/json", nil)
+	if err != nil || resp.StatusCode != 200 {
+		t.Fatalf("ingest post: %v status=%v", err, resp.StatusCode)
+	}
+	if !called {
+		t.Fatal("ingest callback was not invoked")
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), "STRIPE") {
+		t.Fatalf("response missing registered label: %s", body)
 	}
 }
 

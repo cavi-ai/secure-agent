@@ -54,6 +54,8 @@ func main() {
 		handleKill(client)
 	case "fleet":
 		handleFleet(client)
+	case "fingerprint":
+		handleFingerprint(client)
 	case "help", "-h", "--help":
 		printUsage()
 	default:
@@ -73,6 +75,37 @@ func printUsage() {
 	fmt.Println("  secure-agent rotate --incident ID --item ID Auto-rotate a compromised secret")
 	fmt.Println("  secure-agent kill <PID>                  Terminate an agent process tree by PID")
 	fmt.Println("  secure-agent fleet                       Show fleet remote node telemetry")
+	fmt.Println("  secure-agent fingerprint                 Scan configured sources and register secret fingerprints (HMAC only)")
+}
+
+func handleFingerprint(client *http.Client) {
+	resp, err := client.Post("http://unix/firewall/fingerprints/ingest", "application/json", nil)
+	if err != nil {
+		fmt.Printf("Error connecting to secure-agentd: %v\nIs secure-agentd running?\n", err)
+		os.Exit(1)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode != http.StatusOK {
+		fmt.Printf("Fingerprint scan failed (%d): %s\n", resp.StatusCode, strings.TrimSpace(string(body)))
+		os.Exit(1)
+	}
+
+	var out struct {
+		Registered []string `json:"registered"`
+	}
+	if json.Unmarshal(body, &out) != nil || len(out.Registered) == 0 {
+		fmt.Println("No secrets found in the configured ingest sources.")
+		fmt.Println("Add paths under firewall.registry.ingest_sources in ~/.config/secure-agent/config.yaml, then re-run.")
+		return
+	}
+
+	fmt.Printf("Registered %d secret fingerprint(s) — HMAC only, no plaintext stored:\n", len(out.Registered))
+	for _, label := range out.Registered {
+		fmt.Printf("  • %s\n", label)
+	}
+	fmt.Println("Applied to the running daemon.")
 }
 
 func handleStatus(client *http.Client) {
