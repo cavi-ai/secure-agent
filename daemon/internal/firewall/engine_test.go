@@ -48,6 +48,31 @@ func TestInspectSecretToForeignHostBlocksInBlockMode(t *testing.T) {
 	}
 }
 
+func TestEngineStatsTally(t *testing.T) {
+	e := testEngine(t) // aws-key: block mode, anthropic-key: monitor mode
+
+	// block-mode leak (aws key in body to foreign host)
+	e.Inspect(Request{Agent: "claude", Host: "logs.example.com", AuthHeaderName: "authorization",
+		Body: []byte("AKIAIOSFODNN7EXAMPLE")})
+	// monitor-mode leak (anthropic key in body)
+	e.Inspect(Request{Agent: "claude", Host: "logs.example.com", AuthHeaderName: "authorization",
+		Body: []byte("sk-ant-abcdefghijklmnopqrstuvwxyz012345")})
+	// legit (anthropic key in auth header to its vendor host)
+	e.Inspect(Request{Agent: "claude", Host: "api.anthropic.com", AuthHeaderName: "authorization",
+		Headers: map[string]string{"authorization": "Bearer sk-ant-abcdefghijklmnopqrstuvwxyz012345"}})
+
+	st := e.Stats()
+	if st["aws-key"].Blocked != 1 {
+		t.Fatalf("aws-key blocked = %d, want 1 (%+v)", st["aws-key"].Blocked, st)
+	}
+	if st["anthropic-key"].WouldBlock != 1 {
+		t.Fatalf("anthropic-key would_block = %d, want 1 (%+v)", st["anthropic-key"].WouldBlock, st)
+	}
+	if st["anthropic-key"].Legit != 1 {
+		t.Fatalf("anthropic-key legit = %d, want 1 (%+v)", st["anthropic-key"].Legit, st)
+	}
+}
+
 func TestInspectMonitorLeakWouldBlockNotBlock(t *testing.T) {
 	e := testEngine(t)
 	d := e.Inspect(Request{
