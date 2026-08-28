@@ -12,8 +12,28 @@ import (
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/bus"
+	"github.com/cavi-ai/secure-agent/daemon/internal/config"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
+	"github.com/cavi-ai/secure-agent/daemon/internal/firewall"
 )
+
+func testProxyEngine(t *testing.T, mode string) *firewall.Engine {
+	t.Helper()
+	e, err := firewall.NewEngine(config.FirewallConfig{
+		Mode: mode,
+		Patterns: []config.PatternConfig{
+			{ID: "bearer-token", Type: firewall.TypeVendorKey, Re: `Bearer\s+[A-Za-z0-9\-._~+/]{16,}=*`, Mode: mode},
+		},
+		Vendors: map[string]config.VendorConfig{
+			"claude": {Hosts: []string{"api.anthropic.com"}, AuthHeader: "authorization"},
+		},
+		Context: config.ContextConfig{AllowOwnVendorAuth: true, TreatBodySecretAsLeak: true},
+	}, []byte("test-salt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return e
+}
 
 func TestProxyServerDetectsSecretLeakAndBlocks(t *testing.T) {
 	tmpDir := t.TempDir()
@@ -28,7 +48,7 @@ func TestProxyServerDetectsSecretLeakAndBlocks(t *testing.T) {
 	b := bus.New(100)
 	sub := b.Subscribe()
 
-	ps := NewProxyServer(0, b, caMgr)
+	ps := NewProxyServer(0, b, caMgr, testProxyEngine(t, "block"))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -88,7 +108,7 @@ func TestProxyServerDetectsPromptInjectionInResponse(t *testing.T) {
 	b := bus.New(100)
 	sub := b.Subscribe()
 
-	ps := NewProxyServer(0, b, caMgr)
+	ps := NewProxyServer(0, b, caMgr, testProxyEngine(t, "monitor"))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
