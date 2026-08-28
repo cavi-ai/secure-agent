@@ -48,6 +48,24 @@ func TestInspectSecretToForeignHostBlocksInBlockMode(t *testing.T) {
 	}
 }
 
+func TestSetRuleModePromotesToBlock(t *testing.T) {
+	e := testEngine(t) // anthropic-key starts in monitor mode
+	leak := Request{Agent: "claude", Host: "logs.example.com", AuthHeaderName: "authorization",
+		Body: []byte("sk-ant-abcdefghijklmnopqrstuvwxyz012345")}
+
+	if d := e.Inspect(leak); d.Action != ActionWouldBlock {
+		t.Fatalf("pre-promote: want would-block, got %v", d.Action)
+	}
+
+	e.SetRuleMode("anthropic-key", ModeBlock)
+	if e.RuleMode("anthropic-key") != ModeBlock {
+		t.Fatal("RuleMode should reflect the promotion")
+	}
+	if d := e.Inspect(leak); d.Action != ActionBlock {
+		t.Fatalf("post-promote: want block, got %v", d.Action)
+	}
+}
+
 func TestEngineStatsTally(t *testing.T) {
 	e := testEngine(t) // aws-key: block mode, anthropic-key: monitor mode
 
