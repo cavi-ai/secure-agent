@@ -48,6 +48,12 @@ public final class DaemonClient: Sendable {
         return false
     }
 
+    public func setFirewallMode(rule: String, mode: String) async throws {
+        let payload: [String: String] = ["rule": rule, "mode": mode]
+        let jsonData = try JSONSerialization.data(withJSONObject: payload)
+        _ = try await request(method: "POST", path: "/firewall/mode", body: jsonData)
+    }
+
     public func executeRotation(incidentId: String, itemId: String) async throws -> String {
         let payload: [String: String] = ["incident_id": incidentId, "item_id": itemId]
         let jsonData = try JSONSerialization.data(withJSONObject: payload)
