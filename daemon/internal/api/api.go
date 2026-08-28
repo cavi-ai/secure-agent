@@ -30,12 +30,13 @@ type AgentSummary struct {
 }
 
 type Status struct {
-	Running      bool           `json:"running"`
-	Uptime       string         `json:"uptime"`
-	ActiveAgents int            `json:"active_agents"`
-	Agents       []AgentSummary `json:"agents"`
-	ProxyEnabled bool           `json:"proxy_enabled"`
-	ProxyPort    int            `json:"proxy_port"`
+	Running           bool           `json:"running"`
+	Uptime            string         `json:"uptime"`
+	ActiveAgents      int            `json:"active_agents"`
+	Agents            []AgentSummary `json:"agents"`
+	ProxyEnabled      bool           `json:"proxy_enabled"`
+	ProxyPort         int            `json:"proxy_port"`
+	UninspectedEgress int            `json:"uninspected_egress"`
 }
 
 type StatusFunc func() Status
