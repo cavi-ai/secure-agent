@@ -2,6 +2,7 @@ package firewall
 
 import (
 	"strings"
+	"sync"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/config"
 )
@@ -15,10 +16,23 @@ type Request struct {
 	Body           []byte
 }
 
+// RuleStat is the running per-rule tally used to decide whether a rule is safe
+// to promote from monitor to block. A rule with many WouldBlock and zero
+// operator-confirmed false positives is a promotion candidate.
+type RuleStat struct {
+	WouldBlock int `json:"would_block"`
+	Blocked    int `json:"blocked"`
+	Legit      int `json:"legit"`
+	Suspect    int `json:"suspect"`
+}
+
 type Engine struct {
 	reg *Registry
 	det *Detector
 	pol *Policy
+
+	mu    sync.Mutex
+	stats map[string]*RuleStat
 }
 
 func NewEngine(cfg config.FirewallConfig, salt []byte) (*Engine, error) {
@@ -27,10 +41,46 @@ func NewEngine(cfg config.FirewallConfig, salt []byte) (*Engine, error) {
 		return nil, err
 	}
 	return &Engine{
-		reg: NewRegistry(salt, cfg.Registry.Fingerprints),
-		det: det,
-		pol: NewPolicy(cfg),
+		reg:   NewRegistry(salt, cfg.Registry.Fingerprints),
+		det:   det,
+		pol:   NewPolicy(cfg),
+		stats: map[string]*RuleStat{},
 	}, nil
+}
+
+// Stats returns a snapshot of the per-rule tallies.
+func (e *Engine) Stats() map[string]RuleStat {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	out := make(map[string]RuleStat, len(e.stats))
+	for k, v := range e.stats {
+		out[k] = *v
+	}
+	return out
+}
+
+func (e *Engine) tally(findings []Finding) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for _, f := range findings {
+		s := e.stats[f.Hit.RuleID]
+		if s == nil {
+			s = &RuleStat{}
+			e.stats[f.Hit.RuleID] = s
+		}
+		switch f.Verdict.Kind {
+		case VerdictLeak:
+			if f.Verdict.Action == ActionBlock {
+				s.Blocked++
+			} else {
+				s.WouldBlock++
+			}
+		case VerdictLegit:
+			s.Legit++
+		case VerdictSuspect:
+			s.Suspect++
+		}
+	}
 }
 
 // Inspect scans each field of the request, classifies every hit in its field
@@ -69,5 +119,6 @@ func (e *Engine) Inspect(req Request) Decision {
 			action = f.Verdict.Action
 		}
 	}
+	e.tally(findings)
 	return Decision{Action: action, Findings: findings}
 }
