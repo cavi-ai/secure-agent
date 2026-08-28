@@ -115,6 +115,37 @@ func main() {
 		}
 	}
 
+	// Known-secret fingerprints: config defaults plus any registered by
+	// `secure-agent fingerprint`. Reapplied on demand via /firewall/fingerprints/reload.
+	fpStore := firewall.NewFingerprintStore(filepath.Join(filepath.Dir(cfg.Firewall.Registry.SaltRef), "firewall-fingerprints.json"))
+	reloadFingerprints := func() error {
+		combined := append(append([]config.Fingerprint{}, cfg.Firewall.Registry.Fingerprints...), fpStore.Load()...)
+		if fwEngine != nil {
+			fwEngine.SetFingerprints(combined)
+		}
+		return nil
+	}
+	_ = reloadFingerprints() // apply persisted fingerprints on startup
+
+	// ingestFingerprints scans the configured secret sources, registers their
+	// HMAC fingerprints, and applies them live. Triggered by `secure-agent
+	// fingerprint`.
+	ingestFingerprints := func() ([]string, error) {
+		fps, err := firewall.Ingest(cfg.Firewall.Registry.IngestSources, fwSalt)
+		if err != nil {
+			return nil, err
+		}
+		if err := fpStore.Save(fps); err != nil {
+			return nil, err
+		}
+		_ = reloadFingerprints()
+		labels := make([]string, 0, len(fps))
+		for _, fp := range fps {
+			labels = append(labels, fp.Label)
+		}
+		return labels, nil
+	}
+
 	var proxyServer *proxy.ProxyServer
 	if cfg.ProxyEnabled {
 		caMgr, err := proxy.NewCAManager(cfg.ProxyCACertPath, cfg.ProxyCAKeyPath)
@@ -152,7 +183,12 @@ func main() {
 
 	// Start Control API
 	apiServer := api.New(cfg.SocketPath, st, &realKiller{}, statusFn)
-	apiServer.SetFirewall(fwEngine, fwModes)
+	apiServer.SetFirewall(api.FirewallControl{
+		Engine: fwEngine,
+		Modes:  fwModes,
+		Reload: reloadFingerprints,
+		Ingest: ingestFingerprints,
+	})
 	go func() {
 		if err := apiServer.Serve(ctx); err != nil && ctx.Err() == nil {
 			log.Printf("API server error: %v", err)

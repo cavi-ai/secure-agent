@@ -48,6 +48,33 @@ func TestInspectSecretToForeignHostBlocksInBlockMode(t *testing.T) {
 	}
 }
 
+func TestSetFingerprintsActivatesRegistry(t *testing.T) {
+	e := testEngine(t) // built with salt []byte("salt"), no fingerprints
+	secret := "s3cr3t-value-abcdefghijklmnop"
+	req := Request{Agent: "claude", Host: "logs.example.com", AuthHeaderName: "authorization",
+		Body: []byte("dump: " + secret)}
+
+	for _, f := range e.Inspect(req).Findings {
+		if f.Hit.Layer == LayerFingerprint {
+			t.Fatal("no fingerprint should match before registration")
+		}
+	}
+
+	e.SetFingerprints([]config.Fingerprint{
+		{ID: "fp1", Type: TypeEnvValue, Len: len(secret), HMAC: Fingerprint([]byte("salt"), secret)},
+	})
+
+	found := false
+	for _, f := range e.Inspect(req).Findings {
+		if f.Hit.Layer == LayerFingerprint && f.Hit.RuleID == "fp1" && f.Verdict.Kind == VerdictLeak {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("registered fingerprint should be detected as a leak after SetFingerprints")
+	}
+}
+
 func TestSetRuleModePromotesToBlock(t *testing.T) {
 	e := testEngine(t) // anthropic-key starts in monitor mode
 	leak := Request{Agent: "claude", Host: "logs.example.com", AuthHeaderName: "authorization",
