@@ -39,6 +39,22 @@ public final class MenuBuilder: @unchecked Sendable {
             menu.addItem(proxyItem)
         }
 
+        if let s = status, let fw = s.firewallStats, !fw.isEmpty {
+            let wouldBlock = fw.values.reduce(0) { $0 + $1.wouldBlock }
+            let blocked = fw.values.reduce(0) { $0 + $1.blocked }
+            let fwItem = NSMenuItem(title: "Egress Firewall: \(wouldBlock) would-block · \(blocked) blocked", action: nil, keyEquivalent: "")
+            fwItem.image = NSImage(systemSymbolName: "shield.lefthalf.filled", accessibilityDescription: "Egress Firewall")
+            fwItem.isEnabled = false
+            menu.addItem(fwItem)
+        }
+
+        if let s = status, let uninspected = s.uninspectedEgress, uninspected > 0 {
+            let uItem = NSMenuItem(title: "Uninspected egress: \(uninspected) endpoint\(uninspected == 1 ? "" : "s")", action: nil, keyEquivalent: "")
+            uItem.image = NSImage(systemSymbolName: "eye.trianglebadge.exclamationmark", accessibilityDescription: "Uninspected egress")
+            uItem.isEnabled = false
+            menu.addItem(uItem)
+        }
+
         menu.addItem(NSMenuItem.separator())
 
         // 2. Incident Containment & Rotation Section
