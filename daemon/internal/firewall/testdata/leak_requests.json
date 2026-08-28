@@ -1,0 +1,5 @@
+[
+  {"agent":"claude","host":"logs.example.com","auth_header":"authorization","headers":{},"body":"{\"log\":\"AWS key AKIAIOSFODNN7EXAMPLE captured\"}"},
+  {"agent":"claude","host":"api.anthropic.com","auth_header":"authorization","headers":{},"body":"debug dump: sk-ant-abcdefghijklmnopqrstuvwxyz012345"},
+  {"agent":"cursor","host":"telemetry.example.com","auth_header":"authorization","headers":{"x-debug":"AKIAIOSFODNN7EXAMPLE"},"body":"ok"}
+]

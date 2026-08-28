@@ -128,6 +128,32 @@ public final class SetupManager: ObservableObject {
         try fm.createSymbolicLink(atPath: link, withDestinationPath: cliPath)
     }
 
+    // MARK: - Agent routing (opt-in proxy)
+
+    /// The daemon writes this sourceable snippet on startup; the app only points
+    /// the user at it. Sourcing it is the user's own opt-in — we never edit a
+    /// shell rc or the system trust store.
+    public var agentRoutingSnippetPath: String {
+        "\(home)/.config/secure-agent/agent-env.sh"
+    }
+
+    public var isAgentRoutingConfigured: Bool {
+        fm.fileExists(atPath: agentRoutingSnippetPath)
+    }
+
+    public var agentRoutingSourceCommand: String {
+        "source ~/.config/secure-agent/agent-env.sh"
+    }
+
+    public func copyAgentRoutingCommand() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(agentRoutingSourceCommand, forType: .string)
+    }
+
+    public func revealAgentRoutingSnippet() {
+        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: agentRoutingSnippetPath)])
+    }
+
     // MARK: - Full Disk Access
 
     public func openFullDiskAccessSettings() {

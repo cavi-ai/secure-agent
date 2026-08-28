@@ -18,6 +18,55 @@ type AgentDef struct {
 	Match []string `yaml:"match"`
 }
 
+// FirewallConfig configures the egress secret-leak firewall (see the
+// egress-secret-leak-firewall design doc).
+type FirewallConfig struct {
+	Mode     string                  `yaml:"mode"` // monitor | block (global default)
+	Registry RegistryConfig          `yaml:"registry"`
+	Patterns []PatternConfig         `yaml:"patterns"`
+	Entropy  EntropyConfig           `yaml:"entropy"`
+	Vendors  map[string]VendorConfig `yaml:"vendors"`
+	Context  ContextConfig           `yaml:"context"`
+}
+
+type RegistryConfig struct {
+	SaltRef       string        `yaml:"salt_ref"`
+	IngestSources []string      `yaml:"ingest_sources"`
+	Fingerprints  []Fingerprint `yaml:"fingerprints"`
+}
+
+type Fingerprint struct {
+	ID    string `yaml:"id"`
+	Type  string `yaml:"type"`
+	Len   int    `yaml:"len"`
+	Label string `yaml:"label"`
+	HMAC  string `yaml:"hmac"`
+}
+
+type PatternConfig struct {
+	ID   string `yaml:"id"`
+	Type string `yaml:"type"`
+	Re   string `yaml:"re"`
+	Mode string `yaml:"mode"`
+}
+
+type EntropyConfig struct {
+	Enabled bool    `yaml:"enabled"`
+	MinLen  int     `yaml:"min_len"`
+	MinBits float64 `yaml:"min_bits"`
+	Mode    string  `yaml:"mode"`
+}
+
+type VendorConfig struct {
+	Hosts      []string `yaml:"hosts"`
+	AuthHeader string   `yaml:"auth_header"`
+}
+
+type ContextConfig struct {
+	AllowOwnVendorAuth    bool `yaml:"allow_own_vendor_auth"`
+	TreatBodySecretAsLeak bool `yaml:"treat_body_secret_as_leak"`
+}
+
 type rawConfig struct {
 	SensitiveGlobs       []string            `yaml:"sensitive_globs"`
 	SensitivePaths       []string            `yaml:"sensitive_paths"`
@@ -32,6 +81,7 @@ type rawConfig struct {
 	ProxyPort            int                 `yaml:"proxy_port"`
 	ProxyCACertPath      string              `yaml:"proxy_ca_cert_path"`
 	ProxyCAKeyPath       string              `yaml:"proxy_ca_key_path"`
+	Firewall             FirewallConfig      `yaml:"firewall"`
 }
 
 type Config struct {
@@ -48,6 +98,7 @@ type Config struct {
 	ProxyPort         int
 	ProxyCACertPath   string
 	ProxyCAKeyPath    string
+	Firewall          FirewallConfig
 }
 
 func Load(explicitPath string) (Config, error) {
@@ -88,7 +139,10 @@ func Load(explicitPath string) (Config, error) {
 		ProxyPort:         raw.ProxyPort,
 		ProxyCACertPath:   expandPath(raw.ProxyCACertPath),
 		ProxyCAKeyPath:    expandPath(raw.ProxyCAKeyPath),
+		Firewall:          raw.Firewall,
 	}
+	cfg.Firewall.Registry.SaltRef = expandPath(cfg.Firewall.Registry.SaltRef)
+	cfg.Firewall.Registry.IngestSources = expandPaths(cfg.Firewall.Registry.IngestSources)
 
 	return cfg, nil
 }

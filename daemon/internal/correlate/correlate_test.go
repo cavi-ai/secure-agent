@@ -92,6 +92,38 @@ func TestKeychainAccessFlagsImmediately(t *testing.T) {
 	}
 }
 
+func TestUninspectedEgressCounted(t *testing.T) {
+	c := newTestCorrelator(t)
+	base := time.Unix(1_700_000_000, 0)
+
+	// Lone foreign connect: counted as uninspected egress, but produces no flag.
+	f := c.Observe(event.Event{Kind: event.KindConnOpen, PID: 200, TS: base, RemoteHost: "evil.example.com", RemotePort: 443})
+	if len(f) != 0 {
+		t.Fatalf("lone foreign connect must not flag, got %+v", f)
+	}
+	if got := c.UninspectedEgressCount(); got != 1 {
+		t.Fatalf("uninspected count = %d, want 1", got)
+	}
+
+	// Connecting to the local proxy (127.0.0.1) is inspected traffic — not counted.
+	c.Observe(event.Event{Kind: event.KindConnOpen, PID: 200, TS: base.Add(time.Second), RemoteHost: "127.0.0.1", RemotePort: 8443})
+	if got := c.UninspectedEgressCount(); got != 1 {
+		t.Fatalf("localhost connect must not count, got %d", got)
+	}
+
+	// A vendor host is expected egress — not counted.
+	c.Observe(event.Event{Kind: event.KindConnOpen, PID: 200, TS: base.Add(2 * time.Second), RemoteHost: "api2.cursor.com", RemotePort: 443})
+	if got := c.UninspectedEgressCount(); got != 1 {
+		t.Fatalf("vendor host must not count, got %d", got)
+	}
+
+	// Same foreign host again is deduped.
+	c.Observe(event.Event{Kind: event.KindConnOpen, PID: 200, TS: base.Add(3 * time.Second), RemoteHost: "evil.example.com", RemotePort: 443})
+	if got := c.UninspectedEgressCount(); got != 1 {
+		t.Fatalf("dedup failed, count = %d", got)
+	}
+}
+
 func TestForeignConnectThenSensitiveReadFlags(t *testing.T) {
 	c := newTestCorrelator(t)
 	base := time.Unix(1_700_000_000, 0)
