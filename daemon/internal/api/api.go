@@ -52,6 +52,16 @@ type API struct {
 
 	fwEngine *firewall.Engine
 	fwModes  *firewall.ModeStore
+	fwReload func() error
+	fwIngest func() ([]string, error)
+}
+
+// FirewallControl bundles the runtime firewall controls the API exposes.
+type FirewallControl struct {
+	Engine *firewall.Engine
+	Modes  *firewall.ModeStore
+	Reload func() error             // re-apply persisted fingerprints
+	Ingest func() ([]string, error) // scan sources, register fingerprints, return labels
 }
 
 func New(socketPath string, store *store.Store, killer Killer, statusFn StatusFunc) *API {
@@ -66,9 +76,11 @@ func New(socketPath string, store *store.Store, killer Killer, statusFn StatusFu
 // SetFirewall wires the firewall engine and its persisted mode-override store so
 // the control API can promote/demote rules at runtime. Optional: when unset, the
 // /firewall/mode endpoint reports the firewall is not enabled.
-func (a *API) SetFirewall(engine *firewall.Engine, modes *firewall.ModeStore) {
-	a.fwEngine = engine
-	a.fwModes = modes
+func (a *API) SetFirewall(c FirewallControl) {
+	a.fwEngine = c.Engine
+	a.fwModes = c.Modes
+	a.fwReload = c.Reload
+	a.fwIngest = c.Ingest
 }
 
 func (a *API) Serve(ctx context.Context) error {
@@ -104,6 +116,8 @@ func (a *API) Serve(ctx context.Context) error {
 	mux.HandleFunc("/fleet", a.handleFleet)
 	mux.HandleFunc("/kill", a.handleKill)
 	mux.HandleFunc("/firewall/mode", a.handleFirewallMode)
+	mux.HandleFunc("/firewall/fingerprints/reload", a.handleFingerprintReload)
+	mux.HandleFunc("/firewall/fingerprints/ingest", a.handleFingerprintIngest)
 	a.setupWebDashboard(mux)
 
 	server := &http.Server{Handler: mux}
@@ -260,6 +274,46 @@ func (a *API) handleFirewallMode(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok", "rule": req.Rule, "mode": req.Mode})
+}
+
+// handleFingerprintReload re-reads the persisted fingerprints and applies them
+// to the running engine, so `secure-agent fingerprint` takes effect without a
+// daemon restart.
+func (a *API) handleFingerprintReload(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if a.fwReload == nil {
+		http.Error(w, "firewall not enabled", http.StatusServiceUnavailable)
+		return
+	}
+	if err := a.fwReload(); err != nil {
+		http.Error(w, fmt.Sprintf("reload failed: %v", err), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok"})
+}
+
+// handleFingerprintIngest scans the configured secret sources, registers their
+// fingerprints (HMAC only), applies them live, and returns the labels registered.
+func (a *API) handleFingerprintIngest(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if a.fwIngest == nil {
+		http.Error(w, "firewall not enabled", http.StatusServiceUnavailable)
+		return
+	}
+	labels, err := a.fwIngest()
+	if err != nil {
+		http.Error(w, fmt.Sprintf("ingest failed: %v", err), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok", "registered": labels})
 }
 
 type rotateRequest struct {
