@@ -2,14 +2,17 @@ package firewall
 
 import (
 	"strings"
+	"sync"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/config"
 )
 
 type Policy struct {
 	cfg        config.FirewallConfig
-	ruleMode   map[string]Mode
 	globalMode Mode
+
+	mu       sync.RWMutex
+	ruleMode map[string]Mode // guarded by mu; the only mutable policy state
 }
 
 func NewPolicy(cfg config.FirewallConfig) *Policy {
@@ -21,10 +24,19 @@ func NewPolicy(cfg config.FirewallConfig) *Policy {
 }
 
 func (p *Policy) modeFor(ruleID string) Mode {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
 	if m, ok := p.ruleMode[ruleID]; ok {
 		return m
 	}
 	return p.globalMode
+}
+
+// SetMode changes a rule's mode at runtime (e.g. promoting monitor -> block).
+func (p *Policy) SetMode(ruleID string, mode Mode) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.ruleMode[ruleID] = mode
 }
 
 // Classify decides whether a hit in a given request context is a leak, and what
