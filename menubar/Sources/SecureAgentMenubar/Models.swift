@@ -22,6 +22,27 @@ public struct AgentSummaryModel: Codable, Identifiable, Sendable {
     }
 }
 
+public struct RuleStatModel: Codable, Sendable {
+    public let wouldBlock: Int
+    public let blocked: Int
+    public let legit: Int
+    public let suspect: Int
+
+    enum CodingKeys: String, CodingKey {
+        case wouldBlock = "would_block"
+        case blocked
+        case legit
+        case suspect
+    }
+
+    public init(wouldBlock: Int = 0, blocked: Int = 0, legit: Int = 0, suspect: Int = 0) {
+        self.wouldBlock = wouldBlock
+        self.blocked = blocked
+        self.legit = legit
+        self.suspect = suspect
+    }
+}
+
 public struct StatusResponse: Codable, Sendable {
     public let running: Bool
     public let uptime: String
@@ -29,6 +50,8 @@ public struct StatusResponse: Codable, Sendable {
     public let agents: [AgentSummaryModel]?
     public let proxyEnabled: Bool?
     public let proxyPort: Int?
+    public let uninspectedEgress: Int?
+    public let firewallStats: [String: RuleStatModel]?
 
     enum CodingKeys: String, CodingKey {
         case running
@@ -37,15 +60,19 @@ public struct StatusResponse: Codable, Sendable {
         case agents
         case proxyEnabled = "proxy_enabled"
         case proxyPort = "proxy_port"
+        case uninspectedEgress = "uninspected_egress"
+        case firewallStats = "firewall_stats"
     }
 
-    public init(running: Bool, uptime: String, activeAgents: Int, agents: [AgentSummaryModel]? = nil, proxyEnabled: Bool? = nil, proxyPort: Int? = nil) {
+    public init(running: Bool, uptime: String, activeAgents: Int, agents: [AgentSummaryModel]? = nil, proxyEnabled: Bool? = nil, proxyPort: Int? = nil, uninspectedEgress: Int? = nil, firewallStats: [String: RuleStatModel]? = nil) {
         self.running = running
         self.uptime = uptime
         self.activeAgents = activeAgents
         self.agents = agents
         self.proxyEnabled = proxyEnabled
         self.proxyPort = proxyPort
+        self.uninspectedEgress = uninspectedEgress
+        self.firewallStats = firewallStats
     }
 }
 

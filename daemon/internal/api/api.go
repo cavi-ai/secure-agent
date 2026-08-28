@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/cavi-ai/secure-agent/daemon/internal/firewall"
 	"github.com/cavi-ai/secure-agent/daemon/internal/intel"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
@@ -37,6 +38,8 @@ type Status struct {
 	ProxyEnabled      bool           `json:"proxy_enabled"`
 	ProxyPort         int            `json:"proxy_port"`
 	UninspectedEgress int            `json:"uninspected_egress"`
+
+	FirewallStats map[string]firewall.RuleStat `json:"firewall_stats,omitempty"`
 }
 
 type StatusFunc func() Status
