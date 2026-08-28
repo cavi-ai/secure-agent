@@ -106,6 +106,14 @@ func main() {
 	if fwErr != nil {
 		log.Printf("Failed to initialize firewall engine: %v", fwErr)
 	}
+	// Apply any persisted rule-mode overrides (e.g. rules promoted to block in a
+	// previous session) on top of the config defaults.
+	fwModes := firewall.NewModeStore(filepath.Join(filepath.Dir(cfg.Firewall.Registry.SaltRef), "firewall-modes.json"))
+	if fwEngine != nil {
+		for rule, mode := range fwModes.Load() {
+			fwEngine.SetRuleMode(rule, firewall.ParseMode(mode))
+		}
+	}
 
 	var proxyServer *proxy.ProxyServer
 	if cfg.ProxyEnabled {
@@ -144,6 +152,7 @@ func main() {
 
 	// Start Control API
 	apiServer := api.New(cfg.SocketPath, st, &realKiller{}, statusFn)
+	apiServer.SetFirewall(fwEngine, fwModes)
 	go func() {
 		if err := apiServer.Serve(ctx); err != nil && ctx.Err() == nil {
 			log.Printf("API server error: %v", err)
