@@ -60,6 +60,30 @@ func TestClassifyForeignHostIsLeak(t *testing.T) {
 	}
 }
 
+func TestClassifyUnknownAgentKnownVendorHostAuthIsLegit(t *testing.T) {
+	p := testPolicy(t)
+	// Proxy context: agent unknown. A credential in the auth header to a known
+	// vendor host is legitimate.
+	v := p.Classify(
+		Hit{RuleID: "aws-key", SecretType: TypeCloudKey, Layer: LayerPattern},
+		RequestCtx{Agent: "", Host: "api.anthropic.com", Field: FieldAuthHeader},
+	)
+	if v.Kind != VerdictLegit || v.Action != ActionAllow {
+		t.Fatalf("unknown-agent auth to a vendor host must be legit, got %+v", v)
+	}
+}
+
+func TestClassifyUnknownAgentForeignHostIsLeak(t *testing.T) {
+	p := testPolicy(t)
+	v := p.Classify(
+		Hit{RuleID: "aws-key", SecretType: TypeCloudKey, Layer: LayerPattern},
+		RequestCtx{Agent: "", Host: "evil.example.com", Field: FieldAuthHeader},
+	)
+	if v.Kind != VerdictLeak {
+		t.Fatalf("unknown-agent secret to a non-vendor host must be a leak, got %+v", v)
+	}
+}
+
 func TestClassifyEntropyIsSuspectMonitorOnly(t *testing.T) {
 	p := testPolicy(t)
 	v := p.Classify(

@@ -34,16 +34,17 @@ func (p *Policy) Classify(h Hit, ctx RequestCtx) Verdict {
 		return Verdict{Kind: VerdictSuspect, Mode: p.modeFor(h.RuleID), Action: ActionAllow}
 	}
 
-	// Legitimate: a vendor's own credential in its expected auth header to one
-	// of its allowlisted hosts.
-	if p.cfg.Context.AllowOwnVendorAuth && ctx.Field == FieldAuthHeader && p.isVendorHost(ctx.Agent, ctx.Host) {
+	// Legitimate: a credential in the expected auth header to a vendor host. When
+	// the agent is known its own allowlist is used; when it is not (the proxy
+	// sees the connection, not the process), any known vendor host qualifies.
+	if p.cfg.Context.AllowOwnVendorAuth && ctx.Field == FieldAuthHeader && p.vendorHostMatch(ctx.Agent, ctx.Host) {
 		return Verdict{Kind: VerdictLegit, Mode: p.modeFor(h.RuleID), Action: ActionAllow}
 	}
 
 	// Otherwise a fingerprint/pattern hit is a leak: foreign host, or a secret in
 	// a body/query/other-header where credentials do not belong.
 	leak := false
-	if !p.isVendorHost(ctx.Agent, ctx.Host) {
+	if !p.vendorHostMatch(ctx.Agent, ctx.Host) {
 		leak = true
 	}
 	if ctx.Field != FieldAuthHeader && p.cfg.Context.TreatBodySecretAsLeak {
@@ -59,6 +60,25 @@ func (p *Policy) Classify(h Hit, ctx RequestCtx) Verdict {
 		act = ActionBlock
 	}
 	return Verdict{Kind: VerdictLeak, Mode: mode, Action: act}
+}
+
+// vendorHostMatch reports whether host is a legitimate destination for a
+// credential. With a known agent, only that agent's own vendor hosts count;
+// with an unknown agent (proxy context), any configured vendor host counts.
+func (p *Policy) vendorHostMatch(agent, host string) bool {
+	if agent != "" {
+		return p.isVendorHost(agent, host)
+	}
+	return p.isKnownVendorHost(host)
+}
+
+func (p *Policy) isKnownVendorHost(host string) bool {
+	for a := range p.cfg.Vendors {
+		if p.isVendorHost(a, host) {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *Policy) isVendorHost(agent, host string) bool {
