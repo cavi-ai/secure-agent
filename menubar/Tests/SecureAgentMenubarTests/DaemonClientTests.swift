@@ -37,6 +37,23 @@ final class DaemonClientTests: XCTestCase {
         XCTAssertEqual(flags[0].agent, "cursor")
     }
 
+    func testStatusDecodesFirewallStats() throws {
+        let json = """
+        {
+            "running": true,
+            "uptime": "5m",
+            "active_agents": 1,
+            "uninspected_egress": 3,
+            "firewall_stats": { "aws-key": { "would_block": 2, "blocked": 1, "legit": 0, "suspect": 0 } }
+        }
+        """.data(using: .utf8)!
+
+        let s = try JSONDecoder().decode(StatusResponse.self, from: json)
+        XCTAssertEqual(s.uninspectedEgress, 3)
+        XCTAssertEqual(s.firewallStats?["aws-key"]?.wouldBlock, 2)
+        XCTAssertEqual(s.firewallStats?["aws-key"]?.blocked, 1)
+    }
+
     func testClientConnectsToAbsentSocketFailsGracefully() async {
         let client = DaemonClient(socketPath: "/tmp/nonexistent-secure-agent-\(UUID().uuidString).sock")
         do {
