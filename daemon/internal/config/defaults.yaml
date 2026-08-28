@@ -46,6 +46,8 @@ firewall:
     - { id: stripe-key,    type: vendor-key,  re: 'sk_live_[0-9A-Za-z]{24,}',  mode: monitor }
     - { id: slack-token,   type: vendor-key,  re: 'xox[baprs]-[0-9A-Za-z-]{10,}', mode: monitor }
     - { id: private-key,   type: private-key, re: '-----BEGIN [A-Z ]*PRIVATE KEY-----', mode: monitor }
+    - { id: jwt,           type: vendor-key,  re: 'eyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}', mode: monitor }
+    - { id: bearer-token,  type: vendor-key,  re: 'Bearer\s+[A-Za-z0-9\-._~+/]{16,}=*', mode: monitor }
   entropy: { enabled: true, min_len: 20, min_bits: 4.0, mode: monitor }
   vendors:
     claude: { hosts: ["api.anthropic.com","claude.ai"], auth_header: "authorization" }
