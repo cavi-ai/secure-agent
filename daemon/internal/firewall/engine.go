@@ -3,6 +3,7 @@ package firewall
 import (
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/config"
 )
@@ -27,9 +28,10 @@ type RuleStat struct {
 }
 
 type Engine struct {
-	reg *Registry
-	det *Detector
-	pol *Policy
+	reg  atomic.Pointer[Registry]
+	det  *Detector
+	pol  *Policy
+	salt []byte
 
 	mu    sync.Mutex
 	stats map[string]*RuleStat
@@ -40,12 +42,20 @@ func NewEngine(cfg config.FirewallConfig, salt []byte) (*Engine, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Engine{
-		reg:   NewRegistry(salt, cfg.Registry.Fingerprints),
+	e := &Engine{
 		det:   det,
 		pol:   NewPolicy(cfg),
+		salt:  salt,
 		stats: map[string]*RuleStat{},
-	}, nil
+	}
+	e.reg.Store(NewRegistry(salt, cfg.Registry.Fingerprints))
+	return e, nil
+}
+
+// SetFingerprints atomically replaces the known-secret registry, applying
+// newly-ingested fingerprints without a restart.
+func (e *Engine) SetFingerprints(fps []config.Fingerprint) {
+	e.reg.Store(NewRegistry(e.salt, fps))
 }
 
 // SetRuleMode changes a rule's mode at runtime (promote monitor -> block, or
@@ -105,7 +115,7 @@ func (e *Engine) Inspect(req Request) Decision {
 			return
 		}
 		ctx := RequestCtx{Agent: req.Agent, Host: req.Host, Field: field}
-		for _, h := range e.reg.Match([]byte(text)) {
+		for _, h := range e.reg.Load().Match([]byte(text)) {
 			findings = append(findings, Finding{Hit: h, Ctx: ctx, Verdict: e.pol.Classify(h, ctx)})
 		}
 		for _, h := range e.det.Scan(text) {
