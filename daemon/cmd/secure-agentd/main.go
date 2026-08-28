@@ -99,17 +99,20 @@ func main() {
 		}
 	}()
 
+	// Firewall engine: built once, used by the proxy for egress inspection and
+	// surfaced as per-rule stats in status.
+	fwSalt, _ := firewall.LoadSalt(cfg.Firewall.Registry.SaltRef)
+	fwEngine, fwErr := firewall.NewEngine(cfg.Firewall, fwSalt)
+	if fwErr != nil {
+		log.Printf("Failed to initialize firewall engine: %v", fwErr)
+	}
+
 	var proxyServer *proxy.ProxyServer
 	if cfg.ProxyEnabled {
 		caMgr, err := proxy.NewCAManager(cfg.ProxyCACertPath, cfg.ProxyCAKeyPath)
 		if err != nil {
 			log.Printf("Failed to initialize Proxy CA Manager: %v", err)
 		} else {
-			salt, _ := firewall.LoadSalt(cfg.Firewall.Registry.SaltRef)
-			fwEngine, ferr := firewall.NewEngine(cfg.Firewall, salt)
-			if ferr != nil {
-				log.Printf("Failed to initialize firewall engine: %v", ferr)
-			}
 			proxyServer = proxy.NewProxyServer(cfg.ProxyPort, b, caMgr, fwEngine)
 			// Write the opt-in routing snippet into our own config dir. It does
 			// nothing until the user sources it; we never edit their shell rc.
@@ -135,6 +138,7 @@ func main() {
 			ProxyEnabled:      proxyActive,
 			ProxyPort:         proxyPort,
 			UninspectedEgress: correlator.UninspectedEgressCount(),
+			FirewallStats:     firewallStats(fwEngine),
 		}
 	}
 
@@ -215,6 +219,13 @@ func main() {
 	log.Println("secure-agentd shutting down...")
 	cancel()
 	time.Sleep(200 * time.Millisecond)
+}
+
+func firewallStats(e *firewall.Engine) map[string]firewall.RuleStat {
+	if e == nil {
+		return nil
+	}
+	return e.Stats()
 }
 
 func listActiveAgents(tg *agents.Tagger) []api.AgentSummary {
