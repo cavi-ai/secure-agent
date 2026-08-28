@@ -31,22 +31,42 @@ type connMark struct {
 const window = 60 * time.Second
 
 type Correlator struct {
-	mu         sync.Mutex
-	tagger     *agents.Tagger
-	classifier sensitive.Classifier
-	cfg        config.Config
-	marks      map[int32][]readMark
-	conns      map[int32][]connMark
+	mu          sync.Mutex
+	tagger      *agents.Tagger
+	classifier  sensitive.Classifier
+	cfg         config.Config
+	marks       map[int32][]readMark
+	conns       map[int32][]connMark
+	uninspected map[string]struct{} // distinct "agent|host" egress not seen via the proxy
 }
 
 func New(tagger *agents.Tagger, classifier sensitive.Classifier, cfg config.Config) *Correlator {
 	return &Correlator{
-		tagger:     tagger,
-		classifier: classifier,
-		cfg:        cfg,
-		marks:      make(map[int32][]readMark),
-		conns:      make(map[int32][]connMark),
+		tagger:      tagger,
+		classifier:  classifier,
+		cfg:         cfg,
+		marks:       make(map[int32][]readMark),
+		conns:       make(map[int32][]connMark),
+		uninspected: make(map[string]struct{}),
 	}
+}
+
+// UninspectedEgressCount reports the number of distinct agent+host egress
+// endpoints observed connecting directly (not via the local inspection proxy,
+// which agents reach on 127.0.0.1). It is a coverage/blind-spot signal, not an
+// alarm, so it is surfaced as a metric rather than a per-connection flag.
+func (c *Correlator) UninspectedEgressCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.uninspected)
+}
+
+func isLocalhost(host string) bool {
+	switch host {
+	case "127.0.0.1", "::1", "localhost", "":
+		return true
+	}
+	return strings.HasPrefix(host, "127.")
 }
 
 func (c *Correlator) Observe(e event.Event) []model.Flag {
@@ -142,6 +162,13 @@ func (c *Correlator) Observe(e event.Event) []model.Flag {
 	case event.KindConnOpen:
 		if c.isVendorHost(info.Name, e.RemoteHost) {
 			return nil
+		}
+
+		// A tagged agent connecting to a non-localhost host went out without
+		// transiting the proxy (routed traffic targets 127.0.0.1). Record it as a
+		// coverage metric; do not flag (that would alarm on every github/npm call).
+		if !isLocalhost(e.RemoteHost) {
+			c.uninspected[info.Name+"|"+e.RemoteHost] = struct{}{}
 		}
 
 		c.rememberConnLocked(rootPID, e.PID, connMark{at: e.TS, host: e.RemoteHost, port: e.RemotePort})

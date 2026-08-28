@@ -19,7 +19,7 @@ public final class OnboardingWindowController: NSObject, NSWindowDelegate {
         let window = NSWindow(contentViewController: hosting)
         window.title = "Secure Agent Setup"
         window.styleMask = [.titled, .closable]
-        window.setContentSize(NSSize(width: 480, height: 560))
+        window.setContentSize(NSSize(width: 480, height: 600))
         window.center()
         window.isReleasedWhenClosed = false
         window.delegate = self
@@ -52,7 +52,9 @@ struct OnboardingView: View {
     var onDone: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(spacing: 0) {
+          ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
             HStack(spacing: 12) {
                 Image(systemName: "shield.fill")
                     .font(.system(size: 40))
@@ -121,21 +123,50 @@ struct OnboardingView: View {
                 .padding(.vertical, 4)
             }
 
+            GroupBox("5. Agent Routing (optional)") {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Route your agents through the local inspection proxy to scan their outbound traffic for secret leaks. Opt-in and scoped to your shell — it changes no system or keychain settings.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(setup.agentRoutingSourceCommand)
+                        .font(.system(.callout, design: .monospaced))
+                        .textSelection(.enabled)
+                        .padding(6)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(RoundedRectangle(cornerRadius: 6).fill(Color.secondary.opacity(0.12)))
+                    HStack {
+                        Button("Copy Command") { setup.copyAgentRoutingCommand() }
+                        Button("Show File") { setup.revealAgentRoutingSnippet() }
+                            .disabled(!setup.isAgentRoutingConfigured)
+                    }
+                    Text("Run it in each shell where you launch agents, or add it to your shell profile (e.g. ~/.zshrc) to make it permanent.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 4)
+            }
+
             if let err = setup.lastError {
                 Text(err).foregroundStyle(.red).font(.callout)
                     .fixedSize(horizontal: false, vertical: true)
             }
-
-            Spacer()
-
-            HStack {
-                Spacer()
-                Button(setup.needsSetup ? "Finish Later" : "Done") { onDone() }
-                    .keyboardShortcut(.defaultAction)
             }
+            .padding(24)
+          }
+
+          Divider()
+          HStack {
+              Spacer()
+              Button(setup.needsSetup ? "Finish Later" : "Done") { onDone() }
+                  .keyboardShortcut(.defaultAction)
+          }
+          .padding(.horizontal, 24)
+          .padding(.vertical, 12)
         }
-        .padding(24)
-        .frame(width: 480, height: 560)
+        .frame(width: 480, height: 600)
         .task { await setup.refreshState() }
     }
 

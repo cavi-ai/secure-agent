@@ -15,22 +15,24 @@ import (
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/bus"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
+	"github.com/cavi-ai/secure-agent/daemon/internal/firewall"
 	"github.com/cavi-ai/secure-agent/daemon/internal/injection"
-	"github.com/cavi-ai/secure-agent/daemon/internal/redact"
 )
 
 type ProxyServer struct {
 	port      int
 	bus       *bus.Bus
 	caManager *CAManager
+	engine    *firewall.Engine
 	server    *http.Server
 }
 
-func NewProxyServer(port int, b *bus.Bus, caManager *CAManager) *ProxyServer {
+func NewProxyServer(port int, b *bus.Bus, caManager *CAManager, engine *firewall.Engine) *ProxyServer {
 	ps := &ProxyServer{
 		port:      port,
 		bus:       b,
 		caManager: caManager,
+		engine:    engine,
 	}
 
 	ps.server = &http.Server{
@@ -142,8 +144,10 @@ func (ps *ProxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Forward to target host
-	targetConn, err := tls.Dial("tcp", r.Host, &tls.Config{InsecureSkipVerify: true})
+	// Forward to target host, verifying the real server's certificate against
+	// the system roots. Skipping verification here would let a network attacker
+	// between the proxy and the upstream impersonate the API undetected.
+	targetConn, err := tls.Dial("tcp", r.Host, &tls.Config{ServerName: host})
 	if err != nil {
 		resp := &http.Response{StatusCode: http.StatusBadGateway, ProtoMajor: 1, ProtoMinor: 1}
 		_ = resp.Write(tlsClientConn)
@@ -212,31 +216,50 @@ func (ps *ProxyServer) inspectAndForwardHTTP(w http.ResponseWriter, r *http.Requ
 }
 
 func (ps *ProxyServer) inspectRequest(r *http.Request, host string) (blocked bool, detail string) {
-	// 1. Inspect headers for secret leaks
-	for name, values := range r.Header {
-		for _, val := range values {
-			if rule, found := redact.Detect(val); found {
-				detail = fmt.Sprintf("proxy-secret-leak:%s (header: %s)", rule, name)
-				ps.publishHit(host, detail)
-				return true, detail
-			}
-		}
+	if ps.engine == nil {
+		return false, ""
 	}
 
-	// 2. Inspect request body for secret leaks
+	hostOnly := host
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		hostOnly = h
+	}
+
+	var bodyBytes []byte
 	if r.Body != nil {
-		bodyBytes, err := io.ReadAll(r.Body)
-		if err == nil {
+		if b, err := io.ReadAll(r.Body); err == nil {
+			bodyBytes = b
 			r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
-			if rule, found := redact.Detect(string(bodyBytes)); found {
-				detail = fmt.Sprintf("proxy-secret-leak:%s", rule)
-				ps.publishHit(host, detail)
-				return true, detail
-			}
 		}
 	}
 
-	return false, ""
+	headers := make(map[string]string, len(r.Header))
+	for name, values := range r.Header {
+		headers[name] = strings.Join(values, " ")
+	}
+
+	dec := ps.engine.Inspect(firewall.Request{
+		Host:           hostOnly,
+		Query:          r.URL.RawQuery,
+		AuthHeaderName: "authorization",
+		Headers:        headers,
+		Body:           bodyBytes,
+	})
+
+	// Publish every leak (including monitor-mode would-blocks) for observability;
+	// only actually block when the resolved action says so.
+	for _, f := range dec.Findings {
+		if f.Verdict.Kind != firewall.VerdictLeak {
+			continue
+		}
+		d := fmt.Sprintf("proxy-secret-leak:%s", f.Hit.RuleID)
+		ps.publishHit(host, d)
+		if detail == "" {
+			detail = d
+		}
+	}
+
+	return dec.Action == firewall.ActionBlock, detail
 }
 
 func (ps *ProxyServer) inspectResponse(resp *http.Response, host string) {
