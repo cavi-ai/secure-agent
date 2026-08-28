@@ -11,12 +11,14 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/cavi-ai/secure-agent/daemon/internal/agentenv"
 	"github.com/cavi-ai/secure-agent/daemon/internal/agents"
 	"github.com/cavi-ai/secure-agent/daemon/internal/api"
 	"github.com/cavi-ai/secure-agent/daemon/internal/bus"
 	"github.com/cavi-ai/secure-agent/daemon/internal/collect"
 	"github.com/cavi-ai/secure-agent/daemon/internal/config"
 	"github.com/cavi-ai/secure-agent/daemon/internal/correlate"
+	"github.com/cavi-ai/secure-agent/daemon/internal/firewall"
 	"github.com/cavi-ai/secure-agent/daemon/internal/intel"
 	"github.com/cavi-ai/secure-agent/daemon/internal/proxy"
 	"github.com/cavi-ai/secure-agent/daemon/internal/sensitive"
@@ -103,7 +105,17 @@ func main() {
 		if err != nil {
 			log.Printf("Failed to initialize Proxy CA Manager: %v", err)
 		} else {
-			proxyServer = proxy.NewProxyServer(cfg.ProxyPort, b, caMgr)
+			salt, _ := firewall.LoadSalt(cfg.Firewall.Registry.SaltRef)
+			fwEngine, ferr := firewall.NewEngine(cfg.Firewall, salt)
+			if ferr != nil {
+				log.Printf("Failed to initialize firewall engine: %v", ferr)
+			}
+			proxyServer = proxy.NewProxyServer(cfg.ProxyPort, b, caMgr, fwEngine)
+			// Write the opt-in routing snippet into our own config dir. It does
+			// nothing until the user sources it; we never edit their shell rc.
+			if snippetPath, werr := agentenv.WriteSnippet(filepath.Dir(cfg.ProxyCACertPath), cfg.ProxyPort, cfg.ProxyCACertPath); werr == nil {
+				log.Printf("agent routing snippet: %s (source it to route agents through the proxy)", snippetPath)
+			}
 		}
 	}
 
@@ -116,12 +128,13 @@ func main() {
 		}
 		activeAgents := listActiveAgents(tagger)
 		return api.Status{
-			Running:      true,
-			Uptime:       time.Since(startTime).Truncate(time.Second).String(),
-			ActiveAgents: len(activeAgents),
-			Agents:       activeAgents,
-			ProxyEnabled: proxyActive,
-			ProxyPort:    proxyPort,
+			Running:           true,
+			Uptime:            time.Since(startTime).Truncate(time.Second).String(),
+			ActiveAgents:      len(activeAgents),
+			Agents:            activeAgents,
+			ProxyEnabled:      proxyActive,
+			ProxyPort:         proxyPort,
+			UninspectedEgress: correlator.UninspectedEgressCount(),
 		}
 	}
 

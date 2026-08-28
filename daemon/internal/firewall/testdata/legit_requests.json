@@ -1,0 +1,5 @@
+[
+  {"agent":"claude","host":"api.anthropic.com","auth_header":"authorization","headers":{"authorization":"Bearer sk-ant-abcdefghijklmnopqrstuvwxyz012345"},"body":"{\"model\":\"claude\",\"messages\":[]}"},
+  {"agent":"cursor","host":"cursor.sh","auth_header":"authorization","headers":{"authorization":"Bearer sk-abcdefghijklmnopqrstuvwxyz012345"},"body":"{\"prompt\":\"hello\"}"},
+  {"agent":"codex","host":"api.openai.com","auth_header":"authorization","headers":{"authorization":"Bearer sk-abcdefghijklmnopqrstuvwxyz012345"},"body":"ordinary tool output with no secrets"}
+]

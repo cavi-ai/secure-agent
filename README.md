@@ -150,6 +150,36 @@ This creates symbolic links from `plugin/hooks/` to:
 
 ---
 
+## 🛡️ Egress Secret-Leak Firewall
+
+Inspects what your agents send to their APIs and catches secrets leaving where they shouldn't — the class of mistake that forces constant key rotation.
+
+**Detection layers** (`daemon/internal/firewall/`):
+- **Known-secret fingerprints** — your real secrets, stored only as a salted HMAC (never plaintext), matched even through base64 / url / gzip / JSON encodings.
+- **Typed patterns** — Anthropic, OpenAI, GitHub, AWS, Google, Stripe, Slack, JWT, bearer tokens, private keys.
+- **Entropy** — a high-entropy backstop (monitor-only).
+
+**Precision, not noise.** A credential in the expected auth header to its own vendor host is *legitimate*, not a leak. A secret is flagged only when it goes to a non-vendor host, or lands in a request body / query / non-auth header. This is what makes blocking safe.
+
+**Monitor by default; earn enforcement.** Every rule runs in `monitor` mode: leaks are reported, nothing is blocked. Promote a rule to blocking once you trust it, in `~/.config/secure-agent/config.yaml`:
+
+```yaml
+firewall:
+  mode: monitor              # global default
+  patterns:
+    - { id: aws-key, type: cloud-key, re: 'AKIA[0-9A-Z]{16}', mode: block }  # this rule now blocks
+```
+
+**Route agents through the proxy** (opt-in, scoped to your shell — no keychain or system-trust changes). The daemon writes a snippet to `~/.config/secure-agent/agent-env.sh`; source it where you launch agents (or use the menu bar **Setup → Agent Routing**):
+
+```bash
+source ~/.config/secure-agent/agent-env.sh
+```
+
+Traffic that bypasses the proxy (pinned or unrouted) is counted as `uninspected_egress` in the status, so the blind spot is visible rather than silent.
+
+---
+
 ## ⚙️ Configuration
 
 `secure-agent` loads default configuration rules and applies user overlays from `~/.config/secure-agent/config.yaml`.
