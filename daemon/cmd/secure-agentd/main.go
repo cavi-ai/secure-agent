@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/cavi-ai/secure-agent/daemon/internal/agentenv"
 	"github.com/cavi-ai/secure-agent/daemon/internal/agents"
 	"github.com/cavi-ai/secure-agent/daemon/internal/api"
 	"github.com/cavi-ai/secure-agent/daemon/internal/bus"
@@ -110,6 +111,11 @@ func main() {
 				log.Printf("Failed to initialize firewall engine: %v", ferr)
 			}
 			proxyServer = proxy.NewProxyServer(cfg.ProxyPort, b, caMgr, fwEngine)
+			// Write the opt-in routing snippet into our own config dir. It does
+			// nothing until the user sources it; we never edit their shell rc.
+			if snippetPath, werr := agentenv.WriteSnippet(filepath.Dir(cfg.ProxyCACertPath), cfg.ProxyPort, cfg.ProxyCACertPath); werr == nil {
+				log.Printf("agent routing snippet: %s (source it to route agents through the proxy)", snippetPath)
+			}
 		}
 	}
 
