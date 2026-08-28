@@ -29,3 +29,28 @@ proxy_enabled: true
 proxy_port: 8443
 proxy_ca_cert_path: "~/.config/secure-agent/ca.crt"
 proxy_ca_key_path: "~/.config/secure-agent/ca.key"
+firewall:
+  mode: monitor
+  registry:
+    salt_ref: "~/.config/secure-agent/fw-salt"
+    ingest_sources:
+      - "~/.env"
+      - "~/.aws/credentials"
+    fingerprints: []
+  patterns:
+    - { id: anthropic-key, type: vendor-key,  re: 'sk-ant-[A-Za-z0-9_-]{24,}', mode: monitor }
+    - { id: openai-key,    type: vendor-key,  re: 'sk-[A-Za-z0-9]{32,}',       mode: monitor }
+    - { id: github-pat,    type: vendor-key,  re: 'gh[pousr]_[A-Za-z0-9]{36,}', mode: monitor }
+    - { id: aws-key,       type: cloud-key,   re: 'AKIA[0-9A-Z]{16}',          mode: monitor }
+    - { id: google-key,    type: cloud-key,   re: 'AIza[0-9A-Za-z_-]{35}',     mode: monitor }
+    - { id: stripe-key,    type: vendor-key,  re: 'sk_live_[0-9A-Za-z]{24,}',  mode: monitor }
+    - { id: slack-token,   type: vendor-key,  re: 'xox[baprs]-[0-9A-Za-z-]{10,}', mode: monitor }
+    - { id: private-key,   type: private-key, re: '-----BEGIN [A-Z ]*PRIVATE KEY-----', mode: monitor }
+  entropy: { enabled: true, min_len: 20, min_bits: 4.0, mode: monitor }
+  vendors:
+    claude: { hosts: ["api.anthropic.com","claude.ai"], auth_header: "authorization" }
+    cursor: { hosts: ["cursor.sh","cursor.com"],        auth_header: "authorization" }
+    codex:  { hosts: ["api.openai.com"],                auth_header: "authorization" }
+  context:
+    allow_own_vendor_auth: true
+    treat_body_secret_as_leak: true
