@@ -34,3 +34,21 @@ func TestOverlayMergesOverDefaults(t *testing.T) {
 		t.Fatal("overlay must not wipe default agents")
 	}
 }
+
+func TestFirewallDefaultsLoad(t *testing.T) {
+	// Use an absent overlay path so this asserts embedded defaults, not any
+	// real ~/.config overlay on the developer's machine.
+	cfg, err := Load(filepath.Join(t.TempDir(), "absent.yaml"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Firewall.Mode != "monitor" {
+		t.Fatalf("firewall.mode = %q, want monitor", cfg.Firewall.Mode)
+	}
+	if len(cfg.Firewall.Patterns) == 0 {
+		t.Fatal("expected default firewall patterns")
+	}
+	if v, ok := cfg.Firewall.Vendors["claude"]; !ok || len(v.Hosts) == 0 {
+		t.Fatal("expected claude vendor config with hosts")
+	}
+}
