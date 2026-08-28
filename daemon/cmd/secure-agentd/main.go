@@ -128,12 +128,13 @@ func main() {
 		}
 		activeAgents := listActiveAgents(tagger)
 		return api.Status{
-			Running:      true,
-			Uptime:       time.Since(startTime).Truncate(time.Second).String(),
-			ActiveAgents: len(activeAgents),
-			Agents:       activeAgents,
-			ProxyEnabled: proxyActive,
-			ProxyPort:    proxyPort,
+			Running:           true,
+			Uptime:            time.Since(startTime).Truncate(time.Second).String(),
+			ActiveAgents:      len(activeAgents),
+			Agents:            activeAgents,
+			ProxyEnabled:      proxyActive,
+			ProxyPort:         proxyPort,
+			UninspectedEgress: correlator.UninspectedEgressCount(),
 		}
 	}
 
