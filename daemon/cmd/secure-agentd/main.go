@@ -17,6 +17,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/collect"
 	"github.com/cavi-ai/secure-agent/daemon/internal/config"
 	"github.com/cavi-ai/secure-agent/daemon/internal/correlate"
+	"github.com/cavi-ai/secure-agent/daemon/internal/firewall"
 	"github.com/cavi-ai/secure-agent/daemon/internal/intel"
 	"github.com/cavi-ai/secure-agent/daemon/internal/proxy"
 	"github.com/cavi-ai/secure-agent/daemon/internal/sensitive"
@@ -103,7 +104,12 @@ func main() {
 		if err != nil {
 			log.Printf("Failed to initialize Proxy CA Manager: %v", err)
 		} else {
-			proxyServer = proxy.NewProxyServer(cfg.ProxyPort, b, caMgr)
+			salt, _ := firewall.LoadSalt(cfg.Firewall.Registry.SaltRef)
+			fwEngine, ferr := firewall.NewEngine(cfg.Firewall, salt)
+			if ferr != nil {
+				log.Printf("Failed to initialize firewall engine: %v", ferr)
+			}
+			proxyServer = proxy.NewProxyServer(cfg.ProxyPort, b, caMgr, fwEngine)
 		}
 	}
 
