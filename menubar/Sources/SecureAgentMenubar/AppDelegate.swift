@@ -148,6 +148,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             target: self,
             refreshAction: #selector(refreshClicked),
             killAction: #selector(killClicked(_:)),
+            promoteAction: #selector(promoteRuleClicked(_:)),
             viewIncidentAction: #selector(viewIncidentClicked(_:)),
             pauseAction: #selector(pauseClicked),
             dashboardAction: #selector(dashboardClicked),
@@ -179,6 +180,18 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             } catch {
                 print("[secure-agent-menubar] Error killing process PID \(pid): \(error)")
+            }
+        }
+    }
+
+    @objc private func promoteRuleClicked(_ sender: NSMenuItem) {
+        guard let rule = sender.representedObject as? String else { return }
+        Task {
+            do {
+                try await client.setFirewallMode(rule: rule, mode: "block")
+                await MainActor.run { self.fetchDaemonState() }
+            } catch {
+                print("[secure-agent-menubar] promote \(rule) failed: \(error)")
             }
         }
     }
