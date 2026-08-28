@@ -10,6 +10,7 @@ public final class MenuBuilder: @unchecked Sendable {
         target: AnyObject,
         refreshAction: Selector,
         killAction: Selector,
+        promoteAction: Selector,
         viewIncidentAction: Selector,
         pauseAction: Selector,
         dashboardAction: Selector,
@@ -46,6 +47,14 @@ public final class MenuBuilder: @unchecked Sendable {
             fwItem.image = NSImage(systemSymbolName: "shield.lefthalf.filled", accessibilityDescription: "Egress Firewall")
             fwItem.isEnabled = false
             menu.addItem(fwItem)
+
+            // Rules with would-blocks are promotion candidates: click to enforce.
+            for (rule, stat) in fw.sorted(by: { $0.key < $1.key }) where stat.wouldBlock > 0 {
+                let promo = NSMenuItem(title: "   ⬆ Promote ‘\(rule)’ to block (\(stat.wouldBlock) would-block)", action: promoteAction, keyEquivalent: "")
+                promo.target = target
+                promo.representedObject = rule
+                menu.addItem(promo)
+            }
         }
 
         if let s = status, let uninspected = s.uninspectedEgress, uninspected > 0 {

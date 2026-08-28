@@ -49,6 +49,9 @@ type API struct {
 	store      *store.Store
 	killer     Killer
 	statusFn   StatusFunc
+
+	fwEngine *firewall.Engine
+	fwModes  *firewall.ModeStore
 }
 
 func New(socketPath string, store *store.Store, killer Killer, statusFn StatusFunc) *API {
@@ -58,6 +61,14 @@ func New(socketPath string, store *store.Store, killer Killer, statusFn StatusFu
 		killer:     killer,
 		statusFn:   statusFn,
 	}
+}
+
+// SetFirewall wires the firewall engine and its persisted mode-override store so
+// the control API can promote/demote rules at runtime. Optional: when unset, the
+// /firewall/mode endpoint reports the firewall is not enabled.
+func (a *API) SetFirewall(engine *firewall.Engine, modes *firewall.ModeStore) {
+	a.fwEngine = engine
+	a.fwModes = modes
 }
 
 func (a *API) Serve(ctx context.Context) error {
@@ -92,6 +103,7 @@ func (a *API) Serve(ctx context.Context) error {
 	mux.HandleFunc("/rotate", a.handleRotate)
 	mux.HandleFunc("/fleet", a.handleFleet)
 	mux.HandleFunc("/kill", a.handleKill)
+	mux.HandleFunc("/firewall/mode", a.handleFirewallMode)
 	a.setupWebDashboard(mux)
 
 	server := &http.Server{Handler: mux}
@@ -214,6 +226,40 @@ func (a *API) handleKill(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok", "pid": req.PID})
+}
+
+type fwModeRequest struct {
+	Rule string `json:"rule"`
+	Mode string `json:"mode"` // "monitor" | "block"
+}
+
+// handleFirewallMode promotes or demotes a firewall rule at runtime and persists
+// the override so it survives a restart.
+func (a *API) handleFirewallMode(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if a.fwEngine == nil {
+		http.Error(w, "firewall not enabled", http.StatusServiceUnavailable)
+		return
+	}
+	var req fwModeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Rule == "" || (req.Mode != "monitor" && req.Mode != "block") {
+		http.Error(w, `Invalid payload: {"rule":"<id>","mode":"monitor|block"}`, http.StatusBadRequest)
+		return
+	}
+
+	a.fwEngine.SetRuleMode(req.Rule, firewall.ParseMode(req.Mode))
+	if a.fwModes != nil {
+		if err := a.fwModes.Set(req.Rule, req.Mode); err != nil {
+			http.Error(w, fmt.Sprintf("persist failed: %v", err), http.StatusInternalServerError)
+			return
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok", "rule": req.Rule, "mode": req.Mode})
 }
 
 type rotateRequest struct {
