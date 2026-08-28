@@ -6,9 +6,28 @@ package agentenv
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 )
+
+// SnippetName is the file the routing snippet is written as.
+const SnippetName = "agent-env.sh"
+
+// WriteSnippet writes the routing snippet to dir/agent-env.sh (0644) and returns
+// its path. It only writes into the app's own config dir; it never touches the
+// user's shell rc or the system trust store.
+func WriteSnippet(dir string, proxyPort int, caCertPath string) (string, error) {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	path := filepath.Join(dir, SnippetName)
+	if err := os.WriteFile(path, []byte(Snippet(proxyPort, caCertPath)), 0o644); err != nil {
+		return "", err
+	}
+	return path, nil
+}
 
 // Vars returns the environment variables that route an agent through the proxy
 // at 127.0.0.1:proxyPort and make it trust the proxy CA at caCertPath. Both

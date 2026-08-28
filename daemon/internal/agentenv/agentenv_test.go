@@ -1,6 +1,8 @@
 package agentenv
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -28,5 +30,23 @@ func TestSnippetIsSourceableAndScoped(t *testing.T) {
 		if !strings.Contains(s, want) {
 			t.Fatalf("snippet missing %q\n---\n%s", want, s)
 		}
+	}
+}
+
+func TestWriteSnippetCreatesFile(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "cfg")
+	path, err := WriteSnippet(dir, 8443, "/ca.crt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Base(path) != SnippetName {
+		t.Fatalf("path base = %q, want %q", filepath.Base(path), SnippetName)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "export HTTPS_PROXY=http://127.0.0.1:8443") {
+		t.Fatalf("written snippet missing proxy export:\n%s", data)
 	}
 }
