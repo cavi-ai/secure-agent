@@ -27,19 +27,22 @@ public struct RuleStatModel: Codable, Sendable {
     public let blocked: Int
     public let legit: Int
     public let suspect: Int
+    public let mode: String?
 
     enum CodingKeys: String, CodingKey {
         case wouldBlock = "would_block"
         case blocked
         case legit
         case suspect
+        case mode
     }
 
-    public init(wouldBlock: Int = 0, blocked: Int = 0, legit: Int = 0, suspect: Int = 0) {
+    public init(wouldBlock: Int = 0, blocked: Int = 0, legit: Int = 0, suspect: Int = 0, mode: String? = nil) {
         self.wouldBlock = wouldBlock
         self.blocked = blocked
         self.legit = legit
         self.suspect = suspect
+        self.mode = mode
     }
 }
 
