@@ -39,7 +39,8 @@ document.addEventListener('DOMContentLoaded', () => {
     flags: [],
     incidents: [],
     events: [],
-    fleet: []
+    fleet: [],
+    connected: true
   };
 
   async function fetchTelemetry() {
@@ -68,15 +69,24 @@ document.addEventListener('DOMContentLoaded', () => {
         telemetryData.fleet = await fleetRes.json() || [];
       }
 
+      telemetryData.connected = !!(statusRes && statusRes.ok);
+      const banner = document.getElementById('offline-banner');
+      if (banner) banner.hidden = telemetryData.connected;
+
       renderAll();
     } catch (err) {
       console.error('Error fetching telemetry:', err);
+      telemetryData.connected = false;
+      const banner = document.getElementById('offline-banner');
+      if (banner) banner.hidden = false;
+      renderStatus();
     }
   }
 
   function renderAll() {
     renderStatus();
     renderAgents();
+    renderFirewall();
     renderIncidents();
     renderFleet();
     renderFlags();
@@ -84,11 +94,17 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function renderStatus() {
+    const chip = document.getElementById('system-status');
+    if (!telemetryData.connected) {
+      if (chip) chip.className = 'status-chip down';
+      document.getElementById('status-text').textContent = 'Disconnected';
+      return; // keep last-known metrics visible
+    }
+
     const s = telemetryData.status;
     if (!s) return;
 
     document.getElementById('status-text').textContent = s.running ? 'Daemon Active' : 'Disconnected';
-    const chip = document.getElementById('system-status');
     if (chip) chip.className = 'status-chip ' + (s.running ? 'active' : 'down');
     document.getElementById('uptime-val').textContent = s.uptime || '--';
     document.getElementById('proxy-status').textContent = s.proxy_enabled ? `127.0.0.1:${s.proxy_port || 8443}` : 'Disabled';
@@ -109,7 +125,7 @@ document.addEventListener('DOMContentLoaded', () => {
     badge.textContent = agents.length;
 
     if (agents.length === 0) {
-      container.innerHTML = `<div class="empty-state">No active AI agent processes detected</div>`;
+      container.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-agent"/></svg><span>No agents running yet — start Claude Code, Cursor, or Codex and they'll appear here</span></div>`;
       return;
     }
 
@@ -127,6 +143,49 @@ document.addEventListener('DOMContentLoaded', () => {
     `).join('');
   }
 
+  function renderFirewall() {
+    const container = document.getElementById('firewall-container');
+    const badge = document.getElementById('badge-firewall-mode');
+    const s = telemetryData.status;
+    const stats = (s && s.firewall_stats) ? s.firewall_stats : {};
+    const uninspected = (s && s.uninspected_egress) ? s.uninspected_egress : 0;
+    const rules = Object.keys(stats).sort();
+
+    const anyBlock = rules.some(r => stats[r].mode === 'block');
+    badge.textContent = anyBlock ? 'enforcing' : 'monitor';
+    badge.className = 'badge' + (anyBlock ? ' badge-ok' : '');
+
+    if (rules.length === 0 && uninspected === 0) {
+      container.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-shield"/></svg><span>No egress inspected yet — traffic is scanned as your agents run</span></div>`;
+      return;
+    }
+
+    let html = '';
+    if (uninspected > 0) {
+      html += `<div class="fw-uninspected"><svg class="icon"><use href="#i-globe"/></svg><span>${uninspected} endpoint${uninspected === 1 ? '' : 's'} reached without inspection (pinned or unrouted)</span></div>`;
+    }
+    html += rules.map(r => {
+      const st = stats[r];
+      const blocking = st.mode === 'block';
+      const action = blocking
+        ? `<span class="mode-chip block">blocking</span>`
+        : `<button class="btn btn-primary btn-sm" onclick="promoteRule('${escapeHTML(r)}')"><svg class="icon"><use href="#i-arrow"/></svg><span>Promote to block</span></button>`;
+      return `
+        <div class="fw-rule">
+          <div class="fw-rule-main">
+            <span class="fw-rule-id">${escapeHTML(r)}</span>
+            <div class="fw-metrics">
+              <span class="fw-metric"><b>${st.would_block || 0}</b> would-block</span>
+              <span class="fw-metric"><b>${st.blocked || 0}</b> blocked</span>
+              <span class="fw-metric dim"><b>${st.legit || 0}</b> legit</span>
+            </div>
+          </div>
+          ${action}
+        </div>`;
+    }).join('');
+    container.innerHTML = html;
+  }
+
   function renderIncidents() {
     const container = document.getElementById('incidents-container');
     const badge = document.getElementById('badge-incidents-count');
@@ -135,7 +194,7 @@ document.addEventListener('DOMContentLoaded', () => {
     badge.textContent = incidents.length;
 
     if (incidents.length === 0) {
-      container.innerHTML = `<div class="empty-state">No security containment incidents recorded</div>`;
+      container.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-incident"/></svg><span>No incidents — nothing to contain right now</span></div>`;
       return;
     }
 
@@ -169,7 +228,7 @@ document.addEventListener('DOMContentLoaded', () => {
     badge.textContent = fleet.length;
 
     if (fleet.length === 0) {
-      container.innerHTML = `<div class="empty-state">No remote fleet nodes registered</div>`;
+      container.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-server"/></svg><span>No remote fleet nodes registered</span></div>`;
       return;
     }
 
@@ -195,7 +254,7 @@ document.addEventListener('DOMContentLoaded', () => {
     badge.textContent = flags.length;
 
     if (flags.length === 0) {
-      container.innerHTML = `<div class="empty-state">No security correlation flags active</div>`;
+      container.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-alert"/></svg><span>No security flags — agent egress looks clean</span></div>`;
       return;
     }
 
@@ -220,7 +279,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     if (events.length === 0) {
-      container.innerHTML = `<div class="empty-state">No matching timeline events</div>`;
+      container.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-activity"/></svg><span>No matching events</span></div>`;
       return;
     }
 
@@ -260,10 +319,10 @@ document.addEventListener('DOMContentLoaded', () => {
         currentRawMarkdown = text;
         bodyEl.innerHTML = parseMarkdownToHTML(text);
       } else {
-        bodyEl.innerHTML = `<div class="empty-state">Failed to load incident report specification.</div>`;
+        bodyEl.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-doc"/></svg><span>Failed to load the incident report.</span></div>`;
       }
     } catch (err) {
-      bodyEl.innerHTML = `<div class="empty-state">Error: ${escapeHTML(err.message)}</div>`;
+      bodyEl.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-doc"/></svg><span>Error: ${escapeHTML(err.message)}</span></div>`;
     }
   };
 
@@ -283,6 +342,24 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     } catch (err) {
       showToast(`Error killing PID ${pid}: ${err}`, 'danger');
+    }
+  };
+
+  window.promoteRule = async function(rule) {
+    try {
+      const res = await fetch('/firewall/mode', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rule, mode: 'block' })
+      });
+      if (res.ok) {
+        showToast(`Rule “${rule}” promoted to block.`, 'success');
+        fetchTelemetry();
+      } else {
+        showToast(`Failed to promote “${rule}”.`, 'danger');
+      }
+    } catch (err) {
+      showToast(`Error promoting “${rule}”: ${err}`, 'danger');
     }
   };
 

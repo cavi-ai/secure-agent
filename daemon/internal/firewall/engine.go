@@ -21,10 +21,11 @@ type Request struct {
 // to promote from monitor to block. A rule with many WouldBlock and zero
 // operator-confirmed false positives is a promotion candidate.
 type RuleStat struct {
-	WouldBlock int `json:"would_block"`
-	Blocked    int `json:"blocked"`
-	Legit      int `json:"legit"`
-	Suspect    int `json:"suspect"`
+	WouldBlock int    `json:"would_block"`
+	Blocked    int    `json:"blocked"`
+	Legit      int    `json:"legit"`
+	Suspect    int    `json:"suspect"`
+	Mode       string `json:"mode"` // effective mode: "monitor" | "block"
 }
 
 type Engine struct {
@@ -75,7 +76,9 @@ func (e *Engine) Stats() map[string]RuleStat {
 	defer e.mu.Unlock()
 	out := make(map[string]RuleStat, len(e.stats))
 	for k, v := range e.stats {
-		out[k] = *v
+		s := *v
+		s.Mode = e.pol.modeFor(k).String()
+		out[k] = s
 	}
 	return out
 }
