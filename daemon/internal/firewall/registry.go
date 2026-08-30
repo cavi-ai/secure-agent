@@ -70,12 +70,20 @@ func (r *Registry) Match(data []byte) []Hit {
 	return hits
 }
 
+// maxIngestBytes caps the size of a single source file we will scan. Sources
+// are user-supplied paths; a runaway file (a huge log pointed at by mistake)
+// must not stall an ingest. Real secret files (.env, credentials) are tiny.
+const maxIngestBytes = 10 << 20 // 10 MiB
+
 // Ingest reads KEY=VALUE style files and returns fingerprints of the values.
 // Raw values are never returned or stored.
 func Ingest(sources []string, salt []byte) ([]config.Fingerprint, error) {
 	var out []config.Fingerprint
 	n := 0
 	for _, src := range sources {
+		if fi, err := os.Stat(src); err != nil || fi.IsDir() || fi.Size() > maxIngestBytes {
+			continue // missing, a directory, or too large — skip, not an error
+		}
 		f, err := os.Open(src)
 		if err != nil {
 			continue // a missing source is not an error

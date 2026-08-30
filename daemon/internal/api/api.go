@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/firewall"
@@ -50,18 +51,22 @@ type API struct {
 	killer     Killer
 	statusFn   StatusFunc
 
-	fwEngine *firewall.Engine
-	fwModes  *firewall.ModeStore
-	fwReload func() error
-	fwIngest func() ([]string, error)
+	fwEngine      *firewall.Engine
+	fwModes       *firewall.ModeStore
+	fwReload      func() error
+	fwIngest      func() ([]string, error)
+	fwSources     *firewall.SourceStore
+	fwBaseSources []string
 }
 
 // FirewallControl bundles the runtime firewall controls the API exposes.
 type FirewallControl struct {
-	Engine *firewall.Engine
-	Modes  *firewall.ModeStore
-	Reload func() error             // re-apply persisted fingerprints
-	Ingest func() ([]string, error) // scan sources, register fingerprints, return labels
+	Engine      *firewall.Engine
+	Modes       *firewall.ModeStore
+	Reload      func() error             // re-apply persisted fingerprints
+	Ingest      func() ([]string, error) // scan sources, register fingerprints, return labels
+	Sources     *firewall.SourceStore    // user-added ingest sources
+	BaseSources []string                 // config-defined ingest sources (read-only)
 }
 
 func New(socketPath string, store *store.Store, killer Killer, statusFn StatusFunc) *API {
@@ -81,6 +86,8 @@ func (a *API) SetFirewall(c FirewallControl) {
 	a.fwModes = c.Modes
 	a.fwReload = c.Reload
 	a.fwIngest = c.Ingest
+	a.fwSources = c.Sources
+	a.fwBaseSources = c.BaseSources
 }
 
 func (a *API) Serve(ctx context.Context) error {
@@ -119,6 +126,7 @@ func (a *API) Serve(ctx context.Context) error {
 	mux.HandleFunc("/firewall/mode", a.handleFirewallMode)
 	mux.HandleFunc("/firewall/fingerprints/reload", a.handleFingerprintReload)
 	mux.HandleFunc("/firewall/fingerprints/ingest", a.handleFingerprintIngest)
+	mux.HandleFunc("/firewall/sources", a.handleFirewallSources)
 	a.setupWebDashboard(mux)
 
 	server := &http.Server{Handler: mux}
@@ -337,6 +345,91 @@ func (a *API) handleFingerprintIngest(w http.ResponseWriter, r *http.Request) {
 	a.store.PutAudit(store.AuditEntry{Action: "fingerprint-ingest", Detail: fmt.Sprintf("%d secret(s) registered", len(labels))})
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok", "registered": labels})
+}
+
+type sourceRow struct {
+	Source string `json:"source"`
+	Origin string `json:"origin"` // "config" (read-only) | "user"
+}
+
+type sourceRequest struct {
+	Source string `json:"source"`
+	Op     string `json:"op"` // "add" | "remove"
+}
+
+// handleFirewallSources lists (GET) and edits (POST) the ingest sources — the
+// files whose KEY=VALUE secrets get fingerprinted. Config-defined sources are
+// read-only; only user-added sources can be removed. Every edit re-ingests so
+// the fingerprint set converges on the effective source list, and is audited
+// with the path (the path is the subject of the change, never a secret value).
+func (a *API) handleFirewallSources(w http.ResponseWriter, r *http.Request) {
+	if a.fwSources == nil {
+		http.Error(w, "firewall not enabled", http.StatusServiceUnavailable)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		rows := make([]sourceRow, 0, len(a.fwBaseSources))
+		for _, s := range a.fwBaseSources {
+			rows = append(rows, sourceRow{Source: s, Origin: "config"})
+		}
+		for _, s := range a.fwSources.Load() {
+			rows = append(rows, sourceRow{Source: s, Origin: "user"})
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(rows)
+
+	case http.MethodPost:
+		var req sourceRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Invalid payload", http.StatusBadRequest)
+			return
+		}
+		req.Source = strings.TrimSpace(req.Source)
+		if req.Source == "" || (req.Op != "add" && req.Op != "remove") {
+			http.Error(w, `Invalid payload: {"source":"<path>","op":"add|remove"}`, http.StatusBadRequest)
+			return
+		}
+
+		switch req.Op {
+		case "add":
+			if _, err := a.fwSources.Add(req.Source); err != nil {
+				http.Error(w, fmt.Sprintf("persist failed: %v", err), http.StatusInternalServerError)
+				return
+			}
+			a.store.PutAudit(store.AuditEntry{Action: "source-add", Detail: req.Source})
+		case "remove":
+			removed, err := a.fwSources.Remove(req.Source)
+			if err != nil {
+				http.Error(w, fmt.Sprintf("persist failed: %v", err), http.StatusInternalServerError)
+				return
+			}
+			if !removed {
+				http.Error(w, "not a user-added source (config sources are read-only)", http.StatusBadRequest)
+				return
+			}
+			a.store.PutAudit(store.AuditEntry{Action: "source-remove", Detail: req.Source})
+		}
+
+		// Re-ingest so the fingerprint set tracks the effective source list. A
+		// full re-ingest overwrites the persisted set, so a removed source's
+		// fingerprints are purged.
+		registered := 0
+		if a.fwIngest != nil {
+			labels, err := a.fwIngest()
+			if err != nil {
+				http.Error(w, fmt.Sprintf("re-ingest failed: %v", err), http.StatusInternalServerError)
+				return
+			}
+			registered = len(labels)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok", "source": req.Source, "op": req.Op, "registered": registered})
+
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
 }
 
 type rotateRequest struct {
