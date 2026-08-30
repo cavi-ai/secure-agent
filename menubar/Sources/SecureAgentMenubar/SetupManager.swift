@@ -154,6 +154,24 @@ public final class SetupManager: ObservableObject {
         NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: agentRoutingSnippetPath)])
     }
 
+    // MARK: - Secret registry (fingerprints)
+
+    @Published public private(set) var registeredSecrets: [String] = []
+    @Published public private(set) var didRegisterSecrets = false
+
+    /// Ask the daemon to scan the configured sources and register HMAC-only
+    /// fingerprints of the user's secrets, activating the highest-precision
+    /// detection layer. Never sees or stores plaintext.
+    public func registerSecrets() async {
+        lastError = nil
+        do {
+            registeredSecrets = try await DaemonClient().registerSecrets()
+            didRegisterSecrets = true
+        } catch {
+            report(error)
+        }
+    }
+
     // MARK: - Full Disk Access
 
     public func openFullDiskAccessSettings() {
