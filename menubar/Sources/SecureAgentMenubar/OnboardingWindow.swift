@@ -149,6 +149,34 @@ struct OnboardingView: View {
                 .padding(.vertical, 4)
             }
 
+            GroupBox("6. Secret Registry (optional)") {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Register your real secrets so the firewall catches them leaking with near-zero false positives. Values are fingerprinted (HMAC) and never stored.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button("Scan & Register My Secrets") { Task { await setup.registerSecrets() } }
+                    if setup.didRegisterSecrets {
+                        if setup.registeredSecrets.isEmpty {
+                            Text("No secrets found in the configured sources. Add paths under firewall.registry.ingest_sources in the config, then rescan.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        } else {
+                            Text("Watching \(setup.registeredSecrets.count) secret\(setup.registeredSecrets.count == 1 ? "" : "s"):")
+                                .font(.caption)
+                            ForEach(setup.registeredSecrets, id: \.self) { label in
+                                Text("• \(label)")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 4)
+            }
+
             if let err = setup.lastError {
                 Text(err).foregroundStyle(.red).font(.callout)
                     .fixedSize(horizontal: false, vertical: true)
