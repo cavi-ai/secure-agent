@@ -56,6 +56,12 @@
       </div>
     </header>
 
+    <!-- Offline banner (shown when the daemon is unreachable) -->
+    <div class="offline-banner" id="offline-banner" hidden>
+      <svg class="icon"><use href="#i-alert"/></svg>
+      <span>Can't reach the Secure Agent daemon — showing the last known state and retrying…</span>
+    </div>
+
     <!-- KPI row -->
     <section class="kpis">
       <div class="kpi" data-accent="brand">
@@ -127,6 +133,16 @@
       </div>
 
       <div class="col">
+        <section class="panel">
+          <div class="panel-head">
+            <h2><svg class="icon"><use href="#i-shield"/></svg>Egress firewall</h2>
+            <span class="badge" id="badge-firewall-mode">monitor</span>
+          </div>
+          <div class="panel-body" id="firewall-container">
+            <div class="empty"><svg class="icon"><use href="#i-shield"/></svg><span>No egress inspected yet — traffic is scanned as your agents run</span></div>
+          </div>
+        </section>
+
         <section class="panel">
           <div class="panel-head">
             <h2><svg class="icon"><use href="#i-alert"/></svg>Security flags</h2>

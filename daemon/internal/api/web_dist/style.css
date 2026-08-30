@@ -204,8 +204,8 @@ body {
 .agent-card, .incident-card, .flag-card, .fleet-node-card {
   border: 1px solid var(--line); border-radius: var(--r-sm);
   background: var(--bg-2); padding: 12px 14px;
-  animation: rise .22s var(--ease) both;
 }
+/* No entry animation on polled cards: they re-render every 2s and would flicker. */
 @keyframes rise { from { opacity: 0; transform: translateY(4px); } }
 
 .agent-card { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
@@ -310,6 +310,44 @@ body {
 .toast.success { border-left-color: var(--ok); }
 .toast.danger { border-left-color: var(--bad); }
 .toast.info { border-left-color: var(--brand); }
+
+/* ---------- offline banner ---------- */
+.offline-banner {
+  display: flex; align-items: center; gap: 10px;
+  padding: 11px 16px; border-radius: var(--r-md);
+  background: var(--bad-bg); border: 1px solid hsl(348 84% 63% / 0.32); color: var(--bad);
+  font-size: 0.84rem; font-weight: 500;
+  animation: rise .22s var(--ease) both;
+}
+.offline-banner .icon { font-size: 1.05rem; flex: none; }
+.offline-banner[hidden] { display: none; }
+
+/* ---------- firewall panel ---------- */
+.badge-ok { color: var(--ok); background: var(--ok-bg); border-color: transparent; }
+.btn-sm { padding: 6px 10px; font-size: 0.75rem; }
+.fw-uninspected {
+  display: flex; align-items: center; gap: 8px;
+  padding: 9px 11px; border-radius: var(--r-sm);
+  background: var(--warn-bg); color: var(--warn); font-size: 0.8rem;
+}
+.fw-uninspected .icon { flex: none; }
+.fw-rule {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 11px 12px; border-radius: var(--r-sm);
+  background: var(--bg-2); border: 1px solid var(--line);
+}
+.fw-rule-main { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.fw-rule-id { font: 600 0.84rem/1 var(--mono); color: var(--tx-1); }
+.fw-metrics { display: flex; gap: 14px; flex-wrap: wrap; }
+.fw-metric { font-size: 0.74rem; color: var(--tx-2); }
+.fw-metric b { color: var(--tx-1); font-weight: 700; }
+.fw-metric.dim { color: var(--tx-3); }
+.fw-metric.dim b { color: var(--tx-2); }
+.mode-chip {
+  font: 700 0.64rem/1 var(--font); letter-spacing: 0.05em; text-transform: uppercase;
+  padding: 6px 10px; border-radius: 5px; flex: none;
+}
+.mode-chip.block { color: var(--ok); background: var(--ok-bg); }
 
 /* ---------- responsive ---------- */
 @media (max-width: 1000px) {
