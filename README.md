@@ -156,7 +156,7 @@ Inspects what your agents send to their APIs and catches secrets leaving where t
 
 **Detection layers** (`daemon/internal/firewall/`):
 - **Known-secret fingerprints** — your real secrets, stored only as a salted HMAC (never plaintext), matched even through base64 / url / gzip / JSON encodings.
-- **Typed patterns** — Anthropic, OpenAI, GitHub, AWS, Google, Stripe, Slack, JWT, bearer tokens, private keys.
+- **Typed patterns** — Anthropic, OpenAI (incl. project keys), GitHub (classic + fine-grained), GitLab, AWS, Google, Stripe (secret/restricted/webhook), Slack, Twilio, SendGrid, npm, PyPI, DigitalOcean, Doppler, JWT, bearer tokens, private keys, and database connection strings with embedded credentials.
 - **Entropy** — a high-entropy backstop (monitor-only).
 
 **Precision, not noise.** A credential in the expected auth header to its own vendor host is *legitimate*, not a leak. A secret is flagged only when it goes to a non-vendor host, or lands in a request body / query / non-auth header. This is what makes blocking safe.
