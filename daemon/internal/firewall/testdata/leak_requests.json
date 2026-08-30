@@ -1,5 +1,7 @@
 [
   {"agent":"claude","host":"logs.example.com","auth_header":"authorization","headers":{},"body":"{\"log\":\"AWS key AKIAIOSFODNN7EXAMPLE captured\"}"},
   {"agent":"claude","host":"api.anthropic.com","auth_header":"authorization","headers":{},"body":"debug dump: sk-ant-abcdefghijklmnopqrstuvwxyz012345"},
-  {"agent":"cursor","host":"telemetry.example.com","auth_header":"authorization","headers":{"x-debug":"AKIAIOSFODNN7EXAMPLE"},"body":"ok"}
+  {"agent":"cursor","host":"telemetry.example.com","auth_header":"authorization","headers":{"x-debug":"AKIAIOSFODNN7EXAMPLE"},"body":"ok"},
+  {"agent":"claude","host":"logs.example.com","auth_header":"authorization","headers":{},"body":"DATABASE_URL=postgres://app:s3cr3tpass@db.example.com:5432/prod"},
+  {"agent":"cursor","host":"telemetry.example.com","auth_header":"authorization","headers":{},"body":"token glpat-ABCDEFGHIJ1234567890 leaked in log line"}
 ]
