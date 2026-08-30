@@ -118,6 +118,11 @@ func main() {
 	// Known-secret fingerprints: config defaults plus any registered by
 	// `secure-agent fingerprint`. Reapplied on demand via /firewall/fingerprints/reload.
 	fpStore := firewall.NewFingerprintStore(filepath.Join(filepath.Dir(cfg.Firewall.Registry.SaltRef), "firewall-fingerprints.json"))
+
+	// User-added ingest sources (registered from the console) persist alongside
+	// the mode and fingerprint overrides, so a source survives a restart without
+	// editing the config overlay.
+	srcStore := firewall.NewSourceStore(filepath.Join(filepath.Dir(cfg.Firewall.Registry.SaltRef), "firewall-sources.json"))
 	reloadFingerprints := func() error {
 		combined := append(append([]config.Fingerprint{}, cfg.Firewall.Registry.Fingerprints...), fpStore.Load()...)
 		if fwEngine != nil {
@@ -131,7 +136,13 @@ func main() {
 	// HMAC fingerprints, and applies them live. Triggered by `secure-agent
 	// fingerprint`.
 	ingestFingerprints := func() ([]string, error) {
-		fps, err := firewall.Ingest(cfg.Firewall.Registry.IngestSources, fwSalt)
+		// Effective sources are computed at call time: the config defaults plus
+		// any user-added sources (expanded here — they are stored raw).
+		sources := append([]string{}, cfg.Firewall.Registry.IngestSources...)
+		for _, s := range srcStore.Load() {
+			sources = append(sources, config.ExpandPath(s))
+		}
+		fps, err := firewall.Ingest(sources, fwSalt)
 		if err != nil {
 			return nil, err
 		}
@@ -184,10 +195,12 @@ func main() {
 	// Start Control API
 	apiServer := api.New(cfg.SocketPath, st, &realKiller{}, statusFn)
 	apiServer.SetFirewall(api.FirewallControl{
-		Engine: fwEngine,
-		Modes:  fwModes,
-		Reload: reloadFingerprints,
-		Ingest: ingestFingerprints,
+		Engine:      fwEngine,
+		Modes:       fwModes,
+		Reload:      reloadFingerprints,
+		Ingest:      ingestFingerprints,
+		Sources:     srcStore,
+		BaseSources: cfg.Firewall.Registry.IngestSources,
 	})
 	go func() {
 		if err := apiServer.Serve(ctx); err != nil && ctx.Err() == nil {
