@@ -4,7 +4,7 @@ import SwiftUI
 import UserNotifications
 
 @MainActor
-public final class AppDelegate: NSObject, NSApplicationDelegate {
+public final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
     private var statusItem: NSStatusItem!
     private let state = AppState()
     private let popover = NSPopover()
@@ -17,6 +17,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         SetupManager.shared.migrateLegacyLaunchAgent()
         DaemonSupervisor.shared.start()
         NotificationManager.shared.requestAuthorization()
+        UNUserNotificationCenter.current().delegate = self
 
         setupStatusItem()
         setupPopover()
@@ -112,6 +113,36 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         img?.isTemplate = true
         button.image = img
         button.title = count
+    }
+
+    // MARK: - Notifications
+
+    public nonisolated func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification,
+        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+    ) {
+        completionHandler([.banner, .sound])
+    }
+
+    public nonisolated func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse,
+        withCompletionHandler completionHandler: @escaping () -> Void
+    ) {
+        let action = response.actionIdentifier
+        let pid = (response.notification.request.content.userInfo["pid"] as? Int).map { Int32($0) }
+        Task { @MainActor in
+            switch action {
+            case NotificationManager.killAction:
+                if let pid { self.state.kill(pid: pid) }
+            case NotificationManager.openAction, UNNotificationDefaultActionIdentifier:
+                self.state.openDashboard()
+            default:
+                break
+            }
+        }
+        completionHandler()
     }
 
     // MARK: - Right-click actions
