@@ -5,6 +5,12 @@
 [![macOS](https://img.shields.io/badge/macOS-14.0+-000000?style=flat&logo=apple)](https://apple.com/macos)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
+> **Egress inspection & secret-leak firewall for local AI agents.** See what your agents send, catch secrets before they leak, and stop rotating your keys three times a week.
+
+<p align="center">
+  <img src="assets/screenshots/console.png" alt="Secure Agent — live security console" width="920">
+</p>
+
 **`secure-agent`** is a lightweight, always-on AI-agent security monitor and harness guard designed for macOS.
 
 As AI coding agents (Claude Code, Cursor, Codex, OpenClaw, Copilot, etc.) gain increasing autonomy in local development environments, they gain execution privileges to read local sensitive files, mutate shell configurations, access credential stores, and initiate external network connections. `secure-agent` provides a non-intrusive, multi-layered defense system that enforces zero-trust boundaries around AI agent process trees without disrupting developer velocity.
@@ -153,6 +159,10 @@ This creates symbolic links from `plugin/hooks/` to:
 ## 🛡️ Egress Secret-Leak Firewall
 
 Inspects what your agents send to their APIs and catches secrets leaving where they shouldn't — the class of mistake that forces constant key rotation.
+
+<p align="center">
+  <img src="assets/screenshots/firewall.png" alt="Egress firewall — per-rule stats and promote-to-block" width="720">
+</p>
 
 **Detection layers** (`daemon/internal/firewall/`):
 - **Known-secret fingerprints** — your real secrets, stored only as a salted HMAC (never plaintext), matched even through base64 / url / gzip / JSON encodings.
