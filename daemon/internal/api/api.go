@@ -112,6 +112,7 @@ func (a *API) Serve(ctx context.Context) error {
 	mux.HandleFunc("/flags", a.handleFlags)
 	mux.HandleFunc("/events", a.handleEvents)
 	mux.HandleFunc("/incidents", a.handleIncidents)
+	mux.HandleFunc("/audit", a.handleAudit)
 	mux.HandleFunc("/rotate", a.handleRotate)
 	mux.HandleFunc("/fleet", a.handleFleet)
 	mux.HandleFunc("/kill", a.handleKill)
@@ -218,6 +219,21 @@ func (a *API) handleIncidents(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(incidents)
 }
 
+func (a *API) handleAudit(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	limit := 100
+	if lStr := r.URL.Query().Get("limit"); lStr != "" {
+		if parsed, err := strconv.Atoi(lStr); err == nil && parsed > 0 {
+			limit = parsed
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(a.store.RecentAudit(limit))
+}
+
 type killRequest struct {
 	PID int32 `json:"pid"`
 }
@@ -264,6 +280,9 @@ func (a *API) handleFirewallMode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Capture the prior mode before mutating so the audit row is meaningful
+	// ("monitor → block" is the record worth keeping).
+	prevMode := a.fwEngine.RuleMode(req.Rule).String()
 	a.fwEngine.SetRuleMode(req.Rule, firewall.ParseMode(req.Mode))
 	if a.fwModes != nil {
 		if err := a.fwModes.Set(req.Rule, req.Mode); err != nil {
@@ -271,6 +290,7 @@ func (a *API) handleFirewallMode(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	a.store.PutAudit(store.AuditEntry{Action: "rule-mode", Rule: req.Rule, FromMode: prevMode, ToMode: req.Mode})
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok", "rule": req.Rule, "mode": req.Mode})
@@ -292,6 +312,7 @@ func (a *API) handleFingerprintReload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("reload failed: %v", err), http.StatusInternalServerError)
 		return
 	}
+	a.store.PutAudit(store.AuditEntry{Action: "fingerprint-reload"})
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok"})
 }
@@ -312,6 +333,8 @@ func (a *API) handleFingerprintIngest(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("ingest failed: %v", err), http.StatusInternalServerError)
 		return
 	}
+	// Record the count only — never the labels, which carry source paths.
+	a.store.PutAudit(store.AuditEntry{Action: "fingerprint-ingest", Detail: fmt.Sprintf("%d secret(s) registered", len(labels))})
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok", "registered": labels})
 }

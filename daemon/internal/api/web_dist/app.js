@@ -40,17 +40,19 @@ document.addEventListener('DOMContentLoaded', () => {
     incidents: [],
     events: [],
     fleet: [],
+    audit: [],
     connected: true
   };
 
   async function fetchTelemetry() {
     try {
-      const [statusRes, flagsRes, incidentsRes, eventsRes, fleetRes] = await Promise.all([
+      const [statusRes, flagsRes, incidentsRes, eventsRes, fleetRes, auditRes] = await Promise.all([
         fetch('/status').catch(() => null),
         fetch('/flags?limit=20').catch(() => null),
         fetch('/incidents?limit=10').catch(() => null),
         fetch('/events?limit=50').catch(() => null),
-        fetch('/fleet').catch(() => null)
+        fetch('/fleet').catch(() => null),
+        fetch('/audit?limit=50').catch(() => null)
       ]);
 
       if (statusRes && statusRes.ok) {
@@ -67,6 +69,9 @@ document.addEventListener('DOMContentLoaded', () => {
       }
       if (fleetRes && fleetRes.ok) {
         telemetryData.fleet = await fleetRes.json() || [];
+      }
+      if (auditRes && auditRes.ok) {
+        telemetryData.audit = await auditRes.json() || [];
       }
 
       telemetryData.connected = !!(statusRes && statusRes.ok);
@@ -89,6 +94,7 @@ document.addEventListener('DOMContentLoaded', () => {
     renderFirewall();
     renderIncidents();
     renderFleet();
+    renderAudit();
     renderFlags();
     renderEvents();
   }
@@ -244,6 +250,44 @@ document.addEventListener('DOMContentLoaded', () => {
         </div>
       </div>
     `).join('');
+  }
+
+  function renderAudit() {
+    const container = document.getElementById('audit-container');
+    const badge = document.getElementById('badge-audit-count');
+    const audit = telemetryData.audit || [];
+
+    badge.textContent = audit.length;
+
+    if (audit.length === 0) {
+      container.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-history"/></svg><span>No policy changes yet — promotions and secret registrations are logged here</span></div>`;
+      return;
+    }
+
+    container.innerHTML = audit.map(a => {
+      const timeStr = new Date(a.ts).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+      let label = escapeHTML(a.detail || '');
+      let cls = '';
+      if (a.action === 'rule-mode') {
+        label = `${escapeHTML(a.rule)}: ${escapeHTML(a.from_mode)} → ${escapeHTML(a.to_mode)}`;
+        cls = a.to_mode === 'block' ? 'ok' : '';
+      } else if (a.action === 'fingerprint-ingest') {
+        cls = 'tool';
+      } else if (a.action === 'fingerprint-reload') {
+        label = label || 'fingerprints reloaded';
+        cls = 'tool';
+      }
+      const actionLabel = a.action.replace(/-/g, ' ').toUpperCase();
+      return `
+        <div class="audit-item">
+          <div class="audit-head">
+            <span class="event-kind ${cls}">${actionLabel}</span>
+            <span class="audit-t">${timeStr}</span>
+          </div>
+          <div class="audit-dtl">${label}</div>
+        </div>
+      `;
+    }).join('');
   }
 
   function renderFlags() {

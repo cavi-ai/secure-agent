@@ -23,6 +23,19 @@ type Store struct {
 	insertCount uint64
 }
 
+// AuditEntry is one durable record of a policy/control change (a rule promoted
+// or demoted, fingerprints ingested or reloaded). Unlike events, audit rows are
+// low-volume and never pruned. No field ever carries a secret value.
+type AuditEntry struct {
+	ID       int64  `json:"id"`
+	TS       string `json:"ts"`
+	Action   string `json:"action"` // "rule-mode" | "fingerprint-ingest" | "fingerprint-reload"
+	Rule     string `json:"rule,omitempty"`
+	FromMode string `json:"from_mode,omitempty"`
+	ToMode   string `json:"to_mode,omitempty"`
+	Detail   string `json:"detail,omitempty"`
+}
+
 func Open(dbPath, jsonlPath string) (*Store, error) {
 	if dbPath != "" {
 		if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
@@ -75,6 +88,15 @@ func Open(dbPath, jsonlPath string) (*Store, error) {
 			risk TEXT,
 			report_json TEXT,
 			created_at TEXT
+		);`,
+		`CREATE TABLE IF NOT EXISTS audit (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			ts TEXT,
+			action TEXT,
+			rule TEXT,
+			from_mode TEXT,
+			to_mode TEXT,
+			detail TEXT
 		);`,
 	}
 
@@ -264,6 +286,44 @@ func (s *Store) RecentIncidents(limit int) []model.IncidentReport {
 		}
 	}
 	return list
+}
+
+// PutAudit records a policy/control change. The store stamps the timestamp so
+// callers never thread a clock. Audit rows are intentionally never pruned — a
+// promotion must not be evicted by file-open noise the way events are.
+func (s *Store) PutAudit(a AuditEntry) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	ts := time.Now().UTC().Format(time.RFC3339Nano)
+	_, err := s.db.Exec(
+		`INSERT INTO audit (ts, action, rule, from_mode, to_mode, detail) VALUES (?, ?, ?, ?, ?, ?)`,
+		ts, a.Action, a.Rule, a.FromMode, a.ToMode, a.Detail,
+	)
+	if err != nil {
+		log.Printf("store: failed to insert audit %s: %v", a.Action, err)
+	}
+}
+
+func (s *Store) RecentAudit(limit int) []AuditEntry {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	rows, err := s.db.Query(`SELECT id, ts, action, rule, from_mode, to_mode, detail FROM audit ORDER BY id DESC LIMIT ?`, limit)
+	if err != nil {
+		log.Printf("store: query audit error: %v", err)
+		return nil
+	}
+	defer rows.Close()
+
+	var out []AuditEntry
+	for rows.Next() {
+		var a AuditEntry
+		if err := rows.Scan(&a.ID, &a.TS, &a.Action, &a.Rule, &a.FromMode, &a.ToMode, &a.Detail); err == nil {
+			out = append(out, a)
+		}
+	}
+	return out
 }
 
 func (s *Store) Close() error {
