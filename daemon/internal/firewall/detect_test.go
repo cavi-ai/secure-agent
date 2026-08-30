@@ -1,10 +1,50 @@
 package firewall
 
 import (
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/config"
 )
+
+// TestDefaultPatternsCatchCommonSecrets exercises the shipped pattern library
+// against representative real-shaped secrets, so expanding the library is proven
+// to add coverage (not just avoid false positives).
+func TestDefaultPatternsCatchCommonSecrets(t *testing.T) {
+	cfg, err := config.Load(filepath.Join(t.TempDir(), "absent.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := NewDetector(cfg.Firewall.Patterns, config.EntropyConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cases := map[string]string{
+		"anthropic-key":      "sk-ant-abcdefghijklmnopqrstuvwxyz012345",
+		"github-pat":         "ghp_abcdefghijklmnopqrstuvwxyz0123456789",
+		"aws-key":            "AKIAIOSFODNN7EXAMPLE",
+		"gitlab-pat":         "glpat-ABCDEFGHIJ1234567890",
+		"npm-token":          "npm_abcdefghijklmnopqrstuvwxyz0123456789",
+		"sendgrid-key":       "SG.abcdefghijklmnopqrstuv.abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG",
+		"stripe-webhook":     "whsec_" + strings.Repeat("a", 32),
+		"digitalocean-token": "dop_v1_" + strings.Repeat("a", 64),
+		"db-conn-string":     "postgres://user:s3cr3tpass@db.example.com:5432/app",
+	}
+
+	for wantRule, sample := range cases {
+		found := false
+		for _, h := range d.Scan(sample) {
+			if h.RuleID == wantRule {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("rule %q did not match %q", wantRule, sample)
+		}
+	}
+}
 
 func testDetector(t *testing.T) *Detector {
 	t.Helper()
