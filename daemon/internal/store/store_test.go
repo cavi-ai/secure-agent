@@ -36,6 +36,28 @@ func TestPutFlagAlsoAppendsJSONL(t *testing.T) {
 	}
 }
 
+func TestPutAndReadAuditRoundTrips(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(filepath.Join(dir, "e.db"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	s.PutAudit(AuditEntry{Action: "rule-mode", Rule: "aws-key", FromMode: "monitor", ToMode: "block"})
+	got := s.RecentAudit(10)
+	if len(got) != 1 {
+		t.Fatalf("RecentAudit len = %d, want 1", len(got))
+	}
+	a := got[0]
+	if a.Action != "rule-mode" || a.Rule != "aws-key" || a.FromMode != "monitor" || a.ToMode != "block" {
+		t.Fatalf("audit row = %+v", a)
+	}
+	if a.ID == 0 || a.TS == "" {
+		t.Fatalf("audit row missing stamped id/ts: %+v", a)
+	}
+}
+
 func TestEventRetentionBatchPruning(t *testing.T) {
 	dir := t.TempDir()
 	s, err := Open(filepath.Join(dir, "e.db"), "")
