@@ -116,6 +116,12 @@ func TestEngineStatsTally(t *testing.T) {
 	if st["anthropic-key"].Legit != 1 {
 		t.Fatalf("anthropic-key legit = %d, want 1 (%+v)", st["anthropic-key"].Legit, st)
 	}
+	if st["aws-key"].Mode != "block" {
+		t.Fatalf("aws-key mode = %q, want block", st["aws-key"].Mode)
+	}
+	if st["anthropic-key"].Mode != "monitor" {
+		t.Fatalf("anthropic-key mode = %q, want monitor", st["anthropic-key"].Mode)
+	}
 }
 
 func TestInspectMonitorLeakWouldBlockNotBlock(t *testing.T) {

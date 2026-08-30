@@ -88,3 +88,11 @@ func ParseMode(s string) Mode {
 	}
 	return ModeMonitor
 }
+
+// String is the canonical config/API spelling of a Mode.
+func (m Mode) String() string {
+	if m == ModeBlock {
+		return "block"
+	}
+	return "monitor"
+}
