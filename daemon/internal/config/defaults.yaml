@@ -48,6 +48,18 @@ firewall:
     - { id: private-key,   type: private-key, re: '-----BEGIN [A-Z ]*PRIVATE KEY-----', mode: monitor }
     - { id: jwt,           type: vendor-key,  re: 'eyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}', mode: monitor }
     - { id: bearer-token,  type: vendor-key,  re: 'Bearer\s+[A-Za-z0-9\-._~+/]{16,}=*', mode: monitor }
+    - { id: openai-project,   type: vendor-key,   re: 'sk-proj-[A-Za-z0-9_-]{40,}',          mode: monitor }
+    - { id: github-fine-grained, type: vendor-key, re: 'github_pat_[0-9A-Za-z_]{82}',        mode: monitor }
+    - { id: gitlab-pat,       type: vendor-key,   re: 'glpat-[0-9A-Za-z_-]{20}',             mode: monitor }
+    - { id: npm-token,        type: vendor-key,   re: 'npm_[0-9A-Za-z]{36}',                 mode: monitor }
+    - { id: pypi-token,       type: vendor-key,   re: 'pypi-[A-Za-z0-9_-]{50,}',             mode: monitor }
+    - { id: sendgrid-key,     type: vendor-key,   re: 'SG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}', mode: monitor }
+    - { id: twilio-sid,       type: cloud-key,    re: 'AC[0-9a-fA-F]{32}',                   mode: monitor }
+    - { id: stripe-restricted, type: vendor-key,  re: 'rk_live_[0-9A-Za-z]{24,}',            mode: monitor }
+    - { id: stripe-webhook,   type: vendor-key,   re: 'whsec_[A-Za-z0-9]{32,}',              mode: monitor }
+    - { id: digitalocean-token, type: cloud-key,  re: 'dop_v1_[0-9a-f]{64}',                 mode: monitor }
+    - { id: doppler-token,    type: vendor-key,   re: 'dp\.pt\.[A-Za-z0-9]{40,}',            mode: monitor }
+    - { id: db-conn-string,   type: cloud-key,    re: '(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|amqps?)://\S+:\S+@\S+', mode: monitor }
   entropy: { enabled: true, min_len: 20, min_bits: 4.0, mode: monitor }
   vendors:
     claude: { hosts: ["api.anthropic.com","claude.ai"], auth_header: "authorization" }
