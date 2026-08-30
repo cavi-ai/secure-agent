@@ -1,169 +1,176 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>secure-agent — Live AI Security Console</title>
+  <title>Secure Agent — Console</title>
   <link rel="stylesheet" href="style.css">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 </head>
 <body>
-  <div class="app-container">
-    <!-- Top Navigation Header -->
-    <header class="top-header">
+  <!-- Icon sprite: one cohesive line-icon set (1.5px stroke, currentColor). -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs>
+      <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3l7 3v5c0 4.4-3 8.3-7 9.5C8 22.3 5 18.4 5 14V6l7-3z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M9 12l2 2 4-4.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="i-agent" viewBox="0 0 24 24"><rect x="4" y="7" width="16" height="12" rx="3" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M12 4v3M9 12h.01M15 12h.01M9.5 16h5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+      <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 4l8.5 15H3.5L12 4z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M12 10v4M12 17h.01" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></symbol>
+      <symbol id="i-incident" viewBox="0 0 24 24"><path d="M7 3h7l4 4v14H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M13 3v5h5M9.5 13h5M9.5 16.5h3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></symbol>
+      <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M3.5 12h17M12 3.5c2.5 2.4 2.5 14.6 0 17M12 3.5c-2.5 2.4-2.5 14.6 0 17" fill="none" stroke="currentColor" stroke-width="1.4"/></symbol>
+      <symbol id="i-activity" viewBox="0 0 24 24"><path d="M3 12h4l2.5 7 5-14L17 12h4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 0 0-13.7-4.7L4 8.5M4 4v4.5H8.5M4 13a8 8 0 0 0 13.7 4.7L20 15.5M20 20v-4.5h-4.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="i-power" viewBox="0 0 24 24"><path d="M12 4v8M7.5 7a7 7 0 1 0 9 0" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></symbol>
+      <symbol id="i-key" viewBox="0 0 24 24"><circle cx="8" cy="8" r="4" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M11 11l8 8M16 16l2-2M18.5 18.5l2-2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+      <symbol id="i-server" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="7" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="4" y="13" width="16" height="7" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M7.5 7.5h.01M7.5 16.5h.01" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+      <symbol id="i-doc" viewBox="0 0 24 24"><path d="M7 3h7l4 4v14H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M13 3v5h5" stroke="currentColor" stroke-width="1.5"/></symbol>
+      <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" fill="none" stroke="currentColor" stroke-width="1.6"/></symbol>
+      <symbol id="i-close" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></symbol>
+      <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    </defs>
+  </svg>
+
+  <div class="app">
+    <!-- Header -->
+    <header class="masthead">
       <div class="brand">
-        <div class="logo-shield">🛡️</div>
+        <span class="brand-mark" aria-hidden="true"><svg class="icon"><use href="#i-shield"/></svg></span>
         <div class="brand-text">
-          <h1>secure-agent <span class="badge-v1">v1.0</span></h1>
-          <span class="sub-label">Autonomous AI Agent Security & Payload Inspector</span>
+          <div class="brand-name">Secure&nbsp;Agent<span class="brand-ver" id="app-version">v1.0</span></div>
+          <div class="brand-tag">Egress inspection &amp; secret-leak firewall for local AI agents</div>
         </div>
       </div>
-      <div class="header-status">
-        <div class="status-indicator active" id="system-status">
-          <span class="dot"></span>
+      <div class="masthead-right">
+        <div class="status-chip active" id="system-status">
+          <span class="status-dot"></span>
           <span id="status-text">Daemon Active</span>
         </div>
-        <div class="metric-pill">
-          <span class="pill-label">Uptime</span>
-          <span class="pill-val" id="uptime-val">--</span>
+        <div class="stat">
+          <span class="stat-k">Uptime</span>
+          <span class="stat-v" id="uptime-val">--</span>
         </div>
-        <div class="metric-pill">
-          <span class="pill-label">Proxy (MITM)</span>
-          <span class="pill-val" id="proxy-status">127.0.0.1:8443</span>
+        <div class="stat">
+          <span class="stat-k">Proxy</span>
+          <span class="stat-v" id="proxy-status">127.0.0.1:8443</span>
         </div>
-        <button class="btn-refresh" id="btn-refresh" title="Refresh Telemetry">🔄 Refresh</button>
+        <button class="btn btn-ghost" id="btn-refresh" title="Refresh telemetry">
+          <svg class="icon"><use href="#i-refresh"/></svg><span>Refresh</span>
+        </button>
       </div>
     </header>
 
-    <!-- System Quick Metrics Grid -->
-    <section class="metrics-grid">
-      <div class="metric-card">
-        <div class="metric-icon">🤖</div>
-        <div class="metric-body">
-          <span class="metric-title">Active AI Agents</span>
-          <span class="metric-number" id="count-agents">0</span>
-          <span class="metric-hint" id="hint-agents">Processes tagged in process tree</span>
+    <!-- KPI row -->
+    <section class="kpis">
+      <div class="kpi" data-accent="brand">
+        <div class="kpi-icon"><svg class="icon"><use href="#i-agent"/></svg></div>
+        <div class="kpi-body">
+          <span class="kpi-num" id="count-agents">0</span>
+          <span class="kpi-label">Active agents</span>
+          <span class="kpi-hint" id="hint-agents">Tagged in the process tree</span>
         </div>
       </div>
-      <div class="metric-card">
-        <div class="metric-icon">🚨</div>
-        <div class="metric-body">
-          <span class="metric-title">Security Correlation Flags</span>
-          <span class="metric-number" id="count-flags">0</span>
-          <span class="metric-hint">Sliding-window egress matches</span>
+      <div class="kpi" data-accent="rose">
+        <div class="kpi-icon"><svg class="icon"><use href="#i-alert"/></svg></div>
+        <div class="kpi-body">
+          <span class="kpi-num" id="count-flags">0</span>
+          <span class="kpi-label">Security flags</span>
+          <span class="kpi-hint">Correlated egress matches</span>
         </div>
       </div>
-      <div class="metric-card">
-        <div class="metric-icon">📋</div>
-        <div class="metric-body">
-          <span class="metric-title">Containment Incidents</span>
-          <span class="metric-number" id="count-incidents">0</span>
-          <span class="metric-hint">Assessed secret exposures</span>
+      <div class="kpi" data-accent="amber">
+        <div class="kpi-icon"><svg class="icon"><use href="#i-incident"/></svg></div>
+        <div class="kpi-body">
+          <span class="kpi-num" id="count-incidents">0</span>
+          <span class="kpi-label">Incidents</span>
+          <span class="kpi-hint">Assessed secret exposures</span>
         </div>
       </div>
-      <div class="metric-card">
-        <div class="metric-icon">🌐</div>
-        <div class="metric-body">
-          <span class="metric-title">Proxy Inspections</span>
-          <span class="metric-number" id="count-proxy">0</span>
-          <span class="metric-hint">Secret leaks & prompt injections</span>
+      <div class="kpi" data-accent="brand">
+        <div class="kpi-icon"><svg class="icon"><use href="#i-globe"/></svg></div>
+        <div class="kpi-body">
+          <span class="kpi-num" id="count-proxy">0</span>
+          <span class="kpi-label">Proxy inspections</span>
+          <span class="kpi-hint">Leaks &amp; prompt injections</span>
         </div>
       </div>
     </section>
 
-    <!-- Main Workspace Grid -->
-    <main class="dashboard-grid">
-      <!-- Left Column: Active Agents & Incident Containment -->
-      <div class="grid-col left-col">
-        <!-- Active Agent Process Tree Matrix -->
-        <div class="panel">
-          <div class="panel-header">
-            <h2>🤖 Active AI Agent Processes</h2>
-            <span class="count-badge" id="badge-agents-count">0</span>
+    <!-- Workspace -->
+    <main class="grid">
+      <div class="col">
+        <section class="panel">
+          <div class="panel-head">
+            <h2><svg class="icon"><use href="#i-agent"/></svg>Active agent processes</h2>
+            <span class="badge" id="badge-agents-count">0</span>
           </div>
           <div class="panel-body" id="agents-container">
-            <div class="empty-state">No active AI agent processes detected</div>
+            <div class="empty"><svg class="icon"><use href="#i-agent"/></svg><span>No active AI agent processes detected</span></div>
           </div>
-        </div>
+        </section>
 
-        <!-- Incident Containment & Auto-Rotation Hub -->
-        <div class="panel">
-          <div class="panel-header">
-            <h2>📋 Incident Reports & Auto-Rotation Hub</h2>
-            <span class="count-badge danger" id="badge-incidents-count">0</span>
+        <section class="panel">
+          <div class="panel-head">
+            <h2><svg class="icon"><use href="#i-incident"/></svg>Incidents &amp; auto-rotation</h2>
+            <span class="badge badge-rose" id="badge-incidents-count">0</span>
           </div>
           <div class="panel-body" id="incidents-container">
-            <div class="empty-state">No security containment incidents recorded</div>
+            <div class="empty"><svg class="icon"><use href="#i-incident"/></svg><span>No containment incidents recorded</span></div>
           </div>
-        </div>
+        </section>
 
-        <!-- Tailnet Remote Fleet Status -->
-        <div class="panel">
-          <div class="panel-header">
-            <h2>🌐 Tailnet Fleet Node Status</h2>
-            <span class="count-badge" id="badge-fleet-count">0</span>
+        <section class="panel">
+          <div class="panel-head">
+            <h2><svg class="icon"><use href="#i-server"/></svg>Fleet nodes</h2>
+            <span class="badge" id="badge-fleet-count">0</span>
           </div>
           <div class="panel-body" id="fleet-container">
-            <div class="empty-state">No remote fleet nodes registered</div>
+            <div class="empty"><svg class="icon"><use href="#i-server"/></svg><span>No remote fleet nodes registered</span></div>
           </div>
-        </div>
+        </section>
       </div>
 
-      <!-- Right Column: Live Security Feed & Proxy Stream -->
-      <div class="grid-col right-col">
-        <!-- Security Flags & Alerts Feed -->
-        <div class="panel">
-          <div class="panel-header">
-            <h2>🚨 Real-Time Security Flags</h2>
-            <span class="count-badge warning" id="badge-flags-count">0</span>
+      <div class="col">
+        <section class="panel">
+          <div class="panel-head">
+            <h2><svg class="icon"><use href="#i-alert"/></svg>Security flags</h2>
+            <span class="badge badge-amber" id="badge-flags-count">0</span>
           </div>
           <div class="panel-body" id="flags-container">
-            <div class="empty-state">No security correlation flags active</div>
+            <div class="empty"><svg class="icon"><use href="#i-alert"/></svg><span>No security correlation flags active</span></div>
           </div>
-        </div>
+        </section>
 
-        <!-- Live Telemetry & Event Timeline -->
-        <div class="panel">
-          <div class="panel-header">
-            <h2>📡 System Event Timeline & Proxy Stream</h2>
-            <div class="filter-group">
-              <select id="event-filter" class="select-filter">
-                <option value="all">All Events</option>
-                <option value="8">Plugin Actions (Tool Use)</option>
-                <option value="9">Proxy Payload Hits</option>
-                <option value="5">Socket Connections</option>
-                <option value="0">File Opens</option>
-              </select>
-            </div>
+        <section class="panel panel-grow">
+          <div class="panel-head">
+            <h2><svg class="icon"><use href="#i-activity"/></svg>Event timeline</h2>
+            <select id="event-filter" class="select">
+              <option value="all">All events</option>
+              <option value="8">Tool use</option>
+              <option value="9">Proxy hits</option>
+              <option value="5">Connections</option>
+              <option value="0">File opens</option>
+            </select>
           </div>
-          <div class="panel-body timeline-body" id="events-container">
-            <div class="empty-state">No system events logged</div>
+          <div class="panel-body timeline" id="events-container">
+            <div class="empty"><svg class="icon"><use href="#i-activity"/></svg><span>No system events logged</span></div>
           </div>
-        </div>
+        </section>
       </div>
     </main>
   </div>
 
-  <!-- Incident Markdown Report Modal -->
-  <dialog id="report-modal" class="report-modal">
-    <div class="modal-content">
-      <div class="modal-header">
-        <h3 id="modal-title">📄 Security Incident Specification</h3>
-        <div class="modal-actions">
-          <button class="btn-copy-report" id="btn-copy-report">📋 Copy Markdown</button>
-          <button class="btn-close-modal" id="btn-close-modal">✕</button>
-        </div>
+  <!-- Incident report modal -->
+  <dialog id="report-modal" class="modal">
+    <div class="modal-head">
+      <h3 id="modal-title"><svg class="icon"><use href="#i-doc"/></svg>Incident report</h3>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" id="btn-copy-report"><svg class="icon"><use href="#i-copy"/></svg><span>Copy</span></button>
+        <button class="btn btn-icon" id="btn-close-modal" title="Close"><svg class="icon"><use href="#i-close"/></svg></button>
       </div>
-      <div class="modal-body" id="modal-report-body">
-        <div class="loading-spinner">Loading incident specification report…</div>
-      </div>
+    </div>
+    <div class="modal-body" id="modal-report-body">
+      <div class="loading">Loading incident report…</div>
     </div>
   </dialog>
 
-  <!-- Notification Toast Container -->
-  <div id="toast-container" class="toast-container"></div>
+  <div id="toast-container" class="toasts"></div>
 
   <script src="app.js"></script>
 </body>

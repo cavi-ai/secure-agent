@@ -88,6 +88,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!s) return;
 
     document.getElementById('status-text').textContent = s.running ? 'Daemon Active' : 'Disconnected';
+    const chip = document.getElementById('system-status');
+    if (chip) chip.className = 'status-chip ' + (s.running ? 'active' : 'down');
     document.getElementById('uptime-val').textContent = s.uptime || '--';
     document.getElementById('proxy-status').textContent = s.proxy_enabled ? `127.0.0.1:${s.proxy_port || 8443}` : 'Disabled';
 
@@ -115,12 +117,12 @@ document.addEventListener('DOMContentLoaded', () => {
       <div class="agent-card">
         <div class="agent-info">
           <div class="agent-name">
-            🤖 ${escapeHTML(a.name)}
+            <svg class="icon"><use href="#i-agent"/></svg>${escapeHTML(a.name)}
             <span class="agent-pid">PID ${a.pid}</span>
           </div>
-          <div class="agent-cwd">${escapeHTML(a.cwd || 'N/A')}</div>
+          <div class="agent-cwd">${escapeHTML(a.cwd || '—')}</div>
         </div>
-        <button class="btn-action-kill" onclick="killProcess(${a.pid})">⚡ Kill Process</button>
+        <button class="btn btn-danger" onclick="killProcess(${a.pid})"><svg class="icon"><use href="#i-power"/></svg><span>Kill</span></button>
       </div>
     `).join('');
   }
@@ -138,20 +140,20 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     container.innerHTML = incidents.map(inc => `
-      <div class="incident-card critical">
+      <div class="incident-card">
         <div class="incident-header">
-          <span class="risk-tag critical">🚨 ${escapeHTML(inc.risk)}</span>
-          <span class="sub-label">${escapeHTML(inc.rule)} — PID ${inc.pid}</span>
+          <span class="risk-tag ${(inc.risk || '').toUpperCase() === 'HIGH' ? 'high' : ''}"><svg class="icon"><use href="#i-alert"/></svg>${escapeHTML(inc.risk)}</span>
+          <span class="kpi-hint">${escapeHTML(inc.rule)} — PID ${inc.pid}</span>
         </div>
         <div class="incident-summary">${escapeHTML(inc.summary)}</div>
         <div class="incident-actions">
-          <button class="btn-view-report" onclick="openIncidentReport('${escapeHTML(inc.id)}')">📄 View Full Spec Report</button>
+          <button class="btn btn-ghost" onclick="openIncidentReport('${escapeHTML(inc.id)}')"><svg class="icon"><use href="#i-doc"/></svg><span>View report</span></button>
         </div>
         <div class="rotate-list">
           ${(inc.rotate_list || []).map(item => `
             <div class="rotate-item-row">
-              <span>🔑 <strong>${escapeHTML(item.name)}</strong> (${escapeHTML(item.category)})</span>
-              <button class="btn-rotate-now" onclick="triggerRotation('${escapeHTML(inc.id)}', '${escapeHTML(item.id)}')">⚡ Auto-Rotate</button>
+              <span class="rk"><svg class="icon"><use href="#i-key"/></svg><strong>${escapeHTML(item.name)}</strong> (${escapeHTML(item.category)})</span>
+              <button class="btn btn-primary" onclick="triggerRotation('${escapeHTML(inc.id)}', '${escapeHTML(item.id)}')"><svg class="icon"><use href="#i-refresh"/></svg><span>Rotate</span></button>
             </div>
           `).join('')}
         </div>
@@ -174,12 +176,12 @@ document.addEventListener('DOMContentLoaded', () => {
     container.innerHTML = fleet.map(node => `
       <div class="fleet-node-card">
         <div class="fleet-node-header">
-          <span class="fleet-node-name">🖥️ ${escapeHTML(node.hostname || node.id || 'Fleet Node')}</span>
+          <span class="fleet-node-name"><svg class="icon"><use href="#i-server"/></svg>${escapeHTML(node.hostname || node.id || 'Fleet node')}</span>
           <span class="status-badge ${node.online ? 'online' : 'offline'}">${node.online ? 'ONLINE' : 'OFFLINE'}</span>
         </div>
         <div class="fleet-node-meta">
-          <span>IP: ${escapeHTML(node.ip || 'N/A')}</span>
-          <span>Version: ${escapeHTML(node.version || 'v1.0')}</span>
+          <span>IP ${escapeHTML(node.ip || '—')}</span>
+          <span>${escapeHTML(node.version || 'v1.0')}</span>
         </div>
       </div>
     `).join('');
@@ -198,10 +200,10 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     container.innerHTML = flags.map(f => `
-      <div class="flag-card sev3">
-        <div class="flag-rule">🔴 ${escapeHTML(f.rule)} — ${escapeHTML(f.agent)} (PID ${f.pid})</div>
+      <div class="flag-card ${f.severity >= 3 ? 'sev3' : ''}">
+        <div class="flag-rule"><svg class="icon"><use href="#i-alert"/></svg>${escapeHTML(f.rule)} — ${escapeHTML(f.agent)} (PID ${f.pid})</div>
         <div class="flag-evidence">
-          ${(f.evidence || []).map(ev => `<div>↳ ${escapeHTML(ev)}</div>`).join('')}
+          ${(f.evidence || []).map(ev => `<div>${escapeHTML(ev)}</div>`).join('')}
         </div>
       </div>
     `).join('');
@@ -234,10 +236,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
       return `
         <div class="timeline-item">
-          <span class="sub-label">${timeStr}</span>
+          <span class="t">${timeStr}</span>
           <span class="event-kind ${kindClass}">${kindLabel}</span>
-          <span>PID ${e.pid}</span>
-          <span style="color: var(--text-muted);">${escapeHTML(detailStr)}</span>
+          <span class="pid">PID ${e.pid}</span>
+          <span class="dtl">${escapeHTML(detailStr)}</span>
         </div>
       `;
     }).join('');
@@ -247,8 +249,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!reportModal) return;
     const bodyEl = document.getElementById('modal-report-body');
     const titleEl = document.getElementById('modal-title');
-    titleEl.textContent = `📄 Incident Report Spec: ${incidentId}`;
-    bodyEl.innerHTML = `<div class="loading-spinner">Fetching incident report...</div>`;
+    titleEl.innerHTML = `<svg class="icon"><use href="#i-doc"/></svg>Incident report — ${escapeHTML(incidentId)}`;
+    bodyEl.innerHTML = `<div class="loading-spinner">Fetching incident report…</div>`;
     reportModal.showModal();
 
     try {
