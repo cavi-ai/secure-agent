@@ -37,6 +37,13 @@ final class DaemonClientTests: XCTestCase {
         XCTAssertEqual(flags[0].agent, "cursor")
     }
 
+    func testNotificationTitleMapping() {
+        let leak = FlagModel(id: "1", rule: "proxy-secret-leak", severity: 3, ts: "", pid: 1, agent: "claude", evidence: [])
+        XCTAssertEqual(NotificationManager.title(for: leak), "Secret leaving in agent traffic")
+        let unknown = FlagModel(id: "2", rule: "novel-rule", severity: 1, ts: "", pid: 1, agent: "claude", evidence: [])
+        XCTAssertEqual(NotificationManager.title(for: unknown), "novel-rule")
+    }
+
     func testStatusDecodesFirewallStats() throws {
         let json = """
         {
