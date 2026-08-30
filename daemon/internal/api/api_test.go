@@ -114,6 +114,45 @@ func TestFirewallModeEndpointPromotesAndPersists(t *testing.T) {
 	}
 }
 
+func TestFirewallModePromotionIsAudited(t *testing.T) {
+	dir := t.TempDir()
+	sock := fmt.Sprintf("/tmp/sa_test_audit_%d.sock", time.Now().UnixNano())
+	defer os.Remove(sock)
+
+	eng, err := firewall.NewEngine(config.FirewallConfig{
+		Mode:     "monitor",
+		Patterns: []config.PatternConfig{{ID: "aws-key", Type: "cloud-key", Re: `AKIA[0-9A-Z]{16}`, Mode: "monitor"}},
+	}, []byte("salt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	modes := firewall.NewModeStore(filepath.Join(dir, "firewall-modes.json"))
+
+	a := New(sock, testStore(t), &fakeKiller{}, func() Status { return Status{Running: true} })
+	a.SetFirewall(FirewallControl{Engine: eng, Modes: modes})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go a.Serve(ctx)
+	waitForSocket(t, sock)
+
+	cl := unixClient(sock)
+	resp, err := cl.Post("http://unix/firewall/mode", "application/json", strings.NewReader(`{"rule":"aws-key","mode":"block"}`))
+	if err != nil || resp.StatusCode != 200 {
+		t.Fatalf("firewall mode post: %v status=%v", err, resp.StatusCode)
+	}
+
+	auditResp, err := cl.Get("http://unix/audit")
+	if err != nil || auditResp.StatusCode != 200 {
+		t.Fatalf("audit get: %v status=%v", err, auditResp.StatusCode)
+	}
+	body, _ := io.ReadAll(auditResp.Body)
+	for _, want := range []string{`"action":"rule-mode"`, `"rule":"aws-key"`, `"from_mode":"monitor"`, `"to_mode":"block"`} {
+		if !strings.Contains(string(body), want) {
+			t.Fatalf("audit response missing %s: %s", want, body)
+		}
+	}
+}
+
 func TestFingerprintIngestEndpointReturnsLabels(t *testing.T) {
 	sock := fmt.Sprintf("/tmp/sa_test_fping_%d.sock", time.Now().UnixNano())
 	defer os.Remove(sock)
