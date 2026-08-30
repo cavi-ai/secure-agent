@@ -48,6 +48,13 @@ public final class DaemonClient: Sendable {
         return false
     }
 
+    public func registerSecrets() async throws -> [String] {
+        let body = try await request(method: "POST", path: "/firewall/fingerprints/ingest")
+        struct Resp: Decodable { let registered: [String]? }
+        let r = try JSONDecoder().decode(Resp.self, from: body)
+        return r.registered ?? []
+    }
+
     public func setFirewallMode(rule: String, mode: String) async throws {
         let payload: [String: String] = ["rule": rule, "mode": mode]
         let jsonData = try JSONSerialization.data(withJSONObject: payload)
