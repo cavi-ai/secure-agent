@@ -1,6 +1,28 @@
 import AppKit
 
 public final class MenuBuilder: @unchecked Sendable {
+
+    /// Monochrome template SF Symbol for a menu item — follows the menu's text
+    /// color for a clean, native look (no emoji, no hard-coded colors).
+    private static func sym(_ name: String) -> NSImage? {
+        let img = NSImage(systemSymbolName: name, accessibilityDescription: nil)
+        img?.isTemplate = true
+        return img
+    }
+
+    /// A disabled section header rendered in a small, tracked, secondary style.
+    private static func sectionHeader(_ title: String) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        item.isEnabled = false
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 10, weight: .semibold),
+            .foregroundColor: NSColor.tertiaryLabelColor,
+            .kern: 0.6,
+        ]
+        item.attributedTitle = NSAttributedString(string: title.uppercased(), attributes: attrs)
+        return item
+    }
+
     public static func buildMenu(
         status: StatusResponse?,
         flags: [FlagModel],
@@ -20,22 +42,21 @@ public final class MenuBuilder: @unchecked Sendable {
     ) -> NSMenu {
         let menu = NSMenu()
 
-        // 1. Status Header
+        // 1. Status
         let statusItem: NSMenuItem
         if let s = status, s.running {
-            statusItem = NSMenuItem(title: "secure-agentd: Active (Uptime: \(s.uptime))", action: nil, keyEquivalent: "")
-            statusItem.image = NSImage(systemSymbolName: "checkmark.circle.fill", accessibilityDescription: "Connected")?
-                .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 12, weight: .regular))
+            statusItem = NSMenuItem(title: "Active · uptime \(s.uptime)", action: nil, keyEquivalent: "")
+            statusItem.image = sym("checkmark.circle.fill")
         } else {
-            statusItem = NSMenuItem(title: "secure-agentd: Disconnected", action: nil, keyEquivalent: "")
-            statusItem.image = NSImage(systemSymbolName: "xmark.circle.fill", accessibilityDescription: "Disconnected")
+            statusItem = NSMenuItem(title: "Disconnected", action: nil, keyEquivalent: "")
+            statusItem.image = sym("xmark.circle.fill")
         }
         statusItem.isEnabled = false
         menu.addItem(statusItem)
 
         if let s = status, s.proxyEnabled == true, let port = s.proxyPort {
-            let proxyItem = NSMenuItem(title: "Opt-in Proxy: Active (127.0.0.1:\(port))", action: nil, keyEquivalent: "")
-            proxyItem.image = NSImage(systemSymbolName: "lock.shield.fill", accessibilityDescription: "Proxy Active")
+            let proxyItem = NSMenuItem(title: "Proxy active · 127.0.0.1:\(port)", action: nil, keyEquivalent: "")
+            proxyItem.image = sym("lock.shield.fill")
             proxyItem.isEnabled = false
             menu.addItem(proxyItem)
         }
@@ -43,14 +64,14 @@ public final class MenuBuilder: @unchecked Sendable {
         if let s = status, let fw = s.firewallStats, !fw.isEmpty {
             let wouldBlock = fw.values.reduce(0) { $0 + $1.wouldBlock }
             let blocked = fw.values.reduce(0) { $0 + $1.blocked }
-            let fwItem = NSMenuItem(title: "Egress Firewall: \(wouldBlock) would-block · \(blocked) blocked", action: nil, keyEquivalent: "")
-            fwItem.image = NSImage(systemSymbolName: "shield.lefthalf.filled", accessibilityDescription: "Egress Firewall")
+            let fwItem = NSMenuItem(title: "Firewall · \(wouldBlock) would-block · \(blocked) blocked", action: nil, keyEquivalent: "")
+            fwItem.image = sym("shield.lefthalf.filled")
             fwItem.isEnabled = false
             menu.addItem(fwItem)
 
-            // Rules with would-blocks are promotion candidates: click to enforce.
             for (rule, stat) in fw.sorted(by: { $0.key < $1.key }) where stat.wouldBlock > 0 {
-                let promo = NSMenuItem(title: "   ⬆ Promote ‘\(rule)’ to block (\(stat.wouldBlock) would-block)", action: promoteAction, keyEquivalent: "")
+                let promo = NSMenuItem(title: "Promote “\(rule)” to block (\(stat.wouldBlock))", action: promoteAction, keyEquivalent: "")
+                promo.image = sym("arrow.up.circle.fill")
                 promo.target = target
                 promo.representedObject = rule
                 menu.addItem(promo)
@@ -58,144 +79,141 @@ public final class MenuBuilder: @unchecked Sendable {
         }
 
         if let s = status, let uninspected = s.uninspectedEgress, uninspected > 0 {
-            let uItem = NSMenuItem(title: "Uninspected egress: \(uninspected) endpoint\(uninspected == 1 ? "" : "s")", action: nil, keyEquivalent: "")
-            uItem.image = NSImage(systemSymbolName: "eye.trianglebadge.exclamationmark", accessibilityDescription: "Uninspected egress")
+            let uItem = NSMenuItem(title: "Uninspected egress · \(uninspected) endpoint\(uninspected == 1 ? "" : "s")", action: nil, keyEquivalent: "")
+            uItem.image = sym("eye.trianglebadge.exclamationmark")
             uItem.isEnabled = false
             menu.addItem(uItem)
         }
 
-        menu.addItem(NSMenuItem.separator())
+        menu.addItem(.separator())
 
-        // 2. Incident Containment & Rotation Section
+        // 2. Incidents
         if !incidents.isEmpty {
-            let incHeader = NSMenuItem(title: "INCIDENT CONTAINMENT & ROTATION (\(incidents.count))", action: nil, keyEquivalent: "")
-            incHeader.isEnabled = false
-            menu.addItem(incHeader)
-
+            menu.addItem(sectionHeader("Incidents (\(incidents.count))"))
             for (idx, inc) in incidents.prefix(5).enumerated() {
-                let riskPrefix = inc.risk == "CRITICAL" ? "🚨 [CRITICAL]" : "⚠️ [HIGH]"
-                let incItem = NSMenuItem(title: "\(riskPrefix) \(inc.rule) — PID \(inc.pid) (\(inc.rotateList.count) Rotate Items)", action: nil, keyEquivalent: "")
+                let sev = inc.risk == "CRITICAL" ? "[CRITICAL]" : "[HIGH]"
+                let incItem = NSMenuItem(title: "\(sev) \(inc.rule) — PID \(inc.pid)", action: nil, keyEquivalent: "")
+                incItem.image = sym(inc.risk == "CRITICAL" ? "exclamationmark.octagon.fill" : "exclamationmark.triangle.fill")
                 incItem.isEnabled = false
                 menu.addItem(incItem)
 
                 for item in inc.rotateList {
-                    let rotItem = NSMenuItem(title: "   🔑 Rotate: \(item.name) (\(item.category))", action: nil, keyEquivalent: "")
+                    let rotItem = NSMenuItem(title: "    Rotate \(item.name) (\(item.category))", action: nil, keyEquivalent: "")
+                    rotItem.image = sym("key.fill")
                     rotItem.isEnabled = false
                     menu.addItem(rotItem)
                 }
 
-                let viewItem = NSMenuItem(title: "   📋 View Remediation Checklist & Actions...", action: viewIncidentAction, keyEquivalent: "")
+                let viewItem = NSMenuItem(title: "    View remediation…", action: viewIncidentAction, keyEquivalent: "")
+                viewItem.image = sym("doc.text")
                 viewItem.target = target
                 viewItem.tag = idx
                 viewItem.representedObject = inc.id
                 menu.addItem(viewItem)
             }
-
-            menu.addItem(NSMenuItem.separator())
+            menu.addItem(.separator())
         }
 
-        // 3. Security Flags Section
+        // 3. Security flags
         if !flags.isEmpty {
-            let flagsHeader = NSMenuItem(title: "SECURITY ALERTS (\(flags.count))", action: nil, keyEquivalent: "")
-            flagsHeader.isEnabled = false
-            menu.addItem(flagsHeader)
-
+            menu.addItem(sectionHeader("Security flags (\(flags.count))"))
             for flag in flags {
-                let sevPrefix = flag.severity >= 3 ? "🔴 [CRITICAL]" : "🟡 [WARN]"
-                let flagItem = NSMenuItem(title: "\(sevPrefix) \(flag.rule) — \(flag.agent) (PID \(flag.pid))", action: nil, keyEquivalent: "")
+                let sev = flag.severity >= 3 ? "[CRITICAL]" : "[WARN]"
+                let flagItem = NSMenuItem(title: "\(sev) \(flag.rule) — \(flag.agent) (PID \(flag.pid))", action: nil, keyEquivalent: "")
+                flagItem.image = sym(flag.severity >= 3 ? "exclamationmark.octagon.fill" : "exclamationmark.triangle.fill")
                 flagItem.isEnabled = false
                 menu.addItem(flagItem)
 
                 for ev in flag.evidence {
-                    let evItem = NSMenuItem(title: "   ↳ \(ev)", action: nil, keyEquivalent: "")
+                    let evItem = NSMenuItem(title: "        \(ev)", action: nil, keyEquivalent: "")
                     evItem.isEnabled = false
                     menu.addItem(evItem)
                 }
 
-                // Kill process item for this flag
-                let killItem = NSMenuItem(title: "   ⚡ Kill \(flag.agent) Process (PID \(flag.pid))", action: killAction, keyEquivalent: "")
+                let killItem = NSMenuItem(title: "    Kill \(flag.agent) (PID \(flag.pid))", action: killAction, keyEquivalent: "")
+                killItem.image = sym("bolt.fill")
                 killItem.target = target
                 killItem.tag = Int(flag.pid)
                 menu.addItem(killItem)
             }
-
-            menu.addItem(NSMenuItem.separator())
+            menu.addItem(.separator())
         }
 
-        // 4. Active Agents & Harness Tools Section
+        // 4. Active agents & tool activity
         let activeAgentsList = status?.agents ?? []
         let activeCount = max(status?.activeAgents ?? 0, activeAgentsList.count)
-        let agentsHeader = NSMenuItem(title: "ACTIVE AGENTS & HARNESS TOOLS (\(activeCount))", action: nil, keyEquivalent: "")
-        agentsHeader.isEnabled = false
-        menu.addItem(agentsHeader)
+        menu.addItem(sectionHeader("Active agents (\(activeCount))"))
 
         if activeCount == 0 && events.filter({ $0.kind == 8 }).isEmpty {
-            let noneItem = NSMenuItem(title: "No active agent processes or tool activity", action: nil, keyEquivalent: "")
+            let noneItem = NSMenuItem(title: "No active agents or tool activity", action: nil, keyEquivalent: "")
             noneItem.isEnabled = false
             menu.addItem(noneItem)
         } else {
-            if !activeAgentsList.isEmpty {
-                for agent in activeAgentsList {
-                    var title = "🤖 \(agent.name) — PID \(agent.pid)"
-                    if let cwd = agent.cwd, !cwd.isEmpty {
-                        title += " (\(cwd))"
-                    }
-                    let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
-                    item.isEnabled = false
-                    menu.addItem(item)
-
-                    let killItem = NSMenuItem(title: "   ⚡ Kill \(agent.name) Process (PID \(agent.pid))", action: killAction, keyEquivalent: "")
-                    killItem.target = target
-                    killItem.tag = Int(agent.pid)
-                    menu.addItem(killItem)
+            for agent in activeAgentsList {
+                var title = "\(agent.name) — PID \(agent.pid)"
+                if let cwd = agent.cwd, !cwd.isEmpty {
+                    title += " (\(cwd))"
                 }
+                let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+                item.image = sym("cpu")
+                item.isEnabled = false
+                menu.addItem(item)
+
+                let killItem = NSMenuItem(title: "    Kill \(agent.name) (PID \(agent.pid))", action: killAction, keyEquivalent: "")
+                killItem.image = sym("bolt.fill")
+                killItem.target = target
+                killItem.tag = Int(agent.pid)
+                menu.addItem(killItem)
             }
 
             let pluginEvents = events.filter { $0.kind == 8 /* KindPluginAction */ }
             if !pluginEvents.isEmpty {
-                let toolHeader = NSMenuItem(title: "   RECENT TOOL ACTIONS:", action: nil, keyEquivalent: "")
-                toolHeader.isEnabled = false
-                menu.addItem(toolHeader)
-
+                menu.addItem(sectionHeader("Recent tool actions"))
                 for ev in pluginEvents.prefix(5) {
                     let toolName = ev.detail ?? "Tool"
                     let targetPath = ev.path ?? ""
-                    let toolItem = NSMenuItem(title: "   🔨 \(toolName) → \(targetPath) (PID \(ev.pid))", action: nil, keyEquivalent: "")
+                    let toolItem = NSMenuItem(title: "    \(toolName) → \(targetPath) (PID \(ev.pid))", action: nil, keyEquivalent: "")
+                    toolItem.image = sym("hammer.fill")
                     toolItem.isEnabled = false
                     menu.addItem(toolItem)
                 }
             }
         }
 
-        menu.addItem(NSMenuItem.separator())
+        menu.addItem(.separator())
 
-        // 5. Controls & System Actions
-        let pauseTitle = isPaused ? "Resume Monitoring" : "Pause Monitoring"
-        let pauseItem = NSMenuItem(title: pauseTitle, action: pauseAction, keyEquivalent: "")
+        // 5. Controls
+        let pauseItem = NSMenuItem(title: isPaused ? "Resume monitoring" : "Pause monitoring", action: pauseAction, keyEquivalent: "")
+        pauseItem.image = sym(isPaused ? "play.circle" : "pause.circle")
         pauseItem.target = target
         menu.addItem(pauseItem)
 
-        let refreshItem = NSMenuItem(title: "Refresh Now", action: refreshAction, keyEquivalent: "r")
+        let refreshItem = NSMenuItem(title: "Refresh now", action: refreshAction, keyEquivalent: "r")
+        refreshItem.image = sym("arrow.clockwise")
         refreshItem.target = target
         menu.addItem(refreshItem)
 
-        let dashItem = NSMenuItem(title: "Open Security Console", action: dashboardAction, keyEquivalent: "d")
+        let dashItem = NSMenuItem(title: "Open console", action: dashboardAction, keyEquivalent: "d")
+        dashItem.image = sym("square.grid.2x2")
         dashItem.target = target
         menu.addItem(dashItem)
 
-        menu.addItem(NSMenuItem.separator())
+        menu.addItem(.separator())
 
         let setupItem = NSMenuItem(title: "Setup & Permissions…", action: setupAction, keyEquivalent: "")
+        setupItem.image = sym("gearshape")
         setupItem.target = target
         menu.addItem(setupItem)
 
         let uninstallItem = NSMenuItem(title: "Uninstall…", action: uninstallAction, keyEquivalent: "")
+        uninstallItem.image = sym("trash")
         uninstallItem.target = target
         menu.addItem(uninstallItem)
 
-        menu.addItem(NSMenuItem.separator())
+        menu.addItem(.separator())
 
         let quitItem = NSMenuItem(title: "Quit Secure Agent", action: quitAction, keyEquivalent: "q")
+        quitItem.image = sym("power")
         quitItem.target = target
         menu.addItem(quitItem)
 

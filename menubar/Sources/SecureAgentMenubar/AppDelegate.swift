@@ -46,10 +46,10 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     private func setupStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = statusItem.button {
-            let img = NSImage(systemSymbolName: "shield", accessibilityDescription: "secure-agent")
+            let img = NSImage(systemSymbolName: "shield", accessibilityDescription: "Secure Agent")
             img?.isTemplate = true
             button.image = img
-            button.title = " 🛡️"
+            button.title = ""
         }
         updateMenu()
     }
@@ -124,17 +124,17 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             let img = NSImage(systemSymbolName: "exclamationmark.shield.fill", accessibilityDescription: "Flagged: Critical Security Alert")
             img?.isTemplate = true
             button.image = img
-            button.title = " 🚨"
+            button.title = ""
         } else if let status = currentStatus, status.activeAgents > 0 {
             let img = NSImage(systemSymbolName: "bolt.shield.fill", accessibilityDescription: "Agents Active")
             img?.isTemplate = true
             button.image = img
-            button.title = " 🛡️ \(status.activeAgents)"
+            button.title = " \(status.activeAgents)"
         } else {
             let img = NSImage(systemSymbolName: "shield", accessibilityDescription: "Quiet: Monitoring Active")
             img?.isTemplate = true
             button.image = img
-            button.title = " 🛡️"
+            button.title = ""
         }
     }
 
