@@ -1,20 +1,13 @@
 import AppKit
 import Foundation
+import SwiftUI
 import UserNotifications
 
 @MainActor
 public final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
-    private var client: DaemonClient!
-    private var isPaused = false
-
-    private var currentStatus: StatusResponse?
-    private var currentFlags: [FlagModel] = []
-    private var currentIncidents: [IncidentReportModel] = []
-    private var currentEvents: [EventModel] = []
-    private var notifiedFlagIDs: Set<String> = []
-
-    private var timer: Timer?
+    private let state = AppState()
+    private let popover = NSPopover()
 
     public func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -23,12 +16,12 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         // child of this app so it lives and dies with the visible menu bar icon.
         SetupManager.shared.migrateLegacyLaunchAgent()
         DaemonSupervisor.shared.start()
-
-        client = DaemonClient()
         NotificationManager.shared.requestAuthorization()
 
         setupStatusItem()
-        startPolling()
+        setupPopover()
+        state.onChange = { [weak self] in self?.updateStatusIcon() }
+        state.start()
 
         Task {
             await SetupManager.shared.refreshState()
@@ -50,218 +43,84 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             img?.isTemplate = true
             button.image = img
             button.title = ""
-        }
-        updateMenu()
-    }
-
-    private func startPolling() {
-        fetchDaemonState()
-        scheduleTimer(interval: 1.0)
-    }
-
-    private func scheduleTimer(interval: TimeInterval) {
-        timer?.invalidate()
-        timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
-            Task { @MainActor in
-                self?.fetchDaemonState()
-            }
+            button.target = self
+            button.action = #selector(statusItemClicked)
+            button.sendAction(on: [.leftMouseUp, .rightMouseUp])
         }
     }
 
-    private func fetchDaemonState() {
-        guard !isPaused else { return }
+    private func setupPopover() {
+        popover.behavior = .transient
+        popover.animates = true
+        popover.contentViewController = NSHostingController(rootView: ConsoleView(state: state))
+    }
 
-        Task {
-            do {
-                let status = try await client.fetchStatus()
-                let flags = try await client.fetchFlags(limit: 20)
-                let incidents = (try? await client.fetchIncidents(limit: 10)) ?? []
-                let events = try await client.fetchEvents(limit: 50)
-
-                await MainActor.run {
-                    let wasDisconnected = self.currentStatus == nil
-                    self.currentStatus = status
-                    self.currentFlags = flags
-                    self.currentIncidents = incidents
-                    self.currentEvents = events
-                    if wasDisconnected {
-                        // Daemon is back: restore fast polling.
-                        self.scheduleTimer(interval: 1.0)
-                    }
-                    self.processNewFlags(flags)
-                    self.updateStatusIcon()
-                    self.updateMenu()
-                }
-            } catch {
-                await MainActor.run {
-                    let wasConnected = self.currentStatus != nil
-                    self.currentStatus = nil
-                    self.currentIncidents = []
-                    if wasConnected {
-                        // Daemon went away: back off to reduce socket churn.
-                        self.scheduleTimer(interval: 5.0)
-                    }
-                    self.updateStatusIcon()
-                    self.updateMenu()
-                }
-            }
+    @objc private func statusItemClicked() {
+        guard let button = statusItem.button else { return }
+        if NSApp.currentEvent?.type == .rightMouseUp {
+            showRightClickMenu(button)
+        } else {
+            togglePopover(button)
         }
     }
 
-    private func processNewFlags(_ flags: [FlagModel]) {
-        for flag in flags where flag.severity >= 2 {
-            if !notifiedFlagIDs.contains(flag.id) {
-                notifiedFlagIDs.insert(flag.id)
-                NotificationManager.shared.sendNotification(for: flag)
-            }
+    private func togglePopover(_ button: NSStatusBarButton) {
+        if popover.isShown {
+            popover.performClose(nil)
+        } else {
+            state.refresh()
+            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+            popover.contentViewController?.view.window?.makeKey()
         }
+    }
+
+    /// A small native menu on right-click: the quick actions that don't belong
+    /// in the popover (Pause, Setup, Uninstall, Quit).
+    private func showRightClickMenu(_ button: NSStatusBarButton) {
+        let menu = NSMenu()
+        func item(_ title: String, _ symbol: String, _ action: Selector, _ key: String = "") -> NSMenuItem {
+            let it = NSMenuItem(title: title, action: action, keyEquivalent: key)
+            it.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+            it.target = self
+            return it
+        }
+        menu.addItem(item(state.isPaused ? "Resume monitoring" : "Pause monitoring",
+                          state.isPaused ? "play.circle" : "pause.circle", #selector(pauseClicked)))
+        menu.addItem(item("Setup & Permissions…", "gearshape", #selector(setupClicked)))
+        menu.addItem(item("Uninstall…", "trash", #selector(uninstallClicked)))
+        menu.addItem(.separator())
+        menu.addItem(item("Quit Secure Agent", "power", #selector(quitClicked), "q"))
+
+        statusItem.menu = menu
+        button.performClick(nil)
+        statusItem.menu = nil
     }
 
     private func updateStatusIcon() {
         guard let button = statusItem.button else { return }
-
-        if !currentIncidents.isEmpty || currentFlags.contains(where: { $0.severity >= 3 }) {
-            let img = NSImage(systemSymbolName: "exclamationmark.shield.fill", accessibilityDescription: "Flagged: Critical Security Alert")
-            img?.isTemplate = true
-            button.image = img
-            button.title = ""
-        } else if let status = currentStatus, status.activeAgents > 0 {
-            let img = NSImage(systemSymbolName: "bolt.shield.fill", accessibilityDescription: "Agents Active")
-            img?.isTemplate = true
-            button.image = img
-            button.title = " \(status.activeAgents)"
+        let name: String
+        var count = ""
+        if !state.incidents.isEmpty || state.flags.contains(where: { $0.severity >= 3 }) {
+            name = "exclamationmark.shield.fill"
+        } else if let s = state.status, s.activeAgents > 0 {
+            name = "bolt.shield.fill"
+            count = " \(s.activeAgents)"
         } else {
-            let img = NSImage(systemSymbolName: "shield", accessibilityDescription: "Quiet: Monitoring Active")
-            img?.isTemplate = true
-            button.image = img
-            button.title = ""
+            name = "shield"
         }
+        let img = NSImage(systemSymbolName: name, accessibilityDescription: "Secure Agent")
+        img?.isTemplate = true
+        button.image = img
+        button.title = count
     }
 
-    private func updateMenu() {
-        let menu = MenuBuilder.buildMenu(
-            status: currentStatus,
-            flags: currentFlags,
-            incidents: currentIncidents,
-            events: currentEvents,
-            isPaused: isPaused,
-            target: self,
-            refreshAction: #selector(refreshClicked),
-            killAction: #selector(killClicked(_:)),
-            promoteAction: #selector(promoteRuleClicked(_:)),
-            viewIncidentAction: #selector(viewIncidentClicked(_:)),
-            pauseAction: #selector(pauseClicked),
-            dashboardAction: #selector(dashboardClicked),
-            setupAction: #selector(setupClicked),
-            uninstallAction: #selector(uninstallClicked),
-            quitAction: #selector(quitClicked)
-        )
-        statusItem.menu = menu
-    }
+    // MARK: - Right-click actions
 
-    @objc private func refreshClicked() {
-        fetchDaemonState()
-    }
+    @objc private func pauseClicked() { state.togglePause() }
 
-    @objc private func killClicked(_ sender: NSMenuItem) {
-        let pid = Int32(sender.tag)
-        guard pid > 0 else { return }
+    @objc private func setupClicked() { OnboardingWindowController.shared.show() }
 
-        Task {
-            do {
-                let success = try await client.killProcess(pid: pid)
-                await MainActor.run {
-                    if success {
-                        print("[secure-agent-menubar] Killed process PID \(pid)")
-                        self.fetchDaemonState()
-                    } else {
-                        print("[secure-agent-menubar] Failed to kill process PID \(pid)")
-                    }
-                }
-            } catch {
-                print("[secure-agent-menubar] Error killing process PID \(pid): \(error)")
-            }
-        }
-    }
-
-    @objc private func promoteRuleClicked(_ sender: NSMenuItem) {
-        guard let rule = sender.representedObject as? String else { return }
-        Task {
-            do {
-                try await client.setFirewallMode(rule: rule, mode: "block")
-                await MainActor.run { self.fetchDaemonState() }
-            } catch {
-                print("[secure-agent-menubar] promote \(rule) failed: \(error)")
-            }
-        }
-    }
-
-    @objc private func viewIncidentClicked(_ sender: NSMenuItem) {
-        guard let incID = sender.representedObject as? String else { return }
-        let matchingInc = currentIncidents.first(where: { $0.id == incID })
-
-        Task {
-            do {
-                let md = try await client.fetchIncidentMarkdown(id: incID)
-                await MainActor.run {
-                    let alert = NSAlert()
-                    alert.messageText = "Incident Containment & Remediation (\(incID))"
-                    alert.informativeText = md.isEmpty ? "No detailed markdown available." : md
-                    alert.addButton(withTitle: "⚡ Auto-Rotate Secrets")
-                    alert.addButton(withTitle: "Copy Markdown")
-                    alert.addButton(withTitle: "Close")
-                    let response = alert.runModal()
-
-                    if response == .alertFirstButtonReturn {
-                        // Auto-Rotate Secrets clicked
-                        if let inc = matchingInc {
-                            Task {
-                                var logResults: [String] = []
-                                for item in inc.rotateList {
-                                    do {
-                                        let msg = try await self.client.executeRotation(incidentId: incID, itemId: item.id)
-                                        logResults.append("✅ \(item.name): \(msg)")
-                                    } catch {
-                                        logResults.append("❌ \(item.name): \(error.localizedDescription)")
-                                    }
-                                }
-                                await MainActor.run {
-                                    let resAlert = NSAlert()
-                                    resAlert.messageText = "Auto-Rotation Results"
-                                    resAlert.informativeText = logResults.isEmpty ? "No items to rotate." : logResults.joined(separator: "\n\n")
-                                    resAlert.addButton(withTitle: "OK")
-                                    resAlert.runModal()
-                                    self.fetchDaemonState()
-                                }
-                            }
-                        }
-                    } else if response == .alertSecondButtonReturn {
-                        // Copy Markdown clicked
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(md, forType: .string)
-                    }
-                }
-            } catch {
-                print("[secure-agent-menubar] Error fetching incident markdown: \(error)")
-            }
-        }
-    }
-
-    @objc private func pauseClicked() {
-        isPaused.toggle()
-        updateMenu()
-    }
-
-    @objc private func dashboardClicked() {
-        let port = currentStatus?.proxyPort ?? 8443
-        if let url = URL(string: "http://localhost:\(port)/dashboard/") {
-            NSWorkspace.shared.open(url)
-        }
-    }
-
-    @objc private func setupClicked() {
-        OnboardingWindowController.shared.show()
-    }
+    @objc private func quitClicked() { NSApp.terminate(nil) }
 
     @objc private func uninstallClicked() {
         let alert = NSAlert()
@@ -277,10 +136,6 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             SetupManager.shared.report(error)
         }
         Task { await SetupManager.shared.refreshState() }
-        NSApp.terminate(nil)
-    }
-
-    @objc private func quitClicked() {
         NSApp.terminate(nil)
     }
 }
