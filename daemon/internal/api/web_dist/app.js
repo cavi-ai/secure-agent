@@ -1,6 +1,5 @@
 document.addEventListener('DOMContentLoaded', () => {
   const btnRefresh = document.getElementById('btn-refresh');
-  const eventFilter = document.getElementById('event-filter');
   const reportModal = document.getElementById('report-modal');
   const btnCloseModal = document.getElementById('btn-close-modal');
   const btnCopyReport = document.getElementById('btn-copy-report');
@@ -10,10 +9,6 @@ document.addEventListener('DOMContentLoaded', () => {
   btnRefresh.addEventListener('click', () => {
     fetchTelemetry();
     showToast('Refreshing telemetry data...', 'info');
-  });
-
-  eventFilter.addEventListener('change', () => {
-    renderEvents();
   });
 
   const btnAddSource = document.getElementById('btn-add-source');
@@ -41,14 +36,67 @@ document.addEventListener('DOMContentLoaded', () => {
 
   let telemetryData = {
     status: null,
-    flags: [],
+    flags: [],       // unfiltered — feeds KPIs
+    flagsView: [],   // filtered — feeds the flags panel
     incidents: [],
-    events: [],
+    events: [],       // unfiltered — feeds KPIs
+    eventsView: [],   // filtered — feeds the event timeline
     fleet: [],
     audit: [],
     sources: [],
     connected: true
   };
+
+  // Server-side history filters. Change handlers mutate this and call
+  // fetchTelemetry(), so the poll loop keeps honoring the active filter.
+  const filters = {
+    events: { kind: 'all', since: 'all' },
+    flags: { agent: 'all', rule: 'all', minsev: 'all', since: 'all' }
+  };
+  const seenAgents = new Set();
+  const seenRules = new Set();
+
+  function sinceParam(v) {
+    const ms = { '1h': 3600e3, '24h': 86400e3, '7d': 604800e3 }[v];
+    return ms ? new Date(Date.now() - ms).toISOString() : '';
+  }
+  function isFlagsFiltered() {
+    const f = filters.flags;
+    return f.agent !== 'all' || f.rule !== 'all' || f.minsev !== 'all' || f.since !== 'all';
+  }
+  function isEventsFiltered() {
+    const f = filters.events;
+    return f.kind !== 'all' || f.since !== 'all';
+  }
+  function flagsQuery() {
+    const f = filters.flags, p = new URLSearchParams();
+    if (f.agent !== 'all') p.set('agent', f.agent);
+    if (f.rule !== 'all') p.set('rule', f.rule);
+    if (f.minsev !== 'all') p.set('min_severity', f.minsev);
+    const since = sinceParam(f.since);
+    if (since) p.set('since', since);
+    p.set('limit', '200');
+    return '/flags?' + p.toString();
+  }
+  function eventsQuery() {
+    const f = filters.events, p = new URLSearchParams();
+    if (f.kind !== 'all') p.set('kind', f.kind);
+    const since = sinceParam(f.since);
+    if (since) p.set('since', since);
+    p.set('limit', '200');
+    return '/events?' + p.toString();
+  }
+
+  function wireFilter(id, obj, key) {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('change', () => { obj[key] = el.value; fetchTelemetry(); });
+  }
+  wireFilter('event-filter', filters.events, 'kind');
+  wireFilter('event-window', filters.events, 'since');
+  wireFilter('flags-agent', filters.flags, 'agent');
+  wireFilter('flags-rule', filters.flags, 'rule');
+  wireFilter('flags-severity', filters.flags, 'minsev');
+  wireFilter('flags-window', filters.flags, 'since');
 
   async function fetchTelemetry() {
     try {
@@ -82,6 +130,21 @@ document.addEventListener('DOMContentLoaded', () => {
       }
       if (sourcesRes && sourcesRes.ok) {
         telemetryData.sources = await sourcesRes.json() || [];
+      }
+
+      // The panels show the filtered view; KPIs keep reading the unfiltered
+      // lists above. When no filter is active, the view is the unfiltered list
+      // (no extra request); a filter triggers one scoped fetch that can reach
+      // deeper into history than the 50-row summary.
+      telemetryData.flagsView = telemetryData.flags;
+      telemetryData.eventsView = telemetryData.events;
+      if (isFlagsFiltered()) {
+        const r = await fetch(flagsQuery()).catch(() => null);
+        if (r && r.ok) telemetryData.flagsView = await r.json() || [];
+      }
+      if (isEventsFiltered()) {
+        const r = await fetch(eventsQuery()).catch(() => null);
+        if (r && r.ok) telemetryData.eventsView = await r.json() || [];
       }
 
       telemetryData.connected = !!(statusRes && statusRes.ok);
@@ -363,15 +426,39 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   };
 
-  function renderFlags() {
-    const container = document.getElementById('flags-container');
-    const badge = document.getElementById('badge-flags-count');
-    const flags = telemetryData.flags;
+  function syncSelect(id, values) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const have = new Set(Array.from(el.options).map(o => o.value));
+    Array.from(values).sort().forEach(v => {
+      if (!have.has(v)) {
+        const opt = document.createElement('option');
+        opt.value = v;
+        opt.textContent = v;
+        el.appendChild(opt);
+      }
+    });
+  }
 
+  function renderFlags() {
+    const container = document.getElementById('flags-list');
+    const badge = document.getElementById('badge-flags-count');
+
+    // Seed the filter dropdowns from the unfiltered flags so options don't
+    // vanish once a filter narrows the view.
+    (telemetryData.flags || []).forEach(f => {
+      if (f.agent) seenAgents.add(f.agent);
+      if (f.rule) seenRules.add(f.rule);
+    });
+    syncSelect('flags-agent', seenAgents);
+    syncSelect('flags-rule', seenRules);
+
+    const flags = telemetryData.flagsView || [];
     badge.textContent = flags.length;
 
     if (flags.length === 0) {
-      container.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-alert"/></svg><span>No security flags — agent egress looks clean</span></div>`;
+      const msg = isFlagsFiltered() ? 'No flags match the current filter' : 'No security flags — agent egress looks clean';
+      container.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-alert"/></svg><span>${msg}</span></div>`;
       return;
     }
 
@@ -387,16 +474,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function renderEvents() {
     const container = document.getElementById('events-container');
-    const filter = eventFilter.value;
-    let events = telemetryData.events;
-
-    if (filter !== 'all') {
-      const k = parseInt(filter);
-      events = events.filter(e => e.kind === k);
-    }
+    const events = telemetryData.eventsView || [];
 
     if (events.length === 0) {
-      container.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-activity"/></svg><span>No matching events</span></div>`;
+      const msg = isEventsFiltered() ? 'No events match the current filter' : 'No system events logged';
+      container.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-activity"/></svg><span>${msg}</span></div>`;
       return;
     }
 

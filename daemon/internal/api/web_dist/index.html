@@ -175,21 +175,46 @@
             <h2><svg class="icon"><use href="#i-alert"/></svg>Security flags</h2>
             <span class="badge badge-amber" id="badge-flags-count">0</span>
           </div>
-          <div class="panel-body" id="flags-container">
-            <div class="empty"><svg class="icon"><use href="#i-alert"/></svg><span>No security correlation flags active</span></div>
+          <div class="panel-body">
+            <div class="filter-bar">
+              <select id="flags-agent" class="select"><option value="all">All agents</option></select>
+              <select id="flags-rule" class="select"><option value="all">All rules</option></select>
+              <select id="flags-severity" class="select">
+                <option value="all">Any severity</option>
+                <option value="2">Warning &amp; up</option>
+                <option value="3">Critical only</option>
+              </select>
+              <select id="flags-window" class="select">
+                <option value="all">All time</option>
+                <option value="1h">Last hour</option>
+                <option value="24h">Last 24h</option>
+                <option value="7d">Last 7 days</option>
+              </select>
+            </div>
+            <div id="flags-list">
+              <div class="empty"><svg class="icon"><use href="#i-alert"/></svg><span>No security correlation flags active</span></div>
+            </div>
           </div>
         </section>
 
         <section class="panel panel-grow">
           <div class="panel-head">
             <h2><svg class="icon"><use href="#i-activity"/></svg>Event timeline</h2>
-            <select id="event-filter" class="select">
-              <option value="all">All events</option>
-              <option value="8">Tool use</option>
-              <option value="9">Proxy hits</option>
-              <option value="5">Connections</option>
-              <option value="0">File opens</option>
-            </select>
+            <div class="head-filters">
+              <select id="event-filter" class="select">
+                <option value="all">All events</option>
+                <option value="8">Tool use</option>
+                <option value="9">Proxy hits</option>
+                <option value="5">Connections</option>
+                <option value="0">File opens</option>
+              </select>
+              <select id="event-window" class="select">
+                <option value="all">All time</option>
+                <option value="1h">Last hour</option>
+                <option value="24h">Last 24h</option>
+                <option value="7d">Last 7 days</option>
+              </select>
+            </div>
           </div>
           <div class="panel-body timeline" id="events-container">
             <div class="empty"><svg class="icon"><use href="#i-activity"/></svg><span>No system events logged</span></div>
