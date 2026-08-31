@@ -156,6 +156,22 @@
 
         <section class="panel">
           <div class="panel-head">
+            <h2><svg class="icon"><use href="#i-key"/></svg>Secret sources</h2>
+            <span class="badge" id="badge-sources-count">0</span>
+          </div>
+          <div class="panel-body" id="sources-container">
+            <div class="source-add">
+              <input type="text" id="source-input" class="input" placeholder="~/.aws/credentials, ~/.config/gh/hosts.yml…" autocomplete="off" spellcheck="false">
+              <button class="btn btn-primary" id="btn-add-source"><svg class="icon"><use href="#i-arrow"/></svg><span>Add</span></button>
+            </div>
+            <div id="sources-list">
+              <div class="empty"><svg class="icon"><use href="#i-key"/></svg><span>No secret files watched yet — add the credential files whose keys must never leave</span></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
             <h2><svg class="icon"><use href="#i-alert"/></svg>Security flags</h2>
             <span class="badge badge-amber" id="badge-flags-count">0</span>
           </div>
