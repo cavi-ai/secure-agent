@@ -164,15 +164,16 @@ func (a *API) handleFlags(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	limit := 50
-	if lStr := r.URL.Query().Get("limit"); lStr != "" {
-		if parsed, err := strconv.Atoi(lStr); err == nil && parsed > 0 {
-			limit = parsed
-		}
+	q := r.URL.Query()
+	f := store.FlagFilter{
+		Agent: q.Get("agent"),
+		Rule:  q.Get("rule"),
+		Since: q.Get("since"),
+		Limit: queryInt(q.Get("limit"), 50),
 	}
+	f.MinSeverity = queryInt(q.Get("min_severity"), 0)
 	w.Header().Set("Content-Type", "application/json")
-	flags := a.store.RecentFlags(limit)
-	json.NewEncoder(w).Encode(flags)
+	json.NewEncoder(w).Encode(a.store.QueryFlags(f))
 }
 
 func (a *API) handleEvents(w http.ResponseWriter, r *http.Request) {
@@ -180,15 +181,32 @@ func (a *API) handleEvents(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	limit := 50
-	if lStr := r.URL.Query().Get("limit"); lStr != "" {
-		if parsed, err := strconv.Atoi(lStr); err == nil && parsed > 0 {
-			limit = parsed
+	q := r.URL.Query()
+	f := store.EventFilter{
+		Since: q.Get("since"),
+		Limit: queryInt(q.Get("limit"), 50),
+	}
+	if kStr := q.Get("kind"); kStr != "" {
+		if k, err := strconv.Atoi(kStr); err == nil {
+			f.Kind = &k
 		}
 	}
+	if pid := queryInt(q.Get("pid"), 0); pid > 0 {
+		f.PID = int32(pid)
+	}
 	w.Header().Set("Content-Type", "application/json")
-	events := a.store.RecentEvents(limit)
-	json.NewEncoder(w).Encode(events)
+	json.NewEncoder(w).Encode(a.store.QueryEvents(f))
+}
+
+// queryInt parses a query-param int, returning def when absent or invalid.
+func queryInt(s string, def int) int {
+	if s == "" {
+		return def
+	}
+	if v, err := strconv.Atoi(s); err == nil {
+		return v
+	}
+	return def
 }
 
 func (a *API) handleIncidents(w http.ResponseWriter, r *http.Request) {

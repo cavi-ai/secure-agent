@@ -191,6 +191,9 @@ body {
   background: var(--bg-2); border: 1px solid var(--line-2); border-radius: var(--r-sm);
   padding: 7px 10px; cursor: pointer;
 }
+.head-filters { display: flex; gap: 6px; }
+.filter-bar { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+.filter-bar .select { flex: 1 1 auto; min-width: 0; }
 
 /* ---------- empty / loading ---------- */
 .empty {

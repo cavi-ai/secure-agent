@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/config"
+	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 	"github.com/cavi-ai/secure-agent/daemon/internal/firewall"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
@@ -111,6 +112,47 @@ func TestFirewallModeEndpointPromotesAndPersists(t *testing.T) {
 	}
 	if modes.Load()["aws-key"] != "block" {
 		t.Fatal("promotion was not persisted to the mode store")
+	}
+}
+
+func TestFlagsAndEventsEndpointsApplyFilters(t *testing.T) {
+	st := testStore(t)
+	now := time.Now()
+	st.PutFlag(model.Flag{ID: "a", Rule: "proxy-secret-leak", Severity: 3, Agent: "claude", PID: 1, TS: now})
+	st.PutFlag(model.Flag{ID: "b", Rule: "keychain-access", Severity: 1, Agent: "cursor", PID: 2, TS: now})
+	st.PutEvent(event.Event{Kind: event.KindProxyHit, PID: 20, TS: now})
+	st.PutEvent(event.Event{Kind: event.KindFileOpen, PID: 30, TS: now})
+
+	sock := fmt.Sprintf("/tmp/sa_test_filt_%d.sock", time.Now().UnixNano())
+	defer os.Remove(sock)
+	a := New(sock, st, &fakeKiller{}, func() Status { return Status{Running: true} })
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go a.Serve(ctx)
+	waitForSocket(t, sock)
+	cl := unixClient(sock)
+
+	get := func(path string) string {
+		resp, err := cl.Get("http://unix" + path)
+		if err != nil || resp.StatusCode != 200 {
+			t.Fatalf("GET %s: %v status=%v", path, err, resp.StatusCode)
+		}
+		b, _ := io.ReadAll(resp.Body)
+		return string(b)
+	}
+
+	// flags: agent filter returns only that agent's flag
+	if body := get("/flags?agent=cursor"); !strings.Contains(body, `"id":"b"`) || strings.Contains(body, `"id":"a"`) {
+		t.Fatalf("flags?agent=cursor = %s", body)
+	}
+	// flags: min_severity keeps sev>=3 only
+	if body := get("/flags?min_severity=3"); !strings.Contains(body, `"id":"a"`) || strings.Contains(body, `"id":"b"`) {
+		t.Fatalf("flags?min_severity=3 = %s", body)
+	}
+	// events: kind=9 (ProxyHit) keeps only the proxy event (pid 20)
+	proxyKind := int(event.KindProxyHit)
+	if body := get(fmt.Sprintf("/events?kind=%d", proxyKind)); !strings.Contains(body, `"pid":20`) || strings.Contains(body, `"pid":30`) {
+		t.Fatalf("events?kind=ProxyHit = %s", body)
 	}
 }
 
