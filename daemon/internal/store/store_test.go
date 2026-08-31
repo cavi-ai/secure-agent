@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
@@ -55,6 +56,88 @@ func TestPutAndReadAuditRoundTrips(t *testing.T) {
 	}
 	if a.ID == 0 || a.TS == "" {
 		t.Fatalf("audit row missing stamped id/ts: %+v", a)
+	}
+}
+
+func TestQueryFlagsFilters(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(filepath.Join(dir, "e.db"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	base := time.Now()
+	s.PutFlag(model.Flag{ID: "a", Rule: "proxy-secret-leak", Severity: 3, Agent: "claude", PID: 1, TS: base})
+	s.PutFlag(model.Flag{ID: "b", Rule: "keychain-access", Severity: 1, Agent: "cursor", PID: 2, TS: base})
+	s.PutFlag(model.Flag{ID: "c", Rule: "proxy-secret-leak", Severity: 2, Agent: "cursor", PID: 3, TS: base})
+
+	cases := []struct {
+		name string
+		f    FlagFilter
+		want int
+	}{
+		{"agent", FlagFilter{Agent: "cursor"}, 2},
+		{"rule", FlagFilter{Rule: "proxy-secret-leak"}, 2},
+		{"min_severity", FlagFilter{MinSeverity: 2}, 2},
+		{"combined", FlagFilter{Agent: "cursor", Rule: "proxy-secret-leak", MinSeverity: 2}, 1},
+		{"none", FlagFilter{}, 3},
+	}
+	for _, tc := range cases {
+		if got := s.QueryFlags(tc.f); len(got) != tc.want {
+			t.Errorf("%s: got %d flags, want %d", tc.name, len(got), tc.want)
+		}
+	}
+}
+
+// TestQueryFlagsSinceNormalizesTimezone pins the datetime() comparison: a flag
+// stamped with a non-UTC offset must be matched correctly against a UTC `since`.
+// A raw string comparison (10:00-04:00 vs 13:00Z) would wrongly exclude it.
+func TestQueryFlagsSinceNormalizesTimezone(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(filepath.Join(dir, "e.db"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	edt := time.FixedZone("EDT", -4*3600)
+	s.PutFlag(model.Flag{ID: "x", Rule: "r", Severity: 1, Agent: "claude", PID: 1,
+		TS: time.Date(2026, 8, 31, 10, 0, 0, 0, edt)}) // == 14:00Z
+
+	if got := s.QueryFlags(FlagFilter{Since: "2026-08-31T13:00:00Z"}); len(got) != 1 {
+		t.Fatalf("since=13:00Z should include a 14:00Z flag, got %d", len(got))
+	}
+	if got := s.QueryFlags(FlagFilter{Since: "2026-08-31T15:00:00Z"}); len(got) != 0 {
+		t.Fatalf("since=15:00Z should exclude a 14:00Z flag, got %d", len(got))
+	}
+}
+
+func TestQueryEventsFilters(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(filepath.Join(dir, "e.db"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	now := time.Now()
+	s.PutEvent(event.Event{Kind: event.KindFileOpen, PID: 10, TS: now})
+	s.PutEvent(event.Event{Kind: event.KindProxyHit, PID: 20, TS: now})
+	s.PutEvent(event.Event{Kind: event.KindFileOpen, PID: 20, TS: now})
+
+	fileOpen := int(event.KindFileOpen)
+	if got := s.QueryEvents(EventFilter{Kind: &fileOpen}); len(got) != 2 {
+		t.Errorf("kind=FileOpen (0) got %d, want 2", len(got))
+	}
+	if got := s.QueryEvents(EventFilter{PID: 20}); len(got) != 2 {
+		t.Errorf("pid=20 got %d, want 2", len(got))
+	}
+	if got := s.QueryEvents(EventFilter{Kind: &fileOpen, PID: 20}); len(got) != 1 {
+		t.Errorf("kind=FileOpen pid=20 got %d, want 1", len(got))
+	}
+	if got := s.QueryEvents(EventFilter{}); len(got) != 3 {
+		t.Errorf("no filter got %d, want 3", len(got))
 	}
 }
 
