@@ -184,6 +184,73 @@ func TestFingerprintIngestEndpointReturnsLabels(t *testing.T) {
 	}
 }
 
+func TestFirewallSourcesAddRemoveAndAudit(t *testing.T) {
+	dir := t.TempDir()
+	sock := fmt.Sprintf("/tmp/sa_test_src_%d.sock", time.Now().UnixNano())
+	defer os.Remove(sock)
+
+	srcStore := firewall.NewSourceStore(filepath.Join(dir, "firewall-sources.json"))
+	ingestCalls := 0
+
+	a := New(sock, testStore(t), &fakeKiller{}, func() Status { return Status{Running: true} })
+	a.SetFirewall(FirewallControl{
+		Sources:     srcStore,
+		BaseSources: []string{"/etc/agent/defaults.env"},
+		Ingest: func() ([]string, error) {
+			ingestCalls++
+			return []string{"KEY (src)"}, nil
+		},
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go a.Serve(ctx)
+	waitForSocket(t, sock)
+	cl := unixClient(sock)
+
+	// add
+	resp, err := cl.Post("http://unix/firewall/sources", "application/json", strings.NewReader(`{"source":"~/.aws/credentials","op":"add"}`))
+	if err != nil || resp.StatusCode != 200 {
+		t.Fatalf("add post: %v status=%v", err, resp.StatusCode)
+	}
+	if ingestCalls != 1 {
+		t.Fatalf("add should re-ingest once, got %d calls", ingestCalls)
+	}
+
+	// GET shows config (read-only) + the user source
+	getResp, _ := cl.Get("http://unix/firewall/sources")
+	body, _ := io.ReadAll(getResp.Body)
+	for _, want := range []string{`"source":"/etc/agent/defaults.env","origin":"config"`, `"source":"~/.aws/credentials","origin":"user"`} {
+		if !strings.Contains(string(body), want) {
+			t.Fatalf("sources GET missing %s: %s", want, body)
+		}
+	}
+
+	// audit row carries the path
+	auditResp, _ := cl.Get("http://unix/audit")
+	auditBody, _ := io.ReadAll(auditResp.Body)
+	if !strings.Contains(string(auditBody), `"action":"source-add"`) || !strings.Contains(string(auditBody), `~/.aws/credentials`) {
+		t.Fatalf("audit missing source-add row with path: %s", auditBody)
+	}
+
+	// removing a config source is rejected
+	badResp, _ := cl.Post("http://unix/firewall/sources", "application/json", strings.NewReader(`{"source":"/etc/agent/defaults.env","op":"remove"}`))
+	if badResp.StatusCode != 400 {
+		t.Fatalf("remove of config source status=%d, want 400", badResp.StatusCode)
+	}
+
+	// removing the user source succeeds and re-ingests again
+	rmResp, _ := cl.Post("http://unix/firewall/sources", "application/json", strings.NewReader(`{"source":"~/.aws/credentials","op":"remove"}`))
+	if rmResp.StatusCode != 200 {
+		t.Fatalf("remove user source status=%d, want 200", rmResp.StatusCode)
+	}
+	if ingestCalls != 2 {
+		t.Fatalf("remove should re-ingest, total calls = %d, want 2", ingestCalls)
+	}
+	if len(srcStore.Load()) != 0 {
+		t.Fatalf("user source not removed: %v", srcStore.Load())
+	}
+}
+
 func TestRotateEndpointExecutesRotation(t *testing.T) {
 	tmpDir := t.TempDir()
 	envPath := filepath.Join(tmpDir, ".env")
