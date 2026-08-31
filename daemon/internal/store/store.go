@@ -178,11 +178,57 @@ func (s *Store) pruneEventsLocked(maxKeep int) {
 	_, _ = s.db.Exec(`DELETE FROM events WHERE id NOT IN (SELECT id FROM events ORDER BY id DESC LIMIT ?)`, maxKeep)
 }
 
+// FlagFilter narrows a flag history query. A zero value returns the most recent
+// flags — RecentFlags is exactly that. Since is any RFC3339 timestamp (any
+// offset); it is compared with SQLite's datetime() so stored local-offset
+// stamps and a UTC bound normalize to the same instant.
+type FlagFilter struct {
+	Agent       string // exact match; empty = any
+	Rule        string // exact match; empty = any
+	MinSeverity int    // severity >= this; 0 = any
+	Since       string // ts >= this; empty = any
+	Limit       int    // 0 = 50
+}
+
+// EventFilter narrows an event history query. Kind is a pointer because kind 0
+// (KindFileOpen) is a valid filter value distinct from "not set".
+type EventFilter struct {
+	Kind  *int   // exact kind; nil = any
+	PID   int32  // exact pid; 0 = any
+	Since string // ts >= this; empty = any
+	Limit int    // 0 = 50
+}
+
 func (s *Store) RecentFlags(limit int) []model.Flag {
+	return s.QueryFlags(FlagFilter{Limit: limit})
+}
+
+func (s *Store) QueryFlags(f FlagFilter) []model.Flag {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	rows, err := s.db.Query(`SELECT id, rule, severity, ts, pid, agent, evidence FROM flags ORDER BY ts DESC LIMIT ?`, limit)
+	q := `SELECT id, rule, severity, ts, pid, agent, evidence FROM flags WHERE 1=1`
+	var args []any
+	if f.Agent != "" {
+		q += " AND agent = ?"
+		args = append(args, f.Agent)
+	}
+	if f.Rule != "" {
+		q += " AND rule = ?"
+		args = append(args, f.Rule)
+	}
+	if f.MinSeverity > 0 {
+		q += " AND severity >= ?"
+		args = append(args, f.MinSeverity)
+	}
+	if f.Since != "" {
+		q += " AND datetime(ts) >= datetime(?)"
+		args = append(args, f.Since)
+	}
+	q += " ORDER BY ts DESC LIMIT ?"
+	args = append(args, normalizeLimit(f.Limit))
+
+	rows, err := s.db.Query(q, args...)
 	if err != nil {
 		log.Printf("store: query flags error: %v", err)
 		return nil
@@ -203,10 +249,31 @@ func (s *Store) RecentFlags(limit int) []model.Flag {
 }
 
 func (s *Store) RecentEvents(limit int) []event.Event {
+	return s.QueryEvents(EventFilter{Limit: limit})
+}
+
+func (s *Store) QueryEvents(f EventFilter) []event.Event {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	rows, err := s.db.Query(`SELECT kind, ts, pid, exe_path, path, remote_host, remote_port, detail FROM events ORDER BY id DESC LIMIT ?`, limit)
+	q := `SELECT kind, ts, pid, exe_path, path, remote_host, remote_port, detail FROM events WHERE 1=1`
+	var args []any
+	if f.Kind != nil {
+		q += " AND kind = ?"
+		args = append(args, *f.Kind)
+	}
+	if f.PID != 0 {
+		q += " AND pid = ?"
+		args = append(args, f.PID)
+	}
+	if f.Since != "" {
+		q += " AND datetime(ts) >= datetime(?)"
+		args = append(args, f.Since)
+	}
+	q += " ORDER BY id DESC LIMIT ?"
+	args = append(args, normalizeLimit(f.Limit))
+
+	rows, err := s.db.Query(q, args...)
 	if err != nil {
 		log.Printf("store: query events error: %v", err)
 		return nil
@@ -225,6 +292,16 @@ func (s *Store) RecentEvents(limit int) []event.Event {
 		}
 	}
 	return events
+}
+
+func normalizeLimit(limit int) int {
+	if limit <= 0 {
+		return 50
+	}
+	if limit > 1000 {
+		return 1000
+	}
+	return limit
 }
 
 func (s *Store) PutIncident(inc model.IncidentReport) {

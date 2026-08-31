@@ -18,17 +18,18 @@ const (
 )
 
 // Event is the single payload type on the bus. Optional fields are zero when
-// not applicable to the Kind.
+// not applicable to the Kind. JSON tags match the console's field names (the
+// /events endpoint is the only JSON consumer).
 type Event struct {
-	Kind    Kind
-	TS      time.Time
-	PID     int32
-	ExePath string
+	Kind    Kind      `json:"kind"`
+	TS      time.Time `json:"ts"`
+	PID     int32     `json:"pid"`
+	ExePath string    `json:"exe_path,omitempty"`
 	// File events:
-	Path string
+	Path string `json:"path,omitempty"`
 	// Conn events:
-	RemoteHost string
-	RemotePort int
+	RemoteHost string `json:"remote_host,omitempty"`
+	RemotePort int    `json:"remote_port,omitempty"`
 	// Transcript/plugin events:
-	Detail string // rule id or short label; NEVER a secret value
+	Detail string `json:"detail,omitempty"` // rule id or short label; NEVER a secret value
 }
