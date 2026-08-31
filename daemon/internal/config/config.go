@@ -147,6 +147,11 @@ func Load(explicitPath string) (Config, error) {
 	return cfg, nil
 }
 
+// ExpandPath expands a leading ~ and $ENV references in p, matching how config
+// sources are normalized at load. Exported for runtime-added ingest sources,
+// which are stored raw and expanded at use.
+func ExpandPath(p string) string { return expandPath(p) }
+
 func expandPath(p string) string {
 	if strings.HasPrefix(p, "~/") {
 		home, err := os.UserHomeDir()

@@ -16,6 +16,11 @@ document.addEventListener('DOMContentLoaded', () => {
     renderEvents();
   });
 
+  const btnAddSource = document.getElementById('btn-add-source');
+  const sourceInput = document.getElementById('source-input');
+  if (btnAddSource) btnAddSource.addEventListener('click', () => window.addSource());
+  if (sourceInput) sourceInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') window.addSource(); });
+
   if (btnCloseModal && reportModal) {
     btnCloseModal.addEventListener('click', () => {
       reportModal.close();
@@ -41,18 +46,20 @@ document.addEventListener('DOMContentLoaded', () => {
     events: [],
     fleet: [],
     audit: [],
+    sources: [],
     connected: true
   };
 
   async function fetchTelemetry() {
     try {
-      const [statusRes, flagsRes, incidentsRes, eventsRes, fleetRes, auditRes] = await Promise.all([
+      const [statusRes, flagsRes, incidentsRes, eventsRes, fleetRes, auditRes, sourcesRes] = await Promise.all([
         fetch('/status').catch(() => null),
         fetch('/flags?limit=20').catch(() => null),
         fetch('/incidents?limit=10').catch(() => null),
         fetch('/events?limit=50').catch(() => null),
         fetch('/fleet').catch(() => null),
-        fetch('/audit?limit=50').catch(() => null)
+        fetch('/audit?limit=50').catch(() => null),
+        fetch('/firewall/sources').catch(() => null)
       ]);
 
       if (statusRes && statusRes.ok) {
@@ -72,6 +79,9 @@ document.addEventListener('DOMContentLoaded', () => {
       }
       if (auditRes && auditRes.ok) {
         telemetryData.audit = await auditRes.json() || [];
+      }
+      if (sourcesRes && sourcesRes.ok) {
+        telemetryData.sources = await sourcesRes.json() || [];
       }
 
       telemetryData.connected = !!(statusRes && statusRes.ok);
@@ -95,6 +105,7 @@ document.addEventListener('DOMContentLoaded', () => {
     renderIncidents();
     renderFleet();
     renderAudit();
+    renderSources();
     renderFlags();
     renderEvents();
   }
@@ -289,6 +300,68 @@ document.addEventListener('DOMContentLoaded', () => {
       `;
     }).join('');
   }
+
+  function renderSources() {
+    const list = document.getElementById('sources-list');
+    const badge = document.getElementById('badge-sources-count');
+    const sources = telemetryData.sources || [];
+
+    badge.textContent = sources.length;
+
+    if (sources.length === 0) {
+      list.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-key"/></svg><span>No secret files watched yet — add the credential files whose keys must never leave</span></div>`;
+      return;
+    }
+
+    list.innerHTML = sources.map(s => {
+      const isUser = s.origin === 'user';
+      const remove = isUser
+        ? `<button class="source-remove" title="Stop watching" onclick="removeSource('${encodeURIComponent(s.source)}')"><svg class="icon"><use href="#i-close"/></svg></button>`
+        : `<span class="origin-chip config">CONFIG</span>`;
+      return `
+        <div class="source-item">
+          <svg class="icon source-ico"><use href="#i-key"/></svg>
+          <span class="source-path">${escapeHTML(s.source)}</span>
+          ${isUser ? `<span class="origin-chip user">USER</span>` : ''}
+          ${remove}
+        </div>
+      `;
+    }).join('');
+  }
+
+  window.addSource = async function() {
+    const input = document.getElementById('source-input');
+    const value = (input.value || '').trim();
+    if (!value) return;
+    try {
+      const res = await fetch('/firewall/sources', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source: value, op: 'add' })
+      });
+      if (!res.ok) { showToast('Failed to add source: ' + (await res.text()), 'danger'); return; }
+      const data = await res.json();
+      input.value = '';
+      showToast(`Watching ${value} — ${data.registered} secret(s) registered`, 'success');
+      fetchTelemetry();
+    } catch (err) {
+      showToast('Failed to add source: ' + err, 'danger');
+    }
+  };
+
+  window.removeSource = async function(encoded) {
+    const source = decodeURIComponent(encoded);
+    try {
+      const res = await fetch('/firewall/sources', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source, op: 'remove' })
+      });
+      if (!res.ok) { showToast('Failed to remove source: ' + (await res.text()), 'danger'); return; }
+      showToast(`Stopped watching ${source}`, 'info');
+      fetchTelemetry();
+    } catch (err) {
+      showToast('Failed to remove source: ' + err, 'danger');
+    }
+  };
 
   function renderFlags() {
     const container = document.getElementById('flags-container');
