@@ -105,6 +105,14 @@ func Open(dbPath, jsonlPath string) (*Store, error) {
 			to_mode TEXT,
 			detail TEXT
 		);`,
+		`CREATE TABLE IF NOT EXISTS guard_rules (
+			agent TEXT NOT NULL,
+			rule_id TEXT NOT NULL,
+			decision TEXT NOT NULL,
+			source TEXT,
+			created_at TEXT,
+			PRIMARY KEY (agent, rule_id)
+		);`,
 	}
 
 	for _, q := range createQueries {
@@ -445,4 +453,82 @@ func (s *Store) Close() error {
 		return s.db.Close()
 	}
 	return nil
+}
+
+// GuardRule is one durable allow/deny decision for an agent's access to a
+// directory-guard resource, keyed on (agent, rule_id). It records a decision
+// and where it came from — never any secret value.
+type GuardRule struct {
+	ID        int64  `json:"id"`
+	Agent     string `json:"agent"`
+	RuleID    string `json:"rule_id"`
+	Decision  string `json:"decision"` // "allow" | "deny"
+	Source    string `json:"source"`   // "prompt" | "onboarding"
+	CreatedAt string `json:"created_at"`
+}
+
+func (s *Store) PutGuardRule(g GuardRule) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ts := time.Now().UTC().Format(time.RFC3339Nano)
+	_, err := s.db.Exec(
+		`INSERT INTO guard_rules (agent, rule_id, decision, source, created_at)
+		 VALUES (?, ?, ?, ?, ?)
+		 ON CONFLICT(agent, rule_id) DO UPDATE SET decision=excluded.decision, source=excluded.source, created_at=excluded.created_at`,
+		g.Agent, g.RuleID, g.Decision, g.Source, ts,
+	)
+	if err != nil {
+		log.Printf("store: failed to put guard rule %s/%s: %v", g.Agent, g.RuleID, err)
+	}
+}
+
+func (s *Store) LookupGuardRule(agent, ruleID string) (GuardRule, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var g GuardRule
+	err := s.db.QueryRow(
+		`SELECT agent, rule_id, decision, source, created_at FROM guard_rules WHERE agent = ? AND rule_id = ?`,
+		agent, ruleID,
+	).Scan(&g.Agent, &g.RuleID, &g.Decision, &g.Source, &g.CreatedAt)
+	if err != nil {
+		return GuardRule{}, false
+	}
+	return g, true
+}
+
+func (s *Store) ListGuardRules(limit int) []GuardRule {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rows, err := s.db.Query(
+		`SELECT agent, rule_id, decision, source, created_at FROM guard_rules ORDER BY datetime(created_at) DESC LIMIT ?`,
+		normalizeLimit(limit),
+	)
+	if err != nil {
+		log.Printf("store: query guard_rules error: %v", err)
+		return nil
+	}
+	defer rows.Close()
+	var out []GuardRule
+	for rows.Next() {
+		var g GuardRule
+		if err := rows.Scan(&g.Agent, &g.RuleID, &g.Decision, &g.Source, &g.CreatedAt); err == nil {
+			out = append(out, g)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		log.Printf("store: guard_rules cursor error (result may be truncated): %v", err)
+	}
+	return out
+}
+
+func (s *Store) DeleteGuardRule(agent, ruleID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	res, err := s.db.Exec(`DELETE FROM guard_rules WHERE agent = ? AND rule_id = ?`, agent, ruleID)
+	if err != nil {
+		log.Printf("store: delete guard rule error: %v", err)
+		return false
+	}
+	n, _ := res.RowsAffected()
+	return n > 0
 }
