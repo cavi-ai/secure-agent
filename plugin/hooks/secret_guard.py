@@ -277,7 +277,7 @@ def resolve_prompt(agent, tool, path, rule_id, command, event):
             emit_ask(f"Secure Agent: allow {agent} to access {os.path.basename(path)}?", command, event)
         deny("guard-deny:" + rule_id, f"Blocked: access to {norm(path)} needs approval (monitor offline).",
              deny_msg, command, event)
-    if d.get("verdict") == "allow":
+    if isinstance(d, dict) and d.get("verdict") == "allow":
         allow("guard-allow:" + rule_id, command, event)
     deny("guard-deny:" + rule_id, f"Blocked: access to {norm(path)} was denied.", deny_msg, command, event)
 
