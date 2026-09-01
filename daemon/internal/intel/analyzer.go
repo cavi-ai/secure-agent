@@ -10,6 +10,10 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 )
 
+// attributionWindow bounds how far from the flag time an event may be and still
+// count as part of the same incident.
+const attributionWindow = 5 * time.Minute
+
 type Analyzer struct{}
 
 func NewAnalyzer() *Analyzer {
@@ -40,7 +44,15 @@ func (a *Analyzer) Analyze(flag model.Flag, events []event.Event) model.Incident
 	connsSeen := make(map[string]bool)
 
 	for _, ev := range events {
-		if flag.PID != 0 && ev.PID != 0 && ev.PID != flag.PID {
+		// Attribute only this agent's activity near the incident. When the flag
+		// carries a PID, an event must share it: a zero-PID event cannot be
+		// attributed and must not widen the blast radius to every process.
+		if flag.PID != 0 && ev.PID != flag.PID {
+			continue
+		}
+		// And only events within the attribution window of the flag, not stale
+		// rows the ring buffer happens to still hold.
+		if !ev.TS.IsZero() && (ev.TS.Before(flag.TS.Add(-attributionWindow)) || ev.TS.After(flag.TS.Add(attributionWindow))) {
 			continue
 		}
 
@@ -143,6 +155,23 @@ func (a *Analyzer) Analyze(flag model.Flag, events []event.Event) model.Incident
 	return report
 }
 
+// isSSHPrivateKey reports whether a basename looks like an SSH private key,
+// excluding public keys and non-key files under ~/.ssh (config, known_hosts).
+func isSSHPrivateKey(base string) bool {
+	if strings.HasSuffix(base, ".pub") {
+		return false
+	}
+	if strings.HasPrefix(base, "id_") {
+		return true
+	}
+	for _, suf := range []string{"_rsa", "_dsa", "_ecdsa", "_ed25519"} {
+		if strings.HasSuffix(base, suf) {
+			return true
+		}
+	}
+	return false
+}
+
 func (a *Analyzer) classifyPath(path string) *model.RotateItem {
 	cleanPath := strings.ToLower(filepath.Clean(path))
 	baseName := filepath.Base(cleanPath)
@@ -159,39 +188,45 @@ func (a *Analyzer) classifyPath(path string) *model.RotateItem {
 		}
 	}
 
-	if strings.Contains(cleanPath, "/.aws/") || baseName == "credentials" || baseName == "config" {
+	// AWS only within an .aws directory (covers both credentials and config
+	// there). A bare basename of "config"/"credentials" is not AWS — it matches
+	// ~/.ssh/config, .git/config, and countless app files.
+	if strings.Contains(cleanPath, "/.aws/") {
 		return &model.RotateItem{
 			ID:          "rot-aws-creds",
 			Category:    model.CategoryCloudCreds,
 			Name:        "AWS Cloud Credentials",
 			Path:        path,
 			Risk:        model.RiskCritical,
-			Description: "AWS credentials file (~/.aws/credentials) was read by an unverified agent process.",
-			Action:      "Run `aws iam create-access-key` and deactivate old AWS Access Key IDs via AWS IAM Console.",
+			Description: "An AWS credentials/config file (~/.aws/) was read by an unverified agent process.",
+			Action:      "Rotate the affected AWS access keys in the IAM console: create a replacement, update your local config, then deactivate and delete the exposed key.",
 		}
 	}
 
-	if strings.Contains(cleanPath, "/.ssh/") || strings.HasPrefix(baseName, "id_") {
+	// SSH: only actual private keys (id_* or *_rsa/_dsa/_ecdsa/_ed25519, not
+	// .pub) — not ~/.ssh/config or known_hosts.
+	if isSSHPrivateKey(baseName) {
 		return &model.RotateItem{
 			ID:          fmt.Sprintf("rot-ssh-%s", baseName),
 			Category:    model.CategorySSHKeys,
-			Name:        fmt.Sprintf("SSH Keypair: %s", filepath.Base(path)),
+			Name:        fmt.Sprintf("SSH Private Key: %s", filepath.Base(path)),
 			Path:        path,
 			Risk:        model.RiskCritical,
-			Description: "Private SSH key file was read by agent process.",
-			Action:      "Revoke corresponding public key from `authorized_keys` and generate a new keypair via `ssh-keygen -t ed25519`.",
+			Description: "A private SSH key file was read by an agent process.",
+			Action:      "Generate a new keypair (`ssh-keygen -t ed25519`), replace the old public key in every `authorized_keys`/host that trusts it, then remove the old key.",
 		}
 	}
 
-	if strings.Contains(cleanPath, "keychain") || strings.HasSuffix(cleanPath, ".keychain-db") {
+	// Keychain: only real keychain files, not any path containing "keychain".
+	if strings.HasSuffix(cleanPath, ".keychain-db") || strings.HasSuffix(cleanPath, ".keychain") || strings.Contains(cleanPath, "/library/keychains/") {
 		return &model.RotateItem{
 			ID:          "rot-keychain-db",
 			Category:    model.CategoryKeychain,
 			Name:        "macOS Keychain Database",
 			Path:        path,
 			Risk:        model.RiskCritical,
-			Description: "macOS Keychain file or Keychain CLI subcommand was accessed.",
-			Action:      "Audit Keychain items via Keychain Access app; change passwords/tokens stored in the affected Keychain.",
+			Description: "A macOS Keychain file was accessed.",
+			Action:      "Enumerate the affected items with Keychain Access (or `security dump-keychain`), keyed on the (service, account) pair — not service alone, which only shows the first match — and change the passwords/tokens stored in them.",
 		}
 	}
 
