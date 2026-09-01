@@ -15,6 +15,7 @@ import (
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/config"
 	"github.com/cavi-ai/secure-agent/daemon/internal/firewall"
+	"github.com/cavi-ai/secure-agent/daemon/internal/guard"
 	"github.com/cavi-ai/secure-agent/daemon/internal/intel"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 	"github.com/cavi-ai/secure-agent/daemon/internal/supervise"
@@ -61,6 +62,8 @@ type API struct {
 	fwIngest      func() ([]string, error)
 	fwSources     *firewall.SourceStore
 	fwBaseSources []string
+
+	guardBroker *guard.Broker
 }
 
 // FirewallControl bundles the runtime firewall controls the API exposes.
@@ -92,6 +95,14 @@ func (a *API) SetFirewall(c FirewallControl) {
 	a.fwIngest = c.Ingest
 	a.fwSources = c.Sources
 	a.fwBaseSources = c.BaseSources
+}
+
+// SetGuard wires the directory-guard broker so the control API can answer
+// prompt-mode decisions and expose the pending queue / resolve / rules
+// endpoints. Optional: when unset, the /guard/* endpoints report the guard is
+// not enabled.
+func (a *API) SetGuard(b *guard.Broker) {
+	a.guardBroker = b
 }
 
 func (a *API) Serve(ctx context.Context) error {
@@ -130,6 +141,10 @@ func (a *API) Serve(ctx context.Context) error {
 	mux.HandleFunc("/firewall/fingerprints/reload", a.handleFingerprintReload)
 	mux.HandleFunc("/firewall/fingerprints/ingest", a.handleFingerprintIngest)
 	mux.HandleFunc("/firewall/sources", a.handleFirewallSources)
+	mux.HandleFunc("/guard/decision", a.handleGuardDecision)
+	mux.HandleFunc("/guard/pending", a.handleGuardPending)
+	mux.HandleFunc("/guard/resolve", a.handleGuardResolve)
+	mux.HandleFunc("/guard/rules", a.handleGuardRules)
 	a.setupWebDashboard(mux)
 
 	server := &http.Server{Handler: mux}
@@ -490,6 +505,102 @@ func (a *API) handleFirewallSources(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok", "source": req.Source, "op": req.Op, "registered": registered})
 
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func writeJSON(w http.ResponseWriter, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(v)
+}
+
+type guardDecisionRequest struct {
+	Agent  string `json:"agent"`
+	Tool   string `json:"tool"`
+	Path   string `json:"path"`
+	RuleID string `json:"rule_id"`
+}
+
+// handleGuardDecision answers a hook's prompt-mode query: a cached (agent,rule)
+// decision is returned instantly; otherwise it enqueues a pending prompt and
+// blocks until the menubar resolves it or the broker times out (deny).
+func (a *API) handleGuardDecision(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if a.guardBroker == nil {
+		http.Error(w, "guard not enabled", http.StatusServiceUnavailable)
+		return
+	}
+	var req guardDecisionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Agent == "" || req.RuleID == "" {
+		http.Error(w, `Invalid payload: {"agent","tool","path","rule_id"}`, http.StatusBadRequest)
+		return
+	}
+	if g, ok := a.store.LookupGuardRule(req.Agent, req.RuleID); ok {
+		writeJSON(w, guard.Decision{Verdict: g.Decision, Scope: "always", Reason: "cached"})
+		return
+	}
+	id := fmt.Sprintf("%d", time.Now().UnixNano())
+	d := a.guardBroker.Request(guard.Pending{
+		ID: id, Agent: req.Agent, Tool: req.Tool, Path: req.Path, RuleID: req.RuleID,
+	})
+	if d.Scope == "always" && d.Reason == "" {
+		a.store.PutGuardRule(store.GuardRule{Agent: req.Agent, RuleID: req.RuleID, Decision: d.Verdict, Source: "prompt"})
+		a.store.PutAudit(store.AuditEntry{Action: "guard-rule", Rule: req.Agent + "/" + req.RuleID, ToMode: d.Verdict})
+	}
+	writeJSON(w, d)
+}
+
+func (a *API) handleGuardPending(w http.ResponseWriter, r *http.Request) {
+	if a.guardBroker == nil {
+		writeJSON(w, []guard.Pending{})
+		return
+	}
+	writeJSON(w, a.guardBroker.Pending())
+}
+
+type guardResolveRequest struct {
+	ID      string `json:"id"`
+	Verdict string `json:"verdict"` // allow | deny
+	Scope   string `json:"scope"`   // once | always
+}
+
+func (a *API) handleGuardResolve(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost || a.guardBroker == nil {
+		http.Error(w, "unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	var req guardResolveRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil ||
+		(req.Verdict != "allow" && req.Verdict != "deny") ||
+		(req.Scope != "once" && req.Scope != "always") {
+		http.Error(w, `Invalid payload: {"id","verdict":"allow|deny","scope":"once|always"}`, http.StatusBadRequest)
+		return
+	}
+	ok := a.guardBroker.Resolve(req.ID, guard.Decision{Verdict: req.Verdict, Scope: req.Scope})
+	writeJSON(w, map[string]any{"status": "ok", "resolved": ok})
+}
+
+// handleGuardRules lists stored decisions (GET) and revokes one (DELETE ?agent=&rule_id=).
+func (a *API) handleGuardRules(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		writeJSON(w, a.store.ListGuardRules(200))
+	case http.MethodDelete:
+		agent := r.URL.Query().Get("agent")
+		ruleID := r.URL.Query().Get("rule_id")
+		if agent == "" || ruleID == "" {
+			http.Error(w, "agent and rule_id required", http.StatusBadRequest)
+			return
+		}
+		removed := a.store.DeleteGuardRule(agent, ruleID)
+		if removed {
+			a.store.PutAudit(store.AuditEntry{Action: "guard-rule-revoke", Rule: agent + "/" + ruleID})
+		}
+		writeJSON(w, map[string]any{"status": "ok", "removed": removed})
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
