@@ -29,6 +29,7 @@ import json
 import os
 import re
 import shlex
+import socket as _socket
 import sys
 from datetime import datetime, timezone
 
@@ -217,6 +218,82 @@ def match_rule(path: str, rules=DEFAULT_GUARD_RULES):
             if fnmatch.fnmatch(p, gg) or fnmatch.fnmatch(p, gg + "/*"):
                 return rule["id"], overrides.get(rule["id"], rule["mode"])
     return None, None
+
+
+# --- directory guard: prompt-mode daemon resolution --------------------------
+
+SOCK_PATH = os.environ.get("SECURE_AGENT_SOCK") or os.path.join(HOME, ".config", "secure-agent", "daemon.sock")
+PROMPT_DEADLINE_S = 45.0
+
+
+def _guard_query(agent, tool, path, rule_id, deadline_s):
+    """POST /guard/decision over the unix socket; return the decision dict or
+    None if the daemon is unreachable. Own deadline < harness timeout."""
+    body = json.dumps({"agent": agent, "tool": tool, "path": path, "rule_id": rule_id})
+    req = ("POST /guard/decision HTTP/1.1\r\nHost: localhost\r\n"
+           "Content-Type: application/json\r\nConnection: close\r\n"
+           f"Content-Length: {len(body)}\r\n\r\n{body}")
+    s = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+    s.settimeout(deadline_s)
+    try:
+        s.connect(SOCK_PATH)
+    except OSError:
+        return None  # daemon down
+    try:
+        s.sendall(req.encode())
+        chunks = []
+        while True:
+            b = s.recv(4096)
+            if not b:
+                break
+            chunks.append(b)
+    except (OSError, _socket.timeout):
+        return {"verdict": "deny", "scope": "once", "reason": "timeout"}
+    finally:
+        s.close()
+    raw = b"".join(chunks)
+    i = raw.find(b"\r\n\r\n")
+    if i < 0:
+        return {"verdict": "deny", "scope": "once", "reason": "timeout"}
+    try:
+        return json.loads(raw[i + 4:].decode())
+    except ValueError:
+        return {"verdict": "deny", "scope": "once", "reason": "timeout"}
+
+
+def runtime() -> str:
+    if os.environ.get("CLAUDE_CODE_ENTRYPOINT"):
+        return "claude"
+    if os.environ.get("CURSOR_TRACE_ID"):
+        return "cursor"
+    return "unknown"
+
+
+def resolve_prompt(agent, tool, path, rule_id, command, event):
+    """Prompt-mode resolution. Daemon decides (cached or via the native prompt).
+    Daemon-down degrades to the harness's own ask on Claude; on Cursor (whose ask
+    support is unverified) it fails safe to deny. Timeout/deny always block."""
+    d = _guard_query(agent, tool, path, rule_id, PROMPT_DEADLINE_S)
+    deny_msg = (f"DENIED by Directory Guard ({rule_id}). Approve it in the Secure Agent prompt, "
+                "or add an allow-always rule, then retry.")
+    if d is None:  # daemon unreachable
+        if runtime() == "claude":
+            emit_ask(f"Secure Agent: allow {agent} to access {os.path.basename(path)}?", command, event)
+        deny("guard-deny:" + rule_id, f"Blocked: access to {norm(path)} needs approval (monitor offline).",
+             deny_msg, command, event)
+    if d.get("verdict") == "allow":
+        allow("guard-allow:" + rule_id, command, event)
+    deny("guard-deny:" + rule_id, f"Blocked: access to {norm(path)} was denied.", deny_msg, command, event)
+
+
+def emit_ask(reason, command, event):
+    audit("ask", "guard-ask", command, event)
+    emit({
+        "hookSpecificOutput": {"hookEventName": "PreToolUse",
+                               "permissionDecision": "ask",
+                               "permissionDecisionReason": reason},
+    })
+    sys.exit(0)
 
 
 # --- command parsing --------------------------------------------------------
