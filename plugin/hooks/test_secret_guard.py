@@ -7,11 +7,14 @@ would have. Every case in DENY is an action that actually damages the machine.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
+import socketserver
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 HOOK = os.path.join(os.path.dirname(os.path.abspath(__file__)), "secret_guard.py")
@@ -19,11 +22,17 @@ HOME = os.path.expanduser("~")
 
 
 def run(payload: dict, env: dict | None = None) -> dict:
+    base = dict(os.environ)
+    # Strip runtime-detection vars the invoking shell may already carry (this
+    # suite can itself run inside a Claude Code session), so each test's env
+    # overlay is the sole source of truth for the hook's runtime() detection.
+    base.pop("CLAUDE_CODE_ENTRYPOINT", None)
+    base.pop("CURSOR_TRACE_ID", None)
     p = subprocess.run(
         [sys.executable, HOOK],
         input=json.dumps(payload),
         capture_output=True, text=True, timeout=10,
-        env={**os.environ, **(env or {})},
+        env={**base, **(env or {})},
     )
     if p.returncode != 0:
         raise AssertionError(f"hook exited {p.returncode}: {p.stderr[:400]}")
@@ -152,6 +161,59 @@ EXTRA_TESTS = [
     test_read_monitor_default_allows,
     test_read_deny_override_blocks,
     test_read_unknown_allows,
+]
+
+
+# --- prompt mode: daemon call, fail-safe deadline, ask fallback -------------
+
+@contextlib.contextmanager
+def guard_stub(decision):
+    d = tempfile.mkdtemp()
+    sock = os.path.join(d, "daemon.sock")
+    body = json.dumps(decision).encode()
+    class H(socketserver.BaseRequestHandler):
+        def handle(self):
+            self.request.recv(65536)
+            self.request.sendall(
+                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                b"Content-Length: %d\r\nConnection: close\r\n\r\n%s" % (len(body), body))
+    srv = socketserver.UnixStreamServer(sock, H)
+    t = threading.Thread(target=srv.serve_forever, daemon=True); t.start()
+    try:
+        yield sock
+    finally:
+        srv.shutdown(); srv.server_close()
+
+
+def _prompt_env(sock=None):
+    e = with_modes(**{"cloud-creds": "prompt"})
+    if sock:
+        e["SECURE_AGENT_SOCK"] = sock
+    return e
+
+
+def test_prompt_daemon_down_claude_asks():
+    out = run(read(os.path.expanduser("~/.aws/credentials")),
+              env={**_prompt_env("/tmp/nonexistent-guard.sock"), "CLAUDE_CODE_ENTRYPOINT": "cli"})
+    assert out.get("hookSpecificOutput", {}).get("permissionDecision") == "ask", out
+
+
+def test_prompt_daemon_down_cursor_denies():
+    out = run(read(os.path.expanduser("~/.aws/credentials")),
+              env={**_prompt_env("/tmp/nonexistent-guard.sock"), "CURSOR_TRACE_ID": "abc"})
+    assert out.get("permission") == "deny", out
+
+
+def test_prompt_daemon_allows():
+    with guard_stub({"verdict": "allow", "scope": "always"}) as sock:
+        out = run(read(os.path.expanduser("~/.aws/credentials")), env=_prompt_env(sock))
+    assert out.get("permission") == "allow", out
+
+
+EXTRA_TESTS += [
+    test_prompt_daemon_down_claude_asks,
+    test_prompt_daemon_down_cursor_denies,
+    test_prompt_daemon_allows,
 ]
 
 
