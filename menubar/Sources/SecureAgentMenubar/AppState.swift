@@ -121,6 +121,7 @@ public final class AppState: ObservableObject {
         alert.addButton(withTitle: "Allow Once")
         alert.addButton(withTitle: "Allow Always")
         alert.addButton(withTitle: "Deny")
+        NSApp.activate(ignoringOtherApps: true)
         let r = alert.runModal()
         let decision: GuardResolveRequest
         switch r {
