@@ -105,3 +105,22 @@ func TestAnalyzer_ClassifyPaths(t *testing.T) {
 		}
 	}
 }
+
+// Paths that used to be mis-flagged as critical credentials must no longer be:
+// a bare config/credentials basename is not AWS, "keychain" anywhere is not the
+// Keychain DB, and a non-key file under ~/.ssh is not a private key.
+func TestAnalyzer_ClassifyPaths_NoFalsePositives(t *testing.T) {
+	analyzer := NewAnalyzer()
+	for _, p := range []string{
+		"/Users/user/.ssh/config",
+		"/Users/user/.ssh/known_hosts",
+		"/Users/user/.ssh/id_ed25519.pub",
+		"/Users/user/project/.git/config",
+		"/Users/user/src/keychain-demo/README.md",
+		"/Users/user/app/config",
+	} {
+		if item := analyzer.classifyPath(p); item != nil {
+			t.Errorf("classifyPath(%s) = %+v; want nil (no false-positive critical)", p, item)
+		}
+	}
+}

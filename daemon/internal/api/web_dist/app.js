@@ -292,7 +292,6 @@ document.addEventListener('DOMContentLoaded', () => {
           ${(inc.rotate_list || []).map(item => `
             <div class="rotate-item-row">
               <span class="rk"><svg class="icon"><use href="#i-key"/></svg><strong>${escapeHTML(item.name)}</strong> (${escapeHTML(item.category)})</span>
-              <button class="btn btn-primary" onclick="triggerRotation('${escapeHTML(inc.id)}', '${escapeHTML(item.id)}')"><svg class="icon"><use href="#i-refresh"/></svg><span>Rotate</span></button>
             </div>
           `).join('')}
         </div>
@@ -559,25 +558,6 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     } catch (err) {
       showToast(`Error promoting “${rule}”: ${err}`, 'danger');
-    }
-  };
-
-  window.triggerRotation = async function(incidentId, itemId) {
-    try {
-      const res = await fetch('/rotate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ incident_id: incidentId, item_id: itemId })
-      });
-      const data = await res.json();
-      if (res.ok && data.success) {
-        showToast(`Rotation Successful: ${data.message}`, 'success');
-        fetchTelemetry();
-      } else {
-        showToast(`Rotation Failed: ${data.message || 'Error'}`, 'danger');
-      }
-    } catch (err) {
-      showToast(`Error triggering rotation: ${err}`, 'danger');
     }
   };
 
