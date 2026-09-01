@@ -16,6 +16,13 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 )
 
+// Retention caps for the API-populated tables, so an always-on daemon's DB stays
+// bounded. Events are pruned separately (batched) at 10,000.
+const (
+	maxIncidents = 5000  // one full report_json per flag
+	maxAudit     = 50000 // long-lived security log, but still bounded against abuse
+)
+
 type Store struct {
 	mu          sync.Mutex
 	db          *sql.DB
@@ -225,7 +232,10 @@ func (s *Store) QueryFlags(f FlagFilter) []model.Flag {
 		q += " AND datetime(ts) >= datetime(?)"
 		args = append(args, f.Since)
 	}
-	q += " ORDER BY ts DESC LIMIT ?"
+	// Order by the normalized instant, not the raw RFC3339 text: local-offset
+	// stamps sort wrong lexicographically across a DST change, which with LIMIT
+	// can drop the truly-newest rows.
+	q += " ORDER BY datetime(ts) DESC, ts DESC LIMIT ?"
 	args = append(args, normalizeLimit(f.Limit))
 
 	rows, err := s.db.Query(q, args...)
@@ -244,6 +254,10 @@ func (s *Store) QueryFlags(f FlagFilter) []model.Flag {
 			_ = json.Unmarshal([]byte(evStr), &fl.Evidence)
 			flags = append(flags, fl)
 		}
+	}
+	// A mid-cursor error must not be served as a complete history.
+	if err := rows.Err(); err != nil {
+		log.Printf("store: flags cursor error (result may be truncated): %v", err)
 	}
 	return flags
 }
@@ -291,6 +305,9 @@ func (s *Store) QueryEvents(f EventFilter) []event.Event {
 			events = append(events, e)
 		}
 	}
+	if err := rows.Err(); err != nil {
+		log.Printf("store: events cursor error (result may be truncated): %v", err)
+	}
 	return events
 }
 
@@ -322,6 +339,10 @@ func (s *Store) PutIncident(inc model.IncidentReport) {
 	if err != nil {
 		log.Printf("store: failed to insert incident %s: %v", inc.ID, err)
 	}
+
+	// Retention: a flag storm inserts a full report_json per incident; cap the
+	// table so the always-on daemon's DB stays bounded (events are already capped).
+	_, _ = s.db.Exec(`DELETE FROM incidents WHERE id NOT IN (SELECT id FROM incidents ORDER BY created_at DESC LIMIT ?)`, maxIncidents)
 }
 
 func (s *Store) GetIncident(id string) (*model.IncidentReport, error) {
@@ -345,7 +366,7 @@ func (s *Store) RecentIncidents(limit int) []model.IncidentReport {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	rows, err := s.db.Query(`SELECT report_json FROM incidents ORDER BY created_at DESC LIMIT ?`, limit)
+	rows, err := s.db.Query(`SELECT report_json FROM incidents ORDER BY datetime(created_at) DESC, created_at DESC LIMIT ?`, normalizeLimit(limit))
 	if err != nil {
 		log.Printf("store: query incidents error: %v", err)
 		return nil
@@ -362,12 +383,17 @@ func (s *Store) RecentIncidents(limit int) []model.IncidentReport {
 			}
 		}
 	}
+	if err := rows.Err(); err != nil {
+		log.Printf("store: incidents cursor error (result may be truncated): %v", err)
+	}
 	return list
 }
 
 // PutAudit records a policy/control change. The store stamps the timestamp so
-// callers never thread a clock. Audit rows are intentionally never pruned — a
-// promotion must not be evicted by file-open noise the way events are.
+// callers never thread a clock. Audit is a long-lived security log — it keeps far
+// more history than events — but it is still bounded: the entries are inserted by
+// API-triggerable actions, so an unbounded table would let any process with
+// socket access grow the DB without limit by looping mode toggles.
 func (s *Store) PutAudit(a AuditEntry) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -380,13 +406,14 @@ func (s *Store) PutAudit(a AuditEntry) {
 	if err != nil {
 		log.Printf("store: failed to insert audit %s: %v", a.Action, err)
 	}
+	_, _ = s.db.Exec(`DELETE FROM audit WHERE id NOT IN (SELECT id FROM audit ORDER BY id DESC LIMIT ?)`, maxAudit)
 }
 
 func (s *Store) RecentAudit(limit int) []AuditEntry {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	rows, err := s.db.Query(`SELECT id, ts, action, rule, from_mode, to_mode, detail FROM audit ORDER BY id DESC LIMIT ?`, limit)
+	rows, err := s.db.Query(`SELECT id, ts, action, rule, from_mode, to_mode, detail FROM audit ORDER BY id DESC LIMIT ?`, normalizeLimit(limit))
 	if err != nil {
 		log.Printf("store: query audit error: %v", err)
 		return nil
@@ -399,6 +426,9 @@ func (s *Store) RecentAudit(limit int) []AuditEntry {
 		if err := rows.Scan(&a.ID, &a.TS, &a.Action, &a.Rule, &a.FromMode, &a.ToMode, &a.Detail); err == nil {
 			out = append(out, a)
 		}
+	}
+	if err := rows.Err(); err != nil {
+		log.Printf("store: audit cursor error (result may be truncated): %v", err)
 	}
 	return out
 }
