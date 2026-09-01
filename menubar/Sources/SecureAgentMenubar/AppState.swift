@@ -12,6 +12,7 @@ public final class AppState: ObservableObject {
     @Published public private(set) var events: [EventModel] = []
     @Published public private(set) var connected = false
     @Published public var isPaused = false
+    @Published public private(set) var guardRules: [GuardRuleModel] = []
 
     /// Called after every state change so the AppDelegate can refresh the icon.
     public var onChange: (() -> Void)?
@@ -19,6 +20,9 @@ public final class AppState: ObservableObject {
     private let client = DaemonClient()
     private var notifiedFlagIDs: Set<String> = []
     private var timer: Timer?
+    /// The pending-prompt id currently shown in an NSAlert, so the 1Hz poll
+    /// doesn't stack a second dialog on top while one is already up.
+    private var promptingID: String?
 
     public init() {}
 
@@ -42,15 +46,21 @@ public final class AppState: ObservableObject {
                 let flags = try await client.fetchFlags(limit: 20)
                 let incidents = (try? await client.fetchIncidents(limit: 10)) ?? []
                 let events = try await client.fetchEvents(limit: 50)
+                let guardRules = (try? await client.fetchGuardRules()) ?? []
                 let wasDisconnected = !self.connected
                 self.status = status
                 self.flags = flags
                 self.incidents = incidents
                 self.events = events
+                self.guardRules = guardRules
                 self.connected = true
                 if wasDisconnected { self.scheduleTimer(1.0) }
                 self.processNewFlags(flags)
                 self.onChange?()
+                // Presented last: runModal() blocks this Task until the user
+                // responds, so the icon/console refresh above isn't held up.
+                let pending = (try? await client.fetchGuardPending()) ?? []
+                self.presentGuardPromptIfNeeded(pending)
             } catch {
                 let wasConnected = self.connected
                 self.connected = false
@@ -91,6 +101,34 @@ public final class AppState: ObservableObject {
             try? await client.setFirewallMode(rule: rule, mode: "block")
             self.fetch()
         }
+    }
+
+    public func revokeGuardRule(agent: String, ruleID: String) {
+        Task {
+            try? await client.deleteGuardRule(agent: agent, ruleID: ruleID)
+            self.fetch()
+        }
+    }
+
+    /// Shows one native prompt for the oldest pending guard decision, deduping
+    /// by id so the 1Hz poll doesn't stack a dialog on top of an open one.
+    private func presentGuardPromptIfNeeded(_ pending: [GuardPending]) {
+        guard promptingID == nil, let p = pending.first else { return }
+        promptingID = p.id
+        let alert = NSAlert()
+        alert.messageText = "Allow \(p.agent) to access this?"
+        alert.informativeText = "\(p.tool) → \(p.path)\nRule: \(p.ruleID)"
+        alert.addButton(withTitle: "Allow Once")
+        alert.addButton(withTitle: "Allow Always")
+        alert.addButton(withTitle: "Deny")
+        let r = alert.runModal()
+        let decision: GuardResolveRequest
+        switch r {
+        case .alertFirstButtonReturn:  decision = .init(id: p.id, verdict: "allow", scope: "once")
+        case .alertSecondButtonReturn: decision = .init(id: p.id, verdict: "allow", scope: "always")
+        default:                       decision = .init(id: p.id, verdict: "deny", scope: "always")
+        }
+        Task { try? await client.resolveGuard(decision); self.promptingID = nil; self.fetch() }
     }
 
     public func openDashboard() {
