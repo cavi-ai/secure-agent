@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Deny agent mutation of the keychain and shell config; route secrets through CaviClaw.
+"""Deny agent mutation of the keychain and shell config; keep secrets out of agent reach.
 
 Shared single copy. Symlinked into ~/.cursor/hooks/ and ~/.claude/hooks/.
 
@@ -7,10 +7,11 @@ Speaks both hook protocols at once by emitting every key each runtime reads:
 Claude Code reads `decision`/`reason`, Cursor reads `permission`/`user_message`/
 `agent_message`, and each ignores the other's keys.
 
-Policy (the operator, 2026-08-12):
+Policy:
   - Agents get no `security` access at all. Apps reach their own Safe Storage
     natively, not through a shell, so no carve-out is needed.
-  - Every secret an agent needs lives in the CaviClaw 1Password vault.
+  - Credentials an agent needs are proposed to the user, never read directly
+    by the agent.
   - Shell rc files are read-only to agents.
 
 Design rule that the hook this replaces got wrong: match on argv[0], never on a
@@ -18,8 +19,9 @@ substring. `gh api /repos/x/y/security` is not a keychain command. Default is
 allow; a denial requires a positive match on a parsed command word.
 
 Known limit, deliberate: only the top-level command is inspected. A repo script
-that calls `security` internally (code signing, ios-app-store-connect-*) is not
-gated — the operator's own scripts are trusted, ad-hoc agent commands are not.
+that calls `security` internally (code signing, app-store-connect uploads, etc.)
+is not gated — the user's own trusted scripts are out of scope for this generic
+check, only ad-hoc agent commands are.
 """
 
 from __future__ import annotations
@@ -34,7 +36,6 @@ import sys
 from datetime import datetime, timezone
 
 HOME = os.path.expanduser("~")
-ALLOWLIST = os.path.join(HOME, ".agents", "secrets-allowlist.json")
 AUDIT_LOG = os.path.join(HOME, ".agents", "logs", "secret-guard.jsonl")
 
 # --- protected surfaces -----------------------------------------------------
@@ -85,12 +86,6 @@ WRITE_VERB_RE = re.compile(
     )
     """
 )
-
-OP_MUTATION_VERBS = {
-    "create", "edit", "delete", "add", "forget", "revoke", "confirm", "suspend",
-    "reactivate", "grant", "provision",
-}
-OP_SAFE_SUBCOMMANDS = {"--version", "-v", "whoami", "signin", "signout", "--help", "-h", "help"}
 
 SEGMENT_SPLIT = re.compile(r"\|\||&&|[|;\n]|&(?!&)")
 SUBSHELL_RE = re.compile(r"\$\(([^()]*)\)|`([^`]*)`")
@@ -149,9 +144,8 @@ def deny(rule: str, user_msg: str, agent_msg: str, command: str, event: str) -> 
 def norm(token: str) -> str:
     t = token.strip().strip("'\"")
     t = t.replace("$HOME", HOME).replace("${HOME}", HOME)
-    # Expand any other env var the hook inherited, so
-    # `$OPENCLAW_STATE_DIR/credentials/...` classifies as the path it names.
-    # Unset vars are left literal by expandvars; is_secret_file catches those.
+    # Expand any other env var the hook inherited, so a reference like
+    # `$XDG_CONFIG_HOME/gcloud/...` classifies as the path it names.
     t = os.path.expandvars(t)
     if t.startswith("~"):
         t = HOME + t[1:]
@@ -170,18 +164,20 @@ def is_keychain_path(token: str) -> bool:
     return any(m in p for m in KEYCHAIN_MARKERS)
 
 
+# Default credential paths, beyond SSH private keys, that a bare `cat`/`base64`/
+# etc. must never be allowed to print. Mirrors DEFAULT_GUARD_RULES' cloud-creds.
+CREDENTIALS_GLOBS = ("~/.aws/credentials", "~/.config/gcloud/**")
+
+
 def is_secret_file(token: str) -> bool:
     p = norm(token)
-    state = os.environ.get("OPENCLAW_STATE_DIR", "")
-    if state and p.startswith(os.path.join(norm(state), "credentials")):
+    if PRIVATE_KEY_RE.search(p):
         return True
-    if "/.openclaw/credentials/" in p:
-        return True
-    # The var may be unset in the hook's own env while set in the agent's shell,
-    # leaving the reference literal. Treat the literal as the path it names.
-    if "OPENCLAW_STATE_DIR/credentials" in token.replace("{", "").replace("}", ""):
-        return True
-    return bool(PRIVATE_KEY_RE.search(p))
+    for g in CREDENTIALS_GLOBS:
+        gg = norm(g)
+        if fnmatch.fnmatch(p, gg) or fnmatch.fnmatch(p, gg + "/*"):
+            return True
+    return False
 
 
 # --- directory guard: config-driven mode classification ---------------------
@@ -333,80 +329,6 @@ def cmd_name(argv: list) -> str:
     return os.path.basename(argv[0]) if argv else ""
 
 
-# --- op / 1Password ---------------------------------------------------------
-
-def load_allowlist() -> dict:
-    try:
-        with open(ALLOWLIST, encoding="utf-8") as fh:
-            data = json.load(fh)
-    except Exception:
-        return {"vaults": [], "items": []}
-    return {
-        "vaults": [str(v) for v in data.get("vaults", [])],
-        "items": [str(i) for i in data.get("items", [])],
-    }
-
-
-def op_target_vault(argv: list):
-    """Return (vault, item) named by an op invocation, or (None, None)."""
-    vault = item = None
-    for i, a in enumerate(argv):
-        if a.startswith("op://"):
-            parts = a[len("op://"):].split("/")
-            if parts:
-                vault = parts[0]
-            if len(parts) > 1:
-                item = parts[1]
-        elif a == "--vault" and i + 1 < len(argv):
-            vault = argv[i + 1]
-        elif a.startswith("--vault="):
-            vault = a.split("=", 1)[1]
-    return vault, item
-
-
-def check_op(argv: list, command: str, event: str) -> None:
-    sub = [a for a in argv[1:] if not a.startswith("-")]
-    verb = sub[0] if sub else ""
-    if not sub or argv[1] in OP_SAFE_SUBCOMMANDS or verb in OP_SAFE_SUBCOMMANDS:
-        return
-    if any(v in OP_MUTATION_VERBS for v in sub[:3]):
-        deny(
-            "op-mutation",
-            "Blocked: an agent tried to modify 1Password, not just read it.",
-            "DENIED: agents may read from the allowlisted vault and nothing else. "
-            "Creating, editing, deleting or granting in 1Password is the operator's alone. "
-            "Say what you need and why; do not retry with another client.",
-            command, event,
-        )
-
-    allowed = load_allowlist()
-    vault, item = op_target_vault(argv)
-    if vault is None:
-        deny(
-            "op-unscoped",
-            "Blocked: an agent ran an unscoped 1Password command.",
-            "DENIED: name the vault explicitly — `op read op://<vault>/<item>/<field>` or "
-            f"`--vault <name>`. Allowed vaults: {allowed['vaults'] or 'none configured'}.",
-            command, event,
-        )
-    if vault not in allowed["vaults"]:
-        deny(
-            "op-vault-not-allowed",
-            f"Blocked: an agent tried to read 1Password vault '{vault}'.",
-            f"DENIED: vault '{vault}' is not agent-readable. Allowed: "
-            f"{allowed['vaults'] or 'none configured'}. Ask the operator rather than switching vaults.",
-            command, event,
-        )
-    if allowed["items"] and item and item not in allowed["items"]:
-        deny(
-            "op-item-not-allowed",
-            f"Blocked: an agent tried to read 1Password item '{item}'.",
-            f"DENIED: item '{item}' is not on the allowlist in {ALLOWLIST}. "
-            "Ask the operator to add it; do not read a different item instead.",
-            command, event,
-        )
-
-
 # --- main -------------------------------------------------------------------
 
 def check_command(command: str, event: str) -> list:
@@ -414,9 +336,8 @@ def check_command(command: str, event: str) -> list:
 
     Denials exit inside this function. What survives to the return value is the
     permitted traffic that still touched a guarded surface — reading an rc file,
-    listing the keychain dir, an allowed `op read`. Logging only denials would
-    make the log answer "what did I stop" when the question after an incident is
-    "who went near this".
+    listing the keychain dir. Logging only denials would make the log answer
+    "what did I stop" when the question after an incident is "who went near this".
     """
     touched = []
     for argv, raw in segments(command):
@@ -427,10 +348,9 @@ def check_command(command: str, event: str) -> list:
             deny(
                 "keychain-security-cli",
                 "Blocked: an agent tried to run the macOS `security` tool.",
-                "DENIED: agents have no keychain access, read or write. Every secret you "
-                "need is in the CaviClaw 1Password vault — use `op read op://CaviClaw/...`. "
-                "If it is not there, say so and stop; do not reach for the keychain, "
-                "another client, or a subagent.",
+                "DENIED: agents have no keychain access, read or write. If you need a "
+                "credential, say what you need and why; propose it to the user instead "
+                "of reaching for the keychain, another client, or a subagent.",
                 command, event,
             )
 
@@ -443,7 +363,7 @@ def check_command(command: str, event: str) -> list:
                         "Blocked: an agent tried to touch a keychain file directly.",
                         "DENIED: keychain files are off limits — copying, moving, "
                         "chmod/chflags, deleting or reading them. This is the exact class of "
-                        "action that broke the keyring on 2026-08-12.",
+                        "action that can corrupt or lock a user out of their keyring.",
                         command, event,
                     )
 
@@ -464,7 +384,7 @@ def check_command(command: str, event: str) -> list:
                 "shell-rc-unlock",
                 f"Blocked: an agent tried to clear the immutable flag on a shell rc file.",
                 "DENIED: clearing uchg/schg on shell config is how an agent gets write access "
-                "to it. Setting the flag is allowed; removing it is the operator's alone.",
+                "to it. Setting the flag is allowed; removing it is the user's call alone.",
                 command, event,
             )
 
@@ -475,8 +395,8 @@ def check_command(command: str, event: str) -> list:
                         "shell-rc-mutation",
                         f"Blocked: an agent tried to modify {norm(tok)}.",
                         "DENIED: shell config is read-only to agents. `.zshenv` derives every "
-                        "root and PATH for the whole fleet; a silent edit there breaks every "
-                        "agent at once. Read it, propose the diff to the operator, let him apply it.",
+                        "root and PATH for the whole shell; a silent edit there can break every "
+                        "session at once. Read it, propose the diff to the user, let them apply it.",
                         command, event,
                     )
 
@@ -487,7 +407,7 @@ def check_command(command: str, event: str) -> list:
                 deny(
                     "shell-rc-redirect",
                     f"Blocked: an agent tried to redirect output into {norm(tgt)}.",
-                    "DENIED: shell config is read-only to agents. Propose the diff to the operator.",
+                    "DENIED: shell config is read-only to agents. Propose the diff to the user.",
                     command, event,
                 )
             if is_keychain_path(tgt):
@@ -520,7 +440,7 @@ def check_command(command: str, event: str) -> list:
                         "Blocked: an agent tried to write protected config through an interpreter.",
                         "DENIED: routing a write to shell config, the keychain or a credential "
                         "file through python/perl/node does not make it allowed. Propose the "
-                        "diff to the operator.",
+                        "diff to the user.",
                         command, event,
                     )
 
@@ -533,16 +453,11 @@ def check_command(command: str, event: str) -> list:
                         "Blocked: an agent tried to print a credential file.",
                         "DENIED: credential files reach a process through `source`, never "
                         "through stdout. Printing one puts the secret in a transcript. "
-                        "Use `op read op://CaviClaw/...` for the value you actually need.",
+                        "Ask the user for the value you actually need instead.",
                         command, event,
                     )
 
-        # 7. 1Password scope.
-        if name == "op":
-            check_op(argv, command, event)
-            touched.append("op-allowed")
-
-        # 8. Permitted traffic that still went near a guarded surface.
+        # 7. Permitted traffic that still went near a guarded surface.
         for tok in argv[1:]:
             if is_shell_rc(tok):
                 touched.append("shell-rc-read")
@@ -560,7 +475,7 @@ def check_file_write(path: str, command: str, event: str) -> None:
             "shell-rc-write-tool",
             f"Blocked: an agent tried to edit {norm(path)}.",
             "DENIED: shell config is read-only to agents. `.zshenv` derives every root and "
-            "PATH for the fleet. Propose the diff to the operator instead of writing it.",
+            "PATH for the shell. Propose the diff to the user instead of writing it.",
             command, event,
         )
     if is_keychain_path(path) or is_secret_file(path):
