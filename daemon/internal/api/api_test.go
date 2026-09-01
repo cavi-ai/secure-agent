@@ -2,10 +2,12 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,6 +17,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/config"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 	"github.com/cavi-ai/secure-agent/daemon/internal/firewall"
+	"github.com/cavi-ai/secure-agent/daemon/internal/guard"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
@@ -304,5 +307,25 @@ func TestFirewallSourcesAddRemoveAndAudit(t *testing.T) {
 	}
 	if len(srcStore.Load()) != 0 {
 		t.Fatalf("user source not removed: %v", srcStore.Load())
+	}
+}
+
+func TestGuardDecisionCachedRule(t *testing.T) {
+	st := testStore(t)
+	st.PutGuardRule(store.GuardRule{Agent: "claude", RuleID: "cloud-creds", Decision: "allow", Source: "onboarding"})
+
+	a := New("", st, &fakeKiller{}, func() Status { return Status{Running: true} })
+	a.SetGuard(guard.NewBroker(time.Second))
+
+	body := `{"agent":"claude","tool":"Read","path":"/Users/x/.aws/credentials","rule_id":"cloud-creds"}`
+	rr := httptest.NewRecorder()
+	a.handleGuardDecision(rr, httptest.NewRequest("POST", "/guard/decision", strings.NewReader(body)))
+	if rr.Code != 200 {
+		t.Fatalf("code=%d body=%s", rr.Code, rr.Body.String())
+	}
+	var d guard.Decision
+	json.Unmarshal(rr.Body.Bytes(), &d)
+	if d.Verdict != "allow" {
+		t.Fatalf("cached decision = %+v, want allow", d)
 	}
 }
