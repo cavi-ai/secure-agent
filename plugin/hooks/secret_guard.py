@@ -24,6 +24,7 @@ gated — Franco's own scripts are trusted, ad-hoc agent commands are not.
 
 from __future__ import annotations
 
+import fnmatch
 import json
 import os
 import re
@@ -180,6 +181,42 @@ def is_secret_file(token: str) -> bool:
     if "OPENCLAW_STATE_DIR/credentials" in token.replace("{", "").replace("}", ""):
         return True
     return bool(PRIVATE_KEY_RE.search(p))
+
+
+# --- directory guard: config-driven mode classification ---------------------
+
+# Shipped default guard rules. Mirrors daemon defaults.yaml directory_guard.
+# All ship monitor; the mode-override file is the user's opt-in to prompt/deny.
+DEFAULT_GUARD_RULES = [
+    {"id": "ssh-keys",    "paths": ["~/.ssh/id_*", "~/.ssh/*_rsa", "~/.ssh/*_ed25519"], "mode": "monitor"},
+    {"id": "cloud-creds", "paths": ["~/.aws/credentials", "~/.config/gcloud/**", "~/.azure/**"], "mode": "monitor"},
+    {"id": "keychain",    "paths": ["**/*.keychain-db", "**/login.keychain*"], "mode": "monitor"},
+    {"id": "env-files",   "paths": ["**/.env", "**/.env.*"], "mode": "monitor"},
+    {"id": "shell-rc",    "paths": ["~/.zshrc", "~/.zshenv", "~/.bashrc", "~/.profile"], "mode": "monitor"},
+]
+
+
+def _mode_overrides() -> dict:
+    path = os.environ.get("SECURE_AGENT_GUARD_MODES") or os.path.join(HOME, ".config", "secure-agent", "guard-modes.json")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+        return {str(k): str(v) for k, v in data.items()}
+    except Exception:
+        return {}
+
+
+def match_rule(path: str, rules=DEFAULT_GUARD_RULES):
+    """Return (rule_id, effective_mode) for the first rule whose globs match, else (None, None).
+    Effective mode = override file value if present, else the rule's shipped mode."""
+    p = norm(path)
+    overrides = _mode_overrides()
+    for rule in rules:
+        for g in rule["paths"]:
+            gg = norm(g)
+            if fnmatch.fnmatch(p, gg) or fnmatch.fnmatch(p, gg + "/*"):
+                return rule["id"], overrides.get(rule["id"], rule["mode"])
+    return None, None
 
 
 # --- command parsing --------------------------------------------------------
@@ -481,6 +518,22 @@ def main() -> int:
         or data.get("path")
         or ""
     )
+
+    if file_path and tool in {"Read", "Grep", "Glob", "Write", "Edit", "MultiEdit", "NotebookEdit"}:
+        rule_id, mode = match_rule(file_path)
+        if mode == "deny":
+            deny_msg = (f"DENIED by Directory Guard ({rule_id}). Propose the change to the user, "
+                        "or ask them to add an allow rule, then retry.")
+            deny(
+                "guard-deny:" + rule_id,
+                f"Blocked: access to {norm(file_path)} is denied by Directory Guard ({rule_id}).",
+                deny_msg,
+                command or file_path, event,
+            )
+        elif mode == "monitor":
+            audit("allow", "guard-monitor:" + rule_id, command or file_path, event)
+        elif mode == "prompt":
+            resolve_prompt(runtime(), tool, file_path, rule_id, command or file_path, event)
 
     touched = check_command(command, event) if command else []
     if file_path and tool in {"Write", "Edit", "MultiEdit", "NotebookEdit"}:
