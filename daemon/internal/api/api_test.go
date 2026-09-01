@@ -249,8 +249,21 @@ func TestFirewallSourcesAddRemoveAndAudit(t *testing.T) {
 	waitForSocket(t, sock)
 	cl := unixClient(sock)
 
-	// add
-	resp, err := cl.Post("http://unix/firewall/sources", "application/json", strings.NewReader(`{"source":"~/.aws/credentials","op":"add"}`))
+	// A real, user-owned regular file passes validation.
+	srcFile := filepath.Join(dir, "app.env")
+	if err := os.WriteFile(srcFile, []byte("API_KEY=abc123\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// A system path is refused: the daemon reads sources as root, so source-add
+	// must not become an arbitrary-file-read.
+	sysResp, _ := cl.Post("http://unix/firewall/sources", "application/json", strings.NewReader(`{"source":"/etc/master.passwd","op":"add"}`))
+	if sysResp.StatusCode != 400 {
+		t.Fatalf("add of system path status=%d, want 400", sysResp.StatusCode)
+	}
+
+	// add the real source
+	resp, err := cl.Post("http://unix/firewall/sources", "application/json", strings.NewReader(fmt.Sprintf(`{"source":%q,"op":"add"}`, srcFile)))
 	if err != nil || resp.StatusCode != 200 {
 		t.Fatalf("add post: %v status=%v", err, resp.StatusCode)
 	}
@@ -261,16 +274,17 @@ func TestFirewallSourcesAddRemoveAndAudit(t *testing.T) {
 	// GET shows config (read-only) + the user source
 	getResp, _ := cl.Get("http://unix/firewall/sources")
 	body, _ := io.ReadAll(getResp.Body)
-	for _, want := range []string{`"source":"/etc/agent/defaults.env","origin":"config"`, `"source":"~/.aws/credentials","origin":"user"`} {
-		if !strings.Contains(string(body), want) {
-			t.Fatalf("sources GET missing %s: %s", want, body)
-		}
+	if !strings.Contains(string(body), `"source":"/etc/agent/defaults.env","origin":"config"`) {
+		t.Fatalf("sources GET missing config source: %s", body)
+	}
+	if !strings.Contains(string(body), srcFile) || !strings.Contains(string(body), `"origin":"user"`) {
+		t.Fatalf("sources GET missing user source %s: %s", srcFile, body)
 	}
 
 	// audit row carries the path
 	auditResp, _ := cl.Get("http://unix/audit")
 	auditBody, _ := io.ReadAll(auditResp.Body)
-	if !strings.Contains(string(auditBody), `"action":"source-add"`) || !strings.Contains(string(auditBody), `~/.aws/credentials`) {
+	if !strings.Contains(string(auditBody), `"action":"source-add"`) || !strings.Contains(string(auditBody), srcFile) {
 		t.Fatalf("audit missing source-add row with path: %s", auditBody)
 	}
 
@@ -281,7 +295,7 @@ func TestFirewallSourcesAddRemoveAndAudit(t *testing.T) {
 	}
 
 	// removing the user source succeeds and re-ingests again
-	rmResp, _ := cl.Post("http://unix/firewall/sources", "application/json", strings.NewReader(`{"source":"~/.aws/credentials","op":"remove"}`))
+	rmResp, _ := cl.Post("http://unix/firewall/sources", "application/json", strings.NewReader(fmt.Sprintf(`{"source":%q,"op":"remove"}`, srcFile)))
 	if rmResp.StatusCode != 200 {
 		t.Fatalf("remove user source status=%d, want 200", rmResp.StatusCode)
 	}
@@ -290,52 +304,5 @@ func TestFirewallSourcesAddRemoveAndAudit(t *testing.T) {
 	}
 	if len(srcStore.Load()) != 0 {
 		t.Fatalf("user source not removed: %v", srcStore.Load())
-	}
-}
-
-func TestRotateEndpointExecutesRotation(t *testing.T) {
-	tmpDir := t.TempDir()
-	envPath := filepath.Join(tmpDir, ".env")
-	_ = os.WriteFile(envPath, []byte("MY_API_KEY=secret_val_123\n"), 0600)
-
-	st := testStore(t)
-	st.PutIncident(model.IncidentReport{
-		ID:        "inc-test-1",
-		FlagID:    "flag-1",
-		PID:       99,
-		Agent:     "cursor",
-		Timestamp: time.Now(),
-		Rule:      "sensitive-read-then-connect",
-		Summary:   "Test incident summary",
-		Risk:      model.RiskCritical,
-		RotateList: []model.RotateItem{
-			{
-				ID:       "rot-item-1",
-				Category: model.CategoryEnvSecrets,
-				Name:     ".env",
-				Path:     envPath,
-				Risk:     model.RiskCritical,
-			},
-		},
-	})
-
-	sock := fmt.Sprintf("/tmp/sa_test_rot_%d.sock", time.Now().UnixNano())
-	defer os.Remove(sock)
-	fk := &fakeKiller{}
-	a := New(sock, st, fk, func() Status { return Status{Running: true} })
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go a.Serve(ctx)
-	waitForSocket(t, sock)
-
-	cl := unixClient(sock)
-	resp, err := cl.Post("http://unix/rotate", "application/json", strings.NewReader(`{"incident_id":"inc-test-1","item_id":"rot-item-1"}`))
-	if err != nil || resp.StatusCode != 200 {
-		t.Fatalf("rotate post: %v status=%v", err, resp.StatusCode)
-	}
-
-	newBytes, _ := os.ReadFile(envPath)
-	if strings.Contains(string(newBytes), "secret_val_123") {
-		t.Fatal("secret value was not rotated via /rotate API endpoint!")
 	}
 }

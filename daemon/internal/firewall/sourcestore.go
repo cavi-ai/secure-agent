@@ -2,6 +2,7 @@ package firewall
 
 import (
 	"encoding/json"
+	"log"
 	"os"
 	"path/filepath"
 	"sync"
@@ -36,7 +37,8 @@ func (s *SourceStore) loadLocked() []string {
 		return nil
 	}
 	var out []string
-	if json.Unmarshal(data, &out) != nil {
+	if err := json.Unmarshal(data, &out); err != nil {
+		log.Printf("firewall: WARNING: ingest-source file %s is corrupt (%v); user-added sources are NOT loaded until it is fixed", s.path, err)
 		return nil
 	}
 	return out
