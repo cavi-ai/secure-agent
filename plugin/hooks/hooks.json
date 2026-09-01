@@ -13,7 +13,7 @@
     },
     {
       "matcher": {
-        "tool_name": "Write|Edit|MultiEdit|NotebookEdit"
+        "tool_name": "Read|Grep|Glob|Write|Edit|MultiEdit|NotebookEdit"
       },
       "hooks": [
         {
