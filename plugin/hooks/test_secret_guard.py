@@ -122,6 +122,7 @@ DENY = [
     ("chmod 777 /etc/paths", "shell-rc-mutation"),
     # secret files
     ("cat ~/.ssh/id_ed25519", "secret-file-read"),
+    ("cat ~/.aws/credentials", "secret-file-read"),
     # interpreter bypass
     (f"python3 -c \"open('{HOME}/.zshrc','a').write('x')\"", "interpreter-write-bypass"),
     ("node -e \"require('fs').appendFileSync(process.env.HOME+'/.zshenv','x')\"", "interpreter-write-bypass"),
@@ -211,10 +212,20 @@ def test_prompt_daemon_allows():
     assert out.get("permission") == "allow", out
 
 
+def test_prompt_daemon_malformed_response_denies():
+    # A daemon that returns valid JSON that is NOT an object (a bare string here,
+    # not {"verdict": ...}) must never be treated as an allow. The guard fails
+    # closed on anything it cannot positively parse as an allow decision.
+    with guard_stub("allow") as sock:
+        out = run(read(os.path.expanduser("~/.aws/credentials")), env=_prompt_env(sock))
+    assert out.get("permission") == "deny", out
+
+
 EXTRA_TESTS += [
     test_prompt_daemon_down_claude_asks,
     test_prompt_daemon_down_cursor_denies,
     test_prompt_daemon_allows,
+    test_prompt_daemon_malformed_response_denies,
 ]
 
 
