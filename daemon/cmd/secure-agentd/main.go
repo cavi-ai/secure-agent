@@ -66,10 +66,14 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Drain bus and correlate/persist
+	// Drain bus and correlate/persist. drainDone closes once every delivered event
+	// has been persisted, so shutdown can wait for it instead of dropping the final,
+	// most-relevant events/flags/incident around a kill or quit.
 	sub := b.Subscribe()
 	analyzer := intel.NewAnalyzer()
+	drainDone := make(chan struct{})
 	go func() {
+		defer close(drainDone)
 		for e := range sub {
 			st.PutEvent(e)
 			flags := correlator.Observe(e)
@@ -172,6 +176,11 @@ func main() {
 		}
 	}
 
+	// Supervisor with a shared health registry so /status reports each collector's
+	// real state (running / restarting / abandoned) instead of a blanket "running".
+	supReg := supervise.NewRegistry()
+	sup := supervise.New(supReg)
+
 	startTime := time.Now()
 	statusFn := func() api.Status {
 		proxyActive := proxyServer != nil
@@ -189,6 +198,7 @@ func main() {
 			ProxyPort:         proxyPort,
 			UninspectedEgress: correlator.UninspectedEgressCount(),
 			FirewallStats:     firewallStats(fwEngine),
+			Collectors:        supReg.Snapshot(),
 		}
 	}
 
@@ -222,22 +232,22 @@ func main() {
 
 	// Supervised collectors
 	if proxyServer != nil {
-		go supervise.Run(ctx, "proxyserver", func(c context.Context) error {
+		go sup.Run(ctx, "proxyserver", func(c context.Context) error {
 			return proxyServer.Serve(c)
 		})
 	}
 
-	go supervise.Run(ctx, "eslogger", func(c context.Context) error {
+	go sup.Run(ctx, "eslogger", func(c context.Context) error {
 		es := collect.NewESLogger(b)
 		return es.Run(c)
 	})
 
-	go supervise.Run(ctx, "netsampler", func(c context.Context) error {
+	go sup.Run(ctx, "netsampler", func(c context.Context) error {
 		ns := collect.NewNetSampler(b, tagger, cfg.NetSampleInterval, nil)
 		return ns.Run(c)
 	})
 
-	go supervise.Run(ctx, "transcript", func(c context.Context) error {
+	go sup.Run(ctx, "transcript", func(c context.Context) error {
 		ts := collect.NewTranscriptScanner(b, tailTargets)
 		return ts.Run(c)
 	})
@@ -275,8 +285,13 @@ func main() {
 	}
 
 	log.Println("secure-agentd shutting down...")
-	cancel()
-	time.Sleep(200 * time.Millisecond)
+	cancel()  // stop collectors, API, and the tagger loop
+	b.Close() // close the subscriber channel so the drain goroutine finishes buffered events
+	select {
+	case <-drainDone: // all delivered events persisted
+	case <-time.After(2 * time.Second): // bounded: never hang shutdown on a stuck write
+		log.Println("secure-agentd: drain timed out; some buffered events may be unpersisted")
+	}
 }
 
 func firewallStats(e *firewall.Engine) map[string]firewall.RuleStat {

@@ -2,6 +2,7 @@ package firewall
 
 import (
 	"encoding/json"
+	"log"
 	"os"
 	"path/filepath"
 	"sync"
@@ -32,7 +33,8 @@ func (s *FingerprintStore) Load() []config.Fingerprint {
 		return nil
 	}
 	var out []config.Fingerprint
-	if json.Unmarshal(data, &out) != nil {
+	if err := json.Unmarshal(data, &out); err != nil {
+		log.Printf("firewall: WARNING: fingerprint file %s is corrupt (%v); persisted secret fingerprints are NOT loaded until it is fixed", s.path, err)
 		return nil
 	}
 	return out

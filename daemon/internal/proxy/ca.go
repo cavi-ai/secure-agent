@@ -8,6 +8,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"fmt"
+	"log"
 	"math/big"
 	"net"
 	"os"
@@ -16,13 +17,22 @@ import (
 	"time"
 )
 
+// maxCertCacheEntries bounds the leaf-cert cache so a client connecting to
+// unbounded distinct hosts can't grow it without limit.
+const maxCertCacheEntries = 1024
+
+type cacheEntry struct {
+	cert     *tls.Certificate
+	notAfter time.Time
+}
+
 type CAManager struct {
-	caCert *x509.Certificate
-	caKey  *rsa.PrivateKey
+	caCert  *x509.Certificate
+	caKey   *rsa.PrivateKey
 	tlsCert tls.Certificate
 
 	mu        sync.Mutex
-	certCache map[string]*tls.Certificate
+	certCache map[string]*cacheEntry
 }
 
 func NewCAManager(certPath, keyPath string) (*CAManager, error) {
@@ -46,7 +56,7 @@ func NewCAManager(certPath, keyPath string) (*CAManager, error) {
 		caCert:    caCert,
 		caKey:     caKey,
 		tlsCert:   tlsCert,
-		certCache: make(map[string]*tls.Certificate),
+		certCache: make(map[string]*cacheEntry),
 	}, nil
 }
 
@@ -59,13 +69,23 @@ func loadOrCreateCA(certPath, keyPath string) (*x509.Certificate, *rsa.PrivateKe
 	keyBytes, keyErr := os.ReadFile(keyPath)
 
 	if certErr == nil && keyErr == nil {
-		certBlock, _ := pem.Decode(certBytes)
-		keyBlock, _ := pem.Decode(keyBytes)
-		if certBlock != nil && keyBlock != nil {
-			parsedCert, err1 := x509.ParseCertificate(certBlock.Bytes)
-			parsedKey, err2 := x509.ParsePKCS1PrivateKey(keyBlock.Bytes)
-			if err1 == nil && err2 == nil {
-				return parsedCert, parsedKey, nil
+		// Refuse to load a CA key that is group/other-accessible: any local user
+		// could read the trust anchor and MITM every agent that trusts this CA.
+		// A too-permissive key is already compromised, so regenerate a fresh one.
+		secure := true
+		if fi, err := os.Stat(keyPath); err == nil && fi.Mode().Perm()&0o077 != 0 {
+			log.Printf("proxy: WARNING: CA key %s has insecure permissions %#o (group/other-accessible); regenerating a fresh CA", keyPath, fi.Mode().Perm())
+			secure = false
+		}
+		if secure {
+			certBlock, _ := pem.Decode(certBytes)
+			keyBlock, _ := pem.Decode(keyBytes)
+			if certBlock != nil && keyBlock != nil {
+				parsedCert, err1 := x509.ParseCertificate(certBlock.Bytes)
+				parsedKey, err2 := x509.ParsePKCS1PrivateKey(keyBlock.Bytes)
+				if err1 == nil && err2 == nil {
+					return parsedCert, parsedKey, nil
+				}
 			}
 		}
 	}
@@ -100,12 +120,18 @@ func loadOrCreateCA(certPath, keyPath string) (*x509.Certificate, *rsa.PrivateKe
 		return nil, nil, err
 	}
 
-	// Persist
+	// Persist. The key must land at 0600; a write failure is fatal to this call
+	// so the daemon never silently runs with a non-persisted CA that regenerates
+	// on every start (invalidating the CA path already exported to agents).
 	certPem := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDer})
 	keyPem := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
 
-	_ = os.WriteFile(certPath, certPem, 0644)
-	_ = os.WriteFile(keyPath, keyPem, 0600)
+	if err := os.WriteFile(keyPath, keyPem, 0o600); err != nil {
+		return nil, nil, fmt.Errorf("failed to persist CA key: %w", err)
+	}
+	if err := os.WriteFile(certPath, certPem, 0o644); err != nil {
+		return nil, nil, fmt.Errorf("failed to persist CA cert: %w", err)
+	}
 
 	return parsedCert, key, nil
 }
@@ -114,18 +140,22 @@ func (cm *CAManager) GetCertificateForHost(host string) (*tls.Certificate, error
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
 
-	if cert, ok := cm.certCache[host]; ok {
-		return cert, nil
+	// Serve a cached leaf only while it is comfortably before expiry, so a
+	// long-running daemon never hands out an expired cert.
+	if e, ok := cm.certCache[host]; ok && time.Now().Before(e.notAfter.Add(-24*time.Hour)) {
+		return e.cert, nil
 	}
 
+	notBefore := time.Now().Add(-1 * time.Hour)
+	notAfter := time.Now().Add(365 * 24 * time.Hour)
 	serialNumber, _ := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
 	template := &x509.Certificate{
 		SerialNumber: serialNumber,
 		Subject: pkix.Name{
 			CommonName: host,
 		},
-		NotBefore:   time.Now().Add(-1 * time.Hour),
-		NotAfter:    time.Now().Add(365 * 24 * time.Hour),
+		NotBefore:   notBefore,
+		NotAfter:    notAfter,
 		KeyUsage:    x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
 		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 	}
@@ -141,11 +171,16 @@ func (cm *CAManager) GetCertificateForHost(host string) (*tls.Certificate, error
 		return nil, err
 	}
 
-	tlsCert := tls.Certificate{
+	tlsCert := &tls.Certificate{
 		Certificate: [][]byte{certDer, cm.caCert.Raw},
 		PrivateKey:  cm.caKey,
 	}
 
-	cm.certCache[host] = &tlsCert
-	return &tlsCert, nil
+	// Bound the cache: on overflow, drop it wholesale (simple, correct; the certs
+	// are cheap to re-mint) rather than growing without limit.
+	if len(cm.certCache) >= maxCertCacheEntries {
+		cm.certCache = make(map[string]*cacheEntry)
+	}
+	cm.certCache[host] = &cacheEntry{cert: tlsCert, notAfter: notAfter}
+	return tlsCert, nil
 }
