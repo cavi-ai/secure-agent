@@ -192,6 +192,24 @@ See [docs/FIREWALL_THREAT_MODEL.md](docs/FIREWALL_THREAT_MODEL.md) for exactly w
 
 ---
 
+## 🔒 Directory Guard
+
+The second pillar: interactive allow/deny for sensitive file access — Little Snitch for agents, instead of for your network.
+
+When an agent tool call touches a guarded path (SSH keys, cloud credentials, the keychain, `.env` files, shell rc files), the hook checks the rule's mode:
+
+| Mode | Behavior |
+|---|---|
+| `monitor` (default) | Logged only. Nothing is blocked, nothing is asked. |
+| `prompt` | The hook holds the tool call while the menu bar raises a native **Allow Once / Allow Always / Deny** prompt. Your answer is remembered per `(agent, rule)` — "Allow Always" is cached, so the same agent hitting the same rule again is resolved instantly with no further prompt. |
+| `deny` | Blocked outright, no prompt. |
+
+**Quiet by default.** Every rule ships `monitor` — nothing is blocked out of the box. The onboarding **"Guard My Secrets"** step is the explicit opt-in that promotes SSH keys, cloud credentials, and the keychain to `prompt`, written to `~/.config/secure-agent/guard-modes.json`.
+
+**Honest coverage.** The `PreToolUse` hook enforces at the tool-call boundary — it can actually block a `prompt`/`deny` rule before the tool runs. The daemon's `eslogger` telemetry observes a broader slice of file activity (including access outside the hook's reach) but is observe-only there: it can log and correlate, not block.
+
+---
+
 ## ⚙️ Configuration
 
 `secure-agent` loads default configuration rules and applies user overlays from `~/.config/secure-agent/config.yaml`.
