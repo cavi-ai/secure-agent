@@ -8,6 +8,7 @@ would have. Every case in DENY is an action that actually damages the machine.
 from __future__ import annotations
 
 import contextlib
+import glob as _glob
 import json
 import os
 import socketserver
@@ -122,12 +123,12 @@ DENY = [
     # secret files
     ("cat ~/.ssh/id_ed25519", "secret-file-read"),
     # interpreter bypass
-    ("python3 -c \"open('/Users/franco/.zshrc','a').write('x')\"", "interpreter-write-bypass"),
+    (f"python3 -c \"open('{HOME}/.zshrc','a').write('x')\"", "interpreter-write-bypass"),
     ("node -e \"require('fs').appendFileSync(process.env.HOME+'/.zshenv','x')\"", "interpreter-write-bypass"),
-    ("perl -e 'open(F,\">>\",\"/Users/franco/.zprofile\"); print F \"x\"'", "interpreter-write-bypass"),
+    (f"perl -e 'open(F,\">>\",\"{HOME}/.zprofile\"); print F \"x\"'", "interpreter-write-bypass"),
     ("osascript -e 'do shell script \"chflags nouchg ~/.zshrc\"'", "interpreter-write-bypass"),
     # real-world casing: KEYCHAIN_MARKERS are lowercase, the path is not
-    ("python3 -c \"open('/Users/franco/Library/Keychains/login.keychain-db','w')\"", "interpreter-write-bypass"),
+    (f"python3 -c \"open('{HOME}/Library/Keychains/login.keychain-db','w')\"", "interpreter-write-bypass"),
 ]
 
 WRITE_DENY = [
@@ -214,6 +215,24 @@ EXTRA_TESTS += [
     test_prompt_daemon_down_claude_asks,
     test_prompt_daemon_down_cursor_denies,
     test_prompt_daemon_allows,
+]
+
+
+# --- de-personalization gate --------------------------------------------------
+
+def test_no_personal_strings_in_shipped_hooks():
+    # "cavi-ai" is the public org and is allowed; personal vault/owner/incident are not.
+    # Tokens are built from split literals so this assertion's own source line
+    # does not itself trip the scan it performs on every *.py file here.
+    banned = ("cavi" + "claw", "fran" + "co", "open" + "claw", "2026-08" + "-12")
+    for f in _glob.glob(os.path.join(os.path.dirname(__file__), "*.py")):
+        src = open(f, encoding="utf-8").read().lower()
+        for token in banned:
+            assert token not in src, f"{os.path.basename(f)} leaks personal token: {token}"
+
+
+EXTRA_TESTS += [
+    test_no_personal_strings_in_shipped_hooks,
 ]
 
 
