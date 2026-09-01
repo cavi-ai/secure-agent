@@ -2,6 +2,7 @@ package firewall
 
 import (
 	"encoding/json"
+	"log"
 	"os"
 	"path/filepath"
 	"sync"
@@ -33,7 +34,13 @@ func (m *ModeStore) loadLocked() map[string]string {
 	if err != nil {
 		return out
 	}
-	_ = json.Unmarshal(data, &out)
+	// A present-but-corrupt file is a security signal, not a silent "no
+	// overrides": every rule promoted to block would revert to monitor. Surface
+	// it loudly instead of quietly disabling enforcement.
+	if err := json.Unmarshal(data, &out); err != nil {
+		log.Printf("firewall: WARNING: mode-override file %s is corrupt (%v); rule block-promotions are NOT applied until it is fixed", m.path, err)
+		return map[string]string{}
+	}
 	return out
 }
 

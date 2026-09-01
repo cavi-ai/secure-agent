@@ -13,10 +13,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cavi-ai/secure-agent/daemon/internal/config"
 	"github.com/cavi-ai/secure-agent/daemon/internal/firewall"
 	"github.com/cavi-ai/secure-agent/daemon/internal/intel"
-	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
+	"github.com/cavi-ai/secure-agent/daemon/internal/supervise"
 	"golang.org/x/sys/unix"
 )
 
@@ -41,6 +42,9 @@ type Status struct {
 	UninspectedEgress int            `json:"uninspected_egress"`
 
 	FirewallStats map[string]firewall.RuleStat `json:"firewall_stats,omitempty"`
+	// Collectors reports each supervised worker's health so a dead or abandoned
+	// collector cannot appear healthy just because the daemon process is up.
+	Collectors []supervise.Health `json:"collectors,omitempty"`
 }
 
 type StatusFunc func() Status
@@ -120,7 +124,6 @@ func (a *API) Serve(ctx context.Context) error {
 	mux.HandleFunc("/events", a.handleEvents)
 	mux.HandleFunc("/incidents", a.handleIncidents)
 	mux.HandleFunc("/audit", a.handleAudit)
-	mux.HandleFunc("/rotate", a.handleRotate)
 	mux.HandleFunc("/fleet", a.handleFleet)
 	mux.HandleFunc("/kill", a.handleKill)
 	mux.HandleFunc("/firewall/mode", a.handleFirewallMode)
@@ -207,6 +210,41 @@ func queryInt(s string, def int) int {
 		return v
 	}
 	return def
+}
+
+// systemDirs are locations a user secret file never legitimately lives; a source
+// under any of them would only turn the root daemon into a system-file reader.
+var systemDirs = []string{
+	"/etc", "/private/etc", "/System", "/Library",
+	"/usr", "/bin", "/sbin", "/var/db", "/private/var/db",
+}
+
+// validateSourcePath confines a registered ingest source to a plausible user
+// secret file: an absolute regular file, its real path (symlinks resolved) not
+// inside a system store. The daemon reads the source as root, so this is the
+// gate that keeps source-add from becoming an arbitrary-file-read.
+func validateSourcePath(raw string) error {
+	p := config.ExpandPath(strings.TrimSpace(raw))
+	if !filepath.IsAbs(p) {
+		return fmt.Errorf("path must be absolute or ~-relative")
+	}
+	resolved := filepath.Clean(p)
+	if r, err := filepath.EvalSymlinks(p); err == nil {
+		resolved = filepath.Clean(r)
+	}
+	for _, deny := range systemDirs {
+		if resolved == deny || strings.HasPrefix(resolved, deny+"/") {
+			return fmt.Errorf("refusing to ingest a system path: %s", resolved)
+		}
+	}
+	fi, err := os.Stat(resolved)
+	if err != nil {
+		return fmt.Errorf("not readable: %v", err)
+	}
+	if !fi.Mode().IsRegular() {
+		return fmt.Errorf("must be a regular file")
+	}
+	return nil
 }
 
 func (a *API) handleIncidents(w http.ResponseWriter, r *http.Request) {
@@ -412,6 +450,13 @@ func (a *API) handleFirewallSources(w http.ResponseWriter, r *http.Request) {
 
 		switch req.Op {
 		case "add":
+			// The daemon runs as root and reads whatever source is registered, so
+			// an unvalidated path is an arbitrary-file-read primitive. Confine adds
+			// to plausible user secret files: a regular file, not a system store.
+			if err := validateSourcePath(req.Source); err != nil {
+				http.Error(w, fmt.Sprintf("invalid source: %v", err), http.StatusBadRequest)
+				return
+			}
 			if _, err := a.fwSources.Add(req.Source); err != nil {
 				http.Error(w, fmt.Sprintf("persist failed: %v", err), http.StatusInternalServerError)
 				return
@@ -448,66 +493,4 @@ func (a *API) handleFirewallSources(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
-}
-
-type rotateRequest struct {
-	IncidentID string `json:"incident_id"`
-	ItemID     string `json:"item_id"`
-}
-
-type rotateResponse struct {
-	Success bool   `json:"success"`
-	Message string `json:"message"`
-	ItemID  string `json:"item_id"`
-}
-
-func (a *API) handleRotate(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	var req rotateRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.IncidentID == "" || req.ItemID == "" {
-		http.Error(w, "Invalid payload: incident_id and item_id required", http.StatusBadRequest)
-		return
-	}
-
-	inc, err := a.store.GetIncident(req.IncidentID)
-	if err != nil || inc == nil {
-		http.Error(w, "Incident not found", http.StatusNotFound)
-		return
-	}
-
-	var targetItem *model.RotateItem
-	for _, item := range inc.RotateList {
-		if item.ID == req.ItemID {
-			targetItem = &item
-			break
-		}
-	}
-
-	if targetItem == nil {
-		http.Error(w, "Rotate item not found in incident", http.StatusNotFound)
-		return
-	}
-
-	rotator := intel.NewRotator()
-	msg, err := rotator.Execute(*targetItem)
-	w.Header().Set("Content-Type", "application/json")
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(rotateResponse{
-			Success: false,
-			Message: err.Error(),
-			ItemID:  req.ItemID,
-		})
-		return
-	}
-
-	json.NewEncoder(w).Encode(rotateResponse{
-		Success: true,
-		Message: msg,
-		ItemID:  req.ItemID,
-	})
 }
