@@ -33,6 +33,7 @@ struct ConsoleView: View {
     private var sections: some View {
         VStack(alignment: .leading, spacing: 16) {
             firewallSection
+            guardSection
             if !state.activeAgents.isEmpty { agentsSection }
             if !state.flags.isEmpty { flagsSection }
         }
@@ -101,6 +102,45 @@ struct ConsoleView: View {
                     }
                 }
             }
+        }
+    }
+
+    // MARK: guard
+
+    private var guardSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            sectionHeader("Directory guard", trailing: "\(state.guardRules.count)")
+
+            if state.guardRules.isEmpty {
+                Text("No guard decisions yet — sensitive paths are prompted on first access")
+                    .font(.system(size: 11)).foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                ForEach(state.guardRules) { rule in
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack(spacing: 6) {
+                                Text(rule.agent).font(.system(size: 12, weight: .semibold))
+                                Text(rule.ruleID).font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
+                            }
+                            Text("\(rule.decision) · \(rule.source)")
+                                .font(.system(size: 10)).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Text(rule.decision.uppercased()).font(.system(size: 9, weight: .bold))
+                            .foregroundStyle(rule.decision == "allow" ? Color.ok : Color.bad)
+                            .padding(.horizontal, 7).padding(.vertical, 4)
+                            .background((rule.decision == "allow" ? Color.ok : Color.bad).opacity(0.14)).clipShape(Capsule())
+                        Button { state.revokeGuardRule(agent: rule.agent, ruleID: rule.ruleID) } label: {
+                            Label("Revoke", systemImage: "trash").font(.system(size: 11, weight: .semibold))
+                        }
+                        .buttonStyle(.bordered).controlSize(.small)
+                    }
+                }
+            }
+            Text("Hook decisions can block; monitored accesses are observed only")
+                .font(.system(size: 10)).foregroundStyle(.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
