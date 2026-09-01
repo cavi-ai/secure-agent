@@ -52,3 +52,27 @@ func TestFirewallDefaultsLoad(t *testing.T) {
 		t.Fatal("expected claude vendor config with hosts")
 	}
 }
+
+func TestDirectoryGuardDefaults(t *testing.T) {
+	cfg, err := Load(filepath.Join(t.TempDir(), "absent.yaml"))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	// Quiet by default (PRD principle 3): every classic ships monitor; the
+	// onboarding step is the user's explicit opt-in to prompt (Task 7).
+	if cfg.DirectoryGuard.Mode != "monitor" {
+		t.Fatalf("directory_guard.mode = %q, want monitor", cfg.DirectoryGuard.Mode)
+	}
+	if cfg.DirectoryGuard.PromptDeadlineMS != 45000 {
+		t.Fatalf("prompt_deadline_ms = %d, want 45000", cfg.DirectoryGuard.PromptDeadlineMS)
+	}
+	var cloud *GuardRule
+	for i := range cfg.DirectoryGuard.Rules {
+		if cfg.DirectoryGuard.Rules[i].ID == "cloud-creds" {
+			cloud = &cfg.DirectoryGuard.Rules[i]
+		}
+	}
+	if cloud == nil || cloud.Mode != "monitor" {
+		t.Fatalf("cloud-creds rule missing or not monitor-by-default: %+v", cloud)
+	}
+}
