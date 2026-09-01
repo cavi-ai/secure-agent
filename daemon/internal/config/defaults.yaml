@@ -68,3 +68,12 @@ firewall:
   context:
     allow_own_vendor_auth: true
     treat_body_secret_as_leak: true
+directory_guard:
+  mode: monitor
+  prompt_deadline_ms: 45000
+  rules:
+    - { id: ssh-keys,    paths: ["~/.ssh/id_*", "~/.ssh/*_rsa", "~/.ssh/*_ed25519"], mode: monitor }
+    - { id: cloud-creds, paths: ["~/.aws/credentials", "~/.config/gcloud/**", "~/.azure/**"], mode: monitor }
+    - { id: keychain,    paths: ["**/*.keychain-db", "**/login.keychain*"], mode: monitor }
+    - { id: env-files,   paths: ["**/.env", "**/.env.*"], mode: monitor }
+    - { id: shell-rc,    paths: ["~/.zshrc", "~/.zshenv", "~/.bashrc", "~/.profile"], mode: monitor }
