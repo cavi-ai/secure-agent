@@ -15,4 +15,10 @@ final class GuardTests: XCTestCase {
         XCTAssertTrue(s.contains("\"scope\":\"always\""))
         XCTAssertTrue(s.contains("\"verdict\":\"allow\""))
     }
+
+    func testClassicsAreThreePromptRules() {
+        XCTAssertEqual(SetupManager.guardClassics.map { $0.ruleID }.sorted(),
+                       ["cloud-creds", "keychain", "ssh-keys"])
+        XCTAssertTrue(SetupManager.guardClassics.allSatisfy { $0.mode == "prompt" })
+    }
 }
