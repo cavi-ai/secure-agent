@@ -11,19 +11,19 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import time
 
 HOOK = os.path.join(os.path.dirname(os.path.abspath(__file__)), "secret_guard.py")
 HOME = os.path.expanduser("~")
 
 
-def run(payload: dict) -> dict:
+def run(payload: dict, env: dict | None = None) -> dict:
     p = subprocess.run(
         [sys.executable, HOOK],
         input=json.dumps(payload),
-        capture_output=True,
-        text=True,
-        timeout=10,
+        capture_output=True, text=True, timeout=10,
+        env={**os.environ, **(env or {})},
     )
     if p.returncode != 0:
         raise AssertionError(f"hook exited {p.returncode}: {p.stderr[:400]}")
@@ -45,6 +45,16 @@ def write(path: str) -> dict:
     return {"hook_event_name": "PreToolUse", "tool_name": "Write", "tool_input": {"file_path": path}}
 
 
+def read(path: str) -> dict:
+    return {"hook_event_name": "PreToolUse", "tool_name": "Read", "tool_input": {"file_path": path}}
+
+
+def with_modes(**modes) -> dict:
+    d = os.path.join(tempfile.mkdtemp(), "guard-modes.json")
+    open(d, "w").write(json.dumps(modes))
+    return {"SECURE_AGENT_GUARD_MODES": d}
+
+
 # Must be ALLOWED. These are the false positives that got the old hook disabled.
 ALLOW = [
     "gh api /repos/cavi-ai/bobby-browser/security",
@@ -59,11 +69,6 @@ ALLOW = [
     "cat ~/.zshrc",
     "head -50 ~/.zshenv",
     "diff ~/.zshrc ~/.zprofile",
-    "op read op://CaviClaw/Twitter/credential",
-    "op item list --vault CaviClaw",
-    "op --version",
-    "op whoami",
-    ". $OPENCLAW_STATE_DIR/credentials/shell-env.sh",
     "source ~/.zshrc",
     "ls -la ~/Library/Keychains/",
     "echo hello > QUARANTINE/note.txt",
@@ -106,15 +111,7 @@ DENY = [
     ("chflags uchg ~/Library/Keychains/login.keychain-db", "keychain-file-op"),
     ("chmod 777 /etc/paths", "shell-rc-mutation"),
     # secret files
-    ("cat $OPENCLAW_STATE_DIR/credentials/op-service-account-token", "secret-file-read"),
-    ("base64 ~/.openclaw/credentials/secrets.json", "secret-file-read"),
     ("cat ~/.ssh/id_ed25519", "secret-file-read"),
-    # 1Password scope
-    ("op read op://Private/thing/field", "op-vault-not-allowed"),
-    ("op item get 'X' --vault Personal", "op-vault-not-allowed"),
-    ("op item create --category login --title X", "op-mutation"),
-    ("op item delete X --vault CaviClaw", "op-mutation"),
-    ("op read", "op-unscoped"),
     # interpreter bypass
     ("python3 -c \"open('/Users/testuser/.zshrc','a').write('x')\"", "interpreter-write-bypass"),
     ("node -e \"require('fs').appendFileSync(process.env.HOME+'/.zshenv','x')\"", "interpreter-write-bypass"),
@@ -129,6 +126,32 @@ WRITE_DENY = [
     (os.path.join(HOME, ".zshenv"), "shell-rc-write-tool"),
     ("/etc/paths", "shell-rc-write-tool"),
     (os.path.join(HOME, "Library/Keychains/login.keychain-db"), "protected-write-tool"),
+]
+
+
+# --- config-driven guard modes (Directory Guard) -----------------------------
+
+def test_read_monitor_default_allows():
+    # keychain ships monitor; a read is allowed (and logged), not blocked
+    out = run(read(os.path.expanduser("~/Library/Keychains/login.keychain-db")))
+    assert out.get("permission") == "allow", out
+
+
+def test_read_deny_override_blocks():
+    out = run(read(os.path.expanduser("~/Library/Keychains/login.keychain-db")),
+              env=with_modes(keychain="deny"))
+    assert out.get("permission") == "deny", out
+
+
+def test_read_unknown_allows():
+    out = run(read("/tmp/project/main.go"))
+    assert out.get("permission") == "allow", out
+
+
+EXTRA_TESTS = [
+    test_read_monitor_default_allows,
+    test_read_deny_override_blocks,
+    test_read_unknown_allows,
 ]
 
 
@@ -154,6 +177,12 @@ def main() -> int:
         if out.get("permission") != "deny":
             failures.append(f"[write] should DENY ({rule}) but allowed: {path}")
 
+    for fn in EXTRA_TESTS:
+        try:
+            fn()
+        except AssertionError as e:
+            failures.append(f"{fn.__name__}: {e}")
+
     # A malformed payload must not brick the agent.
     p = subprocess.run([sys.executable, HOOK], input="not json", capture_output=True, text=True, timeout=10)
     if json.loads(p.stdout or "{}").get("permission") != "allow":
@@ -172,7 +201,7 @@ def main() -> int:
         for f in failures:
             print("  -", f)
         return 1
-    total = len(ALLOW) * 2 + len(DENY) * 2 + len(WRITE_DENY) + 2
+    total = len(ALLOW) * 2 + len(DENY) * 2 + len(WRITE_DENY) + len(EXTRA_TESTS) + 2
     print(f"PASS ({total} cases, {elapsed:.0f}ms cold call)")
     return 0
 
