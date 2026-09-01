@@ -48,8 +48,6 @@ func main() {
 		handleFlags(client)
 	case "incidents":
 		handleIncidents(client)
-	case "rotate":
-		handleRotate(client)
 	case "kill":
 		handleKill(client)
 	case "fleet":
@@ -72,7 +70,6 @@ func printUsage() {
 	fmt.Println("  secure-agent status                      Show daemon running status and active agents")
 	fmt.Println("  secure-agent flags                       List recent security correlation alerts")
 	fmt.Println("  secure-agent incidents                   Display incident reports and remediation checklists")
-	fmt.Println("  secure-agent rotate --incident ID --item ID Auto-rotate a compromised secret")
 	fmt.Println("  secure-agent kill <PID>                  Terminate an agent process tree by PID")
 	fmt.Println("  secure-agent fleet                       Show fleet remote node telemetry")
 	fmt.Println("  secure-agent fingerprint                 Scan configured sources and register secret fingerprints (HMAC only)")
@@ -134,40 +131,6 @@ func handleIncidents(client *http.Client) {
 	resp, err := client.Get("http://unix/incidents?limit=10")
 	if err != nil {
 		fmt.Printf("Error fetching incidents: %v\n", err)
-		os.Exit(1)
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	fmt.Println(string(body))
-}
-
-func handleRotate(client *http.Client) {
-	var incID, itemID string
-	for i := 2; i < len(os.Args); i++ {
-		if (os.Args[i] == "--incident" || os.Args[i] == "-i") && i+1 < len(os.Args) {
-			incID = os.Args[i+1]
-			i++
-		} else if (os.Args[i] == "--item" || os.Args[i] == "-t") && i+1 < len(os.Args) {
-			itemID = os.Args[i+1]
-			i++
-		}
-	}
-
-	if incID == "" || itemID == "" {
-		fmt.Println("Error: --incident and --item parameters are required.")
-		fmt.Println("Example: secure-agent rotate --incident inc-123 --item rot-456")
-		os.Exit(1)
-	}
-
-	payload := map[string]string{
-		"incident_id": incID,
-		"item_id":     itemID,
-	}
-	data, _ := json.Marshal(payload)
-
-	resp, err := client.Post("http://unix/rotate", "application/json", bytes.NewReader(data))
-	if err != nil {
-		fmt.Printf("Error executing rotation: %v\n", err)
 		os.Exit(1)
 	}
 	defer resp.Body.Close()
