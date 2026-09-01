@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/config"
@@ -64,6 +65,7 @@ type API struct {
 	fwBaseSources []string
 
 	guardBroker *guard.Broker
+	guardSeq    uint64
 }
 
 // FirewallControl bundles the runtime firewall controls the API exposes.
@@ -543,7 +545,7 @@ func (a *API) handleGuardDecision(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, guard.Decision{Verdict: g.Decision, Scope: "always", Reason: "cached"})
 		return
 	}
-	id := fmt.Sprintf("%d", time.Now().UnixNano())
+	id := fmt.Sprintf("%d-%d", time.Now().UnixNano(), atomic.AddUint64(&a.guardSeq, 1))
 	d := a.guardBroker.Request(guard.Pending{
 		ID: id, Agent: req.Agent, Tool: req.Tool, Path: req.Path, RuleID: req.RuleID,
 	})
