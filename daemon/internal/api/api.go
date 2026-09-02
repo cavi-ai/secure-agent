@@ -593,6 +593,9 @@ func (a *API) handleGuardDecision(w http.ResponseWriter, r *http.Request) {
 	id := fmt.Sprintf("%d-%d", time.Now().UnixNano(), atomic.AddUint64(&a.guardSeq, 1))
 	d := a.guardBroker.Request(guard.Pending{
 		ID: id, Agent: req.Agent, Tool: req.Tool, Path: req.Path, RuleID: req.RuleID,
+		// Disclose the blast radius of "allow always": the cached rule covers
+		// every path this rule matches for this agent, not just this file.
+		ScopeText: "Allow Always approves every path under rule \"" + req.RuleID + "\" for agent \"" + req.Agent + "\", not just this one.",
 	})
 	if d.Scope == "always" && d.Reason == "" {
 		a.store.PutGuardRule(store.GuardRule{Agent: req.Agent, RuleID: req.RuleID, Decision: d.Verdict, Source: "prompt"})

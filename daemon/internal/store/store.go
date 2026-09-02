@@ -44,13 +44,15 @@ type AuditEntry struct {
 }
 
 func Open(dbPath, jsonlPath string) (*Store, error) {
+	// State dirs are user-private: the db carries agent activity, evidence
+	// chains, and guard decisions — nothing here needs group/other access.
 	if dbPath != "" {
-		if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(dbPath), 0o700); err != nil {
 			return nil, fmt.Errorf("failed to create db dir: %w", err)
 		}
 	}
 	if jsonlPath != "" {
-		if err := os.MkdirAll(filepath.Dir(jsonlPath), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(jsonlPath), 0o700); err != nil {
 			return nil, fmt.Errorf("failed to create jsonl dir: %w", err)
 		}
 	}
@@ -124,11 +126,24 @@ func Open(dbPath, jsonlPath string) (*Store, error) {
 
 	var jsonl *os.File
 	if jsonlPath != "" {
-		f, err := os.OpenFile(jsonlPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+		f, err := os.OpenFile(jsonlPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 		if err != nil {
 			log.Printf("store: warning: failed to open jsonl path %s: %v", jsonlPath, err)
 		} else {
 			jsonl = f
+		}
+	}
+
+	// SQLite honors the process umask for the db and its WAL/SHM sidecars; the
+	// daemon may inherit a permissive umask from its launcher, so tighten the
+	// resulting files explicitly.
+	if dbPath != "" {
+		for _, p := range []string{dbPath, dbPath + "-wal", dbPath + "-shm"} {
+			if f, err := os.Stat(p); err == nil && f.Mode().Perm()&0o077 != 0 {
+				if err := os.Chmod(p, 0o600); err != nil {
+					log.Printf("store: warning: failed to tighten %s perms: %v", p, err)
+				}
+			}
 		}
 	}
 

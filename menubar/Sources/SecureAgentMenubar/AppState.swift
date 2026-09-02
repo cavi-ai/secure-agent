@@ -117,7 +117,12 @@ public final class AppState: ObservableObject {
         promptingID = p.id
         let alert = NSAlert()
         alert.messageText = "Allow \(p.agent) to access this?"
-        alert.informativeText = "\(p.tool) → \(p.path)\nRule: \(p.ruleID)"
+        var informative = "\(p.tool) → \(p.path)\nRule: \(p.ruleID)"
+        // Disclose what "Allow Always" really approves, so consent is informed.
+        if let scope = p.scopeText, !scope.isEmpty {
+            informative += "\n\n⚠️ \(scope)"
+        }
+        alert.informativeText = informative
         let allowOnceButton = alert.addButton(withTitle: "Allow Once")
         let allowAlwaysButton = alert.addButton(withTitle: "Allow Always")
         let denyButton = alert.addButton(withTitle: "Deny")
