@@ -67,7 +67,7 @@ def with_modes(**modes) -> dict:
 
 # Must be ALLOWED. These are the false positives that got the old hook disabled.
 ALLOW = [
-    "gh api /repos/cavi-ai/bobby-browser/security",
+    "gh api /repos/example-org/example-repo/security",
     "gh api /orgs/cavi-ai/security-advisories",
     "npm audit --json",
     "cargo audit",
@@ -75,15 +75,15 @@ ALLOW = [
     "rg 'security' --type ts",
     "git commit -m 'fix security header parsing'",
     "python3 -c \"print('security')\"",
-    "cd CAVI_TOOLS && make build",
+    "cd /tmp/workspace/example-org/example-repo && make build",
     "cat ~/.zshrc",
     "head -50 ~/.zshenv",
     "diff ~/.zshrc ~/.zprofile",
     "source ~/.zshrc",
     "ls -la ~/Library/Keychains/",
-    "echo hello > QUARANTINE/note.txt",
+    "echo hello > /tmp/example/note.txt",
     "sed -i '' 's/a/b/' ./src/app.ts",
-    "chmod 600 QUARANTINE/x",
+    "chmod 600 /tmp/example/x",
     # locking rc files only hardens them
     "chflags uchg ~/.zshenv ~/.zshrc ~/.zprofile ~/.profile",
     "chflags schg ~/.zshrc",
@@ -327,7 +327,10 @@ def test_no_personal_strings_in_shipped_hooks():
     # "cavi-ai" is the public org and is allowed; personal vault/owner/incident are not.
     # Tokens are built from split literals so this assertion's own source line
     # does not itself trip the scan it performs on every *.py file here.
-    banned = ("cavi" + "claw", "fran" + "co", "open" + "claw", "2026-08" + "-12")
+    banned = (
+        "cavi" + "claw", "fran" + "co", "open" + "claw", "2026-08" + "-12",
+        "mi" + "rza", "/volumes/mi" + "rza", "/users/fran" + "co",
+    )
     for f in _glob.glob(os.path.join(os.path.dirname(__file__), "*.py")):
         src = open(f, encoding="utf-8").read().lower()
         for token in banned:
