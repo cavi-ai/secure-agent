@@ -17,9 +17,11 @@ import (
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/config"
+	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 	"github.com/cavi-ai/secure-agent/daemon/internal/firewall"
 	"github.com/cavi-ai/secure-agent/daemon/internal/guard"
 	"github.com/cavi-ai/secure-agent/daemon/internal/intel"
+	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 	"github.com/cavi-ai/secure-agent/daemon/internal/supervise"
 	"golang.org/x/sys/unix"
@@ -73,6 +75,9 @@ type API struct {
 	peerChk    PeerChecker
 	agentPIDs  func() map[int32]struct{}
 	fleetSinks GuardEventSink
+
+	subscribeEvents   func() <-chan event.Event
+	unsubscribeEvents func(<-chan event.Event)
 }
 
 // GuardEventSink receives guard decisions (allow/deny) for downstream
@@ -163,9 +168,12 @@ func (a *API) Serve(ctx context.Context) error {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/status", a.handleStatus)
+	mux.HandleFunc("/posture", a.handlePosture)
 	mux.HandleFunc("/flags", a.handleFlags)
 	mux.HandleFunc("/events", a.handleEvents)
+	mux.HandleFunc("/events/stream", a.handleEventStream)
 	mux.HandleFunc("/incidents", a.handleIncidents)
+	mux.HandleFunc("/incidents/status", a.handleIncidentStatus)
 	mux.HandleFunc("/audit", a.handleAudit)
 	mux.HandleFunc("/fleet", a.handleFleet)
 	mux.HandleFunc("/kill", a.handleKill)
@@ -317,8 +325,10 @@ func (a *API) handleIncidents(w http.ResponseWriter, r *http.Request) {
 			w.Write([]byte(analyzer.GenerateMarkdown(*inc)))
 			return
 		}
+		// The report plus its workflow state, so UIs can render one object.
+		wf, _ := a.store.IncidentStatus(inc.ID)
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(inc)
+		writeJSON(w, map[string]any{"incident": inc, "workflow": wf})
 		return
 	}
 
@@ -330,7 +340,48 @@ func (a *API) handleIncidents(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	incidents := a.store.RecentIncidents(limit)
-	json.NewEncoder(w).Encode(incidents)
+	type withStatus struct {
+		model.IncidentReport
+		Workflow store.IncidentWorkflow `json:"workflow"`
+	}
+	out := make([]withStatus, 0, len(incidents))
+	for i := range incidents {
+		wf, _ := a.store.IncidentStatus(incidents[i].ID)
+		out = append(out, withStatus{IncidentReport: incidents[i], Workflow: wf})
+	}
+	writeJSON(w, out)
+}
+
+type incidentStatusRequest struct {
+	ID     string `json:"id"`
+	Status string `json:"status"` // open | acknowledged | resolved
+	Note   string `json:"note,omitempty"`
+}
+
+// handleIncidentStatus transitions an incident's workflow state. Audited:
+// who-did-we-decide-about-what is exactly what the audit trail is for.
+func (a *API) handleIncidentStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req incidentStatusRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID == "" {
+		http.Error(w, `Invalid payload: {"id","status":"open|acknowledged|resolved","note":"..."}`, http.StatusBadRequest)
+		return
+	}
+	ok, err := a.store.SetIncidentStatus(req.ID, req.Status, req.Note)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("status update failed: %v", err), http.StatusBadRequest)
+		return
+	}
+	if !ok {
+		http.Error(w, "Incident not found", http.StatusNotFound)
+		return
+	}
+	a.store.PutAudit(store.AuditEntry{Action: "incident-status", Rule: req.ID, ToMode: req.Status, Detail: req.Note})
+	wf, _ := a.store.IncidentStatus(req.ID)
+	writeJSON(w, map[string]any{"status": "ok", "workflow": wf})
 }
 
 func (a *API) handleAudit(w http.ResponseWriter, r *http.Request) {

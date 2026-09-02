@@ -116,8 +116,8 @@ public final class AppState: ObservableObject {
         guard promptingID == nil, let p = pending.first else { return }
         promptingID = p.id
         let alert = NSAlert()
-        alert.messageText = "Allow \(p.agent) to access this?"
-        var informative = "\(p.tool) → \(p.path)\nRule: \(p.ruleID)"
+        alert.messageText = Self.guardPromptHeadline(p)
+        var informative = Self.guardPromptDetail(p)
         // Disclose what "Allow Always" really approves, so consent is informed.
         if let scope = p.scopeText, !scope.isEmpty {
             informative += "\n\n⚠️ \(scope)"
@@ -142,6 +142,43 @@ public final class AppState: ObservableObject {
         default:                       decision = .init(id: p.id, verdict: "deny", scope: "once")
         }
         Task { try? await client.resolveGuard(decision); self.promptingID = nil; self.fetch() }
+    }
+
+    // MARK: - Guard prompt language
+
+    /// Plain-language headline: what is this file, and who wants it.
+    static func guardPromptHeadline(_ p: GuardPending) -> String {
+        switch p.ruleID {
+        case "ssh-keys": return "\(p.agent.capitalized) wants to read an SSH private key"
+        case "cloud-creds": return "\(p.agent.capitalized) wants to read a cloud credential file"
+        case "keychain": return "\(p.agent.capitalized) wants to touch your keychain"
+        case "env-files": return "\(p.agent.capitalized) wants to read an environment file (secrets inside)"
+        case "shell-rc": return "\(p.agent.capitalized) wants to access a shell config file"
+        default: return "Allow \(p.agent) to access this?"
+        }
+    }
+
+    /// Detail line: the concrete file, why it matters, what is being asked.
+    static func guardPromptDetail(_ p: GuardPending) -> String {
+        let why: String
+        switch p.ruleID {
+        case "ssh-keys":
+            why = "A leaked SSH key grants access to every server it authenticates."
+        case "cloud-creds":
+            why = "A leaked cloud key can create resources, read data, or run workloads on your account."
+        case "keychain":
+            why = "The keychain holds every password and certificate on this Mac."
+        case "env-files":
+            why = ".env files carry API keys and database passwords for this project."
+        case "shell-rc":
+            why = "Shell config controls every future terminal session — a silent edit affects everything."
+        default:
+            why = ""
+        }
+        var lines = "\(p.tool) → \(p.path)"
+        if !why.isEmpty { lines += "\n\n\(why)" }
+        lines += "\nRule: \(p.ruleID)"
+        return lines
     }
 
     public func openDashboard() {

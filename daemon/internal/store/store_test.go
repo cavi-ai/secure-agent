@@ -219,3 +219,51 @@ func TestListGuardRulesEmptyIsEmptyArrayNotNull(t *testing.T) {
 		t.Fatalf("json = %s, want []", b)
 	}
 }
+
+func TestIncidentStatusWorkflowForwardOnly(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(filepath.Join(dir, "e.db"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	id := "inc-wf-1"
+	s.PutIncident(model.IncidentReport{ID: id, Summary: "test", Risk: model.RiskHigh})
+
+	if wf, ok := s.IncidentStatus(id); !ok || wf.Status != "open" {
+		t.Fatalf("initial status = %+v ok=%v, want open", wf, ok)
+	}
+
+	if ok, err := s.SetIncidentStatus(id, "acknowledged", ""); err != nil || !ok {
+		t.Fatalf("ack: ok=%v err=%v", ok, err)
+	}
+	wf, _ := s.IncidentStatus(id)
+	if wf.Status != "acknowledged" || wf.AcknowledgedAt == "" {
+		t.Fatalf("after ack = %+v", wf)
+	}
+	firstAck := wf.AcknowledgedAt
+
+	// Re-ack keeps the first stamp.
+	time.Sleep(10 * time.Millisecond)
+	_, _ = s.SetIncidentStatus(id, "acknowledged", "")
+	wf, _ = s.IncidentStatus(id)
+	if wf.AcknowledgedAt != firstAck {
+		t.Fatal("acknowledged_at must be stamped only once")
+	}
+
+	if ok, err := s.SetIncidentStatus(id, "resolved", "rotated keys"); err != nil || !ok {
+		t.Fatalf("resolve: ok=%v err=%v", ok, err)
+	}
+	wf, _ = s.IncidentStatus(id)
+	if wf.Status != "resolved" || wf.ResolvedAt == "" || wf.ResolutionNote != "rotated keys" {
+		t.Fatalf("after resolve = %+v", wf)
+	}
+
+	// Unknown id must not be a silent success.
+	if ok, _ := s.SetIncidentStatus("nope", "resolved", ""); ok {
+		t.Fatal("unknown incident reported resolved")
+	}
+	if _, ok := s.IncidentStatus("nope"); ok {
+		t.Fatal("unknown incident has status")
+	}
+}

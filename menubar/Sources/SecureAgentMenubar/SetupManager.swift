@@ -14,6 +14,10 @@ public final class SetupManager: ObservableObject {
 
     @Published public private(set) var isDaemonRunning = false
     @Published public private(set) var areHooksInstalled = false
+    /// Result of the onboarding hook self-test: nil = passed, string = the
+    /// human-readable failure. Not part of needsSetup — it is a diagnostic.
+    @Published public private(set) var hookSelfTestFailure: String?
+    @Published public private(set) var hookSelfTestRunning = false
     @Published public private(set) var lastError: String?
 
     private let fm = FileManager.default
@@ -101,6 +105,62 @@ public final class SetupManager: ObservableObject {
                 try fm.copyItem(atPath: "\(srcDir)/\(hook)", toPath: dst)
             }
         }
+    }
+
+    /// Run the self-test and publish the outcome to the wizard UI.
+    public func runHookSelfTest() async {
+        hookSelfTestRunning = true
+        defer { hookSelfTestRunning = false }
+        hookSelfTestFailure = await selfTestHooks()
+    }
+
+    /// Fire a synthetic guarded tool call through the installed hook and check
+    /// it answers. A green check here means: python3 present, hook executable,
+    /// protocol intact — the whole chain a silent failure would otherwise hide.
+    /// Returns nil on success, or a human-readable reason on failure.
+    public func selfTestHooks() async -> String? {
+        // Prefer the Claude install; any target with the hook works.
+        let hookPath = Self.hookTargets
+            .map { "\($0)/secret_guard.py" }
+            .first { fm.fileExists(atPath: $0) }
+        guard let hook = hookPath else {
+            return "secret_guard.py is not installed"
+        }
+        let payload = #"{"hook_event_name":"PreToolUse","tool_name":"Read","tool_input":{"file_path":"/tmp/secure-agent-self-test-allow.txt"}}"#
+        guard let stdinData = payload.data(using: .utf8) else { return "internal: payload encoding" }
+
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        p.arguments = ["python3", hook]
+        let inPipe = Pipe(), outPipe = Pipe(), errPipe = Pipe()
+        p.standardInput = inPipe
+        p.standardOutput = outPipe
+        p.standardError = errPipe
+        do {
+            try p.run()
+            inPipe.fileHandleForWriting.write(stdinData)
+            inPipe.fileHandleForWriting.closeFile()
+        } catch {
+            return "could not launch python3: \(error.localizedDescription)"
+        }
+
+        // Hooks answer in well under a second; don't hang the wizard.
+        let deadline = Date().addingTimeInterval(10)
+        while p.isRunning && Date() < deadline {
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        if p.isRunning {
+            p.terminate()
+            return "hook timed out after 10s"
+        }
+        let out = String(data: outPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        guard let json = try? JSONSerialization.jsonObject(with: Data(out.utf8)) as? [String: Any] else {
+            return "hook produced no JSON (python3 missing or hook crashed)"
+        }
+        if json["permission"] as? String == "allow" {
+            return nil
+        }
+        return "hook answered \(json["permission"] ?? "nothing") for a harmless read — expected allow"
     }
 
     // MARK: - Login item
