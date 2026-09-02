@@ -4,11 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
-	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 	"testing"
 	"time"
 

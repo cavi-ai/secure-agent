@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -185,5 +186,50 @@ func TestPrefixCaptureBounds(t *testing.T) {
 	}
 	if string(pc.buf) != "hell" {
 		t.Fatalf("captured %q, want first 4 bytes 'hell'", pc.buf)
+	}
+}
+
+// /dashboard/ must be served from the proxy's loopback listener (the
+// documented console URL), with the browser-hardening header set, and must
+// never be forwarded upstream as proxy traffic.
+func TestDashboardServedOnProxyPort(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	ln.Close() // free the port; Serve re-binds it
+
+	ps := NewProxyServer(port, bus.New(16), nil, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go ps.Serve(ctx)
+
+	// Wire a trivial stand-in asset so the handler source doesn't matter here.
+	SetDashboardHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("<html>console</html>"))
+	}))
+
+	// Wait for the listener to come up.
+	var resp *http.Response
+	for i := 0; i < 50; i++ {
+		resp, err = http.Get(fmt.Sprintf("http://127.0.0.1:%d/dashboard/", port))
+		if err == nil {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("dashboard status = %d, want 200", resp.StatusCode)
+	}
+	if csp := resp.Header.Get("Content-Security-Policy"); csp == "" {
+		t.Fatal("dashboard response missing Content-Security-Policy")
+	}
+	if resp.Header.Get("X-Frame-Options") != "DENY" {
+		t.Fatal("dashboard response missing X-Frame-Options: DENY")
 	}
 }
