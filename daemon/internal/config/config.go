@@ -79,13 +79,22 @@ type FleetConfig struct {
 	Webhooks []WebhookConfig `yaml:"webhooks"`
 }
 
+// CwdOverride pins one directory subtree to specific guard-rule modes — the
+// per-project policy layer (deny .env in the production repo, monitor
+// everywhere else). Written to guard-cwd-overrides.json for the hook to read.
+type CwdOverride struct {
+	CwdPrefix string            `yaml:"cwd_prefix"`
+	Rules     map[string]string `yaml:"rules"` // rule_id -> monitor|prompt|deny
+}
+
 // DirectoryGuardConfig configures the interactive filesystem guard (pillar 2).
 // The hook owns the rule set — it is a stdlib-only Python process and cannot
 // parse YAML — via its own embedded copy plus the user's guard-modes.json
 // override file. The daemon config carries only the hook's fail-safe prompt
 // deadline.
 type DirectoryGuardConfig struct {
-	PromptDeadlineMS int `yaml:"prompt_deadline_ms"`
+	PromptDeadlineMS int           `yaml:"prompt_deadline_ms"`
+	CwdOverrides     []CwdOverride `yaml:"cwd_overrides"`
 }
 
 type rawConfig struct {
