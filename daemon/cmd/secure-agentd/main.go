@@ -50,6 +50,11 @@ func main() {
 		log.Fatalf("failed to load config: %v", err)
 	}
 
+	// Serialize per-project guard policies for the stdlib-only hook to read.
+	if err := config.WriteCwdOverrides(config.DefaultCwdOverridesPath(), cfg.DirectoryGuard.CwdOverrides); err != nil {
+		log.Printf("failed to write guard cwd overrides: %v", err)
+	}
+
 	st, err := store.Open(cfg.DBPath, cfg.JSONLPath)
 	if err != nil {
 		log.Fatalf("failed to open store: %v", err)
