@@ -100,14 +100,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
   async function fetchTelemetry() {
     try {
-      const [statusRes, flagsRes, incidentsRes, eventsRes, fleetRes, auditRes, sourcesRes] = await Promise.all([
+      const [statusRes, flagsRes, incidentsRes, eventsRes, fleetRes, auditRes, sourcesRes, postureRes] = await Promise.all([
         fetch('/status').catch(() => null),
         fetch('/flags?limit=20').catch(() => null),
         fetch('/incidents?limit=10').catch(() => null),
         fetch('/events?limit=50').catch(() => null),
         fetch('/fleet').catch(() => null),
         fetch('/audit?limit=50').catch(() => null),
-        fetch('/firewall/sources').catch(() => null)
+        fetch('/firewall/sources').catch(() => null),
+        fetch('/posture').catch(() => null)
       ]);
 
       if (statusRes && statusRes.ok) {
@@ -130,6 +131,9 @@ document.addEventListener('DOMContentLoaded', () => {
       }
       if (sourcesRes && sourcesRes.ok) {
         telemetryData.sources = await sourcesRes.json() || [];
+      }
+      if (postureRes && postureRes.ok) {
+        telemetryData.posture = await postureRes.json() || null;
       }
 
       // The panels show the filtered view; KPIs keep reading the unfiltered
@@ -162,6 +166,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function renderAll() {
+    renderPosture();
     renderStatus();
     renderAgents();
     renderFirewall();
@@ -266,6 +271,64 @@ document.addEventListener('DOMContentLoaded', () => {
     container.innerHTML = html;
   }
 
+  // Posture headline: the one-glance answer, plus clickable jump-off points
+  // into the panels below (drill-down without leaving the page).
+  function renderPosture() {
+    const banner = document.getElementById('posture-banner');
+    const stateEl = document.getElementById('posture-state');
+    const summaryEl = document.getElementById('posture-summary');
+    const itemsEl = document.getElementById('posture-items');
+    const p = telemetryData.posture;
+    if (!banner || !p) return;
+
+    banner.dataset.state = p.state || 'all-clear';
+    if (p.state === 'all-clear') {
+      stateEl.textContent = 'All clear';
+      summaryEl.textContent = 'Agents monitored, no action needed';
+    } else if (p.state === 'critical') {
+      stateEl.textContent = 'Critical';
+    } else {
+      stateEl.textContent = 'Needs attention';
+    }
+    summaryEl.textContent = p.summary || '';
+
+    // Each item deep-links to its panel: flags/incidents scroll to their
+    // section, guard prompts open the resolve flow, collectors explain.
+    itemsEl.innerHTML = (p.items || []).map(it => {
+      const sev = it.severity >= 3 ? 's3' : it.severity === 2 ? 's2' : 's1';
+      let link = '';
+      if (it.kind === 'flag') link = `<a href="#flags-list">view evidence</a>`;
+      if (it.kind === 'incident') link = `<a href="#" onclick="openIncidentReport('${escapeHTML(it.id)}');return false;">view report</a>`;
+      if (it.kind === 'guard_pending') link = `<span>resolve it in the menu bar app</span>`;
+      if (it.kind === 'collector_down') link = `<span>— ${escapeHTML(it.detail || 'collector stopped')}</span>`;
+      if (it.kind === 'uninspected_egress') link = `<a href="#firewall-container">see firewall</a>`;
+      return `<li><span class="sev ${sev}">●</span><span>${escapeHTML(it.title)} ${link}</span></li>`;
+    }).join('');
+  }
+
+  // Incident workflow: acknowledge keeps it visible but marked seen; resolve
+  // closes it with a note. Both hit /incidents/status and refresh.
+  window.setIncidentStatus = async function(id, status) {
+    const body = { id, status };
+    if (status === 'resolved') {
+      const note = prompt('Resolution note (what did you do?):', '');
+      if (note === null) return; // cancelled
+      body.note = note;
+    }
+    try {
+      const r = await fetch('/incidents/status', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      if (!r.ok) throw new Error(await r.text());
+      showToast(status === 'resolved' ? 'Incident resolved' : 'Incident acknowledged', 'success');
+      fetchTelemetry();
+    } catch (err) {
+      showToast('Failed to update incident: ' + err.message, 'danger');
+    }
+  };
+
   function renderIncidents() {
     const container = document.getElementById('incidents-container');
     const badge = document.getElementById('badge-incidents-count');
@@ -278,15 +341,29 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
-    container.innerHTML = incidents.map(inc => `
-      <div class="incident-card">
+    container.innerHTML = incidents.map(inc => {
+      const wf = inc.workflow || {};
+      const status = wf.status || 'open';
+      const statusChip = status === 'resolved'
+        ? `<span class="status-chip resolved">resolved</span>`
+        : status === 'acknowledged'
+          ? `<span class="status-chip acked">ack</span>`
+          : '';
+      const riskClass = (inc.risk || '').toUpperCase() === 'CRITICAL' ? 'high'
+        : (inc.risk || '').toUpperCase() === 'HIGH' ? 'high' : '';
+      return `
+      <div class="incident-card ${status === 'resolved' ? 'is-resolved' : ''}">
         <div class="incident-header">
-          <span class="risk-tag ${(inc.risk || '').toUpperCase() === 'HIGH' ? 'high' : ''}"><svg class="icon"><use href="#i-alert"/></svg>${escapeHTML(inc.risk)}</span>
+          <span class="risk-tag ${riskClass}"><svg class="icon"><use href="#i-alert"/></svg>${escapeHTML(inc.risk)}</span>
           <span class="kpi-hint">${escapeHTML(inc.rule)} — PID ${inc.pid}</span>
+          ${statusChip}
         </div>
         <div class="incident-summary">${escapeHTML(inc.summary)}</div>
+        ${wf.resolution_note ? `<div class="incident-note">Resolution: ${escapeHTML(wf.resolution_note)}</div>` : ''}
         <div class="incident-actions">
           <button class="btn btn-ghost" onclick="openIncidentReport('${escapeHTML(inc.id)}')"><svg class="icon"><use href="#i-doc"/></svg><span>View report</span></button>
+          ${status === 'open' ? `<button class="btn btn-ghost" onclick="setIncidentStatus('${escapeHTML(inc.id)}','acknowledged')"><svg class="icon"><use href="#i-history"/></svg><span>Acknowledge</span></button>` : ''}
+          ${status !== 'resolved' ? `<button class="btn btn-ghost" onclick="setIncidentStatus('${escapeHTML(inc.id)}','resolved')"><svg class="icon"><use href="#i-shield"/></svg><span>Resolve</span></button>` : ''}
         </div>
         <div class="rotate-list">
           ${(inc.rotate_list || []).map(item => `
@@ -296,7 +373,7 @@ document.addEventListener('DOMContentLoaded', () => {
           `).join('')}
         </div>
       </div>
-    `).join('');
+    `;}).join('');
   }
 
   function renderFleet() {

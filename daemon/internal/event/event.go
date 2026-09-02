@@ -17,6 +17,33 @@ const (
 	KindProxyHit      // payload inspection match (secret leak or prompt injection in proxy stream)
 )
 
+func (k Kind) String() string {
+	switch k {
+	case KindFileOpen:
+		return "file-open"
+	case KindFileWrite:
+		return "file-write"
+	case KindFileDelete:
+		return "file-delete"
+	case KindExec:
+		return "exec"
+	case KindTCCModify:
+		return "tcc-modify"
+	case KindConnOpen:
+		return "conn-open"
+	case KindConnClose:
+		return "conn-close"
+	case KindTranscriptHit:
+		return "transcript-hit"
+	case KindPluginAction:
+		return "plugin-action"
+	case KindProxyHit:
+		return "proxy-hit"
+	default:
+		return "unknown"
+	}
+}
+
 // Event is the single payload type on the bus. Optional fields are zero when
 // not applicable to the Kind. JSON tags match the console's field names (the
 // /events endpoint is the only JSON consumer).
