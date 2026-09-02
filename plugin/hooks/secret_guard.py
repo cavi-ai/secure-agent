@@ -4,8 +4,9 @@
 Shared single copy. Symlinked into ~/.cursor/hooks/ and ~/.claude/hooks/.
 
 Speaks both hook protocols at once by emitting every key each runtime reads:
-Claude Code reads `decision`/`reason`, Cursor reads `permission`/`user_message`/
-`agent_message`, and each ignores the other's keys.
+Claude Code reads `hookSpecificOutput.permissionDecision`/`permissionDecisionReason`,
+Cursor reads `permission`/`user_message`/`agent_message`, and each ignores the
+other's keys.
 
 Policy:
   - Agents get no `security` access at all. Apps reach their own Safe Storage
@@ -137,10 +138,13 @@ def deny(rule: str, user_msg: str, agent_msg: str, command: str, event: str) -> 
     audit("deny", rule, command, event)
     emit({
         "permission": "deny",
-        "decision": "block",
-        "reason": agent_msg,
         "user_message": user_msg,
         "agent_message": agent_msg,
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": agent_msg,
+        },
     })
     sys.exit(0)
 
