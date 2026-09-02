@@ -118,16 +118,23 @@ public final class AppState: ObservableObject {
         let alert = NSAlert()
         alert.messageText = "Allow \(p.agent) to access this?"
         alert.informativeText = "\(p.tool) → \(p.path)\nRule: \(p.ruleID)"
-        alert.addButton(withTitle: "Allow Once")
-        alert.addButton(withTitle: "Allow Always")
-        alert.addButton(withTitle: "Deny")
+        let allowOnceButton = alert.addButton(withTitle: "Allow Once")
+        let allowAlwaysButton = alert.addButton(withTitle: "Allow Always")
+        let denyButton = alert.addButton(withTitle: "Deny")
+        // Safe default: NSAlert binds Return to the first button unless told
+        // otherwise, and NSApp.activate below can steal focus right as this
+        // modal appears — an accidental Return must deny, never approve.
+        allowOnceButton.keyEquivalent = ""
+        allowAlwaysButton.keyEquivalent = ""
+        denyButton.keyEquivalent = "\r"
         NSApp.activate(ignoringOtherApps: true)
         let r = alert.runModal()
         let decision: GuardResolveRequest
         switch r {
         case .alertFirstButtonReturn:  decision = .init(id: p.id, verdict: "allow", scope: "once")
         case .alertSecondButtonReturn: decision = .init(id: p.id, verdict: "allow", scope: "always")
-        default:                       decision = .init(id: p.id, verdict: "deny", scope: "always")
+        case .alertThirdButtonReturn:  decision = .init(id: p.id, verdict: "deny", scope: "always")
+        default:                       decision = .init(id: p.id, verdict: "deny", scope: "once")
         }
         Task { try? await client.resolveGuard(decision); self.promptingID = nil; self.fetch() }
     }
