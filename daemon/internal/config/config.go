@@ -67,6 +67,18 @@ type ContextConfig struct {
 	TreatBodySecretAsLeak bool `yaml:"treat_body_secret_as_leak"`
 }
 
+// WebhookConfig is one HMAC-signed fleet sink.
+type WebhookConfig struct {
+	URL    string   `yaml:"url"`
+	Secret string   `yaml:"secret"`
+	Events []string `yaml:"events"` // flag | incident | guard; empty = all
+}
+
+// FleetConfig configures downstream fleet-oversight delivery.
+type FleetConfig struct {
+	Webhooks []WebhookConfig `yaml:"webhooks"`
+}
+
 // DirectoryGuardConfig configures the interactive filesystem guard (pillar 2).
 // The hook owns the rule set — it is a stdlib-only Python process and cannot
 // parse YAML — via its own embedded copy plus the user's guard-modes.json
@@ -92,6 +104,7 @@ type rawConfig struct {
 	ProxyCAKeyPath      string               `yaml:"proxy_ca_key_path"`
 	Firewall            FirewallConfig       `yaml:"firewall"`
 	DirectoryGuard      DirectoryGuardConfig `yaml:"directory_guard"`
+	Fleet               FleetConfig          `yaml:"fleet"`
 }
 
 type Config struct {
@@ -110,6 +123,7 @@ type Config struct {
 	ProxyCAKeyPath    string
 	Firewall          FirewallConfig
 	DirectoryGuard    DirectoryGuardConfig
+	Fleet             FleetConfig
 }
 
 func Load(explicitPath string) (Config, error) {

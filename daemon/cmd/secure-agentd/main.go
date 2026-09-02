@@ -20,6 +20,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/config"
 	"github.com/cavi-ai/secure-agent/daemon/internal/correlate"
 	"github.com/cavi-ai/secure-agent/daemon/internal/firewall"
+	"github.com/cavi-ai/secure-agent/daemon/internal/fleet"
 	"github.com/cavi-ai/secure-agent/daemon/internal/guard"
 	"github.com/cavi-ai/secure-agent/daemon/internal/intel"
 	"github.com/cavi-ai/secure-agent/daemon/internal/proxy"
@@ -68,6 +69,19 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// Fleet webhook fan-out: flags, incidents, and guard decisions are pushed
+	// to every configured HMAC-signed collector. Best-effort; never blocks the
+	// drain loop.
+	fleetPub := fleet.NewPublisher()
+	for i, wh := range cfg.Fleet.Webhooks {
+		sink := fleet.NewSink(wh, api.NodeID, api.Version, filepath.Dir(cfg.DBPath))
+		if sink == nil {
+			log.Printf("fleet: webhook #%d disabled (missing url or secret)", i)
+			continue
+		}
+		fleetPub.AddSink(sink)
+	}
+
 	// Drain bus and correlate/persist. drainDone closes once every delivered event
 	// has been persisted, so shutdown can wait for it instead of dropping the final,
 	// most-relevant events/flags/incident around a kill or quit.
@@ -82,11 +96,13 @@ func main() {
 			for _, fl := range flags {
 				log.Printf("FLAG TRIGGERED [%d]: %s (pid %d agent %s)", fl.Severity, fl.Rule, fl.PID, fl.Agent)
 				st.PutFlag(fl)
+				fleetPub.Publish(fleet.EventFlag, fl)
 
 				recentEvs := st.RecentEvents(100)
 				report := analyzer.Analyze(fl, recentEvs)
 				st.PutIncident(report)
 				log.Printf("INCIDENT CREATED [%s]: %s (Risk: %s, %d rotate items)", report.ID, report.Summary, report.Risk, len(report.RotateList))
+				fleetPub.Publish(fleet.EventIncident, report)
 			}
 		}
 	}()
@@ -209,6 +225,9 @@ func main() {
 		}
 	}
 
+	// Stable per-install fleet identity (used by /fleet and webhook payloads).
+	api.LoadNodeID(filepath.Join(filepath.Dir(cfg.Firewall.Registry.SaltRef), "node-id"))
+
 	// Start Control API
 	apiServer := api.New(cfg.SocketPath, st, &realKiller{}, statusFn)
 
@@ -243,6 +262,7 @@ func main() {
 	}
 	guardBroker := guard.NewBroker(time.Duration(brokerMS) * time.Millisecond)
 	apiServer.SetGuard(guardBroker)
+	apiServer.SetFleetSink(fleetPub)
 	go func() {
 		if err := apiServer.Serve(ctx); err != nil && ctx.Err() == nil {
 			log.Printf("API server error: %v", err)
