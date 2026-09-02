@@ -47,6 +47,7 @@ public final class OnboardingWindowController: NSObject, NSWindowDelegate {
     }
 }
 
+@MainActor
 struct OnboardingView: View {
     @ObservedObject private var setup = SetupManager.shared
     var onDone: () -> Void

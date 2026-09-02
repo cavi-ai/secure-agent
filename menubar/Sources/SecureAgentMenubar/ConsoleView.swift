@@ -9,6 +9,7 @@ private extension Color {
 
 /// The menu-bar popover: a compact, premium mini-console. Deep views (full
 /// history, incident reports, rotation) live in the web console via "Open console".
+@MainActor
 struct ConsoleView: View {
     @ObservedObject var state: AppState
     /// Preview/snapshot renderers don't lay out ScrollView content; set false to
