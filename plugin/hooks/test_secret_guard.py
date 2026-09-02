@@ -123,6 +123,7 @@ DENY = [
     # secret files
     ("cat ~/.ssh/id_ed25519", "secret-file-read"),
     ("cat ~/.aws/credentials", "secret-file-read"),
+    ("cat ~/.azure/accessTokens.json", "secret-file-read"),
     # interpreter bypass
     (f"python3 -c \"open('{HOME}/.zshrc','a').write('x')\"", "interpreter-write-bypass"),
     ("node -e \"require('fs').appendFileSync(process.env.HOME+'/.zshenv','x')\"", "interpreter-write-bypass"),
@@ -171,6 +172,28 @@ EXTRA_TESTS = [
     test_read_monitor_default_allows,
     test_read_deny_override_blocks,
     test_read_unknown_allows,
+]
+
+
+# --- config-driven guard modes apply to Bash reads too, not just file tools -
+
+def test_bash_read_denied_by_guard_mode_override():
+    out = run(bash("cat /tmp/x/.env"), env=with_modes(**{"env-files": "deny"}))
+    assert out.get("permission") == "deny", out
+
+
+def test_bash_read_prompt_mode_on_bash_denies_without_asking():
+    # Bounded rule: Bash never gets the interactive prompt the file-tool path
+    # uses (it can touch too many paths at once, and a printed secret is
+    # unrecoverable) — a prompt-mode rule resolves straight to deny.
+    out = run(bash("cat /tmp/x/.env"), env=with_modes(**{"env-files": "prompt"}))
+    assert out.get("permission") == "deny", out
+    assert "hookSpecificOutput" not in out, out
+
+
+EXTRA_TESTS += [
+    test_bash_read_denied_by_guard_mode_override,
+    test_bash_read_prompt_mode_on_bash_denies_without_asking,
 ]
 
 
