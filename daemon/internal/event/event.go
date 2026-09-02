@@ -25,6 +25,10 @@ type Event struct {
 	TS      time.Time `json:"ts"`
 	PID     int32     `json:"pid"`
 	ExePath string    `json:"exe_path,omitempty"`
+	// SessionID identifies the harness session that produced the event, so
+	// evidence chains survive PID reuse. Empty for OS-level events the hooks
+	// did not stamp.
+	SessionID string `json:"session_id,omitempty"`
 	// File events:
 	Path string `json:"path,omitempty"`
 	// Conn events:
