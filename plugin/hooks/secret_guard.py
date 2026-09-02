@@ -70,6 +70,12 @@ WRAPPERS = {
     "exec", "doas", "stdbuf", "caffeinate", "script",
 }
 
+# Network clients that can drive an HTTP-over-unix-socket call. Paired with a
+# token naming the guard's own socket or HTTP surface, this is an agent
+# forging its own allow decision instead of going through the tool calls the
+# guard actually mediates.
+NETWORK_CLIENTS = {"curl", "nc", "ncat", "socat", "wget", "http", "httpie"}
+
 INTERPRETERS = {
     "python", "python3", "perl", "ruby", "node", "deno", "bun", "osascript",
     "php", "lua", "tclsh",
@@ -162,6 +168,17 @@ def is_shell_rc(token: str) -> bool:
 def is_keychain_path(token: str) -> bool:
     p = norm(token).lower()
     return any(m in p for m in KEYCHAIN_MARKERS)
+
+
+# The guard's own control plane: its mode-override file, its onboarding/CA
+# state, and the socket the hook talks to the daemon over. An agent that can
+# write here, or drive it directly over the socket, can turn the guard off.
+GUARD_CONTROL_DIR = os.path.join(HOME, ".config", "secure-agent")
+
+
+def is_guard_control_path(token: str) -> bool:
+    p = norm(token)
+    return p == GUARD_CONTROL_DIR or p.startswith(GUARD_CONTROL_DIR + os.sep)
 
 
 # Default credential paths, beyond SSH private keys, that a bare `cat`/`base64`/
@@ -354,6 +371,22 @@ def check_command(command: str, event: str) -> list:
                 command, event,
             )
 
+        # 1a. Network clients driving the guard's own control socket / HTTP
+        #     surface directly — forging /guard/resolve or /guard/decision is
+        #     the same class of attack as editing guard-modes.json by hand.
+        if name in NETWORK_CLIENTS:
+            for tok in argv[1:]:
+                if "daemon.sock" in tok or "/guard/" in tok:
+                    deny(
+                        "guard-control-network",
+                        "Blocked: an agent tried to drive the guard's own control socket.",
+                        "DENIED: talking to the Directory Guard's control socket directly "
+                        "(curl/nc/wget/etc against daemon.sock or /guard/*) is how an agent "
+                        "would forge its own allow decision. Use the tool calls the guard "
+                        "already mediates instead.",
+                        command, event,
+                    )
+
         # 2. Anything pointed at the keychain files.
         if name in MUTATORS or name in READERS:
             for tok in argv[1:]:
@@ -399,8 +432,19 @@ def check_command(command: str, event: str) -> list:
                         "session at once. Read it, propose the diff to the user, let them apply it.",
                         command, event,
                     )
+                if is_guard_control_path(tok):
+                    deny(
+                        "guard-control-mutation",
+                        f"Blocked: an agent tried to modify {norm(tok)}.",
+                        "DENIED: the guard's own config and socket directory "
+                        "(~/.config/secure-agent/) is not agent-writable. Editing "
+                        "guard-modes.json or touching daemon.sock is how an agent would "
+                        "disable the guard that is watching it.",
+                        command, event,
+                    )
 
-        # 4. Redirects into rc files or keychain paths, whatever the command is.
+        # 4. Redirects into rc files, keychain paths, or the guard's own
+        #    control plane, whatever the command is.
         for m in REDIRECT_RE.finditer(raw):
             tgt = m.group(1)
             if is_shell_rc(tgt):
@@ -415,6 +459,15 @@ def check_command(command: str, event: str) -> list:
                     "keychain-redirect",
                     "Blocked: an agent tried to redirect output into a keychain path.",
                     "DENIED: keychain files are off limits.",
+                    command, event,
+                )
+            if is_guard_control_path(tgt):
+                deny(
+                    "guard-control-redirect",
+                    f"Blocked: an agent tried to redirect output into {norm(tgt)}.",
+                    "DENIED: the guard's own config and socket directory is not "
+                    "agent-writable — this is how an agent would disable the guard "
+                    "that is watching it.",
                     command, event,
                 )
 
@@ -476,6 +529,15 @@ def check_file_write(path: str, command: str, event: str) -> None:
             f"Blocked: an agent tried to edit {norm(path)}.",
             "DENIED: shell config is read-only to agents. `.zshenv` derives every root and "
             "PATH for the shell. Propose the diff to the user instead of writing it.",
+            command, event,
+        )
+    if is_guard_control_path(path):
+        deny(
+            "guard-control-write-tool",
+            f"Blocked: an agent tried to write {norm(path)}.",
+            "DENIED: the guard's own config directory (~/.config/secure-agent/) is not "
+            "agent-writable — this is how an agent would disable the guard watching it. "
+            "Reads stay allowed; propose the change to the user instead.",
             command, event,
         )
     if is_keychain_path(path) or is_secret_file(path):
