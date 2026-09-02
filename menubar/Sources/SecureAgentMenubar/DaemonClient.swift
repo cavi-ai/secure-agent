@@ -61,6 +61,25 @@ public final class DaemonClient: Sendable {
         _ = try await request(method: "POST", path: "/firewall/mode", body: jsonData)
     }
 
+    public func fetchGuardPending() async throws -> [GuardPending] {
+        let body = try await request(method: "GET", path: "/guard/pending")
+        return (try? JSONDecoder().decode([GuardPending].self, from: body)) ?? []
+    }
+
+    public func resolveGuard(_ req: GuardResolveRequest) async throws {
+        let data = try JSONEncoder().encode(req)
+        _ = try await request(method: "POST", path: "/guard/resolve", body: data)
+    }
+
+    public func fetchGuardRules() async throws -> [GuardRuleModel] {
+        let body = try await request(method: "GET", path: "/guard/rules")
+        return (try? JSONDecoder().decode([GuardRuleModel].self, from: body)) ?? []
+    }
+
+    public func deleteGuardRule(agent: String, ruleID: String) async throws {
+        _ = try await request(method: "DELETE", path: "/guard/rules?agent=\(agent)&rule_id=\(ruleID)")
+    }
+
     private func request(method: String, path: String, body: Data? = nil) async throws -> Data {
         let socketPath = self.socketPath
         return try await Task.detached {

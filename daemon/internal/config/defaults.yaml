@@ -68,3 +68,5 @@ firewall:
   context:
     allow_own_vendor_auth: true
     treat_body_secret_as_leak: true
+directory_guard:
+  prompt_deadline_ms: 45000

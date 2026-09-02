@@ -52,3 +52,16 @@ func TestFirewallDefaultsLoad(t *testing.T) {
 		t.Fatal("expected claude vendor config with hosts")
 	}
 }
+
+func TestDirectoryGuardDefaults(t *testing.T) {
+	cfg, err := Load(filepath.Join(t.TempDir(), "absent.yaml"))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	// The hook owns the rule set (a stdlib-only Python process can't parse
+	// YAML) via its own embedded copy plus guard-modes.json; the daemon
+	// config carries only the hook's fail-safe prompt deadline.
+	if cfg.DirectoryGuard.PromptDeadlineMS != 45000 {
+		t.Fatalf("prompt_deadline_ms = %d, want 45000", cfg.DirectoryGuard.PromptDeadlineMS)
+	}
+}
