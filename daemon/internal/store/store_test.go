@@ -1,6 +1,7 @@
 package store
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -194,5 +195,27 @@ func TestGuardRuleRoundTrip(t *testing.T) {
 	}
 	if _, ok := s.LookupGuardRule("claude", "cloud-creds"); ok {
 		t.Fatal("rule survived delete")
+	}
+}
+
+func TestListGuardRulesEmptyIsEmptyArrayNotNull(t *testing.T) {
+	// A nil []GuardRule marshals to JSON `null`, not `[]`; a menubar/dashboard
+	// client expecting an array to iterate over should never see null.
+	s, err := Open("", "")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer s.Close()
+
+	rules := s.ListGuardRules(10)
+	if rules == nil {
+		t.Fatal("ListGuardRules returned nil, want a non-nil empty slice")
+	}
+	b, err := json.Marshal(rules)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if string(b) != "[]" {
+		t.Fatalf("json = %s, want []", b)
 	}
 }
