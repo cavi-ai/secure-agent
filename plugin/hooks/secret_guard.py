@@ -114,6 +114,22 @@ def emit(payload: dict) -> None:
     sys.stdout.flush()
 
 
+def session_id() -> str:
+    """Mirrors activity_log.session_id — same env priority, same fallback."""
+    for var in ("CLAUDE_SESSION_ID", "SECURE_AGENT_SESSION_ID"):
+        v = os.environ.get(var)
+        if v:
+            return v[:64]
+    global _SESSION_ID
+    if _SESSION_ID:
+        return _SESSION_ID
+    import uuid
+    _SESSION_ID = uuid.uuid4().hex
+    return _SESSION_ID
+
+_SESSION_ID = ""
+
+
 def audit(verdict: str, rule: str, command: str, event: str) -> None:
     """Never allowed to fail the hook."""
     rec = {
@@ -140,6 +156,7 @@ def audit(verdict: str, rule: str, command: str, event: str) -> None:
                 "ts": rec["ts"],
                 "tool": f"secret-guard:{verdict}",
                 "pid": os.getppid() or os.getpid(),
+                "session_id": session_id(),
                 "file_path": rule,
                 "command": command[:500],
             }) + "\n")
