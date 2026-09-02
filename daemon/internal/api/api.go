@@ -68,6 +68,10 @@ type API struct {
 
 	guardBroker *guard.Broker
 	guardSeq    uint64
+
+	peerRole  *peers
+	peerChk   PeerChecker
+	agentPIDs func() map[int32]struct{}
 }
 
 // FirewallControl bundles the runtime firewall controls the API exposes.
@@ -107,6 +111,18 @@ func (a *API) SetFirewall(c FirewallControl) {
 // not enabled.
 func (a *API) SetGuard(b *guard.Broker) {
 	a.guardBroker = b
+}
+
+// SetPeers enables unix-socket peer-credential gating. AgentPIDs supplies the
+// live tagged-agent pid set used to recognize hook traffic; a nil function or
+// nil checker leaves the API ungated (unit tests).
+func (a *API) SetPeers(checker PeerChecker, agentPIDs func() map[int32]struct{}) {
+	a.peerChk = checker
+	a.agentPIDs = agentPIDs
+	if checker == nil {
+		return
+	}
+	a.peerRole = &peers{OwnerUID: os.Getuid(), AgentPIDs: agentPIDs}
 }
 
 func (a *API) Serve(ctx context.Context) error {
@@ -151,7 +167,10 @@ func (a *API) Serve(ctx context.Context) error {
 	mux.HandleFunc("/guard/rules", a.handleGuardRules)
 	a.setupWebDashboard(mux)
 
-	server := &http.Server{Handler: mux}
+	server := &http.Server{
+		Handler:     a.gate(a.peerChk, mux),
+		ConnContext: gateConnContext,
+	}
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -321,6 +340,12 @@ type killRequest struct {
 	PID int32 `json:"pid"`
 }
 
+// agentPIDs supplies the live tagged-agent pid set for /kill allowlisting;
+// nil disables the restriction (unit tests, non-darwin builds).
+func (a *API) SetAgentPIDs(fn func() map[int32]struct{}) {
+	a.agentPIDs = fn
+}
+
 func (a *API) handleKill(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -330,6 +355,16 @@ func (a *API) handleKill(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.PID <= 0 {
 		http.Error(w, "Invalid pid", http.StatusBadRequest)
 		return
+	}
+
+	// A control socket that can kill any pid is a self-neutralization
+	// primitive (kill the daemon, kill an unrelated user process). Only
+	// processes the tagger currently recognizes as agents are valid targets.
+	if a.agentPIDs != nil {
+		if _, ok := a.agentPIDs()[req.PID]; !ok {
+			http.Error(w, "pid is not a recognized agent process tree", http.StatusForbidden)
+			return
+		}
 	}
 
 	if err := a.killer.Kill(req.PID); err != nil {
