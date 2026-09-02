@@ -251,3 +251,35 @@ directory_guard:
 ```
 
 Resolution per tool call: first entry whose `cwd_prefix` contains the agent's working directory wins for the rules it lists; unlisted rules fall back to the global `guard-modes.json` override, then to shipped defaults. This is how one repo gets pinned to `deny` while the machine stays `monitor`.
+
+---
+
+## 🧭 Operator UX endpoints
+
+### `GET /posture`
+
+The headline answer — *"do I need to look at this machine, and what first?"*:
+
+```json
+{
+  "state": "attention",          // all-clear | attention | critical
+  "needs_you": 2,
+  "summary": "2 item(s) need you — first: Agent read a secret, then connected out.",
+  "items": [
+    {"kind": "flag", "id": "…", "title": "Agent read a secret, then connected out",
+     "severity": 3, "detail": "…", "ts": "…"}
+  ]
+}
+```
+
+Item kinds: `flag` (recent ≤24h, severity ≥2, human-titled), `guard_pending` (unresolved prompts), `collector_down` (dead/abandoned monitors), `uninspected_egress` (connections that bypassed the firewall). Derived live — never a second source of truth.
+
+### `GET /events/stream` (SSE)
+
+Live feed of every bus event as `event: <kind>` / `data: <json>`, with a 15s heartbeat comment. Replaces polling for UIs that can hold a connection (the console's 2 s poll remains for fallback). One bus subscription per connection, released on disconnect.
+
+### Incident workflow
+
+- `GET /incidents` — list items now carry `workflow: {status, acknowledged_at, resolved_at, resolution_note}`.
+- `GET /incidents?id=…` — returns `{incident, workflow}`.
+- `POST /incidents/status` — `{"id","status":"open|acknowledged|resolved","note":"…"}`. Forward-only transitions; `acknowledged_at` stamps once; re-resolve replaces the note. Audited.
