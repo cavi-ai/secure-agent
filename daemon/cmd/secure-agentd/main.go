@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -169,6 +170,11 @@ func main() {
 			log.Printf("Failed to initialize Proxy CA Manager: %v", err)
 		} else {
 			proxyServer = proxy.NewProxyServer(cfg.ProxyPort, b, caMgr, fwEngine)
+			// The documented console URL lives on the proxy's loopback HTTP
+			// port; serve the same embedded assets the unix API serves.
+			if h := api.DashboardHandler(); h != nil {
+				proxy.SetDashboardHandler(http.StripPrefix("/dashboard/", h))
+			}
 			// Write the opt-in routing snippet into our own config dir. It does
 			// nothing until the user sources it; we never edit their shell rc.
 			if snippetPath, werr := agentenv.WriteSnippet(filepath.Dir(cfg.ProxyCACertPath), cfg.ProxyPort, cfg.ProxyCACertPath); werr == nil {
@@ -205,6 +211,16 @@ func main() {
 
 	// Start Control API
 	apiServer := api.New(cfg.SocketPath, st, &realKiller{}, statusFn)
+
+	// Peer-credential gating on the control socket: kernel-attested pid/uid per
+	// connection. Owner uid gets reads, tagged agent pids may ask the guard for
+	// decisions. /kill is restricted to recognized agent processes regardless of
+	// caller; mutating endpoints fall back to owner-uid trust when the menubar
+	// pid cannot be pinned (daemon launched directly).
+	agentPIDSet := apiServer_taggedPIDs(tagger)
+	apiServer.SetPeers(api.DarwinPeerChecker{}, agentPIDSet)
+	apiServer.SetAgentPIDs(agentPIDSet)
+
 	apiServer.SetFirewall(api.FirewallControl{
 		Engine:      fwEngine,
 		Modes:       fwModes,
@@ -314,6 +330,19 @@ func firewallStats(e *firewall.Engine) map[string]firewall.RuleStat {
 		return nil
 	}
 	return e.Stats()
+}
+
+// apiServer_taggedPIDs adapts the tagger's pid map to the API's allowlist
+// shape. Shared by peer classification and /kill restriction.
+func apiServer_taggedPIDs(tg *agents.Tagger) func() map[int32]struct{} {
+	return func() map[int32]struct{} {
+		tagged := tg.TaggedPIDs()
+		pids := make(map[int32]struct{}, len(tagged))
+		for pid := range tagged {
+			pids[pid] = struct{}{}
+		}
+		return pids
+	}
 }
 
 func listActiveAgents(tg *agents.Tagger) []api.AgentSummary {

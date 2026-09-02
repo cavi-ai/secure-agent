@@ -7,7 +7,8 @@ public struct GuardPending: Codable, Identifiable, Sendable {
     public let path: String
     public let ruleID: String
     public let ts: String
-    enum CodingKeys: String, CodingKey { case id, agent, tool, path, ts; case ruleID = "rule_id" }
+    public let scopeText: String?
+    enum CodingKeys: String, CodingKey { case id, agent, tool, path, ts; case ruleID = "rule_id"; case scopeText = "scope_text" }
 }
 
 public struct GuardResolveRequest: Codable, Sendable {

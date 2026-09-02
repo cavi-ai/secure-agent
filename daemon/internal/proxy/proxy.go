@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/bus"
@@ -36,7 +37,7 @@ const (
 )
 
 type ProxyServer struct {
-	port      int
+	port      atomic.Int32 // written once by Serve if the kernel picked a port
 	bus       *bus.Bus
 	caManager *CAManager
 	engine    *firewall.Engine
@@ -45,11 +46,11 @@ type ProxyServer struct {
 
 func NewProxyServer(port int, b *bus.Bus, caManager *CAManager, engine *firewall.Engine) *ProxyServer {
 	ps := &ProxyServer{
-		port:      port,
 		bus:       b,
 		caManager: caManager,
 		engine:    engine,
 	}
+	ps.port.Store(int32(port))
 
 	ps.server = &http.Server{
 		Addr:    fmt.Sprintf("127.0.0.1:%d", port),
@@ -60,18 +61,18 @@ func NewProxyServer(port int, b *bus.Bus, caManager *CAManager, engine *firewall
 }
 
 func (ps *ProxyServer) Port() int {
-	return ps.port
+	return int(ps.port.Load())
 }
 
 func (ps *ProxyServer) Serve(ctx context.Context) error {
-	listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", ps.port))
+	listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", ps.port.Load()))
 	if err != nil {
-		return fmt.Errorf("failed to listen on proxy port %d: %w", ps.port, err)
+		return fmt.Errorf("failed to listen on proxy port %d: %w", ps.port.Load(), err)
 	}
 	defer listener.Close()
 
 	if tcpAddr, ok := listener.Addr().(*net.TCPAddr); ok {
-		ps.port = tcpAddr.Port
+		ps.port.Store(int32(tcpAddr.Port))
 	}
 
 	errCh := make(chan error, 1)
@@ -93,12 +94,30 @@ func (ps *ProxyServer) Serve(ctx context.Context) error {
 }
 
 func (ps *ProxyServer) serveHTTP(w http.ResponseWriter, r *http.Request) {
+	// The embedded security console is served here so the documented
+	// http://127.0.0.1:<proxy_port>/dashboard/ URL actually works; the control
+	// API on the unix socket serves the same assets. Everything else on this
+	// listener is proxy traffic.
+	if r.Method == http.MethodGet && (r.URL.Path == "/dashboard" || strings.HasPrefix(r.URL.Path, "/dashboard/")) {
+		serveDashboard(w, r)
+		return
+	}
 	if r.Method == http.MethodConnect {
 		ps.handleConnect(w, r)
 		return
 	}
 
 	ps.inspectAndForwardHTTP(w, r)
+}
+
+// dashboardHeaders are the minimum hardening set for a browser-reachable page
+// served from a mixed-traffic listener.
+func dashboardHeaders(w http.ResponseWriter) {
+	w.Header().Set("Content-Security-Policy",
+		"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("X-Frame-Options", "DENY")
+	w.Header().Set("Referrer-Policy", "no-referrer")
 }
 
 func (ps *ProxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
