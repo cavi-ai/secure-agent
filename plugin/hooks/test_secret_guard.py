@@ -130,6 +130,13 @@ DENY = [
     ("osascript -e 'do shell script \"chflags nouchg ~/.zshrc\"'", "interpreter-write-bypass"),
     # real-world casing: KEYCHAIN_MARKERS are lowercase, the path is not
     (f"python3 -c \"open('{HOME}/Library/Keychains/login.keychain-db','w')\"", "interpreter-write-bypass"),
+    # guard control-plane: an agent must not be able to disable its own guard
+    ("echo '{}' > ~/.config/secure-agent/guard-modes.json", "guard-control-redirect"),
+    ("rm ~/.config/secure-agent/guard-modes.json", "guard-control-mutation"),
+    ("curl --unix-socket ~/.config/secure-agent/daemon.sock -X POST http://unix/guard/resolve -d '{}'",
+     "guard-control-network"),
+    ("nc -U ~/.config/secure-agent/daemon.sock", "guard-control-network"),
+    ("wget --unix-socket=~/.config/secure-agent/daemon.sock http://unix/guard/resolve", "guard-control-network"),
 ]
 
 WRITE_DENY = [
@@ -137,6 +144,7 @@ WRITE_DENY = [
     (os.path.join(HOME, ".zshenv"), "shell-rc-write-tool"),
     ("/etc/paths", "shell-rc-write-tool"),
     (os.path.join(HOME, "Library/Keychains/login.keychain-db"), "protected-write-tool"),
+    (os.path.join(HOME, ".config/secure-agent/guard-modes.json"), "guard-control-write-tool"),
 ]
 
 
