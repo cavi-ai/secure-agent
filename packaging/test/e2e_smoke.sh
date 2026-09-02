@@ -5,9 +5,24 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
+# Preserve the real Go toolchain locations before HOME moves, so `go build`
+# below still finds its module cache/build cache and never needs network.
+export GOPATH="$(go env GOPATH)"
+export GOCACHE="$(go env GOCACHE)"
+export GOMODCACHE="$(go env GOMODCACHE)"
+export GOENV="$(go env GOENV)"
+export GOPROXY="$(go env GOPROXY)"
+export GOSUMDB="$(go env GOSUMDB)"
+
+# The daemon and the fake agent below both derive state paths from HOME
+# (activity.jsonl tail target, ~/.claude and ~/.cursor watch globs, the CA
+# cert/key, the firewall salt) that aren't all covered by test_config.yaml's
+# explicit overrides. Route all of it into the throwaway dir instead of
+# ever touching the real home.
+export HOME="$tmp"
+
 SOCKET_PATH="$tmp/daemon.sock"
 
-rm -f "${HOME}/.local/state/secure-agent/activity.jsonl"
 printf 'SECRET_KEY=dummy_val_123\n' > "$tmp/.env"
 
 # Create a test overlay config with fast sampling interval for smoke test
