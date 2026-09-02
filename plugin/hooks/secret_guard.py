@@ -114,6 +114,22 @@ def emit(payload: dict) -> None:
     sys.stdout.flush()
 
 
+def session_id() -> str:
+    """Mirrors activity_log.session_id — same env priority, same fallback."""
+    for var in ("CLAUDE_SESSION_ID", "SECURE_AGENT_SESSION_ID"):
+        v = os.environ.get(var)
+        if v:
+            return v[:64]
+    global _SESSION_ID
+    if _SESSION_ID:
+        return _SESSION_ID
+    import uuid
+    _SESSION_ID = uuid.uuid4().hex
+    return _SESSION_ID
+
+_SESSION_ID = ""
+
+
 def audit(verdict: str, rule: str, command: str, event: str) -> None:
     """Never allowed to fail the hook."""
     rec = {
@@ -140,6 +156,7 @@ def audit(verdict: str, rule: str, command: str, event: str) -> None:
                 "ts": rec["ts"],
                 "tool": f"secret-guard:{verdict}",
                 "pid": os.getppid() or os.getpid(),
+                "session_id": session_id(),
                 "file_path": rule,
                 "command": command[:500],
             }) + "\n")
@@ -244,16 +261,54 @@ def _mode_overrides() -> dict:
         return {}
 
 
+def _cwd_overrides() -> list:
+    """Per-project policy overlays, newest daemon-written file:
+    [{"cwd_prefix": "/Users/me/work/api", "rules": {"env-files": "deny"}}, ...]
+    First matching prefix wins; rule modes from a matched entry replace the
+    global override for that entry only."""
+    path = os.environ.get("SECURE_AGENT_GUARD_CWD_OVERRIDES") or os.path.join(
+        HOME, ".config", "secure-agent", "guard-cwd-overrides.json")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+
+def _cwd_for_request() -> str:
+    """The agent's working directory for this tool call: the harness exposes it
+    in the payload's cwd; fall back to the hook process's cwd."""
+    v = os.environ.get("SECURE_AGENT_CWD") or os.environ.get("CLAUDE_CWD") or ""
+    return os.path.normpath(v) if v else os.getcwd()
+
+
 def match_rule(path: str, rules=DEFAULT_GUARD_RULES):
     """Return (rule_id, effective_mode) for the first rule whose globs match, else (None, None).
-    Effective mode = override file value if present, else the rule's shipped mode."""
+
+    Effective mode resolution order: per-cwd overlay (first entry whose
+    cwd_prefix contains the request cwd) > global override file > shipped mode.
+    This is how a fleet operator pins one repo to deny while the rest of the
+    machine stays monitor."""
     p = norm(path)
+    cwd = _cwd_for_request()
+    cwd_modes = {}
+    for entry in _cwd_overrides():
+        prefix = norm(str(entry.get("cwd_prefix", "")))
+        if prefix and (cwd == prefix or cwd.startswith(prefix + os.sep)):
+            rules_map = entry.get("rules") or {}
+            if isinstance(rules_map, dict):
+                cwd_modes = {str(k): str(v) for k, v in rules_map.items()}
+            break
     overrides = _mode_overrides()
     for rule in rules:
         for g in rule["paths"]:
             gg = norm(g)
             if fnmatch.fnmatch(p, gg) or fnmatch.fnmatch(p, gg + "/*"):
-                return rule["id"], overrides.get(rule["id"], rule["mode"])
+                rid = rule["id"]
+                if rid in cwd_modes:
+                    return rid, cwd_modes[rid]
+                return rid, overrides.get(rid, rule["mode"])
     return None, None
 
 

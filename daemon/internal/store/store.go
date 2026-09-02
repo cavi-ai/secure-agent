@@ -85,6 +85,7 @@ func Open(dbPath, jsonlPath string) (*Store, error) {
 			ts TEXT,
 			pid INT,
 			exe_path TEXT,
+			session_id TEXT,
 			path TEXT,
 			remote_host TEXT,
 			remote_port INT,
@@ -122,6 +123,13 @@ func Open(dbPath, jsonlPath string) (*Store, error) {
 			db.Close()
 			return nil, fmt.Errorf("failed to init db schema: %w", err)
 		}
+	}
+	// Pre-session_id databases (CREATE TABLE IF NOT EXISTS is a no-op on them)
+	// get the column added in place; duplicates are already handled by the
+	// CREATE above on fresh files.
+	if _, err := db.Exec(`ALTER TABLE events ADD COLUMN session_id TEXT`); err != nil {
+		// Column already exists — expected on fresh or migrated databases.
+		log.Printf("store: schema note: %v", err)
 	}
 
 	var jsonl *os.File
@@ -182,8 +190,8 @@ func (s *Store) PutEvent(e event.Event) {
 
 	tsStr := e.TS.Format(time.RFC3339Nano)
 	_, err := s.db.Exec(
-		`INSERT INTO events (kind, ts, pid, exe_path, path, remote_host, remote_port, detail) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		int(e.Kind), tsStr, e.PID, e.ExePath, e.Path, e.RemoteHost, e.RemotePort, e.Detail,
+		`INSERT INTO events (kind, ts, pid, exe_path, session_id, path, remote_host, remote_port, detail) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		int(e.Kind), tsStr, e.PID, e.ExePath, e.SessionID, e.Path, e.RemoteHost, e.RemotePort, e.Detail,
 	)
 	if err != nil {
 		log.Printf("store: failed to insert event: %v", err)
