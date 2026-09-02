@@ -21,6 +21,29 @@ def redact_str(s: str) -> str:
         res = pat.sub("[REDACTED]", res)
     return res
 
+def session_id() -> str:
+    """Stable id for this harness session.
+
+    Claude Code exposes CLAUDE_SESSION_ID; Cursor exposes CURSOR_TRACE_ID (per
+    invocation, but still groups a tool burst). When neither exists, derive one
+    from the daemon-visible parent chain + hook start time, cached in-process,
+    so all hook calls in one harness run share it. PID alone is not enough —
+    PIDs are recycled, and fleet consumers must be able to tell sessions apart.
+    """
+    for var in ("CLAUDE_SESSION_ID", "SECURE_AGENT_SESSION_ID"):
+        v = os.environ.get(var)
+        if v:
+            return v[:64]
+    global _SESSION_ID
+    if _SESSION_ID:
+        return _SESSION_ID
+    import uuid
+    _SESSION_ID = uuid.uuid4().hex
+    return _SESSION_ID
+
+_SESSION_ID = ""
+
+
 def main():
     try:
         raw = sys.stdin.read()
@@ -46,6 +69,7 @@ def main():
         "ts": ts,
         "tool": tool,
         "pid": pid,
+        "session_id": session_id(),
         "command": cmd,
     }
 

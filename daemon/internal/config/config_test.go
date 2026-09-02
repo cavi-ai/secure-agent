@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -63,5 +64,41 @@ func TestDirectoryGuardDefaults(t *testing.T) {
 	// config carries only the hook's fail-safe prompt deadline.
 	if cfg.DirectoryGuard.PromptDeadlineMS != 45000 {
 		t.Fatalf("prompt_deadline_ms = %d, want 45000", cfg.DirectoryGuard.PromptDeadlineMS)
+	}
+}
+
+func TestWriteCwdOverridesRoundTrip(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "guard-cwd-overrides.json")
+	in := []CwdOverride{
+		{CwdPrefix: "/work/api", Rules: map[string]string{"env-files": "deny"}},
+	}
+	if err := WriteCwdOverrides(p, in); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []CwdOverride
+	if err := json.Unmarshal(b, &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out) != 1 || out[0].CwdPrefix != "/work/api" || out[0].Rules["env-files"] != "deny" {
+		t.Fatalf("round trip mismatch: %+v", out)
+	}
+	// File must be user-private.
+	if fi, _ := os.Stat(p); fi.Mode().Perm() != 0o600 {
+		t.Fatalf("overrides file perms = %v, want 0600", fi.Mode().Perm())
+	}
+}
+
+func TestWriteCwdOverridesEmptyClears(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "guard-cwd-overrides.json")
+	if err := WriteCwdOverrides(p, nil); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(p)
+	if string(b) != "[]\n" {
+		t.Fatalf("empty override file = %q, want []", string(b))
 	}
 }
