@@ -107,13 +107,33 @@ struct OnboardingView: View {
             }
 
             GroupBox("3. Harness Hooks") {
-                stepRow(
-                    done: setup.areHooksInstalled,
-                    installed: setup.areHooksInstalled,
-                    title: setup.areHooksInstalled ? "Hooks installed (Claude, Cursor, opencode)" : "Install Claude / Cursor / opencode hooks",
-                    buttonTitle: setup.areHooksInstalled ? "Installed" : "Install Hooks",
-                    action: { try setup.installHooks() }
-                )
+                VStack(alignment: .leading, spacing: 6) {
+                    stepRow(
+                        done: setup.areHooksInstalled,
+                        installed: setup.areHooksInstalled,
+                        title: setup.areHooksInstalled ? "Hooks installed (Claude, Cursor, opencode)" : "Install Claude / Cursor / opencode hooks",
+                        buttonTitle: setup.areHooksInstalled ? "Installed" : "Install Hooks",
+                        action: { try setup.installHooks() }
+                    )
+                    if setup.areHooksInstalled {
+                        Button("Test Hooks") {
+                            Task { await setup.runHookSelfTest() }
+                        }
+                        .disabled(setup.hookSelfTestRunning)
+                        if setup.hookSelfTestRunning {
+                            Text("Firing a synthetic tool call through the hook…")
+                                .font(.caption).foregroundColor(.secondary)
+                        } else if let failure = setup.hookSelfTestFailure {
+                            Label(failure, systemImage: "exclamationmark.triangle.fill")
+                                .font(.caption).foregroundColor(.orange)
+                        } else if setup.hookSelfTestFailure != nil {
+                            EmptyView()
+                        } else {
+                            Text("Verify a tool call round-trips through the guard.")
+                                .font(.caption).foregroundColor(.secondary)
+                        }
+                    }
+                }
             }
 
             GroupBox("4. Extras") {
