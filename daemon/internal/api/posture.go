@@ -23,12 +23,12 @@ type PostureItem struct {
 // and what is the one thing to look at first?" Every UI (console, menubar,
 // fleet collector) renders from this instead of re-deriving it from raw lists.
 type Posture struct {
-	State      string        `json:"state"` // all-clear | attention | critical
-	NeedsYou   int           `json:"needs_you"`
-	Summary    string        `json:"summary"`
-	Items      []PostureItem `json:"items"`
-	Generated  string        `json:"generated"`
-	Connected  bool          `json:"connected"`
+	State     string        `json:"state"` // all-clear | attention | critical
+	NeedsYou  int           `json:"needs_you"`
+	Summary   string        `json:"summary"`
+	Items     []PostureItem `json:"items"`
+	Generated string        `json:"generated"`
+	Connected bool          `json:"connected"`
 }
 
 // handlePosture computes the operator headline from live status + stores.
