@@ -445,5 +445,74 @@ def main() -> int:
     return 0
 
 
+# --- per-cwd guard policy overlays ------------------------------------------
+
+def _hook_module():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("secret_guard_hook", HOOK)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _test_cwd_overrides_first_matching_prefix_wins():
+    import tempfile, json as _json
+    with tempfile.TemporaryDirectory() as td:
+        f = os.path.join(td, "cwd-overrides.json")
+        with open(f, "w") as fh:
+            _json.dump([
+                {"cwd_prefix": "/work/api", "rules": {"env-files": "deny"}},
+                {"cwd_prefix": "/work", "rules": {"env-files": "monitor"}},
+            ], fh)
+        old = dict(os.environ)
+        try:
+            os.environ["SECURE_AGENT_GUARD_CWD_OVERRIDES"] = f
+            os.environ["SECURE_AGENT_CWD"] = "/work/api/server"
+            _, mode = _hook_module().match_rule("/work/api/server/.env")
+            assert mode == "deny", f"expected deny from first matching prefix, got {mode}"
+        finally:
+            os.environ.clear(); os.environ.update(old)
+
+
+def _test_cwd_overrides_non_matching_cwd_falls_back():
+    import tempfile, json as _json
+    with tempfile.TemporaryDirectory() as td:
+        f = os.path.join(td, "cwd-overrides.json")
+        with open(f, "w") as fh:
+            _json.dump([{"cwd_prefix": "/work/api", "rules": {"env-files": "deny"}}], fh)
+        old = dict(os.environ)
+        try:
+            os.environ["SECURE_AGENT_GUARD_CWD_OVERRIDES"] = f
+            os.environ["SECURE_AGENT_CWD"] = "/home/user/other"
+            _, mode = _hook_module().match_rule("/home/user/other/.env")
+            assert mode == "monitor", f"expected global monitor fallback, got {mode}"
+        finally:
+            os.environ.clear(); os.environ.update(old)
+
+
+def _test_cwd_overrides_only_listed_rules():
+    import tempfile, json as _json
+    with tempfile.TemporaryDirectory() as td:
+        f = os.path.join(td, "cwd-overrides.json")
+        with open(f, "w") as fh:
+            _json.dump([{"cwd_prefix": "/work/api", "rules": {"env-files": "deny"}}], fh)
+        old = dict(os.environ)
+        try:
+            os.environ["SECURE_AGENT_GUARD_CWD_OVERRIDES"] = f
+            os.environ["SECURE_AGENT_CWD"] = "/work/api"
+            home = os.path.expanduser("~")
+            _, mode = _hook_module().match_rule(home + "/.ssh/id_ed25519")
+            assert mode == "monitor", f"unlisted rule must keep global mode, got {mode}"
+        finally:
+            os.environ.clear(); os.environ.update(old)
+
+
+EXTRA_TESTS += [
+    _test_cwd_overrides_first_matching_prefix_wins,
+    _test_cwd_overrides_non_matching_cwd_falls_back,
+    _test_cwd_overrides_only_listed_rules,
+]
+
+
 if __name__ == "__main__":
     raise SystemExit(main())
