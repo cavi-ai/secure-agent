@@ -1,6 +1,7 @@
 package store
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -157,5 +158,64 @@ func TestEventRetentionBatchPruning(t *testing.T) {
 	eventsAfterPrune := s.RecentEvents(2000)
 	if len(eventsAfterPrune) != 100 {
 		t.Fatalf("events count after explicit prune = %d, want 100", len(eventsAfterPrune))
+	}
+}
+
+func TestGuardRuleRoundTrip(t *testing.T) {
+	s, err := Open("", "")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer s.Close()
+
+	if _, ok := s.LookupGuardRule("claude", "cloud-creds"); ok {
+		t.Fatal("expected no rule before Put")
+	}
+	s.PutGuardRule(GuardRule{Agent: "claude", RuleID: "cloud-creds", Decision: "allow", Source: "prompt"})
+
+	got, ok := s.LookupGuardRule("claude", "cloud-creds")
+	if !ok || got.Decision != "allow" {
+		t.Fatalf("lookup = %+v, ok=%v", got, ok)
+	}
+	// Per-agent scope: cursor is unaffected.
+	if _, ok := s.LookupGuardRule("cursor", "cloud-creds"); ok {
+		t.Fatal("rule leaked across agents")
+	}
+	// Upsert: a second Put replaces the decision, not duplicates it.
+	s.PutGuardRule(GuardRule{Agent: "claude", RuleID: "cloud-creds", Decision: "deny", Source: "prompt"})
+	got, _ = s.LookupGuardRule("claude", "cloud-creds")
+	if got.Decision != "deny" {
+		t.Fatalf("upsert failed, decision=%q", got.Decision)
+	}
+	if n := len(s.ListGuardRules(0)); n != 1 {
+		t.Fatalf("ListGuardRules = %d rows, want 1", n)
+	}
+	if !s.DeleteGuardRule("claude", "cloud-creds") {
+		t.Fatal("delete returned false")
+	}
+	if _, ok := s.LookupGuardRule("claude", "cloud-creds"); ok {
+		t.Fatal("rule survived delete")
+	}
+}
+
+func TestListGuardRulesEmptyIsEmptyArrayNotNull(t *testing.T) {
+	// A nil []GuardRule marshals to JSON `null`, not `[]`; a menubar/dashboard
+	// client expecting an array to iterate over should never see null.
+	s, err := Open("", "")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer s.Close()
+
+	rules := s.ListGuardRules(10)
+	if rules == nil {
+		t.Fatal("ListGuardRules returned nil, want a non-nil empty slice")
+	}
+	b, err := json.Marshal(rules)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if string(b) != "[]" {
+		t.Fatalf("json = %s, want []", b)
 	}
 }

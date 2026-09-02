@@ -31,17 +31,17 @@ As AI coding agents (Claude Code, Cursor, Codex, OpenClaw, Copilot, etc.) gain i
 - 🔗 **Sliding-Window Event Correlation Engine**  
   Correlates process file activity with network egress. Automatically raises security flags when an agent process reads a sensitive file (e.g. `~/.aws/credentials` or `.env`) followed by an outbound socket connection to a domain outside its pre-approved vendor allowlist.
 
-- 🚨 **Rotation Intel & Incident Containment**  
-  Analyzes compromised secret exposures, categorizes risk severity (`CRITICAL`, `HIGH`, `MEDIUM`, `LOW`), assesses blast radius, and generates ordered step-by-step remediation checklists with copy-paste shell commands via `/incidents` and a native Swift UI remediation modal.
+- 🚨 **Rotation Advisory & Incident Containment (Read-Only)**  
+  Analyzes compromised secret exposures, categorizes risk severity (`CRITICAL`, `HIGH`, `MEDIUM`, `LOW`), assesses blast radius, and generates ordered step-by-step remediation checklists with copy-paste shell commands via `/incidents` and a native Swift UI remediation modal — advisory only, no rotation is performed automatically.
 
 - 🌐 **Opt-In Local MITM Proxy & Payload Inspection (`127.0.0.1:8443`)**  
   Features an inline HTTP/HTTPS proxy server with dynamic TLS certificate generation (`CAManager`) that inspects request streams for outbound credential leaks (`redact.Detect`) and response streams for prompt injection attacks (`injection.Detect`).
 
 - 🖥️ **Live Web Security Console (`http://localhost:8443/dashboard/`)**  
-  Embedded dark-mode visual web console for real-time monitoring of active AI agent process trees, secret rotation incidents, sliding-window security flags, and proxy payload inspection streams.
+  Embedded dark-mode visual web console for real-time monitoring of active AI agent process trees, secret-exposure incident reports, sliding-window security flags, and proxy payload inspection streams.
 
 - 🛠️ **Native `secure-agent` CLI Tool**  
-  Pure-Go terminal utility (`secure-agent status`, `flags`, `incidents`, `rotate`, `kill`, `fleet`) for inspecting security posture and triggering 1-click secret rotation directly from terminal prompts.
+  Pure-Go terminal utility (`secure-agent status`, `flags`, `incidents`, `kill`, `fleet`) for inspecting security posture directly from terminal prompts.
 
 - 🔌 **Local Control & Query API**  
   Exposes a secure HTTP API over a Unix domain socket (`~/.config/secure-agent/daemon.sock`) for querying status, events, flags, incidents, and initiating process termination.
@@ -189,6 +189,33 @@ source ~/.config/secure-agent/agent-env.sh
 Traffic that bypasses the proxy (pinned or unrouted) is counted as `uninspected_egress` in the status, so the blind spot is visible rather than silent.
 
 See [docs/FIREWALL_THREAT_MODEL.md](docs/FIREWALL_THREAT_MODEL.md) for exactly what the firewall defends against, what it does not, and how it handles secret material.
+
+---
+
+## 🔒 Directory Guard
+
+The second pillar: interactive allow/deny for sensitive file access — Little Snitch for agents, instead of for your network.
+
+When an agent tool call touches a guarded path (SSH keys, cloud credentials, the keychain, `.env` files, shell rc files), the hook checks the rule's mode:
+
+| Mode | Behavior |
+|---|---|
+| `monitor` (default) | Logged only. Nothing is blocked, nothing is asked. |
+| `prompt` | The hook holds the tool call while the menu bar raises a native **Allow Once / Allow Always / Deny** prompt. Your answer is remembered per `(agent, rule)` — "Allow Always" is cached, so the same agent hitting the same rule again is resolved instantly with no further prompt. |
+| `deny` | Blocked outright, no prompt. |
+
+**Quiet by default.** Every rule ships `monitor` — nothing is blocked out of the box. The onboarding **"Guard My Secrets"** step is the explicit opt-in that promotes SSH keys, cloud credentials, and the keychain to `prompt`, written to `~/.config/secure-agent/guard-modes.json`.
+
+**Honest coverage.** The `PreToolUse` hook enforces at the tool-call boundary — it can actually block a `prompt`/`deny` rule before the tool runs. The daemon's `eslogger` telemetry observes a broader slice of file activity (including access outside the hook's reach) but is observe-only there: it can log and correlate, not block.
+
+| Surface | Coverage |
+|---|---|
+| Claude file tools (`Read`/`Write`/`Edit`/`NotebookEdit`) | Mode-enforced: `monitor` / `prompt` / `deny`, per rule. |
+| Claude `Bash` | `deny`-mode rules enforced; key material (SSH keys, cloud credential files) always denied regardless of mode. `prompt`-mode paths are also denied — there is no interactive prompt mid-Bash, so a `prompt` rule fails safe to `deny` there instead of asking. |
+| `Grep`/`Glob` on a directory | Observe-only, via the `eslogger` backstop. The hook cannot block a directory scan before it happens. |
+| Cursor | `Bash` commands only. Cursor's shell-exec payload doesn't carry a `tool_name`, which the file-tool guard needs to tell a `Write` from a `Read`. |
+
+An agent that can edit `~/.claude/settings.json` or the hook source itself can still remove the guard — this layer raises the bar, it is not a complete seal.
 
 ---
 

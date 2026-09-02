@@ -2,10 +2,12 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,6 +17,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/config"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 	"github.com/cavi-ai/secure-agent/daemon/internal/firewall"
+	"github.com/cavi-ai/secure-agent/daemon/internal/guard"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
@@ -304,5 +307,98 @@ func TestFirewallSourcesAddRemoveAndAudit(t *testing.T) {
 	}
 	if len(srcStore.Load()) != 0 {
 		t.Fatalf("user source not removed: %v", srcStore.Load())
+	}
+}
+
+func TestGuardPendingSortedByTSAscending(t *testing.T) {
+	st := testStore(t)
+	a := New("", st, &fakeKiller{}, func() Status { return Status{Running: true} })
+	broker := guard.NewBroker(2 * time.Second)
+	a.SetGuard(broker)
+
+	// Enqueue with explicit, out-of-order timestamps. The broker keys its
+	// waiters by a map, which has no inherent order, so the handler must
+	// sort explicitly rather than relying on iteration order.
+	go broker.Request(guard.Pending{ID: "b", Agent: "claude", RuleID: "r2", TS: "2026-01-01T00:00:02Z"})
+	go broker.Request(guard.Pending{ID: "a", Agent: "claude", RuleID: "r1", TS: "2026-01-01T00:00:01Z"})
+	go broker.Request(guard.Pending{ID: "c", Agent: "claude", RuleID: "r3", TS: "2026-01-01T00:00:03Z"})
+
+	deadline := time.Now().Add(2 * time.Second)
+	for len(broker.Pending()) != 3 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if n := len(broker.Pending()); n != 3 {
+		t.Fatalf("waiters registered = %d, want 3", n)
+	}
+
+	rr := httptest.NewRecorder()
+	a.handleGuardPending(rr, httptest.NewRequest("GET", "/guard/pending", nil))
+	var got []guard.Pending
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("pending count = %d, want 3: %+v", len(got), got)
+	}
+	for i := 1; i < len(got); i++ {
+		if got[i-1].TS > got[i].TS {
+			t.Fatalf("pending not sorted ascending by ts: %+v", got)
+		}
+	}
+	if got[0].ID != "a" || got[1].ID != "b" || got[2].ID != "c" {
+		t.Fatalf("unexpected order: %+v", got)
+	}
+
+	// Resolve everything so the goroutines don't outlive the test.
+	for _, p := range got {
+		broker.Resolve(p.ID, guard.Decision{Verdict: "deny", Scope: "once"})
+	}
+}
+
+func TestGuardDecisionCachedRule(t *testing.T) {
+	st := testStore(t)
+	st.PutGuardRule(store.GuardRule{Agent: "claude", RuleID: "cloud-creds", Decision: "allow", Source: "onboarding"})
+
+	a := New("", st, &fakeKiller{}, func() Status { return Status{Running: true} })
+	a.SetGuard(guard.NewBroker(time.Second))
+
+	body := `{"agent":"claude","tool":"Read","path":"/Users/x/.aws/credentials","rule_id":"cloud-creds"}`
+	rr := httptest.NewRecorder()
+	a.handleGuardDecision(rr, httptest.NewRequest("POST", "/guard/decision", strings.NewReader(body)))
+	if rr.Code != 200 {
+		t.Fatalf("code=%d body=%s", rr.Code, rr.Body.String())
+	}
+	var d guard.Decision
+	json.Unmarshal(rr.Body.Bytes(), &d)
+	if d.Verdict != "allow" {
+		t.Fatalf("cached decision = %+v, want allow", d)
+	}
+}
+
+func TestGuardDecisionRejectsInvalidAgent(t *testing.T) {
+	st := testStore(t)
+	a := New("", st, &fakeKiller{}, func() Status { return Status{Running: true} })
+	a.SetGuard(guard.NewBroker(time.Second))
+
+	// A shell metacharacter in "agent" is exactly what a forged control-plane
+	// call (see the hook's guard-control-network denial) would try to smuggle
+	// through this field.
+	body := `{"agent":"claude; rm -rf /","tool":"Read","path":"/x","rule_id":"cloud-creds"}`
+	rr := httptest.NewRecorder()
+	a.handleGuardDecision(rr, httptest.NewRequest("POST", "/guard/decision", strings.NewReader(body)))
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("code=%d body=%s, want 400", rr.Code, rr.Body.String())
+	}
+}
+
+func TestGuardRulesDeleteRejectsInvalidRuleID(t *testing.T) {
+	st := testStore(t)
+	a := New("", st, &fakeKiller{}, func() Status { return Status{Running: true} })
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest("DELETE", "/guard/rules?agent=claude&rule_id=../../etc/passwd", nil)
+	a.handleGuardRules(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("code=%d body=%s, want 400", rr.Code, rr.Body.String())
 	}
 }

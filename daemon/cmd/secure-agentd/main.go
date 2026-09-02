@@ -19,6 +19,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/config"
 	"github.com/cavi-ai/secure-agent/daemon/internal/correlate"
 	"github.com/cavi-ai/secure-agent/daemon/internal/firewall"
+	"github.com/cavi-ai/secure-agent/daemon/internal/guard"
 	"github.com/cavi-ai/secure-agent/daemon/internal/intel"
 	"github.com/cavi-ai/secure-agent/daemon/internal/proxy"
 	"github.com/cavi-ai/secure-agent/daemon/internal/sensitive"
@@ -212,6 +213,20 @@ func main() {
 		Sources:     srcStore,
 		BaseSources: cfg.Firewall.Registry.IngestSources,
 	})
+
+	// The broker deadline is set 3s shorter than the hook's own deadline: the
+	// hook must always receive an explicit deny from the daemon rather than a
+	// dropped socket, so the server must resolve first.
+	hookDeadlineMS := cfg.DirectoryGuard.PromptDeadlineMS
+	if hookDeadlineMS <= 0 {
+		hookDeadlineMS = 45000
+	}
+	brokerMS := hookDeadlineMS - 3000
+	if brokerMS < 1000 {
+		brokerMS = 1000
+	}
+	guardBroker := guard.NewBroker(time.Duration(brokerMS) * time.Millisecond)
+	apiServer.SetGuard(guardBroker)
 	go func() {
 		if err := apiServer.Serve(ctx); err != nil && ctx.Err() == nil {
 			log.Printf("API server error: %v", err)

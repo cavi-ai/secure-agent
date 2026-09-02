@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
-"""Deny agent mutation of the keychain and shell config; route secrets through CaviClaw.
+"""Deny agent mutation of the keychain and shell config; keep secrets out of agent reach.
 
 Shared single copy. Symlinked into ~/.cursor/hooks/ and ~/.claude/hooks/.
 
 Speaks both hook protocols at once by emitting every key each runtime reads:
-Claude Code reads `decision`/`reason`, Cursor reads `permission`/`user_message`/
-`agent_message`, and each ignores the other's keys.
+Claude Code reads `hookSpecificOutput.permissionDecision`/`permissionDecisionReason`,
+Cursor reads `permission`/`user_message`/`agent_message`, and each ignores the
+other's keys.
 
-Policy (the operator, 2026-08-12):
+Policy:
   - Agents get no `security` access at all. Apps reach their own Safe Storage
     natively, not through a shell, so no carve-out is needed.
-  - Every secret an agent needs lives in the CaviClaw 1Password vault.
+  - Credentials an agent needs are proposed to the user, never read directly
+    by the agent.
   - Shell rc files are read-only to agents.
 
 Design rule that the hook this replaces got wrong: match on argv[0], never on a
@@ -18,21 +20,23 @@ substring. `gh api /repos/x/y/security` is not a keychain command. Default is
 allow; a denial requires a positive match on a parsed command word.
 
 Known limit, deliberate: only the top-level command is inspected. A repo script
-that calls `security` internally (code signing, ios-app-store-connect-*) is not
-gated — the operator's own scripts are trusted, ad-hoc agent commands are not.
+that calls `security` internally (code signing, app-store-connect uploads, etc.)
+is not gated — the user's own trusted scripts are out of scope for this generic
+check, only ad-hoc agent commands are.
 """
 
 from __future__ import annotations
 
+import fnmatch
 import json
 import os
 import re
 import shlex
+import socket as _socket
 import sys
 from datetime import datetime, timezone
 
 HOME = os.path.expanduser("~")
-ALLOWLIST = os.path.join(HOME, ".agents", "secrets-allowlist.json")
 AUDIT_LOG = os.path.join(HOME, ".agents", "logs", "secret-guard.jsonl")
 
 # --- protected surfaces -----------------------------------------------------
@@ -67,6 +71,12 @@ WRAPPERS = {
     "exec", "doas", "stdbuf", "caffeinate", "script",
 }
 
+# Network clients that can drive an HTTP-over-unix-socket call. Paired with a
+# token naming the guard's own socket or HTTP surface, this is an agent
+# forging its own allow decision instead of going through the tool calls the
+# guard actually mediates.
+NETWORK_CLIENTS = {"curl", "nc", "ncat", "socat", "wget", "http", "httpie"}
+
 INTERPRETERS = {
     "python", "python3", "perl", "ruby", "node", "deno", "bun", "osascript",
     "php", "lua", "tclsh",
@@ -83,12 +93,6 @@ WRITE_VERB_RE = re.compile(
     )
     """
 )
-
-OP_MUTATION_VERBS = {
-    "create", "edit", "delete", "add", "forget", "revoke", "confirm", "suspend",
-    "reactivate", "grant", "provision",
-}
-OP_SAFE_SUBCOMMANDS = {"--version", "-v", "whoami", "signin", "signout", "--help", "-h", "help"}
 
 SEGMENT_SPLIT = re.compile(r"\|\||&&|[|;\n]|&(?!&)")
 SUBSHELL_RE = re.compile(r"\$\(([^()]*)\)|`([^`]*)`")
@@ -134,10 +138,13 @@ def deny(rule: str, user_msg: str, agent_msg: str, command: str, event: str) -> 
     audit("deny", rule, command, event)
     emit({
         "permission": "deny",
-        "decision": "block",
-        "reason": agent_msg,
         "user_message": user_msg,
         "agent_message": agent_msg,
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": agent_msg,
+        },
     })
     sys.exit(0)
 
@@ -147,9 +154,8 @@ def deny(rule: str, user_msg: str, agent_msg: str, command: str, event: str) -> 
 def norm(token: str) -> str:
     t = token.strip().strip("'\"")
     t = t.replace("$HOME", HOME).replace("${HOME}", HOME)
-    # Expand any other env var the hook inherited, so
-    # `$OPENCLAW_STATE_DIR/credentials/...` classifies as the path it names.
-    # Unset vars are left literal by expandvars; is_secret_file catches those.
+    # Expand any other env var the hook inherited, so a reference like
+    # `$XDG_CONFIG_HOME/gcloud/...` classifies as the path it names.
     t = os.path.expandvars(t)
     if t.startswith("~"):
         t = HOME + t[1:]
@@ -168,18 +174,147 @@ def is_keychain_path(token: str) -> bool:
     return any(m in p for m in KEYCHAIN_MARKERS)
 
 
+# The guard's own control plane: its mode-override file, its onboarding/CA
+# state, and the socket the hook talks to the daemon over. An agent that can
+# write here, or drive it directly over the socket, can turn the guard off.
+GUARD_CONTROL_DIR = os.path.join(HOME, ".config", "secure-agent")
+
+
+def is_guard_control_path(token: str) -> bool:
+    p = norm(token)
+    return p == GUARD_CONTROL_DIR or p.startswith(GUARD_CONTROL_DIR + os.sep)
+
+
+# Default credential paths, beyond SSH private keys, that a bare `cat`/`base64`/
+# etc. must never be allowed to print. Mirrors DEFAULT_GUARD_RULES' cloud-creds.
+CREDENTIALS_GLOBS = ("~/.aws/credentials", "~/.config/gcloud/**", "~/.azure/**")
+
+
 def is_secret_file(token: str) -> bool:
     p = norm(token)
-    state = os.environ.get("OPENCLAW_STATE_DIR", "")
-    if state and p.startswith(os.path.join(norm(state), "credentials")):
+    if PRIVATE_KEY_RE.search(p):
         return True
-    if "/.openclaw/credentials/" in p:
-        return True
-    # The var may be unset in the hook's own env while set in the agent's shell,
-    # leaving the reference literal. Treat the literal as the path it names.
-    if "OPENCLAW_STATE_DIR/credentials" in token.replace("{", "").replace("}", ""):
-        return True
-    return bool(PRIVATE_KEY_RE.search(p))
+    for g in CREDENTIALS_GLOBS:
+        gg = norm(g)
+        if fnmatch.fnmatch(p, gg) or fnmatch.fnmatch(p, gg + "/*"):
+            return True
+    return False
+
+
+# --- directory guard: config-driven mode classification ---------------------
+
+# Shipped default guard rules. Mirrors daemon defaults.yaml directory_guard.
+# All ship monitor; the mode-override file is the user's opt-in to prompt/deny.
+DEFAULT_GUARD_RULES = [
+    {"id": "ssh-keys",    "paths": ["~/.ssh/id_*", "~/.ssh/*_rsa", "~/.ssh/*_ed25519"], "mode": "monitor"},
+    {"id": "cloud-creds", "paths": ["~/.aws/credentials", "~/.config/gcloud/**", "~/.azure/**"], "mode": "monitor"},
+    {"id": "keychain",    "paths": ["**/*.keychain-db", "**/login.keychain*"], "mode": "monitor"},
+    {"id": "env-files",   "paths": ["**/.env", "**/.env.*"], "mode": "monitor"},
+    {"id": "shell-rc",    "paths": ["~/.zshrc", "~/.zshenv", "~/.bashrc", "~/.profile"], "mode": "monitor"},
+]
+
+
+def _mode_overrides() -> dict:
+    path = os.environ.get("SECURE_AGENT_GUARD_MODES") or os.path.join(HOME, ".config", "secure-agent", "guard-modes.json")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+        return {str(k): str(v) for k, v in data.items()}
+    except Exception:
+        return {}
+
+
+def match_rule(path: str, rules=DEFAULT_GUARD_RULES):
+    """Return (rule_id, effective_mode) for the first rule whose globs match, else (None, None).
+    Effective mode = override file value if present, else the rule's shipped mode."""
+    p = norm(path)
+    overrides = _mode_overrides()
+    for rule in rules:
+        for g in rule["paths"]:
+            gg = norm(g)
+            if fnmatch.fnmatch(p, gg) or fnmatch.fnmatch(p, gg + "/*"):
+                return rule["id"], overrides.get(rule["id"], rule["mode"])
+    return None, None
+
+
+# --- directory guard: prompt-mode daemon resolution --------------------------
+
+SOCK_PATH = os.environ.get("SECURE_AGENT_SOCK") or os.path.join(HOME, ".config", "secure-agent", "daemon.sock")
+try:
+    PROMPT_DEADLINE_S = float(os.environ.get("SECURE_AGENT_PROMPT_DEADLINE_S", "45"))
+except ValueError:
+    PROMPT_DEADLINE_S = 45.0
+
+
+def _guard_query(agent, tool, path, rule_id, deadline_s):
+    """POST /guard/decision over the unix socket; return the decision dict or
+    None if the daemon is unreachable. Own deadline < harness timeout."""
+    body = json.dumps({"agent": agent, "tool": tool, "path": path, "rule_id": rule_id})
+    req = ("POST /guard/decision HTTP/1.1\r\nHost: localhost\r\n"
+           "Content-Type: application/json\r\nConnection: close\r\n"
+           f"Content-Length: {len(body)}\r\n\r\n{body}")
+    s = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+    s.settimeout(deadline_s)
+    try:
+        s.connect(SOCK_PATH)
+    except OSError:
+        return None  # daemon down
+    try:
+        s.sendall(req.encode())
+        chunks = []
+        while True:
+            b = s.recv(4096)
+            if not b:
+                break
+            chunks.append(b)
+    except (OSError, _socket.timeout):
+        return {"verdict": "deny", "scope": "once", "reason": "timeout"}
+    finally:
+        s.close()
+    raw = b"".join(chunks)
+    i = raw.find(b"\r\n\r\n")
+    if i < 0:
+        return {"verdict": "deny", "scope": "once", "reason": "timeout"}
+    try:
+        return json.loads(raw[i + 4:].decode())
+    except ValueError:
+        return {"verdict": "deny", "scope": "once", "reason": "timeout"}
+
+
+def runtime() -> str:
+    if os.environ.get("CLAUDE_CODE_ENTRYPOINT"):
+        return "claude"
+    if os.environ.get("CURSOR_TRACE_ID"):
+        return "cursor"
+    return "unknown"
+
+
+def resolve_prompt(agent, tool, path, rule_id, command, event):
+    """Prompt-mode resolution. Daemon decides (cached or via the native prompt).
+    Daemon-down degrades to the harness's own ask on Claude; on Cursor (whose ask
+    support is unverified) it fails safe to deny. Timeout/deny always block."""
+    path = norm(path)
+    d = _guard_query(agent, tool, path, rule_id, PROMPT_DEADLINE_S)
+    deny_msg = (f"DENIED by Directory Guard ({rule_id}). Approve it in the Secure Agent prompt, "
+                "or add an allow-always rule, then retry.")
+    if d is None:  # daemon unreachable
+        if runtime() == "claude":
+            emit_ask(f"Secure Agent: allow {agent} to access {os.path.basename(path)}?", command, event)
+        deny("guard-deny:" + rule_id, f"Blocked: access to {path} needs approval (monitor offline).",
+             deny_msg, command, event)
+    if isinstance(d, dict) and d.get("verdict") == "allow":
+        allow("guard-allow:" + rule_id, command, event)
+    deny("guard-deny:" + rule_id, f"Blocked: access to {path} was denied.", deny_msg, command, event)
+
+
+def emit_ask(reason, command, event):
+    audit("ask", "guard-ask", command, event)
+    emit({
+        "hookSpecificOutput": {"hookEventName": "PreToolUse",
+                               "permissionDecision": "ask",
+                               "permissionDecisionReason": reason},
+    })
+    sys.exit(0)
 
 
 # --- command parsing --------------------------------------------------------
@@ -219,80 +354,6 @@ def cmd_name(argv: list) -> str:
     return os.path.basename(argv[0]) if argv else ""
 
 
-# --- op / 1Password ---------------------------------------------------------
-
-def load_allowlist() -> dict:
-    try:
-        with open(ALLOWLIST, encoding="utf-8") as fh:
-            data = json.load(fh)
-    except Exception:
-        return {"vaults": [], "items": []}
-    return {
-        "vaults": [str(v) for v in data.get("vaults", [])],
-        "items": [str(i) for i in data.get("items", [])],
-    }
-
-
-def op_target_vault(argv: list):
-    """Return (vault, item) named by an op invocation, or (None, None)."""
-    vault = item = None
-    for i, a in enumerate(argv):
-        if a.startswith("op://"):
-            parts = a[len("op://"):].split("/")
-            if parts:
-                vault = parts[0]
-            if len(parts) > 1:
-                item = parts[1]
-        elif a == "--vault" and i + 1 < len(argv):
-            vault = argv[i + 1]
-        elif a.startswith("--vault="):
-            vault = a.split("=", 1)[1]
-    return vault, item
-
-
-def check_op(argv: list, command: str, event: str) -> None:
-    sub = [a for a in argv[1:] if not a.startswith("-")]
-    verb = sub[0] if sub else ""
-    if not sub or argv[1] in OP_SAFE_SUBCOMMANDS or verb in OP_SAFE_SUBCOMMANDS:
-        return
-    if any(v in OP_MUTATION_VERBS for v in sub[:3]):
-        deny(
-            "op-mutation",
-            "Blocked: an agent tried to modify 1Password, not just read it.",
-            "DENIED: agents may read from the allowlisted vault and nothing else. "
-            "Creating, editing, deleting or granting in 1Password is the operator's alone. "
-            "Say what you need and why; do not retry with another client.",
-            command, event,
-        )
-
-    allowed = load_allowlist()
-    vault, item = op_target_vault(argv)
-    if vault is None:
-        deny(
-            "op-unscoped",
-            "Blocked: an agent ran an unscoped 1Password command.",
-            "DENIED: name the vault explicitly — `op read op://<vault>/<item>/<field>` or "
-            f"`--vault <name>`. Allowed vaults: {allowed['vaults'] or 'none configured'}.",
-            command, event,
-        )
-    if vault not in allowed["vaults"]:
-        deny(
-            "op-vault-not-allowed",
-            f"Blocked: an agent tried to read 1Password vault '{vault}'.",
-            f"DENIED: vault '{vault}' is not agent-readable. Allowed: "
-            f"{allowed['vaults'] or 'none configured'}. Ask the operator rather than switching vaults.",
-            command, event,
-        )
-    if allowed["items"] and item and item not in allowed["items"]:
-        deny(
-            "op-item-not-allowed",
-            f"Blocked: an agent tried to read 1Password item '{item}'.",
-            f"DENIED: item '{item}' is not on the allowlist in {ALLOWLIST}. "
-            "Ask the operator to add it; do not read a different item instead.",
-            command, event,
-        )
-
-
 # --- main -------------------------------------------------------------------
 
 def check_command(command: str, event: str) -> list:
@@ -300,9 +361,8 @@ def check_command(command: str, event: str) -> list:
 
     Denials exit inside this function. What survives to the return value is the
     permitted traffic that still touched a guarded surface — reading an rc file,
-    listing the keychain dir, an allowed `op read`. Logging only denials would
-    make the log answer "what did I stop" when the question after an incident is
-    "who went near this".
+    listing the keychain dir. Logging only denials would make the log answer
+    "what did I stop" when the question after an incident is "who went near this".
     """
     touched = []
     for argv, raw in segments(command):
@@ -313,12 +373,27 @@ def check_command(command: str, event: str) -> list:
             deny(
                 "keychain-security-cli",
                 "Blocked: an agent tried to run the macOS `security` tool.",
-                "DENIED: agents have no keychain access, read or write. Every secret you "
-                "need is in the CaviClaw 1Password vault — use `op read op://CaviClaw/...`. "
-                "If it is not there, say so and stop; do not reach for the keychain, "
-                "another client, or a subagent.",
+                "DENIED: agents have no keychain access, read or write. If you need a "
+                "credential, say what you need and why; propose it to the user instead "
+                "of reaching for the keychain, another client, or a subagent.",
                 command, event,
             )
+
+        # 1a. Network clients driving the guard's own control socket / HTTP
+        #     surface directly — forging /guard/resolve or /guard/decision is
+        #     the same class of attack as editing guard-modes.json by hand.
+        if name in NETWORK_CLIENTS:
+            for tok in argv[1:]:
+                if "daemon.sock" in tok or "/guard/" in tok:
+                    deny(
+                        "guard-control-network",
+                        "Blocked: an agent tried to drive the guard's own control socket.",
+                        "DENIED: talking to the Directory Guard's control socket directly "
+                        "(curl/nc/wget/etc against daemon.sock or /guard/*) is how an agent "
+                        "would forge its own allow decision. Use the tool calls the guard "
+                        "already mediates instead.",
+                        command, event,
+                    )
 
         # 2. Anything pointed at the keychain files.
         if name in MUTATORS or name in READERS:
@@ -329,7 +404,7 @@ def check_command(command: str, event: str) -> list:
                         "Blocked: an agent tried to touch a keychain file directly.",
                         "DENIED: keychain files are off limits — copying, moving, "
                         "chmod/chflags, deleting or reading them. This is the exact class of "
-                        "action that broke the keyring on 2026-08-12.",
+                        "action that can corrupt or lock a user out of their keyring.",
                         command, event,
                     )
 
@@ -350,7 +425,7 @@ def check_command(command: str, event: str) -> list:
                 "shell-rc-unlock",
                 f"Blocked: an agent tried to clear the immutable flag on a shell rc file.",
                 "DENIED: clearing uchg/schg on shell config is how an agent gets write access "
-                "to it. Setting the flag is allowed; removing it is the operator's alone.",
+                "to it. Setting the flag is allowed; removing it is the user's call alone.",
                 command, event,
             )
 
@@ -361,19 +436,30 @@ def check_command(command: str, event: str) -> list:
                         "shell-rc-mutation",
                         f"Blocked: an agent tried to modify {norm(tok)}.",
                         "DENIED: shell config is read-only to agents. `.zshenv` derives every "
-                        "root and PATH for the whole fleet; a silent edit there breaks every "
-                        "agent at once. Read it, propose the diff to the operator, let him apply it.",
+                        "root and PATH for the whole shell; a silent edit there can break every "
+                        "session at once. Read it, propose the diff to the user, let them apply it.",
+                        command, event,
+                    )
+                if is_guard_control_path(tok):
+                    deny(
+                        "guard-control-mutation",
+                        f"Blocked: an agent tried to modify {norm(tok)}.",
+                        "DENIED: the guard's own config and socket directory "
+                        "(~/.config/secure-agent/) is not agent-writable. Editing "
+                        "guard-modes.json or touching daemon.sock is how an agent would "
+                        "disable the guard that is watching it.",
                         command, event,
                     )
 
-        # 4. Redirects into rc files or keychain paths, whatever the command is.
+        # 4. Redirects into rc files, keychain paths, or the guard's own
+        #    control plane, whatever the command is.
         for m in REDIRECT_RE.finditer(raw):
             tgt = m.group(1)
             if is_shell_rc(tgt):
                 deny(
                     "shell-rc-redirect",
                     f"Blocked: an agent tried to redirect output into {norm(tgt)}.",
-                    "DENIED: shell config is read-only to agents. Propose the diff to the operator.",
+                    "DENIED: shell config is read-only to agents. Propose the diff to the user.",
                     command, event,
                 )
             if is_keychain_path(tgt):
@@ -381,6 +467,15 @@ def check_command(command: str, event: str) -> list:
                     "keychain-redirect",
                     "Blocked: an agent tried to redirect output into a keychain path.",
                     "DENIED: keychain files are off limits.",
+                    command, event,
+                )
+            if is_guard_control_path(tgt):
+                deny(
+                    "guard-control-redirect",
+                    f"Blocked: an agent tried to redirect output into {norm(tgt)}.",
+                    "DENIED: the guard's own config and socket directory is not "
+                    "agent-writable — this is how an agent would disable the guard "
+                    "that is watching it.",
                     command, event,
                 )
 
@@ -406,7 +501,7 @@ def check_command(command: str, event: str) -> list:
                         "Blocked: an agent tried to write protected config through an interpreter.",
                         "DENIED: routing a write to shell config, the keychain or a credential "
                         "file through python/perl/node does not make it allowed. Propose the "
-                        "diff to the operator.",
+                        "diff to the user.",
                         command, event,
                     )
 
@@ -419,16 +514,32 @@ def check_command(command: str, event: str) -> list:
                         "Blocked: an agent tried to print a credential file.",
                         "DENIED: credential files reach a process through `source`, never "
                         "through stdout. Printing one puts the secret in a transcript. "
-                        "Use `op read op://CaviClaw/...` for the value you actually need.",
+                        "Ask the user for the value you actually need instead.",
                         command, event,
                     )
 
-        # 7. 1Password scope.
-        if name == "op":
-            check_op(argv, command, event)
-            touched.append("op-allowed")
+        # 6a. Directory Guard modes apply to Bash reads/mutations too, not
+        #     just file tools — `cat ~/.aws/credentials` must not skip the
+        #     same policy a Read tool call would hit (match_rule runs only
+        #     for file tools otherwise). The hard secret-file-read deny above
+        #     always wins for key material; this is the general case.
+        #     Bounded rule: Bash never gets the interactive prompt the
+        #     file-tool path uses — it can touch many paths at once, and a
+        #     printed secret is unrecoverable — so a prompt-mode path here
+        #     resolves straight to deny, never an ask.
+        if name in READERS or name in MUTATORS:
+            for tok in argv[1:]:
+                rule_id, mode = match_rule(tok)
+                if mode in ("deny", "prompt"):
+                    deny(
+                        "guard-deny:" + rule_id,
+                        f"Blocked: access to {norm(tok)} is denied by Directory Guard ({rule_id}).",
+                        f"DENIED by Directory Guard ({rule_id}). Propose the change to the "
+                        "user, or ask them to add an allow rule, then retry.",
+                        command, event,
+                    )
 
-        # 8. Permitted traffic that still went near a guarded surface.
+        # 7. Permitted traffic that still went near a guarded surface.
         for tok in argv[1:]:
             if is_shell_rc(tok):
                 touched.append("shell-rc-read")
@@ -446,7 +557,16 @@ def check_file_write(path: str, command: str, event: str) -> None:
             "shell-rc-write-tool",
             f"Blocked: an agent tried to edit {norm(path)}.",
             "DENIED: shell config is read-only to agents. `.zshenv` derives every root and "
-            "PATH for the fleet. Propose the diff to the operator instead of writing it.",
+            "PATH for the shell. Propose the diff to the user instead of writing it.",
+            command, event,
+        )
+    if is_guard_control_path(path):
+        deny(
+            "guard-control-write-tool",
+            f"Blocked: an agent tried to write {norm(path)}.",
+            "DENIED: the guard's own config directory (~/.config/secure-agent/) is not "
+            "agent-writable — this is how an agent would disable the guard watching it. "
+            "Reads stay allowed; propose the change to the user instead.",
             command, event,
         )
     if is_keychain_path(path) or is_secret_file(path):
@@ -477,10 +597,27 @@ def main() -> int:
     file_path = str(
         data.get("file_path")
         or tool_input.get("file_path")
+        or tool_input.get("notebook_path")
         or tool_input.get("path")
         or data.get("path")
         or ""
     )
+
+    if file_path and tool in {"Read", "Grep", "Glob", "Write", "Edit", "MultiEdit", "NotebookEdit"}:
+        rule_id, mode = match_rule(file_path)
+        if mode == "deny":
+            deny_msg = (f"DENIED by Directory Guard ({rule_id}). Propose the change to the user, "
+                        "or ask them to add an allow rule, then retry.")
+            deny(
+                "guard-deny:" + rule_id,
+                f"Blocked: access to {norm(file_path)} is denied by Directory Guard ({rule_id}).",
+                deny_msg,
+                command or file_path, event,
+            )
+        elif mode == "monitor":
+            audit("allow", "guard-monitor:" + rule_id, command or file_path, event)
+        elif mode == "prompt":
+            resolve_prompt(runtime(), tool, file_path, rule_id, command or file_path, event)
 
     touched = check_command(command, event) if command else []
     if file_path and tool in {"Write", "Edit", "MultiEdit", "NotebookEdit"}:
