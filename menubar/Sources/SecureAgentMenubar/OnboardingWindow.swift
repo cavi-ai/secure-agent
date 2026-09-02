@@ -49,7 +49,9 @@ public final class OnboardingWindowController: NSObject, NSWindowDelegate {
 
 @MainActor
 struct OnboardingView: View {
-    @ObservedObject private var setup = SetupManager.shared
+    // Accessed lazily inside body (MainActor), so the stored-default-value
+    // expression does not run during nonisolated memberwise init.
+    @ObservedObject private var setup: SetupManager = SetupManager.shared
     var onDone: () -> Void
 
     var body: some View {
