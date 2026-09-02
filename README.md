@@ -208,6 +208,15 @@ When an agent tool call touches a guarded path (SSH keys, cloud credentials, the
 
 **Honest coverage.** The `PreToolUse` hook enforces at the tool-call boundary — it can actually block a `prompt`/`deny` rule before the tool runs. The daemon's `eslogger` telemetry observes a broader slice of file activity (including access outside the hook's reach) but is observe-only there: it can log and correlate, not block.
 
+| Surface | Coverage |
+|---|---|
+| Claude file tools (`Read`/`Write`/`Edit`/`NotebookEdit`) | Mode-enforced: `monitor` / `prompt` / `deny`, per rule. |
+| Claude `Bash` | `deny`-mode rules enforced; key material (SSH keys, cloud credential files) always denied regardless of mode. `prompt`-mode paths are also denied — there is no interactive prompt mid-Bash, so a `prompt` rule fails safe to `deny` there instead of asking. |
+| `Grep`/`Glob` on a directory | Observe-only, via the `eslogger` backstop. The hook cannot block a directory scan before it happens. |
+| Cursor | `Bash` commands only. Cursor's shell-exec payload doesn't carry a `tool_name`, which the file-tool guard needs to tell a `Write` from a `Read`. |
+
+An agent that can edit `~/.claude/settings.json` or the hook source itself can still remove the guard — this layer raises the bar, it is not a complete seal.
+
 ---
 
 ## ⚙️ Configuration
