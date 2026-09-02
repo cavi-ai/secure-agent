@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/config"
+	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 	"github.com/cavi-ai/secure-agent/daemon/internal/firewall"
 	"github.com/cavi-ai/secure-agent/daemon/internal/guard"
 	"github.com/cavi-ai/secure-agent/daemon/internal/intel"
@@ -74,6 +75,9 @@ type API struct {
 	peerChk    PeerChecker
 	agentPIDs  func() map[int32]struct{}
 	fleetSinks GuardEventSink
+
+	subscribeEvents   func() <-chan event.Event
+	unsubscribeEvents func(<-chan event.Event)
 }
 
 // GuardEventSink receives guard decisions (allow/deny) for downstream
@@ -167,6 +171,7 @@ func (a *API) Serve(ctx context.Context) error {
 	mux.HandleFunc("/posture", a.handlePosture)
 	mux.HandleFunc("/flags", a.handleFlags)
 	mux.HandleFunc("/events", a.handleEvents)
+	mux.HandleFunc("/events/stream", a.handleEventStream)
 	mux.HandleFunc("/incidents", a.handleIncidents)
 	mux.HandleFunc("/incidents/status", a.handleIncidentStatus)
 	mux.HandleFunc("/audit", a.handleAudit)
