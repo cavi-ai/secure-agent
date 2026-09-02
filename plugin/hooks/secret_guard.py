@@ -38,6 +38,10 @@ from datetime import datetime, timezone
 
 HOME = os.path.expanduser("~")
 AUDIT_LOG = os.path.join(HOME, ".agents", "logs", "secret-guard.jsonl")
+# Mirror of every verdict into the daemon-tailed activity stream, so guard
+# decisions are visible in the security console, not just in this local file.
+ACTIVITY_LOG = os.environ.get("SECURE_AGENT_ACTIVITY_LOG") or os.path.join(
+    HOME, ".local", "state", "secure-agent", "activity.jsonl")
 
 # --- protected surfaces -----------------------------------------------------
 
@@ -112,16 +116,32 @@ def emit(payload: dict) -> None:
 
 def audit(verdict: str, rule: str, command: str, event: str) -> None:
     """Never allowed to fail the hook."""
+    rec = {
+        "ts": now(),
+        "verdict": verdict,
+        "rule": rule,
+        "event": event,
+        "command": command[:2000],
+        "runtime": os.environ.get("CLAUDE_CODE_ENTRYPOINT") or os.environ.get("CURSOR_TRACE_ID") or "unknown",
+    }
     try:
         os.makedirs(os.path.dirname(AUDIT_LOG), exist_ok=True)
         with open(AUDIT_LOG, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(rec) + "\n")
+    except Exception:
+        pass
+    # Second copy in the daemon-tailed stream. Schema matches what
+    # TranscriptScanner.ScanLine parses (tool/pid/ts/command/file_path): the
+    # guard verdict travels in `tool`, the guard rule in `file_path`.
+    try:
+        os.makedirs(os.path.dirname(ACTIVITY_LOG), exist_ok=True)
+        with open(ACTIVITY_LOG, "a", encoding="utf-8") as fh:
             fh.write(json.dumps({
-                "ts": now(),
-                "verdict": verdict,
-                "rule": rule,
-                "event": event,
-                "command": command[:2000],
-                "runtime": os.environ.get("CLAUDE_CODE_ENTRYPOINT") or os.environ.get("CURSOR_TRACE_ID") or "unknown",
+                "ts": rec["ts"],
+                "tool": f"secret-guard:{verdict}",
+                "pid": os.getppid() or os.getpid(),
+                "file_path": rule,
+                "command": command[:500],
             }) + "\n")
     except Exception:
         pass

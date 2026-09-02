@@ -69,14 +69,16 @@ func socketpair(t *testing.T) (net.Conn, net.Conn) {
 	return ar.c, client
 }
 
-func TestGateRejectsForeignMutationWhenCheckerSet(t *testing.T) {
+func TestGateAllowsPinnedUIMutation(t *testing.T) {
 	sock := fmt.Sprintf("/tmp/sa_gate_%d.sock", time.Now().UnixNano())
 	defer os.Remove(sock)
 	fk := &fakeKiller{}
 	a := New(sock, testStore(t), fk, func() Status { return Status{Running: true} })
-	// Checker set: all connections resolve to this process (owner uid). No UI
-	// pid pinned, so mutations must be refused even for the owner.
+	// Checker set: all connections resolve to this process (owner uid).
+	// Pin this process as the menubar UI; the request must then be allowed
+	// and reach the killer (a foreign uid would be refused by classify).
 	a.SetPeers(loopbackChecker{DarwinPeerChecker{}}, nil)
+	a.peerRole.UIPID = int32(os.Getpid())
 	ctx, cancel := contextWithCancel()
 	defer cancel()
 	go a.Serve(ctx)
@@ -87,11 +89,11 @@ func TestGateRejectsForeignMutationWhenCheckerSet(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp.StatusCode != http.StatusForbidden {
-		t.Fatalf("kill as owner-without-UI-pin: status=%d, want 403", resp.StatusCode)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("kill as pinned UI: status=%d, want 200", resp.StatusCode)
 	}
-	if fk.killed != 0 {
-		t.Fatal("killer must not fire for a gated-out caller")
+	if fk.killed != 7 {
+		t.Fatalf("killer got pid %d, want 7", fk.killed)
 	}
 }
 
