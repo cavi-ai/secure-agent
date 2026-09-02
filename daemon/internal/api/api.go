@@ -163,6 +163,7 @@ func (a *API) Serve(ctx context.Context) error {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/status", a.handleStatus)
+	mux.HandleFunc("/posture", a.handlePosture)
 	mux.HandleFunc("/flags", a.handleFlags)
 	mux.HandleFunc("/events", a.handleEvents)
 	mux.HandleFunc("/incidents", a.handleIncidents)
