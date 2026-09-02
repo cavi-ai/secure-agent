@@ -63,6 +63,18 @@
       <span>Can't reach the Secure Agent daemon — showing the last known state and retrying…</span>
     </div>
 
+    <!-- Posture headline: one line answering "do I need to look?" -->
+    <section class="posture" id="posture-banner" data-state="all-clear">
+      <div class="posture-main">
+        <span class="posture-dot" aria-hidden="true"></span>
+        <div>
+          <div class="posture-state" id="posture-state">All clear</div>
+          <div class="posture-summary" id="posture-summary">Agents monitored, no action needed</div>
+        </div>
+      </div>
+      <ul class="posture-items" id="posture-items"></ul>
+    </section>
+
     <!-- KPI row -->
     <section class="kpis">
       <div class="kpi" data-accent="brand">
