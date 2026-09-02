@@ -185,15 +185,38 @@ def test_bash_read_denied_by_guard_mode_override():
 def test_bash_read_prompt_mode_on_bash_denies_without_asking():
     # Bounded rule: Bash never gets the interactive prompt the file-tool path
     # uses (it can touch too many paths at once, and a printed secret is
-    # unrecoverable) — a prompt-mode rule resolves straight to deny.
+    # unrecoverable) — a prompt-mode rule resolves straight to deny, never
+    # the ask-mode hookSpecificOutput emit_ask() produces.
     out = run(bash("cat /tmp/x/.env"), env=with_modes(**{"env-files": "prompt"}))
     assert out.get("permission") == "deny", out
-    assert "hookSpecificOutput" not in out, out
+    assert out.get("hookSpecificOutput", {}).get("permissionDecision") != "ask", out
 
 
 EXTRA_TESTS += [
     test_bash_read_denied_by_guard_mode_override,
     test_bash_read_prompt_mode_on_bash_denies_without_asking,
+]
+
+
+# --- deny() emits the current PreToolUse shape, not the deprecated one ------
+
+def test_deny_uses_current_pretooluse_shape():
+    out = run(write(os.path.expanduser("~/.zshrc")))
+    assert out.get("permission") == "deny", out
+    hso = out.get("hookSpecificOutput", {})
+    assert hso.get("hookEventName") == "PreToolUse", out
+    assert hso.get("permissionDecision") == "deny", out
+    assert hso.get("permissionDecisionReason"), out
+    # Cursor keys stay for the other runtime.
+    assert out.get("user_message"), out
+    assert out.get("agent_message"), out
+    # The deprecated top-level keys must be gone.
+    assert "decision" not in out, out
+    assert "reason" not in out, out
+
+
+EXTRA_TESTS += [
+    test_deny_uses_current_pretooluse_shape,
 ]
 
 
@@ -290,10 +313,11 @@ def main() -> int:
     for cmd, rule in DENY:
         for shape, label in ((bash, "claude"), (cursor, "cursor")):
             out = run(shape(cmd))
+            hso = out.get("hookSpecificOutput", {})
             if out.get("permission") != "deny":
                 failures.append(f"[{label}] should DENY ({rule}) but allowed: {cmd}")
-            elif out.get("decision") != "block" or not out.get("reason"):
-                failures.append(f"[{label}] deny is missing Claude Code keys: {cmd}")
+            elif hso.get("permissionDecision") != "deny" or not hso.get("permissionDecisionReason"):
+                failures.append(f"[{label}] deny is missing current Claude Code keys: {cmd}")
 
     for path, rule in WRITE_DENY:
         out = run(write(path))
