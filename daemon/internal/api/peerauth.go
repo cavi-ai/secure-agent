@@ -11,11 +11,11 @@ import (
 type role int
 
 const (
-	roleNone   role = iota // peer could not be identified (non-unix conn, kernel refusal)
-	roleForeign            // same machine, different uid — untrusted
-	roleAgent              // a tagged agent process (hook traffic)
-	roleOwner              // same uid as the daemon (user shells, CLI)
-	roleUI                 // the menubar app (trusted mutating client)
+	roleNone    role = iota // peer could not be identified (non-unix conn, kernel refusal)
+	roleForeign             // same machine, different uid — untrusted
+	roleAgent               // a tagged agent process (hook traffic)
+	roleOwner               // same uid as the daemon (user shells, CLI)
+	roleUI                  // the menubar app (trusted mutating client)
 )
 
 // peers holds the process identities the API trusts. All fields are optional:

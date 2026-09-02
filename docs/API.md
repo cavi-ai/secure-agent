@@ -139,3 +139,70 @@ curl -X POST --unix-socket ~/.config/secure-agent/daemon.sock \
   -d '{"pid": 12345}' \
   http://unix/kill
 ```
+
+### 5. `GET /incidents`
+
+Returns rotation-intel incident reports. `?id=ID` fetches one (`&format=markdown` renders the remediation checklist as markdown); without `id`, lists recent reports (`?limit=N`, default 50).
+
+### 6. `GET /audit`
+
+Returns the policy audit trail (rule promotions, fingerprint ingest, guard-rule changes). `?limit=N`, default 100.
+
+### 7. `GET /fleet`
+
+Returns this node's fleet-telemetry summary: hostname, OS/arch, build `version` (set via ldflags; `dev` on untagged builds), `node_id`, running state, active agents, recent flag count, proxy status.
+
+### 8. `POST /firewall/mode`
+
+Promotes or demotes a firewall rule at runtime and persists the override. Payload: `{"rule":"<id>","mode":"monitor|block"}`. Owner-role only.
+
+### 9. `POST /firewall/fingerprints/reload`
+
+Re-applies persisted secret fingerprints to the running engine.
+
+### 10. `POST /firewall/fingerprints/ingest`
+
+Scans configured ingest sources, registers HMAC fingerprints (never plaintext), applies them live, returns registered labels.
+
+### 11. `GET|POST /firewall/sources`
+
+Lists (GET) or edits (POST, `{"source":"<path>","op":"add|remove"}`) the fingerprint ingest sources. Config-defined sources are read-only; adds are validated against system paths.
+
+### 12. `POST /guard/decision`
+
+A hook's prompt-mode query. A cached (agent, rule) decision returns instantly (`reason:"cached"`); otherwise a pending prompt is enqueued and the request blocks until the menubar resolves it or the broker deadline elapses (fail-safe deny). Payload: `{"agent","tool","path","rule_id"}`; `agent`/`rule_id` must match `^[A-Za-z0-9_.-]+$`.
+
+### 13. `GET /guard/pending`
+
+Returns the queued guard prompts oldest-first. Each item carries a `scope_text` disclosing what "Allow Always" would approve.
+
+### 14. `POST /guard/resolve`
+
+Resolves a pending prompt: `{"id","verdict":"allow|deny","scope":"once|always"}`.
+
+### 15. `GET|DELETE /guard/rules`
+
+Lists stored guard decisions (GET); revokes one (DELETE `?agent=&rule_id=`), forcing a fresh prompt next time.
+
+---
+
+## 🔐 Peer authentication & endpoint roles
+
+Every connection is identified with macOS `LOCAL_PEEREPID` / `LOCAL_PEERCRED` (kernel-attested; not forgeable):
+
+| Role | Who | Allowed |
+|---|---|---|
+| Owner | Same uid as the daemon (CLI, shells, ssh management) | All reads; `POST /guard/resolve`; `DELETE /guard/rules`; `POST /firewall/*`; `POST /kill` (agent pids only) |
+| Agent | PIDs currently tagged as agent processes | Reads; `POST /guard/decision` |
+| Foreign | Different uid | Nothing |
+
+`POST /kill` additionally refuses any PID that is not currently a recognized agent process, so the control socket cannot be turned into an arbitrary-process killer.
+
+## 🖥️ Web dashboard
+
+The embedded console is served at both:
+
+- `http://127.0.0.1:<proxy_port>/dashboard/` (when the proxy is enabled), and
+- over the unix socket at `/dashboard/` (for `curl --unix-socket` or an SSH tunnel).
+
+Both routes send `Content-Security-Policy`, `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, and `Referrer-Policy: no-referrer`.

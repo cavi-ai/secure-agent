@@ -145,8 +145,10 @@ public final class AppState: ObservableObject {
     }
 
     public func openDashboard() {
-        let port = status?.proxyPort ?? 8443
-        if let url = URL(string: "http://localhost:\(port)/dashboard/") {
+        // The console is served on the proxy's loopback HTTP port (and on the
+        // unix API). Only open it when the proxy is actually running.
+        guard status?.proxyEnabled == true, let port = status?.proxyPort, port > 0 else { return }
+        if let url = URL(string: "http://127.0.0.1:\(port)/dashboard/") {
             NSWorkspace.shared.open(url)
         }
     }

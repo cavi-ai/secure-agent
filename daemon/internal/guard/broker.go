@@ -46,9 +46,9 @@ func dedupKey(p Pending) string {
 // a deny so a stalled/absent UI is fail-safe, never fail-open.
 type Broker struct {
 	mu      sync.Mutex
-	waiters map[string]*waiter          // by id
-	byKey   map[string]string           // dedupKey -> id
-	queue   []string                    // ids in arrival order
+	waiters map[string]*waiter // by id
+	byKey   map[string]string  // dedupKey -> id
+	queue   []string           // ids in arrival order
 	timeout time.Duration
 }
 

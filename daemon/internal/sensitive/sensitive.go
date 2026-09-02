@@ -38,8 +38,8 @@ type Classifier interface {
 }
 
 type classifierImpl struct {
-	cfg        config.Config
-	sshKeyRe   *regexp.Regexp
+	cfg      config.Config
+	sshKeyRe *regexp.Regexp
 }
 
 func New(cfg config.Config) Classifier {
