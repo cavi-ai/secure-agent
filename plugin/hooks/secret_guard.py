@@ -183,7 +183,7 @@ def is_guard_control_path(token: str) -> bool:
 
 # Default credential paths, beyond SSH private keys, that a bare `cat`/`base64`/
 # etc. must never be allowed to print. Mirrors DEFAULT_GUARD_RULES' cloud-creds.
-CREDENTIALS_GLOBS = ("~/.aws/credentials", "~/.config/gcloud/**")
+CREDENTIALS_GLOBS = ("~/.aws/credentials", "~/.config/gcloud/**", "~/.azure/**")
 
 
 def is_secret_file(token: str) -> bool:
@@ -507,6 +507,27 @@ def check_command(command: str, event: str) -> list:
                         "DENIED: credential files reach a process through `source`, never "
                         "through stdout. Printing one puts the secret in a transcript. "
                         "Ask the user for the value you actually need instead.",
+                        command, event,
+                    )
+
+        # 6a. Directory Guard modes apply to Bash reads/mutations too, not
+        #     just file tools — `cat ~/.aws/credentials` must not skip the
+        #     same policy a Read tool call would hit (match_rule runs only
+        #     for file tools otherwise). The hard secret-file-read deny above
+        #     always wins for key material; this is the general case.
+        #     Bounded rule: Bash never gets the interactive prompt the
+        #     file-tool path uses — it can touch many paths at once, and a
+        #     printed secret is unrecoverable — so a prompt-mode path here
+        #     resolves straight to deny, never an ask.
+        if name in READERS or name in MUTATORS:
+            for tok in argv[1:]:
+                rule_id, mode = match_rule(tok)
+                if mode in ("deny", "prompt"):
+                    deny(
+                        "guard-deny:" + rule_id,
+                        f"Blocked: access to {norm(tok)} is denied by Directory Guard ({rule_id}).",
+                        f"DENIED by Directory Guard ({rule_id}). Propose the change to the "
+                        "user, or ask them to add an allow rule, then retry.",
                         command, event,
                     )
 
