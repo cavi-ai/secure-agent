@@ -20,9 +20,17 @@ all: build
 
 build: daemon cli menubar
 
+lint:
+	@echo "==> go vet ./..."
+	go vet ./...
+	@echo "==> gofmt check..."
+	@test -z "$$(gofmt -l daemon cmd)" || { echo "gofmt needed:"; gofmt -l daemon cmd; exit 1; }
+
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+
 daemon:
 	@echo "==> Building secure-agentd daemon..."
-	go build -o bin/secure-agentd ./daemon/cmd/secure-agentd
+	go build -ldflags "-X github.com/cavi-ai/secure-agent/daemon/internal/api.Version=$(VERSION)" -o bin/secure-agentd ./daemon/cmd/secure-agentd
 
 cli:
 	@echo "==> Building secure-agent CLI..."

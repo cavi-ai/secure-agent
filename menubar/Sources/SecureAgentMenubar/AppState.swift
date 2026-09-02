@@ -117,7 +117,12 @@ public final class AppState: ObservableObject {
         promptingID = p.id
         let alert = NSAlert()
         alert.messageText = "Allow \(p.agent) to access this?"
-        alert.informativeText = "\(p.tool) → \(p.path)\nRule: \(p.ruleID)"
+        var informative = "\(p.tool) → \(p.path)\nRule: \(p.ruleID)"
+        // Disclose what "Allow Always" really approves, so consent is informed.
+        if let scope = p.scopeText, !scope.isEmpty {
+            informative += "\n\n⚠️ \(scope)"
+        }
+        alert.informativeText = informative
         let allowOnceButton = alert.addButton(withTitle: "Allow Once")
         let allowAlwaysButton = alert.addButton(withTitle: "Allow Always")
         let denyButton = alert.addButton(withTitle: "Deny")
@@ -140,8 +145,10 @@ public final class AppState: ObservableObject {
     }
 
     public func openDashboard() {
-        let port = status?.proxyPort ?? 8443
-        if let url = URL(string: "http://localhost:\(port)/dashboard/") {
+        // The console is served on the proxy's loopback HTTP port (and on the
+        // unix API). Only open it when the proxy is actually running.
+        guard status?.proxyEnabled == true, let port = status?.proxyPort, port > 0 else { return }
+        if let url = URL(string: "http://127.0.0.1:\(port)/dashboard/") {
             NSWorkspace.shared.open(url)
         }
     }
