@@ -505,10 +505,10 @@ func (s *Store) ListGuardRules(limit int) []GuardRule {
 	)
 	if err != nil {
 		log.Printf("store: query guard_rules error: %v", err)
-		return nil
+		return []GuardRule{}
 	}
 	defer rows.Close()
-	var out []GuardRule
+	out := []GuardRule{}
 	for rows.Next() {
 		var g GuardRule
 		if err := rows.Scan(&g.Agent, &g.RuleID, &g.Decision, &g.Source, &g.CreatedAt); err == nil {

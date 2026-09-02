@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -517,6 +519,13 @@ func writeJSON(w http.ResponseWriter, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
+// guardTokenRE bounds "agent" and "rule_id" wherever a client supplies them:
+// alphanumerics plus the separators these ids actually use. Both values flow
+// into the store and are echoed back in JSON, so this closes off control
+// characters, path-traversal segments, and shell metacharacters at the
+// boundary rather than trusting every caller downstream.
+var guardTokenRE = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
+
 type guardDecisionRequest struct {
 	Agent  string `json:"agent"`
 	Tool   string `json:"tool"`
@@ -537,8 +546,9 @@ func (a *API) handleGuardDecision(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req guardDecisionRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Agent == "" || req.RuleID == "" {
-		http.Error(w, `Invalid payload: {"agent","tool","path","rule_id"}`, http.StatusBadRequest)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Agent == "" || req.RuleID == "" ||
+		!guardTokenRE.MatchString(req.Agent) || !guardTokenRE.MatchString(req.RuleID) {
+		http.Error(w, `Invalid payload: {"agent","tool","path","rule_id"} (agent/rule_id must match ^[A-Za-z0-9_.-]+$)`, http.StatusBadRequest)
 		return
 	}
 	if g, ok := a.store.LookupGuardRule(req.Agent, req.RuleID); ok {
@@ -561,7 +571,12 @@ func (a *API) handleGuardPending(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, []guard.Pending{})
 		return
 	}
-	writeJSON(w, a.guardBroker.Pending())
+	pending := a.guardBroker.Pending()
+	// Broker.Pending() ranges a map, whose iteration order is unspecified —
+	// sort oldest-first so the menubar always prompts the longest-waiting
+	// request first instead of a random one.
+	sort.Slice(pending, func(i, j int) bool { return pending[i].TS < pending[j].TS })
+	writeJSON(w, pending)
 }
 
 type guardResolveRequest struct {
@@ -594,8 +609,8 @@ func (a *API) handleGuardRules(w http.ResponseWriter, r *http.Request) {
 	case http.MethodDelete:
 		agent := r.URL.Query().Get("agent")
 		ruleID := r.URL.Query().Get("rule_id")
-		if agent == "" || ruleID == "" {
-			http.Error(w, "agent and rule_id required", http.StatusBadRequest)
+		if agent == "" || ruleID == "" || !guardTokenRE.MatchString(agent) || !guardTokenRE.MatchString(ruleID) {
+			http.Error(w, "agent and rule_id required, matching ^[A-Za-z0-9_.-]+$", http.StatusBadRequest)
 			return
 		}
 		removed := a.store.DeleteGuardRule(agent, ruleID)
