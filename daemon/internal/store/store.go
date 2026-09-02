@@ -97,7 +97,11 @@ func Open(dbPath, jsonlPath string) (*Store, error) {
 			pid INT,
 			risk TEXT,
 			report_json TEXT,
-			created_at TEXT
+			created_at TEXT,
+			status TEXT DEFAULT 'open',
+			acknowledged_at TEXT,
+			resolved_at TEXT,
+			resolution_note TEXT
 		);`,
 		`CREATE TABLE IF NOT EXISTS audit (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -554,4 +558,88 @@ func (s *Store) DeleteGuardRule(agent, ruleID string) bool {
 	}
 	n, _ := res.RowsAffected()
 	return n > 0
+}
+
+// IncidentWorkflow is the mutable state layered on top of a stored report.
+// The report itself is immutable evidence; ack/resolve is operator bookkeeping.
+type IncidentWorkflow struct {
+	Status         string `json:"status"` // open | acknowledged | resolved
+	AcknowledgedAt string `json:"acknowledged_at,omitempty"`
+	ResolvedAt     string `json:"resolved_at,omitempty"`
+	ResolutionNote string `json:"resolution_note,omitempty"`
+}
+
+// SetIncidentStatus transitions an incident's workflow state. Transitions are
+// forward-only: open → acknowledged → resolved. Re-resolving is allowed (note
+// is replaced); acknowledged_at is stamped only the first time.
+func (s *Store) SetIncidentStatus(id, status, note string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	switch status {
+	case "acknowledged":
+		_, err := s.db.Exec(
+			`UPDATE incidents SET status='acknowledged',
+				acknowledged_at=COALESCE(acknowledged_at, ?)
+			 WHERE id = ? OR flag_id = ?`,
+			time.Now().UTC().Format(time.RFC3339Nano), id, id)
+		if err != nil {
+			return false, err
+		}
+	case "resolved":
+		_, err := s.db.Exec(
+			`UPDATE incidents SET status='resolved', resolved_at=?, resolution_note=?
+			 WHERE id = ? OR flag_id = ?`,
+			time.Now().UTC().Format(time.RFC3339Nano), note, id, id)
+		if err != nil {
+			return false, err
+		}
+	case "open":
+		_, err := s.db.Exec(
+			`UPDATE incidents SET status='open', acknowledged_at=NULL, resolved_at=NULL, resolution_note=NULL
+			 WHERE id = ? OR flag_id = ?`, id, id)
+		if err != nil {
+			return false, err
+		}
+	default:
+		return false, fmt.Errorf("invalid status %q (open|acknowledged|resolved)", status)
+	}
+
+	n, err := s.db.Exec(`SELECT 1`)
+	_ = n
+	if err != nil {
+		return false, err
+	}
+	rows, err := s.db.Query(`SELECT changes()`)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	if rows.Next() {
+		var changed int
+		if err := rows.Scan(&changed); err != nil {
+			return false, err
+		}
+		return changed > 0, nil
+	}
+	return false, nil
+}
+
+// IncidentStatus returns the workflow state for one incident.
+func (s *Store) IncidentStatus(id string) (IncidentWorkflow, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var wf IncidentWorkflow
+	var ack, res, note sql.NullString
+	err := s.db.QueryRow(
+		`SELECT status, acknowledged_at, resolved_at, resolution_note FROM incidents WHERE id = ? OR flag_id = ?`, id, id,
+	).Scan(&wf.Status, &ack, &res, &note)
+	if err != nil {
+		return IncidentWorkflow{Status: "unknown"}, false
+	}
+	wf.AcknowledgedAt = ack.String
+	wf.ResolvedAt = res.String
+	wf.ResolutionNote = note.String
+	return wf, wf.Status != ""
 }
