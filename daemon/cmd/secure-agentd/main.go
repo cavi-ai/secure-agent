@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -169,6 +170,11 @@ func main() {
 			log.Printf("Failed to initialize Proxy CA Manager: %v", err)
 		} else {
 			proxyServer = proxy.NewProxyServer(cfg.ProxyPort, b, caMgr, fwEngine)
+			// The documented console URL lives on the proxy's loopback HTTP
+			// port; serve the same embedded assets the unix API serves.
+			if h := api.DashboardHandler(); h != nil {
+				proxy.SetDashboardHandler(http.StripPrefix("/dashboard/", h))
+			}
 			// Write the opt-in routing snippet into our own config dir. It does
 			// nothing until the user sources it; we never edit their shell rc.
 			if snippetPath, werr := agentenv.WriteSnippet(filepath.Dir(cfg.ProxyCACertPath), cfg.ProxyPort, cfg.ProxyCACertPath); werr == nil {

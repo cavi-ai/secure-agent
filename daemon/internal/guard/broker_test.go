@@ -177,7 +177,9 @@ func TestPendingReturnsOldestFirst(t *testing.T) {
 	ids := []string{"first", "second", "third"}
 	for i, id := range ids {
 		path := fmt.Sprintf("/p%d", i)
-		go func(id, path string) { done <- b.Request(Pending{ID: id, Agent: "a", RuleID: "r", Path: path, Tool: "Read"}) }(id, path)
+		go func(id, path string) {
+			done <- b.Request(Pending{ID: id, Agent: "a", RuleID: "r", Path: path, Tool: "Read"})
+		}(id, path)
 		time.Sleep(10 * time.Millisecond) // enforce arrival order
 	}
 	p := b.Pending()

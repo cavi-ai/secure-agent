@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  go:
+    name: Go vet + test + fmt
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: gofmt check
+        run: test -z "$(gofmt -l daemon cmd)" || { gofmt -l daemon cmd; exit 1; }
+      - name: go vet
+        run: go vet ./...
+      - name: go test
+        run: go test ./... -count=1 -race
+
+  hooks:
+    name: Python hook tests
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: secret_guard
+        run: python3 plugin/hooks/test_secret_guard.py
+      - name: injection_scan
+        run: python3 plugin/hooks/test_injection_scan.py
+      - name: activity_log
+        run: python3 plugin/hooks/test_activity_log.py
+
+  menubar:
+    name: Swift package tests
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: swift test
+        run: swift test --package-path menubar
+
+  e2e:
+    name: E2E smoke
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: smoke
+        run: ./packaging/test/e2e_smoke.sh
+
+  secrets:
+    name: Secret scan (self)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

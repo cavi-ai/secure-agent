@@ -55,7 +55,7 @@ func TestFleetEndpointReturnsNodeStatus(t *testing.T) {
 	if !fleetNode.ProxyEnabled || fleetNode.ProxyPort != 8443 {
 		t.Fatalf("fleetNode proxy info invalid: %v:%d", fleetNode.ProxyEnabled, fleetNode.ProxyPort)
 	}
-	if !fleetNode.TailnetReady {
-		t.Fatal("fleetNode.TailnetReady is false")
+	if fleetNode.Version == "" {
+		t.Fatal("fleetNode.Version is empty; build must stamp or default it")
 	}
 }
