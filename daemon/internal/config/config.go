@@ -67,19 +67,13 @@ type ContextConfig struct {
 	TreatBodySecretAsLeak bool `yaml:"treat_body_secret_as_leak"`
 }
 
-// GuardRule is one filesystem guard rule: a set of path globs and the mode the
-// guard applies when an agent tool call touches any of them.
-type GuardRule struct {
-	ID    string   `yaml:"id"`
-	Paths []string `yaml:"paths"`
-	Mode  string   `yaml:"mode"` // monitor | prompt | deny
-}
-
 // DirectoryGuardConfig configures the interactive filesystem guard (pillar 2).
+// The hook owns the rule set — it is a stdlib-only Python process and cannot
+// parse YAML — via its own embedded copy plus the user's guard-modes.json
+// override file. The daemon config carries only the hook's fail-safe prompt
+// deadline.
 type DirectoryGuardConfig struct {
-	Mode             string      `yaml:"mode"` // global default: monitor | prompt | deny
-	Rules            []GuardRule `yaml:"rules"`
-	PromptDeadlineMS int         `yaml:"prompt_deadline_ms"`
+	PromptDeadlineMS int `yaml:"prompt_deadline_ms"`
 }
 
 type rawConfig struct {

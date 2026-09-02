@@ -275,11 +275,49 @@ def test_prompt_daemon_malformed_response_denies():
     assert out.get("permission") == "deny", out
 
 
+@contextlib.contextmanager
+def hanging_guard_stub():
+    """A daemon that ACCEPTS the connection but never replies and never
+    closes — exercises the hook's own recv-timeout deadline, distinct from
+    the daemon-down (connection refused) path above."""
+    d = tempfile.mkdtemp()
+    sock = os.path.join(d, "daemon.sock")
+    stop = threading.Event()
+
+    class H(socketserver.BaseRequestHandler):
+        def handle(self):
+            self.request.recv(65536)
+            stop.wait()  # never respond until the test tells us to stop
+
+    srv = socketserver.UnixStreamServer(sock, H)
+    t = threading.Thread(target=srv.serve_forever, daemon=True); t.start()
+    try:
+        yield sock
+    finally:
+        stop.set()  # release any in-flight handle() before shutdown joins it
+        srv.shutdown(); srv.server_close()
+
+
+def test_prompt_deadline_is_configurable_and_fails_safe():
+    # The load-bearing fail-safe path: if the daemon hangs instead of going
+    # down, the hook must still deny once its own deadline elapses, not hang
+    # forever waiting on a socket. SECURE_AGENT_PROMPT_DEADLINE_S makes that
+    # deadline fast enough to test.
+    with hanging_guard_stub() as sock:
+        env = {**_prompt_env(sock), "SECURE_AGENT_PROMPT_DEADLINE_S": "0.5"}
+        t0 = time.time()
+        out = run(read(os.path.expanduser("~/.aws/credentials")), env=env)
+        elapsed = time.time() - t0
+    assert out.get("permission") == "deny", out
+    assert elapsed < 5, f"deadline not honored, took {elapsed:.2f}s"
+
+
 EXTRA_TESTS += [
     test_prompt_daemon_down_claude_asks,
     test_prompt_daemon_down_cursor_denies,
     test_prompt_daemon_allows,
     test_prompt_daemon_malformed_response_denies,
+    test_prompt_deadline_is_configurable_and_fails_safe,
 ]
 
 

@@ -240,7 +240,10 @@ def match_rule(path: str, rules=DEFAULT_GUARD_RULES):
 # --- directory guard: prompt-mode daemon resolution --------------------------
 
 SOCK_PATH = os.environ.get("SECURE_AGENT_SOCK") or os.path.join(HOME, ".config", "secure-agent", "daemon.sock")
-PROMPT_DEADLINE_S = 45.0
+try:
+    PROMPT_DEADLINE_S = float(os.environ.get("SECURE_AGENT_PROMPT_DEADLINE_S", "45"))
+except ValueError:
+    PROMPT_DEADLINE_S = 45.0
 
 
 def _guard_query(agent, tool, path, rule_id, deadline_s):
