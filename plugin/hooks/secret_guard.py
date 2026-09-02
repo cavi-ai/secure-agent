@@ -293,17 +293,18 @@ def resolve_prompt(agent, tool, path, rule_id, command, event):
     """Prompt-mode resolution. Daemon decides (cached or via the native prompt).
     Daemon-down degrades to the harness's own ask on Claude; on Cursor (whose ask
     support is unverified) it fails safe to deny. Timeout/deny always block."""
+    path = norm(path)
     d = _guard_query(agent, tool, path, rule_id, PROMPT_DEADLINE_S)
     deny_msg = (f"DENIED by Directory Guard ({rule_id}). Approve it in the Secure Agent prompt, "
                 "or add an allow-always rule, then retry.")
     if d is None:  # daemon unreachable
         if runtime() == "claude":
             emit_ask(f"Secure Agent: allow {agent} to access {os.path.basename(path)}?", command, event)
-        deny("guard-deny:" + rule_id, f"Blocked: access to {norm(path)} needs approval (monitor offline).",
+        deny("guard-deny:" + rule_id, f"Blocked: access to {path} needs approval (monitor offline).",
              deny_msg, command, event)
     if isinstance(d, dict) and d.get("verdict") == "allow":
         allow("guard-allow:" + rule_id, command, event)
-    deny("guard-deny:" + rule_id, f"Blocked: access to {norm(path)} was denied.", deny_msg, command, event)
+    deny("guard-deny:" + rule_id, f"Blocked: access to {path} was denied.", deny_msg, command, event)
 
 
 def emit_ask(reason, command, event):
@@ -596,6 +597,7 @@ def main() -> int:
     file_path = str(
         data.get("file_path")
         or tool_input.get("file_path")
+        or tool_input.get("notebook_path")
         or tool_input.get("path")
         or data.get("path")
         or ""

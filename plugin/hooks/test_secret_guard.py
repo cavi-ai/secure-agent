@@ -55,6 +55,10 @@ def write(path: str) -> dict:
     return {"hook_event_name": "PreToolUse", "tool_name": "Write", "tool_input": {"file_path": path}}
 
 
+def notebook_edit(path: str) -> dict:
+    return {"hook_event_name": "PreToolUse", "tool_name": "NotebookEdit", "tool_input": {"notebook_path": path}}
+
+
 def read(path: str) -> dict:
     return {"hook_event_name": "PreToolUse", "tool_name": "Read", "tool_input": {"file_path": path}}
 
@@ -217,6 +221,53 @@ def test_deny_uses_current_pretooluse_shape():
 
 EXTRA_TESTS += [
     test_deny_uses_current_pretooluse_shape,
+]
+
+
+# --- main() must read tool_input.notebook_path, not just file_path/path -----
+
+def test_notebook_edit_denied_for_shell_rc():
+    # tool_input carries "notebook_path" for NotebookEdit, not "file_path" —
+    # main() must extract it or NotebookEdit skips the guard entirely.
+    out = run(notebook_edit(os.path.expanduser("~/.zshrc")))
+    assert out.get("permission") == "deny", out
+
+
+EXTRA_TESTS += [
+    test_notebook_edit_denied_for_shell_rc,
+]
+
+
+# --- resolve_prompt must query/display the normalized path, not the raw one -
+
+def test_resolve_prompt_sends_normalized_path():
+    captured = {}
+    d = tempfile.mkdtemp()
+    sock = os.path.join(d, "daemon.sock")
+    resp_body = json.dumps({"verdict": "allow", "scope": "once"}).encode()
+
+    class H(socketserver.BaseRequestHandler):
+        def handle(self):
+            req = self.request.recv(65536)
+            body = req.split(b"\r\n\r\n", 1)[1]
+            captured["path"] = json.loads(body).get("path")
+            self.request.sendall(
+                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                b"Content-Length: %d\r\nConnection: close\r\n\r\n%s" % (len(resp_body), resp_body))
+
+    srv = socketserver.UnixStreamServer(sock, H)
+    t = threading.Thread(target=srv.serve_forever, daemon=True); t.start()
+    try:
+        raw_path = os.path.join(HOME, ".aws", "..", ".aws", "credentials")
+        run(read(raw_path), env=_prompt_env(sock))
+    finally:
+        srv.shutdown(); srv.server_close()
+    assert captured.get("path") == os.path.normpath(raw_path), captured
+    assert ".." not in (captured.get("path") or ""), captured
+
+
+EXTRA_TESTS += [
+    test_resolve_prompt_sends_normalized_path,
 ]
 
 
