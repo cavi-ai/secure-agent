@@ -58,21 +58,10 @@ func TestDirectoryGuardDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	// Quiet by default (PRD principle 3): every classic ships monitor; the
-	// onboarding step is the user's explicit opt-in to prompt (Task 7).
-	if cfg.DirectoryGuard.Mode != "monitor" {
-		t.Fatalf("directory_guard.mode = %q, want monitor", cfg.DirectoryGuard.Mode)
-	}
+	// The hook owns the rule set (a stdlib-only Python process can't parse
+	// YAML) via its own embedded copy plus guard-modes.json; the daemon
+	// config carries only the hook's fail-safe prompt deadline.
 	if cfg.DirectoryGuard.PromptDeadlineMS != 45000 {
 		t.Fatalf("prompt_deadline_ms = %d, want 45000", cfg.DirectoryGuard.PromptDeadlineMS)
-	}
-	var cloud *GuardRule
-	for i := range cfg.DirectoryGuard.Rules {
-		if cfg.DirectoryGuard.Rules[i].ID == "cloud-creds" {
-			cloud = &cfg.DirectoryGuard.Rules[i]
-		}
-	}
-	if cloud == nil || cloud.Mode != "monitor" {
-		t.Fatalf("cloud-creds rule missing or not monitor-by-default: %+v", cloud)
 	}
 }
