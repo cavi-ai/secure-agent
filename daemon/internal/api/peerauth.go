@@ -109,10 +109,12 @@ func requiredRole(method, path string) role {
 	case path == "/kill", path == "/guard/resolve", path == "/guard/rules",
 		path == "/firewall/mode", path == "/firewall/fingerprints/reload",
 		path == "/firewall/fingerprints/ingest", path == "/firewall/sources":
-		if method == http.MethodGet {
+		if method == http.MethodGet || method == http.MethodDelete {
+			// Guard-rule revocation is owner-level, not menubar-only: headless
+			// fleets manage rules over ssh as the owner user.
 			return roleNone
 		}
-		return roleUI
+		return roleOwner
 	default:
 		return roleNone
 	}
