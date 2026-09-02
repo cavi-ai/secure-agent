@@ -69,9 +69,21 @@ type API struct {
 	guardBroker *guard.Broker
 	guardSeq    uint64
 
-	peerRole  *peers
-	peerChk   PeerChecker
-	agentPIDs func() map[int32]struct{}
+	peerRole   *peers
+	peerChk    PeerChecker
+	agentPIDs  func() map[int32]struct{}
+	fleetSinks GuardEventSink
+}
+
+// GuardEventSink receives guard decisions (allow/deny) for downstream
+// delivery. Modeled on fleet.Publisher to avoid an import cycle.
+type GuardEventSink interface {
+	PublishGuardDecision(decision map[string]any)
+}
+
+// SetFleetSink wires the fleet publisher for guard-decision delivery.
+func (a *API) SetFleetSink(s GuardEventSink) {
+	a.fleetSinks = s
 }
 
 // FirewallControl bundles the runtime firewall controls the API exposes.
@@ -600,6 +612,16 @@ func (a *API) handleGuardDecision(w http.ResponseWriter, r *http.Request) {
 	if d.Scope == "always" && d.Reason == "" {
 		a.store.PutGuardRule(store.GuardRule{Agent: req.Agent, RuleID: req.RuleID, Decision: d.Verdict, Source: "prompt"})
 		a.store.PutAudit(store.AuditEntry{Action: "guard-rule", Rule: req.Agent + "/" + req.RuleID, ToMode: d.Verdict})
+	}
+	// Downstream fleet delivery: every resolved decision (cached, prompt, or
+	// timeout-deny) is observable. Payload carries no secret material — paths
+	// and rule ids only, mirroring what the console already shows.
+	if a.fleetSinks != nil {
+		a.fleetSinks.PublishGuardDecision(map[string]any{
+			"agent": req.Agent, "tool": req.Tool, "path": req.Path,
+			"rule_id": req.RuleID, "verdict": d.Verdict, "scope": d.Scope,
+			"reason": d.Reason, "ts": time.Now().UTC().Format(time.RFC3339Nano),
+		})
 	}
 	writeJSON(w, d)
 }

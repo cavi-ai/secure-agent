@@ -67,13 +67,34 @@ type ContextConfig struct {
 	TreatBodySecretAsLeak bool `yaml:"treat_body_secret_as_leak"`
 }
 
+// WebhookConfig is one HMAC-signed fleet sink.
+type WebhookConfig struct {
+	URL    string   `yaml:"url"`
+	Secret string   `yaml:"secret"`
+	Events []string `yaml:"events"` // flag | incident | guard; empty = all
+}
+
+// FleetConfig configures downstream fleet-oversight delivery.
+type FleetConfig struct {
+	Webhooks []WebhookConfig `yaml:"webhooks"`
+}
+
+// CwdOverride pins one directory subtree to specific guard-rule modes — the
+// per-project policy layer (deny .env in the production repo, monitor
+// everywhere else). Written to guard-cwd-overrides.json for the hook to read.
+type CwdOverride struct {
+	CwdPrefix string            `yaml:"cwd_prefix"`
+	Rules     map[string]string `yaml:"rules"` // rule_id -> monitor|prompt|deny
+}
+
 // DirectoryGuardConfig configures the interactive filesystem guard (pillar 2).
 // The hook owns the rule set — it is a stdlib-only Python process and cannot
 // parse YAML — via its own embedded copy plus the user's guard-modes.json
 // override file. The daemon config carries only the hook's fail-safe prompt
 // deadline.
 type DirectoryGuardConfig struct {
-	PromptDeadlineMS int `yaml:"prompt_deadline_ms"`
+	PromptDeadlineMS int           `yaml:"prompt_deadline_ms"`
+	CwdOverrides     []CwdOverride `yaml:"cwd_overrides"`
 }
 
 type rawConfig struct {
@@ -92,6 +113,7 @@ type rawConfig struct {
 	ProxyCAKeyPath      string               `yaml:"proxy_ca_key_path"`
 	Firewall            FirewallConfig       `yaml:"firewall"`
 	DirectoryGuard      DirectoryGuardConfig `yaml:"directory_guard"`
+	Fleet               FleetConfig          `yaml:"fleet"`
 }
 
 type Config struct {
@@ -110,6 +132,7 @@ type Config struct {
 	ProxyCAKeyPath    string
 	Firewall          FirewallConfig
 	DirectoryGuard    DirectoryGuardConfig
+	Fleet             FleetConfig
 }
 
 func Load(explicitPath string) (Config, error) {
