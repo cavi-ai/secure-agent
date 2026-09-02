@@ -67,21 +67,31 @@ type ContextConfig struct {
 	TreatBodySecretAsLeak bool `yaml:"treat_body_secret_as_leak"`
 }
 
+// DirectoryGuardConfig configures the interactive filesystem guard (pillar 2).
+// The hook owns the rule set — it is a stdlib-only Python process and cannot
+// parse YAML — via its own embedded copy plus the user's guard-modes.json
+// override file. The daemon config carries only the hook's fail-safe prompt
+// deadline.
+type DirectoryGuardConfig struct {
+	PromptDeadlineMS int `yaml:"prompt_deadline_ms"`
+}
+
 type rawConfig struct {
-	SensitiveGlobs       []string            `yaml:"sensitive_globs"`
-	SensitivePaths       []string            `yaml:"sensitive_paths"`
-	KeychainMarkers      []string            `yaml:"keychain_markers"`
-	Agents               []AgentDef          `yaml:"agents"`
-	VendorAllowlist      map[string][]string `yaml:"vendor_allowlist"`
-	NetSampleIntervalMS int64               `yaml:"net_sample_interval_ms"`
-	SocketPath           string              `yaml:"socket_path"`
-	DBPath               string              `yaml:"db_path"`
-	JSONLPath            string              `yaml:"jsonl_path"`
-	ProxyEnabled         bool                `yaml:"proxy_enabled"`
-	ProxyPort            int                 `yaml:"proxy_port"`
-	ProxyCACertPath      string              `yaml:"proxy_ca_cert_path"`
-	ProxyCAKeyPath       string              `yaml:"proxy_ca_key_path"`
-	Firewall             FirewallConfig      `yaml:"firewall"`
+	SensitiveGlobs      []string             `yaml:"sensitive_globs"`
+	SensitivePaths      []string             `yaml:"sensitive_paths"`
+	KeychainMarkers     []string             `yaml:"keychain_markers"`
+	Agents              []AgentDef           `yaml:"agents"`
+	VendorAllowlist     map[string][]string  `yaml:"vendor_allowlist"`
+	NetSampleIntervalMS int64                `yaml:"net_sample_interval_ms"`
+	SocketPath          string               `yaml:"socket_path"`
+	DBPath              string               `yaml:"db_path"`
+	JSONLPath           string               `yaml:"jsonl_path"`
+	ProxyEnabled        bool                 `yaml:"proxy_enabled"`
+	ProxyPort           int                  `yaml:"proxy_port"`
+	ProxyCACertPath     string               `yaml:"proxy_ca_cert_path"`
+	ProxyCAKeyPath      string               `yaml:"proxy_ca_key_path"`
+	Firewall            FirewallConfig       `yaml:"firewall"`
+	DirectoryGuard      DirectoryGuardConfig `yaml:"directory_guard"`
 }
 
 type Config struct {
@@ -99,6 +109,7 @@ type Config struct {
 	ProxyCACertPath   string
 	ProxyCAKeyPath    string
 	Firewall          FirewallConfig
+	DirectoryGuard    DirectoryGuardConfig
 }
 
 func Load(explicitPath string) (Config, error) {
@@ -140,6 +151,7 @@ func Load(explicitPath string) (Config, error) {
 		ProxyCACertPath:   expandPath(raw.ProxyCACertPath),
 		ProxyCAKeyPath:    expandPath(raw.ProxyCAKeyPath),
 		Firewall:          raw.Firewall,
+		DirectoryGuard:    raw.DirectoryGuard,
 	}
 	cfg.Firewall.Registry.SaltRef = expandPath(cfg.Firewall.Registry.SaltRef)
 	cfg.Firewall.Registry.IngestSources = expandPaths(cfg.Firewall.Registry.IngestSources)

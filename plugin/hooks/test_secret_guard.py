@@ -7,23 +7,33 @@ would have. Every case in DENY is an action that actually damages the machine.
 
 from __future__ import annotations
 
+import contextlib
+import glob as _glob
 import json
 import os
+import socketserver
 import subprocess
 import sys
+import tempfile
+import threading
 import time
 
 HOOK = os.path.join(os.path.dirname(os.path.abspath(__file__)), "secret_guard.py")
 HOME = os.path.expanduser("~")
 
 
-def run(payload: dict) -> dict:
+def run(payload: dict, env: dict | None = None) -> dict:
+    base = dict(os.environ)
+    # Strip runtime-detection vars the invoking shell may already carry (this
+    # suite can itself run inside a Claude Code session), so each test's env
+    # overlay is the sole source of truth for the hook's runtime() detection.
+    base.pop("CLAUDE_CODE_ENTRYPOINT", None)
+    base.pop("CURSOR_TRACE_ID", None)
     p = subprocess.run(
         [sys.executable, HOOK],
         input=json.dumps(payload),
-        capture_output=True,
-        text=True,
-        timeout=10,
+        capture_output=True, text=True, timeout=10,
+        env={**base, **(env or {})},
     )
     if p.returncode != 0:
         raise AssertionError(f"hook exited {p.returncode}: {p.stderr[:400]}")
@@ -45,9 +55,23 @@ def write(path: str) -> dict:
     return {"hook_event_name": "PreToolUse", "tool_name": "Write", "tool_input": {"file_path": path}}
 
 
+def notebook_edit(path: str) -> dict:
+    return {"hook_event_name": "PreToolUse", "tool_name": "NotebookEdit", "tool_input": {"notebook_path": path}}
+
+
+def read(path: str) -> dict:
+    return {"hook_event_name": "PreToolUse", "tool_name": "Read", "tool_input": {"file_path": path}}
+
+
+def with_modes(**modes) -> dict:
+    d = os.path.join(tempfile.mkdtemp(), "guard-modes.json")
+    open(d, "w").write(json.dumps(modes))
+    return {"SECURE_AGENT_GUARD_MODES": d}
+
+
 # Must be ALLOWED. These are the false positives that got the old hook disabled.
 ALLOW = [
-    "gh api /repos/cavi-ai/bobby-browser/security",
+    "gh api /repos/example-org/example-repo/security",
     "gh api /orgs/cavi-ai/security-advisories",
     "npm audit --json",
     "cargo audit",
@@ -55,20 +79,15 @@ ALLOW = [
     "rg 'security' --type ts",
     "git commit -m 'fix security header parsing'",
     "python3 -c \"print('security')\"",
-    "cd /Volumes/MIRZA/workspace/CAVI/security-tools && make build",
+    "cd /tmp/workspace/example-org/example-repo && make build",
     "cat ~/.zshrc",
     "head -50 ~/.zshenv",
     "diff ~/.zshrc ~/.zprofile",
-    "op read op://CaviClaw/Twitter/credential",
-    "op item list --vault CaviClaw",
-    "op --version",
-    "op whoami",
-    ". $OPENCLAW_STATE_DIR/credentials/shell-env.sh",
     "source ~/.zshrc",
     "ls -la ~/Library/Keychains/",
-    "echo hello > /Volumes/MIRZA/.quarantine/note.txt",
+    "echo hello > /tmp/example/note.txt",
     "sed -i '' 's/a/b/' ./src/app.ts",
-    "chmod 600 /Volumes/MIRZA/.quarantine/x",
+    "chmod 600 /tmp/example/x",
     # locking rc files only hardens them
     "chflags uchg ~/.zshenv ~/.zshrc ~/.zprofile ~/.profile",
     "chflags schg ~/.zshrc",
@@ -106,22 +125,23 @@ DENY = [
     ("chflags uchg ~/Library/Keychains/login.keychain-db", "keychain-file-op"),
     ("chmod 777 /etc/paths", "shell-rc-mutation"),
     # secret files
-    ("cat $OPENCLAW_STATE_DIR/credentials/op-service-account-token", "secret-file-read"),
-    ("base64 ~/.openclaw/credentials/secrets.json", "secret-file-read"),
     ("cat ~/.ssh/id_ed25519", "secret-file-read"),
-    # 1Password scope
-    ("op read op://Private/thing/field", "op-vault-not-allowed"),
-    ("op item get 'X' --vault Personal", "op-vault-not-allowed"),
-    ("op item create --category login --title X", "op-mutation"),
-    ("op item delete X --vault CaviClaw", "op-mutation"),
-    ("op read", "op-unscoped"),
+    ("cat ~/.aws/credentials", "secret-file-read"),
+    ("cat ~/.azure/accessTokens.json", "secret-file-read"),
     # interpreter bypass
-    ("python3 -c \"open('/Users/franco/.zshrc','a').write('x')\"", "interpreter-write-bypass"),
+    (f"python3 -c \"open('{HOME}/.zshrc','a').write('x')\"", "interpreter-write-bypass"),
     ("node -e \"require('fs').appendFileSync(process.env.HOME+'/.zshenv','x')\"", "interpreter-write-bypass"),
-    ("perl -e 'open(F,\">>\",\"/Users/franco/.zprofile\"); print F \"x\"'", "interpreter-write-bypass"),
+    (f"perl -e 'open(F,\">>\",\"{HOME}/.zprofile\"); print F \"x\"'", "interpreter-write-bypass"),
     ("osascript -e 'do shell script \"chflags nouchg ~/.zshrc\"'", "interpreter-write-bypass"),
     # real-world casing: KEYCHAIN_MARKERS are lowercase, the path is not
-    ("python3 -c \"open('/Users/franco/Library/Keychains/login.keychain-db','w')\"", "interpreter-write-bypass"),
+    (f"python3 -c \"open('{HOME}/Library/Keychains/login.keychain-db','w')\"", "interpreter-write-bypass"),
+    # guard control-plane: an agent must not be able to disable its own guard
+    ("echo '{}' > ~/.config/secure-agent/guard-modes.json", "guard-control-redirect"),
+    ("rm ~/.config/secure-agent/guard-modes.json", "guard-control-mutation"),
+    ("curl --unix-socket ~/.config/secure-agent/daemon.sock -X POST http://unix/guard/resolve -d '{}'",
+     "guard-control-network"),
+    ("nc -U ~/.config/secure-agent/daemon.sock", "guard-control-network"),
+    ("wget --unix-socket=~/.config/secure-agent/daemon.sock http://unix/guard/resolve", "guard-control-network"),
 ]
 
 WRITE_DENY = [
@@ -129,6 +149,247 @@ WRITE_DENY = [
     (os.path.join(HOME, ".zshenv"), "shell-rc-write-tool"),
     ("/etc/paths", "shell-rc-write-tool"),
     (os.path.join(HOME, "Library/Keychains/login.keychain-db"), "protected-write-tool"),
+    (os.path.join(HOME, ".config/secure-agent/guard-modes.json"), "guard-control-write-tool"),
+]
+
+
+# --- config-driven guard modes (Directory Guard) -----------------------------
+
+def test_read_monitor_default_allows():
+    # keychain ships monitor; a read is allowed (and logged), not blocked
+    out = run(read(os.path.expanduser("~/Library/Keychains/login.keychain-db")))
+    assert out.get("permission") == "allow", out
+
+
+def test_read_deny_override_blocks():
+    out = run(read(os.path.expanduser("~/Library/Keychains/login.keychain-db")),
+              env=with_modes(keychain="deny"))
+    assert out.get("permission") == "deny", out
+
+
+def test_read_unknown_allows():
+    out = run(read("/tmp/project/main.go"))
+    assert out.get("permission") == "allow", out
+
+
+EXTRA_TESTS = [
+    test_read_monitor_default_allows,
+    test_read_deny_override_blocks,
+    test_read_unknown_allows,
+]
+
+
+# --- config-driven guard modes apply to Bash reads too, not just file tools -
+
+def test_bash_read_denied_by_guard_mode_override():
+    out = run(bash("cat /tmp/x/.env"), env=with_modes(**{"env-files": "deny"}))
+    assert out.get("permission") == "deny", out
+
+
+def test_bash_read_prompt_mode_on_bash_denies_without_asking():
+    # Bounded rule: Bash never gets the interactive prompt the file-tool path
+    # uses (it can touch too many paths at once, and a printed secret is
+    # unrecoverable) — a prompt-mode rule resolves straight to deny, never
+    # the ask-mode hookSpecificOutput emit_ask() produces.
+    out = run(bash("cat /tmp/x/.env"), env=with_modes(**{"env-files": "prompt"}))
+    assert out.get("permission") == "deny", out
+    assert out.get("hookSpecificOutput", {}).get("permissionDecision") != "ask", out
+
+
+EXTRA_TESTS += [
+    test_bash_read_denied_by_guard_mode_override,
+    test_bash_read_prompt_mode_on_bash_denies_without_asking,
+]
+
+
+# --- deny() emits the current PreToolUse shape, not the deprecated one ------
+
+def test_deny_uses_current_pretooluse_shape():
+    out = run(write(os.path.expanduser("~/.zshrc")))
+    assert out.get("permission") == "deny", out
+    hso = out.get("hookSpecificOutput", {})
+    assert hso.get("hookEventName") == "PreToolUse", out
+    assert hso.get("permissionDecision") == "deny", out
+    assert hso.get("permissionDecisionReason"), out
+    # Cursor keys stay for the other runtime.
+    assert out.get("user_message"), out
+    assert out.get("agent_message"), out
+    # The deprecated top-level keys must be gone.
+    assert "decision" not in out, out
+    assert "reason" not in out, out
+
+
+EXTRA_TESTS += [
+    test_deny_uses_current_pretooluse_shape,
+]
+
+
+# --- main() must read tool_input.notebook_path, not just file_path/path -----
+
+def test_notebook_edit_denied_for_shell_rc():
+    # tool_input carries "notebook_path" for NotebookEdit, not "file_path" —
+    # main() must extract it or NotebookEdit skips the guard entirely.
+    out = run(notebook_edit(os.path.expanduser("~/.zshrc")))
+    assert out.get("permission") == "deny", out
+
+
+EXTRA_TESTS += [
+    test_notebook_edit_denied_for_shell_rc,
+]
+
+
+# --- resolve_prompt must query/display the normalized path, not the raw one -
+
+def test_resolve_prompt_sends_normalized_path():
+    captured = {}
+    d = tempfile.mkdtemp()
+    sock = os.path.join(d, "daemon.sock")
+    resp_body = json.dumps({"verdict": "allow", "scope": "once"}).encode()
+
+    class H(socketserver.BaseRequestHandler):
+        def handle(self):
+            req = self.request.recv(65536)
+            body = req.split(b"\r\n\r\n", 1)[1]
+            captured["path"] = json.loads(body).get("path")
+            self.request.sendall(
+                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                b"Content-Length: %d\r\nConnection: close\r\n\r\n%s" % (len(resp_body), resp_body))
+
+    srv = socketserver.UnixStreamServer(sock, H)
+    t = threading.Thread(target=srv.serve_forever, daemon=True); t.start()
+    try:
+        raw_path = os.path.join(HOME, ".aws", "..", ".aws", "credentials")
+        run(read(raw_path), env=_prompt_env(sock))
+    finally:
+        srv.shutdown(); srv.server_close()
+    assert captured.get("path") == os.path.normpath(raw_path), captured
+    assert ".." not in (captured.get("path") or ""), captured
+
+
+EXTRA_TESTS += [
+    test_resolve_prompt_sends_normalized_path,
+]
+
+
+# --- prompt mode: daemon call, fail-safe deadline, ask fallback -------------
+
+@contextlib.contextmanager
+def guard_stub(decision):
+    d = tempfile.mkdtemp()
+    sock = os.path.join(d, "daemon.sock")
+    body = json.dumps(decision).encode()
+    class H(socketserver.BaseRequestHandler):
+        def handle(self):
+            self.request.recv(65536)
+            self.request.sendall(
+                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                b"Content-Length: %d\r\nConnection: close\r\n\r\n%s" % (len(body), body))
+    srv = socketserver.UnixStreamServer(sock, H)
+    t = threading.Thread(target=srv.serve_forever, daemon=True); t.start()
+    try:
+        yield sock
+    finally:
+        srv.shutdown(); srv.server_close()
+
+
+def _prompt_env(sock=None):
+    e = with_modes(**{"cloud-creds": "prompt"})
+    if sock:
+        e["SECURE_AGENT_SOCK"] = sock
+    return e
+
+
+def test_prompt_daemon_down_claude_asks():
+    out = run(read(os.path.expanduser("~/.aws/credentials")),
+              env={**_prompt_env("/tmp/nonexistent-guard.sock"), "CLAUDE_CODE_ENTRYPOINT": "cli"})
+    assert out.get("hookSpecificOutput", {}).get("permissionDecision") == "ask", out
+
+
+def test_prompt_daemon_down_cursor_denies():
+    out = run(read(os.path.expanduser("~/.aws/credentials")),
+              env={**_prompt_env("/tmp/nonexistent-guard.sock"), "CURSOR_TRACE_ID": "abc"})
+    assert out.get("permission") == "deny", out
+
+
+def test_prompt_daemon_allows():
+    with guard_stub({"verdict": "allow", "scope": "always"}) as sock:
+        out = run(read(os.path.expanduser("~/.aws/credentials")), env=_prompt_env(sock))
+    assert out.get("permission") == "allow", out
+
+
+def test_prompt_daemon_malformed_response_denies():
+    # A daemon that returns valid JSON that is NOT an object (a bare string here,
+    # not {"verdict": ...}) must never be treated as an allow. The guard fails
+    # closed on anything it cannot positively parse as an allow decision.
+    with guard_stub("allow") as sock:
+        out = run(read(os.path.expanduser("~/.aws/credentials")), env=_prompt_env(sock))
+    assert out.get("permission") == "deny", out
+
+
+@contextlib.contextmanager
+def hanging_guard_stub():
+    """A daemon that ACCEPTS the connection but never replies and never
+    closes — exercises the hook's own recv-timeout deadline, distinct from
+    the daemon-down (connection refused) path above."""
+    d = tempfile.mkdtemp()
+    sock = os.path.join(d, "daemon.sock")
+    stop = threading.Event()
+
+    class H(socketserver.BaseRequestHandler):
+        def handle(self):
+            self.request.recv(65536)
+            stop.wait()  # never respond until the test tells us to stop
+
+    srv = socketserver.UnixStreamServer(sock, H)
+    t = threading.Thread(target=srv.serve_forever, daemon=True); t.start()
+    try:
+        yield sock
+    finally:
+        stop.set()  # release any in-flight handle() before shutdown joins it
+        srv.shutdown(); srv.server_close()
+
+
+def test_prompt_deadline_is_configurable_and_fails_safe():
+    # The load-bearing fail-safe path: if the daemon hangs instead of going
+    # down, the hook must still deny once its own deadline elapses, not hang
+    # forever waiting on a socket. SECURE_AGENT_PROMPT_DEADLINE_S makes that
+    # deadline fast enough to test.
+    with hanging_guard_stub() as sock:
+        env = {**_prompt_env(sock), "SECURE_AGENT_PROMPT_DEADLINE_S": "0.5"}
+        t0 = time.time()
+        out = run(read(os.path.expanduser("~/.aws/credentials")), env=env)
+        elapsed = time.time() - t0
+    assert out.get("permission") == "deny", out
+    assert elapsed < 5, f"deadline not honored, took {elapsed:.2f}s"
+
+
+EXTRA_TESTS += [
+    test_prompt_daemon_down_claude_asks,
+    test_prompt_daemon_down_cursor_denies,
+    test_prompt_daemon_allows,
+    test_prompt_daemon_malformed_response_denies,
+    test_prompt_deadline_is_configurable_and_fails_safe,
+]
+
+
+# --- de-personalization gate --------------------------------------------------
+
+def test_no_personal_strings_in_shipped_hooks():
+    # "cavi-ai" is the public org and is allowed; personal vault/owner/incident are not.
+    # Tokens are built from split literals so this assertion's own source line
+    # does not itself trip the scan it performs on every *.py file here.
+    banned = (
+        "cavi" + "claw", "fran" + "co", "open" + "claw", "2026-08" + "-12",
+        "mi" + "rza", "/volumes/mi" + "rza", "/users/fran" + "co",
+    )
+    for f in _glob.glob(os.path.join(os.path.dirname(__file__), "*.py")):
+        src = open(f, encoding="utf-8").read().lower()
+        for token in banned:
+            assert token not in src, f"{os.path.basename(f)} leaks personal token: {token}"
+
+
+EXTRA_TESTS += [
+    test_no_personal_strings_in_shipped_hooks,
 ]
 
 
@@ -144,15 +405,22 @@ def main() -> int:
     for cmd, rule in DENY:
         for shape, label in ((bash, "claude"), (cursor, "cursor")):
             out = run(shape(cmd))
+            hso = out.get("hookSpecificOutput", {})
             if out.get("permission") != "deny":
                 failures.append(f"[{label}] should DENY ({rule}) but allowed: {cmd}")
-            elif out.get("decision") != "block" or not out.get("reason"):
-                failures.append(f"[{label}] deny is missing Claude Code keys: {cmd}")
+            elif hso.get("permissionDecision") != "deny" or not hso.get("permissionDecisionReason"):
+                failures.append(f"[{label}] deny is missing current Claude Code keys: {cmd}")
 
     for path, rule in WRITE_DENY:
         out = run(write(path))
         if out.get("permission") != "deny":
             failures.append(f"[write] should DENY ({rule}) but allowed: {path}")
+
+    for fn in EXTRA_TESTS:
+        try:
+            fn()
+        except AssertionError as e:
+            failures.append(f"{fn.__name__}: {e}")
 
     # A malformed payload must not brick the agent.
     p = subprocess.run([sys.executable, HOOK], input="not json", capture_output=True, text=True, timeout=10)
@@ -172,7 +440,7 @@ def main() -> int:
         for f in failures:
             print("  -", f)
         return 1
-    total = len(ALLOW) * 2 + len(DENY) * 2 + len(WRITE_DENY) + 2
+    total = len(ALLOW) * 2 + len(DENY) * 2 + len(WRITE_DENY) + len(EXTRA_TESTS) + 2
     print(f"PASS ({total} cases, {elapsed:.0f}ms cold call)")
     return 0
 

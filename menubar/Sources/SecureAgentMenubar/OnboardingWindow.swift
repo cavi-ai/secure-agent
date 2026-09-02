@@ -177,6 +177,25 @@ struct OnboardingView: View {
                 .padding(.vertical, 4)
             }
 
+            GroupBox("7. Guard Your Secrets") {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Turn on the interactive guard for SSH keys, cloud credentials, and the keychain. When an agent reaches for one, you get a native Allow / Deny prompt. Nothing is blocked until you choose.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button("Guard My Secrets") { setup.enableGuardClassics() }
+                        .disabled(setup.didGuardClassics)
+                    if setup.didGuardClassics {
+                        Text("Guarding SSH keys, cloud credentials, and keychain — you'll be prompted on first access.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 4)
+            }
+
             if let err = setup.lastError {
                 Text(err).foregroundStyle(.red).font(.callout)
                     .fixedSize(horizontal: false, vertical: true)

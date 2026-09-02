@@ -172,6 +172,48 @@ public final class SetupManager: ObservableObject {
         }
     }
 
+    // MARK: - Guard the classics (opt-in promotion from monitor to prompt)
+
+    public struct GuardClassic: Sendable {
+        public let ruleID: String
+        public let mode: String
+    }
+
+    /// SSH keys, cloud creds, and the keychain ship `monitor` (quiet by
+    /// default); this is the user's explicit opt-in to promote them to
+    /// `prompt`. No silent deny.
+    public nonisolated static let guardClassics: [GuardClassic] = [
+        .init(ruleID: "ssh-keys", mode: "prompt"),
+        .init(ruleID: "cloud-creds", mode: "prompt"),
+        .init(ruleID: "keychain", mode: "prompt"),
+    ]
+
+    @Published public private(set) var didGuardClassics = false
+
+    private var guardModesDir: String { "\(home)/.config/secure-agent" }
+    private var guardModesPath: String { "\(guardModesDir)/guard-modes.json" }
+
+    /// Writes the three classics as `prompt` into `guard-modes.json` — the
+    /// same mode-override file the hook reads (`_mode_overrides` in
+    /// secret_guard.py). Merges over any existing entries so the user's own
+    /// edits are never clobbered.
+    public func enableGuardClassics() {
+        lastError = nil
+        do {
+            try fm.createDirectory(atPath: guardModesDir, withIntermediateDirectories: true)
+            var modes: [String: String] = [:]
+            if let data = try? Data(contentsOf: URL(fileURLWithPath: guardModesPath)),
+               let existing = try? JSONDecoder().decode([String: String].self, from: data) {
+                modes = existing
+            }
+            for c in Self.guardClassics { modes[c.ruleID] = c.mode }
+            try JSONEncoder().encode(modes).write(to: URL(fileURLWithPath: guardModesPath))
+            didGuardClassics = true
+        } catch {
+            report(error)
+        }
+    }
+
     // MARK: - Full Disk Access
 
     public func openFullDiskAccessSettings() {
