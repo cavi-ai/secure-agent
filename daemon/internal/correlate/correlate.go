@@ -89,12 +89,13 @@ func (c *Correlator) Observe(e event.Event) []model.Flag {
 		}
 		return []model.Flag{
 			{
-				ID:       flagID,
-				Rule:     ruleName,
-				Severity: 3,
-				TS:       e.TS,
-				PID:      e.PID,
-				Agent:    agentName,
+				ID:        flagID,
+				Rule:      ruleName,
+				Severity:  3,
+				TS:        e.TS,
+				PID:       e.PID,
+				Agent:     agentName,
+				SessionID: e.SessionID,
 				Evidence: []string{
 					fmt.Sprintf("Local proxy detected security violation '%s' while connecting to %s:%d", e.Detail, e.RemoteHost, e.RemotePort),
 				},
@@ -125,13 +126,14 @@ func (c *Correlator) Observe(e event.Event) []model.Flag {
 					fmt.Sprintf("%s (pid %d) accessed keychain file %s at %s", info.Name, e.PID, e.Path, e.TS.Format(time.RFC3339)),
 				}
 				flags = append(flags, model.Flag{
-					ID:       flagID,
-					Rule:     "keychain-access",
-					Severity: 2,
-					TS:       e.TS,
-					PID:      e.PID,
-					Agent:    info.Name,
-					Evidence: evidence,
+					ID:        flagID,
+					Rule:      "keychain-access",
+					Severity:  2,
+					TS:        e.TS,
+					PID:       e.PID,
+					Agent:     info.Name,
+					SessionID: e.SessionID,
+					Evidence:  evidence,
 				})
 			} else {
 				// Check if there's already an unconsumed recent foreign connection for this agent
@@ -187,13 +189,14 @@ func (c *Correlator) Observe(e event.Event) []model.Flag {
 		evidence = append(evidence, fmt.Sprintf("then connected to %s:%d at %s", e.RemoteHost, e.RemotePort, e.TS.Format(time.RFC3339)))
 
 		flags = append(flags, model.Flag{
-			ID:       flagID,
-			Rule:     "sensitive-read-then-connect",
-			Severity: 3,
-			TS:       e.TS,
-			PID:      e.PID,
-			Agent:    info.Name,
-			Evidence: evidence,
+			ID:        flagID,
+			Rule:      "sensitive-read-then-connect",
+			Severity:  3,
+			TS:        e.TS,
+			PID:       e.PID,
+			Agent:     info.Name,
+			SessionID: e.SessionID,
+			Evidence:  evidence,
 		})
 		c.markReadConsumedLocked(rootPID, e.PID)
 		c.markConnConsumedLocked(rootPID, e.PID)

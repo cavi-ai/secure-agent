@@ -206,3 +206,48 @@ The embedded console is served at both:
 - over the unix socket at `/dashboard/` (for `curl --unix-socket` or an SSH tunnel).
 
 Both routes send `Content-Security-Policy`, `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, and `Referrer-Policy: no-referrer`.
+
+---
+
+## 🛰️ Fleet oversight
+
+Downstream collectors consume events from many nodes three ways:
+
+### 1. Webhook push (real-time)
+
+```yaml
+fleet:
+  webhooks:
+    - url: https://collector.internal/hooks/secure-agent
+      secret: "<shared-secret>"
+      events: [flag, incident, guard]   # empty = all
+```
+
+Every flag, incident, and guard decision is POSTed as:
+
+```json
+{"node_id": "…", "kind": "flag", "ts": "…", "version": "…", "payload": {…}}
+```
+
+- Signature: `X-SecureAgent-Signature: sha256=<hex hmac-sha256(secret, body)>` — verify before trusting `payload`.
+- Retries: 3 attempts (500ms/2s/5s backoff) on network errors, 5xx, and 429 only. Non-retryable failures land in `~/.local/state/secure-agent/webhook-deliveries.jsonl` (0600).
+- Delivery is best-effort and asynchronous; a dead collector never slows the daemon.
+
+### 2. Pull API
+
+`GET /fleet` returns this node's status including stable `node_id` and build `version`; `GET /flags|events|incidents|audit|guard/*` are all available over SSH tunnels or Tailscale. Point the CLI at a tunneled socket with `SECURE_AGENT_SOCK=/path/to/tunneled.sock secure-agent status`.
+
+### 3. Session identity
+
+Hook-stamped `session_id` (env `CLAUDE_SESSION_ID`, or a per-run uuid) flows through `events`, `flags`, and incident evidence, so one agent run can be followed end-to-end even after PIDs recycle.
+
+## 📁 Per-project guard policies
+
+```yaml
+directory_guard:
+  cwd_overrides:
+    - cwd_prefix: /Users/me/work/prod-api
+      rules: { env-files: deny, ssh-keys: prompt }
+```
+
+Resolution per tool call: first entry whose `cwd_prefix` contains the agent's working directory wins for the rules it lists; unlisted rules fall back to the global `guard-modes.json` override, then to shipped defaults. This is how one repo gets pinned to `deny` while the machine stays `monitor`.
