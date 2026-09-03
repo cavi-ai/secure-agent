@@ -9,7 +9,7 @@
 2. **Data & Security Safety Rules**:
    - Never write secret values (passwords, tokens, private keys) to logs, code, or committed files.
    - All sensitive data must use redacting placeholders (`[REDACTED]`).
-   - `docs/` specs and implementation plans are local artifacts and must never be committed to git.
+   - Implementation plans and scratch specs stay local; only the published docs (README, CHANGELOG, `docs/*.md`) are committed.
 
 3. **Go Systems Programming Standards**:
    - Keep the core daemon pure Go (`cgo` disabled) to ensure portability across macOS architectures and future Linux builds.

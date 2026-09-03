@@ -52,11 +52,11 @@ This document provides a detailed overview of the internal architecture of `secu
 
 ## 1. Go Telemetry Daemon (`daemon/`)
 
-The daemon (`secure-agentd`) runs as an unprivileged or root system service managed by `launchd`. It collects OS system telemetry without kernel extensions using modern macOS APIs.
+The daemon (`secure-agentd`) runs as a child process of the menu bar app: it starts when Secure Agent launches and stops when the app quits (the daemon also self-terminates if it is orphaned). There is no `launchd` service and nothing runs in the background. It collects OS system telemetry without kernel extensions using modern macOS APIs.
 
 ### Collectors
 
-1. **File Watch Collector (`daemon/internal/collect/filewatch.go`)**:
+1. **File Watch Collector (`daemon/internal/collect/eslogger.go`)**:
    - Subprocesses macOS Endpoint Security (`eslogger`) streaming events for `open`, `exec`, `rename`, `unlink`, and `tcc_modify`.
    - Parses the JSON stream in real-time and filters target paths against sensitive path rules (`sensitive_globs`, `sensitive_paths`, `keychain_markers`).
 
