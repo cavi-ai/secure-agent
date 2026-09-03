@@ -6,7 +6,6 @@
 *.jsonl
 
 **/__pycache__/
-docs/
 .build/
 # Added by code-review-graph
 .code-review-graph/
@@ -18,3 +17,14 @@ QODER.md
 CODEBUDDY.md
 .codebuddy/
 
+
+# built binaries dropped at repo root by hand-builds
+/secure-agent
+/secure-agentd
+/secure-agent-collector
+
+# machine-specific agent/MCP configs (private paths)
+.mcp.json
+opencode.jsonc
+.cursorrules
+.github/code-review-graph.instruction.md
