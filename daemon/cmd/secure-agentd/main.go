@@ -7,8 +7,11 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -200,9 +203,13 @@ func main() {
 			if h := api.DashboardHandler(); h != nil {
 				proxy.SetDashboardHandler(http.StripPrefix("/dashboard/", h))
 			}
+			// Per-install proxy token: the loopback listener must not be a free
+			// open proxy for other local processes. The token is generated next
+			// to the salt (0600) and embedded in the snippet the user sources.
+			proxyToken := proxy.LoadToken(filepath.Join(filepath.Dir(cfg.Firewall.Registry.SaltRef), "proxy-token"))
 			// Write the opt-in routing snippet into our own config dir. It does
 			// nothing until the user sources it; we never edit their shell rc.
-			if snippetPath, werr := agentenv.WriteSnippet(filepath.Dir(cfg.ProxyCACertPath), cfg.ProxyPort, cfg.ProxyCACertPath); werr == nil {
+			if snippetPath, werr := agentenv.WriteSnippet(filepath.Dir(cfg.ProxyCACertPath), cfg.ProxyPort, cfg.ProxyCACertPath, proxyToken); werr == nil {
 				log.Printf("agent routing snippet: %s (source it to route agents through the proxy)", snippetPath)
 			}
 		}
@@ -240,11 +247,25 @@ func main() {
 	// Peer-credential gating on the control socket: kernel-attested pid/uid per
 	// connection. Owner uid gets reads, tagged agent pids may ask the guard for
 	// decisions. /kill is restricted to recognized agent processes regardless of
-	// caller; mutating endpoints fall back to owner-uid trust when the menubar
-	// pid cannot be pinned (daemon launched directly).
+	// caller. The owning app (the menubar that launched this daemon) is pinned
+	// as the only mutating client; direct launches (ppid = shell) keep
+	// owner-uid mutation so headless/ssh management still works.
 	agentPIDSet := apiServer_taggedPIDs(tagger)
 	apiServer.SetPeers(api.DarwinPeerChecker{}, agentPIDSet)
 	apiServer.SetAgentPIDs(agentPIDSet)
+	// Pin the owning menubar app as the only mutating client — but only when
+	// the parent really is an .app binary. A direct launch from a shell must
+	// keep owner-uid mutation (headless/ssh management); pinning the shell
+	// would lock the CLI out of resolve/firewall while granting the shell UI
+	// powers. ps(1) is spawned once at startup, not per request.
+	if ppid := os.Getppid(); ppid > 1 {
+		if out, err := exec.Command("ps", "-p", strconv.Itoa(ppid), "-o", "comm=").Output(); err == nil {
+			parentExe := strings.TrimSpace(string(out))
+			if strings.Contains(parentExe, ".app/Contents/MacOS/") || strings.Contains(parentExe, ".app/Contents/Frameworks/") {
+				apiServer.SetUIPID(int32(ppid))
+			}
+		}
+	}
 
 	apiServer.SetFirewall(api.FirewallControl{
 		Engine:      fwEngine,
