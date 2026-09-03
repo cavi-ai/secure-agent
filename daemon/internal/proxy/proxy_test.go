@@ -238,9 +238,7 @@ func TestDashboardServedOnProxyPort(t *testing.T) {
 // Without a token configured, the proxy keeps working for unauthenticated
 // loopback clients (token load failure must not brick routing).
 func TestProxyNoTokenConfiguredAllowsAll(t *testing.T) {
-	LoadToken(t.TempDir() + "/nonexistent-dir/x") // ensure clean state
-	// Token() empty => authorized() returns true; exercised via CONNECT path below.
-	_ = Token()
+	clearProxyToken()
 }
 
 // With a token configured, unauthenticated CONNECT is refused with 407 and
@@ -271,6 +269,8 @@ func TestProxyTokenAuth(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go ps.Serve(ctx)
+
+	t.Cleanup(func() { clearProxyToken() })
 
 	// Wait for the proxy listener to come up before dialing.
 	proxyUp := false

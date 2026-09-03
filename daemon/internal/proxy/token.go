@@ -46,6 +46,9 @@ func LoadToken(path string) string {
 	return t
 }
 
+// clearProxyToken resets auth state; tests use it to isolate the global.
+func clearProxyToken() { token.Store("") }
+
 // Token returns the active token (empty = auth disabled).
 func Token() string {
 	if v, ok := token.Load().(string); ok {
