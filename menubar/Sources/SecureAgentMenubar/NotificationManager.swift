@@ -64,6 +64,8 @@ public final class NotificationManager: NSObject, Sendable {
         case "proxy-secret-leak": return "Secret leaving in agent traffic"
         case "sensitive-read-then-connect": return "Agent read a secret, then connected out"
         case "keychain-access": return "Agent touched the keychain"
+        case "keychain-security-cli": return "Agent ran the keychain CLI"
+        case "tcc-tamper": return "Agent modified macOS permissions (TCC)"
         case "proxy-prompt-injection": return "Prompt injection in a response"
         default: return flag.rule
         }
