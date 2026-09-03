@@ -175,6 +175,7 @@ func Load(explicitPath string) (Config, error) {
 		ProxyCAKeyPath:    expandPath(raw.ProxyCAKeyPath),
 		Firewall:          raw.Firewall,
 		DirectoryGuard:    raw.DirectoryGuard,
+		Fleet:             raw.Fleet,
 	}
 	cfg.Firewall.Registry.SaltRef = expandPath(cfg.Firewall.Registry.SaltRef)
 	cfg.Firewall.Registry.IngestSources = expandPaths(cfg.Firewall.Registry.IngestSources)
