@@ -15,15 +15,16 @@ import (
 // SnippetName is the file the routing snippet is written as.
 const SnippetName = "agent-env.sh"
 
-// WriteSnippet writes the routing snippet to dir/agent-env.sh (0644) and returns
-// its path. It only writes into the app's own config dir; it never touches the
-// user's shell rc or the system trust store.
-func WriteSnippet(dir string, proxyPort int, caCertPath string) (string, error) {
+// WriteSnippet writes the routing snippet to dir/agent-env.sh (0600 — it
+// carries the proxy token) and returns its path. It only writes into the
+// app's own config dir; it never touches the user's shell rc or the system
+// trust store.
+func WriteSnippet(dir string, proxyPort int, caCertPath string, proxyToken string) (string, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", err
 	}
 	path := filepath.Join(dir, SnippetName)
-	if err := os.WriteFile(path, []byte(Snippet(proxyPort, caCertPath)), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(Snippet(proxyPort, caCertPath, proxyToken)), 0o600); err != nil {
 		return "", err
 	}
 	return path, nil
@@ -33,9 +34,9 @@ func WriteSnippet(dir string, proxyPort int, caCertPath string) (string, error) 
 // at 127.0.0.1:proxyPort and make it trust the proxy CA at caCertPath. Both
 // upper- and lower-case proxy variables are set because CLIs disagree on which
 // they read; the CA variables cover Node, OpenSSL, and Python-requests clients.
-func Vars(proxyPort int, caCertPath string) map[string]string {
+func Vars(proxyPort int, caCertPath string, proxyToken string) map[string]string {
 	proxy := fmt.Sprintf("http://127.0.0.1:%d", proxyPort)
-	return map[string]string{
+	v := map[string]string{
 		"HTTP_PROXY":          proxy,
 		"HTTPS_PROXY":         proxy,
 		"http_proxy":          proxy,
@@ -44,13 +45,21 @@ func Vars(proxyPort int, caCertPath string) map[string]string {
 		"SSL_CERT_FILE":       caCertPath,
 		"REQUESTS_CA_BUNDLE":  caCertPath,
 	}
+	// The proxy authenticates its routed clients; most HTTP stacks propagate
+	// Proxy-Authorization from the environment, and Node clients get the raw
+	// header variable too.
+	if proxyToken != "" {
+		v["PROXY_AUTHORIZATION"] = "Basic " + proxyToken
+		v["X_SECURE_AGENT_PROXY_TOKEN"] = proxyToken
+	}
+	return v
 }
 
 // Snippet renders Vars as a POSIX-sh sourceable script. Intended to be written
 // to the app's own config dir and sourced by the user in the shell where they
 // run agents — not appended to a shell rc by the daemon.
-func Snippet(proxyPort int, caCertPath string) string {
-	v := Vars(proxyPort, caCertPath)
+func Snippet(proxyPort int, caCertPath string, proxyToken string) string {
+	v := Vars(proxyPort, caCertPath, proxyToken)
 	keys := make([]string, 0, len(v))
 	for k := range v {
 		keys = append(keys, k)

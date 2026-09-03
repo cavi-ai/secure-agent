@@ -97,9 +97,15 @@ func (ps *ProxyServer) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	// The embedded security console is served here so the documented
 	// http://127.0.0.1:<proxy_port>/dashboard/ URL actually works; the control
 	// API on the unix socket serves the same assets. Everything else on this
-	// listener is proxy traffic.
+	// listener is proxy traffic. The dashboard is browser-reachable and
+	// unauthenticated by design (loopback only); all proxy traffic requires
+	// the per-install token so the listener is not a free open proxy.
 	if r.Method == http.MethodGet && (r.URL.Path == "/dashboard" || strings.HasPrefix(r.URL.Path, "/dashboard/")) {
 		serveDashboard(w, r)
+		return
+	}
+	if !authorized(r) {
+		rejectToken(w)
 		return
 	}
 	if r.Method == http.MethodConnect {
