@@ -1,5 +1,6 @@
 # secure-agent
 
+[![CI](https://github.com/cavi-ai/secure-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/cavi-ai/secure-agent/actions/workflows/ci.yml)
 [![Go Reference](https://img.shields.io/badge/Go-1.22+-00ADD8?style=flat&logo=go)](https://go.dev/)
 [![Swift](https://img.shields.io/badge/Swift-6.0-FA7343?style=flat&logo=swift)](https://swift.org/)
 [![macOS](https://img.shields.io/badge/macOS-14.0+-000000?style=flat&logo=apple)](https://apple.com/macos)
