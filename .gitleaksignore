@@ -2,3 +2,5 @@
 70f6dca90714673158faf29c7e10537c95d58e54:daemon/internal/firewall/testdata/leak_requests.json:gitlab-pat:6
 4a87db7fb8f4137c590f887ea5047bc5abedf6d8:daemon/internal/api/api_test.go:generic-api-key
 4a87db7fb8f4137c590f887ea5047bc5abedf6d8:daemon/internal/intel/rotator_test.go:generic-api-key
+4a87db7fb8f4137c590f887ea5047bc5abedf6d8:daemon/internal/api/api_test.go:generic-api-key:81
+4a87db7fb8f4137c590f887ea5047bc5abedf6d8:daemon/internal/intel/rotator_test.go:generic-api-key:16
