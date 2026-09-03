@@ -109,3 +109,47 @@ jsonl_path: "~/.local/state/secure-agent/events.jsonl"
 ```
 
 Tilde (`~`) prefixes are automatically expanded to the user's home directory. Environment variables (e.g. `$HOME`) are also resolved automatically.
+
+### `directory_guard` (Map)
+
+Configures the interactive filesystem guard. The shipped defaults are all `monitor`; the onboarding **Guard My Secrets** opt-in promotes rules via `guard-modes.json`, not this file.
+
+```yaml
+directory_guard:
+  prompt_deadline_ms: 45000   # how long a prompt-mode hook waits before failing safe to deny
+  cwd_overrides:              # per-project policies (first matching prefix wins)
+    - cwd_prefix: /Users/me/work/prod-api
+      rules:
+        env-files: deny
+        ssh-keys: prompt
+```
+
+Each entry pins a directory subtree to specific rule modes; rules not listed fall back to the global override file, then shipped defaults.
+
+### `fleet` (Map)
+
+Downstream webhook delivery for fleet oversight:
+
+```yaml
+fleet:
+  webhooks:
+    - url: "https://collector.example.com/hooks/secure-agent"
+      secret: "<shared-secret>"
+      events: [flag, incident, guard]   # empty = all
+```
+
+Every payload is signed with `X-SecureAgent-Signature: sha256=HMAC(secret, body)`; delivery retries (500ms/2s/5s) on network errors and 5xx/429 only.
+
+### Proxy authentication
+
+When the proxy is enabled, the daemon generates a per-install token at
+`~/.config/secure-agent/proxy-token` (0600). The routing snippet
+(`agent-env.sh`) carries it; the proxy rejects unauthenticated proxying with
+`407`. The dashboard remains unauthenticated (loopback only).
+
+### Runtime overrides (not in this file)
+
+- `firewall-modes.json` — firewall rules promoted to block, persisted
+- `guard-modes.json` — directory-guard mode overrides (onboarding writes this)
+- `firewall-sources.json` — user-added fingerprint ingest sources
+- `node-id` — stable per-install fleet identity
