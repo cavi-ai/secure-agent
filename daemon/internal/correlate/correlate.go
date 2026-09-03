@@ -3,6 +3,7 @@ package correlate
 import (
 	"crypto/sha256"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -147,19 +148,62 @@ func (c *Correlator) Observe(e event.Event) []model.Flag {
 						evidence = append(evidence, fmt.Sprintf("then connected to %s:%d at %s", cm.host, cm.port, cm.at.Format(time.RFC3339)))
 					}
 					flags = append(flags, model.Flag{
-						ID:       flagID,
-						Rule:     "sensitive-read-then-connect",
-						Severity: 3,
-						TS:       e.TS,
-						PID:      e.PID,
-						Agent:    info.Name,
-						Evidence: evidence,
+						ID:        flagID,
+						Rule:      "sensitive-read-then-connect",
+						Severity:  3,
+						TS:        e.TS,
+						PID:       e.PID,
+						Agent:     info.Name,
+						SessionID: e.SessionID,
+						Evidence:  evidence,
 					})
 					c.markReadConsumedLocked(rootPID, e.PID)
 					c.markConnConsumedLocked(rootPID, e.PID)
 				}
 			}
 		}
+
+	case event.KindExec:
+		// Rule 3: keychain CLI. Any execution of macOS security(1) by a tagged
+		// agent is flagged regardless of subcommand — reads (dump-keychain,
+		// find-generic-password) and writes (add/modify/delete) are both
+		// exfiltration and tampering vectors, and argv beyond argv[0] arrives
+		// untrusted from eslogger.
+		base := strings.ToLower(filepath.Base(e.ExePath))
+		if base == "security" {
+			flagID := hashFlagID("keychain-security-cli", e.PID, e.TS)
+			flags = append(flags, model.Flag{
+				ID:        flagID,
+				Rule:      "keychain-security-cli",
+				Severity:  3,
+				TS:        e.TS,
+				PID:       e.PID,
+				Agent:     info.Name,
+				SessionID: e.SessionID,
+				Evidence: []string{
+					fmt.Sprintf("%s (pid %d) executed %s at %s", info.Name, e.PID, e.ExePath, e.TS.Format(time.RFC3339)),
+				},
+			})
+		}
+
+	case event.KindTCCModify:
+		// Rule 4: TCC tamper. An agent touching the Transparency, Consent, and
+		// Control database (even reads of the service list) is probing or
+		// escalating its permissions — screen recording, accessibility, and
+		// automation grants are the classic over-reach targets. Severity 3:
+		// there is no benign reason for an agent process to be here.
+		flags = append(flags, model.Flag{
+			ID:        hashFlagID("tcc-tamper", e.PID, e.TS),
+			Rule:      "tcc-tamper",
+			Severity:  3,
+			TS:        e.TS,
+			PID:       e.PID,
+			Agent:     info.Name,
+			SessionID: e.SessionID,
+			Evidence: []string{
+				fmt.Sprintf("%s (pid %d) modified TCC service '%s' at %s", info.Name, e.PID, e.Detail, e.TS.Format(time.RFC3339)),
+			},
+		})
 
 	case event.KindConnOpen:
 		if c.isVendorHost(info.Name, e.RemoteHost) {
