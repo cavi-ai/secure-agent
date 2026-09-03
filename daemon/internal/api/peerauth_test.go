@@ -182,3 +182,65 @@ func contextWithCancel() (context.Context, context.CancelFunc) {
 func newTestBroker() *guard.Broker {
 	return guard.NewBroker(50 * time.Millisecond)
 }
+
+// With the menubar pinned, a same-uid non-UI caller (a shell, a rogue script)
+// may read but must not mutate.
+func TestGateRejectsNonUIMutationWhenUIPinned(t *testing.T) {
+	sock := fmt.Sprintf("/tmp/sa_pin_%d.sock", time.Now().UnixNano())
+	defer os.Remove(sock)
+	fk := &fakeKiller{}
+	a := New(sock, testStore(t), fk, func() Status { return Status{Running: true} })
+	a.SetPeers(DarwinPeerChecker{}, nil)
+	a.peerRole.UIPID = int32(os.Getpid()) + 9999 // a pid that is NOT this test process
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go a.Serve(ctx)
+	waitForSocket(t, sock)
+
+	cl := unixClient(sock)
+	resp, err := cl.Post("http://unix/guard/resolve", "application/json",
+		strings.NewReader(`{"id":"x","verdict":"allow","scope":"once"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("non-UI mutation: status=%d, want 403", resp.StatusCode)
+	}
+	if fk.killed != 0 {
+		t.Fatal("killer must not fire")
+	}
+
+	// Reads stay available to the owner.
+	resp, err = cl.Get("http://unix/status")
+	if err != nil || resp.StatusCode != 200 {
+		t.Fatalf("read as owner when pinned: %v status=%v", err, resp.StatusCode)
+	}
+	resp.Body.Close()
+}
+
+// No UI pin (direct launch): owner-uid mutation still works for headless use.
+func TestGateAllowsOwnerMutationWithoutUIPin(t *testing.T) {
+	sock := fmt.Sprintf("/tmp/sa_nopin_%d.sock", time.Now().UnixNano())
+	defer os.Remove(sock)
+	fk := &fakeKiller{}
+	a := New(sock, testStore(t), fk, func() Status { return Status{Running: true} })
+	a.SetPeers(DarwinPeerChecker{}, nil)
+	// UIPID stays 0.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go a.Serve(ctx)
+	waitForSocket(t, sock)
+
+	cl := unixClient(sock)
+	resp, err := cl.Post("http://unix/incidents/status", "application/json",
+		strings.NewReader(`{"id":"inc-y","status":"acknowledged"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	// 404 (unknown incident) proves the gate let it through to the handler.
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("owner mutation without pin: status=%d, want 404 (handler reached)", resp.StatusCode)
+	}
+}

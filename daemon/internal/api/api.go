@@ -130,6 +130,17 @@ func (a *API) SetGuard(b *guard.Broker) {
 	a.guardBroker = b
 }
 
+// SetUIPID pins the trusted mutating client (the owning menubar app). When
+// set, mutating endpoints (kill, guard resolve, firewall promote) require the
+// peer to BE that process — same-uid shells keep read access but can no
+// longer mutate. When unset (daemon launched directly), mutations fall back
+// to owner-uid trust, which is what headless/ssh management uses.
+func (a *API) SetUIPID(pid int32) {
+	if a.peerRole != nil {
+		a.peerRole.UIPID = pid
+	}
+}
+
 // SetPeers enables unix-socket peer-credential gating. AgentPIDs supplies the
 // live tagged-agent pid set used to recognize hook traffic; a nil function or
 // nil checker leaves the API ungated (unit tests).
