@@ -19,10 +19,11 @@ BUNDLE_ID="com.cavi-ai.secure-agent"
 
 echo "==> Building universal Go binaries (version ${VERSION})..."
 mkdir -p bin
+VERSION_LDFLAGS="-s -w -X github.com/cavi-ai/secure-agent/daemon/internal/api.Version=${VERSION}"
 for arch in arm64 amd64; do
-  CGO_ENABLED=0 GOOS=darwin GOARCH=${arch} go build -trimpath -ldflags "-s -w" \
+  CGO_ENABLED=0 GOOS=darwin GOARCH=${arch} go build -trimpath -ldflags "${VERSION_LDFLAGS}" \
     -o "bin/secure-agentd-${arch}" ./daemon/cmd/secure-agentd
-  CGO_ENABLED=0 GOOS=darwin GOARCH=${arch} go build -trimpath -ldflags "-s -w" \
+  CGO_ENABLED=0 GOOS=darwin GOARCH=${arch} go build -trimpath -ldflags "${VERSION_LDFLAGS}" \
     -o "bin/secure-agent-${arch}" ./cmd/secure-agent
 done
 lipo -create -output bin/secure-agentd bin/secure-agentd-arm64 bin/secure-agentd-amd64
