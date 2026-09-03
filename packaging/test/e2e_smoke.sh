@@ -25,6 +25,20 @@ SOCKET_PATH="$tmp/daemon.sock"
 
 printf 'SECRET_KEY=dummy_val_123\n' > "$tmp/.env"
 
+# Reference collector: verifies the fleet webhook contract (signed delivery,
+# rollup) end to end. Random port; secret shared with the node config below.
+# The node id is pinned by pre-seeding the node-id file the daemon reads, so
+# the collector's secret map can name it exactly.
+NODE_ID="e2e0de00de00de00de00de00de00de00"  # must be 32 hex chars (LoadNodeID validates)
+mkdir -p "$tmp"
+printf '%s\n' "$NODE_ID" > "$tmp/node-id"
+COLL_PORT=$((19000 + RANDOM % 2000))
+COLL_SECRET="e2e-webhook-secret"
+printf '%s=%s\n' "$NODE_ID" "$COLL_SECRET" > "$tmp/collector-secrets.txt"
+go build -o "$tmp/secure-agent-collector" "$SCRIPT_DIR/cmd/secure-agent-collector"
+"$tmp/secure-agent-collector" -addr "127.0.0.1:$COLL_PORT" -store "$tmp/collstore" -config "$tmp/collector-secrets.txt" > "$tmp/collector.log" 2>&1 &
+COLLECTOR_PID=$!
+
 # Create a test overlay config with fast sampling interval for smoke test
 cat > "$tmp/test_config.yaml" <<EOF
 agents:
@@ -36,6 +50,14 @@ jsonl_path: "$tmp/events.jsonl"
 proxy_port: 0
 directory_guard:
   prompt_deadline_ms: 8000
+firewall:
+  registry:
+    salt_ref: "$tmp/fw-salt"
+fleet:
+  webhooks:
+    - url: "http://127.0.0.1:$COLL_PORT/hooks/secure-agent"
+      secret: "$COLL_SECRET"
+      events: [flag, incident, guard]
 EOF
 
 # Build daemon
@@ -43,7 +65,7 @@ go build -o "$tmp/secure-agentd" "$SCRIPT_DIR/daemon/cmd/secure-agentd"
 
 # Launch daemon
 echo "Launching test instance of secure-agentd..."
-"$tmp/secure-agentd" -config "$tmp/test_config.yaml" &
+"$tmp/secure-agentd" -config "$tmp/test_config.yaml" > "$tmp/daemon.log" 2>&1 &
 DAEMON_PID=$!
 sleep 1
 
@@ -220,8 +242,30 @@ else
   wait "$DECISION1_PID" 2>/dev/null || true
 fi
 
-if [ "$PASSED" = true ] && [ "$INCIDENT_PASSED" = true ] && [ "$GUARD_PASSED" = true ]; then
-  echo "E2E SMOKE TEST: PASS (Flag, Incident report, and Directory Guard round-trip verified via API)"
+# ---------------------------------------------------------------------------
+# Fleet webhook: the collector must have received and verified the flag the
+# fake agent triggered above. Sequential check (no heredoc-in-if).
+# ---------------------------------------------------------------------------
+WEBHOOK_PASSED=false
+if [ -n "$DAEMON_PID" ]; then kill "$DAEMON_PID" 2>/dev/null || true; fi
+sleep 1  # give in-flight webhook retries a moment to land
+COLL_STORE="$tmp/collstore/$NODE_ID.jsonl"
+if [ -s "$COLL_STORE" ] && python3 -c '
+import json, sys
+with open(sys.argv[1]) as f:
+    recs = [json.loads(l) for l in f if l.strip()]
+flags = [r for r in recs if r.get("envelope", {}).get("kind") == "flag"]
+sys.exit(0 if flags else 1)
+' "$COLL_STORE"; then
+  WEBHOOK_PASSED=true
+  echo "Fleet webhook: collector received and verified the flag envelope."
+else
+  echo "DEBUG collector log: $(cat "$tmp/collector.log" 2>/dev/null || true)"
+fi
+kill "$COLLECTOR_PID" 2>/dev/null || true
+
+if [ "$PASSED" = true ] && [ "$INCIDENT_PASSED" = true ] && [ "$GUARD_PASSED" = true ] && [ "$WEBHOOK_PASSED" = true ]; then
+  echo "E2E SMOKE TEST: PASS (Flag, Incident, Directory Guard round-trip, and fleet webhook verified)"
   if [ -n "$DAEMON_PID" ]; then
     kill "$DAEMON_PID" 2>/dev/null || true
   fi
@@ -240,6 +284,6 @@ else
   if [ -n "$DAEMON_PID" ]; then
     kill "$DAEMON_PID" 2>/dev/null || true
   fi
-  echo "E2E SMOKE TEST: FAIL (Flag passed: $PASSED, Incident passed: $INCIDENT_PASSED, Guard passed: $GUARD_PASSED)"
+  echo "E2E SMOKE TEST: FAIL (Flag passed: $PASSED, Incident passed: $INCIDENT_PASSED, Guard passed: $GUARD_PASSED, Webhook passed: $WEBHOOK_PASSED)"
   exit 1
 fi
