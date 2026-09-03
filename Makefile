@@ -18,7 +18,7 @@ MENUBAR_BIN := $(BIN_DIR)/secure-agent-menubar
 
 all: build
 
-build: daemon cli menubar
+build: daemon cli menubar collector
 
 lint:
 	@echo "==> go vet ./..."
@@ -35,6 +35,10 @@ daemon:
 cli:
 	@echo "==> Building secure-agent CLI..."
 	go build -o bin/secure-agent ./cmd/secure-agent
+
+collector:
+	@echo "==> Building secure-agent-collector..."
+	go build -o bin/secure-agent-collector ./cmd/secure-agent-collector
 
 menubar:
 	@echo "==> Building secure-agent-menubar..."

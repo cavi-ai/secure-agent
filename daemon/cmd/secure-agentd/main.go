@@ -74,6 +74,10 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// Stable per-install fleet identity (used by /fleet and webhook payloads).
+	// Must run before the sinks are built: they capture api.NodeID.
+	api.LoadNodeID(filepath.Join(filepath.Dir(cfg.Firewall.Registry.SaltRef), "node-id"))
+
 	// Fleet webhook fan-out: flags, incidents, and guard decisions are pushed
 	// to every configured HMAC-signed collector. Best-effort; never blocks the
 	// drain loop.
@@ -230,9 +234,6 @@ func main() {
 		}
 	}
 
-	// Stable per-install fleet identity (used by /fleet and webhook payloads).
-	api.LoadNodeID(filepath.Join(filepath.Dir(cfg.Firewall.Registry.SaltRef), "node-id"))
-
 	// Start Control API
 	apiServer := api.New(cfg.SocketPath, st, &realKiller{}, statusFn)
 
@@ -350,6 +351,15 @@ func main() {
 	case <-drainDone: // all delivered events persisted
 	case <-time.After(2 * time.Second): // bounded: never hang shutdown on a stuck write
 		log.Println("secure-agentd: drain timed out; some buffered events may be unpersisted")
+	}
+	// Give in-flight webhook deliveries a bounded window to land — a fleet
+	// collector must not lose the final events to process exit.
+	fleetDone := make(chan struct{})
+	go func() { fleetPub.Wait(); close(fleetDone) }()
+	select {
+	case <-fleetDone:
+	case <-time.After(3 * time.Second):
+		log.Println("secure-agentd: webhook delivery wait timed out; some deliveries may be dropped")
 	}
 }
 
