@@ -265,12 +265,26 @@ func TestProxyTokenAuth(t *testing.T) {
 		t.Fatal(err)
 	}
 	port := ln.Addr().(*net.TCPAddr).Port
-	ln.Close()
+	ln.Close() // free the port; Serve re-binds it
 
 	ps := NewProxyServer(port, bus.New(16), nil, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go ps.Serve(ctx)
+
+	// Wait for the proxy listener to come up before dialing.
+	proxyUp := false
+	for i := 0; i < 50 && !proxyUp; i++ {
+		if c, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 100*time.Millisecond); err == nil {
+			c.Close()
+			proxyUp = true
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if !proxyUp {
+		t.Fatal("proxy listener never came up")
+	}
 
 	// The proxied upstream: a plain HTTP server that answers 200.
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
