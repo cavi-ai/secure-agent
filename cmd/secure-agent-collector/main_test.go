@@ -66,8 +66,10 @@ func TestHookRejectsBadSignature(t *testing.T) {
 	cases := map[string]func(*http.Request){
 		"missing header": func(r *http.Request) { r.Header.Del("X-SecureAgent-Signature") },
 		"wrong prefix":   func(r *http.Request) { r.Header.Set("X-SecureAgent-Signature", "md5=abc") },
-		"wrong secret":   func(r *http.Request) { r.Header.Set("X-SecureAgent-Signature", sign(t, "other-secret", envelope("n1", "flag"))) },
-		"unknown node":   func(r *http.Request) { r.Header.Set("X-SecureAgent-Node", "ghost") },
+		"wrong secret": func(r *http.Request) {
+			r.Header.Set("X-SecureAgent-Signature", sign(t, "other-secret", envelope("n1", "flag")))
+		},
+		"unknown node": func(r *http.Request) { r.Header.Set("X-SecureAgent-Node", "ghost") },
 	}
 	for name, mutate := range cases {
 		body := envelope("n1", "flag")
