@@ -1,6 +1,7 @@
 package correlate
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -136,5 +137,72 @@ func TestForeignConnectThenSensitiveReadFlags(t *testing.T) {
 	f = c.Observe(event.Event{Kind: event.KindPluginAction, PID: 200, TS: base.Add(2 * time.Second), Path: "/Users/x/proj/.env"})
 	if len(f) != 1 || f[0].Rule != "sensitive-read-then-connect" {
 		t.Fatalf("expected 1 sensitive-read-then-connect flag when conn arrives before read, got %+v", f)
+	}
+}
+
+func TestTCCTamperFlagsImmediately(t *testing.T) {
+	c := newTestCorrelator(t)
+	base := time.Unix(1_700_000_000, 0)
+
+	flags := c.Observe(event.Event{
+		Kind: event.KindTCCModify, PID: 200, TS: base,
+		Detail: "kTCCServiceScreenCapture",
+	})
+	if len(flags) != 1 {
+		t.Fatalf("tcc modify produced %d flags, want 1", len(flags))
+	}
+	f := flags[0]
+	if f.Rule != "tcc-tamper" || f.Severity != 3 {
+		t.Fatalf("flag = %s sev %d, want tcc-tamper/3", f.Rule, f.Severity)
+	}
+	if !strings.Contains(f.Evidence[0], "kTCCServiceScreenCapture") {
+		t.Fatalf("evidence missing service: %v", f.Evidence)
+	}
+}
+
+func TestTCCTamperIgnoredForNonAgents(t *testing.T) {
+	c := newTestCorrelator(t)
+	base := time.Unix(1_700_000_000, 0)
+
+	// PID 999 is not in the fake proc source.
+	flags := c.Observe(event.Event{
+		Kind: event.KindTCCModify, PID: 999, TS: base, Detail: "kTCCServiceAccessibility",
+	})
+	if len(flags) != 0 {
+		t.Fatalf("non-agent TCC event flagged: %+v", flags)
+	}
+}
+
+func TestKeychainSecurityCLIFlagsImmediately(t *testing.T) {
+	c := newTestCorrelator(t)
+	base := time.Unix(1_700_000_000, 0)
+
+	flags := c.Observe(event.Event{
+		Kind:    event.KindExec,
+		PID:     200,
+		TS:      base,
+		ExePath: "/usr/bin/security",
+	})
+	if len(flags) != 1 {
+		t.Fatalf("security(1) exec produced %d flags, want 1", len(flags))
+	}
+	f := flags[0]
+	if f.Rule != "keychain-security-cli" || f.Severity != 3 {
+		t.Fatalf("flag = %s sev %d, want keychain-security-cli/3", f.Rule, f.Severity)
+	}
+	if !strings.Contains(f.Evidence[0], "/usr/bin/security") {
+		t.Fatalf("evidence missing exe path: %v", f.Evidence)
+	}
+}
+
+func TestKeychainCLIRuleIgnoresOtherExecs(t *testing.T) {
+	c := newTestCorrelator(t)
+	base := time.Unix(1_700_000_000, 0)
+
+	for _, exe := range []string{"/usr/bin/git", "/bin/zsh", "/usr/bin/securityctl"} {
+		flags := c.Observe(event.Event{Kind: event.KindExec, PID: 200, TS: base, ExePath: exe})
+		if len(flags) != 0 {
+			t.Fatalf("%s must not flag: %+v", exe, flags)
+		}
 	}
 }
