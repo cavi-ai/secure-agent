@@ -283,3 +283,27 @@ Live feed of every bus event as `event: <kind>` / `data: <json>`, with a 15s hea
 - `GET /incidents` — list items now carry `workflow: {status, acknowledged_at, resolved_at, resolution_note}`.
 - `GET /incidents?id=…` — returns `{incident, workflow}`.
 - `POST /incidents/status` — `{"id","status":"open|acknowledged|resolved","note":"…"}`. Forward-only transitions; `acknowledged_at` stamps once; re-resolve replaces the note. Audited.
+
+---
+
+## 📥 Reference collector (`cmd/secure-agent-collector`)
+
+Stdlib-only reference implementation of the consumer side. Run:
+
+```bash
+make collector
+printf '<node-id>=<secret>\n' > secrets.txt
+./bin/secure-agent-collector -addr 127.0.0.1:9445 -store <dir> -config secrets.txt
+```
+
+| Endpoint | Description |
+|---|---|
+| `POST /hooks/secure-agent` | Webhook receiver. Requires `X-SecureAgent-Node` (provisioned) and `X-SecureAgent-Signature` (HMAC over the raw body, constant-time compared). Envelope `node_id` must match the header. |
+| `GET /fleet` | Merged multi-node rollup, node-id ordered: version, last-seen, flag/incident/guard counts, latest incident summary. |
+| `GET /nodes/<id>/events?kind=&limit=` | One node's stored envelopes, newest first. |
+| `GET /` | HTML overview: per-node posture cards, staleness warnings (>10 min stale, >20 min gone quiet). |
+| `GET /healthz` | Liveness. |
+
+Secrets come from a flat file (`node_id=secret` lines) or `-secrets n1=a,n2=b`. Store: append-only JSONL per node, `0600` in a `0700` directory, replayed into the rollup at startup.
+
+The e2e smoke test provisions a collector, configures a node webhook, triggers a real flag, and asserts a verified envelope lands in the store — the fleet contract cannot regress silently.

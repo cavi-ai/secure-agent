@@ -307,6 +307,49 @@ curl --unix-socket ~/.config/secure-agent/daemon.sock http://unix/flags?limit=10
 
 ---
 
+## 🛰️ Connect a Fleet
+
+The fleet contract is two sides: each node pushes signed webhooks, and a collector rolls them up.
+
+**Node side** — add a webhook to `~/.config/secure-agent/config.yaml`:
+
+```yaml
+fleet:
+  webhooks:
+    - url: "https://collector.internal:9445/hooks/secure-agent"
+      secret: "<shared-secret>"
+      events: [flag, incident, guard]   # empty = all
+```
+
+Every flag, incident, and guard decision is POSTed as an envelope:
+
+```json
+{"node_id": "…32-hex…", "kind": "flag", "ts": "…", "version": "v0.9.0-rc.1", "payload": {…}}
+```
+
+with `X-SecureAgent-Signature: sha256=<hex hmac-sha256(secret, body)>` and `X-SecureAgent-Node: <node_id>` headers.
+
+**Collector side** — the reference collector in this repo (`cmd/secure-agent-collector`, stdlib-only):
+
+```bash
+make collector
+# provision one secret per node, then run (loopback by default):
+printf '%s
+' "<node-id-1>=<secret-1>" > secrets.txt
+./bin/secure-agent-collector -addr 127.0.0.1:9445 -store ~/.local/state/secure-agent-collector -config secrets.txt
+```
+
+- `GET /fleet` — merged multi-node rollup (version, last-seen, flag/incident counts, latest incident)
+- `GET /nodes/<id>/events?kind=flag&limit=50` — one node's stored envelopes
+- `GET /` — dark overview page with per-node cards and staleness warnings
+- `GET /healthz` — liveness
+
+Signatures are verified constant-time; unsigned, tampered, wrong-node, and unknown-node traffic is rejected. Deliveries retry (500ms/2s/5s) on network errors and 5xx/429 only; failures land in the node's `webhook-deliveries.jsonl`.
+
+The whole chain — node → signed webhook → verified envelope → rollup — is enforced by `packaging/test/e2e_smoke.sh` on every CI run.
+
+---
+
 ## 🧪 Testing & Verification
 
 The repository includes test suites across Go, Python, Swift, and end-to-end shell smoke testing.
