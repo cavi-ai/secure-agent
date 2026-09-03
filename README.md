@@ -186,6 +186,8 @@ firewall:
 source ~/.config/secure-agent/agent-env.sh
 ```
 
+The snippet carries a per-install proxy token, so the loopback listener is not a free open proxy for other local processes — only routed agents can use it.
+
 Traffic that bypasses the proxy (pinned or unrouted) is counted as `uninspected_egress` in the status, so the blind spot is visible rather than silent.
 
 See [docs/FIREWALL_THREAT_MODEL.md](docs/FIREWALL_THREAT_MODEL.md) for exactly what the firewall defends against, what it does not, and how it handles secret material.
