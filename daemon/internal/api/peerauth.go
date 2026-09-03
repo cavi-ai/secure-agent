@@ -85,7 +85,7 @@ func (a *API) gate(checker PeerChecker, next http.Handler) http.Handler {
 			return
 		}
 		role := a.peerRole.classify(cred)
-		if requiredRole(r.Method, r.URL.Path) > role {
+		if !a.authorize(role, r.Method, r.URL.Path) {
 			http.Error(w, "forbidden: this endpoint requires a more privileged client", http.StatusForbidden)
 			return
 		}
@@ -93,31 +93,31 @@ func (a *API) gate(checker PeerChecker, next http.Handler) http.Handler {
 	})
 }
 
-// requiredRole maps (method, path) to the minimum role allowed. Reads are open
-// to any identified local peer; decisions are hook+owner; mutations are
-// menubar-only.
-func requiredRole(method, path string) role {
-	switch {
-	case method == http.MethodGet || method == http.MethodHead:
-		if path == "/guard/pending" {
-			// The menubar polls this; agents and owner may too (harmless reads).
-			return roleNone
-		}
-		return roleNone
-	case path == "/guard/decision":
-		return roleNone // any identified peer may ask; handler still validates payload
-	case path == "/kill", path == "/guard/resolve", path == "/guard/rules",
-		path == "/firewall/mode", path == "/firewall/fingerprints/reload",
-		path == "/firewall/fingerprints/ingest", path == "/firewall/sources":
-		if method == http.MethodGet || method == http.MethodDelete {
-			// Guard-rule revocation is owner-level, not menubar-only: headless
-			// fleets manage rules over ssh as the owner user.
-			return roleNone
-		}
-		return roleOwner
-	default:
-		return roleNone
+// isMutation: POST on the mutating endpoint set (DELETE /guard/rules stays
+// owner-level — headless fleets revoke cached decisions over ssh).
+func isMutation(method, path string) bool {
+	if method != http.MethodPost {
+		return false
 	}
+	switch path {
+	case "/kill", "/guard/resolve", "/guard/rules", "/firewall/mode",
+		"/firewall/fingerprints/reload", "/firewall/fingerprints/ingest",
+		"/firewall/sources", "/incidents/status":
+		return true
+	}
+	return false
+}
+
+// authorize applies the (method, path) policy to a classified role. Reads are
+// open to any identified local peer; decisions to any; mutations to the pinned
+// menubar when one exists, otherwise to the owner uid (direct launches,
+// headless/ssh management).
+func (a *API) authorize(role role, method, path string) bool {
+	if isMutation(method, path) && a.peerRole != nil && a.peerRole.UIPID > 0 {
+		return role == roleUI
+	}
+	// Everything else (and all mutations when no UI pin exists) is owner-level.
+	return role >= roleOwner
 }
 
 // peerConnKey is the context key under which the gate stores the request's
