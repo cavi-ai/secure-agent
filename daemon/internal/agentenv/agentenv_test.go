@@ -24,12 +24,29 @@ func TestVarsPointAtProxyAndCA(t *testing.T) {
 func TestSnippetIsSourceableAndScoped(t *testing.T) {
 	s := Snippet(8443, "/home/u/.config/secure-agent/ca.crt", "")
 	for _, want := range []string{
-		"export HTTPS_PROXY=http://127.0.0.1:8443",
-		"export NODE_EXTRA_CA_CERTS=/home/u/.config/secure-agent/ca.crt",
+		"export HTTPS_PROXY='http://127.0.0.1:8443'",
+		"export NODE_EXTRA_CA_CERTS='/home/u/.config/secure-agent/ca.crt'",
 	} {
 		if !strings.Contains(s, want) {
 			t.Fatalf("snippet missing %q\n---\n%s", want, s)
 		}
+	}
+}
+
+func TestSnippetQuotesValues(t *testing.T) {
+	// A CA path with spaces (Application Support) or shell metacharacters must
+	// survive `source` intact — unquoted, it breaks the export or worse.
+	s := Snippet(8443, "/Users/x/Library/Application Support/secure-agent/ca.crt", "")
+	if !strings.Contains(s, "export SSL_CERT_FILE='/Users/x/Library/Application Support/secure-agent/ca.crt'") {
+		t.Fatalf("space-containing path not quoted:\n%s", s)
+	}
+	evil := Snippet(8443, "/tmp/$(touch /tmp/pwned).crt", "")
+	if strings.Contains(evil, "$(touch") && !strings.Contains(evil, "'/tmp/$(touch /tmp/pwned).crt'") {
+		t.Fatalf("metacharacters not neutralized:\n%s", evil)
+	}
+	sq := shellQuote("it's")
+	if sq != `'it'\''s'` {
+		t.Fatalf("shellQuote = %q", sq)
 	}
 }
 
@@ -46,7 +63,7 @@ func TestWriteSnippetCreatesFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(data), "export HTTPS_PROXY=http://127.0.0.1:8443") {
+	if !strings.Contains(string(data), "export HTTPS_PROXY='http://127.0.0.1:8443'") {
 		t.Fatalf("written snippet missing proxy export:\n%s", data)
 	}
 }
@@ -80,7 +97,7 @@ func TestWriteSnippetPermsWithToken(t *testing.T) {
 		t.Fatalf("snippet perms = %v, want 0600", fi.Mode().Perm())
 	}
 	data, _ := os.ReadFile(path)
-	if !strings.Contains(string(data), "PROXY_AUTHORIZATION=Basic abcdef0123456789abcdef0123456789") {
+	if !strings.Contains(string(data), "PROXY_AUTHORIZATION='Basic abcdef0123456789abcdef0123456789'") {
 		t.Fatalf("snippet missing token auth line:\n%s", data)
 	}
 }

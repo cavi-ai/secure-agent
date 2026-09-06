@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/cavi-ai/secure-agent/daemon/internal/safefile"
 	"os"
 	"path/filepath"
 )
@@ -28,7 +29,7 @@ func WriteCwdOverrides(path string, overrides []CwdOverride) error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(path, append(data, '\n'), 0o600); err != nil {
+	if err := safefile.WriteFileAtomic(path, append(data, '\n'), 0o600); err != nil {
 		return fmt.Errorf("write overrides: %w", err)
 	}
 	return nil

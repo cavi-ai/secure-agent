@@ -2,6 +2,8 @@ package config
 
 import (
 	_ "embed"
+	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -153,9 +155,17 @@ func Load(explicitPath string) (Config, error) {
 	}
 
 	if targetPath != "" && targetPath != "/nonexistent" {
-		if data, err := os.ReadFile(expandPath(targetPath)); err == nil {
-			// Unmarshal overlay over raw config struct
-			_ = yaml.Unmarshal(data, &raw)
+		data, err := os.ReadFile(expandPath(targetPath))
+		switch {
+		case err != nil && !os.IsNotExist(err):
+			// An overlay that exists but can't be read must not silently fall
+			// back to defaults — the user's `mode: block` reverting to monitor
+			// with no signal is exactly the failure this tool exists to prevent.
+			log.Printf("config: WARNING: overlay %s unreadable (%v); running on compiled-in defaults", targetPath, err)
+		case err == nil:
+			if err := yaml.Unmarshal(data, &raw); err != nil {
+				log.Printf("config: WARNING: overlay %s is malformed YAML (%v); running on compiled-in defaults", targetPath, err)
+			}
 		}
 	}
 
@@ -180,7 +190,28 @@ func Load(explicitPath string) (Config, error) {
 	cfg.Firewall.Registry.SaltRef = expandPath(cfg.Firewall.Registry.SaltRef)
 	cfg.Firewall.Registry.IngestSources = expandPaths(cfg.Firewall.Registry.IngestSources)
 
+	if err := cfg.Validate(); err != nil {
+		return Config{}, err
+	}
 	return cfg, nil
+}
+
+// Validate rejects values that would crash or silently break subsystems at
+// runtime. A non-positive sample interval reaches time.NewTicker, which panics
+// — the supervisor then recovers a permanently crash-looping collector.
+func (c Config) Validate() error {
+	if c.NetSampleInterval <= 0 {
+		return fmt.Errorf("net_sample_interval_ms must be positive, got %d", c.NetSampleInterval.Milliseconds())
+	}
+	// Port 0 is valid: the kernel assigns a free port (the e2e harness and
+	// tests use it), and ProxyServer.Serve reads back the bound port.
+	if c.ProxyEnabled && (c.ProxyPort < 0 || c.ProxyPort > 65535) {
+		return fmt.Errorf("proxy_port must be 0-65535, got %d", c.ProxyPort)
+	}
+	if c.DirectoryGuard.PromptDeadlineMS < 0 {
+		return fmt.Errorf("directory_guard.prompt_deadline_ms must be >= 0, got %d", c.DirectoryGuard.PromptDeadlineMS)
+	}
+	return nil
 }
 
 // ExpandPath expands a leading ~ and $ENV references in p, matching how config

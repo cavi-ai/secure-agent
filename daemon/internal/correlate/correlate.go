@@ -31,6 +31,12 @@ type connMark struct {
 
 const window = 60 * time.Second
 
+// maxUninspectedTracked bounds the uninspected-egress set. Without a cap it
+// gains one entry per distinct agent|host pair for the life of the daemon. The
+// metric is a blind-spot indicator, not an audit trail: once saturated it stays
+// saturated (and signals "lots of distinct egress") rather than growing forever.
+const maxUninspectedTracked = 4096
+
 type Correlator struct {
 	mu          sync.Mutex
 	tagger      *agents.Tagger
@@ -214,7 +220,10 @@ func (c *Correlator) Observe(e event.Event) []model.Flag {
 		// transiting the proxy (routed traffic targets 127.0.0.1). Record it as a
 		// coverage metric; do not flag (that would alarm on every github/npm call).
 		if !isLocalhost(e.RemoteHost) {
-			c.uninspected[info.Name+"|"+e.RemoteHost] = struct{}{}
+			if _, known := c.uninspected[info.Name+"|"+e.RemoteHost]; !known &&
+				len(c.uninspected) < maxUninspectedTracked {
+				c.uninspected[info.Name+"|"+e.RemoteHost] = struct{}{}
+			}
 		}
 
 		c.rememberConnLocked(rootPID, e.PID, connMark{at: e.TS, host: e.RemoteHost, port: e.RemotePort})

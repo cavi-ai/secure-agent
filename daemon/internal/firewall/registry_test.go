@@ -49,3 +49,27 @@ func TestIngestFingerprintsWithoutStoringPlaintext(t *testing.T) {
 		t.Fatal("plaintext secret leaked into fingerprint metadata")
 	}
 }
+
+func TestIngestRefusesEmptyResultWhenAllSourcesFail(t *testing.T) {
+	// Persisting an empty set would silently purge every registered
+	// fingerprint — the detection layer turns off while looking healthy.
+	missing := filepath.Join(t.TempDir(), "unmounted-volume", ".env")
+	fps, err := Ingest([]string{missing}, []byte("salt"))
+	if err == nil {
+		t.Fatal("expected error when every source failed and no fingerprints were produced")
+	}
+	if fps != nil {
+		t.Fatalf("expected nil fingerprints on refusal, got %d", len(fps))
+	}
+}
+
+func TestIngestZeroSourcesIsNotAnError(t *testing.T) {
+	// No configured sources at all is a legitimate steady state, not a failure.
+	fps, err := Ingest(nil, []byte("salt"))
+	if err != nil {
+		t.Fatalf("nil sources should not error: %v", err)
+	}
+	if len(fps) != 0 {
+		t.Fatalf("expected 0 fingerprints, got %d", len(fps))
+	}
+}

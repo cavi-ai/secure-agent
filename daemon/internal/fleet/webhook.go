@@ -105,8 +105,9 @@ func (s *Sink) Subscribed(k EventKind) bool {
 	return s.kinds[string(k)]
 }
 
-// Deliver marshals payload and POSTs it as an envelope. Retries: 3 attempts,
-// 500ms/2s/5s backoff, only on retryable (network / 5xx / 429) failures.
+// Deliver marshals payload and POSTs it as an envelope. Retries: 1 initial
+// attempt + 3 retries (4 total), 500ms/2s/5s backoff, only on retryable
+// (network / 5xx / 429) failures.
 // Deliver never blocks longer than ~20s worst case; callers run it in a
 // goroutine per event.
 func (s *Sink) Deliver(kind EventKind, payload any) {

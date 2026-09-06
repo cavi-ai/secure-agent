@@ -219,6 +219,72 @@ func TestGateRejectsNonUIMutationWhenUIPinned(t *testing.T) {
 	resp.Body.Close()
 }
 
+// A tagged agent (hook traffic) may read and ask the guard for decisions,
+// but must never mutate. Before authorize() was wired through the role
+// methods, agents got 403 on everything — including /guard/decision, which
+// broke the directory-guard prompt flow.
+func TestGateAgentRolePolicy(t *testing.T) {
+	sock := fmt.Sprintf("/tmp/sa_agent_%d.sock", time.Now().UnixNano())
+	defer os.Remove(sock)
+	fk := &fakeKiller{}
+	a := New(sock, testStore(t), fk, func() Status { return Status{Running: true} })
+	a.SetGuard(newTestBroker())
+	// Classify this test process's connections as a tagged agent.
+	selfPID := int32(os.Getpid())
+	a.SetPeers(loopbackChecker{DarwinPeerChecker{}}, func() map[int32]struct{} {
+		return map[int32]struct{}{selfPID: {}}
+	})
+	ctx, cancel := contextWithCancel()
+	defer cancel()
+	go a.Serve(ctx)
+	waitForSocket(t, sock)
+
+	cl := unixClient(sock)
+
+	// Reads: allowed.
+	resp, err := cl.Get("http://unix/status")
+	if err != nil || resp.StatusCode != 200 {
+		t.Fatalf("agent read /status: %v status=%v, want 200", err, resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	// Guard decision: allowed through the gate (400 = handler validation, not 403).
+	req, _ := http.NewRequest("POST", "http://unix/guard/decision", strings.NewReader(`{}`))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err = cl.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("agent /guard/decision: status=%d, want 400 (not 403)", resp.StatusCode)
+	}
+
+	// Mutations: forbidden for agents even without a UI pin.
+	resp, err = cl.Post("http://unix/kill", "application/json", strings.NewReader(`{"pid":42}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("agent /kill: status=%d, want 403", resp.StatusCode)
+	}
+	if fk.killed != 0 {
+		t.Fatal("killer must not fire for an agent-role caller")
+	}
+
+	// DELETE /guard/rules: owner-level, forbidden for agents.
+	req, _ = http.NewRequest("DELETE", "http://unix/guard/rules?agent=x&rule_id=y", nil)
+	resp, err = cl.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("agent DELETE /guard/rules: status=%d, want 403", resp.StatusCode)
+	}
+}
+
 // No UI pin (direct launch): owner-uid mutation still works for headless use.
 func TestGateAllowsOwnerMutationWithoutUIPin(t *testing.T) {
 	sock := fmt.Sprintf("/tmp/sa_nopin_%d.sock", time.Now().UnixNano())

@@ -36,6 +36,48 @@ func TestOverlayMergesOverDefaults(t *testing.T) {
 	}
 }
 
+func TestOverlayRejectsNonPositiveSampleInterval(t *testing.T) {
+	// time.NewTicker panics on a non-positive duration; validate at load so the
+	// supervisor doesn't recover a permanently crash-looping collector.
+	dir := t.TempDir()
+	p := filepath.Join(dir, "config.yaml")
+	os.WriteFile(p, []byte("net_sample_interval_ms: 0\n"), 0o644)
+	if _, err := Load(p); err == nil {
+		t.Fatal("expected validation error for net_sample_interval_ms: 0")
+	}
+	os.WriteFile(p, []byte("net_sample_interval_ms: -5\n"), 0o644)
+	if _, err := Load(p); err == nil {
+		t.Fatal("expected validation error for negative interval")
+	}
+}
+
+func TestOverlayRejectsInvalidProxyPort(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "config.yaml")
+	os.WriteFile(p, []byte("proxy_enabled: true\nproxy_port: 99999\n"), 0o644)
+	if _, err := Load(p); err == nil {
+		t.Fatal("expected validation error for proxy_port 99999")
+	}
+	// Port 0 is valid: kernel-assigned (e2e/tests use it).
+	os.WriteFile(p, []byte("proxy_enabled: true\nproxy_port: 0\n"), 0o644)
+	if _, err := Load(p); err != nil {
+		t.Fatalf("proxy_port 0 must be accepted (kernel-assigned): %v", err)
+	}
+}
+
+func TestMalformedOverlayLogsWarningAndKeepsDefaults(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "config.yaml")
+	os.WriteFile(p, []byte("net_sample_interval_ms: [broken\n"), 0o644)
+	c, err := Load(p)
+	if err != nil {
+		t.Fatalf("malformed overlay should keep defaults, got error: %v", err)
+	}
+	if c.NetSampleInterval.Milliseconds() != 2000 {
+		t.Fatalf("interval = %v, want default 2s", c.NetSampleInterval)
+	}
+}
+
 func TestFirewallDefaultsLoad(t *testing.T) {
 	// Use an absent overlay path so this asserts embedded defaults, not any
 	// real ~/.config overlay on the developer's machine.
