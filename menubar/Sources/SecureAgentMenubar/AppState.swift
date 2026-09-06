@@ -13,13 +13,23 @@ public final class AppState: ObservableObject {
     @Published public private(set) var connected = false
     @Published public var isPaused = false
     @Published public private(set) var guardRules: [GuardRuleModel] = []
+    /// Last transport/decode failure, surfaced in the UI. A daemon that answers
+    /// with garbage is NOT "Disconnected" — it is up and misbehaving, which the
+    /// user must be able to tell apart from a dead daemon.
+    @Published public private(set) var lastError: String?
 
     /// Called after every state change so the AppDelegate can refresh the icon.
     public var onChange: (() -> Void)?
 
     private let client = DaemonClient()
     private var notifiedFlagIDs: Set<String> = []
+    /// False until the first successful fetch seeds the notification baseline —
+    /// without it, launch fires up to 20 banners for days-old flags.
+    private var didSeedNotificationBaseline = false
     private var timer: Timer?
+    /// Serializes fetch() so a slow daemon can't stack overlapping poll tasks
+    /// that complete out of order and regress state.
+    private var isFetching = false
     /// The pending-prompt id currently shown in an NSAlert, so the 1Hz poll
     /// doesn't stack a second dialog on top while one is already up.
     private var promptingID: String?
@@ -39,32 +49,57 @@ public final class AppState: ObservableObject {
     }
 
     public func fetch() {
-        guard !isPaused else { return }
+        guard !isPaused, !isFetching else { return }
+        isFetching = true
         Task {
+            defer { self.isFetching = false }
             do {
                 let status = try await client.fetchStatus()
                 let flags = try await client.fetchFlags(limit: 20)
                 let incidents = (try? await client.fetchIncidents(limit: 10)) ?? []
-                let events = try await client.fetchEvents(limit: 50)
                 let guardRules = (try? await client.fetchGuardRules()) ?? []
+                // A pause requested mid-flight must not be overwritten by
+                // results that were already in transit.
+                guard !self.isPaused else { return }
                 let wasDisconnected = !self.connected
                 self.status = status
                 self.flags = flags
                 self.incidents = incidents
-                self.events = events
                 self.guardRules = guardRules
                 self.connected = true
+                self.lastError = nil
                 if wasDisconnected { self.scheduleTimer(1.0) }
                 self.processNewFlags(flags)
                 self.onChange?()
-                // Presented last: runModal() blocks this Task until the user
-                // responds, so the icon/console refresh above isn't held up.
-                let pending = (try? await client.fetchGuardPending()) ?? []
-                self.presentGuardPromptIfNeeded(pending)
+                // Guard pending is decoded STRICTLY: a malformed response that
+                // silently became [] would suppress the Allow/Deny prompt — a
+                // fail-open on the security-critical path.
+                do {
+                    let pending = try await client.fetchGuardPending()
+                    guard !self.isPaused else { return }
+                    // Presented last: runModal() blocks this Task until the user
+                    // responds, so the icon/console refresh above isn't held up.
+                    self.presentGuardPromptIfNeeded(pending)
+                } catch {
+                    self.lastError = "guard check failed: \(error.localizedDescription)"
+                    self.onChange?()
+                }
+            } catch let DaemonClientError.decode(msg) {
+                // Daemon answered but spoke garbage: still connected, but say so.
+                self.lastError = "decode error: \(msg)"
+                self.onChange?()
             } catch {
                 let wasConnected = self.connected
                 self.connected = false
+                // Drop ALL daemon-derived state: stale flags/incidents driving
+                // the icon and console while the header says "Disconnected" is
+                // how a user kills the wrong process.
+                self.status = nil
+                self.flags = []
                 self.incidents = []
+                self.events = []
+                self.guardRules = []
+                self.lastError = error.localizedDescription
                 if wasConnected { self.scheduleTimer(5.0) }
                 self.onChange?()
             }
@@ -72,10 +107,22 @@ public final class AppState: ObservableObject {
     }
 
     private func processNewFlags(_ flags: [FlagModel]) {
+        if !didSeedNotificationBaseline {
+            // First fetch after launch is a baseline, not news: every flag in
+            // it may be days old. Notify only for ids that appear afterwards.
+            notifiedFlagIDs.formUnion(flags.map(\.id))
+            didSeedNotificationBaseline = true
+            return
+        }
         for flag in flags where flag.severity >= 2 {
             if notifiedFlagIDs.insert(flag.id).inserted {
                 NotificationManager.shared.sendNotification(for: flag)
             }
+        }
+        // Bound the dedupe set: it only ever inserts otherwise.
+        if notifiedFlagIDs.count > 500 {
+            let live = Set(flags.map(\.id))
+            notifiedFlagIDs.formIntersection(live)
         }
     }
 
@@ -91,7 +138,14 @@ public final class AppState: ObservableObject {
 
     public func kill(pid: Int32) {
         Task {
-            _ = try? await client.killProcess(pid: pid)
+            do {
+                let ok = try await client.killProcess(pid: pid)
+                if !ok {
+                    self.lastError = "kill of pid \(pid) was refused by the daemon"
+                }
+            } catch {
+                self.lastError = "kill failed: \(error.localizedDescription)"
+            }
             self.fetch()
         }
     }
@@ -141,7 +195,19 @@ public final class AppState: ObservableObject {
         case .alertThirdButtonReturn:  decision = .init(id: p.id, verdict: "deny", scope: "always")
         default:                       decision = .init(id: p.id, verdict: "deny", scope: "once")
         }
-        Task { try? await client.resolveGuard(decision); self.promptingID = nil; self.fetch() }
+        // A resolve failure must be visible: the user believes they decided,
+        // and a silently dropped decision re-prompts a second later with no
+        // explanation. Keep the error on screen; the pending item stays
+        // server-side and will re-prompt.
+        Task {
+            do {
+                try await client.resolveGuard(decision)
+            } catch {
+                self.lastError = "decision not recorded (daemon unreachable): \(error.localizedDescription)"
+            }
+            self.promptingID = nil
+            self.fetch()
+        }
     }
 
     // MARK: - Guard prompt language
@@ -183,8 +249,10 @@ public final class AppState: ObservableObject {
 
     public func openDashboard() {
         // The console is served on the proxy's loopback HTTP port (and on the
-        // unix API). Only open it when the proxy is actually running.
-        guard status?.proxyEnabled == true, let port = status?.proxyPort, port > 0 else { return }
+        // unix API). Only open it when the daemon is connected and the proxy
+        // is actually running — a stale port from a dead daemon opens a
+        // browser error page.
+        guard connected, status?.proxyEnabled == true, let port = status?.proxyPort, port > 0 else { return }
         if let url = URL(string: "http://127.0.0.1:\(port)/dashboard/") {
             NSWorkspace.shared.open(url)
         }
