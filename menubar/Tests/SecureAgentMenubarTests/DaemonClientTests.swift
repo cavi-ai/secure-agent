@@ -70,4 +70,67 @@ final class DaemonClientTests: XCTestCase {
             XCTAssertNotNil(error)
         }
     }
+
+    // MARK: - HTTP response parsing (the hand-rolled transport)
+
+    func testParseHTTPResponseExtractsBody() throws {
+        let raw = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}"
+        let body = try DaemonClient.parseHTTPResponse(Data(raw.utf8))
+        XCTAssertEqual(String(data: body, encoding: .utf8), "{}")
+    }
+
+    func testParseHTTPResponseRejectsErrorStatus() {
+        let raw = "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n"
+        XCTAssertThrowsError(try DaemonClient.parseHTTPResponse(Data(raw.utf8))) { err in
+            guard let e = err as? DaemonClientError else {
+                return XCTFail("wrong error type: \(err)")
+            }
+            XCTAssertEqual(e, DaemonClientError.http(404))
+        }
+    }
+
+    func testParseHTTPResponseRejectsMalformed() {
+        XCTAssertThrowsError(try DaemonClient.parseHTTPResponse(Data("garbage".utf8)))
+    }
+
+    func testParseHTTPResponseDechunks() throws {
+        // Go's net/http chunk-encodes responses larger than its 2KB buffer even
+        // over a unix socket — a client that can't dechunk corrupts the JSON.
+        let payload = #"{"running":true}"#
+        let raw = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n" +
+            String(format: "%x\r\n", payload.utf8.count) + payload + "\r\n0\r\n\r\n"
+        let body = try DaemonClient.parseHTTPResponse(Data(raw.utf8))
+        XCTAssertEqual(String(data: body, encoding: .utf8), payload)
+    }
+
+    func testDechunkHandlesSplitChunks() throws {
+        let raw = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n"
+        let body = try DaemonClient.parseHTTPResponse(Data(raw.utf8))
+        XCTAssertEqual(String(data: body, encoding: .utf8), "hello world")
+    }
+
+    // MARK: - request-line safety
+
+    func testURLQueryEscapeNeutralizesInjection() {
+        XCTAssertEqual(DaemonClient.urlQueryEscape("a&b=c"), "a%26b%3Dc")
+        XCTAssertEqual(DaemonClient.urlQueryEscape("x y"), "x%20y")
+        // CR/LF in a daemon-supplied id must not inject headers into the
+        // hand-written request line.
+        let evil = DaemonClient.urlQueryEscape("x\r\nX-Injected: y")
+        XCTAssertFalse(evil.contains("\r"))
+        XCTAssertFalse(evil.contains("\n"))
+        XCTAssertEqual(DaemonClient.urlQueryEscape("plain-id_1.2"), "plain-id_1.2")
+    }
+
+    // MARK: - notification body redaction
+
+    func testNotificationBodyIsRedacted() {
+        // Lock-screen banners must not carry paths/hostnames from evidence.
+        let flag = FlagModel(id: "1", rule: "proxy-secret-leak", severity: 3, ts: "", pid: 1,
+                             agent: "claude",
+                             evidence: ["anthropic-key detected in request body to logs.example.com"])
+        let body = NotificationManager.redactedBody(for: flag)
+        XCTAssertFalse(body.contains("logs.example.com"))
+        XCTAssertFalse(body.contains("anthropic-key"))
+    }
 }
