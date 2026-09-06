@@ -1,4 +1,4 @@
-.PHONY: all build test install uninstall clean daemon menubar cli smoke app dmg icon
+.PHONY: all build test install uninstall clean daemon menubar cli collector smoke app dmg icon lint
 
 app:
 	./packaging/make_app.sh
@@ -71,4 +71,4 @@ clean:
 	@echo "==> Cleaning build artifacts..."
 	rm -rf bin/
 	rm -rf menubar/.build/
-	rm -f *.db *.db-journal *.jsonl
+	rm -f events.db events.db-journal events.db-wal events.db-shm events.jsonl

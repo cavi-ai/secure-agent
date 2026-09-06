@@ -22,7 +22,27 @@ def query_unix(socket_path, path):
     return json.loads(body or "[]")
 
 def main():
+    # Anchor at the repo root regardless of the invoking cwd — the go build
+    # paths below are repo-relative.
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    repo_root = os.path.abspath(os.path.join(script_dir, "..", ".."))
+    os.chdir(repo_root)
+
     with tempfile.TemporaryDirectory() as tmpdir:
+        proc = None
+        try:
+            _run(tmpdir)
+        finally:
+            if proc_holder[0] is not None:
+                proc_holder[0].terminate()
+                try:
+                    proc_holder[0].wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc_holder[0].kill()
+
+proc_holder = [None]
+
+def _run(tmpdir):
         sock_path = os.path.join(tmpdir, "d.sock")
         db_path = os.path.join(tmpdir, "events.db")
         jsonl_path = os.path.join(tmpdir, "events.jsonl")
@@ -46,6 +66,7 @@ jsonl_path: "{jsonl_path}"
         subprocess.run(["go", "build", "-o", bin_path, "./daemon/cmd/secure-agentd"], check=True)
 
         proc = subprocess.Popen([bin_path, "-config", config_path])
+        proc_holder[0] = proc
         time.sleep(1)
 
         # Build fake-cursor Go binary
