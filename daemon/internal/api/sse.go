@@ -78,3 +78,19 @@ func (a *API) SetEventStream(subscribe func() <-chan event.Event, release func(<
 	a.subscribeEvents = subscribe
 	a.unsubscribeEvents = release
 }
+
+// SetEventPublisher wires a bus publish func so guard lifecycle moments
+// (prompt enqueued, prompt resolved) reach SSE subscribers instantly — the
+// menubar's prompt latency drops from poll-interval to push.
+func (a *API) SetEventPublisher(publish func(event.Event)) {
+	a.publishEvent = publish
+}
+
+// publishGuardEvent emits a guard lifecycle event on the bus (nil-safe).
+// Detail carries only rule/agent — never paths, which can be secret-adjacent.
+func (a *API) publishGuardEvent(kind event.Kind, detail string) {
+	if a.publishEvent == nil {
+		return
+	}
+	a.publishEvent(event.Event{Kind: kind, TS: time.Now().UTC(), Detail: detail})
+}

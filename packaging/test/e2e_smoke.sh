@@ -7,10 +7,11 @@ COLLECTOR_PID=""
 DAEMON_PID=""
 AGENT_PID=""
 DECISION1_PID=""
+SSE_CURL_PID=""
 # With `set -e`, any mid-script failure used to leave the collector, daemon,
 # and fake agent running with their state dir deleted underneath them.
 cleanup() {
-  for pid in $DECISION1_PID $AGENT_PID $DAEMON_PID $COLLECTOR_PID; do
+  for pid in $DECISION1_PID $SSE_CURL_PID $AGENT_PID $DAEMON_PID $COLLECTOR_PID; do
     [ -n "$pid" ] && kill "$pid" 2>/dev/null || true
   done
   rm -rf "$tmp"
@@ -190,6 +191,16 @@ guard_decision_payload() {
 }
 
 echo "Guard: posting first /guard/decision (backgrounded, blocks until resolved)..."
+
+# SSE: subscribe to the event stream first — the guard decision must publish a
+# guard-prompt event on the bus, and the stream must carry it (this is what
+# the menubar's instant-prompt path consumes).
+SSE_OUT="$tmp/sse_stream.txt"
+# -N (unbuffered) so frames hit the file as they arrive — the later kill must
+# not lose buffered output.
+curl -sN --unix-socket "$SOCKET_PATH" --max-time 15 http://unix/events/stream > "$SSE_OUT" 2>/dev/null &
+SSE_CURL_PID=$!
+
 curl -s --unix-socket "$SOCKET_PATH" -X POST http://unix/guard/decision \
   -d "$(guard_decision_payload)" > "$DECISION1_OUT" 2>/dev/null &
 DECISION1_PID=$!
@@ -255,6 +266,23 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# SSE stream: the guard round-trip above must have published guard-prompt (and
+# guard-resolved) events on the bus, carried over /events/stream.
+# ---------------------------------------------------------------------------
+SSE_PASSED=false
+kill "$SSE_CURL_PID" 2>/dev/null || true
+wait "$SSE_CURL_PID" 2>/dev/null || true
+SSE_BODY=$(cat "$SSE_OUT" 2>/dev/null || true)
+if printf '%s' "$SSE_BODY" | grep -q "secure-agent event stream" \
+  && printf '%s' "$SSE_BODY" | grep -q "event: guard-prompt" \
+  && printf '%s' "$SSE_BODY" | grep -q "event: guard-resolved"; then
+  echo "SSE: stream carried the guard lifecycle events."
+  SSE_PASSED=true
+else
+  echo "SSE: MISSING guard events on /events/stream."
+fi
+
+# ---------------------------------------------------------------------------
 # Fleet webhook: the collector must have received and verified the flag the
 # fake agent triggered above. Sequential check (no heredoc-in-if).
 # ---------------------------------------------------------------------------
@@ -276,8 +304,8 @@ else
 fi
 kill "$COLLECTOR_PID" 2>/dev/null || true
 
-if [ "$PASSED" = true ] && [ "$INCIDENT_PASSED" = true ] && [ "$GUARD_PASSED" = true ] && [ "$WEBHOOK_PASSED" = true ]; then
-  echo "E2E SMOKE TEST: PASS (Flag, Incident, Directory Guard round-trip, and fleet webhook verified)"
+if [ "$PASSED" = true ] && [ "$INCIDENT_PASSED" = true ] && [ "$GUARD_PASSED" = true ] && [ "$WEBHOOK_PASSED" = true ] && [ "$SSE_PASSED" = true ]; then
+  echo "E2E SMOKE TEST: PASS (Flag, Incident, Directory Guard round-trip, fleet webhook, and SSE stream verified)"
   if [ -n "$DAEMON_PID" ]; then
     kill "$DAEMON_PID" 2>/dev/null || true
   fi
@@ -296,6 +324,7 @@ else
   if [ -n "$DAEMON_PID" ]; then
     kill "$DAEMON_PID" 2>/dev/null || true
   fi
-  echo "E2E SMOKE TEST: FAIL (Flag passed: $PASSED, Incident passed: $INCIDENT_PASSED, Guard passed: $GUARD_PASSED, Webhook passed: $WEBHOOK_PASSED)"
+  echo "E2E SMOKE TEST: FAIL (Flag passed: $PASSED, Incident passed: $INCIDENT_PASSED, Guard passed: $GUARD_PASSED, Webhook passed: $WEBHOOK_PASSED, SSE passed: $SSE_PASSED)"
+  echo "DEBUG SSE STREAM: $SSE_BODY"
   exit 1
 fi
