@@ -90,6 +90,16 @@ func (t *Tagger) Refresh() {
 	}
 	t.table = newTable
 
+	// Prune cache entries for dead pids. Beyond bounding growth on a
+	// long-running daemon with heavy process churn, this is a correctness fix:
+	// a recycled pid must never inherit the previous process's agent tag.
+	for pid := range t.cache {
+		if _, alive := newTable[pid]; !alive {
+			delete(t.cache, pid)
+			delete(t.tagged, pid)
+		}
+	}
+
 	// Pre-populate tagging for candidate process trees without discarding existing positively tagged agent cache
 	for pid := range t.table {
 		if t.isCandidateLocked(pid) {

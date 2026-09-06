@@ -5,6 +5,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -75,20 +76,36 @@ func (r *Registry) Match(data []byte) []Hit {
 // must not stall an ingest. Real secret files (.env, credentials) are tiny.
 const maxIngestBytes = 10 << 20 // 10 MiB
 
+// maxIngestLineBytes caps one source line. The default bufio.Scanner limit is
+// 64 KiB; a longer line silently truncates the scan of that file (sc.Err()
+// reports ErrTooLong), which is how a source with one long line used to lose
+// every secret after it without any signal.
+const maxIngestLineBytes = 1 << 20 // 1 MiB
+
 // Ingest reads KEY=VALUE style files and returns fingerprints of the values.
 // Raw values are never returned or stored.
+//
+// Failure semantics matter: the caller persists the returned set wholesale, so
+// a run that read NOTHING (every source missing/unreadable/oversized) returns
+// an error instead of an empty set — persisting an empty set would silently
+// purge every previously registered fingerprint and turn the highest-precision
+// detection layer off while the status page says it's up.
 func Ingest(sources []string, salt []byte) ([]config.Fingerprint, error) {
 	var out []config.Fingerprint
+	var failed []string
 	n := 0
 	for _, src := range sources {
 		if fi, err := os.Stat(src); err != nil || fi.IsDir() || fi.Size() > maxIngestBytes {
-			continue // missing, a directory, or too large — skip, not an error
+			failed = append(failed, src)
+			continue
 		}
 		f, err := os.Open(src)
 		if err != nil {
-			continue // a missing source is not an error
+			failed = append(failed, src)
+			continue
 		}
 		sc := bufio.NewScanner(f)
+		sc.Buffer(make([]byte, 0, 64*1024), maxIngestLineBytes)
 		for sc.Scan() {
 			line := strings.TrimSpace(sc.Text())
 			if line == "" || strings.HasPrefix(line, "#") {
@@ -111,10 +128,17 @@ func Ingest(sources []string, salt []byte) ([]config.Fingerprint, error) {
 				Label: key + " (" + src + ")",
 				HMAC:  Fingerprint(salt, val),
 			})
-			val = "" // drop plaintext immediately
-			_ = val
+			// Note: val is a string — zeroing it is a no-op. The plaintext only
+			// lives in `line`/`val` for the duration of this iteration; nothing
+			// persists it (the fingerprint carries HMAC, type, length, label).
+		}
+		if err := sc.Err(); err != nil {
+			failed = append(failed, src+" (scan error: "+err.Error()+")")
 		}
 		f.Close()
+	}
+	if len(out) == 0 && len(failed) > 0 {
+		return nil, fmt.Errorf("ingest produced zero fingerprints and every source failed (%s); refusing to return an empty set that would purge the registered fingerprints", strings.Join(failed, ", "))
 	}
 	return out, nil
 }

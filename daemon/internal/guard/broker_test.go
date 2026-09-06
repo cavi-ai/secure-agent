@@ -168,6 +168,49 @@ func TestRequestOverCapIsDeniedImmediately(t *testing.T) {
 	wg.Wait()
 }
 
+// Resolve iterates w.chs while concurrent duplicate Requests append to it.
+// Run under `go test -race`: before the fix (lock dropped before iterating),
+// this is a reliable data race on the slice header/backing array.
+func TestResolveConcurrentWithDuplicateRequests(t *testing.T) {
+	b := NewBroker(2 * time.Second)
+	p := Pending{ID: "r1", Agent: "claude", Tool: "Read", Path: "/Users/x/.aws/credentials", RuleID: "cloud-creds"}
+	done := make(chan Decision, 1)
+	go func() { done <- b.Request(p) }()
+	for len(b.Pending()) == 0 {
+		time.Sleep(time.Millisecond)
+	}
+
+	const dups = 64
+	var wg sync.WaitGroup
+	results := make(chan Decision, dups)
+	for i := 0; i < dups; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			dup := p
+			dup.ID = fmt.Sprintf("r1-dup%d", i)
+			results <- b.Request(dup)
+		}(i)
+	}
+	// Resolve repeatedly while duplicates are registering.
+	for i := 0; i < dups; i++ {
+		b.Resolve("r1", Decision{Verdict: "allow", Scope: "once"})
+		time.Sleep(time.Millisecond)
+	}
+	wg.Wait()
+	close(results)
+	allowed := 0
+	for d := range results {
+		if d.Verdict == "allow" {
+			allowed++
+		}
+	}
+	if allowed == 0 {
+		t.Fatal("no duplicate request received the fanned-out decision")
+	}
+	<-done
+}
+
 // Pending must come back oldest-first so the menubar prompts the
 // longest-waiting request first. Distinct paths so the dedup key does not
 // collapse them into one waiter.

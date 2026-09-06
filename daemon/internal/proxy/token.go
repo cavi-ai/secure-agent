@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/hex"
 	"log"
 	"net/http"
@@ -9,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"sync/atomic"
+
+	"github.com/cavi-ai/secure-agent/daemon/internal/safefile"
 )
 
 // token is the per-install shared secret agents must present to use the
@@ -39,8 +42,8 @@ func LoadToken(path string) string {
 	t := hex.EncodeToString(buf)
 	token.Store(t)
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err == nil {
-		if err := os.WriteFile(path, []byte(t+"\n"), 0o600); err != nil {
-			log.Printf("proxy: token persist failed (token is session-only): %v", err)
+		if err := safefile.WriteFileAtomic(path, []byte(t+"\n"), 0o600); err != nil {
+			log.Printf("proxy: WARNING: token persist failed (token is session-only; sourced agent-env snippets will desync on restart): %v", err)
 		}
 	}
 	return t
@@ -73,17 +76,19 @@ func isHexToken(t string) bool {
 // authorized reports whether the request carries the valid proxy token, in
 // either the standard Proxy-Authorization header ("Basic <hex>", base64-free
 // by convention here) or the X-SecureAgent-Proxy-Token header (some HTTP
-// client stacks strip Proxy-Authorization on CONNECT).
+// client stacks strip Proxy-Authorization on CONNECT). Comparison is
+// constant-time — even on loopback, a timing oracle on the auth gate of a
+// security tool is not a class of bug to ship.
 func authorized(r *http.Request) bool {
 	want := Token()
 	if want == "" {
 		return true // auth disabled (token load failed); fail open on loopback
 	}
-	if r.Header.Get("X-SecureAgent-Proxy-Token") == want {
+	if subtle.ConstantTimeCompare([]byte(r.Header.Get("X-SecureAgent-Proxy-Token")), []byte(want)) == 1 {
 		return true
 	}
 	if pa := r.Header.Get("Proxy-Authorization"); strings.HasPrefix(pa, "Basic ") {
-		return strings.TrimPrefix(pa, "Basic ") == want
+		return subtle.ConstantTimeCompare([]byte(strings.TrimPrefix(pa, "Basic ")), []byte(want)) == 1
 	}
 	return false
 }

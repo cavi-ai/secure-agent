@@ -3,12 +3,22 @@ package collect
 import (
 	"context"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/agents"
 	"github.com/cavi-ai/secure-agent/daemon/internal/bus"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
+)
+
+const (
+	// dnsLookupTimeout bounds one reverse lookup so a hung resolver can't pin
+	// a lookup goroutine forever.
+	dnsLookupTimeout = 3 * time.Second
+	// maxDNSCacheEntries bounds the PTR cache; on overflow it resets wholesale
+	// (stale PTR data is worse than a cold cache, re-fetch is cheap).
+	maxDNSCacheEntries = 512
 )
 
 type connKey struct {
@@ -29,6 +39,10 @@ type NetSampler struct {
 
 	mu       sync.Mutex
 	dnsCache map[string]string
+	// dnsSem bounds concurrent reverse lookups; lookups run off the sampling
+	// hot path (see resolveHost) so a slow/absent resolver never stalls event
+	// delivery.
+	dnsSem chan struct{}
 }
 
 func NewNetSampler(b *bus.Bus, tagger *agents.Tagger, interval time.Duration, lister SocketLister) *NetSampler {
@@ -41,6 +55,7 @@ func NewNetSampler(b *bus.Bus, tagger *agents.Tagger, interval time.Duration, li
 		lister:   lister,
 		interval: interval,
 		dnsCache: make(map[string]string),
+		dnsSem:   make(chan struct{}, 4),
 	}
 }
 
@@ -124,14 +139,14 @@ func (ns *NetSampler) Run(ctx context.Context) error {
 	}
 }
 
-func (ns *NetSampler) getTaggedPIDs() map[int32]struct{} {
-	pids := make(map[int32]struct{})
-	for pid := range ns.tagger.TaggedPIDs() {
-		pids[pid] = struct{}{}
-	}
-	return pids
-}
+// (removed) getTaggedPIDs had no callers — tagged-agent filtering happens
+// inline in Run via tagger.Tag per socket.
 
+// resolveHost returns the cached name for an IP, or the IP itself immediately
+// while an async lookup (deadline-bounded, concurrency-capped) fills the cache
+// for the next sample. The previous design called net.LookupAddr inline with no
+// timeout: a slow or absent PTR resolver stalled the entire sampler loop (and
+// with it, all conn open/close events) for seconds at a time.
 func (ns *NetSampler) resolveHost(ipOrHost string) string {
 	if ipOrHost == "" {
 		return ""
@@ -145,22 +160,34 @@ func (ns *NetSampler) resolveHost(ipOrHost string) string {
 		ns.mu.Unlock()
 		return name
 	}
+	// Optimistic negative entry so a slow resolver doesn't spawn a lookup per
+	// sample for the same IP; the async lookup overwrites it with the name (or
+	// re-stores the IP on failure).
+	ns.dnsCache[ipOrHost] = ipOrHost
+	if len(ns.dnsCache) >= maxDNSCacheEntries {
+		// Wholesale reset: PTR data is cheap to re-fetch and stale entries are
+		// worse than a cold cache.
+		ns.dnsCache = map[string]string{ipOrHost: ipOrHost}
+	}
 	ns.mu.Unlock()
 
-	names, err := net.LookupAddr(ipOrHost)
-	res := ipOrHost
-	if err == nil && len(names) > 0 {
-		res = names[0]
-		if res[len(res)-1] == '.' {
-			res = res[:len(res)-1]
+	select {
+	case ns.dnsSem <- struct{}{}:
+	default:
+		return ipOrHost // lookups saturated; the negative entry still bounds retries
+	}
+	go func() {
+		defer func() { <-ns.dnsSem }()
+		ctx, cancel := context.WithTimeout(context.Background(), dnsLookupTimeout)
+		defer cancel()
+		res := ipOrHost
+		if names, err := net.DefaultResolver.LookupAddr(ctx, ipOrHost); err == nil && len(names) > 0 {
+			res = strings.TrimSuffix(names[0], ".")
 		}
-	}
-
-	ns.mu.Lock()
-	if len(ns.dnsCache) < 256 {
+		ns.mu.Lock()
 		ns.dnsCache[ipOrHost] = res
-	}
-	ns.mu.Unlock()
+		ns.mu.Unlock()
+	}()
 
-	return res
+	return ipOrHost
 }

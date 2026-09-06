@@ -55,6 +55,14 @@ func Vars(proxyPort int, caCertPath string, proxyToken string) map[string]string
 	return v
 }
 
+// shellQuote single-quotes a value for POSIX sh. Values like a CA path under
+// "~/Library/Application Support/..." contain spaces; unquoted they break the
+// export, and a config-controlled value containing shell metacharacters would
+// otherwise be interpreted by the shell that sources the snippet.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
 // Snippet renders Vars as a POSIX-sh sourceable script. Intended to be written
 // to the app's own config dir and sourced by the user in the shell where they
 // run agents — not appended to a shell rc by the daemon.
@@ -71,7 +79,7 @@ func Snippet(proxyPort int, caCertPath string, proxyToken string) string {
 	b.WriteString("# Source this file (e.g. `source ~/.config/secure-agent/agent-env.sh`).\n")
 	b.WriteString("# Remove it, or unset these variables, to stop routing.\n")
 	for _, k := range keys {
-		fmt.Fprintf(&b, "export %s=%s\n", k, v[k])
+		fmt.Fprintf(&b, "export %s=%s\n", k, shellQuote(v[k]))
 	}
 	return b.String()
 }
