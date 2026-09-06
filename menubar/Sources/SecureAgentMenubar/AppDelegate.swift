@@ -34,6 +34,8 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificat
 
     public func applicationWillTerminate(_ notification: Notification) {
         // Quitting the app must take the daemon with it — no hidden survivor.
+        // Stop the event stream/polling first so no in-flight fetch outlives us.
+        state.stop()
         DaemonSupervisor.shared.stop()
     }
 

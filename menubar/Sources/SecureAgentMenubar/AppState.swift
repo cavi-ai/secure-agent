@@ -33,12 +33,106 @@ public final class AppState: ObservableObject {
     /// The pending-prompt id currently shown in an NSAlert, so the 1Hz poll
     /// doesn't stack a second dialog on top while one is already up.
     private var promptingID: String?
+    /// SSE push channel. When live, events drive refreshes and the poll timer
+    /// drops to a slow status cadence; when the endpoint is missing (old
+    /// daemon) or keeps failing, we fall back to the 1Hz poll.
+    private var streamTask: Task<Void, Never>?
+    private var streamFailureCount = 0
+    /// True when the daemon's /events/stream answered 503 (old daemon build):
+    /// stay on polling permanently for this session.
+    private var streamUnavailable = false
+    /// Debounces SSE-driven refreshes (one event per syscall would otherwise
+    /// refetch per event).
+    private var refreshTask: Task<Void, Never>?
 
     public init() {}
 
     public func start() {
         fetch()
         scheduleTimer(1.0)
+        startEventStream()
+    }
+
+    // MARK: - Event stream (SSE push)
+
+    /// Opens /events/stream and lets events drive refreshes. Reconnect policy:
+    /// capped exponential backoff with jitter; a 503 (endpoint not enabled —
+    /// old daemon) switches permanently to polling for this session; repeated
+    /// transport failures keep the poll timer at its fast cadence as fallback.
+    private func startEventStream() {
+        streamTask?.cancel()
+        streamTask = Task { [weak self] in
+            var backoff: UInt64 = 1_000_000_000 // 1s
+            while !Task.isCancelled {
+                guard let self, !self.streamUnavailable else { return }
+                do {
+                    try await self.client.streamEvents { frame in
+                        Task { @MainActor [weak self] in
+                            self?.handleStreamEvent(frame)
+                        }
+                    }
+                    // Stream ended without error: treat as a failure and retry.
+                    throw DaemonClientError.transport("stream ended")
+                } catch is CancellationError {
+                    return
+                } catch let DaemonClientError.http(code) where code == 503 {
+                    self.streamUnavailable = true
+                    return // old daemon: polling carries the session
+                } catch {
+                    self.streamFailureCount += 1
+                    // While the stream is down, the existing poll cadence
+                    // (1s connected / 5s disconnected) covers freshness.
+                    try? await Task.sleep(nanoseconds: backoff)
+                    // ±20% jitter so reconnects don't phase-lock.
+                    let jitter = UInt64.random(in: 0...(backoff / 5 + 1))
+                    backoff = min(backoff * 2 + jitter, 30_000_000_000)
+                }
+            }
+        }
+    }
+
+    private func handleStreamEvent(_ frame: SSEFrame) {
+        streamFailureCount = 0
+        // The stream being alive at all is proof of daemon liveness. On
+        // reconnect, pull full state once (events seen while disconnected
+        // are not replayed — the refetch closes the gap).
+        if !connected {
+            connected = true
+            scheduleTimer(30.0) // stream carries freshness; slow poll for uptime
+            fetch()
+        }
+        switch frame.event {
+        case "guard-prompt", "guard-resolved":
+            // Instant path: a waiting user decision must not wait for a poll.
+            scheduleLightRefresh(immediately: true)
+        default:
+            // Any bus event can precede a new flag (correlator consumes the
+            // same bus) — debounce to one refresh per burst.
+            scheduleLightRefresh(immediately: false)
+        }
+    }
+
+    /// Debounced partial refresh: flags + guard pending only (status/uptime
+    /// stay on the slow poll — they change on a seconds scale, not per event).
+    private func scheduleLightRefresh(immediately: Bool) {
+        refreshTask?.cancel()
+        refreshTask = Task { [weak self] in
+            if !immediately {
+                try? await Task.sleep(nanoseconds: 400_000_000)
+            }
+            guard !Task.isCancelled, let self, !self.isPaused else { return }
+            do {
+                let flags = try await self.client.fetchFlags(limit: 20)
+                guard !Task.isCancelled else { return }
+                self.flags = flags
+                self.processNewFlags(flags)
+                self.onChange?()
+                let pending = try await self.client.fetchGuardPending()
+                self.presentGuardPromptIfNeeded(pending)
+            } catch {
+                // The next stream event or poll tick retries; no state flip here.
+            }
+        }
     }
 
     private func scheduleTimer(_ interval: TimeInterval) {
@@ -124,6 +218,14 @@ public final class AppState: ObservableObject {
             let live = Set(flags.map(\.id))
             notifiedFlagIDs.formIntersection(live)
         }
+    }
+
+    /// Cancel the stream, debounce task, and poll timer (app quit path).
+    public func stop() {
+        streamTask?.cancel()
+        refreshTask?.cancel()
+        timer?.invalidate()
+        timer = nil
     }
 
     // MARK: - Actions

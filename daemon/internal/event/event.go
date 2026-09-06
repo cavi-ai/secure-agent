@@ -15,6 +15,8 @@ const (
 	KindTranscriptHit // secret pattern seen in transcript/plugin log
 	KindPluginAction  // harness tool-use reported by the plugin
 	KindProxyHit      // payload inspection match (secret leak or prompt injection in proxy stream)
+	KindGuardPrompt   // a directory-guard prompt was enqueued (UI should refetch /guard/pending)
+	KindGuardResolved // a guard prompt was resolved (UI should refetch pending + rules)
 )
 
 func (k Kind) String() string {
@@ -39,6 +41,10 @@ func (k Kind) String() string {
 		return "plugin-action"
 	case KindProxyHit:
 		return "proxy-hit"
+	case KindGuardPrompt:
+		return "guard-prompt"
+	case KindGuardResolved:
+		return "guard-resolved"
 	default:
 		return "unknown"
 	}
