@@ -276,7 +276,14 @@ Item kinds: `flag` (recent ≤24h, severity ≥2, human-titled), `guard_pending`
 
 ### `GET /events/stream` (SSE)
 
-Live feed of every bus event as `event: <kind>` / `data: <json>`, with a 15s heartbeat comment. Replaces polling for UIs that can hold a connection (the console's 2 s poll remains for fallback). One bus subscription per connection, released on disconnect.
+Live feed of every bus event as `event: <kind>` / `data: <json>`, with a 15s heartbeat comment. Replaces polling for UIs that can hold a connection — **the menu bar app consumes this stream** (guard prompts are now push-latency instead of poll-latency), falling back to polling when the endpoint is unavailable (503 from an older daemon). One bus subscription per connection, released on disconnect.
+
+Besides telemetry kinds (`file-open`, `conn-open`, `proxy-hit`, …), the stream carries the guard lifecycle:
+
+- `event: guard-prompt` — a directory-guard prompt was enqueued; refetch `/guard/pending` immediately.
+- `event: guard-resolved` — a prompt was resolved; refetch pending + `/guard/rules`.
+
+`data` for these carries only `{kind, ts, detail}` with `detail = "<agent>/<rule_id>"` — never paths.
 
 ### Incident workflow
 

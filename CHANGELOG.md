@@ -4,6 +4,23 @@ All notable changes to `secure-agent` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/) and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased — SSE]
+
+### Menu bar: SSE push replaces 1 Hz polling
+
+- The menu bar app now consumes the daemon's `/events/stream` SSE feed:
+  guard prompts arrive at **push latency** instead of up-to-1s poll latency,
+  and the idle poll drops to a 30s status cadence. Falls back to the 1 Hz
+  poll when the endpoint is unavailable (503 from an older daemon) and
+  reconnects with capped exponential backoff + jitter on transport failure.
+  The stream's 15s heartbeat doubles as the liveness watchdog (45s idle =
+  dead connection, reconnect).
+- Daemon publishes two new bus event kinds for the guard lifecycle:
+  `guard-prompt` (a prompt was enqueued) and `guard-resolved` (a prompt was
+  resolved), letting every connected UI refetch immediately.
+- Enforced by `e2e_smoke.sh`: the stream must carry both guard lifecycle
+  events during the guard round-trip.
+
 ## [Unreleased]
 
 ### Security fixes (hooks)

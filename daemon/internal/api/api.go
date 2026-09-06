@@ -78,6 +78,7 @@ type API struct {
 
 	subscribeEvents   func() <-chan event.Event
 	unsubscribeEvents func(<-chan event.Event)
+	publishEvent      func(event.Event)
 }
 
 // GuardEventSink receives guard decisions (allow/deny) for downstream
@@ -688,6 +689,9 @@ func (a *API) handleGuardDecision(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := fmt.Sprintf("%d-%d", time.Now().UnixNano(), atomic.AddUint64(&a.guardSeq, 1))
+	// Push, not just poll: SSE subscribers (menubar) refetch /guard/pending
+	// immediately instead of waiting out their poll interval.
+	a.publishGuardEvent(event.KindGuardPrompt, req.Agent+"/"+req.RuleID)
 	d := a.guardBroker.Request(guard.Pending{
 		ID: id, Agent: req.Agent, Tool: req.Tool, Path: req.Path, RuleID: req.RuleID,
 		// Disclose the blast radius of "allow always": the cached rule covers
@@ -752,6 +756,9 @@ func (a *API) handleGuardResolve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ok := a.guardBroker.Resolve(req.ID, guard.Decision{Verdict: req.Verdict, Scope: req.Scope})
+	if ok {
+		a.publishGuardEvent(event.KindGuardResolved, req.Verdict+"/"+req.Scope)
+	}
 	writeJSON(w, map[string]any{"status": "ok", "resolved": ok})
 }
 

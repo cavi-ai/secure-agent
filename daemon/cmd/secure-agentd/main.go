@@ -299,6 +299,7 @@ func main() {
 	// SSE live feed: each console gets its own bus subscription; unsubscribes
 	// when the connection closes.
 	apiServer.SetEventStream(b.Subscribe, b.Unsubscribe)
+	apiServer.SetEventPublisher(b.Publish)
 	go func() {
 		if err := apiServer.Serve(ctx); err != nil && ctx.Err() == nil {
 			log.Printf("API server error: %v", err)
