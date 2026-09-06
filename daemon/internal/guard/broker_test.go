@@ -171,8 +171,16 @@ func TestRequestOverCapIsDeniedImmediately(t *testing.T) {
 // Resolve iterates w.chs while concurrent duplicate Requests append to it.
 // Run under `go test -race`: before the fix (lock dropped before iterating),
 // this is a reliable data race on the slice header/backing array.
+//
+// The test must not depend on goroutine scheduling order: duplicates that
+// register AFTER the primary's waiter is resolved get their own waiter (a
+// second prompt — correct behavior), so we deterministically wait until half
+// the duplicates have joined before resolving, and resolve the rest's fresh
+// waiters in the drain phase.
 func TestResolveConcurrentWithDuplicateRequests(t *testing.T) {
-	b := NewBroker(2 * time.Second)
+	// Short broker timeout: any duplicate that ends up with its own waiter
+	// after the drain window fails fast instead of stalling the suite.
+	b := NewBroker(400 * time.Millisecond)
 	p := Pending{ID: "r1", Agent: "claude", Tool: "Read", Path: "/Users/x/.aws/credentials", RuleID: "cloud-creds"}
 	done := make(chan Decision, 1)
 	go func() { done <- b.Request(p) }()
@@ -181,6 +189,7 @@ func TestResolveConcurrentWithDuplicateRequests(t *testing.T) {
 	}
 
 	const dups = 64
+	const joined = dups / 2 // these MUST share r1's waiter
 	var wg sync.WaitGroup
 	results := make(chan Decision, dups)
 	for i := 0; i < dups; i++ {
@@ -192,11 +201,77 @@ func TestResolveConcurrentWithDuplicateRequests(t *testing.T) {
 			results <- b.Request(dup)
 		}(i)
 	}
-	// Resolve repeatedly while duplicates are registering.
-	for i := 0; i < dups; i++ {
-		b.Resolve("r1", Decision{Verdict: "allow", Scope: "once"})
-		time.Sleep(time.Millisecond)
+
+	// Wait until `joined` duplicates have actually registered on r1's waiter
+	// (same-package access; this is what the race detector needs to see —
+	// appends concurrent with Resolve's iteration).
+	waitJoined := func(want int) {
+		deadline := time.After(5 * time.Second)
+		for {
+			b.mu.Lock()
+			n := 0
+			if w, ok := b.waiters["r1"]; ok {
+				n = len(w.chs)
+			}
+			b.mu.Unlock()
+			if n >= want {
+				return
+			}
+			select {
+			case <-deadline:
+				t.Fatalf("only %d channels joined r1's waiter, want %d", n, want)
+			default:
+				time.Sleep(time.Millisecond)
+			}
+		}
 	}
+	waitJoined(joined + 1) // +1 for the primary's own channel
+
+	// Resolve concurrently with the remaining appends — the race window. Note:
+	// once the primary's channel receives a decision, Request returns and the
+	// waiter is deleted; late duplicates then create their own waiters (a
+	// second prompt — correct). We don't require all 64 to share the waiter,
+	// only that appends overlap resolves.
+	stopResolving := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-stopResolving:
+				return
+			default:
+				b.Resolve("r1", Decision{Verdict: "allow", Scope: "once"})
+				time.Sleep(time.Millisecond)
+			}
+		}
+	}()
+	time.Sleep(150 * time.Millisecond)
+	close(stopResolving)
+	// One final fan-out in case the waiter survived the window.
+	b.Resolve("r1", Decision{Verdict: "allow", Scope: "once"})
+
+	// Drain: late duplicates that created their own waiters get resolved too.
+	deadline := time.After(5 * time.Second)
+	for {
+		b.mu.Lock()
+		ids := make([]string, 0, len(b.waiters))
+		for id := range b.waiters {
+			ids = append(ids, id)
+		}
+		b.mu.Unlock()
+		if len(ids) == 0 {
+			break
+		}
+		for _, id := range ids {
+			b.Resolve(id, Decision{Verdict: "allow", Scope: "once"})
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("waiters never drained: %v", ids)
+		default:
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
+
 	wg.Wait()
 	close(results)
 	allowed := 0
@@ -205,8 +280,8 @@ func TestResolveConcurrentWithDuplicateRequests(t *testing.T) {
 			allowed++
 		}
 	}
-	if allowed == 0 {
-		t.Fatal("no duplicate request received the fanned-out decision")
+	if allowed < joined {
+		t.Fatalf("only %d/%d duplicates got the fanned-out decision, want at least %d", allowed, dups, joined)
 	}
 	<-done
 }
