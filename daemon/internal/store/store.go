@@ -78,6 +78,7 @@ func Open(dbPath, jsonlPath string) (*Store, error) {
 			ts TEXT,
 			pid INT,
 			agent TEXT,
+			session_id TEXT,
 			evidence TEXT
 		);`,
 		`CREATE TABLE IF NOT EXISTS events (
@@ -130,11 +131,23 @@ func Open(dbPath, jsonlPath string) (*Store, error) {
 		}
 	}
 	// Pre-session_id databases (CREATE TABLE IF NOT EXISTS is a no-op on them)
-	// get the column added in place; duplicates are already handled by the
-	// CREATE above on fresh files.
-	if _, err := db.Exec(`ALTER TABLE events ADD COLUMN session_id TEXT`); err != nil {
-		// Column already exists — expected on fresh or migrated databases.
-		log.Printf("store: schema note: %v", err)
+	// get the column added in place. Checked via PRAGMA so a fresh database
+	// doesn't log a scary "duplicate column" error on every start.
+	for _, table := range []string{"events", "flags"} {
+		var n int
+		if err := db.QueryRow(
+			`SELECT COUNT(*) FROM pragma_table_info(?) WHERE name='session_id'`, table,
+		).Scan(&n); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("failed to inspect %s schema: %w", table, err)
+		}
+		if n == 0 {
+			if _, err := db.Exec(`ALTER TABLE ` + table + ` ADD COLUMN session_id TEXT`); err != nil {
+				db.Close()
+				return nil, fmt.Errorf("failed to migrate %s.session_id: %w", table, err)
+			}
+			log.Printf("store: migrated %s: added session_id column", table)
+		}
 	}
 
 	var jsonl *os.File
@@ -174,8 +187,8 @@ func (s *Store) PutFlag(fl model.Flag) {
 	tsStr := fl.TS.UTC().Format(time.RFC3339Nano)
 
 	_, err := s.db.Exec(
-		`INSERT OR REPLACE INTO flags (id, rule, severity, ts, pid, agent, evidence) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		fl.ID, fl.Rule, fl.Severity, tsStr, fl.PID, fl.Agent, string(evJSON),
+		`INSERT OR REPLACE INTO flags (id, rule, severity, ts, pid, agent, session_id, evidence) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		fl.ID, fl.Rule, fl.Severity, tsStr, fl.PID, fl.Agent, fl.SessionID, string(evJSON),
 	)
 	if err != nil {
 		log.Printf("store: failed to insert flag %s: %v", fl.ID, err)
@@ -254,7 +267,7 @@ func (s *Store) QueryFlags(f FlagFilter) []model.Flag {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	q := `SELECT id, rule, severity, ts, pid, agent, evidence FROM flags WHERE 1=1`
+	q := `SELECT id, rule, severity, ts, pid, agent, session_id, evidence FROM flags WHERE 1=1`
 	var args []any
 	if f.Agent != "" {
 		q += " AND agent = ?"
@@ -289,7 +302,9 @@ func (s *Store) QueryFlags(f FlagFilter) []model.Flag {
 	for rows.Next() {
 		var fl model.Flag
 		var tsStr, evStr string
-		if err := rows.Scan(&fl.ID, &fl.Rule, &fl.Severity, &tsStr, &fl.PID, &fl.Agent, &evStr); err == nil {
+		var sessionID sql.NullString
+		if err := rows.Scan(&fl.ID, &fl.Rule, &fl.Severity, &tsStr, &fl.PID, &fl.Agent, &sessionID, &evStr); err == nil {
+			fl.SessionID = sessionID.String
 			fl.TS, _ = time.Parse(time.RFC3339Nano, tsStr)
 			_ = json.Unmarshal([]byte(evStr), &fl.Evidence)
 			flags = append(flags, fl)

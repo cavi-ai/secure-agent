@@ -163,9 +163,21 @@ struct ConsoleView: View {
 
     // MARK: guard
 
+    private static let guardRuleLabels: [(id: String, label: String)] = [
+        ("ssh-keys", "SSH private keys"),
+        ("cloud-creds", "Cloud credentials"),
+        ("keychain", "Keychain"),
+        ("env-files", ".env files"),
+        ("shell-rc", "Shell config"),
+    ]
+
     private var guardSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             sectionHeader("Directory guard", trailing: "\(state.guardRules.count)")
+
+            // Per-rule policy: monitor / prompt / deny, persisted to
+            // guard-modes.json (the file the hook reads on every tool call).
+            guardPolicyEditor
 
             if state.guardRules.isEmpty {
                 Text("No guard decisions yet — sensitive paths are prompted on first access")
@@ -197,6 +209,49 @@ struct ConsoleView: View {
             Text("Hook decisions can block; monitored accesses are observed only")
                 .font(.system(size: 10)).foregroundStyle(.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    // MARK: guard policy editor
+
+    /// Per-rule monitor/prompt/deny toggles, persisted straight to
+    /// guard-modes.json (atomic write; the hook reads it per tool call, so no
+    /// daemon round-trip exists). A corrupt file is surfaced, not hidden —
+    /// the hook fails closed on it.
+    private var guardPolicyEditor: some View {
+        let current = SetupManager.shared.currentGuardModes()
+        return VStack(alignment: .leading, spacing: 6) {
+            if current.corrupt {
+                Label("guard-modes.json is unreadable — the guard is failing closed (deny) until fixed",
+                      systemImage: "exclamationmark.triangle.fill")
+                    .font(.system(size: 10)).foregroundStyle(Color.bad)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            ForEach(Self.guardRuleLabels, id: \.id) { rule in
+                HStack {
+                    Text(rule.label).font(.system(size: 11))
+                    Spacer()
+                    Picker("", selection: Binding(
+                        get: { current.modes[rule.id] ?? "monitor" },
+                        set: { newMode in
+                            do {
+                                try SetupManager.shared.setGuardMode(ruleID: rule.id, mode: newMode)
+                                // Re-render from the file we just wrote.
+                                state.refresh()
+                            } catch {
+                                state.reportLocalError("could not set \(rule.id): \(error.localizedDescription)")
+                            }
+                        }
+                    )) {
+                        Text("Monitor").tag("monitor")
+                        Text("Prompt").tag("prompt")
+                        Text("Deny").tag("deny")
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(width: 170)
+                    .labelsHidden()
+                }
+            }
         }
     }
 
@@ -253,6 +308,12 @@ struct ConsoleView: View {
                         .font(.system(size: 12)).foregroundStyle(flag.severity >= 3 ? Color.bad : Color.warn)
                     VStack(alignment: .leading, spacing: 1) {
                         Text("\(flag.rule) — \(flag.agent)").font(.system(size: 11, weight: .medium))
+                        if let sid = flag.sessionId, !sid.isEmpty {
+                            // The evidence-chain link: which harness session
+                            // produced this flag, surviving PID reuse.
+                            Text("session \(sid.prefix(8))").font(.system(size: 9, design: .monospaced))
+                                .foregroundStyle(.quaternary)
+                        }
                         if let ev = flag.evidence.first {
                             Text(ev).font(.system(size: 10, design: .monospaced)).foregroundStyle(.tertiary).lineLimit(2)
                         }
