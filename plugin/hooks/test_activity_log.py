@@ -48,6 +48,34 @@ def main():
         if "sk-12345" in lines[0]:
             raise AssertionError("secret token leaked into activity log!")
 
+        # Bare provider tokens (no Bearer prefix) and key=value secrets must
+        # also be redacted before they hit the log.
+        for i, cmd in enumerate([
+            "echo sk-proj-abcdef1234567890abcdef",
+            "export AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMIK7MDENGbPxRfiCY",
+            "git clone https://user:ghp_abcdef1234567890abcdef@github.com/x/y",
+        ]):
+            p = subprocess.run(
+                [sys.executable, HOOK],
+                input=json.dumps({"hook_event_name": "PostToolUse", "tool_name": "Bash",
+                                  "tool_input": {"command": cmd}, "pid": 5000 + i}),
+                capture_output=True, text=True, env=env, timeout=5,
+            )
+            if p.returncode != 0:
+                raise AssertionError(f"hook exited {p.returncode}: {p.stderr}")
+
+        content = open(logfile).read()
+        for leaked in ("sk-proj-abcdef1234567890abcdef", "wJalrXUtnFEMIK7MDENGbPxRfiCY",
+                       "ghp_abcdef1234567890abcdef"):
+            if leaked in content:
+                raise AssertionError(f"secret leaked into activity log: {leaked[:12]}...")
+
+        # Log must not be world-readable.
+        import stat
+        mode = stat.S_IMODE(os.stat(logfile).st_mode)
+        if mode & 0o077:
+            raise AssertionError(f"activity log is {oct(mode)}, expected 0600")
+
     print("PASS (test_activity_log)")
 
 if __name__ == "__main__":
