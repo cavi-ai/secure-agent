@@ -1,7 +1,7 @@
 import Foundation
 import UserNotifications
 
-public final class NotificationManager: NSObject, Sendable {
+public final class NotificationManager: NSObject, @unchecked Sendable {
     public static let shared = NotificationManager()
 
     public static let flagCategory = "secure-agent.flag"
@@ -12,15 +12,26 @@ public final class NotificationManager: NSObject, Sendable {
 
     override private init() { super.init() }
 
+    /// Whether the user granted notification permission. When denied, security
+    /// alerts would vanish silently — the app surfaces this state instead.
+    public private(set) var authorizationGranted = false
+    /// Set after the first authorization query completes.
+    public private(set) var authorizationResolved = false
+
     public func requestAuthorization() {
         guard isSupported else {
             print("[secure-agent-menubar] Unbundled process context; skipping notification auth.")
             return
         }
         registerCategories()
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, error in
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, error in
             if let error = error {
                 print("[secure-agent-menubar] Notification auth error: \(error)")
+            }
+            self.authorizationGranted = granted
+            self.authorizationResolved = true
+            if !granted {
+                NSLog("[secure-agent] WARNING: notification permission denied — security alerts will not be shown")
             }
         }
     }
@@ -36,6 +47,16 @@ public final class NotificationManager: NSObject, Sendable {
         UNUserNotificationCenter.current().setNotificationCategories([category])
     }
 
+    /// Strip anything path-like or host-like from evidence for the lock screen:
+    /// notification bodies are visible without unlocking, so "anthropic-key
+    /// detected in request body to logs.example.com" would leak posture detail
+    /// to a shoulder-surfer. The full evidence is one click away in the console.
+    static func redactedBody(for flag: FlagModel) -> String {
+        let title = Self.title(for: flag)
+        if title != flag.rule { return title }
+        return flag.rule.replacingOccurrences(of: "-", with: " ")
+    }
+
     public func sendNotification(for flag: FlagModel) {
         guard isSupported else {
             print("[secure-agent-menubar] Alert [\(flag.rule)]: \(flag.evidence.joined(separator: ", "))")
@@ -44,7 +65,7 @@ public final class NotificationManager: NSObject, Sendable {
         let content = UNMutableNotificationContent()
         content.title = Self.title(for: flag)
         content.subtitle = "\(flag.agent.capitalized) · PID \(flag.pid)"
-        content.body = flag.evidence.first ?? flag.rule
+        content.body = Self.redactedBody(for: flag)
         content.categoryIdentifier = Self.flagCategory
         content.userInfo = ["pid": Int(flag.pid), "agent": flag.agent, "rule": flag.rule]
         content.interruptionLevel = flag.severity >= 3 ? .timeSensitive : .active
@@ -53,7 +74,9 @@ public final class NotificationManager: NSObject, Sendable {
         let request = UNNotificationRequest(identifier: flag.id, content: content, trigger: nil)
         UNUserNotificationCenter.current().add(request) { error in
             if let error = error {
-                print("[secure-agent-menubar] Failed to deliver notification: \(error)")
+                // Not print(): an undelivered severity-3 alert is a security
+                // signal, and a bundled GUI app has no stdout anyone reads.
+                NSLog("[secure-agent] Failed to deliver notification: \(error.localizedDescription)")
             }
         }
     }

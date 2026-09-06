@@ -12,8 +12,12 @@ cd "${REPO_ROOT}"
 
 APP_NAME="Secure Agent"
 APP_DIR="${REPO_ROOT}/dist/${APP_NAME}.app"
+# git-describe output lands in Info.plist XML — strip XML metacharacters so a
+# crafted tag name can't break or inject the plist.
 VERSION="${VERSION:-$(git describe --tags --always --dirty 2>/dev/null || echo 0.1.0)}"
+VERSION="$(printf '%s' "$VERSION" | tr -d '<>&"'"'"'')"
 BUILD_NUMBER="${BUILD_NUMBER:-$(git rev-parse --short HEAD 2>/dev/null || echo 1)}"
+BUILD_NUMBER="$(printf '%s' "$BUILD_NUMBER" | tr -cd 'a-zA-Z0-9.-')"
 CODESIGN_IDENTITY="${CODESIGN_IDENTITY:--}"
 BUNDLE_ID="com.cavi-ai.secure-agent"
 

@@ -12,6 +12,7 @@ private extension Color {
 @MainActor
 struct ConsoleView: View {
     @ObservedObject var state: AppState
+    @ObservedObject private var supervisor = DaemonSupervisor.shared
     /// Preview/snapshot renderers don't lay out ScrollView content; set false to
     /// render the sections in a plain stack for snapshots.
     var scrollable: Bool = true
@@ -33,11 +34,65 @@ struct ConsoleView: View {
 
     private var sections: some View {
         VStack(alignment: .leading, spacing: 16) {
+            if let err = state.lastError { errorBanner(err) }
             firewallSection
             guardSection
+            if !state.incidents.isEmpty { incidentsSection }
             if !state.activeAgents.isEmpty { agentsSection }
             if !state.flags.isEmpty { flagsSection }
         }
+    }
+
+    // MARK: incidents
+
+    /// Open incidents with their remediation checklists — the daemon already
+    /// generates these reports; this surfaces them where the user actually
+    /// looks instead of only in the web console.
+    private var incidentsSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            sectionHeader("Incidents", trailing: "\(state.incidents.count)")
+            ForEach(state.incidents.prefix(3)) { inc in
+                Button { selectedIncident = inc } label: {
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: "cross.case.fill")
+                            .font(.system(size: 12)).foregroundStyle(Color.bad)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text("\(inc.rule) — \(inc.agent)").font(.system(size: 11, weight: .medium))
+                            Text(inc.summary).font(.system(size: 10)).foregroundStyle(.tertiary).lineLimit(2)
+                        }
+                        Spacer()
+                        Text(inc.risk.uppercased()).font(.system(size: 9, weight: .bold))
+                            .foregroundStyle(Color.bad)
+                            .padding(.horizontal, 7).padding(.vertical, 4)
+                            .background(Color.bad.opacity(0.14)).clipShape(Capsule())
+                    }
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .sheet(item: $selectedIncident) { inc in
+            IncidentDetailView(incident: inc)
+        }
+    }
+
+    @State private var selectedIncident: IncidentReportModel?
+
+    // MARK: error surfacing
+
+    /// Daemon problems are visible, not just a grey dot: transport failures,
+    /// decode mismatches, refused kills, and dropped guard decisions all land
+    /// here instead of vanishing into a disconnected state.
+    private func errorBanner(_ message: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 11)).foregroundStyle(Color.warn)
+            Text(message).font(.system(size: 11)).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.warn.opacity(0.10))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 
     // MARK: header
@@ -162,14 +217,30 @@ struct ConsoleView: View {
                         }
                     }
                     Spacer()
-                    Button(role: .destructive) { state.kill(pid: agent.pid) } label: {
+                    Button(role: .destructive) { killTarget = agent } label: {
                         Label("Kill", systemImage: "power").font(.system(size: 11, weight: .semibold))
                     }
                     .buttonStyle(.bordered).controlSize(.small)
                 }
             }
         }
+        // One click used to SIGKILL the user's agent with no undo and no
+        // confirmation. Confirm explicitly.
+        .confirmationDialog(
+            "Kill this agent process?",
+            isPresented: Binding(get: { killTarget != nil }, set: { if !$0 { killTarget = nil } }),
+            titleVisibility: .visible
+        ) {
+            Button("Kill \(killTarget?.name ?? "") (pid \(killTarget?.pid ?? 0))", role: .destructive) {
+                if let pid = killTarget?.pid { state.kill(pid: pid) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The agent process tree is terminated immediately. Unsaved work in it is lost.")
+        }
     }
+
+    @State private var killTarget: AgentSummaryModel?
 
     // MARK: flags
 
@@ -195,7 +266,25 @@ struct ConsoleView: View {
     // MARK: footer
 
     private var footer: some View {
-        HStack(spacing: 8) {
+        VStack(spacing: 8) {
+            if supervisor.gaveUpRestarting {
+                // The restart limiter gave up: without this the popover just
+                // says "Disconnected" forever with no way back.
+                HStack(spacing: 8) {
+                    Label("Daemon crashed repeatedly and was left stopped", systemImage: "exclamationmark.octagon.fill")
+                        .font(.system(size: 11)).foregroundStyle(Color.bad)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer()
+                    Button { supervisor.restart(); state.refresh() } label: {
+                        Text("Restart").font(.system(size: 11, weight: .semibold))
+                    }
+                    .buttonStyle(.borderedProminent).tint(.brand).controlSize(.small)
+                }
+                .padding(10)
+                .background(Color.bad.opacity(0.10))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+            }
+            HStack(spacing: 8) {
             Button { state.openDashboard() } label: {
                 Label("Open console", systemImage: "square.grid.2x2").font(.system(size: 12, weight: .semibold))
             }
@@ -207,6 +296,7 @@ struct ConsoleView: View {
             Button { state.refresh() } label: {
                 Image(systemName: "arrow.clockwise").font(.system(size: 13))
             }.buttonStyle(.borderless).help("Refresh")
+            }
         }
         .padding(.horizontal, 14).padding(.vertical, 10)
     }

@@ -48,6 +48,38 @@ def main():
         if "sk-12345" in lines[0]:
             raise AssertionError("secret token leaked into activity log!")
 
+        # Bare provider tokens (no Bearer prefix) and key=value secrets must
+        # also be redacted before they hit the log. The secret-shaped values
+        # are built from fragments so no scanner (or reader) ever sees a real
+        # token shape in source — the repo's own gitleaks gate enforces this.
+        fake_sk = "sk-" + "proj-" + "abcdef" + "1234567890" + "abcdef"
+        fake_aws = "wJalr" + "XUtnFEMI" + "K7MDENG" + "bPxRfi" + "CY"
+        fake_ghp = "ghp_" + "abcdef" + "1234567890" + "abcdef"
+        for i, cmd in enumerate([
+            f"echo {fake_sk}",
+            f"export AWS_SECRET_ACCESS_KEY={fake_aws}",
+            f"git clone https://user:{fake_ghp}@github.com/x/y",
+        ]):
+            p = subprocess.run(
+                [sys.executable, HOOK],
+                input=json.dumps({"hook_event_name": "PostToolUse", "tool_name": "Bash",
+                                  "tool_input": {"command": cmd}, "pid": 5000 + i}),
+                capture_output=True, text=True, env=env, timeout=5,
+            )
+            if p.returncode != 0:
+                raise AssertionError(f"hook exited {p.returncode}: {p.stderr}")
+
+        content = open(logfile).read()
+        for leaked in (fake_sk, fake_aws, fake_ghp):
+            if leaked in content:
+                raise AssertionError(f"secret leaked into activity log: {leaked[:12]}...")
+
+        # Log must not be world-readable.
+        import stat
+        mode = stat.S_IMODE(os.stat(logfile).st_mode)
+        if mode & 0o077:
+            raise AssertionError(f"activity log is {oct(mode)}, expected 0600")
+
     print("PASS (test_activity_log)")
 
 if __name__ == "__main__":

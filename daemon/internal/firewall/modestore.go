@@ -2,6 +2,7 @@ package firewall
 
 import (
 	"encoding/json"
+	"github.com/cavi-ai/secure-agent/daemon/internal/safefile"
 	"log"
 	"os"
 	"path/filepath"
@@ -57,5 +58,5 @@ func (m *ModeStore) Set(ruleID, mode string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(m.path, data, 0o600)
+	return safefile.WriteFileAtomic(m.path, data, 0o600)
 }

@@ -5,6 +5,7 @@ package collect
 import (
 	"bufio"
 	"bytes"
+	"log"
 	"net"
 	"os"
 	"os/exec"
@@ -33,7 +34,14 @@ func (d *DarwinSocketLister) SocketsFor(pid int32) []connKey {
 	}
 
 	cmd := exec.Command(lsofBin, args...)
-	out, _ := cmd.Output()
+	out, err := cmd.Output()
+	if err != nil {
+		// lsof exits nonzero when a pid vanished mid-scan (benign) but also on
+		// real failures; without this log the sampler silently goes blind.
+		if ee, ok := err.(*exec.ExitError); !ok || ee.ExitCode() != 1 {
+			log.Printf("collect: lsof failed: %v", err)
+		}
+	}
 	if len(out) == 0 {
 		return nil
 	}

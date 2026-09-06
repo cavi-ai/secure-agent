@@ -8,6 +8,7 @@ package main
 import (
 	"crypto/hmac"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -15,6 +16,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -35,9 +37,10 @@ var knownKinds = map[string]bool{"flag": true, "incident": true, "guard": true}
 
 // Config is the collector's runtime configuration.
 type Config struct {
-	Addr     string            // listen address (default 127.0.0.1:9445)
-	StoreDir string            // JSONL store directory (default ~/.local/state/secure-agent-collector)
-	Secrets  map[string]string // node_id -> webhook secret
+	Addr      string            // listen address (default 127.0.0.1:9445)
+	StoreDir  string            // JSONL store directory (default ~/.local/state/secure-agent-collector)
+	Secrets   map[string]string // node_id -> webhook secret
+	ReadToken string            // bearer token for read endpoints; empty = loopback-only trust
 }
 
 func loadConfig() Config {
@@ -51,6 +54,8 @@ func loadConfig() Config {
 	flag.StringVar(&cfg.StoreDir, "store", cfg.StoreDir, "JSONL store directory")
 	var secretsRaw string
 	flag.StringVar(&secretsRaw, "secrets", "", "node_id=secret pairs, comma-separated (e.g. n1=s3cret,n2=s3cret2)")
+	flag.StringVar(&cfg.ReadToken, "read-token", os.Getenv("SECURE_AGENT_COLLECTOR_READ_TOKEN"),
+		"bearer token required on read endpoints (/fleet, /nodes/*, /) — set this when binding beyond loopback")
 	flag.Parse()
 
 	// Minimal YAML: node secrets as "node_id: secret" lines under "secrets:".
@@ -118,11 +123,16 @@ func main() {
 
 	c := &Collector{cfg: cfg, store: NewStore(cfg.StoreDir)}
 
+	if cfg.ReadToken == "" && !isLoopbackAddr(cfg.Addr) {
+		log.Printf("collector: WARNING: read endpoints are UNAUTHENTICATED on a non-loopback address (%s) — "+
+			"the full multi-node security telemetry is exposed to the network. Set -read-token.", cfg.Addr)
+	}
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /hooks/secure-agent", c.handleHook)
-	mux.HandleFunc("GET /fleet", c.handleFleet)
-	mux.HandleFunc("GET /nodes/", c.handleNodeEvents)
-	mux.HandleFunc("GET /", c.handleOverview)
+	mux.HandleFunc("GET /fleet", c.requireReadAuth(c.handleFleet))
+	mux.HandleFunc("GET /nodes/", c.requireReadAuth(c.handleNodeEvents))
+	mux.HandleFunc("GET /", c.requireReadAuth(c.handleOverview))
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(200)
 		_, _ = w.Write([]byte("ok"))
@@ -131,6 +141,38 @@ func main() {
 	log.Printf("secure-agent-collector listening on http://%s (nodes: %d)", cfg.Addr, len(cfg.Secrets))
 	srv := &http.Server{Addr: cfg.Addr, Handler: mux}
 	log.Fatal(srv.ListenAndServe())
+}
+
+// isLoopbackAddr reports whether addr binds only to loopback.
+func isLoopbackAddr(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
+	}
+	if host == "" {
+		return false // :port binds all interfaces
+	}
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// requireReadAuth gates read endpoints on the configured bearer token. With no
+// token configured the endpoints stay open (the default bind is loopback, and
+// main warns loudly otherwise) — but a configured token is always enforced.
+func (c *Collector) requireReadAuth(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if c.cfg.ReadToken != "" {
+			got := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+			if subtle.ConstantTimeCompare([]byte(got), []byte(c.cfg.ReadToken)) != 1 {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+		}
+		next(w, r)
+	}
 }
 
 // verifySignature does a constant-time compare of the X-SecureAgent-Signature

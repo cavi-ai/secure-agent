@@ -17,13 +17,31 @@ echo "Removing installed binaries..."
 rm -f "${BIN_DEST}" "${MENUBAR_DEST}" "${HOME}/.local/bin/secure-agent"
 
 echo "Unlinking plugin hooks..."
-rm -f "${HOME}/.claude/hooks/secret_guard.py"
-rm -f "${HOME}/.claude/hooks/injection_scan.py"
-rm -f "${HOME}/.claude/hooks/activity_log.py"
-rm -f "${HOME}/.cursor/hooks/secret_guard.py"
-rm -f "${HOME}/.cursor/hooks/injection_scan.py"
-rm -f "${HOME}/.cursor/hooks/activity_log.py"
+# Only remove symlinks (what the installer creates) or files carrying our
+# marker comment — a user's own replacement file must not be deleted.
+remove_hook() {
+  local path="$1"
+  if [ -L "$path" ]; then
+    rm -f "$path"
+  elif [ -f "$path" ] && grep -q "secure-agent" "$path" 2>/dev/null; then
+    rm -f "$path"
+  elif [ -e "$path" ]; then
+    echo "  kept (not ours): $path"
+  fi
+}
+for target in "${HOME}/.claude/hooks" "${HOME}/.cursor/hooks" "${HOME}/.config/opencode/hooks"; do
+  for hook in secret_guard.py injection_scan.py activity_log.py; do
+    remove_hook "${target}/${hook}"
+  done
+done
 
-echo "============================================================"
-echo "secure-agent has been completely uninstalled."
-echo "============================================================"
+echo ""
+echo "Removed binaries, LaunchAgents, and hooks."
+echo "State left behind (delete manually if unwanted):"
+for leftover in \
+  "${HOME}/.config/secure-agent" \
+  "${HOME}/.local/state/secure-agent" \
+  "${HOME}/.agents/logs" \
+  "${HOME}/Library/Logs/secure-agent"; do
+  [ -e "$leftover" ] && echo "  $leftover"
+done

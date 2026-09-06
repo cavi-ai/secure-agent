@@ -58,7 +58,10 @@ public final class SetupManager: ObservableObject {
     public func refreshState() async {
         let statusReachable = (try? await DaemonClient().fetchStatus().running) ?? false
         isDaemonRunning = DaemonSupervisor.shared.isRunning || statusReachable
-        areHooksInstalled = Self.hookTargets.contains { target in
+        // ALL harnesses must carry the hook — `contains` used to announce
+        // "Hooks installed" when only one of three targets had it, leaving the
+        // other two unprotected while the wizard claimed otherwise.
+        areHooksInstalled = Self.hookTargets.allSatisfy { target in
             fm.fileExists(atPath: "\(target)/secret_guard.py")
         }
     }
@@ -144,7 +147,12 @@ public final class SetupManager: ObservableObject {
             return "could not launch python3: \(error.localizedDescription)"
         }
 
-        // Hooks answer in well under a second; don't hang the wizard.
+        // Hooks answer in well under a second; don't hang the wizard. Read
+        // stdout/stderr CONCURRENTLY with the wait — a hook that writes more
+        // than the 64KB pipe buffer before exiting would otherwise deadlock
+        // against the busy-wait and false-fail as a timeout.
+        async let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
+        async let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
         let deadline = Date().addingTimeInterval(10)
         while p.isRunning && Date() < deadline {
             try? await Task.sleep(nanoseconds: 100_000_000)
@@ -153,7 +161,8 @@ public final class SetupManager: ObservableObject {
             p.terminate()
             return "hook timed out after 10s"
         }
-        let out = String(data: outPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        _ = await errData
+        let out = String(data: await outData, encoding: .utf8) ?? ""
         guard let json = try? JSONSerialization.jsonObject(with: Data(out.utf8)) as? [String: Any] else {
             return "hook produced no JSON (python3 missing or hook crashed)"
         }
@@ -267,7 +276,11 @@ public final class SetupManager: ObservableObject {
                 modes = existing
             }
             for c in Self.guardClassics { modes[c.ruleID] = c.mode }
-            try JSONEncoder().encode(modes).write(to: URL(fileURLWithPath: guardModesPath))
+            // Atomic: a torn guard-modes.json (app killed mid-write) would make
+            // the hook's config load fail — and the hook fails CLOSED on
+            // corrupt config, so a torn write turns every guarded action into
+            // a deny until the file is fixed.
+            try JSONEncoder().encode(modes).write(to: URL(fileURLWithPath: guardModesPath), options: .atomic)
             didGuardClassics = true
         } catch {
             report(error)
