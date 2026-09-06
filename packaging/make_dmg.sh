@@ -46,9 +46,12 @@ hdiutil create \
   "${DMG_PATH}"
 
 if [[ -n "${NOTARY_PROFILE:-}" && "${CODESIGN_IDENTITY:--}" != "-" ]]; then
-  codesign --force --sign "${CODESIGN_IDENTITY}" "${DMG_PATH}" || true
-  xcrun notarytool submit "${DMG_PATH}" --keychain-profile "${NOTARY_PROFILE}" --wait || true
-  xcrun stapler staple "${DMG_PATH}" || true
+  # When a notary profile is configured, the user asked for a distributable
+  # DMG — silently shipping an unnotarized one (old `|| true`) is a lie.
+  # Fail loudly; for ad-hoc dev builds, just leave NOTARY_PROFILE unset.
+  codesign --force --sign "${CODESIGN_IDENTITY}" "${DMG_PATH}"
+  xcrun notarytool submit "${DMG_PATH}" --keychain-profile "${NOTARY_PROFILE}" --wait
+  xcrun stapler staple "${DMG_PATH}"
 fi
 
 rm -rf "${STAGING}"

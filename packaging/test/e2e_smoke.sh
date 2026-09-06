@@ -3,7 +3,19 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 tmp="$(mktemp -d)"
-trap 'rm -rf "$tmp"' EXIT
+COLLECTOR_PID=""
+DAEMON_PID=""
+AGENT_PID=""
+DECISION1_PID=""
+# With `set -e`, any mid-script failure used to leave the collector, daemon,
+# and fake agent running with their state dir deleted underneath them.
+cleanup() {
+  for pid in $DECISION1_PID $AGENT_PID $DAEMON_PID $COLLECTOR_PID; do
+    [ -n "$pid" ] && kill "$pid" 2>/dev/null || true
+  done
+  rm -rf "$tmp"
+}
+trap cleanup EXIT
 
 # Preserve the real Go toolchain locations before HOME moves, so `go build`
 # below still finds its module cache/build cache and never needs network.

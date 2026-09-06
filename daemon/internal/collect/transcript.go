@@ -136,11 +136,21 @@ func (ts *TranscriptScanner) Run(ctx context.Context) error {
 			dirPaths = activePaths(walkDirs(dirTargets))
 		case <-tailTicker.C:
 			cheapPaths = resolveGlobs(cheapTargets)
+			live := make(map[string]struct{}, len(cheapPaths)+len(dirPaths))
 			for _, p := range cheapPaths {
+				live[p] = struct{}{}
 				ts.tailFile(p, offsets)
 			}
 			for _, p := range dirPaths {
+				live[p] = struct{}{}
 				ts.tailFile(p, offsets)
+			}
+			// Prune offsets for files no longer present (deleted/rotated out),
+			// or the map grows by one entry per historical transcript forever.
+			for p := range offsets {
+				if _, ok := live[p]; !ok {
+					delete(offsets, p)
+				}
 			}
 		}
 	}
@@ -248,11 +258,30 @@ func (ts *TranscriptScanner) tailFile(p string, offsets map[string]int64) {
 	newOffset := offset
 
 	for {
-		lineBytes, err := r.ReadBytes('\n')
-		if len(lineBytes) > 0 {
-			if bytes.HasSuffix(lineBytes, []byte("\n")) {
-				newOffset += int64(len(lineBytes))
-				line := strings.TrimRight(string(lineBytes), "\r\n")
+		// ReadSlice (not ReadBytes) so a newline-less multi-MB line is consumed
+		// in buffer-sized fragments instead of being buffered whole. Overlong
+		// lines are skipped but still counted toward the offset once complete.
+		var lineLen int64
+		var frag []byte
+		var err error
+		overlong := false
+		for {
+			frag, err = r.ReadSlice('\n')
+			lineLen += int64(len(frag))
+			if err == bufio.ErrBufferFull {
+				overlong = true
+				continue
+			}
+			break
+		}
+		if overlong {
+			if err == nil { // complete line (ended with \n): advance past it
+				newOffset += lineLen
+			}
+		} else if len(frag) > 0 {
+			if bytes.HasSuffix(frag, []byte("\n")) {
+				newOffset += lineLen
+				line := strings.TrimRight(string(frag), "\r\n")
 				if e, ok := ScanLine(line); ok {
 					ts.bus.Publish(e)
 				}

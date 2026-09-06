@@ -42,6 +42,9 @@ type ProxyServer struct {
 	caManager *CAManager
 	engine    *firewall.Engine
 	server    *http.Server
+	// plainHTTPClient is shared across plain-HTTP proxy requests so connections
+	// are reused; a per-request Transport would defeat keep-alive pooling.
+	plainHTTPClient *http.Client
 }
 
 func NewProxyServer(port int, b *bus.Bus, caManager *CAManager, engine *firewall.Engine) *ProxyServer {
@@ -55,6 +58,23 @@ func NewProxyServer(port int, b *bus.Bus, caManager *CAManager, engine *firewall
 	ps.server = &http.Server{
 		Addr:    fmt.Sprintf("127.0.0.1:%d", port),
 		Handler: http.HandlerFunc(ps.serveHTTP),
+	}
+
+	ps.plainHTTPClient = &http.Client{
+		// Do NOT follow redirects: a 3xx to another host would otherwise be
+		// fetched without re-inspection, bypassing host-scoped policy. Return the
+		// redirect to the caller instead.
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+		// Proxy:nil prevents honoring HTTP_PROXY (which agent-env sets to this
+		// proxy) and looping the daemon back into itself.
+		Transport: &http.Transport{
+			Proxy:                 nil,
+			DialContext:           (&net.Dialer{Timeout: dialTimeout}).DialContext,
+			ResponseHeaderTimeout: 30 * time.Second,
+			TLSHandshakeTimeout:   dialTimeout,
+		},
 	}
 
 	return ps
@@ -184,6 +204,14 @@ func (ps *ProxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 
 		blocked, detail := ps.inspectRequest(req, host)
 		if blocked {
+			// Drain the (unread) request body before the next ReadRequest:
+			// ReadRequest only parses headers, so without draining, the next
+			// loop iteration would parse the previous request's body bytes as a
+			// new request line and desync the keep-alive tunnel.
+			if req.Body != nil {
+				_, _ = io.Copy(io.Discard, io.LimitReader(req.Body, scanCap))
+				req.Body.Close()
+			}
 			body := fmt.Sprintf(`{"error":"Security Violation","detail":%q}`, detail)
 			writeRawResponse(tlsClientConn, http.StatusForbidden, "Forbidden", body, !req.Close)
 			if req.Close {
@@ -254,24 +282,7 @@ func (ps *ProxyServer) inspectAndForwardHTTP(w http.ResponseWriter, r *http.Requ
 	}
 	outReq.Header = r.Header.Clone()
 
-	client := &http.Client{
-		// Do NOT follow redirects: a 3xx to another host would otherwise be
-		// fetched without re-inspection, bypassing host-scoped policy. Return the
-		// redirect to the caller instead.
-		CheckRedirect: func(*http.Request, []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-		// Proxy:nil prevents honoring HTTP_PROXY (which agent-env sets to this
-		// proxy) and looping the daemon back into itself.
-		Transport: &http.Transport{
-			Proxy:                 nil,
-			DialContext:           (&net.Dialer{Timeout: dialTimeout}).DialContext,
-			ResponseHeaderTimeout: 30 * time.Second,
-			TLSHandshakeTimeout:   dialTimeout,
-		},
-	}
-
-	resp, err := client.Do(outReq)
+	resp, err := ps.plainHTTPClient.Do(outReq)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return

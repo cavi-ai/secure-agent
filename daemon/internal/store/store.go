@@ -21,6 +21,7 @@ import (
 const (
 	maxIncidents = 5000  // one full report_json per flag
 	maxAudit     = 50000 // long-lived security log, but still bounded against abuse
+	maxFlags     = 10000 // flags are insert-only like events; cap them too
 )
 
 type Store struct {
@@ -170,7 +171,7 @@ func (s *Store) PutFlag(fl model.Flag) {
 	defer s.mu.Unlock()
 
 	evJSON, _ := json.Marshal(fl.Evidence)
-	tsStr := fl.TS.Format(time.RFC3339Nano)
+	tsStr := fl.TS.UTC().Format(time.RFC3339Nano)
 
 	_, err := s.db.Exec(
 		`INSERT OR REPLACE INTO flags (id, rule, severity, ts, pid, agent, evidence) VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -179,6 +180,10 @@ func (s *Store) PutFlag(fl model.Flag) {
 	if err != nil {
 		log.Printf("store: failed to insert flag %s: %v", fl.ID, err)
 	}
+
+	// Retention: flags are insert-only like events and must be capped too, or
+	// an always-on daemon on a noisy host grows the DB without limit.
+	_, _ = s.db.Exec(`DELETE FROM flags WHERE rowid NOT IN (SELECT rowid FROM flags ORDER BY datetime(ts) DESC, ts DESC LIMIT ?)`, maxFlags)
 
 	if s.jsonlFile != nil {
 		data, err := json.Marshal(fl)
@@ -192,7 +197,7 @@ func (s *Store) PutEvent(e event.Event) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	tsStr := e.TS.Format(time.RFC3339Nano)
+	tsStr := e.TS.UTC().Format(time.RFC3339Nano)
 	_, err := s.db.Exec(
 		`INSERT INTO events (kind, ts, pid, exe_path, session_id, path, remote_host, remote_port, detail) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		int(e.Kind), tsStr, e.PID, e.ExePath, e.SessionID, e.Path, e.RemoteHost, e.RemotePort, e.Detail,
@@ -305,7 +310,7 @@ func (s *Store) QueryEvents(f EventFilter) []event.Event {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	q := `SELECT kind, ts, pid, exe_path, path, remote_host, remote_port, detail FROM events WHERE 1=1`
+	q := `SELECT kind, ts, pid, exe_path, session_id, path, remote_host, remote_port, detail FROM events WHERE 1=1`
 	var args []any
 	if f.Kind != nil {
 		q += " AND kind = ?"
@@ -334,7 +339,7 @@ func (s *Store) QueryEvents(f EventFilter) []event.Event {
 		var e event.Event
 		var kindInt int
 		var tsStr string
-		if err := rows.Scan(&kindInt, &tsStr, &e.PID, &e.ExePath, &e.Path, &e.RemoteHost, &e.RemotePort, &e.Detail); err == nil {
+		if err := rows.Scan(&kindInt, &tsStr, &e.PID, &e.ExePath, &e.SessionID, &e.Path, &e.RemoteHost, &e.RemotePort, &e.Detail); err == nil {
 			e.Kind = event.Kind(kindInt)
 			e.TS, _ = time.Parse(time.RFC3339Nano, tsStr)
 			events = append(events, e)
@@ -366,7 +371,7 @@ func (s *Store) PutIncident(inc model.IncidentReport) {
 		return
 	}
 
-	tsStr := inc.Timestamp.Format(time.RFC3339Nano)
+	tsStr := inc.Timestamp.UTC().Format(time.RFC3339Nano)
 	_, err = s.db.Exec(
 		`INSERT OR REPLACE INTO incidents (id, flag_id, pid, risk, report_json, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
 		inc.ID, inc.FlagID, inc.PID, string(inc.Risk), string(data), tsStr,
@@ -377,7 +382,9 @@ func (s *Store) PutIncident(inc model.IncidentReport) {
 
 	// Retention: a flag storm inserts a full report_json per incident; cap the
 	// table so the always-on daemon's DB stays bounded (events are already capped).
-	_, _ = s.db.Exec(`DELETE FROM incidents WHERE id NOT IN (SELECT id FROM incidents ORDER BY created_at DESC LIMIT ?)`, maxIncidents)
+	// Order by the normalized instant, not raw text: local-offset stamps sort
+	// wrong lexicographically across a DST change.
+	_, _ = s.db.Exec(`DELETE FROM incidents WHERE id NOT IN (SELECT id FROM incidents ORDER BY datetime(created_at) DESC, created_at DESC LIMIT ?)`, maxIncidents)
 }
 
 func (s *Store) GetIncident(id string) (*model.IncidentReport, error) {
@@ -576,53 +583,38 @@ func (s *Store) SetIncidentStatus(id, status, note string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	var res sql.Result
+	var err error
 	switch status {
 	case "acknowledged":
-		_, err := s.db.Exec(
+		res, err = s.db.Exec(
 			`UPDATE incidents SET status='acknowledged',
 				acknowledged_at=COALESCE(acknowledged_at, ?)
 			 WHERE id = ? OR flag_id = ?`,
 			time.Now().UTC().Format(time.RFC3339Nano), id, id)
-		if err != nil {
-			return false, err
-		}
 	case "resolved":
-		_, err := s.db.Exec(
+		res, err = s.db.Exec(
 			`UPDATE incidents SET status='resolved', resolved_at=?, resolution_note=?
 			 WHERE id = ? OR flag_id = ?`,
 			time.Now().UTC().Format(time.RFC3339Nano), note, id, id)
-		if err != nil {
-			return false, err
-		}
 	case "open":
-		_, err := s.db.Exec(
+		res, err = s.db.Exec(
 			`UPDATE incidents SET status='open', acknowledged_at=NULL, resolved_at=NULL, resolution_note=NULL
 			 WHERE id = ? OR flag_id = ?`, id, id)
-		if err != nil {
-			return false, err
-		}
 	default:
 		return false, fmt.Errorf("invalid status %q (open|acknowledged|resolved)", status)
 	}
-
-	n, err := s.db.Exec(`SELECT 1`)
-	_ = n
 	if err != nil {
 		return false, err
 	}
-	rows, err := s.db.Query(`SELECT changes()`)
+	// changes() is per-connection state and database/sql pools connections, so
+	// a follow-up SELECT changes() can land on a different connection and
+	// report 0 — RowsAffected() comes back with the UPDATE's own result.
+	changed, err := res.RowsAffected()
 	if err != nil {
 		return false, err
 	}
-	defer rows.Close()
-	if rows.Next() {
-		var changed int
-		if err := rows.Scan(&changed); err != nil {
-			return false, err
-		}
-		return changed > 0, nil
-	}
-	return false, nil
+	return changed > 0, nil
 }
 
 // IncidentStatus returns the workflow state for one incident.

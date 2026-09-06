@@ -12,7 +12,7 @@ import Foundation
 /// outlive its visible owner. This is the whole point: the user sees the menu
 /// bar icon and can quit it, and nothing keeps running behind their back.
 @MainActor
-public final class DaemonSupervisor {
+public final class DaemonSupervisor: ObservableObject {
     public static let shared = DaemonSupervisor()
 
     private var process: Process?
@@ -28,6 +28,20 @@ public final class DaemonSupervisor {
     private init() {}
 
     public var isRunning: Bool { process?.isRunning ?? false }
+
+    /// True when the restart rate limiter gave up: the daemon is down and will
+    /// NOT come back on its own. The UI must surface this (with a Restart
+    /// button) — otherwise the popover just says "Disconnected" forever.
+    @Published public private(set) var gaveUpRestarting = false
+
+    /// Reset the rate limiter and start the daemon again (user-initiated).
+    public func restart() {
+        restartsInWindow = 0
+        windowStart = Date()
+        gaveUpRestarting = false
+        stopping = false
+        if process == nil, let path = daemonPath { spawn(path) }
+    }
 
     /// Path to the daemon inside the app bundle; nil when running unbundled
     /// (e.g. `swift run` in development, where the daemon is run by hand).
@@ -65,6 +79,9 @@ public final class DaemonSupervisor {
         } catch {
             process = nil
             NSLog("[secure-agent] failed to start daemon: \(error.localizedDescription)")
+            // A failed spawn has no terminationHandler, so without this the
+            // daemon would stay down silently until relaunch.
+            scheduleRetry()
         }
     }
 
@@ -73,7 +90,12 @@ public final class DaemonSupervisor {
         if let current = process, current !== proc { return }
         process = nil
         if stopping { return }
+        NSLog("[secure-agent] daemon exited (status \(proc.terminationStatus)); restarting")
+        scheduleRetry()
+    }
 
+    /// Rate-limited retry shared by crash exits and spawn failures.
+    private func scheduleRetry() {
         let now = Date()
         if now.timeIntervalSince(windowStart) > restartWindow {
             windowStart = now
@@ -81,16 +103,17 @@ public final class DaemonSupervisor {
         }
         restartsInWindow += 1
         if restartsInWindow > maxRestarts {
-            NSLog("[secure-agent] daemon exited \(restartsInWindow) times within \(Int(restartWindow))s; leaving it down until relaunch")
+            gaveUpRestarting = true
+            NSLog("[secure-agent] daemon exited %d times within %ds; leaving it down until the user restarts it", restartsInWindow, Int(restartWindow))
             return
         }
-        NSLog("[secure-agent] daemon exited (status \(proc.terminationStatus)); restarting")
         if let path = daemonPath { spawn(path) }
     }
 
-    /// Terminate the daemon and wait briefly for it to exit. Safe to call from
-    /// `applicationWillTerminate`. SIGTERM first (the daemon shuts down cleanly
-    /// on it), then SIGKILL as a backstop.
+    /// Terminate the daemon. Safe to call from `applicationWillTerminate`.
+    /// SIGTERM first (the daemon shuts down cleanly on it); if it is still up
+    /// when the app exits, the daemon notices it is orphaned and exits on its
+    /// own — no 2-second main-thread busy-wait on the quit path.
     public func stop() {
         stopping = true
         guard let p = process, p.isRunning else {
@@ -98,22 +121,23 @@ public final class DaemonSupervisor {
             return
         }
         p.terminationHandler = nil
-        p.terminate() // SIGTERM
-
-        let deadline = Date().addingTimeInterval(2.0)
-        while p.isRunning && Date() < deadline {
-            usleep(50_000)
-        }
-        if p.isRunning {
-            kill(p.processIdentifier, SIGKILL)
-        }
+        p.terminate() // SIGTERM; orphan-detection is the backstop
         process = nil
-        NSLog("[secure-agent] daemon stopped")
+        NSLog("[secure-agent] daemon stop requested")
     }
+
+    /// Daemon logs append forever otherwise; truncate once they pass the cap
+    /// (on spawn, not per write, so there is no per-line cost).
+    private let maxLogBytes: UInt64 = 5 << 20 // 5 MiB
 
     private func appendingLog(_ name: String) -> FileHandle? {
         let path = "\(logDir)/\(name)"
         if !FileManager.default.fileExists(atPath: path) {
+            FileManager.default.createFile(atPath: path, contents: nil)
+        }
+        if let size = try? FileManager.default.attributesOfItem(atPath: path)[.size] as? UInt64,
+           size > maxLogBytes {
+            try? FileManager.default.removeItem(atPath: path)
             FileManager.default.createFile(atPath: path, contents: nil)
         }
         guard let h = FileHandle(forWritingAtPath: path) else { return nil }

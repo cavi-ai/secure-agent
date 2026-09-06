@@ -21,7 +21,10 @@ func NewAnalyzer() *Analyzer {
 }
 
 func (a *Analyzer) Analyze(flag model.Flag, events []event.Event) model.IncidentReport {
-	incID := fmt.Sprintf("inc-%d-%d", flag.TS.Unix(), flag.PID)
+	// inc-<unix-second>-<pid> collided for two flags on the same pid within one
+	// second (INSERT OR REPLACE then silently overwrote the first incident's
+	// evidence). Include the flag's unique ID so every report gets its own row.
+	incID := fmt.Sprintf("inc-%d-%d-%s", flag.TS.Unix(), flag.PID, flag.ID)
 
 	summary := fmt.Sprintf("Security rule '%s' triggered by agent '%s' (PID %d). Evidence: %s",
 		flag.Rule, flag.Agent, flag.PID, strings.Join(flag.Evidence, ", "))

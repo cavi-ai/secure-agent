@@ -108,16 +108,29 @@ func isMutation(method, path string) bool {
 	return false
 }
 
-// authorize applies the (method, path) policy to a classified role. Reads are
-// open to any identified local peer; decisions to any; mutations to the pinned
-// menubar when one exists, otherwise to the owner uid (direct launches,
-// headless/ssh management).
-func (a *API) authorize(role role, method, path string) bool {
-	if isMutation(method, path) && a.peerRole != nil && a.peerRole.UIPID > 0 {
-		return role == roleUI
+// authorize applies the (method, path) policy to a classified role, wired
+// through the role methods above:
+//   - POST /guard/decision: canDecide (agents asking for their own tool call)
+//   - mutations: the pinned menubar when one exists, otherwise the owner uid
+//     (direct launches, headless/ssh management)
+//   - GET reads: canRead (owner, UI, and tagged agents)
+//   - anything else (DELETE /guard/rules, unknown methods): owner-level
+func (a *API) authorize(r role, method, path string) bool {
+	if method == http.MethodPost && path == "/guard/decision" {
+		return r.canDecide()
 	}
-	// Everything else (and all mutations when no UI pin exists) is owner-level.
-	return role >= roleOwner
+	if isMutation(method, path) {
+		if a.peerRole != nil && a.peerRole.UIPID > 0 {
+			return r.canMutate()
+		}
+		return r >= roleOwner
+	}
+	if method == http.MethodGet {
+		return r.canRead()
+	}
+	// Non-GET, non-mutation-list (e.g. DELETE /guard/rules): owner-level so
+	// headless fleets can still manage rules over ssh, but agents cannot.
+	return r >= roleOwner
 }
 
 // peerConnKey is the context key under which the gate stores the request's

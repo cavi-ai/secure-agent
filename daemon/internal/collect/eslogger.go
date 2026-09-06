@@ -157,6 +157,8 @@ func (es *ESLogger) Run(ctx context.Context) error {
 
 	if err := scanner.Err(); err != nil {
 		_ = cmd.Process.Kill()
+		// Reap the child: Kill without Wait leaves a zombie per restart cycle.
+		_ = cmd.Wait()
 		return fmt.Errorf("eslogger scanner error: %w", err)
 	}
 

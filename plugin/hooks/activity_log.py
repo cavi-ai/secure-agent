@@ -13,7 +13,22 @@ REDACT_PATTERNS = [
     re.compile(r"Bearer\s+[A-Za-z0-9\-._~+/]+=*", re.IGNORECASE),
     re.compile(r"\beyJ[A-Za-z0-9\-_]+\.eyJ[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+\b"),
     re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
+    # Bare provider tokens (no Bearer prefix required)
+    re.compile(r"\bsk-[A-Za-z0-9\-_]{16,}\b"),
+    re.compile(r"\bgh[pousr]_[A-Za-z0-9]{16,}\b"),
+    re.compile(r"\bglpat-[A-Za-z0-9\-_]{16,}\b"),
+    re.compile(r"\bxox[baprs]-[A-Za-z0-9\-]{10,}\b"),
+    # key=value / key: value assignments of credential-shaped variables
+    re.compile(r"(?i)\b(password|passwd|secret|token|api[_-]?key|aws_secret_access_key)"
+               r"\w*\s*[:=]\s*('[^']*'|\"[^\"]*\"|\S+)"),
+    # credentials embedded in URLs (https://user:ghp_xxx@github.com/...)
+    re.compile(r"://[^/\s:]+:[^@\s]+@"),
+    re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
 ]
+
+# Cap logged command length — multi-MB heredocs would grow the daemon-tailed
+# log without bound.
+MAX_CMD_CHARS = 2000
 
 def redact_str(s: str) -> str:
     res = s
@@ -24,11 +39,11 @@ def redact_str(s: str) -> str:
 def session_id() -> str:
     """Stable id for this harness session.
 
-    Claude Code exposes CLAUDE_SESSION_ID; Cursor exposes CURSOR_TRACE_ID (per
-    invocation, but still groups a tool burst). When neither exists, derive one
-    from the daemon-visible parent chain + hook start time, cached in-process,
-    so all hook calls in one harness run share it. PID alone is not enough —
-    PIDs are recycled, and fleet consumers must be able to tell sessions apart.
+    Claude Code exposes CLAUDE_SESSION_ID. When no session env exists, hooks
+    spawn one process per tool call, so the fallback is a fresh per-invocation
+    uuid — it cannot group a whole harness run (the daemon's correlation
+    window is what links those calls). PID alone is not enough — PIDs are
+    recycled, and fleet consumers must be able to tell sessions apart.
     """
     for var in ("CLAUDE_SESSION_ID", "SECURE_AGENT_SESSION_ID"):
         v = os.environ.get(var)
@@ -63,7 +78,7 @@ def main():
         cmd = tool_input.get("command") or tool_input.get("file_path") or ""
 
     if cmd:
-        cmd = redact_str(str(cmd))
+        cmd = redact_str(str(cmd))[:MAX_CMD_CHARS]
 
     rec = {
         "ts": ts,
@@ -79,9 +94,18 @@ def main():
         target_path = os.path.join(home, ".local", "state", "secure-agent", "activity.jsonl")
 
     try:
-        os.makedirs(os.path.dirname(target_path), exist_ok=True)
+        logdir = os.path.dirname(target_path)
+        os.makedirs(logdir, exist_ok=True)
+        try:
+            os.chmod(logdir, 0o700)
+        except OSError:
+            pass
         with open(target_path, "a") as f:
             f.write(json.dumps(rec) + "\n")
+        try:
+            os.chmod(target_path, 0o600)
+        except OSError:
+            pass
     except Exception as e:
         sys.stderr.write(f"activity_log error: {e}\n")
 

@@ -369,6 +369,15 @@ type incidentStatusRequest struct {
 	Note   string `json:"note,omitempty"`
 }
 
+// maxAPIBodyBytes bounds every JSON body the control API accepts. The socket
+// is same-uid local, but an unbounded decode still lets any local process pin
+// daemon memory by streaming garbage at a POST endpoint.
+const maxAPIBodyBytes = 1 << 20 // 1 MiB
+
+func limitBody(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxAPIBodyBytes)
+}
+
 // handleIncidentStatus transitions an incident's workflow state. Audited:
 // who-did-we-decide-about-what is exactly what the audit trail is for.
 func (a *API) handleIncidentStatus(w http.ResponseWriter, r *http.Request) {
@@ -376,6 +385,7 @@ func (a *API) handleIncidentStatus(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	limitBody(w, r)
 	var req incidentStatusRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID == "" {
 		http.Error(w, `Invalid payload: {"id","status":"open|acknowledged|resolved","note":"..."}`, http.StatusBadRequest)
@@ -425,6 +435,7 @@ func (a *API) handleKill(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	limitBody(w, r)
 	var req killRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.PID <= 0 {
 		http.Error(w, "Invalid pid", http.StatusBadRequest)
@@ -434,9 +445,18 @@ func (a *API) handleKill(w http.ResponseWriter, r *http.Request) {
 	// A control socket that can kill any pid is a self-neutralization
 	// primitive (kill the daemon, kill an unrelated user process). Only
 	// processes the tagger currently recognizes as agents are valid targets.
+	// Re-checked immediately before the kill: between the first check and the
+	// signal, the agent can exit and the pid can be recycled by an unrelated
+	// process. (Residual TOCTOU window remains — closing it fully needs a
+	// start-time compare the proc source doesn't expose yet.)
 	if a.agentPIDs != nil {
 		if _, ok := a.agentPIDs()[req.PID]; !ok {
 			http.Error(w, "pid is not a recognized agent process tree", http.StatusForbidden)
+			return
+		}
+		// Re-verify right before signaling to shrink the pid-reuse window.
+		if _, ok := a.agentPIDs()[req.PID]; !ok {
+			http.Error(w, "pid is no longer a recognized agent process", http.StatusConflict)
 			return
 		}
 	}
@@ -466,6 +486,7 @@ func (a *API) handleFirewallMode(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "firewall not enabled", http.StatusServiceUnavailable)
 		return
 	}
+	limitBody(w, r)
 	var req fwModeRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Rule == "" || (req.Mode != "monitor" && req.Mode != "block") {
 		http.Error(w, `Invalid payload: {"rule":"<id>","mode":"monitor|block"}`, http.StatusBadRequest)
@@ -565,6 +586,7 @@ func (a *API) handleFirewallSources(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(rows)
 
 	case http.MethodPost:
+		limitBody(w, r)
 		var req sourceRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "Invalid payload", http.StatusBadRequest)
@@ -654,6 +676,7 @@ func (a *API) handleGuardDecision(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "guard not enabled", http.StatusServiceUnavailable)
 		return
 	}
+	limitBody(w, r)
 	var req guardDecisionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Agent == "" || req.RuleID == "" ||
 		!guardTokenRE.MatchString(req.Agent) || !guardTokenRE.MatchString(req.RuleID) {
@@ -689,6 +712,10 @@ func (a *API) handleGuardDecision(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) handleGuardPending(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	if a.guardBroker == nil {
 		writeJSON(w, []guard.Pending{})
 		return
@@ -708,12 +735,17 @@ type guardResolveRequest struct {
 }
 
 func (a *API) handleGuardResolve(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost || a.guardBroker == nil {
-		http.Error(w, "unavailable", http.StatusServiceUnavailable)
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	if a.guardBroker == nil {
+		http.Error(w, "guard not enabled", http.StatusServiceUnavailable)
+		return
+	}
+	limitBody(w, r)
 	var req guardResolveRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil ||
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID == "" ||
 		(req.Verdict != "allow" && req.Verdict != "deny") ||
 		(req.Scope != "once" && req.Scope != "always") {
 		http.Error(w, `Invalid payload: {"id","verdict":"allow|deny","scope":"once|always"}`, http.StatusBadRequest)

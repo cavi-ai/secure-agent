@@ -2,6 +2,7 @@ package firewall
 
 import (
 	"encoding/json"
+	"github.com/cavi-ai/secure-agent/daemon/internal/safefile"
 	"log"
 	"os"
 	"path/filepath"
@@ -52,5 +53,5 @@ func (s *FingerprintStore) Save(fps []config.Fingerprint) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.path, data, 0o600)
+	return safefile.WriteFileAtomic(s.path, data, 0o600)
 }

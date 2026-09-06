@@ -133,12 +133,16 @@ func (b *Broker) Pending() []Pending {
 // every duplicate request blocked on the same waiter.
 func (b *Broker) Resolve(id string, d Decision) bool {
 	b.mu.Lock()
+	defer b.mu.Unlock()
 	w, ok := b.waiters[id]
-	b.mu.Unlock()
 	if !ok {
 		return false
 	}
 	delivered := false
+	// Sends are non-blocking (channels are buffered cap-1, senders select with
+	// default), so holding the lock here is safe — and required: Request()
+	// appends to w.chs under the same mutex, so iterating it unlocked is a
+	// data race.
 	for _, ch := range w.chs {
 		select {
 		case ch <- d:

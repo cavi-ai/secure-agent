@@ -135,7 +135,13 @@ func main() {
 
 	// Firewall engine: built once, used by the proxy for egress inspection and
 	// surfaced as per-rule stats in status.
-	fwSalt, _ := firewall.LoadSalt(cfg.Firewall.Registry.SaltRef)
+	fwSalt, saltErr := firewall.LoadSalt(cfg.Firewall.Registry.SaltRef)
+	if saltErr != nil {
+		// Loud degradation: the fingerprint layer is OFF, not silently broken.
+		// (A silently rotated salt orphans every registered fingerprint while
+		// the status page still says the firewall is up.)
+		log.Printf("ERROR: firewall salt unavailable, known-secret fingerprinting disabled: %v", saltErr)
+	}
 	fwEngine, fwErr := firewall.NewEngine(cfg.Firewall, fwSalt)
 	if fwErr != nil {
 		log.Printf("Failed to initialize firewall engine: %v", fwErr)

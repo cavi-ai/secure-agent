@@ -15,6 +15,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/cavi-ai/secure-agent/daemon/internal/safefile"
 )
 
 // maxCertCacheEntries bounds the leaf-cert cache so a client connecting to
@@ -123,13 +125,17 @@ func loadOrCreateCA(certPath, keyPath string) (*x509.Certificate, *rsa.PrivateKe
 	// Persist. The key must land at 0600; a write failure is fatal to this call
 	// so the daemon never silently runs with a non-persisted CA that regenerates
 	// on every start (invalidating the CA path already exported to agents).
+	// Atomic-write matters here beyond crash consistency: os.WriteFile preserves
+	// the mode of an EXISTING file, so writing the regenerated key over the old
+	// world-readable one would keep it at 0644 — still compromised, and the next
+	// start would regenerate again. The rename replaces the file wholesale.
 	certPem := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDer})
 	keyPem := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
 
-	if err := os.WriteFile(keyPath, keyPem, 0o600); err != nil {
+	if err := safefile.WriteFileAtomic(keyPath, keyPem, 0o600); err != nil {
 		return nil, nil, fmt.Errorf("failed to persist CA key: %w", err)
 	}
-	if err := os.WriteFile(certPath, certPem, 0o644); err != nil {
+	if err := safefile.WriteFileAtomic(certPath, certPem, 0o644); err != nil {
 		return nil, nil, fmt.Errorf("failed to persist CA cert: %w", err)
 	}
 
