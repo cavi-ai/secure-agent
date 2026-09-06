@@ -4,6 +4,123 @@ All notable changes to `secure-agent` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/) and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Security fixes (hooks)
+
+- **Shell `-c` bypass closed.** `sh`/`bash`/`zsh`/`dash`/`ksh` payloads are now
+  recursively analyzed (depth-capped). Previously `zsh -c "security
+  dump-keychain"` bypassed every check, including the keychain total-ban.
+- **Executor bypasses closed.** `xargs` is no longer stripped as a wrapper
+  (`echo ~/.zshrc | xargs rm` was allowed); `find -exec/-delete` over protected
+  paths is denied; archivers (`tar`/`zip`/`ditto`/`7z`) over protected
+  directories are denied as bulk exfiltration.
+- **Case-folding on APFS.** Path classification is case-insensitive
+  (`~/.ZSHRC` is `~/.zshrc` on a case-insensitive volume).
+- **Wider credential surface.** Added `~/.netrc`, `~/.gnupg/**`,
+  `~/.kube/config`, `~/.docker/config.json`, `~/.npmrc`, `~/.pypirc`,
+  `~/.config/gh/hosts.yml`, and `*.pem`/`*.p12`/`*.pfx` to the never-print set.
+  `.pub` public keys are now correctly *allowed* (they are meant to be shared).
+- **Obfuscated inline writes denied.** Interpreter `-c` code combining a file
+  write with runtime path composition (chr()/base64/env lookups) is denied as
+  `interpreter-obfuscated-write`.
+- **chflags fixed both ways.** Unlock detection now matches a known flag set
+  (`nouchg`/`noschg`) instead of "starts with no" — so `chflags nodump` (a
+  hardening flag) is allowed, while `chflags -R nouchg ~` is denied.
+- **No secrets in the audit trail.** Denied commands are redacted (passwords,
+  tokens, bearer strings, PEM headers) before hitting `secret-guard.jsonl` /
+  `activity.jsonl`, and both logs are now `0600` in `0700` dirs.
+- **Corrupt guard config fails closed.** A truncated `guard-modes.json` /
+  `guard-cwd-overrides.json` now denies (and logs loudly) instead of silently
+  reverting every rule to `monitor`.
+- **Injection scanner robustness.** NFKC normalization, zero-width/format char
+  stripping, and Cyrillic-homoglyph folding before matching; added
+  `forget…`/`do not follow…`/`new goal:` pattern families; recursion is
+  depth-bounded and a scanner crash now emits `{}` instead of dying with no
+  JSON.
+
+### Security fixes (daemon)
+
+- **Guard broker data race fixed** (`Resolve` iterated a waiter's channel slice
+  after dropping the lock while `Request` appended under it). New `-race`
+  regression test.
+- **Authorization wired correctly.** `authorize` now uses the role methods
+  (`canRead`/`canDecide`/`canMutate`): tagged agents may read and ask
+  `/guard/decision` (previously 403, which broke the prompt flow), but can
+  never mutate.
+- **CA key regeneration actually lands at 0600.** `os.WriteFile` preserves an
+  existing file's mode, so a regenerated key inherited the old world-readable
+  perms; all security-state files now write via temp+fsync+rename (atomic and
+  crash-consistent).
+- **Salt rotation is loud, never silent.** A truncated/unreadable salt file is
+  an error with operator instructions instead of silently minting a new salt
+  that orphans every registered fingerprint.
+- **Fingerprint ingest refuses to purge.** A run that reads zero fingerprints
+  while every source failed returns an error instead of an empty set that
+  would silently wipe the registry; oversized lines no longer truncate scans.
+- **Config overlay errors are visible** (log warnings on unreadable/malformed
+  YAML), and `Load` validates values that would panic at runtime
+  (`net_sample_interval_ms <= 0` panics `time.NewTicker`).
+- **Store correctness.** `SetIncidentStatus` uses `RowsAffected` instead of
+  `SELECT changes()` on a possibly-different pooled connection (spurious
+  404s); incident IDs now include the flag ID (same-second same-pid flags no
+  longer overwrite each other's evidence); `flags` table has a retention cap
+  like the other tables; `QueryEvents` returns `session_id`; timestamps are
+  stored UTC-normalized.
+- **Proxy correctness.** Blocked CONNECT request bodies are drained before the
+  next read (keep-alive tunnels no longer desync); the plain-HTTP path reuses
+  one transport; token comparison is constant-time.
+- **Resource bounds.** Fleet deliveries capped at 64 in flight (dropped and
+  counted beyond that); the correlator's uninspected-egress set is capped;
+  the tagger prunes dead pids (also fixes recycled-pid tag inheritance);
+  transcript scanner prunes rotated files and caps line length; eslogger
+  zombies reaped; reverse DNS is async with a deadline instead of blocking
+  the sampler; the event bus refuses subscriptions after close; API POST
+  bodies are size-limited; `/guard/resolve` validates method and id;
+  `lsof` failures are logged.
+- **Collector read auth.** `-read-token` (or
+  `SECURE_AGENT_COLLECTOR_READ_TOKEN`) gates `/fleet`, `/nodes/*`, and `/`;
+  binding a non-loopback address without one logs a loud warning.
+- **`agent-env.sh` values are shell-quoted** — paths with spaces (e.g.
+  `Application Support`) no longer break the snippet, and metacharacters
+  can't inject into the sourcing shell.
+
+### Menu bar app
+
+- **Transport hardening.** The unix-socket client now has connect/send/recv
+  timeouts (a wedged daemon no longer hangs the app or leaks blocked
+  threads), parses the HTTP status line (non-2xx is an error, not JSON), and
+  handles chunked transfer-encoding. Query parameters from daemon-supplied
+  values are percent-encoded.
+- **No more fail-open guard UI.** `/guard/pending` and `/guard/rules` decode
+  strictly; a malformed response surfaces an error instead of silently
+  showing "nothing to approve".
+- **No first-launch notification storm.** The first fetch seeds the
+  notification baseline; only genuinely new flags alert. Notification bodies
+  no longer leak paths/hostnames to the lock screen.
+- **Honest actions.** Kill asks for confirmation and reports refusal; a guard
+  decision that fails to reach the daemon tells you it wasn't recorded;
+  disconnect clears all daemon-derived state instead of showing stale data;
+  a daemon that crashed past the restart limit gets an in-app "Restart"
+  button instead of a silent permanent "Disconnected".
+- **Incident remediation in the popover.** Tapping an incident opens the
+  daemon-generated rotation checklist (previously only in the web console).
+- Fetch loop is serialized (no overlapping out-of-order polls), the unused
+  1 Hz `/events` fetch is gone, hook detection requires all three harnesses
+  (`allSatisfy`), the hook self-test no longer pipe-deadlocks, and
+  `guard-modes.json` writes are atomic.
+
+### CI / packaging
+
+- GitHub Actions are SHA-pinned with `permissions: contents: read`.
+- `e2e_smoke.sh` kills all background processes on any exit (failures used to
+  orphan the daemon/collector with their state dir deleted underneath).
+- `make_dmg.sh` fails loudly when notarization was requested but fails.
+- `make_app.sh` sanitizes git-derived strings before plist interpolation.
+- `uninstall.sh` only removes hooks it actually installed and lists leftover
+  state instead of claiming "completely uninstalled".
+- `run_e2e_verbose.py` anchors at the repo root and always reaps the daemon.
+
 ## [v0.9.0-rc.1] — 2026-09-02
 
 First release candidate. Everything below has CI enforcement: Go (vet, test,
