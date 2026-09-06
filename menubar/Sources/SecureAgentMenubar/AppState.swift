@@ -230,6 +230,13 @@ public final class AppState: ObservableObject {
 
     // MARK: - Actions
 
+    /// Surfaces a local (non-daemon) failure in the same banner as daemon
+    /// errors — e.g. the guard-modes.json write failing.
+    public func reportLocalError(_ message: String) {
+        lastError = message
+        onChange?()
+    }
+
     public func refresh() { fetch() }
 
     public func togglePause() {

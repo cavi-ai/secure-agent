@@ -220,6 +220,8 @@ When an agent tool call touches a guarded path (SSH keys, cloud credentials, the
 
 An agent that can edit `~/.claude/settings.json` or the hook source itself can still remove the guard — this layer raises the bar, it is not a complete seal.
 
+See [docs/GUARD_THREAT_MODEL.md](docs/GUARD_THREAT_MODEL.md) for the full list of closed bypass classes, the known limits (symlinks, TOCTOU, static inline-code analysis), and exactly which failures fail closed vs. open.
+
 ---
 
 ## ⚙️ Configuration

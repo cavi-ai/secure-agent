@@ -4,6 +4,25 @@ All notable changes to `secure-agent` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/) and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Features & follow-ups
+
+- **Session evidence chains survive the store.** The `flags` table now
+  persists `session_id` (with an in-place migration for existing databases —
+  no more `duplicate column` log noise on fresh starts), `/flags` returns it,
+  and the menubar shows the session prefix on flag rows.
+- **Guard policy editor in the popover.** Per-rule `monitor` / `prompt` /
+  `deny` toggles write `guard-modes.json` atomically — Directory Guard policy
+  is now editable without touching JSON by hand. A corrupt modes file is
+  surfaced in the UI (the hook fails closed on it) instead of looking like
+  "everything is monitor".
+- **docs/GUARD_THREAT_MODEL.md** — the Directory Guard's closed bypass
+  classes, known limits (symlinks, TOCTOU, static inline-code analysis), and
+  the fail-open/fail-closed table, linked from the README.
+- `go mod tidy`: dependency graph normalized (direct deps were all marked
+  indirect).
+
 ## [Unreleased — SSE]
 
 ### Menu bar: SSE push replaces 1 Hz polling
