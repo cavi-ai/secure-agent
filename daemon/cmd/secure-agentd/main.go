@@ -236,6 +236,7 @@ func main() {
 		activeAgents := listActiveAgents(tagger)
 		return api.Status{
 			Running:           true,
+			Version:           api.Version,
 			Uptime:            time.Since(startTime).Truncate(time.Second).String(),
 			ActiveAgents:      len(activeAgents),
 			Agents:            activeAgents,
