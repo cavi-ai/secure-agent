@@ -435,3 +435,49 @@ body {
 .workflow-chip.resolved { color: var(--ok); background: var(--ok-bg); }
 .incident-card.is-resolved { opacity: 0.6; }
 .incident-note { font: 400 0.74rem/1.5 var(--font); color: var(--tx-2); font-style: italic; margin: 6px 0; }
+
+/* ---------- liveness ---------- */
+/* Masthead sparkline: rolling events/sec for the last 60s. Fed by SSE pushes
+   (and by poll diffs in fallback mode); drawn as a plain SVG polyline. */
+.spark {
+  display: flex; align-items: center; gap: 8px;
+  padding: 5px 11px; border-radius: var(--r-sm);
+  background: var(--bg-1); border: 1px solid var(--line);
+  color: var(--brand-2);
+}
+.spark svg { width: 96px; height: 22px; display: block; opacity: 0.9; }
+.spark-v { font: 600 0.7rem/1 var(--mono); color: var(--tx-2); min-width: 3ch; text-align: right; }
+
+/* Posture banner: state changes cross-fade instead of snapping. */
+.posture { transition: background-color .5s var(--ease), border-color .5s var(--ease); }
+.posture-dot { transition: background-color .3s var(--ease), box-shadow .3s var(--ease); }
+
+/* Fresh timeline entries: applied only to events unseen in the previous
+   render (SSE push or poll diff), so the 2s polling fallback never flickers
+   rows the user has already seen. */
+.timeline-item.fresh { animation: rise .28s var(--ease) both; }
+.timeline-item.fresh-sev { animation: rise .28s var(--ease) both, fresh-sev-glow 1.4s var(--ease) both; }
+@keyframes fresh-sev-glow {
+  0%, 35% { background: var(--bad-bg); }
+  100% { background: transparent; }
+}
+
+/* KPI count-up: numbers tween in JS; this flash marks the direction. */
+.kpi-num { display: inline-block; }
+@keyframes kpi-bump-up { 30% { color: var(--ok); transform: translateY(-2px); } }
+@keyframes kpi-bump-down { 30% { color: var(--bad); transform: translateY(2px); } }
+.kpi-num.bump-up { animation: kpi-bump-up .5s var(--ease); }
+.kpi-num.bump-down { animation: kpi-bump-down .5s var(--ease); }
+
+/* Firewall interception: panel header pulse when a proxy verdict lands, and a
+   one-shot row highlight when a rule's blocked/would-block counter grows. */
+@keyframes fw-panel-pulse {
+  0%, 40% { border-color: var(--bad); box-shadow: 0 0 0 3px var(--bad-bg), var(--sh-1); }
+  100% { border-color: var(--line); box-shadow: var(--sh-1); }
+}
+#firewall-panel.intercepted { animation: fw-panel-pulse 1.2s var(--ease); }
+@keyframes fw-row-flash {
+  0%, 45% { background: var(--bad-bg); border-color: hsl(348 84% 63% / 0.5); }
+  100% { background: var(--bg-2); border-color: var(--line); }
+}
+.fw-rule.fw-flash { animation: fw-row-flash 1.6s var(--ease) both; }

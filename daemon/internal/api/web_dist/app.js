@@ -67,6 +67,121 @@ document.addEventListener('DOMContentLoaded', () => {
   const seenAgents = new Set();
   const seenRules = new Set();
 
+  // ---------- liveness state ----------
+  // Reduced-motion users get instant updates with no tweening or flashes.
+  const reducedMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  // Sparkline: 60 one-second buckets of event counts. Bumped by SSE pushes;
+  // in polling-fallback mode, fetchTelemetry backfills buckets from the
+  // timestamps of events it hasn't counted yet.
+  const SPARK_BUCKETS = 60;
+  const sparkBuckets = new Array(SPARK_BUCKETS).fill(0);
+  let sparkLastTick = Math.floor(Date.now() / 1000);
+  const countedEventKeys = new Set();
+
+  function sparkAdvance() {
+    const nowSec = Math.floor(Date.now() / 1000);
+    let steps = nowSec - sparkLastTick;
+    if (steps <= 0) return;
+    if (steps > SPARK_BUCKETS) steps = SPARK_BUCKETS;
+    for (let i = 0; i < steps; i++) { sparkBuckets.shift(); sparkBuckets.push(0); }
+    sparkLastTick = nowSec;
+  }
+
+  function sparkBump(n, tsMs) {
+    sparkAdvance();
+    // Events older than the window are clamped into the oldest bucket so the
+    // shape still reflects "something happened" without inventing recency.
+    let idx = SPARK_BUCKETS - 1;
+    if (tsMs) {
+      const ageSec = Math.floor((Date.now() - tsMs) / 1000);
+      idx = Math.max(0, SPARK_BUCKETS - 1 - ageSec);
+    }
+    sparkBuckets[idx] += (n || 1);
+    drawSpark();
+  }
+
+  function drawSpark() {
+    const line = document.getElementById('spark-line');
+    const rate = document.getElementById('spark-rate');
+    if (!line) return;
+    const max = Math.max(2, ...sparkBuckets);
+    const pts = sparkBuckets.map((v, i) => {
+      const x = (i / (SPARK_BUCKETS - 1)) * 120;
+      const y = 26 - (v / max) * 24;
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    }).join(' ');
+    line.setAttribute('points', pts);
+    if (rate) rate.textContent = `${sparkBuckets[SPARK_BUCKETS - 1]}/s`;
+  }
+
+  setInterval(() => { sparkAdvance(); drawSpark(); }, 1000);
+
+  function eventKey(e) {
+    return `${e.ts}|${e.pid}|${e.kind}|${e.detail || e.path || e.remote_host || ''}`;
+  }
+
+  // Count events the poll path surfaced that SSE didn't announce (fallback
+  // mode), so the sparkline stays honest when push is unavailable.
+  function sparkIngestEvents(events) {
+    (events || []).forEach(e => {
+      const k = eventKey(e);
+      if (countedEventKeys.has(k)) return;
+      countedEventKeys.add(k);
+      sparkBump(1, Date.parse(e.ts) || 0);
+    });
+    // Bound the set: keys older than the spark window can never be bumped.
+    if (countedEventKeys.size > 500) {
+      const arr = Array.from(countedEventKeys);
+      arr.slice(0, arr.length - 300).forEach(k => countedEventKeys.delete(k));
+    }
+  }
+
+  // KPI tween: animate numeric transitions, flash green/rose on change.
+  const kpiPrev = {};
+  function setKpi(id, val) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const prev = kpiPrev[id];
+    kpiPrev[id] = val;
+    if (prev === undefined || prev === val || reducedMotion) {
+      el.textContent = val;
+      return;
+    }
+    const cls = val > prev ? 'bump-up' : 'bump-down';
+    el.classList.remove('bump-up', 'bump-down');
+    void el.offsetWidth; // restart the animation on consecutive changes
+    el.classList.add(cls);
+    const start = performance.now(), dur = 400, from = prev, to = val;
+    (function tick(now) {
+      const p = Math.min(1, (now - start) / dur);
+      const eased = 1 - Math.pow(1 - p, 3);
+      el.textContent = Math.round(from + (to - from) * eased);
+      if (p < 1) requestAnimationFrame(tick);
+    })(start);
+  }
+
+  // Track which timeline events the user has already seen, so only genuinely
+  // new rows animate (polling re-renders must never flicker).
+  let prevEventKeys = new Set();
+  let firstEventRender = true;
+  // Filter changes re-render with deeper-history rows that are "new" to the
+  // view but not to the user — suppress the fresh animation for that render.
+  let suppressFreshOnce = false;
+
+  // Firewall diff: which rules gained blocked/would-block counts since the
+  // last render (i.e. a fresh interception).
+  let prevFwStats = null;
+
+  function flashFirewallPanel() {
+    if (reducedMotion) return;
+    const panel = document.getElementById('firewall-panel');
+    if (!panel) return;
+    panel.classList.remove('intercepted');
+    void panel.offsetWidth;
+    panel.classList.add('intercepted');
+  }
+
   function sinceParam(v) {
     const ms = { '1h': 3600e3, '24h': 86400e3, '7d': 604800e3 }[v];
     return ms ? new Date(Date.now() - ms).toISOString() : '';
@@ -100,7 +215,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function wireFilter(id, obj, key) {
     const el = document.getElementById(id);
-    if (el) el.addEventListener('change', () => { obj[key] = el.value; fetchTelemetry(); });
+    if (el) el.addEventListener('change', () => { obj[key] = el.value; suppressFreshOnce = true; fetchTelemetry(); });
   }
   wireFilter('event-filter', filters.events, 'kind');
   wireFilter('event-window', filters.events, 'since');
@@ -153,6 +268,7 @@ document.addEventListener('DOMContentLoaded', () => {
       // deeper into history than the 50-row summary.
       telemetryData.flagsView = telemetryData.flags;
       telemetryData.eventsView = telemetryData.events;
+      sparkIngestEvents(telemetryData.events);
       if (isFlagsFiltered()) {
         const r = await apiFetch(flagsQuery()).catch(() => null);
         if (r && r.ok) telemetryData.flagsView = await r.json() || [];
@@ -206,12 +322,12 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('uptime-val').textContent = s.uptime || '--';
     document.getElementById('proxy-status').textContent = s.proxy_enabled ? `127.0.0.1:${s.proxy_port || 8443}` : 'Disabled';
 
-    document.getElementById('count-agents').textContent = s.active_agents || (s.agents ? s.agents.length : 0);
-    document.getElementById('count-flags').textContent = telemetryData.flags.length;
-    document.getElementById('count-incidents').textContent = telemetryData.incidents.length;
+    setKpi('count-agents', s.active_agents || (s.agents ? s.agents.length : 0));
+    setKpi('count-flags', telemetryData.flags.length);
+    setKpi('count-incidents', telemetryData.incidents.length);
 
     const proxyEvents = telemetryData.events.filter(e => e.kind === 9 || (e.detail && e.detail.includes('proxy')));
-    document.getElementById('count-proxy').textContent = proxyEvents.length;
+    setKpi('count-proxy', proxyEvents.length);
   }
 
   function renderAgents() {
@@ -254,6 +370,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (rules.length === 0 && uninspected === 0) {
       container.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-shield"/></svg><span>No egress inspected yet — traffic is scanned as your agents run</span></div>`;
+      prevFwStats = stats;
       return;
     }
 
@@ -264,11 +381,16 @@ document.addEventListener('DOMContentLoaded', () => {
     html += rules.map(r => {
       const st = stats[r];
       const blocking = st.mode === 'block';
+      // A rule whose blocked/would-block counters grew since the last render
+      // just intercepted something — flash its row once.
+      const prev = prevFwStats ? prevFwStats[r] : null;
+      const grew = !reducedMotion && prevFwStats !== null &&
+        prev && ((st.blocked || 0) > (prev.blocked || 0) || (st.would_block || 0) > (prev.would_block || 0));
       const action = blocking
         ? `<span class="mode-chip block">blocking</span>`
         : `<button class="btn btn-primary btn-sm" onclick="promoteRule('${escapeHTML(r)}')"><svg class="icon"><use href="#i-arrow"/></svg><span>Promote to block</span></button>`;
       return `
-        <div class="fw-rule">
+        <div class="fw-rule${grew ? ' fw-flash' : ''}">
           <div class="fw-rule-main">
             <span class="fw-rule-id">${escapeHTML(r)}</span>
             <div class="fw-metrics">
@@ -281,6 +403,7 @@ document.addEventListener('DOMContentLoaded', () => {
         </div>`;
     }).join('');
     container.innerHTML = html;
+    prevFwStats = stats;
   }
 
   // Posture headline: the one-glance answer, plus clickable jump-off points
@@ -567,6 +690,9 @@ document.addEventListener('DOMContentLoaded', () => {
     if (events.length === 0) {
       const msg = isEventsFiltered() ? 'No events match the current filter' : 'No system events logged';
       container.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-activity"/></svg><span>${msg}</span></div>`;
+      prevEventKeys = new Set();
+      firstEventRender = false;
+      suppressFreshOnce = false;
       return;
     }
 
@@ -582,8 +708,16 @@ document.addEventListener('DOMContentLoaded', () => {
       const timeStr = new Date(e.ts).toLocaleTimeString([], { hour12: false });
       const detailStr = e.detail || e.path || (e.remote_host ? `${e.remote_host}:${e.remote_port}` : '');
 
+      // Animate only events that weren't in the previous render — the whole
+      // list re-renders on every poll, and rows the user already saw must
+      // not flicker. The initial page load never animates.
+      let freshCls = '';
+      if (!reducedMotion && !firstEventRender && !suppressFreshOnce && !prevEventKeys.has(eventKey(e))) {
+        freshCls = e.kind === 9 ? ' fresh-sev' : ' fresh';
+      }
+
       return `
-        <div class="timeline-item">
+        <div class="timeline-item${freshCls}">
           <span class="t">${timeStr}</span>
           <span class="event-kind ${kindClass}">${kindLabel}</span>
           <span class="pid">PID ${e.pid}</span>
@@ -591,6 +725,10 @@ document.addEventListener('DOMContentLoaded', () => {
         </div>
       `;
     }).join('');
+
+    prevEventKeys = new Set(events.map(eventKey));
+    firstEventRender = false;
+    suppressFreshOnce = false;
   }
 
   window.openIncidentReport = async function(incidentId) {
@@ -720,7 +858,20 @@ document.addEventListener('DOMContentLoaded', () => {
     es.onopen = () => { esFailures = 0; stopPolling(); };
     ['file-open', 'file-write', 'file-delete', 'exec', 'tcc-modify', 'conn-open', 'conn-close',
      'transcript-hit', 'plugin-action', 'proxy-hit', 'guard-prompt', 'guard-resolved']
-      .forEach(kind => es.addEventListener(kind, scheduleRefresh));
+      .forEach(kind => es.addEventListener(kind, (msg) => {
+        // Push path: count the event immediately so the sparkline reflects
+        // bursts between fetches. Record its key so sparkIngestEvents won't
+        // double-count it when the 400ms-later fetch lands.
+        let tsMs = 0;
+        try {
+          const e = JSON.parse(msg.data);
+          countedEventKeys.add(eventKey(e));
+          tsMs = Date.parse(e.ts) || 0;
+        } catch { /* frame without a parseable body still counts */ }
+        sparkBump(1, tsMs);
+        if (kind === 'proxy-hit') flashFirewallPanel();
+        scheduleRefresh();
+      }));
     es.onerror = () => {
       // EventSource auto-reconnects while CONNECTING; only fall back to
       // polling when the stream is hard-closed or keeps failing.
