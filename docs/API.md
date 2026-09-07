@@ -276,7 +276,15 @@ Item kinds: `flag` (recent ≤24h, severity ≥2, human-titled), `guard_pending`
 
 ### `GET /events/stream` (SSE)
 
-Live feed of every bus event as `event: <kind>` / `data: <json>`, with a 15s heartbeat comment. Replaces polling for UIs that can hold a connection — **the menu bar app consumes this stream** (guard prompts are now push-latency instead of poll-latency), falling back to polling when the endpoint is unavailable (503 from an older daemon). One bus subscription per connection, released on disconnect.
+Live feed of every bus event as `event: <kind>` / `data: <json>`, with a 15s heartbeat comment. Replaces polling for UIs that can hold a connection — **the menu bar app and the web console both consume this stream** (guard prompts surface at push latency), falling back to polling when the endpoint is unavailable. One bus subscription per connection, released on disconnect.
+
+### Console access on the proxy port
+
+The browser console at `http://127.0.0.1:<proxy_port>/dashboard/` fetches telemetry same-origin, i.e. from the proxy listener. That listener serves the API endpoints listed in `proxy.isConsoleAPIPath` (status/flags/events/incidents/audit/fleet/posture/firewall sources + guard pending/rules/resolve + kill + this SSE stream) behind the **console token**:
+
+- Header `X-SecureAgent-Console-Token: <token>` (fetch/XHR) or `?ct=<token>` (EventSource can't set headers).
+- The token lives at `~/.config/secure-agent/console-token` (0600), distinct from the proxy token on purpose: agents routed through the proxy carry the proxy token in their environment and must not be able to read telemetry or resolve guard prompts with it.
+- `/guard/decision` is **not** served on this listener at all — it stays on the peer-attested unix socket.
 
 Besides telemetry kinds (`file-open`, `conn-open`, `proxy-hit`, …), the stream carries the guard lifecycle:
 
