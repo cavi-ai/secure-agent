@@ -3,11 +3,21 @@
 All notable changes to `secure-agent` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/) and the project adheres to
 [Semantic Versioning](https://semver.org/).
-
-
 ## [v0.9.0-rc.2] — Unreleased
 
-Release candidate 2: the full audit hardening pass (hooks, daemon, menubar, CI/packaging), SSE push for both UIs, the console-auth fix, session evidence chains, and the guard policy editor.
+Release candidate 2: the full audit hardening pass (hooks, daemon,
+menubar, CI/packaging), SSE push for both UIs, the console-auth
+fix, session evidence chains, and the guard policy editor.
+
+### Linux support
+
+- The daemon is now platform-portable (pure Go, no cgo): `/proc`-based
+  process source and socket lister, SO_PEERCRED peer credentials, eslogger
+  gated behind an availability check (Endpoint Security is macOS-only —
+  file telemetry degrades to the transcript scanner on Linux, everything
+  else is identical). New `Linux build + vet + test` CI job on ubuntu-latest
+  enforces it; darwin/linux factories (`NewProcSource`, `NewSocketLister`,
+  `NewPeerChecker`) keep platform code in build-tagged files.
 
 ### Security fixes (hooks)
 
