@@ -123,7 +123,7 @@ struct ConsoleView: View {
     private var firewallSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             sectionHeader("Egress firewall", trailing: state.isEnforcing ? "enforcing" : "monitor",
-                          trailingColor: state.isEnforcing ? .ok : .secondary)
+                          trailingColor: state.isEnforcing ? .ok : .secondary, trailingMonospaced: false)
 
             if state.firewallRules.isEmpty {
                 Text("No egress inspected yet — traffic is scanned as your agents run")
@@ -362,11 +362,11 @@ struct ConsoleView: View {
         .padding(.horizontal, 14).padding(.vertical, 10)
     }
 
-    private func sectionHeader(_ title: String, trailing: String, trailingColor: Color = .secondary) -> some View {
+    private func sectionHeader(_ title: String, trailing: String, trailingColor: Color = .secondary, trailingMonospaced: Bool = true) -> some View {
         HStack {
             Text(title.uppercased()).font(.system(size: 10, weight: .semibold)).foregroundStyle(.secondary).kerning(0.5)
             Spacer()
-            Text(trailing).font(.system(size: 10, weight: .semibold, design: title.contains("firewall") ? .default : .monospaced))
+            Text(trailing).font(.system(size: 10, weight: .semibold, design: trailingMonospaced ? .monospaced : .default))
                 .foregroundStyle(trailingColor)
         }
     }

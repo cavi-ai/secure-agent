@@ -4,65 +4,10 @@ All notable changes to `secure-agent` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/) and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased — console fix]
 
-### Web console: actually works now, and live
+## [v0.9.0-rc.2] — Unreleased
 
-- **Fixed a broken headline feature**: the dashboard at
-  `http://localhost:8443/dashboard/` loaded, but every telemetry fetch hit the
-  proxy listener's token challenge (407) — the console rendered a permanent
-  offline banner with no data. The proxy port now serves the console's API
-  endpoints behind a new per-install **console token**
-  (`~/.config/secure-agent/console-token`, 0600) — deliberately distinct from
-  the proxy token, which agents carry in their environment and could
-  otherwise trade for telemetry reads and guard self-approval.
-  `/guard/decision` stays off the HTTP listener entirely (peer-attested unix
-  socket only).
-- The console now consumes `/events/stream` (SSE) with a 2s polling fallback
-  and a 30s slow refresh for status — guard prompts and flags appear at push
-  latency.
-- The menubar's **Open console** passes the console token automatically; the
-  page strips it from the address bar after lifting it into memory.
-- Enforced by `e2e_smoke.sh`: 403 without a token, 403 with the *proxy* token,
-  200 with the console token; plus `TestConsoleAPIGate` in Go.
-
-## [Unreleased]
-
-### Features & follow-ups
-
-- **Session evidence chains survive the store.** The `flags` table now
-  persists `session_id` (with an in-place migration for existing databases —
-  no more `duplicate column` log noise on fresh starts), `/flags` returns it,
-  and the menubar shows the session prefix on flag rows.
-- **Guard policy editor in the popover.** Per-rule `monitor` / `prompt` /
-  `deny` toggles write `guard-modes.json` atomically — Directory Guard policy
-  is now editable without touching JSON by hand. A corrupt modes file is
-  surfaced in the UI (the hook fails closed on it) instead of looking like
-  "everything is monitor".
-- **docs/GUARD_THREAT_MODEL.md** — the Directory Guard's closed bypass
-  classes, known limits (symlinks, TOCTOU, static inline-code analysis), and
-  the fail-open/fail-closed table, linked from the README.
-- `go mod tidy`: dependency graph normalized (direct deps were all marked
-  indirect).
-
-## [Unreleased — SSE]
-
-### Menu bar: SSE push replaces 1 Hz polling
-
-- The menu bar app now consumes the daemon's `/events/stream` SSE feed:
-  guard prompts arrive at **push latency** instead of up-to-1s poll latency,
-  and the idle poll drops to a 30s status cadence. Falls back to the 1 Hz
-  poll when the endpoint is unavailable (503 from an older daemon) and
-  reconnects with capped exponential backoff + jitter on transport failure.
-  The stream's 15s heartbeat doubles as the liveness watchdog (45s idle =
-  dead connection, reconnect).
-- Daemon publishes two new bus event kinds for the guard lifecycle:
-  `guard-prompt` (a prompt was enqueued) and `guard-resolved` (a prompt was
-  resolved), letting every connected UI refetch immediately.
-- Enforced by `e2e_smoke.sh`: the stream must carry both guard lifecycle
-  events during the guard round-trip.
-
-## [Unreleased]
+Release candidate 2: the full audit hardening pass (hooks, daemon, menubar, CI/packaging), SSE push for both UIs, the console-auth fix, session evidence chains, and the guard policy editor.
 
 ### Security fixes (hooks)
 
@@ -178,6 +123,66 @@ All notable changes to `secure-agent` are documented here. The format follows
 - `uninstall.sh` only removes hooks it actually installed and lists leftover
   state instead of claiming "completely uninstalled".
 - `run_e2e_verbose.py` anchors at the repo root and always reaps the daemon.
+
+### Menu bar: SSE push replaces 1 Hz polling
+
+- The menu bar app now consumes the daemon's `/events/stream` SSE feed:
+  guard prompts arrive at **push latency** instead of up-to-1s poll latency,
+  and the idle poll drops to a 30s status cadence. Falls back to the 1 Hz
+  poll when the endpoint is unavailable (503 from an older daemon) and
+  reconnects with capped exponential backoff + jitter on transport failure.
+  The stream's 15s heartbeat doubles as the liveness watchdog (45s idle =
+  dead connection, reconnect).
+- Daemon publishes two new bus event kinds for the guard lifecycle:
+  `guard-prompt` (a prompt was enqueued) and `guard-resolved` (a prompt was
+  resolved), letting every connected UI refetch immediately.
+- Enforced by `e2e_smoke.sh`: the stream must carry both guard lifecycle
+  events during the guard round-trip.
+
+### Web console: actually works now, and live
+
+- **Fixed a broken headline feature**: the dashboard at
+  `http://localhost:8443/dashboard/` loaded, but every telemetry fetch hit the
+  proxy listener's token challenge (407) — the console rendered a permanent
+  offline banner with no data. The proxy port now serves the console's API
+  endpoints behind a new per-install **console token**
+  (`~/.config/secure-agent/console-token`, 0600) — deliberately distinct from
+  the proxy token, which agents carry in their environment and could
+  otherwise trade for telemetry reads and guard self-approval.
+  `/guard/decision` stays off the HTTP listener entirely (peer-attested unix
+  socket only).
+- The console now consumes `/events/stream` (SSE) with a 2s polling fallback
+  and a 30s slow refresh for status — guard prompts and flags appear at push
+  latency.
+- The menubar's **Open console** passes the console token automatically; the
+  page strips it from the address bar after lifting it into memory.
+- Enforced by `e2e_smoke.sh`: 403 without a token, 403 with the *proxy* token,
+  200 with the console token; plus `TestConsoleAPIGate` in Go.
+
+### Features & follow-ups
+
+- **Session evidence chains survive the store.** The `flags` table now
+  persists `session_id` (with an in-place migration for existing databases —
+  no more `duplicate column` log noise on fresh starts), `/flags` returns it,
+  and the menubar shows the session prefix on flag rows.
+- **Guard policy editor in the popover.** Per-rule `monitor` / `prompt` /
+  `deny` toggles write `guard-modes.json` atomically — Directory Guard policy
+  is now editable without touching JSON by hand. A corrupt modes file is
+  surfaced in the UI (the hook fails closed on it) instead of looking like
+  "everything is monitor".
+- **docs/GUARD_THREAT_MODEL.md** — the Directory Guard's closed bypass
+  classes, known limits (symlinks, TOCTOU, static inline-code analysis), and
+  the fail-open/fail-closed table, linked from the README.
+- `go mod tidy`: dependency graph normalized (direct deps were all marked
+  indirect).
+- Swift model identities no longer collide (`EventModel.id` was
+  `kind-pid-second`; `AgentSummaryModel.id` was bare pid).
+- `AppState` is testable: the daemon client is injected behind a protocol and
+  notifications go through a closure — new unit tests cover the notification
+  baseline storm-guard, dedupe, low-severity filtering, disconnect state
+  clearing, decode-vs-transport distinction, guard decode surfacing, and
+  pause semantics.
+
 
 ## [v0.9.0-rc.1] — 2026-09-02
 

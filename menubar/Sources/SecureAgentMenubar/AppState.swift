@@ -21,7 +21,10 @@ public final class AppState: ObservableObject {
     /// Called after every state change so the AppDelegate can refresh the icon.
     public var onChange: (() -> Void)?
 
-    private let client = DaemonClient()
+    private let client: DaemonClientProtocol
+    /// Notification sink — a closure so tests can count deliveries instead of
+    /// touching UNUserNotificationCenter.
+    var notify: (FlagModel) -> Void = { NotificationManager.shared.sendNotification(for: $0) }
     private var notifiedFlagIDs: Set<String> = []
     /// False until the first successful fetch seeds the notification baseline —
     /// without it, launch fires up to 20 banners for days-old flags.
@@ -45,7 +48,9 @@ public final class AppState: ObservableObject {
     /// refetch per event).
     private var refreshTask: Task<Void, Never>?
 
-    public init() {}
+    public init(client: DaemonClientProtocol = DaemonClient()) {
+        self.client = client
+    }
 
     public func start() {
         fetch()
@@ -145,58 +150,62 @@ public final class AppState: ObservableObject {
     public func fetch() {
         guard !isPaused, !isFetching else { return }
         isFetching = true
-        Task {
-            defer { self.isFetching = false }
+        Task { await performFetch() }
+    }
+
+    /// The fetch core, awaitable — tests drive this directly; the timer/SSE
+    /// paths use fetch() (fire-and-forget, serialized via isFetching).
+    func performFetch() async {
+        defer { self.isFetching = false }
+        do {
+            let status = try await client.fetchStatus()
+            let flags = try await client.fetchFlags(limit: 20)
+            let incidents = (try? await client.fetchIncidents(limit: 10)) ?? []
+            let guardRules = (try? await client.fetchGuardRules()) ?? []
+            // A pause requested mid-flight must not be overwritten by
+            // results that were already in transit.
+            guard !self.isPaused else { return }
+            let wasDisconnected = !self.connected
+            self.status = status
+            self.flags = flags
+            self.incidents = incidents
+            self.guardRules = guardRules
+            self.connected = true
+            self.lastError = nil
+            if wasDisconnected { self.scheduleTimer(1.0) }
+            self.processNewFlags(flags)
+            self.onChange?()
+            // Guard pending is decoded STRICTLY: a malformed response that
+            // silently became [] would suppress the Allow/Deny prompt — a
+            // fail-open on the security-critical path.
             do {
-                let status = try await client.fetchStatus()
-                let flags = try await client.fetchFlags(limit: 20)
-                let incidents = (try? await client.fetchIncidents(limit: 10)) ?? []
-                let guardRules = (try? await client.fetchGuardRules()) ?? []
-                // A pause requested mid-flight must not be overwritten by
-                // results that were already in transit.
+                let pending = try await client.fetchGuardPending()
                 guard !self.isPaused else { return }
-                let wasDisconnected = !self.connected
-                self.status = status
-                self.flags = flags
-                self.incidents = incidents
-                self.guardRules = guardRules
-                self.connected = true
-                self.lastError = nil
-                if wasDisconnected { self.scheduleTimer(1.0) }
-                self.processNewFlags(flags)
-                self.onChange?()
-                // Guard pending is decoded STRICTLY: a malformed response that
-                // silently became [] would suppress the Allow/Deny prompt — a
-                // fail-open on the security-critical path.
-                do {
-                    let pending = try await client.fetchGuardPending()
-                    guard !self.isPaused else { return }
-                    // Presented last: runModal() blocks this Task until the user
-                    // responds, so the icon/console refresh above isn't held up.
-                    self.presentGuardPromptIfNeeded(pending)
-                } catch {
-                    self.lastError = "guard check failed: \(error.localizedDescription)"
-                    self.onChange?()
-                }
-            } catch let DaemonClientError.decode(msg) {
-                // Daemon answered but spoke garbage: still connected, but say so.
-                self.lastError = "decode error: \(msg)"
-                self.onChange?()
+                // Presented last: runModal() blocks this Task until the user
+                // responds, so the icon/console refresh above isn't held up.
+                self.presentGuardPromptIfNeeded(pending)
             } catch {
-                let wasConnected = self.connected
-                self.connected = false
-                // Drop ALL daemon-derived state: stale flags/incidents driving
-                // the icon and console while the header says "Disconnected" is
-                // how a user kills the wrong process.
-                self.status = nil
-                self.flags = []
-                self.incidents = []
-                self.events = []
-                self.guardRules = []
-                self.lastError = error.localizedDescription
-                if wasConnected { self.scheduleTimer(5.0) }
+                self.lastError = "guard check failed: \(error.localizedDescription)"
                 self.onChange?()
             }
+        } catch let DaemonClientError.decode(msg) {
+            // Daemon answered but spoke garbage: still connected, but say so.
+            self.lastError = "decode error: \(msg)"
+            self.onChange?()
+        } catch {
+            let wasConnected = self.connected
+            self.connected = false
+            // Drop ALL daemon-derived state: stale flags/incidents driving
+            // the icon and console while the header says "Disconnected" is
+            // how a user kills the wrong process.
+            self.status = nil
+            self.flags = []
+            self.incidents = []
+            self.events = []
+            self.guardRules = []
+            self.lastError = error.localizedDescription
+            if wasConnected { self.scheduleTimer(5.0) }
+            self.onChange?()
         }
     }
 
@@ -210,7 +219,7 @@ public final class AppState: ObservableObject {
         }
         for flag in flags where flag.severity >= 2 {
             if notifiedFlagIDs.insert(flag.id).inserted {
-                NotificationManager.shared.sendNotification(for: flag)
+                notify(flag)
             }
         }
         // Bound the dedupe set: it only ever inserts otherwise.

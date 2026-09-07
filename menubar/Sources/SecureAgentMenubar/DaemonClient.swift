@@ -11,6 +11,22 @@ public enum DaemonClientError: Error, Equatable {
     case decode(String)
 }
 
+/// The surface AppState (and tests) use. DaemonClient conforms; tests stub it.
+public protocol DaemonClientProtocol: Sendable {
+    func fetchStatus() async throws -> StatusResponse
+    func fetchFlags(limit: Int) async throws -> [FlagModel]
+    func fetchIncidents(limit: Int) async throws -> [IncidentReportModel]
+    func fetchGuardRules() async throws -> [GuardRuleModel]
+    func fetchGuardPending() async throws -> [GuardPending]
+    func resolveGuard(_ req: GuardResolveRequest) async throws
+    func killProcess(pid: Int32) async throws -> Bool
+    func deleteGuardRule(agent: String, ruleID: String) async throws
+    func setFirewallMode(rule: String, mode: String) async throws
+    func streamEvents(onEvent: @escaping @Sendable (SSEFrame) -> Void) async throws
+}
+
+extension DaemonClient: DaemonClientProtocol {}
+
 public final class DaemonClient: Sendable {
     public let socketPath: String
 

@@ -1,7 +1,10 @@
 import Foundation
 
 public struct AgentSummaryModel: Codable, Identifiable, Sendable {
-    public var id: Int32 { pid }
+    /// pid alone can collide across pid reuse while a stale row lingers in the
+    /// list; pid+name is still wrong only if the same process is listed twice,
+    /// which the tagger's pid-keyed table prevents.
+    public var id: String { "\(pid)-\(name)" }
     public let pid: Int32
     public let name: String
     public let exePath: String?
@@ -110,7 +113,11 @@ public struct FlagModel: Codable, Identifiable, Sendable {
 }
 
 public struct EventModel: Codable, Identifiable, Sendable {
-    public var id: String { "\(kind)-\(pid)-\(ts)" }
+    /// kind-pid-ts collided for same-second duplicates; ts carries nanoseconds
+    /// from Go's RFC3339Nano, and the path/host tail separates the rest.
+    public var id: String {
+        "\(kind)-\(pid)-\(ts)-\(path ?? "")-\(remoteHost ?? "")\(remotePort.map(String.init) ?? "")-\(sessionId ?? "")"
+    }
     public let kind: Int
     public let ts: String
     public let pid: Int32
@@ -119,6 +126,7 @@ public struct EventModel: Codable, Identifiable, Sendable {
     public let remoteHost: String?
     public let remotePort: Int?
     public let detail: String?
+    public let sessionId: String?
 
     enum CodingKeys: String, CodingKey {
         case kind
@@ -129,9 +137,10 @@ public struct EventModel: Codable, Identifiable, Sendable {
         case remoteHost = "remote_host"
         case remotePort = "remote_port"
         case detail
+        case sessionId = "session_id"
     }
 
-    public init(kind: Int, ts: String, pid: Int32, exePath: String? = nil, path: String? = nil, remoteHost: String? = nil, remotePort: Int? = nil, detail: String? = nil) {
+    public init(kind: Int, ts: String, pid: Int32, exePath: String? = nil, path: String? = nil, remoteHost: String? = nil, remotePort: Int? = nil, detail: String? = nil, sessionId: String? = nil) {
         self.kind = kind
         self.ts = ts
         self.pid = pid
@@ -140,6 +149,7 @@ public struct EventModel: Codable, Identifiable, Sendable {
         self.remoteHost = remoteHost
         self.remotePort = remotePort
         self.detail = detail
+        self.sessionId = sessionId
     }
 }
 
