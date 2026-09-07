@@ -67,7 +67,7 @@ func main() {
 	b := bus.New(2048)
 	defer b.Close()
 
-	procSource := agents.NewDarwinProcSource()
+	procSource := agents.NewProcSource()
 	tagger := agents.New(cfg, procSource)
 	tagger.Refresh()
 
@@ -257,7 +257,7 @@ func main() {
 	// as the only mutating client; direct launches (ppid = shell) keep
 	// owner-uid mutation so headless/ssh management still works.
 	agentPIDSet := apiServer_taggedPIDs(tagger)
-	apiServer.SetPeers(api.DarwinPeerChecker{}, agentPIDSet)
+	apiServer.SetPeers(api.NewPeerChecker(), agentPIDSet)
 	apiServer.SetAgentPIDs(agentPIDSet)
 	// Pin the owning menubar app as the only mutating client — but only when
 	// the parent really is an .app binary. A direct launch from a shell must
@@ -338,10 +338,17 @@ func main() {
 		})
 	}
 
-	go sup.Run(ctx, "eslogger", func(c context.Context) error {
-		es := collect.NewESLogger(b)
-		return es.Run(c)
-	})
+	if collect.ESLoggerAvailable() {
+		go sup.Run(ctx, "eslogger", func(c context.Context) error {
+			es := collect.NewESLogger(b)
+			return es.Run(c)
+		})
+	} else {
+		// Non-macOS (or eslogger not installed): file-activity telemetry is
+		// degraded, not crash-looped. The transcript scanner still covers the
+		// hook activity log, so guard/plugin signals keep flowing.
+		log.Printf("eslogger unavailable on this platform; Endpoint Security telemetry disabled (transcript + network signals still active)")
+	}
 
 	go sup.Run(ctx, "netsampler", func(c context.Context) error {
 		ns := collect.NewNetSampler(b, tagger, cfg.NetSampleInterval, nil)

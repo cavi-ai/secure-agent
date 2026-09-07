@@ -47,7 +47,7 @@ type NetSampler struct {
 
 func NewNetSampler(b *bus.Bus, tagger *agents.Tagger, interval time.Duration, lister SocketLister) *NetSampler {
 	if lister == nil {
-		lister = NewDarwinSocketLister()
+		lister = NewSocketLister()
 	}
 	return &NetSampler{
 		bus:      b,

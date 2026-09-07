@@ -134,7 +134,7 @@ func TestEndToEndSmokeScenario(t *testing.T) {
 	b := bus.New(256)
 	defer b.Close()
 
-	tg := agents.New(cfg, agents.NewDarwinProcSource())
+	tg := agents.New(cfg, agents.NewProcSource())
 	tg.Refresh()
 
 	cl := sensitive.New(cfg)
@@ -171,7 +171,7 @@ func TestEndToEndSmokeScenario(t *testing.T) {
 
 	// Simulate agent activity
 	currPID := int32(os.Getpid()) // test process PID
-	info, _ := agents.NewDarwinProcSource().Info(currPID)
+	info, _ := agents.NewProcSource().Info(currPID)
 	t.Logf("TEST RUNNER PID: %d, EXE: %q", currPID, info.Exe)
 	// 1. Write sensitive read log
 	envPath := filepath.Join(dir, ".env")
