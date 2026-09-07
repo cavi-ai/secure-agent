@@ -87,8 +87,17 @@ public struct FlagModel: Codable, Identifiable, Sendable {
     public let pid: Int32
     public let agent: String
     public let evidence: [String]
+    /// Harness session that produced the flag — the evidence-chain link that
+    /// survives PID reuse. Empty for OS-level signals.
+    public let sessionId: String?
 
-    public init(id: String, rule: String, severity: Int, ts: String, pid: Int32, agent: String, evidence: [String]) {
+    enum CodingKeys: String, CodingKey {
+        case id, rule, severity, ts, pid, agent, evidence
+        case sessionId = "session_id"
+    }
+
+    public init(id: String, rule: String, severity: Int, ts: String, pid: Int32, agent: String,
+                evidence: [String], sessionId: String? = nil) {
         self.id = id
         self.rule = rule
         self.severity = severity
@@ -96,6 +105,7 @@ public struct FlagModel: Codable, Identifiable, Sendable {
         self.pid = pid
         self.agent = agent
         self.evidence = evidence
+        self.sessionId = sessionId
     }
 }
 

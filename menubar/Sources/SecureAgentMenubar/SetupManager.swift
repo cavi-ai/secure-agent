@@ -262,6 +262,47 @@ public final class SetupManager: ObservableObject {
     private var guardModesDir: String { "\(home)/.config/secure-agent" }
     private var guardModesPath: String { "\(guardModesDir)/guard-modes.json" }
 
+    /// The rule ids the guard ships with (mirrors DEFAULT_GUARD_RULES in
+    /// secret_guard.py; the hook owns the authoritative copy).
+    public static let guardRuleIDs = ["ssh-keys", "cloud-creds", "keychain", "env-files", "shell-rc"]
+
+    /// Current effective mode overrides (empty = the rule ships monitor).
+    /// Missing file → empty; corrupt file → the hook fails closed, so report
+    /// it here too instead of pretending everything is monitor.
+    public func currentGuardModes() -> (modes: [String: String], corrupt: Bool) {
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: guardModesPath)) else {
+            return ([:], false) // missing file: everything at shipped defaults
+        }
+        guard let decoded = try? JSONDecoder().decode([String: String].self, from: data) else {
+            return ([:], true)
+        }
+        return (decoded, false)
+    }
+
+    /// Set one rule's mode, atomically, merging over the user's other pins.
+    /// The hook reads this file on every guarded tool call — no daemon
+    /// round-trip is needed (or possible: the hook is the enforcement point).
+    public func setGuardMode(ruleID: String, mode: String) throws {
+        guard Self.guardRuleIDs.contains(ruleID) else {
+            throw NSError(domain: "SetupManager", code: 1,
+                          userInfo: [NSLocalizedDescriptionKey: "unknown guard rule \(ruleID)"])
+        }
+        guard ["monitor", "prompt", "deny"].contains(mode) else {
+            throw NSError(domain: "SetupManager", code: 2,
+                          userInfo: [NSLocalizedDescriptionKey: "unknown mode \(mode)"])
+        }
+        try fm.createDirectory(atPath: guardModesDir, withIntermediateDirectories: true)
+        var modes = currentGuardModes().modes
+        if mode == "monitor" {
+            modes.removeValue(forKey: ruleID) // monitor is the shipped default; don't pin it
+        } else {
+            modes[ruleID] = mode
+        }
+        // Atomic: a torn file makes the hook fail closed (deny everything
+        // guarded) until fixed.
+        try JSONEncoder().encode(modes).write(to: URL(fileURLWithPath: guardModesPath), options: .atomic)
+    }
+
     /// Writes the three classics as `prompt` into `guard-modes.json` — the
     /// same mode-override file the hook reads (`_mode_overrides` in
     /// secret_guard.py). Merges over any existing entries so the user's own
@@ -270,11 +311,7 @@ public final class SetupManager: ObservableObject {
         lastError = nil
         do {
             try fm.createDirectory(atPath: guardModesDir, withIntermediateDirectories: true)
-            var modes: [String: String] = [:]
-            if let data = try? Data(contentsOf: URL(fileURLWithPath: guardModesPath)),
-               let existing = try? JSONDecoder().decode([String: String].self, from: data) {
-                modes = existing
-            }
+            var modes = currentGuardModes().modes
             for c in Self.guardClassics { modes[c.ruleID] = c.mode }
             // Atomic: a torn guard-modes.json (app killed mid-write) would make
             // the hook's config load fail — and the hook fails CLOSED on

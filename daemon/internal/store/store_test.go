@@ -267,3 +267,26 @@ func TestIncidentStatusWorkflowForwardOnly(t *testing.T) {
 		t.Fatal("unknown incident has status")
 	}
 }
+
+func TestFlagSessionIDRoundTrips(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(filepath.Join(dir, "e.db"), filepath.Join(dir, "e.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	s.PutFlag(model.Flag{ID: "fs1", Rule: "sensitive-read-then-connect", Severity: 3,
+		PID: 42, Agent: "claude", SessionID: "sess-abc-123", TS: time.Now().UTC()})
+	flags := s.RecentFlags(10)
+	if len(flags) != 1 {
+		t.Fatalf("expected 1 flag, got %d", len(flags))
+	}
+	if flags[0].SessionID != "sess-abc-123" {
+		t.Fatalf("session_id = %q, want sess-abc-123 (evidence chain must survive the store)", flags[0].SessionID)
+	}
+	// A flag without a session reads back empty, not an error.
+	s.PutFlag(model.Flag{ID: "fs2", Rule: "r", Severity: 1, TS: time.Now().UTC()})
+	if got := s.RecentFlags(10); len(got) != 2 {
+		t.Fatalf("expected 2 flags, got %d", len(got))
+	}
+}
