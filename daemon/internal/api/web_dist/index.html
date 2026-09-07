@@ -39,6 +39,12 @@
         </div>
       </div>
       <div class="masthead-right">
+        <div class="spark" title="Agent events per second, last 60s">
+          <svg id="spark-svg" viewBox="0 0 120 28" preserveAspectRatio="none" aria-hidden="true">
+            <polyline id="spark-line" points="" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>
+          </svg>
+          <span class="spark-v" id="spark-rate">0/s</span>
+        </div>
         <div class="status-chip active" id="system-status">
           <span class="status-dot"></span>
           <span id="status-text">Daemon Active</span>
@@ -156,7 +162,7 @@
       </div>
 
       <div class="col">
-        <section class="panel">
+        <section class="panel" id="firewall-panel">
           <div class="panel-head">
             <h2><svg class="icon"><use href="#i-shield"/></svg>Egress firewall</h2>
             <span class="badge" id="badge-firewall-mode">monitor</span>
