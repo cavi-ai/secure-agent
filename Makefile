@@ -53,6 +53,8 @@ test:
 	python3 plugin/hooks/test_secret_guard.py
 	python3 plugin/hooks/test_injection_scan.py
 	python3 plugin/hooks/test_activity_log.py
+	@echo "==> Checking console assets..."
+	./packaging/test/check_console_css.sh
 	@echo "==> Running E2E smoke test scenario..."
 	./packaging/test/e2e_smoke.sh
 

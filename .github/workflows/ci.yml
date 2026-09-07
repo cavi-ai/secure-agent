@@ -77,6 +77,14 @@ jobs:
       - name: go test
         run: go test ./... -count=1
 
+  console:
+    name: Console asset lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4 (SHA-pinned)
+      - name: css token & keyframes guard
+        run: ./packaging/test/check_console_css.sh
+
   secrets:
     name: Secret scan (self)
     runs-on: ubuntu-latest
