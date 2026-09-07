@@ -154,6 +154,40 @@ func (a *API) SetPeers(checker PeerChecker, agentPIDs func() map[int32]struct{})
 	a.peerRole = &peers{OwnerUID: os.Getuid(), AgentPIDs: agentPIDs}
 }
 
+// buildMux registers every API route on a fresh mux. Serve() wraps it with
+// the peer-credential gate for the unix socket; ConsoleHandler() exposes it
+// ungated for the proxy listener, where authentication is the console token
+// (peer creds don't exist on a TCP connection).
+func (a *API) buildMux() *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/status", a.handleStatus)
+	mux.HandleFunc("/posture", a.handlePosture)
+	mux.HandleFunc("/flags", a.handleFlags)
+	mux.HandleFunc("/events", a.handleEvents)
+	mux.HandleFunc("/events/stream", a.handleEventStream)
+	mux.HandleFunc("/incidents", a.handleIncidents)
+	mux.HandleFunc("/incidents/status", a.handleIncidentStatus)
+	mux.HandleFunc("/audit", a.handleAudit)
+	mux.HandleFunc("/fleet", a.handleFleet)
+	mux.HandleFunc("/kill", a.handleKill)
+	mux.HandleFunc("/firewall/mode", a.handleFirewallMode)
+	mux.HandleFunc("/firewall/fingerprints/reload", a.handleFingerprintReload)
+	mux.HandleFunc("/firewall/fingerprints/ingest", a.handleFingerprintIngest)
+	mux.HandleFunc("/firewall/sources", a.handleFirewallSources)
+	mux.HandleFunc("/guard/decision", a.handleGuardDecision)
+	mux.HandleFunc("/guard/pending", a.handleGuardPending)
+	mux.HandleFunc("/guard/resolve", a.handleGuardResolve)
+	mux.HandleFunc("/guard/rules", a.handleGuardRules)
+	a.setupWebDashboard(mux)
+	return mux
+}
+
+// ConsoleHandler returns the API mux WITHOUT the unix-socket peer gate, for
+// the proxy listener's console-token-gated routes. /guard/decision is
+// deliberately absent from the proxy listener's whitelist (see
+// proxy.isConsoleAPIPath) even though it is registered here.
+func (a *API) ConsoleHandler() http.Handler { return a.buildMux() }
+
 func (a *API) Serve(ctx context.Context) error {
 	if a.socketPath == "" {
 		return errors.New("socket path cannot be empty")
@@ -178,29 +212,8 @@ func (a *API) Serve(ctx context.Context) error {
 
 	_ = os.Chmod(a.socketPath, 0o600)
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("/status", a.handleStatus)
-	mux.HandleFunc("/posture", a.handlePosture)
-	mux.HandleFunc("/flags", a.handleFlags)
-	mux.HandleFunc("/events", a.handleEvents)
-	mux.HandleFunc("/events/stream", a.handleEventStream)
-	mux.HandleFunc("/incidents", a.handleIncidents)
-	mux.HandleFunc("/incidents/status", a.handleIncidentStatus)
-	mux.HandleFunc("/audit", a.handleAudit)
-	mux.HandleFunc("/fleet", a.handleFleet)
-	mux.HandleFunc("/kill", a.handleKill)
-	mux.HandleFunc("/firewall/mode", a.handleFirewallMode)
-	mux.HandleFunc("/firewall/fingerprints/reload", a.handleFingerprintReload)
-	mux.HandleFunc("/firewall/fingerprints/ingest", a.handleFingerprintIngest)
-	mux.HandleFunc("/firewall/sources", a.handleFirewallSources)
-	mux.HandleFunc("/guard/decision", a.handleGuardDecision)
-	mux.HandleFunc("/guard/pending", a.handleGuardPending)
-	mux.HandleFunc("/guard/resolve", a.handleGuardResolve)
-	mux.HandleFunc("/guard/rules", a.handleGuardRules)
-	a.setupWebDashboard(mux)
-
 	server := &http.Server{
-		Handler:     a.gate(a.peerChk, mux),
+		Handler:     a.gate(a.peerChk, a.buildMux()),
 		ConnContext: gateConnContext,
 	}
 

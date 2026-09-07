@@ -1,4 +1,15 @@
 document.addEventListener('DOMContentLoaded', () => {
+  // Console auth: the menubar opens /dashboard/?ct=<console-token>. The token
+  // gates the telemetry endpoints on this listener (the proxy token agents
+  // carry is a different credential and is NOT accepted here). Lift it into
+  // memory and strip it from the address bar so it doesn't linger in history.
+  const consoleToken = new URLSearchParams(location.search).get('ct') || '';
+  if (consoleToken && window.history.replaceState) {
+    history.replaceState(null, '', location.pathname);
+  }
+  const authHeaders = consoleToken ? { 'X-SecureAgent-Console-Token': consoleToken } : {};
+  const apiFetch = (path, opts = {}) => fetch(path, { ...opts, headers: { ...authHeaders, ...(opts.headers || {}) } });
+
   const btnRefresh = document.getElementById('btn-refresh');
   const reportModal = document.getElementById('report-modal');
   const btnCloseModal = document.getElementById('btn-close-modal');
@@ -101,14 +112,14 @@ document.addEventListener('DOMContentLoaded', () => {
   async function fetchTelemetry() {
     try {
       const [statusRes, flagsRes, incidentsRes, eventsRes, fleetRes, auditRes, sourcesRes, postureRes] = await Promise.all([
-        fetch('/status').catch(() => null),
-        fetch('/flags?limit=20').catch(() => null),
-        fetch('/incidents?limit=10').catch(() => null),
-        fetch('/events?limit=50').catch(() => null),
-        fetch('/fleet').catch(() => null),
-        fetch('/audit?limit=50').catch(() => null),
-        fetch('/firewall/sources').catch(() => null),
-        fetch('/posture').catch(() => null)
+        apiFetch('/status').catch(() => null),
+        apiFetch('/flags?limit=20').catch(() => null),
+        apiFetch('/incidents?limit=10').catch(() => null),
+        apiFetch('/events?limit=50').catch(() => null),
+        apiFetch('/fleet').catch(() => null),
+        apiFetch('/audit?limit=50').catch(() => null),
+        apiFetch('/firewall/sources').catch(() => null),
+        apiFetch('/posture').catch(() => null)
       ]);
 
       if (statusRes && statusRes.ok) {
@@ -143,11 +154,11 @@ document.addEventListener('DOMContentLoaded', () => {
       telemetryData.flagsView = telemetryData.flags;
       telemetryData.eventsView = telemetryData.events;
       if (isFlagsFiltered()) {
-        const r = await fetch(flagsQuery()).catch(() => null);
+        const r = await apiFetch(flagsQuery()).catch(() => null);
         if (r && r.ok) telemetryData.flagsView = await r.json() || [];
       }
       if (isEventsFiltered()) {
-        const r = await fetch(eventsQuery()).catch(() => null);
+        const r = await apiFetch(eventsQuery()).catch(() => null);
         if (r && r.ok) telemetryData.eventsView = await r.json() || [];
       }
 
@@ -316,7 +327,7 @@ document.addEventListener('DOMContentLoaded', () => {
       body.note = note;
     }
     try {
-      const r = await fetch('/incidents/status', {
+      const r = await apiFetch('/incidents/status', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body)
@@ -473,7 +484,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const value = (input.value || '').trim();
     if (!value) return;
     try {
-      const res = await fetch('/firewall/sources', {
+      const res = await apiFetch('/firewall/sources', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ source: value, op: 'add' })
       });
@@ -490,7 +501,7 @@ document.addEventListener('DOMContentLoaded', () => {
   window.removeSource = async function(encoded) {
     const source = decodeURIComponent(encoded);
     try {
-      const res = await fetch('/firewall/sources', {
+      const res = await apiFetch('/firewall/sources', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ source, op: 'remove' })
       });
@@ -588,7 +599,7 @@ document.addEventListener('DOMContentLoaded', () => {
     reportModal.showModal();
 
     try {
-      const res = await fetch(`/incidents?id=${encodeURIComponent(incidentId)}&format=markdown`);
+      const res = await apiFetch(`/incidents?id=${encodeURIComponent(incidentId)}&format=markdown`);
       if (res.ok) {
         const text = await res.text();
         currentRawMarkdown = text;
@@ -604,7 +615,7 @@ document.addEventListener('DOMContentLoaded', () => {
   window.killProcess = async function(pid) {
     if (!confirm(`Are you sure you want to SIGKILL PID ${pid}?`)) return;
     try {
-      const res = await fetch('/kill', {
+      const res = await apiFetch('/kill', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ pid })
@@ -622,7 +633,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   window.promoteRule = async function(rule) {
     try {
-      const res = await fetch('/firewall/mode', {
+      const res = await apiFetch('/firewall/mode', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ rule, mode: 'block' })
@@ -681,7 +692,39 @@ document.addEventListener('DOMContentLoaded', () => {
       .replace(/"/g, '&quot;');
   }
 
-  // Initial fetch and poll every 2 seconds
+  // Live updates: SSE push when the endpoint is available, with a 2s poll as
+  // the fallback (older daemon, or a stream that keeps failing). The stream
+  // carries the guard lifecycle (guard-prompt/guard-resolved), so pending
+  // prompts surface immediately instead of up to 2s late. A slow 30s refresh
+  // always runs for status/uptime, which change without any bus event.
   fetchTelemetry();
-  setInterval(fetchTelemetry, 2000);
+  setInterval(fetchTelemetry, 30000);
+
+  let pollTimer = null;
+  const startPolling = () => { if (!pollTimer) pollTimer = setInterval(fetchTelemetry, 2000); };
+  const stopPolling = () => { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } };
+
+  if (window.EventSource) {
+    const streamURL = '/events/stream' + (consoleToken ? '?ct=' + encodeURIComponent(consoleToken) : '');
+    let esFailures = 0;
+    let refreshPending = false;
+    const scheduleRefresh = () => {
+      if (refreshPending) return;
+      refreshPending = true;
+      setTimeout(() => { refreshPending = false; fetchTelemetry(); }, 400);
+    };
+    const es = new EventSource(streamURL);
+    es.onopen = () => { esFailures = 0; stopPolling(); };
+    ['file-open', 'file-write', 'file-delete', 'exec', 'tcc-modify', 'conn-open', 'conn-close',
+     'transcript-hit', 'plugin-action', 'proxy-hit', 'guard-prompt', 'guard-resolved']
+      .forEach(kind => es.addEventListener(kind, scheduleRefresh));
+    es.onerror = () => {
+      // EventSource auto-reconnects while CONNECTING; only fall back to
+      // polling when the stream is hard-closed or keeps failing.
+      esFailures++;
+      if (es.readyState === EventSource.CLOSED || esFailures > 5) startPolling();
+    };
+  } else {
+    startPolling();
+  }
 });

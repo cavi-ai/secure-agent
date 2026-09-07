@@ -42,10 +42,19 @@ type ProxyServer struct {
 	caManager *CAManager
 	engine    *firewall.Engine
 	server    *http.Server
+	// consoleAPI serves the browser console's telemetry endpoints on this
+	// listener, gated by the console token (never the proxy token — agents
+	// carry that one). Wired by main via SetConsoleAPI.
+	consoleAPI http.Handler
 	// plainHTTPClient is shared across plain-HTTP proxy requests so connections
 	// are reused; a per-request Transport would defeat keep-alive pooling.
 	plainHTTPClient *http.Client
 }
+
+// SetConsoleAPI wires the (ungated-by-peer-creds — this is a TCP listener, so
+// the unix-socket peer gate cannot run here) API mux for browser-console
+// endpoints. Access is gated by the console token instead.
+func (ps *ProxyServer) SetConsoleAPI(h http.Handler) { ps.consoleAPI = h }
 
 func NewProxyServer(port int, b *bus.Bus, caManager *CAManager, engine *firewall.Engine) *ProxyServer {
 	ps := &ProxyServer{
@@ -122,6 +131,21 @@ func (ps *ProxyServer) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	// the per-install token so the listener is not a free open proxy.
 	if r.Method == http.MethodGet && (r.URL.Path == "/dashboard" || strings.HasPrefix(r.URL.Path, "/dashboard/")) {
 		serveDashboard(w, r)
+		return
+	}
+	// Browser-console telemetry endpoints. Same-origin fetches from
+	// /dashboard/ land on this listener; without this route they got 407 (the
+	// proxy token challenge) and the console rendered a permanent offline
+	// banner. Gated by the console token — a credential agents do NOT hold,
+	// unlike the proxy token they carry for egress.
+	if isConsoleAPIPath(r.URL.Path) {
+		if ps.consoleAPI == nil || !consoleAuthorized(r) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`{"error":"console token required"}`))
+			return
+		}
+		ps.consoleAPI.ServeHTTP(w, r)
 		return
 	}
 	if !authorized(r) {
