@@ -21,12 +21,12 @@ func (l loopbackChecker) PeerCred(c net.Conn) (PeerCred, error) {
 	return l.inner.PeerCred(c)
 }
 
-func TestDarwinPeerCheckerResolvesSelf(t *testing.T) {
+func TestPeerCheckerResolvesSelf(t *testing.T) {
 	a, b := socketpair(t)
 	defer a.Close()
 	defer b.Close()
 
-	cred, err := DarwinPeerChecker{}.PeerCred(a)
+	cred, err := NewPeerChecker().PeerCred(a)
 	if err != nil {
 		t.Fatalf("PeerCred: %v", err)
 	}
@@ -77,7 +77,7 @@ func TestGateAllowsPinnedUIMutation(t *testing.T) {
 	// Checker set: all connections resolve to this process (owner uid).
 	// Pin this process as the menubar UI; the request must then be allowed
 	// and reach the killer (a foreign uid would be refused by classify).
-	a.SetPeers(loopbackChecker{DarwinPeerChecker{}}, nil)
+	a.SetPeers(loopbackChecker{NewPeerChecker()}, nil)
 	a.peerRole.UIPID = int32(os.Getpid())
 	ctx, cancel := contextWithCancel()
 	defer cancel()
@@ -101,7 +101,7 @@ func TestGateAllowsOwnerReadsWithCheckerSet(t *testing.T) {
 	sock := fmt.Sprintf("/tmp/sa_gate2_%d.sock", time.Now().UnixNano())
 	defer os.Remove(sock)
 	a := New(sock, testStore(t), &fakeKiller{}, func() Status { return Status{Running: true} })
-	a.SetPeers(loopbackChecker{DarwinPeerChecker{}}, nil)
+	a.SetPeers(loopbackChecker{NewPeerChecker()}, nil)
 	ctx, cancel := contextWithCancel()
 	defer cancel()
 	go a.Serve(ctx)
@@ -119,7 +119,7 @@ func TestGateAllowsGuardDecisionForOwner(t *testing.T) {
 	defer os.Remove(sock)
 	a := New(sock, testStore(t), &fakeKiller{}, func() Status { return Status{Running: true} })
 	a.SetGuard(newTestBroker())
-	a.SetPeers(loopbackChecker{DarwinPeerChecker{}}, nil)
+	a.SetPeers(loopbackChecker{NewPeerChecker()}, nil)
 	ctx, cancel := contextWithCancel()
 	defer cancel()
 	go a.Serve(ctx)
@@ -190,7 +190,7 @@ func TestGateRejectsNonUIMutationWhenUIPinned(t *testing.T) {
 	defer os.Remove(sock)
 	fk := &fakeKiller{}
 	a := New(sock, testStore(t), fk, func() Status { return Status{Running: true} })
-	a.SetPeers(DarwinPeerChecker{}, nil)
+	a.SetPeers(NewPeerChecker(), nil)
 	a.peerRole.UIPID = int32(os.Getpid()) + 9999 // a pid that is NOT this test process
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -231,7 +231,7 @@ func TestGateAgentRolePolicy(t *testing.T) {
 	a.SetGuard(newTestBroker())
 	// Classify this test process's connections as a tagged agent.
 	selfPID := int32(os.Getpid())
-	a.SetPeers(loopbackChecker{DarwinPeerChecker{}}, func() map[int32]struct{} {
+	a.SetPeers(loopbackChecker{NewPeerChecker()}, func() map[int32]struct{} {
 		return map[int32]struct{}{selfPID: {}}
 	})
 	ctx, cancel := contextWithCancel()
@@ -291,7 +291,7 @@ func TestGateAllowsOwnerMutationWithoutUIPin(t *testing.T) {
 	defer os.Remove(sock)
 	fk := &fakeKiller{}
 	a := New(sock, testStore(t), fk, func() Status { return Status{Running: true} })
-	a.SetPeers(DarwinPeerChecker{}, nil)
+	a.SetPeers(NewPeerChecker(), nil)
 	// UIPID stays 0.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

@@ -109,3 +109,6 @@ func getProcPath(pid int32) string {
 	}
 	return ""
 }
+
+// NewProcSource returns the platform's process source.
+func NewProcSource() ProcSource { return NewDarwinProcSource() }

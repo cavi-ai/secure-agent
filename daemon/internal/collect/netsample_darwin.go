@@ -97,3 +97,6 @@ func (d *DarwinSocketLister) SocketsFor(pid int32) []connKey {
 
 	return res
 }
+
+// NewSocketLister returns the platform's socket lister.
+func NewSocketLister() SocketLister { return NewDarwinSocketLister() }
