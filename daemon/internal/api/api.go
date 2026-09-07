@@ -40,6 +40,7 @@ type AgentSummary struct {
 
 type Status struct {
 	Running           bool           `json:"running"`
+	Version           string         `json:"version"`
 	Uptime            string         `json:"uptime"`
 	ActiveAgents      int            `json:"active_agents"`
 	Agents            []AgentSummary `json:"agents"`

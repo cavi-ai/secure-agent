@@ -202,6 +202,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     document.getElementById('status-text').textContent = s.running ? 'Daemon Active' : 'Disconnected';
     if (chip) chip.className = 'status-chip ' + (s.running ? 'active' : 'down');
+    if (s.version) document.getElementById('app-version').textContent = s.version;
     document.getElementById('uptime-val').textContent = s.uptime || '--';
     document.getElementById('proxy-status').textContent = s.proxy_enabled ? `127.0.0.1:${s.proxy_port || 8443}` : 'Disabled';
 
@@ -356,9 +357,9 @@ document.addEventListener('DOMContentLoaded', () => {
       const wf = inc.workflow || {};
       const status = wf.status || 'open';
       const statusChip = status === 'resolved'
-        ? `<span class="status-chip resolved">resolved</span>`
+        ? `<span class="workflow-chip resolved">resolved</span>`
         : status === 'acknowledged'
-          ? `<span class="status-chip acked">ack</span>`
+          ? `<span class="workflow-chip acked">ack</span>`
           : '';
       const riskClass = (inc.risk || '').toUpperCase() === 'CRITICAL' ? 'high'
         : (inc.risk || '').toUpperCase() === 'HIGH' ? 'high' : '';
@@ -576,7 +577,9 @@ document.addEventListener('DOMContentLoaded', () => {
       else if (e.kind === 9) { kindLabel = 'PROXY HIT'; kindClass = 'proxy'; }
       else if (e.kind === 5) { kindLabel = 'NET CONN'; kindClass = 'conn'; }
 
-      const timeStr = new Date(e.ts).toLocaleTimeString();
+      // 24h clock keeps the 68px time column single-line ("16:03:58" fits;
+      // "4:03:58 PM" wraps).
+      const timeStr = new Date(e.ts).toLocaleTimeString([], { hour12: false });
       const detailStr = e.detail || e.path || (e.remote_host ? `${e.remote_host}:${e.remote_port}` : '');
 
       return `
