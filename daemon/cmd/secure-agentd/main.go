@@ -300,6 +300,19 @@ func main() {
 	// when the connection closes.
 	apiServer.SetEventStream(b.Subscribe, b.Unsubscribe)
 	apiServer.SetEventPublisher(b.Publish)
+
+	// The browser console's telemetry fetches are same-origin with the
+	// dashboard, i.e. they land on the proxy's loopback HTTP port. Serve the
+	// API there behind the console token (a credential agents never receive —
+	// unlike the proxy token they carry for egress), so /dashboard/ shows live
+	// data instead of a wall of 407s.
+	if proxyServer != nil {
+		consoleToken := proxy.LoadConsoleToken(filepath.Join(filepath.Dir(cfg.Firewall.Registry.SaltRef), "console-token"))
+		if consoleToken == "" {
+			log.Printf("WARNING: console token unavailable; browser console API on the proxy port is disabled")
+		}
+		proxyServer.SetConsoleAPI(apiServer.ConsoleHandler())
+	}
 	go func() {
 		if err := apiServer.Serve(ctx); err != nil && ctx.Err() == nil {
 			log.Printf("API server error: %v", err)

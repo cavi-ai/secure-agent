@@ -362,7 +362,16 @@ public final class AppState: ObservableObject {
         // is actually running — a stale port from a dead daemon opens a
         // browser error page.
         guard connected, status?.proxyEnabled == true, let port = status?.proxyPort, port > 0 else { return }
-        if let url = URL(string: "http://127.0.0.1:\(port)/dashboard/") {
+        // The console's telemetry endpoints require the console token (a
+        // credential agents never hold). Pass it as a query param; the page
+        // lifts it into memory and sends it as a header on every fetch.
+        var query = ""
+        if let token = try? String(contentsOfFile: NSHomeDirectory() + "/.config/secure-agent/console-token",
+                                   encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
+           !token.isEmpty {
+            query = "?ct=\(DaemonClient.urlQueryEscape(token))"
+        }
+        if let url = URL(string: "http://127.0.0.1:\(port)/dashboard/\(query)") {
             NSWorkspace.shared.open(url)
         }
     }
