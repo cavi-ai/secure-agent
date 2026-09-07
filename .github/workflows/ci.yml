@@ -62,6 +62,21 @@ jobs:
       - name: smoke
         run: ./packaging/test/e2e_smoke.sh
 
+  linux:
+    name: Linux build + vet + test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4 (SHA-pinned)
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5 (SHA-pinned)
+        with:
+          go-version-file: go.mod
+      - name: go build
+        run: go build ./...
+      - name: go vet
+        run: go vet ./...
+      - name: go test
+        run: go test ./... -count=1
+
   secrets:
     name: Secret scan (self)
     runs-on: ubuntu-latest
