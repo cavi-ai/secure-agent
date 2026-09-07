@@ -283,6 +283,29 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Console auth: the browser console's telemetry endpoints on the proxy port
+# require the console token; the proxy token (which agents carry) must NOT
+# work there.
+# ---------------------------------------------------------------------------
+CONSOLE_PASSED=false
+PROXY_PORT=$(curl -s --unix-socket "$SOCKET_PATH" http://unix/status 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin).get("proxy_port", 0))' 2>/dev/null || echo 0)
+if [ "$PROXY_PORT" != "0" ] && [ -f "$tmp/console-token" ]; then
+  CT=$(tr -d '[:space:]' < "$tmp/console-token")
+  PT=$(tr -d '[:space:]' < "$tmp/proxy-token")
+  CODE_NONE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 "http://127.0.0.1:$PROXY_PORT/status" || true)
+  CODE_PT=$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 -H "X-SecureAgent-Proxy-Token: $PT" "http://127.0.0.1:$PROXY_PORT/status" || true)
+  CODE_CT=$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 -H "X-SecureAgent-Console-Token: $CT" "http://127.0.0.1:$PROXY_PORT/status" || true)
+  if [ "$CODE_NONE" = "403" ] && [ "$CODE_PT" = "403" ] && [ "$CODE_CT" = "200" ]; then
+    echo "Console auth: 403 without token, 403 with proxy token, 200 with console token."
+    CONSOLE_PASSED=true
+  else
+    echo "Console auth FAILED: none=$CODE_NONE proxy-token=$CODE_PT console-token=$CODE_CT (want 403/403/200)"
+  fi
+else
+  echo "Console auth: proxy not running or console token missing (port=$PROXY_PORT)."
+fi
+
+# ---------------------------------------------------------------------------
 # Fleet webhook: the collector must have received and verified the flag the
 # fake agent triggered above. Sequential check (no heredoc-in-if).
 # ---------------------------------------------------------------------------
@@ -304,8 +327,8 @@ else
 fi
 kill "$COLLECTOR_PID" 2>/dev/null || true
 
-if [ "$PASSED" = true ] && [ "$INCIDENT_PASSED" = true ] && [ "$GUARD_PASSED" = true ] && [ "$WEBHOOK_PASSED" = true ] && [ "$SSE_PASSED" = true ]; then
-  echo "E2E SMOKE TEST: PASS (Flag, Incident, Directory Guard round-trip, fleet webhook, and SSE stream verified)"
+if [ "$PASSED" = true ] && [ "$INCIDENT_PASSED" = true ] && [ "$GUARD_PASSED" = true ] && [ "$WEBHOOK_PASSED" = true ] && [ "$SSE_PASSED" = true ] && [ "$CONSOLE_PASSED" = true ]; then
+  echo "E2E SMOKE TEST: PASS (Flag, Incident, Directory Guard round-trip, fleet webhook, SSE stream, and console auth verified)"
   if [ -n "$DAEMON_PID" ]; then
     kill "$DAEMON_PID" 2>/dev/null || true
   fi
@@ -324,7 +347,7 @@ else
   if [ -n "$DAEMON_PID" ]; then
     kill "$DAEMON_PID" 2>/dev/null || true
   fi
-  echo "E2E SMOKE TEST: FAIL (Flag passed: $PASSED, Incident passed: $INCIDENT_PASSED, Guard passed: $GUARD_PASSED, Webhook passed: $WEBHOOK_PASSED, SSE passed: $SSE_PASSED)"
+  echo "E2E SMOKE TEST: FAIL (Flag passed: $PASSED, Incident passed: $INCIDENT_PASSED, Guard passed: $GUARD_PASSED, Webhook passed: $WEBHOOK_PASSED, SSE passed: $SSE_PASSED, Console passed: $CONSOLE_PASSED)"
   echo "DEBUG SSE STREAM: $SSE_BODY"
   exit 1
 fi

@@ -4,6 +4,28 @@ All notable changes to `secure-agent` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/) and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased — console fix]
+
+### Web console: actually works now, and live
+
+- **Fixed a broken headline feature**: the dashboard at
+  `http://localhost:8443/dashboard/` loaded, but every telemetry fetch hit the
+  proxy listener's token challenge (407) — the console rendered a permanent
+  offline banner with no data. The proxy port now serves the console's API
+  endpoints behind a new per-install **console token**
+  (`~/.config/secure-agent/console-token`, 0600) — deliberately distinct from
+  the proxy token, which agents carry in their environment and could
+  otherwise trade for telemetry reads and guard self-approval.
+  `/guard/decision` stays off the HTTP listener entirely (peer-attested unix
+  socket only).
+- The console now consumes `/events/stream` (SSE) with a 2s polling fallback
+  and a 30s slow refresh for status — guard prompts and flags appear at push
+  latency.
+- The menubar's **Open console** passes the console token automatically; the
+  page strips it from the address bar after lifting it into memory.
+- Enforced by `e2e_smoke.sh`: 403 without a token, 403 with the *proxy* token,
+  200 with the console token; plus `TestConsoleAPIGate` in Go.
+
 ## [Unreleased]
 
 ### Features & follow-ups
