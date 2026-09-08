@@ -17,7 +17,7 @@ const libPath = path.resolve(
 const ctx = {};
 vm.runInNewContext(readFileSync(libPath, 'utf8'), ctx, { filename: 'lib.js' });
 const {
-  escapeHTML, fmtTime, eventKey,
+  escapeHTML, escapeJS, fmtTime, eventKey,
   advanceBuckets, bucketIndexFor, sparkPoints,
   parseMarkdownToHTML, buildEvidenceChain,
   sessionShort, filterEventsBySession,
@@ -32,6 +32,29 @@ test('escapeHTML tolerates null/undefined/numbers', () => {
   assert.equal(escapeHTML(null), '');
   assert.equal(escapeHTML(undefined), '');
   assert.equal(escapeHTML(0), '0');
+});
+
+// ---------- escapeJS (inline-handler string literals) ----------
+
+test('escapeJS blocks string-literal breakout', () => {
+  // The classic inline-handler payload: close the quote, run code, comment.
+  assert.equal(escapeJS("');alert(1);//"), "\\');alert(1);//");
+  // Backslash first — an unescaped trailing backslash would eat the close quote.
+  assert.equal(escapeJS('a\\b'), 'a\\\\b');
+  assert.equal(escapeJS("line\nbreak\rcarriage"), 'line\\nbreak\\rcarriage');
+  assert.equal(escapeJS(null), '');
+});
+
+test('inline-handler layering: escapeHTML(escapeJS(x)) resists attribute+string breakout', () => {
+  const x = "');alert(1);//";
+  const attr = `onclick="fn('${escapeHTML(escapeJS(x))}')"`;
+  // Every quote from the payload must be backslash-escaped: the only
+  // UNescaped single quotes in the attribute are the handler's own two.
+  const unescapedQuotes = (attr.match(/(?<!\\)'/g) || []).length;
+  assert.equal(unescapedQuotes, 2);
+  // A value carrying both contexts: quote + double-quote + ampersand.
+  const y = `';x="&`;
+  assert.equal(escapeHTML(escapeJS(y)), "\\';x=&quot;&amp;");
 });
 
 // ---------- fmtTime ----------
