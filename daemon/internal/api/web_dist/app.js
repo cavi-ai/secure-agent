@@ -81,23 +81,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function sparkAdvance() {
     const nowSec = Math.floor(Date.now() / 1000);
-    let steps = nowSec - sparkLastTick;
+    const steps = nowSec - sparkLastTick;
     if (steps <= 0) return;
-    if (steps > SPARK_BUCKETS) steps = SPARK_BUCKETS;
-    for (let i = 0; i < steps; i++) { sparkBuckets.shift(); sparkBuckets.push(0); }
+    advanceBuckets(sparkBuckets, steps); // lib.js
     sparkLastTick = nowSec;
   }
 
   function sparkBump(n, tsMs) {
     sparkAdvance();
-    // Events older than the window are clamped into the oldest bucket so the
-    // shape still reflects "something happened" without inventing recency.
-    let idx = SPARK_BUCKETS - 1;
-    if (tsMs) {
-      const ageSec = Math.floor((Date.now() - tsMs) / 1000);
-      idx = Math.max(0, SPARK_BUCKETS - 1 - ageSec);
-    }
-    sparkBuckets[idx] += (n || 1);
+    sparkBuckets[bucketIndexFor(Date.now(), tsMs, SPARK_BUCKETS)] += (n || 1); // lib.js
     drawSpark();
   }
 
@@ -105,21 +97,11 @@ document.addEventListener('DOMContentLoaded', () => {
     const line = document.getElementById('spark-line');
     const rate = document.getElementById('spark-rate');
     if (!line) return;
-    const max = Math.max(2, ...sparkBuckets);
-    const pts = sparkBuckets.map((v, i) => {
-      const x = (i / (SPARK_BUCKETS - 1)) * 120;
-      const y = 26 - (v / max) * 24;
-      return `${x.toFixed(1)},${y.toFixed(1)}`;
-    }).join(' ');
-    line.setAttribute('points', pts);
+    line.setAttribute('points', sparkPoints(sparkBuckets, 120, 26, 24, 2)); // lib.js
     if (rate) rate.textContent = `${sparkBuckets[SPARK_BUCKETS - 1]}/s`;
   }
 
   setInterval(() => { sparkAdvance(); drawSpark(); }, 1000);
-
-  function eventKey(e) {
-    return `${e.ts}|${e.pid}|${e.kind}|${e.detail || e.path || e.remote_host || ''}`;
-  }
 
   // Count events the poll path surfaced that SSE didn't announce (fallback
   // mode), so the sparkline stays honest when push is unavailable.
@@ -704,45 +686,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }).join('');
   }
 
-  // Evidence chain: parse the correlator's evidence sentences into the causal
-  // nodes they describe (sensitive read → egress connection → …) and append a
-  // verdict node. Unrecognized sentences fall back to a raw node so the audit
-  // truth is never hidden by a parser gap.
-  function buildEvidenceChain(flag) {
-    const nodes = [];
-    const ts = (s) => {
-      const d = Date.parse(s);
-      return isNaN(d) ? '' : new Date(d).toLocaleTimeString([], { hour12: false });
-    };
-    for (const ev of (flag.evidence || [])) {
-      let m;
-      if ((m = ev.match(/^(.*?) \(pid (\d+)\) read (.+) at (.+)$/))) {
-        nodes.push({ icon: 'i-key', cls: 'cn-read', label: m[3], sub: `sensitive read · ${ts(m[4])}` });
-      } else if ((m = ev.match(/^then connected to (.+:\d+) at (.+)$/))) {
-        nodes.push({ icon: 'i-globe', cls: 'cn-egress', label: m[1], sub: `egress · ${ts(m[2])}` });
-      } else if ((m = ev.match(/accessed keychain file (.+) at (.+)$/))) {
-        nodes.push({ icon: 'i-key', cls: 'cn-read', label: m[1], sub: `keychain access · ${ts(m[2])}` });
-      } else if ((m = ev.match(/executed (.+) at (.+)$/))) {
-        nodes.push({ icon: 'i-power', cls: 'cn-read', label: m[1], sub: `keychain CLI · ${ts(m[2])}` });
-      } else if ((m = ev.match(/modified TCC service '(.+)' at (.+)$/))) {
-        nodes.push({ icon: 'i-alert', cls: 'cn-read', label: `TCC: ${m[1]}`, sub: `privacy tamper · ${ts(m[2])}` });
-      } else if ((m = ev.match(/^Local proxy detected security violation '(.+)' while connecting to (.+)$/))) {
-        nodes.push({ icon: 'i-shield', cls: 'cn-read', label: m[1], sub: 'payload inspection' });
-        nodes.push({ icon: 'i-globe', cls: 'cn-egress', label: m[2], sub: 'destination' });
-      } else {
-        nodes.push({ icon: 'i-alert', cls: '', label: ev, sub: '' });
-      }
-    }
-    if (nodes.length === 0) return nodes;
-    nodes.push({
-      icon: flag.severity >= 3 ? 'i-alert' : 'i-shield',
-      cls: flag.severity >= 3 ? 'cn-verdict-bad' : 'cn-verdict-warn',
-      label: flag.severity >= 3 ? 'Critical flag raised' : 'Flag raised',
-      sub: flag.rule || ''
-    });
-    return nodes;
-  }
-
   function renderEvents() {
     const container = document.getElementById('events-container');
     const events = telemetryData.eventsView || [];
@@ -763,9 +706,9 @@ document.addEventListener('DOMContentLoaded', () => {
       else if (e.kind === 9) { kindLabel = 'PROXY HIT'; kindClass = 'proxy'; }
       else if (e.kind === 5) { kindLabel = 'NET CONN'; kindClass = 'conn'; }
 
-      // 24h clock keeps the 68px time column single-line ("16:03:58" fits;
-      // "4:03:58 PM" wraps).
-      const timeStr = new Date(e.ts).toLocaleTimeString([], { hour12: false });
+      // fmtTime (lib.js) keeps the 68px time column single-line and
+      // locale-proof ("16:03:58", always zero-padded).
+      const timeStr = fmtTime(new Date(e.ts));
       const detailStr = e.detail || e.path || (e.remote_host ? `${e.remote_host}:${e.remote_port}` : '');
 
       // Animate only events that weren't in the previous render — the whole
@@ -850,29 +793,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   };
 
-  function parseMarkdownToHTML(md) {
-    if (!md) return '';
-    let html = escapeHTML(md);
-
-    // Code blocks
-    html = html.replace(/```([\s\S]*?)```/g, (_, code) => `<pre class="md-codeblock"><code>${code}</code></pre>`);
-    // Inline code
-    html = html.replace(/`([^`]+)`/g, '<code class="md-inline-code">$1</code>');
-    // Headers
-    html = html.replace(/^### (.*$)/gim, '<h3>$1</h3>');
-    html = html.replace(/^## (.*$)/gim, '<h2>$1</h2>');
-    html = html.replace(/^# (.*$)/gim, '<h1>$1</h1>');
-    // Bold
-    html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-    // Bullet lists
-    html = html.replace(/^\- (.*$)/gim, '<li>$1</li>');
-    html = html.replace(/(<li>.*<\/li>)/s, '<ul>$1</ul>');
-    // Paragraphs
-    html = html.replace(/\n\n/g, '<br/><br/>');
-
-    return `<div class="markdown-view">${html}</div>`;
-  }
-
   function showToast(msg, type = 'info') {
     const container = document.getElementById('toast-container');
     const toast = document.createElement('div');
@@ -882,15 +802,6 @@ document.addEventListener('DOMContentLoaded', () => {
     setTimeout(() => {
       toast.remove();
     }, 4000);
-  }
-
-  function escapeHTML(str) {
-    if (!str) return '';
-    return String(str)
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;');
   }
 
   // Live updates: SSE push when the endpoint is available, with a 2s poll as
