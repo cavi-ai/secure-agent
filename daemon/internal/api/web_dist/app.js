@@ -150,6 +150,9 @@ document.addEventListener('DOMContentLoaded', () => {
   // Filter changes re-render with deeper-history rows that are "new" to the
   // view but not to the user — suppress the fresh animation for that render.
   let suppressFreshOnce = false;
+  // Session drill-down: set from a flag card ("view session in timeline"),
+  // filters the timeline client-side (lib.js filterEventsBySession).
+  let timelineSession = null;
 
   // Firewall diff: which rules gained blocked/would-block counts since the
   // last render (i.e. a fresh interception).
@@ -673,11 +676,14 @@ document.addEventListener('DOMContentLoaded', () => {
         <button class="flag-head" onclick="this.parentElement.classList.toggle('expanded');this.setAttribute('aria-expanded',this.parentElement.classList.contains('expanded'))" aria-expanded="${i === 0}">
           <svg class="icon flag-ico"><use href="#i-alert"/></svg>
           <span class="flag-rule-text">${escapeHTML(f.rule)} — ${escapeHTML(f.agent)} (PID ${f.pid})</span>
-          ${f.session_id ? `<span class="flag-session">session ${escapeHTML(String(f.session_id).slice(0, 8))}</span>` : ''}
+          ${f.session_id ? `<span class="flag-session">session ${escapeHTML(sessionShort(f.session_id))}</span>` : ''}
           <svg class="icon flag-chev"><use href="#i-arrow"/></svg>
         </button>
         <div class="flag-detail"><div class="flag-detail-inner">
           ${chainHTML}
+          ${f.session_id ? `<div class="flag-actions-row">
+            <button class="btn btn-ghost btn-sm" onclick="filterTimelineToSession('${escapeHTML(f.session_id)}')"><svg class="icon"><use href="#i-activity"/></svg><span>View session in timeline</span></button>
+          </div>` : ''}
           <div class="flag-evidence">
             ${(f.evidence || []).map(ev => `<div>${escapeHTML(ev)}</div>`).join('')}
           </div>
@@ -688,10 +694,22 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function renderEvents() {
     const container = document.getElementById('events-container');
-    const events = telemetryData.eventsView || [];
+    const allEvents = telemetryData.eventsView || [];
+    const events = filterEventsBySession(allEvents, timelineSession); // lib.js
+
+    // Session filter chip in the panel head mirrors the current drill-down.
+    const chip = document.getElementById('session-filter');
+    if (chip) {
+      chip.hidden = !timelineSession;
+      if (timelineSession) {
+        document.getElementById('session-filter-id').textContent = `${sessionShort(timelineSession)} · ${events.length}`;
+      }
+    }
 
     if (events.length === 0) {
-      const msg = isEventsFiltered() ? 'No events match the current filter' : 'No system events logged';
+      const msg = timelineSession
+        ? `No events for session ${sessionShort(timelineSession)} in the loaded window`
+        : isEventsFiltered() ? 'No events match the current filter' : 'No system events logged';
       container.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-activity"/></svg><span>${msg}</span></div>`;
       prevEventKeys = new Set();
       firstEventRender = false;
@@ -792,6 +810,26 @@ document.addEventListener('DOMContentLoaded', () => {
       showToast(`Error promoting “${rule}”: ${err}`, 'danger');
     }
   };
+
+  // Session drill-down: jump from a flag to just its harness session's events.
+  window.filterTimelineToSession = function(sid) {
+    timelineSession = sid;
+    suppressFreshOnce = true;
+    renderEvents();
+    const el = document.getElementById('events-container');
+    if (el && el.scrollIntoView) {
+      el.scrollIntoView({ behavior: reducedMotion ? 'auto' : 'smooth', block: 'nearest' });
+    }
+  };
+
+  window.clearTimelineSession = function() {
+    timelineSession = null;
+    suppressFreshOnce = true;
+    renderEvents();
+  };
+
+  const btnSessionClear = document.getElementById('session-clear');
+  if (btnSessionClear) btnSessionClear.addEventListener('click', () => window.clearTimelineSession());
 
   function showToast(msg, type = 'info') {
     const container = document.getElementById('toast-container');

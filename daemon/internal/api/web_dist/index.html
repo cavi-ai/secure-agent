@@ -218,8 +218,12 @@
         <section class="panel panel-grow">
           <div class="panel-head">
             <h2><svg class="icon"><use href="#i-activity"/></svg>Event timeline</h2>
-            <div class="head-filters">
-              <select id="event-filter" class="select">
+             <div class="head-filters">
+               <span class="session-filter" id="session-filter" hidden>
+                 session <b id="session-filter-id"></b>
+                 <button class="session-clear" id="session-clear" title="Show all sessions"><svg class="icon"><use href="#i-close"/></svg></button>
+               </span>
+               <select id="event-filter" class="select">
                 <option value="all">All events</option>
                 <option value="8">Tool use</option>
                 <option value="9">Proxy hits</option>
@@ -241,7 +245,6 @@
       </div>
     </main>
   </div>
-
   <!-- Incident report modal -->
   <dialog id="report-modal" class="modal">
     <div class="modal-head">

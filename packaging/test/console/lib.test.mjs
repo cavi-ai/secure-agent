@@ -20,6 +20,7 @@ const {
   escapeHTML, fmtTime, eventKey,
   advanceBuckets, bucketIndexFor, sparkPoints,
   parseMarkdownToHTML, buildEvidenceChain,
+  sessionShort, filterEventsBySession,
 } = ctx;
 
 // ---------- escapeHTML ----------
@@ -166,4 +167,25 @@ test('chain: unknown evidence degrades to a raw node, never dropped', () => {
 test('chain: empty evidence yields no nodes (no dangling verdict)', () => {
   // Note: the returned array is from the VM realm — compare structurally.
   assert.equal(buildEvidenceChain({ rule: 'x', severity: 3, evidence: [] }).length, 0);
+});
+
+// ---------- session helpers ----------
+
+test('sessionShort: first 8 chars, null-safe', () => {
+  assert.equal(sessionShort('7f3a9c21-4b2e-4a1d-9c55-2e8f0d1a3b77'), '7f3a9c21');
+  assert.equal(sessionShort('abc'), 'abc');
+  assert.equal(sessionShort(null), '');
+  assert.equal(sessionShort(12345678), '12345678');
+});
+
+test('filterEventsBySession: keeps only the session, null clears the filter', () => {
+  const events = [
+    { ts: '1', session_id: 'aaa' },
+    { ts: '2', session_id: 'bbb' },
+    { ts: '3', session_id: 'aaa' },
+    { ts: '4' }, // no session at all
+  ];
+  assert.deepEqual(filterEventsBySession(events, 'aaa').map(e => e.ts), ['1', '3']);
+  assert.equal(filterEventsBySession(events, null).length, 4);
+  assert.equal(filterEventsBySession(null, 'aaa').length, 0); // VM-realm array: compare structurally
 });

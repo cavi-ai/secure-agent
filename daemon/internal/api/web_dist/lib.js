@@ -26,6 +26,20 @@ function eventKey(e) {
   return `${e.ts}|${e.pid}|${e.kind}|${e.detail || e.path || e.remote_host || ''}`;
 }
 
+// sessionShort: the display form of a harness session id (first 8 chars),
+// shared by the flag card chip and the timeline filter chip.
+function sessionShort(id) {
+  return String(id || '').slice(0, 8);
+}
+
+// filterEventsBySession: the timeline's session drill-down. Client-side over
+// the already-fetched window — the events API has no session filter, and the
+// loaded window is what the timeline can show anyway.
+function filterEventsBySession(events, sessionId) {
+  if (!sessionId) return events || [];
+  return (events || []).filter(e => e.session_id === sessionId);
+}
+
 // ---------- sparkline (rolling events/sec window) ----------
 
 // Age the bucket ring by `steps` seconds (newest bucket is last). Steps
