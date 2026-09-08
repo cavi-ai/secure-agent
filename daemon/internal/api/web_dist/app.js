@@ -673,14 +673,74 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
-    container.innerHTML = flags.map(f => `
-      <div class="flag-card ${f.severity >= 3 ? 'sev3' : ''}">
-        <div class="flag-rule"><svg class="icon"><use href="#i-alert"/></svg>${escapeHTML(f.rule)} — ${escapeHTML(f.agent)} (PID ${f.pid})</div>
-        <div class="flag-evidence">
-          ${(f.evidence || []).map(ev => `<div>${escapeHTML(ev)}</div>`).join('')}
-        </div>
-      </div>
-    `).join('');
+    container.innerHTML = flags.map((f, i) => {
+      const chain = buildEvidenceChain(f);
+      const chainHTML = chain.length
+        ? `<div class="chain">${chain.map((n, j) => `
+            ${j > 0 ? '<span class="chain-link" aria-hidden="true"></span>' : ''}
+            <div class="chain-node ${n.cls}">
+              <span class="cn-icon"><svg class="icon"><use href="#${n.icon}"/></svg></span>
+              <span class="cn-body">
+                <span class="cn-label">${escapeHTML(n.label)}</span>
+                <span class="cn-sub">${escapeHTML(n.sub)}</span>
+              </span>
+            </div>`).join('')}</div>`
+        : '';
+      return `
+      <div class="flag-card ${f.severity >= 3 ? 'sev3' : ''}${i === 0 ? ' expanded' : ''}">
+        <button class="flag-head" onclick="this.parentElement.classList.toggle('expanded');this.setAttribute('aria-expanded',this.parentElement.classList.contains('expanded'))" aria-expanded="${i === 0}">
+          <svg class="icon flag-ico"><use href="#i-alert"/></svg>
+          <span class="flag-rule-text">${escapeHTML(f.rule)} — ${escapeHTML(f.agent)} (PID ${f.pid})</span>
+          ${f.session_id ? `<span class="flag-session">session ${escapeHTML(String(f.session_id).slice(0, 8))}</span>` : ''}
+          <svg class="icon flag-chev"><use href="#i-arrow"/></svg>
+        </button>
+        <div class="flag-detail"><div class="flag-detail-inner">
+          ${chainHTML}
+          <div class="flag-evidence">
+            ${(f.evidence || []).map(ev => `<div>${escapeHTML(ev)}</div>`).join('')}
+          </div>
+        </div></div>
+      </div>`;
+    }).join('');
+  }
+
+  // Evidence chain: parse the correlator's evidence sentences into the causal
+  // nodes they describe (sensitive read → egress connection → …) and append a
+  // verdict node. Unrecognized sentences fall back to a raw node so the audit
+  // truth is never hidden by a parser gap.
+  function buildEvidenceChain(flag) {
+    const nodes = [];
+    const ts = (s) => {
+      const d = Date.parse(s);
+      return isNaN(d) ? '' : new Date(d).toLocaleTimeString([], { hour12: false });
+    };
+    for (const ev of (flag.evidence || [])) {
+      let m;
+      if ((m = ev.match(/^(.*?) \(pid (\d+)\) read (.+) at (.+)$/))) {
+        nodes.push({ icon: 'i-key', cls: 'cn-read', label: m[3], sub: `sensitive read · ${ts(m[4])}` });
+      } else if ((m = ev.match(/^then connected to (.+:\d+) at (.+)$/))) {
+        nodes.push({ icon: 'i-globe', cls: 'cn-egress', label: m[1], sub: `egress · ${ts(m[2])}` });
+      } else if ((m = ev.match(/accessed keychain file (.+) at (.+)$/))) {
+        nodes.push({ icon: 'i-key', cls: 'cn-read', label: m[1], sub: `keychain access · ${ts(m[2])}` });
+      } else if ((m = ev.match(/executed (.+) at (.+)$/))) {
+        nodes.push({ icon: 'i-power', cls: 'cn-read', label: m[1], sub: `keychain CLI · ${ts(m[2])}` });
+      } else if ((m = ev.match(/modified TCC service '(.+)' at (.+)$/))) {
+        nodes.push({ icon: 'i-alert', cls: 'cn-read', label: `TCC: ${m[1]}`, sub: `privacy tamper · ${ts(m[2])}` });
+      } else if ((m = ev.match(/^Local proxy detected security violation '(.+)' while connecting to (.+)$/))) {
+        nodes.push({ icon: 'i-shield', cls: 'cn-read', label: m[1], sub: 'payload inspection' });
+        nodes.push({ icon: 'i-globe', cls: 'cn-egress', label: m[2], sub: 'destination' });
+      } else {
+        nodes.push({ icon: 'i-alert', cls: '', label: ev, sub: '' });
+      }
+    }
+    if (nodes.length === 0) return nodes;
+    nodes.push({
+      icon: flag.severity >= 3 ? 'i-alert' : 'i-shield',
+      cls: flag.severity >= 3 ? 'cn-verdict-bad' : 'cn-verdict-warn',
+      label: flag.severity >= 3 ? 'Critical flag raised' : 'Flag raised',
+      sub: flag.rule || ''
+    });
+    return nodes;
   }
 
   function renderEvents() {
