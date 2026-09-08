@@ -22,6 +22,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificat
         setupStatusItem()
         setupPopover()
         state.onChange = { [weak self] in self?.updateStatusIcon() }
+        state.onNewCriticalFlag = { [weak self] in self?.flashStatusBadge() }
         state.start()
 
         Task {
@@ -115,6 +116,27 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificat
         img?.isTemplate = true
         button.image = img
         button.title = count
+    }
+
+    // MARK: - Critical-flag badge pulse
+
+    private var flashTask: Task<Void, Never>?
+
+    /// Briefly alternate the status-item title between "!" and nothing, then
+    /// restore the steady-state icon. A critical flag means a secret may have
+    /// just left the machine — the menu bar must pull the eye even with the
+    /// popover closed, without a permanent angry badge.
+    private func flashStatusBadge() {
+        flashTask?.cancel()
+        flashTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            for i in 0..<6 {
+                if Task.isCancelled { break }
+                self.statusItem?.button?.title = (i % 2 == 0) ? " !" : ""
+                try? await Task.sleep(nanoseconds: 500_000_000)
+            }
+            self.updateStatusIcon()
+        }
     }
 
     // MARK: - Notifications

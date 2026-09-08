@@ -20,6 +20,10 @@ public final class AppState: ObservableObject {
 
     /// Called after every state change so the AppDelegate can refresh the icon.
     public var onChange: (() -> Void)?
+    /// Called when a severity-3 flag arrives after the baseline — the
+    /// AppDelegate flashes the status-item badge so a critical leak attempt
+    /// is noticed even when the popover is closed.
+    public var onNewCriticalFlag: (() -> Void)?
 
     private let client: DaemonClientProtocol
     /// Notification sink — a closure so tests can count deliveries instead of
@@ -217,11 +221,14 @@ public final class AppState: ObservableObject {
             didSeedNotificationBaseline = true
             return
         }
+        var sawCritical = false
         for flag in flags where flag.severity >= 2 {
             if notifiedFlagIDs.insert(flag.id).inserted {
                 notify(flag)
+                if flag.severity >= 3 { sawCritical = true }
             }
         }
+        if sawCritical { onNewCriticalFlag?() }
         // Bound the dedupe set: it only ever inserts otherwise.
         if notifiedFlagIDs.count > 500 {
             let live = Set(flags.map(\.id))
@@ -428,6 +435,36 @@ public final class AppState: ObservableObject {
         s.flags = [FlagModel(id: "f1", rule: "proxy-secret-leak", severity: 3, ts: "",
                              pid: 6033, agent: "cursor",
                              evidence: ["anthropic-key detected in request body to logs.example.com"])]
+        s.connected = true
+        return s
+    }
+
+    /// All-clear hero state for previews/snapshots.
+    public static func previewProtected() -> AppState {
+        let s = AppState()
+        s.status = StatusResponse(
+            running: true, uptime: "2h 5m", activeAgents: 1,
+            agents: [AgentSummaryModel(pid: 901, name: "claude", cwd: "/Users/dev/app")],
+            proxyEnabled: true, proxyPort: 8443, uninspectedEgress: 0,
+            firewallStats: ["anthropic-key": RuleStatModel(wouldBlock: 0, blocked: 0, legit: 41, mode: "monitor")])
+        s.connected = true
+        return s
+    }
+
+    /// Attention hero state (would-block + uninspected + a warning flag).
+    public static func previewAttention() -> AppState {
+        let s = AppState()
+        s.status = StatusResponse(
+            running: true, uptime: "2h 5m", activeAgents: 1,
+            agents: [AgentSummaryModel(pid: 901, name: "cursor", cwd: "/Users/dev/web-app")],
+            proxyEnabled: true, proxyPort: 8443, uninspectedEgress: 2,
+            firewallStats: [
+                "anthropic-key": RuleStatModel(wouldBlock: 3, blocked: 0, legit: 12, mode: "monitor"),
+                "aws-key": RuleStatModel(wouldBlock: 0, blocked: 0, legit: 5, mode: "block"),
+            ])
+        s.flags = [FlagModel(id: "f9", rule: "keychain-access", severity: 2, ts: "",
+                             pid: 901, agent: "cursor",
+                             evidence: ["cursor (pid 901) accessed keychain file login.keychain-db at 2026-09-08T09:00:00Z"])]
         s.connected = true
         return s
     }
