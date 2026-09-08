@@ -35,12 +35,71 @@ struct ConsoleView: View {
     private var sections: some View {
         VStack(alignment: .leading, spacing: 16) {
             if let err = state.lastError { errorBanner(err) }
+            hero
+            if !state.incidents.isEmpty { incidentsSection }
             firewallSection
             guardSection
-            if !state.incidents.isEmpty { incidentsSection }
             if !state.activeAgents.isEmpty { agentsSection }
             if !state.flags.isEmpty { flagsSection }
         }
+    }
+
+    // MARK: hero
+
+    /// The one-glance answer, mirroring the web console's posture banner:
+    /// Protected / Attention / Action needed (+ Disconnected). Everything
+    /// below the hero is drill-down; the hero is what most opens should need.
+    private var hero: some View {
+        let m = heroModel
+        return HStack(spacing: 12) {
+            Image(systemName: m.icon)
+                .font(.system(size: 20, weight: .semibold))
+                .foregroundStyle(m.color)
+                .frame(width: 38, height: 38)
+                .background(m.color.opacity(0.14))
+                .clipShape(RoundedRectangle(cornerRadius: 9))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(m.title).font(.system(size: 14, weight: .bold))
+                Text(m.subtitle).font(.system(size: 11)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .background(m.color.opacity(0.07))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .animation(.easeInOut(duration: 0.25), value: m.title)
+    }
+
+    private var heroModel: (icon: String, color: Color, title: String, subtitle: String) {
+        if !state.connected {
+            return ("shield.slash", .secondary, "Disconnected",
+                    "Monitoring paused — the daemon is unreachable")
+        }
+        let criticalFlags = state.flags.filter { $0.severity >= 3 }.count
+        if !state.incidents.isEmpty || criticalFlags > 0 {
+            var parts: [String] = []
+            if !state.incidents.isEmpty {
+                parts.append("\(state.incidents.count) incident\(state.incidents.count == 1 ? "" : "s")")
+            }
+            if criticalFlags > 0 {
+                parts.append("\(criticalFlags) critical flag\(criticalFlags == 1 ? "" : "s")")
+            }
+            return ("exclamationmark.shield.fill", .bad, "Action needed",
+                    parts.joined(separator: " · "))
+        }
+        let warnFlags = state.flags.filter { $0.severity >= 2 }.count
+        if warnFlags > 0 || state.uninspectedEgress > 0 || state.firewallWouldBlock > 0 {
+            var parts: [String] = []
+            if warnFlags > 0 { parts.append("\(warnFlags) flag\(warnFlags == 1 ? "" : "s") to review") }
+            if state.firewallWouldBlock > 0 { parts.append("\(state.firewallWouldBlock) would-block") }
+            if state.uninspectedEgress > 0 { parts.append("\(state.uninspectedEgress) uninspected") }
+            return ("exclamationmark.triangle.fill", .warn, "Attention",
+                    parts.joined(separator: " · "))
+        }
+        let n = state.activeAgents.count
+        return ("checkmark.shield.fill", .ok, "Protected",
+                "\(n) agent\(n == 1 ? "" : "s") monitored · firewall \(state.isEnforcing ? "enforcing" : "monitoring")")
     }
 
     // MARK: incidents
@@ -136,24 +195,33 @@ struct ConsoleView: View {
                         .font(.system(size: 11)).foregroundStyle(Color.warn)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                ForEach(state.firewallRules) { rule in
-                    HStack {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(rule.id).font(.system(size: 12, weight: .semibold, design: .monospaced))
-                            Text("\(rule.stat.wouldBlock) would-block · \(rule.stat.blocked) blocked")
-                                .font(.system(size: 10)).foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        if rule.stat.mode == "block" {
-                            Text("BLOCKING").font(.system(size: 9, weight: .bold))
-                                .foregroundStyle(Color.ok)
-                                .padding(.horizontal, 7).padding(.vertical, 4)
-                                .background(Color.ok.opacity(0.14)).clipShape(Capsule())
-                        } else {
-                            Button { state.promote(rule: rule.id) } label: {
-                                Label("Block", systemImage: "arrow.up.circle.fill").font(.system(size: 11, weight: .semibold))
+                // Condensed: only rules that have seen suspicious traffic earn a
+                // row. Quiet rules (legit traffic only) collapse into one line —
+                // the popover answers questions, it doesn't host dashboards.
+                let active = state.firewallRules.filter { $0.stat.wouldBlock > 0 || $0.stat.blocked > 0 }
+                if active.isEmpty {
+                    Text("\(state.firewallRules.count) rule\(state.firewallRules.count == 1 ? "" : "s") active · no suspicious egress")
+                        .font(.system(size: 11)).foregroundStyle(.tertiary)
+                } else {
+                    ForEach(active) { rule in
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(rule.id).font(.system(size: 12, weight: .semibold, design: .monospaced))
+                                Text("\(rule.stat.wouldBlock) would-block · \(rule.stat.blocked) blocked")
+                                    .font(.system(size: 10)).foregroundStyle(.secondary)
                             }
-                            .buttonStyle(.borderedProminent).tint(.brand).controlSize(.small)
+                            Spacer()
+                            if rule.stat.mode == "block" {
+                                Text("BLOCKING").font(.system(size: 9, weight: .bold))
+                                    .foregroundStyle(Color.ok)
+                                    .padding(.horizontal, 7).padding(.vertical, 4)
+                                    .background(Color.ok.opacity(0.14)).clipShape(Capsule())
+                            } else {
+                                Button { state.promote(rule: rule.id) } label: {
+                                    Label("Block", systemImage: "arrow.up.circle.fill").font(.system(size: 11, weight: .semibold))
+                                }
+                                .buttonStyle(.borderedProminent).tint(.brand).controlSize(.small)
+                            }
                         }
                     }
                 }
@@ -175,9 +243,15 @@ struct ConsoleView: View {
         VStack(alignment: .leading, spacing: 8) {
             sectionHeader("Directory guard", trailing: "\(state.guardRules.count)")
 
-            // Per-rule policy: monitor / prompt / deny, persisted to
-            // guard-modes.json (the file the hook reads on every tool call).
-            guardPolicyEditor
+            // Per-rule policy lives behind a disclosure: the popover answers
+            // "am I protected / did anything happen" at a glance; the
+            // monitor/prompt/deny editor is opened deliberately.
+            DisclosureGroup(isExpanded: $manageRulesExpanded) {
+                guardPolicyEditor.padding(.top, 6)
+            } label: {
+                Text("Manage rules…").font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
 
             if state.guardRules.isEmpty {
                 Text("No guard decisions yet — sensitive paths are prompted on first access")
@@ -296,6 +370,7 @@ struct ConsoleView: View {
     }
 
     @State private var killTarget: AgentSummaryModel?
+    @State private var manageRulesExpanded = false
 
     // MARK: flags
 
