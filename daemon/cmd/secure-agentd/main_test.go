@@ -45,11 +45,14 @@ func TestFullBusCorrelatorStorePipeline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer st.Close()
+	// Teardown order is load-bearing on every path (Fatalf included): the
+	// consumer goroutine must be fully drained (bus closed + done) BEFORE the
+	// store closes, or in-flight PutEvent/PutFlag calls write into a closed
+	// database ("sql: database is closed" — seen as CI flake on Linux).
+	t.Cleanup(func() { st.Close() })
 
 	cfg, _ := config.Load("/nonexistent")
 	b := bus.New(64)
-	defer b.Close()
 
 	tg := agents.New(cfg, fakeProcSource{})
 	tg.Refresh()
@@ -69,6 +72,10 @@ func TestFullBusCorrelatorStorePipeline(t *testing.T) {
 		}
 		close(done)
 	}()
+	t.Cleanup(func() {
+		b.Close()
+		<-done
+	})
 
 	now := time.Now()
 	// 1. Publish sensitive file read
@@ -90,18 +97,24 @@ func TestFullBusCorrelatorStorePipeline(t *testing.T) {
 		RemotePort: 443,
 	})
 
-	time.Sleep(100 * time.Millisecond)
-
-	flags := st.RecentFlags(10)
+	// The consumer goroutine processes the pair asynchronously; a fixed sleep
+	// races the scheduler on slow/loaded runners (0 flags → spurious FAIL).
+	// Poll the store until the flag lands or the deadline expires.
+	var flags []model.Flag
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		flags = st.RecentFlags(10)
+		if len(flags) == 1 || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	if len(flags) != 1 {
 		t.Fatalf("expected 1 flag in store, got %d", len(flags))
 	}
 	if flags[0].Rule != "sensitive-read-then-connect" {
 		t.Fatalf("rule = %s, want sensitive-read-then-connect", flags[0].Rule)
 	}
-
-	b.Close()
-	<-done
 }
 
 func TestEndToEndSmokeScenario(t *testing.T) {
@@ -129,10 +142,11 @@ func TestEndToEndSmokeScenario(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer st.Close()
+	// Same teardown contract as the pipeline test above: drain the consumer
+	// goroutine (bus closed + done) before the store closes, on every path.
+	t.Cleanup(func() { st.Close() })
 
 	b := bus.New(256)
-	defer b.Close()
 
 	tg := agents.New(cfg, agents.NewProcSource())
 	tg.Refresh()
@@ -144,6 +158,7 @@ func TestEndToEndSmokeScenario(t *testing.T) {
 	defer cancel()
 
 	sub := b.Subscribe()
+	consumerDone := make(chan struct{})
 	go func() {
 		for e := range sub {
 			st.PutEvent(e)
@@ -151,7 +166,12 @@ func TestEndToEndSmokeScenario(t *testing.T) {
 				st.PutFlag(fl)
 			}
 		}
+		close(consumerDone)
 	}()
+	t.Cleanup(func() {
+		b.Close()
+		<-consumerDone
+	})
 
 	statusFn := func() api.Status { return api.Status{Running: true} }
 	apiServer := api.New(sockPath, st, &realKiller{}, statusFn)
