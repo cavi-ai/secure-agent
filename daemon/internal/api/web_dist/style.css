@@ -192,6 +192,17 @@ body {
   padding: 7px 10px; cursor: pointer;
 }
 .head-filters { display: flex; gap: 6px; }
+.session-filter {
+  display: inline-flex; align-items: center; gap: 6px;
+  font: 600 0.72rem/1 var(--mono); color: var(--brand-2);
+  background: var(--brand-bg); padding: 5px 8px; border-radius: var(--r-sm);
+}
+.session-filter[hidden] { display: none; }
+.session-clear {
+  display: inline-flex; padding: 2px; border: none; border-radius: 4px;
+  background: transparent; color: var(--brand-2); cursor: pointer; font-size: 0.8rem;
+}
+.session-clear:hover { background: var(--bad-bg); color: var(--bad); }
 .filter-bar { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
 .filter-bar .select { flex: 1 1 auto; min-width: 0; }
 
@@ -265,6 +276,7 @@ body {
 .flag-card.expanded .flag-detail { grid-template-rows: 1fr; }
 .flag-detail-inner { overflow: hidden; min-height: 0; }
 .flag-evidence { margin-top: 8px; display: flex; flex-direction: column; gap: 3px; }
+.flag-actions-row { display: flex; gap: 8px; margin-top: 10px; }
 .flag-evidence div { font: 0.76rem/1.4 var(--mono); color: var(--tx-3); padding-left: 14px; position: relative; }
 .flag-evidence div::before { content: "↳"; position: absolute; left: 0; color: var(--line-2); }
 
