@@ -373,7 +373,7 @@ document.addEventListener('DOMContentLoaded', () => {
         prev && ((st.blocked || 0) > (prev.blocked || 0) || (st.would_block || 0) > (prev.would_block || 0));
       const action = blocking
         ? `<span class="mode-chip block">blocking</span>`
-        : `<button class="btn btn-primary btn-sm" onclick="promoteRule('${escapeHTML(r)}')"><svg class="icon"><use href="#i-arrow"/></svg><span>Promote to block</span></button>`;
+        : `<button class="btn btn-primary btn-sm" onclick="promoteRule('${escapeHTML(escapeJS(r))}')"><svg class="icon"><use href="#i-arrow"/></svg><span>Promote to block</span></button>`;
       return `
         <div class="fw-rule${grew ? ' fw-flash' : ''}">
           <div class="fw-rule-main">
@@ -418,7 +418,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const sev = it.severity >= 3 ? 's3' : it.severity === 2 ? 's2' : 's1';
       let link = '';
       if (it.kind === 'flag') link = `<a href="#flags-list">view evidence</a>`;
-      if (it.kind === 'incident') link = `<a href="#" onclick="openIncidentReport('${escapeHTML(it.id)}');return false;">view report</a>`;
+      if (it.kind === 'incident') link = `<a href="#" onclick="openIncidentReport('${escapeHTML(escapeJS(it.id))}');return false;">view report</a>`;
       if (it.kind === 'guard_pending') link = `<span>resolve it in the menu bar app</span>`;
       if (it.kind === 'collector_down') link = `<span>— ${escapeHTML(it.detail || 'collector stopped')}</span>`;
       if (it.kind === 'uninspected_egress') link = `<a href="#firewall-container">see firewall</a>`;
@@ -481,9 +481,9 @@ document.addEventListener('DOMContentLoaded', () => {
         <div class="incident-summary">${escapeHTML(inc.summary)}</div>
         ${wf.resolution_note ? `<div class="incident-note">Resolution: ${escapeHTML(wf.resolution_note)}</div>` : ''}
         <div class="incident-actions">
-          <button class="btn btn-ghost" onclick="openIncidentReport('${escapeHTML(inc.id)}')"><svg class="icon"><use href="#i-doc"/></svg><span>View report</span></button>
-          ${status === 'open' ? `<button class="btn btn-ghost" onclick="setIncidentStatus('${escapeHTML(inc.id)}','acknowledged')"><svg class="icon"><use href="#i-history"/></svg><span>Acknowledge</span></button>` : ''}
-          ${status !== 'resolved' ? `<button class="btn btn-ghost" onclick="setIncidentStatus('${escapeHTML(inc.id)}','resolved')"><svg class="icon"><use href="#i-shield"/></svg><span>Resolve</span></button>` : ''}
+          <button class="btn btn-ghost" onclick="openIncidentReport('${escapeHTML(escapeJS(inc.id))}')"><svg class="icon"><use href="#i-doc"/></svg><span>View report</span></button>
+          ${status === 'open' ? `<button class="btn btn-ghost" onclick="setIncidentStatus('${escapeHTML(escapeJS(inc.id))}','acknowledged')"><svg class="icon"><use href="#i-history"/></svg><span>Acknowledge</span></button>` : ''}
+          ${status !== 'resolved' ? `<button class="btn btn-ghost" onclick="setIncidentStatus('${escapeHTML(escapeJS(inc.id))}','resolved')"><svg class="icon"><use href="#i-shield"/></svg><span>Resolve</span></button>` : ''}
         </div>
         <div class="rotate-list">
           ${(inc.rotate_list || []).map(item => `
@@ -575,7 +575,7 @@ document.addEventListener('DOMContentLoaded', () => {
     list.innerHTML = sources.map(s => {
       const isUser = s.origin === 'user';
       const remove = isUser
-        ? `<button class="source-remove" title="Stop watching" onclick="removeSource('${encodeURIComponent(s.source)}')"><svg class="icon"><use href="#i-close"/></svg></button>`
+        ? `<button class="source-remove" title="Stop watching" onclick="removeSource('${escapeHTML(escapeJS(s.source))}')"><svg class="icon"><use href="#i-close"/></svg></button>`
         : `<span class="origin-chip config">CONFIG</span>`;
       return `
         <div class="source-item">
@@ -607,8 +607,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   };
 
-  window.removeSource = async function(encoded) {
-    const source = decodeURIComponent(encoded);
+  window.removeSource = async function(source) {
     try {
       const res = await apiFetch('/firewall/sources', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -682,7 +681,7 @@ document.addEventListener('DOMContentLoaded', () => {
         <div class="flag-detail"><div class="flag-detail-inner">
           ${chainHTML}
           ${f.session_id ? `<div class="flag-actions-row">
-            <button class="btn btn-ghost btn-sm" onclick="filterTimelineToSession('${escapeHTML(f.session_id)}')"><svg class="icon"><use href="#i-activity"/></svg><span>View session in timeline</span></button>
+            <button class="btn btn-ghost btn-sm" onclick="filterTimelineToSession('${escapeHTML(escapeJS(f.session_id))}')"><svg class="icon"><use href="#i-activity"/></svg><span>View session in timeline</span></button>
           </div>` : ''}
           <div class="flag-evidence">
             ${(f.evidence || []).map(ev => `<div>${escapeHTML(ev)}</div>`).join('')}

@@ -14,6 +14,24 @@ function escapeHTML(str) {
     .replace(/"/g, '&quot;');
 }
 
+// escapeJS: make a value safe inside a single-quoted JavaScript string
+// literal (the inline onclick handlers). escapeHTML alone is NOT enough
+// there — it doesn't touch the quote or backslash, so a value like
+// ');alert(1);// breaks out of the string and runs as script. Layer this
+// UNDER escapeHTML: JS-string context first, HTML-attribute context second
+// (escapeHTML(escapeJS(value))). Note encodeURIComponent is also not a
+// substitute — it leaves ' and ( ) unescaped.
+function escapeJS(str) {
+  if (str === null || str === undefined) return '';
+  return String(str)
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "\\'")
+    .replace(/\n/g, '\\n')
+    .replace(/\r/g, '\\r')
+    .replace(/\u2028/g, '\\u2028')
+    .replace(/\u2029/g, '\\u2029')
+}
+
 // fmtTime: deterministic local HH:MM:SS. toLocaleTimeString varies by locale
 // (zero-padding, a "24:00" midnight quirk in some), which can re-wrap the
 // 68px timeline column — build the string by hand instead.
