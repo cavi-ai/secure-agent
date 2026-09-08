@@ -5,7 +5,6 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -15,7 +14,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/cavi-ai/secure-agent/daemon/internal/agentenv"
 	"github.com/cavi-ai/secure-agent/daemon/internal/agents"
 	"github.com/cavi-ai/secure-agent/daemon/internal/api"
 	"github.com/cavi-ai/secure-agent/daemon/internal/bus"
@@ -25,7 +23,6 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/firewall"
 	"github.com/cavi-ai/secure-agent/daemon/internal/fleet"
 	"github.com/cavi-ai/secure-agent/daemon/internal/guard"
-	"github.com/cavi-ai/secure-agent/daemon/internal/intel"
 	"github.com/cavi-ai/secure-agent/daemon/internal/proxy"
 	"github.com/cavi-ai/secure-agent/daemon/internal/sensitive"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
@@ -94,30 +91,9 @@ func main() {
 		fleetPub.AddSink(sink)
 	}
 
-	// Drain bus and correlate/persist. drainDone closes once every delivered event
-	// has been persisted, so shutdown can wait for it instead of dropping the final,
-	// most-relevant events/flags/incident around a kill or quit.
-	sub := b.Subscribe()
-	analyzer := intel.NewAnalyzer()
-	drainDone := make(chan struct{})
-	go func() {
-		defer close(drainDone)
-		for e := range sub {
-			st.PutEvent(e)
-			flags := correlator.Observe(e)
-			for _, fl := range flags {
-				log.Printf("FLAG TRIGGERED [%d]: %s (pid %d agent %s)", fl.Severity, fl.Rule, fl.PID, fl.Agent)
-				st.PutFlag(fl)
-				fleetPub.Publish(fleet.EventFlag, fl)
-
-				recentEvs := st.RecentEvents(100)
-				report := analyzer.Analyze(fl, recentEvs)
-				st.PutIncident(report)
-				log.Printf("INCIDENT CREATED [%s]: %s (Risk: %s, %d rotate items)", report.ID, report.Summary, report.Risk, len(report.RotateList))
-				fleetPub.Publish(fleet.EventIncident, report)
-			}
-		}
-	}()
+	// Drain bus and correlate/persist (drainDone closes once every delivered
+	// event has been persisted — shutdown waits for it).
+	drainDone := startDrainLoop(b.Subscribe(), st, correlator, fleetPub)
 
 	// Periodic process tagger refresh (1s)
 	go func() {
@@ -133,92 +109,13 @@ func main() {
 		}
 	}()
 
-	// Firewall engine: built once, used by the proxy for egress inspection and
-	// surfaced as per-rule stats in status.
-	fwSalt, saltErr := firewall.LoadSalt(cfg.Firewall.Registry.SaltRef)
-	if saltErr != nil {
-		// Loud degradation: the fingerprint layer is OFF, not silently broken.
-		// (A silently rotated salt orphans every registered fingerprint while
-		// the status page still says the firewall is up.)
-		log.Printf("ERROR: firewall salt unavailable, known-secret fingerprinting disabled: %v", saltErr)
-	}
-	fwEngine, fwErr := firewall.NewEngine(cfg.Firewall, fwSalt)
-	if fwErr != nil {
-		log.Printf("Failed to initialize firewall engine: %v", fwErr)
-	}
-	// Apply any persisted rule-mode overrides (e.g. rules promoted to block in a
-	// previous session) on top of the config defaults.
-	fwModes := firewall.NewModeStore(filepath.Join(filepath.Dir(cfg.Firewall.Registry.SaltRef), "firewall-modes.json"))
-	if fwEngine != nil {
-		for rule, mode := range fwModes.Load() {
-			fwEngine.SetRuleMode(rule, firewall.ParseMode(mode))
-		}
-	}
-
-	// Known-secret fingerprints: config defaults plus any registered by
-	// `secure-agent fingerprint`. Reapplied on demand via /firewall/fingerprints/reload.
-	fpStore := firewall.NewFingerprintStore(filepath.Join(filepath.Dir(cfg.Firewall.Registry.SaltRef), "firewall-fingerprints.json"))
-
-	// User-added ingest sources (registered from the console) persist alongside
-	// the mode and fingerprint overrides, so a source survives a restart without
-	// editing the config overlay.
-	srcStore := firewall.NewSourceStore(filepath.Join(filepath.Dir(cfg.Firewall.Registry.SaltRef), "firewall-sources.json"))
-	reloadFingerprints := func() error {
-		combined := append(append([]config.Fingerprint{}, cfg.Firewall.Registry.Fingerprints...), fpStore.Load()...)
-		if fwEngine != nil {
-			fwEngine.SetFingerprints(combined)
-		}
-		return nil
-	}
-	_ = reloadFingerprints() // apply persisted fingerprints on startup
-
-	// ingestFingerprints scans the configured secret sources, registers their
-	// HMAC fingerprints, and applies them live. Triggered by `secure-agent
-	// fingerprint`.
-	ingestFingerprints := func() ([]string, error) {
-		// Effective sources are computed at call time: the config defaults plus
-		// any user-added sources (expanded here — they are stored raw).
-		sources := append([]string{}, cfg.Firewall.Registry.IngestSources...)
-		for _, s := range srcStore.Load() {
-			sources = append(sources, config.ExpandPath(s))
-		}
-		fps, err := firewall.Ingest(sources, fwSalt)
-		if err != nil {
-			return nil, err
-		}
-		if err := fpStore.Save(fps); err != nil {
-			return nil, err
-		}
-		_ = reloadFingerprints()
-		labels := make([]string, 0, len(fps))
-		for _, fp := range fps {
-			labels = append(labels, fp.Label)
-		}
-		return labels, nil
-	}
+	// Firewall engine + persisted overrides, used by the proxy for egress
+	// inspection and surfaced as per-rule stats in status.
+	fw := setupFirewall(cfg)
 
 	var proxyServer *proxy.ProxyServer
 	if cfg.ProxyEnabled {
-		caMgr, err := proxy.NewCAManager(cfg.ProxyCACertPath, cfg.ProxyCAKeyPath)
-		if err != nil {
-			log.Printf("Failed to initialize Proxy CA Manager: %v", err)
-		} else {
-			proxyServer = proxy.NewProxyServer(cfg.ProxyPort, b, caMgr, fwEngine)
-			// The documented console URL lives on the proxy's loopback HTTP
-			// port; serve the same embedded assets the unix API serves.
-			if h := api.DashboardHandler(); h != nil {
-				proxy.SetDashboardHandler(http.StripPrefix("/dashboard/", h))
-			}
-			// Per-install proxy token: the loopback listener must not be a free
-			// open proxy for other local processes. The token is generated next
-			// to the salt (0600) and embedded in the snippet the user sources.
-			proxyToken := proxy.LoadToken(filepath.Join(filepath.Dir(cfg.Firewall.Registry.SaltRef), "proxy-token"))
-			// Write the opt-in routing snippet into our own config dir. It does
-			// nothing until the user sources it; we never edit their shell rc.
-			if snippetPath, werr := agentenv.WriteSnippet(filepath.Dir(cfg.ProxyCACertPath), cfg.ProxyPort, cfg.ProxyCACertPath, proxyToken); werr == nil {
-				log.Printf("agent routing snippet: %s (source it to route agents through the proxy)", snippetPath)
-			}
-		}
+		proxyServer = setupProxy(cfg, b, fw.Engine)
 	}
 
 	// Supervisor with a shared health registry so /status reports each collector's
@@ -226,27 +123,7 @@ func main() {
 	supReg := supervise.NewRegistry()
 	sup := supervise.New(supReg)
 
-	startTime := time.Now()
-	statusFn := func() api.Status {
-		proxyActive := proxyServer != nil
-		proxyPort := 0
-		if proxyServer != nil {
-			proxyPort = proxyServer.Port()
-		}
-		activeAgents := listActiveAgents(tagger)
-		return api.Status{
-			Running:           true,
-			Version:           api.Version,
-			Uptime:            time.Since(startTime).Truncate(time.Second).String(),
-			ActiveAgents:      len(activeAgents),
-			Agents:            activeAgents,
-			ProxyEnabled:      proxyActive,
-			ProxyPort:         proxyPort,
-			UninspectedEgress: correlator.UninspectedEgressCount(),
-			FirewallStats:     firewallStats(fwEngine),
-			Collectors:        supReg.Snapshot(),
-		}
-	}
+	statusFn := buildStatusFn(proxyServer, tagger, correlator, fw.Engine, supReg, time.Now())
 
 	// Start Control API
 	apiServer := api.New(cfg.SocketPath, st, &realKiller{}, statusFn)
@@ -275,26 +152,15 @@ func main() {
 	}
 
 	apiServer.SetFirewall(api.FirewallControl{
-		Engine:      fwEngine,
-		Modes:       fwModes,
-		Reload:      reloadFingerprints,
-		Ingest:      ingestFingerprints,
-		Sources:     srcStore,
-		BaseSources: cfg.Firewall.Registry.IngestSources,
+		Engine:      fw.Engine,
+		Modes:       fw.Modes,
+		Reload:      fw.Reload,
+		Ingest:      fw.Ingest,
+		Sources:     fw.Sources,
+		BaseSources: fw.BaseSources,
 	})
 
-	// The broker deadline is set 3s shorter than the hook's own deadline: the
-	// hook must always receive an explicit deny from the daemon rather than a
-	// dropped socket, so the server must resolve first.
-	hookDeadlineMS := cfg.DirectoryGuard.PromptDeadlineMS
-	if hookDeadlineMS <= 0 {
-		hookDeadlineMS = 45000
-	}
-	brokerMS := hookDeadlineMS - 3000
-	if brokerMS < 1000 {
-		brokerMS = 1000
-	}
-	guardBroker := guard.NewBroker(time.Duration(brokerMS) * time.Millisecond)
+	guardBroker := guard.NewBroker(time.Duration(guardBrokerMS(cfg.DirectoryGuard.PromptDeadlineMS)) * time.Millisecond)
 	apiServer.SetGuard(guardBroker)
 	apiServer.SetFleetSink(fleetPub)
 	// SSE live feed: each console gets its own bus subscription; unsubscribes
@@ -320,18 +186,6 @@ func main() {
 		}
 	}()
 
-	// Tail targets for transcript scanner
-	home, _ := os.UserHomeDir()
-	tailTargets := []string{
-		filepath.Join(home, ".claude", "logs", "*.jsonl"),
-		filepath.Join(home, ".claude", "projects"),
-		filepath.Join(home, ".cursor", "logs", "*.jsonl"),
-		filepath.Join(home, ".local", "state", "secure-agent", "activity.jsonl"),
-	}
-	if cfg.JSONLPath != "" {
-		tailTargets = append(tailTargets, cfg.JSONLPath)
-	}
-
 	// Supervised collectors
 	if proxyServer != nil {
 		go sup.Run(ctx, "proxyserver", func(c context.Context) error {
@@ -356,8 +210,9 @@ func main() {
 		return ns.Run(c)
 	})
 
+	home, _ := os.UserHomeDir()
 	go sup.Run(ctx, "transcript", func(c context.Context) error {
-		ts := collect.NewTranscriptScanner(b, tailTargets)
+		ts := collect.NewTranscriptScanner(b, transcriptTailTargets(home, cfg.JSONLPath))
 		return ts.Run(c)
 	})
 
@@ -371,22 +226,9 @@ func main() {
 	// SIGKILL, which cannot be caught by it), this process is reparented to
 	// launchd (pid 1). Watching for the parent changing guarantees the daemon
 	// never lingers as a hidden background process after its owner is gone.
-	// Skip the watch when launched directly by pid 1 (launchd or an already
-	// orphaned context), where there is no owning parent to outlive.
-	parentGone := make(chan struct{})
-	if initialPPID := os.Getppid(); initialPPID != 1 {
-		go func() {
-			ticker := time.NewTicker(2 * time.Second)
-			defer ticker.Stop()
-			for range ticker.C {
-				if os.Getppid() != initialPPID {
-					log.Printf("secure-agentd: owning parent (pid %d) exited; shutting down", initialPPID)
-					close(parentGone)
-					return
-				}
-			}
-		}()
-	}
+	// watchParentExit returns nil when launched directly by pid 1, where there
+	// is no owning parent to outlive.
+	parentGone := watchParentExit(os.Getppid())
 
 	select {
 	case <-sigCh:
