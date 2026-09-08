@@ -84,6 +84,8 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4 (SHA-pinned)
       - name: css token & keyframes guard
         run: ./packaging/test/check_console_css.sh
+      - name: console js unit tests
+        run: node --test 'packaging/test/console/*.test.mjs'
 
   secrets:
     name: Secret scan (self)
