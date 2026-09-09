@@ -211,7 +211,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   async function fetchTelemetry() {
     try {
-      const [statusRes, flagsRes, incidentsRes, eventsRes, fleetRes, auditRes, sourcesRes, postureRes] = await Promise.all([
+      const [statusRes, flagsRes, incidentsRes, eventsRes, fleetRes, auditRes, sourcesRes, postureRes, suggestionsRes] = await Promise.all([
         apiFetch('/status').catch(() => null),
         apiFetch('/flags?limit=20').catch(() => null),
         apiFetch('/incidents?limit=10').catch(() => null),
@@ -219,7 +219,8 @@ document.addEventListener('DOMContentLoaded', () => {
         apiFetch('/fleet').catch(() => null),
         apiFetch('/audit?limit=50').catch(() => null),
         apiFetch('/firewall/sources').catch(() => null),
-        apiFetch('/posture').catch(() => null)
+        apiFetch('/posture').catch(() => null),
+        apiFetch('/allowlist/suggestions').catch(() => null)
       ]);
 
       if (statusRes && statusRes.ok) {
@@ -245,6 +246,9 @@ document.addEventListener('DOMContentLoaded', () => {
       }
       if (postureRes && postureRes.ok) {
         telemetryData.posture = await postureRes.json() || null;
+      }
+      if (suggestionsRes && suggestionsRes.ok) {
+        telemetryData.suggestions = await suggestionsRes.json() || [];
       }
 
       // The panels show the filtered view; KPIs keep reading the unfiltered
@@ -425,6 +429,21 @@ document.addEventListener('DOMContentLoaded', () => {
     let html = '';
     if (uninspected > 0) {
       html += `<div class="fw-uninspected"><svg class="icon"><use href="#i-globe"/></svg><span>${uninspected} endpoint${uninspected === 1 ? '' : 's'} reached without inspection (pinned or unrouted)</span></div>`;
+    }
+    // Egress suggestions: recurring uninspected endpoints the user can approve
+    // into the vendor allowlist with one click (drives the blind spot to zero).
+    const suggestions = telemetryData.suggestions || [];
+    if (suggestions.length > 0) {
+      html += suggestions.map(sg => `
+        <div class="fw-rule fw-suggestion">
+          <div class="fw-rule-main">
+            <span class="fw-rule-id">${escapeHTML(sg.host)}</span>
+            <div class="fw-metrics">
+              <span class="fw-metric dim">${escapeHTML(sg.agent)} · seen <b>${sg.count}×</b> uninspected</span>
+            </div>
+          </div>
+          <button class="btn btn-ghost btn-sm" data-action="allow-host" data-agent="${escapeHTML(sg.agent)}" data-host="${escapeHTML(sg.host)}"><svg class="icon"><use href="#i-shield"/></svg><span>Allow for ${escapeHTML(sg.agent)}</span></button>
+        </div>`).join('');
     }
     html += rules.map(r => {
       const st = stats[r];
@@ -892,8 +911,25 @@ document.addEventListener('DOMContentLoaded', () => {
     fetchTelemetry();
   };
 
-  window.promoteRule = async function(rule) {
+  window.allowHost = async function(agent, host) {
     try {
+      const res = await apiFetch('/allowlist', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ agent, host })
+      });
+      if (res.ok) {
+        showToast(`Allowlisted ${host} for ${agent}`, 'success');
+        fetchTelemetry();
+      } else {
+        showToast(`Failed to allowlist ${host}.`, 'danger');
+      }
+    } catch (err) {
+      showToast(`Error allowlisting ${host}: ${err}`, 'danger');
+    }
+  };
+
+  window.promoteRule = async function(rule) {    try {
       const res = await apiFetch('/firewall/mode', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -965,6 +1001,9 @@ document.addEventListener('DOMContentLoaded', () => {
         break;
       case 'filter-session':
         window.filterTimelineToSession(d.session);
+        break;
+      case 'allow-host':
+        window.allowHost(d.agent, d.host);
         break;
       case 'toggle-flag': {
         const card = el.parentElement;

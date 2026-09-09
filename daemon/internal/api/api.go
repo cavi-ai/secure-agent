@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/config"
+	"github.com/cavi-ai/secure-agent/daemon/internal/correlate"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 	"github.com/cavi-ai/secure-agent/daemon/internal/firewall"
 	"github.com/cavi-ai/secure-agent/daemon/internal/guard"
@@ -79,7 +80,10 @@ type API struct {
 	fwBaseSources []string
 
 	guardBroker *guard.Broker
-	guardSeq    uint64
+
+	correlator *correlate.Correlator
+	allowlist  *correlate.AllowlistStore
+	guardSeq   uint64
 
 	peerRole   *peers
 	peerChk    PeerChecker
@@ -141,6 +145,14 @@ func (a *API) SetGuard(b *guard.Broker) {
 	a.guardBroker = b
 }
 
+// SetAllowlist wires the correlator (blind-spot summary) and the persisted
+// user-approval store so the console can suggest allowlist additions and
+// approve them with one click.
+func (a *API) SetAllowlist(cr *correlate.Correlator, al *correlate.AllowlistStore) {
+	a.correlator = cr
+	a.allowlist = al
+}
+
 // SetUIPID pins the trusted mutating client (the owning menubar app). When
 // set, mutating endpoints (kill, guard resolve, firewall promote) require the
 // peer to BE that process — same-uid shells keep read access but can no
@@ -178,6 +190,8 @@ func (a *API) buildMux() *http.ServeMux {
 	mux.HandleFunc("/incidents", a.handleIncidents)
 	mux.HandleFunc("/incidents/status", a.handleIncidentStatus)
 	mux.HandleFunc("/audit", a.handleAudit)
+	mux.HandleFunc("/allowlist/suggestions", a.handleAllowlistSuggestions)
+	mux.HandleFunc("/allowlist", a.handleAllowlistAdd)
 	mux.HandleFunc("/fleet", a.handleFleet)
 	mux.HandleFunc("/kill", a.handleKill)
 	mux.HandleFunc("/firewall/mode", a.handleFirewallMode)
@@ -442,6 +456,78 @@ func (a *API) handleAudit(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(a.store.RecentAudit(limit))
+}
+
+// Suggestion is one allowlist candidate: an agent+host pair seen bypassing
+// inspection often enough to be worth a decision (threshold keeps one-off
+// noise from nagging).
+type Suggestion struct {
+	Agent string `json:"agent"`
+	Host  string `json:"host"`
+	Count int    `json:"count"`
+}
+
+// minSuggestionCount: a host must recur before we suggest anything — a single
+// stray connection is noise, a pattern is policy input.
+const minSuggestionCount = 3
+
+// handleAllowlistSuggestions lists recurring uninspected egress endpoints,
+// most frequent first. Read-level.
+func (a *API) handleAllowlistSuggestions(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	out := []Suggestion{}
+	if a.correlator != nil {
+		for _, e := range a.correlator.UninspectedEgressSummary() {
+			if e.Count >= minSuggestionCount {
+				out = append(out, Suggestion{Agent: e.Agent, Host: e.Host, Count: e.Count})
+			}
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(out)
+}
+
+// handleAllowlistAdd approves one host for one agent: persists the override,
+// makes the correlator treat the host as vendor traffic, drops it from the
+// blind-spot set, and audits the decision. Mutation-gated.
+func (a *API) handleAllowlistAdd(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if a.allowlist == nil || a.correlator == nil {
+		http.Error(w, "allowlist not enabled", http.StatusServiceUnavailable)
+		return
+	}
+	limitBody(w, r)
+	var req struct {
+		Agent string `json:"agent"`
+		Host  string `json:"host"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Agent == "" || req.Host == "" {
+		http.Error(w, `Invalid payload: {"agent":"<name>","host":"<host>"}`, http.StatusBadRequest)
+		return
+	}
+	// A suggestion is a hostname, never a URL or a path — reject anything
+	// with structure so the allowlist can't be widened by smuggling.
+	if strings.ContainsAny(req.Host, "/:@") || len(req.Host) > 253 {
+		http.Error(w, "host must be a bare hostname", http.StatusBadRequest)
+		return
+	}
+	if err := a.allowlist.Add(req.Agent, req.Host); err != nil {
+		http.Error(w, fmt.Sprintf("persist failed: %v", err), http.StatusInternalServerError)
+		return
+	}
+	a.correlator.NoteAllowlistAdded(req.Agent, req.Host)
+	a.store.PutAudit(store.AuditEntry{
+		Action: "allowlist-add", Rule: req.Agent,
+		Detail: fmt.Sprintf("approved %s for %s", req.Host, req.Agent),
+	})
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok", "agent": req.Agent, "host": req.Host})
 }
 
 type killRequest struct {
