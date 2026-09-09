@@ -442,7 +442,7 @@ body {
   background: var(--bg-1); color: var(--tx-1); padding: 0;
   width: min(760px, 92vw); max-height: 84vh; box-shadow: var(--sh-2);
 }
-.modal::backdrop { background: hsl(224 40% 3% / 0.6); backdrop-filter: blur(3px); }
+.modal::backdrop { background: hsl(224 40% 3% / 0.6); -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px); }
 .modal-head {
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
   padding: 16px 20px; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--bg-1);
