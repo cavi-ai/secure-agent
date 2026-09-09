@@ -201,6 +201,17 @@ SSE_OUT="$tmp/sse_stream.txt"
 curl -sN --unix-socket "$SOCKET_PATH" --max-time 15 http://unix/events/stream > "$SSE_OUT" 2>/dev/null &
 SSE_CURL_PID=$!
 
+# The greeting line means the daemon has SUBSCRIBED this connection to the
+# bus (it subscribes before writing it). Posting the guard decision before
+# the greeting races subscription registration and can drop the guard events
+# — that exact window was a CI flake.
+for _ in $(seq 1 50); do
+  if grep -q "secure-agent event stream" "$SSE_OUT" 2>/dev/null; then
+    break
+  fi
+  sleep 0.1
+done
+
 curl -s --unix-socket "$SOCKET_PATH" -X POST http://unix/guard/decision \
   -d "$(guard_decision_payload)" > "$DECISION1_OUT" 2>/dev/null &
 DECISION1_PID=$!
