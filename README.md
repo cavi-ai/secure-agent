@@ -278,7 +278,26 @@ proxy_enabled: true
 proxy_port: 8443
 proxy_ca_cert_path: "~/.config/secure-agent/ca.crt"
 proxy_ca_key_path: "~/.config/secure-agent/ca.key"
+
+# Opt-in local advisor: a locally served model (MLX, llama.cpp, Ollama —
+# any OpenAI-compatible chat endpoint) triages flags and writes incident
+# narratives. Loopback-only, enforced in code; advisory verdicts can never
+# change enforcement. See docs/ADVISOR_THREAT_MODEL.md.
+advisor:
+  enabled: false                     # flip to true once a local model is serving
+  endpoint: "http://127.0.0.1:8080"  # must be loopback
+  model: ""                          # e.g. "qwen3-4b-instruct"
+  timeout_ms: 8000
 ```
+
+### 🧠 Local advisor
+
+With a local model serving the endpoint above, every flag gets an advisory
+triage verdict (`advisor: benign / suspicious / malicious` chip on the flag
+card, with the rationale as its tooltip), the posture banner and menubar hero
+summarize how many critical flags look benign, and each incident card gains a
+plain-English narrative. The advisor is async and fails silent: if the model
+is down, nothing changes except the absence of verdicts.
 
 ---
 
