@@ -22,6 +22,9 @@ wiring and test infrastructure.
   (`escapeHTML(escapeJS(v))`) applied to all six interpolation sites;
   `removeSource` dropped `encodeURIComponent` (never escaped quotes either).
   Regression tests count unescaped quotes in the emitted attribute.
+  Follow-up: all inline handlers were then replaced with `data-*`
+  attributes + a single delegated click listener — the JS-string
+  interpolation context no longer exists at all (`grep onclick`: 0 hits).
 
 ### Console (web UI)
 
@@ -66,9 +69,13 @@ wiring and test infrastructure.
   transcriptTailTargets, startDrainLoop, buildStatusFn, watchParentExit —
   each with direct unit tests.
 - **Console JS test harness.** DOM-free logic extracted to `lib.js`
-  (escapeHTML/escapeJS, fmtTime, sparkline math, markdown, evidence-chain
-  parser) and covered by a zero-dependency `node --test` suite
-  (19 cases), wired into CI and `make test`.
+  (escapeHTML, fmtTime, sparkline math, markdown, evidence-chain
+  parser) and covered by a zero-dependency `node --test` suite wired
+  into CI and `make test`. A DOM-level suite
+  (`packaging/test/console_dom/`) renders the real console in headless
+  Chrome against stubbed telemetry and asserts 24 behaviors: telemetry
+  wiring, evidence chain, liveness classes, session drill-down, and the
+  zero-inline-handlers guarantee.
 - **Linux CI flake fixed.** `TestFullBusCorrelatorStorePipeline` now
   drains its consumer goroutine before closing the store on every path
   (was: `sql: database is closed` races on slow runners).

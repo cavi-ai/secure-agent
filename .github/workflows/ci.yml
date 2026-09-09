@@ -86,6 +86,8 @@ jobs:
         run: ./packaging/test/check_console_css.sh
       - name: console js unit tests
         run: node --test 'packaging/test/console/*.test.mjs'
+      - name: console dom tests (headless chrome)
+        run: python3 packaging/test/console_dom/run_dom_tests.py
 
   secrets:
     name: Secret scan (self)

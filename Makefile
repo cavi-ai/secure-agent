@@ -57,6 +57,8 @@ test:
 	./packaging/test/check_console_css.sh
 	@echo "==> Running console JS unit tests..."
 	node --test 'packaging/test/console/*.test.mjs'
+	@echo "==> Running console DOM tests..."
+	python3 packaging/test/console_dom/run_dom_tests.py
 	@echo "==> Running E2E smoke test scenario..."
 	./packaging/test/e2e_smoke.sh
 

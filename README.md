@@ -373,8 +373,9 @@ python3 plugin/hooks/test_activity_log.py
 # 3. Run Swift menu bar package tests
 swift test --package-path menubar
 
-# 4. Run console JS unit tests + asset lint
+# 4. Run console JS unit tests + DOM tests + asset lint
 node --test 'packaging/test/console/*.test.mjs'
+python3 packaging/test/console_dom/run_dom_tests.py
 ./packaging/test/check_console_css.sh
 
 # 5. Run end-to-end smoke test script
