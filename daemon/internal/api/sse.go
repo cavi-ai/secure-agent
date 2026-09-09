@@ -30,6 +30,20 @@ func (a *API) handleEventStream(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
 		return
 	}
+
+	// Subscribe BEFORE the greeting: the greeting line is the client's
+	// "stream is live" signal, so it must mean events published from now on
+	// actually reach this connection. Subscribing after writing it opened a
+	// race window where events published between greeting and subscription
+	// were silently dropped (seen as an e2e flake: guard lifecycle events
+	// fired into a not-yet-subscribed stream).
+	sub := a.subscribeEvents()
+	defer func() {
+		if a.unsubscribeEvents != nil {
+			a.unsubscribeEvents(sub)
+		}
+	}()
+
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -37,13 +51,6 @@ func (a *API) handleEventStream(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprint(w, ": secure-agent event stream\n\n")
 	fl.Flush()
-
-	sub := a.subscribeEvents()
-	defer func() {
-		if a.unsubscribeEvents != nil {
-			a.unsubscribeEvents(sub)
-		}
-	}()
 
 	// Heartbeat keeps proxies/middleboxes from idling the connection out and
 	// gives the client a liveness signal.
