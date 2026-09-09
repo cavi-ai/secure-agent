@@ -21,4 +21,34 @@ final class GuardTests: XCTestCase {
                        ["cloud-creds", "harness-config", "keychain", "ssh-keys"])
         XCTAssertTrue(SetupManager.guardClassics.allSatisfy { $0.mode == "prompt" })
     }
+
+    // MARK: - advisor config YAML helpers
+
+    func testAdvisorConfigEnableAppendsBlockWhenAbsent() {
+        let out = SetupManager.advisorConfigUpdating("proxy_enabled: true\n", enabled: true)
+        XCTAssertTrue(SetupManager.advisorConfigIsEnabled(out))
+        XCTAssertTrue(out.contains("proxy_enabled: true")) // untouched
+        XCTAssertTrue(out.contains("endpoint: \"http://127.0.0.1:8080\""))
+    }
+
+    func testAdvisorConfigFlipsEnabledLineOnly() {
+        let yaml = "proxy_enabled: true\nadvisor:\n  enabled: false\n  endpoint: \"http://127.0.0.1:8080\"\n  model: \"qwen\"\n"
+        let out = SetupManager.advisorConfigUpdating(yaml, enabled: true)
+        XCTAssertTrue(SetupManager.advisorConfigIsEnabled(out))
+        XCTAssertTrue(out.contains("model: \"qwen\"")) // other keys preserved
+        // and flipping back works
+        let off = SetupManager.advisorConfigUpdating(out, enabled: false)
+        XCTAssertFalse(SetupManager.advisorConfigIsEnabled(off))
+    }
+
+    func testAdvisorConfigMissingFileIsDisabled() {
+        XCTAssertFalse(SetupManager.advisorConfigIsEnabled(""))
+        XCTAssertFalse(SetupManager.advisorConfigIsEnabled("proxy_enabled: true\n"))
+    }
+
+    func testAdvisorConfigIgnoresKeysOutsideBlock() {
+        // An `enabled:` line in another section must not count.
+        let yaml = "firewall:\n  enabled: true\nadvisor:\n  enabled: false\n"
+        XCTAssertFalse(SetupManager.advisorConfigIsEnabled(yaml))
+    }
 }

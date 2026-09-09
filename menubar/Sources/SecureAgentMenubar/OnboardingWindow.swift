@@ -219,6 +219,46 @@ struct OnboardingView: View {
                 .padding(.vertical, 4)
             }
 
+            GroupBox("8. Local Advisor (optional)") {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("A locally served model (MLX, llama.cpp, Ollama) triages flags and writes plain-English incident narratives — on this machine only. The daemon refuses any non-loopback endpoint, and verdicts never change enforcement.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    HStack {
+                        Image(systemName: setup.advisorServerReachable ? "checkmark.circle.fill" : "circle.dotted")
+                            .foregroundStyle(setup.advisorServerReachable ? .green : .secondary)
+                        Text(setup.advisorServerReachable
+                             ? "Model server detected at 127.0.0.1:8080"
+                             : "No model server on 127.0.0.1:8080")
+                            .font(.callout)
+                        Spacer()
+                        Button("Recheck") { Task { await setup.refreshState() } }
+                    }
+                    if setup.advisorEnabled {
+                        Label("Advisor enabled", systemImage: "checkmark.circle.fill")
+                            .font(.callout).foregroundStyle(.green)
+                        Button("Disable Advisor") { setup.setAdvisorEnabled(false) }
+                    } else {
+                        Button("Enable Advisor") { setup.setAdvisorEnabled(true) }
+                            .disabled(!setup.advisorServerReachable)
+                        if !setup.advisorServerReachable {
+                            Text("Start a model first, e.g.: mlx_lm.server --model mlx-community/Qwen3-4B-Instruct-2507-4bit --port 8080")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    if let note = setup.advisorNote {
+                        Text(note).font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 4)
+            }
+
             if let err = setup.lastError {
                 Text(err).foregroundStyle(.red).font(.callout)
                     .fixedSize(horizontal: false, vertical: true)

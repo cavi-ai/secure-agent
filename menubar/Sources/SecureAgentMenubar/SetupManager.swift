@@ -19,6 +19,17 @@ public final class SetupManager: ObservableObject {
     @Published public private(set) var hookSelfTestFailure: String?
     @Published public private(set) var hookSelfTestRunning = false
     @Published public private(set) var lastError: String?
+    /// Local advisor: whether a model server answers on the loopback endpoint
+    /// and whether the daemon config has the advisor enabled.
+    @Published public private(set) var advisorServerReachable = false
+    @Published public private(set) var advisorEnabled = false
+    /// Neutral guidance after an advisor toggle (the daemon reads config at
+    /// start, so a change needs an app restart). Not an error.
+    @Published public private(set) var advisorNote: String?
+
+    /// The advisor's default loopback endpoint (the daemon enforces loopback;
+    /// the menubar only ever probes this one).
+    public nonisolated static let advisorEndpoint = "http://127.0.0.1:8080"
 
     private let fm = FileManager.default
     private let home = NSHomeDirectory()
@@ -64,6 +75,8 @@ public final class SetupManager: ObservableObject {
         areHooksInstalled = Self.hookTargets.allSatisfy { target in
             fm.fileExists(atPath: "\(target)/secret_guard.py")
         }
+        advisorEnabled = Self.advisorConfigIsEnabled(configYAML())
+        advisorServerReachable = await Self.probeAdvisorServer()
     }
 
     /// The only mandatory setup step is installing the harness hooks; the daemon
@@ -71,6 +84,108 @@ public final class SetupManager: ObservableObject {
     /// optional extras and do not force the wizard open.
     public var needsSetup: Bool {
         isBundled && !areHooksInstalled
+    }
+
+    // MARK: - Local advisor
+
+    private var configPath: String { "\(home)/.config/secure-agent/config.yaml" }
+
+    private func configYAML() -> String {
+        (try? String(contentsOfFile: configPath, encoding: .utf8)) ?? ""
+    }
+
+    /// Probe the loopback model server (OpenAI-compatible /v1/models). Short
+    /// timeout: this runs on every wizard open and must never hang it.
+    public nonisolated static func probeAdvisorServer() async -> Bool {
+        guard let url = URL(string: "\(advisorEndpoint)/v1/models") else { return false }
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 1.5
+        guard let (_, resp) = try? await URLSession.shared.data(for: req),
+              let http = resp as? HTTPURLResponse else { return false }
+        return (200..<300).contains(http.statusCode)
+    }
+
+    /// Flip advisor.enabled in config.yaml. Line-based and deliberately
+    /// narrow: config.yaml is user-owned, so we rewrite only the enabled line
+    /// inside the advisor block, or append the whole block when absent.
+    /// Writes are atomic — a torn config would be a loud daemon error.
+    public func setAdvisorEnabled(_ enabled: Bool) {
+        do {
+            let updated = Self.advisorConfigUpdating(configYAML(), enabled: enabled)
+            let dir = (configPath as NSString).deletingLastPathComponent
+            try fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
+            try updated.write(toFile: configPath, atomically: true, encoding: .utf8)
+            advisorEnabled = enabled
+            advisorNote = "Advisor \(enabled ? "enabled" : "disabled") — quit and relaunch Secure Agent so the daemon picks it up."
+        } catch {
+            report(error)
+        }
+    }
+
+    /// True when the YAML has an advisor block with `enabled: true`.
+    /// Line-based: a real YAML parser would be overkill for one boolean.
+    public nonisolated static func advisorConfigIsEnabled(_ yaml: String) -> Bool {
+        var inAdvisor = false
+        for line in yaml.split(separator: "\n", omittingEmptySubsequences: false) {
+            let s = String(line)
+            if s.hasPrefix("advisor:") { inAdvisor = true; continue }
+            // Any non-indented, non-comment line ends the advisor block.
+            if inAdvisor && !s.hasPrefix(" ") && !s.hasPrefix("#") && !s.trimmingCharacters(in: .whitespaces).isEmpty {
+                inAdvisor = false
+            }
+            if inAdvisor {
+                let t = s.trimmingCharacters(in: .whitespaces)
+                if t.hasPrefix("enabled:") {
+                    return t.replacingOccurrences(of: "enabled:", with: "")
+                        .trimmingCharacters(in: .whitespaces)
+                        .split(separator: "#").first.map { $0.trimmingCharacters(in: .whitespaces) == "true" } ?? false
+                }
+            }
+        }
+        return false
+    }
+
+    /// Return the YAML with advisor.enabled set. Appends the full block when
+    /// the advisor key is absent; preserves all other content byte-for-byte.
+    public nonisolated static func advisorConfigUpdating(_ yaml: String, enabled: Bool) -> String {
+        let value = enabled ? "true" : "false"
+        var lines = yaml.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        var inAdvisor = false
+        var blockStart = -1
+        var blockEnd = lines.count
+        for (i, s) in lines.enumerated() {
+            if s.hasPrefix("advisor:") { inAdvisor = true; blockStart = i; continue }
+            if inAdvisor && !s.hasPrefix(" ") && !s.hasPrefix("#") && !s.trimmingCharacters(in: .whitespaces).isEmpty {
+                blockEnd = i
+                break
+            }
+        }
+        if blockStart >= 0 {
+            for i in blockStart..<blockEnd {
+                let t = lines[i].trimmingCharacters(in: .whitespaces)
+                if t.hasPrefix("enabled:") {
+                    let indent = lines[i].hasPrefix(" ") ? String(lines[i].prefix(while: { $0 == " " })) : ""
+                    lines[i] = "\(indent)enabled: \(value)"
+                    return lines.joined(separator: "\n")
+                }
+            }
+            // Block exists but no enabled key: insert right after `advisor:`.
+            lines.insert("  enabled: \(value)", at: blockStart + 1)
+            return lines.joined(separator: "\n")
+        }
+        var block = """
+
+        # Local triage advisor (opt-in): a locally served model triages flags and
+        # writes incident narratives. Loopback-only, enforced in code.
+        # See docs/ADVISOR_THREAT_MODEL.md.
+        advisor:
+          enabled: \(value)
+          endpoint: "\(advisorEndpoint)"
+          model: ""
+          timeout_ms: 8000
+        """
+        if !yaml.isEmpty && !yaml.hasSuffix("\n") { block = "\n" + block }
+        return yaml + block + "\n"
     }
 
     // MARK: - Legacy LaunchAgent migration
