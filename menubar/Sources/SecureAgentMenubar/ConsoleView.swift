@@ -237,6 +237,7 @@ struct ConsoleView: View {
         ("keychain", "Keychain"),
         ("env-files", ".env files"),
         ("shell-rc", "Shell config"),
+        ("harness-config", "Harness config & hooks"),
     ]
 
     private var guardSection: some View {
