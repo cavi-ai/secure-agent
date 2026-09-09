@@ -16,9 +16,9 @@ final class GuardTests: XCTestCase {
         XCTAssertTrue(s.contains("\"verdict\":\"allow\""))
     }
 
-    func testClassicsAreThreePromptRules() {
+    func testClassicsAreFourPromptRules() {
         XCTAssertEqual(SetupManager.guardClassics.map { $0.ruleID }.sorted(),
-                       ["cloud-creds", "keychain", "ssh-keys"])
+                       ["cloud-creds", "harness-config", "keychain", "ssh-keys"])
         XCTAssertTrue(SetupManager.guardClassics.allSatisfy { $0.mode == "prompt" })
     }
 }
