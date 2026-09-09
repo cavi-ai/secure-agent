@@ -85,6 +85,10 @@ struct ConsoleView: View {
             if criticalFlags > 0 {
                 parts.append("\(criticalFlags) critical flag\(criticalFlags == 1 ? "" : "s")")
             }
+            // The fatigue reducer: the local advisor already triaged some of
+            // these as likely benign — say so at the glance level.
+            let benign = state.flags.filter { $0.severity >= 3 && $0.advisor?.assessment == "benign" }.count
+            if benign > 0 { parts.append("advisor: \(benign) likely benign") }
             return ("exclamationmark.shield.fill", .bad, "Action needed",
                     parts.joined(separator: " · "))
         }

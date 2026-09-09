@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/cavi-ai/secure-agent/daemon/internal/advisor"
 	"github.com/cavi-ai/secure-agent/daemon/internal/agentenv"
 	"github.com/cavi-ai/secure-agent/daemon/internal/agents"
 	"github.com/cavi-ai/secure-agent/daemon/internal/api"
@@ -177,7 +178,9 @@ func transcriptTailTargets(home, jsonlPath string) []string {
 // incidents → fleet webhooks. The returned channel closes once every delivered
 // event has been persisted, so shutdown can wait for it instead of dropping
 // the final, most-relevant events/flags/incident around a kill or quit.
-func startDrainLoop(sub <-chan event.Event, st *store.Store, cr *correlate.Correlator, pub *fleet.Publisher) <-chan struct{} {
+// adv may be nil (advisor disabled); when set, new flags/incidents are also
+// offered for advisory triage — enqueueing is non-blocking and drop-safe.
+func startDrainLoop(sub <-chan event.Event, st *store.Store, cr *correlate.Correlator, pub *fleet.Publisher, adv *advisor.Subscriber) <-chan struct{} {
 	analyzer := intel.NewAnalyzer()
 	drainDone := make(chan struct{})
 	go func() {
@@ -189,16 +192,39 @@ func startDrainLoop(sub <-chan event.Event, st *store.Store, cr *correlate.Corre
 				log.Printf("FLAG TRIGGERED [%d]: %s (pid %d agent %s)", fl.Severity, fl.Rule, fl.PID, fl.Agent)
 				st.PutFlag(fl)
 				pub.Publish(fleet.EventFlag, fl)
+				if adv != nil {
+					adv.EnqueueFlag(fl)
+				}
 
 				recentEvs := st.RecentEvents(100)
 				report := analyzer.Analyze(fl, recentEvs)
 				st.PutIncident(report)
 				log.Printf("INCIDENT CREATED [%s]: %s (Risk: %s, %d rotate items)", report.ID, report.Summary, report.Risk, len(report.RotateList))
 				pub.Publish(fleet.EventIncident, report)
+				if adv != nil {
+					adv.EnqueueIncident(report)
+				}
 			}
 		}
 	}()
 	return drainDone
+}
+
+// setupAdvisor builds the local triage advisor: nil unless explicitly
+// enabled in config (and silently nil never happens — a misconfigured
+// endpoint logs why). The subscriber is supervised like every collector.
+func setupAdvisor(cfg config.Config, st *store.Store) *advisor.Subscriber {
+	ac := advisor.Config{
+		Enabled:  cfg.Advisor.Enabled,
+		Endpoint: cfg.Advisor.Endpoint,
+		Model:    cfg.Advisor.Model,
+		Timeout:  cfg.Advisor.Timeout,
+	}
+	sub := advisor.New(ac, st)
+	if sub != nil {
+		log.Printf("advisor: local triage enabled via %s (model %q)", cfg.Advisor.Endpoint, cfg.Advisor.Model)
+	}
+	return sub
 }
 
 // buildStatusFn assembles the /status payload from live component state.
