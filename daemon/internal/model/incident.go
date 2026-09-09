@@ -45,4 +45,8 @@ type IncidentReport struct {
 	TouchedFiles []string     `json:"touched_files"`
 	Connections  []string     `json:"connections"`
 	RotateList   []RotateItem `json:"rotate_list"`
+	// AdvisorNarrative is the local advisor's plain-English account of the
+	// incident (what happened, why it matters, what to do first). Advisory
+	// display text only — untrusted content, always rendered escaped.
+	AdvisorNarrative string `json:"advisor_narrative,omitempty"`
 }

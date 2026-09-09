@@ -414,7 +414,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Each item deep-links to its panel: flags/incidents scroll to their
     // section, guard prompts open the resolve flow, collectors explain.
-    itemsEl.innerHTML = (p.items || []).map(it => {
+    const items = (p.items || []).map(it => {
       const sev = it.severity >= 3 ? 's3' : it.severity === 2 ? 's2' : 's1';
       let link = '';
       if (it.kind === 'flag') link = `<a href="#flags-list">view evidence</a>`;
@@ -423,7 +423,15 @@ document.addEventListener('DOMContentLoaded', () => {
       if (it.kind === 'collector_down') link = `<span>— ${escapeHTML(it.detail || 'collector stopped')}</span>`;
       if (it.kind === 'uninspected_egress') link = `<a href="#firewall-container">see firewall</a>`;
       return `<li><span class="sev ${sev}">●</span><span>${escapeHTML(it.title)} ${link}</span></li>`;
-    }).join('');
+    });
+    // The fatigue reducer: when the local advisor has triaged the critical
+    // flags and some read benign, say so at the one-glance level.
+    const criticals = (telemetryData.flags || []).filter(f => f.severity >= 3 && f.advisor && f.advisor.assessment);
+    const benignCount = criticals.filter(f => f.advisor.assessment === 'benign').length;
+    if (criticals.length > 0) {
+      items.push(`<li><span class="sev s1">●</span><span>advisor: ${benignCount} of ${criticals.length} triaged critical flags look benign</span></li>`);
+    }
+    itemsEl.innerHTML = items.join('');
   }
 
   // Incident workflow: acknowledge keeps it visible but marked seen; resolve
@@ -479,6 +487,7 @@ document.addEventListener('DOMContentLoaded', () => {
           ${statusChip}
         </div>
         <div class="incident-summary">${escapeHTML(inc.summary)}</div>
+        ${inc.advisor_narrative ? `<div class="advisor-narrative"><svg class="icon"><use href="#i-agent"/></svg><span>${escapeHTML(inc.advisor_narrative)}</span></div>` : ''}
         ${wf.resolution_note ? `<div class="incident-note">Resolution: ${escapeHTML(wf.resolution_note)}</div>` : ''}
         <div class="incident-actions">
           <button class="btn btn-ghost" data-action="open-incident" data-id="${escapeHTML(inc.id)}"><svg class="icon"><use href="#i-doc"/></svg><span>View report</span></button>
@@ -675,6 +684,7 @@ document.addEventListener('DOMContentLoaded', () => {
         <button class="flag-head" data-action="toggle-flag" aria-expanded="${i === 0}">
           <svg class="icon flag-ico"><use href="#i-alert"/></svg>
           <span class="flag-rule-text">${escapeHTML(f.rule)} — ${escapeHTML(f.agent)} (PID ${f.pid})</span>
+          ${f.advisor && f.advisor.assessment ? `<span class="advisor-chip adv-${escapeHTML(f.advisor.assessment)}" title="${escapeHTML(f.advisor.rationale)}">advisor: ${escapeHTML(f.advisor.assessment)}</span>` : ''}
           ${f.session_id ? `<span class="flag-session">session ${escapeHTML(sessionShort(f.session_id))}</span>` : ''}
           <svg class="icon flag-chev"><use href="#i-arrow"/></svg>
         </button>

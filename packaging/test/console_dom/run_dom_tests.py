@@ -114,6 +114,13 @@ def main():
         check("timeline times are HH:MM:SS",
               re.search(r'class="t">\d{2}:\d{2}:\d{2}<', dom) is not None)
 
+        # --- local advisor ---
+        check("advisor chip rendered with assessment class", 'advisor-chip adv-suspicious' in dom)
+        check("advisor chip rationale in tooltip", "first time this session" in dom)
+        check("advisor posture line (1 of 2 benign)",
+              "advisor: 1 of 2 triaged critical flags look benign" in dom)
+        check("incident narrative rendered", "advisor-narrative" in dom and "Rotate the key first" in dom)
+
         # --- structural security: no inline handlers anywhere ---
         check("zero inline onclick handlers in rendered DOM", " onclick=" not in dom)
 
