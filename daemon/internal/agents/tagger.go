@@ -3,25 +3,32 @@ package agents
 import (
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/config"
 )
 
 type ProcInfo struct {
-	PID  int32
-	PPID int32
-	Comm string
-	Exe  string
-	CWD  string
+	PID       int32
+	PPID      int32
+	Comm      string
+	Exe       string
+	CWD       string
+	StartTime time.Time
+	RSSBytes  uint64
 }
 
 type AgentInfo struct {
-	Name    string
-	ExePath string
-	CWD     string
-	PID     int32
-	PPID    int32
-	Chain   []int32
+	Name      string
+	ExePath   string
+	CWD       string
+	PID       int32
+	PPID      int32
+	Chain     []int32
+	StartedAt time.Time
+	RSSBytes  uint64
+	RootPID   int32
+	IsOrphan  bool
 }
 
 type ProcSource interface {
@@ -145,8 +152,8 @@ func (t *Tagger) tagLocked(pid int32) (AgentInfo, bool) {
 		pInfo, ok := t.table[curr]
 		if !ok || pInfo.Exe == "" {
 			if dynamicInfo, found := t.ps.Info(curr); found && dynamicInfo.Exe != "" {
-				if ok && dynamicInfo.PPID == 0 {
-					dynamicInfo.PPID = pInfo.PPID
+				if ok {
+					dynamicInfo = mergeProcInfo(pInfo, dynamicInfo)
 				}
 				pInfo = dynamicInfo
 				t.table[curr] = pInfo
@@ -170,12 +177,14 @@ func (t *Tagger) tagLocked(pid int32) (AgentInfo, bool) {
 							exePath = targetProc.Comm
 						}
 						res := AgentInfo{
-							Name:    agentDef.Name,
-							ExePath: exePath,
-							CWD:     targetProc.CWD,
-							PID:     pid,
-							PPID:    targetProc.PPID,
-							Chain:   chain,
+							Name:      agentDef.Name,
+							ExePath:   exePath,
+							CWD:       targetProc.CWD,
+							PID:       pid,
+							PPID:      targetProc.PPID,
+							Chain:     chain,
+							StartedAt: targetProc.StartTime,
+							RSSBytes:  targetProc.RSSBytes,
 						}
 						t.cache[pid] = res
 						t.tagged[pid] = true
@@ -211,9 +220,53 @@ func (t *Tagger) TaggedPIDs() map[int32]AgentInfo {
 	defer t.mu.RUnlock()
 	res := make(map[int32]AgentInfo)
 	for pid, info := range t.cache {
-		if t.tagged[pid] {
-			res[pid] = info
+		if !t.tagged[pid] {
+			continue
 		}
+		info.RootPID = rootPIDLocked(t.cache, t.tagged, info)
+		_, parentAlive := t.table[info.PPID]
+		info.IsOrphan = info.PPID > 1 && !parentAlive
+		res[pid] = info
 	}
 	return res
+}
+
+// mergeProcInfo keeps List()-cheap fields (start time, ppid) when Info()
+// only fills the lazy ones (exe, rss).
+func mergeProcInfo(listed, info ProcInfo) ProcInfo {
+	if info.PPID == 0 {
+		info.PPID = listed.PPID
+	}
+	if info.StartTime.IsZero() {
+		info.StartTime = listed.StartTime
+	}
+	if info.RSSBytes == 0 {
+		info.RSSBytes = listed.RSSBytes
+	}
+	if info.CWD == "" {
+		info.CWD = listed.CWD
+	}
+	if info.Comm == "" {
+		info.Comm = listed.Comm
+	}
+	return info
+}
+
+// rootPIDLocked walks up same-family tagged parents. The instance root is
+// the highest ancestor still tagged with the same agent name.
+func rootPIDLocked(cache map[int32]AgentInfo, tagged map[int32]bool, info AgentInfo) int32 {
+	cur := info
+	seen := map[int32]bool{}
+	for hops := 0; hops < 32; hops++ {
+		if seen[cur.PID] {
+			return cur.PID
+		}
+		seen[cur.PID] = true
+		parent, ok := cache[cur.PPID]
+		if !ok || !tagged[cur.PPID] || parent.Name != cur.Name {
+			return cur.PID
+		}
+		cur = parent
+	}
+	return cur.PID
 }

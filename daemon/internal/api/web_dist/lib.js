@@ -137,3 +137,82 @@ function buildEvidenceChain(flag) {
   });
   return nodes;
 }
+
+// ---------- agent families ----------
+
+function familyTitle(name) {
+  const s = String(name || 'unknown');
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+function fmtRSS(n) {
+  n = Number(n);
+  if (!n || n < 0) return '';
+  if (n < 1024) return Math.round(n) + ' B';
+  if (n < 1048576) return Math.round(n / 1024) + ' KB';
+  if (n < 1073741824) {
+    const mb = n / 1048576;
+    return (mb >= 10 ? mb.toFixed(0) : mb.toFixed(1)) + ' MB';
+  }
+  return (n / 1073741824).toFixed(1) + ' GB';
+}
+
+function fmtAge(iso, nowMs) {
+  const t = Date.parse(iso);
+  if (!isFinite(t)) return '';
+  const sec = Math.max(0, Math.floor(((nowMs || Date.now()) - t) / 1000));
+  if (sec < 60) return sec + 's';
+  if (sec < 3600) return Math.floor(sec / 60) + 'm';
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  return m ? `${h}h${m}m` : `${h}h`;
+}
+
+function isFamilyRoot(a, members) {
+  if (a.root_pid) return Number(a.root_pid) === Number(a.pid);
+  return !members.some(m => Number(m.pid) === Number(a.ppid));
+}
+
+function childrenOf(root, members) {
+  const rid = Number(root.pid);
+  return (members || []).filter(m => Number(m.pid) !== rid && Number(m.root_pid || m.ppid) === rid);
+}
+
+function groupAgents(agents) {
+  const byName = new Map();
+  for (const a of agents || []) {
+    const name = a.name || 'unknown';
+    if (!byName.has(name)) byName.set(name, []);
+    byName.get(name).push(a);
+  }
+  const families = [];
+  for (const [name, members] of byName) {
+    const roots = members.filter(a => isFamilyRoot(a, members));
+    let earliest = '';
+    let rss = 0;
+    let orphanCount = 0;
+    for (const m of members) {
+      if (m.rss_bytes) rss += Number(m.rss_bytes);
+      if (m.is_orphan) orphanCount++;
+      if (m.started_at && (!earliest || m.started_at < earliest)) earliest = m.started_at;
+    }
+    families.push({
+      name,
+      title: familyTitle(name),
+      members,
+      roots,
+      earliest,
+      rss,
+      orphanCount
+    });
+  }
+  families.sort((a, b) => a.name.localeCompare(b.name));
+  return families;
+}
+
+function familyShouldExpand(family, familyCount, totalInstances, userOpen) {
+  if (userOpen && Object.prototype.hasOwnProperty.call(userOpen, family.name)) {
+    return !!userOpen[family.name];
+  }
+  return familyCount === 1 || totalInstances <= 3 || family.orphanCount > 0;
+}

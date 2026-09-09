@@ -21,6 +21,7 @@ const {
   advanceBuckets, bucketIndexFor, sparkPoints,
   parseMarkdownToHTML, buildEvidenceChain,
   sessionShort, filterEventsBySession,
+  familyTitle, fmtRSS, fmtAge, isFamilyRoot, childrenOf, groupAgents, familyShouldExpand,
 } = ctx;
 
 // ---------- escapeHTML ----------
@@ -188,4 +189,36 @@ test('filterEventsBySession: keeps only the session, null clears the filter', ()
   assert.deepEqual(filterEventsBySession(events, 'aaa').map(e => e.ts), ['1', '3']);
   assert.equal(filterEventsBySession(events, null).length, 4);
   assert.equal(filterEventsBySession(null, 'aaa').length, 0); // VM-realm array: compare structurally
+});
+
+test('groupAgents: families, roots, earliest, rss, orphans', () => {
+  const families = groupAgents([
+    { pid: 1, name: 'claude', root_pid: 1, started_at: '2026-09-09T14:00:00Z', rss_bytes: 100 },
+    { pid: 2, name: 'claude', root_pid: 1, ppid: 1, started_at: '2026-09-09T14:01:00Z', rss_bytes: 50 },
+    { pid: 3, name: 'cursor', root_pid: 3, started_at: '2026-09-09T15:00:00Z', rss_bytes: 10, is_orphan: true },
+  ]);
+  assert.equal(families.length, 2);
+  assert.equal(families[0].name, 'claude');
+  assert.equal(families[0].roots.length, 1);
+  assert.equal(families[0].roots[0].pid, 1);
+  assert.equal(childrenOf(families[0].roots[0], families[0].members).length, 1);
+  assert.equal(families[0].earliest, '2026-09-09T14:00:00Z');
+  assert.equal(families[0].rss, 150);
+  assert.equal(families[1].orphanCount, 1);
+});
+
+test('familyShouldExpand: one family, few instances, orphans, user override', () => {
+  const claude = { name: 'claude', roots: [1, 2], orphanCount: 0 };
+  assert.equal(familyShouldExpand(claude, 1, 10, {}), true);
+  assert.equal(familyShouldExpand(claude, 2, 2, {}), true);
+  assert.equal(familyShouldExpand(claude, 2, 8, {}), false);
+  assert.equal(familyShouldExpand({ name: 'x', orphanCount: 1 }, 2, 8, {}), true);
+  assert.equal(familyShouldExpand(claude, 2, 8, { claude: true }), true);
+  assert.equal(familyShouldExpand(claude, 1, 1, { claude: false }), false);
+});
+
+test('fmtRSS and fmtAge', () => {
+  assert.equal(fmtRSS(0), '');
+  assert.equal(fmtRSS(2048), '2 KB');
+  assert.equal(fmtAge('2026-09-09T16:00:00Z', Date.parse('2026-09-09T16:02:00Z')), '2m');
 });

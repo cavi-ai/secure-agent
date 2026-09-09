@@ -4,6 +4,7 @@ package agents
 
 import (
 	"bytes"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
@@ -34,10 +35,11 @@ func (d *DarwinProcSource) List() []ProcInfo {
 		}
 
 		res = append(res, ProcInfo{
-			PID:  kp.Proc.P_pid,
-			PPID: kp.Eproc.Ppid,
-			Comm: commStr,
-			Exe:  "", // Lazy populated on demand by tagger for candidates
+			PID:       kp.Proc.P_pid,
+			PPID:      kp.Eproc.Ppid,
+			Comm:      commStr,
+			Exe:       "", // Lazy populated on demand by tagger for candidates
+			StartTime: timevalToTime(kp.Proc.P_starttime),
 		})
 	}
 	return res
@@ -47,6 +49,7 @@ func (d *DarwinProcSource) Info(pid int32) (ProcInfo, bool) {
 	exe := getProcPath(pid)
 	ppid := int32(0)
 	commStr := ""
+	start := time.Time{}
 	if kp, err := unix.SysctlKinfoProc("kern.proc.pid", int(pid)); err == nil {
 		ppid = kp.Eproc.Ppid
 		commBuf := make([]byte, len(kp.Proc.P_comm))
@@ -58,6 +61,7 @@ func (d *DarwinProcSource) Info(pid int32) (ProcInfo, bool) {
 		if n >= 0 {
 			commStr = string(commBuf[:n])
 		}
+		start = timevalToTime(kp.Proc.P_starttime)
 	} else if exe == "" {
 		return ProcInfo{}, false
 	}
@@ -67,11 +71,48 @@ func (d *DarwinProcSource) Info(pid int32) (ProcInfo, bool) {
 	}
 
 	return ProcInfo{
-		PID:  pid,
-		PPID: ppid,
-		Comm: commStr,
-		Exe:  exe,
+		PID:       pid,
+		PPID:      ppid,
+		Comm:      commStr,
+		Exe:       exe,
+		StartTime: start,
+		RSSBytes:  procRSS(pid),
 	}, true
+}
+
+func timevalToTime(tv unix.Timeval) time.Time {
+	if tv.Sec == 0 && tv.Usec == 0 {
+		return time.Time{}
+	}
+	return time.Unix(tv.Sec, int64(tv.Usec)*1000)
+}
+
+// procRSS reads resident set size via PROC_PIDTASKINFO. cgo is disabled;
+// SYS_PROC_INFO is the libproc-equivalent syscall. A failure returns 0 so
+// the UI can omit memory rather than invent a number.
+func procRSS(pid int32) uint64 {
+	var info struct {
+		VirtualSize  uint64
+		ResidentSize uint64
+		_            [80]byte
+	}
+	const (
+		procInfoCallPidInfo = 2
+		procPidTaskInfo     = 4
+	)
+	_, _, errno := unix.RawSyscall6(
+		unix.SYS_PROC_INFO,
+		uintptr(procInfoCallPidInfo),
+		uintptr(pid),
+		uintptr(procPidTaskInfo),
+		0,
+		uintptr(unsafe.Pointer(&info)),
+		unsafe.Sizeof(info),
+	)
+	if errno != 0 {
+		return 0
+	}
+	return info.ResidentSize
 }
 
 func getProcPath(pid int32) string {
