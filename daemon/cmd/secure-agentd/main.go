@@ -117,6 +117,11 @@ func main() {
 	// inspection and surfaced as per-rule stats in status.
 	fw := setupFirewall(cfg)
 
+	// User-approved allowlist additions (console egress suggestions): persisted
+	// beside the other override state and consulted on every vendor check.
+	allowlistStore := correlate.NewAllowlistStore(filepath.Join(filepath.Dir(cfg.Firewall.Registry.SaltRef), "allowlist-overrides.json"))
+	correlator.SetAllowlistOverrides(func(agent string) []string { return allowlistStore.Load()[agent] })
+
 	var proxyServer *proxy.ProxyServer
 	if cfg.ProxyEnabled {
 		proxyServer = setupProxy(cfg, b, fw.Engine)
@@ -166,6 +171,7 @@ func main() {
 
 	guardBroker := guard.NewBroker(time.Duration(guardBrokerMS(cfg.DirectoryGuard.PromptDeadlineMS)) * time.Millisecond)
 	apiServer.SetGuard(guardBroker)
+	apiServer.SetAllowlist(correlator, allowlistStore)
 	apiServer.SetFleetSink(fleetPub)
 	// SSE live feed: each console gets its own bus subscription; unsubscribes
 	// when the connection closes.

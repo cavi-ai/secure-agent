@@ -38,6 +38,14 @@ and test infrastructure.
   `cat`.
 - DOM-level console test suite (24 assertions in CI) and an SSE
   subscription race fix (subscribe-before-greeting).
+- **Allowlist suggestions.** Recurring uninspected egress endpoints
+  (≥3 sightings, counted per agent+host in the correlator) now surface
+  in the firewall panel with a one-click "Allow for \<agent\>" —
+  persisted to `allowlist-overrides.json` (0600, atomic), consulted by
+  the vendor-host check immediately, purged from the blind-spot count,
+  and audited. Hosts are validated as bare hostnames so the allowlist
+  can't be widened by smuggled structure; the endpoint is mutation-gated
+  like firewall promotions.
 
 ### Security fixes
 

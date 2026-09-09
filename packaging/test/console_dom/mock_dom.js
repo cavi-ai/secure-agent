@@ -83,6 +83,9 @@
     '/firewall/sources': [
       { source: '~/.aws/credentials', origin: 'config' },
       { source: '~/workspace/api-service/.env.production', origin: 'user' }
+    ],
+    '/allowlist/suggestions': [
+      { agent: 'cursor', host: 'registry.npmjs.org', count: 14 }
     ]
   };
 

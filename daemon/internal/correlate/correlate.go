@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -37,6 +38,12 @@ const window = 60 * time.Second
 // saturated (and signals "lots of distinct egress") rather than growing forever.
 const maxUninspectedTracked = 4096
 
+// uninspectedEntry tracks one agent|host pair seen bypassing the proxy.
+type uninspectedEntry struct {
+	count    int
+	lastSeen time.Time
+}
+
 type Correlator struct {
 	mu          sync.Mutex
 	tagger      *agents.Tagger
@@ -44,7 +51,10 @@ type Correlator struct {
 	cfg         config.Config
 	marks       map[int32][]readMark
 	conns       map[int32][]connMark
-	uninspected map[string]struct{} // distinct "agent|host" egress not seen via the proxy
+	uninspected map[string]*uninspectedEntry // distinct "agent|host" egress not seen via the proxy
+	// allowlistOverrides supplies user-approved hosts (console suggestions) on
+	// top of the config allowlist. Nil until wired.
+	allowlistOverrides func(agent string) []string
 }
 
 func New(tagger *agents.Tagger, classifier sensitive.Classifier, cfg config.Config) *Correlator {
@@ -54,8 +64,46 @@ func New(tagger *agents.Tagger, classifier sensitive.Classifier, cfg config.Conf
 		cfg:         cfg,
 		marks:       make(map[int32][]readMark),
 		conns:       make(map[int32][]connMark),
-		uninspected: make(map[string]struct{}),
+		uninspected: make(map[string]*uninspectedEntry),
 	}
+}
+
+// UninspectedSummary is one agent+host pair observed bypassing inspection.
+type UninspectedSummary struct {
+	Agent    string    `json:"agent"`
+	Host     string    `json:"host"`
+	Count    int       `json:"count"`
+	LastSeen time.Time `json:"last_seen"`
+}
+
+// UninspectedEgressSummary lists the observed blind-spot endpoints, most
+// frequent first — the input for the console's allowlist suggestions.
+func (c *Correlator) UninspectedEgressSummary() []UninspectedSummary {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]UninspectedSummary, 0, len(c.uninspected))
+	for key, e := range c.uninspected {
+		agent, host, _ := strings.Cut(key, "|")
+		out = append(out, UninspectedSummary{Agent: agent, Host: host, Count: e.count, LastSeen: e.lastSeen})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Count > out[j].Count })
+	return out
+}
+
+// SetAllowlistOverrides wires the user-approved host list (persisted by the
+// AllowlistStore) into vendor-host recognition.
+func (c *Correlator) SetAllowlistOverrides(fn func(agent string) []string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.allowlistOverrides = fn
+}
+
+// NoteAllowlistAdded drops the agent|host pair from the blind-spot set once
+// the user approves it — the metric should reflect what is STILL unseen.
+func (c *Correlator) NoteAllowlistAdded(agent, host string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.uninspected, agent+"|"+strings.ToLower(host))
 }
 
 // UninspectedEgressCount reports the number of distinct agent+host egress
@@ -220,9 +268,12 @@ func (c *Correlator) Observe(e event.Event) []model.Flag {
 		// transiting the proxy (routed traffic targets 127.0.0.1). Record it as a
 		// coverage metric; do not flag (that would alarm on every github/npm call).
 		if !isLocalhost(e.RemoteHost) {
-			if _, known := c.uninspected[info.Name+"|"+e.RemoteHost]; !known &&
-				len(c.uninspected) < maxUninspectedTracked {
-				c.uninspected[info.Name+"|"+e.RemoteHost] = struct{}{}
+			key := info.Name + "|" + e.RemoteHost
+			if e2, known := c.uninspected[key]; known {
+				e2.count++
+				e2.lastSeen = e.TS
+			} else if len(c.uninspected) < maxUninspectedTracked {
+				c.uninspected[key] = &uninspectedEntry{count: 1, lastSeen: e.TS}
 			}
 		}
 
@@ -404,15 +455,23 @@ func (c *Correlator) isVendorHost(agentName, host string) bool {
 	if host == "" {
 		return false
 	}
-	allowedList, ok := c.cfg.VendorAllowlist[agentName]
-	if !ok {
-		return false
-	}
 	hostLower := strings.ToLower(host)
-	for _, allowed := range allowedList {
+	matches := func(allowed string) bool {
 		allowedLower := strings.ToLower(allowed)
-		if hostLower == allowedLower || strings.HasSuffix(hostLower, "."+allowedLower) {
+		return hostLower == allowedLower || strings.HasSuffix(hostLower, "."+allowedLower)
+	}
+	for _, allowed := range c.cfg.VendorAllowlist[agentName] {
+		if matches(allowed) {
 			return true
+		}
+	}
+	// User-approved hosts (console allowlist suggestions) count as vendor
+	// traffic for this agent.
+	if c.allowlistOverrides != nil {
+		for _, allowed := range c.allowlistOverrides(agentName) {
+			if matches(allowed) {
+				return true
+			}
 		}
 	}
 	return false

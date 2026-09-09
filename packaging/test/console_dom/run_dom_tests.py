@@ -125,6 +125,11 @@ def main():
               "advisor: 1 of 2 triaged critical flags look benign" in dom)
         check("incident narrative rendered", "advisor-narrative" in dom and "Rotate the key first" in dom)
 
+        # --- allowlist suggestions ---
+        check("egress suggestion rendered", "fw-suggestion" in dom and "registry.npmjs.org" in dom)
+        check("suggestion allow button is delegated",
+              'data-action="allow-host" data-agent="cursor" data-host="registry.npmjs.org"' in dom)
+
         # --- structural security: no inline handlers anywhere ---
         check("zero inline onclick handlers in rendered DOM", " onclick=" not in dom)
 
