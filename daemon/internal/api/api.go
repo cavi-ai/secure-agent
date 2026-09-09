@@ -32,10 +32,15 @@ type Killer interface {
 }
 
 type AgentSummary struct {
-	PID     int32  `json:"pid"`
-	Name    string `json:"name"`
-	ExePath string `json:"exe_path,omitempty"`
-	CWD     string `json:"cwd,omitempty"`
+	PID       int32  `json:"pid"`
+	Name      string `json:"name"`
+	ExePath   string `json:"exe_path,omitempty"`
+	CWD       string `json:"cwd,omitempty"`
+	PPID      int32  `json:"ppid,omitempty"`
+	RootPID   int32  `json:"root_pid,omitempty"`
+	StartedAt string `json:"started_at,omitempty"`
+	RSSBytes  uint64 `json:"rss_bytes,omitempty"`
+	IsOrphan  bool   `json:"is_orphan,omitempty"`
 }
 
 type Status struct {
@@ -436,7 +441,8 @@ func (a *API) handleAudit(w http.ResponseWriter, r *http.Request) {
 }
 
 type killRequest struct {
-	PID int32 `json:"pid"`
+	PID       int32  `json:"pid"`
+	StartedAt string `json:"started_at,omitempty"`
 }
 
 // agentPIDs supplies the live tagged-agent pid set for /kill allowlisting;
@@ -462,8 +468,8 @@ func (a *API) handleKill(w http.ResponseWriter, r *http.Request) {
 	// processes the tagger currently recognizes as agents are valid targets.
 	// Re-checked immediately before the kill: between the first check and the
 	// signal, the agent can exit and the pid can be recycled by an unrelated
-	// process. (Residual TOCTOU window remains — closing it fully needs a
-	// start-time compare the proc source doesn't expose yet.)
+	// process. started_at from the client is compared to the live tagged
+	// process so a recycled pid with a different start time is refused.
 	if a.agentPIDs != nil {
 		if _, ok := a.agentPIDs()[req.PID]; !ok {
 			http.Error(w, "pid is not a recognized agent process tree", http.StatusForbidden)
@@ -476,6 +482,13 @@ func (a *API) handleKill(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if req.StartedAt != "" {
+		if err := a.checkKillStart(req.PID, req.StartedAt); err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+	}
+
 	if err := a.killer.Kill(req.PID); err != nil {
 		http.Error(w, fmt.Sprintf("Kill failed: %v", err), http.StatusInternalServerError)
 		return
@@ -483,6 +496,20 @@ func (a *API) handleKill(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok", "pid": req.PID})
+}
+
+func (a *API) checkKillStart(pid int32, startedAt string) error {
+	st := a.statusFn()
+	for _, ag := range st.Agents {
+		if ag.PID != pid {
+			continue
+		}
+		if ag.StartedAt != "" && ag.StartedAt != startedAt {
+			return fmt.Errorf("pid %d start time mismatch (process recycled?)", pid)
+		}
+		return nil
+	}
+	return nil
 }
 
 type fwModeRequest struct {

@@ -13,10 +13,11 @@
       running: true,
       version: 'v9.9.9-domtest',
       uptime: '4h 12m 8s',
-      active_agents: 2,
+      active_agents: 3,
       agents: [
-        { pid: 5821, name: 'claude', cwd: '/Users/dev/workspace/api-service' },
-        { pid: 6033, name: 'cursor', cwd: '/Users/dev/projects/web-app' }
+        { pid: 5821, name: 'claude', cwd: '/Users/dev/workspace/api-service', ppid: 1, root_pid: 5821, started_at: '2026-09-09T14:00:00Z', rss_bytes: 120000000 },
+        { pid: 5822, name: 'claude', ppid: 5821, root_pid: 5821, started_at: '2026-09-09T14:01:00Z', rss_bytes: 40000000 },
+        { pid: 6033, name: 'cursor', cwd: '/Users/dev/projects/web-app', ppid: 1, root_pid: 6033, started_at: '2026-09-09T15:00:00Z', rss_bytes: 89000000, is_orphan: true }
       ],
       proxy_enabled: true,
       proxy_port: 8443,
