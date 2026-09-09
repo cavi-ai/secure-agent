@@ -55,11 +55,14 @@ func TestBuildStatusFn(t *testing.T) {
 	cr := correlate.New(tagger, sensitive.New(cfg), cfg)
 	reg := supervise.NewRegistry()
 
-	fn := buildStatusFn(nil, tagger, cr, nil, reg, time.Now().Add(-2*time.Second))
+	fn := buildStatusFn(nil, tagger, cr, nil, reg, time.Now().Add(-2*time.Second), true)
 	s := fn()
 
 	if !s.Running {
 		t.Fatal("status should report running")
+	}
+	if !s.AdvisorEnabled {
+		t.Fatal("status must carry the advisor opt-in state")
 	}
 	if s.Version == "" {
 		t.Fatal("status must carry the build version (console badge reads it)")
