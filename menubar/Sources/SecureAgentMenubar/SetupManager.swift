@@ -248,13 +248,14 @@ public final class SetupManager: ObservableObject {
         public let mode: String
     }
 
-    /// SSH keys, cloud creds, and the keychain ship `monitor` (quiet by
-    /// default); this is the user's explicit opt-in to promote them to
-    /// `prompt`. No silent deny.
+    /// SSH keys, cloud creds, the keychain, and the harness's own enforcement
+    /// plane ship `monitor` (quiet by default); this is the user's explicit
+    /// opt-in to promote them to `prompt`. No silent deny.
     public nonisolated static let guardClassics: [GuardClassic] = [
         .init(ruleID: "ssh-keys", mode: "prompt"),
         .init(ruleID: "cloud-creds", mode: "prompt"),
         .init(ruleID: "keychain", mode: "prompt"),
+        .init(ruleID: "harness-config", mode: "prompt"),
     ]
 
     @Published public private(set) var didGuardClassics = false
@@ -264,7 +265,7 @@ public final class SetupManager: ObservableObject {
 
     /// The rule ids the guard ships with (mirrors DEFAULT_GUARD_RULES in
     /// secret_guard.py; the hook owns the authoritative copy).
-    public static let guardRuleIDs = ["ssh-keys", "cloud-creds", "keychain", "env-files", "shell-rc"]
+    public static let guardRuleIDs = ["ssh-keys", "cloud-creds", "keychain", "env-files", "shell-rc", "harness-config"]
 
     /// Current effective mode overrides (empty = the rule ships monitor).
     /// Missing file → empty; corrupt file → the hook fails closed, so report

@@ -70,6 +70,20 @@ def read(path: str) -> dict:
     return {"hook_event_name": "PreToolUse", "tool_name": "Read", "tool_input": {"file_path": path}}
 
 
+def grep(path: str | None = None) -> dict:
+    ti: dict = {"pattern": "secret"}
+    if path:
+        ti["path"] = path
+    return {"hook_event_name": "PreToolUse", "tool_name": "Grep", "tool_input": ti}
+
+
+def glob(path: str | None = None) -> dict:
+    ti: dict = {"pattern": "**/*"}
+    if path:
+        ti["path"] = path
+    return {"hook_event_name": "PreToolUse", "tool_name": "Glob", "tool_input": ti}
+
+
 def with_modes(**modes) -> dict:
     d = os.path.join(tempfile.mkdtemp(), "guard-modes.json")
     open(d, "w").write(json.dumps(modes))
@@ -192,6 +206,17 @@ DENY = [
      "interpreter-obfuscated-write"),
     # recursive chflags over HOME covers every rc file beneath it
     ("chflags -R nouchg ~", "shell-rc-unlock"),
+    # grep/rg are readers: printing a secret file through them is the same
+    # leak as cat
+    ("grep '' ~/.aws/credentials", "secret-file-read"),
+    ("grep AKIA ~/.config/gh/hosts.yml", "secret-file-read"),
+    ("rg -n . ~/.ssh/id_ed25519", "secret-file-read"),
+    # harness enforcement plane (writes/mutations via Bash)
+    ("cp ~/.claude/settings.json /tmp/x", "harness-config-mutation"),
+    ("mv ~/.claude/hooks/secret_guard.py /tmp/x", "harness-config-mutation"),
+    ("echo '{}' > ~/.claude/hooks/evil.py", "harness-config-redirect"),
+    ("tee ~/.cursor/hooks.json", "harness-config-mutation"),
+    ("sed -i '' 's/a/b/' ~/.config/opencode/hooks/guard.py", "harness-config-mutation"),
 ]
 
 WRITE_DENY = [
@@ -200,6 +225,13 @@ WRITE_DENY = [
     ("/etc/paths", "shell-rc-write-tool"),
     (os.path.join(HOME, "Library/Keychains/login.keychain-db"), "protected-write-tool"),
     (os.path.join(HOME, ".config/secure-agent/guard-modes.json"), "guard-control-write-tool"),
+    # harness enforcement plane (Write/Edit tool calls)
+    (os.path.join(HOME, ".claude/settings.json"), "harness-config-write-tool"),
+    (os.path.join(HOME, ".claude/settings.local.json"), "harness-config-write-tool"),
+    (os.path.join(HOME, ".claude/hooks/secret_guard.py"), "harness-config-write-tool"),
+    (os.path.join(HOME, ".cursor/hooks/guard.py"), "harness-config-write-tool"),
+    (os.path.join(HOME, ".cursor/hooks.json"), "harness-config-write-tool"),
+    (os.path.join(HOME, ".config/opencode/hooks/guard.py"), "harness-config-write-tool"),
 ]
 
 
@@ -249,6 +281,105 @@ def test_bash_read_prompt_mode_on_bash_denies_without_asking():
 EXTRA_TESTS += [
     test_bash_read_denied_by_guard_mode_override,
     test_bash_read_prompt_mode_on_bash_denies_without_asking,
+]
+
+
+# --- Grep/Glob directory-scan gating -----------------------------------------
+# A scan rooted at a protected directory reaches every protected file inside
+# it; the governing rule's mode applies to the scan itself.
+
+def test_grep_ssh_dir_monitor_allows_by_default():
+    out = run(grep(os.path.join(HOME, ".ssh")))
+    assert out.get("permission") == "allow", out
+
+
+def test_grep_ssh_dir_deny_blocks():
+    out = run(grep(os.path.join(HOME, ".ssh")), env=with_modes(**{"ssh-keys": "deny"}))
+    assert out.get("permission") == "deny", out
+
+
+def test_grep_ssh_subdir_deny_blocks():
+    out = run(grep(os.path.join(HOME, ".ssh", "config.d")), env=with_modes(**{"ssh-keys": "deny"}))
+    assert out.get("permission") == "deny", out
+
+
+def test_glob_aws_dir_deny_blocks():
+    out = run(glob(os.path.join(HOME, ".aws")), env=with_modes(**{"cloud-creds": "deny"}))
+    assert out.get("permission") == "deny", out
+
+
+def test_grep_no_path_uses_cwd_for_scan_gating():
+    out = run(grep(), env={**with_modes(**{"ssh-keys": "deny"}),
+                           "SECURE_AGENT_CWD": os.path.join(HOME, ".ssh")})
+    assert out.get("permission") == "deny", out
+
+
+def test_grep_project_dir_not_gated():
+    out = run(grep("/tmp/workspace/project"), env=with_modes(**{"ssh-keys": "deny",
+                                                                "cloud-creds": "deny"}))
+    assert out.get("permission") == "allow", out
+
+
+def test_grep_exact_secret_file_still_uses_file_rule():
+    # A Grep aimed at the file itself matches the file-glob rule, not the
+    # dir-scan fallback — both deny here, but the rule id must be the file's.
+    out = run(grep(os.path.join(HOME, ".aws", "credentials")),
+              env=with_modes(**{"cloud-creds": "deny"}))
+    assert out.get("permission") == "deny", out
+
+
+def test_bash_cp_recursive_protected_dir_denied_by_mode():
+    out = run(bash("cp -r ~/.ssh /tmp/sshbackup"), env=with_modes(**{"ssh-keys": "deny"}))
+    assert out.get("permission") == "deny", out
+
+
+def test_bash_cp_recursive_protected_dir_monitor_allows():
+    out = run(bash("cp -r ~/.ssh /tmp/sshbackup"))
+    assert out.get("permission") == "allow", out
+
+
+EXTRA_TESTS += [
+    test_grep_ssh_dir_monitor_allows_by_default,
+    test_grep_ssh_dir_deny_blocks,
+    test_grep_ssh_subdir_deny_blocks,
+    test_glob_aws_dir_deny_blocks,
+    test_grep_no_path_uses_cwd_for_scan_gating,
+    test_grep_project_dir_not_gated,
+    test_grep_exact_secret_file_still_uses_file_rule,
+    test_bash_cp_recursive_protected_dir_denied_by_mode,
+    test_bash_cp_recursive_protected_dir_monitor_allows,
+]
+
+
+# --- harness-config guard rule (reads are mode-governed) ---------------------
+
+def test_harness_config_read_monitor_allows():
+    out = run(read(os.path.join(HOME, ".claude/settings.json")))
+    assert out.get("permission") == "allow", out
+
+
+def test_harness_config_read_deny_blocks():
+    out = run(read(os.path.join(HOME, ".claude/settings.json")),
+              env=with_modes(**{"harness-config": "deny"}))
+    assert out.get("permission") == "deny", out
+
+
+def test_harness_config_bash_read_deny_blocks():
+    out = run(bash("cat ~/.claude/settings.json"), env=with_modes(**{"harness-config": "deny"}))
+    assert out.get("permission") == "deny", out
+
+
+def test_harness_config_hook_script_read_deny_blocks():
+    out = run(read(os.path.join(HOME, ".claude/hooks/secret_guard.py")),
+              env=with_modes(**{"harness-config": "deny"}))
+    assert out.get("permission") == "deny", out
+
+
+EXTRA_TESTS += [
+    test_harness_config_read_monitor_allows,
+    test_harness_config_read_deny_blocks,
+    test_harness_config_bash_read_deny_blocks,
+    test_harness_config_hook_script_read_deny_blocks,
 ]
 
 

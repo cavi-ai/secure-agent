@@ -71,9 +71,12 @@ MUTATORS = {
     "rm", "unlink", "touch", "mkfile",
 }
 # Commands that emit file contents to stdout — the leak path for secret files.
+# grep/rg are readers too: `grep "" ~/.aws/credentials` prints the file just
+# like cat does — the most obvious alias around a cat-only check.
 READERS = {
     "cat", "head", "tail", "less", "more", "bat", "strings", "base64", "xxd",
     "od", "hexdump", "nl", "cut", "cp", "scp", "rsync", "curl", "tee", "open",
+    "grep", "egrep", "fgrep", "rg",
 }
 # Wrappers to strip before reading the real command word.
 # NOTE: xargs is deliberately NOT here — it is an executor whose target arrives
@@ -322,6 +325,27 @@ def is_guard_control_path(token: str) -> bool:
     return p == GUARD_CONTROL_DIR or p.startswith(GUARD_CONTROL_DIR + os.sep)
 
 
+# The harnesses' own enforcement plane: their hook configs and the hook
+# scripts themselves. Editing these is how an agent removes or neuters the
+# guard watching it — the self-removal bypass called out in the threat model.
+# Reads stay allowed (and mode-governed via the harness-config rule below);
+# writes are denied outright, like guard-control writes.
+HARNESS_CONFIG_PATHS = (
+    "~/.claude/settings.json", "~/.claude/settings.local.json",
+    "~/.claude/hooks", "~/.cursor/hooks", "~/.cursor/hooks.json",
+    "~/.config/opencode/hooks",
+)
+
+
+def is_harness_config_path(token: str) -> bool:
+    p = norm(token)
+    for h in HARNESS_CONFIG_PATHS:
+        nh = norm(h)
+        if p == nh or p.startswith(nh + os.sep):
+            return True
+    return False
+
+
 # Default credential paths, beyond SSH private keys, that a bare `cat`/`base64`/
 # etc. must never be allowed to print. Mirrors DEFAULT_GUARD_RULES' cloud-creds.
 CREDENTIALS_GLOBS = (
@@ -392,7 +416,37 @@ DEFAULT_GUARD_RULES = [
     {"id": "keychain",    "paths": ["**/*.keychain-db", "**/login.keychain*"], "mode": "monitor"},
     {"id": "env-files",   "paths": ["**/.env", "**/.env.*"], "mode": "monitor"},
     {"id": "shell-rc",    "paths": ["~/.zshrc", "~/.zshenv", "~/.bashrc", "~/.profile"], "mode": "monitor"},
+    {"id": "harness-config", "paths": ["~/.claude/settings.json", "~/.claude/settings.local.json",
+                                       "~/.claude/hooks/**", "~/.cursor/hooks/**", "~/.cursor/hooks.json",
+                                       "~/.config/opencode/hooks/**"], "mode": "monitor"},
 ]
+
+
+# Directory prefixes whose *scan* is itself a guarded act: a Grep/Glob rooted
+# at ~/.ssh is reaching for the keys inside even though no single file path
+# matches the rules above. Maps the prefix to the rule whose mode governs it.
+DIR_SCAN_RULES = (
+    ("~/.ssh", "ssh-keys"),
+    ("~/.aws", "cloud-creds"),
+    ("~/.config/gcloud", "cloud-creds"),
+    ("~/.azure", "cloud-creds"),
+    ("~/.kube", "cloud-creds"),
+    ("~/.docker", "cloud-creds"),
+    ("~/.gnupg", "cloud-creds"),
+    ("~/Library/Keychains", "keychain"),
+)
+
+
+def match_dir_scan(path: str):
+    """Rule id when a Grep/Glob search root is (or sits inside) a protected
+    directory subtree, else None."""
+    p = norm(path)
+    pl = p.lower()
+    for base, rid in DIR_SCAN_RULES:
+        nb = norm(base).lower()
+        if pl == nb or pl.startswith(nb + os.sep):
+            return rid
+    return None
 
 
 def _load_json_file(path: str, sentinel):
@@ -453,6 +507,32 @@ def _cwd_for_request() -> str:
     return os.path.normpath(v) if v else os.getcwd()
 
 
+def _resolve_mode(rid: str, shipped: str, cwd_modes: dict, overrides: dict) -> str:
+    """The mode-resolution chain shared by file-glob rules and directory-scan
+    rules: per-cwd overlay > global override file > shipped default. A "*"
+    entry means a corrupt config — fail closed with it verbatim."""
+    if "*" in cwd_modes:
+        return cwd_modes["*"]
+    if rid in cwd_modes:
+        return cwd_modes[rid]
+    if "*" in overrides:
+        return overrides["*"]
+    return overrides.get(rid, shipped)
+
+
+def _cwd_mode_map() -> dict:
+    """First per-cwd overlay whose prefix contains the request cwd ({} if none)."""
+    cwd = _cwd_for_request()
+    for entry in _cwd_overrides():
+        prefix = norm(str(entry.get("cwd_prefix", "")))
+        if prefix and (cwd == prefix or cwd.startswith(prefix + os.sep)):
+            rules_map = entry.get("rules") or {}
+            if isinstance(rules_map, dict):
+                return {str(k): str(v) for k, v in rules_map.items()}
+            break
+    return {}
+
+
 def match_rule(path: str, rules=DEFAULT_GUARD_RULES):
     """Return (rule_id, effective_mode) for the first rule whose globs match, else (None, None).
 
@@ -461,29 +541,21 @@ def match_rule(path: str, rules=DEFAULT_GUARD_RULES):
     This is how a fleet operator pins one repo to deny while the rest of the
     machine stays monitor."""
     p = norm(path).lower()  # case-insensitive APFS: fold before glob matching
-    cwd = _cwd_for_request()
-    cwd_modes = {}
-    for entry in _cwd_overrides():
-        prefix = norm(str(entry.get("cwd_prefix", "")))
-        if prefix and (cwd == prefix or cwd.startswith(prefix + os.sep)):
-            rules_map = entry.get("rules") or {}
-            if isinstance(rules_map, dict):
-                cwd_modes = {str(k): str(v) for k, v in rules_map.items()}
-            break
+    cwd_modes = _cwd_mode_map()
     overrides = _mode_overrides()
     for rule in rules:
         for g in rule["paths"]:
             gg = norm(g).lower()
             if fnmatch.fnmatch(p, gg) or fnmatch.fnmatch(p, gg + "/*"):
-                rid = rule["id"]
-                if "*" in cwd_modes:  # corrupt config: fail closed
-                    return rid, cwd_modes["*"]
-                if rid in cwd_modes:
-                    return rid, cwd_modes[rid]
-                if "*" in overrides:  # corrupt config: fail closed
-                    return rid, overrides["*"]
-                return rid, overrides.get(rid, rule["mode"])
+                return rule["id"], _resolve_mode(rule["id"], rule["mode"], cwd_modes, overrides)
     return None, None
+
+
+def mode_for_dir_scan(rid: str) -> str:
+    """Effective mode for a directory-scan rule id (same override chain as
+    match_rule; shipped mode looked up from DEFAULT_GUARD_RULES)."""
+    shipped = next((r["mode"] for r in DEFAULT_GUARD_RULES if r["id"] == rid), "monitor")
+    return _resolve_mode(rid, shipped, _cwd_mode_map(), _mode_overrides())
 
 
 # --- directory guard: prompt-mode daemon resolution --------------------------
@@ -754,6 +826,15 @@ def check_command(command: str, event: str) -> list:
                         "disable the guard that is watching it.",
                         command, event,
                     )
+                if is_harness_config_path(tok):
+                    deny(
+                        "harness-config-mutation",
+                        f"Blocked: an agent tried to modify {norm(tok)}.",
+                        "DENIED: harness settings and hook scripts are the guard's "
+                        "enforcement plane — modifying them is how an agent removes or "
+                        "neuters the guard watching it. Propose the change to the user.",
+                        command, event,
+                    )
 
         # 4. Redirects into rc files, keychain paths, or the guard's own
         #    control plane, whatever the command is.
@@ -780,6 +861,15 @@ def check_command(command: str, event: str) -> list:
                     "DENIED: the guard's own config and socket directory is not "
                     "agent-writable — this is how an agent would disable the guard "
                     "that is watching it.",
+                    command, event,
+                )
+            if is_harness_config_path(tgt):
+                deny(
+                    "harness-config-redirect",
+                    f"Blocked: an agent tried to redirect output into {norm(tgt)}.",
+                    "DENIED: harness settings and hook scripts are the guard's "
+                    "enforcement plane — this is how an agent would disable the "
+                    "guard that is watching it.",
                     command, event,
                 )
 
@@ -850,6 +940,13 @@ def check_command(command: str, event: str) -> list:
         if name in READERS or name in MUTATORS:
             for tok in argv[1:]:
                 rule_id, mode = match_rule(tok)
+                if not rule_id:
+                    # A directory target (cp -r ~/.ssh, tar cf - ~/.aws) is a
+                    # scan of every protected file inside it — same gate as
+                    # the Grep/Glob tool path.
+                    scan_rid = match_dir_scan(tok)
+                    if scan_rid:
+                        rule_id, mode = scan_rid, mode_for_dir_scan(scan_rid)
                 if mode in ("deny", "prompt"):
                     deny(
                         "guard-deny:" + rule_id,
@@ -887,6 +984,16 @@ def check_file_write(path: str, command: str, event: str) -> None:
             "DENIED: the guard's own config directory (~/.config/secure-agent/) is not "
             "agent-writable — this is how an agent would disable the guard watching it. "
             "Reads stay allowed; propose the change to the user instead.",
+            command, event,
+        )
+    if is_harness_config_path(path):
+        deny(
+            "harness-config-write-tool",
+            f"Blocked: an agent tried to write {norm(path)}.",
+            "DENIED: harness settings and hook scripts (~/.claude/, ~/.cursor/, "
+            "~/.config/opencode/) are the guard's enforcement plane — editing them is "
+            "how an agent removes or neuters the guard watching it. Reads stay allowed; "
+            "propose the change to the user instead.",
             command, event,
         )
     if is_keychain_path(path) or is_secret_file(path):
@@ -938,6 +1045,31 @@ def main() -> int:
             audit("allow", "guard-monitor:" + rule_id, command or file_path, event)
         elif mode == "prompt":
             resolve_prompt(runtime(), tool, file_path, rule_id, command or file_path, event)
+
+    # Grep/Glob directory scans: the file-glob rules above match single files,
+    # but a scan ROOTED at a protected directory (~/.ssh, ~/.aws, the
+    # keychain dir) reaches for everything inside it. Gate the scan with the
+    # governing rule's mode. The search root is the tool's path, defaulting to
+    # the request cwd (a Grep with no path searches cwd).
+    if tool in {"Grep", "Glob"}:
+        search_root = file_path or _cwd_for_request()
+        scan_rid = match_dir_scan(search_root)
+        if scan_rid and not match_rule(search_root)[0]:
+            scan_mode = mode_for_dir_scan(scan_rid)
+            scan_target = norm(search_root)
+            if scan_mode == "deny":
+                deny(
+                    "guard-deny:" + scan_rid,
+                    f"Blocked: a directory scan of {scan_target} is denied by Directory Guard ({scan_rid}).",
+                    f"DENIED by Directory Guard ({scan_rid}): scanning {scan_target} reaches "
+                    "the protected files inside it. Ask the user for the specific value you "
+                    "need instead of scanning the directory.",
+                    command or search_root, event,
+                )
+            elif scan_mode == "monitor":
+                audit("allow", "guard-monitor:" + scan_rid, command or search_root, event)
+            elif scan_mode == "prompt":
+                resolve_prompt(runtime(), tool, search_root, scan_rid, command or search_root, event)
 
     touched = check_command(command, event) if command else []
     if file_path and tool in {"Write", "Edit", "MultiEdit", "NotebookEdit"}:
