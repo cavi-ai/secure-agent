@@ -288,12 +288,20 @@ func listActiveAgents(tg *agents.Tagger) []api.AgentSummary {
 	tagged := tg.TaggedPIDs()
 	res := make([]api.AgentSummary, 0, len(tagged))
 	for pid, info := range tagged {
-		res = append(res, api.AgentSummary{
-			PID:     pid,
-			Name:    info.Name,
-			ExePath: info.ExePath,
-			CWD:     info.CWD,
-		})
+		s := api.AgentSummary{
+			PID:      pid,
+			Name:     info.Name,
+			ExePath:  info.ExePath,
+			CWD:      info.CWD,
+			PPID:     info.PPID,
+			RootPID:  info.RootPID,
+			RSSBytes: info.RSSBytes,
+			IsOrphan: info.IsOrphan,
+		}
+		if !info.StartedAt.IsZero() {
+			s.StartedAt = info.StartedAt.UTC().Format(time.RFC3339)
+		}
+		res = append(res, s)
 	}
 	return res
 }

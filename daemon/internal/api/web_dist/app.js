@@ -307,7 +307,15 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('uptime-val').textContent = s.uptime || '--';
     document.getElementById('proxy-status').textContent = s.proxy_enabled ? `127.0.0.1:${s.proxy_port || 8443}` : 'Disabled';
 
-    setKpi('count-agents', s.active_agents || (s.agents ? s.agents.length : 0));
+    const agentList = s.agents || [];
+    setKpi('count-agents', s.active_agents || agentList.length);
+    const families = groupAgents(agentList);
+    const hint = document.getElementById('hint-agents');
+    if (hint) {
+      hint.textContent = families.length
+        ? `${families.length} ${families.length === 1 ? 'family' : 'families'} · ${agentList.length} ${agentList.length === 1 ? 'process' : 'processes'}`
+        : 'Tagged in the process tree';
+    }
     setKpi('count-flags', telemetryData.flags.length);
     setKpi('count-incidents', telemetryData.incidents.length);
 
@@ -315,30 +323,85 @@ document.addEventListener('DOMContentLoaded', () => {
     setKpi('count-proxy', proxyEvents.length);
   }
 
+  const agentGroupOpen = {};
+
   function renderAgents() {
     const container = document.getElementById('agents-container');
     const badge = document.getElementById('badge-agents-count');
     const agents = (telemetryData.status && telemetryData.status.agents) ? telemetryData.status.agents : [];
+    const families = groupAgents(agents);
 
-    badge.textContent = agents.length;
+    badge.textContent = families.length;
 
     if (agents.length === 0) {
       container.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-agent"/></svg><span>No agents running yet — start Claude Code, Cursor, or Codex and they'll appear here</span></div>`;
       return;
     }
 
-    container.innerHTML = agents.map(a => `
-      <div class="agent-card">
+    const now = Date.now();
+    const totalInstances = families.reduce((n, fam) => n + fam.roots.length, 0);
+    container.innerHTML = families.map(f => {
+      const open = familyShouldExpand(f, families.length, totalInstances, agentGroupOpen);
+      const earliestAbs = f.earliest ? fmtTime(new Date(f.earliest)) : '';
+      const earliestAge = f.earliest ? fmtAge(f.earliest, now) : '';
+      const rss = fmtRSS(f.rss);
+      const orphanBtn = f.orphanCount
+        ? `<button type="button" class="btn btn-danger btn-sm" data-action="kill-orphans" data-family="${escapeHTML(f.name)}"><svg class="icon"><use href="#i-power"/></svg><span>Terminate orphans (${f.orphanCount})</span></button>`
+        : '';
+      return `
+      <details class="agent-group" data-family="${escapeHTML(f.name)}"${open ? ' open' : ''}>
+        <summary class="agent-group-head">
+          <span class="agent-group-title">
+            <svg class="icon"><use href="#i-agent"/></svg>
+            <span class="agent-family-name">${escapeHTML(f.title)}</span>
+            <span class="agent-pid">${f.roots.length} ${f.roots.length === 1 ? 'instance' : 'instances'}</span>
+          </span>
+          <span class="agent-group-meta">
+            ${earliestAbs ? `<span class="agent-meta-item" title="${escapeHTML(f.earliest)}">${escapeHTML(earliestAbs)}${earliestAge ? ' · ' + earliestAge : ''}</span>` : ''}
+            ${rss ? `<span class="agent-meta-item">${escapeHTML(rss)}</span>` : ''}
+            ${f.orphanCount ? `<span class="agent-orphan-count">${f.orphanCount} leftover</span>` : ''}
+            ${orphanBtn}
+          </span>
+        </summary>
+        <div class="agent-instances">
+          ${f.roots.map(root => renderInstance(root, f.members, now)).join('')}
+        </div>
+      </details>`;
+    }).join('');
+
+    container.querySelectorAll('details.agent-group').forEach(el => {
+      el.addEventListener('toggle', () => {
+        agentGroupOpen[el.dataset.family] = el.open;
+      });
+    });
+  }
+
+  function renderInstance(root, members, now) {
+    const kids = childrenOf(root, members);
+    return `${renderProcessRow(root, now, false)}${kids.map(c => renderProcessRow(c, now, true)).join('')}`;
+  }
+
+  function renderProcessRow(a, now, nested) {
+    const abs = a.started_at ? fmtTime(new Date(a.started_at)) : '';
+    const age = a.started_at ? fmtAge(a.started_at, now) : '';
+    const rss = fmtRSS(a.rss_bytes);
+    const cwd = a.cwd ? `<div class="agent-cwd">${escapeHTML(a.cwd)}</div>` : '';
+    const status = a.is_orphan
+      ? '<span class="agent-status orphan">leftover</span>'
+      : '<span class="agent-status live">live</span>';
+    return `
+      <div class="agent-instance${nested ? ' nested' : ''}${a.is_orphan ? ' orphan' : ''}">
         <div class="agent-info">
           <div class="agent-name">
-            <svg class="icon"><use href="#i-agent"/></svg>${escapeHTML(a.name)}
             <span class="agent-pid">PID ${a.pid}</span>
+            ${status}
+            ${abs ? `<span class="agent-meta-item" title="${escapeHTML(a.started_at)}">${escapeHTML(abs)}${age ? ' · ' + age : ''}</span>` : ''}
+            ${rss ? `<span class="agent-meta-item">${escapeHTML(rss)}</span>` : ''}
           </div>
-          <div class="agent-cwd">${escapeHTML(a.cwd || '—')}</div>
+          ${cwd}
         </div>
-        <button class="btn btn-danger" data-action="kill" data-pid="${a.pid}"><svg class="icon"><use href="#i-power"/></svg><span>Kill</span></button>
-      </div>
-    `).join('');
+        <button type="button" class="btn btn-danger btn-sm" data-action="kill" data-pid="${a.pid}" data-started="${escapeHTML(a.started_at || '')}" data-family="${escapeHTML(a.name || '')}"><svg class="icon"><use href="#i-power"/></svg><span>Terminate</span></button>
+      </div>`;
   }
 
   function renderFirewall() {
@@ -783,23 +846,50 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   };
 
-  window.killProcess = async function(pid) {
-    if (!confirm(`Are you sure you want to SIGKILL PID ${pid}?`)) return;
+  window.killProcess = async function(pid, startedAt, family) {
+    const when = startedAt ? ` started ${startedAt}` : '';
+    const who = family ? `${family} ` : '';
+    if (!confirm(`Terminate process ${who}PID ${pid}${when}?`)) return;
+    const body = { pid };
+    if (startedAt) body.started_at = startedAt;
     try {
       const res = await apiFetch('/kill', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pid })
+        body: JSON.stringify(body)
       });
       if (res.ok) {
         showToast(`Process PID ${pid} terminated.`, 'success');
         fetchTelemetry();
       } else {
-        showToast(`Failed to kill PID ${pid}.`, 'danger');
+        showToast(`Failed to terminate PID ${pid}.`, 'danger');
       }
     } catch (err) {
-      showToast(`Error killing PID ${pid}: ${err}`, 'danger');
+      showToast(`Error terminating PID ${pid}: ${err}`, 'danger');
     }
+  };
+
+  window.killOrphans = async function(family) {
+    const agents = (telemetryData.status && telemetryData.status.agents) ? telemetryData.status.agents : [];
+    const orphans = agents.filter(a => a.name === family && a.is_orphan);
+    if (orphans.length === 0) return;
+    if (!confirm(`Terminate ${orphans.length} leftover ${family} process${orphans.length === 1 ? '' : 'es'}?`)) return;
+    for (const a of orphans) {
+      const body = { pid: a.pid };
+      if (a.started_at) body.started_at = a.started_at;
+      try {
+        const res = await apiFetch('/kill', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+        if (!res.ok) showToast(`Failed to terminate PID ${a.pid}.`, 'danger');
+      } catch (err) {
+        showToast(`Error terminating PID ${a.pid}: ${err}`, 'danger');
+      }
+    }
+    showToast(`Leftover ${family} processes terminated.`, 'success');
+    fetchTelemetry();
   };
 
   window.promoteRule = async function(rule) {
@@ -851,7 +941,14 @@ document.addEventListener('DOMContentLoaded', () => {
     const d = el.dataset;
     switch (d.action) {
       case 'kill':
-        window.killProcess(Number(d.pid));
+        e.preventDefault();
+        e.stopPropagation();
+        window.killProcess(Number(d.pid), d.started, d.family);
+        break;
+      case 'kill-orphans':
+        e.preventDefault();
+        e.stopPropagation();
+        window.killOrphans(d.family);
         break;
       case 'promote':
         window.promoteRule(d.rule);

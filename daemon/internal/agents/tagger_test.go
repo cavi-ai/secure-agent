@@ -2,6 +2,7 @@ package agents
 
 import (
 	"testing"
+	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/config"
 )
@@ -90,5 +91,38 @@ func TestRefreshZeroSyscallsOnIdleMachine(t *testing.T) {
 	tg.Refresh()
 	if !tg.Any() {
 		t.Fatal("Any() returned false after agent candidate spawned")
+	}
+}
+
+func TestTaggedPIDsRootAndOrphan(t *testing.T) {
+	start := time.Date(2026, 9, 9, 16, 0, 0, 0, time.UTC)
+	fake := fakeProcs{
+		100: {PID: 100, PPID: 1, Exe: "/usr/local/bin/claude", StartTime: start, RSSBytes: 1000},
+		200: {PID: 200, PPID: 100, Exe: "/usr/local/bin/node", StartTime: start.Add(time.Minute), RSSBytes: 200},
+		300: {PID: 300, PPID: 999, Exe: "/usr/local/bin/claude", StartTime: start.Add(2 * time.Minute), RSSBytes: 50},
+		400: {PID: 400, PPID: 1, Exe: "/usr/local/bin/claude", StartTime: start.Add(3 * time.Minute), RSSBytes: 80},
+	}
+	c, _ := config.Load("/nonexistent")
+	tg := New(c, fake)
+	tg.Refresh()
+
+	tagged := tg.TaggedPIDs()
+	if tagged[100].RootPID != 100 {
+		t.Fatalf("pid 100 root=%d, want 100", tagged[100].RootPID)
+	}
+	if tagged[200].RootPID != 100 {
+		t.Fatalf("pid 200 root=%d, want 100 (inherited)", tagged[200].RootPID)
+	}
+	if tagged[400].RootPID != 400 {
+		t.Fatalf("pid 400 root=%d, want 400 (second session)", tagged[400].RootPID)
+	}
+	if tagged[100].IsOrphan || tagged[200].IsOrphan || tagged[400].IsOrphan {
+		t.Fatalf("live tree marked orphan: %+v", tagged)
+	}
+	if !tagged[300].IsOrphan {
+		t.Fatal("pid 300 (parent 999 missing) should be orphan")
+	}
+	if tagged[300].RootPID != 300 {
+		t.Fatalf("orphan root=%d, want 300", tagged[300].RootPID)
 	}
 }
