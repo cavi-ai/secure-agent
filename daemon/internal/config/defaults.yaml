@@ -70,3 +70,12 @@ firewall:
     treat_body_secret_as_leak: true
 directory_guard:
   prompt_deadline_ms: 45000
+
+# Local triage advisor (opt-in): a locally served model gives a second opinion
+# on flags and incidents. Loopback-only, enforced in code. See
+# docs/ADVISOR_THREAT_MODEL.md.
+advisor:
+  enabled: false                    # opt in after serving a local model
+  endpoint: "http://127.0.0.1:8080" # must be loopback — anything else is rejected
+  model: ""                         # model name the server expects
+  timeout_ms: 8000
