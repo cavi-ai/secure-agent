@@ -40,7 +40,8 @@
       {
         rule: 'proxy-secret-leak', agent: 'cursor', pid: 6033, severity: 3,
         session_id: 'b81d4fae-7dec-11d0-a765-00a0c91e6bf6',
-        evidence: ["Local proxy detected security violation 'proxy-secret-leak: anthropic-key' while connecting to logs.example.com:443"]
+        evidence: ["Local proxy detected security violation 'proxy-secret-leak: anthropic-key' while connecting to logs.example.com:443"],
+        advisor: { assessment: 'suspicious', confidence: 0.7, rationale: 'host is not a known vendor; first time this session', suggested_action: 'review once' }
       },
       {
         rule: 'sensitive-read-then-connect', agent: 'cursor', pid: 6033, severity: 3,
@@ -48,7 +49,8 @@
         evidence: [
           'cursor (pid 6033) read ~/.aws/credentials at 2026-09-07T16:04:57Z',
           'then connected to logs.example.com:443 at 2026-09-07T16:05:01Z'
-        ]
+        ],
+        advisor: { assessment: 'benign', confidence: 0.8, rationale: 'registry host matches this project\'s normal workflow', suggested_action: 'none' }
       }
     ],
     '/incidents': [
@@ -58,7 +60,8 @@
         risk: 'CRITICAL',
         summary: 'Agent read ~/.aws/credentials, then opened a connection to an unrecognized host.',
         rotate_list: [{ name: 'AWS_ACCESS_KEY', category: 'cloud' }],
-        workflow: { status: 'acknowledged' }
+        workflow: { status: 'acknowledged' },
+        advisor_narrative: 'Cursor read the AWS credentials file and seconds later connected to an unrecognized host — a classic exfiltration shape. Rotate the key first, then review the session.'
       }
     ],
     '/events': [

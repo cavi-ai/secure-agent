@@ -82,6 +82,18 @@ public struct StatusResponse: Codable, Sendable {
     }
 }
 
+public struct AdvisorVerdictModel: Codable, Sendable {
+    public let assessment: String?
+    public let confidence: Double?
+    public let rationale: String
+    public let suggestedAction: String?
+
+    enum CodingKeys: String, CodingKey {
+        case assessment, confidence, rationale
+        case suggestedAction = "suggested_action"
+    }
+}
+
 public struct FlagModel: Codable, Identifiable, Sendable {
     public let id: String
     public let rule: String
@@ -93,14 +105,16 @@ public struct FlagModel: Codable, Identifiable, Sendable {
     /// Harness session that produced the flag — the evidence-chain link that
     /// survives PID reuse. Empty for OS-level signals.
     public let sessionId: String?
+    /// Local advisor triage verdict, when one exists. Advisory only.
+    public let advisor: AdvisorVerdictModel?
 
     enum CodingKeys: String, CodingKey {
-        case id, rule, severity, ts, pid, agent, evidence
+        case id, rule, severity, ts, pid, agent, evidence, advisor
         case sessionId = "session_id"
     }
 
     public init(id: String, rule: String, severity: Int, ts: String, pid: Int32, agent: String,
-                evidence: [String], sessionId: String? = nil) {
+                evidence: [String], sessionId: String? = nil, advisor: AdvisorVerdictModel? = nil) {
         self.id = id
         self.rule = rule
         self.severity = severity
@@ -109,6 +123,7 @@ public struct FlagModel: Codable, Identifiable, Sendable {
         self.agent = agent
         self.evidence = evidence
         self.sessionId = sessionId
+        self.advisor = advisor
     }
 }
 

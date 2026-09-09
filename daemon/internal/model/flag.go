@@ -13,4 +13,7 @@ type Flag struct {
 	// can follow one agent run end-to-end even after PIDs are recycled.
 	SessionID string   `json:"session_id,omitempty"`
 	Evidence  []string `json:"evidence"`
+	// Advisor carries the local advisor's triage verdict when one exists.
+	// Advisory only — never an enforcement input.
+	Advisor *AdvisorVerdict `json:"advisor,omitempty"`
 }

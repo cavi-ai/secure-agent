@@ -91,9 +91,13 @@ func main() {
 		fleetPub.AddSink(sink)
 	}
 
+	// Local triage advisor (opt-in): flags/incidents are offered to it from
+	// the drain loop; it never touches the enforcement path.
+	advisorSub := setupAdvisor(cfg, st)
+
 	// Drain bus and correlate/persist (drainDone closes once every delivered
 	// event has been persisted — shutdown waits for it).
-	drainDone := startDrainLoop(b.Subscribe(), st, correlator, fleetPub)
+	drainDone := startDrainLoop(b.Subscribe(), st, correlator, fleetPub, advisorSub)
 
 	// Periodic process tagger refresh (1s)
 	go func() {
@@ -215,6 +219,12 @@ func main() {
 		ts := collect.NewTranscriptScanner(b, transcriptTailTargets(home, cfg.JSONLPath))
 		return ts.Run(c)
 	})
+
+	if advisorSub != nil {
+		go sup.Run(ctx, "advisor", func(c context.Context) error {
+			return advisorSub.Run(c)
+		})
+	}
 
 	log.Printf("secure-agentd running on unix socket %s", cfg.SocketPath)
 

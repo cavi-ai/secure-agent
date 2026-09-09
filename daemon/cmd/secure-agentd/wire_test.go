@@ -91,7 +91,7 @@ func TestStartDrainLoopPersistsAndCloses(t *testing.T) {
 	cr := correlate.New(tagger, sensitive.New(cfg), cfg)
 
 	b := bus.New(64)
-	done := startDrainLoop(b.Subscribe(), st, cr, fleet.NewPublisher())
+	done := startDrainLoop(b.Subscribe(), st, cr, fleet.NewPublisher(), nil)
 
 	now := time.Now()
 	b.Publish(event.Event{Kind: event.KindPluginAction, TS: now, PID: 500, Path: "/Users/x/project/.env"})

@@ -7,8 +7,31 @@ All notable changes to `secure-agent` are documented here. The format follows
 ## [v0.9.0-rc.3] — 2026-09-08
 
 Release candidate 3: the console UI overhaul (liveness, evidence chains,
-menubar redesign), a console XSS fix, and a hardening pass on the daemon's
-wiring and test infrastructure.
+menubar redesign), a console XSS fix, the local advisor (opt-in triage
+and incident narratives), and a hardening pass on the daemon's wiring
+and test infrastructure.
+
+### Local advisor (opt-in)
+
+- **Local triage advisor.** Flags and incidents are offered asynchronously
+  to a locally served model (MLX or any OpenAI-compatible loopback
+  endpoint) and the verdicts surface as advisory annotations: an
+  `advisor: benign|suspicious|malicious` chip on flag cards, an
+  "advisor: N of M look benign" line in the posture banner and menubar
+  hero, and a plain-English narrative paragraph on incident cards.
+  Loopback-only is enforced in config validation and again at client
+  construction; verdicts can never flip enforcement; a down/slow model
+  fails silent behind a circuit breaker. See
+  `docs/ADVISOR_THREAT_MODEL.md`.
+- Guard coverage expansion: `Grep`/`Glob` scans rooted at protected
+  directories (`~/.ssh`, `~/.aws`, `~/Library/Keychains`, …) are now
+  gated by the governing rule's mode (monitor/prompt/deny); the
+  `harness-config` rule covers harness settings & hook scripts (reads
+  mode-governed, writes always denied — the self-removal class); grep/rg
+  are classed as readers so `grep '' credentials` is the same deny as
+  `cat`.
+- DOM-level console test suite (24 assertions in CI) and an SSE
+  subscription race fix (subscribe-before-greeting).
 
 ### Security fixes
 

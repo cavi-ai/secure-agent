@@ -4,6 +4,8 @@ import (
 	_ "embed"
 	"fmt"
 	"log"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -99,6 +101,24 @@ type DirectoryGuardConfig struct {
 	CwdOverrides     []CwdOverride `yaml:"cwd_overrides"`
 }
 
+// AdvisorYAML is the on-disk shape of the local advisor config.
+type AdvisorYAML struct {
+	Enabled   bool   `yaml:"enabled"`
+	Endpoint  string `yaml:"endpoint"`
+	Model     string `yaml:"model"`
+	TimeoutMS int    `yaml:"timeout_ms"`
+}
+
+// AdvisorConfig configures the local triage advisor. Disabled unless
+// explicitly opted in; the endpoint must be loopback (the privacy guarantee
+// is enforced at validation time and again at client construction).
+type AdvisorConfig struct {
+	Enabled  bool
+	Endpoint string
+	Model    string
+	Timeout  time.Duration
+}
+
 type rawConfig struct {
 	SensitiveGlobs      []string             `yaml:"sensitive_globs"`
 	SensitivePaths      []string             `yaml:"sensitive_paths"`
@@ -116,6 +136,7 @@ type rawConfig struct {
 	Firewall            FirewallConfig       `yaml:"firewall"`
 	DirectoryGuard      DirectoryGuardConfig `yaml:"directory_guard"`
 	Fleet               FleetConfig          `yaml:"fleet"`
+	Advisor             AdvisorYAML          `yaml:"advisor"`
 }
 
 type Config struct {
@@ -135,6 +156,7 @@ type Config struct {
 	Firewall          FirewallConfig
 	DirectoryGuard    DirectoryGuardConfig
 	Fleet             FleetConfig
+	Advisor           AdvisorConfig
 }
 
 func Load(explicitPath string) (Config, error) {
@@ -186,6 +208,15 @@ func Load(explicitPath string) (Config, error) {
 		Firewall:          raw.Firewall,
 		DirectoryGuard:    raw.DirectoryGuard,
 		Fleet:             raw.Fleet,
+		Advisor: AdvisorConfig{
+			Enabled:  raw.Advisor.Enabled,
+			Endpoint: raw.Advisor.Endpoint,
+			Model:    raw.Advisor.Model,
+			Timeout:  time.Duration(raw.Advisor.TimeoutMS) * time.Millisecond,
+		},
+	}
+	if cfg.Advisor.Enabled && cfg.Advisor.Endpoint == "" {
+		cfg.Advisor.Endpoint = "http://127.0.0.1:8080"
 	}
 	cfg.Firewall.Registry.SaltRef = expandPath(cfg.Firewall.Registry.SaltRef)
 	cfg.Firewall.Registry.IngestSources = expandPaths(cfg.Firewall.Registry.IngestSources)
@@ -210,6 +241,20 @@ func (c Config) Validate() error {
 	}
 	if c.DirectoryGuard.PromptDeadlineMS < 0 {
 		return fmt.Errorf("directory_guard.prompt_deadline_ms must be >= 0, got %d", c.DirectoryGuard.PromptDeadlineMS)
+	}
+	// The advisor's privacy guarantee is enforced, not promised: it may only
+	// talk to a loopback endpoint. Anything else is a config error, not a
+	// fallback.
+	if c.Advisor.Enabled {
+		u, err := url.Parse(c.Advisor.Endpoint)
+		if err != nil || u.Hostname() == "" {
+			return fmt.Errorf("advisor.endpoint %q is not a valid URL", c.Advisor.Endpoint)
+		}
+		h := strings.ToLower(u.Hostname())
+		ip := net.ParseIP(h)
+		if h != "localhost" && (ip == nil || !ip.IsLoopback()) {
+			return fmt.Errorf("advisor.endpoint must be loopback (127.0.0.1/::1/localhost), got %q", c.Advisor.Endpoint)
+		}
 	}
 	return nil
 }
