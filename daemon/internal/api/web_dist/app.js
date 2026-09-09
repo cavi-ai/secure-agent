@@ -336,7 +336,7 @@ document.addEventListener('DOMContentLoaded', () => {
           </div>
           <div class="agent-cwd">${escapeHTML(a.cwd || '—')}</div>
         </div>
-        <button class="btn btn-danger" onclick="killProcess(${a.pid})"><svg class="icon"><use href="#i-power"/></svg><span>Kill</span></button>
+        <button class="btn btn-danger" data-action="kill" data-pid="${a.pid}"><svg class="icon"><use href="#i-power"/></svg><span>Kill</span></button>
       </div>
     `).join('');
   }
@@ -373,7 +373,7 @@ document.addEventListener('DOMContentLoaded', () => {
         prev && ((st.blocked || 0) > (prev.blocked || 0) || (st.would_block || 0) > (prev.would_block || 0));
       const action = blocking
         ? `<span class="mode-chip block">blocking</span>`
-        : `<button class="btn btn-primary btn-sm" onclick="promoteRule('${escapeHTML(escapeJS(r))}')"><svg class="icon"><use href="#i-arrow"/></svg><span>Promote to block</span></button>`;
+        : `<button class="btn btn-primary btn-sm" data-action="promote" data-rule="${escapeHTML(r)}"><svg class="icon"><use href="#i-arrow"/></svg><span>Promote to block</span></button>`;
       return `
         <div class="fw-rule${grew ? ' fw-flash' : ''}">
           <div class="fw-rule-main">
@@ -418,7 +418,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const sev = it.severity >= 3 ? 's3' : it.severity === 2 ? 's2' : 's1';
       let link = '';
       if (it.kind === 'flag') link = `<a href="#flags-list">view evidence</a>`;
-      if (it.kind === 'incident') link = `<a href="#" onclick="openIncidentReport('${escapeHTML(escapeJS(it.id))}');return false;">view report</a>`;
+      if (it.kind === 'incident') link = `<a href="#" data-action="open-incident" data-id="${escapeHTML(it.id)}">view report</a>`;
       if (it.kind === 'guard_pending') link = `<span>resolve it in the menu bar app</span>`;
       if (it.kind === 'collector_down') link = `<span>— ${escapeHTML(it.detail || 'collector stopped')}</span>`;
       if (it.kind === 'uninspected_egress') link = `<a href="#firewall-container">see firewall</a>`;
@@ -481,9 +481,9 @@ document.addEventListener('DOMContentLoaded', () => {
         <div class="incident-summary">${escapeHTML(inc.summary)}</div>
         ${wf.resolution_note ? `<div class="incident-note">Resolution: ${escapeHTML(wf.resolution_note)}</div>` : ''}
         <div class="incident-actions">
-          <button class="btn btn-ghost" onclick="openIncidentReport('${escapeHTML(escapeJS(inc.id))}')"><svg class="icon"><use href="#i-doc"/></svg><span>View report</span></button>
-          ${status === 'open' ? `<button class="btn btn-ghost" onclick="setIncidentStatus('${escapeHTML(escapeJS(inc.id))}','acknowledged')"><svg class="icon"><use href="#i-history"/></svg><span>Acknowledge</span></button>` : ''}
-          ${status !== 'resolved' ? `<button class="btn btn-ghost" onclick="setIncidentStatus('${escapeHTML(escapeJS(inc.id))}','resolved')"><svg class="icon"><use href="#i-shield"/></svg><span>Resolve</span></button>` : ''}
+          <button class="btn btn-ghost" data-action="open-incident" data-id="${escapeHTML(inc.id)}"><svg class="icon"><use href="#i-doc"/></svg><span>View report</span></button>
+          ${status === 'open' ? `<button class="btn btn-ghost" data-action="incident-status" data-id="${escapeHTML(inc.id)}" data-status="acknowledged"><svg class="icon"><use href="#i-history"/></svg><span>Acknowledge</span></button>` : ''}
+          ${status !== 'resolved' ? `<button class="btn btn-ghost" data-action="incident-status" data-id="${escapeHTML(inc.id)}" data-status="resolved"><svg class="icon"><use href="#i-shield"/></svg><span>Resolve</span></button>` : ''}
         </div>
         <div class="rotate-list">
           ${(inc.rotate_list || []).map(item => `
@@ -575,7 +575,7 @@ document.addEventListener('DOMContentLoaded', () => {
     list.innerHTML = sources.map(s => {
       const isUser = s.origin === 'user';
       const remove = isUser
-        ? `<button class="source-remove" title="Stop watching" onclick="removeSource('${escapeHTML(escapeJS(s.source))}')"><svg class="icon"><use href="#i-close"/></svg></button>`
+        ? `<button class="source-remove" title="Stop watching" data-action="remove-source" data-source="${escapeHTML(s.source)}"><svg class="icon"><use href="#i-close"/></svg></button>`
         : `<span class="origin-chip config">CONFIG</span>`;
       return `
         <div class="source-item">
@@ -672,7 +672,7 @@ document.addEventListener('DOMContentLoaded', () => {
         : '';
       return `
       <div class="flag-card ${f.severity >= 3 ? 'sev3' : ''}${i === 0 ? ' expanded' : ''}">
-        <button class="flag-head" onclick="this.parentElement.classList.toggle('expanded');this.setAttribute('aria-expanded',this.parentElement.classList.contains('expanded'))" aria-expanded="${i === 0}">
+        <button class="flag-head" data-action="toggle-flag" aria-expanded="${i === 0}">
           <svg class="icon flag-ico"><use href="#i-alert"/></svg>
           <span class="flag-rule-text">${escapeHTML(f.rule)} — ${escapeHTML(f.agent)} (PID ${f.pid})</span>
           ${f.session_id ? `<span class="flag-session">session ${escapeHTML(sessionShort(f.session_id))}</span>` : ''}
@@ -681,7 +681,7 @@ document.addEventListener('DOMContentLoaded', () => {
         <div class="flag-detail"><div class="flag-detail-inner">
           ${chainHTML}
           ${f.session_id ? `<div class="flag-actions-row">
-            <button class="btn btn-ghost btn-sm" onclick="filterTimelineToSession('${escapeHTML(escapeJS(f.session_id))}')"><svg class="icon"><use href="#i-activity"/></svg><span>View session in timeline</span></button>
+            <button class="btn btn-ghost btn-sm" data-action="filter-session" data-session="${escapeHTML(f.session_id)}"><svg class="icon"><use href="#i-activity"/></svg><span>View session in timeline</span></button>
           </div>` : ''}
           <div class="flag-evidence">
             ${(f.evidence || []).map(ev => `<div>${escapeHTML(ev)}</div>`).join('')}
@@ -829,6 +829,44 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const btnSessionClear = document.getElementById('session-clear');
   if (btnSessionClear) btnSessionClear.addEventListener('click', () => window.clearTimelineSession());
+
+  // Event delegation: every actionable element carries data-action + data-*
+  // attributes and is dispatched here. Values pass through the HTML attribute
+  // context ONLY (escapeHTML suffices) — no JS-string context exists at all,
+  // which removes the inline-handler injection class structurally rather than
+  // by escaping discipline.
+  document.addEventListener('click', (e) => {
+    const el = e.target.closest('[data-action]');
+    if (!el) return;
+    const d = el.dataset;
+    switch (d.action) {
+      case 'kill':
+        window.killProcess(Number(d.pid));
+        break;
+      case 'promote':
+        window.promoteRule(d.rule);
+        break;
+      case 'open-incident':
+        e.preventDefault();
+        window.openIncidentReport(d.id);
+        break;
+      case 'incident-status':
+        window.setIncidentStatus(d.id, d.status);
+        break;
+      case 'remove-source':
+        window.removeSource(d.source);
+        break;
+      case 'filter-session':
+        window.filterTimelineToSession(d.session);
+        break;
+      case 'toggle-flag': {
+        const card = el.parentElement;
+        card.classList.toggle('expanded');
+        el.setAttribute('aria-expanded', card.classList.contains('expanded'));
+        break;
+      }
+    }
+  });
 
   function showToast(msg, type = 'info') {
     const container = document.getElementById('toast-container');
