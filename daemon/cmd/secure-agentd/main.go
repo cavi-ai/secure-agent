@@ -127,7 +127,7 @@ func main() {
 	supReg := supervise.NewRegistry()
 	sup := supervise.New(supReg)
 
-	statusFn := buildStatusFn(proxyServer, tagger, correlator, fw.Engine, supReg, time.Now())
+	statusFn := buildStatusFn(proxyServer, tagger, correlator, fw.Engine, supReg, time.Now(), cfg.Advisor.Enabled)
 
 	// Start Control API
 	apiServer := api.New(cfg.SocketPath, st, &realKiller{}, statusFn)

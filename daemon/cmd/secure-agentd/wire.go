@@ -228,7 +228,7 @@ func setupAdvisor(cfg config.Config, st *store.Store) *advisor.Subscriber {
 }
 
 // buildStatusFn assembles the /status payload from live component state.
-func buildStatusFn(proxyServer *proxy.ProxyServer, tagger *agents.Tagger, cr *correlate.Correlator, eng *firewall.Engine, reg *supervise.Registry, startTime time.Time) api.StatusFunc {
+func buildStatusFn(proxyServer *proxy.ProxyServer, tagger *agents.Tagger, cr *correlate.Correlator, eng *firewall.Engine, reg *supervise.Registry, startTime time.Time, advisorEnabled bool) api.StatusFunc {
 	return func() api.Status {
 		proxyActive := proxyServer != nil
 		proxyPort := 0
@@ -245,6 +245,7 @@ func buildStatusFn(proxyServer *proxy.ProxyServer, tagger *agents.Tagger, cr *co
 			ProxyEnabled:      proxyActive,
 			ProxyPort:         proxyPort,
 			UninspectedEgress: cr.UninspectedEgressCount(),
+			AdvisorEnabled:    advisorEnabled,
 			FirewallStats:     firewallStats(eng),
 			Collectors:        reg.Snapshot(),
 		}

@@ -23,6 +23,12 @@ and test infrastructure.
   construction; verdicts can never flip enforcement; a down/slow model
   fails silent behind a circuit breaker. See
   `docs/ADVISOR_THREAT_MODEL.md`.
+- **Advisor onboarding step.** The setup wizard detects a model server on
+  the loopback endpoint and offers one-click enable/disable (atomic
+  config.yaml flip, restart note included); `/status` carries
+  `advisor_enabled` so UIs can distinguish "no verdicts" from "advisor
+  off". The YAML flip helpers are unit-tested (append-when-absent,
+  flip-only-enabled, block scoping, missing file).
 - Guard coverage expansion: `Grep`/`Glob` scans rooted at protected
   directories (`~/.ssh`, `~/.aws`, `~/Library/Keychains`, …) are now
   gated by the governing rule's mode (monitor/prompt/deny); the
