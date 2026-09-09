@@ -4,6 +4,78 @@ All notable changes to `secure-agent` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/) and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [v0.9.0-rc.3] — 2026-09-08
+
+Release candidate 3: the console UI overhaul (liveness, evidence chains,
+menubar redesign), a console XSS fix, and a hardening pass on the daemon's
+wiring and test infrastructure.
+
+### Security fixes
+
+- **Console inline-handler XSS closed.** Every inline `onclick` handler
+  interpolated values into single-quoted JS strings, but the HTML escaper
+  never touched `'` or `\` — a value like `');alert(1);//` broke out and
+  executed as script in the operator's console, which holds the console
+  token in memory (telemetry reads and guard self-approval were the
+  escalation). Reachable by a monitored agent via `session_id`/event detail
+  through `activity.jsonl`. New `escapeJS` with correct layering
+  (`escapeHTML(escapeJS(v))`) applied to all six interpolation sites;
+  `removeSource` dropped `encodeURIComponent` (never escaped quotes either).
+  Regression tests count unescaped quotes in the emitted attribute.
+
+### Console (web UI)
+
+- **Evidence-chain hero view.** Flags are now expandable cards that tell
+  their causal story as a connected node chain (sensitive read → egress
+  destination → verdict), parsed from the correlator's real evidence
+  sentences with a raw-node fallback that never hides audit data. The most
+  recent flag auto-expands; raw evidence remains visible below the chain.
+- **Liveness pass.** Masthead event-rate sparkline (rolling 60s, SSE-fed
+  with poll-fallback backfill), fresh timeline rows animate only for events
+  unseen in the previous render (no polling flicker), KPI numbers tween
+  with a directional flash, a proxy verdict pulses the firewall panel and
+  flashes the rule row that intercepted, and the posture banner
+  cross-fades between states. All motion honors `prefers-reduced-motion`.
+- **Session drill-down.** "View session in timeline" on any flag card
+  filters the event timeline to that harness session (chip with match
+  count + one-click clear).
+- **CSS regressions fixed.** Undefined `--rose`/`--text`/`--muted` tokens
+  (the critical posture dot was invisible), a duplicate `@keyframes pulse`
+  that broke the status-dot glow, and a `.status-chip` class collision
+  that shrank the masthead chip. New `check_console_css.sh` guard (CI +
+  `make test`) fails on undefined custom properties and duplicate
+  keyframes.
+- **Real version badge.** `/status` carries the link-time build version
+  and the console renders it — the badge can't go stale. Timeline
+  timestamps are now deterministic zero-padded `HH:MM:SS` (`fmtTime`),
+  immune to locale quirks.
+
+### Menu bar app
+
+- **Popover redesign.** A 3-state hero (Protected / Attention / Action
+  needed, plus Disconnected) now answers the three glance questions,
+  mirroring the console's posture banner. The firewall section condenses
+  to rules that have seen suspicious traffic; the guard policy editor
+  moved behind a collapsed "Manage rules…" disclosure. A new severity-3
+  flag briefly pulses the status-item title.
+
+### Testing & engineering
+
+- **`main.go` decomposed** (was the codebase's biggest untested hotspot,
+  degree 172) into `wire.go`: setupFirewall, setupProxy, guardBrokerMS,
+  transcriptTailTargets, startDrainLoop, buildStatusFn, watchParentExit —
+  each with direct unit tests.
+- **Console JS test harness.** DOM-free logic extracted to `lib.js`
+  (escapeHTML/escapeJS, fmtTime, sparkline math, markdown, evidence-chain
+  parser) and covered by a zero-dependency `node --test` suite
+  (19 cases), wired into CI and `make test`.
+- **Linux CI flake fixed.** `TestFullBusCorrelatorStorePipeline` now
+  drains its consumer goroutine before closing the store on every path
+  (was: `sql: database is closed` races on slow runners).
+- **README screenshots regenerated** — they now show the posture banner,
+  evidence chain, secret sources, policy audit, fleet, and the correct
+  version badge.
+
 ## [v0.9.0-rc.2] — 2026-09-07
 
 Release candidate 2: the full audit hardening pass (hooks, daemon,
