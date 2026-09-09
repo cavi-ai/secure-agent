@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 tmp="$(mktemp -d)"
 COLLECTOR_PID=""
+ADVISOR_STUB_PID=""
 DAEMON_PID=""
 AGENT_PID=""
 DECISION1_PID=""
@@ -11,7 +12,7 @@ SSE_CURL_PID=""
 # With `set -e`, any mid-script failure used to leave the collector, daemon,
 # and fake agent running with their state dir deleted underneath them.
 cleanup() {
-  for pid in $DECISION1_PID $SSE_CURL_PID $AGENT_PID $DAEMON_PID $COLLECTOR_PID; do
+  for pid in $DECISION1_PID $SSE_CURL_PID $AGENT_PID $DAEMON_PID $COLLECTOR_PID $ADVISOR_STUB_PID; do
     [ -n "$pid" ] && kill "$pid" 2>/dev/null || true
   done
   rm -rf "$tmp"
@@ -52,6 +53,30 @@ go build -o "$tmp/secure-agent-collector" "$SCRIPT_DIR/cmd/secure-agent-collecto
 "$tmp/secure-agent-collector" -addr "127.0.0.1:$COLL_PORT" -store "$tmp/collstore" -config "$tmp/collector-secrets.txt" > "$tmp/collector.log" 2>&1 &
 COLLECTOR_PID=$!
 
+# Local-advisor stub: an OpenAI-compatible chat endpoint on loopback that
+# always returns a benign triage verdict. The daemon's advisor must call it
+# for the flag below and attach the verdict to /flags.
+ADVISOR_PORT=$((21000 + RANDOM % 2000))
+cat > "$tmp/advisor_stub.py" <<PYEOF
+import http.server, json
+class H(http.server.BaseHTTPRequestHandler):
+    def do_POST(self):
+        n = int(self.headers.get("Content-Length") or 0)
+        self.rfile.read(n)
+        body = json.dumps({"choices": [{"message": {"role": "assistant",
+            "content": '{"assessment":"benign","confidence":0.9,"rationale":"routine workflow","suggested_action":"none"}'}}]}).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+    def log_message(self, *a):
+        pass
+http.server.HTTPServer(("127.0.0.1", $ADVISOR_PORT), H).serve_forever()
+PYEOF
+python3 "$tmp/advisor_stub.py" > "$tmp/advisor_stub.log" 2>&1 &
+ADVISOR_STUB_PID=$!
+
 # Create a test overlay config with fast sampling interval for smoke test
 cat > "$tmp/test_config.yaml" <<EOF
 agents:
@@ -66,6 +91,11 @@ directory_guard:
 firewall:
   registry:
     salt_ref: "$tmp/fw-salt"
+advisor:
+  enabled: true
+  endpoint: "http://127.0.0.1:$ADVISOR_PORT"
+  model: "e2e-stub-4b"
+  timeout_ms: 4000
 fleet:
   webhooks:
     - url: "http://127.0.0.1:$COLL_PORT/hooks/secure-agent"
@@ -165,6 +195,25 @@ for _ in $(seq 1 30); do
 done
 
 wait $AGENT_PID 2>/dev/null || true
+
+# ---------------------------------------------------------------------------
+# Local advisor: the flag above must have been triaged by the stub model
+# server and the verdict attached to /flags (advisory annotation only).
+# ---------------------------------------------------------------------------
+ADVISOR_PASSED=false
+for _ in $(seq 1 30); do
+  ADVISOR_RESP=$(curl -s --unix-socket "$SOCKET_PATH" http://unix/flags 2>/dev/null || true)
+  if echo "$ADVISOR_RESP" | grep -q '"advisor"' && echo "$ADVISOR_RESP" | grep -q '"assessment":"benign"'; then
+    ADVISOR_PASSED=true
+    break
+  fi
+  sleep 0.3
+done
+if [ "$ADVISOR_PASSED" = true ]; then
+  echo "Advisor: flag carries the stub model's benign verdict."
+else
+  echo "Advisor: MISSING verdict on /flags."
+fi
 
 # ---------------------------------------------------------------------------
 # Directory Guard: real HTTP round-trip through the unix socket.
@@ -338,8 +387,8 @@ else
 fi
 kill "$COLLECTOR_PID" 2>/dev/null || true
 
-if [ "$PASSED" = true ] && [ "$INCIDENT_PASSED" = true ] && [ "$GUARD_PASSED" = true ] && [ "$WEBHOOK_PASSED" = true ] && [ "$SSE_PASSED" = true ] && [ "$CONSOLE_PASSED" = true ]; then
-  echo "E2E SMOKE TEST: PASS (Flag, Incident, Directory Guard round-trip, fleet webhook, SSE stream, and console auth verified)"
+if [ "$PASSED" = true ] && [ "$INCIDENT_PASSED" = true ] && [ "$GUARD_PASSED" = true ] && [ "$WEBHOOK_PASSED" = true ] && [ "$SSE_PASSED" = true ] && [ "$CONSOLE_PASSED" = true ] && [ "$ADVISOR_PASSED" = true ]; then
+  echo "E2E SMOKE TEST: PASS (Flag, Incident, Directory Guard round-trip, fleet webhook, SSE stream, console auth, and advisor verdict verified)"
   if [ -n "$DAEMON_PID" ]; then
     kill "$DAEMON_PID" 2>/dev/null || true
   fi
@@ -358,7 +407,7 @@ else
   if [ -n "$DAEMON_PID" ]; then
     kill "$DAEMON_PID" 2>/dev/null || true
   fi
-  echo "E2E SMOKE TEST: FAIL (Flag passed: $PASSED, Incident passed: $INCIDENT_PASSED, Guard passed: $GUARD_PASSED, Webhook passed: $WEBHOOK_PASSED, SSE passed: $SSE_PASSED, Console passed: $CONSOLE_PASSED)"
+  echo "E2E SMOKE TEST: FAIL (Flag passed: $PASSED, Incident passed: $INCIDENT_PASSED, Guard passed: $GUARD_PASSED, Webhook passed: $WEBHOOK_PASSED, SSE passed: $SSE_PASSED, Console passed: $CONSOLE_PASSED, Advisor passed: $ADVISOR_PASSED)"
   echo "DEBUG SSE STREAM: $SSE_BODY"
   exit 1
 fi

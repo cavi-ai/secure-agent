@@ -122,6 +122,18 @@ func Open(dbPath, jsonlPath string) (*Store, error) {
 			created_at TEXT,
 			PRIMARY KEY (agent, rule_id)
 		);`,
+		// Local-advisor verdicts, keyed by the subject they annotate (a flag
+		// id or an incident id). Advisory metadata only.
+		`CREATE TABLE IF NOT EXISTS advisor_verdicts (
+			subject_id TEXT PRIMARY KEY,
+			kind TEXT,
+			assessment TEXT,
+			confidence REAL,
+			rationale TEXT,
+			suggested_action TEXT,
+			model TEXT,
+			created_at TEXT
+		);`,
 	}
 
 	for _, q := range createQueries {
@@ -314,7 +326,61 @@ func (s *Store) QueryFlags(f FlagFilter) []model.Flag {
 	if err := rows.Err(); err != nil {
 		log.Printf("store: flags cursor error (result may be truncated): %v", err)
 	}
+	s.attachAdvisorLocked(flags)
 	return flags
+}
+
+// PutAdvisorVerdict stores (or replaces) the local advisor's verdict for a
+// flag or incident. Advisory metadata only — nothing reads it back into an
+// enforcement decision.
+func (s *Store) PutAdvisorVerdict(subjectID, kind string, v model.AdvisorVerdict) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, err := s.db.Exec(
+		`INSERT OR REPLACE INTO advisor_verdicts
+		 (subject_id, kind, assessment, confidence, rationale, suggested_action, model, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		subjectID, kind, v.Assessment, v.Confidence, v.Rationale, v.SuggestedAction, v.Model,
+		v.CreatedAt.UTC().Format(time.RFC3339Nano),
+	)
+	if err != nil {
+		log.Printf("store: failed to insert advisor verdict %s: %v", subjectID, err)
+	}
+}
+
+// attachAdvisorLocked joins stored verdicts onto flags (caller holds mu).
+func (s *Store) attachAdvisorLocked(flags []model.Flag) {
+	for i := range flags {
+		v, ok := s.advisorVerdictLocked(flags[i].ID, "flag")
+		if ok {
+			vv := v
+			flags[i].Advisor = &vv
+		}
+	}
+}
+
+// advisorVerdictLocked fetches one verdict (caller holds mu).
+func (s *Store) advisorVerdictLocked(subjectID, kind string) (model.AdvisorVerdict, bool) {
+	var v model.AdvisorVerdict
+	var conf sql.NullFloat64
+	var assessment, action, modelName, created sql.NullString
+	var rationale string
+	err := s.db.QueryRow(
+		`SELECT assessment, confidence, rationale, suggested_action, model, created_at
+		 FROM advisor_verdicts WHERE subject_id = ? AND kind = ?`, subjectID, kind,
+	).Scan(&assessment, &conf, &rationale, &action, &modelName, &created)
+	if err != nil {
+		return v, false
+	}
+	v.Assessment = assessment.String
+	if conf.Valid {
+		v.Confidence = conf.Float64
+	}
+	v.Rationale = rationale
+	v.SuggestedAction = action.String
+	v.Model = modelName.String
+	v.CreatedAt, _ = time.Parse(time.RFC3339Nano, created.String)
+	return v, true
 }
 
 func (s *Store) RecentEvents(limit int) []event.Event {
@@ -416,6 +482,9 @@ func (s *Store) GetIncident(id string) (*model.IncidentReport, error) {
 	if err := json.Unmarshal([]byte(reportJSON), &inc); err != nil {
 		return nil, err
 	}
+	if v, ok := s.advisorVerdictLocked(inc.ID, "incident"); ok {
+		inc.AdvisorNarrative = v.Rationale
+	}
 	return &inc, nil
 }
 
@@ -443,7 +512,18 @@ func (s *Store) RecentIncidents(limit int) []model.IncidentReport {
 	if err := rows.Err(); err != nil {
 		log.Printf("store: incidents cursor error (result may be truncated): %v", err)
 	}
+	s.attachNarrativesLocked(list)
 	return list
+}
+
+// attachNarrativesLocked joins advisor narratives onto incidents (caller
+// holds mu).
+func (s *Store) attachNarrativesLocked(list []model.IncidentReport) {
+	for i := range list {
+		if v, ok := s.advisorVerdictLocked(list[i].ID, "incident"); ok {
+			list[i].AdvisorNarrative = v.Rationale
+		}
+	}
 }
 
 // PutAudit records a policy/control change. The store stamps the timestamp so
