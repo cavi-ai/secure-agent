@@ -52,6 +52,10 @@ type Status struct {
 	ProxyEnabled      bool           `json:"proxy_enabled"`
 	ProxyPort         int            `json:"proxy_port"`
 	UninspectedEgress int            `json:"uninspected_egress"`
+	// AdvisorEnabled reports whether the local triage advisor is configured
+	// (opt-in) — the UIs show it so "no verdicts" is distinguishable from
+	// "advisor off".
+	AdvisorEnabled bool `json:"advisor_enabled"`
 
 	FirewallStats map[string]firewall.RuleStat `json:"firewall_stats,omitempty"`
 	// Collectors reports each supervised worker's health so a dead or abandoned
