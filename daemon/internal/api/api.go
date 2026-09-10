@@ -57,6 +57,11 @@ type Status struct {
 	// (opt-in) — the UIs show it so "no verdicts" is distinguishable from
 	// "advisor off".
 	AdvisorEnabled bool `json:"advisor_enabled"`
+	// TrackedProcesses is the full tagged process count (every descendant in
+	// every agent tree), while ActiveAgents counts distinct tree ROOTS — the
+	// number a human means by "agents running". 266 processes is not 266
+	// agents; conflating them erodes trust in the headline number.
+	TrackedProcesses int `json:"tracked_processes"`
 
 	FirewallStats map[string]firewall.RuleStat `json:"firewall_stats,omitempty"`
 	// Collectors reports each supervised worker's health so a dead or abandoned

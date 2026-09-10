@@ -236,12 +236,23 @@ func buildStatusFn(proxyServer *proxy.ProxyServer, tagger *agents.Tagger, cr *co
 			proxyPort = proxyServer.Port()
 		}
 		activeAgents := listActiveAgents(tagger)
+		// Count tree ROOTS, not processes: a CLI agent with 40 helpers is one
+		// agent. (RootPID 0 shouldn't happen but fall back to self.)
+		roots := make(map[int32]struct{}, len(activeAgents))
+		for _, a := range activeAgents {
+			r := a.RootPID
+			if r == 0 {
+				r = a.PID
+			}
+			roots[r] = struct{}{}
+		}
 		return api.Status{
 			Running:           true,
 			Version:           api.Version,
 			Uptime:            time.Since(startTime).Truncate(time.Second).String(),
-			ActiveAgents:      len(activeAgents),
+			ActiveAgents:      len(roots),
 			Agents:            activeAgents,
+			TrackedProcesses:  len(activeAgents),
 			ProxyEnabled:      proxyActive,
 			ProxyPort:         proxyPort,
 			UninspectedEgress: cr.UninspectedEgressCount(),

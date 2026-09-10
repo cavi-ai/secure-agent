@@ -50,7 +50,7 @@ func TestTranscriptTailTargets(t *testing.T) {
 
 func TestBuildStatusFn(t *testing.T) {
 	cfg, _ := config.Load("/nonexistent")
-	tagger := agents.New(cfg, fakeProcSource{})
+	tagger := agents.New(cfg, treeProcSource{})
 	tagger.Refresh()
 	cr := correlate.New(tagger, sensitive.New(cfg), cfg)
 	reg := supervise.NewRegistry()
@@ -70,12 +70,38 @@ func TestBuildStatusFn(t *testing.T) {
 	if s.Uptime == "" || s.Uptime == "0s" {
 		t.Fatalf("uptime should reflect the start time, got %q", s.Uptime)
 	}
+	// Roots vs processes: pid 500 is the tree root, 501 its helper child —
+	// one agent, two tracked processes. (266 processes ≠ 266 agents.)
+	if s.ActiveAgents != 1 {
+		t.Fatalf("ActiveAgents = %d, want 1 root", s.ActiveAgents)
+	}
+	if s.TrackedProcesses != 2 {
+		t.Fatalf("TrackedProcesses = %d, want 2", s.TrackedProcesses)
+	}
 	if s.ProxyEnabled || s.ProxyPort != 0 {
 		t.Fatalf("nil proxy must report disabled/0, got %v/%d", s.ProxyEnabled, s.ProxyPort)
 	}
 	if s.FirewallStats != nil {
 		t.Fatalf("nil engine must report nil stats, got %v", s.FirewallStats)
 	}
+}
+
+// treeProcSource is a one-tree process list: cursor root (500) + zsh helper
+// child (501) — the shape that used to count as two "agents".
+type treeProcSource struct{}
+
+func (treeProcSource) List() []agents.ProcInfo {
+	return []agents.ProcInfo{
+		{PID: 500, PPID: 1, Exe: "/Applications/Cursor.app/Contents/Frameworks/Cursor Helper"},
+		{PID: 501, PPID: 500, Comm: "zsh"},
+	}
+}
+
+func (treeProcSource) Info(pid int32) (agents.ProcInfo, bool) {
+	if pid == 500 {
+		return agents.ProcInfo{PID: 500, PPID: 1, Exe: "/Applications/Cursor.app/Contents/Frameworks/Cursor Helper"}, true
+	}
+	return agents.ProcInfo{}, false
 }
 
 // The extracted drain loop: bus events must be persisted, correlated, and the
