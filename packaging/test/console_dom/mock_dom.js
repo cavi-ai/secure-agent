@@ -34,7 +34,8 @@
       items: [
         { severity: 3, kind: 'flag', title: 'proxy-secret-leak — cursor sent an anthropic-key to logs.example.com' },
         { severity: 3, kind: 'incident', id: 'inc-20260907-6033-a1b2', title: 'sensitive-read-then-connect — cursor (PID 6033)' },
-        { severity: 2, kind: 'uninspected_egress', title: '2 endpoints reached without inspection' }
+        { severity: 2, kind: 'uninspected_egress', title: '2 endpoints reached without inspection' },
+        { severity: 2, kind: 'collector_down', title: 'File monitoring is off', detail: 'usually missing Full Disk Access — open Setup & Permissions in the menu bar' }
       ]
     },
     '/flags': [

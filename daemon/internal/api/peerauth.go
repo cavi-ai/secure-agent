@@ -102,7 +102,7 @@ func isMutation(method, path string) bool {
 	switch path {
 	case "/kill", "/guard/resolve", "/guard/rules", "/firewall/mode",
 		"/firewall/fingerprints/reload", "/firewall/fingerprints/ingest",
-		"/firewall/sources", "/incidents/status", "/allowlist", "/mute":
+		"/firewall/sources", "/incidents/status", "/allowlist", "/mute", "/ui/open-fda":
 		return true
 	}
 	return false
