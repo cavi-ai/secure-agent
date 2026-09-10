@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/cavi-ai/secure-agent/daemon/internal/advisor"
 	"github.com/cavi-ai/secure-agent/daemon/internal/config"
 	"github.com/cavi-ai/secure-agent/daemon/internal/correlate"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
@@ -198,6 +199,7 @@ func (a *API) buildMux() *http.ServeMux {
 	mux.HandleFunc("/allowlist/suggestions", a.handleAllowlistSuggestions)
 	mux.HandleFunc("/allowlist", a.handleAllowlistAdd)
 	mux.HandleFunc("/stats/rollup", a.handleRollup)
+	mux.HandleFunc("/advisor/discover", a.handleAdvisorDiscover)
 	mux.HandleFunc("/fleet", a.handleFleet)
 	mux.HandleFunc("/kill", a.handleKill)
 	mux.HandleFunc("/firewall/mode", a.handleFirewallMode)
@@ -482,6 +484,22 @@ func (a *API) handleRollup(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(a.store.RollupRange(time.Now().Add(-time.Duration(hours) * time.Hour)))
+}
+
+// handleAdvisorDiscover lists loopback OpenAI-compatible model servers the
+// user could link (Path B: existing Ollama/MLX/llama.cpp servers) plus the
+// curated managed-model list (Path A). Read-gated; the menubar's Advisor
+// settings pane renders its dropdowns from this so nobody types an endpoint.
+func (a *API) handleAdvisorDiscover(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	writeJSON(w, map[string]any{
+		"servers":        advisor.DiscoverServers(),
+		"managed_models": advisor.DefaultManagedModels,
+	})
 }
 
 // Suggestion is one allowlist candidate: an agent+host pair seen bypassing

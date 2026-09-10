@@ -103,20 +103,26 @@ type DirectoryGuardConfig struct {
 
 // AdvisorYAML is the on-disk shape of the local advisor config.
 type AdvisorYAML struct {
-	Enabled   bool   `yaml:"enabled"`
-	Endpoint  string `yaml:"endpoint"`
-	Model     string `yaml:"model"`
-	TimeoutMS int    `yaml:"timeout_ms"`
+	Enabled      bool   `yaml:"enabled"`
+	Endpoint     string `yaml:"endpoint"`
+	Model        string `yaml:"model"`
+	TimeoutMS    int    `yaml:"timeout_ms"`
+	Managed      bool   `yaml:"managed"`
+	ManagedModel string `yaml:"managed_model"`
 }
 
 // AdvisorConfig configures the local triage advisor. Disabled unless
 // explicitly opted in; the endpoint must be loopback (the privacy guarantee
 // is enforced at validation time and again at client construction).
+// Managed mode: the daemon spawns/supervises the model server itself and
+// computes the endpoint — Endpoint is ignored (and must not be set).
 type AdvisorConfig struct {
-	Enabled  bool
-	Endpoint string
-	Model    string
-	Timeout  time.Duration
+	Enabled      bool
+	Endpoint     string
+	Model        string
+	Timeout      time.Duration
+	Managed      bool
+	ManagedModel string
 }
 
 type rawConfig struct {
@@ -209,13 +215,15 @@ func Load(explicitPath string) (Config, error) {
 		DirectoryGuard:    raw.DirectoryGuard,
 		Fleet:             raw.Fleet,
 		Advisor: AdvisorConfig{
-			Enabled:  raw.Advisor.Enabled,
-			Endpoint: raw.Advisor.Endpoint,
-			Model:    raw.Advisor.Model,
-			Timeout:  time.Duration(raw.Advisor.TimeoutMS) * time.Millisecond,
+			Enabled:      raw.Advisor.Enabled,
+			Endpoint:     raw.Advisor.Endpoint,
+			Model:        raw.Advisor.Model,
+			Timeout:      time.Duration(raw.Advisor.TimeoutMS) * time.Millisecond,
+			Managed:      raw.Advisor.Managed,
+			ManagedModel: raw.Advisor.ManagedModel,
 		},
 	}
-	if cfg.Advisor.Enabled && cfg.Advisor.Endpoint == "" {
+	if cfg.Advisor.Enabled && !cfg.Advisor.Managed && cfg.Advisor.Endpoint == "" {
 		cfg.Advisor.Endpoint = "http://127.0.0.1:8080"
 	}
 	cfg.Firewall.Registry.SaltRef = expandPath(cfg.Firewall.Registry.SaltRef)
@@ -244,8 +252,16 @@ func (c Config) Validate() error {
 	}
 	// The advisor's privacy guarantee is enforced, not promised: it may only
 	// talk to a loopback endpoint. Anything else is a config error, not a
-	// fallback.
-	if c.Advisor.Enabled {
+	// fallback. Managed mode derives its endpoint (spawned server); a manual
+	// one alongside it is a contradiction worth rejecting loudly.
+	if c.Advisor.Enabled && c.Advisor.Managed {
+		if c.Advisor.ManagedModel == "" {
+			return fmt.Errorf("advisor.managed_model is required when advisor.managed is true")
+		}
+		if c.Advisor.Endpoint != "" {
+			return fmt.Errorf("advisor.endpoint must not be set when advisor.managed is true (it is derived from the spawned server)")
+		}
+	} else if c.Advisor.Enabled {
 		u, err := url.Parse(c.Advisor.Endpoint)
 		if err != nil || u.Hostname() == "" {
 			return fmt.Errorf("advisor.endpoint %q is not a valid URL", c.Advisor.Endpoint)

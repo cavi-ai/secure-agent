@@ -93,11 +93,11 @@ func main() {
 
 	// Local triage advisor (opt-in): flags/incidents are offered to it from
 	// the drain loop; it never touches the enforcement path.
-	advisorSub := setupAdvisor(cfg, st)
+	advisorStk := setupAdvisor(cfg, st)
 
 	// Drain bus and correlate/persist (drainDone closes once every delivered
 	// event has been persisted — shutdown waits for it).
-	drainDone := startDrainLoop(b.Subscribe(), st, correlator, fleetPub, advisorSub)
+	drainDone := startDrainLoop(b.Subscribe(), st, correlator, fleetPub, advisorStk.Sub)
 
 	// Periodic process tagger refresh (1s)
 	go func() {
@@ -226,9 +226,25 @@ func main() {
 		return ts.Run(c)
 	})
 
-	if advisorSub != nil {
+	if advisorStk.Sub != nil {
 		go sup.Run(ctx, "advisor", func(c context.Context) error {
-			return advisorSub.Run(c)
+			return advisorStk.Sub.Run(c)
+		})
+	}
+	if advisorStk.Managed != nil {
+		// The managed model server as a supervised collector: restart on
+		// crash like any other, and kill it on shutdown so it never outlives
+		// the daemon (advisor verdicts die with the app, by design).
+		go sup.Run(ctx, "advisor-model", func(c context.Context) error {
+			done := make(chan error, 1)
+			go func() { done <- advisorStk.Managed.Wait() }()
+			select {
+			case <-c.Done():
+				_ = advisorStk.Managed.Process.Kill()
+				return nil
+			case err := <-done:
+				return err
+			}
 		})
 	}
 

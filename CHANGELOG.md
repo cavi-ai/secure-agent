@@ -61,6 +61,22 @@ and test infrastructure.
   ("File monitoring is off — usually missing Full Disk Access…")
   instead of process jargon ("Monitor eslogger is abandoned"), and the
   attention summary pluralizes properly.
+- **Advisor managed mode.** `advisor.managed: true` makes the daemon
+  download, spawn, and supervise the model server itself (supervised
+  like every collector, killed with the app). Path B: `/advisor/discover`
+  lists loopback OpenAI-compatible servers you already run (Ollama/MLX/
+  llama.cpp) plus the curated managed list; the Settings Advisor pane
+  renders both paths as radio + dropdowns — nobody types an endpoint.
+  Reasoning models handled: thinking disabled per-request, think
+  blocks stripped.
+- **Injection second opinion.** Prompt-injection detections now carry a
+  bounded, secret-scrubbed snippet of what matched (in the event
+  detail → flag evidence), and `proxy-prompt-injection` flags get a
+  dedicated second-opinion prompt tuned for the scanner's classic
+  false positive (documentation ABOUT injection vs an attack).
+- **Agent count precision.** `active_agents` counts tree roots, not
+  processes (266 helpers ≠ 266 agents); new `tracked_processes` field
+  carries the full count; the menubar lists roots only.
 
 ### Security fixes
 

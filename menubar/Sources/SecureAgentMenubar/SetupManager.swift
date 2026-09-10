@@ -26,6 +26,9 @@ public final class SetupManager: ObservableObject {
     /// Neutral guidance after an advisor toggle (the daemon reads config at
     /// start, so a change needs an app restart). Not an error.
     @Published public private(set) var advisorNote: String?
+    /// Loopback model servers + the curated managed list, from the daemon's
+    /// /advisor/discover. Drives the Advisor settings dropdowns.
+    @Published public private(set) var advisorDiscovery = AdvisorDiscovery(servers: [], managedModels: [])
 
     /// The advisor's default loopback endpoint (the daemon enforces loopback;
     /// the menubar only ever probes this one).
@@ -77,6 +80,8 @@ public final class SetupManager: ObservableObject {
         }
         advisorEnabled = Self.advisorConfigIsEnabled(configYAML())
         advisorServerReachable = await Self.probeAdvisorServer()
+        advisorDiscovery = (try? await DaemonClient().fetchAdvisorDiscover())
+            ?? AdvisorDiscovery(servers: [], managedModels: [])
     }
 
     /// The only mandatory setup step is installing the harness hooks; the daemon
@@ -120,6 +125,76 @@ public final class SetupManager: ObservableObject {
         } catch {
             report(error)
         }
+    }
+
+    public enum AdvisorMode: String, Sendable {
+        case managed, existing
+    }
+
+    /// Write the full advisor block for one of the two first-class paths:
+    /// managed (daemon spawns the model server; no endpoint in the file) or
+    /// existing (loopback endpoint + model from the discovery dropdowns).
+    /// Atomic write; the restart note tells the user the daemon needs a
+    /// relaunch to pick it up.
+    public func setAdvisorConfig(mode: AdvisorMode, endpoint: String?, model: String) {
+        do {
+            let updated = Self.advisorConfigSetting(configYAML(), mode: mode, endpoint: endpoint, model: model)
+            let dir = (configPath as NSString).deletingLastPathComponent
+            try fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
+            try updated.write(toFile: configPath, atomically: true, encoding: .utf8)
+            advisorEnabled = true
+            advisorNote = "Advisor configured (\(mode.rawValue)) — quit and relaunch Secure Agent so the daemon picks it up."
+        } catch {
+            report(error)
+        }
+    }
+
+    /// Replace the whole advisor block (or append one) with the given path
+    /// config, preserving every other byte of the user's config.yaml. Pure
+    /// and line-based like the other helpers: block = `advisor:` up to the
+    /// next top-level key.
+    public nonisolated static func advisorConfigSetting(_ yaml: String, mode: AdvisorMode, endpoint: String?, model: String) -> String {
+        // Strip any existing advisor block.
+        let lines = yaml.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        var kept: [String] = []
+        var inAdvisor = false
+        for line in lines {
+            if line.hasPrefix("advisor:") { inAdvisor = true; continue }
+            if inAdvisor && !line.hasPrefix(" ") && !line.hasPrefix("#") && !line.trimmingCharacters(in: .whitespaces).isEmpty {
+                inAdvisor = false
+            }
+            if !inAdvisor { kept.append(line) }
+        }
+        var base = kept.joined(separator: "\n")
+        while base.hasSuffix("\n\n") { base.removeLast() }
+
+        let block: String
+        switch mode {
+        case .managed:
+            block = """
+
+            # Local advisor (managed): the daemon spawns and supervises the model
+            # server itself — no endpoint needed. Loopback-only, enforced in code.
+            advisor:
+              enabled: true
+              managed: true
+              managed_model: "\(model)"
+              timeout_ms: 8000
+            """
+        case .existing:
+            block = """
+
+            # Local advisor (existing server): a locally served model triages flags
+            # and writes incident narratives. Loopback-only, enforced in code.
+            advisor:
+              enabled: true
+              endpoint: "\(endpoint ?? advisorEndpoint)"
+              model: "\(model)"
+              timeout_ms: 8000
+            """
+        }
+        if !base.isEmpty && !base.hasSuffix("\n") { base += "\n" }
+        return base + block + "\n"
     }
 
     /// True when the YAML has an advisor block with `enabled: true`.
