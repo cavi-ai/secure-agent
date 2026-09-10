@@ -4,12 +4,25 @@ All notable changes to `secure-agent` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/) and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
-## [v0.9.0-rc.3] — 2026-09-08
+## [v1.0.0] — 2026-09-10
 
-Release candidate 3: the console UI overhaul (liveness, evidence chains,
-menubar redesign), a console XSS fix, the local advisor (opt-in triage
-and incident narratives), and a hardening pass on the daemon's wiring
-and test infrastructure.
+The first stable release. rc.3 was folded into 1.0 rather than published
+separately — everything below ships in v1.0.0:
+
+- **Console UI overhaul** — evidence chains, liveness, session drill-down,
+  activity trends, posture banner, menubar redesign.
+- **Security hardening** — inline-handler XSS closed and structurally
+  eliminated, harness self-protection, Grep/Glob directory-scan gating,
+  Linux build enforced in CI.
+- **The local advisor** — opt-in triage and incident narratives from a
+  locally served model (loopback-only, advisory-only), with managed-mode
+  provisioning, existing-server discovery, triage backfill, mute
+  dispositions, and injection second opinions.
+- **Learning loop** — allowlist suggestions with advisor assessments,
+  weekly digest.
+- **Self-updating** — verified stable channel + nightly channel.
+- **Daemon hardening** — `main()` decomposition into tested wiring,
+  both CI flakes root-caused and fixed.
 
 ### Local advisor (opt-in)
 
