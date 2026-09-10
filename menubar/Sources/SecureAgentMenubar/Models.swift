@@ -56,6 +56,7 @@ public struct RuleStatModel: Codable, Sendable {
 
 public struct StatusResponse: Codable, Sendable {
     public let running: Bool
+    public let version: String?
     public let uptime: String
     public let activeAgents: Int
     public let agents: [AgentSummaryModel]?
@@ -68,6 +69,7 @@ public struct StatusResponse: Codable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case running
+        case version
         case uptime
         case activeAgents = "active_agents"
         case agents
@@ -78,8 +80,9 @@ public struct StatusResponse: Codable, Sendable {
         case trackedProcesses = "tracked_processes"
     }
 
-    public init(running: Bool, uptime: String, activeAgents: Int, agents: [AgentSummaryModel]? = nil, proxyEnabled: Bool? = nil, proxyPort: Int? = nil, uninspectedEgress: Int? = nil, firewallStats: [String: RuleStatModel]? = nil, trackedProcesses: Int? = nil) {
+    public init(running: Bool, uptime: String, activeAgents: Int, agents: [AgentSummaryModel]? = nil, proxyEnabled: Bool? = nil, proxyPort: Int? = nil, uninspectedEgress: Int? = nil, firewallStats: [String: RuleStatModel]? = nil, trackedProcesses: Int? = nil, version: String? = nil) {
         self.running = running
+        self.version = version
         self.uptime = uptime
         self.activeAgents = activeAgents
         self.agents = agents
