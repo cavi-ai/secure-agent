@@ -620,6 +620,40 @@ func (s *Store) RecentIncidents(limit int) []model.IncidentReport {
 	return list
 }
 
+// CriticalFlagsMissingAdvisor returns recent severity-3 flags that have no
+// advisor verdict yet — the backfill set for when the advisor is enabled
+// after flags already fired. Bounded by limit.
+func (s *Store) CriticalFlagsMissingAdvisor(since time.Time, limit int) []model.Flag {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rows, err := s.db.Query(
+		`SELECT f.id, f.rule, f.severity, f.ts, f.pid, f.agent, f.session_id, f.evidence
+		 FROM flags f
+		 LEFT JOIN advisor_verdicts v ON v.subject_id = f.id AND v.kind = 'flag'
+		 WHERE f.severity >= 3 AND v.subject_id IS NULL AND datetime(f.ts) >= datetime(?)
+		 ORDER BY datetime(f.ts) DESC, f.ts DESC LIMIT ?`,
+		since.UTC().Format(time.RFC3339Nano), normalizeLimit(limit),
+	)
+	if err != nil {
+		log.Printf("store: backfill query error: %v", err)
+		return nil
+	}
+	defer rows.Close()
+	var flags []model.Flag
+	for rows.Next() {
+		var fl model.Flag
+		var tsStr, evStr string
+		var sessionID sql.NullString
+		if err := rows.Scan(&fl.ID, &fl.Rule, &fl.Severity, &tsStr, &fl.PID, &fl.Agent, &sessionID, &evStr); err == nil {
+			fl.SessionID = sessionID.String
+			fl.TS, _ = time.Parse(time.RFC3339Nano, tsStr)
+			_ = json.Unmarshal([]byte(evStr), &fl.Evidence)
+			flags = append(flags, fl)
+		}
+	}
+	return flags
+}
+
 // attachNarrativesLocked joins advisor narratives onto incidents (caller
 // holds mu).
 func (s *Store) attachNarrativesLocked(list []model.IncidentReport) {

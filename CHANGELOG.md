@@ -77,6 +77,12 @@ and test infrastructure.
 - **Agent count precision.** `active_agents` counts tree roots, not
   processes (266 helpers ≠ 266 agents); new `tracked_processes` field
   carries the full count; the menubar lists roots only.
+- **Triage completion loop.** The advisor backfills verdicts for
+  severity-3 flags that fired while it was off (7-day window, bounded);
+  advisor-benign flag rows offer a reversible **Mute rule+host**
+  disposition (persisted to `muted.json`, suppressed at the correlator
+  with a `muted_flags` counter, unmute from the flags panel); open
+  incidents older than 72h surface in posture as aging items.
 
 ### Security fixes
 

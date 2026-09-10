@@ -122,6 +122,18 @@ func main() {
 	allowlistStore := correlate.NewAllowlistStore(filepath.Join(filepath.Dir(cfg.Firewall.Registry.SaltRef), "allowlist-overrides.json"))
 	correlator.SetAllowlistOverrides(func(agent string) []string { return allowlistStore.Load()[agent] })
 
+	// Operator dispositions (mute rule+host): persisted likewise; muted pairs
+	// are counted, not flagged.
+	muteStore := correlate.NewMuteStore(filepath.Join(filepath.Dir(cfg.Firewall.Registry.SaltRef), "muted.json"))
+	correlator.SetMuteChecker(func(rule, host string) bool {
+		for _, h := range muteStore.Load()[rule] {
+			if h == host {
+				return true
+			}
+		}
+		return false
+	})
+
 	var proxyServer *proxy.ProxyServer
 	if cfg.ProxyEnabled {
 		proxyServer = setupProxy(cfg, b, fw.Engine)
@@ -172,6 +184,7 @@ func main() {
 	guardBroker := guard.NewBroker(time.Duration(guardBrokerMS(cfg.DirectoryGuard.PromptDeadlineMS)) * time.Millisecond)
 	apiServer.SetGuard(guardBroker)
 	apiServer.SetAllowlist(correlator, allowlistStore)
+	apiServer.SetMute(correlator, muteStore)
 	apiServer.SetFleetSink(fleetPub)
 	// SSE live feed: each console gets its own bus subscription; unsubscribes
 	// when the connection closes.

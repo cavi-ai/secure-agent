@@ -49,9 +49,10 @@ func (s *chatStub) handler(t *testing.T) http.HandlerFunc {
 }
 
 type memSink struct {
-	mu    sync.Mutex
-	rows  map[string]model.AdvisorVerdict
-	trend model.TrendContext
+	mu       sync.Mutex
+	rows     map[string]model.AdvisorVerdict
+	trend    model.TrendContext
+	backfill []model.Flag
 }
 
 func (m *memSink) PutAdvisorVerdict(subjectID, kind string, v model.AdvisorVerdict) {
@@ -61,6 +62,10 @@ func (m *memSink) PutAdvisorVerdict(subjectID, kind string, v model.AdvisorVerdi
 }
 
 func (m *memSink) TrendFor(rule, host string) model.TrendContext { return m.trend }
+
+func (m *memSink) CriticalFlagsMissingAdvisor(since time.Time, limit int) []model.Flag {
+	return m.backfill
+}
 
 func newStubServer(t *testing.T, stub *chatStub) *httptest.Server {
 	srv := httptest.NewServer(stub.handler(t))
@@ -310,4 +315,35 @@ func TestInjectionFlagsGetSecondOpinionPrompt(t *testing.T) {
 	if strings.Contains(req2.Messages[0].Content, "SECOND OPINION") {
 		t.Fatal("non-injection flag must use the generic prompt")
 	}
+}
+
+func TestBackfillEnqueuesPreExistingFlags(t *testing.T) {
+	stub := &chatStub{content: `{"assessment":"benign","confidence":0.9,"rationale":"routine"}`}
+	srv := newStubServer(t, stub)
+	sink := &memSink{
+		rows: map[string]model.AdvisorVerdict{},
+		backfill: []model.Flag{
+			{ID: "old-flag-1", Rule: "sensitive-read-then-connect", Severity: 3, Evidence: []string{"e"}},
+			{ID: "old-flag-2", Rule: "keychain-access", Severity: 3, Evidence: []string{"e"}},
+		},
+	}
+	sub := New(Config{Enabled: true, Endpoint: srv.URL, Model: "m", Timeout: 2 * time.Second}, sink)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go sub.Run(ctx)
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		sink.mu.Lock()
+		n := len(sink.rows)
+		sink.mu.Unlock()
+		if n == 2 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	t.Fatalf("backfill flags never triaged: %v", sink.rows)
 }

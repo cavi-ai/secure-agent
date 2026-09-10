@@ -136,6 +136,12 @@ def main():
         check("activity chart marks the flag hour", 'class="act-fl"' in dom)
         check("activity chart zero-fills empty hours", 'class="act-zero"' in dom)
 
+        # --- dispositions (mute) ---
+        check("mute action on advisor-benign flag",
+              'data-action="mute-flag" data-rule="sensitive-read-then-connect" data-host="logs.example.com"' in dom)
+        check("mutes list rendered with unmute",
+              'data-action="unmute" data-rule="proxy-prompt-injection" data-host="blog.example.com"' in dom)
+
         # --- structural security: no inline handlers anywhere ---
         check("zero inline onclick handlers in rendered DOM", " onclick=" not in dom)
 

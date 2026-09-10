@@ -211,7 +211,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   async function fetchTelemetry() {
     try {
-      const [statusRes, flagsRes, incidentsRes, eventsRes, fleetRes, auditRes, sourcesRes, postureRes, suggestionsRes, rollupRes] = await Promise.all([
+      const [statusRes, flagsRes, incidentsRes, eventsRes, fleetRes, auditRes, sourcesRes, postureRes, suggestionsRes, rollupRes, mutesRes] = await Promise.all([
         apiFetch('/status').catch(() => null),
         apiFetch('/flags?limit=20').catch(() => null),
         apiFetch('/incidents?limit=10').catch(() => null),
@@ -221,7 +221,8 @@ document.addEventListener('DOMContentLoaded', () => {
         apiFetch('/firewall/sources').catch(() => null),
         apiFetch('/posture').catch(() => null),
         apiFetch('/allowlist/suggestions').catch(() => null),
-        apiFetch('/stats/rollup?hours=168').catch(() => null)
+        apiFetch('/stats/rollup?hours=168').catch(() => null),
+        apiFetch('/mute').catch(() => null)
       ]);
 
       if (statusRes && statusRes.ok) {
@@ -253,6 +254,9 @@ document.addEventListener('DOMContentLoaded', () => {
       }
       if (rollupRes && rollupRes.ok) {
         telemetryData.rollup = await rollupRes.json() || [];
+      }
+      if (mutesRes && mutesRes.ok) {
+        telemetryData.mutes = await mutesRes.json() || [];
       }
 
       // The panels show the filtered view; KPIs keep reading the unfiltered
@@ -806,15 +810,27 @@ document.addEventListener('DOMContentLoaded', () => {
         </button>
         <div class="flag-detail"><div class="flag-detail-inner">
           ${chainHTML}
-          ${f.session_id ? `<div class="flag-actions-row">
-            <button class="btn btn-ghost btn-sm" data-action="filter-session" data-session="${escapeHTML(f.session_id)}"><svg class="icon"><use href="#i-activity"/></svg><span>View session in timeline</span></button>
-          </div>` : ''}
+          <div class="flag-actions-row">
+            ${f.session_id ? `<button class="btn btn-ghost btn-sm" data-action="filter-session" data-session="${escapeHTML(f.session_id)}"><svg class="icon"><use href="#i-activity"/></svg><span>View session in timeline</span></button>` : ''}
+            ${f.advisor && f.advisor.assessment === 'benign' && flagHost(f) ? `<button class="btn btn-ghost btn-sm" data-action="mute-flag" data-rule="${escapeHTML(f.rule)}" data-host="${escapeHTML(flagHost(f))}" title="Stop flagging ${escapeHTML(f.rule)} for ${escapeHTML(flagHost(f))} — reversible"><svg class="icon"><use href="#i-close"/></svg><span>Mute rule+host</span></button>` : ''}
+          </div>
           <div class="flag-evidence">
             ${(f.evidence || []).map(ev => `<div>${escapeHTML(ev)}</div>`).join('')}
           </div>
         </div></div>
       </div>`;
     }).join('');
+
+    // Dispositions: muted (rule, host) pairs, visible so the quiet is
+    // deliberate and reversible.
+    const mutes = telemetryData.mutes || [];
+    if (mutes.length > 0) {
+      container.innerHTML += `<div class="mute-list"><div class="mute-head">Muted</div>` + mutes.map(m => `
+        <div class="mute-row">
+          <span class="mute-pair">${escapeHTML(m.rule)} · ${escapeHTML(m.host)}</span>
+          <button class="source-remove" title="Unmute" data-action="unmute" data-rule="${escapeHTML(m.rule)}" data-host="${escapeHTML(m.host)}"><svg class="icon"><use href="#i-close"/></svg></button>
+        </div>`).join('') + `</div>`;
+    }
   }
 
   function renderEvents() {
@@ -963,6 +979,38 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   };
 
+  window.muteFlag = async function(rule, host) {
+    try {
+      const res = await apiFetch('/mute', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rule, host })
+      });
+      if (res.ok) {
+        showToast(`Muted ${rule} for ${host} — future flags suppressed`, 'success');
+        fetchTelemetry();
+      } else {
+        showToast(`Failed to mute: ${await res.text()}`, 'danger');
+      }
+    } catch (err) {
+      showToast(`Error muting: ${err}`, 'danger');
+    }
+  };
+
+  window.unmuteFlag = async function(rule, host) {
+    try {
+      const res = await apiFetch(`/mute?rule=${encodeURIComponent(rule)}&host=${encodeURIComponent(host)}`, { method: 'DELETE' });
+      if (res.ok) {
+        showToast(`Unmuted ${rule} for ${host}`, 'info');
+        fetchTelemetry();
+      } else {
+        showToast(`Failed to unmute.`, 'danger');
+      }
+    } catch (err) {
+      showToast(`Error unmuting: ${err}`, 'danger');
+    }
+  };
+
   window.promoteRule = async function(rule) {    try {
       const res = await apiFetch('/firewall/mode', {
         method: 'POST',
@@ -1038,6 +1086,12 @@ document.addEventListener('DOMContentLoaded', () => {
         break;
       case 'allow-host':
         window.allowHost(d.agent, d.host);
+        break;
+      case 'mute-flag':
+        window.muteFlag(d.rule, d.host);
+        break;
+      case 'unmute':
+        window.unmuteFlag(d.rule, d.host);
         break;
       case 'toggle-flag': {
         const card = el.parentElement;

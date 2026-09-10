@@ -281,6 +281,7 @@ func buildStatusFn(proxyServer *proxy.ProxyServer, tagger *agents.Tagger, cr *co
 			ProxyPort:         proxyPort,
 			UninspectedEgress: cr.UninspectedEgressCount(),
 			AdvisorEnabled:    advisorEnabled,
+			MutedFlags:        cr.MutedCount(),
 			FirewallStats:     firewallStats(eng),
 			Collectors:        reg.Snapshot(),
 		}
