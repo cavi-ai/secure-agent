@@ -269,6 +269,8 @@ struct OnboardingView: View {
 
           Divider()
           HStack {
+              Button("More options in Settings…") { SettingsWindowController.shared.show() }
+                  .buttonStyle(.link)
               Spacer()
               Button(setup.needsSetup ? "Finish Later" : "Done") { onDone() }
                   .keyboardShortcut(.defaultAction)

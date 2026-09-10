@@ -21,6 +21,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificat
 
         setupStatusItem()
         setupPopover()
+        SettingsWindowController.shared.appState = state
         state.onChange = { [weak self] in self?.updateStatusIcon() }
         state.onNewCriticalFlag = { [weak self] in self?.flashStatusBadge() }
         state.start()
@@ -174,7 +175,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificat
 
     @objc private func pauseClicked() { state.togglePause() }
 
-    @objc private func settingsClicked() { SettingsWindowController.shared.show(state: state) }
+    @objc private func settingsClicked() { SettingsWindowController.shared.show() }
 
     @objc private func setupClicked() { OnboardingWindowController.shared.show() }
 
