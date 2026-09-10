@@ -68,10 +68,14 @@ func IsLoopbackEndpoint(endpoint string) bool {
 
 // chatRequest is the OpenAI-compatible chat-completions payload.
 type chatRequest struct {
-	Model       string        `json:"model"`
-	Messages    []chatMessage `json:"messages"`
-	Temperature float64       `json:"temperature"`
-	MaxTokens   int           `json:"max_tokens"`
+	Model    string        `json:"model"`
+	Messages []chatMessage `json:"messages"`
+	// Reasoning models (Qwen3 et al.) burn the token budget on a reasoning
+	// field and can return empty content; servers that support it disable
+	// thinking, servers that don't ignore the unknown field.
+	ChatTemplateKwargs map[string]any `json:"chat_template_kwargs,omitempty"`
+	Temperature        float64        `json:"temperature"`
+	MaxTokens          int            `json:"max_tokens"`
 }
 
 type chatMessage struct {
@@ -238,8 +242,9 @@ func (s *Subscriber) chat(ctx context.Context, system, user string, maxTokens in
 			{Role: "system", Content: system},
 			{Role: "user", Content: user},
 		},
-		Temperature: 0,
-		MaxTokens:   maxTokens,
+		ChatTemplateKwargs: map[string]any{"enable_thinking": false},
+		Temperature:        0,
+		MaxTokens:          maxTokens,
 	})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		strings.TrimSuffix(s.cfg.Endpoint, "/")+"/v1/chat/completions",
@@ -305,18 +310,22 @@ func (s *Subscriber) triageFlag(ctx context.Context, fl model.Flag) (model.Advis
 	}
 	user := fmt.Sprintf("Flag under review:\nrule: %s\nagent: %s (pid %d)\nseverity: %d\n%s\n\n<evidence>\n%s</evidence>",
 		fl.Rule, fl.Agent, fl.PID, fl.Severity, trendLine, ev.String())
-	content, err := s.chat(ctx, triageSystem, user, 200)
+	content, err := s.chat(ctx, triageSystem, user, 512)
 	if err != nil {
 		return model.AdvisorVerdict{}, err
 	}
 	return parseVerdict(content)
 }
 
+var thinkBlockRE = regexp.MustCompile(`(?s)<think>.*?</think>`)
+
 // parseVerdict strictly validates the model's JSON. Anything malformed,
 // off-schema, or carrying an unknown assessment is dropped — an advisory
-// layer must fail empty, never invent a verdict.
+// layer must fail empty, never invent a verdict. Reasoning models may wrap
+// the answer in a <think> block even when told not to; strip it first.
 func parseVerdict(content string) (model.AdvisorVerdict, error) {
-	c := strings.TrimSpace(content)
+	c := thinkBlockRE.ReplaceAllString(content, "")
+	c = strings.TrimSpace(c)
 	c = strings.TrimPrefix(c, "```json")
 	c = strings.TrimPrefix(c, "```")
 	c = strings.TrimSuffix(c, "```")
