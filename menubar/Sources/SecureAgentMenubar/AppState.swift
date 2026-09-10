@@ -179,6 +179,7 @@ public final class AppState: ObservableObject {
             if wasDisconnected { self.scheduleTimer(1.0) }
             self.processNewFlags(flags)
             self.onChange?()
+            Task { await self.maybeSendWeeklyDigest() }
             // Guard pending is decoded STRICTLY: a malformed response that
             // silently became [] would suppress the Allow/Deny prompt — a
             // fail-open on the security-critical path.
@@ -242,6 +243,60 @@ public final class AppState: ObservableObject {
         refreshTask?.cancel()
         timer?.invalidate()
         timer = nil
+    }
+
+    // MARK: - Weekly digest
+
+    /// The scheduled proof the app is working: Monday 09:00, a one-line
+    /// rollup of the week. Computed from rollups + audit + status, sent via
+    /// the same notify-channel pattern as flag alerts (testable closure).
+    var sendDigest: (String) -> Void = { NotificationManager.shared.sendWeeklyDigest($0) }
+
+    /// Monday 09:00 local (± the poll window), once per ISO week.
+    static func shouldSendWeeklyDigest(now: Date, lastSentWeek: String?, calendar: Calendar = .current) -> Bool {
+        let week = calendar.component(.weekOfYear, from: now)
+        let year = calendar.component(.yearForWeekOfYear, from: now)
+        let key = "\(year)-W\(week)"
+        guard key != lastSentWeek else { return false }
+        guard calendar.component(.weekday, from: now) == 2, // Monday
+              calendar.component(.hour, from: now) == 9 else { return false }
+        return true
+    }
+
+    static func currentWeekKey(now: Date, calendar: Calendar = .current) -> String {
+        "\(calendar.component(.yearForWeekOfYear, from: now))-W\(calendar.component(.weekOfYear, from: now))"
+    }
+
+    /// The one-line digest. Counts only — nothing posture-sensitive.
+    static func weeklyDigestText(flags7d: Int, blockedLeaks: Int, approvals: Int, openIncidents: Int) -> String {
+        let flag = flags7d == 1 ? "flag" : "flags"
+        let leak = blockedLeaks == 1 ? "blocked leak" : "blocked leaks"
+        let approval = approvals == 1 ? "allowlist approval" : "allowlist approvals"
+        let incident = openIncidents == 1 ? "open incident" : "open incidents"
+        return "\(flags7d) \(flag) · \(blockedLeaks) \(leak) · \(approvals) \(approval) · \(openIncidents) \(incident)"
+    }
+
+    private var digestCheckedThisWeek = false
+
+    /// Called from performFetch after a successful status update: if it's
+    /// Monday 09:00 and the digest hasn't gone out this ISO week, send it.
+    func maybeSendWeeklyDigest(now: Date = Date()) async {
+        let defaults = UserDefaults.standard
+        let lastKey = defaults.string(forKey: "weeklyDigestLastWeek")
+        guard Self.shouldSendWeeklyDigest(now: now, lastSentWeek: lastKey), !digestCheckedThisWeek else { return }
+        digestCheckedThisWeek = true
+        defaults.set(Self.currentWeekKey(now: now), forKey: "weeklyDigestLastWeek")
+
+        let rollup = (try? await client.fetchRollup(hours: 168)) ?? []
+        var flags7d = 0
+        for p in rollup where p.kind.hasPrefix("flag:") { flags7d += p.count }
+        let blocked = (status?.firewallStats ?? [:]).values.reduce(0) { $0 + $1.blocked }
+        let weekAgo = now.addingTimeInterval(-7 * 86400)
+        let approvals = ((try? await client.fetchAudit(limit: 50)) ?? []).filter {
+            $0.action == "allowlist-add" && (ISO8601DateFormatter().date(from: $0.ts) ?? .distantPast) > weekAgo
+        }.count
+        let openIncidents = incidents.filter { $0.workflow?.status != "resolved" }.count
+        sendDigest(Self.weeklyDigestText(flags7d: flags7d, blockedLeaks: blocked, approvals: approvals, openIncidents: openIncidents))
     }
 
     // MARK: - Actions

@@ -134,6 +134,15 @@ func main() {
 		return false
 	})
 
+	// Advisor pre-assessment of suggestion-threshold hosts: when an endpoint
+	// crosses into suggestion territory, the advisor has its legitimacy
+	// verdict ready before the operator opens the console.
+	if advisorStk.Sub != nil {
+		correlator.SetOnUninspected(func(agent, host string) {
+			advisorStk.Sub.EnqueueHost(agent, host)
+		})
+	}
+
 	var proxyServer *proxy.ProxyServer
 	if cfg.ProxyEnabled {
 		proxyServer = setupProxy(cfg, b, fw.Engine)

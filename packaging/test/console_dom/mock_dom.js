@@ -85,7 +85,7 @@
       { source: '~/workspace/api-service/.env.production', origin: 'user' }
     ],
     '/allowlist/suggestions': [
-      { agent: 'cursor', host: 'registry.npmjs.org', count: 14 }
+      { agent: 'cursor', host: 'registry.npmjs.org', count: 14, assessment: 'benign', confidence: 0.9, rationale: 'npm registry is routine for JS projects' }
     ],
     '/mute': [
       { rule: 'proxy-prompt-injection', host: 'blog.example.com' }

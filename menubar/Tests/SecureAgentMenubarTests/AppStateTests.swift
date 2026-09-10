@@ -29,6 +29,8 @@ final class StubDaemonClient: DaemonClientProtocol, @unchecked Sendable {
     func fetchAdvisorDiscover() async throws -> AdvisorDiscovery {
         AdvisorDiscovery(servers: [], managedModels: [])
     }
+    func fetchRollup(hours: Int) async throws -> [RollupPointModel] { [] }
+    func fetchAudit(limit: Int) async throws -> [AuditEntryModel] { [] }
     func streamEvents(onEvent: @escaping @Sendable (SSEFrame) -> Void) async throws {
         try await Task.sleep(nanoseconds: 60_000_000_000) // tests don't drive SSE
     }
@@ -163,5 +165,31 @@ final class AppStateTests: XCTestCase {
         state.isPaused = true
         state.fetch()
         XCTAssertFalse(state.connected)
+    }
+}
+
+@MainActor
+final class WeeklyDigestTests: XCTestCase {
+    func testShouldSendOnlyMondayAtNineOncePerWeek() {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "UTC")!
+        // Monday 2026-09-07 is a Monday (verified: 2026-09-07 was a Monday).
+        let mon9 = cal.date(from: DateComponents(year: 2026, month: 9, day: 7, hour: 9, minute: 30))!
+        let mon8 = cal.date(from: DateComponents(year: 2026, month: 9, day: 7, hour: 8, minute: 59))!
+        let tue9 = cal.date(from: DateComponents(year: 2026, month: 9, day: 8, hour: 9, minute: 0))!
+
+        XCTAssertTrue(AppState.shouldSendWeeklyDigest(now: mon9, lastSentWeek: nil, calendar: cal))
+        XCTAssertFalse(AppState.shouldSendWeeklyDigest(now: mon8, lastSentWeek: nil, calendar: cal))
+        XCTAssertFalse(AppState.shouldSendWeeklyDigest(now: tue9, lastSentWeek: nil, calendar: cal))
+        // Already sent this ISO week.
+        let key = AppState.currentWeekKey(now: mon9, calendar: cal)
+        XCTAssertFalse(AppState.shouldSendWeeklyDigest(now: mon9, lastSentWeek: key, calendar: cal))
+    }
+
+    func testDigestTextPluralization() {
+        XCTAssertEqual(AppState.weeklyDigestText(flags7d: 3, blockedLeaks: 1, approvals: 2, openIncidents: 0),
+                       "3 flags · 1 blocked leak · 2 allowlist approvals · 0 open incidents")
+        XCTAssertEqual(AppState.weeklyDigestText(flags7d: 1, blockedLeaks: 2, approvals: 1, openIncidents: 1),
+                       "1 flag · 2 blocked leaks · 1 allowlist approval · 1 open incident")
     }
 }
