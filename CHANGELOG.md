@@ -46,6 +46,21 @@ and test infrastructure.
   and audited. Hosts are validated as bare hostnames so the allowlist
   can't be widened by smuggled structure; the endpoint is mutation-gated
   like firewall promotions.
+- **Settings window.** A real tabbed Settings surface (⌘, from the
+  menu bar, or the popover gear): General (login item, CLI, routing,
+  uninstall), Guard (the full monitor/prompt/deny rule editor),
+  Firewall (per-rule monitor/block with live counters), Advisor (server
+  detection + enable toggle).
+- **Activity trends.** The store keeps pre-aggregated hourly rollups
+  (O(buckets) reads, 30-day retention) served at `/stats/rollup`; the
+  console gains an Activity strip chart (24h/7d, events with rose flag
+  markers), and the advisor's triage prompt now carries week-over-week
+  trend context (rule frequency, host novelty) so "benign vs unusual"
+  is judged against this machine's own history.
+- **Posture language fix.** Dead collectors read as operator language
+  ("File monitoring is off — usually missing Full Disk Access…")
+  instead of process jargon ("Monitor eslogger is abandoned"), and the
+  attention summary pluralizes properly.
 
 ### Security fixes
 

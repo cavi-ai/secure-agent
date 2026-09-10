@@ -86,7 +86,16 @@
     ],
     '/allowlist/suggestions': [
       { agent: 'cursor', host: 'registry.npmjs.org', count: 14 }
-    ]
+    ],
+    '/stats/rollup': (() => {
+      const pts = [];
+      const bucket = (h) => new Date(Math.floor((now - h * 3600000) / 3600000) * 3600000).toISOString().slice(0, 13);
+      for (let h = 0; h < 24; h++) {
+        pts.push({ bucket: bucket(h), kind: 'event:tool', count: (h * 7) % 9 });
+      }
+      pts.push({ bucket: bucket(2), kind: 'flag:s3', count: 1 });
+      return pts;
+    })()
   };
 
   window.fetch = async (path) => {

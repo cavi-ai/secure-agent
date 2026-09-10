@@ -90,6 +90,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificat
         }
         menu.addItem(item(state.isPaused ? "Resume monitoring" : "Pause monitoring",
                           state.isPaused ? "play.circle" : "pause.circle", #selector(pauseClicked)))
+        menu.addItem(item("Settings…", "gearshape.2", #selector(settingsClicked), ","))
         menu.addItem(item("Setup & Permissions…", "gearshape", #selector(setupClicked)))
         menu.addItem(item("Uninstall…", "trash", #selector(uninstallClicked)))
         menu.addItem(.separator())
@@ -172,6 +173,8 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificat
     // MARK: - Right-click actions
 
     @objc private func pauseClicked() { state.togglePause() }
+
+    @objc private func settingsClicked() { SettingsWindowController.shared.show(state: state) }
 
     @objc private func setupClicked() { OnboardingWindowController.shared.show() }
 

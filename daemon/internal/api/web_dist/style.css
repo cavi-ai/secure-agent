@@ -514,6 +514,18 @@ body {
 }
 .mode-chip.block { color: var(--ok); background: var(--ok-bg); }
 
+/* ---------- activity rollup chart ---------- */
+.activity-panel .act-body { padding: 10px 16px 8px; }
+#activity-chart { width: 100%; height: 90px; display: block; }
+#activity-chart .act-ev { fill: var(--brand); opacity: 0.75; }
+#activity-chart .act-fl { fill: var(--bad); }
+#activity-chart .act-zero { fill: var(--bg-3); }
+.act-legend { display: flex; gap: 16px; padding-top: 6px; }
+.act-key { display: inline-flex; align-items: center; gap: 6px; font-size: 0.7rem; color: var(--tx-3); }
+.act-swatch { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+.act-sw-events { background: var(--brand); }
+.act-sw-flags { background: var(--bad); }
+
 /* ---------- responsive ---------- */
 @media (max-width: 1000px) {
   .kpis { grid-template-columns: repeat(2, 1fr); }

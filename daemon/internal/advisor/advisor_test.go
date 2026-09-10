@@ -49,8 +49,9 @@ func (s *chatStub) handler(t *testing.T) http.HandlerFunc {
 }
 
 type memSink struct {
-	mu   sync.Mutex
-	rows map[string]model.AdvisorVerdict
+	mu    sync.Mutex
+	rows  map[string]model.AdvisorVerdict
+	trend model.TrendContext
 }
 
 func (m *memSink) PutAdvisorVerdict(subjectID, kind string, v model.AdvisorVerdict) {
@@ -58,6 +59,8 @@ func (m *memSink) PutAdvisorVerdict(subjectID, kind string, v model.AdvisorVerdi
 	defer m.mu.Unlock()
 	m.rows[subjectID] = v
 }
+
+func (m *memSink) TrendFor(rule, host string) model.TrendContext { return m.trend }
 
 func newStubServer(t *testing.T, stub *chatStub) *httptest.Server {
 	srv := httptest.NewServer(stub.handler(t))
@@ -236,5 +239,32 @@ func TestQueueDropOldestUnderPressure(t *testing.T) {
 	first := <-sub.queue
 	if first.flag.ID != "b" {
 		t.Fatalf("expected oldest evicted, got first=%s", first.flag.ID)
+	}
+}
+
+func TestTriagePromptCarriesTrendContext(t *testing.T) {
+	stub := &chatStub{content: `{"assessment":"benign","confidence":1,"rationale":"x"}`}
+	srv := newStubServer(t, stub)
+	sink := &memSink{
+		rows:  map[string]model.AdvisorVerdict{},
+		trend: model.TrendContext{RuleLast7d: 3, RulePrior7d: 0, HostKnown: true, HostFirstSeen: "2026-09-08T09:00:00Z"},
+	}
+	sub := New(Config{Enabled: true, Endpoint: srv.URL, Model: "m", Timeout: 2 * time.Second}, sink)
+
+	sub.process(context.Background(), task{
+		kind: "flag", subjectID: "f1",
+		flag: model.Flag{ID: "f1", Rule: "sensitive-read-then-connect",
+			Evidence: []string{"then connected to logs.example.com:443 at 2026-09-08T10:00:00Z"}},
+	})
+	stub.mu.Lock()
+	body := stub.lastBody
+	stub.mu.Unlock()
+	var req chatRequest
+	if err := json.Unmarshal([]byte(body), &req); err != nil {
+		t.Fatalf("request body not decodable: %v", err)
+	}
+	user := req.Messages[1].Content
+	if !strings.Contains(user, "3 times in the last 7 days") || !strings.Contains(user, "host first seen 2026-09-08T09:00:00Z") {
+		t.Fatalf("triage prompt missing trend context: %q", user)
 	}
 }

@@ -130,6 +130,12 @@ def main():
         check("suggestion allow button is delegated",
               'data-action="allow-host" data-agent="cursor" data-host="registry.npmjs.org"' in dom)
 
+        # --- activity rollup chart ---
+        rects_ev = dom.count('class="act-ev"')
+        check("activity chart draws event bars", rects_ev > 10, f"rects={rects_ev}")
+        check("activity chart marks the flag hour", 'class="act-fl"' in dom)
+        check("activity chart zero-fills empty hours", 'class="act-zero"' in dom)
+
         # --- structural security: no inline handlers anywhere ---
         check("zero inline onclick handlers in rendered DOM", " onclick=" not in dom)
 

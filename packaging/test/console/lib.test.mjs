@@ -20,7 +20,7 @@ const {
   escapeHTML, fmtTime, eventKey,
   advanceBuckets, bucketIndexFor, sparkPoints,
   parseMarkdownToHTML, buildEvidenceChain,
-  sessionShort, filterEventsBySession,
+  sessionShort, filterEventsBySession, rollupSeries,
   familyTitle, fmtRSS, fmtAge, isFamilyRoot, childrenOf, groupAgents, familyShouldExpand,
 } = ctx;
 
@@ -189,6 +189,35 @@ test('filterEventsBySession: keeps only the session, null clears the filter', ()
   assert.deepEqual(filterEventsBySession(events, 'aaa').map(e => e.ts), ['1', '3']);
   assert.equal(filterEventsBySession(events, null).length, 4);
   assert.equal(filterEventsBySession(null, 'aaa').length, 0); // VM-realm array: compare structurally
+});
+
+// ---------- rollupSeries ----------
+
+test('rollupSeries: zero-fills the window and separates flags from events', () => {
+  const now = Date.parse('2026-09-08T16:37:00Z');
+  const b = (isoHour) => isoHour;
+  const s = rollupSeries([
+    { bucket: b('2026-09-08T16'), kind: 'event:tool', count: 5 },
+    { bucket: b('2026-09-08T16'), kind: 'flag:s3', count: 1 },
+    { bucket: b('2026-09-08T15'), kind: 'event:conn', count: 2 },
+    { bucket: b('2026-08-01T00'), kind: 'event:tool', count: 99 }, // outside window
+  ], 24, now);
+  assert.equal(s.events.length, 24);
+  assert.equal(s.events[23], 5);  // current hour
+  assert.equal(s.flags[23], 1);
+  assert.equal(s.events[22], 2);
+  assert.equal(s.events[0], 0);   // zero-filled, not dropped
+  assert.equal(s.events.reduce((a, c) => a + c, 0), 7); // out-of-window excluded
+  // Labels are local wall-clock (UI shows local time) — derive the expectation
+  // the same way instead of hardcoding a UTC assumption.
+  const wantLabel = String(new Date(Date.parse('2026-09-08T16:00:00Z')).getHours()).padStart(2, '0') + ':00';
+  assert.equal(s.labels[23], wantLabel);
+});
+
+test('rollupSeries: 7d window labels switch to day form', () => {
+  const s = rollupSeries([], 168, Date.parse('2026-09-08T16:00:00Z'));
+  assert.equal(s.labels.length, 168);
+  assert.match(s.labels[167], /^\d{1,2}\/\d{1,2}$/);
 });
 
 test('groupAgents: families, roots, earliest, rss, orphans', () => {
