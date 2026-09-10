@@ -252,6 +252,8 @@ body {
 }
 .agent-instance.nested { margin-left: 16px; }
 .agent-instance.orphan { border-color: hsl(38 92% 56% / 0.45); }
+.agent-instance.stale { opacity: 0.62; }
+.agent-lastseen { color: var(--tx-3); }
 .agent-instance .btn { min-height: 32px; }
 @media (max-width: 560px) {
   .agent-instance .btn { min-height: 44px; }
