@@ -46,6 +46,7 @@ struct SettingsView: View {
             guardTab.tabItem { Label("Guard", systemImage: "lock.shield") }
             firewallTab.tabItem { Label("Firewall", systemImage: "flame") }
             advisorTab.tabItem { Label("Advisor", systemImage: "brain") }
+            updatesTab.tabItem { Label("Updates", systemImage: "arrow.triangle.2.circlepath") }
         }
         .padding(20)
         .frame(width: 560, height: 480)
@@ -294,6 +295,71 @@ struct SettingsView: View {
         .onChange(of: discovery.servers.count) { _, _ in
             if selectedServerID.isEmpty { selectedServerID = discovery.servers.first?.id ?? "" }
             if selectedManagedModel.isEmpty { selectedManagedModel = discovery.managedModels.first ?? "" }
+        }
+    }
+
+    // MARK: Updates
+
+    @ObservedObject private var updates = UpdateManager.shared
+
+    private var updatesTab: some View {
+        Form {
+            Section("This build") {
+                HStack {
+                    Text("Version")
+                    Spacer()
+                    Text(state.status?.version ?? "dev").font(.system(.body, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                }
+                Picker("Channel", selection: $updates.channel) {
+                    ForEach(UpdateManager.Channel.allCases, id: \.self) { Text($0.title).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                if updates.channel == .nightly {
+                    Text("Nightly builds from origin/main of a local git checkout (packaging/update_nightly.sh). Stable installs from the verified release DMG.")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Section {
+                HStack {
+                    Button("Check now") {
+                        Task { await updates.checkNow(currentVersion: state.status?.version ?? "dev") }
+                    }
+                    .disabled(updates.state == .checking || updates.state == .downloading || updates.state == .installing || updates.state == .nightlyRunning)
+                    if let v = updates.availableVersion {
+                        Button("Install \(v)") {
+                            Task { await updates.applyUpdate(currentVersion: state.status?.version ?? "dev") }
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+                }
+                statusLine(updates.state)
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    @ViewBuilder
+    private func statusLine(_ s: UpdateManager.State) -> some View {
+        switch s {
+        case .idle:
+            EmptyView()
+        case .checking:
+            Label("Checking…", systemImage: "arrow.triangle.2.circlepath").font(.caption).foregroundStyle(.secondary)
+        case .upToDate(let msg):
+            Label(msg, systemImage: "checkmark.circle").font(.caption).foregroundStyle(.green)
+        case .available(let v):
+            Label("Update available: \(v)", systemImage: "arrow.down.circle").font(.caption).foregroundStyle(.orange)
+        case .downloading:
+            Label("Downloading & verifying…", systemImage: "arrow.down.doc").font(.caption).foregroundStyle(.secondary)
+        case .installing:
+            Label("Installing…", systemImage: "shippingbox").font(.caption).foregroundStyle(.secondary)
+        case .nightlyRunning:
+            Label("Building from origin/main…", systemImage: "hammer").font(.caption).foregroundStyle(.secondary)
+        case .error(let msg):
+            Label(msg, systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.red)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 }

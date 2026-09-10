@@ -117,7 +117,21 @@ The first-run setup wizard walks you through:
 3. **Harness hooks** — copies `secret_guard.py`, `injection_scan.py`, `activity_log.py` into `~/.claude/hooks`, `~/.cursor/hooks`, and `~/.config/opencode/hooks`.
 4. **Extras** — Open at Login (`SMAppService`) and the `secure-agent` CLI symlink in `~/.local/bin`.
 
-Everything is also manageable later from the menu bar icon (**Setup & Permissions…**, **Uninstall…**, **Open Security Console**).
+Everything is also manageable later from the menu bar icon (**Setup & Permissions…**, **Settings…**, **Uninstall…**, **Open Security Console**).
+
+### In-app updates
+
+The menu bar's **Settings… → Updates** tab offers two channels:
+
+- **Stable** — the latest GitHub release. The app downloads the DMG, verifies
+  it against the release's SHA-256 `checksums.txt` **before mounting** (a
+  mismatch or a missing checksum is a loud refusal, never a silent install),
+  replaces the app bundle in place, and relaunches (the daemon, a child of
+  the app, comes down and back up with it).
+- **Nightly** — builds from the current `origin/main` of a local checkout via
+  `packaging/update_nightly.sh` (fetch → ff-only merge → `make install`).
+  Developer-grade: it needs a git checkout and the repo toolchain; stable
+  needs neither. The check refuses to move a tree with local-only commits.
 
 #### Signing & notarization
 
