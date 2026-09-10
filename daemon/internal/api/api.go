@@ -63,6 +63,9 @@ type Status struct {
 	// number a human means by "agents running". 266 processes is not 266
 	// agents; conflating them erodes trust in the headline number.
 	TrackedProcesses int `json:"tracked_processes"`
+	// MutedFlags counts flags suppressed by operator dispositions (mute
+	// rule+host) — proof the quiet is deliberate, not a hidden silence.
+	MutedFlags int `json:"muted_flags"`
 
 	FirewallStats map[string]firewall.RuleStat `json:"firewall_stats,omitempty"`
 	// Collectors reports each supervised worker's health so a dead or abandoned
@@ -89,6 +92,7 @@ type API struct {
 
 	correlator *correlate.Correlator
 	allowlist  *correlate.AllowlistStore
+	mutes      *correlate.MuteStore
 	guardSeq   uint64
 
 	peerRole   *peers
@@ -159,6 +163,13 @@ func (a *API) SetAllowlist(cr *correlate.Correlator, al *correlate.AllowlistStor
 	a.allowlist = al
 }
 
+// SetMute wires operator dispositions: (rule, host) pairs the operator said
+// "stop telling me about", persisted like the other override stores.
+func (a *API) SetMute(cr *correlate.Correlator, ms *correlate.MuteStore) {
+	a.correlator = cr
+	a.mutes = ms
+}
+
 // SetUIPID pins the trusted mutating client (the owning menubar app). When
 // set, mutating endpoints (kill, guard resolve, firewall promote) require the
 // peer to BE that process — same-uid shells keep read access but can no
@@ -198,6 +209,7 @@ func (a *API) buildMux() *http.ServeMux {
 	mux.HandleFunc("/audit", a.handleAudit)
 	mux.HandleFunc("/allowlist/suggestions", a.handleAllowlistSuggestions)
 	mux.HandleFunc("/allowlist", a.handleAllowlistAdd)
+	mux.HandleFunc("/mute", a.handleMute)
 	mux.HandleFunc("/stats/rollup", a.handleRollup)
 	mux.HandleFunc("/advisor/discover", a.handleAdvisorDiscover)
 	mux.HandleFunc("/fleet", a.handleFleet)
@@ -484,6 +496,78 @@ func (a *API) handleRollup(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(a.store.RollupRange(time.Now().Add(-time.Duration(hours) * time.Hour)))
+}
+
+// MutePair is one operator disposition: (rule, host) suppressed at the
+// correlator (counted, never flagged).
+type MutePair struct {
+	Rule string `json:"rule"`
+	Host string `json:"host"`
+}
+
+// handleMute lists dispositions (GET, read-gated), records one (POST,
+// mutation-gated), or removes one (DELETE, owner-level).
+func (a *API) handleMute(w http.ResponseWriter, r *http.Request) {
+	if a.mutes == nil {
+		http.Error(w, "mute store not enabled", http.StatusServiceUnavailable)
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		out := []MutePair{}
+		for rule, hosts := range a.mutes.Load() {
+			for _, h := range hosts {
+				out = append(out, MutePair{Rule: rule, Host: h})
+			}
+		}
+		sort.Slice(out, func(i, j int) bool {
+			if out[i].Rule != out[j].Rule {
+				return out[i].Rule < out[j].Rule
+			}
+			return out[i].Host < out[j].Host
+		})
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(out)
+	case http.MethodPost:
+		limitBody(w, r)
+		var req MutePair
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Rule == "" || req.Host == "" {
+			http.Error(w, `Invalid payload: {"rule":"<id>","host":"<host>"}`, http.StatusBadRequest)
+			return
+		}
+		if strings.ContainsAny(req.Host, "/:@") || len(req.Host) > 253 {
+			http.Error(w, "host must be a bare hostname", http.StatusBadRequest)
+			return
+		}
+		if err := a.mutes.Add(req.Rule, req.Host); err != nil {
+			http.Error(w, fmt.Sprintf("persist failed: %v", err), http.StatusInternalServerError)
+			return
+		}
+		a.store.PutAudit(store.AuditEntry{
+			Action: "mute-add", Rule: req.Rule,
+			Detail: fmt.Sprintf("muted %s for %s", req.Host, req.Rule),
+		})
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"status": "ok", "rule": req.Rule, "host": req.Host})
+	case http.MethodDelete:
+		rule, host := r.URL.Query().Get("rule"), r.URL.Query().Get("host")
+		if rule == "" || host == "" {
+			http.Error(w, "DELETE requires ?rule=<id>&host=<host>", http.StatusBadRequest)
+			return
+		}
+		if err := a.mutes.Remove(rule, host); err != nil {
+			http.Error(w, fmt.Sprintf("persist failed: %v", err), http.StatusInternalServerError)
+			return
+		}
+		a.store.PutAudit(store.AuditEntry{
+			Action: "mute-remove", Rule: rule,
+			Detail: fmt.Sprintf("unmuted %s for %s", host, rule),
+		})
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
 }
 
 // handleAdvisorDiscover lists loopback OpenAI-compatible model servers the

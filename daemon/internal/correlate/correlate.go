@@ -55,6 +55,10 @@ type Correlator struct {
 	// allowlistOverrides supplies user-approved hosts (console suggestions) on
 	// top of the config allowlist. Nil until wired.
 	allowlistOverrides func(agent string) []string
+	// isMuted answers whether a (rule, host) pair has been dispositioned away
+	// by the operator. Nil until wired.
+	isMuted    func(rule, host string) bool
+	mutedCount int
 }
 
 func New(tagger *agents.Tagger, classifier sensitive.Classifier, cfg config.Config) *Correlator {
@@ -106,6 +110,22 @@ func (c *Correlator) NoteAllowlistAdded(agent, host string) {
 	delete(c.uninspected, agent+"|"+strings.ToLower(host))
 }
 
+// SetMuteChecker wires operator dispositions: muted (rule, host) pairs are
+// counted, not flagged.
+func (c *Correlator) SetMuteChecker(fn func(rule, host string) bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.isMuted = fn
+}
+
+// MutedCount reports how many flags were suppressed by dispositions — proof
+// the operator's "stop telling me" is working, not a hidden silence.
+func (c *Correlator) MutedCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.mutedCount
+}
+
 // UninspectedEgressCount reports the number of distinct agent+host egress
 // endpoints observed connecting directly (not via the local inspection proxy,
 // which agents reach on 127.0.0.1). It is a coverage/blind-spot signal, not an
@@ -141,6 +161,11 @@ func (c *Correlator) Observe(e event.Event) []model.Flag {
 		agentName := "proxy"
 		if info, isAgent := c.tagger.Tag(e.PID); isAgent {
 			agentName = info.Name
+		}
+		// Operator disposition: muted (rule, host) pairs are counted, not flagged.
+		if c.isMuted != nil && c.isMuted(ruleName, e.RemoteHost) {
+			c.mutedCount++
+			return nil
 		}
 		return []model.Flag{
 			{
@@ -193,7 +218,22 @@ func (c *Correlator) Observe(e event.Event) []model.Flag {
 			} else {
 				// Check if there's already an unconsumed recent foreign connection for this agent
 				recentConns := c.recentConnsLocked(rootPID, e.PID, e.TS, window)
-				if len(recentConns) > 0 {
+				// Operator disposition applies only when EVERY connection the
+				// flag would cite is muted — a fresh unmuted host must still flag.
+				mutedAll := c.isMuted != nil && len(recentConns) > 0
+				if mutedAll {
+					for _, cm := range recentConns {
+						if !c.isMuted("sensitive-read-then-connect", cm.host) {
+							mutedAll = false
+							break
+						}
+					}
+				}
+				if mutedAll {
+					c.mutedCount++
+					c.markReadConsumedLocked(rootPID, e.PID)
+					c.markConnConsumedLocked(rootPID, e.PID)
+				} else if len(recentConns) > 0 {
 					flagID := hashFlagID("sensitive-read-then-connect", rootPID, recentConns[0].at)
 					evidence := []string{
 						fmt.Sprintf("%s (pid %d) read %s at %s", info.Name, e.PID, e.Path, e.TS.Format(time.RFC3339)),
@@ -281,6 +321,15 @@ func (c *Correlator) Observe(e event.Event) []model.Flag {
 
 		recent := c.recentReadsLocked(rootPID, e.PID, e.TS, window)
 		if len(recent) == 0 {
+			return nil
+		}
+
+		// Operator disposition: a muted (rule, host) pair is counted, not
+		// flagged — the read-then-connect evidence would only repeat it.
+		if c.isMuted != nil && c.isMuted("sensitive-read-then-connect", e.RemoteHost) {
+			c.mutedCount++
+			c.markReadConsumedLocked(rootPID, e.PID)
+			c.markConnConsumedLocked(rootPID, e.PID)
 			return nil
 		}
 

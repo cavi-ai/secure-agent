@@ -93,6 +93,23 @@ func (a *API) handlePosture(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	// 5. Aging incidents — an open incident older than 72h is a queue item
+	// going stale, not a finding. Resolve it or acknowledge it.
+	for _, inc := range a.store.RecentIncidents(25) {
+		wf, _ := a.store.IncidentStatus(inc.ID)
+		if wf.Status == "resolved" {
+			continue
+		}
+		if time.Since(inc.Timestamp) > 72*time.Hour {
+			posture.Items = append(posture.Items, PostureItem{
+				Kind: "incident", ID: inc.ID,
+				Title:    "Aging incident: " + humanFlagTitle(inc.Rule),
+				Severity: 1,
+				Detail:   "open more than 3 days — resolve or acknowledge",
+			})
+		}
+	}
+
 	posture.NeedsYou = len(posture.Items)
 	switch {
 	case posture.NeedsYou == 0:

@@ -20,7 +20,7 @@ const {
   escapeHTML, fmtTime, eventKey,
   advanceBuckets, bucketIndexFor, sparkPoints,
   parseMarkdownToHTML, buildEvidenceChain,
-  sessionShort, filterEventsBySession, rollupSeries,
+  sessionShort, filterEventsBySession, rollupSeries, flagHost,
   familyTitle, fmtRSS, fmtAge, isFamilyRoot, childrenOf, groupAgents, familyShouldExpand,
 } = ctx;
 
@@ -250,4 +250,14 @@ test('fmtRSS and fmtAge', () => {
   assert.equal(fmtRSS(0), '');
   assert.equal(fmtRSS(2048), '2 KB');
   assert.equal(fmtAge('2026-09-09T16:00:00Z', Date.parse('2026-09-09T16:02:00Z')), '2m');
+});
+
+// ---------- flagHost ----------
+
+test('flagHost: extracts egress host from evidence, empty for hostless rules', () => {
+  assert.equal(flagHost({ evidence: ['cursor (pid 1) read ~/.aws/credentials at 2026-09-08T10:00:00Z', 'then connected to logs.example.com:443 at 2026-09-08T10:00:04Z'] }), 'logs.example.com');
+  assert.equal(flagHost({ evidence: ["Local proxy detected security violation 'x' while connecting to api.example.com:443"] }), 'api.example.com');
+  assert.equal(flagHost({ evidence: ['claude (pid 1) accessed keychain file /x at 2026-09-08T10:00:00Z'] }), '');
+  assert.equal(flagHost({ evidence: [] }), '');
+  assert.equal(flagHost({}), '');
 });
