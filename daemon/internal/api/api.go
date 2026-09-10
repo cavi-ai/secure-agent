@@ -588,11 +588,15 @@ func (a *API) handleAdvisorDiscover(w http.ResponseWriter, r *http.Request) {
 
 // Suggestion is one allowlist candidate: an agent+host pair seen bypassing
 // inspection often enough to be worth a decision (threshold keeps one-off
-// noise from nagging).
+// noise from nagging). Assessment carries the advisor's pre-computed host
+// legitimacy verdict when one exists.
 type Suggestion struct {
-	Agent string `json:"agent"`
-	Host  string `json:"host"`
-	Count int    `json:"count"`
+	Agent      string  `json:"agent"`
+	Host       string  `json:"host"`
+	Count      int     `json:"count"`
+	Assessment string  `json:"assessment,omitempty"`
+	Rationale  string  `json:"rationale,omitempty"`
+	Confidence float64 `json:"confidence,omitempty"`
 }
 
 // minSuggestionCount: a host must recur before we suggest anything — a single
@@ -600,7 +604,8 @@ type Suggestion struct {
 const minSuggestionCount = 3
 
 // handleAllowlistSuggestions lists recurring uninspected egress endpoints,
-// most frequent first. Read-level.
+// most frequent first, with the advisor's host assessment when available.
+// Read-level.
 func (a *API) handleAllowlistSuggestions(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -610,7 +615,13 @@ func (a *API) handleAllowlistSuggestions(w http.ResponseWriter, r *http.Request)
 	if a.correlator != nil {
 		for _, e := range a.correlator.UninspectedEgressSummary() {
 			if e.Count >= minSuggestionCount {
-				out = append(out, Suggestion{Agent: e.Agent, Host: e.Host, Count: e.Count})
+				sg := Suggestion{Agent: e.Agent, Host: e.Host, Count: e.Count}
+				if v, ok := a.store.AdvisorVerdictFor("host:"+e.Agent+"|"+e.Host, "host"); ok {
+					sg.Assessment = v.Assessment
+					sg.Rationale = v.Rationale
+					sg.Confidence = v.Confidence
+				}
+				out = append(out, sg)
 			}
 		}
 	}
