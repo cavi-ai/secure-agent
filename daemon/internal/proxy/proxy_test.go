@@ -147,6 +147,14 @@ func TestProxyServerDetectsPromptInjectionInResponse(t *testing.T) {
 		if ev.Kind != event.KindProxyHit {
 			t.Fatalf("ev.Kind = %v, want KindProxyHit", ev.Kind)
 		}
+		// The detail carries the bounded, scrubbed snippet of WHAT matched —
+		// the operator and the advisor's second opinion need it.
+		if !strings.Contains(ev.Detail, "proxy-prompt-injection:ignore-previous-instructions") {
+			t.Fatalf("detail = %q, want rule prefix", ev.Detail)
+		}
+		if !strings.Contains(ev.Detail, "Ignore all previous instructions") {
+			t.Fatalf("detail = %q, want the matched snippet", ev.Detail)
+		}
 	case <-time.After(1 * time.Second):
 		t.Fatal("timed out waiting for KindProxyHit event")
 	}

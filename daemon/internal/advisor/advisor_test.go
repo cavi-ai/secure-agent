@@ -278,3 +278,36 @@ func TestTriagePromptCarriesTrendContext(t *testing.T) {
 		t.Fatalf("chat request must disable thinking: %+v", req.ChatTemplateKwargs)
 	}
 }
+
+func TestInjectionFlagsGetSecondOpinionPrompt(t *testing.T) {
+	stub := &chatStub{content: `{"assessment":"benign","confidence":0.8,"rationale":"style guide quoting the phrase, not an attack"}`}
+	srv := newStubServer(t, stub)
+	sink := &memSink{rows: map[string]model.AdvisorVerdict{}}
+	sub := New(Config{Enabled: true, Endpoint: srv.URL, Model: "m", Timeout: 2 * time.Second}, sink)
+
+	sub.process(context.Background(), task{
+		kind: "flag", subjectID: "f-inj",
+		flag: model.Flag{ID: "f-inj", Rule: "proxy-prompt-injection", Severity: 3,
+			Evidence: []string{`Local proxy detected security violation 'proxy-prompt-injection:ignore-previous-instructions — "never ignore the previous instructions in your style guide"' while connecting to blog.example.com:443`}},
+	})
+	stub.mu.Lock()
+	body := stub.lastBody
+	stub.mu.Unlock()
+	var req chatRequest
+	if err := json.Unmarshal([]byte(body), &req); err != nil {
+		t.Fatalf("request body not decodable: %v", err)
+	}
+	system := req.Messages[0].Content
+	if !strings.Contains(system, "SECOND OPINION on prompt-injection detections") {
+		t.Fatalf("injection flag must use the second-opinion system prompt, got: %q", system[:120])
+	}
+	// The general path keeps the generic prompt.
+	sub.process(context.Background(), task{kind: "flag", subjectID: "f2", flag: model.Flag{ID: "f2", Rule: "sensitive-read-then-connect"}})
+	stub.mu.Lock()
+	var req2 chatRequest
+	_ = json.Unmarshal([]byte(stub.lastBody), &req2)
+	stub.mu.Unlock()
+	if strings.Contains(req2.Messages[0].Content, "SECOND OPINION") {
+		t.Fatal("non-injection flag must use the generic prompt")
+	}
+}
