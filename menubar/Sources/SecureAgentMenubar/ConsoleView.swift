@@ -39,7 +39,7 @@ struct ConsoleView: View {
             if !state.incidents.isEmpty { incidentsSection }
             firewallSection
             guardSection
-            if !state.activeAgents.isEmpty { agentsSection }
+            if !state.agentRoots.isEmpty { agentsSection }
             if !state.flags.isEmpty { flagsSection }
         }
     }
@@ -101,9 +101,12 @@ struct ConsoleView: View {
             return ("exclamationmark.triangle.fill", .warn, "Attention",
                     parts.joined(separator: " · "))
         }
-        let n = state.activeAgents.count
-        return ("checkmark.shield.fill", .ok, "Protected",
-                "\(n) agent\(n == 1 ? "" : "s") monitored · firewall \(state.isEnforcing ? "enforcing" : "monitoring")")
+        let n = state.activeAgentCount
+        let procs = state.trackedProcessCount
+        let sub = procs > n
+            ? "\(n) agent\(n == 1 ? "" : "s") monitored · \(procs) processes tracked · firewall \(state.isEnforcing ? "enforcing" : "monitoring")"
+            : "\(n) agent\(n == 1 ? "" : "s") monitored · firewall \(state.isEnforcing ? "enforcing" : "monitoring")"
+        return ("checkmark.shield.fill", .ok, "Protected", sub)
     }
 
     // MARK: incidents
@@ -338,8 +341,8 @@ struct ConsoleView: View {
 
     private var agentsSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            sectionHeader("Active agents", trailing: "\(state.activeAgents.count)")
-            ForEach(state.activeAgents) { agent in
+            sectionHeader("Active agents", trailing: "\(state.activeAgentCount)")
+            ForEach(state.agentRoots) { agent in
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
                         HStack(spacing: 6) {
