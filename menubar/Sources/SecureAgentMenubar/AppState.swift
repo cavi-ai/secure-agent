@@ -414,6 +414,18 @@ public final class AppState: ObservableObject {
 
     public var activeAgents: [AgentSummaryModel] { status?.agents ?? [] }
 
+    /// Tree roots only: the popover lists agents, not their helper processes.
+    /// Killing a root kills the tree (the daemon's /kill targets the tree).
+    public var agentRoots: [AgentSummaryModel] {
+        activeAgents.filter { ($0.rootPid ?? $0.pid) == $0.pid }
+    }
+
+    /// The human-meaningful count: distinct agent trees, not processes.
+    public var activeAgentCount: Int { status?.activeAgents ?? agentRoots.count }
+
+    /// Total tagged processes across all trees (helpers included).
+    public var trackedProcessCount: Int { status?.trackedProcesses ?? activeAgents.count }
+
     public var uninspectedEgress: Int { status?.uninspectedEgress ?? 0 }
 
     public struct FirewallRuleRow: Identifiable {

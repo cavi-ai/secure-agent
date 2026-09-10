@@ -9,19 +9,24 @@ public struct AgentSummaryModel: Codable, Identifiable, Sendable {
     public let name: String
     public let exePath: String?
     public let cwd: String?
+    /// The family root this process belongs to (itself when it IS the root).
+    /// 0/nil on older daemons — treat as its own root then.
+    public let rootPid: Int32?
 
     enum CodingKeys: String, CodingKey {
         case pid
         case name
         case exePath = "exe_path"
         case cwd
+        case rootPid = "root_pid"
     }
 
-    public init(pid: Int32, name: String, exePath: String? = nil, cwd: String? = nil) {
+    public init(pid: Int32, name: String, exePath: String? = nil, cwd: String? = nil, rootPid: Int32? = nil) {
         self.pid = pid
         self.name = name
         self.exePath = exePath
         self.cwd = cwd
+        self.rootPid = rootPid
     }
 }
 
@@ -58,6 +63,8 @@ public struct StatusResponse: Codable, Sendable {
     public let proxyPort: Int?
     public let uninspectedEgress: Int?
     public let firewallStats: [String: RuleStatModel]?
+    /// Total tagged processes across all agent trees (nil on older daemons).
+    public let trackedProcesses: Int?
 
     enum CodingKeys: String, CodingKey {
         case running
@@ -68,9 +75,10 @@ public struct StatusResponse: Codable, Sendable {
         case proxyPort = "proxy_port"
         case uninspectedEgress = "uninspected_egress"
         case firewallStats = "firewall_stats"
+        case trackedProcesses = "tracked_processes"
     }
 
-    public init(running: Bool, uptime: String, activeAgents: Int, agents: [AgentSummaryModel]? = nil, proxyEnabled: Bool? = nil, proxyPort: Int? = nil, uninspectedEgress: Int? = nil, firewallStats: [String: RuleStatModel]? = nil) {
+    public init(running: Bool, uptime: String, activeAgents: Int, agents: [AgentSummaryModel]? = nil, proxyEnabled: Bool? = nil, proxyPort: Int? = nil, uninspectedEgress: Int? = nil, firewallStats: [String: RuleStatModel]? = nil, trackedProcesses: Int? = nil) {
         self.running = running
         self.uptime = uptime
         self.activeAgents = activeAgents
@@ -79,6 +87,7 @@ public struct StatusResponse: Codable, Sendable {
         self.proxyPort = proxyPort
         self.uninspectedEgress = uninspectedEgress
         self.firewallStats = firewallStats
+        self.trackedProcesses = trackedProcesses
     }
 }
 
