@@ -51,4 +51,35 @@ final class GuardTests: XCTestCase {
         let yaml = "firewall:\n  enabled: true\nadvisor:\n  enabled: false\n"
         XCTAssertFalse(SetupManager.advisorConfigIsEnabled(yaml))
     }
+
+    // MARK: - advisor full-block writer (Settings advisor pane)
+
+    func testAdvisorConfigSettingManagedWritesManagedBlock() {
+        let out = SetupManager.advisorConfigSetting("proxy_enabled: true\n", mode: .managed, endpoint: nil,
+                                                    model: "mlx-community/Qwen3-4B-4bit")
+        XCTAssertTrue(out.contains("managed: true"))
+        XCTAssertTrue(out.contains("managed_model: \"mlx-community/Qwen3-4B-4bit\""))
+        XCTAssertFalse(out.contains("endpoint:")) // managed derives it
+        XCTAssertTrue(SetupManager.advisorConfigIsEnabled(out))
+        XCTAssertTrue(out.contains("proxy_enabled: true"))
+    }
+
+    func testAdvisorConfigSettingExistingReplacesOldBlock() {
+        let old = "advisor:\n  enabled: true\n  endpoint: \"http://127.0.0.1:8080\"\n  model: \"old\"\nfirewall:\n  mode: monitor\n"
+        let out = SetupManager.advisorConfigSetting(old, mode: .existing,
+                                                    endpoint: "http://127.0.0.1:11434", model: "qwen3:4b")
+        XCTAssertTrue(out.contains("endpoint: \"http://127.0.0.1:11434\""))
+        XCTAssertTrue(out.contains("model: \"qwen3:4b\""))
+        XCTAssertFalse(out.contains("model: \"old\""))
+        XCTAssertFalse(out.contains("managed: true"))
+        XCTAssertTrue(out.contains("firewall:\n  mode: monitor")) // untouched
+    }
+
+    func testAdvisorDiscoveryDecodes() throws {
+        let json = #"{"servers":[{"endpoint":"http://127.0.0.1:11434","kind":"ollama","models":["qwen3:4b"]}],"managed_models":["mlx-community/Qwen3-4B-4bit"]}"#
+        let d = try JSONDecoder().decode(AdvisorDiscovery.self, from: Data(json.utf8))
+        XCTAssertEqual(d.servers.first?.kind, "ollama")
+        XCTAssertEqual(d.servers.first?.models, ["qwen3:4b"])
+        XCTAssertEqual(d.managedModels, ["mlx-community/Qwen3-4B-4bit"])
+    }
 }

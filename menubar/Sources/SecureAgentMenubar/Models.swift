@@ -91,6 +91,34 @@ public struct StatusResponse: Codable, Sendable {
     }
 }
 
+public struct AdvisorDiscovery: Codable, Sendable {
+    public let servers: [DiscoveredServerModel]
+    public let managedModels: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case servers
+        case managedModels = "managed_models"
+    }
+
+    public init(servers: [DiscoveredServerModel], managedModels: [String]) {
+        self.servers = servers
+        self.managedModels = managedModels
+    }
+}
+
+public struct DiscoveredServerModel: Codable, Identifiable, Sendable {
+    public var id: String { endpoint }
+    public let endpoint: String
+    public let kind: String
+    public let models: [String]
+
+    public init(endpoint: String, kind: String, models: [String]) {
+        self.endpoint = endpoint
+        self.kind = kind
+        self.models = models
+    }
+}
+
 public struct AdvisorVerdictModel: Codable, Sendable {
     public let assessment: String?
     public let confidence: Double?
