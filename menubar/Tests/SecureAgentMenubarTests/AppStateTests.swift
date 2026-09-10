@@ -26,6 +26,9 @@ final class StubDaemonClient: DaemonClientProtocol, @unchecked Sendable {
     func killProcess(pid: Int32) async throws -> Bool { true }
     func deleteGuardRule(agent: String, ruleID: String) async throws {}
     func setFirewallMode(rule: String, mode: String) async throws {}
+    func fetchAdvisorDiscover() async throws -> AdvisorDiscovery {
+        AdvisorDiscovery(servers: [], managedModels: [])
+    }
     func streamEvents(onEvent: @escaping @Sendable (SSEFrame) -> Void) async throws {
         try await Task.sleep(nanoseconds: 60_000_000_000) // tests don't drive SSE
     }

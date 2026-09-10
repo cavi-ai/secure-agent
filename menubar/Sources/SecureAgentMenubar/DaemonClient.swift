@@ -22,6 +22,7 @@ public protocol DaemonClientProtocol: Sendable {
     func killProcess(pid: Int32) async throws -> Bool
     func deleteGuardRule(agent: String, ruleID: String) async throws
     func setFirewallMode(rule: String, mode: String) async throws
+    func fetchAdvisorDiscover() async throws -> AdvisorDiscovery
     func streamEvents(onEvent: @escaping @Sendable (SSEFrame) -> Void) async throws
 }
 
@@ -107,6 +108,17 @@ public final class DaemonClient: Sendable {
 
     public func fetchGuardRules() async throws -> [GuardRuleModel] {
         try await getDecodable("/guard/rules")
+    }
+
+    /// Loopback model servers the user could link + the curated managed list.
+    /// Older daemons (pre-discovery) don't have the route — degrade to an
+    /// empty discovery rather than an error so the settings pane still opens.
+    public func fetchAdvisorDiscover() async throws -> AdvisorDiscovery {
+        do {
+            return try await getDecodable("/advisor/discover")
+        } catch DaemonClientError.http(404) {
+            return AdvisorDiscovery(servers: [], managedModels: [])
+        }
     }
 
     public func deleteGuardRule(agent: String, ruleID: String) async throws {

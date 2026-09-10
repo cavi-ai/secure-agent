@@ -79,3 +79,8 @@ advisor:
   endpoint: "http://127.0.0.1:8080" # must be loopback — anything else is rejected
   model: ""                         # model name the server expects
   timeout_ms: 8000
+  # Managed mode: the daemon spawns + supervises the model server itself
+  # (endpoint derived; do not set one). Path B instead: leave managed false
+  # and point endpoint at a server you already run (Ollama/MLX/llama.cpp).
+  managed: false
+  managed_model: "mlx-community/Qwen3-4B-4bit"

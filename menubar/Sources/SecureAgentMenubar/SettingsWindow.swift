@@ -200,39 +200,100 @@ struct SettingsView: View {
 
     // MARK: Advisor
 
+    @State private var advisorMode: SetupManager.AdvisorMode = .managed
+    @State private var selectedManagedModel = ""
+    @State private var selectedServerID = ""
+    @State private var selectedModel = ""
+
     private var advisorTab: some View {
-        Form {
+        let discovery = setup.advisorDiscovery
+        let selectedServer = discovery.servers.first { $0.id == selectedServerID } ?? discovery.servers.first
+        return Form {
             Section {
-                Text("A locally served model triages flags and writes incident narratives — on this machine only. The daemon refuses non-loopback endpoints; verdicts never change enforcement.")
+                Text("A locally served model triages flags and writes incident narratives — on this machine only. Verdicts never change enforcement.")
                     .font(.caption).foregroundStyle(.secondary)
-            }
-            Section("Model server") {
-                HStack {
-                    Image(systemName: setup.advisorServerReachable ? "checkmark.circle.fill" : "circle.dotted")
-                        .foregroundStyle(setup.advisorServerReachable ? .green : .secondary)
-                    Text(setup.advisorServerReachable
-                         ? "Model server detected at 127.0.0.1:8080"
-                         : "No model server on 127.0.0.1:8080")
-                    Spacer()
-                    Button("Recheck") { Task { await setup.refreshState() } }
+                Picker("Model source", selection: $advisorMode) {
+                    Text("Managed local model").tag(SetupManager.AdvisorMode.managed)
+                    Text("Use my existing server").tag(SetupManager.AdvisorMode.existing)
                 }
-                if !setup.advisorServerReachable {
-                    Text("Start one with: mlx_lm.server --model mlx-community/Qwen3-4B-Instruct-2507-4bit --port 8080")
-                        .font(.caption).foregroundStyle(.secondary)
-                        .textSelection(.enabled)
+                .pickerStyle(.radioGroup)
+            }
+
+            if advisorMode == .managed {
+                Section("Managed model") {
+                    if discovery.managedModels.isEmpty {
+                        Text("Daemon discovery unavailable — restart the app to refresh.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    } else {
+                        Picker("Model", selection: $selectedManagedModel) {
+                            ForEach(discovery.managedModels, id: \.self) { Text($0).tag($0) }
+                        }
+                        Text("The daemon downloads, starts, and supervises the server itself. First start downloads ~2.3 GB; verdicts begin when ready.")
+                            .font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            } else {
+                Section("Existing server") {
+                    if discovery.servers.isEmpty {
+                        Text("No OpenAI-compatible servers found on this machine (probed Ollama, MLX, LM Studio ports). Start one, then Recheck.")
+                            .font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    } else {
+                        Picker("Server", selection: $selectedServerID) {
+                            ForEach(discovery.servers) { srv in
+                                Text("\(srv.kind == "ollama" ? "Ollama" : "OpenAI-compatible") · \(srv.endpoint.replacingOccurrences(of: "http://", with: "")) · \(srv.models.count) model\(srv.models.count == 1 ? "" : "s")")
+                                    .tag(srv.id)
+                            }
+                        }
+                        if let srv = selectedServer {
+                            Picker("Model", selection: $selectedModel) {
+                                ForEach(srv.models, id: \.self) { Text($0).tag($0) }
+                            }
+                        }
+                    }
                 }
             }
+
             Section("Advisor") {
-                Toggle("Enable local advisor", isOn: Binding(
-                    get: { setup.advisorEnabled },
-                    set: { setup.setAdvisorEnabled($0) }
-                ))
-                .disabled(!setup.advisorServerReachable && !setup.advisorEnabled)
+                let canEnable = advisorMode == .managed
+                    ? !discovery.managedModels.isEmpty
+                    : selectedServer != nil && !selectedModel.isEmpty
+                Button(setup.advisorEnabled ? "Apply configuration" : "Enable advisor") {
+                    switch advisorMode {
+                    case .managed:
+                        setup.setAdvisorConfig(mode: .managed, endpoint: nil,
+                                               model: selectedManagedModel.isEmpty ? (discovery.managedModels.first ?? "") : selectedManagedModel)
+                    case .existing:
+                        if let srv = selectedServer {
+                            setup.setAdvisorConfig(mode: .existing, endpoint: srv.endpoint, model: selectedModel)
+                        }
+                    }
+                }
+                .disabled(!canEnable)
+                if setup.advisorEnabled {
+                    Button("Disable advisor") { setup.setAdvisorEnabled(false) }
+                }
                 if let note = setup.advisorNote {
                     Text(note).font(.caption).foregroundStyle(.secondary)
+                }
+                HStack {
+                    Button("Recheck servers") { Task { await setup.refreshState() } }
                 }
             }
         }
         .formStyle(.grouped)
+        .onAppear {
+            if selectedManagedModel.isEmpty { selectedManagedModel = discovery.managedModels.first ?? "" }
+            if selectedServerID.isEmpty { selectedServerID = discovery.servers.first?.id ?? "" }
+            if selectedModel.isEmpty { selectedModel = selectedServer?.models.first ?? "" }
+        }
+        .onChange(of: selectedServerID) { _, _ in
+            selectedModel = selectedServer?.models.first ?? ""
+        }
+        .onChange(of: discovery.servers.count) { _, _ in
+            if selectedServerID.isEmpty { selectedServerID = discovery.servers.first?.id ?? "" }
+            if selectedManagedModel.isEmpty { selectedManagedModel = discovery.managedModels.first ?? "" }
+        }
     }
 }
