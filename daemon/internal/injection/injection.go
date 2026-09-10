@@ -2,6 +2,9 @@ package injection
 
 import (
 	"regexp"
+	"strings"
+
+	"github.com/cavi-ai/secure-agent/daemon/internal/redact"
 )
 
 type Rule struct {
@@ -52,4 +55,34 @@ func Detect(text string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// snippetRadius bounds the excerpt around a match (chars each side).
+const snippetRadius = 120
+
+// DetectWithSnippet is Detect plus a bounded, redacted excerpt around the
+// match — the operator (and the local advisor's second opinion) needs to see
+// WHAT matched, not just that something did. The excerpt is scrubbed for
+// credential shapes before it goes anywhere (the flagged page may itself
+// carry secrets).
+func DetectWithSnippet(text string) (string, string, bool) {
+	if text == "" {
+		return "", "", false
+	}
+	for _, r := range rules {
+		if loc := r.Pattern.FindStringIndex(text); loc != nil {
+			start := loc[0] - snippetRadius
+			if start < 0 {
+				start = 0
+			}
+			end := loc[1] + snippetRadius
+			if end > len(text) {
+				end = len(text)
+			}
+			snippet := strings.TrimSpace(text[start:end])
+			snippet = strings.Join(strings.Fields(snippet), " ") // collapse whitespace runs
+			return r.Name, redact.Scrub(snippet), true
+		}
+	}
+	return "", "", false
 }
