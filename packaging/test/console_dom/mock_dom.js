@@ -87,6 +87,9 @@
     '/allowlist/suggestions': [
       { agent: 'cursor', host: 'registry.npmjs.org', count: 14 }
     ],
+    '/mute': [
+      { rule: 'proxy-prompt-injection', host: 'blog.example.com' }
+    ],
     '/stats/rollup': (() => {
       const pts = [];
       const bucket = (h) => new Date(Math.floor((now - h * 3600000) / 3600000) * 3600000).toISOString().slice(0, 13);

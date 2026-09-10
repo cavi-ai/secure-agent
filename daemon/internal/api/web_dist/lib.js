@@ -40,6 +40,16 @@ function filterEventsBySession(events, sessionId) {
   return (events || []).filter(e => e.session_id === sessionId);
 }
 
+// flagHost extracts the egress destination host from a flag's evidence
+// (the host a mute/disposition applies to), or '' for hostless rules.
+function flagHost(flag) {
+  for (const ev of (flag && flag.evidence) || []) {
+    let m = ev.match(/connected to ([^:\s]+):\d+/) || ev.match(/connecting to ([^:\s]+):\d+/);
+    if (m) return m[1];
+  }
+  return '';
+}
+
 // ---------- sparkline (rolling events/sec window) ----------
 
 // Age the bucket ring by `steps` seconds (newest bucket is last). Steps
