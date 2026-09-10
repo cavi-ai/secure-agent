@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -652,6 +653,41 @@ func (s *Store) CriticalFlagsMissingAdvisor(since time.Time, limit int) []model.
 		}
 	}
 	return flags
+}
+
+// LastEventTimes returns the most recent event timestamp (RFC3339Nano, UTC)
+// per pid, for the given pids — the "last used" signal the agents panel uses
+// to tell stale trees from live ones.
+func (s *Store) LastEventTimes(pids []int32) map[int32]string {
+	out := map[int32]string{}
+	if len(pids) == 0 {
+		return out
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	placeholders := make([]string, len(pids))
+	args := make([]any, len(pids))
+	for i, p := range pids {
+		placeholders[i] = "?"
+		args[i] = p
+	}
+	rows, err := s.db.Query(
+		`SELECT pid, MAX(ts) FROM events WHERE pid IN (`+strings.Join(placeholders, ",")+`) GROUP BY pid`,
+		args...,
+	)
+	if err != nil {
+		log.Printf("store: last-event-times error: %v", err)
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var pid int32
+		var ts string
+		if err := rows.Scan(&pid, &ts); err == nil {
+			out[pid] = ts
+		}
+	}
+	return out
 }
 
 // AdvisorVerdictFor fetches one stored verdict (public read; absent = false).

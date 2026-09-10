@@ -312,3 +312,30 @@ func TestCriticalFlagsMissingAdvisor(t *testing.T) {
 		t.Fatalf("backfill set = %v, want [f1]", got)
 	}
 }
+
+func TestLastEventTimes(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), "t.db"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	now := time.Now()
+	st.PutEvent(event.Event{Kind: event.KindFileOpen, TS: now.Add(-2 * time.Hour), PID: 7, Path: "/a"})
+	st.PutEvent(event.Event{Kind: event.KindFileOpen, TS: now.Add(-5 * time.Minute), PID: 7, Path: "/b"})
+	st.PutEvent(event.Event{Kind: event.KindFileOpen, TS: now.Add(-1 * time.Hour), PID: 9, Path: "/c"})
+
+	got := st.LastEventTimes([]int32{7, 9, 42})
+	ts7, err := time.Parse(time.RFC3339Nano, got[7])
+	if err != nil || time.Since(ts7) > 10*time.Minute {
+		t.Fatalf("pid 7 last event should be the newest insert, got %q", got[7])
+	}
+	if got[9] == "" {
+		t.Fatal("pid 9 missing")
+	}
+	if _, ok := got[42]; ok {
+		t.Fatal("pid without events must be absent, not empty-string")
+	}
+	if len(st.LastEventTimes(nil)) != 0 {
+		t.Fatal("empty pid list must return empty map")
+	}
+}

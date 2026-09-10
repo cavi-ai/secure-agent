@@ -518,9 +518,16 @@ public final class SetupManager: ObservableObject {
     // MARK: - Full Disk Access
 
     public func openFullDiskAccessSettings() {
-        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles") {
-            NSWorkspace.shared.open(url)
-        }
+        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")!)
+    }
+
+    /// Reveal the daemon binary in Finder so the user can DRAG it into the
+    /// Full Disk Access list — macOS offers no API to add the app ourselves,
+    /// and "click + and navigate to a hidden Helpers path" is where users
+    /// give up. Drag-and-drop into the FDA list works.
+    public func revealDaemonInFinder() {
+        guard let path = bundledDaemonPath else { return }
+        NSWorkspace.shared.selectFile(path, inFileViewerRootedAtPath: "")
     }
 
     // MARK: - Uninstall
