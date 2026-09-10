@@ -93,12 +93,13 @@ struct OnboardingView: View {
 
             GroupBox("2. Full Disk Access") {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("File monitoring requires Full Disk Access for the daemon. Add secure-agentd in System Settings, then click Recheck.")
+                    Text("File monitoring needs Full Disk Access for the daemon. Open Privacy Settings, then drag secure-agentd from Finder straight into the app list — it's already selected for you.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                     HStack {
                         Button("Open Privacy Settings") { setup.openFullDiskAccessSettings() }
+                        Button("Reveal Daemon in Finder") { setup.revealDaemonInFinder() }
                         Button("Recheck") { Task { await setup.refreshState() } }
                     }
                 }

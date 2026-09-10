@@ -121,6 +121,9 @@ def main():
         # --- local advisor ---
         check("advisor chip rendered with assessment class", 'advisor-chip adv-suspicious' in dom)
         check("advisor chip rationale in tooltip", "first time this session" in dom)
+        check("agent last-active rendered", "active " in dom and " ago" in dom)
+        check("stale process marked", " stale" in dom)
+        check("flag card kill action", 'data-action="kill" data-pid="6033"' in dom)
         check("collector-down FDA deep link", 'data-action="open-fda"' in dom and "Full Disk Access settings" in dom)
         check("advisor posture line (1 of 2 benign)",
               "advisor: 1 of 2 triaged critical flags look benign" in dom)
