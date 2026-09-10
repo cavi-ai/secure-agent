@@ -541,7 +541,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (it.kind === 'flag') link = `<a href="#flags-list">view evidence</a>`;
       if (it.kind === 'incident') link = `<a href="#" data-action="open-incident" data-id="${escapeHTML(it.id)}">view report</a>`;
       if (it.kind === 'guard_pending') link = `<span>resolve it in the menu bar app</span>`;
-      if (it.kind === 'collector_down') link = `<span>— ${escapeHTML(it.detail || 'collector stopped')}</span>`;
+      if (it.kind === 'collector_down') link = `<span>— ${escapeHTML(it.detail || 'collector stopped')} <a href="#" data-action="open-fda">open Full Disk Access settings</a></span>`;
       if (it.kind === 'uninspected_egress') link = `<a href="#firewall-container">see firewall</a>`;
       return `<li><span class="sev ${sev}">●</span><span>${escapeHTML(it.title)} ${link}</span></li>`;
     });
@@ -980,6 +980,19 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   };
 
+  window.openFDASettings = async function() {
+    try {
+      const res = await apiFetch('/ui/open-fda', { method: 'POST' });
+      if (res.ok) {
+        showToast('Opening System Settings → Full Disk Access', 'info');
+      } else {
+        showToast('Could not open settings — open Setup & Permissions from the menu bar instead.', 'danger');
+      }
+    } catch (err) {
+      showToast(`Could not open settings: ${err}`, 'danger');
+    }
+  };
+
   window.muteFlag = async function(rule, host) {
     try {
       const res = await apiFetch('/mute', {
@@ -1093,6 +1106,10 @@ document.addEventListener('DOMContentLoaded', () => {
         break;
       case 'unmute':
         window.unmuteFlag(d.rule, d.host);
+        break;
+      case 'open-fda':
+        e.preventDefault();
+        window.openFDASettings();
         break;
       case 'toggle-flag': {
         const card = el.parentElement;
