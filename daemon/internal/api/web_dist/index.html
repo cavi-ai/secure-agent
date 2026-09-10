@@ -117,6 +117,24 @@
       </div>
     </section>
 
+    <!-- Activity trend: rollup chart, the "is this normal?" answer at a glance -->
+    <section class="panel activity-panel">
+      <div class="panel-head">
+        <h2><svg class="icon"><use href="#i-activity"/></svg>Activity</h2>
+        <select id="activity-window" class="select">
+          <option value="24">Last 24h</option>
+          <option value="168">Last 7 days</option>
+        </select>
+      </div>
+      <div class="panel-body act-body">
+        <svg id="activity-chart" viewBox="0 0 1200 96" preserveAspectRatio="none" role="img" aria-label="Hourly agent activity"></svg>
+        <div class="act-legend">
+          <span class="act-key"><span class="act-swatch act-sw-events"></span>events</span>
+          <span class="act-key"><span class="act-swatch act-sw-flags"></span>flags</span>
+        </div>
+      </div>
+    </section>
+
     <!-- Workspace -->
     <main class="grid">
       <div class="col">

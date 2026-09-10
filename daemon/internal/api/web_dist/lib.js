@@ -97,12 +97,41 @@ function parseMarkdownToHTML(md) {
   return `<div class="markdown-view">${html}</div>`;
 }
 
-// ---------- evidence chain ----------
+// ---------- rollup chart ----------
+
+// rollupSeries shapes hourly rollup points into zero-filled per-bucket totals
+// covering exactly `hours` buckets ending at the current UTC hour. Event kinds
+// ("event:…") and flag kinds ("flag:sN") are separated so the chart can draw
+// activity bars with flag markers.
+function rollupSeries(points, hours, nowMs) {
+  const HOUR = 3600000;
+  const nowHour = Math.floor(nowMs / HOUR);
+  const firstHour = nowHour - hours + 1;
+  const events = new Array(hours).fill(0);
+  const flags = new Array(hours).fill(0);
+  const labels = new Array(hours).fill('');
+  for (const p of points || []) {
+    const h = Math.floor(Date.parse(p.bucket + ':00:00Z') / HOUR);
+    const idx = h - firstHour;
+    if (isNaN(h) || idx < 0 || idx >= hours) continue;
+    if (String(p.kind).startsWith('flag:')) flags[idx] += p.count;
+    else events[idx] += p.count;
+  }
+  for (let i = 0; i < hours; i++) {
+    const d = new Date((firstHour + i) * HOUR);
+    labels[i] = hours <= 48
+      ? String(d.getHours()).padStart(2, '0') + ':00'
+      : d.toLocaleDateString([], { month: 'numeric', day: 'numeric' });
+  }
+  return { labels, events, flags };
+}
 
 // Parse the correlator's evidence sentences into the causal nodes they
 // describe (sensitive read → egress connection → …) and append a
 // severity-colored verdict node. Unrecognized sentences fall back to a raw
 // node so the audit truth is never hidden by a parser gap.
+// ---------- evidence chain ----------
+
 function buildEvidenceChain(flag) {
   const nodes = [];
   const ts = (s) => {

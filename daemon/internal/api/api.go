@@ -192,6 +192,7 @@ func (a *API) buildMux() *http.ServeMux {
 	mux.HandleFunc("/audit", a.handleAudit)
 	mux.HandleFunc("/allowlist/suggestions", a.handleAllowlistSuggestions)
 	mux.HandleFunc("/allowlist", a.handleAllowlistAdd)
+	mux.HandleFunc("/stats/rollup", a.handleRollup)
 	mux.HandleFunc("/fleet", a.handleFleet)
 	mux.HandleFunc("/kill", a.handleKill)
 	mux.HandleFunc("/firewall/mode", a.handleFirewallMode)
@@ -456,6 +457,26 @@ func (a *API) handleAudit(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(a.store.RecentAudit(limit))
+}
+
+// handleRollup serves the pre-aggregated hourly counters that power the
+// console's activity chart (24h/7d trend views). Read-gated.
+func (a *API) handleRollup(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	hours := 24
+	if h := r.URL.Query().Get("hours"); h != "" {
+		if parsed, err := strconv.Atoi(h); err == nil && parsed > 0 {
+			hours = parsed
+		}
+	}
+	if hours > 24*31 {
+		hours = 24 * 31 // one retention window is the useful ceiling
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(a.store.RollupRange(time.Now().Add(-time.Duration(hours) * time.Hour)))
 }
 
 // Suggestion is one allowlist candidate: an agent+host pair seen bypassing

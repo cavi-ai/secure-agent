@@ -122,6 +122,16 @@ func Open(dbPath, jsonlPath string) (*Store, error) {
 			created_at TEXT,
 			PRIMARY KEY (agent, rule_id)
 		);`,
+		// Hourly rollups: pre-aggregated counters so trend views (24h/7d
+		// charts, advisor week-over-week context) are O(buckets), not
+		// O(events). bucket is the UTC hour ("2006-01-02T15").
+		`CREATE TABLE IF NOT EXISTS rollup_hourly (
+			bucket TEXT NOT NULL,
+			kind TEXT NOT NULL,
+			count INT NOT NULL,
+			PRIMARY KEY (bucket, kind)
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_rollup_hourly_bucket ON rollup_hourly(bucket);`,
 		// Local-advisor verdicts, keyed by the subject they annotate (a flag
 		// id or an incident id). Advisory metadata only.
 		`CREATE TABLE IF NOT EXISTS advisor_verdicts (
@@ -204,6 +214,8 @@ func (s *Store) PutFlag(fl model.Flag) {
 	)
 	if err != nil {
 		log.Printf("store: failed to insert flag %s: %v", fl.ID, err)
+	} else {
+		s.bumpRollupLocked(fmt.Sprintf("flag:s%d", fl.Severity), fl.TS)
 	}
 
 	// Retention: flags are insert-only like events and must be capped too, or
@@ -229,11 +241,14 @@ func (s *Store) PutEvent(e event.Event) {
 	)
 	if err != nil {
 		log.Printf("store: failed to insert event: %v", err)
+	} else {
+		s.bumpRollupLocked("event:"+e.Kind.String(), e.TS)
 	}
 
 	s.insertCount++
 	if s.insertCount%1000 == 0 {
 		s.pruneEventsLocked(10000)
+		s.pruneRollupLocked()
 	}
 }
 
@@ -328,6 +343,95 @@ func (s *Store) QueryFlags(f FlagFilter) []model.Flag {
 	}
 	s.attachAdvisorLocked(flags)
 	return flags
+}
+
+// rollupBucket is the UTC hour key for the rollup table.
+func rollupBucket(t time.Time) string {
+	return t.UTC().Truncate(time.Hour).Format("2006-01-02T15")
+}
+
+// rollupRetention bounds the rollup table (hourly buckets, a handful of kinds
+// — 30 days ≈ a few thousand rows).
+const rollupRetention = 30 * 24 * time.Hour
+
+// bumpRollupLocked increments one hourly counter. Caller holds mu. Pruning is
+// driven by PutEvent's existing cadence (see pruneEventsLocked call site).
+func (s *Store) bumpRollupLocked(kind string, ts time.Time) {
+	_, err := s.db.Exec(
+		`INSERT INTO rollup_hourly (bucket, kind, count) VALUES (?, ?, 1)
+		 ON CONFLICT(bucket, kind) DO UPDATE SET count = count + 1`,
+		rollupBucket(ts), kind,
+	)
+	if err != nil {
+		log.Printf("store: rollup bump failed (%s): %v", kind, err)
+	}
+}
+
+// pruneRollupLocked drops expired buckets (called on PutEvent's prune cadence).
+func (s *Store) pruneRollupLocked() {
+	cutoff := rollupBucket(time.Now().Add(-rollupRetention))
+	if _, err := s.db.Exec(`DELETE FROM rollup_hourly WHERE bucket < ?`, cutoff); err != nil {
+		log.Printf("store: rollup prune failed: %v", err)
+	}
+}
+
+// RollupPoint is one (bucket, kind) counter.
+type RollupPoint struct {
+	Bucket string `json:"bucket"` // UTC hour "2006-01-02T15"
+	Kind   string `json:"kind"`
+	Count  int    `json:"count"`
+}
+
+// RollupRange returns hourly counters since the given time (UTC).
+func (s *Store) RollupRange(since time.Time) []RollupPoint {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rows, err := s.db.Query(
+		`SELECT bucket, kind, count FROM rollup_hourly WHERE bucket >= ? ORDER BY bucket`,
+		rollupBucket(since),
+	)
+	if err != nil {
+		log.Printf("store: rollup range error: %v", err)
+		return nil
+	}
+	defer rows.Close()
+	var out []RollupPoint
+	for rows.Next() {
+		var p RollupPoint
+		if err := rows.Scan(&p.Bucket, &p.Kind, &p.Count); err == nil {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// TrendFor computes the trend context for a flag's rule (and host, when the
+// flag evidence names one).
+func (s *Store) TrendFor(rule, host string) model.TrendContext {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var tc model.TrendContext
+	now := time.Now().UTC()
+	wk := now.Add(-7 * 24 * time.Hour).Format(time.RFC3339Nano)
+	prior := now.Add(-14 * 24 * time.Hour).Format(time.RFC3339Nano)
+	_ = s.db.QueryRow(
+		`SELECT
+		   SUM(CASE WHEN datetime(ts) >= datetime(?) THEN 1 ELSE 0 END),
+		   SUM(CASE WHEN datetime(ts) >= datetime(?) AND datetime(ts) < datetime(?) THEN 1 ELSE 0 END)
+		 FROM flags WHERE rule = ?`,
+		wk, prior, wk, rule,
+	).Scan(&tc.RuleLast7d, &tc.RulePrior7d)
+	if host != "" {
+		var first sql.NullString
+		err := s.db.QueryRow(
+			`SELECT MIN(ts) FROM events WHERE remote_host = ?`, host,
+		).Scan(&first)
+		if err == nil && first.Valid && first.String != "" {
+			tc.HostKnown = true
+			tc.HostFirstSeen = first.String
+		}
+	}
+	return tc
 }
 
 // PutAdvisorVerdict stores (or replaces) the local advisor's verdict for a
