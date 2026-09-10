@@ -46,6 +46,37 @@ final class AppStateTests: XCTestCase {
                   agent: "claude", evidence: ["e"])
     }
 
+    func testAgentRootsFiltersToTreeRoots() async {
+        let stub = StubDaemonClient()
+        stub.status = StatusResponse(
+            running: true, uptime: "1m", activeAgents: 1,
+            agents: [
+                AgentSummaryModel(pid: 500, name: "cursor", rootPid: 500),
+                AgentSummaryModel(pid: 501, name: "cursor", rootPid: 500),
+                AgentSummaryModel(pid: 502, name: "cursor", rootPid: 500),
+            ],
+            proxyEnabled: false, proxyPort: 0, uninspectedEgress: 0,
+            firewallStats: nil, trackedProcesses: 3)
+        let (state, _) = makeState(stub)
+        await state.performFetch()
+        XCTAssertEqual(state.agentRoots.map(\.pid), [500])
+        XCTAssertEqual(state.activeAgentCount, 1)      // status field, not array length
+        XCTAssertEqual(state.trackedProcessCount, 3)
+    }
+
+    func testAgentRootsFallbackWithoutRootPid() async {
+        // Older daemon (no root_pid): every row is its own root.
+        let stub = StubDaemonClient()
+        stub.status = StatusResponse(
+            running: true, uptime: "1m", activeAgents: 2,
+            agents: [AgentSummaryModel(pid: 1, name: "claude"), AgentSummaryModel(pid: 2, name: "cursor")],
+            proxyEnabled: false, proxyPort: 0, uninspectedEgress: 0, firewallStats: nil)
+        let (state, _) = makeState(stub)
+        await state.performFetch()
+        XCTAssertEqual(state.agentRoots.count, 2)
+        XCTAssertEqual(state.trackedProcessCount, 2) // falls back to array length
+    }
+
     func testFirstFetchSeedsBaselineWithoutNotifying() async {
         let stub = StubDaemonClient()
         stub.flags = [flag("old-1"), flag("old-2")]
