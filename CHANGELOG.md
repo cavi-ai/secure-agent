@@ -93,6 +93,10 @@ and test infrastructure.
   loud refusal) and a Nightly channel (ff-only build from origin/main
   of a local checkout via `packaging/update_nightly.sh`).
   `make_dmg.sh` now emits `dist/checksums.txt` on every build.
+- **v1.0 polish.** The collector-down posture item deep-links one click
+  into System Settings → Full Disk Access (`POST /ui/open-fda`); the
+  onboarding wizard deep-links into the Settings window ("More options
+  in Settings…") so Settings is the single owner of ongoing config.
 
 ### Security fixes
 

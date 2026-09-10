@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -210,6 +211,7 @@ func (a *API) buildMux() *http.ServeMux {
 	mux.HandleFunc("/allowlist/suggestions", a.handleAllowlistSuggestions)
 	mux.HandleFunc("/allowlist", a.handleAllowlistAdd)
 	mux.HandleFunc("/mute", a.handleMute)
+	mux.HandleFunc("/ui/open-fda", a.handleOpenFDA)
 	mux.HandleFunc("/stats/rollup", a.handleRollup)
 	mux.HandleFunc("/advisor/discover", a.handleAdvisorDiscover)
 	mux.HandleFunc("/fleet", a.handleFleet)
@@ -496,6 +498,24 @@ func (a *API) handleRollup(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(a.store.RollupRange(time.Now().Add(-time.Duration(hours) * time.Hour)))
+}
+
+// handleOpenFDA deep-links the operator to System Settings → Full Disk
+// Access — the one-click fix when the eslogger collector is down (the
+// posture item names the fix; this makes it one click). Mutation-gated like
+// every action that changes machine state.
+func (a *API) handleOpenFDA(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	const fdaURL = "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"
+	if err := exec.Command("open", fdaURL).Start(); err != nil {
+		http.Error(w, fmt.Sprintf("could not open settings: %v", err), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
 // MutePair is one operator disposition: (rule, host) suppressed at the

@@ -10,7 +10,18 @@ public final class SettingsWindowController: NSObject, NSWindowDelegate {
 
     private var window: NSWindow?
 
+    /// The shared AppState, set once by the AppDelegate at launch so any
+    /// surface (menu, wizard, popover) can open Settings without threading
+    /// the state through.
+    public var appState: AppState?
+
+    public func show() {
+        guard let appState else { return }
+        show(state: appState)
+    }
+
     public func show(state: AppState) {
+        appState = state
         if let window {
             window.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
