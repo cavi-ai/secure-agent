@@ -431,6 +431,9 @@ struct ConsoleView: View {
             }
             .buttonStyle(.borderedProminent).tint(.brand).controlSize(.regular)
             Spacer()
+            Button { SettingsWindowController.shared.show(state: state) } label: {
+                Image(systemName: "gearshape").font(.system(size: 13))
+            }.buttonStyle(.borderless).help("Settings")
             Button { state.togglePause() } label: {
                 Image(systemName: state.isPaused ? "play.circle" : "pause.circle").font(.system(size: 14))
             }.buttonStyle(.borderless).help(state.isPaused ? "Resume monitoring" : "Pause monitoring")
