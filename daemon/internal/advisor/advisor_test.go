@@ -347,3 +347,24 @@ func TestBackfillEnqueuesPreExistingFlags(t *testing.T) {
 	defer sink.mu.Unlock()
 	t.Fatalf("backfill flags never triaged: %v", sink.rows)
 }
+
+func TestHostAssessmentStored(t *testing.T) {
+	stub := &chatStub{content: `{"assessment":"benign","confidence":0.9,"rationale":"npm registry is routine for JS projects"}`}
+	srv := newStubServer(t, stub)
+	sink := &memSink{rows: map[string]model.AdvisorVerdict{}}
+	sub := New(Config{Enabled: true, Endpoint: srv.URL, Model: "m", Timeout: 2 * time.Second}, sink)
+
+	sub.EnqueueHost("cursor", "registry.npmjs.org")
+	sub.process(context.Background(), <-sub.queue)
+
+	v, ok := sink.rows["host:cursor|registry.npmjs.org"]
+	if !ok || v.Assessment != "benign" {
+		t.Fatalf("host verdict not stored: %+v", sink.rows)
+	}
+	stub.mu.Lock()
+	body := stub.lastBody
+	stub.mu.Unlock()
+	if !strings.Contains(body, "registry.npmjs.org") || !strings.Contains(body, "cursor") {
+		t.Fatal("host prompt must carry agent + host")
+	}
+}

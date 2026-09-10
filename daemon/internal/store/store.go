@@ -654,6 +654,13 @@ func (s *Store) CriticalFlagsMissingAdvisor(since time.Time, limit int) []model.
 	return flags
 }
 
+// AdvisorVerdictFor fetches one stored verdict (public read; absent = false).
+func (s *Store) AdvisorVerdictFor(subjectID, kind string) (model.AdvisorVerdict, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.advisorVerdictLocked(subjectID, kind)
+}
+
 // attachNarrativesLocked joins advisor narratives onto incidents (caller
 // holds mu).
 func (s *Store) attachNarrativesLocked(list []model.IncidentReport) {

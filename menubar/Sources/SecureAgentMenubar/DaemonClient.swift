@@ -23,6 +23,8 @@ public protocol DaemonClientProtocol: Sendable {
     func deleteGuardRule(agent: String, ruleID: String) async throws
     func setFirewallMode(rule: String, mode: String) async throws
     func fetchAdvisorDiscover() async throws -> AdvisorDiscovery
+    func fetchRollup(hours: Int) async throws -> [RollupPointModel]
+    func fetchAudit(limit: Int) async throws -> [AuditEntryModel]
     func streamEvents(onEvent: @escaping @Sendable (SSEFrame) -> Void) async throws
 }
 
@@ -119,6 +121,20 @@ public final class DaemonClient: Sendable {
         } catch DaemonClientError.http(404) {
             return AdvisorDiscovery(servers: [], managedModels: [])
         }
+    }
+
+    /// Hourly rollup counters (24h/7d trend views, weekly digest).
+    public func fetchRollup(hours: Int) async throws -> [RollupPointModel] {
+        do {
+            return try await getDecodable("/stats/rollup?hours=\(hours)")
+        } catch DaemonClientError.http(404) {
+            return []
+        }
+    }
+
+    /// Policy-change audit rows (digest counts allowlist approvals).
+    public func fetchAudit(limit: Int = 50) async throws -> [AuditEntryModel] {
+        try await getDecodable("/audit?limit=\(limit)")
     }
 
     public func deleteGuardRule(agent: String, ruleID: String) async throws {
