@@ -81,6 +81,26 @@ public final class NotificationManager: NSObject, @unchecked Sendable {
         }
     }
 
+    /// Weekly digest banner: the scheduled proof the app is working. Plain
+    /// counts only — no posture detail on a lock screen.
+    public func sendWeeklyDigest(_ summary: String) {
+        guard isSupported else {
+            print("[secure-agent-menubar] Weekly digest: \(summary)")
+            return
+        }
+        let content = UNMutableNotificationContent()
+        content.title = "Secure Agent — this week"
+        content.body = summary
+        content.interruptionLevel = .active
+        let request = UNNotificationRequest(
+            identifier: "secure-agent.digest.\(UUID().uuidString)", content: content, trigger: nil)
+        UNUserNotificationCenter.current().add(request) { error in
+            if let error = error {
+                NSLog("[secure-agent] Failed to deliver digest: \(error.localizedDescription)")
+            }
+        }
+    }
+
     /// A human, product-voice title per rule (falls back to the rule id).
     static func title(for flag: FlagModel) -> String {
         switch flag.rule {

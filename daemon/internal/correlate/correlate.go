@@ -59,6 +59,10 @@ type Correlator struct {
 	// by the operator. Nil until wired.
 	isMuted    func(rule, host string) bool
 	mutedCount int
+	// onUninspected fires once when an endpoint first crosses the suggestion
+	// threshold — the advisor's cue to pre-assess the host before the
+	// operator ever sees the suggestion. Nil until wired.
+	onUninspected func(agent, host string)
 }
 
 func New(tagger *agents.Tagger, classifier sensitive.Classifier, cfg config.Config) *Correlator {
@@ -116,6 +120,15 @@ func (c *Correlator) SetMuteChecker(fn func(rule, host string) bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.isMuted = fn
+}
+
+// SetOnUninspected wires the suggestion-threshold hook (advisor host
+// pre-assessment). Fires with the correlator lock HELD — the callback must
+// be non-blocking (enqueue, never call back into the correlator).
+func (c *Correlator) SetOnUninspected(fn func(agent, host string)) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.onUninspected = fn
 }
 
 // MutedCount reports how many flags were suppressed by dispositions — proof
@@ -312,6 +325,9 @@ func (c *Correlator) Observe(e event.Event) []model.Flag {
 			if e2, known := c.uninspected[key]; known {
 				e2.count++
 				e2.lastSeen = e.TS
+				if e2.count == 3 && c.onUninspected != nil {
+					c.onUninspected(info.Name, e.RemoteHost)
+				}
 			} else if len(c.uninspected) < maxUninspectedTracked {
 				c.uninspected[key] = &uninspectedEntry{count: 1, lastSeen: e.TS}
 			}

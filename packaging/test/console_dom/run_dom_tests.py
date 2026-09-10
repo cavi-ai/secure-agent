@@ -127,6 +127,7 @@ def main():
 
         # --- allowlist suggestions ---
         check("egress suggestion rendered", "fw-suggestion" in dom and "registry.npmjs.org" in dom)
+        check("suggestion advisor chip", 'advisor-chip adv-benign' in dom and "advisor: benign" in dom)
         check("suggestion allow button is delegated",
               'data-action="allow-host" data-agent="cursor" data-host="registry.npmjs.org"' in dom)
 

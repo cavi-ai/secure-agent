@@ -119,6 +119,20 @@ public struct DiscoveredServerModel: Codable, Identifiable, Sendable {
     }
 }
 
+public struct RollupPointModel: Codable, Sendable {
+    public let bucket: String
+    public let kind: String
+    public let count: Int
+}
+
+public struct AuditEntryModel: Codable, Sendable {
+    public let id: Int
+    public let ts: String
+    public let action: String
+    public let rule: String?
+    public let detail: String?
+}
+
 public struct AdvisorVerdictModel: Codable, Sendable {
     public let assessment: String?
     public let confidence: Double?
@@ -225,6 +239,10 @@ public struct RotateItemModel: Codable, Identifiable, Sendable {
     }
 }
 
+public struct IncidentWorkflowModel: Codable, Sendable {
+    public let status: String // "open" | "acknowledged" | "resolved"
+}
+
 public struct IncidentReportModel: Codable, Identifiable, Sendable {
     public let id: String
     public let flagId: String
@@ -237,6 +255,9 @@ public struct IncidentReportModel: Codable, Identifiable, Sendable {
     public let touchedFiles: [String]
     public let connections: [String]
     public let rotateList: [RotateItemModel]
+    /// Lifecycle state (open/acknowledged/resolved) — sibling key in the
+    /// daemon's incident payload; nil for older daemons.
+    public let workflow: IncidentWorkflowModel?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -250,9 +271,10 @@ public struct IncidentReportModel: Codable, Identifiable, Sendable {
         case touchedFiles = "touched_files"
         case connections
         case rotateList = "rotate_list"
+        case workflow
     }
 
-    public init(id: String, flagId: String, pid: Int32, agent: String, timestamp: String, rule: String, summary: String, risk: String, touchedFiles: [String], connections: [String], rotateList: [RotateItemModel]) {
+    public init(id: String, flagId: String, pid: Int32, agent: String, timestamp: String, rule: String, summary: String, risk: String, touchedFiles: [String], connections: [String], rotateList: [RotateItemModel], workflow: IncidentWorkflowModel? = nil) {
         self.id = id
         self.flagId = flagId
         self.pid = pid
@@ -264,5 +286,6 @@ public struct IncidentReportModel: Codable, Identifiable, Sendable {
         self.touchedFiles = touchedFiles
         self.connections = connections
         self.rotateList = rotateList
+        self.workflow = workflow
     }
 }
