@@ -83,6 +83,16 @@ and test infrastructure.
   disposition (persisted to `muted.json`, suppressed at the correlator
   with a `muted_flags` counter, unmute from the flags panel); open
   incidents older than 72h surface in posture as aging items.
+- **Informed suggestions + weekly digest.** Suggestion-threshold hosts
+  get an advisor legitimacy pre-assessment shown inline on the Allow
+  button; Monday 09:00 the menubar sends a one-line weekly digest from
+  rollups ("3 flags · 1 blocked leak · 2 approvals · 0 open incidents").
+- **In-app updates.** Settings → Updates: a Stable channel (latest
+  GitHub release DMG, SHA-256 verified against the release's
+  checksums.txt before mounting — mismatch or missing checksum is a
+  loud refusal) and a Nightly channel (ff-only build from origin/main
+  of a local checkout via `packaging/update_nightly.sh`).
+  `make_dmg.sh` now emits `dist/checksums.txt` on every build.
 
 ### Security fixes
 

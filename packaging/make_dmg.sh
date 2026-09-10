@@ -55,4 +55,13 @@ if [[ -n "${NOTARY_PROFILE:-}" && "${CODESIGN_IDENTITY:--}" != "-" ]]; then
 fi
 
 rm -rf "${STAGING}"
+
+# SHA-256 checksums: the in-app updater's stable channel verifies the DMG
+# against this file before mounting. Append (don't overwrite) so one release
+# can carry several artifacts.
+echo "==> Writing checksums..."
+CHECKSUMS="${REPO_ROOT}/dist/checksums.txt"
+shasum -a 256 "${DMG_PATH}" | sed "s|${REPO_ROOT}/||" >> "${CHECKSUMS}"
+echo "    $(tail -1 "${CHECKSUMS}")"
+
 echo "==> Done: ${DMG_PATH}"
