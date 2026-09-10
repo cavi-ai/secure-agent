@@ -211,7 +211,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   async function fetchTelemetry() {
     try {
-      const [statusRes, flagsRes, incidentsRes, eventsRes, fleetRes, auditRes, sourcesRes, postureRes, suggestionsRes] = await Promise.all([
+      const [statusRes, flagsRes, incidentsRes, eventsRes, fleetRes, auditRes, sourcesRes, postureRes, suggestionsRes, rollupRes] = await Promise.all([
         apiFetch('/status').catch(() => null),
         apiFetch('/flags?limit=20').catch(() => null),
         apiFetch('/incidents?limit=10').catch(() => null),
@@ -220,7 +220,8 @@ document.addEventListener('DOMContentLoaded', () => {
         apiFetch('/audit?limit=50').catch(() => null),
         apiFetch('/firewall/sources').catch(() => null),
         apiFetch('/posture').catch(() => null),
-        apiFetch('/allowlist/suggestions').catch(() => null)
+        apiFetch('/allowlist/suggestions').catch(() => null),
+        apiFetch('/stats/rollup?hours=168').catch(() => null)
       ]);
 
       if (statusRes && statusRes.ok) {
@@ -249,6 +250,9 @@ document.addEventListener('DOMContentLoaded', () => {
       }
       if (suggestionsRes && suggestionsRes.ok) {
         telemetryData.suggestions = await suggestionsRes.json() || [];
+      }
+      if (rollupRes && rollupRes.ok) {
+        telemetryData.rollup = await rollupRes.json() || [];
       }
 
       // The panels show the filtered view; KPIs keep reading the unfiltered
@@ -292,7 +296,37 @@ document.addEventListener('DOMContentLoaded', () => {
     renderSources();
     renderFlags();
     renderEvents();
+    renderActivity();
   }
+
+  // Activity rollup chart: hourly event bars with rose flag markers — the
+  // "is this normal for this machine?" answer at a glance. The 24h/7d toggle
+  // re-slices the same 7d fetch locally (no refetch).
+  function renderActivity() {
+    const svg = document.getElementById('activity-chart');
+    if (!svg) return;
+    const hours = Number(document.getElementById('activity-window')?.value || 24);
+    const s = rollupSeries(telemetryData.rollup, hours, Date.now()); // lib.js
+    const max = Math.max(1, ...s.events.map((v, i) => v + s.flags[i]));
+    const W = 1200, H = 96, bw = W / hours;
+    let bars = '';
+    for (let i = 0; i < hours; i++) {
+      const evH = (s.events[i] / max) * (H - 14);
+      const flH = (s.flags[i] / max) * (H - 14);
+      const x = (i * bw).toFixed(1);
+      if (s.events[i] > 0) {
+        bars += `<rect x="${x}" y="${(H - evH).toFixed(1)}" width="${(bw - 1).toFixed(1)}" height="${evH.toFixed(1)}" rx="1.5" class="act-ev"><title>${s.labels[i]} — ${s.events[i]} events${s.flags[i] ? `, ${s.flags[i]} flags` : ''}</title></rect>`;
+      }
+      if (s.flags[i] > 0) {
+        bars += `<rect x="${x}" y="${(H - evH - flH).toFixed(1)}" width="${(bw - 1).toFixed(1)}" height="${flH.toFixed(1)}" rx="1.5" class="act-fl"/>`;
+      }
+      if (s.events[i] === 0 && s.flags[i] === 0) {
+        bars += `<rect x="${x}" y="${H - 2}" width="${(bw - 1).toFixed(1)}" height="2" class="act-zero"/>`;
+      }
+    }
+    svg.innerHTML = bars;
+  }
+  document.getElementById('activity-window')?.addEventListener('change', renderActivity);
 
   function renderStatus() {
     const chip = document.getElementById('system-status');

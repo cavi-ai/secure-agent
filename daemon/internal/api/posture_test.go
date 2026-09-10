@@ -98,6 +98,25 @@ func TestPostureCountsUninspectedEgressAndDeadCollectors(t *testing.T) {
 	if !strings.Contains(egressTitle, "3 connections") {
 		t.Fatalf("egress title = %q", egressTitle)
 	}
+	// Collector items read as operator language, not process jargon.
+	var collItem *PostureItem
+	for i := range p.Items {
+		if p.Items[i].Kind == "collector_down" {
+			collItem = &p.Items[i]
+		}
+	}
+	if collItem == nil {
+		t.Fatal("missing collector_down item")
+	}
+	if collItem.Title != "File monitoring is off" {
+		t.Fatalf("collector title = %q, want plain language", collItem.Title)
+	}
+	if !strings.Contains(collItem.Detail, "Full Disk Access") {
+		t.Fatalf("collector detail should hint the fix, got %q", collItem.Detail)
+	}
+	if strings.Contains(p.Summary, "item(s)") {
+		t.Fatalf("summary must not use lazy pluralization: %q", p.Summary)
+	}
 }
 
 func TestPostureOldFlagsDoNotCount(t *testing.T) {

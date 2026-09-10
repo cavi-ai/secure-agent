@@ -75,15 +75,11 @@ func (a *API) handlePosture(w http.ResponseWriter, r *http.Request) {
 	// 3. Dead collectors — a monitor that stopped is a blind spot, not a detail.
 	for _, c := range st.Collectors {
 		if !c.Running || c.Abandoned {
-			state := "down"
-			if c.Abandoned {
-				state = "abandoned"
-			}
 			posture.Items = append(posture.Items, PostureItem{
 				Kind: "collector_down", ID: c.Name,
-				Title:    "Monitor " + c.Name + " is " + state,
+				Title:    humanCollectorTitle(c.Name, c.Abandoned),
 				Severity: 2,
-				Detail:   c.LastError,
+				Detail:   humanCollectorDetail(c.Name, c.LastError),
 			})
 		}
 	}
@@ -168,7 +164,56 @@ func attentionSummary(items []PostureItem) string {
 			top = it
 		}
 	}
-	return fmt.Sprintf("%d item(s) need you — first: %s.", len(items), top.Title)
+	n := len(items)
+	noun := "items need"
+	if n == 1 {
+		noun = "item needs"
+	}
+	return fmt.Sprintf("%d %s you — first: %s.", n, noun, top.Title)
+}
+
+// humanCollectorTitle maps collector process names to operator language —
+// "Monitor eslogger is abandoned" is jargon; "File monitoring is off" is not.
+func humanCollectorTitle(name string, abandoned bool) string {
+	what := map[string]string{
+		"eslogger":    "File monitoring",
+		"netsampler":  "Network sampling",
+		"transcript":  "Transcript scanning",
+		"proxyserver": "Egress inspection",
+		"advisor":     "Local advisor",
+	}[name]
+	if what == "" {
+		what = "Monitor " + name
+	}
+	if abandoned {
+		return what + " keeps stopping"
+	}
+	return what + " is off"
+}
+
+// humanCollectorDetail pairs the raw error with the likely fix.
+func humanCollectorDetail(name, lastErr string) string {
+	var hint string
+	switch name {
+	case "eslogger":
+		// eslogger crash-loops almost always mean Full Disk Access is missing.
+		hint = "usually missing Full Disk Access — open Setup & Permissions in the menu bar"
+	case "netsampler":
+		hint = "restart Secure Agent from the menu bar"
+	case "proxyserver":
+		hint = "check whether another process holds the proxy port"
+	case "transcript":
+		hint = "restart Secure Agent from the menu bar"
+	case "advisor":
+		hint = "check the local model server (default 127.0.0.1:8080)"
+	}
+	if lastErr == "" {
+		return hint
+	}
+	if hint == "" {
+		return lastErr
+	}
+	return hint + " · " + lastErr
 }
 
 // humanFlagTitle maps rule ids to operator language (mirrors the menubar's

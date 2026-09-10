@@ -282,6 +282,18 @@ public final class AppState: ObservableObject {
         }
     }
 
+    /// Settings screen: full mode control (monitor ↔ block), not just promote.
+    public func setFirewallMode(rule: String, mode: String) {
+        Task {
+            do {
+                try await client.setFirewallMode(rule: rule, mode: mode)
+            } catch {
+                self.lastError = "could not set \(rule) to \(mode): \(error.localizedDescription)"
+            }
+            self.fetch()
+        }
+    }
+
     public func revokeGuardRule(agent: String, ruleID: String) {
         Task {
             try? await client.deleteGuardRule(agent: agent, ruleID: ruleID)
