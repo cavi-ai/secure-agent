@@ -4,6 +4,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"time"
 
@@ -210,21 +211,44 @@ func startDrainLoop(sub <-chan event.Event, st *store.Store, cr *correlate.Corre
 	return drainDone
 }
 
+// advisorStack bundles the advisor subscriber and, in managed mode, the model
+// server process the daemon supervises.
+type advisorStack struct {
+	Sub     *advisor.Subscriber
+	Managed *exec.Cmd // nil unless advisor.managed
+}
+
 // setupAdvisor builds the local triage advisor: nil unless explicitly
 // enabled in config (and silently nil never happens — a misconfigured
-// endpoint logs why). The subscriber is supervised like every collector.
-func setupAdvisor(cfg config.Config, st *store.Store) *advisor.Subscriber {
-	ac := advisor.Config{
+// endpoint logs why). In managed mode the model server is spawned here and
+// supervised alongside the subscriber in main.
+func setupAdvisor(cfg config.Config, st *store.Store) advisorStack {
+	endpoint := cfg.Advisor.Endpoint
+	model := cfg.Advisor.Model
+	var managed *exec.Cmd
+	if cfg.Advisor.Enabled && cfg.Advisor.Managed {
+		cmd, ep, err := advisor.LaunchManaged(advisor.ManagedSpec{Model: cfg.Advisor.ManagedModel})
+		if err != nil {
+			log.Printf("advisor: managed mode unavailable (%v) — advisor disabled", err)
+			return advisorStack{}
+		}
+		managed, endpoint, model = cmd, ep, cfg.Advisor.ManagedModel
+	}
+	sub := advisor.New(advisor.Config{
 		Enabled:  cfg.Advisor.Enabled,
-		Endpoint: cfg.Advisor.Endpoint,
-		Model:    cfg.Advisor.Model,
+		Endpoint: endpoint,
+		Model:    model,
 		Timeout:  cfg.Advisor.Timeout,
-	}
-	sub := advisor.New(ac, st)
+	}, st)
 	if sub != nil {
-		log.Printf("advisor: local triage enabled via %s (model %q)", cfg.Advisor.Endpoint, cfg.Advisor.Model)
+		log.Printf("advisor: local triage enabled via %s (model %q)", endpoint, model)
+	} else if managed != nil {
+		// Subscriber refused (shouldn't happen post-validation) — don't leave
+		// an orphan server behind.
+		_ = managed.Process.Kill()
+		managed = nil
 	}
-	return sub
+	return advisorStack{Sub: sub, Managed: managed}
 }
 
 // buildStatusFn assembles the /status payload from live component state.
