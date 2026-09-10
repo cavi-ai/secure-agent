@@ -48,6 +48,9 @@ type Sink interface {
 	// TrendFor supplies the week-over-week context that makes triage more
 	// than a one-shot guess: is this rule/host routine on this machine?
 	TrendFor(rule, host string) model.TrendContext
+	// CriticalFlagsMissingAdvisor feeds the startup backfill: flags that
+	// fired while the advisor was off and have no verdict yet.
+	CriticalFlagsMissingAdvisor(since time.Time, limit int) []model.Flag
 }
 
 // IsLoopbackEndpoint reports whether the endpoint URL targets this machine.
@@ -168,9 +171,21 @@ func (s *Subscriber) EnqueueIncident(inc model.IncidentReport) {
 	}
 }
 
+// backfillLimit bounds the startup sweep: flags fired while the advisor was
+// off are worth triaging, but the queue's first duty is the present.
+const (
+	backfillLimit  = 25
+	backfillWindow = 7 * 24 * time.Hour
+)
+
 // Run processes the queue until ctx is cancelled. Callers should supervise
-// it like any other collector.
+// it like any other collector. On start it backfills verdicts for recent
+// critical flags that fired while the advisor was off — the triage queue
+// should never show "no verdict" just because the flag predates the opt-in.
 func (s *Subscriber) Run(ctx context.Context) error {
+	for _, fl := range s.sink.CriticalFlagsMissingAdvisor(time.Now().Add(-backfillWindow), backfillLimit) {
+		s.EnqueueFlag(fl)
+	}
 	for {
 		select {
 		case <-ctx.Done():

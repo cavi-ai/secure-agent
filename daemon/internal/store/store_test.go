@@ -290,3 +290,25 @@ func TestFlagSessionIDRoundTrips(t *testing.T) {
 		t.Fatalf("expected 2 flags, got %d", len(got))
 	}
 }
+
+func TestCriticalFlagsMissingAdvisor(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), "t.db"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	recent := time.Now().Add(-1 * time.Hour)
+	old := time.Now().Add(-10 * 24 * time.Hour)
+	st.PutFlag(model.Flag{ID: "f1", Rule: "r", Severity: 3, TS: recent, PID: 1})
+	st.PutFlag(model.Flag{ID: "f2", Rule: "r", Severity: 2, TS: recent, PID: 1}) // below sev3
+	st.PutFlag(model.Flag{ID: "f3", Rule: "r", Severity: 3, TS: old, PID: 1})    // outside window
+	st.PutFlag(model.Flag{ID: "f4", Rule: "r", Severity: 3, TS: recent, PID: 1})
+	// f4 already has a verdict — excluded.
+	st.PutAdvisorVerdict("f4", "flag", model.AdvisorVerdict{Assessment: "benign", Rationale: "x"})
+
+	got := st.CriticalFlagsMissingAdvisor(time.Now().Add(-7*24*time.Hour), 10)
+	if len(got) != 1 || got[0].ID != "f1" {
+		t.Fatalf("backfill set = %v, want [f1]", got)
+	}
+}
