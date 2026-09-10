@@ -42,8 +42,11 @@ type AgentSummary struct {
 	PPID      int32  `json:"ppid,omitempty"`
 	RootPID   int32  `json:"root_pid,omitempty"`
 	StartedAt string `json:"started_at,omitempty"`
-	RSSBytes  uint64 `json:"rss_bytes,omitempty"`
-	IsOrphan  bool   `json:"is_orphan,omitempty"`
+	// LastSeenAt is the timestamp of the most recent event attributed to this
+	// process (RFC3339) — the staleness signal for the agents panel.
+	LastSeenAt string `json:"last_seen_at,omitempty"`
+	RSSBytes   uint64 `json:"rss_bytes,omitempty"`
+	IsOrphan   bool   `json:"is_orphan,omitempty"`
 }
 
 type Status struct {
@@ -286,8 +289,21 @@ func (a *API) handleStatus(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
 	st := a.statusFn()
+	// Join last-activity per process: "last used" is what separates a stale
+	// tree from a live one at a glance.
+	if len(st.Agents) > 0 {
+		pids := make([]int32, len(st.Agents))
+		for i, ag := range st.Agents {
+			pids[i] = ag.PID
+		}
+		for i := range st.Agents {
+			if ts, ok := a.store.LastEventTimes(pids)[st.Agents[i].PID]; ok {
+				st.Agents[i].LastSeenAt = ts
+			}
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(st)
 }
 

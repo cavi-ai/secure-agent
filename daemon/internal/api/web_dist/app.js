@@ -426,18 +426,25 @@ document.addEventListener('DOMContentLoaded', () => {
   function renderProcessRow(a, now, nested) {
     const abs = a.started_at ? fmtTime(new Date(a.started_at)) : '';
     const age = a.started_at ? fmtAge(a.started_at, now) : '';
+    // "Last used" is the staleness signal: a tree with no events in 10+ min
+    // is probably dead weight even if the process still exists.
+    const seenAge = a.last_seen_at ? fmtAge(a.last_seen_at, now) : '';
+    const stale = a.last_seen_at
+      ? (now - Date.parse(a.last_seen_at)) > 10 * 60 * 1000
+      : true; // no events at all → nothing to say but "no activity"
     const rss = fmtRSS(a.rss_bytes);
     const cwd = a.cwd ? `<div class="agent-cwd">${escapeHTML(a.cwd)}</div>` : '';
     const status = a.is_orphan
       ? '<span class="agent-status orphan">leftover</span>'
       : '<span class="agent-status live">live</span>';
     return `
-      <div class="agent-instance${nested ? ' nested' : ''}${a.is_orphan ? ' orphan' : ''}">
+      <div class="agent-instance${nested ? ' nested' : ''}${a.is_orphan ? ' orphan' : ''}${stale ? ' stale' : ''}">
         <div class="agent-info">
           <div class="agent-name">
             <span class="agent-pid">PID ${a.pid}</span>
             ${status}
-            ${abs ? `<span class="agent-meta-item" title="${escapeHTML(a.started_at)}">${escapeHTML(abs)}${age ? ' · ' + age : ''}</span>` : ''}
+            ${abs ? `<span class="agent-meta-item" title="started ${escapeHTML(a.started_at)}">${escapeHTML(abs)}${age ? ' · ' + age : ''}</span>` : ''}
+            ${seenAge ? `<span class="agent-meta-item agent-lastseen" title="last event ${escapeHTML(a.last_seen_at)}">active ${escapeHTML(seenAge)} ago</span>` : `<span class="agent-meta-item agent-lastseen">no activity</span>`}
             ${rss ? `<span class="agent-meta-item">${escapeHTML(rss)}</span>` : ''}
           </div>
           ${cwd}
@@ -812,6 +819,7 @@ document.addEventListener('DOMContentLoaded', () => {
         <div class="flag-detail"><div class="flag-detail-inner">
           ${chainHTML}
           <div class="flag-actions-row">
+            <button class="btn btn-danger btn-sm" data-action="kill" data-pid="${f.pid}" title="Terminate the agent process tree (pid ${f.pid})"><svg class="icon"><use href="#i-power"/></svg><span>Kill ${escapeHTML(f.agent)}</span></button>
             ${f.session_id ? `<button class="btn btn-ghost btn-sm" data-action="filter-session" data-session="${escapeHTML(f.session_id)}"><svg class="icon"><use href="#i-activity"/></svg><span>View session in timeline</span></button>` : ''}
             ${f.advisor && f.advisor.assessment === 'benign' && flagHost(f) ? `<button class="btn btn-ghost btn-sm" data-action="mute-flag" data-rule="${escapeHTML(f.rule)}" data-host="${escapeHTML(flagHost(f))}" title="Stop flagging ${escapeHTML(f.rule)} for ${escapeHTML(flagHost(f))} — reversible"><svg class="icon"><use href="#i-close"/></svg><span>Mute rule+host</span></button>` : ''}
           </div>
