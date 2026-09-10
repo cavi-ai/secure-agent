@@ -106,6 +106,11 @@ func TestParseVerdict(t *testing.T) {
 	if _, err := parseVerdict("```json\n{\"assessment\":\"benign\",\"confidence\":1,\"rationale\":\"normal npm flow\"}\n```"); err != nil {
 		t.Fatalf("fenced verdict rejected: %v", err)
 	}
+	// Reasoning models (Qwen3 et al.) may emit a <think> block despite
+	// instructions — the verdict after it must still parse.
+	if _, err := parseVerdict("<think>let me consider this flag carefully...</think>\n{\"assessment\":\"benign\",\"confidence\":1,\"rationale\":\"routine\"}"); err != nil {
+		t.Fatalf("think-blocked verdict rejected: %v", err)
+	}
 	for _, bad := range []string{
 		`not json`,
 		`{"assessment":"everything is fine","confidence":1,"rationale":"x"}`, // off-enum
@@ -266,5 +271,10 @@ func TestTriagePromptCarriesTrendContext(t *testing.T) {
 	user := req.Messages[1].Content
 	if !strings.Contains(user, "3 times in the last 7 days") || !strings.Contains(user, "host first seen 2026-09-08T09:00:00Z") {
 		t.Fatalf("triage prompt missing trend context: %q", user)
+	}
+	// Reasoning models must be asked not to think (else content comes back
+	// empty after the token budget burns on a reasoning field).
+	if req.ChatTemplateKwargs["enable_thinking"] != false {
+		t.Fatalf("chat request must disable thinking: %+v", req.ChatTemplateKwargs)
 	}
 }
