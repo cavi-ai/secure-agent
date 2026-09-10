@@ -392,8 +392,11 @@ func (ps *ProxyServer) scanForInjection(prefix []byte, host string) {
 		return
 	}
 	for _, view := range firewall.Normalize(prefix) {
-		if rule, found := injection.Detect(view); found {
-			ps.publishHit(host, fmt.Sprintf("proxy-prompt-injection:%s", rule))
+		if rule, snippet, found := injection.DetectWithSnippet(view); found {
+			// The snippet rides in the detail so the flag's evidence (and the
+			// advisor's second opinion) shows WHAT matched — bounded and
+			// secret-scrubbed by DetectWithSnippet.
+			ps.publishHit(host, fmt.Sprintf("proxy-prompt-injection:%s — %q", rule, snippet))
 			return
 		}
 	}
