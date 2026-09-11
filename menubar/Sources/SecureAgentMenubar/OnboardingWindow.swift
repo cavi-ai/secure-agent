@@ -107,7 +107,51 @@ struct OnboardingView: View {
                 .padding(.vertical, 4)
             }
 
-            GroupBox("3. Harness Hooks") {
+            GroupBox("3. File Telemetry") {
+                VStack(alignment: .leading, spacing: 8) {
+                    if setup.isESCollectorInstalled {
+                        HStack {
+                            Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                            Text("File telemetry active").font(.callout)
+                        }
+                    } else {
+                        Text("Deep file monitoring (detecting when an agent reads a secret and connects out) needs two one-click permissions: the privileged helper install, and the eslogger switch in Settings. Everything else is automatic.")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        HStack(spacing: 10) {
+                            // Step 1: installs the helper; one macOS password prompt.
+                            if setup.esCollectorDaemonInstalled {
+                                Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                                    .frame(width: 16)
+                                Text("Helper installed")
+                            } else {
+                                Button("1. Install helper") { run { try setup.installESCollector() } }
+                                    .buttonStyle(.borderedProminent).tint(.brand)
+                            }
+                            // Step 2: opens the Settings pane; the eslogger
+                            // switch is already listed (macOS lists it after
+                            // the helper's first run). User flips it on.
+                            Button("2. Turn on eslogger switch") { setup.openFullDiskAccessSettings() }
+                                .disabled(!setup.esCollectorDaemonInstalled)
+                        }
+                        if setup.esCollectorDaemonInstalled && !setup.isESCollectorInstalled {
+                            Text("Settings is open → Privacy & Security → Full Disk Access → turn ON the switch for eslogger (it's already in the list). This window turns green when it works.")
+                                .font(.caption)
+                                .foregroundStyle(.orange)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        HStack {
+                            Spacer()
+                            Button("Recheck") { Task { await setup.refreshState() } }
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 4)
+            }
+
+            GroupBox("4. Harness Hooks") {
                 VStack(alignment: .leading, spacing: 6) {
                     stepRow(
                         done: setup.areHooksInstalled,
@@ -137,7 +181,7 @@ struct OnboardingView: View {
                 }
             }
 
-            GroupBox("4. Extras") {
+            GroupBox("5. Extras") {
                 HStack {
                     Button("Open at Login") { run { try setup.enableLoginItem() } }
                         .disabled(setup.isLoginItemEnabled)
@@ -147,7 +191,7 @@ struct OnboardingView: View {
                 .padding(.vertical, 4)
             }
 
-            GroupBox("5. Agent Routing (optional)") {
+            GroupBox("6. Agent Routing (optional)") {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Route your agents through the local inspection proxy to scan their outbound traffic for secret leaks. Opt-in and scoped to your shell — it changes no system or keychain settings.")
                         .font(.callout)
@@ -173,7 +217,7 @@ struct OnboardingView: View {
                 .padding(.vertical, 4)
             }
 
-            GroupBox("6. Secret Registry (optional)") {
+            GroupBox("7. Secret Registry (optional)") {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Register your real secrets so the firewall catches them leaking with near-zero false positives. Values are fingerprinted (HMAC) and never stored.")
                         .font(.callout)
@@ -201,7 +245,7 @@ struct OnboardingView: View {
                 .padding(.vertical, 4)
             }
 
-            GroupBox("7. Guard Your Secrets") {
+            GroupBox("8. Guard Your Secrets") {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Turn on the interactive guard for SSH keys, cloud credentials, the keychain, and your harness config (settings & hook scripts). When an agent reaches for one, you get a native Allow / Deny prompt. Nothing is blocked until you choose.")
                         .font(.callout)
@@ -220,7 +264,7 @@ struct OnboardingView: View {
                 .padding(.vertical, 4)
             }
 
-            GroupBox("8. Local Advisor (optional)") {
+            GroupBox("9. Local Advisor (optional)") {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("A locally served model (MLX, llama.cpp, Ollama) triages flags and writes plain-English incident narratives — on this machine only. The daemon refuses any non-loopback endpoint, and verdicts never change enforcement.")
                         .font(.callout)

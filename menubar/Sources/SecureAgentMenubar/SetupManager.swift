@@ -11,6 +11,13 @@ public final class SetupManager: ObservableObject {
     public static let shared = SetupManager()
 
     public static let daemonLabel = "com.cavi-ai.secure-agentd"
+    /// The privileged Endpoint Security collector (root LaunchDaemon).
+    public static let esCollectorLabel = "com.cavi-ai.secure-agent-esd"
+    /// The LaunchDaemon runs THE DAEMON BINARY ITSELF in --es-collector
+    /// mode — the binary the operator already granted Full Disk Access.
+    /// No separate helper, no separate FDA drag: one grant covers it.
+    public static let esCollectorInstallPath = Bundle.main.bundleURL
+        .appendingPathComponent("Contents/Helpers/secure-agentd").path
 
     @Published public private(set) var isDaemonRunning = false
     @Published public private(set) var areHooksInstalled = false
@@ -23,6 +30,49 @@ public final class SetupManager: ObservableObject {
     /// and whether the daemon config has the advisor enabled.
     @Published public private(set) var advisorServerReachable = false
     @Published public private(set) var advisorEnabled = false
+    /// Last-persisted advisor config (mode/endpoint/model) — the Settings
+    /// tab's restore source so the advisor persists across restarts.
+    @Published public private(set) var advisorPersisted: (mode: String?, endpoint: String?, model: String?) = (nil, nil, nil)
+    /// Provider names the operator disabled (from disabled_agents in
+    /// config.yaml). Toggling writes the file; the daemon's config watcher
+    /// picks it up on its next Load (agents must be statically configured —
+    /// tagger rebuilds on restart, not hot).
+    @Published public private(set) var disabledAgents: [String] = []
+
+    /// All agent definitions shipped in the daemon's defaults (name → match
+    /// strings), for the Providers tab. Kept in sync with
+    /// daemon/internal/config/defaults.yaml manually.
+    public static let knownAgents: [(name: String, matches: [String])] = [
+        ("claude", ["claude"]),
+        ("cursor", ["Cursor Helper", "cursor"]),
+        ("codex", ["codex"]),
+        ("opencode", ["opencode", "OpenCode Helper"]),
+        ("antigravity", ["antigravity", "Antigravity Helper"]),
+        ("windsurf", ["windsurf"]),
+        ("aider", ["aider"]),
+        ("gemini", ["gemini-cli", "gemini"]),
+        ("codeium", ["codeium"]),
+        ("copilot", ["copilot"]),
+        ("ollama", ["ollama", "llama-server", "llama.cpp"]),
+        ("lm-studio", ["lm studio", "lmstudio"]),
+    ]
+
+    /// Toggle one provider. Writes disabled_agents; the daemon applies it on
+    /// its next config load (restart — agents are static per lifetime).
+    public func setAgentDisabled(_ name: String, disabled: Bool) {
+        do {
+            var off = disabledAgents
+            if disabled { if !off.contains(name) { off.append(name) } }
+            else { off.removeAll { $0 == name } }
+            let updated = Self.setDisabledAgents(configYAML(), disabled: off)
+            let dir = (configPath as NSString).deletingLastPathComponent
+            try fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
+            try updated.write(toFile: configPath, atomically: true, encoding: .utf8)
+            disabledAgents = off
+        } catch {
+            report(error)
+        }
+    }
     /// Neutral guidance after an advisor toggle (the daemon reads config at
     /// start, so a change needs an app restart). Not an error.
     @Published public private(set) var advisorNote: String?
@@ -79,6 +129,8 @@ public final class SetupManager: ObservableObject {
             fm.fileExists(atPath: "\(target)/secret_guard.py")
         }
         advisorEnabled = Self.advisorConfigIsEnabled(configYAML())
+        advisorPersisted = Self.advisorConfig(configYAML())
+        disabledAgents = Self.disabledAgents(configYAML())
         advisorServerReachable = await Self.probeAdvisorServer()
         advisorDiscovery = (try? await DaemonClient().fetchAdvisorDiscover())
             ?? AdvisorDiscovery(servers: [], managedModels: [])
@@ -121,7 +173,7 @@ public final class SetupManager: ObservableObject {
             try fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
             try updated.write(toFile: configPath, atomically: true, encoding: .utf8)
             advisorEnabled = enabled
-            advisorNote = "Advisor \(enabled ? "enabled" : "disabled") — quit and relaunch Secure Agent so the daemon picks it up."
+            advisorNote = "Advisor " + (enabled ? "enabled" : "disabled") + " — applied live (daemon hot-reloads config)."
         } catch {
             report(error)
         }
@@ -143,7 +195,7 @@ public final class SetupManager: ObservableObject {
             try fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
             try updated.write(toFile: configPath, atomically: true, encoding: .utf8)
             advisorEnabled = true
-            advisorNote = "Advisor configured (\(mode.rawValue)) — quit and relaunch Secure Agent so the daemon picks it up."
+            advisorNote = "Advisor configured (\(mode.rawValue)) — applied live (daemon hot-reloads config)."
         } catch {
             report(error)
         }
@@ -199,6 +251,94 @@ public final class SetupManager: ObservableObject {
 
     /// True when the YAML has an advisor block with `enabled: true`.
     /// Line-based: a real YAML parser would be overkill for one boolean.
+    /// Read the disabled_agents list (top-level key, "- name" lines).
+    public nonisolated static func disabledAgents(_ yaml: String) -> [String] {
+        var inList = false
+        var out: [String] = []
+        for line in yaml.split(separator: "\n", omittingEmptySubsequences: false) {
+            let s = String(line)
+            if s.hasPrefix("disabled_agents:") { inList = true; continue }
+            if inList {
+                let t = s.trimmingCharacters(in: .whitespaces)
+                if t.hasPrefix("-") {
+                    out.append(t.dropFirst().trimmingCharacters(in: .whitespaces)
+                        .replacingOccurrences(of: "\"", with: ""))
+                    continue
+                }
+                break // first non-dash line ends the list
+            }
+        }
+        return out
+    }
+
+    /// Write the disabled_agents list (replace or append; preserves the rest
+    /// of the file byte-for-byte).
+    public nonisolated static func setDisabledAgents(_ yaml: String, disabled: [String]) -> String {
+        var lines = yaml.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        // Strip existing block.
+        var kept: [String] = []
+        var skipping = false
+        for line in lines {
+            if line.hasPrefix("disabled_agents:") { skipping = true; continue }
+            if skipping {
+                if line.hasPrefix("  -") || line.hasPrefix(" -") { continue }
+                skipping = false
+            }
+            kept.append(line)
+        }
+        lines = kept
+        if disabled.isEmpty { return lines.joined(separator: "\n") }
+        var block = ["disabled_agents:"]
+        block += disabled.map { "  - \($0)" }
+        // Insert at the top (after any leading comments) — top-level keys
+        // read fine anywhere, but top keeps it discoverable.
+        var idx = 0
+        while idx < lines.count && (lines[idx].hasPrefix("#") || lines[idx].trimmingCharacters(in: .whitespaces).isEmpty) {
+            idx += 1
+        }
+        lines.insert(contentsOf: block, at: idx)
+        return lines.joined(separator: "\n")
+    }
+
+    /// The persisted advisor config (mode, endpoint, model) — what the
+    /// Settings tab restores on open so the advisor "sticks" instead of
+    /// defaulting to managed-every-launch.
+    public nonisolated static func advisorConfig(_ yaml: String) -> (mode: String?, endpoint: String?, model: String?) {
+        var inAdvisor = false
+        var mode: String?
+        var endpoint: String?
+        var model: String?
+        var managed: Bool?
+        for line in yaml.split(separator: "\n", omittingEmptySubsequences: false) {
+            let s = String(line)
+            if s.hasPrefix("advisor:") { inAdvisor = true; continue }
+            if inAdvisor && !s.hasPrefix(" ") && !s.hasPrefix("#") && !s.trimmingCharacters(in: .whitespaces).isEmpty {
+                inAdvisor = false
+            }
+            guard inAdvisor else { continue }
+            let t = s.trimmingCharacters(in: .whitespaces)
+            if t.hasPrefix("managed:") {
+                managed = t.replacingOccurrences(of: "managed:", with: "")
+                    .trimmingCharacters(in: .whitespaces)
+                    .split(separator: "#").first.map { $0.trimmingCharacters(in: .whitespaces) == "true" }
+            } else if t.hasPrefix("managed_model:") {
+                model = t.replacingOccurrences(of: "managed_model:", with: "")
+                    .trimmingCharacters(in: .whitespaces)
+                    .replacingOccurrences(of: "\"", with: "")
+            } else if t.hasPrefix("endpoint:") {
+                endpoint = t.replacingOccurrences(of: "endpoint:", with: "")
+                    .trimmingCharacters(in: .whitespaces)
+                    .replacingOccurrences(of: "\"", with: "")
+            } else if t.hasPrefix("model:") {
+                model = t.replacingOccurrences(of: "model:", with: "")
+                    .trimmingCharacters(in: .whitespaces)
+                    .replacingOccurrences(of: "\"", with: "")
+            }
+        }
+        let m = managed.map { $0 ? "managed" : "existing" }
+        return (m, endpoint, model)
+    }
+
     public nonisolated static func advisorConfigIsEnabled(_ yaml: String) -> Bool {
         var inAdvisor = false
         for line in yaml.split(separator: "\n", omittingEmptySubsequences: false) {
@@ -371,8 +511,116 @@ public final class SetupManager: ObservableObject {
         }
     }
 
+    /// The toggle must go both ways — a one-way "Open at Login" is a trap.
+    public func disableLoginItem() throws {
+        lastError = nil
+        if SMAppService.mainApp.status == .enabled {
+            try SMAppService.mainApp.unregister()
+        }
+    }
+
     public var isLoginItemEnabled: Bool {
         SMAppService.mainApp.status == .enabled
+    }
+
+    // MARK: - Privileged ES collector
+
+    /// Whether the LaunchDaemon plist exists (the helper is installed,
+    /// regardless of whether TCC has granted eslogger yet).
+    public var esCollectorDaemonInstalled: Bool {
+        FileManager.default.fileExists(atPath: "/Library/LaunchDaemons/\(Self.esCollectorLabel).plist")
+    }
+
+    /// Whether file telemetry is actually live: the privileged helper is
+    /// running AND writing the spool (proof eslogger got its ES client —
+    /// i.e. the user has flipped the eslogger switch in Settings).
+    public var isESCollectorInstalled: Bool {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: "/var/db/secure-agent/es-spool.jsonl"),
+              let size = attrs[.size] as? UInt64, size > 0 else { return false }
+        return true
+    }
+
+    /// Installs the privileged ES collector: writes the LaunchDaemon plist
+    /// (running THE DAEMON binary in --es-collector mode — the binary the
+    /// operator already FDA-granted) and bootstraps it. One osascript admin
+    /// prompt; no helper to stage, no second FDA drag.
+    public func installESCollector() throws {
+        lastError = nil
+        guard bundledDaemonPath != nil else { throw SetupError.notBundled }
+        let plist = Self.esPlistB64
+        let label = Self.esCollectorLabel
+        let shell = "echo '\(plist)' | base64 -d > /Library/LaunchDaemons/\(label).plist" +
+            " && chown root:wheel /Library/LaunchDaemons/\(label).plist && chmod 644 /Library/LaunchDaemons/\(label).plist" +
+            " && launchctl bootstrap system /Library/LaunchDaemons/\(label).plist"
+        let script = "do shell script \(shellAppleScriptLiteral(shell)) with administrator privileges"
+        guard runAppleScriptAdmin(script) else {
+            if lastError == nil { lastError = "the privileged collector install was cancelled" }
+            throw SetupError.notBundled
+        }
+        Task { await refreshState() }
+    }
+
+    /// Escapes a shell command into an AppleScript string literal.
+    private func shellAppleScriptLiteral(_ s: String) -> String {
+        "\"\(s.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\""))\""
+    }
+
+    /// Removes the LaunchDaemon + binary. Also called by uninstallAll.
+    public func uninstallESCollector() {
+        let script = "do shell script \"launchctl bootout system /Library/LaunchDaemons/\(Self.esCollectorLabel).plist 2>/dev/null; rm -f /Library/LaunchDaemons/\(Self.esCollectorLabel).plist; true\" with administrator privileges"
+        _ = Self.run(["/usr/bin/osascript", "-e", script])
+    }
+
+    /// LaunchDaemon definition: keep-alive, root, one job — run the helper.
+    static var esPlistXML: String {
+        """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0"><dict>
+            <key>Label</key><string>\(esCollectorLabel)</string>
+            <key>ProgramArguments</key><array>
+                <string>\(esCollectorInstallPath)</string>
+                <string>--es-collector</string>
+            </array>
+            <key>RunAtLoad</key><true/>
+            <key>KeepAlive</key><true/>
+            <key>ThrottleInterval</key><integer>10</integer>
+            <key>StandardErrorPath</key><string>/Library/Logs/secure-agent/esd-err.log</string>
+        </dict></plist>
+        """
+    }
+
+    /// The plist, base64-encoded so it can pass through the osascript →
+    /// do-shell-script layer without any quoting hazards.
+    static var esPlistB64: String {
+        Data(esPlistXML.utf8).base64EncodedString()
+    }
+
+    /// Runs an AppleScript that shells out with administrator privileges.
+    /// Returns false on user-cancel or failure. The password never passes
+    /// through our process — Apple's SecurityAgent prompt owns it.
+    private func runAppleScriptAdmin(_ script: String) -> Bool {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        p.arguments = ["-e", script]
+        p.standardOutput = FileHandle.nullDevice
+        let errPipe = Pipe()
+        p.standardError = errPipe
+        do {
+            try p.run()
+            p.waitUntilExit()
+            if p.terminationStatus != 0 {
+                let msg = String(data: errPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+                if !msg.contains("User canceled") {
+                    lastError = "collector install failed: \(msg.prefix(160))"
+                }
+                return false
+            }
+            return true
+        } catch {
+            lastError = "collector install failed: \(error.localizedDescription)"
+            return false
+        }
     }
 
     // MARK: - CLI symlink
@@ -532,10 +780,36 @@ public final class SetupManager: ObservableObject {
 
     // MARK: - Uninstall
 
+    /// The single uninstall confirmation, shared by the right-click menu and
+    /// Settings — one copy, one button order, one place to evolve.
+    /// Returns true when the user confirmed.
+    @discardableResult
+    public func confirmUninstall() -> Bool {
+        let alert = NSAlert()
+        alert.messageText = "Uninstall Secure Agent?"
+        alert.informativeText = "This stops the background daemon, removes harness hooks, the login item, and the CLI symlink. The app itself and your logs/config are left in place."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Uninstall")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return false }
+        do {
+            try uninstallAll()
+        } catch {
+            report(error)
+        }
+        Task { await refreshState() }
+        return true
+    }
+
     public func uninstallAll() throws {
         lastError = nil
         // Stop the child daemon this app is running.
         DaemonSupervisor.shared.stop()
+        // The privileged ES collector is root-installed; remove it too
+        // (best-effort: if the admin prompt is cancelled, the helper stays
+        // but the app is gone — the plist self-heals nothing without its
+        // binary, so a cancelled prompt leaves a harmless, spool-less daemon).
+        uninstallESCollector()
         // Tear down any legacy LaunchAgent from an older install.
         let uid = getuid()
         Self.run(["/bin/launchctl", "bootout", "gui/\(uid)/\(Self.daemonLabel)"])

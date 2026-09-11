@@ -26,6 +26,10 @@ public final class AppState: ObservableObject {
     public var onNewCriticalFlag: (() -> Void)?
 
     private let client: DaemonClientProtocol
+    /// Shared client for one-off UI fetches (incident reports) — a fresh
+    /// DaemonClient per sheet-open rebuilt nothing but churned allocations
+    /// and made the socket path a per-open computation.
+    public lazy var uiClient: DaemonClientProtocol = client
     /// Notification sink — a closure so tests can count deliveries instead of
     /// touching UNUserNotificationCenter.
     var notify: (FlagModel) -> Void = { NotificationManager.shared.sendNotification(for: $0) }
@@ -55,6 +59,15 @@ public final class AppState: ObservableObject {
     public init(client: DaemonClientProtocol = DaemonClient()) {
         self.client = client
     }
+
+    #if DEBUG
+    /// Test hook: seed daemon-derived state without a live poll loop (the
+    /// tree-grouping tests exercise pure view-data paths).
+    func seedForTesting(status: StatusResponse) {
+        self.status = status
+        self.connected = true
+    }
+    #endif
 
     public func start() {
         fetch()
@@ -152,10 +165,39 @@ public final class AppState: ObservableObject {
     }
 
     public func fetch() {
-        guard !isPaused, !isFetching else { return }
+        if isPaused {
+            // Paused silences alerting, NOT consent: a pending guard decision
+            // is an agent blocked mid-tool-call. Service it even while paused.
+            presentGuardPromptFromPoll()
+            return
+        }
+        guard !isFetching else { return }
         isFetching = true
         Task { await performFetch() }
     }
+
+    /// While paused the full poll is gated off, but a pending guard decision is
+    /// an agent blocked mid-tool-call — consent must keep flowing even when
+    /// alerts are silenced.
+    private func presentGuardPromptFromPoll() {
+        guard !isFetching else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let pending = try await self.client.fetchGuardPending()
+                self.presentGuardPromptIfNeeded(pending)
+            } catch {
+                // The resume fetch re-surfaces transport problems; while paused
+                // only the consent path needs to stay alive.
+            }
+        }
+    }
+
+    /// A single timeout is ambiguous (slow join vs. dead daemon) and a flap
+    /// to "Disconnected" on one slow poll makes the UI lie. Require two
+    /// consecutive transport failures before declaring disconnection; each
+    /// transport error still surfaces via lastError for honesty.
+    private var transportFailureStreak = 0
 
     /// The fetch core, awaitable — tests drive this directly; the timer/SSE
     /// paths use fetch() (fire-and-forget, serialized via isFetching).
@@ -176,7 +218,9 @@ public final class AppState: ObservableObject {
             self.guardRules = guardRules
             self.connected = true
             self.lastError = nil
+            self.transportFailureStreak = 0
             if wasDisconnected { self.scheduleTimer(1.0) }
+            self.eventsRefreshTick += 1
             self.processNewFlags(flags)
             self.onChange?()
             Task { await self.maybeSendWeeklyDigest() }
@@ -199,6 +243,17 @@ public final class AppState: ObservableObject {
             self.onChange?()
         } catch {
             let wasConnected = self.connected
+            self.transportFailureStreak += 1
+            // Two consecutive transport failures: the daemon is really gone.
+            // One timeout on a slow status join is NOT disconnection — the
+            // daemon may be perfectly healthy (smoke test: 400 live pids
+            // made /status take 2–4s, past the old 3s timeout, with zero
+            // wrong answers).
+            guard self.transportFailureStreak >= 2 else {
+                self.lastError = error.localizedDescription
+                self.onChange?()
+                return
+            }
             self.connected = false
             // Drop ALL daemon-derived state: stale flags/incidents driving
             // the icon and console while the header says "Disconnected" is
@@ -311,8 +366,16 @@ public final class AppState: ObservableObject {
     public func refresh() { fetch() }
 
     public func togglePause() {
+        let wasPaused = isPaused
         isPaused.toggle()
-        if !isPaused { fetch() }
+        if wasPaused {
+            // Flags that queued while paused are baseline, not news: without
+            // re-seeding, resume storms the user with every banner that
+            // accrued during the break.
+            didSeedNotificationBaseline = false
+            notifiedFlagIDs.formUnion(flags.map(\.id))
+            fetch()
+        }
         onChange?()
     }
 
@@ -332,7 +395,14 @@ public final class AppState: ObservableObject {
 
     public func promote(rule: String) {
         Task {
-            try? await client.setFirewallMode(rule: rule, mode: "block")
+            do {
+                try await client.setFirewallMode(rule: rule, mode: "block")
+            } catch {
+                // A refused promote must be visible: the user believes the
+                // rule now blocks, and it silently still only monitors.
+                self.lastError = "could not block \(rule): \(error.localizedDescription)"
+                self.onChange?()
+            }
             self.fetch()
         }
     }
@@ -351,7 +421,15 @@ public final class AppState: ObservableObject {
 
     public func revokeGuardRule(agent: String, ruleID: String) {
         Task {
-            try? await client.deleteGuardRule(agent: agent, ruleID: ruleID)
+            do {
+                try await client.deleteGuardRule(agent: agent, ruleID: ruleID)
+            } catch {
+                // Revoking re-enables prompting for that path — a silently
+                // dropped revoke means the user thinks they'll be re-asked
+                // and they won't be.
+                self.lastError = "could not revoke \(ruleID): \(error.localizedDescription)"
+                self.onChange?()
+            }
             self.fetch()
         }
     }
@@ -361,6 +439,11 @@ public final class AppState: ObservableObject {
     private func presentGuardPromptIfNeeded(_ pending: [GuardPending]) {
         guard promptingID == nil, let p = pending.first else { return }
         promptingID = p.id
+        #if DEBUG
+        // Test hook: NSAlert.runModal() cannot run in a test host; tests
+        // assert on the dedupe id to prove the prompt path went live.
+        if testHookSkipPromptDialog { return }
+        #endif
         let alert = NSAlert()
         alert.messageText = Self.guardPromptHeadline(p)
         var informative = Self.guardPromptDetail(p)
@@ -402,6 +485,13 @@ public final class AppState: ObservableObject {
         }
     }
 
+    /// True when the app is showing a guard NSAlert — one at a time.
+    public var promptingIDForTesting: String? { promptingID }
+
+    /// Test hook: skip the modal NSAlert (untestable) while still proving the
+    /// prompt path claimed the pending id.
+    var testHookSkipPromptDialog = false
+
     // MARK: - Guard prompt language
 
     /// Plain-language headline: what is this file, and who wants it.
@@ -439,12 +529,22 @@ public final class AppState: ObservableObject {
         return lines
     }
 
+    /// Why "Open console" is unavailable right now, for tooltip/disabled
+    /// states — nil when it can open. A silent no-op button reads as broken.
+    public var dashboardUnavailableReason: String? {
+        if !connected { return "The daemon is not running" }
+        guard let status else { return "The daemon is not running" }
+        guard status.proxyEnabled == true else { return "The inspection proxy is off (Settings → Agent routing)" }
+        guard let port = status.proxyPort, port > 0 else { return "The console port is not open" }
+        return nil
+    }
+
     public func openDashboard() {
         // The console is served on the proxy's loopback HTTP port (and on the
         // unix API). Only open it when the daemon is connected and the proxy
         // is actually running — a stale port from a dead daemon opens a
         // browser error page.
-        guard connected, status?.proxyEnabled == true, let port = status?.proxyPort, port > 0 else { return }
+        guard dashboardUnavailableReason == nil, let port = status?.proxyPort, port > 0 else { return }
         // The console's telemetry endpoints require the console token (a
         // credential agents never hold). Pass it as a query param; the page
         // lifts it into memory and sends it as a header on every fetch.
@@ -452,7 +552,11 @@ public final class AppState: ObservableObject {
         if let token = try? String(contentsOfFile: NSHomeDirectory() + "/.config/secure-agent/console-token",
                                    encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
            !token.isEmpty {
-            query = "?ct=\(DaemonClient.urlQueryEscape(token))"
+            // Hand off via fragment: fragments are never sent to the server,
+            // so the token stays out of the wire, access logs, and Referer.
+            // The console page lifts it into memory and strips it from the
+            // address bar.
+            query = "#ct=\(DaemonClient.urlQueryEscape(token))"
         }
         if let url = URL(string: "http://127.0.0.1:\(port)/dashboard/\(query)") {
             NSWorkspace.shared.open(url)
@@ -467,12 +571,214 @@ public final class AppState: ObservableObject {
         return "Active"
     }
 
+    // MARK: - Process tree
+
+    /// Incremented on every successful fetch; the process detail sheet keys
+    /// its live-tail task on this so each poll appends fresh transcript rows.
+    @Published public private(set) var eventsRefreshTick = 0
+
     public var activeAgents: [AgentSummaryModel] { status?.agents ?? [] }
+
+    /// Tree roots only: the popover lists agents, not their helper processes.
 
     /// Tree roots only: the popover lists agents, not their helper processes.
     /// Killing a root kills the tree (the daemon's /kill targets the tree).
     public var agentRoots: [AgentSummaryModel] {
         activeAgents.filter { ($0.rootPid ?? $0.pid) == $0.pid }
+    }
+
+    /// Tagged processes that are NOT tree roots — the subagents/helpers a
+    /// session spawned. Grouping them under their parent turns "26 claude
+    /// rows" into "3 sessions (with children)", which is what a human means
+    /// by "how many agents do I have".
+    public var childAgents: [AgentSummaryModel] {
+        activeAgents.filter { let r = $0.rootPid ?? $0.pid; return r != $0.pid }
+    }
+
+    /// One row per tree: the root plus its direct children, sorted by the
+    /// user's chosen key. Roots carry the family's aggregate memory so the
+    /// list answers "what is this session costing" without expanding it.
+    public struct AgentTree: Identifiable {
+        public let root: AgentSummaryModel
+        public let children: [AgentSummaryModel]
+        /// Root RSS + all children (nil when the daemon supplied no RSS).
+        public var totalRSSBytes: UInt64? {
+            let parts = ([root] + children).compactMap(\.rssBytes)
+            guard !parts.isEmpty else { return nil }
+            return parts.reduce(0, +)
+        }
+        public var id: String { root.id }
+        /// Most recent activity across the family — the tree-level liveness
+        /// signal ("this session is working right now").
+        public var lastSeenAt: String? {
+            ([root] + children).compactMap(\.lastSeenAt).max()
+        }
+    }
+
+    public enum AgentSort: String, CaseIterable, Sendable {
+        case lastActivity
+        case created
+        case memory
+
+        var label: String {
+            switch self {
+            case .lastActivity: return "Last activity"
+            case .created: return "Created"
+            case .memory: return "Memory"
+            }
+        }
+    }
+
+    /// Family membership by root_pid (the daemon's own family grouping —
+    /// survives a middle process dying), falling back to ppid on older
+    /// daemons that don't send root_pid.
+    private func childrenOf(_ root: AgentSummaryModel, from kids: [AgentSummaryModel]) -> [AgentSummaryModel] {
+        kids.filter { $0.rootPid == root.pid || ($0.rootPid == nil && $0.ppid == root.pid) }
+            .sorted { ($0.startedAt ?? "") < ($1.startedAt ?? "") }
+    }
+
+    /// Collectors the supervisor gave up on — surfaced in the popover, since
+    /// "eslogger failed permanently" is the reason transcripts would be thin
+    /// and silence must not read as healthy.
+    public var abandonedCollectors: [HealthModel]? {
+        guard let cs = status?.collectors else { return nil }
+        let dead = cs.filter { $0.abandoned }
+        return dead.isEmpty ? nil : dead
+    }
+
+    /// One harness (provider) with its sessions grouped beneath it — the
+    /// two-level organization: "my 40 claude/codex/cursor processes" reads
+    /// as 3 harness groups, each expandable to its sessions, each session
+    /// expandable to its subagents. Collapsed state is UI-only; the model
+    /// just supplies the structure.
+    public struct HarnessGroup: Identifiable {
+        /// Harness name ("claude", "cursor", "codex") — the group header.
+        public let name: String
+        /// Sessions (tree roots) in this harness, with their children.
+        public var trees: [(AgentSummaryModel, [AgentSummaryModel])]
+        /// Family memory across the whole harness.
+        public var totalRSSBytes: UInt64? {
+            let parts = trees.flatMap { [$0.0] + $0.1 }.compactMap(\.rssBytes)
+            return parts.isEmpty ? nil : parts.reduce(0, +)
+        }
+        public var sessionCount: Int { trees.count }
+        public var processCount: Int { trees.reduce(0) { $0 + 1 + $1.1.count } }
+        public var lastSeenAt: String? {
+            trees.flatMap { [$0.0] + $0.1 }.compactMap(\.lastSeenAt).max()
+        }
+        public var id: String { name }
+    }
+
+    /// Harness groups, sessions inside sorted by the user's key.
+    public func harnessGroups(sortedBy sort: AgentSort) -> [HarnessGroup] {
+        let kids = childAgents
+        var byHarness: [String: [(AgentSummaryModel, [AgentSummaryModel])]] = [:]
+        for root in agentRoots {
+            let children = childrenOf(root, from: kids)
+            byHarness[root.name, default: []].append((root, children))
+        }
+        var groups: [HarnessGroup] = byHarness.map { name, trees in
+            HarnessGroup(name: name, trees: trees)
+        }
+        for i in groups.indices {
+            let t = groups[i].trees
+            let sorted: [(AgentSummaryModel, [AgentSummaryModel])]
+            switch sort {
+            case .created:
+                sorted = t.sorted { $0.0.startedAt ?? "" < $1.0.startedAt ?? "" }
+            case .memory:
+                sorted = t.sorted {
+                    (familyRSS($0.0, $0.1) ?? 0) > (familyRSS($1.0, $1.1) ?? 0)
+                }
+            case .lastActivity:
+                sorted = t.sorted { familyLastSeen($0.0, $0.1) > familyLastSeen($1.0, $1.1) }
+            }
+            groups[i].trees = sorted
+        }
+        // Groups by their own strongest activity.
+        return groups.sorted { ($0.lastSeenAt ?? "") > ($1.lastSeenAt ?? "") }
+    }
+
+    /// Flat, pre-sorted rows for the popover list — roots carry a depth and
+    /// the family aggregate so the View layer is one dumb ForEach with zero
+    /// nested-generic inference (nested AgentTree + .children keypaths made
+    /// SwiftUI's ForEach overloads ambiguous).
+    public struct AgentRow: Identifiable {
+        public let agent: AgentSummaryModel
+        /// 0 = session root, 1 = direct child of a root.
+        public let depth: Int
+        /// Number of subprocesses under this row (roots only).
+        public let childCount: Int
+        /// Family memory (roots only; nil when daemon supplied no RSS).
+        public let familyRSSBytes: UInt64?
+        /// Most recent activity in the family (roots only).
+        public let familyLastSeenAt: String?
+        public var id: String { agent.id }
+    }
+
+    /// One row per process, trees grouped, sorted by the chosen key.
+    /// Children are ordered oldest-first within a tree (spawn order reads
+    /// like a story); trees by the user's key.
+    public func agentRows(sortedBy sort: AgentSort) -> [AgentRow] {
+        let kids = childAgents
+        let trees = agentRoots.map { root -> (AgentSummaryModel, [AgentSummaryModel]) in
+            (root, childrenOf(root, from: kids))
+        }
+        let ordered: [(AgentSummaryModel, [AgentSummaryModel])]
+        switch sort {
+        case .created:
+            // Newest session last (reading top-down = chronological).
+            ordered = trees.sorted { $0.0.startedAt ?? "" < $1.0.startedAt ?? "" }
+        case .memory:
+            ordered = trees.sorted {
+                (familyRSS($0.0, $0.1) ?? 0) > (familyRSS($1.0, $1.1) ?? 0)
+            }
+        case .lastActivity:
+            // Most recently active first: the session the user probably
+            // wants to look at is at the top.
+            ordered = trees.sorted {
+                familyLastSeen($0.0, $0.1) > familyLastSeen($1.0, $1.1)
+            }
+        }
+        return ordered.flatMap { root, children in
+            let famRSS = familyRSS(root, children)
+            let famSeen = familyLastSeen(root, children)
+            var rows = [AgentRow(agent: root, depth: 0,
+                                 childCount: children.count,
+                                 familyRSSBytes: famRSS,
+                                 familyLastSeenAt: famSeen)]
+            rows += children.map {
+                AgentRow(agent: $0, depth: 1, childCount: 0,
+                         familyRSSBytes: nil, familyLastSeenAt: nil)
+            }
+            return rows
+        }
+    }
+
+    private func familyRSS(_ root: AgentSummaryModel, _ kids: [AgentSummaryModel]) -> UInt64? {
+        let parts = ([root] + kids).compactMap(\.rssBytes)
+        return parts.isEmpty ? nil : parts.reduce(0, +)
+    }
+
+    private func familyLastSeen(_ root: AgentSummaryModel, _ kids: [AgentSummaryModel]) -> String {
+        ([root] + kids).compactMap(\.lastSeenAt).max() ?? ""
+    }
+
+    /// Trees sorted by the chosen key (structured form; the popover uses
+    /// the flat `agentRows`).
+    public func agentTrees(sortedBy sort: AgentSort) -> [AgentTree] {
+        let kids = childAgents
+        let trees = agentRoots.map { root -> AgentTree in
+            AgentTree(root: root, children: childrenOf(root, from: kids))
+        }
+        switch sort {
+        case .created:
+            return trees.sorted { ($0.root.startedAt ?? "") < ($1.root.startedAt ?? "") }
+        case .memory:
+            return trees.sorted { ($0.totalRSSBytes ?? 0) > ($1.totalRSSBytes ?? 0) }
+        case .lastActivity:
+            return trees.sorted { ($0.lastSeenAt ?? "") > ($1.lastSeenAt ?? "") }
+        }
     }
 
     /// The human-meaningful count: distinct agent trees, not processes.
@@ -482,6 +788,15 @@ public final class AppState: ObservableObject {
     public var trackedProcessCount: Int { status?.trackedProcesses ?? activeAgents.count }
 
     public var uninspectedEgress: Int { status?.uninspectedEgress ?? 0 }
+
+    /// Total resident memory across every tagged agent process — the header's
+    /// glanceable "what do my agents cost" number. nil when the daemon
+    /// supplied no RSS (older daemons).
+    public var totalAgentMemory: UInt64? {
+        let parts = activeAgents.compactMap(\.rssBytes)
+        guard !parts.isEmpty else { return nil }
+        return parts.reduce(0, +)
+    }
 
     public struct FirewallRuleRow: Identifiable {
         public let id: String

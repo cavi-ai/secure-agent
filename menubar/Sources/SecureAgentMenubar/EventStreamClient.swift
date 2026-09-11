@@ -156,6 +156,7 @@ public extension DaemonClient {
                 // before treating anything as stream data.
                 var headerBuf = Data()
                 var headersDone = false
+                var dechunker = ChunkedBodyDechunker()
                 var buffer = [UInt8](repeating: 0, count: 4096)
                 while true {
                     let n = buffer.withUnsafeMutableBytes { Darwin.read(fd, $0.baseAddress, $0.count) }
@@ -187,16 +188,107 @@ public extension DaemonClient {
                             let code = parts.count >= 2 ? Int(parts[1]) ?? 0 : 0
                             throw DaemonClientError.http(code)
                         }
+                        // Go's net/http chunk-encodes streaming responses over
+                        // unix sockets (no Content-Length to imply identity
+                        // framing). Feeding raw chunk bytes into the SSE
+                        // parser corrupts every frame with hex-size lines and
+                        // starves the client into an eternal reconnect loop —
+                        // so the body goes through an incremental dechunker
+                        // first, exactly like the JSON client's response path.
+                        dechunker.isChunked = head.lowercased().contains("transfer-encoding:")
+                            && head.lowercased().contains("chunked")
                         let rest = headerBuf.subdata(in: headerEnd.upperBound..<headerBuf.count)
                         if rest.isEmpty { continue }
-                        for frame in parser.append(rest) { onEvent(frame) }
+                        for body in dechunker.append(rest) {
+                            for frame in parser.append(body) { onEvent(frame) }
+                        }
                         continue
                     }
-                    for frame in parser.append(chunk) { onEvent(frame) }
+                    for body in dechunker.append(chunk) {
+                        for frame in parser.append(body) { onEvent(frame) }
+                    }
                 }
             }.value
         } onCancel: {
             fdBox.close()
+        }
+    }
+}
+
+/// Incremental chunked-transfer decoder for the SSE body: feed it arbitrary
+/// read() chunks, it emits decoded body bytes. Tracks state across reads
+/// (size line, payload, trailing CRLF) because chunk boundaries do NOT
+/// align with read boundaries. Malformed framing is a transport error, never
+/// silently-decoded garbage.
+struct ChunkedBodyDechunker {
+    /// False when the response wasn't chunk-encoded (pass through).
+    var isChunked = false
+    private var buffer = Data()
+    private enum Phase { case sizeLine, payload, trailingCRLF, done }
+    private var phase: Phase = .sizeLine
+    private var remaining = 0
+
+    mutating func append(_ data: Data) -> [Data] {
+        guard isChunked else { return [data] }
+        buffer.append(data)
+        var out: [Data] = []
+        while true {
+            switch phase {
+            case .done:
+                // Trailer bytes after the 0-chunk: ignore until EOF.
+                buffer.removeAll(keepingCapacity: true)
+                return out
+            case .sizeLine:
+                guard let nl = buffer.range(of: Data("\r\n".utf8)) else {
+                    if buffer.count > 32 { // hex size lines are tiny
+                        buffer.removeAll(keepingCapacity: true)
+                    }
+                    return out
+                }
+                let hex = String(data: buffer.subdata(in: 0..<nl.lowerBound), encoding: .utf8) ?? ""
+                buffer.removeSubrange(0..<nl.upperBound)
+                let size = Int(hex.split(separator: ";").first.map(String.init) ?? "", radix: 16) ?? -1
+                guard size >= 0 else {
+                    // Malformed framing: reset the session (drop buffered
+                    // bytes, restart at size-line). The SSE reconnect loop
+                    // re-establishes cleanly rather than parsing garbage.
+                    buffer.removeAll(keepingCapacity: false)
+                    phase = .sizeLine
+                    remaining = 0
+                    return out
+                }
+                if size == 0 {
+                    phase = .done
+                    continue
+                }
+                remaining = size
+                phase = .payload
+            case .payload:
+                guard !buffer.isEmpty else { return out }
+                let take = min(remaining, buffer.count)
+                out.append(buffer.subdata(in: 0..<take))
+                buffer.removeSubrange(0..<take)
+                remaining -= take
+                if remaining == 0 {
+                    phase = .trailingCRLF
+                }
+            case .trailingCRLF:
+                if buffer.count >= 2 {
+                    guard buffer.starts(with: Data("\r\n".utf8)) else {
+                        buffer.removeAll(keepingCapacity: false)
+                        phase = .sizeLine
+                        remaining = 0
+                        return out
+                    }
+                    buffer.removeSubrange(0..<2)
+                    phase = .sizeLine
+                } else if !buffer.isEmpty {
+                    // Might be a split CRLF; wait for the second byte.
+                    return out
+                } else {
+                    return out
+                }
+            }
         }
     }
 }

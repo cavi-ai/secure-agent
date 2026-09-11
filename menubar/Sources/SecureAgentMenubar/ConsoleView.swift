@@ -1,10 +1,32 @@
 import SwiftUI
 
-private extension Color {
+/// App palette, shared by every surface (popover, sheets, settings). Kept in
+/// one place so a tint tweak doesn't need five edits. Both Color and
+/// ShapeStyle surfaces are covered so `.brand` works in either inference
+/// position (foregroundStyle/tint/foregroundStyle(Color)).
+extension Color {
     static let brand = Color(.sRGB, red: 0.52, green: 0.44, blue: 0.97, opacity: 1)
     static let ok = Color(.sRGB, red: 0.30, green: 0.80, blue: 0.55, opacity: 1)
     static let warn = Color(.sRGB, red: 0.96, green: 0.62, blue: 0.20, opacity: 1)
     static let bad = Color(.sRGB, red: 0.92, green: 0.35, blue: 0.45, opacity: 1)
+    /// The dim-but-visible text tier between .tertiary and .secondary.
+    static let tertiaryText = Color(white: 0.62)
+}
+
+extension ShapeStyle where Self == Color {
+    static var brand: Color { .brand }
+    static var ok: Color { .ok }
+    static var warn: Color { .warn }
+    static var bad: Color { .bad }
+}
+
+extension FlagModel {
+    /// Whether this flag's activity happened within the last minute — the
+    /// row's "hot" styling cue (pulsing red vs. settled grey).
+    var tsRecent: Bool {
+        guard let t = EventTime.parse(ts) else { return false }
+        return Date().timeIntervalSince(t) < 60
+    }
 }
 
 /// The menu-bar popover: a compact, premium mini-console. Deep views (full
@@ -32,16 +54,85 @@ struct ConsoleView: View {
         .frame(width: 340)
     }
 
+    /// A collector the supervisor gave up on (e.g. eslogger without FDA) is
+    /// the honest "why are transcripts thin / is this even monitoring"
+    /// answer — silence otherwise reads as working.
+    private func collectorBanner(_ collectors: [HealthModel]) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(collectors) { h in
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "waveform.path.ecg")
+                        .font(.system(size: 11)).foregroundStyle(Color.warn)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("\(h.name) collector stopped — \(h.lastError ?? "repeated failures")")
+                            .font(.system(size: 11)).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Text(esloggerHint(for: h))
+                            .font(.system(size: 10)).foregroundStyle(.tertiary)
+                    }
+                    Spacer(minLength: 0)
+                    Button { DaemonSupervisor.shared.restart(); state.refresh() } label: {
+                        Text("Retry").font(.system(size: 10, weight: .semibold))
+                    }
+                    .buttonStyle(.bordered).controlSize(.mini).tint(Color.brand)
+                }
+                .padding(10)
+                .background(Color.warn.opacity(0.10))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+            }
+        }
+    }
+
+    /// The fix that actually applies to this collector. eslogger's
+    /// NOT_PRIVILEGED is NOT fixable by FDA — macOS requires the Endpoint
+    /// Security client to run as root; honesty beats a placebo instruction.
+    private func esloggerHint(for h: HealthModel) -> String {
+        if h.name == "eslogger" && (h.lastError ?? "").contains("root") {
+            return "macOS requires Endpoint Security (file telemetry) to run as root. A privileged collector helper ships with a future release — every other collector is unaffected."
+        }
+        return "Restart the app after granting Full Disk Access to retry."
+    }
+
     private var sections: some View {
         VStack(alignment: .leading, spacing: 16) {
             if let err = state.lastError { errorBanner(err) }
+            if let abandoned = state.abandonedCollectors, !abandoned.isEmpty {
+                collectorBanner(abandoned)
+            }
             hero
+            // Functional order: 1) needs-a-decision (incidents/criticals),
+            // 2) what's running, 3) what's enforcing (quiet by design).
             if !state.incidents.isEmpty { incidentsSection }
+            if !state.flags.isEmpty { flagsSection }
+            if !state.agentRoots.isEmpty { agentsSection }
             firewallSection
             guardSection
-            if !state.agentRoots.isEmpty { agentsSection }
-            if !state.flags.isEmpty { flagsSection }
         }
+    }
+
+    /// A collector the supervisor gave up on (e.g. eslogger without FDA) is
+    /// the honest "why are transcripts thin / is this even monitoring"
+    /// answer — silence otherwise reads as working.
+    private func abandonedCollectorBanner(_ h: HealthModel) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "waveform.path.ecg")
+                .font(.system(size: 11)).foregroundStyle(Color.warn)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("\(h.name) collector stopped — \(h.lastError ?? "repeated failures")")
+                    .font(.system(size: 11)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text("Restart the app after granting Full Disk Access to retry.")
+                    .font(.system(size: 10)).foregroundStyle(.tertiary)
+            }
+            Spacer(minLength: 0)
+            Button { DaemonSupervisor.shared.restart(); state.refresh() } label: {
+                Text("Retry").font(.system(size: 10, weight: .semibold))
+            }
+            .buttonStyle(.bordered).controlSize(.mini).tint(Color.brand)
+        }
+        .padding(10)
+        .background(Color.warn.opacity(0.10))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 
     // MARK: hero
@@ -72,9 +163,13 @@ struct ConsoleView: View {
     }
 
     private var heroModel: (icon: String, color: Color, title: String, subtitle: String) {
+        if state.isPaused {
+            return ("pause.circle.fill", .secondary, "Paused",
+                    "Alerts silenced — agents still run, decisions still prompt")
+        }
         if !state.connected {
             return ("shield.slash", .secondary, "Disconnected",
-                    "Monitoring paused — the daemon is unreachable")
+                    "Not monitoring — the daemon is unreachable")
         }
         let criticalFlags = state.flags.filter { $0.severity >= 3 }.count
         if !state.incidents.isEmpty || criticalFlags > 0 {
@@ -119,29 +214,46 @@ struct ConsoleView: View {
             sectionHeader("Incidents", trailing: "\(state.incidents.count)")
             ForEach(state.incidents.prefix(3)) { inc in
                 Button { selectedIncident = inc } label: {
-                    HStack(alignment: .top, spacing: 8) {
+                    HStack(spacing: 7) {
                         Image(systemName: "cross.case.fill")
-                            .font(.system(size: 12)).foregroundStyle(Color.bad)
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text("\(inc.rule) — \(inc.agent)").font(.system(size: 11, weight: .medium))
-                            Text(inc.summary).font(.system(size: 10)).foregroundStyle(.tertiary).lineLimit(2)
-                        }
+                            .font(.system(size: 11)).foregroundStyle(Color.bad)
+                        AgentIdentity.tile(inc.agent, size: 14, fontSize: 8)
+                        Text(Self.incidentRowTitle(inc.rule))
+                            .font(.system(size: 11, weight: .medium))
+                            .lineLimit(1)
                         Spacer()
-                        Text(inc.risk.uppercased()).font(.system(size: 9, weight: .bold))
-                            .foregroundStyle(Color.bad)
-                            .padding(.horizontal, 7).padding(.vertical, 4)
-                            .background(Color.bad.opacity(0.14)).clipShape(Capsule())
+                        if let t = relativeTime(inc.timestamp) {
+                            Text(t)
+                                .font(.system(size: 9, weight: .medium, design: .monospaced))
+                                .foregroundStyle(.tertiary)
+                        }
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 7, weight: .semibold)).foregroundStyle(.quaternary)
                     }
                 }
                 .buttonStyle(.plain)
+                .help("\(Self.incidentRowTitle(inc.rule)) — \(inc.agent) · open the incident report")
             }
         }
         .sheet(item: $selectedIncident) { inc in
-            IncidentDetailView(incident: inc)
+            IncidentDetailView(incident: inc, state: state)
         }
     }
 
     @State private var selectedIncident: IncidentReportModel?
+
+    /// Row language for incidents: human title, not the raw rule id.
+    static func incidentRowTitle(_ rule: String) -> String {
+        switch rule {
+        case "sensitive-read-then-connect": return "Read a secret, then connected out"
+        case "proxy-secret-leak": return "Secret left in agent traffic"
+        case "keychain-access": return "Touched your keychain"
+        case "keychain-security-cli": return "Ran the keychain tool"
+        case "tcc-tamper": return "Modified privacy permissions"
+        case "proxy-prompt-injection": return "Prompt injection in a response"
+        default: return rule
+        }
+    }
 
     // MARK: error surfacing
 
@@ -180,6 +292,21 @@ struct ConsoleView: View {
                 }
             }
             Spacer()
+            // Dead space before — now the glanceable resource answer:
+            // what agents cost, and how wide the monitoring net is.
+            if state.connected {
+                VStack(alignment: .trailing, spacing: 3) {
+                    if let mem = ByteCount.short(state.totalAgentMemory) {
+                        Label(mem, systemImage: "memorychip")
+                            .font(.system(size: 10, weight: .semibold, design: .rounded))
+                            .help("Total resident memory across all agent processes")
+                    }
+                    Label("\(state.trackedProcessCount)", systemImage: "cpu")
+                        .font(.system(size: 10, weight: .medium, design: .rounded))
+                        .foregroundStyle(.secondary)
+                        .help("\(state.trackedProcessCount) processes · \(state.activeAgentCount) sessions")
+                }
+            }
         }
         .padding(.horizontal, 14).padding(.vertical, 11)
     }
@@ -339,45 +466,212 @@ struct ConsoleView: View {
 
     // MARK: agents
 
+    @State private var agentSort: AppState.AgentSort = .lastActivity
+    /// Collapsed-by-default harness groups (persist within the popover's
+    /// lifetime; a fresh open resets to the "expanded where it matters" state).
+    @State private var expandedHarnesses: Set<String> = []
+    @State private var selectedProcess: AgentSummaryModel?
+
     private var agentsSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            sectionHeader("Active agents", trailing: "\(state.activeAgentCount)")
-            ForEach(state.agentRoots) { agent in
-                HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                        HStack(spacing: 6) {
-                            Text(agent.name).font(.system(size: 12, weight: .semibold))
-                            Text("PID \(agent.pid)").font(.system(size: 10, design: .monospaced)).foregroundStyle(.tertiary)
-                        }
-                        if let cwd = agent.cwd, !cwd.isEmpty {
-                            Text(cwd).font(.system(size: 10, design: .monospaced)).foregroundStyle(.tertiary).lineLimit(1)
-                        }
-                    }
-                    Spacer()
-                    Button(role: .destructive) { killTarget = agent } label: {
-                        Label("Kill", systemImage: "power").font(.system(size: 11, weight: .semibold))
-                    }
-                    .buttonStyle(.bordered).controlSize(.small)
+            sectionHeader("Agent sessions", trailing: "\(state.activeAgentCount)")
+
+            // Sort control: three keys users actually want. A picker that
+            // small still reads; segmented keeps it to one row.
+            Picker("", selection: $agentSort) {
+                ForEach(AppState.AgentSort.allCases, id: \.self) { s in
+                    Text(s.label).tag(s)
+                }
+            }
+            .pickerStyle(.segmented)
+            .controlSize(.mini)
+            .labelsHidden()
+
+            if state.agentRoots.isEmpty {
+                Text("No agents running — start one and it appears here")
+                    .font(.system(size: 11)).foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                // Two-level: harness group (collapsible) → sessions
+                // (collapsible) → subagents (nested, always visible when
+                // the session is open).
+                ForEach(state.harnessGroups(sortedBy: agentSort)) { group in
+                    harnessGroupView(group)
                 }
             }
         }
-        // One click used to SIGKILL the user's agent with no undo and no
-        // confirmation. Confirm explicitly.
-        .confirmationDialog(
-            "Kill this agent process?",
-            isPresented: Binding(get: { killTarget != nil }, set: { if !$0 { killTarget = nil } }),
-            titleVisibility: .visible
-        ) {
-            Button("Kill \(killTarget?.name ?? "") (pid \(killTarget?.pid ?? 0))", role: .destructive) {
-                if let pid = killTarget?.pid { state.kill(pid: pid) }
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("The agent process tree is terminated immediately. Unsaved work in it is lost.")
+        .sheet(item: $selectedProcess) { proc in
+            ProcessDetailSheet(agent: proc, state: state)
         }
     }
 
-    @State private var killTarget: AgentSummaryModel?
+    /// Level 1: the harness (provider) — logo, session count, family memory.
+    /// Collapsed by default when it has >1 session; a harness with exactly
+    /// one session renders expanded (no information hidden behind a click
+    /// for single-session users).
+    private func harnessGroupView(_ group: AppState.HarnessGroup) -> some View {
+        let expanded = expandedHarnesses.contains(group.name)
+        let mem = ByteCount.short(group.totalRSSBytes)
+        let seen = relativeTime(group.lastSeenAt ?? "")
+        let isSingle = group.trees.count == 1
+        return VStack(alignment: .leading, spacing: 3) {
+            Button {
+                if expanded {
+                    expandedHarnesses.remove(group.name)
+                } else {
+                    expandedHarnesses.insert(group.name)
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: expanded && !isSingle ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 7, weight: .bold)).foregroundStyle(.secondary)
+                        .frame(width: 8)
+                    AgentIdentity.tile(group.name, size: 18)
+                    Text(group.name)
+                        .font(.system(size: 12, weight: .semibold))
+                    if isSingle {
+                        // A one-session harness IS the session — show its
+                        // count inline instead of a pointless "+1".
+                        if group.processCount > 1 {
+                            Text("\(group.processCount) procs")
+                                .font(.system(size: 9, design: .monospaced)).foregroundStyle(.tertiary)
+                        }
+                    } else {
+                        Text("\(group.sessionCount) session\(group.sessionCount == 1 ? "" : "s") · \(group.processCount) procs")
+                            .font(.system(size: 9)).foregroundStyle(.tertiary)
+                    }
+                    Spacer()
+                    if let mem {
+                        Text(mem)
+                            .font(.system(size: 10, weight: .medium, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                    }
+                    if let seen {
+                        Text(seen)
+                            .font(.system(size: 9, weight: seen.hasSuffix("s") ? .semibold : .regular, design: .monospaced))
+                            .foregroundStyle(seen.hasSuffix("s") ? Color.ok : .secondary)
+                            .help("last activity: \(absoluteTime(group.lastSeenAt ?? ""))")
+                    }
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if expanded || isSingle {
+                // Level 2+3: sessions with their subagents nested.
+                ForEach(Array(group.trees.enumerated()), id: \.element.0.id) { _, pair in
+                    sessionView(pair.0, children: pair.1, insideGroup: true)
+                }
+            }
+        }
+    }
+
+    /// Level 2: one session (tree root) — expandable when it has subagents.
+    /// Level 3 renders nested beneath it when expanded.
+    @State private var expandedSessions: Set<String> = []
+
+    private func sessionView(_ root: AgentSummaryModel, children: [AgentSummaryModel], insideGroup: Bool) -> some View {
+        let hasKids = !children.isEmpty
+        let open = expandedSessions.contains(root.id)
+        let mem = ByteCount.short(root.rssBytes)
+        let seen = relativeTime(root.lastSeenAt ?? "")
+        return VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 6) {
+                // Expansion chevron (or indent dot when there's nothing to expand).
+                Group {
+                    if !children.isEmpty {
+                        Button {
+                            toggleSession(root.id)
+                        } label: {
+                            Image(systemName: expandedSessions.contains(root.id) ? "chevron.down" : "chevron.right")
+                                .font(.system(size: 7, weight: .bold)).foregroundStyle(.secondary)
+                                .frame(width: 10, height: 14)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    } else {
+                        Color.clear.frame(width: 10, height: 10)
+                    }
+                }
+                AgentIdentity.tile(root.name, size: 14, fontSize: 8)
+                Button { selectedProcess = root } label: {
+                    HStack(spacing: 5) {
+                        Text("PID \(root.pid)")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(.primary)
+                        if !children.isEmpty {
+                            Text("+\(children.count)")
+                                .font(.system(size: 8, weight: .semibold)).foregroundStyle(.tertiary)
+                        }
+                        if let mem {
+                            Text(mem)
+                                .font(.system(size: 9, design: .monospaced)).foregroundStyle(.tertiary)
+                        }
+                        if let seen {
+                            Text(seen)
+                                .font(.system(size: 9, weight: seen.hasSuffix("s") ? .semibold : .regular, design: .monospaced))
+                                .foregroundStyle(seen.hasSuffix("s") ? Color.ok : Color(white: 0.6, opacity: 1))
+                        }
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                Spacer(minLength: 0)
+            }
+            .padding(.leading, insideGroup ? 12 : 0)
+
+            // Level 3: subagents, nested with a tree rail.
+            if open && !children.isEmpty {
+                ForEach(children, id: \.id) { child in
+                    subagentRow(child)
+                }
+            }
+        }
+    }
+
+    private func toggleSession(_ id: String) {
+        if expandedSessions.contains(id) {
+            expandedSessions.remove(id)
+        } else {
+            expandedSessions.insert(id)
+        }
+    }
+
+    /// Level 3: a subagent, nested under its session with a tree elbow.
+    private func subagentRow(_ child: AgentSummaryModel) -> some View {
+        Button { selectedProcess = child } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "arrow.turn.down.right")
+                    .font(.system(size: 7)).foregroundStyle(.quaternary)
+                    .padding(.leading, 34)
+                AgentIdentity.tile(child.name, size: 13, fontSize: 7)
+                Text(child.name)
+                    .font(.system(size: 10, weight: .regular))
+                    .foregroundStyle(.primary)
+                Text("PID \(child.pid)")
+                    .font(.system(size: 8, design: .monospaced)).foregroundStyle(.tertiary)
+                if child.isOrphanLike {
+                    Image(systemName: "questionmark.square")
+                        .font(.system(size: 7)).foregroundStyle(Color.warn)
+                        .help("parent already exited")
+                }
+                Spacer()
+                if let m = ByteCount.short(child.rssBytes) {
+                    Text(m)
+                        .font(.system(size: 8, design: .monospaced)).foregroundStyle(.tertiary)
+                }
+                if let s = relativeTime(child.lastSeenAt ?? "") {
+                    Text(s)
+                        .font(.system(size: 8, weight: s.hasSuffix("s") ? .semibold : .regular, design: .monospaced))
+                        .foregroundStyle(s.hasSuffix("s") ? Color.ok : Color(white: 0.6, opacity: 1))
+                }
+            }
+            .padding(.leading, 12)
+            .padding(.vertical, 1)
+        }
+        .buttonStyle(.plain)
+    }
+
     @State private var manageRulesExpanded = false
 
     // MARK: flags
@@ -385,25 +679,62 @@ struct ConsoleView: View {
     private var flagsSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             sectionHeader("Security flags", trailing: "\(state.flags.count)")
+            // Every flag is a decision point: the whole row opens the action
+            // sheet (evidence, dispositions, incident link). A critical you
+            // can't act on is just anxiety with a badge.
             ForEach(state.flags.prefix(4)) { flag in
-                HStack(alignment: .top, spacing: 8) {
-                    Image(systemName: flag.severity >= 3 ? "exclamationmark.octagon.fill" : "exclamationmark.triangle.fill")
-                        .font(.system(size: 12)).foregroundStyle(flag.severity >= 3 ? Color.bad : Color.warn)
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text("\(flag.rule) — \(flag.agent)").font(.system(size: 11, weight: .medium))
-                        if let sid = flag.sessionId, !sid.isEmpty {
-                            // The evidence-chain link: which harness session
-                            // produced this flag, surviving PID reuse.
-                            Text("session \(sid.prefix(8))").font(.system(size: 9, design: .monospaced))
-                                .foregroundStyle(.quaternary)
+                Button { selectedFlag = flag } label: {
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: flag.severity >= 3 ? "exclamationmark.octagon.fill" : "exclamationmark.triangle.fill")
+                            .font(.system(size: 12)).foregroundStyle(flag.severity >= 3 ? Color.bad : Color.warn)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(Self.flagRowTitle(flag.rule))
+                                .font(.system(size: 11, weight: .medium))
+                            HStack(spacing: 5) {
+                                AgentIdentity.tile(flag.agent, size: 13, fontSize: 7)
+                                Text(flag.agent).font(.system(size: 9, weight: .medium)).foregroundStyle(.secondary)
+                                if let t = relativeTime(flag.ts) {
+                                    Text(t)
+                                        .font(.system(size: 9, weight: flag.tsRecent ? .semibold : .regular, design: .monospaced))
+                                        .foregroundStyle(flag.tsRecent ? Color.bad : Color.tertiaryText)
+                                }
+                            }
+                            // Raw evidence stays in the action sheet —
+                            // the list row answers "what/who/how fresh",
+                            // not "here's a hex dump".
                         }
-                        if let ev = flag.evidence.first {
-                            Text(ev).font(.system(size: 10, design: .monospaced)).foregroundStyle(.tertiary).lineLimit(2)
+                        Spacer()
+                        if flag.severity >= 3 {
+                            Text("CRITICAL")
+                                .font(.system(size: 8, weight: .bold))
+                                .foregroundStyle(Color.bad)
+                                .padding(.horizontal, 5).padding(.vertical, 3)
+                                .background(Color.bad.opacity(0.14)).clipShape(Capsule())
                         }
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 7, weight: .semibold)).foregroundStyle(.quaternary)
                     }
-                    Spacer()
                 }
+                .buttonStyle(.plain)
             }
+        }
+        .sheet(item: $selectedFlag) { flag in
+            FlagActionSheet(flag: flag, state: state)
+        }
+    }
+
+    @State private var selectedFlag: FlagModel?
+
+    /// Row language: human title, not the raw rule id.
+    private static func flagRowTitle(_ rule: String) -> String {
+        switch rule {
+        case "sensitive-read-then-connect": return "Read a secret, then connected out"
+        case "proxy-secret-leak": return "Secret left in agent traffic"
+        case "keychain-access": return "Touched your keychain"
+        case "keychain-security-cli": return "Ran the keychain tool"
+        case "tcc-tamper": return "Modified privacy permissions"
+        case "proxy-prompt-injection": return "Prompt injection in a response"
+        default: return rule
         }
     }
 
@@ -433,16 +764,27 @@ struct ConsoleView: View {
                 Label("Open console", systemImage: "square.grid.2x2").font(.system(size: 12, weight: .semibold))
             }
             .buttonStyle(.borderedProminent).tint(.brand).controlSize(.regular)
+            .disabled(state.dashboardUnavailableReason != nil)
+            .help(state.dashboardUnavailableReason ?? "Open the web console")
             Spacer()
             Button { SettingsWindowController.shared.show(state: state) } label: {
                 Image(systemName: "gearshape").font(.system(size: 13))
             }.buttonStyle(.borderless).help("Settings")
             Button { state.togglePause() } label: {
                 Image(systemName: state.isPaused ? "play.circle" : "pause.circle").font(.system(size: 14))
-            }.buttonStyle(.borderless).help(state.isPaused ? "Resume monitoring" : "Pause monitoring")
+            }.buttonStyle(.borderless).help(state.isPaused ? "Resume alerts" : "Pause alerts")
             Button { state.refresh() } label: {
                 Image(systemName: "arrow.clockwise").font(.system(size: 13))
-            }.buttonStyle(.borderless).help("Refresh")
+            }
+            .buttonStyle(.borderless)
+            .disabled(state.isPaused)
+            .help(state.isPaused ? "Paused — resume to refresh" : "Refresh")
+            Button { NSApp.terminate(nil) } label: {
+                Image(systemName: "power").font(.system(size: 13))
+            }
+            .buttonStyle(.borderless)
+            .help("Quit Secure Agent (⌘Q)")
+            .keyboardShortcut("q", modifiers: .command)
             }
         }
         .padding(.horizontal, 14).padding(.vertical, 10)

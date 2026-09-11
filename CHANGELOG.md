@@ -4,6 +4,95 @@ All notable changes to `secure-agent` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/) and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [v1.1.0] — 2026-09-11
+
+A substantial feature + hardening release one day after v1.0.0 — in
+retrospect, 1.0.0 was effectively the last release candidate; everything
+below is the delta that earns the "stable" label.
+
+### Added
+- **Actionable criticals** — every flag is a decision point: click it for the
+  evidence chain, the advisor verdict, and one-click dispositions (allow
+  host / dismiss this flag class / kill agent / open incident report).
+- **Little-Snitch-style dispositions** — allowlist a host for an agent, mute
+  a rule+host pair, or **allow one exact file** (per-path guard exceptions,
+  exact-match + descendants, fully revocable from Settings → Decisions).
+- **Agent session trees** — the popover groups harness → sessions →
+  subagents with per-harness brand icons, family memory, and last-activity
+  staleness; collapsed by default, expandable per level.
+- **Process transcripts** — click any process for its live event transcript
+  (reads / writes / spawns / connections with per-line timestamps) and kill
+  with confirmation.
+- **Privileged ES collector** — file telemetry (eslogger) via a root
+  LaunchDaemon running the daemon in `--es-collector` mode writing to a
+  spool; one-click install from onboarding step 3 or Settings → Telemetry.
+- **Popover quit button** — power icon + ⌘Q in the footer (joins the
+  right-click menu entry).
+- **Advisor config hot-reload** — the daemon watches config.yaml and swaps
+  the advisor stack live; enabling/disabling/switching the model takes
+  effect within seconds, no daemon restart required. The Settings advisor
+  tab restores the persisted mode/endpoint/model on open (it previously
+  reset to "managed local model" every launch, making the config look
+  unpersisted).
+
+### Fixed
+- **"Disconnected" flapping on a healthy daemon** — `/status` last-seen join
+  was a `MAX(ts) GROUP BY pid` SQL scan (2–11s at ~400 pids, past the 3s
+  socket timeout). Replaced with an O(1) in-memory last-seen map; socket
+  timeout relaxed to 10s; two-strike rule before declaring disconnection.
+- **SSE reconnect crash-loop** — Go chunk-encodes the event stream over unix
+  sockets; the client's SSE parser never dechunked, corrupting every frame
+  into an eternal reconnect. Added an incremental chunked-body decoder.
+- **Pause semantics** — resume re-seeds the notification baseline (no banner
+  storm of accumulated flags); guard consent prompts still flow while
+  paused (agents no longer hang silently); paused state is now visible in
+  the hero, status icon, and copy.
+- **Update installs no longer freeze the UI** — hdiutil/ditto/git run
+  off-main with concurrent pipe draining (was main-thread + pipe-deadlock
+  risk); DMG downloads stream to disk while hashing instead of buffering
+  whole in RAM; relaunch after terminate (socket-bind race removed); version
+  comparison zero-pads segments ("v1.0" == "v1.0.0").
+- **Console token off the wire** — dashboard handoff moved from `?ct=` query
+  (logged in browser history/server logs) to a `#ct=` fragment (never sent).
+- **Open at Login is now a two-way toggle** (was enable-only forever).
+- **Guard prompt copy** — disconnected hero no longer says "monitoring
+  paused" (collided with the real Pause feature).
+- **Supervisor abandons deterministic failures immediately** — eslogger's
+  NOT_PRIVILEGED used to retry 14× over 3 minutes; permanent errors now
+  abandon on the first attempt with the actionable stderr in the health
+  record. Abandoned collectors surface in the popover with a Retry affordance.
+- **Silent failure paths made visible** — firewall promote, guard-rule
+  revoke, and guard-decision resolution failures surface in the popover
+  error banner instead of being swallowed.
+- **"Open console" is disabled with a reason** when the daemon/proxy is
+  down (was a silent no-op).
+
+### Changed
+- **Settings reorganized by function** — Protection (guard modes +
+  firewall), Providers, Telemetry (ES collector + collector health),
+  Decisions (per-path allows ledger), App, Advisor, Updates.
+- **Provider support out of the box** — 12 harnesses matched by default
+  (claude, cursor, codex, opencode, antigravity, windsurf, aider, gemini,
+  codeium, copilot) plus local model infrastructure (ollama, lm-studio,
+  tracked but their loopback traffic never flagged), each with vendor
+  allowlists. New **Providers tab** toggles monitoring per harness
+  (`disabled_agents` in config.yaml).
+- **Popover reads in priority order** — needs-a-decision (incidents,
+  criticals) → what's running (agent sessions) → what's enforcing
+  (firewall, guard).
+- **Incident sheet redesigned** — human summary + structured evidence +
+  dispositions first; the raw markdown remediation report demoted behind a
+  disclosure with one-click copy.
+- **Agent identity** — brand-colored drawn glyphs for claude / cursor /
+  codex / opencode (and a hashed-hue monogram for unknown harnesses).
+
+### Security
+- **TCC grant stability** — the app must be signed with a stable identity
+  (Developer ID); ad-hoc signing changes the designated requirement's
+  cdhash every build, silently invalidating every Full Disk Access grant
+  on each update. Noted for the release pipeline.
+
+## [v1.0.0] — 2026-09-10
 ## [v1.0.0] — 2026-09-10
 
 The first stable release. rc.3 was folded into 1.0 rather than published

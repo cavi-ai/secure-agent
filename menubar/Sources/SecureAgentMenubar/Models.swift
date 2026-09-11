@@ -12,6 +12,23 @@ public struct AgentSummaryModel: Codable, Identifiable, Sendable {
     /// The family root this process belongs to (itself when it IS the root).
     /// 0/nil on older daemons — treat as its own root then.
     public let rootPid: Int32?
+    /// Direct parent pid (nil on older daemons). The tree view uses this to
+    /// indent subagents under the session that spawned them.
+    public let ppid: Int32?
+    /// Process start (RFC3339) — the "created" sort key.
+    public let startedAt: String?
+    /// Most recent event attributed to this process (RFC3339) — the
+    /// "last activity" sort key and the is-it-doing-anything signal.
+    public let lastSeenAt: String?
+    /// Resident memory in bytes (0/nil when the daemon couldn't read it).
+    public let rssBytes: UInt64?
+    /// True when this tagged process's parent has already exited (daemon
+    /// reports is_orphan) — displayed so a weird-looking row is explainable.
+    /// nil (older daemons) reads as "not orphan" here; the row simply shows
+    /// nothing rather than a wrong glyph.
+    public var isOrphanLike: Bool { isOrphan ?? false }
+
+    public let isOrphan: Bool?
 
     enum CodingKeys: String, CodingKey {
         case pid
@@ -19,14 +36,26 @@ public struct AgentSummaryModel: Codable, Identifiable, Sendable {
         case exePath = "exe_path"
         case cwd
         case rootPid = "root_pid"
+        case ppid
+        case startedAt = "started_at"
+        case lastSeenAt = "last_seen_at"
+        case rssBytes = "rss_bytes"
+        case isOrphan = "is_orphan"
     }
 
-    public init(pid: Int32, name: String, exePath: String? = nil, cwd: String? = nil, rootPid: Int32? = nil) {
+    public init(pid: Int32, name: String, exePath: String? = nil, cwd: String? = nil, rootPid: Int32? = nil,
+                ppid: Int32? = nil, startedAt: String? = nil, lastSeenAt: String? = nil, rssBytes: UInt64? = nil,
+                isOrphan: Bool? = nil) {
         self.pid = pid
         self.name = name
         self.exePath = exePath
         self.cwd = cwd
         self.rootPid = rootPid
+        self.ppid = ppid
+        self.startedAt = startedAt
+        self.lastSeenAt = lastSeenAt
+        self.rssBytes = rssBytes
+        self.isOrphan = isOrphan
     }
 }
 
@@ -54,18 +83,61 @@ public struct RuleStatModel: Codable, Sendable {
     }
 }
 
+/// One per-path guard exception (menubar view of guard_path_allows).
+public struct GuardPathAllowModel: Codable, Identifiable, Sendable {
+    public let agent: String
+    public let ruleID: String
+    public let path: String
+    public let createdAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case agent
+        case ruleID = "rule_id"
+        case path
+        case createdAt = "created_at"
+    }
+
+    public init(agent: String, ruleID: String, path: String, createdAt: String? = nil) {
+        self.agent = agent
+        self.ruleID = ruleID
+        self.path = path
+        self.createdAt = createdAt
+    }
+
+    public var id: String { "\(agent)-\(ruleID)-\(path)" }
+}
+
+/// Health of one supervised collector worker (eslogger, netsampler,
+/// transcript). Surfaced so a dead/abandoned collector cannot masquerade as
+/// healthy — "why are transcripts thin" deserves an on-screen answer.
+public struct HealthModel: Codable, Identifiable, Sendable {
+    public let name: String
+    public let running: Bool
+    /// True when the supervisor gave up on this worker (permanent failure or
+    /// sustained crash-looping) — it will NOT come back without a restart.
+    public let abandoned: Bool
+    public let restarts: Int
+    public let lastError: String?
+
+    public var id: String { name }
+}
+
 public struct StatusResponse: Codable, Sendable {
     public let running: Bool
     public let version: String?
     public let uptime: String
     public let activeAgents: Int
-    public let agents: [AgentSummaryModel]?
+    /// Var (not let): value semantics make this safe, and tests seed agent
+    /// lists after constructing a StatusResponse.
+    public var agents: [AgentSummaryModel]?
     public let proxyEnabled: Bool?
     public let proxyPort: Int?
     public let uninspectedEgress: Int?
     public let firewallStats: [String: RuleStatModel]?
     /// Total tagged processes across all agent trees (nil on older daemons).
     public let trackedProcesses: Int?
+    /// Collector worker health (nil on older daemons).
+    public var collectors: [HealthModel]?
 
     enum CodingKeys: String, CodingKey {
         case running
@@ -78,9 +150,10 @@ public struct StatusResponse: Codable, Sendable {
         case uninspectedEgress = "uninspected_egress"
         case firewallStats = "firewall_stats"
         case trackedProcesses = "tracked_processes"
+        case collectors
     }
 
-    public init(running: Bool, uptime: String, activeAgents: Int, agents: [AgentSummaryModel]? = nil, proxyEnabled: Bool? = nil, proxyPort: Int? = nil, uninspectedEgress: Int? = nil, firewallStats: [String: RuleStatModel]? = nil, trackedProcesses: Int? = nil, version: String? = nil) {
+    public init(running: Bool, uptime: String, activeAgents: Int, agents: [AgentSummaryModel]? = nil, proxyEnabled: Bool? = nil, proxyPort: Int? = nil, uninspectedEgress: Int? = nil, firewallStats: [String: RuleStatModel]? = nil, trackedProcesses: Int? = nil, collectors: [HealthModel]? = nil, version: String? = nil) {
         self.running = running
         self.version = version
         self.uptime = uptime
@@ -91,6 +164,7 @@ public struct StatusResponse: Codable, Sendable {
         self.uninspectedEgress = uninspectedEgress
         self.firewallStats = firewallStats
         self.trackedProcesses = trackedProcesses
+        self.collectors = collectors
     }
 }
 

@@ -89,7 +89,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificat
             it.target = self
             return it
         }
-        menu.addItem(item(state.isPaused ? "Resume monitoring" : "Pause monitoring",
+        menu.addItem(item(state.isPaused ? "Resume alerts" : "Pause alerts",
                           state.isPaused ? "play.circle" : "pause.circle", #selector(pauseClicked)))
         menu.addItem(item("Settings…", "gearshape.2", #selector(settingsClicked), ","))
         menu.addItem(item("Setup & Permissions…", "gearshape", #selector(setupClicked)))
@@ -106,7 +106,9 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificat
         guard let button = statusItem.button else { return }
         let name: String
         var count = ""
-        if !state.incidents.isEmpty || state.flags.contains(where: { $0.severity >= 3 }) {
+        if state.isPaused {
+            name = "pause.shield"
+        } else if !state.incidents.isEmpty || state.flags.contains(where: { $0.severity >= 3 }) {
             name = "exclamationmark.shield.fill"
         } else if let s = state.status, s.activeAgents > 0 {
             name = "bolt.shield.fill"
@@ -182,19 +184,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificat
     @objc private func quitClicked() { NSApp.terminate(nil) }
 
     @objc private func uninstallClicked() {
-        let alert = NSAlert()
-        alert.messageText = "Uninstall Secure Agent?"
-        alert.informativeText = "This stops the background daemon, removes harness hooks, the login item, and the CLI symlink. The app itself and your logs/config are left in place."
-        alert.alertStyle = .warning
-        alert.addButton(withTitle: "Uninstall")
-        alert.addButton(withTitle: "Cancel")
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-        do {
-            try SetupManager.shared.uninstallAll()
-        } catch {
-            SetupManager.shared.report(error)
-        }
-        Task { await SetupManager.shared.refreshState() }
+        SetupManager.shared.confirmUninstall()
         NSApp.terminate(nil)
     }
 }

@@ -339,3 +339,51 @@ func TestLastEventTimes(t *testing.T) {
 		t.Fatal("empty pid list must return empty map")
 	}
 }
+
+func TestGuardPathAllows(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(filepath.Join(dir, "e.db"), filepath.Join(dir, "e.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	s.PutGuardPathAllow(GuardPathAllow{Agent: "claude", RuleID: "ssh-keys", Path: "/Users/x/.ssh/config"})
+	if !s.GuardPathAllowed("claude", "ssh-keys", "/Users/x/.ssh/config") {
+		t.Fatal("exact path must be allowed")
+	}
+	// Descendants inherit: an allow on a path covers everything under it…
+	if !s.GuardPathAllowed("claude", "ssh-keys", "/Users/x/.ssh/config/main.conf") {
+		t.Fatal("descendant of an allowed path must be allowed")
+	}
+	// …but path-adjacent siblings are NOT descendants ("config.d" shares a
+	// prefix with "config" without being under it) — the allow is exactly as
+	// wide as the operator chose.
+	if s.GuardPathAllowed("claude", "ssh-keys", "/Users/x/.ssh/config.d/host.conf") {
+		t.Fatal("prefix-colliding sibling (config.d vs config) must NOT be allowed")
+	}
+	// Siblings don't: the allow is exactly as wide as the operator chose.
+	if s.GuardPathAllowed("claude", "ssh-keys", "/Users/x/.ssh/id_ed25519") {
+		t.Fatal("sibling path must NOT be allowed")
+	}
+	// Other agents/rules are unaffected.
+	if s.GuardPathAllowed("cursor", "ssh-keys", "/Users/x/.ssh/config") ||
+		s.GuardPathAllowed("claude", "env-files", "/Users/x/.ssh/config") {
+		t.Fatal("allow must be scoped to the agent+rule pair")
+	}
+	// Idempotent upsert, list, revoke.
+	s.PutGuardPathAllow(GuardPathAllow{Agent: "claude", RuleID: "ssh-keys", Path: "/Users/x/.ssh/config"})
+	if got := s.ListGuardPathAllows(100); len(got) != 1 {
+		t.Fatalf("upsert must not duplicate, got %d rows", len(got))
+	}
+	if !s.DeleteGuardPathAllow("claude", "ssh-keys", "/Users/x/.ssh/config") {
+		t.Fatal("delete of an existing allow must report removed")
+	}
+	if s.GuardPathAllowed("claude", "ssh-keys", "/Users/x/.ssh/config") {
+		t.Fatal("revoked path must not be allowed")
+	}
+	// Read failure fails closed, never open.
+	if s.GuardPathAllowed("claude", "ssh-keys", "") {
+		t.Fatal("empty path must never be allowed")
+	}
+}
