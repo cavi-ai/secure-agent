@@ -181,7 +181,10 @@ func transcriptTailTargets(home, jsonlPath string) []string {
 // the final, most-relevant events/flags/incident around a kill or quit.
 // adv may be nil (advisor disabled); when set, new flags/incidents are also
 // offered for advisory triage — enqueueing is non-blocking and drop-safe.
-func startDrainLoop(sub <-chan event.Event, st *store.Store, cr *correlate.Correlator, pub *fleet.Publisher, adv *advisor.Subscriber) <-chan struct{} {
+// advGet resolves the CURRENT advisor per event: config hot-reload swaps
+// the stack while the drain loop is mid-event, and a nil getter result
+// (advisor disabled) must drop routing without touching the loop itself.
+func startDrainLoop(sub <-chan event.Event, st *store.Store, cr *correlate.Correlator, pub *fleet.Publisher, advGet func() *advisor.Subscriber) <-chan struct{} {
 	analyzer := intel.NewAnalyzer()
 	drainDone := make(chan struct{})
 	go func() {
@@ -193,7 +196,7 @@ func startDrainLoop(sub <-chan event.Event, st *store.Store, cr *correlate.Corre
 				log.Printf("FLAG TRIGGERED [%d]: %s (pid %d agent %s)", fl.Severity, fl.Rule, fl.PID, fl.Agent)
 				st.PutFlag(fl)
 				pub.Publish(fleet.EventFlag, fl)
-				if adv != nil {
+				if adv := advGet(); adv != nil {
 					adv.EnqueueFlag(fl)
 				}
 
@@ -202,7 +205,7 @@ func startDrainLoop(sub <-chan event.Event, st *store.Store, cr *correlate.Corre
 				st.PutIncident(report)
 				log.Printf("INCIDENT CREATED [%s]: %s (Risk: %s, %d rotate items)", report.ID, report.Summary, report.Risk, len(report.RotateList))
 				pub.Publish(fleet.EventIncident, report)
-				if adv != nil {
+				if adv := advGet(); adv != nil {
 					adv.EnqueueIncident(report)
 				}
 			}

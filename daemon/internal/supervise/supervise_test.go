@@ -3,6 +3,7 @@ package supervise
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -104,4 +105,38 @@ func TestSupervisorRecoversPanic(t *testing.T) {
 		time.Sleep(25 * time.Millisecond)
 	}
 	t.Fatalf("worker ran %d times; a recovered panic should have let it restart to 3", atomic.LoadInt32(&count))
+}
+
+// A permanent failure is deterministic: retrying cannot help, so the
+// supervisor must abandon on the FIRST one instead of burning the full
+// transient window (a 3-minute retry loop for "not privileged" is log spam
+// and a dead telemetry path wearing a busy costume).
+func TestSupervisorAbandonsImmediatelyOnPermanentError(t *testing.T) {
+	var runs int32
+	s := New(nil)
+	s.MaxBackoff = 5 * time.Millisecond
+	s.MinHealthy = time.Hour
+	s.AbandonAfter = time.Hour // would eventually abandon; the test proves it never gets there
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		s.Run(ctx, "perm", func(c context.Context) error {
+			atomic.AddInt32(&runs, 1)
+			return Permanent(fmt.Errorf("eslogger: not privileged"))
+		})
+	}()
+
+	select {
+	case <-done:
+		// Abandoned after the first run.
+	case <-time.After(2 * time.Second):
+		t.Fatalf("worker ran %d times; a permanent error must abandon on the first failure", atomic.LoadInt32(&runs))
+	}
+	if n := atomic.LoadInt32(&runs); n != 1 {
+		t.Fatalf("worker ran %d times; permanent failure must not retry", n)
+	}
 }

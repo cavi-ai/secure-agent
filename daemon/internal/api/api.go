@@ -213,6 +213,7 @@ func (a *API) buildMux() *http.ServeMux {
 	mux.HandleFunc("/audit", a.handleAudit)
 	mux.HandleFunc("/allowlist/suggestions", a.handleAllowlistSuggestions)
 	mux.HandleFunc("/allowlist", a.handleAllowlistAdd)
+	mux.HandleFunc("/guard/path-allow", a.handleGuardPathAllow)
 	mux.HandleFunc("/mute", a.handleMute)
 	mux.HandleFunc("/ui/open-fda", a.handleOpenFDA)
 	mux.HandleFunc("/stats/rollup", a.handleRollup)
@@ -990,6 +991,14 @@ func (a *API) handleGuardDecision(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `Invalid payload: {"agent","tool","path","rule_id"} (agent/rule_id must match ^[A-Za-z0-9_.-]+$)`, http.StatusBadRequest)
 		return
 	}
+	// Per-path exceptions first: an operator-granted allow on THIS exact
+	// path (or an ancestor of it) answers without prompting. Cheapest and
+	// narrowest check first — one cached rule-wide allow must never widen
+	// what a per-path allow does not cover.
+	if a.store.GuardPathAllowed(req.Agent, req.RuleID, req.Path) {
+		writeJSON(w, guard.Decision{Verdict: "allow", Scope: "always", Reason: "path-allow"})
+		return
+	}
 	if g, ok := a.store.LookupGuardRule(req.Agent, req.RuleID); ok {
 		writeJSON(w, guard.Decision{Verdict: g.Decision, Scope: "always", Reason: "cached"})
 		return
@@ -1066,6 +1075,60 @@ func (a *API) handleGuardResolve(w http.ResponseWriter, r *http.Request) {
 		a.publishGuardEvent(event.KindGuardResolved, req.Verdict+"/"+req.Scope)
 	}
 	writeJSON(w, map[string]any{"status": "ok", "resolved": ok})
+}
+
+// handleGuardPathAllow manages per-path guard exceptions: list (GET),
+// add (POST {"agent","rule_id","path"}), revoke (DELETE ?agent=&rule_id=&path=).
+// A path allow is narrower than a rule allow: it approves one file (and its
+// descendants) instead of every path the rule matches. Mutations audited.
+func (a *API) handleGuardPathAllow(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		writeJSON(w, a.store.ListGuardPathAllows(200))
+	case http.MethodPost:
+		if a.guardBroker == nil {
+			http.Error(w, "guard not enabled", http.StatusServiceUnavailable)
+			return
+		}
+		limitBody(w, r)
+		var req struct {
+			Agent  string `json:"agent"`
+			RuleID string `json:"rule_id"`
+			Path   string `json:"path"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Agent == "" || req.RuleID == "" || req.Path == "" ||
+			!guardTokenRE.MatchString(req.Agent) || !guardTokenRE.MatchString(req.RuleID) {
+			http.Error(w, `Invalid payload: {"agent","rule_id","path"} (agent/rule_id must match ^[A-Za-z0-9_.-]+$)`, http.StatusBadRequest)
+			return
+		}
+		if !strings.HasPrefix(req.Path, "/") || len(req.Path) > 1024 || strings.Contains(req.Path, "\x00") {
+			http.Error(w, "path must be an absolute filesystem path", http.StatusBadRequest)
+			return
+		}
+		a.store.PutGuardPathAllow(store.GuardPathAllow{Agent: req.Agent, RuleID: req.RuleID, Path: req.Path})
+		a.store.PutAudit(store.AuditEntry{
+			Action: "guard-path-allow", Rule: req.Agent + "/" + req.RuleID,
+			Detail: "allowed path " + req.Path,
+		})
+		a.publishGuardEvent(event.KindGuardResolved, "path-allow")
+		writeJSON(w, map[string]any{"status": "ok", "agent": req.Agent, "rule_id": req.RuleID, "path": req.Path})
+	case http.MethodDelete:
+		agent := r.URL.Query().Get("agent")
+		ruleID := r.URL.Query().Get("rule_id")
+		path := r.URL.Query().Get("path")
+		if agent == "" || ruleID == "" || path == "" ||
+			!guardTokenRE.MatchString(agent) || !guardTokenRE.MatchString(ruleID) {
+			http.Error(w, "agent, rule_id and path required", http.StatusBadRequest)
+			return
+		}
+		removed := a.store.DeleteGuardPathAllow(agent, ruleID, path)
+		if removed {
+			a.store.PutAudit(store.AuditEntry{Action: "guard-path-allow-revoke", Rule: agent + "/" + ruleID, Detail: "revoked path " + path})
+		}
+		writeJSON(w, map[string]any{"status": "ok", "removed": removed})
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
 }
 
 // handleGuardRules lists stored decisions (GET) and revokes one (DELETE ?agent=&rule_id=).
