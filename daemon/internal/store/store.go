@@ -187,6 +187,24 @@ func Open(dbPath, jsonlPath string) (*Store, error) {
 			log.Printf("store: migrated %s: added session_id column", table)
 		}
 	}
+	// Flags gain an acknowledged marker: when the operator acts on a flag
+	// (applies any disposition), the flag stops counting as critical and
+	// dims in the UI — "acted upon" is a first-class state, not an endless
+	// red row. Same PRAGMA-checked migration pattern as session_id.
+	var ackN int
+	if err := db.QueryRow(
+		`SELECT COUNT(*) FROM pragma_table_info('flags') WHERE name='acknowledged'`,
+	).Scan(&ackN); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to inspect flags schema: %w", err)
+	}
+	if ackN == 0 {
+		if _, err := db.Exec(`ALTER TABLE flags ADD COLUMN acknowledged TEXT`); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("failed to migrate flags.acknowledged: %w", err)
+		}
+		log.Printf("store: migrated flags: added acknowledged column")
+	}
 
 	var jsonl *os.File
 	if jsonlPath != "" {
@@ -320,18 +338,36 @@ func (s *Store) RecentFlags(limit int) []model.Flag {
 
 // GetFlag fetches one flag by ID (for the re-triage endpoint). Absent ID →
 // ok=false; the caller answers 404 rather than re-enqueueing a ghost.
+// AcknowledgeFlag marks a flag acted-upon: it stops counting as critical
+// and renders dimmed. Idempotent (re-ack is a no-op success).
+func (s *Store) AcknowledgeFlag(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	res, err := s.db.Exec(
+		`UPDATE flags SET acknowledged = ? WHERE id = ?`,
+		time.Now().UTC().Format(time.RFC3339Nano), id)
+	if err != nil {
+		log.Printf("store: acknowledge flag error: %v", err)
+		return false
+	}
+	n, _ := res.RowsAffected()
+	return n > 0
+}
+
 func (s *Store) GetFlag(id string) (model.Flag, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	row := s.db.QueryRow(
-		`SELECT id, rule, severity, ts, pid, agent, session_id, evidence FROM flags WHERE id = ?`, id)
+		`SELECT id, rule, severity, ts, pid, agent, session_id, evidence, acknowledged FROM flags WHERE id = ?`, id)
 	var fl model.Flag
 	var tsStr, evStr string
 	var sessionID sql.NullString
-	if err := row.Scan(&fl.ID, &fl.Rule, &fl.Severity, &tsStr, &fl.PID, &fl.Agent, &sessionID, &evStr); err != nil {
+	var ack sql.NullString
+	if err := row.Scan(&fl.ID, &fl.Rule, &fl.Severity, &tsStr, &fl.PID, &fl.Agent, &sessionID, &evStr, &ack); err != nil {
 		return model.Flag{}, false
 	}
 	fl.SessionID = sessionID.String
+	fl.Acknowledged = ack.String != ""
 	fl.TS, _ = time.Parse(time.RFC3339Nano, tsStr)
 	_ = json.Unmarshal([]byte(evStr), &fl.Evidence)
 	return fl, true
@@ -341,7 +377,7 @@ func (s *Store) QueryFlags(f FlagFilter) []model.Flag {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	q := `SELECT id, rule, severity, ts, pid, agent, session_id, evidence FROM flags WHERE 1=1`
+	q := `SELECT id, rule, severity, ts, pid, agent, session_id, evidence, acknowledged FROM flags WHERE 1=1`
 	var args []any
 	if f.Agent != "" {
 		q += " AND agent = ?"
@@ -377,9 +413,11 @@ func (s *Store) QueryFlags(f FlagFilter) []model.Flag {
 		var fl model.Flag
 		var tsStr, evStr string
 		var sessionID sql.NullString
-		if err := rows.Scan(&fl.ID, &fl.Rule, &fl.Severity, &tsStr, &fl.PID, &fl.Agent, &sessionID, &evStr); err == nil {
+		var ack sql.NullString
+		if err := rows.Scan(&fl.ID, &fl.Rule, &fl.Severity, &tsStr, &fl.PID, &fl.Agent, &sessionID, &evStr, &ack); err == nil {
 			fl.SessionID = sessionID.String
 			fl.TS, _ = time.Parse(time.RFC3339Nano, tsStr)
+			fl.Acknowledged = ack.String != ""
 			_ = json.Unmarshal([]byte(evStr), &fl.Evidence)
 			flags = append(flags, fl)
 		}

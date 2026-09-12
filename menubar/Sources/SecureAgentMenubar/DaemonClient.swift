@@ -33,6 +33,8 @@ public protocol DaemonClientProtocol: Sendable {
     /// POST /advisor/retriage — re-run the advisor on an existing flag.
     /// Idempotent server-side (30s cooldown per flag); queued=false means
     /// "already in flight or recent" and is treated as success.
+    /// POST /flags/acknowledge — mark a flag acted-upon (idempotent).
+    func acknowledgeFlag(id: String) async throws
     func retriageFlag(id: String) async throws
     func allowlistAdd(agent: String, host: String) async throws
     /// POST /mute — suppress one rule+host pair (noise control; monitoring
@@ -163,6 +165,11 @@ public final class DaemonClient: Sendable {
     /// Policy-change audit rows (digest counts allowlist approvals).
     public func fetchAudit(limit: Int = 50) async throws -> [AuditEntryModel] {
         try await getDecodable("/audit?limit=\(limit))")
+    }
+
+    public func acknowledgeFlag(id: String) async throws {
+        let body = try JSONSerialization.data(withJSONObject: ["flag_id": id])
+        _ = try await request(method: "POST", path: "/flags/acknowledge", body: body)
     }
 
     public func retriageFlag(id: String) async throws {

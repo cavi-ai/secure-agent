@@ -363,6 +363,9 @@ struct FlagActionSheet: View {
             default:
                 return
             }
+            // Acknowledge AFTER the disposition lands: the flag stops
+            // counting as critical — the operator acted on it. Idempotent.
+            try? await state.uiClient.acknowledgeFlag(id: flag.id)
             state.refresh()
         } catch {
             failure = error.localizedDescription
@@ -414,6 +417,10 @@ struct FlagActionSheet: View {
         confirming = nil
         do {
             try await pending.fire()
+            // Acknowledge after the disposition lands — the flag leaves the
+            // critical list and dims. Ack itself is idempotent; its failure
+            // must not mask the disposition that already succeeded.
+            try? await state.uiClient.acknowledgeFlag(id: flag.id)
             applied = pending.doneLabel
             state.refresh()
         } catch {
