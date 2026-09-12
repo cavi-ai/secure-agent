@@ -102,11 +102,8 @@ struct ConsoleView: View {
             hero
             // Functional order: 1) needs-a-decision (incidents/criticals),
             // 2) what's running, 3) what's enforcing (quiet by design).
-            if !state.incidents.isEmpty { incidentsSection }
-            if !state.flags.isEmpty { flagsSection }
+            if !state.incidents.isEmpty || !state.unactedFlags.isEmpty { attentionSection }
             if !state.agentRoots.isEmpty { agentsSection }
-            firewallSection
-            guardSection
         }
     }
 
@@ -254,10 +251,34 @@ struct ConsoleView: View {
     /// Open incidents with their remediation checklists — the daemon already
     /// generates these reports; this surfaces them where the user actually
     /// looks instead of only in the web console.
-    private var incidentsSection: some View {
+    /// One "needs attention" section: incidents with remediation sheets, then
+    /// flags without an incident (action sheets). The same underlying problem
+    /// never appears twice — if it has an incident, it's an incident row.
+    private var attentionSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            sectionHeader("Incidents", trailing: "\(state.incidents.count)")
-            ForEach(state.incidents.prefix(3)) { inc in
+            let unflagged = state.incidents.count
+            let flagOnly = state.flags.filter { f in
+                f.acknowledged != true && !state.incidents.contains { $0.flagId == f.id }
+            }
+            let total = unflagged + flagOnly.count
+            sectionHeader("Needs attention", trailing: "\(total)")
+            if !state.incidents.isEmpty {
+                incidentRows
+            }
+            ForEach(flagOnly.prefix(4)) { flag in
+                flagRow(flag)
+            }
+        }
+        .sheet(item: $selectedIncident) { inc in
+            IncidentDetailView(incident: inc, state: state)
+        }
+        .sheet(item: $selectedFlag) { flag in
+            FlagActionSheet(flag: flag, state: state)
+        }
+    }
+
+    private var incidentRows: some View {
+        ForEach(state.incidents.prefix(3)) { inc in
                 Button { selectedIncident = inc } label: {
                     HStack(spacing: 7) {
                         Image(systemName: "cross.case.fill")
@@ -278,10 +299,6 @@ struct ConsoleView: View {
                 }
                 .buttonStyle(.plain)
                 .help("\(Self.incidentRowTitle(inc.rule)) — \(inc.agent) · open the incident report")
-            }
-        }
-        .sheet(item: $selectedIncident) { inc in
-            IncidentDetailView(incident: inc, state: state)
         }
     }
 
@@ -354,159 +371,6 @@ struct ConsoleView: View {
             }
         }
         .padding(.horizontal, 14).padding(.vertical, 11)
-    }
-
-    // MARK: firewall
-
-    private var firewallSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            sectionHeader("Egress firewall", trailing: state.isEnforcing ? "enforcing" : "monitor",
-                          trailingColor: state.isEnforcing ? .ok : .secondary, trailingMonospaced: false)
-
-            if state.firewallRules.isEmpty {
-                Text("No egress inspected yet — traffic is scanned as your agents run")
-                    .font(.system(size: 11)).foregroundStyle(.tertiary)
-                    .fixedSize(horizontal: false, vertical: true)
-            } else {
-                if state.uninspectedEgress > 0 {
-                    Label("\(state.uninspectedEgress) endpoint\(state.uninspectedEgress == 1 ? "" : "s") reached without inspection",
-                          systemImage: "globe")
-                        .font(.system(size: 11)).foregroundStyle(Color.warn)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                // Condensed: only rules that have seen suspicious traffic earn a
-                // row. Quiet rules (legit traffic only) collapse into one line —
-                // the popover answers questions, it doesn't host dashboards.
-                let active = state.firewallRules.filter { $0.stat.wouldBlock > 0 || $0.stat.blocked > 0 }
-                if active.isEmpty {
-                    Text("\(state.firewallRules.count) rule\(state.firewallRules.count == 1 ? "" : "s") active · no suspicious egress")
-                        .font(.system(size: 11)).foregroundStyle(.tertiary)
-                } else {
-                    ForEach(active) { rule in
-                        HStack {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(rule.id).font(.system(size: 12, weight: .semibold, design: .monospaced))
-                                Text("\(rule.stat.wouldBlock) would-block · \(rule.stat.blocked) blocked")
-                                    .font(.system(size: 10)).foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                            if rule.stat.mode == "block" {
-                                Text("BLOCKING").font(.system(size: 9, weight: .bold))
-                                    .foregroundStyle(Color.ok)
-                                    .padding(.horizontal, 7).padding(.vertical, 4)
-                                    .background(Color.ok.opacity(0.14)).clipShape(Capsule())
-                            } else {
-                                Button { state.promote(rule: rule.id) } label: {
-                                    Label("Block", systemImage: "arrow.up.circle.fill").font(.system(size: 11, weight: .semibold))
-                                }
-                                .buttonStyle(.borderedProminent).tint(.brand).controlSize(.small)
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // MARK: guard
-
-    private static let guardRuleLabels: [(id: String, label: String)] = [
-        ("ssh-keys", "SSH private keys"),
-        ("cloud-creds", "Cloud credentials"),
-        ("keychain", "Keychain"),
-        ("env-files", ".env files"),
-        ("shell-rc", "Shell config"),
-        ("harness-config", "Harness config & hooks"),
-    ]
-
-    private var guardSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            sectionHeader("Directory guard", trailing: "\(state.guardRules.count)")
-
-            // Per-rule policy lives behind a disclosure: the popover answers
-            // "am I protected / did anything happen" at a glance; the
-            // monitor/prompt/deny editor is opened deliberately.
-            DisclosureGroup(isExpanded: $manageRulesExpanded) {
-                guardPolicyEditor.padding(.top, 6)
-            } label: {
-                Text("Manage rules…").font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.secondary)
-            }
-
-            if state.guardRules.isEmpty {
-                Text("No guard decisions yet — sensitive paths are prompted on first access")
-                    .font(.system(size: 11)).foregroundStyle(.tertiary)
-                    .fixedSize(horizontal: false, vertical: true)
-            } else {
-                ForEach(state.guardRules) { rule in
-                    HStack {
-                        VStack(alignment: .leading, spacing: 2) {
-                            HStack(spacing: 6) {
-                                Text(rule.agent).font(.system(size: 12, weight: .semibold))
-                                Text(rule.ruleID).font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
-                            }
-                            Text("\(rule.decision) · \(rule.source)")
-                                .font(.system(size: 10)).foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        Text(rule.decision.uppercased()).font(.system(size: 9, weight: .bold))
-                            .foregroundStyle(rule.decision == "allow" ? Color.ok : Color.bad)
-                            .padding(.horizontal, 7).padding(.vertical, 4)
-                            .background((rule.decision == "allow" ? Color.ok : Color.bad).opacity(0.14)).clipShape(Capsule())
-                        Button { state.revokeGuardRule(agent: rule.agent, ruleID: rule.ruleID) } label: {
-                            Label("Revoke", systemImage: "trash").font(.system(size: 11, weight: .semibold))
-                        }
-                        .buttonStyle(.bordered).controlSize(.small)
-                    }
-                }
-            }
-            Text("Hook decisions can block; monitored accesses are observed only")
-                .font(.system(size: 10)).foregroundStyle(.tertiary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-    }
-
-    // MARK: guard policy editor
-
-    /// Per-rule monitor/prompt/deny toggles, persisted straight to
-    /// guard-modes.json (atomic write; the hook reads it per tool call, so no
-    /// daemon round-trip exists). A corrupt file is surfaced, not hidden —
-    /// the hook fails closed on it.
-    private var guardPolicyEditor: some View {
-        let current = SetupManager.shared.currentGuardModes()
-        return VStack(alignment: .leading, spacing: 6) {
-            if current.corrupt {
-                Label("guard-modes.json is unreadable — the guard is failing closed (deny) until fixed",
-                      systemImage: "exclamationmark.triangle.fill")
-                    .font(.system(size: 10)).foregroundStyle(Color.bad)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            ForEach(Self.guardRuleLabels, id: \.id) { rule in
-                HStack {
-                    Text(rule.label).font(.system(size: 11))
-                    Spacer()
-                    Picker("", selection: Binding(
-                        get: { current.modes[rule.id] ?? "monitor" },
-                        set: { newMode in
-                            do {
-                                try SetupManager.shared.setGuardMode(ruleID: rule.id, mode: newMode)
-                                // Re-render from the file we just wrote.
-                                state.refresh()
-                            } catch {
-                                state.reportLocalError("could not set \(rule.id): \(error.localizedDescription)")
-                            }
-                        }
-                    )) {
-                        Text("Monitor").tag("monitor")
-                        Text("Prompt").tag("prompt")
-                        Text("Deny").tag("deny")
-                    }
-                    .pickerStyle(.segmented)
-                    .frame(width: 170)
-                    .labelsHidden()
-                }
-            }
-        }
     }
 
     // MARK: agents
@@ -717,64 +581,48 @@ struct ConsoleView: View {
         .buttonStyle(.plain)
     }
 
-    @State private var manageRulesExpanded = false
 
     // MARK: flags
 
-    private var flagsSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            sectionHeader("Security flags", trailing: "\(state.flags.count)")
-            // Every flag is a decision point: the whole row opens the action
-            // sheet (evidence, dispositions, incident link). A critical you
-            // can't act on is just anxiety with a badge.
-            ForEach(state.flags.prefix(4)) { flag in
-                Button { selectedFlag = flag } label: {
-                    HStack(alignment: .top, spacing: 8) {
-                        Image(systemName: flag.severity >= 3 ? "exclamationmark.octagon.fill" : "exclamationmark.triangle.fill")
-                            .font(.system(size: 12)).foregroundStyle(flag.severity >= 3 ? Color.bad : Color.warn)
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(Self.flagRowTitle(flag.rule))
-                                .font(.system(size: 11, weight: .medium))
-                            Text(Self.flagRowTitle(flag.rule))
-                                .font(.system(size: 11, weight: .medium))
-                            HStack(spacing: 5) {
-                                AgentIdentity.tile(flag.agent, size: 13, fontSize: 7)
-                                Text(flag.agent).font(.system(size: 9, weight: .medium)).foregroundStyle(.secondary)
-                                if let t = relativeTime(flag.ts) {
-                                    Text(t)
-                                        .font(.system(size: 9, weight: flag.tsRecent ? .semibold : .regular, design: .monospaced))
-                                        .foregroundStyle(flag.tsRecent ? Color.bad : Color.tertiaryText)
-                                }
-                            }
-                            // Raw evidence stays in the action sheet —
-                            // the list row answers "what/who/how fresh",
-                            // not "here's a hex dump".
+    /// One flag row (used by attentionSection for flags without an incident).
+    private func flagRow(_ flag: FlagModel) -> some View {
+        Button { selectedFlag = flag } label: {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: flag.severity >= 3 ? "exclamationmark.octagon.fill" : "exclamationmark.triangle.fill")
+                    .font(.system(size: 12)).foregroundStyle(flag.severity >= 3 ? Color.bad : Color.warn)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(Self.flagRowTitle(flag.rule))
+                        .font(.system(size: 11, weight: .medium))
+                    HStack(spacing: 5) {
+                        AgentIdentity.tile(flag.agent, size: 13, fontSize: 7)
+                        Text(flag.agent).font(.system(size: 9, weight: .medium)).foregroundStyle(.secondary)
+                        if let t = relativeTime(flag.ts) {
+                            Text(t)
+                                .font(.system(size: 9, weight: flag.tsRecent ? .semibold : .regular, design: .monospaced))
+                                .foregroundStyle(flag.tsRecent ? Color.bad : Color.tertiaryText)
                         }
-                        Spacer()
-                        if flag.acknowledged == true {
-                            Text("DONE")
-                                .font(.system(size: 8, weight: .bold))
-                                .foregroundStyle(Color.ok)
-                                .padding(.horizontal, 5).padding(.vertical, 3)
-                                .background(Color.ok.opacity(0.14)).clipShape(Capsule())
-                        } else if flag.severity >= 3 {
-                            Text("CRITICAL")
-                                .font(.system(size: 8, weight: .bold))
-                                .foregroundStyle(Color.bad)
-                                .padding(.horizontal, 5).padding(.vertical, 3)
-                                .background(Color.bad.opacity(0.14)).clipShape(Capsule())
-                        }
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 7, weight: .semibold)).foregroundStyle(.quaternary)
                     }
                 }
-                .buttonStyle(.plain)
-                .opacity(flag.acknowledged == true ? 0.45 : 1.0)
+                Spacer()
+                if flag.acknowledged == true {
+                    Text("DONE")
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(Color.ok)
+                        .padding(.horizontal, 5).padding(.vertical, 3)
+                        .background(Color.ok.opacity(0.14)).clipShape(Capsule())
+                } else if flag.severity >= 3 {
+                    Text("CRITICAL")
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(Color.bad)
+                        .padding(.horizontal, 5).padding(.vertical, 3)
+                        .background(Color.bad.opacity(0.14)).clipShape(Capsule())
+                }
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 7, weight: .semibold)).foregroundStyle(.quaternary)
             }
         }
-        .sheet(item: $selectedFlag) { flag in
-            FlagActionSheet(flag: flag, state: state)
-        }
+        .buttonStyle(.plain)
+        .opacity(flag.acknowledged == true ? 0.45 : 1.0)
     }
 
     @State private var selectedFlag: FlagModel?
