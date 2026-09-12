@@ -575,3 +575,33 @@ final class DisabledAgentsTests: XCTestCase {
         XCTAssertTrue(out.contains("other: 1"))
     }
 }
+
+
+// MARK: - Advisor → action mapping (suggested_action must become a button)
+
+@MainActor
+final class AdvisorActionMappingTests: XCTestCase {
+    private let flag = FlagModel(id: "f1", rule: "sensitive-read-then-connect",
+                                 severity: 3, ts: "", pid: 7, agent: "cursor", evidence: [])
+
+    func testAllowHostMapsWhenHostPresent() {
+        let m = FlagActionSheet.mappedAction("allow-host", flag: flag, evidenceHost: "api.example.com")
+        XCTAssertEqual(m?.kind, "allow-host")
+        XCTAssertTrue(m!.title.contains("api.example.com"))
+    }
+
+    func testAllowHostNilWithoutHost() {
+        XCTAssertNil(FlagActionSheet.mappedAction("allow-host", flag: flag, evidenceHost: nil))
+    }
+
+    func testAllFourActionsMap() {
+        XCTAssertEqual(FlagActionSheet.mappedAction("mute-rule", flag: flag, evidenceHost: nil)?.kind, "mute-rule")
+        XCTAssertEqual(FlagActionSheet.mappedAction("rotate-credentials", flag: flag, evidenceHost: nil)?.kind, "rotate")
+        XCTAssertEqual(FlagActionSheet.mappedAction("kill-agent", flag: flag, evidenceHost: nil)?.kind, "kill")
+    }
+
+    func testUnknownActionMapsToNothing() {
+        XCTAssertNil(FlagActionSheet.mappedAction("do-something-random", flag: flag, evidenceHost: nil))
+        XCTAssertNil(FlagActionSheet.mappedAction(nil, flag: flag, evidenceHost: nil))
+    }
+}

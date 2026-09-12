@@ -140,52 +140,97 @@ struct ConsoleView: View {
     /// The one-glance answer, mirroring the web console's posture banner:
     /// Protected / Attention / Action needed (+ Disconnected). Everything
     /// below the hero is drill-down; the hero is what most opens should need.
+    /// The hero IS the action when action is needed: subtitle says what to
+    /// do (the advisor's recommendation or the top flag), tapping it opens
+    /// that flag's action sheet. Prose-first: "cursor read a key file and
+    /// connected out — allow or rotate", not "1 incident · 2 critical flags".
     private var hero: some View {
         let m = heroModel
-        return HStack(spacing: 12) {
-            Image(systemName: m.icon)
-                .font(.system(size: 20, weight: .semibold))
-                .foregroundStyle(m.color)
-                .frame(width: 38, height: 38)
-                .background(m.color.opacity(0.14))
-                .clipShape(RoundedRectangle(cornerRadius: 9))
-            VStack(alignment: .leading, spacing: 2) {
-                Text(m.title).font(.system(size: 14, weight: .bold))
-                Text(m.subtitle).font(.system(size: 11)).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+        let actionable = m.actionTarget != nil
+        return Button {
+            if let target = m.actionTarget { selectedFlag = target }
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: m.icon)
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundStyle(m.color)
+                    .frame(width: 38, height: 38)
+                    .background(m.color.opacity(0.14))
+                    .clipShape(RoundedRectangle(cornerRadius: 9))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(m.title).font(.system(size: 14, weight: .bold))
+                    Text(m.subtitle).font(.system(size: 11)).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 0)
+                if actionable {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(m.color.opacity(0.7))
+                }
             }
-            Spacer(minLength: 0)
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(m.color.opacity(0.07))
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .contentShape(Rectangle())
         }
-        .padding(12)
-        .background(m.color.opacity(0.07))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .buttonStyle(.plain)
+        .disabled(!actionable)
         .animation(.easeInOut(duration: 0.25), value: m.title)
     }
 
-    private var heroModel: (icon: String, color: Color, title: String, subtitle: String) {
+    private var heroModel: (icon: String, color: Color, title: String, subtitle: String, actionTarget: FlagModel?) {
         if state.isPaused {
             return ("pause.circle.fill", .secondary, "Paused",
-                    "Alerts silenced — agents still run, decisions still prompt")
+                    "Alerts silenced — agents still run, decisions still prompt", nil)
         }
         if !state.connected {
             return ("shield.slash", .secondary, "Disconnected",
-                    "Not monitoring — the daemon is unreachable")
+                    "Not monitoring — the daemon is unreachable", nil)
         }
         let criticalFlags = state.flags.filter { $0.severity >= 3 }.count
         if !state.incidents.isEmpty || criticalFlags > 0 {
             var parts: [String] = []
-            if !state.incidents.isEmpty {
-                parts.append("\(state.incidents.count) incident\(state.incidents.count == 1 ? "" : "s")")
+            // Prose-first: name what happened + what to do, not counts.
+            // The top critical flag (advisor-ordered when triaged) IS the
+            // action; the hero subtitle says it in one sentence.
+            let top = state.flags.first { $0.severity >= 3 }
+                ?? state.incidents.first.map { inc in
+                    FlagModel(id: inc.flagId, rule: inc.rule, severity: 3, ts: inc.timestamp,
+                              pid: inc.pid, agent: inc.agent, evidence: [])
+                }
+            if let top {
+                let what: String
+                switch top.rule {
+                case "sensitive-read-then-connect":
+                    what = "\(top.agent) read a sensitive file, then connected out"
+                case "proxy-secret-leak":
+                    what = "\(top.agent) sent a secret to a remote host"
+                case "keychain-access":
+                    what = "\(top.agent) opened your keychain"
+                case "keychain-security-cli":
+                    what = "\(top.agent) read keychain secrets via the CLI"
+                case "tcc-tamper":
+                    what = "\(top.agent) changed app permissions without asking"
+                case "proxy-prompt-injection":
+                    what = "a response to \(top.agent) contained an injection attempt"
+                default:
+                    what = "\(top.agent) triggered \(top.rule)"
+                }
+                let advice: String
+                switch top.advisor?.suggestedAction {
+                case "allow-host": advice = "tap to allow the host"
+                case "mute-rule": advice = "tap to dismiss this flag class"
+                case "rotate-credentials": advice = "tap to rotate the credential"
+                case "kill-agent": advice = "tap to stop the agent"
+                default: advice = "tap to review"
+                }
+                return ("exclamationmark.shield.fill", .bad, "Action needed",
+                        "\(what) — \(advice).", top)
             }
-            if criticalFlags > 0 {
-                parts.append("\(criticalFlags) critical flag\(criticalFlags == 1 ? "" : "s")")
-            }
-            // The fatigue reducer: the local advisor already triaged some of
-            // these as likely benign — say so at the glance level.
-            let benign = state.flags.filter { $0.severity >= 3 && $0.advisor?.assessment == "benign" }.count
-            if benign > 0 { parts.append("advisor: \(benign) likely benign") }
             return ("exclamationmark.shield.fill", .bad, "Action needed",
-                    parts.joined(separator: " · "))
+                    "Review the flagged activity.", nil)
         }
         let warnFlags = state.flags.filter { $0.severity >= 2 }.count
         if warnFlags > 0 || state.uninspectedEgress > 0 || state.firewallWouldBlock > 0 {
@@ -194,14 +239,14 @@ struct ConsoleView: View {
             if state.firewallWouldBlock > 0 { parts.append("\(state.firewallWouldBlock) would-block") }
             if state.uninspectedEgress > 0 { parts.append("\(state.uninspectedEgress) uninspected") }
             return ("exclamationmark.triangle.fill", .warn, "Attention",
-                    parts.joined(separator: " · "))
+                    parts.joined(separator: " · "), nil)
         }
         let n = state.activeAgentCount
         let procs = state.trackedProcessCount
         let sub = procs > n
             ? "\(n) agent\(n == 1 ? "" : "s") monitored · \(procs) processes tracked · firewall \(state.isEnforcing ? "enforcing" : "monitoring")"
             : "\(n) agent\(n == 1 ? "" : "s") monitored · firewall \(state.isEnforcing ? "enforcing" : "monitoring")"
-        return ("checkmark.shield.fill", .ok, "Protected", sub)
+        return ("checkmark.shield.fill", .ok, "Protected", sub, nil)
     }
 
     // MARK: incidents
