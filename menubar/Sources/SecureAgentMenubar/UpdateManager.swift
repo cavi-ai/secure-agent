@@ -54,7 +54,11 @@ public final class UpdateManager: ObservableObject {
                 suffix = String(s[i...])
                 s = String(s[..<i])
             }
-            return (s.split(separator: ".").map { Int($0) ?? 0 }, suffix)
+            var nums = s.split(separator: ".").map { Int($0) ?? 0 }
+            // Pad to equal length so "1.0" == "1.0.0" (and "1.0" > "0.9.9").
+            let n = max(nums.count, 3)
+            nums.append(contentsOf: Array(repeating: 0, count: n - nums.count))
+            return (nums, suffix)
         }
         let (rn, rs) = parts(remoteTag)
         let (ln, ls) = parts(localVersion)
@@ -130,12 +134,12 @@ public final class UpdateManager: ObservableObject {
             return
         }
         // Behind-check without moving the tree: fetch, then compare.
-        let fetch = Self.run("/usr/bin/git", ["-C", repo, "fetch", "origin", "main"])
+        let fetch = await Self.run("/usr/bin/git", ["-C", repo, "fetch", "origin", "main"])
         guard fetch.status == 0 else {
             state = .error("git fetch failed: \(fetch.stderr)")
             return
         }
-        let behind = Self.run("/usr/bin/git", ["-C", repo, "rev-list", "--count", "HEAD..origin/main"])
+        let behind = await Self.run("/usr/bin/git", ["-C", repo, "rev-list", "--count", "HEAD..origin/main"])
         let n = Int(behind.stdout.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
         if n > 0 {
             availableVersion = "main+\(n)"
@@ -172,46 +176,105 @@ public final class UpdateManager: ObservableObject {
                 return
             }
             let tmp = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(dmg.name)
-            let (dmgData, _) = try await URLSession.shared.data(from: dmg.browser_download_url)
-            try dmgData.write(to: tmp)
+            // Stream to disk while hashing: a DMG is 100+ MB and must not be
+            // held whole in RAM. Hash over the bytes AS WRITTEN, so a
+            // truncated download fails the verify instead of installing a
+            // truncated image.
+            let actual = try await Self.downloadAndHash(from: dmg.browser_download_url, to: tmp)
             let (sumsData, _) = try await URLSession.shared.data(from: sumsAsset.browser_download_url)
             guard let expected = Self.expectedSHA256(String(decoding: sumsData, as: UTF8.self), filename: dmg.name) else {
                 state = .error("checksums.txt has no entry for \(dmg.name)")
                 return
             }
-            let actual = SHA256.hash(data: dmgData).map { String(format: "%02x", $0) }.joined()
             guard actual == expected else {
+                try? FileManager.default.removeItem(at: tmp)
                 state = .error("SHA-256 mismatch — download corrupted or tampered; not installing")
                 return
             }
             state = .installing
-            try Self.installDMG(at: tmp)
+            try await Self.installDMG(at: tmp)
         } catch {
             state = .error("update failed: \(error.localizedDescription)")
         }
     }
 
+    /// Stream a download to disk in chunks, hashing as it goes. Returns the
+    /// SHA-256 hex digest of exactly the bytes written — a truncated download
+    /// fails the verify instead of installing a truncated image.
+    nonisolated static func downloadAndHash(from url: URL, to destination: URL) async throws -> String {
+        let (stream, response) = try await URLSession.shared.bytes(for: URLRequest(url: url))
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+            throw UpdateError.shell("download failed (HTTP \((response as? HTTPURLResponse)?.statusCode ?? 0))")
+        }
+        var iterator = stream.makeAsyncIterator()
+        FileManager.default.createFile(atPath: destination.path, contents: nil)
+        let file = try FileHandle(forWritingTo: destination)
+        defer { try? file.close() }
+        var hasher = SHA256()
+        var didReceiveAnyData = false
+        // AsyncBytes yields UInt8; coalesce into ~64KB Data chunks so the
+        // per-byte syscall/hash overhead doesn't dominate the download.
+        var buffer = [UInt8]()
+        buffer.reserveCapacity(1 << 16)
+        while let byte = try await iterator.next() {
+            didReceiveAnyData = true
+            buffer.append(byte)
+            if buffer.count >= 1 << 16 {
+                let data = Data(buffer)
+                hasher.update(data: data)
+                try file.write(contentsOf: data)
+                buffer.removeAll(keepingCapacity: true)
+            }
+        }
+        if !buffer.isEmpty {
+            let data = Data(buffer)
+            hasher.update(data: data)
+            try file.write(contentsOf: data)
+        }
+        // Zero bytes means the connection "succeeded" with an empty body —
+        // never treat that as a valid image.
+        guard didReceiveAnyData else {
+            throw UpdateError.shell("download was empty")
+        }
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+    }
+
     /// Mount, replace the app bundle in place, detach, relaunch. The bundle is
     /// replaced at its CURRENT location (dist/ for dev installs, /Applications
     /// for real ones) — writing to /Applications may require admin rights,
-    /// which is surfaced as an honest error.
-    private static func installDMG(at dmg: URL) throws {
-        let mount = run("/usr/bin/hdiutil", ["attach", "-nobrowse", "-readonly", dmg.path])
+    /// which is surfaced as an honest error. All shell work is awaited
+    /// off-main so the UI stays responsive through the install.
+    private static func installDMG(at dmg: URL) async throws {
+        let mount = await run("/usr/bin/hdiutil", ["attach", "-nobrowse", "-readonly", dmg.path])
         guard mount.status == 0 else { throw UpdateError.shell("hdiutil attach: \(mount.stderr)") }
         guard let mountPoint = mount.stdout.split(separator: "\n").last?
             .split(separator: "\t").last.map(String.init)?.trimmingCharacters(in: .whitespaces) else {
             throw UpdateError.shell("hdiutil attach: no mount point")
         }
-        defer { _ = run("/usr/bin/hdiutil", ["detach", mountPoint]) }
+        // Detach the unmount: defer can't await, and the mount point must
+        // outlive the copy regardless of how installDMG exits.
+        defer { Task.detached { _ = await run("/usr/bin/hdiutil", ["detach", mountPoint]) } }
         let src = "\(mountPoint)/Secure Agent.app"
         let dst = Bundle.main.bundleURL.path
-        let copy = run("/usr/bin/ditto", [src, dst])
+        let copy = await run("/usr/bin/ditto", [src, dst])
         guard copy.status == 0 else {
             throw UpdateError.shell("install failed (permission?): \(copy.stderr). Install from the DMG manually.")
         }
-        // Relaunch: the daemon is a child of the app, so a clean terminate
-        // takes it down; the new binary starts fresh.
-        _ = run("/usr/bin/open", ["-n", dst])
+        // Verify the copied bundle's signature BEFORE terminating the running
+        // instance: a truncated/corrupt copy must not brick the install by
+        // killing the only working app. The old instance stays alive on
+        // failure and the operator can retry.
+        let verify = await run("/usr/bin/codesign", ["--verify", "--deep", "--strict", dst])
+        guard verify.status == 0 else {
+            try? await run("/usr/bin/hdiutil", ["detach", mountPoint])
+            throw UpdateError.shell("copied bundle failed signature verification (\(verify.stderr)); keeping the current install")
+        }
+        // Relaunch AFTER this instance exits: the old app must take its daemon
+        // down first, or the new instance's daemon loses the socket-bind race
+        // against the still-running old one.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            _ = try? Process.run(URL(fileURLWithPath: "/usr/bin/open"), arguments: ["-n", dst])
+        }
         NSApp.terminate(nil)
     }
 
@@ -222,7 +285,7 @@ public final class UpdateManager: ObservableObject {
         }
         state = .nightlyRunning
         let script = "\(repo)/packaging/update_nightly.sh"
-        let r = Self.run("/bin/bash", [script])
+        let r = await Self.run("/bin/bash", [script])
         if r.status == 0 {
             state = .upToDate("nightly build installed — the app relaunched itself")
         } else {
@@ -260,22 +323,37 @@ public final class UpdateManager: ObservableObject {
 
     enum UpdateError: Error { case shell(String) }
 
+    /// Drain a pipe fully on a side thread. Reading AFTER waitUntilExit()
+    /// deadlocks once a pipe's 64KB buffer fills, so both pipes must be
+    /// drained concurrently while the child runs.
+    nonisolated private static func drainToEnd(_ handle: FileHandle) async -> String {
+        await Task.detached {
+            String(decoding: handle.readDataToEndOfFile(), as: UTF8.self)
+        }.value
+    }
+
+    /// Run a short helper binary off the main thread: hdiutil/ditto/git can
+    /// take tens of seconds and the UI must not freeze through them.
     @discardableResult
-    nonisolated static func run(_ bin: String, _ args: [String]) -> (status: Int32, stdout: String, stderr: String) {
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: bin)
-        p.arguments = args
-        let out = Pipe(), err = Pipe()
-        p.standardOutput = out
-        p.standardError = err
-        do {
-            try p.run()
-            p.waitUntilExit()
-        } catch {
-            return (-1, "", "\(error.localizedDescription)")
-        }
-        return (p.terminationStatus,
-                String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self),
-                String(decoding: err.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self))
+    nonisolated private static func run(_ bin: String, _ args: [String]) async -> (status: Int32, stdout: String, stderr: String) {
+        let bin = bin
+        let args = args
+        return await Task.detached {
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: bin)
+            p.arguments = args
+            let out = Pipe(), err = Pipe()
+            p.standardOutput = out
+            p.standardError = err
+            do {
+                try p.run()
+            } catch {
+                return (-1, "", "\(error.localizedDescription)")
+            }
+            async let stdout = drainToEnd(out.fileHandleForReading)
+            async let stderr = drainToEnd(err.fileHandleForReading)
+            p.waitUntilExit() // bounded: pipes are drained concurrently
+            return (p.terminationStatus, await stdout, await stderr)
+        }.value
     }
 }

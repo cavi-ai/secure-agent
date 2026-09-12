@@ -16,6 +16,9 @@ public protocol DaemonClientProtocol: Sendable {
     func fetchStatus() async throws -> StatusResponse
     func fetchFlags(limit: Int) async throws -> [FlagModel]
     func fetchIncidents(limit: Int) async throws -> [IncidentReportModel]
+    func fetchIncidentMarkdown(id: String) async throws -> String
+    func fetchEvents(limit: Int) async throws -> [EventModel]
+    func fetchEventsFor(pid: Int32, limit: Int) async throws -> [EventModel]
     func fetchGuardRules() async throws -> [GuardRuleModel]
     func fetchGuardPending() async throws -> [GuardPending]
     func resolveGuard(_ req: GuardResolveRequest) async throws
@@ -25,6 +28,27 @@ public protocol DaemonClientProtocol: Sendable {
     func fetchAdvisorDiscover() async throws -> AdvisorDiscovery
     func fetchRollup(hours: Int) async throws -> [RollupPointModel]
     func fetchAudit(limit: Int) async throws -> [AuditEntryModel]
+    /// POST /allowlist — approve one host for one agent (stops flagging the
+    /// pair; audited daemon-side as "allowlist-add").
+    /// POST /advisor/retriage — re-run the advisor on an existing flag.
+    /// Idempotent server-side (30s cooldown per flag); queued=false means
+    /// "already in flight or recent" and is treated as success.
+    /// POST /flags/acknowledge — mark a flag acted-upon (idempotent).
+    func acknowledgeFlag(id: String) async throws
+    func retriageFlag(id: String) async throws
+    func allowlistAdd(agent: String, host: String) async throws
+    /// POST /mute — suppress one rule+host pair (noise control; monitoring
+    /// of the host continues).
+    func muteAdd(rule: String, host: String) async throws
+    /// GET /mute — persisted dispositions (the "ignore" ledger).
+    func fetchMutes() async throws -> [(rule: String, host: String)]
+    /// DELETE /mute — remove one disposition.
+    func muteRemove(rule: String, host: String) async throws
+    /// POST /guard/path-allow — allow ONE path (and descendants) for one
+    /// agent under one rule, without widening the rule itself.
+    func guardPathAllowAdd(agent: String, ruleID: String, path: String) async throws
+    func fetchGuardPathAllows() async throws -> [GuardPathAllowModel]
+    func deleteGuardPathAllow(agent: String, ruleID: String, path: String) async throws
     func streamEvents(onEvent: @escaping @Sendable (SSEFrame) -> Void) async throws
 }
 
@@ -34,9 +58,12 @@ public final class DaemonClient: Sendable {
     public let socketPath: String
 
     /// Every socket op (connect, write, read) is bounded by this. The daemon
-    /// is local; if it hasn't answered in 3s it is wedged, and the UI must
-    /// degrade instead of parking a cooperative-pool thread forever.
-    public static let ioTimeoutSeconds: Int = 3
+    /// is local, but /status joins last-activity for every live pid and
+    /// measured 2–4s with ~400 tracked processes — a 3s timeout made the
+    /// healthy-but-slow daemon flap to "Disconnected" every poll. 10s
+    /// tolerates the slow join; a genuinely wedged daemon still fails fast
+    /// enough that the next poll retires it.
+    public static let ioTimeoutSeconds: Int = 10
 
     public init(socketPath: String? = nil) {
         if let path = socketPath {
@@ -57,6 +84,13 @@ public final class DaemonClient: Sendable {
 
     public func fetchEvents(limit: Int = 50) async throws -> [EventModel] {
         try await getDecodable("/events?limit=\(limit)")
+    }
+
+    /// Per-process transcript: events attributed to one pid. The daemon
+    /// filters server-side (/events?pid=), so this stays cheap even for
+    /// chatty processes.
+    public func fetchEventsFor(pid: Int32, limit: Int = 300) async throws -> [EventModel] {
+        try await getDecodable("/events?pid=\(pid)&limit=\(limit)")
     }
 
     public func fetchIncidents(limit: Int = 20) async throws -> [IncidentReportModel] {
@@ -134,7 +168,62 @@ public final class DaemonClient: Sendable {
 
     /// Policy-change audit rows (digest counts allowlist approvals).
     public func fetchAudit(limit: Int = 50) async throws -> [AuditEntryModel] {
-        try await getDecodable("/audit?limit=\(limit)")
+        try await getDecodable("/audit?limit=\(limit))")
+    }
+
+    public func acknowledgeFlag(id: String) async throws {
+        let body = try JSONSerialization.data(withJSONObject: ["flag_id": id])
+        _ = try await request(method: "POST", path: "/flags/acknowledge", body: body)
+    }
+
+    public func retriageFlag(id: String) async throws {
+        let body = try JSONSerialization.data(withJSONObject: ["flag_id": id])
+        _ = try await request(method: "POST", path: "/advisor/retriage", body: body)
+    }
+
+    public func allowlistAdd(agent: String, host: String) async throws {
+        try await postJSON("/allowlist", payload: ["agent": agent, "host": host])
+    }
+
+    public func guardPathAllowAdd(agent: String, ruleID: String, path: String) async throws {
+        let body = try JSONSerialization.data(withJSONObject: [
+            "agent": agent, "rule_id": ruleID, "path": path,
+        ])
+        _ = try await request(method: "POST", path: "/guard/path-allow", body: body)
+    }
+
+    public func fetchGuardPathAllows() async throws -> [GuardPathAllowModel] {
+        try await getDecodable("/guard/path-allow")
+    }
+
+    public func deleteGuardPathAllow(agent: String, ruleID: String, path: String) async throws {
+        let pathQ = "/guard/path-allow?agent=\(Self.urlQueryEscape(agent))&rule_id=\(Self.urlQueryEscape(ruleID))&path=\(Self.urlQueryEscape(path))"
+        _ = try await request(method: "DELETE", path: pathQ)
+    }
+
+    public func fetchMutes() async throws -> [(rule: String, host: String)] {
+        let data = try await request(method: "GET", path: "/mute")
+        guard let arr = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return [] }
+        return arr.compactMap { d in
+            guard let rule = d["rule"] as? String, let host = d["host"] as? String else { return nil }
+            return (rule, host)
+        }
+    }
+
+    public func muteRemove(rule: String, host: String) async throws {
+        let q = "?rule=\(Self.urlQueryEscape(rule))&host=\(Self.urlQueryEscape(host))"
+        _ = try await request(method: "DELETE", path: "/mute\(q)")
+    }
+
+    public func muteAdd(rule: String, host: String) async throws {
+        try await postJSON("/mute", payload: ["rule": rule, "host": host])
+    }
+
+    /// Shared POST-with-dict helper for the small disposition endpoints;
+    /// both endpoints answer {"status":"ok",...} on success.
+    private func postJSON(_ path: String, payload: [String: String]) async throws {
+        let body = try JSONSerialization.data(withJSONObject: payload)
+        _ = try await request(method: "POST", path: path, body: body)
     }
 
     public func deleteGuardRule(agent: String, ruleID: String) async throws {

@@ -42,7 +42,8 @@ func (s *chatStub) handler(t *testing.T) http.HandlerFunc {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		resp := chatResponse{Choices: []struct {
-			Message chatMessage `json:"message"`
+			Message      chatMessage `json:"message"`
+			FinishReason string      `json:"finish_reason"`
 		}{{Message: chatMessage{Role: "assistant", Content: content}}}}
 		json.NewEncoder(w).Encode(resp)
 	}
@@ -366,5 +367,37 @@ func TestHostAssessmentStored(t *testing.T) {
 	stub.mu.Unlock()
 	if !strings.Contains(body, "registry.npmjs.org") || !strings.Contains(body, "cursor") {
 		t.Fatal("host prompt must carry agent + host")
+	}
+}
+
+
+func TestParseVerdictExtractsJSONFromProse(t *testing.T) {
+	prose := "The evidence suggests the agent accessed a legitimate developer endpoint. Based on the pattern, this looks like normal usage. {\n  \"assessment\": \"benign\",\n  \"confidence\": 0.7,\n  \"rationale\": \"Matches ordinary development workflow against a known host.\",\n  \"suggested_action\": \"You should allow the host going forward.\"\n}"
+	v, err := parseVerdict(prose)
+	if err != nil {
+		t.Fatalf("prose-wrapped JSON must parse: %v", err)
+	}
+	if v.Assessment != "benign" {
+		t.Fatalf("assessment = %q", v.Assessment)
+	}
+	// The free-form phrasing must normalize to an executable verb.
+	if v.SuggestedAction != "allow-host" {
+		t.Fatalf("suggested_action = %q; want allow-host", v.SuggestedAction)
+	}
+}
+
+func TestNormalizeActionVerbs(t *testing.T) {
+	cases := map[string]string{
+		"rotate the leaked credentials":  "rotate-credentials",
+		"kill the agent immediately":     "kill-agent",
+		"allow the connection to the endpoint": "allow-host",
+		"mute this rule for the host":    "mute-rule",
+		"":                               "",
+		"teleport the llama":             "",
+	}
+	for in, want := range cases {
+		if got := normalizeAction(in); got != want {
+			t.Errorf("normalizeAction(%q) = %q; want %q", in, got, want)
+		}
 	}
 }

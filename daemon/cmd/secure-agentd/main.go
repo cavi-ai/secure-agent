@@ -16,6 +16,7 @@ import (
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/agents"
 	"github.com/cavi-ai/secure-agent/daemon/internal/api"
+	"github.com/cavi-ai/secure-agent/daemon/internal/advisor"
 	"github.com/cavi-ai/secure-agent/daemon/internal/bus"
 	"github.com/cavi-ai/secure-agent/daemon/internal/collect"
 	"github.com/cavi-ai/secure-agent/daemon/internal/config"
@@ -23,6 +24,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/firewall"
 	"github.com/cavi-ai/secure-agent/daemon/internal/fleet"
 	"github.com/cavi-ai/secure-agent/daemon/internal/guard"
+	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/proxy"
 	"github.com/cavi-ai/secure-agent/daemon/internal/sensitive"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
@@ -41,10 +43,31 @@ func (k *realKiller) Kill(pid int32) error {
 
 func main() {
 	configPath := flag.String("config", "", "path to config.yaml overlay")
+	esCollector := flag.Bool("es-collector", false,
+		"run ONLY the ES collector: spawn eslogger and write its output to the spool (/var/db/secure-agent/es-spool.jsonl). Used by the root LaunchDaemon so the FDA grant already held by THIS binary covers the ES client — no separate drag step.")
 	flag.Parse()
+
+	// The privileged ES-collector mode reuses THIS binary (which the operator
+	// already granted Full Disk Access in Settings) so the Endpoint Security
+	// client is created by a process macOS already trusts — that's the whole
+	// point of the "one FDA grant covers everything" UX.
+	if *esCollector {
+		if err := runESCollector(); err != nil {
+			log.Fatalf("es-collector: %v", err)
+		}
+		return
+	}
 
 	log.Println("starting secure-agentd daemon...")
 
+	configPathUsed := *configPath
+	if configPathUsed == "" {
+		if home, err := os.UserHomeDir(); err == nil {
+			if _, err := os.Stat(filepath.Join(home, ".config", "secure-agent", "config.yaml")); err == nil {
+				configPathUsed = filepath.Join(home, ".config", "secure-agent", "config.yaml")
+			}
+		}
+	}
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		log.Fatalf("failed to load config: %v", err)
@@ -93,11 +116,20 @@ func main() {
 
 	// Local triage advisor (opt-in): flags/incidents are offered to it from
 	// the drain loop; it never touches the enforcement path.
-	advisorStk := setupAdvisor(cfg, st)
+	advisorStk := &advisorStackHolder{}
+	advisorStk.Store(setupAdvisor(cfg, st))
+
+	// Hot-reload: the menubar edits config.yaml on every advisor/settings
+	// change; the daemon must NOT require a relaunch. Watch the file and
+	// swap the advisor stack live when it changes (disable/enable/model
+	// switch apply within a poll cycle; guard modes read per-request already).
+	if configPathUsed != "" {
+		go watchAdvisorConfig(ctx, configPathUsed, st, advisorStk)
+	}
 
 	// Drain bus and correlate/persist (drainDone closes once every delivered
 	// event has been persisted — shutdown waits for it).
-	drainDone := startDrainLoop(b.Subscribe(), st, correlator, fleetPub, advisorStk.Sub)
+	drainDone := startDrainLoop(b.Subscribe(), st, correlator, fleetPub, func() *advisor.Subscriber { return advisorStk.Load().Sub })
 
 	// Periodic process tagger refresh (1s)
 	go func() {
@@ -137,11 +169,16 @@ func main() {
 	// Advisor pre-assessment of suggestion-threshold hosts: when an endpoint
 	// crosses into suggestion territory, the advisor has its legitimacy
 	// verdict ready before the operator opens the console.
-	if advisorStk.Sub != nil {
-		correlator.SetOnUninspected(func(agent, host string) {
-			advisorStk.Sub.EnqueueHost(agent, host)
-		})
-	}
+	// Register the host-assessment hook unconditionally, but resolve the
+	// subscriber per call: config hot-reload swaps (or disables) the stack,
+	// and a callback captured when the advisor was enabled must NEVER call
+	// into a now-nil subscriber after a disable (the panic that took the
+	// daemon down during the hot-reload smoke).
+	correlator.SetOnUninspected(func(agent, host string) {
+		if sub := advisorStk.Load().Sub; sub != nil {
+			sub.EnqueueHost(agent, host)
+		}
+	})
 
 	var proxyServer *proxy.ProxyServer
 	if cfg.ProxyEnabled {
@@ -194,6 +231,18 @@ func main() {
 	apiServer.SetGuard(guardBroker)
 	apiServer.SetAllowlist(correlator, allowlistStore)
 	apiServer.SetMute(correlator, muteStore)
+	// Re-triage: look up the stored flag, enqueue through the CURRENT stack
+	// (the holder re-resolves after every config swap). Enqueue is
+	// idempotent advisor-side (cooldown), so hammering the endpoint is safe.
+	apiServer.SetRetriage(api.RetriageFuncs{
+		LookupFlag: func(id string) (model.Flag, bool) { return st.GetFlag(id) },
+		Enqueue: func(fl model.Flag) bool {
+			if sub := advisorStk.Load().Sub; sub != nil {
+				return sub.RetriageFlag(fl)
+			}
+			return false
+		},
+	})
 	apiServer.SetFleetSink(fleetPub)
 	// SSE live feed: each console gets its own bus subscription; unsubscribes
 	// when the connection closes.
@@ -225,16 +274,30 @@ func main() {
 		})
 	}
 
-	if collect.ESLoggerAvailable() {
+	// File-activity telemetry, in order of preference:
+	//  1. Spool tail: the privileged ES collector (root LaunchDaemon) writes
+	//     eslogger output to /var/db/secure-agent/es-spool.jsonl; we tail it.
+	//     This is the sanctioned architecture — macOS permits ES clients only
+	//     as root, and this daemon deliberately runs unprivileged.
+	//  2. Direct eslogger child: only works when this daemon runs as root
+	//     (dev / explicit-sudo runs); on a user daemon it fails NOT_PRIVILEGED
+	//     permanently on the first try.
+	//  3. Neither: file telemetry is degraded, not crash-looped. The
+	//     transcript scanner still covers the hook activity log.
+	switch {
+	case collect.SpoolAvailable():
+		go sup.Run(ctx, "eslogger", func(c context.Context) error {
+			t := collect.NewSpoolTailer(b)
+			return t.Run(c)
+		})
+		log.Printf("file telemetry: tailing privileged ES collector spool")
+	case os.Geteuid() == 0 && collect.ESLoggerAvailable():
 		go sup.Run(ctx, "eslogger", func(c context.Context) error {
 			es := collect.NewESLogger(b)
 			return es.Run(c)
 		})
-	} else {
-		// Non-macOS (or eslogger not installed): file-activity telemetry is
-		// degraded, not crash-looped. The transcript scanner still covers the
-		// hook activity log, so guard/plugin signals keep flowing.
-		log.Printf("eslogger unavailable on this platform; Endpoint Security telemetry disabled (transcript + network signals still active)")
+	default:
+		log.Printf("file telemetry unavailable: ES requires a privileged collector (install it from Settings); transcript + network signals still active")
 	}
 
 	go sup.Run(ctx, "netsampler", func(c context.Context) error {
@@ -248,21 +311,21 @@ func main() {
 		return ts.Run(c)
 	})
 
-	if advisorStk.Sub != nil {
+	if advisorStk.Load().Sub != nil {
 		go sup.Run(ctx, "advisor", func(c context.Context) error {
-			return advisorStk.Sub.Run(c)
+			return advisorStk.Load().Sub.Run(c)
 		})
 	}
-	if advisorStk.Managed != nil {
+	if advisorStk.Load().Managed != nil {
 		// The managed model server as a supervised collector: restart on
 		// crash like any other, and kill it on shutdown so it never outlives
 		// the daemon (advisor verdicts die with the app, by design).
 		go sup.Run(ctx, "advisor-model", func(c context.Context) error {
 			done := make(chan error, 1)
-			go func() { done <- advisorStk.Managed.Wait() }()
+			go func() { done <- advisorStk.Load().Managed.Wait() }()
 			select {
 			case <-c.Done():
-				_ = advisorStk.Managed.Process.Kill()
+				_ = advisorStk.Load().Managed.Process.Kill()
 				return nil
 			case err := <-done:
 				return err

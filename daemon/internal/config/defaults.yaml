@@ -14,13 +14,33 @@ keychain_markers:
   - ".keychain-db"
   - "login.keychain"
 agents:
-  - { name: claude, match: ["claude"] }
-  - { name: cursor, match: ["Cursor Helper", "cursor"] }
-  - { name: codex,  match: ["codex"] }
+  - { name: claude,      match: ["claude"] }
+  - { name: cursor,      match: ["Cursor Helper", "cursor"] }
+  - { name: codex,       match: ["codex"] }
+  - { name: opencode,    match: ["opencode", "OpenCode Helper"] }
+  - { name: antigravity, match: ["antigravity", "Antigravity Helper"] }
+  - { name: windsurf,    match: ["windsurf"] }
+  - { name: aider,       match: ["aider"] }
+  - { name: gemini,      match: ["gemini-cli", "gemini"] }
+  - { name: codeium,     match: ["codeium"] }
+  - { name: copilot,     match: ["copilot"] }
+  # Local model infrastructure: tracked (killable, monitored) but their
+  # loopback traffic is never flagged — they're what the advisor talks to.
+  - { name: ollama,      match: ["ollama", "llama-server", "llama.cpp"] }
+  - { name: lm-studio,   match: ["lm studio", "lmstudio"] }
 vendor_allowlist:
-  claude: ["anthropic.com", "claude.ai"]
-  cursor: ["cursor.sh", "cursor.com"]
-  codex:  ["openai.com", "api.openai.com"]
+  claude:      ["anthropic.com", "claude.ai"]
+  cursor:      ["cursor.sh", "cursor.com"]
+  codex:       ["openai.com", "api.openai.com"]
+  opencode:    ["opencode.ai"]
+  antigravity: ["anthropic.com"]
+  windsurf:    ["codeium.com"]
+  aider:       ["aider.chat"]
+  gemini:      ["googleapis.com", "generativelanguage.googleapis.com"]
+  codeium:     ["codeium.com"]
+  copilot:     ["githubcopilot.com", "copilot-proxy.githubusercontent.com"]
+  ollama:      ["ollama.com", "ollama.ai"]
+  lm-studio:   ["lmstudio.ai"]
 net_sample_interval_ms: 2000
 socket_path: "~/.config/secure-agent/daemon.sock"
 db_path: "~/.local/state/secure-agent/events.db"

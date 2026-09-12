@@ -2,14 +2,17 @@ package collect
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/bus"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
+	"github.com/cavi-ai/secure-agent/daemon/internal/supervise"
 )
 
 type ESLogger struct {
@@ -135,13 +138,21 @@ func ParseESLine(line []byte) (event.Event, bool) {
 
 func (es *ESLogger) Run(ctx context.Context) error {
 	cmd := exec.CommandContext(ctx, "eslogger", "open", "exec", "unlink", "rename", "tcc_modify", "--format", "json")
+	// eslogger writes its own diagnostics ("Failed to create ES client: Not
+	// privileged…") to stderr — capture so the supervisor's health record
+	// carries the actionable line, not just "exit status 1".
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return fmt.Errorf("eslogger stdout pipe: %w", err)
 	}
 
+	start := time.Now()
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("failed to start eslogger: %w", err)
+		// Missing binary / exec failure is deterministic — no retry helps.
+		return supervise.Permanent(fmt.Errorf("failed to start eslogger: %w", err))
 	}
 
 	scanner := bufio.NewScanner(stdout)
@@ -162,5 +173,22 @@ func (es *ESLogger) Run(ctx context.Context) error {
 		return fmt.Errorf("eslogger scanner error: %w", err)
 	}
 
-	return cmd.Wait()
+	waitErr := cmd.Wait()
+	// A fast exit (eslogger's ES-client failures happen in well under a
+	// second) is deterministic — never a retry. Distinguish the two known
+	// causes so the operator gets the fix that actually works:
+	//   NOT_PRIVILEGED: eslogger needs a ROOT ES client. FDA does NOT lift
+	//     this; the sanctioned architecture is a root LaunchDaemon running
+	//     the ES collector (a future packaging step). Say so plainly.
+	//   other fast exits: entitlement/install problems; surface stderr.
+	if waitErr != nil && time.Since(start) < 2*time.Second {
+		msg := strings.TrimSpace(stderr.String())
+		if strings.Contains(msg, "NOT_PRIVILEGED") {
+			return supervise.Permanent(fmt.Errorf(
+				"eslogger needs a root Endpoint Security client (FDA alone does not grant this — macOS requires the ES client to run as root); file telemetry is disabled, other collectors unaffected. A privileged ES collector helper ships with a future release."))
+		}
+		return supervise.Permanent(fmt.Errorf("eslogger exited immediately: %w (stderr: %s)",
+			waitErr, msg))
+	}
+	return waitErr
 }

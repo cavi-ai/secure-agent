@@ -1,13 +1,13 @@
 package store
 
 import (
+	"strings"
 	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
@@ -30,6 +30,11 @@ type Store struct {
 	db          *sql.DB
 	jsonlFile   *os.File
 	insertCount uint64
+	// lastSeen[pid] = RFC3339Nano ts of the most recent event for that pid,
+	// maintained on insert so the /status agents join is O(pids) map lookups
+	// instead of a MAX(ts) GROUP BY scan over the events table (measured
+	// 2–4s at ~400 live pids — past the UI's 3s socket timeout).
+	lastSeen map[int32]string
 }
 
 // AuditEntry is one durable record of a policy/control change (a rule promoted
@@ -123,6 +128,17 @@ func Open(dbPath, jsonlPath string) (*Store, error) {
 			created_at TEXT,
 			PRIMARY KEY (agent, rule_id)
 		);`,
+		// Per-path guard exceptions: exact paths (and their descendants) one
+		// agent+rule may always access, WITHOUT widening to the whole rule.
+		// The Little-Snitch per-path model: trust the specific file, not the
+		// class. PRIMARY KEY includes the path so revocation is exact.
+		`CREATE TABLE IF NOT EXISTS guard_path_allows (
+			agent TEXT NOT NULL,
+			rule_id TEXT NOT NULL,
+			path TEXT NOT NULL,
+			created_at TEXT,
+			PRIMARY KEY (agent, rule_id, path)
+		);`,
 		// Hourly rollups: pre-aggregated counters so trend views (24h/7d
 		// charts, advisor week-over-week context) are O(buckets), not
 		// O(events). bucket is the UTC hour ("2006-01-02T15").
@@ -171,6 +187,24 @@ func Open(dbPath, jsonlPath string) (*Store, error) {
 			}
 			log.Printf("store: migrated %s: added session_id column", table)
 		}
+	}
+	// Flags gain an acknowledged marker: when the operator acts on a flag
+	// (applies any disposition), the flag stops counting as critical and
+	// dims in the UI — "acted upon" is a first-class state, not an endless
+	// red row. Same PRAGMA-checked migration pattern as session_id.
+	var ackN int
+	if err := db.QueryRow(
+		`SELECT COUNT(*) FROM pragma_table_info('flags') WHERE name='acknowledged'`,
+	).Scan(&ackN); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to inspect flags schema: %w", err)
+	}
+	if ackN == 0 {
+		if _, err := db.Exec(`ALTER TABLE flags ADD COLUMN acknowledged TEXT`); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("failed to migrate flags.acknowledged: %w", err)
+		}
+		log.Printf("store: migrated flags: added acknowledged column")
 	}
 
 	var jsonl *os.File
@@ -246,6 +280,18 @@ func (s *Store) PutEvent(e event.Event) {
 		s.bumpRollupLocked("event:"+e.Kind.String(), e.TS)
 	}
 
+	// In-memory last-seen: the /status agents panel reads this per poll
+	// (every 1–5s across all pids). The SQL MAX(ts) GROUP BY equivalent
+	// measured 2–4s with ~400 live pids — past the client's 3s socket
+	// timeout, which flipped the whole UI to "Disconnected" every poll.
+	// One map assignment here replaces the scan entirely.
+	if s.lastSeen == nil {
+		s.lastSeen = map[int32]string{}
+	}
+	if cur, ok := s.lastSeen[e.PID]; !ok || tsStr > cur {
+		s.lastSeen[e.PID] = tsStr
+	}
+
 	s.insertCount++
 	if s.insertCount%1000 == 0 {
 		s.pruneEventsLocked(10000)
@@ -291,11 +337,130 @@ func (s *Store) RecentFlags(limit int) []model.Flag {
 	return s.QueryFlags(FlagFilter{Limit: limit})
 }
 
+// GetFlag fetches one flag by ID (for the re-triage endpoint). Absent ID →
+// ok=false; the caller answers 404 rather than re-enqueueing a ghost.
+// AcknowledgeRuleHost marks every UNacknowledged flag of `rule` whose
+// evidence cites `host` as acted-upon. Called when the operator mutes a
+// rule+host pair: the mute suppresses future flags AND the existing ones
+// leave the critical list — otherwise "ignore" looks like it did nothing.
+// Idempotent; returns the number of flags newly acknowledged.
+func (s *Store) AcknowledgeRuleHost(rule, host string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rows, err := s.db.Query(
+		`SELECT id, evidence FROM flags WHERE rule = ? AND (acknowledged IS NULL OR acknowledged = '')`, rule)
+	if err != nil {
+		log.Printf("store: acknowledge-rule-host query error: %v", err)
+		return 0
+	}
+	defer rows.Close()
+	type pair struct{ id, ev string }
+	var candidates []pair
+	for rows.Next() {
+		var p pair
+		if err := rows.Scan(&p.id, &p.ev); err == nil {
+			candidates = append(candidates, p)
+		}
+	}
+	rows.Close()
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	n := 0
+	for _, c := range candidates {
+		if !evidenceCitesHost(c.ev, host) {
+			continue
+		}
+		if _, err := s.db.Exec(`UPDATE flags SET acknowledged = ? WHERE id = ?`, now, c.id); err == nil {
+			n++
+		}
+	}
+	return n
+}
+
+// evidenceCitesHost: the evidence JSON contains host as a connection
+// target ("connected to <host>[:port]"), localhost-alias aware.
+func evidenceCitesHost(evidenceJSON, host string) bool {
+	if host == "" {
+		return false
+	}
+	var lines []string
+	_ = json.Unmarshal([]byte(evidenceJSON), &lines)
+	want := strings.ToLower(host)
+	isLocal := want == "localhost" || want == "127.0.0.1" || want == "::1" || strings.HasPrefix(want, "127.")
+	for _, line := range lines {
+		idx := strings.Index(line, "connected to ")
+		if idx < 0 {
+			continue
+		}
+		rest := line[idx+len("connected to "):]
+		if at := strings.Index(rest, " at "); at >= 0 {
+			rest = rest[:at]
+		}
+		h := strings.TrimSuffix(rest, "") // host:port
+		if h == "" {
+			continue
+		}
+		// Strip port (IPv6-bracket aware).
+		if strings.HasPrefix(h, "[") {
+			if end := strings.Index(h, "]"); end > 0 {
+				h = h[1:end]
+			}
+		} else if i := strings.LastIndex(h, ":"); i > 0 && !strings.Contains(h[i:], "]") && !strings.Contains(h, "::") {
+			host2 := h[:i]
+			if !strings.Contains(host2, ":") {
+				h = host2
+			}
+		}
+		h = strings.ToLower(h)
+		if h == want {
+			return true
+		}
+		if isLocal && (h == "localhost" || h == "127.0.0.1" || h == "::1" || strings.HasPrefix(h, "127.")) {
+			return true
+		}
+	}
+	return false
+}
+
+// AcknowledgeFlag marks a flag acted-upon: it stops counting as critical
+// and renders dimmed. Idempotent (re-ack is a no-op success).
+func (s *Store) AcknowledgeFlag(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	res, err := s.db.Exec(
+		`UPDATE flags SET acknowledged = ? WHERE id = ?`,
+		time.Now().UTC().Format(time.RFC3339Nano), id)
+	if err != nil {
+		log.Printf("store: acknowledge flag error: %v", err)
+		return false
+	}
+	n, _ := res.RowsAffected()
+	return n > 0
+}
+
+func (s *Store) GetFlag(id string) (model.Flag, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	row := s.db.QueryRow(
+		`SELECT id, rule, severity, ts, pid, agent, session_id, evidence, acknowledged FROM flags WHERE id = ?`, id)
+	var fl model.Flag
+	var tsStr, evStr string
+	var sessionID sql.NullString
+	var ack sql.NullString
+	if err := row.Scan(&fl.ID, &fl.Rule, &fl.Severity, &tsStr, &fl.PID, &fl.Agent, &sessionID, &evStr, &ack); err != nil {
+		return model.Flag{}, false
+	}
+	fl.SessionID = sessionID.String
+	fl.Acknowledged = ack.String != ""
+	fl.TS, _ = time.Parse(time.RFC3339Nano, tsStr)
+	_ = json.Unmarshal([]byte(evStr), &fl.Evidence)
+	return fl, true
+}
+
 func (s *Store) QueryFlags(f FlagFilter) []model.Flag {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	q := `SELECT id, rule, severity, ts, pid, agent, session_id, evidence FROM flags WHERE 1=1`
+	q := `SELECT id, rule, severity, ts, pid, agent, session_id, evidence, acknowledged FROM flags WHERE 1=1`
 	var args []any
 	if f.Agent != "" {
 		q += " AND agent = ?"
@@ -331,9 +496,11 @@ func (s *Store) QueryFlags(f FlagFilter) []model.Flag {
 		var fl model.Flag
 		var tsStr, evStr string
 		var sessionID sql.NullString
-		if err := rows.Scan(&fl.ID, &fl.Rule, &fl.Severity, &tsStr, &fl.PID, &fl.Agent, &sessionID, &evStr); err == nil {
+		var ack sql.NullString
+		if err := rows.Scan(&fl.ID, &fl.Rule, &fl.Severity, &tsStr, &fl.PID, &fl.Agent, &sessionID, &evStr, &ack); err == nil {
 			fl.SessionID = sessionID.String
 			fl.TS, _ = time.Parse(time.RFC3339Nano, tsStr)
+			fl.Acknowledged = ack.String != ""
 			_ = json.Unmarshal([]byte(evStr), &fl.Evidence)
 			flags = append(flags, fl)
 		}
@@ -657,7 +824,12 @@ func (s *Store) CriticalFlagsMissingAdvisor(since time.Time, limit int) []model.
 
 // LastEventTimes returns the most recent event timestamp (RFC3339Nano, UTC)
 // per pid, for the given pids — the "last used" signal the agents panel uses
-// to tell stale trees from live ones.
+// to tell stale trees from live ones. Reads the in-memory map maintained by
+// PutEvent: O(pids) lookups, no table scan (the SQL MAX(ts) GROUP BY this
+// replaced measured 2–4s at ~400 live pids, past the UI's 3s socket timeout).
+// Events older than this daemon's lifetime are not included — last-seen is a
+// liveness signal, and a fresh daemon honestly reports "no activity seen yet"
+// until events flow again.
 func (s *Store) LastEventTimes(pids []int32) map[int32]string {
 	out := map[int32]string{}
 	if len(pids) == 0 {
@@ -665,26 +837,9 @@ func (s *Store) LastEventTimes(pids []int32) map[int32]string {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	placeholders := make([]string, len(pids))
-	args := make([]any, len(pids))
-	for i, p := range pids {
-		placeholders[i] = "?"
-		args[i] = p
-	}
-	rows, err := s.db.Query(
-		`SELECT pid, MAX(ts) FROM events WHERE pid IN (`+strings.Join(placeholders, ",")+`) GROUP BY pid`,
-		args...,
-	)
-	if err != nil {
-		log.Printf("store: last-event-times error: %v", err)
-		return out
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var pid int32
-		var ts string
-		if err := rows.Scan(&pid, &ts); err == nil {
-			out[pid] = ts
+	for _, p := range pids {
+		if ts, ok := s.lastSeen[p]; ok {
+			out[p] = ts
 		}
 	}
 	return out
@@ -775,6 +930,104 @@ type GuardRule struct {
 	Decision  string `json:"decision"` // "allow" | "deny"
 	Source    string `json:"source"`   // "prompt" | "onboarding"
 	CreatedAt string `json:"created_at"`
+}
+
+// GuardPathAllow is one operator-granted per-path exception: this exact
+// path (and its descendants) is allowed for one agent under one rule —
+// without widening the rule itself.
+type GuardPathAllow struct {
+	Agent     string `json:"agent"`
+	RuleID    string `json:"rule_id"`
+	Path      string `json:"path"`
+	CreatedAt string `json:"created_at"`
+}
+
+// PutGuardPathAllow records one per-path allow (idempotent upsert).
+func (s *Store) PutGuardPathAllow(g GuardPathAllow) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ts := time.Now().UTC().Format(time.RFC3339Nano)
+	_, err := s.db.Exec(
+		`INSERT INTO guard_path_allows (agent, rule_id, path, created_at)
+		 VALUES (?, ?, ?, ?)
+		 ON CONFLICT(agent, rule_id, path) DO UPDATE SET created_at=excluded.created_at`,
+		g.Agent, g.RuleID, g.Path, ts)
+	if err != nil {
+		log.Printf("store: put guard_path_allows error: %v", err)
+	}
+}
+
+// guardPathAllowed answers whether path is allowed for agent/ruleID:
+// exact match, or any ancestor-prefix match (an allow on ~/.ssh/config
+// covers ~/.ssh/config/sub too — descendants inherit, siblings don't).
+// Callers must hold s.mu.
+func (s *Store) guardPathAllowedLocked(agent, ruleID, path string) bool {
+	rows, err := s.db.Query(
+		`SELECT path FROM guard_path_allows WHERE agent = ? AND rule_id = ?`,
+		agent, ruleID,
+	)
+	if err != nil {
+		log.Printf("store: query guard_path_allows error: %v", err)
+		return false // fail closed: a read error is NOT an approval
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var allowed string
+		if err := rows.Scan(&allowed); err != nil {
+			continue
+		}
+		if path == allowed || (len(path) > len(allowed) && path[:len(allowed)] == allowed && path[len(allowed)] == '/') {
+			return true
+		}
+	}
+	return false
+}
+
+// GuardPathAllowed is the public check used by /guard/decision. Path is
+// cleaned so "a/b/" and "a//b" match their canonical form.
+func (s *Store) GuardPathAllowed(agent, ruleID, path string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.guardPathAllowedLocked(agent, ruleID, filepath.Clean(path))
+}
+
+// ListGuardPathAllows returns recent per-path allows, newest first.
+func (s *Store) ListGuardPathAllows(limit int) []GuardPathAllow {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rows, err := s.db.Query(
+		`SELECT agent, rule_id, path, created_at FROM guard_path_allows ORDER BY datetime(created_at) DESC LIMIT ?`,
+		normalizeLimit(limit),
+	)
+	if err != nil {
+		log.Printf("store: list guard_path_allows error: %v", err)
+		return nil
+	}
+	defer rows.Close()
+	out := []GuardPathAllow{}
+	for rows.Next() {
+		var g GuardPathAllow
+		if err := rows.Scan(&g.Agent, &g.RuleID, &g.Path, &g.CreatedAt); err == nil {
+			out = append(out, g)
+		}
+	}
+	return out
+}
+
+// DeleteGuardPathAllow revokes one exception; removing an absent one is a no-op.
+func (s *Store) DeleteGuardPathAllow(agent, ruleID, path string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	res, err := s.db.Exec(
+		`DELETE FROM guard_path_allows WHERE agent = ? AND rule_id = ? AND path = ?`,
+		agent, ruleID, path,
+	)
+	if err != nil {
+		log.Printf("store: delete guard_path_allows error: %v", err)
+		return false
+	}
+	n, _ := res.RowsAffected()
+	return n > 0
 }
 
 func (s *Store) PutGuardRule(g GuardRule) {
