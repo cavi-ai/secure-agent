@@ -189,13 +189,13 @@ struct ConsoleView: View {
             return ("shield.slash", .secondary, "Disconnected",
                     "Not monitoring — the daemon is unreachable", nil)
         }
-        let criticalFlags = state.flags.filter { $0.severity >= 3 }.count
+        let criticalFlags = state.flags.filter { $0.severity >= 3 && $0.acknowledged != true }.count
         if !state.incidents.isEmpty || criticalFlags > 0 {
             var parts: [String] = []
             // Prose-first: name what happened + what to do, not counts.
             // The top critical flag (advisor-ordered when triaged) IS the
             // action; the hero subtitle says it in one sentence.
-            let top = state.flags.first { $0.severity >= 3 }
+            let top = state.flags.first { $0.severity >= 3 && $0.acknowledged != true }
                 ?? state.incidents.first.map { inc in
                     FlagModel(id: inc.flagId, rule: inc.rule, severity: 3, ts: inc.timestamp,
                               pid: inc.pid, agent: inc.agent, evidence: [])
@@ -735,6 +735,8 @@ struct ConsoleView: View {
                         VStack(alignment: .leading, spacing: 1) {
                             Text(Self.flagRowTitle(flag.rule))
                                 .font(.system(size: 11, weight: .medium))
+                            Text(Self.flagRowTitle(flag.rule))
+                                .font(.system(size: 11, weight: .medium))
                             HStack(spacing: 5) {
                                 AgentIdentity.tile(flag.agent, size: 13, fontSize: 7)
                                 Text(flag.agent).font(.system(size: 9, weight: .medium)).foregroundStyle(.secondary)
@@ -749,7 +751,13 @@ struct ConsoleView: View {
                             // not "here's a hex dump".
                         }
                         Spacer()
-                        if flag.severity >= 3 {
+                        if flag.acknowledged == true {
+                            Text("DONE")
+                                .font(.system(size: 8, weight: .bold))
+                                .foregroundStyle(Color.ok)
+                                .padding(.horizontal, 5).padding(.vertical, 3)
+                                .background(Color.ok.opacity(0.14)).clipShape(Capsule())
+                        } else if flag.severity >= 3 {
                             Text("CRITICAL")
                                 .font(.system(size: 8, weight: .bold))
                                 .foregroundStyle(Color.bad)
@@ -761,6 +769,7 @@ struct ConsoleView: View {
                     }
                 }
                 .buttonStyle(.plain)
+                .opacity(flag.acknowledged == true ? 0.45 : 1.0)
             }
         }
         .sheet(item: $selectedFlag) { flag in

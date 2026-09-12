@@ -178,6 +178,28 @@ type RetriageFuncs struct {
 
 func (a *API) SetRetriage(r RetriageFuncs) { a.retriage = &r }
 
+// handleFlagAcknowledge marks one flag acted-upon (idempotent). Called by
+// the UI when a disposition is applied so the flag stops counting as
+// critical — the operator's action and the flag's state stay in sync.
+func (a *API) handleFlagAcknowledge(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	limitBody(w, r)
+	var req struct {
+		FlagID string `json:"flag_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.FlagID == "" {
+		http.Error(w, `Invalid payload: {"flag_id"}`, http.StatusBadRequest)
+		return
+	}
+	ok := a.store.AcknowledgeFlag(req.FlagID)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"status": "ok", "acknowledged": ok})
+}
+
+
 // handleAdvisorRetriage re-queues one flag for a fresh advisor verdict.
 // Idempotent by design: repeated requests within the advisor's cooldown are
 // no-ops that still answer ok — the client can hammer it without flooding
@@ -258,6 +280,7 @@ func (a *API) buildMux() *http.ServeMux {
 	mux.HandleFunc("/guard/path-allow", a.handleGuardPathAllow)
 	mux.HandleFunc("/mute", a.handleMute)
 	mux.HandleFunc("/advisor/retriage", a.handleAdvisorRetriage)
+	mux.HandleFunc("/flags/acknowledge", a.handleFlagAcknowledge)
 	mux.HandleFunc("/ui/open-fda", a.handleOpenFDA)
 	mux.HandleFunc("/stats/rollup", a.handleRollup)
 	mux.HandleFunc("/advisor/discover", a.handleAdvisorDiscover)

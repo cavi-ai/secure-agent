@@ -16,4 +16,8 @@ type Flag struct {
 	// Advisor carries the local advisor's triage verdict when one exists.
 	// Advisory only — never an enforcement input.
 	Advisor *AdvisorVerdict `json:"advisor,omitempty"`
+	// Acknowledged: the operator acted on this flag (applied a disposition).
+	// Acknowledged flags stop counting as critical and render dimmed —
+	// "acted upon" instead of an endless red row.
+	Acknowledged bool `json:"acknowledged,omitempty"`
 }

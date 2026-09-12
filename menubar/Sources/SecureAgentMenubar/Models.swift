@@ -233,16 +233,21 @@ public struct FlagModel: Codable, Identifiable, Sendable {
     /// Harness session that produced the flag — the evidence-chain link that
     /// survives PID reuse. Empty for OS-level signals.
     public let sessionId: String?
-    /// Local advisor triage verdict, when one exists. Advisory only.
+    /// Local advisor triage verdict when one exists. Advisory only.
     public let advisor: AdvisorVerdictModel?
+    /// True when the operator applied a disposition on this flag — it stops
+    /// counting as critical and renders dimmed instead of endlessly red.
+    public let acknowledged: Bool?
 
     enum CodingKeys: String, CodingKey {
         case id, rule, severity, ts, pid, agent, evidence, advisor
         case sessionId = "session_id"
+        case acknowledged
     }
 
     public init(id: String, rule: String, severity: Int, ts: String, pid: Int32, agent: String,
-                evidence: [String], sessionId: String? = nil, advisor: AdvisorVerdictModel? = nil) {
+                evidence: [String], sessionId: String? = nil, advisor: AdvisorVerdictModel? = nil,
+                acknowledged: Bool? = nil) {
         self.id = id
         self.rule = rule
         self.severity = severity
@@ -252,6 +257,7 @@ public struct FlagModel: Codable, Identifiable, Sendable {
         self.evidence = evidence
         self.sessionId = sessionId
         self.advisor = advisor
+        self.acknowledged = acknowledged
     }
 }
 

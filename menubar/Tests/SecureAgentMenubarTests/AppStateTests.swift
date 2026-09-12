@@ -23,6 +23,7 @@ final class StubDaemonClient: DaemonClientProtocol, @unchecked Sendable {
     func allowlistAdd(agent: String, host: String) async throws { }
     func guardPathAllowAdd(agent: String, ruleID: String, path: String) async throws { }
     func retriageFlag(id: String) async throws { }
+    func acknowledgeFlag(id: String) async throws { }
     func fetchGuardPathAllows() async throws -> [GuardPathAllowModel] { [] }
     func deleteGuardPathAllow(agent: String, ruleID: String, path: String) async throws { }
     func muteAdd(rule: String, host: String) async throws { }
