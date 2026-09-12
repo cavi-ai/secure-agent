@@ -789,6 +789,13 @@ public final class AppState: ObservableObject {
 
     public var uninspectedEgress: Int { status?.uninspectedEgress ?? 0 }
 
+    /// Flags that still need a decision: not acknowledged and not covered by
+    /// an incident row (the popover shows those as incident rows instead —
+    /// one problem, one row).
+    public var unactedFlags: [FlagModel] {
+        flags.filter { $0.acknowledged != true }
+    }
+
     /// Total resident memory across every tagged agent process — the header's
     /// glanceable "what do my agents cost" number. nil when the daemon
     /// supplied no RSS (older daemons).
