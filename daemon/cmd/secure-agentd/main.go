@@ -24,6 +24,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/firewall"
 	"github.com/cavi-ai/secure-agent/daemon/internal/fleet"
 	"github.com/cavi-ai/secure-agent/daemon/internal/guard"
+	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/proxy"
 	"github.com/cavi-ai/secure-agent/daemon/internal/sensitive"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
@@ -230,6 +231,18 @@ func main() {
 	apiServer.SetGuard(guardBroker)
 	apiServer.SetAllowlist(correlator, allowlistStore)
 	apiServer.SetMute(correlator, muteStore)
+	// Re-triage: look up the stored flag, enqueue through the CURRENT stack
+	// (the holder re-resolves after every config swap). Enqueue is
+	// idempotent advisor-side (cooldown), so hammering the endpoint is safe.
+	apiServer.SetRetriage(api.RetriageFuncs{
+		LookupFlag: func(id string) (model.Flag, bool) { return st.GetFlag(id) },
+		Enqueue: func(fl model.Flag) bool {
+			if sub := advisorStk.Load().Sub; sub != nil {
+				return sub.RetriageFlag(fl)
+			}
+			return false
+		},
+	})
 	apiServer.SetFleetSink(fleetPub)
 	// SSE live feed: each console gets its own bus subscription; unsubscribes
 	// when the connection closes.

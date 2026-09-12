@@ -205,6 +205,21 @@ struct FlagActionSheet: View {
                 .foregroundStyle(.secondary)
                 .kerning(0.5)
 
+            // Re-triage: re-run the advisor for a fresh verdict (idempotent
+            // server-side — 30s cooldown per flag; the stored verdict is
+            // overwritten on completion). Shown so flags triaged under the
+            // older free-form prompt can be upgraded to actionable ones.
+            actionRow(
+                icon: "arrow.triangle.2.circlepath", tint: Color.brand,
+                title: "Re-run the advisor",
+                subtitle: "Ask the local model to re-read this flag and produce a fresh recommendation. Safe to click repeatedly.",
+                pending: PendingAction(
+                    title: "Re-run the advisor?",
+                    message: "The local model re-reads this flag and replaces its recommendation. Takes a few seconds.",
+                    buttonLabel: "Re-run", destructive: false,
+                    fire: { try await state.uiClient.retriageFlag(id: flag.id) },
+                    doneLabel: "advisor re-running — the recommendation updates automatically")) {}
+
             // Advisor's recommendation leads — with an Apply button that
             // actually executes it. "There's an action" now means a button.
             if let rec = Self.mappedAction(flag.advisor?.suggestedAction,

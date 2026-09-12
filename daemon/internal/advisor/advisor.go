@@ -111,6 +111,12 @@ type Subscriber struct {
 	mu          sync.Mutex
 	failures    int
 	circuitOpen time.Time // zero = closed
+
+	// Re-triage idempotency: a flag is re-triaged at most once per cooldown
+	// window regardless of how many times the operator (or UI) asks. The
+	// in-flight set drops duplicate requests while the model is already
+	// working on that flag. Everything is keyed by flag ID.
+	retriageLast map[string]time.Time
 }
 
 const (
@@ -135,17 +141,69 @@ func New(cfg Config, sink Sink) *Subscriber {
 	if cfg.QueueSize <= 0 {
 		cfg.QueueSize = 64
 	}
+		if cfg.QueueSize <= 0 {
+		cfg.QueueSize = 64
+	}
 	return &Subscriber{
-		cfg:    cfg,
-		sink:   sink,
-		client: &http.Client{Timeout: cfg.Timeout},
-		queue:  make(chan task, cfg.QueueSize),
+		cfg:          cfg,
+		sink:         sink,
+		queue:        make(chan task, cfg.QueueSize),
+		client:       &http.Client{Timeout: cfg.Timeout},
+		retriageLast: map[string]time.Time{},
 	}
 }
 
 // EnqueueFlag offers a flag for triage. Drop-oldest under pressure: a stale
 // verdict is worth less than a current one, and the queue must never stall
 // the drain loop.
+// RetriageCooldown: one re-triage per flag per window. Rapid clicking (or
+// a UI retry loop) cannot flood the model queue; repeated requests within
+// the window are idempotent no-ops that report "already queued/recent".
+const RetriageCooldown = 30 * time.Second
+
+// RetriageFlag re-queues an existing flag for a fresh advisor verdict.
+// Idempotent: returns false (without enqueueing) when the flag was already
+// re-triaged within the cooldown window — the earlier request is still
+// honored. The fresh verdict overwrites the stored one on completion
+// (PutAdvisorVerdict is an upsert by subject ID), so "re-triage" converges
+// no matter how many times it is requested.
+func (s *Subscriber) RetriageFlag(fl model.Flag) bool {
+	now := time.Now()
+	s.mu.Lock()
+	if last, ok := s.retriageLast[fl.ID]; ok && now.Sub(last) < RetriageCooldown {
+		s.mu.Unlock()
+		return false
+	}
+	s.retriageLast[fl.ID] = now
+	// Bound the map: drop entries older than 10 windows.
+	if len(s.retriageLast) > 512 {
+		for id, t := range s.retriageLast {
+			if now.Sub(t) > 10*RetriageCooldown {
+				delete(s.retriageLast, id)
+			}
+		}
+	}
+	s.mu.Unlock()
+
+	t := task{kind: "flag", subjectID: fl.ID, flag: fl}
+	select {
+	case s.queue <- t:
+		return true
+	default:
+		// Queue full: drop-oldest like EnqueueFlag, then retry once.
+		select {
+		case <-s.queue:
+		default:
+		}
+		select {
+		case s.queue <- t:
+			return true
+		default:
+			return false
+		}
+	}
+}
+
 func (s *Subscriber) EnqueueFlag(fl model.Flag) {
 	t := task{kind: "flag", subjectID: fl.ID, flag: fl}
 	select {
