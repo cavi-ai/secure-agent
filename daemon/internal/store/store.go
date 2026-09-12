@@ -1,6 +1,7 @@
 package store
 
 import (
+	"strings"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -338,6 +339,88 @@ func (s *Store) RecentFlags(limit int) []model.Flag {
 
 // GetFlag fetches one flag by ID (for the re-triage endpoint). Absent ID →
 // ok=false; the caller answers 404 rather than re-enqueueing a ghost.
+// AcknowledgeRuleHost marks every UNacknowledged flag of `rule` whose
+// evidence cites `host` as acted-upon. Called when the operator mutes a
+// rule+host pair: the mute suppresses future flags AND the existing ones
+// leave the critical list — otherwise "ignore" looks like it did nothing.
+// Idempotent; returns the number of flags newly acknowledged.
+func (s *Store) AcknowledgeRuleHost(rule, host string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rows, err := s.db.Query(
+		`SELECT id, evidence FROM flags WHERE rule = ? AND (acknowledged IS NULL OR acknowledged = '')`, rule)
+	if err != nil {
+		log.Printf("store: acknowledge-rule-host query error: %v", err)
+		return 0
+	}
+	defer rows.Close()
+	type pair struct{ id, ev string }
+	var candidates []pair
+	for rows.Next() {
+		var p pair
+		if err := rows.Scan(&p.id, &p.ev); err == nil {
+			candidates = append(candidates, p)
+		}
+	}
+	rows.Close()
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	n := 0
+	for _, c := range candidates {
+		if !evidenceCitesHost(c.ev, host) {
+			continue
+		}
+		if _, err := s.db.Exec(`UPDATE flags SET acknowledged = ? WHERE id = ?`, now, c.id); err == nil {
+			n++
+		}
+	}
+	return n
+}
+
+// evidenceCitesHost: the evidence JSON contains host as a connection
+// target ("connected to <host>[:port]"), localhost-alias aware.
+func evidenceCitesHost(evidenceJSON, host string) bool {
+	if host == "" {
+		return false
+	}
+	var lines []string
+	_ = json.Unmarshal([]byte(evidenceJSON), &lines)
+	want := strings.ToLower(host)
+	isLocal := want == "localhost" || want == "127.0.0.1" || want == "::1" || strings.HasPrefix(want, "127.")
+	for _, line := range lines {
+		idx := strings.Index(line, "connected to ")
+		if idx < 0 {
+			continue
+		}
+		rest := line[idx+len("connected to "):]
+		if at := strings.Index(rest, " at "); at >= 0 {
+			rest = rest[:at]
+		}
+		h := strings.TrimSuffix(rest, "") // host:port
+		if h == "" {
+			continue
+		}
+		// Strip port (IPv6-bracket aware).
+		if strings.HasPrefix(h, "[") {
+			if end := strings.Index(h, "]"); end > 0 {
+				h = h[1:end]
+			}
+		} else if i := strings.LastIndex(h, ":"); i > 0 && !strings.Contains(h[i:], "]") && !strings.Contains(h, "::") {
+			host2 := h[:i]
+			if !strings.Contains(host2, ":") {
+				h = host2
+			}
+		}
+		h = strings.ToLower(h)
+		if h == want {
+			return true
+		}
+		if isLocal && (h == "localhost" || h == "127.0.0.1" || h == "::1" || strings.HasPrefix(h, "127.")) {
+			return true
+		}
+	}
+	return false
+}
+
 // AcknowledgeFlag marks a flag acted-upon: it stops counting as critical
 // and renders dimmed. Idempotent (re-ack is a no-op success).
 func (s *Store) AcknowledgeFlag(id string) bool {

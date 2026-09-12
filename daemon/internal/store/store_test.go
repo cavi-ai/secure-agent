@@ -387,3 +387,45 @@ func TestGuardPathAllows(t *testing.T) {
 		t.Fatal("empty path must never be allowed")
 	}
 }
+
+
+func TestAcknowledgeRuleHost(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(filepath.Join(dir, "e.db"), filepath.Join(dir, "e.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	// Two flags of the same rule, different hosts; one acknowledged already.
+	s.PutFlag(model.Flag{ID: "f1", Rule: "sensitive-read-then-connect", Severity: 3, PID: 7, Agent: "cursor",
+		Evidence: []string{"cursor (pid 7) read /a at 2026-09-11T12:00:00Z", "then connected to localhost:62381 at 2026-09-11T12:00:01Z"}})
+	s.PutFlag(model.Flag{ID: "f2", Rule: "sensitive-read-then-connect", Severity: 3, PID: 7, Agent: "cursor",
+		Evidence: []string{"then connected to api.example.com:443 at 2026-09-11T12:00:02Z"}})
+	s.PutFlag(model.Flag{ID: "f3", Rule: "sensitive-read-then-connect", Severity: 3, PID: 7, Agent: "cursor",
+		Evidence: []string{"then connected to 127.0.0.1:9999 at 2026-09-11T12:00:03Z"}})
+	s.PutFlag(model.Flag{ID: "f4", Rule: "proxy-secret-leak", Severity: 3, PID: 7, Agent: "cursor",
+		Evidence: []string{"then connected to localhost:1234 at 2026-09-11T12:00:04Z"}})
+
+	n := s.AcknowledgeRuleHost("sensitive-read-then-connect", "localhost")
+	// f1 (localhost) + f3 (127.0.0.1 — localhost alias) ack'd; f2 (other host) + f4 (other rule) untouched.
+	if n != 2 {
+		t.Fatalf("acknowledged %d flags; want 2", n)
+	}
+	got, _ := s.GetFlag("f1")
+	if !got.Acknowledged {
+		t.Fatal("f1 must be acknowledged")
+	}
+	got2, _ := s.GetFlag("f2")
+	if got2.Acknowledged {
+		t.Fatal("f2 (different host) must NOT be acknowledged")
+	}
+	got3, _ := s.GetFlag("f3")
+	if !got3.Acknowledged {
+		t.Fatal("f3 (127.0.0.1 alias of localhost) must be acknowledged")
+	}
+	// Idempotent: second run acknowledges nothing new.
+	if n2 := s.AcknowledgeRuleHost("sensitive-read-then-connect", "localhost"); n2 != 0 {
+		t.Fatalf("second pass acknowledged %d; want 0", n2)
+	}
+}
