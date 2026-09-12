@@ -146,7 +146,11 @@ func New(cfg Config, sink Sink) *Subscriber {
 		return nil
 	}
 	if cfg.Timeout <= 0 {
-		cfg.Timeout = 8 * time.Second
+		// Reasoning models (qwen3 et al) routinely take 20-40s for a
+		// triage call, and a cold model load adds 30-60s of first-request
+		// latency. 8s guaranteed an empty-verdict circuit-open loop on any
+		// local reasoning model.
+		cfg.Timeout = 60 * time.Second
 	}
 	if cfg.QueueSize <= 0 {
 		cfg.QueueSize = 64
@@ -189,12 +193,24 @@ func (s *Subscriber) RetriageFlag(fl model.Flag) bool {
 		return false
 	}
 	s.retriageLast[fl.ID] = now
-	// Bound the map: drop entries older than 10 windows.
+	// Bound the map: drop entries older than 10 windows, and hard-cap so a
+	// flood of unique flag IDs cannot grow it without bound (drop the oldest
+	// entries past the cap — the cooldown only needs recent history).
 	if len(s.retriageLast) > 512 {
 		for id, t := range s.retriageLast {
 			if now.Sub(t) > 10*RetriageCooldown {
 				delete(s.retriageLast, id)
 			}
+		}
+		for len(s.retriageLast) > 512 {
+			var oldestID string
+			var oldest time.Time
+			for id, t := range s.retriageLast {
+				if oldestID == "" || t.Before(oldest) {
+					oldestID, oldest = id, t
+				}
+			}
+			delete(s.retriageLast, oldestID)
 		}
 	}
 	s.mu.Unlock()

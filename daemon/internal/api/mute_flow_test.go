@@ -56,3 +56,50 @@ func TestMuteFlowAcknowledgesExistingFlags(t *testing.T) {
 func flagFor(id, rule, evidence string) model.Flag {
 	return model.Flag{ID: id, Rule: rule, Severity: 3, PID: 7, Agent: "cursor", Evidence: []string{evidence}}
 }
+
+
+// Acknowledge is idempotent and validated at the API layer: a second ack
+// returns ok with acknowledged=true→false semantics preserved (already-acked
+// flags answer acknowledged=false because RowsAffected=0 — the client treats
+// both as success), and malformed IDs are rejected before touching the store.
+func TestFlagAcknowledgeEndpoint(t *testing.T) {
+	dir := t.TempDir()
+	st, err := store.Open(dir+"/e.db", dir+"/e.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	st.PutFlag(flagFor("valid-id.1", "sensitive-read-then-connect", "then connected to localhost:80 at T"))
+
+	a := New(dir+"/d.sock", st, nil, nil)
+	h := a.buildMux()
+
+	ack := func(id string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("POST", "/flags/acknowledge",
+			strings.NewReader(`{"flag_id":"`+id+`"}`))
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		return w
+	}
+
+	if w := ack("valid-id.1"); w.Code != 200 {
+		t.Fatalf("ack: %d %s", w.Code, w.Body.String())
+	}
+	got, ok := st.GetFlag("valid-id.1")
+	if !ok || !got.Acknowledged {
+		t.Fatal("flag must be acknowledged after first ack")
+	}
+	// Idempotent: second ack succeeds (200) — RowsAffected=0 → acknowledged=false
+	// in the response, but the DB state is unchanged and the call is not an error.
+	if w := ack("valid-id.1"); w.Code != 200 {
+		t.Fatalf("second ack must be a 200 no-op: %d", w.Code)
+	}
+	// Malformed ID rejected before touching the store.
+	if w := ack("../evil"); w.Code != 400 {
+		t.Fatalf("malformed id must 400; got %d", w.Code)
+	}
+	// Unknown id: 200 with acknowledged=false (no state change, idempotent).
+	if w := ack("does-not-exist"); w.Code != 200 {
+		t.Fatalf("unknown id ack should 200; got %d", w.Code)
+	}
+}
