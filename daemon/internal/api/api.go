@@ -97,6 +97,7 @@ type API struct {
 	correlator *correlate.Correlator
 	allowlist  *correlate.AllowlistStore
 	mutes      *correlate.MuteStore
+	retriage   *RetriageFuncs
 	guardSeq   uint64
 
 	peerRole   *peers
@@ -167,6 +168,47 @@ func (a *API) SetAllowlist(cr *correlate.Correlator, al *correlate.AllowlistStor
 	a.allowlist = al
 }
 
+// retriageFuncs look up a flag by ID and enqueue it for a fresh advisor
+// verdict. The enqueue is idempotent (advisor-side cooldown); queued=false
+// means "already in flight or recent" — the UI treats that as success.
+type RetriageFuncs struct {
+	LookupFlag func(flagID string) (model.Flag, bool)
+	Enqueue    func(model.Flag) bool
+}
+
+func (a *API) SetRetriage(r RetriageFuncs) { a.retriage = &r }
+
+// handleAdvisorRetriage re-queues one flag for a fresh advisor verdict.
+// Idempotent by design: repeated requests within the advisor's cooldown are
+// no-ops that still answer ok — the client can hammer it without flooding
+// the model queue.
+func (a *API) handleAdvisorRetriage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if a.retriage == nil || a.retriage.LookupFlag == nil || a.retriage.Enqueue == nil {
+		http.Error(w, "advisor not enabled", http.StatusServiceUnavailable)
+		return
+	}
+	limitBody(w, r)
+	var req struct {
+		FlagID string `json:"flag_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.FlagID == "" {
+		http.Error(w, `Invalid payload: {"flag_id"}`, http.StatusBadRequest)
+		return
+	}
+	fl, ok := a.retriage.LookupFlag(req.FlagID)
+	if !ok {
+		http.Error(w, "flag not found", http.StatusNotFound)
+		return
+	}
+	queued := a.retriage.Enqueue(fl)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"status": "ok", "queued": queued})
+}
+
 // SetMute wires operator dispositions: (rule, host) pairs the operator said
 // "stop telling me about", persisted like the other override stores.
 func (a *API) SetMute(cr *correlate.Correlator, ms *correlate.MuteStore) {
@@ -215,6 +257,7 @@ func (a *API) buildMux() *http.ServeMux {
 	mux.HandleFunc("/allowlist", a.handleAllowlistAdd)
 	mux.HandleFunc("/guard/path-allow", a.handleGuardPathAllow)
 	mux.HandleFunc("/mute", a.handleMute)
+	mux.HandleFunc("/advisor/retriage", a.handleAdvisorRetriage)
 	mux.HandleFunc("/ui/open-fda", a.handleOpenFDA)
 	mux.HandleFunc("/stats/rollup", a.handleRollup)
 	mux.HandleFunc("/advisor/discover", a.handleAdvisorDiscover)

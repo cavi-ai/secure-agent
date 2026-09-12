@@ -318,6 +318,25 @@ func (s *Store) RecentFlags(limit int) []model.Flag {
 	return s.QueryFlags(FlagFilter{Limit: limit})
 }
 
+// GetFlag fetches one flag by ID (for the re-triage endpoint). Absent ID →
+// ok=false; the caller answers 404 rather than re-enqueueing a ghost.
+func (s *Store) GetFlag(id string) (model.Flag, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	row := s.db.QueryRow(
+		`SELECT id, rule, severity, ts, pid, agent, session_id, evidence FROM flags WHERE id = ?`, id)
+	var fl model.Flag
+	var tsStr, evStr string
+	var sessionID sql.NullString
+	if err := row.Scan(&fl.ID, &fl.Rule, &fl.Severity, &tsStr, &fl.PID, &fl.Agent, &sessionID, &evStr); err != nil {
+		return model.Flag{}, false
+	}
+	fl.SessionID = sessionID.String
+	fl.TS, _ = time.Parse(time.RFC3339Nano, tsStr)
+	_ = json.Unmarshal([]byte(evStr), &fl.Evidence)
+	return fl, true
+}
+
 func (s *Store) QueryFlags(f FlagFilter) []model.Flag {
 	s.mu.Lock()
 	defer s.mu.Unlock()
