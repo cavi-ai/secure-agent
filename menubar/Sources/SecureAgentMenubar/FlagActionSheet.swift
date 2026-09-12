@@ -140,23 +140,27 @@ struct FlagActionSheet: View {
                     .font(.system(size: 9, design: .monospaced))
                     .foregroundStyle(.quaternary)
             }
-            if let v = flag.advisor {
-                HStack(spacing: 6) {
-                    Image(systemName: v.assessment == "benign" ? "checkmark.seal" : "brain")
-                        .font(.system(size: 9))
-                        .foregroundStyle(v.assessment == "benign" ? Color.ok : Color.secondary)
-                    Text("advisor: \(v.assessment)")
-                        .font(.system(size: 9)).foregroundStyle(.secondary)
-                    if let c = v.confidence {
-                        Text("\(Int(c * 100))%").font(.system(size: 9, design: .monospaced)).foregroundStyle(.tertiary)
+            if let v = flag.advisor, !v.rationale.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "brain")
+                            .font(.system(size: 10)).foregroundStyle(Color.brand)
+                        Text("ADVISOR READ")
+                            .font(.system(size: 9, weight: .semibold))
+                            .kerning(0.5)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Text("\(v.assessment) · \(v.confidence.map { Int($0 * 100) } ?? 0)%")
+                            .font(.system(size: 9, weight: .semibold, design: .rounded))
+                            .foregroundStyle(v.assessment == "benign" ? Color.ok : (v.assessment == "malicious" ? Color.bad : Color.warn))
                     }
-                    if !v.rationale.isEmpty {
-                        Text(v.rationale)
-                            .font(.system(size: 9)).foregroundStyle(.tertiary)
-                            .lineLimit(2)
-                    }
+                    Text(v.rationale)
+                        .font(.system(size: 11))
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-                .help("Local advisor triage — advisory only, never changes enforcement")
+                .padding(10)
+                .background(Color.primary.opacity(0.03))
+                .clipShape(RoundedRectangle(cornerRadius: 7))
             }
         }
     }
@@ -201,6 +205,14 @@ struct FlagActionSheet: View {
                 .foregroundStyle(.secondary)
                 .kerning(0.5)
 
+            // Advisor's recommendation leads — with an Apply button that
+            // actually executes it. "There's an action" now means a button.
+            if let rec = Self.mappedAction(flag.advisor?.suggestedAction,
+                                           flag: flag,
+                                           evidenceHost: evidenceHost) {
+                advisorActionRow(rec)
+            }
+
             if incident != nil {
                 actionRow(
                     icon: "cross.case.fill", tint: Color.bad,
@@ -244,6 +256,101 @@ struct FlagActionSheet: View {
                     buttonLabel: "Kill agent", destructive: true,
                     fire: { _ = try await state.uiClient.killProcess(pid: flag.pid) },
                     doneLabel: "agent terminated")) {}
+        }
+    }
+
+    /// The advisor's suggested_action mapped to an executable disposition —
+    /// when the advisor has an opinion, ITS action leads the list with an
+    /// Apply button. Pure mapping, unit-testable.
+    nonisolated static func mappedAction(_ suggested: String?, flag: FlagModel, evidenceHost: String?) -> (title: String, subtitle: String, kind: String)? {
+        switch suggested {
+        case "allow-host":
+            guard let h = evidenceHost, !h.isEmpty else { return nil }
+            return ("Allow \(h) for \(flag.agent)",
+                    "The advisor assessed this host as legitimate. Future connections to it stop being flagged.",
+                    "allow-host")
+        case "mute-rule":
+            return ("Dismiss this flag class",
+                    "Stop flagging this in this context. Monitoring continues.",
+                    "mute-rule")
+        case "rotate-credentials":
+            return ("Rotate the exposed credential",
+                    "The advisor believes a secret may have left the machine. Opens the remediation checklist with the rotation steps.",
+                    "rotate")
+        case "kill-agent":
+            return ("Kill \(flag.agent) (pid \(flag.pid))",
+                    "The advisor judged the agent's behavior the problem. Terminates the process tree now.",
+                    "kill")
+        default:
+            return nil
+        }
+    }
+
+    /// The advisor's recommendation as a first-class action row with an
+    /// Apply button wired to the mapped endpoint.
+    @State private var applyingAdvisor = false
+    private func advisorActionRow(_ rec: (title: String, subtitle: String, kind: String)) -> some View {
+        return HStack(spacing: 8) {
+            Image(systemName: "brain")
+                .font(.system(size: 11)).foregroundStyle(Color.brand)
+                .frame(width: 22, height: 22)
+                .background(Color.brand.opacity(0.12))
+                .clipShape(RoundedRectangle(cornerRadius: 5))
+            VStack(alignment: .leading, spacing: 1) {
+                Text(rec.title).font(.system(size: 11, weight: .semibold))
+                Text(rec.subtitle)
+                    .font(.system(size: 9)).foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+            Button {
+                applyingAdvisor = true
+                Task {
+                    await executeMapped(rec.kind)
+                    applyingAdvisor = false
+                }
+            } label: {
+                if applyingAdvisor {
+                    ProgressView().controlSize(.mini)
+                } else {
+                    Text("Apply").font(.system(size: 10, weight: .semibold))
+                }
+            }
+            .buttonStyle(.borderedProminent).tint(Color.brand).controlSize(.small)
+            .disabled(applyingAdvisor)
+        }
+        .padding(8)
+        .background(Color.brand.opacity(0.05))
+        .clipShape(RoundedRectangle(cornerRadius: 7))
+    }
+
+    private func executeMapped(_ kind: String) async {
+        do {
+            switch kind {
+            case "allow-host":
+                guard let host = evidenceHost else { return }
+                try await state.uiClient.allowlistAdd(agent: flag.agent, host: host)
+                applied = "\(host) allowlisted — this pair stops flagging"
+            case "mute-rule":
+                guard let host = evidenceHost else { return }
+                try await state.uiClient.muteAdd(rule: flag.rule, host: host)
+                applied = "dismissed — future flags of this rule are suppressed"
+            case "rotate":
+                if let incident = state.incidents.first(where: { $0.flagId == flag.id }) {
+                    showIncident = true
+                    applied = "opened the rotation checklist"
+                } else {
+                    applied = "open the incident report for rotation steps"
+                }
+            case "kill":
+                _ = try await state.uiClient.killProcess(pid: flag.pid)
+                applied = "agent terminated"
+            default:
+                return
+            }
+            state.refresh()
+        } catch {
+            failure = error.localizedDescription
         }
     }
 
