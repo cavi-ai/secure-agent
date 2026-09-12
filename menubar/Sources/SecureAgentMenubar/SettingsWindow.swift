@@ -122,29 +122,7 @@ struct SettingsView: View {
     private var visibilityTab: some View {
         Form {
             Section("File telemetry (Endpoint Security)") {
-                HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Privileged ES collector")
-                            .font(.system(.body, weight: .medium))
-                        Text(setup.isESCollectorInstalled
-                             ? "Installed — file telemetry active"
-                             : "macOS requires file telemetry (eslogger) to run as root. This one-step install creates a minimal root helper: it runs eslogger and nothing else.")
-                            .font(.caption).foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    Spacer()
-                    if setup.isESCollectorInstalled {
-                        Button("Remove", role: .destructive) {
-                            Task { await runAsync { setup.uninstallESCollector() } }
-                        }
-                        .controlSize(.small)
-                    } else {
-                        Button("Install…") {
-                            Task { await runAsync { try setup.installESCollector() } }
-                        }
-                        .buttonStyle(.borderedProminent).tint(.brand).controlSize(.small)
-                    }
-                }
+                ESFileTelemetryCard(setup: setup)
             }
             Section("Transcript & network coverage") {
                 HStack {
@@ -528,6 +506,132 @@ struct SettingsView: View {
         case .error(let msg):
             Label(msg, systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.red)
                 .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+
+/// The guided file-telemetry card: three states, zero guesswork.
+///   A. helper missing          → "Enable File Telemetry" (one admin prompt)
+///   B. helper running, TCC out → "Open Permissions" + inline instruction
+///                                 ("turn ON eslogger"), polling live
+///   C. spool flowing           → green, done. Remove stays available.
+/// The user never hunts for a pane: the button deep-links to the exact
+/// Settings section, and the card self-updates the moment the switch flips.
+struct ESFileTelemetryCard: View {
+    @ObservedObject var setup: SetupManager
+    @State private var polling = false
+
+    private var stage: ESStage {
+        if setup.isESCollectorInstalled { return .active }
+        if setup.esCollectorDaemonInstalled { return .needsGrant }
+        return .notInstalled
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                stageBadge
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(stage.title).font(.system(.body, weight: .medium))
+                    Text(stage.detail)
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer()
+                controls
+            }
+            if stage == .needsGrant {
+                Label("In the pane that just opened: find **eslogger** in the list and turn its switch ON. This card turns green automatically — nothing else to do.",
+                      systemImage: "cursorarrow.click.2")
+                    .font(.caption).foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .task { await pollWhileNeeded() }
+    }
+
+    private var stageBadge: some View {
+        Image(systemName: stage.icon)
+            .font(.system(size: 14, weight: .semibold))
+            .foregroundStyle(stage.tint)
+            .frame(width: 30, height: 30)
+            .background(stage.tint.opacity(0.12))
+            .clipShape(RoundedRectangle(cornerRadius: 7))
+    }
+
+    @ViewBuilder
+    private var controls: some View {
+        switch stage {
+        case .notInstalled:
+            Button("Enable File Telemetry") {
+                Task {
+                    do { try await setup.installESCollectorAsync() }
+                    catch { /* reported via lastError */ }
+                    await pollWhileNeeded()
+                }
+            }
+            .buttonStyle(.borderedProminent).tint(.brand).controlSize(.small)
+        case .needsGrant:
+            Button("Open Permissions") { setup.openESPermissions() }
+                .buttonStyle(.borderedProminent).tint(.brand).controlSize(.small)
+        case .active:
+            Button("Remove", role: .destructive) {
+                Task {
+                    setup.uninstallESCollector()
+                    await setup.refreshState()
+                }
+            }
+            .controlSize(.small)
+        }
+    }
+
+    /// Poll the spool while waiting for the grant: the card flips to green
+    /// within a second of the switch flipping — no manual refresh.
+    private func pollWhileNeeded() async {
+        guard stage == .needsGrant else { return }
+        while !Task.isCancelled, setup.esCollectorDaemonInstalled, !setup.isESCollectorInstalled {
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            await setup.refreshState()
+        }
+    }
+}
+
+enum ESStage {
+    case notInstalled, needsGrant, active
+
+    var title: String {
+        switch self {
+        case .notInstalled: return "File telemetry is off"
+        case .needsGrant: return "One switch left: allow eslogger"
+        case .active: return "File telemetry active"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .notInstalled:
+            return "macOS requires file telemetry (eslogger) to run as root. One admin prompt installs a minimal helper that runs eslogger and nothing else."
+        case .needsGrant:
+            return "The helper is installed and retrying every 10s. It's waiting on one macOS permission."
+        case .active:
+            return "The privileged collector is running and the daemon is reading its stream."
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .notInstalled: return "waveform.path.ecg"
+        case .needsGrant: return "lock.open"
+        case .active: return "checkmark.seal.fill"
+        }
+    }
+
+    var tint: Color {
+        switch self {
+        case .notInstalled: return .secondary
+        case .needsGrant: return .orange
+        case .active: return .ok
         }
     }
 }
