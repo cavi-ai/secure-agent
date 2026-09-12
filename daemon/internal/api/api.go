@@ -646,9 +646,14 @@ func (a *API) handleMute(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, fmt.Sprintf("persist failed: %v", err), http.StatusInternalServerError)
 			return
 		}
+		// Close the loop on existing rows: every unacknowledged flag of this
+		// rule citing this host leaves the critical list. Without this, a
+		// mute suppresses only FUTURE flags and the operator sees "nothing
+		// happened" — the old rows sit there, red, forever.
+		acked := a.store.AcknowledgeRuleHost(req.Rule, req.Host)
 		a.store.PutAudit(store.AuditEntry{
 			Action: "mute-add", Rule: req.Rule,
-			Detail: fmt.Sprintf("muted %s for %s", req.Host, req.Rule),
+			Detail: fmt.Sprintf("muted %s for %s (%d existing flags acknowledged)", req.Host, req.Rule, acked),
 		})
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok", "rule": req.Rule, "host": req.Host})

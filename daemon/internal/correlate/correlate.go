@@ -176,7 +176,8 @@ func (c *Correlator) Observe(e event.Event) []model.Flag {
 			agentName = info.Name
 		}
 		// Operator disposition: muted (rule, host) pairs are counted, not flagged.
-		if c.isMuted != nil && c.isMuted(ruleName, e.RemoteHost) {
+		if c.isMuted != nil && (c.isMuted(ruleName, e.RemoteHost) ||
+			(isLocalhost(e.RemoteHost) && c.isMuted(ruleName, "localhost"))) {
 			c.mutedCount++
 			return nil
 		}
@@ -236,7 +237,11 @@ func (c *Correlator) Observe(e event.Event) []model.Flag {
 				mutedAll := c.isMuted != nil && len(recentConns) > 0
 				if mutedAll {
 					for _, cm := range recentConns {
-						if !c.isMuted("sensitive-read-then-connect", cm.host) {
+						h := cm.host
+						if isLocalhost(h) {
+							h = "localhost" // canonical alias: one mute covers the family
+						}
+						if !c.isMuted("sensitive-read-then-connect", h) {
 							mutedAll = false
 							break
 						}

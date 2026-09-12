@@ -66,6 +66,7 @@ struct SettingsView: View {
         .task {
             await setup.refreshState()
             loadPathAllows()
+            loadMutes()
         }
     }
 
@@ -149,6 +150,35 @@ struct SettingsView: View {
     /// dispositions, in one place, each revocable.
     private var policyTab: some View {
         Form {
+            Section("Muted flag classes") {
+                Text("Rule + host pairs you dismissed. New flags for these pairs are counted, not shown. Remove one to start flagging again.")
+                    .font(.caption).foregroundStyle(.secondary)
+                if mutes.isEmpty {
+                    Text("None — dismissing a flag class from a critical creates one.")
+                        .font(.caption).foregroundStyle(.tertiary)
+                }
+                ForEach(Array(mutes.enumerated()), id: \.offset) { _, m in
+                    HStack(spacing: 8) {
+                        Image(systemName: "eye.slash")
+                            .font(.system(size: 10)).foregroundStyle(.secondary)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(FlagActionSheet.humanTitle(m.rule))
+                                .font(.system(.body, weight: .medium))
+                            Text("host: \(m.host)")
+                                .font(.system(.caption, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button("Unmute", role: .destructive) {
+                            Task {
+                                try? await state.uiClient.muteRemove(rule: m.rule, host: m.host)
+                                await loadMutes()
+                            }
+                        }
+                        .controlSize(.small)
+                    }
+                }
+            }
             Section("Allowed paths (per-path guard exceptions)") {
                 Text("Exact files an agent may access without prompting — narrower than a rule allow. Revoking restores prompting for that file.")
                     .font(.caption).foregroundStyle(.secondary)
@@ -269,6 +299,14 @@ struct SettingsView: View {
     // MARK: Guard
 
     @State private var pathAllows: [GuardPathAllowModel] = []
+    @State private var mutes: [(rule: String, host: String)] = []
+
+    private func loadMutes() {
+        Task {
+            let rows = (try? await state.uiClient.fetchMutes()) ?? []
+            await MainActor.run { mutes = rows.sorted { ($0.rule, $0.host) < ($1.rule, $1.host) } }
+        }
+    }
 
     private func loadPathAllows() {
         Task {

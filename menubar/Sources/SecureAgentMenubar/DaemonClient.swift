@@ -40,6 +40,10 @@ public protocol DaemonClientProtocol: Sendable {
     /// POST /mute — suppress one rule+host pair (noise control; monitoring
     /// of the host continues).
     func muteAdd(rule: String, host: String) async throws
+    /// GET /mute — persisted dispositions (the "ignore" ledger).
+    func fetchMutes() async throws -> [(rule: String, host: String)]
+    /// DELETE /mute — remove one disposition.
+    func muteRemove(rule: String, host: String) async throws
     /// POST /guard/path-allow — allow ONE path (and descendants) for one
     /// agent under one rule, without widening the rule itself.
     func guardPathAllowAdd(agent: String, ruleID: String, path: String) async throws
@@ -195,6 +199,20 @@ public final class DaemonClient: Sendable {
     public func deleteGuardPathAllow(agent: String, ruleID: String, path: String) async throws {
         let pathQ = "/guard/path-allow?agent=\(Self.urlQueryEscape(agent))&rule_id=\(Self.urlQueryEscape(ruleID))&path=\(Self.urlQueryEscape(path))"
         _ = try await request(method: "DELETE", path: pathQ)
+    }
+
+    public func fetchMutes() async throws -> [(rule: String, host: String)] {
+        let data = try await request(method: "GET", path: "/mute")
+        guard let arr = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return [] }
+        return arr.compactMap { d in
+            guard let rule = d["rule"] as? String, let host = d["host"] as? String else { return nil }
+            return (rule, host)
+        }
+    }
+
+    public func muteRemove(rule: String, host: String) async throws {
+        let q = "?rule=\(Self.urlQueryEscape(rule))&host=\(Self.urlQueryEscape(host))"
+        _ = try await request(method: "DELETE", path: "/mute\(q)")
     }
 
     public func muteAdd(rule: String, host: String) async throws {
