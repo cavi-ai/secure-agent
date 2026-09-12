@@ -565,6 +565,20 @@ public final class SetupManager: ObservableObject {
         "\"\(s.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\""))\""
     }
 
+    /// Async wrapper for the guided card (throws so the caller can poll on
+    /// success only).
+    public func installESCollectorAsync() async throws {
+        try installESCollector()
+    }
+
+    /// Deep-link System Settings → Full Disk Access (the pane where the
+    /// eslogger switch lives after the helper's first failed run).
+    public func openESPermissions() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
     /// Removes the LaunchDaemon + binary. Also called by uninstallAll.
     public func uninstallESCollector() {
         let script = "do shell script \"launchctl bootout system /Library/LaunchDaemons/\(Self.esCollectorLabel).plist 2>/dev/null; rm -f /Library/LaunchDaemons/\(Self.esCollectorLabel).plist; true\" with administrator privileges"

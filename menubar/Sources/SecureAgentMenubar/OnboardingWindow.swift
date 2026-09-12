@@ -108,47 +108,8 @@ struct OnboardingView: View {
             }
 
             GroupBox("3. File Telemetry") {
-                VStack(alignment: .leading, spacing: 8) {
-                    if setup.isESCollectorInstalled {
-                        HStack {
-                            Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-                            Text("File telemetry active").font(.callout)
-                        }
-                    } else {
-                        Text("Deep file monitoring (detecting when an agent reads a secret and connects out) needs two one-click permissions: the privileged helper install, and the eslogger switch in Settings. Everything else is automatic.")
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                        HStack(spacing: 10) {
-                            // Step 1: installs the helper; one macOS password prompt.
-                            if setup.esCollectorDaemonInstalled {
-                                Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-                                    .frame(width: 16)
-                                Text("Helper installed")
-                            } else {
-                                Button("1. Install helper") { run { try setup.installESCollector() } }
-                                    .buttonStyle(.borderedProminent).tint(.brand)
-                            }
-                            // Step 2: opens the Settings pane; the eslogger
-                            // switch is already listed (macOS lists it after
-                            // the helper's first run). User flips it on.
-                            Button("2. Turn on eslogger switch") { setup.openFullDiskAccessSettings() }
-                                .disabled(!setup.esCollectorDaemonInstalled)
-                        }
-                        if setup.esCollectorDaemonInstalled && !setup.isESCollectorInstalled {
-                            Text("Settings is open → Privacy & Security → Full Disk Access → turn ON the switch for eslogger (it's already in the list). This window turns green when it works.")
-                                .font(.caption)
-                                .foregroundStyle(.orange)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                        HStack {
-                            Spacer()
-                            Button("Recheck") { Task { await setup.refreshState() } }
-                        }
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.vertical, 4)
+                ESFileTelemetryCard(setup: setup)
+                    .padding(.vertical, 4)
             }
 
             GroupBox("4. Harness Hooks") {
