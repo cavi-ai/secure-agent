@@ -195,18 +195,26 @@ func startDrainLoop(sub <-chan event.Event, st *store.Store, cr *correlate.Corre
 			for _, fl := range flags {
 				log.Printf("FLAG TRIGGERED [%d]: %s (pid %d agent %s)", fl.Severity, fl.Rule, fl.PID, fl.Agent)
 				st.PutFlag(fl)
-				pub.Publish(fleet.EventFlag, fl)
-				if adv := advGet(); adv != nil {
-					adv.EnqueueFlag(fl)
+				if pub != nil {
+					pub.Publish(fleet.EventFlag, fl)
+				}
+				if advGet != nil {
+					if adv := advGet(); adv != nil {
+						adv.EnqueueFlag(fl)
+					}
 				}
 
 				recentEvs := st.RecentEvents(100)
 				report := analyzer.Analyze(fl, recentEvs)
 				st.PutIncident(report)
 				log.Printf("INCIDENT CREATED [%s]: %s (Risk: %s, %d rotate items)", report.ID, report.Summary, report.Risk, len(report.RotateList))
-				pub.Publish(fleet.EventIncident, report)
-				if adv := advGet(); adv != nil {
-					adv.EnqueueIncident(report)
+				if pub != nil {
+					pub.Publish(fleet.EventIncident, report)
+				}
+				if advGet != nil {
+					if adv := advGet(); adv != nil {
+						adv.EnqueueIncident(report)
+					}
 				}
 			}
 		}
