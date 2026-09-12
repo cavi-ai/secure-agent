@@ -260,6 +260,15 @@ public final class UpdateManager: ObservableObject {
         guard copy.status == 0 else {
             throw UpdateError.shell("install failed (permission?): \(copy.stderr). Install from the DMG manually.")
         }
+        // Verify the copied bundle's signature BEFORE terminating the running
+        // instance: a truncated/corrupt copy must not brick the install by
+        // killing the only working app. The old instance stays alive on
+        // failure and the operator can retry.
+        let verify = await run("/usr/bin/codesign", ["--verify", "--deep", "--strict", dst])
+        guard verify.status == 0 else {
+            try? await run("/usr/bin/hdiutil", ["detach", mountPoint])
+            throw UpdateError.shell("copied bundle failed signature verification (\(verify.stderr)); keeping the current install")
+        }
         // Relaunch AFTER this instance exits: the old app must take its daemon
         // down first, or the new instance's daemon loses the socket-bind race
         // against the still-running old one.

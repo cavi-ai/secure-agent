@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"log"
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/bus"
@@ -117,5 +118,47 @@ func (t *SpoolTailer) drainOnce(offset int64) int64 {
 		}
 		lastGood += int64(len(line)) + 1
 	}
+	// An oversized line (>1MB, a corrupt spool write) errors the scanner
+	// and would otherwise leave the offset frozen on it forever — every
+	// poll retries the same giant line. Skip past it: the tail resumes on
+	// the next tick. lastGood only counts complete lines, so finding the
+	// next newline past the current position recovers cleanly.
+	if err := scanner.Err(); err != nil {
+		if info, statErr := f.Stat(); statErr == nil {
+			if rest := info.Size() - offset - lastGood; rest > 0 {
+				// Skip the stuck line plus its terminator.
+				if skip := rest; skip > 8<<20 {
+					return offset + lastGood + skip // giant garbage: drop it all
+				}
+				skipBuf := make([]byte, 64*1024)
+				for rest := info.Size() - offset - lastGood; rest > 0; {
+					n := int64(len(skipBuf))
+					if rest < n {
+						n = rest
+					}
+					read, _ := f.ReadAt(skipBuf, offset+lastGood)
+					if read <= 0 {
+						break
+					}
+					if i := indexByte(skipBuf[:read], '\n'); i >= 0 {
+						return offset + lastGood + int64(i) + 1
+					}
+					rest -= int64(read)
+					lastGood += int64(read)
+				}
+				return offset + lastGood
+			}
+		}
+		log.Printf("collect: spool scanner error at offset %d: %v", offset+lastGood, err)
+	}
 	return offset + lastGood
+}
+
+func indexByte(b []byte, c byte) int {
+	for i := range b {
+		if b[i] == c {
+			return i
+		}
+	}
+	return -1
 }

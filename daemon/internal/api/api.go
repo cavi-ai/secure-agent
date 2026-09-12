@@ -190,8 +190,9 @@ func (a *API) handleFlagAcknowledge(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		FlagID string `json:"flag_id"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.FlagID == "" {
-		http.Error(w, `Invalid payload: {"flag_id"}`, http.StatusBadRequest)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.FlagID == "" ||
+		!guardTokenRE.MatchString(req.FlagID) {
+		http.Error(w, `Invalid payload: {"flag_id"} (id must match ^[A-Za-z0-9_.-]+$)`, http.StatusBadRequest)
 		return
 	}
 	ok := a.store.AcknowledgeFlag(req.FlagID)
@@ -661,6 +662,13 @@ func (a *API) handleMute(w http.ResponseWriter, r *http.Request) {
 		rule, host := r.URL.Query().Get("rule"), r.URL.Query().Get("host")
 		if rule == "" || host == "" {
 			http.Error(w, "DELETE requires ?rule=<id>&host=<host>", http.StatusBadRequest)
+			return
+		}
+		// Same host validation as POST: a bare hostname only (a mute value
+		// with URL structure or absurd length could poison the store and
+		// the ledger UI). Rule must match the id charset.
+		if !guardTokenRE.MatchString(rule) || strings.ContainsAny(host, "/:@") || len(host) > 253 {
+			http.Error(w, "invalid rule/host", http.StatusBadRequest)
 			return
 		}
 		if err := a.mutes.Remove(rule, host); err != nil {
