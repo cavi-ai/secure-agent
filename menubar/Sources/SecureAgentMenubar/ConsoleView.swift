@@ -257,18 +257,27 @@ struct ConsoleView: View {
     private var attentionSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             let groups = state.groupedUnactedFlags()
-            // Rows: incident rows + flag groups whose newest flag has no
-            // incident (those flags are already represented as incidents).
-            let groupsWithoutIncident = groups.filter { g in
-                !state.incidents.contains { inc in g.flags.contains { $0.id == inc.flagId } }
+            // Handled incidents (backing flag acknowledged/resolved) leave the
+            // section — "acted upon" must mean the row leaves, same as flags.
+            let openIncidents = state.incidents.filter { inc in
+                guard let flag = state.flags.first(where: { $0.id == inc.flagId }) else { return true }
+                return flag.acknowledged != true && inc.workflow?.status != "resolved"
             }
-            let total = state.incidents.count + groupsWithoutIncident.count
+            // One row per group: a group whose flags carry incidents opens the
+            // NEWEST incident (remediation) on tap — the incident never renders
+            // as its own duplicate row.
+            let incidentByFlag = Dictionary(uniqueKeysWithValues: openIncidents.map { ($0.flagId, $0) })
+            let rows = attentionRows(groups: groups, openIncidents: openIncidents)
+            // Incidents with no matching flag group render standalone.
+            let groupedFlagIds = Set(groups.flatMap { $0.flags.map(\.id) })
+            let standaloneIncidents = openIncidents.filter { !groupedFlagIds.contains($0.flagId) }
+            let total = rows.count + standaloneIncidents.count
             sectionHeader("Needs attention", trailing: "\(total)")
-            if !state.incidents.isEmpty {
-                incidentRows
+            ForEach(rows.prefix(4)) { row in
+                flagGroupRow(row.group, asIncident: row.incident)
             }
-            ForEach(groups.prefix(4)) { group in
-                flagGroupRow(group)
+            ForEach(standaloneIncidents.prefix(3)) { inc in
+                incidentRow(inc)
             }
         }
         .sheet(item: $selectedIncident) { inc in
@@ -309,10 +318,47 @@ struct ConsoleView: View {
         }
     }
 
+    private func incidentRow(_ inc: IncidentReportModel) -> some View {
+        Button { selectedIncident = inc } label: {
+            HStack(spacing: 7) {
+                Image(systemName: "cross.case.fill")
+                    .font(.system(size: 11)).foregroundStyle(Color.bad)
+                AgentIdentity.tile(inc.agent, size: 14, fontSize: 8)
+                Text(Self.incidentRowTitle(inc.rule))
+                    .font(.system(size: 11, weight: .medium))
+                    .lineLimit(1)
+                Spacer()
+                if let t = relativeTime(inc.timestamp) {
+                    Text(t)
+                        .font(.system(size: 9, weight: .medium, design: .monospaced))
+                        .foregroundStyle(.tertiary)
+                }
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 7, weight: .semibold)).foregroundStyle(.quaternary)
+            }
+        }
+        .buttonStyle(.plain)
+        .help("\(Self.incidentRowTitle(inc.rule)) — \(inc.agent) · open the incident report")
+    }
+
+    private func incidentRows(_ incidents: [IncidentReportModel]) -> some View {
+        ForEach(incidents.prefix(3)) { inc in
+        }
+        .sheet(item: $selectedIncident) { inc in
+            IncidentDetailView(incident: inc, state: state)
+        }
+        .sheet(item: $selectedFlag) { flag in
+            FlagActionSheet(flag: flag, state: state)
+        }
+    }
+
     /// One row per flag GROUP: "touched your keychain ×20 · codex · 2d".
     /// The count badge makes repeats honest; the whole row opens the sheet
     /// (which acts on the newest), with an inline ignore-class shortcut.
-    private func flagGroupRow(_ group: AppState.FlagGroup) -> some View {
+    /// One row per flag GROUP. When the group's flags carry an incident, the
+    /// row opens the NEWEST incident (remediation) instead of the flag sheet —
+    /// one row, one destination, never a duplicate.
+    private func flagGroupRow(_ group: AppState.FlagGroup, asIncident: IncidentReportModel?) -> some View {
         let newest = group.newest
         let seen = relativeTime(group.newest.ts)
         return HStack(alignment: .top, spacing: 8) {
@@ -352,7 +398,13 @@ struct ConsoleView: View {
         }
         .opacity(newest.acknowledged == true ? 0.45 : 1.0)
         .contentShape(Rectangle())
-        .onTapGesture { selectedFlag = newest }
+        .onTapGesture {
+            if let asIncident {
+                selectedIncident = asIncident
+            } else {
+                selectedFlag = newest
+            }
+        }
     }
 
     @State private var confirmIgnoreGroup: AppState.FlagGroup?
@@ -779,5 +831,23 @@ struct ConsoleView: View {
             Text(trailing).font(.system(size: 10, weight: .semibold, design: trailingMonospaced ? .monospaced : .default))
                 .foregroundStyle(trailingColor)
         }
+    }
+}
+
+
+/// One "needs attention" row: a flag group plus its newest open incident (if
+/// any). Identifiable for ForEach — the group id is the identity.
+private struct AttentionRow: Identifiable {
+    let group: AppState.FlagGroup
+    let incident: IncidentReportModel?
+    var id: String { group.id }
+}
+
+@MainActor
+private func attentionRows(groups: [AppState.FlagGroup], openIncidents: [IncidentReportModel]) -> [AttentionRow] {
+    let incidentByFlag = Dictionary(uniqueKeysWithValues: openIncidents.map { ($0.flagId, $0) })
+    return groups.map { g in
+        let incident = g.flags.compactMap { incidentByFlag[$0.id] }.first
+        return AttentionRow(group: g, incident: incident)
     }
 }
