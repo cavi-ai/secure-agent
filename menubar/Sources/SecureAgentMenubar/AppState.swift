@@ -67,6 +67,13 @@ public final class AppState: ObservableObject {
         self.status = status
         self.connected = true
     }
+
+    #if DEBUG
+    /// Test hook: seed flags directly (grouping tests).
+    func seedFlagsForTesting(_ f: [FlagModel]) {
+        self.flags = f
+    }
+    #endif
     #endif
 
     public func start() {
@@ -794,6 +801,64 @@ public final class AppState: ObservableObject {
     /// one problem, one row).
     public var unactedFlags: [FlagModel] {
         flags.filter { $0.acknowledged != true }
+    }
+
+    /// A group of identical flags: same rule + agent + primary file/host.
+    /// Repeated fires of the same pattern (codex touching the same keychain
+    /// file every few minutes) are ONE decision, not twenty.
+    public struct FlagGroup: Identifiable {
+        public let rule: String
+        public let agent: String
+        /// The shared evidence anchor (file path or host) — "identical" is
+        /// defined by this triple.
+        public let anchor: String
+        public let flags: [FlagModel]
+        public var count: Int { flags.count }
+        /// Newest fire in the group (the group's timestamp).
+        public var newest: FlagModel { flags[0] }
+        public var id: String { "\(rule)|\(agent)|\(anchor)" }
+    }
+
+    /// Group unacted flags by (rule, agent, anchor). Newest-first inside and
+    /// across groups. The anchor is the first evidence line's file/host —
+    /// matches what a human scans for ("same file again?").
+    public func groupedUnactedFlags() -> [FlagGroup] {
+        let unacted = unactedFlags
+        var groups: [String: [FlagModel]] = [:]
+        var order: [String] = []
+        for f in unactedFlags {
+            let key = f.rule + "|" + f.agent + "|" + (Self.flagGroupAnchor(f) ?? f.id)
+            if groups[key] == nil { order.append(key) }
+            groups[key, default: []].append(f)
+        }
+        return order.compactMap { key -> FlagGroup? in
+            guard let list = groups[key], let first = list.first else { return nil }
+            // Newest first inside the group.
+            let sorted = list.sorted { $0.ts > $1.ts }
+            return FlagGroup(rule: first.rule, agent: first.agent,
+                             anchor: Self.flagGroupAnchor(first) ?? "", flags: sorted)
+        }
+    }
+
+    /// The stable anchor for a flag: its primary file path or host — what
+    /// makes two flags "the same problem" to a human.
+    nonisolated static func flagGroupAnchor(_ f: FlagModel) -> String? {
+        for line in f.evidence {
+            if let r = line.range(of: "accessed keychain file ") {
+                let rest = line[r.upperBound...]
+                if let at = rest.range(of: " at ") { return String(rest[..<at.lowerBound]) }
+                return String(rest)
+            }
+            if let r = line.range(of: "read ") {
+                let rest = line[r.upperBound...]
+                if let at = rest.range(of: " at ") { return String(rest[..<at.lowerBound]) }
+            }
+            if let r = line.range(of: "connected to ") {
+                let rest = line[r.upperBound...]
+                if let at = rest.range(of: " at ") { return String(rest[..<at.lowerBound]) }
+            }
+        }
+        return nil
     }
 
     /// Total resident memory across every tagged agent process — the header's

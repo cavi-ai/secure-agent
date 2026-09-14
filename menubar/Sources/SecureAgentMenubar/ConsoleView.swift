@@ -256,17 +256,19 @@ struct ConsoleView: View {
     /// never appears twice — if it has an incident, it's an incident row.
     private var attentionSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            let unflagged = state.incidents.count
-            let flagOnly = state.flags.filter { f in
-                f.acknowledged != true && !state.incidents.contains { $0.flagId == f.id }
+            let groups = state.groupedUnactedFlags()
+            // Rows: incident rows + flag groups whose newest flag has no
+            // incident (those flags are already represented as incidents).
+            let groupsWithoutIncident = groups.filter { g in
+                !state.incidents.contains { inc in g.flags.contains { $0.id == inc.flagId } }
             }
-            let total = unflagged + flagOnly.count
+            let total = state.incidents.count + groupsWithoutIncident.count
             sectionHeader("Needs attention", trailing: "\(total)")
             if !state.incidents.isEmpty {
                 incidentRows
             }
-            ForEach(flagOnly.prefix(4)) { flag in
-                flagRow(flag)
+            ForEach(groups.prefix(4)) { group in
+                flagGroupRow(group)
             }
         }
         .sheet(item: $selectedIncident) { inc in
@@ -275,7 +277,85 @@ struct ConsoleView: View {
         .sheet(item: $selectedFlag) { flag in
             FlagActionSheet(flag: flag, state: state)
         }
+        .confirmationDialog(
+            "Dismiss this flag class?",
+            isPresented: Binding(get: { confirmIgnoreGroup != nil }, set: { if !$0 { confirmIgnoreGroup = nil } }),
+            titleVisibility: .visible
+        ) {
+            Button("Dismiss", role: .destructive) {
+                if let g = confirmIgnoreGroup { Task { await ignoreFlagGroup(g) } }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Stop flagging \(Self.flagRowTitle(confirmIgnoreGroup?.rule ?? "")) for \(confirmIgnoreGroup?.agent ?? "") in this context. Existing rows clear; monitoring continues.")
+        }
     }
+
+    /// Ignore-class on a group: mute (rule, host) + acknowledge every flag
+    /// in the group. One gesture, the whole pattern goes quiet.
+    private func ignoreFlagGroup(_ group: AppState.FlagGroup) async {
+        guard let host = FlagActionSheet.hostIn(evidence: group.newest.evidence) else {
+            state.reportLocalError("no connection target to mute — open the flag and rotate instead")
+            return
+        }
+        do {
+            try await state.uiClient.muteAdd(rule: group.rule, host: host)
+            for f in group.flags {
+                try? await state.uiClient.acknowledgeFlag(id: f.id)
+            }
+            state.refresh()
+        } catch {
+            state.reportLocalError("dismiss failed: \(error.localizedDescription)")
+        }
+    }
+
+    /// One row per flag GROUP: "touched your keychain ×20 · codex · 2d".
+    /// The count badge makes repeats honest; the whole row opens the sheet
+    /// (which acts on the newest), with an inline ignore-class shortcut.
+    private func flagGroupRow(_ group: AppState.FlagGroup) -> some View {
+        let newest = group.newest
+        let seen = relativeTime(group.newest.ts)
+        return HStack(alignment: .top, spacing: 8) {
+            Image(systemName: newest.severity >= 3 ? "exclamationmark.octagon.fill" : "exclamationmark.triangle.fill")
+                .font(.system(size: 12)).foregroundStyle(newest.severity >= 3 ? Color.bad : Color.warn)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(Self.flagRowTitle(group.rule))
+                    .font(.system(size: 11, weight: .medium))
+                HStack(spacing: 5) {
+                    AgentIdentity.tile(group.agent, size: 13, fontSize: 7)
+                    Text(group.agent).font(.system(size: 9, weight: .medium)).foregroundStyle(.secondary)
+                    if group.count > 1 {
+                        Text("×\(group.count)")
+                            .font(.system(size: 9, weight: .bold, design: .rounded))
+                            .foregroundStyle(Color.bad)
+                            .help("\(group.count) identical fires of this pattern")
+                    }
+                    if let seen {
+                        Text(seen)
+                            .font(.system(size: 9, weight: seen.hasSuffix("s") ? .semibold : .regular, design: .monospaced))
+                            .foregroundStyle(seen.hasSuffix("s") ? Color.bad : Color.tertiaryText)
+                    }
+                }
+            }
+            Spacer()
+            Button { confirmIgnoreGroup = group } label: {
+                Image(systemName: "eye.slash")
+                    .font(.system(size: 10)).foregroundStyle(.secondary)
+                    .padding(4)
+                    .background(Color.primary.opacity(0.04))
+                    .clipShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .help("Dismiss this flag class (rule + host) — stops future fires and clears these rows")
+            Image(systemName: "chevron.right")
+                .font(.system(size: 7, weight: .semibold)).foregroundStyle(.quaternary)
+        }
+        .opacity(newest.acknowledged == true ? 0.45 : 1.0)
+        .contentShape(Rectangle())
+        .onTapGesture { selectedFlag = newest }
+    }
+
+    @State private var confirmIgnoreGroup: AppState.FlagGroup?
 
     private var incidentRows: some View {
         ForEach(state.incidents.prefix(3)) { inc in
