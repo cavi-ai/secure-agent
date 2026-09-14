@@ -35,3 +35,21 @@ func TestClassify(t *testing.T) {
 		}
 	}
 }
+
+// System trust-store reads are normal macOS behavior — they must classify as
+// keychain_system_trust, NOT the CRITICAL keychain category.
+func TestClassifySystemTrustStore(t *testing.T) {
+	c := New(config.Config{KeychainMarkers: []string{"library/keychains", ".keychain-db"}})
+	cases := map[string]Category{
+		"/System/Library/Keychains/SystemTrustSettings.plist": CatKeychainSystem,
+		"/System/Library/Keychains/System.keychain":           CatKeychainSystem,
+		"/Users/x/Library/Keychains/login.keychain-db":        CatKeychain,
+		"/Users/x/Library/Keychains/data.keychain":            CatKeychain,
+	}
+	for path, want := range cases {
+		got, ok := c.Classify(path)
+		if !ok || got != want {
+			t.Errorf("Classify(%q) = %v,%v; want %v,true", path, got, ok, want)
+		}
+	}
+}

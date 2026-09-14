@@ -206,3 +206,28 @@ func TestKeychainCLIRuleIgnoresOtherExecs(t *testing.T) {
 		}
 	}
 }
+
+// Repeats of the same (pid, keychain path) within the window collapse to one
+// flag — 20 identical rows for one access pattern was the "ignore looks
+// broken" complaint.
+func TestKeychainRepeatSuppression(t *testing.T) {
+	c := newTestCorrelator(t)
+	base := time.Now()
+	path := "/Users/x/Library/Keychains/login.keychain-db"
+
+	total := 0
+	for i := 0; i < 5; i++ {
+		total += len(c.Observe(event.Event{Kind: event.KindFileOpen, PID: 200, TS: base.Add(time.Duration(i) * time.Minute), Path: path}))
+	}
+	// One flag for the first fire; 4 repeats suppressed.
+	if total != 1 {
+		t.Fatalf("expected 1 flag after 5 identical accesses; got %d", total)
+	}
+
+	// After the window expires, the same pattern flags again.
+	total += len(c.Observe(event.Event{Kind: event.KindFileOpen, PID: 200,
+		TS: base.Add(keychainRepeatWindow + time.Minute), Path: path}))
+	if total != 2 {
+		t.Fatalf("expected 2 flags after window expiry; got %d", total)
+	}
+}

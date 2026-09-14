@@ -428,3 +428,42 @@ func TestAcknowledgeRuleHost(t *testing.T) {
 		t.Fatalf("second pass acknowledged %d; want 0", n2)
 	}
 }
+
+// The dashboard's Acknowledge/Resolve buttons write workflow columns on
+// incidents. Regression: those columns were missing from the incidents
+// schema entirely ("no such column: status") — every dismiss was dead.
+func TestIncidentStatusWorkflow(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(filepath.Join(dir, "e.db"), filepath.Join(dir, "e.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	report := model.IncidentReport{ID: "inc-1", FlagID: "f1", PID: 7, Risk: "HIGH",
+		Summary: "test", RotateList: nil, TouchedFiles: nil, Connections: nil}
+	s.PutIncident(report)
+
+	// Acknowledge.
+	ok, err := s.SetIncidentStatus("inc-1", "acknowledged", "")
+	if err != nil || !ok {
+		t.Fatalf("acknowledge failed: %v ok=%v", err, ok)
+	}
+	wf, found := s.IncidentStatus("inc-1")
+	if !found || wf.Status != "acknowledged" {
+		t.Fatalf("status = %+v found=%v", wf, found)
+	}
+
+	// Resolve with note.
+	ok, err = s.SetIncidentStatus("inc-1", "resolved", "verified benign")
+	if err != nil || !ok {
+		t.Fatalf("resolve failed: %v ok=%v", err, ok)
+	}
+	wf, _ = s.IncidentStatus("inc-1")
+	if wf.Status != "resolved" {
+		t.Fatalf("status after resolve = %q", wf.Status)
+	}
+	if wf.ResolutionNote != "verified benign" {
+		t.Fatalf("resolution note = %q", wf.ResolutionNote)
+	}
+}
