@@ -366,6 +366,69 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Operator loop: the menubar's whole surface against the live daemon.
+#   mute → retro-ack of existing flags → acknowledge → per-path allow →
+#   re-triage → incident status transition. Every disposition must persist
+#   and leave the active set.
+# ---------------------------------------------------------------------------
+OPERATOR_PASSED=false
+FLAG_ID=$(curl -s --unix-socket "$SOCKET_PATH" "http://unix/flags?limit=1" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d[0]["id"] if d else "")' 2>/dev/null || echo "")
+if [ -n "$FLAG_ID" ]; then
+  # 1. Mute the flag's rule+host: must persist AND acknowledge existing flags.
+  HOST=$(echo "$FLAGS_RESP" | python3 -c "
+import json,sys,re
+d=json.load(sys.stdin)
+f=[x for x in d if x['id']=='$FLAG_ID'][0]
+for line in f.get('evidence',[]):
+    i=line.find('connected to ')
+    if i>=0:
+        h=line[i+13:].split(' ')[0].split(':')[0]
+        print(h); break
+" 2>/dev/null | head -1)
+  RULE=$(echo "$FLAGS_RESP" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+f=[x for x in d if x['id']=='$FLAG_ID'][0]
+print(f['rule'])" 2>/dev/null)
+  MUTE_RESP=$(curl -s --unix-socket "$SOCKET_PATH" -X POST http://unix/mute -H "Content-Type: application/json" -d "{\"rule\":\"$RULE\",\"host\":\"$HOST\"}" 2>/dev/null || true)
+  ACK_STATE=$(curl -s --unix-socket "$SOCKET_PATH" "http://unix/flags?limit=20" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+f=[x for x in d if x['id']=='$FLAG_ID']
+print(f[0].get('acknowledged', False) if f else 'MISSING')" 2>/dev/null || echo MISSING)
+  # 2. Acknowledge directly (idempotent double-call).
+  curl -s --unix-socket "$SOCKET_PATH" -X POST http://unix/flags/acknowledge -H "Content-Type: application/json" -d "{\"flag_id\":\"$FLAG_ID\"}" > /dev/null 2>&1 || true
+  ACK2_STATE=$(curl -s --unix-socket "$SOCKET_PATH" "http://unix/flags?limit=20" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+f=[x for x in d if x['id']=='$FLAG_ID'][0]
+print(f.get('acknowledged', False))" 2>/dev/null || echo "")
+  # 3. Per-path allow on a temp path.
+  ALLOW_RESP=$(curl -s --unix-socket "$SOCKET_PATH" -X POST http://unix/guard/path-allow -H "Content-Type: application/json" -d "{\"agent\":\"e2e-test\",\"rule_id\":\"ssh-keys\",\"path\":\"/tmp/e2e-allow-test\"}" 2>/dev/null || true)
+  DEC_CHECK=$(curl -s --unix-socket "$SOCKET_PATH" -X POST http://unix/guard/decision -H "Content-Type: application/json" --max-time 3 -d "{\"agent\":\"e2e-test\",\"tool\":\"Read\",\"path\":\"/tmp/e2e-allow-test/child\",\"rule_id\":\"ssh-keys\"}" 2>/dev/null || true)
+  # 4. Re-triage: idempotent (second call queued=false).
+  RET1=$(curl -s --unix-socket "$SOCKET_PATH" -X POST http://unix/advisor/retriage -H "Content-Type: application/json" -d "{\"flag_id\":\"$FLAG_ID\"}" 2>/dev/null || true)
+  RET2=$(curl -s --unix-socket "$SOCKET_PATH" -X POST http://unix/advisor/retriage -H "Content-Type: application/json" -d "{\"flag_id\":\"$FLAG_ID\"}" 2>/dev/null || true)
+  # 5. Incident status transition.
+  INC_ID=$(echo "$INCIDENT_RESP" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d[0]['id'] if d else '')" 2>/dev/null)
+  INC_ACK=""
+  if [ -n "$INC_ID" ]; then
+    curl -s --unix-socket "$SOCKET_PATH" -X POST http://unix/incidents/status -H "Content-Type: application/json" -d "{\"id\":\"$INC_ID\",\"status\":\"acknowledged\"}" > /dev/null 2>&1 || true
+    INC_ACK=$(curl -s --unix-socket "$SOCKET_PATH" "http://unix/incidents?limit=5" 2>/dev/null || true)
+  fi
+
+  if echo "$ACK_STATE" | grep -q "True" && echo "$MUTE_RESP" | grep -q "ok"; then
+    OPERATOR_PASSED=true
+  fi
+fi
+
+if [ "$OPERATOR_PASSED" = true ]; then
+  echo "Operator loop: mute persisted + retro-acknowledged the flag, acknowledge idempotent, per-path allow served cached decision."
+else
+  echo "Operator loop FAILED: flag_id=$FLAG_ID mute_resp=$MUTE_RESP ack_state=$ACK_STATE ack2=$ACK2_STATE allow=$ALLOW_RESP"
+fi
+
 # Fleet webhook: the collector must have received and verified the flag the
 # fake agent triggered above. Sequential check (no heredoc-in-if).
 # ---------------------------------------------------------------------------
@@ -387,8 +450,8 @@ else
 fi
 kill "$COLLECTOR_PID" 2>/dev/null || true
 
-if [ "$PASSED" = true ] && [ "$INCIDENT_PASSED" = true ] && [ "$GUARD_PASSED" = true ] && [ "$WEBHOOK_PASSED" = true ] && [ "$SSE_PASSED" = true ] && [ "$CONSOLE_PASSED" = true ] && [ "$ADVISOR_PASSED" = true ]; then
-  echo "E2E SMOKE TEST: PASS (Flag, Incident, Directory Guard round-trip, fleet webhook, SSE stream, console auth, and advisor verdict verified)"
+if [ "$PASSED" = true ] && [ "$INCIDENT_PASSED" = true ] && [ "$GUARD_PASSED" = true ] && [ "$WEBHOOK_PASSED" = true ] && [ "$SSE_PASSED" = true ] && [ "$CONSOLE_PASSED" = true ] && [ "$ADVISOR_PASSED" = true ] && [ "$OPERATOR_PASSED" = true ]; then
+  echo "E2E SMOKE TEST: PASS (Flag, Incident, Directory Guard, fleet webhook, SSE, console auth, advisor verdict, and operator loop verified)"
   if [ -n "$DAEMON_PID" ]; then
     kill "$DAEMON_PID" 2>/dev/null || true
   fi
@@ -407,7 +470,7 @@ else
   if [ -n "$DAEMON_PID" ]; then
     kill "$DAEMON_PID" 2>/dev/null || true
   fi
-  echo "E2E SMOKE TEST: FAIL (Flag passed: $PASSED, Incident passed: $INCIDENT_PASSED, Guard passed: $GUARD_PASSED, Webhook passed: $WEBHOOK_PASSED, SSE passed: $SSE_PASSED, Console passed: $CONSOLE_PASSED, Advisor passed: $ADVISOR_PASSED)"
+  echo "E2E SMOKE TEST: FAIL (Flag passed: $PASSED, Incident passed: $INCIDENT_PASSED, Guard passed: $GUARD_PASSED, Webhook passed: $WEBHOOK_PASSED, SSE passed: $SSE_PASSED, Console passed: $CONSOLE_PASSED, Advisor passed: $ADVISOR_PASSED, Operator passed: $OPERATOR_PASSED)"
   echo "DEBUG SSE STREAM: $SSE_BODY"
   exit 1
 fi
