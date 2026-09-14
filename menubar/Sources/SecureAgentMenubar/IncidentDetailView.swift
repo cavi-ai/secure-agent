@@ -17,6 +17,11 @@ struct IncidentDetailView: View {
     @State private var showRaw = false
     /// The disposition awaiting its confirmation dialog (nil = none).
     @State private var confirming: DispositionKind?
+    /// Live workflow state (open | acknowledged | resolved) — refreshed after
+    /// transitions so the buttons reflect reality.
+    @State private var workflowStatus: String?
+    @State private var workflowError: String?
+    @State private var resolving = false
     @Environment(\.dismiss) private var dismiss
 
     // MARK: disposition model
@@ -41,6 +46,15 @@ struct IncidentDetailView: View {
                 VStack(alignment: .leading, spacing: 14) {
                     if let applied = appliedDisposition {
                         appliedBanner
+                    }
+                    if let workflowError {
+                        Label(workflowError, systemImage: "xmark.octagon")
+                            .font(.system(size: 11))
+                            .foregroundStyle(Color.bad)
+                            .padding(10)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(Color.bad.opacity(0.10))
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
                     }
                     if let dispositionError {
                         dispositionErrorView
@@ -423,10 +437,51 @@ struct IncidentDetailView: View {
             }
             .buttonStyle(.bordered).controlSize(.small)
             Spacer()
+            workflowControls
             Button("Close") { dismiss() }
                 .keyboardShortcut(.defaultAction)
+                .padding(.leading, 8)
         }
         .padding(.horizontal, 14).padding(.vertical, 10)
+    }
+
+    /// Acknowledge marks it seen; Resolve closes it. The state pill reflects
+    /// what the daemon recorded, so the operator can see the click land.
+    @ViewBuilder
+    private var workflowControls: some View {
+        if resolving {
+            ProgressView().controlSize(.small)
+        } else {
+            switch workflowStatus ?? incident.workflow?.status ?? "open" {
+            case "resolved":
+                Label("Resolved", systemImage: "checkmark.seal.fill")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(Color.ok)
+            case "acknowledged":
+                Label("Seen", systemImage: "checkmark")
+                    .font(.system(size: 10)).foregroundStyle(.secondary)
+                Button("Resolve…") { Task { await transition(to: "resolved") } }
+                    .buttonStyle(.borderedProminent).tint(Color.ok).controlSize(.small)
+            default:
+                Button("Acknowledge") { Task { await transition(to: "acknowledged") } }
+                    .buttonStyle(.bordered).controlSize(.small)
+                Button("Resolve") { Task { await transition(to: "resolved") } }
+                    .buttonStyle(.borderedProminent).tint(Color.ok).controlSize(.small)
+            }
+        }
+    }
+
+    private func transition(to status: String) async {
+        resolving = true
+        workflowError = nil
+        do {
+            try await state.uiClient.setIncidentStatus(id: incident.id, status: status, note: nil)
+            workflowStatus = status
+            state.refresh()
+        } catch {
+            workflowError = "could not update: \(error.localizedDescription)"
+        }
+        resolving = false
     }
 
     private func sectionLabel(_ title: String) -> some View {

@@ -19,6 +19,8 @@ public protocol DaemonClientProtocol: Sendable {
     func fetchIncidentMarkdown(id: String) async throws -> String
     func fetchEvents(limit: Int) async throws -> [EventModel]
     func fetchEventsFor(pid: Int32, limit: Int) async throws -> [EventModel]
+    /// POST /incidents/status — transition open → acknowledged → resolved.
+    func setIncidentStatus(id: String, status: String, note: String?) async throws
     func fetchGuardRules() async throws -> [GuardRuleModel]
     func fetchGuardPending() async throws -> [GuardPending]
     func resolveGuard(_ req: GuardResolveRequest) async throws
@@ -140,6 +142,13 @@ public final class DaemonClient: Sendable {
     public func resolveGuard(_ req: GuardResolveRequest) async throws {
         let data = try JSONEncoder().encode(req)
         _ = try await request(method: "POST", path: "/guard/resolve", body: data)
+    }
+
+    public func setIncidentStatus(id: String, status: String, note: String?) async throws {
+        var body: [String: Any] = ["id": id, "status": status]
+        if let note, !note.isEmpty { body["note"] = note }
+        let data = try JSONSerialization.data(withJSONObject: body)
+        _ = try await request(method: "POST", path: "/incidents/status", body: data)
     }
 
     public func fetchGuardRules() async throws -> [GuardRuleModel] {
