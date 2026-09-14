@@ -29,8 +29,11 @@ if [[ -n "${NOTARY_PROFILE:-}" ]]; then
   xcrun notarytool submit "${ZIP_PATH}" --keychain-profile "${NOTARY_PROFILE}" --wait
   xcrun stapler staple "${APP_DIR}"
   rm -f "${ZIP_PATH}"
-else
-  echo "==> NOTARY_PROFILE not set — skipping notarization (ad-hoc/dev build)."
+elif [[ "${CODESIGN_IDENTITY:--}" == *"Developer ID Application"* ]]; then
+  echo "==> NOTE: Developer ID cert present but NOTARY_PROFILE unset — DMG will be"
+  echo "    Gatekeeper-blocked for other users. Set NOTARY_PROFILE to your keychain"
+  echo "    profile (xcrun notarytool store-credentials --profile <name>) for a"
+  echo "    distributable release."
 fi
 
 echo "==> Creating DMG..."
