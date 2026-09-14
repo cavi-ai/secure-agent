@@ -170,6 +170,12 @@ func New(cfg Config, sink Sink) *Subscriber {
 // EnqueueFlag offers a flag for triage. Drop-oldest under pressure: a stale
 // verdict is worth less than a current one, and the queue must never stall
 // the drain loop.
+// TriageForTest runs the flag triage synchronously and returns the verdict —
+// test-only: production paths go through the queue + process().
+func (s *Subscriber) TriageForTest(fl model.Flag) (model.AdvisorVerdict, error) {
+	return s.triageFlag(context.Background(), fl)
+}
+
 // RetriageCooldown: one re-triage per flag per window. Rapid clicking (or
 // a UI retry loop) cannot flood the model queue; repeated requests within
 // the window are idempotent no-ops that report "already queued/recent".
