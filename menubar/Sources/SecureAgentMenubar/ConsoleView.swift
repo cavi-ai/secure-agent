@@ -533,11 +533,23 @@ struct ConsoleView: View {
                     .font(.system(size: 11)).foregroundStyle(.tertiary)
                     .fixedSize(horizontal: false, vertical: true)
             } else {
-                // Two-level: harness group (collapsible) → sessions
-                // (collapsible) → subagents (nested, always visible when
-                // the session is open).
-                ForEach(state.harnessGroups(sortedBy: agentSort)) { group in
+                let allGroups = state.harnessGroups(sortedBy: agentSort)
+                let shown = allGroups.prefix(6)
+                ForEach(shown) { group in
                     harnessGroupView(group)
+                }
+                if allGroups.count > 6 {
+                    Button { state.openDashboard() } label: {
+                        HStack {
+                            Text("+ \(allGroups.count - 6) more harness\(allGroups.count - 6 == 1 ? "" : "es") — open the console")
+                                .font(.system(size: 10)).foregroundStyle(.secondary)
+                            Spacer()
+                            Image(systemName: "arrow.up.right")
+                                .font(.system(size: 8)).foregroundStyle(.tertiary)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(state.dashboardUnavailableReason != nil)
                 }
             }
         }
