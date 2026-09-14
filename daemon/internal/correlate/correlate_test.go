@@ -231,3 +231,52 @@ func TestKeychainRepeatSuppression(t *testing.T) {
 		t.Fatalf("expected 2 flags after window expiry; got %d", total)
 	}
 }
+
+// Repeat suppression on the other immediate-fire rules: security CLI,
+// TCC tamper, and proxy hits each collapse within their window.
+func TestSecurityCLIRepeatSuppression(t *testing.T) {
+	c := newTestCorrelator(t)
+	base := time.Now()
+	total := 0
+	for i := 0; i < 4; i++ {
+		total += len(c.Observe(event.Event{Kind: event.KindExec, PID: 200,
+			ExePath: "/usr/bin/security", TS: base.Add(time.Duration(i) * time.Minute)}))
+	}
+	if total != 1 {
+		t.Fatalf("expected 1 flag after 4 identical security(1) execs; got %d", total)
+	}
+}
+
+func TestTCCRepeatSuppression(t *testing.T) {
+	c := newTestCorrelator(t)
+	base := time.Now()
+	total := 0
+	for i := 0; i < 3; i++ {
+		total += len(c.Observe(event.Event{Kind: event.KindTCCModify, PID: 200,
+			TS: base.Add(time.Duration(i) * time.Minute), Detail: "kTCCServiceScreenCapture"}))
+	}
+	if total != 1 {
+		t.Fatalf("expected 1 flag after 3 identical TCC writes; got %d", total)
+	}
+}
+
+func TestProxyLeakRepeatSuppression(t *testing.T) {
+	c := newTestCorrelator(t)
+	base := time.Now()
+	total := 0
+	for i := 0; i < 4; i++ {
+		total += len(c.Observe(event.Event{Kind: event.KindProxyHit, PID: 200,
+			TS: base.Add(time.Duration(i) * time.Minute), RemoteHost: "evil.example.com",
+			Detail: "proxy-secret-leak: aws-key in body"}))
+	}
+	if total != 1 {
+		t.Fatalf("expected 1 flag after 4 identical leaks to the same host; got %d", total)
+	}
+	// A different host flags independently.
+	total += len(c.Observe(event.Event{Kind: event.KindProxyHit, PID: 200,
+		TS: base.Add(6 * time.Minute), RemoteHost: "other.example.com",
+		Detail: "proxy-secret-leak: aws-key in body"}))
+	if total != 2 {
+		t.Fatalf("different host must flag independently; got %d", total)
+	}
+}
