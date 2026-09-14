@@ -200,7 +200,6 @@ func (a *API) handleFlagAcknowledge(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]any{"status": "ok", "acknowledged": ok})
 }
 
-
 // handleAdvisorRetriage re-queues one flag for a fresh advisor verdict.
 // Idempotent by design: repeated requests within the advisor's cooldown are
 // no-ops that still answer ok — the client can hammer it without flooding

@@ -200,7 +200,6 @@ func consoleUserUID() (int, error) {
 	return uid, nil
 }
 
-
 type syncBuffer struct {
 	mu  sync.Mutex
 	buf []byte
