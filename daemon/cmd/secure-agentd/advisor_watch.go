@@ -42,7 +42,11 @@ func watchAdvisorConfig(ctx context.Context, path string, st *store.Store,
 
 	var lastKey string
 	check := func() {
-		data, err := config.Load(path)
+		// LoadStrict, not Load: a malformed overlay makes Load substitute
+		// compiled-in defaults (enabled=false, default endpoint) — the
+		// watcher would then "apply" those defaults and silently reconfigure
+		// a working advisor to wrong values. Strict keeps the current stack.
+		data, err := config.LoadStrict(path)
 		if err != nil {
 			// A half-written or corrupt config must NEVER disturb the live
 			// advisor: keep the current stack, log once per state change.

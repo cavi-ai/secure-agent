@@ -188,10 +188,44 @@ func filterDisabledAgents(all []AgentDef, disabled []string) []AgentDef {
 	return out
 }
 
+// ErrOverlayMalformed is returned by LoadStrict when the user overlay exists
+// but cannot be parsed. Load (lenient) masks it with compiled-in defaults —
+// correct for startup, DANGEROUS for hot-reload: a half-written config would
+// silently reconfigure the advisor to defaults. Callers that re-read a file
+// that was just written must use LoadStrict and keep the previous state.
+var ErrOverlayMalformed = fmt.Errorf("overlay is malformed YAML")
+
+func LoadStrict(explicitPath string) (Config, error) {
+	cfg, overlayErr, validateErr := loadWithOverlayError(explicitPath)
+	if validateErr != nil {
+		return Config{}, validateErr
+	}
+	if overlayErr != nil {
+		return cfg, overlayErr
+	}
+	return cfg, nil
+}
+
+// Load is the lenient variant used at boot: a malformed overlay falls back
+// to compiled-in defaults (logged), but VALIDATION errors still surface —
+// booting with a sample interval that panics the collector is worse than
+// refusing to start.
 func Load(explicitPath string) (Config, error) {
+	cfg, _, validateErr := loadWithOverlayError(explicitPath)
+	if validateErr != nil {
+		return Config{}, validateErr
+	}
+	return cfg, nil
+}
+
+// loadWithOverlayError returns the config AND whether the overlay was
+// malformed (defaults were substituted). The hot-reload watcher uses this to
+// distinguish "operator changed something" from "config was half-written".
+func loadWithOverlayError(explicitPath string) (Config, error, error) {
 	var raw rawConfig
+	var overlayMalformed error
 	if err := yaml.Unmarshal(defaultBytes, &raw); err != nil {
-		return Config{}, err
+		return Config{}, err, err
 	}
 
 	targetPath := explicitPath
@@ -213,9 +247,11 @@ func Load(explicitPath string) (Config, error) {
 			// back to defaults — the user's `mode: block` reverting to monitor
 			// with no signal is exactly the failure this tool exists to prevent.
 			log.Printf("config: WARNING: overlay %s unreadable (%v); running on compiled-in defaults", targetPath, err)
+			overlayMalformed = err
 		case err == nil:
 			if err := yaml.Unmarshal(data, &raw); err != nil {
 				log.Printf("config: WARNING: overlay %s is malformed YAML (%v); running on compiled-in defaults", targetPath, err)
+				overlayMalformed = fmt.Errorf("%w: %v", ErrOverlayMalformed, err)
 			}
 		}
 	}
@@ -253,9 +289,9 @@ func Load(explicitPath string) (Config, error) {
 	cfg.Firewall.Registry.IngestSources = expandPaths(cfg.Firewall.Registry.IngestSources)
 
 	if err := cfg.Validate(); err != nil {
-		return Config{}, err
+		return Config{}, overlayMalformed, err
 	}
-	return cfg, nil
+	return cfg, overlayMalformed, nil
 }
 
 // Validate rejects values that would crash or silently break subsystems at

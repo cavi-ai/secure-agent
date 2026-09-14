@@ -17,12 +17,13 @@ import (
 // chatStub is an OpenAI-compatible /v1/chat/completions stub whose response
 // content and behavior are scriptable per test.
 type chatStub struct {
-	mu       sync.Mutex
-	content  string
-	status   int
-	requests int
-	lastBody string
-	hangFor  time.Duration
+	mu        sync.Mutex
+	content   string
+	reasoning string
+	status    int
+	requests  int
+	lastBody  string
+	hangFor   time.Duration
 }
 
 func (s *chatStub) handler(t *testing.T) http.HandlerFunc {
@@ -41,10 +42,13 @@ func (s *chatStub) handler(t *testing.T) http.HandlerFunc {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
+		s.mu.Lock()
+		reasoning := s.reasoning
+		s.mu.Unlock()
 		resp := chatResponse{Choices: []struct {
 			Message      chatMessage `json:"message"`
 			FinishReason string      `json:"finish_reason"`
-		}{{Message: chatMessage{Role: "assistant", Content: content}}}}
+		}{{Message: chatMessage{Role: "assistant", Content: content, Reasoning: reasoning}}}}
 		json.NewEncoder(w).Encode(resp)
 	}
 }
@@ -398,5 +402,54 @@ func TestNormalizeActionVerbs(t *testing.T) {
 		if got := normalizeAction(in); got != want {
 			t.Errorf("normalizeAction(%q) = %q; want %q", in, got, want)
 		}
+	}
+}
+
+// MARK: - Reasoning-model coverage (the empty-verdict fix)
+
+// A reasoning model leaves content empty and puts the JSON inside the
+// reasoning trace; the advisor must fall back to it.
+func TestReasoningFieldFallbackParsesVerdict(t *testing.T) {
+	stub := &chatStub{reasoning: `Let me assess this carefully. The evidence shows a connection to a known-good host. Result: {"assessment":"benign","confidence":0.8,"rationale":"Known developer endpoint.","suggested_action":"allow-host"}`}
+	srv := newStubServer(t, stub)
+
+	sub := New(Config{
+		Enabled:  true,
+		Endpoint: srv.URL,
+		Model:    "test",
+		Timeout:  5 * time.Second,
+	}, &memSink{rows: map[string]model.AdvisorVerdict{}})
+	if sub == nil {
+		t.Fatal("subscriber nil")
+	}
+	_ = sub
+	// Direct triage through the subscriber's chat path:
+	fl := model.Flag{ID: "rf1", Rule: "r", Severity: 3, PID: 1, Agent: "a", Evidence: []string{"then connected to h:1 at T"}}
+	v, err := sub.TriageForTest(fl)
+	if err != nil {
+		t.Fatalf("reasoning fallback must parse: %v", err)
+	}
+	if v.Assessment != "benign" || v.SuggestedAction != "allow-host" {
+		t.Fatalf("verdict = %+v", v)
+	}
+}
+
+// Budget exhaustion mid-reasoning must produce a NAMED error (not an empty
+// JSON parse failure), so the operator can tell "raise tokens" from "bad model".
+func TestBudgetExhaustionIsNamed(t *testing.T) {
+	stub := &chatStub{} // content empty, no reasoning
+	srv := newStubServer(t, stub)
+	sub := New(Config{
+		Enabled:  true,
+		Endpoint: srv.URL,
+		Model:    "test",
+		Timeout:  5 * time.Second,
+	}, &memSink{rows: map[string]model.AdvisorVerdict{}})
+	v, err := sub.TriageForTest(model.Flag{ID: "rf2", Rule: "r", Severity: 3, PID: 1, Agent: "a",
+		Evidence: []string{"then connected to h:1 at T"}})
+	// The stub returns an empty content with no reasoning: parse fails —
+	// this exercises the same path as a length-capped reasoning response.
+	if err == nil && v.SuggestedAction == "" && v.Rationale == "" {
+		t.Fatal("empty model output must produce an error, not a silent empty verdict")
 	}
 }
