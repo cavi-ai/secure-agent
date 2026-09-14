@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -142,5 +143,40 @@ func TestWriteCwdOverridesEmptyClears(t *testing.T) {
 	b, _ := os.ReadFile(p)
 	if string(b) != "[]\n" {
 		t.Fatalf("empty override file = %q, want []", string(b))
+	}
+}
+
+// LoadStrict surfaces overlay corruption instead of masking it with
+// defaults — the hot-reload contract (a half-written config must never
+// silently reconfigure the advisor).
+func TestLoadStrictReportsMalformedOverlay(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+
+	// Valid overlay: no error.
+	os.WriteFile(path, []byte("advisor:\n  enabled: true\n  managed: false\n  endpoint: \"http://127.0.0.1:11434\"\n  model: \"m\"\n"), 0o600)
+	cfg, err := LoadStrict(path)
+	if err != nil {
+		t.Fatalf("valid overlay: %v", err)
+	}
+	if !cfg.Advisor.Enabled {
+		t.Fatal("advisor must be enabled")
+	}
+
+	// Malformed overlay: error carries the sentinel AND the config is
+	// defaults (lenient behavior preserved for boot).
+	os.WriteFile(path, []byte("advisor:\n  enabled: [broken\n  man"), 0o600)
+	_, err = LoadStrict(path)
+	if err == nil {
+		t.Fatal("malformed overlay must be reported, not masked")
+	}
+	if !errors.Is(err, ErrOverlayMalformed) {
+		t.Fatalf("error must wrap ErrOverlayMalformed; got %v", err)
+	}
+
+	// Missing overlay file: no error (no overlay is a valid state).
+	os.Remove(path)
+	if _, err := LoadStrict(path); err != nil {
+		t.Fatalf("missing overlay must not error: %v", err)
 	}
 }
