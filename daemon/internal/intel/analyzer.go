@@ -220,16 +220,33 @@ func (a *Analyzer) classifyPath(path string) *model.RotateItem {
 		}
 	}
 
-	// Keychain: only real keychain files, not any path containing "keychain".
+	// System trust store: reading it is normal for cert-chain evaluation —
+	// any app doing TLS or code-signing touches these files. There is
+	// nothing to rotate (trust anchors are public), and calling it CRITICAL
+	// teaches the operator to ignore alerts.
+	if strings.Contains(cleanPath, "systemtrustsettings.plist") ||
+		strings.Contains(cleanPath, "/system/library/keychains/") {
+		return &model.RotateItem{
+			ID:          "info-keychain-system-trust",
+			Category:    model.CategoryKeychain,
+			Name:        "macOS System Trust Store",
+			Path:        path,
+			Risk:        model.RiskLow,
+			Description: "The agent read the macOS system trust store. Every app that validates a certificate chain (TLS, code signing, package verification) reads this file — it contains public root-CA certificates, not secrets.",
+			Action:      "No action needed. Only flag for review if the agent also attempted outbound connections to unknown hosts immediately after.",
+		}
+	}
+
+	// Keychain: only real USER keychain files, not the system trust store.
 	if strings.HasSuffix(cleanPath, ".keychain-db") || strings.HasSuffix(cleanPath, ".keychain") || strings.Contains(cleanPath, "/library/keychains/") {
 		return &model.RotateItem{
 			ID:          "rot-keychain-db",
 			Category:    model.CategoryKeychain,
-			Name:        "macOS Keychain Database",
+			Name:        "macOS User Keychain",
 			Path:        path,
-			Risk:        model.RiskCritical,
-			Description: "A macOS Keychain file was accessed.",
-			Action:      "Enumerate the affected items with Keychain Access (or `security dump-keychain`), keyed on the (service, account) pair — not service alone, which only shows the first match — and change the passwords/tokens stored in them.",
+			Risk:        model.RiskHigh,
+			Description: "A macOS user keychain file was accessed. Reading the file alone does not expose secrets — items are encrypted with the user's password — but it is unusual for an agent and worth confirming the access pattern.",
+			Action:      "Check what the agent did with the access: Keychain Access → filter items modified around the access time. Rotation is warranted only if the agent also wrote to the keychain or read item secrets via the security CLI.",
 		}
 	}
 

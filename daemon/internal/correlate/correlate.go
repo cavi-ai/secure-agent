@@ -52,6 +52,9 @@ type Correlator struct {
 	marks       map[int32][]readMark
 	conns       map[int32][]connMark
 	uninspected map[string]*uninspectedEntry // distinct "agent|host" egress not seen via the proxy
+	// lastKeychainFire[(pid|path)] — repeat suppression: identical keychain
+	// accesses within keychainRepeatWindow collapse to one flag.
+	lastKeychainFire map[string]time.Time
 	// allowlistOverrides supplies user-approved hosts (console suggestions) on
 	// top of the config allowlist. Nil until wired.
 	allowlistOverrides func(agent string) []string
@@ -157,6 +160,10 @@ func isLocalhost(host string) bool {
 	return strings.HasPrefix(host, "127.")
 }
 
+// keychainRepeatWindow: repeats of the same (pid, keychain path) access
+// within this window are the same pattern — one flag, not a flood.
+const keychainRepeatWindow = 15 * time.Minute
+
 func (c *Correlator) Observe(e event.Event) []model.Flag {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -213,8 +220,30 @@ func (c *Correlator) Observe(e event.Event) []model.Flag {
 	case event.KindFileOpen, event.KindFileWrite, event.KindPluginAction:
 		if cat, ok := c.classifier.Classify(e.Path); ok {
 			c.rememberReadLocked(rootPID, e.PID, readMark{at: e.TS, path: e.Path, cat: cat})
+			// System trust-store reads (SystemTrustSettings, /System/Library/
+			// Keychains) are normal macOS behavior for cert-chain evaluation —
+			// any app doing TLS/code-signing touches them. They are recorded
+			// in the transcript but never CRITICAL, and they never seed the
+			// read-then-connect rule (there is no secret to exfiltrate).
+			if cat == sensitive.CatKeychainSystem {
+				return nil
+			}
 			if cat == sensitive.CatKeychain {
-				// Rule 2: Keychain access flags immediately
+				// Repeat suppression: an agent touching the same keychain file
+				// every few minutes is ONE access pattern, not a new incident
+				// per fire. Collapse repeats within the window. Without this,
+				// one routine access pattern floods the critical list with
+				// dozens of identical rows — the operator's "ignore" looked
+				// broken because the NEXT fire was a new flag id.
+				if c.lastKeychainFire == nil {
+					c.lastKeychainFire = map[string]time.Time{}
+				}
+				key := fmt.Sprintf("%d|%s", e.PID, e.Path)
+				if last, ok := c.lastKeychainFire[key]; ok && e.TS.Sub(last) < keychainRepeatWindow {
+					c.mutedCount++ // counted as suppressed, not flagged
+					return nil
+				}
+				c.lastKeychainFire[key] = e.TS
 				flagID := hashFlagID("keychain-access", e.PID, e.TS)
 				evidence := []string{
 					fmt.Sprintf("%s (pid %d) accessed keychain file %s at %s", info.Name, e.PID, e.Path, e.TS.Format(time.RFC3339)),

@@ -16,6 +16,7 @@ const (
 	CatSSHKey
 	CatAWS
 	CatKeychain
+	CatKeychainSystem
 )
 
 func (c Category) String() string {
@@ -28,6 +29,8 @@ func (c Category) String() string {
 		return "aws_credentials"
 	case CatKeychain:
 		return "keychain"
+	case CatKeychainSystem:
+		return "keychain_system_trust"
 	default:
 		return "other_sensitive"
 	}
@@ -56,7 +59,17 @@ func (c *classifierImpl) Classify(path string) (Category, bool) {
 	clean := filepath.Clean(path)
 	lower := strings.ToLower(clean)
 
-	// 1. Keychain markers
+	// 1a. System trust store: reading these files is what macOS does when
+	// ANY app evaluates a certificate chain (code signing, TLS, package
+	// verification). Agents read them constantly for ordinary work — this
+	// is not a secret and not exfiltratable identity material. Classify
+	// separately so the keychain rule doesn't fire CRITICAL on it.
+	if strings.Contains(lower, "systemtrustsettings.plist") ||
+		strings.Contains(lower, "/system/library/keychains/") {
+		return CatKeychainSystem, true
+	}
+
+	// 1b. Keychain markers (user keychains — the actual secrets).
 	for _, marker := range c.cfg.KeychainMarkers {
 		if strings.Contains(lower, strings.ToLower(marker)) {
 			return CatKeychain, true
