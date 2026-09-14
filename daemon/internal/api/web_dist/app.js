@@ -1,11 +1,13 @@
 document.addEventListener('DOMContentLoaded', () => {
-  // Console auth: the menubar opens /dashboard/?ct=<console-token>. The token
+  // Console auth: the menubar opens /dashboard/#ct=<console-token>. The token
   // gates the telemetry endpoints on this listener (the proxy token agents
-  // carry is a different credential and is NOT accepted here). Lift it into
-  // memory and strip it from the address bar so it doesn't linger in history.
-  const consoleToken = new URLSearchParams(location.search).get('ct') || '';
+  // carry is a different credential and is NOT accepted here). A fragment is
+  // used because fragments are never sent to the server — the token stays off
+  // the wire and out of server logs. Lift it into memory and strip it from
+  // the address bar so it doesn't linger in history.
+  const consoleToken = new URLSearchParams(location.hash.slice(1)).get('ct') || '';
   if (consoleToken && window.history.replaceState) {
-    history.replaceState(null, '', location.pathname);
+    history.replaceState(null, '', location.pathname + location.search);
   }
   const authHeaders = consoleToken ? { 'X-SecureAgent-Console-Token': consoleToken } : {};
   const apiFetch = (path, opts = {}) => fetch(path, { ...opts, headers: { ...authHeaders, ...(opts.headers || {}) } });
