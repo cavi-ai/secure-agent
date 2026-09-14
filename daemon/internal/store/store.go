@@ -790,7 +790,10 @@ func (s *Store) RecentIncidents(limit int) []model.IncidentReport {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	rows, err := s.db.Query(`SELECT report_json FROM incidents ORDER BY datetime(created_at) DESC, created_at DESC LIMIT ?`, normalizeLimit(limit))
+	// Resolved incidents stay in the audit trail but leave the active set:
+	// the operator dismissed them, so they must not keep rendering as
+	// critical rows in the popover.
+	rows, err := s.db.Query(`SELECT report_json FROM incidents WHERE status != 'resolved' ORDER BY datetime(created_at) DESC, created_at DESC LIMIT ?`, normalizeLimit(limit))
 	if err != nil {
 		log.Printf("store: query incidents error: %v", err)
 		return nil
