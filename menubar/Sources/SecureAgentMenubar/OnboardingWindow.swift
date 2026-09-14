@@ -107,7 +107,12 @@ struct OnboardingView: View {
                 .padding(.vertical, 4)
             }
 
-            GroupBox("3. Harness Hooks") {
+            GroupBox("3. File Telemetry") {
+                ESFileTelemetryCard(setup: setup)
+                    .padding(.vertical, 4)
+            }
+
+            GroupBox("4. Harness Hooks") {
                 VStack(alignment: .leading, spacing: 6) {
                     stepRow(
                         done: setup.areHooksInstalled,
@@ -137,7 +142,7 @@ struct OnboardingView: View {
                 }
             }
 
-            GroupBox("4. Extras") {
+            GroupBox("5. Extras") {
                 HStack {
                     Button("Open at Login") { run { try setup.enableLoginItem() } }
                         .disabled(setup.isLoginItemEnabled)
@@ -147,7 +152,7 @@ struct OnboardingView: View {
                 .padding(.vertical, 4)
             }
 
-            GroupBox("5. Agent Routing (optional)") {
+            GroupBox("6. Agent Routing (optional)") {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Route your agents through the local inspection proxy to scan their outbound traffic for secret leaks. Opt-in and scoped to your shell — it changes no system or keychain settings.")
                         .font(.callout)
@@ -173,7 +178,7 @@ struct OnboardingView: View {
                 .padding(.vertical, 4)
             }
 
-            GroupBox("6. Secret Registry (optional)") {
+            GroupBox("7. Secret Registry (optional)") {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Register your real secrets so the firewall catches them leaking with near-zero false positives. Values are fingerprinted (HMAC) and never stored.")
                         .font(.callout)
@@ -201,7 +206,7 @@ struct OnboardingView: View {
                 .padding(.vertical, 4)
             }
 
-            GroupBox("7. Guard Your Secrets") {
+            GroupBox("8. Guard Your Secrets") {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Turn on the interactive guard for SSH keys, cloud credentials, the keychain, and your harness config (settings & hook scripts). When an agent reaches for one, you get a native Allow / Deny prompt. Nothing is blocked until you choose.")
                         .font(.callout)
@@ -220,7 +225,7 @@ struct OnboardingView: View {
                 .padding(.vertical, 4)
             }
 
-            GroupBox("8. Local Advisor (optional)") {
+            GroupBox("9. Local Advisor (optional)") {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("A locally served model (MLX, llama.cpp, Ollama) triages flags and writes plain-English incident narratives — on this machine only. The daemon refuses any non-loopback endpoint, and verdicts never change enforcement.")
                         .font(.callout)

@@ -37,6 +37,36 @@ type Health struct {
 	LastError string `json:"last_error,omitempty"`
 }
 
+// PermanentError marks a failure that cannot succeed on retry: an
+// unprivileged Endpoint Security client, a missing binary with no install
+// path, a bad flag. Restarting on those is pure noise (14 retries over 3
+// minutes for an error that will never change), so the supervisor abandons
+// the worker on the FIRST permanent error. Wrap one:
+//
+//	return supervise.Permanent(fmt.Errorf("eslogger: %w", err))
+type PermanentError struct{ Err error }
+
+func (e PermanentError) Error() string { return e.Err.Error() }
+func (e PermanentError) Unwrap() error { return e.Err }
+
+// Permanent wraps err so the supervisor treats it as deterministic.
+func Permanent(err error) error { return PermanentError{Err: err} }
+
+// isPermanent reports whether err (or its unwrap chain) was marked permanent.
+func isPermanent(err error) bool {
+	for e := err; e != nil; {
+		if _, ok := e.(PermanentError); ok {
+			return true
+		}
+		u, ok := e.(interface{ Unwrap() error })
+		if !ok {
+			return false
+		}
+		e = u.Unwrap()
+	}
+	return false
+}
+
 // Registry is a concurrency-safe collection of worker health, updated by the
 // supervisor and read by the status endpoint. The zero value is not usable; call
 // NewRegistry. A nil *Registry is accepted everywhere and simply records nothing.
@@ -140,6 +170,14 @@ func (s *Supervisor) Run(ctx context.Context, name string, fn func(context.Conte
 			h.Restarts = restarts
 			h.LastError = errStr
 		})
+
+		// A deterministic failure will fail identically every retry —
+		// restarting cannot help, so skip the transient window entirely.
+		if isPermanent(err) {
+			log.Printf("supervisor: worker %s failed permanently; not retrying (%v)", name, err)
+			s.reg.update(name, func(h *Health) { h.Abandoned = true })
+			return
+		}
 
 		if s.AbandonAfter > 0 && time.Since(firstFailure) >= s.AbandonAfter {
 			log.Printf("supervisor: worker %s failed continuously for %v; abandoning (last error: %v)", name, s.AbandonAfter, err)

@@ -126,6 +126,7 @@ type AdvisorConfig struct {
 }
 
 type rawConfig struct {
+	DisabledAgents      []string             `yaml:"disabled_agents"`
 	SensitiveGlobs      []string             `yaml:"sensitive_globs"`
 	SensitivePaths      []string             `yaml:"sensitive_paths"`
 	KeychainMarkers     []string             `yaml:"keychain_markers"`
@@ -151,6 +152,7 @@ type Config struct {
 	KeychainMarkers   []string
 	Agents            []AgentDef
 	VendorAllowlist   map[string][]string
+	DisabledAgents    []string
 	NetSampleInterval time.Duration
 	SocketPath        string
 	DBPath            string
@@ -163,6 +165,27 @@ type Config struct {
 	DirectoryGuard    DirectoryGuardConfig
 	Fleet             FleetConfig
 	Advisor           AdvisorConfig
+}
+
+// filterDisabledAgents drops agents the operator disabled via
+// disabled_agents (case-insensitive name match) — the Providers settings
+// writes this list. A name in disabled_agents that matches nothing is
+// ignored (stale entries must not error).
+func filterDisabledAgents(all []AgentDef, disabled []string) []AgentDef {
+	if len(disabled) == 0 {
+		return all
+	}
+	off := map[string]bool{}
+	for _, d := range disabled {
+		off[strings.ToLower(d)] = true
+	}
+	out := all[:0]
+	for _, a := range all {
+		if !off[strings.ToLower(a.Name)] {
+			out = append(out, a)
+		}
+	}
+	return out
 }
 
 func Load(explicitPath string) (Config, error) {
@@ -201,7 +224,7 @@ func Load(explicitPath string) (Config, error) {
 		SensitiveGlobs:    expandPaths(raw.SensitiveGlobs),
 		SensitivePaths:    expandPaths(raw.SensitivePaths),
 		KeychainMarkers:   raw.KeychainMarkers,
-		Agents:            raw.Agents,
+		Agents:            filterDisabledAgents(raw.Agents, raw.DisabledAgents),
 		VendorAllowlist:   raw.VendorAllowlist,
 		NetSampleInterval: time.Duration(raw.NetSampleIntervalMS) * time.Millisecond,
 		SocketPath:        expandPath(raw.SocketPath),
