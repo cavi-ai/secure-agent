@@ -6,6 +6,10 @@ All notable changes to `secure-agent` are documented here. The format follows
 
 ## [v1.1.0] — 2026-09-11
 
+Released: https://github.com/cavi-ai/secure-agent/releases/tag/v1.1.0
+Signed with an Apple Development certificate (stable TCC grants across
+updates); notarization is the follow-up for public distribution.
+
 A substantial feature + hardening release one day after v1.0.0 — in
 retrospect, 1.0.0 was effectively the last release candidate; everything
 below is the delta that earns the "stable" label.
