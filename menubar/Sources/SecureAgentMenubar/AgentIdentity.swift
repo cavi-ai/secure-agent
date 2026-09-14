@@ -84,6 +84,7 @@ enum AgentIdentity {
 // MARK: - drawn brand glyphs
 
 /// Anthropic's starburst: 8 tapered rays from center.
+@MainActor
 struct ClaudeMarkGlyph: View {
     let inset: CGFloat
     let color: Color
@@ -113,6 +114,7 @@ private func sin(_ a: Double) -> CGFloat { CGFloat(Foundation.sin(a)) }
 
 /// Cursor: a filled rounded square with a vertical split — the cursor logo
 /// reads as two interlocking halves.
+@MainActor
 struct CursorMark: View {
     let inset: CGFloat
     let color: Color
@@ -137,6 +139,7 @@ struct CursorMark: View {
 }
 
 /// OpenAI/Codex: hexagonal knot — a hexagon outline with inner hex offset.
+@MainActor
 struct CodexMark: View {
     let inset: CGFloat
     let color: Color
@@ -161,6 +164,7 @@ struct CodexMark: View {
 }
 
 /// opencode: angle brackets with a slash.
+@MainActor
 struct OpenCodeGlyph: View {
     let inset: CGFloat
     let color: Color
@@ -183,6 +187,7 @@ struct OpenCodeGlyph: View {
 }
 
 /// Antigravity: ascending triangle with a cut baseline.
+@MainActor
 struct TriangleMark: View {
     let inset: CGFloat
     let color: Color
@@ -210,6 +215,7 @@ struct TriangleMark: View {
 }
 
 /// Ollama: the llama silhouette abstracted to head + neck.
+@MainActor
 struct OllamaMark: View {
     let inset: CGFloat
     let color: Color
@@ -235,6 +241,7 @@ struct OllamaMark: View {
 }
 
 /// LM Studio: stacked layers (the studio "deck").
+@MainActor
 struct LmStudioMark: View {
     let inset: CGFloat
     let color: Color

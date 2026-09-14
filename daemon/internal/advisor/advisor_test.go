@@ -370,7 +370,6 @@ func TestHostAssessmentStored(t *testing.T) {
 	}
 }
 
-
 func TestParseVerdictExtractsJSONFromProse(t *testing.T) {
 	prose := "The evidence suggests the agent accessed a legitimate developer endpoint. Based on the pattern, this looks like normal usage. {\n  \"assessment\": \"benign\",\n  \"confidence\": 0.7,\n  \"rationale\": \"Matches ordinary development workflow against a known host.\",\n  \"suggested_action\": \"You should allow the host going forward.\"\n}"
 	v, err := parseVerdict(prose)
@@ -388,12 +387,12 @@ func TestParseVerdictExtractsJSONFromProse(t *testing.T) {
 
 func TestNormalizeActionVerbs(t *testing.T) {
 	cases := map[string]string{
-		"rotate the leaked credentials":  "rotate-credentials",
-		"kill the agent immediately":     "kill-agent",
+		"rotate the leaked credentials":        "rotate-credentials",
+		"kill the agent immediately":           "kill-agent",
 		"allow the connection to the endpoint": "allow-host",
-		"mute this rule for the host":    "mute-rule",
-		"":                               "",
-		"teleport the llama":             "",
+		"mute this rule for the host":          "mute-rule",
+		"":                                     "",
+		"teleport the llama":                   "",
 	}
 	for in, want := range cases {
 		if got := normalizeAction(in); got != want {

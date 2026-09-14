@@ -388,7 +388,6 @@ func TestGuardPathAllows(t *testing.T) {
 	}
 }
 
-
 func TestAcknowledgeRuleHost(t *testing.T) {
 	dir := t.TempDir()
 	s, err := Open(filepath.Join(dir, "e.db"), filepath.Join(dir, "e.jsonl"))

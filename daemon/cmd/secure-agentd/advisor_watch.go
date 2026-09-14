@@ -95,5 +95,3 @@ func boolStr(b bool) string {
 	}
 	return "0"
 }
-
-

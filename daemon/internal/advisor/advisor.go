@@ -86,8 +86,8 @@ type chatRequest struct {
 }
 
 type chatMessage struct {
-	Role      string `json:"role"`
-	Content   string `json:"content"`
+	Role    string `json:"role"`
+	Content string `json:"content"`
 	// Reasoning carries the thinking trace of reasoning models (qwen3 et al).
 	// These models routinely leave Content empty and put their whole answer —
 	// including the JSON we asked for — in Reasoning when the token budget
@@ -97,8 +97,8 @@ type chatMessage struct {
 
 type chatResponse struct {
 	Choices []struct {
-		Message         chatMessage `json:"message"`
-		FinishReason    string      `json:"finish_reason"`
+		Message      chatMessage `json:"message"`
+		FinishReason string      `json:"finish_reason"`
 	} `json:"choices"`
 }
 
@@ -155,7 +155,7 @@ func New(cfg Config, sink Sink) *Subscriber {
 	if cfg.QueueSize <= 0 {
 		cfg.QueueSize = 64
 	}
-		if cfg.QueueSize <= 0 {
+	if cfg.QueueSize <= 0 {
 		cfg.QueueSize = 64
 	}
 	return &Subscriber{

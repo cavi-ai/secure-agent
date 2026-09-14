@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cavi-ai/secure-agent/daemon/internal/correlate"
 	"github.com/cavi-ai/secure-agent/daemon/internal/config"
+	"github.com/cavi-ai/secure-agent/daemon/internal/correlate"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
@@ -56,7 +56,6 @@ func TestMuteFlowAcknowledgesExistingFlags(t *testing.T) {
 func flagFor(id, rule, evidence string) model.Flag {
 	return model.Flag{ID: id, Rule: rule, Severity: 3, PID: 7, Agent: "cursor", Evidence: []string{evidence}}
 }
-
 
 // Acknowledge is idempotent and validated at the API layer: a second ack
 // returns ok with acknowledged=true→false semantics preserved (already-acked

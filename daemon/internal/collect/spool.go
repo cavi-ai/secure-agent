@@ -4,8 +4,8 @@ import (
 	"bufio"
 	"context"
 	"fmt"
-	"os"
 	"log"
+	"os"
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/bus"

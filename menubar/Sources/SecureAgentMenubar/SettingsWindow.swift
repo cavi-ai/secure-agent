@@ -556,6 +556,7 @@ struct SettingsView: View {
 ///   C. spool flowing           → green, done. Remove stays available.
 /// The user never hunts for a pane: the button deep-links to the exact
 /// Settings section, and the card self-updates the moment the switch flips.
+@MainActor
 struct ESFileTelemetryCard: View {
     @ObservedObject var setup: SetupManager
     @State private var polling = false
