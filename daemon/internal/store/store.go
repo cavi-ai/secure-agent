@@ -206,6 +206,32 @@ func Open(dbPath, jsonlPath string) (*Store, error) {
 		}
 		log.Printf("store: migrated flags: added acknowledged column")
 	}
+	// Incidents workflow columns: the acknowledge/resolve endpoints write
+	// status/acknowledged_at/resolved_at/resolution_note. Without this
+	// migration those writes fail with "no such column" and the dashboard's
+	// Acknowledge/Resolve buttons are dead (the exact "dismiss doesn't
+	// work" dogfood complaint).
+	var wfN int
+	if err := db.QueryRow(
+		`SELECT COUNT(*) FROM pragma_table_info('incidents') WHERE name='status'`,
+	).Scan(&wfN); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to inspect incidents schema: %w", err)
+	}
+	if wfN == 0 {
+		for _, col := range []string{
+			`ALTER TABLE incidents ADD COLUMN status TEXT`,
+			`ALTER TABLE incidents ADD COLUMN acknowledged_at TEXT`,
+			`ALTER TABLE incidents ADD COLUMN resolved_at TEXT`,
+			`ALTER TABLE incidents ADD COLUMN resolution_note TEXT`,
+		} {
+			if _, err := db.Exec(col); err != nil {
+				db.Close()
+				return nil, fmt.Errorf("failed to migrate incidents workflow columns: %w", err)
+			}
+		}
+		log.Printf("store: migrated incidents: added workflow columns (status, acknowledged_at, resolved_at, resolution_note)")
+	}
 
 	var jsonl *os.File
 	if jsonlPath != "" {
