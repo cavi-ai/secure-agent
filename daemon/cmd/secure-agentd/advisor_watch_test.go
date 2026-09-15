@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/config"
+	"github.com/cavi-ai/secure-agent/daemon/internal/fleet"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
 
@@ -35,7 +36,7 @@ func TestWatchAdvisorConfigHotSwaps(t *testing.T) {
 	stk := &advisorStackHolder{}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go watchAdvisorConfig(ctx, cfgPath, store, stk)
+	go watchConfig(ctx, cfgPath, configWatchDeps{st: store, stk: stk, pub: fleet.NewPublisher(), fleetCfg: &fleetConfigHolder{}})
 
 	// Initial state: enabled.
 	waitFor(t, 5*time.Second, func() bool { return stk.Load().Sub != nil })
@@ -63,7 +64,7 @@ func TestWatchAdvisorConfigSurvivesCorruptConfig(t *testing.T) {
 	stk := &advisorStackHolder{}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go watchAdvisorConfig(ctx, cfgPath, store, stk)
+	go watchConfig(ctx, cfgPath, configWatchDeps{st: store, stk: stk, pub: fleet.NewPublisher(), fleetCfg: &fleetConfigHolder{}})
 	waitFor(t, 5*time.Second, func() bool { return stk.Load().Sub != nil })
 
 	// Corrupt write (truncated mid-key).
@@ -111,4 +112,74 @@ func waitFor(t *testing.T, timeout time.Duration, cond func() bool) {
 		time.Sleep(100 * time.Millisecond)
 	}
 	t.Fatal("condition not met within timeout")
+}
+
+// The watcher swaps the fleet sink set live: enrolling a collector takes
+// effect within one poll cycle, unenrolling stops delivery — no restart.
+func TestWatchConfigHotSwapsFleet(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	st, err := store.Open(filepath.Join(dir, "e.db"), filepath.Join(dir, "e.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	os.WriteFile(cfgPath, []byte("advisor:\n  enabled: false\n"), 0o600)
+	pub := fleet.NewPublisher()
+	holder := &fleetConfigHolder{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go watchConfig(ctx, cfgPath, configWatchDeps{
+		st: st, stk: &advisorStackHolder{}, pub: pub, fleetCfg: holder, logDir: dir,
+	})
+
+	// Baseline: no webhooks.
+	time.Sleep(300 * time.Millisecond)
+	if pub.HasSinks() {
+		t.Fatal("no webhooks configured — publisher must have no sinks")
+	}
+
+	// Enroll: a webhook appears in config → sinks live within a poll cycle.
+	os.WriteFile(cfgPath, []byte("advisor:\n  enabled: false\nfleet:\n  hostname: builder-01\n  labels: { env: test }\n  heartbeat_interval_sec: 5\n  webhooks:\n    - { url: \"http://127.0.0.1:9999/hooks/secure-agent\", secret: \"s3cret\" }\n"), 0o600)
+	waitFor(t, 5*time.Second, pub.HasSinks)
+	waitFor(t, 5*time.Second, func() bool {
+		fc := holder.Load()
+		return fc.Hostname == "builder-01" && fc.Labels["env"] == "test" && fc.HeartbeatIntervalSec == 5
+	})
+
+	// Unenroll: webhooks removed → sinks gone.
+	os.WriteFile(cfgPath, []byte("advisor:\n  enabled: false\nfleet:\n  webhooks: []\n"), 0o600)
+	waitFor(t, 5*time.Second, func() bool { return !pub.HasSinks() })
+}
+
+// The fleet fingerprint must distinguish every fleet-relevant field — a
+// collision would silently skip a real change (e.g. rotating a secret).
+func TestFleetConfigKeyDistinguishesFields(t *testing.T) {
+	a := config.FleetConfig{
+		Hostname: "h1", HeartbeatIntervalSec: 60,
+		Labels:   map[string]string{"env": "prod"},
+		Webhooks: []config.WebhookConfig{{URL: "http://c", Secret: "s", Events: []string{"flag"}}},
+	}
+	b := a
+	b.Webhooks = []config.WebhookConfig{{URL: "http://c", Secret: "rotated", Events: []string{"flag"}}}
+	if fleetConfigKey(a) == fleetConfigKey(b) {
+		t.Fatal("key must differ on secret rotation")
+	}
+	c := a
+	c.Labels = map[string]string{"env": "staging"}
+	if fleetConfigKey(a) == fleetConfigKey(c) {
+		t.Fatal("key must differ on label change")
+	}
+	d := a
+	d.HeartbeatIntervalSec = 30
+	if fleetConfigKey(a) == fleetConfigKey(d) {
+		t.Fatal("key must differ on interval change")
+	}
+	// Label map iteration order must not affect the key.
+	e := config.FleetConfig{Labels: map[string]string{"a": "1", "b": "2"}}
+	f := config.FleetConfig{Labels: map[string]string{"b": "2", "a": "1"}}
+	if fleetConfigKey(e) != fleetConfigKey(f) {
+		t.Fatal("key must be order-independent for labels")
+	}
 }

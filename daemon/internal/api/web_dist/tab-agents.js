@@ -63,9 +63,20 @@ function renderFleet() {
   const SA = window.SA;
 
   const vis = inspectionVisible(SA.t.status, SA.t.audit);
+  const raw = SA.t.fleet;
+  // /fleet.fleet_configured is the collector-configured bit; status.fleet_configured
+  // is the same signal on /status. Hide if either says the node has no collector.
+  const fromFleet = raw && !Array.isArray(raw) && raw.fleet_configured === false;
+  const show = vis.fleet && !fromFleet;
   const fleetCol = document.getElementById('fleet-col');
-  if (fleetCol) fleetCol.hidden = !vis.fleet;
-  if (!vis.fleet) return;
+  const panel = document.getElementById('fleet-panel');
+  if (fleetCol) fleetCol.hidden = !show;
+  if (panel) panel.style.display = show ? '' : 'none';
+  if (!show) {
+    const badge = document.getElementById('badge-fleet-count');
+    if (badge) badge.textContent = '0';
+    return;
+  }
 
   const container = document.getElementById('fleet-container');
   const badge = document.getElementById('badge-fleet-count');
@@ -73,7 +84,6 @@ function renderFleet() {
   // array of remote nodes. Older console builds did fleet.map on it and
   // crashed renderAll — killing every panel below fleet on every poll.
   // Accept both shapes: object → one local node card; array → remote list.
-  const raw = SA.t.fleet;
   const fleet = Array.isArray(raw)
     ? raw
     : (raw && (raw.hostname || raw.node_id) ? [{ ...raw, online: raw.running !== false }] : []);

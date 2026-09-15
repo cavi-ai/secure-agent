@@ -147,6 +147,15 @@ type WebhookConfig struct {
 // FleetConfig configures downstream fleet-oversight delivery.
 type FleetConfig struct {
 	Webhooks []WebhookConfig `yaml:"webhooks"`
+	// Hostname overrides os.Hostname() in status envelopes — the display name
+	// collectors show for this node.
+	Hostname string `yaml:"hostname"`
+	// Labels are operator-defined grouping dimensions (env, role, team…)
+	// carried in status envelopes for multi-fleet views.
+	Labels map[string]string `yaml:"labels"`
+	// HeartbeatIntervalSec is the status-envelope cadence (default 60s).
+	// Posture-state transitions always push immediately regardless.
+	HeartbeatIntervalSec int `yaml:"heartbeat_interval_sec"`
 }
 
 // CwdOverride pins one directory subtree to specific guard-rule modes — the
@@ -375,6 +384,9 @@ func (c Config) Validate() error {
 	}
 	if c.DirectoryGuard.PromptDeadlineMS < 0 {
 		return fmt.Errorf("directory_guard.prompt_deadline_ms must be >= 0, got %d", c.DirectoryGuard.PromptDeadlineMS)
+	}
+	if c.Fleet.HeartbeatIntervalSec < 0 {
+		return fmt.Errorf("fleet.heartbeat_interval_sec must be >= 0, got %d", c.Fleet.HeartbeatIntervalSec)
 	}
 	// The advisor's privacy guarantee is enforced, not promised: it may only
 	// talk to a loopback endpoint. Anything else is a config error, not a

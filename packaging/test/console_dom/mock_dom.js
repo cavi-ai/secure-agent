@@ -91,7 +91,7 @@
     '/fleet': {
       hostname: 'ci-runner-02', os: 'darwin', arch: 'arm64', version: 'v9.9.9-domtest',
       running: true, uptime: '4h 12m 8s', active_agents: 3, recent_flags: 2,
-      proxy_enabled: true, proxy_port: 8443
+      proxy_enabled: true, proxy_port: 8443, fleet_configured: true
     },
     '/audit': [
       { ts: iso(300000), action: 'rule-mode', rule: 'aws-key', from_mode: 'monitor', to_mode: 'block', detail: '' },
@@ -273,6 +273,11 @@
   // as an honest "Advisor offline" state, not a clickable dead button.
   if (location.search.includes('advisordown')) {
     data['/status'].advisor_health = { enabled: true, circuit_open: true, last_error: 'context deadline exceeded', queue_depth: 0, model: 'qwen3:8b' };
+  }
+  // No-fleet variant: no collector webhooks configured — the fleet panel must
+  // hide entirely instead of carrying a permanently-empty placeholder.
+  if (location.search.includes('nofleetdemo')) {
+    data['/fleet'] = { ...data['/fleet'], fleet_configured: false };
   }
 
   // Auto-action: switch to the Egress tab — panels must hide/show correctly.

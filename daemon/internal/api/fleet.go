@@ -20,7 +20,14 @@ type FleetNodeStatus struct {
 	RecentFlags  int            `json:"recent_flags"`
 	ProxyEnabled bool           `json:"proxy_enabled"`
 	ProxyPort    int            `json:"proxy_port"`
+	// FleetConfigured reports whether this node pushes to any collector
+	// webhook — the console hides the fleet panel entirely when false, so
+	// single-machine installs don't carry a permanently-empty panel.
+	FleetConfigured bool `json:"fleet_configured"`
 }
+
+// SetFleetConfigured records whether any fleet webhook sink is configured.
+func (a *API) SetFleetConfigured(configured bool) { a.fleetConfigured = configured }
 
 func (a *API) handleFleet(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -37,18 +44,19 @@ func (a *API) handleFleet(w http.ResponseWriter, r *http.Request) {
 	flags := a.store.RecentFlags(100)
 
 	node := FleetNodeStatus{
-		Hostname:     hostname,
-		OS:           runtime.GOOS,
-		Arch:         runtime.GOARCH,
-		Version:      Version,
-		NodeID:       NodeID,
-		Running:      st.Running,
-		Uptime:       st.Uptime,
-		ActiveAgents: st.ActiveAgents,
-		Agents:       st.Agents,
-		RecentFlags:  len(flags),
-		ProxyEnabled: st.ProxyEnabled,
-		ProxyPort:    st.ProxyPort,
+		Hostname:        hostname,
+		OS:              runtime.GOOS,
+		Arch:            runtime.GOARCH,
+		Version:         Version,
+		NodeID:          NodeID,
+		Running:         st.Running,
+		Uptime:          st.Uptime,
+		ActiveAgents:    st.ActiveAgents,
+		Agents:          st.Agents,
+		RecentFlags:     len(flags),
+		ProxyEnabled:    st.ProxyEnabled,
+		ProxyPort:       st.ProxyPort,
+		FleetConfigured: a.fleetConfigured,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
