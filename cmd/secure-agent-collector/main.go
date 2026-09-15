@@ -24,16 +24,21 @@ import (
 
 // Envelope mirrors the fleet webhook body (daemon/internal/fleet).
 type Envelope struct {
-	NodeID  string          `json:"node_id"`
-	Kind    string          `json:"kind"` // flag | incident | guard
-	TS      string          `json:"ts"`
-	Version string          `json:"version"`
+	NodeID  string `json:"node_id"`
+	Kind    string `json:"kind"` // flag | incident | guard | status
+	TS      string `json:"ts"`
+	Version string `json:"version"`
+	// Boot+Seq are the node's gap-detection coordinates: Boot identifies one
+	// daemon run, Seq is a per-boot monotonic counter. Absent on legacy nodes.
+	Boot    string          `json:"boot,omitempty"`
+	Seq     uint64          `json:"seq,omitempty"`
 	Payload json.RawMessage `json:"payload"`
 }
 
-// knownKinds bounds accepted kinds — unknown kinds are stored but never
-// counted in the rollup, so a future node version cannot corrupt rollups.
-var knownKinds = map[string]bool{"flag": true, "incident": true, "guard": true}
+// knownKinds bounds accepted kinds — unknown kinds are rejected, so a future
+// node version cannot corrupt rollups. "status" is the heartbeat/posture
+// envelope every node pushes regardless of its event subscriptions.
+var knownKinds = map[string]bool{"flag": true, "incident": true, "guard": true, "status": true}
 
 // Config is the collector's runtime configuration.
 type Config struct {
@@ -131,6 +136,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /hooks/secure-agent", c.handleHook)
 	mux.HandleFunc("GET /fleet", c.requireReadAuth(c.handleFleet))
+	mux.HandleFunc("GET /fleet/rules", c.requireReadAuth(c.handleFleetRules))
 	mux.HandleFunc("GET /nodes/", c.requireReadAuth(c.handleNodeEvents))
 	mux.HandleFunc("GET /", c.requireReadAuth(c.handleOverview))
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -242,8 +248,8 @@ func (c *Collector) handleHook(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte(`{"status":"ok"}`))
 }
 
-// handleFleet serves the merged multi-node rollup, oldest-node-first for
-// stable rendering.
+// handleFleet serves the merged multi-node rollup, ordered by operator
+// priority (critical → attention → stale → all-clear → legacy).
 func (c *Collector) handleFleet(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -252,6 +258,17 @@ func (c *Collector) handleFleet(w http.ResponseWriter, r *http.Request) {
 	nodes := c.store.Rollup()
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(nodes)
+}
+
+// handleFleetRules serves the cross-node rule aggregation: which rules are
+// firing, on how many of the fleet's nodes, with how much critical mass.
+func (c *Collector) handleFleetRules(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(c.store.RuleAggregates())
 }
 
 // handleNodeEvents replays one node's stored envelopes (newest first).
