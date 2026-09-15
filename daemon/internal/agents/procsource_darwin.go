@@ -70,13 +70,15 @@ func (d *DarwinProcSource) Info(pid int32) (ProcInfo, bool) {
 		return ProcInfo{}, false
 	}
 
+	rss, cpu := procUsage(pid)
 	return ProcInfo{
 		PID:       pid,
 		PPID:      ppid,
 		Comm:      commStr,
 		Exe:       exe,
 		StartTime: start,
-		RSSBytes:  procRSS(pid),
+		RSSBytes:  rss,
+		CPUTime:   cpu,
 	}, true
 }
 
@@ -87,14 +89,19 @@ func timevalToTime(tv unix.Timeval) time.Time {
 	return time.Unix(tv.Sec, int64(tv.Usec)*1000)
 }
 
-// procRSS reads resident set size via PROC_PIDTASKINFO. cgo is disabled;
+// procUsage reads resident set size and cumulative CPU time via
+// PROC_PIDTASKINFO. cgo is disabled;
 // SYS_PROC_INFO is the libproc-equivalent syscall. A failure returns 0 so
-// the UI can omit memory rather than invent a number.
-func procRSS(pid int32) uint64 {
+// the UI can omit unavailable measurements rather than inventing values.
+func procUsage(pid int32) (uint64, time.Duration) {
 	var info struct {
-		VirtualSize  uint64
-		ResidentSize uint64
-		_            [80]byte
+		VirtualSize   uint64
+		ResidentSize  uint64
+		TotalUser     uint64
+		TotalSystem   uint64
+		ThreadsUser   uint64
+		ThreadsSystem uint64
+		_             [48]byte
 	}
 	const (
 		procInfoCallPidInfo = 2
@@ -110,9 +117,9 @@ func procRSS(pid int32) uint64 {
 		unsafe.Sizeof(info),
 	)
 	if errno != 0 {
-		return 0
+		return 0, 0
 	}
-	return info.ResidentSize
+	return info.ResidentSize, time.Duration(info.TotalUser + info.TotalSystem)
 }
 
 func getProcPath(pid int32) string {
