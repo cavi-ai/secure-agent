@@ -57,6 +57,12 @@ public struct AgentSummaryModel: Codable, Identifiable, Sendable {
         self.rssBytes = rssBytes
         self.isOrphan = isOrphan
     }
+
+    /// Glance label: the project folder, falling back to the harness name.
+    public var cwdLeaf: String {
+        guard let cwd, !cwd.isEmpty else { return name }
+        return (cwd as NSString).lastPathComponent
+    }
 }
 
 public struct RuleStatModel: Codable, Sendable {

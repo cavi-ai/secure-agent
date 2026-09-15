@@ -253,6 +253,23 @@ body {
 .agent-instance.nested { margin-left: 16px; }
 .agent-instance.orphan { border-color: hsl(38 92% 56% / 0.45); }
 .agent-instance.stale { opacity: 0.62; }
+.session-row {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
+  padding: 8px 10px; border-radius: var(--r-sm);
+  background: var(--bg-2); border: 1px solid var(--line);
+}
+.session-row.orphan { border-color: hsl(38 92% 56% / 0.45); }
+.session-row.stale { opacity: 0.62; }
+.session-main {
+  display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px;
+  flex: 1; min-width: 0; background: none; border: 0; color: inherit;
+  font: inherit; text-align: left; cursor: pointer; padding: 0;
+}
+.session-label { font-weight: 650; }
+.session-helpers { flex: 1 1 100%; }
+.session-helpers-sum {
+  font: 500 0.72rem/1.4 var(--font); color: var(--tx-3); cursor: pointer;
+}
 .agent-lastseen { color: var(--tx-3); }
 .agent-instance .btn { min-height: 32px; }
 @media (max-width: 560px) {

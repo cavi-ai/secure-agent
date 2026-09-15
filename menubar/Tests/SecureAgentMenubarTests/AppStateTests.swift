@@ -594,6 +594,59 @@ final class HarnessGroupTests: XCTestCase {
     }
 }
 
+final class SessionBoardTests: XCTestCase {
+    func testCwdLeafIsProjectFolder() {
+        let a = AgentSummaryModel(pid: 1, name: "claude", cwd: "/Users/dev/workspace/api-service")
+        XCTAssertEqual(a.cwdLeaf, "api-service")
+    }
+
+    func testCwdLeafFallsBackToHarnessName() {
+        let a = AgentSummaryModel(pid: 1, name: "codex")
+        XCTAssertEqual(a.cwdLeaf, "codex")
+    }
+}
+
+@MainActor
+final class SessionBoardRowTests: XCTestCase {
+    private func agent(_ pid: Int32, name: String, root: Int32, ppid: Int32,
+                       cwd: String? = nil, seen: String = "", rss: UInt64? = nil) -> AgentSummaryModel {
+        AgentSummaryModel(pid: pid, name: name, cwd: cwd, rootPid: root, ppid: ppid,
+                          lastSeenAt: seen, rssBytes: rss)
+    }
+
+    func testSessionBoardRowsAreRootsOnlySortedByActivity() {
+        let stub = StubDaemonClient()
+        stub.status.agents = [
+            agent(5822, name: "claude", root: 5821, ppid: 5821, rss: 50),
+            agent(5821, name: "claude", root: 5821, ppid: 1,
+                  cwd: "/Users/dev/workspace/api-service",
+                  seen: "2026-09-11T12:00:00Z", rss: 100),
+            agent(6033, name: "cursor", root: 6033, ppid: 1,
+                  cwd: "/Users/dev/projects/web-app",
+                  seen: "2026-09-11T11:00:00Z", rss: 10),
+        ]
+        let state = AppState(client: stub)
+        state.seedForTesting(status: stub.status)
+        let rows = state.sessionBoardRows(sortedBy: .lastActivity)
+        XCTAssertEqual(rows.map(\.agent.pid), [5821, 6033])
+        XCTAssertEqual(rows[0].agent.cwdLeaf, "api-service")
+        XCTAssertEqual(rows[0].familyRSSBytes, 150)
+        XCTAssertEqual(rows[0].childCount, 1)
+        XCTAssertEqual(rows[1].agent.cwdLeaf, "web-app")
+    }
+
+    func testSessionBoardRowsDoesNotCapAtSix() {
+        let stub = StubDaemonClient()
+        stub.status.agents = (1...8).map { i in
+            agent(Int32(i), name: "claude", root: Int32(i), ppid: 1,
+                  cwd: "/tmp/p\(i)", seen: "2026-09-11T12:00:0\(i)Z")
+        }
+        let state = AppState(client: stub)
+        state.seedForTesting(status: stub.status)
+        XCTAssertEqual(state.sessionBoardRows(sortedBy: .lastActivity).count, 8)
+    }
+}
+
 // MARK: - SSE chunked-body decoding (the reconnect-loop fix)
 
 @MainActor

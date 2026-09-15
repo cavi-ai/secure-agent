@@ -534,20 +534,12 @@ struct ConsoleView: View {
     // MARK: agents
 
     @State private var agentSort: AppState.AgentSort = .lastActivity
-    /// Explicit expansion overrides per harness. Single-session harnesses
-    /// default to EXPANDED (nothing hidden behind a click), multi-session to
-    /// collapsed; the user's toggle always wins. The old Set-based state made
-    /// single-session headers look clickable but do nothing — the "outer
-    /// accordion is dead" complaint.
-    @State private var harnessExpandedOverride: [String: Bool] = [:]
     @State private var selectedProcess: AgentSummaryModel?
 
     private var agentsSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            sectionHeader("Agent sessions", trailing: "\(state.activeAgentCount)")
+            sectionHeader("Sessions", trailing: "\(state.sessionBoardRows(sortedBy: agentSort).count)")
 
-            // Sort control: three keys users actually want. A picker that
-            // small still reads; segmented keeps it to one row.
             Picker("", selection: $agentSort) {
                 ForEach(AppState.AgentSort.allCases, id: \.self) { s in
                     Text(s.label).tag(s)
@@ -562,23 +554,8 @@ struct ConsoleView: View {
                     .font(.system(size: 11)).foregroundStyle(.tertiary)
                     .fixedSize(horizontal: false, vertical: true)
             } else {
-                let allGroups = state.harnessGroups(sortedBy: agentSort)
-                let shown = allGroups.prefix(6)
-                ForEach(shown) { group in
-                    harnessGroupView(group)
-                }
-                if allGroups.count > 6 {
-                    Button { state.openDashboard() } label: {
-                        HStack {
-                            Text("+ \(allGroups.count - 6) more harness\(allGroups.count - 6 == 1 ? "" : "es") — open the console")
-                                .font(.system(size: 10)).foregroundStyle(.secondary)
-                            Spacer()
-                            Image(systemName: "arrow.up.right")
-                                .font(.system(size: 8)).foregroundStyle(.tertiary)
-                        }
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(state.dashboardUnavailableReason != nil)
+                ForEach(state.sessionBoardRows(sortedBy: agentSort)) { row in
+                    sessionView(row.agent, children: children(of: row.agent), insideGroup: false)
                 }
             }
         }
@@ -587,61 +564,8 @@ struct ConsoleView: View {
         }
     }
 
-    /// Level 1: the harness (provider) — logo, session count, family memory.
-    /// Collapsed by default when it has >1 session; a harness with exactly
-    /// one session renders expanded — but stays COLLAPSIBLE: the toggle works
-    /// in both directions for every group (the dead-header fix).
-    private func harnessGroupView(_ group: AppState.HarnessGroup) -> some View {
-        let mem = ByteCount.short(group.totalRSSBytes)
-        let seen = relativeTime(group.lastSeenAt ?? "")
-        let isSingle = group.trees.count == 1
-        let expanded = harnessExpandedOverride[group.name] ?? isSingle
-        return VStack(alignment: .leading, spacing: 3) {
-            Button {
-                harnessExpandedOverride[group.name] = !expanded
-            } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: expanded ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 7, weight: .bold)).foregroundStyle(.secondary)
-                        .frame(width: 8)
-                    AgentIdentity.tile(group.name, size: 18)
-                    Text(group.name)
-                        .font(.system(size: 12, weight: .semibold))
-                    if isSingle {
-                        // A one-session harness IS the session — show its
-                        // count inline instead of a pointless "+1".
-                        if group.processCount > 1 {
-                            Text("\(group.processCount) procs")
-                                .font(.system(size: 9, design: .monospaced)).foregroundStyle(.tertiary)
-                        }
-                    } else {
-                        Text("\(group.sessionCount) session\(group.sessionCount == 1 ? "" : "s") · \(group.processCount) procs")
-                            .font(.system(size: 9)).foregroundStyle(.tertiary)
-                    }
-                    Spacer()
-                    if let mem {
-                        Text(mem)
-                            .font(.system(size: 10, weight: .medium, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                    }
-                    if let seen {
-                        Text(seen)
-                            .font(.system(size: 9, weight: seen.hasSuffix("s") ? .semibold : .regular, design: .monospaced))
-                            .foregroundStyle(seen.hasSuffix("s") ? Color.ok : .secondary)
-                            .help("last activity: \(absoluteTime(group.lastSeenAt ?? ""))")
-                    }
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-
-            if expanded {
-                // Level 2+3: sessions with their subagents nested.
-                ForEach(Array(group.trees.enumerated()), id: \.element.0.id) { _, pair in
-                    sessionView(pair.0, children: pair.1, insideGroup: true)
-                }
-            }
-        }
+    private func children(of root: AgentSummaryModel) -> [AgentSummaryModel] {
+        state.childAgents.filter { $0.rootPid == root.pid }
     }
 
     /// Level 2: one session (tree root) — expandable when it has subagents.
@@ -649,13 +573,12 @@ struct ConsoleView: View {
     @State private var expandedSessions: Set<String> = []
 
     private func sessionView(_ root: AgentSummaryModel, children: [AgentSummaryModel], insideGroup: Bool) -> some View {
-        let hasKids = !children.isEmpty
         let open = expandedSessions.contains(root.id)
-        let mem = ByteCount.short(root.rssBytes)
-        let seen = relativeTime(root.lastSeenAt ?? "")
+        let rssParts = ([root] + children).compactMap(\.rssBytes)
+        let mem = rssParts.isEmpty ? nil : ByteCount.short(rssParts.reduce(0, +))
+        let seen = relativeTime(([root] + children).compactMap(\.lastSeenAt).max() ?? "")
         return VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 6) {
-                // Expansion chevron (or indent dot when there's nothing to expand).
                 Group {
                     if !children.isEmpty {
                         Button {
@@ -674,17 +597,13 @@ struct ConsoleView: View {
                 AgentIdentity.tile(root.name, size: 14, fontSize: 8)
                 Button { selectedProcess = root } label: {
                     HStack(spacing: 5) {
-                        Text("PID \(root.pid)")
+                        Text(root.cwdLeaf)
                             .font(.system(size: 11, weight: .medium))
                             .foregroundStyle(.primary)
-                        // Disambiguate sessions: "PID 63304" tells you nothing
-                        // — the project folder is what the operator recognizes.
-                        if let cwd = root.cwd, !cwd.isEmpty {
-                            Text((cwd as NSString).lastPathComponent)
-                                .font(.system(size: 9, weight: .medium)).foregroundStyle(.secondary)
-                                .lineLimit(1).truncationMode(.middle)
-                                .help(cwd)
-                        }
+                            .lineLimit(1).truncationMode(.middle)
+                            .help(root.cwd ?? root.name)
+                        Text("PID \(root.pid)")
+                            .font(.system(size: 9, design: .monospaced)).foregroundStyle(.tertiary)
                         if !children.isEmpty {
                             Text("+\(children.count)")
                                 .font(.system(size: 8, weight: .semibold)).foregroundStyle(.tertiary)
@@ -706,7 +625,6 @@ struct ConsoleView: View {
             }
             .padding(.leading, insideGroup ? 12 : 0)
 
-            // Level 3: subagents, nested with a tree rail.
             if open && !children.isEmpty {
                 ForEach(children, id: \.id) { child in
                     subagentRow(child)

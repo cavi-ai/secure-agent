@@ -151,8 +151,18 @@
     </nav>
 
     <main>
-      <!-- Overview: "is this normal for this machine?" — trend + live feed -->
+      <!-- Overview: sessions first, then "is this normal?" trend + live feed -->
       <div class="tabpanel" id="tab-overview" role="tabpanel">
+        <section class="panel" id="session-board-panel">
+          <div class="panel-head">
+            <h2><svg class="icon"><use href="#i-agent"/></svg>Sessions</h2>
+            <span class="badge" id="badge-session-count">0</span>
+          </div>
+          <div class="panel-body" id="session-board">
+            <div class="empty"><svg class="icon"><use href="#i-agent"/></svg><span>No agents running yet — start Claude Code, Cursor, or Codex and they'll appear here</span></div>
+          </div>
+        </section>
+
         <section class="panel activity-panel">
           <div class="panel-head">
             <h2><svg class="icon"><use href="#i-activity"/></svg>Activity</h2>
