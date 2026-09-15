@@ -6,6 +6,73 @@ All notable changes to `secure-agent` are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **One-command fleet enrollment (`secure-agent fleet enroll <collector-url>`).**
+  Reads the node id from the running daemon, generates the webhook secret,
+  merges `fleet.webhooks` into `config.yaml` (comment-preserving, backup
+  written first; re-enrolling the same URL rotates the secret in place), and
+  prints the single line the collector's secrets file needs. The old flow —
+  hunt the node id, invent a secret, edit two files, restart the daemon — is
+  gone.
+- **Fleet config is hot-reloadable.** The daemon's config watcher (previously
+  advisor-only) now swaps fleet sinks, heartbeat cadence, labels, and
+  hostname live within one poll cycle — enroll takes effect in seconds, and
+  enrolling a node that had no webhooks at boot activates heartbeats without
+  a restart. `fleet_configured` follows the webhook set so the console's
+  fleet panel appears/disappears live.
+- **Sequence numbers + gap detection (`boot`/`seq` on every envelope).** The
+  Publisher stamps each envelope with a per-boot monotonic sequence; the
+  collector tracks holes with a 90s grace for retries/reordering and surfaces
+  confirmed loss per node (`gaps` in `/fleet`, "N deliveries lost" warnings
+  in the overview). Delivery stays best-effort — but backlog-cap drops and
+  collector downtime are now *visible* instead of silent. A new boot (daemon
+  restart) resets the expectation; legacy unsequenced envelopes skip
+  tracking.
+- **Cross-node rule aggregation (`GET /fleet/rules`).** Rolling-24h per-rule
+  fleet footprint: which rules are firing, on how many of the fleet's nodes,
+  with how much critical mass — "one node is an incident; five is a bad
+  release." Rendered as a "Rules across the fleet" table in the collector
+  overview, sorted by node spread.
+- **Fleet posture heartbeats (`status` envelope kind).** Every fleeted node
+  now pushes a status envelope — at boot, every `fleet.heartbeat_interval_sec`
+  (default 60s), and immediately on posture-state transitions — carrying the
+  node's own `/posture` headline (`posture_state`, `posture_summary`,
+  `needs_you`), hostname, agent count, and operator-defined `fleet.labels`
+  (env/role/team grouping). Heartbeats bypass per-sink `events:` filters on
+  purpose: liveness that can be unsubscribed is indistinguishable from a dead
+  node. Posture computation was extracted (`computePosture`) so the collector
+  renders the exact headline the console and menubar show.
+- **Posture-aware collector rollup.** The reference collector now harvests
+  what it used to discard: flag `severity` and incident `risk` feed rolling
+  **24h counts** (`flags_24h`, `critical_flags_24h`, `incidents_24h`,
+  recomputed at snapshot time so they decay on quiet nodes); guard decisions
+  break down into allow/deny; `last_event` (security activity) is tracked
+  separately from `last_seen` (liveness). The overview page leads with a
+  fleet headline ("2 critical · 1 stale · 12 all-clear") over cards titled
+  by hostname with posture chips and label chips, sorted critical-first.
+  Heartbeat nodes are stale after 3 min and "gone quiet" after 10 (was:
+  indistinguishable from idle after 10 min); legacy event-only nodes keep
+  the lenient 10/20-min thresholds.
+- **Node identity config.** `fleet.hostname` (display-name override) and
+  `fleet.labels` in `config.yaml`, carried in every status envelope.
+
+### Fixed
+- **Collector version was sticky.** The first version a node ever reported
+  was frozen in the rollup forever; upgrades were invisible. Version now
+  tracks the newest report.
+- **Empty fleet panel was permanent noise.** The console's Fleet nodes panel
+  now hides entirely when the node has no collector webhooks configured
+  (`/fleet` reports `fleet_configured`), instead of a forever-empty
+  "No remote fleet nodes registered" placeholder on single-machine installs.
+- **`secure-agent fleet` help text** claimed remote node telemetry; it shows
+  this node's fleet identity (remote rollups live at the collector).
+
+### Changed
+- **Collector storage sits behind a seam.** Persistence is now a small
+  `envelopeLog` interface (append/replay/query) with the JSONL backend as the
+  reference implementation — the swap point for a production-grade SQLite
+  store (retention, TLS, alerting on the roadmap).
+
 ### Fixed
 - **Console whitelist drift (the "everything runs but the console says it
   can't reach the daemon" bug).** The proxy listener's console-token

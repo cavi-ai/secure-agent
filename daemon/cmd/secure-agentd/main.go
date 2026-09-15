@@ -101,31 +101,18 @@ func main() {
 	// Must run before the sinks are built: they capture api.NodeID.
 	api.LoadNodeID(filepath.Join(filepath.Dir(cfg.Firewall.Registry.SaltRef), "node-id"))
 
-	// Fleet webhook fan-out: flags, incidents, and guard decisions are pushed
-	// to every configured HMAC-signed collector. Best-effort; never blocks the
-	// drain loop.
+	// Fleet webhook fan-out: flags, incidents, guard decisions, and status
+	// heartbeats are pushed to every configured HMAC-signed collector.
+	// Best-effort; never blocks the drain loop.
 	fleetPub := fleet.NewPublisher()
-	for i, wh := range cfg.Fleet.Webhooks {
-		sink := fleet.NewSink(wh, api.NodeID, api.Version, filepath.Dir(cfg.DBPath))
-		if sink == nil {
-			log.Printf("fleet: webhook #%d disabled (missing url or secret)", i)
-			continue
-		}
-		fleetPub.AddSink(sink)
-	}
+	fleetPub.ReplaceSinks(buildFleetSinks(cfg.Fleet, filepath.Dir(cfg.DBPath)))
+	fleetCfgLive := &fleetConfigHolder{}
+	fleetCfgLive.Store(cfg.Fleet)
 
 	// Local triage advisor (opt-in): flags/incidents are offered to it from
 	// the drain loop; it never touches the enforcement path.
 	advisorStk := &advisorStackHolder{}
 	advisorStk.Store(setupAdvisor(cfg, st))
-
-	// Hot-reload: the menubar edits config.yaml on every advisor/settings
-	// change; the daemon must NOT require a relaunch. Watch the file and
-	// swap the advisor stack live when it changes (disable/enable/model
-	// switch apply within a poll cycle; guard modes read per-request already).
-	if configPathUsed != "" {
-		go watchAdvisorConfig(ctx, configPathUsed, st, advisorStk)
-	}
 
 	// Drain bus and correlate/persist (drainDone closes once every delivered
 	// event has been persisted — shutdown waits for it).
@@ -251,6 +238,24 @@ func main() {
 		},
 	})
 	apiServer.SetFleetSink(fleetPub)
+	apiServer.SetFleetConfigured(len(cfg.Fleet.Webhooks) > 0)
+	// Fleet heartbeat: posture + liveness pushed to every sink at boot, on a
+	// ticker, and on posture-state transitions. Always armed — enrolling a
+	// collector via config hot-reload activates it without a restart.
+	startFleetHeartbeat(ctx, apiServer, statusFn, fleetPub, fleetCfgLive.Load)
+
+	// Hot-reload: the menubar edits config.yaml on advisor/settings changes
+	// and `secure-agent fleet enroll` writes fleet.webhooks; the daemon must
+	// NOT require a relaunch for either. Watch the file and swap the advisor
+	// stack / fleet sinks live within a poll cycle (guard modes read
+	// per-request already). Started after the API server exists — the watcher
+	// updates fleet_configured on it.
+	if configPathUsed != "" {
+		go watchConfig(ctx, configPathUsed, configWatchDeps{
+			st: st, stk: advisorStk, pub: fleetPub, fleetCfg: fleetCfgLive,
+			logDir: filepath.Dir(cfg.DBPath), apiServer: apiServer,
+		})
+	}
 	// SSE live feed: each console gets its own bus subscription; unsubscribes
 	// when the connection closes.
 	apiServer.SetEventStream(b.Subscribe, b.Unsubscribe)

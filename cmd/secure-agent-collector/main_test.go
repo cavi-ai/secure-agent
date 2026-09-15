@@ -25,6 +25,7 @@ func testCollector(t *testing.T, secrets map[string]string) (*Collector, *httpte
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /hooks/secure-agent", c.handleHook)
 	mux.HandleFunc("GET /fleet", c.handleFleet)
+	mux.HandleFunc("GET /fleet/rules", c.handleFleetRules)
 	mux.HandleFunc("GET /nodes/", c.handleNodeEvents)
 	mux.HandleFunc("GET /", c.handleOverview)
 	srv := httptest.NewServer(mux)

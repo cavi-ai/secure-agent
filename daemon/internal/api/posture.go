@@ -31,14 +31,27 @@ type Posture struct {
 	Connected bool          `json:"connected"`
 }
 
-// handlePosture computes the operator headline from live status + stores.
-// Deliberately derived, not persisted: posture is a view over state, never a
-// second source of truth.
+// handlePosture serves the operator headline. The computation lives in
+// computePosture so the fleet heartbeat can ship the exact same headline the
+// local UIs render — one derivation, three consumers (console, menubar,
+// collector).
 func (a *API) handlePosture(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	w.Header().Set("Content-Type", "application/json")
+	writeJSON(w, a.computePosture())
+}
+
+// CurrentPosture exposes the computed headline to non-HTTP consumers (the
+// fleet heartbeat loop).
+func (a *API) CurrentPosture() Posture { return a.computePosture() }
+
+// computePosture derives the operator headline from live status + stores.
+// Deliberately derived, not persisted: posture is a view over state, never a
+// second source of truth.
+func (a *API) computePosture() Posture {
 	st := a.statusFn()
 	posture := Posture{
 		Items:     []PostureItem{},
@@ -124,8 +137,7 @@ func (a *API) handlePosture(w http.ResponseWriter, r *http.Request) {
 		posture.Summary = attentionSummary(posture.Items)
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	writeJSON(w, posture)
+	return posture
 }
 
 func hasCritical(items []PostureItem) bool {
