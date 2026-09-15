@@ -887,6 +887,12 @@ public final class AppState: ObservableObject {
         }
     }
 
+    /// Session board: one row per tree root, helpers omitted. No cap — the
+    /// popover scrolls. cwdLeaf on the agent is the glance label.
+    public func sessionBoardRows(sortedBy sort: AgentSort) -> [AgentRow] {
+        agentRows(sortedBy: sort).filter { $0.depth == 0 }
+    }
+
     private func familyRSS(_ root: AgentSummaryModel, _ kids: [AgentSummaryModel]) -> UInt64? {
         let parts = ([root] + kids).compactMap(\.rssBytes)
         return parts.isEmpty ? nil : parts.reduce(0, +)

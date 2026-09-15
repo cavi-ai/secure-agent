@@ -22,6 +22,7 @@ const {
   parseMarkdownToHTML, buildEvidenceChain,
   sessionShort, filterEventsBySession, rollupSeries, flagHost,
   familyTitle, fmtRSS, fmtAge, isFamilyRoot, childrenOf, groupAgents, familyShouldExpand,
+  cwdLabel, sessionRows, filterEventsByPids,
 } = ctx;
 
 // ---------- escapeHTML ----------
@@ -250,6 +251,40 @@ test('fmtRSS and fmtAge', () => {
   assert.equal(fmtRSS(0), '');
   assert.equal(fmtRSS(2048), '2 KB');
   assert.equal(fmtAge('2026-09-09T16:00:00Z', Date.parse('2026-09-09T16:02:00Z')), '2m');
+});
+
+test('cwdLabel: last path component, empty when missing', () => {
+  assert.equal(cwdLabel('/Users/dev/workspace/api-service'), 'api-service');
+  assert.equal(cwdLabel('/Users/dev/projects/web-app/'), 'web-app');
+  assert.equal(cwdLabel(''), '');
+  assert.equal(cwdLabel(undefined), '');
+});
+
+test('sessionRows: one row per root, cwd label, family rss, helpers excluded', () => {
+  const rows = sessionRows([
+    { pid: 5821, name: 'claude', cwd: '/Users/dev/workspace/api-service', root_pid: 5821, last_seen_at: '2026-09-11T12:00:00Z', rss_bytes: 100 },
+    { pid: 5822, name: 'claude', root_pid: 5821, ppid: 5821, last_seen_at: '2026-09-11T11:00:00Z', rss_bytes: 50 },
+    { pid: 6033, name: 'cursor', cwd: '/Users/dev/projects/web-app', root_pid: 6033, last_seen_at: '2026-09-11T11:00:00Z', rss_bytes: 10 },
+  ]);
+  assert.equal(rows.length, 2);
+  assert.equal(rows[0].root.pid, 5821);
+  assert.equal(rows[0].label, 'api-service');
+  assert.equal(rows[0].rss, 150);
+  assert.equal(rows[0].pids.map(Number).join(','), '5821,5822');
+  assert.equal(rows[0].children.length, 1);
+  assert.equal(rows[1].label, 'web-app');
+  assert.equal(rows[1].root.pid, 6033);
+});
+
+test('sessionRows: missing cwd falls back to harness name', () => {
+  const rows = sessionRows([{ pid: 1, name: 'codex', root_pid: 1 }]);
+  assert.equal(rows[0].label, 'Codex');
+});
+
+test('filterEventsByPids: empty pids is a no-op; otherwise pid set', () => {
+  const events = [{ pid: 1, ts: 'a' }, { pid: 2, ts: 'b' }, { pid: 3, ts: 'c' }];
+  assert.equal(filterEventsByPids(events, []).length, 3);
+  assert.deepEqual(filterEventsByPids(events, [1, 3]).map(e => e.pid), [1, 3]);
 });
 
 // ---------- flagHost ----------

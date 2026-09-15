@@ -40,6 +40,12 @@ function filterEventsBySession(events, sessionId) {
   return (events || []).filter(e => e.session_id === sessionId);
 }
 
+function filterEventsByPids(events, pids) {
+  if (!pids || !pids.length) return events || [];
+  const set = new Set(pids.map(Number));
+  return (events || []).filter(e => set.has(Number(e.pid)));
+}
+
 // flagHost extracts the egress destination host from a flag's evidence
 // (the host a mute/disposition applies to), or '' for hostless rules.
 function flagHost(flag) {
@@ -254,4 +260,35 @@ function familyShouldExpand(family, familyCount, totalInstances, userOpen) {
     return !!userOpen[family.name];
   }
   return familyCount === 1 || totalInstances <= 3 || family.orphanCount > 0;
+}
+
+function cwdLabel(cwd) {
+  if (!cwd) return '';
+  const s = String(cwd).replace(/\/+$/, '');
+  const i = Math.max(s.lastIndexOf('/'), s.lastIndexOf('\\'));
+  return i >= 0 ? s.slice(i + 1) : s;
+}
+
+function sessionRows(agents) {
+  const list = agents || [];
+  const roots = list.filter(a => isFamilyRoot(a, list));
+  const rows = roots.map(root => {
+    const children = childrenOf(root, list);
+    let rss = Number(root.rss_bytes || 0);
+    let lastSeen = root.last_seen_at || '';
+    for (const k of children) {
+      rss += Number(k.rss_bytes || 0);
+      if (k.last_seen_at && k.last_seen_at > lastSeen) lastSeen = k.last_seen_at;
+    }
+    return {
+      root,
+      children,
+      label: cwdLabel(root.cwd) || familyTitle(root.name),
+      rss,
+      lastSeen,
+      pids: [Number(root.pid), ...children.map(k => Number(k.pid))],
+    };
+  });
+  rows.sort((a, b) => (b.lastSeen || '').localeCompare(a.lastSeen || ''));
+  return rows;
 }

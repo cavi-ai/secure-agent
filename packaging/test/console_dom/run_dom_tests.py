@@ -214,6 +214,13 @@ def main():
               and 'id="tab-findings" role="tabpanel" hidden' in dom)
         check("overview panel visible",
               'id="tab-overview" role="tabpanel">' in dom)
+        check("overview session board is present", 'id="session-board"' in dom)
+        overview = dom.split('id="session-board"', 1)[1].split('id="tab-agents"', 1)[0]
+        check("session board lists two sessions", overview.count('class="session-row') == 2)
+        check("session rows labeled by project folder",
+              "api-service" in overview and "web-app" in overview)
+        check("session row filters timeline by pids",
+              'data-action="filter-pids" data-pids="5821,5822"' in overview)
         check("egress tab badge shows uninspected count",
               'id="tab-badge-egress">2<' in dom)
         check("findings tab badge shows needs-you count",

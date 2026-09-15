@@ -229,6 +229,8 @@ document.addEventListener('DOMContentLoaded', () => {
   // Session drill-down: set from a flag card ("view session in timeline"),
   // filters the timeline client-side (lib.js filterEventsBySession).
   let timelineSession = null;
+  let timelinePids = null;
+  let timelinePidLabel = '';
 
   // Firewall diff: which rules gained blocked/would-block counts since the
   // last render (i.e. a fresh interception).
@@ -415,7 +417,8 @@ document.addEventListener('DOMContentLoaded', () => {
     // renderFleet and silently killed every panel after it — flags, events,
     // activity — on every single poll.
     const panels = [
-      ['posture', renderPosture], ['status', renderStatus], ['agents', renderAgents],
+      ['posture', renderPosture], ['status', renderStatus], ['sessions', renderSessionBoard],
+      ['agents', renderAgents],
       ['firewall', renderFirewall], ['incidents', renderIncidents], ['fleet', renderFleet],
       ['audit', renderAudit], ['sources', renderSources], ['flags', renderFlags],
       ['events', renderEvents], ['activity', renderActivity]
@@ -486,6 +489,48 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const proxyEvents = telemetryData.events.filter(e => e.kind === 9 || (e.detail && e.detail.includes('proxy')));
     setKpi('count-proxy', proxyEvents.length);
+  }
+
+  const sessionHelpOpen = {};
+
+  function renderSessionBoard() {
+    const container = document.getElementById('session-board');
+    const badge = document.getElementById('badge-session-count');
+    if (!container) return;
+    const agents = (telemetryData.status && telemetryData.status.agents) ? telemetryData.status.agents : [];
+    const rows = sessionRows(agents);
+    if (badge) badge.textContent = rows.length;
+    if (rows.length === 0) {
+      container.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-agent"/></svg><span>No agents running yet — start Claude Code, Cursor, or Codex and they'll appear here</span></div>`;
+      return;
+    }
+    const now = Date.now();
+    container.innerHTML = rows.map(row => {
+      const a = row.root;
+      const rss = fmtRSS(row.rss);
+      const seenAge = row.lastSeen ? fmtAge(row.lastSeen, now) : '';
+      const stale = row.lastSeen ? (now - Date.parse(row.lastSeen)) > 10 * 60 * 1000 : true;
+      const helpOpen = sessionHelpOpen[a.pid] ? ' open' : '';
+      const helpers = row.children.length
+        ? `<details class="session-helpers"${helpOpen} data-pid="${a.pid}"><summary class="session-helpers-sum">${row.children.length} helper${row.children.length === 1 ? '' : 's'}</summary>${row.children.map(c => renderProcessRow(c, now, true)).join('')}</details>`
+        : '';
+      return `
+      <div class="session-row${a.is_orphan ? ' orphan' : ''}${stale ? ' stale' : ''}">
+        <button type="button" class="session-main" data-action="filter-pids" data-pids="${escapeHTML(row.pids.join(','))}" data-label="${escapeHTML(row.label)}" title="${escapeHTML(a.cwd || '')}">
+          <span class="session-label">${escapeHTML(row.label)}</span>
+          <span class="agent-pid">${escapeHTML(a.name)} · PID ${a.pid}</span>
+          ${seenAge ? `<span class="agent-meta-item agent-lastseen">active ${escapeHTML(seenAge)} ago</span>` : `<span class="agent-meta-item agent-lastseen">no activity</span>`}
+          ${rss ? `<span class="agent-meta-item">${escapeHTML(rss)}</span>` : ''}
+        </button>
+        <button type="button" class="btn btn-danger btn-sm" data-action="kill" data-pid="${a.pid}" data-started="${escapeHTML(a.started_at || '')}" data-family="${escapeHTML(a.name || '')}"><svg class="icon"><use href="#i-power"/></svg><span>Terminate</span></button>
+        ${helpers}
+      </div>`;
+    }).join('');
+    container.querySelectorAll('details.session-helpers').forEach(el => {
+      el.addEventListener('toggle', () => {
+        sessionHelpOpen[el.dataset.pid] = el.open;
+      });
+    });
   }
 
   const agentGroupOpen = {};
@@ -1068,20 +1113,25 @@ document.addEventListener('DOMContentLoaded', () => {
   function renderEvents() {
     const container = document.getElementById('events-container');
     const allEvents = telemetryData.eventsView || [];
-    const events = filterEventsBySession(allEvents, timelineSession); // lib.js
+    let events = allEvents;
+    if (timelineSession) events = filterEventsBySession(allEvents, timelineSession);
+    else if (timelinePids && timelinePids.length) events = filterEventsByPids(allEvents, timelinePids);
 
-    // Session filter chip in the panel head mirrors the current drill-down.
     const chip = document.getElementById('session-filter');
     if (chip) {
-      chip.hidden = !timelineSession;
-      if (timelineSession) {
-        document.getElementById('session-filter-id').textContent = `${sessionShort(timelineSession)} · ${events.length}`;
+      const on = !!(timelineSession || (timelinePids && timelinePids.length));
+      chip.hidden = !on;
+      if (on) {
+        const tag = timelineSession ? sessionShort(timelineSession) : (timelinePidLabel || ('PID ' + timelinePids[0]));
+        document.getElementById('session-filter-id').textContent = `${tag} · ${events.length}`;
       }
     }
 
     if (events.length === 0) {
       const msg = timelineSession
         ? `No events for session ${sessionShort(timelineSession)} in the loaded window`
+        : (timelinePids && timelinePids.length)
+          ? `No events for ${timelinePidLabel || 'this session'} in the loaded window`
         : isEventsFiltered() ? 'No events match the current filter' : 'No system events logged';
       container.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-activity"/></svg><span>${msg}</span></div>`;
       prevEventKeys = new Set();
@@ -1327,9 +1377,24 @@ document.addEventListener('DOMContentLoaded', () => {
   // Session drill-down: jump from a flag to just its harness session's events.
   window.filterTimelineToSession = function(sid) {
     timelineSession = sid;
+    timelinePids = null;
+    timelinePidLabel = '';
     suppressFreshOnce = true;
     renderEvents();
-    switchTab('overview'); // the timeline lives there — surface it
+    switchTab('overview');
+    const el = document.getElementById('events-container');
+    if (el && el.scrollIntoView) {
+      el.scrollIntoView({ behavior: reducedMotion ? 'auto' : 'smooth', block: 'nearest' });
+    }
+  };
+
+  window.filterTimelineToPids = function(pids, label) {
+    timelineSession = null;
+    timelinePids = (pids || []).map(Number).filter(n => n > 0);
+    timelinePidLabel = label || '';
+    suppressFreshOnce = true;
+    renderEvents();
+    switchTab('overview');
     const el = document.getElementById('events-container');
     if (el && el.scrollIntoView) {
       el.scrollIntoView({ behavior: reducedMotion ? 'auto' : 'smooth', block: 'nearest' });
@@ -1338,6 +1403,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
   window.clearTimelineSession = function() {
     timelineSession = null;
+    timelinePids = null;
+    timelinePidLabel = '';
     suppressFreshOnce = true;
     renderEvents();
   };
@@ -1380,6 +1447,10 @@ document.addEventListener('DOMContentLoaded', () => {
         break;
       case 'filter-session':
         window.filterTimelineToSession(d.session);
+        break;
+      case 'filter-pids':
+        e.preventDefault();
+        window.filterTimelineToPids((d.pids || '').split(','), d.label);
         break;
       case 'allow-host':
         window.allowHost(d.agent, d.host);
