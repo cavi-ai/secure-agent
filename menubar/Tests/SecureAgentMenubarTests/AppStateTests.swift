@@ -45,6 +45,7 @@ final class StubDaemonClient: DaemonClientProtocol, @unchecked Sendable {
     func killProcess(pid: Int32) async throws -> Bool { true }
     func deleteGuardRule(agent: String, ruleID: String) async throws {}
     func setFirewallMode(rule: String, mode: String) async throws {}
+    func promoteFirewallType(_ secretType: String, mode: String) async throws {}
     func fetchAdvisorDiscover() async throws -> AdvisorDiscovery {
         AdvisorDiscovery(servers: [], managedModels: [])
     }
@@ -591,6 +592,144 @@ final class HarnessGroupTests: XCTestCase {
         XCTAssertEqual(groups[0].sessionCount, 2)
         // Most-recent session first within the group.
         XCTAssertEqual(groups[0].trees.first?.0.pid, 100)
+    }
+}
+
+final class SessionBoardTests: XCTestCase {
+    func testCwdLeafIsProjectFolder() {
+        let a = AgentSummaryModel(pid: 1, name: "claude", cwd: "/Users/dev/workspace/api-service")
+        XCTAssertEqual(a.cwdLeaf, "api-service")
+    }
+
+    func testCwdLeafFallsBackToHarnessName() {
+        let a = AgentSummaryModel(pid: 1, name: "codex")
+        XCTAssertEqual(a.cwdLeaf, "codex")
+    }
+}
+
+@MainActor
+final class SessionBoardRowTests: XCTestCase {
+    private func agent(_ pid: Int32, name: String, root: Int32, ppid: Int32,
+                       cwd: String? = nil, seen: String = "", rss: UInt64? = nil) -> AgentSummaryModel {
+        AgentSummaryModel(pid: pid, name: name, cwd: cwd, rootPid: root, ppid: ppid,
+                          lastSeenAt: seen, rssBytes: rss)
+    }
+
+    func testSessionBoardRowsAreRootsOnlySortedByActivity() {
+        let stub = StubDaemonClient()
+        stub.status.agents = [
+            agent(5822, name: "claude", root: 5821, ppid: 5821, rss: 50),
+            agent(5821, name: "claude", root: 5821, ppid: 1,
+                  cwd: "/Users/dev/workspace/api-service",
+                  seen: "2026-09-11T12:00:00Z", rss: 100),
+            agent(6033, name: "cursor", root: 6033, ppid: 1,
+                  cwd: "/Users/dev/projects/web-app",
+                  seen: "2026-09-11T11:00:00Z", rss: 10),
+        ]
+        let state = AppState(client: stub)
+        state.seedForTesting(status: stub.status)
+        let rows = state.sessionBoardRows(sortedBy: .lastActivity)
+        XCTAssertEqual(rows.map(\.agent.pid), [5821, 6033])
+        XCTAssertEqual(rows[0].agent.cwdLeaf, "api-service")
+        XCTAssertEqual(rows[0].familyRSSBytes, 150)
+        XCTAssertEqual(rows[0].childCount, 1)
+        XCTAssertEqual(rows[1].agent.cwdLeaf, "web-app")
+    }
+
+    func testSessionBoardRowsDoesNotCapAtSix() {
+        let stub = StubDaemonClient()
+        stub.status.agents = (1...8).map { i in
+            agent(Int32(i), name: "claude", root: Int32(i), ppid: 1,
+                  cwd: "/tmp/p\(i)", seen: "2026-09-11T12:00:0\(i)Z")
+        }
+        let state = AppState(client: stub)
+        state.seedForTesting(status: stub.status)
+        XCTAssertEqual(state.sessionBoardRows(sortedBy: .lastActivity).count, 8)
+    }
+
+    func testSessionBoardRowsPrefersDaemonTrees() {
+        let stub = StubDaemonClient()
+        stub.status.agents = [
+            agent(99, name: "should-ignore", root: 99, ppid: 1, cwd: "/tmp/wrong"),
+        ]
+        stub.status.trees = [
+            AgentTreeModel(
+                root: agent(10, name: "claude", root: 10, ppid: 1, cwd: "/tmp/proj", seen: "2026-09-15T12:00:00Z", rss: 100),
+                children: [agent(11, name: "claude", root: 10, ppid: 10, rss: 50)],
+                rssBytes: 150,
+                lastSeenAt: "2026-09-15T12:00:00Z"),
+        ]
+        let state = AppState(client: stub)
+        state.seedForTesting(status: stub.status)
+        let rows = state.sessionBoardRows(sortedBy: .lastActivity)
+        XCTAssertEqual(rows.map(\.agent.pid), [10])
+        XCTAssertEqual(rows[0].agent.cwdLeaf, "proj")
+        XCTAssertEqual(rows[0].familyRSSBytes, 150)
+        XCTAssertEqual(rows[0].childCount, 1)
+    }
+
+    func testMonitorVendorKeyIDsSkipsBlockAndNonVendor() {
+        let stub = StubDaemonClient()
+        stub.status.firewallStats = [
+            "openai-key": RuleStatModel(mode: "monitor", type: "vendor-key"),
+            "anthropic-key": RuleStatModel(mode: "block", type: "vendor-key"),
+            "aws-key": RuleStatModel(mode: "monitor", type: "cloud-key"),
+        ]
+        let state = AppState(client: stub)
+        state.seedForTesting(status: stub.status)
+        XCTAssertEqual(state.monitorVendorKeyIDs, ["openai-key"])
+        XCTAssertFalse(state.showFleetPanel)
+    }
+
+    func testShowFleetPanelWhenConfigured() {
+        let stub = StubDaemonClient()
+        stub.status.fleetConfigured = true
+        let state = AppState(client: stub)
+        state.seedForTesting(status: stub.status)
+        XCTAssertTrue(state.showFleetPanel)
+    }
+
+    func testUnactedFlagsForSessionKeepsTreePidsOnly() {
+        let stub = StubDaemonClient()
+        stub.status.agents = [
+            agent(10, name: "claude", root: 10, ppid: 1, cwd: "/tmp/a"),
+            agent(11, name: "claude", root: 10, ppid: 10),
+            agent(20, name: "cursor", root: 20, ppid: 1, cwd: "/tmp/b"),
+        ]
+        let state = AppState(client: stub)
+        state.seedForTesting(status: stub.status)
+        state.seedFlagsForTesting([
+            FlagModel(id: "in-tree", rule: "proxy-secret-leak", severity: 3, ts: "2026-09-15T12:00:00Z",
+                      pid: 11, agent: "claude", evidence: []),
+            FlagModel(id: "other", rule: "proxy-secret-leak", severity: 3, ts: "2026-09-15T12:00:01Z",
+                      pid: 20, agent: "cursor", evidence: []),
+            FlagModel(id: "info", rule: "keychain-access", severity: 1, ts: "2026-09-15T12:00:02Z",
+                      pid: 10, agent: "claude", evidence: []),
+        ])
+        XCTAssertEqual(state.unactedFlagsForSession(rootPid: nil).map(\.id), ["in-tree", "other"])
+        XCTAssertEqual(state.unactedFlagsForSession(rootPid: 10).map(\.id), ["in-tree"])
+        XCTAssertEqual(state.unactedFlagsForSession(rootPid: 20).map(\.id), ["other"])
+        XCTAssertEqual(state.treePIDs(rootPid: 10), Set([10, 11]))
+    }
+
+    func testGroupedUnactedFlagsForSessionDropsOtherTrees() {
+        let stub = StubDaemonClient()
+        stub.status.agents = [
+            agent(10, name: "claude", root: 10, ppid: 1),
+            agent(20, name: "cursor", root: 20, ppid: 1),
+        ]
+        let state = AppState(client: stub)
+        state.seedForTesting(status: stub.status)
+        state.seedFlagsForTesting([
+            FlagModel(id: "a", rule: "proxy-secret-leak", severity: 3, ts: "2026-09-15T12:00:00Z",
+                      pid: 10, agent: "claude", evidence: ["connected to evil.test at x"]),
+            FlagModel(id: "b", rule: "proxy-secret-leak", severity: 3, ts: "2026-09-15T12:00:01Z",
+                      pid: 20, agent: "cursor", evidence: ["connected to evil.test at x"]),
+        ])
+        let scoped = state.groupedUnactedFlags(forRootPid: 10)
+        XCTAssertEqual(scoped.count, 1)
+        XCTAssertEqual(scoped[0].agent, "claude")
+        XCTAssertEqual(state.groupedUnactedFlags().count, 2)
     }
 }
 

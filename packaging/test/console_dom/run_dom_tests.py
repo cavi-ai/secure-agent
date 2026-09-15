@@ -48,7 +48,8 @@ def find_chrome():
 def build_harness(tmp):
     """Harness page = real index.html with mock_dom.js injected between lib.js
     and app.js. Real assets are symlinked so relative paths resolve."""
-    for f in ("index.html", "style.css", "lib.js", "app.js"):
+    for f in ("index.html", "style.css", "lib.js", "app.js",
+              "tab-overview.js", "tab-agents.js", "tab-egress.js", "tab-findings.js"):
         os.symlink(os.path.join(WEB_DIST, f), os.path.join(tmp, f))
     os.symlink(MOCK, os.path.join(tmp, "mock_dom.js"))
     html = open(os.path.join(WEB_DIST, "index.html")).read()
@@ -100,6 +101,7 @@ def main():
         check("posture banner is critical", 'id="posture-banner" data-state="critical"' in dom)
         check("posture headline rendered", 'id="posture-state">Critical<' in dom)
         check("KPI agents count", 'id="count-agents">3<' in dom)
+        check("KPI flags are unacted last 24h", 'id="count-flags">2<' in dom)
         check("KPI incidents count", 'id="count-incidents">1<' in dom)
         check("agent families grouped", dom.count('class="agent-group"') == 2)
         check("claude instance pid", "PID 5821" in dom)
@@ -109,6 +111,8 @@ def main():
         check("firewall enforcing badge",
               'class="badge badge-ok" id="badge-firewall-mode">enforcing<' in dom)
         check("uninspected-egress warning", "2 endpoints reached without inspection" in dom)
+        check("vendor-key promote banner",
+              'data-action="promote-vendor-keys"' in dom and "1 vendor-key rule" in dom)
         check("incident workflow chip (ack)", 'class="workflow-chip acked"' in dom)
         check("secret sources rendered (config+user)",
               dom.count('class="source-item"') == 2 and "CONFIG" in dom and "USER" in dom)
@@ -220,6 +224,14 @@ def main():
               and 'id="tab-findings" role="tabpanel" hidden' in dom)
         check("overview panel visible",
               'id="tab-overview" role="tabpanel">' in dom)
+        check("overview session board is present", 'id="session-board"' in dom)
+        check("session board has project filter", 'id="session-cwd-filter"' in dom)
+        overview = dom.split('id="session-board"', 1)[1].split('id="tab-agents"', 1)[0]
+        check("session board lists two sessions", overview.count('class="session-row') == 2)
+        check("session rows labeled by project folder",
+              "api-service" in overview and "web-app" in overview)
+        check("session row filters timeline by pids",
+              'data-action="filter-pids" data-pids="5821,5822"' in overview)
         check("egress tab badge shows uninspected count",
               'id="tab-badge-egress">2<' in dom)
         check("findings tab badge shows needs-you count",
@@ -261,6 +273,9 @@ def main():
               or ('id="session-filter"' in dom_session and "hidden" not in
                   dom_session.split('id="session-filter"')[1][:80]))
         check("session chip count", "7f3a9c21 · 2" in dom_session)
+        check("session scopes findings list",
+              'id="flags-session-filter"' in dom_session
+              and "hidden" not in dom_session.split('id="flags-session-filter"')[1][:80])
         session_rows = dom_session.count('class="timeline-item')
         check("timeline filtered to 2 session events", session_rows == 2, f"rows={session_rows}")
     finally:

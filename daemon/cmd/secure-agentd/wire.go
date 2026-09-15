@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -266,10 +267,21 @@ func setupAdvisor(cfg config.Config, st *store.Store) advisorStack {
 	return advisorStack{Sub: sub, Managed: managed}
 }
 
+// fleetConfigured is true when at least one HMAC fleet webhook can actually
+// deliver — the console hides the fleet panel until then.
+func fleetConfigured(webhooks []config.WebhookConfig) bool {
+	for _, wh := range webhooks {
+		if strings.TrimSpace(wh.URL) != "" && strings.TrimSpace(wh.Secret) != "" {
+			return true
+		}
+	}
+	return false
+}
+
 // buildStatusFn assembles the /status payload from live component state.
 // advisorHealth is resolved per call (the advisor stack hot-swaps on config
 // reload — a captured bool/subscriber would go stale).
-func buildStatusFn(proxyServer *proxy.ProxyServer, tagger *agents.Tagger, cr *correlate.Correlator, eng *firewall.Engine, reg *supervise.Registry, startTime time.Time, advisorHealth func() advisor.HealthSnapshot) api.StatusFunc {
+func buildStatusFn(proxyServer *proxy.ProxyServer, tagger *agents.Tagger, cr *correlate.Correlator, eng *firewall.Engine, reg *supervise.Registry, startTime time.Time, advisorHealth func() advisor.HealthSnapshot, fleetOn bool) api.StatusFunc {
 	return func() api.Status {
 		proxyActive := proxyServer != nil
 		proxyPort := 0
@@ -301,6 +313,7 @@ func buildStatusFn(proxyServer *proxy.ProxyServer, tagger *agents.Tagger, cr *co
 			AdvisorEnabled:    ah.Enabled,
 			AdvisorHealth:     &ah,
 			MutedFlags:        cr.MutedCount(),
+			FleetConfigured:   fleetOn,
 			FirewallStats:     firewallStats(eng),
 			Collectors:        reg.Snapshot(),
 		}

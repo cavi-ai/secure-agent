@@ -118,16 +118,17 @@ func main() {
 	// event has been persisted — shutdown waits for it).
 	drainDone := startDrainLoop(b.Subscribe(), st, correlator, fleetPub, func() *advisor.Subscriber { return advisorStk.Load().Sub })
 
-	// Periodic process tagger refresh (1s)
+	// Periodic process tagger refresh: 5s while idle, 1s while agents live.
 	go func() {
-		ticker := time.NewTicker(1 * time.Second)
-		defer ticker.Stop()
+		timer := time.NewTimer(agents.RefreshInterval(tagger.Any()))
+		defer timer.Stop()
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			case <-ticker.C:
+			case <-timer.C:
 				tagger.Refresh()
+				timer.Reset(agents.RefreshInterval(tagger.Any()))
 			}
 		}
 	}()
@@ -179,10 +180,12 @@ func main() {
 	sup := supervise.New(supReg)
 
 	statusFn := buildStatusFn(proxyServer, tagger, correlator, fw.Engine, supReg, time.Now(),
-		func() advisor.HealthSnapshot { return advisorStk.Load().Sub.Health() })
+		func() advisor.HealthSnapshot { return advisorStk.Load().Sub.Health() },
+		fleetConfigured(cfg.Fleet.Webhooks))
 
 	// Start Control API
 	apiServer := api.New(cfg.SocketPath, st, &realKiller{}, statusFn)
+	apiServer.SetBusDrops(b.Dropped)
 
 	// Peer-credential gating on the control socket: kernel-attested pid/uid per
 	// connection. Owner uid gets reads, tagged agent pids may ask the guard for

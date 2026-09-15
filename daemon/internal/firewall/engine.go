@@ -1,6 +1,7 @@
 package firewall
 
 import (
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -26,6 +27,7 @@ type RuleStat struct {
 	Legit      int    `json:"legit"`
 	Suspect    int    `json:"suspect"`
 	Mode       string `json:"mode"` // effective mode: "monitor" | "block"
+	Type       string `json:"type,omitempty"`
 }
 
 type Engine struct {
@@ -70,12 +72,45 @@ func (e *Engine) RuleMode(ruleID string) Mode {
 	return e.pol.modeFor(ruleID)
 }
 
-// Stats returns a snapshot of the per-rule tallies.
+func patternType(pat config.PatternConfig) string {
+	if pat.Type == "" {
+		return TypeUnknown
+	}
+	return pat.Type
+}
+
+// RuleIDsOfType returns configured pattern IDs of secretType, sorted.
+func (e *Engine) RuleIDsOfType(secretType string) []string {
+	var ids []string
+	for _, pat := range e.pol.cfg.Patterns {
+		if patternType(pat) == secretType {
+			ids = append(ids, pat.ID)
+		}
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+// Stats returns a snapshot of the per-rule tallies, including idle configured
+// patterns so the console can promote vendor-key rules before the first hit.
 func (e *Engine) Stats() map[string]RuleStat {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	out := make(map[string]RuleStat, len(e.stats))
+	out := make(map[string]RuleStat, len(e.pol.cfg.Patterns)+len(e.stats))
+	for _, pat := range e.pol.cfg.Patterns {
+		s := RuleStat{Type: patternType(pat), Mode: e.pol.modeFor(pat.ID).String()}
+		if v := e.stats[pat.ID]; v != nil {
+			s.WouldBlock = v.WouldBlock
+			s.Blocked = v.Blocked
+			s.Legit = v.Legit
+			s.Suspect = v.Suspect
+		}
+		out[pat.ID] = s
+	}
 	for k, v := range e.stats {
+		if _, ok := out[k]; ok {
+			continue
+		}
 		s := *v
 		s.Mode = e.pol.modeFor(k).String()
 		out[k] = s

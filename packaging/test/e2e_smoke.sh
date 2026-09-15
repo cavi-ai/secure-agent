@@ -85,6 +85,7 @@ net_sample_interval_ms: 200
 socket_path: "$SOCKET_PATH"
 db_path: "$tmp/events.db"
 jsonl_path: "$tmp/events.jsonl"
+proxy_enabled: true
 proxy_port: 0
 directory_guard:
   prompt_deadline_ms: 8000
@@ -368,7 +369,7 @@ if [ "$PROXY_PORT" != "0" ] && [ -f "$tmp/console-token" ]; then
   # fall through to the proxy-token challenge (407). This exact drift
   # silently blanked half the console behind a healthy daemon.
   DRIFT_FAILED=""
-  for p in /status /posture /flags /events /incidents /audit /fleet \
+  for p in /status /snapshot /posture /flags /events /incidents /audit /fleet \
            /firewall/sources /stats/rollup /mute /allowlist/suggestions \
            /egress/uninspected /notify/rules; do
     CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 \

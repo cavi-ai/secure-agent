@@ -22,6 +22,9 @@ const {
   parseMarkdownToHTML, buildEvidenceChain,
   sessionShort, filterEventsBySession, rollupSeries, flagHost,
   familyTitle, fmtRSS, fmtAge, isFamilyRoot, childrenOf, groupAgents, familyShouldExpand,
+  cwdLabel, sessionRows, filterEventsByPids, sessionBoardHTML,
+  monitorVendorKeyIDs, inspectionVisible, vendorKeyPromoteHTML,
+  scopedBySession, unactedLast24h, filterSessionRows,
 } = ctx;
 
 // ---------- escapeHTML ----------
@@ -252,6 +255,68 @@ test('fmtRSS and fmtAge', () => {
   assert.equal(fmtAge('2026-09-09T16:00:00Z', Date.parse('2026-09-09T16:02:00Z')), '2m');
 });
 
+test('cwdLabel: last path component, empty when missing', () => {
+  assert.equal(cwdLabel('/Users/dev/workspace/api-service'), 'api-service');
+  assert.equal(cwdLabel('/Users/dev/projects/web-app/'), 'web-app');
+  assert.equal(cwdLabel(''), '');
+  assert.equal(cwdLabel(undefined), '');
+});
+
+test('sessionRows: one row per root, cwd label, family rss, helpers excluded', () => {
+  const rows = sessionRows([
+    { pid: 5821, name: 'claude', cwd: '/Users/dev/workspace/api-service', root_pid: 5821, last_seen_at: '2026-09-11T12:00:00Z', rss_bytes: 100 },
+    { pid: 5822, name: 'claude', root_pid: 5821, ppid: 5821, last_seen_at: '2026-09-11T11:00:00Z', rss_bytes: 50 },
+    { pid: 6033, name: 'cursor', cwd: '/Users/dev/projects/web-app', root_pid: 6033, last_seen_at: '2026-09-11T11:00:00Z', rss_bytes: 10 },
+  ]);
+  assert.equal(rows.length, 2);
+  assert.equal(rows[0].root.pid, 5821);
+  assert.equal(rows[0].label, 'api-service');
+  assert.equal(rows[0].rss, 150);
+  assert.equal(rows[0].pids.map(Number).join(','), '5821,5822');
+  assert.equal(rows[0].children.length, 1);
+  assert.equal(rows[1].label, 'web-app');
+  assert.equal(rows[1].root.pid, 6033);
+});
+
+test('sessionRows: missing cwd falls back to harness name', () => {
+  const rows = sessionRows([{ pid: 1, name: 'codex', root_pid: 1 }]);
+  assert.equal(rows[0].label, 'Codex');
+});
+
+test('sessionRows: daemon trees are used as-is (no regroup)', () => {
+  const trees = [{
+    root: { pid: 10, name: 'claude', cwd: '/tmp/proj', root_pid: 10 },
+    children: [{ pid: 11, name: 'claude', root_pid: 10 }],
+    rss_bytes: 150,
+    last_seen_at: '2026-09-15T12:00:00Z',
+  }];
+  const rows = sessionRows([{ pid: 99, name: 'should-ignore', root_pid: 99 }], trees);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].root.pid, 10);
+  assert.equal(rows[0].label, 'proj');
+  assert.equal(rows[0].rss, 150);
+  assert.equal(rows[0].pids.map(Number).join(','), '10,11');
+});
+
+test('sessionBoardHTML labels the project folder', () => {
+  const html = sessionBoardHTML([{
+    root: { pid: 10, name: 'claude', cwd: '/tmp/proj', started_at: '' },
+    children: [],
+    label: 'proj',
+    rss: 0,
+    lastSeen: '',
+    pids: [10],
+  }], Date.now(), {});
+  assert.match(html, /session-label">proj</);
+  assert.match(html, /data-action="kill"/);
+});
+
+test('filterEventsByPids: empty pids is a no-op; otherwise pid set', () => {
+  const events = [{ pid: 1, ts: 'a' }, { pid: 2, ts: 'b' }, { pid: 3, ts: 'c' }];
+  assert.equal(filterEventsByPids(events, []).length, 3);
+  assert.deepEqual(filterEventsByPids(events, [1, 3]).map(e => e.pid), [1, 3]);
+});
+
 // ---------- flagHost ----------
 
 test('flagHost: extracts egress host from evidence, empty for hostless rules', () => {
@@ -260,4 +325,73 @@ test('flagHost: extracts egress host from evidence, empty for hostless rules', (
   assert.equal(flagHost({ evidence: ['claude (pid 1) accessed keychain file /x at 2026-09-08T10:00:00Z'] }), '');
   assert.equal(flagHost({ evidence: [] }), '');
   assert.equal(flagHost({}), '');
+});
+
+test('monitorVendorKeyIDs: monitor vendor-key only, sorted', () => {
+  const stats = {
+    'openai-key': { type: 'vendor-key', mode: 'monitor' },
+    'anthropic-key': { type: 'vendor-key', mode: 'block' },
+    'aws-key': { type: 'cloud-key', mode: 'monitor' },
+    'stripe-key': { type: 'vendor-key', mode: 'monitor' },
+  };
+  assert.equal(monitorVendorKeyIDs(stats).join(','), 'openai-key,stripe-key');
+  assert.equal(monitorVendorKeyIDs({}).join(','), '');
+  assert.equal(monitorVendorKeyIDs(null).join(','), '');
+});
+
+test('inspectionVisible: fleet/advisor/audit stay hidden until configured', () => {
+  const off = inspectionVisible({}, []);
+  assert.equal(off.fleet, false);
+  assert.equal(off.advisor, false);
+  assert.equal(off.audit, false);
+  const on = inspectionVisible({ fleet_configured: true, advisor_enabled: true }, [{}]);
+  assert.equal(on.fleet, true);
+  assert.equal(on.advisor, true);
+  assert.equal(on.audit, true);
+  const auditOnly = inspectionVisible({ fleet_configured: false, advisor_enabled: false }, [{}]);
+  assert.equal(auditOnly.fleet, false);
+  assert.equal(auditOnly.advisor, false);
+  assert.equal(auditOnly.audit, true);
+});
+
+test('vendorKeyPromoteHTML: banner names the count and posts type=vendor-key', () => {
+  const html = vendorKeyPromoteHTML(['anthropic-key', 'openai-key']);
+  assert.match(html, /2 vendor-key rules/);
+  assert.match(html, /data-action="promote-vendor-keys"/);
+  assert.equal(vendorKeyPromoteHTML([]), '');
+});
+
+test('scopedBySession: session_id wins; else pid set; else identity', () => {
+  const items = [
+    { id: 'a', pid: 1, session_id: 'sess-a' },
+    { id: 'b', pid: 2, session_id: 'sess-b' },
+    { id: 'c', pid: 3 },
+  ];
+  assert.equal(scopedBySession(items, 'sess-a', null).map(x => x.id).join(','), 'a');
+  assert.equal(scopedBySession(items, '', [2, 3]).map(x => x.id).join(','), 'b,c');
+  assert.equal(scopedBySession(items, '', []).length, 3);
+});
+
+test('unactedLast24h: sev>=2, not ack, within 24h', () => {
+  const now = Date.parse('2026-09-15T18:00:00Z');
+  const flags = [
+    { id: 'fresh', severity: 3, ts: '2026-09-15T17:00:00Z' },
+    { id: 'old', severity: 3, ts: '2026-09-13T18:00:00Z' },
+    { id: 'ack', severity: 3, ts: '2026-09-15T17:00:00Z', acknowledged: true },
+    { id: 'info', severity: 1, ts: '2026-09-15T17:00:00Z' },
+  ];
+  assert.equal(unactedLast24h(flags, now).map(f => f.id).join(','), 'fresh');
+  assert.equal(unactedLast24h([], now).length, 0);
+});
+
+test('filterSessionRows: cwd/label/name substring, empty query is identity', () => {
+  const rows = [
+    { label: 'api-service', root: { name: 'claude', cwd: '/Users/dev/workspace/api-service' } },
+    { label: 'web-app', root: { name: 'cursor', cwd: '/Users/dev/projects/web-app' } },
+  ];
+  assert.equal(filterSessionRows(rows, '').length, 2);
+  assert.equal(filterSessionRows(rows, 'API').map(r => r.label).join(','), 'api-service');
+  assert.equal(filterSessionRows(rows, 'cursor').map(r => r.label).join(','), 'web-app');
+  assert.equal(filterSessionRows(rows, 'projects/web').map(r => r.label).join(','), 'web-app');
+  assert.equal(filterSessionRows(rows, 'nope').length, 0);
 });

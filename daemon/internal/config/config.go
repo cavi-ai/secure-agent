@@ -2,6 +2,7 @@ package config
 
 import (
 	_ "embed"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net"
@@ -16,6 +17,71 @@ import (
 
 //go:embed defaults.yaml
 var defaultBytes []byte
+
+//go:embed guard-rules.json
+var guardRulesBytes []byte
+
+// GuardRuleDoc is the JSON the directory-guard hook and the correlator both
+// read: rule ids, path globs, and directory-scan prefixes.
+type GuardRuleDoc struct {
+	Rules []struct {
+		ID    string   `json:"id"`
+		Paths []string `json:"paths"`
+		Mode  string   `json:"mode"`
+	} `json:"rules"`
+	DirScan [][]string `json:"dir_scan"`
+}
+
+func ParseGuardRules(b []byte) (GuardRuleDoc, error) {
+	var doc GuardRuleDoc
+	if err := json.Unmarshal(b, &doc); err != nil {
+		return GuardRuleDoc{}, err
+	}
+	if len(doc.Rules) == 0 {
+		return GuardRuleDoc{}, fmt.Errorf("guard-rules.json: no rules")
+	}
+	return doc, nil
+}
+
+func globSafeForCorrelator(p string) bool {
+	// sensitive.Classify matches filepath.Base(glob) against the file name.
+	// A glob whose base is "*" or "**" (* as in ~/.azure/**) would mark every
+	// file on disk sensitive.
+	base := filepath.Base(filepath.Clean(p))
+	return base != "*" && base != "**"
+}
+
+func mergeGuardRulePaths(raw *rawConfig) {
+	doc, err := ParseGuardRules(guardRulesBytes)
+	if err != nil {
+		log.Printf("config: guard-rules.json: %v", err)
+		return
+	}
+	seen := make(map[string]bool, len(raw.SensitiveGlobs)+16)
+	for _, g := range raw.SensitiveGlobs {
+		seen[g] = true
+	}
+	for _, r := range doc.Rules {
+		for _, p := range r.Paths {
+			if p == "" || seen[p] || !globSafeForCorrelator(p) {
+				continue
+			}
+			raw.SensitiveGlobs = append(raw.SensitiveGlobs, p)
+			seen[p] = true
+		}
+	}
+	seenPath := make(map[string]bool, len(raw.SensitivePaths)+8)
+	for _, p := range raw.SensitivePaths {
+		seenPath[p] = true
+	}
+	for _, pair := range doc.DirScan {
+		if len(pair) < 1 || pair[0] == "" || seenPath[pair[0]] {
+			continue
+		}
+		raw.SensitivePaths = append(raw.SensitivePaths, pair[0])
+		seenPath[pair[0]] = true
+	}
+}
 
 type AgentDef struct {
 	Name  string   `yaml:"name"`
@@ -236,6 +302,7 @@ func loadWithOverlayError(explicitPath string) (Config, error, error) {
 	if err := yaml.Unmarshal(defaultBytes, &raw); err != nil {
 		return Config{}, err, err
 	}
+	mergeGuardRulePaths(&raw)
 
 	targetPath := explicitPath
 	if targetPath == "" || targetPath == "/nonexistent" {

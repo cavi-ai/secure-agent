@@ -24,10 +24,12 @@ import (
 
 type fakeKiller struct {
 	killed int32
+	all    []int32
 }
 
 func (f *fakeKiller) Kill(pid int32) error {
 	f.killed = pid
+	f.all = append(f.all, pid)
 	return nil
 }
 
@@ -115,6 +117,55 @@ func TestFirewallModeEndpointPromotesAndPersists(t *testing.T) {
 	}
 	if modes.Load()["aws-key"] != "block" {
 		t.Fatal("promotion was not persisted to the mode store")
+	}
+}
+
+func TestFirewallModePromotesAllOfTypeLeavesOthers(t *testing.T) {
+	dir := t.TempDir()
+	sock := fmt.Sprintf("/tmp/sa_test_fwtype_%d.sock", time.Now().UnixNano())
+	defer os.Remove(sock)
+
+	eng, err := firewall.NewEngine(config.FirewallConfig{
+		Mode: "monitor",
+		Patterns: []config.PatternConfig{
+			{ID: "anthropic-key", Type: "vendor-key", Re: `sk-ant-[A-Za-z0-9_-]{24,}`, Mode: "monitor"},
+			{ID: "openai-key", Type: "vendor-key", Re: `sk-[A-Za-z0-9]{32,}`, Mode: "monitor"},
+			{ID: "aws-key", Type: "cloud-key", Re: `AKIA[0-9A-Z]{16}`, Mode: "monitor"},
+		},
+	}, []byte("salt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	modes := firewall.NewModeStore(filepath.Join(dir, "firewall-modes.json"))
+
+	a := New(sock, testStore(t), &fakeKiller{}, func() Status { return Status{Running: true} })
+	a.SetFirewall(FirewallControl{Engine: eng, Modes: modes})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go a.Serve(ctx)
+	waitForSocket(t, sock)
+
+	cl := unixClient(sock)
+	resp, err := cl.Post("http://unix/firewall/mode", "application/json", strings.NewReader(`{"type":"vendor-key","mode":"block"}`))
+	if err != nil || resp.StatusCode != 200 {
+		t.Fatalf("firewall type post: %v status=%v", err, resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), `"anthropic-key"`) || !strings.Contains(string(body), `"openai-key"`) {
+		t.Fatalf("response missing promoted vendor-key ids: %s", body)
+	}
+	if eng.RuleMode("anthropic-key") != firewall.ModeBlock || eng.RuleMode("openai-key") != firewall.ModeBlock {
+		t.Fatal("vendor-key rules were not promoted to block")
+	}
+	if eng.RuleMode("aws-key") != firewall.ModeMonitor {
+		t.Fatal("cloud-key rule must stay in monitor")
+	}
+	loaded := modes.Load()
+	if loaded["anthropic-key"] != "block" || loaded["openai-key"] != "block" {
+		t.Fatalf("type promotion not persisted: %v", loaded)
+	}
+	if _, ok := loaded["aws-key"]; ok {
+		t.Fatal("cloud-key must not be written to the mode store")
 	}
 }
 
@@ -400,5 +451,191 @@ func TestGuardRulesDeleteRejectsInvalidRuleID(t *testing.T) {
 	a.handleGuardRules(rr, req)
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("code=%d body=%s, want 400", rr.Code, rr.Body.String())
+	}
+}
+
+func TestSnapshotBundlesHotTelemetry(t *testing.T) {
+	st := testStore(t)
+	now := time.Now().UTC()
+	st.PutFlag(model.Flag{ID: "flag-a", Rule: "proxy-secret-leak", Severity: 3, Agent: "claude", PID: 1, TS: now})
+	st.PutEvent(event.Event{Kind: event.KindProxyHit, PID: 1, TS: now, Detail: "proxy-scan"})
+
+	a := New("", st, &fakeKiller{}, func() Status {
+		return Status{Running: true, Version: "test", ActiveAgents: 1,
+			Agents: []AgentSummary{{PID: 1, Name: "claude"}}}
+	})
+
+	rr := httptest.NewRecorder()
+	a.buildMux().ServeHTTP(rr, httptest.NewRequest("GET", "/snapshot", nil))
+	if rr.Code != 200 {
+		t.Fatalf("GET /snapshot code=%d body=%s", rr.Code, rr.Body.String())
+	}
+	var snap struct {
+		Status      Status          `json:"status"`
+		Flags       []model.Flag    `json:"flags"`
+		Events      []event.Event   `json:"events"`
+		Posture     Posture         `json:"posture"`
+		Mutes       []MutePair      `json:"mutes"`
+		Suggestions []Suggestion    `json:"suggestions"`
+		Incidents   json.RawMessage `json:"incidents"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &snap); err != nil {
+		t.Fatalf("decode snapshot: %v body=%s", err, rr.Body.String())
+	}
+	if !snap.Status.Running || snap.Status.Version != "test" {
+		t.Fatalf("status = %+v", snap.Status)
+	}
+	if len(snap.Flags) != 1 || snap.Flags[0].ID != "flag-a" {
+		t.Fatalf("flags = %+v", snap.Flags)
+	}
+	if len(snap.Events) != 1 {
+		t.Fatalf("events = %+v", snap.Events)
+	}
+	if snap.Mutes == nil {
+		t.Fatal("mutes must be an array, not omitted")
+	}
+	if snap.Suggestions == nil {
+		t.Fatal("suggestions must be an array, not omitted")
+	}
+	if snap.Incidents == nil {
+		t.Fatal("incidents key missing")
+	}
+	if snap.Posture.Generated == "" {
+		t.Fatal("posture not populated")
+	}
+	if snap.Status.UnactedFlags24h != 1 {
+		t.Fatalf("unacted_flags_24h = %d, want 1", snap.Status.UnactedFlags24h)
+	}
+}
+
+func TestStatusCountsUnacted24hAndBusDrops(t *testing.T) {
+	st := testStore(t)
+	now := time.Now().UTC()
+	st.PutFlag(model.Flag{ID: "fresh", Rule: "proxy-secret-leak", Severity: 3, Agent: "claude", PID: 1, TS: now})
+	st.PutFlag(model.Flag{ID: "old", Rule: "proxy-secret-leak", Severity: 3, Agent: "claude", PID: 1, TS: now.Add(-48 * time.Hour)})
+	st.PutFlag(model.Flag{ID: "ack", Rule: "proxy-secret-leak", Severity: 3, Agent: "claude", PID: 1, TS: now})
+	st.AcknowledgeFlag("ack")
+	st.PutFlag(model.Flag{ID: "info", Rule: "keychain-access", Severity: 1, Agent: "claude", PID: 1, TS: now})
+
+	a := New("", st, &fakeKiller{}, func() Status { return Status{Running: true} })
+	a.SetBusDrops(func() uint64 { return 7 })
+
+	rr := httptest.NewRecorder()
+	a.buildMux().ServeHTTP(rr, httptest.NewRequest("GET", "/status", nil))
+	if rr.Code != 200 {
+		t.Fatalf("GET /status code=%d", rr.Code)
+	}
+	var got Status
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.UnactedFlags24h != 1 {
+		t.Fatalf("unacted_flags_24h = %d, want 1 (fresh sev>=2 only)", got.UnactedFlags24h)
+	}
+	if got.BusDrops != 7 {
+		t.Fatalf("bus_drops = %d, want 7", got.BusDrops)
+	}
+}
+
+func TestGroupAgentTreesOneRowPerRootHelpersFolded(t *testing.T) {
+	trees := GroupAgentTrees([]AgentSummary{
+		{PID: 5822, Name: "claude", RootPID: 5821, RSSBytes: 50, LastSeenAt: "2026-09-11T11:00:00Z"},
+		{PID: 5821, Name: "claude", CWD: "/Users/dev/workspace/api-service", RootPID: 5821, RSSBytes: 100, LastSeenAt: "2026-09-11T12:00:00Z"},
+		{PID: 6033, Name: "cursor", CWD: "/Users/dev/projects/web-app", RootPID: 6033, RSSBytes: 10, LastSeenAt: "2026-09-11T11:00:00Z"},
+	})
+	if len(trees) != 2 {
+		t.Fatalf("trees = %d, want 2", len(trees))
+	}
+	if trees[0].Root.PID != 5821 {
+		t.Fatalf("first root = %d, want 5821 (most recent last_seen)", trees[0].Root.PID)
+	}
+	if trees[0].RSSBytes != 150 {
+		t.Fatalf("family rss = %d, want 150", trees[0].RSSBytes)
+	}
+	if len(trees[0].Children) != 1 || trees[0].Children[0].PID != 5822 {
+		t.Fatalf("children = %+v, want helper 5822", trees[0].Children)
+	}
+	if trees[1].Root.PID != 6033 || len(trees[1].Children) != 0 {
+		t.Fatalf("second tree = %+v", trees[1])
+	}
+}
+
+func TestStatusJSONIncludesTrees(t *testing.T) {
+	a := New("", testStore(t), &fakeKiller{}, func() Status {
+		return Status{Running: true, Agents: []AgentSummary{
+			{PID: 10, Name: "claude", RootPID: 10},
+			{PID: 11, Name: "claude", RootPID: 10},
+		}}
+	})
+	rr := httptest.NewRecorder()
+	a.buildMux().ServeHTTP(rr, httptest.NewRequest("GET", "/status", nil))
+	if rr.Code != 200 {
+		t.Fatalf("GET /status code=%d", rr.Code)
+	}
+	var st Status
+	if err := json.Unmarshal(rr.Body.Bytes(), &st); err != nil {
+		t.Fatal(err)
+	}
+	if len(st.Trees) != 1 || st.Trees[0].Root.PID != 10 || len(st.Trees[0].Children) != 1 {
+		t.Fatalf("trees = %+v", st.Trees)
+	}
+}
+
+func TestKillEndpointKillsTaggedTreeSharingRootPID(t *testing.T) {
+	fk := &fakeKiller{}
+	a := New("", testStore(t), fk, func() Status {
+		return Status{Running: true, Agents: []AgentSummary{
+			{PID: 10, Name: "claude", RootPID: 10},
+			{PID: 11, Name: "claude", RootPID: 10},
+			{PID: 12, Name: "claude", RootPID: 10},
+			{PID: 20, Name: "cursor", RootPID: 20},
+		}}
+	})
+	req := httptest.NewRequest(http.MethodPost, "/kill", strings.NewReader(`{"pid":10}`))
+	rec := httptest.NewRecorder()
+	a.handleKill(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", rec.Code, rec.Body.String())
+	}
+	got := map[int32]int{}
+	for _, p := range fk.all {
+		got[p]++
+	}
+	for _, want := range []int32{10, 11, 12} {
+		if got[want] != 1 {
+			t.Fatalf("killed %v, want tree 10,11,12 once each", fk.all)
+		}
+	}
+	if got[20] != 0 {
+		t.Fatalf("killed other tree pid 20: %v", fk.all)
+	}
+	if len(fk.all) != 3 {
+		t.Fatalf("killed %v, want exactly 3 pids", fk.all)
+	}
+}
+
+func TestKillEndpointHelperPIDKillsWholeTree(t *testing.T) {
+	fk := &fakeKiller{}
+	a := New("", testStore(t), fk, func() Status {
+		return Status{Running: true, Agents: []AgentSummary{
+			{PID: 10, Name: "claude", RootPID: 10},
+			{PID: 11, Name: "claude", RootPID: 10},
+			{PID: 12, Name: "claude", RootPID: 10},
+		}}
+	})
+	req := httptest.NewRequest(http.MethodPost, "/kill", strings.NewReader(`{"pid":11}`))
+	rec := httptest.NewRecorder()
+	a.handleKill(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", rec.Code, rec.Body.String())
+	}
+	got := map[int32]int{}
+	for _, p := range fk.all {
+		got[p]++
+	}
+	for _, want := range []int32{10, 11, 12} {
+		if got[want] != 1 {
+			t.Fatalf("helper kill %v, want whole tree 10,11,12", fk.all)
+		}
 	}
 }

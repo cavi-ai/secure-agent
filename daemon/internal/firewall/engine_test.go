@@ -134,3 +134,29 @@ func TestInspectMonitorLeakWouldBlockNotBlock(t *testing.T) {
 		t.Fatalf("monitor-mode leak must be would-block, got %v (%+v)", d.Action, d.Findings)
 	}
 }
+
+func TestRuleIDsOfTypeListsConfiguredPatterns(t *testing.T) {
+	e := testEngine(t)
+	got := e.RuleIDsOfType(TypeVendorKey)
+	if len(got) != 1 || got[0] != "anthropic-key" {
+		t.Fatalf("vendor-key ids = %v, want [anthropic-key]", got)
+	}
+	got = e.RuleIDsOfType(TypeCloudKey)
+	if len(got) != 1 || got[0] != "aws-key" {
+		t.Fatalf("cloud-key ids = %v, want [aws-key]", got)
+	}
+}
+
+func TestStatsIncludesIdlePatternsWithType(t *testing.T) {
+	e := testEngine(t)
+	st := e.Stats()
+	if st["anthropic-key"].Type != TypeVendorKey {
+		t.Fatalf("anthropic-key type = %q, want %s", st["anthropic-key"].Type, TypeVendorKey)
+	}
+	if st["aws-key"].Type != TypeCloudKey {
+		t.Fatalf("aws-key type = %q, want %s", st["aws-key"].Type, TypeCloudKey)
+	}
+	if st["anthropic-key"].Mode != "monitor" {
+		t.Fatalf("idle anthropic-key mode = %q, want monitor", st["anthropic-key"].Mode)
+	}
+}

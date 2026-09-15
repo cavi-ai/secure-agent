@@ -23,11 +23,13 @@
       proxy_port: 8443,
       uninspected_egress: 2,
       advisor_enabled: true,
+      fleet_configured: true,
+      unacted_flags_24h: 2,
       advisor_health: { enabled: true, queue_depth: 0, model: 'qwen3:8b' },
       firewall_stats: {
-        'anthropic-key':  { mode: 'monitor', would_block: 5, blocked: 0, legit: 12 },
-        'aws-key':        { mode: 'block',   would_block: 2, blocked: 1, legit: 0 },
-        'db-conn-string': { mode: 'monitor', would_block: 1, blocked: 0, legit: 0 }
+        'anthropic-key':  { type: 'vendor-key', mode: 'monitor', would_block: 5, blocked: 0, legit: 12 },
+        'aws-key':        { type: 'cloud-key', mode: 'block',   would_block: 2, blocked: 1, legit: 0 },
+        'db-conn-string': { type: 'env-value', mode: 'monitor', would_block: 1, blocked: 0, legit: 0 }
       }
     },
     '/posture': {
@@ -190,6 +192,22 @@
         ok: true, status: 200,
         json: async () => out,
         text: async () => JSON.stringify(out)
+      };
+    }
+    if (p === '/snapshot') {
+      const body = {
+        status: data['/status'],
+        flags: data['/flags'],
+        incidents: data['/incidents'],
+        events: data['/events'],
+        posture: data['/posture'],
+        suggestions: data['/allowlist/suggestions'],
+        mutes: data['/mute']
+      };
+      return {
+        ok: true, status: 200,
+        json: async () => body,
+        text: async () => JSON.stringify(body)
       };
     }
     const body = data[p];

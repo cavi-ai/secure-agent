@@ -388,6 +388,9 @@ struct SettingsView: View {
         Section("Egress firewall") {
             Text("Monitor reports leaks without blocking; block stops the request. Promote a rule once you trust its precision.")
                 .font(.caption).foregroundStyle(.secondary)
+            if !state.monitorVendorKeyIDs.isEmpty {
+                Button("Block vendor keys") { state.promoteVendorKeys() }
+            }
             if state.firewallRules.isEmpty {
                 Text("No egress inspected yet — traffic is scanned as your agents run.")
                     .font(.caption).foregroundStyle(.secondary)

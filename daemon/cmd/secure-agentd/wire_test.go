@@ -60,7 +60,7 @@ func TestBuildStatusFn(t *testing.T) {
 	reg := supervise.NewRegistry()
 
 	fn := buildStatusFn(nil, tagger, cr, nil, reg, time.Now().Add(-2*time.Second),
-		func() advisor.HealthSnapshot { return advisor.HealthSnapshot{Enabled: true} })
+		func() advisor.HealthSnapshot { return advisor.HealthSnapshot{Enabled: true} }, false)
 	s := fn()
 
 	if !s.Running {
@@ -91,6 +91,21 @@ func TestBuildStatusFn(t *testing.T) {
 	}
 	if s.FirewallStats != nil {
 		t.Fatalf("nil engine must report nil stats, got %v", s.FirewallStats)
+	}
+	if s.FleetConfigured {
+		t.Fatal("status with no webhooks must not claim fleet is configured")
+	}
+}
+
+func TestFleetConfiguredRequiresURLAndSecret(t *testing.T) {
+	if fleetConfigured(nil) {
+		t.Fatal("empty webhooks are not configured")
+	}
+	if fleetConfigured([]config.WebhookConfig{{URL: "https://example", Secret: ""}}) {
+		t.Fatal("url without secret is not configured")
+	}
+	if !fleetConfigured([]config.WebhookConfig{{URL: "https://example", Secret: "s"}}) {
+		t.Fatal("url+secret webhook is configured")
 	}
 }
 
