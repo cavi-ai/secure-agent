@@ -55,6 +55,7 @@ type Status struct {
 	Uptime            string         `json:"uptime"`
 	ActiveAgents      int            `json:"active_agents"`
 	Agents            []AgentSummary `json:"agents"`
+	Trees             []AgentTree    `json:"trees"`
 	ProxyEnabled      bool           `json:"proxy_enabled"`
 	ProxyPort         int            `json:"proxy_port"`
 	UninspectedEgress int            `json:"uninspected_egress"`
@@ -439,6 +440,7 @@ func (a *API) currentStatus() Status {
 			}
 		}
 	}
+	st.Trees = GroupAgentTrees(st.Agents)
 	return st
 }
 

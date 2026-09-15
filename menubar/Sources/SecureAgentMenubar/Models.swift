@@ -65,6 +65,27 @@ public struct AgentSummaryModel: Codable, Identifiable, Sendable {
     }
 }
 
+/// One session tree as emitted by the daemon (`trees` on /status).
+public struct AgentTreeModel: Codable, Sendable {
+    public let root: AgentSummaryModel
+    public let children: [AgentSummaryModel]
+    public let rssBytes: UInt64?
+    public let lastSeenAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case root, children
+        case rssBytes = "rss_bytes"
+        case lastSeenAt = "last_seen_at"
+    }
+
+    public init(root: AgentSummaryModel, children: [AgentSummaryModel] = [], rssBytes: UInt64? = nil, lastSeenAt: String? = nil) {
+        self.root = root
+        self.children = children
+        self.rssBytes = rssBytes
+        self.lastSeenAt = lastSeenAt
+    }
+}
+
 public struct RuleStatModel: Codable, Sendable {
     public let wouldBlock: Int
     public let blocked: Int
@@ -136,6 +157,9 @@ public struct StatusResponse: Codable, Sendable {
     /// Var (not let): value semantics make this safe, and tests seed agent
     /// lists after constructing a StatusResponse.
     public var agents: [AgentSummaryModel]?
+    /// Daemon-grouped session trees. Nil on older daemons — the popover
+    /// regroups the flat list then.
+    public var trees: [AgentTreeModel]?
     public let proxyEnabled: Bool?
     public let proxyPort: Int?
     public let uninspectedEgress: Int?
@@ -154,6 +178,7 @@ public struct StatusResponse: Codable, Sendable {
         case uptime
         case activeAgents = "active_agents"
         case agents
+        case trees
         case proxyEnabled = "proxy_enabled"
         case proxyPort = "proxy_port"
         case uninspectedEgress = "uninspected_egress"
@@ -163,12 +188,13 @@ public struct StatusResponse: Codable, Sendable {
         case advisorHealth = "advisor_health"
     }
 
-    public init(running: Bool, uptime: String, activeAgents: Int, agents: [AgentSummaryModel]? = nil, proxyEnabled: Bool? = nil, proxyPort: Int? = nil, uninspectedEgress: Int? = nil, firewallStats: [String: RuleStatModel]? = nil, trackedProcesses: Int? = nil, collectors: [HealthModel]? = nil, version: String? = nil, advisorHealth: AdvisorHealthModel? = nil) {
+    public init(running: Bool, uptime: String, activeAgents: Int, agents: [AgentSummaryModel]? = nil, trees: [AgentTreeModel]? = nil, proxyEnabled: Bool? = nil, proxyPort: Int? = nil, uninspectedEgress: Int? = nil, firewallStats: [String: RuleStatModel]? = nil, trackedProcesses: Int? = nil, collectors: [HealthModel]? = nil, version: String? = nil, advisorHealth: AdvisorHealthModel? = nil) {
         self.running = running
         self.version = version
         self.uptime = uptime
         self.activeAgents = activeAgents
         self.agents = agents
+        self.trees = trees
         self.proxyEnabled = proxyEnabled
         self.proxyPort = proxyPort
         self.uninspectedEgress = uninspectedEgress
