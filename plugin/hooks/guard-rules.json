@@ -1,0 +1,59 @@
+{
+  "rules": [
+    {
+      "id": "ssh-keys",
+      "paths": ["~/.ssh/id_*", "~/.ssh/*_rsa", "~/.ssh/*_ed25519"],
+      "mode": "monitor"
+    },
+    {
+      "id": "cloud-creds",
+      "paths": [
+        "~/.aws/credentials",
+        "~/.config/gcloud/**",
+        "~/.azure/**",
+        "~/.netrc",
+        "~/.kube/config",
+        "~/.docker/config.json",
+        "~/.config/gh/hosts.yml"
+      ],
+      "mode": "monitor"
+    },
+    {
+      "id": "keychain",
+      "paths": ["**/*.keychain-db", "**/login.keychain*"],
+      "mode": "monitor"
+    },
+    {
+      "id": "env-files",
+      "paths": ["**/.env", "**/.env.*"],
+      "mode": "monitor"
+    },
+    {
+      "id": "shell-rc",
+      "paths": ["~/.zshrc", "~/.zshenv", "~/.bashrc", "~/.profile"],
+      "mode": "monitor"
+    },
+    {
+      "id": "harness-config",
+      "paths": [
+        "~/.claude/settings.json",
+        "~/.claude/settings.local.json",
+        "~/.claude/hooks/**",
+        "~/.cursor/hooks/**",
+        "~/.cursor/hooks.json",
+        "~/.config/opencode/hooks/**"
+      ],
+      "mode": "monitor"
+    }
+  ],
+  "dir_scan": [
+    ["~/.ssh", "ssh-keys"],
+    ["~/.aws", "cloud-creds"],
+    ["~/.config/gcloud", "cloud-creds"],
+    ["~/.azure", "cloud-creds"],
+    ["~/.kube", "cloud-creds"],
+    ["~/.docker", "cloud-creds"],
+    ["~/.gnupg", "cloud-creds"],
+    ["~/Library/Keychains", "keychain"]
+  ]
+}

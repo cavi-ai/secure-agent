@@ -441,30 +441,6 @@ document.addEventListener('DOMContentLoaded', () => {
   // Activity rollup chart: hourly event bars with rose flag markers — the
   // "is this normal for this machine?" answer at a glance. The 24h/7d toggle
   // re-slices the same 7d fetch locally (no refetch).
-  function renderActivity() {
-    const svg = document.getElementById('activity-chart');
-    if (!svg) return;
-    const hours = Number(document.getElementById('activity-window')?.value || 24);
-    const s = rollupSeries(telemetryData.rollup, hours, Date.now()); // lib.js
-    const max = Math.max(1, ...s.events.map((v, i) => v + s.flags[i]));
-    const W = 1200, H = 96, bw = W / hours;
-    let bars = '';
-    for (let i = 0; i < hours; i++) {
-      const evH = (s.events[i] / max) * (H - 14);
-      const flH = (s.flags[i] / max) * (H - 14);
-      const x = (i * bw).toFixed(1);
-      if (s.events[i] > 0) {
-        bars += `<rect x="${x}" y="${(H - evH).toFixed(1)}" width="${(bw - 1).toFixed(1)}" height="${evH.toFixed(1)}" rx="1.5" class="act-ev"><title>${s.labels[i]} — ${s.events[i]} events${s.flags[i] ? `, ${s.flags[i]} flags` : ''}</title></rect>`;
-      }
-      if (s.flags[i] > 0) {
-        bars += `<rect x="${x}" y="${(H - evH - flH).toFixed(1)}" width="${(bw - 1).toFixed(1)}" height="${flH.toFixed(1)}" rx="1.5" class="act-fl"/>`;
-      }
-      if (s.events[i] === 0 && s.flags[i] === 0) {
-        bars += `<rect x="${x}" y="${H - 2}" width="${(bw - 1).toFixed(1)}" height="2" class="act-zero"/>`;
-      }
-    }
-    svg.innerHTML = bars;
-  }
   document.getElementById('activity-window')?.addEventListener('change', renderActivity);
 
   function renderStatus() {
@@ -511,200 +487,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const sessionHelpOpen = {};
 
-  function renderSessionBoard() {
-    const container = document.getElementById('session-board');
-    const badge = document.getElementById('badge-session-count');
-    if (!container) return;
-    const agents = (telemetryData.status && telemetryData.status.agents) ? telemetryData.status.agents : [];
-    const trees = telemetryData.status && telemetryData.status.trees;
-    const rows = sessionRows(agents, trees);
-    if (badge) badge.textContent = rows.length;
-    if (rows.length === 0) {
-      container.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-agent"/></svg><span>No agents running yet — start Claude Code, Cursor, or Codex and they'll appear here</span></div>`;
-      return;
-    }
-    const now = Date.now();
-    container.innerHTML = sessionBoardHTML(rows, now, sessionHelpOpen);
-    container.querySelectorAll('details.session-helpers').forEach(el => {
-      el.addEventListener('toggle', () => {
-        sessionHelpOpen[el.dataset.pid] = el.open;
-      });
-    });
-  }
+  document.getElementById('session-cwd-filter')?.addEventListener('input', () => renderSessionBoard());
+
 
   const agentGroupOpen = {};
 
-  function renderAgents() {
-    const container = document.getElementById('agents-container');
-    const badge = document.getElementById('badge-agents-count');
-    const agents = (telemetryData.status && telemetryData.status.agents) ? telemetryData.status.agents : [];
-    const families = groupAgents(agents);
-
-    badge.textContent = families.length;
-    setTabBadge('agents', families.length); // informative count, neutral styling
-
-    if (agents.length === 0) {
-      container.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-agent"/></svg><span>No agents running yet — start Claude Code, Cursor, or Codex and they'll appear here</span></div>`;
-      return;
-    }
-
-    const now = Date.now();
-    const totalInstances = families.reduce((n, fam) => n + fam.roots.length, 0);
-    container.innerHTML = families.map(f => {
-      const open = familyShouldExpand(f, families.length, totalInstances, agentGroupOpen);
-      const earliestAbs = f.earliest ? fmtTime(new Date(f.earliest)) : '';
-      const earliestAge = f.earliest ? fmtAge(f.earliest, now) : '';
-      const rss = fmtRSS(f.rss);
-      const orphanBtn = f.orphanCount
-        ? `<button type="button" class="btn btn-danger btn-sm" data-action="kill-orphans" data-family="${escapeHTML(f.name)}"><svg class="icon"><use href="#i-power"/></svg><span>Terminate orphans (${f.orphanCount})</span></button>`
-        : '';
-      return `
-      <details class="agent-group" data-family="${escapeHTML(f.name)}"${open ? ' open' : ''}>
-        <summary class="agent-group-head">
-          <span class="agent-group-title">
-            <svg class="icon"><use href="#i-agent"/></svg>
-            <span class="agent-family-name">${escapeHTML(f.title)}</span>
-            <span class="agent-pid">${f.roots.length} ${f.roots.length === 1 ? 'instance' : 'instances'}</span>
-          </span>
-          <span class="agent-group-meta">
-            ${earliestAbs ? `<span class="agent-meta-item" title="${escapeHTML(f.earliest)}">${escapeHTML(earliestAbs)}${earliestAge ? ' · ' + earliestAge : ''}</span>` : ''}
-            ${rss ? `<span class="agent-meta-item">${escapeHTML(rss)}</span>` : ''}
-            ${f.orphanCount ? `<span class="agent-orphan-count">${f.orphanCount} leftover</span>` : ''}
-            ${orphanBtn}
-          </span>
-        </summary>
-        <div class="agent-instances">
-          ${f.roots.map(root => renderInstance(root, f.members, now)).join('')}
-        </div>
-      </details>`;
-    }).join('');
-
-    container.querySelectorAll('details.agent-group').forEach(el => {
-      el.addEventListener('toggle', () => {
-        agentGroupOpen[el.dataset.family] = el.open;
-      });
-    });
-  }
-
-  function renderInstance(root, members, now) {
-    const kids = childrenOf(root, members);
-    return `${renderProcessRow(root, now, false)}${kids.map(c => renderProcessRow(c, now, true)).join('')}`;
-  }
-
-  function renderFirewall() {
-    const container = document.getElementById('firewall-container');
-    const badge = document.getElementById('badge-firewall-mode');
-    const s = telemetryData.status;
-    const stats = (s && s.firewall_stats) ? s.firewall_stats : {};
-    const uninspected = (s && s.uninspected_egress) ? s.uninspected_egress : 0;
-    const rules = Object.keys(stats).sort();
-
-    const anyBlock = rules.some(r => stats[r].mode === 'block');
-    badge.textContent = anyBlock ? 'enforcing' : 'monitor';
-    badge.className = 'badge' + (anyBlock ? ' badge-ok' : '');
-    setTabBadge('egress', uninspected);
-
-    if (rules.length === 0 && uninspected === 0) {
-      container.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-shield"/></svg><span>No egress inspected yet — traffic is scanned as your agents run</span></div>`;
-      prevFwStats = stats;
-      return;
-    }
-
-    let html = '';
-    if (uninspected > 0) {
-      html += `<button type="button" class="fw-uninspected fw-drill" data-action="open-uninspected"><svg class="icon"><use href="#i-globe"/></svg><span>${uninspected} endpoint${uninspected === 1 ? '' : 's'} reached without inspection in the last 24h (pinned or unrouted)</span><span class="fw-drill-hint">view endpoints</span></button>`;
-    }
-    html += vendorKeyPromoteHTML(monitorVendorKeyIDs(stats));
-    // Egress suggestions: recurring uninspected endpoints the user can approve
-    // into the vendor allowlist with one click (drives the blind spot to zero).
-    const suggestions = telemetryData.suggestions || [];
-    if (suggestions.length > 0) {
-      const vis = inspectionVisible(telemetryData.status, telemetryData.audit);
-      html += suggestions.map(sg => `
-        <div class="fw-rule fw-suggestion">
-          <div class="fw-rule-main">
-            <span class="fw-rule-id">${escapeHTML(sg.host)}</span>
-            <div class="fw-metrics">
-              <span class="fw-metric dim">${escapeHTML(sg.agent)} · seen <b>${sg.count}×</b> uninspected</span>
-              ${vis.advisor && sg.assessment ? `<span class="advisor-chip adv-${escapeHTML(sg.assessment)}" title="${escapeHTML(sg.rationale)}">advisor: ${escapeHTML(sg.assessment)}</span>` : ''}
-            </div>
-          </div>
-          <button class="btn btn-ghost btn-sm" data-action="allow-host" data-agent="${escapeHTML(sg.agent)}" data-host="${escapeHTML(sg.host)}"><svg class="icon"><use href="#i-shield"/></svg><span>Allow for ${escapeHTML(sg.agent)}</span></button>
-        </div>`).join('');
-    }
-    html += rules.map(r => {
-      const st = stats[r];
-      const blocking = st.mode === 'block';
-      // A rule whose blocked/would-block counters grew since the last render
-      // just intercepted something — flash its row once.
-      const prev = prevFwStats ? prevFwStats[r] : null;
-      const grew = !reducedMotion && prevFwStats !== null &&
-        prev && ((st.blocked || 0) > (prev.blocked || 0) || (st.would_block || 0) > (prev.would_block || 0));
-      const action = blocking
-        ? `<span class="mode-chip block">blocking</span>`
-        : `<button class="btn btn-primary btn-sm" data-action="promote" data-rule="${escapeHTML(r)}"><svg class="icon"><use href="#i-arrow"/></svg><span>Promote to block</span></button>`;
-      return `
-        <div class="fw-rule${grew ? ' fw-flash' : ''}">
-          <div class="fw-rule-main">
-            <span class="fw-rule-id">${escapeHTML(r)}</span>
-            <div class="fw-metrics">
-              <span class="fw-metric"><b>${st.would_block || 0}</b> would-block</span>
-              <span class="fw-metric"><b>${st.blocked || 0}</b> blocked</span>
-              <span class="fw-metric dim"><b>${st.legit || 0}</b> legit</span>
-            </div>
-          </div>
-          ${action}
-        </div>`;
-    }).join('');
-    container.innerHTML = html;
-    prevFwStats = stats;
-  }
 
   // Posture headline: the one-glance answer, plus clickable jump-off points
   // into the panels below (drill-down without leaving the page).
-  function renderPosture() {
-    const banner = document.getElementById('posture-banner');
-    const stateEl = document.getElementById('posture-state');
-    const summaryEl = document.getElementById('posture-summary');
-    const itemsEl = document.getElementById('posture-items');
-    const p = telemetryData.posture;
-    if (!banner || !p) return;
-
-    banner.dataset.state = p.state || 'all-clear';
-    if (p.state === 'all-clear') {
-      stateEl.textContent = 'All clear';
-      summaryEl.textContent = 'Agents monitored, no action needed';
-    } else if (p.state === 'critical') {
-      stateEl.textContent = 'Critical';
-    } else {
-      stateEl.textContent = 'Needs attention';
-    }
-    summaryEl.textContent = p.summary || '';
-
-    // Each item deep-links to its panel: flags/incidents scroll to their
-    // section, guard prompts open the resolve flow, collectors explain.
-    const items = (p.items || []).map(it => {
-      const sev = it.severity >= 3 ? 's3' : it.severity === 2 ? 's2' : 's1';
-      let link = '';
-      if (it.kind === 'flag') link = `<a href="#" data-action="goto-tab" data-tab="findings">view evidence</a>`;
-      if (it.kind === 'incident') link = `<a href="#" data-action="open-incident" data-id="${escapeHTML(it.id)}">view report</a>`;
-      if (it.kind === 'guard_pending') link = `<span>resolve it in the menu bar app</span>`;
-      if (it.kind === 'collector_down') link = `<span>— ${escapeHTML(it.detail || 'collector stopped')} <a href="#" data-action="open-fda">open Full Disk Access settings</a></span>`;
-      if (it.kind === 'uninspected_egress') link = `<a href="#" data-action="open-uninspected">see endpoints</a>`;
-      return `<li><span class="sev ${sev}">●</span><span>${escapeHTML(it.title)} ${link}</span></li>`;
-    });
-    // The fatigue reducer: when the local advisor has triaged the critical
-    // flags and some read benign, say so at the one-glance level.
-    const vis = inspectionVisible(telemetryData.status, telemetryData.audit);
-    const criticals = vis.advisor
-      ? (telemetryData.flags || []).filter(f => f.severity >= 3 && f.advisor && f.advisor.assessment)
-      : [];
-    const benignCount = criticals.filter(f => f.advisor.assessment === 'benign').length;
-    if (criticals.length > 0) {
-      items.push(`<li><span class="sev s1">●</span><span>advisor: ${benignCount} of ${criticals.length} triaged critical flags look benign</span></li>`);
-    }
-    itemsEl.innerHTML = items.join('');
-  }
 
   // Incident workflow: acknowledge keeps it visible but marked seen; resolve
   // closes it with a note. Both hit /incidents/status and refresh.
@@ -729,165 +519,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   };
 
-  function renderIncidents() {
-    const container = document.getElementById('incidents-container');
-    const badge = document.getElementById('badge-incidents-count');
-    const incidents = scopedBySession(telemetryData.incidents || [], timelineSession, timelinePids);
-
-    badge.textContent = incidents.length;
-
-    if (incidents.length === 0) {
-      container.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-incident"/></svg><span>No incidents — nothing to contain right now</span></div>`;
-      return;
-    }
-
-    container.innerHTML = incidents.map(inc => {
-      const wf = inc.workflow || {};
-      const status = wf.status || 'open';
-      const statusChip = status === 'resolved'
-        ? `<span class="workflow-chip resolved">resolved</span>`
-        : status === 'acknowledged'
-          ? `<span class="workflow-chip acked">ack</span>`
-          : '';
-      const riskClass = (inc.risk || '').toUpperCase() === 'CRITICAL' ? 'high'
-        : (inc.risk || '').toUpperCase() === 'HIGH' ? 'high' : '';
-      return `
-      <div class="incident-card ${status === 'resolved' ? 'is-resolved' : ''}">
-        <div class="incident-header">
-          <span class="risk-tag ${riskClass}"><svg class="icon"><use href="#i-alert"/></svg>${escapeHTML(inc.risk)}</span>
-          <span class="kpi-hint">${inc.agent ? escapeHTML(inc.agent) + ' · ' : ''}${escapeHTML(inc.rule)} — PID ${inc.pid}</span>
-          ${statusChip}
-        </div>
-        <div class="incident-summary">${escapeHTML(inc.summary)}</div>
-        ${inspectionVisible(telemetryData.status, telemetryData.audit).advisor && inc.advisor_narrative ? `<div class="advisor-narrative"><svg class="icon"><use href="#i-agent"/></svg><span>${escapeHTML(inc.advisor_narrative)}</span></div>` : ''}
-        ${wf.resolution_note ? `<div class="incident-note">Resolution: ${escapeHTML(wf.resolution_note)}</div>` : ''}
-        <div class="incident-actions">
-          <button class="btn btn-ghost" data-action="open-incident" data-id="${escapeHTML(inc.id)}"><svg class="icon"><use href="#i-doc"/></svg><span>View report</span></button>
-          ${status === 'open' ? `<button class="btn btn-ghost" data-action="incident-status" data-id="${escapeHTML(inc.id)}" data-status="acknowledged"><svg class="icon"><use href="#i-history"/></svg><span>Acknowledge</span></button>` : ''}
-          ${status !== 'resolved' ? `<button class="btn btn-ghost" data-action="incident-status" data-id="${escapeHTML(inc.id)}" data-status="resolved"><svg class="icon"><use href="#i-shield"/></svg><span>Resolve</span></button>` : ''}
-        </div>
-        <div class="rotate-list">
-          ${(inc.rotate_list || []).map(item => `
-            <div class="rotate-item-row">
-              <span class="rk"><svg class="icon"><use href="#i-key"/></svg><strong>${escapeHTML(item.name)}</strong> (${escapeHTML(item.category)})</span>
-            </div>
-          `).join('')}
-        </div>
-      </div>
-    `;}).join('');
-  }
-
-  function renderFleet() {
-    const vis = inspectionVisible(telemetryData.status, telemetryData.audit);
-    const fleetCol = document.getElementById('fleet-col');
-    if (fleetCol) fleetCol.hidden = !vis.fleet;
-    if (!vis.fleet) return;
-
-    const container = document.getElementById('fleet-container');
-    const badge = document.getElementById('badge-fleet-count');
-    // /fleet returns THIS node's status OBJECT (hostname/os/agents/…), not an
-    // array of remote nodes. Older console builds did fleet.map on it and
-    // crashed renderAll — killing every panel below fleet on every poll.
-    // Accept both shapes: object → one local node card; array → remote list.
-    const raw = telemetryData.fleet;
-    const fleet = Array.isArray(raw)
-      ? raw
-      : (raw && (raw.hostname || raw.node_id) ? [{ ...raw, online: raw.running !== false }] : []);
-
-    badge.textContent = fleet.length;
-
-    if (fleet.length === 0) {
-      container.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-server"/></svg><span>No remote fleet nodes registered</span></div>`;
-      return;
-    }
-
-    container.innerHTML = fleet.map(node => `
-      <div class="fleet-node-card">
-        <div class="fleet-node-header">
-          <span class="fleet-node-name"><svg class="icon"><use href="#i-server"/></svg>${escapeHTML(node.hostname || node.id || 'Fleet node')}</span>
-          <span class="status-badge ${node.online ? 'online' : 'offline'}">${node.online ? 'ONLINE' : 'OFFLINE'}</span>
-        </div>
-        <div class="fleet-node-meta">
-          ${node.os ? `<span>${escapeHTML(node.os)}${node.arch ? '/' + escapeHTML(node.arch) : ''}</span>` : ''}
-          ${node.ip ? `<span>IP ${escapeHTML(node.ip)}</span>` : ''}
-          <span>${escapeHTML(node.version || 'v1.0')}</span>
-          ${typeof node.active_agents === 'number' ? `<span>${node.active_agents} agents</span>` : ''}
-          ${typeof node.recent_flags === 'number' ? `<span>${node.recent_flags} flags</span>` : ''}
-        </div>
-      </div>
-    `).join('');
-  }
-
-  function renderAudit() {
-    const vis = inspectionVisible(telemetryData.status, telemetryData.audit);
-    const panel = document.getElementById('audit-panel');
-    if (panel) panel.hidden = !vis.audit;
-    if (!vis.audit) return;
-
-    const container = document.getElementById('audit-container');
-    const badge = document.getElementById('badge-audit-count');
-    const audit = telemetryData.audit || [];
-
-    badge.textContent = audit.length;
-
-    if (audit.length === 0) {
-      container.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-history"/></svg><span>No policy changes yet — promotions and secret registrations are logged here</span></div>`;
-      return;
-    }
-
-    container.innerHTML = audit.map(a => {
-      const timeStr = new Date(a.ts).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-      let label = escapeHTML(a.detail || '');
-      let cls = '';
-      if (a.action === 'rule-mode') {
-        label = `${escapeHTML(a.rule)}: ${escapeHTML(a.from_mode)} → ${escapeHTML(a.to_mode)}`;
-        cls = a.to_mode === 'block' ? 'ok' : '';
-      } else if (a.action === 'fingerprint-ingest') {
-        cls = 'tool';
-      } else if (a.action === 'fingerprint-reload') {
-        label = label || 'fingerprints reloaded';
-        cls = 'tool';
-      }
-      const actionLabel = a.action.replace(/-/g, ' ').toUpperCase();
-      return `
-        <div class="audit-item">
-          <div class="audit-head">
-            <span class="event-kind ${cls}">${actionLabel}</span>
-            <span class="audit-t">${timeStr}</span>
-          </div>
-          <div class="audit-dtl">${label}</div>
-        </div>
-      `;
-    }).join('');
-  }
-
-  function renderSources() {
-    const list = document.getElementById('sources-list');
-    const badge = document.getElementById('badge-sources-count');
-    const sources = telemetryData.sources || [];
-
-    badge.textContent = sources.length;
-
-    if (sources.length === 0) {
-      list.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-key"/></svg><span>No secret files watched yet — add the credential files whose keys must never leave</span></div>`;
-      return;
-    }
-
-    list.innerHTML = sources.map(s => {
-      const isUser = s.origin === 'user';
-      const remove = isUser
-        ? `<button class="source-remove" title="Stop watching" data-action="remove-source" data-source="${escapeHTML(s.source)}"><svg class="icon"><use href="#i-close"/></svg></button>`
-        : `<span class="origin-chip config">CONFIG</span>`;
-      return `
-        <div class="source-item">
-          <svg class="icon source-ico"><use href="#i-key"/></svg>
-          <span class="source-path">${escapeHTML(s.source)}</span>
-          ${isUser ? `<span class="origin-chip user">USER</span>` : ''}
-          ${remove}
-        </div>
-      `;
-    }).join('');
-  }
 
   window.addSource = async function() {
     const input = document.getElementById('source-input');
@@ -1010,157 +641,34 @@ document.addEventListener('DOMContentLoaded', () => {
     return '';
   }
 
-  function renderFlags() {
-    const container = document.getElementById('flags-list');
-    const badge = document.getElementById('badge-flags-count');
-
-    // Seed the filter dropdowns from the unfiltered flags so options don't
-    // vanish once a filter narrows the view.
-    (telemetryData.flags || []).forEach(f => {
-      if (f.agent) seenAgents.add(f.agent);
-      if (f.rule) seenRules.add(f.rule);
-    });
-    syncSelect('flags-agent', seenAgents);
-    syncSelect('flags-rule', seenRules);
-
-    const flags = scopedBySession(telemetryData.flagsView || [], timelineSession, timelinePids);
-    const scopedInc = scopedBySession(telemetryData.incidents || [], timelineSession, timelinePids);
-    paintSessionChip('flags-session-filter', 'flags-session-filter-id', flags.length);
-    badge.textContent = flags.length;
-    setTabBadge('findings', flags.length + scopedInc.length);
-
-    if (flags.length === 0) {
-      const msg = sessionScopeOn()
-        ? `No flags for ${sessionScopeTag()} in the loaded window`
-        : isFlagsFiltered() ? 'No flags match the current filter' : 'No security flags — agent egress looks clean';
-      container.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-alert"/></svg><span>${msg}</span></div>`;
-      return;
-    }
-
-    const advisorHealth = (telemetryData.status && telemetryData.status.advisor_health) || null;
-    const advisorOffline = !!(advisorHealth && advisorHealth.circuit_open);
-    const vis = inspectionVisible(telemetryData.status, telemetryData.audit);
-
-    container.innerHTML = flags.map((f, i) => {
-      const chain = buildEvidenceChain(f);
-      const chainHTML = chain.length
-        ? `<div class="chain">${chain.map((n, j) => `
-            ${j > 0 ? '<span class="chain-link" aria-hidden="true"></span>' : ''}
-            <div class="chain-node ${n.cls}">
-              <span class="cn-icon"><svg class="icon"><use href="#${n.icon}"/></svg></span>
-              <span class="cn-body">
-                <span class="cn-label">${escapeHTML(n.label)}</span>
-                <span class="cn-sub">${escapeHTML(n.sub)}</span>
-              </span>
-            </div>`).join('')}</div>`
-        : '';
-      const isKeychain = f.rule === 'keychain-access' || f.rule === 'keychain-security-cli';
-      const retriageBtn = !vis.advisor ? ''
-        : pendingRetriage.has(f.id)
-        ? `<span class="advisor-pending" title="The model is re-reading this flag — the fresh verdict lands here"><span class="spinner" aria-hidden="true"></span>advisor re-reading…</span>`
-        : advisorOffline
-          ? `<button class="btn btn-ghost btn-sm" disabled title="Advisor offline — verdicts paused (${escapeHTML(advisorHealth.last_error || 'model server unreachable')})"><svg class="icon"><use href="#i-refresh"/></svg><span>Advisor offline</span></button>`
-          : `<button class="btn btn-ghost btn-sm" data-action="retriage" data-id="${escapeHTML(f.id)}" title="Ask the local model to re-read this flag"><svg class="icon"><use href="#i-refresh"/></svg><span>Re-run advisor</span></button>`;
-      return `
-      <div class="flag-card ${f.severity >= 3 ? 'sev3' : ''}${i === 0 ? ' expanded' : ''}">
-        <button class="flag-head" data-action="toggle-flag" aria-expanded="${i === 0}">
-          <svg class="icon flag-ico"><use href="#i-alert"/></svg>
-          <span class="flag-rule-text">${escapeHTML(f.rule)} — ${escapeHTML(f.agent)} (PID ${f.pid})</span>
-          ${vis.advisor && f.advisor && f.advisor.assessment ? `<span class="advisor-chip adv-${escapeHTML(f.advisor.assessment)}" title="${escapeHTML(f.advisor.rationale)}">advisor: ${escapeHTML(f.advisor.assessment)}</span>` : ''}
-          ${f.session_id ? `<span class="flag-session">session ${escapeHTML(sessionShort(f.session_id))}</span>` : ''}
-          <svg class="icon flag-chev"><use href="#i-arrow"/></svg>
-        </button>
-        <div class="flag-detail"><div class="flag-detail-inner">
-          ${chainHTML}
-          ${isKeychain ? `<div class="flag-context"><svg class="icon"><use href="#i-key"/></svg><span>Apps read the keychain to load their own credentials — this is usually routine. Informational only: dismiss this flag if reviewed, or dismiss the class if it's noise.</span></div>` : ''}
-          <div class="flag-actions-row">
-            <button class="btn btn-ghost btn-sm" data-action="dismiss-flag" data-id="${escapeHTML(f.id)}" title="Mark reviewed — this flag leaves the list; the rule keeps watching"><svg class="icon"><use href="#i-shield"/></svg><span>Dismiss</span></button>
-            ${retriageBtn}
-            ${f.session_id ? `<button class="btn btn-ghost btn-sm" data-action="filter-session" data-session="${escapeHTML(f.session_id)}"><svg class="icon"><use href="#i-activity"/></svg><span>View session in timeline</span></button>` : ''}
-            ${f.advisor && f.advisor.assessment === 'benign' && flagHost(f) ? `<button class="btn btn-ghost btn-sm" data-action="mute-flag" data-rule="${escapeHTML(f.rule)}" data-host="${escapeHTML(flagHost(f))}" title="Stop flagging ${escapeHTML(f.rule)} for ${escapeHTML(flagHost(f))} — reversible"><svg class="icon"><use href="#i-close"/></svg><span>Mute rule+host</span></button>` : ''}
-            ${isKeychain ? `<button class="btn btn-ghost btn-sm" data-action="mute-rule" data-rule="${escapeHTML(f.rule)}" title="Stop flagging ${escapeHTML(f.rule)} entirely — reversible from the muted list below"><svg class="icon"><use href="#i-close"/></svg><span>Dismiss this flag class</span></button>` : ''}
-            <button class="btn btn-danger btn-sm" data-action="kill" data-pid="${f.pid}" title="Terminate the agent process tree (pid ${f.pid})"><svg class="icon"><use href="#i-power"/></svg><span>Kill ${escapeHTML(f.agent)}</span></button>
-          </div>
-          <div class="flag-evidence">
-            ${(f.evidence || []).map(ev => `<div>${escapeHTML(ev)}</div>`).join('')}
-          </div>
-        </div></div>
-      </div>`;
-    }).join('');
-
-    // Dispositions: muted (rule, host) pairs, visible so the quiet is
-    // deliberate and reversible.
-    const mutes = telemetryData.mutes || [];
-    if (mutes.length > 0) {
-      container.innerHTML += `<div class="mute-list"><div class="mute-head">Muted</div>` + mutes.map(m => `
-        <div class="mute-row">
-          <span class="mute-pair">${escapeHTML(m.rule)} · ${m.host === '*' ? 'all hosts' : escapeHTML(m.host)}</span>
-          <button class="source-remove" title="Unmute" data-action="unmute" data-rule="${escapeHTML(m.rule)}" data-host="${escapeHTML(m.host)}"><svg class="icon"><use href="#i-close"/></svg></button>
-        </div>`).join('') + `</div>`;
-    }
-  }
-
-  function renderEvents() {
-    const container = document.getElementById('events-container');
-    const allEvents = telemetryData.eventsView || [];
-    let events = allEvents;
-    if (timelineSession) events = filterEventsBySession(allEvents, timelineSession);
-    else if (timelinePids && timelinePids.length) events = filterEventsByPids(allEvents, timelinePids);
-
-    const chip = document.getElementById('session-filter');
-    if (chip) paintSessionChip('session-filter', 'session-filter-id', events.length);
-
-    if (events.length === 0) {
-      const msg = timelineSession
-        ? `No events for session ${sessionShort(timelineSession)} in the loaded window`
-        : (timelinePids && timelinePids.length)
-          ? `No events for ${timelinePidLabel || 'this session'} in the loaded window`
-        : isEventsFiltered() ? 'No events match the current filter' : 'No system events logged';
-      container.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-activity"/></svg><span>${msg}</span></div>`;
-      prevEventKeys = new Set();
-      firstEventRender = false;
-      suppressFreshOnce = false;
-      return;
-    }
-
-    container.innerHTML = events.map(e => {
-      let kindLabel = 'EVENT';
-      let kindClass = '';
-      if (e.kind === 8) { kindLabel = 'TOOL USE'; kindClass = 'tool'; }
-      else if (e.kind === 9) { kindLabel = 'PROXY HIT'; kindClass = 'proxy'; }
-      else if (e.kind === 5) { kindLabel = 'NET CONN'; kindClass = 'conn'; }
-
-      // fmtTime (lib.js) keeps the 68px time column single-line and
-      // locale-proof ("16:03:58", always zero-padded).
-      const timeStr = fmtTime(new Date(e.ts));
-      const detailStr = e.detail || e.path || (e.remote_host ? `${e.remote_host}:${e.remote_port}` : '');
-      // A bare PID is the ambiguous-process complaint — prefix the agent
-      // name when the tagged tree can supply one.
-      const agentName = agentNameFor(e.pid);
-      const pidLabel = agentName ? `${agentName} · PID ${e.pid}` : `PID ${e.pid}`;
-
-      // Animate only events that weren't in the previous render — the whole
-      // list re-renders on every poll, and rows the user already saw must
-      // not flicker. The initial page load never animates.
-      let freshCls = '';
-      if (!reducedMotion && !firstEventRender && !suppressFreshOnce && !prevEventKeys.has(eventKey(e))) {
-        freshCls = e.kind === 9 ? ' fresh-sev' : ' fresh';
-      }
-
-      return `
-        <div class="timeline-item${freshCls}">
-          <span class="t">${timeStr}</span>
-          <span class="event-kind ${kindClass}">${kindLabel}</span>
-          <span class="pid" title="PID ${e.pid}">${escapeHTML(pidLabel)}</span>
-          <span class="dtl">${escapeHTML(detailStr)}</span>
-        </div>
-      `;
-    }).join('');
-
-    prevEventKeys = new Set(events.map(eventKey));
-    firstEventRender = false;
-    suppressFreshOnce = false;
-  }
+  // Tab renderers (tab-*.js) read this bag at call time so they stay outside
+  // the DOMContentLoaded closure. Lets that are reassigned use accessors.
+  window.SA = {
+    t: telemetryData,
+    sessionHelpOpen,
+    agentGroupOpen,
+    setTabBadge,
+    paintSessionChip,
+    sessionScopeOn,
+    sessionScopeTag,
+    reducedMotion,
+    seenAgents,
+    seenRules,
+    syncSelect,
+    agentNameFor,
+    pendingRetriage,
+    isFlagsFiltered,
+    isEventsFiltered,
+  };
+  Object.defineProperties(window.SA, {
+    timelineSession: { get() { return timelineSession; }, set(v) { timelineSession = v; } },
+    timelinePids: { get() { return timelinePids; }, set(v) { timelinePids = v; } },
+    timelinePidLabel: { get() { return timelinePidLabel; }, set(v) { timelinePidLabel = v; } },
+    prevFwStats: { get() { return prevFwStats; }, set(v) { prevFwStats = v; } },
+    prevEventKeys: { get() { return prevEventKeys; }, set(v) { prevEventKeys = v; } },
+    firstEventRender: { get() { return firstEventRender; }, set(v) { firstEventRender = v; } },
+    suppressFreshOnce: { get() { return suppressFreshOnce; }, set(v) { suppressFreshOnce = v; } },
+  });
 
   // The report modal is shared by two views: the incident report (markdown,
   // with a Copy button) and the uninspected-egress drill-down (row actions,
@@ -1195,24 +703,6 @@ document.addEventListener('DOMContentLoaded', () => {
   // Uninspected-egress drill-down: the count in the firewall panel becomes a
   // list the operator can act on (allow the endpoint, read the advisor's
   // verdict) instead of a dead end.
-  function fillUninspected(bodyEl) {
-    const rows = telemetryData.uninspected || [];
-    if (rows.length === 0) {
-      bodyEl.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-globe"/></svg><span>No uninspected endpoints in the last 24h — the blind spot is closed</span></div>`;
-      return;
-    }
-    bodyEl.innerHTML = `<div class="uninspected-expl">These agents connected directly, bypassing the inspection proxy — usually pinned TLS certificates or tooling that ignores the proxy environment. Allowing a host marks the traffic as expected and closes the blind spot; routing the agent through the proxy (source <code>~/.config/secure-agent/agent-env.sh</code>) inspects it instead.</div>` + rows.map(e => `
-      <div class="fw-rule">
-        <div class="fw-rule-main">
-          <span class="fw-rule-id">${escapeHTML(e.host)}</span>
-          <div class="fw-metrics">
-            <span class="fw-metric dim">${escapeHTML(e.agent)} · <b>${e.count}×</b> in 24h${e.last_seen ? ` · last ${escapeHTML(fmtAge(e.last_seen, Date.now()))} ago` : ''}</span>
-            ${inspectionVisible(telemetryData.status, telemetryData.audit).advisor && e.assessment ? `<span class="advisor-chip adv-${escapeHTML(e.assessment)}" title="${escapeHTML(e.rationale)}">advisor: ${escapeHTML(e.assessment)}</span>` : ''}
-          </div>
-        </div>
-        <button class="btn btn-ghost btn-sm" data-action="allow-host" data-agent="${escapeHTML(e.agent)}" data-host="${escapeHTML(e.host)}"><svg class="icon"><use href="#i-shield"/></svg><span>Allow for ${escapeHTML(e.agent)}</span></button>
-      </div>`).join('');
-  }
 
   window.openUninspected = function() {
     if (!reportModal) return;

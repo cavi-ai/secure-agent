@@ -156,6 +156,7 @@
         <section class="panel" id="session-board-panel">
           <div class="panel-head">
             <h2><svg class="icon"><use href="#i-agent"/></svg>Sessions</h2>
+            <input type="search" id="session-cwd-filter" class="input" placeholder="Filter by project…" autocomplete="off" spellcheck="false">
             <span class="badge" id="badge-session-count">0</span>
           </div>
           <div class="panel-body" id="session-board">
@@ -348,6 +349,10 @@
   <div id="toast-container" class="toasts"></div>
 
   <script src="lib.js"></script>
+  <script src="tab-overview.js"></script>
+  <script src="tab-agents.js"></script>
+  <script src="tab-egress.js"></script>
+  <script src="tab-findings.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

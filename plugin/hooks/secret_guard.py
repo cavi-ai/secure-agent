@@ -406,35 +406,17 @@ def command_references_protected(command: str) -> bool:
 
 # --- directory guard: config-driven mode classification ---------------------
 
-# Shipped default guard rules. Mirrors daemon defaults.yaml directory_guard.
-# All ship monitor; the mode-override file is the user's opt-in to prompt/deny.
-DEFAULT_GUARD_RULES = [
-    {"id": "ssh-keys",    "paths": ["~/.ssh/id_*", "~/.ssh/*_rsa", "~/.ssh/*_ed25519"], "mode": "monitor"},
-    {"id": "cloud-creds", "paths": ["~/.aws/credentials", "~/.config/gcloud/**", "~/.azure/**",
-                                    "~/.netrc", "~/.kube/config", "~/.docker/config.json",
-                                    "~/.config/gh/hosts.yml"], "mode": "monitor"},
-    {"id": "keychain",    "paths": ["**/*.keychain-db", "**/login.keychain*"], "mode": "monitor"},
-    {"id": "env-files",   "paths": ["**/.env", "**/.env.*"], "mode": "monitor"},
-    {"id": "shell-rc",    "paths": ["~/.zshrc", "~/.zshenv", "~/.bashrc", "~/.profile"], "mode": "monitor"},
-    {"id": "harness-config", "paths": ["~/.claude/settings.json", "~/.claude/settings.local.json",
-                                       "~/.claude/hooks/**", "~/.cursor/hooks/**", "~/.cursor/hooks.json",
-                                       "~/.config/opencode/hooks/**"], "mode": "monitor"},
-]
+# Shipped default guard rules. Shared JSON the correlator also loads
+# (daemon/internal/config/guard-rules.json — copies must match).
+def _load_guard_rules():
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "guard-rules.json")
+    with open(path, encoding="utf-8") as fh:
+        return json.load(fh)
 
 
-# Directory prefixes whose *scan* is itself a guarded act: a Grep/Glob rooted
-# at ~/.ssh is reaching for the keys inside even though no single file path
-# matches the rules above. Maps the prefix to the rule whose mode governs it.
-DIR_SCAN_RULES = (
-    ("~/.ssh", "ssh-keys"),
-    ("~/.aws", "cloud-creds"),
-    ("~/.config/gcloud", "cloud-creds"),
-    ("~/.azure", "cloud-creds"),
-    ("~/.kube", "cloud-creds"),
-    ("~/.docker", "cloud-creds"),
-    ("~/.gnupg", "cloud-creds"),
-    ("~/Library/Keychains", "keychain"),
-)
+_GUARD_DOC = _load_guard_rules()
+DEFAULT_GUARD_RULES = _GUARD_DOC["rules"]
+DIR_SCAN_RULES = tuple((a, b) for a, b in _GUARD_DOC["dir_scan"])
 
 
 def match_dir_scan(path: str):

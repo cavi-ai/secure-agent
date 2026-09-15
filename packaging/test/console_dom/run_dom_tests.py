@@ -48,7 +48,8 @@ def find_chrome():
 def build_harness(tmp):
     """Harness page = real index.html with mock_dom.js injected between lib.js
     and app.js. Real assets are symlinked so relative paths resolve."""
-    for f in ("index.html", "style.css", "lib.js", "app.js"):
+    for f in ("index.html", "style.css", "lib.js", "app.js",
+              "tab-overview.js", "tab-agents.js", "tab-egress.js", "tab-findings.js"):
         os.symlink(os.path.join(WEB_DIST, f), os.path.join(tmp, f))
     os.symlink(MOCK, os.path.join(tmp, "mock_dom.js"))
     html = open(os.path.join(WEB_DIST, "index.html")).read()
@@ -218,6 +219,7 @@ def main():
         check("overview panel visible",
               'id="tab-overview" role="tabpanel">' in dom)
         check("overview session board is present", 'id="session-board"' in dom)
+        check("session board has project filter", 'id="session-cwd-filter"' in dom)
         overview = dom.split('id="session-board"', 1)[1].split('id="tab-agents"', 1)[0]
         check("session board lists two sessions", overview.count('class="session-row') == 2)
         check("session rows labeled by project folder",

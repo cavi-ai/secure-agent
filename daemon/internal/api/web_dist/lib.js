@@ -52,6 +52,17 @@ function scopedBySession(items, sessionId, pids) {
   return items || [];
 }
 
+function filterSessionRows(rows, q) {
+  const s = String(q || '').trim().toLowerCase();
+  if (!s) return rows || [];
+  return (rows || []).filter(r => {
+    const label = String((r && r.label) || '').toLowerCase();
+    const cwd = String((r && r.root && r.root.cwd) || '').toLowerCase();
+    const name = String((r && r.root && r.root.name) || '').toLowerCase();
+    return label.includes(s) || cwd.includes(s) || name.includes(s);
+  });
+}
+
 function unactedLast24h(flags, nowMs) {
   const cutoff = nowMs - 24 * 3600e3;
   return (flags || []).filter(f => {

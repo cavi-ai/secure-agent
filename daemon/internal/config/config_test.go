@@ -1,10 +1,12 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -105,11 +107,84 @@ func TestDirectoryGuardDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	// The hook owns the rule set (a stdlib-only Python process can't parse
-	// YAML) via its own embedded copy plus guard-modes.json; the daemon
-	// config carries only the hook's fail-safe prompt deadline.
 	if cfg.DirectoryGuard.PromptDeadlineMS != 45000 {
 		t.Fatalf("prompt_deadline_ms = %d, want 45000", cfg.DirectoryGuard.PromptDeadlineMS)
+	}
+}
+
+func TestGuardRulesJSONParsesAndHookCopyMatches(t *testing.T) {
+	doc, err := ParseGuardRules(guardRulesBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(doc.Rules) < 6 {
+		t.Fatalf("rules = %d, want at least 6", len(doc.Rules))
+	}
+	hook, err := os.ReadFile(filepath.Join("..", "..", "..", "plugin", "hooks", "guard-rules.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(bytes.TrimSpace(guardRulesBytes)) != string(bytes.TrimSpace(hook)) {
+		t.Fatal("plugin/hooks/guard-rules.json drifted from daemon/internal/config/guard-rules.json")
+	}
+}
+
+func TestSensitiveGlobsCoveredByGuardRules(t *testing.T) {
+	cfg, err := Load(filepath.Join(t.TempDir(), "absent.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := ParseGuardRules(guardRulesBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inDoc := map[string]bool{}
+	for _, r := range doc.Rules {
+		for _, p := range r.Paths {
+			inDoc[p] = true
+		}
+	}
+	for _, g := range cfg.SensitiveGlobs {
+		// expandPaths may rewrite ~; compare against the raw YAML token via the doc.
+		_ = g
+	}
+	for _, p := range []string{"**/.env", "~/.ssh/id_*", "~/.aws/credentials"} {
+		if !inDoc[p] {
+			t.Fatalf("guard-rules.json missing correlator glob %q", p)
+		}
+	}
+	found := false
+	for _, g := range cfg.SensitiveGlobs {
+		if strings.Contains(g, ".zshrc") || strings.Contains(g, "login.keychain") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("Load must merge guard-rules.json paths into SensitiveGlobs")
+	}
+}
+
+func TestGuardRuleMergeSkipsStarStarBasenames(t *testing.T) {
+	cfg, err := Load(filepath.Join(t.TempDir(), "absent.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, g := range cfg.SensitiveGlobs {
+		base := filepath.Base(g)
+		if base == "*" || base == "**" {
+			t.Fatalf("unsafe glob %q merged into SensitiveGlobs (basename Match would hit every file)", g)
+		}
+	}
+	found := false
+	for _, p := range cfg.SensitivePaths {
+		if strings.Contains(p, string(filepath.Separator)+"azure") || strings.HasSuffix(p, "azure") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("dir_scan ~/.azure must merge into SensitivePaths")
 	}
 }
 

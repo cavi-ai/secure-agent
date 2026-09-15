@@ -24,7 +24,7 @@ const {
   familyTitle, fmtRSS, fmtAge, isFamilyRoot, childrenOf, groupAgents, familyShouldExpand,
   cwdLabel, sessionRows, filterEventsByPids, sessionBoardHTML,
   monitorVendorKeyIDs, inspectionVisible, vendorKeyPromoteHTML,
-  scopedBySession, unactedLast24h,
+  scopedBySession, unactedLast24h, filterSessionRows,
 } = ctx;
 
 // ---------- escapeHTML ----------
@@ -382,4 +382,16 @@ test('unactedLast24h: sev>=2, not ack, within 24h', () => {
   ];
   assert.equal(unactedLast24h(flags, now).map(f => f.id).join(','), 'fresh');
   assert.equal(unactedLast24h([], now).length, 0);
+});
+
+test('filterSessionRows: cwd/label/name substring, empty query is identity', () => {
+  const rows = [
+    { label: 'api-service', root: { name: 'claude', cwd: '/Users/dev/workspace/api-service' } },
+    { label: 'web-app', root: { name: 'cursor', cwd: '/Users/dev/projects/web-app' } },
+  ];
+  assert.equal(filterSessionRows(rows, '').length, 2);
+  assert.equal(filterSessionRows(rows, 'API').map(r => r.label).join(','), 'api-service');
+  assert.equal(filterSessionRows(rows, 'cursor').map(r => r.label).join(','), 'web-app');
+  assert.equal(filterSessionRows(rows, 'projects/web').map(r => r.label).join(','), 'web-app');
+  assert.equal(filterSessionRows(rows, 'nope').length, 0);
 });
