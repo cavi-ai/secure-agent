@@ -82,6 +82,7 @@ func consoleAuthorized(r *http.Request) bool {
 // enforces this mechanically; add the path AND keep the test green.
 var consoleAPIPaths = map[string]bool{
 	"/status":                       true,
+	"/snapshot":                     true,
 	"/posture":                      true,
 	"/flags":                        true,
 	"/flags/acknowledge":            true,

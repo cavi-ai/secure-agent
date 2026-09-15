@@ -39,6 +39,10 @@ func (a *API) handlePosture(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	writeJSON(w, a.computePosture())
+}
+
+func (a *API) computePosture() Posture {
 	st := a.statusFn()
 	posture := Posture{
 		Items:     []PostureItem{},
@@ -124,8 +128,7 @@ func (a *API) handlePosture(w http.ResponseWriter, r *http.Request) {
 		posture.Summary = attentionSummary(posture.Items)
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	writeJSON(w, posture)
+	return posture
 }
 
 func hasCritical(items []PostureItem) bool {

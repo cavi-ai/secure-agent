@@ -192,6 +192,22 @@
         text: async () => JSON.stringify(out)
       };
     }
+    if (p === '/snapshot') {
+      const body = {
+        status: data['/status'],
+        flags: data['/flags'],
+        incidents: data['/incidents'],
+        events: data['/events'],
+        posture: data['/posture'],
+        suggestions: data['/allowlist/suggestions'],
+        mutes: data['/mute']
+      };
+      return {
+        ok: true, status: 200,
+        json: async () => body,
+        text: async () => JSON.stringify(body)
+      };
+    }
     const body = data[p];
     return {
       ok: body !== undefined,

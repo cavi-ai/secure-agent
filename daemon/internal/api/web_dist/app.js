@@ -329,11 +329,12 @@ document.addEventListener('DOMContentLoaded', () => {
     el.textContent = n > 0 ? n : '';
   }
 
-  async function fetchTelemetry() {
+  async function fetchTelemetry(opts) {
     // grab(): one fetch with honest failure semantics. 403 = the session is
     // dead (drives the auth-expired state); other HTTP errors mark just that
     // endpoint failed; network errors drive the unreachable state. A failed
     // endpoint NEVER overwrites the panel's last good data.
+    const slow = !opts || opts.slow !== false;
     let sawAuth = false;
     const grab = async (key, path) => {
       try {
@@ -345,52 +346,44 @@ document.addEventListener('DOMContentLoaded', () => {
       } catch { return null; } // network error, timeout, or corrupt JSON
     };
 
-    const [status, flags, incidents, events, fleet, audit, sources, posture, suggestions, rollup, mutes, uninspected, notifyCfg] = await Promise.all([
-      grab('status', '/status'),
-      grab('flags', '/flags?limit=20'),
-      grab('incidents', '/incidents?limit=10'),
-      grab('events', '/events?limit=50'),
-      grab('fleet', '/fleet'),
-      grab('audit', '/audit?limit=50'),
-      grab('firewall sources', '/firewall/sources'),
-      grab('posture', '/posture'),
-      grab('egress suggestions', '/allowlist/suggestions'),
-      grab('activity rollup', '/stats/rollup?hours=168'),
-      grab('mutes', '/mute'),
-      grab('uninspected egress', '/egress/uninspected?hours=24&limit=200'),
-      grab('notification rules', '/notify/rules')
-    ]);
-
-    if (status) {
-      // Daemon-restart detection: uptime going BACKWARDS means we are talking
-      // to a new process. Say so, and reset event-novelty tracking so the new
-      // instance's history doesn't animate in as a wall of "fresh" rows.
-      const up = parseUptimeSec(status.uptime);
-      if (prevUptimeSec > 0 && up < prevUptimeSec - 5) {
-        showToast('Daemon restarted — reconnected to the new instance', 'info');
-        prevEventKeys = new Set();
-        firstEventRender = true;
+    const snap = await grab('snapshot', '/snapshot');
+    if (snap) {
+      const status = snap.status;
+      if (status) {
+        const up = parseUptimeSec(status.uptime);
+        if (prevUptimeSec > 0 && up < prevUptimeSec - 5) {
+          showToast('Daemon restarted — reconnected to the new instance', 'info');
+          prevEventKeys = new Set();
+          firstEventRender = true;
+        }
+        prevUptimeSec = up;
+        telemetryData.status = status;
       }
-      prevUptimeSec = up;
-      telemetryData.status = status;
+      if (snap.flags) telemetryData.flags = (snap.flags || []).filter(f => !f.acknowledged);
+      if (snap.incidents) telemetryData.incidents = snap.incidents || [];
+      if (snap.events) telemetryData.events = snap.events || [];
+      if (snap.posture) telemetryData.posture = snap.posture;
+      if (snap.suggestions) telemetryData.suggestions = snap.suggestions || [];
+      if (snap.mutes) telemetryData.mutes = snap.mutes || [];
     }
-    if (flags) telemetryData.flags = (flags || []).filter(f => !f.acknowledged);
-    if (incidents) telemetryData.incidents = incidents || [];
-    if (events) telemetryData.events = events || [];
-    if (fleet) telemetryData.fleet = fleet || [];
-    if (audit) telemetryData.audit = audit || [];
-    if (sources) telemetryData.sources = sources || [];
-    if (posture) telemetryData.posture = posture;
-    if (suggestions) telemetryData.suggestions = suggestions || [];
-    if (rollup) telemetryData.rollup = rollup || [];
-    if (mutes) telemetryData.mutes = mutes || [];
-    if (uninspected) telemetryData.uninspected = uninspected || [];
-    if (notifyCfg) telemetryData.notifyCfg = notifyCfg;
 
-    // The panels show the filtered view; KPIs keep reading the unfiltered
-    // lists above. When no filter is active, the view is the unfiltered list
-    // (no extra request); a filter triggers one scoped fetch that can reach
-    // deeper into history than the 50-row summary.
+    if (slow) {
+      const [fleet, audit, sources, rollup, uninspected, notifyCfg] = await Promise.all([
+        grab('fleet', '/fleet'),
+        grab('audit', '/audit?limit=50'),
+        grab('firewall sources', '/firewall/sources'),
+        grab('activity rollup', '/stats/rollup?hours=168'),
+        grab('uninspected egress', '/egress/uninspected?hours=24&limit=200'),
+        grab('notification rules', '/notify/rules')
+      ]);
+      if (fleet) telemetryData.fleet = fleet || [];
+      if (audit) telemetryData.audit = audit || [];
+      if (sources) telemetryData.sources = sources || [];
+      if (rollup) telemetryData.rollup = rollup || [];
+      if (uninspected) telemetryData.uninspected = uninspected || [];
+      if (notifyCfg) telemetryData.notifyCfg = notifyCfg;
+    }
+
     telemetryData.flagsView = telemetryData.flags;
     telemetryData.eventsView = telemetryData.events;
     sparkIngestEvents(telemetryData.events);
@@ -405,8 +398,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     reconcileRetriage();
 
-    telemetryData.connected = !!status;
-    setConnState(status ? 'ok' : (sawAuth ? 'auth-expired' : 'unreachable'));
+    telemetryData.connected = !!(snap && snap.status);
+    setConnState(telemetryData.connected ? 'ok' : (sawAuth ? 'auth-expired' : 'unreachable'));
 
     renderAll();
   }
@@ -1594,7 +1587,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const scheduleRefresh = () => {
       if (refreshPending) return;
       refreshPending = true;
-      setTimeout(() => { refreshPending = false; fetchTelemetry(); }, 400);
+      setTimeout(() => { refreshPending = false; fetchTelemetry({ slow: false }); }, 400);
     };
     const es = new EventSource(streamURL);
     es.onopen = () => { esFailures = 0; stopPolling(); };

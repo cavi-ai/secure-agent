@@ -402,3 +402,54 @@ func TestGuardRulesDeleteRejectsInvalidRuleID(t *testing.T) {
 		t.Fatalf("code=%d body=%s, want 400", rr.Code, rr.Body.String())
 	}
 }
+
+func TestSnapshotBundlesHotTelemetry(t *testing.T) {
+	st := testStore(t)
+	now := time.Now().UTC()
+	st.PutFlag(model.Flag{ID: "flag-a", Rule: "proxy-secret-leak", Severity: 3, Agent: "claude", PID: 1, TS: now})
+	st.PutEvent(event.Event{Kind: event.KindProxyHit, PID: 1, TS: now, Detail: "proxy-scan"})
+
+	a := New("", st, &fakeKiller{}, func() Status {
+		return Status{Running: true, Version: "test", ActiveAgents: 1,
+			Agents: []AgentSummary{{PID: 1, Name: "claude"}}}
+	})
+
+	rr := httptest.NewRecorder()
+	a.buildMux().ServeHTTP(rr, httptest.NewRequest("GET", "/snapshot", nil))
+	if rr.Code != 200 {
+		t.Fatalf("GET /snapshot code=%d body=%s", rr.Code, rr.Body.String())
+	}
+	var snap struct {
+		Status      Status          `json:"status"`
+		Flags       []model.Flag    `json:"flags"`
+		Events      []event.Event   `json:"events"`
+		Posture     Posture         `json:"posture"`
+		Mutes       []MutePair      `json:"mutes"`
+		Suggestions []Suggestion    `json:"suggestions"`
+		Incidents   json.RawMessage `json:"incidents"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &snap); err != nil {
+		t.Fatalf("decode snapshot: %v body=%s", err, rr.Body.String())
+	}
+	if !snap.Status.Running || snap.Status.Version != "test" {
+		t.Fatalf("status = %+v", snap.Status)
+	}
+	if len(snap.Flags) != 1 || snap.Flags[0].ID != "flag-a" {
+		t.Fatalf("flags = %+v", snap.Flags)
+	}
+	if len(snap.Events) != 1 {
+		t.Fatalf("events = %+v", snap.Events)
+	}
+	if snap.Mutes == nil {
+		t.Fatal("mutes must be an array, not omitted")
+	}
+	if snap.Suggestions == nil {
+		t.Fatal("suggestions must be an array, not omitted")
+	}
+	if snap.Incidents == nil {
+		t.Fatal("incidents key missing")
+	}
+	if snap.Posture.Generated == "" {
+		t.Fatal("posture not populated")
+	}
+}
