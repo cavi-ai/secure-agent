@@ -290,8 +290,8 @@ socket_path: "~/.config/secure-agent/daemon.sock"
 db_path: "~/.local/state/secure-agent/events.db"
 jsonl_path: "~/.local/state/secure-agent/events.jsonl"
 
-# Opt-in local proxy configuration
-proxy_enabled: true
+# Opt-in local proxy configuration (MITM + web console hitchhike)
+proxy_enabled: false
 proxy_port: 8443
 proxy_ca_cert_path: "~/.config/secure-agent/ca.crt"
 proxy_ca_key_path: "~/.config/secure-agent/ca.key"

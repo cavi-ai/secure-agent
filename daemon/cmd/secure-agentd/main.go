@@ -131,16 +131,17 @@ func main() {
 	// event has been persisted — shutdown waits for it).
 	drainDone := startDrainLoop(b.Subscribe(), st, correlator, fleetPub, func() *advisor.Subscriber { return advisorStk.Load().Sub })
 
-	// Periodic process tagger refresh (1s)
+	// Periodic process tagger refresh: 5s while idle, 1s while agents live.
 	go func() {
-		ticker := time.NewTicker(1 * time.Second)
-		defer ticker.Stop()
+		timer := time.NewTimer(agents.RefreshInterval(tagger.Any()))
+		defer timer.Stop()
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			case <-ticker.C:
+			case <-timer.C:
 				tagger.Refresh()
+				timer.Reset(agents.RefreshInterval(tagger.Any()))
 			}
 		}
 	}()
