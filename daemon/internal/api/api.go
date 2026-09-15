@@ -331,6 +331,7 @@ func (a *API) SetPeers(checker PeerChecker, agentPIDs func() map[int32]struct{})
 func (a *API) buildMux() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/status", a.handleStatus)
+	mux.HandleFunc("/snapshot", a.handleSnapshot)
 	mux.HandleFunc("/posture", a.handlePosture)
 	mux.HandleFunc("/flags", a.handleFlags)
 	mux.HandleFunc("/events", a.handleEvents)
@@ -421,22 +422,24 @@ func (a *API) handleStatus(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	writeJSON(w, a.currentStatus())
+}
+
+func (a *API) currentStatus() Status {
 	st := a.statusFn()
-	// Join last-activity per process: "last used" is what separates a stale
-	// tree from a live one at a glance.
 	if len(st.Agents) > 0 {
 		pids := make([]int32, len(st.Agents))
 		for i, ag := range st.Agents {
 			pids[i] = ag.PID
 		}
+		times := a.store.LastEventTimes(pids)
 		for i := range st.Agents {
-			if ts, ok := a.store.LastEventTimes(pids)[st.Agents[i].PID]; ok {
+			if ts, ok := times[st.Agents[i].PID]; ok {
 				st.Agents[i].LastSeenAt = ts
 			}
 		}
 	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(st)
+	return st
 }
 
 func (a *API) handleFlags(w http.ResponseWriter, r *http.Request) {
@@ -682,20 +685,7 @@ func (a *API) handleMute(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodGet:
-		out := []MutePair{}
-		for rule, hosts := range a.mutes.Load() {
-			for _, h := range hosts {
-				out = append(out, MutePair{Rule: rule, Host: h})
-			}
-		}
-		sort.Slice(out, func(i, j int) bool {
-			if out[i].Rule != out[j].Rule {
-				return out[i].Rule < out[j].Rule
-			}
-			return out[i].Host < out[j].Host
-		})
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(out)
+		writeJSON(w, a.mutePairs())
 	case http.MethodPost:
 		limitBody(w, r)
 		var req MutePair
@@ -791,22 +781,7 @@ func (a *API) handleAllowlistSuggestions(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	out := []Suggestion{}
-	if a.correlator != nil {
-		for _, e := range a.correlator.UninspectedEgressSummary() {
-			if e.Count >= minSuggestionCount {
-				sg := Suggestion{Agent: e.Agent, Host: e.Host, Count: e.Count}
-				if v, ok := a.store.AdvisorVerdictFor("host:"+e.Agent+"|"+e.Host, "host"); ok {
-					sg.Assessment = v.Assessment
-					sg.Rationale = v.Rationale
-					sg.Confidence = v.Confidence
-				}
-				out = append(out, sg)
-			}
-		}
-	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(out)
+	writeJSON(w, a.suggestionList())
 }
 
 // UninspectedEndpoint is one blind-spot row for the drill-down behind the
