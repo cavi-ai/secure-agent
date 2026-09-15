@@ -164,7 +164,7 @@ struct SettingsView: View {
                         VStack(alignment: .leading, spacing: 1) {
                             Text(FlagActionSheet.humanTitle(m.rule))
                                 .font(.system(.body, weight: .medium))
-                            Text("host: \(m.host)")
+                            Text(m.host == "*" ? "entire class (all hosts)" : "host: \(m.host)")
                                 .font(.system(.caption, design: .monospaced))
                                 .foregroundStyle(.secondary)
                         }
@@ -176,6 +176,25 @@ struct SettingsView: View {
                             }
                         }
                         .controlSize(.small)
+                    }
+                }
+            }
+            Section("Notifications") {
+                Text("Default: only critical flags page you. Overrides apply to the menu bar and the web console — one choice silences both.")
+                    .font(.caption).foregroundStyle(.secondary)
+                ForEach(Self.notifyRuleLabels, id: \.id) { r in
+                    HStack(spacing: 8) {
+                        Text(r.label)
+                            .font(.system(.body, weight: .medium))
+                        Spacer()
+                        Picker("", selection: notifyBinding(for: r.id)) {
+                            Text("Default").tag("default")
+                            Text("Always").tag("always")
+                            Text("Never").tag("never")
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                        .frame(width: 230)
                     }
                 }
             }
@@ -335,6 +354,32 @@ struct SettingsView: View {
         ("shell-rc", "Shell config"),
         ("harness-config", "Harness config & hooks"),
     ]
+
+    // MARK: Notifications
+
+    private static let notifyRuleLabels: [(id: String, label: String)] = [
+        ("proxy-secret-leak", "Secret leaving in agent traffic"),
+        ("sensitive-read-then-connect", "Secret read, then connected out"),
+        ("keychain-access", "Keychain file access"),
+        ("keychain-security-cli", "Keychain CLI (security tool)"),
+        ("tcc-tamper", "Privacy permissions (TCC) tamper"),
+        ("proxy-prompt-injection", "Prompt injection in a response"),
+    ]
+
+    /// Three-state picker backed by the daemon's override store: "default" is
+    /// the ABSENCE of an override (nil), not a third value.
+    private func notifyBinding(for rule: String) -> Binding<String> {
+        Binding(
+            get: {
+                guard let v = state.notifyOverrides[rule] else { return "default" }
+                return v ? "always" : "never"
+            },
+            set: { newVal in
+                let override: Bool? = newVal == "default" ? nil : (newVal == "always")
+                Task { await state.setNotifyOverride(rule: rule, notify: override) }
+            }
+        )
+    }
 
     // MARK: Firewall
 

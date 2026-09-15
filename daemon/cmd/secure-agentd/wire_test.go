@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cavi-ai/secure-agent/daemon/internal/advisor"
 	"github.com/cavi-ai/secure-agent/daemon/internal/agents"
 	"github.com/cavi-ai/secure-agent/daemon/internal/bus"
 	"github.com/cavi-ai/secure-agent/daemon/internal/config"
@@ -55,7 +56,8 @@ func TestBuildStatusFn(t *testing.T) {
 	cr := correlate.New(tagger, sensitive.New(cfg), cfg)
 	reg := supervise.NewRegistry()
 
-	fn := buildStatusFn(nil, tagger, cr, nil, reg, time.Now().Add(-2*time.Second), true)
+	fn := buildStatusFn(nil, tagger, cr, nil, reg, time.Now().Add(-2*time.Second),
+		func() advisor.HealthSnapshot { return advisor.HealthSnapshot{Enabled: true} })
 	s := fn()
 
 	if !s.Running {
@@ -63,6 +65,9 @@ func TestBuildStatusFn(t *testing.T) {
 	}
 	if !s.AdvisorEnabled {
 		t.Fatal("status must carry the advisor opt-in state")
+	}
+	if s.AdvisorHealth == nil {
+		t.Fatal("status must carry advisor health (the UIs render circuit state from it)")
 	}
 	if s.Version == "" {
 		t.Fatal("status must carry the build version (console badge reads it)")

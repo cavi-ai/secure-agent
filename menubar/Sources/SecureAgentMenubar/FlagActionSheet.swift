@@ -26,6 +26,11 @@ struct FlagActionSheet: View {
         let destructive: Bool
         let fire: () async throws -> Void
         let doneLabel: String
+        /// Dispositions (allow/mute/kill) acknowledge the flag once they land
+        /// — the operator acted, so it stops counting as needing action.
+        /// Informational actions (advisor re-run) must NOT: the operator
+        /// hasn't decided anything yet.
+        var acknowledgeOnDone: Bool = true
     }
 
     var body: some View {
@@ -109,6 +114,21 @@ struct FlagActionSheet: View {
         case "proxy-prompt-injection": return "Prompt injection in a response"
         default: return rule
         }
+    }
+
+    /// Rules whose evidence is a file/exec subject rather than an egress host
+    /// — the host-scoped dispositions (allow/mute host) don't apply, the
+    /// rule-level one does.
+    nonisolated static func isKeychainRule(_ rule: String) -> Bool {
+        rule == "keychain-access" || rule == "keychain-security-cli"
+    }
+
+    /// The mute target for a flag's evidence: the egress host when one
+    /// exists, otherwise the rule-level wildcard (hostless rules — keychain
+    /// file/exec evidence). Never empty: an empty host used to make the
+    /// popover's quick-dismiss error out with "no resolution possible".
+    nonisolated static func muteHost(evidence: [String]) -> String {
+        hostIn(evidence: evidence) ?? "*"
     }
 
     // MARK: evidence
@@ -205,20 +225,85 @@ struct FlagActionSheet: View {
                 .foregroundStyle(.secondary)
                 .kerning(0.5)
 
-            // Re-triage: re-run the advisor for a fresh verdict (idempotent
-            // server-side — 30s cooldown per flag; the stored verdict is
-            // overwritten on completion). Shown so flags triaged under the
-            // older free-form prompt can be upgraded to actionable ones.
+            // Re-triage with an honest lifecycle: pending → spinner while the
+            // model works; circuit-open → say the advisor is offline instead
+            // of offering a button that silently does nothing (the old
+            // behavior: click → prompt → nothing, no feedback, forever).
+            if state.pendingRetriage[flag.id] != nil {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                        .frame(width: 22, height: 22)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("Advisor is re-reading this flag…")
+                            .font(.system(size: 11, weight: .semibold))
+                        Text("The fresh verdict lands here when the model answers — usually a few seconds, up to a minute on a cold model.")
+                            .font(.system(size: 9)).foregroundStyle(.tertiary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(8)
+                .background(Color.brand.opacity(0.06))
+                .clipShape(RoundedRectangle(cornerRadius: 7))
+            } else if state.advisorHealth?.circuitOpen == true {
+                HStack(spacing: 8) {
+                    Image(systemName: "brain")
+                        .font(.system(size: 11)).foregroundStyle(Color.warn)
+                        .frame(width: 22, height: 22)
+                        .background(Color.warn.opacity(0.12))
+                        .clipShape(RoundedRectangle(cornerRadius: 5))
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("Advisor offline — verdicts paused")
+                            .font(.system(size: 11, weight: .semibold))
+                        Text("The local model server isn't answering (\(state.advisorHealth?.lastError ?? "timeout")). Fix it in Settings → Advisor, then re-run.")
+                            .font(.system(size: 9)).foregroundStyle(.tertiary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(8)
+                .background(Color.warn.opacity(0.07))
+                .clipShape(RoundedRectangle(cornerRadius: 7))
+            } else {
+                actionRow(
+                    icon: "arrow.triangle.2.circlepath", tint: Color.brand,
+                    title: "Re-run the advisor",
+                    subtitle: "Ask the local model to re-read this flag and produce a fresh recommendation. Safe to click repeatedly.",
+                    pending: PendingAction(
+                        title: "Re-run the advisor?",
+                        message: "The local model re-reads this flag and replaces its recommendation. Takes a few seconds — the sheet shows progress.",
+                        buttonLabel: "Re-run", destructive: false,
+                        fire: { await state.retriageFlagWithFeedback(flag) },
+                        doneLabel: "advisor re-running — the verdict updates here when it lands",
+                        acknowledgeOnDone: false)) {}
+            }
+
+            // Reviewed-and-done recourse: close THIS flag without touching
+            // the rule — the missing middle ground between "kill the agent"
+            // and "suppress the whole class".
             actionRow(
-                icon: "arrow.triangle.2.circlepath", tint: Color.brand,
-                title: "Re-run the advisor",
-                subtitle: "Ask the local model to re-read this flag and produce a fresh recommendation. Safe to click repeatedly.",
+                icon: "checkmark.circle", tint: Color.ok,
+                title: "Dismiss this flag",
+                subtitle: "You've reviewed it — it stops counting as needing action. The rule keeps watching for the next one.",
                 pending: PendingAction(
-                    title: "Re-run the advisor?",
-                    message: "The local model re-reads this flag and replaces its recommendation. Takes a few seconds.",
-                    buttonLabel: "Re-run", destructive: false,
-                    fire: { try await state.uiClient.retriageFlag(id: flag.id) },
-                    doneLabel: "advisor re-running — the recommendation updates automatically")) {}
+                    title: "Dismiss this flag?",
+                    message: "This flag is marked reviewed and leaves the needs-action list. New flags of the same kind still appear.",
+                    buttonLabel: "Dismiss", destructive: false,
+                    fire: { await state.dismissFlag(flag) },
+                    doneLabel: "flag dismissed — the rule keeps watching")) {}
+
+            if Self.isKeychainRule(flag.rule) {
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "info.circle")
+                        .font(.system(size: 10)).foregroundStyle(Color.brand)
+                    Text("Apps read the keychain to load their own credentials — this is usually routine. Dismiss the class below if it's noise; the daemon keeps watching and counts what was suppressed.")
+                        .font(.system(size: 9)).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(8)
+                .background(Color.brand.opacity(0.05))
+                .clipShape(RoundedRectangle(cornerRadius: 7))
+            }
 
             // Advisor's recommendation leads — with an Apply button that
             // actually executes it. "There's an action" now means a button.
@@ -260,6 +345,21 @@ struct FlagActionSheet: View {
                         buttonLabel: "Dismiss", destructive: false,
                         fire: { try await state.uiClient.muteAdd(rule: flag.rule, host: host) },
                         doneLabel: "dismissed — future flags of this rule for \(host) are suppressed")) {}
+            }
+            // Keychain rules have no host to mute against — their recourse is
+            // the rule-level disposition ("*" host). Without this row the only
+            // offered action for the noisiest class was "Kill agent".
+            if Self.isKeychainRule(flag.rule) {
+                actionRow(
+                    icon: "eye.slash", tint: Color.warn,
+                    title: "Dismiss this flag class",
+                    subtitle: "Stop flagging \(Self.humanTitle(flag.rule).lowercased()) entirely. Monitoring continues; reversible in Settings → Muted flag classes.",
+                    pending: PendingAction(
+                        title: "Dismiss future flags of this kind?",
+                        message: "\(Self.humanTitle(flag.rule)) stops raising flags and notifications. The daemon keeps watching and counts what was suppressed.",
+                        buttonLabel: "Dismiss", destructive: false,
+                        fire: { try await state.uiClient.muteAdd(rule: flag.rule, host: "*") },
+                        doneLabel: "dismissed — future flags of this class are suppressed")) {}
             }
             actionRow(
                 icon: "power", tint: Color.bad,
@@ -420,7 +520,9 @@ struct FlagActionSheet: View {
             // Acknowledge after the disposition lands — the flag leaves the
             // critical list and dims. Ack itself is idempotent; its failure
             // must not mask the disposition that already succeeded.
-            try? await state.uiClient.acknowledgeFlag(id: flag.id)
+            if pending.acknowledgeOnDone {
+                try? await state.uiClient.acknowledgeFlag(id: flag.id)
+            }
             applied = pending.doneLabel
             state.refresh()
         } catch {

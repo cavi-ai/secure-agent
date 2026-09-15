@@ -138,6 +138,9 @@ public struct StatusResponse: Codable, Sendable {
     public let trackedProcesses: Int?
     /// Collector worker health (nil on older daemons).
     public var collectors: [HealthModel]?
+    /// Live advisor health (nil on older daemons): lets the UI say "advisor
+    /// offline" instead of offering actions that silently do nothing.
+    public let advisorHealth: AdvisorHealthModel?
 
     enum CodingKeys: String, CodingKey {
         case running
@@ -151,9 +154,10 @@ public struct StatusResponse: Codable, Sendable {
         case firewallStats = "firewall_stats"
         case trackedProcesses = "tracked_processes"
         case collectors
+        case advisorHealth = "advisor_health"
     }
 
-    public init(running: Bool, uptime: String, activeAgents: Int, agents: [AgentSummaryModel]? = nil, proxyEnabled: Bool? = nil, proxyPort: Int? = nil, uninspectedEgress: Int? = nil, firewallStats: [String: RuleStatModel]? = nil, trackedProcesses: Int? = nil, collectors: [HealthModel]? = nil, version: String? = nil) {
+    public init(running: Bool, uptime: String, activeAgents: Int, agents: [AgentSummaryModel]? = nil, proxyEnabled: Bool? = nil, proxyPort: Int? = nil, uninspectedEgress: Int? = nil, firewallStats: [String: RuleStatModel]? = nil, trackedProcesses: Int? = nil, collectors: [HealthModel]? = nil, version: String? = nil, advisorHealth: AdvisorHealthModel? = nil) {
         self.running = running
         self.version = version
         self.uptime = uptime
@@ -165,6 +169,24 @@ public struct StatusResponse: Codable, Sendable {
         self.firewallStats = firewallStats
         self.trackedProcesses = trackedProcesses
         self.collectors = collectors
+        self.advisorHealth = advisorHealth
+    }
+}
+
+/// The daemon's advisor health snapshot (`advisor_health` in /status).
+public struct AdvisorHealthModel: Codable, Sendable {
+    public let enabled: Bool
+    public let circuitOpen: Bool?
+    public let lastError: String?
+    public let queueDepth: Int?
+    public let model: String?
+
+    enum CodingKeys: String, CodingKey {
+        case enabled
+        case circuitOpen = "circuit_open"
+        case lastError = "last_error"
+        case queueDepth = "queue_depth"
+        case model
     }
 }
 
@@ -208,6 +230,23 @@ public struct AuditEntryModel: Codable, Sendable {
     public let action: String
     public let rule: String?
     public let detail: String?
+}
+
+/// The daemon's notification policy: a default severity bar plus per-rule
+/// overrides (true = always notify, false = never). The menubar and the web
+/// console read the same store, so one choice silences both surfaces.
+public struct NotifyRulesResponse: Codable, Sendable {
+    public let defaultMinSeverity: Int
+    public let overrides: [String: Bool]
+
+    enum CodingKeys: String, CodingKey {
+        case defaultMinSeverity = "default_min_severity"
+        case overrides
+    }
+
+    /// Older daemons (pre-/notify/rules) answer 404 — degrade to the shipped
+    /// default policy rather than an error.
+    public static let fallback = NotifyRulesResponse(defaultMinSeverity: 3, overrides: [:])
 }
 
 public struct AdvisorVerdictModel: Codable, Sendable {
@@ -258,6 +297,13 @@ public struct FlagModel: Codable, Identifiable, Sendable {
         self.sessionId = sessionId
         self.advisor = advisor
         self.acknowledged = acknowledged
+    }
+
+    /// Copy with acknowledged=true — the local echo of a successful dismiss,
+    /// so the flag leaves the needs-action list without waiting for a poll.
+    public func acknowledgedCopy() -> FlagModel {
+        FlagModel(id: id, rule: rule, severity: severity, ts: ts, pid: pid, agent: agent,
+                  evidence: evidence, sessionId: sessionId, advisor: advisor, acknowledged: true)
     }
 }
 

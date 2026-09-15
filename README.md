@@ -52,6 +52,9 @@ As AI coding agents (Claude Code, Cursor, Codex, OpenClaw, Copilot, etc.) gain i
 - ⚙️ **Extensible YAML Rules & Allowlists**  
   Easily customize sensitive path patterns, agent binary matchers, vendor network allowlists (`anthropic.com`, `cursor.sh`, `openai.com`), and proxy settings.
 
+- 🔔 **Noise-Controlled Alerts, With Real Recourse**  
+  Only **severity-3 criticals page you** by default (secret leaks, read-then-connect, TCC tampering, keychain CLI execs); warnings queue silently in the popover and console. Routine keychain-DB file opens are informational (severity 1) — legitimate tooling touches them constantly, so they never page unless you opt in. Every noisy class has a working **"Dismiss this flag class"** (rule-level mute, reversible from Settings → Muted flag classes), and Settings → Notifications / the console bell menu offer per-rule **Default / Always / Never** overrides (`/notify/rules`) shared by both UIs.
+
 ---
 
 ## 🏗️ System Architecture
@@ -205,7 +208,7 @@ source ~/.config/secure-agent/agent-env.sh
 
 The snippet carries a per-install proxy token, so the loopback listener is not a free open proxy for other local processes — only routed agents can use it.
 
-Traffic that bypasses the proxy (pinned or unrouted) is counted as `uninspected_egress` in the status, so the blind spot is visible rather than silent.
+Traffic that bypasses the proxy (pinned or unrouted) is counted as `uninspected_egress` in the status — a **rolling 24h** distinct-endpoint count, so the number reflects the current blind spot instead of growing forever. Clicking the warning (console or posture banner) opens the drill-down: every endpoint with per-agent counts, last-seen, the advisor's verdict, and a one-click **Allow** that closes the blind spot (`GET /egress/uninspected` for the raw list).
 
 See [docs/FIREWALL_THREAT_MODEL.md](docs/FIREWALL_THREAT_MODEL.md) for exactly what the firewall defends against, what it does not, and how it handles secret material.
 

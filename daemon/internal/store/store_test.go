@@ -429,6 +429,37 @@ func TestAcknowledgeRuleHost(t *testing.T) {
 	}
 }
 
+// The rule-level disposition (host "*") sweeps EVERY open flag of the rule,
+// regardless of cited host — the keychain-noise escape hatch.
+func TestAcknowledgeRuleHostWildcard(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(filepath.Join(dir, "w.db"), filepath.Join(dir, "w.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	s.PutFlag(model.Flag{ID: "k1", Rule: "keychain-access", Severity: 1, PID: 7, Agent: "codex",
+		Evidence: []string{"codex (pid 7) accessed keychain file /Users/x/Library/Keychains/login.keychain-db at 2026-09-15T10:00:00Z"}})
+	s.PutFlag(model.Flag{ID: "k2", Rule: "keychain-access", Severity: 1, PID: 9, Agent: "cursor",
+		Evidence: []string{"cursor (pid 9) accessed keychain file /Users/x/Library/Keychains/login.keychain-db at 2026-09-15T10:01:00Z"}})
+	s.PutFlag(model.Flag{ID: "o1", Rule: "proxy-secret-leak", Severity: 3, PID: 7, Agent: "codex",
+		Evidence: []string{"anthropic-key in request body to api.example.com"}})
+
+	if n := s.AcknowledgeRuleHost("keychain-access", "*"); n != 2 {
+		t.Fatalf("wildcard ack = %d, want 2", n)
+	}
+	if f, _ := s.GetFlag("k1"); !f.Acknowledged {
+		t.Fatal("k1 must be acknowledged")
+	}
+	if f, _ := s.GetFlag("k2"); !f.Acknowledged {
+		t.Fatal("k2 must be acknowledged")
+	}
+	if f, _ := s.GetFlag("o1"); f.Acknowledged {
+		t.Fatal("other rules must be untouched by the wildcard")
+	}
+}
+
 // The dashboard's Acknowledge/Resolve buttons write workflow columns on
 // incidents. Regression: those columns were missing from the incidents
 // schema entirely ("no such column: status") — every dismiss was dead.

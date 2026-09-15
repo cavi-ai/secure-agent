@@ -83,6 +83,16 @@ def main():
         build_harness(tmp)
         dom = dump_dom(chrome, tmp)
         dom_session = dump_dom(chrome, tmp, "?sessiondemo")
+        dom_uninsp = dump_dom(chrome, tmp, "?uninspecteddemo")
+        dom_notify = dump_dom(chrome, tmp, "?notifydemo")
+        dom_allow = dump_dom(chrome, tmp, "?allowdemo")
+        dom_dismiss = dump_dom(chrome, tmp, "?dismissdemo")
+        dom_retriage = dump_dom(chrome, tmp, "?retriagedemo")
+        dom_tab = dump_dom(chrome, tmp, "?tabdemo")
+        dom_advdown = dump_dom(chrome, tmp, "?advisordown")
+        dom_authfail = dump_dom(chrome, tmp, "?authfail")
+        dom_netfail = dump_dom(chrome, tmp, "?netfail")
+        dom_tokenseed = dump_dom(chrome, tmp, "?requiretoken&tokenseed")
 
         # --- telemetry wiring ---
         check("version badge comes from /status", 'id="app-version">v9.9.9-domtest<' in dom)
@@ -146,6 +156,96 @@ def main():
               'data-action="mute-flag" data-rule="sensitive-read-then-connect" data-host="logs.example.com"' in dom)
         check("mutes list rendered with unmute",
               'data-action="unmute" data-rule="proxy-prompt-injection" data-host="blog.example.com"' in dom)
+        check("rule-level mute renders as all hosts", "keychain-security-cli · all hosts" in dom)
+        check("keychain flag carries class-dismiss action",
+              'data-action="mute-rule" data-rule="keychain-access"' in dom)
+
+        # --- uninspected-egress drill-down ---
+        check("uninspected warning is a clickable drill-down",
+              'data-action="open-uninspected"' in dom)
+        check("posture uninspected item deep-links to drill-down",
+              'data-action="open-uninspected">see endpoints<' in dom)
+        check("drill-down modal title", "Uninspected egress — last 24h" in dom_uninsp)
+        check("drill-down lists endpoint host", "registry.npmjs.org" in dom_uninsp
+              and "statsig.example.com" in dom_uninsp)
+        check("drill-down allow action delegated",
+              'data-action="allow-host" data-agent="cursor" data-host="registry.npmjs.org"' in dom_uninsp)
+        check("drill-down explains the blind spot", "bypassing the inspection proxy" in dom_uninsp)
+
+        # --- notification preferences ---
+        check("notify bell present", 'id="btn-notify"' in dom)
+        check("notify popover renders rules", "Keychain file access" in dom_notify
+              and 'data-notify-rule="keychain-access"' in dom_notify)
+        check("notify override pre-selected (never)",
+              'data-notify-rule="keychain-access"' in dom_notify and
+              'value="never" selected' in dom_notify.split('data-notify-rule="keychain-access"')[1][:300])
+
+        # --- connection states (the "trouble connecting" regressions) ---
+        check("auth-expired shows honest re-auth guidance, not 'daemon down'",
+              "Session expired — reopen the console from the Secure Agent menu bar" in dom_authfail
+              and "Can&#x27;t reach the Secure Agent daemon" not in dom_authfail
+              and "Can't reach the Secure Agent daemon" not in dom_authfail)
+        check("auth-expired sets the status chip",
+              'id="status-text">Session expired<' in dom_authfail)
+        check("unreachable shows the retry banner",
+              "reach the Secure Agent daemon" in dom_netfail)
+        check("unreachable sets Disconnected chip",
+              'id="status-text">Disconnected<' in dom_netfail)
+        check("token survives reload via sessionStorage (no #ct fragment)",
+              'id="count-agents">3<' in dom_tokenseed
+              and 'id="offline-banner" hidden' in dom_tokenseed)
+
+        # --- fleet node card (real /fleet object shape + renderAll crash isolation) ---
+        check("fleet card renders the local node object",
+              "ci-runner-02" in dom and "darwin/arm64" in dom)
+        check("panels after fleet still render (crash isolation)",
+              dom.count('class="flag-card') == 3
+              and dom.count('class="timeline-item') > 0
+              and dom.count('class="audit-item') == 2)
+
+        # --- tabs (console IA) ---
+        check("tab bar renders all four tabs",
+              dom.count('class="tab-btn') >= 4
+              and all(f'data-tab="{t}"' in dom for t in ("overview", "agents", "egress", "findings")))
+        check("overview tab active by default",
+              'class="tab-btn active" data-tab="overview"' in dom)
+        check("non-active panels hidden",
+              'id="tab-agents" role="tabpanel" hidden' in dom
+              and 'id="tab-findings" role="tabpanel" hidden' in dom)
+        check("overview panel visible",
+              'id="tab-overview" role="tabpanel">' in dom)
+        check("egress tab badge shows uninspected count",
+              'id="tab-badge-egress">2<' in dom)
+        check("findings tab badge shows needs-you count",
+              'id="tab-badge-findings">4<' in dom)
+        check("posture flag item switches to findings tab",
+              'data-action="goto-tab" data-tab="findings"' in dom)
+        check("tab switch reveals the target panel",
+              'id="tab-egress" role="tabpanel">' in dom_tab
+              and 'id="tab-overview" role="tabpanel" hidden' in dom_tab)
+
+        # --- action feedback loops (the "nothing happens" regressions) ---
+        check("flag card carries per-flag dismiss",
+              'data-action="dismiss-flag" data-id="flag-1"' in dom)
+        check("flag card carries re-run advisor",
+              'data-action="retriage" data-id="flag-1"' in dom)
+        check("keychain flag shows benign context",
+              "usually routine" in dom)
+        check("allow removes the suggestion from the list",
+              "fw-suggestion" not in dom_allow,
+              "suggestion still rendered after Allow")
+        check("dismiss removes the flag card",
+              dom_dismiss.count('class="flag-card') == 2
+              and 'data-id="flag-3"' not in dom_dismiss,
+              f"cards={dom_dismiss.count('class=\"flag-card')}")
+        check("re-triage verdict lands and replaces the chip",
+              "re-triage complete: routine vendor traffic" in dom_retriage
+              and "advisor: benign" in dom_retriage)
+        check("advisor offline renders honest disabled state",
+              "Advisor offline" in dom_advdown
+              and 'data-action="retriage" data-id="flag-1"' not in dom_advdown)
+        check("timeline rows carry agent names, not bare PIDs",
+              "cursor · PID 6033" in dom or "claude · PID 5821" in dom)
 
         # --- structural security: no inline handlers anywhere ---
         check("zero inline onclick handlers in rendered DOM", " onclick=" not in dom)

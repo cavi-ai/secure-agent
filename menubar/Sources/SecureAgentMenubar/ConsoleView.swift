@@ -96,6 +96,7 @@ struct ConsoleView: View {
     private var sections: some View {
         VStack(alignment: .leading, spacing: 16) {
             if let err = state.lastError { errorBanner(err) }
+            if let notice = state.advisorNotice { advisorNoticeBanner(notice) }
             if let abandoned = state.abandonedCollectors, !abandoned.isEmpty {
                 collectorBanner(abandoned)
             }
@@ -104,6 +105,31 @@ struct ConsoleView: View {
             // 2) what's running, 3) what's enforcing (quiet by design).
             if !state.incidents.isEmpty || !state.unactedFlags.isEmpty { attentionSection }
             if !state.agentRoots.isEmpty { agentsSection }
+        }
+    }
+
+    /// Advisor lifecycle feedback ("verdict updated", "advisor offline") —
+    /// dismissable, auto-clears so it doesn't become its own noise source.
+    private func advisorNoticeBanner(_ notice: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "brain")
+                .font(.system(size: 11)).foregroundStyle(Color.brand)
+            Text(notice)
+                .font(.system(size: 11)).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+            Button { state.clearAdvisorNotice() } label: {
+                Image(systemName: "xmark").font(.system(size: 9, weight: .bold))
+            }
+            .buttonStyle(.plain).foregroundStyle(.tertiary)
+        }
+        .padding(10)
+        .background(Color.brand.opacity(0.08))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .task(id: notice) {
+            // Auto-clear after 12s: a notice that lingers becomes noise.
+            try? await Task.sleep(nanoseconds: 12_000_000_000)
+            state.clearAdvisorNotice(matching: notice)
         }
     }
 
@@ -301,12 +327,12 @@ struct ConsoleView: View {
     }
 
     /// Ignore-class on a group: mute (rule, host) + acknowledge every flag
-    /// in the group. One gesture, the whole pattern goes quiet.
+    /// in the group. One gesture, the whole pattern goes quiet. Hostless
+    /// rules (keychain file/exec evidence has no connection target) fall
+    /// back to the rule-level disposition (host "*") — the old guard just
+    /// errored out, leaving keychain rows with "no resolution possible".
     private func ignoreFlagGroup(_ group: AppState.FlagGroup) async {
-        guard let host = FlagActionSheet.hostIn(evidence: group.newest.evidence) else {
-            state.reportLocalError("no connection target to mute — open the flag and rotate instead")
-            return
-        }
+        let host = FlagActionSheet.muteHost(evidence: group.newest.evidence)
         do {
             try await state.uiClient.muteAdd(rule: group.rule, host: host)
             for f in group.flags {
@@ -508,9 +534,12 @@ struct ConsoleView: View {
     // MARK: agents
 
     @State private var agentSort: AppState.AgentSort = .lastActivity
-    /// Collapsed-by-default harness groups (persist within the popover's
-    /// lifetime; a fresh open resets to the "expanded where it matters" state).
-    @State private var expandedHarnesses: Set<String> = []
+    /// Explicit expansion overrides per harness. Single-session harnesses
+    /// default to EXPANDED (nothing hidden behind a click), multi-session to
+    /// collapsed; the user's toggle always wins. The old Set-based state made
+    /// single-session headers look clickable but do nothing — the "outer
+    /// accordion is dead" complaint.
+    @State private var harnessExpandedOverride: [String: Bool] = [:]
     @State private var selectedProcess: AgentSummaryModel?
 
     private var agentsSection: some View {
@@ -560,23 +589,19 @@ struct ConsoleView: View {
 
     /// Level 1: the harness (provider) — logo, session count, family memory.
     /// Collapsed by default when it has >1 session; a harness with exactly
-    /// one session renders expanded (no information hidden behind a click
-    /// for single-session users).
+    /// one session renders expanded — but stays COLLAPSIBLE: the toggle works
+    /// in both directions for every group (the dead-header fix).
     private func harnessGroupView(_ group: AppState.HarnessGroup) -> some View {
-        let expanded = expandedHarnesses.contains(group.name)
         let mem = ByteCount.short(group.totalRSSBytes)
         let seen = relativeTime(group.lastSeenAt ?? "")
         let isSingle = group.trees.count == 1
+        let expanded = harnessExpandedOverride[group.name] ?? isSingle
         return VStack(alignment: .leading, spacing: 3) {
             Button {
-                if expanded {
-                    expandedHarnesses.remove(group.name)
-                } else {
-                    expandedHarnesses.insert(group.name)
-                }
+                harnessExpandedOverride[group.name] = !expanded
             } label: {
                 HStack(spacing: 6) {
-                    Image(systemName: expanded && !isSingle ? "chevron.down" : "chevron.right")
+                    Image(systemName: expanded ? "chevron.down" : "chevron.right")
                         .font(.system(size: 7, weight: .bold)).foregroundStyle(.secondary)
                         .frame(width: 8)
                     AgentIdentity.tile(group.name, size: 18)
@@ -610,7 +635,7 @@ struct ConsoleView: View {
             }
             .buttonStyle(.plain)
 
-            if expanded || isSingle {
+            if expanded {
                 // Level 2+3: sessions with their subagents nested.
                 ForEach(Array(group.trees.enumerated()), id: \.element.0.id) { _, pair in
                     sessionView(pair.0, children: pair.1, insideGroup: true)
@@ -652,6 +677,14 @@ struct ConsoleView: View {
                         Text("PID \(root.pid)")
                             .font(.system(size: 11, weight: .medium))
                             .foregroundStyle(.primary)
+                        // Disambiguate sessions: "PID 63304" tells you nothing
+                        // — the project folder is what the operator recognizes.
+                        if let cwd = root.cwd, !cwd.isEmpty {
+                            Text((cwd as NSString).lastPathComponent)
+                                .font(.system(size: 9, weight: .medium)).foregroundStyle(.secondary)
+                                .lineLimit(1).truncationMode(.middle)
+                                .help(cwd)
+                        }
                         if !children.isEmpty {
                             Text("+\(children.count)")
                                 .font(.system(size: 8, weight: .semibold)).foregroundStyle(.tertiary)

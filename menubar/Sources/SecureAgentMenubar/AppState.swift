@@ -13,6 +13,22 @@ public final class AppState: ObservableObject {
     @Published public private(set) var connected = false
     @Published public var isPaused = false
     @Published public private(set) var guardRules: [GuardRuleModel] = []
+    /// Per-rule notification overrides from the daemon (true = always page,
+    /// false = never). Layered over notifyDefaultMinSeverity in shouldNotify.
+    @Published public private(set) var notifyOverrides: [String: Bool] = [:]
+    /// The daemon's default notification bar (ships as severity 3 — warnings
+    /// queue silently in the popover/console, only criticals page).
+    @Published public private(set) var notifyDefaultMinSeverity: Int = 3
+    /// Flags the operator asked the advisor to re-read, keyed by flag id with
+    /// the request time — the action sheet shows a spinner until the fresh
+    /// verdict lands, and an honest failure note when it never does.
+    @Published public private(set) var pendingRetriage: [String: Date] = [:]
+    /// Transient advisor notice ("verdict updated" / "advisor didn't
+    /// answer") — the popover surfaces it; nil when there is nothing to say.
+    @Published public private(set) var advisorNotice: String?
+    /// Verdict signatures captured when a re-triage is requested, so
+    /// "verdict arrived" means CHANGED, not merely present.
+    private var retriageBaseline: [String: String] = [:]
     /// Last transport/decode failure, surfaced in the UI. A daemon that answers
     /// with garbage is NOT "Disconnected" — it is up and misbehaving, which the
     /// user must be able to tell apart from a dead daemon.
@@ -72,6 +88,11 @@ public final class AppState: ObservableObject {
     /// Test hook: seed flags directly (grouping tests).
     func seedFlagsForTesting(_ f: [FlagModel]) {
         self.flags = f
+    }
+
+    /// Test hook: age a pending re-triage past its timeout (expiry path).
+    func agePendingRetriageForTesting(id: String) {
+        pendingRetriage[id] = Date(timeIntervalSinceNow: -120)
     }
     #endif
     #endif
@@ -215,6 +236,7 @@ public final class AppState: ObservableObject {
             let flags = try await client.fetchFlags(limit: 20)
             let incidents = (try? await client.fetchIncidents(limit: 10)) ?? []
             let guardRules = (try? await client.fetchGuardRules()) ?? []
+            let notifyCfg = (try? await client.fetchNotifyRules()) ?? .fallback
             // A pause requested mid-flight must not be overwritten by
             // results that were already in transit.
             guard !self.isPaused else { return }
@@ -223,6 +245,9 @@ public final class AppState: ObservableObject {
             self.flags = flags
             self.incidents = incidents
             self.guardRules = guardRules
+            self.notifyOverrides = notifyCfg.overrides
+            self.notifyDefaultMinSeverity = notifyCfg.defaultMinSeverity
+            self.reconcilePendingRetriage(flags: flags)
             self.connected = true
             self.lastError = nil
             self.transportFailureStreak = 0
@@ -276,6 +301,106 @@ public final class AppState: ObservableObject {
         }
     }
 
+    /// The notification decision for one flag: the operator's per-rule
+    /// override wins (explicit "always page" / "never page"); otherwise the
+    /// daemon's default severity bar decides. Severity-1 informational flags
+    /// (routine keychain-db opens) are silent unless the operator opts in.
+    public func shouldNotify(for flag: FlagModel) -> Bool {
+        if let override = notifyOverrides[flag.rule] { return override }
+        return flag.severity >= notifyDefaultMinSeverity
+    }
+
+    /// Set or clear one rule's notification override (nil = back to default).
+    /// Applied locally on success so the change feels instant; the next poll
+    /// re-reads the daemon's store regardless.
+    public func setNotifyOverride(rule: String, notify: Bool?) async {
+        do {
+            try await uiClient.setNotifyRule(rule: rule, notify: notify)
+            if let notify {
+                notifyOverrides[rule] = notify
+            } else {
+                notifyOverrides.removeValue(forKey: rule)
+            }
+            onChange?()
+        } catch {
+            reportLocalError("notification rule update failed: \(error.localizedDescription)")
+        }
+    }
+
+    /// The advisor's live health straight from /status — nil on older
+    /// daemons (treated as "unknown", not "offline").
+    public var advisorHealth: AdvisorHealthModel? { status?.advisorHealth }
+
+    /// Re-triage with honest feedback: mark the flag pending immediately so
+    /// the sheet shows work-in-progress; the poll loop clears the marker when
+    /// the fresh verdict arrives, or expires it with an explanation when the
+    /// advisor never answers (model server down — the dead-button complaint).
+    public func retriageFlagWithFeedback(_ flag: FlagModel) async {
+        do {
+            try await uiClient.retriageFlag(id: flag.id)
+            retriageBaseline[flag.id] = Self.advisorSignature(flag.advisor)
+            pendingRetriage[flag.id] = Date()
+            onChange?()
+        } catch {
+            reportLocalError("advisor re-run failed: \(error.localizedDescription)")
+        }
+    }
+
+    /// Clear the transient advisor notice (manual dismiss, or the auto-clear
+    /// timer — the `matching` guard keeps a newer notice from being eaten by
+    /// an older notice's timer).
+    public func clearAdvisorNotice(matching: String? = nil) {
+        if let matching, advisorNotice != matching { return }
+        advisorNotice = nil
+        onChange?()
+    }
+
+    /// Dismiss ONE flag (acknowledge): it stops counting as needing action
+    /// without suppressing the class. Applied locally so the row leaves the
+    /// list immediately; the daemon's store is the source of truth on the
+    /// next poll.
+    public func dismissFlag(_ flag: FlagModel) async {
+        do {
+            try await uiClient.acknowledgeFlag(id: flag.id)
+            flags = flags.map { $0.id == flag.id ? $0.acknowledgedCopy() : $0 }
+            onChange?()
+        } catch {
+            reportLocalError("dismiss failed: \(error.localizedDescription)")
+        }
+    }
+
+    /// How long a re-triage stays "pending" before we call it unanswered.
+    private static let retriageTimeout: TimeInterval = 90
+
+    private static func advisorSignature(_ v: AdvisorVerdictModel?) -> String {
+        guard let v else { return "" }
+        return "\(v.assessment ?? "")|\(v.suggestedAction ?? "")|\(v.rationale)"
+    }
+
+    private func reconcilePendingRetriage(flags: [FlagModel]) {
+        guard !pendingRetriage.isEmpty else { return }
+        var changed = false
+        for (id, requestedAt) in pendingRetriage {
+            let current = flags.first(where: { $0.id == id })
+            let landed = current != nil && Self.advisorSignature(current?.advisor) != (retriageBaseline[id] ?? "")
+            if landed {
+                pendingRetriage.removeValue(forKey: id)
+                retriageBaseline.removeValue(forKey: id)
+                advisorNotice = "Advisor verdict updated for \(current?.rule ?? "the flag")"
+                changed = true
+            } else if Date().timeIntervalSince(requestedAt) > Self.retriageTimeout {
+                pendingRetriage.removeValue(forKey: id)
+                retriageBaseline.removeValue(forKey: id)
+                let offline = advisorHealth?.circuitOpen == true
+                advisorNotice = offline
+                    ? "Advisor is offline (circuit open) — check the local model server in Settings → Advisor"
+                    : "Advisor didn't answer within 90s — the model server may be busy or down"
+                changed = true
+            }
+        }
+        if changed { onChange?() }
+    }
+
     private func processNewFlags(_ flags: [FlagModel]) {
         if !didSeedNotificationBaseline {
             // First fetch after launch is a baseline, not news: every flag in
@@ -285,7 +410,7 @@ public final class AppState: ObservableObject {
             return
         }
         var sawCritical = false
-        for flag in flags where flag.severity >= 2 {
+        for flag in flags where shouldNotify(for: flag) {
             if notifiedFlagIDs.insert(flag.id).inserted {
                 notify(flag)
                 if flag.severity >= 3 { sawCritical = true }
@@ -796,11 +921,13 @@ public final class AppState: ObservableObject {
 
     public var uninspectedEgress: Int { status?.uninspectedEgress ?? 0 }
 
-    /// Flags that still need a decision: not acknowledged and not covered by
+    /// Flags that still need a decision: not acknowledged, not covered by
     /// an incident row (the popover shows those as incident rows instead —
-    /// one problem, one row).
+    /// one problem, one row), and not INFORMATIONAL (severity 1 — routine
+    /// keychain-db opens queue silently in the console, they never demand
+    /// a decision here).
     public var unactedFlags: [FlagModel] {
-        flags.filter { $0.acknowledged != true }
+        flags.filter { $0.acknowledged != true && $0.severity >= 2 }
     }
 
     /// A group of identical flags: same rule + agent + primary file/host.
