@@ -1,6 +1,7 @@
 // Package fleet delivers security events to downstream fleet collectors over
 // HMAC-signed webhooks. It is the pull-API companion: nodes stay serverless;
-// collectors receive flags, incidents, and guard decisions as they happen.
+// collectors receive flags, incidents, guard decisions, and status heartbeats
+// as they happen.
 package fleet
 
 import (
@@ -27,6 +28,11 @@ const (
 	EventFlag     EventKind = "flag"
 	EventIncident EventKind = "incident"
 	EventGuard    EventKind = "guard"
+	// EventStatus is the periodic heartbeat/posture envelope. It is NOT a
+	// subscribable event kind: it flows to every sink regardless of the
+	// configured events filter, because liveness that can be filtered out is
+	// indistinguishable from a dead node.
+	EventStatus EventKind = "status"
 )
 
 // Valid reports whether k is a known subscription kind.
@@ -43,11 +49,17 @@ type WebhookConfig = config.WebhookConfig
 
 // Envelope is the JSON body POSTed to every sink. NodeID ties the event to a
 // machine; TS is the delivery time, not the event time (Payload.TS carries that).
+// Boot+Seq give the collector gap detection: Boot identifies one daemon run,
+// Seq is a per-boot monotonic counter stamped by the Publisher, so a dropped
+// delivery (backlog cap, dead collector, restart) shows up as a missing
+// number instead of vanishing silently.
 type Envelope struct {
 	NodeID  string          `json:"node_id"`
 	Kind    string          `json:"kind"`
 	TS      string          `json:"ts"`
 	Version string          `json:"version"`
+	Boot    string          `json:"boot,omitempty"`
+	Seq     uint64          `json:"seq,omitempty"`
 	Payload json.RawMessage `json:"payload"`
 }
 
@@ -94,10 +106,14 @@ func NewSink(cfg WebhookConfig, nodeID, version, logDir string) *Sink {
 	}
 }
 
-// Subscribed reports whether this sink wants events of kind k.
+// Subscribed reports whether this sink wants events of kind k. Status
+// heartbeats always flow (see EventStatus); event kinds honor the filter.
 func (s *Sink) Subscribed(k EventKind) bool {
 	if s == nil {
 		return false
+	}
+	if k == EventStatus {
+		return true
 	}
 	if len(s.kinds) == 0 {
 		return true
@@ -109,8 +125,9 @@ func (s *Sink) Subscribed(k EventKind) bool {
 // attempt + 3 retries (4 total), 500ms/2s/5s backoff, only on retryable
 // (network / 5xx / 429) failures.
 // Deliver never blocks longer than ~20s worst case; callers run it in a
-// goroutine per event.
-func (s *Sink) Deliver(kind EventKind, payload any) {
+// goroutine per event. seq/boot are the Publisher-stamped gap-detection
+// coordinates (0/"" for direct Deliver callers — pre-sequence legacy).
+func (s *Sink) Deliver(kind EventKind, payload any, seq uint64, boot string) {
 	if !s.Subscribed(kind) {
 		return
 	}
@@ -124,6 +141,8 @@ func (s *Sink) Deliver(kind EventKind, payload any) {
 		Kind:    string(kind),
 		TS:      time.Now().UTC().Format(time.RFC3339Nano),
 		Version: s.version,
+		Boot:    boot,
+		Seq:     seq,
 		Payload: json.RawMessage(raw),
 	}
 	body, err := json.Marshal(env)

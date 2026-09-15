@@ -56,7 +56,11 @@ func main() {
 	case "kill":
 		handleKill(client)
 	case "fleet":
-		handleFleet(client)
+		if len(os.Args) > 2 && os.Args[2] == "enroll" {
+			handleFleetEnroll(client, os.Args[3:])
+		} else {
+			handleFleet(client)
+		}
 	case "fingerprint":
 		handleFingerprint(client)
 	case "events":
@@ -86,7 +90,8 @@ func printUsage() {
 	fmt.Println("  secure-agent events [--limit N]          List recent raw system events")
 	fmt.Println("  secure-agent audit [--limit N]           List the policy audit trail")
 	fmt.Println("  secure-agent kill <PID>                  Terminate an agent process tree by PID")
-	fmt.Println("  secure-agent fleet                       Show fleet remote node telemetry")
+	fmt.Println("  secure-agent fleet                       Show THIS node's fleet identity (node_id, hostname, version) — remote rollups live at the collector's /fleet")
+	fmt.Println("  secure-agent fleet enroll <url>          Enroll this node into a collector: generate the secret, write fleet.webhooks, print the collector line")
 	fmt.Println("  secure-agent guard list                  List cached guard decisions")
 	fmt.Println("  secure-agent guard revoke <agent> <rule> Revoke a cached guard decision (forces a new prompt)")
 	fmt.Println("  secure-agent firewall mode <rule> <mode> Set a firewall rule mode (monitor|block)")
