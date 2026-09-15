@@ -57,6 +57,33 @@ public struct AgentSummaryModel: Codable, Identifiable, Sendable {
         self.rssBytes = rssBytes
         self.isOrphan = isOrphan
     }
+
+    /// Glance label: the project folder, falling back to the harness name.
+    public var cwdLeaf: String {
+        guard let cwd, !cwd.isEmpty else { return name }
+        return (cwd as NSString).lastPathComponent
+    }
+}
+
+/// One session tree as emitted by the daemon (`trees` on /status).
+public struct AgentTreeModel: Codable, Sendable {
+    public let root: AgentSummaryModel
+    public let children: [AgentSummaryModel]
+    public let rssBytes: UInt64?
+    public let lastSeenAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case root, children
+        case rssBytes = "rss_bytes"
+        case lastSeenAt = "last_seen_at"
+    }
+
+    public init(root: AgentSummaryModel, children: [AgentSummaryModel] = [], rssBytes: UInt64? = nil, lastSeenAt: String? = nil) {
+        self.root = root
+        self.children = children
+        self.rssBytes = rssBytes
+        self.lastSeenAt = lastSeenAt
+    }
 }
 
 public struct RuleStatModel: Codable, Sendable {
@@ -65,6 +92,7 @@ public struct RuleStatModel: Codable, Sendable {
     public let legit: Int
     public let suspect: Int
     public let mode: String?
+    public let type: String?
 
     enum CodingKeys: String, CodingKey {
         case wouldBlock = "would_block"
@@ -72,14 +100,16 @@ public struct RuleStatModel: Codable, Sendable {
         case legit
         case suspect
         case mode
+        case type
     }
 
-    public init(wouldBlock: Int = 0, blocked: Int = 0, legit: Int = 0, suspect: Int = 0, mode: String? = nil) {
+    public init(wouldBlock: Int = 0, blocked: Int = 0, legit: Int = 0, suspect: Int = 0, mode: String? = nil, type: String? = nil) {
         self.wouldBlock = wouldBlock
         self.blocked = blocked
         self.legit = legit
         self.suspect = suspect
         self.mode = mode
+        self.type = type
     }
 }
 
@@ -130,10 +160,13 @@ public struct StatusResponse: Codable, Sendable {
     /// Var (not let): value semantics make this safe, and tests seed agent
     /// lists after constructing a StatusResponse.
     public var agents: [AgentSummaryModel]?
+    /// Daemon-grouped session trees. Nil on older daemons — the popover
+    /// regroups the flat list then.
+    public var trees: [AgentTreeModel]?
     public let proxyEnabled: Bool?
     public let proxyPort: Int?
     public let uninspectedEgress: Int?
-    public let firewallStats: [String: RuleStatModel]?
+    public var firewallStats: [String: RuleStatModel]?
     /// Total tagged processes across all agent trees (nil on older daemons).
     public let trackedProcesses: Int?
     /// Collector worker health (nil on older daemons).
@@ -141,6 +174,7 @@ public struct StatusResponse: Codable, Sendable {
     /// Live advisor health (nil on older daemons): lets the UI say "advisor
     /// offline" instead of offering actions that silently do nothing.
     public let advisorHealth: AdvisorHealthModel?
+    public var fleetConfigured: Bool?
 
     enum CodingKeys: String, CodingKey {
         case running
@@ -148,6 +182,7 @@ public struct StatusResponse: Codable, Sendable {
         case uptime
         case activeAgents = "active_agents"
         case agents
+        case trees
         case proxyEnabled = "proxy_enabled"
         case proxyPort = "proxy_port"
         case uninspectedEgress = "uninspected_egress"
@@ -155,14 +190,16 @@ public struct StatusResponse: Codable, Sendable {
         case trackedProcesses = "tracked_processes"
         case collectors
         case advisorHealth = "advisor_health"
+        case fleetConfigured = "fleet_configured"
     }
 
-    public init(running: Bool, uptime: String, activeAgents: Int, agents: [AgentSummaryModel]? = nil, proxyEnabled: Bool? = nil, proxyPort: Int? = nil, uninspectedEgress: Int? = nil, firewallStats: [String: RuleStatModel]? = nil, trackedProcesses: Int? = nil, collectors: [HealthModel]? = nil, version: String? = nil, advisorHealth: AdvisorHealthModel? = nil) {
+    public init(running: Bool, uptime: String, activeAgents: Int, agents: [AgentSummaryModel]? = nil, trees: [AgentTreeModel]? = nil, proxyEnabled: Bool? = nil, proxyPort: Int? = nil, uninspectedEgress: Int? = nil, firewallStats: [String: RuleStatModel]? = nil, trackedProcesses: Int? = nil, collectors: [HealthModel]? = nil, version: String? = nil, advisorHealth: AdvisorHealthModel? = nil, fleetConfigured: Bool? = nil) {
         self.running = running
         self.version = version
         self.uptime = uptime
         self.activeAgents = activeAgents
         self.agents = agents
+        self.trees = trees
         self.proxyEnabled = proxyEnabled
         self.proxyPort = proxyPort
         self.uninspectedEgress = uninspectedEgress
@@ -170,6 +207,7 @@ public struct StatusResponse: Codable, Sendable {
         self.trackedProcesses = trackedProcesses
         self.collectors = collectors
         self.advisorHealth = advisorHealth
+        self.fleetConfigured = fleetConfigured
     }
 }
 

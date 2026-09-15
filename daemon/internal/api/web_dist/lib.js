@@ -40,6 +40,38 @@ function filterEventsBySession(events, sessionId) {
   return (events || []).filter(e => e.session_id === sessionId);
 }
 
+function filterEventsByPids(events, pids) {
+  if (!pids || !pids.length) return events || [];
+  const set = new Set(pids.map(Number));
+  return (events || []).filter(e => set.has(Number(e.pid)));
+}
+
+function scopedBySession(items, sessionId, pids) {
+  if (sessionId) return filterEventsBySession(items, sessionId);
+  if (pids && pids.length) return filterEventsByPids(items, pids);
+  return items || [];
+}
+
+function filterSessionRows(rows, q) {
+  const s = String(q || '').trim().toLowerCase();
+  if (!s) return rows || [];
+  return (rows || []).filter(r => {
+    const label = String((r && r.label) || '').toLowerCase();
+    const cwd = String((r && r.root && r.root.cwd) || '').toLowerCase();
+    const name = String((r && r.root && r.root.name) || '').toLowerCase();
+    return label.includes(s) || cwd.includes(s) || name.includes(s);
+  });
+}
+
+function unactedLast24h(flags, nowMs) {
+  const cutoff = nowMs - 24 * 3600e3;
+  return (flags || []).filter(f => {
+    if (!f || f.acknowledged || (f.severity || 0) < 2) return false;
+    const t = Date.parse(f.ts);
+    return Number.isFinite(t) && t >= cutoff;
+  });
+}
+
 // flagHost extracts the egress destination host from a flag's evidence
 // (the host a mute/disposition applies to), or '' for hostless rules.
 function flagHost(flag) {
@@ -255,3 +287,128 @@ function familyShouldExpand(family, familyCount, totalInstances, userOpen) {
   }
   return familyCount === 1 || totalInstances <= 3 || family.orphanCount > 0;
 }
+
+function cwdLabel(cwd) {
+  if (!cwd) return '';
+  const s = String(cwd).replace(/\/+$/, '');
+  const i = Math.max(s.lastIndexOf('/'), s.lastIndexOf('\\'));
+  return i >= 0 ? s.slice(i + 1) : s;
+}
+
+function sessionRows(agents, trees) {
+  if (trees && trees.length) {
+    return trees.map(t => {
+      const root = t.root || {};
+      const children = t.children || [];
+      return {
+        root,
+        children,
+        label: cwdLabel(root.cwd) || familyTitle(root.name),
+        rss: Number(t.rss_bytes || 0),
+        lastSeen: t.last_seen_at || '',
+        pids: [Number(root.pid), ...children.map(k => Number(k.pid))],
+      };
+    });
+  }
+  const list = agents || [];
+  const roots = list.filter(a => isFamilyRoot(a, list));
+  const rows = roots.map(root => {
+    const children = childrenOf(root, list);
+    let rss = Number(root.rss_bytes || 0);
+    let lastSeen = root.last_seen_at || '';
+    for (const k of children) {
+      rss += Number(k.rss_bytes || 0);
+      if (k.last_seen_at && k.last_seen_at > lastSeen) lastSeen = k.last_seen_at;
+    }
+    return {
+      root,
+      children,
+      label: cwdLabel(root.cwd) || familyTitle(root.name),
+      rss,
+      lastSeen,
+      pids: [Number(root.pid), ...children.map(k => Number(k.pid))],
+    };
+  });
+  rows.sort((a, b) => (b.lastSeen || '').localeCompare(a.lastSeen || ''));
+  return rows;
+}
+
+function renderProcessRow(a, now, nested) {
+  const abs = a.started_at ? fmtTime(new Date(a.started_at)) : '';
+  const age = a.started_at ? fmtAge(a.started_at, now) : '';
+  const seenAge = a.last_seen_at ? fmtAge(a.last_seen_at, now) : '';
+  const stale = a.last_seen_at
+    ? (now - Date.parse(a.last_seen_at)) > 10 * 60 * 1000
+    : true;
+  const rss = fmtRSS(a.rss_bytes);
+  const cwd = a.cwd ? `<div class="agent-cwd">${escapeHTML(a.cwd)}</div>` : '';
+  const status = a.is_orphan
+    ? '<span class="agent-status orphan">leftover</span>'
+    : '<span class="agent-status live">live</span>';
+  return `
+      <div class="agent-instance${nested ? ' nested' : ''}${a.is_orphan ? ' orphan' : ''}${stale ? ' stale' : ''}">
+        <div class="agent-info">
+          <div class="agent-name">
+            <span class="agent-pid">PID ${a.pid}</span>
+            ${status}
+            ${abs ? `<span class="agent-meta-item" title="started ${escapeHTML(a.started_at)}">${escapeHTML(abs)}${age ? ' · ' + age : ''}</span>` : ''}
+            ${seenAge ? `<span class="agent-meta-item agent-lastseen" title="last event ${escapeHTML(a.last_seen_at)}">active ${escapeHTML(seenAge)} ago</span>` : `<span class="agent-meta-item agent-lastseen">no activity</span>`}
+            ${rss ? `<span class="agent-meta-item">${escapeHTML(rss)}</span>` : ''}
+          </div>
+          ${cwd}
+        </div>
+        <button type="button" class="btn btn-danger btn-sm" data-action="kill" data-pid="${a.pid}" data-started="${escapeHTML(a.started_at || '')}" data-family="${escapeHTML(a.name || '')}"><svg class="icon"><use href="#i-power"/></svg><span>Terminate</span></button>
+      </div>`;
+}
+
+function sessionBoardHTML(rows, now, helpOpen) {
+  helpOpen = helpOpen || {};
+  return rows.map(row => {
+    const a = row.root;
+    const rss = fmtRSS(row.rss);
+    const seenAge = row.lastSeen ? fmtAge(row.lastSeen, now) : '';
+    const stale = row.lastSeen ? (now - Date.parse(row.lastSeen)) > 10 * 60 * 1000 : true;
+    const open = helpOpen[a.pid] ? ' open' : '';
+    const helpers = row.children.length
+      ? `<details class="session-helpers"${open} data-pid="${a.pid}"><summary class="session-helpers-sum">${row.children.length} helper${row.children.length === 1 ? '' : 's'}</summary>${row.children.map(c => renderProcessRow(c, now, true)).join('')}</details>`
+      : '';
+    return `
+      <div class="session-row${a.is_orphan ? ' orphan' : ''}${stale ? ' stale' : ''}">
+        <button type="button" class="session-main" data-action="filter-pids" data-pids="${escapeHTML(row.pids.join(','))}" data-label="${escapeHTML(row.label)}" title="${escapeHTML(a.cwd || '')}">
+          <span class="session-label">${escapeHTML(row.label)}</span>
+          <span class="agent-pid">${escapeHTML(a.name)} · PID ${a.pid}</span>
+          ${seenAge ? `<span class="agent-meta-item agent-lastseen">active ${escapeHTML(seenAge)} ago</span>` : `<span class="agent-meta-item agent-lastseen">no activity</span>`}
+          ${rss ? `<span class="agent-meta-item">${escapeHTML(rss)}</span>` : ''}
+        </button>
+        <button type="button" class="btn btn-danger btn-sm" data-action="kill" data-pid="${a.pid}" data-started="${escapeHTML(a.started_at || '')}" data-family="${escapeHTML(a.name || '')}"><svg class="icon"><use href="#i-power"/></svg><span>Terminate</span></button>
+        ${helpers}
+      </div>`;
+  }).join('');
+}
+
+function monitorVendorKeyIDs(stats) {
+  return Object.keys(stats || {}).filter(id =>
+    stats[id] && stats[id].type === 'vendor-key' && stats[id].mode !== 'block'
+  ).sort();
+}
+
+function inspectionVisible(status, audit) {
+  return {
+    fleet: !!(status && status.fleet_configured),
+    advisor: !!(status && status.advisor_enabled),
+    audit: Array.isArray(audit) && audit.length > 0,
+  };
+}
+
+function vendorKeyPromoteHTML(ids) {
+  if (!ids || !ids.length) return '';
+  const n = ids.length;
+  return `<div class="fw-promote-vendor">
+    <div class="fw-rule-main">
+      <span class="fw-rule-id">Catch secrets</span>
+      <div class="fw-metrics"><span class="fw-metric">${n} vendor-key rule${n === 1 ? '' : 's'} still in monitor — they report leaks but do not stop them</span></div>
+    </div>
+    <button class="btn btn-primary btn-sm" data-action="promote-vendor-keys"><svg class="icon"><use href="#i-arrow"/></svg><span>Promote vendor keys to block</span></button>
+  </div>`;
+}
+

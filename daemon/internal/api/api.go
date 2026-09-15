@@ -55,6 +55,7 @@ type Status struct {
 	Uptime            string         `json:"uptime"`
 	ActiveAgents      int            `json:"active_agents"`
 	Agents            []AgentSummary `json:"agents"`
+	Trees             []AgentTree    `json:"trees"`
 	ProxyEnabled      bool           `json:"proxy_enabled"`
 	ProxyPort         int            `json:"proxy_port"`
 	UninspectedEgress int            `json:"uninspected_egress"`
@@ -75,6 +76,16 @@ type Status struct {
 	// MutedFlags counts flags suppressed by operator dispositions (mute
 	// rule+host) — proof the quiet is deliberate, not a hidden silence.
 	MutedFlags int `json:"muted_flags"`
+	// FleetConfigured is true when at least one HMAC fleet webhook is set —
+	// the console hides the fleet panel until then.
+	FleetConfigured bool `json:"fleet_configured,omitempty"`
+	// UnactedFlags24h is severity>=2 flags in the last 24h the operator has
+	// not acknowledged — the console KPI, matching posture.
+	UnactedFlags24h int `json:"unacted_flags_24h"`
+	// BusDrops counts in-process events a subscriber missed because its
+	// buffer was full. Zero is healthy; growth under N-agent bursts is the
+	// hot-path signal the audit asked to surface.
+	BusDrops uint64 `json:"bus_drops,omitempty"`
 
 	FirewallStats map[string]firewall.RuleStat `json:"firewall_stats,omitempty"`
 	// Collectors reports each supervised worker's health so a dead or abandoned
@@ -117,6 +128,7 @@ type API struct {
 	subscribeEvents   func() <-chan event.Event
 	unsubscribeEvents func(<-chan event.Event)
 	publishEvent      func(event.Event)
+	busDrops          func() uint64
 }
 
 // GuardEventSink receives guard decisions (allow/deny) for downstream
@@ -129,6 +141,8 @@ type GuardEventSink interface {
 func (a *API) SetFleetSink(s GuardEventSink) {
 	a.fleetSinks = s
 }
+
+func (a *API) SetBusDrops(fn func() uint64) { a.busDrops = fn }
 
 // FirewallControl bundles the runtime firewall controls the API exposes.
 type FirewallControl struct {
@@ -334,6 +348,7 @@ func (a *API) SetPeers(checker PeerChecker, agentPIDs func() map[int32]struct{})
 func (a *API) buildMux() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/status", a.handleStatus)
+	mux.HandleFunc("/snapshot", a.handleSnapshot)
 	mux.HandleFunc("/posture", a.handlePosture)
 	mux.HandleFunc("/flags", a.handleFlags)
 	mux.HandleFunc("/events", a.handleEvents)
@@ -424,22 +439,34 @@ func (a *API) handleStatus(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	writeJSON(w, a.currentStatus())
+}
+
+func (a *API) currentStatus() Status {
 	st := a.statusFn()
-	// Join last-activity per process: "last used" is what separates a stale
-	// tree from a live one at a glance.
 	if len(st.Agents) > 0 {
 		pids := make([]int32, len(st.Agents))
 		for i, ag := range st.Agents {
 			pids[i] = ag.PID
 		}
+		times := a.store.LastEventTimes(pids)
 		for i := range st.Agents {
-			if ts, ok := a.store.LastEventTimes(pids)[st.Agents[i].PID]; ok {
+			if ts, ok := times[st.Agents[i].PID]; ok {
 				st.Agents[i].LastSeenAt = ts
 			}
 		}
 	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(st)
+	st.Trees = GroupAgentTrees(st.Agents)
+	st.UnactedFlags24h = len(a.store.QueryFlags(store.FlagFilter{
+		Unacted:     true,
+		MinSeverity: 2,
+		Since:       time.Now().Add(-24 * time.Hour).UTC().Format(time.RFC3339),
+		Limit:       500,
+	}))
+	if a.busDrops != nil {
+		st.BusDrops = a.busDrops()
+	}
+	return st
 }
 
 func (a *API) handleFlags(w http.ResponseWriter, r *http.Request) {
@@ -685,20 +712,7 @@ func (a *API) handleMute(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodGet:
-		out := []MutePair{}
-		for rule, hosts := range a.mutes.Load() {
-			for _, h := range hosts {
-				out = append(out, MutePair{Rule: rule, Host: h})
-			}
-		}
-		sort.Slice(out, func(i, j int) bool {
-			if out[i].Rule != out[j].Rule {
-				return out[i].Rule < out[j].Rule
-			}
-			return out[i].Host < out[j].Host
-		})
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(out)
+		writeJSON(w, a.mutePairs())
 	case http.MethodPost:
 		limitBody(w, r)
 		var req MutePair
@@ -794,22 +808,7 @@ func (a *API) handleAllowlistSuggestions(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	out := []Suggestion{}
-	if a.correlator != nil {
-		for _, e := range a.correlator.UninspectedEgressSummary() {
-			if e.Count >= minSuggestionCount {
-				sg := Suggestion{Agent: e.Agent, Host: e.Host, Count: e.Count}
-				if v, ok := a.store.AdvisorVerdictFor("host:"+e.Agent+"|"+e.Host, "host"); ok {
-					sg.Assessment = v.Assessment
-					sg.Rationale = v.Rationale
-					sg.Confidence = v.Confidence
-				}
-				out = append(out, sg)
-			}
-		}
-	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(out)
+	writeJSON(w, a.suggestionList())
 }
 
 // UninspectedEndpoint is one blind-spot row for the drill-down behind the
@@ -945,13 +944,68 @@ func (a *API) handleKill(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if err := a.killer.Kill(req.PID); err != nil {
-		http.Error(w, fmt.Sprintf("Kill failed: %v", err), http.StatusInternalServerError)
-		return
+	// UI copy, CLI, and flag actions all say "process tree". Kill every
+	// currently tagged agent that shares this pid's root_pid — not the OS
+	// process tree, only what the tagger already recognized.
+	var killed []int32
+	for _, pid := range a.killTreePIDs(req.PID) {
+		if a.agentPIDs != nil {
+			if _, ok := a.agentPIDs()[pid]; !ok {
+				continue
+			}
+		}
+		if err := a.killer.Kill(pid); err != nil {
+			http.Error(w, fmt.Sprintf("Kill failed: %v", err), http.StatusInternalServerError)
+			return
+		}
+		killed = append(killed, pid)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok", "pid": req.PID})
+	json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok", "pid": req.PID, "killed": killed})
+}
+
+func (a *API) killTreePIDs(pid int32) []int32 {
+	st := a.statusFn()
+	root := pid
+	found := false
+	for _, ag := range st.Agents {
+		if ag.PID != pid {
+			continue
+		}
+		found = true
+		if ag.RootPID != 0 {
+			root = ag.RootPID
+		}
+		break
+	}
+	if !found {
+		return []int32{pid}
+	}
+	var helpers, roots []int32
+	seen := map[int32]struct{}{}
+	for _, ag := range st.Agents {
+		r := ag.RootPID
+		if r == 0 {
+			r = ag.PID
+		}
+		if r != root {
+			continue
+		}
+		if _, ok := seen[ag.PID]; ok {
+			continue
+		}
+		seen[ag.PID] = struct{}{}
+		if ag.PID == root {
+			roots = append(roots, ag.PID)
+		} else {
+			helpers = append(helpers, ag.PID)
+		}
+	}
+	if len(roots) == 0 {
+		roots = []int32{root}
+	}
+	return append(helpers, roots...)
 }
 
 func (a *API) checkKillStart(pid int32, startedAt string) error {
@@ -970,11 +1024,28 @@ func (a *API) checkKillStart(pid int32, startedAt string) error {
 
 type fwModeRequest struct {
 	Rule string `json:"rule"`
+	Type string `json:"type"` // when rule is empty: promote every pattern of this secret type
 	Mode string `json:"mode"` // "monitor" | "block"
 }
 
+func (a *API) applyRuleMode(rule, mode string) error {
+	prevMode := a.fwEngine.RuleMode(rule).String()
+	if prevMode == mode {
+		return nil
+	}
+	a.fwEngine.SetRuleMode(rule, firewall.ParseMode(mode))
+	if a.fwModes != nil {
+		if err := a.fwModes.Set(rule, mode); err != nil {
+			return err
+		}
+	}
+	a.store.PutAudit(store.AuditEntry{Action: "rule-mode", Rule: rule, FromMode: prevMode, ToMode: mode})
+	return nil
+}
+
 // handleFirewallMode promotes or demotes a firewall rule at runtime and persists
-// the override so it survives a restart.
+// the override so it survives a restart. With {"type":"vendor-key","mode":"block"}
+// and no rule, every configured pattern of that secret type is promoted.
 func (a *API) handleFirewallMode(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -986,25 +1057,38 @@ func (a *API) handleFirewallMode(w http.ResponseWriter, r *http.Request) {
 	}
 	limitBody(w, r)
 	var req fwModeRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Rule == "" || (req.Mode != "monitor" && req.Mode != "block") {
-		http.Error(w, `Invalid payload: {"rule":"<id>","mode":"monitor|block"}`, http.StatusBadRequest)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || (req.Rule == "" && req.Type == "") || (req.Mode != "monitor" && req.Mode != "block") {
+		http.Error(w, `Invalid payload: {"rule":"<id>","mode":"monitor|block"} or {"type":"vendor-key","mode":"block"}`, http.StatusBadRequest)
 		return
 	}
 
-	// Capture the prior mode before mutating so the audit row is meaningful
-	// ("monitor → block" is the record worth keeping).
-	prevMode := a.fwEngine.RuleMode(req.Rule).String()
-	a.fwEngine.SetRuleMode(req.Rule, firewall.ParseMode(req.Mode))
-	if a.fwModes != nil {
-		if err := a.fwModes.Set(req.Rule, req.Mode); err != nil {
+	ids := []string{req.Rule}
+	if req.Rule == "" {
+		ids = a.fwEngine.RuleIDsOfType(req.Type)
+	}
+	promoted := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if id == "" {
+			continue
+		}
+		prev := a.fwEngine.RuleMode(id).String()
+		if err := a.applyRuleMode(id, req.Mode); err != nil {
 			http.Error(w, fmt.Sprintf("persist failed: %v", err), http.StatusInternalServerError)
 			return
 		}
+		if prev != req.Mode {
+			promoted = append(promoted, id)
+		}
 	}
-	a.store.PutAudit(store.AuditEntry{Action: "rule-mode", Rule: req.Rule, FromMode: prevMode, ToMode: req.Mode})
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok", "rule": req.Rule, "mode": req.Mode})
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":   "ok",
+		"rule":     req.Rule,
+		"type":     req.Type,
+		"mode":     req.Mode,
+		"promoted": promoted,
+	})
 }
 
 // handleFingerprintReload re-reads the persisted fingerprints and applies them

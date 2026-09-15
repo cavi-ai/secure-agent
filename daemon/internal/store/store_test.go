@@ -2,6 +2,7 @@ package store
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -35,6 +36,41 @@ func TestPutFlagAlsoAppendsJSONL(t *testing.T) {
 	b, _ := os.ReadFile(jl)
 	if !strings.Contains(string(b), `"f1"`) {
 		t.Fatal("flag not mirrored to JSONL")
+	}
+}
+
+func TestPutFlagRotatesJSONLWhenOverCap(t *testing.T) {
+	dir := t.TempDir()
+	jl := filepath.Join(dir, "e.jsonl")
+	prev := jsonlRotateBytes
+	jsonlRotateBytes = 80
+	t.Cleanup(func() { jsonlRotateBytes = prev })
+
+	s, err := Open(filepath.Join(dir, "e.db"), jl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	for i := 0; i < 8; i++ {
+		s.PutFlag(model.Flag{ID: fmt.Sprintf("flag-%d", i), Rule: "proxy-secret-leak", Severity: 3, Agent: "claude"})
+	}
+	rotated := jl + ".1"
+	if _, err := os.Stat(rotated); err != nil {
+		t.Fatalf("expected rotated file %s: %v", rotated, err)
+	}
+	cur, err := os.ReadFile(jl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cur) == 0 {
+		t.Fatal("active jsonl empty after rotate")
+	}
+	old, err := os.ReadFile(rotated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(old) == 0 {
+		t.Fatal("rotated jsonl empty")
 	}
 }
 

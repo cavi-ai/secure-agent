@@ -887,6 +887,32 @@ public final class AppState: ObservableObject {
         }
     }
 
+    /// Session board: one row per tree root, helpers omitted. No cap — the
+    /// popover scrolls. cwdLeaf on the agent is the glance label.
+    public func sessionBoardRows(sortedBy sort: AgentSort) -> [AgentRow] {
+        if let trees = status?.trees, !trees.isEmpty {
+            let rows = trees.map { t in
+                AgentRow(agent: t.root, depth: 0,
+                         childCount: t.children.count,
+                         familyRSSBytes: t.rssBytes,
+                         familyLastSeenAt: t.lastSeenAt)
+            }
+            return sortSessionRows(rows, by: sort)
+        }
+        return agentRows(sortedBy: sort).filter { $0.depth == 0 }
+    }
+
+    private func sortSessionRows(_ rows: [AgentRow], by sort: AgentSort) -> [AgentRow] {
+        switch sort {
+        case .created:
+            return rows.sorted { ($0.agent.startedAt ?? "") < ($1.agent.startedAt ?? "") }
+        case .memory:
+            return rows.sorted { ($0.familyRSSBytes ?? 0) > ($1.familyRSSBytes ?? 0) }
+        case .lastActivity:
+            return rows.sorted { ($0.familyLastSeenAt ?? "") > ($1.familyLastSeenAt ?? "") }
+        }
+    }
+
     private func familyRSS(_ root: AgentSummaryModel, _ kids: [AgentSummaryModel]) -> UInt64? {
         let parts = ([root] + kids).compactMap(\.rssBytes)
         return parts.isEmpty ? nil : parts.reduce(0, +)
@@ -930,6 +956,25 @@ public final class AppState: ObservableObject {
         flags.filter { $0.acknowledged != true && $0.severity >= 2 }
     }
 
+    /// Tagged PIDs in one session tree (root plus helpers).
+    public func treePIDs(rootPid: Int32) -> Set<Int32> {
+        var pids: Set<Int32> = [rootPid]
+        for a in activeAgents {
+            if (a.rootPid ?? a.pid) == rootPid {
+                pids.insert(a.pid)
+            }
+        }
+        return pids
+    }
+
+    /// Unacted flags scoped to one session tree. nil root = every session.
+    public func unactedFlagsForSession(rootPid: Int32?) -> [FlagModel] {
+        let all = unactedFlags
+        guard let rootPid else { return all }
+        let pids = treePIDs(rootPid: rootPid)
+        return all.filter { pids.contains($0.pid) }
+    }
+
     /// A group of identical flags: same rule + agent + primary file/host.
     /// Repeated fires of the same pattern (codex touching the same keychain
     /// file every few minutes) are ONE decision, not twenty.
@@ -949,11 +994,11 @@ public final class AppState: ObservableObject {
     /// Group unacted flags by (rule, agent, anchor). Newest-first inside and
     /// across groups. The anchor is the first evidence line's file/host —
     /// matches what a human scans for ("same file again?").
-    public func groupedUnactedFlags() -> [FlagGroup] {
-        let unacted = unactedFlags
+    public func groupedUnactedFlags(forRootPid rootPid: Int32? = nil) -> [FlagGroup] {
+        let unacted = unactedFlagsForSession(rootPid: rootPid)
         var groups: [String: [FlagModel]] = [:]
         var order: [String] = []
-        for f in unactedFlags {
+        for f in unacted {
             let key = f.rule + "|" + f.agent + "|" + (Self.flagGroupAnchor(f) ?? f.id)
             if groups[key] == nil { order.append(key) }
             groups[key, default: []].append(f)
@@ -1005,6 +1050,24 @@ public final class AppState: ObservableObject {
     /// Firewall rules sorted by id, with their stats.
     public var firewallRules: [FirewallRuleRow] {
         (status?.firewallStats ?? [:]).sorted { $0.key < $1.key }.map { FirewallRuleRow(id: $0.key, stat: $0.value) }
+    }
+
+    public var monitorVendorKeyIDs: [String] {
+        firewallRules.filter { $0.stat.type == "vendor-key" && ($0.stat.mode ?? "monitor") != "block" }.map(\.id).sorted()
+    }
+
+    public var showFleetPanel: Bool { status?.fleetConfigured == true }
+
+    public func promoteVendorKeys() {
+        Task {
+            do {
+                try await client.promoteFirewallType("vendor-key", mode: "block")
+            } catch {
+                self.lastError = "could not block vendor-key rules: \(error.localizedDescription)"
+                self.onChange?()
+            }
+            self.fetch()
+        }
     }
 
     public var firewallWouldBlock: Int { firewallRules.reduce(0) { $0 + $1.stat.wouldBlock } }

@@ -43,4 +43,7 @@ func TestPublishDropsWhenSubscriberFull(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("Publish blocked when subscriber buffer was full")
 	}
+	if got := b.Dropped(); got != 1 {
+		t.Fatalf("Dropped = %d, want 1 (second publish on a full buffer-1 sub)", got)
+	}
 }

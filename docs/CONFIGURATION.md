@@ -105,7 +105,7 @@ net_sample_interval_ms: 2000
 ```yaml
 socket_path: "~/.config/secure-agent/daemon.sock"
 db_path: "~/.local/state/secure-agent/events.db"
-jsonl_path: "~/.local/state/secure-agent/events.jsonl"
+jsonl_path: "~/.local/state/secure-agent/events.jsonl"  # flag mirror; rotates at 8 MiB
 ```
 
 Tilde (`~`) prefixes are automatically expanded to the user's home directory. Environment variables (e.g. `$HOME`) are also resolved automatically.
@@ -142,7 +142,7 @@ Every payload is signed with `X-SecureAgent-Signature: sha256=HMAC(secret, body)
 
 ### Proxy authentication
 
-When the proxy is enabled, the daemon generates a per-install token at
+Default `proxy_enabled` is `false` (MITM inspection and the web console are opt-in). When the proxy is enabled, the daemon generates a per-install token at
 `~/.config/secure-agent/proxy-token` (0600). The routing snippet
 (`agent-env.sh`) carries it; the proxy rejects unauthenticated proxying with
 `407`. The dashboard remains unauthenticated (loopback only).

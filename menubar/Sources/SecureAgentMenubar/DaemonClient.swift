@@ -46,6 +46,7 @@ public protocol DaemonClientProtocol: Sendable {
     func killProcess(pid: Int32) async throws -> Bool
     func deleteGuardRule(agent: String, ruleID: String) async throws
     func setFirewallMode(rule: String, mode: String) async throws
+    func promoteFirewallType(_ secretType: String, mode: String) async throws
     func fetchAdvisorDiscover() async throws -> AdvisorDiscovery
     func fetchRollup(hours: Int) async throws -> [RollupPointModel]
     func fetchAudit(limit: Int) async throws -> [AuditEntryModel]
@@ -152,6 +153,12 @@ public final class DaemonClient: Sendable {
 
     public func setFirewallMode(rule: String, mode: String) async throws {
         let payload: [String: String] = ["rule": rule, "mode": mode]
+        let jsonData = try JSONSerialization.data(withJSONObject: payload)
+        _ = try await request(method: "POST", path: "/firewall/mode", body: jsonData)
+    }
+
+    public func promoteFirewallType(_ secretType: String, mode: String) async throws {
+        let payload: [String: String] = ["type": secretType, "mode": mode]
         let jsonData = try JSONSerialization.data(withJSONObject: payload)
         _ = try await request(method: "POST", path: "/firewall/mode", body: jsonData)
     }

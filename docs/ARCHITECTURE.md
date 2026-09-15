@@ -95,8 +95,8 @@ The plugin layer operates synchronously inside AI agent CLI/IDE harnesses (Claud
   - Blocks modification of shell initialization files (`.zshrc`, `.zshenv`, `/etc/paths`).
   - Blocks reads or writes targeting private key paths and credential vaults.
   - Returns dual-protocol JSON responses for Claude Code (`decision`, `reason`) and Cursor (`permission`, `user_message`).
-- **`injection_scan.py` (`PostToolUse`)**: Scans tool outputs for prompt injection markers and dangerous indirect instruction patterns.
-- **`activity_log.py`**: Logs structured tool event records into `~/.local/state/secure-agent/activity.jsonl`.
+- **`injection_scan.py` (`PostToolUse`)**: Scans tool outputs for prompt injection markers and appends a redacted activity record (via `activity_log.log_payload`) in the same spawn.
+- **`activity_log.py`**: Shared writer for `~/.local/state/secure-agent/activity.jsonl`; not a separate hook process.
 
 ---
 

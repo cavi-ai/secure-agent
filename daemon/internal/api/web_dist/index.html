@@ -107,7 +107,7 @@
         <div class="kpi-body">
           <span class="kpi-num" id="count-flags">0</span>
           <span class="kpi-label">Security flags</span>
-          <span class="kpi-hint">Correlated egress matches</span>
+          <span class="kpi-hint" id="hint-flags">Unacted last 24h</span>
         </div>
       </div>
       <div class="kpi" data-accent="amber">
@@ -115,7 +115,7 @@
         <div class="kpi-body">
           <span class="kpi-num" id="count-incidents">0</span>
           <span class="kpi-label">Incidents</span>
-          <span class="kpi-hint">Assessed secret exposures</span>
+          <span class="kpi-hint">Unacted last 24h</span>
         </div>
       </div>
       <div class="kpi" data-accent="brand">
@@ -151,8 +151,19 @@
     </nav>
 
     <main>
-      <!-- Overview: "is this normal for this machine?" — trend + live feed -->
+      <!-- Overview: sessions first, then "is this normal?" trend + live feed -->
       <div class="tabpanel" id="tab-overview" role="tabpanel">
+        <section class="panel" id="session-board-panel">
+          <div class="panel-head">
+            <h2><svg class="icon"><use href="#i-agent"/></svg>Sessions</h2>
+            <input type="search" id="session-cwd-filter" class="input" placeholder="Filter by project…" autocomplete="off" spellcheck="false">
+            <span class="badge" id="badge-session-count">0</span>
+          </div>
+          <div class="panel-body" id="session-board">
+            <div class="empty"><svg class="icon"><use href="#i-agent"/></svg><span>No agents running yet — start Claude Code, Cursor, or Codex and they'll appear here</span></div>
+          </div>
+        </section>
+
         <section class="panel activity-panel">
           <div class="panel-head">
             <h2><svg class="icon"><use href="#i-activity"/></svg>Activity</h2>
@@ -213,7 +224,7 @@
               </div>
             </section>
           </div>
-          <div class="col">
+          <div class="col" id="fleet-col">
             <section class="panel" id="fleet-panel">
               <div class="panel-head">
                 <h2><svg class="icon"><use href="#i-server"/></svg>Fleet nodes</h2>
@@ -272,6 +283,10 @@
               </div>
               <div class="panel-body">
                 <div class="filter-bar">
+                  <span class="session-filter" id="flags-session-filter" hidden>
+                    session <b id="flags-session-filter-id"></b>
+                    <button class="session-clear" id="flags-session-clear" title="Show all sessions"><svg class="icon"><use href="#i-close"/></svg></button>
+                  </span>
                   <select id="flags-agent" class="select"><option value="all">All agents</option></select>
                   <select id="flags-rule" class="select"><option value="all">All rules</option></select>
                   <select id="flags-severity" class="select">
@@ -303,7 +318,7 @@
               </div>
             </section>
 
-            <section class="panel">
+            <section class="panel" id="audit-panel">
               <div class="panel-head">
                 <h2><svg class="icon"><use href="#i-history"/></svg>Policy audit</h2>
                 <span class="badge" id="badge-audit-count">0</span>
@@ -334,6 +349,10 @@
   <div id="toast-container" class="toasts"></div>
 
   <script src="lib.js"></script>
+  <script src="tab-overview.js"></script>
+  <script src="tab-agents.js"></script>
+  <script src="tab-egress.js"></script>
+  <script src="tab-findings.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

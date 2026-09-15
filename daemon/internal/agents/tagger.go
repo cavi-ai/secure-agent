@@ -204,6 +204,15 @@ func (t *Tagger) tagLocked(pid int32) (AgentInfo, bool) {
 	return AgentInfo{}, false
 }
 
+// RefreshInterval is how long to wait between kern.proc.all walks.
+// Idle (no tagged agents): 5s. Live sessions: 1s so spawn/exit shows up fast.
+func RefreshInterval(anyTagged bool) time.Duration {
+	if anyTagged {
+		return time.Second
+	}
+	return 5 * time.Second
+}
+
 func (t *Tagger) Any() bool {
 	t.mu.RLock()
 	defer t.mu.RUnlock()

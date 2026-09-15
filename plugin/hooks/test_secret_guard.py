@@ -738,10 +738,22 @@ def _test_cwd_overrides_only_listed_rules():
             os.environ.clear(); os.environ.update(old)
 
 
+def _test_guard_rules_json_ships_with_hook():
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "guard-rules.json")
+    with open(path, encoding="utf-8") as fh:
+        doc = json.load(fh)
+    ids = [r["id"] for r in doc["rules"]]
+    assert ids == ["ssh-keys", "cloud-creds", "keychain", "env-files", "shell-rc", "harness-config"], ids
+    assert ["~/.ssh", "ssh-keys"] in [list(x) for x in doc["dir_scan"]]
+    mod = _hook_module()
+    assert [r["id"] for r in mod.DEFAULT_GUARD_RULES] == ids
+
+
 EXTRA_TESTS += [
     _test_cwd_overrides_first_matching_prefix_wins,
     _test_cwd_overrides_non_matching_cwd_falls_back,
     _test_cwd_overrides_only_listed_rules,
+    _test_guard_rules_json_ships_with_hook,
 ]
 
 
