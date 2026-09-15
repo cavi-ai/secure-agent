@@ -46,6 +46,21 @@ function filterEventsByPids(events, pids) {
   return (events || []).filter(e => set.has(Number(e.pid)));
 }
 
+function scopedBySession(items, sessionId, pids) {
+  if (sessionId) return filterEventsBySession(items, sessionId);
+  if (pids && pids.length) return filterEventsByPids(items, pids);
+  return items || [];
+}
+
+function unactedLast24h(flags, nowMs) {
+  const cutoff = nowMs - 24 * 3600e3;
+  return (flags || []).filter(f => {
+    if (!f || f.acknowledged || (f.severity || 0) < 2) return false;
+    const t = Date.parse(f.ts);
+    return Number.isFinite(t) && t >= cutoff;
+  });
+}
+
 // flagHost extracts the egress destination host from a flag's evidence
 // (the host a mute/disposition applies to), or '' for hostless rules.
 function flagHost(flag) {

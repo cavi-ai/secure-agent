@@ -24,6 +24,7 @@
       uninspected_egress: 2,
       advisor_enabled: true,
       fleet_configured: true,
+      unacted_flags_24h: 2,
       advisor_health: { enabled: true, queue_depth: 0, model: 'qwen3:8b' },
       firewall_stats: {
         'anthropic-key':  { type: 'vendor-key', mode: 'monitor', would_block: 5, blocked: 0, legit: 12 },

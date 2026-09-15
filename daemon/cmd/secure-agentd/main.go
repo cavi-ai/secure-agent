@@ -198,6 +198,7 @@ func main() {
 
 	// Start Control API
 	apiServer := api.New(cfg.SocketPath, st, &realKiller{}, statusFn)
+	apiServer.SetBusDrops(b.Dropped)
 
 	// Peer-credential gating on the control socket: kernel-attested pid/uid per
 	// connection. Owner uid gets reads, tagged agent pids may ask the guard for
