@@ -71,8 +71,8 @@ func (p *ProcProcSource) List() []ProcInfo {
 		if err != nil {
 			continue
 		}
-		ppid, comm, start := parseProcStat(string(raw), boot, hz)
-		res = append(res, ProcInfo{PID: int32(pid), PPID: ppid, Comm: comm, StartTime: start})
+		ppid, comm, start, cpu := parseProcStat(string(raw), boot, hz)
+		res = append(res, ProcInfo{PID: int32(pid), PPID: ppid, Comm: comm, StartTime: start, CPUTime: cpu})
 	}
 	return res
 }
@@ -83,7 +83,7 @@ func (p *ProcProcSource) Info(pid int32) (ProcInfo, bool) {
 	if err != nil {
 		return ProcInfo{}, false
 	}
-	ppid, comm, start := parseProcStat(string(raw), boot, hz)
+	ppid, comm, start, cpu := parseProcStat(string(raw), boot, hz)
 	exe, _ := os.Readlink(filepath.Join("/proc", strconv.Itoa(int(pid)), "exe"))
 	if comm == "" && exe == "" {
 		return ProcInfo{}, false
@@ -95,6 +95,7 @@ func (p *ProcProcSource) Info(pid int32) (ProcInfo, bool) {
 		Exe:       exe,
 		StartTime: start,
 		RSSBytes:  readRSS(pid),
+		CPUTime:   cpu,
 	}, true
 }
 

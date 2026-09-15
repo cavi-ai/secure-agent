@@ -16,19 +16,23 @@ type ProcInfo struct {
 	CWD       string
 	StartTime time.Time
 	RSSBytes  uint64
+	CPUTime   time.Duration
 }
 
 type AgentInfo struct {
-	Name      string
-	ExePath   string
-	CWD       string
-	PID       int32
-	PPID      int32
-	Chain     []int32
-	StartedAt time.Time
-	RSSBytes  uint64
-	RootPID   int32
-	IsOrphan  bool
+	Name       string
+	ExePath    string
+	CWD        string
+	PID        int32
+	PPID       int32
+	Chain      []int32
+	StartedAt  time.Time
+	RSSBytes   uint64
+	CPUTime    time.Duration
+	CPUPercent float64
+	RootPID    int32
+	IsOrphan   bool
+	sampledAt  time.Time
 }
 
 type ProcSource interface {
@@ -43,6 +47,7 @@ type Tagger struct {
 	table  map[int32]ProcInfo
 	cache  map[int32]AgentInfo
 	tagged map[int32]bool
+	now    func() time.Time
 }
 
 func New(cfg config.Config, ps ProcSource) *Tagger {
@@ -52,6 +57,7 @@ func New(cfg config.Config, ps ProcSource) *Tagger {
 		table:  make(map[int32]ProcInfo),
 		cache:  make(map[int32]AgentInfo),
 		tagged: make(map[int32]bool),
+		now:    time.Now,
 	}
 }
 
@@ -89,6 +95,7 @@ func (t *Tagger) isCandidateLocked(pid int32) bool {
 func (t *Tagger) Refresh() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	sampledAt := t.now()
 
 	procs := t.ps.List()
 	newTable := make(map[int32]ProcInfo, len(procs))
@@ -105,6 +112,48 @@ func (t *Tagger) Refresh() {
 			delete(t.cache, pid)
 			delete(t.tagged, pid)
 		}
+	}
+
+	// Refresh volatile counters only for processes already attributed to an
+	// agent. This keeps idle scans cheap while making the cached resource view
+	// current for live sessions.
+	for pid, previous := range t.cache {
+		if !t.tagged[pid] {
+			continue
+		}
+		fresh, ok := t.ps.Info(pid)
+		if !ok {
+			continue
+		}
+		fresh = mergeProcInfo(newTable[pid], fresh)
+		if !previous.StartedAt.IsZero() && !fresh.StartTime.IsZero() && !previous.StartedAt.Equal(fresh.StartTime) {
+			delete(t.cache, pid)
+			delete(t.tagged, pid)
+			continue
+		}
+
+		previous.PPID = fresh.PPID
+		if fresh.Exe != "" {
+			previous.ExePath = fresh.Exe
+		} else if fresh.Comm != "" {
+			previous.ExePath = fresh.Comm
+		}
+		if fresh.CWD != "" {
+			previous.CWD = fresh.CWD
+		}
+		if !fresh.StartTime.IsZero() {
+			previous.StartedAt = fresh.StartTime
+		}
+		if fresh.RSSBytes != 0 || previous.RSSBytes == 0 {
+			previous.RSSBytes = fresh.RSSBytes
+		}
+		if fresh.CPUTime != 0 || previous.CPUTime == 0 {
+			previous.CPUPercent = cpuPercent(previous.CPUTime, previous.sampledAt, fresh.CPUTime, sampledAt)
+			previous.CPUTime = fresh.CPUTime
+			previous.sampledAt = sampledAt
+		}
+		t.cache[pid] = previous
+		t.table[pid] = fresh
 	}
 
 	// Pre-populate tagging for candidate process trees without discarding existing positively tagged agent cache
@@ -185,6 +234,8 @@ func (t *Tagger) tagLocked(pid int32) (AgentInfo, bool) {
 							Chain:     chain,
 							StartedAt: targetProc.StartTime,
 							RSSBytes:  targetProc.RSSBytes,
+							CPUTime:   targetProc.CPUTime,
+							sampledAt: t.now(),
 						}
 						t.cache[pid] = res
 						t.tagged[pid] = true
@@ -211,6 +262,13 @@ func RefreshInterval(anyTagged bool) time.Duration {
 		return time.Second
 	}
 	return 5 * time.Second
+}
+
+func cpuPercent(previousCPU time.Duration, previousAt time.Time, currentCPU time.Duration, currentAt time.Time) float64 {
+	if previousAt.IsZero() || !currentAt.After(previousAt) || currentCPU < previousCPU {
+		return 0
+	}
+	return float64(currentCPU-previousCPU) / float64(currentAt.Sub(previousAt)) * 100
 }
 
 func (t *Tagger) Any() bool {
@@ -241,7 +299,7 @@ func (t *Tagger) TaggedPIDs() map[int32]AgentInfo {
 }
 
 // mergeProcInfo keeps List()-cheap fields (start time, ppid) when Info()
-// only fills the lazy ones (exe, rss).
+// only fills the lazy ones (exe, rss, cumulative CPU).
 func mergeProcInfo(listed, info ProcInfo) ProcInfo {
 	if info.PPID == 0 {
 		info.PPID = listed.PPID
@@ -251,6 +309,9 @@ func mergeProcInfo(listed, info ProcInfo) ProcInfo {
 	}
 	if info.RSSBytes == 0 {
 		info.RSSBytes = listed.RSSBytes
+	}
+	if info.CPUTime == 0 {
+		info.CPUTime = listed.CPUTime
 	}
 	if info.CWD == "" {
 		info.CWD = listed.CWD
