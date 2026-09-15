@@ -361,6 +361,25 @@ if [ "$PROXY_PORT" != "0" ] && [ -f "$tmp/console-token" ]; then
   else
     echo "Console auth FAILED: none=$CODE_NONE proxy-token=$CODE_PT console-token=$CODE_CT (want 403/403/200)"
   fi
+  # Whitelist-drift regression: the endpoints the console fetches must NOT
+  # fall through to the proxy-token challenge (407). This exact drift
+  # silently blanked half the console behind a healthy daemon.
+  DRIFT_FAILED=""
+  for p in /status /posture /flags /events /incidents /audit /fleet \
+           /firewall/sources /stats/rollup /mute /allowlist/suggestions \
+           /egress/uninspected /notify/rules; do
+    CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 \
+      -H "X-SecureAgent-Console-Token: $CT" "http://127.0.0.1:$PROXY_PORT$p" || true)
+    if [ "$CODE" != "200" ]; then
+      DRIFT_FAILED="$DRIFT_FAILED $p=$CODE"
+    fi
+  done
+  if [ -z "$DRIFT_FAILED" ]; then
+    echo "Console whitelist: all console-fetched endpoints answer 200 with the console token."
+  else
+    echo "Console whitelist FAILED (want 200):$DRIFT_FAILED"
+    CONSOLE_PASSED=false
+  fi
 else
   echo "Console auth: proxy not running or console token missing (port=$PROXY_PORT)."
 fi

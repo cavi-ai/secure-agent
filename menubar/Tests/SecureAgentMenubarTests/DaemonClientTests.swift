@@ -2,6 +2,56 @@ import XCTest
 @testable import SecureAgentMenubar
 
 final class DaemonClientTests: XCTestCase {
+    func testDaemonClientErrorDescriptionsAreActionable() {
+        // Regression: without LocalizedError every daemon failure surfaced as
+        // "The operation could not be completed. (…DaemonClientError error 1.)"
+        // — the "dismiss failed without reason" complaint.
+        XCTAssertEqual(DaemonClientError.http(403).errorDescription,
+                       "daemon refused the change (HTTP 403) — this client isn't allowed to change policy; restart Secure Agent if this persists")
+        XCTAssertEqual(DaemonClientError.http(401).errorDescription,
+                       "daemon refused the change (HTTP 401) — this client isn't allowed to change policy; restart Secure Agent if this persists")
+        XCTAssertEqual(DaemonClientError.http(500).errorDescription,
+                       "daemon answered HTTP 500")
+        XCTAssertEqual(DaemonClientError.transport("connect timed out").errorDescription,
+                       "daemon unreachable (connect timed out)")
+        XCTAssertEqual(DaemonClientError.decode("bad json").errorDescription,
+                       "daemon answered unexpectedly (bad json)")
+    }
+
+    func testNotifyRulesResponseDecoding() throws {
+        let json = #"{"default_min_severity":3,"overrides":{"keychain-access":false,"tcc-tamper":true}}"#
+            .data(using: .utf8)!
+        let r = try JSONDecoder().decode(NotifyRulesResponse.self, from: json)
+        XCTAssertEqual(r.defaultMinSeverity, 3)
+        XCTAssertEqual(r.overrides["keychain-access"], false)
+        XCTAssertEqual(r.overrides["tcc-tamper"], true)
+        // Fallback for daemons predating /notify/rules.
+        XCTAssertEqual(NotifyRulesResponse.fallback.defaultMinSeverity, 3)
+        XCTAssertTrue(NotifyRulesResponse.fallback.overrides.isEmpty)
+    }
+
+    func testStatusDecodesAdvisorHealth() throws {
+        let json = #"{"running":true,"uptime":"1m","active_agents":1,"advisor_health":{"enabled":true,"circuit_open":true,"last_error":"context deadline exceeded","queue_depth":2,"model":"qwen3:8b"}}"#
+            .data(using: .utf8)!
+        let s = try JSONDecoder().decode(StatusResponse.self, from: json)
+        XCTAssertEqual(s.advisorHealth?.enabled, true)
+        XCTAssertEqual(s.advisorHealth?.circuitOpen, true)
+        XCTAssertEqual(s.advisorHealth?.lastError, "context deadline exceeded")
+        XCTAssertEqual(s.advisorHealth?.queueDepth, 2)
+        XCTAssertEqual(s.advisorHealth?.model, "qwen3:8b")
+    }
+
+    func testAcknowledgedCopyPreservesIdentity() {
+        let f = FlagModel(id: "x", rule: "keychain-access", severity: 1, ts: "t", pid: 9,
+                          agent: "codex", evidence: ["e"], sessionId: "s1")
+        let a = f.acknowledgedCopy()
+        XCTAssertEqual(a.acknowledged, true)
+        XCTAssertEqual(a.id, "x")
+        XCTAssertEqual(a.rule, "keychain-access")
+        XCTAssertEqual(a.sessionId, "s1")
+        XCTAssertEqual(a.severity, 1)
+    }
+
     func testModelDecoding() throws {
         let statusJSON = """
         {

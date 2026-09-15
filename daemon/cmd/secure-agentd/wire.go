@@ -263,7 +263,9 @@ func setupAdvisor(cfg config.Config, st *store.Store) advisorStack {
 }
 
 // buildStatusFn assembles the /status payload from live component state.
-func buildStatusFn(proxyServer *proxy.ProxyServer, tagger *agents.Tagger, cr *correlate.Correlator, eng *firewall.Engine, reg *supervise.Registry, startTime time.Time, advisorEnabled bool) api.StatusFunc {
+// advisorHealth is resolved per call (the advisor stack hot-swaps on config
+// reload — a captured bool/subscriber would go stale).
+func buildStatusFn(proxyServer *proxy.ProxyServer, tagger *agents.Tagger, cr *correlate.Correlator, eng *firewall.Engine, reg *supervise.Registry, startTime time.Time, advisorHealth func() advisor.HealthSnapshot) api.StatusFunc {
 	return func() api.Status {
 		proxyActive := proxyServer != nil
 		proxyPort := 0
@@ -281,6 +283,7 @@ func buildStatusFn(proxyServer *proxy.ProxyServer, tagger *agents.Tagger, cr *co
 			}
 			roots[r] = struct{}{}
 		}
+		ah := advisorHealth()
 		return api.Status{
 			Running:           true,
 			Version:           api.Version,
@@ -290,8 +293,9 @@ func buildStatusFn(proxyServer *proxy.ProxyServer, tagger *agents.Tagger, cr *co
 			TrackedProcesses:  len(activeAgents),
 			ProxyEnabled:      proxyActive,
 			ProxyPort:         proxyPort,
-			UninspectedEgress: cr.UninspectedEgressCount(),
-			AdvisorEnabled:    advisorEnabled,
+			UninspectedEgress: cr.UninspectedEgressCountWindow(correlate.UninspectedWindow),
+			AdvisorEnabled:    ah.Enabled,
+			AdvisorHealth:     &ah,
 			MutedFlags:        cr.MutedCount(),
 			FirewallStats:     firewallStats(eng),
 			Collectors:        reg.Snapshot(),

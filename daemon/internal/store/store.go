@@ -348,6 +348,9 @@ type FlagFilter struct {
 	MinSeverity int    // severity >= this; 0 = any
 	Since       string // ts >= this; empty = any
 	Limit       int    // 0 = 50
+	// Unacted excludes acknowledged (reviewed/dismissed) flags — a flag the
+	// operator already closed must not keep demanding attention (posture).
+	Unacted bool
 }
 
 // EventFilter narrows an event history query. Kind is a pointer because kind 0
@@ -392,7 +395,9 @@ func (s *Store) AcknowledgeRuleHost(rule, host string) int {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	n := 0
 	for _, c := range candidates {
-		if !evidenceCitesHost(c.ev, host) {
+		// host "*" is the rule-level disposition: every open flag of the rule
+		// leaves the list, not just those citing one host.
+		if host != "*" && !evidenceCitesHost(c.ev, host) {
 			continue
 		}
 		if _, err := s.db.Exec(`UPDATE flags SET acknowledged = ? WHERE id = ?`, now, c.id); err == nil {
@@ -503,6 +508,9 @@ func (s *Store) QueryFlags(f FlagFilter) []model.Flag {
 	if f.Since != "" {
 		q += " AND datetime(ts) >= datetime(?)"
 		args = append(args, f.Since)
+	}
+	if f.Unacted {
+		q += " AND (acknowledged IS NULL OR acknowledged = '')"
 	}
 	// Order by the normalized instant, not the raw RFC3339 text: local-offset
 	// stamps sort wrong lexicographically across a DST change, which with LIMIT

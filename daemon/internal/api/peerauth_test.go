@@ -219,6 +219,84 @@ func TestGateRejectsNonUIMutationWhenUIPinned(t *testing.T) {
 	resp.Body.Close()
 }
 
+// /mute is in the mutation set: with a UI pinned, an owner-uid shell gets a
+// flat 403 while the pinned UI passes — the exact path behind "dismiss
+// failed" reports. Pin the whole policy surface for the disposition
+// endpoints so a refactor can't silently re-open (or re-close) them.
+func TestGateDispositionEndpointsPolicy(t *testing.T) {
+	sock := fmt.Sprintf("/tmp/sa_dispo_%d.sock", time.Now().UnixNano())
+	defer os.Remove(sock)
+	a := New(sock, testStore(t), &fakeKiller{}, func() Status { return Status{Running: true} })
+	a.SetPeers(NewPeerChecker(), nil)
+	a.peerRole.UIPID = int32(os.Getpid()) + 9999 // not this process
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go a.Serve(ctx)
+	waitForSocket(t, sock)
+	cl := unixClient(sock)
+
+	// Owner (not the pinned UI): mutations 403.
+	for _, tc := range []struct{ path, body string }{
+		{"/mute", `{"rule":"keychain-access","host":"*"}`},
+		{"/flags/acknowledge", `{"flag_id":"abc123"}`},
+		{"/allowlist", `{"agent":"cursor","host":"example.com"}`},
+		{"/advisor/retriage", `{"flag_id":"abc123"}`},
+	} {
+		resp, err := cl.Post("http://unix"+tc.path, "application/json", strings.NewReader(tc.body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusForbidden {
+			t.Fatalf("POST %s as owner when UI pinned: status=%d, want 403", tc.path, resp.StatusCode)
+		}
+	}
+
+	// /notify/rules is owner-level (headless/ssh management like
+	// DELETE /guard/rules): the owner passes even with a UI pinned.
+	resp, err := cl.Post("http://unix/notify/rules", "application/json",
+		strings.NewReader(`{"rule":"keychain-access","notify":false}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	// 503 (store unwired here) is fine — the point is the GATE let it through.
+	if resp.StatusCode == http.StatusForbidden {
+		t.Fatal("POST /notify/rules as owner must pass the gate (owner-level, like other headless management)")
+	}
+}
+
+// Same set, but through the pinned-UI lens: this process IS the UI, so its
+// mutations must clear the gate (they may 400/503 on unwired stores — the
+// gate decision is what matters).
+func TestGateDispositionEndpointsAsPinnedUI(t *testing.T) {
+	sock := fmt.Sprintf("/tmp/sa_dispoui_%d.sock", time.Now().UnixNano())
+	defer os.Remove(sock)
+	a := New(sock, testStore(t), &fakeKiller{}, func() Status { return Status{Running: true} })
+	a.SetPeers(NewPeerChecker(), nil)
+	a.peerRole.UIPID = int32(os.Getpid())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go a.Serve(ctx)
+	waitForSocket(t, sock)
+	cl := unixClient(sock)
+
+	for _, tc := range []struct{ path, body string }{
+		{"/mute", `{"rule":"keychain-access","host":"*"}`},
+		{"/flags/acknowledge", `{"flag_id":"abc123"}`},
+		{"/allowlist", `{"agent":"cursor","host":"example.com"}`},
+	} {
+		resp, err := cl.Post("http://unix"+tc.path, "application/json", strings.NewReader(tc.body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode == http.StatusForbidden {
+			t.Fatalf("POST %s as pinned UI: got 403 — the menubar's dismiss flow is broken", tc.path)
+		}
+	}
+}
+
 // A tagged agent (hook traffic) may read and ask the guard for decisions,
 // but must never mutate. Before authorize() was wired through the role
 // methods, agents got 403 on everything — including /guard/decision, which

@@ -46,8 +46,9 @@ func (a *API) handlePosture(w http.ResponseWriter, r *http.Request) {
 		Connected: st.Running,
 	}
 
-	// 1. Critical/high flags — the security signal.
-	for _, f := range a.store.QueryFlags(store.FlagFilter{MinSeverity: 2, Limit: 25}) {
+	// 1. Critical/high flags — the security signal. Unacted only: a flag the
+	// operator already reviewed/dismissed must not keep demanding attention.
+	for _, f := range a.store.QueryFlags(store.FlagFilter{MinSeverity: 2, Limit: 25, Unacted: true}) {
 		if isRecent(f.TS, 24*time.Hour) {
 			posture.Items = append(posture.Items, PostureItem{
 				Kind: "flag", ID: f.ID,

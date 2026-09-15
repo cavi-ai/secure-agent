@@ -4,6 +4,125 @@ All notable changes to `secure-agent` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/) and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+- **Console whitelist drift (the "everything runs but the console says it
+  can't reach the daemon" bug).** The proxy listener's console-token
+  whitelist (`isConsoleAPIPath`) had fallen behind the console's fetches:
+  `/stats/rollup`, `/mute`, `/allowlist(+suggestions)` and others answered
+  **407** in the browser, silently blanking the Activity chart, the muted
+  list, and the egress suggestions. The whitelist now covers every endpoint
+  the console fetches, and `TestConsoleAPIPathsCoverWebApp` parses
+  `web_dist/app.js` and fails CI on any future drift.
+- **Console session no longer dies on reload.** The console token was kept
+  in memory only after stripping `#ct=` from the URL, so a single reload
+  produced a permanent wall of 403s rendered as "can't reach the daemon".
+  The token now persists for the life of the tab (sessionStorage), and the
+  offline state is honest: **auth-expired** ("reopen the console from the
+  menu bar") is no longer conflated with **unreachable**. Every fetch also
+  carries a 5s timeout so a hung endpoint can't wedge the refresh cycle.
+- **Uninspected-egress warning was a dead end.** Clicking it scrolled to a
+  panel that showed the same number and nothing else. There is now a real
+  drill-down (`GET /egress/uninspected`): every endpoint with agent, counts,
+  last-seen, the advisor's verdict, and a one-click **Allow**.
+- **Keychain alert storm had no recourse.** `keychain-access` (file-open of
+  keychain DBs) fired a severity-2 notification per (pid, path) every 15
+  minutes, the mute system was never consulted in the keychain code paths,
+  and the menu bar's action sheet offered only "Kill agent" (dismiss actions
+  required host evidence, which keychain flags don't have).
+
+### Added
+- **Rolling 24h blind-spot counter.** `status.uninspected_egress` now counts
+  distinct endpoints seen in the last 24 hours instead of growing
+  monotonically for the daemon's lifetime (it had inflated to ~1000); pairs
+  silent for 7+ days are swept from the tracker.
+- **Rule-level mutes (`host: "*"`).** `POST /mute` with `host: "*"`
+  suppresses an entire flag class (counted in `status.muted_flags`, all open
+  flags of the rule acknowledged). Exposed as "Dismiss this flag class" in
+  both UIs — including, finally, keychain flags.
+- **Per-rule notification overrides (`/notify/rules`).** Default policy is
+  now **severity ≥ 3 notifies** (was ≥ 2); per-rule Default / Always / Never
+  overrides persist at `~/.config/secure-agent/notify-rules.json` and apply
+  to the menu bar and the web console alike (console bell menu, Settings →
+  Notifications section). Sets/clears are audited.
+- **Daemon-restart signal in the console.** An uptime that moves backwards
+  is reported as "Daemon restarted — reconnected" instead of silently
+  pretending continuous state.
+
+### Changed
+- **`keychain-access` demoted to severity 1 (informational).** Legitimate
+  tooling opens keychain DBs for TLS trust evaluation and credential helpers
+  — it never justifies a page. The `security(1)` CLI exec rule
+  (`keychain-security-cli`) stays severity 3.
+- **Console layout is now tabbed** (Overview / Agents / Egress / Findings)
+  instead of one endless page — organized by the question each view answers,
+  with per-tab badges ("2" on Egress = uninspected endpoints waiting),
+  deep-linkable tabs (`#findings`), and posture items that jump to the right
+  tab. Posture banner + KPIs stay always-visible on top.
+
+### Added
+- **Per-flag dismiss in both UIs.** Every flag card/sheet now has "Dismiss"
+  (reviewed-and-done) alongside "Dismiss this flag class" and "Kill" —
+  the missing middle recourse. Posture excludes acknowledged flags, so a
+  reviewed flag stops demanding attention everywhere.
+- **Advisor actions have a feedback loop.** `/status` now carries
+  `advisor_health` (circuit-breaker state, last error, queue depth); re-run
+  requests show a pending spinner, the fresh verdict lands with a notice,
+  timeouts say so honestly after 90s, and a paused advisor renders "Advisor
+  offline — verdicts paused" instead of a clickable dead button (in the web
+  console AND the menu bar sheet).
+- **Human-readable process labels.** The console event timeline and incident
+  cards show agent names (not bare PIDs); menu bar session rows show the
+  project folder next to the PID; keychain flags carry a "this is usually
+  routine" context note.
+- **Regression coverage for every "nothing happens" bug class.** The DOM
+  harness is now stateful: Allow removes the suggestion, Dismiss removes the
+  card, re-triage shows pending then the landed verdict, advisor-offline
+  renders the disabled state, tabs hide/show panels. Connection states are
+  pinned too: 403 → "Session expired — reopen from the menu bar" (never
+  "daemon down"), network failure → retry banner, token persists across
+  reloads via sessionStorage with no `#ct` fragment. Go + Swift suites cover
+  the server/client halves (posture unacted filter, retriage lifecycle,
+  dismiss echo, peer-gate disposition policy for `/mute`,
+  `/flags/acknowledge`, `/allowlist`, `/notify/rules`, `DaemonClientError`
+  human descriptions, `advisor_health` decoding, `NotifyRulesResponse`
+  decoding).
+
+### Fixed
+- **THE dashboard-killer: `/fleet` returns a node-status OBJECT, but the
+  console did `fleet.map` on it** — throwing inside `renderFleet` on every
+  poll and silently killing every panel after it in `renderAll` (flags,
+  incidents, audit, sources, events, activity chart). The live console
+  rendered only agents/firewall/KPIs; the rest was permanently dead.
+  `renderFleet` now accepts both shapes (object → local node card), and
+  `renderAll` is crash-isolated per panel so no single bad payload can ever
+  blank half the page again. The DOM harness's `/fleet` fixture lied (array)
+  — it now matches the real endpoint, with a regression check that panels
+  after fleet render.
+- **Menu bar quick-dismiss errored on keychain groups** ("no connection
+  target to mute") — hostless rules now fall back to the rule-level mute
+  (`host: "*"`), so every flag group has a working one-gesture dismiss.
+- **Informational flags no longer demand attention in the popover.**
+  `unactedFlags` is severity ≥ 2 — routine keychain-db opens queue silently
+  in the console's Findings tab instead of occupying the menu bar's
+  needs-a-decision list.
+- **Dashboard assets send `Cache-Control: no-cache`** (both the unix-socket
+  and proxy-port handlers) so an upgrade can never pair stale cached assets
+  with a new daemon.
+- **Dismiss failures are now diagnosable.** The peer gate logs every denial
+  with the kernel-attested peer (pid/uid/role, endpoint) to daemon-err.log,
+  and `DaemonClientError` conforms to `LocalizedError` — the menu bar says
+  "daemon refused the change (HTTP 403)…" instead of "The operation could
+  not be completed. (…error 1.)".
+- **Menu bar harness accordion was dead for single-session groups.** The
+  outer (harness) header of a one-session harness looked clickable but could
+  never collapse; expansion state is now an explicit override that works in
+  both directions for every group.
+- **"Re-run the advisor" acknowledged the flag.** The old flow marked the
+  flag acted-upon after an *informational* action, closing the loop the
+  operator hadn't closed; only true dispositions acknowledge now.
+
 ## [v1.1.0] — 2026-09-11
 
 Released: https://github.com/cavi-ai/secure-agent/releases/tag/v1.1.0

@@ -24,9 +24,20 @@ Host: unix
 {
   "running": true,
   "uptime": "1h24m05s",
-  "active_agents": 2
+  "active_agents": 2,
+  "advisor_health": {
+    "enabled": true,
+    "circuit_open": false,
+    "queue_depth": 0,
+    "model": "qwen3:8b"
+  }
 }
 ```
+
+`advisor_health` reports the local triage advisor's live state: `circuit_open`
+means the model server has failed repeatedly and verdicts are paused
+(`last_error` says why) — the UIs render this so advisor actions never look
+like dead buttons. Absent on older daemons.
 
 ---
 
@@ -280,7 +291,7 @@ Live feed of every bus event as `event: <kind>` / `data: <json>`, with a 15s hea
 
 ### Console access on the proxy port
 
-The browser console at `http://127.0.0.1:<proxy_port>/dashboard/` fetches telemetry same-origin, i.e. from the proxy listener. That listener serves the API endpoints listed in `proxy.isConsoleAPIPath` (status/flags/events/incidents/audit/fleet/posture/firewall sources + guard pending/rules/resolve + kill + this SSE stream) behind the **console token**:
+The browser console at `http://127.0.0.1:<proxy_port>/dashboard/` fetches telemetry same-origin, i.e. from the proxy listener. That listener serves the API endpoints listed in `proxy.isConsoleAPIPath` (status/posture/flags/events/incidents/audit/fleet/firewall sources + guard pending/rules/resolve + kill + rollup + mute + allowlist(+suggestions) + `/egress/uninspected` + `/notify/rules` + advisor retriage + this SSE stream) behind the **console token**. The whitelist is kept in lockstep with the console's fetches by `TestConsoleAPIPathsCoverWebApp` — a path the console fetches but the listener doesn't whitelist 407s and the panel dies silently, which is exactly the drift that test exists to catch:
 
 - Header `X-SecureAgent-Console-Token: <token>` (fetch/XHR) or `?ct=<token>` (EventSource can't set headers).
 - The token lives at `~/.config/secure-agent/console-token` (0600), distinct from the proxy token on purpose: agents routed through the proxy carry the proxy token in their environment and must not be able to read telemetry or resolve guard prompts with it.
@@ -298,6 +309,64 @@ Besides telemetry kinds (`file-open`, `conn-open`, `proxy-hit`, …), the stream
 - `GET /incidents` — list items now carry `workflow: {status, acknowledged_at, resolved_at, resolution_note}`.
 - `GET /incidents?id=…` — returns `{incident, workflow}`.
 - `POST /incidents/status` — `{"id","status":"open|acknowledged|resolved","note":"…"}`. Forward-only transitions; `acknowledged_at` stamps once; re-resolve replaces the note. Audited.
+
+### `GET /egress/uninspected`
+
+The drill-down behind the posture warning — the actual endpoints that
+bypassed inspection, so the count is explainable and actionable:
+
+```
+GET /egress/uninspected?hours=24&limit=200
+```
+
+```json
+[
+  {"agent": "cursor", "host": "registry.npmjs.org", "count": 14,
+   "last_seen": "2026-09-15T10:00:00Z",
+   "assessment": "benign", "rationale": "npm registry is routine for JS projects"}
+]
+```
+
+`hours` (1–168, default 24) windows the list by last-seen; out-of-range
+values fall back to 24. Sorted most-frequent first; `assessment`/`rationale`
+carry the advisor's host verdict when one exists. Read-level. Approve a row
+with `POST /allowlist` to close that blind spot.
+
+Related: `status.uninspected_egress` is a **rolling 24h** distinct-endpoint
+count ("what is bypassing inspection now"), not a lifetime figure — pairs
+silent for 7+ days are swept from the tracker entirely.
+
+### `GET|POST /notify/rules`
+
+Per-rule notification overrides, layered over the default policy
+(**severity ≥ 3 notifies**; informational flags like routine keychain-db
+opens are silent). Both UIs (menu bar app and web console) read this store,
+so one choice silences both surfaces.
+
+```json
+GET /notify/rules
+{"default_min_severity": 3, "overrides": {"keychain-access": false}}
+```
+
+```
+POST /notify/rules   {"rule": "keychain-access", "notify": false}
+POST /notify/rules   {"rule": "keychain-access", "notify": null}   // clear → default
+```
+
+`true` = always notify for the rule (even below the severity bar), `false` =
+never, `null`/absent = back to default. Rule ids must match
+`^[A-Za-z0-9_.-]+$`. Persisted at `~/.config/secure-agent/notify-rules.json`
+(0600, atomic); sets and clears are audited (`notify-rule-set` /
+`notify-rule-clear`).
+
+### Muting flag classes (`host: "*"`)
+
+`POST /mute` with `host: "*"` is the **rule-level disposition**: the whole
+flag class stops raising flags (silenced fires are counted in
+`status.muted_flags`), and every open flag of the rule is acknowledged so the
+old rows leave the critical list. This is the recourse for noisy host-less
+rules (`keychain-access`, `keychain-security-cli`) — the console and menu bar
+expose it as "Dismiss this flag class". Reversible with `DELETE /mute`.
 
 ---
 
