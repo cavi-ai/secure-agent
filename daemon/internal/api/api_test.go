@@ -24,10 +24,12 @@ import (
 
 type fakeKiller struct {
 	killed int32
+	all    []int32
 }
 
 func (f *fakeKiller) Kill(pid int32) error {
 	f.killed = pid
+	f.all = append(f.all, pid)
 	return nil
 }
 
@@ -451,5 +453,64 @@ func TestSnapshotBundlesHotTelemetry(t *testing.T) {
 	}
 	if snap.Posture.Generated == "" {
 		t.Fatal("posture not populated")
+	}
+}
+
+func TestKillEndpointKillsTaggedTreeSharingRootPID(t *testing.T) {
+	fk := &fakeKiller{}
+	a := New("", testStore(t), fk, func() Status {
+		return Status{Running: true, Agents: []AgentSummary{
+			{PID: 10, Name: "claude", RootPID: 10},
+			{PID: 11, Name: "claude", RootPID: 10},
+			{PID: 12, Name: "claude", RootPID: 10},
+			{PID: 20, Name: "cursor", RootPID: 20},
+		}}
+	})
+	req := httptest.NewRequest(http.MethodPost, "/kill", strings.NewReader(`{"pid":10}`))
+	rec := httptest.NewRecorder()
+	a.handleKill(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", rec.Code, rec.Body.String())
+	}
+	got := map[int32]int{}
+	for _, p := range fk.all {
+		got[p]++
+	}
+	for _, want := range []int32{10, 11, 12} {
+		if got[want] != 1 {
+			t.Fatalf("killed %v, want tree 10,11,12 once each", fk.all)
+		}
+	}
+	if got[20] != 0 {
+		t.Fatalf("killed other tree pid 20: %v", fk.all)
+	}
+	if len(fk.all) != 3 {
+		t.Fatalf("killed %v, want exactly 3 pids", fk.all)
+	}
+}
+
+func TestKillEndpointHelperPIDKillsWholeTree(t *testing.T) {
+	fk := &fakeKiller{}
+	a := New("", testStore(t), fk, func() Status {
+		return Status{Running: true, Agents: []AgentSummary{
+			{PID: 10, Name: "claude", RootPID: 10},
+			{PID: 11, Name: "claude", RootPID: 10},
+			{PID: 12, Name: "claude", RootPID: 10},
+		}}
+	})
+	req := httptest.NewRequest(http.MethodPost, "/kill", strings.NewReader(`{"pid":11}`))
+	rec := httptest.NewRecorder()
+	a.handleKill(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", rec.Code, rec.Body.String())
+	}
+	got := map[int32]int{}
+	for _, p := range fk.all {
+		got[p]++
+	}
+	for _, want := range []int32{10, 11, 12} {
+		if got[want] != 1 {
+			t.Fatalf("helper kill %v, want whole tree 10,11,12", fk.all)
+		}
 	}
 }

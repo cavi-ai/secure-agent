@@ -1238,7 +1238,7 @@ document.addEventListener('DOMContentLoaded', () => {
   window.killProcess = async function(pid, startedAt, family) {
     const when = startedAt ? ` started ${startedAt}` : '';
     const who = family ? `${family} ` : '';
-    if (!confirm(`Terminate process ${who}PID ${pid}${when}?`)) return;
+    if (!confirm(`Terminate process tree ${who}PID ${pid}${when}?`)) return;
     const body = { pid };
     if (startedAt) body.started_at = startedAt;
     try {
@@ -1248,7 +1248,7 @@ document.addEventListener('DOMContentLoaded', () => {
         body: JSON.stringify(body)
       });
       if (res.ok) {
-        showToast(`Process PID ${pid} terminated.`, 'success');
+        showToast(`Process tree PID ${pid} terminated.`, 'success');
         fetchTelemetry();
       } else {
         showToast(`Failed to terminate PID ${pid}.`, 'danger');

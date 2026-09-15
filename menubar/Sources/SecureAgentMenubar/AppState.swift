@@ -936,6 +936,25 @@ public final class AppState: ObservableObject {
         flags.filter { $0.acknowledged != true && $0.severity >= 2 }
     }
 
+    /// Tagged PIDs in one session tree (root plus helpers).
+    public func treePIDs(rootPid: Int32) -> Set<Int32> {
+        var pids: Set<Int32> = [rootPid]
+        for a in activeAgents {
+            if (a.rootPid ?? a.pid) == rootPid {
+                pids.insert(a.pid)
+            }
+        }
+        return pids
+    }
+
+    /// Unacted flags scoped to one session tree. nil root = every session.
+    public func unactedFlagsForSession(rootPid: Int32?) -> [FlagModel] {
+        let all = unactedFlags
+        guard let rootPid else { return all }
+        let pids = treePIDs(rootPid: rootPid)
+        return all.filter { pids.contains($0.pid) }
+    }
+
     /// A group of identical flags: same rule + agent + primary file/host.
     /// Repeated fires of the same pattern (codex touching the same keychain
     /// file every few minutes) are ONE decision, not twenty.
@@ -955,11 +974,11 @@ public final class AppState: ObservableObject {
     /// Group unacted flags by (rule, agent, anchor). Newest-first inside and
     /// across groups. The anchor is the first evidence line's file/host —
     /// matches what a human scans for ("same file again?").
-    public func groupedUnactedFlags() -> [FlagGroup] {
-        let unacted = unactedFlags
+    public func groupedUnactedFlags(forRootPid rootPid: Int32? = nil) -> [FlagGroup] {
+        let unacted = unactedFlagsForSession(rootPid: rootPid)
         var groups: [String: [FlagModel]] = [:]
         var order: [String] = []
-        for f in unactedFlags {
+        for f in unacted {
             let key = f.rule + "|" + f.agent + "|" + (Self.flagGroupAnchor(f) ?? f.id)
             if groups[key] == nil { order.append(key) }
             groups[key, default: []].append(f)

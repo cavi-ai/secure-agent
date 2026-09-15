@@ -645,6 +645,49 @@ final class SessionBoardRowTests: XCTestCase {
         state.seedForTesting(status: stub.status)
         XCTAssertEqual(state.sessionBoardRows(sortedBy: .lastActivity).count, 8)
     }
+
+    func testUnactedFlagsForSessionKeepsTreePidsOnly() {
+        let stub = StubDaemonClient()
+        stub.status.agents = [
+            agent(10, name: "claude", root: 10, ppid: 1, cwd: "/tmp/a"),
+            agent(11, name: "claude", root: 10, ppid: 10),
+            agent(20, name: "cursor", root: 20, ppid: 1, cwd: "/tmp/b"),
+        ]
+        let state = AppState(client: stub)
+        state.seedForTesting(status: stub.status)
+        state.seedFlagsForTesting([
+            FlagModel(id: "in-tree", rule: "proxy-secret-leak", severity: 3, ts: "2026-09-15T12:00:00Z",
+                      pid: 11, agent: "claude", evidence: []),
+            FlagModel(id: "other", rule: "proxy-secret-leak", severity: 3, ts: "2026-09-15T12:00:01Z",
+                      pid: 20, agent: "cursor", evidence: []),
+            FlagModel(id: "info", rule: "keychain-access", severity: 1, ts: "2026-09-15T12:00:02Z",
+                      pid: 10, agent: "claude", evidence: []),
+        ])
+        XCTAssertEqual(state.unactedFlagsForSession(rootPid: nil).map(\.id), ["in-tree", "other"])
+        XCTAssertEqual(state.unactedFlagsForSession(rootPid: 10).map(\.id), ["in-tree"])
+        XCTAssertEqual(state.unactedFlagsForSession(rootPid: 20).map(\.id), ["other"])
+        XCTAssertEqual(state.treePIDs(rootPid: 10), Set([10, 11]))
+    }
+
+    func testGroupedUnactedFlagsForSessionDropsOtherTrees() {
+        let stub = StubDaemonClient()
+        stub.status.agents = [
+            agent(10, name: "claude", root: 10, ppid: 1),
+            agent(20, name: "cursor", root: 20, ppid: 1),
+        ]
+        let state = AppState(client: stub)
+        state.seedForTesting(status: stub.status)
+        state.seedFlagsForTesting([
+            FlagModel(id: "a", rule: "proxy-secret-leak", severity: 3, ts: "2026-09-15T12:00:00Z",
+                      pid: 10, agent: "claude", evidence: ["connected to evil.test at x"]),
+            FlagModel(id: "b", rule: "proxy-secret-leak", severity: 3, ts: "2026-09-15T12:00:01Z",
+                      pid: 20, agent: "cursor", evidence: ["connected to evil.test at x"]),
+        ])
+        let scoped = state.groupedUnactedFlags(forRootPid: 10)
+        XCTAssertEqual(scoped.count, 1)
+        XCTAssertEqual(scoped[0].agent, "claude")
+        XCTAssertEqual(state.groupedUnactedFlags().count, 2)
+    }
 }
 
 // MARK: - SSE chunked-body decoding (the reconnect-loop fix)

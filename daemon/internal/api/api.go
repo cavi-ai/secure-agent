@@ -917,13 +917,68 @@ func (a *API) handleKill(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if err := a.killer.Kill(req.PID); err != nil {
-		http.Error(w, fmt.Sprintf("Kill failed: %v", err), http.StatusInternalServerError)
-		return
+	// UI copy, CLI, and flag actions all say "process tree". Kill every
+	// currently tagged agent that shares this pid's root_pid — not the OS
+	// process tree, only what the tagger already recognized.
+	var killed []int32
+	for _, pid := range a.killTreePIDs(req.PID) {
+		if a.agentPIDs != nil {
+			if _, ok := a.agentPIDs()[pid]; !ok {
+				continue
+			}
+		}
+		if err := a.killer.Kill(pid); err != nil {
+			http.Error(w, fmt.Sprintf("Kill failed: %v", err), http.StatusInternalServerError)
+			return
+		}
+		killed = append(killed, pid)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok", "pid": req.PID})
+	json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok", "pid": req.PID, "killed": killed})
+}
+
+func (a *API) killTreePIDs(pid int32) []int32 {
+	st := a.statusFn()
+	root := pid
+	found := false
+	for _, ag := range st.Agents {
+		if ag.PID != pid {
+			continue
+		}
+		found = true
+		if ag.RootPID != 0 {
+			root = ag.RootPID
+		}
+		break
+	}
+	if !found {
+		return []int32{pid}
+	}
+	var helpers, roots []int32
+	seen := map[int32]struct{}{}
+	for _, ag := range st.Agents {
+		r := ag.RootPID
+		if r == 0 {
+			r = ag.PID
+		}
+		if r != root {
+			continue
+		}
+		if _, ok := seen[ag.PID]; ok {
+			continue
+		}
+		seen[ag.PID] = struct{}{}
+		if ag.PID == root {
+			roots = append(roots, ag.PID)
+		} else {
+			helpers = append(helpers, ag.PID)
+		}
+	}
+	if len(roots) == 0 {
+		roots = []int32{root}
+	}
+	return append(helpers, roots...)
 }
 
 func (a *API) checkKillStart(pid int32, startedAt string) error {
