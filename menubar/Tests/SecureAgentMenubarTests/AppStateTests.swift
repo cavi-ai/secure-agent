@@ -646,6 +646,27 @@ final class SessionBoardRowTests: XCTestCase {
         XCTAssertEqual(state.sessionBoardRows(sortedBy: .lastActivity).count, 8)
     }
 
+    func testSessionBoardRowsPrefersDaemonTrees() {
+        let stub = StubDaemonClient()
+        stub.status.agents = [
+            agent(99, name: "should-ignore", root: 99, ppid: 1, cwd: "/tmp/wrong"),
+        ]
+        stub.status.trees = [
+            AgentTreeModel(
+                root: agent(10, name: "claude", root: 10, ppid: 1, cwd: "/tmp/proj", seen: "2026-09-15T12:00:00Z", rss: 100),
+                children: [agent(11, name: "claude", root: 10, ppid: 10, rss: 50)],
+                rssBytes: 150,
+                lastSeenAt: "2026-09-15T12:00:00Z"),
+        ]
+        let state = AppState(client: stub)
+        state.seedForTesting(status: stub.status)
+        let rows = state.sessionBoardRows(sortedBy: .lastActivity)
+        XCTAssertEqual(rows.map(\.agent.pid), [10])
+        XCTAssertEqual(rows[0].agent.cwdLeaf, "proj")
+        XCTAssertEqual(rows[0].familyRSSBytes, 150)
+        XCTAssertEqual(rows[0].childCount, 1)
+    }
+
     func testUnactedFlagsForSessionKeepsTreePidsOnly() {
         let stub = StubDaemonClient()
         stub.status.agents = [

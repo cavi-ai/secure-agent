@@ -22,7 +22,7 @@ const {
   parseMarkdownToHTML, buildEvidenceChain,
   sessionShort, filterEventsBySession, rollupSeries, flagHost,
   familyTitle, fmtRSS, fmtAge, isFamilyRoot, childrenOf, groupAgents, familyShouldExpand,
-  cwdLabel, sessionRows, filterEventsByPids,
+  cwdLabel, sessionRows, filterEventsByPids, sessionBoardHTML,
 } = ctx;
 
 // ---------- escapeHTML ----------
@@ -279,6 +279,34 @@ test('sessionRows: one row per root, cwd label, family rss, helpers excluded', (
 test('sessionRows: missing cwd falls back to harness name', () => {
   const rows = sessionRows([{ pid: 1, name: 'codex', root_pid: 1 }]);
   assert.equal(rows[0].label, 'Codex');
+});
+
+test('sessionRows: daemon trees are used as-is (no regroup)', () => {
+  const trees = [{
+    root: { pid: 10, name: 'claude', cwd: '/tmp/proj', root_pid: 10 },
+    children: [{ pid: 11, name: 'claude', root_pid: 10 }],
+    rss_bytes: 150,
+    last_seen_at: '2026-09-15T12:00:00Z',
+  }];
+  const rows = sessionRows([{ pid: 99, name: 'should-ignore', root_pid: 99 }], trees);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].root.pid, 10);
+  assert.equal(rows[0].label, 'proj');
+  assert.equal(rows[0].rss, 150);
+  assert.equal(rows[0].pids.map(Number).join(','), '10,11');
+});
+
+test('sessionBoardHTML labels the project folder', () => {
+  const html = sessionBoardHTML([{
+    root: { pid: 10, name: 'claude', cwd: '/tmp/proj', started_at: '' },
+    children: [],
+    label: 'proj',
+    rss: 0,
+    lastSeen: '',
+    pids: [10],
+  }], Date.now(), {});
+  assert.match(html, /session-label">proj</);
+  assert.match(html, /data-action="kill"/);
 });
 
 test('filterEventsByPids: empty pids is a no-op; otherwise pid set', () => {

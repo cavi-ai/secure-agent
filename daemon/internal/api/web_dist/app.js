@@ -491,34 +491,15 @@ document.addEventListener('DOMContentLoaded', () => {
     const badge = document.getElementById('badge-session-count');
     if (!container) return;
     const agents = (telemetryData.status && telemetryData.status.agents) ? telemetryData.status.agents : [];
-    const rows = sessionRows(agents);
+    const trees = telemetryData.status && telemetryData.status.trees;
+    const rows = sessionRows(agents, trees);
     if (badge) badge.textContent = rows.length;
     if (rows.length === 0) {
       container.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-agent"/></svg><span>No agents running yet — start Claude Code, Cursor, or Codex and they'll appear here</span></div>`;
       return;
     }
     const now = Date.now();
-    container.innerHTML = rows.map(row => {
-      const a = row.root;
-      const rss = fmtRSS(row.rss);
-      const seenAge = row.lastSeen ? fmtAge(row.lastSeen, now) : '';
-      const stale = row.lastSeen ? (now - Date.parse(row.lastSeen)) > 10 * 60 * 1000 : true;
-      const helpOpen = sessionHelpOpen[a.pid] ? ' open' : '';
-      const helpers = row.children.length
-        ? `<details class="session-helpers"${helpOpen} data-pid="${a.pid}"><summary class="session-helpers-sum">${row.children.length} helper${row.children.length === 1 ? '' : 's'}</summary>${row.children.map(c => renderProcessRow(c, now, true)).join('')}</details>`
-        : '';
-      return `
-      <div class="session-row${a.is_orphan ? ' orphan' : ''}${stale ? ' stale' : ''}">
-        <button type="button" class="session-main" data-action="filter-pids" data-pids="${escapeHTML(row.pids.join(','))}" data-label="${escapeHTML(row.label)}" title="${escapeHTML(a.cwd || '')}">
-          <span class="session-label">${escapeHTML(row.label)}</span>
-          <span class="agent-pid">${escapeHTML(a.name)} · PID ${a.pid}</span>
-          ${seenAge ? `<span class="agent-meta-item agent-lastseen">active ${escapeHTML(seenAge)} ago</span>` : `<span class="agent-meta-item agent-lastseen">no activity</span>`}
-          ${rss ? `<span class="agent-meta-item">${escapeHTML(rss)}</span>` : ''}
-        </button>
-        <button type="button" class="btn btn-danger btn-sm" data-action="kill" data-pid="${a.pid}" data-started="${escapeHTML(a.started_at || '')}" data-family="${escapeHTML(a.name || '')}"><svg class="icon"><use href="#i-power"/></svg><span>Terminate</span></button>
-        ${helpers}
-      </div>`;
-    }).join('');
+    container.innerHTML = sessionBoardHTML(rows, now, sessionHelpOpen);
     container.querySelectorAll('details.session-helpers').forEach(el => {
       el.addEventListener('toggle', () => {
         sessionHelpOpen[el.dataset.pid] = el.open;
@@ -583,36 +564,6 @@ document.addEventListener('DOMContentLoaded', () => {
   function renderInstance(root, members, now) {
     const kids = childrenOf(root, members);
     return `${renderProcessRow(root, now, false)}${kids.map(c => renderProcessRow(c, now, true)).join('')}`;
-  }
-
-  function renderProcessRow(a, now, nested) {
-    const abs = a.started_at ? fmtTime(new Date(a.started_at)) : '';
-    const age = a.started_at ? fmtAge(a.started_at, now) : '';
-    // "Last used" is the staleness signal: a tree with no events in 10+ min
-    // is probably dead weight even if the process still exists.
-    const seenAge = a.last_seen_at ? fmtAge(a.last_seen_at, now) : '';
-    const stale = a.last_seen_at
-      ? (now - Date.parse(a.last_seen_at)) > 10 * 60 * 1000
-      : true; // no events at all → nothing to say but "no activity"
-    const rss = fmtRSS(a.rss_bytes);
-    const cwd = a.cwd ? `<div class="agent-cwd">${escapeHTML(a.cwd)}</div>` : '';
-    const status = a.is_orphan
-      ? '<span class="agent-status orphan">leftover</span>'
-      : '<span class="agent-status live">live</span>';
-    return `
-      <div class="agent-instance${nested ? ' nested' : ''}${a.is_orphan ? ' orphan' : ''}${stale ? ' stale' : ''}">
-        <div class="agent-info">
-          <div class="agent-name">
-            <span class="agent-pid">PID ${a.pid}</span>
-            ${status}
-            ${abs ? `<span class="agent-meta-item" title="started ${escapeHTML(a.started_at)}">${escapeHTML(abs)}${age ? ' · ' + age : ''}</span>` : ''}
-            ${seenAge ? `<span class="agent-meta-item agent-lastseen" title="last event ${escapeHTML(a.last_seen_at)}">active ${escapeHTML(seenAge)} ago</span>` : `<span class="agent-meta-item agent-lastseen">no activity</span>`}
-            ${rss ? `<span class="agent-meta-item">${escapeHTML(rss)}</span>` : ''}
-          </div>
-          ${cwd}
-        </div>
-        <button type="button" class="btn btn-danger btn-sm" data-action="kill" data-pid="${a.pid}" data-started="${escapeHTML(a.started_at || '')}" data-family="${escapeHTML(a.name || '')}"><svg class="icon"><use href="#i-power"/></svg><span>Terminate</span></button>
-      </div>`;
   }
 
   function renderFirewall() {

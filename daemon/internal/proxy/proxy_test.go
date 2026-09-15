@@ -366,23 +366,33 @@ func TestProxyTokenAuth(t *testing.T) {
 // Parses app.js for absolute-path string literals and asserts each one is in
 // consoleAPIPaths.
 func TestConsoleAPIPathsCoverWebApp(t *testing.T) {
-	src, err := os.ReadFile(filepath.Join("..", "api", "web_dist", "app.js"))
+	dir := filepath.Join("..", "api", "web_dist")
+	ents, err := os.ReadDir(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	re := regexp.MustCompile("[\"'`](/[A-Za-z][A-Za-z0-9/_.-]*)")
 	seen := map[string]bool{}
-	for _, m := range re.FindAllStringSubmatch(string(src), -1) {
-		p := m[1]
-		p = strings.TrimSuffix(p, "?")
-		p = strings.TrimSuffix(p, "/")
-		if p == "" {
+	for _, ent := range ents {
+		if ent.IsDir() || !strings.HasSuffix(ent.Name(), ".js") || ent.Name() == "lib.js" {
 			continue
 		}
-		seen[p] = true
+		src, err := os.ReadFile(filepath.Join(dir, ent.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, m := range re.FindAllStringSubmatch(string(src), -1) {
+			p := m[1]
+			p = strings.TrimSuffix(p, "?")
+			p = strings.TrimSuffix(p, "/")
+			if p == "" {
+				continue
+			}
+			seen[p] = true
+		}
 	}
 	if len(seen) == 0 {
-		t.Fatal("no API paths extracted from app.js — is the extraction regex stale?")
+		t.Fatal("no API paths extracted from web_dist/*.js — is the extraction regex stale?")
 	}
 	for p := range seen {
 		if !consoleAPIPaths[p] {
