@@ -120,6 +120,55 @@ func TestFirewallModeEndpointPromotesAndPersists(t *testing.T) {
 	}
 }
 
+func TestFirewallModePromotesAllOfTypeLeavesOthers(t *testing.T) {
+	dir := t.TempDir()
+	sock := fmt.Sprintf("/tmp/sa_test_fwtype_%d.sock", time.Now().UnixNano())
+	defer os.Remove(sock)
+
+	eng, err := firewall.NewEngine(config.FirewallConfig{
+		Mode: "monitor",
+		Patterns: []config.PatternConfig{
+			{ID: "anthropic-key", Type: "vendor-key", Re: `sk-ant-[A-Za-z0-9_-]{24,}`, Mode: "monitor"},
+			{ID: "openai-key", Type: "vendor-key", Re: `sk-[A-Za-z0-9]{32,}`, Mode: "monitor"},
+			{ID: "aws-key", Type: "cloud-key", Re: `AKIA[0-9A-Z]{16}`, Mode: "monitor"},
+		},
+	}, []byte("salt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	modes := firewall.NewModeStore(filepath.Join(dir, "firewall-modes.json"))
+
+	a := New(sock, testStore(t), &fakeKiller{}, func() Status { return Status{Running: true} })
+	a.SetFirewall(FirewallControl{Engine: eng, Modes: modes})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go a.Serve(ctx)
+	waitForSocket(t, sock)
+
+	cl := unixClient(sock)
+	resp, err := cl.Post("http://unix/firewall/mode", "application/json", strings.NewReader(`{"type":"vendor-key","mode":"block"}`))
+	if err != nil || resp.StatusCode != 200 {
+		t.Fatalf("firewall type post: %v status=%v", err, resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), `"anthropic-key"`) || !strings.Contains(string(body), `"openai-key"`) {
+		t.Fatalf("response missing promoted vendor-key ids: %s", body)
+	}
+	if eng.RuleMode("anthropic-key") != firewall.ModeBlock || eng.RuleMode("openai-key") != firewall.ModeBlock {
+		t.Fatal("vendor-key rules were not promoted to block")
+	}
+	if eng.RuleMode("aws-key") != firewall.ModeMonitor {
+		t.Fatal("cloud-key rule must stay in monitor")
+	}
+	loaded := modes.Load()
+	if loaded["anthropic-key"] != "block" || loaded["openai-key"] != "block" {
+		t.Fatalf("type promotion not persisted: %v", loaded)
+	}
+	if _, ok := loaded["aws-key"]; ok {
+		t.Fatal("cloud-key must not be written to the mode store")
+	}
+}
+
 func TestFlagsAndEventsEndpointsApplyFilters(t *testing.T) {
 	st := testStore(t)
 	now := time.Now()

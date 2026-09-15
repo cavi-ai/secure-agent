@@ -634,6 +634,11 @@ button.fw-uninspected .fw-drill-hint {
   padding: 6px 10px; border-radius: 5px; flex: none;
 }
 .mode-chip.block { color: var(--ok); background: var(--ok-bg); }
+.fw-promote-vendor {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 11px 12px; margin-bottom: 10px; border-radius: var(--r-sm);
+  background: var(--brand-bg, hsl(243 75% 59% / 0.10)); border: 1px solid var(--line);
+}
 
 /* ---------- activity rollup chart ---------- */
 .activity-panel .act-body { padding: 10px 16px 8px; }

@@ -108,6 +108,8 @@ def main():
         check("firewall enforcing badge",
               'class="badge badge-ok" id="badge-firewall-mode">enforcing<' in dom)
         check("uninspected-egress warning", "2 endpoints reached without inspection" in dom)
+        check("vendor-key promote banner",
+              'data-action="promote-vendor-keys"' in dom and "1 vendor-key rule" in dom)
         check("incident workflow chip (ack)", 'class="workflow-chip acked"' in dom)
         check("secret sources rendered (config+user)",
               dom.count('class="source-item"') == 2 and "CONFIG" in dom and "USER" in dom)
