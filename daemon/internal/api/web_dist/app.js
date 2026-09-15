@@ -761,11 +761,23 @@ document.addEventListener('DOMContentLoaded', () => {
   function renderFleet() {
     const container = document.getElementById('fleet-container');
     const badge = document.getElementById('badge-fleet-count');
+    const panel = document.getElementById('fleet-panel');
     // /fleet returns THIS node's status OBJECT (hostname/os/agents/…), not an
     // array of remote nodes. Older console builds did fleet.map on it and
     // crashed renderAll — killing every panel below fleet on every poll.
     // Accept both shapes: object → one local node card; array → remote list.
     const raw = telemetryData.fleet;
+
+    // Single-machine installs carry no fleet webhooks — a permanently-empty
+    // "No remote fleet nodes registered" panel is pure noise, so the whole
+    // panel hides until a collector is configured.
+    if (raw && !Array.isArray(raw) && raw.fleet_configured === false) {
+      if (panel) panel.style.display = 'none';
+      badge.textContent = '0';
+      return;
+    }
+    if (panel) panel.style.display = '';
+
     const fleet = Array.isArray(raw)
       ? raw
       : (raw && (raw.hostname || raw.node_id) ? [{ ...raw, online: raw.running !== false }] : []);

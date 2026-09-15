@@ -1,11 +1,14 @@
 package main
 
 import (
+	"context"
 	"log"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"sync/atomic"
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/advisor"
@@ -19,6 +22,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/firewall"
 	"github.com/cavi-ai/secure-agent/daemon/internal/fleet"
 	"github.com/cavi-ai/secure-agent/daemon/internal/intel"
+	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/proxy"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 	"github.com/cavi-ai/secure-agent/daemon/internal/supervise"
@@ -299,6 +303,124 @@ func buildStatusFn(proxyServer *proxy.ProxyServer, tagger *agents.Tagger, cr *co
 			MutedFlags:        cr.MutedCount(),
 			FirewallStats:     firewallStats(eng),
 			Collectors:        reg.Snapshot(),
+		}
+	}
+}
+
+// defaultFleetHeartbeatSec is the status-envelope cadence when
+// fleet.heartbeat_interval_sec is unset or zero.
+const defaultFleetHeartbeatSec = 60
+
+// fleetTransitionCheckSec is how often the heartbeat loop re-derives posture
+// looking for state transitions. A node going critical must not wait out a
+// full heartbeat interval to tell the collector.
+const fleetTransitionCheckSec = 15
+
+// buildFleetSinks constructs one signed sink per configured webhook; entries
+// missing url or secret are skipped loudly, never silently dropped. Shared by
+// startup and the config hot-reload watcher.
+func buildFleetSinks(fc config.FleetConfig, logDir string) []*fleet.Sink {
+	sinks := []*fleet.Sink{}
+	for i, wh := range fc.Webhooks {
+		sink := fleet.NewSink(wh, api.NodeID, api.Version, logDir)
+		if sink == nil {
+			log.Printf("fleet: webhook #%d disabled (missing url or secret)", i)
+			continue
+		}
+		sinks = append(sinks, sink)
+	}
+	return sinks
+}
+
+// fleetConfigHolder is the atomic, swap-safe fleet config the heartbeat loop
+// reads per cycle — config hot-reload swaps it alongside the sink set, so an
+// interval/labels/hostname edit takes effect without a daemon restart.
+type fleetConfigHolder struct{ v atomic.Value } // config.FleetConfig
+
+func (h *fleetConfigHolder) Load() config.FleetConfig {
+	if x := h.v.Load(); x != nil {
+		return x.(config.FleetConfig)
+	}
+	return config.FleetConfig{}
+}
+
+func (h *fleetConfigHolder) Store(c config.FleetConfig) { h.v.Store(c) }
+
+// buildNodeStatus assembles the heartbeat payload from the same posture +
+// status the local UIs render (pure — directly unit-testable).
+func buildNodeStatus(st api.Status, p api.Posture, hostname string, labels map[string]string) model.NodeStatus {
+	return model.NodeStatus{
+		Hostname:       hostname,
+		OS:             runtime.GOOS,
+		Arch:           runtime.GOARCH,
+		Agents:         st.ActiveAgents,
+		Uptime:         st.Uptime,
+		PostureState:   p.State,
+		PostureSummary: p.Summary,
+		NeedsYou:       p.NeedsYou,
+		Labels:         labels,
+	}
+}
+
+// startFleetHeartbeat pushes a status envelope (liveness + posture headline)
+// to every configured sink: once at boot, then on a ticker, and immediately
+// whenever the posture STATE changes (all-clear → critical must not wait out
+// the interval). The loop ALWAYS runs — unfleeted nodes skip the publish but
+// keep tracking posture state, so enrolling a collector at runtime (config
+// hot-reload) activates heartbeats without a restart and without a spurious
+// "transition" for a state the node was already in. Heartbeats bypass
+// per-sink kind filters on purpose: liveness that can be unsubscribed is
+// indistinguishable from a dead node.
+func startFleetHeartbeat(ctx context.Context, apiServer *api.API, statusFn api.StatusFunc, pub *fleet.Publisher, cfgGet func() config.FleetConfig) {
+	if pub == nil {
+		return
+	}
+	push := func() string {
+		p := apiServer.CurrentPosture()
+		if !pub.HasSinks() {
+			return p.State
+		}
+		fc := cfgGet()
+		hostname := fc.Hostname
+		if hostname == "" {
+			hostname, _ = os.Hostname()
+		}
+		pub.Publish(fleet.EventStatus, buildNodeStatus(statusFn(), p, hostname, fc.Labels))
+		return p.State
+	}
+	interval := func() time.Duration {
+		if d := time.Duration(cfgGet().HeartbeatIntervalSec) * time.Second; d > 0 {
+			return d
+		}
+		return defaultFleetHeartbeatSec * time.Second
+	}
+	go fleetHeartbeatLoop(ctx, push, func() string { return apiServer.CurrentPosture().State },
+		interval, fleetTransitionCheckSec*time.Second)
+	log.Printf("fleet: status heartbeat armed (cadence from fleet.heartbeat_interval_sec, default %ds)", defaultFleetHeartbeatSec)
+}
+
+// fleetHeartbeatLoop pushes once immediately, then on the heartbeat timer,
+// and immediately whenever the posture state changes between transition
+// checks. The interval is re-read on every fire (config hot-reload).
+// Extracted from startFleetHeartbeat so tests can run it with millisecond
+// cadences.
+func fleetHeartbeatLoop(ctx context.Context, push func() string, stateFn func() string, interval func() time.Duration, transitionCheck time.Duration) {
+	lastState := push()
+	transition := time.NewTicker(transitionCheck)
+	defer transition.Stop()
+	heartbeat := time.NewTimer(interval())
+	defer heartbeat.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-heartbeat.C:
+			lastState = push()
+			heartbeat.Reset(interval())
+		case <-transition.C:
+			if s := stateFn(); s != lastState {
+				lastState = push()
+			}
 		}
 	}
 }

@@ -356,10 +356,19 @@ curl --unix-socket ~/.config/secure-agent/daemon.sock http://unix/flags?limit=10
 
 The fleet contract is two sides: each node pushes signed webhooks, and a collector rolls them up.
 
-**Node side** — add a webhook to `~/.config/secure-agent/config.yaml`:
+**Node side** — one command enrolls this machine into a collector:
+
+```bash
+secure-agent fleet enroll https://collector.internal:9445
+```
+
+Enroll reads the node id from the running daemon, generates the shared secret, merges the webhook into `~/.config/secure-agent/config.yaml` (backup written first), and prints the single line to append to the collector's secrets file. The daemon hot-reloads fleet config — deliveries begin within seconds, **no daemon restart**. (Manual setup still works; the equivalent `config.yaml` block is below.)
 
 ```yaml
 fleet:
+  hostname: "builder-01"                      # display name (default: os.Hostname)
+  labels: { env: prod, role: build-runner }   # grouping dimensions for fleet views
+  heartbeat_interval_sec: 60                  # status cadence (default 60)
   webhooks:
     - url: "https://collector.internal:9445/hooks/secure-agent"
       secret: "<shared-secret>"
@@ -369,10 +378,12 @@ fleet:
 Every flag, incident, and guard decision is POSTed as an envelope:
 
 ```json
-{"node_id": "…32-hex…", "kind": "flag", "ts": "…", "version": "v0.9.0-rc.1", "payload": {…}}
+{"node_id": "…32-hex…", "kind": "flag", "ts": "…", "version": "v0.9.0-rc.1", "boot": "…", "seq": 42, "payload": {…}}
 ```
 
-with `X-SecureAgent-Signature: sha256=<hex hmac-sha256(secret, body)>` and `X-SecureAgent-Node: <node_id>` headers.
+with `X-SecureAgent-Signature: sha256=<hex hmac-sha256(secret, body)>` and `X-SecureAgent-Node: <node_id>` headers. `boot` + `seq` are the node's gap-detection coordinates: every delivery is numbered per daemon run, so a dropped delivery (backlog cap, collector downtime, restart) surfaces at the collector as a **sequence gap** — best-effort delivery, but never *silent* loss.
+
+Nodes also push a **`status` heartbeat** — at boot, on the interval, and immediately on posture-state changes — carrying the node's own `/posture` headline (`posture_state`, `posture_summary`, `needs_you`) plus hostname, labels, and agent count. The heartbeat bypasses the `events:` filter on purpose: liveness you can unsubscribe from is indistinguishable from a dead node. This is what lets the collector answer the two fleet questions that matter — *"is anything critical anywhere?"* and *"is every node alive?"*
 
 **Collector side** — the reference collector in this repo (`cmd/secure-agent-collector`, stdlib-only):
 
@@ -384,14 +395,17 @@ printf '%s
 ./bin/secure-agent-collector -addr 127.0.0.1:9445 -store ~/.local/state/secure-agent-collector -config secrets.txt
 ```
 
-- `GET /fleet` — merged multi-node rollup (version, last-seen, flag/incident counts, latest incident)
+- `GET /fleet` — merged multi-node rollup ordered by operator priority (critical → attention → stale → all-clear): version (tracks the newest report), liveness vs. last-activity timestamps, **rolling 24h counts** (`flags_24h`, `critical_flags_24h`, `incidents_24h`), guard allow/deny breakdown, sequence-gap count, and each node's posture headline
+- `GET /fleet/rules` — **cross-node rule aggregation**: which flag rules are firing, on how many of the fleet's nodes ("`sensitive-read-then-connect` — 5/12 nodes, 3 critical in 24h"). One node is an incident; five is a bad release.
 - `GET /nodes/<id>/events?kind=flag&limit=50` — one node's stored envelopes
-- `GET /` — dark overview page with per-node cards and staleness warnings
+- `GET /` — dark overview page: fleet headline (*"2 critical · 1 stale · 12 all-clear"*), the rules-across-fleet table, and per-node cards titled by hostname with posture chips, label chips, and delivery-gap warnings
 - `GET /healthz` — liveness
+
+Liveness is heartbeat-aware: nodes sending `status` are stale after 3 missed minutes and "gone quiet" after 10; legacy event-only nodes keep the lenient 10/20-minute thresholds.
 
 Signatures are verified constant-time; unsigned, tampered, wrong-node, and unknown-node traffic is rejected. Deliveries retry (500ms/2s/5s) on network errors and 5xx/429 only; failures land in the node's `webhook-deliveries.jsonl`.
 
-The whole chain — node → signed webhook → verified envelope → rollup — is enforced by `packaging/test/e2e_smoke.sh` on every CI run.
+The whole chain — node → signed webhook → verified envelope (flag **and** heartbeat) with contiguous sequence numbers → posture-aware rollup — plus the `fleet enroll` CLI flow, is enforced by `packaging/test/e2e_smoke.sh` on every CI run.
 
 ---
 
