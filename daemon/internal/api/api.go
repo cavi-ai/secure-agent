@@ -76,6 +76,9 @@ type Status struct {
 	// MutedFlags counts flags suppressed by operator dispositions (mute
 	// rule+host) — proof the quiet is deliberate, not a hidden silence.
 	MutedFlags int `json:"muted_flags"`
+	// FleetConfigured is true when at least one HMAC fleet webhook is set —
+	// the console hides the fleet panel until then.
+	FleetConfigured bool `json:"fleet_configured,omitempty"`
 
 	FirewallStats map[string]firewall.RuleStat `json:"firewall_stats,omitempty"`
 	// Collectors reports each supervised worker's health so a dead or abandoned
@@ -999,11 +1002,28 @@ func (a *API) checkKillStart(pid int32, startedAt string) error {
 
 type fwModeRequest struct {
 	Rule string `json:"rule"`
+	Type string `json:"type"` // when rule is empty: promote every pattern of this secret type
 	Mode string `json:"mode"` // "monitor" | "block"
 }
 
+func (a *API) applyRuleMode(rule, mode string) error {
+	prevMode := a.fwEngine.RuleMode(rule).String()
+	if prevMode == mode {
+		return nil
+	}
+	a.fwEngine.SetRuleMode(rule, firewall.ParseMode(mode))
+	if a.fwModes != nil {
+		if err := a.fwModes.Set(rule, mode); err != nil {
+			return err
+		}
+	}
+	a.store.PutAudit(store.AuditEntry{Action: "rule-mode", Rule: rule, FromMode: prevMode, ToMode: mode})
+	return nil
+}
+
 // handleFirewallMode promotes or demotes a firewall rule at runtime and persists
-// the override so it survives a restart.
+// the override so it survives a restart. With {"type":"vendor-key","mode":"block"}
+// and no rule, every configured pattern of that secret type is promoted.
 func (a *API) handleFirewallMode(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -1015,25 +1035,38 @@ func (a *API) handleFirewallMode(w http.ResponseWriter, r *http.Request) {
 	}
 	limitBody(w, r)
 	var req fwModeRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Rule == "" || (req.Mode != "monitor" && req.Mode != "block") {
-		http.Error(w, `Invalid payload: {"rule":"<id>","mode":"monitor|block"}`, http.StatusBadRequest)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || (req.Rule == "" && req.Type == "") || (req.Mode != "monitor" && req.Mode != "block") {
+		http.Error(w, `Invalid payload: {"rule":"<id>","mode":"monitor|block"} or {"type":"vendor-key","mode":"block"}`, http.StatusBadRequest)
 		return
 	}
 
-	// Capture the prior mode before mutating so the audit row is meaningful
-	// ("monitor → block" is the record worth keeping).
-	prevMode := a.fwEngine.RuleMode(req.Rule).String()
-	a.fwEngine.SetRuleMode(req.Rule, firewall.ParseMode(req.Mode))
-	if a.fwModes != nil {
-		if err := a.fwModes.Set(req.Rule, req.Mode); err != nil {
+	ids := []string{req.Rule}
+	if req.Rule == "" {
+		ids = a.fwEngine.RuleIDsOfType(req.Type)
+	}
+	promoted := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if id == "" {
+			continue
+		}
+		prev := a.fwEngine.RuleMode(id).String()
+		if err := a.applyRuleMode(id, req.Mode); err != nil {
 			http.Error(w, fmt.Sprintf("persist failed: %v", err), http.StatusInternalServerError)
 			return
 		}
+		if prev != req.Mode {
+			promoted = append(promoted, id)
+		}
 	}
-	a.store.PutAudit(store.AuditEntry{Action: "rule-mode", Rule: req.Rule, FromMode: prevMode, ToMode: req.Mode})
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok", "rule": req.Rule, "mode": req.Mode})
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":   "ok",
+		"rule":     req.Rule,
+		"type":     req.Type,
+		"mode":     req.Mode,
+		"promoted": promoted,
+	})
 }
 
 // handleFingerprintReload re-reads the persisted fingerprints and applies them

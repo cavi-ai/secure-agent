@@ -193,7 +193,8 @@ func main() {
 	sup := supervise.New(supReg)
 
 	statusFn := buildStatusFn(proxyServer, tagger, correlator, fw.Engine, supReg, time.Now(),
-		func() advisor.HealthSnapshot { return advisorStk.Load().Sub.Health() })
+		func() advisor.HealthSnapshot { return advisorStk.Load().Sub.Health() },
+		fleetConfigured(cfg.Fleet.Webhooks))
 
 	// Start Control API
 	apiServer := api.New(cfg.SocketPath, st, &realKiller{}, statusFn)

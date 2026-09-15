@@ -589,17 +589,19 @@ document.addEventListener('DOMContentLoaded', () => {
     if (uninspected > 0) {
       html += `<button type="button" class="fw-uninspected fw-drill" data-action="open-uninspected"><svg class="icon"><use href="#i-globe"/></svg><span>${uninspected} endpoint${uninspected === 1 ? '' : 's'} reached without inspection in the last 24h (pinned or unrouted)</span><span class="fw-drill-hint">view endpoints</span></button>`;
     }
+    html += vendorKeyPromoteHTML(monitorVendorKeyIDs(stats));
     // Egress suggestions: recurring uninspected endpoints the user can approve
     // into the vendor allowlist with one click (drives the blind spot to zero).
     const suggestions = telemetryData.suggestions || [];
     if (suggestions.length > 0) {
+      const vis = inspectionVisible(telemetryData.status, telemetryData.audit);
       html += suggestions.map(sg => `
         <div class="fw-rule fw-suggestion">
           <div class="fw-rule-main">
             <span class="fw-rule-id">${escapeHTML(sg.host)}</span>
             <div class="fw-metrics">
               <span class="fw-metric dim">${escapeHTML(sg.agent)} · seen <b>${sg.count}×</b> uninspected</span>
-              ${sg.assessment ? `<span class="advisor-chip adv-${escapeHTML(sg.assessment)}" title="${escapeHTML(sg.rationale)}">advisor: ${escapeHTML(sg.assessment)}</span>` : ''}
+              ${vis.advisor && sg.assessment ? `<span class="advisor-chip adv-${escapeHTML(sg.assessment)}" title="${escapeHTML(sg.rationale)}">advisor: ${escapeHTML(sg.assessment)}</span>` : ''}
             </div>
           </div>
           <button class="btn btn-ghost btn-sm" data-action="allow-host" data-agent="${escapeHTML(sg.agent)}" data-host="${escapeHTML(sg.host)}"><svg class="icon"><use href="#i-shield"/></svg><span>Allow for ${escapeHTML(sg.agent)}</span></button>
@@ -668,7 +670,10 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     // The fatigue reducer: when the local advisor has triaged the critical
     // flags and some read benign, say so at the one-glance level.
-    const criticals = (telemetryData.flags || []).filter(f => f.severity >= 3 && f.advisor && f.advisor.assessment);
+    const vis = inspectionVisible(telemetryData.status, telemetryData.audit);
+    const criticals = vis.advisor
+      ? (telemetryData.flags || []).filter(f => f.severity >= 3 && f.advisor && f.advisor.assessment)
+      : [];
     const benignCount = criticals.filter(f => f.advisor.assessment === 'benign').length;
     if (criticals.length > 0) {
       items.push(`<li><span class="sev s1">●</span><span>advisor: ${benignCount} of ${criticals.length} triaged critical flags look benign</span></li>`);
@@ -729,7 +734,7 @@ document.addEventListener('DOMContentLoaded', () => {
           ${statusChip}
         </div>
         <div class="incident-summary">${escapeHTML(inc.summary)}</div>
-        ${inc.advisor_narrative ? `<div class="advisor-narrative"><svg class="icon"><use href="#i-agent"/></svg><span>${escapeHTML(inc.advisor_narrative)}</span></div>` : ''}
+        ${inspectionVisible(telemetryData.status, telemetryData.audit).advisor && inc.advisor_narrative ? `<div class="advisor-narrative"><svg class="icon"><use href="#i-agent"/></svg><span>${escapeHTML(inc.advisor_narrative)}</span></div>` : ''}
         ${wf.resolution_note ? `<div class="incident-note">Resolution: ${escapeHTML(wf.resolution_note)}</div>` : ''}
         <div class="incident-actions">
           <button class="btn btn-ghost" data-action="open-incident" data-id="${escapeHTML(inc.id)}"><svg class="icon"><use href="#i-doc"/></svg><span>View report</span></button>
@@ -748,6 +753,11 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function renderFleet() {
+    const vis = inspectionVisible(telemetryData.status, telemetryData.audit);
+    const fleetCol = document.getElementById('fleet-col');
+    if (fleetCol) fleetCol.hidden = !vis.fleet;
+    if (!vis.fleet) return;
+
     const container = document.getElementById('fleet-container');
     const badge = document.getElementById('badge-fleet-count');
     // /fleet returns THIS node's status OBJECT (hostname/os/agents/…), not an
@@ -784,6 +794,11 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function renderAudit() {
+    const vis = inspectionVisible(telemetryData.status, telemetryData.audit);
+    const panel = document.getElementById('audit-panel');
+    if (panel) panel.hidden = !vis.audit;
+    if (!vis.audit) return;
+
     const container = document.getElementById('audit-container');
     const badge = document.getElementById('badge-audit-count');
     const audit = telemetryData.audit || [];
@@ -995,6 +1010,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const advisorHealth = (telemetryData.status && telemetryData.status.advisor_health) || null;
     const advisorOffline = !!(advisorHealth && advisorHealth.circuit_open);
+    const vis = inspectionVisible(telemetryData.status, telemetryData.audit);
 
     container.innerHTML = flags.map((f, i) => {
       const chain = buildEvidenceChain(f);
@@ -1010,7 +1026,8 @@ document.addEventListener('DOMContentLoaded', () => {
             </div>`).join('')}</div>`
         : '';
       const isKeychain = f.rule === 'keychain-access' || f.rule === 'keychain-security-cli';
-      const retriageBtn = pendingRetriage.has(f.id)
+      const retriageBtn = !vis.advisor ? ''
+        : pendingRetriage.has(f.id)
         ? `<span class="advisor-pending" title="The model is re-reading this flag — the fresh verdict lands here"><span class="spinner" aria-hidden="true"></span>advisor re-reading…</span>`
         : advisorOffline
           ? `<button class="btn btn-ghost btn-sm" disabled title="Advisor offline — verdicts paused (${escapeHTML(advisorHealth.last_error || 'model server unreachable')})"><svg class="icon"><use href="#i-refresh"/></svg><span>Advisor offline</span></button>`
@@ -1020,7 +1037,7 @@ document.addEventListener('DOMContentLoaded', () => {
         <button class="flag-head" data-action="toggle-flag" aria-expanded="${i === 0}">
           <svg class="icon flag-ico"><use href="#i-alert"/></svg>
           <span class="flag-rule-text">${escapeHTML(f.rule)} — ${escapeHTML(f.agent)} (PID ${f.pid})</span>
-          ${f.advisor && f.advisor.assessment ? `<span class="advisor-chip adv-${escapeHTML(f.advisor.assessment)}" title="${escapeHTML(f.advisor.rationale)}">advisor: ${escapeHTML(f.advisor.assessment)}</span>` : ''}
+          ${vis.advisor && f.advisor && f.advisor.assessment ? `<span class="advisor-chip adv-${escapeHTML(f.advisor.assessment)}" title="${escapeHTML(f.advisor.rationale)}">advisor: ${escapeHTML(f.advisor.assessment)}</span>` : ''}
           ${f.session_id ? `<span class="flag-session">session ${escapeHTML(sessionShort(f.session_id))}</span>` : ''}
           <svg class="icon flag-chev"><use href="#i-arrow"/></svg>
         </button>
@@ -1168,7 +1185,7 @@ document.addEventListener('DOMContentLoaded', () => {
           <span class="fw-rule-id">${escapeHTML(e.host)}</span>
           <div class="fw-metrics">
             <span class="fw-metric dim">${escapeHTML(e.agent)} · <b>${e.count}×</b> in 24h${e.last_seen ? ` · last ${escapeHTML(fmtAge(e.last_seen, Date.now()))} ago` : ''}</span>
-            ${e.assessment ? `<span class="advisor-chip adv-${escapeHTML(e.assessment)}" title="${escapeHTML(e.rationale)}">advisor: ${escapeHTML(e.assessment)}</span>` : ''}
+            ${inspectionVisible(telemetryData.status, telemetryData.audit).advisor && e.assessment ? `<span class="advisor-chip adv-${escapeHTML(e.assessment)}" title="${escapeHTML(e.rationale)}">advisor: ${escapeHTML(e.assessment)}</span>` : ''}
           </div>
         </div>
         <button class="btn btn-ghost btn-sm" data-action="allow-host" data-agent="${escapeHTML(e.agent)}" data-host="${escapeHTML(e.host)}"><svg class="icon"><use href="#i-shield"/></svg><span>Allow for ${escapeHTML(e.agent)}</span></button>
@@ -1301,7 +1318,28 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   };
 
-  window.promoteRule = async function(rule) {    try {
+  window.promoteVendorKeys = async function() {
+    try {
+      const res = await apiFetch('/firewall/mode', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: 'vendor-key', mode: 'block' })
+      });
+      if (res.ok) {
+        const body = await res.json().catch(() => ({}));
+        const n = (body.promoted || []).length;
+        showToast(n ? `Promoted ${n} vendor-key rule${n === 1 ? '' : 's'} to block.` : 'Vendor-key rules already blocking.', 'success');
+        fetchTelemetry();
+      } else {
+        showToast('Failed to promote vendor-key rules.', 'danger');
+      }
+    } catch (err) {
+      showToast(`Error promoting vendor-key rules: ${err}`, 'danger');
+    }
+  };
+
+  window.promoteRule = async function(rule) {
+    try {
       const res = await apiFetch('/firewall/mode', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1378,6 +1416,9 @@ document.addEventListener('DOMContentLoaded', () => {
         break;
       case 'promote':
         window.promoteRule(d.rule);
+        break;
+      case 'promote-vendor-keys':
+        window.promoteVendorKeys();
         break;
       case 'open-incident':
         e.preventDefault();

@@ -92,6 +92,7 @@ public struct RuleStatModel: Codable, Sendable {
     public let legit: Int
     public let suspect: Int
     public let mode: String?
+    public let type: String?
 
     enum CodingKeys: String, CodingKey {
         case wouldBlock = "would_block"
@@ -99,14 +100,16 @@ public struct RuleStatModel: Codable, Sendable {
         case legit
         case suspect
         case mode
+        case type
     }
 
-    public init(wouldBlock: Int = 0, blocked: Int = 0, legit: Int = 0, suspect: Int = 0, mode: String? = nil) {
+    public init(wouldBlock: Int = 0, blocked: Int = 0, legit: Int = 0, suspect: Int = 0, mode: String? = nil, type: String? = nil) {
         self.wouldBlock = wouldBlock
         self.blocked = blocked
         self.legit = legit
         self.suspect = suspect
         self.mode = mode
+        self.type = type
     }
 }
 
@@ -163,7 +166,7 @@ public struct StatusResponse: Codable, Sendable {
     public let proxyEnabled: Bool?
     public let proxyPort: Int?
     public let uninspectedEgress: Int?
-    public let firewallStats: [String: RuleStatModel]?
+    public var firewallStats: [String: RuleStatModel]?
     /// Total tagged processes across all agent trees (nil on older daemons).
     public let trackedProcesses: Int?
     /// Collector worker health (nil on older daemons).
@@ -171,6 +174,7 @@ public struct StatusResponse: Codable, Sendable {
     /// Live advisor health (nil on older daemons): lets the UI say "advisor
     /// offline" instead of offering actions that silently do nothing.
     public let advisorHealth: AdvisorHealthModel?
+    public var fleetConfigured: Bool?
 
     enum CodingKeys: String, CodingKey {
         case running
@@ -186,9 +190,10 @@ public struct StatusResponse: Codable, Sendable {
         case trackedProcesses = "tracked_processes"
         case collectors
         case advisorHealth = "advisor_health"
+        case fleetConfigured = "fleet_configured"
     }
 
-    public init(running: Bool, uptime: String, activeAgents: Int, agents: [AgentSummaryModel]? = nil, trees: [AgentTreeModel]? = nil, proxyEnabled: Bool? = nil, proxyPort: Int? = nil, uninspectedEgress: Int? = nil, firewallStats: [String: RuleStatModel]? = nil, trackedProcesses: Int? = nil, collectors: [HealthModel]? = nil, version: String? = nil, advisorHealth: AdvisorHealthModel? = nil) {
+    public init(running: Bool, uptime: String, activeAgents: Int, agents: [AgentSummaryModel]? = nil, trees: [AgentTreeModel]? = nil, proxyEnabled: Bool? = nil, proxyPort: Int? = nil, uninspectedEgress: Int? = nil, firewallStats: [String: RuleStatModel]? = nil, trackedProcesses: Int? = nil, collectors: [HealthModel]? = nil, version: String? = nil, advisorHealth: AdvisorHealthModel? = nil, fleetConfigured: Bool? = nil) {
         self.running = running
         self.version = version
         self.uptime = uptime
@@ -202,6 +207,7 @@ public struct StatusResponse: Codable, Sendable {
         self.trackedProcesses = trackedProcesses
         self.collectors = collectors
         self.advisorHealth = advisorHealth
+        self.fleetConfigured = fleetConfigured
     }
 }
 

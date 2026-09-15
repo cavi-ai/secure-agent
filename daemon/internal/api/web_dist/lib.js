@@ -360,3 +360,29 @@ function sessionBoardHTML(rows, now, helpOpen) {
   }).join('');
 }
 
+function monitorVendorKeyIDs(stats) {
+  return Object.keys(stats || {}).filter(id =>
+    stats[id] && stats[id].type === 'vendor-key' && stats[id].mode !== 'block'
+  ).sort();
+}
+
+function inspectionVisible(status, audit) {
+  return {
+    fleet: !!(status && status.fleet_configured),
+    advisor: !!(status && status.advisor_enabled),
+    audit: Array.isArray(audit) && audit.length > 0,
+  };
+}
+
+function vendorKeyPromoteHTML(ids) {
+  if (!ids || !ids.length) return '';
+  const n = ids.length;
+  return `<div class="fw-promote-vendor">
+    <div class="fw-rule-main">
+      <span class="fw-rule-id">Catch secrets</span>
+      <div class="fw-metrics"><span class="fw-metric">${n} vendor-key rule${n === 1 ? '' : 's'} still in monitor — they report leaks but do not stop them</span></div>
+    </div>
+    <button class="btn btn-primary btn-sm" data-action="promote-vendor-keys"><svg class="icon"><use href="#i-arrow"/></svg><span>Promote vendor keys to block</span></button>
+  </div>`;
+}
+

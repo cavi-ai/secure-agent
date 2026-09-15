@@ -1052,6 +1052,24 @@ public final class AppState: ObservableObject {
         (status?.firewallStats ?? [:]).sorted { $0.key < $1.key }.map { FirewallRuleRow(id: $0.key, stat: $0.value) }
     }
 
+    public var monitorVendorKeyIDs: [String] {
+        firewallRules.filter { $0.stat.type == "vendor-key" && ($0.stat.mode ?? "monitor") != "block" }.map(\.id).sorted()
+    }
+
+    public var showFleetPanel: Bool { status?.fleetConfigured == true }
+
+    public func promoteVendorKeys() {
+        Task {
+            do {
+                try await client.promoteFirewallType("vendor-key", mode: "block")
+            } catch {
+                self.lastError = "could not block vendor-key rules: \(error.localizedDescription)"
+                self.onChange?()
+            }
+            self.fetch()
+        }
+    }
+
     public var firewallWouldBlock: Int { firewallRules.reduce(0) { $0 + $1.stat.wouldBlock } }
     public var firewallBlocked: Int { firewallRules.reduce(0) { $0 + $1.stat.blocked } }
     public var isEnforcing: Bool { firewallRules.contains { $0.stat.blocked > 0 } }

@@ -23,11 +23,12 @@
       proxy_port: 8443,
       uninspected_egress: 2,
       advisor_enabled: true,
+      fleet_configured: true,
       advisor_health: { enabled: true, queue_depth: 0, model: 'qwen3:8b' },
       firewall_stats: {
-        'anthropic-key':  { mode: 'monitor', would_block: 5, blocked: 0, legit: 12 },
-        'aws-key':        { mode: 'block',   would_block: 2, blocked: 1, legit: 0 },
-        'db-conn-string': { mode: 'monitor', would_block: 1, blocked: 0, legit: 0 }
+        'anthropic-key':  { type: 'vendor-key', mode: 'monitor', would_block: 5, blocked: 0, legit: 12 },
+        'aws-key':        { type: 'cloud-key', mode: 'block',   would_block: 2, blocked: 1, legit: 0 },
+        'db-conn-string': { type: 'env-value', mode: 'monitor', would_block: 1, blocked: 0, legit: 0 }
       }
     },
     '/posture': {

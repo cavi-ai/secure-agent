@@ -23,6 +23,7 @@ const {
   sessionShort, filterEventsBySession, rollupSeries, flagHost,
   familyTitle, fmtRSS, fmtAge, isFamilyRoot, childrenOf, groupAgents, familyShouldExpand,
   cwdLabel, sessionRows, filterEventsByPids, sessionBoardHTML,
+  monitorVendorKeyIDs, inspectionVisible, vendorKeyPromoteHTML,
 } = ctx;
 
 // ---------- escapeHTML ----------
@@ -323,4 +324,38 @@ test('flagHost: extracts egress host from evidence, empty for hostless rules', (
   assert.equal(flagHost({ evidence: ['claude (pid 1) accessed keychain file /x at 2026-09-08T10:00:00Z'] }), '');
   assert.equal(flagHost({ evidence: [] }), '');
   assert.equal(flagHost({}), '');
+});
+
+test('monitorVendorKeyIDs: monitor vendor-key only, sorted', () => {
+  const stats = {
+    'openai-key': { type: 'vendor-key', mode: 'monitor' },
+    'anthropic-key': { type: 'vendor-key', mode: 'block' },
+    'aws-key': { type: 'cloud-key', mode: 'monitor' },
+    'stripe-key': { type: 'vendor-key', mode: 'monitor' },
+  };
+  assert.equal(monitorVendorKeyIDs(stats).join(','), 'openai-key,stripe-key');
+  assert.equal(monitorVendorKeyIDs({}).join(','), '');
+  assert.equal(monitorVendorKeyIDs(null).join(','), '');
+});
+
+test('inspectionVisible: fleet/advisor/audit stay hidden until configured', () => {
+  const off = inspectionVisible({}, []);
+  assert.equal(off.fleet, false);
+  assert.equal(off.advisor, false);
+  assert.equal(off.audit, false);
+  const on = inspectionVisible({ fleet_configured: true, advisor_enabled: true }, [{}]);
+  assert.equal(on.fleet, true);
+  assert.equal(on.advisor, true);
+  assert.equal(on.audit, true);
+  const auditOnly = inspectionVisible({ fleet_configured: false, advisor_enabled: false }, [{}]);
+  assert.equal(auditOnly.fleet, false);
+  assert.equal(auditOnly.advisor, false);
+  assert.equal(auditOnly.audit, true);
+});
+
+test('vendorKeyPromoteHTML: banner names the count and posts type=vendor-key', () => {
+  const html = vendorKeyPromoteHTML(['anthropic-key', 'openai-key']);
+  assert.match(html, /2 vendor-key rules/);
+  assert.match(html, /data-action="promote-vendor-keys"/);
+  assert.equal(vendorKeyPromoteHTML([]), '');
 });

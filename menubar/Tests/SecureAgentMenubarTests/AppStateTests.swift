@@ -45,6 +45,7 @@ final class StubDaemonClient: DaemonClientProtocol, @unchecked Sendable {
     func killProcess(pid: Int32) async throws -> Bool { true }
     func deleteGuardRule(agent: String, ruleID: String) async throws {}
     func setFirewallMode(rule: String, mode: String) async throws {}
+    func promoteFirewallType(_ secretType: String, mode: String) async throws {}
     func fetchAdvisorDiscover() async throws -> AdvisorDiscovery {
         AdvisorDiscovery(servers: [], managedModels: [])
     }
@@ -665,6 +666,27 @@ final class SessionBoardRowTests: XCTestCase {
         XCTAssertEqual(rows[0].agent.cwdLeaf, "proj")
         XCTAssertEqual(rows[0].familyRSSBytes, 150)
         XCTAssertEqual(rows[0].childCount, 1)
+    }
+
+    func testMonitorVendorKeyIDsSkipsBlockAndNonVendor() {
+        let stub = StubDaemonClient()
+        stub.status.firewallStats = [
+            "openai-key": RuleStatModel(mode: "monitor", type: "vendor-key"),
+            "anthropic-key": RuleStatModel(mode: "block", type: "vendor-key"),
+            "aws-key": RuleStatModel(mode: "monitor", type: "cloud-key"),
+        ]
+        let state = AppState(client: stub)
+        state.seedForTesting(status: stub.status)
+        XCTAssertEqual(state.monitorVendorKeyIDs, ["openai-key"])
+        XCTAssertFalse(state.showFleetPanel)
+    }
+
+    func testShowFleetPanelWhenConfigured() {
+        let stub = StubDaemonClient()
+        stub.status.fleetConfigured = true
+        let state = AppState(client: stub)
+        state.seedForTesting(status: stub.status)
+        XCTAssertTrue(state.showFleetPanel)
     }
 
     func testUnactedFlagsForSessionKeepsTreePidsOnly() {
