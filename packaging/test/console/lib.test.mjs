@@ -24,6 +24,7 @@ const {
   familyTitle, fmtRSS, fmtAge, isFamilyRoot, childrenOf, groupAgents, familyShouldExpand,
   cwdLabel, sessionRows, filterEventsByPids, sessionBoardHTML,
   monitorVendorKeyIDs, inspectionVisible, vendorKeyPromoteHTML,
+  scopedBySession, unactedLast24h,
 } = ctx;
 
 // ---------- escapeHTML ----------
@@ -358,4 +359,27 @@ test('vendorKeyPromoteHTML: banner names the count and posts type=vendor-key', (
   assert.match(html, /2 vendor-key rules/);
   assert.match(html, /data-action="promote-vendor-keys"/);
   assert.equal(vendorKeyPromoteHTML([]), '');
+});
+
+test('scopedBySession: session_id wins; else pid set; else identity', () => {
+  const items = [
+    { id: 'a', pid: 1, session_id: 'sess-a' },
+    { id: 'b', pid: 2, session_id: 'sess-b' },
+    { id: 'c', pid: 3 },
+  ];
+  assert.equal(scopedBySession(items, 'sess-a', null).map(x => x.id).join(','), 'a');
+  assert.equal(scopedBySession(items, '', [2, 3]).map(x => x.id).join(','), 'b,c');
+  assert.equal(scopedBySession(items, '', []).length, 3);
+});
+
+test('unactedLast24h: sev>=2, not ack, within 24h', () => {
+  const now = Date.parse('2026-09-15T18:00:00Z');
+  const flags = [
+    { id: 'fresh', severity: 3, ts: '2026-09-15T17:00:00Z' },
+    { id: 'old', severity: 3, ts: '2026-09-13T18:00:00Z' },
+    { id: 'ack', severity: 3, ts: '2026-09-15T17:00:00Z', acknowledged: true },
+    { id: 'info', severity: 1, ts: '2026-09-15T17:00:00Z' },
+  ];
+  assert.equal(unactedLast24h(flags, now).map(f => f.id).join(','), 'fresh');
+  assert.equal(unactedLast24h([], now).length, 0);
 });

@@ -79,6 +79,13 @@ type Status struct {
 	// FleetConfigured is true when at least one HMAC fleet webhook is set —
 	// the console hides the fleet panel until then.
 	FleetConfigured bool `json:"fleet_configured,omitempty"`
+	// UnactedFlags24h is severity>=2 flags in the last 24h the operator has
+	// not acknowledged — the console KPI, matching posture.
+	UnactedFlags24h int `json:"unacted_flags_24h"`
+	// BusDrops counts in-process events a subscriber missed because its
+	// buffer was full. Zero is healthy; growth under N-agent bursts is the
+	// hot-path signal the audit asked to surface.
+	BusDrops uint64 `json:"bus_drops,omitempty"`
 
 	FirewallStats map[string]firewall.RuleStat `json:"firewall_stats,omitempty"`
 	// Collectors reports each supervised worker's health so a dead or abandoned
@@ -118,6 +125,7 @@ type API struct {
 	subscribeEvents   func() <-chan event.Event
 	unsubscribeEvents func(<-chan event.Event)
 	publishEvent      func(event.Event)
+	busDrops          func() uint64
 }
 
 // GuardEventSink receives guard decisions (allow/deny) for downstream
@@ -130,6 +138,8 @@ type GuardEventSink interface {
 func (a *API) SetFleetSink(s GuardEventSink) {
 	a.fleetSinks = s
 }
+
+func (a *API) SetBusDrops(fn func() uint64) { a.busDrops = fn }
 
 // FirewallControl bundles the runtime firewall controls the API exposes.
 type FirewallControl struct {
@@ -444,6 +454,15 @@ func (a *API) currentStatus() Status {
 		}
 	}
 	st.Trees = GroupAgentTrees(st.Agents)
+	st.UnactedFlags24h = len(a.store.QueryFlags(store.FlagFilter{
+		Unacted:     true,
+		MinSeverity: 2,
+		Since:       time.Now().Add(-24 * time.Hour).UTC().Format(time.RFC3339),
+		Limit:       500,
+	}))
+	if a.busDrops != nil {
+		st.BusDrops = a.busDrops()
+	}
 	return st
 }
 

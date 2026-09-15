@@ -99,6 +99,7 @@ def main():
         check("posture banner is critical", 'id="posture-banner" data-state="critical"' in dom)
         check("posture headline rendered", 'id="posture-state">Critical<' in dom)
         check("KPI agents count", 'id="count-agents">3<' in dom)
+        check("KPI flags are unacted last 24h", 'id="count-flags">2<' in dom)
         check("KPI incidents count", 'id="count-incidents">1<' in dom)
         check("agent families grouped", dom.count('class="agent-group"') == 2)
         check("claude instance pid", "PID 5821" in dom)
@@ -264,6 +265,9 @@ def main():
               or ('id="session-filter"' in dom_session and "hidden" not in
                   dom_session.split('id="session-filter"')[1][:80]))
         check("session chip count", "7f3a9c21 · 2" in dom_session)
+        check("session scopes findings list",
+              'id="flags-session-filter"' in dom_session
+              and "hidden" not in dom_session.split('id="flags-session-filter"')[1][:80])
         session_rows = dom_session.count('class="timeline-item')
         check("timeline filtered to 2 session events", session_rows == 2, f"rows={session_rows}")
     finally:

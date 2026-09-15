@@ -2,6 +2,7 @@ package bus
 
 import (
 	"sync"
+	"sync/atomic"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 )
@@ -9,10 +10,11 @@ import (
 // Bus is a non-blocking in-process fan-out. A slow subscriber drops events
 // rather than stalling collectors — collection must never block on delivery.
 type Bus struct {
-	mu   sync.RWMutex
-	buf  int
-	subs []chan event.Event
-	done bool
+	mu      sync.RWMutex
+	buf     int
+	subs    []chan event.Event
+	done    bool
+	dropped atomic.Uint64
 }
 
 func New(buffer int) *Bus { return &Bus{buf: buffer} }
@@ -58,9 +60,13 @@ func (b *Bus) Publish(e event.Event) {
 		select {
 		case ch <- e:
 		default: // subscriber full: drop, never block
+			b.dropped.Add(1)
 		}
 	}
 }
+
+// Dropped is the number of per-subscriber publishes that found a full buffer.
+func (b *Bus) Dropped() uint64 { return b.dropped.Load() }
 
 func (b *Bus) Close() {
 	b.mu.Lock()

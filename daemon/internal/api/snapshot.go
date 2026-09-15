@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 	"sort"
+	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
@@ -43,8 +44,12 @@ func (a *API) currentSnapshot() Snapshot {
 		out = append(out, snapshotIncident{IncidentReport: incidents[i], Workflow: wf})
 	}
 	return Snapshot{
-		Status:      a.currentStatus(),
-		Flags:       a.store.QueryFlags(store.FlagFilter{Limit: 20}),
+		Status: a.currentStatus(),
+		Flags: a.store.QueryFlags(store.FlagFilter{
+			Unacted: true,
+			Since:   time.Now().Add(-24 * time.Hour).UTC().Format(time.RFC3339),
+			Limit:   200,
+		}),
 		Incidents:   out,
 		Events:      a.store.QueryEvents(store.EventFilter{Limit: 50}),
 		Posture:     a.computePosture(),

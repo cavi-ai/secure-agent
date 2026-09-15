@@ -232,6 +232,23 @@ document.addEventListener('DOMContentLoaded', () => {
   let timelinePids = null;
   let timelinePidLabel = '';
 
+  function sessionScopeOn() {
+    return !!(timelineSession || (timelinePids && timelinePids.length));
+  }
+  function sessionScopeTag() {
+    return timelineSession ? sessionShort(timelineSession) : (timelinePidLabel || ('PID ' + timelinePids[0]));
+  }
+  function paintSessionChip(chipId, labelId, count) {
+    const chip = document.getElementById(chipId);
+    if (!chip) return;
+    const on = sessionScopeOn();
+    chip.hidden = !on;
+    if (on) {
+      const el = document.getElementById(labelId);
+      if (el) el.textContent = `${sessionScopeTag()} · ${count}`;
+    }
+  }
+
   // Firewall diff: which rules gained blocked/would-block counts since the
   // last render (i.e. a fresh interception).
   let prevFwStats = null;
@@ -477,11 +494,19 @@ document.addEventListener('DOMContentLoaded', () => {
         ? `${families.length} ${families.length === 1 ? 'family' : 'families'} · ${agentList.length} ${agentList.length === 1 ? 'process' : 'processes'}`
         : 'Tagged in the process tree';
     }
-    setKpi('count-flags', telemetryData.flags.length);
-    setKpi('count-incidents', telemetryData.incidents.length);
+    setKpi('count-flags', s.unacted_flags_24h != null
+      ? s.unacted_flags_24h
+      : unactedLast24h(telemetryData.flags, Date.now()).length);
+    const openInc = (telemetryData.incidents || []).filter(inc => !inc.workflow || inc.workflow.status !== 'resolved');
+    const inc24 = openInc.filter(inc => {
+      const t = Date.parse(inc.timestamp);
+      return !Number.isFinite(t) || t >= Date.now() - 24 * 3600e3;
+    });
+    setKpi('count-incidents', inc24.length);
 
     const proxyEvents = telemetryData.events.filter(e => e.kind === 9 || (e.detail && e.detail.includes('proxy')));
     setKpi('count-proxy', proxyEvents.length);
+    if (chip && s.bus_drops) chip.title = s.bus_drops + ' event bus drops';
   }
 
   const sessionHelpOpen = {};
@@ -707,7 +732,7 @@ document.addEventListener('DOMContentLoaded', () => {
   function renderIncidents() {
     const container = document.getElementById('incidents-container');
     const badge = document.getElementById('badge-incidents-count');
-    const incidents = telemetryData.incidents;
+    const incidents = scopedBySession(telemetryData.incidents || [], timelineSession, timelinePids);
 
     badge.textContent = incidents.length;
 
@@ -998,12 +1023,16 @@ document.addEventListener('DOMContentLoaded', () => {
     syncSelect('flags-agent', seenAgents);
     syncSelect('flags-rule', seenRules);
 
-    const flags = telemetryData.flagsView || [];
+    const flags = scopedBySession(telemetryData.flagsView || [], timelineSession, timelinePids);
+    const scopedInc = scopedBySession(telemetryData.incidents || [], timelineSession, timelinePids);
+    paintSessionChip('flags-session-filter', 'flags-session-filter-id', flags.length);
     badge.textContent = flags.length;
-    setTabBadge('findings', flags.length + (telemetryData.incidents || []).length);
+    setTabBadge('findings', flags.length + scopedInc.length);
 
     if (flags.length === 0) {
-      const msg = isFlagsFiltered() ? 'No flags match the current filter' : 'No security flags — agent egress looks clean';
+      const msg = sessionScopeOn()
+        ? `No flags for ${sessionScopeTag()} in the loaded window`
+        : isFlagsFiltered() ? 'No flags match the current filter' : 'No security flags — agent egress looks clean';
       container.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-alert"/></svg><span>${msg}</span></div>`;
       return;
     }
@@ -1079,14 +1108,7 @@ document.addEventListener('DOMContentLoaded', () => {
     else if (timelinePids && timelinePids.length) events = filterEventsByPids(allEvents, timelinePids);
 
     const chip = document.getElementById('session-filter');
-    if (chip) {
-      const on = !!(timelineSession || (timelinePids && timelinePids.length));
-      chip.hidden = !on;
-      if (on) {
-        const tag = timelineSession ? sessionShort(timelineSession) : (timelinePidLabel || ('PID ' + timelinePids[0]));
-        document.getElementById('session-filter-id').textContent = `${tag} · ${events.length}`;
-      }
-    }
+    if (chip) paintSessionChip('session-filter', 'session-filter-id', events.length);
 
     if (events.length === 0) {
       const msg = timelineSession
@@ -1363,6 +1385,8 @@ document.addEventListener('DOMContentLoaded', () => {
     timelinePidLabel = '';
     suppressFreshOnce = true;
     renderEvents();
+    renderFlags();
+    renderIncidents();
     switchTab('overview');
     const el = document.getElementById('events-container');
     if (el && el.scrollIntoView) {
@@ -1376,6 +1400,8 @@ document.addEventListener('DOMContentLoaded', () => {
     timelinePidLabel = label || '';
     suppressFreshOnce = true;
     renderEvents();
+    renderFlags();
+    renderIncidents();
     switchTab('overview');
     const el = document.getElementById('events-container');
     if (el && el.scrollIntoView) {
@@ -1389,10 +1415,14 @@ document.addEventListener('DOMContentLoaded', () => {
     timelinePidLabel = '';
     suppressFreshOnce = true;
     renderEvents();
+    renderFlags();
+    renderIncidents();
   };
 
   const btnSessionClear = document.getElementById('session-clear');
   if (btnSessionClear) btnSessionClear.addEventListener('click', () => window.clearTimelineSession());
+  const btnFlagsSessionClear = document.getElementById('flags-session-clear');
+  if (btnFlagsSessionClear) btnFlagsSessionClear.addEventListener('click', () => window.clearTimelineSession());
 
   // Event delegation: every actionable element carries data-action + data-*
   // attributes and is dispatched here. Values pass through the HTML attribute

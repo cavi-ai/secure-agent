@@ -107,7 +107,7 @@
         <div class="kpi-body">
           <span class="kpi-num" id="count-flags">0</span>
           <span class="kpi-label">Security flags</span>
-          <span class="kpi-hint">Correlated egress matches</span>
+          <span class="kpi-hint" id="hint-flags">Unacted last 24h</span>
         </div>
       </div>
       <div class="kpi" data-accent="amber">
@@ -115,7 +115,7 @@
         <div class="kpi-body">
           <span class="kpi-num" id="count-incidents">0</span>
           <span class="kpi-label">Incidents</span>
-          <span class="kpi-hint">Assessed secret exposures</span>
+          <span class="kpi-hint">Unacted last 24h</span>
         </div>
       </div>
       <div class="kpi" data-accent="brand">
@@ -282,6 +282,10 @@
               </div>
               <div class="panel-body">
                 <div class="filter-bar">
+                  <span class="session-filter" id="flags-session-filter" hidden>
+                    session <b id="flags-session-filter-id"></b>
+                    <button class="session-clear" id="flags-session-clear" title="Show all sessions"><svg class="icon"><use href="#i-close"/></svg></button>
+                  </span>
                   <select id="flags-agent" class="select"><option value="all">All agents</option></select>
                   <select id="flags-rule" class="select"><option value="all">All rules</option></select>
                   <select id="flags-severity" class="select">

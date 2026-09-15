@@ -503,6 +503,38 @@ func TestSnapshotBundlesHotTelemetry(t *testing.T) {
 	if snap.Posture.Generated == "" {
 		t.Fatal("posture not populated")
 	}
+	if snap.Status.UnactedFlags24h != 1 {
+		t.Fatalf("unacted_flags_24h = %d, want 1", snap.Status.UnactedFlags24h)
+	}
+}
+
+func TestStatusCountsUnacted24hAndBusDrops(t *testing.T) {
+	st := testStore(t)
+	now := time.Now().UTC()
+	st.PutFlag(model.Flag{ID: "fresh", Rule: "proxy-secret-leak", Severity: 3, Agent: "claude", PID: 1, TS: now})
+	st.PutFlag(model.Flag{ID: "old", Rule: "proxy-secret-leak", Severity: 3, Agent: "claude", PID: 1, TS: now.Add(-48 * time.Hour)})
+	st.PutFlag(model.Flag{ID: "ack", Rule: "proxy-secret-leak", Severity: 3, Agent: "claude", PID: 1, TS: now})
+	st.AcknowledgeFlag("ack")
+	st.PutFlag(model.Flag{ID: "info", Rule: "keychain-access", Severity: 1, Agent: "claude", PID: 1, TS: now})
+
+	a := New("", st, &fakeKiller{}, func() Status { return Status{Running: true} })
+	a.SetBusDrops(func() uint64 { return 7 })
+
+	rr := httptest.NewRecorder()
+	a.buildMux().ServeHTTP(rr, httptest.NewRequest("GET", "/status", nil))
+	if rr.Code != 200 {
+		t.Fatalf("GET /status code=%d", rr.Code)
+	}
+	var got Status
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.UnactedFlags24h != 1 {
+		t.Fatalf("unacted_flags_24h = %d, want 1 (fresh sev>=2 only)", got.UnactedFlags24h)
+	}
+	if got.BusDrops != 7 {
+		t.Fatalf("bus_drops = %d, want 7", got.BusDrops)
+	}
 }
 
 func TestGroupAgentTreesOneRowPerRootHelpersFolded(t *testing.T) {
