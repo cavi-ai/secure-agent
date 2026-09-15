@@ -75,10 +75,16 @@ func consoleAuthorized(r *http.Request) bool {
 
 // consoleAPIPaths is the exact endpoint set the embedded console (and only it)
 // needs. Everything else on this listener stays proxy traffic.
+//
+// PARITY: every path the console fetches (web_dist/app.js apiFetch calls and
+// the EventSource stream) MUST appear here — a missing path falls through to
+// the proxy-token challenge (407) and the panel dies silently. TestConsoleAPIPathsCoverWebApp
+// enforces this mechanically; add the path AND keep the test green.
 var consoleAPIPaths = map[string]bool{
 	"/status":                       true,
 	"/posture":                      true,
 	"/flags":                        true,
+	"/flags/acknowledge":            true,
 	"/events":                       true,
 	"/events/stream":                true,
 	"/incidents":                    true,
@@ -93,6 +99,14 @@ var consoleAPIPaths = map[string]bool{
 	"/guard/pending":                true,
 	"/guard/resolve":                true,
 	"/guard/rules":                  true,
+	"/stats/rollup":                 true,
+	"/mute":                         true,
+	"/allowlist":                    true,
+	"/allowlist/suggestions":        true,
+	"/egress/uninspected":           true,
+	"/notify/rules":                 true,
+	"/advisor/retriage":             true,
+	"/ui/open-fda":                  true,
 }
 
 func isConsoleAPIPath(p string) bool { return consoleAPIPaths[p] }

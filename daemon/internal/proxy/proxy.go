@@ -168,6 +168,11 @@ func dashboardHeaders(w http.ResponseWriter) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("X-Frame-Options", "DENY")
 	w.Header().Set("Referrer-Policy", "no-referrer")
+	// no-cache (not no-store): the browser must revalidate every load, so an
+	// upgrade can never pair stale cached assets with a new daemon — the
+	// "dashboard doesn't load after update" failure mode. Mirrors
+	// api.securityHeaders; Last-Modified/304 keeps revalidation cheap.
+	w.Header().Set("Cache-Control", "no-cache")
 }
 
 func (ps *ProxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {

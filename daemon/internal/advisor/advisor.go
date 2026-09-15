@@ -121,6 +121,7 @@ type Subscriber struct {
 	mu          sync.Mutex
 	failures    int
 	circuitOpen time.Time // zero = closed
+	lastErr     string    // last triage failure — the "why" behind a paused advisor
 
 	// Re-triage idempotency: a flag is re-triaged at most once per cooldown
 	// window regardless of how many times the operator (or UI) asks. The
@@ -133,6 +134,35 @@ const (
 	breakerThreshold = 3
 	breakerCooldown  = 5 * time.Minute
 )
+
+// HealthSnapshot is the advisor's operator-facing health: the UIs render it
+// so "no verdicts yet" is distinguishable from "model server down" — the
+// silent circuit-open state made "re-run the advisor" look like a dead
+// button.
+type HealthSnapshot struct {
+	Enabled     bool   `json:"enabled"`
+	CircuitOpen bool   `json:"circuit_open,omitempty"`
+	LastError   string `json:"last_error,omitempty"`
+	QueueDepth  int    `json:"queue_depth"`
+	Model       string `json:"model,omitempty"`
+}
+
+// Health reports the current snapshot. Nil-receiver safe: a disabled (or
+// not-yet-started) advisor simply reports Enabled=false.
+func (s *Subscriber) Health() HealthSnapshot {
+	if s == nil {
+		return HealthSnapshot{Enabled: false}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return HealthSnapshot{
+		Enabled:     true,
+		CircuitOpen: s.circuitOpenLocked(),
+		LastError:   s.lastErr,
+		QueueDepth:  len(s.queue),
+		Model:       s.cfg.Model,
+	}
+}
 
 // New builds a subscriber. Returns nil when disabled or misconfigured (with
 // a loud log — a silently absent advisor would look identical to a healthy
@@ -326,6 +356,7 @@ func (s *Subscriber) process(ctx context.Context, t task) {
 	}
 	s.mu.Lock()
 	s.failures = 0
+	s.lastErr = ""
 	s.mu.Unlock()
 	verdict.Model = s.cfg.Model
 	verdict.CreatedAt = time.Now().UTC()
@@ -346,6 +377,12 @@ func (s *Subscriber) circuitIsOpen() bool {
 	return false
 }
 
+// circuitOpenLocked reports — without the half-open probe side effect —
+// whether verdicts are currently paused. Lock held by caller.
+func (s *Subscriber) circuitOpenLocked() bool {
+	return s.failures >= breakerThreshold && time.Since(s.circuitOpen) < breakerCooldown
+}
+
 func (s *Subscriber) recordFailure(err error) {
 	s.mu.Lock()
 	s.failures++
@@ -353,6 +390,11 @@ func (s *Subscriber) recordFailure(err error) {
 	if open {
 		s.circuitOpen = time.Now()
 	}
+	msg := err.Error()
+	if len(msg) > 200 {
+		msg = msg[:200] + "…"
+	}
+	s.lastErr = msg
 	s.mu.Unlock()
 	if open {
 		log.Printf("advisor: %v — circuit open for %v (verdicts paused, daemon unaffected)", err, breakerCooldown)

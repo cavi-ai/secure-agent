@@ -3,14 +3,35 @@ document.addEventListener('DOMContentLoaded', () => {
   // gates the telemetry endpoints on this listener (the proxy token agents
   // carry is a different credential and is NOT accepted here). A fragment is
   // used because fragments are never sent to the server — the token stays off
-  // the wire and out of server logs. Lift it into memory and strip it from
-  // the address bar so it doesn't linger in history.
-  const consoleToken = new URLSearchParams(location.hash.slice(1)).get('ct') || '';
-  if (consoleToken && window.history.replaceState) {
-    history.replaceState(null, '', location.pathname + location.search);
+  // the wire and out of server logs.
+  //
+  // The fragment is lifted, kept for the life of the TAB in sessionStorage,
+  // and stripped from the address bar. Without the sessionStorage copy a
+  // single reload lost the token (fragments don't survive navigation) and the
+  // console sat behind a wall of 403s showing "can't reach the daemon"
+  // forever. sessionStorage (not localStorage): the token dies with the tab
+  // and never touches disk-backed storage.
+  const SS_TOKEN_KEY = 'sa.console-token';
+  let consoleToken = new URLSearchParams(location.hash.slice(1)).get('ct') || '';
+  if (consoleToken) {
+    try { sessionStorage.setItem(SS_TOKEN_KEY, consoleToken); } catch { /* private mode: memory only */ }
+    if (window.history.replaceState) {
+      history.replaceState(null, '', location.pathname + location.search);
+    }
+  } else {
+    try { consoleToken = sessionStorage.getItem(SS_TOKEN_KEY) || ''; } catch { consoleToken = ''; }
   }
   const authHeaders = consoleToken ? { 'X-SecureAgent-Console-Token': consoleToken } : {};
-  const apiFetch = (path, opts = {}) => fetch(path, { ...opts, headers: { ...authHeaders, ...(opts.headers || {}) } });
+
+  // Every request carries a timeout: a hung endpoint must not wedge the whole
+  // refresh cycle (Promise.all resolves only as fast as its slowest member).
+  const FETCH_TIMEOUT_MS = 5000;
+  const apiFetch = (path, opts = {}) => {
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), FETCH_TIMEOUT_MS);
+    return fetch(path, { ...opts, signal: ctl.signal, headers: { ...authHeaders, ...(opts.headers || {}) } })
+      .finally(() => clearTimeout(timer));
+  };
 
   const btnRefresh = document.getElementById('btn-refresh');
   const reportModal = document.getElementById('report-modal');
@@ -57,8 +78,61 @@ document.addEventListener('DOMContentLoaded', () => {
     fleet: [],
     audit: [],
     sources: [],
+    uninspected: [],  // /egress/uninspected rows — the drill-down list
+    notifyCfg: null,  // /notify/rules payload — notification preferences
     connected: true
   };
+
+  // ---------- connectivity ----------
+  // Three honest states, never conflated:
+  //  - 'ok':           fetches succeed.
+  //  - 'auth-expired': the daemon answers 403 — the token is missing or
+  //                    rotated. Only the menubar can mint a fresh session;
+  //                    say so instead of pretending the daemon is down.
+  //  - 'unreachable':  network-level failure — the daemon or its proxy
+  //                    listener is gone; the last known state stays visible.
+  let connState = 'ok';
+  let prevUptimeSec = 0;
+  // Endpoints that failed in the last cycle — each failure surfaces ONCE as a
+  // toast so a dying endpoint can't silently blank its panel.
+  const failedEndpoints = new Set();
+
+  function noteEndpointFailure(key) {
+    if (failedEndpoints.has(key)) return;
+    failedEndpoints.add(key);
+    showToast(`Couldn't load ${key} — will keep retrying`, 'danger');
+  }
+
+  // parseUptimeSec reads Go duration strings ("20h3m44s", "2s", "1m5s").
+  function parseUptimeSec(s) {
+    if (!s) return 0;
+    let sec = 0, m;
+    const re = /(\d+)(h|m|s)/g;
+    while ((m = re.exec(s)) !== null) {
+      const v = Number(m[1]);
+      sec += m[2] === 'h' ? v * 3600 : m[2] === 'm' ? v * 60 : v;
+    }
+    return sec;
+  }
+
+  function updateOfflineBanner() {
+    const banner = document.getElementById('offline-banner');
+    if (!banner) return;
+    const text = banner.querySelector('span');
+    if (connState === 'ok') { banner.hidden = true; return; }
+    banner.hidden = false;
+    if (text) {
+      text.textContent = connState === 'auth-expired'
+        ? 'Session expired — reopen the console from the Secure Agent menu bar to reconnect.'
+        : "Can't reach the Secure Agent daemon — showing the last known state and retrying…";
+    }
+  }
+
+  function setConnState(next) {
+    connState = next;
+    updateOfflineBanner();
+    renderStatus();
+  }
 
   // Server-side history filters. Change handlers mutate this and call
   // fetchTelemetry(), so the poll loop keeps honoring the active filter.
@@ -211,98 +285,144 @@ document.addEventListener('DOMContentLoaded', () => {
   wireFilter('flags-severity', filters.flags, 'minsev');
   wireFilter('flags-window', filters.flags, 'since');
 
-  async function fetchTelemetry() {
-    try {
-      const [statusRes, flagsRes, incidentsRes, eventsRes, fleetRes, auditRes, sourcesRes, postureRes, suggestionsRes, rollupRes, mutesRes] = await Promise.all([
-        apiFetch('/status').catch(() => null),
-        apiFetch('/flags?limit=20').catch(() => null),
-        apiFetch('/incidents?limit=10').catch(() => null),
-        apiFetch('/events?limit=50').catch(() => null),
-        apiFetch('/fleet').catch(() => null),
-        apiFetch('/audit?limit=50').catch(() => null),
-        apiFetch('/firewall/sources').catch(() => null),
-        apiFetch('/posture').catch(() => null),
-        apiFetch('/allowlist/suggestions').catch(() => null),
-        apiFetch('/stats/rollup?hours=168').catch(() => null),
-        apiFetch('/mute').catch(() => null)
-      ]);
+  // ---------- tabs ----------
+  // The console is organized by question (Overview / Agents / Egress /
+  // Findings), not by data source. State persists per tab-session; the hash
+  // carries the tab for deep links (#ct is lifted and stripped BEFORE this
+  // runs, so the two never collide).
+  const TABS = ['overview', 'agents', 'egress', 'findings'];
+  let activeTab = 'overview';
 
-      if (statusRes && statusRes.ok) {
-        telemetryData.status = await statusRes.json();
-      }
-      if (flagsRes && flagsRes.ok) {
-        telemetryData.flags = await flagsRes.json() || [];
-      }
-      if (incidentsRes && incidentsRes.ok) {
-        telemetryData.incidents = await incidentsRes.json() || [];
-      }
-      if (eventsRes && eventsRes.ok) {
-        telemetryData.events = await eventsRes.json() || [];
-      }
-      if (fleetRes && fleetRes.ok) {
-        telemetryData.fleet = await fleetRes.json() || [];
-      }
-      if (auditRes && auditRes.ok) {
-        telemetryData.audit = await auditRes.json() || [];
-      }
-      if (sourcesRes && sourcesRes.ok) {
-        telemetryData.sources = await sourcesRes.json() || [];
-      }
-      if (postureRes && postureRes.ok) {
-        telemetryData.posture = await postureRes.json() || null;
-      }
-      if (suggestionsRes && suggestionsRes.ok) {
-        telemetryData.suggestions = await suggestionsRes.json() || [];
-      }
-      if (rollupRes && rollupRes.ok) {
-        telemetryData.rollup = await rollupRes.json() || [];
-      }
-      if (mutesRes && mutesRes.ok) {
-        telemetryData.mutes = await mutesRes.json() || [];
-      }
-
-      // The panels show the filtered view; KPIs keep reading the unfiltered
-      // lists above. When no filter is active, the view is the unfiltered list
-      // (no extra request); a filter triggers one scoped fetch that can reach
-      // deeper into history than the 50-row summary.
-      telemetryData.flagsView = telemetryData.flags;
-      telemetryData.eventsView = telemetryData.events;
-      sparkIngestEvents(telemetryData.events);
-      if (isFlagsFiltered()) {
-        const r = await apiFetch(flagsQuery()).catch(() => null);
-        if (r && r.ok) telemetryData.flagsView = await r.json() || [];
-      }
-      if (isEventsFiltered()) {
-        const r = await apiFetch(eventsQuery()).catch(() => null);
-        if (r && r.ok) telemetryData.eventsView = await r.json() || [];
-      }
-
-      telemetryData.connected = !!(statusRes && statusRes.ok);
-      const banner = document.getElementById('offline-banner');
-      if (banner) banner.hidden = telemetryData.connected;
-
-      renderAll();
-    } catch (err) {
-      console.error('Error fetching telemetry:', err);
-      telemetryData.connected = false;
-      const banner = document.getElementById('offline-banner');
-      if (banner) banner.hidden = false;
-      renderStatus();
+  function switchTab(id, opts = {}) {
+    if (!TABS.includes(id)) id = 'overview';
+    activeTab = id;
+    document.querySelectorAll('.tab-btn').forEach(b => {
+      const on = b.dataset.tab === id;
+      b.classList.toggle('active', on);
+      b.setAttribute('aria-selected', on ? 'true' : 'false');
+    });
+    document.querySelectorAll('.tabpanel').forEach(p => { p.hidden = p.id !== 'tab-' + id; });
+    try { sessionStorage.setItem('sa.console-tab', id); } catch { /* private mode */ }
+    if (!opts.skipHash && window.history.replaceState) {
+      history.replaceState(null, '', location.pathname + location.search + '#' + id);
     }
   }
 
+  document.querySelectorAll('.tab-btn').forEach(b =>
+    b.addEventListener('click', () => switchTab(b.dataset.tab)));
+
+  // Initial tab: hash (deep link) > session memory > overview.
+  let initialTab = (location.hash || '').replace('#', '');
+  if (!TABS.includes(initialTab)) {
+    try { initialTab = sessionStorage.getItem('sa.console-tab') || 'overview'; }
+    catch { initialTab = 'overview'; }
+  }
+  switchTab(initialTab, { skipHash: true });
+
+  // Tab badges: the "something needs you here" signal for hidden panels.
+  function setTabBadge(id, n) {
+    const el = document.getElementById('tab-badge-' + id);
+    if (!el) return;
+    el.hidden = !(n > 0);
+    el.textContent = n > 0 ? n : '';
+  }
+
+  async function fetchTelemetry() {
+    // grab(): one fetch with honest failure semantics. 403 = the session is
+    // dead (drives the auth-expired state); other HTTP errors mark just that
+    // endpoint failed; network errors drive the unreachable state. A failed
+    // endpoint NEVER overwrites the panel's last good data.
+    let sawAuth = false;
+    const grab = async (key, path) => {
+      try {
+        const r = await apiFetch(path);
+        if (r.status === 403) { sawAuth = true; return null; }
+        if (!r.ok) { noteEndpointFailure(key); return null; }
+        failedEndpoints.delete(key);
+        return await r.json();
+      } catch { return null; } // network error, timeout, or corrupt JSON
+    };
+
+    const [status, flags, incidents, events, fleet, audit, sources, posture, suggestions, rollup, mutes, uninspected, notifyCfg] = await Promise.all([
+      grab('status', '/status'),
+      grab('flags', '/flags?limit=20'),
+      grab('incidents', '/incidents?limit=10'),
+      grab('events', '/events?limit=50'),
+      grab('fleet', '/fleet'),
+      grab('audit', '/audit?limit=50'),
+      grab('firewall sources', '/firewall/sources'),
+      grab('posture', '/posture'),
+      grab('egress suggestions', '/allowlist/suggestions'),
+      grab('activity rollup', '/stats/rollup?hours=168'),
+      grab('mutes', '/mute'),
+      grab('uninspected egress', '/egress/uninspected?hours=24&limit=200'),
+      grab('notification rules', '/notify/rules')
+    ]);
+
+    if (status) {
+      // Daemon-restart detection: uptime going BACKWARDS means we are talking
+      // to a new process. Say so, and reset event-novelty tracking so the new
+      // instance's history doesn't animate in as a wall of "fresh" rows.
+      const up = parseUptimeSec(status.uptime);
+      if (prevUptimeSec > 0 && up < prevUptimeSec - 5) {
+        showToast('Daemon restarted — reconnected to the new instance', 'info');
+        prevEventKeys = new Set();
+        firstEventRender = true;
+      }
+      prevUptimeSec = up;
+      telemetryData.status = status;
+    }
+    if (flags) telemetryData.flags = (flags || []).filter(f => !f.acknowledged);
+    if (incidents) telemetryData.incidents = incidents || [];
+    if (events) telemetryData.events = events || [];
+    if (fleet) telemetryData.fleet = fleet || [];
+    if (audit) telemetryData.audit = audit || [];
+    if (sources) telemetryData.sources = sources || [];
+    if (posture) telemetryData.posture = posture;
+    if (suggestions) telemetryData.suggestions = suggestions || [];
+    if (rollup) telemetryData.rollup = rollup || [];
+    if (mutes) telemetryData.mutes = mutes || [];
+    if (uninspected) telemetryData.uninspected = uninspected || [];
+    if (notifyCfg) telemetryData.notifyCfg = notifyCfg;
+
+    // The panels show the filtered view; KPIs keep reading the unfiltered
+    // lists above. When no filter is active, the view is the unfiltered list
+    // (no extra request); a filter triggers one scoped fetch that can reach
+    // deeper into history than the 50-row summary.
+    telemetryData.flagsView = telemetryData.flags;
+    telemetryData.eventsView = telemetryData.events;
+    sparkIngestEvents(telemetryData.events);
+    if (isFlagsFiltered()) {
+      const v = await grab('flags', flagsQuery());
+      if (v) telemetryData.flagsView = (v || []).filter(f => !f.acknowledged);
+    }
+    if (isEventsFiltered()) {
+      const v = await grab('events', eventsQuery());
+      if (v) telemetryData.eventsView = v || [];
+    }
+
+    reconcileRetriage();
+
+    telemetryData.connected = !!status;
+    setConnState(status ? 'ok' : (sawAuth ? 'auth-expired' : 'unreachable'));
+
+    renderAll();
+  }
+
   function renderAll() {
-    renderPosture();
-    renderStatus();
-    renderAgents();
-    renderFirewall();
-    renderIncidents();
-    renderFleet();
-    renderAudit();
-    renderSources();
-    renderFlags();
-    renderEvents();
-    renderActivity();
+    // Crash isolation: one panel's bad data must never take the whole page
+    // down with it. The /fleet shape mismatch (object, not array) threw in
+    // renderFleet and silently killed every panel after it — flags, events,
+    // activity — on every single poll.
+    const panels = [
+      ['posture', renderPosture], ['status', renderStatus], ['agents', renderAgents],
+      ['firewall', renderFirewall], ['incidents', renderIncidents], ['fleet', renderFleet],
+      ['audit', renderAudit], ['sources', renderSources], ['flags', renderFlags],
+      ['events', renderEvents], ['activity', renderActivity]
+    ];
+    for (const [name, fn] of panels) {
+      try { fn(); } catch (err) { console.error(`render panel "${name}" failed:`, err); }
+    }
   }
 
   // Activity rollup chart: hourly event bars with rose flag markers — the
@@ -338,7 +458,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const chip = document.getElementById('system-status');
     if (!telemetryData.connected) {
       if (chip) chip.className = 'status-chip down';
-      document.getElementById('status-text').textContent = 'Disconnected';
+      document.getElementById('status-text').textContent =
+        connState === 'auth-expired' ? 'Session expired' : 'Disconnected';
       return; // keep last-known metrics visible
     }
 
@@ -376,6 +497,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const families = groupAgents(agents);
 
     badge.textContent = families.length;
+    setTabBadge('agents', families.length); // informative count, neutral styling
 
     if (agents.length === 0) {
       container.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-agent"/></svg><span>No agents running yet — start Claude Code, Cursor, or Codex and they'll appear here</span></div>`;
@@ -466,6 +588,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const anyBlock = rules.some(r => stats[r].mode === 'block');
     badge.textContent = anyBlock ? 'enforcing' : 'monitor';
     badge.className = 'badge' + (anyBlock ? ' badge-ok' : '');
+    setTabBadge('egress', uninspected);
 
     if (rules.length === 0 && uninspected === 0) {
       container.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-shield"/></svg><span>No egress inspected yet — traffic is scanned as your agents run</span></div>`;
@@ -475,7 +598,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     let html = '';
     if (uninspected > 0) {
-      html += `<div class="fw-uninspected"><svg class="icon"><use href="#i-globe"/></svg><span>${uninspected} endpoint${uninspected === 1 ? '' : 's'} reached without inspection (pinned or unrouted)</span></div>`;
+      html += `<button type="button" class="fw-uninspected fw-drill" data-action="open-uninspected"><svg class="icon"><use href="#i-globe"/></svg><span>${uninspected} endpoint${uninspected === 1 ? '' : 's'} reached without inspection in the last 24h (pinned or unrouted)</span><span class="fw-drill-hint">view endpoints</span></button>`;
     }
     // Egress suggestions: recurring uninspected endpoints the user can approve
     // into the vendor allowlist with one click (drives the blind spot to zero).
@@ -547,11 +670,11 @@ document.addEventListener('DOMContentLoaded', () => {
     const items = (p.items || []).map(it => {
       const sev = it.severity >= 3 ? 's3' : it.severity === 2 ? 's2' : 's1';
       let link = '';
-      if (it.kind === 'flag') link = `<a href="#flags-list">view evidence</a>`;
+      if (it.kind === 'flag') link = `<a href="#" data-action="goto-tab" data-tab="findings">view evidence</a>`;
       if (it.kind === 'incident') link = `<a href="#" data-action="open-incident" data-id="${escapeHTML(it.id)}">view report</a>`;
       if (it.kind === 'guard_pending') link = `<span>resolve it in the menu bar app</span>`;
       if (it.kind === 'collector_down') link = `<span>— ${escapeHTML(it.detail || 'collector stopped')} <a href="#" data-action="open-fda">open Full Disk Access settings</a></span>`;
-      if (it.kind === 'uninspected_egress') link = `<a href="#firewall-container">see firewall</a>`;
+      if (it.kind === 'uninspected_egress') link = `<a href="#" data-action="open-uninspected">see endpoints</a>`;
       return `<li><span class="sev ${sev}">●</span><span>${escapeHTML(it.title)} ${link}</span></li>`;
     });
     // The fatigue reducer: when the local advisor has triaged the critical
@@ -613,7 +736,7 @@ document.addEventListener('DOMContentLoaded', () => {
       <div class="incident-card ${status === 'resolved' ? 'is-resolved' : ''}">
         <div class="incident-header">
           <span class="risk-tag ${riskClass}"><svg class="icon"><use href="#i-alert"/></svg>${escapeHTML(inc.risk)}</span>
-          <span class="kpi-hint">${escapeHTML(inc.rule)} — PID ${inc.pid}</span>
+          <span class="kpi-hint">${inc.agent ? escapeHTML(inc.agent) + ' · ' : ''}${escapeHTML(inc.rule)} — PID ${inc.pid}</span>
           ${statusChip}
         </div>
         <div class="incident-summary">${escapeHTML(inc.summary)}</div>
@@ -638,7 +761,14 @@ document.addEventListener('DOMContentLoaded', () => {
   function renderFleet() {
     const container = document.getElementById('fleet-container');
     const badge = document.getElementById('badge-fleet-count');
-    const fleet = telemetryData.fleet || [];
+    // /fleet returns THIS node's status OBJECT (hostname/os/agents/…), not an
+    // array of remote nodes. Older console builds did fleet.map on it and
+    // crashed renderAll — killing every panel below fleet on every poll.
+    // Accept both shapes: object → one local node card; array → remote list.
+    const raw = telemetryData.fleet;
+    const fleet = Array.isArray(raw)
+      ? raw
+      : (raw && (raw.hostname || raw.node_id) ? [{ ...raw, online: raw.running !== false }] : []);
 
     badge.textContent = fleet.length;
 
@@ -654,8 +784,11 @@ document.addEventListener('DOMContentLoaded', () => {
           <span class="status-badge ${node.online ? 'online' : 'offline'}">${node.online ? 'ONLINE' : 'OFFLINE'}</span>
         </div>
         <div class="fleet-node-meta">
-          <span>IP ${escapeHTML(node.ip || '—')}</span>
+          ${node.os ? `<span>${escapeHTML(node.os)}${node.arch ? '/' + escapeHTML(node.arch) : ''}</span>` : ''}
+          ${node.ip ? `<span>IP ${escapeHTML(node.ip)}</span>` : ''}
           <span>${escapeHTML(node.version || 'v1.0')}</span>
+          ${typeof node.active_agents === 'number' ? `<span>${node.active_agents} agents</span>` : ''}
+          ${typeof node.recent_flags === 'number' ? `<span>${node.recent_flags} flags</span>` : ''}
         </div>
       </div>
     `).join('');
@@ -774,6 +907,80 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
+  // ---------- advisor re-triage lifecycle ----------
+  // id → { baseline, at }. Pending means "we asked, the model hasn't
+  // answered yet" — the card shows a spinner, never a dead button. Mirrors
+  // the menubar's flow.
+  const pendingRetriage = new Map();
+  const RETRIAGE_TIMEOUT_MS = 90000;
+  const advisorSig = (v) => v ? `${v.assessment || ''}|${v.suggested_action || ''}|${v.rationale || ''}` : '';
+
+  function reconcileRetriage() {
+    if (!pendingRetriage.size) return;
+    const health = telemetryData.status && telemetryData.status.advisor_health;
+    for (const [id, p] of pendingRetriage) {
+      const f = (telemetryData.flags || []).find(x => x.id === id);
+      if (f && advisorSig(f.advisor) !== p.baseline) {
+        pendingRetriage.delete(id);
+        showToast(`Advisor verdict updated for ${f.rule}`, 'success');
+      } else if (Date.now() - p.at > RETRIAGE_TIMEOUT_MS) {
+        pendingRetriage.delete(id);
+        showToast(health && health.circuit_open
+          ? 'Advisor is offline (verdicts paused) — check the local model server'
+          : "Advisor didn't answer within 90s — the model server may be busy or down", 'danger');
+      }
+    }
+  }
+
+  window.retriageFlag = async function(id) {
+    const f = (telemetryData.flags || []).find(x => x.id === id);
+    try {
+      const res = await apiFetch('/advisor/retriage', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ flag_id: id })
+      });
+      if (!res.ok) throw new Error(await res.text());
+      pendingRetriage.set(id, { baseline: advisorSig(f && f.advisor), at: Date.now() });
+      renderFlags();
+      fetchTelemetry();
+    } catch (err) {
+      showToast(`Advisor re-run failed: ${err.message || err}`, 'danger');
+    }
+  };
+
+  // Dismiss ONE flag (acknowledge): reviewed-and-done — the flag leaves the
+  // list, the rule keeps watching. The missing middle ground between "kill
+  // the agent" and "suppress the class".
+  window.dismissFlag = async function(id) {
+    try {
+      const res = await apiFetch('/flags/acknowledge', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ flag_id: id })
+      });
+      if (!res.ok) throw new Error(await res.text());
+      telemetryData.flags = (telemetryData.flags || []).filter(x => x.id !== id);
+      telemetryData.flagsView = (telemetryData.flagsView || []).filter(x => x.id !== id);
+      showToast('Flag dismissed — the rule keeps watching', 'info');
+      renderFlags();
+      renderStatus();
+      fetchTelemetry();
+    } catch (err) {
+      showToast(`Failed to dismiss flag: ${err.message || err}`, 'danger');
+    }
+  };
+
+  // pid → agent name for human-readable timeline rows (a bare PID is the
+  // ambiguous-process complaint; the name is what the operator recognizes).
+  function agentNameFor(pid) {
+    const list = (telemetryData.status && telemetryData.status.agents) || [];
+    for (const a of list) {
+      if (Number(a.pid) === Number(pid)) return a.name || '';
+    }
+    return '';
+  }
+
   function renderFlags() {
     const container = document.getElementById('flags-list');
     const badge = document.getElementById('badge-flags-count');
@@ -789,12 +996,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const flags = telemetryData.flagsView || [];
     badge.textContent = flags.length;
+    setTabBadge('findings', flags.length + (telemetryData.incidents || []).length);
 
     if (flags.length === 0) {
       const msg = isFlagsFiltered() ? 'No flags match the current filter' : 'No security flags — agent egress looks clean';
       container.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-alert"/></svg><span>${msg}</span></div>`;
       return;
     }
+
+    const advisorHealth = (telemetryData.status && telemetryData.status.advisor_health) || null;
+    const advisorOffline = !!(advisorHealth && advisorHealth.circuit_open);
 
     container.innerHTML = flags.map((f, i) => {
       const chain = buildEvidenceChain(f);
@@ -809,6 +1020,12 @@ document.addEventListener('DOMContentLoaded', () => {
               </span>
             </div>`).join('')}</div>`
         : '';
+      const isKeychain = f.rule === 'keychain-access' || f.rule === 'keychain-security-cli';
+      const retriageBtn = pendingRetriage.has(f.id)
+        ? `<span class="advisor-pending" title="The model is re-reading this flag — the fresh verdict lands here"><span class="spinner" aria-hidden="true"></span>advisor re-reading…</span>`
+        : advisorOffline
+          ? `<button class="btn btn-ghost btn-sm" disabled title="Advisor offline — verdicts paused (${escapeHTML(advisorHealth.last_error || 'model server unreachable')})"><svg class="icon"><use href="#i-refresh"/></svg><span>Advisor offline</span></button>`
+          : `<button class="btn btn-ghost btn-sm" data-action="retriage" data-id="${escapeHTML(f.id)}" title="Ask the local model to re-read this flag"><svg class="icon"><use href="#i-refresh"/></svg><span>Re-run advisor</span></button>`;
       return `
       <div class="flag-card ${f.severity >= 3 ? 'sev3' : ''}${i === 0 ? ' expanded' : ''}">
         <button class="flag-head" data-action="toggle-flag" aria-expanded="${i === 0}">
@@ -820,10 +1037,14 @@ document.addEventListener('DOMContentLoaded', () => {
         </button>
         <div class="flag-detail"><div class="flag-detail-inner">
           ${chainHTML}
+          ${isKeychain ? `<div class="flag-context"><svg class="icon"><use href="#i-key"/></svg><span>Apps read the keychain to load their own credentials — this is usually routine. Informational only: dismiss this flag if reviewed, or dismiss the class if it's noise.</span></div>` : ''}
           <div class="flag-actions-row">
-            <button class="btn btn-danger btn-sm" data-action="kill" data-pid="${f.pid}" title="Terminate the agent process tree (pid ${f.pid})"><svg class="icon"><use href="#i-power"/></svg><span>Kill ${escapeHTML(f.agent)}</span></button>
+            <button class="btn btn-ghost btn-sm" data-action="dismiss-flag" data-id="${escapeHTML(f.id)}" title="Mark reviewed — this flag leaves the list; the rule keeps watching"><svg class="icon"><use href="#i-shield"/></svg><span>Dismiss</span></button>
+            ${retriageBtn}
             ${f.session_id ? `<button class="btn btn-ghost btn-sm" data-action="filter-session" data-session="${escapeHTML(f.session_id)}"><svg class="icon"><use href="#i-activity"/></svg><span>View session in timeline</span></button>` : ''}
             ${f.advisor && f.advisor.assessment === 'benign' && flagHost(f) ? `<button class="btn btn-ghost btn-sm" data-action="mute-flag" data-rule="${escapeHTML(f.rule)}" data-host="${escapeHTML(flagHost(f))}" title="Stop flagging ${escapeHTML(f.rule)} for ${escapeHTML(flagHost(f))} — reversible"><svg class="icon"><use href="#i-close"/></svg><span>Mute rule+host</span></button>` : ''}
+            ${isKeychain ? `<button class="btn btn-ghost btn-sm" data-action="mute-rule" data-rule="${escapeHTML(f.rule)}" title="Stop flagging ${escapeHTML(f.rule)} entirely — reversible from the muted list below"><svg class="icon"><use href="#i-close"/></svg><span>Dismiss this flag class</span></button>` : ''}
+            <button class="btn btn-danger btn-sm" data-action="kill" data-pid="${f.pid}" title="Terminate the agent process tree (pid ${f.pid})"><svg class="icon"><use href="#i-power"/></svg><span>Kill ${escapeHTML(f.agent)}</span></button>
           </div>
           <div class="flag-evidence">
             ${(f.evidence || []).map(ev => `<div>${escapeHTML(ev)}</div>`).join('')}
@@ -838,7 +1059,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (mutes.length > 0) {
       container.innerHTML += `<div class="mute-list"><div class="mute-head">Muted</div>` + mutes.map(m => `
         <div class="mute-row">
-          <span class="mute-pair">${escapeHTML(m.rule)} · ${escapeHTML(m.host)}</span>
+          <span class="mute-pair">${escapeHTML(m.rule)} · ${m.host === '*' ? 'all hosts' : escapeHTML(m.host)}</span>
           <button class="source-remove" title="Unmute" data-action="unmute" data-rule="${escapeHTML(m.rule)}" data-host="${escapeHTML(m.host)}"><svg class="icon"><use href="#i-close"/></svg></button>
         </div>`).join('') + `</div>`;
     }
@@ -880,6 +1101,10 @@ document.addEventListener('DOMContentLoaded', () => {
       // locale-proof ("16:03:58", always zero-padded).
       const timeStr = fmtTime(new Date(e.ts));
       const detailStr = e.detail || e.path || (e.remote_host ? `${e.remote_host}:${e.remote_port}` : '');
+      // A bare PID is the ambiguous-process complaint — prefix the agent
+      // name when the tagged tree can supply one.
+      const agentName = agentNameFor(e.pid);
+      const pidLabel = agentName ? `${agentName} · PID ${e.pid}` : `PID ${e.pid}`;
 
       // Animate only events that weren't in the previous render — the whole
       // list re-renders on every poll, and rows the user already saw must
@@ -893,7 +1118,7 @@ document.addEventListener('DOMContentLoaded', () => {
         <div class="timeline-item${freshCls}">
           <span class="t">${timeStr}</span>
           <span class="event-kind ${kindClass}">${kindLabel}</span>
-          <span class="pid">PID ${e.pid}</span>
+          <span class="pid" title="PID ${e.pid}">${escapeHTML(pidLabel)}</span>
           <span class="dtl">${escapeHTML(detailStr)}</span>
         </div>
       `;
@@ -904,10 +1129,18 @@ document.addEventListener('DOMContentLoaded', () => {
     suppressFreshOnce = false;
   }
 
+  // The report modal is shared by two views: the incident report (markdown,
+  // with a Copy button) and the uninspected-egress drill-down (row actions,
+  // no Copy). modalMode tracks which one is open so action handlers can
+  // re-render the right content after a mutation.
+  let modalMode = null; // 'incident' | 'uninspected' | null
+
   window.openIncidentReport = async function(incidentId) {
     if (!reportModal) return;
+    modalMode = 'incident';
     const bodyEl = document.getElementById('modal-report-body');
     const titleEl = document.getElementById('modal-title');
+    if (btnCopyReport) btnCopyReport.style.display = '';
     titleEl.innerHTML = `<svg class="icon"><use href="#i-doc"/></svg>Incident report — ${escapeHTML(incidentId)}`;
     bodyEl.innerHTML = `<div class="loading-spinner">Fetching incident report…</div>`;
     reportModal.showModal();
@@ -924,6 +1157,39 @@ document.addEventListener('DOMContentLoaded', () => {
     } catch (err) {
       bodyEl.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-doc"/></svg><span>Error: ${escapeHTML(err.message)}</span></div>`;
     }
+  };
+
+  // Uninspected-egress drill-down: the count in the firewall panel becomes a
+  // list the operator can act on (allow the endpoint, read the advisor's
+  // verdict) instead of a dead end.
+  function fillUninspected(bodyEl) {
+    const rows = telemetryData.uninspected || [];
+    if (rows.length === 0) {
+      bodyEl.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-globe"/></svg><span>No uninspected endpoints in the last 24h — the blind spot is closed</span></div>`;
+      return;
+    }
+    bodyEl.innerHTML = `<div class="uninspected-expl">These agents connected directly, bypassing the inspection proxy — usually pinned TLS certificates or tooling that ignores the proxy environment. Allowing a host marks the traffic as expected and closes the blind spot; routing the agent through the proxy (source <code>~/.config/secure-agent/agent-env.sh</code>) inspects it instead.</div>` + rows.map(e => `
+      <div class="fw-rule">
+        <div class="fw-rule-main">
+          <span class="fw-rule-id">${escapeHTML(e.host)}</span>
+          <div class="fw-metrics">
+            <span class="fw-metric dim">${escapeHTML(e.agent)} · <b>${e.count}×</b> in 24h${e.last_seen ? ` · last ${escapeHTML(fmtAge(e.last_seen, Date.now()))} ago` : ''}</span>
+            ${e.assessment ? `<span class="advisor-chip adv-${escapeHTML(e.assessment)}" title="${escapeHTML(e.rationale)}">advisor: ${escapeHTML(e.assessment)}</span>` : ''}
+          </div>
+        </div>
+        <button class="btn btn-ghost btn-sm" data-action="allow-host" data-agent="${escapeHTML(e.agent)}" data-host="${escapeHTML(e.host)}"><svg class="icon"><use href="#i-shield"/></svg><span>Allow for ${escapeHTML(e.agent)}</span></button>
+      </div>`).join('');
+  }
+
+  window.openUninspected = function() {
+    if (!reportModal) return;
+    modalMode = 'uninspected';
+    const bodyEl = document.getElementById('modal-report-body');
+    const titleEl = document.getElementById('modal-title');
+    if (btnCopyReport) btnCopyReport.style.display = 'none';
+    titleEl.innerHTML = `<svg class="icon"><use href="#i-globe"/></svg>Uninspected egress — last 24h`;
+    fillUninspected(bodyEl);
+    if (!reportModal.open) reportModal.showModal();
   };
 
   window.killProcess = async function(pid, startedAt, family) {
@@ -981,7 +1247,11 @@ document.addEventListener('DOMContentLoaded', () => {
       });
       if (res.ok) {
         showToast(`Allowlisted ${host} for ${agent}`, 'success');
-        fetchTelemetry();
+        await fetchTelemetry();
+        // Refresh the drill-down in place: the allowed pair should disappear.
+        if (modalMode === 'uninspected' && reportModal && reportModal.open) {
+          fillUninspected(document.getElementById('modal-report-body'));
+        }
       } else {
         showToast(`Failed to allowlist ${host}.`, 'danger');
       }
@@ -1011,7 +1281,9 @@ document.addEventListener('DOMContentLoaded', () => {
         body: JSON.stringify({ rule, host })
       });
       if (res.ok) {
-        showToast(`Muted ${rule} for ${host} — future flags suppressed`, 'success');
+        showToast(host === '*'
+          ? `Dismissed ${rule} — future flags of this class are suppressed`
+          : `Muted ${rule} for ${host} — future flags suppressed`, 'success');
         fetchTelemetry();
       } else {
         showToast(`Failed to mute: ${await res.text()}`, 'danger');
@@ -1057,6 +1329,7 @@ document.addEventListener('DOMContentLoaded', () => {
     timelineSession = sid;
     suppressFreshOnce = true;
     renderEvents();
+    switchTab('overview'); // the timeline lives there — surface it
     const el = document.getElementById('events-container');
     if (el && el.scrollIntoView) {
       el.scrollIntoView({ behavior: reducedMotion ? 'auto' : 'smooth', block: 'nearest' });
@@ -1114,6 +1387,23 @@ document.addEventListener('DOMContentLoaded', () => {
       case 'mute-flag':
         window.muteFlag(d.rule, d.host);
         break;
+      case 'mute-rule':
+        window.muteFlag(d.rule, '*');
+        break;
+      case 'dismiss-flag':
+        window.dismissFlag(d.id);
+        break;
+      case 'retriage':
+        window.retriageFlag(d.id);
+        break;
+      case 'open-uninspected':
+        e.preventDefault();
+        window.openUninspected();
+        break;
+      case 'goto-tab':
+        e.preventDefault();
+        switchTab(d.tab);
+        break;
       case 'unmute':
         window.unmuteFlag(d.rule, d.host);
         break;
@@ -1141,6 +1431,70 @@ document.addEventListener('DOMContentLoaded', () => {
     }, 4000);
   }
 
+  // ---------- notification preferences ----------
+  // Per-rule overrides over the daemon's default policy (severity >= 3
+  // notifies). Each rule gets Default / Always / Never; the menubar reads the
+  // same store, so one choice silences both surfaces.
+  const NOTIFY_RULES = [
+    ['proxy-secret-leak', 'Secret leaving in agent traffic'],
+    ['sensitive-read-then-connect', 'Secret read, then connected out'],
+    ['keychain-access', 'Keychain file access'],
+    ['keychain-security-cli', 'Keychain CLI (security tool)'],
+    ['tcc-tamper', 'Privacy permissions (TCC) tamper'],
+    ['proxy-prompt-injection', 'Prompt injection in a response']
+  ];
+
+  function renderNotifyRules() {
+    const list = document.getElementById('notify-rules-list');
+    if (!list) return;
+    const overrides = (telemetryData.notifyCfg && telemetryData.notifyCfg.overrides) || {};
+    list.innerHTML = NOTIFY_RULES.map(([rule, label]) => {
+      const cur = rule in overrides ? (overrides[rule] ? 'always' : 'never') : 'default';
+      return `<div class="notify-rule-row">
+        <span class="notify-rule-name" title="${escapeHTML(rule)}">${escapeHTML(label)}</span>
+        <select class="select select-sm" data-notify-rule="${escapeHTML(rule)}" aria-label="Notifications for ${escapeHTML(label)}">
+          <option value="default"${cur === 'default' ? ' selected' : ''}>Default</option>
+          <option value="always"${cur === 'always' ? ' selected' : ''}>Always</option>
+          <option value="never"${cur === 'never' ? ' selected' : ''}>Never</option>
+        </select>
+      </div>`;
+    }).join('');
+  }
+
+  const btnNotify = document.getElementById('btn-notify');
+  const notifyPop = document.getElementById('notify-pop');
+  if (btnNotify && notifyPop) {
+    btnNotify.addEventListener('click', (e) => {
+      e.stopPropagation();
+      renderNotifyRules();
+      notifyPop.hidden = !notifyPop.hidden;
+    });
+    document.addEventListener('click', (e) => {
+      if (!notifyPop.hidden && !e.target.closest('.notify-wrap')) notifyPop.hidden = true;
+    });
+    notifyPop.addEventListener('change', async (e) => {
+      const sel = e.target.closest('select[data-notify-rule]');
+      if (!sel) return;
+      const rule = sel.dataset.notifyRule;
+      const v = sel.value;
+      const body = v === 'default' ? { rule, notify: null } : { rule, notify: v === 'always' };
+      try {
+        const res = await apiFetch('/notify/rules', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+        if (!res.ok) throw new Error(await res.text());
+        showToast(v === 'default' ? `${rule}: back to the default policy`
+          : v === 'always' ? `${rule}: will always notify`
+          : `${rule}: notifications off`, 'success');
+        fetchTelemetry();
+      } catch (err) {
+        showToast(`Failed to update notification rule: ${err.message || err}`, 'danger');
+      }
+    });
+  }
+
   // Live updates: SSE push when the endpoint is available, with a 2s poll as
   // the fallback (older daemon, or a stream that keeps failing). The stream
   // carries the guard lifecycle (guard-prompt/guard-resolved), so pending
@@ -1150,10 +1504,19 @@ document.addEventListener('DOMContentLoaded', () => {
   setInterval(fetchTelemetry, 30000);
 
   let pollTimer = null;
-  const startPolling = () => { if (!pollTimer) pollTimer = setInterval(fetchTelemetry, 2000); };
+  const startPolling = () => {
+    // Auth-expired sessions retry on the slow 30s cadence only — a dead token
+    // doesn't deserve a 2s hammer against a wall of 403s.
+    if (connState === 'auth-expired') return;
+    if (!pollTimer) pollTimer = setInterval(fetchTelemetry, 2000);
+  };
   const stopPolling = () => { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } };
 
-  if (window.EventSource) {
+  // Testability hook: ?nosse skips the push stream (headless E2E can then
+  // use virtual time — a pending SSE response stalls the virtual clock).
+  const noSSE = new URLSearchParams(location.search).has('nosse');
+
+  if (window.EventSource && !noSSE) {
     const streamURL = '/events/stream' + (consoleToken ? '?ct=' + encodeURIComponent(consoleToken) : '');
     let esFailures = 0;
     let refreshPending = false;

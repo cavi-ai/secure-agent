@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -359,6 +360,37 @@ func TestProxyTokenAuth(t *testing.T) {
 // so they land on the proxy listener. They must require the CONSOLE token —
 // never the proxy token, which agents legitimately carry and could otherwise
 // turn into telemetry reads and guard self-approval.
+// TestConsoleAPIPathsCoverWebApp is the drift tripwire: every API path the
+// embedded console fetches must be whitelisted on the proxy listener, or the
+// panel that fetches it dies silently behind the proxy-token challenge (407).
+// Parses app.js for absolute-path string literals and asserts each one is in
+// consoleAPIPaths.
+func TestConsoleAPIPathsCoverWebApp(t *testing.T) {
+	src, err := os.ReadFile(filepath.Join("..", "api", "web_dist", "app.js"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	re := regexp.MustCompile("[\"'`](/[A-Za-z][A-Za-z0-9/_.-]*)")
+	seen := map[string]bool{}
+	for _, m := range re.FindAllStringSubmatch(string(src), -1) {
+		p := m[1]
+		p = strings.TrimSuffix(p, "?")
+		p = strings.TrimSuffix(p, "/")
+		if p == "" {
+			continue
+		}
+		seen[p] = true
+	}
+	if len(seen) == 0 {
+		t.Fatal("no API paths extracted from app.js — is the extraction regex stale?")
+	}
+	for p := range seen {
+		if !consoleAPIPaths[p] {
+			t.Errorf("console fetches %s but consoleAPIPaths lacks it — that panel 407s on the proxy listener", p)
+		}
+	}
+}
+
 func TestConsoleAPIGate(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
