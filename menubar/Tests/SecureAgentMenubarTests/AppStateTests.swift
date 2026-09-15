@@ -30,6 +30,12 @@ final class StubDaemonClient: DaemonClientProtocol, @unchecked Sendable {
     func muteAdd(rule: String, host: String) async throws { }
     func fetchMutes() async throws -> [(rule: String, host: String)] { [] }
     func muteRemove(rule: String, host: String) async throws { }
+    var notifyRules = NotifyRulesResponse.fallback
+    var setNotifyRuleCalls: [(rule: String, notify: Bool?)] = []
+    func fetchNotifyRules() async throws -> NotifyRulesResponse { notifyRules }
+    func setNotifyRule(rule: String, notify: Bool?) async throws {
+        setNotifyRuleCalls.append((rule, notify))
+    }
     func fetchGuardRules() async throws -> [GuardRuleModel] { [] }
     func fetchGuardPending() async throws -> [GuardPending] {
         if let guardError { throw guardError }
@@ -131,6 +137,131 @@ final class AppStateTests: XCTestCase {
         stub.flags = [flag("low", 1)]
         await state.performFetch()
         XCTAssertEqual(notifications.count, 0)
+    }
+
+    func testWarningSeveritySilentUnderDefaultPolicy() async {
+        // Default bar is severity 3: a sev-2 warning queues in the UI but
+        // does not page — the keychain-storm fix.
+        let stub = StubDaemonClient()
+        stub.flags = []
+        let (state, notifications) = makeState(stub)
+        await state.performFetch()
+        stub.flags = [flag("warn-1", 2)]
+        await state.performFetch()
+        XCTAssertEqual(notifications.count, 0)
+    }
+
+    func testOverrideAlwaysNotifiesBelowBar() async {
+        let stub = StubDaemonClient()
+        stub.notifyRules = NotifyRulesResponse(defaultMinSeverity: 3, overrides: ["keychain-access": true])
+        stub.flags = []
+        let (state, notifications) = makeState(stub)
+        await state.performFetch()
+        stub.flags = [FlagModel(id: "kc-1", rule: "keychain-access", severity: 1, ts: "", pid: 1,
+                                agent: "codex", evidence: ["e"])]
+        await state.performFetch()
+        XCTAssertEqual(notifications.count, 1)
+    }
+
+    func testOverrideNeverSuppressesCritical() async {
+        let stub = StubDaemonClient()
+        stub.notifyRules = NotifyRulesResponse(defaultMinSeverity: 3, overrides: ["proxy-secret-leak": false])
+        stub.flags = []
+        let (state, notifications) = makeState(stub)
+        await state.performFetch()
+        stub.flags = [flag("crit-1", 3)]
+        await state.performFetch()
+        XCTAssertEqual(notifications.count, 0)
+    }
+
+    func testSetNotifyOverrideAppliesLocallyAndPersists() async {
+        let stub = StubDaemonClient()
+        let (state, _) = makeState(stub)
+        await state.performFetch()
+
+        await state.setNotifyOverride(rule: "keychain-access", notify: false)
+        XCTAssertEqual(state.notifyOverrides["keychain-access"], false)
+        XCTAssertEqual(stub.setNotifyRuleCalls.count, 1)
+        XCTAssertEqual(stub.setNotifyRuleCalls[0].rule, "keychain-access")
+        XCTAssertEqual(stub.setNotifyRuleCalls[0].notify, false)
+
+        // shouldNotify honors the local override immediately.
+        XCTAssertFalse(state.shouldNotify(for: FlagModel(id: "x", rule: "keychain-access", severity: 3,
+                                                         ts: "", pid: 1, agent: "codex", evidence: [])))
+
+        // Clearing returns to the default bar.
+        await state.setNotifyOverride(rule: "keychain-access", notify: nil)
+        XCTAssertNil(state.notifyOverrides["keychain-access"])
+        XCTAssertEqual(stub.setNotifyRuleCalls.count, 2)
+        XCTAssertNil(stub.setNotifyRuleCalls[1].notify ?? nil)
+    }
+
+    func testRetriageFeedbackLifecycle() async {
+        let stub = StubDaemonClient()
+        stub.flags = [flag("rt-1", 3)]
+        let (state, _) = makeState(stub)
+        await state.performFetch()
+
+        // Request marks the flag pending — the sheet shows progress.
+        await state.retriageFlagWithFeedback(flag("rt-1", 3))
+        XCTAssertNotNil(state.pendingRetriage["rt-1"])
+
+        // Same verdict still → still pending (present ≠ landed).
+        await state.performFetch()
+        XCTAssertNotNil(state.pendingRetriage["rt-1"])
+
+        // Fresh verdict → pending clears with a "verdict updated" notice.
+        stub.flags = [FlagModel(id: "rt-1", rule: "proxy-secret-leak", severity: 3, ts: "", pid: 1,
+                                agent: "claude", evidence: ["e"],
+                                advisor: AdvisorVerdictModel(assessment: "benign", confidence: 0.9,
+                                                             rationale: "routine vendor traffic", suggestedAction: "none"))]
+        await state.performFetch()
+        XCTAssertNil(state.pendingRetriage["rt-1"])
+        XCTAssertEqual(state.advisorNotice, "Advisor verdict updated for proxy-secret-leak")
+    }
+
+    func testRetriageTimeoutProducesHonestNotice() async {
+        let stub = StubDaemonClient()
+        stub.flags = [flag("rt-2", 3)]
+        let (state, _) = makeState(stub)
+        await state.performFetch()
+        await state.retriageFlagWithFeedback(flag("rt-2", 3))
+        state.agePendingRetriageForTesting(id: "rt-2")
+
+        await state.performFetch()
+        XCTAssertNil(state.pendingRetriage["rt-2"])
+        XCTAssertTrue(state.advisorNotice?.contains("didn't answer") == true,
+                      "timeout must explain itself, got: \(state.advisorNotice ?? "nil")")
+    }
+
+    func testDismissFlagLeavesUnactedList() async {
+        let stub = StubDaemonClient()
+        stub.flags = [flag("d-1", 3), flag("d-2", 3)]
+        let (state, _) = makeState(stub)
+        await state.performFetch()
+        XCTAssertEqual(state.unactedFlags.count, 2)
+
+        await state.dismissFlag(flag("d-1", 3))
+        // Local echo: the dismissed flag stops needing action immediately.
+        XCTAssertEqual(state.unactedFlags.map(\.id), ["d-2"])
+    }
+
+    func testInformationalFlagsNeverDemandAction() async {
+        // Severity-1 (routine keychain-db opens) queues silently — it must
+        // not occupy the popover's needs-a-decision list.
+        let stub = StubDaemonClient()
+        stub.flags = [flag("kc-info", 1), flag("warn", 2)]
+        let (state, _) = makeState(stub)
+        await state.performFetch()
+        XCTAssertEqual(state.unactedFlags.map(\.id), ["warn"])
+    }
+
+    func testMuteHostFallsBackToWildcardForHostlessEvidence() {
+        let keychainEv = ["codex (pid 901) accessed keychain file /Users/x/Library/Keychains/login.keychain-db at 2026-09-15T10:00:00Z"]
+        XCTAssertEqual(FlagActionSheet.muteHost(evidence: keychainEv), "*")
+        let connEv = ["cursor (pid 7) read /a at 2026-09-11T12:00:00Z",
+                      "then connected to api.example.com:443 at 2026-09-11T12:00:01Z"]
+        XCTAssertEqual(FlagActionSheet.muteHost(evidence: connEv), "api.example.com")
     }
 
     func testTransportErrorClearsAllDaemonState() async {

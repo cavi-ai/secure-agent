@@ -155,11 +155,12 @@ func main() {
 	correlator.SetAllowlistOverrides(func(agent string) []string { return allowlistStore.Load()[agent] })
 
 	// Operator dispositions (mute rule+host): persisted likewise; muted pairs
-	// are counted, not flagged.
+	// are counted, not flagged. The host "*" is the rule-level disposition —
+	// "stop flagging this class at all" (the keychain-noise escape hatch).
 	muteStore := correlate.NewMuteStore(filepath.Join(filepath.Dir(cfg.Firewall.Registry.SaltRef), "muted.json"))
 	correlator.SetMuteChecker(func(rule, host string) bool {
 		for _, h := range muteStore.Load()[rule] {
-			if h == host {
+			if h == host || h == "*" {
 				return true
 			}
 		}
@@ -190,7 +191,8 @@ func main() {
 	supReg := supervise.NewRegistry()
 	sup := supervise.New(supReg)
 
-	statusFn := buildStatusFn(proxyServer, tagger, correlator, fw.Engine, supReg, time.Now(), cfg.Advisor.Enabled)
+	statusFn := buildStatusFn(proxyServer, tagger, correlator, fw.Engine, supReg, time.Now(),
+		func() advisor.HealthSnapshot { return advisorStk.Load().Sub.Health() })
 
 	// Start Control API
 	apiServer := api.New(cfg.SocketPath, st, &realKiller{}, statusFn)
@@ -231,6 +233,11 @@ func main() {
 	apiServer.SetGuard(guardBroker)
 	apiServer.SetAllowlist(correlator, allowlistStore)
 	apiServer.SetMute(correlator, muteStore)
+	// Per-rule notification overrides (page me / never page me for a class),
+	// persisted beside the other override state; the UIs layer them over the
+	// severity>=3 default policy.
+	notifyRuleStore := correlate.NewNotifyRuleStore(filepath.Join(filepath.Dir(cfg.Firewall.Registry.SaltRef), "notify-rules.json"))
+	apiServer.SetNotifyRules(notifyRuleStore)
 	// Re-triage: look up the stored flag, enqueue through the CURRENT stack
 	// (the holder re-resolves after every config swap). Enqueue is
 	// idempotent advisor-side (cooldown), so hammering the endpoint is safe.

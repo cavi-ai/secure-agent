@@ -34,6 +34,35 @@ func TestPostureAllClearWhenNothingPending(t *testing.T) {
 	}
 }
 
+// A reviewed (acknowledged) flag must not keep demanding attention in the
+// posture headline — dismiss has to actually close the loop.
+func TestPostureExcludesAcknowledgedFlags(t *testing.T) {
+	sock := fmt.Sprintf("/tmp/sa_posture3_%d.sock", time.Now().UnixNano())
+	defer os.Remove(sock)
+	st := testStore(t)
+	st.PutFlag(model.Flag{ID: "open-1", Rule: "sensitive-read-then-connect", Severity: 3, TS: time.Now(), Evidence: []string{"read .env then connected"}})
+	st.PutFlag(model.Flag{ID: "done-1", Rule: "proxy-secret-leak", Severity: 3, TS: time.Now(), Evidence: []string{"key in body"}})
+	st.AcknowledgeFlag("done-1")
+	a := New(sock, st, &fakeKiller{}, func() Status { return Status{Running: true} })
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go a.Serve(ctx)
+	waitForSocket(t, sock)
+
+	cl := unixClient(sock)
+	resp, _ := cl.Get("http://unix/posture")
+	var p Posture
+	decodeInto(t, resp, &p)
+	if p.NeedsYou != 1 {
+		t.Fatalf("posture = %+v, want exactly 1 item (the acknowledged flag must not count)", p)
+	}
+	for _, it := range p.Items {
+		if it.ID == "done-1" {
+			t.Fatal("acknowledged flag must not appear in posture items")
+		}
+	}
+}
+
 func TestPostureCriticalFlagDrivesState(t *testing.T) {
 	sock := fmt.Sprintf("/tmp/sa_posture2_%d.sock", time.Now().UnixNano())
 	defer os.Remove(sock)

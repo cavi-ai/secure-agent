@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -17,6 +18,21 @@ const (
 	roleOwner               // same uid as the daemon (user shells, CLI)
 	roleUI                  // the menubar app (trusted mutating client)
 )
+
+func (r role) String() string {
+	switch r {
+	case roleForeign:
+		return "foreign"
+	case roleAgent:
+		return "agent"
+	case roleOwner:
+		return "owner"
+	case roleUI:
+		return "ui"
+	default:
+		return "none"
+	}
+}
 
 // peers holds the process identities the API trusts. All fields are optional:
 // when OwnerUID is nil every same-uid caller is trusted for reads; when
@@ -81,11 +97,17 @@ func (a *API) gate(checker PeerChecker, next http.Handler) http.Handler {
 		}
 		cred, err := checker.PeerCred(connOf(r))
 		if err != nil {
+			log.Printf("api: peer identification failed for %s %s: %v", r.Method, r.URL.Path, err)
 			http.Error(w, "peer identification failed", http.StatusUnauthorized)
 			return
 		}
 		role := a.peerRole.classify(cred)
 		if !a.authorize(role, r.Method, r.URL.Path) {
+			// Denials are logged with the kernel-attested identity: a mute or
+			// dismiss that 403s must be diagnosable from the daemon log
+			// instead of surfacing in the UI as a bare "dismiss failed".
+			log.Printf("api: denied %s %s for peer pid=%d uid=%d role=%s (pinnedUI=%d)",
+				r.Method, r.URL.Path, cred.PID, cred.UID, role, a.peerRole.UIPID)
 			http.Error(w, "forbidden: this endpoint requires a more privileged client", http.StatusForbidden)
 			return
 		}

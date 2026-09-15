@@ -62,6 +62,11 @@ type Status struct {
 	// (opt-in) — the UIs show it so "no verdicts" is distinguishable from
 	// "advisor off".
 	AdvisorEnabled bool `json:"advisor_enabled"`
+	// AdvisorHealth carries the advisor's live health (circuit state, last
+	// error, queue depth) so "no verdicts yet" is distinguishable from
+	// "model server down" — the silent pause that made advisor actions look
+	// dead. Nil when unwired (unit tests, older integrations).
+	AdvisorHealth *advisor.HealthSnapshot `json:"advisor_health,omitempty"`
 	// TrackedProcesses is the full tagged process count (every descendant in
 	// every agent tree), while ActiveAgents counts distinct tree ROOTS — the
 	// number a human means by "agents running". 266 processes is not 266
@@ -94,11 +99,12 @@ type API struct {
 
 	guardBroker *guard.Broker
 
-	correlator *correlate.Correlator
-	allowlist  *correlate.AllowlistStore
-	mutes      *correlate.MuteStore
-	retriage   *RetriageFuncs
-	guardSeq   uint64
+	correlator  *correlate.Correlator
+	allowlist   *correlate.AllowlistStore
+	mutes       *correlate.MuteStore
+	notifyRules *correlate.NotifyRuleStore
+	retriage    *RetriageFuncs
+	guardSeq    uint64
 
 	peerRole   *peers
 	peerChk    PeerChecker
@@ -238,6 +244,63 @@ func (a *API) SetMute(cr *correlate.Correlator, ms *correlate.MuteStore) {
 	a.mutes = ms
 }
 
+// SetNotifyRules wires the per-rule notification override store so the UIs
+// can read and set "page me / never page me for this class" choices.
+func (a *API) SetNotifyRules(ns *correlate.NotifyRuleStore) {
+	a.notifyRules = ns
+}
+
+// DefaultNotifyMinSeverity is the default notification policy: warnings are
+// queued silently, only criticals page. Per-rule overrides sit on top.
+const DefaultNotifyMinSeverity = 3
+
+// handleNotifyRules reads (GET) and writes (POST) per-rule notification
+// overrides. POST body: {"rule":"<id>","notify":true|false|null} — null (or
+// absent) clears the override and returns the rule to the default policy.
+func (a *API) handleNotifyRules(w http.ResponseWriter, r *http.Request) {
+	if a.notifyRules == nil {
+		http.Error(w, "notify rules not enabled", http.StatusServiceUnavailable)
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"default_min_severity": DefaultNotifyMinSeverity,
+			"overrides":            a.notifyRules.Load(),
+		})
+	case http.MethodPost:
+		limitBody(w, r)
+		var req struct {
+			Rule   string `json:"rule"`
+			Notify *bool  `json:"notify"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || !guardTokenRE.MatchString(req.Rule) {
+			http.Error(w, `Invalid payload: {"rule":"<id>","notify":true|false|null}`, http.StatusBadRequest)
+			return
+		}
+		var err error
+		action := "notify-rule-clear"
+		detail := "cleared notification override for " + req.Rule
+		if req.Notify != nil {
+			err = a.notifyRules.Set(req.Rule, *req.Notify)
+			action = "notify-rule-set"
+			detail = map[bool]string{true: "always notify", false: "never notify"}[*req.Notify] + " for " + req.Rule
+		} else {
+			err = a.notifyRules.Clear(req.Rule)
+		}
+		if err != nil {
+			http.Error(w, fmt.Sprintf("persist failed: %v", err), http.StatusInternalServerError)
+			return
+		}
+		a.store.PutAudit(store.AuditEntry{Action: action, Rule: req.Rule, Detail: detail})
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"status": "ok", "rule": req.Rule})
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
 // SetUIPID pins the trusted mutating client (the owning menubar app). When
 // set, mutating endpoints (kill, guard resolve, firewall promote) require the
 // peer to BE that process — same-uid shells keep read access but can no
@@ -277,6 +340,8 @@ func (a *API) buildMux() *http.ServeMux {
 	mux.HandleFunc("/audit", a.handleAudit)
 	mux.HandleFunc("/allowlist/suggestions", a.handleAllowlistSuggestions)
 	mux.HandleFunc("/allowlist", a.handleAllowlistAdd)
+	mux.HandleFunc("/egress/uninspected", a.handleUninspectedEgress)
+	mux.HandleFunc("/notify/rules", a.handleNotifyRules)
 	mux.HandleFunc("/guard/path-allow", a.handleGuardPathAllow)
 	mux.HandleFunc("/mute", a.handleMute)
 	mux.HandleFunc("/advisor/retriage", a.handleAdvisorRetriage)
@@ -737,6 +802,50 @@ func (a *API) handleAllowlistSuggestions(w http.ResponseWriter, r *http.Request)
 					sg.Confidence = v.Confidence
 				}
 				out = append(out, sg)
+			}
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(out)
+}
+
+// UninspectedEndpoint is one blind-spot row for the drill-down behind the
+// posture warning: which agent reached which host without inspection, how
+// often, and when last — with the advisor's verdict when one exists.
+type UninspectedEndpoint struct {
+	Agent      string    `json:"agent"`
+	Host       string    `json:"host"`
+	Count      int       `json:"count"`
+	LastSeen   time.Time `json:"last_seen"`
+	Assessment string    `json:"assessment,omitempty"`
+	Rationale  string    `json:"rationale,omitempty"`
+}
+
+// handleUninspectedEgress lists the endpoints behind the "N connections
+// bypassed the egress firewall" warning so the number is explainable and
+// actionable instead of a dead end. Read-level. ?hours= (1..168, default 24)
+// windows the list; ?limit= caps rows (default 200).
+func (a *API) handleUninspectedEgress(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	hours := queryInt(r.URL.Query().Get("hours"), 24)
+	if hours < 1 || hours > 168 {
+		hours = 24
+	}
+	limit := queryInt(r.URL.Query().Get("limit"), 200)
+	out := []UninspectedEndpoint{}
+	if a.correlator != nil {
+		for _, e := range a.correlator.UninspectedEgressSummarySince(time.Now().Add(-time.Duration(hours) * time.Hour)) {
+			ep := UninspectedEndpoint{Agent: e.Agent, Host: e.Host, Count: e.Count, LastSeen: e.LastSeen}
+			if v, ok := a.store.AdvisorVerdictFor("host:"+e.Agent+"|"+e.Host, "host"); ok {
+				ep.Assessment = v.Assessment
+				ep.Rationale = v.Rationale
+			}
+			out = append(out, ep)
+			if len(out) >= limit {
+				break
 			}
 		}
 	}

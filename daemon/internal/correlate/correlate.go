@@ -38,6 +38,17 @@ const window = 60 * time.Second
 // saturated (and signals "lots of distinct egress") rather than growing forever.
 const maxUninspectedTracked = 4096
 
+// UninspectedWindow is the rolling window the headline count answers over —
+// "how many distinct endpoints bypassed inspection RECENTLY", not "since the
+// daemon last restarted". A lifetime count inflates monotonically and stops
+// meaning anything (operators watched it sit near the thousands for weeks).
+const UninspectedWindow = 24 * time.Hour
+
+// uninspectedRetention bounds how long a silent pair is kept for the
+// drill-down — long enough to explain a past spike, short enough that the
+// set cannot accumulate dead weight forever.
+const uninspectedRetention = 7 * 24 * time.Hour
+
 // uninspectedEntry tracks one agent|host pair seen bypassing the proxy.
 type uninspectedEntry struct {
 	count    int
@@ -92,15 +103,37 @@ type UninspectedSummary struct {
 // UninspectedEgressSummary lists the observed blind-spot endpoints, most
 // frequent first — the input for the console's allowlist suggestions.
 func (c *Correlator) UninspectedEgressSummary() []UninspectedSummary {
+	return c.UninspectedEgressSummarySince(time.Time{})
+}
+
+// UninspectedEgressSummarySince lists blind-spot endpoints last seen at or
+// after since (zero time = no window), most frequent first. Powers the
+// console's drill-down behind the posture warning.
+func (c *Correlator) UninspectedEgressSummarySince(since time.Time) []UninspectedSummary {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.pruneUninspectedLocked(time.Now())
 	out := make([]UninspectedSummary, 0, len(c.uninspected))
 	for key, e := range c.uninspected {
+		if !since.IsZero() && e.lastSeen.Before(since) {
+			continue
+		}
 		agent, host, _ := strings.Cut(key, "|")
 		out = append(out, UninspectedSummary{Agent: agent, Host: host, Count: e.count, LastSeen: e.lastSeen})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Count > out[j].Count })
 	return out
+}
+
+// pruneUninspectedLocked drops pairs silent for longer than the retention —
+// the set is a blind-spot indicator, not an audit trail. Lock held by caller.
+func (c *Correlator) pruneUninspectedLocked(now time.Time) {
+	cutoff := now.Add(-uninspectedRetention)
+	for k, e := range c.uninspected {
+		if e.lastSeen.Before(cutoff) {
+			delete(c.uninspected, k)
+		}
+	}
 }
 
 // SetAllowlistOverrides wires the user-approved host list (persisted by the
@@ -151,7 +184,25 @@ func (c *Correlator) MutedCount() int {
 func (c *Correlator) UninspectedEgressCount() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.pruneUninspectedLocked(time.Now())
 	return len(c.uninspected)
+}
+
+// UninspectedEgressCountWindow counts only pairs seen within d — the rolling
+// headline number the UIs show, so the metric answers "what is bypassing
+// inspection NOW" instead of growing monotonically for the daemon's lifetime.
+func (c *Correlator) UninspectedEgressCountWindow(d time.Duration) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.pruneUninspectedLocked(time.Now())
+	cutoff := time.Now().Add(-d)
+	n := 0
+	for _, e := range c.uninspected {
+		if e.lastSeen.After(cutoff) {
+			n++
+		}
+	}
+	return n
 }
 
 func isLocalhost(host string) bool {
@@ -269,6 +320,12 @@ func (c *Correlator) Observe(e event.Event) []model.Flag {
 				return nil
 			}
 			if cat == sensitive.CatKeychain {
+				// Operator disposition: a rule-level mute (host "*") silences the
+				// class — counted so the quiet is deliberate, never hidden.
+				if c.isMuted != nil && c.isMuted("keychain-access", "*") {
+					c.mutedCount++
+					return nil
+				}
 				// Repeat suppression: an agent touching the same keychain file
 				// every few minutes is ONE access pattern, not a new incident
 				// per fire. Collapse repeats within the window. Without this,
@@ -285,7 +342,7 @@ func (c *Correlator) Observe(e event.Event) []model.Flag {
 				flags = append(flags, model.Flag{
 					ID:        flagID,
 					Rule:      "keychain-access",
-					Severity:  2,
+					Severity:  1,
 					TS:        e.TS,
 					PID:       e.PID,
 					Agent:     info.Name,
@@ -346,6 +403,10 @@ func (c *Correlator) Observe(e event.Event) []model.Flag {
 		// untrusted from eslogger.
 		base := strings.ToLower(filepath.Base(e.ExePath))
 		if base == "security" {
+			if c.isMuted != nil && c.isMuted("keychain-security-cli", "*") {
+				c.mutedCount++
+				return nil
+			}
 			if !c.shouldFlag("keychain-security-cli", e.PID, "", e.TS, repeatWindows["keychain-security-cli"]) {
 				return nil
 			}

@@ -11,6 +11,25 @@ public enum DaemonClientError: Error, Equatable {
     case decode(String)
 }
 
+/// Human-readable failure reasons. Without this, every daemon error surfaced
+/// as "The operation could not be completed. (…DaemonClientError error 1.)"
+/// — the "dismiss failed without reason" complaint.
+extension DaemonClientError: LocalizedError {
+    public var errorDescription: String? {
+        switch self {
+        case .transport(let detail):
+            return "daemon unreachable (\(detail))"
+        case .http(let code):
+            if code == 401 || code == 403 {
+                return "daemon refused the change (HTTP \(code)) — this client isn't allowed to change policy; restart Secure Agent if this persists"
+            }
+            return "daemon answered HTTP \(code)"
+        case .decode(let detail):
+            return "daemon answered unexpectedly (\(detail))"
+        }
+    }
+}
+
 /// The surface AppState (and tests) use. DaemonClient conforms; tests stub it.
 public protocol DaemonClientProtocol: Sendable {
     func fetchStatus() async throws -> StatusResponse
@@ -46,6 +65,12 @@ public protocol DaemonClientProtocol: Sendable {
     func fetchMutes() async throws -> [(rule: String, host: String)]
     /// DELETE /mute — remove one disposition.
     func muteRemove(rule: String, host: String) async throws
+    /// GET /notify/rules — notification policy: default severity bar +
+    /// per-rule overrides (true = always page, false = never).
+    func fetchNotifyRules() async throws -> NotifyRulesResponse
+    /// POST /notify/rules — set (true/false) or clear (nil) one rule's
+    /// override; nil returns the rule to the default policy.
+    func setNotifyRule(rule: String, notify: Bool?) async throws
     /// POST /guard/path-allow — allow ONE path (and descendants) for one
     /// agent under one rule, without widening the rule itself.
     func guardPathAllowAdd(agent: String, ruleID: String, path: String) async throws
@@ -226,6 +251,23 @@ public final class DaemonClient: Sendable {
 
     public func muteAdd(rule: String, host: String) async throws {
         try await postJSON("/mute", payload: ["rule": rule, "host": host])
+    }
+
+    /// Older daemons (pre-/notify/rules) answer 404 — degrade to the shipped
+    /// default (severity >= 3 notifies, no overrides) so alerts still flow.
+    public func fetchNotifyRules() async throws -> NotifyRulesResponse {
+        do {
+            return try await getDecodable("/notify/rules")
+        } catch DaemonClientError.http(404) {
+            return .fallback
+        }
+    }
+
+    public func setNotifyRule(rule: String, notify: Bool?) async throws {
+        var payload: [String: Any] = ["rule": rule]
+        if let notify { payload["notify"] = notify }
+        let body = try JSONSerialization.data(withJSONObject: payload)
+        _ = try await request(method: "POST", path: "/notify/rules", body: body)
     }
 
     /// Shared POST-with-dict helper for the small disposition endpoints;

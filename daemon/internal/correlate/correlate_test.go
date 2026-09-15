@@ -88,14 +88,15 @@ func TestKeychainAccessFlagsImmediately(t *testing.T) {
 	if len(f) != 1 || f[0].Rule != "keychain-access" {
 		t.Fatalf("expected 1 keychain-access flag, got %+v", f)
 	}
-	if f[0].Severity != 2 {
-		t.Fatalf("severity = %d, want 2", f[0].Severity)
+	if f[0].Severity != 1 {
+		t.Fatalf("severity = %d, want 1 (informational — routine keychain-db opens are not an alarm)", f[0].Severity)
 	}
 }
 
 func TestUninspectedEgressCounted(t *testing.T) {
 	c := newTestCorrelator(t)
-	base := time.Unix(1_700_000_000, 0)
+	// Recent base: entries past the retention window are pruned on read.
+	base := time.Now().Add(-time.Hour)
 
 	// Lone foreign connect: counted as uninspected egress, but produces no flag.
 	f := c.Observe(event.Event{Kind: event.KindConnOpen, PID: 200, TS: base, RemoteHost: "evil.example.com", RemotePort: 443})
@@ -204,6 +205,56 @@ func TestKeychainCLIRuleIgnoresOtherExecs(t *testing.T) {
 		if len(flags) != 0 {
 			t.Fatalf("%s must not flag: %+v", exe, flags)
 		}
+	}
+}
+
+// A rule-level mute (host "*") silences the keychain class — the escape
+// hatch for the "sea of warnings" complaint. Silenced fires are counted, so
+// the quiet is deliberate and measurable, not hidden.
+func TestKeychainRuleLevelMute(t *testing.T) {
+	c := newTestCorrelator(t)
+	c.SetMuteChecker(func(rule, host string) bool { return host == "*" })
+	base := time.Now()
+
+	if f := c.Observe(event.Event{Kind: event.KindFileOpen, PID: 200, TS: base, Path: "/Users/x/Library/Keychains/login.keychain-db"}); len(f) != 0 {
+		t.Fatalf("muted keychain-access must not flag, got %+v", f)
+	}
+	if f := c.Observe(event.Event{Kind: event.KindExec, PID: 200, TS: base, ExePath: "/usr/bin/security"}); len(f) != 0 {
+		t.Fatalf("muted keychain-security-cli must not flag, got %+v", f)
+	}
+	if got := c.MutedCount(); got != 2 {
+		t.Fatalf("muted fires must be counted, got %d, want 2", got)
+	}
+}
+
+// The rolling window counts only recent pairs: an endpoint silent for 48h is
+// outside the 24h headline number but still listed in the unfiltered summary
+// (until the retention sweeps it).
+func TestUninspectedEgressWindow(t *testing.T) {
+	c := newTestCorrelator(t)
+	now := time.Now()
+	c.Observe(event.Event{Kind: event.KindConnOpen, PID: 200, TS: now.Add(-48 * time.Hour), RemoteHost: "old.example.com", RemotePort: 443})
+	c.Observe(event.Event{Kind: event.KindConnOpen, PID: 200, TS: now.Add(-time.Hour), RemoteHost: "fresh.example.com", RemotePort: 443})
+
+	if got := c.UninspectedEgressCount(); got != 2 {
+		t.Fatalf("total count = %d, want 2", got)
+	}
+	if got := c.UninspectedEgressCountWindow(UninspectedWindow); got != 1 {
+		t.Fatalf("24h window count = %d, want 1 (only the fresh endpoint)", got)
+	}
+	sum := c.UninspectedEgressSummarySince(now.Add(-UninspectedWindow))
+	if len(sum) != 1 || sum[0].Host != "fresh.example.com" {
+		t.Fatalf("windowed summary = %+v, want only fresh.example.com", sum)
+	}
+}
+
+// Pairs silent past the retention are swept so the set cannot accumulate
+// dead weight for the daemon's lifetime.
+func TestUninspectedRetentionPrunes(t *testing.T) {
+	c := newTestCorrelator(t)
+	c.Observe(event.Event{Kind: event.KindConnOpen, PID: 200, TS: time.Now().Add(-8 * 24 * time.Hour), RemoteHost: "ancient.example.com", RemotePort: 443})
+	if got := c.UninspectedEgressCount(); got != 0 {
+		t.Fatalf("entry past retention must be pruned, count = %d", got)
 	}
 }
 

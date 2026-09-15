@@ -16,7 +16,7 @@ CLAUDE.md
 QODER.md
 CODEBUDDY.md
 .codebuddy/
-
+.remember/
 
 # built binaries dropped at repo root by hand-builds
 /secure-agent

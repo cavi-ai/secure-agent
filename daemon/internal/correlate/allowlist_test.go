@@ -11,7 +11,9 @@ import (
 
 func TestUninspectedSummaryCounts(t *testing.T) {
 	c := newTestCorrelator(t)
-	base := time.Unix(1_700_000_000, 0)
+	// Recent base: the summary prunes entries silent past the retention, so a
+	// fixed 2023 timestamp would be swept before the assertion.
+	base := time.Now().Add(-time.Hour)
 	for i := 0; i < 5; i++ {
 		c.Observe(event.Event{Kind: event.KindConnOpen, PID: 200, TS: base.Add(time.Duration(i) * time.Second), RemoteHost: "logs.example.com", RemotePort: 443})
 	}

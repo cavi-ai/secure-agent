@@ -37,6 +37,11 @@ func securityHeaders(next http.Handler) http.Handler {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "no-referrer")
+		// no-cache (not no-store): the browser must revalidate every load, so
+		// an upgrade can never leave a stale index.html paired with a new
+		// app.js (or vice versa) — the "dashboard doesn't load after update"
+		// failure mode. Last-Modified/304 keeps revalidation cheap.
+		w.Header().Set("Cache-Control", "no-cache")
 		next.ServeHTTP(w, r)
 	})
 }
