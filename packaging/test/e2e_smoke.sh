@@ -98,6 +98,9 @@ advisor:
   model: "e2e-stub-4b"
   timeout_ms: 4000
 fleet:
+  hostname: "e2e-node"
+  labels: { env: e2e }
+  heartbeat_interval_sec: 2
   webhooks:
     - url: "http://127.0.0.1:$COLL_PORT/hooks/secure-agent"
       secret: "$COLL_SECRET"
@@ -449,6 +452,21 @@ else
   echo "Operator loop FAILED: flag_id=$FLAG_ID mute_resp=$MUTE_RESP ack_state=$ACK_STATE ack2=$ACK2_STATE allow=$ALLOW_RESP"
 fi
 
+# Enroll UX: one command provisions the node side (secret + config) and
+# prints the collector line — no manual node-id hunting, no daemon restart
+# (config watcher picks it up; here we only assert the CLI contract).
+# ---------------------------------------------------------------------------
+ENROLL_PASSED=false
+go build -o "$tmp/secure-agent-cli" "$SCRIPT_DIR/cmd/secure-agent"
+ENROLL_CFG="$tmp/enroll-config.yaml"
+ENROLL_OUT=$(SECURE_AGENT_SOCK="$SOCKET_PATH" SECURE_AGENT_CONFIG="$ENROLL_CFG" "$tmp/secure-agent-cli" fleet enroll "http://127.0.0.1:$COLL_PORT" 2>&1)
+if [ -s "$ENROLL_CFG" ] && echo "$ENROLL_OUT" | grep -q "$NODE_ID=" && grep -q "hooks/secure-agent" "$ENROLL_CFG"; then
+  ENROLL_PASSED=true
+  echo "Enroll: CLI provisioned fleet.webhooks and printed the collector line."
+else
+  echo "Enroll FAILED: $ENROLL_OUT"
+fi
+
 # Fleet webhook: the collector must have received and verified the flag the
 # fake agent triggered above. Sequential check (no heredoc-in-if).
 # ---------------------------------------------------------------------------
@@ -460,18 +478,35 @@ if [ -s "$COLL_STORE" ] && python3 -c '
 import json, sys
 with open(sys.argv[1]) as f:
     recs = [json.loads(l) for l in f if l.strip()]
-flags = [r for r in recs if r.get("envelope", {}).get("kind") == "flag"]
-sys.exit(0 if flags else 1)
+envs = [r.get("envelope", {}) for r in recs]
+flags = [e for e in envs if e.get("kind") == "flag"]
+status = [e for e in envs if e.get("kind") == "status"]
+if not flags:
+    sys.exit(1)
+# The heartbeat must have landed too, carrying the nodes own posture
+# headline and identity — even though this sink subscribes to flag/incident/guard only.
+p = status[-1].get("payload", {}) if status else {}
+if not (p.get("hostname") == "e2e-node"
+    and p.get("posture_state") in ("all-clear", "attention", "critical")
+    and p.get("labels", {}).get("env") == "e2e"):
+    sys.exit(1)
+# Gap detection: every envelope is stamped with one boot id, and the seq
+# stream is contiguous — no silent loss on a healthy loopback chain.
+seqs = sorted(e.get("seq", 0) for e in envs)
+boots = {e.get("boot", "") for e in envs}
+ok = (seqs and seqs[0] >= 1 and seqs == list(range(seqs[0], seqs[-1] + 1))
+      and boots and boots != {""} and len(boots) == 1)
+sys.exit(0 if ok else 1)
 ' "$COLL_STORE"; then
   WEBHOOK_PASSED=true
-  echo "Fleet webhook: collector received and verified the flag envelope."
+  echo "Fleet webhook: collector verified flag + status envelopes; seq stream contiguous, one boot id."
 else
   echo "DEBUG collector log: $(cat "$tmp/collector.log" 2>/dev/null || true)"
 fi
 kill "$COLLECTOR_PID" 2>/dev/null || true
 
-if [ "$PASSED" = true ] && [ "$INCIDENT_PASSED" = true ] && [ "$GUARD_PASSED" = true ] && [ "$WEBHOOK_PASSED" = true ] && [ "$SSE_PASSED" = true ] && [ "$CONSOLE_PASSED" = true ] && [ "$ADVISOR_PASSED" = true ] && [ "$OPERATOR_PASSED" = true ]; then
-  echo "E2E SMOKE TEST: PASS (Flag, Incident, Directory Guard, fleet webhook, SSE, console auth, advisor verdict, and operator loop verified)"
+if [ "$PASSED" = true ] && [ "$INCIDENT_PASSED" = true ] && [ "$GUARD_PASSED" = true ] && [ "$WEBHOOK_PASSED" = true ] && [ "$SSE_PASSED" = true ] && [ "$CONSOLE_PASSED" = true ] && [ "$ADVISOR_PASSED" = true ] && [ "$OPERATOR_PASSED" = true ] && [ "$ENROLL_PASSED" = true ]; then
+  echo "E2E SMOKE TEST: PASS (Flag, Incident, Directory Guard, fleet webhook + seq, enroll, SSE, console auth, advisor verdict, and operator loop verified)"
   if [ -n "$DAEMON_PID" ]; then
     kill "$DAEMON_PID" 2>/dev/null || true
   fi
@@ -490,7 +525,7 @@ else
   if [ -n "$DAEMON_PID" ]; then
     kill "$DAEMON_PID" 2>/dev/null || true
   fi
-  echo "E2E SMOKE TEST: FAIL (Flag passed: $PASSED, Incident passed: $INCIDENT_PASSED, Guard passed: $GUARD_PASSED, Webhook passed: $WEBHOOK_PASSED, SSE passed: $SSE_PASSED, Console passed: $CONSOLE_PASSED, Advisor passed: $ADVISOR_PASSED, Operator passed: $OPERATOR_PASSED)"
+  echo "E2E SMOKE TEST: FAIL (Flag passed: $PASSED, Incident passed: $INCIDENT_PASSED, Guard passed: $GUARD_PASSED, Webhook passed: $WEBHOOK_PASSED, Enroll passed: $ENROLL_PASSED, SSE passed: $SSE_PASSED, Console passed: $CONSOLE_PASSED, Advisor passed: $ADVISOR_PASSED, Operator passed: $OPERATOR_PASSED)"
   echo "DEBUG SSE STREAM: $SSE_BODY"
   exit 1
 fi

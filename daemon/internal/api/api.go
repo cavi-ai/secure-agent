@@ -121,6 +121,9 @@ type API struct {
 	peerChk    PeerChecker
 	agentPIDs  func() map[int32]struct{}
 	fleetSinks GuardEventSink
+	// fleetConfigured mirrors len(cfg.Fleet.Webhooks) > 0 so /fleet can tell
+	// the console whether a collector exists at all.
+	fleetConfigured bool
 
 	subscribeEvents   func() <-chan event.Event
 	unsubscribeEvents func(<-chan event.Event)

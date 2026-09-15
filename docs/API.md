@@ -226,8 +226,13 @@ Downstream collectors consume events from many nodes three ways:
 
 ### 1. Webhook push (real-time)
 
+Fastest path: `secure-agent fleet enroll <collector-url>` on the node — it reads the node id from the daemon, generates the secret, merges the webhook into `config.yaml` (backup first), and prints the one line the collector's secrets file needs. The daemon hot-reloads fleet config; no restart. The manual equivalent:
+
 ```yaml
 fleet:
+  hostname: "builder-01"              # display name collectors show (default: os.Hostname)
+  labels: { env: prod, role: build-runner }  # grouping dimensions for multi-fleet views
+  heartbeat_interval_sec: 60          # status-envelope cadence (default 60)
   webhooks:
     - url: https://collector.internal/hooks/secure-agent
       secret: "<shared-secret>"
@@ -237,8 +242,27 @@ fleet:
 Every flag, incident, and guard decision is POSTed as:
 
 ```json
-{"node_id": "…", "kind": "flag", "ts": "…", "version": "…", "payload": {…}}
+{"node_id": "…", "kind": "flag", "ts": "…", "version": "…", "boot": "…", "seq": 42, "payload": {…}}
 ```
+
+`boot` identifies one daemon run; `seq` is a per-boot monotonic counter stamped on **every** envelope (heartbeats included). Collectors use them for gap detection: a delivery lost to the backlog cap, collector downtime, or a restart surfaces as a sequence gap with a 90s grace period for retries/reordering — loss is honest, never silent. A new `boot` resets the expectation (a restart is not a gap). Fleet config (`webhooks`, `hostname`, `labels`, `heartbeat_interval_sec`) is **hot-reloadable**: the daemon's config watcher swaps sinks and cadence within one poll cycle.
+
+In addition, every node pushes a **`status` heartbeat** — once at boot, then
+every `heartbeat_interval_sec`, and immediately whenever the posture state
+changes (`all-clear → critical` must not wait out the interval). The status
+kind is **not** filterable by `events:` — liveness that can be unsubscribed
+is indistinguishable from a dead node. Payload:
+
+```json
+{"hostname": "builder-01", "os": "darwin", "arch": "arm64", "agents": 2,
+ "uptime": "4h12m", "posture_state": "critical",
+ "posture_summary": "Secret leaving in agent traffic — act now.",
+ "needs_you": 2, "labels": {"env": "prod"}}
+```
+
+`posture_state`/`posture_summary`/`needs_you` are the node's own `/posture`
+headline — collectors render the same answer the local UIs show instead of
+re-deriving it from raw flags.
 
 - Signature: `X-SecureAgent-Signature: sha256=<hex hmac-sha256(secret, body)>` — verify before trusting `payload`.
 - Retries: 3 attempts (500ms/2s/5s backoff) on network errors, 5xx, and 429 only. Non-retryable failures land in `~/.local/state/secure-agent/webhook-deliveries.jsonl` (0600).
@@ -382,12 +406,13 @@ printf '<node-id>=<secret>\n' > secrets.txt
 
 | Endpoint | Description |
 |---|---|
-| `POST /hooks/secure-agent` | Webhook receiver. Requires `X-SecureAgent-Node` (provisioned) and `X-SecureAgent-Signature` (HMAC over the raw body, constant-time compared). Envelope `node_id` must match the header. |
-| `GET /fleet` | Merged multi-node rollup, node-id ordered: version, last-seen, flag/incident/guard counts, latest incident summary. |
+| `POST /hooks/secure-agent` | Webhook receiver. Requires `X-SecureAgent-Node` (provisioned) and `X-SecureAgent-Signature` (HMAC over the raw body, constant-time compared). Envelope `node_id` must match the header. Accepted kinds: `flag`, `incident`, `guard`, `status`. |
+| `GET /fleet` | Merged multi-node rollup ordered by operator priority (critical → attention → stale → all-clear → legacy). Per node: `hostname`, `labels`, `version` (tracks the newest report), `last_seen` (liveness), `last_event` (security activity), lifetime counts, **rolling 24h counts** (`flags_24h`, `critical_flags_24h`, `incidents_24h`), guard `allow`/`deny` breakdown, `gaps` (sequence-gap loss count), `boot_id`, and the node's own posture (`posture_state`, `posture_summary`, `needs_you`, `agents`). |
+| `GET /fleet/rules` | Cross-node rule aggregation: `{total_nodes, rules: [{rule, nodes, node_ids, flags_24h, critical_24h}]}` sorted by fleet spread — "is the same thing firing on N/M nodes?" |
 | `GET /nodes/<id>/events?kind=&limit=` | One node's stored envelopes, newest first. |
-| `GET /` | HTML overview: per-node posture cards, staleness warnings (>10 min stale, >20 min gone quiet). |
+| `GET /` | HTML overview: a fleet headline ("2 critical · 1 stale · 12 all-clear"), the rules-across-fleet table, and per-node cards (hostname, posture chip, 24h counts, labels, delivery-gap warnings). Liveness: heartbeat nodes stale >3 min, gone >10 min; legacy event-only nodes >10 / >20 min. |
 | `GET /healthz` | Liveness. |
 
-Secrets come from a flat file (`node_id=secret` lines) or `-secrets n1=a,n2=b`. Store: append-only JSONL per node, `0600` in a `0700` directory, replayed into the rollup at startup.
+Secrets come from a flat file (`node_id=secret` lines) or `-secrets n1=a,n2=b`. Store: append-only JSONL per node, `0600` in a `0700` directory, replayed into the rollup at startup behind a small `envelopeLog` interface — a SQLite backend can replace it without touching rollup semantics (the production-grade trajectory: retention, TLS, alerting).
 
-The e2e smoke test provisions a collector, configures a node webhook, triggers a real flag, and asserts a verified envelope lands in the store — the fleet contract cannot regress silently.
+The e2e smoke test provisions a collector, configures a node webhook, triggers a real flag, and asserts verified flag **and status-heartbeat** envelopes land in the store — the fleet contract cannot regress silently.

@@ -519,7 +519,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   };
 
-
   window.addSource = async function() {
     const input = document.getElementById('source-input');
     const value = (input.value || '').trim();

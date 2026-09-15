@@ -94,6 +94,7 @@ def main():
         dom_authfail = dump_dom(chrome, tmp, "?authfail")
         dom_netfail = dump_dom(chrome, tmp, "?netfail")
         dom_tokenseed = dump_dom(chrome, tmp, "?requiretoken&tokenseed")
+        dom_nofleet = dump_dom(chrome, tmp, "?nofleetdemo")
 
         # --- telemetry wiring ---
         check("version badge comes from /status", 'id="app-version">v9.9.9-domtest<' in dom)
@@ -202,6 +203,11 @@ def main():
         # --- fleet node card (real /fleet object shape + renderAll crash isolation) ---
         check("fleet card renders the local node object",
               "ci-runner-02" in dom and "darwin/arm64" in dom)
+        check("fleet panel visible when a collector is configured",
+              'id="fleet-panel">' in dom)
+        check("fleet panel hides when no collector is configured",
+              'id="fleet-panel" style="display: none;"' in dom_nofleet
+              and "ci-runner-02" not in dom_nofleet)
         check("panels after fleet still render (crash isolation)",
               dom.count('class="flag-card') == 3
               and dom.count('class="timeline-item') > 0

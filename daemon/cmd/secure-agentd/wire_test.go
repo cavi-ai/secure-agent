@@ -1,12 +1,15 @@
 package main
 
 import (
+	"context"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/advisor"
 	"github.com/cavi-ai/secure-agent/daemon/internal/agents"
+	"github.com/cavi-ai/secure-agent/daemon/internal/api"
 	"github.com/cavi-ai/secure-agent/daemon/internal/bus"
 	"github.com/cavi-ai/secure-agent/daemon/internal/config"
 	"github.com/cavi-ai/secure-agent/daemon/internal/correlate"
@@ -168,4 +171,99 @@ func TestWatchParentExit(t *testing.T) {
 	if ch := watchParentExit(1); ch != nil {
 		t.Fatal("pid-1 launch must not start an orphan watch")
 	}
+}
+
+func TestBuildNodeStatus(t *testing.T) {
+	st := statusStub()
+	p := postureStub("critical", "Secret leaving in agent traffic — act now.", 2)
+	labels := map[string]string{"env": "prod", "role": "build-runner"}
+	ns := buildNodeStatus(st, p, "builder-01", labels)
+	if ns.Hostname != "builder-01" || ns.PostureState != "critical" || ns.NeedsYou != 2 {
+		t.Fatalf("node status = %+v", ns)
+	}
+	if ns.PostureSummary != p.Summary || ns.Agents != st.ActiveAgents || ns.Uptime != st.Uptime {
+		t.Fatalf("payload must mirror status+posture: %+v", ns)
+	}
+	if ns.Labels["env"] != "prod" || ns.OS == "" || ns.Arch == "" {
+		t.Fatalf("labels/os/arch missing: %+v", ns)
+	}
+}
+
+func statusStub() api.Status {
+	return api.Status{Running: true, Version: "v9", Uptime: "1h0m0s", ActiveAgents: 3}
+}
+
+func postureStub(state, summary string, needsYou int) api.Posture {
+	return api.Posture{State: state, Summary: summary, NeedsYou: needsYou, Items: []api.PostureItem{}}
+}
+
+// The heartbeat loop must push once at boot, on the ticker, and IMMEDIATELY
+// when the posture state flips — a node going critical cannot wait out a
+// 60s interval.
+func TestFleetHeartbeatLoopPushesOnTransition(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var mu sync.Mutex
+	pushes := 0
+	state := "all-clear"
+	push := func() string {
+		mu.Lock()
+		defer mu.Unlock()
+		pushes++
+		return state
+	}
+	stateFn := func() string { mu.Lock(); defer mu.Unlock(); return state }
+
+	// Heartbeat far in the future: only boot + transition pushes should fire.
+	go fleetHeartbeatLoop(ctx, push, stateFn, func() time.Duration { return time.Hour }, 20*time.Millisecond)
+	time.Sleep(60 * time.Millisecond)
+	mu.Lock()
+	state = "critical"
+	mu.Unlock()
+	time.Sleep(100 * time.Millisecond)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if pushes != 2 {
+		t.Fatalf("pushes = %d, want 2 (boot + transition)", pushes)
+	}
+}
+
+func TestFleetHeartbeatLoopTicks(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var mu sync.Mutex
+	pushes := 0
+	push := func() string { mu.Lock(); defer mu.Unlock(); pushes++; return "all-clear" }
+	stateFn := func() string { return "all-clear" }
+
+	go fleetHeartbeatLoop(ctx, push, stateFn, func() time.Duration { return 30 * time.Millisecond }, time.Hour)
+	time.Sleep(110 * time.Millisecond)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if pushes < 3 { // boot + at least 2 ticks
+		t.Fatalf("pushes = %d, want >= 3 (boot + ticks)", pushes)
+	}
+}
+
+// Unfleeted nodes arm the loop but publish nothing — enrolling a collector
+// at runtime (config hot-reload) must work without a daemon restart.
+func TestStartFleetHeartbeatNoopWithoutSinks(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	dir := t.TempDir()
+	st, err := store.Open(filepath.Join(dir, "t.db"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	srv := api.New("", st, nil, func() api.Status { return statusStub() })
+	cfgGet := func() config.FleetConfig { return config.FleetConfig{} }
+	startFleetHeartbeat(ctx, srv, func() api.Status { return statusStub() }, fleet.NewPublisher(), cfgGet)
+	startFleetHeartbeat(ctx, srv, func() api.Status { return statusStub() }, nil, cfgGet) // nil publisher: no loop at all
+	time.Sleep(50 * time.Millisecond)
+	// No panic, no delivery, nothing else to assert — the loop is inert.
 }
