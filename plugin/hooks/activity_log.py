@@ -59,15 +59,7 @@ def session_id() -> str:
 _SESSION_ID = ""
 
 
-def main():
-    try:
-        raw = sys.stdin.read()
-        if not raw.strip():
-            return
-        payload = json.loads(raw)
-    except Exception:
-        return
-
+def log_payload(payload: dict) -> None:
     tool = payload.get("tool_name") or payload.get("tool") or "unknown"
     pid = payload.get("pid") or os.getppid() or os.getpid()
     ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
@@ -108,6 +100,18 @@ def main():
             pass
     except Exception as e:
         sys.stderr.write(f"activity_log error: {e}\n")
+
+
+def main():
+    try:
+        raw = sys.stdin.read()
+        if not raw.strip():
+            return
+        payload = json.loads(raw)
+    except Exception:
+        return
+
+    log_payload(payload)
 
 if __name__ == "__main__":
     main()

@@ -19,6 +19,9 @@ func TestLoadDefaultsWhenNoOverlay(t *testing.T) {
 	if c.NetSampleInterval.Milliseconds() != 2000 {
 		t.Fatalf("interval = %v, want 2s", c.NetSampleInterval)
 	}
+	if c.ProxyEnabled {
+		t.Fatal("default proxy_enabled must be false (inspection is opt-in)")
+	}
 }
 
 func TestOverlayMergesOverDefaults(t *testing.T) {

@@ -25,9 +25,14 @@ const (
 	maxFlags     = 10000 // flags are insert-only like events; cap them too
 )
 
+// jsonlRotateBytes caps the forensic flag mirror. SQLite is the source of
+// truth and already prunes; JSONL is append-only unless rotated.
+var jsonlRotateBytes int64 = 8 << 20
+
 type Store struct {
 	mu          sync.Mutex
 	db          *sql.DB
+	jsonlPath   string
 	jsonlFile   *os.File
 	insertCount uint64
 	// lastSeen[pid] = RFC3339Nano ts of the most recent event for that pid,
@@ -258,6 +263,7 @@ func Open(dbPath, jsonlPath string) (*Store, error) {
 
 	return &Store{
 		db:        db,
+		jsonlPath: jsonlPath,
 		jsonlFile: jsonl,
 	}, nil
 }
@@ -284,11 +290,38 @@ func (s *Store) PutFlag(fl model.Flag) {
 	_, _ = s.db.Exec(`DELETE FROM flags WHERE rowid NOT IN (SELECT rowid FROM flags ORDER BY datetime(ts) DESC, ts DESC LIMIT ?)`, maxFlags)
 
 	if s.jsonlFile != nil {
-		data, err := json.Marshal(fl)
-		if err == nil {
-			s.jsonlFile.Write(append(data, '\n'))
+		s.maybeRotateJSONLLocked()
+		if s.jsonlFile != nil {
+			data, err := json.Marshal(fl)
+			if err == nil {
+				s.jsonlFile.Write(append(data, '\n'))
+			}
 		}
 	}
+}
+
+func (s *Store) maybeRotateJSONLLocked() {
+	if s.jsonlFile == nil || s.jsonlPath == "" || jsonlRotateBytes <= 0 {
+		return
+	}
+	st, err := s.jsonlFile.Stat()
+	if err != nil || st.Size() < jsonlRotateBytes {
+		return
+	}
+	_ = s.jsonlFile.Close()
+	s.jsonlFile = nil
+	rotated := s.jsonlPath + ".1"
+	_ = os.Remove(rotated)
+	if err := os.Rename(s.jsonlPath, rotated); err != nil {
+		log.Printf("store: warning: jsonl rotate rename failed: %v", err)
+		return
+	}
+	f, err := os.OpenFile(s.jsonlPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		log.Printf("store: warning: jsonl rotate reopen failed: %v", err)
+		return
+	}
+	s.jsonlFile = f
 }
 
 func (s *Store) PutEvent(e event.Event) {

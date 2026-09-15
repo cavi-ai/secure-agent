@@ -14,6 +14,8 @@ import re
 import sys
 import unicodedata
 
+from activity_log import log_payload
+
 INJECTION_PATTERNS = [
     re.compile(r"ignore\s+(?:all\s+|any\s+|the\s+)?(?:previous|prior|above|former)\s+(?:instructions?|directives?|prompts?|context|rules?)", re.IGNORECASE),
     re.compile(r"ignore\s+(?:previous|prior|above|former)\s+(?:instructions?|directives?|prompts?|context|rules?)", re.IGNORECASE),
@@ -77,6 +79,10 @@ def main():
         if not raw.strip():
             return
         payload = json.loads(raw)
+        try:
+            log_payload(payload)
+        except Exception:
+            pass
         result = payload.get("tool_result") or payload.get("content") or payload
         hits = scan_text(result)
     except Exception:

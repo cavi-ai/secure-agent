@@ -3,6 +3,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 
 sys.setrecursionlimit(20000)  # the deep-nesting case must survive json.dumps here
 
@@ -69,6 +70,40 @@ def main():
     out_deep = run({"hook_event_name": "PostToolUse", "tool_name": "Read", "tool_result": deep})
     if not isinstance(out_deep, dict):
         raise AssertionError(f"deep nesting should still emit JSON, got: {out_deep!r}")
+
+    # 4. Same spawn also appends activity.jsonl (one python3 per PostToolUse).
+    with tempfile.TemporaryDirectory() as tmpdir:
+        logfile = os.path.join(tmpdir, "activity.jsonl")
+        env = os.environ.copy()
+        env["SECURE_AGENT_ACTIVITY_LOG"] = logfile
+        p = subprocess.run(
+            [sys.executable, HOOK],
+            input=json.dumps({
+                "hook_event_name": "PostToolUse",
+                "tool_name": "Bash",
+                "tool_input": {"command": "echo hi"},
+                "pid": 99,
+            }),
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=5,
+        )
+        if p.returncode != 0:
+            raise AssertionError(f"hook exited {p.returncode}: {p.stderr}")
+        if not os.path.exists(logfile):
+            raise AssertionError("injection_scan must also write activity.jsonl")
+        rec = json.loads(open(logfile).read().strip().split("\n")[-1])
+        if rec.get("tool") != "Bash" or rec.get("pid") != 99:
+            raise AssertionError(f"activity record mismatch: {rec}")
+
+    hooks_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hooks.json")
+    hooks = json.loads(open(hooks_path).read())
+    post_cmds = [h["command"] for entry in hooks.get("PostToolUse", []) for h in entry.get("hooks", [])]
+    if len(post_cmds) != 1 or "injection_scan.py" not in post_cmds[0]:
+        raise AssertionError(f"PostToolUse must be a single injection_scan spawn, got {post_cmds}")
+    if any("activity_log.py" in c for c in post_cmds):
+        raise AssertionError("activity_log.py must not be a separate PostToolUse spawn")
 
     print("PASS (test_injection_scan)")
 
