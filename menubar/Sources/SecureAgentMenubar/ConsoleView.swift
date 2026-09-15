@@ -103,7 +103,7 @@ struct ConsoleView: View {
             hero
             // Functional order: 1) needs-a-decision (incidents/criticals),
             // 2) what's running, 3) what's enforcing (quiet by design).
-            if !state.incidents.isEmpty || !state.unactedFlags.isEmpty { attentionSection }
+            if !attentionIsEmpty { attentionSection }
             if !state.agentRoots.isEmpty { agentsSection }
         }
     }
@@ -277,28 +277,36 @@ struct ConsoleView: View {
     /// Open incidents with their remediation checklists — the daemon already
     /// generates these reports; this surfaces them where the user actually
     /// looks instead of only in the web console.
+    private var attentionIsEmpty: Bool {
+        state.unactedFlagsForSession(rootPid: selectedSessionRoot).isEmpty
+            && scopedOpenIncidents.isEmpty
+    }
+
+    private var scopedOpenIncidents: [IncidentReportModel] {
+        let pids = selectedSessionRoot.map { state.treePIDs(rootPid: $0) }
+        return state.incidents.filter { inc in
+            if let pids, !pids.contains(inc.pid) { return false }
+            guard let flag = state.flags.first(where: { $0.id == inc.flagId }) else { return true }
+            return flag.acknowledged != true && inc.workflow?.status != "resolved"
+        }
+    }
+
     /// One "needs attention" section: incidents with remediation sheets, then
     /// flags without an incident (action sheets). The same underlying problem
     /// never appears twice — if it has an incident, it's an incident row.
     private var attentionSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            let groups = state.groupedUnactedFlags()
-            // Handled incidents (backing flag acknowledged/resolved) leave the
-            // section — "acted upon" must mean the row leaves, same as flags.
-            let openIncidents = state.incidents.filter { inc in
-                guard let flag = state.flags.first(where: { $0.id == inc.flagId }) else { return true }
-                return flag.acknowledged != true && inc.workflow?.status != "resolved"
-            }
+            let groups = state.groupedUnactedFlags(forRootPid: selectedSessionRoot)
+            let openIncidents = scopedOpenIncidents
             // One row per group: a group whose flags carry incidents opens the
             // NEWEST incident (remediation) on tap — the incident never renders
             // as its own duplicate row.
-            let incidentByFlag = Dictionary(uniqueKeysWithValues: openIncidents.map { ($0.flagId, $0) })
             let rows = attentionRows(groups: groups, openIncidents: openIncidents)
             // Incidents with no matching flag group render standalone.
             let groupedFlagIds = Set(groups.flatMap { $0.flags.map(\.id) })
             let standaloneIncidents = openIncidents.filter { !groupedFlagIds.contains($0.flagId) }
             let total = rows.count + standaloneIncidents.count
-            sectionHeader("Needs attention", trailing: "\(total)")
+            sectionHeader("Needs attention", trailing: selectedSessionRoot == nil ? "\(total)" : "\(total) in session")
             ForEach(rows.prefix(4)) { row in
                 flagGroupRow(row.group, asIncident: row.incident)
             }
@@ -535,6 +543,7 @@ struct ConsoleView: View {
 
     @State private var agentSort: AppState.AgentSort = .lastActivity
     @State private var selectedProcess: AgentSummaryModel?
+    @State private var selectedSessionRoot: Int32?
 
     private var agentsSection: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -577,6 +586,7 @@ struct ConsoleView: View {
         let rssParts = ([root] + children).compactMap(\.rssBytes)
         let mem = rssParts.isEmpty ? nil : ByteCount.short(rssParts.reduce(0, +))
         let seen = relativeTime(([root] + children).compactMap(\.lastSeenAt).max() ?? "")
+        let flagN = state.unactedFlagsForSession(rootPid: root.pid).count
         return VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 6) {
                 Group {
@@ -595,7 +605,14 @@ struct ConsoleView: View {
                     }
                 }
                 AgentIdentity.tile(root.name, size: 14, fontSize: 8)
-                Button { selectedProcess = root } label: {
+                Button {
+                    if selectedSessionRoot == root.pid {
+                        selectedSessionRoot = nil
+                    } else {
+                        selectedSessionRoot = root.pid
+                    }
+                    selectedProcess = root
+                } label: {
                     HStack(spacing: 5) {
                         Text(root.cwdLeaf)
                             .font(.system(size: 11, weight: .medium))
@@ -622,8 +639,28 @@ struct ConsoleView: View {
                 }
                 .buttonStyle(.plain)
                 Spacer(minLength: 0)
+                if flagN > 0 {
+                    Text("\(flagN)")
+                        .font(.system(size: 8, weight: .bold, design: .rounded))
+                        .foregroundStyle(Color.bad)
+                        .help("\(flagN) unacted flag\(flagN == 1 ? "" : "s") in this session")
+                }
+                Button {
+                    state.kill(pid: root.pid)
+                } label: {
+                    Image(systemName: "power")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(Color.bad)
+                        .padding(4)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Terminate this session's process tree")
             }
             .padding(.leading, insideGroup ? 12 : 0)
+            .padding(.vertical, 2)
+            .background(selectedSessionRoot == root.pid ? Color.brand.opacity(0.10) : Color.clear)
+            .clipShape(RoundedRectangle(cornerRadius: 6))
 
             if open && !children.isEmpty {
                 ForEach(children, id: \.id) { child in
