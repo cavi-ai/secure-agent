@@ -131,7 +131,7 @@ func TestRefreshIntervalIdleVsBusy(t *testing.T) {
 	if RefreshInterval(false) != 5*time.Second {
 		t.Fatalf("idle interval = %s, want 5s", RefreshInterval(false))
 	}
-	if RefreshInterval(true) != time.Second {
-		t.Fatalf("busy interval = %s, want 1s", RefreshInterval(true))
+	if RefreshInterval(true) != 3*time.Second {
+		t.Fatalf("busy interval = %s, want 3s", RefreshInterval(true))
 	}
 }

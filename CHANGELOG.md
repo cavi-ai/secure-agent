@@ -10,6 +10,11 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Firewall rules can be demoted back to monitor from the console (block was a one-way ratchet in the UI).
 - `GET /allowlist` lists user-approved endpoints; `DELETE /allowlist` removes one. The console renders them with working Remove buttons.
 
+### Changed
+- Console SSE only refetches `/snapshot` on exec, guard, and proxy-hit; file/conn events update the sparkline only.
+- Process tagger walks every 3s while agents are tagged (idle stays 5s).
+- `PostToolUse` is one `secret_guard.py` spawn (injection scan + activity log); `injection_scan.py` is no longer a second process.
+
 ### Fixed
 - List endpoints (`/events`, `/flags`, `/incidents`, `/audit`, `/stats/rollup`) returned `null` instead of `[]` when empty — crashed strict clients (process transcript sheet).
 - Daemon shutdown during instance overlap could unlink the successor's live unix socket (running but unreachable).

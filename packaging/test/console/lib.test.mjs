@@ -24,7 +24,7 @@ const {
   familyTitle, fmtRSS, fmtAge, isFamilyRoot, childrenOf, groupAgents, familyShouldExpand,
   cwdLabel, sessionRows, filterEventsByPids, sessionBoardHTML,
   monitorVendorKeyIDs, inspectionVisible, vendorKeyPromoteHTML,
-  scopedBySession, unactedLast24h, filterSessionRows,
+  scopedBySession, unactedLast24h, filterSessionRows, sseNeedsSnapshot,
 } = ctx;
 
 // ---------- escapeHTML ----------
@@ -394,4 +394,16 @@ test('filterSessionRows: cwd/label/name substring, empty query is identity', () 
   assert.equal(filterSessionRows(rows, 'cursor').map(r => r.label).join(','), 'web-app');
   assert.equal(filterSessionRows(rows, 'projects/web').map(r => r.label).join(','), 'web-app');
   assert.equal(filterSessionRows(rows, 'nope').length, 0);
+});
+
+test('sseNeedsSnapshot: exec/guard/proxy-hit refetch; file/conn are spark-only', () => {
+  assert.equal(sseNeedsSnapshot('exec'), true);
+  assert.equal(sseNeedsSnapshot('guard-prompt'), true);
+  assert.equal(sseNeedsSnapshot('guard-resolved'), true);
+  assert.equal(sseNeedsSnapshot('proxy-hit'), true);
+  assert.equal(sseNeedsSnapshot('file-open'), false);
+  assert.equal(sseNeedsSnapshot('file-write'), false);
+  assert.equal(sseNeedsSnapshot('conn-open'), false);
+  assert.equal(sseNeedsSnapshot('transcript-hit'), false);
+  assert.equal(sseNeedsSnapshot('plugin-action'), false);
 });
