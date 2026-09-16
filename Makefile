@@ -40,15 +40,15 @@ VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 
 daemon:
 	@echo "==> Building secure-agentd daemon..."
-	go build -ldflags "-X github.com/cavi-ai/secure-agent/daemon/internal/api.Version=$(VERSION)" -o bin/secure-agentd ./daemon/cmd/secure-agentd
+	CGO_ENABLED=0 go build -ldflags "-X github.com/cavi-ai/secure-agent/daemon/internal/api.Version=$(VERSION)" -o bin/secure-agentd ./daemon/cmd/secure-agentd
 
 cli:
 	@echo "==> Building secure-agent CLI..."
-	go build -o bin/secure-agent ./cmd/secure-agent
+	CGO_ENABLED=0 go build -o bin/secure-agent ./cmd/secure-agent
 
 collector:
 	@echo "==> Building secure-agent-collector..."
-	go build -o bin/secure-agent-collector ./cmd/secure-agent-collector
+	CGO_ENABLED=0 go build -o bin/secure-agent-collector ./cmd/secure-agent-collector
 
 menubar:
 	@echo "==> Building secure-agent-menubar..."
@@ -56,7 +56,7 @@ menubar:
 
 test:
 	@echo "==> Running Go unit tests..."
-	go test ./...
+	go test ./... -count=1
 	@echo "==> Running Swift package tests..."
 	swift test --package-path menubar
 	@echo "==> Running Python hook tests..."
