@@ -404,21 +404,16 @@ func (a *API) Serve(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to listen on unix socket: %w", err)
 	}
-	// Remove the socket file on exit ONLY if it is still the file we created.
-	// When two daemons overlap (old instance exiting while the new one binds),
-	// the old one's cleanup must not unlink the new daemon's live socket —
-	// that leaves a healthy daemon unreachable on an unlinked path (the
-	// "daemon running, popover says Disconnected" race).
-	created, statErr := os.Stat(a.socketPath)
-	defer func() {
-		listener.Close()
-		if statErr != nil {
-			return
-		}
-		if now, err := os.Stat(a.socketPath); err == nil && os.SameFile(created, now) {
-			_ = os.Remove(a.socketPath)
-		}
-	}()
+	// Never unlink the socket file on exit. Go's UnixListener.Close removes
+	// the path by default, and when two daemons overlap (old instance exiting
+	// while the new one binds), the old one's Close unlinks the NEW daemon's
+	// live socket — a healthy daemon left unreachable on an unlinked path.
+	// Stale socket files are harmless: startup removes them before binding,
+	// and a client of a stale path gets ECONNREFUSED, same as a missing file.
+	if ul, ok := listener.(*net.UnixListener); ok {
+		ul.SetUnlinkOnClose(false)
+	}
+	defer listener.Close()
 
 	_ = os.Chmod(a.socketPath, 0o600)
 
