@@ -1,6 +1,7 @@
 package resource
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"sort"
@@ -9,19 +10,35 @@ import (
 )
 
 type ControlMode string
+type InterventionAction string
 
 const (
 	ModeObserve   ControlMode = "observe"
 	ModePrompt    ControlMode = "prompt"
 	ModeTerminate ControlMode = "terminate"
 
-	StateHealthy   = "healthy"
-	StateGrace     = "grace"
-	StateExceeded  = "over-budget"
-	StateApproval  = "approval-required"
-	StateCooldown  = "cooldown"
-	StateContained = "contained"
+	ActionNotify        InterventionAction = "notify"
+	ActionLowerPriority InterventionAction = "lower_priority"
+	ActionPause         InterventionAction = "pause"
+	ActionResume        InterventionAction = "resume"
+	ActionTerminate     InterventionAction = "terminate"
+
+	StateHealthy    = "healthy"
+	StateGrace      = "grace"
+	StateExceeded   = "over-budget"
+	StateApproval   = "approval-required"
+	StateCooldown   = "cooldown"
+	StateContained  = "contained"
+	StateNotified   = "notified"
+	StateIntervened = "intervened"
+	StatePaused     = "paused"
 )
+
+type InterventionStep struct {
+	Action InterventionAction
+	After  time.Duration
+	Nice   int
+}
 
 type Policy struct {
 	Mode          ControlMode
@@ -29,6 +46,7 @@ type Policy struct {
 	MaxCPUPercent float64
 	Sustain       time.Duration
 	Cooldown      time.Duration
+	Interventions []InterventionStep
 }
 
 type WorkspacePolicy struct {
@@ -48,42 +66,58 @@ type Violation struct {
 }
 
 type SessionControl struct {
-	Mode         ControlMode `json:"mode"`
-	State        string      `json:"state"`
-	PolicySource string      `json:"policy_source"`
-	PolicyScope  string      `json:"policy_scope,omitempty"`
-	BreachSince  *time.Time  `json:"breach_since,omitempty"`
-	PendingID    string      `json:"pending_id,omitempty"`
-	Violations   []Violation `json:"violations"`
+	Mode         ControlMode          `json:"mode"`
+	State        string               `json:"state"`
+	PolicySource string               `json:"policy_source"`
+	PolicyScope  string               `json:"policy_scope,omitempty"`
+	BreachSince  *time.Time           `json:"breach_since,omitempty"`
+	PendingID    string               `json:"pending_id,omitempty"`
+	Violations   []Violation          `json:"violations"`
+	LastAction   InterventionAction   `json:"last_action,omitempty"`
+	LastError    string               `json:"last_error,omitempty"`
+	NextAction   InterventionAction   `json:"next_action,omitempty"`
+	NextActionAt *time.Time           `json:"next_action_at,omitempty"`
+	Applied      []InterventionAction `json:"applied_actions,omitempty"`
+	Paused       bool                 `json:"paused,omitempty"`
 }
 
 type PendingAction struct {
-	ID         string      `json:"id"`
-	SessionKey string      `json:"session_key"`
-	RootPID    int32       `json:"root_pid"`
-	Name       string      `json:"name"`
-	Workspace  string      `json:"workspace,omitempty"`
-	CreatedAt  time.Time   `json:"created_at"`
-	Violations []Violation `json:"violations"`
+	ID         string             `json:"id"`
+	SessionKey string             `json:"session_key"`
+	RootPID    int32              `json:"root_pid"`
+	Name       string             `json:"name"`
+	Workspace  string             `json:"workspace,omitempty"`
+	CreatedAt  time.Time          `json:"created_at"`
+	Violations []Violation        `json:"violations"`
+	Action     InterventionAction `json:"action"`
+	Nice       int                `json:"nice,omitempty"`
 }
 
 type ControlSnapshot struct {
-	Mode               ControlMode               `json:"mode"`
-	MaxRSSBytes        uint64                    `json:"max_rss_bytes,omitempty"`
-	MaxCPUPercent      float64                   `json:"max_cpu_percent,omitempty"`
-	SustainSeconds     int64                     `json:"sustain_seconds"`
-	CooldownSeconds    int64                     `json:"cooldown_seconds"`
-	WorkspaceOverrides []WorkspacePolicySnapshot `json:"workspace_overrides"`
-	Pending            []PendingAction           `json:"pending"`
+	Mode               ControlMode                `json:"mode"`
+	MaxRSSBytes        uint64                     `json:"max_rss_bytes,omitempty"`
+	MaxCPUPercent      float64                    `json:"max_cpu_percent,omitempty"`
+	SustainSeconds     int64                      `json:"sustain_seconds"`
+	CooldownSeconds    int64                      `json:"cooldown_seconds"`
+	WorkspaceOverrides []WorkspacePolicySnapshot  `json:"workspace_overrides"`
+	Pending            []PendingAction            `json:"pending"`
+	Interventions      []InterventionStepSnapshot `json:"interventions,omitempty"`
+}
+
+type InterventionStepSnapshot struct {
+	Action       InterventionAction `json:"action"`
+	AfterSeconds int64              `json:"after_seconds"`
+	Nice         int                `json:"nice,omitempty"`
 }
 
 type WorkspacePolicySnapshot struct {
-	CwdPrefix       string      `json:"cwd_prefix"`
-	Mode            ControlMode `json:"mode"`
-	MaxRSSBytes     uint64      `json:"max_rss_bytes,omitempty"`
-	MaxCPUPercent   float64     `json:"max_cpu_percent,omitempty"`
-	SustainSeconds  int64       `json:"sustain_seconds"`
-	CooldownSeconds int64       `json:"cooldown_seconds"`
+	CwdPrefix       string                     `json:"cwd_prefix"`
+	Mode            ControlMode                `json:"mode"`
+	MaxRSSBytes     uint64                     `json:"max_rss_bytes,omitempty"`
+	MaxCPUPercent   float64                    `json:"max_cpu_percent,omitempty"`
+	SustainSeconds  int64                      `json:"sustain_seconds"`
+	CooldownSeconds int64                      `json:"cooldown_seconds"`
+	Interventions   []InterventionStepSnapshot `json:"interventions,omitempty"`
 }
 
 type ControlAction struct {
@@ -96,28 +130,42 @@ type ControlAction struct {
 	Name            string
 	Workspace       string
 	Violations      []Violation
+	Nice            int
 }
+
+// PartialPauseError means a pause attempt failed and at least one process
+// could not be resumed during rollback. The session remains recoverable through
+// the normal resume control.
+type PartialPauseError struct{ Cause error }
+
+func (e *PartialPauseError) Error() string { return e.Cause.Error() }
+func (e *PartialPauseError) Unwrap() error { return e.Cause }
 
 type sessionState struct {
 	breachSince   time.Time
 	pendingID     string
 	cooldownUntil time.Time
 	contained     bool
+	applied       map[InterventionAction]bool
+	inFlight      InterventionAction
+	lastAction    InterventionAction
+	lastError     string
+	paused        bool
 }
 
 type Controller struct {
-	mu        sync.Mutex
-	policies  PolicySet
-	states    map[string]*sessionState
-	pending   map[string]PendingAction
-	latest    Snapshot
-	seq       uint64
-	terminate func(ControlAction) error
+	mu       sync.Mutex
+	policies PolicySet
+	states   map[string]*sessionState
+	pending  map[string]PendingAction
+	latest   Snapshot
+	seq      uint64
+	execute  func(ControlAction) error
 }
 
-func NewController(policy Policy, terminate func(ControlAction) error) *Controller {
+func NewController(policy Policy, execute func(ControlAction) error) *Controller {
 	return &Controller{policies: normalizedPolicySet(PolicySet{Default: policy}), states: map[string]*sessionState{},
-		pending: map[string]PendingAction{}, terminate: terminate}
+		pending: map[string]PendingAction{}, execute: execute}
 }
 
 func normalizedPolicy(p Policy) Policy {
@@ -130,6 +178,7 @@ func normalizedPolicy(p Policy) Policy {
 	if p.Cooldown < 0 {
 		p.Cooldown = 0
 	}
+	p.Interventions = append([]InterventionStep(nil), p.Interventions...)
 	return p
 }
 
@@ -170,11 +219,23 @@ func normalizedPolicySet(p PolicySet) PolicySet {
 }
 
 func equalPolicySet(a, b PolicySet) bool {
-	if a.Default != b.Default || len(a.WorkspaceOverrides) != len(b.WorkspaceOverrides) {
+	if !equalPolicy(a.Default, b.Default) || len(a.WorkspaceOverrides) != len(b.WorkspaceOverrides) {
 		return false
 	}
 	for i := range a.WorkspaceOverrides {
-		if a.WorkspaceOverrides[i].Path != b.WorkspaceOverrides[i].Path || a.WorkspaceOverrides[i].Policy != b.WorkspaceOverrides[i].Policy {
+		if a.WorkspaceOverrides[i].Path != b.WorkspaceOverrides[i].Path || !equalPolicy(a.WorkspaceOverrides[i].Policy, b.WorkspaceOverrides[i].Policy) {
+			return false
+		}
+	}
+	return true
+}
+
+func equalPolicy(a, b Policy) bool {
+	if a.Mode != b.Mode || a.MaxRSSBytes != b.MaxRSSBytes || a.MaxCPUPercent != b.MaxCPUPercent || a.Sustain != b.Sustain || a.Cooldown != b.Cooldown || len(a.Interventions) != len(b.Interventions) {
+		return false
+	}
+	for i := range a.Interventions {
+		if a.Interventions[i] != b.Interventions[i] {
 			return false
 		}
 	}
@@ -201,9 +262,13 @@ func workspacePathMatches(workspace, prefix string) bool {
 }
 
 func (c *Controller) SetTerminator(fn func(ControlAction) error) {
+	c.SetExecutor(fn)
+}
+
+func (c *Controller) SetExecutor(fn func(ControlAction) error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.terminate = fn
+	c.execute = fn
 }
 
 func (c *Controller) Observe(snapshot Snapshot, now time.Time) {
@@ -228,12 +293,20 @@ func (c *Controller) Observe(snapshot Snapshot, now time.Time) {
 		s.Control = control
 		state := c.states[s.Key]
 		if state == nil {
-			state = &sessionState{}
+			state = &sessionState{applied: make(map[InterventionAction]bool)}
 			c.states[s.Key] = state
 		}
+		if state.applied == nil {
+			state.applied = make(map[InterventionAction]bool)
+		}
+		populateSessionControl(control, state)
 		if len(violations) == 0 {
 			delete(c.pending, state.pendingID)
-			*state = sessionState{}
+			if state.paused {
+				control.State = StatePaused
+				continue
+			}
+			*state = sessionState{applied: make(map[InterventionAction]bool)}
 			continue
 		}
 		if now.Before(state.cooldownUntil) {
@@ -249,34 +322,56 @@ func (c *Controller) Observe(snapshot Snapshot, now time.Time) {
 			control.State = StateGrace
 			continue
 		}
+		steps := effectiveInterventions(policy)
+		if policy.Mode == ModeObserve || len(steps) == 0 {
+			control.State = StateExceeded
+			if len(steps) > 0 {
+				control.NextAction = steps[0].Action
+				due := state.breachSince.Add(policy.Sustain + steps[0].After)
+				control.NextActionAt = &due
+			}
+			continue
+		}
+		step, found := nextIntervention(steps, state)
+		if !found {
+			control.State = interventionState(state.lastAction)
+			continue
+		}
+		dueAt := state.breachSince.Add(policy.Sustain + step.After)
+		control.NextAction, control.NextActionAt = step.Action, &dueAt
+		if now.Before(dueAt) {
+			if state.lastAction != "" {
+				control.State = interventionState(state.lastAction)
+			} else {
+				control.State = StateGrace
+			}
+			continue
+		}
+		if state.inFlight != "" || state.pendingID != "" {
+			if state.pendingID != "" {
+				control.State, control.PendingID = StateApproval, state.pendingID
+			}
+			continue
+		}
 		targetPID, targetStartedAt := containmentTarget(*s)
-		action := ControlAction{Kind: "terminate", SessionKey: s.Key, RootPID: s.RootPID,
+		action := ControlAction{Kind: string(step.Action), SessionKey: s.Key, RootPID: s.RootPID,
 			RootStartedAt: s.RootStartedAt, TargetPID: targetPID, TargetStartedAt: targetStartedAt,
-			Name: s.Name, Workspace: s.Workspace,
+			Name: s.Name, Workspace: s.Workspace, Nice: step.Nice,
 			Violations: append([]Violation(nil), violations...)}
-		switch policy.Mode {
-		case ModePrompt:
+		if policy.Mode == ModePrompt && step.Action != ActionNotify {
 			if state.pendingID == "" {
 				c.seq++
 				state.pendingID = fmt.Sprintf("resource-%d", c.seq)
 				c.pending[state.pendingID] = PendingAction{ID: state.pendingID, SessionKey: s.Key,
 					RootPID: s.RootPID, Name: s.Name, Workspace: s.Workspace, CreatedAt: now,
-					Violations: append([]Violation(nil), violations...)}
+					Violations: append([]Violation(nil), violations...), Action: step.Action, Nice: step.Nice}
 			}
 			control.State, control.PendingID = StateApproval, state.pendingID
-		case ModeTerminate:
-			if !state.contained && c.terminate != nil {
-				state.contained = true
-				control.State = StateContained
-				automatic = append(automatic, automaticAction{action: action, cooldown: policy.Cooldown})
-			} else if state.contained {
-				control.State = StateContained
-			} else {
-				control.State = StateExceeded
-			}
-		default:
-			control.State = StateExceeded
+			continue
 		}
+		state.inFlight = step.Action
+		control.State = interventionState(step.Action)
+		automatic = append(automatic, automaticAction{action: action, cooldown: policy.Cooldown})
 	}
 	for key, state := range c.states {
 		if !live[key] {
@@ -286,21 +381,97 @@ func (c *Controller) Observe(snapshot Snapshot, now time.Time) {
 	}
 	snapshot.Control = c.controlSnapshotLocked(policies)
 	c.latest = cloneSnapshot(snapshot)
-	terminate := c.terminate
+	execute := c.execute
 	c.mu.Unlock()
-	if terminate != nil {
-		for _, automatic := range automatic {
-			if err := terminate(automatic.action); err != nil {
-				c.mu.Lock()
-				if state := c.states[automatic.action.SessionKey]; state != nil {
-					state.contained = false
-					state.cooldownUntil = now.Add(automatic.cooldown)
-					c.setLatestControlStateLocked(automatic.action.SessionKey, StateCooldown, "")
-				}
-				c.mu.Unlock()
-			}
+	for _, automatic := range automatic {
+		var err error
+		if execute == nil && automatic.action.Kind != string(ActionNotify) {
+			err = fmt.Errorf("resource intervention is unavailable")
+		} else if execute != nil {
+			err = execute(automatic.action)
+		}
+		c.mu.Lock()
+		c.applyActionResultLocked(automatic.action.SessionKey, InterventionAction(automatic.action.Kind), err, now, automatic.cooldown)
+		c.mu.Unlock()
+	}
+}
+
+func effectiveInterventions(policy Policy) []InterventionStep {
+	if len(policy.Interventions) > 0 {
+		return policy.Interventions
+	}
+	if policy.Mode == ModePrompt || policy.Mode == ModeTerminate {
+		return []InterventionStep{{Action: ActionTerminate}}
+	}
+	return nil
+}
+
+func nextIntervention(steps []InterventionStep, state *sessionState) (InterventionStep, bool) {
+	for _, step := range steps {
+		if !state.applied[step.Action] {
+			return step, true
 		}
 	}
+	return InterventionStep{}, false
+}
+
+func populateSessionControl(control *SessionControl, state *sessionState) {
+	control.LastAction, control.LastError, control.Paused = state.lastAction, state.lastError, state.paused
+	control.Applied = nil
+	for action, applied := range state.applied {
+		if applied {
+			control.Applied = append(control.Applied, action)
+		}
+	}
+	sort.Slice(control.Applied, func(i, j int) bool { return control.Applied[i] < control.Applied[j] })
+}
+
+func interventionState(action InterventionAction) string {
+	switch action {
+	case ActionNotify:
+		return StateNotified
+	case ActionPause:
+		return StatePaused
+	case ActionTerminate:
+		return StateContained
+	case ActionLowerPriority:
+		return StateIntervened
+	default:
+		return StateExceeded
+	}
+}
+
+func (c *Controller) applyActionResultLocked(sessionKey string, action InterventionAction, err error, now time.Time, cooldown time.Duration) {
+	state := c.states[sessionKey]
+	if state == nil {
+		return
+	}
+	state.inFlight = ""
+	if err != nil {
+		state.lastError = err.Error()
+		state.cooldownUntil = now.Add(cooldown)
+		var partialPause *PartialPauseError
+		if errors.As(err, &partialPause) {
+			state.paused = true
+			state.lastAction = ActionPause
+			c.updateLatestControlLocked(sessionKey, StatePaused, "", state)
+		} else {
+			c.updateLatestControlLocked(sessionKey, StateCooldown, "", state)
+		}
+		return
+	}
+	state.applied[action] = true
+	state.lastAction, state.lastError = action, ""
+	if action == ActionPause {
+		state.paused = true
+	}
+	if action == ActionResume {
+		state.paused = false
+	}
+	if action == ActionTerminate {
+		state.contained = true
+	}
+	c.updateLatestControlLocked(sessionKey, interventionState(action), "", state)
 }
 
 func policyViolations(p Policy, s Session) []Violation {
@@ -339,11 +510,20 @@ func (c *Controller) controlSnapshotLocked(policies PolicySet) *ControlSnapshot 
 		op := override.Policy
 		overrides = append(overrides, WorkspacePolicySnapshot{CwdPrefix: override.Path, Mode: op.Mode,
 			MaxRSSBytes: op.MaxRSSBytes, MaxCPUPercent: op.MaxCPUPercent,
-			SustainSeconds: int64(op.Sustain.Seconds()), CooldownSeconds: int64(op.Cooldown.Seconds())})
+			SustainSeconds: int64(op.Sustain.Seconds()), CooldownSeconds: int64(op.Cooldown.Seconds()),
+			Interventions: interventionSnapshots(op.Interventions)})
 	}
 	return &ControlSnapshot{Mode: p.Mode, MaxRSSBytes: p.MaxRSSBytes, MaxCPUPercent: p.MaxCPUPercent,
 		SustainSeconds: int64(p.Sustain.Seconds()), CooldownSeconds: int64(p.Cooldown.Seconds()),
-		WorkspaceOverrides: overrides, Pending: pending}
+		WorkspaceOverrides: overrides, Pending: pending, Interventions: interventionSnapshots(p.Interventions)}
+}
+
+func interventionSnapshots(steps []InterventionStep) []InterventionStepSnapshot {
+	out := make([]InterventionStepSnapshot, 0, len(steps))
+	for _, step := range steps {
+		out = append(out, InterventionStepSnapshot{Action: step.Action, AfterSeconds: int64(step.After.Seconds()), Nice: step.Nice})
+	}
+	return out
 }
 
 func (c *Controller) Resolve(id, decision string, now time.Time) error {
@@ -353,53 +533,126 @@ func (c *Controller) Resolve(id, decision string, now time.Time) error {
 		c.mu.Unlock()
 		return fmt.Errorf("resource action not found")
 	}
-	if decision != "terminate" && decision != "dismiss" {
+	if decision != "apply" && decision != string(pending.Action) && decision != "terminate" && decision != "dismiss" {
 		c.mu.Unlock()
-		return fmt.Errorf("decision must be terminate or dismiss")
+		return fmt.Errorf("decision must apply the pending action or dismiss")
+	}
+	state := c.states[pending.SessionKey]
+	if state == nil || state.pendingID != id {
+		c.mu.Unlock()
+		return fmt.Errorf("resource action is no longer active")
+	}
+	if state.inFlight != "" {
+		c.mu.Unlock()
+		return fmt.Errorf("resource action is already in progress")
 	}
 	if decision == "dismiss" {
 		delete(c.pending, id)
-		if state := c.states[pending.SessionKey]; state != nil {
-			state.pendingID = ""
-			policy, _ := c.policies.forWorkspace(pending.Workspace)
-			state.cooldownUntil = now.Add(policy.Cooldown)
-			c.setLatestControlStateLocked(pending.SessionKey, StateCooldown, "")
-		}
+		state.pendingID = ""
+		policy, _ := c.policies.forWorkspace(pending.Workspace)
+		state.cooldownUntil = now.Add(policy.Cooldown)
+		c.setLatestControlStateLocked(pending.SessionKey, StateCooldown, "")
 		c.mu.Unlock()
 		return nil
 	}
+	if decision == "terminate" && pending.Action != ActionTerminate {
+		c.mu.Unlock()
+		return fmt.Errorf("pending action is %s", pending.Action)
+	}
 	var action ControlAction
-	if decision == "terminate" {
-		for _, s := range c.latest.Sessions {
-			if s.Key == pending.SessionKey {
-				targetPID, targetStartedAt := containmentTarget(s)
-				action = ControlAction{Kind: decision, SessionKey: s.Key, RootPID: s.RootPID,
-					RootStartedAt: s.RootStartedAt, TargetPID: targetPID, TargetStartedAt: targetStartedAt,
-					Name: s.Name, Workspace: s.Workspace,
-					Violations: pending.Violations}
-				break
-			}
+	for _, s := range c.latest.Sessions {
+		if s.Key == pending.SessionKey {
+			targetPID, targetStartedAt := containmentTarget(s)
+			action = ControlAction{Kind: string(pending.Action), SessionKey: s.Key, RootPID: s.RootPID,
+				RootStartedAt: s.RootStartedAt, TargetPID: targetPID, TargetStartedAt: targetStartedAt,
+				Name: s.Name, Workspace: s.Workspace, Violations: pending.Violations, Nice: pending.Nice}
+			break
 		}
 	}
-	terminate := c.terminate
+	state.inFlight = pending.Action
+	execute := c.execute
 	c.mu.Unlock()
+	fail := func(err error) error {
+		c.mu.Lock()
+		if current := c.states[pending.SessionKey]; current != nil && current.pendingID == id && current.inFlight == pending.Action {
+			policy, _ := c.policies.forWorkspace(pending.Workspace)
+			c.applyActionResultLocked(pending.SessionKey, pending.Action, err, now, policy.Cooldown)
+		}
+		c.mu.Unlock()
+		return err
+	}
 	if action.TargetPID == 0 {
-		return fmt.Errorf("session is no longer active")
+		return fail(fmt.Errorf("session is no longer active"))
 	}
-	if terminate == nil {
-		return fmt.Errorf("resource containment is unavailable")
+	if execute == nil {
+		return fail(fmt.Errorf("resource intervention is unavailable"))
 	}
-	if err := terminate(action); err != nil {
-		return err // keep the approval pending so the operator can retry
+	if err := execute(action); err != nil {
+		return fail(err) // keep the approval pending so the operator can retry
 	}
 	c.mu.Lock()
 	delete(c.pending, id)
-	if state := c.states[pending.SessionKey]; state != nil {
+	if state := c.states[pending.SessionKey]; state != nil && state.pendingID == id {
 		state.pendingID = ""
-		state.contained = true
 		policy, _ := c.policies.forWorkspace(pending.Workspace)
+		c.applyActionResultLocked(pending.SessionKey, pending.Action, nil, now, policy.Cooldown)
+	}
+	c.mu.Unlock()
+	return nil
+}
+
+func (c *Controller) Resume(sessionKey string, now time.Time) error {
+	c.mu.Lock()
+	state := c.states[sessionKey]
+	if state == nil || !state.paused {
+		c.mu.Unlock()
+		return fmt.Errorf("session is not paused")
+	}
+	if state.inFlight != "" {
+		c.mu.Unlock()
+		return fmt.Errorf("resource action is already in progress")
+	}
+	var action ControlAction
+	for _, s := range c.latest.Sessions {
+		if s.Key == sessionKey {
+			targetPID, targetStartedAt := containmentTarget(s)
+			action = ControlAction{Kind: string(ActionResume), SessionKey: s.Key, RootPID: s.RootPID,
+				RootStartedAt: s.RootStartedAt, TargetPID: targetPID, TargetStartedAt: targetStartedAt,
+				Name: s.Name, Workspace: s.Workspace}
+			break
+		}
+	}
+	state.inFlight = ActionResume
+	execute := c.execute
+	c.mu.Unlock()
+	fail := func(err error) error {
+		c.mu.Lock()
+		if current := c.states[sessionKey]; current != nil && current.inFlight == ActionResume {
+			policy, _ := c.policies.forWorkspace(action.Workspace)
+			c.applyActionResultLocked(sessionKey, ActionResume, err, now, policy.Cooldown)
+		}
+		c.mu.Unlock()
+		return err
+	}
+	if action.TargetPID == 0 {
+		return fail(fmt.Errorf("session is no longer active"))
+	}
+	if execute == nil {
+		return fail(fmt.Errorf("resource intervention is unavailable"))
+	}
+	if err := execute(action); err != nil {
+		return fail(err)
+	}
+	c.mu.Lock()
+	if state := c.states[sessionKey]; state != nil {
+		if state.pendingID != "" {
+			delete(c.pending, state.pendingID)
+			state.pendingID = ""
+		}
+		policy, _ := c.policies.forWorkspace(action.Workspace)
 		state.cooldownUntil = now.Add(policy.Cooldown)
-		c.setLatestControlStateLocked(pending.SessionKey, StateContained, "")
+		c.applyActionResultLocked(sessionKey, ActionResume, nil, now, policy.Cooldown)
+		c.updateLatestControlLocked(sessionKey, StateCooldown, "", state)
 	}
 	c.mu.Unlock()
 	return nil
@@ -418,12 +671,23 @@ func containmentTarget(s Session) (int32, time.Time) {
 }
 
 func (c *Controller) setLatestControlStateLocked(sessionKey, state, pendingID string) {
+	c.updateLatestControlLocked(sessionKey, state, pendingID, c.states[sessionKey])
+}
+
+func (c *Controller) updateLatestControlLocked(sessionKey, controlState, pendingID string, state *sessionState) {
 	for i := range c.latest.Sessions {
 		if c.latest.Sessions[i].Key != sessionKey || c.latest.Sessions[i].Control == nil {
 			continue
 		}
-		c.latest.Sessions[i].Control.State = state
+		c.latest.Sessions[i].Control.State = controlState
 		c.latest.Sessions[i].Control.PendingID = pendingID
+		if controlState != StateCooldown && controlState != StateApproval {
+			c.latest.Sessions[i].Control.NextAction = ""
+			c.latest.Sessions[i].Control.NextActionAt = nil
+		}
+		if state != nil {
+			populateSessionControl(c.latest.Sessions[i].Control, state)
+		}
 		return
 	}
 }

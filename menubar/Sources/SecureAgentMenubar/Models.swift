@@ -2,10 +2,60 @@ import Foundation
 
 public struct ResourceSnapshotModel: Codable, Sendable {
     public let host: HostPressureModel?
+    public let sessions: [ResourceSessionModel]?
 
-    public init(host: HostPressureModel?) {
+    public init(host: HostPressureModel?, sessions: [ResourceSessionModel]? = nil) {
         self.host = host
+        self.sessions = sessions
     }
+}
+
+public struct ResourceSessionModel: Codable, Sendable {
+    public let key: String
+    public let name: String
+    public let control: ResourceSessionControlModel?
+
+    public init(key: String, name: String, control: ResourceSessionControlModel? = nil) {
+        self.key = key
+        self.name = name
+        self.control = control
+    }
+}
+
+public struct ResourceSessionControlModel: Codable, Sendable {
+    public let state: String
+    public let pendingID: String?
+    public let lastAction: String?
+    public let lastError: String?
+    public let nextAction: String?
+    public let paused: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case state
+        case pendingID = "pending_id"
+        case lastAction = "last_action"
+        case lastError = "last_error"
+        case nextAction = "next_action"
+        case paused
+    }
+
+    public init(state: String, pendingID: String? = nil, lastAction: String? = nil,
+                lastError: String? = nil, nextAction: String? = nil, paused: Bool? = nil) {
+        self.state = state
+        self.pendingID = pendingID
+        self.lastAction = lastAction
+        self.lastError = lastError
+        self.nextAction = nextAction
+        self.paused = paused
+    }
+}
+
+public struct ResourceInterventionNotice: Equatable, Sendable {
+    public let sessionKey: String
+    public let sessionName: String
+    public let state: String
+    public let action: String?
+    public let error: String?
 }
 
 public struct HostPressureModel: Codable, Sendable {

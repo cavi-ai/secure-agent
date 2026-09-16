@@ -63,8 +63,9 @@
       control: {
         mode: 'prompt', max_rss_bytes: 4294967296, max_cpu_percent: 100,
         sustain_seconds: 30, cooldown_seconds: 300,
+		interventions: [{ action: 'notify', after_seconds: 0 }, { action: 'lower_priority', after_seconds: 30, nice: 10 }, { action: 'pause', after_seconds: 60 }, { action: 'terminate', after_seconds: 120 }],
         workspace_overrides: [{ cwd_prefix: '/Users/dev/workspace', mode: 'observe', max_rss_bytes: 6442450944, max_cpu_percent: 200, sustain_seconds: 60, cooldown_seconds: 600 }],
-        pending: [{ id: 'resource-1', session_key: '5821:1789480800000000000', root_pid: 5821 }]
+		pending: [{ id: 'resource-1', session_key: '5821:1789480800000000000', root_pid: 5821, action: 'pause' }]
       },
       sessions: [
         {
@@ -74,6 +75,7 @@
           estimated_reclaim_bytes: 1610612736,
           control: {
             mode: 'prompt', state: 'approval-required', pending_id: 'resource-1',
+			next_action: 'pause', last_action: 'lower_priority', applied_actions: ['notify', 'lower_priority'],
             policy_source: 'workspace', policy_scope: '/Users/dev/workspace',
             violations: [{ metric: 'rss_bytes', actual: 5905580032, limit: 4294967296 }]
           },
@@ -98,6 +100,7 @@
           key: '6033:1789484400000000000', name: 'cursor', workspace: '/Users/dev/projects/web-app',
           root_pid: 6033, root_started_at: '2026-09-09T15:00:00Z', last_seen_at: iso(3600000),
           rss_bytes: 90000000, cpu_percent: 10, process_count: 1, orphan_count: 1,
+		  control: { mode: 'prompt', state: 'paused', policy_source: 'default', paused: true, last_action: 'pause', last_error: 'rollback failed: permission denied', violations: [] },
           processes: [{ pid: 6033, ppid: 1, name: 'cursor', cwd: '/Users/dev/projects/web-app', rss_bytes: 90000000, cpu_percent: 10, is_orphan: true }],
           samples: [{ at: iso(0), rss_bytes: 90000000, cpu_percent: 10 }],
           diagnoses: [{ code: 'orphan-drift', severity: 'warning', summary: 'Attributed processes remain after their parent disappeared.' }]

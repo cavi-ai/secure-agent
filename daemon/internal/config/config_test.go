@@ -277,6 +277,27 @@ func TestResourceControlConfigAndValidation(t *testing.T) {
 	}
 }
 
+func TestResourceControlInterventionValidation(t *testing.T) {
+	valid := ResourceControlConfig{Mode: "prompt", Interventions: []ResourceInterventionConfig{
+		{Action: "notify", AfterSeconds: 0},
+		{Action: "lower_priority", AfterSeconds: 30, Nice: 10},
+		{Action: "pause", AfterSeconds: 60},
+		{Action: "terminate", AfterSeconds: 120},
+	}}
+	if err := ValidateResourceControl(valid); err != nil {
+		t.Fatal(err)
+	}
+	invalid := valid
+	invalid.Interventions = []ResourceInterventionConfig{{Action: "terminate", AfterSeconds: 60}, {Action: "pause", AfterSeconds: 30}}
+	if err := ValidateResourceControl(invalid); err == nil {
+		t.Fatal("out-of-order intervention ladder accepted")
+	}
+	invalid.Interventions = []ResourceInterventionConfig{{Action: "pause"}, {Action: "lower_priority", Nice: 10}}
+	if err := ValidateResourceControl(invalid); err == nil {
+		t.Fatal("non-canonical intervention order accepted")
+	}
+}
+
 func TestWriteResourceControlPreservesUnrelatedYAML(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	original := "# keep this comment\nproxy_enabled: true\nresource_control:\n  mode: observe\n"
@@ -284,7 +305,9 @@ func TestWriteResourceControlPreservesUnrelatedYAML(t *testing.T) {
 		t.Fatal(err)
 	}
 	next := ResourceControlConfig{Mode: "prompt", MaxRSSMB: 2048, MaxCPUPercent: 150,
-		SustainSeconds: 30, CooldownSeconds: 300, WorkspaceOverrides: []ResourceControlOverride{{
+		SustainSeconds: 30, CooldownSeconds: 300, Interventions: []ResourceInterventionConfig{
+			{Action: "notify"}, {Action: "lower_priority", AfterSeconds: 30, Nice: 10}, {Action: "pause", AfterSeconds: 60},
+		}, WorkspaceOverrides: []ResourceControlOverride{{
 			CwdPrefix: "/work/app", Mode: "terminate", MaxRSSMB: 4096, MaxCPUPercent: 200,
 			SustainSeconds: 60, CooldownSeconds: 600,
 		}}}
@@ -303,7 +326,8 @@ func TestWriteResourceControlPreservesUnrelatedYAML(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.ResourceControl.Mode != "prompt" || len(loaded.ResourceControl.WorkspaceOverrides) != 1 {
+	if loaded.ResourceControl.Mode != "prompt" || len(loaded.ResourceControl.Interventions) != 3 ||
+		loaded.ResourceControl.Interventions[1].Nice != 10 || len(loaded.ResourceControl.WorkspaceOverrides) != 1 {
 		t.Fatalf("resource control=%+v", loaded.ResourceControl)
 	}
 }

@@ -751,17 +751,17 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   };
 
-  window.resolveResourceControl = async function(id, decision) {
-    const verb = decision === 'terminate' ? 'contain this entire session' : 'keep this session running';
+  window.resolveResourceControl = async function(id, decision, sessionKey, actionName) {
+    const verb = decision === 'dismiss' ? 'keep this session running' : decision === 'resume' ? 'resume this entire session' : `apply ${String(actionName || 'this intervention').replaceAll('_', ' ')}`;
     if (!confirm(`Resource policy: ${verb}?`)) return;
     try {
       const res = await apiFetch('/resources/control', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id, decision })
+		body: JSON.stringify({ id, decision, session_key: sessionKey || '' })
       });
       if (!res.ok) throw new Error(await res.text());
-      showToast(decision === 'terminate' ? 'Session containment requested.' : 'Session kept running for the cooldown window.', 'success');
+      showToast(decision === 'dismiss' ? 'Session kept running for the cooldown window.' : decision === 'resume' ? 'Session resumed.' : 'Intervention applied.', 'success');
       fetchTelemetry({ slow: true });
     } catch (err) {
       showToast(`Resource decision failed: ${err}`, 'danger');
@@ -777,12 +777,20 @@ document.addEventListener('DOMContentLoaded', () => {
       max_rss_mb: Math.round(Number(policy.max_rss_bytes || 0) / (1024 * 1024)),
       max_cpu_percent: Number(policy.max_cpu_percent || 0),
       sustain_seconds: Number(policy.sustain_seconds || 0),
-      cooldown_seconds: Number(policy.cooldown_seconds || 0)
+	  cooldown_seconds: Number(policy.cooldown_seconds || 0),
+	  interventions: (policy.interventions || []).map(step => ({
+		action: step.action, after_seconds: Number(step.after_seconds || 0), nice: Number(step.nice || 0)
+	  }))
     };
   }
 
   function resourcePolicyFields(policy, index, isDefault) {
     const selected = (mode) => policy.mode === mode ? ' selected' : '';
+	const step = (action) => (policy.interventions || []).find(item => item.action === action);
+	const intervention = (action, label, defaultAfter, extra = '') => {
+	  const current = step(action);
+	  return `<label class="resource-policy-step"><input type="checkbox" data-step-enabled data-step-action="${action}"${current ? ' checked' : ''}><span>${label}</span><input class="input" type="number" min="0" step="1" data-step-after value="${Number(current?.after_seconds ?? defaultAfter)}" aria-label="${label} delay in seconds">${extra}</label>`;
+	};
     return `<div class="resource-policy-editor-row${isDefault ? ' default' : ''}" data-policy-row data-policy-index="${index}" data-policy-default="${isDefault ? 'true' : 'false'}">
       ${isDefault ? '' : `<label class="resource-policy-field resource-policy-path">Workspace path<input class="input" data-policy-field="cwd_prefix" value="${escapeHTML(policy.cwd_prefix || '')}" placeholder="Absolute project path" spellcheck="false"></label>`}
       <label class="resource-policy-field">Action<select class="select" data-policy-field="mode"><option value="observe"${selected('observe')}>Observe</option><option value="prompt"${selected('prompt')}>Ask first</option><option value="terminate"${selected('terminate')}>Terminate</option></select></label>
@@ -790,6 +798,12 @@ document.addEventListener('DOMContentLoaded', () => {
       <label class="resource-policy-field">CPU (%)<input class="input" type="number" min="0" step="1" data-policy-field="max_cpu_percent" value="${Number(policy.max_cpu_percent || 0)}"></label>
       <label class="resource-policy-field">Grace (sec)<input class="input" type="number" min="0" step="1" data-policy-field="sustain_seconds" value="${Number(policy.sustain_seconds || 0)}"></label>
       <label class="resource-policy-field">Cooldown (sec)<input class="input" type="number" min="0" step="1" data-policy-field="cooldown_seconds" value="${Number(policy.cooldown_seconds || 0)}"></label>
+	  <div class="resource-policy-ladder"><span class="resource-policy-ladder-title">Intervention ladder <small>seconds after grace</small></span>
+		${intervention('notify', 'Notify', 0)}
+		${intervention('lower_priority', 'Lower priority', 30, `<input class="input resource-policy-nice" type="number" min="1" max="19" step="1" data-step-nice value="${Number(step('lower_priority')?.nice || 10)}" aria-label="Nice value">`)}
+		${intervention('pause', 'Pause', 60)}
+		${intervention('terminate', 'Terminate', 120)}
+	  </div>
       ${isDefault ? '' : `<button type="button" class="btn btn-ghost btn-sm" data-action="remove-resource-override" data-index="${index}">Remove</button>`}
     </div>`;
   }
@@ -800,7 +814,7 @@ document.addEventListener('DOMContentLoaded', () => {
       <section class="resource-policy-section"><div class="resource-policy-section-head"><h4>Machine default</h4></div>${resourcePolicyFields(resourcePolicyDraft.default, -1, true)}</section>
       <section class="resource-policy-section"><div class="resource-policy-section-head"><h4>Workspace overrides</h4><span><button type="button" class="btn btn-ghost btn-sm" data-action="add-resource-override" data-source="current">Add current workspace</button><button type="button" class="btn btn-ghost btn-sm" data-action="add-resource-override" data-source="manual">Add path</button></span></div>
       <div id="resource-policy-overrides">${resourcePolicyDraft.overrides.map((p, i) => resourcePolicyFields(p, i, false)).join('') || '<div class="resource-detail-empty">No workspace overrides. Every session uses the machine default.</div>'}</div></section>
-      <p class="resource-policy-danger">Terminate mode automatically contains the full attributed session after the grace period.</p>`;
+	  <p class="resource-policy-danger">Terminate mode applies every enabled intervention automatically. Pause stops the full attributed session until resumed; terminate ends it.</p>`;
   }
 
   function readResourcePolicyEditor() {
@@ -811,7 +825,12 @@ document.addEventListener('DOMContentLoaded', () => {
         ...(row.dataset.policyDefault === 'true' ? {} : { cwd_prefix: value('cwd_prefix').trim() }),
         mode: value('mode'), max_rss_mb: Number(value('max_rss_mb')),
         max_cpu_percent: Number(value('max_cpu_percent')), sustain_seconds: Number(value('sustain_seconds')),
-        cooldown_seconds: Number(value('cooldown_seconds'))
+		cooldown_seconds: Number(value('cooldown_seconds')),
+		interventions: Array.from(row.querySelectorAll('[data-step-enabled]:checked')).map(enabled => {
+		  const stepRow = enabled.closest('.resource-policy-step');
+		  return { action: enabled.dataset.stepAction, after_seconds: Number(stepRow.querySelector('[data-step-after]').value),
+			...(enabled.dataset.stepAction === 'lower_priority' ? { nice: Number(stepRow.querySelector('[data-step-nice]').value) } : {}) };
+		})
       };
     };
     const rows = Array.from(resourcePolicyBody.querySelectorAll('[data-policy-row]'));
@@ -862,7 +881,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     const body = { ...draft.default, workspace_overrides: draft.overrides };
     if ([body, ...body.workspace_overrides].some(p => p.mode === 'terminate') &&
-        !confirm('Terminate mode will automatically stop an entire agent session after its grace period. Save this policy?')) return;
+		!confirm('Terminate mode will automatically apply the enabled intervention ladder to entire agent sessions. Save this policy?')) return;
     if (btnSaveResourcePolicy) btnSaveResourcePolicy.disabled = true;
     try {
       const res = await apiFetch('/resources/policy', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -1104,7 +1123,7 @@ document.addEventListener('DOMContentLoaded', () => {
       case 'resource-control':
         e.preventDefault();
         e.stopPropagation();
-        window.resolveResourceControl(d.id, d.decision);
+		window.resolveResourceControl(d.id, d.decision, d.session, d.intervention);
         break;
       case 'edit-resource-policy':
         window.openResourcePolicyEditor();

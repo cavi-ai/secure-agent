@@ -95,6 +95,11 @@ resource_control:
   max_cpu_percent: 0
   sustain_seconds: 0
   cooldown_seconds: 60
+  interventions:
+    - action: notify
+      after_seconds: 0
+    - action: pause
+      after_seconds: 0
 firewall:
   registry:
     salt_ref: "$tmp/fw-salt"
@@ -179,7 +184,7 @@ func main() {
 
 		clientConn, err := net.Dial("tcp", l.Addr().String())
 		if err == nil {
-			time.Sleep(10 * time.Second)
+			time.Sleep(30 * time.Second)
 			close(done)
 			clientConn.Close()
 		}
@@ -267,34 +272,53 @@ fi
 RESOURCE_CONTROL_PASSED=false
 CONTROL_RESP=""
 CONTROL_AFTER=""
+CONTROL_RESUMED=""
+RESUME_RESP=""
 AUDIT_AFTER=""
-RESOURCE_PENDING_ID=$(printf '%s' "$RESOURCE_RESP" | python3 -c '
+RESOURCE_PENDING_ID=""
+RESOURCE_SESSION_KEY=""
+for _ in $(seq 1 20); do
+  RESOURCE_RESP=$(curl -s --unix-socket "$SOCKET_PATH" http://unix/resources 2>/dev/null || true)
+  read -r RESOURCE_PENDING_ID RESOURCE_SESSION_KEY < <(printf '%s' "$RESOURCE_RESP" | python3 -c '
 import json,sys
 try:
     pending=json.load(sys.stdin).get("control",{}).get("pending",[])
     target=int(sys.argv[1])
-    print(next((p.get("id","") for p in pending if p.get("root_pid")==target), ""))
+    action=next((p for p in pending if p.get("root_pid")==target and p.get("action")=="pause"), {})
+    print(action.get("id",""), action.get("session_key",""))
 except Exception:
-    print("")
+    print("", "")
 ' "$AGENT_PID" 2>/dev/null || true)
-if [ -n "$RESOURCE_PENDING_ID" ]; then
+  [ -n "$RESOURCE_PENDING_ID" ] && break
+  sleep 0.1
+done
+if [ -n "$RESOURCE_PENDING_ID" ] && [ -n "$RESOURCE_SESSION_KEY" ]; then
   CONTROL_RESP=$(curl -s --unix-socket "$SOCKET_PATH" -X POST http://unix/resources/control \
     -H "Content-Type: application/json" \
-    -d "{\"id\":\"$RESOURCE_PENDING_ID\",\"decision\":\"dismiss\"}" 2>/dev/null || true)
+    -d "{\"id\":\"$RESOURCE_PENDING_ID\",\"decision\":\"apply\"}" 2>/dev/null || true)
   CONTROL_AFTER=$(curl -s --unix-socket "$SOCKET_PATH" http://unix/resources 2>/dev/null || true)
+  RESUME_RESP=$(curl -s --unix-socket "$SOCKET_PATH" -X POST http://unix/resources/control \
+    -H "Content-Type: application/json" \
+    -d "{\"session_key\":\"$RESOURCE_SESSION_KEY\",\"decision\":\"resume\"}" 2>/dev/null || true)
+  CONTROL_RESUMED=$(curl -s --unix-socket "$SOCKET_PATH" http://unix/resources 2>/dev/null || true)
   AUDIT_AFTER=$(curl -s --unix-socket "$SOCKET_PATH" http://unix/audit 2>/dev/null || true)
   if printf '%s' "$CONTROL_RESP" | grep -q '"status":"ok"' \
-    && printf '%s' "$CONTROL_AFTER" | python3 -c 'import json,sys; target=sys.argv[1]; pending=json.load(sys.stdin).get("control",{}).get("pending",[]); sys.exit(0 if all(p.get("id") != target for p in pending) else 1)' "$RESOURCE_PENDING_ID" \
-    && printf '%s' "$AUDIT_AFTER" | grep -q '"action":"resource-control"'; then
+    && printf '%s' "$CONTROL_AFTER" | python3 -c 'import json,sys; key=sys.argv[1]; sessions=json.load(sys.stdin).get("sessions",[]); session=next((s for s in sessions if s.get("key")==key), {}); sys.exit(0 if session.get("control",{}).get("paused") is True else 1)' "$RESOURCE_SESSION_KEY" \
+    && printf '%s' "$RESUME_RESP" | grep -q '"status":"ok"' \
+    && printf '%s' "$CONTROL_RESUMED" | python3 -c 'import json,sys; key=sys.argv[1]; sessions=json.load(sys.stdin).get("sessions",[]); session=next((s for s in sessions if s.get("key")==key), {}); control=session.get("control",{}); sys.exit(0 if control.get("paused") is not True and control.get("state")=="cooldown" else 1)' "$RESOURCE_SESSION_KEY" \
+    && printf '%s' "$AUDIT_AFTER" | grep -q '"to_mode":"pause"' \
+    && printf '%s' "$AUDIT_AFTER" | grep -q '"to_mode":"resume"'; then
     RESOURCE_CONTROL_PASSED=true
-    echo "Resource control: approval dismissed, cooldown applied, decision audited."
+    echo "Resource control: notify, approved whole-session pause, resume, and audit lifecycle completed."
   fi
 fi
 if [ "$RESOURCE_CONTROL_PASSED" != true ]; then
-  echo "Resource control FAILED: prompt/resolve/audit lifecycle did not complete (id=$RESOURCE_PENDING_ID response=$CONTROL_RESP)."
+  echo "Resource control FAILED: graduated pause/resume/audit lifecycle did not complete (id=$RESOURCE_PENDING_ID apply=$CONTROL_RESP resume=$RESUME_RESP)."
 fi
 
-wait $AGENT_PID 2>/dev/null || true
+kill "$AGENT_PID" 2>/dev/null || true
+wait "$AGENT_PID" 2>/dev/null || true
+AGENT_PID=""
 
 # ---------------------------------------------------------------------------
 # Local advisor: the flag above must have been triaged by the stub model

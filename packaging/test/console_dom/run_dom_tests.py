@@ -274,16 +274,25 @@ def main():
         check("resource policy editor opens with the active document",
               'id="resource-policy-modal" class="modal resource-policy-modal" open' in dom_policy
               and "Policy editor" in dom_policy and "Machine default" in dom_policy)
+        check("resource intervention ladder is visible",
+              "notify → lower priority → pause → terminate" in resource_view)
+        check("policy editor exposes intervention steps",
+              'data-step-action="lower_priority" checked' in dom_policy
+              and 'data-step-action="pause" checked' in dom_policy)
         check("policy editor adds the selected session workspace",
               'value="/Users/dev/workspace/api-service"' in dom_policy)
         check("policy editor exposes automatic containment warning",
-              "automatically contains the full attributed session" in dom_policy)
+		      "applies every enabled intervention automatically" in dom_policy)
         check("terminate policy save requires explicit confirmation",
-              'data-last-confirm="Terminate mode will automatically stop an entire agent session after its grace period. Save this policy?"' in dom_policy)
+		      'data-last-confirm="Terminate mode will automatically apply the enabled intervention ladder to entire agent sessions. Save this policy?"' in dom_policy)
         check("resource approval contains the whole session",
-              'data-action="resource-control" data-id="resource-1" data-decision="terminate"' in resource_view)
+              'data-action="resource-control" data-id="resource-1" data-decision="apply" data-intervention="pause"' in resource_view)
         check("resource approval can keep the session running",
               'data-action="resource-control" data-id="resource-1" data-decision="dismiss"' in resource_view)
+        check("paused resource session can resume",
+              'data-action="resource-control" data-session="6033:1789484400000000000" data-decision="resume"' in resource_view)
+        check("resource intervention failure is visible",
+              "Intervention failed: rollback failed: permission denied" in resource_view)
         check("overview session board is present", 'id="session-board"' in dom)
         check("session board has project filter", 'id="session-cwd-filter"' in dom)
         overview = dom.split('id="session-board"', 1)[1].split('id="tab-agents"', 1)[0]

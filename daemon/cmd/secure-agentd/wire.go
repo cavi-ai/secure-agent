@@ -460,7 +460,17 @@ func resourcePolicy(c config.ResourceControlConfig) resource.Policy {
 		MaxCPUPercent: c.MaxCPUPercent,
 		Sustain:       time.Duration(c.SustainSeconds) * time.Second,
 		Cooldown:      time.Duration(c.CooldownSeconds) * time.Second,
+		Interventions: resourceInterventions(c.Interventions),
 	}
+}
+
+func resourceInterventions(steps []config.ResourceInterventionConfig) []resource.InterventionStep {
+	out := make([]resource.InterventionStep, 0, len(steps))
+	for _, step := range steps {
+		out = append(out, resource.InterventionStep{Action: resource.InterventionAction(step.Action),
+			After: time.Duration(step.AfterSeconds) * time.Second, Nice: step.Nice})
+	}
+	return out
 }
 
 func resourcePolicySet(c config.ResourceControlConfig) resource.PolicySet {
@@ -473,6 +483,7 @@ func resourcePolicySet(c config.ResourceControlConfig) resource.PolicySet {
 				MaxCPUPercent: override.MaxCPUPercent,
 				Sustain:       time.Duration(override.SustainSeconds) * time.Second,
 				Cooldown:      time.Duration(override.CooldownSeconds) * time.Second,
+				Interventions: resourceInterventions(override.Interventions),
 			},
 		})
 	}

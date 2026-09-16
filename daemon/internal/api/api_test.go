@@ -665,3 +665,26 @@ func TestTerminateAgentTreeUsesLiveHelperWhenRootExited(t *testing.T) {
 		t.Fatalf("killed=%v want [11 12]", killed)
 	}
 }
+
+func TestTerminateAgentTreeVerifiedRejectsReusedChildPID(t *testing.T) {
+	fk := &fakeKiller{}
+	rootStarted := time.Date(2026, 9, 16, 12, 0, 0, 0, time.UTC)
+	childStarted := rootStarted.Add(time.Second)
+	a := New("", testStore(t), fk, func() Status {
+		return Status{Running: true, Agents: []AgentSummary{
+			{PID: 10, Name: "claude", RootPID: 10, StartedAt: rootStarted.Format(time.RFC3339Nano)},
+			{PID: 11, Name: "claude", RootPID: 10, StartedAt: childStarted.Add(time.Second).Format(time.RFC3339Nano)},
+		}}
+	})
+	a.SetAgentPIDs(func() map[int32]struct{} { return map[int32]struct{}{10: {}, 11: {}} })
+	_, err := a.TerminateAgentTreeVerified(10, rootStarted.Format(time.RFC3339Nano), map[int32]time.Time{
+		10: rootStarted,
+		11: childStarted,
+	})
+	if err == nil {
+		t.Fatal("reused child pid was accepted")
+	}
+	if len(fk.all) != 0 {
+		t.Fatalf("killed=%v before family identity validation completed", fk.all)
+	}
+}

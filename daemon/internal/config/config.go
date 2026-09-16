@@ -181,24 +181,32 @@ type DirectoryGuardConfig struct {
 // limits disable that dimension. Termination is never a default: operators
 // must explicitly select mode=terminate in their private config overlay.
 type ResourceControlConfig struct {
-	Mode               string                    `yaml:"mode" json:"mode"` // observe | prompt | terminate
-	MaxRSSMB           uint64                    `yaml:"max_rss_mb" json:"max_rss_mb"`
-	MaxCPUPercent      float64                   `yaml:"max_cpu_percent" json:"max_cpu_percent"`
-	SustainSeconds     int                       `yaml:"sustain_seconds" json:"sustain_seconds"`
-	CooldownSeconds    int                       `yaml:"cooldown_seconds" json:"cooldown_seconds"`
-	WorkspaceOverrides []ResourceControlOverride `yaml:"workspace_overrides,omitempty" json:"workspace_overrides"`
+	Mode               string                       `yaml:"mode" json:"mode"` // observe | prompt | terminate
+	MaxRSSMB           uint64                       `yaml:"max_rss_mb" json:"max_rss_mb"`
+	MaxCPUPercent      float64                      `yaml:"max_cpu_percent" json:"max_cpu_percent"`
+	SustainSeconds     int                          `yaml:"sustain_seconds" json:"sustain_seconds"`
+	CooldownSeconds    int                          `yaml:"cooldown_seconds" json:"cooldown_seconds"`
+	Interventions      []ResourceInterventionConfig `yaml:"interventions,omitempty" json:"interventions,omitempty"`
+	WorkspaceOverrides []ResourceControlOverride    `yaml:"workspace_overrides,omitempty" json:"workspace_overrides"`
+}
+
+type ResourceInterventionConfig struct {
+	Action       string `yaml:"action" json:"action"`
+	AfterSeconds int    `yaml:"after_seconds" json:"after_seconds"`
+	Nice         int    `yaml:"nice,omitempty" json:"nice,omitempty"`
 }
 
 // ResourceControlOverride applies a complete policy to one workspace subtree.
 // Complete policies make the effective behavior reviewable without hidden
 // field inheritance from the machine default.
 type ResourceControlOverride struct {
-	CwdPrefix       string  `yaml:"cwd_prefix" json:"cwd_prefix"`
-	Mode            string  `yaml:"mode" json:"mode"`
-	MaxRSSMB        uint64  `yaml:"max_rss_mb" json:"max_rss_mb"`
-	MaxCPUPercent   float64 `yaml:"max_cpu_percent" json:"max_cpu_percent"`
-	SustainSeconds  int     `yaml:"sustain_seconds" json:"sustain_seconds"`
-	CooldownSeconds int     `yaml:"cooldown_seconds" json:"cooldown_seconds"`
+	CwdPrefix       string                       `yaml:"cwd_prefix" json:"cwd_prefix"`
+	Mode            string                       `yaml:"mode" json:"mode"`
+	MaxRSSMB        uint64                       `yaml:"max_rss_mb" json:"max_rss_mb"`
+	MaxCPUPercent   float64                      `yaml:"max_cpu_percent" json:"max_cpu_percent"`
+	SustainSeconds  int                          `yaml:"sustain_seconds" json:"sustain_seconds"`
+	CooldownSeconds int                          `yaml:"cooldown_seconds" json:"cooldown_seconds"`
+	Interventions   []ResourceInterventionConfig `yaml:"interventions,omitempty" json:"interventions,omitempty"`
 }
 
 // AdvisorYAML is the on-disk shape of the local advisor config.
@@ -454,6 +462,9 @@ func ValidateResourceControl(c ResourceControlConfig) error {
 	if err := validateResourcePolicy("resource_control", c.Mode, c.MaxRSSMB, c.MaxCPUPercent, c.SustainSeconds, c.CooldownSeconds); err != nil {
 		return err
 	}
+	if err := validateResourceInterventions("resource_control", c.Interventions); err != nil {
+		return err
+	}
 	seen := make(map[string]bool, len(c.WorkspaceOverrides))
 	for i, override := range c.WorkspaceOverrides {
 		field := fmt.Sprintf("resource_control.workspace_overrides[%d]", i)
@@ -469,6 +480,9 @@ func ValidateResourceControl(c ResourceControlConfig) error {
 		}
 		seen[clean] = true
 		if err := validateResourcePolicy(field, override.Mode, override.MaxRSSMB, override.MaxCPUPercent, override.SustainSeconds, override.CooldownSeconds); err != nil {
+			return err
+		}
+		if err := validateResourceInterventions(field, override.Interventions); err != nil {
 			return err
 		}
 	}
@@ -493,6 +507,48 @@ func validateResourcePolicy(field, mode string, maxRSSMB uint64, maxCPU float64,
 	const maxDurationSeconds = int64((1<<63 - 1) / int64(time.Second))
 	if int64(sustain) > maxDurationSeconds || int64(cooldown) > maxDurationSeconds {
 		return fmt.Errorf("%s sustain_seconds and cooldown_seconds are too large", field)
+	}
+	return nil
+}
+
+func validateResourceInterventions(field string, steps []ResourceInterventionConfig) error {
+	seen := make(map[string]bool, len(steps))
+	previousAfter := -1
+	previousRank := -1
+	rank := map[string]int{"notify": 0, "lower_priority": 1, "pause": 2, "terminate": 3}
+	for i, step := range steps {
+		stepField := fmt.Sprintf("%s.interventions[%d]", field, i)
+		switch step.Action {
+		case "notify", "lower_priority", "pause", "terminate":
+		default:
+			return fmt.Errorf("%s.action must be notify, lower_priority, pause, or terminate", stepField)
+		}
+		if seen[step.Action] {
+			return fmt.Errorf("%s.action duplicates %q", stepField, step.Action)
+		}
+		seen[step.Action] = true
+		if rank[step.Action] <= previousRank {
+			return fmt.Errorf("%s.action must follow notify, lower_priority, pause, terminate order", stepField)
+		}
+		previousRank = rank[step.Action]
+		if step.AfterSeconds < 0 || step.AfterSeconds < previousAfter {
+			return fmt.Errorf("%s.after_seconds must be non-negative and ordered", stepField)
+		}
+		const maxDurationSeconds = int64((1<<63 - 1) / int64(time.Second))
+		if int64(step.AfterSeconds) > maxDurationSeconds {
+			return fmt.Errorf("%s.after_seconds is too large", stepField)
+		}
+		previousAfter = step.AfterSeconds
+		if step.Action == "lower_priority" {
+			if step.Nice < 1 || step.Nice > 19 {
+				return fmt.Errorf("%s.nice must be between 1 and 19", stepField)
+			}
+		} else if step.Nice != 0 {
+			return fmt.Errorf("%s.nice is only valid for lower_priority", stepField)
+		}
+		if step.Action == "terminate" && i != len(steps)-1 {
+			return fmt.Errorf("%s terminate must be the final intervention", stepField)
+		}
 	}
 	return nil
 }

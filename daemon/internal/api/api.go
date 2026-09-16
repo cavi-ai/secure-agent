@@ -486,19 +486,30 @@ func (a *API) handleResourceControl(w http.ResponseWriter, r *http.Request) {
 	}
 	limitBody(w, r)
 	var req struct {
-		ID       string `json:"id"`
-		Decision string `json:"decision"`
+		ID         string `json:"id"`
+		SessionKey string `json:"session_key"`
+		Decision   string `json:"decision"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid payload", http.StatusBadRequest)
 		return
 	}
-	if err := a.resourceControl.Resolve(req.ID, req.Decision, time.Now()); err != nil {
+	var err error
+	if req.Decision == "resume" {
+		err = a.resourceControl.Resume(req.SessionKey, time.Now())
+	} else {
+		err = a.resourceControl.Resolve(req.ID, req.Decision, time.Now())
+	}
+	if err != nil {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
-	a.store.PutAudit(store.AuditEntry{Action: "resource-control", Rule: req.ID, ToMode: req.Decision})
-	writeJSON(w, map[string]string{"status": "ok", "id": req.ID, "decision": req.Decision})
+	rule := req.ID
+	if rule == "" {
+		rule = req.SessionKey
+	}
+	a.store.PutAudit(store.AuditEntry{Action: "resource-control", Rule: rule, ToMode: req.Decision})
+	writeJSON(w, map[string]string{"status": "ok", "id": req.ID, "session_key": req.SessionKey, "decision": req.Decision})
 }
 
 func (a *API) handleResourcePolicy(w http.ResponseWriter, r *http.Request) {
@@ -1039,6 +1050,17 @@ func (a *API) handleKill(w http.ResponseWriter, r *http.Request) {
 // TerminateAgentTree is the single guarded containment path used by both the
 // operator /kill endpoint and resource budgets.
 func (a *API) TerminateAgentTree(pid int32, startedAt string) ([]int32, error) {
+	return a.terminateAgentTree(pid, startedAt, nil)
+}
+
+// TerminateAgentTreeVerified applies the normal guarded containment path and
+// additionally proves every family member is the same process instance seen
+// by the resource sampler.
+func (a *API) TerminateAgentTreeVerified(pid int32, startedAt string, expectedStarts map[int32]time.Time) ([]int32, error) {
+	return a.terminateAgentTree(pid, startedAt, expectedStarts)
+}
+
+func (a *API) terminateAgentTree(pid int32, startedAt string, expectedStarts map[int32]time.Time) ([]int32, error) {
 	if pid <= 0 {
 		return nil, fmt.Errorf("invalid pid")
 	}
@@ -1068,11 +1090,27 @@ func (a *API) TerminateAgentTree(pid int32, startedAt string) ([]int32, error) {
 	// UI copy, CLI, and flag actions all say "process tree". Kill every
 	// currently tagged agent that shares this pid's root_pid — not the OS
 	// process tree, only what the tagger already recognized.
-	var killed []int32
+	var members []int32
 	for _, memberPID := range a.killTreePIDs(pid) {
 		if a.agentPIDs != nil {
 			if _, ok := a.agentPIDs()[memberPID]; !ok {
 				continue
+			}
+		}
+		members = append(members, memberPID)
+	}
+	if expectedStarts != nil {
+		for _, memberPID := range members {
+			if err := a.checkExpectedProcessStart(memberPID, expectedStarts); err != nil {
+				return nil, err
+			}
+		}
+	}
+	var killed []int32
+	for _, memberPID := range members {
+		if expectedStarts != nil {
+			if err := a.checkExpectedProcessStart(memberPID, expectedStarts); err != nil {
+				return killed, err
 			}
 		}
 		if err := a.killer.Kill(memberPID); err != nil {
@@ -1081,6 +1119,24 @@ func (a *API) TerminateAgentTree(pid int32, startedAt string) ([]int32, error) {
 		killed = append(killed, memberPID)
 	}
 	return killed, nil
+}
+
+func (a *API) checkExpectedProcessStart(pid int32, expected map[int32]time.Time) error {
+	want, ok := expected[pid]
+	if !ok || want.IsZero() {
+		return fmt.Errorf("pid %d has no verified start identity", pid)
+	}
+	for _, ag := range a.statusFn().Agents {
+		if ag.PID != pid {
+			continue
+		}
+		got, err := time.Parse(time.RFC3339Nano, ag.StartedAt)
+		if err != nil || !got.Equal(want) {
+			return fmt.Errorf("pid %d start time mismatch (process recycled?)", pid)
+		}
+		return nil
+	}
+	return fmt.Errorf("pid %d is no longer in the recognized session", pid)
 }
 
 func (a *API) killTreePIDs(pid int32) []int32 {

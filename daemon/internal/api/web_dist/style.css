@@ -364,6 +364,11 @@ body {
 .resource-policy-section-head h4 { margin:0; font-size:12px; }
 .resource-policy-editor-row { display:grid; grid-template-columns:minmax(180px,1.4fr) minmax(110px,.7fr) repeat(4,minmax(90px,.65fr)) auto; gap:8px; align-items:end; padding:10px; margin-bottom:8px; border:1px solid var(--line); border-radius:8px; background:var(--bg-2); }
 .resource-policy-editor-row.default { grid-template-columns:minmax(110px,.7fr) repeat(4,minmax(90px,.65fr)); }
+.resource-policy-ladder { grid-column:1/-1; display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:8px; padding-top:8px; border-top:1px solid var(--line); }
+.resource-policy-ladder-title { grid-column:1/-1; font-size:12px; font-weight:700; }
+.resource-policy-ladder-title small { color:var(--tx-2); font-weight:500; }
+.resource-policy-step { display:grid; grid-template-columns:auto 1fr 72px; gap:6px; align-items:center; font-size:12px; }
+.resource-policy-step:has(.resource-policy-nice) { grid-template-columns:auto 1fr 64px 56px; }
 .resource-policy-field { display:grid; gap:4px; color:var(--tx-3); font-size:10px; }
 .resource-policy-field .input,.resource-policy-field .select { width:100%; }
 .resource-policy-actions { display:flex; justify-content:flex-end; gap:8px; padding:12px 20px 18px; border-top:1px solid var(--line); }
@@ -373,6 +378,7 @@ body {
   .resource-policy-path { grid-column:1/-1; }
 }
 .resource-control-state { color:var(--warn); font:600 10px var(--mono); }
+.resource-control-error { color:var(--bad); font:600 10px var(--mono); }
 .resource-approval { display:inline-flex; gap:6px; margin-left:auto; }
 .resource-session-foot .btn { padding: 6px 9px; font-size: .7rem; }
 .resource-detail-wrap {

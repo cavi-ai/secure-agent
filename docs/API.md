@@ -141,6 +141,16 @@ resource_control:
   max_cpu_percent: 200      # 0 disables; 100 is one full core
   sustain_seconds: 30       # continuous breach before action
   cooldown_seconds: 300     # suppress repeat prompts/failed retries
+  interventions:            # optional ordered delays after sustain_seconds
+    - action: notify
+      after_seconds: 0
+    - action: lower_priority
+      after_seconds: 30
+      nice: 10              # 1..19; larger values get less CPU priority
+    - action: pause
+      after_seconds: 60
+    - action: terminate     # must be the final step
+      after_seconds: 120
   workspace_overrides:
     - cwd_prefix: /Users/me/workspace/critical-service
       mode: terminate
@@ -195,11 +205,19 @@ seconds. Reads re-enrich and persist that evidence so events which reached
 SQLite slightly after the pressure capture are included; a successful refresh
 after the settling window marks the episode `complete`.
 
-`observe` only annotates sessions. `prompt` adds an approval to
-`control.pending`; resolve it with
-`POST /resources/control {"id":"resource-1","decision":"terminate|dismiss"}`.
-`terminate` invokes the same recognized-agent-only, start-time-checked
-whole-family containment path as `POST /kill`. Termination is never enabled
+`observe` only annotates sessions. With a configured ladder, `prompt` applies
+`notify` automatically and adds an approval to `control.pending` for each
+state-changing step. Resolve it with
+`POST /resources/control {"id":"resource-1","decision":"apply|dismiss"}`.
+Resume a paused family with
+`POST /resources/control {"session_key":"…","decision":"resume"}`.
+`terminate` mode executes every configured step automatically. Priority,
+pause, resume, and termination always target the complete recognized session
+family with a fresh process-start identity check immediately before action.
+Failed steps stop escalation and enter cooldown; no later destructive step is
+silently skipped to. Without an `interventions` list, the legacy behavior is
+preserved: `prompt` requests termination approval and `terminate` invokes the
+recognized-agent containment path automatically. Termination is never enabled
 by default. Policy changes, operator decisions, automatic attempts, and
 failures are recorded in `/audit`.
 
