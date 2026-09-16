@@ -40,6 +40,12 @@ import socket as _socket
 import sys
 from datetime import datetime, timezone
 
+_HOOK_DIR = os.path.dirname(os.path.abspath(__file__))
+if _HOOK_DIR not in sys.path:
+    sys.path.insert(0, _HOOK_DIR)
+from activity_log import log_payload
+from injection_scan import scan_text
+
 HOME = os.path.expanduser("~")
 AUDIT_LOG = os.path.join(HOME, ".agents", "logs", "secret-guard.jsonl")
 # Mirror of every verdict into the daemon-tailed activity stream, so guard
@@ -999,6 +1005,20 @@ def main() -> int:
         return 0
 
     event = str(data.get("hook_event_name") or data.get("event") or "")
+    if event == "PostToolUse":
+        try:
+            log_payload(data)
+        except Exception:
+            pass
+        result = data.get("tool_result") or data.get("content") or data
+        hits = scan_text(result)
+        if hits:
+            msg = "[secure-agent] Warning: Prompt injection pattern detected in tool result"
+            print(json.dumps({"systemMessage": msg, "user_message": msg}))
+        else:
+            print("{}")
+        return 0
+
     tool = str(data.get("tool_name") or "")
     tool_input = data.get("tool_input") or {}
 

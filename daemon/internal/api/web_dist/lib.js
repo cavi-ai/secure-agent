@@ -412,3 +412,10 @@ function vendorKeyPromoteHTML(ids) {
   </div>`;
 }
 
+// sseNeedsSnapshot: which EventSource kinds must refetch GET /snapshot.
+// file/conn/transcript noise only bumps the sparkline — a 400ms snapshot
+// after every ES file-open is the leftover hot-path tax.
+function sseNeedsSnapshot(kind) {
+  return kind === 'exec' || kind === 'guard-prompt' || kind === 'guard-resolved' || kind === 'proxy-hit';
+}
+

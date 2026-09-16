@@ -1162,7 +1162,7 @@ document.addEventListener('DOMContentLoaded', () => {
         } catch { /* frame without a parseable body still counts */ }
         sparkBump(1, tsMs);
         if (kind === 'proxy-hit') flashFirewallPanel();
-        scheduleRefresh();
+        if (sseNeedsSnapshot(kind)) scheduleRefresh();
       }));
     es.onerror = () => {
       // EventSource auto-reconnects while CONNECTING; only fall back to
