@@ -230,6 +230,11 @@
       default_min_severity: 3,
       overrides: { 'keychain-access': false }
     },
+    '/guard/pending': [{
+      id: 'guard-1', agent: 'claude', tool: 'Read', path: '/workspace/api-service/.env',
+      rule_id: 'cloud-creds', ts: iso(30000),
+      scope_text: 'Allow Always approves every path under rule "cloud-creds" for agent "claude", not just this one.'
+    }],
     '/stats/rollup': (() => {
       const pts = [];
       const bucket = (h) => new Date(Math.floor((now - h * 3600000) / 3600000) * 3600000).toISOString().slice(0, 13);
@@ -259,6 +264,7 @@
       return false;
     };
   }
+  if (MODE.includes('guarddemo')) window.confirm = () => true;
   if (MODE.includes('tokenseed')) {
     try { sessionStorage.setItem('sa.console-token', 'test-token'); } catch { /* ignored */ }
   }
@@ -286,6 +292,9 @@
     if (p === '/flags/acknowledge') {
       data['/flags'] = data['/flags'].filter(f => f.id !== body.flag_id);
       return { status: 'ok', acknowledged: true };
+    }
+    if (p === '/guard/resolve') {
+      data['/guard/pending'] = data['/guard/pending'].filter(prompt => prompt.id !== body.id);
     }
     if (p === '/advisor/retriage') {
       // The model "answers" shortly after the request: the flag's verdict
@@ -376,6 +385,11 @@
   // Auto-action: exercise the session drill-down like a user click would.
   if (location.search.includes('sessiondemo')) {
     setTimeout(() => window.filterTimelineToSession('7f3a9c21-4b2e-4a1d-9c55-2e8f0d1a3b77'), 4000);
+  }
+  // Auto-action: resolve the guard request once; the unified queue must
+  // refresh and remove that blocked tool call.
+  if (location.search.includes('guarddemo')) {
+    setTimeout(() => document.querySelector('[data-action="guard-resolve"][data-scope="once"]').click(), 4000);
   }
   // Auto-action: open the uninspected-egress drill-down modal.
   if (location.search.includes('uninspecteddemo')) {
