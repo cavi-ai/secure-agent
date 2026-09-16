@@ -385,13 +385,14 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     if (slow) {
-      const [fleet, audit, sources, rollup, uninspected, notifyCfg] = await Promise.all([
+      const [fleet, audit, sources, rollup, uninspected, notifyCfg, allowlist] = await Promise.all([
         grab('fleet', '/fleet'),
         grab('audit', '/audit?limit=50'),
         grab('firewall sources', '/firewall/sources'),
         grab('activity rollup', '/stats/rollup?hours=168'),
         grab('uninspected egress', '/egress/uninspected?hours=24&limit=200'),
-        grab('notification rules', '/notify/rules')
+        grab('notification rules', '/notify/rules'),
+        grab('allowlist', '/allowlist')
       ]);
       if (fleet) telemetryData.fleet = fleet || [];
       if (audit) telemetryData.audit = audit || [];
@@ -399,6 +400,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (rollup) telemetryData.rollup = rollup || [];
       if (uninspected) telemetryData.uninspected = uninspected || [];
       if (notifyCfg) telemetryData.notifyCfg = notifyCfg;
+      if (allowlist) telemetryData.allowlist = allowlist || [];
     }
 
     telemetryData.flagsView = telemetryData.flags;
@@ -867,6 +869,44 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   };
 
+  // Blocking must be reversible — a rule you can only tighten is a ratchet.
+  window.demoteRule = async function(rule) {
+    try {
+      const res = await apiFetch('/firewall/mode', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rule, mode: 'monitor' })
+      });
+      if (res.ok) {
+        showToast(`Rule “${rule}” back to monitor.`, 'success');
+        fetchTelemetry();
+      } else {
+        showToast(`Failed to demote “${rule}”.`, 'danger');
+      }
+    } catch (err) {
+      showToast(`Error demoting “${rule}”: ${err}`, 'danger');
+    }
+  };
+
+  window.removeAllowlistEntry = async function(agent, host) {
+    try {
+      const res = await apiFetch('/allowlist', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ agent, host })
+      });
+      if (res.ok) {
+        telemetryData.allowlist = (telemetryData.allowlist || []).filter(p => !(p.agent === agent && p.host === host));
+        showToast(`Removed ${host} for ${agent}.`, 'info');
+        renderFirewall();
+      } else {
+        showToast(`Failed to remove ${host}.`, 'danger');
+      }
+    } catch (err) {
+      showToast(`Error removing ${host}: ${err}`, 'danger');
+    }
+  };
+
   // Session drill-down: jump from a flag to just its harness session's events.
   window.filterTimelineToSession = function(sid) {
     timelineSession = sid;
@@ -935,6 +975,12 @@ document.addEventListener('DOMContentLoaded', () => {
         break;
       case 'promote':
         window.promoteRule(d.rule);
+        break;
+      case 'demote':
+        window.demoteRule(d.rule);
+        break;
+      case 'allowlist-remove':
+        window.removeAllowlistEntry(d.agent, d.host);
         break;
       case 'promote-vendor-keys':
         window.promoteVendorKeys();
