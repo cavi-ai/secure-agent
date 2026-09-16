@@ -249,6 +249,12 @@ def main():
               and dom.index('id="session-board"') < dom.index('id="tab-agents"'))
         check("overview has no session board",
               'id="session-board"' not in dom.split('id="tab-overview"', 1)[1].split('id="tab-sessions"', 1)[0])
+        overview = dom.split('id="tab-overview"', 1)[1].split('id="tab-sessions"', 1)[0]
+        check("overview session strip is present", 'id="session-strip"' in overview)
+        check("overview strip names the live projects",
+              "api-service" in overview and "web-app" in overview)
+        check("overview strip opens the sessions tab",
+              'data-action="goto-tab" data-tab="sessions"' in overview)
         check("session board has project filter", 'id="session-cwd-filter"' in dom)
         sessions = dom.split('id="session-board"', 1)[1].split('id="tab-agents"', 1)[0]
         check("session board lists two sessions", sessions.count('class="session-row') == 2)
