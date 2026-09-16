@@ -6,6 +6,9 @@ All notable changes to `secure-agent` are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- CI: cancel stale runs, job timeouts, credential-free checkout, `CGO_ENABLED=0` Linux gate, `go mod tidy`, `govulncheck`, Dependabot, Go test shuffle. Proxy token/CA permission contracts now have unit tests (the old 0600 check was asserting a different temp path).
+
 ### Changed
 - Overview shows a 3-row session strip (project folder, RSS, last seen, needs-you) that opens the Sessions tab. The full board stays on Sessions.
 - Menubar sessions are grouped by harness family again (collapsed headers with session/memory/activity aggregates, small families expanded), capped at 6 groups with a "+N more — open the console" link. The flat 50-row list is gone.

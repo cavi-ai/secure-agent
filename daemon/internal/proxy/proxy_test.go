@@ -244,27 +244,20 @@ func TestDashboardServedOnProxyPort(t *testing.T) {
 	}
 }
 
-// Without a token configured, the proxy keeps working for unauthenticated
-// loopback clients (token load failure must not brick routing).
-func TestProxyNoTokenConfiguredAllowsAll(t *testing.T) {
-	clearProxyToken()
-}
-
 // With a token configured, unauthenticated CONNECT is refused with 407 and
 // the correct challenge header; authenticated passes through to the handler.
-func tokenPath(t *testing.T) string {
-	t.Helper()
-	return filepath.Join(t.TempDir(), "proxy-token")
-}
-
 func TestProxyTokenAuth(t *testing.T) {
-	token := LoadToken(tokenPath(t))
+	path := filepath.Join(t.TempDir(), "proxy-token")
+	token := LoadToken(path)
 	if token == "" {
 		t.Fatal("token generation failed")
 	}
-	// LoadToken persists 0600 — verify.
-	if fi, err := os.Stat(tokenPath(t)); err == nil && fi.Mode().Perm() != 0o600 {
-		t.Fatalf("token file perms = %v", fi.Mode().Perm())
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm() != 0o600 {
+		t.Fatalf("token file perms = %v, want 0600", fi.Mode().Perm())
 	}
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
