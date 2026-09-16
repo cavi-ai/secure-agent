@@ -678,7 +678,7 @@ public final class AppState: ObservableObject {
         return nil
     }
 
-    public func openDashboard() {
+    public func openDashboard(tab: String? = nil) {
         // The console is served on the proxy's loopback HTTP port (and on the
         // unix API). Only open it when the daemon is connected and the proxy
         // is actually running — a stale port from a dead daemon opens a
@@ -694,8 +694,11 @@ public final class AppState: ObservableObject {
             // Hand off via fragment: fragments are never sent to the server,
             // so the token stays out of the wire, access logs, and Referer.
             // The console page lifts it into memory and strips it from the
-            // address bar.
+            // address bar. An optional tab deep-link rides alongside.
             query = "#ct=\(DaemonClient.urlQueryEscape(token))"
+            if let tab {
+                query += "&tab=\(DaemonClient.urlQueryEscape(tab))"
+            }
         }
         if let url = URL(string: "http://127.0.0.1:\(port)/dashboard/\(query)") {
             // Focus an already-open console tab instead of spawning a
@@ -950,6 +953,44 @@ public final class AppState: ObservableObject {
         return agentRows(sortedBy: sort).filter { $0.depth == 0 }
     }
 
+    /// One harness family (cursor, codex, claude…) on the session board.
+    public struct SessionFamily: Identifiable {
+        public let name: String
+        public let rows: [AgentRow]
+        public var id: String { name }
+        public var totalRSSBytes: UInt64? {
+            let parts = rows.compactMap(\.familyRSSBytes)
+            return parts.isEmpty ? nil : parts.reduce(0, +)
+        }
+        public var lastSeenAt: String? {
+            rows.compactMap(\.familyLastSeenAt).max()
+        }
+    }
+
+    /// Harness-grouped session board: families ordered by their best row in
+    /// the active sort, sessions sorted within. The flat list is unreadable
+    /// once the fleet is busy (50 rows is a scroll trap, not an overview).
+    public func sessionBoardFamilies(sortedBy sort: AgentSort) -> [SessionFamily] {
+        let flat = sessionBoardRows(sortedBy: sort)
+        var order: [String] = []
+        var byName: [String: [AgentRow]] = [:]
+        for row in flat {
+            if byName[row.agent.name] == nil {
+                byName[row.agent.name] = []
+                order.append(row.agent.name)
+            }
+            byName[row.agent.name]!.append(row)
+        }
+        return order.map { SessionFamily(name: $0, rows: byName[$0]!) }
+    }
+
+    /// What tapping the hero does. Every hero state that names a count must
+    /// have one — a number with no action behind it is noise.
+    public enum HeroAction {
+        case flag(FlagModel)
+        case openConsole(tab: String)
+    }
+
     private func sortSessionRows(_ rows: [AgentRow], by sort: AgentSort) -> [AgentRow] {
         switch sort {
         case .created:
@@ -1185,6 +1226,19 @@ public final class AppState: ObservableObject {
                 ? ["aws-key": RuleStatModel(wouldBlock: wouldBlock, mode: "monitor")]
                 : [:])
         s.flags = flags
+        s.connected = true
+        return s
+    }
+
+    /// Custom-agent state for session-board tests: connected, caller controls
+    /// the process list (roots are derived from it).
+    public static func previewAgents(_ agents: [AgentSummaryModel]) -> AppState {
+        let s = AppState()
+        s.status = StatusResponse(
+            running: true, uptime: "1h", activeAgents: agents.count,
+            agents: agents,
+            proxyEnabled: true, proxyPort: 8443, uninspectedEgress: 0,
+            firewallStats: [:])
         s.connected = true
         return s
     }
