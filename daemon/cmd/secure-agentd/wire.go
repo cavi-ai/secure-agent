@@ -25,6 +25,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/intel"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/proxy"
+	"github.com/cavi-ai/secure-agent/daemon/internal/resource"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 	"github.com/cavi-ai/secure-agent/daemon/internal/supervise"
 )
@@ -318,6 +319,15 @@ func buildStatusFn(proxyServer *proxy.ProxyServer, tagger *agents.Tagger, cr *co
 			Collectors:        reg.Snapshot(),
 		}
 	}
+}
+
+func observeResources(tracker *resource.Tracker, tagger *agents.Tagger, st *store.Store, now time.Time) {
+	infos := tagger.TaggedPIDs()
+	pids := make([]int32, 0, len(infos))
+	for pid := range infos {
+		pids = append(pids, pid)
+	}
+	tracker.Observe(infos, st.LastEventTimes(pids), now)
 }
 
 // defaultFleetHeartbeatSec is the status-envelope cadence when

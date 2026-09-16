@@ -5,10 +5,11 @@ import "sort"
 // AgentTree is one session: the tagged root plus its helpers. The daemon
 // emits this so the console and menubar do not regroup the flat agent list.
 type AgentTree struct {
-	Root     AgentSummary   `json:"root"`
-	Children []AgentSummary `json:"children"`
-	RSSBytes uint64         `json:"rss_bytes,omitempty"`
-	LastSeen string         `json:"last_seen_at,omitempty"`
+	Root       AgentSummary   `json:"root"`
+	Children   []AgentSummary `json:"children"`
+	RSSBytes   uint64         `json:"rss_bytes,omitempty"`
+	CPUPercent float64        `json:"cpu_percent,omitempty"`
+	LastSeen   string         `json:"last_seen_at,omitempty"`
 }
 
 // GroupAgentTrees folds a flat tagged-process list into session trees
@@ -28,17 +29,20 @@ func GroupAgentTrees(agents []AgentSummary) []AgentTree {
 	for _, root := range roots {
 		kids := treeChildren(root, agents)
 		var rss uint64
+		var cpu float64
 		last := root.LastSeenAt
 		if root.RSSBytes > 0 {
 			rss += root.RSSBytes
 		}
+		cpu += root.CPUPercent
 		for _, k := range kids {
 			rss += k.RSSBytes
+			cpu += k.CPUPercent
 			if k.LastSeenAt != "" && k.LastSeenAt > last {
 				last = k.LastSeenAt
 			}
 		}
-		out = append(out, AgentTree{Root: root, Children: kids, RSSBytes: rss, LastSeen: last})
+		out = append(out, AgentTree{Root: root, Children: kids, RSSBytes: rss, CPUPercent: cpu, LastSeen: last})
 	}
 	sort.Slice(out, func(i, j int) bool {
 		return out[i].LastSeen > out[j].LastSeen

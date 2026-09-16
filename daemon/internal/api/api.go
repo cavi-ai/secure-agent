@@ -25,6 +25,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/guard"
 	"github.com/cavi-ai/secure-agent/daemon/internal/intel"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
+	"github.com/cavi-ai/secure-agent/daemon/internal/resource"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 	"github.com/cavi-ai/secure-agent/daemon/internal/supervise"
 	"golang.org/x/sys/unix"
@@ -44,9 +45,10 @@ type AgentSummary struct {
 	StartedAt string `json:"started_at,omitempty"`
 	// LastSeenAt is the timestamp of the most recent event attributed to this
 	// process (RFC3339) — the staleness signal for the agents panel.
-	LastSeenAt string `json:"last_seen_at,omitempty"`
-	RSSBytes   uint64 `json:"rss_bytes,omitempty"`
-	IsOrphan   bool   `json:"is_orphan,omitempty"`
+	LastSeenAt string  `json:"last_seen_at,omitempty"`
+	RSSBytes   uint64  `json:"rss_bytes,omitempty"`
+	CPUPercent float64 `json:"cpu_percent,omitempty"`
+	IsOrphan   bool    `json:"is_orphan,omitempty"`
 }
 
 type Status struct {
@@ -100,6 +102,7 @@ type API struct {
 	store      *store.Store
 	killer     Killer
 	statusFn   StatusFunc
+	resources  func() resource.Snapshot
 
 	fwEngine      *firewall.Engine
 	fwModes       *firewall.ModeStore
@@ -143,6 +146,8 @@ func (a *API) SetFleetSink(s GuardEventSink) {
 }
 
 func (a *API) SetBusDrops(fn func() uint64) { a.busDrops = fn }
+
+func (a *API) SetResources(fn func() resource.Snapshot) { a.resources = fn }
 
 // FirewallControl bundles the runtime firewall controls the API exposes.
 type FirewallControl struct {
@@ -348,6 +353,7 @@ func (a *API) SetPeers(checker PeerChecker, agentPIDs func() map[int32]struct{})
 func (a *API) buildMux() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/status", a.handleStatus)
+	mux.HandleFunc("/resources", a.handleResources)
 	mux.HandleFunc("/snapshot", a.handleSnapshot)
 	mux.HandleFunc("/posture", a.handlePosture)
 	mux.HandleFunc("/flags", a.handleFlags)
@@ -440,6 +446,18 @@ func (a *API) handleStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, a.currentStatus())
+}
+
+func (a *API) handleResources(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if a.resources == nil {
+		http.Error(w, "resource telemetry not enabled", http.StatusServiceUnavailable)
+		return
+	}
+	writeJSON(w, a.resources())
 }
 
 func (a *API) currentStatus() Status {
