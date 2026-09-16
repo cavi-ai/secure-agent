@@ -7,6 +7,11 @@ All notable changes to `secure-agent` are documented here. The format follows
 ## [Unreleased]
 
 ### Fixed
+- List endpoints (`/events`, `/flags`, `/incidents`, `/audit`, `/stats/rollup`) returned `null` instead of `[]` when empty — crashed strict clients (process transcript sheet).
+- Daemon shutdown during instance overlap could unlink the successor's live unix socket (running but unreachable).
+- Menubar: decodes `null` list bodies as empty; transcript sheet gains Retry.
+
+### Fixed
 - **Hero "N flags to review" counted reviewed flags.** The popover hero's
   Attention branch counted every severity≥2 flag in the fetch window —
   including acknowledged ones — so it read "20 flags to review" over a list
