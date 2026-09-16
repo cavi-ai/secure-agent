@@ -95,6 +95,8 @@ def main():
         dom_netfail = dump_dom(chrome, tmp, "?netfail")
         dom_tokenseed = dump_dom(chrome, tmp, "?requiretoken&tokenseed")
         dom_nofleet = dump_dom(chrome, tmp, "?nofleetdemo")
+        dom_demote = dump_dom(chrome, tmp, "?demotedemo")
+        dom_allowrm = dump_dom(chrome, tmp, "?allowlistdemo")
 
         # --- telemetry wiring ---
         check("version badge comes from /status", 'id="app-version">v9.9.9-domtest<' in dom)
@@ -111,6 +113,16 @@ def main():
         check("firewall enforcing badge",
               'class="badge badge-ok" id="badge-firewall-mode">enforcing<' in dom)
         check("uninspected-egress warning", "2 endpoints reached without inspection" in dom)
+
+        # --- reversible enforcement (block is not a ratchet) ---
+        check("blocking rule shows demote button",
+              'data-action="demote" data-rule="aws-key"' in dom)
+        check("demote flips the rule back to promote",
+              'data-action="promote" data-rule="aws-key"' in dom_demote)
+        check("allowlist entries render with remove",
+              "Allowed endpoints" in dom and "artifacts.example.com" in dom)
+        check("remove drops the allowlist row",
+              "artifacts.example.com" not in dom_allowrm)
         check("vendor-key promote banner",
               'data-action="promote-vendor-keys"' in dom and "1 vendor-key rule" in dom)
         check("incident workflow chip (ack)", 'class="workflow-chip acked"' in dom)

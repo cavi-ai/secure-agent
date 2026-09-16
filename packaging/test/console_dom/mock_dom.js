@@ -104,6 +104,9 @@
     '/allowlist/suggestions': [
       { agent: 'cursor', host: 'registry.npmjs.org', count: 14, assessment: 'benign', confidence: 0.9, rationale: 'npm registry is routine for JS projects' }
     ],
+    '/allowlist': [
+      { agent: 'cursor', host: 'artifacts.example.com' }
+    ],
     '/mute': [
       { rule: 'proxy-prompt-injection', host: 'blog.example.com' },
       { rule: 'keychain-security-cli', host: '*' }
@@ -149,6 +152,15 @@
   const handlePost = (p, opts) => {
     let body = {};
     try { body = JSON.parse((opts && opts.body) || '{}'); } catch { /* ignored */ }
+    if (p === '/allowlist' && opts && opts.method === 'DELETE') {
+      data['/allowlist'] = data['/allowlist'].filter(x => !(x.agent === body.agent && x.host === body.host));
+      return { status: 'ok' };
+    }
+    if (p === '/firewall/mode') {
+      const st = data['/status'].firewall_stats[body.rule];
+      if (st) st.mode = body.mode;
+      return { status: 'ok' };
+    }
     if (p === '/allowlist') {
       data['/allowlist/suggestions'] = data['/allowlist/suggestions'].filter(s => s.host !== body.host);
       data['/egress/uninspected'] = data['/egress/uninspected'].filter(e => e.host !== body.host);
@@ -278,6 +290,15 @@
   // hide entirely instead of carrying a permanently-empty placeholder.
   if (location.search.includes('nofleetdemo')) {
     data['/fleet'] = { ...data['/fleet'], fleet_configured: false };
+  }
+
+  // Auto-action: demote a blocking rule — it must flip back to Promote.
+  if (location.search.includes('demotedemo')) {
+    setTimeout(() => document.querySelector('[data-action="demote"][data-rule="aws-key"]').click(), 4000);
+  }
+  // Auto-action: remove an allowlist entry — the row must leave the list.
+  if (location.search.includes('allowlistdemo')) {
+    setTimeout(() => document.querySelector('[data-action="allowlist-remove"]').click(), 4000);
   }
 
   // Auto-action: switch to the Egress tab — panels must hide/show correctly.
