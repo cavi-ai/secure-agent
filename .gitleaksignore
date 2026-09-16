@@ -7,3 +7,4 @@
 # Fake redaction-test value (AWS docs example shape), removed from source in
 # the follow-up commit on this branch — the test now builds it from fragments.
 40a92193b4fe5ec6c01949ad7dc9dddbf847c31a:plugin/hooks/test_activity_log.py:generic-api-key:55
+27c3f39ce52819ceb2e746b6249eb9b7a90262e7:CHANGELOG.md:generic-api-key:10
