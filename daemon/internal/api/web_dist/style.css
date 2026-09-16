@@ -334,6 +334,23 @@ body {
 .resource-reclaim { color: var(--tx-3); font-family: var(--mono); }
 .resource-policy { display:flex; justify-content:space-between; gap:12px; margin:8px 0 12px; padding:8px 10px; border:1px solid var(--line); border-radius:8px; color:var(--tx-2); font-size:11px; }
 .resource-policy b { color:var(--tx-1); text-transform:capitalize; }
+.resource-policy > span { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.resource-policy-source { color:var(--tx-3); font-size:10px; }
+.resource-policy-modal { width:min(900px, 94vw); }
+.resource-policy-intro { margin:0 0 16px; color:var(--tx-2); font-size:12px; line-height:1.5; }
+.resource-policy-section { margin-top:16px; }
+.resource-policy-section-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:8px; }
+.resource-policy-section-head h4 { margin:0; font-size:12px; }
+.resource-policy-editor-row { display:grid; grid-template-columns:minmax(180px,1.4fr) minmax(110px,.7fr) repeat(4,minmax(90px,.65fr)) auto; gap:8px; align-items:end; padding:10px; margin-bottom:8px; border:1px solid var(--line); border-radius:8px; background:var(--bg-2); }
+.resource-policy-editor-row.default { grid-template-columns:minmax(110px,.7fr) repeat(4,minmax(90px,.65fr)); }
+.resource-policy-field { display:grid; gap:4px; color:var(--tx-3); font-size:10px; }
+.resource-policy-field .input,.resource-policy-field .select { width:100%; }
+.resource-policy-actions { display:flex; justify-content:flex-end; gap:8px; padding:12px 20px 18px; border-top:1px solid var(--line); }
+.resource-policy-danger { color:var(--bad); font-size:11px; }
+@media (max-width: 900px) {
+  .resource-policy-editor-row,.resource-policy-editor-row.default { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .resource-policy-path { grid-column:1/-1; }
+}
 .resource-control-state { color:var(--warn); font:600 10px var(--mono); }
 .resource-approval { display:inline-flex; gap:6px; margin-left:auto; }
 .resource-session-foot .btn { padding: 6px 9px; font-size: .7rem; }

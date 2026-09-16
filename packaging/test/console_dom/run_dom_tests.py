@@ -95,6 +95,7 @@ def main():
         dom_netfail = dump_dom(chrome, tmp, "?netfail")
         dom_tokenseed = dump_dom(chrome, tmp, "?requiretoken&tokenseed")
         dom_nofleet = dump_dom(chrome, tmp, "?nofleetdemo")
+        dom_policy = dump_dom(chrome, tmp, "?policydemo")
 
         # --- telemetry wiring ---
         check("version badge comes from /status", 'id="app-version">v9.9.9-domtest<' in dom)
@@ -235,7 +236,18 @@ def main():
         check("resource action targets the full family",
               'data-action="filter-pids" data-pids="5821,5822"' in resource_view)
         check("resource policy mode and grace are visible",
-              "prompt</b> policy" in resource_view and "30s grace" in resource_view)
+              "prompt</b> machine policy" in resource_view and "30s grace" in resource_view)
+        check("resource policy source is visible on sessions",
+              "workspace policy · /Users/dev/workspace" in resource_view)
+        check("resource policy editor opens with the active document",
+              'id="resource-policy-modal" class="modal resource-policy-modal" open' in dom_policy
+              and "Policy editor" in dom_policy and "Machine default" in dom_policy)
+        check("policy editor adds the selected session workspace",
+              'value="/Users/dev/workspace/api-service"' in dom_policy)
+        check("policy editor exposes automatic containment warning",
+              "automatically contains the full attributed session" in dom_policy)
+        check("terminate policy save requires explicit confirmation",
+              'data-last-confirm="Terminate mode will automatically stop an entire agent session after its grace period. Save this policy?"' in dom_policy)
         check("resource approval contains the whole session",
               'data-action="resource-control" data-id="resource-1" data-decision="terminate"' in resource_view)
         check("resource approval can keep the session running",

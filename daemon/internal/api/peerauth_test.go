@@ -267,6 +267,12 @@ func TestGateDispositionEndpointsPolicy(t *testing.T) {
 	}
 }
 
+func TestResourcePolicyPutIsPinnedUIMutation(t *testing.T) {
+	if !isMutation(http.MethodPut, "/resources/policy") {
+		t.Fatal("PUT /resources/policy must require the pinned UI role")
+	}
+}
+
 // Same set, but through the pinned-UI lens: this process IS the UI, so its
 // mutations must clear the gate (they may 400/503 on unwired stores — the
 // gate decision is what matters).

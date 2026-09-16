@@ -2,6 +2,7 @@ package resource
 
 import (
 	"fmt"
+	"path/filepath"
 	"sort"
 	"sync"
 	"time"
@@ -30,6 +31,16 @@ type Policy struct {
 	Cooldown      time.Duration
 }
 
+type WorkspacePolicy struct {
+	Path   string
+	Policy Policy
+}
+
+type PolicySet struct {
+	Default            Policy
+	WorkspaceOverrides []WorkspacePolicy
+}
+
 type Violation struct {
 	Metric string  `json:"metric"`
 	Actual float64 `json:"actual"`
@@ -37,11 +48,13 @@ type Violation struct {
 }
 
 type SessionControl struct {
-	Mode        ControlMode `json:"mode"`
-	State       string      `json:"state"`
-	BreachSince *time.Time  `json:"breach_since,omitempty"`
-	PendingID   string      `json:"pending_id,omitempty"`
-	Violations  []Violation `json:"violations"`
+	Mode         ControlMode `json:"mode"`
+	State        string      `json:"state"`
+	PolicySource string      `json:"policy_source"`
+	PolicyScope  string      `json:"policy_scope,omitempty"`
+	BreachSince  *time.Time  `json:"breach_since,omitempty"`
+	PendingID    string      `json:"pending_id,omitempty"`
+	Violations   []Violation `json:"violations"`
 }
 
 type PendingAction struct {
@@ -55,12 +68,22 @@ type PendingAction struct {
 }
 
 type ControlSnapshot struct {
-	Mode            ControlMode     `json:"mode"`
-	MaxRSSBytes     uint64          `json:"max_rss_bytes,omitempty"`
-	MaxCPUPercent   float64         `json:"max_cpu_percent,omitempty"`
-	SustainSeconds  int64           `json:"sustain_seconds"`
-	CooldownSeconds int64           `json:"cooldown_seconds"`
-	Pending         []PendingAction `json:"pending"`
+	Mode               ControlMode               `json:"mode"`
+	MaxRSSBytes        uint64                    `json:"max_rss_bytes,omitempty"`
+	MaxCPUPercent      float64                   `json:"max_cpu_percent,omitempty"`
+	SustainSeconds     int64                     `json:"sustain_seconds"`
+	CooldownSeconds    int64                     `json:"cooldown_seconds"`
+	WorkspaceOverrides []WorkspacePolicySnapshot `json:"workspace_overrides"`
+	Pending            []PendingAction           `json:"pending"`
+}
+
+type WorkspacePolicySnapshot struct {
+	CwdPrefix       string      `json:"cwd_prefix"`
+	Mode            ControlMode `json:"mode"`
+	MaxRSSBytes     uint64      `json:"max_rss_bytes,omitempty"`
+	MaxCPUPercent   float64     `json:"max_cpu_percent,omitempty"`
+	SustainSeconds  int64       `json:"sustain_seconds"`
+	CooldownSeconds int64       `json:"cooldown_seconds"`
 }
 
 type ControlAction struct {
@@ -84,7 +107,7 @@ type sessionState struct {
 
 type Controller struct {
 	mu        sync.Mutex
-	policy    Policy
+	policies  PolicySet
 	states    map[string]*sessionState
 	pending   map[string]PendingAction
 	latest    Snapshot
@@ -93,7 +116,7 @@ type Controller struct {
 }
 
 func NewController(policy Policy, terminate func(ControlAction) error) *Controller {
-	return &Controller{policy: normalizedPolicy(policy), states: map[string]*sessionState{},
+	return &Controller{policies: normalizedPolicySet(PolicySet{Default: policy}), states: map[string]*sessionState{},
 		pending: map[string]PendingAction{}, terminate: terminate}
 }
 
@@ -111,14 +134,70 @@ func normalizedPolicy(p Policy) Policy {
 }
 
 func (c *Controller) SetPolicy(p Policy) {
+	c.SetPolicySet(PolicySet{Default: p})
+}
+
+// SetPolicySet applies a changed document and reports whether live state was
+// reset. Callers use the result to avoid duplicate audit entries when the file
+// watcher observes a policy already applied through the API.
+func (c *Controller) SetPolicySet(p PolicySet) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.policy = normalizedPolicy(p)
+	p = normalizedPolicySet(p)
+	if equalPolicySet(c.policies, p) {
+		return false
+	}
+	c.policies = p
 	c.states = map[string]*sessionState{}
 	c.pending = map[string]PendingAction{}
 	for i := range c.latest.Sessions {
 		c.latest.Sessions[i].Control = nil
 	}
+	return true
+}
+
+func normalizedPolicySet(p PolicySet) PolicySet {
+	p.Default = normalizedPolicy(p.Default)
+	p.WorkspaceOverrides = append([]WorkspacePolicy(nil), p.WorkspaceOverrides...)
+	for i := range p.WorkspaceOverrides {
+		p.WorkspaceOverrides[i].Path = filepath.Clean(p.WorkspaceOverrides[i].Path)
+		p.WorkspaceOverrides[i].Policy = normalizedPolicy(p.WorkspaceOverrides[i].Policy)
+	}
+	sort.SliceStable(p.WorkspaceOverrides, func(i, j int) bool {
+		return len(p.WorkspaceOverrides[i].Path) > len(p.WorkspaceOverrides[j].Path)
+	})
+	return p
+}
+
+func equalPolicySet(a, b PolicySet) bool {
+	if a.Default != b.Default || len(a.WorkspaceOverrides) != len(b.WorkspaceOverrides) {
+		return false
+	}
+	for i := range a.WorkspaceOverrides {
+		if a.WorkspaceOverrides[i].Path != b.WorkspaceOverrides[i].Path || a.WorkspaceOverrides[i].Policy != b.WorkspaceOverrides[i].Policy {
+			return false
+		}
+	}
+	return true
+}
+
+func (p PolicySet) forWorkspace(workspace string) (Policy, string) {
+	if workspace != "" {
+		workspace = filepath.Clean(workspace)
+		for _, override := range p.WorkspaceOverrides {
+			if workspacePathMatches(workspace, override.Path) {
+				return override.Policy, override.Path
+			}
+		}
+	}
+	return p.Default, ""
+}
+
+func workspacePathMatches(workspace, prefix string) bool {
+	if prefix == string(filepath.Separator) {
+		return true
+	}
+	return workspace == prefix || (len(workspace) > len(prefix) && workspace[:len(prefix)] == prefix && workspace[len(prefix)] == filepath.Separator)
 }
 
 func (c *Controller) SetTerminator(fn func(ControlAction) error) {
@@ -129,14 +208,23 @@ func (c *Controller) SetTerminator(fn func(ControlAction) error) {
 
 func (c *Controller) Observe(snapshot Snapshot, now time.Time) {
 	c.mu.Lock()
-	policy := c.policy
+	policies := c.policies
 	live := make(map[string]bool, len(snapshot.Sessions))
-	var automatic []ControlAction
+	type automaticAction struct {
+		action   ControlAction
+		cooldown time.Duration
+	}
+	var automatic []automaticAction
 	for i := range snapshot.Sessions {
 		s := &snapshot.Sessions[i]
 		live[s.Key] = true
+		policy, scope := policies.forWorkspace(s.Workspace)
 		violations := policyViolations(policy, *s)
-		control := &SessionControl{Mode: policy.Mode, State: StateHealthy, Violations: violations}
+		source := "default"
+		if scope != "" {
+			source = "workspace"
+		}
+		control := &SessionControl{Mode: policy.Mode, State: StateHealthy, PolicySource: source, PolicyScope: scope, Violations: violations}
 		s.Control = control
 		state := c.states[s.Key]
 		if state == nil {
@@ -180,7 +268,7 @@ func (c *Controller) Observe(snapshot Snapshot, now time.Time) {
 			if !state.contained && c.terminate != nil {
 				state.contained = true
 				control.State = StateContained
-				automatic = append(automatic, action)
+				automatic = append(automatic, automaticAction{action: action, cooldown: policy.Cooldown})
 			} else if state.contained {
 				control.State = StateContained
 			} else {
@@ -196,18 +284,18 @@ func (c *Controller) Observe(snapshot Snapshot, now time.Time) {
 			delete(c.states, key)
 		}
 	}
-	snapshot.Control = c.controlSnapshotLocked(policy)
+	snapshot.Control = c.controlSnapshotLocked(policies)
 	c.latest = cloneSnapshot(snapshot)
 	terminate := c.terminate
 	c.mu.Unlock()
 	if terminate != nil {
-		for _, action := range automatic {
-			if err := terminate(action); err != nil {
+		for _, automatic := range automatic {
+			if err := terminate(automatic.action); err != nil {
 				c.mu.Lock()
-				if state := c.states[action.SessionKey]; state != nil {
+				if state := c.states[automatic.action.SessionKey]; state != nil {
 					state.contained = false
-					state.cooldownUntil = now.Add(policy.Cooldown)
-					c.setLatestControlStateLocked(action.SessionKey, StateCooldown, "")
+					state.cooldownUntil = now.Add(automatic.cooldown)
+					c.setLatestControlStateLocked(automatic.action.SessionKey, StateCooldown, "")
 				}
 				c.mu.Unlock()
 			}
@@ -230,7 +318,7 @@ func (c *Controller) Snapshot() Snapshot {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	s := cloneSnapshot(c.latest)
-	s.Control = c.controlSnapshotLocked(c.policy)
+	s.Control = c.controlSnapshotLocked(c.policies)
 	for i := range s.Sessions {
 		if st := c.states[s.Sessions[i].Key]; st != nil && st.pendingID != "" && s.Sessions[i].Control != nil {
 			s.Sessions[i].Control.PendingID = st.pendingID
@@ -239,14 +327,23 @@ func (c *Controller) Snapshot() Snapshot {
 	return s
 }
 
-func (c *Controller) controlSnapshotLocked(p Policy) *ControlSnapshot {
+func (c *Controller) controlSnapshotLocked(policies PolicySet) *ControlSnapshot {
 	pending := make([]PendingAction, 0, len(c.pending))
 	for _, item := range c.pending {
 		pending = append(pending, item)
 	}
 	sort.Slice(pending, func(i, j int) bool { return pending[i].CreatedAt.Before(pending[j].CreatedAt) })
+	p := policies.Default
+	overrides := make([]WorkspacePolicySnapshot, 0, len(policies.WorkspaceOverrides))
+	for _, override := range policies.WorkspaceOverrides {
+		op := override.Policy
+		overrides = append(overrides, WorkspacePolicySnapshot{CwdPrefix: override.Path, Mode: op.Mode,
+			MaxRSSBytes: op.MaxRSSBytes, MaxCPUPercent: op.MaxCPUPercent,
+			SustainSeconds: int64(op.Sustain.Seconds()), CooldownSeconds: int64(op.Cooldown.Seconds())})
+	}
 	return &ControlSnapshot{Mode: p.Mode, MaxRSSBytes: p.MaxRSSBytes, MaxCPUPercent: p.MaxCPUPercent,
-		SustainSeconds: int64(p.Sustain.Seconds()), CooldownSeconds: int64(p.Cooldown.Seconds()), Pending: pending}
+		SustainSeconds: int64(p.Sustain.Seconds()), CooldownSeconds: int64(p.Cooldown.Seconds()),
+		WorkspaceOverrides: overrides, Pending: pending}
 }
 
 func (c *Controller) Resolve(id, decision string, now time.Time) error {
@@ -264,7 +361,8 @@ func (c *Controller) Resolve(id, decision string, now time.Time) error {
 		delete(c.pending, id)
 		if state := c.states[pending.SessionKey]; state != nil {
 			state.pendingID = ""
-			state.cooldownUntil = now.Add(c.policy.Cooldown)
+			policy, _ := c.policies.forWorkspace(pending.Workspace)
+			state.cooldownUntil = now.Add(policy.Cooldown)
 			c.setLatestControlStateLocked(pending.SessionKey, StateCooldown, "")
 		}
 		c.mu.Unlock()
@@ -299,7 +397,8 @@ func (c *Controller) Resolve(id, decision string, now time.Time) error {
 	if state := c.states[pending.SessionKey]; state != nil {
 		state.pendingID = ""
 		state.contained = true
-		state.cooldownUntil = now.Add(c.policy.Cooldown)
+		policy, _ := c.policies.forWorkspace(pending.Workspace)
+		state.cooldownUntil = now.Add(policy.Cooldown)
 		c.setLatestControlStateLocked(pending.SessionKey, StateContained, "")
 	}
 	c.mu.Unlock()

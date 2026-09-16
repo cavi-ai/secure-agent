@@ -9,6 +9,7 @@ package main
 // by their own subsystems; paths and firewall stay boot-static.
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"sort"
@@ -104,16 +105,18 @@ func watchConfig(ctx context.Context, path string, deps configWatchDeps) {
 		if key := resourceConfigKey(data.ResourceControl); key != lastResourceKey {
 			lastResourceKey = key
 			if deps.resourceControl != nil {
-				deps.resourceControl.SetPolicy(resourcePolicy(data.ResourceControl))
-				if deps.st != nil {
+				applied := deps.resourceControl.SetPolicySet(resourcePolicySet(data.ResourceControl))
+				if applied && deps.st != nil {
 					deps.st.PutAudit(store.AuditEntry{Action: "resource-policy", ToMode: data.ResourceControl.Mode,
 						Detail: fmt.Sprintf("rss=%dMiB cpu=%.0f%% sustain=%ds cooldown=%ds",
 							data.ResourceControl.MaxRSSMB, data.ResourceControl.MaxCPUPercent,
 							data.ResourceControl.SustainSeconds, data.ResourceControl.CooldownSeconds)})
 				}
-				log.Printf("resource control applied live (mode=%s rss=%dMiB cpu=%.0f%% sustain=%ds)",
-					data.ResourceControl.Mode, data.ResourceControl.MaxRSSMB,
-					data.ResourceControl.MaxCPUPercent, data.ResourceControl.SustainSeconds)
+				if applied {
+					log.Printf("resource control applied live (mode=%s rss=%dMiB cpu=%.0f%% sustain=%ds)",
+						data.ResourceControl.Mode, data.ResourceControl.MaxRSSMB,
+						data.ResourceControl.MaxCPUPercent, data.ResourceControl.SustainSeconds)
+				}
 			}
 		}
 	}
@@ -131,7 +134,8 @@ func watchConfig(ctx context.Context, path string, deps configWatchDeps) {
 }
 
 func resourceConfigKey(c config.ResourceControlConfig) string {
-	return fmt.Sprintf("%s|%d|%g|%d|%d", c.Mode, c.MaxRSSMB, c.MaxCPUPercent, c.SustainSeconds, c.CooldownSeconds)
+	b, _ := json.Marshal(c) // all fields are JSON-safe after config validation
+	return string(b)
 }
 
 // advisorConfigKey fingerprints the advisor-relevant config so a reload

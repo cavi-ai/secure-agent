@@ -79,6 +79,7 @@ func (d *DarwinProcSource) Info(pid int32) (ProcInfo, bool) {
 		StartTime: start,
 		RSSBytes:  rss,
 		CPUTime:   cpu,
+		CWD:       procCWD(pid),
 	}, true
 }
 
@@ -120,6 +121,36 @@ func procUsage(pid int32) (uint64, time.Duration) {
 		return 0, 0
 	}
 	return info.ResidentSize, time.Duration(info.TotalUser + info.TotalSystem)
+}
+
+// procCWD reads the current working directory from PROC_PIDVNODEPATHINFO.
+// The first vnode_info_path is pvi_cdir; its path starts after vnode_info.
+func procCWD(pid int32) string {
+	const (
+		procInfoCallPidInfo  = 2
+		procPidVnodePathInfo = 9
+		vnodeInfoSize        = 152
+		maxPathLen           = 1024
+		vnodePathInfoSize    = vnodeInfoSize + maxPathLen
+	)
+	var info [2 * vnodePathInfoSize]byte
+	n, _, errno := unix.RawSyscall6(
+		unix.SYS_PROC_INFO,
+		uintptr(procInfoCallPidInfo),
+		uintptr(pid),
+		uintptr(procPidVnodePathInfo),
+		0,
+		uintptr(unsafe.Pointer(&info[0])),
+		uintptr(len(info)),
+	)
+	if errno != 0 || n < uintptr(vnodeInfoSize) {
+		return ""
+	}
+	path := info[vnodeInfoSize:vnodePathInfoSize]
+	if end := bytes.IndexByte(path, 0); end >= 0 {
+		path = path[:end]
+	}
+	return string(path)
 }
 
 func getProcPath(pid int32) string {

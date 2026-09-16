@@ -20,7 +20,10 @@ All notable changes to `secure-agent` are documented here. The format follows
   containment, or explicit automatic whole-family termination after a
   sustained RSS/CPU breach. Grace periods, cooldowns, PID start-time checks,
   retryable failed approvals, console controls, and durable audit entries keep
-  the destructive path bounded and explainable.
+  the destructive path bounded and explainable. The console now includes a
+  visual policy editor with complete per-workspace overrides, longest-path
+  selection, atomic YAML persistence, and an explicit confirmation before
+  automatic termination can be saved.
 - **One-command fleet enrollment (`secure-agent fleet enroll <collector-url>`).**
   Reads the node id from the running daemon, generates the webhook secret,
   merges `fleet.webhooks` into `config.yaml` (comment-preserving, backup

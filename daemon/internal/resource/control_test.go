@@ -61,6 +61,37 @@ func TestControllerObserveModeNeverContains(t *testing.T) {
 	}
 }
 
+func TestControllerSelectsLongestWorkspacePolicy(t *testing.T) {
+	now := time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
+	c := NewController(Policy{Mode: ModeObserve, MaxRSSBytes: 100}, nil)
+	c.SetPolicySet(PolicySet{
+		Default: Policy{Mode: ModeObserve, MaxRSSBytes: 100},
+		WorkspaceOverrides: []WorkspacePolicy{
+			{Path: "/work", Policy: Policy{Mode: ModePrompt, MaxRSSBytes: 200}},
+			{Path: "/work/critical", Policy: Policy{Mode: ModeTerminate, MaxRSSBytes: 300}},
+		},
+	})
+	snapshot := Snapshot{Sessions: []Session{
+		{Key: "deep", Workspace: "/work/critical/service", RootPID: 10, RSSBytes: 350},
+		{Key: "parent", Workspace: "/work/other", RootPID: 11, RSSBytes: 250},
+		{Key: "boundary", Workspace: "/worker", RootPID: 12, RSSBytes: 150},
+	}}
+	c.Observe(snapshot, now)
+	got := c.Snapshot().Sessions
+	if got[0].Control.PolicySource != "workspace" || got[0].Control.PolicyScope != "/work/critical" || got[0].Control.Mode != ModeTerminate {
+		t.Fatalf("deep control=%+v", got[0].Control)
+	}
+	if got[1].Control.PolicyScope != "/work" || got[1].Control.Mode != ModePrompt {
+		t.Fatalf("parent control=%+v", got[1].Control)
+	}
+	if got[2].Control.PolicySource != "default" || got[2].Control.PolicyScope != "" || got[2].Control.Mode != ModeObserve {
+		t.Fatalf("boundary control=%+v", got[2].Control)
+	}
+	if len(c.Snapshot().Control.WorkspaceOverrides) != 2 {
+		t.Fatalf("overrides=%+v", c.Snapshot().Control.WorkspaceOverrides)
+	}
+}
+
 func TestControllerDismissAddsCooldown(t *testing.T) {
 	now := time.Now()
 	c := NewController(Policy{Mode: ModePrompt, MaxRSSBytes: 100, Cooldown: time.Minute}, nil)

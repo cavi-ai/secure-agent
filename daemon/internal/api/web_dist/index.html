@@ -356,6 +356,18 @@
     </div>
   </dialog>
 
+  <dialog id="resource-policy-modal" class="modal resource-policy-modal">
+    <div class="modal-head">
+      <div><span class="resource-eyebrow">Resource guardrails</span><h3><svg class="icon"><use href="#i-activity"/></svg>Policy editor</h3></div>
+      <button class="btn btn-icon" id="btn-close-resource-policy" title="Close"><svg class="icon"><use href="#i-close"/></svg></button>
+    </div>
+    <div class="modal-body" id="resource-policy-body"></div>
+    <div class="resource-policy-actions">
+      <button type="button" class="btn btn-ghost" id="btn-cancel-resource-policy">Cancel</button>
+      <button type="button" class="btn btn-primary" id="btn-save-resource-policy">Save and apply</button>
+    </div>
+  </dialog>
+
   <div id="toast-container" class="toasts"></div>
 
   <script src="lib.js"></script>

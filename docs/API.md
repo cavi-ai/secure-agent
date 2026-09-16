@@ -101,7 +101,21 @@ resource_control:
   max_cpu_percent: 200      # 0 disables; 100 is one full core
   sustain_seconds: 30       # continuous breach before action
   cooldown_seconds: 300     # suppress repeat prompts/failed retries
+  workspace_overrides:
+    - cwd_prefix: /Users/me/workspace/critical-service
+      mode: terminate
+      max_rss_mb: 8192
+      max_cpu_percent: 300
+      sustain_seconds: 60
+      cooldown_seconds: 600
 ```
+
+Workspace overrides cover the exact normalized path and its descendants. If
+multiple prefixes match, the longest prefix wins. Every override is a complete
+policy so its effective behavior does not depend on hidden field inheritance.
+The Resource Mission Control editor writes the full policy document with
+`PUT /resources/policy`; the daemon validates and atomically persists the YAML
+before applying it. An unsuccessful write leaves the active policy unchanged.
 
 `observe` only annotates sessions. `prompt` adds an approval to
 `control.pending`; resolve it with

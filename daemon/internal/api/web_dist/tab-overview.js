@@ -50,7 +50,7 @@ function renderResourceMissionControl() {
     control.max_rss_bytes ? `${fmtRSS(control.max_rss_bytes)} memory` : '',
     control.max_cpu_percent ? `${fmtCPU(control.max_cpu_percent)} CPU` : ''
   ].filter(Boolean).join(' · ');
-  const policy = `<div class="resource-policy"><span><b>${escapeHTML(control.mode || 'observe')}</b> policy${limits ? ` · ${escapeHTML(limits)}` : ' · budgets disabled'}${control.sustain_seconds ? ` · ${Number(control.sustain_seconds)}s grace` : ''}</span><span>${(control.pending || []).length} approval${(control.pending || []).length === 1 ? '' : 's'} pending</span></div>`;
+  const policy = `<div class="resource-policy"><span><b>${escapeHTML(control.mode || 'observe')}</b> machine policy${limits ? ` · ${escapeHTML(limits)}` : ' · budgets disabled'}${control.sustain_seconds ? ` · ${Number(control.sustain_seconds)}s grace` : ''} · ${(control.workspace_overrides || []).length} workspace override${(control.workspace_overrides || []).length === 1 ? '' : 's'}</span><span><span>${(control.pending || []).length} approval${(control.pending || []).length === 1 ? '' : 's'} pending</span><button type="button" class="btn btn-ghost btn-sm" data-action="edit-resource-policy">Edit policy</button></span></div>`;
   if (sessions.length === 0) {
     container.innerHTML = policy + `<div class="empty"><svg class="icon"><use href="#i-activity"/></svg><span>No attributed agent resource use right now</span></div>`;
     return;
@@ -80,6 +80,9 @@ function renderResourceMissionControl() {
     const active = selected && selected.key === session.key ? ' selected' : '';
     const reclaim = fmtRSS(session.estimated_reclaim_bytes);
     const sessionControl = session.control || {};
+    const policySource = sessionControl.policy_source === 'workspace'
+      ? `workspace policy · ${sessionControl.policy_scope || session.workspace || ''}`
+      : 'machine default';
     const approval = sessionControl.pending_id ? `
       <span class="resource-approval">
         <button type="button" class="btn btn-danger btn-sm" data-action="resource-control" data-id="${escapeHTML(sessionControl.pending_id)}" data-decision="terminate">Contain session</button>
@@ -104,6 +107,7 @@ function renderResourceMissionControl() {
           <span class="resource-diagnosis${primary ? '' : ' quiet'}">${primary ? resourceDiagnosisText(primary) : 'Within current thresholds'}</span>
           ${reclaim ? `<span class="resource-reclaim">up to ${escapeHTML(reclaim)} reclaimable</span>` : ''}
           ${sessionControl.state && sessionControl.state !== 'healthy' ? `<span class="resource-control-state">${escapeHTML(sessionControl.state)}</span>` : ''}
+          <span class="resource-policy-source">${escapeHTML(policySource)}</span>
           ${approval}
           <button type="button" class="btn btn-ghost btn-sm" data-action="filter-pids" data-pids="${escapeHTML(pids.join(','))}" data-label="${escapeHTML(label)}">Open family activity</button>
         </div>

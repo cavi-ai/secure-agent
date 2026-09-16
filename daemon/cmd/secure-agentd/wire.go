@@ -339,6 +339,22 @@ func resourcePolicy(c config.ResourceControlConfig) resource.Policy {
 	}
 }
 
+func resourcePolicySet(c config.ResourceControlConfig) resource.PolicySet {
+	set := resource.PolicySet{Default: resourcePolicy(c)}
+	for _, override := range c.WorkspaceOverrides {
+		set.WorkspaceOverrides = append(set.WorkspaceOverrides, resource.WorkspacePolicy{
+			Path: override.CwdPrefix,
+			Policy: resource.Policy{
+				Mode: resource.ControlMode(override.Mode), MaxRSSBytes: override.MaxRSSMB * 1024 * 1024,
+				MaxCPUPercent: override.MaxCPUPercent,
+				Sustain:       time.Duration(override.SustainSeconds) * time.Second,
+				Cooldown:      time.Duration(override.CooldownSeconds) * time.Second,
+			},
+		})
+	}
+	return set
+}
+
 // defaultFleetHeartbeatSec is the status-envelope cadence when
 // fleet.heartbeat_interval_sec is unset or zero.
 const defaultFleetHeartbeatSec = 60

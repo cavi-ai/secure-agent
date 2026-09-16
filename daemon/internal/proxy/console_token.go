@@ -84,6 +84,7 @@ var consoleAPIPaths = map[string]bool{
 	"/status":                       true,
 	"/resources":                    true,
 	"/resources/control":            true,
+	"/resources/policy":             true,
 	"/snapshot":                     true,
 	"/posture":                      true,
 	"/flags":                        true,

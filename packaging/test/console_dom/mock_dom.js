@@ -41,6 +41,7 @@
       control: {
         mode: 'prompt', max_rss_bytes: 4294967296, max_cpu_percent: 100,
         sustain_seconds: 30, cooldown_seconds: 300,
+        workspace_overrides: [{ cwd_prefix: '/Users/dev/workspace', mode: 'observe', max_rss_bytes: 6442450944, max_cpu_percent: 200, sustain_seconds: 60, cooldown_seconds: 600 }],
         pending: [{ id: 'resource-1', session_key: '5821:1789480800000000000', root_pid: 5821 }]
       },
       sessions: [
@@ -51,6 +52,7 @@
           estimated_reclaim_bytes: 1610612736,
           control: {
             mode: 'prompt', state: 'approval-required', pending_id: 'resource-1',
+            policy_source: 'workspace', policy_scope: '/Users/dev/workspace',
             violations: [{ metric: 'rss_bytes', actual: 5905580032, limit: 4294967296 }]
           },
           processes: [
@@ -187,6 +189,12 @@
   //                  #ct fragment, token must come from storage).
   const MODE = location.search;
   const REQUIRE_TOKEN = MODE.includes('requiretoken');
+  if (MODE.includes('policydemo')) {
+    window.confirm = (message) => {
+      document.documentElement.dataset.lastConfirm = message;
+      return false;
+    };
+  }
   if (MODE.includes('tokenseed')) {
     try { sessionStorage.setItem('sa.console-token', 'test-token'); } catch { /* ignored */ }
   }
@@ -331,5 +339,16 @@
   // Auto-action: switch to the Egress tab — panels must hide/show correctly.
   if (location.search.includes('tabdemo')) {
     setTimeout(() => document.querySelector('[data-tab="egress"]').click(), 4000);
+  }
+  // Auto-action: select a session, open the resource policy editor, and add
+  // its workspace as an override through the real delegated click path.
+  if (location.search.includes('policydemo')) {
+    setTimeout(() => {
+      document.querySelector('[data-action="resource-session"]').click();
+      document.querySelector('[data-action="edit-resource-policy"]').click();
+      document.querySelector('[data-action="add-resource-override"][data-source="current"]').click();
+      document.querySelector('[data-policy-default="true"] [data-policy-field="mode"]').value = 'terminate';
+      document.getElementById('btn-save-resource-policy').click();
+    }, 4000);
   }
 })();
