@@ -98,16 +98,16 @@ func TestResourcePolicyEndpointPersistsBeforeApply(t *testing.T) {
 		control.SetPolicySet(testResourcePolicySet(next))
 		return nil
 	})
-	body := strings.NewReader(`{"mode":"prompt","max_rss_mb":2048,"max_cpu_percent":150,"sustain_seconds":30,"cooldown_seconds":300,"workspace_overrides":[{"cwd_prefix":"/work/app","mode":"terminate","max_rss_mb":4096,"max_cpu_percent":200,"sustain_seconds":60,"cooldown_seconds":600}]}`)
+	body := strings.NewReader(`{"mode":"prompt","max_rss_mb":2048,"max_cpu_percent":150,"sustain_seconds":30,"cooldown_seconds":300,"interventions":[{"action":"notify","after_seconds":0},{"action":"pause","after_seconds":60}],"workspace_overrides":[{"cwd_prefix":"/work/app","mode":"terminate","max_rss_mb":4096,"max_cpu_percent":200,"sustain_seconds":60,"cooldown_seconds":600}]}`)
 	response := httptest.NewRecorder()
 	a.buildMux().ServeHTTP(response, httptest.NewRequest(http.MethodPut, "/resources/policy", body))
 	if response.Code != http.StatusOK {
 		t.Fatalf("code=%d body=%s", response.Code, response.Body.String())
 	}
-	if persisted.Mode != "prompt" || len(persisted.WorkspaceOverrides) != 1 {
+	if persisted.Mode != "prompt" || len(persisted.Interventions) != 2 || persisted.Interventions[1].Action != "pause" || len(persisted.WorkspaceOverrides) != 1 {
 		t.Fatalf("persisted=%+v", persisted)
 	}
-	if got := control.Snapshot().Control; got.Mode != resource.ModePrompt || len(got.WorkspaceOverrides) != 1 {
+	if got := control.Snapshot().Control; got.Mode != resource.ModePrompt || len(got.Interventions) != 2 || len(got.WorkspaceOverrides) != 1 {
 		t.Fatalf("active=%+v", got)
 	}
 	if audits := st.RecentAudit(5); len(audits) != 1 || audits[0].Action != "resource-policy-update" {
@@ -117,15 +117,24 @@ func TestResourcePolicyEndpointPersistsBeforeApply(t *testing.T) {
 
 func testResourcePolicySet(c config.ResourceControlConfig) resource.PolicySet {
 	set := resource.PolicySet{Default: resource.Policy{Mode: resource.ControlMode(c.Mode), MaxRSSBytes: c.MaxRSSMB * 1024 * 1024,
-		MaxCPUPercent: c.MaxCPUPercent, Sustain: time.Duration(c.SustainSeconds) * time.Second, Cooldown: time.Duration(c.CooldownSeconds) * time.Second}}
+		MaxCPUPercent: c.MaxCPUPercent, Sustain: time.Duration(c.SustainSeconds) * time.Second, Cooldown: time.Duration(c.CooldownSeconds) * time.Second,
+		Interventions: testResourceInterventions(c.Interventions)}}
 	for _, override := range c.WorkspaceOverrides {
 		set.WorkspaceOverrides = append(set.WorkspaceOverrides, resource.WorkspacePolicy{Path: override.CwdPrefix, Policy: resource.Policy{
 			Mode: resource.ControlMode(override.Mode), MaxRSSBytes: override.MaxRSSMB * 1024 * 1024,
 			MaxCPUPercent: override.MaxCPUPercent, Sustain: time.Duration(override.SustainSeconds) * time.Second,
-			Cooldown: time.Duration(override.CooldownSeconds) * time.Second,
+			Cooldown: time.Duration(override.CooldownSeconds) * time.Second, Interventions: testResourceInterventions(override.Interventions),
 		}})
 	}
 	return set
+}
+
+func testResourceInterventions(steps []config.ResourceInterventionConfig) []resource.InterventionStep {
+	out := make([]resource.InterventionStep, 0, len(steps))
+	for _, step := range steps {
+		out = append(out, resource.InterventionStep{Action: resource.InterventionAction(step.Action), After: time.Duration(step.AfterSeconds) * time.Second, Nice: step.Nice})
+	}
+	return out
 }
 
 func TestResourcePolicyEndpointLeavesActivePolicyOnWriteFailure(t *testing.T) {
@@ -229,5 +238,30 @@ func TestResourceControlResolveEndpoint(t *testing.T) {
 	audits := st.RecentAudit(5)
 	if len(audits) != 1 || audits[0].Action != "resource-control" || audits[0].ToMode != "dismiss" {
 		t.Fatalf("audit=%+v", audits)
+	}
+}
+
+func TestResourceControlResumeEndpoint(t *testing.T) {
+	st := testStore(t)
+	a := New("", st, nil, func() Status { return Status{Running: true} })
+	var actions []resource.ControlAction
+	control := resource.NewController(resource.Policy{Mode: resource.ModeTerminate, MaxRSSBytes: 100,
+		Interventions: []resource.InterventionStep{{Action: resource.ActionPause}}},
+		func(action resource.ControlAction) error { actions = append(actions, action); return nil })
+	now := time.Date(2026, 9, 16, 12, 0, 0, 0, time.UTC)
+	control.Observe(resource.Snapshot{Sessions: []resource.Session{{
+		Key: "s1", RootPID: 10, RootStartedAt: now, Name: "claude", RSSBytes: 200,
+		Processes: []resource.Process{{PID: 10, StartedAt: now}},
+	}}}, now)
+	a.SetResourceControl(control)
+
+	response := httptest.NewRecorder()
+	body := strings.NewReader(`{"session_key":"s1","decision":"resume"}`)
+	a.buildMux().ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/resources/control", body))
+	if response.Code != http.StatusOK {
+		t.Fatalf("code=%d body=%s", response.Code, response.Body.String())
+	}
+	if len(actions) != 2 || actions[1].Kind != "resume" {
+		t.Fatalf("actions=%+v", actions)
 	}
 }

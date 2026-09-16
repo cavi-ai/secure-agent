@@ -108,6 +108,46 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(state.resources?.host?.capacity, "constrained")
     }
 
+    func testResourceInterventionTransitionNotifiesAfterBaseline() async {
+        let stub = StubDaemonClient()
+        stub.resources = ResourceSnapshotModel(host: nil, sessions: [
+            ResourceSessionModel(key: "s1", name: "codex", control: ResourceSessionControlModel(state: "grace"))
+        ])
+        let state = AppState(client: stub)
+        var notices: [ResourceInterventionNotice] = []
+        state.notifyResource = { notices.append($0) }
+
+        await state.performFetch()
+        XCTAssertTrue(notices.isEmpty)
+
+        stub.resources = ResourceSnapshotModel(host: nil, sessions: [
+            ResourceSessionModel(key: "s1", name: "codex", control: ResourceSessionControlModel(
+                state: "approval-required", pendingID: "resource-1", nextAction: "pause"))
+        ])
+        await state.performFetch()
+
+        XCTAssertEqual(notices.count, 1)
+        XCTAssertEqual(notices[0].sessionKey, "s1")
+        XCTAssertEqual(notices[0].state, "approval-required")
+        XCTAssertEqual(notices[0].action, "pause")
+    }
+
+	func testInitialResourceApprovalNotifiesImmediately() async {
+		let stub = StubDaemonClient()
+		stub.resources = ResourceSnapshotModel(host: nil, sessions: [
+			ResourceSessionModel(key: "s1", name: "codex", control: ResourceSessionControlModel(
+				state: "approval-required", pendingID: "resource-1", nextAction: "pause"))
+		])
+		let state = AppState(client: stub)
+		var notices: [ResourceInterventionNotice] = []
+		state.notifyResource = { notices.append($0) }
+
+		await state.performFetch()
+
+		XCTAssertEqual(notices.count, 1)
+		XCTAssertEqual(notices[0].action, "pause")
+	}
+
     func testAgentRootsFallbackWithoutRootPid() async {
         // Older daemon (no root_pid): every row is its own root.
         let stub = StubDaemonClient()

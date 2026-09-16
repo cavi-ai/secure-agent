@@ -50,10 +50,19 @@ public final class AppState: ObservableObject {
     /// Notification sink — a closure so tests can count deliveries instead of
     /// touching UNUserNotificationCenter.
     var notify: (FlagModel) -> Void = { NotificationManager.shared.sendNotification(for: $0) }
+    var notifyResource: (ResourceInterventionNotice) -> Void = { NotificationManager.shared.sendResourceNotification($0) }
     private var notifiedFlagIDs: Set<String> = []
     /// False until the first successful fetch seeds the notification baseline —
     /// without it, launch fires up to 20 banners for days-old flags.
     private var didSeedNotificationBaseline = false
+    private struct ResourceNoticeSignature: Equatable {
+        let state: String
+        let pendingID: String?
+        let nextAction: String?
+        let lastAction: String?
+        let lastError: String?
+    }
+    private var resourceNoticeBaseline: [String: ResourceNoticeSignature]?
     private var timer: Timer?
     /// Serializes fetch() so a slow daemon can't stack overlapping poll tasks
     /// that complete out of order and regress state.
@@ -244,6 +253,7 @@ public final class AppState: ObservableObject {
             guard !self.isPaused else { return }
             let wasDisconnected = !self.connected
             self.status = status
+			self.processResourceTransitions(resources)
             self.resources = resources
             self.flags = flags
             self.incidents = incidents
@@ -426,6 +436,41 @@ public final class AppState: ObservableObject {
             let live = Set(flags.map(\.id))
             notifiedFlagIDs.formIntersection(live)
         }
+    }
+
+    private func processResourceTransitions(_ resources: ResourceSnapshotModel?) {
+        guard let sessions = resources?.sessions else { return }
+        let current = Dictionary(uniqueKeysWithValues: sessions.map { session in
+            let control = session.control
+            return (session.key, ResourceNoticeSignature(state: control?.state ?? "healthy",
+                                                         pendingID: control?.pendingID,
+                                                         nextAction: control?.nextAction,
+                                                         lastAction: control?.lastAction,
+                                                         lastError: control?.lastError))
+        })
+        guard let previous = resourceNoticeBaseline else {
+            resourceNoticeBaseline = current
+			for session in sessions {
+				guard let signature = current[session.key], signature.pendingID != nil || signature.lastError != nil else { continue }
+				notifyResource(ResourceInterventionNotice(sessionKey: session.key, sessionName: session.name,
+													  state: signature.state,
+													  action: signature.pendingID == nil ? signature.lastAction : signature.nextAction,
+													  error: signature.lastError))
+			}
+            return
+        }
+        for session in sessions {
+            guard let signature = current[session.key], previous[session.key] != signature else { continue }
+            let actionable = signature.pendingID != nil || signature.lastAction != nil || signature.lastError != nil
+                || signature.state == "grace" || signature.state == "over-budget"
+            if actionable {
+                notifyResource(ResourceInterventionNotice(sessionKey: session.key, sessionName: session.name,
+                                                          state: signature.state,
+                                                          action: signature.pendingID == nil ? signature.lastAction : signature.nextAction,
+                                                          error: signature.lastError))
+            }
+        }
+        resourceNoticeBaseline = current
     }
 
     /// Cancel the stream, debounce task, and poll timer (app quit path).

@@ -210,13 +210,74 @@ func main() {
 			return nil
 		})
 	}
-	resourceControl.SetTerminator(func(action resource.ControlAction) error {
-		killed, err := apiServer.TerminateAgentTree(action.TargetPID, action.TargetStartedAt.Format(time.RFC3339Nano))
-		detail := fmt.Sprintf("session=%s root_pid=%d processes=%d", action.SessionKey, action.RootPID, len(killed))
+	resourceControl.SetExecutor(func(action resource.ControlAction) error {
+		var affected int
+		baseline := tagger.TaggedPIDs()
+		revalidate := func(pid int32) error {
+			original, ok := baseline[pid]
+			if !ok {
+				return fmt.Errorf("pid %d left the recognized session", pid)
+			}
+			fresh, ok := tagger.TaggedPIDs()[pid]
+			if !ok || !fresh.StartedAt.Equal(original.StartedAt) {
+				return fmt.Errorf("pid %d identity changed before intervention", pid)
+			}
+			return nil
+		}
+		err := applyResourceProcessAction(action, baseline, func(action resource.ControlAction) error {
+			expectedStarts := make(map[int32]time.Time)
+			rootPID := action.RootPID
+			if rootPID == 0 {
+				if target, ok := baseline[action.TargetPID]; ok {
+					rootPID = normalizedActionRoot(target)
+				}
+			}
+			for pid, info := range baseline {
+				if normalizedActionRoot(info) == rootPID {
+					expectedStarts[pid] = info.StartedAt
+				}
+			}
+			killed, killErr := apiServer.TerminateAgentTreeVerified(action.TargetPID, action.TargetStartedAt.Format(time.RFC3339Nano), expectedStarts)
+			affected = len(killed)
+			return killErr
+		}, func(pid int32, signal syscall.Signal) error {
+			if err := revalidate(pid); err != nil {
+				return err
+			}
+			if err := syscall.Kill(int(pid), signal); err == nil {
+				affected++
+				return nil
+			} else {
+				return err
+			}
+		}, func(pid int32, nice int) error {
+			if err := revalidate(pid); err != nil {
+				return err
+			}
+			current, err := syscall.Getpriority(syscall.PRIO_PROCESS, int(pid))
+			if err != nil {
+				return err
+			}
+			if current >= nice {
+				affected++
+				return nil
+			}
+			if err := syscall.Setpriority(syscall.PRIO_PROCESS, int(pid), nice); err == nil {
+				affected++
+				return nil
+			} else {
+				return err
+			}
+		})
+		detail := fmt.Sprintf("session=%s root_pid=%d action=%s processes=%d", action.SessionKey, action.RootPID, action.Kind, affected)
 		if err != nil {
 			detail += " error=" + err.Error()
 		}
-		st.PutAudit(store.AuditEntry{Action: "resource-containment", Rule: action.Name, ToMode: action.Kind, Detail: detail})
+		auditAction := "resource-intervention"
+		if action.Kind == string(resource.ActionTerminate) {
+			auditAction = "resource-containment"
+		}
+		st.PutAudit(store.AuditEntry{Action: auditAction, Rule: action.Name, ToMode: action.Kind, Detail: detail})
 		return err
 	})
 
