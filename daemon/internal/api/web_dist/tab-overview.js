@@ -27,6 +27,38 @@ function renderActivity() {
   svg.innerHTML = bars;
 }
 
+function resourceFlightRecorderHTML(snapshot) {
+  const episodes = snapshot.episodes || [];
+  return `<section class="resource-flight-recorder">
+    <div class="resource-flight-head"><div><span class="resource-eyebrow">Local history</span><h3>Pressure flight recorder</h3></div><span>${episodes.length ? `${episodes.length} recent episode${episodes.length === 1 ? '' : 's'}` : 'No pressure captured yet'}</span></div>
+    <p class="resource-flight-intro">When a session crosses a diagnostic threshold, secure-agent keeps a bounded ten-minute prelude and the highest-impact processes for post-mortem review.</p>
+    <div class="resource-episode-list">${episodes.map((episode, index) => {
+      const session = episode.session || {};
+      const label = cwdLabel(session.workspace) || familyTitle(session.name);
+      const diagnoses = session.diagnoses || [];
+      const primary = diagnoses[0] || {};
+      const processes = [...(session.processes || [])].sort((a, b) => Number(b.rss_bytes || 0) - Number(a.rss_bytes || 0));
+      const visibleProcesses = processes.slice(0, 10);
+      const omittedCount = Math.max(0, Number(session.process_count || processes.length) - visibleProcesses.length);
+      const drivers = visibleProcesses.map(process => {
+        const share = session.rss_bytes ? Math.round(Number(process.rss_bytes || 0) / Number(session.rss_bytes) * 100) : 0;
+        return `<div class="resource-episode-process"><span><b>${escapeHTML(process.name || 'process')}</b> · PID ${Number(process.pid || 0)}${process.is_orphan ? ' · leftover' : ''}</span><span>${escapeHTML(fmtRSS(process.rss_bytes) || '—')} · ${share}%</span></div>`;
+      }).join('');
+      const evidence = diagnoses.flatMap(d => d.evidence || []).map(item => `<li>${escapeHTML(item)}</li>`).join('');
+      const memoryPoints = resourceSparkPoints(session.samples, 'rss_bytes', 220, 38);
+      const cpuPoints = resourceSparkPoints(session.samples, 'cpu_percent', 220, 38);
+      const age = episode.captured_at ? fmtAge(episode.captured_at, Date.now()) : '';
+      return `<details class="resource-episode severity-${escapeHTML(episode.severity || 'warning')}"${index === 0 ? ' open' : ''}>
+        <summary><span><b>${escapeHTML(label)}</b><small>${escapeHTML(primary.summary || (episode.diagnosis_codes || []).join(', ') || 'Resource pressure')}</small></span><span class="resource-episode-metrics"><b>${escapeHTML(fmtRSS(session.rss_bytes) || '—')}</b><b>${escapeHTML(fmtCPU(session.cpu_percent) || '—')}</b><time>${age ? `${escapeHTML(age)} ago` : 'recorded'}</time></span></summary>
+        <div class="resource-episode-body">
+          <div><span class="resource-eyebrow">What drove it</span><div class="resource-episode-processes">${drivers || '<span>No process breakdown recorded</span>'}${omittedCount ? `<small>${omittedCount} lower-impact process${omittedCount === 1 ? '' : 'es'} omitted</small>` : ''}</div></div>
+          <div><span class="resource-eyebrow">Evidence</span>${evidence ? `<ul>${evidence}</ul>` : '<p>No additional evidence recorded.</p>'}<svg class="resource-episode-spark" viewBox="0 0 220 38" preserveAspectRatio="none" role="img" aria-label="Resource trend before capture">${memoryPoints ? `<polyline class="resource-spark-memory" points="${memoryPoints}"/>` : ''}${cpuPoints ? `<polyline class="resource-spark-cpu" points="${cpuPoints}"/>` : ''}</svg></div>
+        </div>
+      </details>`;
+    }).join('') || '<div class="resource-detail-empty">The recorder is armed. Episodes appear here when a session becomes heavy, grows rapidly, or leaves resource-holding processes behind.</div>'}</div>
+  </section>`;
+}
+
 function renderResourceMissionControl() {
   const SA = window.SA;
   const container = document.getElementById('resource-board');
@@ -51,8 +83,9 @@ function renderResourceMissionControl() {
     control.max_cpu_percent ? `${fmtCPU(control.max_cpu_percent)} CPU` : ''
   ].filter(Boolean).join(' · ');
   const policy = `<div class="resource-policy"><span><b>${escapeHTML(control.mode || 'observe')}</b> machine policy${limits ? ` · ${escapeHTML(limits)}` : ' · budgets disabled'}${control.sustain_seconds ? ` · ${Number(control.sustain_seconds)}s grace` : ''} · ${(control.workspace_overrides || []).length} workspace override${(control.workspace_overrides || []).length === 1 ? '' : 's'}</span><span><span>${(control.pending || []).length} approval${(control.pending || []).length === 1 ? '' : 's'} pending</span><button type="button" class="btn btn-ghost btn-sm" data-action="edit-resource-policy">Edit policy</button></span></div>`;
+  const flightRecorder = resourceFlightRecorderHTML(snapshot);
   if (sessions.length === 0) {
-    container.innerHTML = policy + `<div class="empty"><svg class="icon"><use href="#i-activity"/></svg><span>No attributed agent resource use right now</span></div>`;
+    container.innerHTML = policy + `<div class="empty"><svg class="icon"><use href="#i-activity"/></svg><span>No attributed agent resource use right now</span></div>` + flightRecorder;
     return;
   }
 
@@ -129,7 +162,7 @@ function renderResourceMissionControl() {
       </div>`;
   }
 
-  container.innerHTML = posture + policy + `<div class="resource-layout"><div class="resource-session-list">${cards}</div><aside class="resource-detail-wrap">${detail}</aside></div>`;
+  container.innerHTML = posture + policy + `<div class="resource-layout"><div class="resource-session-list">${cards}</div><aside class="resource-detail-wrap">${detail}</aside></div>` + flightRecorder;
 }
 
 function renderSessionBoard() {

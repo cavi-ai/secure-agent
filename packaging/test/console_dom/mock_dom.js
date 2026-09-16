@@ -80,7 +80,27 @@
           samples: [{ at: iso(0), rss_bytes: 90000000, cpu_percent: 10 }],
           diagnoses: [{ code: 'orphan-drift', severity: 'warning', summary: 'Attributed processes remain after their parent disappeared.' }]
         }
-      ]
+      ],
+      episodes: [{
+        id: 7, captured_at: iso(1800000), severity: 'critical', diagnosis_codes: ['heavy-memory', 'runaway-child'],
+        session: {
+          key: '4412:1789470000000000000', name: 'codex', workspace: '/Users/dev/workspace/data-pipeline',
+          root_pid: 4412, rss_bytes: 7516192768, cpu_percent: 88, process_count: 3,
+          processes: [
+            { pid: 4412, name: 'codex', rss_bytes: 1073741824, cpu_percent: 18 },
+            { pid: 4419, ppid: 4412, name: 'node', rss_bytes: 5905580032, cpu_percent: 65 },
+            { pid: 4420, ppid: 4412, name: 'rg', rss_bytes: 536870912, cpu_percent: 5 }
+          ],
+          samples: [
+            { at: iso(2400000), rss_bytes: 4294967296, cpu_percent: 42 },
+            { at: iso(1800000), rss_bytes: 7516192768, cpu_percent: 88 }
+          ],
+          diagnoses: [{
+            code: 'runaway-child', severity: 'critical', summary: 'One child process dominated session memory.',
+            evidence: ['PID 4419: 5905580032 bytes (79%)']
+          }]
+        }
+      }]
     },
     '/posture': {
       state: 'critical',
@@ -334,6 +354,11 @@
   // hide entirely instead of carrying a permanently-empty placeholder.
   if (location.search.includes('nofleetdemo')) {
     data['/fleet'] = { ...data['/fleet'], fleet_configured: false };
+  }
+  // Post-mortem variant: every live session has exited, but persisted pressure
+  // episodes must remain visible.
+  if (location.search.includes('noresourcesdemo')) {
+    data['/resources'] = { ...data['/resources'], rss_bytes: 0, cpu_percent: 0, process_count: 0, session_count: 0, sessions: [] };
   }
 
   // Auto-action: switch to the Egress tab — panels must hide/show correctly.

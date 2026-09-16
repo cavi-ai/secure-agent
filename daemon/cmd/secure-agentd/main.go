@@ -91,11 +91,14 @@ func main() {
 	tagger := agents.New(cfg, procSource)
 	tagger.Refresh()
 	resourceTracker := resource.NewTracker()
+	resourceEpisodes := newResourceEpisodeWriter(st)
+	defer resourceEpisodes.Close()
 	resourceControl := resource.NewController(resourcePolicy(cfg.ResourceControl), nil)
 	resourceControl.SetPolicySet(resourcePolicySet(cfg.ResourceControl))
 	resourceNow := time.Now()
 	observeResources(resourceTracker, tagger, st, resourceNow)
 	resourceControl.Observe(resourceTracker.Snapshot(), resourceNow)
+	resourceEpisodes.Observe(resourceControl.Snapshot())
 
 	classifier := sensitive.New(cfg)
 	correlator := correlate.New(tagger, classifier, cfg)
@@ -137,6 +140,7 @@ func main() {
 				now := time.Now()
 				observeResources(resourceTracker, tagger, st, now)
 				resourceControl.Observe(resourceTracker.Snapshot(), now)
+				resourceEpisodes.Observe(resourceControl.Snapshot())
 				timer.Reset(agents.RefreshInterval(tagger.Any()))
 			}
 		}

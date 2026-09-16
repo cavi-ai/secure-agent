@@ -28,6 +28,7 @@ func TestResourcesEndpoint(t *testing.T) {
 	want := resource.Snapshot{
 		ObservedAt: time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC),
 		RSSBytes:   300, CPUPercent: 75, ProcessCount: 2, SessionCount: 1,
+		Episodes: []resource.Episode{},
 		Sessions: []resource.Session{{
 			Key: "10:100", Name: "claude", RootPID: 10, RSSBytes: 300, CPUPercent: 75, ProcessCount: 2,
 			Processes: []resource.Process{{PID: 10, RSSBytes: 200}, {PID: 11, PPID: 10, RSSBytes: 100}},
@@ -48,12 +49,39 @@ func TestResourcesEndpoint(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("GET code=%d body=%s", response.Code, response.Body.String())
 	}
+	if !strings.Contains(response.Body.String(), `"episodes":[]`) {
+		t.Fatalf("empty episodes must encode as []: %s", response.Body.String())
+	}
 	var got resource.Snapshot
 	if err := json.Unmarshal(response.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("snapshot mismatch\ngot:  %#v\nwant: %#v", got, want)
+	}
+}
+
+func TestResourcesEndpointIncludesPressureEpisodes(t *testing.T) {
+	st := testStore(t)
+	now := time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
+	if err := st.PutResourceEpisode(resource.Episode{CapturedAt: now, Severity: "critical",
+		Session: resource.Session{Key: "10:100", RootPID: 10, RSSBytes: 5 << 30}}); err != nil {
+		t.Fatal(err)
+	}
+	a := New("", st, nil, func() Status { return Status{Running: true} })
+	a.SetResources(func() resource.Snapshot { return resource.Snapshot{ObservedAt: now} })
+
+	response := httptest.NewRecorder()
+	a.buildMux().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/resources", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("code=%d body=%s", response.Code, response.Body.String())
+	}
+	var got resource.Snapshot
+	if err := json.Unmarshal(response.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Episodes) != 1 || got.Episodes[0].Session.Key != "10:100" {
+		t.Fatalf("episodes=%+v", got.Episodes)
 	}
 }
 

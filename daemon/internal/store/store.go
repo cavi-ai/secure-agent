@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -15,14 +16,16 @@ import (
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
+	"github.com/cavi-ai/secure-agent/daemon/internal/resource"
 )
 
 // Retention caps for the API-populated tables, so an always-on daemon's DB stays
 // bounded. Events are pruned separately (batched) at 10,000.
 const (
-	maxIncidents = 5000  // one full report_json per flag
-	maxAudit     = 50000 // long-lived security log, but still bounded against abuse
-	maxFlags     = 10000 // flags are insert-only like events; cap them too
+	maxIncidents        = 5000  // one full report_json per flag
+	maxAudit            = 50000 // long-lived security log, but still bounded against abuse
+	maxFlags            = 10000 // flags are insert-only like events; cap them too
+	maxResourceEpisodes = 500   // bounded full-family pressure snapshots
 )
 
 // jsonlRotateBytes caps the forensic flag mirror. SQLite is the source of
@@ -166,6 +169,14 @@ func Open(dbPath, jsonlPath string) (*Store, error) {
 			model TEXT,
 			created_at TEXT
 		);`,
+		`CREATE TABLE IF NOT EXISTS resource_episodes (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			captured_at TEXT NOT NULL,
+			severity TEXT NOT NULL,
+			session_key TEXT NOT NULL,
+			episode_json TEXT NOT NULL
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_resource_episodes_captured_at ON resource_episodes(captured_at);`,
 	}
 
 	for _, q := range createQueries {
@@ -972,6 +983,65 @@ func (s *Store) RecentAudit(limit int) []AuditEntry {
 	}
 	if err := rows.Err(); err != nil {
 		log.Printf("store: audit cursor error (result may be truncated): %v", err)
+	}
+	return out
+}
+
+func (s *Store) PutResourceEpisode(episode resource.Episode) error {
+	payload, err := json.Marshal(episode)
+	if err != nil {
+		return fmt.Errorf("marshal resource episode: %w", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin resource episode write: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO resource_episodes (captured_at, severity, session_key, episode_json) VALUES (?, ?, ?, ?)`,
+		episode.CapturedAt.UTC().Format(time.RFC3339Nano), episode.Severity, episode.Session.Key, string(payload),
+	); err != nil {
+		return fmt.Errorf("insert resource episode: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM resource_episodes WHERE id NOT IN (SELECT id FROM resource_episodes ORDER BY id DESC LIMIT ?)`, maxResourceEpisodes); err != nil {
+		return fmt.Errorf("prune resource episodes: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit resource episode: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) RecentResourceEpisodes(limit int) []resource.Episode {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	rows, err := s.db.Query(`SELECT id, episode_json FROM resource_episodes ORDER BY id DESC LIMIT ?`, normalizeLimit(limit))
+	if err != nil {
+		log.Printf("store: query resource episodes error: %v", err)
+		return []resource.Episode{}
+	}
+	defer rows.Close()
+
+	out := make([]resource.Episode, 0)
+	for rows.Next() {
+		var id int64
+		var payload string
+		if err := rows.Scan(&id, &payload); err != nil {
+			continue
+		}
+		var episode resource.Episode
+		if err := json.Unmarshal([]byte(payload), &episode); err != nil {
+			log.Printf("store: decode resource episode %d: %v", id, err)
+			continue
+		}
+		episode.ID = id
+		out = append(out, episode)
+	}
+	if err := rows.Err(); err != nil {
+		log.Printf("store: resource episode cursor error (result may be truncated): %v", err)
 	}
 	return out
 }

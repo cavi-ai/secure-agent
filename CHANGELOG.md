@@ -14,7 +14,10 @@ All notable changes to `secure-agent` are documented here. The format follows
   orphan drift. `GET /resources` exposes process topology, trends, evidence,
   thresholds, confidence, and reclaim estimates. The web console ranks and
   charts whole sessions with click-through family detail; the native menu bar
-  shows family CPU/memory and supports Impact sorting.
+  shows family CPU/memory and supports Impact sorting. A local Resource Flight
+  Recorder preserves bounded pressure episodes when diagnoses appear, change,
+  or memory escalates another 25%, retaining whole-session totals, the root,
+  the 64 highest-impact processes, and a ten-minute prelude after exit.
 - **Opt-in session resource budgets and containment.** A hot-reloadable
   `resource_control` policy supports observe-only reporting, approval-required
   containment, or explicit automatic whole-family termination after a
