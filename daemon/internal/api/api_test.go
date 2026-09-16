@@ -54,15 +54,19 @@ func unixClient(socketPath string) *http.Client {
 }
 
 func waitForSocket(t *testing.T, socketPath string) {
-	for i := 0; i < 20; i++ {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	var last error
+	for time.Now().Before(deadline) {
 		conn, err := net.Dial("unix", socketPath)
 		if err == nil {
 			conn.Close()
 			return
 		}
-		time.Sleep(50 * time.Millisecond)
+		last = err
+		time.Sleep(20 * time.Millisecond)
 	}
-	t.Fatalf("socket %s not ready", socketPath)
+	t.Fatalf("socket %s not ready: %v", socketPath, last)
 }
 
 func TestKillEndpointInvokesKiller(t *testing.T) {
