@@ -435,6 +435,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // activity — on every single poll.
     const panels = [
       ['posture', renderPosture], ['status', renderStatus], ['sessions', renderSessionBoard],
+      ['session-strip', renderSessionStrip],
       ['agents', renderAgents],
       ['firewall', renderFirewall], ['incidents', renderIncidents], ['fleet', renderFleet],
       ['audit', renderAudit], ['sources', renderSources], ['flags', renderFlags],
