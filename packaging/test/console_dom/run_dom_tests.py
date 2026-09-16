@@ -224,6 +224,16 @@ def main():
               and 'id="tab-findings" role="tabpanel" hidden' in dom)
         check("overview panel visible",
               'id="tab-overview" role="tabpanel">' in dom)
+        check("resource mission control is present", 'id="resource-mission-control"' in dom)
+        resource_view = dom.split('id="resource-mission-control"', 1)[1].split('id="session-board-panel"', 1)[0]
+        check("high-impact session shows CPU and memory",
+              "132.5%" in resource_view and "5.5 GB" in resource_view)
+        check("resource diagnosis explains the pressure",
+              "Memory grew 1.4 GB in 15 minutes." in resource_view)
+        check("resource trend SVG is rendered",
+              'class="resource-spark"' in resource_view and 'points="' in resource_view)
+        check("resource action targets the full family",
+              'data-action="filter-pids" data-pids="5821,5822"' in resource_view)
         check("overview session board is present", 'id="session-board"' in dom)
         check("session board has project filter", 'id="session-cwd-filter"' in dom)
         overview = dom.split('id="session-board"', 1)[1].split('id="tab-agents"', 1)[0]

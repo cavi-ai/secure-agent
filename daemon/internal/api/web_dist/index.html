@@ -151,8 +151,18 @@
     </nav>
 
     <main>
-      <!-- Overview: sessions first, then "is this normal?" trend + live feed -->
+      <!-- Overview: resource posture, sessions, then "is this normal?" trend + live feed -->
       <div class="tabpanel" id="tab-overview" role="tabpanel">
+        <section class="panel resource-panel" id="resource-mission-control">
+          <div class="panel-head">
+            <h2><svg class="icon"><use href="#i-activity"/></svg>Resource Mission Control</h2>
+            <span class="badge" id="resource-observed">Live</span>
+          </div>
+          <div class="panel-body" id="resource-board">
+            <div class="empty"><svg class="icon"><use href="#i-activity"/></svg><span>Waiting for attributed CPU and memory samples…</span></div>
+          </div>
+        </section>
+
         <section class="panel" id="session-board-panel">
           <div class="panel-head">
             <h2><svg class="icon"><use href="#i-agent"/></svg>Sessions</h2>
