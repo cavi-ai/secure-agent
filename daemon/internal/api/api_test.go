@@ -539,8 +539,8 @@ func TestStatusCountsUnacted24hAndBusDrops(t *testing.T) {
 
 func TestGroupAgentTreesOneRowPerRootHelpersFolded(t *testing.T) {
 	trees := GroupAgentTrees([]AgentSummary{
-		{PID: 5822, Name: "claude", RootPID: 5821, RSSBytes: 50, LastSeenAt: "2026-09-11T11:00:00Z"},
-		{PID: 5821, Name: "claude", CWD: "/Users/dev/workspace/api-service", RootPID: 5821, RSSBytes: 100, LastSeenAt: "2026-09-11T12:00:00Z"},
+		{PID: 5822, Name: "claude", RootPID: 5821, RSSBytes: 50, CPUPercent: 25, LastSeenAt: "2026-09-11T11:00:00Z"},
+		{PID: 5821, Name: "claude", CWD: "/Users/dev/workspace/api-service", RootPID: 5821, RSSBytes: 100, CPUPercent: 50, LastSeenAt: "2026-09-11T12:00:00Z"},
 		{PID: 6033, Name: "cursor", CWD: "/Users/dev/projects/web-app", RootPID: 6033, RSSBytes: 10, LastSeenAt: "2026-09-11T11:00:00Z"},
 	})
 	if len(trees) != 2 {
@@ -551,6 +551,9 @@ func TestGroupAgentTreesOneRowPerRootHelpersFolded(t *testing.T) {
 	}
 	if trees[0].RSSBytes != 150 {
 		t.Fatalf("family rss = %d, want 150", trees[0].RSSBytes)
+	}
+	if trees[0].CPUPercent != 75 {
+		t.Fatalf("family cpu = %v, want 75", trees[0].CPUPercent)
 	}
 	if len(trees[0].Children) != 1 || trees[0].Children[0].PID != 5822 {
 		t.Fatalf("children = %+v, want helper 5822", trees[0].Children)
@@ -563,8 +566,8 @@ func TestGroupAgentTreesOneRowPerRootHelpersFolded(t *testing.T) {
 func TestStatusJSONIncludesTrees(t *testing.T) {
 	a := New("", testStore(t), &fakeKiller{}, func() Status {
 		return Status{Running: true, Agents: []AgentSummary{
-			{PID: 10, Name: "claude", RootPID: 10},
-			{PID: 11, Name: "claude", RootPID: 10},
+			{PID: 10, Name: "claude", RootPID: 10, CPUPercent: 60},
+			{PID: 11, Name: "claude", RootPID: 10, CPUPercent: 15},
 		}}
 	})
 	rr := httptest.NewRecorder()
@@ -578,6 +581,9 @@ func TestStatusJSONIncludesTrees(t *testing.T) {
 	}
 	if len(st.Trees) != 1 || st.Trees[0].Root.PID != 10 || len(st.Trees[0].Children) != 1 {
 		t.Fatalf("trees = %+v", st.Trees)
+	}
+	if st.Agents[0].CPUPercent != 60 || st.Trees[0].CPUPercent != 75 {
+		t.Fatalf("CPU serialization/aggregation failed: agents=%+v trees=%+v", st.Agents, st.Trees)
 	}
 }
 

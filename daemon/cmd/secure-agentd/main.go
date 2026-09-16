@@ -26,6 +26,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/guard"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/proxy"
+	"github.com/cavi-ai/secure-agent/daemon/internal/resource"
 	"github.com/cavi-ai/secure-agent/daemon/internal/sensitive"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 	"github.com/cavi-ai/secure-agent/daemon/internal/supervise"
@@ -90,6 +91,8 @@ func main() {
 	procSource := agents.NewProcSource()
 	tagger := agents.New(cfg, procSource)
 	tagger.Refresh()
+	resourceTracker := resource.NewTracker()
+	observeResources(resourceTracker, tagger, st, time.Now())
 
 	classifier := sensitive.New(cfg)
 	correlator := correlate.New(tagger, classifier, cfg)
@@ -128,6 +131,7 @@ func main() {
 				return
 			case <-timer.C:
 				tagger.Refresh()
+				observeResources(resourceTracker, tagger, st, time.Now())
 				timer.Reset(agents.RefreshInterval(tagger.Any()))
 			}
 		}
@@ -186,6 +190,7 @@ func main() {
 	// Start Control API
 	apiServer := api.New(cfg.SocketPath, st, &realKiller{}, statusFn)
 	apiServer.SetBusDrops(b.Dropped)
+	apiServer.SetResources(resourceTracker.Snapshot)
 
 	// Peer-credential gating on the control socket: kernel-attested pid/uid per
 	// connection. Owner uid gets reads, tagged agent pids may ask the guard for
@@ -411,14 +416,15 @@ func listActiveAgents(tg *agents.Tagger) []api.AgentSummary {
 	res := make([]api.AgentSummary, 0, len(tagged))
 	for pid, info := range tagged {
 		s := api.AgentSummary{
-			PID:      pid,
-			Name:     info.Name,
-			ExePath:  info.ExePath,
-			CWD:      info.CWD,
-			PPID:     info.PPID,
-			RootPID:  info.RootPID,
-			RSSBytes: info.RSSBytes,
-			IsOrphan: info.IsOrphan,
+			PID:        pid,
+			Name:       info.Name,
+			ExePath:    info.ExePath,
+			CWD:        info.CWD,
+			PPID:       info.PPID,
+			RootPID:    info.RootPID,
+			RSSBytes:   info.RSSBytes,
+			CPUPercent: info.CPUPercent,
+			IsOrphan:   info.IsOrphan,
 		}
 		if !info.StartedAt.IsZero() {
 			s.StartedAt = info.StartedAt.UTC().Format(time.RFC3339)

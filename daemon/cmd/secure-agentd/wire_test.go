@@ -15,6 +15,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/correlate"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 	"github.com/cavi-ai/secure-agent/daemon/internal/fleet"
+	"github.com/cavi-ai/secure-agent/daemon/internal/resource"
 	"github.com/cavi-ai/secure-agent/daemon/internal/sensitive"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 	"github.com/cavi-ai/secure-agent/daemon/internal/supervise"
@@ -54,7 +55,11 @@ func TestTranscriptTailTargets(t *testing.T) {
 
 func TestBuildStatusFn(t *testing.T) {
 	cfg, _ := config.Load("/nonexistent")
-	tagger := agents.New(cfg, treeProcSource{})
+	source := &treeProcSource{cpu: time.Second}
+	tagger := agents.New(cfg, source)
+	tagger.Refresh()
+	time.Sleep(time.Millisecond)
+	source.cpu = 2 * time.Second
 	tagger.Refresh()
 	cr := correlate.New(tagger, sensitive.New(cfg), cfg)
 	reg := supervise.NewRegistry()
@@ -86,6 +91,13 @@ func TestBuildStatusFn(t *testing.T) {
 	if s.TrackedProcesses != 2 {
 		t.Fatalf("TrackedProcesses = %d, want 2", s.TrackedProcesses)
 	}
+	var cpu float64
+	for _, agent := range s.Agents {
+		cpu += agent.CPUPercent
+	}
+	if cpu <= 0 {
+		t.Fatalf("status CPU sum=%v want sampled CPU", cpu)
+	}
 	if s.ProxyEnabled || s.ProxyPort != 0 {
 		t.Fatalf("nil proxy must report disabled/0, got %v/%d", s.ProxyEnabled, s.ProxyPort)
 	}
@@ -111,20 +123,50 @@ func TestFleetConfiguredRequiresURLAndSecret(t *testing.T) {
 
 // treeProcSource is a one-tree process list: cursor root (500) + zsh helper
 // child (501) — the shape that used to count as two "agents".
-type treeProcSource struct{}
+type treeProcSource struct {
+	cpu time.Duration
+}
 
-func (treeProcSource) List() []agents.ProcInfo {
+func (s *treeProcSource) List() []agents.ProcInfo {
 	return []agents.ProcInfo{
-		{PID: 500, PPID: 1, Exe: "/Applications/Cursor.app/Contents/Frameworks/Cursor Helper"},
-		{PID: 501, PPID: 500, Comm: "zsh"},
+		{PID: 500, PPID: 1, Exe: "/Applications/Cursor.app/Contents/Frameworks/Cursor Helper", CPUTime: s.cpu, RSSBytes: 100},
+		{PID: 501, PPID: 500, Comm: "zsh", CPUTime: s.cpu, RSSBytes: 50},
 	}
 }
 
-func (treeProcSource) Info(pid int32) (agents.ProcInfo, bool) {
+func (s *treeProcSource) Info(pid int32) (agents.ProcInfo, bool) {
 	if pid == 500 {
-		return agents.ProcInfo{PID: 500, PPID: 1, Exe: "/Applications/Cursor.app/Contents/Frameworks/Cursor Helper"}, true
+		return agents.ProcInfo{PID: 500, PPID: 1, Exe: "/Applications/Cursor.app/Contents/Frameworks/Cursor Helper", CPUTime: s.cpu, RSSBytes: 100}, true
+	}
+	if pid == 501 {
+		return agents.ProcInfo{PID: 501, PPID: 500, Comm: "zsh", CPUTime: s.cpu, RSSBytes: 50}, true
 	}
 	return agents.ProcInfo{}, false
+}
+
+func TestObserveResourcesBuildsSessionSnapshot(t *testing.T) {
+	dir := t.TempDir()
+	st, err := store.Open(filepath.Join(dir, "resources.db"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+
+	cfg, _ := config.Load("/nonexistent")
+	tagger := agents.New(cfg, &treeProcSource{cpu: time.Second})
+	tagger.Refresh()
+	now := time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
+	st.PutEvent(event.Event{PID: 500, TS: now, Kind: event.KindPluginAction})
+	tracker := resource.NewTracker()
+
+	observeResources(tracker, tagger, st, now)
+	snapshot := tracker.Snapshot()
+	if snapshot.SessionCount != 1 || snapshot.ProcessCount != 2 || snapshot.RSSBytes != 150 {
+		t.Fatalf("snapshot=%+v", snapshot)
+	}
+	if snapshot.Sessions[0].LastSeenAt != now.Format(time.RFC3339Nano) {
+		t.Fatalf("last_seen=%q want %q", snapshot.Sessions[0].LastSeenAt, now.Format(time.RFC3339Nano))
+	}
 }
 
 // The extracted drain loop: bus events must be persisted, correlated, and the
