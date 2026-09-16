@@ -7,6 +7,12 @@ All notable changes to `secure-agent` are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Unified Attention Center.** The console now groups resource approvals,
+  blocked guard requests, critical findings and incidents, and uninspected
+  egress by complete agent session. Each group shows its workspace, process
+  count, memory, CPU, and the reason it needs review, with existing scoped
+  actions available directly from the queue. Signals that cannot be safely
+  attributed to one live session remain in an explicit agent-level group.
 - **Resource Mission Control for local agent fleets.** The daemon now samples
   live RSS and CPU for attributed processes, groups them into stable session
   families, retains one hour of five-second history, and diagnoses heavy
