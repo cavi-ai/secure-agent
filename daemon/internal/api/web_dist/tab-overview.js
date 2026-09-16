@@ -1,4 +1,4 @@
-// Overview tab: session board, activity, events, posture.
+// Overview tab: session strip, activity, events, posture.
 
 function renderActivity() {
   const SA = window.SA;
@@ -25,6 +25,24 @@ function renderActivity() {
     }
   }
   svg.innerHTML = bars;
+}
+
+function renderSessionStrip() {
+  const SA = window.SA;
+  const panel = document.getElementById('session-strip-panel');
+  const el = document.getElementById('session-strip');
+  if (!el) return;
+  const agents = (SA.t.status && SA.t.status.agents) ? SA.t.status.agents : [];
+  const trees = SA.t.status && SA.t.status.trees;
+  const all = sessionRows(agents, trees);
+  const top = sessionStripRows(all, 3);
+  if (!top.length) {
+    if (panel) panel.hidden = true;
+    el.innerHTML = '';
+    return;
+  }
+  if (panel) panel.hidden = false;
+  el.innerHTML = sessionStripHTML(top, all.length, Date.now(), SA.t.flags);
 }
 
 function renderSessionBoard() {

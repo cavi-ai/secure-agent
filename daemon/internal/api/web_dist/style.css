@@ -264,6 +264,23 @@ body {
 }
 .session-row.orphan { border-color: hsl(38 92% 56% / 0.45); }
 .session-row.stale { opacity: 0.62; }
+.session-strip-panel { flex: 0 0 auto; }
+.session-strip {
+  display: flex; flex-direction: column; gap: 4px;
+}
+.session-strip-row, .session-strip-more {
+  display: flex; align-items: baseline; gap: 8px; width: 100%;
+  background: none; border: 0; color: inherit; font: inherit;
+  text-align: left; cursor: pointer; padding: 6px 2px;
+}
+.session-strip-label { font-weight: 650; }
+.session-strip-meta { color: var(--tx-3); font-size: 0.78rem; }
+.session-strip-need {
+  margin-left: auto; font: 650 0.72rem/1 var(--font);
+  color: var(--warn); background: var(--warn-bg);
+  padding: 3px 6px; border-radius: 4px;
+}
+.session-strip-more { color: var(--tx-3); font-size: 0.78rem; }
 .session-main {
   display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px;
   flex: 1; min-width: 0; background: none; border: 0; color: inherit;

@@ -157,6 +157,13 @@
     <main>
       <!-- Overview: "is this normal?" trend + live feed -->
       <div class="tabpanel" id="tab-overview" role="tabpanel">
+        <section class="panel session-strip-panel" id="session-strip-panel" hidden>
+          <div class="panel-head">
+            <h2><svg class="icon"><use href="#i-agent"/></svg>Sessions</h2>
+            <button type="button" class="btn btn-ghost btn-sm" data-action="goto-tab" data-tab="sessions">View all</button>
+          </div>
+          <div class="panel-body" id="session-strip"></div>
+        </section>
         <section class="panel activity-panel">
           <div class="panel-head">
             <h2><svg class="icon"><use href="#i-activity"/></svg>Activity</h2>
