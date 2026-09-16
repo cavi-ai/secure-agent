@@ -25,6 +25,7 @@ final class HeroModelTests: XCTestCase {
         let hero = ConsoleView(state: s, scrollable: false).heroModel
         XCTAssertEqual(hero.title, "Protected")
         XCTAssertFalse(hero.subtitle.contains("to review"), "hero lied: \(hero.subtitle)")
+        XCTAssertNil(hero.action)
     }
 
     func testUnactedWarningFlagCounts() {
@@ -33,20 +34,35 @@ final class HeroModelTests: XCTestCase {
         let hero = ConsoleView(state: s, scrollable: false).heroModel
         XCTAssertEqual(hero.title, "Attention")
         XCTAssertTrue(hero.subtitle.contains("1 flag to review"), "hero: \(hero.subtitle)")
+        // "N flags to review" must be clickable — the top unacted flag's sheet.
+        guard case .flag = hero.action else {
+            XCTFail("flags-to-review hero must open the top flag's action sheet")
+            return
+        }
     }
 
     func testUninspectedAloneStillEarnsAttention() {
         // Zero unacted flags but a real blind spot — Attention stays, and the
-        // subtitle names only the true item.
+        // subtitle names only the true item. And it is CLICKABLE: the egress
+        // drill-down in the console ("if I can't click it I don't wanna see it").
         let s = state(flags: [flag(id: "f1", sev: 2, acked: true)], uninspected: 34)
         let hero = ConsoleView(state: s, scrollable: false).heroModel
         XCTAssertEqual(hero.title, "Attention")
         XCTAssertEqual(hero.subtitle, "34 uninspected")
+        guard case .openConsole(let tab) = hero.action else {
+            XCTFail("uninspected hero must open the console egress tab")
+            return
+        }
+        XCTAssertEqual(tab, "egress")
     }
 
     func testCriticalUnactedStillEscalates() {
         let s = state(flags: [flag(id: "f1", sev: 3, acked: false)])
         let hero = ConsoleView(state: s, scrollable: false).heroModel
         XCTAssertEqual(hero.title, "Action needed")
+        guard case .flag = hero.action else {
+            XCTFail("critical hero must open the flag's action sheet")
+            return
+        }
     }
 }

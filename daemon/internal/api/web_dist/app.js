@@ -12,11 +12,16 @@ document.addEventListener('DOMContentLoaded', () => {
   // forever. sessionStorage (not localStorage): the token dies with the tab
   // and never touches disk-backed storage.
   const SS_TOKEN_KEY = 'sa.console-token';
-  let consoleToken = new URLSearchParams(location.hash.slice(1)).get('ct') || '';
+  const hashParams = new URLSearchParams(location.hash.slice(1));
+  let consoleToken = hashParams.get('ct') || '';
   if (consoleToken) {
     try { sessionStorage.setItem(SS_TOKEN_KEY, consoleToken); } catch { /* private mode: memory only */ }
     if (window.history.replaceState) {
-      history.replaceState(null, '', location.pathname + location.search);
+      // Strip the token from the address bar but PRESERVE a tab deep-link
+      // (#ct=…&tab=egress → #egress) — the hero's "open the drill-down"
+      // depends on it surviving the handoff.
+      const tab = hashParams.get('tab');
+      history.replaceState(null, '', location.pathname + location.search + (tab ? '#' + tab : ''));
     }
   } else {
     try { consoleToken = sessionStorage.getItem(SS_TOKEN_KEY) || ''; } catch { consoleToken = ''; }

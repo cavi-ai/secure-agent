@@ -169,9 +169,16 @@ struct ConsoleView: View {
     /// connected out — allow or rotate", not "1 incident · 2 critical flags".
     private var hero: some View {
         let m = heroModel
-        let actionable = m.actionTarget != nil
+        let actionable = m.action != nil
         return Button {
-            if let target = m.actionTarget { selectedFlag = target }
+            switch m.action {
+            case .flag(let target):
+                selectedFlag = target
+            case .openConsole(let tab):
+                state.openDashboard(tab: tab)
+            case nil:
+                break
+            }
         } label: {
             HStack(spacing: 12) {
                 Image(systemName: m.icon)
@@ -204,7 +211,7 @@ struct ConsoleView: View {
     }
 
     // Internal (not private) so the hero regression tests can drive it.
-    var heroModel: (icon: String, color: Color, title: String, subtitle: String, actionTarget: FlagModel?) {
+    var heroModel: (icon: String, color: Color, title: String, subtitle: String, action: AppState.HeroAction?) {
         if state.isPaused {
             return ("pause.circle.fill", .secondary, "Paused",
                     "Alerts silenced — agents still run, decisions still prompt", nil)
@@ -250,7 +257,7 @@ struct ConsoleView: View {
                 default: advice = "tap to review"
                 }
                 return ("exclamationmark.shield.fill", .bad, "Action needed",
-                        "\(what) — \(advice).", top)
+                        "\(what) — \(advice).", .flag(top))
             }
             return ("exclamationmark.shield.fill", .bad, "Action needed",
                     "Review the flagged activity.", nil)
@@ -264,8 +271,18 @@ struct ConsoleView: View {
             if warnFlags > 0 { parts.append("\(warnFlags) flag\(warnFlags == 1 ? "" : "s") to review") }
             if state.firewallWouldBlock > 0 { parts.append("\(state.firewallWouldBlock) would-block") }
             if state.uninspectedEgress > 0 { parts.append("\(state.uninspectedEgress) uninspected") }
+            // Every count in the subtitle is clickable: flags open the top
+            // one's action sheet; uninspected/would-block open the egress
+            // drill-down in the console. "If I can't click it I don't wanna
+            // see it."
+            let action: AppState.HeroAction?
+            if let topWarn = state.unactedFlags.first {
+                action = .flag(topWarn)
+            } else {
+                action = .openConsole(tab: "egress")
+            }
             return ("exclamationmark.triangle.fill", .warn, "Attention",
-                    parts.joined(separator: " · "), nil)
+                    parts.joined(separator: " · "), action)
         }
         let n = state.activeAgentCount
         let procs = state.trackedProcessCount
@@ -566,13 +583,71 @@ struct ConsoleView: View {
                     .font(.system(size: 11)).foregroundStyle(.tertiary)
                     .fixedSize(horizontal: false, vertical: true)
             } else {
-                ForEach(state.sessionBoardRows(sortedBy: agentSort)) { row in
-                    sessionView(row.agent, children: children(of: row.agent), insideGroup: false)
+                // Harness-grouped, not a flat 50-row list: families ordered by
+                // their best row in the active sort, sessions nested beneath.
+                let families = state.sessionBoardFamilies(sortedBy: agentSort)
+                ForEach(families.prefix(6)) { fam in
+                    familyGroup(fam)
+                }
+                if families.count > 6 {
+                    Button { state.openDashboard(tab: "sessions") } label: {
+                        Text("+ \(families.count - 6) more — open the console")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(.secondary)
+                            .padding(.vertical, 2)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
                 }
             }
         }
         .sheet(item: $selectedProcess) { proc in
             ProcessDetailSheet(agent: proc, state: state)
+        }
+    }
+
+    /// Family expansion: small families (≤3 sessions) start open, big ones
+    /// start collapsed; a tap toggles the override for that family.
+    @State private var familyToggled: Set<String> = []
+
+    private func familyGroup(_ fam: AppState.SessionFamily) -> some View {
+        let open = (fam.rows.count <= 3) != familyToggled.contains(fam.id)
+        return VStack(alignment: .leading, spacing: 3) {
+            Button {
+                if familyToggled.contains(fam.id) {
+                    familyToggled.remove(fam.id)
+                } else {
+                    familyToggled.insert(fam.id)
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: open ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 7, weight: .bold)).foregroundStyle(.secondary)
+                        .frame(width: 10, height: 14)
+                    AgentIdentity.tile(fam.name, size: 14, fontSize: 8)
+                    Text(fam.name)
+                        .font(.system(size: 11, weight: .semibold))
+                    Text("\(fam.rows.count) session\(fam.rows.count == 1 ? "" : "s")")
+                        .font(.system(size: 9)).foregroundStyle(.tertiary)
+                    if let rss = fam.totalRSSBytes, let mem = ByteCount.short(rss) {
+                        Text(mem)
+                            .font(.system(size: 9, design: .monospaced)).foregroundStyle(.tertiary)
+                    }
+                    if let seen = relativeTime(fam.lastSeenAt ?? "") {
+                        Text(seen)
+                            .font(.system(size: 9, weight: seen.hasSuffix("s") ? .semibold : .regular, design: .monospaced))
+                            .foregroundStyle(seen.hasSuffix("s") ? Color.ok : Color(white: 0.6, opacity: 1))
+                    }
+                    Spacer(minLength: 0)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            if open {
+                ForEach(fam.rows) { row in
+                    sessionView(row.agent, children: children(of: row.agent), insideGroup: true)
+                }
+            }
         }
     }
 
