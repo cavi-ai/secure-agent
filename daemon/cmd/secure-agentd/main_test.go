@@ -179,11 +179,6 @@ func TestEndToEndSmokeScenario(t *testing.T) {
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- apiServer.Serve(ctx) }()
 
-	// Bind must finish before we poll /flags. A fixed 200ms sleep races
-	// Serve on a loaded runner and the API loop expires while the store
-	// already has the flag (false "not triggered via API").
-	waitUnix(t, sockPath, 5*time.Second, serveErr)
-
 	go supervise.Run(ctx, "netsample", func(c context.Context) error {
 		ns := collect.NewNetSampler(b, tg, cfg.NetSampleInterval, nil)
 		return ns.Run(c)
@@ -193,6 +188,12 @@ func TestEndToEndSmokeScenario(t *testing.T) {
 		ts := collect.NewTranscriptScanner(b, []string{actPath})
 		return ts.Run(c)
 	})
+
+	// Socket and collectors must be live before the activity file is written.
+	// Starting the transcript scanner after that write seeds its offset at EOF
+	// and the plugin line is treated as old history (empty event stream).
+	waitUnix(t, sockPath, 5*time.Second, serveErr)
+	time.Sleep(300 * time.Millisecond)
 
 	// Simulate agent activity
 	currPID := int32(os.Getpid()) // test process PID

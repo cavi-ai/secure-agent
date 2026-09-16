@@ -7,7 +7,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 ## [Unreleased]
 
 ### Added
-- CI: cancel stale runs, job timeouts, credential-free checkout, `CGO_ENABLED=0` Linux gate, `go mod tidy`, `govulncheck`, Dependabot, Go test shuffle. Proxy token/CA permission contracts now have unit tests (the old 0600 check was asserting a different temp path).
+- CI: cancel stale runs, job timeouts, credential-free checkout, cgo-free Linux gate, go mod tidy, govulncheck, Dependabot, Go test shuffle. Proxy token and CA permission contracts now have unit tests (the old 0600 check was asserting a different temp path). Go toolchain 1.26.6.
 
 ### Changed
 - Overview shows a 3-row session strip (project folder, RSS, last seen, needs-you) that opens the Sessions tab. The full board stays on Sessions.
