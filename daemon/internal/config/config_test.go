@@ -258,3 +258,20 @@ func TestLoadStrictReportsMalformedOverlay(t *testing.T) {
 		t.Fatalf("missing overlay must not error: %v", err)
 	}
 }
+
+func TestResourceControlConfigAndValidation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	os.WriteFile(path, []byte("resource_control:\n  mode: prompt\n  max_rss_mb: 4096\n  max_cpu_percent: 175\n  sustain_seconds: 45\n  cooldown_seconds: 600\n"), 0o600)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ResourceControl.Mode != "prompt" || cfg.ResourceControl.MaxRSSMB != 4096 ||
+		cfg.ResourceControl.MaxCPUPercent != 175 || cfg.ResourceControl.SustainSeconds != 45 {
+		t.Fatalf("resource control=%+v", cfg.ResourceControl)
+	}
+	os.WriteFile(path, []byte("resource_control:\n  mode: destroy\n"), 0o600)
+	if _, err := Load(path); err == nil {
+		t.Fatal("invalid resource control mode accepted")
+	}
+}

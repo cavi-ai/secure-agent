@@ -124,24 +124,42 @@ func TestFleetConfiguredRequiresURLAndSecret(t *testing.T) {
 // treeProcSource is a one-tree process list: cursor root (500) + zsh helper
 // child (501) — the shape that used to count as two "agents".
 type treeProcSource struct {
-	cpu time.Duration
+	cpu   time.Duration
+	start time.Time
 }
 
 func (s *treeProcSource) List() []agents.ProcInfo {
 	return []agents.ProcInfo{
-		{PID: 500, PPID: 1, Exe: "/Applications/Cursor.app/Contents/Frameworks/Cursor Helper", CPUTime: s.cpu, RSSBytes: 100},
+		{PID: 500, PPID: 1, Exe: "/Applications/Cursor.app/Contents/Frameworks/Cursor Helper", StartTime: s.start, CPUTime: s.cpu, RSSBytes: 100},
 		{PID: 501, PPID: 500, Comm: "zsh", CPUTime: s.cpu, RSSBytes: 50},
 	}
 }
 
 func (s *treeProcSource) Info(pid int32) (agents.ProcInfo, bool) {
 	if pid == 500 {
-		return agents.ProcInfo{PID: 500, PPID: 1, Exe: "/Applications/Cursor.app/Contents/Frameworks/Cursor Helper", CPUTime: s.cpu, RSSBytes: 100}, true
+		return agents.ProcInfo{PID: 500, PPID: 1, Exe: "/Applications/Cursor.app/Contents/Frameworks/Cursor Helper", StartTime: s.start, CPUTime: s.cpu, RSSBytes: 100}, true
 	}
 	if pid == 501 {
 		return agents.ProcInfo{PID: 501, PPID: 500, Comm: "zsh", CPUTime: s.cpu, RSSBytes: 50}, true
 	}
 	return agents.ProcInfo{}, false
+}
+
+func TestListActiveAgentsPreservesFractionalStartTime(t *testing.T) {
+	cfg, _ := config.Load("/nonexistent")
+	started := time.Date(2026, 9, 15, 12, 0, 0, 123456789, time.UTC)
+	tagger := agents.New(cfg, &treeProcSource{start: started})
+	tagger.Refresh()
+	var got string
+	for _, agent := range listActiveAgents(tagger) {
+		if agent.PID == 500 {
+			got = agent.StartedAt
+			break
+		}
+	}
+	if got != started.Format(time.RFC3339Nano) {
+		t.Fatalf("started_at=%q want %q", got, started.Format(time.RFC3339Nano))
+	}
 }
 
 func TestObserveResourcesBuildsSessionSnapshot(t *testing.T) {

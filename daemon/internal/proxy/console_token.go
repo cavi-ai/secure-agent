@@ -83,6 +83,7 @@ func consoleAuthorized(r *http.Request) bool {
 var consoleAPIPaths = map[string]bool{
 	"/status":                       true,
 	"/resources":                    true,
+	"/resources/control":            true,
 	"/snapshot":                     true,
 	"/posture":                      true,
 	"/flags":                        true,

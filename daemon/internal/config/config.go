@@ -176,6 +176,17 @@ type DirectoryGuardConfig struct {
 	CwdOverrides     []CwdOverride `yaml:"cwd_overrides"`
 }
 
+// ResourceControlConfig governs whole attributed session families. Zero
+// limits disable that dimension. Termination is never a default: operators
+// must explicitly select mode=terminate in their private config overlay.
+type ResourceControlConfig struct {
+	Mode            string  `yaml:"mode"` // observe | prompt | terminate
+	MaxRSSMB        uint64  `yaml:"max_rss_mb"`
+	MaxCPUPercent   float64 `yaml:"max_cpu_percent"`
+	SustainSeconds  int     `yaml:"sustain_seconds"`
+	CooldownSeconds int     `yaml:"cooldown_seconds"`
+}
+
 // AdvisorYAML is the on-disk shape of the local advisor config.
 type AdvisorYAML struct {
 	Enabled      bool   `yaml:"enabled"`
@@ -201,24 +212,25 @@ type AdvisorConfig struct {
 }
 
 type rawConfig struct {
-	DisabledAgents      []string             `yaml:"disabled_agents"`
-	SensitiveGlobs      []string             `yaml:"sensitive_globs"`
-	SensitivePaths      []string             `yaml:"sensitive_paths"`
-	KeychainMarkers     []string             `yaml:"keychain_markers"`
-	Agents              []AgentDef           `yaml:"agents"`
-	VendorAllowlist     map[string][]string  `yaml:"vendor_allowlist"`
-	NetSampleIntervalMS int64                `yaml:"net_sample_interval_ms"`
-	SocketPath          string               `yaml:"socket_path"`
-	DBPath              string               `yaml:"db_path"`
-	JSONLPath           string               `yaml:"jsonl_path"`
-	ProxyEnabled        bool                 `yaml:"proxy_enabled"`
-	ProxyPort           int                  `yaml:"proxy_port"`
-	ProxyCACertPath     string               `yaml:"proxy_ca_cert_path"`
-	ProxyCAKeyPath      string               `yaml:"proxy_ca_key_path"`
-	Firewall            FirewallConfig       `yaml:"firewall"`
-	DirectoryGuard      DirectoryGuardConfig `yaml:"directory_guard"`
-	Fleet               FleetConfig          `yaml:"fleet"`
-	Advisor             AdvisorYAML          `yaml:"advisor"`
+	DisabledAgents      []string              `yaml:"disabled_agents"`
+	SensitiveGlobs      []string              `yaml:"sensitive_globs"`
+	SensitivePaths      []string              `yaml:"sensitive_paths"`
+	KeychainMarkers     []string              `yaml:"keychain_markers"`
+	Agents              []AgentDef            `yaml:"agents"`
+	VendorAllowlist     map[string][]string   `yaml:"vendor_allowlist"`
+	NetSampleIntervalMS int64                 `yaml:"net_sample_interval_ms"`
+	SocketPath          string                `yaml:"socket_path"`
+	DBPath              string                `yaml:"db_path"`
+	JSONLPath           string                `yaml:"jsonl_path"`
+	ProxyEnabled        bool                  `yaml:"proxy_enabled"`
+	ProxyPort           int                   `yaml:"proxy_port"`
+	ProxyCACertPath     string                `yaml:"proxy_ca_cert_path"`
+	ProxyCAKeyPath      string                `yaml:"proxy_ca_key_path"`
+	Firewall            FirewallConfig        `yaml:"firewall"`
+	DirectoryGuard      DirectoryGuardConfig  `yaml:"directory_guard"`
+	ResourceControl     ResourceControlConfig `yaml:"resource_control"`
+	Fleet               FleetConfig           `yaml:"fleet"`
+	Advisor             AdvisorYAML           `yaml:"advisor"`
 }
 
 type Config struct {
@@ -238,6 +250,7 @@ type Config struct {
 	ProxyCAKeyPath    string
 	Firewall          FirewallConfig
 	DirectoryGuard    DirectoryGuardConfig
+	ResourceControl   ResourceControlConfig
 	Fleet             FleetConfig
 	Advisor           AdvisorConfig
 }
@@ -348,6 +361,7 @@ func loadWithOverlayError(explicitPath string) (Config, error, error) {
 		ProxyCAKeyPath:    expandPath(raw.ProxyCAKeyPath),
 		Firewall:          raw.Firewall,
 		DirectoryGuard:    raw.DirectoryGuard,
+		ResourceControl:   raw.ResourceControl,
 		Fleet:             raw.Fleet,
 		Advisor: AdvisorConfig{
 			Enabled:      raw.Advisor.Enabled,
@@ -384,6 +398,17 @@ func (c Config) Validate() error {
 	}
 	if c.DirectoryGuard.PromptDeadlineMS < 0 {
 		return fmt.Errorf("directory_guard.prompt_deadline_ms must be >= 0, got %d", c.DirectoryGuard.PromptDeadlineMS)
+	}
+	switch c.ResourceControl.Mode {
+	case "observe", "prompt", "terminate":
+	default:
+		return fmt.Errorf("resource_control.mode must be observe, prompt, or terminate, got %q", c.ResourceControl.Mode)
+	}
+	if c.ResourceControl.MaxCPUPercent < 0 {
+		return fmt.Errorf("resource_control.max_cpu_percent must be >= 0")
+	}
+	if c.ResourceControl.SustainSeconds < 0 || c.ResourceControl.CooldownSeconds < 0 {
+		return fmt.Errorf("resource_control sustain_seconds and cooldown_seconds must be >= 0")
 	}
 	if c.Fleet.HeartbeatIntervalSec < 0 {
 		return fmt.Errorf("fleet.heartbeat_interval_sec must be >= 0, got %d", c.Fleet.HeartbeatIntervalSec)

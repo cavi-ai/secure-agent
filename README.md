@@ -46,6 +46,11 @@ As AI coding agents (Claude Code, Cursor, Codex, OpenClaw, Copilot, etc.) gain i
 - 📊 **Resource Mission Control**
   Attributes live resident memory and CPU to complete agent sessions—root process plus helpers—so one runaway child cannot hide behind a harmless-looking parent. The console ranks sessions by pressure, charts one hour of history, explains heavy memory, full-core CPU, rapid growth, idle retention, runaway children, and orphan drift, and opens the entire process family before any terminate action. The native menu bar shows the same family totals and adds an **Impact** sort for quick daily triage.
 
+  Optional session budgets add a sustained-breach grace period and cooldown.
+  `observe` reports only, `prompt` requires a console decision, and
+  `terminate` contains the complete attributed process family automatically.
+  The default is `observe` with both limits disabled.
+
 - 🛠️ **Native `secure-agent` CLI Tool**  
   Pure-Go terminal utility (`secure-agent status`, `flags`, `incidents`, `kill`, `fleet`) for inspecting security posture directly from terminal prompts.
 
@@ -331,6 +336,7 @@ The Go daemon listens on a local Unix domain socket (`~/.config/secure-agent/dae
 |---|---|---|
 | `/status` | `GET` | Returns daemon running state, uptime, active agent count, and proxy status. |
 | `/resources` | `GET` | Returns attributed session-family RSS, CPU, process topology, history, diagnoses, and reclaim estimates. |
+| `/resources/control` | `POST` | Resolves a pending resource action with `{"id":"…","decision":"terminate|dismiss"}`. |
 | `/flags` | `GET` | Returns recent security correlation flags (accepts optional `?limit=N`). |
 | `/events` | `GET` | Returns recent raw system events (accepts optional `?limit=N`). |
 | `/incidents` | `GET` | Returns rotation intel postmortem reports & checklists (`?id=ID`, `?format=markdown`). |

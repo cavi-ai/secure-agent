@@ -15,6 +15,12 @@ All notable changes to `secure-agent` are documented here. The format follows
   thresholds, confidence, and reclaim estimates. The web console ranks and
   charts whole sessions with click-through family detail; the native menu bar
   shows family CPU/memory and supports Impact sorting.
+- **Opt-in session resource budgets and containment.** A hot-reloadable
+  `resource_control` policy supports observe-only reporting, approval-required
+  containment, or explicit automatic whole-family termination after a
+  sustained RSS/CPU breach. Grace periods, cooldowns, PID start-time checks,
+  retryable failed approvals, console controls, and durable audit entries keep
+  the destructive path bounded and explainable.
 - **One-command fleet enrollment (`secure-agent fleet enroll <collector-url>`).**
   Reads the node id from the running daemon, generates the webhook secret,
   merges `fleet.webhooks` into `config.yaml` (comment-preserving, backup

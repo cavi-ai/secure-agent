@@ -98,11 +98,12 @@ type Status struct {
 type StatusFunc func() Status
 
 type API struct {
-	socketPath string
-	store      *store.Store
-	killer     Killer
-	statusFn   StatusFunc
-	resources  func() resource.Snapshot
+	socketPath      string
+	store           *store.Store
+	killer          Killer
+	statusFn        StatusFunc
+	resources       func() resource.Snapshot
+	resourceControl *resource.Controller
 
 	fwEngine      *firewall.Engine
 	fwModes       *firewall.ModeStore
@@ -147,7 +148,8 @@ func (a *API) SetFleetSink(s GuardEventSink) {
 
 func (a *API) SetBusDrops(fn func() uint64) { a.busDrops = fn }
 
-func (a *API) SetResources(fn func() resource.Snapshot) { a.resources = fn }
+func (a *API) SetResources(fn func() resource.Snapshot)        { a.resources = fn }
+func (a *API) SetResourceControl(control *resource.Controller) { a.resourceControl = control }
 
 // FirewallControl bundles the runtime firewall controls the API exposes.
 type FirewallControl struct {
@@ -354,6 +356,7 @@ func (a *API) buildMux() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/status", a.handleStatus)
 	mux.HandleFunc("/resources", a.handleResources)
+	mux.HandleFunc("/resources/control", a.handleResourceControl)
 	mux.HandleFunc("/snapshot", a.handleSnapshot)
 	mux.HandleFunc("/posture", a.handlePosture)
 	mux.HandleFunc("/flags", a.handleFlags)
@@ -458,6 +461,32 @@ func (a *API) handleResources(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, a.resources())
+}
+
+func (a *API) handleResourceControl(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if a.resourceControl == nil {
+		http.Error(w, "resource control not enabled", http.StatusServiceUnavailable)
+		return
+	}
+	limitBody(w, r)
+	var req struct {
+		ID       string `json:"id"`
+		Decision string `json:"decision"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid payload", http.StatusBadRequest)
+		return
+	}
+	if err := a.resourceControl.Resolve(req.ID, req.Decision, time.Now()); err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	a.store.PutAudit(store.AuditEntry{Action: "resource-control", Rule: req.ID, ToMode: req.Decision})
+	writeJSON(w, map[string]string{"status": "ok", "id": req.ID, "decision": req.Decision})
 }
 
 func (a *API) currentStatus() Status {
@@ -936,6 +965,27 @@ func (a *API) handleKill(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	killed, err := a.TerminateAgentTree(req.PID, req.StartedAt)
+	if err != nil {
+		status := http.StatusInternalServerError
+		if strings.Contains(err.Error(), "not a recognized") {
+			status = http.StatusForbidden
+		}
+		if strings.Contains(err.Error(), "no longer") || strings.Contains(err.Error(), "start") {
+			status = http.StatusConflict
+		}
+		http.Error(w, err.Error(), status)
+		return
+	}
+	writeJSON(w, map[string]interface{}{"status": "ok", "pid": req.PID, "killed": killed})
+}
+
+// TerminateAgentTree is the single guarded containment path used by both the
+// operator /kill endpoint and resource budgets.
+func (a *API) TerminateAgentTree(pid int32, startedAt string) ([]int32, error) {
+	if pid <= 0 {
+		return nil, fmt.Errorf("invalid pid")
+	}
 	// A control socket that can kill any pid is a self-neutralization
 	// primitive (kill the daemon, kill an unrelated user process). Only
 	// processes the tagger currently recognizes as agents are valid targets.
@@ -944,21 +994,18 @@ func (a *API) handleKill(w http.ResponseWriter, r *http.Request) {
 	// process. started_at from the client is compared to the live tagged
 	// process so a recycled pid with a different start time is refused.
 	if a.agentPIDs != nil {
-		if _, ok := a.agentPIDs()[req.PID]; !ok {
-			http.Error(w, "pid is not a recognized agent process tree", http.StatusForbidden)
-			return
+		if _, ok := a.agentPIDs()[pid]; !ok {
+			return nil, fmt.Errorf("pid is not a recognized agent process tree")
 		}
 		// Re-verify right before signaling to shrink the pid-reuse window.
-		if _, ok := a.agentPIDs()[req.PID]; !ok {
-			http.Error(w, "pid is no longer a recognized agent process", http.StatusConflict)
-			return
+		if _, ok := a.agentPIDs()[pid]; !ok {
+			return nil, fmt.Errorf("pid is no longer a recognized agent process")
 		}
 	}
 
-	if req.StartedAt != "" {
-		if err := a.checkKillStart(req.PID, req.StartedAt); err != nil {
-			http.Error(w, err.Error(), http.StatusConflict)
-			return
+	if startedAt != "" {
+		if err := a.checkKillStart(pid, startedAt); err != nil {
+			return nil, err
 		}
 	}
 
@@ -966,21 +1013,18 @@ func (a *API) handleKill(w http.ResponseWriter, r *http.Request) {
 	// currently tagged agent that shares this pid's root_pid — not the OS
 	// process tree, only what the tagger already recognized.
 	var killed []int32
-	for _, pid := range a.killTreePIDs(req.PID) {
+	for _, memberPID := range a.killTreePIDs(pid) {
 		if a.agentPIDs != nil {
-			if _, ok := a.agentPIDs()[pid]; !ok {
+			if _, ok := a.agentPIDs()[memberPID]; !ok {
 				continue
 			}
 		}
-		if err := a.killer.Kill(pid); err != nil {
-			http.Error(w, fmt.Sprintf("Kill failed: %v", err), http.StatusInternalServerError)
-			return
+		if err := a.killer.Kill(memberPID); err != nil {
+			return killed, fmt.Errorf("Kill failed: %w", err)
 		}
-		killed = append(killed, pid)
+		killed = append(killed, memberPID)
 	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok", "pid": req.PID, "killed": killed})
+	return killed, nil
 }
 
 func (a *API) killTreePIDs(pid int32) []int32 {

@@ -92,7 +92,10 @@ func main() {
 	tagger := agents.New(cfg, procSource)
 	tagger.Refresh()
 	resourceTracker := resource.NewTracker()
-	observeResources(resourceTracker, tagger, st, time.Now())
+	resourceControl := resource.NewController(resourcePolicy(cfg.ResourceControl), nil)
+	resourceNow := time.Now()
+	observeResources(resourceTracker, tagger, st, resourceNow)
+	resourceControl.Observe(resourceTracker.Snapshot(), resourceNow)
 
 	classifier := sensitive.New(cfg)
 	correlator := correlate.New(tagger, classifier, cfg)
@@ -131,7 +134,9 @@ func main() {
 				return
 			case <-timer.C:
 				tagger.Refresh()
-				observeResources(resourceTracker, tagger, st, time.Now())
+				now := time.Now()
+				observeResources(resourceTracker, tagger, st, now)
+				resourceControl.Observe(resourceTracker.Snapshot(), now)
 				timer.Reset(agents.RefreshInterval(tagger.Any()))
 			}
 		}
@@ -190,7 +195,17 @@ func main() {
 	// Start Control API
 	apiServer := api.New(cfg.SocketPath, st, &realKiller{}, statusFn)
 	apiServer.SetBusDrops(b.Dropped)
-	apiServer.SetResources(resourceTracker.Snapshot)
+	apiServer.SetResources(resourceControl.Snapshot)
+	apiServer.SetResourceControl(resourceControl)
+	resourceControl.SetTerminator(func(action resource.ControlAction) error {
+		killed, err := apiServer.TerminateAgentTree(action.TargetPID, action.TargetStartedAt.Format(time.RFC3339Nano))
+		detail := fmt.Sprintf("session=%s root_pid=%d processes=%d", action.SessionKey, action.RootPID, len(killed))
+		if err != nil {
+			detail += " error=" + err.Error()
+		}
+		st.PutAudit(store.AuditEntry{Action: "resource-containment", Rule: action.Name, ToMode: action.Kind, Detail: detail})
+		return err
+	})
 
 	// Peer-credential gating on the control socket: kernel-attested pid/uid per
 	// connection. Owner uid gets reads, tagged agent pids may ask the guard for
@@ -261,7 +276,8 @@ func main() {
 	if configPathUsed != "" {
 		go watchConfig(ctx, configPathUsed, configWatchDeps{
 			st: st, stk: advisorStk, pub: fleetPub, fleetCfg: fleetCfgLive,
-			logDir: filepath.Dir(cfg.DBPath), apiServer: apiServer,
+			logDir: filepath.Dir(cfg.DBPath), apiServer: apiServer, resourceControl: resourceControl,
+			initialConfig: &cfg,
 		})
 	}
 	// SSE live feed: each console gets its own bus subscription; unsubscribes
@@ -427,7 +443,7 @@ func listActiveAgents(tg *agents.Tagger) []api.AgentSummary {
 			IsOrphan:   info.IsOrphan,
 		}
 		if !info.StartedAt.IsZero() {
-			s.StartedAt = info.StartedAt.UTC().Format(time.RFC3339)
+			s.StartedAt = info.StartedAt.UTC().Format(time.RFC3339Nano)
 		}
 		res = append(res, s)
 	}

@@ -89,6 +89,12 @@ proxy_enabled: true
 proxy_port: 0
 directory_guard:
   prompt_deadline_ms: 8000
+resource_control:
+  mode: prompt
+  max_rss_mb: 1
+  max_cpu_percent: 0
+  sustain_seconds: 0
+  cooldown_seconds: 60
 firewall:
   registry:
     salt_ref: "$tmp/fw-salt"
@@ -245,6 +251,36 @@ if [ "$RESOURCE_PASSED" = true ]; then
   echo "Resources: live session family carries RSS, CPU, process topology, and history."
 else
   echo "Resources FAILED: /resources did not expose the live fake-agent footprint."
+fi
+
+RESOURCE_CONTROL_PASSED=false
+CONTROL_RESP=""
+CONTROL_AFTER=""
+AUDIT_AFTER=""
+RESOURCE_PENDING_ID=$(printf '%s' "$RESOURCE_RESP" | python3 -c '
+import json,sys
+try:
+    pending=json.load(sys.stdin).get("control",{}).get("pending",[])
+    target=int(sys.argv[1])
+    print(next((p.get("id","") for p in pending if p.get("root_pid")==target), ""))
+except Exception:
+    print("")
+' "$AGENT_PID" 2>/dev/null || true)
+if [ -n "$RESOURCE_PENDING_ID" ]; then
+  CONTROL_RESP=$(curl -s --unix-socket "$SOCKET_PATH" -X POST http://unix/resources/control \
+    -H "Content-Type: application/json" \
+    -d "{\"id\":\"$RESOURCE_PENDING_ID\",\"decision\":\"dismiss\"}" 2>/dev/null || true)
+  CONTROL_AFTER=$(curl -s --unix-socket "$SOCKET_PATH" http://unix/resources 2>/dev/null || true)
+  AUDIT_AFTER=$(curl -s --unix-socket "$SOCKET_PATH" http://unix/audit 2>/dev/null || true)
+  if printf '%s' "$CONTROL_RESP" | grep -q '"status":"ok"' \
+    && printf '%s' "$CONTROL_AFTER" | python3 -c 'import json,sys; target=sys.argv[1]; pending=json.load(sys.stdin).get("control",{}).get("pending",[]); sys.exit(0 if all(p.get("id") != target for p in pending) else 1)' "$RESOURCE_PENDING_ID" \
+    && printf '%s' "$AUDIT_AFTER" | grep -q '"action":"resource-control"'; then
+    RESOURCE_CONTROL_PASSED=true
+    echo "Resource control: approval dismissed, cooldown applied, decision audited."
+  fi
+fi
+if [ "$RESOURCE_CONTROL_PASSED" != true ]; then
+  echo "Resource control FAILED: prompt/resolve/audit lifecycle did not complete (id=$RESOURCE_PENDING_ID response=$CONTROL_RESP)."
 fi
 
 wait $AGENT_PID 2>/dev/null || true
@@ -554,8 +590,8 @@ else
 fi
 kill "$COLLECTOR_PID" 2>/dev/null || true
 
-if [ "$PASSED" = true ] && [ "$INCIDENT_PASSED" = true ] && [ "$RESOURCE_PASSED" = true ] && [ "$GUARD_PASSED" = true ] && [ "$WEBHOOK_PASSED" = true ] && [ "$SSE_PASSED" = true ] && [ "$CONSOLE_PASSED" = true ] && [ "$ADVISOR_PASSED" = true ] && [ "$OPERATOR_PASSED" = true ] && [ "$ENROLL_PASSED" = true ]; then
-  echo "E2E SMOKE TEST: PASS (Flag, Incident, resources, Directory Guard, fleet webhook + seq, enroll, SSE, console auth, advisor verdict, and operator loop verified)"
+if [ "$PASSED" = true ] && [ "$INCIDENT_PASSED" = true ] && [ "$RESOURCE_PASSED" = true ] && [ "$RESOURCE_CONTROL_PASSED" = true ] && [ "$GUARD_PASSED" = true ] && [ "$WEBHOOK_PASSED" = true ] && [ "$SSE_PASSED" = true ] && [ "$CONSOLE_PASSED" = true ] && [ "$ADVISOR_PASSED" = true ] && [ "$OPERATOR_PASSED" = true ] && [ "$ENROLL_PASSED" = true ]; then
+  echo "E2E SMOKE TEST: PASS (Flag, Incident, resources + control approval, Directory Guard, fleet webhook + seq, enroll, SSE, console auth, advisor verdict, and operator loop verified)"
   if [ -n "$DAEMON_PID" ]; then
     kill "$DAEMON_PID" 2>/dev/null || true
   fi
@@ -574,7 +610,7 @@ else
   if [ -n "$DAEMON_PID" ]; then
     kill "$DAEMON_PID" 2>/dev/null || true
   fi
-  echo "E2E SMOKE TEST: FAIL (Flag passed: $PASSED, Incident passed: $INCIDENT_PASSED, Resources passed: $RESOURCE_PASSED, Guard passed: $GUARD_PASSED, Webhook passed: $WEBHOOK_PASSED, Enroll passed: $ENROLL_PASSED, SSE passed: $SSE_PASSED, Console passed: $CONSOLE_PASSED, Advisor passed: $ADVISOR_PASSED, Operator passed: $OPERATOR_PASSED)"
+  echo "E2E SMOKE TEST: FAIL (Flag passed: $PASSED, Incident passed: $INCIDENT_PASSED, Resources passed: $RESOURCE_PASSED, Resource control passed: $RESOURCE_CONTROL_PASSED, Guard passed: $GUARD_PASSED, Webhook passed: $WEBHOOK_PASSED, Enroll passed: $ENROLL_PASSED, SSE passed: $SSE_PASSED, Console passed: $CONSOLE_PASSED, Advisor passed: $ADVISOR_PASSED, Operator passed: $OPERATOR_PASSED)"
   echo "DEBUG SSE STREAM: $SSE_BODY"
   exit 1
 fi

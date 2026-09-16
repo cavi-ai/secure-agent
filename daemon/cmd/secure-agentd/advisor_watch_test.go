@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/config"
 	"github.com/cavi-ai/secure-agent/daemon/internal/fleet"
+	"github.com/cavi-ai/secure-agent/daemon/internal/resource"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
 
@@ -48,6 +50,37 @@ func TestWatchAdvisorConfigHotSwaps(t *testing.T) {
 	// Flip back on: it returns.
 	write(true)
 	waitFor(t, 5*time.Second, func() bool { return stk.Load().Sub != nil })
+}
+
+func TestWatchConfigKeepsAlreadyAppliedStartupState(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	st, err := store.Open(filepath.Join(dir, "e.db"), filepath.Join(dir, "e.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	if err := os.WriteFile(cfgPath, []byte("advisor:\n  enabled: true\n  managed: false\n  endpoint: \"http://127.0.0.1:11434\"\n  model: \"startup\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.LoadStrict(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial := setupAdvisor(cfg, st)
+	stk := &advisorStackHolder{}
+	stk.Store(initial)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go watchConfig(ctx, cfgPath, configWatchDeps{
+		st: st, stk: stk, pub: fleet.NewPublisher(), fleetCfg: &fleetConfigHolder{}, initialConfig: &cfg,
+	})
+
+	time.Sleep(300 * time.Millisecond)
+	if stk.Load().Sub != initial.Sub {
+		t.Fatal("watcher replaced the already-applied advisor during startup")
+	}
 }
 
 // A corrupt config mid-write must NOT disturb the live stack.
@@ -151,6 +184,44 @@ func TestWatchConfigHotSwapsFleet(t *testing.T) {
 	// Unenroll: webhooks removed → sinks gone.
 	os.WriteFile(cfgPath, []byte("advisor:\n  enabled: false\nfleet:\n  webhooks: []\n"), 0o600)
 	waitFor(t, 5*time.Second, func() bool { return !pub.HasSinks() })
+}
+
+func TestWatchConfigHotSwapsResourcePolicy(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	st, err := store.Open(filepath.Join(dir, "e.db"), filepath.Join(dir, "e.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	controller := resource.NewController(resource.Policy{Mode: resource.ModeObserve}, nil)
+	write := func(mode string, rssMB int) {
+		src := fmt.Sprintf("resource_control:\n  mode: %s\n  max_rss_mb: %d\n  max_cpu_percent: 150\n  sustain_seconds: 12\n  cooldown_seconds: 60\n", mode, rssMB)
+		if err := os.WriteFile(cfgPath, []byte(src), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("prompt", 2048)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go watchConfig(ctx, cfgPath, configWatchDeps{
+		st: st, stk: &advisorStackHolder{}, pub: fleet.NewPublisher(), fleetCfg: &fleetConfigHolder{},
+		resourceControl: controller,
+	})
+
+	waitFor(t, 5*time.Second, func() bool {
+		policy := controller.Snapshot().Control
+		return policy != nil && policy.Mode == resource.ModePrompt && policy.MaxRSSBytes == 2048*1024*1024 &&
+			policy.MaxCPUPercent == 150 && policy.SustainSeconds == 12 && policy.CooldownSeconds == 60
+	})
+
+	write("terminate", 1024)
+	waitFor(t, 5*time.Second, func() bool {
+		policy := controller.Snapshot().Control
+		return policy != nil && policy.Mode == resource.ModeTerminate && policy.MaxRSSBytes == 1024*1024*1024
+	})
 }
 
 // The fleet fingerprint must distinguish every fleet-relevant field — a

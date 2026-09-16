@@ -241,6 +241,7 @@ func TestGateDispositionEndpointsPolicy(t *testing.T) {
 		{"/flags/acknowledge", `{"flag_id":"abc123"}`},
 		{"/allowlist", `{"agent":"cursor","host":"example.com"}`},
 		{"/advisor/retriage", `{"flag_id":"abc123"}`},
+		{"/resources/control", `{"id":"resource-1","decision":"dismiss"}`},
 	} {
 		resp, err := cl.Post("http://unix"+tc.path, "application/json", strings.NewReader(tc.body))
 		if err != nil {
@@ -285,6 +286,7 @@ func TestGateDispositionEndpointsAsPinnedUI(t *testing.T) {
 		{"/mute", `{"rule":"keychain-access","host":"*"}`},
 		{"/flags/acknowledge", `{"flag_id":"abc123"}`},
 		{"/allowlist", `{"agent":"cursor","host":"example.com"}`},
+		{"/resources/control", `{"id":"resource-1","decision":"dismiss"}`},
 	} {
 		resp, err := cl.Post("http://unix"+tc.path, "application/json", strings.NewReader(tc.body))
 		if err != nil {

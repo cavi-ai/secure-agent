@@ -743,6 +743,23 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   };
 
+  window.resolveResourceControl = async function(id, decision) {
+    const verb = decision === 'terminate' ? 'contain this entire session' : 'keep this session running';
+    if (!confirm(`Resource policy: ${verb}?`)) return;
+    try {
+      const res = await apiFetch('/resources/control', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, decision })
+      });
+      if (!res.ok) throw new Error(await res.text());
+      showToast(decision === 'terminate' ? 'Session containment requested.' : 'Session kept running for the cooldown window.', 'success');
+      fetchTelemetry({ slow: true });
+    } catch (err) {
+      showToast(`Resource decision failed: ${err}`, 'danger');
+    }
+  };
+
   window.killOrphans = async function(family) {
     const agents = (telemetryData.status && telemetryData.status.agents) ? telemetryData.status.agents : [];
     const orphans = agents.filter(a => a.name === family && a.is_orphan);
@@ -965,6 +982,11 @@ document.addEventListener('DOMContentLoaded', () => {
       case 'resource-session':
         selectedResourceKey = d.key || '';
         renderResourceMissionControl();
+        break;
+      case 'resource-control':
+        e.preventDefault();
+        e.stopPropagation();
+        window.resolveResourceControl(d.id, d.decision);
         break;
       case 'allow-host':
         window.allowHost(d.agent, d.host);

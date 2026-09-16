@@ -45,8 +45,14 @@ function renderResourceMissionControl() {
     if (impact) return impact;
     return Number(b.rss_bytes || 0) - Number(a.rss_bytes || 0);
   });
+  const control = snapshot.control || {};
+  const limits = [
+    control.max_rss_bytes ? `${fmtRSS(control.max_rss_bytes)} memory` : '',
+    control.max_cpu_percent ? `${fmtCPU(control.max_cpu_percent)} CPU` : ''
+  ].filter(Boolean).join(' · ');
+  const policy = `<div class="resource-policy"><span><b>${escapeHTML(control.mode || 'observe')}</b> policy${limits ? ` · ${escapeHTML(limits)}` : ' · budgets disabled'}${control.sustain_seconds ? ` · ${Number(control.sustain_seconds)}s grace` : ''}</span><span>${(control.pending || []).length} approval${(control.pending || []).length === 1 ? '' : 's'} pending</span></div>`;
   if (sessions.length === 0) {
-    container.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-activity"/></svg><span>No attributed agent resource use right now</span></div>`;
+    container.innerHTML = policy + `<div class="empty"><svg class="icon"><use href="#i-activity"/></svg><span>No attributed agent resource use right now</span></div>`;
     return;
   }
 
@@ -73,6 +79,12 @@ function renderResourceMissionControl() {
     const pressure = diagnoses.length ? ` pressure-${escapeHTML(primary.severity || 'warning')}` : '';
     const active = selected && selected.key === session.key ? ' selected' : '';
     const reclaim = fmtRSS(session.estimated_reclaim_bytes);
+    const sessionControl = session.control || {};
+    const approval = sessionControl.pending_id ? `
+      <span class="resource-approval">
+        <button type="button" class="btn btn-danger btn-sm" data-action="resource-control" data-id="${escapeHTML(sessionControl.pending_id)}" data-decision="terminate">Contain session</button>
+        <button type="button" class="btn btn-ghost btn-sm" data-action="resource-control" data-id="${escapeHTML(sessionControl.pending_id)}" data-decision="dismiss">Keep running</button>
+      </span>` : '';
     return `
       <div class="resource-session-card${pressure}${active}">
         <button type="button" class="resource-session-main" data-action="resource-session" data-key="${escapeHTML(session.key)}">
@@ -91,6 +103,8 @@ function renderResourceMissionControl() {
         <div class="resource-session-foot">
           <span class="resource-diagnosis${primary ? '' : ' quiet'}">${primary ? resourceDiagnosisText(primary) : 'Within current thresholds'}</span>
           ${reclaim ? `<span class="resource-reclaim">up to ${escapeHTML(reclaim)} reclaimable</span>` : ''}
+          ${sessionControl.state && sessionControl.state !== 'healthy' ? `<span class="resource-control-state">${escapeHTML(sessionControl.state)}</span>` : ''}
+          ${approval}
           <button type="button" class="btn btn-ghost btn-sm" data-action="filter-pids" data-pids="${escapeHTML(pids.join(','))}" data-label="${escapeHTML(label)}">Open family activity</button>
         </div>
       </div>`;
@@ -111,7 +125,7 @@ function renderResourceMissionControl() {
       </div>`;
   }
 
-  container.innerHTML = posture + `<div class="resource-layout"><div class="resource-session-list">${cards}</div><aside class="resource-detail-wrap">${detail}</aside></div>`;
+  container.innerHTML = posture + policy + `<div class="resource-layout"><div class="resource-session-list">${cards}</div><aside class="resource-detail-wrap">${detail}</aside></div>`;
 }
 
 function renderSessionBoard() {
