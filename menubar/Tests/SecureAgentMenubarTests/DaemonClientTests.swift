@@ -41,6 +41,16 @@ final class DaemonClientTests: XCTestCase {
         XCTAssertEqual(s.advisorHealth?.model, "qwen3:8b")
     }
 
+    func testStatusDecodesOptionalProcessAndFamilyCPU() throws {
+        let json = #"{"running":true,"uptime":"1m","active_agents":1,"agents":[{"pid":10,"name":"claude","cpu_percent":125.5},{"pid":11,"name":"claude"}],"trees":[{"root":{"pid":10,"name":"claude","cpu_percent":125.5},"children":[{"pid":11,"name":"claude"}],"cpu_percent":125.5}]}"#
+            .data(using: .utf8)!
+        let status = try JSONDecoder().decode(StatusResponse.self, from: json)
+
+        XCTAssertEqual(status.agents?[0].cpuPercent, 125.5)
+        XCTAssertNil(status.agents?[1].cpuPercent)
+        XCTAssertEqual(status.trees?[0].cpuPercent, 125.5)
+    }
+
     func testAcknowledgedCopyPreservesIdentity() {
         let f = FlagModel(id: "x", rule: "keychain-access", severity: 1, ts: "t", pid: 9,
                           agent: "codex", evidence: ["e"], sessionId: "s1")

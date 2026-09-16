@@ -96,9 +96,20 @@ struct ProcessDetailSheet: View {
     @State private var autoScrollToLatest = false
     @Environment(\.dismiss) private var dismiss
 
-    private var children: [AgentSummaryModel] {
-        state.agentRoots + state.childAgents
-            .filter { $0.ppid == agent.pid }
+    private var family: [AgentSummaryModel] {
+        let rootPID = agent.rootPid ?? agent.pid
+        let members = state.activeAgents.filter { ($0.rootPid ?? $0.pid) == rootPID }
+        return members.isEmpty ? [agent] : members
+    }
+
+    private var familyCPUPercent: Double? {
+        let parts = family.compactMap(\.cpuPercent)
+        return parts.isEmpty ? nil : parts.reduce(0, +)
+    }
+
+    private var familyRSSBytes: UInt64? {
+        let parts = family.compactMap(\.rssBytes)
+        return parts.isEmpty ? nil : parts.reduce(0, +)
     }
 
     var body: some View {
@@ -152,6 +163,10 @@ struct ProcessDetailSheet: View {
                 if let mem = ByteCount.short(agent.rssBytes) {
                     Label(mem, systemImage: "memorychip")
                 }
+                if let cpu = agent.cpuPercent {
+                    Label(String(format: "%.0f%%", cpu), systemImage: "gauge.with.dots.needle.50percent")
+                        .foregroundStyle(cpu >= 100 ? Color.warn : Color.secondary)
+                }
                 if let started = relativeTime(agent.startedAt ?? "") {
                     Label("up \(started)", systemImage: "clock")
                 }
@@ -164,6 +179,20 @@ struct ProcessDetailSheet: View {
                 }
             }
             .font(.system(size: 11))
+            .foregroundStyle(.secondary)
+            HStack(spacing: 6) {
+                Text("Session family")
+                    .fontWeight(.semibold)
+                Text("\(family.count) process\(family.count == 1 ? "" : "es")")
+                if let memory = ByteCount.short(familyRSSBytes) {
+                    Text("· \(memory)")
+                }
+                if let cpu = familyCPUPercent {
+                    Text("· \(String(format: "%.0f%%", cpu)) CPU")
+                        .foregroundStyle(cpu >= 100 ? Color.warn : Color.secondary)
+                }
+            }
+            .font(.system(size: 10, design: .monospaced))
             .foregroundStyle(.secondary)
         }
         .padding(14)
