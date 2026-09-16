@@ -59,6 +59,11 @@ type Status struct {
 	ProxyEnabled      bool           `json:"proxy_enabled"`
 	ProxyPort         int            `json:"proxy_port"`
 	UninspectedEgress int            `json:"uninspected_egress"`
+	// UninspectedInfra counts unrouted endpoints classified as known
+	// CDN/cloud infrastructure (the agents' own API carriers). Reported for
+	// honesty but excluded from the headline above — infra is a routing
+	// coverage note, not a finding.
+	UninspectedInfra int `json:"uninspected_infra"`
 	// AdvisorEnabled reports whether the local triage advisor is configured
 	// (opt-in) — the UIs show it so "no verdicts" is distinguishable from
 	// "advisor off".
@@ -828,6 +833,7 @@ type UninspectedEndpoint struct {
 	Host       string    `json:"host"`
 	Count      int       `json:"count"`
 	LastSeen   time.Time `json:"last_seen"`
+	Infra      string    `json:"infra,omitempty"`
 	Assessment string    `json:"assessment,omitempty"`
 	Rationale  string    `json:"rationale,omitempty"`
 }
@@ -849,7 +855,7 @@ func (a *API) handleUninspectedEgress(w http.ResponseWriter, r *http.Request) {
 	out := []UninspectedEndpoint{}
 	if a.correlator != nil {
 		for _, e := range a.correlator.UninspectedEgressSummarySince(time.Now().Add(-time.Duration(hours) * time.Hour)) {
-			ep := UninspectedEndpoint{Agent: e.Agent, Host: e.Host, Count: e.Count, LastSeen: e.LastSeen}
+			ep := UninspectedEndpoint{Agent: e.Agent, Host: e.Host, Count: e.Count, LastSeen: e.LastSeen, Infra: e.Infra}
 			if v, ok := a.store.AdvisorVerdictFor("host:"+e.Agent+"|"+e.Host, "host"); ok {
 				ep.Assessment = v.Assessment
 				ep.Rationale = v.Rationale

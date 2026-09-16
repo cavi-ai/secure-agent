@@ -118,7 +118,22 @@ function fillUninspected(bodyEl) {
     bodyEl.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-globe"/></svg><span>No uninspected endpoints in the last 24h — the blind spot is closed</span></div>`;
     return;
   }
-  bodyEl.innerHTML = `<div class="uninspected-expl">These agents connected directly, bypassing the inspection proxy — usually pinned TLS certificates or tooling that ignores the proxy environment. Allowing a host marks the traffic as expected and closes the blind spot; routing the agent through the proxy (source <code>~/.config/secure-agent/agent-env.sh</code>) inspects it instead.</div>` + rows.map(e => `
+  // Split actionable unknowns from CDN/cloud carriers: 130 Cloudflare IPs is
+  // one routing note, not 130 rows to review.
+  const unknown = rows.filter(e => !e.infra);
+  const infra = rows.filter(e => e.infra);
+  const infraByOrg = {};
+  for (const e of infra) {
+    (infraByOrg[e.infra] = infraByOrg[e.infra] || { endpoints: 0, hits: 0 });
+    infraByOrg[e.infra].endpoints += 1;
+    infraByOrg[e.infra].hits += e.count || 0;
+  }
+
+  let html = `<div class="uninspected-expl">These agents connected directly, bypassing the inspection proxy — usually pinned TLS certificates or tooling that ignores the proxy environment. Allowing a host marks the traffic as expected and closes the blind spot; routing the agent through the proxy (source <code>~/.config/secure-agent/agent-env.sh</code>) inspects it instead.</div>`;
+  if (unknown.length === 0) {
+    html += `<div class="empty"><svg class="icon"><use href="#i-globe"/></svg><span>No unknown endpoints — everything unrouted is known cloud/CDN infrastructure (below)</span></div>`;
+  }
+  html += unknown.map(e => `
     <div class="fw-rule">
       <div class="fw-rule-main">
         <span class="fw-rule-id">${escapeHTML(e.host)}</span>
@@ -129,5 +144,13 @@ function fillUninspected(bodyEl) {
       </div>
       <button class="btn btn-ghost btn-sm" data-action="allow-host" data-agent="${escapeHTML(e.agent)}" data-host="${escapeHTML(e.host)}"><svg class="icon"><use href="#i-shield"/></svg><span>Allow for ${escapeHTML(e.agent)}</span></button>
     </div>`).join('');
+
+  if (infra.length > 0) {
+    const orgRows = Object.entries(infraByOrg)
+      .sort((a, b) => b[1].endpoints - a[1].endpoints)
+      .map(([org, v]) => `<div class="mute-row"><span class="mute-pair">${escapeHTML(org)}</span><span class="fw-metric dim">${v.endpoints} endpoint${v.endpoints === 1 ? '' : 's'} · ${v.hits}× in 24h</span></div>`).join('');
+    html += `<details class="infra-group"><summary>Known CDN/cloud infrastructure (${infra.length} endpoint${infra.length === 1 ? '' : 's'}) — the agents' own API carriers; route agents through the proxy to inspect this traffic</summary>${orgRows}</details>`;
+  }
+  bodyEl.innerHTML = html;
 }
 

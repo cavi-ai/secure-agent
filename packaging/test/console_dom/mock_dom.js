@@ -113,7 +113,9 @@
     ],
     '/egress/uninspected': [
       { agent: 'cursor', host: 'registry.npmjs.org', count: 14, last_seen: iso(300000), assessment: 'benign', rationale: 'npm registry is routine for JS projects' },
-      { agent: 'claude', host: 'statsig.example.com', count: 3, last_seen: iso(900000) }
+      { agent: 'claude', host: 'statsig.example.com', count: 3, last_seen: iso(900000) },
+      { agent: 'cursor', host: '2606:4700:4408::ac40:9bd1', count: 56, last_seen: iso(600000), infra: 'Cloudflare' },
+      { agent: 'codex', host: 'ec2-98-90-104-193.compute-1.amazonaws.com', count: 11, last_seen: iso(700000), infra: 'AWS' }
     ],
     '/notify/rules': {
       default_min_severity: 3,
