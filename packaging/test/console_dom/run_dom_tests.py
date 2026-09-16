@@ -233,24 +233,29 @@ def main():
               and dom.count('class="audit-item') == 2)
 
         # --- tabs (console IA) ---
-        check("tab bar renders all four tabs",
-              dom.count('class="tab-btn') >= 4
-              and all(f'data-tab="{t}"' in dom for t in ("overview", "agents", "egress", "findings")))
+        check("tab bar renders all five tabs",
+              dom.count('class="tab-btn') >= 5
+              and all(f'data-tab="{t}"' in dom for t in ("overview", "sessions", "agents", "egress", "findings")))
         check("overview tab active by default",
               'class="tab-btn active" data-tab="overview"' in dom)
         check("non-active panels hidden",
-              'id="tab-agents" role="tabpanel" hidden' in dom
+              'id="tab-sessions" role="tabpanel" hidden' in dom
+              and 'id="tab-agents" role="tabpanel" hidden' in dom
               and 'id="tab-findings" role="tabpanel" hidden' in dom)
         check("overview panel visible",
               'id="tab-overview" role="tabpanel">' in dom)
-        check("overview session board is present", 'id="session-board"' in dom)
+        check("sessions panel lives in the sessions tab",
+              dom.index('id="tab-sessions"') < dom.index('id="session-board"')
+              and dom.index('id="session-board"') < dom.index('id="tab-agents"'))
+        check("overview has no session board",
+              'id="session-board"' not in dom.split('id="tab-overview"', 1)[1].split('id="tab-sessions"', 1)[0])
         check("session board has project filter", 'id="session-cwd-filter"' in dom)
-        overview = dom.split('id="session-board"', 1)[1].split('id="tab-agents"', 1)[0]
-        check("session board lists two sessions", overview.count('class="session-row') == 2)
+        sessions = dom.split('id="session-board"', 1)[1].split('id="tab-agents"', 1)[0]
+        check("session board lists two sessions", sessions.count('class="session-row') == 2)
         check("session rows labeled by project folder",
-              "api-service" in overview and "web-app" in overview)
+              "api-service" in sessions and "web-app" in sessions)
         check("session row filters timeline by pids",
-              'data-action="filter-pids" data-pids="5821,5822"' in overview)
+              'data-action="filter-pids" data-pids="5821,5822"' in sessions)
         check("egress tab badge shows uninspected count",
               'id="tab-badge-egress">2<' in dom)
         check("findings tab badge shows needs-you count",

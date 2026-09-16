@@ -309,7 +309,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // Findings), not by data source. State persists per tab-session; the hash
   // carries the tab for deep links (#ct is lifted and stripped BEFORE this
   // runs, so the two never collide).
-  const TABS = ['overview', 'agents', 'egress', 'findings'];
+  const TABS = ['overview', 'sessions', 'agents', 'egress', 'findings'];
   let activeTab = 'overview';
 
   function switchTab(id, opts = {}) {

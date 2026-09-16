@@ -129,12 +129,16 @@
     </section>
 
     <!-- Primary navigation: the console is organized by question, not by
-         data source — "is this normal?" (Overview), "what's running?"
-         (Agents), "where is traffic going?" (Egress), "what needs my
-         decision?" (Findings). -->
+         data source — "is this normal?" (Overview), "what ran, grouped by
+         run?" (Sessions), "what's running?" (Agents), "where is traffic
+         going?" (Egress), "what needs my decision?" (Findings). -->
     <nav class="tabs" role="tablist" aria-label="Console sections">
       <button class="tab-btn active" data-tab="overview" role="tab" aria-selected="true" aria-controls="tab-overview">
         <svg class="icon"><use href="#i-activity"/></svg><span>Overview</span>
+      </button>
+      <button class="tab-btn" data-tab="sessions" role="tab" aria-selected="false" aria-controls="tab-sessions">
+        <svg class="icon"><use href="#i-agent"/></svg><span>Sessions</span>
+        <span class="tab-badge" id="tab-badge-sessions" hidden></span>
       </button>
       <button class="tab-btn" data-tab="agents" role="tab" aria-selected="false" aria-controls="tab-agents">
         <svg class="icon"><use href="#i-agent"/></svg><span>Agents</span>
@@ -151,19 +155,8 @@
     </nav>
 
     <main>
-      <!-- Overview: sessions first, then "is this normal?" trend + live feed -->
+      <!-- Overview: "is this normal?" trend + live feed -->
       <div class="tabpanel" id="tab-overview" role="tabpanel">
-        <section class="panel" id="session-board-panel">
-          <div class="panel-head">
-            <h2><svg class="icon"><use href="#i-agent"/></svg>Sessions</h2>
-            <input type="search" id="session-cwd-filter" class="input" placeholder="Filter by project…" autocomplete="off" spellcheck="false">
-            <span class="badge" id="badge-session-count">0</span>
-          </div>
-          <div class="panel-body" id="session-board">
-            <div class="empty"><svg class="icon"><use href="#i-agent"/></svg><span>No agents running yet — start Claude Code, Cursor, or Codex and they'll appear here</span></div>
-          </div>
-        </section>
-
         <section class="panel activity-panel">
           <div class="panel-head">
             <h2><svg class="icon"><use href="#i-activity"/></svg>Activity</h2>
@@ -206,6 +199,21 @@
           </div>
           <div class="panel-body timeline" id="events-container">
             <div class="empty"><svg class="icon"><use href="#i-activity"/></svg><span>No system events logged</span></div>
+          </div>
+        </section>
+      </div>
+
+      <!-- Sessions: every agent run as a first-class board — it fills the
+           whole dashboard when the fleet is busy, so it is its own tab. -->
+      <div class="tabpanel" id="tab-sessions" role="tabpanel" hidden>
+        <section class="panel" id="session-board-panel">
+          <div class="panel-head">
+            <h2><svg class="icon"><use href="#i-agent"/></svg>Sessions</h2>
+            <input type="search" id="session-cwd-filter" class="input" placeholder="Filter by project…" autocomplete="off" spellcheck="false">
+            <span class="badge" id="badge-session-count">0</span>
+          </div>
+          <div class="panel-body" id="session-board">
+            <div class="empty"><svg class="icon"><use href="#i-agent"/></svg><span>No agents running yet — start Claude Code, Cursor, or Codex and they'll appear here</span></div>
           </div>
         </section>
       </div>
