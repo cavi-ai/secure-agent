@@ -7,6 +7,14 @@ All notable changes to `secure-agent` are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Resource Mission Control for local agent fleets.** The daemon now samples
+  live RSS and CPU for attributed processes, groups them into stable session
+  families, retains one hour of five-second history, and diagnoses heavy
+  memory, full-core CPU, rapid growth, idle retention, runaway children, and
+  orphan drift. `GET /resources` exposes process topology, trends, evidence,
+  thresholds, confidence, and reclaim estimates. The web console ranks and
+  charts whole sessions with click-through family detail; the native menu bar
+  shows family CPU/memory and supports Impact sorting.
 - **One-command fleet enrollment (`secure-agent fleet enroll <collector-url>`).**
   Reads the node id from the running daemon, generates the webhook secret,
   merges `fleet.webhooks` into `config.yaml` (comment-preserving, backup

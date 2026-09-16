@@ -39,6 +39,58 @@ means the model server has failed repeatedly and verdicts are paused
 (`last_error` says why) — the UIs render this so advisor actions never look
 like dead buttons. Absent on older daemons.
 
+### Resource telemetry: `GET /resources`
+
+Returns a point-in-time rollup of resources attributed to tagged agent process
+families. Each session is anchored to the root PID and process start time, so
+PID reuse cannot splice two runs together. Samples are taken every five
+seconds and retained in memory for one hour; daemon restarts begin a new
+history. This is agent-attributed posture, not whole-machine memory or CPU.
+
+```json
+{
+  "observed_at": "2026-09-15T20:00:00Z",
+  "rss_bytes": 5368709120,
+  "cpu_percent": 142.5,
+  "process_count": 3,
+  "session_count": 1,
+  "sessions": [{
+    "key": "58210:1789502400000000000",
+    "name": "claude",
+    "workspace": "/Users/dev/project",
+    "root_pid": 58210,
+    "root_started_at": "2026-09-15T19:30:00Z",
+    "rss_bytes": 5368709120,
+    "cpu_percent": 142.5,
+    "process_count": 3,
+    "orphan_count": 0,
+    "estimated_reclaim_bytes": 5368709120,
+    "processes": [
+      {"name": "claude", "pid": 58210, "ppid": 1, "rss_bytes": 1073741824, "cpu_percent": 22.5},
+      {"name": "node", "pid": 58211, "ppid": 58210, "rss_bytes": 4294967296, "cpu_percent": 120}
+    ],
+    "samples": [{"at": "2026-09-15T20:00:00Z", "rss_bytes": 5368709120, "cpu_percent": 142.5}],
+    "diagnoses": [{
+      "code": "heavy-memory",
+      "severity": "critical",
+      "summary": "Session is using at least 4 GiB of resident memory.",
+      "threshold": "RSS >= 4 GiB",
+      "confidence": "high",
+      "estimated_reclaim_bytes": 5368709120
+    }]
+  }]
+}
+```
+
+Diagnoses are deterministic and may include `heavy-memory` (RSS ≥ 4 GiB),
+`heavy-cpu` (CPU ≥ 100%), `rapid-growth` (≥ 1 GiB and ≥ 25% over 15
+minutes), `idle-heavy` (RSS ≥ 2 GiB after 15 minutes without attributed
+activity), `runaway-child` (a child holds ≥ 1 GiB and ≥ 60% of family RSS),
+and `orphan-drift` (an attributed process remains after its parent exits).
+`estimated_reclaim_bytes` is an estimate of memory associated with the
+diagnosed scope; it is not a promise that the operating system will reclaim
+that exact amount immediately.
+
 ---
 
 ### 2. `GET /flags`
