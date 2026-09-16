@@ -84,6 +84,7 @@ def main():
         build_harness(tmp)
         dom = dump_dom(chrome, tmp)
         dom_session = dump_dom(chrome, tmp, "?sessiondemo")
+        dom_guard = dump_dom(chrome, tmp, "?guarddemo")
         dom_uninsp = dump_dom(chrome, tmp, "?uninspecteddemo")
         dom_notify = dump_dom(chrome, tmp, "?notifydemo")
         dom_allow = dump_dom(chrome, tmp, "?allowdemo")
@@ -238,6 +239,7 @@ def main():
         check("tab bar renders all five tabs",
               dom.count('class="tab-btn') >= 5
               and all(f'data-tab="{t}"' in dom for t in ("overview", "sessions", "agents", "egress", "findings")))
+        check("findings destination is presented as attention", '>Attention<' in dom)
         check("overview tab active by default",
               'class="tab-btn active" data-tab="overview"' in dom)
         check("non-active panels hidden",
@@ -334,7 +336,23 @@ def main():
         check("egress tab badge shows uninspected count",
               'id="tab-badge-egress">2<' in dom)
         check("findings tab badge shows needs-you count",
-              'id="tab-badge-findings">4<' in dom)
+              'id="tab-badge-findings">8<' in dom)
+        attention = dom.split('id="attention-center"', 1)[1].split('id="security-findings-grid"', 1)[0]
+        check("attention center groups the whole api-service session",
+              'class="attention-group' in attention and "api-service" in attention
+              and "5.5 GB" in attention and "132.5%" in attention and "<b>2</b> processes" in attention)
+        check("attention center unifies all actionable signal types",
+              all(label in attention for label in ("Guard decision", "Resource pressure", "Critical incident", "Critical finding", "Uninspected egress")))
+        check("attention resource actions target the full session",
+              'data-action="resource-control" data-id="resource-1" data-decision="apply"' in attention)
+        check("attention guard actions expose bounded choices",
+              'data-action="guard-resolve" data-id="guard-1" data-verdict="allow" data-scope="once"' in attention
+              and 'data-action="guard-resolve" data-id="guard-1" data-verdict="deny" data-scope="always"' in attention)
+        check("attention shows blast-radius copy", "approves every path under rule" in attention)
+        check("attention egress opens endpoint evidence", 'data-action="open-uninspected"' in attention)
+        check("resolved guard request leaves the attention queue",
+              'id="tab-badge-findings">7<' in dom_guard
+              and 'data-action="guard-resolve" data-id="guard-1"' not in dom_guard)
         check("posture flag item switches to findings tab",
               'data-action="goto-tab" data-tab="findings"' in dom)
         check("tab switch reveals the target panel",
