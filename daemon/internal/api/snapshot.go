@@ -83,7 +83,9 @@ func (a *API) suggestionList() []Suggestion {
 		return out
 	}
 	for _, e := range a.correlator.UninspectedEgressSummary() {
-		if e.Count < minSuggestionCount {
+		if e.Count < minSuggestionCount || e.Infra != "" {
+			// Rare pairs and known CDN/cloud carriers are never "approve this
+			// endpoint" suggestions — suggestions exist for judgment calls.
 			continue
 		}
 		sg := Suggestion{Agent: e.Agent, Host: e.Host, Count: e.Count}

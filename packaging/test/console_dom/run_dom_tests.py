@@ -123,6 +123,13 @@ def main():
               "Allowed endpoints" in dom and "artifacts.example.com" in dom)
         check("remove drops the allowlist row",
               "artifacts.example.com" not in dom_allowrm)
+
+        # --- uninspected drill-down groups infra, keeps unknowns actionable ---
+        check("drill-down keeps unknown endpoints actionable",
+              "registry.npmjs.org" in dom_uninsp)
+        check("drill-down collapses CDN/cloud carriers",
+              "Known CDN/cloud infrastructure (2 endpoints)" in dom_uninsp
+              and "Cloudflare" in dom_uninsp and "AWS" in dom_uninsp)
         check("vendor-key promote banner",
               'data-action="promote-vendor-keys"' in dom and "1 vendor-key rule" in dom)
         check("incident workflow chip (ack)", 'class="workflow-chip acked"' in dom)
