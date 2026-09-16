@@ -27,7 +27,55 @@ const {
   monitorVendorKeyIDs, inspectionVisible, vendorKeyPromoteHTML,
   scopedBySession, unactedLast24h, filterSessionRows, sseNeedsSnapshot,
   sessionStripRows, sessionNeedsYou, sessionStripHTML,
+  buildAttentionGroups,
 } = ctx;
+
+// ---------- unified attention center ----------
+
+test('buildAttentionGroups correlates resource, guard, security, and egress work by session', () => {
+  const groups = buildAttentionGroups({
+    status: { agents: [
+      { pid: 10, name: 'claude', cwd: '/work/api', root_pid: 10 },
+      { pid: 11, name: 'claude', root_pid: 10 },
+    ] },
+    resources: { sessions: [{
+      key: '10:start', name: 'claude', workspace: '/work/api', root_pid: 10,
+      rss_bytes: 5 * 1024 ** 3, cpu_percent: 125, process_count: 2,
+      processes: [{ pid: 10 }, { pid: 11 }],
+      diagnoses: [{ summary: 'Memory grew 2 GB in 10 minutes.', severity: 'critical' }],
+      control: { pending_id: 'resource-1', next_action: 'pause', state: 'approval-required' },
+    }] },
+    guardPending: [{ id: 'guard-1', agent: 'claude', tool: 'Read', path: '/work/api/.env', rule_id: 'secrets' }],
+    flags: [{ id: 'flag-1', agent: 'claude', pid: 11, rule: 'secret-leak', severity: 3, evidence: ['sent to logs.example.com'] }],
+    incidents: [{ id: 'inc-1', agent: 'claude', pid: 10, rule: 'read-then-connect', risk: 'CRITICAL', summary: 'Credential read followed by network access.', workflow: { status: 'open' } }],
+    uninspected: [{ agent: 'claude', host: 'registry.npmjs.org', count: 7 }],
+  });
+
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].key, 'session:10:start');
+  assert.equal(groups[0].label, 'api');
+  assert.equal(groups[0].rssBytes, 5 * 1024 ** 3);
+  assert.equal(groups[0].cpuPercent, 125);
+  assert.equal(groups[0].processCount, 2);
+  assert.equal(groups[0].items.map(item => item.kind).join(','), 'guard,resource,incident,flag,egress');
+  assert.equal(groups[0].items.find(item => item.kind === 'egress').count, 7);
+});
+
+test('buildAttentionGroups keeps ambiguous agent-only work in an explicit shared group', () => {
+  const groups = buildAttentionGroups({
+    resources: { sessions: [
+      { key: '1:a', name: 'codex', workspace: '/work/one', root_pid: 1, processes: [{ pid: 1 }], control: {} },
+      { key: '2:b', name: 'codex', workspace: '/work/two', root_pid: 2, processes: [{ pid: 2 }], control: {} },
+    ] },
+    guardPending: [{ id: 'guard-1', agent: 'codex', tool: 'Bash', path: '/tmp/x', rule_id: 'shell' }],
+    uninspected: [{ agent: 'codex', host: 'example.com', count: 2 }],
+  });
+
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].key, 'agent:codex');
+  assert.equal(groups[0].label, 'codex activity');
+  assert.equal(groups[0].items.map(item => item.kind).join(','), 'guard,egress');
+});
 
 // ---------- resource mission control ----------
 

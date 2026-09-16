@@ -1,4 +1,79 @@
-// Findings tab: flags, incidents, audit (hidden until configured).
+// Attention tab: a session-grouped operator queue followed by detailed
+// findings, incidents, and the policy audit ledger.
+
+function renderAttention() {
+  const SA = window.SA;
+  const container = document.getElementById('attention-list');
+  const badge = document.getElementById('badge-attention-count');
+  if (!container) return;
+  const groups = buildAttentionGroups({
+    status: SA.t.status,
+    resources: SA.t.resources,
+    guardPending: SA.t.guardPending,
+    flags: SA.t.flags,
+    incidents: SA.t.incidents,
+    uninspected: SA.t.uninspected,
+  });
+  const count = groups.reduce((sum, group) => sum + group.items.length, 0);
+  if (badge) badge.textContent = count;
+  SA.setTabBadge('findings', count);
+  if (!groups.length) {
+    container.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-shield"/></svg><span>No decisions waiting — monitored sessions are within policy</span></div>`;
+    return;
+  }
+
+  const advisorHealth = (SA.t.status && SA.t.status.advisor_health) || null;
+  const advisorVisible = !!(SA.t.status && SA.t.status.advisor_enabled);
+  const advisorOffline = !!(advisorHealth && advisorHealth.circuit_open);
+
+  const actions = item => {
+    if (item.kind === 'guard') return `
+      <button class="btn btn-primary btn-sm" data-action="guard-resolve" data-id="${escapeHTML(item.id)}" data-verdict="allow" data-scope="once">Allow once</button>
+      <button class="btn btn-ghost btn-sm" data-action="guard-resolve" data-id="${escapeHTML(item.id)}" data-verdict="allow" data-scope="always">Allow rule</button>
+      <button class="btn btn-danger btn-sm" data-action="guard-resolve" data-id="${escapeHTML(item.id)}" data-verdict="deny" data-scope="always">Deny rule</button>`;
+    if (item.kind === 'resource') return `
+      <button class="btn btn-danger btn-sm" data-action="resource-control" data-id="${escapeHTML(item.id)}" data-decision="apply" data-intervention="${escapeHTML(item.action)}">Apply ${escapeHTML(String(item.action).replaceAll('_', ' '))}</button>
+      <button class="btn btn-ghost btn-sm" data-action="resource-control" data-id="${escapeHTML(item.id)}" data-decision="dismiss">Keep running</button>`;
+    if (item.kind === 'incident') return `
+      <button class="btn btn-ghost btn-sm" data-action="open-incident" data-id="${escapeHTML(item.id)}">View report</button>
+      ${item.status === 'open' ? `<button class="btn btn-ghost btn-sm" data-action="incident-status" data-id="${escapeHTML(item.id)}" data-status="acknowledged">Acknowledge</button>` : ''}`;
+    if (item.kind === 'flag') return `
+      <button class="btn btn-ghost btn-sm" data-action="dismiss-flag" data-id="${escapeHTML(item.id)}">Dismiss</button>
+      ${!advisorVisible ? '' : advisorOffline
+        ? `<button class="btn btn-ghost btn-sm" disabled title="Advisor offline — verdicts paused (${escapeHTML(advisorHealth.last_error || 'model server unreachable')})">Advisor offline</button>`
+        : `<button class="btn btn-ghost btn-sm" data-action="retriage" data-id="${escapeHTML(item.id)}">Re-run advisor</button>`}`;
+    return `<button class="btn btn-ghost btn-sm" data-action="open-uninspected">Review endpoints</button>`;
+  };
+
+  container.innerHTML = `<div class="attention-groups">${groups.map(group => {
+    const urgent = group.items[0] && group.items[0].priority >= 4 ? ' urgent' : '';
+    const metrics = [
+      group.rssBytes ? `<span><b>${escapeHTML(fmtRSS(group.rssBytes))}</b> memory</span>` : '',
+      group.cpuPercent ? `<span><b>${escapeHTML(fmtCPU(group.cpuPercent))}</b> CPU</span>` : '',
+      group.processCount ? `<span><b>${Number(group.processCount)}</b> process${group.processCount === 1 ? '' : 'es'}</span>` : '',
+    ].filter(Boolean).join('');
+    return `<article class="attention-group${urgent}">
+      <header class="attention-group-head">
+        <div class="attention-identity">
+          <span class="attention-agent">${escapeHTML(group.agent)}</span>
+          <strong>${escapeHTML(group.label)}</strong>
+          ${group.workspace ? `<span class="attention-workspace">${escapeHTML(group.workspace)}</span>` : '<span class="attention-workspace">Signals could not be safely attributed to one live session</span>'}
+        </div>
+        <div class="attention-metrics">${metrics}</div>
+        <span class="attention-total">${group.items.length} item${group.items.length === 1 ? '' : 's'}</span>
+      </header>
+      <div class="attention-items">${group.items.map(item => `
+        <div class="attention-item kind-${escapeHTML(item.kind)}">
+          <span class="attention-kind">${escapeHTML(item.title)}</span>
+          <div class="attention-reason">
+            <strong>${escapeHTML(item.detail)}</strong>
+            ${item.scopeText ? `<span>${escapeHTML(item.scopeText)}</span>` : ''}
+          </div>
+          <div class="attention-actions">${actions(item)}</div>
+        </div>`).join('')}</div>
+    </article>`;
+  }).join('')}</div>`;
+}
 
 function renderIncidents() {
   const SA = window.SA;
@@ -114,7 +189,6 @@ function renderFlags() {
   const scopedInc = scopedBySession(SA.t.incidents || [], SA.timelineSession, SA.timelinePids);
   SA.paintSessionChip('flags-session-filter', 'flags-session-filter-id', flags.length);
   badge.textContent = flags.length;
-  SA.setTabBadge('findings', flags.length + scopedInc.length);
 
   if (flags.length === 0) {
     const msg = SA.sessionScopeOn()
@@ -186,4 +260,3 @@ function renderFlags() {
       </div>`).join('') + `</div>`;
   }
 }
-
