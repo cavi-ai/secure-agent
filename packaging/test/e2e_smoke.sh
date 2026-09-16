@@ -124,10 +124,21 @@ import (
 	"encoding/json"
 	"net"
 	"os"
+	"runtime"
 	"time"
 )
 
 func main() {
+	// Keep a visible resource footprint long enough for the daemon's delta
+	// sampler to prove both RSS and CPU attribution through /resources.
+	memory := make([]byte, 32<<20)
+	for i := 0; i < len(memory); i += 4096 {
+		memory[i] = 1
+	}
+	go func() {
+		deadline := time.Now().Add(6 * time.Second)
+		for time.Now().Before(deadline) {}
+	}()
 	time.Sleep(500 * time.Millisecond)
 	home, _ := os.UserHomeDir()
 	actPath := home + "/.local/state/secure-agent/activity.jsonl"
@@ -167,6 +178,7 @@ func main() {
 			clientConn.Close()
 		}
 	}
+	runtime.KeepAlive(memory)
 }
 EOF
 
@@ -197,6 +209,43 @@ for _ in $(seq 1 30); do
   fi
   sleep 0.3
 done
+
+# Resource mission control: the live fake agent must appear as one attributed
+# session with real RSS, CPU, a process row, and at least one history sample.
+RESOURCE_PASSED=false
+for _ in $(seq 1 40); do
+  RESOURCE_RESP=$(curl -s --unix-socket "$SOCKET_PATH" http://unix/resources 2>/dev/null || true)
+  if printf '%s' "$RESOURCE_RESP" | python3 -c '
+import json, sys
+pid = int(sys.argv[1])
+try:
+    snap = json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
+sessions = [s for s in snap.get("sessions", []) if s.get("root_pid") == pid]
+if not sessions:
+    sys.exit(1)
+s = sessions[0]
+processes = [p for p in s.get("processes", []) if p.get("pid") == pid]
+ok = (snap.get("rss_bytes", 0) > 0
+      and snap.get("process_count", 0) >= 1
+      and snap.get("session_count", 0) >= 1
+      and s.get("rss_bytes", 0) > 0
+      and s.get("cpu_percent", 0) > 0
+      and len(s.get("samples", [])) >= 1
+      and processes and processes[0].get("rss_bytes", 0) > 0)
+sys.exit(0 if ok else 1)
+' "$AGENT_PID" 2>/dev/null; then
+    RESOURCE_PASSED=true
+    break
+  fi
+  sleep 0.2
+done
+if [ "$RESOURCE_PASSED" = true ]; then
+  echo "Resources: live session family carries RSS, CPU, process topology, and history."
+else
+  echo "Resources FAILED: /resources did not expose the live fake-agent footprint."
+fi
 
 wait $AGENT_PID 2>/dev/null || true
 
@@ -370,7 +419,7 @@ if [ "$PROXY_PORT" != "0" ] && [ -f "$tmp/console-token" ]; then
   # silently blanked half the console behind a healthy daemon.
   DRIFT_FAILED=""
   for p in /status /snapshot /posture /flags /events /incidents /audit /fleet \
-           /firewall/sources /stats/rollup /mute /allowlist/suggestions \
+           /resources /firewall/sources /stats/rollup /mute /allowlist/suggestions \
            /egress/uninspected /notify/rules; do
     CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 \
       -H "X-SecureAgent-Console-Token: $CT" "http://127.0.0.1:$PROXY_PORT$p" || true)
@@ -505,8 +554,8 @@ else
 fi
 kill "$COLLECTOR_PID" 2>/dev/null || true
 
-if [ "$PASSED" = true ] && [ "$INCIDENT_PASSED" = true ] && [ "$GUARD_PASSED" = true ] && [ "$WEBHOOK_PASSED" = true ] && [ "$SSE_PASSED" = true ] && [ "$CONSOLE_PASSED" = true ] && [ "$ADVISOR_PASSED" = true ] && [ "$OPERATOR_PASSED" = true ] && [ "$ENROLL_PASSED" = true ]; then
-  echo "E2E SMOKE TEST: PASS (Flag, Incident, Directory Guard, fleet webhook + seq, enroll, SSE, console auth, advisor verdict, and operator loop verified)"
+if [ "$PASSED" = true ] && [ "$INCIDENT_PASSED" = true ] && [ "$RESOURCE_PASSED" = true ] && [ "$GUARD_PASSED" = true ] && [ "$WEBHOOK_PASSED" = true ] && [ "$SSE_PASSED" = true ] && [ "$CONSOLE_PASSED" = true ] && [ "$ADVISOR_PASSED" = true ] && [ "$OPERATOR_PASSED" = true ] && [ "$ENROLL_PASSED" = true ]; then
+  echo "E2E SMOKE TEST: PASS (Flag, Incident, resources, Directory Guard, fleet webhook + seq, enroll, SSE, console auth, advisor verdict, and operator loop verified)"
   if [ -n "$DAEMON_PID" ]; then
     kill "$DAEMON_PID" 2>/dev/null || true
   fi
@@ -525,7 +574,7 @@ else
   if [ -n "$DAEMON_PID" ]; then
     kill "$DAEMON_PID" 2>/dev/null || true
   fi
-  echo "E2E SMOKE TEST: FAIL (Flag passed: $PASSED, Incident passed: $INCIDENT_PASSED, Guard passed: $GUARD_PASSED, Webhook passed: $WEBHOOK_PASSED, Enroll passed: $ENROLL_PASSED, SSE passed: $SSE_PASSED, Console passed: $CONSOLE_PASSED, Advisor passed: $ADVISOR_PASSED, Operator passed: $OPERATOR_PASSED)"
+  echo "E2E SMOKE TEST: FAIL (Flag passed: $PASSED, Incident passed: $INCIDENT_PASSED, Resources passed: $RESOURCE_PASSED, Guard passed: $GUARD_PASSED, Webhook passed: $WEBHOOK_PASSED, Enroll passed: $ENROLL_PASSED, SSE passed: $SSE_PASSED, Console passed: $CONSOLE_PASSED, Advisor passed: $ADVISOR_PASSED, Operator passed: $OPERATOR_PASSED)"
   echo "DEBUG SSE STREAM: $SSE_BODY"
   exit 1
 fi
