@@ -25,6 +25,7 @@ type Episode struct {
 	ActivityStatus string               `json:"activity_status,omitempty"`
 	Activities     []EpisodeActivity    `json:"activities,omitempty"`
 	Correlations   []EpisodeCorrelation `json:"correlations,omitempty"`
+	Host           *HostSnapshot        `json:"host,omitempty"`
 	Session        Session              `json:"session"`
 }
 
@@ -93,8 +94,14 @@ func (r *Recorder) Observe(snapshot Snapshot) []Episode {
 		previous, exists := r.active[session.Key]
 		escalated := exists && previous.rssBytes > 0 && session.RSSBytes > previous.rssBytes && session.RSSBytes-previous.rssBytes >= previous.rssBytes/4
 		if !exists || previous.signature != signature || escalated {
+			var host *HostSnapshot
+			if snapshot.Host != nil {
+				copyOf := cloneSnapshot(Snapshot{Host: snapshot.Host})
+				host = copyOf.Host
+			}
 			episodes = append(episodes, Episode{
 				CapturedAt: snapshot.ObservedAt, Severity: severity, DiagnosisCodes: codes,
+				Host:    host,
 				Session: boundedSessionCopy(session),
 			})
 			r.active[session.Key] = recordedPressure{signature: signature, rssBytes: session.RSSBytes}

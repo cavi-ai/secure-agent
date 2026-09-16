@@ -524,6 +524,13 @@ struct ConsoleView: View {
             // what agents cost, and how wide the monitoring net is.
             if state.connected {
                 VStack(alignment: .trailing, spacing: 3) {
+                    if let host = state.resources?.host,
+                       let available = ByteCount.short(host.availableMemoryBytes) {
+                        Label("\(available) available · \(host.headroomScore)/100", systemImage: "gauge.with.dots.needle.33percent")
+                            .font(.system(size: 10, weight: .semibold, design: .rounded))
+                            .foregroundStyle(host.capacity == "critical" ? Color.bad : host.capacity == "constrained" ? Color.warn : Color.ok)
+                            .help("Machine headroom · \(host.memoryPressure) memory pressure · \(host.thermalState) thermal · agents \(ByteCount.short(host.agentMemoryBytes) ?? "unavailable") · other apps \(ByteCount.short(host.nonAgentMemoryBytes) ?? "unavailable")")
+                    }
                     if let mem = ByteCount.short(state.totalAgentMemory) {
                         Label(mem, systemImage: "memorychip")
                             .font(.system(size: 10, weight: .semibold, design: .rounded))

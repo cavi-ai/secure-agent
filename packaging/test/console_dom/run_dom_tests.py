@@ -228,6 +228,15 @@ def main():
               'id="tab-overview" role="tabpanel">' in dom)
         check("resource mission control is present", 'id="resource-mission-control"' in dom)
         resource_view = dom.split('id="resource-mission-control"', 1)[1].split('id="session-board-panel"', 1)[0]
+        check("whole-machine headroom is visible",
+              "Machine headroom" in resource_view and "25 / 100" in resource_view
+              and "4.0 GB available" in resource_view)
+        check("agent and non-agent memory are separated",
+              "Agents 34.4%" in resource_view and "Other 40.6%" in resource_view
+              and 'class="resource-host-segment agent"' in resource_view)
+        check("whole-machine CPU swap and thermal context are visible",
+              "75.0% total" in resource_view and "58.4% other" in resource_view
+              and "2.0 GB / 8.0 GB" in resource_view and "Nominal" in resource_view)
         check("high-impact session shows CPU and memory",
               "132.5%" in resource_view and "5.5 GB" in resource_view)
         check("resource diagnosis explains the pressure",
@@ -244,6 +253,9 @@ def main():
         check("resource pressure episode explains correlated activity",
               "Memory rose 3.0 GiB in 10m while node started." in resource_view
               and "Observed correlation" in resource_view)
+        check("pressure episode preserves captured machine context",
+              "Host at capture" in resource_view and "1.0 GB available" in resource_view
+              and "Critical pressure" in resource_view and "Serious thermal" in resource_view)
         check("resource pressure chart includes activity markers",
               'class="resource-activity-marker' in resource_view
               and "Bash tool ran" in resource_view

@@ -45,11 +45,34 @@ Returns a point-in-time rollup of resources attributed to tagged agent process
 families. Each session is anchored to the root PID and process start time, so
 PID reuse cannot splice two runs together. Samples are taken every five
 seconds and retained in memory for one hour; daemon restarts begin a new
-history. This is agent-attributed posture, not whole-machine memory or CPU.
+history. The session totals remain agent-attributed; `host` provides the
+whole-machine context needed to tell whether that usage is safe or is crowding
+out the rest of the workstation.
 
 ```json
 {
   "observed_at": "2026-09-15T20:00:00Z",
+  "host": {
+    "total_memory_bytes": 17179869184,
+    "free_memory_bytes": 2147483648,
+    "available_memory_bytes": 4294967296,
+    "compressed_memory_bytes": 1073741824,
+    "used_memory_bytes": 12884901888,
+    "agent_memory_bytes": 5368709120,
+    "non_agent_memory_bytes": 7516192768,
+    "swap_total_bytes": 8589934592,
+    "swap_used_bytes": 2147483648,
+    "headroom_percent": 25,
+    "agent_memory_percent": 31.3,
+    "system_cpu_percent": 75,
+    "agent_cpu_percent": 8.9,
+    "non_agent_cpu_percent": 66.1,
+    "logical_cpu_count": 16,
+    "memory_pressure": "normal",
+    "thermal_state": "nominal",
+    "headroom_score": 25,
+    "capacity": "constrained"
+  },
   "rss_bytes": 5368709120,
   "cpu_percent": 142.5,
   "process_count": 3,
@@ -81,6 +104,23 @@ history. This is agent-attributed posture, not whole-machine memory or CPU.
   }]
 }
 ```
+
+Host CPU values are percentages of the machine's complete logical-CPU
+capacity (0–100). Session and process CPU values continue to use 100% per
+fully occupied core. `agent_cpu_percent` converts the attributed session total
+to machine capacity; `non_agent_cpu_percent` is the saturating difference from
+the measured system total. Memory attribution is likewise saturating, so a
+racing process sample can never produce a negative non-agent value.
+
+`headroom_score` is the most constrained available signal: available-memory
+percentage, CPU idle percentage, unused-swap percentage, or the thermal cap.
+Scores below 15 are `critical`, 15–49 are `constrained`, and 50–100 are
+`ample`. Memory pressure is `critical` below 10% available memory or at 80%
+swap use, `warning` below 20% available or at 50% swap use, and `normal`
+otherwise. Fields that the operating system does not expose are omitted and
+the corresponding state is `unknown`; secure-agent does not manufacture a
+healthy reading. macOS and Linux use native kernel/proc metrics, with thermal
+state collected best-effort. The first CPU sample has no delta and is omitted.
 
 Diagnoses are deterministic and may include `heavy-memory` (RSS ≥ 4 GiB),
 `heavy-cpu` (CPU ≥ 100%), `rapid-growth` (≥ 1 GiB and ≥ 25% over 15
@@ -122,8 +162,10 @@ resource-pressure captures. An episode is recorded when a diagnosis first
 appears, its diagnosis set changes, or resident memory rises another 25%.
 Each capture contains whole-session totals, diagnostic evidence, effective
 control state, the root plus at most 64 highest-RSS processes, and at most 120
-five-second samples (a ten-minute prelude). The database retains the newest
-500 episodes, and each `/resources` response returns the newest 20.
+five-second samples (a ten-minute prelude). It also includes the captured
+`host` snapshot, so later review can distinguish a large but safe session from
+one that exhausted machine headroom. The database retains the newest 500
+episodes, and each `/resources` response returns the newest 20.
 
 Episodes may also contain `activities` and `correlations`. The daemon selects
 events only from PIDs in the captured process family and only between the

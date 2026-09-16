@@ -51,6 +51,16 @@ final class DaemonClientTests: XCTestCase {
         XCTAssertEqual(status.trees?[0].cpuPercent, 125.5)
     }
 
+    func testResourceSnapshotDecodesWholeMachinePressure() throws {
+        let json = #"{"host":{"total_memory_bytes":17179869184,"available_memory_bytes":4294967296,"agent_memory_bytes":3221225472,"non_agent_memory_bytes":9663676416,"headroom_percent":25,"system_cpu_percent":75,"agent_cpu_percent":20,"non_agent_cpu_percent":55,"memory_pressure":"normal","thermal_state":"nominal","headroom_score":25,"capacity":"constrained"}}"#
+            .data(using: .utf8)!
+        let resources = try JSONDecoder().decode(ResourceSnapshotModel.self, from: json)
+        XCTAssertEqual(resources.host?.availableMemoryBytes, 4 * 1024 * 1024 * 1024)
+        XCTAssertEqual(resources.host?.nonAgentCPUPercent, 55)
+        XCTAssertEqual(resources.host?.headroomScore, 25)
+        XCTAssertEqual(resources.host?.capacity, "constrained")
+    }
+
     func testAcknowledgedCopyPreservesIdentity() {
         let f = FlagModel(id: "x", rule: "keychain-access", severity: 1, ts: "t", pid: 9,
                           agent: "codex", evidence: ["e"], sessionId: "s1")

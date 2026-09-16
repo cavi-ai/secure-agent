@@ -48,6 +48,50 @@ function resourceActivityLabel(kind) {
   return labels[kind] || 'ACTIVITY';
 }
 
+function resourceHostContextHTML(host) {
+  if (!host || !Number(host.total_memory_bytes)) return '';
+  const total = Number(host.total_memory_bytes);
+  const available = Number(host.available_memory_bytes || 0);
+  const memoryKnown = String(host.memory_pressure || 'unknown') !== 'unknown';
+  const agentPercent = Math.max(0, Math.min(100, Number(host.agent_memory_percent || 0)));
+  const otherPercent = Math.max(0, Math.min(100 - agentPercent,
+    Number(host.non_agent_memory_bytes || 0) / total * 100));
+  const availablePercent = Math.max(0, 100 - agentPercent - otherPercent);
+  const capacity = String(host.capacity || 'unknown');
+  const pressure = familyTitle(host.memory_pressure || 'unknown');
+  const thermal = familyTitle(host.thermal_state || 'unknown');
+  const cpuUnavailable = host.system_cpu_percent === null || host.system_cpu_percent === undefined;
+  const cpuAttributionUnavailable = host.agent_cpu_percent === null || host.agent_cpu_percent === undefined
+    || host.non_agent_cpu_percent === null || host.non_agent_cpu_percent === undefined;
+  const cpu = cpuUnavailable ? 'Unavailable' : cpuAttributionUnavailable
+    ? `${Number(host.system_cpu_percent).toFixed(1)}% total · attribution unavailable`
+    : `${Number(host.system_cpu_percent).toFixed(1)}% total · ${Number(host.agent_cpu_percent).toFixed(1)}% agents · ${Number(host.non_agent_cpu_percent).toFixed(1)}% other`;
+  const swap = Number(host.swap_total_bytes || 0)
+    ? `${fmtRSS(host.swap_used_bytes) || '0 B'} / ${fmtRSS(host.swap_total_bytes)}`
+    : 'Not configured';
+  return `<section class="resource-host-context capacity-${escapeHTML(capacity)}" aria-label="Whole-machine resource pressure">
+    <div class="resource-host-heading">
+      <div><span class="resource-eyebrow">Whole machine</span><h3>Machine headroom</h3></div>
+      <span class="resource-capacity"><b>${Number(host.headroom_score || 0)} / 100</b><small>${escapeHTML(capacity)}</small></span>
+    </div>
+    <div class="resource-host-memory">
+      <div><strong>${memoryKnown ? escapeHTML(fmtRSS(available) || '0 B') : 'Unavailable'} available</strong><span>of ${escapeHTML(fmtRSS(total))} physical memory</span></div>
+      ${memoryKnown ? `<div class="resource-host-bar" role="img" aria-label="Memory: ${agentPercent.toFixed(1)} percent agents, ${otherPercent.toFixed(1)} percent other, ${availablePercent.toFixed(1)} percent available">
+        <span class="resource-host-segment agent" style="width:${agentPercent.toFixed(1)}%"></span>
+        <span class="resource-host-segment other" style="width:${otherPercent.toFixed(1)}%"></span>
+        <span class="resource-host-segment available" style="width:${availablePercent.toFixed(1)}%"></span>
+      </div>
+      <div class="resource-host-legend"><span><i class="agent"></i>Agents ${agentPercent.toFixed(1)}%</span><span><i class="other"></i>Other ${otherPercent.toFixed(1)}%</span><span><i class="available"></i>Available ${availablePercent.toFixed(1)}%</span></div>` : '<div class="resource-host-legend"><span>Memory breakdown unavailable</span></div>'}
+    </div>
+    <div class="resource-host-stats">
+      <div><span>Memory pressure</span><strong>${escapeHTML(pressure)}</strong></div>
+      <div><span>CPU</span><strong>${escapeHTML(cpu)}</strong></div>
+      <div><span>Swap</span><strong>${escapeHTML(swap)}</strong></div>
+      <div><span>Thermal</span><strong>${escapeHTML(thermal)}</strong></div>
+    </div>
+  </section>`;
+}
+
 function resourceFlightRecorderHTML(snapshot) {
   const episodes = snapshot.episodes || [];
   return `<section class="resource-flight-recorder">
@@ -64,6 +108,8 @@ function resourceFlightRecorderHTML(snapshot) {
       const activities = episode.activities || [];
       const correlations = episode.correlations || [];
       const correlation = correlations[0];
+      const host = episode.host;
+      const hostAtCapture = host ? `<div class="resource-episode-host"><span class="resource-eyebrow">Host at capture</span><strong>${escapeHTML(fmtRSS(host.available_memory_bytes) || 'Unavailable')} available</strong><span>${escapeHTML(familyTitle(host.memory_pressure || 'unknown'))} pressure · ${escapeHTML(familyTitle(host.thermal_state || 'unknown'))} thermal · headroom ${Number(host.headroom_score || 0)} / 100</span></div>` : '';
       const drivers = visibleProcesses.map(process => {
         const share = session.rss_bytes ? Math.round(Number(process.rss_bytes || 0) / Number(session.rss_bytes) * 100) : 0;
         return `<div class="resource-episode-process"><span><b>${escapeHTML(process.name || 'process')}</b> · PID ${Number(process.pid || 0)}${process.is_orphan ? ' · leftover' : ''}</span><span>${escapeHTML(fmtRSS(process.rss_bytes) || '—')} · ${share}%</span></div>`;
@@ -83,6 +129,7 @@ function resourceFlightRecorderHTML(snapshot) {
       return `<details class="resource-episode severity-${escapeHTML(episode.severity || 'warning')}"${index === 0 ? ' open' : ''}>
         <summary><span><b>${escapeHTML(label)}</b><small>${escapeHTML(primary.summary || (episode.diagnosis_codes || []).join(', ') || 'Resource pressure')}</small></span><span class="resource-episode-metrics"><b>${escapeHTML(fmtRSS(session.rss_bytes) || '—')}</b><b>${escapeHTML(fmtCPU(session.cpu_percent) || '—')}</b><time>${age ? `${escapeHTML(age)} ago` : 'recorded'}</time></span></summary>
         <div class="resource-episode-body">
+          ${hostAtCapture}
           <div><span class="resource-eyebrow">What drove it</span><div class="resource-episode-processes">${drivers || '<span>No process breakdown recorded</span>'}${omittedCount ? `<small>${omittedCount} lower-impact process${omittedCount === 1 ? '' : 'es'} omitted</small>` : ''}</div></div>
           <div><span class="resource-eyebrow">Evidence</span>${evidence ? `<ul>${evidence}</ul>` : '<p>No additional evidence recorded.</p>'}<svg class="resource-episode-spark" viewBox="0 0 220 38" preserveAspectRatio="none" role="img" aria-label="Resource trend and nearby activity before capture">${memoryPoints ? `<polyline class="resource-spark-memory" points="${memoryPoints}"/>` : ''}${cpuPoints ? `<polyline class="resource-spark-cpu" points="${cpuPoints}"/>` : ''}${activityMarkers}</svg></div>
           <div class="resource-episode-context">
@@ -116,6 +163,7 @@ function renderResourceMissionControl() {
     return Number(b.rss_bytes || 0) - Number(a.rss_bytes || 0);
   });
   const control = snapshot.control || {};
+  const hostContext = resourceHostContextHTML(snapshot.host);
   const limits = [
     control.max_rss_bytes ? `${fmtRSS(control.max_rss_bytes)} memory` : '',
     control.max_cpu_percent ? `${fmtCPU(control.max_cpu_percent)} CPU` : ''
@@ -123,7 +171,7 @@ function renderResourceMissionControl() {
   const policy = `<div class="resource-policy"><span><b>${escapeHTML(control.mode || 'observe')}</b> machine policy${limits ? ` · ${escapeHTML(limits)}` : ' · budgets disabled'}${control.sustain_seconds ? ` · ${Number(control.sustain_seconds)}s grace` : ''} · ${(control.workspace_overrides || []).length} workspace override${(control.workspace_overrides || []).length === 1 ? '' : 's'}</span><span><span>${(control.pending || []).length} approval${(control.pending || []).length === 1 ? '' : 's'} pending</span><button type="button" class="btn btn-ghost btn-sm" data-action="edit-resource-policy">Edit policy</button></span></div>`;
   const flightRecorder = resourceFlightRecorderHTML(snapshot);
   if (sessions.length === 0) {
-    container.innerHTML = policy + `<div class="empty"><svg class="icon"><use href="#i-activity"/></svg><span>No attributed agent resource use right now</span></div>` + flightRecorder;
+    container.innerHTML = hostContext + policy + `<div class="empty"><svg class="icon"><use href="#i-activity"/></svg><span>No attributed agent resource use right now</span></div>` + flightRecorder;
     return;
   }
 
@@ -200,7 +248,7 @@ function renderResourceMissionControl() {
       </div>`;
   }
 
-  container.innerHTML = posture + policy + `<div class="resource-layout"><div class="resource-session-list">${cards}</div><aside class="resource-detail-wrap">${detail}</aside></div>` + flightRecorder;
+  container.innerHTML = hostContext + posture + policy + `<div class="resource-layout"><div class="resource-session-list">${cards}</div><aside class="resource-detail-wrap">${detail}</aside></div>` + flightRecorder;
 }
 
 function renderSessionBoard() {

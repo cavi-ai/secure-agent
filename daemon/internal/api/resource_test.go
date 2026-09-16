@@ -27,7 +27,9 @@ func TestResourcesEndpoint(t *testing.T) {
 
 	want := resource.Snapshot{
 		ObservedAt: time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC),
-		RSSBytes:   300, CPUPercent: 75, ProcessCount: 2, SessionCount: 1,
+		Host: &resource.HostSnapshot{TotalMemoryBytes: 16 << 30, AvailableMemoryBytes: 4 << 30,
+			MemoryPressure: "normal", ThermalState: "nominal", HeadroomScore: 25, Capacity: "constrained"},
+		RSSBytes: 300, CPUPercent: 75, ProcessCount: 2, SessionCount: 1,
 		Episodes: []resource.Episode{},
 		Sessions: []resource.Session{{
 			Key: "10:100", Name: "claude", RootPID: 10, RSSBytes: 300, CPUPercent: 75, ProcessCount: 2,
