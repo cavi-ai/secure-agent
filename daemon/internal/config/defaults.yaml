@@ -99,6 +99,7 @@ resource_control:
   max_cpu_percent: 0
   sustain_seconds: 30
   cooldown_seconds: 300
+  workspace_overrides: []
 
 # Local triage advisor (opt-in): a locally served model gives a second opinion
 # on flags and incidents. Loopback-only, enforced in code. See

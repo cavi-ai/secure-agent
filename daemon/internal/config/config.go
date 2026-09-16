@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"net"
 	"net/url"
 	"os"
@@ -180,11 +181,24 @@ type DirectoryGuardConfig struct {
 // limits disable that dimension. Termination is never a default: operators
 // must explicitly select mode=terminate in their private config overlay.
 type ResourceControlConfig struct {
-	Mode            string  `yaml:"mode"` // observe | prompt | terminate
-	MaxRSSMB        uint64  `yaml:"max_rss_mb"`
-	MaxCPUPercent   float64 `yaml:"max_cpu_percent"`
-	SustainSeconds  int     `yaml:"sustain_seconds"`
-	CooldownSeconds int     `yaml:"cooldown_seconds"`
+	Mode               string                    `yaml:"mode" json:"mode"` // observe | prompt | terminate
+	MaxRSSMB           uint64                    `yaml:"max_rss_mb" json:"max_rss_mb"`
+	MaxCPUPercent      float64                   `yaml:"max_cpu_percent" json:"max_cpu_percent"`
+	SustainSeconds     int                       `yaml:"sustain_seconds" json:"sustain_seconds"`
+	CooldownSeconds    int                       `yaml:"cooldown_seconds" json:"cooldown_seconds"`
+	WorkspaceOverrides []ResourceControlOverride `yaml:"workspace_overrides,omitempty" json:"workspace_overrides"`
+}
+
+// ResourceControlOverride applies a complete policy to one workspace subtree.
+// Complete policies make the effective behavior reviewable without hidden
+// field inheritance from the machine default.
+type ResourceControlOverride struct {
+	CwdPrefix       string  `yaml:"cwd_prefix" json:"cwd_prefix"`
+	Mode            string  `yaml:"mode" json:"mode"`
+	MaxRSSMB        uint64  `yaml:"max_rss_mb" json:"max_rss_mb"`
+	MaxCPUPercent   float64 `yaml:"max_cpu_percent" json:"max_cpu_percent"`
+	SustainSeconds  int     `yaml:"sustain_seconds" json:"sustain_seconds"`
+	CooldownSeconds int     `yaml:"cooldown_seconds" json:"cooldown_seconds"`
 }
 
 // AdvisorYAML is the on-disk shape of the local advisor config.
@@ -372,6 +386,9 @@ func loadWithOverlayError(explicitPath string) (Config, error, error) {
 			ManagedModel: raw.Advisor.ManagedModel,
 		},
 	}
+	for i := range cfg.ResourceControl.WorkspaceOverrides {
+		cfg.ResourceControl.WorkspaceOverrides[i].CwdPrefix = expandPath(cfg.ResourceControl.WorkspaceOverrides[i].CwdPrefix)
+	}
 	if cfg.Advisor.Enabled && !cfg.Advisor.Managed && cfg.Advisor.Endpoint == "" {
 		cfg.Advisor.Endpoint = "http://127.0.0.1:8080"
 	}
@@ -399,16 +416,8 @@ func (c Config) Validate() error {
 	if c.DirectoryGuard.PromptDeadlineMS < 0 {
 		return fmt.Errorf("directory_guard.prompt_deadline_ms must be >= 0, got %d", c.DirectoryGuard.PromptDeadlineMS)
 	}
-	switch c.ResourceControl.Mode {
-	case "observe", "prompt", "terminate":
-	default:
-		return fmt.Errorf("resource_control.mode must be observe, prompt, or terminate, got %q", c.ResourceControl.Mode)
-	}
-	if c.ResourceControl.MaxCPUPercent < 0 {
-		return fmt.Errorf("resource_control.max_cpu_percent must be >= 0")
-	}
-	if c.ResourceControl.SustainSeconds < 0 || c.ResourceControl.CooldownSeconds < 0 {
-		return fmt.Errorf("resource_control sustain_seconds and cooldown_seconds must be >= 0")
+	if err := ValidateResourceControl(c.ResourceControl); err != nil {
+		return err
 	}
 	if c.Fleet.HeartbeatIntervalSec < 0 {
 		return fmt.Errorf("fleet.heartbeat_interval_sec must be >= 0, got %d", c.Fleet.HeartbeatIntervalSec)
@@ -434,6 +443,56 @@ func (c Config) Validate() error {
 		if h != "localhost" && (ip == nil || !ip.IsLoopback()) {
 			return fmt.Errorf("advisor.endpoint must be loopback (127.0.0.1/::1/localhost), got %q", c.Advisor.Endpoint)
 		}
+	}
+	return nil
+}
+
+// ValidateResourceControl validates both the machine default and every scoped
+// policy. Workspace prefixes are path-boundary matched, so duplicates and
+// non-canonical paths are rejected instead of producing ambiguous precedence.
+func ValidateResourceControl(c ResourceControlConfig) error {
+	if err := validateResourcePolicy("resource_control", c.Mode, c.MaxRSSMB, c.MaxCPUPercent, c.SustainSeconds, c.CooldownSeconds); err != nil {
+		return err
+	}
+	seen := make(map[string]bool, len(c.WorkspaceOverrides))
+	for i, override := range c.WorkspaceOverrides {
+		field := fmt.Sprintf("resource_control.workspace_overrides[%d]", i)
+		if override.CwdPrefix == "" || !filepath.IsAbs(override.CwdPrefix) {
+			return fmt.Errorf("%s.cwd_prefix must be an absolute path", field)
+		}
+		clean := filepath.Clean(override.CwdPrefix)
+		if clean != override.CwdPrefix {
+			return fmt.Errorf("%s.cwd_prefix must be normalized, got %q", field, override.CwdPrefix)
+		}
+		if seen[clean] {
+			return fmt.Errorf("%s.cwd_prefix duplicates %q", field, clean)
+		}
+		seen[clean] = true
+		if err := validateResourcePolicy(field, override.Mode, override.MaxRSSMB, override.MaxCPUPercent, override.SustainSeconds, override.CooldownSeconds); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateResourcePolicy(field, mode string, maxRSSMB uint64, maxCPU float64, sustain, cooldown int) error {
+	switch mode {
+	case "observe", "prompt", "terminate":
+	default:
+		return fmt.Errorf("%s.mode must be observe, prompt, or terminate, got %q", field, mode)
+	}
+	if maxCPU < 0 || math.IsNaN(maxCPU) || math.IsInf(maxCPU, 0) {
+		return fmt.Errorf("%s.max_cpu_percent must be >= 0", field)
+	}
+	if maxRSSMB > ^uint64(0)/(1024*1024) {
+		return fmt.Errorf("%s.max_rss_mb is too large", field)
+	}
+	if sustain < 0 || cooldown < 0 {
+		return fmt.Errorf("%s sustain_seconds and cooldown_seconds must be >= 0", field)
+	}
+	const maxDurationSeconds = int64((1<<63 - 1) / int64(time.Second))
+	if int64(sustain) > maxDurationSeconds || int64(cooldown) > maxDurationSeconds {
+		return fmt.Errorf("%s sustain_seconds and cooldown_seconds are too large", field)
 	}
 	return nil
 }

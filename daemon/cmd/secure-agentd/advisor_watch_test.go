@@ -222,6 +222,17 @@ func TestWatchConfigHotSwapsResourcePolicy(t *testing.T) {
 		policy := controller.Snapshot().Control
 		return policy != nil && policy.Mode == resource.ModeTerminate && policy.MaxRSSBytes == 1024*1024*1024
 	})
+
+	src := "resource_control:\n  mode: terminate\n  max_rss_mb: 1024\n  max_cpu_percent: 150\n  sustain_seconds: 12\n  cooldown_seconds: 60\n  workspace_overrides:\n    - cwd_prefix: /work/app\n      mode: prompt\n      max_rss_mb: 4096\n      max_cpu_percent: 200\n      sustain_seconds: 30\n      cooldown_seconds: 300\n"
+	if err := os.WriteFile(cfgPath, []byte(src), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, 5*time.Second, func() bool {
+		policy := controller.Snapshot().Control
+		return policy != nil && len(policy.WorkspaceOverrides) == 1 &&
+			policy.WorkspaceOverrides[0].CwdPrefix == "/work/app" &&
+			policy.WorkspaceOverrides[0].Mode == resource.ModePrompt
+	})
 }
 
 // The fleet fingerprint must distinguish every fleet-relevant field — a

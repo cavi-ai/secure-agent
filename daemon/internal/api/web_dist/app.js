@@ -37,6 +37,11 @@ document.addEventListener('DOMContentLoaded', () => {
   const reportModal = document.getElementById('report-modal');
   const btnCloseModal = document.getElementById('btn-close-modal');
   const btnCopyReport = document.getElementById('btn-copy-report');
+  const resourcePolicyModal = document.getElementById('resource-policy-modal');
+  const resourcePolicyBody = document.getElementById('resource-policy-body');
+  const btnCloseResourcePolicy = document.getElementById('btn-close-resource-policy');
+  const btnCancelResourcePolicy = document.getElementById('btn-cancel-resource-policy');
+  const btnSaveResourcePolicy = document.getElementById('btn-save-resource-policy');
 
   let currentRawMarkdown = '';
 
@@ -67,6 +72,9 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     });
   }
+
+  if (btnCloseResourcePolicy && resourcePolicyModal) btnCloseResourcePolicy.addEventListener('click', () => resourcePolicyModal.close());
+  if (btnCancelResourcePolicy && resourcePolicyModal) btnCancelResourcePolicy.addEventListener('click', () => resourcePolicyModal.close());
 
   let telemetryData = {
     status: null,
@@ -760,6 +768,116 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   };
 
+  let resourcePolicyDraft = null;
+
+  function resourcePolicyFromSnapshot(policy) {
+    return {
+      cwd_prefix: policy.cwd_prefix || '',
+      mode: policy.mode || 'observe',
+      max_rss_mb: Math.round(Number(policy.max_rss_bytes || 0) / (1024 * 1024)),
+      max_cpu_percent: Number(policy.max_cpu_percent || 0),
+      sustain_seconds: Number(policy.sustain_seconds || 0),
+      cooldown_seconds: Number(policy.cooldown_seconds || 0)
+    };
+  }
+
+  function resourcePolicyFields(policy, index, isDefault) {
+    const selected = (mode) => policy.mode === mode ? ' selected' : '';
+    return `<div class="resource-policy-editor-row${isDefault ? ' default' : ''}" data-policy-row data-policy-index="${index}" data-policy-default="${isDefault ? 'true' : 'false'}">
+      ${isDefault ? '' : `<label class="resource-policy-field resource-policy-path">Workspace path<input class="input" data-policy-field="cwd_prefix" value="${escapeHTML(policy.cwd_prefix || '')}" placeholder="Absolute project path" spellcheck="false"></label>`}
+      <label class="resource-policy-field">Action<select class="select" data-policy-field="mode"><option value="observe"${selected('observe')}>Observe</option><option value="prompt"${selected('prompt')}>Ask first</option><option value="terminate"${selected('terminate')}>Terminate</option></select></label>
+      <label class="resource-policy-field">Memory (MiB)<input class="input" type="number" min="0" step="1" data-policy-field="max_rss_mb" value="${Number(policy.max_rss_mb || 0)}"></label>
+      <label class="resource-policy-field">CPU (%)<input class="input" type="number" min="0" step="1" data-policy-field="max_cpu_percent" value="${Number(policy.max_cpu_percent || 0)}"></label>
+      <label class="resource-policy-field">Grace (sec)<input class="input" type="number" min="0" step="1" data-policy-field="sustain_seconds" value="${Number(policy.sustain_seconds || 0)}"></label>
+      <label class="resource-policy-field">Cooldown (sec)<input class="input" type="number" min="0" step="1" data-policy-field="cooldown_seconds" value="${Number(policy.cooldown_seconds || 0)}"></label>
+      ${isDefault ? '' : `<button type="button" class="btn btn-ghost btn-sm" data-action="remove-resource-override" data-index="${index}">Remove</button>`}
+    </div>`;
+  }
+
+  function renderResourcePolicyEditor() {
+    if (!resourcePolicyBody || !resourcePolicyDraft) return;
+    resourcePolicyBody.innerHTML = `<p class="resource-policy-intro">Set machine-wide budgets, then add complete policies for specific workspace trees. The most specific matching path wins.</p>
+      <section class="resource-policy-section"><div class="resource-policy-section-head"><h4>Machine default</h4></div>${resourcePolicyFields(resourcePolicyDraft.default, -1, true)}</section>
+      <section class="resource-policy-section"><div class="resource-policy-section-head"><h4>Workspace overrides</h4><span><button type="button" class="btn btn-ghost btn-sm" data-action="add-resource-override" data-source="current">Add current workspace</button><button type="button" class="btn btn-ghost btn-sm" data-action="add-resource-override" data-source="manual">Add path</button></span></div>
+      <div id="resource-policy-overrides">${resourcePolicyDraft.overrides.map((p, i) => resourcePolicyFields(p, i, false)).join('') || '<div class="resource-detail-empty">No workspace overrides. Every session uses the machine default.</div>'}</div></section>
+      <p class="resource-policy-danger">Terminate mode automatically contains the full attributed session after the grace period.</p>`;
+  }
+
+  function readResourcePolicyEditor() {
+    if (!resourcePolicyBody || !resourcePolicyDraft) return resourcePolicyDraft;
+    const read = (row) => {
+      const value = (name) => row.querySelector(`[data-policy-field="${name}"]`)?.value || '';
+      return {
+        ...(row.dataset.policyDefault === 'true' ? {} : { cwd_prefix: value('cwd_prefix').trim() }),
+        mode: value('mode'), max_rss_mb: Number(value('max_rss_mb')),
+        max_cpu_percent: Number(value('max_cpu_percent')), sustain_seconds: Number(value('sustain_seconds')),
+        cooldown_seconds: Number(value('cooldown_seconds'))
+      };
+    };
+    const rows = Array.from(resourcePolicyBody.querySelectorAll('[data-policy-row]'));
+    return { default: read(rows[0]), overrides: rows.slice(1).map(read) };
+  }
+
+  window.openResourcePolicyEditor = function() {
+    const control = (telemetryData.resources && telemetryData.resources.control) || {};
+    resourcePolicyDraft = {
+      default: resourcePolicyFromSnapshot(control),
+      overrides: (control.workspace_overrides || []).map(resourcePolicyFromSnapshot)
+    };
+    renderResourcePolicyEditor();
+    if (resourcePolicyModal && !resourcePolicyModal.open) resourcePolicyModal.showModal();
+  };
+
+  window.addResourceOverride = function(source) {
+    resourcePolicyDraft = readResourcePolicyEditor();
+    const selected = (telemetryData.resources?.sessions || []).find(s => s.key === selectedResourceKey);
+    const path = source === 'current' && selected ? (selected.workspace || '') : '';
+    if (source === 'current' && !path) {
+      showToast('Select a session with a workspace first.', 'info');
+      return;
+    }
+    if (path && resourcePolicyDraft.overrides.some(p => p.cwd_prefix === path)) {
+      showToast('That workspace already has an override.', 'info');
+      return;
+    }
+    resourcePolicyDraft.overrides.push({ ...resourcePolicyDraft.default, cwd_prefix: path });
+    renderResourcePolicyEditor();
+    const paths = resourcePolicyBody.querySelectorAll('[data-policy-field="cwd_prefix"]');
+    if (paths.length) paths[paths.length - 1].focus();
+  };
+
+  window.removeResourceOverride = function(index) {
+    resourcePolicyDraft = readResourcePolicyEditor();
+    resourcePolicyDraft.overrides.splice(Number(index), 1);
+    renderResourcePolicyEditor();
+  };
+
+  async function saveResourcePolicy() {
+    const draft = readResourcePolicyEditor();
+    if (!draft) return;
+    const invalid = draft.overrides.find(p => !p.cwd_prefix.startsWith('/'));
+    if (invalid) {
+      showToast('Workspace paths must be absolute.', 'danger');
+      return;
+    }
+    const body = { ...draft.default, workspace_overrides: draft.overrides };
+    if ([body, ...body.workspace_overrides].some(p => p.mode === 'terminate') &&
+        !confirm('Terminate mode will automatically stop an entire agent session after its grace period. Save this policy?')) return;
+    if (btnSaveResourcePolicy) btnSaveResourcePolicy.disabled = true;
+    try {
+      const res = await apiFetch('/resources/policy', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      if (!res.ok) throw new Error((await res.text()).trim() || 'save failed');
+      resourcePolicyModal.close();
+      showToast('Resource policy saved and applied.', 'success');
+      fetchTelemetry({ slow: true });
+    } catch (err) {
+      showToast(`Resource policy save failed: ${err.message || err}`, 'danger');
+    } finally {
+      if (btnSaveResourcePolicy) btnSaveResourcePolicy.disabled = false;
+    }
+  }
+  if (btnSaveResourcePolicy) btnSaveResourcePolicy.addEventListener('click', saveResourcePolicy);
+
   window.killOrphans = async function(family) {
     const agents = (telemetryData.status && telemetryData.status.agents) ? telemetryData.status.agents : [];
     const orphans = agents.filter(a => a.name === family && a.is_orphan);
@@ -987,6 +1105,15 @@ document.addEventListener('DOMContentLoaded', () => {
         e.preventDefault();
         e.stopPropagation();
         window.resolveResourceControl(d.id, d.decision);
+        break;
+      case 'edit-resource-policy':
+        window.openResourcePolicyEditor();
+        break;
+      case 'add-resource-override':
+        window.addResourceOverride(d.source);
+        break;
+      case 'remove-resource-override':
+        window.removeResourceOverride(d.index);
         break;
       case 'allow-host':
         window.allowHost(d.agent, d.host);

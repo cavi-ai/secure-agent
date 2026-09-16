@@ -85,6 +85,7 @@ func (p *ProcProcSource) Info(pid int32) (ProcInfo, bool) {
 	}
 	ppid, comm, start, cpu := parseProcStat(string(raw), boot, hz)
 	exe, _ := os.Readlink(filepath.Join("/proc", strconv.Itoa(int(pid)), "exe"))
+	cwd, _ := os.Readlink(filepath.Join("/proc", strconv.Itoa(int(pid)), "cwd"))
 	if comm == "" && exe == "" {
 		return ProcInfo{}, false
 	}
@@ -96,6 +97,7 @@ func (p *ProcProcSource) Info(pid int32) (ProcInfo, bool) {
 		StartTime: start,
 		RSSBytes:  readRSS(pid),
 		CPUTime:   cpu,
+		CWD:       cwd,
 	}, true
 }
 

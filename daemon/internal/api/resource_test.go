@@ -2,13 +2,17 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/cavi-ai/secure-agent/daemon/internal/config"
 	"github.com/cavi-ai/secure-agent/daemon/internal/resource"
 )
 
@@ -50,6 +54,120 @@ func TestResourcesEndpoint(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("snapshot mismatch\ngot:  %#v\nwant: %#v", got, want)
+	}
+}
+
+func TestResourcePolicyEndpointPersistsBeforeApply(t *testing.T) {
+	st := testStore(t)
+	a := New("", st, nil, func() Status { return Status{Running: true} })
+	control := resource.NewController(resource.Policy{Mode: resource.ModeObserve, MaxRSSBytes: 100}, nil)
+	a.SetResourceControl(control)
+	var persisted config.ResourceControlConfig
+	a.SetResourcePolicyUpdater(func(next config.ResourceControlConfig) error {
+		persisted = next
+		control.SetPolicySet(testResourcePolicySet(next))
+		return nil
+	})
+	body := strings.NewReader(`{"mode":"prompt","max_rss_mb":2048,"max_cpu_percent":150,"sustain_seconds":30,"cooldown_seconds":300,"workspace_overrides":[{"cwd_prefix":"/work/app","mode":"terminate","max_rss_mb":4096,"max_cpu_percent":200,"sustain_seconds":60,"cooldown_seconds":600}]}`)
+	response := httptest.NewRecorder()
+	a.buildMux().ServeHTTP(response, httptest.NewRequest(http.MethodPut, "/resources/policy", body))
+	if response.Code != http.StatusOK {
+		t.Fatalf("code=%d body=%s", response.Code, response.Body.String())
+	}
+	if persisted.Mode != "prompt" || len(persisted.WorkspaceOverrides) != 1 {
+		t.Fatalf("persisted=%+v", persisted)
+	}
+	if got := control.Snapshot().Control; got.Mode != resource.ModePrompt || len(got.WorkspaceOverrides) != 1 {
+		t.Fatalf("active=%+v", got)
+	}
+	if audits := st.RecentAudit(5); len(audits) != 1 || audits[0].Action != "resource-policy-update" {
+		t.Fatalf("audit=%+v", audits)
+	}
+}
+
+func testResourcePolicySet(c config.ResourceControlConfig) resource.PolicySet {
+	set := resource.PolicySet{Default: resource.Policy{Mode: resource.ControlMode(c.Mode), MaxRSSBytes: c.MaxRSSMB * 1024 * 1024,
+		MaxCPUPercent: c.MaxCPUPercent, Sustain: time.Duration(c.SustainSeconds) * time.Second, Cooldown: time.Duration(c.CooldownSeconds) * time.Second}}
+	for _, override := range c.WorkspaceOverrides {
+		set.WorkspaceOverrides = append(set.WorkspaceOverrides, resource.WorkspacePolicy{Path: override.CwdPrefix, Policy: resource.Policy{
+			Mode: resource.ControlMode(override.Mode), MaxRSSBytes: override.MaxRSSMB * 1024 * 1024,
+			MaxCPUPercent: override.MaxCPUPercent, Sustain: time.Duration(override.SustainSeconds) * time.Second,
+			Cooldown: time.Duration(override.CooldownSeconds) * time.Second,
+		}})
+	}
+	return set
+}
+
+func TestResourcePolicyEndpointLeavesActivePolicyOnWriteFailure(t *testing.T) {
+	a := New("", testStore(t), nil, func() Status { return Status{Running: true} })
+	control := resource.NewController(resource.Policy{Mode: resource.ModeObserve, MaxRSSBytes: 100}, nil)
+	a.SetResourceControl(control)
+	a.SetResourcePolicyUpdater(func(config.ResourceControlConfig) error { return fmt.Errorf("disk full") })
+	response := httptest.NewRecorder()
+	body := strings.NewReader(`{"mode":"terminate","max_rss_mb":2048,"sustain_seconds":30,"cooldown_seconds":300}`)
+	a.buildMux().ServeHTTP(response, httptest.NewRequest(http.MethodPut, "/resources/policy", body))
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("code=%d body=%s", response.Code, response.Body.String())
+	}
+	if got := control.Snapshot().Control.Mode; got != resource.ModeObserve {
+		t.Fatalf("active mode=%q want observe", got)
+	}
+}
+
+func TestResourcePolicyEndpointAuditsRejectedUpdates(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "invalid payload", body: `{ "unknown": true }`},
+		{name: "trailing payload", body: `{ "mode": "observe" } {}`},
+		{name: "validation failure", body: `{ "mode": "destroy" }`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			st := testStore(t)
+			a := New("", st, nil, func() Status { return Status{Running: true} })
+			a.SetResourcePolicyUpdater(func(config.ResourceControlConfig) error { return nil })
+			response := httptest.NewRecorder()
+			a.buildMux().ServeHTTP(response, httptest.NewRequest(http.MethodPut, "/resources/policy", strings.NewReader(tt.body)))
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf("code=%d body=%s", response.Code, response.Body.String())
+			}
+			audits := st.RecentAudit(5)
+			if len(audits) != 1 || audits[0].Action != "resource-policy-update-rejected" {
+				t.Fatalf("audit=%+v", audits)
+			}
+		})
+	}
+}
+
+func TestResourcePolicyEndpointSerializesPersistAndApply(t *testing.T) {
+	a := New("", testStore(t), nil, func() Status { return Status{Running: true} })
+	var active, overlap atomic.Int32
+	a.SetResourcePolicyUpdater(func(config.ResourceControlConfig) error {
+		if active.Add(1) != 1 {
+			overlap.Store(1)
+		}
+		time.Sleep(10 * time.Millisecond)
+		active.Add(-1)
+		return nil
+	})
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			body := strings.NewReader(`{"mode":"observe","max_rss_mb":1024,"sustain_seconds":30,"cooldown_seconds":300}`)
+			response := httptest.NewRecorder()
+			a.buildMux().ServeHTTP(response, httptest.NewRequest(http.MethodPut, "/resources/policy", body))
+			if response.Code != http.StatusOK {
+				t.Errorf("code=%d body=%s", response.Code, response.Body.String())
+			}
+		}()
+	}
+	wg.Wait()
+	if overlap.Load() != 0 {
+		t.Fatal("resource policy updates overlapped persistence and application")
 	}
 }
 

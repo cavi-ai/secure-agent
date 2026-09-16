@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -98,12 +100,14 @@ type Status struct {
 type StatusFunc func() Status
 
 type API struct {
-	socketPath      string
-	store           *store.Store
-	killer          Killer
-	statusFn        StatusFunc
-	resources       func() resource.Snapshot
-	resourceControl *resource.Controller
+	socketPath       string
+	store            *store.Store
+	killer           Killer
+	statusFn         StatusFunc
+	resources        func() resource.Snapshot
+	resourceControl  *resource.Controller
+	resourcePolicy   func(config.ResourceControlConfig) error
+	resourcePolicyMu sync.Mutex
 
 	fwEngine      *firewall.Engine
 	fwModes       *firewall.ModeStore
@@ -150,6 +154,9 @@ func (a *API) SetBusDrops(fn func() uint64) { a.busDrops = fn }
 
 func (a *API) SetResources(fn func() resource.Snapshot)        { a.resources = fn }
 func (a *API) SetResourceControl(control *resource.Controller) { a.resourceControl = control }
+func (a *API) SetResourcePolicyUpdater(fn func(config.ResourceControlConfig) error) {
+	a.resourcePolicy = fn
+}
 
 // FirewallControl bundles the runtime firewall controls the API exposes.
 type FirewallControl struct {
@@ -357,6 +364,7 @@ func (a *API) buildMux() *http.ServeMux {
 	mux.HandleFunc("/status", a.handleStatus)
 	mux.HandleFunc("/resources", a.handleResources)
 	mux.HandleFunc("/resources/control", a.handleResourceControl)
+	mux.HandleFunc("/resources/policy", a.handleResourcePolicy)
 	mux.HandleFunc("/snapshot", a.handleSnapshot)
 	mux.HandleFunc("/posture", a.handlePosture)
 	mux.HandleFunc("/flags", a.handleFlags)
@@ -487,6 +495,50 @@ func (a *API) handleResourceControl(w http.ResponseWriter, r *http.Request) {
 	}
 	a.store.PutAudit(store.AuditEntry{Action: "resource-control", Rule: req.ID, ToMode: req.Decision})
 	writeJSON(w, map[string]string{"status": "ok", "id": req.ID, "decision": req.Decision})
+}
+
+func (a *API) handleResourcePolicy(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPut {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if a.resourcePolicy == nil {
+		http.Error(w, "resource policy editing not enabled", http.StatusServiceUnavailable)
+		return
+	}
+	limitBody(w, r)
+	reject := func(detail string) {
+		a.store.PutAudit(store.AuditEntry{Action: "resource-policy-update-rejected", Detail: detail})
+	}
+	var next config.ResourceControlConfig
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&next); err != nil {
+		reject("invalid payload")
+		http.Error(w, "Invalid payload", http.StatusBadRequest)
+		return
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		reject("trailing payload")
+		http.Error(w, "Invalid payload", http.StatusBadRequest)
+		return
+	}
+	if err := config.ValidateResourceControl(next); err != nil {
+		reject("validation failed: " + err.Error())
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	a.resourcePolicyMu.Lock()
+	defer a.resourcePolicyMu.Unlock()
+	if err := a.resourcePolicy(next); err != nil {
+		a.store.PutAudit(store.AuditEntry{Action: "resource-policy-update-failed", ToMode: next.Mode,
+			Detail: fmt.Sprintf("workspace_overrides=%d error=%v", len(next.WorkspaceOverrides), err)})
+		http.Error(w, "resource policy was not saved", http.StatusInternalServerError)
+		return
+	}
+	a.store.PutAudit(store.AuditEntry{Action: "resource-policy-update", ToMode: next.Mode,
+		Detail: fmt.Sprintf("workspace_overrides=%d", len(next.WorkspaceOverrides))})
+	writeJSON(w, map[string]string{"status": "ok"})
 }
 
 func (a *API) currentStatus() Status {

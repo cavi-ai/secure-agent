@@ -64,11 +64,10 @@ func main() {
 	configPathUsed := *configPath
 	if configPathUsed == "" {
 		if home, err := os.UserHomeDir(); err == nil {
-			if _, err := os.Stat(filepath.Join(home, ".config", "secure-agent", "config.yaml")); err == nil {
-				configPathUsed = filepath.Join(home, ".config", "secure-agent", "config.yaml")
-			}
+			configPathUsed = filepath.Join(home, ".config", "secure-agent", "config.yaml")
 		}
 	}
+	configPathUsed = config.ExpandPath(configPathUsed)
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		log.Fatalf("failed to load config: %v", err)
@@ -93,6 +92,7 @@ func main() {
 	tagger.Refresh()
 	resourceTracker := resource.NewTracker()
 	resourceControl := resource.NewController(resourcePolicy(cfg.ResourceControl), nil)
+	resourceControl.SetPolicySet(resourcePolicySet(cfg.ResourceControl))
 	resourceNow := time.Now()
 	observeResources(resourceTracker, tagger, st, resourceNow)
 	resourceControl.Observe(resourceTracker.Snapshot(), resourceNow)
@@ -197,6 +197,15 @@ func main() {
 	apiServer.SetBusDrops(b.Dropped)
 	apiServer.SetResources(resourceControl.Snapshot)
 	apiServer.SetResourceControl(resourceControl)
+	if configPathUsed != "" {
+		apiServer.SetResourcePolicyUpdater(func(next config.ResourceControlConfig) error {
+			if err := config.WriteResourceControl(configPathUsed, next); err != nil {
+				return err
+			}
+			resourceControl.SetPolicySet(resourcePolicySet(next))
+			return nil
+		})
+	}
 	resourceControl.SetTerminator(func(action resource.ControlAction) error {
 		killed, err := apiServer.TerminateAgentTree(action.TargetPID, action.TargetStartedAt.Format(time.RFC3339Nano))
 		detail := fmt.Sprintf("session=%s root_pid=%d processes=%d", action.SessionKey, action.RootPID, len(killed))

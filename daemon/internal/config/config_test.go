@@ -261,17 +261,73 @@ func TestLoadStrictReportsMalformedOverlay(t *testing.T) {
 
 func TestResourceControlConfigAndValidation(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
-	os.WriteFile(path, []byte("resource_control:\n  mode: prompt\n  max_rss_mb: 4096\n  max_cpu_percent: 175\n  sustain_seconds: 45\n  cooldown_seconds: 600\n"), 0o600)
+	os.WriteFile(path, []byte("resource_control:\n  mode: prompt\n  max_rss_mb: 4096\n  max_cpu_percent: 175\n  sustain_seconds: 45\n  cooldown_seconds: 600\n  workspace_overrides:\n    - cwd_prefix: /work/critical\n      mode: terminate\n      max_rss_mb: 8192\n      max_cpu_percent: 250\n      sustain_seconds: 60\n      cooldown_seconds: 900\n"), 0o600)
 	cfg, err := Load(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if cfg.ResourceControl.Mode != "prompt" || cfg.ResourceControl.MaxRSSMB != 4096 ||
-		cfg.ResourceControl.MaxCPUPercent != 175 || cfg.ResourceControl.SustainSeconds != 45 {
+		cfg.ResourceControl.MaxCPUPercent != 175 || cfg.ResourceControl.SustainSeconds != 45 ||
+		len(cfg.ResourceControl.WorkspaceOverrides) != 1 || cfg.ResourceControl.WorkspaceOverrides[0].CwdPrefix != "/work/critical" {
 		t.Fatalf("resource control=%+v", cfg.ResourceControl)
 	}
 	os.WriteFile(path, []byte("resource_control:\n  mode: destroy\n"), 0o600)
 	if _, err := Load(path); err == nil {
 		t.Fatal("invalid resource control mode accepted")
+	}
+}
+
+func TestWriteResourceControlPreservesUnrelatedYAML(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	original := "# keep this comment\nproxy_enabled: true\nresource_control:\n  mode: observe\n"
+	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	next := ResourceControlConfig{Mode: "prompt", MaxRSSMB: 2048, MaxCPUPercent: 150,
+		SustainSeconds: 30, CooldownSeconds: 300, WorkspaceOverrides: []ResourceControlOverride{{
+			CwdPrefix: "/work/app", Mode: "terminate", MaxRSSMB: 4096, MaxCPUPercent: 200,
+			SustainSeconds: 60, CooldownSeconds: 600,
+		}}}
+	if err := WriteResourceControl(path, next); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	if !strings.Contains(text, "# keep this comment") || !strings.Contains(text, "proxy_enabled: true") {
+		t.Fatalf("unrelated YAML was not preserved:\n%s", text)
+	}
+	loaded, err := LoadStrict(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.ResourceControl.Mode != "prompt" || len(loaded.ResourceControl.WorkspaceOverrides) != 1 {
+		t.Fatalf("resource control=%+v", loaded.ResourceControl)
+	}
+}
+
+func TestResourceControlRejectsUnsafeWorkspaceOverrides(t *testing.T) {
+	cfg, err := Load(filepath.Join(t.TempDir(), "missing.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.ResourceControl.WorkspaceOverrides = []ResourceControlOverride{
+		{CwdPrefix: "relative/path", Mode: "observe"},
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("relative workspace prefix accepted")
+	}
+}
+
+func TestResourceControlRejectsValuesThatOverflowRuntimeUnits(t *testing.T) {
+	cfg, err := Load(filepath.Join(t.TempDir(), "missing.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.ResourceControl.MaxRSSMB = ^uint64(0)
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("RSS value that overflows byte conversion was accepted")
 	}
 }

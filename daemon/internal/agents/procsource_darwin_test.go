@@ -5,6 +5,7 @@ package agents
 import (
 	"bytes"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 	"unsafe"
@@ -73,5 +74,11 @@ func TestSelfStartTimeAndRSS(t *testing.T) {
 	}
 	if info.RSSBytes == 0 {
 		t.Log("RSSBytes is 0 (proc_info may be restricted); start time still required")
+	}
+	if info.CWD == "" {
+		t.Fatal("CWD is empty")
+	}
+	if !filepath.IsAbs(info.CWD) {
+		t.Fatalf("CWD is not absolute: %q", info.CWD)
 	}
 }
