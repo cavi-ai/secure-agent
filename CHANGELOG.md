@@ -6,6 +6,10 @@ All notable changes to `secure-agent` are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Firewall rules can be demoted back to monitor from the console (block was a one-way ratchet in the UI).
+- `GET /allowlist` lists user-approved endpoints; `DELETE /allowlist` removes one. The console renders them with working Remove buttons.
+
 ### Fixed
 - List endpoints (`/events`, `/flags`, `/incidents`, `/audit`, `/stats/rollup`) returned `null` instead of `[]` when empty — crashed strict clients (process transcript sheet).
 - Daemon shutdown during instance overlap could unlink the successor's live unix socket (running but unreachable).
