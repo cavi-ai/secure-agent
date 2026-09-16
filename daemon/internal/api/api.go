@@ -404,9 +404,20 @@ func (a *API) Serve(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to listen on unix socket: %w", err)
 	}
+	// Remove the socket file on exit ONLY if it is still the file we created.
+	// When two daemons overlap (old instance exiting while the new one binds),
+	// the old one's cleanup must not unlink the new daemon's live socket —
+	// that leaves a healthy daemon unreachable on an unlinked path (the
+	// "daemon running, popover says Disconnected" race).
+	created, statErr := os.Stat(a.socketPath)
 	defer func() {
 		listener.Close()
-		_ = os.Remove(a.socketPath)
+		if statErr != nil {
+			return
+		}
+		if now, err := os.Stat(a.socketPath); err == nil && os.SameFile(created, now) {
+			_ = os.Remove(a.socketPath)
+		}
 	}()
 
 	_ = os.Chmod(a.socketPath, 0o600)

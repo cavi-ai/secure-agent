@@ -558,7 +558,7 @@ func (s *Store) QueryFlags(f FlagFilter) []model.Flag {
 	}
 	defer rows.Close()
 
-	var flags []model.Flag
+	flags := []model.Flag{}
 	for rows.Next() {
 		var fl model.Flag
 		var tsStr, evStr string
@@ -630,7 +630,7 @@ func (s *Store) RollupRange(since time.Time) []RollupPoint {
 		return nil
 	}
 	defer rows.Close()
-	var out []RollupPoint
+	out := []RollupPoint{}
 	for rows.Next() {
 		var p RollupPoint
 		if err := rows.Scan(&p.Bucket, &p.Kind, &p.Count); err == nil {
@@ -754,7 +754,7 @@ func (s *Store) QueryEvents(f EventFilter) []event.Event {
 	}
 	defer rows.Close()
 
-	var events []event.Event
+	events := []event.Event{}
 	for rows.Next() {
 		var e event.Event
 		var kindInt int
@@ -841,7 +841,7 @@ func (s *Store) RecentIncidents(limit int) []model.IncidentReport {
 	}
 	defer rows.Close()
 
-	var list []model.IncidentReport
+	list := []model.IncidentReport{}
 	for rows.Next() {
 		var reportJSON string
 		if err := rows.Scan(&reportJSON); err == nil {
@@ -877,7 +877,7 @@ func (s *Store) CriticalFlagsMissingAdvisor(since time.Time, limit int) []model.
 		return nil
 	}
 	defer rows.Close()
-	var flags []model.Flag
+	flags := []model.Flag{}
 	for rows.Next() {
 		var fl model.Flag
 		var tsStr, evStr string
@@ -963,7 +963,7 @@ func (s *Store) RecentAudit(limit int) []AuditEntry {
 	}
 	defer rows.Close()
 
-	var out []AuditEntry
+	out := []AuditEntry{}
 	for rows.Next() {
 		var a AuditEntry
 		if err := rows.Scan(&a.ID, &a.TS, &a.Action, &a.Rule, &a.FromMode, &a.ToMode, &a.Detail); err == nil {
