@@ -755,3 +755,6 @@ button.fw-uninspected .fw-drill-hint {
   100% { background: var(--bg-2); border-color: var(--line); }
 }
 .fw-rule.fw-flash { animation: fw-row-flash 1.6s var(--ease) both; }
+
+.infra-group { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 8px; }
+.infra-group summary { color: var(--tx-3); font-size: 12px; cursor: pointer; }
