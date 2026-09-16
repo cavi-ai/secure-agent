@@ -183,6 +183,49 @@ public final class SetupManager: ObservableObject {
         case managed, existing
     }
 
+    // MARK: - Inspection proxy (web console)
+
+    /// Flip proxy_enabled in config.yaml. Line-based and deliberately narrow,
+    /// same contract as the advisor helpers: rewrite the TOP-LEVEL key when
+    /// present (never an indented or commented lookalike), append it
+    /// otherwise, preserve every other byte of the user's file.
+    public nonisolated static func proxyEnabledUpdating(_ yaml: String, enabled: Bool) -> String {
+        let value = enabled ? "true" : "false"
+        let lines = yaml.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        var out = lines
+        var replaced = false
+        for i in lines.indices {
+            let line = lines[i]
+            guard !line.hasPrefix(" "), !line.hasPrefix("\t"), !line.hasPrefix("#") else { continue }
+            if line.trimmingCharacters(in: .whitespaces).hasPrefix("proxy_enabled:") {
+                out[i] = "proxy_enabled: \(value)"
+                replaced = true
+            }
+        }
+        if replaced { return out.joined(separator: "\n") }
+        var base = yaml
+        if !base.isEmpty && !base.hasSuffix("\n") { base += "\n" }
+        return base + """
+        # Loopback inspection proxy (127.0.0.1): serves the web console and
+        # inspects agent egress for secret leaks / prompt injection.
+        proxy_enabled: \(value)
+
+        """
+    }
+
+    /// Write proxy_enabled; the daemon starts the proxy at boot only, so the
+    /// caller is responsible for bouncing the daemon afterwards.
+    public func setProxyEnabled(_ enabled: Bool) {
+        do {
+            let updated = Self.proxyEnabledUpdating(configYAML(), enabled: enabled)
+            let dir = (configPath as NSString).deletingLastPathComponent
+            try fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
+            try updated.write(toFile: configPath, atomically: true, encoding: .utf8)
+        } catch {
+            report(error)
+        }
+    }
+
     /// Write the full advisor block for one of the two first-class paths:
     /// managed (daemon spawns the model server; no endpoint in the file) or
     /// existing (loopback endpoint + model from the discovery dropdowns).
@@ -305,7 +348,6 @@ public final class SetupManager: ObservableObject {
     /// defaulting to managed-every-launch.
     public nonisolated static func advisorConfig(_ yaml: String) -> (mode: String?, endpoint: String?, model: String?) {
         var inAdvisor = false
-        var mode: String?
         var endpoint: String?
         var model: String?
         var managed: Bool?

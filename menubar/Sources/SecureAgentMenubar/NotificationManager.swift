@@ -81,6 +81,42 @@ public final class NotificationManager: NSObject, @unchecked Sendable {
         }
     }
 
+    /// Notification Center must track live posture, not accumulate grey
+    /// history: banners whose flag the operator already acted on (dismissed
+    /// in either UI, muted, or retro-acknowledged daemon-side — all converge
+    /// to `acknowledged`) are withdrawn, and anything older than maxAge is
+    /// pruned. Called on every poll so the Center can never pile up handled
+    /// alerts again.
+    public func reconcileDeliveredNotifications(acknowledgedIDs: Set<String>,
+                                                maxAge: TimeInterval = 7 * 24 * 3600) {
+        // getDeliveredNotifications needs a real app bundle proxy — it throws
+        // NSInternalInconsistencyException in the xctest host, where Bundle
+        // lookups otherwise succeed (bundleURL ends in usr/bin, not .app).
+        // Skip the whole path when we're not inside a real .app bundle.
+        guard isSupported, Bundle.main.bundleURL.pathExtension == "app" else { return }
+        UNUserNotificationCenter.current().getDeliveredNotifications { notes in
+            let pairs = notes.map { (id: $0.request.identifier, date: $0.date) }
+            let remove = Self.identifiersToRemove(delivered: pairs, acknowledgedIDs: acknowledgedIDs,
+                                                  maxAge: maxAge, now: Date())
+            if !remove.isEmpty {
+                UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: remove)
+            }
+        }
+    }
+
+    /// Pure decision, unit-testable: which delivered identifiers leave the
+    /// Center. A banner leaves when its flag is acknowledged (acted on — the
+    /// whole point of dismissing) or when it's simply too old to be posture.
+    static func identifiersToRemove(delivered: [(id: String, date: Date)],
+                                    acknowledgedIDs: Set<String>,
+                                    maxAge: TimeInterval, now: Date) -> [String] {
+        delivered.compactMap { item in
+            if acknowledgedIDs.contains(item.id) { return item.id }
+            if now.timeIntervalSince(item.date) > maxAge { return item.id }
+            return nil
+        }
+    }
+
     /// Weekly digest banner: the scheduled proof the app is working. Plain
     /// counts only — no posture detail on a lock screen.
     public func sendWeeklyDigest(_ summary: String) {

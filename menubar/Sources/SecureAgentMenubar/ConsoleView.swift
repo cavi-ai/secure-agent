@@ -203,7 +203,8 @@ struct ConsoleView: View {
         .animation(.easeInOut(duration: 0.25), value: m.title)
     }
 
-    private var heroModel: (icon: String, color: Color, title: String, subtitle: String, actionTarget: FlagModel?) {
+    // Internal (not private) so the hero regression tests can drive it.
+    var heroModel: (icon: String, color: Color, title: String, subtitle: String, actionTarget: FlagModel?) {
         if state.isPaused {
             return ("pause.circle.fill", .secondary, "Paused",
                     "Alerts silenced — agents still run, decisions still prompt", nil)
@@ -214,7 +215,6 @@ struct ConsoleView: View {
         }
         let criticalFlags = state.flags.filter { $0.severity >= 3 && $0.acknowledged != true }.count
         if !state.incidents.isEmpty || criticalFlags > 0 {
-            var parts: [String] = []
             // Prose-first: name what happened + what to do, not counts.
             // The top critical flag (advisor-ordered when triaged) IS the
             // action; the hero subtitle says it in one sentence.
@@ -255,7 +255,10 @@ struct ConsoleView: View {
             return ("exclamationmark.shield.fill", .bad, "Action needed",
                     "Review the flagged activity.", nil)
         }
-        let warnFlags = state.flags.filter { $0.severity >= 2 }.count
+        // Unacted only: a flag the operator already reviewed/dismissed must
+        // not keep demanding attention in the hero (the "20 flags to review"
+        // that were all long-handled). Same filter as the attention section.
+        let warnFlags = state.unactedFlags.count
         if warnFlags > 0 || state.uninspectedEgress > 0 || state.firewallWouldBlock > 0 {
             var parts: [String] = []
             if warnFlags > 0 { parts.append("\(warnFlags) flag\(warnFlags == 1 ? "" : "s") to review") }
@@ -758,6 +761,26 @@ struct ConsoleView: View {
     }
 
     @State private var selectedFlag: FlagModel?
+    @State private var confirmEnableConsole = false
+
+    /// "Open console" click: opens when the console is up; when it's off, the
+    /// button is the way OUT of the off state (confirmation → one-click
+    /// enable), not a dead greyed-out control with a tooltip.
+    private func openConsoleTapped() {
+        if state.dashboardUnavailableReason == nil {
+            state.openDashboard()
+        } else if state.connected {
+            confirmEnableConsole = true
+        }
+    }
+
+    private var consoleButtonHelp: String {
+        if !state.connected { return "The daemon is not running" }
+        if state.dashboardUnavailableReason != nil {
+            return "The console is off — click to turn it on"
+        }
+        return "Open the web console"
+    }
 
     /// Row language: human title, not the raw rule id.
     private static func flagRowTitle(_ rule: String) -> String {
@@ -794,12 +817,26 @@ struct ConsoleView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 8))
             }
             HStack(spacing: 8) {
-            Button { state.openDashboard() } label: {
-                Label("Open console", systemImage: "square.grid.2x2").font(.system(size: 12, weight: .semibold))
+            Button { openConsoleTapped() } label: {
+                if state.isEnablingConsole {
+                    Label("Enabling…", systemImage: "hourglass").font(.system(size: 12, weight: .semibold))
+                } else {
+                    Label("Open console", systemImage: "square.grid.2x2").font(.system(size: 12, weight: .semibold))
+                }
             }
             .buttonStyle(.borderedProminent).tint(.brand).controlSize(.regular)
-            .disabled(state.dashboardUnavailableReason != nil)
-            .help(state.dashboardUnavailableReason ?? "Open the web console")
+            .disabled(!state.connected || state.isEnablingConsole)
+            .help(consoleButtonHelp)
+            .confirmationDialog(
+                "Turn on the local console?",
+                isPresented: $confirmEnableConsole,
+                titleVisibility: .visible
+            ) {
+                Button("Turn on & open") { state.enableConsoleAndOpen() }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("The console is served by the loopback inspection proxy (127.0.0.1) — it also inspects agent egress for secret leaks, in monitor mode (nothing is blocked). Turning it on restarts the background monitor for a second.")
+            }
             Spacer()
             Button { SettingsWindowController.shared.show(state: state) } label: {
                 Image(systemName: "gearshape").font(.system(size: 13))

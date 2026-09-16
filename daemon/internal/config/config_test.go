@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -256,5 +257,44 @@ func TestLoadStrictReportsMalformedOverlay(t *testing.T) {
 	os.Remove(path)
 	if _, err := LoadStrict(path); err != nil {
 		t.Fatalf("missing overlay must not error: %v", err)
+	}
+}
+
+// Regression: a malformed overlay used to log a WARNING on EVERY load call —
+// the hot-reload watcher polls LoadStrict every 2s, so one bad config.yaml
+// produced ~1,600 log lines in under an hour (the "terminal full of errors"
+// complaint). The contract now: LoadStrict is silent (the watcher logs its
+// own guarded once-per-state line), and boot-time Load logs exactly one
+// warning per call.
+func TestMalformedOverlayLoggingContract(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(p, []byte("- this\n- is\n- a top-level sequence\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+
+	// The watcher's path: strict loads must NOT log at all.
+	if _, err := LoadStrict(p); !errors.Is(err, ErrOverlayMalformed) {
+		t.Fatalf("LoadStrict err = %v, want ErrOverlayMalformed", err)
+	}
+	if _, err := LoadStrict(p); err == nil {
+		t.Fatal("LoadStrict must keep failing while the file is malformed")
+	}
+	if buf.Len() != 0 {
+		t.Fatalf("LoadStrict must be silent (the watcher polls it every 2s), logged: %q", buf.String())
+	}
+
+	// The boot path: exactly one warning per call, and it must say WHY.
+	if _, err := Load(p); err != nil {
+		t.Fatalf("lenient Load must fall back to defaults, got %v", err)
+	}
+	if got := strings.Count(buf.String(), "WARNING: overlay problem"); got != 1 {
+		t.Fatalf("Load must log the malformed overlay exactly once, got %d warnings: %q", got, buf.String())
+	}
+	if !strings.Contains(buf.String(), "compiled-in defaults") {
+		t.Fatalf("boot warning must name the fallback behavior: %q", buf.String())
 	}
 }
