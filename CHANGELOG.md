@@ -6,6 +6,44 @@ All notable changes to `secure-agent` are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- **Hero "N flags to review" counted reviewed flags.** The popover hero's
+  Attention branch counted every severity≥2 flag in the fetch window —
+  including acknowledged ones — so it read "20 flags to review" over a list
+  the operator had fully dealt with. It now uses the same unacted filter as
+  the attention section (`unactedFlags`), and `heroModel` is pinned by
+  regression tests (reviewed flags never demand review; uninspected-egress
+  alone still earns Attention).
+- **"Open console" was a greyed-out dead end when the inspection proxy was
+  off.** The footer button is now the way OUT of the off state: it offers a
+  one-click "Turn on & open" flow — writes `proxy_enabled: true` into
+  config.yaml (narrow line-based edit, every other byte preserved), bounces
+  the daemon (waiting for the old one to release the socket so the new one
+  wins the bind race), waits for the port, and opens the console. The button
+  shows an "Enabling…" state and fails loudly if the port never comes up.
+- **Duplicate console tabs.** "Open console" now focuses an already-open
+  console tab in Safari or Chrome (AppleScript, with plain-open fallback for
+  other browsers and for Automation-consent denial) instead of spawning a
+  fresh dead-end tab on every click.
+- **Menubar build warnings cleared** (dead `try?`/`await`/variables,
+  optional-interpolation, implicit-strong-capture) — the package builds
+  warning-free.
+- **Notification Center no longer piles up handled alerts.** The menubar now
+  reconciles delivered banners on every poll: banners whose flag was acted
+  on (dismissed in either UI, muted, retro-acknowledged daemon-side — all
+  converge to `acknowledged`) are withdrawn, and anything older than 7 days
+  is pruned. Previously nothing ever withdrew a delivered notification, so
+  the Center accumulated greyed-out history for alerts the operator had
+  already dealt with. (The reconciliation path also skips
+  `getDeliveredNotifications` outside a real .app bundle — it throws in the
+  xctest host.)
+- **Malformed-overlay log storm.** A bad `config.yaml` logged a WARNING on
+  every load — and the hot-reload watcher loads every 2s, producing ~1,600
+  lines/hour (`cannot unmarshal !!seq into config.rawConfig`). The loader is
+  now silent; boot-time `Load` logs the warning exactly once, and the
+  watcher keeps its own once-per-state line. Regression test pins the
+  contract.
+
 ### Added
 - **One-command fleet enrollment (`secure-agent fleet enroll <collector-url>`).**
   Reads the node id from the running daemon, generates the webhook secret,

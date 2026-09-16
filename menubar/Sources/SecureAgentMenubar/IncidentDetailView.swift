@@ -44,7 +44,7 @@ struct IncidentDetailView: View {
             Divider()
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
-                    if let applied = appliedDisposition {
+                    if appliedDisposition != nil {
                         appliedBanner
                     }
                     if let workflowError {
@@ -56,7 +56,7 @@ struct IncidentDetailView: View {
                             .background(Color.bad.opacity(0.10))
                             .clipShape(RoundedRectangle(cornerRadius: 8))
                     }
-                    if let dispositionError {
+                    if dispositionError != nil {
                         dispositionErrorView
                     }
                     whatHappened
