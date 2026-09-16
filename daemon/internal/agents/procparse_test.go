@@ -11,7 +11,7 @@ func TestParseProcStatStartAndPPID(t *testing.T) {
 	// utime stime cutime cstime priority nice numthreads itrealvalue starttime ...
 	stat := "12 (code) S 7 12 12 0 0 0 0 0 0 0 0 0 0 20 0 1 0 0 12345"
 	boot := time.Unix(1_000_000, 0)
-	ppid, comm, start := parseProcStat(stat, boot, 100)
+	ppid, comm, start, cpu := parseProcStat(stat, boot, 100)
 	if ppid != 7 || comm != "code" {
 		t.Fatalf("ppid=%d comm=%q", ppid, comm)
 	}
@@ -19,11 +19,23 @@ func TestParseProcStatStartAndPPID(t *testing.T) {
 	if !start.Equal(want) {
 		t.Fatalf("start=%v want %v", start, want)
 	}
+	if cpu != 0 {
+		t.Fatalf("cpu=%v want 0", cpu)
+	}
+}
+
+func TestParseProcStatCPUTime(t *testing.T) {
+	// utime=120 and stime=30 ticks at 100Hz => 1.5 seconds.
+	stat := "12 (code) S 7 12 12 0 0 0 0 0 0 0 120 30 0 0 20 0 1 0 0 12345"
+	_, _, _, cpu := parseProcStat(stat, time.Unix(1_000_000, 0), 100)
+	if cpu != 1500*time.Millisecond {
+		t.Fatalf("cpu=%v want 1.5s", cpu)
+	}
 }
 
 func TestParseProcStatCommWithParens(t *testing.T) {
 	stat := "1 (a) b) (c) S 0 1 1 0 0 0 0 0 0 0 0 0 0 20 0 1 0 1 0"
-	ppid, comm, _ := parseProcStat(stat, time.Unix(0, 0), 100)
+	ppid, comm, _, _ := parseProcStat(stat, time.Unix(0, 0), 100)
 	if comm != "a) b) (c" {
 		t.Fatalf("comm=%q", comm)
 	}

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -25,6 +27,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/intel"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/proxy"
+	"github.com/cavi-ai/secure-agent/daemon/internal/resource"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 	"github.com/cavi-ai/secure-agent/daemon/internal/supervise"
 )
@@ -319,6 +322,173 @@ func buildStatusFn(proxyServer *proxy.ProxyServer, tagger *agents.Tagger, cr *co
 			Collectors:        reg.Snapshot(),
 		}
 	}
+}
+
+func observeResources(tracker *resource.Tracker, tagger *agents.Tagger, st *store.Store, now time.Time) {
+	infos := tagger.TaggedPIDs()
+	pids := make([]int32, 0, len(infos))
+	for pid := range infos {
+		pids = append(pids, pid)
+	}
+	tracker.Observe(infos, st.LastEventTimes(pids), now)
+}
+
+const resourceEpisodePendingLimit = 256
+
+type resourceEpisodeStore interface {
+	PutResourceEpisode(resource.Episode) error
+}
+
+type resourceEpisodeWriter struct {
+	recorder *resource.Recorder
+	store    resourceEpisodeStore
+	mu       sync.Mutex
+	pending  map[string]resource.Episode
+	wake     chan struct{}
+	stop     chan struct{}
+	done     chan struct{}
+	closed   bool
+}
+
+func newResourceEpisodeWriter(st resourceEpisodeStore) *resourceEpisodeWriter {
+	w := &resourceEpisodeWriter{
+		recorder: resource.NewRecorder(), store: st, pending: make(map[string]resource.Episode),
+		wake: make(chan struct{}, 1), stop: make(chan struct{}), done: make(chan struct{}),
+	}
+	go w.run()
+	return w
+}
+
+func (w *resourceEpisodeWriter) Observe(snapshot resource.Snapshot) {
+	w.mu.Lock()
+	if w.closed {
+		w.mu.Unlock()
+		return
+	}
+	queued := false
+	for _, episode := range w.recorder.Observe(snapshot) {
+		key := fmt.Sprintf("%s|%d|%s|%d", episode.Session.Key, episode.CapturedAt.UnixNano(), strings.Join(episode.DiagnosisCodes, ","), episode.Session.RSSBytes)
+		if len(w.pending) >= resourceEpisodePendingLimit {
+			w.recorder.Retry(episode.Session.Key)
+			log.Printf("resource recorder: pending buffer full; will retry session %s", episode.Session.Key)
+			continue
+		}
+		w.pending[key] = episode
+		queued = true
+	}
+	w.mu.Unlock()
+	if queued {
+		select {
+		case w.wake <- struct{}{}:
+		default:
+		}
+	}
+}
+
+func (w *resourceEpisodeWriter) run() {
+	defer close(w.done)
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-w.wake:
+			w.flushPending()
+		case <-ticker.C:
+			w.flushPending()
+		case <-w.stop:
+			deadline := time.Now().Add(2 * time.Second)
+			for time.Now().Before(deadline) && w.hasPending() {
+				if !w.flushOne() {
+					time.Sleep(50 * time.Millisecond)
+				}
+			}
+			return
+		}
+	}
+}
+
+func (w *resourceEpisodeWriter) hasPending() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return len(w.pending) > 0
+}
+
+func (w *resourceEpisodeWriter) flushPending() {
+	for w.flushOne() {
+	}
+}
+
+func (w *resourceEpisodeWriter) flushOne() bool {
+	w.mu.Lock()
+	var key string
+	var episode resource.Episode
+	for key, episode = range w.pending {
+		break
+	}
+	w.mu.Unlock()
+	if key == "" {
+		return false
+	}
+	if err := w.store.PutResourceEpisode(episode); err != nil {
+		log.Printf("resource recorder: %v; retained for retry", err)
+		return false
+	}
+	w.mu.Lock()
+	delete(w.pending, key)
+	w.mu.Unlock()
+	return true
+}
+
+func (w *resourceEpisodeWriter) Close() {
+	w.mu.Lock()
+	if w.closed {
+		w.mu.Unlock()
+		return
+	}
+	w.closed = true
+	close(w.stop)
+	w.mu.Unlock()
+	select {
+	case <-w.done:
+	case <-time.After(2500 * time.Millisecond):
+		log.Printf("resource recorder: shutdown timed out; abandoning pending writes")
+	}
+}
+
+func resourcePolicy(c config.ResourceControlConfig) resource.Policy {
+	return resource.Policy{
+		Mode: resource.ControlMode(c.Mode), MaxRSSBytes: c.MaxRSSMB * 1024 * 1024,
+		MaxCPUPercent: c.MaxCPUPercent,
+		Sustain:       time.Duration(c.SustainSeconds) * time.Second,
+		Cooldown:      time.Duration(c.CooldownSeconds) * time.Second,
+		Interventions: resourceInterventions(c.Interventions),
+	}
+}
+
+func resourceInterventions(steps []config.ResourceInterventionConfig) []resource.InterventionStep {
+	out := make([]resource.InterventionStep, 0, len(steps))
+	for _, step := range steps {
+		out = append(out, resource.InterventionStep{Action: resource.InterventionAction(step.Action),
+			After: time.Duration(step.AfterSeconds) * time.Second, Nice: step.Nice})
+	}
+	return out
+}
+
+func resourcePolicySet(c config.ResourceControlConfig) resource.PolicySet {
+	set := resource.PolicySet{Default: resourcePolicy(c)}
+	for _, override := range c.WorkspaceOverrides {
+		set.WorkspaceOverrides = append(set.WorkspaceOverrides, resource.WorkspacePolicy{
+			Path: override.CwdPrefix,
+			Policy: resource.Policy{
+				Mode: resource.ControlMode(override.Mode), MaxRSSBytes: override.MaxRSSMB * 1024 * 1024,
+				MaxCPUPercent: override.MaxCPUPercent,
+				Sustain:       time.Duration(override.SustainSeconds) * time.Second,
+				Cooldown:      time.Duration(override.CooldownSeconds) * time.Second,
+				Interventions: resourceInterventions(override.Interventions),
+			},
+		})
+	}
+	return set
 }
 
 // defaultFleetHeartbeatSec is the status-envelope cadence when

@@ -10,11 +10,13 @@ final class StubDaemonClient: DaemonClientProtocol, @unchecked Sendable {
     var pending: [GuardPending] = []
     var statusError: Error?
     var guardError: Error?
+    var resources = ResourceSnapshotModel(host: nil)
 
     func fetchStatus() async throws -> StatusResponse {
         if let statusError { throw statusError }
         return status
     }
+    func fetchResources() async throws -> ResourceSnapshotModel { resources }
     func fetchFlags(limit: Int) async throws -> [FlagModel] { flags }
     func fetchIncidents(limit: Int) async throws -> [IncidentReportModel] { [] }
     func fetchIncidentMarkdown(id: String) async throws -> String { "" }
@@ -88,6 +90,63 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(state.activeAgentCount, 1)      // status field, not array length
         XCTAssertEqual(state.trackedProcessCount, 3)
     }
+
+    func testFetchSurfacesMachineHeadroom() async {
+        let stub = StubDaemonClient()
+        stub.resources = ResourceSnapshotModel(host: HostPressureModel(
+            totalMemoryBytes: 16 * 1024 * 1024 * 1024,
+            availableMemoryBytes: 4 * 1024 * 1024 * 1024,
+            agentMemoryBytes: 3 * 1024 * 1024 * 1024,
+            nonAgentMemoryBytes: 9 * 1024 * 1024 * 1024,
+            memoryPressure: "normal", thermalState: "nominal",
+            headroomScore: 25, capacity: "constrained"))
+        let (state, _) = makeState(stub)
+
+        await state.performFetch()
+
+        XCTAssertEqual(state.resources?.host?.availableMemoryBytes, 4 * 1024 * 1024 * 1024)
+        XCTAssertEqual(state.resources?.host?.capacity, "constrained")
+    }
+
+    func testResourceInterventionTransitionNotifiesAfterBaseline() async {
+        let stub = StubDaemonClient()
+        stub.resources = ResourceSnapshotModel(host: nil, sessions: [
+            ResourceSessionModel(key: "s1", name: "codex", control: ResourceSessionControlModel(state: "grace"))
+        ])
+        let state = AppState(client: stub)
+        var notices: [ResourceInterventionNotice] = []
+        state.notifyResource = { notices.append($0) }
+
+        await state.performFetch()
+        XCTAssertTrue(notices.isEmpty)
+
+        stub.resources = ResourceSnapshotModel(host: nil, sessions: [
+            ResourceSessionModel(key: "s1", name: "codex", control: ResourceSessionControlModel(
+                state: "approval-required", pendingID: "resource-1", nextAction: "pause"))
+        ])
+        await state.performFetch()
+
+        XCTAssertEqual(notices.count, 1)
+        XCTAssertEqual(notices[0].sessionKey, "s1")
+        XCTAssertEqual(notices[0].state, "approval-required")
+        XCTAssertEqual(notices[0].action, "pause")
+    }
+
+	func testInitialResourceApprovalNotifiesImmediately() async {
+		let stub = StubDaemonClient()
+		stub.resources = ResourceSnapshotModel(host: nil, sessions: [
+			ResourceSessionModel(key: "s1", name: "codex", control: ResourceSessionControlModel(
+				state: "approval-required", pendingID: "resource-1", nextAction: "pause"))
+		])
+		let state = AppState(client: stub)
+		var notices: [ResourceInterventionNotice] = []
+		state.notifyResource = { notices.append($0) }
+
+		await state.performFetch()
+
+		XCTAssertEqual(notices.count, 1)
+		XCTAssertEqual(notices[0].action, "pause")
+	}
 
     func testAgentRootsFallbackWithoutRootPid() async {
         // Older daemon (no root_pid): every row is its own root.
@@ -378,9 +437,11 @@ final class AppStateTests: XCTestCase {
     // MARK: - Agent tree grouping
 
     private func agent(_ pid: Int32, root: Int32? = nil, ppid: Int32? = nil,
-                       started: String? = nil, seen: String? = nil, rss: UInt64? = nil) -> AgentSummaryModel {
+                       started: String? = nil, seen: String? = nil, rss: UInt64? = nil,
+                       cpu: Double? = nil) -> AgentSummaryModel {
         AgentSummaryModel(pid: pid, name: "claude", rootPid: root ?? pid,
-                          ppid: ppid, startedAt: started, lastSeenAt: seen, rssBytes: rss)
+                          ppid: ppid, startedAt: started, lastSeenAt: seen, rssBytes: rss,
+                          cpuPercent: cpu)
     }
 
     func testAgentRowsGroupTreesAndSortByLastActivity() {
@@ -433,6 +494,31 @@ final class AppStateTests: XCTestCase {
         let rows = state.agentRows(sortedBy: .memory)
         XCTAssertEqual(rows.first?.agent.pid, 100)
         XCTAssertEqual(rows.first?.familyRSSBytes, 1050)
+    }
+
+    func testAgentRowsSortByImpactAndAggregateFamilyCPU() {
+        let gib = UInt64(1024 * 1024 * 1024)
+        let stub = StubDaemonClient()
+        stub.status.agents = [
+            agent(100, root: 100, ppid: 1, rss: gib, cpu: 80),
+            agent(101, root: 100, ppid: 100, rss: 64, cpu: 70),
+            agent(200, root: 200, ppid: 1, rss: 3 * gib, cpu: 0),
+        ]
+        let state = AppState(client: stub)
+        state.seedForTesting(status: stub.status)
+
+        let rows = state.agentRows(sortedBy: .impact)
+        XCTAssertEqual(rows.first?.agent.pid, 100)
+        XCTAssertEqual(rows.first?.familyCPUPercent, 150)
+    }
+
+    func testAgentRowsKeepUnavailableFamilyCPUUnknown() {
+        let stub = StubDaemonClient()
+        stub.status.agents = [agent(100, root: 100, ppid: 1, rss: 100)]
+        let state = AppState(client: stub)
+        state.seedForTesting(status: stub.status)
+
+        XCTAssertNil(state.agentRows(sortedBy: .impact).first?.familyCPUPercent)
     }
 
     func testAgentRowsTreatsOrphanChildAsStillInTree() {
@@ -610,9 +696,10 @@ final class SessionBoardTests: XCTestCase {
 @MainActor
 final class SessionBoardRowTests: XCTestCase {
     private func agent(_ pid: Int32, name: String, root: Int32, ppid: Int32,
-                       cwd: String? = nil, seen: String = "", rss: UInt64? = nil) -> AgentSummaryModel {
+                       cwd: String? = nil, seen: String = "", rss: UInt64? = nil,
+                       cpu: Double? = nil) -> AgentSummaryModel {
         AgentSummaryModel(pid: pid, name: name, cwd: cwd, rootPid: root, ppid: ppid,
-                          lastSeenAt: seen, rssBytes: rss)
+                          lastSeenAt: seen, rssBytes: rss, cpuPercent: cpu)
     }
 
     func testSessionBoardRowsAreRootsOnlySortedByActivity() {
@@ -657,7 +744,8 @@ final class SessionBoardRowTests: XCTestCase {
                 root: agent(10, name: "claude", root: 10, ppid: 1, cwd: "/tmp/proj", seen: "2026-09-15T12:00:00Z", rss: 100),
                 children: [agent(11, name: "claude", root: 10, ppid: 10, rss: 50)],
                 rssBytes: 150,
-                lastSeenAt: "2026-09-15T12:00:00Z"),
+                lastSeenAt: "2026-09-15T12:00:00Z",
+                cpuPercent: 42),
         ]
         let state = AppState(client: stub)
         state.seedForTesting(status: stub.status)
@@ -665,6 +753,7 @@ final class SessionBoardRowTests: XCTestCase {
         XCTAssertEqual(rows.map(\.agent.pid), [10])
         XCTAssertEqual(rows[0].agent.cwdLeaf, "proj")
         XCTAssertEqual(rows[0].familyRSSBytes, 150)
+        XCTAssertEqual(rows[0].familyCPUPercent, 42)
         XCTAssertEqual(rows[0].childCount, 1)
     }
 

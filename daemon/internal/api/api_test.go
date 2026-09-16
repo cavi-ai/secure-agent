@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -543,8 +544,8 @@ func TestStatusCountsUnacted24hAndBusDrops(t *testing.T) {
 
 func TestGroupAgentTreesOneRowPerRootHelpersFolded(t *testing.T) {
 	trees := GroupAgentTrees([]AgentSummary{
-		{PID: 5822, Name: "claude", RootPID: 5821, RSSBytes: 50, LastSeenAt: "2026-09-11T11:00:00Z"},
-		{PID: 5821, Name: "claude", CWD: "/Users/dev/workspace/api-service", RootPID: 5821, RSSBytes: 100, LastSeenAt: "2026-09-11T12:00:00Z"},
+		{PID: 5822, Name: "claude", RootPID: 5821, RSSBytes: 50, CPUPercent: 25, LastSeenAt: "2026-09-11T11:00:00Z"},
+		{PID: 5821, Name: "claude", CWD: "/Users/dev/workspace/api-service", RootPID: 5821, RSSBytes: 100, CPUPercent: 50, LastSeenAt: "2026-09-11T12:00:00Z"},
 		{PID: 6033, Name: "cursor", CWD: "/Users/dev/projects/web-app", RootPID: 6033, RSSBytes: 10, LastSeenAt: "2026-09-11T11:00:00Z"},
 	})
 	if len(trees) != 2 {
@@ -555,6 +556,9 @@ func TestGroupAgentTreesOneRowPerRootHelpersFolded(t *testing.T) {
 	}
 	if trees[0].RSSBytes != 150 {
 		t.Fatalf("family rss = %d, want 150", trees[0].RSSBytes)
+	}
+	if trees[0].CPUPercent != 75 {
+		t.Fatalf("family cpu = %v, want 75", trees[0].CPUPercent)
 	}
 	if len(trees[0].Children) != 1 || trees[0].Children[0].PID != 5822 {
 		t.Fatalf("children = %+v, want helper 5822", trees[0].Children)
@@ -567,8 +571,8 @@ func TestGroupAgentTreesOneRowPerRootHelpersFolded(t *testing.T) {
 func TestStatusJSONIncludesTrees(t *testing.T) {
 	a := New("", testStore(t), &fakeKiller{}, func() Status {
 		return Status{Running: true, Agents: []AgentSummary{
-			{PID: 10, Name: "claude", RootPID: 10},
-			{PID: 11, Name: "claude", RootPID: 10},
+			{PID: 10, Name: "claude", RootPID: 10, CPUPercent: 60},
+			{PID: 11, Name: "claude", RootPID: 10, CPUPercent: 15},
 		}}
 	})
 	rr := httptest.NewRecorder()
@@ -582,6 +586,9 @@ func TestStatusJSONIncludesTrees(t *testing.T) {
 	}
 	if len(st.Trees) != 1 || st.Trees[0].Root.PID != 10 || len(st.Trees[0].Children) != 1 {
 		t.Fatalf("trees = %+v", st.Trees)
+	}
+	if st.Agents[0].CPUPercent != 60 || st.Trees[0].CPUPercent != 75 {
+		t.Fatalf("CPU serialization/aggregation failed: agents=%+v trees=%+v", st.Agents, st.Trees)
 	}
 }
 
@@ -641,5 +648,47 @@ func TestKillEndpointHelperPIDKillsWholeTree(t *testing.T) {
 		if got[want] != 1 {
 			t.Fatalf("helper kill %v, want whole tree 10,11,12", fk.all)
 		}
+	}
+}
+
+func TestTerminateAgentTreeUsesLiveHelperWhenRootExited(t *testing.T) {
+	fk := &fakeKiller{}
+	started := "2026-09-09T16:00:00.123456789Z"
+	a := New("", testStore(t), fk, func() Status {
+		return Status{Running: true, Agents: []AgentSummary{
+			{PID: 11, Name: "claude", RootPID: 10, StartedAt: started, IsOrphan: true},
+			{PID: 12, Name: "claude", RootPID: 10, IsOrphan: true},
+		}}
+	})
+	a.SetAgentPIDs(func() map[int32]struct{} { return map[int32]struct{}{11: {}, 12: {}} })
+	killed, err := a.TerminateAgentTree(11, started)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(killed, []int32{11, 12}) {
+		t.Fatalf("killed=%v want [11 12]", killed)
+	}
+}
+
+func TestTerminateAgentTreeVerifiedRejectsReusedChildPID(t *testing.T) {
+	fk := &fakeKiller{}
+	rootStarted := time.Date(2026, 9, 16, 12, 0, 0, 0, time.UTC)
+	childStarted := rootStarted.Add(time.Second)
+	a := New("", testStore(t), fk, func() Status {
+		return Status{Running: true, Agents: []AgentSummary{
+			{PID: 10, Name: "claude", RootPID: 10, StartedAt: rootStarted.Format(time.RFC3339Nano)},
+			{PID: 11, Name: "claude", RootPID: 10, StartedAt: childStarted.Add(time.Second).Format(time.RFC3339Nano)},
+		}}
+	})
+	a.SetAgentPIDs(func() map[int32]struct{} { return map[int32]struct{}{10: {}, 11: {}} })
+	_, err := a.TerminateAgentTreeVerified(10, rootStarted.Format(time.RFC3339Nano), map[int32]time.Time{
+		10: rootStarted,
+		11: childStarted,
+	})
+	if err == nil {
+		t.Fatal("reused child pid was accepted")
+	}
+	if len(fk.all) != 0 {
+		t.Fatalf("killed=%v before family identity validation completed", fk.all)
 	}
 }

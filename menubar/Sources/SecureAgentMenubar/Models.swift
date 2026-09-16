@@ -1,5 +1,141 @@
 import Foundation
 
+public struct ResourceSnapshotModel: Codable, Sendable {
+    public let host: HostPressureModel?
+    public let sessions: [ResourceSessionModel]?
+
+    public init(host: HostPressureModel?, sessions: [ResourceSessionModel]? = nil) {
+        self.host = host
+        self.sessions = sessions
+    }
+}
+
+public struct ResourceSessionModel: Codable, Sendable {
+    public let key: String
+    public let name: String
+    public let control: ResourceSessionControlModel?
+
+    public init(key: String, name: String, control: ResourceSessionControlModel? = nil) {
+        self.key = key
+        self.name = name
+        self.control = control
+    }
+}
+
+public struct ResourceSessionControlModel: Codable, Sendable {
+    public let state: String
+    public let pendingID: String?
+    public let lastAction: String?
+    public let lastError: String?
+    public let nextAction: String?
+    public let paused: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case state
+        case pendingID = "pending_id"
+        case lastAction = "last_action"
+        case lastError = "last_error"
+        case nextAction = "next_action"
+        case paused
+    }
+
+    public init(state: String, pendingID: String? = nil, lastAction: String? = nil,
+                lastError: String? = nil, nextAction: String? = nil, paused: Bool? = nil) {
+        self.state = state
+        self.pendingID = pendingID
+        self.lastAction = lastAction
+        self.lastError = lastError
+        self.nextAction = nextAction
+        self.paused = paused
+    }
+}
+
+public struct ResourceInterventionNotice: Equatable, Sendable {
+    public let sessionKey: String
+    public let sessionName: String
+    public let state: String
+    public let action: String?
+    public let error: String?
+}
+
+public struct HostPressureModel: Codable, Sendable {
+    public let totalMemoryBytes: UInt64?
+    public let freeMemoryBytes: UInt64?
+    public let availableMemoryBytes: UInt64?
+    public let compressedMemoryBytes: UInt64?
+    public let usedMemoryBytes: UInt64?
+    public let agentMemoryBytes: UInt64?
+    public let nonAgentMemoryBytes: UInt64?
+    public let swapTotalBytes: UInt64?
+    public let swapUsedBytes: UInt64?
+    public let headroomPercent: Double?
+    public let agentMemoryPercent: Double?
+    public let systemCPUPercent: Double?
+    public let agentCPUPercent: Double?
+    public let nonAgentCPUPercent: Double?
+    public let load1: Double?
+    public let logicalCPUCount: Int?
+    public let memoryPressure: String
+    public let thermalState: String
+    public let headroomScore: Int
+    public let capacity: String
+
+    enum CodingKeys: String, CodingKey {
+        case totalMemoryBytes = "total_memory_bytes"
+        case freeMemoryBytes = "free_memory_bytes"
+        case availableMemoryBytes = "available_memory_bytes"
+        case compressedMemoryBytes = "compressed_memory_bytes"
+        case usedMemoryBytes = "used_memory_bytes"
+        case agentMemoryBytes = "agent_memory_bytes"
+        case nonAgentMemoryBytes = "non_agent_memory_bytes"
+        case swapTotalBytes = "swap_total_bytes"
+        case swapUsedBytes = "swap_used_bytes"
+        case headroomPercent = "headroom_percent"
+        case agentMemoryPercent = "agent_memory_percent"
+        case systemCPUPercent = "system_cpu_percent"
+        case agentCPUPercent = "agent_cpu_percent"
+        case nonAgentCPUPercent = "non_agent_cpu_percent"
+        case load1 = "load_1"
+        case logicalCPUCount = "logical_cpu_count"
+        case memoryPressure = "memory_pressure"
+        case thermalState = "thermal_state"
+        case headroomScore = "headroom_score"
+        case capacity
+    }
+
+    public init(totalMemoryBytes: UInt64? = nil, freeMemoryBytes: UInt64? = nil,
+                availableMemoryBytes: UInt64? = nil, compressedMemoryBytes: UInt64? = nil,
+                usedMemoryBytes: UInt64? = nil, agentMemoryBytes: UInt64? = nil,
+                nonAgentMemoryBytes: UInt64? = nil, swapTotalBytes: UInt64? = nil,
+                swapUsedBytes: UInt64? = nil, headroomPercent: Double? = nil,
+                agentMemoryPercent: Double? = nil, systemCPUPercent: Double? = nil,
+                agentCPUPercent: Double? = nil, nonAgentCPUPercent: Double? = nil,
+                load1: Double? = nil, logicalCPUCount: Int? = nil,
+                memoryPressure: String = "unknown", thermalState: String = "unknown",
+                headroomScore: Int = 0, capacity: String = "unknown") {
+        self.totalMemoryBytes = totalMemoryBytes
+        self.freeMemoryBytes = freeMemoryBytes
+        self.availableMemoryBytes = availableMemoryBytes
+        self.compressedMemoryBytes = compressedMemoryBytes
+        self.usedMemoryBytes = usedMemoryBytes
+        self.agentMemoryBytes = agentMemoryBytes
+        self.nonAgentMemoryBytes = nonAgentMemoryBytes
+        self.swapTotalBytes = swapTotalBytes
+        self.swapUsedBytes = swapUsedBytes
+        self.headroomPercent = headroomPercent
+        self.agentMemoryPercent = agentMemoryPercent
+        self.systemCPUPercent = systemCPUPercent
+        self.agentCPUPercent = agentCPUPercent
+        self.nonAgentCPUPercent = nonAgentCPUPercent
+        self.load1 = load1
+        self.logicalCPUCount = logicalCPUCount
+        self.memoryPressure = memoryPressure
+        self.thermalState = thermalState
+        self.headroomScore = headroomScore
+        self.capacity = capacity
+    }
+}
+
 public struct AgentSummaryModel: Codable, Identifiable, Sendable {
     /// pid alone can collide across pid reuse while a stale row lingers in the
     /// list; pid+name is still wrong only if the same process is listed twice,
@@ -22,6 +158,9 @@ public struct AgentSummaryModel: Codable, Identifiable, Sendable {
     public let lastSeenAt: String?
     /// Resident memory in bytes (0/nil when the daemon couldn't read it).
     public let rssBytes: UInt64?
+    /// Current CPU use as a percentage of one core. Values may exceed 100
+    /// when a process uses multiple cores; nil means unavailable.
+    public let cpuPercent: Double?
     /// True when this tagged process's parent has already exited (daemon
     /// reports is_orphan) — displayed so a weird-looking row is explainable.
     /// nil (older daemons) reads as "not orphan" here; the row simply shows
@@ -40,12 +179,13 @@ public struct AgentSummaryModel: Codable, Identifiable, Sendable {
         case startedAt = "started_at"
         case lastSeenAt = "last_seen_at"
         case rssBytes = "rss_bytes"
+        case cpuPercent = "cpu_percent"
         case isOrphan = "is_orphan"
     }
 
     public init(pid: Int32, name: String, exePath: String? = nil, cwd: String? = nil, rootPid: Int32? = nil,
                 ppid: Int32? = nil, startedAt: String? = nil, lastSeenAt: String? = nil, rssBytes: UInt64? = nil,
-                isOrphan: Bool? = nil) {
+                isOrphan: Bool? = nil, cpuPercent: Double? = nil) {
         self.pid = pid
         self.name = name
         self.exePath = exePath
@@ -56,6 +196,7 @@ public struct AgentSummaryModel: Codable, Identifiable, Sendable {
         self.lastSeenAt = lastSeenAt
         self.rssBytes = rssBytes
         self.isOrphan = isOrphan
+        self.cpuPercent = cpuPercent
     }
 
     /// Glance label: the project folder, falling back to the harness name.
@@ -71,18 +212,22 @@ public struct AgentTreeModel: Codable, Sendable {
     public let children: [AgentSummaryModel]
     public let rssBytes: UInt64?
     public let lastSeenAt: String?
+    public let cpuPercent: Double?
 
     enum CodingKeys: String, CodingKey {
         case root, children
         case rssBytes = "rss_bytes"
         case lastSeenAt = "last_seen_at"
+        case cpuPercent = "cpu_percent"
     }
 
-    public init(root: AgentSummaryModel, children: [AgentSummaryModel] = [], rssBytes: UInt64? = nil, lastSeenAt: String? = nil) {
+    public init(root: AgentSummaryModel, children: [AgentSummaryModel] = [], rssBytes: UInt64? = nil,
+                lastSeenAt: String? = nil, cpuPercent: Double? = nil) {
         self.root = root
         self.children = children
         self.rssBytes = rssBytes
         self.lastSeenAt = lastSeenAt
+        self.cpuPercent = cpuPercent
     }
 }
 

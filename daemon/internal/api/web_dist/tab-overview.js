@@ -27,6 +27,235 @@ function renderActivity() {
   svg.innerHTML = bars;
 }
 
+function resourceActivityMarkers(activities, samples, width, height) {
+  if (!activities.length || !samples.length) return '';
+  const times = samples.map(sample => new Date(sample.at).getTime()).filter(Number.isFinite);
+  if (!times.length) return '';
+  const start = Math.min(...times);
+  const end = Math.max(...times);
+  const span = Math.max(1, end - start);
+  return activities.slice(-24).map(activity => {
+    const at = new Date(activity.at).getTime();
+    if (!Number.isFinite(at) || at < start || at > end) return '';
+    const x = Math.max(2, Math.min(width - 2, ((at - start) / span) * width));
+    const kind = String(activity.kind || 'activity').replace(/[^a-z0-9-]/gi, '');
+    return `<g class="resource-activity-marker kind-${escapeHTML(kind)}"><line x1="${x.toFixed(1)}" x2="${x.toFixed(1)}" y1="2" y2="${height - 2}"/><circle cx="${x.toFixed(1)}" cy="5" r="2.4"/><title>${escapeHTML(activity.summary || 'Recorded activity')}</title></g>`;
+  }).join('');
+}
+
+function resourceActivityLabel(kind) {
+  const labels = { 'process-start': 'START', process: 'PROCESS', tool: 'TOOL', file: 'FILE', network: 'NETWORK', guard: 'GUARD', security: 'SECURITY' };
+  return labels[kind] || 'ACTIVITY';
+}
+
+function resourceHostContextHTML(host) {
+  if (!host || !Number(host.total_memory_bytes)) return '';
+  const total = Number(host.total_memory_bytes);
+  const available = Number(host.available_memory_bytes || 0);
+  const memoryKnown = String(host.memory_pressure || 'unknown') !== 'unknown';
+  const agentPercent = Math.max(0, Math.min(100, Number(host.agent_memory_percent || 0)));
+  const otherPercent = Math.max(0, Math.min(100 - agentPercent,
+    Number(host.non_agent_memory_bytes || 0) / total * 100));
+  const availablePercent = Math.max(0, 100 - agentPercent - otherPercent);
+  const capacity = String(host.capacity || 'unknown');
+  const pressure = familyTitle(host.memory_pressure || 'unknown');
+  const thermal = familyTitle(host.thermal_state || 'unknown');
+  const cpuUnavailable = host.system_cpu_percent === null || host.system_cpu_percent === undefined;
+  const cpuAttributionUnavailable = host.agent_cpu_percent === null || host.agent_cpu_percent === undefined
+    || host.non_agent_cpu_percent === null || host.non_agent_cpu_percent === undefined;
+  const cpu = cpuUnavailable ? 'Unavailable' : cpuAttributionUnavailable
+    ? `${Number(host.system_cpu_percent).toFixed(1)}% total · attribution unavailable`
+    : `${Number(host.system_cpu_percent).toFixed(1)}% total · ${Number(host.agent_cpu_percent).toFixed(1)}% agents · ${Number(host.non_agent_cpu_percent).toFixed(1)}% other`;
+  const swap = Number(host.swap_total_bytes || 0)
+    ? `${fmtRSS(host.swap_used_bytes) || '0 B'} / ${fmtRSS(host.swap_total_bytes)}`
+    : 'Not configured';
+  return `<section class="resource-host-context capacity-${escapeHTML(capacity)}" aria-label="Whole-machine resource pressure">
+    <div class="resource-host-heading">
+      <div><span class="resource-eyebrow">Whole machine</span><h3>Machine headroom</h3></div>
+      <span class="resource-capacity"><b>${Number(host.headroom_score || 0)} / 100</b><small>${escapeHTML(capacity)}</small></span>
+    </div>
+    <div class="resource-host-memory">
+      <div><strong>${memoryKnown ? escapeHTML(fmtRSS(available) || '0 B') : 'Unavailable'} available</strong><span>of ${escapeHTML(fmtRSS(total))} physical memory</span></div>
+      ${memoryKnown ? `<div class="resource-host-bar" role="img" aria-label="Memory: ${agentPercent.toFixed(1)} percent agents, ${otherPercent.toFixed(1)} percent other, ${availablePercent.toFixed(1)} percent available">
+        <span class="resource-host-segment agent" style="width:${agentPercent.toFixed(1)}%"></span>
+        <span class="resource-host-segment other" style="width:${otherPercent.toFixed(1)}%"></span>
+        <span class="resource-host-segment available" style="width:${availablePercent.toFixed(1)}%"></span>
+      </div>
+      <div class="resource-host-legend"><span><i class="agent"></i>Agents ${agentPercent.toFixed(1)}%</span><span><i class="other"></i>Other ${otherPercent.toFixed(1)}%</span><span><i class="available"></i>Available ${availablePercent.toFixed(1)}%</span></div>` : '<div class="resource-host-legend"><span>Memory breakdown unavailable</span></div>'}
+    </div>
+    <div class="resource-host-stats">
+      <div><span>Memory pressure</span><strong>${escapeHTML(pressure)}</strong></div>
+      <div><span>CPU</span><strong>${escapeHTML(cpu)}</strong></div>
+      <div><span>Swap</span><strong>${escapeHTML(swap)}</strong></div>
+      <div><span>Thermal</span><strong>${escapeHTML(thermal)}</strong></div>
+    </div>
+  </section>`;
+}
+
+function resourceFlightRecorderHTML(snapshot) {
+  const episodes = snapshot.episodes || [];
+  return `<section class="resource-flight-recorder">
+    <div class="resource-flight-head"><div><span class="resource-eyebrow">Local history</span><h3>Pressure flight recorder</h3></div><span>${episodes.length ? `${episodes.length} recent episode${episodes.length === 1 ? '' : 's'}` : 'No pressure captured yet'}</span></div>
+    <p class="resource-flight-intro">When a session crosses a diagnostic threshold, secure-agent keeps a bounded ten-minute prelude and the highest-impact processes for post-mortem review.</p>
+    <div class="resource-episode-list">${episodes.map((episode, index) => {
+      const session = episode.session || {};
+      const label = cwdLabel(session.workspace) || familyTitle(session.name);
+      const diagnoses = session.diagnoses || [];
+      const primary = diagnoses[0] || {};
+      const processes = [...(session.processes || [])].sort((a, b) => Number(b.rss_bytes || 0) - Number(a.rss_bytes || 0));
+      const visibleProcesses = processes.slice(0, 10);
+      const omittedCount = Math.max(0, Number(session.process_count || processes.length) - visibleProcesses.length);
+      const activities = episode.activities || [];
+      const correlations = episode.correlations || [];
+      const correlation = correlations[0];
+      const host = episode.host;
+      const hostAtCapture = host ? `<div class="resource-episode-host"><span class="resource-eyebrow">Host at capture</span><strong>${escapeHTML(fmtRSS(host.available_memory_bytes) || 'Unavailable')} available</strong><span>${escapeHTML(familyTitle(host.memory_pressure || 'unknown'))} pressure · ${escapeHTML(familyTitle(host.thermal_state || 'unknown'))} thermal · headroom ${Number(host.headroom_score || 0)} / 100</span></div>` : '';
+      const drivers = visibleProcesses.map(process => {
+        const share = session.rss_bytes ? Math.round(Number(process.rss_bytes || 0) / Number(session.rss_bytes) * 100) : 0;
+        return `<div class="resource-episode-process"><span><b>${escapeHTML(process.name || 'process')}</b> · PID ${Number(process.pid || 0)}${process.is_orphan ? ' · leftover' : ''}</span><span>${escapeHTML(fmtRSS(process.rss_bytes) || '—')} · ${share}%</span></div>`;
+      }).join('');
+      const evidence = diagnoses.flatMap(d => d.evidence || []).map(item => `<li>${escapeHTML(item)}</li>`).join('');
+      const memoryPoints = resourceSparkPoints(session.samples, 'rss_bytes', 220, 38);
+      const cpuPoints = resourceSparkPoints(session.samples, 'cpu_percent', 220, 38);
+      const activityMarkers = resourceActivityMarkers(activities, session.samples || [], 220, 38);
+      const activityRows = activities.slice(-8).map(activity => `
+        <div class="resource-activity-row">
+          <time>${escapeHTML(fmtTime(new Date(activity.at)))}</time>
+          <span class="resource-activity-kind kind-${escapeHTML(activity.kind || 'activity')}">${escapeHTML(resourceActivityLabel(activity.kind))}</span>
+          <span><b>${escapeHTML(activity.process || `PID ${Number(activity.pid || 0)}`)}</b> · ${escapeHTML(activity.summary || 'Recorded activity')}</span>
+        </div>`).join('');
+      const activityOmitted = Math.max(0, activities.length - 8);
+      const age = episode.captured_at ? fmtAge(episode.captured_at, Date.now()) : '';
+      return `<details class="resource-episode severity-${escapeHTML(episode.severity || 'warning')}"${index === 0 ? ' open' : ''}>
+        <summary><span><b>${escapeHTML(label)}</b><small>${escapeHTML(primary.summary || (episode.diagnosis_codes || []).join(', ') || 'Resource pressure')}</small></span><span class="resource-episode-metrics"><b>${escapeHTML(fmtRSS(session.rss_bytes) || '—')}</b><b>${escapeHTML(fmtCPU(session.cpu_percent) || '—')}</b><time>${age ? `${escapeHTML(age)} ago` : 'recorded'}</time></span></summary>
+        <div class="resource-episode-body">
+          ${hostAtCapture}
+          <div><span class="resource-eyebrow">What drove it</span><div class="resource-episode-processes">${drivers || '<span>No process breakdown recorded</span>'}${omittedCount ? `<small>${omittedCount} lower-impact process${omittedCount === 1 ? '' : 'es'} omitted</small>` : ''}</div></div>
+          <div><span class="resource-eyebrow">Evidence</span>${evidence ? `<ul>${evidence}</ul>` : '<p>No additional evidence recorded.</p>'}<svg class="resource-episode-spark" viewBox="0 0 220 38" preserveAspectRatio="none" role="img" aria-label="Resource trend and nearby activity before capture">${memoryPoints ? `<polyline class="resource-spark-memory" points="${memoryPoints}"/>` : ''}${cpuPoints ? `<polyline class="resource-spark-cpu" points="${cpuPoints}"/>` : ''}${activityMarkers}</svg></div>
+          <div class="resource-episode-context">
+            <div class="resource-context-head"><span class="resource-eyebrow">What happened nearby</span>${correlation ? '<span class="resource-correlation-badge">Observed correlation</span>' : ''}</div>
+            ${correlation ? `<strong>${escapeHTML(correlation.summary)}</strong><p>Timing evidence can narrow an investigation, but does not prove which action caused the resource change.</p>` : '<p>No matching activity was recorded during this pressure window.</p>'}
+            <div class="resource-activity-list">${activityRows || '<span>No bounded activity references were available.</span>'}</div>
+            <div class="resource-context-actions">${activityOmitted ? `<small>${activityOmitted} earlier activities omitted from this view</small>` : '<span></span>'}<small>${episode.activity_status === 'settling' ? 'Activity context is still settling' : 'Scoped to this captured process lifetime'}</small></div>
+          </div>
+        </div>
+      </details>`;
+    }).join('') || '<div class="resource-detail-empty">The recorder is armed. Episodes appear here when a session becomes heavy, grows rapidly, or leaves resource-holding processes behind.</div>'}</div>
+  </section>`;
+}
+
+function renderResourceMissionControl() {
+  const SA = window.SA;
+  const container = document.getElementById('resource-board');
+  const observed = document.getElementById('resource-observed');
+  if (!container) return;
+  const snapshot = SA.t.resources;
+  if (!snapshot) return;
+
+  if (observed) {
+    const age = snapshot.observed_at ? fmtAge(snapshot.observed_at, Date.now()) : '';
+    observed.textContent = age ? `${age} ago` : 'Live';
+  }
+
+  const sessions = [...(snapshot.sessions || [])].sort((a, b) => {
+    const impact = resourceImpact(b) - resourceImpact(a);
+    if (impact) return impact;
+    return Number(b.rss_bytes || 0) - Number(a.rss_bytes || 0);
+  });
+  const control = snapshot.control || {};
+  const hostContext = resourceHostContextHTML(snapshot.host);
+  const limits = [
+    control.max_rss_bytes ? `${fmtRSS(control.max_rss_bytes)} memory` : '',
+    control.max_cpu_percent ? `${fmtCPU(control.max_cpu_percent)} CPU` : ''
+  ].filter(Boolean).join(' · ');
+	const ladder = (control.interventions || []).map(step => String(step.action || '').replaceAll('_', ' ')).join(' → ');
+  const policy = `<div class="resource-policy"><span><b>${escapeHTML(control.mode || 'observe')}</b> machine policy${limits ? ` · ${escapeHTML(limits)}` : ' · budgets disabled'}${control.sustain_seconds ? ` · ${Number(control.sustain_seconds)}s grace` : ''}${ladder ? ` · ${escapeHTML(ladder)}` : ''} · ${(control.workspace_overrides || []).length} workspace override${(control.workspace_overrides || []).length === 1 ? '' : 's'}</span><span><span>${(control.pending || []).length} approval${(control.pending || []).length === 1 ? '' : 's'} pending</span><button type="button" class="btn btn-ghost btn-sm" data-action="edit-resource-policy">Edit policy</button></span></div>`;
+  const flightRecorder = resourceFlightRecorderHTML(snapshot);
+  if (sessions.length === 0) {
+    container.innerHTML = hostContext + policy + `<div class="empty"><svg class="icon"><use href="#i-activity"/></svg><span>No attributed agent resource use right now</span></div>` + flightRecorder;
+    return;
+  }
+
+  if (SA.selectedResourceKey && !sessions.some(s => s.key === SA.selectedResourceKey)) {
+    SA.selectedResourceKey = '';
+  }
+  const selected = sessions.find(s => s.key === SA.selectedResourceKey);
+  const totalCPU = Object.prototype.hasOwnProperty.call(snapshot, 'cpu_percent') ? fmtCPU(snapshot.cpu_percent) : '';
+  const posture = `
+    <div class="resource-posture" aria-label="Attributed machine resource posture">
+      <div class="resource-posture-lead"><span class="resource-eyebrow">Attributed now</span><strong>${sessions.length} session${sessions.length === 1 ? '' : 's'}</strong></div>
+      <div class="resource-stat"><span>Memory</span><strong>${escapeHTML(fmtRSS(snapshot.rss_bytes) || 'Unavailable')}</strong></div>
+      <div class="resource-stat"><span>CPU</span><strong>${escapeHTML(totalCPU || 'Unavailable')}</strong></div>
+      <div class="resource-stat"><span>Processes</span><strong>${Number(snapshot.process_count || 0)}</strong></div>
+    </div>`;
+
+  const cards = sessions.map((session, index) => {
+    const label = cwdLabel(session.workspace) || familyTitle(session.name);
+    const diagnoses = session.diagnoses || [];
+    const primary = diagnoses[0];
+    const pids = (session.processes || []).map(p => Number(p.pid)).filter(Number.isFinite);
+    const memoryPoints = resourceSparkPoints(session.samples, 'rss_bytes', 140, 30);
+    const cpuPoints = resourceSparkPoints(session.samples, 'cpu_percent', 140, 30);
+    const pressure = diagnoses.length ? ` pressure-${escapeHTML(primary.severity || 'warning')}` : '';
+    const active = selected && selected.key === session.key ? ' selected' : '';
+    const reclaim = fmtRSS(session.estimated_reclaim_bytes);
+    const sessionControl = session.control || {};
+    const policySource = sessionControl.policy_source === 'workspace'
+      ? `workspace policy · ${sessionControl.policy_scope || session.workspace || ''}`
+      : 'machine default';
+    const approval = sessionControl.pending_id ? `
+      <span class="resource-approval">
+		<button type="button" class="btn btn-danger btn-sm" data-action="resource-control" data-id="${escapeHTML(sessionControl.pending_id)}" data-decision="apply" data-intervention="${escapeHTML(sessionControl.next_action || '')}">Apply ${escapeHTML(String(sessionControl.next_action || 'intervention').replaceAll('_', ' '))}</button>
+        <button type="button" class="btn btn-ghost btn-sm" data-action="resource-control" data-id="${escapeHTML(sessionControl.pending_id)}" data-decision="dismiss">Keep running</button>
+      </span>` : '';
+	const resume = sessionControl.paused ? `<button type="button" class="btn btn-primary btn-sm" data-action="resource-control" data-session="${escapeHTML(session.key)}" data-decision="resume">Resume session</button>` : '';
+	const interventionError = sessionControl.last_error ? `<span class="resource-control-error">Intervention failed: ${escapeHTML(sessionControl.last_error)}</span>` : '';
+    return `
+      <div class="resource-session-card${pressure}${active}">
+        <button type="button" class="resource-session-main" data-action="resource-session" data-key="${escapeHTML(session.key)}">
+          <span class="resource-rank">${index + 1}</span>
+          <span class="resource-identity">
+            <strong>${escapeHTML(label)}</strong>
+            <span>${escapeHTML(session.name || 'agent')} · root PID ${Number(session.root_pid || 0)} · ${Number(session.process_count || 0)} process${Number(session.process_count || 0) === 1 ? '' : 'es'}</span>
+          </span>
+          <span class="resource-metric"><b>${escapeHTML(fmtRSS(session.rss_bytes) || '—')}</b><small>memory</small></span>
+          <span class="resource-metric"><b>${escapeHTML(fmtCPU(session.cpu_percent) || '—')}</b><small>CPU</small></span>
+          <svg class="resource-spark" viewBox="0 0 140 30" preserveAspectRatio="none" role="img" aria-label="Recent memory and CPU trend">
+            ${memoryPoints ? `<polyline class="resource-spark-memory" points="${memoryPoints}"/>` : ''}
+            ${cpuPoints ? `<polyline class="resource-spark-cpu" points="${cpuPoints}"/>` : ''}
+          </svg>
+        </button>
+        <div class="resource-session-foot">
+          <span class="resource-diagnosis${primary ? '' : ' quiet'}">${primary ? resourceDiagnosisText(primary) : 'Within current thresholds'}</span>
+          ${reclaim ? `<span class="resource-reclaim">up to ${escapeHTML(reclaim)} reclaimable</span>` : ''}
+          ${sessionControl.state && sessionControl.state !== 'healthy' ? `<span class="resource-control-state">${escapeHTML(sessionControl.state)}</span>` : ''}
+          <span class="resource-policy-source">${escapeHTML(policySource)}</span>
+          ${approval}
+		  ${resume}
+		  ${interventionError}
+          <button type="button" class="btn btn-ghost btn-sm" data-action="filter-pids" data-pids="${escapeHTML(pids.join(','))}" data-label="${escapeHTML(label)}">Open family activity</button>
+        </div>
+      </div>`;
+  }).join('');
+
+  let detail = `<div class="resource-detail-empty">Select a session to inspect its complete process family.</div>`;
+  if (selected) {
+    const label = cwdLabel(selected.workspace) || familyTitle(selected.name);
+    const processes = (selected.processes || []).map(process => `
+      <div class="resource-process${process.is_orphan ? ' orphan' : ''}">
+        <span><b>PID ${Number(process.pid || 0)}</b>${Number(process.pid) === Number(selected.root_pid) ? ' · root' : ` · child of ${Number(process.ppid || 0)}`}${process.is_orphan ? ' · leftover' : ''}</span>
+        <span>${escapeHTML(fmtRSS(process.rss_bytes) || '—')} · ${escapeHTML(fmtCPU(process.cpu_percent) || '—')}</span>
+      </div>`).join('');
+    detail = `
+      <div class="resource-detail">
+        <div class="resource-detail-head"><div><span class="resource-eyebrow">Process topology</span><strong>${escapeHTML(label)}</strong></div><span>root PID ${Number(selected.root_pid || 0)}</span></div>
+        <div class="resource-processes">${processes}</div>
+      </div>`;
+  }
+
+  container.innerHTML = hostContext + posture + policy + `<div class="resource-layout"><div class="resource-session-list">${cards}</div><aside class="resource-detail-wrap">${detail}</aside></div>` + flightRecorder;
+}
+
 function renderSessionStrip() {
   const SA = window.SA;
   const panel = document.getElementById('session-strip-panel');
@@ -182,4 +411,3 @@ function renderEvents() {
   SA.firstEventRender = false;
   SA.suppressFreshOnce = false;
 }
-

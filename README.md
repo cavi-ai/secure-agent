@@ -43,6 +43,16 @@ As AI coding agents (Claude Code, Cursor, Codex, OpenClaw, Copilot, etc.) gain i
 - 🖥️ **Live Web Security Console (`http://localhost:8443/dashboard/`)**  
   Embedded dark-mode visual web console for real-time monitoring of active AI agent process trees, secret-exposure incident reports, sliding-window security flags, and proxy payload inspection streams. Updates are pushed over SSE (`/events/stream`) with a polling fallback. The console's telemetry endpoints on the proxy port are gated by a per-install **console token** (0600, `~/.config/secure-agent/console-token`) — a credential agents never receive, so a routed agent can't turn its proxy token into telemetry reads or guard self-approval. The menubar's **Open console** passes the token automatically.
 
+- 📊 **Resource Mission Control**
+  Attributes live resident memory and CPU to complete agent sessions—root process plus helpers—so one runaway child cannot hide behind a harmless-looking parent. Whole-machine context shows available and free memory, compression, swap, CPU split between agents and everything else, memory pressure, thermal state, and a conservative headroom score. The console ranks sessions by pressure, charts one hour of history, explains heavy memory, full-core CPU, rapid growth, idle retention, runaway children, and orphan drift, and opens the entire process family before any terminate action. The native menu bar shows machine headroom and family totals and adds an **Impact** sort for quick daily triage. A bounded local flight recorder keeps pressure episodes, their captured host conditions, process attribution, and the ten-minute lead-up available for post-mortem review after a session exits. Each episode correlates redacted process, tool, file, network, guard, and security activity with the steepest observed memory rise while clearly distinguishing temporal correlation from proven causation.
+
+  Optional session budgets add a sustained-breach grace period, cooldown, and
+  a graduated `notify → lower priority → pause → terminate` ladder. `observe`
+  reports only, `prompt` notifies automatically and requires approval for
+  state-changing steps, and `terminate` executes the configured ladder
+  automatically. Paused session families can be resumed from the console. The
+  default is `observe` with both limits disabled.
+
 - 🛠️ **Native `secure-agent` CLI Tool**  
   Pure-Go terminal utility (`secure-agent status`, `flags`, `incidents`, `kill`, `fleet`) for inspecting security posture directly from terminal prompts.
 
@@ -327,6 +337,8 @@ The Go daemon listens on a local Unix domain socket (`~/.config/secure-agent/dae
 | Endpoint | Method | Description |
 |---|---|---|
 | `/status` | `GET` | Returns daemon running state, uptime, active agent count, and proxy status. |
+| `/resources` | `GET` | Returns attributed session-family RSS, CPU, process topology, history, diagnoses, and reclaim estimates. |
+| `/resources/control` | `POST` | Applies or dismisses a pending resource action, or resumes a paused session family. |
 | `/flags` | `GET` | Returns recent security correlation flags (accepts optional `?limit=N`). |
 | `/events` | `GET` | Returns recent raw system events (accepts optional `?limit=N`). |
 | `/incidents` | `GET` | Returns rotation intel postmortem reports & checklists (`?id=ID`, `?format=markdown`). |

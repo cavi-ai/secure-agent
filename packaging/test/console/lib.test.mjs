@@ -23,10 +23,54 @@ const {
   sessionShort, filterEventsBySession, rollupSeries, flagHost,
   familyTitle, fmtRSS, fmtAge, isFamilyRoot, childrenOf, groupAgents, familyShouldExpand,
   cwdLabel, sessionRows, filterEventsByPids, sessionBoardHTML,
+  fmtCPU, resourceImpact, resourceSparkPoints, resourceDiagnosisText,
   monitorVendorKeyIDs, inspectionVisible, vendorKeyPromoteHTML,
   scopedBySession, unactedLast24h, filterSessionRows, sseNeedsSnapshot,
   sessionStripRows, sessionNeedsYou, sessionStripHTML,
 } = ctx;
+
+// ---------- resource mission control ----------
+
+test('fmtCPU formats present values and preserves unavailable values', () => {
+  assert.equal(fmtCPU(undefined), '');
+  assert.equal(fmtCPU(null), '');
+  assert.equal(fmtCPU(Number.NaN), '');
+  assert.equal(fmtCPU(0), '0%');
+  assert.equal(fmtCPU(0.5), '0.5%');
+  assert.equal(fmtCPU(132.5), '132.5%');
+  assert.equal(fmtCPU(75), '75%');
+});
+
+test('resourceImpact ranks the dominant CPU or memory pressure', () => {
+  const sessions = [
+    { key: 'memory', rss_bytes: 3 * 1024 ** 3, cpu_percent: 20 },
+    { key: 'cpu', rss_bytes: 1024 ** 3, cpu_percent: 140 },
+    { key: 'quiet', rss_bytes: 0, cpu_percent: 0 },
+  ].sort((a, b) => resourceImpact(b) - resourceImpact(a));
+  assert.deepEqual(sessions.map(s => s.key), ['cpu', 'memory', 'quiet']);
+  assert.equal(resourceImpact(null), 0);
+});
+
+test('resourceSparkPoints normalizes trends and omits unavailable series', () => {
+  assert.equal(resourceSparkPoints([], 'rss_bytes', 120, 24), '');
+  assert.equal(resourceSparkPoints([{ rss_bytes: null }], 'rss_bytes', 120, 24), '');
+  assert.equal(
+    resourceSparkPoints([{ rss_bytes: 100 }, { rss_bytes: 200 }, { rss_bytes: 300 }], 'rss_bytes', 120, 24),
+    '0.0,24.0 60.0,12.0 120.0,0.0'
+  );
+  assert.equal(
+    resourceSparkPoints([{ cpu_percent: 50 }, { cpu_percent: 50 }], 'cpu_percent', 120, 24),
+    '0.0,12.0 120.0,12.0'
+  );
+});
+
+test('resourceDiagnosisText provides fallback copy and escapes server text', () => {
+  assert.equal(resourceDiagnosisText({ code: 'heavy-memory' }), 'Heavy memory use');
+  assert.equal(
+    resourceDiagnosisText({ summary: '<img src=x onerror="boom">' }),
+    '&lt;img src=x onerror=&quot;boom&quot;&gt;'
+  );
+});
 
 // ---------- escapeHTML ----------
 

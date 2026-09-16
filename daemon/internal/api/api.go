@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -25,6 +27,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/guard"
 	"github.com/cavi-ai/secure-agent/daemon/internal/intel"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
+	"github.com/cavi-ai/secure-agent/daemon/internal/resource"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 	"github.com/cavi-ai/secure-agent/daemon/internal/supervise"
 	"golang.org/x/sys/unix"
@@ -44,9 +47,10 @@ type AgentSummary struct {
 	StartedAt string `json:"started_at,omitempty"`
 	// LastSeenAt is the timestamp of the most recent event attributed to this
 	// process (RFC3339) — the staleness signal for the agents panel.
-	LastSeenAt string `json:"last_seen_at,omitempty"`
-	RSSBytes   uint64 `json:"rss_bytes,omitempty"`
-	IsOrphan   bool   `json:"is_orphan,omitempty"`
+	LastSeenAt string  `json:"last_seen_at,omitempty"`
+	RSSBytes   uint64  `json:"rss_bytes,omitempty"`
+	CPUPercent float64 `json:"cpu_percent,omitempty"`
+	IsOrphan   bool    `json:"is_orphan,omitempty"`
 }
 
 type Status struct {
@@ -101,10 +105,14 @@ type Status struct {
 type StatusFunc func() Status
 
 type API struct {
-	socketPath string
-	store      *store.Store
-	killer     Killer
-	statusFn   StatusFunc
+	socketPath       string
+	store            *store.Store
+	killer           Killer
+	statusFn         StatusFunc
+	resources        func() resource.Snapshot
+	resourceControl  *resource.Controller
+	resourcePolicy   func(config.ResourceControlConfig) error
+	resourcePolicyMu sync.Mutex
 
 	fwEngine      *firewall.Engine
 	fwModes       *firewall.ModeStore
@@ -148,6 +156,12 @@ func (a *API) SetFleetSink(s GuardEventSink) {
 }
 
 func (a *API) SetBusDrops(fn func() uint64) { a.busDrops = fn }
+
+func (a *API) SetResources(fn func() resource.Snapshot)        { a.resources = fn }
+func (a *API) SetResourceControl(control *resource.Controller) { a.resourceControl = control }
+func (a *API) SetResourcePolicyUpdater(fn func(config.ResourceControlConfig) error) {
+	a.resourcePolicy = fn
+}
 
 // FirewallControl bundles the runtime firewall controls the API exposes.
 type FirewallControl struct {
@@ -353,6 +367,9 @@ func (a *API) SetPeers(checker PeerChecker, agentPIDs func() map[int32]struct{})
 func (a *API) buildMux() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/status", a.handleStatus)
+	mux.HandleFunc("/resources", a.handleResources)
+	mux.HandleFunc("/resources/control", a.handleResourceControl)
+	mux.HandleFunc("/resources/policy", a.handleResourcePolicy)
 	mux.HandleFunc("/snapshot", a.handleSnapshot)
 	mux.HandleFunc("/posture", a.handlePosture)
 	mux.HandleFunc("/flags", a.handleFlags)
@@ -451,6 +468,103 @@ func (a *API) handleStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, a.currentStatus())
+}
+
+func (a *API) handleResources(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if a.resources == nil {
+		http.Error(w, "resource telemetry not enabled", http.StatusServiceUnavailable)
+		return
+	}
+	snapshot := a.resources()
+	if a.store != nil {
+		snapshot.Episodes = a.store.RecentResourceEpisodes(20)
+	}
+	writeJSON(w, snapshot)
+}
+
+func (a *API) handleResourceControl(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if a.resourceControl == nil {
+		http.Error(w, "resource control not enabled", http.StatusServiceUnavailable)
+		return
+	}
+	limitBody(w, r)
+	var req struct {
+		ID         string `json:"id"`
+		SessionKey string `json:"session_key"`
+		Decision   string `json:"decision"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid payload", http.StatusBadRequest)
+		return
+	}
+	var err error
+	if req.Decision == "resume" {
+		err = a.resourceControl.Resume(req.SessionKey, time.Now())
+	} else {
+		err = a.resourceControl.Resolve(req.ID, req.Decision, time.Now())
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	rule := req.ID
+	if rule == "" {
+		rule = req.SessionKey
+	}
+	a.store.PutAudit(store.AuditEntry{Action: "resource-control", Rule: rule, ToMode: req.Decision})
+	writeJSON(w, map[string]string{"status": "ok", "id": req.ID, "session_key": req.SessionKey, "decision": req.Decision})
+}
+
+func (a *API) handleResourcePolicy(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPut {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if a.resourcePolicy == nil {
+		http.Error(w, "resource policy editing not enabled", http.StatusServiceUnavailable)
+		return
+	}
+	limitBody(w, r)
+	reject := func(detail string) {
+		a.store.PutAudit(store.AuditEntry{Action: "resource-policy-update-rejected", Detail: detail})
+	}
+	var next config.ResourceControlConfig
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&next); err != nil {
+		reject("invalid payload")
+		http.Error(w, "Invalid payload", http.StatusBadRequest)
+		return
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		reject("trailing payload")
+		http.Error(w, "Invalid payload", http.StatusBadRequest)
+		return
+	}
+	if err := config.ValidateResourceControl(next); err != nil {
+		reject("validation failed: " + err.Error())
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	a.resourcePolicyMu.Lock()
+	defer a.resourcePolicyMu.Unlock()
+	if err := a.resourcePolicy(next); err != nil {
+		a.store.PutAudit(store.AuditEntry{Action: "resource-policy-update-failed", ToMode: next.Mode,
+			Detail: fmt.Sprintf("workspace_overrides=%d error=%v", len(next.WorkspaceOverrides), err)})
+		http.Error(w, "resource policy was not saved", http.StatusInternalServerError)
+		return
+	}
+	a.store.PutAudit(store.AuditEntry{Action: "resource-policy-update", ToMode: next.Mode,
+		Detail: fmt.Sprintf("workspace_overrides=%d", len(next.WorkspaceOverrides))})
+	writeJSON(w, map[string]string{"status": "ok"})
 }
 
 func (a *API) currentStatus() Status {
@@ -978,6 +1092,38 @@ func (a *API) handleKill(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	killed, err := a.TerminateAgentTree(req.PID, req.StartedAt)
+	if err != nil {
+		status := http.StatusInternalServerError
+		if strings.Contains(err.Error(), "not a recognized") {
+			status = http.StatusForbidden
+		}
+		if strings.Contains(err.Error(), "no longer") || strings.Contains(err.Error(), "start") {
+			status = http.StatusConflict
+		}
+		http.Error(w, err.Error(), status)
+		return
+	}
+	writeJSON(w, map[string]interface{}{"status": "ok", "pid": req.PID, "killed": killed})
+}
+
+// TerminateAgentTree is the single guarded containment path used by both the
+// operator /kill endpoint and resource budgets.
+func (a *API) TerminateAgentTree(pid int32, startedAt string) ([]int32, error) {
+	return a.terminateAgentTree(pid, startedAt, nil)
+}
+
+// TerminateAgentTreeVerified applies the normal guarded containment path and
+// additionally proves every family member is the same process instance seen
+// by the resource sampler.
+func (a *API) TerminateAgentTreeVerified(pid int32, startedAt string, expectedStarts map[int32]time.Time) ([]int32, error) {
+	return a.terminateAgentTree(pid, startedAt, expectedStarts)
+}
+
+func (a *API) terminateAgentTree(pid int32, startedAt string, expectedStarts map[int32]time.Time) ([]int32, error) {
+	if pid <= 0 {
+		return nil, fmt.Errorf("invalid pid")
+	}
 	// A control socket that can kill any pid is a self-neutralization
 	// primitive (kill the daemon, kill an unrelated user process). Only
 	// processes the tagger currently recognizes as agents are valid targets.
@@ -986,43 +1132,71 @@ func (a *API) handleKill(w http.ResponseWriter, r *http.Request) {
 	// process. started_at from the client is compared to the live tagged
 	// process so a recycled pid with a different start time is refused.
 	if a.agentPIDs != nil {
-		if _, ok := a.agentPIDs()[req.PID]; !ok {
-			http.Error(w, "pid is not a recognized agent process tree", http.StatusForbidden)
-			return
+		if _, ok := a.agentPIDs()[pid]; !ok {
+			return nil, fmt.Errorf("pid is not a recognized agent process tree")
 		}
 		// Re-verify right before signaling to shrink the pid-reuse window.
-		if _, ok := a.agentPIDs()[req.PID]; !ok {
-			http.Error(w, "pid is no longer a recognized agent process", http.StatusConflict)
-			return
+		if _, ok := a.agentPIDs()[pid]; !ok {
+			return nil, fmt.Errorf("pid is no longer a recognized agent process")
 		}
 	}
 
-	if req.StartedAt != "" {
-		if err := a.checkKillStart(req.PID, req.StartedAt); err != nil {
-			http.Error(w, err.Error(), http.StatusConflict)
-			return
+	if startedAt != "" {
+		if err := a.checkKillStart(pid, startedAt); err != nil {
+			return nil, err
 		}
 	}
 
 	// UI copy, CLI, and flag actions all say "process tree". Kill every
 	// currently tagged agent that shares this pid's root_pid — not the OS
 	// process tree, only what the tagger already recognized.
-	var killed []int32
-	for _, pid := range a.killTreePIDs(req.PID) {
+	var members []int32
+	for _, memberPID := range a.killTreePIDs(pid) {
 		if a.agentPIDs != nil {
-			if _, ok := a.agentPIDs()[pid]; !ok {
+			if _, ok := a.agentPIDs()[memberPID]; !ok {
 				continue
 			}
 		}
-		if err := a.killer.Kill(pid); err != nil {
-			http.Error(w, fmt.Sprintf("Kill failed: %v", err), http.StatusInternalServerError)
-			return
-		}
-		killed = append(killed, pid)
+		members = append(members, memberPID)
 	}
+	if expectedStarts != nil {
+		for _, memberPID := range members {
+			if err := a.checkExpectedProcessStart(memberPID, expectedStarts); err != nil {
+				return nil, err
+			}
+		}
+	}
+	var killed []int32
+	for _, memberPID := range members {
+		if expectedStarts != nil {
+			if err := a.checkExpectedProcessStart(memberPID, expectedStarts); err != nil {
+				return killed, err
+			}
+		}
+		if err := a.killer.Kill(memberPID); err != nil {
+			return killed, fmt.Errorf("Kill failed: %w", err)
+		}
+		killed = append(killed, memberPID)
+	}
+	return killed, nil
+}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok", "pid": req.PID, "killed": killed})
+func (a *API) checkExpectedProcessStart(pid int32, expected map[int32]time.Time) error {
+	want, ok := expected[pid]
+	if !ok || want.IsZero() {
+		return fmt.Errorf("pid %d has no verified start identity", pid)
+	}
+	for _, ag := range a.statusFn().Agents {
+		if ag.PID != pid {
+			continue
+		}
+		got, err := time.Parse(time.RFC3339Nano, ag.StartedAt)
+		if err != nil || !got.Equal(want) {
+			return fmt.Errorf("pid %d start time mismatch (process recycled?)", pid)
+		}
+		return nil
+	}
+	return fmt.Errorf("pid %d is no longer in the recognized session", pid)
 }
 
 func (a *API) killTreePIDs(pid int32) []int32 {

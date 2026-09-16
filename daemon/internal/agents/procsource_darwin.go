@@ -70,13 +70,16 @@ func (d *DarwinProcSource) Info(pid int32) (ProcInfo, bool) {
 		return ProcInfo{}, false
 	}
 
+	rss, cpu := procUsage(pid)
 	return ProcInfo{
 		PID:       pid,
 		PPID:      ppid,
 		Comm:      commStr,
 		Exe:       exe,
 		StartTime: start,
-		RSSBytes:  procRSS(pid),
+		RSSBytes:  rss,
+		CPUTime:   cpu,
+		CWD:       procCWD(pid),
 	}, true
 }
 
@@ -87,14 +90,19 @@ func timevalToTime(tv unix.Timeval) time.Time {
 	return time.Unix(tv.Sec, int64(tv.Usec)*1000)
 }
 
-// procRSS reads resident set size via PROC_PIDTASKINFO. cgo is disabled;
+// procUsage reads resident set size and cumulative CPU time via
+// PROC_PIDTASKINFO. cgo is disabled;
 // SYS_PROC_INFO is the libproc-equivalent syscall. A failure returns 0 so
-// the UI can omit memory rather than invent a number.
-func procRSS(pid int32) uint64 {
+// the UI can omit unavailable measurements rather than inventing values.
+func procUsage(pid int32) (uint64, time.Duration) {
 	var info struct {
-		VirtualSize  uint64
-		ResidentSize uint64
-		_            [80]byte
+		VirtualSize   uint64
+		ResidentSize  uint64
+		TotalUser     uint64
+		TotalSystem   uint64
+		ThreadsUser   uint64
+		ThreadsSystem uint64
+		_             [48]byte
 	}
 	const (
 		procInfoCallPidInfo = 2
@@ -110,9 +118,39 @@ func procRSS(pid int32) uint64 {
 		unsafe.Sizeof(info),
 	)
 	if errno != 0 {
-		return 0
+		return 0, 0
 	}
-	return info.ResidentSize
+	return info.ResidentSize, time.Duration(info.TotalUser + info.TotalSystem)
+}
+
+// procCWD reads the current working directory from PROC_PIDVNODEPATHINFO.
+// The first vnode_info_path is pvi_cdir; its path starts after vnode_info.
+func procCWD(pid int32) string {
+	const (
+		procInfoCallPidInfo  = 2
+		procPidVnodePathInfo = 9
+		vnodeInfoSize        = 152
+		maxPathLen           = 1024
+		vnodePathInfoSize    = vnodeInfoSize + maxPathLen
+	)
+	var info [2 * vnodePathInfoSize]byte
+	n, _, errno := unix.RawSyscall6(
+		unix.SYS_PROC_INFO,
+		uintptr(procInfoCallPidInfo),
+		uintptr(pid),
+		uintptr(procPidVnodePathInfo),
+		0,
+		uintptr(unsafe.Pointer(&info[0])),
+		uintptr(len(info)),
+	)
+	if errno != 0 || n < uintptr(vnodeInfoSize) {
+		return ""
+	}
+	path := info[vnodeInfoSize:vnodePathInfoSize]
+	if end := bytes.IndexByte(path, 0); end >= 0 {
+		path = path[:end]
+	}
+	return string(path)
 }
 
 func getProcPath(pid int32) string {

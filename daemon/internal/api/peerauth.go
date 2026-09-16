@@ -118,11 +118,15 @@ func (a *API) gate(checker PeerChecker, next http.Handler) http.Handler {
 // isMutation: POST on the mutating endpoint set (DELETE /guard/rules stays
 // owner-level — headless fleets revoke cached decisions over ssh).
 func isMutation(method, path string) bool {
+	if method == http.MethodPut && path == "/resources/policy" {
+		return true
+	}
 	if method != http.MethodPost {
 		return false
 	}
 	switch path {
 	case "/kill", "/guard/resolve", "/guard/rules", "/firewall/mode",
+		"/resources/control",
 		"/firewall/fingerprints/reload", "/firewall/fingerprints/ingest",
 		"/firewall/sources", "/incidents/status", "/allowlist", "/mute", "/ui/open-fda",
 		"/flags/acknowledge", "/advisor/retriage":
