@@ -36,11 +36,17 @@ rm -f bin/secure-agentd-arm64 bin/secure-agentd-amd64 bin/secure-agent-arm64 bin
 
 echo "==> Building universal menubar app..."
 (cd menubar && swift build -c release --arch arm64 --arch x86_64)
-MENUBAR_BIN="${REPO_ROOT}/menubar/.build/apple/Products/Release/secure-agent-menubar"
-if [[ ! -x "${MENUBAR_BIN}" ]]; then
-  MENUBAR_BIN="${REPO_ROOT}/menubar/.build/release/secure-agent-menubar"
-fi
-[[ -x "${MENUBAR_BIN}" ]] || { echo "error: menubar binary not found" >&2; exit 1; }
+# Locate the product via SwiftPM itself: hardcoded .build/apple/... paths go
+# silently stale when the scratch dir differs (custom SWIFTPM build dir,
+# Xcode/SwiftPM layout changes) — the build then "succeeds" while shipping a
+# days-old binary. --show-bin-path always tells the truth.
+MENUBAR_BIN="$(cd menubar && swift build -c release --arch arm64 --arch x86_64 --show-bin-path)/secure-agent-menubar"
+[[ -x "${MENUBAR_BIN}" ]] || { echo "error: menubar binary not found at ${MENUBAR_BIN}" >&2; exit 1; }
+# Freshness assertion: the product must be newer than every Swift source.
+# A stale product here means the build lied — fail loudly instead of
+# assembling an app with yesterday's menubar.
+NEWEST_SRC="$(find menubar/Sources menubar/Package.swift -name '*.swift' -newer "${MENUBAR_BIN}" | head -1)"
+[[ -z "${NEWEST_SRC}" ]] || { echo "error: menubar binary is STALE (older than ${NEWEST_SRC}) — clean menubar/.build and retry" >&2; exit 1; }
 
 echo "==> Assembling ${APP_NAME}.app..."
 rm -rf "${APP_DIR}"
