@@ -7,6 +7,9 @@ All notable changes to `secure-agent` are documented here. The format follows
 ## [Unreleased]
 
 ### Changed
+- The session board is its own console tab (Overview / Sessions / Agents / Egress / Findings) instead of filling the main dashboard. Overview keeps the activity trend and event timeline.
+
+### Changed
 - Uninspected-egress headline now counts only unknown endpoints. Known CDN/cloud infrastructure (Cloudflare, Google, AWS, GitHub, Akamai, Fastly, Azure — by suffix, CIDR, and cached PTR for bare IPs) is collapsed into a separate `uninspected_infra` figure and one collapsible group in the drill-down, excluded from the hero, posture, allowlist suggestions, and advisor pre-assessment.
 
 ### Added

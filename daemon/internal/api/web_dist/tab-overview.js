@@ -38,6 +38,7 @@ function renderSessionBoard() {
   const q = (document.getElementById('session-cwd-filter') || {}).value || '';
   const rows = filterSessionRows(sessionRows(agents, trees), q);
   if (badge) badge.textContent = rows.length;
+  SA.setTabBadge('sessions', rows.length);
   if (rows.length === 0) {
     const msg = String(q).trim()
       ? `No sessions match “${escapeHTML(String(q).trim())}”`
