@@ -6,6 +6,9 @@ All notable changes to `secure-agent` are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- API HTTP handlers for resources, kill, firewall, and guard live in their own files (`api.go` 1662→940). Same package, no behavior change.
+
 ### Added
 - **Resource Mission Control for local agent fleets.** The daemon now samples
   live RSS and CPU for attributed processes, groups them into stable session
