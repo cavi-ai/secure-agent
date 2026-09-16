@@ -9,6 +9,8 @@ package main
 // by their own subsystems; paths and firewall stay boot-static.
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"log"
 	"sort"
 	"strconv"
@@ -19,6 +21,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/api"
 	"github.com/cavi-ai/secure-agent/daemon/internal/config"
 	"github.com/cavi-ai/secure-agent/daemon/internal/fleet"
+	"github.com/cavi-ai/secure-agent/daemon/internal/resource"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
 
@@ -40,12 +43,14 @@ func (h *advisorStackHolder) Store(s advisorStack) { h.v.Store(s) }
 
 // configWatchDeps bundles everything the live config watcher may swap.
 type configWatchDeps struct {
-	st        *store.Store
-	stk       *advisorStackHolder
-	pub       *fleet.Publisher
-	fleetCfg  *fleetConfigHolder
-	logDir    string   // webhook delivery log dir (filepath.Dir(cfg.DBPath))
-	apiServer *api.API // SetFleetConfigured follows the webhook set
+	st              *store.Store
+	stk             *advisorStackHolder
+	pub             *fleet.Publisher
+	fleetCfg        *fleetConfigHolder
+	logDir          string   // webhook delivery log dir (filepath.Dir(cfg.DBPath))
+	apiServer       *api.API // SetFleetConfigured follows the webhook set
+	resourceControl *resource.Controller
+	initialConfig   *config.Config
 }
 
 // watchConfig polls config.yaml and re-configures the advisor stack and the
@@ -54,7 +59,12 @@ type configWatchDeps struct {
 // Paths, firewall, and guard are deliberately boot-static.
 func watchConfig(ctx context.Context, path string, deps configWatchDeps) {
 
-	var lastAdvisorKey, lastFleetKey string
+	var lastAdvisorKey, lastFleetKey, lastResourceKey string
+	if deps.initialConfig != nil {
+		lastAdvisorKey = advisorConfigKey(deps.initialConfig.Advisor)
+		lastFleetKey = fleetConfigKey(deps.initialConfig.Fleet)
+		lastResourceKey = resourceConfigKey(deps.initialConfig.ResourceControl)
+	}
 	check := func() {
 		// LoadStrict, not Load: a malformed overlay makes Load substitute
 		// compiled-in defaults (enabled=false, default endpoint) — the
@@ -92,6 +102,23 @@ func watchConfig(ctx context.Context, path string, deps configWatchDeps) {
 			log.Printf("fleet config applied live (%d webhook(s), heartbeat %ds)",
 				len(data.Fleet.Webhooks), data.Fleet.HeartbeatIntervalSec)
 		}
+		if key := resourceConfigKey(data.ResourceControl); key != lastResourceKey {
+			lastResourceKey = key
+			if deps.resourceControl != nil {
+				applied := deps.resourceControl.SetPolicySet(resourcePolicySet(data.ResourceControl))
+				if applied && deps.st != nil {
+					deps.st.PutAudit(store.AuditEntry{Action: "resource-policy", ToMode: data.ResourceControl.Mode,
+						Detail: fmt.Sprintf("rss=%dMiB cpu=%.0f%% sustain=%ds cooldown=%ds",
+							data.ResourceControl.MaxRSSMB, data.ResourceControl.MaxCPUPercent,
+							data.ResourceControl.SustainSeconds, data.ResourceControl.CooldownSeconds)})
+				}
+				if applied {
+					log.Printf("resource control applied live (mode=%s rss=%dMiB cpu=%.0f%% sustain=%ds)",
+						data.ResourceControl.Mode, data.ResourceControl.MaxRSSMB,
+						data.ResourceControl.MaxCPUPercent, data.ResourceControl.SustainSeconds)
+				}
+			}
+		}
 	}
 	check()
 	ticker := time.NewTicker(2 * time.Second)
@@ -104,6 +131,11 @@ func watchConfig(ctx context.Context, path string, deps configWatchDeps) {
 			check()
 		}
 	}
+}
+
+func resourceConfigKey(c config.ResourceControlConfig) string {
+	b, _ := json.Marshal(c) // all fields are JSON-safe after config validation
+	return string(b)
 }
 
 // advisorConfigKey fingerprints the advisor-relevant config so a reload

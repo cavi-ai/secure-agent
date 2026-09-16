@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"net"
 	"net/url"
 	"os"
@@ -176,6 +177,38 @@ type DirectoryGuardConfig struct {
 	CwdOverrides     []CwdOverride `yaml:"cwd_overrides"`
 }
 
+// ResourceControlConfig governs whole attributed session families. Zero
+// limits disable that dimension. Termination is never a default: operators
+// must explicitly select mode=terminate in their private config overlay.
+type ResourceControlConfig struct {
+	Mode               string                       `yaml:"mode" json:"mode"` // observe | prompt | terminate
+	MaxRSSMB           uint64                       `yaml:"max_rss_mb" json:"max_rss_mb"`
+	MaxCPUPercent      float64                      `yaml:"max_cpu_percent" json:"max_cpu_percent"`
+	SustainSeconds     int                          `yaml:"sustain_seconds" json:"sustain_seconds"`
+	CooldownSeconds    int                          `yaml:"cooldown_seconds" json:"cooldown_seconds"`
+	Interventions      []ResourceInterventionConfig `yaml:"interventions,omitempty" json:"interventions,omitempty"`
+	WorkspaceOverrides []ResourceControlOverride    `yaml:"workspace_overrides,omitempty" json:"workspace_overrides"`
+}
+
+type ResourceInterventionConfig struct {
+	Action       string `yaml:"action" json:"action"`
+	AfterSeconds int    `yaml:"after_seconds" json:"after_seconds"`
+	Nice         int    `yaml:"nice,omitempty" json:"nice,omitempty"`
+}
+
+// ResourceControlOverride applies a complete policy to one workspace subtree.
+// Complete policies make the effective behavior reviewable without hidden
+// field inheritance from the machine default.
+type ResourceControlOverride struct {
+	CwdPrefix       string                       `yaml:"cwd_prefix" json:"cwd_prefix"`
+	Mode            string                       `yaml:"mode" json:"mode"`
+	MaxRSSMB        uint64                       `yaml:"max_rss_mb" json:"max_rss_mb"`
+	MaxCPUPercent   float64                      `yaml:"max_cpu_percent" json:"max_cpu_percent"`
+	SustainSeconds  int                          `yaml:"sustain_seconds" json:"sustain_seconds"`
+	CooldownSeconds int                          `yaml:"cooldown_seconds" json:"cooldown_seconds"`
+	Interventions   []ResourceInterventionConfig `yaml:"interventions,omitempty" json:"interventions,omitempty"`
+}
+
 // AdvisorYAML is the on-disk shape of the local advisor config.
 type AdvisorYAML struct {
 	Enabled      bool   `yaml:"enabled"`
@@ -201,24 +234,25 @@ type AdvisorConfig struct {
 }
 
 type rawConfig struct {
-	DisabledAgents      []string             `yaml:"disabled_agents"`
-	SensitiveGlobs      []string             `yaml:"sensitive_globs"`
-	SensitivePaths      []string             `yaml:"sensitive_paths"`
-	KeychainMarkers     []string             `yaml:"keychain_markers"`
-	Agents              []AgentDef           `yaml:"agents"`
-	VendorAllowlist     map[string][]string  `yaml:"vendor_allowlist"`
-	NetSampleIntervalMS int64                `yaml:"net_sample_interval_ms"`
-	SocketPath          string               `yaml:"socket_path"`
-	DBPath              string               `yaml:"db_path"`
-	JSONLPath           string               `yaml:"jsonl_path"`
-	ProxyEnabled        bool                 `yaml:"proxy_enabled"`
-	ProxyPort           int                  `yaml:"proxy_port"`
-	ProxyCACertPath     string               `yaml:"proxy_ca_cert_path"`
-	ProxyCAKeyPath      string               `yaml:"proxy_ca_key_path"`
-	Firewall            FirewallConfig       `yaml:"firewall"`
-	DirectoryGuard      DirectoryGuardConfig `yaml:"directory_guard"`
-	Fleet               FleetConfig          `yaml:"fleet"`
-	Advisor             AdvisorYAML          `yaml:"advisor"`
+	DisabledAgents      []string              `yaml:"disabled_agents"`
+	SensitiveGlobs      []string              `yaml:"sensitive_globs"`
+	SensitivePaths      []string              `yaml:"sensitive_paths"`
+	KeychainMarkers     []string              `yaml:"keychain_markers"`
+	Agents              []AgentDef            `yaml:"agents"`
+	VendorAllowlist     map[string][]string   `yaml:"vendor_allowlist"`
+	NetSampleIntervalMS int64                 `yaml:"net_sample_interval_ms"`
+	SocketPath          string                `yaml:"socket_path"`
+	DBPath              string                `yaml:"db_path"`
+	JSONLPath           string                `yaml:"jsonl_path"`
+	ProxyEnabled        bool                  `yaml:"proxy_enabled"`
+	ProxyPort           int                   `yaml:"proxy_port"`
+	ProxyCACertPath     string                `yaml:"proxy_ca_cert_path"`
+	ProxyCAKeyPath      string                `yaml:"proxy_ca_key_path"`
+	Firewall            FirewallConfig        `yaml:"firewall"`
+	DirectoryGuard      DirectoryGuardConfig  `yaml:"directory_guard"`
+	ResourceControl     ResourceControlConfig `yaml:"resource_control"`
+	Fleet               FleetConfig           `yaml:"fleet"`
+	Advisor             AdvisorYAML           `yaml:"advisor"`
 }
 
 type Config struct {
@@ -238,6 +272,7 @@ type Config struct {
 	ProxyCAKeyPath    string
 	Firewall          FirewallConfig
 	DirectoryGuard    DirectoryGuardConfig
+	ResourceControl   ResourceControlConfig
 	Fleet             FleetConfig
 	Advisor           AdvisorConfig
 }
@@ -353,6 +388,7 @@ func loadWithOverlayError(explicitPath string) (Config, error, error) {
 		ProxyCAKeyPath:    expandPath(raw.ProxyCAKeyPath),
 		Firewall:          raw.Firewall,
 		DirectoryGuard:    raw.DirectoryGuard,
+		ResourceControl:   raw.ResourceControl,
 		Fleet:             raw.Fleet,
 		Advisor: AdvisorConfig{
 			Enabled:      raw.Advisor.Enabled,
@@ -362,6 +398,9 @@ func loadWithOverlayError(explicitPath string) (Config, error, error) {
 			Managed:      raw.Advisor.Managed,
 			ManagedModel: raw.Advisor.ManagedModel,
 		},
+	}
+	for i := range cfg.ResourceControl.WorkspaceOverrides {
+		cfg.ResourceControl.WorkspaceOverrides[i].CwdPrefix = expandPath(cfg.ResourceControl.WorkspaceOverrides[i].CwdPrefix)
 	}
 	if cfg.Advisor.Enabled && !cfg.Advisor.Managed && cfg.Advisor.Endpoint == "" {
 		cfg.Advisor.Endpoint = "http://127.0.0.1:8080"
@@ -390,6 +429,9 @@ func (c Config) Validate() error {
 	if c.DirectoryGuard.PromptDeadlineMS < 0 {
 		return fmt.Errorf("directory_guard.prompt_deadline_ms must be >= 0, got %d", c.DirectoryGuard.PromptDeadlineMS)
 	}
+	if err := ValidateResourceControl(c.ResourceControl); err != nil {
+		return err
+	}
 	if c.Fleet.HeartbeatIntervalSec < 0 {
 		return fmt.Errorf("fleet.heartbeat_interval_sec must be >= 0, got %d", c.Fleet.HeartbeatIntervalSec)
 	}
@@ -413,6 +455,104 @@ func (c Config) Validate() error {
 		ip := net.ParseIP(h)
 		if h != "localhost" && (ip == nil || !ip.IsLoopback()) {
 			return fmt.Errorf("advisor.endpoint must be loopback (127.0.0.1/::1/localhost), got %q", c.Advisor.Endpoint)
+		}
+	}
+	return nil
+}
+
+// ValidateResourceControl validates both the machine default and every scoped
+// policy. Workspace prefixes are path-boundary matched, so duplicates and
+// non-canonical paths are rejected instead of producing ambiguous precedence.
+func ValidateResourceControl(c ResourceControlConfig) error {
+	if err := validateResourcePolicy("resource_control", c.Mode, c.MaxRSSMB, c.MaxCPUPercent, c.SustainSeconds, c.CooldownSeconds); err != nil {
+		return err
+	}
+	if err := validateResourceInterventions("resource_control", c.Interventions); err != nil {
+		return err
+	}
+	seen := make(map[string]bool, len(c.WorkspaceOverrides))
+	for i, override := range c.WorkspaceOverrides {
+		field := fmt.Sprintf("resource_control.workspace_overrides[%d]", i)
+		if override.CwdPrefix == "" || !filepath.IsAbs(override.CwdPrefix) {
+			return fmt.Errorf("%s.cwd_prefix must be an absolute path", field)
+		}
+		clean := filepath.Clean(override.CwdPrefix)
+		if clean != override.CwdPrefix {
+			return fmt.Errorf("%s.cwd_prefix must be normalized, got %q", field, override.CwdPrefix)
+		}
+		if seen[clean] {
+			return fmt.Errorf("%s.cwd_prefix duplicates %q", field, clean)
+		}
+		seen[clean] = true
+		if err := validateResourcePolicy(field, override.Mode, override.MaxRSSMB, override.MaxCPUPercent, override.SustainSeconds, override.CooldownSeconds); err != nil {
+			return err
+		}
+		if err := validateResourceInterventions(field, override.Interventions); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateResourcePolicy(field, mode string, maxRSSMB uint64, maxCPU float64, sustain, cooldown int) error {
+	switch mode {
+	case "observe", "prompt", "terminate":
+	default:
+		return fmt.Errorf("%s.mode must be observe, prompt, or terminate, got %q", field, mode)
+	}
+	if maxCPU < 0 || math.IsNaN(maxCPU) || math.IsInf(maxCPU, 0) {
+		return fmt.Errorf("%s.max_cpu_percent must be >= 0", field)
+	}
+	if maxRSSMB > ^uint64(0)/(1024*1024) {
+		return fmt.Errorf("%s.max_rss_mb is too large", field)
+	}
+	if sustain < 0 || cooldown < 0 {
+		return fmt.Errorf("%s sustain_seconds and cooldown_seconds must be >= 0", field)
+	}
+	const maxDurationSeconds = int64((1<<63 - 1) / int64(time.Second))
+	if int64(sustain) > maxDurationSeconds || int64(cooldown) > maxDurationSeconds {
+		return fmt.Errorf("%s sustain_seconds and cooldown_seconds are too large", field)
+	}
+	return nil
+}
+
+func validateResourceInterventions(field string, steps []ResourceInterventionConfig) error {
+	seen := make(map[string]bool, len(steps))
+	previousAfter := -1
+	previousRank := -1
+	rank := map[string]int{"notify": 0, "lower_priority": 1, "pause": 2, "terminate": 3}
+	for i, step := range steps {
+		stepField := fmt.Sprintf("%s.interventions[%d]", field, i)
+		switch step.Action {
+		case "notify", "lower_priority", "pause", "terminate":
+		default:
+			return fmt.Errorf("%s.action must be notify, lower_priority, pause, or terminate", stepField)
+		}
+		if seen[step.Action] {
+			return fmt.Errorf("%s.action duplicates %q", stepField, step.Action)
+		}
+		seen[step.Action] = true
+		if rank[step.Action] <= previousRank {
+			return fmt.Errorf("%s.action must follow notify, lower_priority, pause, terminate order", stepField)
+		}
+		previousRank = rank[step.Action]
+		if step.AfterSeconds < 0 || step.AfterSeconds < previousAfter {
+			return fmt.Errorf("%s.after_seconds must be non-negative and ordered", stepField)
+		}
+		const maxDurationSeconds = int64((1<<63 - 1) / int64(time.Second))
+		if int64(step.AfterSeconds) > maxDurationSeconds {
+			return fmt.Errorf("%s.after_seconds is too large", stepField)
+		}
+		previousAfter = step.AfterSeconds
+		if step.Action == "lower_priority" {
+			if step.Nice < 1 || step.Nice > 19 {
+				return fmt.Errorf("%s.nice must be between 1 and 19", stepField)
+			}
+		} else if step.Nice != 0 {
+			return fmt.Errorf("%s.nice is only valid for lower_priority", stepField)
+		}
+		if step.Action == "terminate" && i != len(steps)-1 {
+			return fmt.Errorf("%s terminate must be the final intervention", stepField)
 		}
 	}
 	return nil

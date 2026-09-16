@@ -544,6 +544,13 @@ struct ConsoleView: View {
             // what agents cost, and how wide the monitoring net is.
             if state.connected {
                 VStack(alignment: .trailing, spacing: 3) {
+                    if let host = state.resources?.host,
+                       let available = ByteCount.short(host.availableMemoryBytes) {
+                        Label("\(available) available · \(host.headroomScore)/100", systemImage: "gauge.with.dots.needle.33percent")
+                            .font(.system(size: 10, weight: .semibold, design: .rounded))
+                            .foregroundStyle(host.capacity == "critical" ? Color.bad : host.capacity == "constrained" ? Color.warn : Color.ok)
+                            .help("Machine headroom · \(host.memoryPressure) memory pressure · \(host.thermalState) thermal · agents \(ByteCount.short(host.agentMemoryBytes) ?? "unavailable") · other apps \(ByteCount.short(host.nonAgentMemoryBytes) ?? "unavailable")")
+                    }
                     if let mem = ByteCount.short(state.totalAgentMemory) {
                         Label(mem, systemImage: "memorychip")
                             .font(.system(size: 10, weight: .semibold, design: .rounded))
@@ -663,6 +670,8 @@ struct ConsoleView: View {
         let open = expandedSessions.contains(root.id)
         let rssParts = ([root] + children).compactMap(\.rssBytes)
         let mem = rssParts.isEmpty ? nil : ByteCount.short(rssParts.reduce(0, +))
+        let cpuParts = ([root] + children).compactMap(\.cpuPercent)
+        let cpu = cpuParts.isEmpty ? nil : cpuParts.reduce(0, +)
         let seen = relativeTime(([root] + children).compactMap(\.lastSeenAt).max() ?? "")
         let flagN = state.unactedFlagsForSession(rootPid: root.pid).count
         return VStack(alignment: .leading, spacing: 3) {
@@ -706,6 +715,12 @@ struct ConsoleView: View {
                         if let mem {
                             Text(mem)
                                 .font(.system(size: 9, design: .monospaced)).foregroundStyle(.tertiary)
+                        }
+                        if let cpu {
+                            Text(String(format: "%.0f%%", cpu))
+                                .font(.system(size: 9, design: .monospaced))
+                                .foregroundStyle(cpu >= 100 ? Color.warn : Color.secondary)
+                                .help("CPU across this session's process family")
                         }
                         if let seen {
                             Text(seen)
@@ -778,6 +793,11 @@ struct ConsoleView: View {
                 if let m = ByteCount.short(child.rssBytes) {
                     Text(m)
                         .font(.system(size: 8, design: .monospaced)).foregroundStyle(.tertiary)
+                }
+                if let cpu = child.cpuPercent {
+                    Text(String(format: "%.0f%%", cpu))
+                        .font(.system(size: 8, design: .monospaced))
+                        .foregroundStyle(cpu >= 100 ? Color.warn : Color.secondary)
                 }
                 if let s = relativeTime(child.lastSeenAt ?? "") {
                     Text(s)

@@ -135,3 +135,69 @@ func TestRefreshIntervalIdleVsBusy(t *testing.T) {
 		t.Fatalf("busy interval = %s, want 3s", RefreshInterval(true))
 	}
 }
+
+func TestCPUPercent(t *testing.T) {
+	previousAt := time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
+	got := cpuPercent(time.Second, previousAt, 2*time.Second, previousAt.Add(2*time.Second))
+	if got != 50 {
+		t.Fatalf("cpuPercent=%v want 50", got)
+	}
+	if got := cpuPercent(2*time.Second, previousAt, time.Second, previousAt.Add(time.Second)); got != 0 {
+		t.Fatalf("counter regression=%v want 0", got)
+	}
+	if got := cpuPercent(time.Second, previousAt, 2*time.Second, previousAt); got != 0 {
+		t.Fatalf("zero wall delta=%v want 0", got)
+	}
+}
+
+func TestRefreshUpdatesDynamicResources(t *testing.T) {
+	start := time.Date(2026, 9, 15, 11, 0, 0, 0, time.UTC)
+	now := time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
+	src := &countingProcSource{procs: map[int32]ProcInfo{
+		100: {PID: 100, PPID: 1, Comm: "claude", Exe: "/usr/local/bin/claude", StartTime: start, RSSBytes: 100, CPUTime: time.Second},
+	}}
+	c, _ := config.Load("/nonexistent")
+	tg := New(c, src)
+	tg.now = func() time.Time { return now }
+	tg.Refresh()
+
+	src.procs[100] = ProcInfo{PID: 100, PPID: 1, Comm: "claude", Exe: "/usr/local/bin/claude", StartTime: start, RSSBytes: 250, CPUTime: 3 * time.Second}
+	now = now.Add(2 * time.Second)
+	tg.Refresh()
+
+	info := tg.TaggedPIDs()[100]
+	if info.RSSBytes != 250 {
+		t.Fatalf("RSSBytes=%d want 250", info.RSSBytes)
+	}
+	if info.CPUPercent != 100 {
+		t.Fatalf("CPUPercent=%v want 100", info.CPUPercent)
+	}
+	if !info.StartedAt.Equal(start) {
+		t.Fatalf("StartedAt=%v want %v", info.StartedAt, start)
+	}
+}
+
+func TestRefreshDoesNotCarryResourcesAcrossPIDReuse(t *testing.T) {
+	firstStart := time.Date(2026, 9, 15, 11, 0, 0, 0, time.UTC)
+	now := time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
+	src := &countingProcSource{procs: map[int32]ProcInfo{
+		100: {PID: 100, PPID: 1, Comm: "claude", Exe: "/usr/local/bin/claude", StartTime: firstStart, RSSBytes: 500, CPUTime: 10 * time.Second},
+	}}
+	c, _ := config.Load("/nonexistent")
+	tg := New(c, src)
+	tg.now = func() time.Time { return now }
+	tg.Refresh()
+
+	secondStart := firstStart.Add(time.Hour)
+	src.procs[100] = ProcInfo{PID: 100, PPID: 1, Comm: "claude", Exe: "/usr/local/bin/claude", StartTime: secondStart, RSSBytes: 50, CPUTime: time.Second}
+	now = now.Add(time.Second)
+	tg.Refresh()
+
+	info := tg.TaggedPIDs()[100]
+	if !info.StartedAt.Equal(secondStart) {
+		t.Fatalf("StartedAt=%v want replacement start %v", info.StartedAt, secondStart)
+	}
+	if info.RSSBytes != 50 || info.CPUTime != time.Second || info.CPUPercent != 0 {
+		t.Fatalf("replacement inherited resources: %+v", info)
+	}
+}

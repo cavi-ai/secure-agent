@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -15,14 +16,17 @@ import (
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
+	"github.com/cavi-ai/secure-agent/daemon/internal/resource"
 )
 
 // Retention caps for the API-populated tables, so an always-on daemon's DB stays
 // bounded. Events are pruned separately (batched) at 10,000.
 const (
-	maxIncidents = 5000  // one full report_json per flag
-	maxAudit     = 50000 // long-lived security log, but still bounded against abuse
-	maxFlags     = 10000 // flags are insert-only like events; cap them too
+	maxIncidents        = 5000  // one full report_json per flag
+	maxAudit            = 50000 // long-lived security log, but still bounded against abuse
+	maxFlags            = 10000 // flags are insert-only like events; cap them too
+	maxResourceEpisodes = 500   // bounded full-family pressure snapshots
+	episodeSettleWindow = 30 * time.Second
 )
 
 // jsonlRotateBytes caps the forensic flag mirror. SQLite is the source of
@@ -104,6 +108,7 @@ func Open(dbPath, jsonlPath string) (*Store, error) {
 			remote_port INT,
 			detail TEXT
 		);`,
+		`CREATE INDEX IF NOT EXISTS idx_events_pid_ts ON events(pid, ts);`,
 		`CREATE TABLE IF NOT EXISTS incidents (
 			id TEXT PRIMARY KEY,
 			flag_id TEXT,
@@ -166,6 +171,14 @@ func Open(dbPath, jsonlPath string) (*Store, error) {
 			model TEXT,
 			created_at TEXT
 		);`,
+		`CREATE TABLE IF NOT EXISTS resource_episodes (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			captured_at TEXT NOT NULL,
+			severity TEXT NOT NULL,
+			session_key TEXT NOT NULL,
+			episode_json TEXT NOT NULL
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_resource_episodes_captured_at ON resource_episodes(captured_at);`,
 	}
 
 	for _, q := range createQueries {
@@ -974,6 +987,318 @@ func (s *Store) RecentAudit(limit int) []AuditEntry {
 		log.Printf("store: audit cursor error (result may be truncated): %v", err)
 	}
 	return out
+}
+
+func (s *Store) PutResourceEpisode(episode resource.Episode) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	episode.ActivityStatus = "settling"
+	enriched, enrichErr := s.attachResourceEpisodeActivity(ctx, episode)
+	episode = enriched
+	if enrichErr != nil {
+		log.Printf("store: initial resource episode activity: %v", enrichErr)
+	}
+	payload, err := json.Marshal(episode)
+	if err != nil {
+		return fmt.Errorf("marshal resource episode: %w", err)
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin resource episode write: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO resource_episodes (captured_at, severity, session_key, episode_json) VALUES (?, ?, ?, ?)`,
+		episode.CapturedAt.UTC().Format(time.RFC3339Nano), episode.Severity, episode.Session.Key, string(payload),
+	); err != nil {
+		return fmt.Errorf("insert resource episode: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM resource_episodes WHERE id NOT IN (SELECT id FROM resource_episodes ORDER BY id DESC LIMIT ?)`, maxResourceEpisodes); err != nil {
+		return fmt.Errorf("prune resource episodes: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit resource episode: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) attachResourceEpisodeActivity(ctx context.Context, episode resource.Episode) (resource.Episode, error) {
+	end := episode.CapturedAt
+	start := end.Add(-10 * time.Minute)
+	var sampleStart time.Time
+	for _, sample := range episode.Session.Samples {
+		if !sample.At.IsZero() && sample.At.Before(end) && sample.At.After(start) && (sampleStart.IsZero() || sample.At.Before(sampleStart)) {
+			sampleStart = sample.At
+		}
+	}
+	if !sampleStart.IsZero() {
+		start = sampleStart
+	}
+	if !episode.Session.RootStartedAt.IsZero() && episode.Session.RootStartedAt.After(start) {
+		start = episode.Session.RootStartedAt
+	}
+
+	processes := make(map[int32]resource.Process, len(episode.Session.Processes))
+	pids := make([]int32, 0, len(episode.Session.Processes))
+	activities := append([]resource.EpisodeActivity(nil), episode.Activities...)
+	activityKeys := make(map[string]struct{}, len(activities))
+	for _, activity := range activities {
+		activityKeys[resourceActivityKey(activity)] = struct{}{}
+	}
+	appendActivity := func(activity resource.EpisodeActivity) {
+		key := resourceActivityKey(activity)
+		if _, exists := activityKeys[key]; exists {
+			return
+		}
+		activityKeys[key] = struct{}{}
+		activities = append(activities, activity)
+	}
+	for _, process := range episode.Session.Processes {
+		if process.PID <= 0 {
+			continue
+		}
+		processes[process.PID] = process
+		pids = append(pids, process.PID)
+		if !process.StartedAt.IsZero() && !process.StartedAt.Before(start) && !process.StartedAt.After(end) {
+			appendActivity(resource.EpisodeActivity{
+				At: process.StartedAt, Kind: "process-start", PID: process.PID, Process: process.Name,
+				Summary: truncateResourceActivity(process.Name+" started", 160),
+			})
+		}
+	}
+	if len(pids) == 0 || end.IsZero() {
+		return resource.AttachEpisodeActivity(episode, activities), nil
+	}
+
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(pids)), ",")
+	query := `SELECT kind, ts, pid, exe_path, path, remote_host, remote_port, detail
+		FROM events WHERE pid IN (` + placeholders + `)
+		AND datetime(ts) >= datetime(?) AND datetime(ts) <= datetime(?)
+		ORDER BY datetime(ts) DESC, id DESC`
+	args := make([]any, 0, len(pids)+2)
+	for _, pid := range pids {
+		args = append(args, pid)
+	}
+	args = append(args, start.UTC().Format(time.RFC3339Nano), end.UTC().Format(time.RFC3339Nano))
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return resource.AttachEpisodeActivity(episode, activities), fmt.Errorf("query resource episode activity: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var e event.Event
+		var kind int
+		var ts string
+		if err := rows.Scan(&kind, &ts, &e.PID, &e.ExePath, &e.Path, &e.RemoteHost, &e.RemotePort, &e.Detail); err != nil {
+			continue
+		}
+		e.Kind = event.Kind(kind)
+		e.TS, _ = time.Parse(time.RFC3339Nano, ts)
+		process := processes[e.PID]
+		if e.TS.Before(start) || e.TS.After(end) || (!process.StartedAt.IsZero() && e.TS.Before(process.StartedAt)) {
+			continue
+		}
+		appendActivity(resource.EpisodeActivity{
+			At: e.TS, Kind: resourceActivityKind(e.Kind), PID: e.PID, Process: process.Name,
+			Summary: resourceActivitySummary(e),
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return resource.AttachEpisodeActivity(episode, activities), fmt.Errorf("read resource episode activity: %w", err)
+	}
+	return resource.AttachEpisodeActivity(episode, activities), nil
+}
+
+func resourceActivityKey(activity resource.EpisodeActivity) string {
+	return fmt.Sprintf("%d|%s|%d|%s", activity.At.UnixNano(), activity.Kind, activity.PID, activity.Summary)
+}
+
+func resourceActivityKind(kind event.Kind) string {
+	switch kind {
+	case event.KindExec:
+		return "process"
+	case event.KindPluginAction:
+		return "tool"
+	case event.KindFileOpen, event.KindFileWrite, event.KindFileDelete:
+		return "file"
+	case event.KindConnOpen, event.KindConnClose:
+		return "network"
+	case event.KindGuardPrompt, event.KindGuardResolved:
+		return "guard"
+	default:
+		return "security"
+	}
+}
+
+func resourceActivitySummary(e event.Event) string {
+	var summary string
+	switch e.Kind {
+	case event.KindFileOpen:
+		summary = "opened " + filepath.Base(e.Path)
+	case event.KindFileWrite:
+		summary = "wrote " + filepath.Base(e.Path)
+	case event.KindFileDelete:
+		summary = "deleted " + filepath.Base(e.Path)
+	case event.KindExec:
+		summary = filepath.Base(e.ExePath) + " executed"
+	case event.KindConnOpen:
+		summary = fmt.Sprintf("connected to %s:%d", e.RemoteHost, e.RemotePort)
+	case event.KindConnClose:
+		summary = fmt.Sprintf("closed connection to %s:%d", e.RemoteHost, e.RemotePort)
+	case event.KindPluginAction:
+		summary = e.Detail
+	case event.KindGuardPrompt:
+		summary = "guard prompted: " + e.Detail
+	case event.KindGuardResolved:
+		summary = "guard resolved: " + e.Detail
+	case event.KindProxyHit:
+		summary = "proxy rule matched: " + e.Detail
+	case event.KindTranscriptHit:
+		summary = "transcript rule matched: " + e.Detail
+	case event.KindTCCModify:
+		summary = "privacy controls changed"
+	default:
+		summary = e.Kind.String()
+	}
+	if strings.TrimSpace(summary) == "" {
+		summary = e.Kind.String()
+	}
+	return truncateResourceActivity(summary, 160)
+}
+
+func truncateResourceActivity(value string, limit int) string {
+	value = strings.TrimSpace(value)
+	runes := []rune(value)
+	if len(runes) <= limit {
+		return value
+	}
+	return string(runes[:limit]) + "…"
+}
+
+func (s *Store) RecentResourceEpisodes(limit int) []resource.Episode {
+	s.mu.Lock()
+	rows, err := s.db.Query(`SELECT id, episode_json FROM resource_episodes ORDER BY id DESC LIMIT ?`, normalizeLimit(limit))
+	if err != nil {
+		s.mu.Unlock()
+		log.Printf("store: query resource episodes error: %v", err)
+		return []resource.Episode{}
+	}
+
+	out := make([]resource.Episode, 0)
+	payloads := make([]string, 0)
+	for rows.Next() {
+		var id int64
+		var payload string
+		if err := rows.Scan(&id, &payload); err != nil {
+			continue
+		}
+		var episode resource.Episode
+		if err := json.Unmarshal([]byte(payload), &episode); err != nil {
+			log.Printf("store: decode resource episode %d: %v", id, err)
+			continue
+		}
+		episode.ID = id
+		out = append(out, episode)
+		payloads = append(payloads, payload)
+	}
+	if err := rows.Err(); err != nil {
+		log.Printf("store: resource episode cursor error (result may be truncated): %v", err)
+	}
+	rows.Close()
+	s.mu.Unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	for i := range out {
+		if out[i].ActivityStatus == "complete" {
+			continue
+		}
+		out[i] = s.refreshResourceEpisode(ctx, out[i].ID, payloads[i], out[i])
+	}
+	return out
+}
+
+// refreshResourceEpisode uses optimistic compare-and-swap updates. If another
+// API reader enriches the same settling episode first, its activity is merged
+// into the retry instead of being overwritten by a stale full-JSON write.
+func (s *Store) refreshResourceEpisode(ctx context.Context, id int64, expectedPayload string, episode resource.Episode) resource.Episode {
+	persistedFallback := episode
+	accumulated := append([]resource.EpisodeActivity(nil), episode.Activities...)
+	for attempt := 0; attempt < 3; attempt++ {
+		enriched, enrichErr := s.attachResourceEpisodeActivity(ctx, episode)
+		if enrichErr != nil {
+			return persistedFallback
+		}
+		accumulated = append(accumulated[:0], enriched.Activities...)
+		if !enriched.CapturedAt.IsZero() && time.Since(enriched.CapturedAt) >= episodeSettleWindow {
+			enriched.ActivityStatus = "complete"
+		}
+		persisted := enriched
+		persisted.ID = 0
+		payload, err := json.Marshal(persisted)
+		if err != nil {
+			return persistedFallback
+		}
+		if string(payload) == expectedPayload {
+			enriched.ID = id
+			return enriched
+		}
+		result, err := s.db.ExecContext(ctx,
+			`UPDATE resource_episodes SET episode_json = ? WHERE id = ? AND episode_json = ?`,
+			string(payload), id, expectedPayload,
+		)
+		if err != nil {
+			log.Printf("store: refresh resource episode %d: %v", id, err)
+			return persistedFallback
+		}
+		if updated, _ := result.RowsAffected(); updated == 1 {
+			enriched.ID = id
+			return enriched
+		}
+
+		var latestPayload string
+		if err := s.db.QueryRowContext(ctx, `SELECT episode_json FROM resource_episodes WHERE id = ?`, id).Scan(&latestPayload); err != nil {
+			return persistedFallback
+		}
+		var latest resource.Episode
+		if err := json.Unmarshal([]byte(latestPayload), &latest); err != nil {
+			return persistedFallback
+		}
+		latest.ID = id
+		persistedFallback = latest
+		latest.Activities = mergeResourceActivities(latest.Activities, accumulated)
+		episode = latest
+		expectedPayload = latestPayload
+	}
+	// Heavy concurrent polling can exhaust the bounded retry loop. Return the
+	// actual persisted row rather than an uncommitted merge that could exceed
+	// the activity cap or disappear on the next read.
+	var latestPayload string
+	if err := s.db.QueryRowContext(ctx, `SELECT episode_json FROM resource_episodes WHERE id = ?`, id).Scan(&latestPayload); err == nil {
+		var latest resource.Episode
+		if json.Unmarshal([]byte(latestPayload), &latest) == nil {
+			latest.ID = id
+			return latest
+		}
+	}
+	return persistedFallback
+}
+
+func mergeResourceActivities(existing, additional []resource.EpisodeActivity) []resource.EpisodeActivity {
+	merged := append([]resource.EpisodeActivity(nil), existing...)
+	seen := make(map[string]struct{}, len(merged))
+	for _, activity := range merged {
+		seen[resourceActivityKey(activity)] = struct{}{}
+	}
+	for _, activity := range additional {
+		key := resourceActivityKey(activity)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		merged = append(merged, activity)
+	}
+	return merged
 }
 
 func (s *Store) Close() error {

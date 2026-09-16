@@ -105,9 +105,11 @@ func TestLaunchManagedSpawnsAndServes(t *testing.T) {
 	if !strings.HasPrefix(endpoint, "http://127.0.0.1:") {
 		t.Fatalf("endpoint must be loopback, got %q", endpoint)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// The full race suite runs every package concurrently; process startup can
+	// exceed five seconds on a loaded CI host even though the helper is healthy.
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	if !WaitReady(ctx, endpoint, 5*time.Second) {
+	if !WaitReady(ctx, endpoint, 15*time.Second) {
 		t.Fatal("managed server never became ready")
 	}
 }

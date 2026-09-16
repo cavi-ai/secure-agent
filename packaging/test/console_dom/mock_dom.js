@@ -32,6 +32,115 @@
         'db-conn-string': { type: 'env-value', mode: 'monitor', would_block: 1, blocked: 0, legit: 0 }
       }
     },
+    '/resources': {
+      observed_at: iso(0),
+      host: {
+        total_memory_bytes: 17179869184,
+        free_memory_bytes: 2147483648,
+        available_memory_bytes: 4294967296,
+        compressed_memory_bytes: 1073741824,
+        used_memory_bytes: 12884901888,
+        agent_memory_bytes: 5905580032,
+        non_agent_memory_bytes: 6979321856,
+        swap_total_bytes: 8589934592,
+        swap_used_bytes: 2147483648,
+        headroom_percent: 25,
+        agent_memory_percent: 34.4,
+        system_cpu_percent: 75,
+        agent_cpu_percent: 16.6,
+        non_agent_cpu_percent: 58.4,
+        load_1: 5.5,
+        logical_cpu_count: 8,
+        memory_pressure: 'normal',
+        thermal_state: 'nominal',
+        headroom_score: 25,
+        capacity: 'constrained'
+      },
+      rss_bytes: 5995580032,
+      cpu_percent: 142.5,
+      process_count: 3,
+      session_count: 2,
+      control: {
+        mode: 'prompt', max_rss_bytes: 4294967296, max_cpu_percent: 100,
+        sustain_seconds: 30, cooldown_seconds: 300,
+		interventions: [{ action: 'notify', after_seconds: 0 }, { action: 'lower_priority', after_seconds: 30, nice: 10 }, { action: 'pause', after_seconds: 60 }, { action: 'terminate', after_seconds: 120 }],
+        workspace_overrides: [{ cwd_prefix: '/Users/dev/workspace', mode: 'observe', max_rss_bytes: 6442450944, max_cpu_percent: 200, sustain_seconds: 60, cooldown_seconds: 600 }],
+		pending: [{ id: 'resource-1', session_key: '5821:1789480800000000000', root_pid: 5821, action: 'pause' }]
+      },
+      sessions: [
+        {
+          key: '5821:1789480800000000000', name: 'claude', workspace: '/Users/dev/workspace/api-service',
+          root_pid: 5821, root_started_at: '2026-09-09T14:00:00Z', last_seen_at: iso(60000),
+          rss_bytes: 5905580032, cpu_percent: 132.5, process_count: 2, orphan_count: 0,
+          estimated_reclaim_bytes: 1610612736,
+          control: {
+            mode: 'prompt', state: 'approval-required', pending_id: 'resource-1',
+			next_action: 'pause', last_action: 'lower_priority', applied_actions: ['notify', 'lower_priority'],
+            policy_source: 'workspace', policy_scope: '/Users/dev/workspace',
+            violations: [{ metric: 'rss_bytes', actual: 5905580032, limit: 4294967296 }]
+          },
+          processes: [
+            { pid: 5821, ppid: 1, name: 'claude', cwd: '/Users/dev/workspace/api-service', rss_bytes: 4294967296, cpu_percent: 92.5 },
+            { pid: 5822, ppid: 5821, name: 'claude', rss_bytes: 1610612736, cpu_percent: 40 }
+          ],
+          samples: [
+            { at: iso(900000), rss_bytes: 4400000000, cpu_percent: 82 },
+            { at: iso(450000), rss_bytes: 5100000000, cpu_percent: 110 },
+            { at: iso(0), rss_bytes: 5905580032, cpu_percent: 132.5 }
+          ],
+          diagnoses: [{
+            code: 'rapid-growth', severity: 'warning',
+            summary: 'Memory grew 1.4 GB in 15 minutes.',
+            evidence: ['15-minute growth: 1505580032 bytes (34.2%)'],
+            threshold: '15-minute growth >= 1 GiB and >= 25%', confidence: 'high',
+            estimated_reclaim_bytes: 1505580032
+          }]
+        },
+        {
+          key: '6033:1789484400000000000', name: 'cursor', workspace: '/Users/dev/projects/web-app',
+          root_pid: 6033, root_started_at: '2026-09-09T15:00:00Z', last_seen_at: iso(3600000),
+          rss_bytes: 90000000, cpu_percent: 10, process_count: 1, orphan_count: 1,
+		  control: { mode: 'prompt', state: 'paused', policy_source: 'default', paused: true, last_action: 'pause', last_error: 'rollback failed: permission denied', violations: [] },
+          processes: [{ pid: 6033, ppid: 1, name: 'cursor', cwd: '/Users/dev/projects/web-app', rss_bytes: 90000000, cpu_percent: 10, is_orphan: true }],
+          samples: [{ at: iso(0), rss_bytes: 90000000, cpu_percent: 10 }],
+          diagnoses: [{ code: 'orphan-drift', severity: 'warning', summary: 'Attributed processes remain after their parent disappeared.' }]
+        }
+      ],
+      episodes: [{
+        id: 7, captured_at: iso(1800000), severity: 'critical', diagnosis_codes: ['heavy-memory', 'runaway-child'],
+        host: {
+          total_memory_bytes: 17179869184, available_memory_bytes: 1073741824,
+          memory_pressure: 'critical', thermal_state: 'serious',
+          headroom_score: 6, capacity: 'critical'
+        },
+        correlations: [{
+          summary: 'Memory rose 3.0 GiB in 10m while node started.', confidence: 'observed-correlation',
+          from: iso(2400000), to: iso(1800000), rss_delta_bytes: 3221225472, activity_count: 3
+        }],
+        activities: [
+          { at: iso(2250000), kind: 'tool', pid: 4412, process: 'codex', summary: 'Bash tool ran' },
+          { at: iso(2100000), kind: 'process-start', pid: 4419, process: 'node', summary: 'node started' },
+          { at: iso(1950000), kind: 'network', pid: 4419, process: 'node', summary: 'connected to api.openai.com:443' }
+        ],
+        session: {
+          key: '4412:1789470000000000000', name: 'codex', workspace: '/Users/dev/workspace/data-pipeline',
+          root_pid: 4412, rss_bytes: 7516192768, cpu_percent: 88, process_count: 3,
+          processes: [
+            { pid: 4412, name: 'codex', rss_bytes: 1073741824, cpu_percent: 18 },
+            { pid: 4419, ppid: 4412, name: 'node', rss_bytes: 5905580032, cpu_percent: 65 },
+            { pid: 4420, ppid: 4412, name: 'rg', rss_bytes: 536870912, cpu_percent: 5 }
+          ],
+          samples: [
+            { at: iso(2400000), rss_bytes: 4294967296, cpu_percent: 42 },
+            { at: iso(1800000), rss_bytes: 7516192768, cpu_percent: 88 }
+          ],
+          diagnoses: [{
+            code: 'runaway-child', severity: 'critical', summary: 'One child process dominated session memory.',
+            evidence: ['PID 4419: 5905580032 bytes (79%)']
+          }]
+        }
+      }]
+    },
     '/posture': {
       state: 'critical',
       summary: '1 critical flag and 1 open incident need review',
@@ -144,6 +253,12 @@
   //                  #ct fragment, token must come from storage).
   const MODE = location.search;
   const REQUIRE_TOKEN = MODE.includes('requiretoken');
+  if (MODE.includes('policydemo')) {
+    window.confirm = (message) => {
+      document.documentElement.dataset.lastConfirm = message;
+      return false;
+    };
+  }
   if (MODE.includes('tokenseed')) {
     try { sessionStorage.setItem('sa.console-token', 'test-token'); } catch { /* ignored */ }
   }
@@ -293,6 +408,11 @@
   if (location.search.includes('nofleetdemo')) {
     data['/fleet'] = { ...data['/fleet'], fleet_configured: false };
   }
+  // Post-mortem variant: every live session has exited, but persisted pressure
+  // episodes must remain visible.
+  if (location.search.includes('noresourcesdemo')) {
+    data['/resources'] = { ...data['/resources'], rss_bytes: 0, cpu_percent: 0, process_count: 0, session_count: 0, sessions: [] };
+  }
 
   // Auto-action: demote a blocking rule — it must flip back to Promote.
   if (location.search.includes('demotedemo')) {
@@ -306,5 +426,16 @@
   // Auto-action: switch to the Egress tab — panels must hide/show correctly.
   if (location.search.includes('tabdemo')) {
     setTimeout(() => document.querySelector('[data-tab="egress"]').click(), 4000);
+  }
+  // Auto-action: select a session, open the resource policy editor, and add
+  // its workspace as an override through the real delegated click path.
+  if (location.search.includes('policydemo')) {
+    setTimeout(() => {
+      document.querySelector('[data-action="resource-session"]').click();
+      document.querySelector('[data-action="edit-resource-policy"]').click();
+      document.querySelector('[data-action="add-resource-override"][data-source="current"]').click();
+      document.querySelector('[data-policy-default="true"] [data-policy-field="mode"]').value = 'terminate';
+      document.getElementById('btn-save-resource-policy').click();
+    }, 4000);
   }
 })();

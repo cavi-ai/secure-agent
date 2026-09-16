@@ -39,6 +39,188 @@ means the model server has failed repeatedly and verdicts are paused
 (`last_error` says why) — the UIs render this so advisor actions never look
 like dead buttons. Absent on older daemons.
 
+### Resource telemetry: `GET /resources`
+
+Returns a point-in-time rollup of resources attributed to tagged agent process
+families. Each session is anchored to the root PID and process start time, so
+PID reuse cannot splice two runs together. Samples are taken every five
+seconds and retained in memory for one hour; daemon restarts begin a new
+history. The session totals remain agent-attributed; `host` provides the
+whole-machine context needed to tell whether that usage is safe or is crowding
+out the rest of the workstation.
+
+```json
+{
+  "observed_at": "2026-09-15T20:00:00Z",
+  "host": {
+    "total_memory_bytes": 17179869184,
+    "free_memory_bytes": 2147483648,
+    "available_memory_bytes": 4294967296,
+    "compressed_memory_bytes": 1073741824,
+    "used_memory_bytes": 12884901888,
+    "agent_memory_bytes": 5368709120,
+    "non_agent_memory_bytes": 7516192768,
+    "swap_total_bytes": 8589934592,
+    "swap_used_bytes": 2147483648,
+    "headroom_percent": 25,
+    "agent_memory_percent": 31.3,
+    "system_cpu_percent": 75,
+    "agent_cpu_percent": 8.9,
+    "non_agent_cpu_percent": 66.1,
+    "logical_cpu_count": 16,
+    "memory_pressure": "normal",
+    "thermal_state": "nominal",
+    "headroom_score": 25,
+    "capacity": "constrained"
+  },
+  "rss_bytes": 5368709120,
+  "cpu_percent": 142.5,
+  "process_count": 3,
+  "session_count": 1,
+  "sessions": [{
+    "key": "58210:1789502400000000000",
+    "name": "claude",
+    "workspace": "/Users/dev/project",
+    "root_pid": 58210,
+    "root_started_at": "2026-09-15T19:30:00Z",
+    "rss_bytes": 5368709120,
+    "cpu_percent": 142.5,
+    "process_count": 3,
+    "orphan_count": 0,
+    "estimated_reclaim_bytes": 5368709120,
+    "processes": [
+      {"name": "claude", "pid": 58210, "ppid": 1, "rss_bytes": 1073741824, "cpu_percent": 22.5},
+      {"name": "node", "pid": 58211, "ppid": 58210, "rss_bytes": 4294967296, "cpu_percent": 120}
+    ],
+    "samples": [{"at": "2026-09-15T20:00:00Z", "rss_bytes": 5368709120, "cpu_percent": 142.5}],
+    "diagnoses": [{
+      "code": "heavy-memory",
+      "severity": "critical",
+      "summary": "Session is using at least 4 GiB of resident memory.",
+      "threshold": "RSS >= 4 GiB",
+      "confidence": "high",
+      "estimated_reclaim_bytes": 5368709120
+    }]
+  }]
+}
+```
+
+Host CPU values are percentages of the machine's complete logical-CPU
+capacity (0–100). Session and process CPU values continue to use 100% per
+fully occupied core. `agent_cpu_percent` converts the attributed session total
+to machine capacity; `non_agent_cpu_percent` is the saturating difference from
+the measured system total. Memory attribution is likewise saturating, so a
+racing process sample can never produce a negative non-agent value.
+
+`headroom_score` is the most constrained available signal: available-memory
+percentage, CPU idle percentage, unused-swap percentage, or the thermal cap.
+Scores below 15 are `critical`, 15–49 are `constrained`, and 50–100 are
+`ample`. Memory pressure is `critical` below 10% available memory or at 80%
+swap use, `warning` below 20% available or at 50% swap use, and `normal`
+otherwise. Fields that the operating system does not expose are omitted and
+the corresponding state is `unknown`; secure-agent does not manufacture a
+healthy reading. macOS and Linux use native kernel/proc metrics, with thermal
+state collected best-effort. The first CPU sample has no delta and is omitted.
+
+Diagnoses are deterministic and may include `heavy-memory` (RSS ≥ 4 GiB),
+`heavy-cpu` (CPU ≥ 100%), `rapid-growth` (≥ 1 GiB and ≥ 25% over 15
+minutes), `idle-heavy` (RSS ≥ 2 GiB after 15 minutes without attributed
+activity), `runaway-child` (a child holds ≥ 1 GiB and ≥ 60% of family RSS),
+and `orphan-drift` (an attributed process remains after its parent exits).
+`estimated_reclaim_bytes` is an estimate of memory associated with the
+diagnosed scope; it is not a promise that the operating system will reclaim
+that exact amount immediately.
+
+Resource budgets are configured in the private overlay and hot-reload within
+one config-watch cycle:
+
+```yaml
+resource_control:
+  mode: prompt              # observe | prompt | terminate
+  max_rss_mb: 4096          # 0 disables this dimension
+  max_cpu_percent: 200      # 0 disables; 100 is one full core
+  sustain_seconds: 30       # continuous breach before action
+  cooldown_seconds: 300     # suppress repeat prompts/failed retries
+  interventions:            # optional ordered delays after sustain_seconds
+    - action: notify
+      after_seconds: 0
+    - action: lower_priority
+      after_seconds: 30
+      nice: 10              # 1..19; larger values get less CPU priority
+    - action: pause
+      after_seconds: 60
+    - action: terminate     # must be the final step
+      after_seconds: 120
+  workspace_overrides:
+    - cwd_prefix: /Users/me/workspace/critical-service
+      mode: terminate
+      max_rss_mb: 8192
+      max_cpu_percent: 300
+      sustain_seconds: 60
+      cooldown_seconds: 600
+```
+
+Workspace overrides cover the exact normalized path and its descendants. If
+multiple prefixes match, the longest prefix wins. Every override is a complete
+policy so its effective behavior does not depend on hidden field inheritance.
+The Resource Mission Control editor writes the full policy document with
+`PUT /resources/policy`; the daemon validates and atomically persists the YAML
+before applying it. An unsuccessful write leaves the active policy unchanged.
+
+The response also includes `episodes`, the newest 20 locally persisted
+resource-pressure captures. An episode is recorded when a diagnosis first
+appears, its diagnosis set changes, or resident memory rises another 25%.
+Each capture contains whole-session totals, diagnostic evidence, effective
+control state, the root plus at most 64 highest-RSS processes, and at most 120
+five-second samples (a ten-minute prelude). It also includes the captured
+`host` snapshot, so later review can distinguish a large but safe session from
+one that exhausted machine headroom. The database retains the newest 500
+episodes, and each `/resources` response returns the newest 20.
+
+Episodes may also contain `activities` and `correlations`. The daemon selects
+events only from PIDs in the captured process family and only between the
+retained prelude and capture time, then rejects any event outside that exact
+nanosecond window or before the captured process instance started. It converts
+the survivors into short references such
+as process starts, tool labels, file basenames, and network destinations;
+payloads and secret values are never copied. At most 80 of the newest
+references are retained. `correlations` identifies the largest positive
+sample-to-sample RSS change and any recorded activity in that same interval:
+
+```json
+{
+  "activities": [
+    {"at":"2026-09-15T19:59:55Z","kind":"process-start","pid":58211,"process":"node","summary":"node started"}
+  ],
+  "correlations": [
+    {"summary":"Memory rose 1.4 GiB in 5s while node started.","confidence":"observed-correlation","from":"2026-09-15T19:59:50Z","to":"2026-09-15T19:59:55Z","rss_delta_bytes":1503238554,"activity_count":1}
+  ]
+}
+```
+
+`observed-correlation` is deliberately not a causal verdict. The console says
+so beside every explanation and preserves the underlying activity rows for
+operator review. New episodes report `activity_status: "settling"` for 30
+seconds. Reads re-enrich and persist that evidence so events which reached
+SQLite slightly after the pressure capture are included; a successful refresh
+after the settling window marks the episode `complete`.
+
+`observe` only annotates sessions. With a configured ladder, `prompt` applies
+`notify` automatically and adds an approval to `control.pending` for each
+state-changing step. Resolve it with
+`POST /resources/control {"id":"resource-1","decision":"apply|dismiss"}`.
+Resume a paused family with
+`POST /resources/control {"session_key":"…","decision":"resume"}`.
+`terminate` mode executes every configured step automatically. Priority,
+pause, resume, and termination always target the complete recognized session
+family with a fresh process-start identity check immediately before action.
+Failed steps stop escalation and enter cooldown; no later destructive step is
+silently skipped to. Without an `interventions` list, the legacy behavior is
+preserved: `prompt` requests termination approval and `terminate` invokes the
+recognized-agent containment path automatically. Termination is never enabled
+by default. Policy changes, operator decisions, automatic attempts, and
+failures are recorded in `/audit`.
+
 ---
 
 ### 2. `GET /flags`
