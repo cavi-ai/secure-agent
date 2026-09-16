@@ -79,6 +79,55 @@ func TestRecorderRetryReemitsActivePressure(t *testing.T) {
 	}
 }
 
+func TestAttachEpisodeActivityExplainsSteepestGrowthWithoutClaimingCausation(t *testing.T) {
+	now := time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
+	episode := Episode{CapturedAt: now.Add(15 * time.Second), Session: Session{
+		RSSBytes: 4 * gib,
+		Samples: []Sample{
+			{At: now, RSSBytes: gib},
+			{At: now.Add(5 * time.Second), RSSBytes: gib + 128*1024*1024},
+			{At: now.Add(10 * time.Second), RSSBytes: 4 * gib},
+		},
+	}}
+
+	got := AttachEpisodeActivity(episode, []EpisodeActivity{
+		{At: now.Add(2 * time.Second), Kind: "tool", PID: 100, Summary: "Read tool ran"},
+		{At: now.Add(8 * time.Second), Kind: "process-start", PID: 101, Process: "node", Summary: "node started"},
+	})
+
+	if len(got.Activities) != 2 {
+		t.Fatalf("activities=%d want 2", len(got.Activities))
+	}
+	if len(got.Correlations) != 1 {
+		t.Fatalf("correlations=%d want 1", len(got.Correlations))
+	}
+	correlation := got.Correlations[0]
+	if correlation.Confidence != "observed-correlation" {
+		t.Fatalf("confidence=%q", correlation.Confidence)
+	}
+	if correlation.RSSDeltaBytes != 3*gib-128*1024*1024 || correlation.ActivityCount != 1 {
+		t.Fatalf("correlation=%+v", correlation)
+	}
+	if correlation.Summary != "Memory rose 2.9 GiB in 5s while node started." {
+		t.Fatalf("summary=%q", correlation.Summary)
+	}
+}
+
+func TestAttachEpisodeActivityBoundsNewestEvidence(t *testing.T) {
+	now := time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
+	activities := make([]EpisodeActivity, episodeActivityLimit+5)
+	for i := range activities {
+		activities[i] = EpisodeActivity{At: now.Add(time.Duration(i) * time.Second), PID: int32(i + 1)}
+	}
+	got := AttachEpisodeActivity(Episode{}, activities)
+	if len(got.Activities) != episodeActivityLimit {
+		t.Fatalf("activities=%d want %d", len(got.Activities), episodeActivityLimit)
+	}
+	if got.Activities[0].PID != 6 {
+		t.Fatalf("oldest retained pid=%d want 6", got.Activities[0].PID)
+	}
+}
+
 func episodeHasPID(episode Episode, pid int32) bool {
 	for _, process := range episode.Session.Processes {
 		if process.PID == pid {

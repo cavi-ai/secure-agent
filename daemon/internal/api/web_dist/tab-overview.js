@@ -27,6 +27,27 @@ function renderActivity() {
   svg.innerHTML = bars;
 }
 
+function resourceActivityMarkers(activities, samples, width, height) {
+  if (!activities.length || !samples.length) return '';
+  const times = samples.map(sample => new Date(sample.at).getTime()).filter(Number.isFinite);
+  if (!times.length) return '';
+  const start = Math.min(...times);
+  const end = Math.max(...times);
+  const span = Math.max(1, end - start);
+  return activities.slice(-24).map(activity => {
+    const at = new Date(activity.at).getTime();
+    if (!Number.isFinite(at) || at < start || at > end) return '';
+    const x = Math.max(2, Math.min(width - 2, ((at - start) / span) * width));
+    const kind = String(activity.kind || 'activity').replace(/[^a-z0-9-]/gi, '');
+    return `<g class="resource-activity-marker kind-${escapeHTML(kind)}"><line x1="${x.toFixed(1)}" x2="${x.toFixed(1)}" y1="2" y2="${height - 2}"/><circle cx="${x.toFixed(1)}" cy="5" r="2.4"/><title>${escapeHTML(activity.summary || 'Recorded activity')}</title></g>`;
+  }).join('');
+}
+
+function resourceActivityLabel(kind) {
+  const labels = { 'process-start': 'START', process: 'PROCESS', tool: 'TOOL', file: 'FILE', network: 'NETWORK', guard: 'GUARD', security: 'SECURITY' };
+  return labels[kind] || 'ACTIVITY';
+}
+
 function resourceFlightRecorderHTML(snapshot) {
   const episodes = snapshot.episodes || [];
   return `<section class="resource-flight-recorder">
@@ -40,6 +61,9 @@ function resourceFlightRecorderHTML(snapshot) {
       const processes = [...(session.processes || [])].sort((a, b) => Number(b.rss_bytes || 0) - Number(a.rss_bytes || 0));
       const visibleProcesses = processes.slice(0, 10);
       const omittedCount = Math.max(0, Number(session.process_count || processes.length) - visibleProcesses.length);
+      const activities = episode.activities || [];
+      const correlations = episode.correlations || [];
+      const correlation = correlations[0];
       const drivers = visibleProcesses.map(process => {
         const share = session.rss_bytes ? Math.round(Number(process.rss_bytes || 0) / Number(session.rss_bytes) * 100) : 0;
         return `<div class="resource-episode-process"><span><b>${escapeHTML(process.name || 'process')}</b> · PID ${Number(process.pid || 0)}${process.is_orphan ? ' · leftover' : ''}</span><span>${escapeHTML(fmtRSS(process.rss_bytes) || '—')} · ${share}%</span></div>`;
@@ -47,12 +71,26 @@ function resourceFlightRecorderHTML(snapshot) {
       const evidence = diagnoses.flatMap(d => d.evidence || []).map(item => `<li>${escapeHTML(item)}</li>`).join('');
       const memoryPoints = resourceSparkPoints(session.samples, 'rss_bytes', 220, 38);
       const cpuPoints = resourceSparkPoints(session.samples, 'cpu_percent', 220, 38);
+      const activityMarkers = resourceActivityMarkers(activities, session.samples || [], 220, 38);
+      const activityRows = activities.slice(-8).map(activity => `
+        <div class="resource-activity-row">
+          <time>${escapeHTML(fmtTime(new Date(activity.at)))}</time>
+          <span class="resource-activity-kind kind-${escapeHTML(activity.kind || 'activity')}">${escapeHTML(resourceActivityLabel(activity.kind))}</span>
+          <span><b>${escapeHTML(activity.process || `PID ${Number(activity.pid || 0)}`)}</b> · ${escapeHTML(activity.summary || 'Recorded activity')}</span>
+        </div>`).join('');
+      const activityOmitted = Math.max(0, activities.length - 8);
       const age = episode.captured_at ? fmtAge(episode.captured_at, Date.now()) : '';
       return `<details class="resource-episode severity-${escapeHTML(episode.severity || 'warning')}"${index === 0 ? ' open' : ''}>
         <summary><span><b>${escapeHTML(label)}</b><small>${escapeHTML(primary.summary || (episode.diagnosis_codes || []).join(', ') || 'Resource pressure')}</small></span><span class="resource-episode-metrics"><b>${escapeHTML(fmtRSS(session.rss_bytes) || '—')}</b><b>${escapeHTML(fmtCPU(session.cpu_percent) || '—')}</b><time>${age ? `${escapeHTML(age)} ago` : 'recorded'}</time></span></summary>
         <div class="resource-episode-body">
           <div><span class="resource-eyebrow">What drove it</span><div class="resource-episode-processes">${drivers || '<span>No process breakdown recorded</span>'}${omittedCount ? `<small>${omittedCount} lower-impact process${omittedCount === 1 ? '' : 'es'} omitted</small>` : ''}</div></div>
-          <div><span class="resource-eyebrow">Evidence</span>${evidence ? `<ul>${evidence}</ul>` : '<p>No additional evidence recorded.</p>'}<svg class="resource-episode-spark" viewBox="0 0 220 38" preserveAspectRatio="none" role="img" aria-label="Resource trend before capture">${memoryPoints ? `<polyline class="resource-spark-memory" points="${memoryPoints}"/>` : ''}${cpuPoints ? `<polyline class="resource-spark-cpu" points="${cpuPoints}"/>` : ''}</svg></div>
+          <div><span class="resource-eyebrow">Evidence</span>${evidence ? `<ul>${evidence}</ul>` : '<p>No additional evidence recorded.</p>'}<svg class="resource-episode-spark" viewBox="0 0 220 38" preserveAspectRatio="none" role="img" aria-label="Resource trend and nearby activity before capture">${memoryPoints ? `<polyline class="resource-spark-memory" points="${memoryPoints}"/>` : ''}${cpuPoints ? `<polyline class="resource-spark-cpu" points="${cpuPoints}"/>` : ''}${activityMarkers}</svg></div>
+          <div class="resource-episode-context">
+            <div class="resource-context-head"><span class="resource-eyebrow">What happened nearby</span>${correlation ? '<span class="resource-correlation-badge">Observed correlation</span>' : ''}</div>
+            ${correlation ? `<strong>${escapeHTML(correlation.summary)}</strong><p>Timing evidence can narrow an investigation, but does not prove which action caused the resource change.</p>` : '<p>No matching activity was recorded during this pressure window.</p>'}
+            <div class="resource-activity-list">${activityRows || '<span>No bounded activity references were available.</span>'}</div>
+            <div class="resource-context-actions">${activityOmitted ? `<small>${activityOmitted} earlier activities omitted from this view</small>` : '<span></span>'}<small>${episode.activity_status === 'settling' ? 'Activity context is still settling' : 'Scoped to this captured process lifetime'}</small></div>
+          </div>
         </div>
       </details>`;
     }).join('') || '<div class="resource-detail-empty">The recorder is armed. Episodes appear here when a session becomes heavy, grows rapidly, or leaves resource-holding processes behind.</div>'}</div>

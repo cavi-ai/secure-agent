@@ -17,7 +17,14 @@ All notable changes to `secure-agent` are documented here. The format follows
   shows family CPU/memory and supports Impact sorting. A local Resource Flight
   Recorder preserves bounded pressure episodes when diagnoses appear, change,
   or memory escalates another 25%, retaining whole-session totals, the root,
-  the 64 highest-impact processes, and a ten-minute prelude after exit.
+  the 64 highest-impact processes, and a ten-minute prelude after exit. Each
+  episode adds up to 80 redacted activity references from the captured process
+  family, marks them on the trend chart, and identifies the activity observed
+  during the steepest sample-to-sample memory rise without claiming that
+  temporal proximity proves causation. Exact nanosecond and per-process
+  lifetime checks prevent recycled PIDs from importing unrelated activity;
+  a bounded settling window re-enriches episodes from events persisted just
+  after the initial capture.
 - **Opt-in session resource budgets and containment.** A hot-reloadable
   `resource_control` policy supports observe-only reporting, approval-required
   containment, or explicit automatic whole-family termination after a
