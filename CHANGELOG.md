@@ -7,6 +7,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 ## [Unreleased]
 
 ### Changed
+- Overview shows a 3-row session strip (project folder, RSS, last seen, needs-you) that opens the Sessions tab. The full board stays on Sessions.
 - Menubar sessions are grouped by harness family again (collapsed headers with session/memory/activity aggregates, small families expanded), capped at 6 groups with a "+N more — open the console" link. The flat 50-row list is gone.
 - Every hero count is clickable: "N flags to review" opens the top unacted flag's action sheet; uninspected/would-block opens the console egress drill-down (tab deep-links now survive the token handoff).
 

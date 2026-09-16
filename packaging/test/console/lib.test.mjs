@@ -25,6 +25,7 @@ const {
   cwdLabel, sessionRows, filterEventsByPids, sessionBoardHTML,
   monitorVendorKeyIDs, inspectionVisible, vendorKeyPromoteHTML,
   scopedBySession, unactedLast24h, filterSessionRows, sseNeedsSnapshot,
+  sessionStripRows, sessionNeedsYou, sessionStripHTML,
 } = ctx;
 
 // ---------- escapeHTML ----------
@@ -406,4 +407,44 @@ test('sseNeedsSnapshot: exec/guard/proxy-hit refetch; file/conn are spark-only',
   assert.equal(sseNeedsSnapshot('conn-open'), false);
   assert.equal(sseNeedsSnapshot('transcript-hit'), false);
   assert.equal(sseNeedsSnapshot('plugin-action'), false);
+});
+
+test('sessionStripRows: first n, empty is empty', () => {
+  const rows = [
+    { label: 'a', pids: [1] },
+    { label: 'b', pids: [2] },
+    { label: 'c', pids: [3] },
+    { label: 'd', pids: [4] },
+  ];
+  assert.equal(sessionStripRows(rows, 3).map(r => r.label).join(','), 'a,b,c');
+  assert.equal(sessionStripRows(rows).map(r => r.label).join(','), 'a,b,c');
+  assert.equal(sessionStripRows([], 3).length, 0);
+});
+
+test('sessionNeedsYou: unacked flags on the row pids', () => {
+  const row = { pids: [5821, 5822] };
+  const flags = [
+    { pid: 5821, acknowledged: false },
+    { pid: 5822, acknowledged: true },
+    { pid: 6033, acknowledged: false },
+  ];
+  assert.equal(sessionNeedsYou(row, flags), 1);
+  assert.equal(sessionNeedsYou(row, []), 0);
+});
+
+test('sessionStripHTML: labels, RSS, needs-you, opens Sessions tab', () => {
+  const now = Date.parse('2026-09-15T18:00:00Z');
+  const html = sessionStripHTML(
+    [{ label: 'api-service', pids: [5821], rss: 160000000, lastSeen: '2026-09-15T17:59:00Z' }],
+    5,
+    now,
+    [{ pid: 5821 }]
+  );
+  assert.match(html, /api-service/);
+  assert.match(html, /session-strip-row/);
+  assert.match(html, /data-action="goto-tab"/);
+  assert.match(html, /data-tab="sessions"/);
+  assert.match(html, /session-strip-need/);
+  assert.match(html, /View all 5/);
+  assert.equal(sessionStripHTML([], 0, now, []), '');
 });
