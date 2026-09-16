@@ -26,6 +26,7 @@ type Snapshot struct {
 	ProcessCount int              `json:"process_count"`
 	SessionCount int              `json:"session_count"`
 	Sessions     []Session        `json:"sessions"`
+	Episodes     []Episode        `json:"episodes"`
 	Control      *ControlSnapshot `json:"control,omitempty"`
 }
 
@@ -340,6 +341,12 @@ func cloneSnapshot(snapshot Snapshot) Snapshot {
 			copyOf.Sessions[i].Diagnoses[j] = diagnosis
 			copyOf.Sessions[i].Diagnoses[j].Evidence = append([]string(nil), diagnosis.Evidence...)
 		}
+	}
+	copyOf.Episodes = make([]Episode, len(snapshot.Episodes))
+	for i, episode := range snapshot.Episodes {
+		copyOf.Episodes[i] = episode
+		copyOf.Episodes[i].DiagnosisCodes = append([]string(nil), episode.DiagnosisCodes...)
+		copyOf.Episodes[i].Session = boundedSessionCopy(episode.Session)
 	}
 	return copyOf
 }

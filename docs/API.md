@@ -117,6 +117,14 @@ The Resource Mission Control editor writes the full policy document with
 `PUT /resources/policy`; the daemon validates and atomically persists the YAML
 before applying it. An unsuccessful write leaves the active policy unchanged.
 
+The response also includes `episodes`, the newest 20 locally persisted
+resource-pressure captures. An episode is recorded when a diagnosis first
+appears, its diagnosis set changes, or resident memory rises another 25%.
+Each capture contains whole-session totals, diagnostic evidence, effective
+control state, the root plus at most 64 highest-RSS processes, and at most 120
+five-second samples (a ten-minute prelude). The database retains the newest
+500 episodes, and each `/resources` response returns the newest 20.
+
 `observe` only annotates sessions. `prompt` adds an approval to
 `control.pending`; resolve it with
 `POST /resources/control {"id":"resource-1","decision":"terminate|dismiss"}`.

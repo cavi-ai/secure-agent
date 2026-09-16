@@ -95,6 +95,7 @@ def main():
         dom_netfail = dump_dom(chrome, tmp, "?netfail")
         dom_tokenseed = dump_dom(chrome, tmp, "?requiretoken&tokenseed")
         dom_nofleet = dump_dom(chrome, tmp, "?nofleetdemo")
+        dom_noresources = dump_dom(chrome, tmp, "?noresourcesdemo")
         dom_policy = dump_dom(chrome, tmp, "?policydemo")
 
         # --- telemetry wiring ---
@@ -231,6 +232,15 @@ def main():
               "132.5%" in resource_view and "5.5 GB" in resource_view)
         check("resource diagnosis explains the pressure",
               "Memory grew 1.4 GB in 15 minutes." in resource_view)
+        check("resource flight recorder preserves exited sessions",
+              "Pressure flight recorder" in resource_view and "data-pipeline" in resource_view)
+        check("resource flight recorder remains visible with no live sessions",
+              "No attributed agent resource use right now" in dom_noresources
+              and "Pressure flight recorder" in dom_noresources
+              and "data-pipeline" in dom_noresources)
+        check("resource flight recorder identifies the dominant process",
+              "PID 4419" in resource_view and "79%" in resource_view
+              and "One child process dominated session memory." in resource_view)
         check("resource trend SVG is rendered",
               'class="resource-spark"' in resource_view and 'points="' in resource_view)
         check("resource action targets the full family",

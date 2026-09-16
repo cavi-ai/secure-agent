@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -184,6 +185,62 @@ func TestObserveResourcesBuildsSessionSnapshot(t *testing.T) {
 	}
 	if snapshot.Sessions[0].LastSeenAt != now.Format(time.RFC3339Nano) {
 		t.Fatalf("last_seen=%q want %q", snapshot.Sessions[0].LastSeenAt, now.Format(time.RFC3339Nano))
+	}
+}
+
+func TestResourceEpisodeWriterPersistsOnlyTransitions(t *testing.T) {
+	dir := t.TempDir()
+	st, err := store.Open(filepath.Join(dir, "episodes.db"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	writer := newResourceEpisodeWriter(st)
+	now := time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
+	snapshot := resource.Snapshot{ObservedAt: now, Sessions: []resource.Session{{
+		Key: "500:1", RootPID: 500, RSSBytes: 5 << 30,
+		Diagnoses: []resource.Diagnosis{{Code: "heavy-memory", Severity: "critical"}},
+	}}}
+
+	writer.Observe(snapshot)
+	writer.Observe(snapshot)
+	writer.Close()
+	if got := st.RecentResourceEpisodes(10); len(got) != 1 || got[0].Session.Key != "500:1" {
+		t.Fatalf("episodes=%+v", got)
+	}
+}
+
+type flakyResourceEpisodeStore struct {
+	mu       sync.Mutex
+	failures int
+	saved    []resource.Episode
+}
+
+func (s *flakyResourceEpisodeStore) PutResourceEpisode(episode resource.Episode) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.failures > 0 {
+		s.failures--
+		return errors.New("temporary sqlite failure")
+	}
+	s.saved = append(s.saved, episode)
+	return nil
+}
+
+func TestResourceEpisodeWriterRetriesCapturedEpisode(t *testing.T) {
+	st := &flakyResourceEpisodeStore{failures: 1}
+	writer := newResourceEpisodeWriter(st)
+	snapshot := resource.Snapshot{ObservedAt: time.Now(), Sessions: []resource.Session{{
+		Key: "500:1", RootPID: 500, RSSBytes: 5 << 30,
+		Diagnoses: []resource.Diagnosis{{Code: "heavy-memory", Severity: "critical"}},
+	}}}
+	writer.Observe(snapshot)
+	writer.Close()
+
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if len(st.saved) != 1 || st.saved[0].Session.Key != "500:1" {
+		t.Fatalf("saved=%+v", st.saved)
 	}
 }
 

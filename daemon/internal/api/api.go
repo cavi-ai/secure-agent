@@ -468,7 +468,11 @@ func (a *API) handleResources(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "resource telemetry not enabled", http.StatusServiceUnavailable)
 		return
 	}
-	writeJSON(w, a.resources())
+	snapshot := a.resources()
+	if a.store != nil {
+		snapshot.Episodes = a.store.RecentResourceEpisodes(20)
+	}
+	writeJSON(w, snapshot)
 }
 
 func (a *API) handleResourceControl(w http.ResponseWriter, r *http.Request) {
