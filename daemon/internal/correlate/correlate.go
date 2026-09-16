@@ -98,6 +98,10 @@ type UninspectedSummary struct {
 	Host     string    `json:"host"`
 	Count    int       `json:"count"`
 	LastSeen time.Time `json:"last_seen"`
+	// Infra names the CDN/cloud org when the endpoint is known infrastructure
+	// (InfraOrg) — empty for genuinely unknown destinations. UIs escalate
+	// only the unknown kind; infra rows collapse into a coverage note.
+	Infra string `json:"infra,omitempty"`
 }
 
 // UninspectedEgressSummary lists the observed blind-spot endpoints, most
@@ -119,7 +123,7 @@ func (c *Correlator) UninspectedEgressSummarySince(since time.Time) []Uninspecte
 			continue
 		}
 		agent, host, _ := strings.Cut(key, "|")
-		out = append(out, UninspectedSummary{Agent: agent, Host: host, Count: e.count, LastSeen: e.lastSeen})
+		out = append(out, UninspectedSummary{Agent: agent, Host: host, Count: e.count, LastSeen: e.lastSeen, Infra: InfraOrg(host)})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Count > out[j].Count })
 	return out
@@ -191,18 +195,38 @@ func (c *Correlator) UninspectedEgressCount() int {
 // UninspectedEgressCountWindow counts only pairs seen within d — the rolling
 // headline number the UIs show, so the metric answers "what is bypassing
 // inspection NOW" instead of growing monotonically for the daemon's lifetime.
+// Known CDN/cloud infrastructure (InfraOrg) is reported separately via
+// UninspectedInfraCountWindow and never joins the headline: 130 Cloudflare
+// IPs is one routing note, not 130 findings.
 func (c *Correlator) UninspectedEgressCountWindow(d time.Duration) int {
+	unknown, _ := c.uninspectedCountSplit(d)
+	return unknown
+}
+
+// UninspectedInfraCountWindow counts in-window pairs classified as known
+// CDN/cloud infrastructure — the dimmed "routing coverage" figure.
+func (c *Correlator) UninspectedInfraCountWindow(d time.Duration) int {
+	_, infra := c.uninspectedCountSplit(d)
+	return infra
+}
+
+func (c *Correlator) uninspectedCountSplit(d time.Duration) (unknown, infra int) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.pruneUninspectedLocked(time.Now())
 	cutoff := time.Now().Add(-d)
-	n := 0
-	for _, e := range c.uninspected {
-		if e.lastSeen.After(cutoff) {
-			n++
+	for key, e := range c.uninspected {
+		if !e.lastSeen.After(cutoff) {
+			continue
+		}
+		_, host, _ := strings.Cut(key, "|")
+		if InfraOrg(host) != "" {
+			infra++
+		} else {
+			unknown++
 		}
 	}
-	return n
+	return
 }
 
 func isLocalhost(host string) bool {
@@ -460,7 +484,9 @@ func (c *Correlator) Observe(e event.Event) []model.Flag {
 			if e2, known := c.uninspected[key]; known {
 				e2.count++
 				e2.lastSeen = e.TS
-				if e2.count == 3 && c.onUninspected != nil {
+				// Advisor pre-assessment is for endpoints a human must judge —
+				// never spend model calls on Cloudflare/Google/AWS carriers.
+				if e2.count == 3 && c.onUninspected != nil && InfraOrg(e.RemoteHost) == "" {
 					c.onUninspected(info.Name, e.RemoteHost)
 				}
 			} else if len(c.uninspected) < maxUninspectedTracked {

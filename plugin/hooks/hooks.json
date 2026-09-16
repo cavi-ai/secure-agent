@@ -31,7 +31,7 @@
       "hooks": [
         {
           "type": "command",
-          "command": "python3 ${plugin_dir}/hooks/injection_scan.py"
+          "command": "python3 ${plugin_dir}/hooks/secret_guard.py"
         }
       ]
     }

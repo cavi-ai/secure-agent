@@ -60,7 +60,7 @@ enum EventTime {
         return f
     }()
 
-    nonisolated(unsafe) static let display: DateFormatter = {
+    static let display: DateFormatter = {
         let f = DateFormatter()
         f.dateStyle = .none
         f.timeStyle = .medium
@@ -337,7 +337,8 @@ struct ProcessDetailSheet: View {
 }
 
 /// A process transcript sheet's error state is inline (banner style) —
-/// consistent with IncidentDetailView.
+/// consistent with IncidentDetailView. Retry is first-class: a transcript
+/// that failed during a daemon restart must not require closing the sheet.
 extension ProcessDetailSheet {
     var errorView: some View {
         VStack(spacing: 8) {
@@ -348,6 +349,8 @@ extension ProcessDetailSheet {
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
+            Button("Retry") { Task { await load() } }
+                .controlSize(.small)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }

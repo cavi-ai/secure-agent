@@ -305,9 +305,22 @@ public final class DaemonClient: Sendable {
 
     private func getDecodable<T: Decodable>(_ path: String) async throws -> T {
         let body = try await request(method: "GET", path: path)
+        return try Self.decodeBody(T.self, path: path, body: body)
+    }
+
+    /// Decode one response body. Static and pure for tests. A list endpoint
+    /// with zero rows may answer `null` (older daemons encoded a nil slice);
+    /// for array responses that is [] in disguise — decode it as such
+    /// instead of surfacing a bogus "daemon answered unexpectedly" (the
+    /// process-transcript failure).
+    static func decodeBody<T: Decodable>(_ type: T.Type, path: String, body: Data) throws -> T {
         do {
             return try JSONDecoder().decode(T.self, from: body)
         } catch {
+            if String(decoding: body, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines) == "null",
+               let empty = try? JSONDecoder().decode(T.self, from: Data("[]".utf8)) {
+                return empty
+            }
             throw DaemonClientError.decode("\(path): \(error.localizedDescription)")
         }
     }

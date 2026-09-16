@@ -1,4 +1,4 @@
-// Overview tab: session board, activity, events, posture.
+// Overview tab: session strip, activity, events, posture.
 
 function renderActivity() {
   const SA = window.SA;
@@ -256,6 +256,24 @@ function renderResourceMissionControl() {
   container.innerHTML = hostContext + posture + policy + `<div class="resource-layout"><div class="resource-session-list">${cards}</div><aside class="resource-detail-wrap">${detail}</aside></div>` + flightRecorder;
 }
 
+function renderSessionStrip() {
+  const SA = window.SA;
+  const panel = document.getElementById('session-strip-panel');
+  const el = document.getElementById('session-strip');
+  if (!el) return;
+  const agents = (SA.t.status && SA.t.status.agents) ? SA.t.status.agents : [];
+  const trees = SA.t.status && SA.t.status.trees;
+  const all = sessionRows(agents, trees);
+  const top = sessionStripRows(all, 3);
+  if (!top.length) {
+    if (panel) panel.hidden = true;
+    el.innerHTML = '';
+    return;
+  }
+  if (panel) panel.hidden = false;
+  el.innerHTML = sessionStripHTML(top, all.length, Date.now(), SA.t.flags);
+}
+
 function renderSessionBoard() {
   const SA = window.SA;
 
@@ -267,6 +285,7 @@ function renderSessionBoard() {
   const q = (document.getElementById('session-cwd-filter') || {}).value || '';
   const rows = filterSessionRows(sessionRows(agents, trees), q);
   if (badge) badge.textContent = rows.length;
+  SA.setTabBadge('sessions', rows.length);
   if (rows.length === 0) {
     const msg = String(q).trim()
       ? `No sessions match “${escapeHTML(String(q).trim())}”`

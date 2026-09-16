@@ -58,6 +58,28 @@ func (s *AllowlistStore) Add(agent, host string) error {
 	return safefile.WriteFileAtomic(s.path, mustJSON(m), 0o600)
 }
 
+// Remove deletes host from agent's approved set. Every approval must be
+// reversible — an allowlist you can only grow is a ratchet, not a policy.
+// Idempotent: removing an absent host is a no-op.
+func (s *AllowlistStore) Remove(agent, host string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	m := s.loadLocked()
+	hosts := m[agent]
+	kept := hosts[:0]
+	for _, h := range hosts {
+		if h != host {
+			kept = append(kept, h)
+		}
+	}
+	if len(kept) == 0 {
+		delete(m, agent)
+	} else {
+		m[agent] = kept
+	}
+	return safefile.WriteFileAtomic(s.path, mustJSON(m), 0o600)
+}
+
 func mustJSON(v any) []byte {
 	data, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {

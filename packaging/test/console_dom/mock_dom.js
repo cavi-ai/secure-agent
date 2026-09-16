@@ -213,13 +213,18 @@
     '/allowlist/suggestions': [
       { agent: 'cursor', host: 'registry.npmjs.org', count: 14, assessment: 'benign', confidence: 0.9, rationale: 'npm registry is routine for JS projects' }
     ],
+    '/allowlist': [
+      { agent: 'cursor', host: 'artifacts.example.com' }
+    ],
     '/mute': [
       { rule: 'proxy-prompt-injection', host: 'blog.example.com' },
       { rule: 'keychain-security-cli', host: '*' }
     ],
     '/egress/uninspected': [
       { agent: 'cursor', host: 'registry.npmjs.org', count: 14, last_seen: iso(300000), assessment: 'benign', rationale: 'npm registry is routine for JS projects' },
-      { agent: 'claude', host: 'statsig.example.com', count: 3, last_seen: iso(900000) }
+      { agent: 'claude', host: 'statsig.example.com', count: 3, last_seen: iso(900000) },
+      { agent: 'cursor', host: '2606:4700:4408::ac40:9bd1', count: 56, last_seen: iso(600000), infra: 'Cloudflare' },
+      { agent: 'codex', host: 'ec2-98-90-104-193.compute-1.amazonaws.com', count: 11, last_seen: iso(700000), infra: 'AWS' }
     ],
     '/notify/rules': {
       default_min_severity: 3,
@@ -264,6 +269,15 @@
   const handlePost = (p, opts) => {
     let body = {};
     try { body = JSON.parse((opts && opts.body) || '{}'); } catch { /* ignored */ }
+    if (p === '/allowlist' && opts && opts.method === 'DELETE') {
+      data['/allowlist'] = data['/allowlist'].filter(x => !(x.agent === body.agent && x.host === body.host));
+      return { status: 'ok' };
+    }
+    if (p === '/firewall/mode') {
+      const st = data['/status'].firewall_stats[body.rule];
+      if (st) st.mode = body.mode;
+      return { status: 'ok' };
+    }
     if (p === '/allowlist') {
       data['/allowlist/suggestions'] = data['/allowlist/suggestions'].filter(s => s.host !== body.host);
       data['/egress/uninspected'] = data['/egress/uninspected'].filter(e => e.host !== body.host);
@@ -398,6 +412,15 @@
   // episodes must remain visible.
   if (location.search.includes('noresourcesdemo')) {
     data['/resources'] = { ...data['/resources'], rss_bytes: 0, cpu_percent: 0, process_count: 0, session_count: 0, sessions: [] };
+  }
+
+  // Auto-action: demote a blocking rule — it must flip back to Promote.
+  if (location.search.includes('demotedemo')) {
+    setTimeout(() => document.querySelector('[data-action="demote"][data-rule="aws-key"]').click(), 4000);
+  }
+  // Auto-action: remove an allowlist entry — the row must leave the list.
+  if (location.search.includes('allowlistdemo')) {
+    setTimeout(() => document.querySelector('[data-action="allowlist-remove"]').click(), 4000);
   }
 
   // Auto-action: switch to the Egress tab — panels must hide/show correctly.
