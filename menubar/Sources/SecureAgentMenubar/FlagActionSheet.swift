@@ -170,7 +170,7 @@ struct FlagActionSheet: View {
                             .kerning(0.5)
                             .foregroundStyle(.secondary)
                         Spacer()
-                        Text("\(v.assessment) · \(v.confidence.map { Int($0 * 100) } ?? 0)%")
+                        Text("\(v.assessment ?? "unknown") · \(v.confidence.map { Int($0 * 100) } ?? 0)%")
                             .font(.system(size: 9, weight: .semibold, design: .rounded))
                             .foregroundStyle(v.assessment == "benign" ? Color.ok : (v.assessment == "malicious" ? Color.bad : Color.warn))
                     }
@@ -451,7 +451,7 @@ struct FlagActionSheet: View {
                 try await state.uiClient.muteAdd(rule: flag.rule, host: host)
                 applied = "dismissed — future flags of this rule are suppressed"
             case "rotate":
-                if let incident = state.incidents.first(where: { $0.flagId == flag.id }) {
+                if state.incidents.contains(where: { $0.flagId == flag.id }) {
                     showIncident = true
                     applied = "opened the rotation checklist"
                 } else {

@@ -266,7 +266,7 @@ public final class UpdateManager: ObservableObject {
         // failure and the operator can retry.
         let verify = await run("/usr/bin/codesign", ["--verify", "--deep", "--strict", dst])
         guard verify.status == 0 else {
-            try? await run("/usr/bin/hdiutil", ["detach", mountPoint])
+            _ = await run("/usr/bin/hdiutil", ["detach", mountPoint])
             throw UpdateError.shell("copied bundle failed signature verification (\(verify.stderr)); keeping the current install")
         }
         // Relaunch AFTER this instance exits: the old app must take its daemon
