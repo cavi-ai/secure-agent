@@ -332,6 +332,10 @@ body {
 .resource-diagnosis { color: var(--warn); flex: 1; }
 .resource-diagnosis.quiet { color: var(--ok); }
 .resource-reclaim { color: var(--tx-3); font-family: var(--mono); }
+.resource-policy { display:flex; justify-content:space-between; gap:12px; margin:8px 0 12px; padding:8px 10px; border:1px solid var(--line); border-radius:8px; color:var(--tx-2); font-size:11px; }
+.resource-policy b { color:var(--tx-1); text-transform:capitalize; }
+.resource-control-state { color:var(--warn); font:600 10px var(--mono); }
+.resource-approval { display:inline-flex; gap:6px; margin-left:auto; }
 .resource-session-foot .btn { padding: 6px 9px; font-size: .7rem; }
 .resource-detail-wrap {
   min-width: 0; border: 1px solid var(--line); border-radius: var(--r-sm); background: hsl(223 20% 10% / .7);

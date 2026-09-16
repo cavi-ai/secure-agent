@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -49,5 +50,36 @@ func TestResourcesEndpoint(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("snapshot mismatch\ngot:  %#v\nwant: %#v", got, want)
+	}
+}
+
+func TestResourceControlResolveEndpoint(t *testing.T) {
+	st := testStore(t)
+	a := New("", st, nil, func() Status { return Status{Running: true} })
+	control := resource.NewController(resource.Policy{
+		Mode: resource.ModePrompt, MaxRSSBytes: 100,
+	}, nil)
+	now := time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
+	control.Observe(resource.Snapshot{Sessions: []resource.Session{{
+		Key: "s1", RootPID: 10, RootStartedAt: now, Name: "claude", RSSBytes: 200,
+	}}}, now)
+	pending := control.Snapshot().Control.Pending
+	if len(pending) != 1 {
+		t.Fatalf("pending=%v", pending)
+	}
+	a.SetResourceControl(control)
+
+	response := httptest.NewRecorder()
+	body := strings.NewReader(`{"id":"` + pending[0].ID + `","decision":"dismiss"}`)
+	a.buildMux().ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/resources/control", body))
+	if response.Code != http.StatusOK {
+		t.Fatalf("code=%d body=%s", response.Code, response.Body.String())
+	}
+	if len(control.Snapshot().Control.Pending) != 0 {
+		t.Fatal("resolved action remained pending")
+	}
+	audits := st.RecentAudit(5)
+	if len(audits) != 1 || audits[0].Action != "resource-control" || audits[0].ToMode != "dismiss" {
+		t.Fatalf("audit=%+v", audits)
 	}
 }

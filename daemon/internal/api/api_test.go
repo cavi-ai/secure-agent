@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -643,5 +644,24 @@ func TestKillEndpointHelperPIDKillsWholeTree(t *testing.T) {
 		if got[want] != 1 {
 			t.Fatalf("helper kill %v, want whole tree 10,11,12", fk.all)
 		}
+	}
+}
+
+func TestTerminateAgentTreeUsesLiveHelperWhenRootExited(t *testing.T) {
+	fk := &fakeKiller{}
+	started := "2026-09-09T16:00:00.123456789Z"
+	a := New("", testStore(t), fk, func() Status {
+		return Status{Running: true, Agents: []AgentSummary{
+			{PID: 11, Name: "claude", RootPID: 10, StartedAt: started, IsOrphan: true},
+			{PID: 12, Name: "claude", RootPID: 10, IsOrphan: true},
+		}}
+	})
+	a.SetAgentPIDs(func() map[int32]struct{} { return map[int32]struct{}{11: {}, 12: {}} })
+	killed, err := a.TerminateAgentTree(11, started)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(killed, []int32{11, 12}) {
+		t.Fatalf("killed=%v want [11 12]", killed)
 	}
 }

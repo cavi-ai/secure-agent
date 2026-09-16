@@ -38,12 +38,21 @@
       cpu_percent: 142.5,
       process_count: 3,
       session_count: 2,
+      control: {
+        mode: 'prompt', max_rss_bytes: 4294967296, max_cpu_percent: 100,
+        sustain_seconds: 30, cooldown_seconds: 300,
+        pending: [{ id: 'resource-1', session_key: '5821:1789480800000000000', root_pid: 5821 }]
+      },
       sessions: [
         {
           key: '5821:1789480800000000000', name: 'claude', workspace: '/Users/dev/workspace/api-service',
           root_pid: 5821, root_started_at: '2026-09-09T14:00:00Z', last_seen_at: iso(60000),
           rss_bytes: 5905580032, cpu_percent: 132.5, process_count: 2, orphan_count: 0,
           estimated_reclaim_bytes: 1610612736,
+          control: {
+            mode: 'prompt', state: 'approval-required', pending_id: 'resource-1',
+            violations: [{ metric: 'rss_bytes', actual: 5905580032, limit: 4294967296 }]
+          },
           processes: [
             { pid: 5821, ppid: 1, name: 'claude', cwd: '/Users/dev/workspace/api-service', rss_bytes: 4294967296, cpu_percent: 92.5 },
             { pid: 5822, ppid: 5821, name: 'claude', rss_bytes: 1610612736, cpu_percent: 40 }

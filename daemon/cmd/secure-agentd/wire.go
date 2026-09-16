@@ -330,6 +330,15 @@ func observeResources(tracker *resource.Tracker, tagger *agents.Tagger, st *stor
 	tracker.Observe(infos, st.LastEventTimes(pids), now)
 }
 
+func resourcePolicy(c config.ResourceControlConfig) resource.Policy {
+	return resource.Policy{
+		Mode: resource.ControlMode(c.Mode), MaxRSSBytes: c.MaxRSSMB * 1024 * 1024,
+		MaxCPUPercent: c.MaxCPUPercent,
+		Sustain:       time.Duration(c.SustainSeconds) * time.Second,
+		Cooldown:      time.Duration(c.CooldownSeconds) * time.Second,
+	}
+}
+
 // defaultFleetHeartbeatSec is the status-envelope cadence when
 // fleet.heartbeat_interval_sec is unset or zero.
 const defaultFleetHeartbeatSec = 60

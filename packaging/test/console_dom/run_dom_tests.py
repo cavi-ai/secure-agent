@@ -234,6 +234,12 @@ def main():
               'class="resource-spark"' in resource_view and 'points="' in resource_view)
         check("resource action targets the full family",
               'data-action="filter-pids" data-pids="5821,5822"' in resource_view)
+        check("resource policy mode and grace are visible",
+              "prompt</b> policy" in resource_view and "30s grace" in resource_view)
+        check("resource approval contains the whole session",
+              'data-action="resource-control" data-id="resource-1" data-decision="terminate"' in resource_view)
+        check("resource approval can keep the session running",
+              'data-action="resource-control" data-id="resource-1" data-decision="dismiss"' in resource_view)
         check("overview session board is present", 'id="session-board"' in dom)
         check("session board has project filter", 'id="session-cwd-filter"' in dom)
         overview = dom.split('id="session-board"', 1)[1].split('id="tab-agents"', 1)[0]

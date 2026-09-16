@@ -91,6 +91,15 @@ firewall:
 directory_guard:
   prompt_deadline_ms: 45000
 
+# Whole-session resource budgets. Limits of zero disable enforcement for that
+# metric. Observe is the safe default; prompt/terminate require explicit opt-in.
+resource_control:
+  mode: observe
+  max_rss_mb: 0
+  max_cpu_percent: 0
+  sustain_seconds: 30
+  cooldown_seconds: 300
+
 # Local triage advisor (opt-in): a locally served model gives a second opinion
 # on flags and incidents. Loopback-only, enforced in code. See
 # docs/ADVISOR_THREAT_MODEL.md.

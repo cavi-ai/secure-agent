@@ -20,29 +20,31 @@ const (
 )
 
 type Snapshot struct {
-	ObservedAt   time.Time `json:"observed_at"`
-	RSSBytes     uint64    `json:"rss_bytes"`
-	CPUPercent   float64   `json:"cpu_percent,omitempty"`
-	ProcessCount int       `json:"process_count"`
-	SessionCount int       `json:"session_count"`
-	Sessions     []Session `json:"sessions"`
+	ObservedAt   time.Time        `json:"observed_at"`
+	RSSBytes     uint64           `json:"rss_bytes"`
+	CPUPercent   float64          `json:"cpu_percent,omitempty"`
+	ProcessCount int              `json:"process_count"`
+	SessionCount int              `json:"session_count"`
+	Sessions     []Session        `json:"sessions"`
+	Control      *ControlSnapshot `json:"control,omitempty"`
 }
 
 type Session struct {
-	Key                   string      `json:"key"`
-	Name                  string      `json:"name"`
-	Workspace             string      `json:"workspace,omitempty"`
-	RootPID               int32       `json:"root_pid"`
-	RootStartedAt         time.Time   `json:"root_started_at"`
-	LastSeenAt            string      `json:"last_seen_at,omitempty"`
-	RSSBytes              uint64      `json:"rss_bytes"`
-	CPUPercent            float64     `json:"cpu_percent,omitempty"`
-	ProcessCount          int         `json:"process_count"`
-	OrphanCount           int         `json:"orphan_count"`
-	EstimatedReclaimBytes uint64      `json:"estimated_reclaim_bytes,omitempty"`
-	Processes             []Process   `json:"processes"`
-	Samples               []Sample    `json:"samples"`
-	Diagnoses             []Diagnosis `json:"diagnoses"`
+	Key                   string          `json:"key"`
+	Name                  string          `json:"name"`
+	Workspace             string          `json:"workspace,omitempty"`
+	RootPID               int32           `json:"root_pid"`
+	RootStartedAt         time.Time       `json:"root_started_at"`
+	LastSeenAt            string          `json:"last_seen_at,omitempty"`
+	RSSBytes              uint64          `json:"rss_bytes"`
+	CPUPercent            float64         `json:"cpu_percent,omitempty"`
+	ProcessCount          int             `json:"process_count"`
+	OrphanCount           int             `json:"orphan_count"`
+	EstimatedReclaimBytes uint64          `json:"estimated_reclaim_bytes,omitempty"`
+	Processes             []Process       `json:"processes"`
+	Samples               []Sample        `json:"samples"`
+	Diagnoses             []Diagnosis     `json:"diagnoses"`
+	Control               *SessionControl `json:"control,omitempty"`
 }
 
 type Process struct {
@@ -329,6 +331,11 @@ func cloneSnapshot(snapshot Snapshot) Snapshot {
 		copyOf.Sessions[i].Processes = append([]Process(nil), session.Processes...)
 		copyOf.Sessions[i].Samples = append([]Sample(nil), session.Samples...)
 		copyOf.Sessions[i].Diagnoses = make([]Diagnosis, len(session.Diagnoses))
+		if session.Control != nil {
+			control := *session.Control
+			control.Violations = append([]Violation(nil), session.Control.Violations...)
+			copyOf.Sessions[i].Control = &control
+		}
 		for j, diagnosis := range session.Diagnoses {
 			copyOf.Sessions[i].Diagnoses[j] = diagnosis
 			copyOf.Sessions[i].Diagnoses[j].Evidence = append([]string(nil), diagnosis.Evidence...)

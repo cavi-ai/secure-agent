@@ -91,6 +91,26 @@ and `orphan-drift` (an attributed process remains after its parent exits).
 diagnosed scope; it is not a promise that the operating system will reclaim
 that exact amount immediately.
 
+Resource budgets are configured in the private overlay and hot-reload within
+one config-watch cycle:
+
+```yaml
+resource_control:
+  mode: prompt              # observe | prompt | terminate
+  max_rss_mb: 4096          # 0 disables this dimension
+  max_cpu_percent: 200      # 0 disables; 100 is one full core
+  sustain_seconds: 30       # continuous breach before action
+  cooldown_seconds: 300     # suppress repeat prompts/failed retries
+```
+
+`observe` only annotates sessions. `prompt` adds an approval to
+`control.pending`; resolve it with
+`POST /resources/control {"id":"resource-1","decision":"terminate|dismiss"}`.
+`terminate` invokes the same recognized-agent-only, start-time-checked
+whole-family containment path as `POST /kill`. Termination is never enabled
+by default. Policy changes, operator decisions, automatic attempts, and
+failures are recorded in `/audit`.
+
 ---
 
 ### 2. `GET /flags`
