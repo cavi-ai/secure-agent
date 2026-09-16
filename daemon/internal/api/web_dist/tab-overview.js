@@ -27,6 +27,93 @@ function renderActivity() {
   svg.innerHTML = bars;
 }
 
+function renderResourceMissionControl() {
+  const SA = window.SA;
+  const container = document.getElementById('resource-board');
+  const observed = document.getElementById('resource-observed');
+  if (!container) return;
+  const snapshot = SA.t.resources;
+  if (!snapshot) return;
+
+  if (observed) {
+    const age = snapshot.observed_at ? fmtAge(snapshot.observed_at, Date.now()) : '';
+    observed.textContent = age ? `${age} ago` : 'Live';
+  }
+
+  const sessions = [...(snapshot.sessions || [])].sort((a, b) => {
+    const impact = resourceImpact(b) - resourceImpact(a);
+    if (impact) return impact;
+    return Number(b.rss_bytes || 0) - Number(a.rss_bytes || 0);
+  });
+  if (sessions.length === 0) {
+    container.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-activity"/></svg><span>No attributed agent resource use right now</span></div>`;
+    return;
+  }
+
+  if (SA.selectedResourceKey && !sessions.some(s => s.key === SA.selectedResourceKey)) {
+    SA.selectedResourceKey = '';
+  }
+  const selected = sessions.find(s => s.key === SA.selectedResourceKey);
+  const totalCPU = Object.prototype.hasOwnProperty.call(snapshot, 'cpu_percent') ? fmtCPU(snapshot.cpu_percent) : '';
+  const posture = `
+    <div class="resource-posture" aria-label="Attributed machine resource posture">
+      <div class="resource-posture-lead"><span class="resource-eyebrow">Attributed now</span><strong>${sessions.length} session${sessions.length === 1 ? '' : 's'}</strong></div>
+      <div class="resource-stat"><span>Memory</span><strong>${escapeHTML(fmtRSS(snapshot.rss_bytes) || 'Unavailable')}</strong></div>
+      <div class="resource-stat"><span>CPU</span><strong>${escapeHTML(totalCPU || 'Unavailable')}</strong></div>
+      <div class="resource-stat"><span>Processes</span><strong>${Number(snapshot.process_count || 0)}</strong></div>
+    </div>`;
+
+  const cards = sessions.map((session, index) => {
+    const label = cwdLabel(session.workspace) || familyTitle(session.name);
+    const diagnoses = session.diagnoses || [];
+    const primary = diagnoses[0];
+    const pids = (session.processes || []).map(p => Number(p.pid)).filter(Number.isFinite);
+    const memoryPoints = resourceSparkPoints(session.samples, 'rss_bytes', 140, 30);
+    const cpuPoints = resourceSparkPoints(session.samples, 'cpu_percent', 140, 30);
+    const pressure = diagnoses.length ? ` pressure-${escapeHTML(primary.severity || 'warning')}` : '';
+    const active = selected && selected.key === session.key ? ' selected' : '';
+    const reclaim = fmtRSS(session.estimated_reclaim_bytes);
+    return `
+      <div class="resource-session-card${pressure}${active}">
+        <button type="button" class="resource-session-main" data-action="resource-session" data-key="${escapeHTML(session.key)}">
+          <span class="resource-rank">${index + 1}</span>
+          <span class="resource-identity">
+            <strong>${escapeHTML(label)}</strong>
+            <span>${escapeHTML(session.name || 'agent')} · root PID ${Number(session.root_pid || 0)} · ${Number(session.process_count || 0)} process${Number(session.process_count || 0) === 1 ? '' : 'es'}</span>
+          </span>
+          <span class="resource-metric"><b>${escapeHTML(fmtRSS(session.rss_bytes) || '—')}</b><small>memory</small></span>
+          <span class="resource-metric"><b>${escapeHTML(fmtCPU(session.cpu_percent) || '—')}</b><small>CPU</small></span>
+          <svg class="resource-spark" viewBox="0 0 140 30" preserveAspectRatio="none" role="img" aria-label="Recent memory and CPU trend">
+            ${memoryPoints ? `<polyline class="resource-spark-memory" points="${memoryPoints}"/>` : ''}
+            ${cpuPoints ? `<polyline class="resource-spark-cpu" points="${cpuPoints}"/>` : ''}
+          </svg>
+        </button>
+        <div class="resource-session-foot">
+          <span class="resource-diagnosis${primary ? '' : ' quiet'}">${primary ? resourceDiagnosisText(primary) : 'Within current thresholds'}</span>
+          ${reclaim ? `<span class="resource-reclaim">up to ${escapeHTML(reclaim)} reclaimable</span>` : ''}
+          <button type="button" class="btn btn-ghost btn-sm" data-action="filter-pids" data-pids="${escapeHTML(pids.join(','))}" data-label="${escapeHTML(label)}">Open family activity</button>
+        </div>
+      </div>`;
+  }).join('');
+
+  let detail = `<div class="resource-detail-empty">Select a session to inspect its complete process family.</div>`;
+  if (selected) {
+    const label = cwdLabel(selected.workspace) || familyTitle(selected.name);
+    const processes = (selected.processes || []).map(process => `
+      <div class="resource-process${process.is_orphan ? ' orphan' : ''}">
+        <span><b>PID ${Number(process.pid || 0)}</b>${Number(process.pid) === Number(selected.root_pid) ? ' · root' : ` · child of ${Number(process.ppid || 0)}`}${process.is_orphan ? ' · leftover' : ''}</span>
+        <span>${escapeHTML(fmtRSS(process.rss_bytes) || '—')} · ${escapeHTML(fmtCPU(process.cpu_percent) || '—')}</span>
+      </div>`).join('');
+    detail = `
+      <div class="resource-detail">
+        <div class="resource-detail-head"><div><span class="resource-eyebrow">Process topology</span><strong>${escapeHTML(label)}</strong></div><span>root PID ${Number(selected.root_pid || 0)}</span></div>
+        <div class="resource-processes">${processes}</div>
+      </div>`;
+  }
+
+  container.innerHTML = posture + `<div class="resource-layout"><div class="resource-session-list">${cards}</div><aside class="resource-detail-wrap">${detail}</aside></div>`;
+}
+
 function renderSessionBoard() {
   const SA = window.SA;
 
@@ -163,4 +250,3 @@ function renderEvents() {
   SA.firstEventRender = false;
   SA.suppressFreshOnce = false;
 }
-

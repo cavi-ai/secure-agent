@@ -70,6 +70,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   let telemetryData = {
     status: null,
+    resources: null,
     flags: [],       // unfiltered — feeds KPIs
     flagsView: [],   // filtered — feeds the flags panel
     incidents: [],
@@ -231,6 +232,7 @@ document.addEventListener('DOMContentLoaded', () => {
   let timelineSession = null;
   let timelinePids = null;
   let timelinePidLabel = '';
+  let selectedResourceKey = '';
 
   function sessionScopeOn() {
     return !!(timelineSession || (timelinePids && timelinePids.length));
@@ -363,7 +365,10 @@ document.addEventListener('DOMContentLoaded', () => {
       } catch { return null; } // network error, timeout, or corrupt JSON
     };
 
-    const snap = await grab('snapshot', '/snapshot');
+    const requests = [grab('snapshot', '/snapshot')];
+    if (slow) requests.push(grab('resources', '/resources'));
+    const [snap, resources] = await Promise.all(requests);
+    if (resources) telemetryData.resources = resources;
     if (snap) {
       const status = snap.status;
       if (status) {
@@ -427,7 +432,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // renderFleet and silently killed every panel after it — flags, events,
     // activity — on every single poll.
     const panels = [
-      ['posture', renderPosture], ['status', renderStatus], ['sessions', renderSessionBoard],
+      ['posture', renderPosture], ['status', renderStatus], ['resources', renderResourceMissionControl], ['sessions', renderSessionBoard],
       ['agents', renderAgents],
       ['firewall', renderFirewall], ['incidents', renderIncidents], ['fleet', renderFleet],
       ['audit', renderAudit], ['sources', renderSources], ['flags', renderFlags],
@@ -667,6 +672,7 @@ document.addEventListener('DOMContentLoaded', () => {
     prevEventKeys: { get() { return prevEventKeys; }, set(v) { prevEventKeys = v; } },
     firstEventRender: { get() { return firstEventRender; }, set(v) { firstEventRender = v; } },
     suppressFreshOnce: { get() { return suppressFreshOnce; }, set(v) { suppressFreshOnce = v; } },
+    selectedResourceKey: { get() { return selectedResourceKey; }, set(v) { selectedResourceKey = v; } },
   });
 
   // The report modal is shared by two views: the incident report (markdown,
@@ -955,6 +961,10 @@ document.addEventListener('DOMContentLoaded', () => {
       case 'filter-pids':
         e.preventDefault();
         window.filterTimelineToPids((d.pids || '').split(','), d.label);
+        break;
+      case 'resource-session':
+        selectedResourceKey = d.key || '';
+        renderResourceMissionControl();
         break;
       case 'allow-host':
         window.allowHost(d.agent, d.host);

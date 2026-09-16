@@ -228,6 +228,49 @@ function fmtRSS(n) {
   return (n / 1073741824).toFixed(1) + ' GB';
 }
 
+function fmtCPU(value) {
+  if (value === null || value === undefined || !Number.isFinite(Number(value))) return '';
+  const n = Number(value);
+  return n.toFixed(1).replace(/\.0$/, '') + '%';
+}
+
+// A score of 1 means the session is at the first-slice warning threshold:
+// either 4 GiB resident memory or one full CPU core.
+function resourceImpact(session) {
+  if (!session) return 0;
+  const memory = Math.max(0, Number(session.rss_bytes) || 0) / (4 * 1024 ** 3);
+  const cpu = Math.max(0, Number(session.cpu_percent) || 0) / 100;
+  return Math.max(memory, cpu);
+}
+
+function resourceSparkPoints(samples, field, width, height) {
+  const values = (samples || [])
+    .filter(sample => sample && sample[field] !== null && sample[field] !== undefined && Number.isFinite(Number(sample[field])))
+    .map(sample => Number(sample[field]));
+  if (!values.length) return '';
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const range = max - min;
+  return values.map((value, index) => {
+    const x = values.length === 1 ? width / 2 : (index / (values.length - 1)) * width;
+    const y = range === 0 ? height / 2 : height - ((value - min) / range) * height;
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(' ');
+}
+
+function resourceDiagnosisText(diagnosis) {
+  if (!diagnosis) return '';
+  const fallbacks = {
+    'heavy-memory': 'Heavy memory use',
+    'heavy-cpu': 'High CPU use',
+    'rapid-growth': 'Memory is growing quickly',
+    'idle-heavy': 'Idle session retains substantial memory',
+    'runaway-child': 'One child dominates session memory',
+    'orphan-drift': 'Detached processes are still consuming resources',
+  };
+  return escapeHTML(diagnosis.summary || fallbacks[diagnosis.code] || 'Resource pressure detected');
+}
+
 function fmtAge(iso, nowMs) {
   const t = Date.parse(iso);
   if (!isFinite(t)) return '';
@@ -411,4 +454,3 @@ function vendorKeyPromoteHTML(ids) {
     <button class="btn btn-primary btn-sm" data-action="promote-vendor-keys"><svg class="icon"><use href="#i-arrow"/></svg><span>Promote vendor keys to block</span></button>
   </div>`;
 }
-

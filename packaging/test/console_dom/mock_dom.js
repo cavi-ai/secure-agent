@@ -32,6 +32,45 @@
         'db-conn-string': { type: 'env-value', mode: 'monitor', would_block: 1, blocked: 0, legit: 0 }
       }
     },
+    '/resources': {
+      observed_at: iso(0),
+      rss_bytes: 5995580032,
+      cpu_percent: 142.5,
+      process_count: 3,
+      session_count: 2,
+      sessions: [
+        {
+          key: '5821:1789480800000000000', name: 'claude', workspace: '/Users/dev/workspace/api-service',
+          root_pid: 5821, root_started_at: '2026-09-09T14:00:00Z', last_seen_at: iso(60000),
+          rss_bytes: 5905580032, cpu_percent: 132.5, process_count: 2, orphan_count: 0,
+          estimated_reclaim_bytes: 1610612736,
+          processes: [
+            { pid: 5821, ppid: 1, name: 'claude', cwd: '/Users/dev/workspace/api-service', rss_bytes: 4294967296, cpu_percent: 92.5 },
+            { pid: 5822, ppid: 5821, name: 'claude', rss_bytes: 1610612736, cpu_percent: 40 }
+          ],
+          samples: [
+            { at: iso(900000), rss_bytes: 4400000000, cpu_percent: 82 },
+            { at: iso(450000), rss_bytes: 5100000000, cpu_percent: 110 },
+            { at: iso(0), rss_bytes: 5905580032, cpu_percent: 132.5 }
+          ],
+          diagnoses: [{
+            code: 'rapid-growth', severity: 'warning',
+            summary: 'Memory grew 1.4 GB in 15 minutes.',
+            evidence: ['15-minute growth: 1505580032 bytes (34.2%)'],
+            threshold: '15-minute growth >= 1 GiB and >= 25%', confidence: 'high',
+            estimated_reclaim_bytes: 1505580032
+          }]
+        },
+        {
+          key: '6033:1789484400000000000', name: 'cursor', workspace: '/Users/dev/projects/web-app',
+          root_pid: 6033, root_started_at: '2026-09-09T15:00:00Z', last_seen_at: iso(3600000),
+          rss_bytes: 90000000, cpu_percent: 10, process_count: 1, orphan_count: 1,
+          processes: [{ pid: 6033, ppid: 1, name: 'cursor', cwd: '/Users/dev/projects/web-app', rss_bytes: 90000000, cpu_percent: 10, is_orphan: true }],
+          samples: [{ at: iso(0), rss_bytes: 90000000, cpu_percent: 10 }],
+          diagnoses: [{ code: 'orphan-drift', severity: 'warning', summary: 'Attributed processes remain after their parent disappeared.' }]
+        }
+      ]
+    },
     '/posture': {
       state: 'critical',
       summary: '1 critical flag and 1 open incident need review',
