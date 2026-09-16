@@ -184,3 +184,28 @@ final class DaemonClientTests: XCTestCase {
         XCTAssertFalse(body.contains("anthropic-key"))
     }
 }
+
+// Regression: list endpoints with zero rows answered `null` (nil-slice
+// encoding), crashing the strict array decode — the process transcript sheet
+// showed "The data couldn't be read because it is missing". null must decode
+// as an empty array; garbage must still error.
+final class NullListDecodeTests: XCTestCase {
+    func testNullDecodesAsEmptyArray() throws {
+        let events = try DaemonClient.decodeBody([EventModel].self, path: "/events?pid=1", body: Data("null".utf8))
+        XCTAssertEqual(events.count, 0)
+        let flags = try DaemonClient.decodeBody([FlagModel].self, path: "/flags", body: Data("null\n".utf8))
+        XCTAssertEqual(flags.count, 0)
+    }
+
+    func testGarbageStillErrors() {
+        XCTAssertThrowsError(try DaemonClient.decodeBody([EventModel].self, path: "/events", body: Data("nope".utf8))) { err in
+            XCTAssertTrue(err.localizedDescription.contains("/events"), "error must name the path: \(err)")
+        }
+    }
+
+    func testRealArrayStillDecodes() throws {
+        let body = Data(#"[{"kind":5,"ts":"2026-09-15T01:00:00Z","pid":42}]"#.utf8)
+        let events = try DaemonClient.decodeBody([EventModel].self, path: "/events", body: body)
+        XCTAssertEqual(events.first?.pid, 42)
+    }
+}
