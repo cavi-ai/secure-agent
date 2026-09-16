@@ -131,7 +131,7 @@
     <!-- Primary navigation: the console is organized by question, not by
          data source — "is this normal?" (Overview), "what ran, grouped by
          run?" (Sessions), "what's running?" (Agents), "where is traffic
-         going?" (Egress), "what needs my decision?" (Findings). -->
+         going?" (Egress), "what needs my decision?" (Attention). -->
     <nav class="tabs" role="tablist" aria-label="Console sections">
       <button class="tab-btn active" data-tab="overview" role="tab" aria-selected="true" aria-controls="tab-overview">
         <svg class="icon"><use href="#i-activity"/></svg><span>Overview</span>
@@ -149,7 +149,7 @@
         <span class="tab-badge tab-badge-warn" id="tab-badge-egress" hidden></span>
       </button>
       <button class="tab-btn" data-tab="findings" role="tab" aria-selected="false" aria-controls="tab-findings">
-        <svg class="icon"><use href="#i-alert"/></svg><span>Findings</span>
+        <svg class="icon"><use href="#i-alert"/></svg><span>Attention</span>
         <span class="tab-badge tab-badge-warn" id="tab-badge-findings" hidden></span>
       </button>
     </nav>
@@ -297,9 +297,22 @@
         </div>
       </div>
 
-      <!-- Findings: "what needs my decision?" — flags, incidents, ledger -->
+      <!-- Attention: session-grouped decisions first, detailed evidence below. -->
       <div class="tabpanel" id="tab-findings" role="tabpanel" hidden>
-        <div class="grid">
+        <section class="panel attention-panel" id="attention-center">
+          <div class="panel-head attention-head">
+            <div>
+              <span class="attention-eyebrow">Operator queue</span>
+              <h2><svg class="icon"><use href="#i-alert"/></svg>Needs your attention</h2>
+              <p>Decisions grouped by the complete agent session they affect.</p>
+            </div>
+            <span class="badge badge-amber" id="badge-attention-count">0</span>
+          </div>
+          <div class="panel-body" id="attention-list">
+            <div class="empty"><svg class="icon"><use href="#i-shield"/></svg><span>No decisions waiting</span></div>
+          </div>
+        </section>
+        <div class="grid" id="security-findings-grid">
           <div class="col">
             <section class="panel">
               <div class="panel-head">

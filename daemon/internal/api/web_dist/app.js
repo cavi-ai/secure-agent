@@ -93,6 +93,7 @@ document.addEventListener('DOMContentLoaded', () => {
     audit: [],
     sources: [],
     uninspected: [],  // /egress/uninspected rows — the drill-down list
+    guardPending: [], // blocked tool calls waiting for an operator decision
     notifyCfg: null,  // /notify/rules payload — notification preferences
     connected: true
   };
@@ -378,9 +379,10 @@ document.addEventListener('DOMContentLoaded', () => {
       } catch { return null; } // network error, timeout, or corrupt JSON
     };
 
-    const requests = [grab('snapshot', '/snapshot')];
+    const requests = [grab('snapshot', '/snapshot'), grab('guard decisions', '/guard/pending')];
     if (slow) requests.push(grab('resources', '/resources'));
-    const [snap, resources] = await Promise.all(requests);
+    const [snap, guardPending, resources] = await Promise.all(requests);
+    if (guardPending) telemetryData.guardPending = guardPending || [];
     if (resources) telemetryData.resources = resources;
     if (snap) {
       const status = snap.status;
@@ -451,7 +453,7 @@ document.addEventListener('DOMContentLoaded', () => {
       ['session-strip', renderSessionStrip],
       ['agents', renderAgents],
       ['firewall', renderFirewall], ['incidents', renderIncidents], ['fleet', renderFleet],
-      ['audit', renderAudit], ['sources', renderSources], ['flags', renderFlags],
+      ['audit', renderAudit], ['sources', renderSources], ['flags', renderFlags], ['attention', renderAttention],
       ['events', renderEvents], ['activity', renderActivity]
     ];
     for (const [name, fn] of panels) {
@@ -773,6 +775,25 @@ document.addEventListener('DOMContentLoaded', () => {
       fetchTelemetry({ slow: true });
     } catch (err) {
       showToast(`Resource decision failed: ${err}`, 'danger');
+    }
+  };
+
+  window.resolveGuardPrompt = async function(id, verdict, scope) {
+    const action = verdict === 'allow'
+      ? (scope === 'always' ? 'allow every future path matched by this rule' : 'allow this request once')
+      : 'deny this request and remember the rule';
+    if (!confirm(`Guard decision: ${action}?`)) return;
+    try {
+      const res = await apiFetch('/guard/resolve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, verdict, scope })
+      });
+      if (!res.ok) throw new Error(await res.text());
+      showToast(`Guard request ${verdict === 'allow' ? 'allowed' : 'denied'}${scope === 'always' ? ' for this rule' : ' once'}.`, 'success');
+      fetchTelemetry({ slow: false });
+    } catch (err) {
+      showToast(`Guard decision failed: ${err}`, 'danger');
     }
   };
 
@@ -1176,6 +1197,10 @@ document.addEventListener('DOMContentLoaded', () => {
         e.preventDefault();
         e.stopPropagation();
 		window.resolveResourceControl(d.id, d.decision, d.session, d.intervention);
+        break;
+      case 'guard-resolve':
+        e.preventDefault();
+        window.resolveGuardPrompt(d.id, d.verdict, d.scope);
         break;
       case 'edit-resource-policy':
         window.openResourcePolicyEditor();
