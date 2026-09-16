@@ -1,10 +1,10 @@
 package config
 
 import (
-	"log"
 	"bytes"
 	"encoding/json"
 	"errors"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
