@@ -172,7 +172,7 @@ struct SettingsView: View {
                         Button("Unmute", role: .destructive) {
                             Task {
                                 try? await state.uiClient.muteRemove(rule: m.rule, host: m.host)
-                                await loadMutes()
+                                loadMutes()
                             }
                         }
                         .controlSize(.small)

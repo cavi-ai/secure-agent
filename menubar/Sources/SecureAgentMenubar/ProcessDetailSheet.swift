@@ -60,7 +60,7 @@ enum EventTime {
         return f
     }()
 
-    nonisolated(unsafe) static let display: DateFormatter = {
+    static let display: DateFormatter = {
         let f = DateFormatter()
         f.dateStyle = .none
         f.timeStyle = .medium
