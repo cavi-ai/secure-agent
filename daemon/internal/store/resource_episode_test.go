@@ -22,6 +22,8 @@ func TestResourceEpisodeRoundTrip(t *testing.T) {
 	now := time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
 	want := resource.Episode{
 		CapturedAt: now, Severity: "critical", DiagnosisCodes: []string{"heavy-memory"},
+		Host: &resource.HostSnapshot{TotalMemoryBytes: 16 << 30, AvailableMemoryBytes: 2 << 30,
+			MemoryPressure: "warning", ThermalState: "nominal", HeadroomScore: 12, Capacity: "critical"},
 		Session: resource.Session{Key: "100:1", Name: "claude", Workspace: "/work/app", RootPID: 100,
 			RSSBytes: 5 << 30, Processes: []resource.Process{{PID: 100, RSSBytes: 5 << 30}},
 			Samples:   []resource.Sample{{At: now, RSSBytes: 5 << 30}},
@@ -35,7 +37,7 @@ func TestResourceEpisodeRoundTrip(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("episodes=%d want 1", len(got))
 	}
-	if got[0].ID == 0 || !got[0].CapturedAt.Equal(now) || got[0].Session.Workspace != "/work/app" || got[0].Session.Processes[0].PID != 100 {
+	if got[0].ID == 0 || !got[0].CapturedAt.Equal(now) || got[0].Session.Workspace != "/work/app" || got[0].Session.Processes[0].PID != 100 || got[0].Host == nil || got[0].Host.AvailableMemoryBytes != 2<<30 {
 		t.Fatalf("episode=%+v", got[0])
 	}
 }

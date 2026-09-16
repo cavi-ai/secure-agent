@@ -37,6 +37,22 @@ func TestRecorderCapturesPressureTransitionsAndEscalation(t *testing.T) {
 	}
 }
 
+func TestRecorderCapturesWholeMachineContext(t *testing.T) {
+	now := time.Date(2026, 9, 16, 12, 0, 0, 0, time.UTC)
+	host := &HostSnapshot{TotalMemoryBytes: 16 * gib, AvailableMemoryBytes: gib, MemoryPressure: "critical", Capacity: "critical"}
+	session := Session{Key: "100:1", RootPID: 100, RSSBytes: 5 * gib,
+		Diagnoses: []Diagnosis{{Code: "heavy-memory", Severity: "critical"}}}
+
+	episodes := NewRecorder().Observe(Snapshot{ObservedAt: now, Host: host, Sessions: []Session{session}})
+	if len(episodes) != 1 || episodes[0].Host == nil || episodes[0].Host.AvailableMemoryBytes != gib {
+		t.Fatalf("episode host context=%+v", episodes)
+	}
+	host.AvailableMemoryBytes = 0
+	if episodes[0].Host.AvailableMemoryBytes != gib {
+		t.Fatal("episode retained a mutable host pointer")
+	}
+}
+
 func TestRecorderBoundsStoredTrend(t *testing.T) {
 	now := time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
 	samples := make([]Sample, episodeSampleLimit+10)

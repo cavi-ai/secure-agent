@@ -232,6 +232,7 @@ sessions = [s for s in snap.get("sessions", []) if s.get("root_pid") == pid]
 if not sessions:
     sys.exit(1)
 s = sessions[0]
+host = snap.get("host") or {}
 processes = [p for p in s.get("processes", []) if p.get("pid") == pid]
 ok = (snap.get("rss_bytes", 0) > 0
       and snap.get("process_count", 0) >= 1
@@ -239,7 +240,17 @@ ok = (snap.get("rss_bytes", 0) > 0
       and s.get("rss_bytes", 0) > 0
       and s.get("cpu_percent", 0) > 0
       and len(s.get("samples", [])) >= 1
-      and processes and processes[0].get("rss_bytes", 0) > 0)
+      and processes and processes[0].get("rss_bytes", 0) > 0
+      and host.get("total_memory_bytes", 0) > 0
+      and host.get("available_memory_bytes", 0) > 0
+      and host.get("agent_memory_bytes") == snap.get("rss_bytes")
+      and host.get("non_agent_memory_bytes", -1) >= 0
+      and host.get("logical_cpu_count", 0) > 0
+      and host.get("system_cpu_percent") is not None
+      and host.get("non_agent_cpu_percent") is not None
+      and host.get("memory_pressure") in ("normal", "warning", "critical")
+      and host.get("thermal_state") in ("nominal", "fair", "serious", "critical", "unknown")
+      and host.get("capacity") in ("ample", "constrained", "critical"))
 sys.exit(0 if ok else 1)
 ' "$AGENT_PID" 2>/dev/null; then
     RESOURCE_PASSED=true
@@ -248,7 +259,7 @@ sys.exit(0 if ok else 1)
   sleep 0.2
 done
 if [ "$RESOURCE_PASSED" = true ]; then
-  echo "Resources: live session family carries RSS, CPU, process topology, and history."
+  echo "Resources: live session family and whole-machine headroom are attributed together."
 else
   echo "Resources FAILED: /resources did not expose the live fake-agent footprint."
 fi

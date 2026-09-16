@@ -7,6 +7,7 @@ import Foundation
 @MainActor
 public final class AppState: ObservableObject {
     @Published public private(set) var status: StatusResponse?
+    @Published public private(set) var resources: ResourceSnapshotModel?
     @Published public private(set) var flags: [FlagModel] = []
     @Published public private(set) var incidents: [IncidentReportModel] = []
     @Published public private(set) var events: [EventModel] = []
@@ -237,11 +238,13 @@ public final class AppState: ObservableObject {
             let incidents = (try? await client.fetchIncidents(limit: 10)) ?? []
             let guardRules = (try? await client.fetchGuardRules()) ?? []
             let notifyCfg = (try? await client.fetchNotifyRules()) ?? .fallback
+            let resources = try? await client.fetchResources()
             // A pause requested mid-flight must not be overwritten by
             // results that were already in transit.
             guard !self.isPaused else { return }
             let wasDisconnected = !self.connected
             self.status = status
+            self.resources = resources
             self.flags = flags
             self.incidents = incidents
             self.guardRules = guardRules
@@ -291,6 +294,7 @@ public final class AppState: ObservableObject {
             // the icon and console while the header says "Disconnected" is
             // how a user kills the wrong process.
             self.status = nil
+            self.resources = nil
             self.flags = []
             self.incidents = []
             self.events = []

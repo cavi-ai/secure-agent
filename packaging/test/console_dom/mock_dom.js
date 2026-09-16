@@ -34,6 +34,28 @@
     },
     '/resources': {
       observed_at: iso(0),
+      host: {
+        total_memory_bytes: 17179869184,
+        free_memory_bytes: 2147483648,
+        available_memory_bytes: 4294967296,
+        compressed_memory_bytes: 1073741824,
+        used_memory_bytes: 12884901888,
+        agent_memory_bytes: 5905580032,
+        non_agent_memory_bytes: 6979321856,
+        swap_total_bytes: 8589934592,
+        swap_used_bytes: 2147483648,
+        headroom_percent: 25,
+        agent_memory_percent: 34.4,
+        system_cpu_percent: 75,
+        agent_cpu_percent: 16.6,
+        non_agent_cpu_percent: 58.4,
+        load_1: 5.5,
+        logical_cpu_count: 8,
+        memory_pressure: 'normal',
+        thermal_state: 'nominal',
+        headroom_score: 25,
+        capacity: 'constrained'
+      },
       rss_bytes: 5995580032,
       cpu_percent: 142.5,
       process_count: 3,
@@ -83,6 +105,11 @@
       ],
       episodes: [{
         id: 7, captured_at: iso(1800000), severity: 'critical', diagnosis_codes: ['heavy-memory', 'runaway-child'],
+        host: {
+          total_memory_bytes: 17179869184, available_memory_bytes: 1073741824,
+          memory_pressure: 'critical', thermal_state: 'serious',
+          headroom_score: 6, capacity: 'critical'
+        },
         correlations: [{
           summary: 'Memory rose 3.0 GiB in 10m while node started.', confidence: 'observed-correlation',
           from: iso(2400000), to: iso(1800000), rss_delta_bytes: 3221225472, activity_count: 3

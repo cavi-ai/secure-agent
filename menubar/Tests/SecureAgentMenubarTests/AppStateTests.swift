@@ -10,11 +10,13 @@ final class StubDaemonClient: DaemonClientProtocol, @unchecked Sendable {
     var pending: [GuardPending] = []
     var statusError: Error?
     var guardError: Error?
+    var resources = ResourceSnapshotModel(host: nil)
 
     func fetchStatus() async throws -> StatusResponse {
         if let statusError { throw statusError }
         return status
     }
+    func fetchResources() async throws -> ResourceSnapshotModel { resources }
     func fetchFlags(limit: Int) async throws -> [FlagModel] { flags }
     func fetchIncidents(limit: Int) async throws -> [IncidentReportModel] { [] }
     func fetchIncidentMarkdown(id: String) async throws -> String { "" }
@@ -87,6 +89,23 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(state.agentRoots.map(\.pid), [500])
         XCTAssertEqual(state.activeAgentCount, 1)      // status field, not array length
         XCTAssertEqual(state.trackedProcessCount, 3)
+    }
+
+    func testFetchSurfacesMachineHeadroom() async {
+        let stub = StubDaemonClient()
+        stub.resources = ResourceSnapshotModel(host: HostPressureModel(
+            totalMemoryBytes: 16 * 1024 * 1024 * 1024,
+            availableMemoryBytes: 4 * 1024 * 1024 * 1024,
+            agentMemoryBytes: 3 * 1024 * 1024 * 1024,
+            nonAgentMemoryBytes: 9 * 1024 * 1024 * 1024,
+            memoryPressure: "normal", thermalState: "nominal",
+            headroomScore: 25, capacity: "constrained"))
+        let (state, _) = makeState(stub)
+
+        await state.performFetch()
+
+        XCTAssertEqual(state.resources?.host?.availableMemoryBytes, 4 * 1024 * 1024 * 1024)
+        XCTAssertEqual(state.resources?.host?.capacity, "constrained")
     }
 
     func testAgentRootsFallbackWithoutRootPid() async {

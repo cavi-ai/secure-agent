@@ -21,6 +21,7 @@ const (
 
 type Snapshot struct {
 	ObservedAt   time.Time        `json:"observed_at"`
+	Host         *HostSnapshot    `json:"host,omitempty"`
 	RSSBytes     uint64           `json:"rss_bytes"`
 	CPUPercent   float64          `json:"cpu_percent,omitempty"`
 	ProcessCount int              `json:"process_count"`
@@ -78,18 +79,45 @@ type Diagnosis struct {
 }
 
 type Tracker struct {
-	mu        sync.RWMutex
-	histories map[string][]Sample
-	snapshot  Snapshot
+	mu             sync.RWMutex
+	hostSampleMu   sync.Mutex
+	histories      map[string][]Sample
+	snapshot       Snapshot
+	hostSampler    hostSampler
+	hostRaw        rawHostSample
+	hostObservedAt time.Time
 }
 
 func NewTracker() *Tracker {
-	return &Tracker{histories: make(map[string][]Sample)}
+	return newTrackerWithHostSampler(newPlatformHostSampler())
+}
+
+func newTrackerWithHostSampler(sampler hostSampler) *Tracker {
+	return &Tracker{histories: make(map[string][]Sample), hostSampler: sampler}
 }
 
 func (t *Tracker) Observe(infos map[int32]agents.AgentInfo, lastSeen map[int32]string, now time.Time) {
+	var sampled *rawHostSample
+	agentCPUTimes := make(map[int32]time.Duration, len(infos))
+	for pid, info := range infos {
+		agentCPUTimes[pid] = info.CPUTime
+	}
+	t.hostSampleMu.Lock()
+	t.mu.RLock()
+	due := t.hostObservedAt.IsZero() || now.Sub(t.hostObservedAt) >= sampleInterval
+	t.mu.RUnlock()
+	if due && t.hostSampler != nil {
+		raw := t.hostSampler(agentCPUTimes)
+		sampled = &raw
+	}
+
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if sampled != nil && (t.hostObservedAt.IsZero() || now.Sub(t.hostObservedAt) >= sampleInterval) {
+		t.hostRaw = *sampled
+		t.hostObservedAt = now
+	}
+	t.hostSampleMu.Unlock()
 
 	rootStarts := make(map[int32]time.Time)
 	for _, info := range infos {
@@ -197,6 +225,8 @@ func (t *Tracker) Observe(infos map[int32]agents.AgentInfo, lastSeen map[int32]s
 		snapshot.CPUPercent += session.CPUPercent
 		snapshot.ProcessCount += session.ProcessCount
 	}
+	host := deriveHostSnapshot(t.hostRaw, snapshot.RSSBytes)
+	snapshot.Host = &host
 	t.histories = nextHistories
 	t.snapshot = snapshot
 }
@@ -326,6 +356,13 @@ func impactScore(session Session) float64 {
 
 func cloneSnapshot(snapshot Snapshot) Snapshot {
 	copyOf := snapshot
+	if snapshot.Host != nil {
+		host := *snapshot.Host
+		host.SystemCPUPercent = cloneFloat(snapshot.Host.SystemCPUPercent)
+		host.NonAgentCPUPercent = cloneFloat(snapshot.Host.NonAgentCPUPercent)
+		host.Load1 = cloneFloat(snapshot.Host.Load1)
+		copyOf.Host = &host
+	}
 	copyOf.Sessions = make([]Session, len(snapshot.Sessions))
 	for i, session := range snapshot.Sessions {
 		copyOf.Sessions[i] = session
@@ -345,6 +382,13 @@ func cloneSnapshot(snapshot Snapshot) Snapshot {
 	copyOf.Episodes = make([]Episode, len(snapshot.Episodes))
 	for i, episode := range snapshot.Episodes {
 		copyOf.Episodes[i] = episode
+		if episode.Host != nil {
+			host := *episode.Host
+			host.SystemCPUPercent = cloneFloat(episode.Host.SystemCPUPercent)
+			host.NonAgentCPUPercent = cloneFloat(episode.Host.NonAgentCPUPercent)
+			host.Load1 = cloneFloat(episode.Host.Load1)
+			copyOf.Episodes[i].Host = &host
+		}
 		copyOf.Episodes[i].DiagnosisCodes = append([]string(nil), episode.DiagnosisCodes...)
 		copyOf.Episodes[i].Session = boundedSessionCopy(episode.Session)
 	}
