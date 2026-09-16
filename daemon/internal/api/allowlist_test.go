@@ -210,3 +210,89 @@ func TestMuteEndpointRoundTrip(t *testing.T) {
 		t.Fatalf("mute lifecycle must be audited: %+v", st.RecentAudit(10))
 	}
 }
+
+// Approvals are reversible: GET lists current overrides, DELETE removes one.
+// A allowlist that only grows is a ratchet, not a policy.
+func TestAllowlistListAndRemove(t *testing.T) {
+	dir := t.TempDir()
+	sock := fmt.Sprintf("/tmp/sa_test_allowrm_%d.sock", time.Now().UnixNano())
+	defer os.Remove(sock)
+
+	cfg, err := config.Load("/nonexistent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tagger := agents.New(cfg, allowlistProcSource{})
+	tagger.Refresh()
+	cr := correlate.New(tagger, sensitive.New(cfg), cfg)
+	alStore := correlate.NewAllowlistStore(filepath.Join(dir, "allow.json"))
+
+	st := testStore(t)
+	t.Cleanup(func() { st.Close() })
+	a := New(sock, st, &fakeKiller{}, func() Status { return Status{Running: true} })
+	a.SetAllowlist(cr, alStore)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go a.Serve(ctx)
+	waitForSocket(t, sock)
+	cl := unixClient(sock)
+
+	post := func(method, body string) *http.Response {
+		req, _ := http.NewRequest(method, "http://unix/allowlist", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := cl.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp
+	}
+	post(http.MethodPost, `{"agent":"cursor","host":"registry.npmjs.org"}`).Body.Close()
+	post(http.MethodPost, `{"agent":"cursor","host":"example.com"}`).Body.Close()
+	post(http.MethodPost, `{"agent":"claude","host":"cdn.anthropic.com"}`).Body.Close()
+
+	// GET lists all three, sorted by agent then host.
+	resp, _ := cl.Get("http://unix/allowlist")
+	var got []struct {
+		Agent string `json:"agent"`
+		Host  string `json:"host"`
+	}
+	json.NewDecoder(resp.Body).Decode(&got)
+	resp.Body.Close()
+	if len(got) != 3 || got[0].Agent != "claude" || got[1].Host != "example.com" {
+		t.Fatalf("GET /allowlist = %+v", got)
+	}
+
+	// DELETE removes exactly one pair.
+	post(http.MethodDelete, `{"agent":"cursor","host":"example.com"}`).Body.Close()
+	resp2, _ := cl.Get("http://unix/allowlist")
+	got = nil
+	json.NewDecoder(resp2.Body).Decode(&got)
+	resp2.Body.Close()
+	if len(got) != 2 {
+		t.Fatalf("after DELETE: %+v", got)
+	}
+	for _, p := range got {
+		if p.Host == "example.com" {
+			t.Fatalf("removed host still present: %+v", got)
+		}
+	}
+
+	// Removing the last host of an agent drops the agent key entirely.
+	post(http.MethodDelete, `{"agent":"claude","host":"cdn.anthropic.com"}`).Body.Close()
+	m := alStore.Load()
+	if _, ok := m["claude"]; ok {
+		t.Fatalf("empty agent key should be dropped: %v", m)
+	}
+
+	// The removals are audited.
+	aud := st.RecentAudit(10)
+	found := 0
+	for _, e := range aud {
+		if e.Action == "allowlist-remove" {
+			found++
+		}
+	}
+	if found != 2 {
+		t.Fatalf("allowlist-remove audit entries = %d, want 2", found)
+	}
+}

@@ -52,7 +52,7 @@ function renderFirewall() {
     const grew = !SA.reducedMotion && SA.prevFwStats !== null &&
       prev && ((st.blocked || 0) > (prev.blocked || 0) || (st.would_block || 0) > (prev.would_block || 0));
     const action = blocking
-      ? `<span class="mode-chip block">blocking</span>`
+      ? `<span class="mode-chip block">blocking</span><button class="btn btn-ghost btn-sm" data-action="demote" data-rule="${escapeHTML(r)}" title="Back to monitor-only — blocking is reversible"><svg class="icon"><use href="#i-arrow"/></svg><span>Demote to monitor</span></button>`
       : `<button class="btn btn-primary btn-sm" data-action="promote" data-rule="${escapeHTML(r)}"><svg class="icon"><use href="#i-arrow"/></svg><span>Promote to block</span></button>`;
     return `
       <div class="fw-rule${grew ? ' fw-flash' : ''}">
@@ -67,6 +67,15 @@ function renderFirewall() {
         ${action}
       </div>`;
   }).join('');
+  // User-approved (agent, host) allowlist entries — every one reversible.
+  const allowlist = SA.t.allowlist || [];
+  if (allowlist.length > 0) {
+    html += `<div class="mute-list"><div class="mute-head">Allowed endpoints</div>` + allowlist.map(p => `
+      <div class="mute-row">
+        <span class="mute-pair">${escapeHTML(p.host)} · ${escapeHTML(p.agent)}</span>
+        <button class="source-remove" title="Remove — the endpoint goes back to uninspected" data-action="allowlist-remove" data-agent="${escapeHTML(p.agent)}" data-host="${escapeHTML(p.host)}"><svg class="icon"><use href="#i-close"/></svg></button>
+      </div>`).join('') + `</div>`;
+  }
   container.innerHTML = html;
   SA.prevFwStats = stats;
 }
