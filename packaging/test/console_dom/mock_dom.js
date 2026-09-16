@@ -83,6 +83,15 @@
       ],
       episodes: [{
         id: 7, captured_at: iso(1800000), severity: 'critical', diagnosis_codes: ['heavy-memory', 'runaway-child'],
+        correlations: [{
+          summary: 'Memory rose 3.0 GiB in 10m while node started.', confidence: 'observed-correlation',
+          from: iso(2400000), to: iso(1800000), rss_delta_bytes: 3221225472, activity_count: 3
+        }],
+        activities: [
+          { at: iso(2250000), kind: 'tool', pid: 4412, process: 'codex', summary: 'Bash tool ran' },
+          { at: iso(2100000), kind: 'process-start', pid: 4419, process: 'node', summary: 'node started' },
+          { at: iso(1950000), kind: 'network', pid: 4419, process: 'node', summary: 'connected to api.openai.com:443' }
+        ],
         session: {
           key: '4412:1789470000000000000', name: 'codex', workspace: '/Users/dev/workspace/data-pipeline',
           root_pid: 4412, rss_bytes: 7516192768, cpu_percent: 88, process_count: 3,

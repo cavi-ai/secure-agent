@@ -125,6 +125,34 @@ control state, the root plus at most 64 highest-RSS processes, and at most 120
 five-second samples (a ten-minute prelude). The database retains the newest
 500 episodes, and each `/resources` response returns the newest 20.
 
+Episodes may also contain `activities` and `correlations`. The daemon selects
+events only from PIDs in the captured process family and only between the
+retained prelude and capture time, then rejects any event outside that exact
+nanosecond window or before the captured process instance started. It converts
+the survivors into short references such
+as process starts, tool labels, file basenames, and network destinations;
+payloads and secret values are never copied. At most 80 of the newest
+references are retained. `correlations` identifies the largest positive
+sample-to-sample RSS change and any recorded activity in that same interval:
+
+```json
+{
+  "activities": [
+    {"at":"2026-09-15T19:59:55Z","kind":"process-start","pid":58211,"process":"node","summary":"node started"}
+  ],
+  "correlations": [
+    {"summary":"Memory rose 1.4 GiB in 5s while node started.","confidence":"observed-correlation","from":"2026-09-15T19:59:50Z","to":"2026-09-15T19:59:55Z","rss_delta_bytes":1503238554,"activity_count":1}
+  ]
+}
+```
+
+`observed-correlation` is deliberately not a causal verdict. The console says
+so beside every explanation and preserves the underlying activity rows for
+operator review. New episodes report `activity_status: "settling"` for 30
+seconds. Reads re-enrich and persist that evidence so events which reached
+SQLite slightly after the pressure capture are included; a successful refresh
+after the settling window marks the episode `complete`.
+
 `observe` only annotates sessions. `prompt` adds an approval to
 `control.pending`; resolve it with
 `POST /resources/control {"id":"resource-1","decision":"terminate|dismiss"}`.

@@ -241,6 +241,16 @@ def main():
         check("resource flight recorder identifies the dominant process",
               "PID 4419" in resource_view and "79%" in resource_view
               and "One child process dominated session memory." in resource_view)
+        check("resource pressure episode explains correlated activity",
+              "Memory rose 3.0 GiB in 10m while node started." in resource_view
+              and "Observed correlation" in resource_view)
+        check("resource pressure chart includes activity markers",
+              'class="resource-activity-marker' in resource_view
+              and "Bash tool ran" in resource_view
+              and "connected to api.openai.com:443" in resource_view)
+        check("historical resource evidence stays scoped to its captured lifetime",
+              "Scoped to this captured process lifetime" in resource_view
+              and 'data-action="filter-pids" data-pids="4412,4419,4420"' not in resource_view)
         check("resource trend SVG is rendered",
               'class="resource-spark"' in resource_view and 'points="' in resource_view)
         check("resource action targets the full family",

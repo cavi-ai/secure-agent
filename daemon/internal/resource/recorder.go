@@ -1,6 +1,7 @@
 package resource
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 	"sync"
@@ -8,19 +9,46 @@ import (
 )
 
 const (
-	episodeSampleLimit  = 120 // ten minutes at the five-second sample cadence
-	episodeProcessLimit = 64  // highest-RSS processes, always including the root
+	episodeSampleLimit   = 120 // ten minutes at the five-second sample cadence
+	episodeProcessLimit  = 64  // highest-RSS processes, always including the root
+	episodeActivityLimit = 80  // newest correlated events retained per episode
 )
 
 // Episode is a bounded, local post-mortem of a session under resource pressure.
 // It retains the whole process family and enough trend history to explain what
 // grew without keeping an unbounded copy of live telemetry.
 type Episode struct {
-	ID             int64     `json:"id,omitempty"`
-	CapturedAt     time.Time `json:"captured_at"`
-	Severity       string    `json:"severity"`
-	DiagnosisCodes []string  `json:"diagnosis_codes"`
-	Session        Session   `json:"session"`
+	ID             int64                `json:"id,omitempty"`
+	CapturedAt     time.Time            `json:"captured_at"`
+	Severity       string               `json:"severity"`
+	DiagnosisCodes []string             `json:"diagnosis_codes"`
+	ActivityStatus string               `json:"activity_status,omitempty"`
+	Activities     []EpisodeActivity    `json:"activities,omitempty"`
+	Correlations   []EpisodeCorrelation `json:"correlations,omitempty"`
+	Session        Session              `json:"session"`
+}
+
+// EpisodeActivity is a bounded, redacted reference to activity observed from
+// a process in the captured family. Summary is deliberately short and must
+// never contain payloads or secret values.
+type EpisodeActivity struct {
+	At      time.Time `json:"at"`
+	Kind    string    `json:"kind"`
+	PID     int32     `json:"pid"`
+	Process string    `json:"process,omitempty"`
+	Summary string    `json:"summary"`
+}
+
+// EpisodeCorrelation describes temporal evidence, not a causal conclusion.
+// The confidence label is explicit so clients cannot accidentally present an
+// event that occurred near a spike as proof that it caused the spike.
+type EpisodeCorrelation struct {
+	Summary       string    `json:"summary"`
+	Confidence    string    `json:"confidence"`
+	From          time.Time `json:"from"`
+	To            time.Time `json:"to"`
+	RSSDeltaBytes uint64    `json:"rss_delta_bytes"`
+	ActivityCount int       `json:"activity_count"`
 }
 
 type recordedPressure struct {
@@ -86,6 +114,74 @@ func (r *Recorder) Retry(sessionKey string) {
 	r.mu.Lock()
 	delete(r.active, sessionKey)
 	r.mu.Unlock()
+}
+
+// AttachEpisodeActivity bounds evidence and identifies the largest observed
+// sample-to-sample memory increase. Its wording is intentionally temporal:
+// "while" communicates co-occurrence without claiming causation.
+func AttachEpisodeActivity(episode Episode, activities []EpisodeActivity) Episode {
+	activities = append([]EpisodeActivity(nil), activities...)
+	sort.SliceStable(activities, func(i, j int) bool { return activities[i].At.Before(activities[j].At) })
+	if len(activities) > episodeActivityLimit {
+		activities = append([]EpisodeActivity(nil), activities[len(activities)-episodeActivityLimit:]...)
+	}
+	episode.Activities = activities
+	episode.Correlations = nil
+
+	samples := append([]Sample(nil), episode.Session.Samples...)
+	sort.SliceStable(samples, func(i, j int) bool { return samples[i].At.Before(samples[j].At) })
+	if len(samples) < 2 {
+		return episode
+	}
+	var from, to Sample
+	var largest uint64
+	for i := 1; i < len(samples); i++ {
+		if samples[i].RSSBytes <= samples[i-1].RSSBytes {
+			continue
+		}
+		delta := samples[i].RSSBytes - samples[i-1].RSSBytes
+		if delta > largest {
+			largest, from, to = delta, samples[i-1], samples[i]
+		}
+	}
+	if largest == 0 {
+		return episode
+	}
+
+	concurrent := make([]EpisodeActivity, 0)
+	for _, activity := range activities {
+		if !activity.At.Before(from.At) && !activity.At.After(to.At) {
+			concurrent = append(concurrent, activity)
+		}
+	}
+	summary := fmt.Sprintf("Memory rose %s in %s", formatEpisodeBytes(largest), formatEpisodeDuration(to.At.Sub(from.At)))
+	if len(concurrent) > 0 && concurrent[0].Summary != "" {
+		summary += " while " + strings.TrimSuffix(concurrent[0].Summary, ".")
+	} else {
+		summary += "; no matching activity was recorded in that interval"
+	}
+	episode.Correlations = []EpisodeCorrelation{{
+		Summary: summary + ".", Confidence: "observed-correlation", From: from.At, To: to.At,
+		RSSDeltaBytes: largest, ActivityCount: len(concurrent),
+	}}
+	return episode
+}
+
+func formatEpisodeBytes(bytes uint64) string {
+	const gib = uint64(1024 * 1024 * 1024)
+	const mib = uint64(1024 * 1024)
+	if bytes >= gib {
+		return fmt.Sprintf("%.1f GiB", float64(bytes)/float64(gib))
+	}
+	return fmt.Sprintf("%.0f MiB", float64(bytes)/float64(mib))
+}
+
+func formatEpisodeDuration(duration time.Duration) string {
+	duration = duration.Round(time.Second)
+	if duration%time.Minute == 0 && duration >= time.Minute {
+		return fmt.Sprintf("%dm", int(duration/time.Minute))
+	}
+	return duration.String()
 }
 
 func boundedSessionCopy(session Session) Session {
