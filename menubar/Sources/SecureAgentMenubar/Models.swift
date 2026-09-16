@@ -22,6 +22,9 @@ public struct AgentSummaryModel: Codable, Identifiable, Sendable {
     public let lastSeenAt: String?
     /// Resident memory in bytes (0/nil when the daemon couldn't read it).
     public let rssBytes: UInt64?
+    /// Current CPU use as a percentage of one core. Values may exceed 100
+    /// when a process uses multiple cores; nil means unavailable.
+    public let cpuPercent: Double?
     /// True when this tagged process's parent has already exited (daemon
     /// reports is_orphan) — displayed so a weird-looking row is explainable.
     /// nil (older daemons) reads as "not orphan" here; the row simply shows
@@ -40,12 +43,13 @@ public struct AgentSummaryModel: Codable, Identifiable, Sendable {
         case startedAt = "started_at"
         case lastSeenAt = "last_seen_at"
         case rssBytes = "rss_bytes"
+        case cpuPercent = "cpu_percent"
         case isOrphan = "is_orphan"
     }
 
     public init(pid: Int32, name: String, exePath: String? = nil, cwd: String? = nil, rootPid: Int32? = nil,
                 ppid: Int32? = nil, startedAt: String? = nil, lastSeenAt: String? = nil, rssBytes: UInt64? = nil,
-                isOrphan: Bool? = nil) {
+                isOrphan: Bool? = nil, cpuPercent: Double? = nil) {
         self.pid = pid
         self.name = name
         self.exePath = exePath
@@ -56,6 +60,7 @@ public struct AgentSummaryModel: Codable, Identifiable, Sendable {
         self.lastSeenAt = lastSeenAt
         self.rssBytes = rssBytes
         self.isOrphan = isOrphan
+        self.cpuPercent = cpuPercent
     }
 
     /// Glance label: the project folder, falling back to the harness name.
@@ -71,18 +76,22 @@ public struct AgentTreeModel: Codable, Sendable {
     public let children: [AgentSummaryModel]
     public let rssBytes: UInt64?
     public let lastSeenAt: String?
+    public let cpuPercent: Double?
 
     enum CodingKeys: String, CodingKey {
         case root, children
         case rssBytes = "rss_bytes"
         case lastSeenAt = "last_seen_at"
+        case cpuPercent = "cpu_percent"
     }
 
-    public init(root: AgentSummaryModel, children: [AgentSummaryModel] = [], rssBytes: UInt64? = nil, lastSeenAt: String? = nil) {
+    public init(root: AgentSummaryModel, children: [AgentSummaryModel] = [], rssBytes: UInt64? = nil,
+                lastSeenAt: String? = nil, cpuPercent: Double? = nil) {
         self.root = root
         self.children = children
         self.rssBytes = rssBytes
         self.lastSeenAt = lastSeenAt
+        self.cpuPercent = cpuPercent
     }
 }
 

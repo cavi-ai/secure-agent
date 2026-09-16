@@ -739,6 +739,10 @@ public final class AppState: ObservableObject {
             guard !parts.isEmpty else { return nil }
             return parts.reduce(0, +)
         }
+        public var totalCPUPercent: Double? {
+            let parts = ([root] + children).compactMap(\.cpuPercent)
+            return parts.isEmpty ? nil : parts.reduce(0, +)
+        }
         public var id: String { root.id }
         /// Most recent activity across the family — the tree-level liveness
         /// signal ("this session is working right now").
@@ -751,12 +755,14 @@ public final class AppState: ObservableObject {
         case lastActivity
         case created
         case memory
+        case impact
 
         var label: String {
             switch self {
             case .lastActivity: return "Last activity"
             case .created: return "Created"
             case .memory: return "Memory"
+            case .impact: return "Impact"
             }
         }
     }
@@ -793,6 +799,10 @@ public final class AppState: ObservableObject {
             let parts = trees.flatMap { [$0.0] + $0.1 }.compactMap(\.rssBytes)
             return parts.isEmpty ? nil : parts.reduce(0, +)
         }
+        public var totalCPUPercent: Double? {
+            let parts = trees.flatMap { [$0.0] + $0.1 }.compactMap(\.cpuPercent)
+            return parts.isEmpty ? nil : parts.reduce(0, +)
+        }
         public var sessionCount: Int { trees.count }
         public var processCount: Int { trees.reduce(0) { $0 + 1 + $1.1.count } }
         public var lastSeenAt: String? {
@@ -822,6 +832,11 @@ public final class AppState: ObservableObject {
                 sorted = t.sorted {
                     (familyRSS($0.0, $0.1) ?? 0) > (familyRSS($1.0, $1.1) ?? 0)
                 }
+            case .impact:
+                sorted = t.sorted {
+                    familyImpact(rss: familyRSS($0.0, $0.1), cpu: familyCPU($0.0, $0.1)) >
+                        familyImpact(rss: familyRSS($1.0, $1.1), cpu: familyCPU($1.0, $1.1))
+                }
             case .lastActivity:
                 sorted = t.sorted { familyLastSeen($0.0, $0.1) > familyLastSeen($1.0, $1.1) }
             }
@@ -843,6 +858,8 @@ public final class AppState: ObservableObject {
         public let childCount: Int
         /// Family memory (roots only; nil when daemon supplied no RSS).
         public let familyRSSBytes: UInt64?
+        /// Family CPU (roots only; nil when daemon supplied no CPU data).
+        public let familyCPUPercent: Double?
         /// Most recent activity in the family (roots only).
         public let familyLastSeenAt: String?
         public var id: String { agent.id }
@@ -865,6 +882,11 @@ public final class AppState: ObservableObject {
             ordered = trees.sorted {
                 (familyRSS($0.0, $0.1) ?? 0) > (familyRSS($1.0, $1.1) ?? 0)
             }
+        case .impact:
+            ordered = trees.sorted {
+                familyImpact(rss: familyRSS($0.0, $0.1), cpu: familyCPU($0.0, $0.1)) >
+                    familyImpact(rss: familyRSS($1.0, $1.1), cpu: familyCPU($1.0, $1.1))
+            }
         case .lastActivity:
             // Most recently active first: the session the user probably
             // wants to look at is at the top.
@@ -875,13 +897,15 @@ public final class AppState: ObservableObject {
         return ordered.flatMap { root, children in
             let famRSS = familyRSS(root, children)
             let famSeen = familyLastSeen(root, children)
+            let famCPU = familyCPU(root, children)
             var rows = [AgentRow(agent: root, depth: 0,
                                  childCount: children.count,
                                  familyRSSBytes: famRSS,
+                                 familyCPUPercent: famCPU,
                                  familyLastSeenAt: famSeen)]
             rows += children.map {
                 AgentRow(agent: $0, depth: 1, childCount: 0,
-                         familyRSSBytes: nil, familyLastSeenAt: nil)
+                         familyRSSBytes: nil, familyCPUPercent: nil, familyLastSeenAt: nil)
             }
             return rows
         }
@@ -895,6 +919,7 @@ public final class AppState: ObservableObject {
                 AgentRow(agent: t.root, depth: 0,
                          childCount: t.children.count,
                          familyRSSBytes: t.rssBytes,
+                         familyCPUPercent: t.cpuPercent ?? familyCPU(t.root, t.children),
                          familyLastSeenAt: t.lastSeenAt)
             }
             return sortSessionRows(rows, by: sort)
@@ -908,6 +933,11 @@ public final class AppState: ObservableObject {
             return rows.sorted { ($0.agent.startedAt ?? "") < ($1.agent.startedAt ?? "") }
         case .memory:
             return rows.sorted { ($0.familyRSSBytes ?? 0) > ($1.familyRSSBytes ?? 0) }
+        case .impact:
+            return rows.sorted {
+                familyImpact(rss: $0.familyRSSBytes, cpu: $0.familyCPUPercent) >
+                    familyImpact(rss: $1.familyRSSBytes, cpu: $1.familyCPUPercent)
+            }
         case .lastActivity:
             return rows.sorted { ($0.familyLastSeenAt ?? "") > ($1.familyLastSeenAt ?? "") }
         }
@@ -922,6 +952,17 @@ public final class AppState: ObservableObject {
         ([root] + kids).compactMap(\.lastSeenAt).max() ?? ""
     }
 
+    private func familyCPU(_ root: AgentSummaryModel, _ kids: [AgentSummaryModel]) -> Double? {
+        let parts = ([root] + kids).compactMap(\.cpuPercent)
+        return parts.isEmpty ? nil : parts.reduce(0, +)
+    }
+
+    /// Pressure relative to the first diagnostic thresholds: 4 GiB memory
+    /// or one fully occupied core. The stronger signal wins.
+    private func familyImpact(rss: UInt64?, cpu: Double?) -> Double {
+        max(Double(rss ?? 0) / Double(4 * 1024 * 1024 * 1024), (cpu ?? 0) / 100)
+    }
+
     /// Trees sorted by the chosen key (structured form; the popover uses
     /// the flat `agentRows`).
     public func agentTrees(sortedBy sort: AgentSort) -> [AgentTree] {
@@ -934,6 +975,11 @@ public final class AppState: ObservableObject {
             return trees.sorted { ($0.root.startedAt ?? "") < ($1.root.startedAt ?? "") }
         case .memory:
             return trees.sorted { ($0.totalRSSBytes ?? 0) > ($1.totalRSSBytes ?? 0) }
+        case .impact:
+            return trees.sorted {
+                familyImpact(rss: $0.totalRSSBytes, cpu: $0.totalCPUPercent) >
+                    familyImpact(rss: $1.totalRSSBytes, cpu: $1.totalCPUPercent)
+            }
         case .lastActivity:
             return trees.sorted { ($0.lastSeenAt ?? "") > ($1.lastSeenAt ?? "") }
         }

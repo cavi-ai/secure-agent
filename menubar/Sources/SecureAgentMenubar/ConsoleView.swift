@@ -585,6 +585,8 @@ struct ConsoleView: View {
         let open = expandedSessions.contains(root.id)
         let rssParts = ([root] + children).compactMap(\.rssBytes)
         let mem = rssParts.isEmpty ? nil : ByteCount.short(rssParts.reduce(0, +))
+        let cpuParts = ([root] + children).compactMap(\.cpuPercent)
+        let cpu = cpuParts.isEmpty ? nil : cpuParts.reduce(0, +)
         let seen = relativeTime(([root] + children).compactMap(\.lastSeenAt).max() ?? "")
         let flagN = state.unactedFlagsForSession(rootPid: root.pid).count
         return VStack(alignment: .leading, spacing: 3) {
@@ -628,6 +630,12 @@ struct ConsoleView: View {
                         if let mem {
                             Text(mem)
                                 .font(.system(size: 9, design: .monospaced)).foregroundStyle(.tertiary)
+                        }
+                        if let cpu {
+                            Text(String(format: "%.0f%%", cpu))
+                                .font(.system(size: 9, design: .monospaced))
+                                .foregroundStyle(cpu >= 100 ? Color.warn : Color.secondary)
+                                .help("CPU across this session's process family")
                         }
                         if let seen {
                             Text(seen)
@@ -700,6 +708,11 @@ struct ConsoleView: View {
                 if let m = ByteCount.short(child.rssBytes) {
                     Text(m)
                         .font(.system(size: 8, design: .monospaced)).foregroundStyle(.tertiary)
+                }
+                if let cpu = child.cpuPercent {
+                    Text(String(format: "%.0f%%", cpu))
+                        .font(.system(size: 8, design: .monospaced))
+                        .foregroundStyle(cpu >= 100 ? Color.warn : Color.secondary)
                 }
                 if let s = relativeTime(child.lastSeenAt ?? "") {
                     Text(s)
