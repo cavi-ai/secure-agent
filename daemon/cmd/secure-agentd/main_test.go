@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/cavi-ai/secure-agent/daemon/internal/event"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -18,6 +18,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/collect"
 	"github.com/cavi-ai/secure-agent/daemon/internal/config"
 	"github.com/cavi-ai/secure-agent/daemon/internal/correlate"
+	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/sensitive"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
@@ -175,7 +176,8 @@ func TestEndToEndSmokeScenario(t *testing.T) {
 
 	statusFn := func() api.Status { return api.Status{Running: true} }
 	apiServer := api.New(sockPath, st, &realKiller{}, statusFn)
-	go apiServer.Serve(ctx)
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- apiServer.Serve(ctx) }()
 
 	go supervise.Run(ctx, "netsample", func(c context.Context) error {
 		ns := collect.NewNetSampler(b, tg, cfg.NetSampleInterval, nil)
@@ -187,7 +189,11 @@ func TestEndToEndSmokeScenario(t *testing.T) {
 		return ts.Run(c)
 	})
 
-	time.Sleep(200 * time.Millisecond)
+	// Socket and collectors must be live before the activity file is written.
+	// Starting the transcript scanner after that write seeds its offset at EOF
+	// and the plugin line is treated as old history (empty event stream).
+	waitUnix(t, sockPath, 5*time.Second, serveErr)
+	time.Sleep(300 * time.Millisecond)
 
 	// Simulate agent activity
 	currPID := int32(os.Getpid()) // test process PID
@@ -219,7 +225,19 @@ func TestEndToEndSmokeScenario(t *testing.T) {
 	}
 	defer cliConn.Close()
 
-	// Wait for flag via API
+	// Correlator writes asynchronously via netsample. Wait on the store
+	// first (same contract as TestFullBusCorrelatorStorePipeline), then
+	// assert the unix API serves the flag.
+	deadline := time.Now().Add(5 * time.Second)
+	for len(st.RecentFlags(10)) == 0 && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if len(st.RecentFlags(10)) == 0 {
+		events := st.RecentEvents(50)
+		evData, _ := json.MarshalIndent(events, "", "  ")
+		t.Fatalf("correlator never wrote a flag\nEVENTS:\n%s", string(evData))
+	}
+
 	client := &http.Client{
 		Transport: &http.Transport{
 			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
@@ -229,19 +247,32 @@ func TestEndToEndSmokeScenario(t *testing.T) {
 		Timeout: 2 * time.Second,
 	}
 
+	var lastStatus int
+	var lastErr error
+	var lastBody string
 	flagFound := false
-	for i := 0; i < 20; i++ {
+	deadline = time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
 		resp, err := client.Get("http://unix/flags")
-		if err == nil && resp.StatusCode == 200 {
+		if err != nil {
+			lastErr = err
+			time.Sleep(50 * time.Millisecond)
+			continue
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		lastStatus = resp.StatusCode
+		lastBody = string(body)
+		if resp.StatusCode == http.StatusOK {
 			var flags []model.Flag
-			if json.NewDecoder(resp.Body).Decode(&flags) == nil && len(flags) > 0 {
+			if err := json.Unmarshal(body, &flags); err != nil {
+				lastErr = err
+			} else if len(flags) > 0 {
 				flagFound = true
-				resp.Body.Close()
 				break
 			}
-			resp.Body.Close()
 		}
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(50 * time.Millisecond)
 	}
 
 	if serverConn := <-connCh; serverConn != nil {
@@ -249,10 +280,27 @@ func TestEndToEndSmokeScenario(t *testing.T) {
 	}
 
 	if !flagFound {
-		events := st.RecentEvents(50)
-		evData, _ := json.MarshalIndent(events, "", "  ")
-		flags := st.RecentFlags(50)
-		flData, _ := json.MarshalIndent(flags, "", "  ")
-		t.Fatalf("E2E smoke scenario failed: flag was not triggered via API.\nEVENTS:\n%s\nFLAGS:\n%s", string(evData), string(flData))
+		t.Fatalf("flag in store but /flags did not serve it: status=%d err=%v body=%s", lastStatus, lastErr, lastBody)
 	}
+}
+
+func waitUnix(t *testing.T, path string, d time.Duration, serve <-chan error) {
+	t.Helper()
+	deadline := time.Now().Add(d)
+	var last error
+	for time.Now().Before(deadline) {
+		select {
+		case err := <-serve:
+			t.Fatalf("api Serve exited before bind: %v", err)
+		default:
+		}
+		c, err := net.Dial("unix", path)
+		if err == nil {
+			c.Close()
+			return
+		}
+		last = err
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("unix socket %s never came up: %v", path, last)
 }

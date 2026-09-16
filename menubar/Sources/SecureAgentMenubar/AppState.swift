@@ -127,8 +127,8 @@ public final class AppState: ObservableObject {
                 guard let self, !self.streamUnavailable else { return }
                 do {
                     try await self.client.streamEvents { frame in
-                        Task { @MainActor [weak self] in
-                            self?.handleStreamEvent(frame)
+                        Task { @MainActor in
+                            self.handleStreamEvent(frame)
                         }
                     }
                     // Stream ended without error: treat as a failure and retry.
@@ -267,6 +267,13 @@ public final class AppState: ObservableObject {
             if wasDisconnected { self.scheduleTimer(1.0) }
             self.eventsRefreshTick += 1
             self.processNewFlags(flags)
+            // Withdraw banners for flags the operator already dealt with —
+            // dismissed in either UI, muted, or retro-acknowledged daemon-
+            // side all converge to `acknowledged`. Notification Center tracks
+            // live posture; it must not pile up grey history for handled
+            // alerts.
+            NotificationManager.shared.reconcileDeliveredNotifications(
+                acknowledgedIDs: Set(flags.filter { $0.acknowledged == true }.map(\.id)))
             self.onChange?()
             Task { await self.maybeSendWeeklyDigest() }
             // Guard pending is decoded STRICTLY: a malformed response that
@@ -720,7 +727,7 @@ public final class AppState: ObservableObject {
         return nil
     }
 
-    public func openDashboard() {
+    public func openDashboard(tab: String? = nil) {
         // The console is served on the proxy's loopback HTTP port (and on the
         // unix API). Only open it when the daemon is connected and the proxy
         // is actually running — a stale port from a dead daemon opens a
@@ -736,11 +743,55 @@ public final class AppState: ObservableObject {
             // Hand off via fragment: fragments are never sent to the server,
             // so the token stays out of the wire, access logs, and Referer.
             // The console page lifts it into memory and strips it from the
-            // address bar.
+            // address bar. An optional tab deep-link rides alongside.
             query = "#ct=\(DaemonClient.urlQueryEscape(token))"
+            if let tab {
+                query += "&tab=\(DaemonClient.urlQueryEscape(tab))"
+            }
         }
         if let url = URL(string: "http://127.0.0.1:\(port)/dashboard/\(query)") {
-            NSWorkspace.shared.open(url)
+            // Focus an already-open console tab instead of spawning a
+            // duplicate dead-end tab on every click.
+            ConsoleOpener.openOrFocus(url: url, match: ConsoleOpener.tabMatch(port: port))
+        }
+    }
+
+    @Published public private(set) var isEnablingConsole = false
+
+    /// One-click path out of the "console is off" dead end: flip
+    /// proxy_enabled, bounce the daemon (the proxy starts at boot only), wait
+    /// for the port, then open. The greyed-out button with a tooltip used to
+    /// strand users — the disabled state is now the action.
+    public func enableConsoleAndOpen() {
+        guard !isEnablingConsole else { return }
+        isEnablingConsole = true
+        onChange?()
+        Task {
+            defer { self.isEnablingConsole = false; self.onChange?() }
+            SetupManager.shared.setProxyEnabled(true)
+            // Wait for the OLD daemon to release the socket before
+            // respawning, or the new one loses the bind race.
+            DaemonSupervisor.shared.stop()
+            for _ in 0..<20 { // up to ~5s
+                try? await Task.sleep(nanoseconds: 250_000_000)
+                if (try? await client.fetchStatus()) == nil { break }
+            }
+            DaemonSupervisor.shared.restart()
+            var up = false
+            for _ in 0..<30 { // up to ~15s for the proxy port
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                if let st = try? await client.fetchStatus(), (st.proxyPort ?? 0) > 0 {
+                    up = true
+                    break
+                }
+            }
+            await performFetch()
+            if up {
+                openDashboard()
+            } else {
+                self.lastError = "The console did not come up — see ~/Library/Logs/secure-agent/daemon-err.log"
+                self.onChange?()
+            }
         }
     }
 
@@ -974,6 +1025,44 @@ public final class AppState: ObservableObject {
             return sortSessionRows(rows, by: sort)
         }
         return agentRows(sortedBy: sort).filter { $0.depth == 0 }
+    }
+
+    /// One harness family (cursor, codex, claude…) on the session board.
+    public struct SessionFamily: Identifiable {
+        public let name: String
+        public let rows: [AgentRow]
+        public var id: String { name }
+        public var totalRSSBytes: UInt64? {
+            let parts = rows.compactMap(\.familyRSSBytes)
+            return parts.isEmpty ? nil : parts.reduce(0, +)
+        }
+        public var lastSeenAt: String? {
+            rows.compactMap(\.familyLastSeenAt).max()
+        }
+    }
+
+    /// Harness-grouped session board: families ordered by their best row in
+    /// the active sort, sessions sorted within. The flat list is unreadable
+    /// once the fleet is busy (50 rows is a scroll trap, not an overview).
+    public func sessionBoardFamilies(sortedBy sort: AgentSort) -> [SessionFamily] {
+        let flat = sessionBoardRows(sortedBy: sort)
+        var order: [String] = []
+        var byName: [String: [AgentRow]] = [:]
+        for row in flat {
+            if byName[row.agent.name] == nil {
+                byName[row.agent.name] = []
+                order.append(row.agent.name)
+            }
+            byName[row.agent.name]!.append(row)
+        }
+        return order.map { SessionFamily(name: $0, rows: byName[$0]!) }
+    }
+
+    /// What tapping the hero does. Every hero state that names a count must
+    /// have one — a number with no action behind it is noise.
+    public enum HeroAction {
+        case flag(FlagModel)
+        case openConsole(tab: String)
     }
 
     private func sortSessionRows(_ rows: [AgentRow], by sort: AgentSort) -> [AgentRow] {
@@ -1216,6 +1305,35 @@ public final class AppState: ObservableObject {
         s.flags = [FlagModel(id: "f9", rule: "keychain-access", severity: 2, ts: "",
                              pid: 901, agent: "cursor",
                              evidence: ["cursor (pid 901) accessed keychain file login.keychain-db at 2026-09-08T09:00:00Z"])]
+        s.connected = true
+        return s
+    }
+
+    /// Custom-flag hero state for previews and hero regression tests: connected,
+    /// proxy up, caller controls the flag list and the blind-spot counters.
+    public static func previewFlags(_ flags: [FlagModel], uninspected: Int = 0, wouldBlock: Int = 0) -> AppState {
+        let s = AppState()
+        s.status = StatusResponse(
+            running: true, uptime: "1h", activeAgents: 1,
+            agents: [AgentSummaryModel(pid: 901, name: "cursor", cwd: "/tmp")],
+            proxyEnabled: true, proxyPort: 8443, uninspectedEgress: uninspected,
+            firewallStats: wouldBlock > 0
+                ? ["aws-key": RuleStatModel(wouldBlock: wouldBlock, mode: "monitor")]
+                : [:])
+        s.flags = flags
+        s.connected = true
+        return s
+    }
+
+    /// Custom-agent state for session-board tests: connected, caller controls
+    /// the process list (roots are derived from it).
+    public static func previewAgents(_ agents: [AgentSummaryModel]) -> AppState {
+        let s = AppState()
+        s.status = StatusResponse(
+            running: true, uptime: "1h", activeAgents: agents.count,
+            agents: agents,
+            proxyEnabled: true, proxyPort: 8443, uninspectedEgress: 0,
+            firewallStats: [:])
         s.connected = true
         return s
     }

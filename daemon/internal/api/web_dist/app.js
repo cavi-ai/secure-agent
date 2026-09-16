@@ -12,11 +12,16 @@ document.addEventListener('DOMContentLoaded', () => {
   // forever. sessionStorage (not localStorage): the token dies with the tab
   // and never touches disk-backed storage.
   const SS_TOKEN_KEY = 'sa.console-token';
-  let consoleToken = new URLSearchParams(location.hash.slice(1)).get('ct') || '';
+  const hashParams = new URLSearchParams(location.hash.slice(1));
+  let consoleToken = hashParams.get('ct') || '';
   if (consoleToken) {
     try { sessionStorage.setItem(SS_TOKEN_KEY, consoleToken); } catch { /* private mode: memory only */ }
     if (window.history.replaceState) {
-      history.replaceState(null, '', location.pathname + location.search);
+      // Strip the token from the address bar but PRESERVE a tab deep-link
+      // (#ct=…&tab=egress → #egress) — the hero's "open the drill-down"
+      // depends on it surviving the handoff.
+      const tab = hashParams.get('tab');
+      history.replaceState(null, '', location.pathname + location.search + (tab ? '#' + tab : ''));
     }
   } else {
     try { consoleToken = sessionStorage.getItem(SS_TOKEN_KEY) || ''; } catch { consoleToken = ''; }
@@ -319,7 +324,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // Findings), not by data source. State persists per tab-session; the hash
   // carries the tab for deep links (#ct is lifted and stripped BEFORE this
   // runs, so the two never collide).
-  const TABS = ['overview', 'agents', 'egress', 'findings'];
+  const TABS = ['overview', 'sessions', 'agents', 'egress', 'findings'];
   let activeTab = 'overview';
 
   function switchTab(id, opts = {}) {
@@ -398,13 +403,14 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     if (slow) {
-      const [fleet, audit, sources, rollup, uninspected, notifyCfg] = await Promise.all([
+      const [fleet, audit, sources, rollup, uninspected, notifyCfg, allowlist] = await Promise.all([
         grab('fleet', '/fleet'),
         grab('audit', '/audit?limit=50'),
         grab('firewall sources', '/firewall/sources'),
         grab('activity rollup', '/stats/rollup?hours=168'),
         grab('uninspected egress', '/egress/uninspected?hours=24&limit=200'),
-        grab('notification rules', '/notify/rules')
+        grab('notification rules', '/notify/rules'),
+        grab('allowlist', '/allowlist')
       ]);
       if (fleet) telemetryData.fleet = fleet || [];
       if (audit) telemetryData.audit = audit || [];
@@ -412,6 +418,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (rollup) telemetryData.rollup = rollup || [];
       if (uninspected) telemetryData.uninspected = uninspected || [];
       if (notifyCfg) telemetryData.notifyCfg = notifyCfg;
+      if (allowlist) telemetryData.allowlist = allowlist || [];
     }
 
     telemetryData.flagsView = telemetryData.flags;
@@ -441,6 +448,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // activity — on every single poll.
     const panels = [
       ['posture', renderPosture], ['status', renderStatus], ['resources', renderResourceMissionControl], ['sessions', renderSessionBoard],
+      ['session-strip', renderSessionStrip],
       ['agents', renderAgents],
       ['firewall', renderFirewall], ['incidents', renderIncidents], ['fleet', renderFleet],
       ['audit', renderAudit], ['sources', renderSources], ['flags', renderFlags],
@@ -1027,6 +1035,44 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   };
 
+  // Blocking must be reversible — a rule you can only tighten is a ratchet.
+  window.demoteRule = async function(rule) {
+    try {
+      const res = await apiFetch('/firewall/mode', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rule, mode: 'monitor' })
+      });
+      if (res.ok) {
+        showToast(`Rule “${rule}” back to monitor.`, 'success');
+        fetchTelemetry();
+      } else {
+        showToast(`Failed to demote “${rule}”.`, 'danger');
+      }
+    } catch (err) {
+      showToast(`Error demoting “${rule}”: ${err}`, 'danger');
+    }
+  };
+
+  window.removeAllowlistEntry = async function(agent, host) {
+    try {
+      const res = await apiFetch('/allowlist', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ agent, host })
+      });
+      if (res.ok) {
+        telemetryData.allowlist = (telemetryData.allowlist || []).filter(p => !(p.agent === agent && p.host === host));
+        showToast(`Removed ${host} for ${agent}.`, 'info');
+        renderFirewall();
+      } else {
+        showToast(`Failed to remove ${host}.`, 'danger');
+      }
+    } catch (err) {
+      showToast(`Error removing ${host}: ${err}`, 'danger');
+    }
+  };
+
   // Session drill-down: jump from a flag to just its harness session's events.
   window.filterTimelineToSession = function(sid) {
     timelineSession = sid;
@@ -1095,6 +1141,12 @@ document.addEventListener('DOMContentLoaded', () => {
         break;
       case 'promote':
         window.promoteRule(d.rule);
+        break;
+      case 'demote':
+        window.demoteRule(d.rule);
+        break;
+      case 'allowlist-remove':
+        window.removeAllowlistEntry(d.agent, d.host);
         break;
       case 'promote-vendor-keys':
         window.promoteVendorKeys();
@@ -1294,7 +1346,7 @@ document.addEventListener('DOMContentLoaded', () => {
         } catch { /* frame without a parseable body still counts */ }
         sparkBump(1, tsMs);
         if (kind === 'proxy-hit') flashFirewallPanel();
-        scheduleRefresh();
+        if (sseNeedsSnapshot(kind)) scheduleRefresh();
       }));
     es.onerror = () => {
       // EventSource auto-reconnects while CONNECTING; only fall back to

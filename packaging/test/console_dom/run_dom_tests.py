@@ -97,6 +97,8 @@ def main():
         dom_nofleet = dump_dom(chrome, tmp, "?nofleetdemo")
         dom_noresources = dump_dom(chrome, tmp, "?noresourcesdemo")
         dom_policy = dump_dom(chrome, tmp, "?policydemo")
+        dom_demote = dump_dom(chrome, tmp, "?demotedemo")
+        dom_allowrm = dump_dom(chrome, tmp, "?allowlistdemo")
 
         # --- telemetry wiring ---
         check("version badge comes from /status", 'id="app-version">v9.9.9-domtest<' in dom)
@@ -113,6 +115,23 @@ def main():
         check("firewall enforcing badge",
               'class="badge badge-ok" id="badge-firewall-mode">enforcing<' in dom)
         check("uninspected-egress warning", "2 endpoints reached without inspection" in dom)
+
+        # --- reversible enforcement (block is not a ratchet) ---
+        check("blocking rule shows demote button",
+              'data-action="demote" data-rule="aws-key"' in dom)
+        check("demote flips the rule back to promote",
+              'data-action="promote" data-rule="aws-key"' in dom_demote)
+        check("allowlist entries render with remove",
+              "Allowed endpoints" in dom and "artifacts.example.com" in dom)
+        check("remove drops the allowlist row",
+              "artifacts.example.com" not in dom_allowrm)
+
+        # --- uninspected drill-down groups infra, keeps unknowns actionable ---
+        check("drill-down keeps unknown endpoints actionable",
+              "registry.npmjs.org" in dom_uninsp)
+        check("drill-down collapses CDN/cloud carriers",
+              "Known CDN/cloud infrastructure (2 endpoints)" in dom_uninsp
+              and "Cloudflare" in dom_uninsp and "AWS" in dom_uninsp)
         check("vendor-key promote banner",
               'data-action="promote-vendor-keys"' in dom and "1 vendor-key rule" in dom)
         check("incident workflow chip (ack)", 'class="workflow-chip acked"' in dom)
@@ -216,18 +235,19 @@ def main():
               and dom.count('class="audit-item') == 2)
 
         # --- tabs (console IA) ---
-        check("tab bar renders all four tabs",
-              dom.count('class="tab-btn') >= 4
-              and all(f'data-tab="{t}"' in dom for t in ("overview", "agents", "egress", "findings")))
+        check("tab bar renders all five tabs",
+              dom.count('class="tab-btn') >= 5
+              and all(f'data-tab="{t}"' in dom for t in ("overview", "sessions", "agents", "egress", "findings")))
         check("overview tab active by default",
               'class="tab-btn active" data-tab="overview"' in dom)
         check("non-active panels hidden",
-              'id="tab-agents" role="tabpanel" hidden' in dom
+              'id="tab-sessions" role="tabpanel" hidden' in dom
+              and 'id="tab-agents" role="tabpanel" hidden' in dom
               and 'id="tab-findings" role="tabpanel" hidden' in dom)
         check("overview panel visible",
               'id="tab-overview" role="tabpanel">' in dom)
         check("resource mission control is present", 'id="resource-mission-control"' in dom)
-        resource_view = dom.split('id="resource-mission-control"', 1)[1].split('id="session-board-panel"', 1)[0]
+        resource_view = dom.split('id="resource-mission-control"', 1)[1].split('id="session-strip-panel"', 1)[0]
         check("whole-machine headroom is visible",
               "Machine headroom" in resource_view and "25 / 100" in resource_view
               and "4.0 GB available" in resource_view)
@@ -293,14 +313,24 @@ def main():
               'data-action="resource-control" data-session="6033:1789484400000000000" data-decision="resume"' in resource_view)
         check("resource intervention failure is visible",
               "Intervention failed: rollback failed: permission denied" in resource_view)
-        check("overview session board is present", 'id="session-board"' in dom)
-        check("session board has project filter", 'id="session-cwd-filter"' in dom)
-        overview = dom.split('id="session-board"', 1)[1].split('id="tab-agents"', 1)[0]
-        check("session board lists two sessions", overview.count('class="session-row') == 2)
-        check("session rows labeled by project folder",
+        check("sessions panel lives in the sessions tab",
+              dom.index('id="tab-sessions"') < dom.index('id="session-board"')
+              and dom.index('id="session-board"') < dom.index('id="tab-agents"'))
+        check("overview has no session board",
+              'id="session-board"' not in dom.split('id="tab-overview"', 1)[1].split('id="tab-sessions"', 1)[0])
+        overview = dom.split('id="tab-overview"', 1)[1].split('id="tab-sessions"', 1)[0]
+        check("overview session strip is present", 'id="session-strip"' in overview)
+        check("overview strip names the live projects",
               "api-service" in overview and "web-app" in overview)
+        check("overview strip opens the sessions tab",
+              'data-action="goto-tab" data-tab="sessions"' in overview)
+        check("session board has project filter", 'id="session-cwd-filter"' in dom)
+        sessions = dom.split('id="session-board"', 1)[1].split('id="tab-agents"', 1)[0]
+        check("session board lists two sessions", sessions.count('class="session-row') == 2)
+        check("session rows labeled by project folder",
+              "api-service" in sessions and "web-app" in sessions)
         check("session row filters timeline by pids",
-              'data-action="filter-pids" data-pids="5821,5822"' in overview)
+              'data-action="filter-pids" data-pids="5821,5822"' in sessions)
         check("egress tab badge shows uninspected count",
               'id="tab-badge-egress">2<' in dom)
         check("findings tab badge shows needs-you count",

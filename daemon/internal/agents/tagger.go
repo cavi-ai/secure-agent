@@ -256,10 +256,11 @@ func (t *Tagger) tagLocked(pid int32) (AgentInfo, bool) {
 }
 
 // RefreshInterval is how long to wait between kern.proc.all walks.
-// Idle (no tagged agents): 5s. Live sessions: 1s so spawn/exit shows up fast.
+// Idle (no tagged agents): 5s. Live sessions: 3s — spawn/exit still shows
+// up on a glance, without a 1 Hz walk on the multi-harness machine.
 func RefreshInterval(anyTagged bool) time.Duration {
 	if anyTagged {
-		return time.Second
+		return 3 * time.Second
 	}
 	return 5 * time.Second
 }

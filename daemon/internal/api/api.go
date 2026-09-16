@@ -63,6 +63,11 @@ type Status struct {
 	ProxyEnabled      bool           `json:"proxy_enabled"`
 	ProxyPort         int            `json:"proxy_port"`
 	UninspectedEgress int            `json:"uninspected_egress"`
+	// UninspectedInfra counts unrouted endpoints classified as known
+	// CDN/cloud infrastructure (the agents' own API carriers). Reported for
+	// honesty but excluded from the headline above — infra is a routing
+	// coverage note, not a finding.
+	UninspectedInfra int `json:"uninspected_infra"`
 	// AdvisorEnabled reports whether the local triage advisor is configured
 	// (opt-in) — the UIs show it so "no verdicts" is distinguishable from
 	// "advisor off".
@@ -421,10 +426,16 @@ func (a *API) Serve(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to listen on unix socket: %w", err)
 	}
-	defer func() {
-		listener.Close()
-		_ = os.Remove(a.socketPath)
-	}()
+	// Never unlink the socket file on exit. Go's UnixListener.Close removes
+	// the path by default, and when two daemons overlap (old instance exiting
+	// while the new one binds), the old one's Close unlinks the NEW daemon's
+	// live socket — a healthy daemon left unreachable on an unlinked path.
+	// Stale socket files are harmless: startup removes them before binding,
+	// and a client of a stale path gets ECONNREFUSED, same as a missing file.
+	if ul, ok := listener.(*net.UnixListener); ok {
+		ul.SetUnlinkOnClose(false)
+	}
+	defer listener.Close()
 
 	_ = os.Chmod(a.socketPath, 0o600)
 
@@ -596,6 +607,9 @@ func (a *API) handleFlags(w http.ResponseWriter, r *http.Request) {
 		Limit: queryInt(q.Get("limit"), 50),
 	}
 	f.MinSeverity = queryInt(q.Get("min_severity"), 0)
+	// ?unacted=1 excludes acknowledged flags — reviewed rows must not bury
+	// the open ones inside a limit window full of handled noise.
+	f.Unacted = q.Get("unacted") == "1" || q.Get("unacted") == "true"
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(a.store.QueryFlags(f))
 }
@@ -933,6 +947,7 @@ type UninspectedEndpoint struct {
 	Host       string    `json:"host"`
 	Count      int       `json:"count"`
 	LastSeen   time.Time `json:"last_seen"`
+	Infra      string    `json:"infra,omitempty"`
 	Assessment string    `json:"assessment,omitempty"`
 	Rationale  string    `json:"rationale,omitempty"`
 }
@@ -954,7 +969,7 @@ func (a *API) handleUninspectedEgress(w http.ResponseWriter, r *http.Request) {
 	out := []UninspectedEndpoint{}
 	if a.correlator != nil {
 		for _, e := range a.correlator.UninspectedEgressSummarySince(time.Now().Add(-time.Duration(hours) * time.Hour)) {
-			ep := UninspectedEndpoint{Agent: e.Agent, Host: e.Host, Count: e.Count, LastSeen: e.LastSeen}
+			ep := UninspectedEndpoint{Agent: e.Agent, Host: e.Host, Count: e.Count, LastSeen: e.LastSeen, Infra: e.Infra}
 			if v, ok := a.store.AdvisorVerdictFor("host:"+e.Agent+"|"+e.Host, "host"); ok {
 				ep.Assessment = v.Assessment
 				ep.Rationale = v.Rationale
@@ -973,12 +988,57 @@ func (a *API) handleUninspectedEgress(w http.ResponseWriter, r *http.Request) {
 // makes the correlator treat the host as vendor traffic, drops it from the
 // blind-spot set, and audits the decision. Mutation-gated.
 func (a *API) handleAllowlistAdd(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	if a.allowlist == nil || a.correlator == nil {
 		http.Error(w, "allowlist not enabled", http.StatusServiceUnavailable)
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		// Current user-approved (agent, host) overrides, sorted — the console
+		// renders them with working Remove buttons (approvals are reversible).
+		type pair struct {
+			Agent string `json:"agent"`
+			Host  string `json:"host"`
+		}
+		out := []pair{}
+		for agent, hosts := range a.allowlist.Load() {
+			for _, h := range hosts {
+				out = append(out, pair{Agent: agent, Host: h})
+			}
+		}
+		sort.Slice(out, func(i, j int) bool {
+			if out[i].Agent != out[j].Agent {
+				return out[i].Agent < out[j].Agent
+			}
+			return out[i].Host < out[j].Host
+		})
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(out)
+		return
+	case http.MethodDelete:
+		limitBody(w, r)
+		var req struct {
+			Agent string `json:"agent"`
+			Host  string `json:"host"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Agent == "" || req.Host == "" {
+			http.Error(w, `Invalid payload: {"agent":"<name>","host":"<host>"}`, http.StatusBadRequest)
+			return
+		}
+		if err := a.allowlist.Remove(req.Agent, req.Host); err != nil {
+			http.Error(w, fmt.Sprintf("persist failed: %v", err), http.StatusInternalServerError)
+			return
+		}
+		a.store.PutAudit(store.AuditEntry{
+			Action: "allowlist-remove", Rule: req.Agent,
+			Detail: fmt.Sprintf("removed %s for %s", req.Host, req.Agent),
+		})
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	limitBody(w, r)

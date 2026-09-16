@@ -80,7 +80,7 @@ ADVISOR_STUB_PID=$!
 # Create a test overlay config with fast sampling interval for smoke test
 cat > "$tmp/test_config.yaml" <<EOF
 agents:
-  - { name: cursor, match: ["fake-cursor", "cursor"] }
+  - { name: cursor, match: ["fake-cursor"] }
 net_sample_interval_ms: 200
 socket_path: "$SOCKET_PATH"
 db_path: "$tmp/events.db"
@@ -277,7 +277,9 @@ RESUME_RESP=""
 AUDIT_AFTER=""
 RESOURCE_PENDING_ID=""
 RESOURCE_SESSION_KEY=""
-for _ in $(seq 1 20); do
+# The first discovery pass applies notify; the next active-agent refresh
+# (currently 3s) advances the ladder to the pause approval.
+for _ in $(seq 1 60); do
   RESOURCE_RESP=$(curl -s --unix-socket "$SOCKET_PATH" http://unix/resources 2>/dev/null || true)
   read -r RESOURCE_PENDING_ID RESOURCE_SESSION_KEY < <(printf '%s' "$RESOURCE_RESP" | python3 -c '
 import json,sys

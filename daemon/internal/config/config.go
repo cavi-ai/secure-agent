@@ -317,13 +317,18 @@ func LoadStrict(explicitPath string) (Config, error) {
 }
 
 // Load is the lenient variant used at boot: a malformed overlay falls back
-// to compiled-in defaults (logged), but VALIDATION errors still surface —
+// to compiled-in defaults (logged ONCE here — the loader itself is silent so
+// the hot-reload watcher, which calls LoadStrict every 2s, can't spam the
+// log thousands of lines per hour), but VALIDATION errors still surface —
 // booting with a sample interval that panics the collector is worse than
 // refusing to start.
 func Load(explicitPath string) (Config, error) {
-	cfg, _, validateErr := loadWithOverlayError(explicitPath)
+	cfg, overlayErr, validateErr := loadWithOverlayError(explicitPath)
 	if validateErr != nil {
 		return Config{}, validateErr
+	}
+	if overlayErr != nil {
+		log.Printf("config: WARNING: overlay problem (%v); running on compiled-in defaults", overlayErr)
 	}
 	return cfg, nil
 }
@@ -357,11 +362,11 @@ func loadWithOverlayError(explicitPath string) (Config, error, error) {
 			// An overlay that exists but can't be read must not silently fall
 			// back to defaults — the user's `mode: block` reverting to monitor
 			// with no signal is exactly the failure this tool exists to prevent.
-			log.Printf("config: WARNING: overlay %s unreadable (%v); running on compiled-in defaults", targetPath, err)
+			// Reported via overlayErr; LOGGING is the caller's choice (Load
+			// logs once at boot, the watcher's guard logs once per err state).
 			overlayMalformed = err
 		case err == nil:
 			if err := yaml.Unmarshal(data, &raw); err != nil {
-				log.Printf("config: WARNING: overlay %s is malformed YAML (%v); running on compiled-in defaults", targetPath, err)
 				overlayMalformed = fmt.Errorf("%w: %v", ErrOverlayMalformed, err)
 			}
 		}

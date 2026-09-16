@@ -376,6 +376,41 @@ function sessionRows(agents, trees) {
   return rows;
 }
 
+function sessionStripRows(rows, n) {
+  const cap = n == null ? 3 : Number(n);
+  return (rows || []).slice(0, cap > 0 ? cap : 0);
+}
+
+function sessionNeedsYou(row, flags) {
+  const pids = new Set((row && row.pids ? row.pids : []).map(Number));
+  let n = 0;
+  for (const f of flags || []) {
+    if (f.acknowledged) continue;
+    if (pids.has(Number(f.pid))) n++;
+  }
+  return n;
+}
+
+function sessionStripHTML(rows, total, now, flags) {
+  rows = rows || [];
+  if (!rows.length) return '';
+  const items = rows.map(row => {
+    const need = sessionNeedsYou(row, flags);
+    const rss = fmtRSS(row.rss);
+    const seen = row.lastSeen ? fmtAge(row.lastSeen, now) : '';
+    return `<button type="button" class="session-strip-row" data-action="goto-tab" data-tab="sessions">
+      <span class="session-strip-label">${escapeHTML(row.label)}</span>
+      ${rss ? `<span class="session-strip-meta">${escapeHTML(rss)}</span>` : ''}
+      ${seen ? `<span class="session-strip-meta">${escapeHTML(seen)}</span>` : ''}
+      ${need ? `<span class="session-strip-need">${need}</span>` : ''}
+    </button>`;
+  }).join('');
+  const more = Number(total) > rows.length
+    ? `<button type="button" class="session-strip-more" data-action="goto-tab" data-tab="sessions">View all ${Number(total)}</button>`
+    : '';
+  return `<div class="session-strip">${items}${more}</div>`;
+}
+
 function renderProcessRow(a, now, nested) {
   const abs = a.started_at ? fmtTime(new Date(a.started_at)) : '';
   const age = a.started_at ? fmtAge(a.started_at, now) : '';
@@ -453,4 +488,10 @@ function vendorKeyPromoteHTML(ids) {
     </div>
     <button class="btn btn-primary btn-sm" data-action="promote-vendor-keys"><svg class="icon"><use href="#i-arrow"/></svg><span>Promote vendor keys to block</span></button>
   </div>`;
+}
+// sseNeedsSnapshot: which EventSource kinds must refetch GET /snapshot.
+// file/conn/transcript noise only bumps the sparkline — a 400ms snapshot
+// after every ES file-open is the leftover hot-path tax.
+function sseNeedsSnapshot(kind) {
+  return kind === 'exec' || kind === 'guard-prompt' || kind === 'guard-resolved' || kind === 'proxy-hit';
 }

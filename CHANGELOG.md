@@ -34,6 +34,72 @@ All notable changes to `secure-agent` are documented here. The format follows
   visual policy editor with complete per-workspace overrides, longest-path
   selection, atomic YAML persistence, and an explicit confirmation before
   automatic termination can be saved.
+- CI: cancel stale runs, job timeouts, credential-free checkout, cgo-free Linux gate, go mod tidy, govulncheck, Dependabot, Go test shuffle. Proxy token and CA permission contracts now have unit tests (the old 0600 check was asserting a different temp path). Go toolchain 1.26.6.
+
+### Changed
+- Overview shows a 3-row session strip (project folder, RSS, last seen, needs-you) that opens the Sessions tab. The full board stays on Sessions.
+- Menubar sessions are grouped by harness family again (collapsed headers with session/memory/activity aggregates, small families expanded), capped at 6 groups with a "+N more — open the console" link. The flat 50-row list is gone.
+- Every hero count is clickable: "N flags to review" opens the top unacted flag's action sheet; uninspected/would-block opens the console egress drill-down (tab deep-links now survive the token handoff).
+
+### Changed
+- The session board is its own console tab (Overview / Sessions / Agents / Egress / Findings) instead of filling the main dashboard. Overview keeps the activity trend and event timeline.
+
+### Changed
+- Uninspected-egress headline now counts only unknown endpoints. Known CDN/cloud infrastructure (Cloudflare, Google, AWS, GitHub, Akamai, Fastly, Azure — by suffix, CIDR, and cached PTR for bare IPs) is collapsed into a separate `uninspected_infra` figure and one collapsible group in the drill-down, excluded from the hero, posture, allowlist suggestions, and advisor pre-assessment.
+
+### Added
+- Firewall rules can be demoted back to monitor from the console (block was a one-way ratchet in the UI).
+- `GET /allowlist` lists user-approved endpoints; `DELETE /allowlist` removes one. The console renders them with working Remove buttons.
+
+### Changed
+- Console SSE only refetches `/snapshot` on exec, guard, and proxy-hit; file/conn events update the sparkline only.
+- Process tagger walks every 3s while agents are tagged (idle stays 5s).
+- `PostToolUse` is one `secret_guard.py` spawn (injection scan + activity log); `injection_scan.py` is no longer a second process.
+
+### Fixed
+- List endpoints (`/events`, `/flags`, `/incidents`, `/audit`, `/stats/rollup`) returned `null` instead of `[]` when empty — crashed strict clients (process transcript sheet).
+- Daemon shutdown during instance overlap could unlink the successor's live unix socket (running but unreachable).
+- Menubar: decodes `null` list bodies as empty; transcript sheet gains Retry.
+
+### Fixed
+- **Hero "N flags to review" counted reviewed flags.** The popover hero's
+  Attention branch counted every severity≥2 flag in the fetch window —
+  including acknowledged ones — so it read "20 flags to review" over a list
+  the operator had fully dealt with. It now uses the same unacted filter as
+  the attention section (`unactedFlags`), and `heroModel` is pinned by
+  regression tests (reviewed flags never demand review; uninspected-egress
+  alone still earns Attention).
+- **"Open console" was a greyed-out dead end when the inspection proxy was
+  off.** The footer button is now the way OUT of the off state: it offers a
+  one-click "Turn on & open" flow — writes `proxy_enabled: true` into
+  config.yaml (narrow line-based edit, every other byte preserved), bounces
+  the daemon (waiting for the old one to release the socket so the new one
+  wins the bind race), waits for the port, and opens the console. The button
+  shows an "Enabling…" state and fails loudly if the port never comes up.
+- **Duplicate console tabs.** "Open console" now focuses an already-open
+  console tab in Safari or Chrome (AppleScript, with plain-open fallback for
+  other browsers and for Automation-consent denial) instead of spawning a
+  fresh dead-end tab on every click.
+- **Menubar build warnings cleared** (dead `try?`/`await`/variables,
+  optional-interpolation, implicit-strong-capture) — the package builds
+  warning-free.
+- **Notification Center no longer piles up handled alerts.** The menubar now
+  reconciles delivered banners on every poll: banners whose flag was acted
+  on (dismissed in either UI, muted, retro-acknowledged daemon-side — all
+  converge to `acknowledged`) are withdrawn, and anything older than 7 days
+  is pruned. Previously nothing ever withdrew a delivered notification, so
+  the Center accumulated greyed-out history for alerts the operator had
+  already dealt with. (The reconciliation path also skips
+  `getDeliveredNotifications` outside a real .app bundle — it throws in the
+  xctest host.)
+- **Malformed-overlay log storm.** A bad `config.yaml` logged a WARNING on
+  every load — and the hot-reload watcher loads every 2s, producing ~1,600
+  lines/hour (`cannot unmarshal !!seq into config.rawConfig`). The loader is
+  now silent; boot-time `Load` logs the warning exactly once, and the
+  watcher keeps its own once-per-state line. Regression test pins the
+  contract.
+
+### Added
 - **One-command fleet enrollment (`secure-agent fleet enroll <collector-url>`).**
   Reads the node id from the running daemon, generates the webhook secret,
   merges `fleet.webhooks` into `config.yaml` (comment-preserving, backup
