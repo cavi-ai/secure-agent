@@ -39,11 +39,39 @@ type Store struct {
 	jsonlPath   string
 	jsonlFile   *os.File
 	insertCount uint64
+	// Per-kind time-based retention. Socket churn (conn open/close) ages out
+	// in hours; security-relevant kinds keep days. Count-based pruning stays
+	// as a backstop — a busy machine must never let conn noise evict the
+	// security record (the 10k-row, zero-activity window from the audit).
+	connRetention  time.Duration
+	eventRetention time.Duration
 	// lastSeen[pid] = RFC3339Nano ts of the most recent event for that pid,
 	// maintained on insert so the /status agents join is O(pids) map lookups
 	// instead of a MAX(ts) GROUP BY scan over the events table (measured
 	// 2–4s at ~400 live pids — past the UI's 3s socket timeout).
 	lastSeen map[int32]string
+}
+
+// Retention defaults; both overrideable via config (retention.conn_event_hours,
+// retention.event_days).
+const (
+	DefaultConnEventRetention = 24 * time.Hour
+	DefaultEventRetention     = 7 * 24 * time.Hour
+)
+
+// SetEventRetention configures per-kind time-based pruning. Zero values fall
+// back to the defaults.
+func (s *Store) SetEventRetention(conn, other time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if conn <= 0 {
+		conn = DefaultConnEventRetention
+	}
+	if other <= 0 {
+		other = DefaultEventRetention
+	}
+	s.connRetention = conn
+	s.eventRetention = other
 }
 
 // AuditEntry is one durable record of a policy/control change (a rule promoted
@@ -381,6 +409,23 @@ func (s *Store) pruneEventsLocked(maxKeep int) {
 	if maxKeep <= 0 {
 		maxKeep = 10000
 	}
+	// Time-based per kind first (datetime() normalizes any legacy local-offset
+	// ts values), then the row-count cap as a pure backstop.
+	conn := s.connRetention
+	if conn <= 0 {
+		conn = DefaultConnEventRetention
+	}
+	other := s.eventRetention
+	if other <= 0 {
+		other = DefaultEventRetention
+	}
+	now := time.Now().UTC()
+	connCutoff := now.Add(-conn).Format(time.RFC3339Nano)
+	otherCutoff := now.Add(-other).Format(time.RFC3339Nano)
+	_, _ = s.db.Exec(`DELETE FROM events WHERE kind IN (?, ?) AND datetime(ts) < datetime(?)`,
+		int(event.KindConnOpen), int(event.KindConnClose), connCutoff)
+	_, _ = s.db.Exec(`DELETE FROM events WHERE kind NOT IN (?, ?) AND datetime(ts) < datetime(?)`,
+		int(event.KindConnOpen), int(event.KindConnClose), otherCutoff)
 	_, _ = s.db.Exec(`DELETE FROM events WHERE id NOT IN (SELECT id FROM events ORDER BY id DESC LIMIT ?)`, maxKeep)
 }
 
