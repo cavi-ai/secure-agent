@@ -35,6 +35,12 @@ type Health struct {
 	Abandoned bool   `json:"abandoned"`
 	Restarts  int    `json:"restarts"`
 	LastError string `json:"last_error,omitempty"`
+	// LastProduced is the RFC3339 timestamp of the worker's most recent
+	// published event. Liveness ("the goroutine is alive") is not coverage —
+	// a tailer whose source stopped growing reads Running:true while seeing
+	// nothing. Posture compares LastProduced against a per-collector window
+	// to say "this monitor is blind".
+	LastProduced string `json:"last_produced,omitempty"`
 }
 
 // PermanentError marks a failure that cannot succeed on retry: an
@@ -89,6 +95,15 @@ func (r *Registry) update(name string, mut func(*Health)) {
 	h.Name = name
 	mut(&h)
 	r.m[name] = h
+}
+
+// MarkProduced stamps a worker's coverage heartbeat: call it whenever the
+// worker publishes an event. Cheap (one mutex + one timestamp) and the only
+// signal that distinguishes "running" from "actually seeing anything".
+func (r *Registry) MarkProduced(name string) {
+	r.update(name, func(h *Health) {
+		h.LastProduced = time.Now().UTC().Format(time.RFC3339)
+	})
 }
 
 // Snapshot returns a copy of every tracked worker's health.

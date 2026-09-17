@@ -34,9 +34,21 @@ type Killer interface {
 	Kill(pid int32) error
 }
 
+// CoverageStatus answers "of the harnesses actually running, how many is the
+// daemon seeing?" — the monitor reporting its own blindness. HarnessesSeen
+// counts harnesses (agent kinds, infra excluded) with attributed activity in
+// the recent window; HarnessesActive counts those with live processes.
+type CoverageStatus struct {
+	HarnessesActive int `json:"harnesses_active"`
+	HarnessesSeen   int `json:"harnesses_seen"`
+}
+
 type AgentSummary struct {
 	PID       int32  `json:"pid"`
-	Name      string `json:"name"`
+	Name string `json:"name"`
+	// Kind is "agent" or "infra" (IDEs, local model servers). Infra processes
+	// stay visible for resources and kill, but never count as agents.
+	Kind      string `json:"kind,omitempty"`
 	ExePath   string `json:"exe_path,omitempty"`
 	CWD       string `json:"cwd,omitempty"`
 	PPID      int32  `json:"ppid,omitempty"`
@@ -51,10 +63,14 @@ type AgentSummary struct {
 }
 
 type Status struct {
-	Running           bool           `json:"running"`
-	Version           string         `json:"version"`
-	Uptime            string         `json:"uptime"`
-	ActiveAgents      int            `json:"active_agents"`
+	Running      bool   `json:"running"`
+	Version      string `json:"version"`
+	Uptime       string `json:"uptime"`
+	ActiveAgents int    `json:"active_agents"`
+	// InfraCount counts distinct tree ROOTS of kind=infra families (IDEs,
+	// local model servers) — shared infrastructure, shown beside but never
+	// inside ActiveAgents ("Agents 4 · Sessions 9 · Infra 3").
+	InfraCount        int            `json:"infra_count,omitempty"`
 	Agents            []AgentSummary `json:"agents"`
 	Trees             []AgentTree    `json:"trees"`
 	ProxyEnabled      bool           `json:"proxy_enabled"`
@@ -92,6 +108,10 @@ type Status struct {
 	// buffer was full. Zero is healthy; growth under N-agent bursts is the
 	// hot-path signal the audit asked to surface.
 	BusDrops uint64 `json:"bus_drops,omitempty"`
+
+	// Coverage reports how many running harnesses the daemon is actually
+	// seeing ("seeing 2 of 3 harnesses") — liveness is not coverage.
+	Coverage *CoverageStatus `json:"coverage,omitempty"`
 
 	FirewallStats map[string]firewall.RuleStat `json:"firewall_stats,omitempty"`
 	// Collectors reports each supervised worker's health so a dead or abandoned

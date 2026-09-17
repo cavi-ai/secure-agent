@@ -41,6 +41,11 @@ func SpoolAvailable() bool {
 type SpoolTailer struct {
 	bus  *bus.Bus
 	path string
+
+	// OnProduce, when set, is called after any spool event is published —
+	// the supervisor's coverage heartbeat: a tailer whose spool stopped
+	// growing must not read as healthy coverage.
+	OnProduce func()
 }
 
 func NewSpoolTailer(b *bus.Bus) *SpoolTailer {
@@ -111,12 +116,17 @@ func (t *SpoolTailer) drainOnce(offset int64) int64 {
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
 	var lastGood int64
+	published := false
 	for scanner.Scan() {
 		line := scanner.Bytes()
 		if e, ok := ParseESLine(line); ok {
 			t.bus.Publish(e)
+			published = true
 		}
 		lastGood += int64(len(line)) + 1
+	}
+	if published && t.OnProduce != nil {
+		t.OnProduce()
 	}
 	// An oversized line (>1MB, a corrupt spool write) errors the scanner
 	// and would otherwise leave the offset frozen on it forever — every

@@ -812,11 +812,11 @@ public final class AppState: ObservableObject {
     public var activeAgents: [AgentSummaryModel] { status?.agents ?? [] }
 
     /// Tree roots only: the popover lists agents, not their helper processes.
-
-    /// Tree roots only: the popover lists agents, not their helper processes.
     /// Killing a root kills the tree (the daemon's /kill targets the tree).
+    /// Infra roots (IDEs, model servers) are excluded — they are shared
+    /// infrastructure, never counted as agents.
     public var agentRoots: [AgentSummaryModel] {
-        activeAgents.filter { ($0.rootPid ?? $0.pid) == $0.pid }
+        activeAgents.filter { ($0.rootPid ?? $0.pid) == $0.pid && !$0.isInfra }
     }
 
     /// Tagged processes that are NOT tree roots — the subagents/helpers a
