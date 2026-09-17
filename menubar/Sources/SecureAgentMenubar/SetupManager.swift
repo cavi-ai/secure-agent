@@ -124,10 +124,12 @@ public final class SetupManager: ObservableObject {
         isDaemonRunning = DaemonSupervisor.shared.isRunning || statusReachable
         // ALL harnesses must carry the hook — `contains` used to announce
         // "Hooks installed" when only one of three targets had it, leaving the
-        // other two unprotected while the wizard claimed otherwise.
+        // other two unprotected while the wizard claimed otherwise. Claude Code
+        // must also have the hooks REGISTERED in settings.json — files on disk
+        // alone never run.
         areHooksInstalled = Self.hookTargets.allSatisfy { target in
             fm.fileExists(atPath: "\(target)/secret_guard.py")
-        }
+        } && claudeHooksRegistered()
         advisorEnabled = Self.advisorConfigIsEnabled(configYAML())
         advisorPersisted = Self.advisorConfig(configYAML())
         disabledAgents = Self.disabledAgents(configYAML())
@@ -480,6 +482,111 @@ public final class SetupManager: ObservableObject {
                 try fm.copyItem(atPath: "\(srcDir)/\(hook)", toPath: dst)
             }
         }
+        // Copying the script is not enough: Claude Code runs hooks only when
+        // settings.json registers them. The audited gap was exactly this —
+        // files copied, nothing registered, guard never ran.
+        try registerClaudeHooks()
+    }
+
+    // MARK: - Harness hook registration (Claude Code settings.json)
+
+    public static var claudeSettingsPath: String { NSHomeDirectory() + "/.claude/settings.json" }
+
+    /// The command Claude Code runs for guarded tool calls.
+    public static var claudeHookCommand: String {
+        "python3 \(NSHomeDirectory())/.claude/hooks/secret_guard.py"
+    }
+
+    /// Merge PreToolUse + PostToolUse entries into ~/.claude/settings.json.
+    /// Merge, never clobber: the user's other hooks and settings stay
+    /// untouched. Backup first, atomic write — a torn settings file would
+    /// break the user's whole harness, not just us. Idempotent.
+    public func registerClaudeHooks() throws {
+        try Self.registerClaudeHooks(at: Self.claudeSettingsPath, command: Self.claudeHookCommand)
+    }
+
+    /// Path-parameterized core of registerClaudeHooks (tests use temp files).
+    nonisolated static func registerClaudeHooks(at path: String, command: String) throws {
+        let fm = FileManager.default
+        var root: [String: Any] = [:]
+        if let data = fm.contents(atPath: path), !data.isEmpty {
+            guard let parsed = try? JSONSerialization.jsonObject(with: data),
+                  let dict = parsed as? [String: Any] else {
+                throw NSError(domain: "SetupManager", code: 3,
+                              userInfo: [NSLocalizedDescriptionKey: "~/.claude/settings.json is not valid JSON — not touching it; fix or back it up first"])
+            }
+            root = dict
+            // Backup before any mutation of a file we don't own.
+            try? data.write(to: URL(fileURLWithPath: path + ".bak-secure-agent"), options: .atomic)
+        }
+        var hooks = root["hooks"] as? [String: Any] ?? [:]
+        for eventName in ["PreToolUse", "PostToolUse"] {
+            var groups = hooks[eventName] as? [[String: Any]] ?? []
+            if !Self.groupsContainGuard(groups) {
+                groups.append([
+                    "matcher": "*",
+                    "hooks": [["type": "command", "command": command]],
+                ])
+            }
+            hooks[eventName] = groups
+        }
+        root["hooks"] = hooks
+        try fm.createDirectory(atPath: (path as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+        let data = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
+        try data.write(to: URL(fileURLWithPath: path), options: .atomic)
+    }
+
+    /// Whether Claude Code's settings reference the guard for both events.
+    public func claudeHooksRegistered() -> Bool {
+        Self.claudeHooksRegistered(at: Self.claudeSettingsPath)
+    }
+
+    nonisolated static func claudeHooksRegistered(at path: String) -> Bool {
+        guard let data = FileManager.default.contents(atPath: path),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let hooks = root["hooks"] as? [String: Any] else { return false }
+        return ["PreToolUse", "PostToolUse"].allSatisfy {
+            Self.groupsContainGuard(hooks[$0] as? [[String: Any]] ?? [])
+        }
+    }
+
+    /// Remove our registrations (uninstall), leaving other hooks untouched.
+    public func unregisterClaudeHooks() {
+        Self.unregisterClaudeHooks(at: Self.claudeSettingsPath)
+    }
+
+    nonisolated static func unregisterClaudeHooks(at path: String) {
+        guard let data = FileManager.default.contents(atPath: path),
+              var root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              var hooks = root["hooks"] as? [String: Any] else { return }
+        for eventName in ["PreToolUse", "PostToolUse"] {
+            let groups = (hooks[eventName] as? [[String: Any]] ?? []).compactMap { group -> [String: Any]? in
+                let kept = (group["hooks"] as? [[String: Any]] ?? []).filter { h in
+                    guard let cmd = h["command"] as? String else { return true }
+                    return !cmd.contains("/.claude/hooks/secret_guard.py")
+                }
+                if kept.isEmpty { return nil }
+                var g = group
+                g["hooks"] = kept
+                return g
+            }
+            hooks[eventName] = groups
+        }
+        root["hooks"] = hooks
+        if let out = try? JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys]) {
+            try? out.write(to: URL(fileURLWithPath: path), options: .atomic)
+        }
+    }
+
+    private nonisolated static func groupsContainGuard(_ groups: [[String: Any]]) -> Bool {
+        for group in groups {
+            for h in group["hooks"] as? [[String: Any]] ?? [] {
+                if let cmd = h["command"] as? String, cmd.contains("/.claude/hooks/secret_guard.py") {
+                    return true
+                }
+            }
+        }
+        return false
     }
 
     /// Run the self-test and publish the outcome to the wizard UI.
@@ -880,6 +987,7 @@ public final class SetupManager: ObservableObject {
                 try? fm.removeItem(atPath: "\(target)/\(hook)")
             }
         }
+        unregisterClaudeHooks()
         try? fm.removeItem(atPath: "\(home)/.local/bin/secure-agent")
     }
 
