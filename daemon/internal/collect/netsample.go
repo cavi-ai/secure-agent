@@ -37,6 +37,10 @@ type NetSampler struct {
 	lister   SocketLister
 	interval time.Duration
 
+	// OnProduce, when set, is called after any conn event is published — the
+	// supervisor's coverage heartbeat ("running" ≠ "seeing anything").
+	OnProduce func()
+
 	mu       sync.Mutex
 	dnsCache map[string]string
 	// dnsSem bounds concurrent reverse lookups; lookups run off the sampling
@@ -73,6 +77,22 @@ func DiffConnections(prev, cur map[connKey]struct{}) (opened, closed []connKey) 
 	return opened, closed
 }
 
+// isLoopbackHost reports whether a socket's remote endpoint is loopback
+// (127.0.0.0/8 or ::1). Loopback churn — dev servers, local model servers,
+// the daemon's own socket — is machine-local noise, not egress: recording it
+// floods the event store (observed live: 10,346 retained rows, 100% socket
+// churn, zero agent activity) and drowns real connections out of the
+// count-based retention window.
+func isLoopbackHost(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	return false
+}
+
 func (ns *NetSampler) Run(ctx context.Context) error {
 	ticker := time.NewTicker(ns.interval)
 	defer ticker.Stop()
@@ -96,6 +116,9 @@ func (ns *NetSampler) Run(ctx context.Context) error {
 							RemotePort: k.Port,
 						})
 					}
+					if ns.OnProduce != nil {
+						ns.OnProduce()
+					}
 					prevSnapshot = make(map[connKey]struct{})
 				}
 				continue
@@ -105,6 +128,9 @@ func (ns *NetSampler) Run(ctx context.Context) error {
 			// Sample active sockets and filter against tagged agent process trees
 			allSocks := ns.lister.SocketsFor(-1)
 			for _, s := range allSocks {
+				if isLoopbackHost(s.Host) {
+					continue // loopback is not egress; see isLoopbackHost
+				}
 				if _, isAgent := ns.tagger.Tag(s.PID); isAgent {
 					resolvedHost := ns.resolveHost(s.Host)
 					k := connKey{PID: s.PID, Host: resolvedHost, Port: s.Port}
@@ -132,6 +158,9 @@ func (ns *NetSampler) Run(ctx context.Context) error {
 					RemoteHost: k.Host,
 					RemotePort: k.Port,
 				})
+			}
+			if len(opened)+len(closed) > 0 && ns.OnProduce != nil {
+				ns.OnProduce()
 			}
 
 			prevSnapshot = curSnapshot
