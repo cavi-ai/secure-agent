@@ -133,31 +133,6 @@ struct ConsoleView: View {
         }
     }
 
-    /// A collector the supervisor gave up on (e.g. eslogger without FDA) is
-    /// the honest "why are transcripts thin / is this even monitoring"
-    /// answer — silence otherwise reads as working.
-    private func abandonedCollectorBanner(_ h: HealthModel) -> some View {
-        HStack(alignment: .top, spacing: 8) {
-            Image(systemName: "waveform.path.ecg")
-                .font(.system(size: 11)).foregroundStyle(Color.warn)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("\(h.name) collector stopped — \(h.lastError ?? "repeated failures")")
-                    .font(.system(size: 11)).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                Text("Restart the app after granting Full Disk Access to retry.")
-                    .font(.system(size: 10)).foregroundStyle(.tertiary)
-            }
-            Spacer(minLength: 0)
-            Button { DaemonSupervisor.shared.restart(); state.refresh() } label: {
-                Text("Retry").font(.system(size: 10, weight: .semibold))
-            }
-            .buttonStyle(.bordered).controlSize(.mini).tint(Color.brand)
-        }
-        .padding(10)
-        .background(Color.warn.opacity(0.10))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-    }
-
     // MARK: hero
 
     /// The one-glance answer, mirroring the web console's posture banner:
@@ -395,17 +370,6 @@ struct ConsoleView: View {
         .help("\(Self.incidentRowTitle(inc.rule)) — \(inc.agent) · open the incident report")
     }
 
-    private func incidentRows(_ incidents: [IncidentReportModel]) -> some View {
-        ForEach(incidents.prefix(3)) { inc in
-        }
-        .sheet(item: $selectedIncident) { inc in
-            IncidentDetailView(incident: inc, state: state)
-        }
-        .sheet(item: $selectedFlag) { flag in
-            FlagActionSheet(flag: flag, state: state)
-        }
-    }
-
     /// One row per flag GROUP: "touched your keychain ×20 · codex · 2d".
     /// The count badge makes repeats honest; the whole row opens the sheet
     /// (which acts on the newest), with an inline ignore-class shortcut.
@@ -462,31 +426,6 @@ struct ConsoleView: View {
     }
 
     @State private var confirmIgnoreGroup: AppState.FlagGroup?
-
-    private var incidentRows: some View {
-        ForEach(state.incidents.prefix(3)) { inc in
-                Button { selectedIncident = inc } label: {
-                    HStack(spacing: 7) {
-                        Image(systemName: "cross.case.fill")
-                            .font(.system(size: 11)).foregroundStyle(Color.bad)
-                        AgentIdentity.tile(inc.agent, size: 14, fontSize: 8)
-                        Text(Self.incidentRowTitle(inc.rule))
-                            .font(.system(size: 11, weight: .medium))
-                            .lineLimit(1)
-                        Spacer()
-                        if let t = relativeTime(inc.timestamp) {
-                            Text(t)
-                                .font(.system(size: 9, weight: .medium, design: .monospaced))
-                                .foregroundStyle(.tertiary)
-                        }
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 7, weight: .semibold)).foregroundStyle(.quaternary)
-                    }
-                }
-                .buttonStyle(.plain)
-                .help("\(Self.incidentRowTitle(inc.rule)) — \(inc.agent) · open the incident report")
-        }
-    }
 
     @State private var selectedIncident: IncidentReportModel?
 

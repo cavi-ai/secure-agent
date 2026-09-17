@@ -52,7 +52,7 @@ func LoadToken(path string) string {
 // clearProxyToken resets auth state; tests use it to isolate the global.
 func clearProxyToken() { token.Store("") }
 
-// Token returns the active token (empty = auth disabled).
+// Token returns the active token (empty = load failed; auth fails closed).
 func Token() string {
 	if v, ok := token.Load().(string); ok {
 		return v
@@ -82,7 +82,10 @@ func isHexToken(t string) bool {
 func authorized(r *http.Request) bool {
 	want := Token()
 	if want == "" {
-		return true // auth disabled (token load failed); fail open on loopback
+		// Fail closed: a missing token means the random source failed at
+		// startup. An open relay on a security product's egress proxy is
+		// worse than a broken one — matches consoleAuthorized.
+		return false
 	}
 	if subtle.ConstantTimeCompare([]byte(r.Header.Get("X-SecureAgent-Proxy-Token")), []byte(want)) == 1 {
 		return true

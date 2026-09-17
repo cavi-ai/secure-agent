@@ -1,6 +1,11 @@
 import XCTest
 @testable import SecureAgentMenubar
 
+/// Sendable box for the request bytes a test socket server captures.
+private final class RequestCapture: @unchecked Sendable {
+    var request: String?
+}
+
 final class DaemonClientTests: XCTestCase {
     func testDaemonClientErrorDescriptionsAreActionable() {
         // Regression: without LocalizedError every daemon failure surfaced as
@@ -139,6 +144,62 @@ final class DaemonClientTests: XCTestCase {
         } catch {
             XCTAssertNotNil(error)
         }
+    }
+
+    /// Regression: fetchAudit built "/audit?limit=\(limit))" — a stray paren
+    /// made the daemon ignore the limit and answer 100 rows. Stand up a real
+    /// unix-socket listener and assert the exact request line.
+    func testFetchAuditSendsExactRequestLine() async throws {
+        let sockPath = "/tmp/secure-agent-test-\(UUID().uuidString).sock"
+        defer { try? FileManager.default.removeItem(atPath: sockPath) }
+
+        let serverFD = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
+        XCTAssertGreaterThanOrEqual(serverFD, 0)
+        defer { Darwin.close(serverFD) }
+
+        var addr = sockaddr_un()
+        addr.sun_family = sa_family_t(AF_UNIX)
+        let pathBytes = sockPath.utf8CString
+        _ = withUnsafeMutableBytes(of: &addr.sun_path) { ptr in
+            pathBytes.withUnsafeBufferPointer { pathPtr in
+                ptr.copyBytes(from: UnsafeRawBufferPointer(pathPtr))
+            }
+        }
+        let addrLen = socklen_t(MemoryLayout<sa_family_t>.size + pathBytes.count)
+        let bindRes = withUnsafePointer(to: &addr) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                Darwin.bind(serverFD, $0, addrLen)
+            }
+        }
+        XCTAssertEqual(bindRes, 0)
+        XCTAssertEqual(Darwin.listen(serverFD, 1), 0)
+
+        let captured = RequestCapture()
+        let server = Task.detached {
+            let conn = Darwin.accept(serverFD, nil, nil)
+            guard conn >= 0 else { return }
+            var buf = [UInt8](repeating: 0, count: 4096)
+            var data = Data()
+            // One read is enough for a request this small; stop at the header
+            // terminator so we don't block on the client closing.
+            while data.range(of: Data("\r\n\r\n".utf8)) == nil {
+                let n = Darwin.read(conn, &buf, buf.count)
+                if n <= 0 { break }
+                data.append(contentsOf: buf[0..<n])
+            }
+            captured.request = String(decoding: data, as: UTF8.self)
+            let body = "[]"
+            let resp = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: \(body.utf8.count)\r\n\r\n\(body)"
+            _ = resp.utf8.withContiguousStorageIfAvailable { Darwin.write(conn, $0.baseAddress!, $0.count) }
+            Darwin.close(conn)
+        }
+        defer { server.cancel() }
+
+        let client = DaemonClient(socketPath: sockPath)
+        let rows = try await client.fetchAudit(limit: 42)
+        XCTAssertEqual(rows.count, 0)
+        let line = captured.request?.components(separatedBy: "\r\n").first ?? ""
+        XCTAssertEqual(line, "GET /audit?limit=42 HTTP/1.1", "request line must carry a clean query string")
     }
 
     // MARK: - HTTP response parsing (the hand-rolled transport)
