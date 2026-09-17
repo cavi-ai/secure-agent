@@ -21,12 +21,12 @@ import (
 type allowlistProcSource struct{}
 
 func (allowlistProcSource) List() []agents.ProcInfo {
-	return []agents.ProcInfo{{PID: 42, PPID: 1, Exe: "/Applications/Cursor.app/Contents/Frameworks/Cursor Helper"}}
+	return []agents.ProcInfo{{PID: 42, PPID: 1, Exe: "/usr/local/bin/cursor-agent"}}
 }
 
 func (allowlistProcSource) Info(pid int32) (agents.ProcInfo, bool) {
 	if pid == 42 {
-		return agents.ProcInfo{PID: 42, PPID: 1, Exe: "/Applications/Cursor.app/Contents/Frameworks/Cursor Helper"}, true
+		return agents.ProcInfo{PID: 42, PPID: 1, Exe: "/usr/local/bin/cursor-agent"}, true
 	}
 	return agents.ProcInfo{}, false
 }

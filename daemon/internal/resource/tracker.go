@@ -20,20 +20,27 @@ const (
 )
 
 type Snapshot struct {
-	ObservedAt   time.Time        `json:"observed_at"`
-	Host         *HostSnapshot    `json:"host,omitempty"`
-	RSSBytes     uint64           `json:"rss_bytes"`
-	CPUPercent   float64          `json:"cpu_percent,omitempty"`
-	ProcessCount int              `json:"process_count"`
-	SessionCount int              `json:"session_count"`
-	Sessions     []Session        `json:"sessions"`
-	Episodes     []Episode        `json:"episodes"`
-	Control      *ControlSnapshot `json:"control,omitempty"`
+	ObservedAt   time.Time     `json:"observed_at"`
+	Host         *HostSnapshot `json:"host,omitempty"`
+	RSSBytes     uint64        `json:"rss_bytes"`
+	CPUPercent   float64       `json:"cpu_percent,omitempty"`
+	ProcessCount int           `json:"process_count"`
+	SessionCount int           `json:"session_count"`
+	// InfraCount counts kind=infra sessions (IDEs, local model servers) —
+	// shared infrastructure shown beside, never inside, SessionCount.
+	InfraCount int              `json:"infra_count,omitempty"`
+	Sessions   []Session        `json:"sessions"`
+	Episodes   []Episode        `json:"episodes"`
+	Control    *ControlSnapshot `json:"control,omitempty"`
 }
 
 type Session struct {
-	Key                   string          `json:"key"`
-	Name                  string          `json:"name"`
+	Key  string `json:"key"`
+	Name string `json:"name"`
+	// Kind is "agent" or "infra" (IDEs, local model servers). Infra sessions
+	// render as shared infrastructure: no diagnoses, no reclaimable estimate,
+	// not counted as sessions.
+	Kind                  string          `json:"kind,omitempty"`
 	Workspace             string          `json:"workspace,omitempty"`
 	RootPID               int32           `json:"root_pid"`
 	RootStartedAt         time.Time       `json:"root_started_at"`
@@ -135,7 +142,7 @@ func (t *Tracker) Observe(infos map[int32]agents.AgentInfo, lastSeen map[int32]s
 		key := sessionKey(rootPID, rootStart)
 		session := grouped[key]
 		if session == nil {
-			session = &Session{Key: key, RootPID: rootPID, RootStartedAt: rootStart}
+			session = &Session{Key: key, RootPID: rootPID, RootStartedAt: rootStart, Kind: info.Kind}
 			grouped[key] = session
 		}
 
@@ -202,10 +209,15 @@ func (t *Tracker) Observe(infos map[int32]agents.AgentInfo, lastSeen map[int32]s
 		}
 		nextHistories[key] = history
 		session.Samples = append([]Sample(nil), history...)
-		session.Diagnoses = diagnoseSession(*session, history, now)
-		for _, diagnosis := range session.Diagnoses {
-			if diagnosis.EstimatedReclaimBytes > session.EstimatedReclaimBytes {
-				session.EstimatedReclaimBytes = diagnosis.EstimatedReclaimBytes
+		if session.Kind != "infra" {
+			// Infra (IDEs, model servers) is shared infrastructure: monitored
+			// and killable, but a 17 GB IDE must never read as "reclaimable
+			// agent memory" — no diagnoses, no reclaim estimate.
+			session.Diagnoses = diagnoseSession(*session, history, now)
+			for _, diagnosis := range session.Diagnoses {
+				if diagnosis.EstimatedReclaimBytes > session.EstimatedReclaimBytes {
+					session.EstimatedReclaimBytes = diagnosis.EstimatedReclaimBytes
+				}
 			}
 		}
 		sessions = append(sessions, *session)
@@ -219,8 +231,13 @@ func (t *Tracker) Observe(infos map[int32]agents.AgentInfo, lastSeen map[int32]s
 		return sessions[i].Key < sessions[j].Key
 	})
 
-	snapshot := Snapshot{ObservedAt: now, SessionCount: len(sessions), Sessions: sessions}
+	snapshot := Snapshot{ObservedAt: now, Sessions: sessions}
 	for _, session := range sessions {
+		if session.Kind == "infra" {
+			snapshot.InfraCount++
+		} else {
+			snapshot.SessionCount++
+		}
 		snapshot.RSSBytes += session.RSSBytes
 		snapshot.CPUPercent += session.CPUPercent
 		snapshot.ProcessCount += session.ProcessCount

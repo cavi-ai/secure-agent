@@ -87,6 +87,25 @@ func mergeGuardRulePaths(raw *rawConfig) {
 type AgentDef struct {
 	Name  string   `yaml:"name"`
 	Match []string `yaml:"match"`
+	// Kind separates real coding agents from shared infrastructure (IDEs,
+	// local model servers, MCP servers). Empty means "agent". Infra is still
+	// tracked — monitored, killable, resource-visible — but it is never
+	// counted as an agent or a session in the headline numbers, and its
+	// memory never shows up as "reclaimable".
+	Kind string `yaml:"kind,omitempty"`
+}
+
+// AgentKindInfra marks a matched process family as shared infrastructure
+// rather than a coding agent (see AgentDef.Kind).
+const AgentKindInfra = "infra"
+
+// NormalizeAgentKind maps the zero value to the default kind so tagger and
+// tracker never special-case "".
+func NormalizeAgentKind(kind string) string {
+	if kind == AgentKindInfra {
+		return AgentKindInfra
+	}
+	return "agent"
 }
 
 // FirewallConfig configures the egress secret-leak firewall (see the
@@ -233,6 +252,19 @@ type AdvisorConfig struct {
 	ManagedModel string
 }
 
+// RetentionYAML is the on-disk shape of event retention. Zero values fall
+// back to the store defaults (conn churn 24h, everything else 7d).
+type RetentionYAML struct {
+	ConnEventHours int `yaml:"conn_event_hours"`
+	EventDays      int `yaml:"event_days"`
+}
+
+// RetentionConfig is per-kind time-based event retention.
+type RetentionConfig struct {
+	ConnEvent time.Duration
+	Event     time.Duration
+}
+
 type rawConfig struct {
 	DisabledAgents      []string              `yaml:"disabled_agents"`
 	SensitiveGlobs      []string              `yaml:"sensitive_globs"`
@@ -253,6 +285,7 @@ type rawConfig struct {
 	ResourceControl     ResourceControlConfig `yaml:"resource_control"`
 	Fleet               FleetConfig           `yaml:"fleet"`
 	Advisor             AdvisorYAML           `yaml:"advisor"`
+	Retention           RetentionYAML         `yaml:"retention"`
 }
 
 type Config struct {
@@ -273,8 +306,18 @@ type Config struct {
 	Firewall          FirewallConfig
 	DirectoryGuard    DirectoryGuardConfig
 	ResourceControl   ResourceControlConfig
+	Retention         RetentionConfig
 	Fleet             FleetConfig
 	Advisor           AdvisorConfig
+}
+
+// normalizeAgentKinds fills the zero value with the default kind so tagger
+// and tracker never special-case "".
+func normalizeAgentKinds(defs []AgentDef) []AgentDef {
+	for i := range defs {
+		defs[i].Kind = NormalizeAgentKind(defs[i].Kind)
+	}
+	return defs
 }
 
 // filterDisabledAgents drops agents the operator disabled via
@@ -376,7 +419,7 @@ func loadWithOverlayError(explicitPath string) (Config, error, error) {
 		SensitiveGlobs:    expandPaths(raw.SensitiveGlobs),
 		SensitivePaths:    expandPaths(raw.SensitivePaths),
 		KeychainMarkers:   raw.KeychainMarkers,
-		Agents:            filterDisabledAgents(raw.Agents, raw.DisabledAgents),
+		Agents:            normalizeAgentKinds(filterDisabledAgents(raw.Agents, raw.DisabledAgents)),
 		VendorAllowlist:   raw.VendorAllowlist,
 		NetSampleInterval: time.Duration(raw.NetSampleIntervalMS) * time.Millisecond,
 		SocketPath:        expandPath(raw.SocketPath),
@@ -390,6 +433,10 @@ func loadWithOverlayError(explicitPath string) (Config, error, error) {
 		DirectoryGuard:    raw.DirectoryGuard,
 		ResourceControl:   raw.ResourceControl,
 		Fleet:             raw.Fleet,
+		Retention: RetentionConfig{
+			ConnEvent: time.Duration(raw.Retention.ConnEventHours) * time.Hour,
+			Event:     time.Duration(raw.Retention.EventDays) * 24 * time.Hour,
+		},
 		Advisor: AdvisorConfig{
 			Enabled:      raw.Advisor.Enabled,
 			Endpoint:     raw.Advisor.Endpoint,
