@@ -24,7 +24,7 @@ func (f fakeProcs) Info(pid int32) (ProcInfo, bool) {
 
 func TestTagInheritsFromAgentParent(t *testing.T) {
 	fake := fakeProcs{
-		100: {PID: 100, PPID: 1, Exe: "/Applications/Cursor.app/Contents/Frameworks/Cursor Helper"},
+		100: {PID: 100, PPID: 1, Exe: "/usr/local/bin/claude"},
 		200: {PID: 200, PPID: 100, Exe: "/usr/local/bin/node"},
 		999: {PID: 999, PPID: 1, Exe: "/bin/ls"},
 	}
@@ -32,14 +32,45 @@ func TestTagInheritsFromAgentParent(t *testing.T) {
 	tg := New(c, fake)
 	tg.Refresh()
 	info, ok := tg.Tag(200)
-	if !ok || info.Name != "cursor" {
-		t.Fatalf("Tag(200) = %+v, %v; want cursor,true", info, ok)
+	if !ok || info.Name != "claude" {
+		t.Fatalf("Tag(200) = %+v, %v; want claude,true", info, ok)
+	}
+	if info.Kind != "agent" {
+		t.Fatalf("Tag(200).Kind = %q, want agent", info.Kind)
 	}
 	if _, ok := tg.Tag(999); ok {
 		t.Fatal("Tag(999) tagged an unrelated process")
 	}
 	if !tg.Any() {
 		t.Fatal("Any() = false with a live agent")
+	}
+}
+
+// The Cursor IDE and local model servers are shared infrastructure, not
+// agents: still tagged (monitored, killable) but marked kind=infra so counts
+// and the "reclaimable" headline exclude them.
+func TestTagMarksIDEAndModelServersAsInfra(t *testing.T) {
+	fake := fakeProcs{
+		100: {PID: 100, PPID: 1, Exe: "/Applications/Cursor.app/Contents/MacOS/Cursor"},
+		101: {PID: 101, PPID: 1, Exe: "/usr/local/bin/ollama serve"},
+		102: {PID: 102, PPID: 1, Exe: "/usr/local/bin/cursor-agent"},
+	}
+	c, _ := config.Load("/nonexistent")
+	tg := New(c, fake)
+	tg.Refresh()
+
+	ide, ok := tg.Tag(100)
+	if !ok || ide.Name != "cursor-ide" || ide.Kind != config.AgentKindInfra {
+		t.Fatalf("Tag(100) = %+v, %v; want cursor-ide/infra", ide, ok)
+	}
+	ollama, ok := tg.Tag(101)
+	if !ok || ollama.Name != "ollama" || ollama.Kind != config.AgentKindInfra {
+		t.Fatalf("Tag(101) = %+v, %v; want ollama/infra", ollama, ok)
+	}
+	// The cursor CLI harness stays an agent — only the IDE is infra.
+	cli, ok := tg.Tag(102)
+	if !ok || cli.Name != "cursor" || cli.Kind != "agent" {
+		t.Fatalf("Tag(102) = %+v, %v; want cursor/agent", cli, ok)
 	}
 }
 

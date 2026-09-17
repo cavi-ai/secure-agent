@@ -15,13 +15,13 @@ type fakeProcSource struct{}
 
 func (f fakeProcSource) List() []agents.ProcInfo {
 	return []agents.ProcInfo{
-		{PID: 200, PPID: 1, Exe: "/Applications/Cursor.app/Contents/Frameworks/Cursor Helper"},
+		{PID: 200, PPID: 1, Exe: "/usr/local/bin/cursor-agent"},
 	}
 }
 
 func (f fakeProcSource) Info(pid int32) (agents.ProcInfo, bool) {
 	if pid == 200 {
-		return agents.ProcInfo{PID: 200, PPID: 1, Exe: "/Applications/Cursor.app/Contents/Frameworks/Cursor Helper"}, true
+		return agents.ProcInfo{PID: 200, PPID: 1, Exe: "/usr/local/bin/cursor-agent"}, true
 	}
 	return agents.ProcInfo{}, false
 }
