@@ -16,7 +16,7 @@
 
 > **Platform support.** macOS 14+ is the primary target (Endpoint Security telemetry, menubar app, DMG packaging). The Go daemon also builds and runs on **Linux** (`GOOS=linux go build ./...`), where Endpoint Security (`eslogger`) file telemetry degrades gracefully to the transcript scanner and network sampling runs on `/proc` — the guard hooks, egress firewall, fleet, and console all work identically. CI enforces the Linux build + tests on every push.
 
-As AI coding agents (Claude Code, Cursor, Codex, OpenClaw, Copilot, etc.) gain increasing autonomy in local development environments, they gain execution privileges to read local sensitive files, mutate shell configurations, access credential stores, and initiate external network connections. `secure-agent` provides a non-intrusive, multi-layered defense system that enforces zero-trust boundaries around AI agent process trees without disrupting developer velocity.
+As AI coding agents (Claude Code, Cursor, Codex, Gemini, opencode, Copilot, etc.) gain increasing autonomy in local development environments, they gain execution privileges to read local sensitive files, mutate shell configurations, access credential stores, and initiate external network connections. `secure-agent` provides a non-intrusive, multi-layered defense system that enforces zero-trust boundaries around AI agent process trees without disrupting developer velocity.
 
 ---
 
@@ -29,7 +29,7 @@ As AI coding agents (Claude Code, Cursor, Codex, OpenClaw, Copilot, etc.) gain i
   Scans tool output streams, web fetches, and agent transcripts in real time for indirect prompt injection vectors and credential leakage.
 
 - ⚡ **Low-Overhead System Telemetry Daemon (`secure-agentd`)**  
-  A pure Go daemon that consumes macOS Endpoint Security events (`eslogger`) and periodically samples per-process active network sockets (`libproc`). Maintains a lightweight footprint (<30 MB RAM, <2% CPU).
+  A pure Go daemon that consumes macOS Endpoint Security events (`eslogger`) and periodically samples per-process active network sockets (`lsof`). Current measured footprint: ~100 MB RSS resident, <2% CPU (the "<30 MB" target was written before the resource tracker, proxy, and advisor subsystems landed).
 
 - 🔗 **Sliding-Window Event Correlation Engine**  
   Correlates process file activity with network egress. Automatically raises security flags when an agent process reads a sensitive file (e.g. `~/.aws/credentials` or `.env`) followed by an outbound socket connection to a domain outside its pre-approved vendor allowlist.
@@ -79,7 +79,7 @@ flowchart TD
 
     subgraph OS Telemetry ["macOS Subsystems"]
         ES["eslogger\n(open, exec, rename, unlink, tcc_modify)"]
-        LP["libproc\n(Socket Sampler)"]
+        LP["lsof\n(Socket Sampler)"]
     end
 
     subgraph Daemon ["secure-agentd (Go Daemon)"]

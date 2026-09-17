@@ -214,7 +214,7 @@ public final class DaemonClient: Sendable {
 
     /// Policy-change audit rows (digest counts allowlist approvals).
     public func fetchAudit(limit: Int = 50) async throws -> [AuditEntryModel] {
-        try await getDecodable("/audit?limit=\(limit))")
+        try await getDecodable("/audit?limit=\(limit)")
     }
 
     public func acknowledgeFlag(id: String) async throws {
