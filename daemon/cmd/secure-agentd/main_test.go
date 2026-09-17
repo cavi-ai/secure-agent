@@ -29,13 +29,13 @@ type fakeProcSource struct{}
 
 func (f fakeProcSource) List() []agents.ProcInfo {
 	return []agents.ProcInfo{
-		{PID: 500, PPID: 1, Exe: "/Applications/Cursor.app/Contents/Frameworks/Cursor Helper"},
+		{PID: 500, PPID: 1, Exe: "/usr/local/bin/cursor-agent"},
 	}
 }
 
 func (f fakeProcSource) Info(pid int32) (agents.ProcInfo, bool) {
 	if pid == 500 {
-		return agents.ProcInfo{PID: 500, PPID: 1, Exe: "/Applications/Cursor.app/Contents/Frameworks/Cursor Helper"}, true
+		return agents.ProcInfo{PID: 500, PPID: 1, Exe: "/usr/local/bin/cursor-agent"}, true
 	}
 	return agents.ProcInfo{}, false
 }
@@ -206,8 +206,10 @@ func TestEndToEndSmokeScenario(t *testing.T) {
 	rec := fmt.Sprintf(`{"tool":"Read","file_path":%q,"pid":%d}`, envPath, currPID)
 	os.WriteFile(actPath, []byte(rec+"\n"), 0644)
 
-	// 2. Open foreign TCP socket
-	l, err := net.Listen("tcp", "127.0.0.1:0")
+	// 2. Open foreign TCP socket. The sampler filters loopback (it is not
+	// egress), so the fixture connection must ride a real interface address —
+	// still on-box, no internet required.
+	l, err := net.Listen("tcp", nonLoopbackAddr(t)+":0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -282,6 +284,26 @@ func TestEndToEndSmokeScenario(t *testing.T) {
 	if !flagFound {
 		t.Fatalf("flag in store but /flags did not serve it: status=%d err=%v body=%s", lastStatus, lastErr, lastBody)
 	}
+}
+
+// nonLoopbackAddr returns the host's first non-loopback IPv4 so tests can
+// open a connection the egress pipeline actually observes (loopback is
+// filtered by the net sampler). Skips when the machine has no real interface.
+func nonLoopbackAddr(t *testing.T) string {
+	t.Helper()
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		t.Skipf("no interface addrs: %v", err)
+	}
+	for _, a := range addrs {
+		ipNet, ok := a.(*net.IPNet)
+		if !ok || ipNet.IP.IsLoopback() || ipNet.IP.To4() == nil {
+			continue
+		}
+		return ipNet.IP.String()
+	}
+	t.Skip("no non-loopback IPv4 interface available")
+	return ""
 }
 
 func waitUnix(t *testing.T, path string, d time.Duration, serve <-chan error) {
