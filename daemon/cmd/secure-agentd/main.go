@@ -83,6 +83,7 @@ func main() {
 		log.Fatalf("failed to open store: %v", err)
 	}
 	defer st.Close()
+	st.SetEventRetention(cfg.Retention.ConnEvent, cfg.Retention.Event)
 
 	b := bus.New(2048)
 	defer b.Close()
@@ -192,7 +193,7 @@ func main() {
 	supReg := supervise.NewRegistry()
 	sup := supervise.New(supReg)
 
-	statusFn := buildStatusFn(proxyServer, tagger, correlator, fw.Engine, supReg, time.Now(),
+	statusFn := buildStatusFn(proxyServer, tagger, correlator, fw.Engine, supReg, st, time.Now(),
 		func() advisor.HealthSnapshot { return advisorStk.Load().Sub.Health() },
 		fleetConfigured(cfg.Fleet.Webhooks))
 
@@ -398,12 +399,14 @@ func main() {
 	case collect.SpoolAvailable():
 		go sup.Run(ctx, "eslogger", func(c context.Context) error {
 			t := collect.NewSpoolTailer(b)
+			t.OnProduce = func() { supReg.MarkProduced("eslogger") }
 			return t.Run(c)
 		})
 		log.Printf("file telemetry: tailing privileged ES collector spool")
 	case os.Geteuid() == 0 && collect.ESLoggerAvailable():
 		go sup.Run(ctx, "eslogger", func(c context.Context) error {
 			es := collect.NewESLogger(b)
+			es.OnProduce = func() { supReg.MarkProduced("eslogger") }
 			return es.Run(c)
 		})
 	default:
@@ -412,12 +415,14 @@ func main() {
 
 	go sup.Run(ctx, "netsampler", func(c context.Context) error {
 		ns := collect.NewNetSampler(b, tagger, cfg.NetSampleInterval, nil)
+		ns.OnProduce = func() { supReg.MarkProduced("netsampler") }
 		return ns.Run(c)
 	})
 
 	home, _ := os.UserHomeDir()
 	go sup.Run(ctx, "transcript", func(c context.Context) error {
 		ts := collect.NewTranscriptScanner(b, transcriptTailTargets(home, cfg.JSONLPath))
+		ts.OnProduce = func() { supReg.MarkProduced("transcript") }
 		return ts.Run(c)
 	})
 
@@ -508,6 +513,7 @@ func listActiveAgents(tg *agents.Tagger) []api.AgentSummary {
 		s := api.AgentSummary{
 			PID:        pid,
 			Name:       info.Name,
+			Kind:       info.Kind,
 			ExePath:    info.ExePath,
 			CWD:        info.CWD,
 			PPID:       info.PPID,

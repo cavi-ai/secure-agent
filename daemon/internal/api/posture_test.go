@@ -148,6 +148,73 @@ func TestPostureCountsUninspectedEgressAndDeadCollectors(t *testing.T) {
 	}
 }
 
+// A running collector that produces nothing while agents are active is the
+// monitor's worst failure mode: green lights, blind sensors (the audit found
+// both the eslogger spool and the hook pipeline dead for days, all healthy).
+func TestPostureFlagsSilentCollectorsAndUncoveredHarnesses(t *testing.T) {
+	sock := fmt.Sprintf("/tmp/sa_posture5_%d.sock", time.Now().UnixNano())
+	defer os.Remove(sock)
+	a := New(sock, testStore(t), &fakeKiller{}, func() Status {
+		return Status{
+			Running: true, Uptime: "1h0m0s", ActiveAgents: 2,
+			Collectors: []supervise.Health{
+				{Name: "eslogger", Running: true},   // never produced → silent
+				{Name: "netsampler", Running: true}, // not watched (idle agents open no sockets)
+			},
+		}
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go a.Serve(ctx)
+	waitForSocket(t, sock)
+
+	cl := unixClient(sock)
+	resp, _ := cl.Get("http://unix/posture")
+	var p Posture
+	decodeInto(t, resp, &p)
+
+	kinds := map[string]string{}
+	for _, it := range p.Items {
+		kinds[it.Kind] = it.ID
+	}
+	if kinds["collector_silent"] != "eslogger" {
+		t.Fatalf("expected collector_silent for eslogger, got %+v", p.Items)
+	}
+	if kinds["harness_uncovered"] == "" {
+		t.Fatalf("expected harness_uncovered (agents active, zero hook events), got %+v", p.Items)
+	}
+	for _, it := range p.Items {
+		if it.Kind == "collector_silent" && it.ID == "netsampler" {
+			t.Fatal("netsampler silence is ambiguous — it must not be flagged")
+		}
+	}
+}
+
+// No agents running: an idle machine is not a blind monitor — silence is
+// legitimate, posture stays all-clear.
+func TestPostureNoSilenceFlagsWhenIdle(t *testing.T) {
+	sock := fmt.Sprintf("/tmp/sa_posture6_%d.sock", time.Now().UnixNano())
+	defer os.Remove(sock)
+	a := New(sock, testStore(t), &fakeKiller{}, func() Status {
+		return Status{
+			Running: true, Uptime: "2h0m0s", ActiveAgents: 0,
+			Collectors: []supervise.Health{{Name: "eslogger", Running: true}},
+		}
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go a.Serve(ctx)
+	waitForSocket(t, sock)
+
+	cl := unixClient(sock)
+	resp, _ := cl.Get("http://unix/posture")
+	var p Posture
+	decodeInto(t, resp, &p)
+	if p.NeedsYou != 0 {
+		t.Fatalf("idle machine must be all-clear, got %+v", p.Items)
+	}
+}
+
 func TestPostureOldFlagsDoNotCount(t *testing.T) {
 	sock := fmt.Sprintf("/tmp/sa_posture4_%d.sock", time.Now().UnixNano())
 	defer os.Remove(sock)

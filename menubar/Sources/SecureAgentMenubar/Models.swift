@@ -13,11 +13,18 @@ public struct ResourceSnapshotModel: Codable, Sendable {
 public struct ResourceSessionModel: Codable, Sendable {
     public let key: String
     public let name: String
+    /// "infra" for shared infrastructure (IDEs, model servers); nil/"agent"
+    /// for real coding agents. Nil on older daemons.
+    public let kind: String?
     public let control: ResourceSessionControlModel?
 
-    public init(key: String, name: String, control: ResourceSessionControlModel? = nil) {
+    /// Infra sessions render as shared infrastructure, not agent sessions.
+    public var isInfra: Bool { kind == "infra" }
+
+    public init(key: String, name: String, kind: String? = nil, control: ResourceSessionControlModel? = nil) {
         self.key = key
         self.name = name
+        self.kind = kind
         self.control = control
     }
 }
@@ -143,6 +150,10 @@ public struct AgentSummaryModel: Codable, Identifiable, Sendable {
     public var id: String { "\(pid)-\(name)" }
     public let pid: Int32
     public let name: String
+    /// "infra" for shared infrastructure (IDEs, model servers); nil (older
+    /// daemons) reads as a regular agent.
+    public let kind: String?
+    public var isInfra: Bool { kind == "infra" }
     public let exePath: String?
     public let cwd: String?
     /// The family root this process belongs to (itself when it IS the root).
@@ -172,6 +183,7 @@ public struct AgentSummaryModel: Codable, Identifiable, Sendable {
     enum CodingKeys: String, CodingKey {
         case pid
         case name
+        case kind
         case exePath = "exe_path"
         case cwd
         case rootPid = "root_pid"
@@ -183,11 +195,12 @@ public struct AgentSummaryModel: Codable, Identifiable, Sendable {
         case isOrphan = "is_orphan"
     }
 
-    public init(pid: Int32, name: String, exePath: String? = nil, cwd: String? = nil, rootPid: Int32? = nil,
+    public init(pid: Int32, name: String, kind: String? = nil, exePath: String? = nil, cwd: String? = nil, rootPid: Int32? = nil,
                 ppid: Int32? = nil, startedAt: String? = nil, lastSeenAt: String? = nil, rssBytes: UInt64? = nil,
                 isOrphan: Bool? = nil, cpuPercent: Double? = nil) {
         self.pid = pid
         self.name = name
+        self.kind = kind
         self.exePath = exePath
         self.cwd = cwd
         self.rootPid = rootPid
@@ -293,8 +306,29 @@ public struct HealthModel: Codable, Identifiable, Sendable {
     public let abandoned: Bool
     public let restarts: Int
     public let lastError: String?
+    /// RFC3339 of the worker's most recent published event — running but
+    /// silent is the "monitor gone blind" signal. Nil on older daemons.
+    public let lastProduced: String?
 
     public var id: String { name }
+
+    enum CodingKeys: String, CodingKey {
+        case name, running, abandoned, restarts
+        case lastError = "last_error"
+        case lastProduced = "last_produced"
+    }
+}
+
+/// How many running harnesses the daemon is actually seeing (`coverage` in
+/// /status). The monitor reporting its own blindness.
+public struct CoverageModel: Codable, Sendable {
+    public let harnessesActive: Int
+    public let harnessesSeen: Int
+
+    enum CodingKeys: String, CodingKey {
+        case harnessesActive = "harnesses_active"
+        case harnessesSeen = "harnesses_seen"
+    }
 }
 
 public struct StatusResponse: Codable, Sendable {
@@ -302,6 +336,9 @@ public struct StatusResponse: Codable, Sendable {
     public let version: String?
     public let uptime: String
     public let activeAgents: Int
+    /// Distinct infra tree roots (IDEs, local model servers) — shown beside,
+    /// never inside, activeAgents. Nil on older daemons.
+    public let infraCount: Int?
     /// Var (not let): value semantics make this safe, and tests seed agent
     /// lists after constructing a StatusResponse.
     public var agents: [AgentSummaryModel]?
@@ -320,12 +357,15 @@ public struct StatusResponse: Codable, Sendable {
     /// offline" instead of offering actions that silently do nothing.
     public let advisorHealth: AdvisorHealthModel?
     public var fleetConfigured: Bool?
+    /// Harness coverage (nil on older daemons).
+    public let coverage: CoverageModel?
 
     enum CodingKeys: String, CodingKey {
         case running
         case version
         case uptime
         case activeAgents = "active_agents"
+        case infraCount = "infra_count"
         case agents
         case trees
         case proxyEnabled = "proxy_enabled"
@@ -336,13 +376,15 @@ public struct StatusResponse: Codable, Sendable {
         case collectors
         case advisorHealth = "advisor_health"
         case fleetConfigured = "fleet_configured"
+        case coverage
     }
 
-    public init(running: Bool, uptime: String, activeAgents: Int, agents: [AgentSummaryModel]? = nil, trees: [AgentTreeModel]? = nil, proxyEnabled: Bool? = nil, proxyPort: Int? = nil, uninspectedEgress: Int? = nil, firewallStats: [String: RuleStatModel]? = nil, trackedProcesses: Int? = nil, collectors: [HealthModel]? = nil, version: String? = nil, advisorHealth: AdvisorHealthModel? = nil, fleetConfigured: Bool? = nil) {
+    public init(running: Bool, uptime: String, activeAgents: Int, infraCount: Int? = nil, agents: [AgentSummaryModel]? = nil, trees: [AgentTreeModel]? = nil, proxyEnabled: Bool? = nil, proxyPort: Int? = nil, uninspectedEgress: Int? = nil, firewallStats: [String: RuleStatModel]? = nil, trackedProcesses: Int? = nil, collectors: [HealthModel]? = nil, version: String? = nil, advisorHealth: AdvisorHealthModel? = nil, fleetConfigured: Bool? = nil, coverage: CoverageModel? = nil) {
         self.running = running
         self.version = version
         self.uptime = uptime
         self.activeAgents = activeAgents
+        self.infraCount = infraCount
         self.agents = agents
         self.trees = trees
         self.proxyEnabled = proxyEnabled
@@ -353,6 +395,7 @@ public struct StatusResponse: Codable, Sendable {
         self.collectors = collectors
         self.advisorHealth = advisorHealth
         self.fleetConfigured = fleetConfigured
+        self.coverage = coverage
     }
 }
 

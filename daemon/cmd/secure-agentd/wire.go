@@ -284,7 +284,7 @@ func fleetConfigured(webhooks []config.WebhookConfig) bool {
 // buildStatusFn assembles the /status payload from live component state.
 // advisorHealth is resolved per call (the advisor stack hot-swaps on config
 // reload — a captured bool/subscriber would go stale).
-func buildStatusFn(proxyServer *proxy.ProxyServer, tagger *agents.Tagger, cr *correlate.Correlator, eng *firewall.Engine, reg *supervise.Registry, startTime time.Time, advisorHealth func() advisor.HealthSnapshot, fleetOn bool) api.StatusFunc {
+func buildStatusFn(proxyServer *proxy.ProxyServer, tagger *agents.Tagger, cr *correlate.Correlator, eng *firewall.Engine, reg *supervise.Registry, st *store.Store, startTime time.Time, advisorHealth func() advisor.HealthSnapshot, fleetOn bool) api.StatusFunc {
 	return func() api.Status {
 		proxyActive := proxyServer != nil
 		proxyPort := 0
@@ -293,12 +293,19 @@ func buildStatusFn(proxyServer *proxy.ProxyServer, tagger *agents.Tagger, cr *co
 		}
 		activeAgents := listActiveAgents(tagger)
 		// Count tree ROOTS, not processes: a CLI agent with 40 helpers is one
-		// agent. (RootPID 0 shouldn't happen but fall back to self.)
+		// agent. (RootPID 0 shouldn't happen but fall back to self.) Infra
+		// families (IDEs, model servers) are counted separately — they are
+		// shared infrastructure, never agents.
 		roots := make(map[int32]struct{}, len(activeAgents))
+		infraRoots := make(map[int32]struct{}, len(activeAgents))
 		for _, a := range activeAgents {
 			r := a.RootPID
 			if r == 0 {
 				r = a.PID
+			}
+			if a.Kind == config.AgentKindInfra {
+				infraRoots[r] = struct{}{}
+				continue
 			}
 			roots[r] = struct{}{}
 		}
@@ -308,6 +315,8 @@ func buildStatusFn(proxyServer *proxy.ProxyServer, tagger *agents.Tagger, cr *co
 			Version:           api.Version,
 			Uptime:            time.Since(startTime).Truncate(time.Second).String(),
 			ActiveAgents:      len(roots),
+			InfraCount:        len(infraRoots),
+			Coverage:          computeCoverage(activeAgents, st),
 			Agents:            activeAgents,
 			TrackedProcesses:  len(activeAgents),
 			ProxyEnabled:      proxyActive,
@@ -324,8 +333,50 @@ func buildStatusFn(proxyServer *proxy.ProxyServer, tagger *agents.Tagger, cr *co
 	}
 }
 
-func observeResources(tracker *resource.Tracker, tagger *agents.Tagger, st *store.Store, now time.Time) {
-	infos := tagger.TaggedPIDs()
+// coverageWindow is how recent attributed activity must be for a harness to
+// count as "seen" — matching the UI's "last activity" staleness signal.
+const coverageWindow = 15 * time.Minute
+
+// computeCoverage answers "of the harnesses actually running, how many is
+// the daemon seeing?" Active = distinct agent-kind harness names with live
+// processes; seen = those with any attributed event inside coverageWindow.
+// A harness with zero recent events while its processes run is a harness
+// whose hooks are not firing — the blind spot the audit found live.
+func computeCoverage(active []api.AgentSummary, st *store.Store) *api.CoverageStatus {
+	if st == nil {
+		return nil
+	}
+	pidsByHarness := make(map[string][]int32)
+	for _, a := range active {
+		if a.Kind == config.AgentKindInfra {
+			continue
+		}
+		pidsByHarness[a.Name] = append(pidsByHarness[a.Name], a.PID)
+	}
+	if len(pidsByHarness) == 0 {
+		return &api.CoverageStatus{}
+	}
+	var pids []int32
+	for _, list := range pidsByHarness {
+		pids = append(pids, list...)
+	}
+	seen := st.LastEventTimes(pids)
+	cutoff := time.Now().Add(-coverageWindow)
+	cov := &api.CoverageStatus{HarnessesActive: len(pidsByHarness)}
+	for _, list := range pidsByHarness {
+		for _, pid := range list {
+			if ts, ok := seen[pid]; ok {
+				if parsed, err := time.Parse(time.RFC3339Nano, ts); err == nil && parsed.After(cutoff) {
+					cov.HarnessesSeen++
+					break
+				}
+			}
+		}
+	}
+	return cov
+}
+
+func observeResources(tracker *resource.Tracker, tagger *agents.Tagger, st *store.Store, now time.Time) {	infos := tagger.TaggedPIDs()
 	pids := make([]int32, 0, len(infos))
 	for pid := range infos {
 		pids = append(pids, pid)

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
 
@@ -94,6 +95,19 @@ func (a *API) computePosture() Posture {
 				Severity: 2,
 				Detail:   humanCollectorDetail(c.Name, c.LastError),
 			})
+		}
+	}
+
+	// 3b. Silent collectors — running but producing nothing while agents are
+	// active. Liveness is not coverage: the worst failure mode a monitor can
+	// have is reporting green while blind (both audited live: the eslogger
+	// spool untouched for days, zero hook events for 17h, all "healthy").
+	if st.ActiveAgents > 0 {
+		for _, item := range silentCollectorItems(st) {
+			posture.Items = append(posture.Items, item)
+		}
+		if item := harnessUncoveredItem(a.store, st); item != nil {
+			posture.Items = append(posture.Items, *item)
 		}
 	}
 
@@ -199,6 +213,92 @@ func attentionSummary(items []PostureItem) string {
 		noun = "item needs"
 	}
 	return fmt.Sprintf("%d %s you — first: %s.", n, noun, top.Title)
+}
+
+// collectorSilenceWindows: how long a producer collector may publish nothing
+// while agents are active before posture calls it blind. Netsampler is
+// excluded: an idle-but-working agent legitimately opens no sockets for long
+// stretches, so its silence is ambiguous. File and transcript telemetry are
+// not ambiguous — an active harness touches files constantly.
+var collectorSilenceWindows = map[string]time.Duration{
+	"eslogger":   30 * time.Minute,
+	"transcript": 30 * time.Minute,
+}
+
+// collectorBootGrace suppresses never-produced items right after daemon
+// start: collectors need a few minutes to see their first event.
+const collectorBootGrace = 10 * time.Minute
+
+// silentCollectorItems flags running collectors that have produced nothing
+// recent (or nothing at all past the boot grace) while agents are active.
+func silentCollectorItems(st Status) []PostureItem {
+	var items []PostureItem
+	uptime, _ := time.ParseDuration(st.Uptime)
+	for _, c := range st.Collectors {
+		if !c.Running || c.Abandoned {
+			continue
+		}
+		window, watched := collectorSilenceWindows[c.Name]
+		if !watched {
+			continue
+		}
+		if c.LastProduced == "" {
+			if uptime >= collectorBootGrace {
+				items = append(items, PostureItem{
+					Kind: "collector_silent", ID: c.Name,
+					Title:    humanCollectorSilentTitle(c.Name) + " is producing nothing",
+					Severity: 2,
+					Detail:   "collector is running but has published no events since daemon start — telemetry source may be dead",
+				})
+			}
+			continue
+		}
+		last, err := time.Parse(time.RFC3339, c.LastProduced)
+		if err != nil {
+			continue
+		}
+		if time.Since(last) > window {
+			items = append(items, PostureItem{
+				Kind: "collector_silent", ID: c.Name,
+				Title:    humanCollectorSilentTitle(c.Name) + " went quiet",
+				Severity: 2,
+				Detail:   "no events for more than " + window.String() + " while agents are active — check the telemetry source",
+			})
+		}
+	}
+	return items
+}
+
+func humanCollectorSilentTitle(name string) string {
+	switch name {
+	case "eslogger":
+		return "File monitoring"
+	case "transcript":
+		return "Transcript scanning"
+	}
+	return "Monitor " + name
+}
+
+// harnessUncoveredItem flags the audited failure mode: agent processes are
+// running but no harness hook or transcript event has landed in 24h — the
+// hooks are not registered (or every harness is uncovered).
+func harnessUncoveredItem(st *store.Store, status Status) *PostureItem {
+	if st == nil {
+		return nil
+	}
+	since := time.Now().Add(-24 * time.Hour).UTC().Format(time.RFC3339)
+	for _, kind := range []event.Kind{event.KindTranscriptHit, event.KindPluginAction} {
+		k := int(kind)
+		if len(st.QueryEvents(store.EventFilter{Kind: &k, Since: since, Limit: 1})) > 0 {
+			return nil
+		}
+	}
+	return &PostureItem{
+		Kind: "harness_uncovered", ID: "harness-hooks",
+		Title:    "No harness hook activity in 24h",
+		Severity: 2,
+		Detail:   fmt.Sprintf("%d agent(s) running but hooks never fired — hooks may not be registered (run Setup)", status.ActiveAgents),
+	}
 }
 
 // humanCollectorTitle maps collector process names to operator language —

@@ -65,7 +65,7 @@ func TestBuildStatusFn(t *testing.T) {
 	cr := correlate.New(tagger, sensitive.New(cfg), cfg)
 	reg := supervise.NewRegistry()
 
-	fn := buildStatusFn(nil, tagger, cr, nil, reg, time.Now().Add(-2*time.Second),
+	fn := buildStatusFn(nil, tagger, cr, nil, reg, nil, time.Now().Add(-2*time.Second),
 		func() advisor.HealthSnapshot { return advisor.HealthSnapshot{Enabled: true} }, false)
 	s := fn()
 
@@ -131,14 +131,14 @@ type treeProcSource struct {
 
 func (s *treeProcSource) List() []agents.ProcInfo {
 	return []agents.ProcInfo{
-		{PID: 500, PPID: 1, Exe: "/Applications/Cursor.app/Contents/Frameworks/Cursor Helper", StartTime: s.start, CPUTime: s.cpu, RSSBytes: 100},
+		{PID: 500, PPID: 1, Exe: "/usr/local/bin/cursor-agent", StartTime: s.start, CPUTime: s.cpu, RSSBytes: 100},
 		{PID: 501, PPID: 500, Comm: "zsh", CPUTime: s.cpu, RSSBytes: 50},
 	}
 }
 
 func (s *treeProcSource) Info(pid int32) (agents.ProcInfo, bool) {
 	if pid == 500 {
-		return agents.ProcInfo{PID: 500, PPID: 1, Exe: "/Applications/Cursor.app/Contents/Frameworks/Cursor Helper", StartTime: s.start, CPUTime: s.cpu, RSSBytes: 100}, true
+		return agents.ProcInfo{PID: 500, PPID: 1, Exe: "/usr/local/bin/cursor-agent", StartTime: s.start, CPUTime: s.cpu, RSSBytes: 100}, true
 	}
 	if pid == 501 {
 		return agents.ProcInfo{PID: 501, PPID: 500, Comm: "zsh", CPUTime: s.cpu, RSSBytes: 50}, true
@@ -186,6 +186,65 @@ func TestObserveResourcesBuildsSessionSnapshot(t *testing.T) {
 	if snapshot.Sessions[0].LastSeenAt != now.Format(time.RFC3339Nano) {
 		t.Fatalf("last_seen=%q want %q", snapshot.Sessions[0].LastSeenAt, now.Format(time.RFC3339Nano))
 	}
+}
+
+// Infra families (IDEs, model servers) are tracked and resourced but never
+// counted as agents or sessions, and never diagnosed "reclaimable" — the
+// 17.4 GB Cursor-as-reclaimable bug from the 2026-09 audit.
+func TestInfraFamiliesAreCountedSeparately(t *testing.T) {
+	dir := t.TempDir()
+	st, err := store.Open(filepath.Join(dir, "resources.db"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+
+	procs := &mixedProcSource{procs: []agents.ProcInfo{
+		{PID: 500, PPID: 1, Exe: "/usr/local/bin/cursor-agent", RSSBytes: 100},
+		{PID: 600, PPID: 1, Exe: "/Applications/Cursor.app/Contents/MacOS/Cursor", RSSBytes: 5 << 30},
+		{PID: 601, PPID: 600, Exe: "/Applications/Cursor.app/Contents/Frameworks/Cursor Helper (Renderer)", RSSBytes: 3 << 30},
+	}}
+	cfg, _ := config.Load("/nonexistent")
+	tagger := agents.New(cfg, procs)
+	tagger.Refresh()
+	tracker := resource.NewTracker()
+	observeResources(tracker, tagger, st, time.Now())
+
+	snapshot := tracker.Snapshot()
+	if snapshot.SessionCount != 1 {
+		t.Fatalf("SessionCount = %d, want 1 (infra excluded)", snapshot.SessionCount)
+	}
+	if snapshot.InfraCount != 1 {
+		t.Fatalf("InfraCount = %d, want 1", snapshot.InfraCount)
+	}
+	for _, s := range snapshot.Sessions {
+		if s.Kind == "infra" && (len(s.Diagnoses) > 0 || s.EstimatedReclaimBytes > 0) {
+			t.Fatalf("infra session %q must carry no diagnoses or reclaim estimate: %+v", s.Name, s.Diagnoses)
+		}
+	}
+
+	fn := buildStatusFn(nil, tagger, correlate.New(tagger, sensitive.New(cfg), cfg), nil,
+		supervise.NewRegistry(), st, time.Now(),
+		func() advisor.HealthSnapshot { return advisor.HealthSnapshot{} }, false)
+	status := fn()
+	if status.ActiveAgents != 1 {
+		t.Fatalf("ActiveAgents = %d, want 1 (IDE excluded)", status.ActiveAgents)
+	}
+	if status.InfraCount != 1 {
+		t.Fatalf("InfraCount = %d, want 1", status.InfraCount)
+	}
+}
+
+type mixedProcSource struct{ procs []agents.ProcInfo }
+
+func (m *mixedProcSource) List() []agents.ProcInfo { return m.procs }
+func (m *mixedProcSource) Info(pid int32) (agents.ProcInfo, bool) {
+	for _, p := range m.procs {
+		if p.PID == pid {
+			return p, true
+		}
+	}
+	return agents.ProcInfo{}, false
 }
 
 func TestResourceEpisodeWriterPersistsOnlyTransitions(t *testing.T) {

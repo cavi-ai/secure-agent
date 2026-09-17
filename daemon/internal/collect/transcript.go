@@ -32,6 +32,11 @@ const (
 type TranscriptScanner struct {
 	bus   *bus.Bus
 	paths []string
+
+	// OnProduce, when set, is called after any transcript/plugin event is
+	// published — the supervisor's coverage heartbeat: a scanner whose
+	// harnesses never emit hook events must not read as healthy coverage.
+	OnProduce func()
 }
 
 func NewTranscriptScanner(b *bus.Bus, paths []string) *TranscriptScanner {
@@ -284,6 +289,9 @@ func (ts *TranscriptScanner) tailFile(p string, offsets map[string]int64) {
 				line := strings.TrimRight(string(frag), "\r\n")
 				if e, ok := ScanLine(line); ok {
 					ts.bus.Publish(e)
+					if ts.OnProduce != nil {
+						ts.OnProduce()
+					}
 				}
 			} else {
 				// Partial line at EOF; do not advance past partial line, retry on next poll

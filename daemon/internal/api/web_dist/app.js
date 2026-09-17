@@ -478,7 +478,13 @@ document.addEventListener('DOMContentLoaded', () => {
     const s = telemetryData.status;
     if (!s) return;
 
-    document.getElementById('status-text').textContent = s.running ? 'Daemon Active' : 'Disconnected';
+    // "Daemon Active" alone hid dead telemetry; the coverage suffix is the
+    // monitor saying how many running harnesses it is actually seeing.
+    let statusLine = s.running ? 'Daemon Active' : 'Disconnected';
+    if (s.running && s.coverage && s.coverage.harnesses_active > 0) {
+      statusLine += ` — seeing ${s.coverage.harnesses_seen}/${s.coverage.harnesses_active} harnesses`;
+    }
+    document.getElementById('status-text').textContent = statusLine;
     if (chip) chip.className = 'status-chip ' + (s.running ? 'active' : 'down');
     if (s.version) document.getElementById('app-version').textContent = s.version;
     document.getElementById('uptime-val').textContent = s.uptime || '--';
@@ -489,8 +495,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const families = groupAgents(agentList);
     const hint = document.getElementById('hint-agents');
     if (hint) {
+      // Infra (IDEs, model servers) is tracked but never counted as agents.
+      const infra = s.infra_count ? ` · ${s.infra_count} infra` : '';
       hint.textContent = families.length
-        ? `${families.length} ${families.length === 1 ? 'family' : 'families'} · ${agentList.length} ${agentList.length === 1 ? 'process' : 'processes'}`
+        ? `${families.length} ${families.length === 1 ? 'family' : 'families'} · ${agentList.length} ${agentList.length === 1 ? 'process' : 'processes'}${infra}`
         : 'Tagged in the process tree';
     }
     setKpi('count-flags', s.unacted_flags_24h != null
