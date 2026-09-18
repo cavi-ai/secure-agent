@@ -30,7 +30,6 @@ type Publisher struct {
 	wg      sync.WaitGroup
 	sem     chan struct{}
 	dropped atomic.Uint64
-	seq     atomic.Uint64
 	boot    string
 }
 
@@ -81,24 +80,22 @@ func (p *Publisher) HasSinks() bool {
 	return len(p.sinks) > 0
 }
 
-// Publish delivers payload to every sink subscribed to kind, stamped with the
-// next per-boot sequence number (shared across kinds — gaps are about the
-// node's delivery stream, not per-kind streams). In-flight deliveries are
-// capped; beyond the cap the event is dropped (counted, logged periodically)
-// so a dead collector plus a flag storm cannot OOM the daemon. A drop DOES
-// leave a sequence gap at the collector — that is the point.
+// Publish delivers payload to every sink subscribed to kind, stamped with
+// that sink's next per-boot sequence number. In-flight deliveries are capped;
+// beyond the cap the event is dropped (counted, logged periodically) so a
+// dead collector plus a flag storm cannot OOM the daemon. A drop DOES leave a
+// sequence gap at that collector — that is the point. Sequence is per-sink
+// because sinks subscribe to different kind sets: a kind one collector never
+// receives must not advance its counter and fabricate a gap.
 func (p *Publisher) Publish(kind EventKind, payload any) {
 	p.mu.Lock()
 	sinks := append([]*Sink(nil), p.sinks...)
 	p.mu.Unlock()
-	if len(sinks) == 0 {
-		return
-	}
-	seq := p.seq.Add(1)
 	for _, s := range sinks {
 		if !s.Subscribed(kind) {
 			continue
 		}
+		seq := s.NextSeq()
 		select {
 		case p.sem <- struct{}{}:
 		default:
@@ -108,11 +105,11 @@ func (p *Publisher) Publish(kind EventKind, payload any) {
 			continue
 		}
 		p.wg.Add(1)
-		go func(s *Sink) {
+		go func(s *Sink, seq uint64) {
 			defer p.wg.Done()
 			defer func() { <-p.sem }()
 			s.Deliver(kind, payload, seq, p.boot)
-		}(s)
+		}(s, seq)
 	}
 }
 
