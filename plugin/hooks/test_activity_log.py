@@ -12,6 +12,12 @@ def main():
         logfile = os.path.join(tmpdir, "activity.jsonl")
         env = os.environ.copy()
         env["SECURE_AGENT_ACTIVITY_LOG"] = logfile
+        # Isolate HOME: the session handshake sentinel lives under
+        # ~/.local/state/secure-agent/sessions_seen and must never touch the
+        # real home directory from a test run.
+        env["HOME"] = tmpdir
+        # One session id for every invocation: the handshake must fire once.
+        env["SECURE_AGENT_SESSION_ID"] = "test-session-1"
 
         payload = {
             "hook_event_name": "PostToolUse",
@@ -37,10 +43,18 @@ def main():
         with open(logfile, "r") as f:
             lines = [line.strip() for line in f if line.strip()]
 
-        if len(lines) != 1:
-            raise AssertionError(f"expected 1 line in activity log, got {len(lines)}")
+        # First call per session: one session_start handshake + one activity row.
+        if len(lines) != 2:
+            raise AssertionError(f"expected handshake + activity line, got {len(lines)}: {lines}")
 
-        rec = json.loads(lines[0])
+        hs = json.loads(lines[0])
+        if hs.get("type") != "session_start" or hs.get("session_id") != "test-session-1":
+            raise AssertionError(f"first line must be the session handshake: {hs}")
+        for key in ("harness", "workspace", "pid", "ts"):
+            if key not in hs:
+                raise AssertionError(f"handshake missing {key}: {hs}")
+
+        rec = json.loads(lines[1])
         if rec.get("tool") != "Bash" or rec.get("pid") != 4321:
             raise AssertionError(f"record mismatch: {rec}")
 
@@ -73,6 +87,13 @@ def main():
         for leaked in (fake_sk, fake_aws, fake_ghp):
             if leaked in content:
                 raise AssertionError(f"secret leaked into activity log: {leaked[:12]}...")
+
+        # The handshake fires exactly once per session (sentinel-suppressed),
+        # even across the separate hook processes above.
+        n_handshakes = sum(1 for line in content.splitlines()
+                           if '"session_start"' in line)
+        if n_handshakes != 1:
+            raise AssertionError(f"expected exactly 1 handshake line, got {n_handshakes}")
 
         # Log must not be world-readable.
         import stat
