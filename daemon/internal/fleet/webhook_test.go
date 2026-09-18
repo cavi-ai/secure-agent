@@ -230,3 +230,58 @@ func TestPublisherReplaceSinks(t *testing.T) {
 		t.Fatal("nil replace must leave no sinks")
 	}
 }
+
+// Regression: sequence numbers are per-sink. A kind a collector does not
+// subscribe to must not advance its counter — the shared counter fabricated
+// gaps and the e2e caught it (session envelopes pushed a security-only
+// collector's seq past 1 with nothing delivered).
+func TestPublisherSeqIsPerSinkBySubscription(t *testing.T) {
+	var mu sync.Mutex
+	var got []Envelope
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var env Envelope
+		if json.NewDecoder(r.Body).Decode(&env) == nil {
+			mu.Lock()
+			got = append(got, env)
+			mu.Unlock()
+		}
+	}))
+	defer srv.Close()
+
+	p := NewPublisher()
+	// This collector wants only flags and incidents, not sessions/traces.
+	p.AddSink(NewSink(WebhookConfig{URL: srv.URL, Secret: "s", Events: []string{"flag", "incident"}}, "n", "v", ""))
+	p.Publish(EventSession, map[string]any{"id": "s1"})  // not subscribed: no seq burn
+	p.Publish(EventTrace, map[string]any{"id": "t1"})    // not subscribed
+	p.Publish(EventFlag, map[string]any{"id": "f1"})     // seq 1
+	p.Publish(EventIncident, map[string]any{"id": "i1"}) // seq 2
+	p.Wait()
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(got) != 2 {
+		t.Fatalf("received %d envelopes, want 2 (unsubscribed kinds must not deliver)", len(got))
+	}
+	if got[0].Seq > got[1].Seq {
+		got[0], got[1] = got[1], got[0]
+	}
+	if got[0].Seq != 1 || got[1].Seq != 2 {
+		t.Fatalf("seqs = %d,%d, want 1,2 (no gap from unsubscribed kinds)", got[0].Seq, got[1].Seq)
+	}
+}
+
+// A status heartbeat always flows even to a sink that subscribes to nothing
+// else (liveness must be gap-visible).
+func TestPublisherStatusAlwaysDelivers(t *testing.T) {
+	var got atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { got.Add(1) }))
+	defer srv.Close()
+
+	p := NewPublisher()
+	p.AddSink(NewSink(WebhookConfig{URL: srv.URL, Secret: "s", Events: []string{"flag"}}, "n", "v", ""))
+	p.Publish(EventStatus, map[string]any{"hostname": "n1"})
+	p.Wait()
+	if got.Load() != 1 {
+		t.Fatalf("status heartbeats = %d, want 1", got.Load())
+	}
+}
