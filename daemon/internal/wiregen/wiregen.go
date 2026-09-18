@@ -134,3 +134,48 @@ func Names(ts string) []string {
 	sort.Strings(out)
 	return out
 }
+
+// JSONKeys returns every JSON key a struct (or its nested structs) emits,
+// with nested keys flattened one level (e.g. "advisor.assessment"). The
+// Swift mirror drift test uses this to prove the hand-written Codable types
+// declare everything the daemon can send.
+func JSONKeys(v any) []string {
+	seen := map[string]bool{}
+	var walk func(t reflect.Type, prefix string, depth int)
+	walk = func(t reflect.Type, prefix string, depth int) {
+		for t.Kind() == reflect.Pointer || t.Kind() == reflect.Slice {
+			t = t.Elem()
+		}
+		if t.Kind() != reflect.Struct || t == timeType || depth > 2 {
+			return
+		}
+		for i := 0; i < t.NumField(); i++ {
+			f := t.Field(i)
+			tag := f.Tag.Get("json")
+			if tag == "-" {
+				continue
+			}
+			name, _, _ := strings.Cut(tag, ",")
+			if name == "" {
+				name = f.Name
+			}
+			ft := f.Type
+			for ft.Kind() == reflect.Pointer || ft.Kind() == reflect.Slice {
+				ft = ft.Elem()
+			}
+			if ft.Kind() == reflect.Struct && ft != timeType && depth < 2 {
+				// Nested object: recurse (keys are what the Swift side must
+				// declare as a sub-struct; the parent key covers the leaf).
+				walk(ft, prefix+name+".", depth+1)
+			}
+			seen[prefix+name] = true
+		}
+	}
+	walk(reflect.TypeOf(v), "", 0)
+	out := make([]string, 0, len(seen))
+	for k := range seen {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
