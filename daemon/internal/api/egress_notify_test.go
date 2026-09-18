@@ -15,6 +15,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/config"
 	"github.com/cavi-ai/secure-agent/daemon/internal/correlate"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
+	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/sensitive"
 )
 
@@ -159,5 +160,96 @@ func TestNotifyRulesEndpoint(t *testing.T) {
 	}
 	if !foundSet || !foundClear {
 		t.Fatalf("overrides must be audited (set=%v clear=%v)", foundSet, foundClear)
+	}
+}
+
+// The on-demand host assessment: the console asks "what is this endpoint?"
+// and gets a cached verdict plus a queued fresh assessment. This is the
+// advisor functionality that turns a raw IP into a decision.
+func TestAdvisorAssessHostEndpoint(t *testing.T) {
+	sock := fmt.Sprintf("/tmp/sa_assess_%d.sock", time.Now().UnixNano())
+	defer os.Remove(sock)
+
+	st := testStore(t)
+	a := New(sock, st, &fakeKiller{}, func() Status { return Status{Running: true} })
+
+	queued := []string{}
+	a.SetHostAssess(HostAssessFuncs{
+		GetVerdict: func(agent, host string) (model.AdvisorVerdict, bool) {
+			if host == "known.example.com" {
+				return model.AdvisorVerdict{Assessment: "benign", Rationale: "routine vendor traffic"}, true
+			}
+			return model.AdvisorVerdict{}, false
+		},
+		Enqueue: func(agent, host string) bool {
+			queued = append(queued, agent+"|"+host)
+			return true
+		},
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go a.Serve(ctx)
+	waitForSocket(t, sock)
+	cl := unixClient(sock)
+
+	post := func(body string) (int, map[string]any) {
+		resp, err := cl.Post("http://unix/advisor/assess-host", "application/json", strings.NewReader(body))
+		if err != nil {
+			t.Fatalf("POST assess-host: %v", err)
+		}
+		defer resp.Body.Close()
+		var out map[string]any
+		_ = json.NewDecoder(resp.Body).Decode(&out)
+		return resp.StatusCode, out
+	}
+
+	// Cached verdict path: answered immediately, still (re)queued.
+	code, out := post(`{"agent":"cursor","host":"known.example.com"}`)
+	if code != 200 {
+		t.Fatalf("status = %d", code)
+	}
+	if v, ok := out["verdict"].(map[string]any); !ok || v["assessment"] != "benign" {
+		t.Fatalf("cached verdict missing: %v", out)
+	}
+	if out["queued"] != true {
+		t.Fatalf("queued = %v, want true", out["queued"])
+	}
+
+	// Unknown host: queued, no verdict yet.
+	code, out = post(`{"agent":"codex","host":"2607:6bc0::10"}`)
+	if code != 200 || out["queued"] != true {
+		t.Fatalf("unknown host: code=%d out=%v", code, out)
+	}
+	if _, has := out["verdict"]; has {
+		t.Fatalf("unknown host must not carry a verdict: %v", out)
+	}
+	if len(queued) != 2 {
+		t.Fatalf("enqueued = %v, want 2", queued)
+	}
+
+	// Missing host is rejected.
+	if code, _ := post(`{"agent":"x"}`); code != 400 {
+		t.Fatalf("missing host: status = %d, want 400", code)
+	}
+}
+
+// With no advisor wired, the endpoint is an honest 503 (the console renders
+// "Advisor is off" rather than a dead button).
+func TestAdvisorAssessHostDisabled(t *testing.T) {
+	sock := fmt.Sprintf("/tmp/sa_assess_off_%d.sock", time.Now().UnixNano())
+	defer os.Remove(sock)
+	a := New(sock, testStore(t), &fakeKiller{}, func() Status { return Status{Running: true} })
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go a.Serve(ctx)
+	waitForSocket(t, sock)
+	cl := unixClient(sock)
+	resp, err := cl.Post("http://unix/advisor/assess-host", "application/json", strings.NewReader(`{"agent":"x","host":"y"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", resp.StatusCode)
 	}
 }

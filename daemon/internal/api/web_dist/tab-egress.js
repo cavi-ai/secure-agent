@@ -118,6 +118,8 @@ function fillUninspected(bodyEl) {
     bodyEl.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-globe"/></svg><span>No uninspected endpoints in the last 24h — the blind spot is closed</span></div>`;
     return;
   }
+  const vis = inspectionVisible(SA.t.status, SA.t.audit);
+  const advisorOn = vis.advisor;
   // Split actionable unknowns from CDN/cloud carriers: 130 Cloudflare IPs is
   // one routing note, not 130 rows to review.
   const unknown = rows.filter(e => !e.infra);
@@ -129,45 +131,81 @@ function fillUninspected(bodyEl) {
     infraByOrg[e.infra].hits += e.count || 0;
   }
 
-  let html = `<div class="uninspected-expl">These agents connected directly, bypassing the inspection proxy — usually pinned TLS certificates or tooling that ignores the proxy environment. Allowing a host marks the traffic as expected and closes the blind spot; routing the agent through the proxy (source <code>~/.config/secure-agent/agent-env.sh</code>) inspects it instead.</div>`;
+  // Frame the job: these are connections the agents made that bypassed the
+  // inspection proxy, so the operator's decision is "is this expected for
+  // this agent?" — not "do you know what 160.79.104.10 is?".
+  let html = `<div class="uninspected-expl">
+    <b>What this is:</b> these agents connected directly to the internet, bypassing the inspection proxy — usually an app with pinned TLS certs or tooling that ignores the proxy environment.
+    <br><b>What to do:</b> for each endpoint, <b>Allow</b> it if it's expected for that agent (future connections stop asking), or <b>Route</b> the agent through the proxy to inspect it instead. ${advisorOn ? 'Not sure? <b>Ask the advisor</b> for a plain-English read.' : '<b>Advisor is off</b> — enable it in Settings for automatic endpoint guidance.'}
+  </div>`;
+
   if (unknown.length === 0) {
     html += `<div class="empty"><svg class="icon"><use href="#i-globe"/></svg><span>No unknown endpoints — everything unrouted is known cloud/CDN infrastructure (below)</span></div>`;
   }
 
-  // Bulk decisions: group the unknowns by agent + host suffix so 90 raw IPs
-  // from one carrier become one "allow all" instead of 90 clicks.
-  const bulkGroups = {};
-  for (const e of unknown) {
-    const key = e.agent + '|' + hostSuffix(e.host);
-    (bulkGroups[key] = bulkGroups[key] || []).push(e);
-  }
-  const bulkButtons = Object.entries(bulkGroups)
-    .filter(([, list]) => list.length >= 2)
-    .sort((a, b) => b[1].length - a[1].length)
-    .map(([key, list]) => {
-      const [agent, suffix] = key.split('|');
-      return `<button class="btn btn-ghost btn-sm" data-action="bulk-allow" data-agent="${escapeHTML(agent)}" data-hosts="${escapeHTML(list.map(e => e.host).join(','))}"><svg class="icon"><use href="#i-shield"/></svg><span>Allow all ${list.length} ${escapeHTML(suffix)} hosts for ${escapeHTML(agent)}</span></button>`;
-    }).join('');
-  if (bulkButtons) html += `<div class="bulk-allow">${bulkButtons}</div>`;
+  // Group by agent so the operator reads "cursor is reaching 12 hosts"
+  // rather than twelve loose rows. Within an agent, most-used first.
+  const byAgent = {};
+  for (const e of unknown) (byAgent[e.agent] = byAgent[e.agent] || []).push(e);
 
-  html += unknown.map(e => `
-    <div class="fw-rule">
-      <div class="fw-rule-main">
-        <span class="fw-rule-id">${escapeHTML(e.host)}</span>
-        <div class="fw-metrics">
-          <span class="fw-metric dim">${escapeHTML(e.agent)} · <b>${e.count}×</b> in 24h${e.last_seen ? ` · last ${escapeHTML(fmtAge(e.last_seen, Date.now()))} ago` : ''}${e.first_seen ? ` · first seen ${escapeHTML(fmtAge(e.first_seen, Date.now()))} ago` : ''}${e.session_id ? ` · session ${escapeHTML(String(e.session_id).slice(0, 8))}` : ''}</span>
-          ${inspectionVisible(SA.t.status, SA.t.audit).advisor && e.assessment ? `<span class="advisor-chip adv-${escapeHTML(e.assessment)}" title="${escapeHTML(e.rationale)}">advisor: ${escapeHTML(e.assessment)}</span>` : ''}
-        </div>
-      </div>
-      <button class="btn btn-ghost btn-sm" data-action="allow-host" data-agent="${escapeHTML(e.agent)}" data-host="${escapeHTML(e.host)}"><svg class="icon"><use href="#i-shield"/></svg><span>Allow for ${escapeHTML(e.agent)}</span></button>
-    </div>`).join('');
+  html += Object.entries(byAgent).map(([agent, list]) => {
+    list.sort((a, b) => (b.count || 0) - (a.count || 0));
+    // One bulk decision per agent when several hosts share a suffix family.
+    const bulkGroups = {};
+    for (const e of list) (bulkGroups[hostSuffix(e.host)] = bulkGroups[hostSuffix(e.host)] || []).push(e);
+    const bulkButtons = Object.entries(bulkGroups)
+      .filter(([, g]) => g.length >= 2)
+      .sort((a, b) => b[1].length - a[1].length)
+      .map(([suffix, g]) =>
+        `<button class="btn btn-ghost btn-sm" data-action="bulk-allow" data-agent="${escapeHTML(agent)}" data-hosts="${escapeHTML(g.map(e => e.host).join(','))}"><svg class="icon"><use href="#i-shield"/></svg><span>Allow all ${g.length} ${escapeHTML(suffix)} hosts</span></button>`).join('');
+    return `<div class="egress-agent-group">
+      <div class="egress-agent-head"><span class="egress-agent-name">${escapeHTML(agent)}</span><span class="fw-metric dim">${list.length} uninspected endpoint${list.length === 1 ? '' : 's'}</span></div>
+      ${bulkButtons ? `<div class="bulk-allow">${bulkButtons}</div>` : ''}
+      ${list.map(e => egressRowHTML(e, advisorOn)).join('')}
+    </div>`;
+  }).join('');
 
   if (infra.length > 0) {
     const orgRows = Object.entries(infraByOrg)
       .sort((a, b) => b[1].endpoints - a[1].endpoints)
       .map(([org, v]) => `<div class="mute-row"><span class="mute-pair">${escapeHTML(org)}</span><span class="fw-metric dim">${v.endpoints} endpoint${v.endpoints === 1 ? '' : 's'} · ${v.hits}× in 24h</span></div>`).join('');
-    html += `<details class="infra-group"><summary>Known CDN/cloud infrastructure (${infra.length} endpoint${infra.length === 1 ? '' : 's'}) — the agents' own API carriers; route agents through the proxy to inspect this traffic</summary>${orgRows}</details>`;
+    html += `<details class="infra-group"><summary>Known cloud/CDN infrastructure (${infra.length} endpoint${infra.length === 1 ? '' : 's'}) — these are the agents' own API carriers (Anthropic, OpenAI, GitHub, AWS…); nothing to decide, shown for completeness</summary>${orgRows}</details>`;
   }
   bodyEl.innerHTML = html;
+}
+
+// One uninspected endpoint as a decision row: what/who/when on the left, the
+// advisor's read in the middle, and the concrete actions on the right.
+function egressRowHTML(e, advisorOn) {
+  const first = e.first_seen ? fmtAge(e.first_seen, Date.now()) : '';
+  const last = e.last_seen ? fmtAge(e.last_seen, Date.now()) : '';
+  const facts = [
+    `<b>${e.count || 0}×</b> in 24h`,
+    last ? `last ${escapeHTML(last)} ago` : '',
+    first ? `first seen ${escapeHTML(first)} ago` : '',
+    e.session_id ? `session ${escapeHTML(String(e.session_id).slice(0, 8))}` : '',
+  ].filter(Boolean).join(' · ');
+
+  let advisor;
+  if (e.assessment) {
+    advisor = `<span class="advisor-chip adv-${escapeHTML(e.assessment)}" title="${escapeHTML(e.rationale || '')}">advisor: ${escapeHTML(e.assessment)}</span>`;
+    if (e.rationale) advisor += `<div class="egress-advice">${escapeHTML(e.rationale)}</div>`;
+  } else if (advisorOn) {
+    advisor = `<button class="btn btn-ghost btn-sm" data-action="assess-host" data-agent="${escapeHTML(e.agent)}" data-host="${escapeHTML(e.host)}"><svg class="icon"><use href="#i-agent"/></svg><span>Ask the advisor</span></button>`;
+  } else {
+    advisor = `<span class="fw-metric dim">advisor off</span>`;
+  }
+
+  return `<div class="fw-rule egress-row">
+    <div class="fw-rule-main">
+      <span class="fw-rule-id">${escapeHTML(e.host)}</span>
+      <div class="fw-metrics"><span class="fw-metric dim">${facts}</span></div>
+      ${advisor}
+    </div>
+    <div class="egress-actions">
+      <button class="btn btn-primary btn-sm" data-action="allow-host" data-agent="${escapeHTML(e.agent)}" data-host="${escapeHTML(e.host)}" title="Mark this endpoint expected for ${escapeHTML(e.agent)}; it leaves this list"><svg class="icon"><use href="#i-shield"/></svg><span>Allow</span></button>
+      <button class="btn btn-ghost btn-sm" data-action="goto-tab" data-tab="telemetry" title="See the events around this connection"><svg class="icon"><use href="#i-activity"/></svg><span>Evidence</span></button>
+    </div>
+  </div>`;
 }
 
