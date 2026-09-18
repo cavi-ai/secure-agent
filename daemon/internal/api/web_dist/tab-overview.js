@@ -277,9 +277,11 @@ function renderSessionStrip() {
 function renderSessionBoard() {
   const SA = window.SA;
 
-  const container = document.getElementById('session-board');
+  const rail = document.getElementById('session-rail');
+  const detail = document.getElementById('session-detail');
+  const legacy = document.getElementById('session-board');
   const badge = document.getElementById('badge-session-count');
-  if (!container) return;
+  if (!rail) return;
   const agents = (SA.t.status && SA.t.status.agents) ? SA.t.status.agents : [];
   const trees = SA.t.status && SA.t.status.trees;
   const q = (document.getElementById('session-cwd-filter') || {}).value || '';
@@ -287,24 +289,50 @@ function renderSessionBoard() {
   // daemon provides it; process-tree grouping is the fallback for older
   // daemons.
   const durable = SA.t.sessions;
-  const rows = (durable && durable.length)
+  const useDurable = !!(durable && durable.length);
+  const rows = useDurable
     ? filterSessionRows(sessionRowsDurable(durable, trees), q)
     : filterSessionRows(sessionRows(agents, trees), q);
   const liveCount = rows.filter(r => r.status !== 'ended').length;
   if (badge) badge.textContent = liveCount;
   SA.setTabBadge('sessions', liveCount);
+
+  if (useDurable) {
+    if (legacy) legacy.hidden = true;
+    rail.hidden = false;
+    if (detail) detail.hidden = false;
+    // Rail: one card per durable session (alive and ended).
+    rail.innerHTML = rows.length
+      ? rows.map(r => sessionRailCardHTML(durable.find(s => s.id === r.id) || r, trees, SA.selectedSessionId)).join('')
+      : `<div class="empty"><svg class="icon"><use href="#i-agent"/></svg><span>${q ? 'No sessions match' : 'No sessions yet — start a harness and it appears here'}</span></div>`;
+    // Detail: the selected session's trace waterfall.
+    const selected = durable.find(s => s.id === SA.selectedSessionId);
+    if (detail) {
+      if (selected) {
+        detail.innerHTML = sessionDetailHTML(selected, SA.sessionTimeline || []);
+      } else if (SA.selectedSessionId) {
+        detail.innerHTML = `<div class="empty"><span>Session no longer listed</span></div>`;
+      } else {
+        detail.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-agent"/></svg><span>Select a session to see its trace</span></div>`;
+      }
+    }
+    return;
+  }
+
+  // Legacy fallback: process-tree board, no rail.
+  rail.hidden = true;
+  if (detail) detail.hidden = true;
+  if (legacy) legacy.hidden = false;
   if (rows.length === 0) {
     const msg = String(q).trim()
       ? `No sessions match “${escapeHTML(String(q).trim())}”`
       : 'No agents running yet — start Claude Code, Cursor, or Codex and they\'ll appear here';
-    container.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-agent"/></svg><span>${msg}</span></div>`;
+    legacy.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-agent"/></svg><span>${msg}</span></div>`;
     return;
   }
   const now = Date.now();
-  container.innerHTML = (durable && durable.length)
-    ? sessionBoardDurableHTML(rows, now, SA.sessionHelpOpen)
-    : sessionBoardHTML(rows, now, SA.sessionHelpOpen);
-  container.querySelectorAll('details.session-helpers').forEach(el => {
+  legacy.innerHTML = sessionBoardHTML(rows, now, SA.sessionHelpOpen);
+  legacy.querySelectorAll('details.session-helpers').forEach(el => {
     el.addEventListener('toggle', () => {
       SA.sessionHelpOpen[el.dataset.pid] = el.open;
     });
@@ -322,6 +350,14 @@ function renderPosture() {
   if (!banner || !p) return;
 
   banner.dataset.state = p.state || 'all-clear';
+  // Announce escalations only (not every re-render): the screen-reader
+  // equivalent of the eye catching a banner turn red.
+  const prevState = banner.dataset.announcedState || '';
+  const nextState = p.state || 'all-clear';
+  if (nextState !== prevState && nextState !== 'all-clear') {
+    (window.saAnnounce || function(){})((nextState === 'critical' ? 'Critical: ' : 'Attention: ') + (p.summary || ''));
+  }
+  banner.dataset.announcedState = nextState;
   if (p.state === 'all-clear') {
     stateEl.textContent = 'All clear';
     summaryEl.textContent = 'Agents monitored, no action needed';
