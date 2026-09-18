@@ -17,10 +17,9 @@ func TestEventStreamDeliversBusEvents(t *testing.T) {
 	defer os.Remove(sock)
 	a := New(sock, testStore(t), &fakeKiller{}, func() Status { return Status{Running: true} })
 
-	// Fake bus: subscribe returns a channel we control.
-	ch := make(chan event.Event, 4)
-	a.SetEventStream(func() <-chan event.Event { return ch },
-		func(<-chan event.Event) { close(ch) })
+	// Typed deltas: the stream serves the delta hub, not the raw bus.
+	hub := NewDeltaHub()
+	a.SetDeltaHub(hub)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go a.Serve(ctx)
@@ -37,7 +36,7 @@ func TestEventStreamDeliversBusEvents(t *testing.T) {
 		t.Fatalf("content-type = %q", ct)
 	}
 
-	ch <- event.Event{Kind: event.KindProxyHit, PID: 7, Detail: "proxy-secret-leak:aws-key", TS: time.Now()}
+	hub.Publish(Delta{Type: "event", Data: event.Event{Kind: event.KindProxyHit, PID: 7, Detail: "proxy-secret-leak:aws-key", TS: time.Now()}})
 
 	// Read until we see the event (skipping the initial comment line).
 	buf := make([]byte, 4096)
@@ -53,8 +52,8 @@ func TestEventStreamDeliversBusEvents(t *testing.T) {
 			t.Fatalf("stream read: %v (acc=%q)", err, acc)
 		}
 	}
-	if !strings.Contains(acc, "event: proxy-hit") || !strings.Contains(acc, "aws-key") {
-		t.Fatalf("event not delivered: %q", acc)
+	if !strings.Contains(acc, "event: event") || !strings.Contains(acc, "aws-key") {
+		t.Fatalf("delta not delivered: %q", acc)
 	}
 }
 

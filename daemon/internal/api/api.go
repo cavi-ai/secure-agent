@@ -156,10 +156,15 @@ type API struct {
 	// the console whether a collector exists at all.
 	fleetConfigured bool
 
-	subscribeEvents   func() <-chan event.Event
-	unsubscribeEvents func(<-chan event.Event)
-	publishEvent      func(event.Event)
-	busDrops          func() uint64
+	publishEvent func(event.Event)
+	busDrops     func() uint64
+
+	// deltas is the typed state-change fan-out the SSE stream serves.
+	// lastPosture dedupes posture deltas (state + item count).
+	deltaHub         *DeltaHub
+	lastPostureMu    sync.Mutex
+	lastPostureState string
+	lastPostureCount int
 }
 
 // GuardEventSink receives guard decisions (allow/deny) for downstream

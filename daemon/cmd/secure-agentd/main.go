@@ -35,6 +35,18 @@ import (
 
 type realKiller struct{}
 
+// postureHookHolder defers arming the posture-delta hook until the API
+// server exists (it owns posture computation); the drain loop starts first.
+type postureHookHolder struct {
+	fn func()
+}
+
+func (h *postureHookHolder) run() {
+	if h.fn != nil {
+		h.fn()
+	}
+}
+
 func (k *realKiller) Kill(pid int32) error {
 	if pid <= 1 {
 		return fmt.Errorf("refusing to kill pid %d", pid)
@@ -109,6 +121,16 @@ func main() {
 	// ingest (hook handshake > transcript > process tree).
 	resolver := session.NewResolver(st, tagger)
 
+	// Typed deltas: SSE clients patch state from these; /snapshot is for
+	// initial load and reconciliation only.
+	deltaHub := api.NewDeltaHub()
+	defer deltaHub.Close()
+	resolver.OnSessionChange = func(sess model.Session) {
+		deltaHub.Publish(api.Delta{Type: "session", Data: sess})
+	}
+	// postureHook is armed once the API server exists (it owns posture).
+	postureHook := &postureHookHolder{}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -131,7 +153,9 @@ func main() {
 
 	// Drain bus and correlate/persist (drainDone closes once every delivered
 	// event has been persisted — shutdown waits for it).
-	drainDone := startDrainLoop(b.Subscribe(), st, correlator, fleetPub, resolver, func() *advisor.Subscriber { return advisorStk.Load().Sub })
+	drainDone := startDrainLoop(b.Subscribe(), st, correlator, fleetPub, resolver, deltaHub,
+		func() { postureHook.run() },
+		func() *advisor.Subscriber { return advisorStk.Load().Sub })
 
 	// Periodic process tagger refresh: 5s while idle, 1s while agents live.
 	go func() {
@@ -363,8 +387,9 @@ func main() {
 	}
 	// SSE live feed: each console gets its own bus subscription; unsubscribes
 	// when the connection closes.
-	apiServer.SetEventStream(b.Subscribe, b.Unsubscribe)
 	apiServer.SetEventPublisher(b.Publish)
+	apiServer.SetDeltaHub(deltaHub)
+	postureHook.fn = apiServer.PublishPostureIfChanged
 
 	// The browser console's telemetry fetches are same-origin with the
 	// dashboard, i.e. they land on the proxy's loopback HTTP port. Serve the

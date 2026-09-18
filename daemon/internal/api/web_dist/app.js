@@ -1366,22 +1366,57 @@ document.addEventListener('DOMContentLoaded', () => {
     };
     const es = new EventSource(streamURL);
     es.onopen = () => { esFailures = 0; stopPolling(); };
-    ['file-open', 'file-write', 'file-delete', 'exec', 'tcc-modify', 'conn-open', 'conn-close',
-     'transcript-hit', 'plugin-action', 'proxy-hit', 'guard-prompt', 'guard-resolved']
-      .forEach(kind => es.addEventListener(kind, (msg) => {
-        // Push path: count the event immediately so the sparkline reflects
-        // bursts between fetches. Record its key so sparkIngestEvents won't
-        // double-count it when the 400ms-later fetch lands.
-        let tsMs = 0;
-        try {
-          const e = JSON.parse(msg.data);
-          countedEventKeys.add(eventKey(e));
-          tsMs = Date.parse(e.ts) || 0;
-        } catch { /* frame without a parseable body still counts */ }
-        sparkBump(1, tsMs);
-        if (kind === 'proxy-hit') flashFirewallPanel();
-        if (sseNeedsSnapshot(kind)) scheduleRefresh();
-      }));
+
+    // Typed deltas: patch local state, then one debounced render. The
+    // full-snapshot refetch per raw bus event is over — /snapshot remains
+    // for initial load and the 30s reconcile.
+    let renderPending = false;
+    const scheduleRender = () => {
+      if (renderPending) return;
+      renderPending = true;
+      setTimeout(() => { renderPending = false; renderAll(); }, 120);
+    };
+    const upsertById = (list, item) => {
+      list = list || [];
+      const i = list.findIndex(x => x && x.id === item.id);
+      if (i >= 0) list[i] = item; else list.unshift(item);
+      return list;
+    };
+    es.addEventListener('event', (msg) => {
+      // Push path: count the event immediately so the sparkline reflects
+      // bursts between fetches. Record its key so sparkIngestEvents won't
+      // double-count it when the reconcile fetch lands.
+      try {
+        const e = JSON.parse(msg.data);
+        countedEventKeys.add(eventKey(e));
+        sparkBump(1, Date.parse(e.ts) || 0);
+        telemetryData.events = [e, ...(telemetryData.events || [])].slice(0, 200);
+        if (e.kind === 9) flashFirewallPanel(); // proxy-hit
+      } catch { sparkBump(1, 0); /* unparseable frame still counts */ }
+      scheduleRender();
+    });
+    es.addEventListener('flag', (msg) => {
+      try { telemetryData.flags = upsertById(telemetryData.flags, JSON.parse(msg.data)); } catch { /* next reconcile repairs */ }
+      scheduleRender();
+    });
+    es.addEventListener('incident', (msg) => {
+      // Delta incidents are the bare report (no workflow join); the 30s
+      // reconcile supplies workflow state.
+      try { telemetryData.incidents = upsertById(telemetryData.incidents, JSON.parse(msg.data)); } catch { /* next reconcile repairs */ }
+      scheduleRender();
+    });
+    es.addEventListener('session', (msg) => {
+      try { telemetryData.sessions = upsertById(telemetryData.sessions, JSON.parse(msg.data)); } catch { /* next reconcile repairs */ }
+      scheduleRender();
+    });
+    es.addEventListener('posture', (msg) => {
+      try { telemetryData.posture = JSON.parse(msg.data); } catch { /* next reconcile repairs */ }
+      scheduleRender();
+    });
+    // Guard lifecycle: a waiting operator decision must not wait for a
+    // reconcile — keep the instant refetch for these two.
+    ['guard-prompt', 'guard-resolved']
+      .forEach(kind => es.addEventListener(kind, scheduleRefresh));
     es.onerror = () => {
       // EventSource auto-reconnects while CONNECTING; only fall back to
       // polling when the stream is hard-closed or keeps failing.
