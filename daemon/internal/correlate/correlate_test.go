@@ -331,3 +331,27 @@ func TestProxyLeakRepeatSuppression(t *testing.T) {
 		t.Fatalf("different host must flag independently; got %d", total)
 	}
 }
+
+// Uninspected entries carry first-seen and the most recent session: the two
+// facts an operator needs before "allow all" (when did this start, which run
+// dialed it). Repeats update lastSeen/session but never firstSeen.
+func TestUninspectedSummaryCarriesFirstSeenAndSession(t *testing.T) {
+	c := newTestCorrelator(t)
+	early := time.Now().Add(-2 * time.Hour)
+	c.Observe(event.Event{Kind: event.KindConnOpen, PID: 200, TS: early, RemoteHost: "cdn.example.com", RemotePort: 443, SessionID: "sess-a"})
+	c.Observe(event.Event{Kind: event.KindConnOpen, PID: 200, TS: time.Now().Add(-time.Minute), RemoteHost: "cdn.example.com", RemotePort: 443, SessionID: "sess-b"})
+
+	sum := c.UninspectedEgressSummary()
+	if len(sum) != 1 {
+		t.Fatalf("summary = %+v, want 1 entry", sum)
+	}
+	if sum[0].FirstSeen.Unix() != early.Unix() {
+		t.Fatalf("first_seen = %v, want the first sighting %v", sum[0].FirstSeen, early)
+	}
+	if sum[0].SessionID != "sess-b" {
+		t.Fatalf("session_id = %q, want the most recent sess-b", sum[0].SessionID)
+	}
+	if sum[0].Count != 2 {
+		t.Fatalf("count = %d, want 2", sum[0].Count)
+	}
+}

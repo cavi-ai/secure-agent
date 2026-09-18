@@ -338,6 +338,74 @@ function cwdLabel(cwd) {
   return i >= 0 ? s.slice(i + 1) : s;
 }
 
+// Session-first timeline: a waterfall of tool calls (bars spanning
+// start→result), model calls (token rows), and file/network/guard dots on
+// the same axis. Pure function — the DOM tests drive it headless.
+function sessionWaterfallHTML(events) {
+  const toolCalls = (events || []).filter(e => e.kind === 12);
+  const modelCalls = (events || []).filter(e => e.kind === 14);
+  const dots = (events || []).filter(e => e.kind !== 12 && e.kind !== 13 && e.kind !== 14);
+  if (!events || events.length === 0) {
+    return '<div class="empty"><span>No trace events for this session yet</span></div>';
+  }
+  const startOf = e => Date.parse(e.ts) || 0;
+  const endOf = e => startOf(e) + (Number(e.duration_ms) || 0);
+  let lo = Infinity, hi = -Infinity;
+  for (const e of events) {
+    lo = Math.min(lo, startOf(e));
+    hi = Math.max(hi, endOf(e));
+  }
+  if (hi <= lo) hi = lo + 1000; // degenerate single-instant window
+  const span = hi - lo;
+  const pct = t => Math.max(0, Math.min(100, (t - lo) / span * 100));
+  const wid = (a, b) => Math.max(0.4, (b - a) / span * 100);
+
+  const fmtClock = t => {
+    const d = new Date(t);
+    return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0') + ':' + String(d.getSeconds()).padStart(2, '0');
+  };
+
+  const bars = toolCalls.map(e => {
+    const err = e.tool_status === 'error' ? ' error' : '';
+    const dur = e.duration_ms ? fmtDurationMs(e.duration_ms) : '';
+    return `<div class="wf-row"><span class="wf-name">${escapeHTML(e.tool || 'tool')}<span class="wf-dur">${escapeHTML(dur)}</span></span><span class="wf-track"><span class="wf-bar${err}" style="left:${pct(startOf(e)).toFixed(2)}%;width:${wid(startOf(e), endOf(e)).toFixed(2)}%"></span></span></div>`;
+  }).join('');
+
+  const dotCls = e => {
+    if (e.kind === 5 || e.kind === 6) return 'conn';
+    if (e.kind === 10 || e.kind === 11) return 'guard';
+    return '';
+  };
+  const dotRow = dots.length
+    ? `<div class="wf-row"><span class="wf-name">file · net · guard</span><span class="wf-track">${dots.map(e => `<span class="wf-dot ${dotCls(e)}" style="left:${pct(startOf(e)).toFixed(2)}%"></span>`).join('')}</span></div>`
+    : '';
+
+  const modelRows = modelCalls.map(e => {
+    const tok = `${fmtCompact(e.tokens_in || 0)} in · ${fmtCompact(e.tokens_out || 0)} out`;
+    const cost = e.cost_usd ? `$${e.cost_usd.toFixed(4)}` : '';
+    return `<div class="wf-model"><span><b>${escapeHTML(e.model || 'model')}</b> · ${escapeHTML(fmtClock(startOf(e)))}</span><span>${escapeHTML(tok)}${cost ? ' · ' + escapeHTML(cost) : ''}</span></div>`;
+  }).join('');
+
+  return `<div class="wf">
+    <div class="wf-axis"><span>${escapeHTML(fmtClock(lo))}</span><span>${escapeHTML(fmtClock(hi))}</span></div>
+    ${bars}${dotRow}${modelRows}
+  </div>`;
+}
+
+function fmtDurationMs(ms) {
+  ms = Number(ms) || 0;
+  if (ms < 1000) return ms + 'ms';
+  if (ms < 60000) return (ms / 1000).toFixed(1).replace(/\.0$/, '') + 's';
+  return Math.floor(ms / 60000) + 'm ' + Math.round((ms % 60000) / 1000) + 's';
+}
+
+function fmtCompact(n) {
+  n = Number(n) || 0;
+  if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+  if (n >= 1e3) return (n / 1e3).toFixed(1) + 'k';
+  return String(n);
+}
+
 // Durable sessions (GET /sessions via /snapshot): one row per harness
 // session, alive or ended — history survives process exit. Live process
 // trees are joined by root pid for RSS/helpers/kill; ended rows render
@@ -413,6 +481,17 @@ function sessionBoardDurableHTML(rows, now, helpOpen) {
         ${helpers}
       </div>`;
   }).join('');
+}
+
+// hostSuffix groups endpoints for bulk decisions: the registrable-ish tail
+// (last two labels) for names, the address itself for IPs/short hosts.
+// Approximate by design — no public-suffix list ships with the console; the
+// button always names exactly what it will allow.
+function hostSuffix(host) {
+  const h = String(host || '');
+  if (!h || h.includes(':') || /^[\d.]+$/.test(h)) return h;
+  const parts = h.split('.');
+  return parts.length > 2 ? parts.slice(-2).join('.') : h;
 }
 
 function sessionRows(agents, trees) {

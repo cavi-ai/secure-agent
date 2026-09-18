@@ -21,7 +21,9 @@ import tempfile
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 WEB_DIST = os.path.join(REPO, "daemon", "internal", "api", "web_dist")
 MOCK = os.path.join(os.path.dirname(__file__), "mock_dom.js")
-VIRTUAL_TIME_MS = 9000
+# Virtual-time budget for each dump. 12s: the auto-actions fire at 4s and the
+# styled-confirm dialogs (P3) add a round-trip before the mutated state lands.
+VIRTUAL_TIME_MS = 12000
 
 passed = []
 failed = []
@@ -49,7 +51,7 @@ def build_harness(tmp):
     """Harness page = real index.html with mock_dom.js injected between lib.js
     and app.js. Real assets are symlinked so relative paths resolve."""
     for f in ("index.html", "style.css", "lib.js", "app.js",
-              "tab-overview.js", "tab-agents.js", "tab-egress.js", "tab-findings.js"):
+              "tab-overview.js", "tab-sessions.js", "tab-agents.js", "tab-egress.js", "tab-findings.js"):
         os.symlink(os.path.join(WEB_DIST, f), os.path.join(tmp, f))
     os.symlink(MOCK, os.path.join(tmp, "mock_dom.js"))
     html = open(os.path.join(WEB_DIST, "index.html")).read()
@@ -100,6 +102,19 @@ def main():
         dom_policy = dump_dom(chrome, tmp, "?policydemo")
         dom_demote = dump_dom(chrome, tmp, "?demotedemo")
         dom_allowrm = dump_dom(chrome, tmp, "?allowlistdemo")
+        dom_rail = dump_dom(chrome, tmp, "?raildemo")
+
+        # --- session-first tab (P3) ---
+        check("session rail renders durable sessions", dom.count('class="session-card') >= 2,
+              f"cards={dom.count('class=\"session-card')}")
+        check("rail shows names not pids", "claude · api-service@main" in dom)
+        check("ended session marked", 'session-card ended' in dom)
+        check("rail selection renders trace waterfall",
+              'class="wf-bar' in dom_rail and 'Bash' in dom_rail,
+              "no waterfall bars in raildemo")
+        check("waterfall carries model usage row",
+              "claude-sonnet-4-5" in dom_rail and "46.2k in" in dom_rail)
+        check("waterfall marks tool errors", 'wf-bar error' in dom_rail)
 
         # --- telemetry wiring ---
         check("version badge comes from /status", 'id="app-version">v9.9.9-domtest<' in dom)
@@ -133,6 +148,10 @@ def main():
         check("drill-down collapses CDN/cloud carriers",
               "Known CDN/cloud infrastructure (2 endpoints)" in dom_uninsp
               and "Cloudflare" in dom_uninsp and "AWS" in dom_uninsp)
+        check("egress rows show first-seen and session",
+              "first seen" in dom_uninsp and "session " in dom_uninsp)
+        check("egress bulk allow groups same-suffix hosts",
+              'data-action="bulk-allow" data-agent="claude"' in dom_uninsp and "Allow all 2" in dom_uninsp)
         check("vendor-key promote banner",
               'data-action="promote-vendor-keys"' in dom and "1 vendor-key rule" in dom)
         check("incident workflow chip (ack)", 'class="workflow-chip acked"' in dom)
@@ -306,7 +325,9 @@ def main():
         check("policy editor exposes automatic containment warning",
 		      "applies every enabled intervention automatically" in dom_policy)
         check("terminate policy save requires explicit confirmation",
-		      'data-last-confirm="Terminate mode will automatically apply the enabled intervention ladder to entire agent sessions. Save this policy?"' in dom_policy)
+		      'id="confirm-message"' in dom_policy
+		      and "Terminate mode will automatically apply the enabled intervention ladder to entire agent sessions" in dom_policy
+		      and 'id="confirm-title">Enable terminate mode<' in dom_policy)
         check("resource approval contains the whole session",
               'data-action="resource-control" data-id="resource-1" data-decision="apply" data-intervention="pause"' in resource_view)
         check("resource approval can keep the session running",
@@ -327,12 +348,13 @@ def main():
         check("overview strip opens the sessions tab",
               'data-action="goto-tab" data-tab="sessions"' in overview)
         check("session board has project filter", 'id="session-cwd-filter"' in dom)
-        sessions = dom.split('id="session-board"', 1)[1].split('id="tab-agents"', 1)[0]
-        check("session board lists two sessions", sessions.count('class="session-row') == 2)
-        check("session rows labeled by project folder",
+        sessions = dom.split('id="session-rail"', 1)[1].split('id="session-detail"', 1)[0]
+        check("session rail lists two sessions", sessions.count('class="session-card') == 2,
+              f"cards={sessions.count('class=\"session-card')}")
+        check("session cards labeled by project folder",
               "api-service" in sessions and "web-app" in sessions)
-        check("session row filters timeline by pids",
-              'data-action="filter-pids" data-pids="5821,5822"' in sessions)
+        check("session card selects the session trace",
+              'data-action="select-session" data-id="sess-claude-1"' in sessions)
         check("egress tab badge shows uninspected count",
               'id="tab-badge-egress">2<' in dom)
         check("findings tab badge shows needs-you count",

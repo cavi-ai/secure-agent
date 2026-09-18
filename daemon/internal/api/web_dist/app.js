@@ -48,6 +48,79 @@ document.addEventListener('DOMContentLoaded', () => {
   const btnCancelResourcePolicy = document.getElementById('btn-cancel-resource-policy');
   const btnSaveResourcePolicy = document.getElementById('btn-save-resource-policy');
 
+  // Screen-reader announcements for state the eye would catch on its own.
+  const liveRegion = document.getElementById('a11y-live');
+  window.saAnnounce = function(text) {
+    if (!liveRegion || !text) return;
+    liveRegion.textContent = '';
+    // A tick later so repeated identical strings re-announce.
+    setTimeout(() => { liveRegion.textContent = text; }, 30);
+  };
+
+  // Styled confirmation replacing native confirm()/prompt(): a real dialog
+  // with focus management, a danger action, and an optional typed reason
+  // (saPrompt). Returns a Promise so call sites read like the natives did.
+  const confirmModal = document.getElementById('confirm-modal');
+  const confirmTitle = document.getElementById('confirm-title');
+  const confirmMessage = document.getElementById('confirm-message');
+  const confirmInput = document.getElementById('confirm-input');
+  const confirmOk = document.getElementById('confirm-ok');
+  function saDialog({ title, message, okLabel, withInput, placeholder, danger }) {
+    if (!confirmModal || typeof confirmModal.showModal !== 'function') {
+      // No dialog support: fall back to the native prompt/confirm so the
+      // action is still possible (never silently drop a destructive step).
+      const text = withInput ? window.prompt(message, '') : null;
+      return Promise.resolve(withInput ? text : window.confirm(message));
+    }
+    confirmTitle.textContent = title || 'Confirm';
+    confirmMessage.textContent = message || '';
+    confirmOk.textContent = okLabel || 'Confirm';
+    confirmOk.className = 'btn ' + (danger === false ? 'btn-primary' : 'btn-danger');
+    confirmInput.hidden = !withInput;
+    confirmInput.value = '';
+    if (withInput) confirmInput.placeholder = placeholder || '';
+    return new Promise((resolve) => {
+      const done = () => {
+        confirmModal.removeEventListener('close', onClose);
+        resolve(confirmModal.returnValue === 'ok' ? (withInput ? (confirmInput.value || '') : true) : (withInput ? null : false));
+      };
+      const onClose = done;
+      confirmModal.addEventListener('close', onClose, { once: true });
+      confirmModal.showModal();
+      (withInput ? confirmInput : confirmOk).focus();
+    });
+  }
+  window.saConfirm = (message, opts = {}) => saDialog({ message, danger: true, ...opts });
+  window.saPrompt = (message, opts = {}) => saDialog({ message, withInput: true, danger: false, ...opts });
+
+  // Theme: explicit pin (persisted) or follow the system. The pre-paint
+  // inline script already applied the initial choice; this wires the toggle.
+  (function initTheme() {
+    const mq = window.matchMedia ? window.matchMedia('(prefers-color-scheme: light)') : null;
+    const apply = (mode) => {
+      const theme = mode === 'system'
+        ? (mq && mq.matches ? 'light' : 'dark')
+        : mode;
+      document.documentElement.dataset.theme = theme;
+      for (const m of ['system', 'light', 'dark']) {
+        const b = document.getElementById('theme-' + m);
+        if (b) b.setAttribute('aria-pressed', m === mode ? 'true' : 'false');
+      }
+    };
+    let mode = 'system';
+    try { mode = localStorage.getItem('sa-theme') || 'system'; } catch { /* memory only */ }
+    apply(mode);
+    for (const m of ['system', 'light', 'dark']) {
+      const b = document.getElementById('theme-' + m);
+      if (b) b.addEventListener('click', () => {
+        mode = m;
+        try { m === 'system' ? localStorage.removeItem('sa-theme') : localStorage.setItem('sa-theme', m); } catch { /* ok */ }
+        apply(m);
+      });
+    }
+    if (mq && mq.addEventListener) mq.addEventListener('change', () => { if (mode === 'system') apply('system'); });
+  })();
+
   let currentRawMarkdown = '';
 
   btnRefresh.addEventListener('click', () => {
@@ -533,7 +606,9 @@ document.addEventListener('DOMContentLoaded', () => {
   window.setIncidentStatus = async function(id, status) {
     const body = { id, status };
     if (status === 'resolved') {
-      const note = prompt('Resolution note (what did you do?):', '');
+      const note = await saPrompt('Resolve this incident. What did you do?', {
+        title: 'Resolve incident', okLabel: 'Resolve', danger: false, placeholder: 'rotated the key, removed the file…'
+      });
       if (note === null) return; // cancelled
       body.note = note;
     }
@@ -700,7 +775,28 @@ document.addEventListener('DOMContentLoaded', () => {
     firstEventRender: { get() { return firstEventRender; }, set(v) { firstEventRender = v; } },
     suppressFreshOnce: { get() { return suppressFreshOnce; }, set(v) { suppressFreshOnce = v; } },
     selectedResourceKey: { get() { return selectedResourceKey; }, set(v) { selectedResourceKey = v; } },
+    selectedSessionId: { get() { return selectedSessionId; }, set(v) { selectedSessionId = v; } },
+    sessionTimeline: { get() { return sessionTimeline; }, set(v) { sessionTimeline = v; } },
   });
+
+  // Session-first tab: selection + its trace. The timeline refetches on
+  // select and when an event delta lands for the selected session.
+  let selectedSessionId = '';
+  let sessionTimeline = [];
+  let sessionTimelineAt = 0;
+  async function loadSessionTimeline(id, force) {
+    if (!id) { sessionTimeline = []; return; }
+    // Throttle refetches: deltas for the selected session arrive per event.
+    if (!force && Date.now() - sessionTimelineAt < 2000) return;
+    sessionTimelineAt = Date.now();
+    const r = await apiFetch('/sessions/' + encodeURIComponent(id) + '/timeline?limit=500');
+    if (r.ok) sessionTimeline = (await r.json()) || [];
+  }
+  window.selectSession = async function(id) {
+    selectedSessionId = (selectedSessionId === id) ? '' : id;
+    if (selectedSessionId) await loadSessionTimeline(selectedSessionId, true);
+    renderAll();
+  };
 
   // The report modal is shared by two views: the incident report (markdown,
   // with a Copy button) and the uninspected-egress drill-down (row actions,
@@ -750,7 +846,7 @@ document.addEventListener('DOMContentLoaded', () => {
   window.killProcess = async function(pid, startedAt, family) {
     const when = startedAt ? ` started ${startedAt}` : '';
     const who = family ? `${family} ` : '';
-    if (!confirm(`Terminate process tree ${who}PID ${pid}${when}?`)) return;
+    if (!await saConfirm(`Terminate the ${who || ''}process tree at PID ${pid}${when || ''}?`, { title: 'Terminate process tree', okLabel: 'Terminate' })) return;
     const body = { pid };
     if (startedAt) body.started_at = startedAt;
     try {
@@ -772,7 +868,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   window.resolveResourceControl = async function(id, decision, sessionKey, actionName) {
     const verb = decision === 'dismiss' ? 'keep this session running' : decision === 'resume' ? 'resume this entire session' : `apply ${String(actionName || 'this intervention').replaceAll('_', ' ')}`;
-    if (!confirm(`Resource policy: ${verb}?`)) return;
+    if (!await saConfirm(`Save this resource policy change: ${verb}?`, { title: 'Resource policy', okLabel: 'Save' })) return;
     try {
       const res = await apiFetch('/resources/control', {
         method: 'POST',
@@ -791,7 +887,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const action = verdict === 'allow'
       ? (scope === 'always' ? 'allow every future path matched by this rule' : 'allow this request once')
       : 'deny this request and remember the rule';
-    if (!confirm(`Guard decision: ${action}?`)) return;
+    if (!await saConfirm(`Apply guard decision: ${action}?`, { title: 'Guard decision', okLabel: 'Apply' })) return;
     try {
       const res = await apiFetch('/guard/resolve', {
         method: 'POST',
@@ -919,7 +1015,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     const body = { ...draft.default, workspace_overrides: draft.overrides };
     if ([body, ...body.workspace_overrides].some(p => p.mode === 'terminate') &&
-		!confirm('Terminate mode will automatically apply the enabled intervention ladder to entire agent sessions. Save this policy?')) return;
+		!await saConfirm('Terminate mode will automatically apply the enabled intervention ladder to entire agent sessions. Save this policy?', { title: 'Enable terminate mode', okLabel: 'Save policy' })) return;
     if (btnSaveResourcePolicy) btnSaveResourcePolicy.disabled = true;
     try {
       const res = await apiFetch('/resources/policy', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -939,7 +1035,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const agents = (telemetryData.status && telemetryData.status.agents) ? telemetryData.status.agents : [];
     const orphans = agents.filter(a => a.name === family && a.is_orphan);
     if (orphans.length === 0) return;
-    if (!confirm(`Terminate ${orphans.length} leftover ${family} process${orphans.length === 1 ? '' : 'es'}?`)) return;
+    if (!await saConfirm(`Terminate ${orphans.length} leftover ${family} process${orphans.length === 1 ? '' : 'es'}?`, { title: 'Clean up leftovers', okLabel: 'Terminate' })) return;
     for (const a of orphans) {
       const body = { pid: a.pid };
       if (a.started_at) body.started_at = a.started_at;
@@ -956,6 +1052,29 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     showToast(`Leftover ${family} processes terminated.`, 'success');
     fetchTelemetry();
+  };
+
+  // Bulk allow: one click for a group the operator has already judged (all
+  // hosts under one suffix for one agent). Sequential and bounded — the
+  // allowlist is a user-owned file, not a bulk-import target.
+  window.bulkAllowHosts = async function(agent, hosts) {
+    const list = String(hosts || '').split(',').filter(Boolean);
+    let ok = 0;
+    for (const host of list) {
+      try {
+        const res = await apiFetch('/allowlist', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ agent, host })
+        });
+        if (res.ok) ok++;
+      } catch { /* continue; the toast reports the tally */ }
+    }
+    showToast(`Allowlisted ${ok} of ${list.length} hosts for ${agent}`, ok === list.length ? 'success' : 'warn');
+    await fetchTelemetry();
+    if (modalMode === 'uninspected' && reportModal && reportModal.open) {
+      fillUninspected(document.getElementById('modal-report-body'));
+    }
   };
 
   window.allowHost = async function(agent, host) {
@@ -1223,6 +1342,12 @@ document.addEventListener('DOMContentLoaded', () => {
       case 'allow-host':
         window.allowHost(d.agent, d.host);
         break;
+      case 'bulk-allow':
+        window.bulkAllowHosts(d.agent, d.hosts);
+        break;
+      case 'select-session':
+        window.selectSession(d.id);
+        break;
       case 'mute-flag':
         window.muteFlag(d.rule, d.host);
         break;
@@ -1392,6 +1517,10 @@ document.addEventListener('DOMContentLoaded', () => {
         sparkBump(1, Date.parse(e.ts) || 0);
         telemetryData.events = [e, ...(telemetryData.events || [])].slice(0, 200);
         if (e.kind === 9) flashFirewallPanel(); // proxy-hit
+        // The open session's waterfall follows its own trace live.
+        if (selectedSessionId && e.session_id === selectedSessionId) {
+          loadSessionTimeline(selectedSessionId).then(scheduleRender);
+        }
       } catch { sparkBump(1, 0); /* unparseable frame still counts */ }
       scheduleRender();
     });
