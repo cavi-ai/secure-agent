@@ -3,6 +3,7 @@ package intel
 import (
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -18,6 +19,39 @@ type Analyzer struct{}
 
 func NewAnalyzer() *Analyzer {
 	return &Analyzer{}
+}
+
+var (
+	connSubjectRe = regexp.MustCompile(`connected to ([^\s]+)`)
+	fileSubjectRe = regexp.MustCompile(`\bread (\S+?) (?:at|then)\b`)
+)
+
+// SubjectForFlag derives the aggregation subject from a flag's evidence:
+// the connected host for egress rules, the touched path for file rules.
+// Empty when nothing extractable — aggregation then keys on rule+session
+// alone, which is still one incident per rule per session.
+func SubjectForFlag(flag model.Flag) string {
+	for _, ev := range flag.Evidence {
+		for _, prefix := range []string{"conn:", "net:"} {
+			if strings.HasPrefix(ev, prefix) {
+				return strings.TrimSpace(strings.TrimPrefix(ev, prefix))
+			}
+		}
+		if strings.HasPrefix(ev, "file:") {
+			return strings.TrimSpace(strings.TrimPrefix(ev, "file:"))
+		}
+	}
+	for _, ev := range flag.Evidence {
+		if m := connSubjectRe.FindStringSubmatch(ev); m != nil {
+			return m[1]
+		}
+	}
+	for _, ev := range flag.Evidence {
+		if m := fileSubjectRe.FindStringSubmatch(ev); m != nil {
+			return m[1]
+		}
+	}
+	return ""
 }
 
 func (a *Analyzer) Analyze(flag model.Flag, events []event.Event) model.IncidentReport {

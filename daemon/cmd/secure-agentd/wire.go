@@ -227,8 +227,20 @@ func startDrainLoop(sub <-chan event.Event, st *store.Store, cr *correlate.Corre
 					}
 				}
 
+				// Incidents aggregate: one per rule+session+subject, flags
+				// become its evidence. The 323-identical-flags storm becomes
+				// one incident with a count, not 323 reports.
+				subject := intel.SubjectForFlag(fl)
+				if openID, found := st.FindOpenIncident(fl.Rule, fl.SessionID, subject); found {
+					st.AggregateIntoIncident(openID, fl.ID, fl.TS)
+					continue
+				}
+
 				recentEvs := st.RecentEvents(100)
 				report := analyzer.Analyze(fl, recentEvs)
+				report.SessionID = fl.SessionID
+				report.Subject = subject
+				report.AggregateCount = 1
 				st.PutIncident(report)
 				log.Printf("INCIDENT CREATED [%s]: %s (Risk: %s, %d rotate items)", report.ID, report.Summary, report.Risk, len(report.RotateList))
 				if pub != nil {

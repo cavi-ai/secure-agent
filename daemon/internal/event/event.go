@@ -17,6 +17,11 @@ const (
 	KindProxyHit      // payload inspection match (secret leak or prompt injection in proxy stream)
 	KindGuardPrompt   // a directory-guard prompt was enqueued (UI should refetch /guard/pending)
 	KindGuardResolved // a guard prompt was resolved (UI should refetch pending + rules)
+	// Trace model (P2): agent-semantic events parsed from harness transcripts.
+	// These carry no content — only tool names, durations, models, tokens.
+	KindToolCall  // a tool_use → tool_result pair (or unpaired start)
+	KindTurn      // a user→assistant turn boundary
+	KindModelCall // one model API call with usage
 )
 
 func (k Kind) String() string {
@@ -45,6 +50,12 @@ func (k Kind) String() string {
 		return "guard-prompt"
 	case KindGuardResolved:
 		return "guard-resolved"
+	case KindToolCall:
+		return "tool-call"
+	case KindTurn:
+		return "turn"
+	case KindModelCall:
+		return "model-call"
 	default:
 		return "unknown"
 	}
@@ -69,4 +80,12 @@ type Event struct {
 	RemotePort int    `json:"remote_port,omitempty"`
 	// Transcript/plugin events:
 	Detail string `json:"detail,omitempty"` // rule id or short label; NEVER a secret value
+	// Trace events (KindToolCall/KindTurn/KindModelCall):
+	ToolName   string  `json:"tool,omitempty"`        // tool_call: tool name
+	ToolStatus string  `json:"tool_status,omitempty"` // tool_call: ok | error | running
+	DurationMs int64   `json:"duration_ms,omitempty"` // tool_call: start→result
+	Model      string  `json:"model,omitempty"`       // model_call: model id
+	TokensIn   int64   `json:"tokens_in,omitempty"`   // model_call: input + cache-creation tokens
+	TokensOut  int64   `json:"tokens_out,omitempty"`  // model_call: output tokens
+	CostUSD    float64 `json:"cost_usd,omitempty"`    // model_call: approximate, from the pricing table (0 = unknown model)
 }

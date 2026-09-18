@@ -99,11 +99,17 @@ function renderIncidents() {
         : '';
     const riskClass = (inc.risk || '').toUpperCase() === 'CRITICAL' ? 'high'
       : (inc.risk || '').toUpperCase() === 'HIGH' ? 'high' : '';
+    // Aggregated incidents read as one row with a repeat count — the flag
+    // storm is evidence, not 323 cards.
+    const countChip = (inc.aggregate_count || 0) > 1
+      ? `<span class="workflow-chip">×${Number(inc.aggregate_count)} flags</span>`
+      : '';
     return `
     <div class="incident-card ${status === 'resolved' ? 'is-resolved' : ''}">
       <div class="incident-header">
         <span class="risk-tag ${riskClass}"><svg class="icon"><use href="#i-alert"/></svg>${escapeHTML(inc.risk)}</span>
-        <span class="kpi-hint">${inc.agent ? escapeHTML(inc.agent) + ' · ' : ''}${escapeHTML(inc.rule)} — PID ${inc.pid}</span>
+        <span class="kpi-hint">${inc.agent ? escapeHTML(inc.agent) + ' · ' : ''}${escapeHTML(inc.rule)}${inc.subject ? ' — ' + escapeHTML(inc.subject) : ''}</span>
+        ${countChip}
         ${statusChip}
       </div>
       <div class="incident-summary">${escapeHTML(inc.summary)}</div>

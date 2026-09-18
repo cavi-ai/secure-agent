@@ -108,3 +108,54 @@ func TestSessionRootsExcludesEnded(t *testing.T) {
 		t.Fatal("ended session's root must not be reported live")
 	}
 }
+
+// Incident aggregation: one incident per rule+session+subject; repeat flags
+// become evidence (count bumps, flag ids accumulate, report_json stays
+// current). Resolved incidents never match — a recurrence after resolution
+// is a new incident.
+func TestIncidentAggregation(t *testing.T) {
+	s, err := Open("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	now := time.Now()
+	s.PutIncident(model.IncidentReport{
+		ID: "inc-1", FlagID: "f1", PID: 1, Agent: "codex", Timestamp: now,
+		Rule: "keychain-access", SessionID: "sess-1", Subject: "login.keychain-db",
+		Risk: model.RiskHigh, Summary: "first",
+	})
+
+	id, ok := s.FindOpenIncident("keychain-access", "sess-1", "login.keychain-db")
+	if !ok || id != "inc-1" {
+		t.Fatalf("FindOpenIncident = %q, %v", id, ok)
+	}
+	// Different subject or session must NOT match.
+	if _, ok := s.FindOpenIncident("keychain-access", "sess-1", "other.plist"); ok {
+		t.Fatal("wrong subject matched")
+	}
+	if _, ok := s.FindOpenIncident("keychain-access", "sess-2", "login.keychain-db"); ok {
+		t.Fatal("wrong session matched")
+	}
+
+	s.AggregateIntoIncident("inc-1", "f2", now.Add(time.Hour))
+	s.AggregateIntoIncident("inc-1", "f3", now.Add(2*time.Hour))
+
+	got := s.RecentIncidents(5)
+	if len(got) != 1 {
+		t.Fatalf("incidents = %d, want 1 aggregated", len(got))
+	}
+	if got[0].AggregateCount != 3 {
+		t.Fatalf("aggregate_count = %d, want 3", got[0].AggregateCount)
+	}
+	if got[0].LastFlagAt == nil || got[0].LastFlagAt.Unix() != now.Add(2*time.Hour).Unix() {
+		t.Fatalf("last_flag_at = %v", got[0].LastFlagAt)
+	}
+
+	// Resolved: no longer an aggregation target.
+	s.db.Exec(`UPDATE incidents SET status = 'resolved' WHERE id = 'inc-1'`)
+	if _, ok := s.FindOpenIncident("keychain-access", "sess-1", "login.keychain-db"); ok {
+		t.Fatal("resolved incident must not aggregate")
+	}
+}
