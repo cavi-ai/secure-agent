@@ -283,9 +283,16 @@ function renderSessionBoard() {
   const agents = (SA.t.status && SA.t.status.agents) ? SA.t.status.agents : [];
   const trees = SA.t.status && SA.t.status.trees;
   const q = (document.getElementById('session-cwd-filter') || {}).value || '';
-  const rows = filterSessionRows(sessionRows(agents, trees), q);
-  if (badge) badge.textContent = rows.length;
-  SA.setTabBadge('sessions', rows.length);
+  // The durable session spine (/sessions) is the source of truth when the
+  // daemon provides it; process-tree grouping is the fallback for older
+  // daemons.
+  const durable = SA.t.sessions;
+  const rows = (durable && durable.length)
+    ? filterSessionRows(sessionRowsDurable(durable, trees), q)
+    : filterSessionRows(sessionRows(agents, trees), q);
+  const liveCount = rows.filter(r => r.status !== 'ended').length;
+  if (badge) badge.textContent = liveCount;
+  SA.setTabBadge('sessions', liveCount);
   if (rows.length === 0) {
     const msg = String(q).trim()
       ? `No sessions match “${escapeHTML(String(q).trim())}”`
@@ -294,7 +301,9 @@ function renderSessionBoard() {
     return;
   }
   const now = Date.now();
-  container.innerHTML = sessionBoardHTML(rows, now, SA.sessionHelpOpen);
+  container.innerHTML = (durable && durable.length)
+    ? sessionBoardDurableHTML(rows, now, SA.sessionHelpOpen)
+    : sessionBoardHTML(rows, now, SA.sessionHelpOpen);
   container.querySelectorAll('details.session-helpers').forEach(el => {
     el.addEventListener('toggle', () => {
       SA.sessionHelpOpen[el.dataset.pid] = el.open;

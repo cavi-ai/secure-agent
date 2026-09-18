@@ -402,6 +402,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (snap.posture) telemetryData.posture = snap.posture;
       if (snap.suggestions) telemetryData.suggestions = snap.suggestions || [];
       if (snap.mutes) telemetryData.mutes = snap.mutes || [];
+      if (snap.sessions) telemetryData.sessions = snap.sessions || [];
     }
 
     if (slow) {
