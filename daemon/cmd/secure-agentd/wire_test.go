@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/fleet"
 	"github.com/cavi-ai/secure-agent/daemon/internal/resource"
 	"github.com/cavi-ai/secure-agent/daemon/internal/sensitive"
+	"github.com/cavi-ai/secure-agent/daemon/internal/session"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 	"github.com/cavi-ai/secure-agent/daemon/internal/supervise"
 )
@@ -45,11 +47,25 @@ func TestGuardBrokerMS(t *testing.T) {
 
 func TestTranscriptTailTargets(t *testing.T) {
 	base := transcriptTailTargets("/home/x", "")
-	if len(base) != 4 {
-		t.Fatalf("expected 4 base targets, got %d: %v", len(base), base)
+	// claude, cursor, codex, gemini, opencode, and the hook activity log.
+	wantSubs := []string{".claude", ".cursor", ".codex", ".gemini", "opencode", "activity.jsonl"}
+	if len(base) != 8 {
+		t.Fatalf("expected 8 base targets, got %d: %v", len(base), base)
+	}
+	for _, sub := range wantSubs {
+		found := false
+		for _, tgt := range base {
+			if strings.Contains(tgt, sub) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("no tail target covers %q: %v", sub, base)
+		}
 	}
 	withJSONL := transcriptTailTargets("/home/x", "/var/log/events.jsonl")
-	if len(withJSONL) != 5 || withJSONL[4] != "/var/log/events.jsonl" {
+	if len(withJSONL) != 9 || withJSONL[8] != "/var/log/events.jsonl" {
 		t.Fatalf("jsonl path not appended: %v", withJSONL)
 	}
 }
@@ -319,7 +335,8 @@ func TestStartDrainLoopPersistsAndCloses(t *testing.T) {
 	cr := correlate.New(tagger, sensitive.New(cfg), cfg)
 
 	b := bus.New(64)
-	done := startDrainLoop(b.Subscribe(), st, cr, fleet.NewPublisher(), nil)
+	res := session.NewResolver(st, tagger)
+	done := startDrainLoop(b.Subscribe(), st, cr, fleet.NewPublisher(), res, nil)
 
 	now := time.Now()
 	b.Publish(event.Event{Kind: event.KindPluginAction, TS: now, PID: 500, Path: "/Users/x/project/.env"})
