@@ -384,6 +384,7 @@ func (a *API) SetPeers(checker PeerChecker, agentPIDs func() map[int32]struct{})
 func (a *API) buildMux() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/status", a.handleStatus)
+	mux.HandleFunc("/sessions", a.handleSessions)
 	mux.HandleFunc("/resources", a.handleResources)
 	mux.HandleFunc("/resources/control", a.handleResourceControl)
 	mux.HandleFunc("/resources/policy", a.handleResourcePolicy)
@@ -485,6 +486,22 @@ func (a *API) handleStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, a.currentStatus())
+}
+
+// handleSessions serves the durable session list — live and ended sessions
+// with harness, workspace, repo and branch. This is the spine; the process
+// tree is just its live projection. ?status=active|idle|ended, ?limit=N.
+func (a *API) handleSessions(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	q := r.URL.Query()
+	f := store.SessionFilter{Status: q.Get("status")}
+	if n, err := strconv.Atoi(q.Get("limit")); err == nil && n > 0 {
+		f.Limit = n
+	}
+	writeJSON(w, a.store.ListSessions(f))
 }
 
 func (a *API) currentStatus() Status {

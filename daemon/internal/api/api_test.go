@@ -692,3 +692,47 @@ func TestTerminateAgentTreeVerifiedRejectsReusedChildPID(t *testing.T) {
 		t.Fatalf("killed=%v before family identity validation completed", fk.all)
 	}
 }
+
+// /sessions serves the durable session spine: live and ended, newest first.
+func TestSessionsEndpoint(t *testing.T) {
+	sock := fmt.Sprintf("/tmp/sa_sessions_%d.sock", time.Now().UnixNano())
+	defer os.Remove(sock)
+	st := testStore(t)
+	now := time.Now()
+	st.UpsertSession(model.Session{ID: "s1", Harness: "claude", Workspace: "/repo", Repo: "repo", Branch: "main",
+		StartedAt: now, LastSeenAt: now, Status: model.SessionActive, Confidence: model.ConfHook})
+	st.UpsertSession(model.Session{ID: "s2", Harness: "codex", StartedAt: now.Add(-time.Hour), LastSeenAt: now.Add(-time.Hour),
+		Status: model.SessionActive, Confidence: model.ConfProcessTree})
+	st.EndSession("s2", now.Add(-30*time.Minute))
+
+	a := New(sock, st, &fakeKiller{}, func() Status { return Status{Running: true} })
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go a.Serve(ctx)
+	waitForSocket(t, sock)
+
+	cl := unixClient(sock)
+
+	resp, err := cl.Get("http://unix/sessions")
+	if err != nil || resp.StatusCode != 200 {
+		t.Fatalf("GET /sessions: %v status=%v", err, resp.StatusCode)
+	}
+	var all []model.Session
+	decodeInto(t, resp, &all)
+	if len(all) != 2 {
+		t.Fatalf("sessions = %d, want 2 (live + ended)", len(all))
+	}
+	if all[0].ID != "s1" || all[0].Repo != "repo" || all[0].Branch != "main" {
+		t.Fatalf("first session = %+v, want the live hook session with metadata", all[0])
+	}
+	if all[1].ID != "s2" || all[1].EndedAt == nil {
+		t.Fatalf("second session = %+v, want ended with ended_at", all[1])
+	}
+
+	resp2, _ := cl.Get("http://unix/sessions?status=ended")
+	var ended []model.Session
+	decodeInto(t, resp2, &ended)
+	if len(ended) != 1 || ended[0].ID != "s2" {
+		t.Fatalf("status=ended = %+v, want only s2", ended)
+	}
+}
