@@ -380,6 +380,22 @@ func main() {
 			return false
 		},
 	})
+	// On-demand host assessment: the console turns "what is this IP?" into an
+	// advisor verdict the operator can act on. Cached verdict answers
+	// immediately; a fresh assessment is queued (idempotent, advisor-side
+	// cooldown) so repeated clicks never flood the model.
+	apiServer.SetHostAssess(api.HostAssessFuncs{
+		GetVerdict: func(agent, host string) (model.AdvisorVerdict, bool) {
+			return st.AdvisorVerdictFor("host:"+agent+"|"+host, "host")
+		},
+		Enqueue: func(agent, host string) bool {
+			if sub := advisorStk.Load().Sub; sub != nil {
+				sub.EnqueueHost(agent, host)
+				return true
+			}
+			return false
+		},
+	})
 	apiServer.SetFleetSink(fleetPub)
 	apiServer.SetFleetConfigured(len(cfg.Fleet.Webhooks) > 0)
 	// Fleet heartbeat: posture + liveness pushed to every sink at boot, on a
