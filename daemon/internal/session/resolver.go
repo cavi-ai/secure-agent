@@ -167,6 +167,25 @@ func (r *Resolver) HandleHandshake(h Handshake) {
 	r.touchLocked(h.SessionID, ts)
 }
 
+// NoteTranscriptSession records a transcript-tier sighting: the session id
+// comes from the harness's own transcript records (e.g. Claude's sessionId),
+// stronger than a process-tree guess, weaker than the hook handshake.
+func (r *Resolver) NoteTranscriptSession(id, workspace string, ts time.Time) {
+	if id == "" {
+		return
+	}
+	if ts.IsZero() {
+		ts = r.now()
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.st.UpsertSession(model.Session{
+		ID: id, Workspace: workspace, StartedAt: ts, LastSeenAt: ts,
+		Status: model.SessionActive, Confidence: model.ConfTranscript,
+	})
+	r.touchLocked(id, ts)
+}
+
 // ensureHookSession creates a minimal record for a hook-stamped id seen
 // without a handshake (e.g. activity log lines predating registration).
 func (r *Resolver) ensureHookSession(e *event.Event) {

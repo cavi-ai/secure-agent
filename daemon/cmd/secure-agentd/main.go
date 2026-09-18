@@ -436,6 +436,7 @@ func main() {
 				Repo: h.Repo, Branch: h.Branch, PID: h.PID, TS: hts,
 			})
 		}
+		ts.OnSessionSeen = resolver.NoteTranscriptSession
 		return ts.Run(c)
 	})
 

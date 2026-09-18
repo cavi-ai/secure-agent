@@ -736,3 +736,43 @@ func TestSessionsEndpoint(t *testing.T) {
 		t.Fatalf("status=ended = %+v, want only s2", ended)
 	}
 }
+
+// /sessions/{id}/timeline serves one session's events oldest-first.
+func TestSessionTimelineEndpoint(t *testing.T) {
+	sock := fmt.Sprintf("/tmp/sa_timeline_%d.sock", time.Now().UnixNano())
+	defer os.Remove(sock)
+	st := testStore(t)
+	now := time.Now()
+	st.PutEvent(event.Event{Kind: event.KindModelCall, TS: now, SessionID: "s1", Model: "claude-sonnet-4-5", TokensIn: 100, TokensOut: 10})
+	st.PutEvent(event.Event{Kind: event.KindToolCall, TS: now.Add(time.Second), SessionID: "s1", ToolName: "Bash", ToolStatus: "ok", DurationMs: 900})
+	st.PutEvent(event.Event{Kind: event.KindFileOpen, TS: now.Add(2 * time.Second), SessionID: "other", Path: "/x"})
+
+	a := New(sock, st, &fakeKiller{}, func() Status { return Status{Running: true} })
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go a.Serve(ctx)
+	waitForSocket(t, sock)
+
+	cl := unixClient(sock)
+	resp, err := cl.Get("http://unix/sessions/s1/timeline")
+	if err != nil || resp.StatusCode != 200 {
+		t.Fatalf("GET timeline: %v status=%v", err, resp.StatusCode)
+	}
+	var tl []event.Event
+	decodeInto(t, resp, &tl)
+	if len(tl) != 2 {
+		t.Fatalf("timeline = %d events, want 2 (other session excluded)", len(tl))
+	}
+	if tl[0].Kind != event.KindModelCall || tl[1].Kind != event.KindToolCall {
+		t.Fatalf("timeline not oldest-first: %v, %v", tl[0].Kind, tl[1].Kind)
+	}
+	if tl[0].TokensIn != 100 || tl[1].DurationMs != 900 || tl[1].ToolName != "Bash" {
+		t.Fatalf("trace fields lost: %+v %+v", tl[0], tl[1])
+	}
+
+	resp2, _ := cl.Get("http://unix/sessions/s1")
+	if resp2.StatusCode != 404 {
+		t.Fatalf("GET /sessions/s1 without subpath: %d, want 404", resp2.StatusCode)
+	}
+	resp2.Body.Close()
+}

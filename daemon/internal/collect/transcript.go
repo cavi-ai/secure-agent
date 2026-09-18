@@ -42,6 +42,14 @@ type TranscriptScanner struct {
 	// (harness, workspace, repo, branch, harness pid) so the session resolver
 	// can register the authoritative session record.
 	OnHandshake func(Handshake)
+
+	// OnSessionSeen, when set, reports a session id sighted in a harness
+	// transcript (with the transcript's cwd) — transcript-tier resolution.
+	OnSessionSeen func(sessionID, workspace string, at time.Time)
+
+	// tracers hold per-file Claude trace state (open tool_use ids). The
+	// scanner's tail loop is single-goroutine, so no lock.
+	tracers map[string]*ClaudeTracer
 }
 
 // Handshake is the hook's session announcement line
@@ -338,6 +346,37 @@ func (ts *TranscriptScanner) tailFile(p string, offsets map[string]int64) {
 						ts.OnProduce()
 					}
 					continue
+				}
+				// Claude Code transcripts carry the trace: model calls with
+				// usage, tool calls with durations, turn boundaries.
+				if IsClaudeTranscriptPath(p) {
+					tracer := ts.tracers[p]
+					if tracer == nil {
+						tracer = NewClaudeTracer()
+						if ts.tracers == nil {
+							ts.tracers = map[string]*ClaudeTracer{}
+						}
+						ts.tracers[p] = tracer
+					}
+					if evs, cwd, ok := tracer.ParseLine(line); ok {
+						for _, e := range evs {
+							ts.bus.Publish(e)
+						}
+						if ts.OnProduce != nil {
+							ts.OnProduce()
+						}
+						if ts.OnSessionSeen != nil {
+							ts.OnSessionSeen(evs[0].SessionID, cwd, evs[0].TS)
+						}
+						// Trace lines still get the redaction scan — an
+						// assistant message can carry a secret in its text.
+						if e, hit := ScanLine(line); hit && e.Kind == event.KindTranscriptHit {
+							e.SessionID = evs[0].SessionID
+							ts.bus.Publish(e)
+						}
+						continue
+					}
+					// Not a trace record: still run the redaction scan.
 				}
 				if e, ok := ScanLine(line); ok {
 					ts.bus.Publish(e)
