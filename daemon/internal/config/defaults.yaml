@@ -126,3 +126,12 @@ advisor:
   # and point endpoint at a server you already run (Ollama/MLX/llama.cpp).
   managed: false
   managed_model: "mlx-community/Qwen3-4B-4bit"
+
+# OpenTelemetry trace export (opt-in). Sessions and trace events are exported
+# as OTLP/HTTP JSON spans to any backend; empty endpoint disables it. No
+# secrets cross this wire. See docs/CONFIGURATION.md.
+otlp:
+  endpoint: ""                      # e.g. "http://127.0.0.1:4318/v1/traces"
+  service: "secure-agent"
+  headers: {}
+  labels: {}
