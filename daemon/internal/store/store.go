@@ -134,7 +134,14 @@ func Open(dbPath, jsonlPath string) (*Store, error) {
 			path TEXT,
 			remote_host TEXT,
 			remote_port INT,
-			detail TEXT
+			detail TEXT,
+			tool TEXT,
+			tool_status TEXT,
+			duration_ms INTEGER,
+			model TEXT,
+			tokens_in INTEGER,
+			tokens_out INTEGER,
+			cost_usd REAL
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_events_pid_ts ON events(pid, ts);`,
 		`CREATE TABLE IF NOT EXISTS incidents (
@@ -236,6 +243,28 @@ func Open(dbPath, jsonlPath string) (*Store, error) {
 			log.Printf("store: migrated %s: added session_id column", table)
 		}
 	}
+	// Trace columns (P2): older databases gain them in place.
+	for _, col := range []string{"tool", "tool_status", "duration_ms", "model", "tokens_in", "tokens_out", "cost_usd"} {
+		var n int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('events') WHERE name=?`, col).Scan(&n); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("failed to inspect events schema: %w", err)
+		}
+		if n == 0 {
+			typ := "TEXT"
+			switch col {
+			case "duration_ms", "tokens_in", "tokens_out":
+				typ = "INTEGER"
+			case "cost_usd":
+				typ = "REAL"
+			}
+			if _, err := db.Exec(`ALTER TABLE events ADD COLUMN ` + col + ` ` + typ); err != nil {
+				db.Close()
+				return nil, fmt.Errorf("failed to migrate events.%s: %w", col, err)
+			}
+			log.Printf("store: migrated events: added %s column", col)
+		}
+	}
 	// Flags gain an acknowledged marker: when the operator acts on a flag
 	// (applies any disposition), the flag stops counting as critical and
 	// dims in the UI — "acted upon" is a first-class state, not an endless
@@ -279,6 +308,32 @@ func Open(dbPath, jsonlPath string) (*Store, error) {
 			}
 		}
 		log.Printf("store: migrated incidents: added workflow columns (status, acknowledged_at, resolved_at, resolution_note)")
+	}
+	// Incident aggregation columns (P2): one incident per rule+session+subject;
+	// flags become its evidence. Older rows keep NULLs and simply never match
+	// an aggregation key — they stay standalone, which is what they were.
+	var aggN int
+	if err := db.QueryRow(
+		`SELECT COUNT(*) FROM pragma_table_info('incidents') WHERE name='aggregate_count'`,
+	).Scan(&aggN); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to inspect incidents schema: %w", err)
+	}
+	if aggN == 0 {
+		for _, col := range []string{
+			`ALTER TABLE incidents ADD COLUMN rule TEXT`,
+			`ALTER TABLE incidents ADD COLUMN session_id TEXT`,
+			`ALTER TABLE incidents ADD COLUMN subject TEXT`,
+			`ALTER TABLE incidents ADD COLUMN aggregate_count INTEGER`,
+			`ALTER TABLE incidents ADD COLUMN last_flag_at TEXT`,
+			`ALTER TABLE incidents ADD COLUMN flag_ids TEXT`,
+		} {
+			if _, err := db.Exec(col); err != nil {
+				db.Close()
+				return nil, fmt.Errorf("failed to migrate incidents aggregation columns: %w", err)
+			}
+		}
+		log.Printf("store: migrated incidents: added aggregation columns (rule, session_id, subject, aggregate_count, last_flag_at, flag_ids)")
 	}
 
 	var jsonl *os.File
@@ -373,8 +428,9 @@ func (s *Store) PutEvent(e event.Event) {
 
 	tsStr := e.TS.UTC().Format(time.RFC3339Nano)
 	_, err := s.db.Exec(
-		`INSERT INTO events (kind, ts, pid, exe_path, session_id, path, remote_host, remote_port, detail) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO events (kind, ts, pid, exe_path, session_id, path, remote_host, remote_port, detail, tool, tool_status, duration_ms, model, tokens_in, tokens_out, cost_usd) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		int(e.Kind), tsStr, e.PID, e.ExePath, e.SessionID, e.Path, e.RemoteHost, e.RemotePort, e.Detail,
+		nullStr(e.ToolName), nullStr(e.ToolStatus), nullInt(e.DurationMs), nullStr(e.Model), nullInt(e.TokensIn), nullInt(e.TokensOut), nullFloat(e.CostUSD),
 	)
 	if err != nil {
 		log.Printf("store: failed to insert event: %v", err)
@@ -450,10 +506,11 @@ type FlagFilter struct {
 // EventFilter narrows an event history query. Kind is a pointer because kind 0
 // (KindFileOpen) is a valid filter value distinct from "not set".
 type EventFilter struct {
-	Kind  *int   // exact kind; nil = any
-	PID   int32  // exact pid; 0 = any
-	Since string // ts >= this; empty = any
-	Limit int    // 0 = 50
+	Kind      *int   // exact kind; nil = any
+	PID       int32  // exact pid; 0 = any
+	SessionID string // exact session; "" = any
+	Since     string // ts >= this; empty = any
+	Limit     int    // 0 = 50
 }
 
 func (s *Store) RecentFlags(limit int) []model.Flag {
@@ -791,7 +848,8 @@ func (s *Store) QueryEvents(f EventFilter) []event.Event {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	q := `SELECT kind, ts, pid, exe_path, session_id, path, remote_host, remote_port, detail FROM events WHERE 1=1`
+	q := `SELECT kind, ts, pid, exe_path, session_id, path, remote_host, remote_port, detail,
+		tool, tool_status, duration_ms, model, tokens_in, tokens_out, cost_usd FROM events WHERE 1=1`
 	var args []any
 	if f.Kind != nil {
 		q += " AND kind = ?"
@@ -800,6 +858,10 @@ func (s *Store) QueryEvents(f EventFilter) []event.Event {
 	if f.PID != 0 {
 		q += " AND pid = ?"
 		args = append(args, f.PID)
+	}
+	if f.SessionID != "" {
+		q += " AND session_id = ?"
+		args = append(args, f.SessionID)
 	}
 	if f.Since != "" {
 		q += " AND datetime(ts) >= datetime(?)"
@@ -820,9 +882,20 @@ func (s *Store) QueryEvents(f EventFilter) []event.Event {
 		var e event.Event
 		var kindInt int
 		var tsStr string
-		if err := rows.Scan(&kindInt, &tsStr, &e.PID, &e.ExePath, &e.SessionID, &e.Path, &e.RemoteHost, &e.RemotePort, &e.Detail); err == nil {
+		var tool, toolStatus, modelName sql.NullString
+		var durMs, tokIn, tokOut sql.NullInt64
+		var cost sql.NullFloat64
+		if err := rows.Scan(&kindInt, &tsStr, &e.PID, &e.ExePath, &e.SessionID, &e.Path, &e.RemoteHost, &e.RemotePort, &e.Detail,
+			&tool, &toolStatus, &durMs, &modelName, &tokIn, &tokOut, &cost); err == nil {
 			e.Kind = event.Kind(kindInt)
 			e.TS, _ = time.Parse(time.RFC3339Nano, tsStr)
+			e.ToolName = tool.String
+			e.ToolStatus = toolStatus.String
+			e.DurationMs = durMs.Int64
+			e.Model = modelName.String
+			e.TokensIn = tokIn.Int64
+			e.TokensOut = tokOut.Int64
+			e.CostUSD = cost.Float64
 			events = append(events, e)
 		}
 	}
@@ -842,6 +915,29 @@ func normalizeLimit(limit int) int {
 	return limit
 }
 
+// Nullable column helpers: zero values store as NULL so omitempty on read
+// keeps "absent" distinct from "zero".
+func nullStr(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
+}
+
+func nullInt(n int64) any {
+	if n == 0 {
+		return nil
+	}
+	return n
+}
+
+func nullFloat(f float64) any {
+	if f == 0 {
+		return nil
+	}
+	return f
+}
+
 func (s *Store) PutIncident(inc model.IncidentReport) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -853,9 +949,15 @@ func (s *Store) PutIncident(inc model.IncidentReport) {
 	}
 
 	tsStr := inc.Timestamp.UTC().Format(time.RFC3339Nano)
+	count := inc.AggregateCount
+	if count == 0 {
+		count = 1
+	}
+	flagIDs, _ := json.Marshal([]string{inc.FlagID})
 	_, err = s.db.Exec(
-		`INSERT OR REPLACE INTO incidents (id, flag_id, pid, risk, report_json, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+		`INSERT OR REPLACE INTO incidents (id, flag_id, pid, risk, report_json, created_at, rule, session_id, subject, aggregate_count, last_flag_at, flag_ids) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		inc.ID, inc.FlagID, inc.PID, string(inc.Risk), string(data), tsStr,
+		inc.Rule, inc.SessionID, inc.Subject, count, tsStr, string(flagIDs),
 	)
 	if err != nil {
 		log.Printf("store: failed to insert incident %s: %v", inc.ID, err)
@@ -886,6 +988,63 @@ func (s *Store) GetIncident(id string) (*model.IncidentReport, error) {
 		inc.AdvisorNarrative = v.Rationale
 	}
 	return &inc, nil
+}
+
+// FindOpenIncident returns the open (unresolved) incident matching the
+// aggregation key — one incident per rule+session+subject; repeat flags
+// become its evidence instead of minting duplicate reports.
+func (s *Store) FindOpenIncident(rule, sessionID, subject string) (string, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var id string
+	err := s.db.QueryRow(
+		`SELECT id FROM incidents
+		 WHERE COALESCE(rule,'') = ? AND COALESCE(session_id,'') = ? AND COALESCE(subject,'') = ?
+		   AND COALESCE(status,'open') != 'resolved'
+		 ORDER BY datetime(created_at) DESC LIMIT 1`,
+		rule, sessionID, subject,
+	).Scan(&id)
+	if err != nil {
+		return "", false
+	}
+	return id, true
+}
+
+// AggregateIntoIncident folds another flag into an existing incident: bumps
+// the count, records the flag id as evidence, refreshes last_flag_at, and
+// patches the served report_json so the UI reads current numbers.
+func (s *Store) AggregateIntoIncident(id, flagID string, ts time.Time) {
+	if id == "" || flagID == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var reportJSON, flagIDsRaw string
+	var count int
+	err := s.db.QueryRow(`SELECT report_json, COALESCE(flag_ids,'[]'), COALESCE(aggregate_count,1) FROM incidents WHERE id = ?`, id).
+		Scan(&reportJSON, &flagIDsRaw, &count)
+	if err != nil {
+		return
+	}
+	var flagIDs []string
+	_ = json.Unmarshal([]byte(flagIDsRaw), &flagIDs)
+	flagIDs = append(flagIDs, flagID)
+	count++
+	tsStr := ts.UTC().Format(time.RFC3339Nano)
+
+	var inc model.IncidentReport
+	if err := json.Unmarshal([]byte(reportJSON), &inc); err == nil {
+		inc.AggregateCount = count
+		t := ts.UTC()
+		inc.LastFlagAt = &t
+		if data, err := json.Marshal(inc); err == nil {
+			reportJSON = string(data)
+		}
+	}
+	idsJSON, _ := json.Marshal(flagIDs)
+	_, _ = s.db.Exec(`UPDATE incidents SET aggregate_count = ?, last_flag_at = ?, flag_ids = ?, report_json = ? WHERE id = ?`,
+		count, tsStr, string(idsJSON), reportJSON, id)
 }
 
 func (s *Store) RecentIncidents(limit int) []model.IncidentReport {
