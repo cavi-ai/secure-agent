@@ -79,8 +79,11 @@
           </button>
           <div class="notify-pop" id="notify-pop" hidden>
             <div class="notify-pop-head">Notifications</div>
-            <div class="notify-pop-sub">Default: only critical flags notify. Overrides apply to the menu bar app and this console.</div>
+            <div class="notify-pop-sub">Default: only critical flags notify. Strongest rule first: a workspace scope beats a per-rule override, which beats the default. Applies to the menu bar app and this console.</div>
             <div id="notify-rules-list"></div>
+            <div class="notify-pop-head notify-scope-head">Per-workspace scopes</div>
+            <div class="notify-pop-sub">Page me for a rule only in one repo (or silence it there), matched by path prefix. Example: always notify for <code>proxy-secret-leak</code> under <code>/Users/me/work/prod</code>.</div>
+            <div id="notify-scopes-list"></div>
           </div>
         </div>
         <div class="theme-toggle" role="group" aria-label="Theme">

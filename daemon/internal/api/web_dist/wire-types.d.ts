@@ -53,6 +53,7 @@ export interface Flag {
   pid: number;
   agent: string;
   session_id?: string;
+  workspace?: string;
   evidence: string[];
   advisor?: AdvisorVerdict;
   acknowledged?: boolean;

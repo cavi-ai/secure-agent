@@ -256,6 +256,32 @@ final class AppStateTests: XCTestCase {
         XCTAssertNil(stub.setNotifyRuleCalls[1].notify ?? nil)
     }
 
+// Per-workspace notification scopes are the strongest tier: a scope beats the
+// per-rule override and the default, matched by path prefix, longest first.
+func testWorkspaceScopeBeatsRuleOverrideAndDefault() async {
+    let stub = StubDaemonClient()
+    stub.notifyRules = NotifyRulesResponse(
+        defaultMinSeverity: 3,
+        overrides: ["proxy-secret-leak": false],       // rule says never
+        scopes: [NotifyScopeModel(workspace: "/Users/dev/work/prod", rule: "proxy-secret-leak", notify: true)])
+    stub.flags = []
+    let (state, _) = makeState(stub)
+    await state.performFetch()
+
+    // In the scoped workspace: the scope wins -> pages despite the rule "never".
+    let scoped = FlagModel(id: "f1", rule: "proxy-secret-leak", severity: 3, ts: "", pid: 1,
+                           agent: "claude", evidence: [], workspace: "/Users/dev/work/prod/api")
+    XCTAssertTrue(state.shouldNotify(for: scoped))
+    // Outside the scope: the per-rule override still applies (never).
+    let outside = FlagModel(id: "f2", rule: "proxy-secret-leak", severity: 3, ts: "", pid: 1,
+                            agent: "claude", evidence: [], workspace: "/Users/dev/other")
+    XCTAssertFalse(state.shouldNotify(for: outside))
+    // No workspace (older daemon): falls through to the rule override.
+    let noWS = FlagModel(id: "f3", rule: "proxy-secret-leak", severity: 3, ts: "", pid: 1,
+                         agent: "claude", evidence: [])
+    XCTAssertFalse(state.shouldNotify(for: noWS))
+}
+
     func testRetriageFeedbackLifecycle() async {
         let stub = StubDaemonClient()
         stub.flags = [flag("rt-1", 3)]

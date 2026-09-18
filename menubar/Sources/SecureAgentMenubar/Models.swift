@@ -464,15 +464,32 @@ public struct AuditEntryModel: Codable, Sendable {
 public struct NotifyRulesResponse: Codable, Sendable {
     public let defaultMinSeverity: Int
     public let overrides: [String: Bool]
+    /// Per-workspace+rule scopes (the more specific tier over `overrides`).
+    /// Empty on older daemons.
+    public let scopes: [NotifyScopeModel]?
 
     enum CodingKeys: String, CodingKey {
         case defaultMinSeverity = "default_min_severity"
         case overrides
+        case scopes
+    }
+
+    public init(defaultMinSeverity: Int, overrides: [String: Bool], scopes: [NotifyScopeModel]? = nil) {
+        self.defaultMinSeverity = defaultMinSeverity
+        self.overrides = overrides
+        self.scopes = scopes
     }
 
     /// Older daemons (pre-/notify/rules) answer 404 — degrade to the shipped
     /// default policy rather than an error.
-    public static let fallback = NotifyRulesResponse(defaultMinSeverity: 3, overrides: [:])
+    public static let fallback = NotifyRulesResponse(defaultMinSeverity: 3, overrides: [:], scopes: [])
+}
+
+/// One per-workspace+rule notification scope.
+public struct NotifyScopeModel: Codable, Sendable {
+    public let workspace: String
+    public let rule: String
+    public let notify: Bool
 }
 
 public struct AdvisorVerdictModel: Codable, Sendable {
@@ -498,6 +515,9 @@ public struct FlagModel: Codable, Identifiable, Sendable {
     /// Harness session that produced the flag — the evidence-chain link that
     /// survives PID reuse. Empty for OS-level signals.
     public let sessionId: String?
+    /// Session working directory — the key for per-workspace notification
+    /// scopes. Nil on older daemons.
+    public let workspace: String?
     /// Local advisor triage verdict when one exists. Advisory only.
     public let advisor: AdvisorVerdictModel?
     /// True when the operator applied a disposition on this flag — it stops
@@ -507,11 +527,13 @@ public struct FlagModel: Codable, Identifiable, Sendable {
     enum CodingKeys: String, CodingKey {
         case id, rule, severity, ts, pid, agent, evidence, advisor
         case sessionId = "session_id"
+        case workspace
         case acknowledged
     }
 
     public init(id: String, rule: String, severity: Int, ts: String, pid: Int32, agent: String,
-                evidence: [String], sessionId: String? = nil, advisor: AdvisorVerdictModel? = nil,
+                evidence: [String], sessionId: String? = nil, workspace: String? = nil,
+                advisor: AdvisorVerdictModel? = nil,
                 acknowledged: Bool? = nil) {
         self.id = id
         self.rule = rule
@@ -521,6 +543,7 @@ public struct FlagModel: Codable, Identifiable, Sendable {
         self.agent = agent
         self.evidence = evidence
         self.sessionId = sessionId
+        self.workspace = workspace
         self.advisor = advisor
         self.acknowledged = acknowledged
     }

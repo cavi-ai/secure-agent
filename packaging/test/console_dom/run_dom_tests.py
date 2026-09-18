@@ -243,6 +243,11 @@ def main():
         check("notify override pre-selected (never)",
               'data-notify-rule="keychain-access"' in dom_notify and
               'value="never" selected' in dom_notify.split('data-notify-rule="keychain-access"')[1][:300])
+        check("notify popover lists workspace scopes",
+              "Per-workspace scopes" in dom_notify
+              and 'data-action="notify-scope-remove" data-rule="proxy-secret-leak" data-workspace="/Users/dev/work/prod"' in dom_notify)
+        check("notify popover offers adding a workspace scope",
+              'id="notify-scope-path"' in dom_notify and 'data-action="notify-scope-add"' in dom_notify)
 
         # --- connection states (the "trouble connecting" regressions) ---
         check("auth-expired shows honest re-auth guidance, not 'daemon down'",

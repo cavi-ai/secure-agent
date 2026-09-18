@@ -250,7 +250,8 @@
     ],
     '/notify/rules': {
       default_min_severity: 3,
-      overrides: { 'keychain-access': false }
+      overrides: { 'keychain-access': false },
+      scopes: [{ workspace: '/Users/dev/work/prod', rule: 'proxy-secret-leak', notify: true }]
     },
     '/guard/pending': [{
       id: 'guard-1', agent: 'claude', tool: 'Read', path: '/workspace/api-service/.env',
@@ -322,6 +323,22 @@
       const row = data['/egress/uninspected'].find(e => e.host === body.host);
       if (row && out.verdict) { row.assessment = out.verdict.assessment; row.rationale = out.verdict.rationale; }
       return out;
+    }
+    if (p === '/notify/rules') {
+      // Workspace scope set/clear against the fixture so the popover re-renders.
+      if (body.workspace) {
+        data['/notify/rules'].scopes = data['/notify/rules'].scopes || [];
+        data['/notify/rules'].scopes = data['/notify/rules'].scopes.filter(
+          s => !(s.workspace === body.workspace && s.rule === body.rule));
+        if (body.notify !== null && body.notify !== undefined) {
+          data['/notify/rules'].scopes.push({ workspace: body.workspace, rule: body.rule, notify: !!body.notify });
+        }
+      } else if (body.notify === null || body.notify === undefined) {
+        delete data['/notify/rules'].overrides[body.rule];
+      } else {
+        data['/notify/rules'].overrides[body.rule] = !!body.notify;
+      }
+      return { status: 'ok' };
     }
     if (p === '/advisor/retriage') {
       // The model "answers" shortly after the request: the flag's verdict
