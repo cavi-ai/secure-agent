@@ -1,9 +1,24 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="dark">
+<html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Secure Agent — Console</title>
+  <script>
+    // Theme before first paint: explicit choice (localStorage) wins,
+    // otherwise follow the system.
+    (function () {
+      var t = null;
+      try { t = localStorage.getItem('sa-theme'); } catch (e) {}
+      if (t === 'light' || t === 'dark') {
+        document.documentElement.dataset.theme = t;
+      } else if (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) {
+        document.documentElement.dataset.theme = 'light';
+      } else {
+        document.documentElement.dataset.theme = 'dark';
+      }
+    })();
+  </script>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -67,6 +82,11 @@
             <div class="notify-pop-sub">Default: only critical flags notify. Overrides apply to the menu bar app and this console.</div>
             <div id="notify-rules-list"></div>
           </div>
+        </div>
+        <div class="theme-toggle" role="group" aria-label="Theme">
+          <button type="button" id="theme-system" aria-pressed="false">Auto</button>
+          <button type="button" id="theme-light" aria-pressed="false">Light</button>
+          <button type="button" id="theme-dark" aria-pressed="false">Dark</button>
         </div>
         <button class="btn btn-ghost" id="btn-refresh" title="Refresh telemetry">
           <svg class="icon"><use href="#i-refresh"/></svg><span>Refresh</span>
@@ -220,8 +240,8 @@
         </section>
       </div>
 
-      <!-- Sessions: every agent run as a first-class board — it fills the
-           whole dashboard when the fleet is busy, so it is its own tab. -->
+      <!-- Sessions: session-first — a rail of durable sessions (alive and
+           ended) with the selected session's trace waterfall beside it. -->
       <div class="tabpanel" id="tab-sessions" role="tabpanel" hidden>
         <section class="panel" id="session-board-panel">
           <div class="panel-head">
@@ -229,9 +249,15 @@
             <input type="search" id="session-cwd-filter" class="input" placeholder="Filter by project…" autocomplete="off" spellcheck="false">
             <span class="badge" id="badge-session-count">0</span>
           </div>
-          <div class="panel-body" id="session-board">
-            <div class="empty"><svg class="icon"><use href="#i-agent"/></svg><span>No agents running yet — start Claude Code, Cursor, or Codex and they'll appear here</span></div>
+          <div class="session-split">
+            <div class="session-rail" id="session-rail" role="listbox" aria-label="Sessions"></div>
+            <div class="session-detail" id="session-detail">
+              <div class="empty"><svg class="icon"><use href="#i-agent"/></svg><span>No agents running yet — start Claude Code, Cursor, or Codex and they'll appear here</span></div>
+            </div>
           </div>
+          <!-- Legacy fallback: daemons without the sessions spine render the
+               process-tree board here. -->
+          <div class="panel-body" id="session-board" hidden></div>
         </section>
       </div>
 
@@ -398,8 +424,28 @@
 
   <div id="toast-container" class="toasts"></div>
 
+  <!-- Off-screen live region: state changes the eye would catch (posture
+       escalation, new critical) are announced to screen readers. -->
+  <div id="a11y-live" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
+
+  <!-- Styled confirmation (replaces native confirm()): destructive actions
+       get a real dialog with focus management and a typed reason where
+       needed. -->
+  <dialog id="confirm-modal" class="modal confirm-modal">
+    <form method="dialog" class="confirm-form">
+      <h3 id="confirm-title">Confirm</h3>
+      <p id="confirm-message" class="confirm-message"></p>
+      <textarea id="confirm-input" class="input confirm-input" rows="2" placeholder="Why? (optional)" hidden></textarea>
+      <div class="confirm-actions">
+        <button type="submit" value="cancel" class="btn btn-ghost" id="confirm-cancel">Cancel</button>
+        <button type="submit" value="ok" class="btn btn-danger" id="confirm-ok">Confirm</button>
+      </div>
+    </form>
+  </dialog>
+
   <script src="lib.js"></script>
   <script src="tab-overview.js"></script>
+  <script src="tab-sessions.js"></script>
   <script src="tab-agents.js"></script>
   <script src="tab-egress.js"></script>
   <script src="tab-findings.js"></script>
