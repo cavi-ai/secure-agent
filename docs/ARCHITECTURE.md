@@ -59,7 +59,7 @@ This document provides a detailed overview of the internal architecture of `secu
 
 ## 1. Go Telemetry Daemon (`daemon/`)
 
-The daemon (`secure-agentd`) runs as a child process of the menu bar app: it starts when Secure Agent launches and stops when the app quits (the daemon also self-terminates if it is orphaned). There is no `launchd` service and nothing runs in the background. It collects OS system telemetry without kernel extensions using modern macOS APIs.
+By default the daemon (`secure-agentd`) runs as a child process of the menu bar app: it starts when Secure Agent launches and stops when the app quits (the daemon also self-terminates if it is orphaned). For a headless node — a fleet or CI machine with no GUI login — `secure-agent service install` writes a plain launchd LaunchAgent (`RunAtLoad`, **no** `KeepAlive`; the daemon's own supervisor restarts collectors, and launchd respawning the whole process would fight the menubar over the socket), giving it a GUI-independent lifetime. Run either the app or the service, not both. It collects OS system telemetry without kernel extensions using modern macOS APIs.
 
 ### Collectors
 
