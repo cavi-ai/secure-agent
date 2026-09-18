@@ -88,6 +88,15 @@ export interface IncidentReport {
   advisor_narrative?: string;
 }
 
+export interface BudgetStatus {
+  mode: string;
+  enforced: boolean;
+  over_budget: number;
+  approval: number;
+  contained: number;
+  paused: number;
+}
+
 export interface NodeStatus {
   hostname: string;
   os: string;
@@ -98,6 +107,7 @@ export interface NodeStatus {
   posture_summary: string;
   needs_you: number;
   labels?: Record<string, string>;
+  budget?: BudgetStatus;
 }
 
 export interface AgentSummary {

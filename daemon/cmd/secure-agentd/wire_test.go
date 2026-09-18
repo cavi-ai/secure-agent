@@ -370,7 +370,7 @@ func TestBuildNodeStatus(t *testing.T) {
 	st := statusStub()
 	p := postureStub("critical", "Secret leaving in agent traffic — act now.", 2)
 	labels := map[string]string{"env": "prod", "role": "build-runner"}
-	ns := buildNodeStatus(st, p, "builder-01", labels)
+	ns := buildNodeStatus(st, p, "builder-01", labels, resource.BudgetSummary{Mode: "prompt", Enforced: true, OverBudget: 1})
 	if ns.Hostname != "builder-01" || ns.PostureState != "critical" || ns.NeedsYou != 2 {
 		t.Fatalf("node status = %+v", ns)
 	}
@@ -379,6 +379,9 @@ func TestBuildNodeStatus(t *testing.T) {
 	}
 	if ns.Labels["env"] != "prod" || ns.OS == "" || ns.Arch == "" {
 		t.Fatalf("labels/os/arch missing: %+v", ns)
+	}
+	if ns.Budget == nil || ns.Budget.Mode != "prompt" || !ns.Budget.Enforced || ns.Budget.OverBudget != 1 {
+		t.Fatalf("budget posture not carried in the heartbeat: %+v", ns.Budget)
 	}
 }
 
