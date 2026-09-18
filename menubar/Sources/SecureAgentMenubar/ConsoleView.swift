@@ -9,6 +9,7 @@ import SwiftUI
 /// the audited complexity. What stays: the posture hero, any collector/error
 /// banner, the pending guard decision inline, up to three session cards with
 /// a live heartbeat, and the one button that opens the console.
+@MainActor
 struct ConsoleView: View {
     @ObservedObject var state: AppState
     @ObservedObject private var supervisor = DaemonSupervisor.shared
