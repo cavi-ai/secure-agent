@@ -744,7 +744,25 @@ body {
 .md-inline-code { background: var(--bg-3); padding: 2px 5px; border-radius: 4px; color: var(--brand-2); }
 
 /* ---------- toasts ---------- */
-.toasts { position: fixed; bottom: 22px; right: 22px; display: flex; flex-direction: column; gap: 10px; z-index: 100; }
+/* The container is a top-layer popover (see index.html): a plain fixed div
+   with z-index cannot paint above a native <dialog>. Reset the UA popover
+   chrome (inset:0/margin:auto/border/background) so it stays an anchored
+   bottom-right stack, and keep it click-through so it never blocks the
+   surface beneath. */
+.toasts {
+  position: fixed; bottom: 22px; right: 22px; left: auto; top: auto;
+  margin: 0; inset: auto 22px 22px auto;
+  display: flex; flex-direction: column; gap: 10px; z-index: 100;
+  border: 0; background: transparent; padding: 0; overflow: hidden;
+  width: auto; height: auto;
+  max-height: min(60vh, 420px);
+  pointer-events: none;
+}
+/* Only hide-when-closed on browsers that support the Popover API; elsewhere
+   the container is a normal always-present fixed div. */
+@supports selector(:popover-open) {
+  .toasts:not(:popover-open) { display: none; }
+}
 .toast {
   min-width: 240px; max-width: 360px;
   padding: 12px 15px; border-radius: var(--r-sm);
@@ -752,11 +770,22 @@ body {
   font-size: 0.83rem; box-shadow: var(--sh-2);
   border-left: 3px solid var(--brand);
   animation: toastIn .22s var(--ease) both;
+  pointer-events: auto;
 }
 @keyframes toastIn { from { opacity: 0; transform: translateX(12px); } }
 .toast.success { border-left-color: var(--ok); }
 .toast.danger { border-left-color: var(--bad); }
 .toast.info { border-left-color: var(--brand); }
+
+/* While a native <dialog> is open, toasts are hosted INSIDE it (top layer
+   beats all z-index), anchored to the dialog's bottom-right corner. */
+.toast-host {
+  position: fixed; bottom: 22px; right: 22px; z-index: 10;
+  display: flex; flex-direction: column; gap: 10px;
+  max-height: min(50vh, 360px); overflow: hidden;
+  pointer-events: none;
+}
+.toast-host .toast { pointer-events: auto; }
 
 /* ---------- offline banner ---------- */
 .offline-banner {
@@ -774,6 +803,13 @@ body {
   display: flex; gap: 4px;
   padding: 4px; border-radius: var(--r-md);
   background: var(--bg-1); border: 1px solid var(--line);
+  min-width: 0;
+}
+/* Narrow widths: the tab bar scrolls horizontally rather than forcing the
+   whole page to overflow (six tabs no longer fit one row). */
+@media (max-width: 719px) {
+  .tabs { overflow-x: auto; flex-wrap: nowrap; scrollbar-width: thin; }
+  .tab-btn { flex: none; white-space: nowrap; }
 }
 .tab-btn {
   display: inline-flex; align-items: center; gap: 7px;
@@ -1116,3 +1152,22 @@ button.fw-uninspected .fw-drill-hint {
 .confirm-message { color: var(--tx-2); margin: 6px 0 12px; }
 .confirm-input { width: 100%; margin-bottom: 12px; }
 .confirm-actions { display: flex; justify-content: flex-end; gap: 8px; }
+
+/* Overview head: names the tab and states the drill-down path, so the page
+   reads as a summary with pointers rather than an undifferentiated stack. */
+.overview-head { margin: 2px 0 14px; }
+.overview-title { font-size: 1.05rem; letter-spacing: -0.01em; margin-bottom: 3px; }
+.overview-sub { color: var(--tx-2); font-size: 0.82rem; margin: 0; max-width: 70ch; }
+
+/* Egress decision modal: agent-grouped rows with facts, advisor read, actions. */
+.egress-agent-group { margin: 0 0 14px; border: 1px solid var(--line); border-radius: var(--r-md); overflow: hidden; }
+.egress-agent-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 9px 12px; background: var(--bg-2); }
+.egress-agent-name { font-weight: 650; font-size: 0.86rem; text-transform: capitalize; }
+.egress-agent-group .fw-rule { border: 0; border-top: 1px solid var(--line); border-radius: 0; margin: 0; }
+.egress-agent-group .bulk-allow { padding: 8px 12px 0; margin: 0; }
+.egress-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 10px 12px; }
+.egress-row .fw-rule-main { flex: 1 1 auto; min-width: 0; }
+.egress-actions { display: flex; gap: 6px; flex: none; }
+.egress-advice { color: var(--tx-2); font-size: 0.78rem; margin-top: 4px; max-width: 60ch; }
+.uninspected-expl { color: var(--tx-2); font-size: 0.82rem; line-height: 1.5; margin: 0 0 14px; max-width: 78ch; }
+.uninspected-expl b { color: var(--tx-1); }

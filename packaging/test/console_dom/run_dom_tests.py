@@ -88,6 +88,7 @@ def main():
         dom_session = dump_dom(chrome, tmp, "?sessiondemo")
         dom_guard = dump_dom(chrome, tmp, "?guarddemo")
         dom_uninsp = dump_dom(chrome, tmp, "?uninspecteddemo")
+        dom_toast = dump_dom(chrome, tmp, "?toastdemo")
         dom_notify = dump_dom(chrome, tmp, "?notifydemo")
         dom_allow = dump_dom(chrome, tmp, "?allowdemo")
         dom_dismiss = dump_dom(chrome, tmp, "?dismissdemo")
@@ -146,12 +147,29 @@ def main():
         check("drill-down keeps unknown endpoints actionable",
               "registry.npmjs.org" in dom_uninsp)
         check("drill-down collapses CDN/cloud carriers",
-              "Known CDN/cloud infrastructure (2 endpoints)" in dom_uninsp
+              "Known cloud/CDN infrastructure (2 endpoints)" in dom_uninsp
               and "Cloudflare" in dom_uninsp and "AWS" in dom_uninsp)
         check("egress rows show first-seen and session",
               "first seen" in dom_uninsp and "session " in dom_uninsp)
         check("egress bulk allow groups same-suffix hosts",
               'data-action="bulk-allow" data-agent="claude"' in dom_uninsp and "Allow all 2" in dom_uninsp)
+        check("egress explains what the list is and what to do",
+              "What this is:" in dom_uninsp and "What to do:" in dom_uninsp)
+        check("egress rows carry a plain Allow action",
+              'data-action="allow-host"' in dom_uninsp and ">Allow</span>" in dom_uninsp)
+        check("egress rows offer on-demand advisor assessment",
+              'data-action="assess-host" data-agent="claude"' in dom_uninsp
+              and "Ask the advisor" in dom_uninsp)
+        check("egress rows with a verdict show the advisor chip",
+              'advisor-chip adv-benign' in dom_uninsp)
+        # A toast fired while the egress modal is open must render ABOVE it.
+        # Native <dialog> lives in the browser top layer, which no root-level
+        # z-index can beat — so the toast is hosted inside the dialog. This is
+        # the "toast goes in the background, everything fails" regression.
+        dialog_start = dom_toast.find('id="report-modal"')
+        dialog_block = dom_toast[dialog_start:dialog_start + 6000] if dialog_start >= 0 else ''
+        check("toast renders inside the open modal (top layer)",
+              'class="toast-host"' in dialog_block and 'class="toast ' in dialog_block)
         check("vendor-key promote banner",
               'data-action="promote-vendor-keys"' in dom and "1 vendor-key rule" in dom)
         check("incident workflow chip (ack)", 'class="workflow-chip acked"' in dom)
