@@ -91,3 +91,23 @@ func TestScanLineFakeCursorActivity(t *testing.T) {
 		t.Fatalf("Path = %q, want /tmp/foo/.env", e.Path)
 	}
 }
+
+func TestParseHandshake(t *testing.T) {
+	line := `{"type":"session_start","ts":"2026-09-17T12:00:00Z","session_id":"abc","harness":"claude","workspace":"/repo","repo":"repo","branch":"main","pid":4242}`
+	h, ok := ParseHandshake(line)
+	if !ok {
+		t.Fatal("handshake not recognized")
+	}
+	if h.SessionID != "abc" || h.Harness != "claude" || h.Workspace != "/repo" || h.Repo != "repo" || h.Branch != "main" || h.PID != 4242 {
+		t.Fatalf("handshake = %+v", h)
+	}
+
+	// A regular activity line is not a handshake.
+	if _, ok := ParseHandshake(`{"tool":"Read","pid":1,"session_id":"abc"}`); ok {
+		t.Fatal("activity line misclassified as handshake")
+	}
+	// A handshake without a session id is useless — drop it.
+	if _, ok := ParseHandshake(`{"type":"session_start","harness":"claude"}`); ok {
+		t.Fatal("handshake without session_id must not parse")
+	}
+}

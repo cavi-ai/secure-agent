@@ -172,17 +172,37 @@ func main() {
 
 	// The daemon's net sampler filters loopback (it is not egress), so the
 	// fixture connection must ride a real interface address — still on-box,
-	// no internet required.
-	nonLoopback := func() string {
-		addrs, _ := net.InterfaceAddrs()
-		for _, a := range addrs {
-			if ipn, ok := a.(*net.IPNet); ok && !ipn.IP.IsLoopback() && ipn.IP.To4() != nil {
-				return ipn.IP.String()
-			}
+	// no internet required. Interface lists include down links and VPN utuns
+	// that answer nothing, so each candidate is proven with a probe dial.
+	var l net.Listener
+	addrs, _ := net.InterfaceAddrs()
+	for _, a := range addrs {
+		ipn, ok := a.(*net.IPNet)
+		if !ok || ipn.IP.IsLoopback() || ipn.IP.To4() == nil {
+			continue
 		}
-		return "127.0.0.1"
+		cand, err := net.Listen("tcp", ipn.IP.String()+":0")
+		if err != nil {
+			continue
+		}
+		probe, err := net.DialTimeout("tcp", cand.Addr().String(), 500*time.Millisecond)
+		if err != nil {
+			cand.Close()
+			continue
+		}
+		if c, err := cand.Accept(); err == nil {
+			c.Close()
+		}
+		probe.Close()
+		l = cand
+		break
 	}
-	l, err := net.Listen("tcp", nonLoopback()+":0")
+	if l == nil {
+		l, err = net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			return
+		}
+	}
 	if err == nil {
 		defer l.Close()
 		done := make(chan struct{})

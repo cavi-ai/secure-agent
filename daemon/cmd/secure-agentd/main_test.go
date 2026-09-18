@@ -209,7 +209,7 @@ func TestEndToEndSmokeScenario(t *testing.T) {
 	// 2. Open foreign TCP socket. The sampler filters loopback (it is not
 	// egress), so the fixture connection must ride a real interface address —
 	// still on-box, no internet required.
-	l, err := net.Listen("tcp", nonLoopbackAddr(t)+":0")
+	l, err := listenNonLoopback(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -286,10 +286,11 @@ func TestEndToEndSmokeScenario(t *testing.T) {
 	}
 }
 
-// nonLoopbackAddr returns the host's first non-loopback IPv4 so tests can
-// open a connection the egress pipeline actually observes (loopback is
-// filtered by the net sampler). Skips when the machine has no real interface.
-func nonLoopbackAddr(t *testing.T) string {
+// listenNonLoopback finds a non-loopback IPv4 that actually self-connects:
+// interface lists include down links and VPN utuns whose addresses answer
+// nothing. Each candidate is proven with a bounded probe dial; the winning
+// listener is returned ready for the fixture's real connection.
+func listenNonLoopback(t *testing.T) (net.Listener, error) {
 	t.Helper()
 	addrs, err := net.InterfaceAddrs()
 	if err != nil {
@@ -300,10 +301,24 @@ func nonLoopbackAddr(t *testing.T) string {
 		if !ok || ipNet.IP.IsLoopback() || ipNet.IP.To4() == nil {
 			continue
 		}
-		return ipNet.IP.String()
+		ln, err := net.Listen("tcp", ipNet.IP.String()+":0")
+		if err != nil {
+			continue
+		}
+		probe, err := net.DialTimeout("tcp", ln.Addr().String(), 500*time.Millisecond)
+		if err != nil {
+			ln.Close()
+			continue
+		}
+		// Drain the probe so the fixture's own Accept sees a clean queue.
+		if c, err := ln.Accept(); err == nil {
+			c.Close()
+		}
+		probe.Close()
+		return ln, nil
 	}
-	t.Skip("no non-loopback IPv4 interface available")
-	return ""
+	t.Skip("no self-connectable non-loopback IPv4 interface available")
+	return nil, nil
 }
 
 func waitUnix(t *testing.T, path string, d time.Duration, serve <-chan error) {

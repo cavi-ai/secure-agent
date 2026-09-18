@@ -21,6 +21,9 @@ type Snapshot struct {
 	Posture     Posture       `json:"posture"`
 	Suggestions []Suggestion  `json:"suggestions"`
 	Mutes       []MutePair    `json:"mutes"`
+	// Sessions is the durable session spine (live and recently ended) — the
+	// Sessions tab renders from this, not from process-tree guesswork.
+	Sessions []model.Session `json:"sessions"`
 }
 
 type snapshotIncident struct {
@@ -55,6 +58,7 @@ func (a *API) currentSnapshot() Snapshot {
 		Posture:     a.computePosture(),
 		Suggestions: a.suggestionList(),
 		Mutes:       a.mutePairs(),
+		Sessions:    a.store.ListSessions(store.SessionFilter{Limit: 100}),
 	}
 }
 
