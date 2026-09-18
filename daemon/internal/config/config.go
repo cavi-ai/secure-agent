@@ -161,7 +161,7 @@ type ContextConfig struct {
 type WebhookConfig struct {
 	URL    string   `yaml:"url"`
 	Secret string   `yaml:"secret"`
-	Events []string `yaml:"events"` // flag | incident | guard; empty = all
+	Events []string `yaml:"events"` // flag | incident | guard | session | trace; empty = all
 }
 
 // FleetConfig configures downstream fleet-oversight delivery.

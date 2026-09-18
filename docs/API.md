@@ -418,7 +418,7 @@ fleet:
   webhooks:
     - url: https://collector.internal/hooks/secure-agent
       secret: "<shared-secret>"
-      events: [flag, incident, guard]   # empty = all
+      events: [flag, incident, guard]   # empty = all; add session, trace for the sessions view
 ```
 
 Every flag, incident, and guard decision is POSTed as:
@@ -426,6 +426,8 @@ Every flag, incident, and guard decision is POSTed as:
 ```json
 {"node_id": "…", "kind": "flag", "ts": "…", "version": "…", "boot": "…", "seq": 42, "payload": {…}}
 ```
+
+`session` envelopes carry a session upsert/lifecycle change (one per change, not per event) and `trace` envelopes carry one agent-semantic trace event (tool call, model call, turn) — both are opt-in per sink because a busy harness emits traces at a rate that would crowd the security events. Trace delivery is deliberately lossy: the publisher's in-flight cap drops trace overflow before it can starve flag/incident delivery, and the collector's gap detector keeps the loss honest. `GET /fleet/sessions` folds them into the cross-node sessions view.
 
 `boot` identifies one daemon run; `seq` is a per-boot monotonic counter stamped on **every** envelope (heartbeats included). Collectors use them for gap detection: a delivery lost to the backlog cap, collector downtime, or a restart surfaces as a sequence gap with a 90s grace period for retries/reordering — loss is honest, never silent. A new `boot` resets the expectation (a restart is not a gap). Fleet config (`webhooks`, `hostname`, `labels`, `heartbeat_interval_sec`) is **hot-reloadable**: the daemon's config watcher swaps sinks and cadence within one poll cycle.
 
@@ -588,9 +590,10 @@ printf '<node-id>=<secret>\n' > secrets.txt
 
 | Endpoint | Description |
 |---|---|
-| `POST /hooks/secure-agent` | Webhook receiver. Requires `X-SecureAgent-Node` (provisioned) and `X-SecureAgent-Signature` (HMAC over the raw body, constant-time compared). Envelope `node_id` must match the header. Accepted kinds: `flag`, `incident`, `guard`, `status`. |
+| `POST /hooks/secure-agent` | Webhook receiver. Requires `X-SecureAgent-Node` (provisioned) and `X-SecureAgent-Signature` (HMAC over the raw body, constant-time compared). Envelope `node_id` must match the header. Accepted kinds: `flag`, `incident`, `guard`, `status`, `session`, `trace`. |
 | `GET /fleet` | Merged multi-node rollup ordered by operator priority (critical → attention → stale → all-clear → legacy). Per node: `hostname`, `labels`, `version` (tracks the newest report), `last_seen` (liveness), `last_event` (security activity), lifetime counts, **rolling 24h counts** (`flags_24h`, `critical_flags_24h`, `incidents_24h`), guard `allow`/`deny` breakdown, `gaps` (sequence-gap loss count), `boot_id`, and the node's own posture (`posture_state`, `posture_summary`, `needs_you`, `agents`). |
 | `GET /fleet/rules` | Cross-node rule aggregation: `{total_nodes, rules: [{rule, nodes, node_ids, flags_24h, critical_24h}]}` sorted by fleet spread — "is the same thing firing on N/M nodes?" |
+| `GET /fleet/sessions` | Cross-node sessions: every node's latest record per session (`harness`, `workspace`, `repo`, `branch`, `status`, `confidence`, timestamps) with the node's `hostname` and `labels`. Live sessions first, ended ones below — the "who is working where" view. Fed by the opt-in `session`/`trace` envelope kinds. |
 | `GET /nodes/<id>/events?kind=&limit=` | One node's stored envelopes, newest first. |
 | `GET /` | HTML overview: a fleet headline ("2 critical · 1 stale · 12 all-clear"), the rules-across-fleet table, and per-node cards (hostname, posture chip, 24h counts, labels, delivery-gap warnings). Liveness: heartbeat nodes stale >3 min, gone >10 min; legacy event-only nodes >10 / >20 min. |
 | `GET /healthz` | Liveness. |

@@ -86,6 +86,13 @@ type windowEvent struct {
 type nodeRuntime struct {
 	state  *NodeState
 	recent []windowEvent
+	// sessions is the latest record per session id seen from this node — the
+	// cross-node view's per-node slice. Bounded by the node's session count
+	// (small; a busy machine has tens, not thousands).
+	sessions map[string]sessionPayload
+	// lastTrace keeps the most recent trace per session so the cross-node
+	// timeline can show "what is it doing now" without unbounded history.
+	lastTrace map[string]tracePayload
 	// Sequence tracking (per boot): maxSeq is the highest seq seen this boot;
 	// holes are seqs skipped so far (seq → when the hole opened), pending
 	// either a late arrival (retry/reorder) or confirmation as a gap.
@@ -103,6 +110,47 @@ type statusPayload struct {
 	PostureSummary string            `json:"posture_summary"`
 	NeedsYou       int               `json:"needs_you"`
 	Labels         map[string]string `json:"labels"`
+}
+
+// sessionPayload mirrors model.Session on the node side. The collector keeps
+// the latest record per (node, session id) — the cross-node "who is working
+// where" view.
+type sessionPayload struct {
+	ID         string `json:"id"`
+	Harness    string `json:"harness"`
+	Workspace  string `json:"workspace"`
+	Repo       string `json:"repo"`
+	Branch     string `json:"branch"`
+	Status     string `json:"status"`
+	Confidence string `json:"confidence"`
+	RootPID    int    `json:"root_pid"`
+	StartedAt  string `json:"started_at"`
+	EndedAt    string `json:"ended_at"`
+	LastSeenAt string `json:"last_seen_at"`
+}
+
+// FleetSession is one session as the cross-node view shows it: the node it
+// ran on plus its labels (so "env=prod" filters work across machines).
+type FleetSession struct {
+	NodeID   string            `json:"node_id"`
+	Hostname string            `json:"hostname,omitempty"`
+	Labels   map[string]string `json:"labels,omitempty"`
+	sessionPayload
+}
+
+// tracePayload mirrors event.Event's trace fields on the node side — enough
+// to render a cross-node timeline without pulling the raw OS event flood.
+type tracePayload struct {
+	Kind       int     `json:"kind"`
+	TS         string  `json:"ts"`
+	SessionID  string  `json:"session_id"`
+	Tool       string  `json:"tool"`
+	ToolStatus string  `json:"tool_status"`
+	DurationMs int     `json:"duration_ms"`
+	Model      string  `json:"model"`
+	TokensIn   int     `json:"tokens_in"`
+	TokensOut  int     `json:"tokens_out"`
+	CostUSD    float64 `json:"cost_usd"`
 }
 
 // envelopeFile is the on-disk record: the envelope plus the receipt time, so
@@ -207,6 +255,24 @@ func (s *Store) apply(env Envelope, receivedAt string) {
 			st.PostureState = p.PostureState
 			st.PostureSummary = p.PostureSummary
 			st.NeedsYou = p.NeedsYou
+		}
+	case "session":
+		var p sessionPayload
+		if json.Unmarshal(env.Payload, &p) == nil && p.ID != "" {
+			if rt.sessions == nil {
+				rt.sessions = map[string]sessionPayload{}
+			}
+			rt.sessions[p.ID] = p
+		}
+	case "trace":
+		var p tracePayload
+		if json.Unmarshal(env.Payload, &p) == nil && p.SessionID != "" {
+			if rt.lastTrace == nil {
+				rt.lastTrace = map[string]tracePayload{}
+			}
+			// Last write wins; envelopes arrive near-chronologically and the
+			// view only wants the latest state, so no timestamp comparison.
+			rt.lastTrace[p.SessionID] = p
 		}
 	}
 }
@@ -462,6 +528,32 @@ func (s *Store) Rollup() []*NodeState {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.sortNodesSnapshotLocked(time.Now())
+}
+
+// Sessions returns every node's sessions as one cross-node list, newest
+// activity first, with each node's hostname and labels attached so the view
+// can group by env/role without a second lookup. Ended sessions are included
+// (the history survives), but they sort below live ones.
+func (s *Store) Sessions() []FleetSession {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := []FleetSession{}
+	for nodeID, rt := range s.nodes {
+		hostname := rt.state.Hostname
+		labels := rt.state.Labels
+		for _, sess := range rt.sessions {
+			fs := FleetSession{NodeID: nodeID, Hostname: hostname, Labels: labels, sessionPayload: sess}
+			out = append(out, fs)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		li, lj := out[i].Status != "ended", out[j].Status != "ended"
+		if li != lj {
+			return li // live sessions first
+		}
+		return out[i].LastSeenAt > out[j].LastSeenAt
+	})
+	return out
 }
 
 // Query replays one node's envelopes from disk, newest first, optionally

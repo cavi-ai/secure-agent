@@ -192,6 +192,16 @@ func transcriptTailTargets(home, jsonlPath string) []string {
 	return targets
 }
 
+// isTraceKind reports whether an event is an agent-semantic trace record the
+// fleet wire carries (tool calls, turns, model calls) — not the raw OS flood.
+func isTraceKind(k event.Kind) bool {
+	switch k {
+	case event.KindToolCall, event.KindTurn, event.KindModelCall:
+		return true
+	}
+	return false
+}
+
 // startDrainLoop consumes the bus, persisting events and correlating flags →
 // incidents → fleet webhooks. The returned channel closes once every delivered
 // event has been persisted, so shutdown can wait for it instead of dropping
@@ -222,6 +232,13 @@ func startDrainLoop(sub <-chan event.Event, st *store.Store, cr *correlate.Corre
 				deltas.Publish(api.Delta{Type: kind, Data: e})
 			}
 			flags := cr.Observe(e)
+			// Traces cross the fleet wire too (opt-in per sink): a collector
+			// showing cross-node sessions needs the tool/model calls, not just
+			// the security events. Lossy by design — the publisher's in-flight
+			// cap drops trace overflow before it can starve flags.
+			if pub != nil && isTraceKind(e.Kind) {
+				pub.Publish(fleet.EventTrace, e)
+			}
 			for _, fl := range flags {
 				if fl.SessionID == "" {
 					fl.SessionID = e.SessionID

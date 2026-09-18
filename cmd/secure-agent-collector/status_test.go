@@ -208,3 +208,66 @@ func get(t *testing.T, url string) string {
 	buf.ReadFrom(resp.Body)
 	return buf.String()
 }
+
+// The cross-node sessions view keeps the latest session record per node and
+// attaches hostname/labels; live sessions sort above ended ones.
+func TestFleetSessionsRollupAndEndpoint(t *testing.T) {
+	dir := t.TempDir()
+	s := NewStore(dir)
+	mustAppend(t, s, Envelope{NodeID: "n1", Kind: "status",
+		Payload: json.RawMessage(`{"hostname":"builder-01","labels":{"env":"prod"}}`)})
+	mustAppend(t, s, Envelope{NodeID: "n1", Kind: "session",
+		Payload: json.RawMessage(`{"id":"s1","harness":"claude","repo":"api","branch":"main","status":"active","last_seen_at":"2026-09-18T12:00:00Z"}`)})
+	mustAppend(t, s, Envelope{NodeID: "n1", Kind: "session",
+		Payload: json.RawMessage(`{"id":"s2","harness":"codex","status":"ended","last_seen_at":"2026-09-18T13:00:00Z"}`)})
+	// Same session id again: last write wins (status flipped to idle).
+	mustAppend(t, s, Envelope{NodeID: "n1", Kind: "session",
+		Payload: json.RawMessage(`{"id":"s1","harness":"claude","repo":"api","branch":"main","status":"idle","last_seen_at":"2026-09-18T12:30:00Z"}`)})
+
+	got := s.Sessions()
+	if len(got) != 2 {
+		t.Fatalf("sessions = %d, want 2", len(got))
+	}
+	if got[0].ID != "s1" || got[0].Status != "idle" {
+		t.Fatalf("live session not first or not updated: %+v", got[0])
+	}
+	if got[0].NodeID != "n1" || got[0].Hostname != "builder-01" || got[0].Labels["env"] != "prod" {
+		t.Fatalf("node identity missing: %+v", got[0])
+	}
+	if got[1].ID != "s2" || got[1].Status != "ended" {
+		t.Fatalf("ended session = %+v", got[1])
+	}
+
+	// A trace updates the per-session "latest" without adding a session.
+	mustAppend(t, s, Envelope{NodeID: "n1", Kind: "trace",
+		Payload: json.RawMessage(`{"kind":12,"session_id":"s1","tool":"Bash","duration_ms":900}`)})
+	if n := len(s.Sessions()); n != 2 {
+		t.Fatalf("trace must not create a session row, got %d", n)
+	}
+}
+
+func TestFleetSessionsEndpoint(t *testing.T) {
+	dir := t.TempDir()
+	s := NewStore(dir)
+	mustAppend(t, s, Envelope{NodeID: "n1", Kind: "session",
+		Payload: json.RawMessage(`{"id":"s1","harness":"claude","status":"active"}`)})
+	c := &Collector{cfg: Config{StoreDir: dir, Secrets: map[string]string{"n1": "x"}}, store: s}
+	srv := httptest.NewServer(http.HandlerFunc(c.handleFleetSessions))
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	var got []FleetSession
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].ID != "s1" {
+		t.Fatalf("sessions = %+v", got)
+	}
+}
