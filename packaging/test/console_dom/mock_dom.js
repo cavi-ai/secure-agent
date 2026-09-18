@@ -534,6 +534,22 @@
   if (location.search.includes('tabdemo')) {
     setTimeout(() => document.querySelector('[data-tab="egress"]').click(), 4000);
   }
+  // Auto-action: save a view, type a search, then apply the view — exercises
+  // the saved-view + search paths through the real UI.
+  if (location.search.includes('viewdemo')) {
+    setTimeout(() => {
+      document.getElementById('btn-views').click();
+      document.getElementById('view-name').value = 'Prod leaks';
+      document.querySelector('[data-action="save-view"]').click();
+      setTimeout(() => {
+        const s = document.getElementById('global-search');
+        s.value = 'npm';
+        s.dispatchEvent(new Event('input', { bubbles: true }));
+        // Reopen the popover so the saved view is visible in the dump.
+        document.getElementById('views-pop').hidden = false;
+      }, 300);
+    }, 4000);
+  }
   // Auto-action: select a session, open the resource policy editor, and add
   // its workspace as an override through the real delegated click path.
   if (location.search.includes('policydemo')) {
