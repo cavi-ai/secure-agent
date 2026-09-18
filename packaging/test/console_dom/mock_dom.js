@@ -311,6 +311,18 @@
     if (p === '/guard/resolve') {
       data['/guard/pending'] = data['/guard/pending'].filter(prompt => prompt.id !== body.id);
     }
+    if (p === '/advisor/assess-host') {
+      // Cached verdict for a known host; a fresh (unknown) host queues.
+      const out = { status: 'ok', queued: true };
+      if (body.host === 'registry.npmjs.org') {
+        out.verdict = { assessment: 'benign', rationale: 'npm registry is routine for JS projects' };
+      }
+      // Reflect the verdict into the uninspected fixture so the row re-renders
+      // with guidance (the poll path the console uses).
+      const row = data['/egress/uninspected'].find(e => e.host === body.host);
+      if (row && out.verdict) { row.assessment = out.verdict.assessment; row.rationale = out.verdict.rationale; }
+      return out;
+    }
     if (p === '/advisor/retriage') {
       // The model "answers" shortly after the request: the flag's verdict
       // changes, which the pending state must pick up and surface.
@@ -448,6 +460,16 @@
   // Auto-action: open the uninspected-egress drill-down modal.
   if (location.search.includes('uninspecteddemo')) {
     setTimeout(() => window.openUninspected(), 4000);
+  }
+  // Auto-action: open the egress modal, then fire a toast from inside it —
+  // proves the toast renders above the open modal (native <dialog> is in the
+  // browser top layer, which no root-level z-index can paint over). Fires
+  // late so the toast is still on screen when the DOM is dumped.
+  if (location.search.includes('toastdemo')) {
+    setTimeout(() => {
+      window.openUninspected();
+      document.getElementById('btn-refresh').click();
+    }, 9000);
   }
   // Auto-action: open the notification preferences popover.
   if (location.search.includes('notifydemo')) {

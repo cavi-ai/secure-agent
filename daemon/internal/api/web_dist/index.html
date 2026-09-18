@@ -164,6 +164,9 @@
         <svg class="icon"><use href="#i-agent"/></svg><span>Agents</span>
         <span class="tab-badge" id="tab-badge-agents" hidden></span>
       </button>
+      <button class="tab-btn" data-tab="telemetry" role="tab" aria-selected="false" aria-controls="tab-telemetry">
+        <svg class="icon"><use href="#i-activity"/></svg><span>Telemetry</span>
+      </button>
       <button class="tab-btn" data-tab="egress" role="tab" aria-selected="false" aria-controls="tab-egress">
         <svg class="icon"><use href="#i-shield"/></svg><span>Egress</span>
         <span class="tab-badge tab-badge-warn" id="tab-badge-egress" hidden></span>
@@ -175,25 +178,17 @@
     </nav>
 
     <main>
-      <!-- Overview: resource posture, compact sessions, then "is this normal?" trend + live feed -->
+      <!-- Overview: the answer to "is anything wrong, and is this normal?" —
+           posture, one-glance counts, the activity trend, and a compact
+           session strip. Deep per-source detail lives in its own tab; the
+           old single wall (resource control + full timeline + chart) is
+           split so no tab is an undifferentiated scroll. -->
       <div class="tabpanel" id="tab-overview" role="tabpanel">
-        <section class="panel resource-panel" id="resource-mission-control">
-          <div class="panel-head">
-            <h2><svg class="icon"><use href="#i-activity"/></svg>Resource Mission Control</h2>
-            <span class="badge" id="resource-observed">Live</span>
-          </div>
-          <div class="panel-body" id="resource-board">
-            <div class="empty"><svg class="icon"><use href="#i-activity"/></svg><span>Waiting for attributed CPU and memory samples…</span></div>
-          </div>
+        <section class="overview-head">
+          <h2 class="overview-title">Overview</h2>
+          <p class="overview-sub">Posture, counts, and the activity trend. Drill into <b>Sessions</b>, <b>Telemetry</b>, <b>Egress</b>, or <b>Attention</b> for detail.</p>
         </section>
 
-        <section class="panel session-strip-panel" id="session-strip-panel" hidden>
-          <div class="panel-head">
-            <h2><svg class="icon"><use href="#i-agent"/></svg>Sessions</h2>
-            <button type="button" class="btn btn-ghost btn-sm" data-action="goto-tab" data-tab="sessions">View all</button>
-          </div>
-          <div class="panel-body" id="session-strip"></div>
-        </section>
         <section class="panel activity-panel">
           <div class="panel-head">
             <h2><svg class="icon"><use href="#i-activity"/></svg>Activity</h2>
@@ -208,6 +203,33 @@
               <span class="act-key"><span class="act-swatch act-sw-events"></span>events</span>
               <span class="act-key"><span class="act-swatch act-sw-flags"></span>flags</span>
             </div>
+          </div>
+        </section>
+
+        <section class="panel session-strip-panel" id="session-strip-panel" hidden>
+          <div class="panel-head">
+            <h2><svg class="icon"><use href="#i-agent"/></svg>Sessions</h2>
+            <button type="button" class="btn btn-ghost btn-sm" data-action="goto-tab" data-tab="sessions">View all</button>
+          </div>
+          <div class="panel-body" id="session-strip"></div>
+        </section>
+      </div>
+
+      <!-- Telemetry: the per-source detail that used to flood Overview —
+           attributed resource control and the raw event timeline. -->
+      <div class="tabpanel" id="tab-telemetry" role="tabpanel" hidden>
+        <section class="overview-head">
+          <h2 class="overview-title">Telemetry</h2>
+          <p class="overview-sub">Attributed resource use and the raw event feed — the sources behind the Overview summary.</p>
+        </section>
+
+        <section class="panel resource-panel" id="resource-mission-control">
+          <div class="panel-head">
+            <h2><svg class="icon"><use href="#i-activity"/></svg>Resource Mission Control</h2>
+            <span class="badge" id="resource-observed">Live</span>
+          </div>
+          <div class="panel-body" id="resource-board">
+            <div class="empty"><svg class="icon"><use href="#i-activity"/></svg><span>Waiting for attributed CPU and memory samples…</span></div>
           </div>
         </section>
 
@@ -422,7 +444,12 @@
     </div>
   </dialog>
 
-  <div id="toast-container" class="toasts"></div>
+  <!-- Toasts live in a popover so they share the browser's TOP LAYER with any
+       open <dialog>. A root-level element with z-index cannot paint over a
+       native modal (top layer beats all z-index); a popover can, and popovers
+       opened after a dialog order above it. This is why a toast fired from a
+       modal was invisible before. -->
+  <div id="toast-container" class="toasts" popover="manual"></div>
 
   <!-- Off-screen live region: state changes the eye would catch (posture
        escalation, new critical) are announced to screen readers. -->
