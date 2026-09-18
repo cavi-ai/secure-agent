@@ -405,10 +405,21 @@ func TestConsoleAPIPathsCoverWebApp(t *testing.T) {
 	if len(seen) == 0 {
 		t.Fatal("no API paths extracted from web_dist/*.js — is the extraction regex stale?")
 	}
+	// Dynamic route families produce fragments the literal extractor cannot
+	// assemble (e.g. "/sessions/" + id + "/timeline"). Validate the assembled
+	// route directly; everything else must be an exact allow-list key.
+	if !isConsoleAPIPath("/sessions/sess-1/timeline") {
+		t.Error("dynamic /sessions/{id}/timeline route is not console-allowed — the trace panel 407s on the proxy listener")
+	}
+	fragments := map[string]bool{"/timeline": true, "/sessions": true}
 	for p := range seen {
-		if !consoleAPIPaths[p] {
-			t.Errorf("console fetches %s but consoleAPIPaths lacks it — that panel 407s on the proxy listener", p)
+		if consoleAPIPaths[p] {
+			continue
 		}
+		if fragments[p] {
+			continue // part of the dynamic session-timeline route, checked above
+		}
+		t.Errorf("console fetches %s but consoleAPIPaths lacks it — that panel 407s on the proxy listener", p)
 	}
 }
 
@@ -484,5 +495,22 @@ func TestConsoleAPIGate(t *testing.T) {
 	r.Body.Close()
 	if r.StatusCode == http.StatusOK {
 		t.Fatal("/guard/decision must not be served on the console port")
+	}
+}
+
+// The dynamic session-trace route is console-gated: an exact shape is
+// admitted, anything else on the prefix falls through to proxy auth.
+func TestConsoleSessionTimelinePathGate(t *testing.T) {
+	if !isConsoleAPIPath("/sessions/sess-1/timeline") {
+		t.Fatal("the session timeline route must be console-allowed")
+	}
+	if isConsoleAPIPath("/sessions/sess-1") {
+		t.Fatal("bare session id is not a console API path")
+	}
+	if isConsoleAPIPath("/sessions/../secrets") {
+		t.Fatal("path traversal must not be admitted")
+	}
+	if isConsoleAPIPath("/sessions//timeline") {
+		t.Fatal("empty session id must not be admitted")
 	}
 }

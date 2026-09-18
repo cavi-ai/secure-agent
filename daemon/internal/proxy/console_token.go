@@ -112,6 +112,21 @@ var consoleAPIPaths = map[string]bool{
 	"/notify/rules":                 true,
 	"/advisor/retriage":             true,
 	"/ui/open-fda":                  true,
+	// Dynamic route family: /sessions/{id}/timeline (per-session trace).
+	"/sessions/": true,
 }
 
-func isConsoleAPIPath(p string) bool { return consoleAPIPaths[p] }
+// isConsoleAPIPath matches the exact allow-list plus the dynamic session
+// trace prefix. Only the exact known shape is admitted — anything else on
+// this listener still hits the proxy-token challenge.
+func isConsoleAPIPath(p string) bool {
+	if consoleAPIPaths[p] {
+		return true
+	}
+	if strings.HasPrefix(p, "/sessions/") {
+		rest := strings.TrimPrefix(p, "/sessions/")
+		parts := strings.SplitN(rest, "/", 2)
+		return len(parts) == 2 && parts[0] != "" && parts[1] == "timeline"
+	}
+	return false
+}
