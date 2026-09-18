@@ -48,6 +48,27 @@ func (a *API) handlePosture(w http.ResponseWriter, r *http.Request) {
 // fleet heartbeat loop).
 func (a *API) CurrentPosture() Posture { return a.computePosture() }
 
+// PublishPostureIfChanged recomputes the headline and pushes a posture delta
+// only when it actually changed — the drain loop calls this after
+// flag/incident/guard changes; per-event calls would recompute on socket
+// churn, so dedupe happens here, not there.
+func (a *API) PublishPostureIfChanged() {
+	if a.deltaHub == nil {
+		return
+	}
+	p := a.computePosture()
+	a.lastPostureMu.Lock()
+	changed := p.State != a.lastPostureState || p.NeedsYou != a.lastPostureCount
+	if changed {
+		a.lastPostureState = p.State
+		a.lastPostureCount = p.NeedsYou
+	}
+	a.lastPostureMu.Unlock()
+	if changed {
+		a.deltaHub.Publish(Delta{Type: "posture", Data: p})
+	}
+}
+
 // computePosture derives the operator headline from live status + stores.
 // Deliberately derived, not persisted: posture is a view over state, never a
 // second source of truth.

@@ -1012,10 +1012,11 @@ func (s *Store) FindOpenIncident(rule, sessionID, subject string) (string, bool)
 
 // AggregateIntoIncident folds another flag into an existing incident: bumps
 // the count, records the flag id as evidence, refreshes last_flag_at, and
-// patches the served report_json so the UI reads current numbers.
-func (s *Store) AggregateIntoIncident(id, flagID string, ts time.Time) {
+// patches the served report_json so the UI reads current numbers. Returns
+// the updated report (for the incident delta) — false when the row is gone.
+func (s *Store) AggregateIntoIncident(id, flagID string, ts time.Time) (model.IncidentReport, bool) {
 	if id == "" || flagID == "" {
-		return
+		return model.IncidentReport{}, false
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1025,7 +1026,7 @@ func (s *Store) AggregateIntoIncident(id, flagID string, ts time.Time) {
 	err := s.db.QueryRow(`SELECT report_json, COALESCE(flag_ids,'[]'), COALESCE(aggregate_count,1) FROM incidents WHERE id = ?`, id).
 		Scan(&reportJSON, &flagIDsRaw, &count)
 	if err != nil {
-		return
+		return model.IncidentReport{}, false
 	}
 	var flagIDs []string
 	_ = json.Unmarshal([]byte(flagIDsRaw), &flagIDs)
@@ -1045,6 +1046,7 @@ func (s *Store) AggregateIntoIncident(id, flagID string, ts time.Time) {
 	idsJSON, _ := json.Marshal(flagIDs)
 	_, _ = s.db.Exec(`UPDATE incidents SET aggregate_count = ?, last_flag_at = ?, flag_ids = ?, report_json = ? WHERE id = ?`,
 		count, tsStr, string(idsJSON), reportJSON, id)
+	return inc, true
 }
 
 func (s *Store) RecentIncidents(limit int) []model.IncidentReport {
