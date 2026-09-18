@@ -1,43 +1,24 @@
 import SwiftUI
 
-/// App palette, shared by every surface (popover, sheets, settings). Kept in
-/// one place so a tint tweak doesn't need five edits. Both Color and
-/// ShapeStyle surfaces are covered so `.brand` works in either inference
-/// position (foregroundStyle/tint/foregroundStyle(Color)).
-extension Color {
-    static let brand = Color(.sRGB, red: 0.52, green: 0.44, blue: 0.97, opacity: 1)
-    static let ok = Color(.sRGB, red: 0.30, green: 0.80, blue: 0.55, opacity: 1)
-    static let warn = Color(.sRGB, red: 0.96, green: 0.62, blue: 0.20, opacity: 1)
-    static let bad = Color(.sRGB, red: 0.92, green: 0.35, blue: 0.45, opacity: 1)
-    /// The dim-but-visible text tier between .tertiary and .secondary.
-    static let tertiaryText = Color(white: 0.62)
-}
-
-extension ShapeStyle where Self == Color {
-    static var brand: Color { .brand }
-    static var ok: Color { .ok }
-    static var warn: Color { .warn }
-    static var bad: Color { .bad }
-}
-
-extension FlagModel {
-    /// Whether this flag's activity happened within the last minute — the
-    /// row's "hot" styling cue (pulsing red vs. settled grey).
-    var tsRecent: Bool {
-        guard let t = EventTime.parse(ts) else { return false }
-        return Date().timeIntervalSince(t) < 60
-    }
-}
-
-/// The menu-bar popover: a compact, premium mini-console. Deep views (full
-/// history, incident reports, rotation) live in the web console via "Open console".
-@MainActor
+/// The menu-bar popover: glance and act, nothing more. 340pt wide.
+///
+/// The console is the product; this surface answers "are my agents okay, and
+/// does anything need me right now" and gets out of the way. Drill-downs
+/// (agent sort, family trees, subagent nesting, flag/incident/process sheets)
+/// live in the web console — a 340×420 popover doing a work surface's job was
+/// the audited complexity. What stays: the posture hero, any collector/error
+/// banner, the pending guard decision inline, up to three session cards with
+/// a live heartbeat, and the one button that opens the console.
 struct ConsoleView: View {
     @ObservedObject var state: AppState
     @ObservedObject private var supervisor = DaemonSupervisor.shared
-    /// Preview/snapshot renderers don't lay out ScrollView content; set false to
-    /// render the sections in a plain stack for snapshots.
+    /// Preview/snapshot renderers don't lay out ScrollView content; set false
+    /// to render the sections in a plain stack for snapshots.
     var scrollable: Bool = true
+
+    /// How many session cards the glance shows. Three is enough to answer
+    /// "what is running" without becoming a list.
+    private let maxSessionCards = 3
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -54,9 +35,37 @@ struct ConsoleView: View {
         .frame(width: 340)
     }
 
-    /// A collector the supervisor gave up on (e.g. eslogger without FDA) is
-    /// the honest "why are transcripts thin / is this even monitoring"
-    /// answer — silence otherwise reads as working.
+    // MARK: sections
+
+    private var sections: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            if let err = state.lastError { banner(err, icon: "exclamationmark.triangle.fill", tint: .warn) }
+            if let notice = state.advisorNotice { advisorNoticeBanner(notice) }
+            if let abandoned = state.abandonedCollectors, !abandoned.isEmpty {
+                collectorBanner(abandoned)
+            }
+            hero
+            if let pending = state.pendingGuard { guardDecisionCard(pending) }
+            if !state.agentRoots.isEmpty { sessionCards }
+        }
+    }
+
+    /// A shared banner row: icon, message, optional action.
+    private func banner(_ message: String, icon: String, tint: Color) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: icon).font(.system(size: 11)).foregroundStyle(tint)
+            Text(message).font(.system(size: 11)).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(tint.opacity(0.10))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    /// A collector the supervisor gave up on is the honest "why are
+    /// transcripts thin / is this even monitoring" answer — silence otherwise
+    /// reads as working.
     private func collectorBanner(_ collectors: [HealthModel]) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             ForEach(collectors) { h in
@@ -93,21 +102,6 @@ struct ConsoleView: View {
         return "Restart the app after granting Full Disk Access to retry."
     }
 
-    private var sections: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            if let err = state.lastError { errorBanner(err) }
-            if let notice = state.advisorNotice { advisorNoticeBanner(notice) }
-            if let abandoned = state.abandonedCollectors, !abandoned.isEmpty {
-                collectorBanner(abandoned)
-            }
-            hero
-            // Functional order: 1) needs-a-decision (incidents/criticals),
-            // 2) what's running, 3) what's enforcing (quiet by design).
-            if !attentionIsEmpty { attentionSection }
-            if !state.agentRoots.isEmpty { agentsSection }
-        }
-    }
-
     /// Advisor lifecycle feedback ("verdict updated", "advisor offline") —
     /// dismissable, auto-clears so it doesn't become its own noise source.
     private func advisorNoticeBanner(_ notice: String) -> some View {
@@ -136,19 +130,18 @@ struct ConsoleView: View {
     // MARK: hero
 
     /// The one-glance answer, mirroring the web console's posture banner:
-    /// Protected / Attention / Action needed (+ Disconnected). Everything
-    /// below the hero is drill-down; the hero is what most opens should need.
-    /// The hero IS the action when action is needed: subtitle says what to
-    /// do (the advisor's recommendation or the top flag), tapping it opens
-    /// that flag's action sheet. Prose-first: "cursor read a key file and
-    /// connected out — allow or rotate", not "1 incident · 2 critical flags".
+    /// Protected / Attention / Action needed (+ Disconnected). The hero IS the
+    /// action when action is needed: tapping it opens the top flag's sheet in
+    /// the console, or the egress drill-down for uninspected egress.
     private var hero: some View {
         let m = heroModel
         let actionable = m.action != nil
         return Button {
             switch m.action {
-            case .flag(let target):
-                selectedFlag = target
+            case .flag:
+                // Per-flag deep-links aren't part of the console URL protocol
+                // yet; open its home tab where the row is first in the list.
+                state.openDashboard(tab: "findings")
             case .openConsole(let tab):
                 state.openDashboard(tab: tab)
             case nil:
@@ -198,8 +191,6 @@ struct ConsoleView: View {
         let criticalFlags = state.flags.filter { $0.severity >= 3 && $0.acknowledged != true }.count
         if !state.incidents.isEmpty || criticalFlags > 0 {
             // Prose-first: name what happened + what to do, not counts.
-            // The top critical flag (advisor-ordered when triaged) IS the
-            // action; the hero subtitle says it in one sentence.
             let top = state.flags.first { $0.severity >= 3 && $0.acknowledged != true }
                 ?? state.incidents.first.map { inc in
                     FlagModel(id: inc.flagId, rule: inc.rule, severity: 3, ts: inc.timestamp,
@@ -225,17 +216,17 @@ struct ConsoleView: View {
                 }
                 let advice: String
                 switch top.advisor?.suggestedAction {
-                case "allow-host": advice = "tap to allow the host"
-                case "mute-rule": advice = "tap to dismiss this flag class"
-                case "rotate-credentials": advice = "tap to rotate the credential"
-                case "kill-agent": advice = "tap to stop the agent"
-                default: advice = "tap to review"
+                case "allow-host": advice = "review it in the console"
+                case "mute-rule": advice = "dismiss the class in the console"
+                case "rotate-credentials": advice = "rotate the credential"
+                case "kill-agent": advice = "stop the agent"
+                default: advice = "review it in the console"
                 }
                 return ("exclamationmark.shield.fill", .bad, "Action needed",
                         "\(what) — \(advice).", .flag(top))
             }
             return ("exclamationmark.shield.fill", .bad, "Action needed",
-                    "Review the flagged activity.", nil)
+                    "Review the flagged activity in the console.", nil)
         }
         // Unacted only: a flag the operator already reviewed/dismissed must
         // not keep demanding attention in the hero (the "20 flags to review"
@@ -247,9 +238,8 @@ struct ConsoleView: View {
             if state.firewallWouldBlock > 0 { parts.append("\(state.firewallWouldBlock) would-block") }
             if state.uninspectedEgress > 0 { parts.append("\(state.uninspectedEgress) uninspected") }
             // Every count in the subtitle is clickable: flags open the top
-            // one's action sheet; uninspected/would-block open the egress
-            // drill-down in the console. "If I can't click it I don't wanna
-            // see it."
+            // one's sheet in the console; uninspected/would-block open the
+            // egress drill-down. "If I can't click it I don't wanna see it."
             let action: AppState.HeroAction?
             if let topWarn = state.unactedFlags.first {
                 action = .flag(topWarn)
@@ -267,197 +257,115 @@ struct ConsoleView: View {
         return ("checkmark.shield.fill", .ok, "Protected", sub, nil)
     }
 
-    // MARK: incidents
+    // MARK: guard decision (inline consent)
 
-    /// Open incidents with their remediation checklists — the daemon already
-    /// generates these reports; this surfaces them where the user actually
-    /// looks instead of only in the web console.
-    private var attentionIsEmpty: Bool {
-        state.unactedFlagsForSession(rootPid: selectedSessionRoot).isEmpty
-            && scopedOpenIncidents.isEmpty
-    }
-
-    private var scopedOpenIncidents: [IncidentReportModel] {
-        let pids = selectedSessionRoot.map { state.treePIDs(rootPid: $0) }
-        return state.incidents.filter { inc in
-            if let pids, !pids.contains(inc.pid) { return false }
-            guard let flag = state.flags.first(where: { $0.id == inc.flagId }) else { return true }
-            return flag.acknowledged != true && inc.workflow?.status != "resolved"
-        }
-    }
-
-    /// One "needs attention" section: incidents with remediation sheets, then
-    /// flags without an incident (action sheets). The same underlying problem
-    /// never appears twice — if it has an incident, it's an incident row.
-    private var attentionSection: some View {
+    /// The pending guard decision, inline. The native NSAlert remains the
+    /// always-on path (it fires even with the popover closed); when the
+    /// operator has the popover open, this lets them decide without waiting on
+    /// a modal. Return key is not bound here — denying stays the deliberate act.
+    private func guardDecisionCard(_ p: GuardPending) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            let groups = state.groupedUnactedFlags(forRootPid: selectedSessionRoot)
-            let openIncidents = scopedOpenIncidents
-            // One row per group: a group whose flags carry incidents opens the
-            // NEWEST incident (remediation) on tap — the incident never renders
-            // as its own duplicate row.
-            let rows = attentionRows(groups: groups, openIncidents: openIncidents)
-            // Incidents with no matching flag group render standalone.
-            let groupedFlagIds = Set(groups.flatMap { $0.flags.map(\.id) })
-            let standaloneIncidents = openIncidents.filter { !groupedFlagIds.contains($0.flagId) }
-            let total = rows.count + standaloneIncidents.count
-            sectionHeader("Needs attention", trailing: selectedSessionRoot == nil ? "\(total)" : "\(total) in session")
-            ForEach(rows.prefix(4)) { row in
-                flagGroupRow(row.group, asIncident: row.incident)
-            }
-            ForEach(standaloneIncidents.prefix(3)) { inc in
-                incidentRow(inc)
-            }
-        }
-        .sheet(item: $selectedIncident) { inc in
-            IncidentDetailView(incident: inc, state: state)
-        }
-        .sheet(item: $selectedFlag) { flag in
-            FlagActionSheet(flag: flag, state: state)
-        }
-        .confirmationDialog(
-            "Dismiss this flag class?",
-            isPresented: Binding(get: { confirmIgnoreGroup != nil }, set: { if !$0 { confirmIgnoreGroup = nil } }),
-            titleVisibility: .visible
-        ) {
-            Button("Dismiss", role: .destructive) {
-                if let g = confirmIgnoreGroup { Task { await ignoreFlagGroup(g) } }
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("Stop flagging \(Self.flagRowTitle(confirmIgnoreGroup?.rule ?? "")) for \(confirmIgnoreGroup?.agent ?? "") in this context. Existing rows clear; monitoring continues.")
-        }
-    }
-
-    /// Ignore-class on a group: mute (rule, host) + acknowledge every flag
-    /// in the group. One gesture, the whole pattern goes quiet. Hostless
-    /// rules (keychain file/exec evidence has no connection target) fall
-    /// back to the rule-level disposition (host "*") — the old guard just
-    /// errored out, leaving keychain rows with "no resolution possible".
-    private func ignoreFlagGroup(_ group: AppState.FlagGroup) async {
-        let host = FlagActionSheet.muteHost(evidence: group.newest.evidence)
-        do {
-            try await state.uiClient.muteAdd(rule: group.rule, host: host)
-            for f in group.flags {
-                try? await state.uiClient.acknowledgeFlag(id: f.id)
-            }
-            state.refresh()
-        } catch {
-            state.reportLocalError("dismiss failed: \(error.localizedDescription)")
-        }
-    }
-
-    private func incidentRow(_ inc: IncidentReportModel) -> some View {
-        Button { selectedIncident = inc } label: {
-            HStack(spacing: 7) {
-                Image(systemName: "cross.case.fill")
-                    .font(.system(size: 11)).foregroundStyle(Color.bad)
-                AgentIdentity.tile(inc.agent, size: 14, fontSize: 8)
-                Text(Self.incidentRowTitle(inc.rule))
-                    .font(.system(size: 11, weight: .medium))
-                    .lineLimit(1)
-                Spacer()
-                if let t = relativeTime(inc.timestamp) {
-                    Text(t)
-                        .font(.system(size: 9, weight: .medium, design: .monospaced))
-                        .foregroundStyle(.tertiary)
-                }
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 7, weight: .semibold)).foregroundStyle(.quaternary)
-            }
-        }
-        .buttonStyle(.plain)
-        .help("\(Self.incidentRowTitle(inc.rule)) — \(inc.agent) · open the incident report")
-    }
-
-    /// One row per flag GROUP: "touched your keychain ×20 · codex · 2d".
-    /// The count badge makes repeats honest; the whole row opens the sheet
-    /// (which acts on the newest), with an inline ignore-class shortcut.
-    /// One row per flag GROUP. When the group's flags carry an incident, the
-    /// row opens the NEWEST incident (remediation) instead of the flag sheet —
-    /// one row, one destination, never a duplicate.
-    private func flagGroupRow(_ group: AppState.FlagGroup, asIncident: IncidentReportModel?) -> some View {
-        let newest = group.newest
-        let seen = relativeTime(group.newest.ts)
-        return HStack(alignment: .top, spacing: 8) {
-            Image(systemName: newest.severity >= 3 ? "exclamationmark.octagon.fill" : "exclamationmark.triangle.fill")
-                .font(.system(size: 12)).foregroundStyle(newest.severity >= 3 ? Color.bad : Color.warn)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(Self.flagRowTitle(group.rule))
-                    .font(.system(size: 11, weight: .medium))
-                HStack(spacing: 5) {
-                    AgentIdentity.tile(group.agent, size: 13, fontSize: 7)
-                    Text(group.agent).font(.system(size: 9, weight: .medium)).foregroundStyle(.secondary)
-                    if group.count > 1 {
-                        Text("×\(group.count)")
-                            .font(.system(size: 9, weight: .bold, design: .rounded))
-                            .foregroundStyle(Color.bad)
-                            .help("\(group.count) identical fires of this pattern")
-                    }
-                    if let seen {
-                        Text(seen)
-                            .font(.system(size: 9, weight: seen.hasSuffix("s") ? .semibold : .regular, design: .monospaced))
-                            .foregroundStyle(seen.hasSuffix("s") ? Color.bad : Color.tertiaryText)
-                    }
+            HStack(spacing: 8) {
+                Image(systemName: "hand.raised.fill")
+                    .font(.system(size: 12)).foregroundStyle(Color.warn)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(Self.guardPromptHeadline(p))
+                        .font(.system(size: 11, weight: .semibold))
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(Self.guardPromptDetail(p))
+                        .font(.system(size: 10)).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
-            Spacer()
-            Button { confirmIgnoreGroup = group } label: {
-                Image(systemName: "eye.slash")
-                    .font(.system(size: 10)).foregroundStyle(.secondary)
-                    .padding(4)
-                    .background(Color.primary.opacity(0.04))
-                    .clipShape(Capsule())
+            if let scope = p.scopeText, !scope.isEmpty {
+                Text("⚠️ \(scope)")
+                    .font(.system(size: 10)).foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            .buttonStyle(.plain)
-            .help("Dismiss this flag class (rule + host) — stops future fires and clears these rows")
-            Image(systemName: "chevron.right")
-                .font(.system(size: 7, weight: .semibold)).foregroundStyle(.quaternary)
-        }
-        .opacity(newest.acknowledged == true ? 0.45 : 1.0)
-        .contentShape(Rectangle())
-        .onTapGesture {
-            if let asIncident {
-                selectedIncident = asIncident
-            } else {
-                selectedFlag = newest
+            HStack(spacing: 6) {
+                Button { Task { await state.resolvePendingGuard(verdict: "allow", scope: "once") } } label: {
+                    Text("Allow Once").font(.system(size: 11, weight: .semibold))
+                }.buttonStyle(.bordered).controlSize(.small).tint(.brand)
+                Button { Task { await state.resolvePendingGuard(verdict: "allow", scope: "always") } } label: {
+                    Text("Allow Always").font(.system(size: 11))
+                }.buttonStyle(.bordered).controlSize(.small)
+                Button { Task { await state.resolvePendingGuard(verdict: "deny", scope: "always") } } label: {
+                    Text("Deny").font(.system(size: 11, weight: .semibold))
+                }.buttonStyle(.borderedProminent).controlSize(.small).tint(.bad)
             }
-        }
-    }
-
-    @State private var confirmIgnoreGroup: AppState.FlagGroup?
-
-    @State private var selectedIncident: IncidentReportModel?
-
-    /// Row language for incidents: human title, not the raw rule id.
-    static func incidentRowTitle(_ rule: String) -> String {
-        switch rule {
-        case "sensitive-read-then-connect": return "Read a secret, then connected out"
-        case "proxy-secret-leak": return "Secret left in agent traffic"
-        case "keychain-access": return "Touched your keychain"
-        case "keychain-security-cli": return "Ran the keychain tool"
-        case "tcc-tamper": return "Modified privacy permissions"
-        case "proxy-prompt-injection": return "Prompt injection in a response"
-        default: return rule
-        }
-    }
-
-    // MARK: error surfacing
-
-    /// Daemon problems are visible, not just a grey dot: transport failures,
-    /// decode mismatches, refused kills, and dropped guard decisions all land
-    /// here instead of vanishing into a disconnected state.
-    private func errorBanner(_ message: String) -> some View {
-        HStack(alignment: .top, spacing: 8) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 11)).foregroundStyle(Color.warn)
-            Text(message).font(.system(size: 11)).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
         }
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.warn.opacity(0.10))
         .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    // MARK: session cards
+
+    /// Up to three sessions with a live heartbeat. The full board, sorts and
+    /// trees live in the console.
+    private var sessionCards: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            sectionHeader("Sessions", trailing: "\(state.activeAgentCount)")
+            let rows = state.sessionBoardRows(sortedBy: .lastActivity)
+            ForEach(rows.prefix(maxSessionCards)) { row in
+                sessionCard(row)
+            }
+            if rows.count > maxSessionCards {
+                Button { state.openDashboard(tab: "sessions") } label: {
+                    Text("+ \(rows.count - maxSessionCards) more — open the console")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    /// One session card: harness glyph, project@branch-ish label, elapsed,
+    /// memory, a heartbeat that actually moves, and terminate. Tapping opens
+    /// the session's trace in the console.
+    private func sessionCard(_ row: AppState.AgentRow) -> some View {
+        let agent = row.agent
+        let rss = row.familyRSSBytes.flatMap(ByteCount.short)
+        let seen = relativeTime(row.familyLastSeenAt ?? agent.lastSeenAt ?? "")
+        let working = seen?.hasSuffix("s") ?? false
+        return HStack(spacing: 8) {
+            AgentIdentity.tile(agent.name, size: 18, fontSize: 9)
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(spacing: 5) {
+                    Text(agent.cwdLeaf)
+                        .font(.system(size: 12, weight: .semibold))
+                        .lineLimit(1).truncationMode(.middle)
+                    HeartbeatDot(active: working)
+                }
+                HStack(spacing: 6) {
+                    Text(agent.name).font(.system(size: 9)).foregroundStyle(.secondary)
+                    if let seen { Text(seen).font(.system(size: 9, design: .monospaced)).foregroundStyle(working ? Color.ok : Color.tertiaryText) }
+                    if let rss { Text(rss).font(.system(size: 9, design: .monospaced)).foregroundStyle(.tertiary) }
+                    if agent.isOrphanLike {
+                        Image(systemName: "questionmark.square").font(.system(size: 8)).foregroundStyle(Color.warn)
+                            .help("parent already exited")
+                    }
+                }
+            }
+            Spacer(minLength: 0)
+            Button { state.kill(pid: agent.pid) } label: {
+                Image(systemName: "power")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(Color.bad)
+                    .padding(4)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Terminate this session's process tree")
+        }
+        .padding(8)
+        .background(Color.primary.opacity(0.03))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .contentShape(Rectangle())
+        .onTapGesture { state.openDashboard(tab: "sessions") }
     }
 
     // MARK: header
@@ -479,8 +387,6 @@ struct ConsoleView: View {
                 }
             }
             Spacer()
-            // Dead space before — now the glanceable resource answer:
-            // what agents cost, and how wide the monitoring net is.
             if state.connected {
                 VStack(alignment: .trailing, spacing: 3) {
                     if let host = state.resources?.host,
@@ -495,338 +401,10 @@ struct ConsoleView: View {
                             .font(.system(size: 10, weight: .semibold, design: .rounded))
                             .help("Total resident memory across all agent processes")
                     }
-                    Label("\(state.trackedProcessCount)", systemImage: "cpu")
-                        .font(.system(size: 10, weight: .medium, design: .rounded))
-                        .foregroundStyle(.secondary)
-                        .help("\(state.trackedProcessCount) processes · \(state.activeAgentCount) sessions")
                 }
             }
         }
         .padding(.horizontal, 14).padding(.vertical, 11)
-    }
-
-    // MARK: agents
-
-    @State private var agentSort: AppState.AgentSort = .lastActivity
-    @State private var selectedProcess: AgentSummaryModel?
-    @State private var selectedSessionRoot: Int32?
-
-    private var agentsSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            sectionHeader("Sessions", trailing: "\(state.sessionBoardRows(sortedBy: agentSort).count)")
-
-            Picker("", selection: $agentSort) {
-                ForEach(AppState.AgentSort.allCases, id: \.self) { s in
-                    Text(s.label).tag(s)
-                }
-            }
-            .pickerStyle(.segmented)
-            .controlSize(.mini)
-            .labelsHidden()
-
-            if state.agentRoots.isEmpty {
-                Text("No agents running — start one and it appears here")
-                    .font(.system(size: 11)).foregroundStyle(.tertiary)
-                    .fixedSize(horizontal: false, vertical: true)
-            } else {
-                // Harness-grouped, not a flat 50-row list: families ordered by
-                // their best row in the active sort, sessions nested beneath.
-                let families = state.sessionBoardFamilies(sortedBy: agentSort)
-                ForEach(families.prefix(6)) { fam in
-                    familyGroup(fam)
-                }
-                if families.count > 6 {
-                    Button { state.openDashboard(tab: "sessions") } label: {
-                        Text("+ \(families.count - 6) more — open the console")
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundStyle(.secondary)
-                            .padding(.vertical, 2)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-        }
-        .sheet(item: $selectedProcess) { proc in
-            ProcessDetailSheet(agent: proc, state: state)
-        }
-    }
-
-    /// Family expansion: small families (≤3 sessions) start open, big ones
-    /// start collapsed; a tap toggles the override for that family.
-    @State private var familyToggled: Set<String> = []
-
-    private func familyGroup(_ fam: AppState.SessionFamily) -> some View {
-        let open = (fam.rows.count <= 3) != familyToggled.contains(fam.id)
-        return VStack(alignment: .leading, spacing: 3) {
-            Button {
-                if familyToggled.contains(fam.id) {
-                    familyToggled.remove(fam.id)
-                } else {
-                    familyToggled.insert(fam.id)
-                }
-            } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: open ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 7, weight: .bold)).foregroundStyle(.secondary)
-                        .frame(width: 10, height: 14)
-                    AgentIdentity.tile(fam.name, size: 14, fontSize: 8)
-                    Text(fam.name)
-                        .font(.system(size: 11, weight: .semibold))
-                    Text("\(fam.rows.count) session\(fam.rows.count == 1 ? "" : "s")")
-                        .font(.system(size: 9)).foregroundStyle(.tertiary)
-                    if let rss = fam.totalRSSBytes, let mem = ByteCount.short(rss) {
-                        Text(mem)
-                            .font(.system(size: 9, design: .monospaced)).foregroundStyle(.tertiary)
-                    }
-                    if let seen = relativeTime(fam.lastSeenAt ?? "") {
-                        Text(seen)
-                            .font(.system(size: 9, weight: seen.hasSuffix("s") ? .semibold : .regular, design: .monospaced))
-                            .foregroundStyle(seen.hasSuffix("s") ? Color.ok : Color(white: 0.6, opacity: 1))
-                    }
-                    Spacer(minLength: 0)
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            if open {
-                ForEach(fam.rows) { row in
-                    sessionView(row.agent, children: children(of: row.agent), insideGroup: true)
-                }
-            }
-        }
-    }
-
-    private func children(of root: AgentSummaryModel) -> [AgentSummaryModel] {
-        state.childAgents.filter { $0.rootPid == root.pid }
-    }
-
-    /// Level 2: one session (tree root) — expandable when it has subagents.
-    /// Level 3 renders nested beneath it when expanded.
-    @State private var expandedSessions: Set<String> = []
-
-    private func sessionView(_ root: AgentSummaryModel, children: [AgentSummaryModel], insideGroup: Bool) -> some View {
-        let open = expandedSessions.contains(root.id)
-        let rssParts = ([root] + children).compactMap(\.rssBytes)
-        let mem = rssParts.isEmpty ? nil : ByteCount.short(rssParts.reduce(0, +))
-        let cpuParts = ([root] + children).compactMap(\.cpuPercent)
-        let cpu = cpuParts.isEmpty ? nil : cpuParts.reduce(0, +)
-        let seen = relativeTime(([root] + children).compactMap(\.lastSeenAt).max() ?? "")
-        let flagN = state.unactedFlagsForSession(rootPid: root.pid).count
-        return VStack(alignment: .leading, spacing: 3) {
-            HStack(spacing: 6) {
-                Group {
-                    if !children.isEmpty {
-                        Button {
-                            toggleSession(root.id)
-                        } label: {
-                            Image(systemName: expandedSessions.contains(root.id) ? "chevron.down" : "chevron.right")
-                                .font(.system(size: 7, weight: .bold)).foregroundStyle(.secondary)
-                                .frame(width: 10, height: 14)
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                    } else {
-                        Color.clear.frame(width: 10, height: 10)
-                    }
-                }
-                AgentIdentity.tile(root.name, size: 14, fontSize: 8)
-                Button {
-                    if selectedSessionRoot == root.pid {
-                        selectedSessionRoot = nil
-                    } else {
-                        selectedSessionRoot = root.pid
-                    }
-                    selectedProcess = root
-                } label: {
-                    HStack(spacing: 5) {
-                        Text(root.cwdLeaf)
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(.primary)
-                            .lineLimit(1).truncationMode(.middle)
-                            .help(root.cwd ?? root.name)
-                        Text("PID \(root.pid)")
-                            .font(.system(size: 9, design: .monospaced)).foregroundStyle(.tertiary)
-                        if !children.isEmpty {
-                            Text("+\(children.count)")
-                                .font(.system(size: 8, weight: .semibold)).foregroundStyle(.tertiary)
-                        }
-                        if let mem {
-                            Text(mem)
-                                .font(.system(size: 9, design: .monospaced)).foregroundStyle(.tertiary)
-                        }
-                        if let cpu {
-                            Text(String(format: "%.0f%%", cpu))
-                                .font(.system(size: 9, design: .monospaced))
-                                .foregroundStyle(cpu >= 100 ? Color.warn : Color.secondary)
-                                .help("CPU across this session's process family")
-                        }
-                        if let seen {
-                            Text(seen)
-                                .font(.system(size: 9, weight: seen.hasSuffix("s") ? .semibold : .regular, design: .monospaced))
-                                .foregroundStyle(seen.hasSuffix("s") ? Color.ok : Color(white: 0.6, opacity: 1))
-                        }
-                    }
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                Spacer(minLength: 0)
-                if flagN > 0 {
-                    Text("\(flagN)")
-                        .font(.system(size: 8, weight: .bold, design: .rounded))
-                        .foregroundStyle(Color.bad)
-                        .help("\(flagN) unacted flag\(flagN == 1 ? "" : "s") in this session")
-                }
-                Button {
-                    state.kill(pid: root.pid)
-                } label: {
-                    Image(systemName: "power")
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(Color.bad)
-                        .padding(4)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .help("Terminate this session's process tree")
-            }
-            .padding(.leading, insideGroup ? 12 : 0)
-            .padding(.vertical, 2)
-            .background(selectedSessionRoot == root.pid ? Color.brand.opacity(0.10) : Color.clear)
-            .clipShape(RoundedRectangle(cornerRadius: 6))
-
-            if open && !children.isEmpty {
-                ForEach(children, id: \.id) { child in
-                    subagentRow(child)
-                }
-            }
-        }
-    }
-
-    private func toggleSession(_ id: String) {
-        if expandedSessions.contains(id) {
-            expandedSessions.remove(id)
-        } else {
-            expandedSessions.insert(id)
-        }
-    }
-
-    /// Level 3: a subagent, nested under its session with a tree elbow.
-    private func subagentRow(_ child: AgentSummaryModel) -> some View {
-        Button { selectedProcess = child } label: {
-            HStack(spacing: 6) {
-                Image(systemName: "arrow.turn.down.right")
-                    .font(.system(size: 7)).foregroundStyle(.quaternary)
-                    .padding(.leading, 34)
-                AgentIdentity.tile(child.name, size: 13, fontSize: 7)
-                Text(child.name)
-                    .font(.system(size: 10, weight: .regular))
-                    .foregroundStyle(.primary)
-                Text("PID \(child.pid)")
-                    .font(.system(size: 8, design: .monospaced)).foregroundStyle(.tertiary)
-                if child.isOrphanLike {
-                    Image(systemName: "questionmark.square")
-                        .font(.system(size: 7)).foregroundStyle(Color.warn)
-                        .help("parent already exited")
-                }
-                Spacer()
-                if let m = ByteCount.short(child.rssBytes) {
-                    Text(m)
-                        .font(.system(size: 8, design: .monospaced)).foregroundStyle(.tertiary)
-                }
-                if let cpu = child.cpuPercent {
-                    Text(String(format: "%.0f%%", cpu))
-                        .font(.system(size: 8, design: .monospaced))
-                        .foregroundStyle(cpu >= 100 ? Color.warn : Color.secondary)
-                }
-                if let s = relativeTime(child.lastSeenAt ?? "") {
-                    Text(s)
-                        .font(.system(size: 8, weight: s.hasSuffix("s") ? .semibold : .regular, design: .monospaced))
-                        .foregroundStyle(s.hasSuffix("s") ? Color.ok : Color(white: 0.6, opacity: 1))
-                }
-            }
-            .padding(.leading, 12)
-            .padding(.vertical, 1)
-        }
-        .buttonStyle(.plain)
-    }
-
-
-    // MARK: flags
-
-    /// One flag row (used by attentionSection for flags without an incident).
-    private func flagRow(_ flag: FlagModel) -> some View {
-        Button { selectedFlag = flag } label: {
-            HStack(alignment: .top, spacing: 8) {
-                Image(systemName: flag.severity >= 3 ? "exclamationmark.octagon.fill" : "exclamationmark.triangle.fill")
-                    .font(.system(size: 12)).foregroundStyle(flag.severity >= 3 ? Color.bad : Color.warn)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(Self.flagRowTitle(flag.rule))
-                        .font(.system(size: 11, weight: .medium))
-                    HStack(spacing: 5) {
-                        AgentIdentity.tile(flag.agent, size: 13, fontSize: 7)
-                        Text(flag.agent).font(.system(size: 9, weight: .medium)).foregroundStyle(.secondary)
-                        if let t = relativeTime(flag.ts) {
-                            Text(t)
-                                .font(.system(size: 9, weight: flag.tsRecent ? .semibold : .regular, design: .monospaced))
-                                .foregroundStyle(flag.tsRecent ? Color.bad : Color.tertiaryText)
-                        }
-                    }
-                }
-                Spacer()
-                if flag.acknowledged == true {
-                    Text("DONE")
-                        .font(.system(size: 8, weight: .bold))
-                        .foregroundStyle(Color.ok)
-                        .padding(.horizontal, 5).padding(.vertical, 3)
-                        .background(Color.ok.opacity(0.14)).clipShape(Capsule())
-                } else if flag.severity >= 3 {
-                    Text("CRITICAL")
-                        .font(.system(size: 8, weight: .bold))
-                        .foregroundStyle(Color.bad)
-                        .padding(.horizontal, 5).padding(.vertical, 3)
-                        .background(Color.bad.opacity(0.14)).clipShape(Capsule())
-                }
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 7, weight: .semibold)).foregroundStyle(.quaternary)
-            }
-        }
-        .buttonStyle(.plain)
-        .opacity(flag.acknowledged == true ? 0.45 : 1.0)
-    }
-
-    @State private var selectedFlag: FlagModel?
-    @State private var confirmEnableConsole = false
-
-    /// "Open console" click: opens when the console is up; when it's off, the
-    /// button is the way OUT of the off state (confirmation → one-click
-    /// enable), not a dead greyed-out control with a tooltip.
-    private func openConsoleTapped() {
-        if state.dashboardUnavailableReason == nil {
-            state.openDashboard()
-        } else if state.connected {
-            confirmEnableConsole = true
-        }
-    }
-
-    private var consoleButtonHelp: String {
-        if !state.connected { return "The daemon is not running" }
-        if state.dashboardUnavailableReason != nil {
-            return "The console is off — click to turn it on"
-        }
-        return "Open the web console"
-    }
-
-    /// Row language: human title, not the raw rule id.
-    private static func flagRowTitle(_ rule: String) -> String {
-        switch rule {
-        case "sensitive-read-then-connect": return "Read a secret, then connected out"
-        case "proxy-secret-leak": return "Secret left in agent traffic"
-        case "keychain-access": return "Touched your keychain"
-        case "keychain-security-cli": return "Ran the keychain tool"
-        case "tcc-tamper": return "Modified privacy permissions"
-        case "proxy-prompt-injection": return "Prompt injection in a response"
-        default: return rule
-        }
     }
 
     // MARK: footer
@@ -851,74 +429,126 @@ struct ConsoleView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 8))
             }
             HStack(spacing: 8) {
-            Button { openConsoleTapped() } label: {
-                if state.isEnablingConsole {
-                    Label("Enabling…", systemImage: "hourglass").font(.system(size: 12, weight: .semibold))
-                } else {
-                    Label("Open console", systemImage: "square.grid.2x2").font(.system(size: 12, weight: .semibold))
+                Button { openConsoleTapped() } label: {
+                    if state.isEnablingConsole {
+                        Label("Enabling…", systemImage: "hourglass").font(.system(size: 12, weight: .semibold))
+                    } else {
+                        Label("Open console", systemImage: "square.grid.2x2").font(.system(size: 12, weight: .semibold))
+                    }
                 }
-            }
-            .buttonStyle(.borderedProminent).tint(.brand).controlSize(.regular)
-            .disabled(!state.connected || state.isEnablingConsole)
-            .help(consoleButtonHelp)
-            .confirmationDialog(
-                "Turn on the local console?",
-                isPresented: $confirmEnableConsole,
-                titleVisibility: .visible
-            ) {
-                Button("Turn on & open") { state.enableConsoleAndOpen() }
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                Text("The console is served by the loopback inspection proxy (127.0.0.1) — it also inspects agent egress for secret leaks, in monitor mode (nothing is blocked). Turning it on restarts the background monitor for a second.")
-            }
-            Spacer()
-            Button { SettingsWindowController.shared.show(state: state) } label: {
-                Image(systemName: "gearshape").font(.system(size: 13))
-            }.buttonStyle(.borderless).help("Settings")
-            Button { state.togglePause() } label: {
-                Image(systemName: state.isPaused ? "play.circle" : "pause.circle").font(.system(size: 14))
-            }.buttonStyle(.borderless).help(state.isPaused ? "Resume alerts" : "Pause alerts")
-            Button { state.refresh() } label: {
-                Image(systemName: "arrow.clockwise").font(.system(size: 13))
-            }
-            .buttonStyle(.borderless)
-            .disabled(state.isPaused)
-            .help(state.isPaused ? "Paused — resume to refresh" : "Refresh")
-            Button { NSApp.terminate(nil) } label: {
-                Image(systemName: "power").font(.system(size: 13))
-            }
-            .buttonStyle(.borderless)
-            .help("Quit Secure Agent (⌘Q)")
-            .keyboardShortcut("q", modifiers: .command)
+                .buttonStyle(.borderedProminent).tint(.brand).controlSize(.regular)
+                .disabled(!state.connected || state.isEnablingConsole)
+                .help(consoleButtonHelp)
+                .confirmationDialog(
+                    "Turn on the local console?",
+                    isPresented: $confirmEnableConsole,
+                    titleVisibility: .visible
+                ) {
+                    Button("Turn on & open") { state.enableConsoleAndOpen() }
+                    Button("Cancel", role: .cancel) {}
+                } message: {
+                    Text("The console is served by the loopback inspection proxy (127.0.0.1) — it also inspects agent egress for secret leaks, in monitor mode (nothing is blocked). Turning it on restarts the background monitor for a second.")
+                }
+                Spacer()
+                Button { SettingsWindowController.shared.show(state: state) } label: {
+                    Image(systemName: "gearshape").font(.system(size: 13))
+                }.buttonStyle(.borderless).help("Settings")
+                Button { state.togglePause() } label: {
+                    Image(systemName: state.isPaused ? "play.circle" : "pause.circle").font(.system(size: 14))
+                }.buttonStyle(.borderless).help(state.isPaused ? "Resume alerts" : "Pause alerts")
+                Button { state.refresh() } label: {
+                    Image(systemName: "arrow.clockwise").font(.system(size: 13))
+                }
+                .buttonStyle(.borderless)
+                .disabled(state.isPaused)
+                .help(state.isPaused ? "Paused — resume to refresh" : "Refresh")
+                Button { NSApp.terminate(nil) } label: {
+                    Image(systemName: "power").font(.system(size: 13))
+                }
+                .buttonStyle(.borderless)
+                .help("Quit Secure Agent (⌘Q)")
+                .keyboardShortcut("q", modifiers: .command)
             }
         }
         .padding(.horizontal, 14).padding(.vertical, 10)
     }
 
-    private func sectionHeader(_ title: String, trailing: String, trailingColor: Color = .secondary, trailingMonospaced: Bool = true) -> some View {
+    @State private var confirmEnableConsole = false
+
+    /// "Open console" click: opens when the console is up; when it's off, the
+    /// button is the way OUT of the off state (confirmation → one-click
+    /// enable), not a dead greyed-out control with a tooltip.
+    private func openConsoleTapped() {
+        if state.dashboardUnavailableReason == nil {
+            state.openDashboard()
+        } else if state.connected {
+            confirmEnableConsole = true
+        }
+    }
+
+    private var consoleButtonHelp: String {
+        if !state.connected { return "The daemon is not running" }
+        if state.dashboardUnavailableReason != nil {
+            return "The console is off — click to turn it on"
+        }
+        return "Open the web console"
+    }
+
+    private func sectionHeader(_ title: String, trailing: String) -> some View {
         HStack {
             Text(title.uppercased()).font(.system(size: 10, weight: .semibold)).foregroundStyle(.secondary).kerning(0.5)
             Spacer()
-            Text(trailing).font(.system(size: 10, weight: .semibold, design: trailingMonospaced ? .monospaced : .default))
-                .foregroundStyle(trailingColor)
+            Text(trailing).font(.system(size: 10, weight: .semibold, design: .monospaced)).foregroundStyle(.secondary)
+        }
+    }
+
+    // MARK: guard prompt language
+
+    /// Plain-language headline: what is this file, and who wants it.
+    static func guardPromptHeadline(_ p: GuardPending) -> String {
+        switch p.ruleID {
+        case "ssh-keys": return "\(p.agent.capitalized) wants to read an SSH private key"
+        case "cloud-creds": return "\(p.agent.capitalized) wants to read a cloud credential file"
+        case "keychain": return "\(p.agent.capitalized) wants to touch your keychain"
+        case "env-files": return "\(p.agent.capitalized) wants to read an environment file (secrets inside)"
+        case "shell-rc": return "\(p.agent.capitalized) wants to access a shell config file"
+        default: return "Allow \(p.agent) to access this?"
+        }
+    }
+
+    /// Detail line: the concrete file, why it matters, what is being asked.
+    static func guardPromptDetail(_ p: GuardPending) -> String {
+        let file = (p.path as NSString).lastPathComponent
+        switch p.ruleID {
+        case "ssh-keys": return "\(file) — private keys grant server access; leaking one is a full compromise."
+        case "cloud-creds": return "\(file) — cloud credentials can be used from anywhere once leaked."
+        case "keychain": return "\(file) — the keychain holds saved passwords and tokens."
+        case "env-files": return "\(file) — environment files often carry API keys and database passwords."
+        case "shell-rc": return "\(file) — shell config runs on every new terminal."
+        default: return "\(file)"
         }
     }
 }
 
+/// A small dot that breathes while a session is working — motion that carries
+/// meaning, and respects reduced motion.
+private struct HeartbeatDot: View {
+    let active: Bool
 
-/// One "needs attention" row: a flag group plus its newest open incident (if
-/// any). Identifiable for ForEach — the group id is the identity.
-private struct AttentionRow: Identifiable {
-    let group: AppState.FlagGroup
-    let incident: IncidentReportModel?
-    var id: String { group.id }
-}
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-@MainActor
-private func attentionRows(groups: [AppState.FlagGroup], openIncidents: [IncidentReportModel]) -> [AttentionRow] {
-    let incidentByFlag = Dictionary(uniqueKeysWithValues: openIncidents.map { ($0.flagId, $0) })
-    return groups.map { g in
-        let incident = g.flags.compactMap { incidentByFlag[$0.id] }.first
-        return AttentionRow(group: g, incident: incident)
+    var body: some View {
+        Circle()
+            .fill(active ? Color.ok : Color.secondary.opacity(0.5))
+            .frame(width: 6, height: 6)
+            .opacity(active && !reduceMotion ? 1 : 0.75)
+            .scaleEffect(active && !reduceMotion ? 1.0 : 0.85)
+            .animation(
+                active && !reduceMotion
+                    ? .easeInOut(duration: 1.2).repeatForever(autoreverses: true)
+                    : .default,
+                value: active
+            )
+            .help(active ? "Working — activity in the last minute" : "Idle")
     }
 }
