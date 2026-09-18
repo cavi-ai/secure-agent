@@ -37,6 +37,40 @@ type TranscriptScanner struct {
 	// published — the supervisor's coverage heartbeat: a scanner whose
 	// harnesses never emit hook events must not read as healthy coverage.
 	OnProduce func()
+
+	// OnHandshake, when set, receives the hook's session-start announcements
+	// (harness, workspace, repo, branch, harness pid) so the session resolver
+	// can register the authoritative session record.
+	OnHandshake func(Handshake)
+}
+
+// Handshake is the hook's session announcement line
+// ({"type":"session_start", ...}) as parsed off the activity log.
+type Handshake struct {
+	SessionID string `json:"session_id"`
+	Harness   string `json:"harness"`
+	Workspace string `json:"workspace"`
+	Repo      string `json:"repo"`
+	Branch    string `json:"branch"`
+	PID       int32  `json:"pid"`
+	TS        string `json:"ts"`
+}
+
+// ParseHandshake recognizes session_start lines. Kept separate from ScanLine
+// so the redaction scan never misfires on handshake metadata.
+func ParseHandshake(line string) (Handshake, bool) {
+	trimmed := strings.TrimSpace(line)
+	if !strings.HasPrefix(trimmed, "{") || !strings.Contains(trimmed, `"session_start"`) {
+		return Handshake{}, false
+	}
+	var h struct {
+		Type string `json:"type"`
+		Handshake
+	}
+	if err := json.Unmarshal([]byte(trimmed), &h); err != nil || h.Type != "session_start" || h.SessionID == "" {
+		return Handshake{}, false
+	}
+	return h.Handshake, true
 }
 
 func NewTranscriptScanner(b *bus.Bus, paths []string) *TranscriptScanner {
@@ -287,6 +321,24 @@ func (ts *TranscriptScanner) tailFile(p string, offsets map[string]int64) {
 			if bytes.HasSuffix(frag, []byte("\n")) {
 				newOffset += lineLen
 				line := strings.TrimRight(string(frag), "\r\n")
+				if h, ok := ParseHandshake(line); ok {
+					if ts.OnHandshake != nil {
+						ts.OnHandshake(h)
+					}
+					// Also publish as a plugin action: the handshake is hook
+					// activity (coverage signal) and belongs on the timeline.
+					evt := event.Event{Kind: event.KindPluginAction, PID: h.PID, SessionID: h.SessionID, Detail: "session-start"}
+					if t, err := time.Parse(time.RFC3339Nano, h.TS); err == nil {
+						evt.TS = t
+					} else {
+						evt.TS = time.Now()
+					}
+					ts.bus.Publish(evt)
+					if ts.OnProduce != nil {
+						ts.OnProduce()
+					}
+					continue
+				}
 				if e, ok := ScanLine(line); ok {
 					ts.bus.Publish(e)
 					if ts.OnProduce != nil {

@@ -59,6 +59,55 @@ def session_id() -> str:
 _SESSION_ID = ""
 
 
+def _git_field(workspace: str, *args: str) -> str:
+    """Best-effort git probe with a hard timeout; never fails the hook."""
+    import subprocess
+    try:
+        out = subprocess.run(
+            ["git", "-C", workspace, *args],
+            capture_output=True, text=True, timeout=2,
+        )
+        if out.returncode == 0:
+            return out.stdout.strip()[:256]
+    except Exception:
+        pass
+    return ""
+
+
+def maybe_handshake(payload: dict, sid: str, log_path: str) -> None:
+    """Emit one session_start line per session so the daemon can register the
+    authoritative session record (harness, workspace, repo, branch, harness
+    pid). Sentinel files make hooks — spawned once per tool call — cheap.
+    """
+    home = os.path.expanduser("~")
+    seen_dir = os.path.join(home, ".local", "state", "secure-agent", "sessions_seen")
+    sentinel = os.path.join(seen_dir, re.sub(r"[^A-Za-z0-9._-]", "_", sid))
+    if os.path.exists(sentinel):
+        return
+    workspace = payload.get("cwd") or os.getcwd()
+    harness = "claude" if os.environ.get("CLAUDE_SESSION_ID") else os.environ.get("SECURE_AGENT_HARNESS", "")
+    repo = _git_field(workspace, "rev-parse", "--show-toplevel")
+    branch = _git_field(workspace, "rev-parse", "--abbrev-ref", "HEAD") if repo else ""
+    rec = {
+        "type": "session_start",
+        "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "session_id": sid,
+        "harness": harness,
+        "workspace": workspace,
+        "repo": os.path.basename(repo) if repo else "",
+        "branch": branch,
+        "pid": os.getppid() or 0,
+    }
+    try:
+        os.makedirs(seen_dir, exist_ok=True)
+        with open(log_path, "a") as f:
+            f.write(json.dumps(rec) + "\n")
+        with open(sentinel, "w") as f:
+            f.write("")
+    except Exception as e:
+        sys.stderr.write(f"activity_log handshake error: {e}\n")
+
+
 def log_payload(payload: dict) -> None:
     tool = payload.get("tool_name") or payload.get("tool") or "unknown"
     pid = payload.get("pid") or os.getppid() or os.getpid()
@@ -72,11 +121,12 @@ def log_payload(payload: dict) -> None:
     if cmd:
         cmd = redact_str(str(cmd))[:MAX_CMD_CHARS]
 
+    sid = session_id()
     rec = {
         "ts": ts,
         "tool": tool,
         "pid": pid,
-        "session_id": session_id(),
+        "session_id": sid,
         "command": cmd,
     }
 
@@ -92,6 +142,7 @@ def log_payload(payload: dict) -> None:
             os.chmod(logdir, 0o700)
         except OSError:
             pass
+        maybe_handshake(payload, sid, target_path)
         with open(target_path, "a") as f:
             f.write(json.dumps(rec) + "\n")
         try:
