@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -385,6 +386,7 @@ func (a *API) buildMux() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/status", a.handleStatus)
 	mux.HandleFunc("/sessions", a.handleSessions)
+	mux.HandleFunc("/sessions/", a.handleSessionTimeline)
 	mux.HandleFunc("/resources", a.handleResources)
 	mux.HandleFunc("/resources/control", a.handleResourceControl)
 	mux.HandleFunc("/resources/policy", a.handleResourcePolicy)
@@ -502,6 +504,30 @@ func (a *API) handleSessions(w http.ResponseWriter, r *http.Request) {
 		f.Limit = n
 	}
 	writeJSON(w, a.store.ListSessions(f))
+}
+
+// handleSessionTimeline serves one session's events oldest-first — the
+// timeline the console renders for a selected session. Path shape:
+// /sessions/{id}/timeline[?limit=N].
+func (a *API) handleSessionTimeline(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	rest := strings.TrimPrefix(r.URL.Path, "/sessions/")
+	parts := strings.SplitN(rest, "/", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] != "timeline" {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	f := store.EventFilter{SessionID: parts[0], Limit: 500}
+	if n, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && n > 0 {
+		f.Limit = n
+	}
+	events := a.store.QueryEvents(f)
+	// QueryEvents returns newest-first; a timeline reads oldest-first.
+	slices.Reverse(events)
+	writeJSON(w, events)
 }
 
 func (a *API) currentStatus() Status {
