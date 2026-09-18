@@ -376,7 +376,8 @@ func computeCoverage(active []api.AgentSummary, st *store.Store) *api.CoverageSt
 	return cov
 }
 
-func observeResources(tracker *resource.Tracker, tagger *agents.Tagger, st *store.Store, now time.Time) {	infos := tagger.TaggedPIDs()
+func observeResources(tracker *resource.Tracker, tagger *agents.Tagger, st *store.Store, now time.Time) {
+	infos := tagger.TaggedPIDs()
 	pids := make([]int32, 0, len(infos))
 	for pid := range infos {
 		pids = append(pids, pid)

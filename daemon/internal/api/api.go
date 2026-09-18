@@ -44,7 +44,7 @@ type CoverageStatus struct {
 }
 
 type AgentSummary struct {
-	PID       int32  `json:"pid"`
+	PID  int32  `json:"pid"`
 	Name string `json:"name"`
 	// Kind is "agent" or "infra" (IDEs, local model servers). Infra processes
 	// stay visible for resources and kill, but never count as agents.
