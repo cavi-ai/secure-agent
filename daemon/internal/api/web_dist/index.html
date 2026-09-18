@@ -73,6 +73,23 @@
           <span class="stat-k">Proxy</span>
           <span class="stat-v" id="proxy-status">127.0.0.1:8443</span>
         </div>
+        <div class="search-wrap">
+          <input type="search" id="global-search" class="input input-sm" placeholder="Search agents, hosts, rules…" autocomplete="off" spellcheck="false" aria-label="Search telemetry">
+        </div>
+        <div class="views-wrap">
+          <button class="btn btn-ghost btn-icon" id="btn-views" title="Saved views">
+            <svg class="icon"><use href="#i-doc"/></svg>
+          </button>
+          <div class="views-pop" id="views-pop" hidden>
+            <div class="notify-pop-head">Saved views</div>
+            <div class="notify-pop-sub">A view captures the active tab and filters (flags/events). Save the current state, or load one back.</div>
+            <div id="views-list"></div>
+            <div class="views-save">
+              <input class="input input-sm" id="view-name" placeholder="View name" autocomplete="off" spellcheck="false">
+              <button class="btn btn-ghost btn-sm" data-action="save-view"><svg class="icon"><use href="#i-arrow"/></svg><span>Save current</span></button>
+            </div>
+          </div>
+        </div>
         <div class="notify-wrap">
           <button class="btn btn-ghost btn-icon" id="btn-notify" title="Notification preferences">
             <svg class="icon"><use href="#i-bell"/></svg>
@@ -369,6 +386,7 @@
               <div class="panel-head">
                 <h2><svg class="icon"><use href="#i-alert"/></svg>Security flags</h2>
                 <span class="badge badge-amber" id="badge-flags-count">0</span>
+                <button class="btn btn-ghost btn-sm" data-action="export" data-what="flags" title="Download the current flags as JSON"><svg class="icon"><use href="#i-doc"/></svg><span>Export</span></button>
               </div>
               <div class="panel-body">
                 <div class="filter-bar">
@@ -401,6 +419,7 @@
               <div class="panel-head">
                 <h2><svg class="icon"><use href="#i-incident"/></svg>Incidents &amp; auto-rotation</h2>
                 <span class="badge badge-rose" id="badge-incidents-count">0</span>
+                <button class="btn btn-ghost btn-sm" data-action="export" data-what="incidents" title="Download the current incidents as JSON"><svg class="icon"><use href="#i-doc"/></svg><span>Export</span></button>
               </div>
               <div class="panel-body" id="incidents-container">
                 <div class="empty"><svg class="icon"><use href="#i-incident"/></svg><span>No containment incidents recorded</span></div>

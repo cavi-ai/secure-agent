@@ -414,6 +414,128 @@ document.addEventListener('DOMContentLoaded', () => {
   wireFilter('flags-severity', filters.flags, 'minsev');
   wireFilter('flags-window', filters.flags, 'since');
 
+  // ---------- saved views ----------
+  // A view is a named snapshot of what the operator is looking at: the tab,
+  // the flag/event filters, and the free-text search. Persisted in
+  // localStorage (per browser, not per daemon — a view is a UI convenience,
+  // not a fleet policy). No secrets are stored; only filter values.
+  const VIEWS_KEY = 'sa.views';
+  function loadViews() {
+    try { return JSON.parse(localStorage.getItem(VIEWS_KEY) || '[]') || []; } catch { return []; }
+  }
+  function persistViews(views) {
+    try { localStorage.setItem(VIEWS_KEY, JSON.stringify(views)); } catch { /* private mode */ }
+  }
+  function currentViewSnapshot(name) {
+    return {
+      name,
+      tab: activeTab,
+      search: (document.getElementById('global-search') || {}).value || '',
+      flags: { ...filters.flags },
+      events: { ...filters.events },
+    };
+  }
+  window.saveCurrentView = function() {
+    const nameEl = document.getElementById('view-name');
+    const name = ((nameEl && nameEl.value) || '').trim();
+    if (!name) { showToast('Give the view a name.', 'info'); return; }
+    const views = loadViews().filter(v => v.name !== name);
+    views.push(currentViewSnapshot(name));
+    persistViews(views);
+    if (nameEl) nameEl.value = '';
+    renderViews();
+    showToast(`View saved: ${name}`, 'success');
+  };
+  window.applyView = function(name) {
+    const view = loadViews().find(v => v.name === name);
+    if (!view) return;
+    filters.flags = { ...filters.flags, ...(view.flags || {}) };
+    filters.events = { ...filters.events, ...(view.events || {}) };
+    const search = document.getElementById('global-search');
+    if (search) search.value = view.search || '';
+    syncFilterControls();
+    const pop = document.getElementById('views-pop');
+    if (pop) pop.hidden = true;
+    if (view.tab && TABS.includes(view.tab)) switchTab(view.tab);
+    suppressFreshOnce = true;
+    fetchTelemetry();
+    showToast(`View applied: ${name}`, 'info');
+  };
+  window.removeView = function(name) {
+    persistViews(loadViews().filter(v => v.name !== name));
+    renderViews();
+  };
+  function renderViews() {
+    const list = document.getElementById('views-list');
+    if (!list) return;
+    const views = loadViews();
+    list.innerHTML = views.length
+      ? views.map(v => `<div class="view-row">
+          <button class="view-load" data-action="apply-view" data-name="${escapeHTML(v.name)}" title="Apply ${escapeHTML(v.name)}">${escapeHTML(v.name)}</button>
+          <span class="view-tab">${escapeHTML(v.tab || 'overview')}</span>
+          <button class="source-remove" data-action="remove-view" data-name="${escapeHTML(v.name)}" title="Delete view"><svg class="icon"><use href="#i-close"/></svg></button>
+        </div>`).join('')
+      : '<div class="notify-scope-empty">No saved views yet</div>';
+  }
+  // Push the filter model back into the <select> controls after applying a view.
+  function syncFilterControls() {
+    const set = (id, val) => { const el = document.getElementById(id); if (el) el.value = val; };
+    set('flags-agent', filters.flags.agent);
+    set('flags-rule', filters.flags.rule);
+    set('flags-severity', filters.flags.minsev);
+    set('flags-window', filters.flags.since);
+    set('event-filter', filters.events.kind);
+    set('event-window', filters.events.since);
+  }
+  {
+    const btnViews = document.getElementById('btn-views');
+    const viewsPop = document.getElementById('views-pop');
+    if (btnViews && viewsPop) {
+      btnViews.addEventListener('click', (e) => {
+        e.stopPropagation();
+        renderViews();
+        viewsPop.hidden = !viewsPop.hidden;
+      });
+      document.addEventListener('click', (e) => {
+        if (!viewsPop.hidden && !e.target.closest('.views-wrap')) viewsPop.hidden = true;
+      });
+    }
+  }
+
+  // ---------- global search ----------
+  // One box that narrows the panels by free text. It matches agent, rule,
+  // host, and evidence across the rendered lists — a client-side lens over
+  // data already in hand, not a new query surface (the filters do that).
+  let globalSearch = '';
+  {
+    const el = document.getElementById('global-search');
+    if (el) el.addEventListener('input', () => {
+      globalSearch = el.value.trim().toLowerCase();
+      suppressFreshOnce = true;
+      renderAll();
+    });
+  }
+  window.globalSearchTerm = () => globalSearch;
+
+  // ---------- export ----------
+  // Download the current panel data as a file. Pure client-side: the console
+  // already holds the rows; no new endpoint, no server round-trip, and the
+  // file lands where the operator chose.
+  window.exportData = function(which) {
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    let rows, filename;
+    if (which === 'flags') { rows = telemetryData.flags || []; filename = `secure-agent-flags-${stamp}.json`; }
+    else if (which === 'incidents') { rows = telemetryData.incidents || []; filename = `secure-agent-incidents-${stamp}.json`; }
+    else { rows = telemetryData.events || []; filename = `secure-agent-events-${stamp}.json`; }
+    const blob = new Blob([JSON.stringify(rows, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    showToast(`Exported ${rows.length} ${which} → ${filename}`, 'success');
+  };
+
   // ---------- tabs ----------
   // The console is organized by question (Overview / Agents / Egress /
   // Findings), not by data source. State persists per tab-session; the hash
@@ -787,6 +909,7 @@ document.addEventListener('DOMContentLoaded', () => {
     pendingRetriage,
     isFlagsFiltered,
     isEventsFiltered,
+    globalSearchTerm,
   };
   Object.defineProperties(window.SA, {
     timelineSession: { get() { return timelineSession; }, set(v) { timelineSession = v; } },
@@ -1414,6 +1537,18 @@ document.addEventListener('DOMContentLoaded', () => {
         break;
       case 'notify-scope-remove':
         window.removeNotifyScope(d.rule, d.workspace);
+        break;
+      case 'save-view':
+        window.saveCurrentView();
+        break;
+      case 'apply-view':
+        window.applyView(d.name);
+        break;
+      case 'remove-view':
+        window.removeView(d.name);
+        break;
+      case 'export':
+        window.exportData(d.what);
         break;
       case 'select-session':
         window.selectSession(d.id);

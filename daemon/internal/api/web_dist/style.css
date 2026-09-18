@@ -1182,3 +1182,21 @@ button.fw-uninspected .fw-drill-hint {
 .notify-scope-add { display: flex; gap: 5px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
 .notify-scope-add .input-sm, .notify-scope-add .select-sm { font-size: 0.74rem; padding: 3px 6px; }
 .notify-scope-add .input-sm { flex: 1 1 120px; min-width: 100px; }
+
+/* Global search + saved views (masthead). */
+.search-wrap { min-width: 0; }
+.search-wrap .input-sm { font-size: 0.78rem; padding: 5px 9px; width: 190px; }
+@media (max-width: 1100px) { .search-wrap .input-sm { width: 130px; } }
+.views-wrap { position: relative; }
+.views-pop {
+  position: absolute; right: 0; top: calc(100% + 8px); z-index: 60;
+  width: 320px; padding: 12px; text-align: left;
+  background: var(--bg-1); border: 1px solid var(--line-2); border-radius: var(--r-md);
+  box-shadow: var(--sh-2);
+}
+.view-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; }
+.view-row .view-load { flex: 1 1 auto; text-align: left; background: none; border: 0; color: var(--tx-1); font: inherit; font-size: 0.8rem; cursor: pointer; padding: 3px 0; }
+.view-row .view-load:hover { color: var(--brand); }
+.view-tab { font-family: var(--mono); font-size: 0.68rem; color: var(--tx-3); }
+.views-save { display: flex; gap: 6px; margin-top: 8px; }
+.views-save .input-sm { flex: 1 1 auto; font-size: 0.76rem; padding: 4px 7px; }
