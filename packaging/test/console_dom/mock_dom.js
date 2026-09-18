@@ -9,6 +9,27 @@
   const iso = (msAgo) => new Date(now - msAgo).toISOString();
 
   const data = {
+    // Durable sessions (the P1 spine) — drives the session-first rail.
+    '/sessions': [
+      {
+        id: 'sess-claude-1', harness: 'claude', workspace: '/Users/dev/workspace/api-service',
+        repo: 'api-service', branch: 'main', root_pid: 5821,
+        started_at: '2026-09-09T14:00:00Z', last_seen_at: iso(60000),
+        status: 'active', confidence: 'hook',
+        _timeline: [
+          { kind: 12, ts: iso(120000), session_id: 'sess-claude-1', tool: 'Bash', tool_status: 'ok', duration_ms: 31000 },
+          { kind: 12, ts: iso(60000), session_id: 'sess-claude-1', tool: 'Read', tool_status: 'error', duration_ms: 400 },
+          { kind: 14, ts: iso(90000), session_id: 'sess-claude-1', model: 'claude-sonnet-4-5', tokens_in: 46220, tokens_out: 812, cost_usd: 0.0002 },
+          { kind: 5, ts: iso(30000), session_id: 'sess-claude-1', remote_host: 'api.anthropic.com', remote_port: 443 }
+        ]
+      },
+      {
+        id: 'sess-cursor-2', harness: 'cursor', workspace: '/Users/dev/projects/web-app',
+        repo: '', branch: '', root_pid: 6033,
+        started_at: '2026-09-09T15:00:00Z', ended_at: '2026-09-09T17:30:00Z', last_seen_at: iso(3600000),
+        status: 'ended', confidence: 'process-tree'
+      }
+    ],
     '/status': {
       running: true,
       version: 'v9.9.9-domtest',
@@ -221,8 +242,9 @@
       { rule: 'keychain-security-cli', host: '*' }
     ],
     '/egress/uninspected': [
-      { agent: 'cursor', host: 'registry.npmjs.org', count: 14, last_seen: iso(300000), assessment: 'benign', rationale: 'npm registry is routine for JS projects' },
-      { agent: 'claude', host: 'statsig.example.com', count: 3, last_seen: iso(900000) },
+      { agent: 'cursor', host: 'registry.npmjs.org', count: 14, first_seen: iso(86400000), last_seen: iso(300000), session_id: 'sess-cursor-2', assessment: 'benign', rationale: 'npm registry is routine for JS projects' },
+      { agent: 'claude', host: 'statsig.example.com', count: 3, first_seen: iso(7200000), last_seen: iso(900000), session_id: 'sess-claude-1' },
+      { agent: 'claude', host: 'telemetry.example.com', count: 5, first_seen: iso(5400000), last_seen: iso(600000), session_id: 'sess-claude-1' },
       { agent: 'cursor', host: '2606:4700:4408::ac40:9bd1', count: 56, last_seen: iso(600000), infra: 'Cloudflare' },
       { agent: 'codex', host: 'ec2-98-90-104-193.compute-1.amazonaws.com', count: 11, last_seen: iso(700000), infra: 'AWS' }
     ],
@@ -258,13 +280,6 @@
   //                  #ct fragment, token must come from storage).
   const MODE = location.search;
   const REQUIRE_TOKEN = MODE.includes('requiretoken');
-  if (MODE.includes('policydemo')) {
-    window.confirm = (message) => {
-      document.documentElement.dataset.lastConfirm = message;
-      return false;
-    };
-  }
-  if (MODE.includes('guarddemo')) window.confirm = () => true;
   if (MODE.includes('tokenseed')) {
     try { sessionStorage.setItem('sa.console-token', 'test-token'); } catch { /* ignored */ }
   }
@@ -340,10 +355,23 @@
         events: data['/events'],
         posture: data['/posture'],
         suggestions: data['/allowlist/suggestions'],
-        mutes: data['/mute']
+        mutes: data['/mute'],
+        sessions: data['/sessions']
       };
       return {
         ok: true, status: 200,
+        json: async () => body,
+        text: async () => JSON.stringify(body)
+      };
+    }
+    // Session timeline: /sessions/<id>/timeline
+    const tlMatch = p.match(/^\/sessions\/([^/]+)\/timeline/);
+    if (tlMatch) {
+      const sid = decodeURIComponent(tlMatch[1]);
+      const sess = (data['/sessions'] || []).find(s => s.id === sid);
+      const body = sess ? (sess._timeline || []) : null;
+      return {
+        ok: body !== null, status: body !== null ? 200 : 404,
         json: async () => body,
         text: async () => JSON.stringify(body)
       };
@@ -387,10 +415,35 @@
   if (location.search.includes('sessiondemo')) {
     setTimeout(() => window.filterTimelineToSession('7f3a9c21-4b2e-4a1d-9c55-2e8f0d1a3b77'), 4000);
   }
+  // Auto-action: select a session in the session-first rail so the trace
+  // waterfall renders.
+  if (location.search.includes('raildemo')) {
+    setTimeout(() => window.selectSession('sess-claude-1'), 4000);
+  }
   // Auto-action: resolve the guard request once; the unified queue must
-  // refresh and remove that blocked tool call.
+  // refresh and remove that blocked tool call. The styled confirm dialog
+  // opens first — accept it.
   if (location.search.includes('guarddemo')) {
-    setTimeout(() => document.querySelector('[data-action="guard-resolve"][data-scope="once"]').click(), 4000);
+    const clickResolve = () => {
+      const btn = document.querySelector('[data-action="guard-resolve"][data-scope="once"]');
+      if (btn) btn.click();
+    };
+    const acceptDialog = () => {
+      // Poll for the styled confirm dialog (it opens in the click handler),
+      // then accept it; the queue refresh follows.
+      let n = 0;
+      const iv = setInterval(() => {
+        n++;
+        const ok = document.getElementById('confirm-ok');
+        if (ok && ok.closest('dialog') && ok.closest('dialog').open) {
+          ok.click();
+          clearInterval(iv);
+        } else if (n > 20) {
+          clearInterval(iv);
+        }
+      }, 100);
+    };
+    setTimeout(() => { clickResolve(); acceptDialog(); }, 4000);
   }
   // Auto-action: open the uninspected-egress drill-down modal.
   if (location.search.includes('uninspecteddemo')) {

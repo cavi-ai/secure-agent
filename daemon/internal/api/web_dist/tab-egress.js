@@ -133,12 +133,29 @@ function fillUninspected(bodyEl) {
   if (unknown.length === 0) {
     html += `<div class="empty"><svg class="icon"><use href="#i-globe"/></svg><span>No unknown endpoints — everything unrouted is known cloud/CDN infrastructure (below)</span></div>`;
   }
+
+  // Bulk decisions: group the unknowns by agent + host suffix so 90 raw IPs
+  // from one carrier become one "allow all" instead of 90 clicks.
+  const bulkGroups = {};
+  for (const e of unknown) {
+    const key = e.agent + '|' + hostSuffix(e.host);
+    (bulkGroups[key] = bulkGroups[key] || []).push(e);
+  }
+  const bulkButtons = Object.entries(bulkGroups)
+    .filter(([, list]) => list.length >= 2)
+    .sort((a, b) => b[1].length - a[1].length)
+    .map(([key, list]) => {
+      const [agent, suffix] = key.split('|');
+      return `<button class="btn btn-ghost btn-sm" data-action="bulk-allow" data-agent="${escapeHTML(agent)}" data-hosts="${escapeHTML(list.map(e => e.host).join(','))}"><svg class="icon"><use href="#i-shield"/></svg><span>Allow all ${list.length} ${escapeHTML(suffix)} hosts for ${escapeHTML(agent)}</span></button>`;
+    }).join('');
+  if (bulkButtons) html += `<div class="bulk-allow">${bulkButtons}</div>`;
+
   html += unknown.map(e => `
     <div class="fw-rule">
       <div class="fw-rule-main">
         <span class="fw-rule-id">${escapeHTML(e.host)}</span>
         <div class="fw-metrics">
-          <span class="fw-metric dim">${escapeHTML(e.agent)} · <b>${e.count}×</b> in 24h${e.last_seen ? ` · last ${escapeHTML(fmtAge(e.last_seen, Date.now()))} ago` : ''}</span>
+          <span class="fw-metric dim">${escapeHTML(e.agent)} · <b>${e.count}×</b> in 24h${e.last_seen ? ` · last ${escapeHTML(fmtAge(e.last_seen, Date.now()))} ago` : ''}${e.first_seen ? ` · first seen ${escapeHTML(fmtAge(e.first_seen, Date.now()))} ago` : ''}${e.session_id ? ` · session ${escapeHTML(String(e.session_id).slice(0, 8))}` : ''}</span>
           ${inspectionVisible(SA.t.status, SA.t.audit).advisor && e.assessment ? `<span class="advisor-chip adv-${escapeHTML(e.assessment)}" title="${escapeHTML(e.rationale)}">advisor: ${escapeHTML(e.assessment)}</span>` : ''}
         </div>
       </div>
