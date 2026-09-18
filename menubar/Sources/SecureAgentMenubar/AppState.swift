@@ -14,6 +14,10 @@ public final class AppState: ObservableObject {
     @Published public private(set) var connected = false
     @Published public var isPaused = false
     @Published public private(set) var guardRules: [GuardRuleModel] = []
+    /// The oldest pending guard decision, surfaced so the popover can show it
+    /// inline (the native NSAlert remains the always-on consent path; this is
+    /// the glance-and-act affordance when the popover is open).
+    @Published public private(set) var pendingGuard: GuardPending?
     /// Per-rule notification overrides from the daemon (true = always page,
     /// false = never). Layered over notifyDefaultMinSeverity in shouldNotify.
     @Published public private(set) var notifyOverrides: [String: Bool] = [:]
@@ -625,6 +629,9 @@ public final class AppState: ObservableObject {
     /// Shows one native prompt for the oldest pending guard decision, deduping
     /// by id so the 1Hz poll doesn't stack a dialog on top of an open one.
     private func presentGuardPromptIfNeeded(_ pending: [GuardPending]) {
+        // Keep the glanceable copy current even when the native alert is
+        // already up (or suppressed by the test hook).
+        self.pendingGuard = pending.first
         guard promptingID == nil, let p = pending.first else { return }
         promptingID = p.id
         #if DEBUG
@@ -675,6 +682,22 @@ public final class AppState: ObservableObject {
 
     /// True when the app is showing a guard NSAlert — one at a time.
     public var promptingIDForTesting: String? { promptingID }
+
+    /// Resolve a pending guard decision from the popover's inline prompt.
+    /// Claims the id the same way the native alert does, so the two consent
+    /// paths never race a double-prompt.
+    public func resolvePendingGuard(verdict: String, scope: String) async {
+        guard let p = pendingGuard else { return }
+        promptingID = p.id
+        pendingGuard = nil // optimistic: the poll/stream re-adds it if unresolved
+        do {
+            try await uiClient.resolveGuard(GuardResolveRequest(id: p.id, verdict: verdict, scope: scope))
+        } catch {
+            lastError = "decision not recorded (daemon unreachable): \(error.localizedDescription)"
+        }
+        promptingID = nil
+        fetch()
+    }
 
     /// Test hook: skip the modal NSAlert (untestable) while still proving the
     /// prompt path claimed the pending id.
@@ -1275,6 +1298,9 @@ public final class AppState: ObservableObject {
         s.flags = [FlagModel(id: "f1", rule: "proxy-secret-leak", severity: 3, ts: "",
                              pid: 6033, agent: "cursor",
                              evidence: ["anthropic-key detected in request body to logs.example.com"])]
+        s.pendingGuard = GuardPending(id: "g1", agent: "claude", tool: "Read",
+                                      path: "/Users/dev/workspace/api-service/.env",
+                                      ruleID: "env-files", ts: "", scopeText: nil)
         s.connected = true
         return s
     }
