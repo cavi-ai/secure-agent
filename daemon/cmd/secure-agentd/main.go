@@ -125,9 +125,6 @@ func main() {
 	// initial load and reconciliation only.
 	deltaHub := api.NewDeltaHub()
 	defer deltaHub.Close()
-	resolver.OnSessionChange = func(sess model.Session) {
-		deltaHub.Publish(api.Delta{Type: "session", Data: sess})
-	}
 	// postureHook is armed once the API server exists (it owns posture).
 	postureHook := &postureHookHolder{}
 
@@ -138,13 +135,20 @@ func main() {
 	// Must run before the sinks are built: they capture api.NodeID.
 	api.LoadNodeID(filepath.Join(filepath.Dir(cfg.Firewall.Registry.SaltRef), "node-id"))
 
-	// Fleet webhook fan-out: flags, incidents, guard decisions, and status
-	// heartbeats are pushed to every configured HMAC-signed collector.
-	// Best-effort; never blocks the drain loop.
+	// Fleet webhook fan-out: flags, incidents, guard decisions, sessions,
+	// traces, and status heartbeats are pushed to every configured
+	// HMAC-signed collector. Best-effort; never blocks the drain loop.
 	fleetPub := fleet.NewPublisher()
 	fleetPub.ReplaceSinks(buildFleetSinks(cfg.Fleet, filepath.Dir(cfg.DBPath)))
 	fleetCfgLive := &fleetConfigHolder{}
 	fleetCfgLive.Store(cfg.Fleet)
+
+	// Session changes reach both consumers: the console delta stream and the
+	// fleet wire (cross-node sessions).
+	resolver.OnSessionChange = func(sess model.Session) {
+		deltaHub.Publish(api.Delta{Type: "session", Data: sess})
+		fleetPub.Publish(fleet.EventSession, sess)
+	}
 
 	// Local triage advisor (opt-in): flags/incidents are offered to it from
 	// the drain loop; it never touches the enforcement path.

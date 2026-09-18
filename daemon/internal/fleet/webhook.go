@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/config"
@@ -28,6 +29,16 @@ const (
 	EventFlag     EventKind = "flag"
 	EventIncident EventKind = "incident"
 	EventGuard    EventKind = "guard"
+	// EventSession carries a session upsert/lifecycle change (the P1 spine) so
+	// collectors can show cross-node sessions with labels. Low volume: one
+	// envelope per session change, not per event.
+	EventSession EventKind = "session"
+	// EventTrace carries one agent-semantic trace event (tool call, model
+	// call, turn). Opt-in and deliberately lossy: a busy harness emits
+	// hundreds per hour, and the publisher's in-flight cap drops overflow
+	// rather than letting a trace flood starve flag/incident delivery. The
+	// collector's gap detector makes the loss honest.
+	EventTrace EventKind = "trace"
 	// EventStatus is the periodic heartbeat/posture envelope. It is NOT a
 	// subscribable event kind: it flows to every sink regardless of the
 	// configured events filter, because liveness that can be filtered out is
@@ -38,7 +49,7 @@ const (
 // Valid reports whether k is a known subscription kind.
 func (k EventKind) Valid() bool {
 	switch k {
-	case EventFlag, EventIncident, EventGuard:
+	case EventFlag, EventIncident, EventGuard, EventSession, EventTrace:
 		return true
 	}
 	return false
@@ -72,6 +83,12 @@ type Sink struct {
 	client  *http.Client
 	nodeID  string
 	version string
+
+	// seq is this sink's own per-boot delivery counter. It must be per-sink,
+	// not publisher-wide: sinks subscribe to different kind sets, and a kind
+	// one collector never receives must not advance its sequence — that would
+	// manufacture a gap at that collector out of a delivery it never wanted.
+	seq atomic.Uint64
 
 	logMu   sync.Mutex
 	logPath string
@@ -120,6 +137,11 @@ func (s *Sink) Subscribed(k EventKind) bool {
 	}
 	return s.kinds[string(k)]
 }
+
+// NextSeq stamps this sink's next per-boot sequence number. Called by the
+// Publisher only when the sink actually subscribes to the kind being
+// published, so the counter tracks exactly the stream this collector sees.
+func (s *Sink) NextSeq() uint64 { return s.seq.Add(1) }
 
 // Deliver marshals payload and POSTs it as an envelope. Retries: 1 initial
 // attempt + 3 retries (4 total), 500ms/2s/5s backoff, only on retryable
