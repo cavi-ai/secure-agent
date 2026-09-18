@@ -51,8 +51,12 @@ const uninspectedRetention = 7 * 24 * time.Hour
 
 // uninspectedEntry tracks one agent|host pair seen bypassing the proxy.
 type uninspectedEntry struct {
-	count    int
-	lastSeen time.Time
+	count     int
+	lastSeen  time.Time
+	firstSeen time.Time
+	// sessionID is the most recent session that reached this host — the
+	// "which run dialed it" context the operator needs before allowing.
+	sessionID string
 }
 
 type Correlator struct {
@@ -94,10 +98,13 @@ func New(tagger *agents.Tagger, classifier sensitive.Classifier, cfg config.Conf
 
 // UninspectedSummary is one agent+host pair observed bypassing inspection.
 type UninspectedSummary struct {
-	Agent    string    `json:"agent"`
-	Host     string    `json:"host"`
-	Count    int       `json:"count"`
-	LastSeen time.Time `json:"last_seen"`
+	Agent     string    `json:"agent"`
+	Host      string    `json:"host"`
+	Count     int       `json:"count"`
+	FirstSeen time.Time `json:"first_seen,omitempty"`
+	LastSeen  time.Time `json:"last_seen"`
+	// SessionID is the most recent session that reached this host.
+	SessionID string `json:"session_id,omitempty"`
 	// Infra names the CDN/cloud org when the endpoint is known infrastructure
 	// (InfraOrg) — empty for genuinely unknown destinations. UIs escalate
 	// only the unknown kind; infra rows collapse into a coverage note.
@@ -123,7 +130,8 @@ func (c *Correlator) UninspectedEgressSummarySince(since time.Time) []Uninspecte
 			continue
 		}
 		agent, host, _ := strings.Cut(key, "|")
-		out = append(out, UninspectedSummary{Agent: agent, Host: host, Count: e.count, LastSeen: e.lastSeen, Infra: InfraOrg(host)})
+		out = append(out, UninspectedSummary{Agent: agent, Host: host, Count: e.count,
+			FirstSeen: e.firstSeen, LastSeen: e.lastSeen, SessionID: e.sessionID, Infra: InfraOrg(host)})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Count > out[j].Count })
 	return out
@@ -484,13 +492,16 @@ func (c *Correlator) Observe(e event.Event) []model.Flag {
 			if e2, known := c.uninspected[key]; known {
 				e2.count++
 				e2.lastSeen = e.TS
+				if e.SessionID != "" {
+					e2.sessionID = e.SessionID
+				}
 				// Advisor pre-assessment is for endpoints a human must judge —
 				// never spend model calls on Cloudflare/Google/AWS carriers.
 				if e2.count == 3 && c.onUninspected != nil && InfraOrg(e.RemoteHost) == "" {
 					c.onUninspected(info.Name, e.RemoteHost)
 				}
 			} else if len(c.uninspected) < maxUninspectedTracked {
-				c.uninspected[key] = &uninspectedEntry{count: 1, lastSeen: e.TS}
+				c.uninspected[key] = &uninspectedEntry{count: 1, firstSeen: e.TS, lastSeen: e.TS, sessionID: e.SessionID}
 			}
 		}
 
