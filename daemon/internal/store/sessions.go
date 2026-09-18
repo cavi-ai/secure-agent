@@ -246,6 +246,17 @@ func (s *Store) ListSessions(f SessionFilter) []model.Session {
 	return out
 }
 
+// GetSession returns one session by id.
+func (s *Store) GetSession(id string) (model.Session, bool) {
+	got := s.ListSessions(SessionFilter{Limit: 1000})
+	for _, sess := range got {
+		if sess.ID == id {
+			return sess, true
+		}
+	}
+	return model.Session{}, false
+}
+
 // pruneSessionsLocked bounds the ended-session tail: ended rows older than
 // the event retention window are pure noise.
 func (s *Store) pruneSessionsLocked() {

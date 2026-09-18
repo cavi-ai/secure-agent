@@ -50,6 +50,9 @@ type TranscriptScanner struct {
 	// tracers hold per-file Claude trace state (open tool_use ids). The
 	// scanner's tail loop is single-goroutine, so no lock.
 	tracers map[string]*ClaudeTracer
+	// codexTracers hold per-file Codex rollout state (call_id pairing,
+	// session id from session_meta).
+	codexTracers map[string]*CodexTracer
 }
 
 // Handshake is the hook's session announcement line
@@ -377,6 +380,30 @@ func (ts *TranscriptScanner) tailFile(p string, offsets map[string]int64) {
 						continue
 					}
 					// Not a trace record: still run the redaction scan.
+				}
+				// Codex rollouts carry the same trace shape through their own
+				// envelope (token_count deltas, function_call pairing).
+				if IsCodexRolloutPath(p) {
+					tracer := ts.codexTracers[p]
+					if tracer == nil {
+						tracer = NewCodexTracer()
+						if ts.codexTracers == nil {
+							ts.codexTracers = map[string]*CodexTracer{}
+						}
+						ts.codexTracers[p] = tracer
+					}
+					if evs, ok := tracer.ParseLine(line); ok {
+						if sid, cwd := tracer.Session(); sid != "" && ts.OnSessionSeen != nil {
+							ts.OnSessionSeen(sid, cwd, time.Now())
+						}
+						for _, e := range evs {
+							ts.bus.Publish(e)
+						}
+						if len(evs) > 0 && ts.OnProduce != nil {
+							ts.OnProduce()
+						}
+						continue
+					}
 				}
 				if e, ok := ScanLine(line); ok {
 					ts.bus.Publish(e)

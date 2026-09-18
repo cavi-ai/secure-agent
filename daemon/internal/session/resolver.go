@@ -43,6 +43,11 @@ type Resolver struct {
 	st     *store.Store
 	tagger *agents.Tagger
 
+	// OnSessionChange, when set, receives the session record after every
+	// upsert or lifecycle transition — the session delta published to SSE
+	// subscribers so consoles patch instead of refetch.
+	OnSessionChange func(model.Session)
+
 	mu     sync.Mutex
 	byPID  map[int32]string     // pid → session id (process-tree cache)
 	byRoot map[int32]string     // root pid → session id
@@ -103,7 +108,7 @@ func (r *Resolver) Resolve(e *event.Event) string {
 		if ts.IsZero() {
 			ts = r.now()
 		}
-		r.st.UpsertSession(model.Session{
+		sess := model.Session{
 			ID:            id,
 			Harness:       info.Name,
 			Workspace:     info.CWD,
@@ -113,7 +118,9 @@ func (r *Resolver) Resolve(e *event.Event) string {
 			LastSeenAt:    ts,
 			Status:        model.SessionActive,
 			Confidence:    model.ConfProcessTree,
-		})
+		}
+		r.st.UpsertSession(sess)
+		r.emitLocked(sess)
 		r.byRoot[root] = id
 	}
 	r.byPID[e.PID] = id
@@ -164,6 +171,9 @@ func (r *Resolver) HandleHandshake(h Handshake) {
 		Status:     model.SessionActive,
 		Confidence: model.ConfHook,
 	})
+	if sess, ok := r.st.GetSession(h.SessionID); ok {
+		r.emitLocked(sess)
+	}
 	r.touchLocked(h.SessionID, ts)
 }
 
@@ -183,6 +193,9 @@ func (r *Resolver) NoteTranscriptSession(id, workspace string, ts time.Time) {
 		ID: id, Workspace: workspace, StartedAt: ts, LastSeenAt: ts,
 		Status: model.SessionActive, Confidence: model.ConfTranscript,
 	})
+	if stored, ok := r.st.GetSession(id); ok {
+		r.emitLocked(stored)
+	}
 	r.touchLocked(id, ts)
 }
 
@@ -209,6 +222,16 @@ func (r *Resolver) ensureHookSession(e *event.Event) {
 		}
 	}
 	r.st.UpsertSession(sess)
+	if stored, ok := r.st.GetSession(e.SessionID); ok {
+		r.emitLocked(stored)
+	}
+}
+
+// emitLocked notifies delta subscribers of a session change (nil-safe).
+func (r *Resolver) emitLocked(sess model.Session) {
+	if r.OnSessionChange != nil {
+		r.OnSessionChange(sess)
+	}
 }
 
 // touchLocked bumps last_seen at most once per touchThrottle per session.
@@ -228,7 +251,7 @@ func (r *Resolver) touchLocked(id string, ts time.Time) {
 // hook sessions). Call on the tagger refresh cadence.
 func (r *Resolver) Sweep() {
 	now := r.now()
-	r.st.MarkSessionsIdle(now.Add(-idleAfter))
+	idled := r.st.MarkSessionsIdle(now.Add(-idleAfter))
 
 	live := map[int32]bool{}
 	for pid := range r.tagger.TaggedPIDs() {
@@ -240,6 +263,9 @@ func (r *Resolver) Sweep() {
 	for root, id := range r.byRoot {
 		if !live[root] {
 			r.st.EndSession(id, now)
+			if sess, ok := r.st.GetSession(id); ok {
+				r.emitLocked(sess)
+			}
 			delete(r.byRoot, root)
 			for pid, sid := range r.byPID {
 				if sid == id {
@@ -254,11 +280,24 @@ func (r *Resolver) Sweep() {
 	for root, id := range r.st.SessionRoots() {
 		if _, tracked := r.byRoot[root]; !tracked && !live[root] {
 			r.st.EndSession(id, now)
+			if sess, ok := r.st.GetSession(id); ok {
+				r.emitLocked(sess)
+			}
 		}
 	}
 	for _, sess := range r.st.ListSessions(store.SessionFilter{Status: model.SessionIdle, Limit: 500}) {
 		if sess.RootPID == 0 && now.Sub(sess.LastSeenAt) > endSilentAfter {
 			r.st.EndSession(sess.ID, now)
+			if stored, ok := r.st.GetSession(sess.ID); ok {
+				r.emitLocked(stored)
+			}
+		}
+	}
+	// Idle transitions ride the delta stream too (the console's status chip
+	// must move without a poll).
+	for _, id := range idled {
+		if sess, ok := r.st.GetSession(id); ok {
+			r.emitLocked(sess)
 		}
 	}
 }

@@ -336,7 +336,7 @@ func TestStartDrainLoopPersistsAndCloses(t *testing.T) {
 
 	b := bus.New(64)
 	res := session.NewResolver(st, tagger)
-	done := startDrainLoop(b.Subscribe(), st, cr, fleet.NewPublisher(), res, nil)
+	done := startDrainLoop(b.Subscribe(), st, cr, fleet.NewPublisher(), res, nil, nil, nil)
 
 	now := time.Now()
 	b.Publish(event.Event{Kind: event.KindPluginAction, TS: now, PID: 500, Path: "/Users/x/project/.env"})
