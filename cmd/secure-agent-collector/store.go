@@ -60,11 +60,11 @@ type NodeState struct {
 	// Gaps counts deliveries the node stamped but that never arrived —
 	// backlog-cap drops, collector downtime, restarts mid-flight. Delivery is
 	// best-effort by design; gaps make the loss honest instead of silent.
-	Gaps   int    `json:"gaps"`
+	Gaps int `json:"gaps"`
 	// Budget is the node's resource-budget posture from its latest heartbeat
 	// (nil on legacy nodes). Lets the cross-node view rank by budget pressure.
 	Budget *BudgetState `json:"budget,omitempty"`
-	BootID string `json:"boot_id,omitempty"`
+	BootID string       `json:"boot_id,omitempty"`
 }
 
 // gapGrace is how long a missing sequence number is tolerated before it
