@@ -20,4 +20,19 @@ type NodeStatus struct {
 	// Labels are operator-defined dimensions (env, role, team…) from
 	// fleet.labels in config.yaml — the grouping key for multi-fleet views.
 	Labels map[string]string `json:"labels,omitempty"`
+	// Budget is the node's resource-budget posture (counts only): which mode
+	// is in force and how many sessions are over budget, awaiting approval,
+	// contained, or paused. Lets a fleet view answer "which node is enforcing
+	// a budget" without fetching every node's resource detail.
+	Budget *BudgetStatus `json:"budget,omitempty"`
+}
+
+// BudgetStatus is the compact per-node budget posture carried in heartbeats.
+type BudgetStatus struct {
+	Mode       string `json:"mode"` // observe | prompt | terminate
+	Enforced   bool   `json:"enforced"`
+	OverBudget int    `json:"over_budget"`
+	Approval   int    `json:"approval"`
+	Contained  int    `json:"contained"`
+	Paused     int    `json:"paused"`
 }

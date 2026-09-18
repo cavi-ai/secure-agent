@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/config"
+	"github.com/cavi-ai/secure-agent/daemon/internal/resource"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
 
@@ -106,4 +107,18 @@ func (a *API) handleResourcePolicy(w http.ResponseWriter, r *http.Request) {
 	a.store.PutAudit(store.AuditEntry{Action: "resource-policy-update", ToMode: next.Mode,
 		Detail: fmt.Sprintf("workspace_overrides=%d", len(next.WorkspaceOverrides))})
 	writeJSON(w, map[string]string{"status": "ok"})
+}
+
+// BudgetSummary returns the controller's compact budget posture (counts only)
+// for the fleet heartbeat and the console header. Zero value when no
+// controller is wired (unit tests, older integrations).
+func (a *API) BudgetSummary() resource.BudgetSummary {
+	if a.resourceControl == nil {
+		return resource.BudgetSummary{}
+	}
+	snap := a.resourceControl.Snapshot()
+	if snap.Control == nil {
+		return resource.BudgetSummary{}
+	}
+	return snap.Control.Budget
 }

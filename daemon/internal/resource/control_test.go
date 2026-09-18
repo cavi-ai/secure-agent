@@ -303,3 +303,22 @@ func controlSnapshot(pid int32, rss uint64, cpu float64) Snapshot {
 		Processes: []Process{{PID: pid, RSSBytes: rss, CPUPercent: cpu}},
 	}}}
 }
+
+// The budget summary is the fleet heartbeat's "which node is enforcing" line:
+// counts of sessions in each budget state plus the mode/enforced flag.
+func TestBudgetSummaryCountsStates(t *testing.T) {
+	c := NewController(Policy{Mode: ModePrompt, MaxRSSBytes: 1 << 30, Sustain: time.Second}, nil)
+	// No sessions: mode + enforced carry, counts are zero.
+	b := c.Snapshot().Control.Budget
+	if b.Mode != string(ModePrompt) || !b.Enforced {
+		t.Fatalf("budget = %+v, want prompt/enforced", b)
+	}
+	if b.OverBudget != 0 || b.Approval != 0 || b.Contained != 0 || b.Paused != 0 {
+		t.Fatalf("empty budget counts = %+v", b)
+	}
+	// Observe mode with no limits is not "enforced".
+	c2 := NewController(Policy{Mode: ModeObserve}, nil)
+	if c2.Snapshot().Control.Budget.Enforced {
+		t.Fatal("observe with no limits must not read as enforced")
+	}
+}

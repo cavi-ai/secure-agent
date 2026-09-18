@@ -664,7 +664,7 @@ func (h *fleetConfigHolder) Store(c config.FleetConfig) { h.v.Store(c) }
 
 // buildNodeStatus assembles the heartbeat payload from the same posture +
 // status the local UIs render (pure — directly unit-testable).
-func buildNodeStatus(st api.Status, p api.Posture, hostname string, labels map[string]string) model.NodeStatus {
+func buildNodeStatus(st api.Status, p api.Posture, hostname string, labels map[string]string, budget resource.BudgetSummary) model.NodeStatus {
 	return model.NodeStatus{
 		Hostname:       hostname,
 		OS:             runtime.GOOS,
@@ -675,6 +675,11 @@ func buildNodeStatus(st api.Status, p api.Posture, hostname string, labels map[s
 		PostureSummary: p.Summary,
 		NeedsYou:       p.NeedsYou,
 		Labels:         labels,
+		Budget: &model.BudgetStatus{
+			Mode: string(budget.Mode), Enforced: budget.Enforced,
+			OverBudget: budget.OverBudget, Approval: budget.Approval,
+			Contained: budget.Contained, Paused: budget.Paused,
+		},
 	}
 }
 
@@ -701,7 +706,7 @@ func startFleetHeartbeat(ctx context.Context, apiServer *api.API, statusFn api.S
 		if hostname == "" {
 			hostname, _ = os.Hostname()
 		}
-		pub.Publish(fleet.EventStatus, buildNodeStatus(statusFn(), p, hostname, fc.Labels))
+		pub.Publish(fleet.EventStatus, buildNodeStatus(statusFn(), p, hostname, fc.Labels, apiServer.BudgetSummary()))
 		return p.State
 	}
 	interval := func() time.Duration {
