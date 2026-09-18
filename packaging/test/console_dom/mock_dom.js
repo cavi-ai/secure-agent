@@ -357,25 +357,26 @@
     };
   };
 
-  // SSE stub: drip live events so liveness paths (sparkline, fresh rows,
-  // firewall flash) execute during the virtual-time window.
+  // SSE stub: drip live deltas so liveness paths (sparkline, fresh rows,
+  // firewall flash) execute during the virtual-time window. The stream is
+  // typed envelopes: one "event" delta per persisted event.
   window.EventSource = class {
     constructor() {
       this.readyState = 1;
       this._listeners = {};
       setTimeout(() => this.onopen && this.onopen(), 0);
       const drip = [
-        ['conn-open', { kind: 5, pid: 5821, remote_host: 'api.anthropic.com', remote_port: 443 }],
-        ['proxy-hit', { kind: 9, pid: 5821, detail: 'proxy-scan: POST /v1/messages (clean)' }],
-        ['exec',      { kind: 8, pid: 6033, detail: 'Bash → git status' }]
+        { kind: 5, pid: 5821, remote_host: 'api.anthropic.com', remote_port: 443 },
+        { kind: 9, pid: 5821, detail: 'proxy-scan: POST /v1/messages (clean)' },
+        { kind: 8, pid: 6033, detail: 'Bash → git status' }
       ];
       let i = 0;
       this._timer = setInterval(() => {
-        const [kind, ev] = drip[i % drip.length];
+        const ev = drip[i % drip.length];
         i++;
         ev.ts = new Date().toISOString();
         data['/events'].unshift({ ...ev });
-        (this._listeners[kind] || []).forEach(fn => fn({ data: JSON.stringify(ev) }));
+        (this._listeners['event'] || []).forEach(fn => fn({ data: JSON.stringify(ev) }));
       }, 900);
     }
     addEventListener(kind, fn) { (this._listeners[kind] = this._listeners[kind] || []).push(fn); }

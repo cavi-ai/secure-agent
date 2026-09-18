@@ -201,7 +201,7 @@ func transcriptTailTargets(home, jsonlPath string) []string {
 // advGet resolves the CURRENT advisor per event: config hot-reload swaps
 // the stack while the drain loop is mid-event, and a nil getter result
 // (advisor disabled) must drop routing without touching the loop itself.
-func startDrainLoop(sub <-chan event.Event, st *store.Store, cr *correlate.Correlator, pub *fleet.Publisher, res *session.Resolver, advGet func() *advisor.Subscriber) <-chan struct{} {
+func startDrainLoop(sub <-chan event.Event, st *store.Store, cr *correlate.Correlator, pub *fleet.Publisher, res *session.Resolver, deltas *api.DeltaHub, postureChanged func(), advGet func() *advisor.Subscriber) <-chan struct{} {
 	analyzer := intel.NewAnalyzer()
 	drainDone := make(chan struct{})
 	go func() {
@@ -211,6 +211,16 @@ func startDrainLoop(sub <-chan event.Event, st *store.Store, cr *correlate.Corre
 			// triggers, and the incident all carry the session id.
 			res.Resolve(&e)
 			st.PutEvent(e)
+			if deltas != nil {
+				// Guard lifecycle keeps its own delta names (the menubar's
+				// instant prompt path keys on them); everything else is a
+				// generic typed event for timeline/console patching.
+				kind := "event"
+				if e.Kind == event.KindGuardPrompt || e.Kind == event.KindGuardResolved {
+					kind = e.Kind.String()
+				}
+				deltas.Publish(api.Delta{Type: kind, Data: e})
+			}
 			flags := cr.Observe(e)
 			for _, fl := range flags {
 				if fl.SessionID == "" {
@@ -218,6 +228,9 @@ func startDrainLoop(sub <-chan event.Event, st *store.Store, cr *correlate.Corre
 				}
 				log.Printf("FLAG TRIGGERED [%d]: %s (pid %d agent %s)", fl.Severity, fl.Rule, fl.PID, fl.Agent)
 				st.PutFlag(fl)
+				if deltas != nil {
+					deltas.Publish(api.Delta{Type: "flag", Data: fl})
+				}
 				if pub != nil {
 					pub.Publish(fleet.EventFlag, fl)
 				}
@@ -232,7 +245,12 @@ func startDrainLoop(sub <-chan event.Event, st *store.Store, cr *correlate.Corre
 				// one incident with a count, not 323 reports.
 				subject := intel.SubjectForFlag(fl)
 				if openID, found := st.FindOpenIncident(fl.Rule, fl.SessionID, subject); found {
-					st.AggregateIntoIncident(openID, fl.ID, fl.TS)
+					if updated, ok := st.AggregateIntoIncident(openID, fl.ID, fl.TS); ok && deltas != nil {
+						deltas.Publish(api.Delta{Type: "incident", Data: updated})
+					}
+					if postureChanged != nil {
+						postureChanged()
+					}
 					continue
 				}
 
@@ -242,6 +260,9 @@ func startDrainLoop(sub <-chan event.Event, st *store.Store, cr *correlate.Corre
 				report.Subject = subject
 				report.AggregateCount = 1
 				st.PutIncident(report)
+				if deltas != nil {
+					deltas.Publish(api.Delta{Type: "incident", Data: report})
+				}
 				log.Printf("INCIDENT CREATED [%s]: %s (Risk: %s, %d rotate items)", report.ID, report.Summary, report.Risk, len(report.RotateList))
 				if pub != nil {
 					pub.Publish(fleet.EventIncident, report)
@@ -251,6 +272,12 @@ func startDrainLoop(sub <-chan event.Event, st *store.Store, cr *correlate.Corre
 						adv.EnqueueIncident(report)
 					}
 				}
+			}
+			if len(flags) > 0 && postureChanged != nil {
+				postureChanged()
+			}
+			if (e.Kind == event.KindGuardPrompt || e.Kind == event.KindGuardResolved) && postureChanged != nil {
+				postureChanged()
 			}
 		}
 	}()

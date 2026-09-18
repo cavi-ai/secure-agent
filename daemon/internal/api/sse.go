@@ -20,7 +20,7 @@ func (a *API) handleEventStream(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if a.subscribeEvents == nil {
+	if a.deltaHub == nil {
 		http.Error(w, "event stream not enabled", http.StatusServiceUnavailable)
 		return
 	}
@@ -37,11 +37,9 @@ func (a *API) handleEventStream(w http.ResponseWriter, r *http.Request) {
 	// race window where events published between greeting and subscription
 	// were silently dropped (seen as an e2e flake: guard lifecycle events
 	// fired into a not-yet-subscribed stream).
-	sub := a.subscribeEvents()
+	sub := a.deltaHub.Subscribe()
 	defer func() {
-		if a.unsubscribeEvents != nil {
-			a.unsubscribeEvents(sub)
-		}
+		a.deltaHub.Unsubscribe(sub)
 	}()
 
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -61,15 +59,15 @@ func (a *API) handleEventStream(w http.ResponseWriter, r *http.Request) {
 		select {
 		case <-r.Context().Done():
 			return
-		case e, ok := <-sub:
+		case d, ok := <-sub:
 			if !ok {
 				return
 			}
-			data, err := json.Marshal(e)
+			data, err := json.Marshal(d.Data)
 			if err != nil {
 				continue
 			}
-			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", e.Kind.String(), data)
+			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", d.Type, data)
 			fl.Flush()
 		case <-heartbeat.C:
 			fmt.Fprint(w, ": ping\n\n")
@@ -78,12 +76,10 @@ func (a *API) handleEventStream(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// SetEventStream wires the bus subscription factory. subscribe must be safe
-// for concurrent use; release unsubscribes (the API package cannot import bus
-// internals directly from handlers without a cycle-safe seam).
-func (a *API) SetEventStream(subscribe func() <-chan event.Event, release func(<-chan event.Event)) {
-	a.subscribeEvents = subscribe
-	a.unsubscribeEvents = release
+// SetDeltaHub wires the typed-delta fan-out the SSE handler serves.
+// subscribe must be safe for concurrent use; release unsubscribes.
+func (a *API) SetDeltaHub(h *DeltaHub) {
+	a.deltaHub = h
 }
 
 // SetEventPublisher wires a bus publish func so guard lifecycle moments
