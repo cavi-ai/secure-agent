@@ -28,6 +28,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/proxy"
 	"github.com/cavi-ai/secure-agent/daemon/internal/resource"
 	"github.com/cavi-ai/secure-agent/daemon/internal/sensitive"
+	"github.com/cavi-ai/secure-agent/daemon/internal/session"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 	"github.com/cavi-ai/secure-agent/daemon/internal/supervise"
 )
@@ -104,6 +105,10 @@ func main() {
 	classifier := sensitive.New(cfg)
 	correlator := correlate.New(tagger, classifier, cfg)
 
+	// Session resolver: attributes every event to a durable session at
+	// ingest (hook handshake > transcript > process tree).
+	resolver := session.NewResolver(st, tagger)
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -126,7 +131,7 @@ func main() {
 
 	// Drain bus and correlate/persist (drainDone closes once every delivered
 	// event has been persisted — shutdown waits for it).
-	drainDone := startDrainLoop(b.Subscribe(), st, correlator, fleetPub, func() *advisor.Subscriber { return advisorStk.Load().Sub })
+	drainDone := startDrainLoop(b.Subscribe(), st, correlator, fleetPub, resolver, func() *advisor.Subscriber { return advisorStk.Load().Sub })
 
 	// Periodic process tagger refresh: 5s while idle, 1s while agents live.
 	go func() {
@@ -139,6 +144,7 @@ func main() {
 			case <-timer.C:
 				tagger.Refresh()
 				now := time.Now()
+				resolver.Sweep()
 				observeResources(resourceTracker, tagger, st, now)
 				resourceControl.Observe(resourceTracker.Snapshot(), now)
 				resourceEpisodes.Observe(resourceControl.Snapshot())
@@ -423,6 +429,13 @@ func main() {
 	go sup.Run(ctx, "transcript", func(c context.Context) error {
 		ts := collect.NewTranscriptScanner(b, transcriptTailTargets(home, cfg.JSONLPath))
 		ts.OnProduce = func() { supReg.MarkProduced("transcript") }
+		ts.OnHandshake = func(h collect.Handshake) {
+			hts, _ := time.Parse(time.RFC3339Nano, h.TS)
+			resolver.HandleHandshake(session.Handshake{
+				SessionID: h.SessionID, Harness: h.Harness, Workspace: h.Workspace,
+				Repo: h.Repo, Branch: h.Branch, PID: h.PID, TS: hts,
+			})
+		}
 		return ts.Run(c)
 	})
 

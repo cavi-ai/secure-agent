@@ -28,6 +28,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/proxy"
 	"github.com/cavi-ai/secure-agent/daemon/internal/resource"
+	"github.com/cavi-ai/secure-agent/daemon/internal/session"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 	"github.com/cavi-ai/secure-agent/daemon/internal/supervise"
 )
@@ -170,11 +171,19 @@ func guardBrokerMS(hookDeadlineMS int) int {
 
 // transcriptTailTargets are the log paths the transcript scanner tails: each
 // harness's activity logs plus the daemon's own JSONL sink when configured.
+// The scanner's dir walk picks up .jsonl files — codex sessions rollouts feed
+// the Layer-5 redaction scan directly. Harness logs in other formats (gemini's
+// logs.json) get format support with the P2 trace work; the dirs are listed
+// now so coverage is explicit instead of absent.
 func transcriptTailTargets(home, jsonlPath string) []string {
 	targets := []string{
 		filepath.Join(home, ".claude", "logs", "*.jsonl"),
 		filepath.Join(home, ".claude", "projects"),
 		filepath.Join(home, ".cursor", "logs", "*.jsonl"),
+		filepath.Join(home, ".codex", "sessions"),
+		filepath.Join(home, ".gemini", "tmp"),
+		filepath.Join(home, ".local", "share", "opencode"),
+		filepath.Join(home, ".config", "opencode"),
 		filepath.Join(home, ".local", "state", "secure-agent", "activity.jsonl"),
 	}
 	if jsonlPath != "" {
@@ -192,15 +201,21 @@ func transcriptTailTargets(home, jsonlPath string) []string {
 // advGet resolves the CURRENT advisor per event: config hot-reload swaps
 // the stack while the drain loop is mid-event, and a nil getter result
 // (advisor disabled) must drop routing without touching the loop itself.
-func startDrainLoop(sub <-chan event.Event, st *store.Store, cr *correlate.Correlator, pub *fleet.Publisher, advGet func() *advisor.Subscriber) <-chan struct{} {
+func startDrainLoop(sub <-chan event.Event, st *store.Store, cr *correlate.Correlator, pub *fleet.Publisher, res *session.Resolver, advGet func() *advisor.Subscriber) <-chan struct{} {
 	analyzer := intel.NewAnalyzer()
 	drainDone := make(chan struct{})
 	go func() {
 		defer close(drainDone)
 		for e := range sub {
+			// Attribute before anything else: the stored event, the flags it
+			// triggers, and the incident all carry the session id.
+			res.Resolve(&e)
 			st.PutEvent(e)
 			flags := cr.Observe(e)
 			for _, fl := range flags {
+				if fl.SessionID == "" {
+					fl.SessionID = e.SessionID
+				}
 				log.Printf("FLAG TRIGGERED [%d]: %s (pid %d agent %s)", fl.Severity, fl.Rule, fl.PID, fl.Agent)
 				st.PutFlag(fl)
 				if pub != nil {
