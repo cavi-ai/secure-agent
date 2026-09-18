@@ -92,10 +92,21 @@ vendor_allowlist:
 ---
 
 ### `net_sample_interval_ms` (Integer)
-Frequency in milliseconds at which `libproc` samples active open network sockets for tagged agent processes (default: `2000` ms).
+Frequency in milliseconds at which the socket sampler (`lsof`) lists active open network sockets for tagged agent processes (default: `2000` ms). Loopback endpoints are never recorded — local-only traffic is not egress.
 
 ```yaml
 net_sample_interval_ms: 2000
+```
+
+---
+
+### `retention` (Object)
+Time-based event retention, per kind. Socket churn (`conn-open`/`conn-close`) ages out in hours so it cannot evict the security record; all other kinds keep days. A row-count cap remains as a backstop.
+
+```yaml
+retention:
+  conn_event_hours: 24  # socket open/close churn
+  event_days: 7         # file, exec, transcript, guard, proxy events
 ```
 
 ---

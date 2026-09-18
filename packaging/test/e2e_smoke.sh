@@ -170,7 +170,19 @@ func main() {
 	}
 	f.Close()
 
-	l, err := net.Listen("tcp", "127.0.0.1:0")
+	// The daemon's net sampler filters loopback (it is not egress), so the
+	// fixture connection must ride a real interface address — still on-box,
+	// no internet required.
+	nonLoopback := func() string {
+		addrs, _ := net.InterfaceAddrs()
+		for _, a := range addrs {
+			if ipn, ok := a.(*net.IPNet); ok && !ipn.IP.IsLoopback() && ipn.IP.To4() != nil {
+				return ipn.IP.String()
+			}
+		}
+		return "127.0.0.1"
+	}
+	l, err := net.Listen("tcp", nonLoopback()+":0")
 	if err == nil {
 		defer l.Close()
 		done := make(chan struct{})

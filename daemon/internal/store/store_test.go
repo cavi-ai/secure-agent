@@ -187,13 +187,56 @@ func TestEventRetentionBatchPruning(t *testing.T) {
 	defer s.Close()
 
 	for i := 0; i < 2500; i++ {
-		s.PutEvent(event.Event{Kind: event.KindExec, PID: int32(i)})
+		s.PutEvent(event.Event{Kind: event.KindExec, PID: int32(i), TS: time.Now()})
 	}
 
 	s.PruneEvents(100)
 	eventsAfterPrune := s.RecentEvents(2000)
 	if len(eventsAfterPrune) != 100 {
 		t.Fatalf("events count after explicit prune = %d, want 100", len(eventsAfterPrune))
+	}
+}
+
+// Retention is time-based per kind: socket churn ages out in hours so it can
+// never evict the security record again (the 10k-row, zero-activity window),
+// while file/exec/guard kinds keep days.
+func TestEventRetentionPerKindTimeWindows(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(filepath.Join(dir, "e.db"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	s.SetEventRetention(24*time.Hour, 7*24*time.Hour)
+
+	now := time.Now()
+	put := func(kind event.Kind, age time.Duration) {
+		s.PutEvent(event.Event{Kind: kind, PID: 42, TS: now.Add(-age)})
+	}
+	put(event.KindConnOpen, 48*time.Hour)      // stale churn: pruned
+	put(event.KindConnClose, 48*time.Hour)     // stale churn: pruned
+	put(event.KindConnOpen, time.Hour)         // fresh churn: kept
+	put(event.KindExec, 48*time.Hour)          // 2d old, within 7d: kept
+	put(event.KindFileOpen, 30*24*time.Hour)   // 30d old: pruned
+	put(event.KindGuardPrompt, 6*24*time.Hour) // 6d old, within 7d: kept
+
+	s.PruneEvents(10000)
+
+	got := map[event.Kind]int{}
+	for _, e := range s.RecentEvents(100) {
+		got[e.Kind]++
+	}
+	want := map[event.Kind]int{
+		event.KindConnOpen:    1,
+		event.KindConnClose:   0,
+		event.KindExec:        1,
+		event.KindFileOpen:    0,
+		event.KindGuardPrompt: 1,
+	}
+	for kind, n := range want {
+		if got[kind] != n {
+			t.Errorf("kind %s: kept %d, want %d", kind, got[kind], n)
+		}
 	}
 }
 
