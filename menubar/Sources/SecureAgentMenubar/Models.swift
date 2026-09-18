@@ -548,6 +548,14 @@ public struct EventModel: Codable, Identifiable, Sendable {
     public let remotePort: Int?
     public let detail: String?
     public let sessionId: String?
+    // Trace fields (P2): tool calls, model calls, turns. Nil on older daemons.
+    public let tool: String?
+    public let toolStatus: String?
+    public let durationMs: Int?
+    public let model: String?
+    public let tokensIn: Int?
+    public let tokensOut: Int?
+    public let costUsd: Double?
 
     enum CodingKeys: String, CodingKey {
         case kind
@@ -559,9 +567,16 @@ public struct EventModel: Codable, Identifiable, Sendable {
         case remotePort = "remote_port"
         case detail
         case sessionId = "session_id"
+        case tool
+        case toolStatus = "tool_status"
+        case durationMs = "duration_ms"
+        case model
+        case tokensIn = "tokens_in"
+        case tokensOut = "tokens_out"
+        case costUsd = "cost_usd"
     }
 
-    public init(kind: Int, ts: String, pid: Int32, exePath: String? = nil, path: String? = nil, remoteHost: String? = nil, remotePort: Int? = nil, detail: String? = nil, sessionId: String? = nil) {
+    public init(kind: Int, ts: String, pid: Int32, exePath: String? = nil, path: String? = nil, remoteHost: String? = nil, remotePort: Int? = nil, detail: String? = nil, sessionId: String? = nil, tool: String? = nil, toolStatus: String? = nil, durationMs: Int? = nil, model: String? = nil, tokensIn: Int? = nil, tokensOut: Int? = nil, costUsd: Double? = nil) {
         self.kind = kind
         self.ts = ts
         self.pid = pid
@@ -571,6 +586,13 @@ public struct EventModel: Codable, Identifiable, Sendable {
         self.remotePort = remotePort
         self.detail = detail
         self.sessionId = sessionId
+        self.tool = tool
+        self.toolStatus = toolStatus
+        self.durationMs = durationMs
+        self.model = model
+        self.tokensIn = tokensIn
+        self.tokensOut = tokensOut
+        self.costUsd = costUsd
     }
 }
 
@@ -613,6 +635,15 @@ public struct IncidentReportModel: Codable, Identifiable, Sendable {
     /// Lifecycle state (open/acknowledged/resolved) — sibling key in the
     /// daemon's incident payload; nil for older daemons.
     public let workflow: IncidentWorkflowModel?
+    // Aggregation (P2): one incident per rule+session+subject with a repeat
+    // count; nil/1 on older daemons. The menubar shows the count so a flag
+    // storm reads as one row, not N.
+    public let sessionId: String?
+    public let subject: String?
+    public let aggregateCount: Int?
+    public let lastFlagAt: String?
+    /// The local advisor's plain-English account; display-only, escaped.
+    public let advisorNarrative: String?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -627,9 +658,14 @@ public struct IncidentReportModel: Codable, Identifiable, Sendable {
         case connections
         case rotateList = "rotate_list"
         case workflow
+        case sessionId = "session_id"
+        case subject
+        case aggregateCount = "aggregate_count"
+        case lastFlagAt = "last_flag_at"
+        case advisorNarrative = "advisor_narrative"
     }
 
-    public init(id: String, flagId: String, pid: Int32, agent: String, timestamp: String, rule: String, summary: String, risk: String, touchedFiles: [String], connections: [String], rotateList: [RotateItemModel], workflow: IncidentWorkflowModel? = nil) {
+    public init(id: String, flagId: String, pid: Int32, agent: String, timestamp: String, rule: String, summary: String, risk: String, touchedFiles: [String], connections: [String], rotateList: [RotateItemModel], workflow: IncidentWorkflowModel? = nil, sessionId: String? = nil, subject: String? = nil, aggregateCount: Int? = nil, lastFlagAt: String? = nil, advisorNarrative: String? = nil) {
         self.id = id
         self.flagId = flagId
         self.pid = pid
@@ -642,5 +678,10 @@ public struct IncidentReportModel: Codable, Identifiable, Sendable {
         self.connections = connections
         self.rotateList = rotateList
         self.workflow = workflow
+        self.sessionId = sessionId
+        self.subject = subject
+        self.aggregateCount = aggregateCount
+        self.lastFlagAt = lastFlagAt
+        self.advisorNarrative = advisorNarrative
     }
 }
