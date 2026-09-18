@@ -26,8 +26,11 @@ func TestKindStringMappingIsStable(t *testing.T) {
 		KindProxyHit:      "proxy-hit",
 		KindGuardPrompt:   "guard-prompt",
 		KindGuardResolved: "guard-resolved",
+		KindToolCall:      "tool-call",
+		KindTurn:          "turn",
+		KindModelCall:     "model-call",
 	}
-	if len(want) != 12 {
+	if len(want) != 15 {
 		t.Fatalf("contract covers %d kinds; a new Kind must extend this test", len(want))
 	}
 	for k, s := range want {
@@ -90,9 +93,50 @@ func TestEventOmitsEmptyOptionalFields(t *testing.T) {
 	if err := json.Unmarshal(raw, &m); err != nil {
 		t.Fatal(err)
 	}
-	for _, key := range []string{"exe_path", "session_id", "path", "remote_host", "remote_port", "detail"} {
+	for _, key := range []string{"exe_path", "session_id", "path", "remote_host", "remote_port", "detail",
+		"tool", "tool_status", "duration_ms", "model", "tokens_in", "tokens_out", "cost_usd"} {
 		if _, ok := m[key]; ok {
 			t.Errorf("optional key %q must be omitted when empty: %s", key, raw)
 		}
+	}
+}
+
+// Trace fields round-trip: a model_call keeps model, tokens and cost; a
+// tool_call keeps name, status, duration.
+func TestEventTraceFieldsRoundTrip(t *testing.T) {
+	ev := Event{
+		Kind: KindModelCall, TS: time.Date(2026, 9, 17, 12, 0, 0, 0, time.UTC),
+		SessionID: "s1", Model: "claude-sonnet-5",
+		TokensIn: 46220, TokensOut: 8, CostUSD: 0.000139,
+	}
+	raw, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"model", "tokens_in", "tokens_out", "cost_usd"} {
+		if _, ok := m[key]; !ok {
+			t.Errorf("model_call missing wire key %q: %s", key, raw)
+		}
+	}
+	var back Event
+	if err := json.Unmarshal(raw, &back); err != nil {
+		t.Fatal(err)
+	}
+	if back.Model != ev.Model || back.TokensIn != ev.TokensIn || back.CostUSD != ev.CostUSD {
+		t.Errorf("round trip mismatch: %+v", back)
+	}
+
+	tc := Event{Kind: KindToolCall, TS: time.Now(), SessionID: "s1", ToolName: "Bash", ToolStatus: "ok", DurationMs: 31000}
+	raw2, _ := json.Marshal(tc)
+	var back2 Event
+	if err := json.Unmarshal(raw2, &back2); err != nil {
+		t.Fatal(err)
+	}
+	if back2.ToolName != "Bash" || back2.DurationMs != 31000 || back2.ToolStatus != "ok" {
+		t.Errorf("tool_call round trip mismatch: %+v", back2)
 	}
 }
