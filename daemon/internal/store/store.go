@@ -207,6 +207,8 @@ func Open(dbPath, jsonlPath string) (*Store, error) {
 			episode_json TEXT NOT NULL
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_resource_episodes_captured_at ON resource_episodes(captured_at);`,
+		sessionsSchema,
+		`CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status, last_seen_at);`,
 	}
 
 	for _, q := range createQueries {
@@ -396,6 +398,7 @@ func (s *Store) PutEvent(e event.Event) {
 	if s.insertCount%1000 == 0 {
 		s.pruneEventsLocked(10000)
 		s.pruneRollupLocked()
+		s.pruneSessionsLocked()
 	}
 }
 

@@ -338,6 +338,83 @@ function cwdLabel(cwd) {
   return i >= 0 ? s.slice(i + 1) : s;
 }
 
+// Durable sessions (GET /sessions via /snapshot): one row per harness
+// session, alive or ended — history survives process exit. Live process
+// trees are joined by root pid for RSS/helpers/kill; ended rows render
+// dimmed with their end time and no actions.
+function sessionLabelDurable(s) {
+  const name = s.harness || 'agent';
+  if (s.repo) return `${name} · ${s.repo}${s.branch ? '@' + s.branch : ''}`;
+  return `${name} · ${cwdLabel(s.workspace) || 'unknown workspace'}`;
+}
+
+function sessionRowsDurable(sessions, trees) {
+  const byRoot = {};
+  (trees || []).forEach(t => {
+    if (t.root && t.root.pid) byRoot[Number(t.root.pid)] = t;
+  });
+  return (sessions || []).map(s => {
+    const live = s.root_pid ? byRoot[Number(s.root_pid)] : null;
+    const children = live ? (live.children || []) : [];
+    const root = live ? live.root : {
+      pid: Number(s.root_pid || 0),
+      name: s.harness || 'agent',
+      cwd: s.workspace || '',
+      started_at: s.root_started_at || '',
+    };
+    return {
+      id: s.id || '',
+      root,
+      children,
+      label: sessionLabelDurable(s),
+      rss: live ? Number(live.rss_bytes || 0) : 0,
+      lastSeen: s.last_seen_at || '',
+      status: s.status || 'active',
+      confidence: s.confidence || '',
+      endedAt: s.ended_at || '',
+      pids: live ? [Number(live.root.pid), ...children.map(k => Number(k.pid))] : [],
+    };
+  });
+}
+
+function sessionBoardDurableHTML(rows, now, helpOpen) {
+  helpOpen = helpOpen || {};
+  return rows.map(row => {
+    const a = row.root;
+    const rss = fmtRSS(row.rss);
+    const ended = row.status === 'ended';
+    const seenAge = row.lastSeen ? fmtAge(row.lastSeen, now) : '';
+    const open = helpOpen[row.id] ? ' open' : '';
+    const statusChip = ended
+      ? `<span class="agent-meta-item">ended${row.endedAt ? ' ' + escapeHTML(fmtAge(row.endedAt, now)) + ' ago' : ''}</span>`
+      : row.status === 'idle'
+        ? `<span class="agent-meta-item">idle</span>`
+        : '';
+    const helpers = row.children.length
+      ? `<details class="session-helpers"${open} data-pid="${escapeHTML(row.id)}"><summary class="session-helpers-sum">${row.children.length} helper${row.children.length === 1 ? '' : 's'}</summary>${row.children.map(c => renderProcessRow(c, now, true)).join('')}</details>`
+      : '';
+    const kill = !ended && a.pid
+      ? `<button type="button" class="btn btn-danger btn-sm" data-action="kill" data-pid="${a.pid}" data-started="${escapeHTML(a.started_at || '')}" data-family="${escapeHTML(a.name || '')}"><svg class="icon"><use href="#i-power"/></svg><span>Terminate</span></button>`
+      : '';
+    const main = row.pids.length
+      ? `<button type="button" class="session-main" data-action="filter-pids" data-pids="${escapeHTML(row.pids.join(','))}" data-label="${escapeHTML(row.label)}" title="${escapeHTML(a.cwd || '')}">`
+      : `<span class="session-main" title="${escapeHTML(a.cwd || '')}">`;
+    const mainEnd = row.pids.length ? '</button>' : '</span>';
+    return `
+      <div class="session-row${ended ? ' stale' : ''}">
+        ${main}
+          <span class="session-label">${escapeHTML(row.label)}</span>
+          <span class="agent-pid">${escapeHTML(a.name)}${a.pid ? ' · PID ' + a.pid : ''}</span>
+          ${statusChip}
+          ${seenAge ? `<span class="agent-meta-item agent-lastseen">active ${escapeHTML(seenAge)} ago</span>` : `<span class="agent-meta-item agent-lastseen">no activity</span>`}
+          ${rss ? `<span class="agent-meta-item">${escapeHTML(rss)}</span>` : ''}
+        ${mainEnd}
+        ${kill}
+        ${helpers}
+      </div>`;
+  }).join('');
+}
+
 function sessionRows(agents, trees) {
   if (trees && trees.length) {
     return trees.map(t => {
