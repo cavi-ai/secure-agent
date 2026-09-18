@@ -183,7 +183,7 @@ function renderResourceMissionControl() {
   const totalCPU = Object.prototype.hasOwnProperty.call(snapshot, 'cpu_percent') ? fmtCPU(snapshot.cpu_percent) : '';
   const posture = `
     <div class="resource-posture" aria-label="Attributed machine resource posture">
-      <div class="resource-posture-lead"><span class="resource-eyebrow">Attributed now</span><strong>${sessions.length} session${sessions.length === 1 ? '' : 's'}</strong></div>
+      <div class="resource-posture-lead"><span class="resource-eyebrow">Attributed now</span><strong>${Number(snapshot.session_count ?? sessions.length)} session${Number(snapshot.session_count ?? sessions.length) === 1 ? '' : 's'}${snapshot.infra_count ? ` · ${Number(snapshot.infra_count)} infra` : ''}</strong></div>
       <div class="resource-stat"><span>Memory</span><strong>${escapeHTML(fmtRSS(snapshot.rss_bytes) || 'Unavailable')}</strong></div>
       <div class="resource-stat"><span>CPU</span><strong>${escapeHTML(totalCPU || 'Unavailable')}</strong></div>
       <div class="resource-stat"><span>Processes</span><strong>${Number(snapshot.process_count || 0)}</strong></div>
@@ -216,7 +216,7 @@ function renderResourceMissionControl() {
           <span class="resource-rank">${index + 1}</span>
           <span class="resource-identity">
             <strong>${escapeHTML(label)}</strong>
-            <span>${escapeHTML(session.name || 'agent')} · root PID ${Number(session.root_pid || 0)} · ${Number(session.process_count || 0)} process${Number(session.process_count || 0) === 1 ? '' : 'es'}</span>
+            <span>${escapeHTML(session.name || 'agent')} · root PID ${Number(session.root_pid || 0)} · ${Number(session.process_count || 0)} process${Number(session.process_count || 0) === 1 ? '' : 'es'}${session.kind === 'infra' ? ' · infra' : ''}</span>
           </span>
           <span class="resource-metric"><b>${escapeHTML(fmtRSS(session.rss_bytes) || '—')}</b><small>memory</small></span>
           <span class="resource-metric"><b>${escapeHTML(fmtCPU(session.cpu_percent) || '—')}</b><small>CPU</small></span>

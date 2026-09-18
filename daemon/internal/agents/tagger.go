@@ -20,7 +20,10 @@ type ProcInfo struct {
 }
 
 type AgentInfo struct {
-	Name       string
+	Name string
+	// Kind is "agent" or "infra" (IDEs, local model servers) from the matched
+	// AgentDef. Infra is tracked and killable but never counted as an agent.
+	Kind       string
 	ExePath    string
 	CWD        string
 	PID        int32
@@ -226,7 +229,10 @@ func (t *Tagger) tagLocked(pid int32) (AgentInfo, bool) {
 							exePath = targetProc.Comm
 						}
 						res := AgentInfo{
-							Name:      agentDef.Name,
+							Name: agentDef.Name,
+							// Normalize here too: configs built in-process (tests)
+							// skip the loader's normalization pass.
+							Kind:      config.NormalizeAgentKind(agentDef.Kind),
 							ExePath:   exePath,
 							CWD:       targetProc.CWD,
 							PID:       pid,
