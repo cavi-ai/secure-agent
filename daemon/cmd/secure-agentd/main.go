@@ -25,6 +25,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/fleet"
 	"github.com/cavi-ai/secure-agent/daemon/internal/guard"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
+	"github.com/cavi-ai/secure-agent/daemon/internal/otlp"
 	"github.com/cavi-ai/secure-agent/daemon/internal/proxy"
 	"github.com/cavi-ai/secure-agent/daemon/internal/resource"
 	"github.com/cavi-ai/secure-agent/daemon/internal/sensitive"
@@ -143,11 +144,21 @@ func main() {
 	fleetCfgLive := &fleetConfigHolder{}
 	fleetCfgLive.Store(cfg.Fleet)
 
-	// Session changes reach both consumers: the console delta stream and the
-	// fleet wire (cross-node sessions).
+	// OTLP trace export (opt-in): sessions and trace events as OTLP/HTTP
+	// spans. Nil when no endpoint is configured.
+	otlpExp := otlp.New(otlp.Config{
+		Endpoint: cfg.OTLP.Endpoint,
+		Headers:  cfg.OTLP.Headers,
+		Service:  cfg.OTLP.Service,
+		Labels:   cfg.OTLP.Labels,
+	}, api.NodeID, api.Version)
+
+	// Session changes reach every consumer: the console delta stream, the
+	// fleet wire (cross-node sessions), and OTLP (trace backends).
 	resolver.OnSessionChange = func(sess model.Session) {
 		deltaHub.Publish(api.Delta{Type: "session", Data: sess})
 		fleetPub.Publish(fleet.EventSession, sess)
+		otlpExp.SessionSpan(sess)
 	}
 
 	// Local triage advisor (opt-in): flags/incidents are offered to it from
@@ -157,7 +168,7 @@ func main() {
 
 	// Drain bus and correlate/persist (drainDone closes once every delivered
 	// event has been persisted — shutdown waits for it).
-	drainDone := startDrainLoop(b.Subscribe(), st, correlator, fleetPub, resolver, deltaHub,
+	drainDone := startDrainLoop(b.Subscribe(), st, correlator, fleetPub, resolver, deltaHub, otlpExp,
 		func() { postureHook.run() },
 		func() *advisor.Subscriber { return advisorStk.Load().Sub })
 
@@ -526,6 +537,15 @@ func main() {
 	case <-fleetDone:
 	case <-time.After(3 * time.Second):
 		log.Println("secure-agentd: webhook delivery wait timed out; some deliveries may be dropped")
+	}
+	// Flush buffered OTLP spans so the final trace batch lands. Bounded like
+	// the rest: a dead endpoint must not hold shutdown open.
+	otlpDone := make(chan struct{})
+	go func() { otlpExp.Wait(); close(otlpDone) }()
+	select {
+	case <-otlpDone:
+	case <-time.After(3 * time.Second):
+		log.Println("secure-agentd: OTLP export wait timed out; some spans may be dropped")
 	}
 }
 

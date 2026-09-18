@@ -26,6 +26,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/fleet"
 	"github.com/cavi-ai/secure-agent/daemon/internal/intel"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
+	"github.com/cavi-ai/secure-agent/daemon/internal/otlp"
 	"github.com/cavi-ai/secure-agent/daemon/internal/proxy"
 	"github.com/cavi-ai/secure-agent/daemon/internal/resource"
 	"github.com/cavi-ai/secure-agent/daemon/internal/session"
@@ -211,7 +212,7 @@ func isTraceKind(k event.Kind) bool {
 // advGet resolves the CURRENT advisor per event: config hot-reload swaps
 // the stack while the drain loop is mid-event, and a nil getter result
 // (advisor disabled) must drop routing without touching the loop itself.
-func startDrainLoop(sub <-chan event.Event, st *store.Store, cr *correlate.Correlator, pub *fleet.Publisher, res *session.Resolver, deltas *api.DeltaHub, postureChanged func(), advGet func() *advisor.Subscriber) <-chan struct{} {
+func startDrainLoop(sub <-chan event.Event, st *store.Store, cr *correlate.Correlator, pub *fleet.Publisher, res *session.Resolver, deltas *api.DeltaHub, otlpExp *otlp.Exporter, postureChanged func(), advGet func() *advisor.Subscriber) <-chan struct{} {
 	analyzer := intel.NewAnalyzer()
 	drainDone := make(chan struct{})
 	go func() {
@@ -236,8 +237,11 @@ func startDrainLoop(sub <-chan event.Event, st *store.Store, cr *correlate.Corre
 			// showing cross-node sessions needs the tool/model calls, not just
 			// the security events. Lossy by design — the publisher's in-flight
 			// cap drops trace overflow before it can starve flags.
-			if pub != nil && isTraceKind(e.Kind) {
-				pub.Publish(fleet.EventTrace, e)
+			if isTraceKind(e.Kind) {
+				if pub != nil {
+					pub.Publish(fleet.EventTrace, e)
+				}
+				otlpExp.TraceEvent(e)
 			}
 			for _, fl := range flags {
 				if fl.SessionID == "" {
