@@ -26,6 +26,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/guard"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/proxy"
+	"github.com/cavi-ai/secure-agent/daemon/internal/resource"
 	"github.com/cavi-ai/secure-agent/daemon/internal/sensitive"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 	"github.com/cavi-ai/secure-agent/daemon/internal/supervise"
@@ -63,11 +64,10 @@ func main() {
 	configPathUsed := *configPath
 	if configPathUsed == "" {
 		if home, err := os.UserHomeDir(); err == nil {
-			if _, err := os.Stat(filepath.Join(home, ".config", "secure-agent", "config.yaml")); err == nil {
-				configPathUsed = filepath.Join(home, ".config", "secure-agent", "config.yaml")
-			}
+			configPathUsed = filepath.Join(home, ".config", "secure-agent", "config.yaml")
 		}
 	}
+	configPathUsed = config.ExpandPath(configPathUsed)
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		log.Fatalf("failed to load config: %v", err)
@@ -83,6 +83,7 @@ func main() {
 		log.Fatalf("failed to open store: %v", err)
 	}
 	defer st.Close()
+	st.SetEventRetention(cfg.Retention.ConnEvent, cfg.Retention.Event)
 
 	b := bus.New(2048)
 	defer b.Close()
@@ -90,6 +91,15 @@ func main() {
 	procSource := agents.NewProcSource()
 	tagger := agents.New(cfg, procSource)
 	tagger.Refresh()
+	resourceTracker := resource.NewTracker()
+	resourceEpisodes := newResourceEpisodeWriter(st)
+	defer resourceEpisodes.Close()
+	resourceControl := resource.NewController(resourcePolicy(cfg.ResourceControl), nil)
+	resourceControl.SetPolicySet(resourcePolicySet(cfg.ResourceControl))
+	resourceNow := time.Now()
+	observeResources(resourceTracker, tagger, st, resourceNow)
+	resourceControl.Observe(resourceTracker.Snapshot(), resourceNow)
+	resourceEpisodes.Observe(resourceControl.Snapshot())
 
 	classifier := sensitive.New(cfg)
 	correlator := correlate.New(tagger, classifier, cfg)
@@ -128,6 +138,10 @@ func main() {
 				return
 			case <-timer.C:
 				tagger.Refresh()
+				now := time.Now()
+				observeResources(resourceTracker, tagger, st, now)
+				resourceControl.Observe(resourceTracker.Snapshot(), now)
+				resourceEpisodes.Observe(resourceControl.Snapshot())
 				timer.Reset(agents.RefreshInterval(tagger.Any()))
 			}
 		}
@@ -179,13 +193,94 @@ func main() {
 	supReg := supervise.NewRegistry()
 	sup := supervise.New(supReg)
 
-	statusFn := buildStatusFn(proxyServer, tagger, correlator, fw.Engine, supReg, time.Now(),
+	statusFn := buildStatusFn(proxyServer, tagger, correlator, fw.Engine, supReg, st, time.Now(),
 		func() advisor.HealthSnapshot { return advisorStk.Load().Sub.Health() },
 		fleetConfigured(cfg.Fleet.Webhooks))
 
 	// Start Control API
 	apiServer := api.New(cfg.SocketPath, st, &realKiller{}, statusFn)
 	apiServer.SetBusDrops(b.Dropped)
+	apiServer.SetResources(resourceControl.Snapshot)
+	apiServer.SetResourceControl(resourceControl)
+	if configPathUsed != "" {
+		apiServer.SetResourcePolicyUpdater(func(next config.ResourceControlConfig) error {
+			if err := config.WriteResourceControl(configPathUsed, next); err != nil {
+				return err
+			}
+			resourceControl.SetPolicySet(resourcePolicySet(next))
+			return nil
+		})
+	}
+	resourceControl.SetExecutor(func(action resource.ControlAction) error {
+		var affected int
+		baseline := tagger.TaggedPIDs()
+		revalidate := func(pid int32) error {
+			original, ok := baseline[pid]
+			if !ok {
+				return fmt.Errorf("pid %d left the recognized session", pid)
+			}
+			fresh, ok := tagger.TaggedPIDs()[pid]
+			if !ok || !fresh.StartedAt.Equal(original.StartedAt) {
+				return fmt.Errorf("pid %d identity changed before intervention", pid)
+			}
+			return nil
+		}
+		err := applyResourceProcessAction(action, baseline, func(action resource.ControlAction) error {
+			expectedStarts := make(map[int32]time.Time)
+			rootPID := action.RootPID
+			if rootPID == 0 {
+				if target, ok := baseline[action.TargetPID]; ok {
+					rootPID = normalizedActionRoot(target)
+				}
+			}
+			for pid, info := range baseline {
+				if normalizedActionRoot(info) == rootPID {
+					expectedStarts[pid] = info.StartedAt
+				}
+			}
+			killed, killErr := apiServer.TerminateAgentTreeVerified(action.TargetPID, action.TargetStartedAt.Format(time.RFC3339Nano), expectedStarts)
+			affected = len(killed)
+			return killErr
+		}, func(pid int32, signal syscall.Signal) error {
+			if err := revalidate(pid); err != nil {
+				return err
+			}
+			if err := syscall.Kill(int(pid), signal); err == nil {
+				affected++
+				return nil
+			} else {
+				return err
+			}
+		}, func(pid int32, nice int) error {
+			if err := revalidate(pid); err != nil {
+				return err
+			}
+			current, err := syscall.Getpriority(syscall.PRIO_PROCESS, int(pid))
+			if err != nil {
+				return err
+			}
+			if current >= nice {
+				affected++
+				return nil
+			}
+			if err := syscall.Setpriority(syscall.PRIO_PROCESS, int(pid), nice); err == nil {
+				affected++
+				return nil
+			} else {
+				return err
+			}
+		})
+		detail := fmt.Sprintf("session=%s root_pid=%d action=%s processes=%d", action.SessionKey, action.RootPID, action.Kind, affected)
+		if err != nil {
+			detail += " error=" + err.Error()
+		}
+		auditAction := "resource-intervention"
+		if action.Kind == string(resource.ActionTerminate) {
+			auditAction = "resource-containment"
+		}
+		st.PutAudit(store.AuditEntry{Action: auditAction, Rule: action.Name, ToMode: action.Kind, Detail: detail})
+		return err
+	})
 
 	// Peer-credential gating on the control socket: kernel-attested pid/uid per
 	// connection. Owner uid gets reads, tagged agent pids may ask the guard for
@@ -256,7 +351,8 @@ func main() {
 	if configPathUsed != "" {
 		go watchConfig(ctx, configPathUsed, configWatchDeps{
 			st: st, stk: advisorStk, pub: fleetPub, fleetCfg: fleetCfgLive,
-			logDir: filepath.Dir(cfg.DBPath), apiServer: apiServer,
+			logDir: filepath.Dir(cfg.DBPath), apiServer: apiServer, resourceControl: resourceControl,
+			initialConfig: &cfg,
 		})
 	}
 	// SSE live feed: each console gets its own bus subscription; unsubscribes
@@ -303,12 +399,14 @@ func main() {
 	case collect.SpoolAvailable():
 		go sup.Run(ctx, "eslogger", func(c context.Context) error {
 			t := collect.NewSpoolTailer(b)
+			t.OnProduce = func() { supReg.MarkProduced("eslogger") }
 			return t.Run(c)
 		})
 		log.Printf("file telemetry: tailing privileged ES collector spool")
 	case os.Geteuid() == 0 && collect.ESLoggerAvailable():
 		go sup.Run(ctx, "eslogger", func(c context.Context) error {
 			es := collect.NewESLogger(b)
+			es.OnProduce = func() { supReg.MarkProduced("eslogger") }
 			return es.Run(c)
 		})
 	default:
@@ -317,12 +415,14 @@ func main() {
 
 	go sup.Run(ctx, "netsampler", func(c context.Context) error {
 		ns := collect.NewNetSampler(b, tagger, cfg.NetSampleInterval, nil)
+		ns.OnProduce = func() { supReg.MarkProduced("netsampler") }
 		return ns.Run(c)
 	})
 
 	home, _ := os.UserHomeDir()
 	go sup.Run(ctx, "transcript", func(c context.Context) error {
 		ts := collect.NewTranscriptScanner(b, transcriptTailTargets(home, cfg.JSONLPath))
+		ts.OnProduce = func() { supReg.MarkProduced("transcript") }
 		return ts.Run(c)
 	})
 
@@ -411,17 +511,19 @@ func listActiveAgents(tg *agents.Tagger) []api.AgentSummary {
 	res := make([]api.AgentSummary, 0, len(tagged))
 	for pid, info := range tagged {
 		s := api.AgentSummary{
-			PID:      pid,
-			Name:     info.Name,
-			ExePath:  info.ExePath,
-			CWD:      info.CWD,
-			PPID:     info.PPID,
-			RootPID:  info.RootPID,
-			RSSBytes: info.RSSBytes,
-			IsOrphan: info.IsOrphan,
+			PID:        pid,
+			Name:       info.Name,
+			Kind:       info.Kind,
+			ExePath:    info.ExePath,
+			CWD:        info.CWD,
+			PPID:       info.PPID,
+			RootPID:    info.RootPID,
+			RSSBytes:   info.RSSBytes,
+			CPUPercent: info.CPUPercent,
+			IsOrphan:   info.IsOrphan,
 		}
 		if !info.StartedAt.IsZero() {
-			s.StartedAt = info.StartedAt.UTC().Format(time.RFC3339)
+			s.StartedAt = info.StartedAt.UTC().Format(time.RFC3339Nano)
 		}
 		res = append(res, s)
 	}

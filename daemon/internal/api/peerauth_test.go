@@ -241,6 +241,7 @@ func TestGateDispositionEndpointsPolicy(t *testing.T) {
 		{"/flags/acknowledge", `{"flag_id":"abc123"}`},
 		{"/allowlist", `{"agent":"cursor","host":"example.com"}`},
 		{"/advisor/retriage", `{"flag_id":"abc123"}`},
+		{"/resources/control", `{"id":"resource-1","decision":"dismiss"}`},
 	} {
 		resp, err := cl.Post("http://unix"+tc.path, "application/json", strings.NewReader(tc.body))
 		if err != nil {
@@ -266,6 +267,12 @@ func TestGateDispositionEndpointsPolicy(t *testing.T) {
 	}
 }
 
+func TestResourcePolicyPutIsPinnedUIMutation(t *testing.T) {
+	if !isMutation(http.MethodPut, "/resources/policy") {
+		t.Fatal("PUT /resources/policy must require the pinned UI role")
+	}
+}
+
 // Same set, but through the pinned-UI lens: this process IS the UI, so its
 // mutations must clear the gate (they may 400/503 on unwired stores — the
 // gate decision is what matters).
@@ -285,6 +292,7 @@ func TestGateDispositionEndpointsAsPinnedUI(t *testing.T) {
 		{"/mute", `{"rule":"keychain-access","host":"*"}`},
 		{"/flags/acknowledge", `{"flag_id":"abc123"}`},
 		{"/allowlist", `{"agent":"cursor","host":"example.com"}`},
+		{"/resources/control", `{"id":"resource-1","decision":"dismiss"}`},
 	} {
 		resp, err := cl.Post("http://unix"+tc.path, "application/json", strings.NewReader(tc.body))
 		if err != nil {

@@ -7,6 +7,7 @@ import Foundation
 @MainActor
 public final class AppState: ObservableObject {
     @Published public private(set) var status: StatusResponse?
+    @Published public private(set) var resources: ResourceSnapshotModel?
     @Published public private(set) var flags: [FlagModel] = []
     @Published public private(set) var incidents: [IncidentReportModel] = []
     @Published public private(set) var events: [EventModel] = []
@@ -49,10 +50,19 @@ public final class AppState: ObservableObject {
     /// Notification sink — a closure so tests can count deliveries instead of
     /// touching UNUserNotificationCenter.
     var notify: (FlagModel) -> Void = { NotificationManager.shared.sendNotification(for: $0) }
+    var notifyResource: (ResourceInterventionNotice) -> Void = { NotificationManager.shared.sendResourceNotification($0) }
     private var notifiedFlagIDs: Set<String> = []
     /// False until the first successful fetch seeds the notification baseline —
     /// without it, launch fires up to 20 banners for days-old flags.
     private var didSeedNotificationBaseline = false
+    private struct ResourceNoticeSignature: Equatable {
+        let state: String
+        let pendingID: String?
+        let nextAction: String?
+        let lastAction: String?
+        let lastError: String?
+    }
+    private var resourceNoticeBaseline: [String: ResourceNoticeSignature]?
     private var timer: Timer?
     /// Serializes fetch() so a slow daemon can't stack overlapping poll tasks
     /// that complete out of order and regress state.
@@ -237,11 +247,14 @@ public final class AppState: ObservableObject {
             let incidents = (try? await client.fetchIncidents(limit: 10)) ?? []
             let guardRules = (try? await client.fetchGuardRules()) ?? []
             let notifyCfg = (try? await client.fetchNotifyRules()) ?? .fallback
+            let resources = try? await client.fetchResources()
             // A pause requested mid-flight must not be overwritten by
             // results that were already in transit.
             guard !self.isPaused else { return }
             let wasDisconnected = !self.connected
             self.status = status
+			self.processResourceTransitions(resources)
+            self.resources = resources
             self.flags = flags
             self.incidents = incidents
             self.guardRules = guardRules
@@ -298,6 +311,7 @@ public final class AppState: ObservableObject {
             // the icon and console while the header says "Disconnected" is
             // how a user kills the wrong process.
             self.status = nil
+            self.resources = nil
             self.flags = []
             self.incidents = []
             self.events = []
@@ -429,6 +443,41 @@ public final class AppState: ObservableObject {
             let live = Set(flags.map(\.id))
             notifiedFlagIDs.formIntersection(live)
         }
+    }
+
+    private func processResourceTransitions(_ resources: ResourceSnapshotModel?) {
+        guard let sessions = resources?.sessions else { return }
+        let current = Dictionary(uniqueKeysWithValues: sessions.map { session in
+            let control = session.control
+            return (session.key, ResourceNoticeSignature(state: control?.state ?? "healthy",
+                                                         pendingID: control?.pendingID,
+                                                         nextAction: control?.nextAction,
+                                                         lastAction: control?.lastAction,
+                                                         lastError: control?.lastError))
+        })
+        guard let previous = resourceNoticeBaseline else {
+            resourceNoticeBaseline = current
+			for session in sessions {
+				guard let signature = current[session.key], signature.pendingID != nil || signature.lastError != nil else { continue }
+				notifyResource(ResourceInterventionNotice(sessionKey: session.key, sessionName: session.name,
+													  state: signature.state,
+													  action: signature.pendingID == nil ? signature.lastAction : signature.nextAction,
+													  error: signature.lastError))
+			}
+            return
+        }
+        for session in sessions {
+            guard let signature = current[session.key], previous[session.key] != signature else { continue }
+            let actionable = signature.pendingID != nil || signature.lastAction != nil || signature.lastError != nil
+                || signature.state == "grace" || signature.state == "over-budget"
+            if actionable {
+                notifyResource(ResourceInterventionNotice(sessionKey: session.key, sessionName: session.name,
+                                                          state: signature.state,
+                                                          action: signature.pendingID == nil ? signature.lastAction : signature.nextAction,
+                                                          error: signature.lastError))
+            }
+        }
+        resourceNoticeBaseline = current
     }
 
     /// Cancel the stream, debounce task, and poll timer (app quit path).
@@ -763,11 +812,11 @@ public final class AppState: ObservableObject {
     public var activeAgents: [AgentSummaryModel] { status?.agents ?? [] }
 
     /// Tree roots only: the popover lists agents, not their helper processes.
-
-    /// Tree roots only: the popover lists agents, not their helper processes.
     /// Killing a root kills the tree (the daemon's /kill targets the tree).
+    /// Infra roots (IDEs, model servers) are excluded — they are shared
+    /// infrastructure, never counted as agents.
     public var agentRoots: [AgentSummaryModel] {
-        activeAgents.filter { ($0.rootPid ?? $0.pid) == $0.pid }
+        activeAgents.filter { ($0.rootPid ?? $0.pid) == $0.pid && !$0.isInfra }
     }
 
     /// Tagged processes that are NOT tree roots — the subagents/helpers a
@@ -790,6 +839,10 @@ public final class AppState: ObservableObject {
             guard !parts.isEmpty else { return nil }
             return parts.reduce(0, +)
         }
+        public var totalCPUPercent: Double? {
+            let parts = ([root] + children).compactMap(\.cpuPercent)
+            return parts.isEmpty ? nil : parts.reduce(0, +)
+        }
         public var id: String { root.id }
         /// Most recent activity across the family — the tree-level liveness
         /// signal ("this session is working right now").
@@ -802,12 +855,14 @@ public final class AppState: ObservableObject {
         case lastActivity
         case created
         case memory
+        case impact
 
         var label: String {
             switch self {
             case .lastActivity: return "Last activity"
             case .created: return "Created"
             case .memory: return "Memory"
+            case .impact: return "Impact"
             }
         }
     }
@@ -844,6 +899,10 @@ public final class AppState: ObservableObject {
             let parts = trees.flatMap { [$0.0] + $0.1 }.compactMap(\.rssBytes)
             return parts.isEmpty ? nil : parts.reduce(0, +)
         }
+        public var totalCPUPercent: Double? {
+            let parts = trees.flatMap { [$0.0] + $0.1 }.compactMap(\.cpuPercent)
+            return parts.isEmpty ? nil : parts.reduce(0, +)
+        }
         public var sessionCount: Int { trees.count }
         public var processCount: Int { trees.reduce(0) { $0 + 1 + $1.1.count } }
         public var lastSeenAt: String? {
@@ -873,6 +932,11 @@ public final class AppState: ObservableObject {
                 sorted = t.sorted {
                     (familyRSS($0.0, $0.1) ?? 0) > (familyRSS($1.0, $1.1) ?? 0)
                 }
+            case .impact:
+                sorted = t.sorted {
+                    familyImpact(rss: familyRSS($0.0, $0.1), cpu: familyCPU($0.0, $0.1)) >
+                        familyImpact(rss: familyRSS($1.0, $1.1), cpu: familyCPU($1.0, $1.1))
+                }
             case .lastActivity:
                 sorted = t.sorted { familyLastSeen($0.0, $0.1) > familyLastSeen($1.0, $1.1) }
             }
@@ -894,6 +958,8 @@ public final class AppState: ObservableObject {
         public let childCount: Int
         /// Family memory (roots only; nil when daemon supplied no RSS).
         public let familyRSSBytes: UInt64?
+        /// Family CPU (roots only; nil when daemon supplied no CPU data).
+        public let familyCPUPercent: Double?
         /// Most recent activity in the family (roots only).
         public let familyLastSeenAt: String?
         public var id: String { agent.id }
@@ -916,6 +982,11 @@ public final class AppState: ObservableObject {
             ordered = trees.sorted {
                 (familyRSS($0.0, $0.1) ?? 0) > (familyRSS($1.0, $1.1) ?? 0)
             }
+        case .impact:
+            ordered = trees.sorted {
+                familyImpact(rss: familyRSS($0.0, $0.1), cpu: familyCPU($0.0, $0.1)) >
+                    familyImpact(rss: familyRSS($1.0, $1.1), cpu: familyCPU($1.0, $1.1))
+            }
         case .lastActivity:
             // Most recently active first: the session the user probably
             // wants to look at is at the top.
@@ -926,13 +997,15 @@ public final class AppState: ObservableObject {
         return ordered.flatMap { root, children in
             let famRSS = familyRSS(root, children)
             let famSeen = familyLastSeen(root, children)
+            let famCPU = familyCPU(root, children)
             var rows = [AgentRow(agent: root, depth: 0,
                                  childCount: children.count,
                                  familyRSSBytes: famRSS,
+                                 familyCPUPercent: famCPU,
                                  familyLastSeenAt: famSeen)]
             rows += children.map {
                 AgentRow(agent: $0, depth: 1, childCount: 0,
-                         familyRSSBytes: nil, familyLastSeenAt: nil)
+                         familyRSSBytes: nil, familyCPUPercent: nil, familyLastSeenAt: nil)
             }
             return rows
         }
@@ -946,6 +1019,7 @@ public final class AppState: ObservableObject {
                 AgentRow(agent: t.root, depth: 0,
                          childCount: t.children.count,
                          familyRSSBytes: t.rssBytes,
+                         familyCPUPercent: t.cpuPercent ?? familyCPU(t.root, t.children),
                          familyLastSeenAt: t.lastSeenAt)
             }
             return sortSessionRows(rows, by: sort)
@@ -997,6 +1071,11 @@ public final class AppState: ObservableObject {
             return rows.sorted { ($0.agent.startedAt ?? "") < ($1.agent.startedAt ?? "") }
         case .memory:
             return rows.sorted { ($0.familyRSSBytes ?? 0) > ($1.familyRSSBytes ?? 0) }
+        case .impact:
+            return rows.sorted {
+                familyImpact(rss: $0.familyRSSBytes, cpu: $0.familyCPUPercent) >
+                    familyImpact(rss: $1.familyRSSBytes, cpu: $1.familyCPUPercent)
+            }
         case .lastActivity:
             return rows.sorted { ($0.familyLastSeenAt ?? "") > ($1.familyLastSeenAt ?? "") }
         }
@@ -1011,6 +1090,17 @@ public final class AppState: ObservableObject {
         ([root] + kids).compactMap(\.lastSeenAt).max() ?? ""
     }
 
+    private func familyCPU(_ root: AgentSummaryModel, _ kids: [AgentSummaryModel]) -> Double? {
+        let parts = ([root] + kids).compactMap(\.cpuPercent)
+        return parts.isEmpty ? nil : parts.reduce(0, +)
+    }
+
+    /// Pressure relative to the first diagnostic thresholds: 4 GiB memory
+    /// or one fully occupied core. The stronger signal wins.
+    private func familyImpact(rss: UInt64?, cpu: Double?) -> Double {
+        max(Double(rss ?? 0) / Double(4 * 1024 * 1024 * 1024), (cpu ?? 0) / 100)
+    }
+
     /// Trees sorted by the chosen key (structured form; the popover uses
     /// the flat `agentRows`).
     public func agentTrees(sortedBy sort: AgentSort) -> [AgentTree] {
@@ -1023,6 +1113,11 @@ public final class AppState: ObservableObject {
             return trees.sorted { ($0.root.startedAt ?? "") < ($1.root.startedAt ?? "") }
         case .memory:
             return trees.sorted { ($0.totalRSSBytes ?? 0) > ($1.totalRSSBytes ?? 0) }
+        case .impact:
+            return trees.sorted {
+                familyImpact(rss: $0.totalRSSBytes, cpu: $0.totalCPUPercent) >
+                    familyImpact(rss: $1.totalRSSBytes, cpu: $1.totalCPUPercent)
+            }
         case .lastActivity:
             return trees.sorted { ($0.lastSeenAt ?? "") > ($1.lastSeenAt ?? "") }
         }

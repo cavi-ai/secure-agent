@@ -131,7 +131,7 @@
     <!-- Primary navigation: the console is organized by question, not by
          data source — "is this normal?" (Overview), "what ran, grouped by
          run?" (Sessions), "what's running?" (Agents), "where is traffic
-         going?" (Egress), "what needs my decision?" (Findings). -->
+         going?" (Egress), "what needs my decision?" (Attention). -->
     <nav class="tabs" role="tablist" aria-label="Console sections">
       <button class="tab-btn active" data-tab="overview" role="tab" aria-selected="true" aria-controls="tab-overview">
         <svg class="icon"><use href="#i-activity"/></svg><span>Overview</span>
@@ -149,14 +149,24 @@
         <span class="tab-badge tab-badge-warn" id="tab-badge-egress" hidden></span>
       </button>
       <button class="tab-btn" data-tab="findings" role="tab" aria-selected="false" aria-controls="tab-findings">
-        <svg class="icon"><use href="#i-alert"/></svg><span>Findings</span>
+        <svg class="icon"><use href="#i-alert"/></svg><span>Attention</span>
         <span class="tab-badge tab-badge-warn" id="tab-badge-findings" hidden></span>
       </button>
     </nav>
 
     <main>
-      <!-- Overview: "is this normal?" trend + live feed -->
+      <!-- Overview: resource posture, compact sessions, then "is this normal?" trend + live feed -->
       <div class="tabpanel" id="tab-overview" role="tabpanel">
+        <section class="panel resource-panel" id="resource-mission-control">
+          <div class="panel-head">
+            <h2><svg class="icon"><use href="#i-activity"/></svg>Resource Mission Control</h2>
+            <span class="badge" id="resource-observed">Live</span>
+          </div>
+          <div class="panel-body" id="resource-board">
+            <div class="empty"><svg class="icon"><use href="#i-activity"/></svg><span>Waiting for attributed CPU and memory samples…</span></div>
+          </div>
+        </section>
+
         <section class="panel session-strip-panel" id="session-strip-panel" hidden>
           <div class="panel-head">
             <h2><svg class="icon"><use href="#i-agent"/></svg>Sessions</h2>
@@ -287,9 +297,22 @@
         </div>
       </div>
 
-      <!-- Findings: "what needs my decision?" — flags, incidents, ledger -->
+      <!-- Attention: session-grouped decisions first, detailed evidence below. -->
       <div class="tabpanel" id="tab-findings" role="tabpanel" hidden>
-        <div class="grid">
+        <section class="panel attention-panel" id="attention-center">
+          <div class="panel-head attention-head">
+            <div>
+              <span class="attention-eyebrow">Operator queue</span>
+              <h2><svg class="icon"><use href="#i-alert"/></svg>Needs your attention</h2>
+              <p>Decisions grouped by the complete agent session they affect.</p>
+            </div>
+            <span class="badge badge-amber" id="badge-attention-count">0</span>
+          </div>
+          <div class="panel-body" id="attention-list">
+            <div class="empty"><svg class="icon"><use href="#i-shield"/></svg><span>No decisions waiting</span></div>
+          </div>
+        </section>
+        <div class="grid" id="security-findings-grid">
           <div class="col">
             <section class="panel">
               <div class="panel-head">
@@ -358,6 +381,18 @@
     </div>
     <div class="modal-body" id="modal-report-body">
       <div class="loading">Loading incident report…</div>
+    </div>
+  </dialog>
+
+  <dialog id="resource-policy-modal" class="modal resource-policy-modal">
+    <div class="modal-head">
+      <div><span class="resource-eyebrow">Resource guardrails</span><h3><svg class="icon"><use href="#i-activity"/></svg>Policy editor</h3></div>
+      <button class="btn btn-icon" id="btn-close-resource-policy" title="Close"><svg class="icon"><use href="#i-close"/></svg></button>
+    </div>
+    <div class="modal-body" id="resource-policy-body"></div>
+    <div class="resource-policy-actions">
+      <button type="button" class="btn btn-ghost" id="btn-cancel-resource-policy">Cancel</button>
+      <button type="button" class="btn btn-primary" id="btn-save-resource-policy">Save and apply</button>
     </div>
   </dialog>
 

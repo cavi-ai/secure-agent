@@ -16,7 +16,7 @@
 
 > **Platform support.** macOS 14+ is the primary target (Endpoint Security telemetry, menubar app, DMG packaging). The Go daemon also builds and runs on **Linux** (`GOOS=linux go build ./...`), where Endpoint Security (`eslogger`) file telemetry degrades gracefully to the transcript scanner and network sampling runs on `/proc` — the guard hooks, egress firewall, fleet, and console all work identically. CI enforces the Linux build + tests on every push.
 
-As AI coding agents (Claude Code, Cursor, Codex, OpenClaw, Copilot, etc.) gain increasing autonomy in local development environments, they gain execution privileges to read local sensitive files, mutate shell configurations, access credential stores, and initiate external network connections. `secure-agent` provides a non-intrusive, multi-layered defense system that enforces zero-trust boundaries around AI agent process trees without disrupting developer velocity.
+As AI coding agents (Claude Code, Cursor, Codex, Gemini, opencode, Copilot, etc.) gain increasing autonomy in local development environments, they gain execution privileges to read local sensitive files, mutate shell configurations, access credential stores, and initiate external network connections. `secure-agent` provides a non-intrusive, multi-layered defense system that enforces zero-trust boundaries around AI agent process trees without disrupting developer velocity.
 
 ---
 
@@ -29,7 +29,7 @@ As AI coding agents (Claude Code, Cursor, Codex, OpenClaw, Copilot, etc.) gain i
   Scans tool output streams, web fetches, and agent transcripts in real time for indirect prompt injection vectors and credential leakage.
 
 - ⚡ **Low-Overhead System Telemetry Daemon (`secure-agentd`)**  
-  A pure Go daemon that consumes macOS Endpoint Security events (`eslogger`) and periodically samples per-process active network sockets (`libproc`). Maintains a lightweight footprint (<30 MB RAM, <2% CPU).
+  A pure Go daemon that consumes macOS Endpoint Security events (`eslogger`) and periodically samples per-process active network sockets (`lsof`). Current measured footprint: ~100 MB RSS resident, <2% CPU (the "<30 MB" target was written before the resource tracker, proxy, and advisor subsystems landed).
 
 - 🔗 **Sliding-Window Event Correlation Engine**  
   Correlates process file activity with network egress. Automatically raises security flags when an agent process reads a sensitive file (e.g. `~/.aws/credentials` or `.env`) followed by an outbound socket connection to a domain outside its pre-approved vendor allowlist.
@@ -41,7 +41,17 @@ As AI coding agents (Claude Code, Cursor, Codex, OpenClaw, Copilot, etc.) gain i
   Features an inline HTTP/HTTPS proxy server with dynamic TLS certificate generation (`CAManager`) that inspects request streams for outbound credential leaks (`redact.Detect`) and response streams for prompt injection attacks (`injection.Detect`).
 
 - 🖥️ **Live Web Security Console (`http://localhost:8443/dashboard/`)**  
-  Embedded dark-mode visual web console for real-time monitoring of active AI agent process trees, secret-exposure incident reports, sliding-window security flags, and proxy payload inspection streams. Updates are pushed over SSE (`/events/stream`) with a polling fallback. The console's telemetry endpoints on the proxy port are gated by a per-install **console token** (0600, `~/.config/secure-agent/console-token`) — a credential agents never receive, so a routed agent can't turn its proxy token into telemetry reads or guard self-approval. The menubar's **Open console** passes the token automatically.
+  Embedded dark-mode visual web console for real-time monitoring of active AI agent process trees, secret-exposure incident reports, sliding-window security flags, and proxy payload inspection streams. Its **Attention** view groups resource approvals, blocked guard requests, critical findings and incidents, and uninspected egress by complete session, with workspace, memory, CPU, process count, and scoped actions in one queue. Updates are pushed over SSE (`/events/stream`) with a polling fallback. The console's telemetry endpoints on the proxy port are gated by a per-install **console token** (0600, `~/.config/secure-agent/console-token`) — a credential agents never receive, so a routed agent can't turn its proxy token into telemetry reads or guard self-approval. The menubar's **Open console** passes the token automatically.
+
+- 📊 **Resource Mission Control**
+  Attributes live resident memory and CPU to complete agent sessions—root process plus helpers—so one runaway child cannot hide behind a harmless-looking parent. Whole-machine context shows available and free memory, compression, swap, CPU split between agents and everything else, memory pressure, thermal state, and a conservative headroom score. The console ranks sessions by pressure, charts one hour of history, explains heavy memory, full-core CPU, rapid growth, idle retention, runaway children, and orphan drift, and opens the entire process family before any terminate action. The native menu bar shows machine headroom and family totals and adds an **Impact** sort for quick daily triage. A bounded local flight recorder keeps pressure episodes, their captured host conditions, process attribution, and the ten-minute lead-up available for post-mortem review after a session exits. Each episode correlates redacted process, tool, file, network, guard, and security activity with the steepest observed memory rise while clearly distinguishing temporal correlation from proven causation.
+
+  Optional session budgets add a sustained-breach grace period, cooldown, and
+  a graduated `notify → lower priority → pause → terminate` ladder. `observe`
+  reports only, `prompt` notifies automatically and requires approval for
+  state-changing steps, and `terminate` executes the configured ladder
+  automatically. Paused session families can be resumed from the console. The
+  default is `observe` with both limits disabled.
 
 - 🛠️ **Native `secure-agent` CLI Tool**  
   Pure-Go terminal utility (`secure-agent status`, `flags`, `incidents`, `kill`, `fleet`) for inspecting security posture directly from terminal prompts.
@@ -69,7 +79,7 @@ flowchart TD
 
     subgraph OS Telemetry ["macOS Subsystems"]
         ES["eslogger\n(open, exec, rename, unlink, tcc_modify)"]
-        LP["libproc\n(Socket Sampler)"]
+        LP["lsof\n(Socket Sampler)"]
     end
 
     subgraph Daemon ["secure-agentd (Go Daemon)"]
@@ -327,6 +337,8 @@ The Go daemon listens on a local Unix domain socket (`~/.config/secure-agent/dae
 | Endpoint | Method | Description |
 |---|---|---|
 | `/status` | `GET` | Returns daemon running state, uptime, active agent count, and proxy status. |
+| `/resources` | `GET` | Returns attributed session-family RSS, CPU, process topology, history, diagnoses, and reclaim estimates. |
+| `/resources/control` | `POST` | Applies or dismisses a pending resource action, or resumes a paused session family. |
 | `/flags` | `GET` | Returns recent security correlation flags (accepts optional `?limit=N`). |
 | `/events` | `GET` | Returns recent raw system events (accepts optional `?limit=N`). |
 | `/incidents` | `GET` | Returns rotation intel postmortem reports & checklists (`?id=ID`, `?format=markdown`). |

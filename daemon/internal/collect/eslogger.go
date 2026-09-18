@@ -17,6 +17,10 @@ import (
 
 type ESLogger struct {
 	bus *bus.Bus
+
+	// OnProduce, when set, is called after any ES event is published — the
+	// supervisor's coverage heartbeat.
+	OnProduce func()
 }
 
 func NewESLogger(b *bus.Bus) *ESLogger {
@@ -163,6 +167,9 @@ func (es *ESLogger) Run(ctx context.Context) error {
 		line := scanner.Bytes()
 		if e, ok := ParseESLine(line); ok {
 			es.bus.Publish(e)
+			if es.OnProduce != nil {
+				es.OnProduce()
+			}
 		}
 	}
 

@@ -228,6 +228,49 @@ function fmtRSS(n) {
   return (n / 1073741824).toFixed(1) + ' GB';
 }
 
+function fmtCPU(value) {
+  if (value === null || value === undefined || !Number.isFinite(Number(value))) return '';
+  const n = Number(value);
+  return n.toFixed(1).replace(/\.0$/, '') + '%';
+}
+
+// A score of 1 means the session is at the first-slice warning threshold:
+// either 4 GiB resident memory or one full CPU core.
+function resourceImpact(session) {
+  if (!session) return 0;
+  const memory = Math.max(0, Number(session.rss_bytes) || 0) / (4 * 1024 ** 3);
+  const cpu = Math.max(0, Number(session.cpu_percent) || 0) / 100;
+  return Math.max(memory, cpu);
+}
+
+function resourceSparkPoints(samples, field, width, height) {
+  const values = (samples || [])
+    .filter(sample => sample && sample[field] !== null && sample[field] !== undefined && Number.isFinite(Number(sample[field])))
+    .map(sample => Number(sample[field]));
+  if (!values.length) return '';
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const range = max - min;
+  return values.map((value, index) => {
+    const x = values.length === 1 ? width / 2 : (index / (values.length - 1)) * width;
+    const y = range === 0 ? height / 2 : height - ((value - min) / range) * height;
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(' ');
+}
+
+function resourceDiagnosisText(diagnosis) {
+  if (!diagnosis) return '';
+  const fallbacks = {
+    'heavy-memory': 'Heavy memory use',
+    'heavy-cpu': 'High CPU use',
+    'rapid-growth': 'Memory is growing quickly',
+    'idle-heavy': 'Idle session retains substantial memory',
+    'runaway-child': 'One child dominates session memory',
+    'orphan-drift': 'Detached processes are still consuming resources',
+  };
+  return escapeHTML(diagnosis.summary || fallbacks[diagnosis.code] || 'Resource pressure detected');
+}
+
 function fmtAge(iso, nowMs) {
   const t = Date.parse(iso);
   if (!isFinite(t)) return '';
@@ -348,6 +391,134 @@ function sessionNeedsYou(row, flags) {
   return n;
 }
 
+// Build the operator's attention queue around whole agent sessions. Signals
+// without a PID (guard prompts and uninspected egress) join a live session
+// only when the agent name identifies exactly one session; ambiguous work is
+// kept in an explicit agent-level group rather than guessed onto a process.
+function buildAttentionGroups(data) {
+  data = data || {};
+  const resources = data.resources || {};
+  const resourceSessions = resources.sessions || [];
+  const fallbackRows = resourceSessions.length ? [] : sessionRows(
+    (data.status && data.status.agents) || [], data.status && data.status.trees
+  );
+  const sessions = resourceSessions.map(s => ({
+    key: String(s.key || s.root_pid || ''),
+    agent: s.name || '',
+    workspace: s.workspace || '',
+    label: cwdLabel(s.workspace) || familyTitle(s.name),
+    rootPid: Number(s.root_pid || 0),
+    pids: (s.processes || []).map(p => Number(p.pid)).filter(Number.isFinite),
+    rssBytes: Number(s.rss_bytes || 0),
+    cpuPercent: Number(s.cpu_percent || 0),
+    processCount: Number(s.process_count || (s.processes || []).length || 0),
+    diagnoses: s.diagnoses || [],
+    control: s.control || {},
+  })).concat(fallbackRows.map(row => ({
+    key: String((row.root && (row.root.root_pid || row.root.pid)) || ''),
+    agent: (row.root && row.root.name) || '',
+    workspace: (row.root && row.root.cwd) || '',
+    label: row.label,
+    rootPid: Number((row.root && row.root.pid) || 0),
+    pids: row.pids || [],
+    rssBytes: Number(row.rss || 0),
+    cpuPercent: 0,
+    processCount: (row.pids || []).length,
+    diagnoses: [],
+    control: {},
+  })));
+
+  const byPID = new Map();
+  const byAgent = new Map();
+  sessions.forEach(session => {
+    session.pids.forEach(pid => byPID.set(Number(pid), session));
+    if (session.rootPid) byPID.set(session.rootPid, session);
+    const key = String(session.agent || '').toLowerCase();
+    if (key) byAgent.set(key, [...(byAgent.get(key) || []), session]);
+  });
+
+  const groups = new Map();
+  const targetFor = (agent, pid) => {
+    const direct = byPID.get(Number(pid));
+    if (direct) return direct;
+    const matches = byAgent.get(String(agent || '').toLowerCase()) || [];
+    if (matches.length === 1) return matches[0];
+    return null;
+  };
+  const groupFor = (agent, pid) => {
+    const session = targetFor(agent, pid);
+    const key = session ? `session:${session.key}` : `agent:${agent || 'unattributed'}`;
+    if (!groups.has(key)) {
+      groups.set(key, {
+        key,
+        label: session ? session.label : `${agent || 'Unattributed'} activity`,
+        agent: session ? session.agent : (agent || 'unknown'),
+        workspace: session ? session.workspace : '',
+        rootPid: session ? session.rootPid : 0,
+        pids: session ? session.pids : [],
+        rssBytes: session ? session.rssBytes : 0,
+        cpuPercent: session ? session.cpuPercent : 0,
+        processCount: session ? session.processCount : 0,
+        items: [],
+      });
+    }
+    return groups.get(key);
+  };
+  const add = (agent, pid, item) => groupFor(agent, pid).items.push(item);
+
+  sessions.forEach(session => {
+    if (!session.control.pending_id) return;
+    const diagnosis = session.diagnoses[0] || {};
+    add(session.agent, session.rootPid, {
+      kind: 'resource', priority: 4, id: session.control.pending_id,
+      action: session.control.next_action || 'intervention',
+      title: 'Resource pressure',
+      detail: diagnosis.summary || 'This session exceeded its configured resource budget.',
+    });
+  });
+  (data.guardPending || []).forEach(prompt => add(prompt.agent, 0, {
+    kind: 'guard', priority: 5, id: prompt.id, title: 'Guard decision',
+    detail: `${prompt.tool || 'Tool'} wants access to ${prompt.path || 'a protected path'}`,
+    rule: prompt.rule_id || '', path: prompt.path || '', scopeText: prompt.scope_text || '',
+  }));
+  (data.incidents || []).forEach(incident => {
+    const status = (incident.workflow && incident.workflow.status) || 'open';
+    const risk = String(incident.risk || '').toUpperCase();
+    if (status === 'resolved' || (risk !== 'CRITICAL' && risk !== 'HIGH')) return;
+    add(incident.agent, incident.pid, {
+      kind: 'incident', priority: 3, id: incident.id, title: 'Critical incident',
+      detail: incident.summary || incident.rule || 'A security incident needs review.', status,
+    });
+  });
+  (data.flags || []).forEach(flag => {
+    if (flag.acknowledged || Number(flag.severity || 0) < 3) return;
+    add(flag.agent, flag.pid, {
+      kind: 'flag', priority: 2, id: flag.id, title: 'Critical finding',
+      detail: `${flag.rule || 'Security rule'}${(flag.evidence || [])[0] ? ` — ${flag.evidence[0]}` : ''}`,
+    });
+  });
+  (data.uninspected || []).forEach(row => {
+    const group = groupFor(row.agent, row.pid);
+    let item = group.items.find(candidate => candidate.kind === 'egress');
+    if (!item) {
+      item = { kind: 'egress', priority: 1, title: 'Uninspected egress', detail: '', count: 0, hosts: [] };
+      group.items.push(item);
+    }
+    item.count += Number(row.count || 0);
+    if (row.host && !item.hosts.includes(row.host)) item.hosts.push(row.host);
+    item.detail = `${item.count} connection${item.count === 1 ? '' : 's'} across ${item.hosts.length} endpoint${item.hosts.length === 1 ? '' : 's'} bypassed inspection.`;
+  });
+
+  return [...groups.values()]
+    .filter(group => group.items.length)
+    .map(group => ({ ...group, items: group.items.sort((a, b) => b.priority - a.priority) }))
+    .sort((a, b) => {
+      const pa = a.items[0] ? a.items[0].priority : 0;
+      const pb = b.items[0] ? b.items[0].priority : 0;
+      return pb - pa || b.items.length - a.items.length || a.label.localeCompare(b.label);
+    });
+}
+
 function sessionStripHTML(rows, total, now, flags) {
   rows = rows || [];
   if (!rows.length) return '';
@@ -446,11 +617,9 @@ function vendorKeyPromoteHTML(ids) {
     <button class="btn btn-primary btn-sm" data-action="promote-vendor-keys"><svg class="icon"><use href="#i-arrow"/></svg><span>Promote vendor keys to block</span></button>
   </div>`;
 }
-
 // sseNeedsSnapshot: which EventSource kinds must refetch GET /snapshot.
 // file/conn/transcript noise only bumps the sparkline — a 400ms snapshot
 // after every ES file-open is the leftover hot-path tax.
 function sseNeedsSnapshot(kind) {
   return kind === 'exec' || kind === 'guard-prompt' || kind === 'guard-resolved' || kind === 'proxy-hit';
 }
-

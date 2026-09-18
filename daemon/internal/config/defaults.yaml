@@ -15,7 +15,11 @@ keychain_markers:
   - "login.keychain"
 agents:
   - { name: claude,      match: ["claude"] }
-  - { name: cursor,      match: ["Cursor Helper", "cursor"] }
+  # The Cursor IDE is infrastructure, not an agent — it must be listed BEFORE
+  # the cursor CLI entry (first match wins) so Cursor.app and its helpers are
+  # classified infra while the cursor CLI harness stays an agent.
+  - { name: cursor-ide,  match: ["Cursor.app", "Cursor Helper"], kind: infra }
+  - { name: cursor,      match: ["cursor"] }
   - { name: codex,       match: ["codex"] }
   - { name: opencode,    match: ["opencode", "OpenCode Helper"] }
   - { name: antigravity, match: ["antigravity", "Antigravity Helper"] }
@@ -26,11 +30,13 @@ agents:
   - { name: copilot,     match: ["copilot"] }
   # Local model infrastructure: tracked (killable, monitored) but their
   # loopback traffic is never flagged — they're what the advisor talks to.
-  - { name: ollama,      match: ["ollama", "llama-server", "llama.cpp"] }
-  - { name: lm-studio,   match: ["lm studio", "lmstudio"] }
+  # kind: infra keeps them out of agent/session counts and reclaimable memory.
+  - { name: ollama,      match: ["ollama", "llama-server", "llama.cpp"], kind: infra }
+  - { name: lm-studio,   match: ["lm studio", "lmstudio"], kind: infra }
 vendor_allowlist:
   claude:      ["anthropic.com", "claude.ai"]
   cursor:      ["cursor.sh", "cursor.com"]
+  cursor-ide:  ["cursor.sh", "cursor.com"]
   codex:       ["openai.com", "api.openai.com"]
   opencode:    ["opencode.ai"]
   antigravity: ["anthropic.com"]
@@ -42,6 +48,12 @@ vendor_allowlist:
   ollama:      ["ollama.com", "ollama.ai"]
   lm-studio:   ["lmstudio.ai"]
 net_sample_interval_ms: 2000
+# Time-based event retention, per kind. Socket churn (conn open/close) ages
+# out fast so it cannot evict the security record; everything else keeps a
+# week. A row-count cap remains as a backstop.
+retention:
+  conn_event_hours: 24
+  event_days: 7
 socket_path: "~/.config/secure-agent/daemon.sock"
 db_path: "~/.local/state/secure-agent/events.db"
 jsonl_path: "~/.local/state/secure-agent/events.jsonl"
@@ -90,6 +102,16 @@ firewall:
     treat_body_secret_as_leak: true
 directory_guard:
   prompt_deadline_ms: 45000
+
+# Whole-session resource budgets. Limits of zero disable enforcement for that
+# metric. Observe is the safe default; prompt/terminate require explicit opt-in.
+resource_control:
+  mode: observe
+  max_rss_mb: 0
+  max_cpu_percent: 0
+  sustain_seconds: 30
+  cooldown_seconds: 300
+  workspace_overrides: []
 
 # Local triage advisor (opt-in): a locally served model gives a second opinion
 # on flags and incidents. Loopback-only, enforced in code. See

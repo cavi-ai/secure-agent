@@ -84,6 +84,7 @@ def main():
         build_harness(tmp)
         dom = dump_dom(chrome, tmp)
         dom_session = dump_dom(chrome, tmp, "?sessiondemo")
+        dom_guard = dump_dom(chrome, tmp, "?guarddemo")
         dom_uninsp = dump_dom(chrome, tmp, "?uninspecteddemo")
         dom_notify = dump_dom(chrome, tmp, "?notifydemo")
         dom_allow = dump_dom(chrome, tmp, "?allowdemo")
@@ -95,6 +96,8 @@ def main():
         dom_netfail = dump_dom(chrome, tmp, "?netfail")
         dom_tokenseed = dump_dom(chrome, tmp, "?requiretoken&tokenseed")
         dom_nofleet = dump_dom(chrome, tmp, "?nofleetdemo")
+        dom_noresources = dump_dom(chrome, tmp, "?noresourcesdemo")
+        dom_policy = dump_dom(chrome, tmp, "?policydemo")
         dom_demote = dump_dom(chrome, tmp, "?demotedemo")
         dom_allowrm = dump_dom(chrome, tmp, "?allowlistdemo")
 
@@ -236,6 +239,7 @@ def main():
         check("tab bar renders all five tabs",
               dom.count('class="tab-btn') >= 5
               and all(f'data-tab="{t}"' in dom for t in ("overview", "sessions", "agents", "egress", "findings")))
+        check("findings destination is presented as attention", '>Attention<' in dom)
         check("overview tab active by default",
               'class="tab-btn active" data-tab="overview"' in dom)
         check("non-active panels hidden",
@@ -244,6 +248,73 @@ def main():
               and 'id="tab-findings" role="tabpanel" hidden' in dom)
         check("overview panel visible",
               'id="tab-overview" role="tabpanel">' in dom)
+        check("resource mission control is present", 'id="resource-mission-control"' in dom)
+        resource_view = dom.split('id="resource-mission-control"', 1)[1].split('id="session-strip-panel"', 1)[0]
+        check("whole-machine headroom is visible",
+              "Machine headroom" in resource_view and "25 / 100" in resource_view
+              and "4.0 GB available" in resource_view)
+        check("agent and non-agent memory are separated",
+              "Agents 34.4%" in resource_view and "Other 40.6%" in resource_view
+              and 'class="resource-host-segment agent"' in resource_view)
+        check("whole-machine CPU swap and thermal context are visible",
+              "75.0% total" in resource_view and "58.4% other" in resource_view
+              and "2.0 GB / 8.0 GB" in resource_view and "Nominal" in resource_view)
+        check("high-impact session shows CPU and memory",
+              "132.5%" in resource_view and "5.5 GB" in resource_view)
+        check("resource diagnosis explains the pressure",
+              "Memory grew 1.4 GB in 15 minutes." in resource_view)
+        check("resource flight recorder preserves exited sessions",
+              "Pressure flight recorder" in resource_view and "data-pipeline" in resource_view)
+        check("resource flight recorder remains visible with no live sessions",
+              "No attributed agent resource use right now" in dom_noresources
+              and "Pressure flight recorder" in dom_noresources
+              and "data-pipeline" in dom_noresources)
+        check("resource flight recorder identifies the dominant process",
+              "PID 4419" in resource_view and "79%" in resource_view
+              and "One child process dominated session memory." in resource_view)
+        check("resource pressure episode explains correlated activity",
+              "Memory rose 3.0 GiB in 10m while node started." in resource_view
+              and "Observed correlation" in resource_view)
+        check("pressure episode preserves captured machine context",
+              "Host at capture" in resource_view and "1.0 GB available" in resource_view
+              and "Critical pressure" in resource_view and "Serious thermal" in resource_view)
+        check("resource pressure chart includes activity markers",
+              'class="resource-activity-marker' in resource_view
+              and "Bash tool ran" in resource_view
+              and "connected to api.openai.com:443" in resource_view)
+        check("historical resource evidence stays scoped to its captured lifetime",
+              "Scoped to this captured process lifetime" in resource_view
+              and 'data-action="filter-pids" data-pids="4412,4419,4420"' not in resource_view)
+        check("resource trend SVG is rendered",
+              'class="resource-spark"' in resource_view and 'points="' in resource_view)
+        check("resource action targets the full family",
+              'data-action="filter-pids" data-pids="5821,5822"' in resource_view)
+        check("resource policy mode and grace are visible",
+              "prompt</b> machine policy" in resource_view and "30s grace" in resource_view)
+        check("resource policy source is visible on sessions",
+              "workspace policy · /Users/dev/workspace" in resource_view)
+        check("resource policy editor opens with the active document",
+              'id="resource-policy-modal" class="modal resource-policy-modal" open' in dom_policy
+              and "Policy editor" in dom_policy and "Machine default" in dom_policy)
+        check("resource intervention ladder is visible",
+              "notify → lower priority → pause → terminate" in resource_view)
+        check("policy editor exposes intervention steps",
+              'data-step-action="lower_priority" checked' in dom_policy
+              and 'data-step-action="pause" checked' in dom_policy)
+        check("policy editor adds the selected session workspace",
+              'value="/Users/dev/workspace/api-service"' in dom_policy)
+        check("policy editor exposes automatic containment warning",
+		      "applies every enabled intervention automatically" in dom_policy)
+        check("terminate policy save requires explicit confirmation",
+		      'data-last-confirm="Terminate mode will automatically apply the enabled intervention ladder to entire agent sessions. Save this policy?"' in dom_policy)
+        check("resource approval contains the whole session",
+              'data-action="resource-control" data-id="resource-1" data-decision="apply" data-intervention="pause"' in resource_view)
+        check("resource approval can keep the session running",
+              'data-action="resource-control" data-id="resource-1" data-decision="dismiss"' in resource_view)
+        check("paused resource session can resume",
+              'data-action="resource-control" data-session="6033:1789484400000000000" data-decision="resume"' in resource_view)
+        check("resource intervention failure is visible",
+              "Intervention failed: rollback failed: permission denied" in resource_view)
         check("sessions panel lives in the sessions tab",
               dom.index('id="tab-sessions"') < dom.index('id="session-board"')
               and dom.index('id="session-board"') < dom.index('id="tab-agents"'))
@@ -265,7 +336,23 @@ def main():
         check("egress tab badge shows uninspected count",
               'id="tab-badge-egress">2<' in dom)
         check("findings tab badge shows needs-you count",
-              'id="tab-badge-findings">4<' in dom)
+              'id="tab-badge-findings">8<' in dom)
+        attention = dom.split('id="attention-center"', 1)[1].split('id="security-findings-grid"', 1)[0]
+        check("attention center groups the whole api-service session",
+              'class="attention-group' in attention and "api-service" in attention
+              and "5.5 GB" in attention and "132.5%" in attention and "<b>2</b> processes" in attention)
+        check("attention center unifies all actionable signal types",
+              all(label in attention for label in ("Guard decision", "Resource pressure", "Critical incident", "Critical finding", "Uninspected egress")))
+        check("attention resource actions target the full session",
+              'data-action="resource-control" data-id="resource-1" data-decision="apply"' in attention)
+        check("attention guard actions expose bounded choices",
+              'data-action="guard-resolve" data-id="guard-1" data-verdict="allow" data-scope="once"' in attention
+              and 'data-action="guard-resolve" data-id="guard-1" data-verdict="deny" data-scope="always"' in attention)
+        check("attention shows blast-radius copy", "approves every path under rule" in attention)
+        check("attention egress opens endpoint evidence", 'data-action="open-uninspected"' in attention)
+        check("resolved guard request leaves the attention queue",
+              'id="tab-badge-findings">7<' in dom_guard
+              and 'data-action="guard-resolve" data-id="guard-1"' not in dom_guard)
         check("posture flag item switches to findings tab",
               'data-action="goto-tab" data-tab="findings"' in dom)
         check("tab switch reveals the target panel",

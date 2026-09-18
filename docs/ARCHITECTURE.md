@@ -11,8 +11,8 @@ This document provides a detailed overview of the internal architecture of `secu
 ```
 +-----------------------------------------------------------------------+
 |                             Harness Hooks                             |
-|           (plugin/hooks/secret_guard.py & injection_scan.py)          |
-|    - Synchronous PreToolUse mutation & read gating                    |
+|     (plugin/hooks/secret_guard.py, injection_scan.py, activity_log.py)|
+|    - Synchronous PreToolUse mutation & read gating (directory guard)  |
 |    - Synchronous PostToolUse prompt injection scanning                |
 |    - Writes session audit JSONL                                       |
 +-----------------------------------+-----------------------------------+
@@ -23,7 +23,7 @@ This document provides a detailed overview of the internal architecture of `secu
 |                            (Go Daemon)                                |
 |  +--------------------+  +-------------------+  +------------------+  |
 |  | File Watcher       |  | Socket Sampler    |  | Process Tagger   |  |
-|  | (eslogger)         |  | (libproc)         |  | (sysctl/proc)    |  |
+|  | (eslogger spool)   |  | (lsof)            |  | (sysctl/proc)    |  |
 |  +---------+----------+  +---------+---------+  +--------+---------+  |
 |            |                       |                     |            |
 |            +-----------------------+---------------------+            |
@@ -31,21 +31,28 @@ This document provides a detailed overview of the internal architecture of `secu
 |                                    v                                  |
 |                     Event Bus (Non-blocking Pub/Sub)                  |
 |                                    |                                  |
-|                                    v                                  |
-|                 Sliding-Window Correlation Engine                     |
-|                                    |                                  |
+|         +--------------------------+--------------------------+         |
+|         v                          v                          v         |
+|  Sliding-Window            Egress Proxy + Secret       Resource Tracker |
+|  Correlation Engine        Leak Firewall               + Control Ladder |
+|  (correlate.go)            (proxy/, firewall/)         (resource/)      |
+|         |                          |                          |         |
+|         +--------------------------+--------------------------+         |
 |                                    v                                  |
 |                 SQLite Store & Unix Domain Socket API                 |
-+-----------------------------------+-----------------------------------+
-                                    |
-                                    v (Unix Socket API)
-+-----------------------------------+-----------------------------------+
-|                       secure-agent-menubar                            |
-|                            (Swift UI)                                 |
-|    - NSStatusItem menu bar view & desktop notifications               |
-|    - Active agent list & evidence chain view                          |
-|    - One-click process kill switch                                    |
-+-----------------------------------------------------------------------+
+|                       (+ SSE stream, posture endpoint)                |
++--------+--------------------------+--------------------------+--------+
+         |                          |                          |
+         v (Unix Socket API)        v (Loopback HTTP)          v (Webhooks)
++-------------------+  +---------------------------+  +-------------------+
+| secure-agent-     |  | Web Console (dashboard)   |  | Fleet Collector   |
+| menubar (SwiftUI) |  | served by the daemon      |  | (secure-agent-    |
+| - posture hero &  |  | behind console token:     |  |  collector):      |
+|   guard prompts   |  | posture, sessions,        |  | flags, incidents  |
+| - one-click kill  |  | egress, attention         |  | and posture per   |
+| - local advisor   |  | - CSP + nosniff           |  |  node, rollup     |
+|   triage surface  |  |                           |  |                   |
++-------------------+  +---------------------------+  +-------------------+
 ```
 
 ---
@@ -61,8 +68,8 @@ The daemon (`secure-agentd`) runs as a child process of the menu bar app: it sta
    - Parses the JSON stream in real-time and filters target paths against sensitive path rules (`sensitive_globs`, `sensitive_paths`, `keychain_markers`).
 
 2. **Network Socket Sampler (`daemon/internal/collect/netsample.go`)**:
-   - Periodically queries open TCP/UDP sockets for tagged agent process PIDs using `libproc` socket APIs.
-   - Differs consecutive socket states to detect newly opened outbound socket connections.
+   - Periodically lists established TCP sockets via `lsof` (platform-abstracted: `netsample_darwin.go`, `netsample_linux.go`) and keeps only sockets owned by tagged agent process trees. Loopback endpoints are filtered out — local-only traffic is not egress.
+   - Diffs consecutive socket states to detect newly opened outbound socket connections.
 
 3. **Agent Process Tagger (`daemon/internal/agents/tagger.go`)**:
    - Monitors the system process table to identify known AI agent executables (`claude`, `cursor`, `codex`, `copilot`) and child interpreter subprocesses (`node`, `python`, `bash`).
@@ -77,7 +84,7 @@ The daemon (`secure-agentd`) runs as a child process of the menu bar app: it sta
 - **Pub/Sub Channel Bus (`daemon/internal/bus/bus.go`)**: Centralized Go channel event bus with non-blocking fan-out subscribers. Guarantees that slow database disk IO never blocks real-time file or process event capture.
 - **Store Engine (`daemon/internal/store/store.go`)**: Dual-persists events and correlation flags to SQLite (`events.db`) and structured JSONL logs (`events.jsonl`). Implements automatic retention pruning.
 
-### Correlation Engine (`daemon/internal/correlate/correlator.go`)
+### Correlation Engine (`daemon/internal/correlate/correlate.go`)
 
 The correlator evaluates incoming event streams against a sliding time window (default 30 seconds):
 
@@ -88,7 +95,7 @@ The correlator evaluates incoming event streams against a sliding time window (d
 
 ## 2. Harness Plugin Hooks (`plugin/`)
 
-The plugin layer operates synchronously inside AI agent CLI/IDE harnesses (Claude Code, Cursor, OpenClaw).
+The plugin layer operates synchronously inside AI agent CLI/IDE harnesses (Claude Code, Cursor).
 
 - **`secret_guard.py` (`PreToolUse`)**: Intercepts tool execution requests (e.g. `Bash`, `Write`) to enforce strict safety constraints:
   - Blocks execution of Keychain manipulation CLI subcommands (`security delete-generic-password`, `security dump-keychain`, etc.).
@@ -104,6 +111,6 @@ The plugin layer operates synchronously inside AI agent CLI/IDE harnesses (Claud
 
 Built using Swift 6, AppKit, and SwiftUI, `secure-agent-menubar` is a lightweight macOS status bar application.
 
-- **Asynchronous Daemon Client (`DaemonClient.swift`)**: Polls the daemon Unix domain socket API (`/status`, `/flags`, `/events`) over an asynchronous timer.
-- **User Interface (`MenuBuilder.swift`)**: Displays active agent count badge, quick action buttons, live process list, and security flag details with complete evidence chains (process PID, executable path, file accessed, remote IP/domain).
+- **Asynchronous Daemon Client (`DaemonClient.swift`)**: Talks to the daemon over its Unix domain socket API (`/status`, `/flags`, `/events`, `/snapshot`, …). Live updates arrive over the SSE stream (`EventStream`); a fallback poll keeps state fresh when the stream drops.
+- **User Interface (`ConsoleView.swift` popover + the daemon-served web console)**: The popover shows the posture hero, session families, pending guard prompts and one-click actions; the full console (posture, sessions, egress, attention) is served by the daemon behind the console token.
 - **Process Termination**: Sends POST requests to `/kill` to issue `SIGKILL` signals to compromised or rogue agent process trees.

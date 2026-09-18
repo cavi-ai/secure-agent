@@ -81,6 +81,27 @@ public final class NotificationManager: NSObject, @unchecked Sendable {
         }
     }
 
+    public func sendResourceNotification(_ notice: ResourceInterventionNotice) {
+        let action = (notice.action ?? notice.state).replacingOccurrences(of: "_", with: " ")
+        if !isSupported {
+            print("[secure-agent-menubar] Resource intervention [\(notice.sessionName)]: \(action)")
+            return
+        }
+        let content = UNMutableNotificationContent()
+        content.title = notice.error == nil ? "Agent resource intervention" : "Resource intervention failed"
+        content.subtitle = notice.sessionName.capitalized
+        content.body = notice.error == nil ? action.capitalized : "Open the console to review the failure."
+        content.interruptionLevel = notice.error == nil ? .active : .timeSensitive
+        content.sound = notice.error == nil ? .default : .defaultCritical
+        let request = UNNotificationRequest(identifier: "secure-agent.resource.\(notice.sessionKey).\(UUID().uuidString)",
+                                            content: content, trigger: nil)
+        UNUserNotificationCenter.current().add(request) { error in
+            if let error {
+                NSLog("[secure-agent] Failed to deliver resource notification: \(error.localizedDescription)")
+            }
+        }
+    }
+
     /// Notification Center must track live posture, not accumulate grey
     /// history: banners whose flag the operator already acted on (dismissed
     /// in either UI, muted, or retro-acknowledged daemon-side — all converge

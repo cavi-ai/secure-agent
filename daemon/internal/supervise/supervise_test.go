@@ -140,3 +140,29 @@ func TestSupervisorAbandonsImmediatelyOnPermanentError(t *testing.T) {
 		t.Fatalf("worker ran %d times; permanent failure must not retry", n)
 	}
 }
+
+// MarkProduced is the coverage heartbeat: a running worker that has never
+// produced is distinguishable from one producing now (liveness ≠ coverage).
+func TestMarkProducedStampsCoverage(t *testing.T) {
+	reg := NewRegistry()
+	reg.update("netsampler", func(h *Health) { h.Running = true })
+
+	snap := reg.Snapshot()
+	if snap[0].LastProduced != "" {
+		t.Fatalf("LastProduced = %q, want empty before any produce", snap[0].LastProduced)
+	}
+
+	reg.MarkProduced("netsampler")
+	snap = reg.Snapshot()
+	ts, err := time.Parse(time.RFC3339, snap[0].LastProduced)
+	if err != nil {
+		t.Fatalf("LastProduced %q not RFC3339: %v", snap[0].LastProduced, err)
+	}
+	if time.Since(ts) > time.Minute {
+		t.Fatalf("LastProduced %q is stale", snap[0].LastProduced)
+	}
+
+	// Nil registry is a no-op, never a panic (collectors run unwired in tests).
+	var nilReg *Registry
+	nilReg.MarkProduced("x")
+}

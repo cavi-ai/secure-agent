@@ -33,6 +33,7 @@ extension DaemonClientError: LocalizedError {
 /// The surface AppState (and tests) use. DaemonClient conforms; tests stub it.
 public protocol DaemonClientProtocol: Sendable {
     func fetchStatus() async throws -> StatusResponse
+    func fetchResources() async throws -> ResourceSnapshotModel
     func fetchFlags(limit: Int) async throws -> [FlagModel]
     func fetchIncidents(limit: Int) async throws -> [IncidentReportModel]
     func fetchIncidentMarkdown(id: String) async throws -> String
@@ -104,6 +105,10 @@ public final class DaemonClient: Sendable {
 
     public func fetchStatus() async throws -> StatusResponse {
         try await getDecodable("/status")
+    }
+
+    public func fetchResources() async throws -> ResourceSnapshotModel {
+        try await getDecodable("/resources")
     }
 
     public func fetchFlags(limit: Int = 20) async throws -> [FlagModel] {
@@ -209,7 +214,7 @@ public final class DaemonClient: Sendable {
 
     /// Policy-change audit rows (digest counts allowlist approvals).
     public func fetchAudit(limit: Int = 50) async throws -> [AuditEntryModel] {
-        try await getDecodable("/audit?limit=\(limit))")
+        try await getDecodable("/audit?limit=\(limit)")
     }
 
     public func acknowledgeFlag(id: String) async throws {

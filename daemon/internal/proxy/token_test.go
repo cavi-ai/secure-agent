@@ -38,15 +38,15 @@ func TestLoadTokenMalformedRegenerates(t *testing.T) {
 	}
 }
 
-func TestProxyAuthFailOpenWithoutToken(t *testing.T) {
+func TestProxyAuthFailClosedWithoutToken(t *testing.T) {
 	t.Cleanup(clearProxyToken)
 	clearProxyToken()
 	req, err := http.NewRequest("GET", "http://127.0.0.1/", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !authorized(req) {
-		t.Fatal("empty proxy token must fail open on loopback")
+	if authorized(req) {
+		t.Fatal("empty proxy token must fail closed — a security product never becomes an open relay")
 	}
 }
 

@@ -1,5 +1,148 @@
 import Foundation
 
+public struct ResourceSnapshotModel: Codable, Sendable {
+    public let host: HostPressureModel?
+    public let sessions: [ResourceSessionModel]?
+
+    public init(host: HostPressureModel?, sessions: [ResourceSessionModel]? = nil) {
+        self.host = host
+        self.sessions = sessions
+    }
+}
+
+public struct ResourceSessionModel: Codable, Sendable {
+    public let key: String
+    public let name: String
+    /// "infra" for shared infrastructure (IDEs, model servers); nil/"agent"
+    /// for real coding agents. Nil on older daemons.
+    public let kind: String?
+    public let control: ResourceSessionControlModel?
+
+    /// Infra sessions render as shared infrastructure, not agent sessions.
+    public var isInfra: Bool { kind == "infra" }
+
+    public init(key: String, name: String, kind: String? = nil, control: ResourceSessionControlModel? = nil) {
+        self.key = key
+        self.name = name
+        self.kind = kind
+        self.control = control
+    }
+}
+
+public struct ResourceSessionControlModel: Codable, Sendable {
+    public let state: String
+    public let pendingID: String?
+    public let lastAction: String?
+    public let lastError: String?
+    public let nextAction: String?
+    public let paused: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case state
+        case pendingID = "pending_id"
+        case lastAction = "last_action"
+        case lastError = "last_error"
+        case nextAction = "next_action"
+        case paused
+    }
+
+    public init(state: String, pendingID: String? = nil, lastAction: String? = nil,
+                lastError: String? = nil, nextAction: String? = nil, paused: Bool? = nil) {
+        self.state = state
+        self.pendingID = pendingID
+        self.lastAction = lastAction
+        self.lastError = lastError
+        self.nextAction = nextAction
+        self.paused = paused
+    }
+}
+
+public struct ResourceInterventionNotice: Equatable, Sendable {
+    public let sessionKey: String
+    public let sessionName: String
+    public let state: String
+    public let action: String?
+    public let error: String?
+}
+
+public struct HostPressureModel: Codable, Sendable {
+    public let totalMemoryBytes: UInt64?
+    public let freeMemoryBytes: UInt64?
+    public let availableMemoryBytes: UInt64?
+    public let compressedMemoryBytes: UInt64?
+    public let usedMemoryBytes: UInt64?
+    public let agentMemoryBytes: UInt64?
+    public let nonAgentMemoryBytes: UInt64?
+    public let swapTotalBytes: UInt64?
+    public let swapUsedBytes: UInt64?
+    public let headroomPercent: Double?
+    public let agentMemoryPercent: Double?
+    public let systemCPUPercent: Double?
+    public let agentCPUPercent: Double?
+    public let nonAgentCPUPercent: Double?
+    public let load1: Double?
+    public let logicalCPUCount: Int?
+    public let memoryPressure: String
+    public let thermalState: String
+    public let headroomScore: Int
+    public let capacity: String
+
+    enum CodingKeys: String, CodingKey {
+        case totalMemoryBytes = "total_memory_bytes"
+        case freeMemoryBytes = "free_memory_bytes"
+        case availableMemoryBytes = "available_memory_bytes"
+        case compressedMemoryBytes = "compressed_memory_bytes"
+        case usedMemoryBytes = "used_memory_bytes"
+        case agentMemoryBytes = "agent_memory_bytes"
+        case nonAgentMemoryBytes = "non_agent_memory_bytes"
+        case swapTotalBytes = "swap_total_bytes"
+        case swapUsedBytes = "swap_used_bytes"
+        case headroomPercent = "headroom_percent"
+        case agentMemoryPercent = "agent_memory_percent"
+        case systemCPUPercent = "system_cpu_percent"
+        case agentCPUPercent = "agent_cpu_percent"
+        case nonAgentCPUPercent = "non_agent_cpu_percent"
+        case load1 = "load_1"
+        case logicalCPUCount = "logical_cpu_count"
+        case memoryPressure = "memory_pressure"
+        case thermalState = "thermal_state"
+        case headroomScore = "headroom_score"
+        case capacity
+    }
+
+    public init(totalMemoryBytes: UInt64? = nil, freeMemoryBytes: UInt64? = nil,
+                availableMemoryBytes: UInt64? = nil, compressedMemoryBytes: UInt64? = nil,
+                usedMemoryBytes: UInt64? = nil, agentMemoryBytes: UInt64? = nil,
+                nonAgentMemoryBytes: UInt64? = nil, swapTotalBytes: UInt64? = nil,
+                swapUsedBytes: UInt64? = nil, headroomPercent: Double? = nil,
+                agentMemoryPercent: Double? = nil, systemCPUPercent: Double? = nil,
+                agentCPUPercent: Double? = nil, nonAgentCPUPercent: Double? = nil,
+                load1: Double? = nil, logicalCPUCount: Int? = nil,
+                memoryPressure: String = "unknown", thermalState: String = "unknown",
+                headroomScore: Int = 0, capacity: String = "unknown") {
+        self.totalMemoryBytes = totalMemoryBytes
+        self.freeMemoryBytes = freeMemoryBytes
+        self.availableMemoryBytes = availableMemoryBytes
+        self.compressedMemoryBytes = compressedMemoryBytes
+        self.usedMemoryBytes = usedMemoryBytes
+        self.agentMemoryBytes = agentMemoryBytes
+        self.nonAgentMemoryBytes = nonAgentMemoryBytes
+        self.swapTotalBytes = swapTotalBytes
+        self.swapUsedBytes = swapUsedBytes
+        self.headroomPercent = headroomPercent
+        self.agentMemoryPercent = agentMemoryPercent
+        self.systemCPUPercent = systemCPUPercent
+        self.agentCPUPercent = agentCPUPercent
+        self.nonAgentCPUPercent = nonAgentCPUPercent
+        self.load1 = load1
+        self.logicalCPUCount = logicalCPUCount
+        self.memoryPressure = memoryPressure
+        self.thermalState = thermalState
+        self.headroomScore = headroomScore
+        self.capacity = capacity
+    }
+}
+
 public struct AgentSummaryModel: Codable, Identifiable, Sendable {
     /// pid alone can collide across pid reuse while a stale row lingers in the
     /// list; pid+name is still wrong only if the same process is listed twice,
@@ -7,6 +150,10 @@ public struct AgentSummaryModel: Codable, Identifiable, Sendable {
     public var id: String { "\(pid)-\(name)" }
     public let pid: Int32
     public let name: String
+    /// "infra" for shared infrastructure (IDEs, model servers); nil (older
+    /// daemons) reads as a regular agent.
+    public let kind: String?
+    public var isInfra: Bool { kind == "infra" }
     public let exePath: String?
     public let cwd: String?
     /// The family root this process belongs to (itself when it IS the root).
@@ -22,6 +169,9 @@ public struct AgentSummaryModel: Codable, Identifiable, Sendable {
     public let lastSeenAt: String?
     /// Resident memory in bytes (0/nil when the daemon couldn't read it).
     public let rssBytes: UInt64?
+    /// Current CPU use as a percentage of one core. Values may exceed 100
+    /// when a process uses multiple cores; nil means unavailable.
+    public let cpuPercent: Double?
     /// True when this tagged process's parent has already exited (daemon
     /// reports is_orphan) — displayed so a weird-looking row is explainable.
     /// nil (older daemons) reads as "not orphan" here; the row simply shows
@@ -33,6 +183,7 @@ public struct AgentSummaryModel: Codable, Identifiable, Sendable {
     enum CodingKeys: String, CodingKey {
         case pid
         case name
+        case kind
         case exePath = "exe_path"
         case cwd
         case rootPid = "root_pid"
@@ -40,14 +191,16 @@ public struct AgentSummaryModel: Codable, Identifiable, Sendable {
         case startedAt = "started_at"
         case lastSeenAt = "last_seen_at"
         case rssBytes = "rss_bytes"
+        case cpuPercent = "cpu_percent"
         case isOrphan = "is_orphan"
     }
 
-    public init(pid: Int32, name: String, exePath: String? = nil, cwd: String? = nil, rootPid: Int32? = nil,
+    public init(pid: Int32, name: String, kind: String? = nil, exePath: String? = nil, cwd: String? = nil, rootPid: Int32? = nil,
                 ppid: Int32? = nil, startedAt: String? = nil, lastSeenAt: String? = nil, rssBytes: UInt64? = nil,
-                isOrphan: Bool? = nil) {
+                isOrphan: Bool? = nil, cpuPercent: Double? = nil) {
         self.pid = pid
         self.name = name
+        self.kind = kind
         self.exePath = exePath
         self.cwd = cwd
         self.rootPid = rootPid
@@ -56,6 +209,7 @@ public struct AgentSummaryModel: Codable, Identifiable, Sendable {
         self.lastSeenAt = lastSeenAt
         self.rssBytes = rssBytes
         self.isOrphan = isOrphan
+        self.cpuPercent = cpuPercent
     }
 
     /// Glance label: the project folder, falling back to the harness name.
@@ -71,18 +225,22 @@ public struct AgentTreeModel: Codable, Sendable {
     public let children: [AgentSummaryModel]
     public let rssBytes: UInt64?
     public let lastSeenAt: String?
+    public let cpuPercent: Double?
 
     enum CodingKeys: String, CodingKey {
         case root, children
         case rssBytes = "rss_bytes"
         case lastSeenAt = "last_seen_at"
+        case cpuPercent = "cpu_percent"
     }
 
-    public init(root: AgentSummaryModel, children: [AgentSummaryModel] = [], rssBytes: UInt64? = nil, lastSeenAt: String? = nil) {
+    public init(root: AgentSummaryModel, children: [AgentSummaryModel] = [], rssBytes: UInt64? = nil,
+                lastSeenAt: String? = nil, cpuPercent: Double? = nil) {
         self.root = root
         self.children = children
         self.rssBytes = rssBytes
         self.lastSeenAt = lastSeenAt
+        self.cpuPercent = cpuPercent
     }
 }
 
@@ -148,8 +306,29 @@ public struct HealthModel: Codable, Identifiable, Sendable {
     public let abandoned: Bool
     public let restarts: Int
     public let lastError: String?
+    /// RFC3339 of the worker's most recent published event — running but
+    /// silent is the "monitor gone blind" signal. Nil on older daemons.
+    public let lastProduced: String?
 
     public var id: String { name }
+
+    enum CodingKeys: String, CodingKey {
+        case name, running, abandoned, restarts
+        case lastError = "last_error"
+        case lastProduced = "last_produced"
+    }
+}
+
+/// How many running harnesses the daemon is actually seeing (`coverage` in
+/// /status). The monitor reporting its own blindness.
+public struct CoverageModel: Codable, Sendable {
+    public let harnessesActive: Int
+    public let harnessesSeen: Int
+
+    enum CodingKeys: String, CodingKey {
+        case harnessesActive = "harnesses_active"
+        case harnessesSeen = "harnesses_seen"
+    }
 }
 
 public struct StatusResponse: Codable, Sendable {
@@ -157,6 +336,9 @@ public struct StatusResponse: Codable, Sendable {
     public let version: String?
     public let uptime: String
     public let activeAgents: Int
+    /// Distinct infra tree roots (IDEs, local model servers) — shown beside,
+    /// never inside, activeAgents. Nil on older daemons.
+    public let infraCount: Int?
     /// Var (not let): value semantics make this safe, and tests seed agent
     /// lists after constructing a StatusResponse.
     public var agents: [AgentSummaryModel]?
@@ -175,12 +357,15 @@ public struct StatusResponse: Codable, Sendable {
     /// offline" instead of offering actions that silently do nothing.
     public let advisorHealth: AdvisorHealthModel?
     public var fleetConfigured: Bool?
+    /// Harness coverage (nil on older daemons).
+    public let coverage: CoverageModel?
 
     enum CodingKeys: String, CodingKey {
         case running
         case version
         case uptime
         case activeAgents = "active_agents"
+        case infraCount = "infra_count"
         case agents
         case trees
         case proxyEnabled = "proxy_enabled"
@@ -191,13 +376,15 @@ public struct StatusResponse: Codable, Sendable {
         case collectors
         case advisorHealth = "advisor_health"
         case fleetConfigured = "fleet_configured"
+        case coverage
     }
 
-    public init(running: Bool, uptime: String, activeAgents: Int, agents: [AgentSummaryModel]? = nil, trees: [AgentTreeModel]? = nil, proxyEnabled: Bool? = nil, proxyPort: Int? = nil, uninspectedEgress: Int? = nil, firewallStats: [String: RuleStatModel]? = nil, trackedProcesses: Int? = nil, collectors: [HealthModel]? = nil, version: String? = nil, advisorHealth: AdvisorHealthModel? = nil, fleetConfigured: Bool? = nil) {
+    public init(running: Bool, uptime: String, activeAgents: Int, infraCount: Int? = nil, agents: [AgentSummaryModel]? = nil, trees: [AgentTreeModel]? = nil, proxyEnabled: Bool? = nil, proxyPort: Int? = nil, uninspectedEgress: Int? = nil, firewallStats: [String: RuleStatModel]? = nil, trackedProcesses: Int? = nil, collectors: [HealthModel]? = nil, version: String? = nil, advisorHealth: AdvisorHealthModel? = nil, fleetConfigured: Bool? = nil, coverage: CoverageModel? = nil) {
         self.running = running
         self.version = version
         self.uptime = uptime
         self.activeAgents = activeAgents
+        self.infraCount = infraCount
         self.agents = agents
         self.trees = trees
         self.proxyEnabled = proxyEnabled
@@ -208,6 +395,7 @@ public struct StatusResponse: Codable, Sendable {
         self.collectors = collectors
         self.advisorHealth = advisorHealth
         self.fleetConfigured = fleetConfigured
+        self.coverage = coverage
     }
 }
 

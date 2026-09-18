@@ -24,7 +24,7 @@ func (f fakeProcs) Info(pid int32) (ProcInfo, bool) {
 
 func TestTagInheritsFromAgentParent(t *testing.T) {
 	fake := fakeProcs{
-		100: {PID: 100, PPID: 1, Exe: "/Applications/Cursor.app/Contents/Frameworks/Cursor Helper"},
+		100: {PID: 100, PPID: 1, Exe: "/usr/local/bin/claude"},
 		200: {PID: 200, PPID: 100, Exe: "/usr/local/bin/node"},
 		999: {PID: 999, PPID: 1, Exe: "/bin/ls"},
 	}
@@ -32,14 +32,45 @@ func TestTagInheritsFromAgentParent(t *testing.T) {
 	tg := New(c, fake)
 	tg.Refresh()
 	info, ok := tg.Tag(200)
-	if !ok || info.Name != "cursor" {
-		t.Fatalf("Tag(200) = %+v, %v; want cursor,true", info, ok)
+	if !ok || info.Name != "claude" {
+		t.Fatalf("Tag(200) = %+v, %v; want claude,true", info, ok)
+	}
+	if info.Kind != "agent" {
+		t.Fatalf("Tag(200).Kind = %q, want agent", info.Kind)
 	}
 	if _, ok := tg.Tag(999); ok {
 		t.Fatal("Tag(999) tagged an unrelated process")
 	}
 	if !tg.Any() {
 		t.Fatal("Any() = false with a live agent")
+	}
+}
+
+// The Cursor IDE and local model servers are shared infrastructure, not
+// agents: still tagged (monitored, killable) but marked kind=infra so counts
+// and the "reclaimable" headline exclude them.
+func TestTagMarksIDEAndModelServersAsInfra(t *testing.T) {
+	fake := fakeProcs{
+		100: {PID: 100, PPID: 1, Exe: "/Applications/Cursor.app/Contents/MacOS/Cursor"},
+		101: {PID: 101, PPID: 1, Exe: "/usr/local/bin/ollama serve"},
+		102: {PID: 102, PPID: 1, Exe: "/usr/local/bin/cursor-agent"},
+	}
+	c, _ := config.Load("/nonexistent")
+	tg := New(c, fake)
+	tg.Refresh()
+
+	ide, ok := tg.Tag(100)
+	if !ok || ide.Name != "cursor-ide" || ide.Kind != config.AgentKindInfra {
+		t.Fatalf("Tag(100) = %+v, %v; want cursor-ide/infra", ide, ok)
+	}
+	ollama, ok := tg.Tag(101)
+	if !ok || ollama.Name != "ollama" || ollama.Kind != config.AgentKindInfra {
+		t.Fatalf("Tag(101) = %+v, %v; want ollama/infra", ollama, ok)
+	}
+	// The cursor CLI harness stays an agent — only the IDE is infra.
+	cli, ok := tg.Tag(102)
+	if !ok || cli.Name != "cursor" || cli.Kind != "agent" {
+		t.Fatalf("Tag(102) = %+v, %v; want cursor/agent", cli, ok)
 	}
 }
 
@@ -133,5 +164,71 @@ func TestRefreshIntervalIdleVsBusy(t *testing.T) {
 	}
 	if RefreshInterval(true) != 3*time.Second {
 		t.Fatalf("busy interval = %s, want 3s", RefreshInterval(true))
+	}
+}
+
+func TestCPUPercent(t *testing.T) {
+	previousAt := time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
+	got := cpuPercent(time.Second, previousAt, 2*time.Second, previousAt.Add(2*time.Second))
+	if got != 50 {
+		t.Fatalf("cpuPercent=%v want 50", got)
+	}
+	if got := cpuPercent(2*time.Second, previousAt, time.Second, previousAt.Add(time.Second)); got != 0 {
+		t.Fatalf("counter regression=%v want 0", got)
+	}
+	if got := cpuPercent(time.Second, previousAt, 2*time.Second, previousAt); got != 0 {
+		t.Fatalf("zero wall delta=%v want 0", got)
+	}
+}
+
+func TestRefreshUpdatesDynamicResources(t *testing.T) {
+	start := time.Date(2026, 9, 15, 11, 0, 0, 0, time.UTC)
+	now := time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
+	src := &countingProcSource{procs: map[int32]ProcInfo{
+		100: {PID: 100, PPID: 1, Comm: "claude", Exe: "/usr/local/bin/claude", StartTime: start, RSSBytes: 100, CPUTime: time.Second},
+	}}
+	c, _ := config.Load("/nonexistent")
+	tg := New(c, src)
+	tg.now = func() time.Time { return now }
+	tg.Refresh()
+
+	src.procs[100] = ProcInfo{PID: 100, PPID: 1, Comm: "claude", Exe: "/usr/local/bin/claude", StartTime: start, RSSBytes: 250, CPUTime: 3 * time.Second}
+	now = now.Add(2 * time.Second)
+	tg.Refresh()
+
+	info := tg.TaggedPIDs()[100]
+	if info.RSSBytes != 250 {
+		t.Fatalf("RSSBytes=%d want 250", info.RSSBytes)
+	}
+	if info.CPUPercent != 100 {
+		t.Fatalf("CPUPercent=%v want 100", info.CPUPercent)
+	}
+	if !info.StartedAt.Equal(start) {
+		t.Fatalf("StartedAt=%v want %v", info.StartedAt, start)
+	}
+}
+
+func TestRefreshDoesNotCarryResourcesAcrossPIDReuse(t *testing.T) {
+	firstStart := time.Date(2026, 9, 15, 11, 0, 0, 0, time.UTC)
+	now := time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
+	src := &countingProcSource{procs: map[int32]ProcInfo{
+		100: {PID: 100, PPID: 1, Comm: "claude", Exe: "/usr/local/bin/claude", StartTime: firstStart, RSSBytes: 500, CPUTime: 10 * time.Second},
+	}}
+	c, _ := config.Load("/nonexistent")
+	tg := New(c, src)
+	tg.now = func() time.Time { return now }
+	tg.Refresh()
+
+	secondStart := firstStart.Add(time.Hour)
+	src.procs[100] = ProcInfo{PID: 100, PPID: 1, Comm: "claude", Exe: "/usr/local/bin/claude", StartTime: secondStart, RSSBytes: 50, CPUTime: time.Second}
+	now = now.Add(time.Second)
+	tg.Refresh()
+
+	info := tg.TaggedPIDs()[100]
+	if !info.StartedAt.Equal(secondStart) {
+		t.Fatalf("StartedAt=%v want replacement start %v", info.StartedAt, secondStart)
+	}
+	if info.RSSBytes != 50 || info.CPUTime != time.Second || info.CPUPercent != 0 {
+		t.Fatalf("replacement inherited resources: %+v", info)
 	}
 }

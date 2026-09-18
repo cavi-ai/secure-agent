@@ -6,7 +6,43 @@ All notable changes to `secure-agent` are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- API HTTP handlers for resources, kill, firewall, and guard live in their own files (`api.go` 1662→940). Same package, no behavior change.
+
 ### Added
+- **Unified Attention Center.** The console now groups resource approvals,
+  blocked guard requests, critical findings and incidents, and uninspected
+  egress by complete agent session. Each group shows its workspace, process
+  count, memory, CPU, and the reason it needs review, with existing scoped
+  actions available directly from the queue. Signals that cannot be safely
+  attributed to one live session remain in an explicit agent-level group.
+- **Resource Mission Control for local agent fleets.** The daemon now samples
+  live RSS and CPU for attributed processes, groups them into stable session
+  families, retains one hour of five-second history, and diagnoses heavy
+  memory, full-core CPU, rapid growth, idle retention, runaway children, and
+  orphan drift. `GET /resources` exposes process topology, trends, evidence,
+  thresholds, confidence, and reclaim estimates. The web console ranks and
+  charts whole sessions with click-through family detail; the native menu bar
+  shows family CPU/memory and supports Impact sorting. A local Resource Flight
+  Recorder preserves bounded pressure episodes when diagnoses appear, change,
+  or memory escalates another 25%, retaining whole-session totals, the root,
+  the 64 highest-impact processes, and a ten-minute prelude after exit. Each
+  episode adds up to 80 redacted activity references from the captured process
+  family, marks them on the trend chart, and identifies the activity observed
+  during the steepest sample-to-sample memory rise without claiming that
+  temporal proximity proves causation. Exact nanosecond and per-process
+  lifetime checks prevent recycled PIDs from importing unrelated activity;
+  a bounded settling window re-enriches episodes from events persisted just
+  after the initial capture.
+- **Opt-in session resource budgets and containment.** A hot-reloadable
+  `resource_control` policy supports observe-only reporting, approval-required
+  containment, or explicit automatic whole-family termination after a
+  sustained RSS/CPU breach. Grace periods, cooldowns, PID start-time checks,
+  retryable failed approvals, console controls, and durable audit entries keep
+  the destructive path bounded and explainable. The console now includes a
+  visual policy editor with complete per-workspace overrides, longest-path
+  selection, atomic YAML persistence, and an explicit confirmation before
+  automatic termination can be saved.
 - CI: cancel stale runs, job timeouts, credential-free checkout, cgo-free Linux gate, go mod tidy, govulncheck, Dependabot, Go test shuffle. Proxy token and CA permission contracts now have unit tests (the old 0600 check was asserting a different temp path). Go toolchain 1.26.6.
 
 ### Changed
