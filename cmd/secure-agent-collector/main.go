@@ -37,8 +37,12 @@ type Envelope struct {
 
 // knownKinds bounds accepted kinds — unknown kinds are rejected, so a future
 // node version cannot corrupt rollups. "status" is the heartbeat/posture
-// envelope every node pushes regardless of its event subscriptions.
-var knownKinds = map[string]bool{"flag": true, "incident": true, "guard": true, "status": true}
+// envelope every node pushes regardless of its event subscriptions. "session"
+// and "trace" carry the P1/P2 spine (opt-in per sink).
+var knownKinds = map[string]bool{
+	"flag": true, "incident": true, "guard": true, "status": true,
+	"session": true, "trace": true,
+}
 
 // Config is the collector's runtime configuration.
 type Config struct {
@@ -137,6 +141,7 @@ func main() {
 	mux.HandleFunc("POST /hooks/secure-agent", c.handleHook)
 	mux.HandleFunc("GET /fleet", c.requireReadAuth(c.handleFleet))
 	mux.HandleFunc("GET /fleet/rules", c.requireReadAuth(c.handleFleetRules))
+	mux.HandleFunc("GET /fleet/sessions", c.requireReadAuth(c.handleFleetSessions))
 	mux.HandleFunc("GET /nodes/", c.requireReadAuth(c.handleNodeEvents))
 	mux.HandleFunc("GET /", c.requireReadAuth(c.handleOverview))
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -269,6 +274,17 @@ func (c *Collector) handleFleetRules(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(c.store.RuleAggregates())
+}
+
+// handleFleetSessions serves the cross-node sessions view: every node's
+// sessions with hostname and labels, live first.
+func (c *Collector) handleFleetSessions(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(c.store.Sessions())
 }
 
 // handleNodeEvents replays one node's stored envelopes (newest first).
