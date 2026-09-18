@@ -146,6 +146,7 @@ type API struct {
 	mutes       *correlate.MuteStore
 	notifyRules *correlate.NotifyRuleStore
 	retriage    *RetriageFuncs
+	hostAssess  *HostAssessFuncs
 	guardSeq    uint64
 
 	peerRole   *peers
@@ -242,6 +243,54 @@ type RetriageFuncs struct {
 }
 
 func (a *API) SetRetriage(r RetriageFuncs) { a.retriage = &r }
+
+// HostAssessFuncs look up a stored advisor verdict for an agent+host and
+// enqueue an on-demand legitimacy assessment. GetVerdict returns the
+// stored verdict when one exists; Enqueue queues one (idempotent). Lookup
+// is separate so the console can render a cached verdict immediately while
+// a fresh one is queued.
+type HostAssessFuncs struct {
+	GetVerdict func(agent, host string) (model.AdvisorVerdict, bool)
+	Enqueue    func(agent, host string) bool
+}
+
+func (a *API) SetHostAssess(h HostAssessFuncs) { a.hostAssess = &h }
+
+// handleAdvisorAssessHost answers "what is this endpoint, and should I trust
+// it?" for one uninspected agent+host pair: the stored advisor verdict if one
+// exists, otherwise it queues an assessment. This is the functionality that
+// turned a wall of raw IPs into decisions — the operator no longer has to
+// know what 160.79.104.10 is.
+func (a *API) handleAdvisorAssessHost(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if a.hostAssess == nil {
+		http.Error(w, "advisor not enabled", http.StatusServiceUnavailable)
+		return
+	}
+	limitBody(w, r)
+	var req struct {
+		Agent string `json:"agent"`
+		Host  string `json:"host"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Host == "" {
+		http.Error(w, `Invalid payload: {"agent","host"}`, http.StatusBadRequest)
+		return
+	}
+	resp := map[string]any{"status": "ok", "queued": false}
+	if a.hostAssess.GetVerdict != nil {
+		if v, ok := a.hostAssess.GetVerdict(req.Agent, req.Host); ok {
+			resp["verdict"] = v
+		}
+	}
+	if a.hostAssess.Enqueue != nil {
+		resp["queued"] = a.hostAssess.Enqueue(req.Agent, req.Host)
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
+}
 
 // handleFlagAcknowledge marks one flag acted-upon (idempotent). Called by
 // the UI when a disposition is applied so the flag stops counting as
@@ -410,6 +459,7 @@ func (a *API) buildMux() *http.ServeMux {
 	mux.HandleFunc("/guard/path-allow", a.handleGuardPathAllow)
 	mux.HandleFunc("/mute", a.handleMute)
 	mux.HandleFunc("/advisor/retriage", a.handleAdvisorRetriage)
+	mux.HandleFunc("/advisor/assess-host", a.handleAdvisorAssessHost)
 	mux.HandleFunc("/flags/acknowledge", a.handleFlagAcknowledge)
 	mux.HandleFunc("/ui/open-fda", a.handleOpenFDA)
 	mux.HandleFunc("/stats/rollup", a.handleRollup)

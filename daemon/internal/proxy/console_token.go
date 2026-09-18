@@ -111,6 +111,7 @@ var consoleAPIPaths = map[string]bool{
 	"/egress/uninspected":           true,
 	"/notify/rules":                 true,
 	"/advisor/retriage":             true,
+	"/advisor/assess-host":          true,
 	"/ui/open-fda":                  true,
 	// Dynamic route family: /sessions/{id}/timeline (per-session trace).
 	"/sessions/": true,
