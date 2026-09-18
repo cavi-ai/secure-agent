@@ -34,12 +34,22 @@ type RotateItem struct {
 }
 
 type IncidentReport struct {
-	ID           string       `json:"id"`
-	FlagID       string       `json:"flag_id"`
-	PID          int32        `json:"pid"`
-	Agent        string       `json:"agent"`
-	Timestamp    time.Time    `json:"timestamp"`
-	Rule         string       `json:"rule"`
+	ID        string    `json:"id"`
+	FlagID    string    `json:"flag_id"`
+	PID       int32     `json:"pid"`
+	Agent     string    `json:"agent"`
+	Timestamp time.Time `json:"timestamp"`
+	Rule      string    `json:"rule"`
+	// SessionID groups the incident with its harness session (P1 spine).
+	SessionID string `json:"session_id,omitempty"`
+	// Subject is what the rule fired on (a host, a path) — with Rule and
+	// SessionID it forms the aggregation key: one incident per
+	// rule+session+subject, flags become its evidence.
+	Subject string `json:"subject,omitempty"`
+	// AggregateCount is how many flags this incident aggregates (1 = single).
+	AggregateCount int `json:"aggregate_count,omitempty"`
+	// LastFlagAt is the most recent aggregated flag's time.
+	LastFlagAt   *time.Time   `json:"last_flag_at,omitempty"`
 	Summary      string       `json:"summary"`
 	Risk         RiskLevel    `json:"risk"`
 	TouchedFiles []string     `json:"touched_files"`
