@@ -265,6 +265,16 @@ type RetentionConfig struct {
 	Event     time.Duration
 }
 
+// OTLPConfig configures the OpenTelemetry trace exporter (opt-in). Empty
+// endpoint disables it. Sessions and trace events are exported as OTLP/HTTP
+// JSON spans; no secrets cross this wire.
+type OTLPConfig struct {
+	Endpoint string            `yaml:"endpoint"`
+	Headers  map[string]string `yaml:"headers"`
+	Service  string            `yaml:"service"`
+	Labels   map[string]string `yaml:"labels"`
+}
+
 type rawConfig struct {
 	DisabledAgents      []string              `yaml:"disabled_agents"`
 	SensitiveGlobs      []string              `yaml:"sensitive_globs"`
@@ -286,6 +296,7 @@ type rawConfig struct {
 	Fleet               FleetConfig           `yaml:"fleet"`
 	Advisor             AdvisorYAML           `yaml:"advisor"`
 	Retention           RetentionYAML         `yaml:"retention"`
+	OTLP                OTLPConfig            `yaml:"otlp"`
 }
 
 type Config struct {
@@ -309,6 +320,7 @@ type Config struct {
 	Retention         RetentionConfig
 	Fleet             FleetConfig
 	Advisor           AdvisorConfig
+	OTLP              OTLPConfig
 }
 
 // normalizeAgentKinds fills the zero value with the default kind so tagger
@@ -437,6 +449,7 @@ func loadWithOverlayError(explicitPath string) (Config, error, error) {
 			ConnEvent: time.Duration(raw.Retention.ConnEventHours) * time.Hour,
 			Event:     time.Duration(raw.Retention.EventDays) * 24 * time.Hour,
 		},
+		OTLP: raw.OTLP,
 		Advisor: AdvisorConfig{
 			Enabled:      raw.Advisor.Enabled,
 			Endpoint:     raw.Advisor.Endpoint,

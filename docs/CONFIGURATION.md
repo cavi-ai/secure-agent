@@ -149,7 +149,21 @@ fleet:
       events: [flag, incident, guard]   # empty = all
 ```
 
-Every payload is signed with `X-SecureAgent-Signature: sha256=HMAC(secret, body)`; delivery retries (500ms/2s/5s) on network errors and 5xx/429 only.
+Every payload is signed with `X-SecureAgent-Signature: sha256=HMAC(secret, body)`; delivery retries (500ms/2s/5s) on network errors and 5xx/429 only. Add `session` and `trace` to `events` to carry the session spine and agent-semantic trace events (the collector's `GET /fleet/sessions` view); trace delivery is deliberately lossy under load.
+
+### `otlp` (Map)
+
+OpenTelemetry trace export (opt-in). Sessions, tool calls, model calls and turns are exported as **OTLP/HTTP JSON** spans to any backend (Tempo, Jaeger, Honeycomb, an OTel Collector). Empty `endpoint` disables it. No secrets cross this wire — spans carry tool names, models, durations and token counts, never file contents or command text.
+
+```yaml
+otlp:
+  endpoint: "http://127.0.0.1:4318/v1/traces"  # OTLP/HTTP JSON receiver
+  service: "secure-agent"                       # resource service.name
+  headers: { "x-api-key": "<token>" }           # hosted backends; optional
+  labels: { env: prod, role: build-runner }     # extra resource attributes
+```
+
+One session maps to one OTLP trace; each tool/model call nests under it. Export is best-effort and bounded — a slow or dead endpoint never stalls the daemon's event drain, and dropped spans are counted rather than buffered without limit.
 
 ### Proxy authentication
 

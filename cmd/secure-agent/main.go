@@ -71,6 +71,8 @@ func main() {
 		handleGuard(client, os.Args[2:])
 	case "firewall":
 		handleFirewall(client, os.Args[2:])
+	case "service":
+		handleService(os.Args[2:])
 	case "help", "-h", "--help":
 		printUsage()
 	default:
@@ -97,6 +99,9 @@ func printUsage() {
 	fmt.Println("  secure-agent firewall mode <rule> <mode> Set a firewall rule mode (monitor|block)")
 	fmt.Println("  secure-agent firewall sources            List fingerprint ingest sources")
 	fmt.Println("  secure-agent fingerprint                 Scan configured sources and register secret fingerprints (HMAC only)")
+	fmt.Println("  secure-agent service install [daemon]    Install a headless launchd service (no menu bar app required)")
+	fmt.Println("  secure-agent service uninstall           Remove the headless service")
+	fmt.Println("  secure-agent service status              Show the headless service state")
 }
 
 // queryFlag parses a "--name value" pair from args; returns def when absent.
