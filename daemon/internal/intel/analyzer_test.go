@@ -124,3 +124,22 @@ func TestAnalyzer_ClassifyPaths_NoFalsePositives(t *testing.T) {
 		}
 	}
 }
+
+func TestSubjectForFlag(t *testing.T) {
+	cases := []struct {
+		name     string
+		evidence []string
+		want     string
+	}{
+		{"conn prefix", []string{"conn:evil.example.com:443"}, "evil.example.com:443"},
+		{"file prefix", []string{"file:/Users/x/.aws/credentials"}, "/Users/x/.aws/credentials"},
+		{"prose conn", []string{"codex (pid 1) read /x at t, then connected to evil.example.com:443 at t2"}, "evil.example.com:443"},
+		{"prose file", []string{"codex (pid 1) read /Users/x/.env at t"}, "/Users/x/.env"},
+		{"none", []string{"something happened"}, ""},
+	}
+	for _, c := range cases {
+		if got := SubjectForFlag(model.Flag{Evidence: c.evidence}); got != c.want {
+			t.Errorf("%s: subject = %q, want %q", c.name, got, c.want)
+		}
+	}
+}
