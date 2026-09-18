@@ -247,6 +247,11 @@ func startDrainLoop(sub <-chan event.Event, st *store.Store, cr *correlate.Corre
 				if fl.SessionID == "" {
 					fl.SessionID = e.SessionID
 				}
+				// Stamp the workspace so per-workspace notification scopes can
+				// key on it without re-resolving the session later.
+				if fl.Workspace == "" && fl.SessionID != "" {
+					fl.Workspace = res.WorkspaceFor(fl.SessionID)
+				}
 				log.Printf("FLAG TRIGGERED [%d]: %s (pid %d agent %s)", fl.Severity, fl.Rule, fl.PID, fl.Agent)
 				st.PutFlag(fl)
 				if deltas != nil {

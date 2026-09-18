@@ -253,3 +253,61 @@ func TestAdvisorAssessHostDisabled(t *testing.T) {
 		t.Fatalf("status = %d, want 503", resp.StatusCode)
 	}
 }
+
+// Per-workspace notification scopes are the more specific tier over per-rule
+// overrides: set/get/clear through the same endpoint, surfaced in GET.
+func TestNotifyWorkspaceScopes(t *testing.T) {
+	sock := fmt.Sprintf("/tmp/sa_nscope_%d.sock", time.Now().UnixNano())
+	defer os.Remove(sock)
+	dir := t.TempDir()
+	a := New(sock, testStore(t), &fakeKiller{}, func() Status { return Status{Running: true} })
+	a.SetNotifyRules(correlate.NewNotifyRuleStore(filepath.Join(dir, "notify-rules.json")))
+	a.SetNotifyScopes(correlate.NewNotifyScopeStore(filepath.Join(dir, "notify-scopes.json")))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go a.Serve(ctx)
+	waitForSocket(t, sock)
+	cl := unixClient(sock)
+
+	type payload struct {
+		Scopes []correlate.NotifyScopePair `json:"scopes"`
+	}
+	get := func() payload {
+		resp, err := cl.Get("http://unix/notify/rules")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var p payload
+		if err := json.NewDecoder(resp.Body).Decode(&p); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+
+	if len(get().Scopes) != 0 {
+		t.Fatal("expected no scopes initially")
+	}
+	resp, err := cl.Post("http://unix/notify/rules", "application/json",
+		strings.NewReader(`{"workspace":"/Users/dev/prod","rule":"proxy-secret-leak","notify":true}`))
+	if err != nil || resp.StatusCode != 200 {
+		t.Fatalf("set scope: %v status=%v", err, resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	scopes := get().Scopes
+	if len(scopes) != 1 || scopes[0].Workspace != "/Users/dev/prod" || !scopes[0].Notify {
+		t.Fatalf("scope not surfaced: %+v", scopes)
+	}
+
+	// Clear via null notify.
+	resp, err = cl.Post("http://unix/notify/rules", "application/json",
+		strings.NewReader(`{"workspace":"/Users/dev/prod","rule":"proxy-secret-leak","notify":null}`))
+	if err != nil || resp.StatusCode != 200 {
+		t.Fatalf("clear scope: %v status=%v", err, resp.StatusCode)
+	}
+	resp.Body.Close()
+	if len(get().Scopes) != 0 {
+		t.Fatal("cleared scope still present")
+	}
+}

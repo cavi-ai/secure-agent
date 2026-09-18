@@ -1409,6 +1409,12 @@ document.addEventListener('DOMContentLoaded', () => {
       case 'assess-host':
         window.assessHost(d.agent, d.host);
         break;
+      case 'notify-scope-add':
+        window.addNotifyScope();
+        break;
+      case 'notify-scope-remove':
+        window.removeNotifyScope(d.rule, d.workspace);
+        break;
       case 'select-session':
         window.selectSession(d.id);
         break;
@@ -1524,6 +1530,62 @@ document.addEventListener('DOMContentLoaded', () => {
         </select>
       </div>`;
     }).join('');
+    renderNotifyScopes();
+  }
+
+  // Per-workspace scopes: existing ones with a remove button, plus a compact
+  // add form (rule + path prefix + page/silence). The daemon matches by path
+  // prefix, longest first.
+  function renderNotifyScopes() {
+    const list = document.getElementById('notify-scopes-list');
+    if (!list) return;
+    const scopes = (telemetryData.notifyCfg && telemetryData.notifyCfg.scopes) || [];
+    const rows = scopes.map(s => `<div class="notify-rule-row">
+        <span class="notify-rule-name" title="${escapeHTML(s.workspace)}">${escapeHTML(s.rule)} <span class="notify-scope-path">${escapeHTML(s.workspace)}</span></span>
+        <span class="notify-scope-mode ${s.notify ? 'on' : 'off'}">${s.notify ? 'page' : 'quiet'}</span>
+        <button class="source-remove" title="Remove this scope" data-action="notify-scope-remove" data-rule="${escapeHTML(s.rule)}" data-workspace="${escapeHTML(s.workspace)}"><svg class="icon"><use href="#i-close"/></svg></button>
+      </div>`).join('');
+    list.innerHTML = (rows || '<div class="notify-scope-empty">No workspace scopes yet</div>') + `
+      <div class="notify-scope-add">
+        <select class="select select-sm" id="notify-scope-rule" aria-label="Rule for the workspace scope">
+          ${NOTIFY_RULES.map(([rule, label]) => `<option value="${escapeHTML(rule)}">${escapeHTML(label)}</option>`).join('')}
+        </select>
+        <input class="input input-sm" id="notify-scope-path" placeholder="repo path, e.g. ~/work/prod" autocomplete="off" spellcheck="false">
+        <select class="select select-sm" id="notify-scope-mode" aria-label="Scope action">
+          <option value="always">Page</option>
+          <option value="never">Quiet</option>
+        </select>
+        <button class="btn btn-ghost btn-sm" data-action="notify-scope-add" title="Add this workspace scope"><svg class="icon"><use href="#i-arrow"/></svg><span>Add</span></button>
+      </div>`;
+  }
+
+  window.addNotifyScope = async function() {
+    const rule = (document.getElementById('notify-scope-rule') || {}).value;
+    const workspace = ((document.getElementById('notify-scope-path') || {}).value || '').trim();
+    const mode = (document.getElementById('notify-scope-mode') || {}).value;
+    if (!rule || !workspace) { showToast('Pick a rule and enter a workspace path.', 'info'); return; }
+    await setNotifyScope(rule, workspace, mode === 'always');
+  };
+
+  window.removeNotifyScope = async function(rule, workspace) {
+    await setNotifyScope(rule, workspace, null);
+  };
+
+  async function setNotifyScope(rule, workspace, notify) {
+    try {
+      const res = await apiFetch('/notify/rules', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rule, workspace, notify })
+      });
+      if (!res.ok) throw new Error(await res.text());
+      showToast(notify === null ? `Scope removed: ${rule} in ${workspace}`
+        : notify ? `${rule}: always pages in ${workspace}`
+        : `${rule}: quiet in ${workspace}`, 'success');
+      fetchTelemetry();
+    } catch (err) {
+      showToast(`Failed to update workspace scope: ${err.message || err}`, 'danger');
+    }
   }
 
   const btnNotify = document.getElementById('btn-notify');
