@@ -65,6 +65,27 @@ document.addEventListener('DOMContentLoaded', () => {
   const confirmMessage = document.getElementById('confirm-message');
   const confirmInput = document.getElementById('confirm-input');
   const confirmOk = document.getElementById('confirm-ok');
+
+  // Opening a <dialog> twice throws InvalidStateError, which aborted whatever
+  // handler was mid-flight (the "everything fails" report). Every open goes
+  // through here: idempotent, and it never leaves the caller with a dialog it
+  // did not mean to reopen.
+  function openModal(dlg) {
+    if (!dlg || typeof dlg.showModal !== 'function') return false;
+    if (!dlg.open) dlg.showModal();
+    // A native modal enters the top layer ABOVE anything already there — so
+    // toasts (a popover) that were on screen before the modal opened would be
+    // hidden behind it. Re-promote them above the just-opened dialog.
+    const toasts = document.getElementById('toast-container');
+    if (toasts && typeof toasts.showPopover === 'function' && toasts.childElementCount > 0) {
+      try {
+        if (toasts.matches(':popover-open')) toasts.hidePopover();
+        toasts.showPopover();
+      } catch { /* already ordered or unsupported */ }
+    }
+    return true;
+  }
+
   function saDialog({ title, message, okLabel, withInput, placeholder, danger }) {
     if (!confirmModal || typeof confirmModal.showModal !== 'function') {
       // No dialog support: fall back to the native prompt/confirm so the
@@ -86,7 +107,7 @@ document.addEventListener('DOMContentLoaded', () => {
       };
       const onClose = done;
       confirmModal.addEventListener('close', onClose, { once: true });
-      confirmModal.showModal();
+      openModal(confirmModal);
       (withInput ? confirmInput : confirmOk).focus();
     });
   }
@@ -397,8 +418,9 @@ document.addEventListener('DOMContentLoaded', () => {
   // The console is organized by question (Overview / Agents / Egress /
   // Findings), not by data source. State persists per tab-session; the hash
   // carries the tab for deep links (#ct is lifted and stripped BEFORE this
-  // runs, so the two never collide).
-  const TABS = ['overview', 'sessions', 'agents', 'egress', 'findings'];
+  // runs, so the two never collide). "Telemetry" holds the per-source detail
+  // (resource control + raw event timeline) split out of Overview.
+  const TABS = ['overview', 'sessions', 'agents', 'telemetry', 'egress', 'findings'];
   let activeTab = 'overview';
 
   function switchTab(id, opts = {}) {
@@ -812,7 +834,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (btnCopyReport) btnCopyReport.style.display = '';
     titleEl.innerHTML = `<svg class="icon"><use href="#i-doc"/></svg>Incident report — ${escapeHTML(incidentId)}`;
     bodyEl.innerHTML = `<div class="loading-spinner">Fetching incident report…</div>`;
-    reportModal.showModal();
+    openModal(reportModal);
 
     try {
       const res = await apiFetch(`/incidents?id=${encodeURIComponent(incidentId)}&format=markdown`);
@@ -840,7 +862,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (btnCopyReport) btnCopyReport.style.display = 'none';
     titleEl.innerHTML = `<svg class="icon"><use href="#i-globe"/></svg>Uninspected egress — last 24h`;
     fillUninspected(bodyEl);
-    if (!reportModal.open) reportModal.showModal();
+    openModal(reportModal);
   };
 
   window.killProcess = async function(pid, startedAt, family) {
@@ -978,7 +1000,7 @@ document.addEventListener('DOMContentLoaded', () => {
       overrides: (control.workspace_overrides || []).map(resourcePolicyFromSnapshot)
     };
     renderResourcePolicyEditor();
-    if (resourcePolicyModal && !resourcePolicyModal.open) resourcePolicyModal.showModal();
+    if (resourcePolicyModal) openModal(resourcePolicyModal);
   };
 
   window.addResourceOverride = function(source) {
@@ -1076,6 +1098,45 @@ document.addEventListener('DOMContentLoaded', () => {
       fillUninspected(document.getElementById('modal-report-body'));
     }
   };
+
+  // Ask the advisor what an endpoint is — the functionality that turns a raw
+  // IP into a decision. The daemon answers with a cached verdict immediately
+  // and queues a fresh assessment; the console polls a few times for the
+  // verdict to land, then re-renders the row.
+  window.assessHost = async function(agent, host) {
+    try {
+      const res = await apiFetch('/advisor/assess-host', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ agent, host })
+      });
+      if (res.status === 503) {
+        showToast('Advisor is off — enable it in Settings for endpoint guidance.', 'info');
+        return;
+      }
+      if (!res.ok) throw new Error(await res.text());
+      const data = await res.json().catch(() => ({}));
+      showToast(data.verdict ? 'Advisor verdict loaded' : 'Asking the advisor…', 'info');
+      await pollHostVerdict(agent, host, !!data.verdict);
+    } catch (err) {
+      showToast(`Advisor assessment failed: ${err.message || err}`, 'danger');
+    }
+  };
+
+  // Poll for a fresh host verdict (bounded): the model answers in seconds, and
+  // /egress/uninspected carries the stored verdict once it lands.
+  async function pollHostVerdict(agent, host, hadVerdict) {
+    const rounds = hadVerdict ? 1 : 8;
+    for (let i = 0; i < rounds; i++) {
+      await fetchTelemetry({ slow: true });
+      const row = (telemetryData.uninspected || []).find(e => e.agent === agent && e.host === host);
+      if (row && row.assessment) break;
+      await new Promise(r => setTimeout(r, 1500));
+    }
+    if (modalMode === 'uninspected' && reportModal && reportModal.open) {
+      fillUninspected(document.getElementById('modal-report-body'));
+    }
+  }
 
   window.allowHost = async function(agent, host) {
     try {
@@ -1345,6 +1406,9 @@ document.addEventListener('DOMContentLoaded', () => {
       case 'bulk-allow':
         window.bulkAllowHosts(d.agent, d.hosts);
         break;
+      case 'assess-host':
+        window.assessHost(d.agent, d.host);
+        break;
       case 'select-session':
         window.selectSession(d.id);
         break;
@@ -1385,13 +1449,50 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   function showToast(msg, type = 'info') {
-    const container = document.getElementById('toast-container');
     const toast = document.createElement('div');
     toast.className = `toast ${type}`;
     toast.textContent = msg;
-    container.appendChild(toast);
+
+    // Topmost open native <dialog>, if any. A dialog lives in the browser's
+    // top layer, which no root-level z-index can paint over — so while a modal
+    // is open the toast is appended INSIDE it, guaranteeing it renders above
+    // the modal content instead of behind the backdrop (the reported bug).
+    const openDialogs = document.querySelectorAll('dialog[open]');
+    const topDialog = openDialogs.length ? openDialogs[openDialogs.length - 1] : null;
+    let host;
+    if (topDialog) {
+      host = topDialog.querySelector(':scope > .toast-host');
+      if (!host) {
+        host = document.createElement('div');
+        host.className = 'toast-host';
+        topDialog.appendChild(host);
+      }
+    } else {
+      host = document.getElementById('toast-container');
+      if (!host) return;
+      // Popover keeps the fixed stack above page content; guarded for
+      // browsers without the Popover API (plain fixed div).
+      if (typeof host.showPopover === 'function') {
+        try {
+          if (host.matches(':popover-open')) host.hidePopover();
+          host.showPopover();
+        } catch { /* unsupported */ }
+      }
+    }
+
+    host.appendChild(toast);
+    // Keep the stack short: an endpoint-failure burst must not build a toast
+    // column taller than the viewport (which pushes the oldest ones off-screen).
+    while (host.childElementCount > 4) host.firstElementChild.remove();
+
     setTimeout(() => {
       toast.remove();
+      if (host.classList.contains('toast-host') && !host.childElementCount) {
+        host.remove();
+      } else if (host.id === 'toast-container' && !host.childElementCount &&
+                 typeof host.hidePopover === 'function' && host.matches(':popover-open')) {
+        try { host.hidePopover(); } catch { /* ok */ }
+      }
     }, 4000);
   }
 
