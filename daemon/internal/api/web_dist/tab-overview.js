@@ -256,6 +256,81 @@ function renderResourceMissionControl() {
   container.innerHTML = hostContext + posture + policy + `<div class="resource-layout"><div class="resource-session-list">${cards}</div><aside class="resource-detail-wrap">${detail}</aside></div>` + flightRecorder;
 }
 
+// Findings-by-rule chart: one bar per rule, ranked by count in the window.
+// The point is shape — "is one rule dominating?" — not exact values.
+function renderChartFlags() {
+  const SA = window.SA;
+  const el = document.getElementById('chart-flags');
+  const total = document.getElementById('chart-flags-total');
+  if (!el) return;
+  const flags = SA.t.flagsView || [];
+  if (total) total.textContent = flags.length;
+  if (!flags.length) {
+    el.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-alert"/></svg><span>No findings in the window</span></div>`;
+    return;
+  }
+  const byRule = {};
+  for (const f of flags) {
+    byRule[f.rule] = byRule[f.rule] || { n: 0, crit: 0 };
+    byRule[f.rule].n++;
+    if ((f.severity || 0) >= 3) byRule[f.rule].crit++;
+  }
+  const rows = Object.entries(byRule)
+    .sort((a, b) => b[1].n - a[1].n)
+    .map(([rule, v]) => ({
+      label: ruleTitle(rule),
+      value: v.n,
+      cls: v.crit > 0 ? 'crit' : 'warn',
+      sub: v.crit > 0 ? `${v.crit} critical` : '',
+      titleAttr: rule,
+    }));
+  el.innerHTML = hbarsHTML(rows);
+}
+
+// Memory-by-session chart: resident memory per attributed session, ranked.
+// Uses the durable session rows joined with live tree RSS; falls back to the
+// process-tree families when the daemon predates the session spine.
+function renderChartMemory() {
+  const SA = window.SA;
+  const el = document.getElementById('chart-memory');
+  const total = document.getElementById('chart-mem-total');
+  if (!el) return;
+  const trees = (SA.t.status && SA.t.status.trees) || [];
+  const durable = SA.t.sessions || [];
+  const byRoot = {};
+  for (const t of trees) if (t.root) byRoot[Number(t.root.pid)] = t;
+
+  let sessions = durable.map(s => {
+    const live = s.root_pid ? byRoot[Number(s.root_pid)] : null;
+    return {
+      label: s.repo ? `${s.harness} · ${s.repo}` : `${s.harness} · ${cwdLabel(s.workspace) || 'unknown'}`,
+      rss: live ? Number(live.rss_bytes || 0) : 0,
+      infra: s.kind === 'infra',
+    };
+  }).filter(s => s.rss > 0);
+
+  if (!sessions.length) {
+    // Legacy fallback: process-tree families.
+    sessions = trees.map(t => ({
+      label: `${(t.root && t.root.name) || 'agent'} · ${cwdLabel(t.root && t.root.cwd) || 'unknown'}`,
+      rss: Number(t.rss_bytes || 0),
+      infra: false,
+    })).filter(s => s.rss > 0);
+  }
+  if (total) total.textContent = sessions.filter(s => !s.infra).length;
+  if (!sessions.length) {
+    el.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-agent"/></svg><span>No attributed sessions yet</span></div>`;
+    return;
+  }
+  const rows = sessions.sort((a, b) => b.rss - a.rss).slice(0, 8).map(s => ({
+    label: s.label,
+    value: s.rss,
+    cls: s.infra ? 'infra' : '',
+    sub: s.infra ? 'infra' : '',
+  }));
+  el.innerHTML = hbarsHTML(rows, { format: v => fmtRSS(v) || '0 B' });
+}
+
 function renderSessionStrip() {
   const SA = window.SA;
   const panel = document.getElementById('session-strip-panel');

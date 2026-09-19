@@ -365,12 +365,15 @@ def main():
               and dom.index('id="session-board"') < dom.index('id="tab-agents"'))
         check("overview has no session board",
               'id="session-board"' not in dom.split('id="tab-overview"', 1)[1].split('id="tab-sessions"', 1)[0])
-        overview = dom.split('id="tab-overview"', 1)[1].split('id="tab-sessions"', 1)[0]
-        check("overview session strip is present", 'id="session-strip"' in overview)
-        check("overview strip names the live projects",
-              "api-service" in overview and "web-app" in overview)
-        check("overview strip opens the sessions tab",
-              'data-action="goto-tab" data-tab="sessions"' in overview)
+        overview = dom.split('id="tab-overview"', 1)[1].split('id="tab-resources"', 1)[0]
+        # Overview is charts-only: the activity chart plus the two ranked-bar
+        # charts. Lists (sessions/agents/flags/events) live in their own tabs.
+        check("overview leads with the activity chart", 'id="activity-chart"' in overview)
+        check("overview has the findings-by-rule chart", 'id="chart-flags"' in overview)
+        check("overview has the memory-by-session chart", 'id="chart-memory"' in overview)
+        check("overview carries no list panels",
+              'id="session-strip"' not in overview and 'id="events-container"' not in overview
+              and 'id="resource-board"' not in overview)
         check("session board has project filter", 'id="session-cwd-filter"' in dom)
         sessions = dom.split('id="session-rail"', 1)[1].split('id="session-detail"', 1)[0]
         check("session rail lists two sessions", sessions.count('class="session-card') == 2,
@@ -404,6 +407,16 @@ def main():
         check("tab switch reveals the target panel",
               'id="tab-egress" role="tabpanel">' in dom_tab
               and 'id="tab-overview" role="tabpanel" hidden' in dom_tab)
+        # The old catch-all "Telemetry" tab split into two coherent ones.
+        check("resources and events are separate tabs",
+              'id="tab-resources" role="tabpanel" hidden' in dom
+              and 'id="tab-events" role="tabpanel" hidden' in dom)
+        check("resource panel lives in the resources tab",
+              dom.index('id="tab-resources"') < dom.index('id="resource-board"')
+              and dom.index('id="resource-board"') < dom.index('id="tab-events"'))
+        check("event timeline lives in the events tab",
+              dom.index('id="tab-events"') < dom.index('id="events-container"')
+              and dom.index('id="events-container"') < dom.index('id="tab-sessions"'))
 
         # --- saved views, search, export (P5) ---
         check("saved-view menu is present", 'id="btn-views"' in dom and 'id="views-pop"' in dom)

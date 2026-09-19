@@ -306,6 +306,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // KPI tween: animate numeric transitions, flash green/rose on change.
   const kpiPrev = {};
+  // markZero flags an element whose numeric value is zero, so CSS can drop
+  // its severity colour (a red "0 flags" is noise, not a warning). A CLASS,
+  // not a data attribute: the class sits before the id in the markup, so the
+  // exact `id="count-flags">N<` shape stays intact for tests and tooling.
+  function markZero(id) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.classList.toggle('is-zero', String(el.textContent).trim() === '0');
+  }
+
   function setKpi(id, val) {
     const el = document.getElementById(id);
     if (!el) return;
@@ -542,7 +552,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // carries the tab for deep links (#ct is lifted and stripped BEFORE this
   // runs, so the two never collide). "Telemetry" holds the per-source detail
   // (resource control + raw event timeline) split out of Overview.
-  const TABS = ['overview', 'sessions', 'agents', 'telemetry', 'egress', 'findings'];
+  const TABS = ['overview', 'sessions', 'agents', 'resources', 'events', 'egress', 'findings'];
   let activeTab = 'overview';
 
   function switchTab(id, opts = {}) {
@@ -668,7 +678,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // activity — on every single poll.
     const panels = [
       ['posture', renderPosture], ['status', renderStatus], ['resources', renderResourceMissionControl], ['sessions', renderSessionBoard],
-      ['session-strip', renderSessionStrip],
+      ['chart-flags', renderChartFlags], ['chart-memory', renderChartMemory],
       ['agents', renderAgents],
       ['firewall', renderFirewall], ['incidents', renderIncidents], ['fleet', renderFleet],
       ['audit', renderAudit], ['sources', renderSources], ['flags', renderFlags], ['attention', renderAttention],
@@ -707,17 +717,39 @@ document.addEventListener('DOMContentLoaded', () => {
     if (s.version) document.getElementById('app-version').textContent = s.version;
     document.getElementById('uptime-val').textContent = s.uptime || '--';
     document.getElementById('proxy-status').textContent = s.proxy_enabled ? `127.0.0.1:${s.proxy_port || 8443}` : 'Disabled';
+    // The status chip's tooltip carries what the header used to spell out, so
+    // uptime/proxy stay available without their own stat blocks.
+    if (chip) {
+      const up = document.getElementById('uptime-val')?.textContent || '--';
+      const px = document.getElementById('proxy-status')?.textContent || '';
+      chip.title = `uptime ${up}${s.proxy_enabled ? ` · proxy ${px}` : ''}`;
+    }
+    const uptimeMeta = document.getElementById('uptime-meta');
+    if (uptimeMeta) uptimeMeta.textContent = 'up ' + (s.uptime || '--');
+    // Coverage light: how many running harnesses the daemon is actually
+    // seeing. Red only when it is provably blind (0 of a live count).
+    const cov = document.getElementById('coverage-chip');
+    if (cov) {
+      if (s.coverage && s.coverage.harnesses_active > 0) {
+        const seen = s.coverage.harnesses_seen, act = s.coverage.harnesses_active;
+        cov.hidden = false;
+        cov.textContent = `seeing ${seen}/${act}`;
+        cov.className = 'ss-chip ' + (seen === 0 ? 'blind' : seen < act ? 'partial' : 'ok');
+        cov.title = seen === 0
+          ? 'The daemon is running but seeing no harness activity — hooks may not be registered'
+          : `${seen} of ${act} running harnesses have attributed activity`;
+      } else {
+        cov.hidden = true;
+      }
+    }
 
     const agentList = s.agents || [];
     setKpi('count-agents', s.active_agents || agentList.length);
-    const families = groupAgents(agentList);
     const hint = document.getElementById('hint-agents');
     if (hint) {
       // Infra (IDEs, model servers) is tracked but never counted as agents.
-      const infra = s.infra_count ? ` · ${s.infra_count} infra` : '';
-      hint.textContent = families.length
-        ? `${families.length} ${families.length === 1 ? 'family' : 'families'} · ${agentList.length} ${agentList.length === 1 ? 'process' : 'processes'}${infra}`
-        : 'Tagged in the process tree';
+      // Inline in the stat strip, so keep it to one short phrase.
+      hint.textContent = s.infra_count ? `+${s.infra_count} infra` : '';
     }
     setKpi('count-flags', s.unacted_flags_24h != null
       ? s.unacted_flags_24h
@@ -731,6 +763,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const proxyEvents = telemetryData.events.filter(e => e.kind === 9 || (e.detail && e.detail.includes('proxy')));
     setKpi('count-proxy', proxyEvents.length);
+    // Severity colour only when the count is real: a red 0 reads as a bug.
+    markZero('count-flags');
+    markZero('count-incidents');
     if (chip && s.bus_drops) chip.title = s.bus_drops + ' event bus drops';
   }
 
