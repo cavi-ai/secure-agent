@@ -1,4 +1,4 @@
-package main
+package daemon
 
 // Hot-reload of live-swappable config: the menubar edits config.yaml on every
 // Settings change ("Enable advisor", model switch), and `secure-agent fleet
