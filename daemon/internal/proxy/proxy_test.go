@@ -413,13 +413,13 @@ func TestConsoleAPIPathsCoverWebApp(t *testing.T) {
 	}
 	fragments := map[string]bool{"/timeline": true, "/sessions": true}
 	for p := range seen {
-		if consoleAPIPaths[p] {
+		if isConsoleAPIPath(p) {
 			continue
 		}
 		if fragments[p] {
 			continue // part of the dynamic session-timeline route, checked above
 		}
-		t.Errorf("console fetches %s but consoleAPIPaths lacks it — that panel 407s on the proxy listener", p)
+		t.Errorf("console fetches %s but the console allow-list lacks it — that panel 407s on the proxy listener", p)
 	}
 }
 
