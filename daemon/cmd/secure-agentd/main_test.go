@@ -175,7 +175,7 @@ func TestEndToEndSmokeScenario(t *testing.T) {
 	})
 
 	statusFn := func() api.Status { return api.Status{Running: true} }
-	apiServer := api.New(api.Deps{SocketPath: sockPath, Store: st, Killer: &realKiller{}, Status: statusFn})
+	apiServer := api.New(api.Deps{SocketPath: sockPath, Store: st, Killer: nil, Status: statusFn})
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- apiServer.Serve(ctx) }()
 

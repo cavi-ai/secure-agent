@@ -1,4 +1,4 @@
-package main
+package daemon
 
 import (
 	"context"
@@ -23,6 +23,21 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 	"github.com/cavi-ai/secure-agent/daemon/internal/supervise"
 )
+
+type fakeProcSource struct{}
+
+func (f fakeProcSource) List() []agents.ProcInfo {
+	return []agents.ProcInfo{
+		{PID: 500, PPID: 1, Exe: "/usr/local/bin/cursor-agent"},
+	}
+}
+
+func (f fakeProcSource) Info(pid int32) (agents.ProcInfo, bool) {
+	if pid == 500 {
+		return agents.ProcInfo{PID: 500, PPID: 1, Exe: "/usr/local/bin/cursor-agent"}, true
+	}
+	return agents.ProcInfo{}, false
+}
 
 func TestGuardBrokerMS(t *testing.T) {
 	cases := []struct {
