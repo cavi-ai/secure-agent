@@ -534,6 +534,12 @@
   if (location.search.includes('tabdemo')) {
     setTimeout(() => document.querySelector('[data-tab="egress"]').click(), 4000);
   }
+  // Auto-action: switch to a named tab once telemetry has landed, then hold
+  // long enough for a screenshot — ?tab=<name> for visual QA.
+  {
+    const tab = new URLSearchParams(location.search).get('tab');
+    if (tab) setTimeout(() => document.querySelector(`[data-tab="${tab}"]`)?.click(), 1500);
+  }
   // Auto-action: save a view, type a search, then apply the view — exercises
   // the saved-view + search paths through the real UI.
   if (location.search.includes('viewdemo')) {

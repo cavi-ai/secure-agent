@@ -806,12 +806,10 @@ body {
   padding: 4px; border-radius: var(--r-md);
   background: var(--bg-1); border: 1px solid var(--line);
   min-width: 0;
-}
-/* Narrow widths: the tab bar scrolls horizontally rather than forcing the
-   whole page to overflow (six tabs no longer fit one row). */
-@media (max-width: 719px) {
-  .tabs { overflow-x: auto; flex-wrap: nowrap; scrollbar-width: thin; }
-  .tab-btn { flex: none; white-space: nowrap; }
+  /* The bar scrolls horizontally whenever the tabs don't fit, at any width —
+     a fixed breakpoint can't know how many tabs there are (this overflowed
+     between 720 and 1000px once the tab count grew to eight). */
+  overflow-x: auto; flex-wrap: nowrap; scrollbar-width: thin;
 }
 .tab-btn {
   display: inline-flex; align-items: center; gap: 7px;
@@ -819,6 +817,7 @@ body {
   background: transparent; color: var(--tx-2);
   font: 550 0.82rem/1 var(--font); cursor: pointer;
   transition: background .16s var(--ease), color .16s var(--ease);
+  flex: none; white-space: nowrap;
 }
 .tab-btn .icon { font-size: 0.95rem; }
 .tab-btn:hover { color: var(--tx-1); background: var(--bg-2); }
@@ -1245,3 +1244,12 @@ button.fw-uninspected .fw-drill-hint {
   .hbar-sub { display: none; }
   .hbar-row { grid-template-columns: minmax(90px, 1.2fr) minmax(60px, 2fr) auto; }
 }
+
+/* Thin attributed-now line (replaces the four-cell resource-posture grid). */
+.resource-attributed {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 20px;
+  margin: 4px 0 12px; padding: 8px 2px;
+  border-bottom: 1px solid var(--line);
+  color: var(--tx-3); font-size: 0.78rem;
+}
+.resource-attributed b { color: var(--tx-1); font-weight: 700; }

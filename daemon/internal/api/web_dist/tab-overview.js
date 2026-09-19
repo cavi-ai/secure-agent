@@ -126,7 +126,7 @@ function resourceFlightRecorderHTML(snapshot) {
         </div>`).join('');
       const activityOmitted = Math.max(0, activities.length - 8);
       const age = episode.captured_at ? fmtAge(episode.captured_at, Date.now()) : '';
-      return `<details class="resource-episode severity-${escapeHTML(episode.severity || 'warning')}"${index === 0 ? ' open' : ''}>
+      return `<details class="resource-episode severity-${escapeHTML(episode.severity || 'warning')}">
         <summary><span><b>${escapeHTML(label)}</b><small>${escapeHTML(primary.summary || (episode.diagnosis_codes || []).join(', ') || 'Resource pressure')}</small></span><span class="resource-episode-metrics"><b>${escapeHTML(fmtRSS(session.rss_bytes) || '—')}</b><b>${escapeHTML(fmtCPU(session.cpu_percent) || '—')}</b><time>${age ? `${escapeHTML(age)} ago` : 'recorded'}</time></span></summary>
         <div class="resource-episode-body">
           ${hostAtCapture}
@@ -170,9 +170,8 @@ function renderResourceMissionControl() {
   ].filter(Boolean).join(' · ');
 	const ladder = (control.interventions || []).map(step => String(step.action || '').replaceAll('_', ' ')).join(' → ');
   const policy = `<div class="resource-policy"><span><b>${escapeHTML(control.mode || 'observe')}</b> machine policy${limits ? ` · ${escapeHTML(limits)}` : ' · budgets disabled'}${control.sustain_seconds ? ` · ${Number(control.sustain_seconds)}s grace` : ''}${ladder ? ` · ${escapeHTML(ladder)}` : ''} · ${(control.workspace_overrides || []).length} workspace override${(control.workspace_overrides || []).length === 1 ? '' : 's'}</span><span><span>${(control.pending || []).length} approval${(control.pending || []).length === 1 ? '' : 's'} pending</span><button type="button" class="btn btn-ghost btn-sm" data-action="edit-resource-policy">Edit policy</button></span></div>`;
-  const flightRecorder = resourceFlightRecorderHTML(snapshot);
   if (sessions.length === 0) {
-    container.innerHTML = hostContext + policy + `<div class="empty"><svg class="icon"><use href="#i-activity"/></svg><span>No attributed agent resource use right now</span></div>` + flightRecorder;
+    container.innerHTML = hostContext + policy + `<div class="empty"><svg class="icon"><use href="#i-activity"/></svg><span>No attributed agent resource use right now</span></div>`;
     return;
   }
 
@@ -181,13 +180,17 @@ function renderResourceMissionControl() {
   }
   const selected = sessions.find(s => s.key === SA.selectedResourceKey);
   const totalCPU = Object.prototype.hasOwnProperty.call(snapshot, 'cpu_percent') ? fmtCPU(snapshot.cpu_percent) : '';
-  const posture = `
-    <div class="resource-posture" aria-label="Attributed machine resource posture">
-      <div class="resource-posture-lead"><span class="resource-eyebrow">Attributed now</span><strong>${Number(snapshot.session_count ?? sessions.length)} session${Number(snapshot.session_count ?? sessions.length) === 1 ? '' : 's'}${snapshot.infra_count ? ` · ${Number(snapshot.infra_count)} infra` : ''}</strong></div>
-      <div class="resource-stat"><span>Memory</span><strong>${escapeHTML(fmtRSS(snapshot.rss_bytes) || 'Unavailable')}</strong></div>
-      <div class="resource-stat"><span>CPU</span><strong>${escapeHTML(totalCPU || 'Unavailable')}</strong></div>
-      <div class="resource-stat"><span>Processes</span><strong>${Number(snapshot.process_count || 0)}</strong></div>
-    </div>`;
+  // One thin attributed-now line instead of a 66px four-cell grid: the machine
+  // numbers already fill the headroom card above, so this only carries the
+  // agent-attributed totals, and it reads as a subtitle to the list.
+  const sessionCount = Number(snapshot.session_count ?? sessions.length);
+  const infraNote = snapshot.infra_count ? ` · ${Number(snapshot.infra_count)} infra` : '';
+  const posture = `<div class="resource-attributed">
+    <span><b>${sessionCount}</b> session${sessionCount === 1 ? '' : 's'}${infraNote}</span>
+    <span><b>${escapeHTML(fmtRSS(snapshot.rss_bytes) || '—')}</b> memory</span>
+    <span><b>${escapeHTML(totalCPU || '—')}</b> CPU</span>
+    <span><b>${Number(snapshot.process_count || 0)}</b> processes</span>
+  </div>`;
 
   const cards = sessions.map((session, index) => {
     const label = cwdLabel(session.workspace) || familyTitle(session.name);
@@ -253,7 +256,25 @@ function renderResourceMissionControl() {
       </div>`;
   }
 
-  container.innerHTML = hostContext + posture + policy + `<div class="resource-layout"><div class="resource-session-list">${cards}</div><aside class="resource-detail-wrap">${detail}</aside></div>` + flightRecorder;
+  container.innerHTML = hostContext + posture + policy + `<div class="resource-layout"><div class="resource-session-list">${cards}</div><aside class="resource-detail-wrap">${detail}</aside></div>`;
+}
+
+// History tab: the pressure flight recorder on its own page. It was stacked
+// under the live resource view where a single episode (host at capture, the
+// process breakdown, evidence, a sparkline and nearby activity) opened inline
+// and buried everything else.
+function renderResourceHistory() {
+  const SA = window.SA;
+  const board = document.getElementById('history-board');
+  const observed = document.getElementById('history-observed');
+  if (!board) return;
+  const snapshot = SA.t.resources;
+  if (!snapshot) return;
+  if (observed) {
+    const episodes = (snapshot.episodes || []).length;
+    observed.textContent = episodes ? `${episodes} episode${episodes === 1 ? '' : 's'}` : 'None yet';
+  }
+  board.innerHTML = resourceFlightRecorderHTML(snapshot);
 }
 
 // Findings-by-rule chart: one bar per rule, ranked by count in the window.
