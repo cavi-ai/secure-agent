@@ -13,7 +13,7 @@ import (
 // apiroutes.Table. This is the test that makes them unable to drift: every
 // table path has a handler, and every handler map entry is in the table.
 func TestRouteTableMatchesHandlers(t *testing.T) {
-	a := New("", testStore(t), nil, func() Status { return Status{Running: true} })
+	a := newTestAPI("", testStore(t), nil, func() Status { return Status{Running: true} })
 	handlers := a.routes()
 
 	var missingHandler, missingRoute []string
@@ -45,7 +45,7 @@ func TestRouteTableMatchesHandlers(t *testing.T) {
 // table but not the mux would be a silent hole, and this catches the reverse of
 // the check above at the HTTP layer.
 func TestRouteTablePathsAreRegistered(t *testing.T) {
-	a := New("", testStore(t), nil, func() Status { return Status{Running: true} })
+	a := newTestAPI("", testStore(t), nil, func() Status { return Status{Running: true} })
 	mux := a.buildMux()
 	for _, r := range apiroutes.Table {
 		// A GET to a mutation still proves the path is routed (it returns 405

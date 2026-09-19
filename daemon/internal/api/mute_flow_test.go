@@ -26,8 +26,9 @@ func TestMuteFlowAcknowledgesExistingFlags(t *testing.T) {
 	st.PutFlag(flagFor("f3", "sensitive-read-then-connect", "then connected to api.example.com:443 at T"))
 
 	mutes := correlate.NewMuteStore(dir + "/muted.json")
-	a := New(dir+"/d.sock", st, nil, nil)
-	a.SetMute(correlate.New(nil, nil, config.Config{}), mutes) // correlator nil-safe? use New(nil)
+	a := newTestAPI(dir+"/d.sock", st, nil, nil)
+	a.correlator = correlate.New(nil, nil, config.Config{})
+	a.mutes = mutes // correlator nil-safe? use New(nil)
 	if a.mutes == nil {
 		t.Fatal("mute store not set")
 	}
@@ -70,7 +71,7 @@ func TestFlagAcknowledgeEndpoint(t *testing.T) {
 	defer st.Close()
 	st.PutFlag(flagFor("valid-id.1", "sensitive-read-then-connect", "then connected to localhost:80 at T"))
 
-	a := New(dir+"/d.sock", st, nil, nil)
+	a := newTestAPI(dir+"/d.sock", st, nil, nil)
 	h := a.buildMux()
 
 	ack := func(id string) *httptest.ResponseRecorder {

@@ -32,7 +32,7 @@ func TestServeShutdownDoesNotUnlinkSuccessorsSocket(t *testing.T) {
 
 	// Daemon A binds, then Daemon B takes over the same path (B's Serve
 	// removes the "stale" file and binds — the normal takeover).
-	a1 := New(sock, st, &fakeKiller{}, statusFn)
+	a1 := newTestAPI(sock, st, &fakeKiller{}, statusFn)
 	ctx1, cancel1 := context.WithCancel(context.Background())
 	done1 := make(chan error, 1)
 	go func() { done1 <- a1.Serve(ctx1) }()
@@ -42,7 +42,7 @@ func TestServeShutdownDoesNotUnlinkSuccessorsSocket(t *testing.T) {
 		t.Fatal("daemon A socket missing after bind")
 	}
 
-	a2 := New(sock, st, &fakeKiller{}, statusFn)
+	a2 := newTestAPI(sock, st, &fakeKiller{}, statusFn)
 	ctx2, cancel2 := context.WithCancel(context.Background())
 	defer cancel2()
 	done2 := make(chan error, 1)

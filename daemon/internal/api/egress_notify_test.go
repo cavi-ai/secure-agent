@@ -40,8 +40,9 @@ func TestUninspectedEgressEndpoint(t *testing.T) {
 	cr.Observe(event.Event{Kind: event.KindConnOpen, PID: 42, TS: now.Add(-time.Hour), RemoteHost: "fresh.example.com", RemotePort: 443})
 	cr.Observe(event.Event{Kind: event.KindConnOpen, PID: 42, TS: now.Add(-48 * time.Hour), RemoteHost: "stale.example.com", RemotePort: 443})
 
-	a := New(sock, testStore(t), &fakeKiller{}, func() Status { return Status{Running: true} })
-	a.SetAllowlist(cr, nil)
+	a := newTestAPI(sock, testStore(t), &fakeKiller{}, func() Status { return Status{Running: true} })
+	a.correlator = cr
+	a.allowlist = nil
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go a.Serve(ctx)
@@ -87,8 +88,8 @@ func TestNotifyRulesEndpoint(t *testing.T) {
 	defer os.Remove(sock)
 
 	st := testStore(t)
-	a := New(sock, st, &fakeKiller{}, func() Status { return Status{Running: true} })
-	a.SetNotifyRules(correlate.NewNotifyRuleStore(filepath.Join(dir, "notify-rules.json")))
+	a := newTestAPI(sock, st, &fakeKiller{}, func() Status { return Status{Running: true} })
+	a.notifyRules = correlate.NewNotifyRuleStore(filepath.Join(dir, "notify-rules.json"))
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go a.Serve(ctx)
@@ -172,10 +173,10 @@ func TestAdvisorAssessHostEndpoint(t *testing.T) {
 	defer os.Remove(sock)
 
 	st := testStore(t)
-	a := New(sock, st, &fakeKiller{}, func() Status { return Status{Running: true} })
+	a := newTestAPI(sock, st, &fakeKiller{}, func() Status { return Status{Running: true} })
 
 	queued := []string{}
-	a.SetHostAssess(HostAssessFuncs{
+	a.hostAssess = &HostAssessFuncs{
 		GetVerdict: func(agent, host string) (model.AdvisorVerdict, bool) {
 			if host == "known.example.com" {
 				return model.AdvisorVerdict{Assessment: "benign", Rationale: "routine vendor traffic"}, true
@@ -186,7 +187,7 @@ func TestAdvisorAssessHostEndpoint(t *testing.T) {
 			queued = append(queued, agent+"|"+host)
 			return true
 		},
-	})
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go a.Serve(ctx)
@@ -239,7 +240,7 @@ func TestAdvisorAssessHostEndpoint(t *testing.T) {
 func TestAdvisorAssessHostDisabled(t *testing.T) {
 	sock := fmt.Sprintf("/tmp/sa_assess_off_%d.sock", time.Now().UnixNano())
 	defer os.Remove(sock)
-	a := New(sock, testStore(t), &fakeKiller{}, func() Status { return Status{Running: true} })
+	a := newTestAPI(sock, testStore(t), &fakeKiller{}, func() Status { return Status{Running: true} })
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go a.Serve(ctx)
@@ -261,9 +262,9 @@ func TestNotifyWorkspaceScopes(t *testing.T) {
 	sock := fmt.Sprintf("/tmp/sa_nscope_%d.sock", time.Now().UnixNano())
 	defer os.Remove(sock)
 	dir := t.TempDir()
-	a := New(sock, testStore(t), &fakeKiller{}, func() Status { return Status{Running: true} })
-	a.SetNotifyRules(correlate.NewNotifyRuleStore(filepath.Join(dir, "notify-rules.json")))
-	a.SetNotifyScopes(correlate.NewNotifyScopeStore(filepath.Join(dir, "notify-scopes.json")))
+	a := newTestAPI(sock, testStore(t), &fakeKiller{}, func() Status { return Status{Running: true} })
+	a.notifyRules = correlate.NewNotifyRuleStore(filepath.Join(dir, "notify-rules.json"))
+	a.notifyScopes = correlate.NewNotifyScopeStore(filepath.Join(dir, "notify-scopes.json"))
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go a.Serve(ctx)

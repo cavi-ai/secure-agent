@@ -76,19 +76,6 @@ func (a *API) handleEventStream(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// SetDeltaHub wires the typed-delta fan-out the SSE handler serves.
-// subscribe must be safe for concurrent use; release unsubscribes.
-func (a *API) SetDeltaHub(h *DeltaHub) {
-	a.deltaHub = h
-}
-
-// SetEventPublisher wires a bus publish func so guard lifecycle moments
-// (prompt enqueued, prompt resolved) reach SSE subscribers instantly — the
-// menubar's prompt latency drops from poll-interval to push.
-func (a *API) SetEventPublisher(publish func(event.Event)) {
-	a.publishEvent = publish
-}
-
 // publishGuardEvent emits a guard lifecycle event on the bus (nil-safe).
 // Detail carries only rule/agent — never paths, which can be secret-adjacent.
 func (a *API) publishGuardEvent(kind event.Kind, detail string) {
