@@ -18,6 +18,7 @@ export interface Event {
   tokens_in?: number;
   tokens_out?: number;
   cost_usd?: number;
+  call_id?: string;
 }
 
 export interface Session {

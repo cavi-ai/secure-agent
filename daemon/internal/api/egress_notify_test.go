@@ -16,6 +16,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/correlate"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
+	"github.com/cavi-ai/secure-agent/daemon/internal/resource"
 	"github.com/cavi-ai/secure-agent/daemon/internal/sensitive"
 )
 
@@ -309,5 +310,28 @@ func TestNotifyWorkspaceScopes(t *testing.T) {
 	resp.Body.Close()
 	if len(get().Scopes) != 0 {
 		t.Fatal("cleared scope still present")
+	}
+}
+
+// /resources is downsampled: 720 sparkline points become <=120, always
+// keeping the newest sample. The full series stays in the store for episodes.
+func TestResourcesDownsamplesSamples(t *testing.T) {
+	mk := func(n int) []resource.Sample {
+		out := make([]resource.Sample, n)
+		for i := range out {
+			out[i] = resource.Sample{At: time.Now().Add(time.Duration(i) * time.Second), RSSBytes: uint64(i)}
+		}
+		return out
+	}
+	if got := downsample(mk(5), 120); len(got) != 5 {
+		t.Fatalf("short series changed: %d", len(got))
+	}
+	got := downsample(mk(720), 120)
+	if len(got) != 120 {
+		t.Fatalf("downsampled = %d, want 120", len(got))
+	}
+	// The newest sample must survive (the UI labels it "now").
+	if got[len(got)-1].RSSBytes != 719 {
+		t.Fatalf("last sample = %d, want 719", got[len(got)-1].RSSBytes)
 	}
 }

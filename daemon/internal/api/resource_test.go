@@ -73,17 +73,28 @@ func TestResourcesEndpointIncludesPressureEpisodes(t *testing.T) {
 	a := New("", st, nil, func() Status { return Status{Running: true} })
 	a.SetResources(func() resource.Snapshot { return resource.Snapshot{ObservedAt: now} })
 
+	// Episodes moved off the hot /resources payload onto their own endpoint.
 	response := httptest.NewRecorder()
-	a.buildMux().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/resources", nil))
+	a.buildMux().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/resources/episodes", nil))
 	if response.Code != http.StatusOK {
 		t.Fatalf("code=%d body=%s", response.Code, response.Body.String())
 	}
-	var got resource.Snapshot
+	var got []resource.Episode
 	if err := json.Unmarshal(response.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
-	if len(got.Episodes) != 1 || got.Episodes[0].Session.Key != "10:100" {
-		t.Fatalf("episodes=%+v", got.Episodes)
+	if len(got) != 1 || got[0].Session.Key != "10:100" {
+		t.Fatalf("episodes=%+v", got)
+	}
+	// And /resources must NOT carry them (that was the 2 MB regression).
+	live := httptest.NewRecorder()
+	a.buildMux().ServeHTTP(live, httptest.NewRequest(http.MethodGet, "/resources", nil))
+	var snap resource.Snapshot
+	if err := json.Unmarshal(live.Body.Bytes(), &snap); err != nil {
+		t.Fatal(err)
+	}
+	if len(snap.Episodes) != 0 {
+		t.Fatalf("episodes still on /resources: %+v", snap.Episodes)
 	}
 }
 

@@ -88,4 +88,10 @@ type Event struct {
 	TokensIn   int64   `json:"tokens_in,omitempty"`   // model_call: input + cache-creation tokens
 	TokensOut  int64   `json:"tokens_out,omitempty"`  // model_call: output tokens
 	CostUSD    float64 `json:"cost_usd,omitempty"`    // model_call: approximate, from the pricing table (0 = unknown model)
+	// CallID is the harness's own tool-call id (Claude tool_use id, Codex
+	// call_id, opencode callID). For a tool_call it makes the row keyed and
+	// idempotent: the start inserts, the completion updates the SAME row
+	// (store.PutEvent upserts on (session_id, call_id)), and a transcript
+	// re-read cannot duplicate a call. Empty for non-tool events.
+	CallID string `json:"call_id,omitempty"`
 }

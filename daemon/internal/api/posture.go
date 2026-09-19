@@ -1,8 +1,11 @@
 package api
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -128,6 +131,9 @@ func (a *API) computePosture() Posture {
 			posture.Items = append(posture.Items, item)
 		}
 		if item := harnessUncoveredItem(a.store, st); item != nil {
+			posture.Items = append(posture.Items, *item)
+		}
+		if item := guardHookUnregisteredItem(st); item != nil {
 			posture.Items = append(posture.Items, *item)
 		}
 	}
@@ -303,23 +309,84 @@ func humanCollectorSilentTitle(name string) string {
 // harnessUncoveredItem flags the audited failure mode: agent processes are
 // running but no harness hook or transcript event has landed in 24h — the
 // hooks are not registered (or every harness is uncovered).
+// harnessUncoveredItem flags agent processes running with no HOOK activity.
+// It keys on hook-produced evidence only (plugin actions and handshakes) —
+// NOT transcript hits, which are secret-pattern matches in any tailed log and
+// say nothing about whether the guard hook is registered. Clearing on
+// transcript hits (the previous behaviour) hid exactly the failure this item
+// exists to report.
 func harnessUncoveredItem(st *store.Store, status Status) *PostureItem {
 	if st == nil {
 		return nil
 	}
 	since := time.Now().Add(-24 * time.Hour).UTC().Format(time.RFC3339)
-	for _, kind := range []event.Kind{event.KindTranscriptHit, event.KindPluginAction} {
-		k := int(kind)
-		if len(st.QueryEvents(store.EventFilter{Kind: &k, Since: since, Limit: 1})) > 0 {
-			return nil
-		}
+	k := int(event.KindPluginAction)
+	if len(st.QueryEvents(store.EventFilter{Kind: &k, Since: since, Limit: 1})) > 0 {
+		return nil
 	}
 	return &PostureItem{
 		Kind: "harness_uncovered", ID: "harness-hooks",
 		Title:    "No harness hook activity in 24h",
 		Severity: 2,
-		Detail:   fmt.Sprintf("%d agent(s) running but hooks never fired — hooks may not be registered (run Setup)", status.ActiveAgents),
+		Detail:   fmt.Sprintf("%d agent(s) running but no hook ever fired — hooks may not be registered (run Setup)", status.ActiveAgents),
 	}
+}
+
+// guardHookUnregisteredItem reports that the Claude Code guard hook is not
+// registered in ~/.claude/settings.json, so the PreToolUse/PostToolUse guard
+// never runs for that harness. This is a distinct failure from "the
+// transcript scanner is silent": an agent can be active and traced while the
+// guard is unregistered. Registered-but-broken is caught by the hook
+// self-test; this catches never-registered.
+func guardHookUnregisteredItem(status Status) *PostureItem {
+	if status.ActiveAgents == 0 {
+		return nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil
+	}
+	settings := filepath.Join(home, ".claude", "settings.json")
+	if !claudeHookRegistered(settings) {
+		return &PostureItem{
+			Kind: "guard_hook_unregistered", ID: "claude-hook",
+			Title:    "Claude Code guard hook is not registered",
+			Severity: 2,
+			Detail:   "~/.claude/settings.json has no guard hook, so the PreToolUse guard never runs — install it from Setup & Permissions",
+		}
+	}
+	return nil
+}
+
+// claudeHookRegistered reports whether settings.json registers the guard hook
+// for both PreToolUse and PostToolUse. A missing/unreadable file is not
+// registered.
+func claudeHookRegistered(path string) bool {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	var root struct {
+		Hooks map[string][]struct {
+			Hooks []struct {
+				Command string `json:"command"`
+			} `json:"hooks"`
+		} `json:"hooks"`
+	}
+	if json.Unmarshal(data, &root) != nil {
+		return false
+	}
+	guard := func(eventName string) bool {
+		for _, group := range root.Hooks[eventName] {
+			for _, h := range group.Hooks {
+				if strings.Contains(h.Command, ".claude/hooks/secret_guard.py") {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	return guard("PreToolUse") && guard("PostToolUse")
 }
 
 // humanCollectorTitle maps collector process names to operator language —

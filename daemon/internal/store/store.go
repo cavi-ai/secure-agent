@@ -142,7 +142,8 @@ func Open(dbPath, jsonlPath string) (*Store, error) {
 			model TEXT,
 			tokens_in INTEGER,
 			tokens_out INTEGER,
-			cost_usd REAL
+			cost_usd REAL,
+			call_id TEXT
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_events_pid_ts ON events(pid, ts);`,
 		`CREATE TABLE IF NOT EXISTS incidents (
@@ -258,7 +259,7 @@ func Open(dbPath, jsonlPath string) (*Store, error) {
 		log.Printf("store: migrated flags: added workspace column")
 	}
 	// Trace columns (P2): older databases gain them in place.
-	for _, col := range []string{"tool", "tool_status", "duration_ms", "model", "tokens_in", "tokens_out", "cost_usd"} {
+	for _, col := range []string{"tool", "tool_status", "duration_ms", "model", "tokens_in", "tokens_out", "cost_usd", "call_id"} {
 		var n int
 		if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('events') WHERE name=?`, col).Scan(&n); err != nil {
 			db.Close()
@@ -277,6 +278,36 @@ func Open(dbPath, jsonlPath string) (*Store, error) {
 				return nil, fmt.Errorf("failed to migrate events.%s: %w", col, err)
 			}
 			log.Printf("store: migrated events: added %s column", col)
+		}
+	}
+	// One row per harness tool call: a completion (same session+call_id)
+	// upserts the start row instead of appending a second. A plain UNIQUE
+	// index (not partial) so ON CONFLICT(session_id, call_id) resolves;
+	// SQLite treats NULL call_ids as distinct, so non-tool events (NULL)
+	// never collide.
+	//
+	// Created HERE, after the call_id migration above: on an older database
+	// the index would otherwise reference a column that did not yet exist and
+	// Open() would fail. (Observed bug: "no such column: call_id".)
+	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_events_call ON events(session_id, call_id);`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to create events call index: %w", err)
+	}
+	// A partial idx_events_call from an earlier build does not satisfy
+	// ON CONFLICT(session_id, call_id). Detect the stale, same-name partial
+	// index and replace it (indexes aren't IF-NOT-EXISTS-replaceable).
+	var idxSQL string
+	if err := db.QueryRow(`SELECT COALESCE(sql,'') FROM sqlite_master WHERE type='index' AND name='idx_events_call'`).Scan(&idxSQL); err == nil {
+		if strings.Contains(idxSQL, "WHERE") {
+			if _, err := db.Exec(`DROP INDEX IF EXISTS idx_events_call`); err != nil {
+				db.Close()
+				return nil, fmt.Errorf("failed to drop stale call index: %w", err)
+			}
+			if _, err := db.Exec(`CREATE UNIQUE INDEX idx_events_call ON events(session_id, call_id);`); err != nil {
+				db.Close()
+				return nil, fmt.Errorf("failed to recreate events call index: %w", err)
+			}
+			log.Printf("store: replaced partial idx_events_call with a full unique index")
 		}
 	}
 	// Flags gain an acknowledged marker: when the operator acts on a flag
@@ -441,11 +472,34 @@ func (s *Store) PutEvent(e event.Event) {
 	defer s.mu.Unlock()
 
 	tsStr := e.TS.UTC().Format(time.RFC3339Nano)
-	_, err := s.db.Exec(
-		`INSERT INTO events (kind, ts, pid, exe_path, session_id, path, remote_host, remote_port, detail, tool, tool_status, duration_ms, model, tokens_in, tokens_out, cost_usd) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		int(e.Kind), tsStr, e.PID, e.ExePath, e.SessionID, e.Path, e.RemoteHost, e.RemotePort, e.Detail,
-		nullStr(e.ToolName), nullStr(e.ToolStatus), nullInt(e.DurationMs), nullStr(e.Model), nullInt(e.TokensIn), nullInt(e.TokensOut), nullFloat(e.CostUSD),
-	)
+	// Tool calls are keyed by (session_id, call_id): the harness emits a start
+	// (status "running") and later a completion for the SAME call, and a
+	// transcript re-read can replay both. The upsert folds them into one row —
+	// the start inserts, the completion updates status/duration in place.
+	// Non-tool events (call_id NULL) never match the partial unique index and
+	// always insert.
+	var err error
+	if e.CallID != "" {
+		_, err = s.db.Exec(
+			`INSERT INTO events (kind, ts, pid, exe_path, session_id, path, remote_host, remote_port, detail, tool, tool_status, duration_ms, model, tokens_in, tokens_out, cost_usd, call_id)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			 ON CONFLICT(session_id, call_id) DO UPDATE SET
+			   tool_status = CASE WHEN excluded.tool_status != '' AND excluded.tool_status != 'running' THEN excluded.tool_status ELSE events.tool_status END,
+			   duration_ms = CASE WHEN excluded.duration_ms > 0 THEN excluded.duration_ms ELSE events.duration_ms END,
+			   tokens_in   = CASE WHEN excluded.tokens_in  > 0 THEN excluded.tokens_in  ELSE events.tokens_in  END,
+			   tokens_out  = CASE WHEN excluded.tokens_out > 0 THEN excluded.tokens_out ELSE events.tokens_out END,
+			   cost_usd    = CASE WHEN excluded.cost_usd   > 0 THEN excluded.cost_usd   ELSE events.cost_usd   END`,
+			int(e.Kind), tsStr, e.PID, e.ExePath, e.SessionID, e.Path, e.RemoteHost, e.RemotePort, e.Detail,
+			nullStr(e.ToolName), nullStr(e.ToolStatus), nullInt(e.DurationMs), nullStr(e.Model), nullInt(e.TokensIn), nullInt(e.TokensOut), nullFloat(e.CostUSD), e.CallID,
+		)
+	} else {
+		_, err = s.db.Exec(
+			`INSERT INTO events (kind, ts, pid, exe_path, session_id, path, remote_host, remote_port, detail, tool, tool_status, duration_ms, model, tokens_in, tokens_out, cost_usd)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			int(e.Kind), tsStr, e.PID, e.ExePath, e.SessionID, e.Path, e.RemoteHost, e.RemotePort, e.Detail,
+			nullStr(e.ToolName), nullStr(e.ToolStatus), nullInt(e.DurationMs), nullStr(e.Model), nullInt(e.TokensIn), nullInt(e.TokensOut), nullFloat(e.CostUSD),
+		)
+	}
 	if err != nil {
 		log.Printf("store: failed to insert event: %v", err)
 	} else {
@@ -865,7 +919,7 @@ func (s *Store) QueryEvents(f EventFilter) []event.Event {
 	defer s.mu.Unlock()
 
 	q := `SELECT kind, ts, pid, exe_path, session_id, path, remote_host, remote_port, detail,
-		tool, tool_status, duration_ms, model, tokens_in, tokens_out, cost_usd FROM events WHERE 1=1`
+		tool, tool_status, duration_ms, model, tokens_in, tokens_out, cost_usd, call_id FROM events WHERE 1=1`
 	var args []any
 	if f.Kind != nil {
 		q += " AND kind = ?"
@@ -898,11 +952,11 @@ func (s *Store) QueryEvents(f EventFilter) []event.Event {
 		var e event.Event
 		var kindInt int
 		var tsStr string
-		var tool, toolStatus, modelName sql.NullString
+		var tool, toolStatus, modelName, callID sql.NullString
 		var durMs, tokIn, tokOut sql.NullInt64
 		var cost sql.NullFloat64
 		if err := rows.Scan(&kindInt, &tsStr, &e.PID, &e.ExePath, &e.SessionID, &e.Path, &e.RemoteHost, &e.RemotePort, &e.Detail,
-			&tool, &toolStatus, &durMs, &modelName, &tokIn, &tokOut, &cost); err == nil {
+			&tool, &toolStatus, &durMs, &modelName, &tokIn, &tokOut, &cost, &callID); err == nil {
 			e.Kind = event.Kind(kindInt)
 			e.TS, _ = time.Parse(time.RFC3339Nano, tsStr)
 			e.ToolName = tool.String
@@ -912,6 +966,7 @@ func (s *Store) QueryEvents(f EventFilter) []event.Event {
 			e.TokensIn = tokIn.Int64
 			e.TokensOut = tokOut.Int64
 			e.CostUSD = cost.Float64
+			e.CallID = callID.String
 			events = append(events, e)
 		}
 	}
