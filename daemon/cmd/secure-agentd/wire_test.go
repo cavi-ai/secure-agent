@@ -47,10 +47,11 @@ func TestGuardBrokerMS(t *testing.T) {
 
 func TestTranscriptTailTargets(t *testing.T) {
 	base := transcriptTailTargets("/home/x", "")
-	// claude, cursor, codex, gemini, opencode, and the hook activity log.
-	wantSubs := []string{".claude", ".cursor", ".codex", ".gemini", "opencode", "activity.jsonl"}
-	if len(base) != 8 {
-		t.Fatalf("expected 8 base targets, got %d: %v", len(base), base)
+	// claude, cursor (legacy logs + project transcripts), codex, agy brain,
+	// and the hook activity log. opencode is polled (SQLite), not a tail target.
+	wantSubs := []string{".claude", ".cursor/logs", ".cursor/projects", ".codex", "antigravity-cli/brain", "activity.jsonl"}
+	if len(base) != 7 {
+		t.Fatalf("expected 7 base targets, got %d: %v", len(base), base)
 	}
 	for _, sub := range wantSubs {
 		found := false
@@ -65,7 +66,7 @@ func TestTranscriptTailTargets(t *testing.T) {
 		}
 	}
 	withJSONL := transcriptTailTargets("/home/x", "/var/log/events.jsonl")
-	if len(withJSONL) != 9 || withJSONL[8] != "/var/log/events.jsonl" {
+	if len(withJSONL) != 8 || withJSONL[7] != "/var/log/events.jsonl" {
 		t.Fatalf("jsonl path not appended: %v", withJSONL)
 	}
 }

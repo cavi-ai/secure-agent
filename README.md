@@ -31,6 +31,9 @@ As AI coding agents (Claude Code, Cursor, Codex, Gemini, opencode, Copilot, etc.
 - ⚡ **Low-Overhead System Telemetry Daemon (`secure-agentd`)**  
   A pure Go daemon that consumes macOS Endpoint Security events (`eslogger`) and periodically samples per-process active network sockets (`lsof`). Current measured footprint: ~100 MB RSS resident, <2% CPU (the "<30 MB" target was written before the resource tracker, proxy, and advisor subsystems landed).
 
+- 🧭 **Harness Trace Coverage**  
+  Parses agent-semantic trace events (tool calls, model calls, turns) from Claude Code, Codex, Cursor, Antigravity (agy), and opencode transcripts — a metadata-only trace (names, durations, models, tokens; never content). opencode stores its trace in SQLite and is read by a read-only, watermarked poller. Coverage table in `docs/ARCHITECTURE.md`.
+
 - 🔗 **Sliding-Window Event Correlation Engine**  
   Correlates process file activity with network egress. Automatically raises security flags when an agent process reads a sensitive file (e.g. `~/.aws/credentials` or `.env`) followed by an outbound socket connection to a domain outside its pre-approved vendor allowlist.
 

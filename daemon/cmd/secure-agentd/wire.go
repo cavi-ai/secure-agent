@@ -181,10 +181,12 @@ func transcriptTailTargets(home, jsonlPath string) []string {
 		filepath.Join(home, ".claude", "logs", "*.jsonl"),
 		filepath.Join(home, ".claude", "projects"),
 		filepath.Join(home, ".cursor", "logs", "*.jsonl"),
+		// Cursor's real transcripts (the ~/.cursor/logs dir above is empty on
+		// current builds — the tail target is kept for older ones).
+		filepath.Join(home, ".cursor", "projects"),
 		filepath.Join(home, ".codex", "sessions"),
-		filepath.Join(home, ".gemini", "tmp"),
-		filepath.Join(home, ".local", "share", "opencode"),
-		filepath.Join(home, ".config", "opencode"),
+		// Antigravity (agy) brain transcripts, under the .gemini tree.
+		filepath.Join(home, ".gemini", "antigravity-cli", "brain"),
 		filepath.Join(home, ".local", "state", "secure-agent", "activity.jsonl"),
 	}
 	if jsonlPath != "" {
