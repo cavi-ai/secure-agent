@@ -18,7 +18,7 @@ import (
 func TestPostureAllClearWhenNothingPending(t *testing.T) {
 	sock := fmt.Sprintf("/tmp/sa_posture_%d.sock", time.Now().UnixNano())
 	defer os.Remove(sock)
-	a := New(sock, testStore(t), &fakeKiller{}, func() Status { return Status{Running: true} })
+	a := newTestAPI(sock, testStore(t), &fakeKiller{}, func() Status { return Status{Running: true} })
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go a.Serve(ctx)
@@ -45,7 +45,7 @@ func TestPostureExcludesAcknowledgedFlags(t *testing.T) {
 	st.PutFlag(model.Flag{ID: "open-1", Rule: "sensitive-read-then-connect", Severity: 3, TS: time.Now(), Evidence: []string{"read .env then connected"}})
 	st.PutFlag(model.Flag{ID: "done-1", Rule: "proxy-secret-leak", Severity: 3, TS: time.Now(), Evidence: []string{"key in body"}})
 	st.AcknowledgeFlag("done-1")
-	a := New(sock, st, &fakeKiller{}, func() Status { return Status{Running: true} })
+	a := newTestAPI(sock, st, &fakeKiller{}, func() Status { return Status{Running: true} })
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go a.Serve(ctx)
@@ -70,7 +70,7 @@ func TestPostureCriticalFlagDrivesState(t *testing.T) {
 	defer os.Remove(sock)
 	st := testStore(t)
 	st.PutFlag(model.Flag{ID: "f1", Rule: "sensitive-read-then-connect", Severity: 3, TS: time.Now(), Evidence: []string{"read .env then connected"}})
-	a := New(sock, st, &fakeKiller{}, func() Status { return Status{Running: true} })
+	a := newTestAPI(sock, st, &fakeKiller{}, func() Status { return Status{Running: true} })
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go a.Serve(ctx)
@@ -94,7 +94,7 @@ func TestPostureCriticalFlagDrivesState(t *testing.T) {
 func TestPostureCountsUninspectedEgressAndDeadCollectors(t *testing.T) {
 	sock := fmt.Sprintf("/tmp/sa_posture3_%d.sock", time.Now().UnixNano())
 	defer os.Remove(sock)
-	a := New(sock, testStore(t), &fakeKiller{}, func() Status {
+	a := newTestAPI(sock, testStore(t), &fakeKiller{}, func() Status {
 		return Status{
 			Running:           true,
 			UninspectedEgress: 3,
@@ -156,7 +156,7 @@ func TestPostureCountsUninspectedEgressAndDeadCollectors(t *testing.T) {
 func TestPostureFlagsSilentCollectorsAndUncoveredHarnesses(t *testing.T) {
 	sock := fmt.Sprintf("/tmp/sa_posture5_%d.sock", time.Now().UnixNano())
 	defer os.Remove(sock)
-	a := New(sock, testStore(t), &fakeKiller{}, func() Status {
+	a := newTestAPI(sock, testStore(t), &fakeKiller{}, func() Status {
 		return Status{
 			Running: true, Uptime: "1h0m0s", ActiveAgents: 2,
 			Collectors: []supervise.Health{
@@ -197,7 +197,7 @@ func TestPostureFlagsSilentCollectorsAndUncoveredHarnesses(t *testing.T) {
 func TestPostureNoSilenceFlagsWhenIdle(t *testing.T) {
 	sock := fmt.Sprintf("/tmp/sa_posture6_%d.sock", time.Now().UnixNano())
 	defer os.Remove(sock)
-	a := New(sock, testStore(t), &fakeKiller{}, func() Status {
+	a := newTestAPI(sock, testStore(t), &fakeKiller{}, func() Status {
 		return Status{
 			Running: true, Uptime: "2h0m0s", ActiveAgents: 0,
 			Collectors: []supervise.Health{{Name: "eslogger", Running: true}},
@@ -222,7 +222,7 @@ func TestPostureOldFlagsDoNotCount(t *testing.T) {
 	defer os.Remove(sock)
 	st := testStore(t)
 	st.PutFlag(model.Flag{ID: "old", Rule: "keychain-access", Severity: 3, TS: time.Now().Add(-48 * time.Hour)})
-	a := New(sock, st, &fakeKiller{}, func() Status { return Status{Running: true} })
+	a := newTestAPI(sock, st, &fakeKiller{}, func() Status { return Status{Running: true} })
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go a.Serve(ctx)

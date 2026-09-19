@@ -9,7 +9,7 @@ import (
 
 func TestKillEndpointRejectsStartMismatch(t *testing.T) {
 	fk := &fakeKiller{}
-	a := New("", testStore(t), fk, func() Status {
+	a := newTestAPI("", testStore(t), fk, func() Status {
 		return Status{Running: true, Agents: []AgentSummary{
 			{PID: 7, Name: "claude", StartedAt: "2026-09-09T16:00:00Z"},
 		}}
@@ -27,7 +27,7 @@ func TestKillEndpointRejectsStartMismatch(t *testing.T) {
 
 func TestKillEndpointAllowsMatchingStart(t *testing.T) {
 	fk := &fakeKiller{}
-	a := New("", testStore(t), fk, func() Status {
+	a := newTestAPI("", testStore(t), fk, func() Status {
 		return Status{Running: true, Agents: []AgentSummary{
 			{PID: 7, Name: "claude", StartedAt: "2026-09-09T16:00:00Z"},
 		}}

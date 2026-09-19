@@ -55,8 +55,9 @@ func TestAllowlistSuggestApproveRoundTrip(t *testing.T) {
 	}
 
 	st := testStore(t)
-	a := New(sock, st, &fakeKiller{}, func() Status { return Status{Running: true} })
-	a.SetAllowlist(cr, al)
+	a := newTestAPI(sock, st, &fakeKiller{}, func() Status { return Status{Running: true} })
+	a.correlator = cr
+	a.allowlist = al
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go a.Serve(ctx)
@@ -148,8 +149,9 @@ func TestMuteEndpointRoundTrip(t *testing.T) {
 	})
 
 	st := testStore(t)
-	a := New(sock, st, &fakeKiller{}, func() Status { return Status{Running: true} })
-	a.SetMute(cr, ms)
+	a := newTestAPI(sock, st, &fakeKiller{}, func() Status { return Status{Running: true} })
+	a.correlator = cr
+	a.mutes = ms
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go a.Serve(ctx)
@@ -229,8 +231,9 @@ func TestAllowlistListAndRemove(t *testing.T) {
 
 	st := testStore(t)
 	t.Cleanup(func() { st.Close() })
-	a := New(sock, st, &fakeKiller{}, func() Status { return Status{Running: true} })
-	a.SetAllowlist(cr, alStore)
+	a := newTestAPI(sock, st, &fakeKiller{}, func() Status { return Status{Running: true} })
+	a.correlator = cr
+	a.allowlist = alStore
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go a.Serve(ctx)

@@ -261,20 +261,109 @@ func main() {
 		func() advisor.HealthSnapshot { return advisorStk.Load().Sub.Health() },
 		fleetConfigured(cfg.Fleet.Webhooks))
 
-	// Start Control API
-	apiServer := api.New(cfg.SocketPath, st, &realKiller{}, statusFn)
-	apiServer.SetBusDrops(b.Dropped)
-	apiServer.SetResources(resourceControl.Snapshot)
-	apiServer.SetResourceControl(resourceControl)
+	// Start Control API. Every dependency is resolved here, once: the API no
+	// longer exposes twenty optional setters that must be called in the right
+	// order after New (the composition-root smell the audit named).
+	guardBroker := guard.NewBroker(time.Duration(guardBrokerMS(cfg.DirectoryGuard.PromptDeadlineMS)) * time.Millisecond)
+	notifyRuleStore := correlate.NewNotifyRuleStore(filepath.Join(filepath.Dir(cfg.Firewall.Registry.SaltRef), "notify-rules.json"))
+	notifyScopeStore := correlate.NewNotifyScopeStore(filepath.Join(filepath.Dir(cfg.Firewall.Registry.SaltRef), "notify-scopes.json"))
+
+	// Peer-credential gating on the control socket: kernel-attested pid/uid per
+	// connection. Owner uid gets reads, tagged agent pids may ask the guard for
+	// decisions. /kill is restricted to recognized agent processes regardless of
+	// caller. The owning app (the menubar that launched this daemon) is pinned
+	// as the only mutating client; direct launches (ppid = shell) keep
+	// owner-uid mutation so headless/ssh management still works.
+	agentPIDSet := apiServer_taggedPIDs(tagger)
+	// Pin the owning menubar app as the only mutating client — but only when
+	// the parent really is an .app binary. A direct launch from a shell must
+	// keep owner-uid mutation (headless/ssh management); pinning the shell
+	// would lock the CLI out of resolve/firewall while granting the shell UI
+	// powers. ps(1) is spawned once at startup, not per request.
+	var uiPID int32
+	if ppid := os.Getppid(); ppid > 1 {
+		if out, err := exec.Command("ps", "-p", strconv.Itoa(ppid), "-o", "comm=").Output(); err == nil {
+			parentExe := strings.TrimSpace(string(out))
+			if strings.Contains(parentExe, ".app/Contents/MacOS/") || strings.Contains(parentExe, ".app/Contents/Frameworks/") {
+				uiPID = int32(ppid)
+			}
+		}
+	}
+
+	// Re-triage: look up the stored flag, enqueue through the CURRENT stack
+	// (the holder re-resolves after every config swap). Enqueue is
+	// idempotent advisor-side (cooldown), so hammering the endpoint is safe.
+	retriageFuncs := &api.RetriageFuncs{
+		LookupFlag: func(id string) (model.Flag, bool) { return st.GetFlag(id) },
+		Enqueue: func(fl model.Flag) bool {
+			if sub := advisorStk.Load().Sub; sub != nil {
+				return sub.RetriageFlag(fl)
+			}
+			return false
+		},
+	}
+	// On-demand host assessment: the console turns "what is this IP?" into an
+	// advisor verdict the operator can act on. Cached verdict answers
+	// immediately; a fresh assessment is queued (idempotent, advisor-side
+	// cooldown) so repeated clicks never flood the model.
+	hostAssessFuncs := &api.HostAssessFuncs{
+		GetVerdict: func(agent, host string) (model.AdvisorVerdict, bool) {
+			return st.AdvisorVerdictFor("host:"+agent+"|"+host, "host")
+		},
+		Enqueue: func(agent, host string) bool {
+			if sub := advisorStk.Load().Sub; sub != nil {
+				sub.EnqueueHost(agent, host)
+				return true
+			}
+			return false
+		},
+	}
+
+	var resourcePolicyUpdater func(config.ResourceControlConfig) error
 	if configPathUsed != "" {
-		apiServer.SetResourcePolicyUpdater(func(next config.ResourceControlConfig) error {
+		resourcePolicyUpdater = func(next config.ResourceControlConfig) error {
 			if err := config.WriteResourceControl(configPathUsed, next); err != nil {
 				return err
 			}
 			resourceControl.SetPolicySet(resourcePolicySet(next))
 			return nil
-		})
+		}
 	}
+
+	apiServer := api.New(api.Deps{
+		SocketPath:            cfg.SocketPath,
+		Store:                 st,
+		Killer:                &realKiller{},
+		Status:                statusFn,
+		BusDrops:              b.Dropped,
+		Resources:             resourceControl.Snapshot,
+		ResourceControl:       resourceControl,
+		ResourcePolicyUpdater: resourcePolicyUpdater,
+		Firewall: api.FirewallControl{
+			Engine:      fw.Engine,
+			Modes:       fw.Modes,
+			Reload:      fw.Reload,
+			Ingest:      fw.Ingest,
+			Sources:     fw.Sources,
+			BaseSources: fw.BaseSources,
+		},
+		Guard:           guardBroker,
+		Correlator:      correlator,
+		Allowlist:       allowlistStore,
+		Mutes:           muteStore,
+		NotifyRules:     notifyRuleStore,
+		NotifyScopes:    notifyScopeStore,
+		Retriage:        retriageFuncs,
+		HostAssess:      hostAssessFuncs,
+		PeerChecker:     api.NewPeerChecker(),
+		AgentPIDs:       agentPIDSet,
+		UIPID:           uiPID,
+		FleetSink:       fleetPub,
+		FleetConfigured: len(cfg.Fleet.Webhooks) > 0,
+		PublishEvent:    b.Publish,
+		DeltaHub:        deltaHub,
+	})
+
 	resourceControl.SetExecutor(func(action resource.ControlAction) error {
 		var affected int
 		baseline := tagger.TaggedPIDs()
@@ -346,79 +435,6 @@ func main() {
 		return err
 	})
 
-	// Peer-credential gating on the control socket: kernel-attested pid/uid per
-	// connection. Owner uid gets reads, tagged agent pids may ask the guard for
-	// decisions. /kill is restricted to recognized agent processes regardless of
-	// caller. The owning app (the menubar that launched this daemon) is pinned
-	// as the only mutating client; direct launches (ppid = shell) keep
-	// owner-uid mutation so headless/ssh management still works.
-	agentPIDSet := apiServer_taggedPIDs(tagger)
-	apiServer.SetPeers(api.NewPeerChecker(), agentPIDSet)
-	apiServer.SetAgentPIDs(agentPIDSet)
-	// Pin the owning menubar app as the only mutating client — but only when
-	// the parent really is an .app binary. A direct launch from a shell must
-	// keep owner-uid mutation (headless/ssh management); pinning the shell
-	// would lock the CLI out of resolve/firewall while granting the shell UI
-	// powers. ps(1) is spawned once at startup, not per request.
-	if ppid := os.Getppid(); ppid > 1 {
-		if out, err := exec.Command("ps", "-p", strconv.Itoa(ppid), "-o", "comm=").Output(); err == nil {
-			parentExe := strings.TrimSpace(string(out))
-			if strings.Contains(parentExe, ".app/Contents/MacOS/") || strings.Contains(parentExe, ".app/Contents/Frameworks/") {
-				apiServer.SetUIPID(int32(ppid))
-			}
-		}
-	}
-
-	apiServer.SetFirewall(api.FirewallControl{
-		Engine:      fw.Engine,
-		Modes:       fw.Modes,
-		Reload:      fw.Reload,
-		Ingest:      fw.Ingest,
-		Sources:     fw.Sources,
-		BaseSources: fw.BaseSources,
-	})
-
-	guardBroker := guard.NewBroker(time.Duration(guardBrokerMS(cfg.DirectoryGuard.PromptDeadlineMS)) * time.Millisecond)
-	apiServer.SetGuard(guardBroker)
-	apiServer.SetAllowlist(correlator, allowlistStore)
-	apiServer.SetMute(correlator, muteStore)
-	// Per-rule notification overrides (page me / never page me for a class),
-	// persisted beside the other override state; the UIs layer them over the
-	// severity>=3 default policy.
-	notifyRuleStore := correlate.NewNotifyRuleStore(filepath.Join(filepath.Dir(cfg.Firewall.Registry.SaltRef), "notify-rules.json"))
-	apiServer.SetNotifyRules(notifyRuleStore)
-	notifyScopeStore := correlate.NewNotifyScopeStore(filepath.Join(filepath.Dir(cfg.Firewall.Registry.SaltRef), "notify-scopes.json"))
-	apiServer.SetNotifyScopes(notifyScopeStore)
-	// Re-triage: look up the stored flag, enqueue through the CURRENT stack
-	// (the holder re-resolves after every config swap). Enqueue is
-	// idempotent advisor-side (cooldown), so hammering the endpoint is safe.
-	apiServer.SetRetriage(api.RetriageFuncs{
-		LookupFlag: func(id string) (model.Flag, bool) { return st.GetFlag(id) },
-		Enqueue: func(fl model.Flag) bool {
-			if sub := advisorStk.Load().Sub; sub != nil {
-				return sub.RetriageFlag(fl)
-			}
-			return false
-		},
-	})
-	// On-demand host assessment: the console turns "what is this IP?" into an
-	// advisor verdict the operator can act on. Cached verdict answers
-	// immediately; a fresh assessment is queued (idempotent, advisor-side
-	// cooldown) so repeated clicks never flood the model.
-	apiServer.SetHostAssess(api.HostAssessFuncs{
-		GetVerdict: func(agent, host string) (model.AdvisorVerdict, bool) {
-			return st.AdvisorVerdictFor("host:"+agent+"|"+host, "host")
-		},
-		Enqueue: func(agent, host string) bool {
-			if sub := advisorStk.Load().Sub; sub != nil {
-				sub.EnqueueHost(agent, host)
-				return true
-			}
-			return false
-		},
-	})
-	apiServer.SetFleetSink(fleetPub)
-	apiServer.SetFleetConfigured(len(cfg.Fleet.Webhooks) > 0)
 	// Fleet heartbeat: posture + liveness pushed to every sink at boot, on a
 	// ticker, and on posture-state transitions. Always armed — enrolling a
 	// collector via config hot-reload activates it without a restart.
@@ -437,10 +453,6 @@ func main() {
 			initialConfig: &cfg,
 		})
 	}
-	// SSE live feed: each console gets its own bus subscription; unsubscribes
-	// when the connection closes.
-	apiServer.SetEventPublisher(b.Publish)
-	apiServer.SetDeltaHub(deltaHub)
 	postureHook.fn = apiServer.PublishPostureIfChanged
 
 	// The browser console's telemetry fetches are same-origin with the

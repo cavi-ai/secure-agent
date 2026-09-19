@@ -15,11 +15,11 @@ import (
 func TestEventStreamDeliversBusEvents(t *testing.T) {
 	sock := fmt.Sprintf("/tmp/sa_sse_%d.sock", time.Now().UnixNano())
 	defer os.Remove(sock)
-	a := New(sock, testStore(t), &fakeKiller{}, func() Status { return Status{Running: true} })
+	a := newTestAPI(sock, testStore(t), &fakeKiller{}, func() Status { return Status{Running: true} })
 
 	// Typed deltas: the stream serves the delta hub, not the raw bus.
 	hub := NewDeltaHub()
-	a.SetDeltaHub(hub)
+	a.deltaHub = hub
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go a.Serve(ctx)

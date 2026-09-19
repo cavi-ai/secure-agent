@@ -13,12 +13,6 @@ type killRequest struct {
 	StartedAt string `json:"started_at,omitempty"`
 }
 
-// agentPIDs supplies the live tagged-agent pid set for /kill allowlisting;
-// nil disables the restriction (unit tests, non-darwin builds).
-func (a *API) SetAgentPIDs(fn func() map[int32]struct{}) {
-	a.agentPIDs = fn
-}
-
 func (a *API) handleKill(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
