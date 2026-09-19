@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/supervise"
 )
@@ -241,5 +243,59 @@ func decodeInto(t *testing.T, resp *http.Response, v any) {
 	defer resp.Body.Close()
 	if err := jsonDecode(resp.Body, v); err != nil {
 		t.Fatalf("decode: %v", err)
+	}
+}
+
+// Transcript hits must NOT clear harness_uncovered: a secret pattern in any
+// tailed log says nothing about whether the guard hook is registered. The old
+// behaviour cleared on transcript hits, hiding the exact failure the item
+// exists to report.
+func TestHarnessUncoveredIgnoresTranscriptHits(t *testing.T) {
+	st := testStore(t)
+	st.PutEvent(event.Event{Kind: event.KindTranscriptHit, TS: time.Now(), Detail: "aws-key"})
+	item := harnessUncoveredItem(st, Status{ActiveAgents: 2})
+	if item == nil {
+		t.Fatal("transcript hit must not clear harness_uncovered")
+	}
+	// A real hook action DOES clear it.
+	st.PutEvent(event.Event{Kind: event.KindPluginAction, TS: time.Now(), Detail: "Read"})
+	if item := harnessUncoveredItem(st, Status{ActiveAgents: 2}); item != nil {
+		t.Fatalf("plugin action should clear harness_uncovered, got %+v", item)
+	}
+}
+
+// The guard-hook registration item is independent of transcript coverage: it
+// reports a missing settings.json entry while agents are active.
+func TestGuardHookUnregisteredItem(t *testing.T) {
+	// No agents → nothing to say.
+	if item := guardHookUnregisteredItem(Status{ActiveAgents: 0}); item != nil {
+		t.Fatalf("no agents must not raise the item: %+v", item)
+	}
+	// With agents active and no (or unregistered) settings.json, it fires.
+	item := guardHookUnregisteredItem(Status{ActiveAgents: 3})
+	if item == nil {
+		t.Fatal("expected guard_hook_unregistered when no hook is registered")
+	}
+	if item.Kind != "guard_hook_unregistered" || item.Severity != 2 {
+		t.Fatalf("item = %+v", item)
+	}
+}
+
+func TestClaudeHookRegistered(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "settings.json")
+	// Missing file → not registered.
+	if claudeHookRegistered(path) {
+		t.Fatal("missing settings.json must read as unregistered")
+	}
+	// Only PreToolUse → not fully registered.
+	os.WriteFile(path, []byte(`{"hooks":{"PreToolUse":[{"hooks":[{"command":"python3 ~/.claude/hooks/secret_guard.py"}]}]}}`), 0o600)
+	if claudeHookRegistered(path) {
+		t.Fatal("PreToolUse alone must not count as registered")
+	}
+	// Both events → registered.
+	os.WriteFile(path, []byte(`{"hooks":{"PreToolUse":[{"hooks":[{"command":"python3 ~/.claude/hooks/secret_guard.py"}]}],"PostToolUse":[{"hooks":[{"command":"python3 ~/.claude/hooks/secret_guard.py"}]}]}}`), 0o600)
+	if !claudeHookRegistered(path) {
+		t.Fatal("both events registered must read as registered")
 	}
 }

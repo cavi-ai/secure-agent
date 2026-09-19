@@ -109,3 +109,63 @@ func TestIsClaudeTranscriptPath(t *testing.T) {
 		t.Fatal("activity log misclassified as claude transcript")
 	}
 }
+
+// Every tool_use and its tool_result carry the harness's own id, so the store
+// can key one row per call (start upserts, completion updates it). Without
+// CallID a start row stayed "running" forever beside a duplicate completion.
+func TestClaudeTraceToolCallsCarryCallID(t *testing.T) {
+	tr := NewClaudeTracer()
+	evs, _, _ := tr.ParseLine(claudeAssistantLine)
+	var start *event.Event
+	for i := range evs {
+		if evs[i].Kind == event.KindToolCall {
+			start = &evs[i]
+		}
+	}
+	if start == nil || start.CallID != "toolu_1" {
+		t.Fatalf("start call id = %+v, want toolu_1", start)
+	}
+	result := `{"type":"user","sessionId":"sess-1","timestamp":"2026-09-17T12:00:31.500Z","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_1","is_error":false}]}}`
+	evs, _, _ = tr.ParseLine(result)
+	if len(evs) != 1 || evs[0].CallID != "toolu_1" || evs[0].ToolStatus != "ok" {
+		t.Fatalf("completion = %+v, want toolu_1/ok", evs)
+	}
+}
+
+// Claude writes user prompts as content BLOCKS or as a bare JSON string. The
+// string form was missed, which is why turns were near zero in the live DB.
+func TestClaudeTraceTurnDetectsStringContent(t *testing.T) {
+	tr := NewClaudeTracer()
+	stringPrompt := `{"type":"user","sessionId":"s1","timestamp":"2026-09-17T12:00:00Z","message":{"content":"take the handoff packet"}}`
+	evs, _, ok := tr.ParseLine(stringPrompt)
+	if !ok || len(evs) != 1 || evs[0].Kind != event.KindTurn {
+		t.Fatalf("string prompt evs = %+v, want one turn", evs)
+	}
+	// Tool-result plumbing and system wrappers are NOT turns.
+	for _, line := range []string{
+		`{"type":"user","sessionId":"s1","message":{"content":[{"type":"tool_result","tool_use_id":"x"}]}}`,
+		`{"type":"user","sessionId":"s1","message":{"content":"<task-notification>\n<task-id>abc</task-id>"}}`,
+	} {
+		if evs, _, _ := tr.ParseLine(line); len(evs) != 0 {
+			t.Fatalf("non-prompt produced %+v, want no turn", evs)
+		}
+	}
+}
+
+// Price lookup resolves current families and dated/suffixed ids by prefix.
+func TestModelCostPrefixMatch(t *testing.T) {
+	// A dated id must resolve to its family price, not cost 0.
+	if c := ModelCostUSD("claude-sonnet-4-5-20250929", 1_000_000, 0); c <= 0 {
+		t.Fatalf("dated sonnet id cost = %v, want > 0", c)
+	}
+	// The live fleet's ids: fable/opus-5/sonnet-5 must all price.
+	for _, m := range []string{"claude-fable-5-1", "claude-opus-5", "claude-sonnet-5"} {
+		if c := ModelCostUSD(m, 1_000_000, 0); c <= 0 {
+			t.Errorf("%s cost = 0, must be priced", m)
+		}
+	}
+	// Unknown models stay honestly 0.
+	if c := ModelCostUSD("gpt-9-ultra", 1_000_000, 0); c != 0 {
+		t.Errorf("unknown model cost = %v, want 0", c)
+	}
+}

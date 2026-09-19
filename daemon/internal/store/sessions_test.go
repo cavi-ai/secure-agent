@@ -1,6 +1,8 @@
 package store
 
 import (
+	"database/sql"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -157,5 +159,105 @@ func TestIncidentAggregation(t *testing.T) {
 	s.db.Exec(`UPDATE incidents SET status = 'resolved' WHERE id = 'inc-1'`)
 	if _, ok := s.FindOpenIncident("keychain-access", "sess-1", "login.keychain-db"); ok {
 		t.Fatal("resolved incident must not aggregate")
+	}
+}
+
+// A tool call is one row keyed by (session_id, call_id): the start inserts,
+// the completion updates that row, and a transcript re-read (same start) must
+// not duplicate it. This is what stopped 5–10× duplicate rows for one call.
+func TestToolCallUpsertsOneRow(t *testing.T) {
+	s, err := Open("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	now := time.Now()
+
+	start := event.Event{Kind: event.KindToolCall, TS: now, SessionID: "s1",
+		CallID: "toolu_1", ToolName: "Bash", ToolStatus: "running"}
+	s.PutEvent(start)
+	// Re-read of the same start must not create a second row.
+	s.PutEvent(start)
+	if n := len(s.RecentEvents(10)); n != 1 {
+		t.Fatalf("start re-read produced %d rows, want 1", n)
+	}
+
+	// Completion updates the same row: status + duration, still one row.
+	done := event.Event{Kind: event.KindToolCall, TS: now.Add(3 * time.Second), SessionID: "s1",
+		CallID: "toolu_1", ToolName: "Bash", ToolStatus: "ok", DurationMs: 3000}
+	s.PutEvent(done)
+	got := s.RecentEvents(10)
+	if len(got) != 1 {
+		t.Fatalf("after completion rows = %d, want 1", len(got))
+	}
+	if got[0].ToolStatus != "ok" || got[0].DurationMs != 3000 {
+		t.Fatalf("row = %+v, want ok/3000", got[0])
+	}
+
+	// A different call id is its own row.
+	s.PutEvent(event.Event{Kind: event.KindToolCall, TS: now, SessionID: "s1",
+		CallID: "toolu_2", ToolName: "Read", ToolStatus: "running"})
+	if n := len(s.RecentEvents(10)); n != 2 {
+		t.Fatalf("distinct call rows = %d, want 2", n)
+	}
+
+	// Non-tool events (no call id) still append freely.
+	s.PutEvent(event.Event{Kind: event.KindFileOpen, TS: now, SessionID: "s1", Path: "/x"})
+	s.PutEvent(event.Event{Kind: event.KindFileOpen, TS: now, SessionID: "s1", Path: "/x"})
+	if n := len(s.RecentEvents(10)); n != 4 {
+		t.Fatalf("non-tool rows = %d, want 4 (append, not upsert)", n)
+	}
+}
+
+// A harness-less upsert must not erase a session's harness. Trace events
+// resolve without a pid, so they arrive with Harness == ""; the conflict
+// clause used to write excluded.harness unconditionally, stripping the name
+// off every transcript-joined session.
+func TestUpsertSessionPreservesHarness(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), "e.db"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.UpsertSession(model.Session{ID: "s1", Harness: "claude", Workspace: "/repo",
+		StartedAt: time.Now(), LastSeenAt: time.Now(), Status: model.SessionActive})
+	// A later, identity-poor upsert (the trace-event shape).
+	st.UpsertSession(model.Session{ID: "s1",
+		StartedAt: time.Now(), LastSeenAt: time.Now(), Status: model.SessionActive})
+
+	got, ok := st.GetSession("s1")
+	if !ok {
+		t.Fatal("session disappeared")
+	}
+	if got.Harness != "claude" || got.Workspace != "/repo" {
+		t.Fatalf("harness clobbered: %+v", got)
+	}
+}
+
+// An older database (events without call_id) must OPEN — the call index has to
+// be created after the column migration, not inside the initial schema batch.
+// Regression: "SQL logic error: no such column: call_id" on daemon start.
+func TestOpenMigratesOldEventsTableForCallIndex(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "old.db")
+	// Hand-build a pre-trace events table.
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE events (id INTEGER PRIMARY KEY AUTOINCREMENT, kind INT, ts TEXT, pid INT, exe_path TEXT, session_id TEXT, path TEXT, remote_host TEXT, remote_port INT, detail TEXT)`); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+
+	st, err := Open(path, "")
+	if err != nil {
+		t.Fatalf("Open on an old DB failed: %v", err)
+	}
+	defer st.Close()
+	// And the upsert works end to end on the migrated table.
+	st.PutEvent(event.Event{Kind: event.KindToolCall, TS: time.Now(), SessionID: "s", CallID: "c1", ToolStatus: "running"})
+	st.PutEvent(event.Event{Kind: event.KindToolCall, TS: time.Now(), SessionID: "s", CallID: "c1", ToolStatus: "ok"})
+	if n := len(st.QueryEvents(EventFilter{})); n != 1 {
+		t.Fatalf("events=%d want 1 after upsert on migrated table", n)
 	}
 }

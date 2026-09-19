@@ -133,3 +133,54 @@ func mustConfig(t *testing.T) config.Config {
 	cfg, _ := config.Load("/nonexistent")
 	return cfg
 }
+
+// The join: a transcript sighting merges into the process-tree session for the
+// same harness+workspace, rekeying its events onto the conversation id and
+// filling harness/workspace so the session is never nameless. This is what
+// makes "claude · repo@branch · timeline" possible.
+func TestTranscriptSessionJoinsProcessTreeSession(t *testing.T) {
+	r, st := testResolver(t, fakeProcs{
+		100: {PID: 100, PPID: 1, Exe: "/usr/local/bin/claude", CWD: "/repo", StartTime: time.Now()},
+	})
+	// A process-tree session is created first (an OS event arrives).
+	e := event.Event{Kind: event.KindFileOpen, PID: 100, TS: time.Now()}
+	procID := r.Resolve(&e)
+	if procID == "" {
+		t.Fatal("process-tree session not created")
+	}
+
+	// Then the transcript names the conversation for the same workspace.
+	r.NoteTranscriptSession("conv-abc", "claude", "/repo", time.Now())
+
+	sessions := st.ListSessions(store.SessionFilter{})
+	if len(sessions) != 1 {
+		t.Fatalf("sessions = %d, want 1 (joined, not duplicated): %+v", len(sessions), sessions)
+	}
+	s := sessions[0]
+	if s.ID != "conv-abc" || s.Harness != "claude" || s.Workspace != "/repo" {
+		t.Fatalf("joined session = %+v", s)
+	}
+	// The earlier OS event followed the rekey.
+	for _, ev := range st.RecentEvents(10) {
+		if ev.SessionID == procID {
+			t.Fatalf("event still on provisional id %q", procID)
+		}
+	}
+}
+
+// A transcript seen BEFORE the process tree is adopted: the process-tree
+// resolve must reuse the conversation id, not mint a second session.
+func TestProcessTreeAdoptsPriorTranscriptSession(t *testing.T) {
+	r, st := testResolver(t, fakeProcs{
+		100: {PID: 100, PPID: 1, Exe: "/usr/local/bin/claude", CWD: "/repo", StartTime: time.Now()},
+	})
+	r.NoteTranscriptSession("conv-xyz", "claude", "/repo", time.Now())
+	e := event.Event{Kind: event.KindFileOpen, PID: 100, TS: time.Now()}
+	id := r.Resolve(&e)
+	if id != "conv-xyz" {
+		t.Fatalf("resolved id = %q, want conv-xyz (adopted)", id)
+	}
+	if n := len(st.ListSessions(store.SessionFilter{})); n != 1 {
+		t.Fatalf("sessions = %d, want 1", n)
+	}
+}

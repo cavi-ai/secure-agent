@@ -12,6 +12,12 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
 
+// maxWireSamples bounds the per-session sample series in the /resources
+// payload. A sparkline is ~140px wide; shipping 720 points inflated the
+// snapshot to ~2 MB per fetch for pixels nobody sees. The full history stays
+// in the store for episodes; the wire gets an evenly-strided downsample.
+const maxWireSamples = 120
+
 func (a *API) handleResources(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -22,10 +28,46 @@ func (a *API) handleResources(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	snapshot := a.resources()
-	if a.store != nil {
-		snapshot.Episodes = a.store.RecentResourceEpisodes(20)
+	// Episodes (the flight recorder) moved to /resources/episodes: ~0.5 MB of
+	// historical detail the live view never renders. Emit [] (not null) so
+	// existing consumers see an empty list, not a missing field.
+	snapshot.Episodes = []resource.Episode{}
+	for i := range snapshot.Sessions {
+		snapshot.Sessions[i].Samples = downsample(snapshot.Sessions[i].Samples, maxWireSamples)
 	}
 	writeJSON(w, snapshot)
+}
+
+// handleResourceEpisodes serves the pressure flight recorder (historical
+// episodes) on its own endpoint, so the hot /resources payload stays small.
+func (a *API) handleResourceEpisodes(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	out := []resource.Episode{}
+	if a.resources != nil {
+		out = a.resources().Episodes
+	}
+	if a.store != nil {
+		out = a.store.RecentResourceEpisodes(20)
+	}
+	writeJSON(w, out)
+}
+
+// downsample returns at most n points, evenly strided, always keeping the
+// last point (the most recent sample is the one the UI labels "now").
+func downsample(samples []resource.Sample, n int) []resource.Sample {
+	if len(samples) <= n {
+		return samples
+	}
+	out := make([]resource.Sample, 0, n)
+	step := float64(len(samples)-1) / float64(n-1)
+	for i := 0; i < n; i++ {
+		out = append(out, samples[int(float64(i)*step)])
+	}
+	out[n-1] = samples[len(samples)-1]
+	return out
 }
 
 func (a *API) handleResourceControl(w http.ResponseWriter, r *http.Request) {
