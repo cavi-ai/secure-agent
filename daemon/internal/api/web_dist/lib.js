@@ -483,6 +483,19 @@ function sessionBoardDurableHTML(rows, now, helpOpen) {
   }).join('');
 }
 
+// matchesSearch: the global-search lens. Free text (already lowercased by the
+// caller) matched against the human-visible fields of any row kind — agent,
+// rule, host, path, detail, evidence. A missing term matches everything.
+function matchesSearch(term, ...fields) {
+  if (!term) return true;
+  for (const f of fields) {
+    if (f == null) continue;
+    const s = Array.isArray(f) ? f.join(' ') : String(f);
+    if (s.toLowerCase().includes(term)) return true;
+  }
+  return false;
+}
+
 // hostSuffix groups endpoints for bulk decisions: the registrable-ish tail
 // (last two labels) for names, the address itself for IPs/short hosts.
 // Approximate by design — no public-suffix list ships with the console; the

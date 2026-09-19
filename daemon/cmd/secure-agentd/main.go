@@ -368,6 +368,8 @@ func main() {
 	// severity>=3 default policy.
 	notifyRuleStore := correlate.NewNotifyRuleStore(filepath.Join(filepath.Dir(cfg.Firewall.Registry.SaltRef), "notify-rules.json"))
 	apiServer.SetNotifyRules(notifyRuleStore)
+	notifyScopeStore := correlate.NewNotifyScopeStore(filepath.Join(filepath.Dir(cfg.Firewall.Registry.SaltRef), "notify-scopes.json"))
+	apiServer.SetNotifyScopes(notifyScopeStore)
 	// Re-triage: look up the stored flag, enqueue through the CURRENT stack
 	// (the holder re-resolves after every config swap). Enqueue is
 	// idempotent advisor-side (cooldown), so hammering the endpoint is safe.

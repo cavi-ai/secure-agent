@@ -122,6 +122,7 @@ func Open(dbPath, jsonlPath string) (*Store, error) {
 			pid INT,
 			agent TEXT,
 			session_id TEXT,
+			workspace TEXT,
 			evidence TEXT
 		);`,
 		`CREATE TABLE IF NOT EXISTS events (
@@ -242,6 +243,19 @@ func Open(dbPath, jsonlPath string) (*Store, error) {
 			}
 			log.Printf("store: migrated %s: added session_id column", table)
 		}
+	}
+	// flags.workspace (P5): the key for per-workspace notification scopes.
+	var wsN int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('flags') WHERE name='workspace'`).Scan(&wsN); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to inspect flags.workspace: %w", err)
+	}
+	if wsN == 0 {
+		if _, err := db.Exec(`ALTER TABLE flags ADD COLUMN workspace TEXT`); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("failed to migrate flags.workspace: %w", err)
+		}
+		log.Printf("store: migrated flags: added workspace column")
 	}
 	// Trace columns (P2): older databases gain them in place.
 	for _, col := range []string{"tool", "tool_status", "duration_ms", "model", "tokens_in", "tokens_out", "cost_usd"} {
@@ -374,8 +388,8 @@ func (s *Store) PutFlag(fl model.Flag) {
 	tsStr := fl.TS.UTC().Format(time.RFC3339Nano)
 
 	_, err := s.db.Exec(
-		`INSERT OR REPLACE INTO flags (id, rule, severity, ts, pid, agent, session_id, evidence) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		fl.ID, fl.Rule, fl.Severity, tsStr, fl.PID, fl.Agent, fl.SessionID, string(evJSON),
+		`INSERT OR REPLACE INTO flags (id, rule, severity, ts, pid, agent, session_id, workspace, evidence) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		fl.ID, fl.Rule, fl.Severity, tsStr, fl.PID, fl.Agent, fl.SessionID, fl.Workspace, string(evJSON),
 	)
 	if err != nil {
 		log.Printf("store: failed to insert flag %s: %v", fl.ID, err)
@@ -623,15 +637,16 @@ func (s *Store) GetFlag(id string) (model.Flag, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	row := s.db.QueryRow(
-		`SELECT id, rule, severity, ts, pid, agent, session_id, evidence, acknowledged FROM flags WHERE id = ?`, id)
+		`SELECT id, rule, severity, ts, pid, agent, session_id, workspace, evidence, acknowledged FROM flags WHERE id = ?`, id)
 	var fl model.Flag
 	var tsStr, evStr string
-	var sessionID sql.NullString
+	var sessionID, workspace sql.NullString
 	var ack sql.NullString
-	if err := row.Scan(&fl.ID, &fl.Rule, &fl.Severity, &tsStr, &fl.PID, &fl.Agent, &sessionID, &evStr, &ack); err != nil {
+	if err := row.Scan(&fl.ID, &fl.Rule, &fl.Severity, &tsStr, &fl.PID, &fl.Agent, &sessionID, &workspace, &evStr, &ack); err != nil {
 		return model.Flag{}, false
 	}
 	fl.SessionID = sessionID.String
+	fl.Workspace = workspace.String
 	fl.Acknowledged = ack.String != ""
 	fl.TS, _ = time.Parse(time.RFC3339Nano, tsStr)
 	_ = json.Unmarshal([]byte(evStr), &fl.Evidence)
@@ -642,7 +657,7 @@ func (s *Store) QueryFlags(f FlagFilter) []model.Flag {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	q := `SELECT id, rule, severity, ts, pid, agent, session_id, evidence, acknowledged FROM flags WHERE 1=1`
+	q := `SELECT id, rule, severity, ts, pid, agent, session_id, workspace, evidence, acknowledged FROM flags WHERE 1=1`
 	var args []any
 	if f.Agent != "" {
 		q += " AND agent = ?"
@@ -680,10 +695,11 @@ func (s *Store) QueryFlags(f FlagFilter) []model.Flag {
 	for rows.Next() {
 		var fl model.Flag
 		var tsStr, evStr string
-		var sessionID sql.NullString
+		var sessionID, workspace sql.NullString
 		var ack sql.NullString
-		if err := rows.Scan(&fl.ID, &fl.Rule, &fl.Severity, &tsStr, &fl.PID, &fl.Agent, &sessionID, &evStr, &ack); err == nil {
+		if err := rows.Scan(&fl.ID, &fl.Rule, &fl.Severity, &tsStr, &fl.PID, &fl.Agent, &sessionID, &workspace, &evStr, &ack); err == nil {
 			fl.SessionID = sessionID.String
+			fl.Workspace = workspace.String
 			fl.TS, _ = time.Parse(time.RFC3339Nano, tsStr)
 			fl.Acknowledged = ack.String != ""
 			_ = json.Unmarshal([]byte(evStr), &fl.Evidence)

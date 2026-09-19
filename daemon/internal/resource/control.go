@@ -102,6 +102,25 @@ type ControlSnapshot struct {
 	WorkspaceOverrides []WorkspacePolicySnapshot  `json:"workspace_overrides"`
 	Pending            []PendingAction            `json:"pending"`
 	Interventions      []InterventionStepSnapshot `json:"interventions,omitempty"`
+	// Budget is the one-line fleet summary: how many sessions are over
+	// budget, awaiting approval, or contained. Carried in the fleet
+	// heartbeat so "which node has a session pinned by a budget" is one
+	// number per node, not a full resource fetch per machine.
+	Budget BudgetSummary `json:"budget"`
+}
+
+// BudgetSummary is the compact budget posture of one node: counts only, no
+// session detail — the fleet view answers "which nodes are enforcing".
+type BudgetSummary struct {
+	// Mode is the machine-default budget mode (observe | prompt | terminate).
+	Mode string `json:"mode"`
+	// Enforced is true when any RSS or CPU budget is set (nonzero).
+	Enforced bool `json:"enforced"`
+	// OverBudget / Approval / Contained / Paused count sessions in each state.
+	OverBudget int `json:"over_budget"`
+	Approval   int `json:"approval"`
+	Contained  int `json:"contained"`
+	Paused     int `json:"paused"`
 }
 
 type InterventionStepSnapshot struct {
@@ -515,7 +534,36 @@ func (c *Controller) controlSnapshotLocked(policies PolicySet) *ControlSnapshot 
 	}
 	return &ControlSnapshot{Mode: p.Mode, MaxRSSBytes: p.MaxRSSBytes, MaxCPUPercent: p.MaxCPUPercent,
 		SustainSeconds: int64(p.Sustain.Seconds()), CooldownSeconds: int64(p.Cooldown.Seconds()),
-		WorkspaceOverrides: overrides, Pending: pending, Interventions: interventionSnapshots(p.Interventions)}
+		WorkspaceOverrides: overrides, Pending: pending, Interventions: interventionSnapshots(p.Interventions),
+		Budget: c.budgetSummaryLocked(policies)}
+}
+
+// budgetSummaryLocked counts sessions in each budget state from the latest
+// snapshot's per-session control (the derived State field). Counts only — the
+// fleet heartbeat carries this so a multi-node view can say "node B has two
+// sessions pinned by a budget" without fetching every node's resources.
+func (c *Controller) budgetSummaryLocked(policies PolicySet) BudgetSummary {
+	b := BudgetSummary{
+		Mode:     string(policies.Default.Mode),
+		Enforced: policies.Default.MaxRSSBytes > 0 || policies.Default.MaxCPUPercent > 0,
+	}
+	for i := range c.latest.Sessions {
+		ctrl := c.latest.Sessions[i].Control
+		if ctrl == nil {
+			continue
+		}
+		switch ctrl.State {
+		case StateExceeded:
+			b.OverBudget++
+		case StateApproval:
+			b.Approval++
+		case StateContained:
+			b.Contained++
+		case StatePaused:
+			b.Paused++
+		}
+	}
+	return b
 }
 
 func interventionSnapshots(steps []InterventionStep) []InterventionStepSnapshot {

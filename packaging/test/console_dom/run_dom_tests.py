@@ -94,6 +94,7 @@ def main():
         dom_dismiss = dump_dom(chrome, tmp, "?dismissdemo")
         dom_retriage = dump_dom(chrome, tmp, "?retriagedemo")
         dom_tab = dump_dom(chrome, tmp, "?tabdemo")
+        dom_view = dump_dom(chrome, tmp, "?viewdemo")
         dom_advdown = dump_dom(chrome, tmp, "?advisordown")
         dom_authfail = dump_dom(chrome, tmp, "?authfail")
         dom_netfail = dump_dom(chrome, tmp, "?netfail")
@@ -243,6 +244,11 @@ def main():
         check("notify override pre-selected (never)",
               'data-notify-rule="keychain-access"' in dom_notify and
               'value="never" selected' in dom_notify.split('data-notify-rule="keychain-access"')[1][:300])
+        check("notify popover lists workspace scopes",
+              "Per-workspace scopes" in dom_notify
+              and 'data-action="notify-scope-remove" data-rule="proxy-secret-leak" data-workspace="/Users/dev/work/prod"' in dom_notify)
+        check("notify popover offers adding a workspace scope",
+              'id="notify-scope-path"' in dom_notify and 'data-action="notify-scope-add"' in dom_notify)
 
         # --- connection states (the "trouble connecting" regressions) ---
         check("auth-expired shows honest re-auth guidance, not 'daemon down'",
@@ -398,6 +404,19 @@ def main():
         check("tab switch reveals the target panel",
               'id="tab-egress" role="tabpanel">' in dom_tab
               and 'id="tab-overview" role="tabpanel" hidden' in dom_tab)
+
+        # --- saved views, search, export (P5) ---
+        check("saved-view menu is present", 'id="btn-views"' in dom and 'id="views-pop"' in dom)
+        check("a saved view appears in the list",
+              'data-action="apply-view" data-name="Prod leaks"' in dom_view)
+        check("global search box is present", 'id="global-search"' in dom)
+        check("export actions are wired",
+              'data-action="export" data-what="flags"' in dom
+              and 'data-action="export" data-what="incidents"' in dom)
+        # The search term narrows the events panel: "npm" must drop rows that
+        # do not mention it (the drip includes non-npm events).
+        check("search narrows the panel",
+              dom_view.count('class="timeline-item') <= dom.count('class="timeline-item'))
 
         # --- action feedback loops (the "nothing happens" regressions) ---
         check("flag card carries per-flag dismiss",

@@ -141,13 +141,14 @@ type API struct {
 
 	guardBroker *guard.Broker
 
-	correlator  *correlate.Correlator
-	allowlist   *correlate.AllowlistStore
-	mutes       *correlate.MuteStore
-	notifyRules *correlate.NotifyRuleStore
-	retriage    *RetriageFuncs
-	hostAssess  *HostAssessFuncs
-	guardSeq    uint64
+	correlator   *correlate.Correlator
+	allowlist    *correlate.AllowlistStore
+	mutes        *correlate.MuteStore
+	notifyRules  *correlate.NotifyRuleStore
+	notifyScopes *correlate.NotifyScopeStore
+	retriage     *RetriageFuncs
+	hostAssess   *HostAssessFuncs
+	guardSeq     uint64
 
 	peerRole   *peers
 	peerChk    PeerChecker
@@ -358,13 +359,26 @@ func (a *API) SetNotifyRules(ns *correlate.NotifyRuleStore) {
 	a.notifyRules = ns
 }
 
+// SetNotifyScopes wires the per-workspace notification scope store — the more
+// specific tier over the per-rule override ("prod repo pages, scratch clones
+// stay quiet").
+func (a *API) SetNotifyScopes(ns *correlate.NotifyScopeStore) {
+	a.notifyScopes = ns
+}
+
 // DefaultNotifyMinSeverity is the default notification policy: warnings are
 // queued silently, only criticals page. Per-rule overrides sit on top.
 const DefaultNotifyMinSeverity = 3
 
-// handleNotifyRules reads (GET) and writes (POST) per-rule notification
-// overrides. POST body: {"rule":"<id>","notify":true|false|null} — null (or
-// absent) clears the override and returns the rule to the default policy.
+// handleNotifyRules reads (GET) and writes (POST) notification overrides.
+// Two tiers are exposed here:
+//
+//	per-rule  — POST {"rule":"<id>","notify":true|false|null}
+//	per-workspace+rule — POST {"workspace":"/repo","rule":"<id>","notify":…}
+//
+// A workspace scope is the more specific tier: it beats the per-rule override
+// and the default, matched by path prefix (longest first). GET returns both,
+// so the console renders the full decision order.
 func (a *API) handleNotifyRules(w http.ResponseWriter, r *http.Request) {
 	if a.notifyRules == nil {
 		http.Error(w, "notify rules not enabled", http.StatusServiceUnavailable)
@@ -372,19 +386,51 @@ func (a *API) handleNotifyRules(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodGet:
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{
+		resp := map[string]any{
 			"default_min_severity": DefaultNotifyMinSeverity,
 			"overrides":            a.notifyRules.Load(),
-		})
+			"scopes":               []correlate.NotifyScopePair{},
+		}
+		if a.notifyScopes != nil {
+			resp["scopes"] = a.notifyScopes.Pairs()
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
 	case http.MethodPost:
 		limitBody(w, r)
 		var req struct {
-			Rule   string `json:"rule"`
-			Notify *bool  `json:"notify"`
+			Rule      string `json:"rule"`
+			Workspace string `json:"workspace"`
+			Notify    *bool  `json:"notify"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || !guardTokenRE.MatchString(req.Rule) {
-			http.Error(w, `Invalid payload: {"rule":"<id>","notify":true|false|null}`, http.StatusBadRequest)
+			http.Error(w, `Invalid payload: {"rule":"<id>","notify":true|false|null[,"workspace":"/path"]}`, http.StatusBadRequest)
+			return
+		}
+		// Workspace scope path: the flag's workspace or the rule's per-rule
+		// tier. A workspace is required to use the scoped tier.
+		if req.Workspace != "" {
+			if a.notifyScopes == nil {
+				http.Error(w, "workspace notification scopes not enabled", http.StatusServiceUnavailable)
+				return
+			}
+			var err error
+			action := "notify-scope-clear"
+			detail := "cleared notification scope for " + req.Workspace + " / " + req.Rule
+			if req.Notify != nil {
+				err = a.notifyScopes.Set(req.Workspace, req.Rule, *req.Notify)
+				action = "notify-scope-set"
+				detail = map[bool]string{true: "always notify", false: "never notify"}[*req.Notify] + " for " + req.Rule + " in " + req.Workspace
+			} else {
+				err = a.notifyScopes.Clear(req.Workspace, req.Rule)
+			}
+			if err != nil {
+				http.Error(w, fmt.Sprintf("persist failed: %v", err), http.StatusInternalServerError)
+				return
+			}
+			a.store.PutAudit(store.AuditEntry{Action: action, Rule: req.Rule, Detail: detail})
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]string{"status": "ok", "rule": req.Rule, "workspace": req.Workspace})
 			return
 		}
 		var err error

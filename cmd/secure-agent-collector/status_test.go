@@ -271,3 +271,26 @@ func TestFleetSessionsEndpoint(t *testing.T) {
 		t.Fatalf("sessions = %+v", got)
 	}
 }
+
+// A node's budget posture rides the heartbeat into the rollup, so a fleet view
+// can rank nodes by budget pressure without fetching each node's resources.
+func TestStatusCarriesBudget(t *testing.T) {
+	dir := t.TempDir()
+	s := NewStore(dir)
+	mustAppend(t, s, Envelope{NodeID: "n1", Kind: "status",
+		Payload: json.RawMessage(`{"hostname":"builder-01","budget":{"mode":"prompt","enforced":true,"over_budget":2,"approval":1,"contained":1}}`)})
+	st := s.Rollup()[0]
+	if st.Budget == nil {
+		t.Fatal("budget missing from rollup")
+	}
+	if st.Budget.Mode != "prompt" || !st.Budget.Enforced || st.Budget.OverBudget != 2 || st.Budget.Approval != 1 || st.Budget.Contained != 1 {
+		t.Fatalf("budget = %+v", st.Budget)
+	}
+	// A legacy node (no budget field) reads nil, not a zero struct.
+	mustAppend(t, s, Envelope{NodeID: "n2", Kind: "status", Payload: json.RawMessage(`{"hostname":"legacy"}`)})
+	for _, n := range s.Rollup() {
+		if n.NodeID == "n2" && n.Budget != nil {
+			t.Fatalf("legacy node budget = %+v, want nil", n.Budget)
+		}
+	}
+}

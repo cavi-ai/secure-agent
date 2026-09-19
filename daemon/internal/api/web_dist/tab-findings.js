@@ -191,7 +191,8 @@ function renderFlags() {
   SA.syncSelect('flags-agent', SA.seenAgents);
   SA.syncSelect('flags-rule', SA.seenRules);
 
-  const flags = scopedBySession(SA.t.flagsView || [], SA.timelineSession, SA.timelinePids);
+  const flags = scopedBySession(SA.t.flagsView || [], SA.timelineSession, SA.timelinePids)
+    .filter(f => matchesSearch(SA.globalSearchTerm(), f.agent, f.rule, f.evidence, f.sessionId, f.workspace));
   const scopedInc = scopedBySession(SA.t.incidents || [], SA.timelineSession, SA.timelinePids);
   SA.paintSessionChip('flags-session-filter', 'flags-session-filter-id', flags.length);
   badge.textContent = flags.length;
