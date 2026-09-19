@@ -176,19 +176,6 @@ type GuardEventSink interface {
 	PublishGuardDecision(decision map[string]any)
 }
 
-// SetFleetSink wires the fleet publisher for guard-decision delivery.
-func (a *API) SetFleetSink(s GuardEventSink) {
-	a.fleetSinks = s
-}
-
-func (a *API) SetBusDrops(fn func() uint64) { a.busDrops = fn }
-
-func (a *API) SetResources(fn func() resource.Snapshot)        { a.resources = fn }
-func (a *API) SetResourceControl(control *resource.Controller) { a.resourceControl = control }
-func (a *API) SetResourcePolicyUpdater(fn func(config.ResourceControlConfig) error) {
-	a.resourcePolicy = fn
-}
-
 // FirewallControl bundles the runtime firewall controls the API exposes.
 type FirewallControl struct {
 	Engine      *firewall.Engine
@@ -199,52 +186,13 @@ type FirewallControl struct {
 	BaseSources []string                 // config-defined ingest sources (read-only)
 }
 
-func New(socketPath string, store *store.Store, killer Killer, statusFn StatusFunc) *API {
-	return &API{
-		socketPath: socketPath,
-		store:      store,
-		killer:     killer,
-		statusFn:   statusFn,
-	}
-}
-
-// SetFirewall wires the firewall engine and its persisted mode-override store so
-// the control API can promote/demote rules at runtime. Optional: when unset, the
-// /firewall/mode endpoint reports the firewall is not enabled.
-func (a *API) SetFirewall(c FirewallControl) {
-	a.fwEngine = c.Engine
-	a.fwModes = c.Modes
-	a.fwReload = c.Reload
-	a.fwIngest = c.Ingest
-	a.fwSources = c.Sources
-	a.fwBaseSources = c.BaseSources
-}
-
-// SetGuard wires the directory-guard broker so the control API can answer
-// prompt-mode decisions and expose the pending queue / resolve / rules
-// endpoints. Optional: when unset, the /guard/* endpoints report the guard is
-// not enabled.
-func (a *API) SetGuard(b *guard.Broker) {
-	a.guardBroker = b
-}
-
-// SetAllowlist wires the correlator (blind-spot summary) and the persisted
-// user-approval store so the console can suggest allowlist additions and
-// approve them with one click.
-func (a *API) SetAllowlist(cr *correlate.Correlator, al *correlate.AllowlistStore) {
-	a.correlator = cr
-	a.allowlist = al
-}
-
-// retriageFuncs look up a flag by ID and enqueue it for a fresh advisor
+// RetriageFuncs look up a flag by ID and enqueue it for a fresh advisor
 // verdict. The enqueue is idempotent (advisor-side cooldown); queued=false
 // means "already in flight or recent" — the UI treats that as success.
 type RetriageFuncs struct {
 	LookupFlag func(flagID string) (model.Flag, bool)
 	Enqueue    func(model.Flag) bool
 }
-
-func (a *API) SetRetriage(r RetriageFuncs) { a.retriage = &r }
 
 // HostAssessFuncs look up a stored advisor verdict for an agent+host and
 // enqueue an on-demand legitimacy assessment. GetVerdict returns the
@@ -256,7 +204,90 @@ type HostAssessFuncs struct {
 	Enqueue    func(agent, host string) bool
 }
 
-func (a *API) SetHostAssess(h HostAssessFuncs) { a.hostAssess = &h }
+// Deps is the API's complete dependency set, resolved once at composition.
+// It replaces the twenty optional setters the audit called out: every field is
+// read in New, so wiring a component is one struct literal and a missing
+// component is visible at the call site instead of a nil check at serve time.
+// Optional fields may be left zero — the handlers degrade to their documented
+// "not enabled" response.
+type Deps struct {
+	SocketPath string
+	Store      *store.Store
+	Killer     Killer
+	Status     StatusFunc
+
+	// Resources / control (optional).
+	Resources             func() resource.Snapshot
+	ResourceControl       *resource.Controller
+	ResourcePolicyUpdater func(config.ResourceControlConfig) error
+
+	// Firewall (optional).
+	Firewall FirewallControl
+
+	// Directory guard (optional).
+	Guard *guard.Broker
+
+	// Correlator-derived stores (optional).
+	Correlator   *correlate.Correlator
+	Allowlist    *correlate.AllowlistStore
+	Mutes        *correlate.MuteStore
+	NotifyRules  *correlate.NotifyRuleStore
+	NotifyScopes *correlate.NotifyScopeStore
+
+	// Advisor hooks (optional).
+	Retriage   *RetriageFuncs
+	HostAssess *HostAssessFuncs
+
+	// Peers (optional). An empty Checker leaves the API ungated.
+	PeerChecker PeerChecker
+	AgentPIDs   func() map[int32]struct{}
+	UIPID       int32
+
+	// Fleet + telemetry (optional).
+	FleetSink       GuardEventSink
+	FleetConfigured bool
+	BusDrops        func() uint64
+	PublishEvent    func(event.Event)
+	DeltaHub        *DeltaHub
+}
+
+// New builds the API from its resolved dependencies.
+func New(d Deps) *API {
+	a := &API{
+		socketPath:      d.SocketPath,
+		store:           d.Store,
+		killer:          d.Killer,
+		statusFn:        d.Status,
+		resources:       d.Resources,
+		resourceControl: d.ResourceControl,
+		resourcePolicy:  d.ResourcePolicyUpdater,
+		fwEngine:        d.Firewall.Engine,
+		fwModes:         d.Firewall.Modes,
+		fwReload:        d.Firewall.Reload,
+		fwIngest:        d.Firewall.Ingest,
+		fwSources:       d.Firewall.Sources,
+		fwBaseSources:   d.Firewall.BaseSources,
+		guardBroker:     d.Guard,
+		correlator:      d.Correlator,
+		allowlist:       d.Allowlist,
+		mutes:           d.Mutes,
+		notifyRules:     d.NotifyRules,
+		notifyScopes:    d.NotifyScopes,
+		retriage:        d.Retriage,
+		hostAssess:      d.HostAssess,
+		agentPIDs:       d.AgentPIDs,
+		fleetSinks:      d.FleetSink,
+		fleetConfigured: d.FleetConfigured,
+		busDrops:        d.BusDrops,
+		publishEvent:    d.PublishEvent,
+		deltaHub:        d.DeltaHub,
+	}
+	a.peerChk = d.PeerChecker
+	if d.PeerChecker != nil {
+		a.peerRole = &peers{OwnerUID: os.Getuid(), UIPID: d.UIPID, AgentPIDs: d.AgentPIDs}
+	}
+	return a
+}
 
 // handleAdvisorAssessHost answers "what is this endpoint, and should I trust
 // it?" for one uninspected agent+host pair: the stored advisor verdict if one
@@ -349,23 +380,13 @@ func (a *API) handleAdvisorRetriage(w http.ResponseWriter, r *http.Request) {
 
 // SetMute wires operator dispositions: (rule, host) pairs the operator said
 // "stop telling me about", persisted like the other override stores.
-func (a *API) SetMute(cr *correlate.Correlator, ms *correlate.MuteStore) {
-	a.correlator = cr
-	a.mutes = ms
-}
 
 // SetNotifyRules wires the per-rule notification override store so the UIs
 // can read and set "page me / never page me for this class" choices.
-func (a *API) SetNotifyRules(ns *correlate.NotifyRuleStore) {
-	a.notifyRules = ns
-}
 
 // SetNotifyScopes wires the per-workspace notification scope store — the more
 // specific tier over the per-rule override ("prod repo pages, scratch clones
 // stay quiet").
-func (a *API) SetNotifyScopes(ns *correlate.NotifyScopeStore) {
-	a.notifyScopes = ns
-}
 
 // DefaultNotifyMinSeverity is the default notification policy: warnings are
 // queued silently, only criticals page. Per-rule overrides sit on top.
@@ -461,23 +482,10 @@ func (a *API) handleNotifyRules(w http.ResponseWriter, r *http.Request) {
 // peer to BE that process — same-uid shells keep read access but can no
 // longer mutate. When unset (daemon launched directly), mutations fall back
 // to owner-uid trust, which is what headless/ssh management uses.
-func (a *API) SetUIPID(pid int32) {
-	if a.peerRole != nil {
-		a.peerRole.UIPID = pid
-	}
-}
 
 // SetPeers enables unix-socket peer-credential gating. AgentPIDs supplies the
 // live tagged-agent pid set used to recognize hook traffic; a nil function or
 // nil checker leaves the API ungated (unit tests).
-func (a *API) SetPeers(checker PeerChecker, agentPIDs func() map[int32]struct{}) {
-	a.peerChk = checker
-	a.agentPIDs = agentPIDs
-	if checker == nil {
-		return
-	}
-	a.peerRole = &peers{OwnerUID: os.Getuid(), AgentPIDs: agentPIDs}
-}
 
 // routes maps every registered path to its handler. The path set is the
 // apiroutes.Table (the single source of truth shared with the console
