@@ -292,10 +292,15 @@ def main():
         check("overview panel visible",
               'id="tab-overview" role="tabpanel">' in dom)
         check("resource mission control is present", 'id="resource-mission-control"' in dom)
-        resource_view = dom.split('id="resource-mission-control"', 1)[1].split('id="session-strip-panel"', 1)[0]
+        # The live Resources tab ends where the History tab begins: the flight
+        # recorder moved out, so it must NOT be inside the resource view.
+        resource_view = dom.split('id="resource-mission-control"', 1)[1].split('id="tab-history"', 1)[0]
+        history_view = dom.split('id="tab-history"', 1)[1].split('id="tab-events"', 1)[0]
         check("whole-machine headroom is visible",
               "Machine headroom" in resource_view and "25 / 100" in resource_view
               and "4.0 GB available" in resource_view)
+        check("live resources exclude the flight recorder",
+              "Pressure flight recorder" not in resource_view)
         check("agent and non-agent memory are separated",
               "Agents 34.4%" in resource_view and "Other 40.6%" in resource_view
               and 'class="resource-host-segment agent"' in resource_view)
@@ -307,27 +312,27 @@ def main():
         check("resource diagnosis explains the pressure",
               "Memory grew 1.4 GB in 15 minutes." in resource_view)
         check("resource flight recorder preserves exited sessions",
-              "Pressure flight recorder" in resource_view and "data-pipeline" in resource_view)
+              "Pressure flight recorder" in history_view and "data-pipeline" in history_view)
         check("resource flight recorder remains visible with no live sessions",
               "No attributed agent resource use right now" in dom_noresources
               and "Pressure flight recorder" in dom_noresources
               and "data-pipeline" in dom_noresources)
         check("resource flight recorder identifies the dominant process",
-              "PID 4419" in resource_view and "79%" in resource_view
-              and "One child process dominated session memory." in resource_view)
+              "PID 4419" in history_view and "79%" in history_view
+              and "One child process dominated session memory." in history_view)
         check("resource pressure episode explains correlated activity",
-              "Memory rose 3.0 GiB in 10m while node started." in resource_view
-              and "Observed correlation" in resource_view)
+              "Memory rose 3.0 GiB in 10m while node started." in history_view
+              and "Observed correlation" in history_view)
         check("pressure episode preserves captured machine context",
-              "Host at capture" in resource_view and "1.0 GB available" in resource_view
-              and "Critical pressure" in resource_view and "Serious thermal" in resource_view)
+              "Host at capture" in history_view and "1.0 GB available" in history_view
+              and "Critical pressure" in history_view and "Serious thermal" in history_view)
         check("resource pressure chart includes activity markers",
-              'class="resource-activity-marker' in resource_view
-              and "Bash tool ran" in resource_view
-              and "connected to api.openai.com:443" in resource_view)
+              'class="resource-activity-marker' in history_view
+              and "Bash tool ran" in history_view
+              and "connected to api.openai.com:443" in history_view)
         check("historical resource evidence stays scoped to its captured lifetime",
-              "Scoped to this captured process lifetime" in resource_view
-              and 'data-action="filter-pids" data-pids="4412,4419,4420"' not in resource_view)
+              "Scoped to this captured process lifetime" in history_view
+              and 'data-action="filter-pids" data-pids="4412,4419,4420"' not in history_view)
         check("resource trend SVG is rendered",
               'class="resource-spark"' in resource_view and 'points="' in resource_view)
         check("resource action targets the full family",
@@ -411,9 +416,15 @@ def main():
         check("resources and events are separate tabs",
               'id="tab-resources" role="tabpanel" hidden' in dom
               and 'id="tab-events" role="tabpanel" hidden' in dom)
+        check("history is its own tab",
+              'id="tab-history" role="tabpanel" hidden' in dom
+              and 'data-tab="history"' in dom)
         check("resource panel lives in the resources tab",
               dom.index('id="tab-resources"') < dom.index('id="resource-board"')
-              and dom.index('id="resource-board"') < dom.index('id="tab-events"'))
+              and dom.index('id="resource-board"') < dom.index('id="tab-history"'))
+        check("flight recorder lives in the history tab",
+              dom.index('id="tab-history"') < dom.index('id="history-board"')
+              and dom.index('id="history-board"') < dom.index('id="tab-events"'))
         check("event timeline lives in the events tab",
               dom.index('id="tab-events"') < dom.index('id="events-container"')
               and dom.index('id="events-container"') < dom.index('id="tab-sessions"'))

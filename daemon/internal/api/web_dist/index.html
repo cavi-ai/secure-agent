@@ -175,6 +175,9 @@
       <button class="tab-btn" data-tab="resources" role="tab" aria-selected="false" aria-controls="tab-resources">
         <svg class="icon"><use href="#i-server"/></svg><span>Resources</span>
       </button>
+      <button class="tab-btn" data-tab="history" role="tab" aria-selected="false" aria-controls="tab-history">
+        <svg class="icon"><use href="#i-history"/></svg><span>History</span>
+      </button>
       <button class="tab-btn" data-tab="events" role="tab" aria-selected="false" aria-controls="tab-events">
         <svg class="icon"><use href="#i-activity"/></svg><span>Events</span>
       </button>
@@ -241,11 +244,27 @@
       <div class="tabpanel" id="tab-resources" role="tabpanel" hidden>
         <section class="panel resource-panel" id="resource-mission-control">
           <div class="panel-head">
-            <h2><svg class="icon"><use href="#i-activity"/></svg>Resource Mission Control</h2>
+            <h2><svg class="icon"><use href="#i-activity"/></svg>Resources now</h2>
             <span class="badge" id="resource-observed">Live</span>
           </div>
           <div class="panel-body" id="resource-board">
             <div class="empty"><svg class="icon"><use href="#i-activity"/></svg><span>Waiting for attributed CPU and memory samples…</span></div>
+          </div>
+        </section>
+      </div>
+
+      <!-- History: pressure episodes (the flight recorder). Separated from
+           Resources so the live view stays about "now" and the dense
+           post-mortem review lives where it belongs — this is the panel that
+           opened a full episode inline and made the Resources tab unreadable. -->
+      <div class="tabpanel" id="tab-history" role="tabpanel" hidden>
+        <section class="panel resource-panel">
+          <div class="panel-head">
+            <h2><svg class="icon"><use href="#i-history"/></svg>Pressure history</h2>
+            <span class="badge" id="history-observed">—</span>
+          </div>
+          <div class="panel-body" id="history-board">
+            <div class="empty"><svg class="icon"><use href="#i-history"/></svg><span>The recorder is armed. Episodes appear here when a session becomes heavy, grows rapidly, or leaves resource-holding processes behind.</span></div>
           </div>
         </section>
       </div>
