@@ -488,6 +488,7 @@ func (a *API) buildMux() *http.ServeMux {
 	mux.HandleFunc("/sessions", a.handleSessions)
 	mux.HandleFunc("/sessions/", a.handleSessionTimeline)
 	mux.HandleFunc("/resources", a.handleResources)
+	mux.HandleFunc("/resources/episodes", a.handleResourceEpisodes)
 	mux.HandleFunc("/resources/control", a.handleResourceControl)
 	mux.HandleFunc("/resources/policy", a.handleResourcePolicy)
 	mux.HandleFunc("/snapshot", a.handleSnapshot)

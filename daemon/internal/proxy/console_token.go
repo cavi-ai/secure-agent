@@ -84,6 +84,7 @@ var consoleAPIPaths = map[string]bool{
 	"/status":                       true,
 	"/sessions":                     true,
 	"/resources":                    true,
+	"/resources/episodes":           true,
 	"/resources/control":            true,
 	"/resources/policy":             true,
 	"/snapshot":                     true,

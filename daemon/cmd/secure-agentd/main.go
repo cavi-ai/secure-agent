@@ -52,8 +52,27 @@ func (k *realKiller) Kill(pid int32) error {
 	if pid <= 1 {
 		return fmt.Errorf("refusing to kill pid %d", pid)
 	}
-	log.Printf("secure-agentd: issuing SIGKILL to pid %d", pid)
-	return syscall.Kill(int(pid), syscall.SIGKILL)
+	// Terminate politely, then force. The automated resource ladder already
+	// gives a session a grace window; a manual kill must not be a worse
+	// citizen than the automatic one. SIGTERM lets the process flush state and
+	// release locks; a stubborn process gets SIGKILL after the grace.
+	log.Printf("secure-agentd: sending SIGTERM to pid %d", pid)
+	if err := syscall.Kill(int(pid), syscall.SIGTERM); err != nil {
+		// Already gone (ESRCH) or not ours (EPERM): report, don't escalate.
+		return err
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		time.Sleep(150 * time.Millisecond)
+		if err := syscall.Kill(int(pid), 0); err != nil {
+			return nil // exited
+		}
+	}
+	log.Printf("secure-agentd: pid %d ignored SIGTERM; issuing SIGKILL", pid)
+	if err := syscall.Kill(int(pid), syscall.SIGKILL); err != nil && err != syscall.ESRCH {
+		return err
+	}
+	return nil
 }
 
 func main() {

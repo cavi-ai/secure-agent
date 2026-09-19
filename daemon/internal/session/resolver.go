@@ -49,21 +49,33 @@ type Resolver struct {
 	OnSessionChange func(model.Session)
 
 	mu     sync.Mutex
-	byPID  map[int32]string     // pid → session id (process-tree cache)
-	byRoot map[int32]string     // root pid → session id
-	touch  map[string]time.Time // session id → last TouchSession (throttle)
-	now    func() time.Time
+	byPID  map[int32]string // pid → session id (process-tree cache)
+	byRoot map[int32]string // root pid → session id
+	// byScope maps "harness\x00workspace" → provisional process-tree session
+	// id, so a transcript sighting joins the running conversation without a
+	// store scan. Filled when a process-tree session is created, cleared when
+	// it ends.
+	byScope map[string]string
+	touch   map[string]time.Time // session id → last TouchSession (throttle)
+	now     func() time.Time
 }
 
 func NewResolver(st *store.Store, tg *agents.Tagger) *Resolver {
 	return &Resolver{
-		st:     st,
-		tagger: tg,
-		byPID:  map[int32]string{},
-		byRoot: map[int32]string{},
-		touch:  map[string]time.Time{},
-		now:    time.Now,
+		st:      st,
+		tagger:  tg,
+		byPID:   map[int32]string{},
+		byRoot:  map[int32]string{},
+		byScope: map[string]string{},
+		touch:   map[string]time.Time{},
+		now:     time.Now,
 	}
+}
+
+// scopeKey identifies a harness working directory: the join key between a
+// process-tree session and the transcript that names its conversation.
+func scopeKey(harness, workspace string) string {
+	return harness + "\x00" + workspace
 }
 
 // ProcSessionID is the provisional id for a process-tree-resolved session.
@@ -103,7 +115,16 @@ func (r *Resolver) Resolve(e *event.Event) string {
 	}
 	id, ok := r.byRoot[root]
 	if !ok {
-		id = ProcSessionID(root, info.StartedAt)
+		// Adopt a transcript session already known for this harness+workspace
+		// (the transcript may have been tailed before the process tree was
+		// sampled). Otherwise mint a provisional process-tree id. Either way
+		// the scope index points at the current id, so a later transcript
+		// sighting merges into it instead of creating a second row.
+		if existing, found := r.byScope[scopeKey(info.Name, info.CWD)]; found && info.CWD != "" {
+			id = existing
+		} else {
+			id = ProcSessionID(root, info.StartedAt)
+		}
 		ts := e.TS
 		if ts.IsZero() {
 			ts = r.now()
@@ -122,6 +143,9 @@ func (r *Resolver) Resolve(e *event.Event) string {
 		r.st.UpsertSession(sess)
 		r.emitLocked(sess)
 		r.byRoot[root] = id
+		if sess.Workspace != "" {
+			r.byScope[scopeKey(sess.Harness, sess.Workspace)] = id
+		}
 	}
 	r.byPID[e.PID] = id
 	r.touchLocked(id, e.TS)
@@ -177,10 +201,19 @@ func (r *Resolver) HandleHandshake(h Handshake) {
 	r.touchLocked(h.SessionID, ts)
 }
 
-// NoteTranscriptSession records a transcript-tier sighting: the session id
-// comes from the harness's own transcript records (e.g. Claude's sessionId),
-// stronger than a process-tree guess, weaker than the hook handshake.
-func (r *Resolver) NoteTranscriptSession(id, workspace string, ts time.Time) {
+// NoteTranscriptSession records a harness transcript sighting. The id comes
+// from the harness's own transcript (e.g. Claude's sessionId), stronger than a
+// process-tree guess. `harness` names the source ("claude", "codex", …) and
+// `workspace` is the transcript's cwd; both fill the session record so a
+// trace session is never nameless.
+//
+// When a process-tree session already exists for the same harness+workspace
+// (the harness process is the one running this conversation), the transcript
+// session MERGES INTO it rather than creating a second row — that is the join
+// that makes "claude · repo@branch · timeline" possible. The process-tree id
+// is provisional; the harness's own id is authoritative, so the merge rekeys
+// the process row's events onto the transcript id.
+func (r *Resolver) NoteTranscriptSession(id, harness, workspace string, ts time.Time) {
 	if id == "" {
 		return
 	}
@@ -189,14 +222,44 @@ func (r *Resolver) NoteTranscriptSession(id, workspace string, ts time.Time) {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
+	// Join: if a process-tree session covers this harness+workspace and is
+	// still provisional, rekey it to the harness id so its events follow.
+	if workspace != "" && harness != "" {
+		if old, ok := r.findProvisionalLocked(harness, workspace); ok && old != id {
+			r.st.RekeySession(old, id)
+			for pid, sid := range r.byPID {
+				if sid == old {
+					r.byPID[pid] = id
+				}
+			}
+			for root, sid := range r.byRoot {
+				if sid == old {
+					r.byRoot[root] = id
+				}
+			}
+		}
+		// Keep the scope index pointing at the current id so a process-tree
+		// session created after this sighting adopts the conversation.
+		r.byScope[scopeKey(harness, workspace)] = id
+	}
+
 	r.st.UpsertSession(model.Session{
-		ID: id, Workspace: workspace, StartedAt: ts, LastSeenAt: ts,
+		ID: id, Harness: harness, Workspace: workspace,
+		StartedAt: ts, LastSeenAt: ts,
 		Status: model.SessionActive, Confidence: model.ConfTranscript,
 	})
 	if stored, ok := r.st.GetSession(id); ok {
 		r.emitLocked(stored)
 	}
 	r.touchLocked(id, ts)
+}
+
+// findProvisionalLocked returns the process-tree session id for a
+// harness+workspace whose conversation id is not yet known. Caller holds mu.
+func (r *Resolver) findProvisionalLocked(harness, workspace string) (string, bool) {
+	id, ok := r.byScope[scopeKey(harness, workspace)]
+	return id, ok
 }
 
 // ensureHookSession creates a minimal record for a hook-stamped id seen
@@ -283,6 +346,11 @@ func (r *Resolver) Sweep() {
 			for pid, sid := range r.byPID {
 				if sid == id {
 					delete(r.byPID, pid)
+				}
+			}
+			for scope, sid := range r.byScope {
+				if sid == id {
+					delete(r.byScope, scope)
 				}
 			}
 		}

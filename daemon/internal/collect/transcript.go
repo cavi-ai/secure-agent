@@ -44,8 +44,10 @@ type TranscriptScanner struct {
 	OnHandshake func(Handshake)
 
 	// OnSessionSeen, when set, reports a session id sighted in a harness
-	// transcript (with the transcript's cwd) — transcript-tier resolution.
-	OnSessionSeen func(sessionID, workspace string, at time.Time)
+	// transcript, with the harness name and workspace — transcript-tier
+	// resolution and the join key to the process-tree session for the same
+	// harness+workspace.
+	OnSessionSeen func(sessionID, harness, workspace string, at time.Time)
 
 	// tracers hold per-file Claude trace state (open tool_use ids). The
 	// scanner's tail loop is single-goroutine, so no lock.
@@ -162,21 +164,27 @@ func (ts *TranscriptScanner) Run(ctx context.Context) error {
 	// whole tree on every tail tick previously pegged the CPU at ~20%+.
 	dirTargets, cheapTargets := ts.classifyTargets()
 	cheapPaths := resolveGlobs(cheapTargets)
-	dirPaths := activePaths(walkDirs(dirTargets))
+	// ALL transcript files, not just the recently-active ones. The active set
+	// is what gets TAILED each tick, but every file present at startup must be
+	// SEEDED to its current EOF — otherwise an older session file that is
+	// appended to later is read from byte 0 and its whole history is replayed
+	// (observed live: one tool call stored 5–10× at identical timestamps,
+	// ~500 row-ids apart across daemon restarts).
+	allDirPaths := walkDirs(dirTargets)
+	dirPaths := activePaths(allDirPaths)
 
-	// Seed everything present at startup to EOF so old history is not replayed;
-	// files that appear later are read from byte 0 (see tailFile), so genuinely
-	// new session transcripts are captured whole.
-	for _, p := range cheapPaths {
-		if fi, err := os.Stat(p); err == nil && !fi.IsDir() {
-			offsets[p] = fi.Size()
+	// Seed every known file to EOF so old history is never replayed; files
+	// that appear later are read from byte 0 (see tailFile), so genuinely new
+	// session transcripts are captured whole.
+	seed := func(paths []string) {
+		for _, p := range paths {
+			if fi, err := os.Stat(p); err == nil && !fi.IsDir() {
+				offsets[p] = fi.Size()
+			}
 		}
 	}
-	for _, p := range dirPaths {
-		if fi, err := os.Stat(p); err == nil && !fi.IsDir() {
-			offsets[p] = fi.Size()
-		}
-	}
+	seed(cheapPaths)
+	seed(allDirPaths)
 
 	tailTicker := time.NewTicker(tailInterval)
 	defer tailTicker.Stop()
@@ -189,10 +197,15 @@ func (ts *TranscriptScanner) Run(ctx context.Context) error {
 			return ctx.Err()
 		case <-resolveTicker.C:
 			dirTargets, cheapTargets = ts.classifyTargets()
-			dirPaths = activePaths(walkDirs(dirTargets))
+			allDirPaths = walkDirs(dirTargets)
+			dirPaths = activePaths(allDirPaths)
+			// Seed any newly-appeared file to EOF so a file first seen on a
+			// later resolve is not replayed from byte 0 either. (The fast tail
+			// tick seeds cheap globs; this covers the slow dir walk.)
+			seed(allDirPaths)
 		case <-tailTicker.C:
 			cheapPaths = resolveGlobs(cheapTargets)
-			live := make(map[string]struct{}, len(cheapPaths)+len(dirPaths))
+			live := make(map[string]struct{}, len(cheapPaths)+len(allDirPaths))
 			for _, p := range cheapPaths {
 				live[p] = struct{}{}
 				ts.tailFile(p, offsets)
@@ -201,10 +214,15 @@ func (ts *TranscriptScanner) Run(ctx context.Context) error {
 				live[p] = struct{}{}
 				ts.tailFile(p, offsets)
 			}
-			// Prune offsets for files no longer present (deleted/rotated out),
-			// or the map grows by one entry per historical transcript forever.
+			// Prune offsets only for files that no longer EXIST (deleted or
+			// rotated out). Pruning inactive-but-present files forced a byte-0
+			// re-read the moment they were appended to again — the duplicate
+			// replay bug.
 			for p := range offsets {
-				if _, ok := live[p]; !ok {
+				if _, ok := live[p]; ok {
+					continue
+				}
+				if _, err := os.Stat(p); err != nil {
 					delete(offsets, p)
 				}
 			}
@@ -384,7 +402,7 @@ func (ts *TranscriptScanner) tailFile(p string, offsets map[string]int64) {
 							ts.OnProduce()
 						}
 						if ts.OnSessionSeen != nil {
-							ts.OnSessionSeen(evs[0].SessionID, cwd, evs[0].TS)
+							ts.OnSessionSeen(evs[0].SessionID, "claude", cwd, evs[0].TS)
 						}
 						// Trace lines still get the redaction scan — an
 						// assistant message can carry a secret in its text.
@@ -409,7 +427,7 @@ func (ts *TranscriptScanner) tailFile(p string, offsets map[string]int64) {
 					}
 					if evs, ok := tracer.ParseLine(line); ok {
 						if sid, cwd := tracer.Session(); sid != "" && ts.OnSessionSeen != nil {
-							ts.OnSessionSeen(sid, cwd, time.Now())
+							ts.OnSessionSeen(sid, "codex", cwd, time.Now())
 						}
 						for _, e := range evs {
 							ts.bus.Publish(e)
@@ -434,7 +452,7 @@ func (ts *TranscriptScanner) tailFile(p string, offsets map[string]int64) {
 					if evs, ok := tracer.ParseLine(line); ok {
 						sid, ws := tracer.Session()
 						if sid != "" && ts.OnSessionSeen != nil {
-							ts.OnSessionSeen(sid, ws, evs[0].TS)
+							ts.OnSessionSeen(sid, "cursor", ws, evs[0].TS)
 						}
 						for _, e := range evs {
 							ts.bus.Publish(e)
@@ -458,7 +476,7 @@ func (ts *TranscriptScanner) tailFile(p string, offsets map[string]int64) {
 					if evs, ok := tracer.ParseLine(line); ok {
 						sid, ws := tracer.Session()
 						if sid != "" && ts.OnSessionSeen != nil {
-							ts.OnSessionSeen(sid, ws, evs[0].TS)
+							ts.OnSessionSeen(sid, "agy", ws, evs[0].TS)
 						}
 						for _, e := range evs {
 							ts.bus.Publish(e)

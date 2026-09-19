@@ -520,6 +520,8 @@
   if (location.search.includes('noresourcesdemo')) {
     data['/resources'] = { ...data['/resources'], rss_bytes: 0, cpu_percent: 0, process_count: 0, session_count: 0, sessions: [] };
   }
+  // Episodes live on their own endpoint now.
+  data['/resources/episodes'] = (data['/resources'].episodes || []);
 
   // Auto-action: demote a blocking rule — it must flip back to Promote.
   if (location.search.includes('demotedemo')) {
