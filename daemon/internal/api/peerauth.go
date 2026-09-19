@@ -6,6 +6,8 @@ import (
 	"net"
 	"net/http"
 	"os"
+
+	"github.com/cavi-ai/secure-agent/daemon/internal/apiroutes"
 )
 
 // Role of the authenticated peer on a control-socket connection.
@@ -115,24 +117,11 @@ func (a *API) gate(checker PeerChecker, next http.Handler) http.Handler {
 	})
 }
 
-// isMutation: POST on the mutating endpoint set (DELETE /guard/rules stays
-// owner-level — headless fleets revoke cached decisions over ssh).
+// isMutation: POST/PUT on the mutating endpoint set (DELETE /guard/rules stays
+// owner-level — headless fleets revoke cached decisions over ssh). The set is
+// the apiroutes.Table, shared with the mux and the console allow-list.
 func isMutation(method, path string) bool {
-	if method == http.MethodPut && path == "/resources/policy" {
-		return true
-	}
-	if method != http.MethodPost {
-		return false
-	}
-	switch path {
-	case "/kill", "/guard/resolve", "/guard/rules", "/firewall/mode",
-		"/resources/control",
-		"/firewall/fingerprints/reload", "/firewall/fingerprints/ingest",
-		"/firewall/sources", "/incidents/status", "/allowlist", "/mute", "/ui/open-fda",
-		"/flags/acknowledge", "/advisor/retriage":
-		return true
-	}
-	return false
+	return apiroutes.IsMutation(method, path)
 }
 
 // authorize applies the (method, path) policy to a classified role, wired
@@ -143,7 +132,7 @@ func isMutation(method, path string) bool {
 //   - GET reads: canRead (owner, UI, and tagged agents)
 //   - anything else (DELETE /guard/rules, unknown methods): owner-level
 func (a *API) authorize(r role, method, path string) bool {
-	if method == http.MethodPost && path == "/guard/decision" {
+	if apiroutes.IsDecide(method, path) {
 		return r.canDecide()
 	}
 	if isMutation(method, path) {
