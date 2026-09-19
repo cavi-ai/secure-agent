@@ -204,7 +204,7 @@ function egressRowHTML(e, advisorOn) {
     </div>
     <div class="egress-actions">
       <button class="btn btn-primary btn-sm" data-action="allow-host" data-agent="${escapeHTML(e.agent)}" data-host="${escapeHTML(e.host)}" title="Mark this endpoint expected for ${escapeHTML(e.agent)}; it leaves this list"><svg class="icon"><use href="#i-shield"/></svg><span>Allow</span></button>
-      <button class="btn btn-ghost btn-sm" data-action="goto-tab" data-tab="telemetry" title="See the events around this connection"><svg class="icon"><use href="#i-activity"/></svg><span>Evidence</span></button>
+      <button class="btn btn-ghost btn-sm" data-action="goto-tab" data-tab="events" title="See the events around this connection"><svg class="icon"><use href="#i-activity"/></svg><span>Evidence</span></button>
     </div>
   </div>`;
 }

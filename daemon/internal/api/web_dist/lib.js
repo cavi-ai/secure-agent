@@ -216,6 +216,40 @@ function familyTitle(name) {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
+// Operator-facing rule titles, shared by the flags panel and the Overview
+// charts so one rule reads the same everywhere.
+var RULE_TITLES = {
+  'proxy-secret-leak': 'Secret leaving in agent traffic',
+  'sensitive-read-then-connect': 'Secret read, then connected out',
+  'keychain-access': 'Keychain file access',
+  'keychain-security-cli': 'Keychain CLI (security tool)',
+  'tcc-tamper': 'Privacy permissions (TCC) tamper',
+  'proxy-prompt-injection': 'Prompt injection in a response',
+};
+
+function ruleTitle(rule) {
+  return RULE_TITLES[rule] || String(rule || 'unknown');
+}
+
+// hbarsHTML renders a ranked horizontal-bar list — the readable chart for
+// "which of these is biggest" without axes or a plotting dependency.
+// rows: [{label, value, sub, cls}], value compared against the max.
+function hbarsHTML(rows, opts) {
+  opts = opts || {};
+  const fmt = opts.format || (v => String(v));
+  const max = Math.max(1, ...rows.map(r => r.value));
+  return rows.map(r => {
+    const pct = Math.max(2, (r.value / max) * 100);
+    return `<div class="hbar-row">
+      <span class="hbar-label" title="${escapeHTML(r.titleAttr || r.label)}">${escapeHTML(r.label)}</span>
+      <span class="hbar-track"><span class="hbar-fill ${r.cls || ''}" style="width:${pct.toFixed(1)}%"></span></span>
+      <span class="hbar-val">${escapeHTML(fmt(r.value))}</span>
+      ${r.sub ? `<span class="hbar-sub">${escapeHTML(r.sub)}</span>` : ''}
+    </div>`;
+  }).join('');
+}
+
+
 function fmtRSS(n) {
   n = Number(n);
   if (!n || n < 0) return '';

@@ -65,16 +65,12 @@
           <span class="status-dot"></span>
           <span id="status-text">Daemon Active</span>
         </div>
-        <div class="stat">
-          <span class="stat-k">Uptime</span>
-          <span class="stat-v" id="uptime-val">--</span>
-        </div>
-        <div class="stat">
-          <span class="stat-k">Proxy</span>
-          <span class="stat-v" id="proxy-status">127.0.0.1:8443</span>
-        </div>
+        <!-- Uptime + proxy are kept as hidden readouts: the status chip's
+             tooltip carries them, the JS keeps writing them, and the header
+             stays one line instead of a row of stat blocks. -->
+        <span class="sr-only"><span id="uptime-val">--</span><span id="proxy-status">disabled</span></span>
         <div class="search-wrap">
-          <input type="search" id="global-search" class="input input-sm" placeholder="Search agents, hosts, rules…" autocomplete="off" spellcheck="false" aria-label="Search telemetry">
+          <input type="search" id="global-search" class="input input-sm" placeholder="Search…" autocomplete="off" spellcheck="false" aria-label="Search telemetry">
         </div>
         <div class="views-wrap">
           <button class="btn btn-ghost btn-icon" id="btn-views" title="Saved views">
@@ -104,12 +100,12 @@
           </div>
         </div>
         <div class="theme-toggle" role="group" aria-label="Theme">
-          <button type="button" id="theme-system" aria-pressed="false">Auto</button>
-          <button type="button" id="theme-light" aria-pressed="false">Light</button>
-          <button type="button" id="theme-dark" aria-pressed="false">Dark</button>
+          <button type="button" id="theme-system" aria-pressed="false" title="Follow the system theme"><svg class="icon"><use href="#i-activity"/></svg></button>
+          <button type="button" id="theme-light" aria-pressed="false" title="Light theme">L</button>
+          <button type="button" id="theme-dark" aria-pressed="false" title="Dark theme">D</button>
         </div>
-        <button class="btn btn-ghost" id="btn-refresh" title="Refresh telemetry">
-          <svg class="icon"><use href="#i-refresh"/></svg><span>Refresh</span>
+        <button class="btn btn-ghost btn-icon" id="btn-refresh" title="Refresh telemetry">
+          <svg class="icon"><use href="#i-refresh"/></svg>
         </button>
       </div>
     </header>
@@ -132,39 +128,31 @@
       <ul class="posture-items" id="posture-items"></ul>
     </section>
 
-    <!-- KPI row -->
-    <section class="kpis">
-      <div class="kpi" data-accent="brand">
-        <div class="kpi-icon"><svg class="icon"><use href="#i-agent"/></svg></div>
-        <div class="kpi-body">
-          <span class="kpi-num" id="count-agents">0</span>
-          <span class="kpi-label">Active agents</span>
-          <span class="kpi-hint" id="hint-agents">Tagged in the process tree</span>
-        </div>
+    <!-- Thin one-line metrics strip. The old four-tile KPI block ate a third
+         of the first screen before any chart; the numbers are the same, the
+         real estate is not. -->
+    <section class="statstrip" aria-label="At a glance">
+      <div class="ss-item">
+        <span class="ss-num" id="count-agents">0</span>
+        <span class="ss-label">agents</span>
+        <span class="ss-hint" id="hint-agents"></span>
       </div>
-      <div class="kpi" data-accent="rose">
-        <div class="kpi-icon"><svg class="icon"><use href="#i-alert"/></svg></div>
-        <div class="kpi-body">
-          <span class="kpi-num" id="count-flags">0</span>
-          <span class="kpi-label">Security flags</span>
-          <span class="kpi-hint" id="hint-flags">Unacted last 24h</span>
-        </div>
+      <div class="ss-item ss-crit">
+        <span class="ss-num" id="count-flags">0</span>
+        <span class="ss-label">flags · 24h</span>
       </div>
-      <div class="kpi" data-accent="amber">
-        <div class="kpi-icon"><svg class="icon"><use href="#i-incident"/></svg></div>
-        <div class="kpi-body">
-          <span class="kpi-num" id="count-incidents">0</span>
-          <span class="kpi-label">Incidents</span>
-          <span class="kpi-hint">Unacted last 24h</span>
-        </div>
+      <div class="ss-item ss-warn">
+        <span class="ss-num" id="count-incidents">0</span>
+        <span class="ss-label">incidents · 24h</span>
       </div>
-      <div class="kpi" data-accent="brand">
-        <div class="kpi-icon"><svg class="icon"><use href="#i-globe"/></svg></div>
-        <div class="kpi-body">
-          <span class="kpi-num" id="count-proxy">0</span>
-          <span class="kpi-label">Proxy inspections</span>
-          <span class="kpi-hint">Leaks &amp; prompt injections</span>
-        </div>
+      <div class="ss-item">
+        <span class="ss-num" id="count-proxy">0</span>
+        <span class="ss-label">proxy hits</span>
+      </div>
+      <span class="ss-spacer"></span>
+      <div class="ss-meta">
+        <span class="ss-chip" id="coverage-chip" hidden></span>
+        <span id="uptime-meta">--</span>
       </div>
     </section>
 
@@ -184,8 +172,11 @@
         <svg class="icon"><use href="#i-agent"/></svg><span>Agents</span>
         <span class="tab-badge" id="tab-badge-agents" hidden></span>
       </button>
-      <button class="tab-btn" data-tab="telemetry" role="tab" aria-selected="false" aria-controls="tab-telemetry">
-        <svg class="icon"><use href="#i-activity"/></svg><span>Telemetry</span>
+      <button class="tab-btn" data-tab="resources" role="tab" aria-selected="false" aria-controls="tab-resources">
+        <svg class="icon"><use href="#i-server"/></svg><span>Resources</span>
+      </button>
+      <button class="tab-btn" data-tab="events" role="tab" aria-selected="false" aria-controls="tab-events">
+        <svg class="icon"><use href="#i-activity"/></svg><span>Events</span>
       </button>
       <button class="tab-btn" data-tab="egress" role="tab" aria-selected="false" aria-controls="tab-egress">
         <svg class="icon"><use href="#i-shield"/></svg><span>Egress</span>
@@ -198,27 +189,20 @@
     </nav>
 
     <main>
-      <!-- Overview: the answer to "is anything wrong, and is this normal?" —
-           posture, one-glance counts, the activity trend, and a compact
-           session strip. Deep per-source detail lives in its own tab; the
-           old single wall (resource control + full timeline + chart) is
-           split so no tab is an undifferentiated scroll. -->
+      <!-- Overview: the visual summary — three charts, nothing else. Every
+           list (sessions, agents, flags, events) has its own tab; this page
+           answers "what does the shape of today look like?" at a glance. -->
       <div class="tabpanel" id="tab-overview" role="tabpanel">
-        <section class="overview-head">
-          <h2 class="overview-title">Overview</h2>
-          <p class="overview-sub">Posture, counts, and the activity trend. Drill into <b>Sessions</b>, <b>Telemetry</b>, <b>Egress</b>, or <b>Attention</b> for detail.</p>
-        </section>
-
-        <section class="panel activity-panel">
+        <section class="panel chart-panel">
           <div class="panel-head">
-            <h2><svg class="icon"><use href="#i-activity"/></svg>Activity</h2>
+            <h2><svg class="icon"><use href="#i-activity"/></svg>Activity over time</h2>
             <select id="activity-window" class="select">
               <option value="24">Last 24h</option>
               <option value="168">Last 7 days</option>
             </select>
           </div>
           <div class="panel-body act-body">
-            <svg id="activity-chart" viewBox="0 0 1200 96" preserveAspectRatio="none" role="img" aria-label="Hourly agent activity"></svg>
+            <svg id="activity-chart" viewBox="0 0 1200 120" preserveAspectRatio="none" role="img" aria-label="Hourly agent activity"></svg>
             <div class="act-legend">
               <span class="act-key"><span class="act-swatch act-sw-events"></span>events</span>
               <span class="act-key"><span class="act-swatch act-sw-flags"></span>flags</span>
@@ -226,23 +210,35 @@
           </div>
         </section>
 
-        <section class="panel session-strip-panel" id="session-strip-panel" hidden>
-          <div class="panel-head">
-            <h2><svg class="icon"><use href="#i-agent"/></svg>Sessions</h2>
-            <button type="button" class="btn btn-ghost btn-sm" data-action="goto-tab" data-tab="sessions">View all</button>
-          </div>
-          <div class="panel-body" id="session-strip"></div>
-        </section>
+        <div class="chart-grid">
+          <section class="panel chart-panel">
+            <div class="panel-head">
+              <h2><svg class="icon"><use href="#i-alert"/></svg>Findings by rule</h2>
+              <span class="badge" id="chart-flags-total">0</span>
+            </div>
+            <div class="panel-body">
+              <div id="chart-flags" class="hbars">
+                <div class="empty"><svg class="icon"><use href="#i-alert"/></svg><span>No findings in the window</span></div>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel chart-panel">
+            <div class="panel-head">
+              <h2><svg class="icon"><use href="#i-agent"/></svg>Memory by session</h2>
+              <span class="badge" id="chart-mem-total">0</span>
+            </div>
+            <div class="panel-body">
+              <div id="chart-memory" class="hbars">
+                <div class="empty"><svg class="icon"><use href="#i-agent"/></svg><span>No attributed sessions yet</span></div>
+              </div>
+            </div>
+          </section>
+        </div>
       </div>
 
-      <!-- Telemetry: the per-source detail that used to flood Overview —
-           attributed resource control and the raw event timeline. -->
-      <div class="tabpanel" id="tab-telemetry" role="tabpanel" hidden>
-        <section class="overview-head">
-          <h2 class="overview-title">Telemetry</h2>
-          <p class="overview-sub">Attributed resource use and the raw event feed — the sources behind the Overview summary.</p>
-        </section>
-
+      <!-- Resources: attributed CPU/memory per session. -->
+      <div class="tabpanel" id="tab-resources" role="tabpanel" hidden>
         <section class="panel resource-panel" id="resource-mission-control">
           <div class="panel-head">
             <h2><svg class="icon"><use href="#i-activity"/></svg>Resource Mission Control</h2>
@@ -252,7 +248,10 @@
             <div class="empty"><svg class="icon"><use href="#i-activity"/></svg><span>Waiting for attributed CPU and memory samples…</span></div>
           </div>
         </section>
+      </div>
 
+      <!-- Events: the raw event timeline. -->
+      <div class="tabpanel" id="tab-events" role="tabpanel" hidden>
         <section class="panel panel-grow">
           <div class="panel-head">
             <h2><svg class="icon"><use href="#i-activity"/></svg>Event timeline</h2>

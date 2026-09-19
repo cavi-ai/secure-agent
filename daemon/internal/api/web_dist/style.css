@@ -94,9 +94,11 @@ body {
 /* Theme toggle */
 .theme-toggle { display: flex; align-items: center; gap: 2px; border: 1px solid var(--line); border-radius: 999px; padding: 2px; }
 .theme-toggle button {
-  border: 0; background: transparent; color: var(--tx-3); font: inherit; font-size: 11px;
-  padding: 3px 9px; border-radius: 999px; cursor: pointer;
+  border: 0; background: transparent; color: var(--tx-3); font: inherit; font-size: 10.5px; font-weight: 650;
+  min-width: 22px; padding: 3px 5px; border-radius: 999px; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
 }
+.theme-toggle button .icon { font-size: 0.95rem; }
 .theme-toggle button[aria-pressed="true"] { background: var(--bg-3); color: var(--tx-1); }
 .theme-toggle button:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
 
@@ -979,7 +981,7 @@ button.fw-uninspected .fw-drill-hint {
 
 /* ---------- activity rollup chart ---------- */
 .activity-panel .act-body { padding: 10px 16px 8px; }
-#activity-chart { width: 100%; height: 90px; display: block; }
+#activity-chart { width: 100%; height: 150px; display: block; }
 #activity-chart .act-ev { fill: var(--brand); opacity: 0.75; }
 #activity-chart .act-fl { fill: var(--bad); }
 #activity-chart .act-zero { fill: var(--bg-3); }
@@ -1200,3 +1202,46 @@ button.fw-uninspected .fw-drill-hint {
 .view-tab { font-family: var(--mono); font-size: 0.68rem; color: var(--tx-3); }
 .views-save { display: flex; gap: 6px; margin-top: 8px; }
 .views-save .input-sm { flex: 1 1 auto; font-size: 0.76rem; padding: 4px 7px; }
+
+
+/* ---------- at-a-glance stat strip (replaces the 4-tile KPI block) ---------- */
+.statstrip {
+  display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px 22px;
+  padding: 10px 4px 14px; margin-bottom: 4px;
+  border-bottom: 1px solid var(--line);
+}
+.ss-item { display: flex; align-items: baseline; gap: 6px; }
+.ss-num { font: 700 1.5rem/1 var(--font); font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
+.ss-label { font-size: 0.76rem; color: var(--tx-3); }
+.ss-hint { font-size: 0.72rem; color: var(--tx-3); }
+.ss-item.ss-crit .ss-num { color: var(--bad); }
+.ss-item.ss-warn .ss-num { color: var(--warn); }
+.ss-item.ss-crit .ss-num.is-zero, .ss-item.ss-warn .ss-num.is-zero { color: var(--tx-1); }
+.ss-spacer { flex: 1 1 auto; }
+.ss-meta { display: flex; align-items: baseline; gap: 12px; color: var(--tx-3); font: 500 0.74rem/1 var(--mono); }
+.ss-chip { font: 600 0.72rem/1 var(--mono); padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); }
+.ss-chip.ok { color: var(--ok); border-color: transparent; background: var(--ok-bg); }
+.ss-chip.partial { color: var(--warn); border-color: transparent; background: var(--warn-bg); }
+.ss-chip.blind { color: var(--bad); border-color: transparent; background: var(--bad-bg); }
+
+/* ---------- overview charts ---------- */
+.chart-panel .panel-body { padding: 12px 16px 14px; }
+.chart-panel .act-body { padding: 14px 16px 8px; }
+.chart-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; align-items: start; }
+@media (max-width: 900px) { .chart-grid { grid-template-columns: 1fr; } }
+
+/* Horizontal bar list — the readable "ranked" chart. */
+.hbars { display: flex; flex-direction: column; gap: 9px; }
+.hbar-row { display: grid; grid-template-columns: minmax(120px, 1.4fr) minmax(80px, 3fr) auto auto; align-items: center; gap: 10px; }
+.hbar-label { font-size: 0.8rem; color: var(--tx-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hbar-track { height: 10px; border-radius: 5px; background: var(--bg-2); overflow: hidden; }
+.hbar-fill { display: block; height: 100%; border-radius: 5px; background: var(--brand); opacity: 0.8; }
+.hbar-fill.crit { background: var(--bad); }
+.hbar-fill.warn { background: var(--warn); }
+.hbar-fill.infra { background: var(--tx-3); }
+.hbar-val { font: 600 0.78rem/1 var(--mono); color: var(--tx-1); font-variant-numeric: tabular-nums; }
+.hbar-sub { font-size: 0.68rem; color: var(--bad); white-space: nowrap; }
+@media (max-width: 560px) {
+  .hbar-sub { display: none; }
+  .hbar-row { grid-template-columns: minmax(90px, 1.2fr) minmax(60px, 2fr) auto; }
+}
