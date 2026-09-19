@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"github.com/cavi-ai/secure-agent/daemon/internal/apiroutes"
 	"github.com/cavi-ai/secure-agent/daemon/internal/safefile"
 )
 
@@ -76,59 +77,11 @@ func consoleAuthorized(r *http.Request) bool {
 // consoleAPIPaths is the exact endpoint set the embedded console (and only it)
 // needs. Everything else on this listener stays proxy traffic.
 //
-// PARITY: every path the console fetches (web_dist/app.js apiFetch calls and
-// the EventSource stream) MUST appear here — a missing path falls through to
-// the proxy-token challenge (407) and the panel dies silently. TestConsoleAPIPathsCoverWebApp
-// enforces this mechanically; add the path AND keep the test green.
-var consoleAPIPaths = map[string]bool{
-	"/status":                       true,
-	"/sessions":                     true,
-	"/resources":                    true,
-	"/resources/episodes":           true,
-	"/resources/control":            true,
-	"/resources/policy":             true,
-	"/snapshot":                     true,
-	"/posture":                      true,
-	"/flags":                        true,
-	"/flags/acknowledge":            true,
-	"/events":                       true,
-	"/events/stream":                true,
-	"/incidents":                    true,
-	"/incidents/status":             true,
-	"/audit":                        true,
-	"/fleet":                        true,
-	"/firewall/mode":                true,
-	"/firewall/sources":             true,
-	"/firewall/fingerprints/reload": true,
-	"/firewall/fingerprints/ingest": true,
-	"/kill":                         true,
-	"/guard/pending":                true,
-	"/guard/resolve":                true,
-	"/guard/rules":                  true,
-	"/stats/rollup":                 true,
-	"/mute":                         true,
-	"/allowlist":                    true,
-	"/allowlist/suggestions":        true,
-	"/egress/uninspected":           true,
-	"/notify/rules":                 true,
-	"/advisor/retriage":             true,
-	"/advisor/assess-host":          true,
-	"/ui/open-fda":                  true,
-	// Dynamic route family: /sessions/{id}/timeline (per-session trace).
-	"/sessions/": true,
-}
-
-// isConsoleAPIPath matches the exact allow-list plus the dynamic session
-// trace prefix. Only the exact known shape is admitted — anything else on
-// this listener still hits the proxy-token challenge.
+// PARITY: the set is derived from apiroutes.Table (the single source of truth
+// shared with the mux and the peer-role gate), so a route is added in exactly
+// one place. TestConsoleAPIPathsCoverWebApp still asserts every path the
+// console fetches is admitted — a missing path falls through to the
+// proxy-token challenge (407) and the panel dies silently.
 func isConsoleAPIPath(p string) bool {
-	if consoleAPIPaths[p] {
-		return true
-	}
-	if strings.HasPrefix(p, "/sessions/") {
-		rest := strings.TrimPrefix(p, "/sessions/")
-		parts := strings.SplitN(rest, "/", 2)
-		return len(parts) == 2 && parts[0] != "" && parts[1] == "timeline"
-	}
-	return false
+	return apiroutes.ConsoleAllowed(p)
 }
