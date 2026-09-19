@@ -53,6 +53,12 @@ type TranscriptScanner struct {
 	// codexTracers hold per-file Codex rollout state (call_id pairing,
 	// session id from session_meta).
 	codexTracers map[string]*CodexTracer
+	// cursorTracers hold per-file Cursor transcript state (session id from
+	// the filename; Cursor has no pairing or usage to track).
+	cursorTracers map[string]*CursorTracer
+	// agyTracers hold per-file Antigravity transcript state (session id from
+	// the brain directory; tools + turns only).
+	agyTracers map[string]*AGYTracer
 }
 
 // Handshake is the hook's session announcement line
@@ -226,9 +232,18 @@ func walkDirs(dirs []string) []string {
 	var res []string
 	for _, d := range dirs {
 		_ = filepath.WalkDir(d, func(path string, de os.DirEntry, err error) error {
-			if err == nil && !de.IsDir() && strings.HasSuffix(path, ".jsonl") {
-				res = append(res, path)
+			if err != nil || de.IsDir() || !strings.HasSuffix(path, ".jsonl") {
+				return nil
 			}
+			// agy writes the same steps three ways (transcript.jsonl,
+			// transcript_full.jsonl, and chunk files); trace only the full
+			// one so a step is never emitted — or redaction-scanned — twice.
+			if strings.Contains(filepath.ToSlash(path), "/antigravity-cli/brain/") {
+				if !strings.HasSuffix(path, "/transcript_full.jsonl") {
+					return nil
+				}
+			}
+			res = append(res, path)
 			return nil
 		})
 	}
@@ -400,6 +415,55 @@ func (ts *TranscriptScanner) tailFile(p string, offsets map[string]int64) {
 							ts.bus.Publish(e)
 						}
 						if len(evs) > 0 && ts.OnProduce != nil {
+							ts.OnProduce()
+						}
+						continue
+					}
+				}
+				// Cursor agent transcripts: tool calls + turns (no
+				// timestamps, no result pairing, no token usage).
+				if IsCursorTranscriptPath(p) {
+					tracer := ts.cursorTracers[p]
+					if tracer == nil {
+						tracer = NewCursorTracer(p)
+						if ts.cursorTracers == nil {
+							ts.cursorTracers = map[string]*CursorTracer{}
+						}
+						ts.cursorTracers[p] = tracer
+					}
+					if evs, ok := tracer.ParseLine(line); ok {
+						sid, ws := tracer.Session()
+						if sid != "" && ts.OnSessionSeen != nil {
+							ts.OnSessionSeen(sid, ws, evs[0].TS)
+						}
+						for _, e := range evs {
+							ts.bus.Publish(e)
+						}
+						if ts.OnProduce != nil {
+							ts.OnProduce()
+						}
+						continue
+					}
+				}
+				// Antigravity (agy) transcripts: tool calls + turns.
+				if IsAGYTranscriptPath(p) {
+					tracer := ts.agyTracers[p]
+					if tracer == nil {
+						tracer = NewAGYTracer(p)
+						if ts.agyTracers == nil {
+							ts.agyTracers = map[string]*AGYTracer{}
+						}
+						ts.agyTracers[p] = tracer
+					}
+					if evs, ok := tracer.ParseLine(line); ok {
+						sid, ws := tracer.Session()
+						if sid != "" && ts.OnSessionSeen != nil {
+							ts.OnSessionSeen(sid, ws, evs[0].TS)
+						}
+						for _, e := range evs {
+							ts.bus.Publish(e)
+						}
+						if ts.OnProduce != nil {
 							ts.OnProduce()
 						}
 						continue
