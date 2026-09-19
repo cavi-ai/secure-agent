@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/advisor"
+	"github.com/cavi-ai/secure-agent/daemon/internal/apiroutes"
 	"github.com/cavi-ai/secure-agent/daemon/internal/config"
 	"github.com/cavi-ai/secure-agent/daemon/internal/correlate"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
@@ -478,49 +479,67 @@ func (a *API) SetPeers(checker PeerChecker, agentPIDs func() map[int32]struct{})
 	a.peerRole = &peers{OwnerUID: os.Getuid(), AgentPIDs: agentPIDs}
 }
 
-// buildMux registers every API route on a fresh mux. Serve() wraps it with
-// the peer-credential gate for the unix socket; ConsoleHandler() exposes it
-// ungated for the proxy listener, where authentication is the console token
-// (peer creds don't exist on a TCP connection).
+// routes maps every registered path to its handler. The path set is the
+// apiroutes.Table (the single source of truth shared with the console
+// allow-list and the peer-role gate); this map supplies the handler. A test
+// (TestRouteTableMatchesHandlers) asserts the two agree, so a route can no
+// longer be added to one list and forgotten in another.
+func (a *API) routes() map[string]http.HandlerFunc {
+	return map[string]http.HandlerFunc{
+		"/status":                       a.handleStatus,
+		"/sessions":                     a.handleSessions,
+		"/sessions/":                    a.handleSessionTimeline,
+		"/resources":                    a.handleResources,
+		"/resources/episodes":           a.handleResourceEpisodes,
+		"/resources/control":            a.handleResourceControl,
+		"/resources/policy":             a.handleResourcePolicy,
+		"/snapshot":                     a.handleSnapshot,
+		"/posture":                      a.handlePosture,
+		"/flags":                        a.handleFlags,
+		"/events":                       a.handleEvents,
+		"/events/stream":                a.handleEventStream,
+		"/incidents":                    a.handleIncidents,
+		"/incidents/status":             a.handleIncidentStatus,
+		"/audit":                        a.handleAudit,
+		"/allowlist/suggestions":        a.handleAllowlistSuggestions,
+		"/allowlist":                    a.handleAllowlistAdd,
+		"/egress/uninspected":           a.handleUninspectedEgress,
+		"/notify/rules":                 a.handleNotifyRules,
+		"/guard/path-allow":             a.handleGuardPathAllow,
+		"/mute":                         a.handleMute,
+		"/advisor/retriage":             a.handleAdvisorRetriage,
+		"/advisor/assess-host":          a.handleAdvisorAssessHost,
+		"/flags/acknowledge":            a.handleFlagAcknowledge,
+		"/ui/open-fda":                  a.handleOpenFDA,
+		"/stats/rollup":                 a.handleRollup,
+		"/advisor/discover":             a.handleAdvisorDiscover,
+		"/fleet":                        a.handleFleet,
+		"/kill":                         a.handleKill,
+		"/firewall/mode":                a.handleFirewallMode,
+		"/firewall/fingerprints/reload": a.handleFingerprintReload,
+		"/firewall/fingerprints/ingest": a.handleFingerprintIngest,
+		"/firewall/sources":             a.handleFirewallSources,
+		"/guard/decision":               a.handleGuardDecision,
+		"/guard/pending":                a.handleGuardPending,
+		"/guard/resolve":                a.handleGuardResolve,
+		"/guard/rules":                  a.handleGuardRules,
+	}
+}
+
+// buildMux registers every API route on a fresh mux, driven by apiroutes.Table
+// so the mux, the peer-role gate and the console allow-list cannot drift.
+// Serve() wraps it with the peer-credential gate for the unix socket;
+// ConsoleHandler() exposes it ungated for the proxy listener, where
+// authentication is the console token (peer creds don't exist on a TCP
+// connection).
 func (a *API) buildMux() *http.ServeMux {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/status", a.handleStatus)
-	mux.HandleFunc("/sessions", a.handleSessions)
-	mux.HandleFunc("/sessions/", a.handleSessionTimeline)
-	mux.HandleFunc("/resources", a.handleResources)
-	mux.HandleFunc("/resources/episodes", a.handleResourceEpisodes)
-	mux.HandleFunc("/resources/control", a.handleResourceControl)
-	mux.HandleFunc("/resources/policy", a.handleResourcePolicy)
-	mux.HandleFunc("/snapshot", a.handleSnapshot)
-	mux.HandleFunc("/posture", a.handlePosture)
-	mux.HandleFunc("/flags", a.handleFlags)
-	mux.HandleFunc("/events", a.handleEvents)
-	mux.HandleFunc("/events/stream", a.handleEventStream)
-	mux.HandleFunc("/incidents", a.handleIncidents)
-	mux.HandleFunc("/incidents/status", a.handleIncidentStatus)
-	mux.HandleFunc("/audit", a.handleAudit)
-	mux.HandleFunc("/allowlist/suggestions", a.handleAllowlistSuggestions)
-	mux.HandleFunc("/allowlist", a.handleAllowlistAdd)
-	mux.HandleFunc("/egress/uninspected", a.handleUninspectedEgress)
-	mux.HandleFunc("/notify/rules", a.handleNotifyRules)
-	mux.HandleFunc("/guard/path-allow", a.handleGuardPathAllow)
-	mux.HandleFunc("/mute", a.handleMute)
-	mux.HandleFunc("/advisor/retriage", a.handleAdvisorRetriage)
-	mux.HandleFunc("/advisor/assess-host", a.handleAdvisorAssessHost)
-	mux.HandleFunc("/flags/acknowledge", a.handleFlagAcknowledge)
-	mux.HandleFunc("/ui/open-fda", a.handleOpenFDA)
-	mux.HandleFunc("/stats/rollup", a.handleRollup)
-	mux.HandleFunc("/advisor/discover", a.handleAdvisorDiscover)
-	mux.HandleFunc("/fleet", a.handleFleet)
-	mux.HandleFunc("/kill", a.handleKill)
-	mux.HandleFunc("/firewall/mode", a.handleFirewallMode)
-	mux.HandleFunc("/firewall/fingerprints/reload", a.handleFingerprintReload)
-	mux.HandleFunc("/firewall/fingerprints/ingest", a.handleFingerprintIngest)
-	mux.HandleFunc("/firewall/sources", a.handleFirewallSources)
-	mux.HandleFunc("/guard/decision", a.handleGuardDecision)
-	mux.HandleFunc("/guard/pending", a.handleGuardPending)
-	mux.HandleFunc("/guard/resolve", a.handleGuardResolve)
-	mux.HandleFunc("/guard/rules", a.handleGuardRules)
+	handlers := a.routes()
+	for _, r := range apiroutes.Table {
+		if h, ok := handlers[r.Path]; ok {
+			mux.HandleFunc(r.Path, h)
+		}
+	}
 	a.setupWebDashboard(mux)
 	return mux
 }
