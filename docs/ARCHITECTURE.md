@@ -75,9 +75,23 @@ By default the daemon (`secure-agentd`) runs as a child process of the menu bar 
    - Monitors the system process table to identify known AI agent executables (`claude`, `cursor`, `codex`, `copilot`) and child interpreter subprocesses (`node`, `python`, `bash`).
    - Tags events with agent identity, working directory (`cwd`), session ID, and parent PID chain.
 
-4. **Transcript Scanner (`daemon/internal/collect/transcript.go`)**:
+4. **Transcript & Trace Scanner (`daemon/internal/collect/transcript.go`, `*_trace.go`)**:
    - Tails harness session logs and `activity.jsonl` files emitted by the plugin hooks.
    - Runs Layer-5 credential redaction patterns to strip secrets (JWTs, API tokens, private keys) before event persistence.
+   - **Trace parsing** turns harness transcripts into agent-semantic events (tool calls, model calls, turns) — see the coverage table below. No transcript content ever crosses into an event: only tool names, durations, model ids and token counts.
+   - **opencode** keeps no JSONL; its trace lives in a SQLite database and is read by a separate **read-only, watermarked poller** (`opencode_trace.go`) — never writes, never locks the app out, bounded rows per poll.
+
+   **Trace coverage** (what the daemon can actually see, by harness):
+
+   | Harness | Source | Trace events |
+   |---|---|---|
+   | Claude Code | `~/.claude/projects/**/*.jsonl` | tool calls (with durations), model calls (tokens + cost), turns |
+   | Codex | `~/.codex/sessions/**/rollout-*.jsonl` | tool calls (with durations), model calls (tokens; model/cost unknown) |
+   | Cursor | `~/.cursor/projects/*/agent-transcripts/*/*.jsonl` | tool calls, turns (no timestamps/results/usage in the format) |
+   | Antigravity (agy) | `~/.gemini/antigravity-cli/brain/*/.system_generated/logs/transcript_full.jsonl` | tool calls (status, no duration), turns |
+   | opencode | `~/.local/share/opencode/opencode.db` (SQLite) | tool calls (with durations), model calls (tokens + cost) |
+
+   Uncovered-by-trace harnesses (any other agent CLI) still get process, network and resource visibility, and every tailed log is redaction-scanned for secrets.
 
 ### Event Bus & Storage
 
