@@ -246,6 +246,19 @@ func (r *Resolver) touchLocked(id string, ts time.Time) {
 	r.st.TouchSession(id, ts)
 }
 
+// WorkspaceFor returns the workspace recorded for a session id ("" if none) —
+// so flags/incidents can carry the workspace that per-workspace notification
+// scopes key on without a second resolution pass.
+func (r *Resolver) WorkspaceFor(sessionID string) string {
+	if sessionID == "" {
+		return ""
+	}
+	if sess, ok := r.st.GetSession(sessionID); ok {
+		return sess.Workspace
+	}
+	return ""
+}
+
 // Sweep advances the lifecycle: active → idle after silence, idle → ended
 // when the root process is gone (or after a day of silence for pid-less
 // hook sessions). Call on the tagger refresh cadence.

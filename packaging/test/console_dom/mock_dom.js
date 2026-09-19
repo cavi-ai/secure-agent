@@ -250,7 +250,8 @@
     ],
     '/notify/rules': {
       default_min_severity: 3,
-      overrides: { 'keychain-access': false }
+      overrides: { 'keychain-access': false },
+      scopes: [{ workspace: '/Users/dev/work/prod', rule: 'proxy-secret-leak', notify: true }]
     },
     '/guard/pending': [{
       id: 'guard-1', agent: 'claude', tool: 'Read', path: '/workspace/api-service/.env',
@@ -322,6 +323,22 @@
       const row = data['/egress/uninspected'].find(e => e.host === body.host);
       if (row && out.verdict) { row.assessment = out.verdict.assessment; row.rationale = out.verdict.rationale; }
       return out;
+    }
+    if (p === '/notify/rules') {
+      // Workspace scope set/clear against the fixture so the popover re-renders.
+      if (body.workspace) {
+        data['/notify/rules'].scopes = data['/notify/rules'].scopes || [];
+        data['/notify/rules'].scopes = data['/notify/rules'].scopes.filter(
+          s => !(s.workspace === body.workspace && s.rule === body.rule));
+        if (body.notify !== null && body.notify !== undefined) {
+          data['/notify/rules'].scopes.push({ workspace: body.workspace, rule: body.rule, notify: !!body.notify });
+        }
+      } else if (body.notify === null || body.notify === undefined) {
+        delete data['/notify/rules'].overrides[body.rule];
+      } else {
+        data['/notify/rules'].overrides[body.rule] = !!body.notify;
+      }
+      return { status: 'ok' };
     }
     if (p === '/advisor/retriage') {
       // The model "answers" shortly after the request: the flag's verdict
@@ -516,6 +533,22 @@
   // Auto-action: switch to the Egress tab — panels must hide/show correctly.
   if (location.search.includes('tabdemo')) {
     setTimeout(() => document.querySelector('[data-tab="egress"]').click(), 4000);
+  }
+  // Auto-action: save a view, type a search, then apply the view — exercises
+  // the saved-view + search paths through the real UI.
+  if (location.search.includes('viewdemo')) {
+    setTimeout(() => {
+      document.getElementById('btn-views').click();
+      document.getElementById('view-name').value = 'Prod leaks';
+      document.querySelector('[data-action="save-view"]').click();
+      setTimeout(() => {
+        const s = document.getElementById('global-search');
+        s.value = 'npm';
+        s.dispatchEvent(new Event('input', { bubbles: true }));
+        // Reopen the popover so the saved view is visible in the dump.
+        document.getElementById('views-pop').hidden = false;
+      }, 300);
+    }, 4000);
   }
   // Auto-action: select a session, open the resource policy editor, and add
   // its workspace as an override through the real delegated click path.

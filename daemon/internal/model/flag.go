@@ -11,7 +11,11 @@ type Flag struct {
 	Agent    string    `json:"agent"`
 	// SessionID groups the flag with its harness session, so fleet consumers
 	// can follow one agent run end-to-end even after PIDs are recycled.
-	SessionID string   `json:"session_id,omitempty"`
+	SessionID string `json:"session_id,omitempty"`
+	// Workspace is the session's working directory, stamped at ingest. It is
+	// the key for per-workspace notification scopes — "page me for leaks in
+	// the prod repo, stay quiet in my scratch clones".
+	Workspace string   `json:"workspace,omitempty"`
 	Evidence  []string `json:"evidence"`
 	// Advisor carries the local advisor's triage verdict when one exists.
 	// Advisory only — never an enforcement input.

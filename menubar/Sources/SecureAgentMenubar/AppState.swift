@@ -21,6 +21,9 @@ public final class AppState: ObservableObject {
     /// Per-rule notification overrides from the daemon (true = always page,
     /// false = never). Layered over notifyDefaultMinSeverity in shouldNotify.
     @Published public private(set) var notifyOverrides: [String: Bool] = [:]
+    /// Per-workspace+rule scopes from the daemon — the more specific tier,
+    /// matched by path prefix (longest wins). Empty on older daemons.
+    @Published public private(set) var notifyScopes: [NotifyScopeModel] = []
     /// The daemon's default notification bar (ships as severity 3 — warnings
     /// queue silently in the popover/console, only criticals page).
     @Published public private(set) var notifyDefaultMinSeverity: Int = 3
@@ -263,6 +266,7 @@ public final class AppState: ObservableObject {
             self.incidents = incidents
             self.guardRules = guardRules
             self.notifyOverrides = notifyCfg.overrides
+            self.notifyScopes = notifyCfg.scopes ?? []
             self.notifyDefaultMinSeverity = notifyCfg.defaultMinSeverity
             self.reconcilePendingRetriage(flags: flags)
             self.connected = true
@@ -326,13 +330,30 @@ public final class AppState: ObservableObject {
         }
     }
 
-    /// The notification decision for one flag: the operator's per-rule
-    /// override wins (explicit "always page" / "never page"); otherwise the
-    /// daemon's default severity bar decides. Severity-1 informational flags
-    /// (routine keychain-db opens) are silent unless the operator opts in.
+    /// The notification decision for one flag. Strongest tier first:
+    /// per-workspace+rule scope, then per-rule override, then the daemon's
+    /// default severity bar. Severity-1 informational flags (routine
+    /// keychain-db opens) are silent unless the operator opts in.
     public func shouldNotify(for flag: FlagModel) -> Bool {
+        if let scoped = workspaceScopeNotify(for: flag) { return scoped }
         if let override = notifyOverrides[flag.rule] { return override }
         return flag.severity >= notifyDefaultMinSeverity
+    }
+
+    /// Longest-matching workspace scope for this flag's rule, if any. Prefix
+    /// match: a scope on /repo covers /repo and anything beneath it.
+    private func workspaceScopeNotify(for flag: FlagModel) -> Bool? {
+        guard let ws = flag.workspace, !ws.isEmpty else { return nil }
+        let clean = ws.hasSuffix("/") ? String(ws.dropLast()) : ws
+        var best: (len: Int, notify: Bool)?
+        for s in notifyScopes where s.rule == flag.rule {
+            let scope = s.workspace.hasSuffix("/") ? String(s.workspace.dropLast()) : s.workspace
+            guard clean == scope || clean.hasPrefix(scope + "/") else { continue }
+            if best == nil || scope.count > best!.len {
+                best = (scope.count, s.notify)
+            }
+        }
+        return best?.notify
     }
 
     /// Set or clear one rule's notification override (nil = back to default).

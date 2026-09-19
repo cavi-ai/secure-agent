@@ -401,6 +401,8 @@ function renderEvents() {
   let events = allEvents;
   if (SA.timelineSession) events = filterEventsBySession(allEvents, SA.timelineSession);
   else if (SA.timelinePids && SA.timelinePids.length) events = filterEventsByPids(allEvents, SA.timelinePids);
+  const term = SA.globalSearchTerm ? SA.globalSearchTerm() : '';
+  if (term) events = events.filter(e => matchesSearch(term, e.path, e.remote_host, e.detail, e.exe_path, e.session_id));
 
   const chip = document.getElementById('session-filter');
   if (chip) SA.paintSessionChip('session-filter', 'session-filter-id', events.length);

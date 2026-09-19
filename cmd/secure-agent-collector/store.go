@@ -60,8 +60,11 @@ type NodeState struct {
 	// Gaps counts deliveries the node stamped but that never arrived —
 	// backlog-cap drops, collector downtime, restarts mid-flight. Delivery is
 	// best-effort by design; gaps make the loss honest instead of silent.
-	Gaps   int    `json:"gaps"`
-	BootID string `json:"boot_id,omitempty"`
+	Gaps int `json:"gaps"`
+	// Budget is the node's resource-budget posture from its latest heartbeat
+	// (nil on legacy nodes). Lets the cross-node view rank by budget pressure.
+	Budget *BudgetState `json:"budget,omitempty"`
+	BootID string       `json:"boot_id,omitempty"`
 }
 
 // gapGrace is how long a missing sequence number is tolerated before it
@@ -110,6 +113,19 @@ type statusPayload struct {
 	PostureSummary string            `json:"posture_summary"`
 	NeedsYou       int               `json:"needs_you"`
 	Labels         map[string]string `json:"labels"`
+	Budget         *BudgetState      `json:"budget,omitempty"`
+}
+
+// BudgetState is the per-node resource-budget posture from the heartbeat
+// (mirrors model.BudgetStatus). Counts only, so a fleet view can rank nodes
+// by budget pressure without fetching each node's resource detail.
+type BudgetState struct {
+	Mode       string `json:"mode"`
+	Enforced   bool   `json:"enforced"`
+	OverBudget int    `json:"over_budget"`
+	Approval   int    `json:"approval"`
+	Contained  int    `json:"contained"`
+	Paused     int    `json:"paused"`
 }
 
 // sessionPayload mirrors model.Session on the node side. The collector keeps
@@ -255,6 +271,7 @@ func (s *Store) apply(env Envelope, receivedAt string) {
 			st.PostureState = p.PostureState
 			st.PostureSummary = p.PostureSummary
 			st.NeedsYou = p.NeedsYou
+			st.Budget = p.Budget
 		}
 	case "session":
 		var p sessionPayload
