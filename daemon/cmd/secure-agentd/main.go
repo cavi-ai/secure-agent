@@ -498,6 +498,16 @@ func main() {
 		return ts.Run(c)
 	})
 
+	// opencode keeps no JSONL transcripts — its trace lives in a SQLite DB, so
+	// it is polled separately (read-only, watermarked). Absent DB → the
+	// collector simply produces nothing and the coverage signal says so.
+	oc := collect.NewOpencodeCollector(b, "", 0)
+	oc.OnProduce = func() { supReg.MarkProduced("opencode") }
+	oc.OnSessionSeen = resolver.NoteTranscriptSession
+	go sup.Run(ctx, "opencode", func(c context.Context) error {
+		return oc.Run(c)
+	})
+
 	if advisorStk.Load().Sub != nil {
 		go sup.Run(ctx, "advisor", func(c context.Context) error {
 			return advisorStk.Load().Sub.Run(c)
