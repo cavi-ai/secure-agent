@@ -120,7 +120,7 @@ func (t *CodexTracer) ParseLine(line string) (events []event.Event, ok bool) {
 			t.pending[item.CallID] = pendingTool{name: item.Name, ts: ts}
 			return []event.Event{{
 				Kind: event.KindToolCall, TS: ts, SessionID: t.sessionID,
-				ToolName: item.Name, ToolStatus: "running",
+				CallID: item.CallID, ToolName: item.Name, ToolStatus: "running",
 			}}, true
 		case "function_call_output":
 			p, found := t.pending[item.CallID]
@@ -130,7 +130,7 @@ func (t *CodexTracer) ParseLine(line string) (events []event.Event, ok bool) {
 			delete(t.pending, item.CallID)
 			return []event.Event{{
 				Kind: event.KindToolCall, TS: p.ts, SessionID: t.sessionID,
-				ToolName: p.name, ToolStatus: "ok",
+				CallID: item.CallID, ToolName: p.name, ToolStatus: "ok",
 				DurationMs: ts.Sub(p.ts).Milliseconds(),
 			}}, true
 		}

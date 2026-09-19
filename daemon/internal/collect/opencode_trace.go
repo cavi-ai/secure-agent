@@ -63,7 +63,7 @@ type OpencodeCollector struct {
 	// heartbeat (a running poller that sees nothing is "silent").
 	OnProduce func()
 	// OnSessionSeen reports an opencode session (id, workspace, time).
-	OnSessionSeen func(sessionID, workspace string, at time.Time)
+	OnSessionSeen func(sessionID, harness, workspace string, at time.Time)
 
 	// watermark: the highest part/session time_updated (unix millis) already
 	// read. Persisted only in memory — a daemon restart re-reads the recent
@@ -172,7 +172,7 @@ func (c *OpencodeCollector) pollOnce() int {
 			c.bus.Publish(e)
 			published++
 			if c.OnSessionSeen != nil && workspace != "" {
-				c.OnSessionSeen(sessionID, workspace, e.TS)
+				c.OnSessionSeen(sessionID, "opencode", workspace, e.TS)
 			}
 		}
 	}
@@ -194,8 +194,9 @@ func OpencodePartEvents(sessionID, data string, updatedMillis int64) []event.Eve
 	var p struct {
 		Type string `json:"type"`
 		// tool parts:
-		Tool  string `json:"tool"`
-		State *struct {
+		Tool   string `json:"tool"`
+		CallID string `json:"callID"`
+		State  *struct {
 			Status string `json:"status"` // pending | running | completed | error
 			Time   struct {
 				Start int64 `json:"start"`
@@ -240,7 +241,7 @@ func OpencodePartEvents(sessionID, data string, updatedMillis int64) []event.Eve
 		}
 		return []event.Event{{
 			Kind: event.KindToolCall, TS: ts, SessionID: sessionID,
-			ToolName: p.Tool, ToolStatus: status, DurationMs: durMs,
+			CallID: p.CallID, ToolName: p.Tool, ToolStatus: status, DurationMs: durMs,
 		}}
 	case "step-finish":
 		if p.Tokens == nil {

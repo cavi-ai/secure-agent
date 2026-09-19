@@ -23,10 +23,29 @@ type claudeRecord struct {
 	CWD       string `json:"cwd"`
 	Timestamp string `json:"timestamp"`
 	Message   struct {
-		Model   string            `json:"model"`
-		Usage   *claudeUsage      `json:"usage"`
-		Content []json.RawMessage `json:"content"`
+		Model   string          `json:"model"`
+		Usage   *claudeUsage    `json:"usage"`
+		Content json.RawMessage `json:"content"`
 	} `json:"message"`
+}
+
+// claudeContents decodes a message's content, which Claude writes either as an
+// array of blocks (normal) or as a bare JSON string (older/simple user
+// records). Returning the string as a text block keeps turn detection honest
+// without a second parse path.
+func claudeContents(raw json.RawMessage) []claudeContent {
+	if len(raw) == 0 {
+		return nil
+	}
+	var blocks []claudeContent
+	if json.Unmarshal(raw, &blocks) == nil {
+		return blocks
+	}
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		return []claudeContent{{Type: "text", Text: s}}
+	}
+	return nil
 }
 
 type claudeUsage struct {
@@ -61,27 +80,52 @@ func NewClaudeTracer() *ClaudeTracer {
 	return &ClaudeTracer{pending: map[string]pendingTool{}}
 }
 
-// Pricing per 1M tokens (USD), Anthropic list prices. Cost is approximate by
-// design: cache-read discounts and tier pricing are not modeled; unknown
-// models cost 0 rather than a fabricated number. Operators can refine via
-// config later — the tokens are the durable fact, cost is derived.
-var modelPricePerMillion = map[string][2]float64{ // [input, output]
-	"claude-opus-4-1":   {15, 75},
+// modelPricePerMillion holds Anthropic list prices (USD per 1M tokens) as
+// [input, output]. Keys are matched by PREFIX so a dated id
+// ("claude-sonnet-4-5-20250929") resolves to its family price without a
+// per-date table. Cost is approximate by design: cache-read discounts and
+// tier pricing are not modeled; an unknown model costs 0 rather than a
+// fabricated number.
+var modelPricePerMillion = map[string][2]float64{
+	"claude-fable":      {3, 15},
+	"claude-opus-5":     {5, 25},
 	"claude-opus-4":     {15, 75},
-	"claude-sonnet-4-5": {3, 15},
+	"claude-sonnet-5":   {3, 15},
 	"claude-sonnet-4":   {3, 15},
 	"claude-haiku-4-5":  {1, 5},
+	"claude-haiku-4":    {1, 5},
 	"claude-haiku-3-5":  {0.80, 4},
+	"claude-3-5-sonnet": {3, 15},
+	"claude-3-opus":     {15, 75},
+	"claude-3-haiku":    {0.25, 1.25},
 }
 
 // ModelCostUSD approximates one call's cost. Cache-read tokens are billed as
 // input here (the approximation is documented); unknown models return 0.
 func ModelCostUSD(model string, in, out int64) float64 {
-	price, ok := modelPricePerMillion[model]
+	price, ok := lookupPrice(model)
 	if !ok {
 		return 0
 	}
 	return (float64(in)*price[0] + float64(out)*price[1]) / 1e6
+}
+
+// lookupPrice resolves a model id to its price by exact match first, then the
+// longest matching family prefix (so dated ids and minor suffixes work).
+func lookupPrice(model string) ([2]float64, bool) {
+	if p, ok := modelPricePerMillion[model]; ok {
+		return p, true
+	}
+	best := ""
+	for prefix := range modelPricePerMillion {
+		if strings.HasPrefix(model, prefix) && len(prefix) > len(best) {
+			best = prefix
+		}
+	}
+	if best == "" {
+		return [2]float64{}, false
+	}
+	return modelPricePerMillion[best], true
 }
 
 // IsClaudeTranscriptPath reports whether a tailed file is a Claude Code
@@ -112,13 +156,7 @@ func (t *ClaudeTracer) ParseLine(line string) (events []event.Event, cwd string,
 		}
 	}
 
-	var contents []claudeContent
-	for _, raw := range rec.Message.Content {
-		var c claudeContent
-		if err := json.Unmarshal(raw, &c); err == nil {
-			contents = append(contents, c)
-		}
-	}
+	contents := claudeContents(rec.Message.Content)
 
 	switch rec.Type {
 	case "assistant":
@@ -138,9 +176,13 @@ func (t *ClaudeTracer) ParseLine(line string) (events []event.Event, cwd string,
 		for _, c := range contents {
 			if c.Type == "tool_use" && c.ID != "" && c.Name != "" {
 				t.pending[c.ID] = pendingTool{name: c.Name, ts: ts}
+				// One row per call, keyed by the harness's tool_use id: the
+				// completion below updates THIS row (store upserts on
+				// session_id+call_id), so a call is never a stale "running"
+				// row plus a duplicate completion row.
 				events = append(events, event.Event{
 					Kind: event.KindToolCall, TS: ts, SessionID: rec.SessionID,
-					ToolName: c.Name, ToolStatus: "running",
+					CallID: c.ID, ToolName: c.Name, ToolStatus: "running",
 				})
 			}
 		}
@@ -160,14 +202,18 @@ func (t *ClaudeTracer) ParseLine(line string) (events []event.Event, cwd string,
 			}
 			events = append(events, event.Event{
 				Kind: event.KindToolCall, TS: p.ts, SessionID: rec.SessionID,
-				ToolName: p.name, ToolStatus: status,
+				CallID: c.ToolUseID, ToolName: p.name, ToolStatus: status,
 				DurationMs: ts.Sub(p.ts).Milliseconds(),
 			})
 		}
-		// A user record with real text (not tool_result plumbing) is a turn
-		// boundary — one user→assistant cycle of the session.
+		// A user record carrying real prompt text is a turn boundary. Tool
+		// results and system wrappers are not; claudeContents already
+		// normalized a bare-string content into a text block.
 		for _, c := range contents {
-			if c.Type == "text" && strings.TrimSpace(c.Text) != "" {
+			if c.Type == "tool_result" {
+				continue
+			}
+			if c.Type == "text" && isPromptText(c.Text) {
 				events = append(events, event.Event{
 					Kind: event.KindTurn, TS: ts, SessionID: rec.SessionID,
 				})
@@ -176,4 +222,20 @@ func (t *ClaudeTracer) ParseLine(line string) (events []event.Event, cwd string,
 		}
 	}
 	return events, rec.CWD, len(events) > 0
+}
+
+// isPromptText filters out the harness's own wrapper content so only genuine
+// operator prompts count as turns.
+func isPromptText(s string) bool {
+	t := strings.TrimSpace(s)
+	if t == "" {
+		return false
+	}
+	// System-injected wrappers, not user prompts.
+	for _, pre := range []string{"<task-notification>", "<system-reminder>", "<command-name>", "<local-command"} {
+		if strings.HasPrefix(t, pre) {
+			return false
+		}
+	}
+	return true
 }

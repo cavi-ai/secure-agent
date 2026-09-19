@@ -633,20 +633,22 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     if (slow) {
-      const [fleet, audit, sources, rollup, uninspected, notifyCfg, allowlist] = await Promise.all([
+      const [fleet, audit, sources, rollup, uninspected, notifyCfg, allowlist, episodes] = await Promise.all([
         grab('fleet', '/fleet'),
         grab('audit', '/audit?limit=50'),
         grab('firewall sources', '/firewall/sources'),
         grab('activity rollup', '/stats/rollup?hours=168'),
         grab('uninspected egress', '/egress/uninspected?hours=24&limit=200'),
         grab('notification rules', '/notify/rules'),
-        grab('allowlist', '/allowlist')
+        grab('allowlist', '/allowlist'),
+        grab('resource episodes', '/resources/episodes')
       ]);
       if (fleet) telemetryData.fleet = fleet || [];
       if (audit) telemetryData.audit = audit || [];
       if (sources) telemetryData.sources = sources || [];
       if (rollup) telemetryData.rollup = rollup || [];
       if (uninspected) telemetryData.uninspected = uninspected || [];
+      if (episodes) telemetryData.episodes = episodes || [];
       if (notifyCfg) telemetryData.notifyCfg = notifyCfg;
       if (allowlist) telemetryData.allowlist = allowlist || [];
     }

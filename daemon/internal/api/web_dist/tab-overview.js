@@ -268,10 +268,11 @@ function renderResourceHistory() {
   const board = document.getElementById('history-board');
   const observed = document.getElementById('history-observed');
   if (!board) return;
-  const snapshot = SA.t.resources;
-  if (!snapshot) return;
+  // Episodes moved off /resources onto /resources/episodes (the hot payload
+  // dropped ~0.5 MB of historical detail no live view rendered).
+  const snapshot = { episodes: SA.t.episodes || [] };
   if (observed) {
-    const episodes = (snapshot.episodes || []).length;
+    const episodes = snapshot.episodes.length;
     observed.textContent = episodes ? `${episodes} episode${episodes === 1 ? '' : 's'}` : 'None yet';
   }
   board.innerHTML = resourceFlightRecorderHTML(snapshot);

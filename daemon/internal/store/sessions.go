@@ -41,16 +41,24 @@ func (s *Store) upsertSessionLocked(sess model.Session) {
 		return
 	}
 	var cur struct {
-		workspace, repo, branch, status, confidence string
+		harness, workspace, repo, branch, status, confidence string
 	}
-	err := s.db.QueryRow(`SELECT workspace, repo, branch, status, confidence FROM sessions WHERE id = ?`, sess.ID).
-		Scan(&cur.workspace, &cur.repo, &cur.branch, &cur.status, &cur.confidence)
+	err := s.db.QueryRow(`SELECT harness, workspace, repo, branch, status, confidence FROM sessions WHERE id = ?`, sess.ID).
+		Scan(&cur.harness, &cur.workspace, &cur.repo, &cur.branch, &cur.status, &cur.confidence)
 	exists := err == nil
 	if err != nil && err != sql.ErrNoRows {
 		return
 	}
 
 	if exists {
+		// Fill-only merge: an upsert that carries less identity than the row
+		// must never erase it. Trace events (Tier 1) resolve WITHOUT a pid, so
+		// they arrive harness-less; clobbering here is what stripped the
+		// harness off every transcript-joined session and left the join
+		// looking broken.
+		if sess.Harness == "" {
+			sess.Harness = cur.harness
+		}
 		if sess.Workspace == "" {
 			sess.Workspace = cur.workspace
 		}
