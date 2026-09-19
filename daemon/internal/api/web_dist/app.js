@@ -552,7 +552,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // carries the tab for deep links (#ct is lifted and stripped BEFORE this
   // runs, so the two never collide). "Telemetry" holds the per-source detail
   // (resource control + raw event timeline) split out of Overview.
-  const TABS = ['overview', 'sessions', 'agents', 'resources', 'events', 'egress', 'findings'];
+  const TABS = ['overview', 'sessions', 'agents', 'resources', 'history', 'events', 'egress', 'findings'];
   let activeTab = 'overview';
 
   function switchTab(id, opts = {}) {
@@ -677,7 +677,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // renderFleet and silently killed every panel after it — flags, events,
     // activity — on every single poll.
     const panels = [
-      ['posture', renderPosture], ['status', renderStatus], ['resources', renderResourceMissionControl], ['sessions', renderSessionBoard],
+      ['posture', renderPosture], ['status', renderStatus], ['resources', renderResourceMissionControl], ['history', renderResourceHistory], ['sessions', renderSessionBoard],
       ['chart-flags', renderChartFlags], ['chart-memory', renderChartMemory],
       ['agents', renderAgents],
       ['firewall', renderFirewall], ['incidents', renderIncidents], ['fleet', renderFleet],
