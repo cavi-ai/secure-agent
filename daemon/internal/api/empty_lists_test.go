@@ -17,8 +17,9 @@ import (
 func TestListEndpointsEmitEmptyArrayNeverNull(t *testing.T) {
 	st := testStore(t)
 	t.Cleanup(func() { st.Close() })
-	a := New("", st, &fakeKiller{}, func() Status { return Status{Running: true} })
-	a.SetMute(nil, correlate.NewMuteStore(filepath.Join(t.TempDir(), "muted.json")))
+	a := newTestAPI("", st, &fakeKiller{}, func() Status { return Status{Running: true} })
+	a.correlator = nil
+	a.mutes = correlate.NewMuteStore(filepath.Join(t.TempDir(), "muted.json"))
 	mux := a.buildMux()
 
 	paths := []string{

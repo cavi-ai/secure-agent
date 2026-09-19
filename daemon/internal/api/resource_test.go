@@ -17,7 +17,7 @@ import (
 )
 
 func TestResourcesEndpoint(t *testing.T) {
-	a := New("", testStore(t), nil, func() Status { return Status{Running: true} })
+	a := newTestAPI("", testStore(t), nil, func() Status { return Status{Running: true} })
 
 	unwired := httptest.NewRecorder()
 	a.buildMux().ServeHTTP(unwired, httptest.NewRequest(http.MethodGet, "/resources", nil))
@@ -38,7 +38,7 @@ func TestResourcesEndpoint(t *testing.T) {
 			Diagnoses: []resource.Diagnosis{{Code: "heavy-cpu", Severity: "critical", Summary: "busy", Evidence: []string{"CPU 75"}, Threshold: "test", Confidence: "high"}},
 		}},
 	}
-	a.SetResources(func() resource.Snapshot { return want })
+	a.resources = func() resource.Snapshot { return want }
 
 	method := httptest.NewRecorder()
 	a.buildMux().ServeHTTP(method, httptest.NewRequest(http.MethodPost, "/resources", nil))
@@ -70,8 +70,8 @@ func TestResourcesEndpointIncludesPressureEpisodes(t *testing.T) {
 		Session: resource.Session{Key: "10:100", RootPID: 10, RSSBytes: 5 << 30}}); err != nil {
 		t.Fatal(err)
 	}
-	a := New("", st, nil, func() Status { return Status{Running: true} })
-	a.SetResources(func() resource.Snapshot { return resource.Snapshot{ObservedAt: now} })
+	a := newTestAPI("", st, nil, func() Status { return Status{Running: true} })
+	a.resources = func() resource.Snapshot { return resource.Snapshot{ObservedAt: now} }
 
 	// Episodes moved off the hot /resources payload onto their own endpoint.
 	response := httptest.NewRecorder()
@@ -100,15 +100,15 @@ func TestResourcesEndpointIncludesPressureEpisodes(t *testing.T) {
 
 func TestResourcePolicyEndpointPersistsBeforeApply(t *testing.T) {
 	st := testStore(t)
-	a := New("", st, nil, func() Status { return Status{Running: true} })
+	a := newTestAPI("", st, nil, func() Status { return Status{Running: true} })
 	control := resource.NewController(resource.Policy{Mode: resource.ModeObserve, MaxRSSBytes: 100}, nil)
-	a.SetResourceControl(control)
+	a.resourceControl = control
 	var persisted config.ResourceControlConfig
-	a.SetResourcePolicyUpdater(func(next config.ResourceControlConfig) error {
+	a.resourcePolicy = func(next config.ResourceControlConfig) error {
 		persisted = next
 		control.SetPolicySet(testResourcePolicySet(next))
 		return nil
-	})
+	}
 	body := strings.NewReader(`{"mode":"prompt","max_rss_mb":2048,"max_cpu_percent":150,"sustain_seconds":30,"cooldown_seconds":300,"interventions":[{"action":"notify","after_seconds":0},{"action":"pause","after_seconds":60}],"workspace_overrides":[{"cwd_prefix":"/work/app","mode":"terminate","max_rss_mb":4096,"max_cpu_percent":200,"sustain_seconds":60,"cooldown_seconds":600}]}`)
 	response := httptest.NewRecorder()
 	a.buildMux().ServeHTTP(response, httptest.NewRequest(http.MethodPut, "/resources/policy", body))
@@ -149,10 +149,10 @@ func testResourceInterventions(steps []config.ResourceInterventionConfig) []reso
 }
 
 func TestResourcePolicyEndpointLeavesActivePolicyOnWriteFailure(t *testing.T) {
-	a := New("", testStore(t), nil, func() Status { return Status{Running: true} })
+	a := newTestAPI("", testStore(t), nil, func() Status { return Status{Running: true} })
 	control := resource.NewController(resource.Policy{Mode: resource.ModeObserve, MaxRSSBytes: 100}, nil)
-	a.SetResourceControl(control)
-	a.SetResourcePolicyUpdater(func(config.ResourceControlConfig) error { return fmt.Errorf("disk full") })
+	a.resourceControl = control
+	a.resourcePolicy = func(config.ResourceControlConfig) error { return fmt.Errorf("disk full") }
 	response := httptest.NewRecorder()
 	body := strings.NewReader(`{"mode":"terminate","max_rss_mb":2048,"sustain_seconds":30,"cooldown_seconds":300}`)
 	a.buildMux().ServeHTTP(response, httptest.NewRequest(http.MethodPut, "/resources/policy", body))
@@ -176,8 +176,8 @@ func TestResourcePolicyEndpointAuditsRejectedUpdates(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			st := testStore(t)
-			a := New("", st, nil, func() Status { return Status{Running: true} })
-			a.SetResourcePolicyUpdater(func(config.ResourceControlConfig) error { return nil })
+			a := newTestAPI("", st, nil, func() Status { return Status{Running: true} })
+			a.resourcePolicy = func(config.ResourceControlConfig) error { return nil }
 			response := httptest.NewRecorder()
 			a.buildMux().ServeHTTP(response, httptest.NewRequest(http.MethodPut, "/resources/policy", strings.NewReader(tt.body)))
 			if response.Code != http.StatusBadRequest {
@@ -192,16 +192,16 @@ func TestResourcePolicyEndpointAuditsRejectedUpdates(t *testing.T) {
 }
 
 func TestResourcePolicyEndpointSerializesPersistAndApply(t *testing.T) {
-	a := New("", testStore(t), nil, func() Status { return Status{Running: true} })
+	a := newTestAPI("", testStore(t), nil, func() Status { return Status{Running: true} })
 	var active, overlap atomic.Int32
-	a.SetResourcePolicyUpdater(func(config.ResourceControlConfig) error {
+	a.resourcePolicy = func(config.ResourceControlConfig) error {
 		if active.Add(1) != 1 {
 			overlap.Store(1)
 		}
 		time.Sleep(10 * time.Millisecond)
 		active.Add(-1)
 		return nil
-	})
+	}
 	var wg sync.WaitGroup
 	for i := 0; i < 2; i++ {
 		wg.Add(1)
@@ -223,7 +223,7 @@ func TestResourcePolicyEndpointSerializesPersistAndApply(t *testing.T) {
 
 func TestResourceControlResolveEndpoint(t *testing.T) {
 	st := testStore(t)
-	a := New("", st, nil, func() Status { return Status{Running: true} })
+	a := newTestAPI("", st, nil, func() Status { return Status{Running: true} })
 	control := resource.NewController(resource.Policy{
 		Mode: resource.ModePrompt, MaxRSSBytes: 100,
 	}, nil)
@@ -235,7 +235,7 @@ func TestResourceControlResolveEndpoint(t *testing.T) {
 	if len(pending) != 1 {
 		t.Fatalf("pending=%v", pending)
 	}
-	a.SetResourceControl(control)
+	a.resourceControl = control
 
 	response := httptest.NewRecorder()
 	body := strings.NewReader(`{"id":"` + pending[0].ID + `","decision":"dismiss"}`)
@@ -254,7 +254,7 @@ func TestResourceControlResolveEndpoint(t *testing.T) {
 
 func TestResourceControlResumeEndpoint(t *testing.T) {
 	st := testStore(t)
-	a := New("", st, nil, func() Status { return Status{Running: true} })
+	a := newTestAPI("", st, nil, func() Status { return Status{Running: true} })
 	var actions []resource.ControlAction
 	control := resource.NewController(resource.Policy{Mode: resource.ModeTerminate, MaxRSSBytes: 100,
 		Interventions: []resource.InterventionStep{{Action: resource.ActionPause}}},
@@ -264,7 +264,7 @@ func TestResourceControlResumeEndpoint(t *testing.T) {
 		Key: "s1", RootPID: 10, RootStartedAt: now, Name: "claude", RSSBytes: 200,
 		Processes: []resource.Process{{PID: 10, StartedAt: now}},
 	}}}, now)
-	a.SetResourceControl(control)
+	a.resourceControl = control
 
 	response := httptest.NewRecorder()
 	body := strings.NewReader(`{"session_key":"s1","decision":"resume"}`)

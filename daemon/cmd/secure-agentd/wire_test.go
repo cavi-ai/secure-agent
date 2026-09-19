@@ -457,7 +457,7 @@ func TestStartFleetHeartbeatNoopWithoutSinks(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { st.Close() })
-	srv := api.New("", st, nil, func() api.Status { return statusStub() })
+	srv := api.New(api.Deps{Store: st, Status: func() api.Status { return statusStub() }})
 	cfgGet := func() config.FleetConfig { return config.FleetConfig{} }
 	startFleetHeartbeat(ctx, srv, func() api.Status { return statusStub() }, fleet.NewPublisher(), cfgGet)
 	startFleetHeartbeat(ctx, srv, func() api.Status { return statusStub() }, nil, cfgGet) // nil publisher: no loop at all

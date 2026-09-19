@@ -28,7 +28,7 @@ func TestFleetEndpointReturnsNodeStatus(t *testing.T) {
 		}
 	}
 
-	a := New(sock, st, fk, statusFn)
+	a := newTestAPI(sock, st, fk, statusFn)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go a.Serve(ctx)
