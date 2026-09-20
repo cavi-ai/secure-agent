@@ -267,6 +267,14 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 			return false
 		},
 	}
+	// Guard advisor: each newly blocked prompt is offered for a recommendation
+	// the operator reads before deciding. Advisory only — the broker still
+	// blocks for the human; this never resolves a prompt.
+	guardAdvisor := func(req model.GuardAssessmentRequest) {
+		if sub := advisorStk.Load().Sub; sub != nil {
+			sub.EnqueueGuard(req)
+		}
+	}
 
 	var resourcePolicyUpdater func(config.ResourceControlConfig) error
 	if opts.ConfigPath != "" {
@@ -304,6 +312,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 		NotifyScopes:    notifyScopeStore,
 		Retriage:        retriageFuncs,
 		HostAssess:      hostAssessFuncs,
+		GuardAdvisor:    guardAdvisor,
 		PeerChecker:     api.NewPeerChecker(),
 		AgentPIDs:       agentPIDSet,
 		UIPID:           uiPID,

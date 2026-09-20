@@ -458,13 +458,13 @@
       if (btn) btn.click();
     };
     const acceptDialog = () => {
-      // Poll for the styled confirm dialog (it opens in the click handler),
+      // Poll for the drawer-hosted confirm (it opens in the click handler),
       // then accept it; the queue refresh follows.
       let n = 0;
       const iv = setInterval(() => {
         n++;
         const ok = document.getElementById('confirm-ok');
-        if (ok && ok.closest('dialog') && ok.closest('dialog').open) {
+        if (ok && ok.closest('#confirm-layer') && !ok.closest('#confirm-layer').hidden) {
           ok.click();
           clearInterval(iv);
         } else if (n > 20) {
@@ -566,7 +566,7 @@
       document.querySelector('[data-action="edit-resource-policy"]').click();
       document.querySelector('[data-action="add-resource-override"][data-source="current"]').click();
       document.querySelector('[data-policy-default="true"] [data-policy-field="mode"]').value = 'terminate';
-      document.getElementById('btn-save-resource-policy').click();
+      document.querySelector('#drawer-foot [data-action="policy-save"]').click();
     }, 4000);
   }
 })();

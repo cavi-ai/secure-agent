@@ -180,6 +180,13 @@ public struct AgentSummaryModel: Codable, Identifiable, Sendable {
 
     public let isOrphan: Bool?
 
+    /// Durable-session identity, joined by root pid on /status. Lets a row
+    /// read "claude · secure-agent@main" instead of a bare process cwd.
+    public let sessionID: String?
+    public let workspace: String?
+    public let repo: String?
+    public let branch: String?
+
     enum CodingKeys: String, CodingKey {
         case pid
         case name
@@ -193,11 +200,16 @@ public struct AgentSummaryModel: Codable, Identifiable, Sendable {
         case rssBytes = "rss_bytes"
         case cpuPercent = "cpu_percent"
         case isOrphan = "is_orphan"
+        case sessionID = "session_id"
+        case workspace
+        case repo
+        case branch
     }
 
     public init(pid: Int32, name: String, kind: String? = nil, exePath: String? = nil, cwd: String? = nil, rootPid: Int32? = nil,
                 ppid: Int32? = nil, startedAt: String? = nil, lastSeenAt: String? = nil, rssBytes: UInt64? = nil,
-                isOrphan: Bool? = nil, cpuPercent: Double? = nil) {
+                isOrphan: Bool? = nil, cpuPercent: Double? = nil, sessionID: String? = nil,
+                workspace: String? = nil, repo: String? = nil, branch: String? = nil) {
         self.pid = pid
         self.name = name
         self.kind = kind
@@ -210,12 +222,30 @@ public struct AgentSummaryModel: Codable, Identifiable, Sendable {
         self.rssBytes = rssBytes
         self.isOrphan = isOrphan
         self.cpuPercent = cpuPercent
+        self.sessionID = sessionID
+        self.workspace = workspace
+        self.repo = repo
+        self.branch = branch
     }
 
     /// Glance label: the project folder, falling back to the harness name.
+    /// Prefers the durable session's repo when the process cwd is unhelpful
+    /// (agents launched from "/" or a temp dir produced a bare "/" label).
     public var cwdLeaf: String {
-        guard let cwd, !cwd.isEmpty else { return name }
-        return (cwd as NSString).lastPathComponent
+        if let repo, !repo.isEmpty { return repo }
+        let ws = (workspace?.isEmpty == false ? workspace : cwd)
+        if let ws, !ws.isEmpty, ws != "/" {
+            return (ws as NSString).lastPathComponent
+        }
+        return name
+    }
+
+    /// "repo@branch" when the session knows them, else "". Shown under the
+    /// harness name on a session card.
+    public var repoBranch: String {
+        guard let repo, !repo.isEmpty else { return "" }
+        guard let branch, !branch.isEmpty else { return repo }
+        return "\(repo)@\(branch)"
     }
 }
 
