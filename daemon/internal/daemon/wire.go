@@ -19,6 +19,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/agents"
 	"github.com/cavi-ai/secure-agent/daemon/internal/api"
 	"github.com/cavi-ai/secure-agent/daemon/internal/bus"
+	"github.com/cavi-ai/secure-agent/daemon/internal/collect"
 	"github.com/cavi-ai/secure-agent/daemon/internal/config"
 	"github.com/cavi-ai/secure-agent/daemon/internal/correlate"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
@@ -366,7 +367,7 @@ func fleetConfigured(webhooks []config.WebhookConfig) bool {
 // buildStatusFn assembles the /status payload from live component state.
 // advisorHealth is resolved per call (the advisor stack hot-swaps on config
 // reload — a captured bool/subscriber would go stale).
-func buildStatusFn(proxyServer *proxy.ProxyServer, tagger *agents.Tagger, cr *correlate.Correlator, eng *firewall.Engine, reg *supervise.Registry, st *store.Store, startTime time.Time, advisorHealth func() advisor.HealthSnapshot, fleetOn bool) api.StatusFunc {
+func buildStatusFn(proxyServer *proxy.ProxyServer, tagger *agents.Tagger, cr *correlate.Correlator, eng *firewall.Engine, reg *supervise.Registry, st *store.Store, startTime time.Time, advisorHealth func() advisor.HealthSnapshot, fleetOn, spoolBased bool) api.StatusFunc {
 	return func() api.Status {
 		proxyActive := proxyServer != nil
 		proxyPort := 0
@@ -392,6 +393,16 @@ func buildStatusFn(proxyServer *proxy.ProxyServer, tagger *agents.Tagger, cr *co
 			roots[r] = struct{}{}
 		}
 		ah := advisorHealth()
+		// When file telemetry rides the privileged collector's spool, the
+		// daemon probes the writer's real state (launchd service + spool
+		// freshness) so posture can report a crash-looping root service the
+		// tailer cannot see. Best-effort; nil when not spool-based.
+		var esSvc *collect.ESServiceSnapshot
+		if spoolBased {
+			if state, size, mtime, err := collect.ESServiceProbe(); err == nil {
+				esSvc = &collect.ESServiceSnapshot{State: state, SpoolSize: size, SpoolMtime: mtime}
+			}
+		}
 		return api.Status{
 			Running:           true,
 			Version:           api.Version,
@@ -411,6 +422,7 @@ func buildStatusFn(proxyServer *proxy.ProxyServer, tagger *agents.Tagger, cr *co
 			FleetConfigured:   fleetOn,
 			FirewallStats:     firewallStats(eng),
 			Collectors:        reg.Snapshot(),
+			ESService:         esSvc,
 		}
 	}
 }

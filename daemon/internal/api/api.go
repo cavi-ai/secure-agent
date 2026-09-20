@@ -19,6 +19,7 @@ import (
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/advisor"
 	"github.com/cavi-ai/secure-agent/daemon/internal/apiroutes"
+	"github.com/cavi-ai/secure-agent/daemon/internal/collect"
 	"github.com/cavi-ai/secure-agent/daemon/internal/config"
 	"github.com/cavi-ai/secure-agent/daemon/internal/correlate"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
@@ -127,6 +128,12 @@ type Status struct {
 	// Collectors reports each supervised worker's health so a dead or abandoned
 	// collector cannot appear healthy just because the daemon process is up.
 	Collectors []supervise.Health `json:"collectors,omitempty"`
+	// ESService carries the real state of the root LaunchDaemon that writes
+	// the ES spool, when the daemon tails it. The tailer's own health proves
+	// nothing about the writer; this is the probe that catches the writer
+	// crash-looping while the tailer reads green. Nil when file telemetry is
+	// not spool-based.
+	ESService *collect.ESServiceSnapshot `json:"es_service,omitempty"`
 }
 
 type StatusFunc func() Status

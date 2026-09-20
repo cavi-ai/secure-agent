@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cavi-ai/secure-agent/daemon/internal/collect"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
@@ -258,9 +259,21 @@ const collectorBootGrace = 10 * time.Minute
 
 // silentCollectorItems flags running collectors that have produced nothing
 // recent (or nothing at all past the boot grace) while agents are active.
+// For the eslogger tailer the goroutine's heartbeat is not the whole story:
+// the WRITER is the root LaunchDaemon, so its real launchd state and spool
+// freshness are probed too — a crash-looping writer (exit 1 every respawn)
+// must read as blind even while the tailer itself runs green.
 func silentCollectorItems(st Status) []PostureItem {
 	var items []PostureItem
 	uptime, _ := time.ParseDuration(st.Uptime)
+	// Probe the root service once per posture pass; only meaningful when
+	// the daemon tails the spool (an eslogger collector row that came from
+	// a direct root eslogger child has no external service).
+	for _, c := range st.Collectors {
+		if c.Name == "eslogger" && c.Running && !c.Abandoned && st.ESService != nil {
+			items = append(items, esServiceItems(*st.ESService)...)
+		}
+	}
 	for _, c := range st.Collectors {
 		if !c.Running || c.Abandoned {
 			continue
@@ -292,6 +305,28 @@ func silentCollectorItems(st Status) []PostureItem {
 				Detail:   "no events for more than " + window.String() + " while agents are active — check the telemetry source",
 			})
 		}
+	}
+	return items
+}
+
+// esServiceItems turns one root-service probe into posture items. The probe
+// is best-effort: launchctl errors are already folded into the state string.
+func esServiceItems(s collect.ESServiceSnapshot) []PostureItem {
+	var items []PostureItem
+	if strings.Contains(s.State, "spawn") || strings.Contains(s.State, "exit") {
+		items = append(items, PostureItem{
+			Kind: "collector_silent", ID: "eslogger",
+			Title:    "File monitoring service is failing",
+			Severity: 2,
+			Detail:   "root ES collector service state: " + s.State + " — spool " + s.SpoolState() + " — check /Library/Logs/secure-agent/esd-err.log",
+		})
+	} else if time.Since(s.SpoolMtime) > 30*time.Minute {
+		items = append(items, PostureItem{
+			Kind: "collector_silent", ID: "eslogger",
+			Title:    "File monitoring service is not writing",
+			Severity: 2,
+			Detail:   "root ES collector reports " + s.State + " but the spool " + s.SpoolState() + " — file telemetry may be blind",
+		})
 	}
 	return items
 }

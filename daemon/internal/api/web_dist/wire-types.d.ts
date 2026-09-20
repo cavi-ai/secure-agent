@@ -160,6 +160,12 @@ export interface Health {
   last_produced?: string;
 }
 
+export interface ESServiceSnapshot {
+  state: string;
+  spool_size: number;
+  spool_mtime: string;
+}
+
 export interface Status {
   running: boolean;
   version: string;
@@ -182,6 +188,7 @@ export interface Status {
   coverage?: CoverageStatus;
   firewall_stats?: Record<string, RuleStat>;
   collectors?: Health[];
+  es_service?: ESServiceSnapshot;
 }
 
 export interface PostureItem {
