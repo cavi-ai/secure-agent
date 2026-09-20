@@ -79,10 +79,46 @@ func isPermanent(err error) bool {
 type Registry struct {
 	mu sync.Mutex
 	m  map[string]Health
+	// lastProduced persists the coverage heartbeat across daemon restarts:
+	// a rebuild must not reset "this collector last produced X" to silence,
+	// because the 10-min boot grace then hides a dead source for 40 quiet
+	// minutes after every restart. Loaded via LoadLastProduced, written
+	// back by PersistLastProduced.
+	lastProduced map[string]string
 }
 
 func NewRegistry() *Registry {
 	return &Registry{m: make(map[string]Health)}
+}
+
+// LoadLastProduced seeds the registry with coverage heartbeats persisted by
+// the previous run. A worker that has not produced since startup keeps the
+// carried stamp, so posture can see a genuinely dead source across restarts.
+func (r *Registry) LoadLastProduced(prev map[string]string) {
+	if r == nil || len(prev) == 0 {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.lastProduced = make(map[string]string, len(prev))
+	for k, v := range prev {
+		r.lastProduced[k] = v
+	}
+}
+
+// PersistLastProduced returns a copy of the coverage heartbeats for the
+// caller to write to disk (best-effort JSON under the state dir).
+func (r *Registry) PersistLastProduced() map[string]string {
+	if r == nil {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make(map[string]string, len(r.lastProduced))
+	for k, v := range r.lastProduced {
+		out[k] = v
+	}
+	return out
 }
 
 func (r *Registry) update(name string, mut func(*Health)) {
@@ -93,6 +129,13 @@ func (r *Registry) update(name string, mut func(*Health)) {
 	defer r.mu.Unlock()
 	h := r.m[name]
 	h.Name = name
+	// First sighting of this worker in THIS run: seed LastProduced from the
+	// carried-over map so a restart does not blank the coverage record.
+	if _, seen := r.m[name]; !seen && h.LastProduced == "" {
+		if v, ok := r.lastProduced[name]; ok && v > h.LastProduced {
+			h.LastProduced = v
+		}
+	}
 	mut(&h)
 	r.m[name] = h
 }
@@ -101,9 +144,19 @@ func (r *Registry) update(name string, mut func(*Health)) {
 // worker publishes an event. Cheap (one mutex + one timestamp) and the only
 // signal that distinguishes "running" from "actually seeing anything".
 func (r *Registry) MarkProduced(name string) {
+	if r == nil {
+		return
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
 	r.update(name, func(h *Health) {
-		h.LastProduced = time.Now().UTC().Format(time.RFC3339)
+		h.LastProduced = now
 	})
+	r.mu.Lock()
+	if r.lastProduced == nil {
+		r.lastProduced = map[string]string{}
+	}
+	r.lastProduced[name] = now
+	r.mu.Unlock()
 }
 
 // Snapshot returns a copy of every tracked worker's health.

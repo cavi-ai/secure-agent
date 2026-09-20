@@ -28,3 +28,6 @@ CODEBUDDY.md
 opencode.jsonc
 .cursorrules
 .github/code-review-graph.instruction.md
+
+# local scratch dirs (not this product's data)
+/data/
