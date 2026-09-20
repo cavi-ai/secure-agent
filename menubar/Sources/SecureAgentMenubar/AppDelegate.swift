@@ -108,7 +108,11 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificat
         var count = ""
         if state.isPaused {
             name = "pause.shield"
-        } else if !state.incidents.isEmpty || state.flags.contains(where: { $0.severity >= 3 }) {
+        } else if state.needsAttention {
+            // unactedCriticals + unresolvedIncidents: the same predicate the
+            // hero and console use. Previously this counted raw flags and
+            // incidents, so an acknowledged flag or resolved incident kept the
+            // warning lit forever — the "always there no matter what" report.
             name = "exclamationmark.shield.fill"
         } else if let s = state.status, s.activeAgents > 0 {
             name = "bolt.shield.fill"
