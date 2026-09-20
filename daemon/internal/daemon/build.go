@@ -221,7 +221,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 
 	statusFn := buildStatusFn(proxyServer, tagger, correlator, fw.Engine, supReg, st, time.Now(),
 		func() advisor.HealthSnapshot { return advisorStk.Load().Sub.Health() },
-		fleetConfigured(cfg.Fleet.Webhooks))
+		fleetConfigured(cfg.Fleet.Webhooks), collect.SpoolAvailable())
 
 	// Start Control API. Every dependency is resolved here, once: the API no
 	// longer exposes twenty optional setters that must be called in the right

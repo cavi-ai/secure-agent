@@ -13,9 +13,12 @@ public final class SetupManager: ObservableObject {
     public static let daemonLabel = "com.cavi-ai.secure-agentd"
     /// The privileged Endpoint Security collector (root LaunchDaemon).
     public static let esCollectorLabel = "com.cavi-ai.secure-agent-esd"
-    /// The LaunchDaemon runs THE DAEMON BINARY ITSELF in --es-collector
-    /// mode — the binary the operator already granted Full Disk Access.
-    /// No separate helper, no separate FDA drag: one grant covers it.
+    /// Root-owned helper path the LaunchDaemon executes. The bundle copy is
+    /// user-writable, so the installer stages the binary to a path neither
+    /// the login user nor a plain admin can overwrite without a prompt.
+    public static let esCollectorHelperPath = "/Library/PrivilegedHelperTools/\(esCollectorLabel)"
+    /// Legacy install path (the in-bundle binary); kept so the uninstaller
+    /// and the migration boot-out can clean it up.
     public static let esCollectorInstallPath = Bundle.main.bundleURL
         .appendingPathComponent("Contents/Helpers/secure-agentd").path
 
@@ -674,10 +677,12 @@ public final class SetupManager: ObservableObject {
 
     // MARK: - Privileged ES collector
 
-    /// Whether the LaunchDaemon plist exists (the helper is installed,
-    /// regardless of whether TCC has granted eslogger yet).
+    /// Whether the LaunchDaemon plist exists AND the root-owned helper is
+    /// in place (the collector is installed, regardless of whether TCC has
+    /// granted eslogger yet).
     public var esCollectorDaemonInstalled: Bool {
-        FileManager.default.fileExists(atPath: "/Library/LaunchDaemons/\(Self.esCollectorLabel).plist")
+        FileManager.default.fileExists(atPath: "/Library/LaunchDaemons/\(Self.esCollectorLabel).plist") &&
+        FileManager.default.fileExists(atPath: Self.esCollectorHelperPath)
     }
 
     /// Whether file telemetry is actually live: the privileged helper is
@@ -689,22 +694,38 @@ public final class SetupManager: ObservableObject {
         return true
     }
 
-    /// Installs the privileged ES collector: writes the LaunchDaemon plist
-    /// (running THE DAEMON binary in --es-collector mode — the binary the
-    /// operator already FDA-granted) and bootstraps it. One osascript admin
-    /// prompt; no helper to stage, no second FDA drag.
+    /// Installs the privileged ES collector: copies the daemon binary to a
+    /// ROOT-OWNED path (/Library/PrivilegedHelperTools — the login user and
+    /// plain admins cannot overwrite it there), records the binary's SHA-256
+    /// in /var/db/secure-agent/esd.binhash (root-only dir) so the collector
+    /// refuses to run a swapped binary, writes the LaunchDaemon plist, and
+    /// bootstraps it. One osascript admin prompt.
     public func installESCollector() throws {
         lastError = nil
-        guard bundledDaemonPath != nil else { throw SetupError.notBundled }
-        let plist = Self.esPlistB64
+        guard let src = bundledDaemonPath else { throw SetupError.notBundled }
         let label = Self.esCollectorLabel
-        let shell = "echo '\(plist)' | base64 -d > /Library/LaunchDaemons/\(label).plist" +
+        let helper = "/Library/PrivilegedHelperTools/\(label)"
+        let hashPath = "/var/db/secure-agent/esd.binhash"
+        let plist = Self.esPlistB64
+        let shell =
+            "mkdir -p /Library/PrivilegedHelperTools /var/db/secure-agent /Library/Logs/secure-agent" +
+            " && cp -f '\(src)' '\(helper)'" +
+            " && chown root:wheel '\(helper)' && chmod 755 '\(helper)'" +
+            " && /usr/bin/shasum -a 256 '\(helper)' | awk '{print $1}' > '\(hashPath)'" +
+            " && chown root:wheel '\(hashPath)' && chmod 644 '\(hashPath)'" +
+            " && echo '\(plist)' | base64 -d > /Library/LaunchDaemons/\(label).plist" +
             " && chown root:wheel /Library/LaunchDaemons/\(label).plist && chmod 644 /Library/LaunchDaemons/\(label).plist" +
             " && launchctl bootstrap system /Library/LaunchDaemons/\(label).plist"
         let script = "do shell script \(shellAppleScriptLiteral(shell)) with administrator privileges"
         guard runAppleScriptAdmin(script) else {
             if lastError == nil { lastError = "the privileged collector install was cancelled" }
             throw SetupError.notBundled
+        }
+        // The dev tree's writable copy must never run as root again: if the
+        // old in-bundle plist is loaded, boot it out (best-effort, no prompt).
+        if FileManager.default.fileExists(atPath: "/Library/LaunchDaemons/\(label).plist") {
+            let old = "do shell script \"launchctl bootout system /Library/LaunchDaemons/\(label).plist 2>/dev/null; true\" with administrator privileges"
+            _ = Self.run(["/usr/bin/osascript", "-e", old])
         }
         Task { await refreshState() }
     }
@@ -728,13 +749,18 @@ public final class SetupManager: ObservableObject {
         }
     }
 
-    /// Removes the LaunchDaemon + binary. Also called by uninstallAll.
+    /// Removes the LaunchDaemon + helper (root-owned and any legacy in-bundle
+    /// copy). Also called by uninstallAll.
     public func uninstallESCollector() {
-        let script = "do shell script \"launchctl bootout system /Library/LaunchDaemons/\(Self.esCollectorLabel).plist 2>/dev/null; rm -f /Library/LaunchDaemons/\(Self.esCollectorLabel).plist; true\" with administrator privileges"
+        let script = "do shell script \"launchctl bootout system /Library/LaunchDaemons/\(Self.esCollectorLabel).plist 2>/dev/null; rm -f /Library/LaunchDaemons/\(Self.esCollectorLabel).plist '\(Self.esCollectorHelperPath)' '\(Self.esCollectorInstallPath)' /var/db/secure-agent/esd.binhash; true\" with administrator privileges"
         _ = Self.run(["/usr/bin/osascript", "-e", script])
     }
 
-    /// LaunchDaemon definition: keep-alive, root, one job — run the helper.
+    /// LaunchDaemon definition: RunAtLoad with an exit-code-aware
+    /// SuccessfulExit/FailedKeepAlive pair, NOT a blanket KeepAlive — a
+    /// failing collector must back off (launchd's ThrottleInterval applies
+    /// to failed respawns) instead of respawning every 10 s forever, and a
+    /// clean exit must not be relaunched mid-shutdown.
     static var esPlistXML: String {
         """
         <?xml version="1.0" encoding="UTF-8"?>
@@ -742,12 +768,16 @@ public final class SetupManager: ObservableObject {
         <plist version="1.0"><dict>
             <key>Label</key><string>\(esCollectorLabel)</string>
             <key>ProgramArguments</key><array>
-                <string>\(esCollectorInstallPath)</string>
+                <string>/Library/PrivilegedHelperTools/\(esCollectorLabel)</string>
                 <string>--es-collector</string>
             </array>
             <key>RunAtLoad</key><true/>
-            <key>KeepAlive</key><true/>
-            <key>ThrottleInterval</key><integer>10</integer>
+            <key>KeepAlive</key><dict>
+                <key>SuccessfulExit</key><false/>
+                <key>Crashed</key><true/>
+            </dict>
+            <key>ThrottleInterval</key><integer>60</integer>
+            <key>StandardOutPath</key><string>/Library/Logs/secure-agent/esd-out.log</string>
             <key>StandardErrorPath</key><string>/Library/Logs/secure-agent/esd-err.log</string>
         </dict></plist>
         """
