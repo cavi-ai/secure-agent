@@ -2,6 +2,7 @@ package collect
 
 import (
 	"encoding/json"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -57,10 +58,11 @@ func NewCodexTracer() *CodexTracer {
 	return &CodexTracer{pending: map[string]pendingTool{}}
 }
 
-// IsCodexRolloutPath reports whether a tailed file is a Codex rollout log.
+// IsCodexRolloutPath reports whether a tailed file is a Codex rollout log —
+// under the default ~/.codex/sessions or a custom CODEX_HOME.
 func IsCodexRolloutPath(path string) bool {
-	return strings.Contains(path, "/.codex/sessions/") &&
-		strings.Contains(path, "/rollout-") &&
+	return strings.Contains(path, "/sessions/") &&
+		strings.Contains(filepath.Base(path), "rollout-") &&
 		strings.HasSuffix(path, ".jsonl")
 }
 

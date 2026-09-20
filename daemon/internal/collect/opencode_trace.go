@@ -69,6 +69,10 @@ type OpencodeCollector struct {
 	// read. Persisted only in memory — a daemon restart re-reads the recent
 	// tail, which is idempotent (the session spine dedupes by id).
 	watermark int64
+
+	// modelCache: session id → last-seen assistant model id, so the per-part
+	// model lookup is one bounded query per session, not per event.
+	modelCache map[string]string
 }
 
 // NewOpencodeCollector builds the poller. Empty dbPath resolves the default.
@@ -169,6 +173,15 @@ func (c *OpencodeCollector) pollOnce() int {
 			maxSeen = updated
 		}
 		for _, e := range OpencodePartEvents(sessionID, data, updated) {
+			// Stamp the model: step-finish rows otherwise carry no model id
+			// (the audit's 534 unpriced-by-model rows). Best-effort; empty is
+			// honest when the message row has none.
+			if e.Kind == event.KindModelCall && e.Model == "" {
+				e.Model = c.modelFor(db, sessionID)
+				if e.Model != "" && e.CostUSD == 0 {
+					e.CostUSD = ModelCostUSD(e.Model, e.TokensIn, e.TokensOut)
+				}
+			}
 			c.bus.Publish(e)
 			published++
 			if c.OnSessionSeen != nil && workspace != "" {
@@ -183,6 +196,36 @@ func (c *OpencodeCollector) pollOnce() int {
 		c.watermark = maxSeen
 	}
 	return published
+}
+
+// modelFor reads the model id off a session's most recent assistant message
+// (message.data JSON carries model: {providerID, modelID}). Bounded to one
+// small row; a schema drift degrades to "" quietly.
+func (c *OpencodeCollector) modelFor(db *sql.DB, sessionID string) string {
+	if v, ok := c.modelCache[sessionID]; ok {
+		return v
+	}
+	var data string
+	err := db.QueryRow(`
+		SELECT data FROM message
+		WHERE session_id = ? AND json_extract(data, '$.role') = 'assistant'
+		ORDER BY time_updated DESC LIMIT 1`, sessionID).Scan(&data)
+	if err != nil {
+		return ""
+	}
+	var m struct {
+		Model struct {
+			ModelID string `json:"modelID"`
+		} `json:"model"`
+	}
+	if json.Unmarshal([]byte(data), &m) != nil || m.Model.ModelID == "" {
+		return ""
+	}
+	if c.modelCache == nil {
+		c.modelCache = map[string]string{}
+	}
+	c.modelCache[sessionID] = m.Model.ModelID
+	return m.Model.ModelID
 }
 
 // OpencodePartEvents maps one opencode `part` row to trace events. Pure and
