@@ -6,6 +6,9 @@ package session
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -23,7 +26,61 @@ const (
 	endSilentAfter = 24 * time.Hour
 	// touchThrottle bounds last_seen writes per session.
 	touchThrottle = 30 * time.Second
+	// minSessionLifetime is how long a process-tree session must stay live
+	// before it is persisted. Orchestrated bounded-turn runs mint one
+	// throwaway codex root every few seconds under a temp workspace; without
+	// a floor, 400+ stub rows/day bury the conversations a human means by
+	// "session". Sub-minute trees still get attributed in memory; they just
+	// never become rows.
+	minSessionLifetime = 60 * time.Second
+	// ephemeralWorkspaceMarkers are workspace path segments that mark an
+	// orchestrated scratch run (OpenClaw bounded turns et al). Combined with
+	// the lifetime floor they keep stub sessions out of the store.
+	ephemeralWorkspaceMarker = "/openclaw/"
 )
+
+// gitInfoFor reads repo and branch from a workspace's .git directory at
+// resolve time — the handshake's git probe only exists for hook sessions, so
+// without this every transcript- or process-tree-resolved session had an
+// empty repo (the audit's "1 of 1,667 rows"). Best-effort and cheap: two
+// small reads, memoized per workspace for the process lifetime (a
+// conversation does not move repositories mid-session). Call sites hold the
+// resolver mutex, so the map needs no lock of its own.
+func gitInfoFor(workspace string) (repo, branch string) {
+	if workspace == "" {
+		return "", ""
+	}
+	if gitCache == nil {
+		gitCache = map[string][2]string{}
+	}
+	if v, ok := gitCache[workspace]; ok {
+		return v[0], v[1]
+	}
+	repo = filepath.Base(filepath.Clean(workspace))
+	// Detached worktrees and submodule checkouts carry the real git dir in
+	// the .git FILE ("gitdir: ..."); a normal checkout is a directory.
+	gitDir := filepath.Join(workspace, ".git")
+	if data, err := os.ReadFile(gitDir); err == nil {
+		line := strings.TrimSpace(string(data))
+		if rest, ok := strings.CutPrefix(line, "gitdir:"); ok {
+			gitDir = strings.TrimSpace(rest)
+			if !filepath.IsAbs(gitDir) {
+				gitDir = filepath.Join(workspace, gitDir)
+			}
+		}
+	}
+	branch = ""
+	if head, err := os.ReadFile(filepath.Join(gitDir, "HEAD")); err == nil {
+		line := strings.TrimSpace(string(head))
+		if ref, ok := strings.CutPrefix(line, "ref: refs/heads/"); ok {
+			branch = strings.TrimSpace(ref)
+		}
+	}
+	gitCache[workspace] = [2]string{repo, branch}
+	return repo, branch
+}
+
+var gitCache map[string][2]string
 
 // Handshake is the hook's session announcement: harness identity, workspace,
 // and the harness's own pid (the hook's parent), which joins the hook
@@ -57,18 +114,24 @@ type Resolver struct {
 	// it ends.
 	byScope map[string]string
 	touch   map[string]time.Time // session id → last TouchSession (throttle)
-	now     func() time.Time
+	// deferred holds process-tree sessions that have not yet outlived
+	// minSessionLifetime: attributed in memory, not persisted. touchLocked
+	// promotes them to the store when the floor is passed; Sweep drops the
+	// dead ones so a bounded-turn flood never touches the disk.
+	deferred map[string]model.Session
+	now      func() time.Time
 }
 
 func NewResolver(st *store.Store, tg *agents.Tagger) *Resolver {
 	return &Resolver{
-		st:      st,
-		tagger:  tg,
-		byPID:   map[int32]string{},
-		byRoot:  map[int32]string{},
-		byScope: map[string]string{},
-		touch:   map[string]time.Time{},
-		now:     time.Now,
+		st:       st,
+		tagger:   tg,
+		byPID:    map[int32]string{},
+		byRoot:   map[int32]string{},
+		byScope:  map[string]string{},
+		touch:    map[string]time.Time{},
+		deferred: map[string]model.Session{},
+		now:      time.Now,
 	}
 }
 
@@ -129,10 +192,13 @@ func (r *Resolver) Resolve(e *event.Event) string {
 		if ts.IsZero() {
 			ts = r.now()
 		}
+		repo, branch := gitInfoFor(info.CWD)
 		sess := model.Session{
 			ID:            id,
 			Harness:       info.Name,
 			Workspace:     info.CWD,
+			Repo:          repo,
+			Branch:        branch,
 			RootPID:       root,
 			RootStartedAt: info.StartedAt.UTC().Format(time.RFC3339Nano),
 			StartedAt:     ts,
@@ -140,8 +206,20 @@ func (r *Resolver) Resolve(e *event.Event) string {
 			Status:        model.SessionActive,
 			Confidence:    model.ConfProcessTree,
 		}
-		r.st.UpsertSession(sess)
-		r.emitLocked(sess)
+		// Orchestrated bounded-turn runs: the codex root's parent chain
+		// reaches a DIFFERENT tagged family (the orchestrator process). Nest
+		// this session under that family's session as a child so one run
+		// reads as one parent, not hundreds of stubs.
+		sess.ParentID = r.orchestratorForLocked(root, info.Name)
+		if r.shouldPersistLocked(sess, ts) {
+			r.st.UpsertSession(sess)
+			r.emitLocked(sess)
+		} else {
+			// Held in memory; persisted only if the session outlives the
+			// floor (touchLocked promotes it). Dropped silently if it dies
+			// young — a sub-minute scratch run is not a session row.
+			r.deferred[id] = sess
+		}
 		r.byRoot[root] = id
 		if sess.Workspace != "" {
 			r.byScope[scopeKey(sess.Harness, sess.Workspace)] = id
@@ -151,6 +229,49 @@ func (r *Resolver) Resolve(e *event.Event) string {
 	r.touchLocked(id, e.TS)
 	e.SessionID = id
 	return id
+}
+
+// orchestratorForLocked returns the session id of the tagged family whose
+// process spawned this root (a different harness in the ancestor chain) —
+// the parent for orchestrated children. "" when the root's ancestry holds
+// no other tagged harness.
+func (r *Resolver) orchestratorForLocked(root int32, harness string) string {
+	info, ok := r.tagger.Tag(root)
+	if !ok {
+		return ""
+	}
+	for _, pid := range info.Chain {
+		if pid == root {
+			continue
+		}
+		parent, ok := r.tagger.Tag(pid)
+		if !ok || parent.Name == harness {
+			continue
+		}
+		if sid, ok := r.byRoot[parent.RootPID]; ok {
+			return sid
+		}
+	}
+	return ""
+}
+
+// shouldPersistLocked applies the session floor: orchestrated scratch runs
+// (ephemeral workspace marker) are never rows; everything else is held in
+// memory until it outlives minSessionLifetime. The floor applies only to
+// NEW process-tree sessions — hook/transcript sessions are conversations
+// the harness itself named and always persist.
+func (r *Resolver) shouldPersistLocked(sess model.Session, ts time.Time) bool {
+	if strings.Contains(filepath.ToSlash(sess.Workspace), ephemeralWorkspaceMarker) {
+		return false
+	}
+	if sess.RootPID == 0 {
+		return true
+	}
+	info, ok := r.tagger.Tag(sess.RootPID)
+	if ok && !info.StartedAt.IsZero() {
+		return ts.Sub(info.StartedAt) >= minSessionLifetime
+	}
+	return true
 }
 
 // HandleHandshake registers a hook-announced session. When a process-tree
@@ -172,6 +293,13 @@ func (r *Resolver) HandleHandshake(h Handshake) {
 	if h.PID > 0 {
 		if old, ok := r.byRoot[h.PID]; ok && old != h.SessionID {
 			r.st.RekeySession(old, h.SessionID)
+			// The hook named the conversation — promote a deferred session
+			// unconditionally (the floor applies to nameless scratch runs).
+			if sess, ok := r.deferred[old]; ok {
+				delete(r.deferred, old)
+				sess.ID = h.SessionID
+				r.st.UpsertSession(sess)
+			}
 			delete(r.byRoot, h.PID)
 			for pid, id := range r.byPID {
 				if id == old {
@@ -228,6 +356,13 @@ func (r *Resolver) NoteTranscriptSession(id, harness, workspace string, ts time.
 	if workspace != "" && harness != "" {
 		if old, ok := r.findProvisionalLocked(harness, workspace); ok && old != id {
 			r.st.RekeySession(old, id)
+			// A transcript sighting names the conversation: promote any
+			// deferred (below-the-floor) session under its new id.
+			if sess, ok := r.deferred[old]; ok {
+				delete(r.deferred, old)
+				sess.ID = id
+				r.st.UpsertSession(sess)
+			}
 			for pid, sid := range r.byPID {
 				if sid == old {
 					r.byPID[pid] = id
@@ -244,8 +379,10 @@ func (r *Resolver) NoteTranscriptSession(id, harness, workspace string, ts time.
 		r.byScope[scopeKey(harness, workspace)] = id
 	}
 
+	repo, branch := gitInfoFor(workspace)
 	r.st.UpsertSession(model.Session{
 		ID: id, Harness: harness, Workspace: workspace,
+		Repo: repo, Branch: branch,
 		StartedAt: ts, LastSeenAt: ts,
 		Status: model.SessionActive, Confidence: model.ConfTranscript,
 	})
@@ -284,6 +421,9 @@ func (r *Resolver) ensureHookSession(e *event.Event) {
 			}
 		}
 	}
+	if sess.Repo == "" {
+		sess.Repo, sess.Branch = gitInfoFor(sess.Workspace)
+	}
 	r.st.UpsertSession(sess)
 	if stored, ok := r.st.GetSession(e.SessionID); ok {
 		r.emitLocked(stored)
@@ -298,6 +438,8 @@ func (r *Resolver) emitLocked(sess model.Session) {
 }
 
 // touchLocked bumps last_seen at most once per touchThrottle per session.
+// A deferred (below-the-floor) session is persisted the first time it is
+// touched past minSessionLifetime since its root started.
 func (r *Resolver) touchLocked(id string, ts time.Time) {
 	if ts.IsZero() {
 		ts = r.now()
@@ -306,6 +448,24 @@ func (r *Resolver) touchLocked(id string, ts time.Time) {
 		return
 	}
 	r.touch[id] = ts
+	if sess, ok := r.deferred[id]; ok {
+		// Ephemeral-workspace runs are never rows, at any age.
+		if strings.Contains(filepath.ToSlash(sess.Workspace), ephemeralWorkspaceMarker) {
+			delete(r.deferred, id)
+			return
+		}
+		info, tagged := r.tagger.Tag(sess.RootPID)
+		aged := !tagged || info.StartedAt.IsZero() || ts.Sub(info.StartedAt) >= minSessionLifetime
+		if tagged && !info.StartedAt.IsZero() && ts.Sub(info.StartedAt) < minSessionLifetime {
+			return // still under the floor: keep waiting, stay unpersisted
+		}
+		delete(r.deferred, id)
+		if aged {
+			r.st.UpsertSession(sess)
+			r.emitLocked(sess)
+		}
+		return
+	}
 	r.st.TouchSession(id, ts)
 }
 
@@ -342,6 +502,7 @@ func (r *Resolver) Sweep() {
 			if sess, ok := r.st.GetSession(id); ok {
 				r.emitLocked(sess)
 			}
+			delete(r.deferred, id)
 			delete(r.byRoot, root)
 			for pid, sid := range r.byPID {
 				if sid == id {

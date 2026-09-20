@@ -1,6 +1,8 @@
 package session
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -112,7 +114,7 @@ func TestHandshakeRekeysProcessTreeSession(t *testing.T) {
 
 func TestSweepEndsSessionsWhoseRootExited(t *testing.T) {
 	r, st := testResolver(t, fakeProcs{
-		100: {PID: 100, PPID: 1, Exe: "/usr/local/bin/claude", StartTime: time.Now()},
+		100: {PID: 100, PPID: 1, Exe: "/usr/local/bin/claude", StartTime: time.Now().Add(-2 * time.Minute)},
 	})
 	e := event.Event{Kind: event.KindFileOpen, PID: 100, TS: time.Now()}
 	r.Resolve(&e)
@@ -125,6 +127,131 @@ func TestSweepEndsSessionsWhoseRootExited(t *testing.T) {
 	sessions := st.ListSessions(store.SessionFilter{Status: model.SessionEnded})
 	if len(sessions) != 1 {
 		t.Fatalf("ended = %d, want 1 (%+v)", len(sessions), st.ListSessions(store.SessionFilter{}))
+	}
+}
+
+// Repo and branch are read from the workspace's .git at resolve time — not
+// only when a hook handshake carries them (the audit: repo on 1 of 1,667
+// sessions).
+func TestGitInfoReadFromWorkspace(t *testing.T) {
+	ws := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(ws, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws, ".git", "HEAD"), []byte("ref: refs/heads/feat/session-spine\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r, st := testResolver(t, fakeProcs{
+		100: {PID: 100, PPID: 1, Exe: "/usr/local/bin/claude", CWD: ws, StartTime: time.Now().Add(-2 * time.Minute)},
+	})
+	e := event.Event{Kind: event.KindFileOpen, PID: 100, TS: time.Now()}
+	r.Resolve(&e)
+	sessions := st.ListSessions(store.SessionFilter{})
+	if len(sessions) != 1 {
+		t.Fatalf("sessions = %d, want 1", len(sessions))
+	}
+	s := sessions[0]
+	if s.Repo == "" || s.Branch != "feat/session-spine" {
+		t.Fatalf("repo/branch = %q/%q, want non-empty repo + branch from .git/HEAD", s.Repo, s.Branch)
+	}
+}
+
+// A linked worktree (a .git FILE pointing at the real git dir) still
+// resolves its branch — codex and agents often run inside worktrees.
+func TestGitInfoFollowsWorktreeLink(t *testing.T) {
+	ws := t.TempDir()
+	gitDir := filepath.Join(ws, "real-git-dir")
+	if err := os.MkdirAll(gitDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(gitDir, "HEAD"), []byte("ref: refs/heads/wt-branch\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws, ".git"), []byte("gitdir: "+gitDir+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	repo, branch := gitInfoFor(ws)
+	if branch != "wt-branch" {
+		t.Fatalf("branch = %q, want wt-branch via gitdir file", branch)
+	}
+	if repo == "" {
+		t.Fatal("repo must fall back to the workspace basename")
+	}
+}
+
+// A workspace that is not a git tree yields no branch and never errors.
+func TestGitInfoNonRepo(t *testing.T) {
+	repo, branch := gitInfoFor(t.TempDir())
+	if repo == "" || branch != "" {
+		t.Fatalf("non-repo = %q/%q, want basename + empty branch", repo, branch)
+	}
+	if repo, branch := gitInfoFor(""); repo != "" || branch != "" {
+		t.Fatalf("empty workspace = %q/%q, want empty", repo, branch)
+	}
+}
+
+// A session created before the resolver started (root started long ago) is
+// persisted immediately; a root that is still young is deferred — attributed
+// in memory but not persisted until it outlives the floor.
+func TestSessionFloorDefersYoungRoots(t *testing.T) {
+	r, st := testResolver(t, fakeProcs{
+		100: {PID: 100, PPID: 1, Exe: "/usr/local/bin/codex", CWD: "/repo", StartTime: time.Now()},
+	})
+	e := event.Event{Kind: event.KindFileOpen, PID: 100, TS: time.Now()}
+	id := r.Resolve(&e)
+	if id == "" {
+		t.Fatal("young root must still be attributed in memory")
+	}
+	if n := len(st.ListSessions(store.SessionFilter{})); n != 0 {
+		t.Fatalf("young root persisted %d sessions, want 0 (deferred)", n)
+	}
+	// The root ages past the floor: the next touch persists it.
+	r.now = func() time.Time { return time.Now().Add(2 * time.Minute) }
+	e2 := event.Event{Kind: event.KindFileOpen, PID: 100, TS: time.Now().Add(2 * time.Minute)}
+	if id2 := r.Resolve(&e2); id2 != id {
+		t.Fatalf("id changed across touch: %q vs %q", id2, id)
+	}
+	if n := len(st.ListSessions(store.SessionFilter{})); n != 1 {
+		t.Fatalf("sessions = %d, want 1 after floor", n)
+	}
+}
+
+// A young root that dies before the floor never becomes a row: the
+// bounded-turn flood (417 sub-minute codex runs a day) stays out of the
+// store entirely.
+func TestSessionFloorDropsYoungDeaths(t *testing.T) {
+	r, st := testResolver(t, fakeProcs{
+		100: {PID: 100, PPID: 1, Exe: "/usr/local/bin/codex", CWD: "/repo", StartTime: time.Now()},
+	})
+	e := event.Event{Kind: event.KindFileOpen, PID: 100, TS: time.Now()}
+	if id := r.Resolve(&e); id == "" {
+		t.Fatal("must attribute in memory")
+	}
+	// Root exits young.
+	r.tagger = agents.New(mustConfig(t), fakeProcs{})
+	r.tagger.Refresh()
+	r.Sweep()
+	if n := len(st.ListSessions(store.SessionFilter{Status: model.SessionEnded})); n != 0 {
+		t.Fatalf("ended rows = %d, want 0 (young death is not a session)", n)
+	}
+	if n := len(st.ListSessions(store.SessionFilter{})); n != 0 {
+		t.Fatalf("sessions = %d, want 0", n)
+	}
+}
+
+// An orchestrated bounded-turn workspace (OpenClaw's scratch dirs) is never
+// persisted no matter how long it lives, and nests under its orchestrator's
+// session when one exists.
+func TestEphemeralWorkspaceNeverPersists(t *testing.T) {
+	r, st := testResolver(t, fakeProcs{
+		100: {PID: 100, PPID: 1, Exe: "/usr/local/bin/codex", CWD: "/private/tmp/openclaw/codex-bounded-turn-42/workspace", StartTime: time.Now().Add(-time.Hour)},
+	})
+	e := event.Event{Kind: event.KindFileOpen, PID: 100, TS: time.Now()}
+	if id := r.Resolve(&e); id == "" {
+		t.Fatal("must attribute in memory")
+	}
+	if n := len(st.ListSessions(store.SessionFilter{})); n != 0 {
+		t.Fatalf("orchestrated scratch run persisted %d rows, want 0", n)
 	}
 }
 
