@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -259,5 +260,52 @@ func TestOpenMigratesOldEventsTableForCallIndex(t *testing.T) {
 	st.PutEvent(event.Event{Kind: event.KindToolCall, TS: time.Now(), SessionID: "s", CallID: "c1", ToolStatus: "ok"})
 	if n := len(st.QueryEvents(EventFilter{})); n != 1 {
 		t.Fatalf("events=%d want 1 after upsert on migrated table", n)
+	}
+}
+
+// The default view (Status "") returns live sessions first plus a bounded
+// recent-ended tail — a flood of ended stubs must not bury live work or
+// fill the whole limit.
+func TestDefaultSessionViewLiveFirst(t *testing.T) {
+	s, err := Open("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	now := time.Now()
+	for i := 0; i < 40; i++ {
+		s.UpsertSession(model.Session{
+			ID: fmt.Sprintf("ended-%d", i), Harness: "codex",
+			StartedAt: now, LastSeenAt: now, Status: model.SessionEnded,
+		})
+	}
+	for i := 0; i < 3; i++ {
+		s.UpsertSession(model.Session{
+			ID: fmt.Sprintf("live-%d", i), Harness: "claude",
+			StartedAt: now, LastSeenAt: now, Status: model.SessionActive,
+		})
+	}
+
+	got := s.ListSessions(SessionFilter{Limit: 20})
+	live := 0
+	ended := 0
+	for _, sess := range got {
+		if sess.Status == model.SessionEnded {
+			ended++
+		} else {
+			live++
+		}
+	}
+	if live != 3 || ended != 17 {
+		t.Fatalf("default view live=%d ended=%d, want 3 live then 17 ended tail", live, ended)
+	}
+	// Live rows come first.
+	if got[0].Status != model.SessionActive {
+		t.Fatalf("first row status = %s, want active", got[0].Status)
+	}
+	// Explicit ended filter still reaches the whole population.
+	if n := len(s.ListSessions(SessionFilter{Status: model.SessionEnded, Limit: 100})); n != 40 {
+		t.Fatalf("ended filter = %d, want 40", n)
 	}
 }

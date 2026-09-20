@@ -231,14 +231,22 @@ func (s *Store) RekeySession(oldID, newID string) {
 	_ = tx.Commit()
 }
 
-// SessionFilter narrows ListSessions. Status "" returns live (active+idle)
-// plus ended up to Limit.
+// SessionFilter narrows ListSessions. Status "" returns the DEFAULT view:
+// live sessions (active+idle) first, then a bounded recent-ended tail —
+// not a wall of four hundred ended stubs (the audit's "/sessions returns
+// 100 rows and 53 of them are ended codex stubs").
 type SessionFilter struct {
-	Status string // active | idle | ended | "" = all
+	Status string // active | idle | ended | "" = live + recent ended
 	Limit  int    // 0 = 100
 }
 
-// ListSessions returns sessions ordered by last_seen_at DESC.
+// defaultEndedTail caps how many ended sessions the default view carries.
+const defaultEndedTail = 25
+
+// ListSessions returns sessions. The default (Status "") ordering: live
+// sessions by last_seen DESC, then the most recent ended ones, with the
+// whole result capped at Limit. ?status=ended still fetches the ended
+// population alone (the console's collapsible section paginates there).
 func (s *Store) ListSessions(f SessionFilter) []model.Session {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -246,40 +254,62 @@ func (s *Store) ListSessions(f SessionFilter) []model.Session {
 	if limit <= 0 {
 		limit = 100
 	}
-	query := `SELECT id, harness, workspace, repo, branch, root_pid, root_started_at, parent_id, started_at, ended_at, last_seen_at, status, confidence FROM sessions`
-	args := []any{}
-	if f.Status != "" {
-		query += ` WHERE status = ?`
-		args = append(args, f.Status)
-	}
-	query += ` ORDER BY last_seen_at DESC LIMIT ?`
-	args = append(args, limit)
-
-	rows, err := s.db.Query(query, args...)
-	if err != nil {
-		return nil
-	}
-	defer rows.Close()
-	out := []model.Session{}
-	for rows.Next() {
-		var sess model.Session
-		var endedAt sql.NullString
-		var startedAt, lastSeen string
-		if err := rows.Scan(&sess.ID, &sess.Harness, &sess.Workspace, &sess.Repo, &sess.Branch,
-			&sess.RootPID, &sess.RootStartedAt, &sess.ParentID, &startedAt, &endedAt, &lastSeen,
-			&sess.Status, &sess.Confidence); err != nil {
-			continue
-		}
-		sess.StartedAt, _ = time.Parse(time.RFC3339Nano, startedAt)
-		sess.LastSeenAt, _ = time.Parse(time.RFC3339Nano, lastSeen)
-		if endedAt.Valid && endedAt.String != "" {
-			if t, err := time.Parse(time.RFC3339Nano, endedAt.String); err == nil {
-				sess.EndedAt = &t
+	sel := `SELECT id, harness, workspace, repo, branch, root_pid, root_started_at, parent_id, started_at, ended_at, last_seen_at, status, confidence FROM sessions`
+	scan := func(rows *sql.Rows) []model.Session {
+		defer rows.Close()
+		out := []model.Session{}
+		for rows.Next() {
+			var sess model.Session
+			var endedAt sql.NullString
+			var startedAt, lastSeen string
+			if err := rows.Scan(&sess.ID, &sess.Harness, &sess.Workspace, &sess.Repo, &sess.Branch,
+				&sess.RootPID, &sess.RootStartedAt, &sess.ParentID, &startedAt, &endedAt, &lastSeen,
+				&sess.Status, &sess.Confidence); err != nil {
+				continue
 			}
+			sess.StartedAt, _ = time.Parse(time.RFC3339Nano, startedAt)
+			sess.LastSeenAt, _ = time.Parse(time.RFC3339Nano, lastSeen)
+			if endedAt.Valid && endedAt.String != "" {
+				if t, err := time.Parse(time.RFC3339Nano, endedAt.String); err == nil {
+					sess.EndedAt = &t
+				}
+			}
+			out = append(out, sess)
 		}
-		out = append(out, sess)
+		return out
 	}
-	return out
+	switch f.Status {
+	case "":
+		// Default view: live first, then the recent ended tail.
+		live := sel + ` WHERE status IN (?, ?) ORDER BY last_seen_at DESC LIMIT ?`
+		rows, err := s.db.Query(live, model.SessionActive, model.SessionIdle, limit)
+		if err != nil {
+			return nil
+		}
+		out := scan(rows)
+		if len(out) >= limit {
+			return out
+		}
+		endedRows, err := s.db.Query(sel+` WHERE status = ? ORDER BY last_seen_at DESC LIMIT ?`,
+			model.SessionEnded, min(defaultEndedTail, limit-len(out)))
+		if err != nil {
+			return out
+		}
+		return append(out, scan(endedRows)...)
+	default:
+		rows, err := s.db.Query(sel+` WHERE status = ? ORDER BY last_seen_at DESC LIMIT ?`, f.Status, limit)
+		if err != nil {
+			return nil
+		}
+		return scan(rows)
+	}
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // GetSession returns one session by id.
