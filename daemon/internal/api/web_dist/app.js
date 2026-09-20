@@ -78,8 +78,13 @@ document.addEventListener('DOMContentLoaded', () => {
     drawerFoot.hidden = !foot;
     drawer.className = 'drawer' + (variant ? ' ' + variant : '');
     drawer.hidden = false;
-    // Move focus into the panel so keyboard users are not stranded behind it.
-    (btnDrawerClose || drawerBody).focus?.();
+    // Reserve room so the panel docks beside the content instead of covering
+    // it — this is an inspector, not a modal.
+    const app = document.querySelector('.app');
+    if (app) {
+      app.classList.add('drawer-open');
+      app.classList.toggle('drawer-wide', !!variant);
+    }
     return true;
   }
 
@@ -89,6 +94,8 @@ document.addEventListener('DOMContentLoaded', () => {
     drawerBody.innerHTML = '';
     drawerFoot.innerHTML = '';
     drawerFoot.hidden = true;
+    const app = document.querySelector('.app');
+    if (app) app.classList.remove('drawer-open', 'drawer-wide');
     const fn = drawerOnClose;
     drawerOnClose = null;
     if (drawerOpener && typeof drawerOpener.focus === 'function') drawerOpener.focus();
@@ -99,10 +106,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
   if (btnDrawerClose) btnDrawerClose.addEventListener('click', closeDrawer);
   if (drawer) {
-    drawer.addEventListener('click', (e) => {
-      const hit = e.target.closest('[data-action="drawer-close"]');
-      if (hit) closeDrawer();
-    });
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape' && drawer && !drawer.hidden) closeDrawer();
     });
