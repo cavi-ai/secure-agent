@@ -123,7 +123,7 @@ func (s *Store) TouchSession(id string, ts time.Time) {
 // EndSession marks a session ended (root process gone, or explicit end).
 // Tool calls still marked "running" in that session are closed as "error":
 // a session cannot finish while a call is in flight, and rows stuck at
-// running (the audit found 36 over an hour old) poison pairing stats.
+// running poison pairing stats.
 func (s *Store) EndSession(id string, ts time.Time) {
 	if id == "" {
 		return
@@ -240,8 +240,7 @@ func (s *Store) RekeySession(oldID, newID string) {
 
 // SessionFilter narrows ListSessions. Status "" returns the DEFAULT view:
 // live sessions (active+idle) first, then a bounded recent-ended tail —
-// not a wall of four hundred ended stubs (the audit's "/sessions returns
-// 100 rows and 53 of them are ended codex stubs").
+// not a wall of ended stubs.
 type SessionFilter struct {
 	Status string // active | idle | ended | "" = live + recent ended
 	Limit  int    // 0 = 100

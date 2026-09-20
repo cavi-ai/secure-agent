@@ -55,21 +55,31 @@ active_agents="$agents"  # compat name for the hook check below
 grace=0
 [ "$uptime_s" -ge 600 ] && grace=1
 
-# ---- 1. Session identity: repo set on most git-tree sessions ----
-# The audit: repo and branch on 1 of 1,667 rows. Resolution reads .git at
-# resolve time now, so rows whose workspace is a git tree must carry a repo.
+# ---- 1. Session identity: harness names + repo coverage ----
+# Resolution reads .git at resolve time. Both asserted as ratios, not presence.
 total_sessions="$(q 'select count(*) from sessions;')"
+named="$(q "select count(*) from sessions where harness != '';")"
 if [ "$grace" = 1 ]; then
-  git_ws="$(q "select count(*) from sessions where workspace != '' and repo = '';")"
   if [ "${total_sessions:-0}" -eq 0 ]; then
-    ok "session repo coverage (no sessions yet)"
+    ok "session identity (no sessions yet)"
   else
-    named="$(q "select count(*) from sessions where harness != '';")"
     share=$((100 * named / total_sessions))
     if [ "$share" -ge 80 ]; then
       ok "sessions carry a harness ($named/$total_sessions = ${share}%)"
     else
       bad "sessions carry a harness" "$named of $total_sessions = ${share}% (want >= 80%)"
+    fi
+    ws_sessions="$(q "select count(*) from sessions where harness != '' and workspace like '/Volumes/Work/workspace/%';")"
+    with_repo="$(q "select count(*) from sessions where harness != '' and workspace like '/Volumes/Work/workspace/%' and repo != '';")"
+    if [ "${ws_sessions:-0}" -eq 0 ]; then
+      ok "session repo coverage (no workspace-backed sessions yet)"
+    else
+      repo_share=$((100 * with_repo / ws_sessions))
+      if [ "$repo_share" -ge 50 ]; then
+        ok "session repo coverage ($with_repo/$ws_sessions = ${repo_share}%)"
+      else
+        bad "session repo coverage" "$with_repo of $ws_sessions = ${repo_share}% (want >= 50%)"
+      fi
     fi
   fi
 else
@@ -84,8 +94,11 @@ else
   bad "no duplicate tool-call rows" "$dupes (session,call_id) pairs stored more than once"
 fi
 
-# No id-less tool rows at all: agy/Cursor mint synthetic ids now.
-idless="$(q "select count(*) from events where kind = 12 and (call_id is null or call_id = '');")"
+# No id-less tool rows from the LIVE build: agy/Cursor mint synthetic ids now.
+# Scoped to the daemon's current uptime — legacy id-less rows predate the fix
+# and cannot be re-paired retroactively (their real tool ids are unrecoverable).
+# uptime_s is known-good here (parsed above, before the boot-grace branch).
+idless="$(q "select count(*) from events where kind = 12 and datetime(ts) > datetime('now', '-' || $uptime_s || ' seconds') and (call_id is null or call_id = '');")"
 if [ "${idless:-0}" -eq 0 ]; then
   ok "no id-less tool-call rows"
 else
@@ -93,18 +106,24 @@ else
 fi
 
 # ---- 3. Turn ratio vs human prompts ----
-# v1 passed on "turns > 0" — 1 turn vs 20 prompts was a green check. v2
-# compares turns against the floor count of human prompts in Claude
-# transcripts touched in the last 16h (tool results / meta / sidechain
-# excluded). The prompt count is a FLOOR (wrapper variants may hide some).
+# v1 passed on "turns > 0". v2 compares turns against the floor count of
+# human prompts in Claude transcripts touched in the last 16h. Files are
+# passed as ARGV (xargs); fileinput opens each — the earlier stdin read
+# never saw the files, so the assertion was dead.
 turns="$(q "select count(*) from events where kind = 13;")"
+turns_win="$(q "select count(*) from events where kind = 13 and ts > datetime('now', '-16 hours');")"
 prompts=0
+prompt_minutes=960
 claude_dir="$HOME/.claude/projects"
 if [ -d "$claude_dir" ]; then
-  prompts=$(find "$claude_dir" -name '*.jsonl' -mtime -1 -exec python3 -c '
-import json,sys
+  # Window matches the DB-side turn window (16h), not raw file age: old-build
+  # transcripts outside the window would inflate the floor while their turns
+  # were pruned, making the ratio asymmetric.
+  prompts=$(find "$claude_dir" -name '*.jsonl' -mmin -960 -print0 2>/dev/null |
+    xargs -0 -n 32 python3 -c '
+import json,sys,fileinput
 seen=0
-for line in sys.stdin:
+for line in fileinput.input(files=sys.argv[1:]):
     line=line.strip()
     if not line.startswith("{"): continue
     try: rec=json.loads(line)
@@ -120,8 +139,9 @@ for line in sys.stdin:
         if t.startswith(("<task-notification>","<system-reminder>","<command-name>","<local-command")): continue
         seen+=1; break
 print(seen)
-' {} + 2>/dev/null | awk '{s+=$1} END {print s+0}')
+' 2>/dev/null | awk '{s+=$1} END {print s+0}')
 fi
+turns="$turns_win"
 if [ "$grace" = 0 ] || [ "${prompts:-0}" -eq 0 ]; then
   ok "turn ratio (grace/no prompts — not asserted)"
 elif [ "${turns:-0}" -ge $((prompts * 8 / 10)) ]; then
@@ -131,9 +151,6 @@ else
 fi
 
 # ---- 4. Session flood control: created-per-hour vs agent roots ----
-# The audit: 423 codex sessions/day minted by bounded-turn runs. The floor
-# (60s lifetime) plus the ephemeral-workspace rule keep stubs out; created
-# sessions per hour must stay within 2x the live agent root count.
 if [ "$grace" = 1 ] && [ "$agents" -gt 0 ]; then
   recent="$(q "select count(*) from sessions where started_at > datetime('now', '-1 hour');")"
   budget=$((agents * 2 + 10))
@@ -146,13 +163,19 @@ else
   ok "session creation rate (skipped: grace or no agents)"
 fi
 
-# ---- 5. Cost: priced claude calls ----
+# ---- 5. Cost: priced claude calls (ratio, not presence) ----
 priced="$(q "select count(*) from events where kind=14 and model like 'claude-%' and cost_usd is not null and cost_usd > 0;")"
 unknown="$(q "select count(*) from events where kind=14 and model like 'claude-%' and (cost_usd is null or cost_usd = 0);")"
-if [ "${unknown:-0}" -eq 0 ] || [ "${priced:-0}" -gt 0 ]; then
-  ok "claude model calls are priced ($priced priced, $unknown unpriced)"
+claude_calls=$((priced + unknown))
+if [ "${claude_calls:-0}" -eq 0 ]; then
+  ok "claude model calls are priced (no claude calls yet)"
 else
-  bad "claude model calls are priced" "0 of $((priced+unknown)) claude calls have cost"
+  price_share=$((100 * priced / claude_calls))
+  if [ "$price_share" -ge 90 ]; then
+    ok "claude model calls are priced ($priced/$claude_calls = ${price_share}%)"
+  else
+    bad "claude model calls are priced" "$priced of $claude_calls = ${price_share}% (want >= 90%)"
+  fi
 fi
 
 # ---- 6. Guard hook registration: ratio, not skip ----

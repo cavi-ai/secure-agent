@@ -27,25 +27,19 @@ const (
 	// touchThrottle bounds last_seen writes per session.
 	touchThrottle = 30 * time.Second
 	// minSessionLifetime is how long a process-tree session must stay live
-	// before it is persisted. Orchestrated bounded-turn runs mint one
-	// throwaway codex root every few seconds under a temp workspace; without
-	// a floor, 400+ stub rows/day bury the conversations a human means by
-	// "session". Sub-minute trees still get attributed in memory; they just
-	// never become rows.
+	// before it is persisted: orchestrated bounded-turn runs mint one
+	// throwaway codex root every few seconds; sub-minute trees get
+	// attributed in memory but never become rows. No workspace-path rule:
+	// any path marker also matches long-lived conversations under that path.
 	minSessionLifetime = 60 * time.Second
-	// ephemeralWorkspaceMarkers are workspace path segments that mark an
-	// orchestrated scratch run (OpenClaw bounded turns et al). Combined with
-	// the lifetime floor they keep stub sessions out of the store.
-	ephemeralWorkspaceMarker = "/openclaw/"
 )
 
 // gitInfoFor reads repo and branch from a workspace's .git directory at
 // resolve time — the handshake's git probe only exists for hook sessions, so
-// without this every transcript- or process-tree-resolved session had an
-// empty repo (the audit's "1 of 1,667 rows"). Best-effort and cheap: two
-// small reads, memoized per workspace for the process lifetime (a
-// conversation does not move repositories mid-session). Call sites hold the
-// resolver mutex, so the map needs no lock of its own.
+// without this transcript- and process-tree-resolved sessions have an empty
+// repo. Best-effort and cheap: two small reads, memoized per workspace for the
+// process lifetime (a conversation does not move repositories mid-session).
+// Call sites hold the resolver mutex, so the map needs no lock of its own.
 func gitInfoFor(workspace string) (repo, branch string) {
 	if workspace == "" {
 		return "", ""
@@ -255,15 +249,10 @@ func (r *Resolver) orchestratorForLocked(root int32, harness string) string {
 	return ""
 }
 
-// shouldPersistLocked applies the session floor: orchestrated scratch runs
-// (ephemeral workspace marker) are never rows; everything else is held in
-// memory until it outlives minSessionLifetime. The floor applies only to
-// NEW process-tree sessions — hook/transcript sessions are conversations
-// the harness itself named and always persist.
+// shouldPersistLocked applies the session floor: process-tree sessions are
+// held in memory until they outlived minSessionLifetime. Hook/transcript
+// sessions always persist.
 func (r *Resolver) shouldPersistLocked(sess model.Session, ts time.Time) bool {
-	if strings.Contains(filepath.ToSlash(sess.Workspace), ephemeralWorkspaceMarker) {
-		return false
-	}
 	if sess.RootPID == 0 {
 		return true
 	}
@@ -437,9 +426,8 @@ func (r *Resolver) emitLocked(sess model.Session) {
 	}
 }
 
-// touchLocked bumps last_seen at most once per touchThrottle per session.
-// A deferred (below-the-floor) session is persisted the first time it is
-// touched past minSessionLifetime since its root started.
+// touchLocked bumps last_seen at most once per touchThrottle per session,
+// promoting deferred sessions past the floor.
 func (r *Resolver) touchLocked(id string, ts time.Time) {
 	if ts.IsZero() {
 		ts = r.now()
@@ -449,24 +437,42 @@ func (r *Resolver) touchLocked(id string, ts time.Time) {
 	}
 	r.touch[id] = ts
 	if sess, ok := r.deferred[id]; ok {
-		// Ephemeral-workspace runs are never rows, at any age.
-		if strings.Contains(filepath.ToSlash(sess.Workspace), ephemeralWorkspaceMarker) {
+		if info, tagged := r.tagger.Tag(sess.RootPID); tagged && !info.StartedAt.IsZero() {
+			if ts.Sub(info.StartedAt) < minSessionLifetime {
+				return // still under the floor
+			}
 			delete(r.deferred, id)
-			return
-		}
-		info, tagged := r.tagger.Tag(sess.RootPID)
-		aged := !tagged || info.StartedAt.IsZero() || ts.Sub(info.StartedAt) >= minSessionLifetime
-		if tagged && !info.StartedAt.IsZero() && ts.Sub(info.StartedAt) < minSessionLifetime {
-			return // still under the floor: keep waiting, stay unpersisted
-		}
-		delete(r.deferred, id)
-		if aged {
 			r.st.UpsertSession(sess)
 			r.emitLocked(sess)
+			return
 		}
+		// Root no longer tagged (exited). A root that died young is still
+		// not a row: judge by the root's start recorded at session creation
+		// (Tag failure otherwise reads as "aged"; the touch throttle
+		// guarantees it fires first for dead stubs).
+		if rootStart := rootStarted(sess); !rootStart.IsZero() && ts.Sub(rootStart) < minSessionLifetime {
+			delete(r.deferred, id)
+			return // root died before the floor
+		}
+		delete(r.deferred, id)
+		r.st.UpsertSession(sess)
+		r.emitLocked(sess)
 		return
 	}
 	r.st.TouchSession(id, ts)
+}
+
+// rootStarted parses the root start time recorded at session creation
+// (zero when unknown).
+func rootStarted(sess model.Session) time.Time {
+	if sess.RootStartedAt == "" {
+		return time.Time{}
+	}
+	t, err := time.Parse(time.RFC3339Nano, sess.RootStartedAt)
+	if err != nil {
+		return time.Time{}
+	}
+	return t
 }
 
 // WorkspaceFor returns the workspace recorded for a session id ("" if none) —

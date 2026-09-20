@@ -168,8 +168,7 @@ func (ts *TranscriptScanner) Run(ctx context.Context) error {
 	// is what gets TAILED each tick, but every file present at startup must be
 	// SEEDED to its current EOF — otherwise an older session file that is
 	// appended to later is read from byte 0 and its whole history is replayed
-	// (observed live: one tool call stored 5–10× at identical timestamps,
-	// ~500 row-ids apart across daemon restarts).
+	// (one tool call stored 5–10× at identical timestamps across restarts).
 	allDirPaths := walkDirs(dirTargets)
 	dirPaths := activePaths(allDirPaths)
 
@@ -337,13 +336,15 @@ func (ts *TranscriptScanner) tailFile(p string, offsets map[string]int64) {
 		return
 	}
 
-	r := bufio.NewReader(f)
+	r := bufio.NewReaderSize(f, 1024*1024)
 	newOffset := offset
 
 	for {
-		// ReadSlice (not ReadBytes) so a newline-less multi-MB line is consumed
-		// in buffer-sized fragments instead of being buffered whole. Overlong
-		// lines are skipped but still counted toward the offset once complete.
+		// ReadSlice with fragments assembled into one line: transcript lines
+		// exceed the reader's buffer (real prompts run 10 KB+), and dropping
+		// overlong lines silently skipped exactly the long human-prompt
+		// records — turn detection never saw them. A newline-less multi-MB
+		// line is still capped and skipped.
 		var lineLen int64
 		var frag []byte
 		var err error

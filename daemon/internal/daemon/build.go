@@ -44,8 +44,8 @@ type Options struct {
 
 // Components is the fully-wired daemon: every subsystem built, every collector
 // started. The caller owns its lifetime: wait for a shutdown trigger, then call
-// Shutdown. Build is the composition root the audit asked for — main() is now
-// CLI parsing plus process lifecycle, not component construction.
+// Shutdown. Build is the composition root; main() is CLI parsing plus process
+// lifecycle, not component construction.
 type Components struct {
 	cfg   config.Config
 	store *store.Store
@@ -234,7 +234,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 
 	// Start Control API. Every dependency is resolved here, once: the API no
 	// longer exposes twenty optional setters that must be called in the right
-	// order after New (the composition-root smell the audit named).
+	// order after New.
 	guardBroker := guard.NewBroker(time.Duration(guardBrokerMS(cfg.DirectoryGuard.PromptDeadlineMS)) * time.Millisecond)
 	notifyRuleStore := correlate.NewNotifyRuleStore(filepath.Join(filepath.Dir(cfg.Firewall.Registry.SaltRef), "notify-rules.json"))
 	notifyScopeStore := correlate.NewNotifyScopeStore(filepath.Join(filepath.Dir(cfg.Firewall.Registry.SaltRef), "notify-scopes.json"))

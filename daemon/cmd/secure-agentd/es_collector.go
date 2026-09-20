@@ -215,8 +215,8 @@ func (w *spoolWriter) rotateLocked() error {
 func pumpToSpool(stdout interface{ Read([]byte) (int, error) }) error {
 	w := &spoolWriter{}
 	// Open WITHOUT rotating: the spool may hold events the tailer has not
-	// drained yet (this process may have crash-looped — destroying unread
-	// data on every respawn was the audit's finding). Rotation happens on
+	// drained yet (this process may have crash-looped; destroying unread
+	// data on every respawn loses evidence). Rotation happens on
 	// size only, inside writeLine.
 	if err := w.open(); err != nil {
 		return err

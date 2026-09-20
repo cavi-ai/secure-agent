@@ -60,8 +60,8 @@ var ESServiceProbe = ESServiceState
 // ESServiceState probes the privileged collector's real health the only way
 // an unprivileged daemon can: stat the spool (size + mtime) and read the
 // launchd service state via launchctl print. Spawning/exit != 0 with a
-// stale spool is the crash-loop signature the audit caught live (11,571
-// spawns while the tailer reported running).
+// stale spool is the crash-loop signature (rapid respawns while the tailer
+// reports running).
 func ESServiceState() (string, int64, time.Time, error) {
 	var size int64
 	var mtime time.Time

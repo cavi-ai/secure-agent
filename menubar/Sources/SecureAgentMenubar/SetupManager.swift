@@ -694,18 +694,19 @@ public final class SetupManager: ObservableObject {
         return true
     }
 
-    /// Installs the privileged ES collector: copies the daemon binary to a
-    /// ROOT-OWNED path (/Library/PrivilegedHelperTools — the login user and
-    /// plain admins cannot overwrite it there), records the binary's SHA-256
-    /// in /var/db/secure-agent/esd.binhash (root-only dir) so the collector
-    /// refuses to run a swapped binary, writes the LaunchDaemon plist, and
-    /// bootstraps it. One osascript admin prompt.
+    /// Installs the privileged ES collector: root-owned helper copy in
+    /// /Library/PrivilegedHelperTools, SHA-256 recorded in
+    /// /var/db/secure-agent/esd.binhash, LaunchDaemon plist, bootstrap. One
+    /// osascript admin prompt. Order matters: stage files, boot out any job
+    /// loaded under this label, write the plist, bootstrap — booting out
+    /// after the bootstrap would tear down the just-installed job.
     public func installESCollector() throws {
         lastError = nil
         guard let src = bundledDaemonPath else { throw SetupError.notBundled }
         let label = Self.esCollectorLabel
         let helper = "/Library/PrivilegedHelperTools/\(label)"
         let hashPath = "/var/db/secure-agent/esd.binhash"
+        let plistPath = "/Library/LaunchDaemons/\(label).plist"
         let plist = Self.esPlistB64
         let shell =
             "mkdir -p /Library/PrivilegedHelperTools /var/db/secure-agent /Library/Logs/secure-agent" +
@@ -713,19 +714,14 @@ public final class SetupManager: ObservableObject {
             " && chown root:wheel '\(helper)' && chmod 755 '\(helper)'" +
             " && /usr/bin/shasum -a 256 '\(helper)' | awk '{print $1}' > '\(hashPath)'" +
             " && chown root:wheel '\(hashPath)' && chmod 644 '\(hashPath)'" +
-            " && echo '\(plist)' | base64 -d > /Library/LaunchDaemons/\(label).plist" +
-            " && chown root:wheel /Library/LaunchDaemons/\(label).plist && chmod 644 /Library/LaunchDaemons/\(label).plist" +
-            " && launchctl bootstrap system /Library/LaunchDaemons/\(label).plist"
+            " && { launchctl bootout system '\(plistPath)' 2>/dev/null || true; }" +
+            " && echo '\(plist)' | base64 -d > '\(plistPath)'" +
+            " && chown root:wheel '\(plistPath)' && chmod 644 '\(plistPath)'" +
+            " && launchctl bootstrap system '\(plistPath)'"
         let script = "do shell script \(shellAppleScriptLiteral(shell)) with administrator privileges"
         guard runAppleScriptAdmin(script) else {
             if lastError == nil { lastError = "the privileged collector install was cancelled" }
             throw SetupError.notBundled
-        }
-        // The dev tree's writable copy must never run as root again: if the
-        // old in-bundle plist is loaded, boot it out (best-effort, no prompt).
-        if FileManager.default.fileExists(atPath: "/Library/LaunchDaemons/\(label).plist") {
-            let old = "do shell script \"launchctl bootout system /Library/LaunchDaemons/\(label).plist 2>/dev/null; true\" with administrator privileges"
-            _ = Self.run(["/usr/bin/osascript", "-e", old])
         }
         Task { await refreshState() }
     }

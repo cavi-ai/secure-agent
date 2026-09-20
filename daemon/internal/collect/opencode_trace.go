@@ -174,8 +174,8 @@ func (c *OpencodeCollector) pollOnce() int {
 		}
 		for _, e := range OpencodePartEvents(sessionID, data, updated) {
 			// Stamp the model: step-finish rows otherwise carry no model id
-			// (the audit's 534 unpriced-by-model rows). Best-effort; empty is
-			// honest when the message row has none.
+			// and land unpriced. Best-effort; empty is honest when the
+			// message row has none.
 			if e.Kind == event.KindModelCall && e.Model == "" {
 				e.Model = c.modelFor(db, sessionID)
 				if e.Model != "" && e.CostUSD == 0 {

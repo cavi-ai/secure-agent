@@ -178,10 +178,9 @@ func guardBrokerMS(hookDeadlineMS int) int {
 // logs.json) get format support with the P2 trace work; the dirs are listed
 // now so coverage is explicit instead of absent.
 func transcriptTailTargets(home, jsonlPath string) []string {
-	// CODEX_HOME moves Codex's rollout store out of ~/.codex (observed on
-	// this machine: 423 codex sessions ran while zero transcripts were
-	// written under ~/.codex/sessions because the harness used a custom
-	// home). Default to both so a default install is still covered.
+	// CODEX_HOME moves Codex's rollout store out of ~/.codex; sessions then
+	// run while zero transcripts are written under ~/.codex/sessions.
+	// Default to both so a default install is still covered.
 	codexHome := os.Getenv("CODEX_HOME")
 	targets := []string{
 		filepath.Join(home, ".claude", "logs", "*.jsonl"),
@@ -443,7 +442,7 @@ const coverageWindow = 15 * time.Minute
 // the daemon seeing?" Active = distinct agent-kind harness names with live
 // processes; seen = those with any attributed event inside coverageWindow.
 // A harness with zero recent events while its processes run is a harness
-// whose hooks are not firing — the blind spot the audit found live.
+// whose hooks are not firing.
 func computeCoverage(active []api.AgentSummary, st *store.Store) *api.CoverageStatus {
 	if st == nil {
 		return nil

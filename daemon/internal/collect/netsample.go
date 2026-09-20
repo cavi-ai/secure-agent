@@ -80,9 +80,8 @@ func DiffConnections(prev, cur map[connKey]struct{}) (opened, closed []connKey) 
 // isLoopbackHost reports whether a socket's remote endpoint is loopback
 // (127.0.0.0/8 or ::1). Loopback churn — dev servers, local model servers,
 // the daemon's own socket — is machine-local noise, not egress: recording it
-// floods the event store (observed live: 10,346 retained rows, 100% socket
-// churn, zero agent activity) and drowns real connections out of the
-// count-based retention window.
+// floods the event store with socket churn and drowns real connections out of
+// the count-based retention window.
 func isLoopbackHost(host string) bool {
 	if host == "localhost" {
 		return true

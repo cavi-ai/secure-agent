@@ -16,7 +16,9 @@ import (
 // payload. A sparkline is ~140px wide; shipping 720 points inflated the
 // snapshot to ~2 MB per fetch for pixels nobody sees. The full history stays
 // in the store for episodes; the wire gets an evenly-strided downsample.
-const maxWireSamples = 120
+// 120 still left samples the bulk of a 400 KB payload (32 sessions × ~11 KB);
+// 60 points keeps the sparkline's shape at a third of the bytes.
+const maxWireSamples = 60
 
 func (a *API) handleResources(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
