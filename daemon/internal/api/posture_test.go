@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cavi-ai/secure-agent/daemon/internal/collect"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/supervise"
@@ -189,6 +190,44 @@ func TestPostureFlagsSilentCollectorsAndUncoveredHarnesses(t *testing.T) {
 		if it.Kind == "collector_silent" && it.ID == "netsampler" {
 			t.Fatal("netsampler silence is ambiguous — it must not be flagged")
 		}
+	}
+}
+
+// The root ES service crash-looping must surface even while the spool TAILER
+// runs green: the tailer's heartbeat proves nothing about the writer (the
+// audit's 11,571-spawn loop was invisible for eight days).
+func TestPostureFlagsCrashLoopingRootService(t *testing.T) {
+	sock := fmt.Sprintf("/tmp/sa_posture7_%d.sock", time.Now().UnixNano())
+	defer os.Remove(sock)
+	prev := collect.ESServiceProbe
+	collect.ESServiceProbe = func() (string, int64, time.Time, error) {
+		return "spawn scheduled (last exit 1)", 0, time.Now().Add(-8 * 24 * time.Hour), nil
+	}
+	defer func() { collect.ESServiceProbe = prev }()
+	a := newTestAPI(sock, testStore(t), &fakeKiller{}, func() Status {
+		return Status{
+			Running: true, Uptime: "1h0m0s", ActiveAgents: 2,
+			Collectors: []supervise.Health{{Name: "eslogger", Running: true, LastProduced: time.Now().UTC().Format(time.RFC3339)}},
+			ESService:  &collect.ESServiceSnapshot{State: "spawn scheduled (last exit 1)", SpoolMtime: time.Now().Add(-8 * 24 * time.Hour)},
+		}
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go a.Serve(ctx)
+	waitForSocket(t, sock)
+
+	cl := unixClient(sock)
+	resp, _ := cl.Get("http://unix/posture")
+	var p Posture
+	decodeInto(t, resp, &p)
+	found := false
+	for _, it := range p.Items {
+		if it.Kind == "collector_silent" && it.ID == "eslogger" && strings.Contains(it.Detail, "spawn scheduled") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected collector_silent for the crash-looping root service, got %+v", p.Items)
 	}
 }
 
