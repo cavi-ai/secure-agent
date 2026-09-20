@@ -74,3 +74,19 @@ func TestWorkspaceFromCursorSlugOnlyTrustedRoots(t *testing.T) {
 		t.Fatalf("untrusted slug = %q, want empty", got)
 	}
 }
+
+// Cursor records carry no tool-call id; synthetic ids (session + sequence)
+// key the rows so re-reads upsert instead of inserting unpairable dupes.
+func TestCursorToolCallsCarrySyntheticCallID(t *testing.T) {
+	tr := NewCursorTracer("/Users/x/.cursor/projects/slug-x/agent-transcripts/abc/abc.jsonl")
+	line := `{"role":"assistant","message":{"content":[{"type":"tool_use","name":"Read"}]}}`
+	evs, _ := tr.ParseLine(line)
+	if len(evs) != 1 || evs[0].CallID == "" {
+		t.Fatalf("call id = %+v, want synthetic non-empty", evs)
+	}
+	tr2 := NewCursorTracer("/Users/x/.cursor/projects/slug-x/agent-transcripts/abc/abc.jsonl")
+	evs2, _ := tr2.ParseLine(line)
+	if evs2[0].CallID != evs[0].CallID {
+		t.Fatalf("rebuild id %q != original %q", evs2[0].CallID, evs[0].CallID)
+	}
+}

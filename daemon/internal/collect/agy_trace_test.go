@@ -68,3 +68,24 @@ func TestAGYPaths(t *testing.T) {
 }
 
 func intPtr(n int) *int { return &n }
+
+// agy records carry no tool-call id; the tracer mints stable synthetic ids
+// (session + per-file sequence) so rows are keyed and idempotent under
+// transcript re-reads instead of one unpairable insert per replay.
+func TestAGYToolCallsCarrySyntheticCallID(t *testing.T) {
+	tr := NewAGYTracer("/Users/x/.gemini/antigravity-cli/brain/uuid-one/.system_generated/logs/transcript_full.jsonl")
+	evs, _ := tr.ParseLine(agyToolLine)
+	if len(evs) != 2 || evs[0].CallID == "" || evs[1].CallID == "" {
+		t.Fatalf("call ids = %q,%q, want synthetic non-empty", evs[0].CallID, evs[1].CallID)
+	}
+	if evs[0].CallID == evs[1].CallID {
+		t.Fatal("two calls in one step share an id")
+	}
+	// Deterministic across tracer rebuilds of the same file position: same
+	// session + sequence → same id.
+	tr2 := NewAGYTracer("/Users/x/.gemini/antigravity-cli/brain/uuid-one/.system_generated/logs/transcript_full.jsonl")
+	evs2, _ := tr2.ParseLine(agyToolLine)
+	if evs2[0].CallID != evs[0].CallID {
+		t.Fatalf("rebuild id %q != original %q", evs2[0].CallID, evs[0].CallID)
+	}
+}

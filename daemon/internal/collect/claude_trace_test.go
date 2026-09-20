@@ -169,3 +169,25 @@ func TestModelCostPrefixMatch(t *testing.T) {
 		t.Errorf("unknown model cost = %v, want 0", c)
 	}
 }
+
+// isMeta records (injected context) and isSidechain records (subagent
+// conversations) must never read as operator turns — the noise that kept
+// turn counts at ~5% of real prompts.
+func TestClaudeTraceMetaAndSidechainNotTurns(t *testing.T) {
+	tr := NewClaudeTracer()
+	meta := `{"type":"user","sessionId":"s1","isMeta":true,"message":{"content":"cached context dump"}}`
+	side := `{"type":"user","sessionId":"s1","isSidechain":true,"message":{"content":"subagent exploring"}}`
+	for _, line := range []string{meta, side} {
+		evs, _, _ := tr.ParseLine(line)
+		for _, e := range evs {
+			if e.Kind == event.KindTurn {
+				t.Fatalf("injected record produced a turn: %+v", evs)
+			}
+		}
+	}
+	// A genuine prompt still counts.
+	evs, _, _ := tr.ParseLine(`{"type":"user","sessionId":"s1","message":{"content":"fix the bug"}}`)
+	if len(evs) != 1 || evs[0].Kind != event.KindTurn {
+		t.Fatalf("real prompt evs = %+v, want one turn", evs)
+	}
+}
