@@ -299,3 +299,28 @@ func TestAllowlistListAndRemove(t *testing.T) {
 		t.Fatalf("allowlist-remove audit entries = %d, want 2", found)
 	}
 }
+
+// IPv6 endpoints must be approvable: agents reach IPv6-only hosts and the
+// suggestions list surfaces them, but the old validator rejected any ':' so
+// the Allow button 400'd with no explanation ("nothing happens on click").
+func TestValidAllowlistHost(t *testing.T) {
+	ok := []string{
+		"example.com", "sub.example.com", "15.133.36.34.bc.googleusercontent.com",
+		"2607:6bc0::10", "2600:1900:4110:86f::", "2603:1030:10:d::4c3",
+		"::1", "fe80::1", "127.0.0.1", "10.0.0.1",
+	}
+	for _, h := range ok {
+		if !validAllowlistHost(h) {
+			t.Errorf("%q should be allowed", h)
+		}
+	}
+	bad := []string{
+		"", "http://evil.com", "evil.com/path", "evil.com:443", "user@evil.com",
+		"[::1]", "::1%en0", "a..b", "-lead.com", "trail-.com", "evil.com?x=1",
+	}
+	for _, h := range bad {
+		if validAllowlistHost(h) {
+			t.Errorf("%q should be rejected", h)
+		}
+	}
+}

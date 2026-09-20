@@ -732,31 +732,28 @@ body {
 .source-remove .icon { font-size: 0.9rem; }
 .source-remove:hover { background: var(--bad-bg); color: var(--bad); }
 
-/* ---------- drawer (replaces native <dialog> modals) ----------
-   A native modal's ::backdrop is painted by the UA using the SYSTEM
-   color-scheme, so a page pinned to the opposite theme got inverted
-   fg/bg — the "modal is broken" report. The drawer is ordinary DOM styled
-   only from our tokens: it cannot disagree with the page theme. */
-.drawer { position: fixed; inset: 0; z-index: 200; display: flex; justify-content: flex-end; }
-.drawer[hidden] { display: none; }
-.drawer-scrim {
-  position: absolute; inset: 0; background: hsl(224 40% 3% / 0.55);
-  -webkit-backdrop-filter: blur(2px); backdrop-filter: blur(2px);
-  animation: drawerScrimIn .18s var(--ease) both;
+/* ---------- docked inspector (replaces native <dialog> modals) ----------
+   NOT a modal. No scrim, no backdrop blur, no focus trap: the page behind the
+   panel stays fully visible and interactive, so this never "changes the
+   foreground/background" the way a native <dialog>'s system-scheme ::backdrop
+   did. The panel is anchored to the right edge and simply coexists with the
+   content (which the layout reserves room for via .app.drawer-open). */
+.drawer {
+  position: fixed; top: 0; right: 0; bottom: 0; z-index: 200;
+  display: flex; justify-content: flex-end; pointer-events: none;
 }
+.drawer[hidden] { display: none; }
 .drawer-panel {
-  position: relative; height: 100%; width: min(760px, 94vw); max-width: 100%;
+  position: relative; height: 100%; width: min(560px, 92vw); max-width: 100%;
   display: flex; flex-direction: column;
   background: var(--bg-1); color: var(--tx-1);
   border-left: 1px solid var(--line-2); box-shadow: var(--sh-2);
   animation: drawerSlideIn .22s var(--ease) both;
+  pointer-events: auto;
 }
-.drawer.resource-policy .drawer-panel { width: min(900px, 96vw); }
-@keyframes drawerScrimIn { from { opacity: 0; } }
+.drawer.resource-policy .drawer-panel { width: min(720px, 94vw); }
 @keyframes drawerSlideIn { from { transform: translateX(24px); opacity: 0; } }
-@media (prefers-reduced-motion: reduce) {
-  .drawer-scrim, .drawer-panel { animation: none; }
-}
+@media (prefers-reduced-motion: reduce) { .drawer-panel { animation: none; } }
 .drawer-head {
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
   padding: 15px 20px; border-bottom: 1px solid var(--line); flex: none;
@@ -770,10 +767,18 @@ body {
   background: var(--bg-1); flex: none;
 }
 .drawer-foot[hidden] { display: none; }
+/* While the inspector is open, reserve its width so it never sits ON TOP of
+   the content — the page shifts rather than being covered. */
+@media (min-width: 1100px) {
+  .app.drawer-open { padding-right: min(560px, 92vw); }
+  .app.drawer-open.drawer-wide { padding-right: min(720px, 94vw); }
+  .app.drawer-open { transition: padding-right .22s var(--ease); }
+}
 
 /* ---------- confirm layer ----------
-   Stacks above the drawer (300 > 200) so a confirm raised from inside a
-   drawer leaves the drawer visible behind it. */
+   A confirm is genuinely transient, so it DOES dim the page — but it is a
+   small centered card, not the primary surface, and it stacks above the
+   inspector. */
 .confirm-layer { position: fixed; inset: 0; z-index: 300; display: flex; align-items: center; justify-content: center; }
 .confirm-layer[hidden] { display: none; }
 .confirm-scrim { position: absolute; inset: 0; background: hsl(224 40% 3% / 0.45); }
