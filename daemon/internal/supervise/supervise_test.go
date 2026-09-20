@@ -166,3 +166,34 @@ func TestMarkProducedStampsCoverage(t *testing.T) {
 	var nilReg *Registry
 	nilReg.MarkProduced("x")
 }
+
+// Coverage heartbeats carry across restarts: LoadLastProduced seeds the map,
+// a worker registering later inherits the carried stamp, and PersistLastProduced
+// returns the current heartbeats for the next run. Without this, every daemon
+// restart reset the silence clock and the boot grace hid a dead collector for
+// another ten minutes.
+func TestLastProducedCarriesAcrossRestart(t *testing.T) {
+	reg := NewRegistry()
+	reg.LoadLastProduced(map[string]string{"eslogger": "2026-09-19T12:00:00Z"})
+	reg.update("eslogger", func(h *Health) { h.Running = true })
+	snap := reg.Snapshot()
+	if len(snap) != 1 || snap[0].LastProduced != "2026-09-19T12:00:00Z" {
+		t.Fatalf("carried stamp lost: %+v", snap)
+	}
+	// A fresh produce overwrites the carried value.
+	reg.MarkProduced("eslogger")
+	snap = reg.Snapshot()
+	ts, err := time.Parse(time.RFC3339, snap[0].LastProduced)
+	if err != nil || time.Since(ts) > time.Minute {
+		t.Fatalf("fresh stamp = %+v err=%v", snap[0].LastProduced, err)
+	}
+	persisted := reg.PersistLastProduced()
+	if persisted["eslogger"] != snap[0].LastProduced {
+		t.Fatalf("persisted = %+v, want the fresh stamp", persisted)
+	}
+	// MarkProduced on an unwired worker is still recorded for persistence.
+	reg.MarkProduced("transcript")
+	if reg.PersistLastProduced()["transcript"] == "" {
+		t.Fatal("unregistered worker's heartbeat must still persist")
+	}
+}

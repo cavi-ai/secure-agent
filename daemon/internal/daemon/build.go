@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -147,6 +148,16 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 	advisorStk := &advisorStackHolder{}
 	advisorStk.Store(setupAdvisor(cfg, st))
 
+	// Supervisor with a shared health registry so /status reports each
+	// collector's real state (running / restarting / abandoned). Coverage
+	// heartbeats (last_produced) are carried across restarts from the state
+	// file: a rebuild must not buy forty quiet minutes while the boot grace
+	// hides a collector that died before the restart.
+	supReg := supervise.NewRegistry()
+	supReg.LoadLastProduced(loadLastProduced(cfg.DBPath))
+	sup := supervise.New(supReg)
+	persistLastProduced(cfg.DBPath, supReg) // seed the file so it always exists
+
 	// Drain bus and correlate/persist (drainDone closes once every delivered
 	// event has been persisted — shutdown waits for it).
 	c.drainDone = startDrainLoop(b.Subscribe(), st, correlator, fleetPub, resolver, deltaHub, otlpExp,
@@ -168,6 +179,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 				observeResources(resourceTracker, tagger, st, now)
 				resourceControl.Observe(resourceTracker.Snapshot(), now)
 				resourceEpisodes.Observe(resourceControl.Snapshot())
+				persistLastProduced(cfg.DBPath, supReg)
 				timer.Reset(agents.RefreshInterval(tagger.Any()))
 			}
 		}
@@ -216,9 +228,6 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 
 	// Supervisor with a shared health registry so /status reports each collector's
 	// real state (running / restarting / abandoned) instead of a blanket "running".
-	supReg := supervise.NewRegistry()
-	sup := supervise.New(supReg)
-
 	statusFn := buildStatusFn(proxyServer, tagger, correlator, fw.Engine, supReg, st, time.Now(),
 		func() advisor.HealthSnapshot { return advisorStk.Load().Sub.Health() },
 		fleetConfigured(cfg.Fleet.Webhooks), collect.SpoolAvailable())
@@ -637,6 +646,44 @@ func (h *postureHookHolder) run() {
 // only mutating client — but only when the parent really is an .app binary. A
 // direct launch from a shell must keep owner-uid mutation (headless/ssh
 // management). ps(1) is spawned once at startup, not per request.
+// coverageFilePath is where the coverage heartbeats persist, next to the
+// event store: <db dir>/coverage.json.
+func coverageFilePath(dbPath string) string {
+	return filepath.Join(filepath.Dir(dbPath), "coverage.json")
+}
+
+// loadLastProduced reads the previous run's coverage heartbeats. Best-effort:
+// a missing or corrupt file is an empty map, never a startup failure.
+func loadLastProduced(dbPath string) map[string]string {
+	data, err := os.ReadFile(coverageFilePath(dbPath))
+	if err != nil {
+		return nil
+	}
+	out := map[string]string{}
+	if json.Unmarshal(data, &out) != nil {
+		return nil
+	}
+	return out
+}
+
+// persistLastProduced writes the registry's coverage heartbeats for the next
+// run. Best-effort and cheap (a few hundred bytes on the tagger cadence).
+func persistLastProduced(dbPath string, reg *supervise.Registry) {
+	snap := reg.PersistLastProduced()
+	if snap == nil {
+		return
+	}
+	data, err := json.Marshal(snap)
+	if err != nil {
+		return
+	}
+	path := coverageFilePath(dbPath)
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+		return
+	}
+	_ = os.WriteFile(path, data, 0o600)
+}
+
 func owningUIPID() int32 {
 	ppid := os.Getppid()
 	if ppid <= 1 {
