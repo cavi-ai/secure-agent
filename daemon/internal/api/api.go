@@ -62,6 +62,14 @@ type AgentSummary struct {
 	RSSBytes   uint64  `json:"rss_bytes,omitempty"`
 	CPUPercent float64 `json:"cpu_percent,omitempty"`
 	IsOrphan   bool    `json:"is_orphan,omitempty"`
+
+	// Durable-session identity, joined by RootPID, so a client can label a row
+	// "claude · secure-agent@main" instead of a bare process cwd. Empty when no
+	// session has been resolved for the tree yet.
+	SessionID string `json:"session_id,omitempty"`
+	Workspace string `json:"workspace,omitempty"`
+	Repo      string `json:"repo,omitempty"`
+	Branch    string `json:"branch,omitempty"`
 }
 
 type Status struct {
@@ -149,6 +157,7 @@ type API struct {
 	notifyScopes *correlate.NotifyScopeStore
 	retriage     *RetriageFuncs
 	hostAssess   *HostAssessFuncs
+	guardAdvisor func(model.GuardAssessmentRequest)
 	guardSeq     uint64
 
 	peerRole   *peers
@@ -238,6 +247,10 @@ type Deps struct {
 	Retriage   *RetriageFuncs
 	HostAssess *HostAssessFuncs
 
+	// GuardAdvisor, when set, is offered each newly blocked guard prompt for an
+	// advisory recommendation. NEVER resolves the prompt — the human decides.
+	GuardAdvisor func(model.GuardAssessmentRequest)
+
 	// Peers (optional). An empty Checker leaves the API ungated.
 	PeerChecker PeerChecker
 	AgentPIDs   func() map[int32]struct{}
@@ -275,6 +288,7 @@ func New(d Deps) *API {
 		notifyScopes:    d.NotifyScopes,
 		retriage:        d.Retriage,
 		hostAssess:      d.HostAssess,
+		guardAdvisor:    d.GuardAdvisor,
 		agentPIDs:       d.AgentPIDs,
 		fleetSinks:      d.FleetSink,
 		fleetConfigured: d.FleetConfigured,
@@ -674,6 +688,32 @@ func (a *API) currentStatus() Status {
 		}
 	}
 	st.Trees = GroupAgentTrees(st.Agents)
+	// Join each tree root to its durable session (by root pid) so the menubar
+	// and console can label a row with the harness + repo@branch the session
+	// knows — the process cwd alone reads as "/" for many agents.
+	if byRoot := a.store.SessionsByRootPID(); len(byRoot) > 0 {
+		for i := range st.Trees {
+			root := &st.Trees[i].Root
+			pid := root.RootPID
+			if pid == 0 {
+				pid = root.PID
+			}
+			if sess, ok := byRoot[pid]; ok {
+				if root.SessionID == "" {
+					root.SessionID = sess.ID
+				}
+				if root.Workspace == "" {
+					root.Workspace = sess.Workspace
+				}
+				if root.Repo == "" {
+					root.Repo = sess.Repo
+				}
+				if root.Branch == "" {
+					root.Branch = sess.Branch
+				}
+			}
+		}
+	}
 	st.UnactedFlags24h = len(a.store.QueryFlags(store.FlagFilter{
 		Unacted:     true,
 		MinSeverity: 2,

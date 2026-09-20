@@ -26,10 +26,63 @@ function eventKey(e) {
   return `${e.ts}|${e.pid}|${e.kind}|${e.detail || e.path || e.remote_host || ''}`;
 }
 
+// advisorAdviceHTML: the advisor's recommendation on a blocked guard prompt.
+// Advisory only — it never resolves the prompt; it informs the human's choice.
+// assessment (benign|suspicious|malicious) maps to allow|look|deny.
+function advisorAdviceHTML(advice) {
+  if (!advice || !advice.rationale) return '';
+  const verdict = advice.assessment === 'benign' ? 'allow'
+    : advice.assessment === 'malicious' ? 'deny' : 'look';
+  const pct = Math.round((Number(advice.confidence) || 0) * 100);
+  return `<span class="advisor-advice ${verdict}">`
+    + `<b>Advisor suggests ${verdict === 'look' ? 'you look first' : verdict}</b>`
+    + `${pct ? ` (${pct}% conf)` : ''} — ${escapeHTML(advice.rationale)}</span>`;
+}
+
 // sessionShort: the display form of a harness session id (first 8 chars),
 // shared by the flag card chip and the timeline filter chip.
 function sessionShort(id) {
   return String(id || '').slice(0, 8);
+}
+
+// harnessMeta: per-harness identity for the console — a brand color and a
+// short glyph so "claude", "cursor" and "codex" rows are distinguishable at a
+// glance (they were all identical before). Mirrors the menubar's AgentIdentity
+// palette so the two surfaces agree. Pure: returns data, no DOM.
+function harnessMeta(name) {
+  const key = String(name || '').toLowerCase();
+  const known = [
+    ['claude', '✳', 'hsl(18 60% 58%)'],      // Anthropic clay
+    ['cursor', '▰', 'hsl(220 8% 62%)'],       // Cursor near-black (lightened)
+    ['codex', '⬡', 'hsl(168 68% 42%)'],       // OpenAI teal
+    ['opencode', '〈', 'hsl(258 90% 72%)'],
+    ['antigravity', '▲', 'hsl(233 90% 68%)'],
+    ['agy', '▲', 'hsl(233 90% 68%)'],
+    ['windsurf', '≋', 'hsl(178 82% 38%)'],
+    ['aider', '◉', 'hsl(20 90% 58%)'],
+    ['gemini', '✦', 'hsl(218 88% 64%)'],
+    ['codeium', '◈', 'hsl(201 88% 46%)'],
+    ['copilot', '◍', 'hsl(220 12% 60%)'],
+    ['ollama', '◐', 'hsl(0 0% 70%)'],
+    ['lm-studio', '◧', 'hsl(210 50% 48%)'],
+  ];
+  for (const [needle, glyph, color] of known) {
+    if (key.includes(needle)) return { glyph, color, known: true };
+  }
+  // Unknown harness: deterministic hue from the name, first letter as glyph.
+  let h = 2166136261;
+  for (const b of key) h = (h ^ b.charCodeAt(0)) >>> 0, h = Math.imul(h, 16777619) >>> 0;
+  return { glyph: (name || '?').trim().slice(0, 1).toUpperCase() || '?',
+           color: `hsl(${h % 360} 62% 62%)`, known: false };
+}
+
+// harnessChipHTML: the icon tile + label used in list rows. The tile carries
+// the harness color; aria-hidden so screen readers read the label once.
+function harnessChipHTML(name) {
+  const m = harnessMeta(name);
+  return `<span class="harness-chip" title="${escapeHTML(name || 'agent')}">`
+    + `<span class="harness-glyph" style="--harness-color:${m.color}" aria-hidden="true">${escapeHTML(m.glyph)}</span>`
+    + `</span>`;
 }
 
 // filterEventsBySession: the timeline's session drill-down. Client-side over
@@ -447,7 +500,12 @@ function fmtCompact(n) {
 function sessionLabelDurable(s) {
   const name = s.harness || 'agent';
   if (s.repo) return `${name} · ${s.repo}${s.branch ? '@' + s.branch : ''}`;
-  return `${name} · ${cwdLabel(s.workspace) || 'unknown workspace'}`;
+  const ws = cwdLabel(s.workspace);
+  if (ws) return `${name} · ${ws}`;
+  // No workspace resolved: fall back to a short session id rather than the
+  // misleading "unknown workspace" for a row that is otherwise fine.
+  const short = sessionShort(s.id);
+  return short ? `${name} · ${short}` : name;
 }
 
 function sessionRowsDurable(sessions, trees) {
@@ -683,6 +741,7 @@ function buildAttentionGroups(data) {
     kind: 'guard', priority: 5, id: prompt.id, title: 'Guard decision',
     detail: `${prompt.tool || 'Tool'} wants access to ${prompt.path || 'a protected path'}`,
     rule: prompt.rule_id || '', path: prompt.path || '', scopeText: prompt.scope_text || '',
+    advisor: prompt.advisor || null,
   }));
   (data.incidents || []).forEach(incident => {
     const status = (incident.workflow && incident.workflow.status) || 'open';

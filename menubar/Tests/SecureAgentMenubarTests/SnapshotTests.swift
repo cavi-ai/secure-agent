@@ -23,7 +23,7 @@ final class SnapshotTests: XCTestCase {
     func testPendingGuardHeadlineLanguage() {
         let p = GuardPending(id: "g1", agent: "claude", tool: "Read",
                              path: "/Users/x/.aws/credentials", ruleID: "cloud-creds",
-                             ts: "", scopeText: nil)
+                             ts: "", scopeText: nil, advisor: nil)
         XCTAssertEqual(ConsoleView.guardPromptHeadline(p),
                        "Claude wants to read a cloud credential file")
         XCTAssertTrue(ConsoleView.guardPromptDetail(p).contains("credentials"))

@@ -163,14 +163,14 @@ def main():
               and "Ask the advisor" in dom_uninsp)
         check("egress rows with a verdict show the advisor chip",
               'advisor-chip adv-benign' in dom_uninsp)
-        # A toast fired while the egress modal is open must render ABOVE it.
-        # Native <dialog> lives in the browser top layer, which no root-level
-        # z-index can beat — so the toast is hosted inside the dialog. This is
-        # the "toast goes in the background, everything fails" regression.
-        dialog_start = dom_toast.find('id="report-modal"')
-        dialog_block = dom_toast[dialog_start:dialog_start + 6000] if dialog_start >= 0 else ''
-        check("toast renders inside the open modal (top layer)",
-              'class="toast-host"' in dialog_block and 'class="toast ' in dialog_block)
+        # A toast fired while the drawer is open must be present and the drawer
+        # must be open. The old native-<dialog> + top-layer toast dance is gone:
+        # the drawer is ordinary DOM and toasts are a top-layer popover, so a
+        # toast can no longer fall behind the overlay.
+        check("drawer is open for the drill-down",
+              'id="drawer" class="drawer"' in dom_toast and 'id="drawer" class="drawer" hidden' not in dom_toast)
+        check("toast rendered while the drawer is open",
+              'class="toast ' in dom_toast)
         check("vendor-key promote banner",
               'data-action="promote-vendor-keys"' in dom and "1 vendor-key rule" in dom)
         check("incident workflow chip (ack)", 'class="workflow-chip acked"' in dom)
@@ -230,7 +230,7 @@ def main():
               'data-action="open-uninspected"' in dom)
         check("posture uninspected item deep-links to drill-down",
               'data-action="open-uninspected">see endpoints<' in dom)
-        check("drill-down modal title", "Uninspected egress — last 24h" in dom_uninsp)
+        check("drill-down drawer title", "Uninspected egress — last 24h" in dom_uninsp)
         check("drill-down lists endpoint host", "registry.npmjs.org" in dom_uninsp
               and "statsig.example.com" in dom_uninsp)
         check("drill-down allow action delegated",
@@ -342,8 +342,8 @@ def main():
         check("resource policy source is visible on sessions",
               "workspace policy · /Users/dev/workspace" in resource_view)
         check("resource policy editor opens with the active document",
-              'id="resource-policy-modal" class="modal resource-policy-modal" open' in dom_policy
-              and "Policy editor" in dom_policy and "Machine default" in dom_policy)
+              'id="drawer" class="drawer resource-policy"' in dom_policy
+              and "Resource policy editor" in dom_policy and "Machine default" in dom_policy)
         check("resource intervention ladder is visible",
               "notify → lower priority → pause → terminate" in resource_view)
         check("policy editor exposes intervention steps",
