@@ -577,3 +577,35 @@ func TestIncidentStatusWorkflow(t *testing.T) {
 		t.Fatalf("resolution note = %q", wf.ResolutionNote)
 	}
 }
+
+// Trace kinds are exempt from the global row cap: socket churn at 73% of
+// rows evicted a 7-day trace window down to 15 hours (the audit). The cap
+// now counts OS-event kinds only; trace kinds have their own budgets.
+func TestPruneExemptsTraceKindsFromCountCap(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(filepath.Join(dir, "e.db"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	now := time.Now()
+	// 60 OS events (conn churn) vs 20 trace rows: a cap of 50 must evict OS
+	// rows but leave every trace row.
+	for i := 0; i < 60; i++ {
+		s.PutEvent(event.Event{Kind: event.KindConnOpen, PID: 1, TS: now})
+	}
+	for i := 0; i < 20; i++ {
+		s.PutEvent(event.Event{Kind: event.KindToolCall, TS: now, SessionID: "s", CallID: fmt.Sprintf("c%d", i), ToolName: "Bash", ToolStatus: "ok"})
+	}
+	s.PruneEvents(50)
+
+	kind := int(event.KindToolCall)
+	if n := len(s.QueryEvents(EventFilter{Kind: &kind})); n != 20 {
+		t.Fatalf("trace rows after prune = %d, want 20 (cap must not evict trace)", n)
+	}
+	conn := int(event.KindConnOpen)
+	if n := len(s.QueryEvents(EventFilter{Kind: &conn})); n >= 60 {
+		t.Fatalf("OS rows after prune = %d, want evicted down to the cap", n)
+	}
+}

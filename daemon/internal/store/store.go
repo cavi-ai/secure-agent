@@ -537,7 +537,11 @@ func (s *Store) pruneEventsLocked(maxKeep int) {
 		maxKeep = 10000
 	}
 	// Time-based per kind first (datetime() normalizes any legacy local-offset
-	// ts values), then the row-count cap as a pure backstop.
+	// ts values), then the row-count cap as a pure backstop. Trace kinds are
+	// EXEMPT from the count cap: they are the product's memory ("what did
+	// claude do"), and socket churn at 73% of rows evicted a 7-day trace
+	// window down to 15 hours (the audit's finding). Their time retention
+	// still applies.
 	conn := s.connRetention
 	if conn <= 0 {
 		conn = DefaultConnEventRetention
@@ -553,7 +557,24 @@ func (s *Store) pruneEventsLocked(maxKeep int) {
 		int(event.KindConnOpen), int(event.KindConnClose), connCutoff)
 	_, _ = s.db.Exec(`DELETE FROM events WHERE kind NOT IN (?, ?) AND datetime(ts) < datetime(?)`,
 		int(event.KindConnOpen), int(event.KindConnClose), otherCutoff)
-	_, _ = s.db.Exec(`DELETE FROM events WHERE id NOT IN (SELECT id FROM events ORDER BY id DESC LIMIT ?)`, maxKeep)
+	// Trace kinds carry their own budget (traceKindBudget each): generous but
+	// bounded, and never counted against the OS-event cap.
+	for k, budget := range traceKindBudgets {
+		_, _ = s.db.Exec(`DELETE FROM events WHERE kind = ? AND id NOT IN
+			(SELECT id FROM events WHERE kind = ? ORDER BY id DESC LIMIT ?)`, k, k, budget)
+	}
+	// Count cap applies to non-trace kinds only.
+	_, _ = s.db.Exec(`DELETE FROM events WHERE kind NOT IN (12, 13, 14) AND id NOT IN
+		(SELECT id FROM events WHERE kind NOT IN (12, 13, 14) ORDER BY id DESC LIMIT ?)`, maxKeep)
+}
+
+// traceKindBudgets: per-kind row budgets for the agent-semantic trace. Sized
+// so a week of heavy agent work fits: ~50k calls, ~100k model calls (the
+// noisiest), ~20k turns. Time retention remains the primary bound.
+var traceKindBudgets = map[int]int{
+	int(event.KindToolCall):  50000,
+	int(event.KindTurn):      20000,
+	int(event.KindModelCall): 100000,
 }
 
 // FlagFilter narrows a flag history query. A zero value returns the most recent
