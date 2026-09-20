@@ -67,3 +67,47 @@ func TestInfraOrgPTR(t *testing.T) {
 		t.Fatalf("cached PTR = %q, want AWS", got)
 	}
 }
+
+func TestIdentify(t *testing.T) {
+	orig := lookupAddr
+	t.Cleanup(func() { lookupAddr = orig })
+	ptrCache = sync.Map{}
+	lookupAddr = func(_ context.Context, ip string) ([]string, error) { return nil, errors.New("no ptr") }
+
+	// The exact IPv6 that read as unidentifiable: Google Cloud's 2600:1901::/32.
+	if id := Identify("2600:1901:0:9e23::"); id.Org != "Google Cloud" || id.Kind != "ipv6" {
+		t.Fatalf("gcp v6 = %+v", id)
+	}
+	if id := Identify("2607:6bc0::10"); id.Org != "Anthropic" {
+		t.Fatalf("anthropic v6 = %+v", id)
+	}
+	if id := Identify("34.36.133.15"); id.Kind != "ipv4" {
+		t.Fatalf("v4 kind = %+v", id)
+	}
+	if id := Identify("not-an-ip.example.com"); id.Kind != "hostname" || id.Name == "" {
+		t.Fatalf("hostname = %+v", id)
+	}
+	// A provider registry identifies as an org even though it is not the
+	// agent's own API carrier.
+	if id := Identify("registry.npmjs.org"); id.Org != "npm registry" {
+		t.Fatalf("npm = %+v", id)
+	}
+}
+
+// Identify must be broader than InfraOrg: it may name a provider for an IP the
+// coverage headline deliberately leaves unclassified (VM hostnames).
+func TestIdentifyPTRBroadensBeyondInfraOrg(t *testing.T) {
+	orig := lookupAddr
+	t.Cleanup(func() { lookupAddr = orig })
+	ptrCache = sync.Map{}
+	lookupAddr = func(_ context.Context, ip string) ([]string, error) {
+		return []string{"17.46.190.35.bc.googleusercontent.com."}, nil
+	}
+	if got := InfraOrg("35.190.46.17"); got != "" {
+		t.Fatalf("InfraOrg must stay narrow, got %q", got)
+	}
+	id := Identify("35.190.46.17")
+	if id.Org != "Google Cloud" || id.Name == "" {
+		t.Fatalf("Identify should name the provider: %+v", id)
+	}
+}

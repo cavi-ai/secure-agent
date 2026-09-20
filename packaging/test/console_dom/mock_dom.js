@@ -246,8 +246,18 @@
       { agent: 'claude', host: 'statsig.example.com', count: 3, first_seen: iso(7200000), last_seen: iso(900000), session_id: 'sess-claude-1' },
       { agent: 'claude', host: 'telemetry.example.com', count: 5, first_seen: iso(5400000), last_seen: iso(600000), session_id: 'sess-claude-1' },
       { agent: 'cursor', host: '2606:4700:4408::ac40:9bd1', count: 56, last_seen: iso(600000), infra: 'Cloudflare' },
-      { agent: 'codex', host: 'ec2-98-90-104-193.compute-1.amazonaws.com', count: 11, last_seen: iso(700000), infra: 'AWS' }
+      { agent: 'codex', host: 'ec2-98-90-104-193.compute-1.amazonaws.com', count: 11, last_seen: iso(700000), infra: 'AWS' },
+      { agent: 'claude', host: '2600:1901:0:9e23::', count: 2, last_seen: iso(400000) }
     ],
+    '/egress/endpoint': {
+      host: '2600:1901:0:9e23::',
+      identity: { kind: 'ipv6', org: 'Google Cloud' },
+      agents: ['claude'],
+      count: 2, first_seen: iso(7200000), last_seen: iso(400000),
+      sessions: [{ id: 'sess-claude-1', harness: 'claude', workspace: '/Users/dev/workspace/api-service', repo: 'api-service', branch: 'main' }],
+      events: [{ ts: iso(400000), remote_port: 443, session_id: 'sess-claude-1' }],
+      allowed: []
+    },
     '/notify/rules': {
       default_min_severity: 3,
       overrides: { 'keychain-access': false },
@@ -477,6 +487,10 @@
   // Auto-action: open the uninspected-egress drill-down modal.
   if (location.search.includes('uninspecteddemo')) {
     setTimeout(() => window.openUninspected(), 4000);
+  }
+  // Auto-action: open the endpoint Evidence detail for the unattributed IPv6.
+  if (location.search.includes('endpointdemo')) {
+    setTimeout(() => window.openEndpointDetail('2600:1901:0:9e23::', 'claude'), 4000);
   }
   // Auto-action: open the egress modal, then fire a toast from inside it —
   // proves the toast renders above the open modal (native <dialog> is in the

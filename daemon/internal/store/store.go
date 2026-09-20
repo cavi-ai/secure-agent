@@ -574,11 +574,12 @@ type FlagFilter struct {
 // EventFilter narrows an event history query. Kind is a pointer because kind 0
 // (KindFileOpen) is a valid filter value distinct from "not set".
 type EventFilter struct {
-	Kind      *int   // exact kind; nil = any
-	PID       int32  // exact pid; 0 = any
-	SessionID string // exact session; "" = any
-	Since     string // ts >= this; empty = any
-	Limit     int    // 0 = 50
+	Kind       *int   // exact kind; nil = any
+	PID        int32  // exact pid; 0 = any
+	SessionID  string // exact session; "" = any
+	RemoteHost string // exact remote host; "" = any
+	Since      string // ts >= this; empty = any
+	Limit      int    // 0 = 50
 }
 
 func (s *Store) RecentFlags(limit int) []model.Flag {
@@ -932,6 +933,10 @@ func (s *Store) QueryEvents(f EventFilter) []event.Event {
 	if f.SessionID != "" {
 		q += " AND session_id = ?"
 		args = append(args, f.SessionID)
+	}
+	if f.RemoteHost != "" {
+		q += " AND remote_host = ?"
+		args = append(args, f.RemoteHost)
 	}
 	if f.Since != "" {
 		q += " AND datetime(ts) >= datetime(?)"
