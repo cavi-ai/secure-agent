@@ -1,6 +1,9 @@
 package collect
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
@@ -87,5 +90,35 @@ func TestAGYToolCallsCarrySyntheticCallID(t *testing.T) {
 	evs2, _ := tr2.ParseLine(agyToolLine)
 	if evs2[0].CallID != evs[0].CallID {
 		t.Fatalf("rebuild id %q != original %q", evs2[0].CallID, evs[0].CallID)
+	}
+}
+
+// The synthetic id sequence resumes past the calls already in the file after
+// a daemon restart (the tailer resumes at EOF; a counter restarting at 1
+// would upsert later calls onto pre-restart rows).
+func TestAGYToolCallSequenceSurvivesRestart(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "brain", "uuid-nine", ".system_generated", "logs")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "transcript_full.jsonl")
+	pre := strings.Join([]string{
+		`{"step_index":1,"type":"USER_INPUT","status":"DONE","created_at":"2026-09-11T09:38:10Z","content":"go"}`,
+		`{"step_index":2,"type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-09-11T09:38:12Z","tool_calls":[{"name":"run_command"}]}`,
+		"", // trailing newline, as a real transcript has
+	}, "\n")
+	if err := os.WriteFile(path, []byte(pre), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tr := NewAGYTracer(path)
+	evs, ok := tr.ParseLine(agyToolLine)
+	if !ok || len(evs) != 2 {
+		t.Fatalf("evs = %+v, want 2 tool calls", evs)
+	}
+	if want := "-agy-2"; !strings.HasSuffix(evs[0].CallID, want) {
+		t.Fatalf("call id = %q, want suffix %q (resumes past the 1 pre-restart call)", evs[0].CallID, want)
+	}
+	if want := "-agy-3"; !strings.HasSuffix(evs[1].CallID, want) {
+		t.Fatalf("call id = %q, want suffix %q", evs[1].CallID, want)
 	}
 }

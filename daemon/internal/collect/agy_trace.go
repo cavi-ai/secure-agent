@@ -1,6 +1,7 @@
 package collect
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -50,17 +51,18 @@ type AGYTracer struct {
 	sessionID string
 	workspace string
 	// toolSeq numbers the tool calls within this file so each gets a stable
-	// synthetic call id: agy records carry no tool-call id, and rows without
-	// one inserted forever without updating (NULL call ids are distinct in
-	// the store's unique index) — 150 unpairable rows in the audit.
+	// synthetic call id: agy records carry no tool-call id, and NULL call ids
+	// are distinct in the store's unique index, so id-less rows insert forever
+	// without updating.
 	toolSeq int
 }
 
 // NewAGYTracer builds a tracer for one brain transcript, taking the session id
 // from the brain directory UUID and the workspace best-effort from agy's
-// conversation cache.
+// conversation cache. The tool-call sequence is seeded from the calls already
+// in the file so ids resume past them after a daemon restart.
 func NewAGYTracer(path string) *AGYTracer {
-	t := &AGYTracer{}
+	t := &AGYTracer{toolSeq: countAGYToolCalls(path)}
 	// .../brain/<uuid>/.system_generated/logs/transcript_full.jsonl → uuid.
 	if parts := strings.Split(filepath.ToSlash(path), "/brain/"); len(parts) == 2 {
 		t.sessionID = strings.SplitN(parts[1], "/", 2)[0]
@@ -69,6 +71,35 @@ func NewAGYTracer(path string) *AGYTracer {
 		t.workspace = agyWorkspaceFor(t.sessionID)
 	}
 	return t
+}
+
+// countAGYToolCalls counts the tool calls already in the file, matching
+// ParseLine's emission rule exactly (records with named tool_calls entries).
+func countAGYToolCalls(path string) int {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0
+	}
+	defer f.Close()
+	n := 0
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if !strings.HasPrefix(line, "{") || !strings.Contains(line, `"type"`) {
+			continue
+		}
+		var rec agyRecord
+		if json.Unmarshal([]byte(line), &rec) != nil {
+			continue
+		}
+		for _, tc := range rec.ToolCalls {
+			if tc.Name != "" {
+				n++
+			}
+		}
+	}
+	return n
 }
 
 // Session returns the identity learned from the path + cache.
@@ -121,8 +152,7 @@ func (t *AGYTracer) ParseLine(line string) (events []event.Event, ok bool) {
 		if tc.Name == "" {
 			continue
 		}
-		// Synthetic call id: session + per-file sequence. Deterministic per
-		// append order; the store upserts completions into THIS row.
+		// Synthetic call id: session + per-file sequence.
 		t.toolSeq++
 		events = append(events, event.Event{
 			Kind: event.KindToolCall, TS: ts, SessionID: t.sessionID,

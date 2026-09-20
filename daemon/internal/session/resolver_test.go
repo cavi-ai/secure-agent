@@ -216,9 +216,10 @@ func TestSessionFloorDefersYoungRoots(t *testing.T) {
 	}
 }
 
-// A young root that dies before the floor never becomes a row: the
-// bounded-turn flood (417 sub-minute codex runs a day) stays out of the
-// store entirely.
+// A young root that dies before the floor never becomes a row. Regression:
+// the promote path treated an untaggable root (dead, pruned by refresh) as
+// aged past the floor — the touch throttle guarantees Tag fails first, so
+// every young death leaked into the store.
 func TestSessionFloorDropsYoungDeaths(t *testing.T) {
 	r, st := testResolver(t, fakeProcs{
 		100: {PID: 100, PPID: 1, Exe: "/usr/local/bin/codex", CWD: "/repo", StartTime: time.Now()},
@@ -227,31 +228,36 @@ func TestSessionFloorDropsYoungDeaths(t *testing.T) {
 	if id := r.Resolve(&e); id == "" {
 		t.Fatal("must attribute in memory")
 	}
-	// Root exits young.
+	// Root exits young; the tagger prunes it on refresh.
 	r.tagger = agents.New(mustConfig(t), fakeProcs{})
 	r.tagger.Refresh()
-	r.Sweep()
-	if n := len(st.ListSessions(store.SessionFilter{Status: model.SessionEnded})); n != 0 {
-		t.Fatalf("ended rows = %d, want 0 (young death is not a session)", n)
+	// A late touch must not promote the dead stub.
+	r.mu.Lock()
+	r.touchLocked("proc-100-0", time.Now().Add(2*time.Minute).Add(31*time.Second))
+	rows := len(st.ListSessions(store.SessionFilter{}))
+	r.mu.Unlock()
+	if rows != 0 {
+		t.Fatalf("sessions = %d, want 0 (young death promoted via Tag-failure)", rows)
 	}
-	if n := len(st.ListSessions(store.SessionFilter{})); n != 0 {
-		t.Fatalf("sessions = %d, want 0", n)
+	if n := len(st.ListSessions(store.SessionFilter{Status: model.SessionEnded})); n != 0 {
+		t.Fatalf("ended rows = %d, want 0", n)
 	}
 }
 
-// An orchestrated bounded-turn workspace (OpenClaw's scratch dirs) is never
-// persisted no matter how long it lives, and nests under its orchestrator's
-// session when one exists.
-func TestEphemeralWorkspaceNeverPersists(t *testing.T) {
+// A long-lived process-tree session persists once past the floor wherever its
+// workspace lives. Regression guard for the removed /openclaw/ path marker:
+// it stopped persistence for established conversations under that path.
+func TestAgedWorkspacePersistsRegardlessOfPath(t *testing.T) {
+	ws := "/Volumes/workspace/FORKS-PR-ONLY/openclaw/probe-42/workspace"
 	r, st := testResolver(t, fakeProcs{
-		100: {PID: 100, PPID: 1, Exe: "/usr/local/bin/codex", CWD: "/private/tmp/openclaw/codex-bounded-turn-42/workspace", StartTime: time.Now().Add(-time.Hour)},
+		100: {PID: 100, PPID: 1, Exe: "/usr/local/bin/codex", CWD: ws, StartTime: time.Now().Add(-time.Hour)},
 	})
 	e := event.Event{Kind: event.KindFileOpen, PID: 100, TS: time.Now()}
 	if id := r.Resolve(&e); id == "" {
 		t.Fatal("must attribute in memory")
 	}
-	if n := len(st.ListSessions(store.SessionFilter{})); n != 0 {
-		t.Fatalf("orchestrated scratch run persisted %d rows, want 0", n)
+	if n := len(st.ListSessions(store.SessionFilter{})); n != 1 {
+		t.Fatalf("aged session persisted %d rows, want 1", n)
 	}
 }
 

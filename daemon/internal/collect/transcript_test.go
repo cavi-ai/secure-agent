@@ -78,6 +78,52 @@ func TestScannerTailsActiveFile(t *testing.T) {
 	}
 }
 
+// A line longer than the reader's buffer must still parse. Regression: lines
+// over 4 KB were counted toward the offset and skipped — real prompt records
+// run 10 KB+, so turn detection silently saw none of them.
+func TestOverlongLineStillParses(t *testing.T) {
+	dir := t.TempDir()
+	projectsDir := filepath.Join(dir, ".claude", "projects")
+	if err := os.MkdirAll(projectsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	logPath := filepath.Join(projectsDir, "session.jsonl")
+	if err := os.WriteFile(logPath, []byte("seed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	b := bus.New(16)
+	sub := b.Subscribe()
+	ts := NewTranscriptScanner(b, []string{logPath})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go ts.Run(ctx)
+
+	// Append a 12 KB user-prompt record after the seed.
+	time.Sleep(250 * time.Millisecond)
+	long := strings.Repeat("x", 12000)
+	line := `{"sessionId":"turn-long","type":"user","timestamp":"2026-09-20T17:44:53.118Z","message":{"content":"` + long + `"}}` + "\n"
+	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(line); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+
+	for {
+		select {
+		case e := <-sub:
+			if e.Kind == event.KindTurn {
+				return
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatal("overlong prompt line was skipped, no turn published")
+		}
+	}
+}
+
 func TestScanLineFakeCursorActivity(t *testing.T) {
 	line := `{"file_path":"/tmp/foo/.env","pid":12345,"tool":"Read"}`
 	e, ok := ScanLine(line)

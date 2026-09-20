@@ -42,7 +42,7 @@ type Store struct {
 	// Per-kind time-based retention. Socket churn (conn open/close) ages out
 	// in hours; security-relevant kinds keep days. Count-based pruning stays
 	// as a backstop — a busy machine must never let conn noise evict the
-	// security record (the 10k-row, zero-activity window from the audit).
+	// security record.
 	connRetention  time.Duration
 	eventRetention time.Duration
 	// lastSeen[pid] = RFC3339Nano ts of the most recent event for that pid,
@@ -288,7 +288,7 @@ func Open(dbPath, jsonlPath string) (*Store, error) {
 	//
 	// Created HERE, after the call_id migration above: on an older database
 	// the index would otherwise reference a column that did not yet exist and
-	// Open() would fail. (Observed bug: "no such column: call_id".)
+	// Open() would fail.
 	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_events_call ON events(session_id, call_id);`); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("failed to create events call index: %w", err)
@@ -540,8 +540,7 @@ func (s *Store) pruneEventsLocked(maxKeep int) {
 	// ts values), then the row-count cap as a pure backstop. Trace kinds are
 	// EXEMPT from the count cap: they are the product's memory ("what did
 	// claude do"), and socket churn at 73% of rows evicted a 7-day trace
-	// window down to 15 hours (the audit's finding). Their time retention
-	// still applies.
+	// window down to 15 hours. Their time retention still applies.
 	conn := s.connRetention
 	if conn <= 0 {
 		conn = DefaultConnEventRetention

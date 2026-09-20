@@ -1,8 +1,10 @@
 package collect
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -17,9 +19,8 @@ import (
 // a message.content array carrying text and tool_use blocks. Two deliberate
 // limits, because the format has them:
 //   - No timestamps: events use the observation time (file append time).
-//   - No tool_result: a tool_use is never paired with its result, so a call
-//     is emitted with status "running" and no duration. The tool NAME and the
-//     turn structure are the trace; durations for Cursor cannot be recovered.
+//   - No tool_result: a tool_use is never paired with its result. Status is
+//     "unknown"; "running" would be flipped to "error" by the running-row sweep.
 //
 // No model id, token counts, or cost appear in these transcripts either, so
 // Cursor sessions carry tool calls and turns only. Content is never carried
@@ -55,15 +56,47 @@ type CursorTracer struct {
 
 // NewCursorTracer builds a tracer for one transcript file, taking the session
 // id from the filename (<uuid>.jsonl) and the workspace from the project slug.
+// The tool-call sequence is seeded from the calls already in the file so ids
+// resume past them after a daemon restart (the tailer resumes at EOF).
 func NewCursorTracer(path string) *CursorTracer {
 	base := strings.TrimSuffix(filepath.Base(path), ".jsonl")
-	t := &CursorTracer{sessionID: base}
+	t := &CursorTracer{sessionID: base, toolSeq: countCursorToolCalls(path)}
 	// .../projects/<slug>/agent-transcripts/<uuid>/<uuid>.jsonl → slug.
 	if parts := strings.Split(filepath.ToSlash(path), "/projects/"); len(parts) == 2 {
 		slug := strings.SplitN(parts[1], "/", 2)[0]
 		t.workspace = workspaceFromCursorSlug(slug)
 	}
 	return t
+}
+
+// countCursorToolCalls counts the tool calls already in the file, matching
+// ParseLine's emission rule exactly (assistant records, tool_use with a name).
+func countCursorToolCalls(path string) int {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0
+	}
+	defer f.Close()
+	n := 0
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if !strings.HasPrefix(line, "{") || !strings.Contains(line, `"role"`) {
+			continue
+		}
+		var rec cursorRecord
+		if json.Unmarshal([]byte(line), &rec) != nil || rec.Role != "assistant" {
+			continue
+		}
+		for _, raw := range rec.Message.Content {
+			var c cursorContent
+			if json.Unmarshal(raw, &c) == nil && c.Type == "tool_use" && c.Name != "" {
+				n++
+			}
+		}
+	}
+	return n
 }
 
 // workspaceFromCursorSlug best-effort decodes Cursor's lossy project slug
@@ -125,7 +158,7 @@ func (t *CursorTracer) ParseLine(line string) (events []event.Event, ok bool) {
 					// pairs with it, but the row is keyed and idempotent under
 					// transcript re-reads instead of a new row each time.
 					CallID:   fmt.Sprintf("%s-cur-%d", t.sessionID, t.toolSeq),
-					ToolName: c.Name, ToolStatus: "running", // no result to pair with
+					ToolName: c.Name, ToolStatus: "unknown",
 				})
 			}
 		}

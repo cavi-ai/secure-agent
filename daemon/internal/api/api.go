@@ -117,7 +117,7 @@ type Status struct {
 	UnactedFlags24h int `json:"unacted_flags_24h"`
 	// BusDrops counts in-process events a subscriber missed because its
 	// buffer was full. Zero is healthy; growth under N-agent bursts is the
-	// hot-path signal the audit asked to surface.
+	// hot-path signal to surface.
 	BusDrops uint64 `json:"bus_drops,omitempty"`
 
 	// Coverage reports how many running harnesses the daemon is actually
@@ -221,9 +221,9 @@ type HostAssessFuncs struct {
 }
 
 // Deps is the API's complete dependency set, resolved once at composition.
-// It replaces the twenty optional setters the audit called out: every field is
-// read in New, so wiring a component is one struct literal and a missing
-// component is visible at the call site instead of a nil check at serve time.
+// It replaces the twenty optional setters: every field is read in New, so
+// wiring a component is one struct literal and a missing component is visible
+// at the call site instead of a nil check at serve time.
 // Optional fields may be left zero — the handlers degrade to their documented
 // "not enabled" response.
 type Deps struct {

@@ -1,6 +1,9 @@
 package collect
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
@@ -19,13 +22,14 @@ func TestCursorTraceToolsAndTurns(t *testing.T) {
 		t.Fatalf("workspace = %q, want the decoded slug", ws)
 	}
 
-	// Assistant record → one running tool_call per tool_use (no pairing).
+	// Assistant record → one tool_call per tool_use; status unknown (no
+	// tool_result in Cursor; "running" would be swept to error).
 	evs, ok := tr.ParseLine(cursorAssistantLine)
 	if !ok || len(evs) != 2 {
 		t.Fatalf("assistant evs = %+v, want 2 tool calls", evs)
 	}
 	for _, e := range evs {
-		if e.Kind != event.KindToolCall || e.ToolStatus != "running" || e.SessionID != "abcdef12-3456" {
+		if e.Kind != event.KindToolCall || e.ToolStatus != "unknown" || e.SessionID != "abcdef12-3456" {
 			t.Fatalf("tool_call = %+v", e)
 		}
 	}
@@ -88,5 +92,29 @@ func TestCursorToolCallsCarrySyntheticCallID(t *testing.T) {
 	evs2, _ := tr2.ParseLine(line)
 	if evs2[0].CallID != evs[0].CallID {
 		t.Fatalf("rebuild id %q != original %q", evs2[0].CallID, evs[0].CallID)
+	}
+}
+
+// The synthetic id sequence resumes past the calls already in the file after
+// a daemon restart (the tailer resumes at EOF; a counter restarting at 1
+// would upsert later calls onto pre-restart rows).
+func TestCursorToolCallSequenceSurvivesRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "session-uuid.jsonl")
+	pre := strings.Join([]string{
+		`{"role":"assistant","message":{"content":[{"type":"tool_use","name":"Read"},{"type":"tool_use","name":"Edit"}]}}`,
+		`{"role":"user","message":{"content":[{"type":"text","text":"next"}]}}`,
+		"", // trailing newline, as a real transcript has
+	}, "\n")
+	if err := os.WriteFile(path, []byte(pre), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tr := NewCursorTracer(path)
+	line := `{"role":"assistant","message":{"content":[{"type":"tool_use","name":"Bash"}]}}`
+	evs, ok := tr.ParseLine(line)
+	if !ok || len(evs) != 1 {
+		t.Fatalf("evs = %+v, want 1 tool call", evs)
+	}
+	if want := "session-uuid-cur-3"; evs[0].CallID != want {
+		t.Fatalf("call id = %q, want %q (resumes past the 2 pre-restart calls)", evs[0].CallID, want)
 	}
 }

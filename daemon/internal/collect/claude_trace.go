@@ -24,9 +24,8 @@ type claudeRecord struct {
 	Timestamp string `json:"timestamp"`
 	// isMeta records are harness-injected context (system reminders,
 	// command wrappers), never operator prompts. isSidechain records are
-	// subagent side conversations. Both must not count as turns — the audit
-	// found 1 kind-13 row against ~20 real prompts while these made up the
-	// noise that drowned detection.
+	// subagent side conversations. Both must not count as turns: counting
+	// them drowns real prompts in noise and understates turn coverage.
 	IsMeta      *bool `json:"isMeta"`
 	IsSidechain *bool `json:"isSidechain"`
 	Message     struct {

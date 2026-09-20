@@ -49,7 +49,7 @@ func main() {
 
 	// Build is the composition root: it resolves every component from cfg and
 	// starts the collectors and servers. main() is CLI parsing plus process
-	// lifecycle only (the shape the audit asked for).
+	// lifecycle only.
 	comps, err := daemon.Build(ctx, cfg, daemon.Options{ConfigPath: configPathUsed})
 	if err != nil {
 		log.Fatalf("failed to start daemon: %v", err)

@@ -306,6 +306,9 @@ func TestHarnessUncoveredIgnoresTranscriptHits(t *testing.T) {
 // The guard-hook registration item is independent of transcript coverage: it
 // reports a missing settings.json entry while agents are active.
 func TestGuardHookUnregisteredItem(t *testing.T) {
+	// Hermetic HOME: the item reads the live ~/.claude/settings.json; a
+	// machine with the hook registered must not flip this test's outcome.
+	t.Setenv("HOME", t.TempDir())
 	// No agents → nothing to say.
 	if item := guardHookUnregisteredItem(Status{ActiveAgents: 0}); item != nil {
 		t.Fatalf("no agents must not raise the item: %+v", item)
