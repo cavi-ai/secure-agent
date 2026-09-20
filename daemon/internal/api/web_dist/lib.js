@@ -39,7 +39,78 @@ function advisorAdviceHTML(advice) {
     + `${pct ? ` (${pct}% conf)` : ''} — ${escapeHTML(advice.rationale)}</span>`;
 }
 
-// sessionShort: the display form of a harness session id (first 8 chars),
+// eventClock: RFC3339 → local HH:MM:SS, '' when unparseable. Shared by the
+// endpoint drill-down; the timeline's own helper is local to that builder.
+function eventClock(s) {
+  const d = Date.parse(s);
+  return isNaN(d) ? '' : fmtTime(new Date(d));
+}
+
+// endpointIdentityLine: one plain sentence naming what an endpoint is, so an
+// operator can decide whether an agent's connection is rightful. Pure.
+function endpointIdentityLine(identity) {
+  if (!identity) return 'Unknown endpoint';
+  const org = identity.org || '';
+  const name = identity.name || '';
+  const isIP = identity.kind === 'ipv6' || identity.kind === 'ipv4';
+  if (isIP && org && name) return `${org} address (${name})`;
+  if (isIP && org) return `${org} address`;
+  if (isIP && name) return `Resolves to ${name}`;
+  if (isIP) return 'No owner identified — may be a private or unroutable address';
+  if (org) return `${org} (${name})`;
+  return name || 'Unknown endpoint';
+}
+
+// endpointDetailHTML: the endpoint evidence drawer. Pure function — the DOM
+// tests drive it headless.
+function endpointDetailHTML(detail, clickedAgent) {
+  if (!detail || !detail.host) {
+    return '<div class="empty"><span>No endpoint data</span></div>';
+  }
+  const id = detail.identity || {};
+  const kindChip = id.kind === 'ipv6' ? 'IPv6' : id.kind === 'ipv4' ? 'IPv4' : 'hostname';
+  const facts = [
+    detail.count ? `<b>${detail.count}×</b> in 7d` : '',
+    detail.last_seen ? `last ${fmtAge(detail.last_seen, Date.now())} ago` : '',
+    detail.first_seen ? `first seen ${fmtAge(detail.first_seen, Date.now())} ago` : '',
+  ].filter(Boolean).join(' · ');
+
+  const agents = (detail.agents || []).map(a => {
+    const isClicked = clickedAgent && a === clickedAgent;
+    return `<button type="button" class="btn btn-ghost btn-sm${isClicked ? ' active' : ''}" data-action="allow-host" data-agent="${escapeHTML(a)}" data-host="${escapeHTML(detail.host)}">Allow for ${escapeHTML(a)}</button>`;
+  }).join('');
+
+  const sessions = (detail.sessions || []).map(s => `
+    <div class="endpoint-session">
+      <strong>${escapeHTML(s.harness || 'agent')}</strong>
+      <span>${escapeHTML(s.repo ? `${s.repo}${s.branch ? '@' + s.branch : ''}` : (s.workspace || 'unknown workspace'))}</span>
+      <span class="endpoint-session-id">${escapeHTML(String(s.id || '').slice(0, 8))}</span>
+    </div>`).join('') || '<div class="resource-detail-empty">No session attribution on these connections.</div>';
+
+  const events = (detail.events || []).slice(0, 20).map(e => `
+    <div class="endpoint-event">
+      <span class="endpoint-event-time">${escapeHTML(eventClock(e.ts))}</span>
+      <span class="endpoint-event-port">:${escapeHTML(String(e.remote_port || ''))}</span>
+      <span class="endpoint-event-agent">${escapeHTML(e.session_id ? 'session ' + String(e.session_id).slice(0, 8) : (e.exe_path ? String(e.exe_path).split('/').pop() : 'agent'))}</span>
+    </div>`).join('') || '<div class="resource-detail-empty">No recorded connections.</div>';
+
+  const allowed = (detail.allowed || []).length
+    ? `<div class="endpoint-allowed">Already trusted for ${(detail.allowed || []).map(a => escapeHTML(a.agent)).join(', ')} — this endpoint stops being flagged for them.</div>`
+    : '';
+
+  return `
+    <div class="endpoint-head">
+      <div class="endpoint-host">${escapeHTML(detail.host)}</div>
+      <span class="endpoint-kind">${escapeHTML(kindChip)}</span>
+    </div>
+    <p class="endpoint-identity">${escapeHTML(endpointIdentityLine(id))}</p>
+    ${facts ? `<p class="endpoint-facts">${facts}</p>` : ''}
+    ${allowed}
+    <div class="endpoint-actions">${agents || ''}</div>
+    <section class="endpoint-section"><h4>Reached by</h4>${sessions}</section>
+    <section class="endpoint-section"><h4>Recent connections</h4>${events}</section>`;
+}
+
 // shared by the flag card chip and the timeline filter chip.
 function sessionShort(id) {
   return String(id || '').slice(0, 8);
@@ -114,6 +185,32 @@ function filterSessionRows(rows, q) {
     const name = String((r && r.root && r.root.name) || '').toLowerCase();
     return label.includes(s) || cwd.includes(s) || name.includes(s);
   });
+}
+
+// groupSessionSections: organize the session rail so live and dead work are
+// not interleaved. Active first, then idle, then ended — and the ended ones
+// collapse into their own section so a hundred finished codex runs do not
+// bury the three sessions that are actually working. Pure; the console and
+// the DOM tests both consume it.
+function groupSessionSections(rows) {
+  const active = [];
+  const idle = [];
+  const ended = [];
+  for (const r of rows || []) {
+    const st = (r && r.status) || 'active';
+    if (st === 'ended') ended.push(r);
+    else if (st === 'idle') idle.push(r);
+    else active.push(r);
+  }
+  const byRecency = (a, b) => String(b.last_seen_at || b.lastSeen || '') < String(a.last_seen_at || a.lastSeen || '') ? -1 : 1;
+  active.sort(byRecency);
+  idle.sort(byRecency);
+  ended.sort(byRecency);
+  const sections = [];
+  if (active.length) sections.push({ key: 'active', label: 'Working now', rows: active });
+  if (idle.length) sections.push({ key: 'idle', label: 'Idle', rows: idle });
+  if (ended.length) sections.push({ key: 'ended', label: 'Ended', rows: ended, collapsed: true });
+  return sections;
 }
 
 function unactedLast24h(flags, nowMs) {
@@ -497,13 +594,18 @@ function fmtCompact(n) {
 // session, alive or ended — history survives process exit. Live process
 // trees are joined by root pid for RSS/helpers/kill; ended rows render
 // dimmed with their end time and no actions.
-function sessionLabelDurable(s) {
+//
+// liveCwd is the joined process tree's working directory, used only when the
+// session's own workspace is unhelpful ("/" or empty) — a provisional
+// process-tree session otherwise rendered as "claude · proc-132", which tells
+// the operator nothing about which project the session is working in.
+function sessionLabelDurable(s, liveCwd) {
   const name = s.harness || 'agent';
   if (s.repo) return `${name} · ${s.repo}${s.branch ? '@' + s.branch : ''}`;
   const ws = cwdLabel(s.workspace);
   if (ws) return `${name} · ${ws}`;
-  // No workspace resolved: fall back to a short session id rather than the
-  // misleading "unknown workspace" for a row that is otherwise fine.
+  const live = cwdLabel(liveCwd);
+  if (live) return `${name} · ${live}`;
   const short = sessionShort(s.id);
   return short ? `${name} · ${short}` : name;
 }
@@ -516,6 +618,7 @@ function sessionRowsDurable(sessions, trees) {
   return (sessions || []).map(s => {
     const live = s.root_pid ? byRoot[Number(s.root_pid)] : null;
     const children = live ? (live.children || []) : [];
+    const liveCwd = (live && live.root && live.root.cwd) || '';
     const root = live ? live.root : {
       pid: Number(s.root_pid || 0),
       name: s.harness || 'agent',
@@ -526,7 +629,7 @@ function sessionRowsDurable(sessions, trees) {
       id: s.id || '',
       root,
       children,
-      label: sessionLabelDurable(s),
+      label: sessionLabelDurable(s, liveCwd),
       rss: live ? Number(live.rss_bytes || 0) : 0,
       lastSeen: s.last_seen_at || '',
       status: s.status || 'active',

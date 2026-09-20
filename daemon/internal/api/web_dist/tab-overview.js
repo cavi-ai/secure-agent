@@ -398,10 +398,28 @@ function renderSessionBoard() {
     if (legacy) legacy.hidden = true;
     rail.hidden = false;
     if (detail) detail.hidden = false;
-    // Rail: one card per durable session (alive and ended).
-    rail.innerHTML = rows.length
-      ? rows.map(r => sessionRailCardHTML(durable.find(s => s.id === r.id) || r, trees, SA.selectedSessionId)).join('')
-      : `<div class="empty"><svg class="icon"><use href="#i-agent"/></svg><span>${q ? 'No sessions match' : 'No sessions yet — start a harness and it appears here'}</span></div>`;
+    // Rail: durable sessions, grouped so live work is not buried under a
+    // hundred ended runs. Active → idle → ended; ended collapses.
+    if (rows.length) {
+      const sections = groupSessionSections(rows);
+      const endedOpen = !!SA.endedSessionsOpen;
+      rail.innerHTML = sections.map(section => {
+        const cards = section.rows
+          .map(r => sessionRailCardHTML(durable.find(s => s.id === r.id) || r, trees, SA.selectedSessionId))
+          .join('');
+        if (!section.collapsed) {
+          return `<div class="session-section"><div class="session-section-head">${escapeHTML(section.label)} <span>${section.rows.length}</span></div><div class="session-section-body">${cards}</div></div>`;
+        }
+        return `<div class="session-section collapsed${endedOpen ? ' open' : ''}">
+          <button type="button" class="session-section-head as-button" data-action="toggle-ended-sessions" aria-expanded="${endedOpen}">
+            ${escapeHTML(section.label)} <span>${section.rows.length}</span> <svg class="icon"><use href="#i-arrow"/></svg>
+          </button>
+          <div class="session-section-body">${cards}</div>
+        </div>`;
+      }).join('');
+    } else {
+      rail.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-agent"/></svg><span>${q ? 'No sessions match' : 'No sessions yet — start a harness and it appears here'}</span></div>`;
+    }
     // Detail: the selected session's trace waterfall.
     const selected = durable.find(s => s.id === SA.selectedSessionId);
     if (detail) {

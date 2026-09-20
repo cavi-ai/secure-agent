@@ -526,6 +526,7 @@ func (a *API) routes() map[string]http.HandlerFunc {
 		"/allowlist/suggestions":        a.handleAllowlistSuggestions,
 		"/allowlist":                    a.handleAllowlistAdd,
 		"/egress/uninspected":           a.handleUninspectedEgress,
+		"/egress/endpoint":              a.handleEndpointDetail,
 		"/notify/rules":                 a.handleNotifyRules,
 		"/guard/path-allow":             a.handleGuardPathAllow,
 		"/mute":                         a.handleMute,
@@ -1079,6 +1080,110 @@ func (a *API) handleUninspectedEgress(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(out)
+}
+
+// EndpointDetail answers "what is this endpoint?" for one host: its identity
+// (org, resolved name, v4/v6), every agent that reached it, the sessions
+// involved, and the recent connection events. The Evidence action on an egress
+// row opens this so an unknown IPv6 is explainable instead of a bare address
+// that invites blocking rightful traffic.
+type EndpointDetail struct {
+	Host      string                     `json:"host"`
+	Identity  correlate.EndpointIdentity `json:"identity"`
+	Agents    []string                   `json:"agents"`
+	Sessions  []model.Session            `json:"sessions"`
+	Count     int                        `json:"count"`
+	FirstSeen *time.Time                 `json:"first_seen,omitempty"`
+	LastSeen  *time.Time                 `json:"last_seen,omitempty"`
+	Infra     string                     `json:"infra,omitempty"`
+	// Allowed is set when the operator has already approved this host for any
+	// agent — so the drawer shows "already allowed" instead of offering it.
+	Allowed []EndpointAllowance `json:"allowed,omitempty"`
+	Events  []event.Event       `json:"events"`
+}
+
+// EndpointAllowance is one existing allowlist entry for the endpoint.
+type EndpointAllowance struct {
+	Agent string `json:"agent"`
+	Host  string `json:"host"`
+}
+
+func (a *API) handleEndpointDetail(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	host := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("host")))
+	if host == "" {
+		http.Error(w, `missing ?host=`, http.StatusBadRequest)
+		return
+	}
+	detail := EndpointDetail{
+		Host:     host,
+		Identity: correlate.Identify(host),
+		Agents:   []string{},
+		Sessions: []model.Session{},
+		Allowed:  []EndpointAllowance{},
+		Events:   []event.Event{},
+	}
+	// Aggregate every agent+host summary matching this host (case-insensitive;
+	// the summaries key on the lowercased host).
+	if a.correlator != nil {
+		for _, e := range a.correlator.UninspectedEgressSummarySince(time.Time{}) {
+			if !strings.EqualFold(e.Host, host) {
+				continue
+			}
+			detail.Agents = append(detail.Agents, e.Agent)
+			detail.Count += e.Count
+			if !e.FirstSeen.IsZero() && (detail.FirstSeen == nil || e.FirstSeen.Before(*detail.FirstSeen)) {
+				t := e.FirstSeen
+				detail.FirstSeen = &t
+			}
+			if !e.LastSeen.IsZero() && (detail.LastSeen == nil || e.LastSeen.After(*detail.LastSeen)) {
+				t := e.LastSeen
+				detail.LastSeen = &t
+			}
+			if detail.Infra == "" {
+				detail.Infra = e.Infra
+			}
+		}
+	}
+	sort.Strings(detail.Agents)
+	detail.Agents = slices.Compact(detail.Agents)
+
+	// Recent connection events to this host, and the durable sessions behind
+	// them (so "claude reached it" comes with the repo/branch it was working in).
+	evs := a.store.QueryEvents(store.EventFilter{
+		RemoteHost: host,
+		Since:      time.Now().Add(-7 * 24 * time.Hour).UTC().Format(time.RFC3339),
+		Limit:      50,
+	})
+	detail.Events = evs
+	seen := map[string]bool{}
+	for _, e := range evs {
+		if e.SessionID == "" || seen[e.SessionID] {
+			continue
+		}
+		seen[e.SessionID] = true
+		if s, ok := a.store.GetSession(e.SessionID); ok {
+			detail.Sessions = append(detail.Sessions, s)
+		}
+	}
+
+	// Existing allowances for this host (any agent) — so the drawer can say
+	// "already trusted for X" instead of re-offering Allow.
+	if a.allowlist != nil {
+		for agent, hosts := range a.allowlist.Load() {
+			for _, h := range hosts {
+				if strings.EqualFold(h, host) {
+					detail.Allowed = append(detail.Allowed, EndpointAllowance{Agent: agent, Host: h})
+				}
+			}
+		}
+		sort.Slice(detail.Allowed, func(i, j int) bool { return detail.Allowed[i].Agent < detail.Allowed[j].Agent })
+	}
+
+	writeJSON(w, detail)
 }
 
 // handleAllowlistAdd approves one host for one agent: persists the override,
