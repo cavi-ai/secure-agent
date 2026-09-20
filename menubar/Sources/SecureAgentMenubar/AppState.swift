@@ -563,7 +563,7 @@ public final class AppState: ObservableObject {
         let approvals = ((try? await client.fetchAudit(limit: 50)) ?? []).filter {
             $0.action == "allowlist-add" && (ISO8601DateFormatter().date(from: $0.ts) ?? .distantPast) > weekAgo
         }.count
-        let openIncidents = incidents.filter { $0.workflow?.status != "resolved" }.count
+        let openIncidents = unresolvedIncidents.count
         sendDigest(Self.weeklyDigestText(flags7d: flags7d, blockedLeaks: blocked, approvals: approvals, openIncidents: openIncidents))
     }
 
@@ -1184,6 +1184,27 @@ public final class AppState: ObservableObject {
         flags.filter { $0.acknowledged != true && $0.severity >= 2 }
     }
 
+    /// Incidents that still need attention: not resolved. The status icon used
+    /// to key on `!incidents.isEmpty`, so a resolved incident kept the angry
+    /// shield lit forever — out of sync with the hero, which already filtered.
+    public var unresolvedIncidents: [IncidentReportModel] {
+        incidents.filter { $0.workflow?.status != "resolved" }
+    }
+
+    /// Criticals that still need a decision: severity >= 3, not acknowledged.
+    /// The single source of truth for the status icon AND the hero, so the two
+    /// can never disagree ("the menu bar warning is always there no matter
+    /// what" — it was counting long-handled flags).
+    public var unactedCriticals: [FlagModel] {
+        flags.filter { $0.acknowledged != true && $0.severity >= 3 }
+    }
+
+    /// Does anything demand action right now? The one predicate the menu-bar
+    /// icon, hero and badge all read.
+    public var needsAttention: Bool {
+        !unresolvedIncidents.isEmpty || !unactedCriticals.isEmpty
+    }
+
     /// Tagged PIDs in one session tree (root plus helpers).
     public func treePIDs(rootPid: Int32) -> Set<Int32> {
         var pids: Set<Int32> = [rootPid]
@@ -1382,6 +1403,14 @@ public final class AppState: ObservableObject {
             proxyEnabled: true, proxyPort: 8443, uninspectedEgress: 0,
             firewallStats: [:])
         s.connected = true
+        return s
+    }
+
+    /// Custom-state for the status-icon/hero sync tests: caller controls flags
+    /// AND incidents so the acknowledged/resolved filters can be exercised.
+    public static func previewFlagsAndIncidents(_ flags: [FlagModel], _ incidents: [IncidentReportModel]) -> AppState {
+        let s = previewFlags(flags)
+        s.incidents = incidents
         return s
     }
 }
