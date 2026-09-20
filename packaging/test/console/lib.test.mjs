@@ -28,6 +28,8 @@ const {
   scopedBySession, unactedLast24h, filterSessionRows, sseNeedsSnapshot,
   sessionStripRows, sessionNeedsYou, sessionStripHTML,
   buildAttentionGroups, harnessMeta, harnessChipHTML, advisorAdviceHTML,
+  groupSessionSections, endpointIdentityLine, endpointDetailHTML,
+  sessionLabelDurable, sessionRowsDurable,
 } = ctx;
 
 // ---------- unified attention center ----------
@@ -591,4 +593,74 @@ test('advisorAdviceHTML maps assessment to a recommendation and escapes text', (
   // Rationale is escaped (model output is untrusted).
   const evil = advisorAdviceHTML({ assessment: 'benign', rationale: '<script>x</script>' });
   assert.ok(!evil.includes('<script>'));
+});
+
+// ---------- session board organization ----------
+
+test('groupSessionSections separates live from ended and collapses history', () => {
+  const rows = [
+    { id: 'a', status: 'active', lastSeen: '2026-01-01T10:00:00Z' },
+    { id: 'b', status: 'ended', lastSeen: '2026-01-01T09:00:00Z' },
+    { id: 'c', status: 'idle', lastSeen: '2026-01-01T08:00:00Z' },
+    { id: 'd', status: 'ended', lastSeen: '2026-01-01T07:00:00Z' },
+    { id: 'e', status: 'active', lastSeen: '2026-01-01T11:00:00Z' },
+  ];
+  const s = groupSessionSections(rows);
+  assert.equal(s.map(x => x.key).join(','), 'active,idle,ended');
+  assert.equal(s[0].rows.map(r => r.id).join(','), 'e,a'); // newest active first
+  assert.equal(s[1].rows.map(r => r.id).join(','), 'c');
+  assert.equal(s[2].collapsed, true);
+  assert.equal(s[2].rows.length, 2);
+  // No ended sessions → no empty section.
+  assert.equal(groupSessionSections([{ id: 'x', status: 'active' }]).map(x => x.key).join(','), 'active');
+});
+
+// ---------- endpoint identity ----------
+
+test('endpointIdentityLine explains an address in plain language', () => {
+  assert.match(endpointIdentityLine({ kind: 'ipv6', org: 'Google Cloud' }), /Google Cloud address/);
+  assert.match(endpointIdentityLine({ kind: 'ipv6', org: 'Anthropic', name: 'x.anthropic.com' }), /Anthropic address/);
+  assert.match(endpointIdentityLine({ kind: 'ipv4', name: 'ec2-1-2-3-4.compute-1.amazonaws.com' }), /Resolves to/);
+  assert.match(endpointIdentityLine({ kind: 'ipv6' }), /No owner identified/);
+  assert.match(endpointIdentityLine({ kind: 'hostname', org: 'npm registry', name: 'registry.npmjs.org' }), /npm registry/);
+});
+
+test('endpointDetailHTML renders identity, agents, sessions and escapes', () => {
+  const html = endpointDetailHTML({
+    host: '2600:1901:0:9e23::',
+    identity: { kind: 'ipv6', org: 'Google Cloud' },
+    agents: ['claude', 'codex'],
+    count: 4, last_seen: '2026-01-01T10:00:00Z', first_seen: '2026-01-01T09:00:00Z',
+    sessions: [{ id: 'abcdefgh1234', harness: 'claude', repo: 'secure-agent', branch: 'main' }],
+    events: [{ ts: '2026-01-01T10:00:00Z', remote_port: 443, session_id: 'abcdefgh1234' }],
+    allowed: [],
+  }, 'claude');
+  assert.match(html, /Google Cloud address/);
+  assert.match(html, /Allow for claude/);
+  assert.match(html, /Allow for codex/);
+  assert.match(html, /secure-agent@main/);
+  assert.match(html, /:443/);
+  // Untrusted host string must be escaped.
+  const evil = endpointDetailHTML({ host: '<script>x</script>', identity: {}, agents: [], sessions: [], events: [] }, '');
+  assert.ok(!evil.includes('<script>'));
+});
+
+// ---------- session labels ----------
+
+test('sessionLabelDurable falls back to the live tree cwd, not the session id', () => {
+  // repo wins.
+  assert.equal(sessionLabelDurable({ harness: 'claude', repo: 'secure-agent', branch: 'main' }), 'claude · secure-agent@main');
+  // workspace next.
+  assert.equal(sessionLabelDurable({ harness: 'codex', workspace: '/work/api' }), 'codex · api');
+  // Unhelpful workspace "/" → use the joined process tree's cwd.
+  assert.equal(sessionLabelDurable({ harness: 'claude', workspace: '/', id: 'proc-132' }, '/work/myrepo'), 'claude · myrepo');
+  // Nothing usable → short id, never a bare "/".
+  assert.equal(sessionLabelDurable({ harness: 'claude', workspace: '/', id: 'proc-132' }), 'claude · proc-132');
+});
+
+test('sessionRowsDurable passes the live tree cwd into the label', () => {
+  const sessions = [{ id: 'proc-1', harness: 'claude', workspace: '/', status: 'active', root_pid: 10 }];
+  const trees = [{ root: { pid: 10, name: 'claude', cwd: '/Volumes/work/alpha' }, children: [], rss_bytes: 100 }];
+  const rows = sessionRowsDurable(sessions, trees);
+  assert.equal(rows[0].label, 'claude · alpha');
 });

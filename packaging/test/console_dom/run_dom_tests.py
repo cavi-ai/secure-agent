@@ -88,6 +88,7 @@ def main():
         dom_session = dump_dom(chrome, tmp, "?sessiondemo")
         dom_guard = dump_dom(chrome, tmp, "?guarddemo")
         dom_uninsp = dump_dom(chrome, tmp, "?uninspecteddemo")
+        dom_endpoint = dump_dom(chrome, tmp, "?endpointdemo")
         dom_toast = dump_dom(chrome, tmp, "?toastdemo")
         dom_notify = dump_dom(chrome, tmp, "?notifydemo")
         dom_allow = dump_dom(chrome, tmp, "?allowdemo")
@@ -236,6 +237,16 @@ def main():
         check("drill-down allow action delegated",
               'data-action="allow-host" data-agent="cursor" data-host="registry.npmjs.org"' in dom_uninsp)
         check("drill-down explains the blind spot", "bypassing the inspection proxy" in dom_uninsp)
+
+        # --- endpoint evidence: an unattributed IPv6 must be identifiable ---
+        check("endpoint Evidence opens a detail drawer",
+              'id="drawer" class="drawer"' in dom_endpoint and "2600:1901:0:9e23::" in dom_endpoint)
+        check("endpoint detail names the owner, not a bare address",
+              "Google Cloud address" in dom_endpoint)
+        check("endpoint detail shows which agent and session reached it",
+              "Allow for claude" in dom_endpoint and "api-service@main" in dom_endpoint)
+        check("endpoint detail lists recent connections",
+              "Recent connections" in dom_endpoint and ":443" in dom_endpoint)
 
         # --- notification preferences ---
         check("notify bell present", 'id="btn-notify"' in dom)

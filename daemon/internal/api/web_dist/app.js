@@ -989,6 +989,7 @@ document.addEventListener('DOMContentLoaded', () => {
     selectedResourceKey: { get() { return selectedResourceKey; }, set(v) { selectedResourceKey = v; } },
     selectedSessionId: { get() { return selectedSessionId; }, set(v) { selectedSessionId = v; } },
     sessionTimeline: { get() { return sessionTimeline; }, set(v) { sessionTimeline = v; } },
+    endedSessionsOpen: { get() { return endedSessionsOpen; }, set(v) { endedSessionsOpen = v; } },
   });
 
   // Session-first tab: selection + its trace. The timeline refetches on
@@ -996,6 +997,7 @@ document.addEventListener('DOMContentLoaded', () => {
   let selectedSessionId = '';
   let sessionTimeline = [];
   let sessionTimelineAt = 0;
+  let endedSessionsOpen = false;
   async function loadSessionTimeline(id, force) {
     if (!id) { sessionTimeline = []; return; }
     // Throttle refetches: deltas for the selected session arrive per event.
@@ -1038,6 +1040,30 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     } catch (err) {
       drawerBody.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-doc"/></svg><span>Error: ${escapeHTML(err.message)}</span></div>`;
+    }
+  };
+
+  // Endpoint detail: "what IS this address?" The Evidence action opens this so
+  // an unknown IPv6 is explained (owner org, PTR name, which agents/sessions
+  // reached it, recent connections) instead of being a bare address that looks
+  // safe to block.
+  window.openEndpointDetail = async function(host, agent) {
+    if (!drawer) return;
+    drawerMode = 'endpoint';
+    if (btnDrawerCopy) btnDrawerCopy.hidden = true;
+    openDrawer({
+      title: 'Endpoint detail',
+      icon: 'globe',
+      onClose: () => { drawerMode = null; },
+    });
+    drawerBody.innerHTML = `<div class="loading-spinner">Identifying ${escapeHTML(host)}…</div>`;
+    try {
+      const res = await apiFetch(`/egress/endpoint?host=${encodeURIComponent(host)}`);
+      if (!res.ok) throw new Error((await res.text()).trim() || 'lookup failed');
+      const detail = await res.json();
+      drawerBody.innerHTML = endpointDetailHTML(detail, agent);
+    } catch (err) {
+      drawerBody.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-globe"/></svg><span>Could not identify this endpoint: ${escapeHTML(err.message || err)}</span></div>`;
     }
   };
 
@@ -1611,6 +1637,10 @@ document.addEventListener('DOMContentLoaded', () => {
       case 'assess-host':
         window.assessHost(d.agent, d.host);
         break;
+      case 'endpoint-detail':
+        e.preventDefault();
+        window.openEndpointDetail(d.host, d.agent);
+        break;
       case 'notify-scope-add':
         window.addNotifyScope();
         break;
@@ -1631,6 +1661,10 @@ document.addEventListener('DOMContentLoaded', () => {
         break;
       case 'select-session':
         window.selectSession(d.id);
+        break;
+      case 'toggle-ended-sessions':
+        endedSessionsOpen = !endedSessionsOpen;
+        renderSessionBoard();
         break;
       case 'mute-flag':
         window.muteFlag(d.rule, d.host);
