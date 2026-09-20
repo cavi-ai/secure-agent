@@ -1147,10 +1147,13 @@ func (a *API) handleAllowlistAdd(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `Invalid payload: {"agent":"<name>","host":"<host>"}`, http.StatusBadRequest)
 		return
 	}
-	// A suggestion is a hostname, never a URL or a path — reject anything
-	// with structure so the allowlist can't be widened by smuggling.
-	if strings.ContainsAny(req.Host, "/:@") || len(req.Host) > 253 {
-		http.Error(w, "host must be a bare hostname", http.StatusBadRequest)
+	// A suggestion is a hostname or an IP literal, never a URL, a path, or a
+	// host:port pair — reject anything with structure so the allowlist can't be
+	// widened by smuggling. Bare IPv6 literals contain ':' and must be
+	// admitted: agents reach IPv6-only endpoints, and the suggestions list now
+	// surfaces them (they were previously un-approvable with a 400).
+	if !validAllowlistHost(req.Host) {
+		http.Error(w, "host must be a bare hostname or IP address", http.StatusBadRequest)
 		return
 	}
 	if err := a.allowlist.Add(req.Agent, req.Host); err != nil {
@@ -1164,6 +1167,48 @@ func (a *API) handleAllowlistAdd(w http.ResponseWriter, r *http.Request) {
 	})
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok", "agent": req.Agent, "host": req.Host})
+}
+
+// validAllowlistHost admits a bare DNS name or an IP literal (IPv4 or IPv6).
+// It rejects anything carrying URL/path/port structure so the allowlist cannot
+// be widened by smuggling — while still admitting the IPv6 literals agents
+// actually reach (previously any ':' was rejected, so IPv6-only endpoints
+// could never be approved).
+func validAllowlistHost(host string) bool {
+	if host == "" || len(host) > 253 {
+		return false
+	}
+	// URL/path structure is never a host.
+	if strings.ContainsAny(host, "/@?#") || strings.Contains(host, "://") {
+		return false
+	}
+	// A bare IPv6 literal: valid per net.ParseIP, must not be bracketed or
+	// carry a zone (the net sample stores the bare address).
+	if ip := net.ParseIP(host); ip != nil {
+		return true
+	}
+	// Reject bracketed IPv6 ([::1]) and any embedded colon: for a DNS name a
+	// colon means host:port, which is not a bare host.
+	if strings.ContainsAny(host, "[]:") {
+		return false
+	}
+	// DNS name: labels of [A-Za-z0-9-], not starting/ending with '-'.
+	for _, label := range strings.Split(host, ".") {
+		if label == "" {
+			return false
+		}
+		if label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for i := 0; i < len(label); i++ {
+			c := label[i]
+			ok := c == '-' || c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+			if !ok {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

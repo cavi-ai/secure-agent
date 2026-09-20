@@ -458,14 +458,13 @@
       </div>
     </main>
   </div>
-  <!-- Right-side slide-over drawer. Replaces the native <dialog> surfaces:
-       a native modal paints its own backdrop with the SYSTEM color-scheme,
-       which inverted fg/bg whenever the page theme was pinned to the other
-       scheme — the "modal is broken" report. The drawer is plain DOM styled
-       entirely from our tokens, so it can never disagree with the page. -->
+  <!-- Right-side docked inspector. NOT a modal: no scrim, no dimming, no
+       focus trap — the page behind stays fully visible and interactive, so it
+       never "changes the foreground/background". Plain DOM styled only from
+       our tokens, so it can never disagree with the page theme the way a
+       native <dialog>'s system-scheme backdrop did. -->
   <div id="drawer" class="drawer" hidden>
-    <div class="drawer-scrim" data-action="drawer-close"></div>
-    <aside class="drawer-panel" role="dialog" aria-modal="true" aria-labelledby="drawer-title">
+    <aside class="drawer-panel" role="complementary" aria-labelledby="drawer-title">
       <header class="drawer-head">
         <h3 id="drawer-title"><svg class="icon"><use href="#i-doc"/></svg><span id="drawer-title-text">Details</span></h3>
         <div class="drawer-actions">
