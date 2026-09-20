@@ -189,11 +189,11 @@ struct ConsoleView: View {
             return ("shield.slash", .secondary, "Disconnected",
                     "Not monitoring — the daemon is unreachable", nil)
         }
-        let criticalFlags = state.flags.filter { $0.severity >= 3 && $0.acknowledged != true }.count
-        if !state.incidents.isEmpty || criticalFlags > 0 {
+        let criticalFlags = state.unactedCriticals
+        if !state.unresolvedIncidents.isEmpty || !criticalFlags.isEmpty {
             // Prose-first: name what happened + what to do, not counts.
-            let top = state.flags.first { $0.severity >= 3 && $0.acknowledged != true }
-                ?? state.incidents.first.map { inc in
+            let top = criticalFlags.first
+                ?? state.unresolvedIncidents.first.map { inc in
                     FlagModel(id: inc.flagId, rule: inc.rule, severity: 3, ts: inc.timestamp,
                               pid: inc.pid, agent: inc.agent, evidence: [])
                 }
