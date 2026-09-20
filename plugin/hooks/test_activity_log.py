@@ -101,6 +101,41 @@ def main():
         if mode & 0o077:
             raise AssertionError(f"activity log is {oct(mode)}, expected 0600")
 
+    # Regression: Claude Code passes the session id in the hook JSON PAYLOAD
+    # (`session_id`), not the hook's environment. Reading only env produced a
+    # fresh uuid per tool call (11 handshakes for one session) and an empty
+    # harness — the "session names don't parse" bug. Assert the payload wins.
+    with tempfile.TemporaryDirectory() as tmpdir:
+        logfile = os.path.join(tmpdir, "activity.jsonl")
+        env = os.environ.copy()
+        env["SECURE_AGENT_ACTIVITY_LOG"] = logfile
+        env["HOME"] = tmpdir
+        env.pop("CLAUDE_SESSION_ID", None)
+        # Use THIS repo as the workspace so the git probe finds a real repo.
+        repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(HOOK))))
+        expected_repo = os.path.basename(repo_root)
+        payload = {
+            "hook_event_name": "PostToolUse",
+            "session_id": "real-claude-session",
+            "transcript_path": "/Users/x/.claude/projects/-repo/real-claude-session.jsonl",
+            "cwd": repo_root,
+            "tool_name": "Read",
+            "tool_input": {"file_path": os.path.join(repo_root, ".env")},
+        }
+        p = subprocess.run([sys.executable, HOOK], input=json.dumps(payload),
+                           capture_output=True, text=True, env=env, timeout=5)
+        if p.returncode != 0:
+            raise AssertionError(f"hook exited {p.returncode}: {p.stderr}")
+        hs = json.loads(open(logfile).readline())
+        if hs.get("session_id") != "real-claude-session":
+            raise AssertionError(f"payload session_id ignored: {hs}")
+        if hs.get("harness") != "claude":
+            raise AssertionError(f"harness not derived from payload: {hs}")
+        if hs.get("repo") != expected_repo:
+            raise AssertionError(f"repo not probed for a git workspace ({expected_repo}): {hs}")
+        if not hs.get("branch"):
+            raise AssertionError(f"branch not probed for a git workspace: {hs}")
+
     print("PASS (test_activity_log)")
 
 if __name__ == "__main__":

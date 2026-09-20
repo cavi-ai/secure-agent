@@ -283,6 +283,18 @@ struct ConsoleView: View {
                     .font(.system(size: 10)).foregroundStyle(.tertiary)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            if let advice = p.advisor {
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: Self.advisorSymbol(advice.recommendation))
+                        .font(.system(size: 10)).foregroundStyle(Self.advisorColor(advice.recommendation))
+                    Text("Advisor: \(advice.rationale)")
+                        .font(.system(size: 10)).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(6)
+                .background(Self.advisorColor(advice.recommendation).opacity(0.10))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+            }
             HStack(spacing: 6) {
                 Button { Task { await state.resolvePendingGuard(verdict: "allow", scope: "once") } } label: {
                     Text("Allow Once").font(.system(size: 11, weight: .semibold))
@@ -343,6 +355,10 @@ struct ConsoleView: View {
                 }
                 HStack(spacing: 6) {
                     Text(agent.name).font(.system(size: 9)).foregroundStyle(.secondary)
+                    if !agent.repoBranch.isEmpty {
+                        Text(agent.repoBranch).font(.system(size: 9, design: .monospaced)).foregroundStyle(.tertiary)
+                            .lineLimit(1).truncationMode(.middle)
+                    }
                     if let seen { Text(seen).font(.system(size: 9, design: .monospaced)).foregroundStyle(working ? Color.ok : Color.tertiaryText) }
                     if let rss { Text(rss).font(.system(size: 9, design: .monospaced)).foregroundStyle(.tertiary) }
                     if agent.isOrphanLike {
@@ -527,6 +543,24 @@ struct ConsoleView: View {
         case "env-files": return "\(file) — environment files often carry API keys and database passwords."
         case "shell-rc": return "\(file) — shell config runs on every new terminal."
         default: return "\(file)"
+        }
+    }
+
+    /// Advisor recommendation → symbol/color. "allow" reads green, "deny" red,
+    /// "look" amber — matching the chip vocabulary the console uses.
+    static func advisorSymbol(_ recommendation: String) -> String {
+        switch recommendation {
+        case "allow": return "checkmark.circle"
+        case "deny": return "xmark.octagon"
+        default: return "questionmark.circle"
+        }
+    }
+
+    static func advisorColor(_ recommendation: String) -> Color {
+        switch recommendation {
+        case "allow": return .ok
+        case "deny": return .bad
+        default: return .warn
         }
     }
 }

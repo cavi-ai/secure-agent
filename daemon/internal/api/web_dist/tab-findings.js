@@ -68,6 +68,7 @@ function renderAttention() {
           <div class="attention-reason">
             <strong>${escapeHTML(item.detail)}</strong>
             ${item.scopeText ? `<span>${escapeHTML(item.scopeText)}</span>` : ''}
+            ${item.advisor ? advisorAdviceHTML(item.advisor) : ''}
           </div>
           <div class="attention-actions">${actions(item)}</div>
         </div>`).join('')}</div>

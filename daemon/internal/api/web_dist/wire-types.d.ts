@@ -124,6 +124,10 @@ export interface AgentSummary {
   rss_bytes?: number;
   cpu_percent?: number;
   is_orphan?: boolean;
+  session_id?: string;
+  workspace?: string;
+  repo?: string;
+  branch?: string;
 }
 
 export interface AgentTree {

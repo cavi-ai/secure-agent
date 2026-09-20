@@ -1321,7 +1321,7 @@ public final class AppState: ObservableObject {
                              evidence: ["anthropic-key detected in request body to logs.example.com"])]
         s.pendingGuard = GuardPending(id: "g1", agent: "claude", tool: "Read",
                                       path: "/Users/dev/workspace/api-service/.env",
-                                      ruleID: "env-files", ts: "", scopeText: nil)
+                                      ruleID: "env-files", ts: "", scopeText: nil, advisor: nil)
         s.connected = true
         return s
     }

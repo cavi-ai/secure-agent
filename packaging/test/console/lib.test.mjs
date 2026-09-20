@@ -27,7 +27,7 @@ const {
   monitorVendorKeyIDs, inspectionVisible, vendorKeyPromoteHTML,
   scopedBySession, unactedLast24h, filterSessionRows, sseNeedsSnapshot,
   sessionStripRows, sessionNeedsYou, sessionStripHTML,
-  buildAttentionGroups,
+  buildAttentionGroups, harnessMeta, harnessChipHTML, advisorAdviceHTML,
 } = ctx;
 
 // ---------- unified attention center ----------
@@ -539,4 +539,56 @@ test('sessionStripHTML: labels, RSS, needs-you, opens Sessions tab', () => {
   assert.match(html, /session-strip-need/);
   assert.match(html, /View all 5/);
   assert.equal(sessionStripHTML([], 0, now, []), '');
+});
+
+// ---------- per-harness identity ----------
+
+test('harnessMeta gives each known harness a distinct glyph and color', () => {
+  const claude = harnessMeta('claude');
+  const cursor = harnessMeta('cursor');
+  const codex = harnessMeta('codex');
+  for (const m of [claude, cursor, codex]) assert.equal(m.known, true);
+  // The whole point: they must not all look the same.
+  assert.notEqual(claude.glyph, cursor.glyph);
+  assert.notEqual(cursor.glyph, codex.glyph);
+  assert.notEqual(claude.color, codex.color);
+});
+
+test('harnessMeta matches harness variants and falls back deterministically', () => {
+  assert.equal(harnessMeta('cursor-ide').glyph, harnessMeta('cursor').glyph);
+  assert.equal(harnessMeta('lm-studio').known, true);
+  const a = harnessMeta('mystery-agent');
+  const b = harnessMeta('mystery-agent');
+  assert.equal(a.known, false);
+  assert.equal(a.glyph, 'M');
+  assert.equal(a.color, b.color); // deterministic, not random
+});
+
+test('harnessChipHTML embeds the color token and escapes the name', () => {
+  const html = harnessChipHTML('claude');
+  assert.match(html, /--harness-color:hsl/);
+  assert.match(html, /class="harness-glyph"/);
+  // A malicious harness name must not break out of the title attribute.
+  const evil = harnessChipHTML('"><script>alert(1)</script>');
+  assert.ok(!evil.includes('<script>'));
+});
+
+// ---------- advisor guard advice ----------
+
+test('advisorAdviceHTML maps assessment to a recommendation and escapes text', () => {
+  const allow = advisorAdviceHTML({ assessment: 'benign', confidence: 0.9, rationale: 'routine' });
+  assert.match(allow, /advisor-advice allow/);
+  assert.match(allow, /suggests allow/);
+  assert.match(allow, /90% conf/);
+  const deny = advisorAdviceHTML({ assessment: 'malicious', confidence: 0.8, rationale: 'exfil' });
+  assert.match(deny, /advisor-advice deny/);
+  const look = advisorAdviceHTML({ assessment: 'suspicious', confidence: 0.5, rationale: 'unclear' });
+  assert.match(look, /advisor-advice look/);
+  assert.match(look, /you look first/);
+  // No advice / no rationale renders nothing.
+  assert.equal(advisorAdviceHTML(null), '');
+  assert.equal(advisorAdviceHTML({ assessment: 'benign' }), '');
+  // Rationale is escaped (model output is untrusted).
+  const evil = advisorAdviceHTML({ assessment: 'benign', rationale: '<script>x</script>' });
+  assert.ok(!evil.includes('<script>'));
 });

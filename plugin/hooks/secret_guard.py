@@ -185,20 +185,18 @@ def emit(payload: dict) -> None:
     sys.stdout.flush()
 
 
-def session_id() -> str:
-    """Mirrors activity_log.session_id — same env priority, same fallback."""
-    for var in ("CLAUDE_SESSION_ID", "SECURE_AGENT_SESSION_ID"):
-        v = os.environ.get(var)
-        if v:
-            return v[:64]
-    global _SESSION_ID
-    if _SESSION_ID:
-        return _SESSION_ID
-    import uuid
-    _SESSION_ID = uuid.uuid4().hex
-    return _SESSION_ID
+def session_id(payload: dict | None = None) -> str:
+    """Mirrors activity_log.session_id — one implementation, so a fix to the
+    payload-vs-env detection lands in both hooks at once. ``_PAYLOAD`` is set
+    by main() so audit()/allow()/deny() (which have no payload argument) still
+    attribute to the right session."""
+    from activity_log import session_id as _sid
+    return _sid(payload if payload is not None else _PAYLOAD)
 
-_SESSION_ID = ""
+
+# Set in main() from the hook's stdin payload. Claude Code delivers the session
+# id there, not in the hook environment.
+_PAYLOAD: dict = {}
 
 
 # Denied commands can themselves contain secrets (`security add-generic-password
@@ -489,9 +487,10 @@ def _cwd_overrides() -> list:
 
 
 def _cwd_for_request() -> str:
-    """The agent's working directory for this tool call: the harness exposes it
-    in the payload's cwd; fall back to the hook process's cwd."""
-    v = os.environ.get("SECURE_AGENT_CWD") or os.environ.get("CLAUDE_CWD") or ""
+    """The workspace the hook is acting in: Claude Code's cwd in the stdin
+    payload, env as a fallback, then the hook process's cwd."""
+    v = (str(_PAYLOAD.get("cwd") or "") if isinstance(_PAYLOAD, dict) else "") \
+        or os.environ.get("SECURE_AGENT_CWD") or os.environ.get("CLAUDE_CWD") or ""
     return os.path.normpath(v) if v else os.getcwd()
 
 
@@ -555,10 +554,13 @@ except ValueError:
     PROMPT_DEADLINE_S = 45.0
 
 
-def _guard_query(agent, tool, path, rule_id, deadline_s):
+def _guard_query(agent, tool, path, rule_id, deadline_s, workspace=""):
     """POST /guard/decision over the unix socket; return the decision dict or
-    None if the daemon is unreachable. Own deadline < harness timeout."""
-    body = json.dumps({"agent": agent, "tool": tool, "path": path, "rule_id": rule_id})
+    None if the daemon is unreachable. Own deadline < harness timeout. The
+    workspace rides along so the advisor can judge whether the access is
+    routine for this project rather than in the abstract."""
+    body = json.dumps({"agent": agent, "tool": tool, "path": path, "rule_id": rule_id,
+                       "workspace": workspace})
     req = ("POST /guard/decision HTTP/1.1\r\nHost: localhost\r\n"
            "Content-Type: application/json\r\nConnection: close\r\n"
            f"Content-Length: {len(body)}\r\n\r\n{body}")
@@ -603,7 +605,7 @@ def resolve_prompt(agent, tool, path, rule_id, command, event):
     Daemon-down degrades to the harness's own ask on Claude; on Cursor (whose ask
     support is unverified) it fails safe to deny. Timeout/deny always block."""
     path = norm(path)
-    d = _guard_query(agent, tool, path, rule_id, PROMPT_DEADLINE_S)
+    d = _guard_query(agent, tool, path, rule_id, PROMPT_DEADLINE_S, _cwd_for_request())
     deny_msg = (f"DENIED by Directory Guard ({rule_id}). Approve it in the Secure Agent prompt, "
                 "or add an allow-always rule, then retry.")
     if d is None:  # daemon unreachable
@@ -994,6 +996,7 @@ def check_file_write(path: str, command: str, event: str) -> None:
 
 
 def main() -> int:
+    global _PAYLOAD
     try:
         raw = sys.stdin.read()
         data = json.loads(raw) if raw.strip() else {}
@@ -1003,6 +1006,8 @@ def main() -> int:
         # that got the previous hook disabled.
         allow()
         return 0
+
+    _PAYLOAD = data if isinstance(data, dict) else {}
 
     event = str(data.get("hook_event_name") or data.get("event") or "")
     if event == "PostToolUse":
