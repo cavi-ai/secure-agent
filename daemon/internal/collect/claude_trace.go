@@ -22,11 +22,24 @@ type claudeRecord struct {
 	SessionID string `json:"sessionId"` // matches CLAUDE_SESSION_ID the hook sees
 	CWD       string `json:"cwd"`
 	Timestamp string `json:"timestamp"`
-	Message   struct {
+	// isMeta records are harness-injected context (system reminders,
+	// command wrappers), never operator prompts. isSidechain records are
+	// subagent side conversations. Both must not count as turns — the audit
+	// found 1 kind-13 row against ~20 real prompts while these made up the
+	// noise that drowned detection.
+	IsMeta      *bool `json:"isMeta"`
+	IsSidechain *bool `json:"isSidechain"`
+	Message     struct {
 		Model   string          `json:"model"`
 		Usage   *claudeUsage    `json:"usage"`
 		Content json.RawMessage `json:"content"`
 	} `json:"message"`
+}
+
+// injected reports whether the record is harness plumbing (meta/sidechain),
+// so its text can never read as an operator prompt.
+func (r *claudeRecord) injected() bool {
+	return (r.IsMeta != nil && *r.IsMeta) || (r.IsSidechain != nil && *r.IsSidechain)
 }
 
 // claudeContents decodes a message's content, which Claude writes either as an
@@ -207,8 +220,10 @@ func (t *ClaudeTracer) ParseLine(line string) (events []event.Event, cwd string,
 			})
 		}
 		// A user record carrying real prompt text is a turn boundary. Tool
-		// results and system wrappers are not; claudeContents already
-		// normalized a bare-string content into a text block.
+		// results, system wrappers, isMeta and isSidechain records are not.
+		if rec.injected() {
+			break
+		}
 		for _, c := range contents {
 			if c.Type == "tool_result" {
 				continue

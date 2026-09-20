@@ -2,6 +2,7 @@ package collect
 
 import (
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"time"
@@ -41,11 +42,15 @@ type cursorContent struct {
 	Text string `json:"text"` // text blocks
 }
 
-// CursorTracer turns Cursor transcript lines into trace events. Stateless
-// beyond the per-file session id: Cursor has no pairing or usage to track.
+// CursorTracer turns Cursor transcript lines into trace events. Stateful
+// only for the per-file session id and the synthetic call-id sequence:
+// Cursor has no pairing or usage to track.
 type CursorTracer struct {
 	sessionID string
 	workspace string
+	// toolSeq numbers tool calls within this file for the synthetic call id
+	// (Cursor carries none; id-less rows insert forever without updating).
+	toolSeq int
 }
 
 // NewCursorTracer builds a tracer for one transcript file, taking the session
@@ -113,8 +118,13 @@ func (t *CursorTracer) ParseLine(line string) (events []event.Event, ok bool) {
 	case "assistant":
 		for _, c := range contents {
 			if c.Type == "tool_use" && c.Name != "" {
+				t.toolSeq++
 				events = append(events, event.Event{
 					Kind: event.KindToolCall, TS: ts, SessionID: t.sessionID,
+					// Synthetic id: stable per file + sequence. No result ever
+					// pairs with it, but the row is keyed and idempotent under
+					// transcript re-reads instead of a new row each time.
+					CallID:   fmt.Sprintf("%s-cur-%d", t.sessionID, t.toolSeq),
 					ToolName: c.Name, ToolStatus: "running", // no result to pair with
 				})
 			}

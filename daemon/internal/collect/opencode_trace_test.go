@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/bus"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
@@ -131,5 +132,35 @@ func TestOpencodeCollectorReadsWatermarkedDB(t *testing.T) {
 	// The collector must not have created WAL sidecars (read-only open).
 	if _, err := os.Stat(path + "-wal"); err == nil {
 		t.Fatal("read-only collector created a WAL file — it must never write")
+	}
+}
+
+// A step-finish part gets the session's assistant-message model stamped on
+// it (message.data JSON carries model.modelID); cost derives from the model
+// price table when opencode reported none.
+func TestOpencodeStepFinishGetsModelFromMessage(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "opencode.db")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	_, err = db.Exec(`CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT, time_updated INTEGER, data TEXT);
+		CREATE TABLE part (time_updated INTEGER, session_id TEXT, data TEXT)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`INSERT INTO message VALUES ('m1','s1',100,'{"role":"assistant","model":{"providerID":"anthropic","modelID":"claude-sonnet-4"}}')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := NewOpencodeCollector(nil, dbPath, time.Millisecond)
+	model := c.modelFor(db, "s1")
+	if model != "claude-sonnet-4" {
+		t.Fatalf("modelFor = %q, want claude-sonnet-4", model)
+	}
+	if m2 := c.modelFor(db, "s1"); m2 != model {
+		t.Fatal("modelFor must be memoized per session")
 	}
 }

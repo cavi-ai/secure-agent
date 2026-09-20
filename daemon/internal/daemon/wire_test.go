@@ -479,3 +479,30 @@ func TestStartFleetHeartbeatNoopWithoutSinks(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 	// No panic, no delivery, nothing else to assert — the loop is inert.
 }
+
+// CODEX_HOME moves the rollout store; the tail targets must follow it while
+// keeping the default path covered.
+func TestTranscriptTailTargetsFollowCodexHome(t *testing.T) {
+	home := "/Users/x"
+	t.Setenv("CODEX_HOME", "/tmp/codex-alt")
+	targets := transcriptTailTargets(home, "")
+	foundDefault, foundAlt := false, false
+	for _, p := range targets {
+		if p == filepath.Join(home, ".codex", "sessions") {
+			foundDefault = true
+		}
+		if p == "/tmp/codex-alt/sessions" {
+			foundAlt = true
+		}
+	}
+	if !foundDefault || !foundAlt {
+		t.Fatalf("targets = %v; want default + CODEX_HOME", targets)
+	}
+	// A CODEX_HOME equal to the default must not duplicate the target.
+	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
+	for _, p := range transcriptTailTargets(home, "") {
+		if p == "/tmp/codex-alt/sessions" {
+			t.Fatal("stale CODEX_HOME target leaked")
+		}
+	}
+}

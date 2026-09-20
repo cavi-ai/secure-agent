@@ -178,6 +178,11 @@ func guardBrokerMS(hookDeadlineMS int) int {
 // logs.json) get format support with the P2 trace work; the dirs are listed
 // now so coverage is explicit instead of absent.
 func transcriptTailTargets(home, jsonlPath string) []string {
+	// CODEX_HOME moves Codex's rollout store out of ~/.codex (observed on
+	// this machine: 423 codex sessions ran while zero transcripts were
+	// written under ~/.codex/sessions because the harness used a custom
+	// home). Default to both so a default install is still covered.
+	codexHome := os.Getenv("CODEX_HOME")
 	targets := []string{
 		filepath.Join(home, ".claude", "logs", "*.jsonl"),
 		filepath.Join(home, ".claude", "projects"),
@@ -189,6 +194,9 @@ func transcriptTailTargets(home, jsonlPath string) []string {
 		// Antigravity (agy) brain transcripts, under the .gemini tree.
 		filepath.Join(home, ".gemini", "antigravity-cli", "brain"),
 		filepath.Join(home, ".local", "state", "secure-agent", "activity.jsonl"),
+	}
+	if codexHome != "" && codexHome != filepath.Join(home, ".codex") {
+		targets = append(targets, filepath.Join(codexHome, "sessions"))
 	}
 	if jsonlPath != "" {
 		targets = append(targets, jsonlPath)

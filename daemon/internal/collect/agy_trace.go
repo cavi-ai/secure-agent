@@ -2,6 +2,7 @@ package collect
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -48,6 +49,11 @@ type agyRecord struct {
 type AGYTracer struct {
 	sessionID string
 	workspace string
+	// toolSeq numbers the tool calls within this file so each gets a stable
+	// synthetic call id: agy records carry no tool-call id, and rows without
+	// one inserted forever without updating (NULL call ids are distinct in
+	// the store's unique index) — 150 unpairable rows in the audit.
+	toolSeq int
 }
 
 // NewAGYTracer builds a tracer for one brain transcript, taking the session id
@@ -115,8 +121,12 @@ func (t *AGYTracer) ParseLine(line string) (events []event.Event, ok bool) {
 		if tc.Name == "" {
 			continue
 		}
+		// Synthetic call id: session + per-file sequence. Deterministic per
+		// append order; the store upserts completions into THIS row.
+		t.toolSeq++
 		events = append(events, event.Event{
 			Kind: event.KindToolCall, TS: ts, SessionID: t.sessionID,
+			CallID:   fmt.Sprintf("%s-agy-%d", t.sessionID, t.toolSeq),
 			ToolName: tc.Name, ToolStatus: agyToolStatus(rec.Status, rec.ExitCode),
 		})
 	}

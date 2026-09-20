@@ -309,3 +309,31 @@ func TestDefaultSessionViewLiveFirst(t *testing.T) {
 		t.Fatalf("ended filter = %d, want 40", n)
 	}
 }
+
+// Ending a session closes its stuck "running" tool calls as errors — the
+// sweep the trace pairing needed (36 rows ran over an hour past session end).
+func TestEndSessionClosesRunningToolCalls(t *testing.T) {
+	s, err := Open("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	now := time.Now()
+	s.UpsertSession(model.Session{ID: "sx", RootPID: 7, StartedAt: now, LastSeenAt: now, Status: model.SessionActive})
+	s.PutEvent(event.Event{Kind: event.KindToolCall, TS: now, SessionID: "sx", CallID: "c1", ToolName: "Bash", ToolStatus: "running"})
+	s.PutEvent(event.Event{Kind: event.KindToolCall, TS: now, SessionID: "sx", CallID: "c2", ToolName: "Read", ToolStatus: "ok"})
+
+	s.EndSession("sx", now.Add(time.Minute))
+	kind := int(event.KindToolCall)
+	calls := s.QueryEvents(EventFilter{Kind: &kind})
+	byID := map[string]string{}
+	for _, e := range calls {
+		byID[e.CallID] = e.ToolStatus
+	}
+	if byID["c1"] != "error" {
+		t.Fatalf("running call after session end = %q, want error", byID["c1"])
+	}
+	if byID["c2"] != "ok" {
+		t.Fatalf("completed call must stay ok, got %q", byID["c2"])
+	}
+}

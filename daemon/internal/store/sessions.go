@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"time"
 
+	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 )
 
@@ -120,6 +121,9 @@ func (s *Store) TouchSession(id string, ts time.Time) {
 }
 
 // EndSession marks a session ended (root process gone, or explicit end).
+// Tool calls still marked "running" in that session are closed as "error":
+// a session cannot finish while a call is in flight, and rows stuck at
+// running (the audit found 36 over an hour old) poison pairing stats.
 func (s *Store) EndSession(id string, ts time.Time) {
 	if id == "" {
 		return
@@ -129,6 +133,9 @@ func (s *Store) EndSession(id string, ts time.Time) {
 	t := ts.UTC().Format(time.RFC3339Nano)
 	_, _ = s.db.Exec(`UPDATE sessions SET status = ?, ended_at = ?, last_seen_at = MAX(last_seen_at, ?) WHERE id = ? AND status != ?`,
 		model.SessionEnded, t, t, id, model.SessionEnded)
+	_, _ = s.db.Exec(`UPDATE events SET tool_status = 'error'
+		WHERE session_id = ? AND kind = ? AND tool_status = 'running'`,
+		id, int(event.KindToolCall))
 }
 
 // MarkSessionsIdle flips active sessions with no activity since cutoff to
