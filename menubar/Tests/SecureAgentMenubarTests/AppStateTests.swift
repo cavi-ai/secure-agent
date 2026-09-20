@@ -446,7 +446,7 @@ func testWorkspaceScopeBeatsRuleOverrideAndDefault() async {
         let stub = StubDaemonClient()
         stub.pending = [GuardPending(id: "g1", agent: "claude", tool: "Read",
                                      path: "/Users/x/.ssh/id_ed25519", ruleID: "ssh-keys",
-                                     ts: "", scopeText: nil)]
+                                     ts: "", scopeText: nil, advisor: nil)]
         let (state, _) = makeState(stub)
         state.testHookSkipPromptDialog = true // NSAlert.runModal is untestable
         state.isPaused = true

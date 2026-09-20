@@ -36,15 +36,23 @@ def redact_str(s: str) -> str:
         res = pat.sub("[REDACTED]", res)
     return res
 
-def session_id() -> str:
+def session_id(payload: dict | None = None) -> str:
     """Stable id for this harness session.
 
-    Claude Code exposes CLAUDE_SESSION_ID. When no session env exists, hooks
-    spawn one process per tool call, so the fallback is a fresh per-invocation
-    uuid — it cannot group a whole harness run (the daemon's correlation
-    window is what links those calls). PID alone is not enough — PIDs are
-    recycled, and fleet consumers must be able to tell sessions apart.
+    Claude Code passes the session id in the hook JSON payload as
+    ``session_id`` (and exposes ``CLAUDE_SESSION_ID`` only to the agent's own
+    environment, NOT to hook subprocesses). Reading it from the payload is what
+    makes the handshake id match the transcript's ``sessionId`` — the join the
+    session resolver depends on. The env vars are kept as a legacy fallback.
+
+    The sentinel file is keyed on this id, so a stable id means exactly one
+    handshake per session (hooks spawn once per tool call). Without a stable
+    id the fallback is a fresh per-invocation uuid, which cannot group a run.
     """
+    if payload:
+        v = payload.get("session_id") or payload.get("sessionId")
+        if v:
+            return str(v)[:64]
     for var in ("CLAUDE_SESSION_ID", "SECURE_AGENT_SESSION_ID"):
         v = os.environ.get(var)
         if v:
@@ -57,6 +65,20 @@ def session_id() -> str:
     return _SESSION_ID
 
 _SESSION_ID = ""
+
+# Harness name by the payload's ``transcript_path`` or the agent's env. The
+# transcript path is the reliable signal: Claude Code writes
+# ~/.claude/projects/<slug>/<session>.jsonl, so its presence names the harness
+# even when no env var survives into the hook subprocess.
+def detect_harness(payload: dict | None = None) -> str:
+    env_harness = os.environ.get("SECURE_AGENT_HARNESS", "")
+    if env_harness:
+        return env_harness
+    if payload:
+        tp = payload.get("transcript_path") or ""
+        if ".claude/projects" in tp or payload.get("session_id"):
+            return "claude"
+    return "claude" if os.environ.get("CLAUDE_SESSION_ID") else ""
 
 
 def _git_field(workspace: str, *args: str) -> str:
@@ -85,7 +107,7 @@ def maybe_handshake(payload: dict, sid: str, log_path: str) -> None:
     if os.path.exists(sentinel):
         return
     workspace = payload.get("cwd") or os.getcwd()
-    harness = "claude" if os.environ.get("CLAUDE_SESSION_ID") else os.environ.get("SECURE_AGENT_HARNESS", "")
+    harness = detect_harness(payload)
     repo = _git_field(workspace, "rev-parse", "--show-toplevel")
     branch = _git_field(workspace, "rev-parse", "--abbrev-ref", "HEAD") if repo else ""
     rec = {
@@ -121,7 +143,7 @@ def log_payload(payload: dict) -> None:
     if cmd:
         cmd = redact_str(str(cmd))[:MAX_CMD_CHARS]
 
-    sid = session_id()
+    sid = session_id(payload)
     rec = {
         "ts": ts,
         "tool": tool,

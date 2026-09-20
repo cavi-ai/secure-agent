@@ -13,7 +13,7 @@ function sessionRailCardHTML(s, trees, selectedId) {
   const pulse = status === 'active' ? '<span class="sc-pulse active" aria-hidden="true"></span>' : '';
   const seen = s.last_seen_at ? fmtAge(s.last_seen_at, Date.now()) + ' ago' : '';
   return `<button type="button" class="session-card ${status}${s.id === selectedId ? ' selected' : ''}" data-action="select-session" data-id="${escapeHTML(s.id)}" aria-pressed="${s.id === selectedId}">
-    <span class="sc-label">${escapeHTML(sessionLabelDurable(s))}</span>
+    <span class="sc-head">${harnessChipHTML(s.harness)}<span class="sc-label">${escapeHTML(sessionLabelDurable(s))}</span></span>
     <span class="sc-meta">${pulse}<span class="sc-state ${escapeHTML(status)}">${escapeHTML(status)}</span>${seen ? `<span>${escapeHTML(seen)}</span>` : ''}${rss ? `<span>${escapeHTML(rss)}</span>` : ''}</span>
   </button>`;
 }

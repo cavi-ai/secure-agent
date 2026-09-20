@@ -3,6 +3,8 @@ package guard
 import (
 	"sync"
 	"time"
+
+	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 )
 
 // MaxWaiters bounds the pending-prompt queue. A misbehaving agent that loops
@@ -27,6 +29,10 @@ type Pending struct {
 	// ScopeText tells the user what an "allow always" would cover, so the
 	// prompt discloses its blast radius instead of leaving it implied.
 	ScopeText string `json:"scope_text,omitempty"`
+	// Advisor is the local advisor's recommendation, attached when one has
+	// landed. Advisory only: it never resolves the prompt; the human decides.
+	// (Populated by the API when serving /guard/pending, not by the broker.)
+	Advisor *model.AdvisorVerdict `json:"advisor,omitempty"`
 }
 
 type waiter struct {

@@ -10,8 +10,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/cavi-ai/secure-agent/daemon/internal/advisor"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 	"github.com/cavi-ai/secure-agent/daemon/internal/guard"
+	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
 
@@ -27,6 +29,9 @@ type guardDecisionRequest struct {
 	Tool   string `json:"tool"`
 	Path   string `json:"path"`
 	RuleID string `json:"rule_id"`
+	// Workspace is the hook's cwd, passed to the advisor so it can judge the
+	// access in context. Optional (older hooks omit it).
+	Workspace string `json:"workspace,omitempty"`
 }
 
 // handleGuardDecision answers a hook's prompt-mode query: a cached (agent,rule)
@@ -61,6 +66,14 @@ func (a *API) handleGuardDecision(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := fmt.Sprintf("%d-%d", time.Now().UnixNano(), atomic.AddUint64(&a.guardSeq, 1))
+	// Offer the prompt to the advisor for a recommendation the operator sees
+	// while deciding. Advisory only — the broker still blocks for the human.
+	if a.guardAdvisor != nil {
+		a.guardAdvisor(model.GuardAssessmentRequest{
+			Agent: req.Agent, Tool: req.Tool, Path: req.Path, RuleID: req.RuleID,
+			Workspace: req.Workspace,
+		})
+	}
 	// Push, not just poll: SSE subscribers (menubar) refetch /guard/pending
 	// immediately instead of waiting out their poll interval.
 	a.publishGuardEvent(event.KindGuardPrompt, req.Agent+"/"+req.RuleID)
@@ -97,6 +110,13 @@ func (a *API) handleGuardPending(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pending := a.guardBroker.Pending()
+	// Attach the advisor's recommendation, when one has landed. Advisory only:
+	// the human still resolves; this just shows the model's read inline.
+	for i := range pending {
+		if v, ok := a.store.AdvisorVerdictFor(advisor.GuardSubjectID(pending[i].Agent, pending[i].RuleID, pending[i].Path, pending[i].Tool), "guard"); ok {
+			pending[i].Advisor = &v
+		}
+	}
 	// Broker.Pending() ranges a map, whose iteration order is unspecified —
 	// sort oldest-first so the menubar always prompts the longest-waiting
 	// request first instead of a random one.

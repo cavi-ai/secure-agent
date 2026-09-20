@@ -39,14 +39,13 @@ document.addEventListener('DOMContentLoaded', () => {
   };
 
   const btnRefresh = document.getElementById('btn-refresh');
-  const reportModal = document.getElementById('report-modal');
-  const btnCloseModal = document.getElementById('btn-close-modal');
-  const btnCopyReport = document.getElementById('btn-copy-report');
-  const resourcePolicyModal = document.getElementById('resource-policy-modal');
-  const resourcePolicyBody = document.getElementById('resource-policy-body');
-  const btnCloseResourcePolicy = document.getElementById('btn-close-resource-policy');
-  const btnCancelResourcePolicy = document.getElementById('btn-cancel-resource-policy');
-  const btnSaveResourcePolicy = document.getElementById('btn-save-resource-policy');
+  const drawer = document.getElementById('drawer');
+  const drawerBody = document.getElementById('drawer-body');
+  const drawerFoot = document.getElementById('drawer-foot');
+  const drawerTitle = document.getElementById('drawer-title-text');
+  const drawerTitleIcon = document.querySelector('#drawer-title use');
+  const btnDrawerClose = document.getElementById('btn-drawer-close');
+  const btnDrawerCopy = document.getElementById('btn-drawer-copy');
 
   // Screen-reader announcements for state the eye would catch on its own.
   const liveRegion = document.getElementById('a11y-live');
@@ -57,58 +56,95 @@ document.addEventListener('DOMContentLoaded', () => {
     setTimeout(() => { liveRegion.textContent = text; }, 30);
   };
 
-  // Styled confirmation replacing native confirm()/prompt(): a real dialog
-  // with focus management, a danger action, and an optional typed reason
-  // (saPrompt). Returns a Promise so call sites read like the natives did.
-  const confirmModal = document.getElementById('confirm-modal');
-  const confirmTitle = document.getElementById('confirm-title');
-  const confirmMessage = document.getElementById('confirm-message');
-  const confirmInput = document.getElementById('confirm-input');
-  const confirmOk = document.getElementById('confirm-ok');
+  // ---------- drawer ----------
+  // One slide-over replaces every native <dialog>. A native modal's backdrop
+  // is painted by the UA from the SYSTEM color-scheme, which inverted fg/bg
+  // when the page theme was pinned to the other scheme. This surface is plain
+  // DOM styled only from our tokens, so it always matches the page.
+  //
+  // The drawer is a single reusable surface: title + body + optional footer
+  // actions. Only one is open at a time; closing restores focus to the opener.
+  let drawerOpener = null;
+  let drawerOnClose = null;
 
-  // Opening a <dialog> twice throws InvalidStateError, which aborted whatever
-  // handler was mid-flight (the "everything fails" report). Every open goes
-  // through here: idempotent, and it never leaves the caller with a dialog it
-  // did not mean to reopen.
-  function openModal(dlg) {
-    if (!dlg || typeof dlg.showModal !== 'function') return false;
-    if (!dlg.open) dlg.showModal();
-    // A native modal enters the top layer ABOVE anything already there — so
-    // toasts (a popover) that were on screen before the modal opened would be
-    // hidden behind it. Re-promote them above the just-opened dialog.
-    const toasts = document.getElementById('toast-container');
-    if (toasts && typeof toasts.showPopover === 'function' && toasts.childElementCount > 0) {
-      try {
-        if (toasts.matches(':popover-open')) toasts.hidePopover();
-        toasts.showPopover();
-      } catch { /* already ordered or unsupported */ }
-    }
+  function openDrawer({ title, icon, body, foot, variant, onClose }) {
+    if (!drawer) return false;
+    drawerOpener = document.activeElement;
+    drawerOnClose = onClose || null;
+    drawerTitle.textContent = title || 'Details';
+    if (icon && drawerTitleIcon) drawerTitleIcon.setAttribute('href', '#i-' + icon);
+    drawerBody.innerHTML = body || '';
+    drawerFoot.innerHTML = foot || '';
+    drawerFoot.hidden = !foot;
+    drawer.className = 'drawer' + (variant ? ' ' + variant : '');
+    drawer.hidden = false;
+    // Move focus into the panel so keyboard users are not stranded behind it.
+    (btnDrawerClose || drawerBody).focus?.();
     return true;
   }
 
+  function closeDrawer() {
+    if (!drawer || drawer.hidden) return;
+    drawer.hidden = true;
+    drawerBody.innerHTML = '';
+    drawerFoot.innerHTML = '';
+    drawerFoot.hidden = true;
+    const fn = drawerOnClose;
+    drawerOnClose = null;
+    if (drawerOpener && typeof drawerOpener.focus === 'function') drawerOpener.focus();
+    drawerOpener = null;
+    if (fn) fn();
+  }
+  window.saCloseDrawer = closeDrawer;
+
+  if (btnDrawerClose) btnDrawerClose.addEventListener('click', closeDrawer);
+  if (drawer) {
+    drawer.addEventListener('click', (e) => {
+      const hit = e.target.closest('[data-action="drawer-close"]');
+      if (hit) closeDrawer();
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && drawer && !drawer.hidden) closeDrawer();
+    });
+  }
+
+  // Confirmation / prompt. A small stacked card (z-index above the drawer),
+  // NOT the drawer itself: a confirm raised from inside the policy editor must
+  // not blow away the editor behind it. Returns a Promise so call sites read
+  // like the native confirm()/prompt() they replaced.
+  const confirmLayer = document.getElementById('confirm-layer');
+  const confirmTitleEl = document.getElementById('confirm-title');
+  const confirmMessageEl = document.getElementById('confirm-message');
+  const confirmInputEl = document.getElementById('confirm-input');
+  const confirmOkEl = document.getElementById('confirm-ok');
+  const confirmCancelEl = document.getElementById('confirm-cancel');
+
   function saDialog({ title, message, okLabel, withInput, placeholder, danger }) {
-    if (!confirmModal || typeof confirmModal.showModal !== 'function') {
-      // No dialog support: fall back to the native prompt/confirm so the
-      // action is still possible (never silently drop a destructive step).
+    if (!confirmLayer) {
       const text = withInput ? window.prompt(message, '') : null;
       return Promise.resolve(withInput ? text : window.confirm(message));
     }
-    confirmTitle.textContent = title || 'Confirm';
-    confirmMessage.textContent = message || '';
-    confirmOk.textContent = okLabel || 'Confirm';
-    confirmOk.className = 'btn ' + (danger === false ? 'btn-primary' : 'btn-danger');
-    confirmInput.hidden = !withInput;
-    confirmInput.value = '';
-    if (withInput) confirmInput.placeholder = placeholder || '';
+    confirmTitleEl.textContent = title || 'Confirm';
+    confirmMessageEl.textContent = message || '';
+    confirmOkEl.textContent = okLabel || 'Confirm';
+    confirmOkEl.className = 'btn ' + (danger === false ? 'btn-primary' : 'btn-danger');
+    confirmInputEl.hidden = !withInput;
+    confirmInputEl.value = '';
+    if (withInput) confirmInputEl.placeholder = placeholder || '';
+    confirmLayer.hidden = false;
+    (withInput ? confirmInputEl : confirmOkEl).focus();
+
     return new Promise((resolve) => {
-      const done = () => {
-        confirmModal.removeEventListener('close', onClose);
-        resolve(confirmModal.returnValue === 'ok' ? (withInput ? (confirmInput.value || '') : true) : (withInput ? null : false));
+      const finish = (value) => {
+        confirmOkEl.removeEventListener('click', okHandler);
+        confirmCancelEl.removeEventListener('click', cancelHandler);
+        confirmLayer.hidden = true;
+        resolve(value);
       };
-      const onClose = done;
-      confirmModal.addEventListener('close', onClose, { once: true });
-      openModal(confirmModal);
-      (withInput ? confirmInput : confirmOk).focus();
+      const okHandler = () => finish(withInput ? (confirmInputEl.value || '') : true);
+      const cancelHandler = () => finish(withInput ? null : false);
+      confirmOkEl.addEventListener('click', okHandler, { once: true });
+      confirmCancelEl.addEventListener('click', cancelHandler, { once: true });
     });
   }
   window.saConfirm = (message, opts = {}) => saDialog({ message, danger: true, ...opts });
@@ -154,14 +190,8 @@ document.addEventListener('DOMContentLoaded', () => {
   if (btnAddSource) btnAddSource.addEventListener('click', () => window.addSource());
   if (sourceInput) sourceInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') window.addSource(); });
 
-  if (btnCloseModal && reportModal) {
-    btnCloseModal.addEventListener('click', () => {
-      reportModal.close();
-    });
-  }
-
-  if (btnCopyReport) {
-    btnCopyReport.addEventListener('click', async () => {
+  if (btnDrawerCopy) {
+    btnDrawerCopy.addEventListener('click', async () => {
       if (!currentRawMarkdown) return;
       try {
         await navigator.clipboard.writeText(currentRawMarkdown);
@@ -171,9 +201,6 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     });
   }
-
-  if (btnCloseResourcePolicy && resourcePolicyModal) btnCloseResourcePolicy.addEventListener('click', () => resourcePolicyModal.close());
-  if (btnCancelResourcePolicy && resourcePolicyModal) btnCancelResourcePolicy.addEventListener('click', () => resourcePolicyModal.close());
 
   let telemetryData = {
     status: null,
@@ -980,33 +1007,34 @@ document.addEventListener('DOMContentLoaded', () => {
     renderAll();
   };
 
-  // The report modal is shared by two views: the incident report (markdown,
-  // with a Copy button) and the uninspected-egress drill-down (row actions,
-  // no Copy). modalMode tracks which one is open so action handlers can
+  // The drawer is shared by two views: the incident report (markdown, with a
+  // Copy button) and the uninspected-egress drill-down (row actions, no
+  // Copy). drawerMode tracks which one is open so action handlers can
   // re-render the right content after a mutation.
-  let modalMode = null; // 'incident' | 'uninspected' | null
+  let drawerMode = null; // 'incident' | 'uninspected' | null
 
   window.openIncidentReport = async function(incidentId) {
-    if (!reportModal) return;
-    modalMode = 'incident';
-    const bodyEl = document.getElementById('modal-report-body');
-    const titleEl = document.getElementById('modal-title');
-    if (btnCopyReport) btnCopyReport.style.display = '';
-    titleEl.innerHTML = `<svg class="icon"><use href="#i-doc"/></svg>Incident report — ${escapeHTML(incidentId)}`;
-    bodyEl.innerHTML = `<div class="loading-spinner">Fetching incident report…</div>`;
-    openModal(reportModal);
+    if (!drawer) return;
+    drawerMode = 'incident';
+    if (btnDrawerCopy) btnDrawerCopy.hidden = false;
+    openDrawer({
+      title: `Incident report — ${incidentId}`,
+      icon: 'doc',
+      body: `<div class="loading-spinner">Fetching incident report…</div>`,
+      onClose: () => { drawerMode = null; },
+    });
 
     try {
       const res = await apiFetch(`/incidents?id=${encodeURIComponent(incidentId)}&format=markdown`);
       if (res.ok) {
         const text = await res.text();
         currentRawMarkdown = text;
-        bodyEl.innerHTML = parseMarkdownToHTML(text);
+        drawerBody.innerHTML = parseMarkdownToHTML(text);
       } else {
-        bodyEl.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-doc"/></svg><span>Failed to load the incident report.</span></div>`;
+        drawerBody.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-doc"/></svg><span>Failed to load the incident report.</span></div>`;
       }
     } catch (err) {
-      bodyEl.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-doc"/></svg><span>Error: ${escapeHTML(err.message)}</span></div>`;
+      drawerBody.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-doc"/></svg><span>Error: ${escapeHTML(err.message)}</span></div>`;
     }
   };
 
@@ -1015,14 +1043,15 @@ document.addEventListener('DOMContentLoaded', () => {
   // verdict) instead of a dead end.
 
   window.openUninspected = function() {
-    if (!reportModal) return;
-    modalMode = 'uninspected';
-    const bodyEl = document.getElementById('modal-report-body');
-    const titleEl = document.getElementById('modal-title');
-    if (btnCopyReport) btnCopyReport.style.display = 'none';
-    titleEl.innerHTML = `<svg class="icon"><use href="#i-globe"/></svg>Uninspected egress — last 24h`;
-    fillUninspected(bodyEl);
-    openModal(reportModal);
+    if (!drawer) return;
+    drawerMode = 'uninspected';
+    if (btnDrawerCopy) btnDrawerCopy.hidden = true;
+    openDrawer({
+      title: 'Uninspected egress — last 24h',
+      icon: 'globe',
+      onClose: () => { drawerMode = null; },
+    });
+    fillUninspected(drawerBody);
   };
 
   window.killProcess = async function(pid, startedAt, family) {
@@ -1125,8 +1154,8 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function renderResourcePolicyEditor() {
-    if (!resourcePolicyBody || !resourcePolicyDraft) return;
-    resourcePolicyBody.innerHTML = `<p class="resource-policy-intro">Set machine-wide budgets, then add complete policies for specific workspace trees. The most specific matching path wins.</p>
+    if (!drawerBody || !resourcePolicyDraft) return;
+    drawerBody.innerHTML = `<p class="resource-policy-intro">Set machine-wide budgets, then add complete policies for specific workspace trees. The most specific matching path wins.</p>
       <section class="resource-policy-section"><div class="resource-policy-section-head"><h4>Machine default</h4></div>${resourcePolicyFields(resourcePolicyDraft.default, -1, true)}</section>
       <section class="resource-policy-section"><div class="resource-policy-section-head"><h4>Workspace overrides</h4><span><button type="button" class="btn btn-ghost btn-sm" data-action="add-resource-override" data-source="current">Add current workspace</button><button type="button" class="btn btn-ghost btn-sm" data-action="add-resource-override" data-source="manual">Add path</button></span></div>
       <div id="resource-policy-overrides">${resourcePolicyDraft.overrides.map((p, i) => resourcePolicyFields(p, i, false)).join('') || '<div class="resource-detail-empty">No workspace overrides. Every session uses the machine default.</div>'}</div></section>
@@ -1134,7 +1163,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function readResourcePolicyEditor() {
-    if (!resourcePolicyBody || !resourcePolicyDraft) return resourcePolicyDraft;
+    if (!drawerBody || !resourcePolicyDraft) return resourcePolicyDraft;
     const read = (row) => {
       const value = (name) => row.querySelector(`[data-policy-field="${name}"]`)?.value || '';
       return {
@@ -1149,7 +1178,7 @@ document.addEventListener('DOMContentLoaded', () => {
 		})
       };
     };
-    const rows = Array.from(resourcePolicyBody.querySelectorAll('[data-policy-row]'));
+    const rows = Array.from(drawerBody.querySelectorAll('[data-policy-row]'));
     return { default: read(rows[0]), overrides: rows.slice(1).map(read) };
   }
 
@@ -1159,8 +1188,17 @@ document.addEventListener('DOMContentLoaded', () => {
       default: resourcePolicyFromSnapshot(control),
       overrides: (control.workspace_overrides || []).map(resourcePolicyFromSnapshot)
     };
+    openDrawer({
+      title: 'Resource policy editor',
+      icon: 'activity',
+      variant: 'resource-policy',
+      foot: `<button type="button" class="btn btn-ghost" data-action="policy-cancel">Cancel</button>`
+        + `<button type="button" class="btn btn-primary" data-action="policy-save">Save and apply</button>`,
+      onClose: () => { resourcePolicyDraft = null; },
+    });
     renderResourcePolicyEditor();
-    if (resourcePolicyModal) openModal(resourcePolicyModal);
+    drawerFoot.querySelector('[data-action="policy-cancel"]')?.addEventListener('click', closeDrawer);
+    drawerFoot.querySelector('[data-action="policy-save"]')?.addEventListener('click', saveResourcePolicy);
   };
 
   window.addResourceOverride = function(source) {
@@ -1177,7 +1215,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     resourcePolicyDraft.overrides.push({ ...resourcePolicyDraft.default, cwd_prefix: path });
     renderResourcePolicyEditor();
-    const paths = resourcePolicyBody.querySelectorAll('[data-policy-field="cwd_prefix"]');
+    const paths = drawerBody.querySelectorAll('[data-policy-field="cwd_prefix"]');
     if (paths.length) paths[paths.length - 1].focus();
   };
 
@@ -1198,20 +1236,21 @@ document.addEventListener('DOMContentLoaded', () => {
     const body = { ...draft.default, workspace_overrides: draft.overrides };
     if ([body, ...body.workspace_overrides].some(p => p.mode === 'terminate') &&
 		!await saConfirm('Terminate mode will automatically apply the enabled intervention ladder to entire agent sessions. Save this policy?', { title: 'Enable terminate mode', okLabel: 'Save policy' })) return;
-    if (btnSaveResourcePolicy) btnSaveResourcePolicy.disabled = true;
+    const saveBtn = drawerFoot.querySelector('[data-action="policy-save"]');
+    if (saveBtn) saveBtn.disabled = true;
     try {
       const res = await apiFetch('/resources/policy', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       if (!res.ok) throw new Error((await res.text()).trim() || 'save failed');
-      resourcePolicyModal.close();
+      closeDrawer();
       showToast('Resource policy saved and applied.', 'success');
       fetchTelemetry({ slow: true });
     } catch (err) {
       showToast(`Resource policy save failed: ${err.message || err}`, 'danger');
     } finally {
-      if (btnSaveResourcePolicy) btnSaveResourcePolicy.disabled = false;
+      const b = drawerFoot.querySelector('[data-action="policy-save"]');
+      if (b) b.disabled = false;
     }
   }
-  if (btnSaveResourcePolicy) btnSaveResourcePolicy.addEventListener('click', saveResourcePolicy);
 
   window.killOrphans = async function(family) {
     const agents = (telemetryData.status && telemetryData.status.agents) ? telemetryData.status.agents : [];
@@ -1254,8 +1293,8 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     showToast(`Allowlisted ${ok} of ${list.length} hosts for ${agent}`, ok === list.length ? 'success' : 'warn');
     await fetchTelemetry();
-    if (modalMode === 'uninspected' && reportModal && reportModal.open) {
-      fillUninspected(document.getElementById('modal-report-body'));
+    if (drawerMode === 'uninspected' && drawer && !drawer.hidden) {
+      fillUninspected(drawerBody);
     }
   };
 
@@ -1293,8 +1332,8 @@ document.addEventListener('DOMContentLoaded', () => {
       if (row && row.assessment) break;
       await new Promise(r => setTimeout(r, 1500));
     }
-    if (modalMode === 'uninspected' && reportModal && reportModal.open) {
-      fillUninspected(document.getElementById('modal-report-body'));
+    if (drawerMode === 'uninspected' && drawer && !drawer.hidden) {
+      fillUninspected(drawerBody);
     }
   }
 
@@ -1309,8 +1348,8 @@ document.addEventListener('DOMContentLoaded', () => {
         showToast(`Allowlisted ${host} for ${agent}`, 'success');
         await fetchTelemetry();
         // Refresh the drill-down in place: the allowed pair should disappear.
-        if (modalMode === 'uninspected' && reportModal && reportModal.open) {
-          fillUninspected(document.getElementById('modal-report-body'));
+        if (drawerMode === 'uninspected' && drawer && !drawer.hidden) {
+          fillUninspected(drawerBody);
         }
       } else {
         showToast(`Failed to allowlist ${host}.`, 'danger');
@@ -1631,31 +1670,16 @@ document.addEventListener('DOMContentLoaded', () => {
     toast.className = `toast ${type}`;
     toast.textContent = msg;
 
-    // Topmost open native <dialog>, if any. A dialog lives in the browser's
-    // top layer, which no root-level z-index can paint over — so while a modal
-    // is open the toast is appended INSIDE it, guaranteeing it renders above
-    // the modal content instead of behind the backdrop (the reported bug).
-    const openDialogs = document.querySelectorAll('dialog[open]');
-    const topDialog = openDialogs.length ? openDialogs[openDialogs.length - 1] : null;
-    let host;
-    if (topDialog) {
-      host = topDialog.querySelector(':scope > .toast-host');
-      if (!host) {
-        host = document.createElement('div');
-        host.className = 'toast-host';
-        topDialog.appendChild(host);
-      }
-    } else {
-      host = document.getElementById('toast-container');
-      if (!host) return;
-      // Popover keeps the fixed stack above page content; guarded for
-      // browsers without the Popover API (plain fixed div).
-      if (typeof host.showPopover === 'function') {
-        try {
-          if (host.matches(':popover-open')) host.hidePopover();
-          host.showPopover();
-        } catch { /* unsupported */ }
-      }
+    // The drawer is ordinary DOM (z-index 200), and the toast container is a
+    // top-layer popover — so toasts already paint above an open drawer without
+    // the old "append inside the <dialog>" dance that native modals required.
+    const host = document.getElementById('toast-container');
+    if (!host) return;
+    if (typeof host.showPopover === 'function') {
+      try {
+        if (host.matches(':popover-open')) host.hidePopover();
+        host.showPopover();
+      } catch { /* unsupported */ }
     }
 
     host.appendChild(toast);

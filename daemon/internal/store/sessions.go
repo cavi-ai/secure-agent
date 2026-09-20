@@ -155,7 +155,7 @@ func (s *Store) MarkSessionsIdle(cutoff time.Time) []string {
 	return ids
 }
 
-// LiveRootPIDs returns root pids of non-ended sessions so the resolver can
+// SessionRoots returns root pids of non-ended sessions so the resolver can
 // end sessions whose process tree is gone.
 func (s *Store) SessionRoots() map[int32]string {
 	s.mu.Lock()
@@ -172,6 +172,34 @@ func (s *Store) SessionRoots() map[int32]string {
 		if rows.Scan(&pid, &id) == nil {
 			out[pid] = id
 		}
+	}
+	return out
+}
+
+// SessionsByRootPID returns the non-ended session for each live root pid,
+// keyed by pid. The console/menubar join process trees to durable session
+// identity with this (harness, workspace, repo, branch) so a tree row reads
+// "claude · secure-agent@main" rather than a bare process cwd ("/").
+func (s *Store) SessionsByRootPID() map[int32]model.Session {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rows, err := s.db.Query(`SELECT id, harness, workspace, repo, branch, root_pid, root_started_at, parent_id, started_at, ended_at, last_seen_at, status, confidence
+		FROM sessions WHERE status != ? AND root_pid != 0`, model.SessionEnded)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	out := map[int32]model.Session{}
+	for rows.Next() {
+		var sess model.Session
+		var endedAt sql.NullString
+		var startedAt, lastSeen string
+		if err := rows.Scan(&sess.ID, &sess.Harness, &sess.Workspace, &sess.Repo, &sess.Branch,
+			&sess.RootPID, &sess.RootStartedAt, &sess.ParentID, &startedAt, &endedAt, &lastSeen,
+			&sess.Status, &sess.Confidence); err != nil {
+			continue
+		}
+		out[sess.RootPID] = sess
 	}
 	return out
 }
