@@ -13,11 +13,14 @@ package main
 // any additional drag — the whole UX becomes one FDA grant.
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"sync"
 	"syscall"
 
@@ -31,10 +34,82 @@ const (
 	maxSpoolBytes = 32 << 20
 )
 
+// verifyOwnIntegrity refuses to run as root from a binary the login user (or
+// any admin) could have swapped since install. The LaunchDaemon executes this
+// binary as root; a writable binary converts "monitoring tool" into
+// "root on request". The binary's own cdhash is recorded in
+// /var/db/secure-agent/esd.binhash at install time (root-owned directory,
+// written by the privileged install step); on every start the running file
+// must still match. A missing hash file is treated as unverified: the
+// installer always writes one, so its absence means tampering or a stale
+// install — both fail closed.
+func verifyOwnIntegrity() error {
+	exe, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("resolve self: %w", err)
+	}
+	real, err := filepath.EvalSymlinks(exe)
+	if err == nil {
+		exe = real
+	}
+	info, err := os.Stat(exe)
+	if err != nil {
+		return fmt.Errorf("stat self: %w", err)
+	}
+	// Mode checks are the cheap half: a writable binary is a defect even with
+	// a matching hash. Root-owned path or not, refuse anything the console
+	// user could overwrite.
+	if info.Mode().Perm()&0o022 != 0 {
+		return fmt.Errorf("refusing: %s is group/world-writable (perms %#o)", exe, info.Mode().Perm())
+	}
+	hashPath := filepath.Join(esSpoolDir, "esd.binhash")
+	want, err := os.ReadFile(hashPath)
+	if err != nil {
+		return fmt.Errorf("refusing: integrity hash %s unreadable (stale or tampered install): %w", hashPath, err)
+	}
+	got, err := fileSHA256(exe)
+	if err != nil {
+		return fmt.Errorf("hash self: %w", err)
+	}
+	if got != string(want) {
+		return fmt.Errorf("refusing: %s changed since install (hash mismatch)", exe)
+	}
+	return nil
+}
+
+func fileSHA256(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	buf := make([]byte, 256*1024)
+	for {
+		n, err := f.Read(buf)
+		if n > 0 {
+			if _, err := h.Write(buf[:n]); err != nil {
+				return "", err
+			}
+		}
+		if err != nil {
+			if err.Error() == "EOF" {
+				return hex.EncodeToString(h.Sum(nil)), nil
+			}
+			return "", err
+		}
+	}
+}
+
 // runESCollector never returns except on fatal setup error.
 func runESCollector() error {
 	if os.Geteuid() != 0 {
 		return fmt.Errorf("must run as root (Endpoint Security requires it)")
+	}
+	// Fail closed on a binary the login user could have replaced. This runs
+	// BEFORE anything else touches the spool or eslogger.
+	if err := verifyOwnIntegrity(); err != nil {
+		return err
 	}
 	if _, err := exec.LookPath("eslogger"); err != nil {
 		return fmt.Errorf("eslogger not found: %w", err)
@@ -81,6 +156,27 @@ type spoolWriter struct {
 	size int64
 }
 
+// open attaches to the existing spool, resuming after whatever bytes are
+// already there. Existing content is preserved — unread events are the
+// tailer's data, not garbage.
+func (w *spoolWriter) open() error {
+	f, err := os.OpenFile(collect.ESPoolPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o640)
+	if err != nil {
+		return fmt.Errorf("open spool: %w", err)
+	}
+	if err := chownSpoolFileToConsoleUser(collect.ESPoolPath); err != nil {
+		log.Printf("es-collector: chown spool (daemon may not read it): %v", err)
+	}
+	info, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return fmt.Errorf("stat spool: %w", err)
+	}
+	w.f = f
+	w.size = info.Size()
+	return nil
+}
+
 func (w *spoolWriter) writeLine(line []byte) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -118,7 +214,11 @@ func (w *spoolWriter) rotateLocked() error {
 
 func pumpToSpool(stdout interface{ Read([]byte) (int, error) }) error {
 	w := &spoolWriter{}
-	if err := w.rotateLocked(); err != nil {
+	// Open WITHOUT rotating: the spool may hold events the tailer has not
+	// drained yet (this process may have crash-looped — destroying unread
+	// data on every respawn was the audit's finding). Rotation happens on
+	// size only, inside writeLine.
+	if err := w.open(); err != nil {
 		return err
 	}
 	buf := make([]byte, 0, 256*1024)

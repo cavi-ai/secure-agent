@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/bus"
@@ -14,6 +16,12 @@ import (
 
 // The privileged ES collector's spool (secure-agentd --es-collector writes it as root).
 const ESPoolPath = "/var/db/secure-agent/es-spool.jsonl"
+
+// ESServiceLabel is the root LaunchDaemon label running the privileged
+// collector. The user daemon probes its real launchd state so posture can
+// say "the root service is crash-looping" — the tailer being alive proves
+// nothing about the writer.
+const ESServiceLabel = "com.cavi-ai.secure-agent-esd"
 
 // SpoolAvailable reports whether the privileged ES collector's spool exists
 // and is readable by this (unprivileged) daemon — the signal that file
@@ -26,6 +34,58 @@ func SpoolAvailable() bool {
 	}
 	_ = f.Close()
 	return true
+}
+
+// ESServiceSnapshot is one probe of the privileged collector's real state:
+// the launchd service state string plus the spool's size and mtime. The
+// probe is injectable (ESServiceProbe) so tests never shell out.
+type ESServiceSnapshot struct {
+	State      string    `json:"state"`
+	SpoolSize  int64     `json:"spool_size"`
+	SpoolMtime time.Time `json:"spool_mtime"`
+}
+
+// SpoolState renders the spool facts for humans ("3.2 MB, updated 12 min ago").
+func (s ESServiceSnapshot) SpoolState() string {
+	if s.SpoolSize == 0 && s.SpoolMtime.IsZero() {
+		return "absent"
+	}
+	return fmt.Sprintf("%d bytes, updated %s ago", s.SpoolSize, time.Since(s.SpoolMtime).Round(time.Second))
+}
+
+// ESServiceProbe is the function posture calls to read the root service's
+// real state. Overridable in tests; production uses ESServiceState.
+var ESServiceProbe = ESServiceState
+
+// ESServiceState probes the privileged collector's real health the only way
+// an unprivileged daemon can: stat the spool (size + mtime) and read the
+// launchd service state via launchctl print. Spawning/exit != 0 with a
+// stale spool is the crash-loop signature the audit caught live (11,571
+// spawns while the tailer reported running).
+func ESServiceState() (string, int64, time.Time, error) {
+	var size int64
+	var mtime time.Time
+	if st, serr := os.Stat(ESPoolPath); serr == nil {
+		size, mtime = st.Size(), st.ModTime()
+	}
+	out, cerr := exec.Command("/bin/launchctl", "print", "system/"+ESServiceLabel).Output()
+	if cerr != nil {
+		// Not loaded / not running as root: report the spool facts anyway.
+		return "not-loaded", size, mtime, nil
+	}
+	state := "running"
+	for line := range strings.SplitSeq(string(out), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "state = ") {
+			state = strings.TrimPrefix(trimmed, "state = ")
+		} else if strings.HasPrefix(trimmed, "last exit code = ") {
+			code := strings.TrimPrefix(trimmed, "last exit code = ")
+			if code != "0" && code != "(never exited)" {
+				state = state + " (last exit " + code + ")"
+			}
+		}
+	}
+	return state, size, mtime, nil
 }
 
 // SpoolTailer consumes the privileged ES collector's spool file and publishes
