@@ -271,10 +271,16 @@ func silentCollectorItems(st Status) []PostureItem {
 	// a direct root eslogger child has no external service).
 	for _, c := range st.Collectors {
 		if c.Name == "eslogger" && c.Running && !c.Abandoned && st.ESService != nil {
-			items = append(items, esServiceItems(*st.ESService)...)
+			svcItems := esServiceItems(*st.ESService)
+			items = append(items, svcItems...)
+			// The spool-based probe supersedes the tailer heartbeat when it
+			// reports a failure: both would emit collector_silent under the
+			// same id, double-counting one blind spot. A healthy probe with
+			// a still-silent tailer keeps the generic check.
+			if len(svcItems) > 0 {
+				continue
+			}
 		}
-	}
-	for _, c := range st.Collectors {
 		if !c.Running || c.Abandoned {
 			continue
 		}

@@ -6,6 +6,37 @@ All notable changes to `secure-agent` are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- ES service probe parses the FIRST top-level `state =` from `launchctl print`
+  (nested sections repeat the key and previously overwrote the real service
+  state); the last-exit-code annotation is kept.
+- Posture emits at most one item per collector: the spool-based ES probe
+  supersedes the tailer heartbeat when it reports a failure, so a crash-looping
+  root service no longer double-counts under the `eslogger` id.
+- Session repo identity walks up to the enclosing git root (workspaces are
+  often subdirectories of a checkout), reports empty when no repo encloses the
+  workspace instead of inventing one from the basename, and the memoized
+  resolution expires after 10 minutes instead of living for the process
+  lifetime.
+- Codex rollout discovery reads `CODEX_HOME` off live codex processes (same
+  mechanism as `ps eww`), so orchestrators that relocate the rollout store no
+  longer blind codex tracing until a daemon restart.
+- opencode model attribution reads the current schema (`message.data.modelID`
+  top-level) with the older nested `model.modelID` as fallback — model calls
+  carry their model id again instead of landing unpriced with an empty model.
+- Privileged ES collector: the integrity hash moved from the console-user-owned
+  spool directory to root-owned `/Library/Application Support/secure-agent`,
+  the binary self-check now refuses non-root-owned executables in addition to
+  writable ones, and the expected pre-grant eslogger permission failure retries
+  inside the process (60s backoff) instead of respawn-churning through launchd.
+- Acceptance gate: the ES service check no longer parses JSON through
+  quote-broken shell interpolation (every probe read as absent), treats
+  `not-loaded` as a failure when spool-based, asserts guard hook ACTIVITY
+  (events in the last hour) instead of settings.json registration, and scopes
+  the repo-coverage and turn-ratio assertions to the current daemon's boot
+  window — rows and transcript records from before boot cannot be fixed
+  retroactively and previously made the ratio assertions measure old binaries.
+
 ### Changed
 - API HTTP handlers for resources, kill, firewall, and guard live in their own files (`api.go` 1662→940). Same package, no behavior change.
 

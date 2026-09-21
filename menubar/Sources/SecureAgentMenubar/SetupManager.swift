@@ -696,24 +696,29 @@ public final class SetupManager: ObservableObject {
 
     /// Installs the privileged ES collector: root-owned helper copy in
     /// /Library/PrivilegedHelperTools, SHA-256 recorded in
-    /// /var/db/secure-agent/esd.binhash, LaunchDaemon plist, bootstrap. One
-    /// osascript admin prompt. Order matters: stage files, boot out any job
-    /// loaded under this label, write the plist, bootstrap — booting out
-    /// after the bootstrap would tear down the just-installed job.
+    /// /Library/Application Support/secure-agent/esd.binhash (a root-owned
+    /// directory — the spool dir is chowned to the console user, so a hash
+    /// there could be swapped out from under the integrity check),
+    /// LaunchDaemon plist, bootstrap. One osascript admin prompt. Order
+    /// matters: stage files, boot out any job loaded under this label, write
+    /// the plist, bootstrap — booting out after the bootstrap would tear
+    /// down the just-installed job.
     public func installESCollector() throws {
         lastError = nil
         guard let src = bundledDaemonPath else { throw SetupError.notBundled }
         let label = Self.esCollectorLabel
         let helper = "/Library/PrivilegedHelperTools/\(label)"
-        let hashPath = "/var/db/secure-agent/esd.binhash"
+        let stateDir = "/Library/Application Support/secure-agent"
+        let hashPath = "\(stateDir)/esd.binhash"
         let plistPath = "/Library/LaunchDaemons/\(label).plist"
         let plist = Self.esPlistB64
         let shell =
-            "mkdir -p /Library/PrivilegedHelperTools /var/db/secure-agent /Library/Logs/secure-agent" +
+            "mkdir -p /Library/PrivilegedHelperTools /var/db/secure-agent /Library/Logs/secure-agent '\(stateDir)'" +
             " && cp -f '\(src)' '\(helper)'" +
             " && chown root:wheel '\(helper)' && chmod 755 '\(helper)'" +
             " && /usr/bin/shasum -a 256 '\(helper)' | awk '{print $1}' > '\(hashPath)'" +
             " && chown root:wheel '\(hashPath)' && chmod 644 '\(hashPath)'" +
+            " && chown root:wheel '\(stateDir)' && chmod 755 '\(stateDir)'" +
             " && { launchctl bootout system '\(plistPath)' 2>/dev/null || true; }" +
             " && echo '\(plist)' | base64 -d > '\(plistPath)'" +
             " && chown root:wheel '\(plistPath)' && chmod 644 '\(plistPath)'" +
@@ -748,7 +753,7 @@ public final class SetupManager: ObservableObject {
     /// Removes the LaunchDaemon + helper (root-owned and any legacy in-bundle
     /// copy). Also called by uninstallAll.
     public func uninstallESCollector() {
-        let script = "do shell script \"launchctl bootout system /Library/LaunchDaemons/\(Self.esCollectorLabel).plist 2>/dev/null; rm -f /Library/LaunchDaemons/\(Self.esCollectorLabel).plist '\(Self.esCollectorHelperPath)' '\(Self.esCollectorInstallPath)' /var/db/secure-agent/esd.binhash; true\" with administrator privileges"
+        let script = "do shell script \"launchctl bootout system /Library/LaunchDaemons/\(Self.esCollectorLabel).plist 2>/dev/null; rm -f /Library/LaunchDaemons/\(Self.esCollectorLabel).plist '\(Self.esCollectorHelperPath)' '\(Self.esCollectorInstallPath)' '/Library/Application Support/secure-agent/esd.binhash' /var/db/secure-agent/esd.binhash; true\" with administrator privileges"
         _ = Self.run(["/usr/bin/osascript", "-e", script])
     }
 

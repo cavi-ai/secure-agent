@@ -34,47 +34,76 @@ const (
 	minSessionLifetime = 60 * time.Second
 )
 
-// gitInfoFor reads repo and branch from a workspace's .git directory at
-// resolve time — the handshake's git probe only exists for hook sessions, so
-// without this transcript- and process-tree-resolved sessions have an empty
-// repo. Best-effort and cheap: two small reads, memoized per workspace for the
-// process lifetime (a conversation does not move repositories mid-session).
-// Call sites hold the resolver mutex, so the map needs no lock of its own.
+// gitCacheTTL bounds how long a workspace's repo resolution is trusted:
+// workspaces move between repos (a scratch dir becomes a checkout, a
+// worktree is removed) and a process-lifetime memo served stale values.
+const gitCacheTTL = 10 * time.Minute
+
+type gitInfo struct {
+	repo, branch string
+	at           time.Time
+}
+
+// gitInfoFor reads repo and branch from the workspace's ENCLOSING git root —
+// workspaces are often subdirectories of a checkout, and the repo is the
+// root's basename, not the workspace's. A path with no enclosing .git yields
+// empty strings ("" is honest; the basename of a non-repo is noise like "/"
+// or ".config"). Results memoize per workspace for gitCacheTTL. Call sites
+// hold the resolver mutex, so the map needs no lock of its own.
 func gitInfoFor(workspace string) (repo, branch string) {
 	if workspace == "" {
 		return "", ""
 	}
 	if gitCache == nil {
-		gitCache = map[string][2]string{}
+		gitCache = map[string]gitInfo{}
 	}
-	if v, ok := gitCache[workspace]; ok {
-		return v[0], v[1]
+	if v, ok := gitCache[workspace]; ok && time.Since(v.at) < gitCacheTTL {
+		return v.repo, v.branch
 	}
-	repo = filepath.Base(filepath.Clean(workspace))
-	// Detached worktrees and submodule checkouts carry the real git dir in
-	// the .git FILE ("gitdir: ..."); a normal checkout is a directory.
-	gitDir := filepath.Join(workspace, ".git")
-	if data, err := os.ReadFile(gitDir); err == nil {
-		line := strings.TrimSpace(string(data))
-		if rest, ok := strings.CutPrefix(line, "gitdir:"); ok {
-			gitDir = strings.TrimSpace(rest)
-			if !filepath.IsAbs(gitDir) {
-				gitDir = filepath.Join(workspace, gitDir)
-			}
-		}
-	}
-	branch = ""
-	if head, err := os.ReadFile(filepath.Join(gitDir, "HEAD")); err == nil {
-		line := strings.TrimSpace(string(head))
-		if ref, ok := strings.CutPrefix(line, "ref: refs/heads/"); ok {
-			branch = strings.TrimSpace(ref)
-		}
-	}
-	gitCache[workspace] = [2]string{repo, branch}
+	repo, branch = resolveGitInfo(workspace)
+	gitCache[workspace] = gitInfo{repo: repo, branch: branch, at: time.Now()}
 	return repo, branch
 }
 
-var gitCache map[string][2]string
+// resolveGitInfo walks up from workspace looking for a .git entry (directory
+// or worktree link file), the same rule git itself applies.
+func resolveGitInfo(workspace string) (repo, branch string) {
+	dir := filepath.Clean(workspace)
+	for {
+		// Detached worktrees and submodule checkouts carry the real git dir
+		// in the .git FILE ("gitdir: ..."); a normal checkout is a directory.
+		gitDir := filepath.Join(dir, ".git")
+		st, err := os.Stat(gitDir)
+		if err == nil {
+			if !st.IsDir() {
+				if data, rerr := os.ReadFile(gitDir); rerr == nil {
+					line := strings.TrimSpace(string(data))
+					if rest, ok := strings.CutPrefix(line, "gitdir:"); ok {
+						gitDir = strings.TrimSpace(rest)
+						if !filepath.IsAbs(gitDir) {
+							gitDir = filepath.Join(dir, gitDir)
+						}
+					}
+				}
+			}
+			repo = filepath.Base(dir)
+			if head, herr := os.ReadFile(filepath.Join(gitDir, "HEAD")); herr == nil {
+				line := strings.TrimSpace(string(head))
+				if ref, ok := strings.CutPrefix(line, "ref: refs/heads/"); ok {
+					branch = strings.TrimSpace(ref)
+				}
+			}
+			return repo, branch
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", ""
+		}
+		dir = parent
+	}
+}
+
+var gitCache map[string]gitInfo
 
 // Handshake is the hook's session announcement: harness identity, workspace,
 // and the harness's own pid (the hook's parent), which joins the hook

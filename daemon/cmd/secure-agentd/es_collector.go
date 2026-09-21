@@ -21,28 +21,41 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/collect"
 )
 
 const (
 	esSpoolDir = "/var/db/secure-agent"
+	// esStateDir holds the integrity hash. It must NOT be the spool dir:
+	// the spool dir is chowned to the console user (so the unprivileged
+	// daemon can read the spool), and a hash file in a user-owned directory
+	// can be swapped out from under the check.
+	esStateDir = "/Library/Application Support/secure-agent"
 	// 32MB handoff buffer: the user daemon drains continuously; rotation
 	// prevents unbounded root-written growth on pathological activity.
 	maxSpoolBytes = 32 << 20
+	// esRetryInterval backs off between eslogger respawns inside this
+	// process when the failure is the expected pre-grant one (no ES
+	// permission yet). Internal retry keeps the service state "running"
+	// instead of crash-looping through launchd on every denied attempt.
+	esRetryInterval = 60 * time.Second
 )
 
 // verifyOwnIntegrity refuses to run as root from a binary the login user (or
 // any admin) could have swapped since install. The LaunchDaemon executes this
 // binary as root; a writable binary converts "monitoring tool" into
-// "root on request". The binary's own cdhash is recorded in
-// /var/db/secure-agent/esd.binhash at install time (root-owned directory,
-// written by the privileged install step); on every start the running file
-// must still match. A missing hash file is treated as unverified: the
-// installer always writes one, so its absence means tampering or a stale
-// install — both fail closed.
+// "root on request". The binary's own SHA-256 is recorded in
+// /Library/Application Support/secure-agent/esd.binhash at install time (a
+// root-owned directory, written by the privileged install step — NOT the
+// spool dir, which is chowned to the console user); on every start the
+// running file must still match. A missing hash file is treated as
+// unverified: the installer always writes one, so its absence means tampering
+// or a stale install — both fail closed.
 func verifyOwnIntegrity() error {
 	exe, err := os.Executable()
 	if err != nil {
@@ -56,13 +69,16 @@ func verifyOwnIntegrity() error {
 	if err != nil {
 		return fmt.Errorf("stat self: %w", err)
 	}
-	// Mode checks are the cheap half: a writable binary is a defect even with
-	// a matching hash. Root-owned path or not, refuse anything the console
-	// user could overwrite.
+	// Mode AND ownership are the cheap half: a 0755 binary owned by the
+	// login user is exactly as swappable as a writable one. Refuse anything
+	// not owned by root with no group/world write bits.
 	if info.Mode().Perm()&0o022 != 0 {
 		return fmt.Errorf("refusing: %s is group/world-writable (perms %#o)", exe, info.Mode().Perm())
 	}
-	hashPath := filepath.Join(esSpoolDir, "esd.binhash")
+	if st, ok := info.Sys().(*syscall.Stat_t); !ok || st.Uid != 0 {
+		return fmt.Errorf("refusing: %s is not owned by root", exe)
+	}
+	hashPath := filepath.Join(esStateDir, "esd.binhash")
 	want, err := os.ReadFile(hashPath)
 	if err != nil {
 		return fmt.Errorf("refusing: integrity hash %s unreadable (stale or tampered install): %w", hashPath, err)
@@ -125,6 +141,33 @@ func runESCollector() error {
 		log.Printf("es-collector: chown spool (daemon may not read it): %v", err)
 	}
 
+	for {
+		err := runESLoggerOnce(ctx)
+		if ctx.Err() != nil {
+			return nil // shutdown: eslogger was killed by the context
+		}
+		if err == nil {
+			return nil
+		}
+		if !isESPermissionFailure(err) {
+			return err
+		}
+		// The ES client is denied until the operator grants eslogger its
+		// permission in Settings. That is the EXPECTED pre-grant state, so
+		// wait and retry inside this process: exiting nonzero would let
+		// launchd respawn-churn the service on every denied attempt.
+		log.Printf("es-collector: %v — waiting %s for the eslogger permission grant", err, esRetryInterval)
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-time.After(esRetryInterval):
+		}
+	}
+}
+
+// runESLoggerOnce runs eslogger to completion (or ctx cancellation) and
+// pumps its JSON to the spool.
+func runESLoggerOnce(ctx context.Context) error {
 	cmd := exec.CommandContext(ctx, "eslogger", "open", "exec", "unlink", "rename", "tcc_modify", "--format", "json")
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -147,6 +190,12 @@ func runESCollector() error {
 		return fmt.Errorf("eslogger exited: %w (stderr: %s)", waitErr, oneLine(stderr.String()))
 	}
 	return nil
+}
+
+// isESPermissionFailure reports whether an eslogger failure is the expected
+// "no ES client permission yet" denial rather than a real crash.
+func isESPermissionFailure(err error) bool {
+	return err != nil && strings.Contains(strings.ToLower(err.Error()), "not permitted")
 }
 
 // spoolWriter serializes appends with size-capped rotation.
