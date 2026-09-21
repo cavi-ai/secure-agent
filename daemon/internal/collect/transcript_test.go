@@ -124,6 +124,103 @@ func TestOverlongLineStillParses(t *testing.T) {
 	}
 }
 
+// A prompt appended to a transcript that was IDLE past the active window must
+// still produce a turn. Regression: the resolve tick re-seeded every file's
+// offset to EOF, so the appended line — the one that made the file active
+// again — was skipped, and the prompt never became a turn.
+func TestIdleFileAppendIsNotSkipped(t *testing.T) {
+	dir := t.TempDir()
+	projectsDir := filepath.Join(dir, ".claude", "projects")
+	if err := os.MkdirAll(projectsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	logPath := filepath.Join(projectsDir, "session.jsonl")
+	seedLine := `{"sessionId":"idle-s","type":"user","timestamp":"2026-09-20T17:44:53.118Z","isMeta":true,"message":{"content":"meta"}}` + "\n"
+	if err := os.WriteFile(logPath, []byte(seedLine), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	b := bus.New(16)
+	sub := b.Subscribe()
+	ts := NewTranscriptScanner(b, []string{projectsDir})
+	ts.tailEvery = 20 * time.Millisecond
+	ts.resolveEvery = 50 * time.Millisecond
+	ts.activeWindowD = 100 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go ts.Run(ctx)
+
+	// Let the scanner seed the file, then age it out of the active set.
+	time.Sleep(200 * time.Millisecond)
+	old := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(logPath, old, old); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(200 * time.Millisecond) // a resolve tick with the file inactive
+
+	// The append that ends the idle gap: a real prompt record.
+	line := `{"sessionId":"idle-s","type":"user","timestamp":"2026-09-20T17:45:53.118Z","message":{"content":"fix the thing"}}` + "\n"
+	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(line); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+
+	deadline := time.After(5 * time.Second)
+	for {
+		select {
+		case e := <-sub:
+			if e.Kind == event.KindTurn && e.SessionID == "idle-s" {
+				return
+			}
+		case <-deadline:
+			t.Fatal("prompt appended after an idle gap was skipped — no turn published")
+		}
+	}
+}
+
+// A transcript created AFTER the scanner started is read from byte 0 — its
+// whole content is new, so the first prompt must land.
+func TestNewSessionFileReadFromStart(t *testing.T) {
+	dir := t.TempDir()
+	projectsDir := filepath.Join(dir, ".claude", "projects")
+	if err := os.MkdirAll(projectsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	b := bus.New(16)
+	sub := b.Subscribe()
+	ts := NewTranscriptScanner(b, []string{projectsDir})
+	ts.tailEvery = 20 * time.Millisecond
+	ts.resolveEvery = 50 * time.Millisecond
+	ts.activeWindowD = 100 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go ts.Run(ctx)
+	time.Sleep(200 * time.Millisecond)
+
+	logPath := filepath.Join(projectsDir, "brand-new.jsonl")
+	line := `{"sessionId":"new-s","type":"user","timestamp":"2026-09-20T17:46:53.118Z","message":{"content":"first prompt"}}` + "\n"
+	if err := os.WriteFile(logPath, []byte(line), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	deadline := time.After(5 * time.Second)
+	for {
+		select {
+		case e := <-sub:
+			if e.Kind == event.KindTurn && e.SessionID == "new-s" {
+				return
+			}
+		case <-deadline:
+			t.Fatal("new session transcript was not read from byte 0")
+		}
+	}
+}
+
 func TestScanLineFakeCursorActivity(t *testing.T) {
 	line := `{"file_path":"/tmp/foo/.env","pid":12345,"tool":"Read"}`
 	e, ok := ScanLine(line)

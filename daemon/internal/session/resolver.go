@@ -44,13 +44,14 @@ type gitInfo struct {
 	at           time.Time
 }
 
-// gitInfoFor reads repo and branch from the workspace's ENCLOSING git root —
+// GitInfoFor reads repo and branch from the workspace's ENCLOSING git root —
 // workspaces are often subdirectories of a checkout, and the repo is the
 // root's basename, not the workspace's. A path with no enclosing .git yields
 // empty strings ("" is honest; the basename of a non-repo is noise like "/"
 // or ".config"). Results memoize per workspace for gitCacheTTL. Call sites
-// hold the resolver mutex, so the map needs no lock of its own.
-func gitInfoFor(workspace string) (repo, branch string) {
+// hold the resolver mutex, so the map needs no lock of its own. Exported for
+// the store's repair pass over rows written by older resolvers.
+func GitInfoFor(workspace string) (repo, branch string) {
 	if workspace == "" {
 		return "", ""
 	}
@@ -215,7 +216,16 @@ func (r *Resolver) Resolve(e *event.Event) string {
 		if ts.IsZero() {
 			ts = r.now()
 		}
-		repo, branch := gitInfoFor(info.CWD)
+		// For a process discovered days after it launched, discovery time is
+		// not the session start — stamping every boot's registration burst
+		// "created now" makes restarts look like session floods. Process
+		// start is the session start for a CLI harness (the id already
+		// embeds it); fall back to discovery time only when start is unknown.
+		startedAt := info.StartedAt
+		if startedAt.IsZero() {
+			startedAt = ts
+		}
+		repo, branch := GitInfoFor(info.CWD)
 		sess := model.Session{
 			ID:            id,
 			Harness:       info.Name,
@@ -224,7 +234,7 @@ func (r *Resolver) Resolve(e *event.Event) string {
 			Branch:        branch,
 			RootPID:       root,
 			RootStartedAt: info.StartedAt.UTC().Format(time.RFC3339Nano),
-			StartedAt:     ts,
+			StartedAt:     startedAt,
 			LastSeenAt:    ts,
 			Status:        model.SessionActive,
 			Confidence:    model.ConfProcessTree,
@@ -397,7 +407,7 @@ func (r *Resolver) NoteTranscriptSession(id, harness, workspace string, ts time.
 		r.byScope[scopeKey(harness, workspace)] = id
 	}
 
-	repo, branch := gitInfoFor(workspace)
+	repo, branch := GitInfoFor(workspace)
 	r.st.UpsertSession(model.Session{
 		ID: id, Harness: harness, Workspace: workspace,
 		Repo: repo, Branch: branch,
@@ -440,7 +450,7 @@ func (r *Resolver) ensureHookSession(e *event.Event) {
 		}
 	}
 	if sess.Repo == "" {
-		sess.Repo, sess.Branch = gitInfoFor(sess.Workspace)
+		sess.Repo, sess.Branch = GitInfoFor(sess.Workspace)
 	}
 	r.st.UpsertSession(sess)
 	if stored, ok := r.st.GetSession(e.SessionID); ok {

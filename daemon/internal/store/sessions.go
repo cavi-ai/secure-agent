@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"path/filepath"
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
@@ -138,11 +139,71 @@ func (s *Store) EndSession(id string, ts time.Time) {
 		id, int(event.KindToolCall))
 }
 
+// SweepStaleRunningCalls closes tool-call rows stuck at "running" past the
+// cutoff. EndSession sweeps its own session, but rows written before that
+// sweep existed (or whose completion line was lost) stay running forever; a
+// call cannot legitimately be in flight for hours. If the completion arrives
+// late, the upsert on session_id+call_id flips the row back to ok.
+func (s *Store) SweepStaleRunningCalls(cutoff time.Time) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	res, err := s.db.Exec(`UPDATE events SET tool_status = 'error'
+		WHERE kind = ? AND tool_status = 'running' AND ts < ?`,
+		int(event.KindToolCall), cutoff.UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		return 0
+	}
+	n, _ := res.RowsAffected()
+	return int(n)
+}
+
+// RepairSessionGitIdentity rewrites repo/branch for rows whose stored repo
+// carries the old basename heuristic's signature (repo equals the workspace
+// basename, or repo is empty) when the resolver's current answer differs.
+// Rows whose repo names something other than the workspace tail — a real
+// handshake or walk-up resolution — are untouched. Confidence is no proof of
+// origin here: fill-merge keeps a heuristic repo when a later handshake
+// arrives with an empty one. Returns the number of repaired rows.
+func (s *Store) RepairSessionGitIdentity(resolve func(workspace string) (repo, branch string)) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rows, err := s.db.Query(`SELECT id, workspace, repo, branch FROM sessions
+		WHERE workspace != '' LIMIT 5000`)
+	if err != nil {
+		return 0
+	}
+	type row struct{ id, ws, repo, branch string }
+	var todo []row
+	for rows.Next() {
+		var r row
+		if err := rows.Scan(&r.id, &r.ws, &r.repo, &r.branch); err == nil {
+			todo = append(todo, r)
+		}
+	}
+	rows.Close()
+	repaired := 0
+	for _, r := range todo {
+		base := filepath.Base(filepath.Clean(r.ws))
+		if r.repo != "" && r.repo != base {
+			continue // a real resolution, not the basename heuristic
+		}
+		repo, branch := resolve(r.ws)
+		if repo == r.repo && branch == r.branch {
+			continue
+		}
+		if _, err := s.db.Exec(`UPDATE sessions SET repo = ?, branch = ? WHERE id = ?`, repo, branch, r.id); err == nil {
+			repaired++
+		}
+	}
+	return repaired
+}
+
 // MarkSessionsIdle flips active sessions with no activity since cutoff to
 // idle. Returns the ids flipped (the resolver ends their pid-less cousins).
 func (s *Store) MarkSessionsIdle(cutoff time.Time) []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	c := cutoff.UTC().Format(time.RFC3339Nano)
 	rows, err := s.db.Query(`SELECT id FROM sessions WHERE status = ? AND last_seen_at < ?`, model.SessionActive, c)
 	if err != nil {
