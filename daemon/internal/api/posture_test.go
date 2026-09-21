@@ -152,8 +152,7 @@ func TestPostureCountsUninspectedEgressAndDeadCollectors(t *testing.T) {
 }
 
 // A running collector that produces nothing while agents are active is the
-// monitor's worst failure mode: green lights, blind sensors (the audit found
-// both the eslogger spool and the hook pipeline dead for days, all healthy).
+// monitor's worst failure mode: green lights, blind sensors.
 func TestPostureFlagsSilentCollectorsAndUncoveredHarnesses(t *testing.T) {
 	sock := fmt.Sprintf("/tmp/sa_posture5_%d.sock", time.Now().UnixNano())
 	defer os.Remove(sock)
@@ -194,8 +193,7 @@ func TestPostureFlagsSilentCollectorsAndUncoveredHarnesses(t *testing.T) {
 }
 
 // The root ES service crash-looping must surface even while the spool TAILER
-// runs green: the tailer's heartbeat proves nothing about the writer (the
-// audit's 11,571-spawn loop was invisible for eight days).
+// runs green: the tailer's heartbeat proves nothing about the writer.
 func TestPostureFlagsCrashLoopingRootService(t *testing.T) {
 	sock := fmt.Sprintf("/tmp/sa_posture7_%d.sock", time.Now().UnixNano())
 	defer os.Remove(sock)
@@ -228,6 +226,36 @@ func TestPostureFlagsCrashLoopingRootService(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("expected collector_silent for the crash-looping root service, got %+v", p.Items)
+	}
+}
+
+// A failing root service AND a never-produced tailer are one blind spot:
+// posture must carry exactly one collector_silent item for eslogger.
+func TestPostureSingleESItemWhenProbeFails(t *testing.T) {
+	st := Status{
+		Running: true, Uptime: "1h0m0s", ActiveAgents: 2,
+		Collectors: []supervise.Health{{Name: "eslogger", Running: true}}, // never produced
+		ESService:  &collect.ESServiceSnapshot{State: "spawn scheduled (last exit 1)", SpoolMtime: time.Now().Add(-8 * 24 * time.Hour)},
+	}
+	count := 0
+	for _, it := range silentCollectorItems(st) {
+		if it.ID == "eslogger" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("eslogger items = %d, want exactly 1", count)
+	}
+	// Healthy probe + silent tailer: the tailer silence still surfaces.
+	st.ESService = &collect.ESServiceSnapshot{State: "running", SpoolMtime: time.Now()}
+	count = 0
+	for _, it := range silentCollectorItems(st) {
+		if it.ID == "eslogger" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("healthy probe + silent tailer: eslogger items = %d, want 1 (tailer silence)", count)
 	}
 }
 

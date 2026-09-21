@@ -33,6 +33,12 @@ type TranscriptScanner struct {
 	bus   *bus.Bus
 	paths []string
 
+	// ExtraTargets, when set, is consulted on every classify pass for
+	// dynamically discovered targets (e.g. CODEX_HOME read off live codex
+	// processes — a launcher that relocates the rollout store must not
+	// blind the daemon until restart).
+	ExtraTargets func() []string
+
 	// OnProduce, when set, is called after any transcript/plugin event is
 	// published — the supervisor's coverage heartbeat: a scanner whose
 	// harnesses never emit hook events must not read as healthy coverage.
@@ -232,9 +238,13 @@ func (ts *TranscriptScanner) Run(ctx context.Context) error {
 // classifyTargets splits configured targets into directory targets (which need
 // a recursive walk) and cheap targets (explicit files or globs). A target that
 // does not currently exist is treated as cheap; it costs nothing until it
-// appears.
+// appears. Dynamic targets (ExtraTargets) are re-evaluated on every pass.
 func (ts *TranscriptScanner) classifyTargets() (dirs, cheap []string) {
-	for _, p := range ts.paths {
+	paths := ts.paths
+	if ts.ExtraTargets != nil {
+		paths = append(append([]string{}, paths...), ts.ExtraTargets()...)
+	}
+	for _, p := range paths {
 		if fi, err := os.Stat(p); err == nil && fi.IsDir() {
 			dirs = append(dirs, p)
 		} else {

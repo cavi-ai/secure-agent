@@ -163,4 +163,11 @@ func TestOpencodeStepFinishGetsModelFromMessage(t *testing.T) {
 	if m2 := c.modelFor(db, "s1"); m2 != model {
 		t.Fatal("modelFor must be memoized per session")
 	}
+	// Current opencode carries the model top-level (modelID), not nested.
+	if _, err := db.Exec(`INSERT INTO message VALUES ('m2','s2',200,'{"role":"assistant","modelID":"k3-256k","providerID":"acme"}')`); err != nil {
+		t.Fatal(err)
+	}
+	if model := c.modelFor(db, "s2"); model != "k3-256k" {
+		t.Fatalf("modelFor top-level = %q, want k3-256k", model)
+	}
 }

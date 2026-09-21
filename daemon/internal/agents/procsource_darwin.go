@@ -4,6 +4,8 @@ package agents
 
 import (
 	"bytes"
+	"encoding/binary"
+	"strings"
 	"time"
 	"unsafe"
 
@@ -153,7 +155,8 @@ func procCWD(pid int32) string {
 	return string(path)
 }
 
-func getProcPath(pid int32) string {
+// procArgs2 fetches the KERN_PROCARGS2 buffer: argc, exec path, argv, env.
+func procArgs2(pid int32) []byte {
 	mib := []int32{1 /* CTL_KERN */, 49 /* KERN_PROCARGS2 */, pid}
 	n := uintptr(0)
 	_, _, err := unix.Syscall6(
@@ -166,7 +169,7 @@ func getProcPath(pid int32) string {
 		0,
 	)
 	if err != 0 || n == 0 {
-		return ""
+		return nil
 	}
 	buf := make([]byte, n)
 	_, _, err = unix.Syscall6(
@@ -179,12 +182,68 @@ func getProcPath(pid int32) string {
 		0,
 	)
 	if err != 0 || n <= 4 {
+		return nil
+	}
+	return buf
+}
+
+func getProcPath(pid int32) string {
+	buf := procArgs2(pid)
+	if len(buf) <= 4 {
 		return ""
 	}
 	pathBuf := buf[4:]
 	idx := bytes.IndexByte(pathBuf, 0)
 	if idx > 0 {
 		return string(pathBuf[:idx])
+	}
+	return ""
+}
+
+// ProcEnvVar reads one variable from a process's start environment out of
+// the KERN_PROCARGS2 buffer (the env block follows argv) — the same
+// mechanism and the same same-user visibility limit as `ps eww`. "" when
+// unreadable or unset.
+func ProcEnvVar(pid int32, key string) string {
+	buf := procArgs2(pid)
+	if len(buf) <= 4 {
+		return ""
+	}
+	argc := int(int32(binary.LittleEndian.Uint32(buf[:4])))
+	rest := buf[4:]
+	next := func() (string, bool) {
+		i := bytes.IndexByte(rest, 0)
+		if i < 0 {
+			return "", false
+		}
+		s := string(rest[:i])
+		rest = rest[i+1:]
+		return s, true
+	}
+	if _, ok := next(); !ok { // exec path
+		return ""
+	}
+	for len(rest) > 0 && rest[0] == 0 { // alignment padding
+		rest = rest[1:]
+	}
+	for i := 0; i < argc; i++ { // argv[0..argc-1]
+		if _, ok := next(); !ok {
+			return ""
+		}
+	}
+	for len(rest) > 0 && rest[0] == 0 { // argv/env separator + padding
+		rest = rest[1:]
+	}
+	prefix := key + "="
+	for len(rest) > 0 {
+		s, ok := next()
+		if !ok {
+			s = string(rest)
+			rest = nil
+		}
+		if strings.HasPrefix(s, prefix) {
+			return s[len(prefix):]
+		}
 	}
 	return ""
 }

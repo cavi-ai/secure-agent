@@ -484,6 +484,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 	home, _ := os.UserHomeDir()
 	go sup.Run(ctx, "transcript", func(c context.Context) error {
 		ts := collect.NewTranscriptScanner(b, transcriptTailTargets(home, cfg.JSONLPath))
+		ts.ExtraTargets = func() []string { return codexSessionTargets(tagger, home) }
 		ts.OnProduce = func() { supReg.MarkProduced("transcript") }
 		ts.OnHandshake = func(h collect.Handshake) {
 			hts, _ := time.Parse(time.RFC3339Nano, h.TS)

@@ -203,6 +203,43 @@ func transcriptTailTargets(home, jsonlPath string) []string {
 	return targets
 }
 
+// codexSessionTargets discovers CODEX_HOME off LIVE codex processes: an
+// orchestrator that runs codex with a relocated home writes rollouts outside
+// ~/.codex, and the daemon's own env never sees it. Reading the variable off
+// the process itself (same mechanism as `ps eww`) keeps the tail targets
+// correct without a daemon restart. Called on the transcript scanner's
+// resolve cadence.
+func codexSessionTargets(tagger *agents.Tagger, home string) []string {
+	if tagger == nil {
+		return nil
+	}
+	return codexSessionTargetsFrom(tagger.TaggedPIDs(), agents.ProcEnvVar, home)
+}
+
+// codexSessionTargetsFrom is the testable core: deduped CODEX_HOME/sessions
+// dirs from tagged codex processes, minus the default already covered.
+func codexSessionTargetsFrom(procs map[int32]agents.AgentInfo, envOf func(int32, string) string, home string) []string {
+	def := filepath.Join(home, ".codex", "sessions")
+	seen := map[string]bool{}
+	var out []string
+	for pid, info := range procs {
+		if info.Name != "codex" {
+			continue
+		}
+		ch := envOf(pid, "CODEX_HOME")
+		if ch == "" {
+			continue
+		}
+		dir := filepath.Join(ch, "sessions")
+		if dir == def || seen[dir] {
+			continue
+		}
+		seen[dir] = true
+		out = append(out, dir)
+	}
+	return out
+}
+
 // isTraceKind reports whether an event is an agent-semantic trace record the
 // fleet wire carries (tool calls, turns, model calls) — not the raw OS flood.
 func isTraceKind(k event.Kind) bool {
