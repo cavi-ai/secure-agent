@@ -73,19 +73,34 @@ func ESServiceState() (string, int64, time.Time, error) {
 		// Not loaded / not running as root: report the spool facts anyway.
 		return "not-loaded", size, mtime, nil
 	}
+	return parseLaunchctlState(string(out)), size, mtime, nil
+}
+
+// parseLaunchctlState extracts the service state from `launchctl print`
+// output. Top-level keys sit at exactly one tab of indentation; nested
+// sections (endpoints, mach services) carry their own `state =` lines,
+// which must not overwrite the service state — first top-level match wins.
+// A nonzero last exit code rides along as an annotation.
+func parseLaunchctlState(out string) string {
 	state := "running"
-	for line := range strings.SplitSeq(string(out), "\n") {
+	exitNote := ""
+	seenState := false
+	for line := range strings.SplitSeq(out, "\n") {
+		if !strings.HasPrefix(line, "\t") || strings.HasPrefix(line, "\t\t") {
+			continue
+		}
 		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "state = ") {
+		if !seenState && strings.HasPrefix(trimmed, "state = ") {
 			state = strings.TrimPrefix(trimmed, "state = ")
+			seenState = true
 		} else if strings.HasPrefix(trimmed, "last exit code = ") {
 			code := strings.TrimPrefix(trimmed, "last exit code = ")
 			if code != "0" && code != "(never exited)" {
-				state = state + " (last exit " + code + ")"
+				exitNote = " (last exit " + code + ")"
 			}
 		}
 	}
-	return state, size, mtime, nil
+	return state + exitNote
 }
 
 // SpoolTailer consumes the privileged ES collector's spool file and publishes

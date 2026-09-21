@@ -5,6 +5,7 @@ package agents
 import (
 	"bytes"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
@@ -58,6 +59,43 @@ func TestSysctlProcArgs2(t *testing.T) {
 	if path == "" {
 		t.Fatalf("Failed to get path for self PID %d", pid)
 	}
+}
+
+func TestProcEnvVarReadsChild(t *testing.T) {
+	// KERN_PROCARGS2 reports the environment AT EXEC, and macOS redacts it
+	// for platform binaries (/bin/sleep shows nothing even to ps eww), so the
+	// child is this test binary re-executed as a blocking helper.
+	cmd := exec.Command(os.Args[0], "-test.run=TestEnvHelperProcess")
+	cmd.Env = append(os.Environ(),
+		"SECURE_AGENT_TEST_ENVVAR=probe-value-123",
+		"GO_WANT_HELPER_PROCESS=1",
+	)
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = cmd.Process.Kill(); _, _ = cmd.Process.Wait() }()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if got := ProcEnvVar(int32(cmd.Process.Pid), "SECURE_AGENT_TEST_ENVVAR"); got == "probe-value-123" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("ProcEnvVar(child) never returned the exec-time env var")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if got := ProcEnvVar(int32(cmd.Process.Pid), "SECURE_AGENT_TEST_MISSING"); got != "" {
+		t.Fatalf("missing var = %q, want empty", got)
+	}
+}
+
+// TestEnvHelperProcess blocks forever when re-executed by
+// TestProcEnvVarReadsChild; run directly it is a no-op pass.
+func TestEnvHelperProcess(t *testing.T) {
+	if os.Getenv("GO_WANT_HELPER_PROCESS") != "1" {
+		return
+	}
+	select {}
 }
 
 func TestSelfStartTimeAndRSS(t *testing.T) {

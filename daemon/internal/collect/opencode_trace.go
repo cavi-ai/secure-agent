@@ -213,19 +213,30 @@ func (c *OpencodeCollector) modelFor(db *sql.DB, sessionID string) string {
 	if err != nil {
 		return ""
 	}
+	// opencode's message.data has carried the model two ways: nested
+	// (model.modelID) on older builds and top-level (modelID) on current
+	// ones. Read both; top-level wins.
 	var m struct {
-		Model struct {
+		ModelID string `json:"modelID"`
+		Model   struct {
 			ModelID string `json:"modelID"`
 		} `json:"model"`
 	}
-	if json.Unmarshal([]byte(data), &m) != nil || m.Model.ModelID == "" {
+	if json.Unmarshal([]byte(data), &m) != nil {
+		return ""
+	}
+	id := m.ModelID
+	if id == "" {
+		id = m.Model.ModelID
+	}
+	if id == "" {
 		return ""
 	}
 	if c.modelCache == nil {
 		c.modelCache = map[string]string{}
 	}
-	c.modelCache[sessionID] = m.Model.ModelID
-	return m.Model.ModelID
+	c.modelCache[sessionID] = id
+	return id
 }
 
 // OpencodePartEvents maps one opencode `part` row to trace events. Pure and

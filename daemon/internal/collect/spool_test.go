@@ -41,6 +41,34 @@ func drainSpool(t *testing.T, lines []string, want int, timeout time.Duration) [
 	}
 }
 
+func TestParseLaunchctlStateTakesFirstTopLevelState(t *testing.T) {
+	// launchctl print output carries the service state at one tab of
+	// indentation; nested sections (endpoints, mach services) repeat the
+	// key at deeper indentation. A crash-looping service reads as
+	// "spawn scheduled" only when the FIRST top-level state wins.
+	out := "system/com.cavi-ai.secure-agent-esd = {\n" +
+		"\tactive count = 1\n" +
+		"\tpath = /Library/LaunchDaemons/com.cavi-ai.secure-agent-esd.plist\n" +
+		"\tstate = spawn scheduled\n" +
+		"\n" +
+		"\tprogram = /Library/PrivilegedHelperTools/com.cavi-ai.secure-agent-esd\n" +
+		"\tlast exit code = 1\n" +
+		"\tmach services = {\n" +
+		"\t\tcom.example = {\n" +
+		"\t\t\tstate = running\n" +
+		"\t\t}\n" +
+		"\t}\n" +
+		"}\n"
+	if got := parseLaunchctlState(out); got != "spawn scheduled (last exit 1)" {
+		t.Fatalf("state = %q, want spawn scheduled (last exit 1)", got)
+	}
+	// Clean exit: no annotation.
+	clean := "\tstate = running\n\tlast exit code = 0\n"
+	if got := parseLaunchctlState(clean); got != "running" {
+		t.Fatalf("state = %q, want running", got)
+	}
+}
+
 func TestSpoolTailerParsesAndPublishes(t *testing.T) {
 	// An ES open-event envelope exactly like eslogger emits.
 	line := `{"event_type":0,"process":{"audit_token":{"pid":4242},"pid":4242,"executable":{"path":"/usr/bin/cat"}},"event":{"open":{"file":{"path":"/Users/x/.ssh/id_ed25519"}}},"time":"2026-09-11T12:00:00.000000Z"}`

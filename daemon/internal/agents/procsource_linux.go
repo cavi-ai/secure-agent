@@ -108,3 +108,19 @@ func readRSS(pid int32) uint64 {
 	}
 	return parseProcStatm(string(b), uint64(os.Getpagesize()))
 }
+
+// ProcEnvVar reads one variable from /proc/<pid>/environ (NUL-separated).
+// "" when unreadable or unset.
+func ProcEnvVar(pid int32, key string) string {
+	data, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(int(pid)), "environ"))
+	if err != nil {
+		return ""
+	}
+	prefix := key + "="
+	for _, e := range strings.Split(string(data), "\x00") {
+		if strings.HasPrefix(e, prefix) {
+			return strings.TrimPrefix(e, prefix)
+		}
+	}
+	return ""
+}

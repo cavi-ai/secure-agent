@@ -506,3 +506,31 @@ func TestTranscriptTailTargetsFollowCodexHome(t *testing.T) {
 		}
 	}
 }
+
+// A launcher that relocates codex's home per process (orchestrated agents)
+// must surface as a tail target via the process's own environment — the
+// daemon's env never sees it.
+func TestCodexSessionTargetsFromLiveProcesses(t *testing.T) {
+	procs := map[int32]agents.AgentInfo{
+		100: {Name: "codex"},
+		101: {Name: "codex"},
+		200: {Name: "claude"}, // other harness: ignored
+		300: {Name: "codex"},  // no CODEX_HOME
+	}
+	env := map[int32]string{100: "/data/orch/agent-a/codex-home", 101: "/data/orch/agent-a/codex-home"}
+	envOf := func(pid int32, key string) string {
+		if key != "CODEX_HOME" {
+			return ""
+		}
+		return env[pid]
+	}
+	got := codexSessionTargetsFrom(procs, envOf, "/Users/x")
+	if len(got) != 1 || got[0] != "/data/orch/agent-a/codex-home/sessions" {
+		t.Fatalf("targets = %v, want the deduped per-process sessions dir", got)
+	}
+	// The default codex home is already covered by transcriptTailTargets.
+	env[100] = "/Users/x/.codex"
+	if got := codexSessionTargetsFrom(map[int32]agents.AgentInfo{100: {Name: "codex"}}, envOf, "/Users/x"); len(got) != 0 {
+		t.Fatalf("default CODEX_HOME must not duplicate the built-in target: %v", got)
+	}
+}

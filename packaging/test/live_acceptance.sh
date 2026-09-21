@@ -30,7 +30,6 @@ if [ -z "$status" ]; then
 fi
 ok "daemon reachable"
 
-json() { python3 -c "import json,sys;d=json.load(sys.stdin);print(eval('d'+'$1'))" 2>/dev/null; }
 q() { sqlite3 "$DB" "$1" 2>/dev/null; }
 
 # Parsed ONCE, safely: v1 shelled eval() on the whole /status per field and
@@ -69,16 +68,20 @@ if [ "$grace" = 1 ]; then
     else
       bad "sessions carry a harness" "$named of $total_sessions = ${share}% (want >= 80%)"
     fi
-    ws_sessions="$(q "select count(*) from sessions where harness != '' and workspace like '/Volumes/MIRZA/workspace/%';")"
-    with_repo="$(q "select count(*) from sessions where harness != '' and workspace like '/Volumes/MIRZA/workspace/%' and repo != '';")"
+    # Repo coverage is judged on the LIVE build's sessions only: rows started
+    # before this daemon booted carry whatever the older resolver computed and
+    # cannot be re-resolved retroactively.
+    scope="started_at > datetime('now', '-' || $uptime_s || ' seconds')"
+    ws_sessions="$(q "select count(*) from sessions where $scope and harness != '' and workspace like '/Volumes/MIRZA/workspace/%';")"
+    with_repo="$(q "select count(*) from sessions where $scope and harness != '' and workspace like '/Volumes/MIRZA/workspace/%' and repo != '';")"
     if [ "${ws_sessions:-0}" -eq 0 ]; then
-      ok "session repo coverage (no workspace-backed sessions yet)"
+      ok "session repo coverage (no workspace-backed sessions since boot)"
     else
       repo_share=$((100 * with_repo / ws_sessions))
       if [ "$repo_share" -ge 50 ]; then
-        ok "session repo coverage ($with_repo/$ws_sessions = ${repo_share}%)"
+        ok "session repo coverage ($with_repo/$ws_sessions = ${repo_share}% since boot)"
       else
-        bad "session repo coverage" "$with_repo of $ws_sessions = ${repo_share}% (want >= 50%)"
+        bad "session repo coverage" "$with_repo of $ws_sessions = ${repo_share}% since boot (want >= 50%)"
       fi
     fi
   fi
@@ -107,21 +110,28 @@ fi
 
 # ---- 3. Turn ratio vs human prompts ----
 # v1 passed on "turns > 0". v2 compares turns against the floor count of
-# human prompts in Claude transcripts touched in the last 16h. Files are
-# passed as ARGV (xargs); fileinput opens each — the earlier stdin read
-# never saw the files, so the assertion was dead.
-turns="$(q "select count(*) from events where kind = 13;")"
-turns_win="$(q "select count(*) from events where kind = 13 and ts > datetime('now', '-16 hours');")"
+# human prompts in Claude transcripts touched in the same window. Both sides
+# are scoped to the CURRENT daemon's uptime (capped at 16h): transcripts are
+# seeded to EOF at boot, so pre-boot prompts can never produce turns — a
+# wider prompt window only measures the previous binary. Files are passed as
+# ARGV (xargs); fileinput opens each — the earlier stdin read never saw the
+# files, so the assertion was dead.
+win_s="$uptime_s"
+[ "$win_s" -gt 57600 ] && win_s=57600
+prompt_minutes=$(( (win_s + 59) / 60 ))
+boot_epoch=$(( $(date +%s) - uptime_s ))
+turns="$(q "select count(*) from events where kind = 13 and ts > datetime('now', '-' || $win_s || ' seconds');")"
 prompts=0
-prompt_minutes=960
 claude_dir="$HOME/.claude/projects"
 if [ -d "$claude_dir" ]; then
-  # Window matches the DB-side turn window (16h), not raw file age: old-build
-  # transcripts outside the window would inflate the floor while their turns
-  # were pruned, making the ratio asymmetric.
-  prompts=$(find "$claude_dir" -name '*.jsonl' -mmin -960 -print0 2>/dev/null |
-    xargs -0 -n 32 python3 -c '
-import json,sys,fileinput
+  # File mtime is only a pre-filter: a transcript touched after boot still
+  # holds pre-boot prompt lines, and the daemon seeds files to EOF at boot —
+  # those records can never produce turns. The floor counts only prompt
+  # records timestamped at/after the daemon's boot.
+  prompts=$(find "$claude_dir" -name '*.jsonl' -mmin -"$prompt_minutes" -print0 2>/dev/null |
+    xargs -0 -n 32 env BOOT_EPOCH="$boot_epoch" python3 -c '
+import json,sys,fileinput,datetime,os
+boot=datetime.datetime.fromtimestamp(int(os.environ["BOOT_EPOCH"]), datetime.timezone.utc)
 seen=0
 for line in fileinput.input(files=sys.argv[1:]):
     line=line.strip()
@@ -129,6 +139,11 @@ for line in fileinput.input(files=sys.argv[1:]):
     try: rec=json.loads(line)
     except Exception: continue
     if rec.get("type")!="user" or rec.get("isMeta") or rec.get("isSidechain"): continue
+    ts=rec.get("timestamp")
+    if ts:
+        try: rt=datetime.datetime.fromisoformat(ts.replace("Z","+00:00"))
+        except Exception: rt=None
+        if rt is not None and rt < boot: continue
     c=rec.get("message",{}).get("content")
     texts=[]
     if isinstance(c,str): texts=[c]
@@ -141,7 +156,6 @@ for line in fileinput.input(files=sys.argv[1:]):
 print(seen)
 ' 2>/dev/null | awk '{s+=$1} END {print s+0}')
 fi
-turns="$turns_win"
 if [ "$grace" = 0 ] || [ "${prompts:-0}" -eq 0 ]; then
   ok "turn ratio (grace/no prompts — not asserted)"
 elif [ "${turns:-0}" -ge $((prompts * 8 / 10)) ]; then
@@ -178,20 +192,17 @@ else
   fi
 fi
 
-# ---- 6. Guard hook registration: ratio, not skip ----
-if [ "$active_agents" -gt 0 ]; then
-  if python3 - <<'PY'
-import json,os,sys
-p=os.path.expanduser("~/.claude/settings.json")
-try: d=json.load(open(p))
-except Exception: sys.exit(1)
-h=d.get("hooks",{})
-def has(e): return any("secret_guard.py" in hk.get("command","") for g in h.get(e,[]) for hk in g.get("hooks",[]))
-sys.exit(0 if has("PreToolUse") and has("PostToolUse") else 1)
-PY
-  then ok "claude guard hook registered"; else bad "claude guard hook registered" "settings.json has no guard hook with $active_agents agents active"; fi
+# ---- 6. Guard hook ACTIVITY, not registration ----
+# Registration in settings.json proves nothing: the v2 audit found the hook
+# registered while kind=8 rows stayed at zero for days. With agents active
+# past the boot grace, the guard must have produced plugin actions.
+hook_events="$(q "select count(*) from events where kind = 8 and ts > datetime('now', '-1 hour');")"
+if [ "$active_agents" -eq 0 ] || [ "$grace" = 0 ]; then
+  ok "guard hook activity (no agents active / boot grace — not asserted)"
+elif [ "${hook_events:-0}" -gt 0 ]; then
+  ok "guard hook activity ($hook_events hook events in the last hour)"
 else
-  ok "claude guard hook registered (no agents active, not required)"
+  bad "guard hook activity" "0 hook events in the last hour with $active_agents agents active — hook registered but silent?"
 fi
 
 # ---- 7. Snapshot size: /resources must stay small ----
@@ -203,9 +214,22 @@ else
 fi
 
 # ---- 8. Root ES service state: honest, not tailer-green ----
-es_status="$(echo "$status" | json "['es_service']['state']" 2>/dev/null || echo absent)"
+# Parse with a heredoc: the old one-liner interpolated ['es_service'] into the
+# python source, where the single quotes terminated its string literals — every
+# probe read as "absent" even with es_service present.
+es_status="$(python3 - "$status" <<'PY'
+import json,sys
+try:
+    d=json.loads(sys.argv[1])
+    print((d.get("es_service") or {}).get("state") or "absent")
+except Exception:
+    print("absent")
+PY
+)"
 if [ "$es_status" = "absent" ]; then
   ok "ES service state (not spool-based, nothing to probe)"
+elif [ "$es_status" = "not-loaded" ]; then
+  bad "ES service state" "daemon is spool-based but the root service is not loaded"
 elif echo "$es_status" | grep -qE "spawn|exit"; then
   bad "ES service state" "root service reports: $es_status"
 else
