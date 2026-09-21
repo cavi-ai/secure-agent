@@ -15,6 +15,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -45,6 +46,17 @@ const (
 	// instead of crash-looping through launchd on every denied attempt.
 	esRetryInterval = 60 * time.Second
 )
+
+// errESPermanent marks failures that cannot clear on their own (wrong user,
+// integrity refusal, eslogger missing): the process must exit 0 so launchd
+// leaves the service stopped instead of respawning it forever.
+var errESPermanent = errors.New("permanent es-collector failure")
+
+func permanent(err error) error { return fmt.Errorf("%w: %v", errESPermanent, err) }
+
+// IsESPermanentFailure reports whether err is a permanent refusal (the
+// caller exits 0 for those).
+func IsESPermanentFailure(err error) bool { return errors.Is(err, errESPermanent) }
 
 // verifyOwnIntegrity refuses to run as root from a binary the login user (or
 // any admin) could have swapped since install. The LaunchDaemon executes this
@@ -120,15 +132,15 @@ func fileSHA256(path string) (string, error) {
 // runESCollector never returns except on fatal setup error.
 func runESCollector() error {
 	if os.Geteuid() != 0 {
-		return fmt.Errorf("must run as root (Endpoint Security requires it)")
+		return permanent(fmt.Errorf("must run as root (Endpoint Security requires it)"))
 	}
 	// Fail closed on a binary the login user could have replaced. This runs
 	// BEFORE anything else touches the spool or eslogger.
 	if err := verifyOwnIntegrity(); err != nil {
-		return err
+		return permanent(err)
 	}
 	if _, err := exec.LookPath("eslogger"); err != nil {
-		return fmt.Errorf("eslogger not found: %w", err)
+		return permanent(fmt.Errorf("eslogger not found: %w", err))
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

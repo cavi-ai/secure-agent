@@ -99,6 +99,11 @@ WRAPPERS = {
 # guard actually mediates.
 NETWORK_CLIENTS = {"curl", "nc", "ncat", "socat", "wget", "http", "httpie"}
 
+# Read-only endpoints on the daemon socket an agent may GET — the acceptance
+# gate needs /status and /resources. Everything else on the socket stays
+# denied (the guard's control surface is a self-approval channel).
+READONLY_SOCKET_PATHS = ("/status", "/resources", "/healthz", "/posture")
+
 INTERPRETERS = {
     "python", "python3", "perl", "ruby", "node", "deno", "bun", "osascript",
     "php", "lua", "tclsh",
@@ -704,16 +709,47 @@ def check_command(command: str, event: str) -> list:
         # 1a. Network clients driving the guard's own control socket / HTTP
         #     surface directly — forging /guard/resolve or /guard/decision is
         #     the same class of attack as editing guard-modes.json by hand.
+        #     Match the RESOLVED target, not token text: shlex sees "$SOCK"
+        #     and "~" unexpanded, so raw substring matching misses both. The
+        #     socket also serves read-only status the acceptance gate needs;
+        #     a plain GET of an allowlisted status path is sanctioned.
         if name in NETWORK_CLIENTS:
-            for tok in argv[1:]:
-                if "daemon.sock" in tok or "/guard/" in tok:
+            toks = [os.path.expandvars(os.path.expanduser(t)) for t in argv[1:]]
+            url_path = None
+            for t in toks:
+                m = re.match(r"https?://unix(/[^ \t]*)?$", t)
+                if m:
+                    url_path = m.group(1) or "/"
+                    break
+            sock_real = os.path.realpath(SOCK_PATH)
+            hits_sock = any(
+                not t.startswith("-") and os.path.realpath(t) == sock_real
+                for t in toks
+            )
+            guard_url = any("/guard/" in t for t in toks)
+            if url_path is not None or hits_sock or guard_url:
+                write_verbs = {"-d", "--data", "--data-binary", "--data-raw",
+                               "--data-ascii", "-F", "--form", "--json",
+                               "-T", "--upload-file"}
+                read_only = True
+                for i, t in enumerate(argv[1:]):
+                    if t in write_verbs:
+                        read_only = False
+                    elif t in ("-X", "--request") and i + 2 <= len(argv) and argv[i + 2].upper() != "GET":
+                        read_only = False
+                    elif t.startswith("-X") and len(t) > 2 and t[2:].upper() != "GET":
+                        read_only = False
+                sanctioned = (not guard_url and read_only
+                              and url_path in READONLY_SOCKET_PATHS)
+                if not sanctioned:
                     deny(
                         "guard-control-network",
                         "Blocked: an agent tried to drive the guard's own control socket.",
-                        "DENIED: talking to the Directory Guard's control socket directly "
-                        "(curl/nc/wget/etc against daemon.sock or /guard/*) is how an agent "
-                        "would forge its own allow decision. Use the tool calls the guard "
-                        "already mediates instead.",
+                        "DENIED: writing to the daemon's control socket (curl/nc/wget/etc "
+                        "against daemon.sock or /guard/*) is how an agent would forge its "
+                        "own allow decision. Read-only status (GET /status, /resources) is "
+                        "permitted; everything else goes through the tool calls the guard "
+                        "already mediates.",
                         command, event,
                     )
 

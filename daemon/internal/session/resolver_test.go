@@ -170,7 +170,7 @@ func TestGitInfoFollowsWorktreeLink(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(ws, ".git"), []byte("gitdir: "+gitDir+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	repo, branch := gitInfoFor(ws)
+	repo, branch := GitInfoFor(ws)
 	if branch != "wt-branch" {
 		t.Fatalf("branch = %q, want wt-branch via gitdir file", branch)
 	}
@@ -182,11 +182,11 @@ func TestGitInfoFollowsWorktreeLink(t *testing.T) {
 // A workspace that is not inside any git tree yields no repo and no branch:
 // the basename of a non-repo is noise ("/", ".config"), not identity.
 func TestGitInfoNonRepo(t *testing.T) {
-	repo, branch := gitInfoFor(t.TempDir())
+	repo, branch := GitInfoFor(t.TempDir())
 	if repo != "" || branch != "" {
 		t.Fatalf("non-repo = %q/%q, want empty/empty", repo, branch)
 	}
-	if repo, branch := gitInfoFor(""); repo != "" || branch != "" {
+	if repo, branch := GitInfoFor(""); repo != "" || branch != "" {
 		t.Fatalf("empty workspace = %q/%q, want empty", repo, branch)
 	}
 }
@@ -205,7 +205,7 @@ func TestGitInfoWalksUpToGitRoot(t *testing.T) {
 	if err := os.MkdirAll(nested, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	repo, branch := gitInfoFor(nested)
+	repo, branch := GitInfoFor(nested)
 	if repo != filepath.Base(root) || branch != "main" {
 		t.Fatalf("nested workspace = %q/%q, want %q/main", repo, branch, filepath.Base(root))
 	}
@@ -216,19 +216,19 @@ func TestGitInfoWalksUpToGitRoot(t *testing.T) {
 func TestGitInfoCacheExpires(t *testing.T) {
 	ws := t.TempDir()
 	gitCache = map[string]gitInfo{}
-	if repo, _ := gitInfoFor(ws); repo != "" {
+	if repo, _ := GitInfoFor(ws); repo != "" {
 		t.Fatalf("pre-repo = %q, want empty", repo)
 	}
 	if err := os.MkdirAll(filepath.Join(ws, ".git"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	// Still cached within the TTL.
-	if repo, _ := gitInfoFor(ws); repo != "" {
+	if repo, _ := GitInfoFor(ws); repo != "" {
 		t.Fatalf("cached empty = %q, want empty within TTL", repo)
 	}
 	// Age the entry past the TTL; the new .git must resolve.
 	gitCache[ws] = gitInfo{at: time.Now().Add(-2 * gitCacheTTL)}
-	if repo, _ := gitInfoFor(ws); repo != filepath.Base(ws) {
+	if repo, _ := GitInfoFor(ws); repo != filepath.Base(ws) {
 		t.Fatalf("post-TTL = %q, want %q", repo, filepath.Base(ws))
 	}
 }

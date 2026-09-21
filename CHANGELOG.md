@@ -36,6 +36,31 @@ All notable changes to `secure-agent` are documented here. The format follows
   the repo-coverage and turn-ratio assertions to the current daemon's boot
   window — rows and transcript records from before boot cannot be fixed
   retroactively and previously made the ratio assertions measure old binaries.
+- Acceptance gate: time-window queries wrap stored RFC3339 timestamps in
+  `datetime()` before comparing — the raw string compare against sqlite's
+  space-separated format made every row from the same day read as "in the
+  last hour", which hid session floods and inflated hook-activity counts.
+- Transcript tailer no longer skips new content: a boot re-seed only applies
+  to files the tailer was already following (tracked files keep their saved
+  offsets), and a transcript discovered for the first time under an already-
+  tracked target is read from the start instead of from its current end —
+  session one in a workspace and lines written while the daemon was down are
+  ingested again.
+- Daemon startup repairs rows written by older resolvers: sessions whose repo
+  carries the old basename heuristic's signature are re-resolved against the
+  enclosing git root, and tool-call rows stranded at "running" past ten
+  minutes (lost completion lines) are closed as error.
+- Process-discovered sessions stamp `started_at` with the process's real
+  start time instead of the discovery time — a daemon restart no longer makes
+  every live agent look like a session created in the last hour.
+- Guard hook: read-only socket reads against the agent daemon are allow-listed
+  by RESOLVED target (a `$SOCK` variable or `http://unix/<path>` URL now
+  matches the socket path, not the literal token), covering GETs to /status,
+  /resources, /healthz and /posture; any write verb or /guard path against the
+  socket is still denied, and loopback /guard requests are denied regardless.
+- Privileged ES collector exits 0 on failures launchd cannot fix (not root,
+  binary-integrity failure, eslogger missing) so the service stops
+  crash-looping; genuine startup failures still exit non-zero.
 
 ### Changed
 - API HTTP handlers for resources, kill, firewall, and guard live in their own files (`api.go` 1662→940). Same package, no behavior change.

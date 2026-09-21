@@ -68,10 +68,10 @@ if [ "$grace" = 1 ]; then
     else
       bad "sessions carry a harness" "$named of $total_sessions = ${share}% (want >= 80%)"
     fi
-    # Repo coverage is judged on the LIVE build's sessions only: rows started
-    # before this daemon booted carry whatever the older resolver computed and
-    # cannot be re-resolved retroactively.
-    scope="started_at > datetime('now', '-' || $uptime_s || ' seconds')"
+    # Repo coverage is judged on the LIVE build's sessions only: the startup
+    # repair pass re-resolves older rows, but rows started before this boot
+    # still reflect whatever their original resolver saw at ingest time.
+    scope="datetime(started_at) > datetime('now', '-' || $uptime_s || ' seconds')"
     ws_sessions="$(q "select count(*) from sessions where $scope and harness != '' and workspace like '/Volumes/MIRZA/workspace/%';")"
     with_repo="$(q "select count(*) from sessions where $scope and harness != '' and workspace like '/Volumes/MIRZA/workspace/%' and repo != '';")"
     if [ "${ws_sessions:-0}" -eq 0 ]; then
@@ -111,16 +111,16 @@ fi
 # ---- 3. Turn ratio vs human prompts ----
 # v1 passed on "turns > 0". v2 compares turns against the floor count of
 # human prompts in Claude transcripts touched in the same window. Both sides
-# are scoped to the CURRENT daemon's uptime (capped at 16h): transcripts are
-# seeded to EOF at boot, so pre-boot prompts can never produce turns — a
-# wider prompt window only measures the previous binary. Files are passed as
-# ARGV (xargs); fileinput opens each — the earlier stdin read never saw the
-# files, so the assertion was dead.
+# are scoped to the CURRENT daemon's uptime (capped at 16h): files already
+# known to the tailer are seeded to EOF at boot, so their pre-boot prompts
+# can never produce turns — a wider prompt window only measures the previous
+# binary. Files are passed as ARGV (xargs); fileinput opens each — the
+# earlier stdin read never saw the files, so the assertion was dead.
 win_s="$uptime_s"
 [ "$win_s" -gt 57600 ] && win_s=57600
 prompt_minutes=$(( (win_s + 59) / 60 ))
 boot_epoch=$(( $(date +%s) - uptime_s ))
-turns="$(q "select count(*) from events where kind = 13 and ts > datetime('now', '-' || $win_s || ' seconds');")"
+turns="$(q "select count(*) from events where kind = 13 and datetime(ts) > datetime('now', '-' || $win_s || ' seconds');")"
 prompts=0
 claude_dir="$HOME/.claude/projects"
 if [ -d "$claude_dir" ]; then
@@ -166,7 +166,7 @@ fi
 
 # ---- 4. Session flood control: created-per-hour vs agent roots ----
 if [ "$grace" = 1 ] && [ "$agents" -gt 0 ]; then
-  recent="$(q "select count(*) from sessions where started_at > datetime('now', '-1 hour');")"
+  recent="$(q "select count(*) from sessions where datetime(started_at) > datetime('now', '-1 hour');")"
   budget=$((agents * 2 + 10))
   if [ "${recent:-0}" -le "$budget" ]; then
     ok "session creation rate ($recent/h <= $budget)"
@@ -193,10 +193,10 @@ else
 fi
 
 # ---- 6. Guard hook ACTIVITY, not registration ----
-# Registration in settings.json proves nothing: the v2 audit found the hook
-# registered while kind=8 rows stayed at zero for days. With agents active
-# past the boot grace, the guard must have produced plugin actions.
-hook_events="$(q "select count(*) from events where kind = 8 and ts > datetime('now', '-1 hour');")"
+# Registration in settings.json proves nothing: a registered hook can still
+# stay silent for days. With agents active past the boot grace, the guard
+# must have produced plugin actions.
+hook_events="$(q "select count(*) from events where kind = 8 and datetime(ts) > datetime('now', '-1 hour');")"
 if [ "$active_agents" -eq 0 ] || [ "$grace" = 0 ]; then
   ok "guard hook activity (no agents active / boot grace — not asserted)"
 elif [ "${hook_events:-0}" -gt 0 ]; then

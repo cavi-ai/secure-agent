@@ -125,6 +125,11 @@ ALLOW = [
     # xargs on ordinary paths is fine
     "find ./src -name '*.pyc' | xargs rm",
     "echo ./build ./dist | xargs rm -rf",
+    # read-only daemon status is sanctioned — the acceptance gate needs it
+    "curl --unix-socket ~/.config/secure-agent/daemon.sock http://unix/status",
+    'curl --unix-socket "$SOCK" http://unix/status',
+    "curl --unix-socket ~/.config/secure-agent/daemon.sock http://unix/resources",
+    "curl -s --max-time 3 --unix-socket ~/.config/secure-agent/daemon.sock http://unix/posture",
     # find without -exec/-delete just lists names
     "find ~/.ssh -name 'config'",
     # unbalanced quote must not brick the agent
@@ -178,6 +183,11 @@ DENY = [
      "guard-control-network"),
     ("nc -U ~/.config/secure-agent/daemon.sock", "guard-control-network"),
     ("wget --unix-socket=~/.config/secure-agent/daemon.sock http://unix/guard/resolve", "guard-control-network"),
+    # resolved-target matching: unexpanded $VAR/~ must not slip the socket
+    # past the token-text scan; the URL path alone carries the intent
+    ('curl --unix-socket "$SOCK" http://unix/guard/resolve', "guard-control-network"),
+    ('curl --unix-socket "$SOCK" http://unix/status -X POST', "guard-control-network"),
+    ("curl http://127.0.0.1:8443/guard/decision", "guard-control-network"),
     # shell -c recursion: the payload is a whole new command line
     ("zsh -c \"security dump-keychain\"", "keychain-security-cli"),
     ("bash -c \"rm ~/.zshrc\"", "shell-rc-mutation"),

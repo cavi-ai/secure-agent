@@ -105,6 +105,17 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 	// ingest (hook handshake > transcript > process tree).
 	resolver := session.NewResolver(st, tagger)
 
+	// Repair pass for rows written by older resolvers: re-resolve repo and
+	// branch where the stored value is the old basename heuristic's output,
+	// and close tool-call rows stranded at "running" by lost completion
+	// lines or a pre-sweep build.
+	if n := st.RepairSessionGitIdentity(session.GitInfoFor); n > 0 {
+		log.Printf("sessions: re-resolved git identity on %d older rows", n)
+	}
+	if n := st.SweepStaleRunningCalls(time.Now().Add(-10 * time.Minute)); n > 0 {
+		log.Printf("sessions: closed %d stale running tool-call rows", n)
+	}
+
 	// Typed deltas: SSE clients patch state from these; /snapshot is for
 	// initial load and reconciliation only.
 	deltaHub := api.NewDeltaHub()
