@@ -341,3 +341,18 @@ func waitUnix(t *testing.T, path string, d time.Duration, serve <-chan error) {
 	}
 	t.Fatalf("unix socket %s never came up: %v", path, last)
 }
+
+// Permanent refusals (integrity, wrong user) must classify as permanent so
+// the process exits 0 and launchd does not respawn them forever; transient
+// eslogger failures keep the nonzero-exit respawn backstop.
+func TestESPermanentClassification(t *testing.T) {
+	if !IsESPermanentFailure(permanent(fmt.Errorf("refusing: binary swapped"))) {
+		t.Fatal("permanent() must classify as permanent")
+	}
+	if IsESPermanentFailure(fmt.Errorf("eslogger exited: signal: killed")) {
+		t.Fatal("transient eslogger failure must not classify as permanent")
+	}
+	if IsESPermanentFailure(nil) {
+		t.Fatal("nil must not classify as permanent")
+	}
+}

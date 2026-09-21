@@ -337,3 +337,79 @@ func TestEndSessionClosesRunningToolCalls(t *testing.T) {
 		t.Fatalf("completed call must stay ok, got %q", byID["c2"])
 	}
 }
+
+// Rows stuck at "running" past the cutoff (completion line lost, or written
+// before EndSession swept them) close as error; recent in-flight calls and
+// completed calls are untouched.
+func TestSweepStaleRunningCalls(t *testing.T) {
+	s, err := Open("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	now := time.Now()
+	old := now.Add(-time.Hour)
+	s.PutEvent(event.Event{Kind: event.KindToolCall, TS: old, SessionID: "s1", CallID: "stale", ToolName: "Bash", ToolStatus: "running"})
+	s.PutEvent(event.Event{Kind: event.KindToolCall, TS: now, SessionID: "s1", CallID: "live", ToolName: "Bash", ToolStatus: "running"})
+	s.PutEvent(event.Event{Kind: event.KindToolCall, TS: old, SessionID: "s1", CallID: "done", ToolName: "Read", ToolStatus: "ok"})
+
+	if n := s.SweepStaleRunningCalls(now.Add(-10 * time.Minute)); n != 1 {
+		t.Fatalf("swept %d rows, want 1", n)
+	}
+	kind := int(event.KindToolCall)
+	byID := map[string]string{}
+	for _, e := range s.QueryEvents(EventFilter{Kind: &kind}) {
+		byID[e.CallID] = e.ToolStatus
+	}
+	if byID["stale"] != "error" || byID["live"] != "running" || byID["done"] != "ok" {
+		t.Fatalf("statuses = %v, want stale=error live=running done=ok", byID)
+	}
+}
+
+// The basename heuristic left repo equal to the workspace basename (or a
+// garbage tail) on rows written before the walk-up resolver. The repair
+// re-resolves those rows and leaves hook-confidence rows and honest
+// resolutions untouched.
+func TestRepairSessionGitIdentity(t *testing.T) {
+	s, err := Open("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	now := time.Now()
+	s.UpsertSession(model.Session{ID: "old-proc", Workspace: "/x/proj/sub", Repo: "sub", Confidence: model.ConfProcessTree, StartedAt: now, LastSeenAt: now})
+	s.UpsertSession(model.Session{ID: "old-nonrepo", Workspace: "/x/scratch", Repo: "scratch", Confidence: model.ConfTranscript, StartedAt: now, LastSeenAt: now})
+	s.UpsertSession(model.Session{ID: "hook-row", Workspace: "/x/proj/sub", Repo: "sub", Branch: "kept", Confidence: model.ConfHook, StartedAt: now, LastSeenAt: now})
+
+	resolve := func(ws string) (string, string) {
+		if ws == "/x/proj/sub" {
+			return "proj", "main"
+		}
+		return "", ""
+	}
+	if n := s.RepairSessionGitIdentity(resolve); n != 3 {
+		t.Fatalf("repaired %d, want 3 (a basename repo is heuristic output on any confidence)", n)
+	}
+	sess, _ := s.GetSession("old-proc")
+	if sess.Repo != "proj" || sess.Branch != "main" {
+		t.Fatalf("old-proc = %q/%q, want proj/main", sess.Repo, sess.Branch)
+	}
+	sess, _ = s.GetSession("old-nonrepo")
+	if sess.Repo != "" || sess.Branch != "" {
+		t.Fatalf("old-nonrepo = %q/%q, want empty (no enclosing repo)", sess.Repo, sess.Branch)
+	}
+	sess, _ = s.GetSession("hook-row")
+	if sess.Repo != "proj" || sess.Branch != "main" {
+		t.Fatalf("hook row = %q/%q, want proj/main (its stored value was the heuristic's)", sess.Repo, sess.Branch)
+	}
+	// A row whose repo is NOT the workspace basename is a real resolution:
+	// never rewritten.
+	s.UpsertSession(model.Session{ID: "real", Workspace: "/x/proj/sub", Repo: "proj", Branch: "kept", Confidence: model.ConfHook, StartedAt: now, LastSeenAt: now})
+	if n := s.RepairSessionGitIdentity(resolve); n != 0 {
+		t.Fatalf("repaired %d, want 0 (nothing heuristic left)", n)
+	}
+	sess, _ = s.GetSession("real")
+	if sess.Repo != "proj" || sess.Branch != "kept" {
+		t.Fatalf("real row = %q/%q, must be untouched", sess.Repo, sess.Branch)
+	}
+}

@@ -25,6 +25,13 @@ func main() {
 	// point of the "one FDA grant covers everything" UX.
 	if *esCollector {
 		if err := runESCollector(); err != nil {
+			if IsESPermanentFailure(err) {
+				// Exit 0: the refusal cannot clear on respawn (wrong user,
+				// tampered binary, missing eslogger), and a nonzero exit
+				// would let launchd respawn the refusal forever.
+				log.Printf("es-collector: %v — refusing permanently, service stays stopped", err)
+				return
+			}
 			log.Fatalf("es-collector: %v", err)
 		}
 		return
