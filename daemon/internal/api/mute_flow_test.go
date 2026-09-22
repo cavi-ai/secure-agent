@@ -55,7 +55,7 @@ func TestMuteFlowAcknowledgesExistingFlags(t *testing.T) {
 }
 
 func flagFor(id, rule, evidence string) model.Flag {
-	return model.Flag{ID: id, Rule: rule, Severity: 3, PID: 7, Agent: "cursor", Evidence: []string{evidence}}
+	return model.Flag{ID: id, Rule: rule, Severity: 3, PID: 7, Agent: "cursor", Evidence: model.EvidenceFromStrings(evidence)}
 }
 
 // Acknowledge is idempotent and validated at the API layer: a second ack

@@ -31,23 +31,45 @@ var (
 // Empty when nothing extractable — aggregation then keys on rule+session
 // alone, which is still one incident per rule per session.
 func SubjectForFlag(flag model.Flag) string {
+	// Structured evidence (kind set by the correlator) needs no string work.
 	for _, ev := range flag.Evidence {
-		for _, prefix := range []string{"conn:", "net:"} {
-			if strings.HasPrefix(ev, prefix) {
-				return strings.TrimSpace(strings.TrimPrefix(ev, prefix))
-			}
-		}
-		if strings.HasPrefix(ev, "file:") {
-			return strings.TrimSpace(strings.TrimPrefix(ev, "file:"))
+		if ev.Kind == "connect" && ev.Label != "" {
+			return ev.Label
 		}
 	}
 	for _, ev := range flag.Evidence {
-		if m := connSubjectRe.FindStringSubmatch(ev); m != nil {
+		if (ev.Kind == "read" || ev.Kind == "keychain") && ev.Label != "" {
+			return ev.Label
+		}
+	}
+	// Legacy rows decode as kind "text" — parse the display string.
+	for _, ev := range flag.Evidence {
+		if ev.Kind != "text" {
+			continue
+		}
+		s := ev.Text
+		for _, prefix := range []string{"conn:", "net:"} {
+			if strings.HasPrefix(s, prefix) {
+				return strings.TrimSpace(strings.TrimPrefix(s, prefix))
+			}
+		}
+		if strings.HasPrefix(s, "file:") {
+			return strings.TrimSpace(strings.TrimPrefix(s, "file:"))
+		}
+	}
+	for _, ev := range flag.Evidence {
+		if ev.Kind != "text" {
+			continue
+		}
+		if m := connSubjectRe.FindStringSubmatch(ev.Text); m != nil {
 			return m[1]
 		}
 	}
 	for _, ev := range flag.Evidence {
-		if m := fileSubjectRe.FindStringSubmatch(ev); m != nil {
+		if ev.Kind != "text" {
+			continue
+		}
+		if m := fileSubjectRe.FindStringSubmatch(ev.Text); m != nil {
 			return m[1]
 		}
 	}
@@ -61,7 +83,7 @@ func (a *Analyzer) Analyze(flag model.Flag, events []event.Event) model.Incident
 	incID := fmt.Sprintf("inc-%d-%d-%s", flag.TS.Unix(), flag.PID, flag.ID)
 
 	summary := fmt.Sprintf("Security rule '%s' triggered by agent '%s' (PID %d). Evidence: %s",
-		flag.Rule, flag.Agent, flag.PID, strings.Join(flag.Evidence, ", "))
+		flag.Rule, flag.Agent, flag.PID, strings.Join(flag.EvidenceStrings(), ", "))
 
 	report := model.IncidentReport{
 		ID:           incID,
@@ -109,62 +131,56 @@ func (a *Analyzer) Analyze(flag model.Flag, events []event.Event) model.Incident
 		}
 	}
 
-	// Always parse evidence strings from flag to extract target files & connections
-	for _, evStr := range flag.Evidence {
-		if strings.HasPrefix(evStr, "file:") {
-			p := strings.TrimPrefix(evStr, "file:")
+	// Extract target files & connections from the flag's evidence. Structured
+	// items (kind set by the correlator) carry Label directly; legacy rows
+	// decode as kind "text" and keep the string parsing.
+	for _, item := range flag.Evidence {
+		addFile := func(p string) {
 			p = strings.TrimSpace(p)
 			if p != "" && !filesSeen[p] {
 				filesSeen[p] = true
 				report.TouchedFiles = append(report.TouchedFiles, p)
-				item := a.classifyPath(p)
-				if item != nil {
-					report.RotateList = append(report.RotateList, *item)
+				if it := a.classifyPath(p); it != nil {
+					report.RotateList = append(report.RotateList, *it)
 				}
 			}
-		} else if strings.HasPrefix(evStr, "conn:") || strings.HasPrefix(evStr, "net:") {
-			c := strings.TrimPrefix(evStr, "conn:")
-			c = strings.TrimPrefix(c, "net:")
+		}
+		addConn := func(c string) {
 			c = strings.TrimSpace(c)
 			if c != "" && !connsSeen[c] {
 				connsSeen[c] = true
 				report.Connections = append(report.Connections, c)
 			}
-		} else {
-			// Extract file paths and connections formatted in evidence text
-			if idx := strings.Index(evStr, " read "); idx != -1 {
-				rest := evStr[idx+len(" read "):]
-				if atIdx := strings.LastIndex(rest, " at "); atIdx != -1 {
-					p := strings.TrimSpace(rest[:atIdx])
-					if p != "" && !filesSeen[p] {
-						filesSeen[p] = true
-						report.TouchedFiles = append(report.TouchedFiles, p)
-						item := a.classifyPath(p)
-						if item != nil {
-							report.RotateList = append(report.RotateList, *item)
-						}
+		}
+		switch item.Kind {
+		case "read", "keychain":
+			addFile(item.Label)
+		case "connect":
+			addConn(item.Label)
+		case "text":
+			evStr := item.Text
+			if strings.HasPrefix(evStr, "file:") {
+				addFile(strings.TrimPrefix(evStr, "file:"))
+			} else if strings.HasPrefix(evStr, "conn:") || strings.HasPrefix(evStr, "net:") {
+				c := strings.TrimPrefix(evStr, "conn:")
+				c = strings.TrimPrefix(c, "net:")
+				addConn(c)
+			} else {
+				// Extract file paths and connections formatted in evidence text
+				if idx := strings.Index(evStr, " read "); idx != -1 {
+					rest := evStr[idx+len(" read "):]
+					if atIdx := strings.LastIndex(rest, " at "); atIdx != -1 {
+						addFile(rest[:atIdx])
 					}
-				}
-			} else if idx := strings.Index(evStr, " accessed keychain file "); idx != -1 {
-				rest := evStr[idx+len(" accessed keychain file "):]
-				if atIdx := strings.LastIndex(rest, " at "); atIdx != -1 {
-					p := strings.TrimSpace(rest[:atIdx])
-					if p != "" && !filesSeen[p] {
-						filesSeen[p] = true
-						report.TouchedFiles = append(report.TouchedFiles, p)
-						item := a.classifyPath(p)
-						if item != nil {
-							report.RotateList = append(report.RotateList, *item)
-						}
+				} else if idx := strings.Index(evStr, " accessed keychain file "); idx != -1 {
+					rest := evStr[idx+len(" accessed keychain file "):]
+					if atIdx := strings.LastIndex(rest, " at "); atIdx != -1 {
+						addFile(rest[:atIdx])
 					}
-				}
-			} else if idx := strings.Index(evStr, " connected to "); idx != -1 {
-				rest := evStr[idx+len(" connected to "):]
-				if atIdx := strings.LastIndex(rest, " at "); atIdx != -1 {
-					c := strings.TrimSpace(rest[:atIdx])
-					if c != "" && !connsSeen[c] {
-						connsSeen[c] = true
-						report.Connections = append(report.Connections, c)
+				} else if idx := strings.Index(evStr, " connected to "); idx != -1 {
+					rest := evStr[idx+len(" connected to "):]
+					if atIdx := strings.LastIndex(rest, " at "); atIdx != -1 {
+						addConn(rest[:atIdx])
 					}
 				}
 			}

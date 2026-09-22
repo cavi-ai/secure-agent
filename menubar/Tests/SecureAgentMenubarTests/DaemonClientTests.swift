@@ -68,7 +68,7 @@ final class DaemonClientTests: XCTestCase {
 
     func testAcknowledgedCopyPreservesIdentity() {
         let f = FlagModel(id: "x", rule: "keychain-access", severity: 1, ts: "t", pid: 9,
-                          agent: "codex", evidence: ["e"], sessionId: "s1")
+                          agent: "codex", evidence: [.legacy("e")], sessionId: "s1")
         let a = f.acknowledgedCopy()
         XCTAssertEqual(a.acknowledged, true)
         XCTAssertEqual(a.id, "x")
@@ -259,7 +259,7 @@ final class DaemonClientTests: XCTestCase {
         // Lock-screen banners must not carry paths/hostnames from evidence.
         let flag = FlagModel(id: "1", rule: "proxy-secret-leak", severity: 3, ts: "", pid: 1,
                              agent: "claude",
-                             evidence: ["anthropic-key detected in request body to logs.example.com"])
+                             evidence: [.legacy("anthropic-key detected in request body to logs.example.com")])
         let body = NotificationManager.redactedBody(for: flag)
         XCTAssertFalse(body.contains("logs.example.com"))
         XCTAssertFalse(body.contains("anthropic-key"))

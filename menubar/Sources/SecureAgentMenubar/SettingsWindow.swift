@@ -597,11 +597,14 @@ struct SettingsView: View {
 }
 
 
-/// The guided file-telemetry card: three states, zero guesswork.
+/// The guided file-telemetry card: four states, zero guesswork.
 ///   A. helper missing          → "Enable File Telemetry" (one admin prompt)
-///   B. helper running, TCC out → "Open Permissions" + inline instruction
+///   B. helper dead             → "Reinstall" (service not running — pointing
+///                                 at System Settings is a dead end when the
+///                                 collector never launched eslogger)
+///   C. helper running, TCC out → "Open Permissions" + inline instruction
 ///                                 ("turn ON eslogger"), polling live
-///   C. spool flowing           → green, done. Remove stays available.
+///   D. spool flowing           → green, done. Remove stays available.
 /// The user never hunts for a pane: the button deep-links to the exact
 /// Settings section, and the card self-updates the moment the switch flips.
 @MainActor
@@ -611,7 +614,16 @@ struct ESFileTelemetryCard: View {
 
     private var stage: ESStage {
         if setup.isESCollectorInstalled { return .active }
-        if setup.esCollectorDaemonInstalled { return .needsGrant }
+        if setup.esCollectorDaemonInstalled {
+            // The daemon's launchd probe is the truth here: a service that
+            // isn't running can never put eslogger into the Settings list,
+            // so the grant instructions would send the user hunting for a
+            // switch that does not exist. Offer repair instead.
+            if let svc = setup.esServiceState, svc != "running", !svc.hasPrefix("waiting") {
+                return .dead
+            }
+            return .needsGrant
+        }
         return .notInstalled
     }
 
@@ -659,6 +671,15 @@ struct ESFileTelemetryCard: View {
                 }
             }
             .buttonStyle(.borderedProminent).tint(.brand).controlSize(.small)
+        case .dead:
+            Button("Reinstall") {
+                Task {
+                    do { try await setup.installESCollectorAsync() }
+                    catch { /* reported via lastError */ }
+                    await pollWhileNeeded()
+                }
+            }
+            .buttonStyle(.borderedProminent).tint(.brand).controlSize(.small)
         case .needsGrant:
             Button("Open Permissions") { setup.openESPermissions() }
                 .buttonStyle(.borderedProminent).tint(.brand).controlSize(.small)
@@ -673,10 +694,11 @@ struct ESFileTelemetryCard: View {
         }
     }
 
-    /// Poll the spool while waiting for the grant: the card flips to green
-    /// within a second of the switch flipping — no manual refresh.
+    /// Poll the spool while waiting for the grant (or a reinstall to take):
+    /// the card flips to green within a second of the switch flipping — no
+    /// manual refresh.
     private func pollWhileNeeded() async {
-        guard stage == .needsGrant else { return }
+        guard stage == .needsGrant || stage == .dead else { return }
         while !Task.isCancelled, setup.esCollectorDaemonInstalled, !setup.isESCollectorInstalled {
             try? await Task.sleep(nanoseconds: 1_000_000_000)
             await setup.refreshState()
@@ -685,11 +707,12 @@ struct ESFileTelemetryCard: View {
 }
 
 enum ESStage {
-    case notInstalled, needsGrant, active
+    case notInstalled, dead, needsGrant, active
 
     var title: String {
         switch self {
         case .notInstalled: return "File telemetry is off"
+        case .dead: return "File telemetry service is not running"
         case .needsGrant: return "One switch left: allow eslogger"
         case .active: return "File telemetry active"
         }
@@ -699,6 +722,8 @@ enum ESStage {
         switch self {
         case .notInstalled:
             return "macOS requires file telemetry (eslogger) to run as root. One admin prompt installs a minimal helper that runs eslogger and nothing else."
+        case .dead:
+            return "The helper is installed but the service isn't running, so the eslogger permission switch never appears in Settings. Reinstall restarts it (one admin prompt)."
         case .needsGrant:
             return "The helper is installed and retrying every 10s. It's waiting on one macOS permission."
         case .active:
@@ -709,6 +734,7 @@ enum ESStage {
     var icon: String {
         switch self {
         case .notInstalled: return "waveform.path.ecg"
+        case .dead: return "exclamationmark.triangle"
         case .needsGrant: return "lock.open"
         case .active: return "checkmark.seal.fill"
         }
@@ -717,6 +743,7 @@ enum ESStage {
     var tint: Color {
         switch self {
         case .notInstalled: return .secondary
+        case .dead: return .warn
         case .needsGrant: return .orange
         case .active: return .ok
         }

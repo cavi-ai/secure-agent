@@ -11,6 +11,7 @@ import (
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/collect"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
+	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
 
@@ -28,12 +29,16 @@ type PostureItem struct {
 // and what is the one thing to look at first?" Every UI (console, menubar,
 // fleet collector) renders from this instead of re-deriving it from raw lists.
 type Posture struct {
-	State     string        `json:"state"` // all-clear | attention | critical
-	NeedsYou  int           `json:"needs_you"`
-	Summary   string        `json:"summary"`
-	Items     []PostureItem `json:"items"`
-	Generated string        `json:"generated"`
-	Connected bool          `json:"connected"`
+	State    string        `json:"state"` // all-clear | attention | critical
+	NeedsYou int           `json:"needs_you"`
+	Summary  string        `json:"summary"`
+	Items    []PostureItem `json:"items"`
+	// Groups is the session-grouped attention queue — the one derivation the
+	// console's attention tab, the menubar icon, and the fleet heartbeat all
+	// render from.
+	Groups    []AttentionGroup `json:"groups,omitempty"`
+	Generated string           `json:"generated"`
+	Connected bool             `json:"connected"`
 }
 
 // handlePosture serves the operator headline. The computation lives in
@@ -166,6 +171,7 @@ func (a *API) computePosture() Posture {
 	}
 
 	posture.NeedsYou = len(posture.Items)
+	posture.Groups = a.computeAttentionGroups(st)
 	switch {
 	case posture.NeedsYou == 0:
 		posture.State = "all-clear"
@@ -214,8 +220,13 @@ func humanPath(p string) string {
 	return p
 }
 
-// firstEvidence is firstNonEmpty for a flag's evidence list.
-func firstEvidence(ev []string) string { return firstNonEmpty(ev) }
+// firstEvidence is the first evidence line, rendered for text display.
+func firstEvidence(ev []model.EvidenceItem) string {
+	if len(ev) == 0 {
+		return ""
+	}
+	return ev[0].String()
+}
 
 // criticalSummary picks the highest-severity item as the one-line headline.
 func criticalSummary(items []PostureItem) string {

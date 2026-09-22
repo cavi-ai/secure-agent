@@ -81,10 +81,20 @@ struct ConsoleView: View {
                             .font(.system(size: 10)).foregroundStyle(.tertiary)
                     }
                     Spacer(minLength: 0)
-                    Button { DaemonSupervisor.shared.restart(); state.refresh() } label: {
-                        Text("Retry").font(.system(size: 10, weight: .semibold))
+                    if h.name == "eslogger" {
+                        // The writer is the root LaunchDaemon — restarting the
+                        // menu bar app cannot help. The fix lives on the
+                        // Setup & Permissions card (install/repair/grant).
+                        Button { OnboardingWindowController.shared.show() } label: {
+                            Text("Fix").font(.system(size: 10, weight: .semibold))
+                        }
+                        .buttonStyle(.bordered).controlSize(.mini).tint(Color.brand)
+                    } else {
+                        Button { DaemonSupervisor.shared.restart(); state.refresh() } label: {
+                            Text("Retry").font(.system(size: 10, weight: .semibold))
+                        }
+                        .buttonStyle(.bordered).controlSize(.mini).tint(Color.brand)
                     }
-                    .buttonStyle(.bordered).controlSize(.mini).tint(Color.brand)
                 }
                 .padding(10)
                 .background(Color.warn.opacity(0.10))
@@ -93,12 +103,13 @@ struct ConsoleView: View {
         }
     }
 
-    /// The fix that actually applies to this collector. eslogger's
-    /// NOT_PRIVILEGED is NOT fixable by FDA — macOS requires the Endpoint
-    /// Security client to run as root; honesty beats a placebo instruction.
+    /// The fix that actually applies to this collector. eslogger is written
+    /// by the root LaunchDaemon now — "restart the app" and FDA advice are
+    /// both dead ends; the ES card on the Setup & Permissions window owns
+    /// the real flow (install → repair → grant).
     private func esloggerHint(for h: HealthModel) -> String {
-        if h.name == "eslogger" && (h.lastError ?? "").contains("root") {
-            return "macOS requires Endpoint Security (file telemetry) to run as root. A privileged collector helper ships with a future release — every other collector is unaffected."
+        if h.name == "eslogger" {
+            return "File telemetry runs as a root service. Open Setup & Permissions to repair or grant its one permission."
         }
         return "Restart the app after granting Full Disk Access to retry."
     }

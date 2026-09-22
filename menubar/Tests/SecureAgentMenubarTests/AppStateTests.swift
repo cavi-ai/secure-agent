@@ -19,6 +19,9 @@ final class StubDaemonClient: DaemonClientProtocol, @unchecked Sendable {
     func fetchResources() async throws -> ResourceSnapshotModel { resources }
     func fetchFlags(limit: Int) async throws -> [FlagModel] { flags }
     func fetchIncidents(limit: Int) async throws -> [IncidentReportModel] { [] }
+    func fetchPosture() async throws -> PostureModel {
+        PostureModel(state: "all-clear", needsYou: 0, summary: "", connected: true)
+    }
     func fetchIncidentMarkdown(id: String) async throws -> String { "" }
     func fetchEvents(limit: Int) async throws -> [EventModel] { [] }
     func fetchEventsFor(pid: Int32, limit: Int) async throws -> [EventModel] { [] }
@@ -70,7 +73,7 @@ final class AppStateTests: XCTestCase {
 
     private func flag(_ id: String, _ severity: Int = 3) -> FlagModel {
         FlagModel(id: id, rule: "proxy-secret-leak", severity: severity, ts: "", pid: 1,
-                  agent: "claude", evidence: ["e"])
+                  agent: "claude", evidence: [.legacy("e")])
     }
 
     func testAgentRootsFiltersToTreeRoots() async {
@@ -218,7 +221,7 @@ final class AppStateTests: XCTestCase {
         let (state, notifications) = makeState(stub)
         await state.performFetch()
         stub.flags = [FlagModel(id: "kc-1", rule: "keychain-access", severity: 1, ts: "", pid: 1,
-                                agent: "codex", evidence: ["e"])]
+                                agent: "codex", evidence: [.legacy("e")])]
         await state.performFetch()
         XCTAssertEqual(notifications.count, 1)
     }
@@ -298,7 +301,7 @@ func testWorkspaceScopeBeatsRuleOverrideAndDefault() async {
 
         // Fresh verdict → pending clears with a "verdict updated" notice.
         stub.flags = [FlagModel(id: "rt-1", rule: "proxy-secret-leak", severity: 3, ts: "", pid: 1,
-                                agent: "claude", evidence: ["e"],
+                                agent: "claude", evidence: [.legacy("e")],
                                 advisor: AdvisorVerdictModel(assessment: "benign", confidence: 0.9,
                                                              rationale: "routine vendor traffic", suggestedAction: "none"))]
         await state.performFetch()
@@ -343,10 +346,10 @@ func testWorkspaceScopeBeatsRuleOverrideAndDefault() async {
     }
 
     func testMuteHostFallsBackToWildcardForHostlessEvidence() {
-        let keychainEv = ["codex (pid 901) accessed keychain file /Users/x/Library/Keychains/login.keychain-db at 2026-09-15T10:00:00Z"]
+        let keychainEv: [EvidenceItemModel] = [.legacy("codex (pid 901) accessed keychain file /Users/x/Library/Keychains/login.keychain-db at 2026-09-15T10:00:00Z")]
         XCTAssertEqual(FlagActionSheet.muteHost(evidence: keychainEv), "*")
-        let connEv = ["cursor (pid 7) read /a at 2026-09-11T12:00:00Z",
-                      "then connected to api.example.com:443 at 2026-09-11T12:00:01Z"]
+        let connEv: [EvidenceItemModel] = [.legacy("cursor (pid 7) read /a at 2026-09-11T12:00:00Z"),
+                      .legacy("then connected to api.example.com:443 at 2026-09-11T12:00:01Z")]
         XCTAssertEqual(FlagActionSheet.muteHost(evidence: connEv), "api.example.com")
     }
 
@@ -638,11 +641,11 @@ final class FlagActionSheetTests: XCTestCase {
     func testHostFromEvidence() {
         XCTAssertEqual(
             FlagActionSheet.hostIn(evidence: [
-                "cursor (pid 9) read /Users/x/.env at 2026-09-11T12:00:00Z",
-                "then connected to api.example.com:443 at 2026-09-11T12:00:01Z",
+                .legacy("cursor (pid 9) read /Users/x/.env at 2026-09-11T12:00:00Z"),
+                .legacy("then connected to api.example.com:443 at 2026-09-11T12:00:01Z"),
             ]),
             "api.example.com")
-        XCTAssertNil(FlagActionSheet.hostIn(evidence: ["no connections here"]))
+        XCTAssertNil(FlagActionSheet.hostIn(evidence: [.legacy("no connections here")]))
     }
 
     func testHostFromHostPortIPv6() {
@@ -652,9 +655,9 @@ final class FlagActionSheetTests: XCTestCase {
 
     func testTimestampInExtractsEvidenceTime() {
         XCTAssertEqual(
-            FlagActionSheet.timestampIn("claude read /a at 2026-09-11T12:00:05Z"),
+            FlagActionSheet.timestampIn(.legacy("claude read /a at 2026-09-11T12:00:05Z")),
             "2026-09-11T12:00:05Z")
-        XCTAssertEqual(FlagActionSheet.timestampIn("no time here"), "")
+        XCTAssertEqual(FlagActionSheet.timestampIn(.legacy("no time here")), "")
     }
 }
 
@@ -837,9 +840,9 @@ final class SessionBoardRowTests: XCTestCase {
         state.seedForTesting(status: stub.status)
         state.seedFlagsForTesting([
             FlagModel(id: "a", rule: "proxy-secret-leak", severity: 3, ts: "2026-09-15T12:00:00Z",
-                      pid: 10, agent: "claude", evidence: ["connected to evil.test at x"]),
+                      pid: 10, agent: "claude", evidence: [.legacy("connected to evil.test at x")]),
             FlagModel(id: "b", rule: "proxy-secret-leak", severity: 3, ts: "2026-09-15T12:00:01Z",
-                      pid: 20, agent: "cursor", evidence: ["connected to evil.test at x"]),
+                      pid: 20, agent: "cursor", evidence: [.legacy("connected to evil.test at x")]),
         ])
         let scoped = state.groupedUnactedFlags(forRootPid: 10)
         XCTAssertEqual(scoped.count, 1)
@@ -1003,7 +1006,7 @@ final class AdvisorActionMappingTests: XCTestCase {
 final class FlagGroupingTests: XCTestCase {
     private func keyFlag(_ id: String, ts: String, file: String) -> FlagModel {
         FlagModel(id: id, rule: "keychain-access", severity: 3, ts: ts, pid: 500,
-                  agent: "codex", evidence: ["codex (pid 500) accessed keychain file \(file) at 2026-09-12T03:00:00Z"])
+                  agent: "codex", evidence: [.legacy("codex (pid 500) accessed keychain file \(file) at 2026-09-12T03:00:00Z")])
     }
 
     func testIdenticalFlagsGroupWithCount() {

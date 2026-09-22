@@ -36,6 +36,7 @@ public protocol DaemonClientProtocol: Sendable {
     func fetchResources() async throws -> ResourceSnapshotModel
     func fetchFlags(limit: Int) async throws -> [FlagModel]
     func fetchIncidents(limit: Int) async throws -> [IncidentReportModel]
+    func fetchPosture() async throws -> PostureModel
     func fetchIncidentMarkdown(id: String) async throws -> String
     func fetchEvents(limit: Int) async throws -> [EventModel]
     func fetchEventsFor(pid: Int32, limit: Int) async throws -> [EventModel]
@@ -128,6 +129,12 @@ public final class DaemonClient: Sendable {
 
     public func fetchIncidents(limit: Int = 20) async throws -> [IncidentReportModel] {
         try await getDecodable("/incidents?limit=\(limit)")
+    }
+
+    /// The one operator headline. Attention state, badge counts, and the
+    /// session-grouped queue all derive from this — never re-derived locally.
+    public func fetchPosture() async throws -> PostureModel {
+        try await getDecodable("/posture")
     }
 
     public func fetchIncidentMarkdown(id: String) async throws -> String {

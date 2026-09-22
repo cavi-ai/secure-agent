@@ -648,16 +648,21 @@ func (s *Store) AcknowledgeRuleHost(rule, host string) int {
 }
 
 // evidenceCitesHost: the evidence JSON contains host as a connection
-// target ("connected to <host>[:port]"), localhost-alias aware.
+// target ("connected to <host>[:port]"), localhost-alias aware. Rows from
+// newer daemons carry structured items; the kind field answers directly.
 func evidenceCitesHost(evidenceJSON, host string) bool {
 	if host == "" {
 		return false
 	}
-	var lines []string
-	_ = json.Unmarshal([]byte(evidenceJSON), &lines)
+	var items []model.EvidenceItem
+	_ = json.Unmarshal([]byte(evidenceJSON), &items)
 	want := strings.ToLower(host)
 	isLocal := want == "localhost" || want == "127.0.0.1" || want == "::1" || strings.HasPrefix(want, "127.")
-	for _, line := range lines {
+	for _, item := range items {
+		line := item.Text
+		if line == "" {
+			line = item.String()
+		}
 		idx := strings.Index(line, "connected to ")
 		if idx < 0 {
 			continue

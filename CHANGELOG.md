@@ -61,6 +61,17 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Privileged ES collector exits 0 on failures launchd cannot fix (not root,
   binary-integrity failure, eslogger missing) so the service stops
   crash-looping; genuine startup failures still exit non-zero.
+- ES collector integrity check trims the recorded hash — the installer wrote
+  it via `awk '{print $1}' > file`, leaving a trailing newline that made every
+  start read as tampered; the installer now writes it without one.
+- Flag evidence is structured (`kind`/`label`/`sub`/`ts`) instead of display
+  strings every client re-parsed with its own regexes; the console evidence
+  chain and the menubar action sheet render the served fields, and rows
+  written by older daemons still decode as plain-text items.
+- Flag rule titles are served by the daemon (`flag.title`) instead of being
+  copied into the console's `RULE_TITLES`, the menubar notification switch,
+  and the posture copy — one table, every surface agrees; the client tables
+  remain only as fallbacks for older daemons.
 
 ### Changed
 - API HTTP handlers for resources, kill, firewall, and guard live in their own files (`api.go` 1662→940). Same package, no behavior change.
@@ -72,6 +83,10 @@ All notable changes to `secure-agent` are documented here. The format follows
   count, memory, CPU, and the reason it needs review, with existing scoped
   actions available directly from the queue. Signals that cannot be safely
   attributed to one live session remain in an explicit agent-level group.
+  The grouping is computed once, daemon-side (`/posture` → `groups`): the
+  console renders it as served and the menubar's attention predicate reads
+  the posture state instead of re-deriving it from flags and incidents, so
+  the icon, hero, badge, and console queue can never disagree.
 - **Resource Mission Control for local agent fleets.** The daemon now samples
   live RSS and CPU for attributed processes, groups them into stable session
   families, retains one hour of five-second history, and diagnoses heavy

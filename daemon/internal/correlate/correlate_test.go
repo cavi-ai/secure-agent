@@ -156,7 +156,7 @@ func TestTCCTamperFlagsImmediately(t *testing.T) {
 	if f.Rule != "tcc-tamper" || f.Severity != 3 {
 		t.Fatalf("flag = %s sev %d, want tcc-tamper/3", f.Rule, f.Severity)
 	}
-	if !strings.Contains(f.Evidence[0], "kTCCServiceScreenCapture") {
+	if !strings.Contains(f.Evidence[0].String(), "kTCCServiceScreenCapture") {
 		t.Fatalf("evidence missing service: %v", f.Evidence)
 	}
 }
@@ -191,7 +191,7 @@ func TestKeychainSecurityCLIFlagsImmediately(t *testing.T) {
 	if f.Rule != "keychain-security-cli" || f.Severity != 3 {
 		t.Fatalf("flag = %s sev %d, want keychain-security-cli/3", f.Rule, f.Severity)
 	}
-	if !strings.Contains(f.Evidence[0], "/usr/bin/security") {
+	if !strings.Contains(f.Evidence[0].String(), "/usr/bin/security") {
 		t.Fatalf("evidence missing exe path: %v", f.Evidence)
 	}
 }

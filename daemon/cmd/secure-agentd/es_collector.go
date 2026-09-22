@@ -99,7 +99,9 @@ func verifyOwnIntegrity() error {
 	if err != nil {
 		return fmt.Errorf("hash self: %w", err)
 	}
-	if got != string(want) {
+	// The installer records the hash via `shasum | awk > file`, which leaves
+	// a trailing newline — compare trimmed or every start reads as tampered.
+	if got != strings.TrimSpace(string(want)) {
 		return fmt.Errorf("refusing: %s changed since install (hash mismatch)", exe)
 	}
 	return nil

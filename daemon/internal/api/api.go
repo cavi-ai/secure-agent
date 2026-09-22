@@ -751,7 +751,13 @@ func (a *API) handleFlags(w http.ResponseWriter, r *http.Request) {
 	// the open ones inside a limit window full of handled noise.
 	f.Unacted = q.Get("unacted") == "1" || q.Get("unacted") == "true"
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(a.store.QueryFlags(f))
+	flags := a.store.QueryFlags(f)
+	// Stamp the rule title so clients render the daemon's words instead of
+	// keeping their own copies of the rule→title table.
+	for i := range flags {
+		flags[i].Title = humanFlagTitle(flags[i].Rule)
+	}
+	json.NewEncoder(w).Encode(flags)
 }
 
 func (a *API) handleEvents(w http.ResponseWriter, r *http.Request) {
