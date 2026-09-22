@@ -27,57 +27,14 @@ const {
   monitorVendorKeyIDs, inspectionVisible, vendorKeyPromoteHTML,
   scopedBySession, unactedLast24h, filterSessionRows, sseNeedsSnapshot,
   sessionStripRows, sessionNeedsYou, sessionStripHTML,
-  buildAttentionGroups, harnessMeta, harnessChipHTML, advisorAdviceHTML,
+  harnessMeta, harnessChipHTML, advisorAdviceHTML,
   groupSessionSections, endpointIdentityLine, endpointDetailHTML,
   sessionLabelDurable, sessionRowsDurable,
 } = ctx;
 
 // ---------- unified attention center ----------
-
-test('buildAttentionGroups correlates resource, guard, security, and egress work by session', () => {
-  const groups = buildAttentionGroups({
-    status: { agents: [
-      { pid: 10, name: 'claude', cwd: '/work/api', root_pid: 10 },
-      { pid: 11, name: 'claude', root_pid: 10 },
-    ] },
-    resources: { sessions: [{
-      key: '10:start', name: 'claude', workspace: '/work/api', root_pid: 10,
-      rss_bytes: 5 * 1024 ** 3, cpu_percent: 125, process_count: 2,
-      processes: [{ pid: 10 }, { pid: 11 }],
-      diagnoses: [{ summary: 'Memory grew 2 GB in 10 minutes.', severity: 'critical' }],
-      control: { pending_id: 'resource-1', next_action: 'pause', state: 'approval-required' },
-    }] },
-    guardPending: [{ id: 'guard-1', agent: 'claude', tool: 'Read', path: '/work/api/.env', rule_id: 'secrets' }],
-    flags: [{ id: 'flag-1', agent: 'claude', pid: 11, rule: 'secret-leak', severity: 3, evidence: ['sent to logs.example.com'] }],
-    incidents: [{ id: 'inc-1', agent: 'claude', pid: 10, rule: 'read-then-connect', risk: 'CRITICAL', summary: 'Credential read followed by network access.', workflow: { status: 'open' } }],
-    uninspected: [{ agent: 'claude', host: 'registry.npmjs.org', count: 7 }],
-  });
-
-  assert.equal(groups.length, 1);
-  assert.equal(groups[0].key, 'session:10:start');
-  assert.equal(groups[0].label, 'api');
-  assert.equal(groups[0].rssBytes, 5 * 1024 ** 3);
-  assert.equal(groups[0].cpuPercent, 125);
-  assert.equal(groups[0].processCount, 2);
-  assert.equal(groups[0].items.map(item => item.kind).join(','), 'guard,resource,incident,flag,egress');
-  assert.equal(groups[0].items.find(item => item.kind === 'egress').count, 7);
-});
-
-test('buildAttentionGroups keeps ambiguous agent-only work in an explicit shared group', () => {
-  const groups = buildAttentionGroups({
-    resources: { sessions: [
-      { key: '1:a', name: 'codex', workspace: '/work/one', root_pid: 1, processes: [{ pid: 1 }], control: {} },
-      { key: '2:b', name: 'codex', workspace: '/work/two', root_pid: 2, processes: [{ pid: 2 }], control: {} },
-    ] },
-    guardPending: [{ id: 'guard-1', agent: 'codex', tool: 'Bash', path: '/tmp/x', rule_id: 'shell' }],
-    uninspected: [{ agent: 'codex', host: 'example.com', count: 2 }],
-  });
-
-  assert.equal(groups.length, 1);
-  assert.equal(groups[0].key, 'agent:codex');
-  assert.equal(groups[0].label, 'codex activity');
-  assert.equal(groups[0].items.map(item => item.kind).join(','), 'guard,egress');
-});
+// The grouping itself is computed daemon-side (daemon/internal/api/attention.go,
+// covered by attention_test.go); the console renders posture.groups as served.
 
 // ---------- resource mission control ----------
 
@@ -201,12 +158,12 @@ test('markdown: empty input', () => {
 
 // ---------- buildEvidenceChain ----------
 
-test('chain: sensitive-read-then-connect parses to read → egress → verdict', () => {
+test('chain: sensitive-read-then-connect renders structured read → egress → verdict', () => {
   const nodes = buildEvidenceChain({
     rule: 'sensitive-read-then-connect', severity: 3,
     evidence: [
-      'cursor (pid 6033) read ~/.aws/credentials at 2026-09-07T16:04:57Z',
-      'then connected to logs.example.com:443 at 2026-09-07T16:05:01Z',
+      { kind: 'read', label: '~/.aws/credentials', sub: 'sensitive read', ts: '2026-09-07T16:04:57Z' },
+      { kind: 'connect', label: 'logs.example.com:443', sub: 'egress', ts: '2026-09-07T16:05:01Z' },
     ],
   });
   assert.equal(nodes.length, 3);
@@ -219,10 +176,13 @@ test('chain: sensitive-read-then-connect parses to read → egress → verdict',
   assert.match(nodes[0].sub, /^sensitive read · \d{2}:\d{2}:\d{2}$/);
 });
 
-test('chain: proxy violation parses to inspection → destination → verdict', () => {
+test('chain: proxy violation renders inspection → destination → verdict', () => {
   const nodes = buildEvidenceChain({
     rule: 'proxy-secret-leak', severity: 3,
-    evidence: ["Local proxy detected security violation 'proxy-secret-leak: anthropic-key' while connecting to logs.example.com:443"],
+    evidence: [
+      { kind: 'violation', label: 'proxy-secret-leak: anthropic-key', sub: 'payload inspection' },
+      { kind: 'connect', label: 'logs.example.com:443', sub: 'destination' },
+    ],
   });
   assert.equal(nodes.length, 3);
   assert.equal(nodes[0].label, 'proxy-secret-leak: anthropic-key');
@@ -230,10 +190,10 @@ test('chain: proxy violation parses to inspection → destination → verdict', 
   assert.equal(nodes[1].label, 'logs.example.com:443');
 });
 
-test('chain: keychain access / CLI / TCC formats', () => {
+test('chain: keychain access / CLI / TCC structured items', () => {
   const kc = buildEvidenceChain({
     rule: 'keychain-access', severity: 2,
-    evidence: ['claude (pid 12) accessed keychain file /Users/x/Library/Keychains/login.keychain-db at 2026-09-07T16:00:00Z'],
+    evidence: [{ kind: 'keychain', label: '/Users/x/Library/Keychains/login.keychain-db', sub: 'keychain access', ts: '2026-09-07T16:00:00Z' }],
   });
   assert.equal(kc.length, 2);
   assert.match(kc[0].sub, /^keychain access · /);
@@ -242,25 +202,28 @@ test('chain: keychain access / CLI / TCC formats', () => {
 
   const cli = buildEvidenceChain({
     rule: 'keychain-security-cli', severity: 3,
-    evidence: ['cursor (pid 9) executed /usr/bin/security at 2026-09-07T16:00:00Z'],
+    evidence: [{ kind: 'exec', label: '/usr/bin/security', sub: 'keychain CLI', ts: '2026-09-07T16:00:00Z' }],
   });
   assert.equal(cli[0].icon, 'i-power');
 
   const tcc = buildEvidenceChain({
     rule: 'tcc-tamper', severity: 3,
-    evidence: ["codex (pid 7) modified TCC service 'kTCCServiceScreenCapture' at 2026-09-07T16:00:00Z"],
+    evidence: [{ kind: 'tcc', label: 'kTCCServiceScreenCapture', sub: 'privacy tamper', ts: '2026-09-07T16:00:00Z' }],
   });
-  assert.equal(tcc[0].label, 'TCC: kTCCServiceScreenCapture');
+  assert.equal(tcc[0].label, 'kTCCServiceScreenCapture');
 });
 
-test('chain: unknown evidence degrades to a raw node, never dropped', () => {
-  const nodes = buildEvidenceChain({
+test('chain: legacy string rows and unknown kinds degrade to raw nodes, never dropped', () => {
+  const legacy = buildEvidenceChain({
     rule: 'future-rule', severity: 2,
-    evidence: ['some totally new evidence format the parser does not know'],
+    evidence: [{ kind: 'text', text: 'some totally new evidence format', label: 'some totally new evidence format' }],
   });
-  assert.equal(nodes.length, 2);
-  assert.equal(nodes[0].label, 'some totally new evidence format the parser does not know');
-  assert.equal(nodes[0].cls, '');
+  assert.equal(legacy.length, 2);
+  assert.equal(legacy[0].label, 'some totally new evidence format');
+  assert.equal(legacy[0].cls, '');
+  // Pre-structured wire rows may still be bare strings.
+  const bare = buildEvidenceChain({ rule: 'x', severity: 2, evidence: ['raw old row'] });
+  assert.equal(bare[0].label, 'raw old row');
 });
 
 test('chain: empty evidence yields no nodes (no dangling verdict)', () => {

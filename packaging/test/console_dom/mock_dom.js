@@ -170,6 +170,49 @@
         { severity: 3, kind: 'incident', id: 'inc-20260907-6033-a1b2', title: 'sensitive-read-then-connect — cursor (PID 6033)' },
         { severity: 2, kind: 'uninspected_egress', title: '2 endpoints reached without inspection' },
         { severity: 2, kind: 'collector_down', title: 'File monitoring is off', detail: 'usually missing Full Disk Access — open Setup & Permissions in the menu bar' }
+      ],
+      // The attention tab renders this served queue verbatim — the daemon
+      // groups it; the console never re-derives it.
+      groups: [
+        {
+          key: 'session:5821:1789480800000000000', label: 'api-service', agent: 'claude',
+          workspace: '/Users/dev/workspace/api-service', rootPid: 5821, pids: [5821, 5822],
+          rssBytes: 5905580032, cpuPercent: 132.5, processCount: 2,
+          items: [
+            { kind: 'guard', priority: 5, id: 'guard-1', title: 'Guard decision',
+              detail: 'Read wants access to /workspace/api-service/.env',
+              rule: 'cloud-creds', path: '/workspace/api-service/.env',
+              scopeText: 'Allow Always approves every path under rule "cloud-creds" for agent "claude", not just this one.' },
+            { kind: 'resource', priority: 4, id: 'resource-1', action: 'pause',
+              title: 'Resource pressure', detail: 'Memory grew 1.4 GB in 15 minutes.' },
+            { kind: 'egress', priority: 1, title: 'Uninspected egress', count: 7,
+              hosts: ['registry.npmjs.org'],
+              detail: '7 connections across 1 endpoint bypassed inspection.' }
+          ]
+        },
+        {
+          key: 'session:6033:1789484400000000000', label: 'web-app', agent: 'cursor',
+          workspace: '/Users/dev/projects/web-app', rootPid: 6033, pids: [6033],
+          rssBytes: 90000000, cpuPercent: 10, processCount: 1,
+          items: [
+            { kind: 'incident', priority: 3, id: 'inc-20260907-6033-a1b2', status: 'open',
+              title: 'Critical incident', detail: 'Credential read followed by network access.' },
+            { kind: 'flag', priority: 2, id: 'flag-1',
+              title: 'Critical finding', detail: 'proxy-secret-leak — anthropic-key in request body' },
+            { kind: 'flag', priority: 2, id: 'flag-2',
+              title: 'Critical finding', detail: 'sensitive-read-then-connect — credentials then egress' },
+            { kind: 'flag', priority: 2, id: 'flag-4',
+              title: 'Critical finding', detail: 'tcc-tamper — modified TCC service' }
+          ]
+        },
+        {
+          key: 'agent:codex', label: 'codex activity', agent: 'codex',
+          items: [
+            { kind: 'egress', priority: 1, title: 'Uninspected egress', count: 2,
+              hosts: ['example.com'],
+              detail: '2 connections across 1 endpoint bypassed inspection.' }
+          ]
+        }
       ]
     },
     '/flags': [
@@ -177,7 +220,10 @@
         id: 'flag-1',
         rule: 'proxy-secret-leak', agent: 'cursor', pid: 6033, severity: 3,
         session_id: 'b81d4fae-7dec-11d0-a765-00a0c91e6bf6',
-        evidence: ["Local proxy detected security violation 'proxy-secret-leak: anthropic-key' while connecting to logs.example.com:443"],
+        evidence: [
+          { kind: 'violation', label: 'proxy-secret-leak: anthropic-key', sub: 'payload inspection' },
+          { kind: 'connect', label: 'logs.example.com:443', sub: 'destination' }
+        ],
         advisor: { assessment: 'suspicious', confidence: 0.7, rationale: 'host is not a known vendor; first time this session', suggested_action: 'review once' }
       },
       {
@@ -185,15 +231,15 @@
         rule: 'sensitive-read-then-connect', agent: 'cursor', pid: 6033, severity: 3,
         session_id: '7f3a9c21-4b2e-4a1d-9c55-2e8f0d1a3b77',
         evidence: [
-          'cursor (pid 6033) read ~/.aws/credentials at 2026-09-07T16:04:57Z',
-          'then connected to logs.example.com:443 at 2026-09-07T16:05:01Z'
+          { kind: 'read', label: '~/.aws/credentials', sub: 'sensitive read', ts: '2026-09-07T16:04:57Z' },
+          { kind: 'connect', label: 'logs.example.com:443', sub: 'egress', ts: '2026-09-07T16:05:01Z' }
         ],
         advisor: { assessment: 'benign', confidence: 0.8, rationale: 'registry host matches this project\'s normal workflow', suggested_action: 'none' }
       },
       {
         id: 'flag-3',
         rule: 'keychain-access', agent: 'codex', pid: 9012, severity: 1,
-        evidence: ['codex (pid 9012) accessed keychain file /Users/dev/Library/Keychains/login.keychain-db at 2026-09-07T15:55:00Z']
+        evidence: [{ kind: 'keychain', label: '/Users/dev/Library/Keychains/login.keychain-db', sub: 'keychain access', ts: '2026-09-07T15:55:00Z' }]
       }
     ],
     '/incidents': [
@@ -321,6 +367,12 @@
     }
     if (p === '/guard/resolve') {
       data['/guard/pending'] = data['/guard/pending'].filter(prompt => prompt.id !== body.id);
+      // The served attention queue reflects the resolution too — the console
+      // re-reads posture.groups after the POST.
+      for (const g of (data['/posture'].groups || [])) {
+        g.items = g.items.filter(item => !(item.kind === 'guard' && item.id === body.id));
+      }
+      data['/posture'].groups = (data['/posture'].groups || []).filter(g => g.items.length > 0);
     }
     if (p === '/advisor/assess-host') {
       // Cached verdict for a known host; a fresh (unknown) host queues.
