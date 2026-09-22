@@ -74,6 +74,21 @@ func TestTagMarksIDEAndModelServersAsInfra(t *testing.T) {
 	}
 }
 
+// OpenClaw runs its bundled node from under ~/.openclaw; the path segment,
+// not the node basename, is what identifies the harness.
+func TestTagOpenClawAsAgent(t *testing.T) {
+	fake := fakeProcs{
+		100: {PID: 100, PPID: 1, Exe: "/Volumes/x/.openclaw/node-v24/bin/node"},
+	}
+	c, _ := config.Load("/nonexistent")
+	tg := New(c, fake)
+	tg.Refresh()
+	info, ok := tg.Tag(100)
+	if !ok || info.Name != "openclaw" || info.Kind != "agent" {
+		t.Fatalf("Tag(100) = %+v, %v; want openclaw/agent", info, ok)
+	}
+}
+
 type countingProcSource struct {
 	procs     map[int32]ProcInfo
 	infoCalls int

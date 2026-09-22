@@ -15,6 +15,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificat
         // Self-heal any legacy KeepAlive LaunchAgent, then run the daemon as a
         // child of this app so it lives and dies with the visible menu bar icon.
         SetupManager.shared.migrateLegacyLaunchAgent()
+        SetupManager.shared.refreshInstalledHooks()
         DaemonSupervisor.shared.start()
         NotificationManager.shared.requestAuthorization()
         UNUserNotificationCenter.current().delegate = self

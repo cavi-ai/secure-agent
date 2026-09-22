@@ -1,4 +1,5 @@
 import AppKit
+import CryptoKit
 import Foundation
 import ServiceManagement
 
@@ -85,6 +86,14 @@ public final class SetupManager: ObservableObject {
     /// switch" apart from "service dead" — only the former should point at
     /// System Settings.
     @Published public private(set) var esServiceState: String?
+    /// Set when an ES helper install replaced a previously installed build
+    /// with a different binary: the privacy grant is bound to the old build,
+    /// so file telemetry stays dark until Full Disk Access is granted again.
+    /// Cleared once the spool is written after that install.
+    @Published public private(set) var esNeedsRegrant = false
+    /// Spool mtime recorded right after the hash-changing install; a later
+    /// write proves the new build holds the grant.
+    private var regrantSpoolMtime: Date?
     /// Loopback model servers + the curated managed list, from the daemon's
     /// /advisor/discover. Drives the Advisor settings dropdowns.
     @Published public private(set) var advisorDiscovery = AdvisorDiscovery(servers: [], managedModels: [])
@@ -132,6 +141,10 @@ public final class SetupManager: ObservableObject {
         let status = try? await DaemonClient().fetchStatus()
         isDaemonRunning = DaemonSupervisor.shared.isRunning || (status?.running ?? false)
         esServiceState = status?.esService?.state
+        if esNeedsRegrant,
+           Self.regrantResolved(installSpoolMtime: regrantSpoolMtime, currentSpoolMtime: esSpoolMtime()) {
+            esNeedsRegrant = false
+        }
         // ALL harnesses must carry the hook — `contains` used to announce
         // "Hooks installed" when only one of three targets had it, leaving the
         // other two unprotected while the wizard claimed otherwise. Claude Code
@@ -479,11 +492,16 @@ public final class SetupManager: ObservableObject {
         NSHomeDirectory() + "/.config/opencode/hooks",
     ]
 
+    /// Hook scripts shipped in a bundled hooks directory (tests excluded).
+    nonisolated static func hookFileNames(in dir: String) throws -> [String] {
+        try FileManager.default.contentsOfDirectory(atPath: dir)
+            .filter { $0.hasSuffix(".py") && !$0.hasPrefix("test_") }
+    }
+
     public func installHooks() throws {
         guard let srcDir = bundledHooksDir else { throw SetupError.notBundled }
         lastError = nil
-        let hooks = try fm.contentsOfDirectory(atPath: srcDir)
-            .filter { $0.hasSuffix(".py") && !$0.hasPrefix("test_") }
+        let hooks = try Self.hookFileNames(in: srcDir)
         for target in Self.hookTargets {
             try fm.createDirectory(atPath: target, withIntermediateDirectories: true)
             for hook in hooks {
@@ -496,6 +514,46 @@ public final class SetupManager: ObservableObject {
         // settings.json registers them. The audited gap was exactly this —
         // files copied, nothing registered, guard never ran.
         try registerClaudeHooks()
+    }
+
+    /// Brings already-installed hook copies up to the bundled versions so an
+    /// app update reaches the scripts the harnesses run. Only targets that
+    /// already carry the guard are refreshed; settings.json is not touched.
+    public func refreshInstalledHooks() {
+        guard let srcDir = bundledHooksDir else { return }
+        for target in Self.hookTargets where fm.fileExists(atPath: "\(target)/secret_guard.py") {
+            do {
+                let refreshed = try Self.refreshInstalledHooks(bundledDir: srcDir, installedDir: target)
+                if !refreshed.isEmpty {
+                    NSLog("[secure-agent] refreshed hooks in \(target): \(refreshed.joined(separator: ", "))")
+                }
+            } catch {
+                NSLog("[secure-agent] hook refresh failed for \(target): \(error.localizedDescription)")
+            }
+        }
+    }
+
+    /// Overwrites each installed hook whose SHA-256 differs from the bundled
+    /// copy and creates missing ones; identical files are left untouched.
+    /// Returns the names written.
+    @discardableResult
+    nonisolated static func refreshInstalledHooks(bundledDir: String, installedDir: String) throws -> [String] {
+        let fm = FileManager.default
+        var refreshed: [String] = []
+        for hook in try hookFileNames(in: bundledDir).sorted() {
+            let src = "\(bundledDir)/\(hook)"
+            let dst = "\(installedDir)/\(hook)"
+            if let installed = fileSHA256(dst), installed == fileSHA256(src) { continue }
+            if fm.fileExists(atPath: dst) { try fm.removeItem(atPath: dst) }
+            try fm.copyItem(atPath: src, toPath: dst)
+            refreshed.append(hook)
+        }
+        return refreshed
+    }
+
+    private nonisolated static func fileSHA256(_ path: String) -> String? {
+        guard let data = FileManager.default.contents(atPath: path) else { return nil }
+        return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 
     // MARK: - Harness hook registration (Claude Code settings.json)
@@ -696,9 +754,35 @@ public final class SetupManager: ObservableObject {
     /// running AND writing the spool (proof eslogger got its ES client —
     /// i.e. the user has flipped the eslogger switch in Settings).
     public var isESCollectorInstalled: Bool {
-        guard let attrs = try? FileManager.default.attributesOfItem(atPath: "/var/db/secure-agent/es-spool.jsonl"),
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: Self.esSpoolPath),
               let size = attrs[.size] as? UInt64, size > 0 else { return false }
         return true
+    }
+
+    /// The privileged collector's spool, written as root and readable here.
+    public nonisolated static let esSpoolPath = "/var/db/secure-agent/es-spool.jsonl"
+
+    private func esSpoolMtime() -> Date? {
+        (try? fm.attributesOfItem(atPath: Self.esSpoolPath))?[.modificationDate] as? Date
+    }
+
+    /// A reinstall needs a fresh Full Disk Access grant when it replaced a
+    /// previously installed helper with a different build.
+    public nonisolated static func needsRegrant(previousHash: String?, newHash: String?) -> Bool {
+        guard let previousHash, !previousHash.isEmpty, let newHash, !newHash.isEmpty else { return false }
+        return previousHash != newHash
+    }
+
+    /// The re-grant is proven once the spool is written after the install.
+    public nonisolated static func regrantResolved(installSpoolMtime: Date?, currentSpoolMtime: Date?) -> Bool {
+        guard let current = currentSpoolMtime else { return false }
+        guard let installed = installSpoolMtime else { return true }
+        return current > installed
+    }
+
+    private nonisolated static func readBinHash(_ path: String) -> String? {
+        (try? String(contentsOfFile: path, encoding: .utf8))?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// Installs the privileged ES collector: root-owned helper copy in
@@ -719,6 +803,7 @@ public final class SetupManager: ObservableObject {
         let hashPath = "\(stateDir)/esd.binhash"
         let plistPath = "/Library/LaunchDaemons/\(label).plist"
         let plist = Self.esPlistB64
+        let previousHash = Self.readBinHash(hashPath)
         let shell =
             "mkdir -p /Library/PrivilegedHelperTools /var/db/secure-agent /Library/Logs/secure-agent '\(stateDir)'" +
             " && cp -f '\(src)' '\(helper)'" +
@@ -734,6 +819,10 @@ public final class SetupManager: ObservableObject {
         guard runAppleScriptAdmin(script) else {
             if lastError == nil { lastError = "the privileged collector install was cancelled" }
             throw SetupError.notBundled
+        }
+        if Self.needsRegrant(previousHash: previousHash, newHash: Self.readBinHash(hashPath)) {
+            regrantSpoolMtime = esSpoolMtime()
+            esNeedsRegrant = true
         }
         Task { await refreshState() }
     }

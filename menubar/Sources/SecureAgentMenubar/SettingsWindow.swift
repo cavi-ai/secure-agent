@@ -597,18 +597,24 @@ struct SettingsView: View {
 }
 
 
-/// The guided file-telemetry card: four states.
+/// The guided file-telemetry card: five states.
 ///   A. helper missing          → "Enable File Telemetry" (one admin prompt)
 ///   B. helper dead             → "Reinstall"
 ///   C. helper running, TCC out → "Open Permissions" + inline instruction,
 ///                                 polling live
-///   D. spool flowing           → green, done. Remove stays available.
+///   D. helper replaced         → "Open Permissions": the grant belongs to the
+///                                 previous build; polling live until the
+///                                 spool is written again
+///   E. spool flowing           → green, done. Remove stays available.
 @MainActor
 struct ESFileTelemetryCard: View {
     @ObservedObject var setup: SetupManager
     @State private var polling = false
 
     private var stage: ESStage {
+        // An old spool still has bytes, so a replaced helper would read as
+        // active; the re-grant flag outranks it until the spool advances.
+        if setup.esNeedsRegrant && setup.esCollectorDaemonInstalled { return .needsRegrant }
         if setup.isESCollectorInstalled { return .active }
         if setup.esCollectorDaemonInstalled {
             // A stopped service never registers a TCC entry, so grant
@@ -678,7 +684,7 @@ struct ESFileTelemetryCard: View {
                 }
             }
             .buttonStyle(.borderedProminent).tint(.brand).controlSize(.small)
-        case .needsGrant:
+        case .needsGrant, .needsRegrant:
             Button("Open Permissions") { setup.openESPermissions() }
                 .buttonStyle(.borderedProminent).tint(.brand).controlSize(.small)
         case .active:
@@ -696,8 +702,9 @@ struct ESFileTelemetryCard: View {
     /// the card flips to green within a second of the switch flipping — no
     /// manual refresh.
     private func pollWhileNeeded() async {
-        guard stage == .needsGrant || stage == .dead else { return }
-        while !Task.isCancelled, setup.esCollectorDaemonInstalled, !setup.isESCollectorInstalled {
+        guard stage == .needsGrant || stage == .dead || stage == .needsRegrant else { return }
+        while !Task.isCancelled, setup.esCollectorDaemonInstalled,
+              setup.esNeedsRegrant || !setup.isESCollectorInstalled {
             try? await Task.sleep(nanoseconds: 1_000_000_000)
             await setup.refreshState()
         }
@@ -705,13 +712,14 @@ struct ESFileTelemetryCard: View {
 }
 
 enum ESStage {
-    case notInstalled, dead, needsGrant, active
+    case notInstalled, dead, needsGrant, needsRegrant, active
 
     var title: String {
         switch self {
         case .notInstalled: return "File telemetry is off"
         case .dead: return "File telemetry service is not running"
         case .needsGrant: return "One switch left: allow the file-telemetry helper"
+        case .needsRegrant: return "Re-grant Full Disk Access: the helper changed"
         case .active: return "File telemetry active"
         }
     }
@@ -724,6 +732,8 @@ enum ESStage {
             return "The helper is installed but the service isn't running, so its switch never appears in Settings. Reinstall restarts it (one admin prompt)."
         case .needsGrant:
             return "The helper is installed and retrying every 60s. It's waiting on one macOS permission."
+        case .needsRegrant:
+            return "A new helper build was installed and macOS tied the permission to the previous one. Turn the com.cavi-ai.secure-agent-esd switch off and on again in Full Disk Access."
         case .active:
             return "The privileged collector is running and the daemon is reading its stream."
         }
@@ -734,6 +744,7 @@ enum ESStage {
         case .notInstalled: return "waveform.path.ecg"
         case .dead: return "exclamationmark.triangle"
         case .needsGrant: return "lock.open"
+        case .needsRegrant: return "lock.rotation"
         case .active: return "checkmark.seal.fill"
         }
     }
@@ -742,7 +753,7 @@ enum ESStage {
         switch self {
         case .notInstalled: return .secondary
         case .dead: return .warn
-        case .needsGrant: return .orange
+        case .needsGrant, .needsRegrant: return .orange
         case .active: return .ok
         }
     }
