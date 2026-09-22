@@ -75,6 +75,11 @@ All notable changes to `secure-agent` are documented here. The format follows
 
 ### Changed
 - API HTTP handlers for resources, kill, firewall, and guard live in their own files (`api.go` 1662→940). Same package, no behavior change.
+- The daemon composition root is split into named stages (`buildResourceStack`,
+  `buildFleetAndOTLP`, `runResourceLoop`, `wireEgressOverrides`,
+  `buildAdvisorHooks`, `buildResourcePolicyUpdater`, `makeResourceExecutor`,
+  `startCollectors`) — `Build` 477→197 lines of sequencing. Same wiring, no
+  behavior change.
 
 ### Added
 - **Unified Attention Center.** The console now groups resource approvals,
