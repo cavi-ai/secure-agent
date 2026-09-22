@@ -88,15 +88,8 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 	procSource := agents.NewProcSource()
 	tagger := agents.New(cfg, procSource)
 	tagger.Refresh()
-	resourceTracker := resource.NewTracker()
-	resourceEpisodes := newResourceEpisodeWriter(st)
+	resourceTracker, resourceEpisodes, resourceControl := buildResourceStack(cfg, st, tagger)
 	c.resourceEpisodes = resourceEpisodes
-	resourceControl := resource.NewController(resourcePolicy(cfg.ResourceControl), nil)
-	resourceControl.SetPolicySet(resourcePolicySet(cfg.ResourceControl))
-	resourceNow := time.Now()
-	observeResources(resourceTracker, tagger, st, resourceNow)
-	resourceControl.Observe(resourceTracker.Snapshot(), resourceNow)
-	resourceEpisodes.Observe(resourceControl.Snapshot())
 
 	classifier := sensitive.New(cfg)
 	correlator := correlate.New(tagger, classifier, cfg)
@@ -105,16 +98,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 	// ingest (hook handshake > transcript > process tree).
 	resolver := session.NewResolver(st, tagger)
 
-	// Repair pass for rows written by older resolvers: re-resolve repo and
-	// branch where the stored value is the old basename heuristic's output,
-	// and close tool-call rows stranded at "running" by lost completion
-	// lines or a pre-sweep build.
-	if n := st.RepairSessionGitIdentity(session.GitInfoFor); n > 0 {
-		log.Printf("sessions: re-resolved git identity on %d older rows", n)
-	}
-	if n := st.SweepStaleRunningCalls(time.Now().Add(-10 * time.Minute)); n > 0 {
-		log.Printf("sessions: closed %d stale running tool-call rows", n)
-	}
+	repairStoredRows(st)
 
 	// Typed deltas: SSE clients patch state from these; /snapshot is for
 	// initial load and reconciliation only.
@@ -127,23 +111,8 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 	// Must run before the sinks are built: they capture api.NodeID.
 	api.LoadNodeID(filepath.Join(filepath.Dir(cfg.Firewall.Registry.SaltRef), "node-id"))
 
-	// Fleet webhook fan-out: flags, incidents, guard decisions, sessions,
-	// traces, and status heartbeats are pushed to every configured
-	// HMAC-signed collector. Best-effort; never blocks the drain loop.
-	fleetPub := fleet.NewPublisher()
+	fleetPub, fleetCfgLive, otlpExp := buildFleetAndOTLP(cfg)
 	c.fleetPub = fleetPub
-	fleetPub.ReplaceSinks(buildFleetSinks(cfg.Fleet, filepath.Dir(cfg.DBPath)))
-	fleetCfgLive := &fleetConfigHolder{}
-	fleetCfgLive.Store(cfg.Fleet)
-
-	// OTLP trace export (opt-in): sessions and trace events as OTLP/HTTP
-	// spans. Nil when no endpoint is configured.
-	otlpExp := otlp.New(otlp.Config{
-		Endpoint: cfg.OTLP.Endpoint,
-		Headers:  cfg.OTLP.Headers,
-		Service:  cfg.OTLP.Service,
-		Labels:   cfg.OTLP.Labels,
-	}, api.NodeID, api.Version)
 	c.otlp = otlpExp
 
 	// Session changes reach every consumer: the console delta stream, the
@@ -176,61 +145,13 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 		func() *advisor.Subscriber { return advisorStk.Load().Sub })
 
 	// Periodic process tagger refresh: 5s while idle, 1s while agents live.
-	go func() {
-		timer := time.NewTimer(agents.RefreshInterval(tagger.Any()))
-		defer timer.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-timer.C:
-				tagger.Refresh()
-				now := time.Now()
-				resolver.Sweep()
-				observeResources(resourceTracker, tagger, st, now)
-				resourceControl.Observe(resourceTracker.Snapshot(), now)
-				resourceEpisodes.Observe(resourceControl.Snapshot())
-				persistLastProduced(cfg.DBPath, supReg)
-				timer.Reset(agents.RefreshInterval(tagger.Any()))
-			}
-		}
-	}()
+	go runResourceLoop(ctx, tagger, resolver, resourceTracker, resourceControl, resourceEpisodes, st, cfg.DBPath, supReg)
 
 	// Firewall engine + persisted overrides, used by the proxy for egress
 	// inspection and surfaced as per-rule stats in status.
 	fw := setupFirewall(cfg)
 
-	// User-approved allowlist additions (console egress suggestions): persisted
-	// beside the other override state and consulted on every vendor check.
-	allowlistStore := correlate.NewAllowlistStore(filepath.Join(filepath.Dir(cfg.Firewall.Registry.SaltRef), "allowlist-overrides.json"))
-	correlator.SetAllowlistOverrides(func(agent string) []string { return allowlistStore.Load()[agent] })
-
-	// Operator dispositions (mute rule+host): persisted likewise; muted pairs
-	// are counted, not flagged. The host "*" is the rule-level disposition —
-	// "stop flagging this class at all" (the keychain-noise escape hatch).
-	muteStore := correlate.NewMuteStore(filepath.Join(filepath.Dir(cfg.Firewall.Registry.SaltRef), "muted.json"))
-	correlator.SetMuteChecker(func(rule, host string) bool {
-		for _, h := range muteStore.Load()[rule] {
-			if h == host || h == "*" {
-				return true
-			}
-		}
-		return false
-	})
-
-	// Advisor pre-assessment of suggestion-threshold hosts: when an endpoint
-	// crosses into suggestion territory, the advisor has its legitimacy
-	// verdict ready before the operator opens the console.
-	// Register the host-assessment hook unconditionally, but resolve the
-	// subscriber per call: config hot-reload swaps (or disables) the stack,
-	// and a callback captured when the advisor was enabled must NEVER call
-	// into a now-nil subscriber after a disable (the panic that took the
-	// daemon down during the hot-reload smoke).
-	correlator.SetOnUninspected(func(agent, host string) {
-		if sub := advisorStk.Load().Sub; sub != nil {
-			sub.EnqueueHost(agent, host)
-		}
-	})
+	allowlistStore, muteStore := wireEgressOverrides(cfg, correlator, advisorStk)
 
 	var proxyServer *proxy.ProxyServer
 	if cfg.ProxyEnabled {
@@ -259,53 +180,8 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 	agentPIDSet := taggedPIDSet(tagger)
 	uiPID := owningUIPID()
 
-	// Re-triage: look up the stored flag, enqueue through the CURRENT stack
-	// (the holder re-resolves after every config swap). Enqueue is
-	// idempotent advisor-side (cooldown), so hammering the endpoint is safe.
-	retriageFuncs := &api.RetriageFuncs{
-		LookupFlag: func(id string) (model.Flag, bool) { return st.GetFlag(id) },
-		Enqueue: func(fl model.Flag) bool {
-			if sub := advisorStk.Load().Sub; sub != nil {
-				return sub.RetriageFlag(fl)
-			}
-			return false
-		},
-	}
-	// On-demand host assessment: the console turns "what is this IP?" into an
-	// advisor verdict the operator can act on. Cached verdict answers
-	// immediately; a fresh assessment is queued (idempotent, advisor-side
-	// cooldown) so repeated clicks never flood the model.
-	hostAssessFuncs := &api.HostAssessFuncs{
-		GetVerdict: func(agent, host string) (model.AdvisorVerdict, bool) {
-			return st.AdvisorVerdictFor("host:"+agent+"|"+host, "host")
-		},
-		Enqueue: func(agent, host string) bool {
-			if sub := advisorStk.Load().Sub; sub != nil {
-				sub.EnqueueHost(agent, host)
-				return true
-			}
-			return false
-		},
-	}
-	// Guard advisor: each newly blocked prompt is offered for a recommendation
-	// the operator reads before deciding. Advisory only — the broker still
-	// blocks for the human; this never resolves a prompt.
-	guardAdvisor := func(req model.GuardAssessmentRequest) {
-		if sub := advisorStk.Load().Sub; sub != nil {
-			sub.EnqueueGuard(req)
-		}
-	}
-
-	var resourcePolicyUpdater func(config.ResourceControlConfig) error
-	if opts.ConfigPath != "" {
-		resourcePolicyUpdater = func(next config.ResourceControlConfig) error {
-			if err := config.WriteResourceControl(opts.ConfigPath, next); err != nil {
-				return err
-			}
-			resourceControl.SetPolicySet(resourcePolicySet(next))
-			return nil
-		}
-	}
+	retriageFuncs, hostAssessFuncs, guardAdvisor := buildAdvisorHooks(st, advisorStk)
+	resourcePolicyUpdater := buildResourcePolicyUpdater(opts.ConfigPath, resourceControl)
 
 	apiServer := api.New(api.Deps{
 		SocketPath:            cfg.SocketPath,
@@ -342,76 +218,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 		DeltaHub:        deltaHub,
 	})
 
-	resourceControl.SetExecutor(func(action resource.ControlAction) error {
-		var affected int
-		baseline := tagger.TaggedPIDs()
-		revalidate := func(pid int32) error {
-			original, ok := baseline[pid]
-			if !ok {
-				return fmt.Errorf("pid %d left the recognized session", pid)
-			}
-			fresh, ok := tagger.TaggedPIDs()[pid]
-			if !ok || !fresh.StartedAt.Equal(original.StartedAt) {
-				return fmt.Errorf("pid %d identity changed before intervention", pid)
-			}
-			return nil
-		}
-		err := applyResourceProcessAction(action, baseline, func(action resource.ControlAction) error {
-			expectedStarts := make(map[int32]time.Time)
-			rootPID := action.RootPID
-			if rootPID == 0 {
-				if target, ok := baseline[action.TargetPID]; ok {
-					rootPID = normalizedActionRoot(target)
-				}
-			}
-			for pid, info := range baseline {
-				if normalizedActionRoot(info) == rootPID {
-					expectedStarts[pid] = info.StartedAt
-				}
-			}
-			killed, killErr := apiServer.TerminateAgentTreeVerified(action.TargetPID, action.TargetStartedAt.Format(time.RFC3339Nano), expectedStarts)
-			affected = len(killed)
-			return killErr
-		}, func(pid int32, signal syscall.Signal) error {
-			if err := revalidate(pid); err != nil {
-				return err
-			}
-			if err := syscall.Kill(int(pid), signal); err == nil {
-				affected++
-				return nil
-			} else {
-				return err
-			}
-		}, func(pid int32, nice int) error {
-			if err := revalidate(pid); err != nil {
-				return err
-			}
-			current, err := syscall.Getpriority(syscall.PRIO_PROCESS, int(pid))
-			if err != nil {
-				return err
-			}
-			if current >= nice {
-				affected++
-				return nil
-			}
-			if err := syscall.Setpriority(syscall.PRIO_PROCESS, int(pid), nice); err == nil {
-				affected++
-				return nil
-			} else {
-				return err
-			}
-		})
-		detail := fmt.Sprintf("session=%s root_pid=%d action=%s processes=%d", action.SessionKey, action.RootPID, action.Kind, affected)
-		if err != nil {
-			detail += " error=" + err.Error()
-		}
-		auditAction := "resource-intervention"
-		if action.Kind == string(resource.ActionTerminate) {
-			auditAction = "resource-containment"
-		}
-		st.PutAudit(store.AuditEntry{Action: auditAction, Rule: action.Name, ToMode: action.Kind, Detail: detail})
-		return err
-	})
+	resourceControl.SetExecutor(makeResourceExecutor(apiServer, tagger, st))
 
 	// Fleet heartbeat: posture + liveness pushed to every sink at boot, on a
 	// ticker, and on posture-state transitions. Always armed — enrolling a
@@ -451,94 +258,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 		}
 	}()
 
-	// Supervised collectors
-	if proxyServer != nil {
-		go sup.Run(ctx, "proxyserver", func(c context.Context) error {
-			return proxyServer.Serve(c)
-		})
-	}
-
-	// File-activity telemetry, in order of preference:
-	//  1. Spool tail: the privileged ES collector (root LaunchDaemon) writes
-	//     eslogger output to /var/db/secure-agent/es-spool.jsonl; we tail it.
-	//     This is the sanctioned architecture — macOS permits ES clients only
-	//     as root, and this daemon deliberately runs unprivileged.
-	//  2. Direct eslogger child: only works when this daemon runs as root
-	//     (dev / explicit-sudo runs); on a user daemon it fails NOT_PRIVILEGED
-	//     permanently on the first try.
-	//  3. Neither: file telemetry is degraded, not crash-looped. The
-	//     transcript scanner still covers the hook activity log.
-	switch {
-	case collect.SpoolAvailable():
-		go sup.Run(ctx, "eslogger", func(c context.Context) error {
-			t := collect.NewSpoolTailer(b)
-			t.OnProduce = func() { supReg.MarkProduced("eslogger") }
-			return t.Run(c)
-		})
-		log.Printf("file telemetry: tailing privileged ES collector spool")
-	case os.Geteuid() == 0 && collect.ESLoggerAvailable():
-		go sup.Run(ctx, "eslogger", func(c context.Context) error {
-			es := collect.NewESLogger(b)
-			es.OnProduce = func() { supReg.MarkProduced("eslogger") }
-			return es.Run(c)
-		})
-	default:
-		log.Printf("file telemetry unavailable: ES requires a privileged collector (install it from Settings); transcript + network signals still active")
-	}
-
-	go sup.Run(ctx, "netsampler", func(c context.Context) error {
-		ns := collect.NewNetSampler(b, tagger, cfg.NetSampleInterval, nil)
-		ns.OnProduce = func() { supReg.MarkProduced("netsampler") }
-		return ns.Run(c)
-	})
-
-	home, _ := os.UserHomeDir()
-	go sup.Run(ctx, "transcript", func(c context.Context) error {
-		ts := collect.NewTranscriptScanner(b, transcriptTailTargets(home, cfg.JSONLPath))
-		ts.ExtraTargets = func() []string { return codexSessionTargets(tagger, home) }
-		ts.OnProduce = func() { supReg.MarkProduced("transcript") }
-		ts.OnHandshake = func(h collect.Handshake) {
-			hts, _ := time.Parse(time.RFC3339Nano, h.TS)
-			resolver.HandleHandshake(session.Handshake{
-				SessionID: h.SessionID, Harness: h.Harness, Workspace: h.Workspace,
-				Repo: h.Repo, Branch: h.Branch, PID: h.PID, TS: hts,
-			})
-		}
-		ts.OnSessionSeen = resolver.NoteTranscriptSession
-		return ts.Run(c)
-	})
-
-	// opencode keeps no JSONL transcripts — its trace lives in a SQLite DB, so
-	// it is polled separately (read-only, watermarked). Absent DB → the
-	// collector simply produces nothing and the coverage signal says so.
-	oc := collect.NewOpencodeCollector(b, "", 0)
-	oc.OnProduce = func() { supReg.MarkProduced("opencode") }
-	oc.OnSessionSeen = resolver.NoteTranscriptSession
-	go sup.Run(ctx, "opencode", func(c context.Context) error {
-		return oc.Run(c)
-	})
-
-	if advisorStk.Load().Sub != nil {
-		go sup.Run(ctx, "advisor", func(c context.Context) error {
-			return advisorStk.Load().Sub.Run(c)
-		})
-	}
-	if advisorStk.Load().Managed != nil {
-		// The managed model server as a supervised collector: restart on
-		// crash like any other, and kill it on shutdown so it never outlives
-		// the daemon (advisor verdicts die with the app, by design).
-		go sup.Run(ctx, "advisor-model", func(c context.Context) error {
-			done := make(chan error, 1)
-			go func() { done <- advisorStk.Load().Managed.Wait() }()
-			select {
-			case <-c.Done():
-				_ = advisorStk.Load().Managed.Process.Kill()
-				return nil
-			case err := <-done:
-				return err
-			}
-		})
-	}
+	startCollectors(ctx, sup, supReg, cfg, b, tagger, resolver, advisorStk, proxyServer)
 
 	log.Printf("secure-agentd running on unix socket %s", cfg.SocketPath)
 	return c, nil
@@ -754,4 +474,333 @@ func listActiveAgents(tg *agents.Tagger) []api.AgentSummary {
 		res = append(res, s)
 	}
 	return res
+}
+
+// --- Build stages: the composition root's named phases --------------------
+
+// buildResourceStack constructs the resource tracker, episode writer, and
+// policy controller and primes them with the first observation so the API
+// never serves an empty snapshot.
+func buildResourceStack(cfg config.Config, st *store.Store, tagger *agents.Tagger) (*resource.Tracker, *resourceEpisodeWriter, *resource.Controller) {
+	tracker := resource.NewTracker()
+	episodes := newResourceEpisodeWriter(st)
+	control := resource.NewController(resourcePolicy(cfg.ResourceControl), nil)
+	control.SetPolicySet(resourcePolicySet(cfg.ResourceControl))
+	now := time.Now()
+	observeResources(tracker, tagger, st, now)
+	control.Observe(tracker.Snapshot(), now)
+	episodes.Observe(control.Snapshot())
+	return tracker, episodes, control
+}
+
+// repairStoredRows fixes rows written by older builds: re-resolve repo and
+// branch where the stored value is the old basename heuristic's output, and
+// close tool-call rows stranded at "running" by lost completion lines.
+func repairStoredRows(st *store.Store) {
+	if n := st.RepairSessionGitIdentity(session.GitInfoFor); n > 0 {
+		log.Printf("sessions: re-resolved git identity on %d older rows", n)
+	}
+	if n := st.SweepStaleRunningCalls(time.Now().Add(-10 * time.Minute)); n > 0 {
+		log.Printf("sessions: closed %d stale running tool-call rows", n)
+	}
+}
+
+// buildFleetAndOTLP constructs the fleet webhook fan-out (flags, incidents,
+// guard decisions, sessions, traces, heartbeats pushed to every configured
+// HMAC-signed collector; best-effort, never blocks the drain loop) and the
+// opt-in OTLP trace exporter (nil when no endpoint is configured).
+func buildFleetAndOTLP(cfg config.Config) (*fleet.Publisher, *fleetConfigHolder, *otlp.Exporter) {
+	pub := fleet.NewPublisher()
+	pub.ReplaceSinks(buildFleetSinks(cfg.Fleet, filepath.Dir(cfg.DBPath)))
+	cfgLive := &fleetConfigHolder{}
+	cfgLive.Store(cfg.Fleet)
+	exp := otlp.New(otlp.Config{
+		Endpoint: cfg.OTLP.Endpoint,
+		Headers:  cfg.OTLP.Headers,
+		Service:  cfg.OTLP.Service,
+		Labels:   cfg.OTLP.Labels,
+	}, api.NodeID, api.Version)
+	return pub, cfgLive, exp
+}
+
+// runResourceLoop is the periodic process-tagger refresh: 5s while idle, 1s
+// while agents live. Each tick also sweeps sessions, re-observes resources
+// and control, and persists collector heartbeats.
+func runResourceLoop(ctx context.Context, tagger *agents.Tagger, resolver *session.Resolver, tracker *resource.Tracker, control *resource.Controller, episodes *resourceEpisodeWriter, st *store.Store, dbPath string, supReg *supervise.Registry) {
+	timer := time.NewTimer(agents.RefreshInterval(tagger.Any()))
+	defer timer.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+			tagger.Refresh()
+			now := time.Now()
+			resolver.Sweep()
+			observeResources(tracker, tagger, st, now)
+			control.Observe(tracker.Snapshot(), now)
+			episodes.Observe(control.Snapshot())
+			persistLastProduced(dbPath, supReg)
+			timer.Reset(agents.RefreshInterval(tagger.Any()))
+		}
+	}
+}
+
+// wireEgressOverrides attaches the operator's egress dispositions to the
+// correlator: the user-approved allowlist additions (console egress
+// suggestions) and the muted rule+host pairs (counted, not flagged — the
+// host "*" is the rule-level disposition, the keychain-noise escape hatch).
+// It also arms advisor pre-assessment of suggestion-threshold hosts so a
+// legitimacy verdict is ready before the operator opens the console. The
+// hook is registered unconditionally but resolves the subscriber per call:
+// config hot-reload swaps (or disables) the stack, and a callback captured
+// when the advisor was enabled must NEVER call into a now-nil subscriber
+// after a disable (the panic that took the daemon down during the
+// hot-reload smoke).
+func wireEgressOverrides(cfg config.Config, correlator *correlate.Correlator, advisorStk *advisorStackHolder) (*correlate.AllowlistStore, *correlate.MuteStore) {
+	stateDir := filepath.Dir(cfg.Firewall.Registry.SaltRef)
+	allowlistStore := correlate.NewAllowlistStore(filepath.Join(stateDir, "allowlist-overrides.json"))
+	correlator.SetAllowlistOverrides(func(agent string) []string { return allowlistStore.Load()[agent] })
+	muteStore := correlate.NewMuteStore(filepath.Join(stateDir, "muted.json"))
+	correlator.SetMuteChecker(func(rule, host string) bool {
+		for _, h := range muteStore.Load()[rule] {
+			if h == host || h == "*" {
+				return true
+			}
+		}
+		return false
+	})
+	correlator.SetOnUninspected(func(agent, host string) {
+		if sub := advisorStk.Load().Sub; sub != nil {
+			sub.EnqueueHost(agent, host)
+		}
+	})
+	return allowlistStore, muteStore
+}
+
+// buildAdvisorHooks wires the advisor-facing API closures. Every one
+// resolves the subscriber through the holder per call — config hot-reload
+// swaps the stack, and a stale capture would call into a nil subscriber.
+// Enqueue paths are idempotent advisor-side (cooldown), so hammering the
+// endpoints is safe.
+func buildAdvisorHooks(st *store.Store, advisorStk *advisorStackHolder) (*api.RetriageFuncs, *api.HostAssessFuncs, func(model.GuardAssessmentRequest)) {
+	// Re-triage: look up the stored flag, enqueue through the CURRENT stack.
+	retriage := &api.RetriageFuncs{
+		LookupFlag: func(id string) (model.Flag, bool) { return st.GetFlag(id) },
+		Enqueue: func(fl model.Flag) bool {
+			if sub := advisorStk.Load().Sub; sub != nil {
+				return sub.RetriageFlag(fl)
+			}
+			return false
+		},
+	}
+	// On-demand host assessment: the console turns "what is this IP?" into
+	// an advisor verdict the operator can act on. A cached verdict answers
+	// immediately; a fresh assessment is queued so repeated clicks never
+	// flood the model.
+	hostAssess := &api.HostAssessFuncs{
+		GetVerdict: func(agent, host string) (model.AdvisorVerdict, bool) {
+			return st.AdvisorVerdictFor("host:"+agent+"|"+host, "host")
+		},
+		Enqueue: func(agent, host string) bool {
+			if sub := advisorStk.Load().Sub; sub != nil {
+				sub.EnqueueHost(agent, host)
+				return true
+			}
+			return false
+		},
+	}
+	// Guard advisor: each newly blocked prompt is offered for a
+	// recommendation the operator reads before deciding. Advisory only —
+	// the broker still blocks for the human; this never resolves a prompt.
+	guardAdvisor := func(req model.GuardAssessmentRequest) {
+		if sub := advisorStk.Load().Sub; sub != nil {
+			sub.EnqueueGuard(req)
+		}
+	}
+	return retriage, hostAssess, guardAdvisor
+}
+
+// buildResourcePolicyUpdater returns the config-write callback for resource
+// policy edits, or nil when the daemon runs without a config file (tests).
+func buildResourcePolicyUpdater(configPath string, resourceControl *resource.Controller) func(config.ResourceControlConfig) error {
+	if configPath == "" {
+		return nil
+	}
+	return func(next config.ResourceControlConfig) error {
+		if err := config.WriteResourceControl(configPath, next); err != nil {
+			return err
+		}
+		resourceControl.SetPolicySet(resourcePolicySet(next))
+		return nil
+	}
+}
+
+// makeResourceExecutor builds the resource controller's intervention
+// executor. Every process action revalidates the target against a baseline
+// snapshot taken when the action fired — a pid that left the session or was
+// recycled (start time changed) is refused, so a stale decision can never
+// hit an innocent process. Outcomes are audited.
+func makeResourceExecutor(apiServer *api.API, tagger *agents.Tagger, st *store.Store) func(resource.ControlAction) error {
+	return func(action resource.ControlAction) error {
+		var affected int
+		baseline := tagger.TaggedPIDs()
+		revalidate := func(pid int32) error {
+			original, ok := baseline[pid]
+			if !ok {
+				return fmt.Errorf("pid %d left the recognized session", pid)
+			}
+			fresh, ok := tagger.TaggedPIDs()[pid]
+			if !ok || !fresh.StartedAt.Equal(original.StartedAt) {
+				return fmt.Errorf("pid %d identity changed before intervention", pid)
+			}
+			return nil
+		}
+		err := applyResourceProcessAction(action, baseline, func(action resource.ControlAction) error {
+			expectedStarts := make(map[int32]time.Time)
+			rootPID := action.RootPID
+			if rootPID == 0 {
+				if target, ok := baseline[action.TargetPID]; ok {
+					rootPID = normalizedActionRoot(target)
+				}
+			}
+			for pid, info := range baseline {
+				if normalizedActionRoot(info) == rootPID {
+					expectedStarts[pid] = info.StartedAt
+				}
+			}
+			killed, killErr := apiServer.TerminateAgentTreeVerified(action.TargetPID, action.TargetStartedAt.Format(time.RFC3339Nano), expectedStarts)
+			affected = len(killed)
+			return killErr
+		}, func(pid int32, signal syscall.Signal) error {
+			if err := revalidate(pid); err != nil {
+				return err
+			}
+			if err := syscall.Kill(int(pid), signal); err == nil {
+				affected++
+				return nil
+			} else {
+				return err
+			}
+		}, func(pid int32, nice int) error {
+			if err := revalidate(pid); err != nil {
+				return err
+			}
+			current, err := syscall.Getpriority(syscall.PRIO_PROCESS, int(pid))
+			if err != nil {
+				return err
+			}
+			if current >= nice {
+				affected++
+				return nil
+			}
+			if err := syscall.Setpriority(syscall.PRIO_PROCESS, int(pid), nice); err == nil {
+				affected++
+				return nil
+			} else {
+				return err
+			}
+		})
+		detail := fmt.Sprintf("session=%s root_pid=%d action=%s processes=%d", action.SessionKey, action.RootPID, action.Kind, affected)
+		if err != nil {
+			detail += " error=" + err.Error()
+		}
+		auditAction := "resource-intervention"
+		if action.Kind == string(resource.ActionTerminate) {
+			auditAction = "resource-containment"
+		}
+		st.PutAudit(store.AuditEntry{Action: auditAction, Rule: action.Name, ToMode: action.Kind, Detail: detail})
+		return err
+	}
+}
+
+// startCollectors launches the supervised collectors. File-activity
+// telemetry picks the first available source, in order of preference:
+//  1. Spool tail: the privileged ES collector (root LaunchDaemon) writes
+//     eslogger output to /var/db/secure-agent/es-spool.jsonl; we tail it.
+//     This is the sanctioned architecture — macOS permits ES clients only
+//     as root, and this daemon deliberately runs unprivileged.
+//  2. Direct eslogger child: only works when this daemon runs as root
+//     (dev / explicit-sudo runs); on a user daemon it fails NOT_PRIVILEGED
+//     permanently on the first try.
+//  3. Neither: file telemetry is degraded, not crash-looped. The transcript
+//     scanner still covers the hook activity log.
+func startCollectors(ctx context.Context, sup *supervise.Supervisor, supReg *supervise.Registry, cfg config.Config, b *bus.Bus, tagger *agents.Tagger, resolver *session.Resolver, advisorStk *advisorStackHolder, proxyServer *proxy.ProxyServer) {
+	if proxyServer != nil {
+		go sup.Run(ctx, "proxyserver", func(c context.Context) error {
+			return proxyServer.Serve(c)
+		})
+	}
+
+	switch {
+	case collect.SpoolAvailable():
+		go sup.Run(ctx, "eslogger", func(c context.Context) error {
+			t := collect.NewSpoolTailer(b)
+			t.OnProduce = func() { supReg.MarkProduced("eslogger") }
+			return t.Run(c)
+		})
+		log.Printf("file telemetry: tailing privileged ES collector spool")
+	case os.Geteuid() == 0 && collect.ESLoggerAvailable():
+		go sup.Run(ctx, "eslogger", func(c context.Context) error {
+			es := collect.NewESLogger(b)
+			es.OnProduce = func() { supReg.MarkProduced("eslogger") }
+			return es.Run(c)
+		})
+	default:
+		log.Printf("file telemetry unavailable: ES requires a privileged collector (install it from Settings); transcript + network signals still active")
+	}
+
+	go sup.Run(ctx, "netsampler", func(c context.Context) error {
+		ns := collect.NewNetSampler(b, tagger, cfg.NetSampleInterval, nil)
+		ns.OnProduce = func() { supReg.MarkProduced("netsampler") }
+		return ns.Run(c)
+	})
+
+	home, _ := os.UserHomeDir()
+	go sup.Run(ctx, "transcript", func(c context.Context) error {
+		ts := collect.NewTranscriptScanner(b, transcriptTailTargets(home, cfg.JSONLPath))
+		ts.ExtraTargets = func() []string { return codexSessionTargets(tagger, home) }
+		ts.OnProduce = func() { supReg.MarkProduced("transcript") }
+		ts.OnHandshake = func(h collect.Handshake) {
+			hts, _ := time.Parse(time.RFC3339Nano, h.TS)
+			resolver.HandleHandshake(session.Handshake{
+				SessionID: h.SessionID, Harness: h.Harness, Workspace: h.Workspace,
+				Repo: h.Repo, Branch: h.Branch, PID: h.PID, TS: hts,
+			})
+		}
+		ts.OnSessionSeen = resolver.NoteTranscriptSession
+		return ts.Run(c)
+	})
+
+	// opencode keeps no JSONL transcripts — its trace lives in a SQLite DB,
+	// so it is polled separately (read-only, watermarked). Absent DB → the
+	// collector simply produces nothing and the coverage signal says so.
+	oc := collect.NewOpencodeCollector(b, "", 0)
+	oc.OnProduce = func() { supReg.MarkProduced("opencode") }
+	oc.OnSessionSeen = resolver.NoteTranscriptSession
+	go sup.Run(ctx, "opencode", func(c context.Context) error {
+		return oc.Run(c)
+	})
+
+	if advisorStk.Load().Sub != nil {
+		go sup.Run(ctx, "advisor", func(c context.Context) error {
+			return advisorStk.Load().Sub.Run(c)
+		})
+	}
+	if advisorStk.Load().Managed != nil {
+		// The managed model server as a supervised collector: restart on
+		// crash like any other, and kill it on shutdown so it never outlives
+		// the daemon (advisor verdicts die with the app, by design).
+		go sup.Run(ctx, "advisor-model", func(c context.Context) error {
+			done := make(chan error, 1)
+			go func() { done <- advisorStk.Load().Managed.Wait() }()
+			select {
+			case <-c.Done():
+				_ = advisorStk.Load().Managed.Process.Kill()
+				return nil
+			case err := <-done:
+				return err
+			}
+		})
+	}
 }
