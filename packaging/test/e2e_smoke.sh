@@ -554,10 +554,18 @@ FLAG_ID=$(curl -s --unix-socket "$SOCKET_PATH" "http://unix/flags?limit=1" | pyt
 if [ -n "$FLAG_ID" ]; then
   # 1. Mute the flag's rule+host: must persist AND acknowledge existing flags.
   HOST=$(echo "$FLAGS_RESP" | python3 -c "
-import json,sys,re
+import json,sys
 d=json.load(sys.stdin)
 f=[x for x in d if x['id']=='$FLAG_ID'][0]
-for line in f.get('evidence',[]):
+for item in f.get('evidence',[]):
+    # Structured evidence (kind 'connect') carries host:port in label;
+    # legacy rows are bare strings or {kind:'text', text:...}.
+    if isinstance(item, dict):
+        if item.get('kind') == 'connect' and item.get('label'):
+            print(item['label'].split(':')[0]); break
+        line = item.get('text') or item.get('label') or ''
+    else:
+        line = item
     i=line.find('connected to ')
     if i>=0:
         h=line[i+13:].split(' ')[0].split(':')[0]
