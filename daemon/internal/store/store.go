@@ -647,9 +647,8 @@ func (s *Store) AcknowledgeRuleHost(rule, host string) int {
 	return n
 }
 
-// evidenceCitesHost: the evidence JSON contains host as a connection
-// target ("connected to <host>[:port]"), localhost-alias aware. Rows from
-// newer daemons carry structured items; the kind field answers directly.
+// evidenceCitesHost: evidence JSON contains host as a connection target,
+// localhost-alias aware.
 func evidenceCitesHost(evidenceJSON, host string) bool {
 	if host == "" {
 		return false

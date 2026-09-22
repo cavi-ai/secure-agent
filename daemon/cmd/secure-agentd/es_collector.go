@@ -1,16 +1,11 @@
 package main
 
-// The privileged ES-collector mode: this binary runs as root under launchd,
-// spawning Apple's eslogger and appending its JSON to the spool the
-// unprivileged daemon tails. It deliberately touches NOTHING else — no
-// store, no socket, no API — so the root surface is exactly "run eslogger,
-// append to /var/db/secure-agent/es-spool.jsonl".
+// The privileged ES-collector mode: runs as root under launchd, spawns
+// eslogger, appends its JSON to the spool the unprivileged daemon tails.
+// Touches nothing else: no store, no socket, no API.
 //
-// Why this binary instead of a separate helper: the operator has ALREADY
-// granted Full Disk Access to secure-agentd (the daemon path they dragged
-// into Settings). TCC attributes the grant to this binary, so when THIS
-// process creates the Endpoint Security client, macOS permits it without
-// any additional drag — the whole UX becomes one FDA grant.
+// TCC attributes the ES grant to the responsible process — this binary — so
+// the operator's one FDA grant covers the whole chain.
 import (
 	"context"
 	"crypto/sha256"

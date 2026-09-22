@@ -33,9 +33,7 @@ type Posture struct {
 	NeedsYou int           `json:"needs_you"`
 	Summary  string        `json:"summary"`
 	Items    []PostureItem `json:"items"`
-	// Groups is the session-grouped attention queue — the one derivation the
-	// console's attention tab, the menubar icon, and the fleet heartbeat all
-	// render from.
+	// Groups is the session-grouped attention queue every surface renders.
 	Groups    []AttentionGroup `json:"groups,omitempty"`
 	Generated string           `json:"generated"`
 	Connected bool             `json:"connected"`

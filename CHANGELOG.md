@@ -7,6 +7,9 @@ All notable changes to `secure-agent` are documented here. The format follows
 ## [Unreleased]
 
 ### Fixed
+- ES grant flow: the Full Disk Access entry is the helper binary
+  `com.cavi-ai.secure-agent-esd`, not `eslogger` — the setup card now names
+  it exactly, and the retry-interval copy matches the real 60s backoff.
 - ES service probe parses the FIRST top-level `state =` from `launchctl print`
   (nested sections repeat the key and previously overwrote the real service
   state); the last-exit-code annotation is kept.

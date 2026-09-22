@@ -7,8 +7,7 @@ import Foundation
 @MainActor
 public final class AppState: ObservableObject {
     @Published public private(set) var status: StatusResponse?
-    /// The daemon's operator headline (/posture). Drives needsAttention.
-    /// Nil until the first successful fetch or on older daemons.
+    /// /posture headline; drives needsAttention. Nil until first fetch.
     @Published public private(set) var posture: PostureModel?
     @Published public private(set) var resources: ResourceSnapshotModel?
     @Published public private(set) var flags: [FlagModel] = []
@@ -1204,10 +1203,8 @@ public final class AppState: ObservableObject {
         flags.filter { $0.acknowledged != true && $0.severity >= 3 }
     }
 
-    /// Does anything demand action right now? The one predicate the menu-bar
-    /// icon, hero and badge all read — and it is the daemon's /posture state,
-    /// not a local recomputation: one derivation, every surface agrees. The
-    /// flag/incident fallback stays for pre-posture daemons only.
+    /// The one predicate the icon, hero and badge read: the daemon's /posture
+    /// state. Flag/incident fallback covers pre-posture daemons.
     public var needsAttention: Bool {
         if let posture { return posture.state != "all-clear" }
         return !unresolvedIncidents.isEmpty || !unactedCriticals.isEmpty
@@ -1269,9 +1266,7 @@ public final class AppState: ObservableObject {
         }
     }
 
-    /// The stable anchor for a flag: its primary file path or host — what
-    /// makes two flags "the same problem" to a human. Structured evidence
-    /// items carry the anchor directly; legacy text lines keep the parse.
+    /// The stable anchor for a flag: its primary file path or host.
     nonisolated static func flagGroupAnchor(_ f: FlagModel) -> String? {
         for item in f.evidence where item.kind == "keychain" || item.kind == "read" {
             if !item.label.isEmpty { return item.label }
