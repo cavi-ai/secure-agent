@@ -336,7 +336,7 @@ func (c *Correlator) Observe(e event.Event) []model.Flag {
 
 	info, isAgent := c.tagger.Tag(e.PID)
 	if !isAgent {
-		return nil
+		return c.untaggedKeychainLocked(e)
 	}
 
 	rootPID := e.PID
@@ -359,39 +359,7 @@ func (c *Correlator) Observe(e event.Event) []model.Flag {
 				return nil
 			}
 			if cat == sensitive.CatKeychain {
-				// Operator disposition: a rule-level mute (host "*") silences the
-				// class — counted so the quiet is deliberate, never hidden.
-				if c.isMuted != nil && c.isMuted("keychain-access", "*") {
-					c.mutedCount++
-					return nil
-				}
-				// Repeat suppression: an agent touching the same keychain file
-				// every few minutes is ONE access pattern, not a new incident
-				// per fire. Collapse repeats within the window. Without this,
-				// one routine access pattern floods the critical list with
-				// dozens of identical rows — the operator's "ignore" looked
-				// broken because the NEXT fire was a new flag id.
-				if !c.shouldFlag("keychain-access", e.PID, e.Path, e.TS, keychainRepeatWindow) {
-					return nil
-				}
-				flagID := hashFlagID("keychain-access", e.PID, e.TS)
-				evidence := []model.EvidenceItem{{
-					Kind:  "keychain",
-					Label: e.Path,
-					Sub:   "keychain access",
-					TS:    e.TS.Format(time.RFC3339),
-					Text:  fmt.Sprintf("%s (pid %d) accessed keychain file %s at %s", info.Name, e.PID, e.Path, e.TS.Format(time.RFC3339)),
-				}}
-				flags = append(flags, model.Flag{
-					ID:        flagID,
-					Rule:      "keychain-access",
-					Severity:  1,
-					TS:        e.TS,
-					PID:       e.PID,
-					Agent:     info.Name,
-					SessionID: e.SessionID,
-					Evidence:  evidence,
-				})
+				flags = append(flags, c.keychainAccessLocked(e, info.Name)...)
 			} else {
 				// Check if there's already an unconsumed recent foreign connection for this agent
 				recentConns := c.recentConnsLocked(rootPID, e.PID, e.TS, window)
@@ -585,6 +553,73 @@ func (c *Correlator) Observe(e event.Event) []model.Flag {
 	}
 
 	return flags
+}
+
+// keychainAccessLocked applies the keychain-access rule to one login-keychain
+// file access attributed to agent. Callers hold c.mu.
+func (c *Correlator) keychainAccessLocked(e event.Event, agent string) []model.Flag {
+	// Operator disposition: a rule-level mute (host "*") silences the
+	// class — counted so the quiet is deliberate, never hidden.
+	if c.isMuted != nil && c.isMuted("keychain-access", "*") {
+		c.mutedCount++
+		return nil
+	}
+	// Repeat suppression: an agent touching the same keychain file
+	// every few minutes is ONE access pattern, not a new incident
+	// per fire. Collapse repeats within the window. Without this,
+	// one routine access pattern floods the critical list with
+	// dozens of identical rows — the operator's "ignore" looked
+	// broken because the NEXT fire was a new flag id.
+	if !c.shouldFlag("keychain-access", e.PID, e.Path, e.TS, keychainRepeatWindow) {
+		return nil
+	}
+	return []model.Flag{{
+		ID:        hashFlagID("keychain-access", e.PID, e.TS),
+		Rule:      "keychain-access",
+		Severity:  1,
+		TS:        e.TS,
+		PID:       e.PID,
+		Agent:     agent,
+		SessionID: e.SessionID,
+		Evidence: []model.EvidenceItem{{
+			Kind:  "keychain",
+			Label: e.Path,
+			Sub:   "keychain access",
+			TS:    e.TS.Format(time.RFC3339),
+			Text:  fmt.Sprintf("%s (pid %d) accessed keychain file %s at %s", agent, e.PID, e.Path, e.TS.Format(time.RFC3339)),
+		}},
+	}}
+}
+
+// systemExePrefixes are the OS-owned install locations. Login-keychain opens
+// by executables under them are platform behavior, not an untagged process
+// reaching for credentials.
+var systemExePrefixes = []string{"/System/", "/usr/", "/bin/", "/sbin/", "/Library/Apple/", "/private/var/"}
+
+func isSystemExe(exe string) bool {
+	for _, p := range systemExePrefixes {
+		if strings.HasPrefix(exe, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// untaggedKeychainLocked applies the keychain-access rule to a process the
+// tagger does not know. Only login-keychain file opens and writes by an
+// executable outside the system prefixes qualify; the flag names the process
+// as "untagged:<exe basename>". Callers hold c.mu.
+func (c *Correlator) untaggedKeychainLocked(e event.Event) []model.Flag {
+	if e.Kind != event.KindFileOpen && e.Kind != event.KindFileWrite {
+		return nil
+	}
+	if e.ExePath == "" || isSystemExe(e.ExePath) {
+		return nil
+	}
+	if cat, ok := c.classifier.Classify(e.Path); !ok || cat != sensitive.CatKeychain {
+		return nil
+	}
+	return c.keychainAccessLocked(e, "untagged:"+filepath.Base(e.ExePath))
 }
 
 func (c *Correlator) rememberReadLocked(pid int32, directPID int32, rm readMark) {

@@ -198,8 +198,8 @@ func TestPostureFlagsCrashLoopingRootService(t *testing.T) {
 	sock := fmt.Sprintf("/tmp/sa_posture7_%d.sock", time.Now().UnixNano())
 	defer os.Remove(sock)
 	prev := collect.ESServiceProbe
-	collect.ESServiceProbe = func() (string, int64, time.Time, error) {
-		return "spawn scheduled (last exit 1)", 0, time.Now().Add(-8 * 24 * time.Hour), nil
+	collect.ESServiceProbe = func() (collect.ESServiceSnapshot, error) {
+		return collect.ESServiceSnapshot{State: "spawn scheduled (last exit 1)", SpoolMtime: time.Now().Add(-8 * 24 * time.Hour)}, nil
 	}
 	defer func() { collect.ESServiceProbe = prev }()
 	a := newTestAPI(sock, testStore(t), &fakeKiller{}, func() Status {
@@ -256,6 +256,34 @@ func TestPostureSingleESItemWhenProbeFails(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("healthy probe + silent tailer: eslogger items = %d, want 1 (tailer silence)", count)
+	}
+}
+
+// A running root service whose helper binary is newer than the last spool
+// write lost its privacy grant: the item must name the re-grant. An older
+// helper keeps the generic not-writing detail.
+func TestESServiceItemsNamesRegrantAfterHelperReplaced(t *testing.T) {
+	now := time.Now()
+	replaced := esServiceItems(collect.ESServiceSnapshot{
+		State: "running", SpoolSize: 10, SpoolMtime: now.Add(-2 * time.Hour), HelperMtime: now.Add(-time.Hour),
+	})
+	if len(replaced) != 1 || replaced[0].Kind != "collector_silent" {
+		t.Fatalf("replaced helper: items = %+v, want one collector_silent", replaced)
+	}
+	d := replaced[0].Detail
+	if !strings.Contains(d, "helper binary was replaced after the last write") ||
+		!strings.Contains(d, "Full Disk Access") || !strings.Contains(d, collect.ESServiceLabel) {
+		t.Fatalf("replaced helper detail must name the re-grant, got %q", d)
+	}
+
+	unchanged := esServiceItems(collect.ESServiceSnapshot{
+		State: "running", SpoolSize: 10, SpoolMtime: now.Add(-2 * time.Hour), HelperMtime: now.Add(-3 * time.Hour),
+	})
+	if len(unchanged) != 1 {
+		t.Fatalf("unchanged helper: items = %+v, want one", unchanged)
+	}
+	if strings.Contains(unchanged[0].Detail, "replaced") || !strings.Contains(unchanged[0].Detail, "file telemetry may be blind") {
+		t.Fatalf("unchanged helper must keep the generic detail, got %q", unchanged[0].Detail)
 	}
 }
 

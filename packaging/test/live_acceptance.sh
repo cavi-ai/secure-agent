@@ -163,8 +163,12 @@ for line in fileinput.input(files=sys.argv[1:]):
 print(seen)
 ' 2>/dev/null | awk '{s+=$1} END {print s+0}')
 fi
+# Upper bound too: turns well past the prompt count mean over-detection or
+# duplicate turn rows, which the floor alone never catches.
 if [ "$grace" = 0 ] || [ "${prompts:-0}" -eq 0 ]; then
   ok "turn ratio (grace/no prompts — not asserted)"
+elif [ "${turns:-0}" -gt $((prompts * 3 / 2)) ]; then
+  bad "turn ratio" "$turns turns vs $prompts human prompts (want <= 150%: over-detection or duplicate rows)"
 elif [ "${turns:-0}" -ge $((prompts * 8 / 10)) ]; then
   ok "turn ratio ($turns turns vs $prompts prompts)"
 else
@@ -239,23 +243,85 @@ fi
 # Parse with a heredoc: the old one-liner interpolated ['es_service'] into the
 # python source, where the single quotes terminated its string literals — every
 # probe read as "absent" even with es_service present.
-es_status="$(python3 - "$status" <<'PY'
-import json,sys
+# A running state alone is not health: the service can stay up while the
+# spool goes unwritten (lost privacy grant), so the spool age rides along.
+# spool_age_min is empty when spool_mtime is missing or unparseable.
+es_probe="$(python3 - "$status" <<'PY'
+import json,sys,datetime
 try:
     d=json.loads(sys.argv[1])
-    print((d.get("es_service") or {}).get("state") or "absent")
+    es=d.get("es_service") or {}
+    age=""
+    try:
+        mt=datetime.datetime.fromisoformat(es.get("spool_mtime",""))
+        age=str(int((datetime.datetime.now(datetime.timezone.utc)-mt).total_seconds()//60))
+    except Exception:
+        pass
+    print("%s\t%s" % (es.get("state") or "absent", age))
 except Exception:
-    print("absent")
+    print("absent\t")
 PY
 )"
+IFS=$'\t' read -r es_status spool_age_min <<<"$es_probe"
 if [ "$es_status" = "absent" ]; then
   ok "ES service state (not spool-based, nothing to probe)"
 elif [ "$es_status" = "not-loaded" ]; then
   bad "ES service state" "daemon is spool-based but the root service is not loaded"
 elif echo "$es_status" | grep -qE "spawn|exit"; then
   bad "ES service state" "root service reports: $es_status"
+elif [ "$es_status" = "running" ] && [ "$grace" = 1 ] && [ "$agents" -gt 0 ] &&
+     [ -n "$spool_age_min" ] && [ "$spool_age_min" -gt 10 ]; then
+  bad "ES service state" "root service running but spool not written for $spool_age_min min"
 else
   ok "ES service state ($es_status)"
+fi
+
+# ---- 9. Transcript -> session coverage ----
+# Every Claude transcript with a user/assistant record timestamped since boot
+# (and settled for 2 min, by mtime) must have a sessions row keyed by its
+# file basename; a missing row means the daemon never traced it. mtime alone
+# is only a pre-filter: non-trace records (attachment, queue-operation,
+# custom-title, mode, cost-state) can bump a transcript's mtime without ever
+# producing a trace line, so mtime-in-range is not sufficient on its own.
+if [ "$grace" = 1 ] && [ -d "$claude_dir" ]; then
+  read -r miss_n want_n <<<"$(q 'select id from sessions;' | python3 -c '
+import glob,json,os,sys,time
+root,boot=sys.argv[1],int(sys.argv[2])
+known={l.strip() for l in sys.stdin}
+cutoff=time.time()-120
+boot_iso=time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(boot))
+want=set()
+for p in glob.glob(os.path.join(root,"*","*.jsonl")):
+    try: m=os.stat(p).st_mtime
+    except OSError: continue
+    if not (boot < m < cutoff): continue
+    hit=False
+    try:
+        with open(p) as f:
+            for line in f:
+                line=line.strip()
+                if not line: continue
+                try: rec=json.loads(line)
+                except Exception: continue
+                if not isinstance(rec, dict): continue
+                if rec.get("type") not in ("user", "assistant"): continue
+                ts=rec.get("timestamp")
+                if isinstance(ts, str) and ts >= boot_iso:
+                    hit=True
+                    break
+    except OSError: continue
+    if hit: want.add(os.path.basename(p)[:-len(".jsonl")])
+print(len(want-known), len(want))
+' "$claude_dir" "$boot_epoch")"
+  if [ -z "${miss_n:-}" ]; then
+    bad "transcripts since boot have sessions" "transcript scan failed"
+  elif [ "$miss_n" -eq 0 ]; then
+    ok "transcripts since boot have sessions ($want_n files)"
+  else
+    bad "transcripts since boot have sessions" "$miss_n of $want_n transcripts with trace records since boot have no sessions row"
+  fi
+else
+  ok "transcript session coverage (skipped inside 10-min boot grace)"
 fi
 
 echo

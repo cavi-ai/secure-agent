@@ -28,6 +28,7 @@ agents:
   - { name: gemini,      match: ["gemini-cli", "gemini"] }
   - { name: codeium,     match: ["codeium"] }
   - { name: copilot,     match: ["copilot"] }
+  - { name: openclaw,    match: ["/.openclaw/"] }
   # Local model infrastructure: tracked (killable, monitored) but their
   # loopback traffic is never flagged — they're what the advisor talks to.
   # kind: infra keeps them out of agent/session counts and reclaimable memory.
