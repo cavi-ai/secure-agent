@@ -277,20 +277,40 @@ else
 fi
 
 # ---- 9. Transcript -> session coverage ----
-# Every Claude transcript written since boot (and settled for 2 min) must have
-# a sessions row keyed by its file basename; a missing row means the
-# transcript was never attributed.
+# Every Claude transcript with a user/assistant record timestamped since boot
+# (and settled for 2 min, by mtime) must have a sessions row keyed by its
+# file basename; a missing row means the daemon never traced it. mtime alone
+# is only a pre-filter: non-trace records (attachment, queue-operation,
+# custom-title, mode, cost-state) can bump a transcript's mtime without ever
+# producing a trace line, so mtime-in-range is not sufficient on its own.
 if [ "$grace" = 1 ] && [ -d "$claude_dir" ]; then
   read -r miss_n want_n <<<"$(q 'select id from sessions;' | python3 -c '
-import glob,os,sys,time
+import glob,json,os,sys,time
 root,boot=sys.argv[1],int(sys.argv[2])
 known={l.strip() for l in sys.stdin}
 cutoff=time.time()-120
+boot_iso=time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(boot))
 want=set()
 for p in glob.glob(os.path.join(root,"*","*.jsonl")):
     try: m=os.stat(p).st_mtime
     except OSError: continue
-    if boot < m < cutoff: want.add(os.path.basename(p)[:-len(".jsonl")])
+    if not (boot < m < cutoff): continue
+    hit=False
+    try:
+        with open(p) as f:
+            for line in f:
+                line=line.strip()
+                if not line: continue
+                try: rec=json.loads(line)
+                except Exception: continue
+                if not isinstance(rec, dict): continue
+                if rec.get("type") not in ("user", "assistant"): continue
+                ts=rec.get("timestamp")
+                if isinstance(ts, str) and ts >= boot_iso:
+                    hit=True
+                    break
+    except OSError: continue
+    if hit: want.add(os.path.basename(p)[:-len(".jsonl")])
 print(len(want-known), len(want))
 ' "$claude_dir" "$boot_epoch")"
   if [ -z "${miss_n:-}" ]; then
@@ -298,7 +318,7 @@ print(len(want-known), len(want))
   elif [ "$miss_n" -eq 0 ]; then
     ok "transcripts since boot have sessions ($want_n files)"
   else
-    bad "transcripts since boot have sessions" "$miss_n of $want_n transcripts modified since boot have no sessions row"
+    bad "transcripts since boot have sessions" "$miss_n of $want_n transcripts with trace records since boot have no sessions row"
   fi
 else
   ok "transcript session coverage (skipped inside 10-min boot grace)"
