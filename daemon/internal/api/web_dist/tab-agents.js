@@ -30,7 +30,7 @@ function renderAgents() {
     <details class="agent-group" data-family="${escapeHTML(f.name)}"${open ? ' open' : ''}>
       <summary class="agent-group-head">
         <span class="agent-group-title">
-          <svg class="icon"><use href="#i-agent"/></svg>
+          ${harnessChipHTML(f.name)}
           <span class="agent-family-name">${escapeHTML(f.title)}</span>
           <span class="agent-pid">${f.roots.length} ${f.roots.length === 1 ? 'instance' : 'instances'}</span>
         </span>

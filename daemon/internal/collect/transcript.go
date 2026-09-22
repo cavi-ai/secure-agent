@@ -33,6 +33,11 @@ type TranscriptScanner struct {
 	bus   *bus.Bus
 	paths []string
 
+	// OffsetStatePath, when set, persists tail offsets across daemon
+	// restarts. Without it a restart re-seeds every transcript at EOF and
+	// lines appended while the daemon was down are never read.
+	OffsetStatePath string
+
 	// ExtraTargets, when set, is consulted on every classify pass for
 	// dynamically discovered targets (e.g. CODEX_HOME read off live codex
 	// processes — a launcher that relocates the rollout store must not
@@ -164,7 +169,7 @@ func ScanLine(line string) (event.Event, bool) {
 }
 
 func (ts *TranscriptScanner) Run(ctx context.Context) error {
-	offsets := make(map[string]int64)
+	offsets := ts.loadOffsets()
 
 	tailEvery := ts.tailEvery
 	if tailEvery <= 0 {
@@ -209,6 +214,7 @@ func (ts *TranscriptScanner) Run(ctx context.Context) error {
 	}
 	seededDirs := map[string]bool{}
 	var allDirPaths, dirPaths []string
+	dirty := false
 	walk := func() {
 		allDirPaths = allDirPaths[:0]
 		for _, d := range dirTargets {
@@ -237,16 +243,21 @@ func (ts *TranscriptScanner) Run(ctx context.Context) error {
 		case <-resolveTicker.C:
 			dirTargets, cheapTargets = ts.classifyTargets()
 			walk()
+			ts.saveOffsets(offsets)
 		case <-tailTicker.C:
 			cheapPaths = resolveGlobs(cheapTargets)
 			live := make(map[string]struct{}, len(cheapPaths)+len(allDirPaths))
 			for _, p := range cheapPaths {
 				live[p] = struct{}{}
-				ts.tailFile(p, offsets)
+				ts.tailFile(p, offsets, &dirty)
 			}
 			for _, p := range dirPaths {
 				live[p] = struct{}{}
-				ts.tailFile(p, offsets)
+				ts.tailFile(p, offsets, &dirty)
+			}
+			if dirty {
+				dirty = false
+				ts.saveOffsets(offsets)
 			}
 			// Prune offsets only for files that no longer EXIST (deleted or
 			// rotated out). Pruning inactive-but-present files forced a byte-0
@@ -348,7 +359,48 @@ func (ts *TranscriptScanner) activePaths(paths []string) []string {
 	return res
 }
 
-func (ts *TranscriptScanner) tailFile(p string, offsets map[string]int64) {
+// loadOffsets reads persisted tail offsets written by a previous daemon run.
+// A corrupt or unreadable file is ignored — worst case is a re-seed at EOF,
+// the pre-persistence behavior.
+func (ts *TranscriptScanner) loadOffsets() map[string]int64 {
+	offsets := make(map[string]int64)
+	if ts.OffsetStatePath == "" {
+		return offsets
+	}
+	data, err := os.ReadFile(ts.OffsetStatePath)
+	if err != nil {
+		return offsets
+	}
+	var saved map[string]int64
+	if err := json.Unmarshal(data, &saved); err != nil {
+		return offsets
+	}
+	for p, off := range saved {
+		if fi, err := os.Stat(p); err == nil && !fi.IsDir() && fi.Size() >= off {
+			offsets[p] = off
+		}
+	}
+	return offsets
+}
+
+// saveOffsets persists the tail offsets. Best-effort: a failed write loses
+// at most one restart's worth of appended lines.
+func (ts *TranscriptScanner) saveOffsets(offsets map[string]int64) {
+	if ts.OffsetStatePath == "" {
+		return
+	}
+	data, err := json.Marshal(offsets)
+	if err != nil {
+		return
+	}
+	tmp := ts.OffsetStatePath + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		return
+	}
+	_ = os.Rename(tmp, ts.OffsetStatePath)
+}
+
+func (ts *TranscriptScanner) tailFile(p string, offsets map[string]int64, dirty *bool) {
 	fi, err := os.Stat(p)
 	if err != nil || fi.IsDir() {
 		return
@@ -546,4 +598,7 @@ func (ts *TranscriptScanner) tailFile(p string, offsets map[string]int64) {
 	}
 
 	offsets[p] = newOffset
+	if newOffset != offset && dirty != nil {
+		*dirty = true
+	}
 }

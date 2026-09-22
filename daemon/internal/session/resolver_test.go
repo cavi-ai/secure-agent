@@ -360,3 +360,57 @@ func TestProcessTreeAdoptsPriorTranscriptSession(t *testing.T) {
 		t.Fatalf("sessions = %d, want 1", n)
 	}
 }
+
+// A second transcript id in the same workspace is a sibling conversation:
+// the first transcript session must NOT be rekeyed onto it. Only
+// process-tree (provisional) sessions are eligible for the rekey join.
+func TestSecondTranscriptIdIsSiblingNotRekey(t *testing.T) {
+	r, st := testResolver(t, fakeProcs{
+		100: {PID: 100, PPID: 1, Exe: "/usr/local/bin/claude", CWD: "/repo", StartTime: time.Now()},
+	})
+	now := time.Now()
+	r.NoteTranscriptSession("conv-1", "claude", "/repo", now)
+	r.NoteTranscriptSession("conv-2", "claude", "/repo", now.Add(time.Minute))
+
+	sessions := st.ListSessions(store.SessionFilter{})
+	if len(sessions) != 2 {
+		t.Fatalf("sessions = %d, want 2 sibling rows: %+v", len(sessions), sessions)
+	}
+	for _, s := range sessions {
+		if s.ID != "conv-1" && s.ID != "conv-2" {
+			t.Fatalf("unexpected session id %q — a transcript session was rekeyed", s.ID)
+		}
+	}
+}
+
+// A process-tree session still rekeys onto a transcript sighting (the join),
+// and a LATER transcript id leaves the joined row alone.
+func TestTranscriptJoinThenSiblingStaysPut(t *testing.T) {
+	r, st := testResolver(t, fakeProcs{
+		100: {PID: 100, PPID: 1, Exe: "/usr/local/bin/claude", CWD: "/repo", StartTime: time.Now()},
+	})
+	e := event.Event{Kind: event.KindFileOpen, PID: 100, TS: time.Now()}
+	procID := r.Resolve(&e)
+	if procID == "" {
+		t.Fatal("process-tree session not created")
+	}
+	r.NoteTranscriptSession("conv-1", "claude", "/repo", time.Now())
+	r.NoteTranscriptSession("conv-2", "claude", "/repo", time.Now().Add(time.Minute))
+
+	sessions := st.ListSessions(store.SessionFilter{})
+	if len(sessions) != 2 {
+		t.Fatalf("sessions = %d, want 2 (joined conv-1 + sibling conv-2): %+v", len(sessions), sessions)
+	}
+	ids := map[string]bool{}
+	for _, s := range sessions {
+		ids[s.ID] = true
+	}
+	if !ids["conv-1"] || !ids["conv-2"] {
+		t.Fatalf("session ids = %v, want conv-1 and conv-2", ids)
+	}
+	for _, ev := range st.RecentEvents(10) {
+		if ev.SessionID == procID {
+			t.Fatalf("event still on provisional id %q", procID)
+		}
+	}
+}

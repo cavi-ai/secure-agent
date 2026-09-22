@@ -7,6 +7,7 @@ package main
 // TCC attributes the ES grant to the responsible process — this binary — so
 // the operator's one FDA grant covers the whole chain.
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -295,6 +296,9 @@ func pumpToSpool(stdout interface{ Read([]byte) (int, error) }) error {
 				}
 				line := buf[:nl]
 				buf = append(buf[:0], buf[nl+1:]...)
+				if len(bytes.TrimSpace(line)) == 0 {
+					continue // eslogger emits blank lines on drop paths; keep them out of the spool
+				}
 				if err := w.writeLine(line); err != nil {
 					return fmt.Errorf("spool write: %w", err)
 				}
