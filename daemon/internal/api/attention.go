@@ -11,13 +11,10 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
 
-// Attention groups: the session-grouped operator queue. Computed ONCE here
-// and served from /posture so the console, the menubar, and the fleet
-// heartbeat all render the same queue — previously the console re-derived it
-// in JS and the menubar kept a third predicate, and the three disagreed.
+// Attention groups: computed once here and served from /posture; every
+// surface renders the same queue.
 
-// AttentionItem is one actionable signal inside a group. Priority orders
-// items inside the group (higher first): guard 5, resource 4, incident 3,
+// AttentionItem priorities (higher first): guard 5, resource 4, incident 3,
 // flag 2, egress 1.
 type AttentionItem struct {
 	Kind      string                `json:"kind"` // resource | guard | incident | flag | egress
@@ -50,8 +47,7 @@ type AttentionGroup struct {
 	Items        []AttentionItem `json:"items"`
 }
 
-// attentionSession is the internal grouping target: a live session a signal
-// can be attributed to.
+// attentionSession: a live session a signal can be attributed to.
 type attentionSession struct {
 	key          string
 	agent        string
@@ -66,10 +62,8 @@ type attentionSession struct {
 	control      *resource.SessionControl
 }
 
-// computeAttentionGroups builds the session-grouped queue. Signals without a
-// PID (guard prompts, uninspected egress) join a live session only when the
-// agent name identifies exactly one; ambiguous work stays in an explicit
-// agent-level group rather than being guessed onto a process.
+// Signals without a PID join a live session only when the agent name
+// identifies exactly one; ambiguous work stays in an agent-level group.
 func (a *API) computeAttentionGroups(st Status) []AttentionGroup {
 	var sessions []attentionSession
 	if a.resources != nil {

@@ -514,9 +514,7 @@ const reasoningSafeMaxTokens = 2048
 
 func ptr[T any](v T) *T { return &v }
 
-// evidenceHost extracts the egress host from a flag's evidence — the trend
-// lookup key for novelty checks. Structured items carry it directly; legacy
-// text rows keep the regex.
+// evidenceHost extracts the egress host from a flag's evidence.
 func evidenceHost(fl model.Flag) string {
 	for _, item := range fl.Evidence {
 		if item.Kind == "connect" && item.Label != "" {

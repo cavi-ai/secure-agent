@@ -597,16 +597,12 @@ struct SettingsView: View {
 }
 
 
-/// The guided file-telemetry card: four states, zero guesswork.
+/// The guided file-telemetry card: four states.
 ///   A. helper missing          → "Enable File Telemetry" (one admin prompt)
-///   B. helper dead             → "Reinstall" (service not running — pointing
-///                                 at System Settings is a dead end when the
-///                                 collector never launched eslogger)
-///   C. helper running, TCC out → "Open Permissions" + inline instruction
-///                                 ("turn ON eslogger"), polling live
+///   B. helper dead             → "Reinstall"
+///   C. helper running, TCC out → "Open Permissions" + inline instruction,
+///                                 polling live
 ///   D. spool flowing           → green, done. Remove stays available.
-/// The user never hunts for a pane: the button deep-links to the exact
-/// Settings section, and the card self-updates the moment the switch flips.
 @MainActor
 struct ESFileTelemetryCard: View {
     @ObservedObject var setup: SetupManager
@@ -615,10 +611,8 @@ struct ESFileTelemetryCard: View {
     private var stage: ESStage {
         if setup.isESCollectorInstalled { return .active }
         if setup.esCollectorDaemonInstalled {
-            // The daemon's launchd probe is the truth here: a service that
-            // isn't running can never put eslogger into the Settings list,
-            // so the grant instructions would send the user hunting for a
-            // switch that does not exist. Offer repair instead.
+            // A stopped service never registers a TCC entry, so grant
+            // instructions would point at a switch that does not exist.
             if let svc = setup.esServiceState, svc != "running", !svc.hasPrefix("waiting") {
                 return .dead
             }
@@ -641,7 +635,11 @@ struct ESFileTelemetryCard: View {
                 controls
             }
             if stage == .needsGrant {
-                Label("In the pane that just opened: find **eslogger** in the list and turn its switch ON. This card turns green automatically — nothing else to do.",
+                // The TCC entry is the root helper binary, not eslogger:
+                // TCC attributes the grant to the responsible process, which
+                // for a launchd job is the daemon binary itself. Its list
+                // entry is the binary filename: "com.cavi-ai.secure-agent-esd".
+                Label("In the pane that just opened: turn ON the switch for **com.cavi-ai.secure-agent-esd** (the file-telemetry helper). This card turns green automatically — nothing else to do.",
                       systemImage: "cursorarrow.click.2")
                     .font(.caption).foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
@@ -713,7 +711,7 @@ enum ESStage {
         switch self {
         case .notInstalled: return "File telemetry is off"
         case .dead: return "File telemetry service is not running"
-        case .needsGrant: return "One switch left: allow eslogger"
+        case .needsGrant: return "One switch left: allow the file-telemetry helper"
         case .active: return "File telemetry active"
         }
     }
@@ -723,9 +721,9 @@ enum ESStage {
         case .notInstalled:
             return "macOS requires file telemetry (eslogger) to run as root. One admin prompt installs a minimal helper that runs eslogger and nothing else."
         case .dead:
-            return "The helper is installed but the service isn't running, so the eslogger permission switch never appears in Settings. Reinstall restarts it (one admin prompt)."
+            return "The helper is installed but the service isn't running, so its switch never appears in Settings. Reinstall restarts it (one admin prompt)."
         case .needsGrant:
-            return "The helper is installed and retrying every 10s. It's waiting on one macOS permission."
+            return "The helper is installed and retrying every 60s. It's waiting on one macOS permission."
         case .active:
             return "The privileged collector is running and the daemon is reading its stream."
         }

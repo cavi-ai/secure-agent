@@ -476,11 +476,10 @@ func listActiveAgents(tg *agents.Tagger) []api.AgentSummary {
 	return res
 }
 
-// --- Build stages: the composition root's named phases --------------------
+// --- Build stages ---
 
-// buildResourceStack constructs the resource tracker, episode writer, and
-// policy controller and primes them with the first observation so the API
-// never serves an empty snapshot.
+// buildResourceStack primes tracker, episode writer, and controller with a
+// first observation so the API never serves an empty snapshot.
 func buildResourceStack(cfg config.Config, st *store.Store, tagger *agents.Tagger) (*resource.Tracker, *resourceEpisodeWriter, *resource.Controller) {
 	tracker := resource.NewTracker()
 	episodes := newResourceEpisodeWriter(st)
@@ -493,9 +492,8 @@ func buildResourceStack(cfg config.Config, st *store.Store, tagger *agents.Tagge
 	return tracker, episodes, control
 }
 
-// repairStoredRows fixes rows written by older builds: re-resolve repo and
-// branch where the stored value is the old basename heuristic's output, and
-// close tool-call rows stranded at "running" by lost completion lines.
+// repairStoredRows re-resolves repo/branch on rows carrying the old basename
+// heuristic and closes tool-call rows stranded at "running".
 func repairStoredRows(st *store.Store) {
 	if n := st.RepairSessionGitIdentity(session.GitInfoFor); n > 0 {
 		log.Printf("sessions: re-resolved git identity on %d older rows", n)
@@ -505,10 +503,8 @@ func repairStoredRows(st *store.Store) {
 	}
 }
 
-// buildFleetAndOTLP constructs the fleet webhook fan-out (flags, incidents,
-// guard decisions, sessions, traces, heartbeats pushed to every configured
-// HMAC-signed collector; best-effort, never blocks the drain loop) and the
-// opt-in OTLP trace exporter (nil when no endpoint is configured).
+// buildFleetAndOTLP constructs the fleet webhook fan-out and the OTLP
+// exporter (nil when unconfigured).
 func buildFleetAndOTLP(cfg config.Config) (*fleet.Publisher, *fleetConfigHolder, *otlp.Exporter) {
 	pub := fleet.NewPublisher()
 	pub.ReplaceSinks(buildFleetSinks(cfg.Fleet, filepath.Dir(cfg.DBPath)))
@@ -523,9 +519,8 @@ func buildFleetAndOTLP(cfg config.Config) (*fleet.Publisher, *fleetConfigHolder,
 	return pub, cfgLive, exp
 }
 
-// runResourceLoop is the periodic process-tagger refresh: 5s while idle, 1s
-// while agents live. Each tick also sweeps sessions, re-observes resources
-// and control, and persists collector heartbeats.
+// runResourceLoop: tagger refresh (5s idle, 1s under agents), session sweep,
+// resource observe, heartbeat persist.
 func runResourceLoop(ctx context.Context, tagger *agents.Tagger, resolver *session.Resolver, tracker *resource.Tracker, control *resource.Controller, episodes *resourceEpisodeWriter, st *store.Store, dbPath string, supReg *supervise.Registry) {
 	timer := time.NewTimer(agents.RefreshInterval(tagger.Any()))
 	defer timer.Stop()
@@ -546,17 +541,9 @@ func runResourceLoop(ctx context.Context, tagger *agents.Tagger, resolver *sessi
 	}
 }
 
-// wireEgressOverrides attaches the operator's egress dispositions to the
-// correlator: the user-approved allowlist additions (console egress
-// suggestions) and the muted rule+host pairs (counted, not flagged — the
-// host "*" is the rule-level disposition, the keychain-noise escape hatch).
-// It also arms advisor pre-assessment of suggestion-threshold hosts so a
-// legitimacy verdict is ready before the operator opens the console. The
-// hook is registered unconditionally but resolves the subscriber per call:
-// config hot-reload swaps (or disables) the stack, and a callback captured
-// when the advisor was enabled must NEVER call into a now-nil subscriber
-// after a disable (the panic that took the daemon down during the
-// hot-reload smoke).
+// wireEgressOverrides attaches allowlist/mute stores to the correlator and
+// arms advisor pre-assessment. The hook resolves the subscriber per call:
+// hot-reload swaps the stack, and a stale capture panics on nil.
 func wireEgressOverrides(cfg config.Config, correlator *correlate.Correlator, advisorStk *advisorStackHolder) (*correlate.AllowlistStore, *correlate.MuteStore) {
 	stateDir := filepath.Dir(cfg.Firewall.Registry.SaltRef)
 	allowlistStore := correlate.NewAllowlistStore(filepath.Join(stateDir, "allowlist-overrides.json"))
@@ -578,11 +565,8 @@ func wireEgressOverrides(cfg config.Config, correlator *correlate.Correlator, ad
 	return allowlistStore, muteStore
 }
 
-// buildAdvisorHooks wires the advisor-facing API closures. Every one
-// resolves the subscriber through the holder per call — config hot-reload
-// swaps the stack, and a stale capture would call into a nil subscriber.
-// Enqueue paths are idempotent advisor-side (cooldown), so hammering the
-// endpoints is safe.
+// buildAdvisorHooks wires the advisor-facing API closures; each resolves
+// the subscriber per call (hot-reload swaps the stack).
 func buildAdvisorHooks(st *store.Store, advisorStk *advisorStackHolder) (*api.RetriageFuncs, *api.HostAssessFuncs, func(model.GuardAssessmentRequest)) {
 	// Re-triage: look up the stored flag, enqueue through the CURRENT stack.
 	retriage := &api.RetriageFuncs{
@@ -621,8 +605,7 @@ func buildAdvisorHooks(st *store.Store, advisorStk *advisorStackHolder) (*api.Re
 	return retriage, hostAssess, guardAdvisor
 }
 
-// buildResourcePolicyUpdater returns the config-write callback for resource
-// policy edits, or nil when the daemon runs without a config file (tests).
+// buildResourcePolicyUpdater: nil without a config file (tests).
 func buildResourcePolicyUpdater(configPath string, resourceControl *resource.Controller) func(config.ResourceControlConfig) error {
 	if configPath == "" {
 		return nil
@@ -636,11 +619,8 @@ func buildResourcePolicyUpdater(configPath string, resourceControl *resource.Con
 	}
 }
 
-// makeResourceExecutor builds the resource controller's intervention
-// executor. Every process action revalidates the target against a baseline
-// snapshot taken when the action fired — a pid that left the session or was
-// recycled (start time changed) is refused, so a stale decision can never
-// hit an innocent process. Outcomes are audited.
+// makeResourceExecutor revalidates every target against a baseline snapshot:
+// a pid that left the session or was recycled is refused. Audited.
 func makeResourceExecutor(apiServer *api.API, tagger *agents.Tagger, st *store.Store) func(resource.ControlAction) error {
 	return func(action resource.ControlAction) error {
 		var affected int
@@ -714,17 +694,10 @@ func makeResourceExecutor(apiServer *api.API, tagger *agents.Tagger, st *store.S
 	}
 }
 
-// startCollectors launches the supervised collectors. File-activity
-// telemetry picks the first available source, in order of preference:
-//  1. Spool tail: the privileged ES collector (root LaunchDaemon) writes
-//     eslogger output to /var/db/secure-agent/es-spool.jsonl; we tail it.
-//     This is the sanctioned architecture — macOS permits ES clients only
-//     as root, and this daemon deliberately runs unprivileged.
-//  2. Direct eslogger child: only works when this daemon runs as root
-//     (dev / explicit-sudo runs); on a user daemon it fails NOT_PRIVILEGED
-//     permanently on the first try.
-//  3. Neither: file telemetry is degraded, not crash-looped. The transcript
-//     scanner still covers the hook activity log.
+// startCollectors launches the supervised collectors. File telemetry:
+//  1. Spool tail from the root ES LaunchDaemon (sanctioned path).
+//  2. Direct eslogger child (root dev runs only).
+//  3. Neither: degraded, not crash-looped; the transcript scanner remains.
 func startCollectors(ctx context.Context, sup *supervise.Supervisor, supReg *supervise.Registry, cfg config.Config, b *bus.Bus, tagger *agents.Tagger, resolver *session.Resolver, advisorStk *advisorStackHolder, proxyServer *proxy.ProxyServer) {
 	if proxyServer != nil {
 		go sup.Run(ctx, "proxyserver", func(c context.Context) error {

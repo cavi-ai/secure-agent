@@ -131,8 +131,7 @@ public final class DaemonClient: Sendable {
         try await getDecodable("/incidents?limit=\(limit)")
     }
 
-    /// The one operator headline. Attention state, badge counts, and the
-    /// session-grouped queue all derive from this — never re-derived locally.
+    /// /posture headline; attention derives from it, never locally.
     public func fetchPosture() async throws -> PostureModel {
         try await getDecodable("/posture")
     }

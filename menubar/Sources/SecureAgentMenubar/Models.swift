@@ -449,9 +449,7 @@ public struct ESServiceModel: Codable, Sendable {
     }
 }
 
-/// The daemon's operator headline from /posture. The menubar renders this
-/// verbatim — attention state is derived once, daemon-side, and never
-/// recomputed from flags/incidents locally.
+/// /posture headline; attention state is derived daemon-side only.
 public struct PostureModel: Codable, Sendable {
     public let state: String // all-clear | attention | critical
     public let needsYou: Int
@@ -571,9 +569,7 @@ public struct AdvisorVerdictModel: Codable, Sendable {
     }
 }
 
-/// One piece of flag evidence. Newer daemons serve structured items
-/// (kind/label/sub/ts); rows written by older daemons arrive as bare strings
-/// and decode as kind "text" — displayText covers both.
+/// One piece of flag evidence; older daemons send bare strings (kind "text").
 public struct EvidenceItemModel: Codable, Sendable {
     public let kind: String // read | connect | keychain | exec | tcc | violation | text
     public let label: String
@@ -581,8 +577,7 @@ public struct EvidenceItemModel: Codable, Sendable {
     public let ts: String?
     public let text: String?
 
-    /// The legacy display string — what text consumers (notifications,
-    /// anchors) read.
+    /// The legacy display string.
     public var displayText: String {
         if let text, !text.isEmpty { return text }
         if let sub, !sub.isEmpty { return "\(label) (\(sub))" }
@@ -597,7 +592,7 @@ public struct EvidenceItemModel: Codable, Sendable {
         self.text = text
     }
 
-    /// Convenience for tests: a legacy text line.
+    /// Test helper: a legacy text line.
     public static func legacy(_ s: String) -> EvidenceItemModel {
         EvidenceItemModel(kind: "text", label: s, text: s)
     }
@@ -635,9 +630,7 @@ public struct FlagModel: Codable, Identifiable, Sendable {
     public let workspace: String?
     /// Local advisor triage verdict when one exists. Advisory only.
     public let advisor: AdvisorVerdictModel?
-    /// Operator-facing rule title served by the daemon — the one source of
-    /// truth. Nil on rows from older daemons; title(for:) falls back to the
-    /// legacy table then.
+    /// Daemon-served rule title; nil on older daemons (title(for:) falls back).
     public let title: String?
     /// True when the operator applied a disposition on this flag — it stops
     /// counting as critical and renders dimmed instead of endlessly red.

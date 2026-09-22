@@ -31,7 +31,7 @@ var (
 // Empty when nothing extractable — aggregation then keys on rule+session
 // alone, which is still one incident per rule per session.
 func SubjectForFlag(flag model.Flag) string {
-	// Structured evidence (kind set by the correlator) needs no string work.
+	// Structured items need no string work.
 	for _, ev := range flag.Evidence {
 		if ev.Kind == "connect" && ev.Label != "" {
 			return ev.Label
@@ -42,7 +42,7 @@ func SubjectForFlag(flag model.Flag) string {
 			return ev.Label
 		}
 	}
-	// Legacy rows decode as kind "text" — parse the display string.
+	// Legacy rows decode as kind "text".
 	for _, ev := range flag.Evidence {
 		if ev.Kind != "text" {
 			continue
@@ -131,9 +131,8 @@ func (a *Analyzer) Analyze(flag model.Flag, events []event.Event) model.Incident
 		}
 	}
 
-	// Extract target files & connections from the flag's evidence. Structured
-	// items (kind set by the correlator) carry Label directly; legacy rows
-	// decode as kind "text" and keep the string parsing.
+	// Extract files & connections from evidence; kind "text" keeps the legacy
+	// string parsing.
 	for _, item := range flag.Evidence {
 		addFile := func(p string) {
 			p = strings.TrimSpace(p)
