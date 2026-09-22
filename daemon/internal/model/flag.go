@@ -5,10 +5,8 @@ import (
 	"time"
 )
 
-// EvidenceItem is one structured piece of flag evidence. Producers
-// (correlate) set Kind/Label/Sub/TS at detection time so no client ever
-// parses a display string. Text carries legacy rows written before evidence
-// was structured; Kind "text" marks those.
+// EvidenceItem: structured flag evidence. Text carries legacy pre-structure
+// rows; Kind "text" marks those.
 type EvidenceItem struct {
 	Kind  string `json:"kind"` // read | connect | keychain | exec | tcc | violation | text
 	Label string `json:"label"`
@@ -17,8 +15,7 @@ type EvidenceItem struct {
 	Text  string `json:"text,omitempty"`
 }
 
-// UnmarshalJSON accepts both the legacy form (a bare string) and the
-// structured form, so rows written by older daemons still decode.
+// UnmarshalJSON accepts the legacy bare-string form too.
 func (e *EvidenceItem) UnmarshalJSON(data []byte) error {
 	var s string
 	if err := json.Unmarshal(data, &s); err == nil {
@@ -31,8 +28,7 @@ func (e *EvidenceItem) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, (*alias)(e))
 }
 
-// String renders the item as the legacy display string — the form intel and
-// advisor prompts consume.
+// String renders the legacy display string.
 func (e EvidenceItem) String() string {
 	if e.Text != "" {
 		return e.Text
@@ -43,8 +39,7 @@ func (e EvidenceItem) String() string {
 	return e.Label
 }
 
-// EvidenceStrings renders the evidence list as legacy display strings for
-// text consumers (intel analyzer, advisor prompts, incident markdown).
+// EvidenceStrings renders the list as display strings.
 func (f Flag) EvidenceStrings() []string {
 	out := make([]string, 0, len(f.Evidence))
 	for _, ev := range f.Evidence {
@@ -53,8 +48,7 @@ func (f Flag) EvidenceStrings() []string {
 	return out
 }
 
-// EvidenceFromStrings builds text-kind evidence items — for tests and
-// legacy-string call sites.
+// EvidenceFromStrings builds text-kind items (tests, legacy call sites).
 func EvidenceFromStrings(strs ...string) []EvidenceItem {
 	out := make([]EvidenceItem, 0, len(strs))
 	for _, s := range strs {

@@ -158,8 +158,7 @@ public final class NotificationManager: NSObject, @unchecked Sendable {
         }
     }
 
-    /// A human, product-voice title per rule. The daemon serves `title` on
-    /// the flag — use it; the switch is only the fallback for older daemons.
+    /// Daemon-served flag.title first; the switch is the older-daemon fallback.
     static func title(for flag: FlagModel) -> String {
         if let served = flag.title, !served.isEmpty { return served }
         switch flag.rule {

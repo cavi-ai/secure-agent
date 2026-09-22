@@ -173,7 +173,7 @@ make test       # full Go + Swift + Python + E2E suites
 make install    # build "Secure Agent.app" and launch it (no LaunchAgents)
 ```
 
-> **Note**: To enable full Endpoint Security telemetry via `eslogger`, grant Full Disk Access to the daemon binary under **System Settings → Privacy & Security → Full Disk Access**.
+> **Note**: To enable full Endpoint Security telemetry via `eslogger`, grant Full Disk Access to the helper binary `com.cavi-ai.secure-agent-esd` under **System Settings → Privacy & Security → Full Disk Access**. It appears in the list after the first denied attempt; the Settings card in the app deep-links to the pane.
 
 ### Plugin Hook Installation
 

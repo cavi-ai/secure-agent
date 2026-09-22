@@ -185,8 +185,7 @@ struct FlagActionSheet: View {
         }
     }
 
-    /// The per-row time rail: structured items carry ts directly; legacy
-    /// text lines end in "at <RFC3339>".
+    /// Per-row time rail: item.ts, else the legacy "at <RFC3339>" suffix.
     nonisolated static func timestampIn(_ item: EvidenceItemModel) -> String {
         if let ts = item.ts, !ts.isEmpty { return ts }
         let line = item.displayText
@@ -198,12 +197,10 @@ struct FlagActionSheet: View {
 
     /// The primary host in the evidence (disposition target), nil if none.
     nonisolated static func hostIn(evidence: [EvidenceItemModel]) -> String? {
-        // Structured items carry the destination directly.
         for item in evidence where item.kind == "connect" {
             let h = hostFromHostPort(item.label)
             if !h.isEmpty { return h }
         }
-        // Legacy text lines keep the string parse.
         for item in evidence where item.kind == "text" {
             let line = item.displayText
             guard let to = line.range(of: "connected to "),
