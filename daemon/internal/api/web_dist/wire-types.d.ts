@@ -173,6 +173,7 @@ export interface ESServiceSnapshot {
   state: string;
   spool_size: number;
   spool_mtime: string;
+  helper_mtime: string;
 }
 
 export interface Status {

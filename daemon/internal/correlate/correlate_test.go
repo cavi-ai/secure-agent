@@ -8,6 +8,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/agents"
 	"github.com/cavi-ai/secure-agent/daemon/internal/config"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
+	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/sensitive"
 )
 
@@ -90,6 +91,40 @@ func TestKeychainAccessFlagsImmediately(t *testing.T) {
 	}
 	if f[0].Severity != 1 {
 		t.Fatalf("severity = %d, want 1 (informational — routine keychain-db opens are not an alarm)", f[0].Severity)
+	}
+}
+
+// A process the tagger does not know still trips keychain-access when it
+// opens the login keychain from outside the system prefixes; the flag names
+// the executable and repeats collapse like the tagged path.
+func TestUntaggedKeychainAccessFlags(t *testing.T) {
+	c := newTestCorrelator(t)
+	base := time.Unix(1_700_000_000, 0)
+	ev := event.Event{Kind: event.KindFileOpen, PID: 999, TS: base,
+		ExePath: "/Volumes/x/.openclaw/node-v24/bin/node",
+		Path:    "/Users/x/Library/Keychains/login.keychain-db"}
+
+	var flags []model.Flag
+	flags = append(flags, c.Observe(ev)...)
+	ev.TS = base.Add(time.Minute)
+	flags = append(flags, c.Observe(ev)...)
+	if len(flags) != 1 || flags[0].Rule != "keychain-access" {
+		t.Fatalf("expected exactly 1 keychain-access flag, got %+v", flags)
+	}
+	if flags[0].Agent != "untagged:node" || flags[0].Severity != 1 {
+		t.Fatalf("flag agent/severity = %q/%d, want untagged:node/1", flags[0].Agent, flags[0].Severity)
+	}
+}
+
+func TestUntaggedSystemExeKeychainAccessDoesNotFlag(t *testing.T) {
+	c := newTestCorrelator(t)
+	base := time.Unix(1_700_000_000, 0)
+
+	f := c.Observe(event.Event{Kind: event.KindFileOpen, PID: 999, TS: base,
+		ExePath: "/System/Library/Frameworks/Security.framework/Versions/A/XPCServices/authd.xpc/Contents/MacOS/authd",
+		Path:    "/Users/x/Library/Keychains/login.keychain-db"})
+	if len(f) != 0 {
+		t.Fatalf("system executable must not flag, got %+v", f)
 	}
 }
 

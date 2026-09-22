@@ -443,8 +443,8 @@ func buildStatusFn(proxyServer *proxy.ProxyServer, tagger *agents.Tagger, cr *co
 		// tailer cannot see. Best-effort; nil when not spool-based.
 		var esSvc *collect.ESServiceSnapshot
 		if spoolBased {
-			if state, size, mtime, err := collect.ESServiceProbe(); err == nil {
-				esSvc = &collect.ESServiceSnapshot{State: state, SpoolSize: size, SpoolMtime: mtime}
+			if snap, err := collect.ESServiceProbe(); err == nil {
+				esSvc = &snap
 			}
 		}
 		return api.Status{

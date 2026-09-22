@@ -23,6 +23,9 @@ const ESPoolPath = "/var/db/secure-agent/es-spool.jsonl"
 // nothing about the writer.
 const ESServiceLabel = "com.cavi-ai.secure-agent-esd"
 
+// ESHelperPath is the installed privileged collector binary the root service runs.
+const ESHelperPath = "/Library/PrivilegedHelperTools/" + ESServiceLabel
+
 // SpoolAvailable reports whether the privileged ES collector's spool exists
 // and is readable by this (unprivileged) daemon — the signal that file
 // telemetry should come from the spool tail instead of a direct eslogger
@@ -37,12 +40,14 @@ func SpoolAvailable() bool {
 }
 
 // ESServiceSnapshot is one probe of the privileged collector's real state:
-// the launchd service state string plus the spool's size and mtime. The
-// probe is injectable (ESServiceProbe) so tests never shell out.
+// the launchd service state string, the spool's size and mtime, and the
+// helper binary's mtime (zero when absent). The probe is injectable
+// (ESServiceProbe) so tests never shell out.
 type ESServiceSnapshot struct {
-	State      string    `json:"state"`
-	SpoolSize  int64     `json:"spool_size"`
-	SpoolMtime time.Time `json:"spool_mtime"`
+	State       string    `json:"state"`
+	SpoolSize   int64     `json:"spool_size"`
+	SpoolMtime  time.Time `json:"spool_mtime"`
+	HelperMtime time.Time `json:"helper_mtime"`
 }
 
 // SpoolState renders the spool facts for humans ("3.2 MB, updated 12 min ago").
@@ -58,22 +63,26 @@ func (s ESServiceSnapshot) SpoolState() string {
 var ESServiceProbe = ESServiceState
 
 // ESServiceState probes the privileged collector's real health the only way
-// an unprivileged daemon can: stat the spool (size + mtime) and read the
-// launchd service state via launchctl print. Spawning/exit != 0 with a
-// stale spool is the crash-loop signature (rapid respawns while the tailer
-// reports running).
-func ESServiceState() (string, int64, time.Time, error) {
-	var size int64
-	var mtime time.Time
+// an unprivileged daemon can: stat the spool (size + mtime) and the helper
+// binary (mtime), and read the launchd service state via launchctl print.
+// Spawning/exit != 0 with a stale spool is the crash-loop signature (rapid
+// respawns while the tailer reports running).
+func ESServiceState() (ESServiceSnapshot, error) {
+	var s ESServiceSnapshot
 	if st, serr := os.Stat(ESPoolPath); serr == nil {
-		size, mtime = st.Size(), st.ModTime()
+		s.SpoolSize, s.SpoolMtime = st.Size(), st.ModTime()
+	}
+	if st, serr := os.Stat(ESHelperPath); serr == nil {
+		s.HelperMtime = st.ModTime()
 	}
 	out, cerr := exec.Command("/bin/launchctl", "print", "system/"+ESServiceLabel).Output()
 	if cerr != nil {
-		// Not loaded / not running as root: report the spool facts anyway.
-		return "not-loaded", size, mtime, nil
+		// Not loaded / not running as root: report the file facts anyway.
+		s.State = "not-loaded"
+		return s, nil
 	}
-	return parseLaunchctlState(string(out)), size, mtime, nil
+	s.State = parseLaunchctlState(string(out))
+	return s, nil
 }
 
 // parseLaunchctlState extracts the service state from `launchctl print`
