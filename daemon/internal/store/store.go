@@ -310,6 +310,19 @@ func Open(dbPath, jsonlPath string) (*Store, error) {
 			log.Printf("store: replaced partial idx_events_call with a full unique index")
 		}
 	}
+	// Dedupe turns and model calls on (session, ts): a transcript re-read
+	// replays the same record with the same timestamp, and without a
+	// constraint each replay double-counts the turn/call. Delete existing
+	// duplicates first or the unique index fails to build.
+	if _, err := db.Exec(`DELETE FROM events WHERE kind IN (13, 14) AND id NOT IN (
+		SELECT MIN(id) FROM events WHERE kind IN (13, 14) GROUP BY kind, session_id, ts)`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to dedupe turn/model-call events: %w", err)
+	}
+	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_events_turn_dedupe ON events(kind, session_id, ts) WHERE kind IN (13, 14) AND session_id != '';`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to create turn dedupe index: %w", err)
+	}
 	// Flags gain an acknowledged marker: when the operator acts on a flag
 	// (applies any disposition), the flag stops counting as critical and
 	// dims in the UI — "acted upon" is a first-class state, not an endless
@@ -479,8 +492,9 @@ func (s *Store) PutEvent(e event.Event) {
 	// Non-tool events (call_id NULL) never match the partial unique index and
 	// always insert.
 	var err error
+	var res sql.Result
 	if e.CallID != "" {
-		_, err = s.db.Exec(
+		res, err = s.db.Exec(
 			`INSERT INTO events (kind, ts, pid, exe_path, session_id, path, remote_host, remote_port, detail, tool, tool_status, duration_ms, model, tokens_in, tokens_out, cost_usd, call_id)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			 ON CONFLICT(session_id, call_id) DO UPDATE SET
@@ -493,8 +507,16 @@ func (s *Store) PutEvent(e event.Event) {
 			nullStr(e.ToolName), nullStr(e.ToolStatus), nullInt(e.DurationMs), nullStr(e.Model), nullInt(e.TokensIn), nullInt(e.TokensOut), nullFloat(e.CostUSD), e.CallID,
 		)
 	} else {
-		_, err = s.db.Exec(
-			`INSERT INTO events (kind, ts, pid, exe_path, session_id, path, remote_host, remote_port, detail, tool, tool_status, duration_ms, model, tokens_in, tokens_out, cost_usd)
+		// Turns and model calls dedupe on (kind, session_id, ts) — a
+		// transcript re-read replays the same record and must not
+		// double-count. INSERT OR IGNORE relies on the partial unique index
+		// created at open; other kinds always insert.
+		verb := "INSERT"
+		if e.Kind == event.KindTurn || e.Kind == event.KindModelCall {
+			verb = "INSERT OR IGNORE"
+		}
+		res, err = s.db.Exec(
+			verb+` INTO events (kind, ts, pid, exe_path, session_id, path, remote_host, remote_port, detail, tool, tool_status, duration_ms, model, tokens_in, tokens_out, cost_usd)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			int(e.Kind), tsStr, e.PID, e.ExePath, e.SessionID, e.Path, e.RemoteHost, e.RemotePort, e.Detail,
 			nullStr(e.ToolName), nullStr(e.ToolStatus), nullInt(e.DurationMs), nullStr(e.Model), nullInt(e.TokensIn), nullInt(e.TokensOut), nullFloat(e.CostUSD),
@@ -502,7 +524,7 @@ func (s *Store) PutEvent(e event.Event) {
 	}
 	if err != nil {
 		log.Printf("store: failed to insert event: %v", err)
-	} else {
+	} else if n, _ := res.RowsAffected(); n > 0 {
 		s.bumpRollupLocked("event:"+e.Kind.String(), e.TS)
 	}
 

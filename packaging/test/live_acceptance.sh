@@ -72,10 +72,17 @@ if [ "$grace" = 1 ]; then
     # repair pass re-resolves older rows, but rows started before this boot
     # still reflect whatever their original resolver saw at ingest time.
     scope="datetime(started_at) > datetime('now', '-' || $uptime_s || ' seconds')"
+    boot_sessions="$(q "select count(*) from sessions where $scope and harness != '';")"
     ws_sessions="$(q "select count(*) from sessions where $scope and harness != '' and workspace like '/Volumes/Work/workspace/%';")"
     with_repo="$(q "select count(*) from sessions where $scope and harness != '' and workspace like '/Volumes/Work/workspace/%' and repo != '';")"
     if [ "${ws_sessions:-0}" -eq 0 ]; then
-      ok "session repo coverage (no workspace-backed sessions since boot)"
+      # Vacuous pass hid a real gap: at 34min uptime with sessions resolved,
+      # "no workspace-backed sessions" means attribution dropped them.
+      if [ "${boot_sessions:-0}" -gt 0 ]; then
+        bad "session repo coverage" "0 of $boot_sessions sessions since boot carry a workspace — attribution drop?"
+      else
+        ok "session repo coverage (no sessions since boot)"
+      fi
     else
       repo_share=$((100 * with_repo / ws_sessions))
       if [ "$repo_share" -ge 50 ]; then
@@ -192,17 +199,32 @@ else
   fi
 fi
 
-# ---- 6. Guard hook ACTIVITY, not registration ----
-# Registration in settings.json proves nothing: a registered hook can still
-# stay silent for days. With agents active past the boot grace, the guard
-# must have produced plugin actions.
-hook_events="$(q "select count(*) from events where kind = 8 and datetime(ts) > datetime('now', '-1 hour');")"
-if [ "$active_agents" -eq 0 ] || [ "$grace" = 0 ]; then
-  ok "guard hook activity (no agents active / boot grace — not asserted)"
-elif [ "${hook_events:-0}" -gt 0 ]; then
-  ok "guard hook activity ($hook_events hook events in the last hour)"
+# ---- 6. Guard hook: registration AND activity ----
+# Registration in settings.json alone proves nothing (a registered hook can
+# stay silent for days); activity alone proves nothing about tomorrow (an
+# unregistered hook stops firing on the next restart). Assert both.
+SETTINGS="$HOME/.claude/settings.json"
+registered=0
+if [ -f "$SETTINGS" ] && python3 -c "
+import json, sys
+d = json.load(open('$SETTINGS'))
+hooks = d.get('hooks', {})
+for phase in ('PreToolUse', 'PostToolUse'):
+    for entry in hooks.get(phase, []):
+        for h in entry.get('hooks', []):
+            if 'secret_guard.py' in str(h.get('command', '')):
+                sys.exit(0)
+sys.exit(1)
+" 2>/dev/null; then
+  registered=1
+fi
+hook_events_24h="$(q "select count(*) from events where kind = 8 and datetime(ts) > datetime('now', '-24 hours');")"
+if [ "$registered" = 1 ] && [ "${hook_events_24h:-0}" -gt 0 ]; then
+  ok "guard hook registered and active ($hook_events_24h hook events in 24h)"
+elif [ "$registered" != 1 ]; then
+  bad "guard hook registration" "secret_guard.py not registered in ~/.claude/settings.json"
 else
-  bad "guard hook activity" "0 hook events in the last hour with $active_agents agents active — hook registered but silent?"
+  bad "guard hook activity" "registered but 0 hook events in 24h — hook is silent"
 fi
 
 # ---- 7. Snapshot size: /resources must stay small ----

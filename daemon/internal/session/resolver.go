@@ -379,26 +379,29 @@ func (r *Resolver) NoteTranscriptSession(id, harness, workspace string, ts time.
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	// Join: if a process-tree session covers this harness+workspace and is
-	// still provisional, rekey it to the harness id so its events follow.
+	// Join: rekey only a process-tree session — the harness's own transcript
+	// id is authoritative over a provisional one. A second transcript id in
+	// the same workspace is a sibling conversation, not a rename.
 	if workspace != "" && harness != "" {
 		if old, ok := r.findProvisionalLocked(harness, workspace); ok && old != id {
-			r.st.RekeySession(old, id)
-			// A transcript sighting names the conversation: promote any
-			// deferred (below-the-floor) session under its new id.
-			if sess, ok := r.deferred[old]; ok {
-				delete(r.deferred, old)
-				sess.ID = id
-				r.st.UpsertSession(sess)
-			}
-			for pid, sid := range r.byPID {
-				if sid == old {
-					r.byPID[pid] = id
+			if r.confidenceLocked(old) == model.ConfProcessTree {
+				r.st.RekeySession(old, id)
+				// A transcript sighting names the conversation: promote any
+				// deferred (below-the-floor) session under its new id.
+				if sess, ok := r.deferred[old]; ok {
+					delete(r.deferred, old)
+					sess.ID = id
+					r.st.UpsertSession(sess)
 				}
-			}
-			for root, sid := range r.byRoot {
-				if sid == old {
-					r.byRoot[root] = id
+				for pid, sid := range r.byPID {
+					if sid == old {
+						r.byPID[pid] = id
+					}
+				}
+				for root, sid := range r.byRoot {
+					if sid == old {
+						r.byRoot[root] = id
+					}
 				}
 			}
 		}
@@ -425,6 +428,18 @@ func (r *Resolver) NoteTranscriptSession(id, harness, workspace string, ts time.
 func (r *Resolver) findProvisionalLocked(harness, workspace string) (string, bool) {
 	id, ok := r.byScope[scopeKey(harness, workspace)]
 	return id, ok
+}
+
+// confidenceLocked reports the confidence tier of a session id: deferred
+// (in-memory) sessions first, then the store. Caller holds mu.
+func (r *Resolver) confidenceLocked(id string) string {
+	if sess, ok := r.deferred[id]; ok {
+		return sess.Confidence
+	}
+	if sess, ok := r.st.GetSession(id); ok {
+		return sess.Confidence
+	}
+	return ""
 }
 
 // ensureHookSession creates a minimal record for a hook-stamped id seen

@@ -254,3 +254,62 @@ func TestParseHandshake(t *testing.T) {
 		t.Fatal("handshake without session_id must not parse")
 	}
 }
+
+// Lines appended while the daemon is down must not be lost: with a persisted
+// offset file the restarted scanner resumes where the last run stopped
+// instead of re-seeding the transcript at EOF.
+func TestOffsetsSurviveRestart(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "session.jsonl")
+	statePath := filepath.Join(dir, "offsets.json")
+
+	if err := os.WriteFile(logPath, []byte("seed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	b1 := bus.New(16)
+	sub1 := b1.Subscribe()
+	ts1 := NewTranscriptScanner(b1, []string{logPath})
+	ts1.OffsetStatePath = statePath
+	ctx1, cancel1 := context.WithCancel(context.Background())
+	go ts1.Run(ctx1)
+	time.Sleep(250 * time.Millisecond)
+
+	// Appended while "up": read and offset advanced.
+	f, _ := os.OpenFile(logPath, os.O_APPEND|os.O_WRONLY, 0o644)
+	f.WriteString(`{"tool":"Read","file_path":"/a"}` + "\n")
+	f.Close()
+	select {
+	case <-sub1:
+	case <-time.After(3 * time.Second):
+		t.Fatal("first scanner did not publish the appended line")
+	}
+	// The dirty-save fires on the next tail tick after the offset advances.
+	time.Sleep(500 * time.Millisecond)
+	cancel1()
+
+	// Appended while "down": the line a fresh-start seed would skip.
+	f, _ = os.OpenFile(logPath, os.O_APPEND|os.O_WRONLY, 0o644)
+	f.WriteString(`{"tool":"Bash","command":"ls"}` + "\n")
+	f.Close()
+
+	b2 := bus.New(16)
+	sub2 := b2.Subscribe()
+	ts2 := NewTranscriptScanner(b2, []string{logPath})
+	ts2.OffsetStatePath = statePath
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	defer cancel2()
+	go ts2.Run(ctx2)
+
+	deadline := time.After(3 * time.Second)
+	for {
+		select {
+		case e := <-sub2:
+			if e.Kind == event.KindPluginAction && e.Detail == "Bash" {
+				return // the down-window line was picked up
+			}
+		case <-deadline:
+			t.Fatal("line appended while the daemon was down was lost across restart")
+		}
+	}
+}

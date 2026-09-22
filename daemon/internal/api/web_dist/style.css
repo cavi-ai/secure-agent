@@ -290,6 +290,7 @@ body {
   display: flex; align-items: center; gap: 8px; font-weight: 650; min-width: 0;
 }
 .agent-group-title .icon { color: var(--brand-2); font-size: 1.05rem; }
+.agent-group-title .harness-glyph { width: 22px; height: 22px; font-size: 14px; border-radius: 6px; }
 .agent-group-meta {
   display: flex; align-items: center; flex-wrap: wrap; gap: 8px; justify-content: flex-end;
 }

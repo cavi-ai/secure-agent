@@ -609,3 +609,41 @@ func TestPruneExemptsTraceKindsFromCountCap(t *testing.T) {
 		t.Fatalf("OS rows after prune = %d, want evicted down to the cap", n)
 	}
 }
+
+// A transcript re-read replays the same turn/model-call record with the same
+// timestamp; the second insert must be ignored, not double-counted.
+func TestTurnAndModelCallDedupeOnSessionTS(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(filepath.Join(dir, "e.db"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	ts := time.Date(2026, 9, 22, 12, 0, 0, 0, time.UTC)
+	turn := event.Event{Kind: event.KindTurn, TS: ts, SessionID: "s1"}
+	s.PutEvent(turn)
+	s.PutEvent(turn)
+	mc := event.Event{Kind: event.KindModelCall, TS: ts, SessionID: "s1", Model: "claude-x"}
+	s.PutEvent(mc)
+	s.PutEvent(mc)
+
+	turns := 0
+	s.db.QueryRow(`SELECT COUNT(*) FROM events WHERE kind = 13 AND session_id = 's1'`).Scan(&turns)
+	if turns != 1 {
+		t.Fatalf("turns = %d, want 1 (replay ignored)", turns)
+	}
+	calls := 0
+	s.db.QueryRow(`SELECT COUNT(*) FROM events WHERE kind = 14 AND session_id = 's1'`).Scan(&calls)
+	if calls != 1 {
+		t.Fatalf("model calls = %d, want 1 (replay ignored)", calls)
+	}
+	// Other kinds still insert duplicates (no dedupe).
+	s.PutEvent(event.Event{Kind: event.KindFileOpen, TS: ts, PID: 1})
+	s.PutEvent(event.Event{Kind: event.KindFileOpen, TS: ts, PID: 1})
+	opens := 0
+	s.db.QueryRow(`SELECT COUNT(*) FROM events WHERE kind = 0`).Scan(&opens)
+	if opens != 2 {
+		t.Fatalf("file opens = %d, want 2 (no dedupe for other kinds)", opens)
+	}
+}
