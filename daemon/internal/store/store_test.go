@@ -477,13 +477,13 @@ func TestAcknowledgeRuleHost(t *testing.T) {
 
 	// Two flags of the same rule, different hosts; one acknowledged already.
 	s.PutFlag(model.Flag{ID: "f1", Rule: "sensitive-read-then-connect", Severity: 3, PID: 7, Agent: "cursor",
-		Evidence: []string{"cursor (pid 7) read /a at 2026-09-11T12:00:00Z", "then connected to localhost:62381 at 2026-09-11T12:00:01Z"}})
+		Evidence: model.EvidenceFromStrings("cursor (pid 7) read /a at 2026-09-11T12:00:00Z", "then connected to localhost:62381 at 2026-09-11T12:00:01Z")})
 	s.PutFlag(model.Flag{ID: "f2", Rule: "sensitive-read-then-connect", Severity: 3, PID: 7, Agent: "cursor",
-		Evidence: []string{"then connected to api.example.com:443 at 2026-09-11T12:00:02Z"}})
+		Evidence: model.EvidenceFromStrings("then connected to api.example.com:443 at 2026-09-11T12:00:02Z")})
 	s.PutFlag(model.Flag{ID: "f3", Rule: "sensitive-read-then-connect", Severity: 3, PID: 7, Agent: "cursor",
-		Evidence: []string{"then connected to 127.0.0.1:9999 at 2026-09-11T12:00:03Z"}})
+		Evidence: model.EvidenceFromStrings("then connected to 127.0.0.1:9999 at 2026-09-11T12:00:03Z")})
 	s.PutFlag(model.Flag{ID: "f4", Rule: "proxy-secret-leak", Severity: 3, PID: 7, Agent: "cursor",
-		Evidence: []string{"then connected to localhost:1234 at 2026-09-11T12:00:04Z"}})
+		Evidence: model.EvidenceFromStrings("then connected to localhost:1234 at 2026-09-11T12:00:04Z")})
 
 	n := s.AcknowledgeRuleHost("sensitive-read-then-connect", "localhost")
 	// f1 (localhost) + f3 (127.0.0.1 — localhost alias) ack'd; f2 (other host) + f4 (other rule) untouched.
@@ -519,11 +519,11 @@ func TestAcknowledgeRuleHostWildcard(t *testing.T) {
 	defer s.Close()
 
 	s.PutFlag(model.Flag{ID: "k1", Rule: "keychain-access", Severity: 1, PID: 7, Agent: "codex",
-		Evidence: []string{"codex (pid 7) accessed keychain file /Users/x/Library/Keychains/login.keychain-db at 2026-09-15T10:00:00Z"}})
+		Evidence: model.EvidenceFromStrings("codex (pid 7) accessed keychain file /Users/x/Library/Keychains/login.keychain-db at 2026-09-15T10:00:00Z")})
 	s.PutFlag(model.Flag{ID: "k2", Rule: "keychain-access", Severity: 1, PID: 9, Agent: "cursor",
-		Evidence: []string{"cursor (pid 9) accessed keychain file /Users/x/Library/Keychains/login.keychain-db at 2026-09-15T10:01:00Z"}})
+		Evidence: model.EvidenceFromStrings("cursor (pid 9) accessed keychain file /Users/x/Library/Keychains/login.keychain-db at 2026-09-15T10:01:00Z")})
 	s.PutFlag(model.Flag{ID: "o1", Rule: "proxy-secret-leak", Severity: 3, PID: 7, Agent: "codex",
-		Evidence: []string{"anthropic-key in request body to api.example.com"}})
+		Evidence: model.EvidenceFromStrings("anthropic-key in request body to api.example.com")})
 
 	if n := s.AcknowledgeRuleHost("keychain-access", "*"); n != 2 {
 		t.Fatalf("wildcard ack = %d, want 2", n)

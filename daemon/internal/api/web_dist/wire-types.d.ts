@@ -37,6 +37,14 @@ export interface Session {
   confidence: string;
 }
 
+export interface EvidenceItem {
+  kind: string;
+  label: string;
+  sub?: string;
+  ts?: string;
+  text?: string;
+}
+
 export interface AdvisorVerdict {
   assessment?: string;
   confidence?: number;
@@ -55,7 +63,8 @@ export interface Flag {
   agent: string;
   session_id?: string;
   workspace?: string;
-  evidence: string[];
+  evidence: EvidenceItem[];
+  title?: string;
   advisor?: AdvisorVerdict;
   acknowledged?: boolean;
 }
@@ -200,11 +209,41 @@ export interface PostureItem {
   ts?: string;
 }
 
+export interface AttentionItem {
+  kind: string;
+  priority: number;
+  id?: string;
+  action?: string;
+  title: string;
+  detail?: string;
+  rule?: string;
+  path?: string;
+  scopeText?: string;
+  status?: string;
+  count?: number;
+  hosts?: string[];
+  advisor?: AdvisorVerdict;
+}
+
+export interface AttentionGroup {
+  key: string;
+  label: string;
+  agent: string;
+  workspace?: string;
+  rootPid?: number;
+  pids?: number[];
+  rssBytes?: number;
+  cpuPercent?: number;
+  processCount?: number;
+  items: AttentionItem[];
+}
+
 export interface Posture {
   state: string;
   needs_you: number;
   summary: string;
   items: PostureItem[];
+  groups?: AttentionGroup[];
   generated: string;
   connected: boolean;
 }

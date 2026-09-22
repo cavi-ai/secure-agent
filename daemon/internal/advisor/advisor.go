@@ -514,11 +514,21 @@ const reasoningSafeMaxTokens = 2048
 
 func ptr[T any](v T) *T { return &v }
 
-// evidenceHost extracts the first "connected to <host>:port" host from a
-// flag's evidence, when present — the trend lookup key for novelty checks.
+// evidenceHost extracts the egress host from a flag's evidence — the trend
+// lookup key for novelty checks. Structured items carry it directly; legacy
+// text rows keep the regex.
 func evidenceHost(fl model.Flag) string {
-	for _, line := range fl.Evidence {
-		if m := evidenceHostRE.FindStringSubmatch(line); m != nil {
+	for _, item := range fl.Evidence {
+		if item.Kind == "connect" && item.Label != "" {
+			host, _, _ := strings.Cut(item.Label, ":")
+			return host
+		}
+	}
+	for _, item := range fl.Evidence {
+		if item.Kind != "text" {
+			continue
+		}
+		if m := evidenceHostRE.FindStringSubmatch(item.Text); m != nil {
 			return m[1]
 		}
 	}
@@ -566,7 +576,7 @@ func (s *Subscriber) assessGuard(ctx context.Context, req model.GuardAssessmentR
 
 func (s *Subscriber) triageFlag(ctx context.Context, fl model.Flag) (model.AdvisorVerdict, error) {
 	var ev strings.Builder
-	for _, line := range fl.Evidence {
+	for _, line := range fl.EvidenceStrings() {
 		ev.WriteString(line)
 		ev.WriteString("\n")
 	}

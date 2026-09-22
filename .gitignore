@@ -31,3 +31,6 @@ opencode.jsonc
 
 # local scratch dirs (not this product's data)
 /data/
+
+# macOS
+.DS_Store

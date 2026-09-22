@@ -79,6 +79,12 @@ public final class SetupManager: ObservableObject {
     /// Neutral guidance after an advisor toggle (the daemon reads config at
     /// start, so a change needs an app restart). Not an error.
     @Published public private(set) var advisorNote: String?
+    /// Root ES LaunchDaemon state as probed by the daemon ("running",
+    /// "not running (last exit 1)", "not-loaded"). Nil until the first
+    /// status fetch lands. Lets the ES card tell "waiting on the Settings
+    /// switch" apart from "service dead" — only the former should point at
+    /// System Settings.
+    @Published public private(set) var esServiceState: String?
     /// Loopback model servers + the curated managed list, from the daemon's
     /// /advisor/discover. Drives the Advisor settings dropdowns.
     @Published public private(set) var advisorDiscovery = AdvisorDiscovery(servers: [], managedModels: [])
@@ -123,8 +129,9 @@ public final class SetupManager: ObservableObject {
     // MARK: - State
 
     public func refreshState() async {
-        let statusReachable = (try? await DaemonClient().fetchStatus().running) ?? false
-        isDaemonRunning = DaemonSupervisor.shared.isRunning || statusReachable
+        let status = try? await DaemonClient().fetchStatus()
+        isDaemonRunning = DaemonSupervisor.shared.isRunning || (status?.running ?? false)
+        esServiceState = status?.esService?.state
         // ALL harnesses must carry the hook — `contains` used to announce
         // "Hooks installed" when only one of three targets had it, leaving the
         // other two unprotected while the wizard claimed otherwise. Claude Code
@@ -716,7 +723,7 @@ public final class SetupManager: ObservableObject {
             "mkdir -p /Library/PrivilegedHelperTools /var/db/secure-agent /Library/Logs/secure-agent '\(stateDir)'" +
             " && cp -f '\(src)' '\(helper)'" +
             " && chown root:wheel '\(helper)' && chmod 755 '\(helper)'" +
-            " && /usr/bin/shasum -a 256 '\(helper)' | awk '{print $1}' > '\(hashPath)'" +
+            " && /usr/bin/shasum -a 256 '\(helper)' | awk '{printf $1}' > '\(hashPath)'" +
             " && chown root:wheel '\(hashPath)' && chmod 644 '\(hashPath)'" +
             " && chown root:wheel '\(stateDir)' && chmod 755 '\(stateDir)'" +
             " && { launchctl bootout system '\(plistPath)' 2>/dev/null || true; }" +

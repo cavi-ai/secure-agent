@@ -59,7 +59,7 @@ public final class NotificationManager: NSObject, @unchecked Sendable {
 
     public func sendNotification(for flag: FlagModel) {
         guard isSupported else {
-            print("[secure-agent-menubar] Alert [\(flag.rule)]: \(flag.evidence.joined(separator: ", "))")
+            print("[secure-agent-menubar] Alert [\(flag.rule)]: \(flag.evidence.map(\.displayText).joined(separator: ", "))")
             return
         }
         let content = UNMutableNotificationContent()
@@ -158,8 +158,10 @@ public final class NotificationManager: NSObject, @unchecked Sendable {
         }
     }
 
-    /// A human, product-voice title per rule (falls back to the rule id).
+    /// A human, product-voice title per rule. The daemon serves `title` on
+    /// the flag — use it; the switch is only the fallback for older daemons.
     static func title(for flag: FlagModel) -> String {
+        if let served = flag.title, !served.isEmpty { return served }
         switch flag.rule {
         case "proxy-secret-leak": return "Secret leaving in agent traffic"
         case "sensitive-read-then-connect": return "Agent read a secret, then connected out"

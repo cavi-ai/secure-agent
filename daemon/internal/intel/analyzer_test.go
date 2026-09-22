@@ -19,7 +19,7 @@ func TestAnalyzer_Analyze(t *testing.T) {
 		PID:      1234,
 		Agent:    "cursor",
 		TS:       time.Now(),
-		Evidence: []string{"file:/Users/test/.env", "net:1.2.3.4:443"},
+		Evidence: model.EvidenceFromStrings("file:/Users/test/.env", "net:1.2.3.4:443"),
 	}
 
 	events := []event.Event{
@@ -138,7 +138,7 @@ func TestSubjectForFlag(t *testing.T) {
 		{"none", []string{"something happened"}, ""},
 	}
 	for _, c := range cases {
-		if got := SubjectForFlag(model.Flag{Evidence: c.evidence}); got != c.want {
+		if got := SubjectForFlag(model.Flag{Evidence: model.EvidenceFromStrings(c.evidence...)}); got != c.want {
 			t.Errorf("%s: subject = %q, want %q", c.name, got, c.want)
 		}
 	}

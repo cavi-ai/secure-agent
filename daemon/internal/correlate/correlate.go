@@ -320,9 +320,16 @@ func (c *Correlator) Observe(e event.Event) []model.Flag {
 				PID:       e.PID,
 				Agent:     agentName,
 				SessionID: e.SessionID,
-				Evidence: []string{
-					fmt.Sprintf("Local proxy detected security violation '%s' while connecting to %s:%d", e.Detail, e.RemoteHost, e.RemotePort),
-				},
+				Evidence: []model.EvidenceItem{{
+					Kind:  "violation",
+					Label: e.Detail,
+					Sub:   "payload inspection",
+					Text:  fmt.Sprintf("Local proxy detected security violation '%s' while connecting to %s:%d", e.Detail, e.RemoteHost, e.RemotePort),
+				}, {
+					Kind:  "connect",
+					Label: fmt.Sprintf("%s:%d", e.RemoteHost, e.RemotePort),
+					Sub:   "destination",
+				}},
 			},
 		}
 	}
@@ -368,9 +375,13 @@ func (c *Correlator) Observe(e event.Event) []model.Flag {
 					return nil
 				}
 				flagID := hashFlagID("keychain-access", e.PID, e.TS)
-				evidence := []string{
-					fmt.Sprintf("%s (pid %d) accessed keychain file %s at %s", info.Name, e.PID, e.Path, e.TS.Format(time.RFC3339)),
-				}
+				evidence := []model.EvidenceItem{{
+					Kind:  "keychain",
+					Label: e.Path,
+					Sub:   "keychain access",
+					TS:    e.TS.Format(time.RFC3339),
+					Text:  fmt.Sprintf("%s (pid %d) accessed keychain file %s at %s", info.Name, e.PID, e.Path, e.TS.Format(time.RFC3339)),
+				}}
 				flags = append(flags, model.Flag{
 					ID:        flagID,
 					Rule:      "keychain-access",
@@ -405,11 +416,21 @@ func (c *Correlator) Observe(e event.Event) []model.Flag {
 					c.markConnConsumedLocked(rootPID, e.PID)
 				} else if len(recentConns) > 0 {
 					flagID := hashFlagID("sensitive-read-then-connect", rootPID, recentConns[0].at)
-					evidence := []string{
-						fmt.Sprintf("%s (pid %d) read %s at %s", info.Name, e.PID, e.Path, e.TS.Format(time.RFC3339)),
-					}
+					evidence := []model.EvidenceItem{{
+						Kind:  "read",
+						Label: e.Path,
+						Sub:   "sensitive read",
+						TS:    e.TS.Format(time.RFC3339),
+						Text:  fmt.Sprintf("%s (pid %d) read %s at %s", info.Name, e.PID, e.Path, e.TS.Format(time.RFC3339)),
+					}}
 					for _, cm := range recentConns {
-						evidence = append(evidence, fmt.Sprintf("then connected to %s:%d at %s", cm.host, cm.port, cm.at.Format(time.RFC3339)))
+						evidence = append(evidence, model.EvidenceItem{
+							Kind:  "connect",
+							Label: fmt.Sprintf("%s:%d", cm.host, cm.port),
+							Sub:   "egress",
+							TS:    cm.at.Format(time.RFC3339),
+							Text:  fmt.Sprintf("then connected to %s:%d at %s", cm.host, cm.port, cm.at.Format(time.RFC3339)),
+						})
 					}
 					flags = append(flags, model.Flag{
 						ID:        flagID,
@@ -451,9 +472,13 @@ func (c *Correlator) Observe(e event.Event) []model.Flag {
 				PID:       e.PID,
 				Agent:     info.Name,
 				SessionID: e.SessionID,
-				Evidence: []string{
-					fmt.Sprintf("%s (pid %d) executed %s at %s", info.Name, e.PID, e.ExePath, e.TS.Format(time.RFC3339)),
-				},
+				Evidence: []model.EvidenceItem{{
+					Kind:  "exec",
+					Label: e.ExePath,
+					Sub:   "keychain CLI",
+					TS:    e.TS.Format(time.RFC3339),
+					Text:  fmt.Sprintf("%s (pid %d) executed %s at %s", info.Name, e.PID, e.ExePath, e.TS.Format(time.RFC3339)),
+				}},
 			})
 		}
 
@@ -474,9 +499,13 @@ func (c *Correlator) Observe(e event.Event) []model.Flag {
 			PID:       e.PID,
 			Agent:     info.Name,
 			SessionID: e.SessionID,
-			Evidence: []string{
-				fmt.Sprintf("%s (pid %d) modified TCC service '%s' at %s", info.Name, e.PID, e.Detail, e.TS.Format(time.RFC3339)),
-			},
+			Evidence: []model.EvidenceItem{{
+				Kind:  "tcc",
+				Label: e.Detail,
+				Sub:   "privacy tamper",
+				TS:    e.TS.Format(time.RFC3339),
+				Text:  fmt.Sprintf("%s (pid %d) modified TCC service '%s' at %s", info.Name, e.PID, e.Detail, e.TS.Format(time.RFC3339)),
+			}},
 		})
 
 	case event.KindConnOpen:
@@ -523,11 +552,23 @@ func (c *Correlator) Observe(e event.Event) []model.Flag {
 
 		// Rule 1: sensitive-read-then-connect
 		flagID := hashFlagID("sensitive-read-then-connect", rootPID, recent[0].at)
-		var evidence []string
+		var evidence []model.EvidenceItem
 		for _, m := range recent {
-			evidence = append(evidence, fmt.Sprintf("%s (pid %d) read %s at %s", info.Name, e.PID, m.path, m.at.Format(time.RFC3339)))
+			evidence = append(evidence, model.EvidenceItem{
+				Kind:  "read",
+				Label: m.path,
+				Sub:   "sensitive read",
+				TS:    m.at.Format(time.RFC3339),
+				Text:  fmt.Sprintf("%s (pid %d) read %s at %s", info.Name, e.PID, m.path, m.at.Format(time.RFC3339)),
+			})
 		}
-		evidence = append(evidence, fmt.Sprintf("then connected to %s:%d at %s", e.RemoteHost, e.RemotePort, e.TS.Format(time.RFC3339)))
+		evidence = append(evidence, model.EvidenceItem{
+			Kind:  "connect",
+			Label: fmt.Sprintf("%s:%d", e.RemoteHost, e.RemotePort),
+			Sub:   "egress",
+			TS:    e.TS.Format(time.RFC3339),
+			Text:  fmt.Sprintf("then connected to %s:%d at %s", e.RemoteHost, e.RemotePort, e.TS.Format(time.RFC3339)),
+		})
 
 		flags = append(flags, model.Flag{
 			ID:        flagID,

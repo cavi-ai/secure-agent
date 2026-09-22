@@ -7,6 +7,9 @@ import Foundation
 @MainActor
 public final class AppState: ObservableObject {
     @Published public private(set) var status: StatusResponse?
+    /// The daemon's operator headline (/posture). Drives needsAttention.
+    /// Nil until the first successful fetch or on older daemons.
+    @Published public private(set) var posture: PostureModel?
     @Published public private(set) var resources: ResourceSnapshotModel?
     @Published public private(set) var flags: [FlagModel] = []
     @Published public private(set) var incidents: [IncidentReportModel] = []
@@ -252,6 +255,7 @@ public final class AppState: ObservableObject {
             let status = try await client.fetchStatus()
             let flags = try await client.fetchFlags(limit: 20)
             let incidents = (try? await client.fetchIncidents(limit: 10)) ?? []
+            let posture = try? await client.fetchPosture()
             let guardRules = (try? await client.fetchGuardRules()) ?? []
             let notifyCfg = (try? await client.fetchNotifyRules()) ?? .fallback
             let resources = try? await client.fetchResources()
@@ -260,6 +264,7 @@ public final class AppState: ObservableObject {
             guard !self.isPaused else { return }
             let wasDisconnected = !self.connected
             self.status = status
+            self.posture = posture
 			self.processResourceTransitions(resources)
             self.resources = resources
             self.flags = flags
@@ -1200,9 +1205,12 @@ public final class AppState: ObservableObject {
     }
 
     /// Does anything demand action right now? The one predicate the menu-bar
-    /// icon, hero and badge all read.
+    /// icon, hero and badge all read — and it is the daemon's /posture state,
+    /// not a local recomputation: one derivation, every surface agrees. The
+    /// flag/incident fallback stays for pre-posture daemons only.
     public var needsAttention: Bool {
-        !unresolvedIncidents.isEmpty || !unactedCriticals.isEmpty
+        if let posture { return posture.state != "all-clear" }
+        return !unresolvedIncidents.isEmpty || !unactedCriticals.isEmpty
     }
 
     /// Tagged PIDs in one session tree (root plus helpers).
@@ -1262,9 +1270,17 @@ public final class AppState: ObservableObject {
     }
 
     /// The stable anchor for a flag: its primary file path or host — what
-    /// makes two flags "the same problem" to a human.
+    /// makes two flags "the same problem" to a human. Structured evidence
+    /// items carry the anchor directly; legacy text lines keep the parse.
     nonisolated static func flagGroupAnchor(_ f: FlagModel) -> String? {
-        for line in f.evidence {
+        for item in f.evidence where item.kind == "keychain" || item.kind == "read" {
+            if !item.label.isEmpty { return item.label }
+        }
+        for item in f.evidence where item.kind == "connect" {
+            if !item.label.isEmpty { return item.label }
+        }
+        for item in f.evidence where item.kind == "text" {
+            let line = item.displayText
             if let r = line.range(of: "accessed keychain file ") {
                 let rest = line[r.upperBound...]
                 if let at = rest.range(of: " at ") { return String(rest[..<at.lowerBound]) }
@@ -1339,7 +1355,7 @@ public final class AppState: ObservableObject {
             ])
         s.flags = [FlagModel(id: "f1", rule: "proxy-secret-leak", severity: 3, ts: "",
                              pid: 6033, agent: "cursor",
-                             evidence: ["anthropic-key detected in request body to logs.example.com"])]
+                             evidence: [.legacy("anthropic-key detected in request body to logs.example.com")])]
         s.pendingGuard = GuardPending(id: "g1", agent: "claude", tool: "Read",
                                       path: "/Users/dev/workspace/api-service/.env",
                                       ruleID: "env-files", ts: "", scopeText: nil, advisor: nil)
@@ -1372,7 +1388,7 @@ public final class AppState: ObservableObject {
             ])
         s.flags = [FlagModel(id: "f9", rule: "keychain-access", severity: 2, ts: "",
                              pid: 901, agent: "cursor",
-                             evidence: ["cursor (pid 901) accessed keychain file login.keychain-db at 2026-09-08T09:00:00Z"])]
+                             evidence: [.legacy("cursor (pid 901) accessed keychain file login.keychain-db at 2026-09-08T09:00:00Z")])]
         s.connected = true
         return s
     }

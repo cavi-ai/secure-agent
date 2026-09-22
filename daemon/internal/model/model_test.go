@@ -37,7 +37,7 @@ func TestFlagWireShape(t *testing.T) {
 		PID:       42,
 		Agent:     "claude",
 		SessionID: "sess-1",
-		Evidence:  []string{"e"},
+		Evidence:  EvidenceFromStrings("e"),
 		Advisor: &AdvisorVerdict{
 			Assessment: "suspicious", Confidence: 0.7, Rationale: "r",
 			SuggestedAction: "rotate", Model: "m", CreatedAt: ts,

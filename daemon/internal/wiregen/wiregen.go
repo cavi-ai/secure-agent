@@ -35,6 +35,8 @@ func WireTypes() []any {
 		api.CoverageStatus{},
 		api.Posture{},
 		api.PostureItem{},
+		api.AttentionGroup{},
+		api.AttentionItem{},
 		supervise.Health{},
 		advisor.HealthSnapshot{},
 	}

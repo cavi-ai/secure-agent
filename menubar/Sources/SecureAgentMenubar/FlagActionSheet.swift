@@ -127,7 +127,7 @@ struct FlagActionSheet: View {
     /// exists, otherwise the rule-level wildcard (hostless rules — keychain
     /// file/exec evidence). Never empty: an empty host used to make the
     /// popover's quick-dismiss error out with "no resolution possible".
-    nonisolated static func muteHost(evidence: [String]) -> String {
+    nonisolated static func muteHost(evidence: [EvidenceItemModel]) -> String {
         hostIn(evidence: evidence) ?? "*"
     }
 
@@ -145,7 +145,7 @@ struct FlagActionSheet: View {
                         .font(.system(size: 9, weight: .medium, design: .monospaced))
                         .foregroundStyle(.tertiary)
                         .frame(width: 30, alignment: .trailing)
-                    Text(ev)
+                    Text(ev.displayText)
                         .font(.system(size: 10, design: .monospaced))
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
@@ -185,8 +185,11 @@ struct FlagActionSheet: View {
         }
     }
 
-    /// Evidence lines end in "at <RFC3339>" — the per-row time rail source.
-    nonisolated static func timestampIn(_ line: String) -> String {
+    /// The per-row time rail: structured items carry ts directly; legacy
+    /// text lines end in "at <RFC3339>".
+    nonisolated static func timestampIn(_ item: EvidenceItemModel) -> String {
+        if let ts = item.ts, !ts.isEmpty { return ts }
+        let line = item.displayText
         guard let at = line.range(of: " at "), at.upperBound < line.endIndex else { return "" }
         return String(line[at.upperBound...])
     }
@@ -194,8 +197,15 @@ struct FlagActionSheet: View {
     // MARK: actions
 
     /// The primary host in the evidence (disposition target), nil if none.
-    nonisolated static func hostIn(evidence: [String]) -> String? {
-        for line in evidence {
+    nonisolated static func hostIn(evidence: [EvidenceItemModel]) -> String? {
+        // Structured items carry the destination directly.
+        for item in evidence where item.kind == "connect" {
+            let h = hostFromHostPort(item.label)
+            if !h.isEmpty { return h }
+        }
+        // Legacy text lines keep the string parse.
+        for item in evidence where item.kind == "text" {
+            let line = item.displayText
             guard let to = line.range(of: "connected to "),
                   let at = line[to.upperBound...].range(of: " at ") else { continue }
             let hostPort = String(line[to.upperBound..<at.lowerBound])

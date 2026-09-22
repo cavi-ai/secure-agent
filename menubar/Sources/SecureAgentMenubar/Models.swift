@@ -389,6 +389,11 @@ public struct StatusResponse: Codable, Sendable {
     public var fleetConfigured: Bool?
     /// Harness coverage (nil on older daemons).
     public let coverage: CoverageModel?
+    /// Root ES LaunchDaemon probe (nil on older daemons): real service state
+    /// plus spool facts, so the UI can tell "waiting on the Settings switch"
+    /// apart from "service dead" instead of pointing at a switch that never
+    /// appears.
+    public let esService: ESServiceModel?
 
     enum CodingKeys: String, CodingKey {
         case running
@@ -407,9 +412,10 @@ public struct StatusResponse: Codable, Sendable {
         case advisorHealth = "advisor_health"
         case fleetConfigured = "fleet_configured"
         case coverage
+        case esService = "es_service"
     }
 
-    public init(running: Bool, uptime: String, activeAgents: Int, infraCount: Int? = nil, agents: [AgentSummaryModel]? = nil, trees: [AgentTreeModel]? = nil, proxyEnabled: Bool? = nil, proxyPort: Int? = nil, uninspectedEgress: Int? = nil, firewallStats: [String: RuleStatModel]? = nil, trackedProcesses: Int? = nil, collectors: [HealthModel]? = nil, version: String? = nil, advisorHealth: AdvisorHealthModel? = nil, fleetConfigured: Bool? = nil, coverage: CoverageModel? = nil) {
+    public init(running: Bool, uptime: String, activeAgents: Int, infraCount: Int? = nil, agents: [AgentSummaryModel]? = nil, trees: [AgentTreeModel]? = nil, proxyEnabled: Bool? = nil, proxyPort: Int? = nil, uninspectedEgress: Int? = nil, firewallStats: [String: RuleStatModel]? = nil, trackedProcesses: Int? = nil, collectors: [HealthModel]? = nil, version: String? = nil, advisorHealth: AdvisorHealthModel? = nil, fleetConfigured: Bool? = nil, coverage: CoverageModel? = nil, esService: ESServiceModel? = nil) {
         self.running = running
         self.version = version
         self.uptime = uptime
@@ -426,6 +432,37 @@ public struct StatusResponse: Codable, Sendable {
         self.advisorHealth = advisorHealth
         self.fleetConfigured = fleetConfigured
         self.coverage = coverage
+        self.esService = esService
+    }
+}
+
+/// The root ES LaunchDaemon probe from /status (es_service).
+public struct ESServiceModel: Codable, Sendable {
+    public let state: String
+    public let spoolSize: Int64
+    public let spoolMtime: String?
+
+    enum CodingKeys: String, CodingKey {
+        case state
+        case spoolSize = "spool_size"
+        case spoolMtime = "spool_mtime"
+    }
+}
+
+/// The daemon's operator headline from /posture. The menubar renders this
+/// verbatim — attention state is derived once, daemon-side, and never
+/// recomputed from flags/incidents locally.
+public struct PostureModel: Codable, Sendable {
+    public let state: String // all-clear | attention | critical
+    public let needsYou: Int
+    public let summary: String
+    public let connected: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case state
+        case needsYou = "needs_you"
+        case summary
+        case connected
     }
 }
 
@@ -534,6 +571,54 @@ public struct AdvisorVerdictModel: Codable, Sendable {
     }
 }
 
+/// One piece of flag evidence. Newer daemons serve structured items
+/// (kind/label/sub/ts); rows written by older daemons arrive as bare strings
+/// and decode as kind "text" — displayText covers both.
+public struct EvidenceItemModel: Codable, Sendable {
+    public let kind: String // read | connect | keychain | exec | tcc | violation | text
+    public let label: String
+    public let sub: String?
+    public let ts: String?
+    public let text: String?
+
+    /// The legacy display string — what text consumers (notifications,
+    /// anchors) read.
+    public var displayText: String {
+        if let text, !text.isEmpty { return text }
+        if let sub, !sub.isEmpty { return "\(label) (\(sub))" }
+        return label
+    }
+
+    public init(kind: String = "text", label: String, sub: String? = nil, ts: String? = nil, text: String? = nil) {
+        self.kind = kind
+        self.label = label
+        self.sub = sub
+        self.ts = ts
+        self.text = text
+    }
+
+    /// Convenience for tests: a legacy text line.
+    public static func legacy(_ s: String) -> EvidenceItemModel {
+        EvidenceItemModel(kind: "text", label: s, text: s)
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let s = try? container.decode(String.self) {
+            kind = "text"; label = s; sub = nil; ts = nil; text = s
+            return
+        }
+        let obj = try decoder.container(keyedBy: CodingKeys.self)
+        kind = try obj.decodeIfPresent(String.self, forKey: .kind) ?? "text"
+        label = try obj.decodeIfPresent(String.self, forKey: .label) ?? ""
+        sub = try obj.decodeIfPresent(String.self, forKey: .sub)
+        ts = try obj.decodeIfPresent(String.self, forKey: .ts)
+        text = try obj.decodeIfPresent(String.self, forKey: .text)
+    }
+
+    private enum CodingKeys: String, CodingKey { case kind, label, sub, ts, text }
+}
+
 public struct FlagModel: Codable, Identifiable, Sendable {
     public let id: String
     public let rule: String
@@ -541,7 +626,7 @@ public struct FlagModel: Codable, Identifiable, Sendable {
     public let ts: String
     public let pid: Int32
     public let agent: String
-    public let evidence: [String]
+    public let evidence: [EvidenceItemModel]
     /// Harness session that produced the flag — the evidence-chain link that
     /// survives PID reuse. Empty for OS-level signals.
     public let sessionId: String?
@@ -550,21 +635,26 @@ public struct FlagModel: Codable, Identifiable, Sendable {
     public let workspace: String?
     /// Local advisor triage verdict when one exists. Advisory only.
     public let advisor: AdvisorVerdictModel?
+    /// Operator-facing rule title served by the daemon — the one source of
+    /// truth. Nil on rows from older daemons; title(for:) falls back to the
+    /// legacy table then.
+    public let title: String?
     /// True when the operator applied a disposition on this flag — it stops
     /// counting as critical and renders dimmed instead of endlessly red.
     public let acknowledged: Bool?
 
     enum CodingKeys: String, CodingKey {
-        case id, rule, severity, ts, pid, agent, evidence, advisor
+        case id, rule, severity, ts, pid, agent, evidence, advisor, title
         case sessionId = "session_id"
         case workspace
         case acknowledged
     }
 
     public init(id: String, rule: String, severity: Int, ts: String, pid: Int32, agent: String,
-                evidence: [String], sessionId: String? = nil, workspace: String? = nil,
+                evidence: [EvidenceItemModel], sessionId: String? = nil, workspace: String? = nil,
                 advisor: AdvisorVerdictModel? = nil,
-                acknowledged: Bool? = nil) {
+                acknowledged: Bool? = nil,
+                title: String? = nil) {
         self.id = id
         self.rule = rule
         self.severity = severity
@@ -575,6 +665,7 @@ public struct FlagModel: Codable, Identifiable, Sendable {
         self.sessionId = sessionId
         self.workspace = workspace
         self.advisor = advisor
+        self.title = title
         self.acknowledged = acknowledged
     }
 
@@ -582,7 +673,8 @@ public struct FlagModel: Codable, Identifiable, Sendable {
     /// so the flag leaves the needs-action list without waiting for a poll.
     public func acknowledgedCopy() -> FlagModel {
         FlagModel(id: id, rule: rule, severity: severity, ts: ts, pid: pid, agent: agent,
-                  evidence: evidence, sessionId: sessionId, advisor: advisor, acknowledged: true)
+                  evidence: evidence, sessionId: sessionId, advisor: advisor,
+                  acknowledged: true, title: title)
     }
 }
 

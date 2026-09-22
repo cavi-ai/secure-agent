@@ -6,14 +6,9 @@ function renderAttention() {
   const container = document.getElementById('attention-list');
   const badge = document.getElementById('badge-attention-count');
   if (!container) return;
-  const groups = buildAttentionGroups({
-    status: SA.t.status,
-    resources: SA.t.resources,
-    guardPending: SA.t.guardPending,
-    flags: SA.t.flags,
-    incidents: SA.t.incidents,
-    uninspected: SA.t.uninspected,
-  });
+  // The daemon serves the grouped queue on /posture — one derivation, no
+  // client-side regrouping that could disagree with the menubar.
+  const groups = (SA.t.posture && SA.t.posture.groups) || [];
   const count = groups.reduce((sum, group) => sum + group.items.length, 0);
   if (badge) badge.textContent = count;
   SA.setTabBadge('findings', count);
