@@ -67,6 +67,8 @@ By default the daemon (`secure-agentd`) runs as a child process of the menu bar 
    - Subprocesses macOS Endpoint Security (`eslogger`) streaming events for `open`, `exec`, `rename`, `unlink`, and `tcc_modify`.
    - Parses the JSON stream in real-time and filters target paths against sensitive path rules (`sensitive_globs`, `sensitive_paths`, `keychain_markers`).
 
+   On macOS `eslogger` requires root, so it runs in a collector daemon that ships inside the app bundle: the daemon binary again as `Contents/MacOS/secure-agent-esd` (that name selects collector mode) with its LaunchDaemon plist at `Contents/Library/LaunchDaemons/com.cavi-ai.secure-agent-esd.plist`. The app registers it with `SMAppService.daemon`; the user approves Secure Agent once in Login Items and once in Full Disk Access, with no admin password. The collector refuses to start when its own code signature does not verify, then appends eslogger's JSON to `/var/db/secure-agent/es-spool.jsonl`, which the unprivileged daemon tails (`daemon/internal/collect/spool.go`).
+
 2. **Network Socket Sampler (`daemon/internal/collect/netsample.go`)**:
    - Periodically lists established TCP sockets via `lsof` (platform-abstracted: `netsample_darwin.go`, `netsample_linux.go`) and keeps only sockets owned by tagged agent process trees. Loopback endpoints are filtered out — local-only traffic is not egress.
    - Diffs consecutive socket states to detect newly opened outbound socket connections.
