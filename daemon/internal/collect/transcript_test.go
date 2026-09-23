@@ -272,7 +272,8 @@ func TestOffsetsSurviveRestart(t *testing.T) {
 	ts1 := NewTranscriptScanner(b1, []string{logPath})
 	ts1.OffsetStatePath = statePath
 	ctx1, cancel1 := context.WithCancel(context.Background())
-	go ts1.Run(ctx1)
+	done1 := make(chan struct{})
+	go func() { _ = ts1.Run(ctx1); close(done1) }()
 	time.Sleep(250 * time.Millisecond)
 
 	// Appended while "up": read and offset advanced.
@@ -287,6 +288,11 @@ func TestOffsetsSurviveRestart(t *testing.T) {
 	// The dirty-save fires on the next tail tick after the offset advances.
 	time.Sleep(500 * time.Millisecond)
 	cancel1()
+	select {
+	case <-done1:
+	case <-time.After(5 * time.Second):
+		t.Fatal("first scanner did not stop after cancel")
+	}
 
 	// Appended while "down": the line a fresh-start seed would skip.
 	f, _ = os.OpenFile(logPath, os.O_APPEND|os.O_WRONLY, 0o644)
@@ -298,8 +304,16 @@ func TestOffsetsSurviveRestart(t *testing.T) {
 	ts2 := NewTranscriptScanner(b2, []string{logPath})
 	ts2.OffsetStatePath = statePath
 	ctx2, cancel2 := context.WithCancel(context.Background())
-	defer cancel2()
-	go ts2.Run(ctx2)
+	done2 := make(chan struct{})
+	go func() { _ = ts2.Run(ctx2); close(done2) }()
+	defer func() {
+		cancel2()
+		select {
+		case <-done2:
+		case <-time.After(5 * time.Second):
+			t.Fatal("second scanner did not stop after cancel")
+		}
+	}()
 
 	deadline := time.After(3 * time.Second)
 	for {
