@@ -1,6 +1,7 @@
 package firewall
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/config"
@@ -233,5 +234,36 @@ func TestScanTextSkipsEntropyLayer(t *testing.T) {
 		if !found {
 			t.Fatalf("%s: want aws-key pattern hit, got %+v", name, hits)
 		}
+	}
+}
+
+// Mask replaces every fingerprint and typed-pattern hit with a marker naming
+// its rule, and reports clean only when a rescan of the result finds nothing.
+func TestMaskRedactsHitsAndReportsWhatRemains(t *testing.T) {
+	e := testEngine(t)
+	secret := "s3cr3t-value-" + "abcdefghijklmnop"
+	e.SetFingerprints([]config.Fingerprint{
+		{ID: "fp1", Type: TypeEnvValue, Len: len(secret), HMAC: Fingerprint([]byte("salt"), secret)},
+	})
+
+	masked, clean := e.Mask(`{"content":"export TOKEN=` + secret + ` done"}`)
+	if !clean || strings.Contains(masked, secret) || !strings.Contains(masked, "[REDACTED:fp1]") {
+		t.Fatalf("registered token: masked=%q clean=%v", masked, clean)
+	}
+
+	key := "AKIA" + "IOSFODNN7EXAMPLE"
+	masked, clean = e.Mask(`{"text":"key=` + key + `"}`)
+	if !clean || strings.Contains(masked, key) || !strings.Contains(masked, "[REDACTED:aws-key]") {
+		t.Fatalf("typed key: masked=%q clean=%v", masked, clean)
+	}
+
+	masked, clean = e.Mask(`{"content":"env dump ` + base64Std(secret) + ` done"}`)
+	if clean {
+		t.Fatalf("a secret present only encoded must leave clean=false, masked=%q", masked)
+	}
+
+	plain := `{"type":"assistant","text":"ran go test ./..."}`
+	if masked, clean = e.Mask(plain); !clean || masked != plain {
+		t.Fatalf("plain text: masked=%q clean=%v", masked, clean)
 	}
 }

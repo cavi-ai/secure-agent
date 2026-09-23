@@ -49,6 +49,15 @@ func (d *Detector) Scan(text string) []Hit {
 	return hits
 }
 
+// MaskPatterns replaces every typed-pattern match in text with
+// [REDACTED:<pattern id>].
+func (d *Detector) MaskPatterns(text string) string {
+	for _, p := range d.patterns {
+		text = p.re.ReplaceAllLiteralString(text, "[REDACTED:"+p.id+"]")
+	}
+	return text
+}
+
 // ScanPatterns returns the typed-pattern hits only; the entropy layer is
 // never run.
 func (d *Detector) ScanPatterns(text string) []Hit {
