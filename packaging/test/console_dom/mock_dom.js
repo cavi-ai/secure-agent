@@ -359,7 +359,21 @@
       }
       pts.push({ bucket: bucket(2), kind: 'flag:s3', count: 1 });
       return pts;
-    })()
+    })(),
+    // /costs (24h, by repo): six rows, deliberately unsorted; the top 5 by
+    // cost render, and the 0-cost 'docs' row (fewer calls) is dropped.
+    '/costs': {
+      since: iso(24 * 3600000), until: iso(0), by: 'repo',
+      total: { key: '', calls: 40, sessions: 7, tokens_in: 912000, tokens_out: 48000, cost_usd: 36.674, unpriced_calls: 2 },
+      rows: [
+        { key: 'web-console', harness: 'codex', calls: 9, sessions: 2, tokens_in: 210000, tokens_out: 9000, cost_usd: 8.124, unpriced_calls: 0 },
+        { key: 'docs', harness: 'claude', calls: 1, sessions: 1, tokens_in: 1000, tokens_out: 100, cost_usd: 0, unpriced_calls: 0 },
+        { key: 'api-service', harness: 'claude', calls: 18, sessions: 2, tokens_in: 560000, tokens_out: 30000, cost_usd: 24.5, unpriced_calls: 0 },
+        { key: 'scratch', harness: 'cursor', calls: 3, sessions: 1, tokens_in: 20000, tokens_out: 1900, cost_usd: 0.85, unpriced_calls: 0 },
+        { key: '(no repo)', calls: 2, sessions: 1, tokens_in: 1000, tokens_out: 0, cost_usd: 0, unpriced_calls: 2 },
+        { key: 'infra-tools', harness: 'opencode', calls: 7, sessions: 1, tokens_in: 120000, tokens_out: 7000, cost_usd: 3.2, unpriced_calls: 0 }
+      ]
+    }
   };
 
   // ---------- failure-mode simulation ----------
@@ -623,6 +637,11 @@
   // hide entirely instead of carrying a permanently-empty placeholder.
   if (location.search.includes('nofleetdemo')) {
     data['/fleet'] = { ...data['/fleet'], fleet_configured: false };
+  }
+  // No-spend variant: an empty /costs report — the tile reads an em dash and
+  // the card shows its empty state.
+  if (location.search.includes('nocostsdemo')) {
+    data['/costs'] = { ...data['/costs'], total: { key: '', calls: 0, sessions: 0, tokens_in: 0, tokens_out: 0, cost_usd: 0, unpriced_calls: 0 }, rows: [] };
   }
   // Post-mortem variant: every live session has exited, but persisted pressure
   // episodes must remain visible.

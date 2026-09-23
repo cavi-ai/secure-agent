@@ -48,3 +48,19 @@ func TestListEndpointsEmitEmptyArrayNeverNull(t *testing.T) {
 		}
 	}
 }
+
+// Object endpoints carry their lists in a field; /costs rows must be [] too.
+func TestCostsRowsEmitEmptyArrayNeverNull(t *testing.T) {
+	st := testStore(t)
+	t.Cleanup(func() { st.Close() })
+	a := newTestAPI("", st, &fakeKiller{}, func() Status { return Status{Running: true} })
+	rec := httptest.NewRecorder()
+	a.buildMux().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/costs", nil))
+	body := strings.TrimSpace(rec.Body.String())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("/costs: status %d (body %q)", rec.Code, body)
+	}
+	if !strings.Contains(body, `"rows":[]`) {
+		t.Fatalf("/costs: body = %q — rows must be [] (never null)", body)
+	}
+}

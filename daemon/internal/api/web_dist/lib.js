@@ -611,6 +611,24 @@ function fmtRSS(n) {
   return (n / 1073741824).toFixed(1) + ' GB';
 }
 
+// fmtUSD: dollars with two decimals and thousands separators. A non-zero
+// amount under a cent reads "<$0.01" so real spend never renders as $0.00.
+function fmtUSD(n) {
+  n = Number(n) || 0;
+  if (n > 0 && n < 0.01) return '<$0.01';
+  const [whole, frac] = n.toFixed(2).split('.');
+  return '$' + whole.replace(/\B(?=(\d{3})+(?!\d))/g, ',') + '.' + frac;
+}
+
+// topCostRows: the n most expensive /costs rows (cost desc, then calls desc).
+// Tolerates a missing report or rows.
+function topCostRows(report, n) {
+  const rows = report && Array.isArray(report.rows) ? report.rows.slice() : [];
+  rows.sort((a, b) => (Number(b.cost_usd) || 0) - (Number(a.cost_usd) || 0)
+    || (Number(b.calls) || 0) - (Number(a.calls) || 0));
+  return rows.slice(0, n);
+}
+
 function fmtCPU(value) {
   if (value === null || value === undefined || !Number.isFinite(Number(value))) return '';
   const n = Number(value);
