@@ -100,7 +100,8 @@ func TestPlanSubjectResolution(t *testing.T) {
 	p := seedTranscriptFinding(t, a)
 	for _, s := range []string{"flag:f1", "incident:inc-1", "file:" + p} {
 		code, resp := planCall(t, a, http.MethodGet, s)
-		if code != http.StatusOK || resp.Playbook.Rule != "secret-in-transcript" || resp.Status != "none" {
+		if code != http.StatusOK || resp.Playbook.Rule != "secret-in-transcript" || resp.Status != "none" ||
+			resp.Flag == nil || resp.Flag.ID != "f1" || resp.Flag.Explain == nil {
 			t.Errorf("%s: %d %+v", s, code, resp)
 		}
 	}
