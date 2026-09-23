@@ -28,12 +28,15 @@ type PlanFuncs struct {
 // always, the advisor's plan when one exists. Status is none, pending,
 // ready, stale (the evidence changed since the plan) or disabled.
 type PlanResponse struct {
-	Subject      string             `json:"subject"`
-	Status       string             `json:"status"`
-	Playbook     playbook.Playbook  `json:"playbook"`
-	Plan         *model.AdvisorPlan `json:"plan,omitempty"`
-	AdvisorReady bool               `json:"advisor_ready"`
-	Reason       string             `json:"reason,omitempty"`
+	Subject  string             `json:"subject"`
+	Status   string             `json:"status"`
+	Playbook playbook.Playbook  `json:"playbook"`
+	Plan     *model.AdvisorPlan `json:"plan,omitempty"`
+	// Flag is the subject's flag with its explanation, so the served
+	// actions a plan recommends can be performed from any surface.
+	Flag         *model.Flag `json:"flag,omitempty"`
+	AdvisorReady bool        `json:"advisor_ready"`
+	Reason       string      `json:"reason,omitempty"`
 }
 
 // Plan context bounds.
@@ -192,7 +195,7 @@ func (a *API) servePlan(w http.ResponseWriter, subject string) {
 		http.Error(w, "no stored flag, incident or evidence file matches this subject", http.StatusNotFound)
 		return
 	}
-	resp := PlanResponse{Subject: subject, Status: "none", Playbook: playbook.For(t.rule)}
+	resp := PlanResponse{Subject: subject, Status: "none", Playbook: playbook.For(t.rule), Flag: a.planFlag(t)}
 	resp.AdvisorReady, resp.Reason = a.planReady()
 	if p, ok := a.store.AdvisorPlanFor(subject); ok {
 		resp.Plan = &p
@@ -216,7 +219,7 @@ func (a *API) requestPlan(w http.ResponseWriter, subject string) {
 		http.Error(w, "no stored flag, incident or evidence file matches this subject", http.StatusNotFound)
 		return
 	}
-	resp := PlanResponse{Subject: subject, Playbook: playbook.For(t.rule)}
+	resp := PlanResponse{Subject: subject, Playbook: playbook.For(t.rule), Flag: a.planFlag(t)}
 	resp.AdvisorReady, resp.Reason = a.planReady()
 	if !resp.AdvisorReady {
 		resp.Status = "disabled"
@@ -239,6 +242,17 @@ func (a *API) requestPlan(w http.ResponseWriter, subject string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
 	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// planFlag is the subject's flag with its title and explanation stamped.
+func (a *API) planFlag(t planTarget) *model.Flag {
+	if t.flag == nil {
+		return nil
+	}
+	f := *t.flag
+	f.Title = humanFlagTitle(f.Rule)
+	f.Explain = a.explainFlag(f, false)
+	return &f
 }
 
 // offeredActions are the served action ids the plan may recommend: the
