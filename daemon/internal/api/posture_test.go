@@ -293,6 +293,24 @@ func TestESServiceItemsNamesRegrantAfterHelperReplaced(t *testing.T) {
 	}
 }
 
+// A flooding writer (garbage lines drowning the tailer's per-tick budget)
+// supersedes the ordinary not-writing/crash-loop items: the operator needs
+// to see "flooding", not a generic silence report.
+func TestESServiceItemsFlooding(t *testing.T) {
+	flooding := esServiceItems(collect.ESServiceSnapshot{State: "running", Flooding: true})
+	if len(flooding) != 1 || flooding[0].Title != "File monitoring writer is flooding" {
+		t.Fatalf("Flooding=true: items = %+v, want one flooding item", flooding)
+	}
+	unparsed := esServiceItems(collect.ESServiceSnapshot{State: "running", SpoolMtime: time.Now(), UnparsedShare: 0.9})
+	if len(unparsed) != 1 || unparsed[0].Title != "File monitoring writer is flooding" {
+		t.Fatalf("UnparsedShare=0.9: items = %+v, want one flooding item", unparsed)
+	}
+	ok := esServiceItems(collect.ESServiceSnapshot{State: "running", SpoolMtime: time.Now(), UnparsedShare: 0.1})
+	if len(ok) != 0 {
+		t.Fatalf("UnparsedShare=0.1: items = %+v, want none", ok)
+	}
+}
+
 // No agents running: an idle machine is not a blind monitor — silence is
 // legitimate, posture stays all-clear.
 func TestPostureNoSilenceFlagsWhenIdle(t *testing.T) {

@@ -175,6 +175,9 @@ export interface ESServiceSnapshot {
   spool_size: number;
   spool_mtime: string;
   helper_mtime: string;
+  flooding: boolean;
+  unparsed_share: number;
+  bytes_skipped: number;
 }
 
 export interface Status {

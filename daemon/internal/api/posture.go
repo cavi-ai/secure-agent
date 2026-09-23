@@ -325,7 +325,18 @@ func silentCollectorItems(st Status) []PostureItem {
 
 // esServiceItems turns one root-service probe into posture items. The probe
 // is best-effort: launchctl errors are already folded into the state string.
+// A flooding writer supersedes every other eslogger item: the tailer and the
+// root service can both read healthy while the writer drowns them in
+// garbage, and that is the failure the operator needs to see first.
 func esServiceItems(s collect.ESServiceSnapshot) []PostureItem {
+	if esServiceFlooding(s) {
+		return []PostureItem{{
+			Kind: "collector_silent", ID: "eslogger",
+			Title:    "File monitoring writer is flooding",
+			Severity: 2,
+			Detail:   esFloodingDetail(s),
+		}}
+	}
 	var items []PostureItem
 	if esServiceFailing(s.State) {
 		items = append(items, PostureItem{
@@ -356,6 +367,21 @@ func esServiceItems(s collect.ESServiceSnapshot) []PostureItem {
 // crash-looping (spawn scheduled) or has exited.
 func esServiceFailing(state string) bool {
 	return strings.Contains(state, "spawn") || strings.Contains(state, "exit")
+}
+
+// esServiceFlooding reports a writer producing mostly-unparseable lines
+// (garbage past the tailer's per-tick drain budget, or, defensively, a share
+// over half even without an active skip) — a service that runs and writes
+// but is broken, not one that is down.
+func esServiceFlooding(s collect.ESServiceSnapshot) bool {
+	return s.Flooding || s.UnparsedShare > 0.5
+}
+
+// esFloodingDetail is the shared wording for the flooding failure: posture
+// and doctor report the same facts.
+func esFloodingDetail(s collect.ESServiceSnapshot) string {
+	return fmt.Sprintf("%.0f%% of lines in the last drain did not parse, %.1f MB skipped — the writer is producing garbage",
+		s.UnparsedShare*100, float64(s.BytesSkipped)/(1<<20))
 }
 
 func humanCollectorSilentTitle(name string) string {

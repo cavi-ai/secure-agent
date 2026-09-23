@@ -169,6 +169,18 @@ func TestDoctorFileTelemetryFailsOnCrashLoop(t *testing.T) {
 	}
 }
 
+func TestDoctorFileTelemetryFailsOnFlood(t *testing.T) {
+	st := testStore(t)
+	t.Cleanup(func() { st.Close() })
+	rep, _ := getDoctor(t, st, Status{Running: true, Uptime: "1h0m0s",
+		ESService: &collect.ESServiceSnapshot{State: "running", Flooding: true, UnparsedShare: 0.97, BytesSkipped: 6 << 20}})
+	c := doctorCheckByID(t, rep, "file-telemetry")
+	if c.State != doctorFail || !strings.Contains(c.Detail, "did not parse") ||
+		!strings.Contains(c.Fix, "Reinstall the file telemetry helper from the Setup card") {
+		t.Fatalf("file-telemetry = %+v, want fail naming the unparsed share with the reinstall fix", c)
+	}
+}
+
 func TestDoctorHookActiveFailsWithAgentsAndNoHookEvents(t *testing.T) {
 	st := testStore(t)
 	t.Cleanup(func() { st.Close() })
@@ -278,6 +290,21 @@ func TestDoctorChecksFromFacts(t *testing.T) {
 			f.st.ESService = &collect.ESServiceSnapshot{State: "not-loaded"}
 			return f
 		}(), doctorFail, "not loaded"},
+		{"flooding writer", checkFileTelemetry, func() doctorFacts {
+			f := steady
+			f.st.ESService = &collect.ESServiceSnapshot{State: "running", Flooding: true}
+			return f
+		}(), doctorFail, "did not parse"},
+		{"unparsed share alone", checkFileTelemetry, func() doctorFacts {
+			f := steady
+			f.st.ESService = &collect.ESServiceSnapshot{State: "running", UnparsedShare: 0.9}
+			return f
+		}(), doctorFail, "did not parse"},
+		{"low unparsed share is not flooding", checkFileTelemetry, func() doctorFacts {
+			f := steady
+			f.st.ESService = &collect.ESServiceSnapshot{State: "running", SpoolMtime: now, UnparsedShare: 0.1}
+			return f
+		}(), doctorPass, "running"},
 	}
 	for _, tc := range cases {
 		state, detail := tc.check(tc.f)
