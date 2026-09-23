@@ -291,6 +291,7 @@ Returns one flag (with `title` and `advisor`) plus `explain`, the daemon's plain
 ### 3. `GET /events`
 
 Retrieves raw system telemetry events captured by the file watcher and network sampler.
+File opens, writes and deletes are stored for processes inside an agent family, and otherwise only as the evidence of a flag.
 
 #### Query Parameters
 - `limit` *(optional, integer)*: Maximum number of events to return (default: `50`).
@@ -706,7 +707,7 @@ Item kinds: `flag` (recent ≤24h, severity ≥2, human-titled), `guard_pending`
 
 ### `GET /events/stream` (SSE)
 
-Live feed of every bus event as `event: <kind>` / `data: <json>`, with a 15s heartbeat comment. Replaces polling for UIs that can hold a connection — **the menu bar app and the web console both consume this stream** (guard prompts surface at push latency), falling back to polling when the endpoint is unavailable. One bus subscription per connection, released on disconnect.
+Live feed of every stored event as `event: <kind>` / `data: <json>`, with a 15s heartbeat comment. Replaces polling for UIs that can hold a connection — **the menu bar app and the web console both consume this stream** (guard prompts surface at push latency), falling back to polling when the endpoint is unavailable. One bus subscription per connection, released on disconnect.
 
 ### Console access on the proxy port
 
