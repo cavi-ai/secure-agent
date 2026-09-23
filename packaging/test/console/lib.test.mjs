@@ -41,6 +41,7 @@ const {
   hbarsHTML, sessionWaterfallHTML, applyInlineMetrics, resourceHostContextHTML,
   fmtUSD, topCostRows,
   familyLabel, cappedList, resourceNeedsAttention, resourceFamilyGroups,
+  mapPostureAttention,
 } = ctx;
 
 // ---------- spend ----------
@@ -1159,4 +1160,128 @@ test('resourceFamilyGroups: harness groups by memory, children nested under thei
   const inf = resourceFamilyGroups([f('m', 'ollama', 5, 1, 0, 'infra'), f('k', 'codex', 6, 1, 0)],
     [{ id: 'sm', root_pid: 5 }, { id: 'sk', root_pid: 6, parent_id: 'sm' }]);
   assert.deepEqual([...inf].map(g => g.key), ['codex', 'infra']);
+});
+
+// Minimal element for paintDrawerBack: children, id lookup, insertBefore,
+// remove and click listeners.
+class FakeEl {
+  constructor(doc, tag, id = '') {
+    this.ownerDocument = doc; this.tagName = tag; this.id = id;
+    this.children = []; this.parent = null; this.listeners = {}; this.textContent = '';
+  }
+  querySelector(sel) {
+    for (const c of this.children) {
+      if ('#' + c.id === sel) return c;
+      const hit = c.querySelector(sel);
+      if (hit) return hit;
+    }
+    return null;
+  }
+  insertBefore(node, ref) {
+    const i = ref ? this.children.indexOf(ref) : -1;
+    node.parent = this;
+    this.children.splice(i < 0 ? this.children.length : i, 0, node);
+    return node;
+  }
+  remove() {
+    if (!this.parent) return;
+    this.parent.children.splice(this.parent.children.indexOf(this), 1);
+    this.parent = null;
+  }
+  addEventListener(type, fn) { (this.listeners[type] = this.listeners[type] || []).push(fn); }
+  click() { (this.listeners.click || []).forEach(fn => fn({ type: 'click' })); }
+}
+const fakeDoc = { createElement: tag => new FakeEl(fakeDoc, tag) };
+
+test('openDrawer back: the head shows ‹ label before the title and a click calls reopen once', () => {
+  const head = new FakeEl(fakeDoc, 'header');
+  const title = head.insertBefore(new FakeEl(fakeDoc, 'h3', 'drawer-title'), null);
+  let calls = 0;
+  const btn = ctx.paintDrawerBack(head, title, { label: 'Uninspected egress', reopen: () => { calls++; } });
+  assert.equal(head.querySelector('#btn-drawer-back'), btn);
+  assert.equal(btn.textContent, '‹ Uninspected egress');
+  assert.equal(btn.className, 'btn btn-ghost drawer-back');
+  assert.equal(head.children.indexOf(btn), head.children.indexOf(title) - 1);
+  btn.click();
+  assert.equal(calls, 1);
+  ctx.paintDrawerBack(head, title, { label: 'Endpoint detail', reopen: () => {} });
+  assert.equal(head.children.filter(c => c.id === 'btn-drawer-back').length, 1, 'a second open replaces the button');
+});
+
+test('openDrawer back: without back the button is absent', () => {
+  const head = new FakeEl(fakeDoc, 'header');
+  const title = head.insertBefore(new FakeEl(fakeDoc, 'h3', 'drawer-title'), null);
+  assert.equal(ctx.paintDrawerBack(head, title, null), null);
+  assert.equal(head.querySelector('#btn-drawer-back'), null);
+  ctx.paintDrawerBack(head, title, { label: 'Uninspected egress', reopen: () => {} });
+  ctx.paintDrawerBack(head, title, undefined);
+  assert.equal(head.querySelector('#btn-drawer-back'), null, 'an open without back removes the previous button');
+});
+
+test('scopeBarHTML: session scope names the session and counts; pid scope names the family; unscoped is empty', () => {
+  const s = ctx.scopeBarHTML({ session: '7f3a9c21-4b2e-4a1d-9c55-2e8f0d1a3b77', events: 12, flags: 1 });
+  assert.match(s, /^<span>Scoped to session <b>[^<]+<\/b> · 12 events · 1 flag<\/span>/);
+  assert.match(s, /data-action="clear-scope">Clear<\/button>$/);
+  const p = ctx.scopeBarHTML({ pids: [5821, 5822], pidLabel: 'api-service <main>', events: 1, flags: 0 });
+  assert.match(p, /^<span>Scoped to <b>api-service &lt;main&gt;<\/b> \(2 processes\) · 1 event · 0 flags<\/span>/);
+  assert.equal(ctx.scopeBarHTML({ session: null, pids: null, events: 3, flags: 3 }), '');
+  assert.equal(ctx.scopeBarHTML({ pids: [], events: 0, flags: 0 }), '');
+});
+
+test('attentionCount is posture.needs_you', () => {
+  assert.equal(ctx.attentionCount({ needs_you: 13, groups: [{ items: [1, 2] }] }), 13);
+  assert.equal(ctx.attentionCount({ needs_you: 0 }), 0);
+  assert.equal(ctx.attentionCount(null), 0);
+});
+
+test('the tab bar is sticky and holds the posture pill and the scope bar', () => {
+  const bar = indexHTML.split('id="tabs-bar"', 2)[1].split('<main>', 1)[0];
+  assert.ok(bar.indexOf('<nav class="tabs" role="tablist"') >= 0);
+  assert.ok(bar.indexOf('id="tabs-posture" data-action="goto-top"') > bar.indexOf('</nav>'));
+  assert.ok(bar.indexOf('id="scope-bar"') > bar.indexOf('id="tabs-posture"'));
+  assert.match(styleCSS, /\.tabs-bar \{\s*position: sticky; top: 0; z-index: 50;[^}]*background: var\(--bg-0\);/);
+});
+
+// ---------- optimistic attention removal ----------
+
+test('mapPostureAttention: a removed item leaves items, groups and needs_you coherent', () => {
+  const posture = {
+    state: 'critical', summary: 's', needs_you: 4,
+    items: [
+      { kind: 'flag', id: 'f1' }, { kind: 'guard_pending', id: 'g1' },
+      { kind: 'resource_pressure', id: 'r1' }, { kind: 'incident', id: 'i1' },
+    ],
+    groups: [
+      { key: 'a', items: [{ kind: 'flag', id: 'f1' }, { kind: 'guard', id: 'g1' }] },
+      { key: 'b', items: [{ kind: 'resource', id: 'r1' }, { kind: 'incident', id: 'i1' }] },
+    ],
+  };
+  const sum = p => p.groups.reduce((n, g) => n + g.items.length, 0);
+  const coherent = p => {
+    assert.equal(p.needs_you, p.items.length);
+    assert.equal(sum(p), p.needs_you);
+  };
+
+  let p = mapPostureAttention(posture, it => (it.kind === 'guard' && it.id === 'g1' ? null : it));
+  assert.ok(!p.items.some(it => it.id === 'g1'));
+  assert.equal(p.needs_you, 3);
+  coherent(p);
+  assert.equal(p.state, 'critical');
+  assert.equal(p.summary, 's');
+
+  p = mapPostureAttention(p, it => (it.kind === 'resource' && it.id === 'r1' ? null : it));
+  assert.ok(!p.items.some(it => it.id === 'r1'));
+  coherent(p);
+
+  p = mapPostureAttention(p, it => (it.kind === 'incident' ? { ...it, status: 'acknowledged' } : it));
+  assert.ok(p.items.some(it => it.id === 'i1'));
+  assert.equal(p.needs_you, 2);
+  coherent(p);
+
+  p = mapPostureAttention(p, it => (it.kind === 'incident' ? null : it));
+  assert.equal(p.groups.length, 1);
+  assert.equal(p.needs_you, 1);
+  coherent(p);
+  assert.equal(posture.items.length, 4);
+  assert.equal(posture.needs_you, 4);
 });

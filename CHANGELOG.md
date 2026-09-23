@@ -7,6 +7,12 @@ All notable changes to `secure-agent` are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- Console tab bar stays at the top while the page scrolls.
+- Console tab bar shows a posture pill once stuck.
+- Console posture pill scrolls the page back to the top.
+- Console scope bar under the tabs names the session or process family Events, Flags and Incidents are narrowed to, with a Clear button.
+- Console drawers opened from inside another drawer show a Back button that reopens the previous drawer.
+- `/posture` `machine` group for collector, hook and machine-wide egress items.
 - `/egress/uninspected` rows carry `identity`, `first_seen` and `session_id`.
 - `identity.class` (`vendor`, `telemetry`, `cloud`) on `/egress/uninspected`, `/egress/endpoint` and `/snapshot` suggestions.
 - Egress drill-down groups vendor-class endpoints (no `infra`) into one row per agent and vendor with Allow all and Evidence.
@@ -49,6 +55,19 @@ All notable changes to `secure-agent` are documented here. The format follows
   per (path, rule) are collapsed.
 
 ### Changed
+- `/posture` `items` and `groups` come from one pass.
+- `/posture` puts every item in exactly one group.
+- `/posture` group items sum to `needs_you`.
+- `/posture` `groups` include unacknowledged severity-2 flags with priority 1, rule title and disposition.
+- `/posture` `groups` include pending resource decisions as `resource` items.
+- `/posture` `items` include pending resource decisions as `resource_pressure` items.
+- `/posture` `items` carry one `uninspected_egress` item per group with uninspected egress to unknown endpoints.
+- `/posture` egress items and their counts exclude known CDN/cloud carriers.
+- `/posture` `items` carry open critical incidents at severity 3.
+- `/posture` `state` is `critical` while a critical incident is open.
+- `/posture` `items` carry open high incidents at severity 2.
+- `/posture` `items` carry other incidents open more than 72h at severity 1.
+- Console Attention badge shows `posture.needs_you`.
 - File opens, writes and deletes from processes outside every agent family are not stored unless they raise a flag.
 - Event pruning seeks a `(kind, id)` index: kinds by index skip-scan, each kind's budget cut at its budget-th newest id.
 - Insert-driven pruning runs at most once per 30 s.

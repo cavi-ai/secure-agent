@@ -267,6 +267,46 @@ function scopedBySession(items, sessionId, pids) {
   return items || [];
 }
 
+// Scope bar under the tabs: names the session (or process family) Events,
+// Flags and Incidents are narrowed to, with its counts; '' when unscoped.
+function scopeBarHTML({ session, pids, pidLabel, events, flags }) {
+  const n = Number(events) || 0;
+  const m = Number(flags) || 0;
+  const counts = ` · ${n} event${n === 1 ? '' : 's'} · ${m} flag${m === 1 ? '' : 's'}`;
+  const clear = '<button type="button" class="btn btn-ghost btn-sm" data-action="clear-scope">Clear</button>';
+  if (session) return `<span>Scoped to session <b>${escapeHTML(sessionShort(session))}</b>${counts}</span>${clear}`;
+  if (pids && pids.length) {
+    const k = pids.length;
+    return `<span>Scoped to <b>${escapeHTML(pidLabel || 'PID ' + pids[0])}</b> (${k} process${k === 1 ? '' : 'es'})${counts}</span>${clear}`;
+  }
+  return '';
+}
+
+// The Attention badge counts what the hero counts: /posture needs_you, which
+// the daemon keeps equal to the grouped items.
+function attentionCount(posture) {
+  return (posture && Number(posture.needs_you)) || 0;
+}
+
+// Drawer back-stack: a drawer opened from inside another carries back
+// ({ label, reopen }); the head shows "‹ label" before the title and the
+// click re-runs the previous opener, so that drawer re-renders from live
+// data. Without back the button is removed.
+function paintDrawerBack(head, title, back) {
+  const old = head.querySelector('#btn-drawer-back');
+  if (old) old.remove();
+  if (!back) return null;
+  const btn = head.ownerDocument.createElement('button');
+  btn.type = 'button';
+  btn.id = 'btn-drawer-back';
+  btn.className = 'btn btn-ghost drawer-back';
+  btn.textContent = '‹ ' + back.label;
+  btn.title = 'Back to ' + back.label;
+  btn.addEventListener('click', () => back.reopen());
+  head.insertBefore(btn, title);
+  return btn;
+}
+
 function filterSessionRows(rows, q) {
   const s = String(q || '').trim().toLowerCase();
   if (!s) return rows || [];
@@ -1274,4 +1314,27 @@ function vendorKeyPromoteHTML(ids) {
 // after every ES file-open is the leftover hot-path tax.
 function sseNeedsSnapshot(kind) {
   return kind === 'exec' || kind === 'guard-prompt' || kind === 'guard-resolved' || kind === 'proxy-hit';
+}
+// attentionItemKind: the group-item kind a /posture headline item belongs to.
+function attentionItemKind(kind) {
+  return { guard_pending: 'guard', resource_pressure: 'resource', uninspected_egress: 'egress' }[kind] || kind;
+}
+// mapPostureAttention: the posture after an optimistic attention change. fn
+// maps each group item (null drops it); a dropped item leaves posture.items
+// too and needs_you is items.length, so the count, the headline items and
+// the groups agree until the next snapshot. state and summary stay the
+// daemon's.
+function mapPostureAttention(p, fn) {
+  if (!p || !p.groups) return p;
+  const dropped = new Set();
+  const groups = p.groups.map(g => ({
+    ...g,
+    items: g.items.map(it => {
+      const out = fn(it);
+      if (!out) dropped.add(it.kind + '|' + it.id);
+      return out;
+    }).filter(Boolean),
+  })).filter(g => g.items.length);
+  const items = (p.items || []).filter(it => !dropped.has(attentionItemKind(it.kind) + '|' + it.id));
+  return { ...p, groups, items, needs_you: items.length };
 }
