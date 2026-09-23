@@ -636,6 +636,15 @@ test('style.css tile colors match harnessMeta for every known harness', () => {
   assert.ok(styleCSS.includes('.harness-tile.light {'), 'light tile rule missing');
 });
 
+test('the session pulse animates only when motion is allowed; reduce stops transitions', () => {
+  const uses = [...styleCSS.matchAll(/animation:\s*sc-breathe/g)];
+  assert.equal(uses.length, 1);
+  const guard = styleCSS.lastIndexOf('@media (prefers-reduced-motion: no-preference) {', uses[0].index);
+  assert.ok(guard >= 0 && !styleCSS.slice(guard, uses[0].index).includes('}'),
+    'the pulse animation must sit inside the no-preference block');
+  assert.match(styleCSS, /@media \(prefers-reduced-motion: reduce\) \{\s*\* \{ animation: none !important; transition: none !important; \}/);
+});
+
 test('harnessChipHTML renders the sprite mark by class and escapes the name', () => {
   const claude = harnessChipHTML('claude');
   assert.match(claude, /<svg class="harness-logo" aria-hidden="true"><use href="#logo-claude"\/><\/svg>/);
