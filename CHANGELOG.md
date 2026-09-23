@@ -7,6 +7,10 @@ All notable changes to `secure-agent` are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- Hermes Agent process matcher (`hermes-agent`, `/.hermes/`).
+- Hermes Agent sessions from `state.db` and each profile's `state.db`: turns, tool calls and model calls; `hermes_home` setting.
+- Hermes sessions carry the repo, branch and parent session Hermes records.
+- `/doctor` `hermes` check: databases read, watermarks and last poll, or not installed.
 - openclaw conversations from `lcm.db`: sessions, turns, tool calls and model calls; `openclaw_home` setting.
 - `/doctor` trace coverage names the traced harnesses.
 - `/costs` rows and total split `unpriced_calls` into `unknown_model_calls`, `unpriced_model_calls`, `plan_calls` and `local_calls`.

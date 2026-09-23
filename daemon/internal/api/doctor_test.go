@@ -319,3 +319,33 @@ func TestDoctorChecksFromFacts(t *testing.T) {
 		}
 	}
 }
+
+func TestDoctorHermes(t *testing.T) {
+	polled := time.Date(2026, 9, 23, 8, 0, 0, 0, time.UTC)
+	for name, tc := range map[string]struct {
+		st            *collect.HermesStatus
+		state, detail string
+	}{
+		"unwired": {nil, doctorSkip, "not wired"},
+		"absent":  {&collect.HermesStatus{Root: "/h", LastPoll: polled}, doctorSkip, "not installed (no state.db under /h)"},
+		"read": {&collect.HermesStatus{Root: "/h", LastPoll: polled, DBs: []collect.HermesDBStatus{
+			{Path: "/h/state.db", Watermark: 42}, {Path: "/h/profiles/w/state.db", Watermark: 3}}},
+			doctorPass, "/h/state.db @ message 42, /h/profiles/w/state.db @ message 3 · polled 2026-09-23T08:00:00Z"},
+		"failing": {&collect.HermesStatus{Root: "/h", LastPoll: polled, LastError: "/h/state.db: messages: no such table",
+			DBs: []collect.HermesDBStatus{{Path: "/h/state.db"}}}, doctorFail, "/h/state.db: messages: no such table"},
+	} {
+		if state, detail := checkHermes(doctorFacts{hermes: tc.st}); state != tc.state || detail != tc.detail {
+			t.Errorf("%s: checkHermes = %s %q, want %s %q", name, state, detail, tc.state, tc.detail)
+		}
+	}
+
+	// Wired through Deps, the report carries the row with its fix on fail.
+	st := testStore(t)
+	t.Cleanup(func() { st.Close() })
+	t.Setenv("HOME", t.TempDir())
+	a := New(Deps{Store: st, Status: func() Status { return Status{Uptime: "1h0m0s"} },
+		Hermes: func() collect.HermesStatus { return collect.HermesStatus{Root: "/h", LastError: "boom"} }})
+	if c := doctorCheckByID(t, a.doctorReport(polled), "hermes"); c.State != doctorFail || c.Detail != "boom" || c.Fix == "" {
+		t.Fatalf("hermes check = %+v, want fail with a fix", c)
+	}
+}

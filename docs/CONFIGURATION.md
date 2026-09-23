@@ -118,12 +118,19 @@ socket_path: "~/.config/secure-agent/daemon.sock"
 db_path: "~/.local/state/secure-agent/events.db"
 jsonl_path: "~/.local/state/secure-agent/events.jsonl"  # flag mirror; rotates at 8 MiB
 openclaw_home: "~/.openclaw"  # openclaw state directory holding lcm.db
+hermes_home: "~/.hermes"      # Hermes Agent root holding state.db and profiles/*/state.db
 ```
 
 `openclaw_home` is unset by default. Unset, the daemon uses the first of
 `$OPENCLAW_STATE_DIR`, `$OPENCLAW_HOME/.openclaw`, `~/.openclaw`, and the
 `.openclaw` directory of a running openclaw process's executable path that
 holds `lcm.db`. Set, it is the only path read.
+
+`hermes_home` is unset by default. Unset, the daemon uses `$HERMES_HOME`, else
+`~/.hermes`. It reads `state.db` there and each `profiles/<name>/state.db`;
+none present, the Hermes collector stays idle and `/doctor` reports `hermes`
+as not installed.
+A Hermes installed outside `~/.hermes` without a `hermes-agent` path needs an `agents:` override to be tagged.
 
 Tilde (`~`) prefixes are automatically expanded to the user's home directory. Environment variables (e.g. `$HOME`) are also resolved automatically.
 

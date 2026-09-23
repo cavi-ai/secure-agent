@@ -83,6 +83,7 @@ By default the daemon (`secure-agentd`) runs as a child process of the menu bar 
    - **Trace parsing** turns harness transcripts into agent-semantic events (tool calls, model calls, turns) — see the coverage table below. No transcript content ever crosses into an event: only tool names, durations, model ids and token counts.
    - **opencode** keeps no JSONL; its trace lives in a SQLite database and is read by a separate **read-only, watermarked poller** (`opencode_trace.go`) — never writes, never locks the app out, bounded rows per poll.
    - **openclaw** keeps its conversations in `lcm.db` (SQLite) in its state directory, read by the same kind of read-only, watermarked poller (`openclaw_trace.go`); the watermark persists beside the store. Each conversation is a session (`openclaw:<agent>` workspace label), ended when openclaw marks it inactive or archived.
+   - **Hermes Agent** keeps its sessions in `state.db` (SQLite) under its root (`hermes_home`, else `$HERMES_HOME`, else `~/.hermes`) and one `state.db` per profile under `profiles/<name>/`; each is read by the same kind of read-only poller (`hermes_trace.go`), watermarked per database on `messages.id`, the watermarks persisted beside the store. Each session carries its cwd (else a `hermes:<source>` label), the repo and branch Hermes records, and its parent session; it ends at Hermes's `ended_at`. Tool-call arguments and message content are never selected.
 
    **Trace coverage** (what the daemon can actually see, by harness):
 
@@ -94,6 +95,7 @@ By default the daemon (`secure-agentd`) runs as a child process of the menu bar 
    | Antigravity (agy) | `~/.gemini/antigravity-cli/brain/*/.system_generated/logs/transcript_full.jsonl` | tool calls (status, no duration), turns |
    | opencode | `~/.local/share/opencode/opencode.db` (SQLite) | tool calls (with durations), model calls (tokens + cost) |
    | openclaw | `<openclaw_home>/lcm.db` (SQLite) | tool calls (status; durations in whole seconds), turns, model calls (tokens + cost, when openclaw records step tokens) |
+   | Hermes Agent | `<hermes_home>/state.db`, `<hermes_home>/profiles/*/state.db` (SQLite) | tool calls (with durations; error only when `finish_reason` says so), turns, model calls (per model per session from `session_model_usage` when present, else per assistant message with `token_count`; cost recorded or priced from the model id) |
 
    Uncovered-by-trace harnesses (any other agent CLI) still get process, network and resource visibility, and every tailed log is redaction-scanned for secrets.
 
