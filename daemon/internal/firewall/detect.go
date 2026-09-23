@@ -50,15 +50,41 @@ func (d *Detector) Scan(text string) []Hit {
 }
 
 // ScanPatterns returns the typed-pattern hits only; the entropy layer is
-// never run.
+// never run. A match counts only where it starts a token (startsToken).
 func (d *Detector) ScanPatterns(text string) []Hit {
 	var hits []Hit
 	for _, p := range d.patterns {
-		if p.re.MatchString(text) {
+		if matchesAtTokenStart(p.re, text) {
 			hits = append(hits, Hit{RuleID: p.id, SecretType: p.secretType, Layer: LayerPattern, Confidence: 0.9})
 		}
 	}
 	return hits
+}
+
+// matchesAtTokenStart reports whether re matches text at a token start.
+func matchesAtTokenStart(re *regexp.Regexp, text string) bool {
+	for _, m := range re.FindAllStringIndex(text, -1) {
+		if startsToken(text, m[0]) {
+			return true
+		}
+	}
+	return false
+}
+
+// startsToken reports whether position i begins a token: the byte before it
+// is not a base64 or base64url character, or it ends a JSON escape (\n, \t,
+// \r). Vendor-key shapes occur by chance inside encoded blobs (encrypted
+// reasoning items, images); there they follow such a character.
+func startsToken(text string, i int) bool {
+	if i == 0 {
+		return true
+	}
+	c := text[i-1]
+	isB64 := c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '+' || c == '/' || c == '_' || c == '-'
+	if !isB64 {
+		return true
+	}
+	return i >= 2 && text[i-2] == '\\' && (c == 'n' || c == 't' || c == 'r')
 }
 
 func isTokenBreak(r rune) bool {
