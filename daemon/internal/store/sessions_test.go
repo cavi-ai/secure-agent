@@ -68,18 +68,39 @@ func TestRekeySessionRepointsEventsAndFlags(t *testing.T) {
 	defer s.Close()
 
 	now := time.Now()
-	s.UpsertSession(model.Session{ID: "proc-100-1", Harness: "claude", RootPID: 100,
+	s.UpsertSession(model.Session{ID: "proc-100-1", Harness: "claude", RootPID: 100, ParentID: "proc-50-1",
+		StartedAt: now, LastSeenAt: now, Status: model.SessionActive, Confidence: model.ConfProcessTree})
+	s.UpsertSession(model.Session{ID: "proc-200-1", Harness: "codex", RootPID: 200, ParentID: "proc-100-1",
 		StartedAt: now, LastSeenAt: now, Status: model.SessionActive, Confidence: model.ConfProcessTree})
 	s.PutEvent(event.Event{Kind: event.KindExec, PID: 100, TS: now, SessionID: "proc-100-1"})
 	s.PutFlag(model.Flag{ID: "f1", Rule: "keychain-access", Severity: 2, TS: now, SessionID: "proc-100-1"})
 
 	s.RekeySession("proc-100-1", "hook-abc")
 
-	if n := len(s.ListSessions(SessionFilter{})); n != 1 {
-		t.Fatalf("sessions = %d, want 1 after rekey", n)
+	if n := len(s.ListSessions(SessionFilter{})); n != 2 {
+		t.Fatalf("sessions = %d, want 2 after rekey", n)
 	}
-	if got := s.ListSessions(SessionFilter{})[0]; got.ID != "hook-abc" {
-		t.Fatalf("session id = %q, want hook-abc", got.ID)
+	if _, ok := s.GetSession("proc-100-1"); ok {
+		t.Fatal("old id still present after rekey")
+	}
+	if got, ok := s.GetSession("hook-abc"); !ok || got.ParentID != "proc-50-1" {
+		t.Fatalf("rekeyed session = %+v, %v; want parent proc-50-1", got, ok)
+	}
+	if child, _ := s.GetSession("proc-200-1"); child.ParentID != "hook-abc" {
+		t.Fatalf("child parent = %q, want hook-abc", child.ParentID)
+	}
+
+	// Merge into an existing row that has no parent: the parent carries over.
+	s.UpsertSession(model.Session{ID: "proc-300-1", Harness: "codex", RootPID: 300, ParentID: "hook-abc",
+		StartedAt: now, LastSeenAt: now, Status: model.SessionActive, Confidence: model.ConfProcessTree})
+	s.UpsertSession(model.Session{ID: "tx-300", Harness: "codex",
+		StartedAt: now, LastSeenAt: now, Status: model.SessionActive, Confidence: model.ConfTranscript})
+	s.RekeySession("proc-300-1", "tx-300")
+	if got, ok := s.GetSession("tx-300"); !ok || got.ParentID != "hook-abc" {
+		t.Fatalf("merged session = %+v, %v; want parent hook-abc", got, ok)
+	}
+	if _, ok := s.GetSession("proc-300-1"); ok {
+		t.Fatal("old id still present after merge")
 	}
 	for _, e := range s.RecentEvents(10) {
 		if e.SessionID != "hook-abc" {
