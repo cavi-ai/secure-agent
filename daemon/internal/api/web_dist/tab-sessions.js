@@ -1,36 +1,85 @@
 // Sessions tab: session-first. A rail of durable sessions (the P1 spine)
-// on the left; the selected session's trace waterfall on the right.
-// renderSessionBoard (app.js's panel registry) delegates here when durable
-// sessions exist; the legacy process-tree board remains the fallback.
+// grouped by harness on the left; the selected session's trace waterfall on
+// the right. renderSessionBoard (app.js's panel registry) delegates here when
+// durable sessions exist; the legacy process-tree board remains the fallback.
 
-// One rail card per session: name, repo@branch, state chip, last activity,
-// live RSS when the tree is up. Kill stays on live cards only.
-function sessionRailCardHTML(s, trees, selectedId) {
-  const live = s.root_pid && (trees || []).some(t => t.root && Number(t.root.pid) === Number(s.root_pid));
-  const tree = live ? (trees || []).find(t => t.root && Number(t.root.pid) === Number(s.root_pid)) : null;
+// liveTreeFor: the live process tree rooted at a session's root pid, if up.
+function liveTreeFor(s, trees) {
+  if (!s.root_pid) return null;
+  return (trees || []).find(t => t.root && Number(t.root.pid) === Number(s.root_pid)) || null;
+}
+
+// One rail card per session: title (the group head already names the
+// harness), state chip, last activity, live RSS when the tree is up, a pulse
+// while active. Kill stays on live cards only. nested indents a sub-session
+// under its parent.
+function sessionRailCardHTML(s, trees, selectedId, nested) {
+  const tree = liveTreeFor(s, trees);
   const rss = tree ? fmtRSS(tree.rss_bytes) : '';
   const status = s.status || 'active';
   const pulse = status === 'active' ? '<span class="sc-pulse active" aria-hidden="true"></span>' : '';
   const seen = s.last_seen_at ? fmtAge(s.last_seen_at, Date.now()) + ' ago' : '';
-  return `<button type="button" class="session-card ${status}${s.id === selectedId ? ' selected' : ''}" data-action="select-session" data-id="${escapeHTML(s.id)}" aria-pressed="${s.id === selectedId}">
-    <span class="sc-head">${harnessChipHTML(s.harness)}<span class="sc-label">${escapeHTML(sessionLabelDurable(s))}</span></span>
-    <span class="sc-meta">${pulse}<span class="sc-state ${escapeHTML(status)}">${escapeHTML(status)}</span>${seen ? `<span>${escapeHTML(seen)}</span>` : ''}${rss ? `<span>${escapeHTML(rss)}</span>` : ''}</span>
-  </button>`;
+  const selected = s.id === selectedId;
+  const title = sessionTitle(s, tree && tree.root.cwd);
+  const kill = tree && status !== 'ended'
+    ? `<button type="button" class="btn btn-danger btn-sm sc-kill" data-action="kill" data-pid="${escapeHTML(tree.root.pid)}" data-started="${escapeHTML(tree.root.started_at || '')}" data-family="${escapeHTML(s.harness || '')}" title="Terminate" aria-label="Terminate ${escapeHTML(title)}"><svg class="icon"><use href="#i-power"/></svg></button>`
+    : '';
+  return `<div class="session-card ${escapeHTML(status)}${selected ? ' selected' : ''}${nested ? ' nested' : ''}">
+    <button type="button" class="sc-main" data-action="select-session" data-id="${escapeHTML(s.id)}" aria-pressed="${selected}">
+      <span class="sc-head">${pulse}<span class="sc-label">${escapeHTML(title)}</span></span>
+      <span class="sc-meta"><span class="sc-state ${escapeHTML(status)}">${escapeHTML(status)}</span>${seen ? `<span>${escapeHTML(seen)}</span>` : ''}${rss ? `<span>${escapeHTML(rss)}</span>` : ''}</span>
+    </button>${kill}
+  </div>`;
 }
 
-// The selected session's trace: waterfall of tool calls, model usage rows,
-// and file/net/guard dots. data comes from GET /sessions/{id}/timeline.
-function sessionDetailHTML(sess, events) {
+// One harness group: mark + display name + counts in a collapsible head,
+// live families (sub-sessions indented), then the collapsed ended tail.
+function sessionGroupHTML(g, trees, selectedId, open, endedOpen) {
+  const family = f => sessionRailCardHTML(f.session, trees, selectedId, false)
+    + f.children.map(c => sessionRailCardHTML(c, trees, selectedId, true)).join('');
+  const ended = g.ended.length
+    ? `<div class="session-ended${endedOpen ? ' open' : ''}">
+        <button type="button" class="session-ended-toggle" data-action="toggle-ended-sessions" data-harness="${escapeHTML(g.key)}" aria-expanded="${endedOpen}">Ended (${familySize(g.ended)}) <svg class="icon"><use href="#i-arrow"/></svg></button>
+        <div class="session-ended-body">${g.ended.map(family).join('')}</div>
+      </div>`
+    : '';
+  return `<details class="session-group" data-harness="${escapeHTML(g.key)}"${open ? ' open' : ''}>
+    <summary class="session-group-head">${harnessChipHTML(g.key, { label: true })}<span class="session-group-counts">${escapeHTML(sessionGroupCounts(g))}</span></summary>
+    <div class="session-group-body">${g.live.map(family).join('')}${ended}</div>
+  </details>`;
+}
+
+// The trailing infra group: IDEs and model servers, RSS totals only.
+function sessionInfraGroupHTML(g, open) {
+  const rows = g.items.map(it => `<div class="infra-row">${harnessChipHTML(it.key, { label: true })}<span class="agent-meta-item">${escapeHTML(fmtRSS(it.rss) || '—')}</span></div>`).join('');
+  return `<details class="session-group infra" data-harness="infra"${open ? ' open' : ''}>
+    <summary class="session-group-head"><span class="session-group-title">Infrastructure</span><span class="session-group-counts">${escapeHTML(fmtRSS(g.rss) || '—')}</span></summary>
+    <div class="session-group-body">${rows}</div>
+  </details>`;
+}
+
+// The selected session's head and trace: mark, repo@branch, harness name,
+// identity confidence, workspace path (click copies), then the waterfall of
+// tool calls, model usage rows, and file/net/guard dots from
+// GET /sessions/{id}/timeline.
+function sessionDetailHTML(sess, events, trees) {
   if (!sess) {
     return `<div class="empty"><svg class="icon"><use href="#i-agent"/></svg><span>Select a session to see its trace</span></div>`;
   }
-  const label = sessionLabelDurable(sess);
+  const tree = liveTreeFor(sess, trees);
+  const title = sessionTitle(sess, tree && tree.root.cwd);
+  const path = sess.workspace && sess.workspace !== '/' ? sess.workspace : '';
   const meta = [
-    sess.workspace || '',
     sess.started_at ? 'started ' + fmtAge(sess.started_at, Date.now()) + ' ago' : '',
     sess.ended_at ? 'ended ' + fmtAge(sess.ended_at, Date.now()) + ' ago' : '',
-    sess.confidence ? 'identity: ' + sess.confidence : '',
   ].filter(Boolean).map(escapeHTML).join(' · ');
-  return `<div class="session-detail-head"><h3>${escapeHTML(label)}</h3><span class="sd-meta">${meta}</span></div>
+  return `<div class="session-detail-head">
+      ${harnessChipHTML(sess.harness)}
+      <h3>${escapeHTML(title)}</h3>
+      <span class="sd-harness">${escapeHTML(harnessMeta(sess.harness).label)}</span>
+      ${sess.confidence ? `<span class="ss-chip sd-conf" title="How this session was identified">${escapeHTML(sess.confidence)}</span>` : ''}
+      ${path ? `<button type="button" class="sd-path" data-action="copy-path" data-path="${escapeHTML(path)}" title="${escapeHTML(path)} — click to copy">${escapeHTML(middleTruncate(path, 48))}</button>` : ''}
+      ${meta ? `<span class="sd-meta">${meta}</span>` : ''}
+    </div>
     ${sessionWaterfallHTML(events)}`;
 }

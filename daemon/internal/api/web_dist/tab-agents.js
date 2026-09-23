@@ -1,15 +1,24 @@
-// Agents tab: family groups, instances, fleet (hidden until configured).
+// Agents tab: harness groups (same order, marks and filter state as the
+// Sessions rail), instances, an Infrastructure section, fleet (hidden until
+// configured).
 
 function renderAgents() {
   const SA = window.SA;
 
   const container = document.getElementById('agents-container');
   const badge = document.getElementById('badge-agents-count');
+  const pills = document.getElementById('agent-harness-pills');
   const agents = (SA.t.status && SA.t.status.agents) ? SA.t.status.agents : [];
-  const families = groupAgents(agents);
+  const groups = groupAgentsByHarness(agents);
+  const agentGroups = groups.filter(g => !g.infra);
 
-  badge.textContent = families.length;
-  SA.setTabBadge('agents', families.length); // informative count, neutral styling
+  // Infra is never counted as an agent.
+  badge.textContent = agentGroups.length;
+  SA.setTabBadge('agents', agentGroups.length); // informative count, neutral styling
+  if (pills) {
+    pills.innerHTML = harnessPillsHTML(agentGroups.map(g => g.key), SA.harnessFilter.harnesses);
+    applyInlineMetrics(pills);
+  }
 
   if (agents.length === 0) {
     container.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-agent"/></svg><span>No agents running yet — start Claude Code, Cursor, or Codex and they'll appear here</span></div>`;
@@ -17,46 +26,87 @@ function renderAgents() {
   }
 
   const now = Date.now();
-  const totalInstances = families.reduce((n, fam) => n + fam.roots.length, 0);
-  container.innerHTML = families.map(f => {
-    const open = familyShouldExpand(f, families.length, totalInstances, SA.agentGroupOpen);
-    const earliestAbs = f.earliest ? fmtTime(new Date(f.earliest)) : '';
-    const earliestAge = f.earliest ? fmtAge(f.earliest, now) : '';
-    const rss = fmtRSS(f.rss);
-    const orphanBtn = f.orphanCount
-      ? `<button type="button" class="btn btn-danger btn-sm" data-action="kill-orphans" data-family="${escapeHTML(f.name)}"><svg class="icon"><use href="#i-power"/></svg><span>Terminate orphans (${f.orphanCount})</span></button>`
-      : '';
-    return `
-    <details class="agent-group" data-family="${escapeHTML(f.name)}"${open ? ' open' : ''}>
-      <summary class="agent-group-head">
-        <span class="agent-group-title">
-          ${harnessChipHTML(f.name)}
-          <span class="agent-family-name">${escapeHTML(f.title)}</span>
-          <span class="agent-pid">${f.roots.length} ${f.roots.length === 1 ? 'instance' : 'instances'}</span>
-        </span>
-        <span class="agent-group-meta">
-          ${earliestAbs ? `<span class="agent-meta-item" title="${escapeHTML(f.earliest)}">${escapeHTML(earliestAbs)}${earliestAge ? ' · ' + earliestAge : ''}</span>` : ''}
-          ${rss ? `<span class="agent-meta-item">${escapeHTML(rss)}</span>` : ''}
-          ${f.orphanCount ? `<span class="agent-orphan-count">${f.orphanCount} leftover</span>` : ''}
-          ${orphanBtn}
-        </span>
-      </summary>
-      <div class="agent-instances">
-        ${f.roots.map(root => renderInstance(root, f.members, now)).join('')}
-      </div>
-    </details>`;
-  }).join('');
+  const shown = applyAgentFilters(groups, SA.harnessFilter);
+  const visible = shown.filter(g => !g.infra);
+  const infra = shown.filter(g => g.infra);
+  const isOpen = (key, dflt) => (Object.prototype.hasOwnProperty.call(SA.agentGroupOpen, key) ? !!SA.agentGroupOpen[key] : dflt);
+  const body = visible.length
+    ? visible.map(g => agentGroupHTML(g, now, isOpen(g.key, true), SA.agentTreeOpen)).join('')
+    : agentGroups.length
+      ? `<div class="empty"><svg class="icon"><use href="#i-agent"/></svg><span>No agents match — <button type="button" class="link-btn" data-action="clear-harness-filter">clear the filter</button></span></div>`
+      : `<div class="empty"><svg class="icon"><use href="#i-agent"/></svg><span>No agents running — only infrastructure below</span></div>`;
+  const infraSection = infra.length
+    ? `<section class="agent-infra" aria-label="Infrastructure"><h3 class="agent-infra-head">Infrastructure <span>IDEs and model servers — not counted as agents</span></h3>${infra.map(g => agentGroupHTML(g, now, isOpen(g.key, false), SA.agentTreeOpen)).join('')}</section>`
+    : '';
+  container.innerHTML = body + infraSection;
+  applyInlineMetrics(container);
 
   container.querySelectorAll('details.agent-group').forEach(el => {
     el.addEventListener('toggle', () => {
-      SA.agentGroupOpen[el.dataset.family] = el.open;
+      SA.agentGroupOpen[el.dataset.harness] = el.open;
+    });
+  });
+  container.querySelectorAll('details.agent-tree').forEach(el => {
+    el.addEventListener('toggle', () => {
+      SA.agentTreeOpen[el.dataset.pid] = el.open;
     });
   });
 }
 
-function renderInstance(root, members, now) {
-  const kids = childrenOf(root, members);
-  return `${renderProcessRow(root, now, false)}${kids.map(c => renderProcessRow(c, now, true)).join('')}`;
+// One harness group: mark + display name, then instances, processes, RSS,
+// CPU and last seen over the instances shown; leftovers get a bulk kill.
+function agentGroupHTML(g, now, open, treeOpen) {
+  const t = agentGroupTotals(g);
+  const rss = fmtRSS(t.rss);
+  const cpu = fmtCPU(t.cpu);
+  const seen = t.lastSeen ? fmtAge(t.lastSeen, now) : '';
+  const orphanBtn = t.orphans
+    ? `<button type="button" class="btn btn-danger btn-sm" data-action="kill-orphans" data-family="${escapeHTML(g.key)}"><svg class="icon"><use href="#i-power"/></svg><span>Terminate orphans (${t.orphans})</span></button>`
+    : '';
+  return `
+    <details class="agent-group${g.infra ? ' infra' : ''}" data-harness="${escapeHTML(g.key)}"${open ? ' open' : ''}>
+      <summary class="agent-group-head">
+        <span class="agent-group-title">${harnessChipHTML(g.key, { label: true })}</span>
+        <span class="agent-group-meta">
+          <span class="agent-meta-item">${t.instances} ${t.instances === 1 ? 'instance' : 'instances'} · ${t.processes} ${t.processes === 1 ? 'process' : 'processes'}</span>
+          ${rss ? `<span class="agent-meta-item">${escapeHTML(rss)}</span>` : ''}
+          ${cpu ? `<span class="agent-meta-item">${escapeHTML(cpu)} CPU</span>` : ''}
+          ${seen ? `<span class="agent-meta-item agent-lastseen" title="${escapeHTML(t.lastSeen)}">seen ${escapeHTML(seen)} ago</span>` : ''}
+          ${t.orphans ? `<span class="agent-orphan-count">${t.orphans} leftover</span>` : ''}
+          ${orphanBtn}
+        </span>
+      </summary>
+      <div class="agent-instances">
+        ${g.instances.map(inst => agentInstanceHTML(inst, now, treeOpen)).join('')}
+      </div>
+    </details>`;
+}
+
+// One instance: what it works on (repo@branch, else its folder) with the pid
+// beside it, leftover badge, activity, RSS of its tree, kill; helper
+// processes sit behind a disclosure.
+function agentInstanceHTML(inst, now, treeOpen) {
+  const a = inst.root;
+  const title = sessionTitle(a, a.cwd) || harnessMeta(a.name).label;
+  const seenAge = a.last_seen_at ? fmtAge(a.last_seen_at, now) : '';
+  const stale = a.last_seen_at ? (now - Date.parse(a.last_seen_at)) > 10 * 60 * 1000 : true;
+  const rss = fmtRSS([a, ...inst.children].reduce((n, p) => n + Number(p.rss_bytes || 0), 0));
+  const n = inst.children.length;
+  const tree = n
+    ? `<details class="session-helpers agent-tree" data-pid="${escapeHTML(a.pid)}"${treeOpen[a.pid] ? ' open' : ''}><summary class="session-helpers-sum">${n} helper process${n === 1 ? '' : 'es'}</summary>${inst.children.map(c => renderProcessRow(c, now, true)).join('')}</details>`
+    : '';
+  return `
+      <div class="agent-instance agent-row${n ? ' has-tree' : ''}${a.is_orphan ? ' orphan' : ''}${stale ? ' stale' : ''}">
+        <div class="agent-row-main" title="${escapeHTML(a.cwd || a.workspace || '')}">
+          <span class="agent-row-title">${escapeHTML(title)}</span>
+          <span class="agent-pid">PID ${escapeHTML(a.pid)}</span>
+          ${a.is_orphan ? '<span class="agent-status orphan">leftover</span>' : ''}
+          ${seenAge ? `<span class="agent-meta-item agent-lastseen" title="last event ${escapeHTML(a.last_seen_at)}">active ${escapeHTML(seenAge)} ago</span>` : `<span class="agent-meta-item agent-lastseen">no activity</span>`}
+          ${rss ? `<span class="agent-meta-item">${escapeHTML(rss)}</span>` : ''}
+        </div>
+        <button type="button" class="btn btn-danger btn-sm" data-action="kill" data-pid="${escapeHTML(a.pid)}" data-started="${escapeHTML(a.started_at || '')}" data-family="${escapeHTML(a.name || '')}"><svg class="icon"><use href="#i-power"/></svg><span>Terminate</span></button>
+        ${tree}
+      </div>`;
 }
 
 function renderFleet() {
