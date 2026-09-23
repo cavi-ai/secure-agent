@@ -407,17 +407,20 @@ func TestConsoleAPIPathsCoverWebApp(t *testing.T) {
 	}
 	// Dynamic route families produce fragments the literal extractor cannot
 	// assemble (e.g. "/sessions/" + id + "/timeline"). Validate the assembled
-	// route directly; everything else must be an exact allow-list key.
+	// routes directly; everything else must be an exact allow-list key.
 	if !isConsoleAPIPath("/sessions/sess-1/timeline") {
 		t.Error("dynamic /sessions/{id}/timeline route is not console-allowed — the trace panel 407s on the proxy listener")
 	}
-	fragments := map[string]bool{"/timeline": true, "/sessions": true}
+	if !isConsoleAPIPath("/sessions/sess-1/report") {
+		t.Error("dynamic /sessions/{id}/report route is not console-allowed — the Export button 407s on the proxy listener")
+	}
+	fragments := map[string]bool{"/timeline": true, "/report": true, "/sessions": true}
 	for p := range seen {
 		if isConsoleAPIPath(p) {
 			continue
 		}
 		if fragments[p] {
-			continue // part of the dynamic session-timeline route, checked above
+			continue // part of a dynamic session route, checked above
 		}
 		t.Errorf("console fetches %s but the console allow-list lacks it — that panel 407s on the proxy listener", p)
 	}
@@ -498,11 +501,21 @@ func TestConsoleAPIGate(t *testing.T) {
 	}
 }
 
-// The dynamic session-trace route is console-gated: an exact shape is
-// admitted, anything else on the prefix falls through to proxy auth.
+// The dynamic session routes are console-gated: the exact timeline and
+// report shapes are admitted, anything else on the prefix falls through to
+// proxy auth.
 func TestConsoleSessionTimelinePathGate(t *testing.T) {
 	if !isConsoleAPIPath("/sessions/sess-1/timeline") {
 		t.Fatal("the session timeline route must be console-allowed")
+	}
+	if !isConsoleAPIPath("/sessions/sess-1/report") {
+		t.Fatal("the session report route must be console-allowed")
+	}
+	if isConsoleAPIPath("/sessions/sess-1/other") {
+		t.Fatal("an unknown session subpath must not be admitted")
+	}
+	if isConsoleAPIPath("/sessions//report") {
+		t.Fatal("empty session id must not be admitted for the report")
 	}
 	if isConsoleAPIPath("/sessions/sess-1") {
 		t.Fatal("bare session id is not a console API path")

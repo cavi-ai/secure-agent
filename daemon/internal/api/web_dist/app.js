@@ -1237,6 +1237,28 @@ document.addEventListener('DOMContentLoaded', () => {
     const r = await apiFetch('/sessions/' + encodeURIComponent(id) + '/timeline?limit=500');
     if (r.ok) sessionTimeline = (await r.json()) || [];
   }
+  // Export: copy the session's markdown report. Safari only honours a
+  // clipboard write started inside the click, so where ClipboardItem exists
+  // the write starts now with the report body still loading.
+  window.copySessionReport = function(id) {
+    const text = apiFetch('/sessions/' + encodeURIComponent(id) + '/report?format=md').then(async r => {
+      const body = await r.text();
+      if (!r.ok) throw new Error((body || '').trim() || 'HTTP ' + r.status);
+      return body;
+    });
+    const clip = navigator.clipboard;
+    let write;
+    if (clip && typeof clip.write === 'function' && typeof window.ClipboardItem === 'function') {
+      write = clip.write([new ClipboardItem({ 'text/plain': text.then(t => new Blob([t], { type: 'text/plain' })) })]);
+    } else if (clip) {
+      write = text.then(t => clip.writeText(t));
+    } else {
+      write = Promise.reject(new Error('no clipboard'));
+    }
+    Promise.all([text, write]).then(
+      () => showToast('Session report copied (markdown)', 'success'),
+      err => showToast('Export failed: ' + ((err && err.message) || err), 'danger'));
+  };
   window.selectSession = async function(id) {
     selectedSessionId = (selectedSessionId === id) ? '' : id;
     if (selectedSessionId) await loadSessionTimeline(selectedSessionId, true);
@@ -1951,6 +1973,9 @@ document.addEventListener('DOMContentLoaded', () => {
         harnessFilter.harnesses = {};
         harnessFilter.text = '';
         harnessFilterChanged();
+        break;
+      case 'copy-report':
+        window.copySessionReport(d.id);
         break;
       case 'copy-path':
         (navigator.clipboard ? navigator.clipboard.writeText(d.path || '') : Promise.reject(new Error('no clipboard'))).then(

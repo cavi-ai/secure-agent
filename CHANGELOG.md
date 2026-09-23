@@ -7,6 +7,13 @@ All notable changes to `secure-agent` are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- Session report: `GET /sessions/{id}/report?format=json|md` aggregates one
+  session's tools, models, cost, files, hosts, guard decisions, findings,
+  secret-rule hits and opening timeline (names, paths, hosts, model and rule
+  ids, counts — never content); `secure-agent session <id-or-prefix>` prints
+  it as markdown, `secure-agent sessions` lists sessions, `GET /sessions`
+  filters by `harness`, `repo`, `branch` and `since`, and the console's
+  session head gains an Export button that copies the markdown.
 - `secret-in-transcript` flag: tailed harness transcript lines are scanned with
   the firewall's known-secret fingerprints and typed patterns; a hit carries
   the rule id, transcript path, and session id (never the matched text), is

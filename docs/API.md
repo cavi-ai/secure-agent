@@ -457,6 +457,66 @@ Each check has a `state` of `pass`, `fail` or `skip`, a `detail`, and on `fail` 
 
 (The example shows three of the thirteen checks.) Read-level. CLI: `secure-agent doctor [--json]` prints one `PASS`/`FAIL`/`SKIP` line per check, a `fix:` line under each failure and a summary line, and exits `1` when any check fails.
 
+### 18. `GET /sessions/{id}/report`
+
+What one session did — tools, models, spend, files, hosts, guard decisions, findings and secret-rule hits — as JSON or markdown. It carries tool names, model ids, paths, hosts, rule ids and counts; never content or matched text.
+
+```
+GET /sessions/{id}/report?format=json|md
+```
+
+`format` defaults to `json`; `md` returns `Content-Type: text/markdown; charset=utf-8`. An unknown session id, or any `/sessions/{id}/…` leaf other than `timeline` and `report`, returns `404`; another `format` returns `400`.
+
+```json
+{
+  "session": {"id": "7f3a9c21-…", "harness": "claude", "repo": "api-service", "branch": "main",
+              "started_at": "2026-09-23T09:00:00Z", "last_seen_at": "2026-09-23T09:42:10Z",
+              "status": "active", "confidence": "hook"},
+  "duration_s": 2530, "events": 214,
+  "turns": 6, "tool_calls": 41, "model_calls": 19,
+  "tokens_in": 812000, "tokens_out": 9100, "cost_usd": 3.12, "unpriced_calls": 0,
+  "tools": [{"key": "Bash", "count": 22, "errors": 2, "duration_ms": 61000}],
+  "models": [{"model": "claude-sonnet-4-5", "calls": 19, "tokens_in": 812000, "tokens_out": 9100,
+              "cost_usd": 3.12, "unpriced_calls": 0}],
+  "files": [{"key": "/work/api-service/go.mod", "count": 4}],
+  "hosts": [{"key": "api.anthropic.com", "count": 19}],
+  "guard": [{"ts": "2026-09-23T09:10:02Z", "kind": "guard-resolved", "label": "allow/session"}],
+  "secret_hits": [{"ts": "2026-09-23T09:20:40Z", "kind": "transcript-hit", "label": "aws-key", "status": "typed"}],
+  "flags": [],
+  "timeline": [{"ts": "2026-09-23T09:00:04Z", "kind": "tool-call", "label": "Bash", "status": "ok", "duration_ms": 1500}]
+}
+```
+
+- Events are read oldest-first, at most 20,000 per report; `events` is how many were read.
+- `tools` are sorted by calls (`errors` counts `tool_status: "error"`, `duration_ms` is summed); `models` by cost; `files` (file open/write/delete) and `hosts` (connections) by count, at most 50 each.
+- `secret_hits` are transcript hits: `label` is the rule id, `status` the detection layer.
+- `flags` are the session's findings; `timeline` is the first 500 events, labelled by tool, model, path, host or detail.
+- Every list is `[]` when empty, never `null`.
+
+The markdown form:
+
+```
+# <harness> · <repo>@<branch, or the workspace> — <started, local> → <ended | live> (<duration>)
+Session `<id>` · <status> · identity: <confidence>
+
+## Summary
+- Turns N · tool calls N (E errors) · model calls N · tokens N in / N out · cost $X (N unpriced)
+- Files touched N · hosts contacted N · guard decisions N · findings N · secret hits N
+
+## Models            table: model | calls | tokens in | tokens out | cost
+## Tools             table: tool | calls | errors | time
+## Files touched     - `path` × count (top 25)
+## Network           - host × count
+## Guard decisions   - HH:MM:SS kind label
+## Findings          - severity N · rule · timestamp
+## Secret hits       - rule · layer · HH:MM:SS
+## Timeline          - HH:MM:SS kind label [status] [duration] (first 100, then "… N more")
+```
+
+Empty sections read `none`. Costs use the console's rule: two decimals, `<$0.01` under a cent. Read-level; admitted on the proxy listener with the console token. CLI: `secure-agent session <id-or-prefix> [--json]` prints the markdown (or the JSON); a unique id prefix of at least 6 characters resolves, an ambiguous one lists its candidates and exits `1`.
+
+`GET /sessions` (the session list) narrows with exact-match `harness`, `repo` and `branch`, and `since` (`24h`, `7d` or RFC3339, as `/costs`; a session matches when it started or was last seen at or after it), alongside `status` (`active`, `idle`, `ended`; default: live sessions, then the 25 most recent ended ones) and `limit` (default 100). A malformed `since` returns `400`. CLI: `secure-agent sessions [--harness H] [--repo R] [--branch B] [--since D] [--status S] [--limit N] [--json]`.
+
 ---
 
 ## 🔐 Peer authentication & endpoint roles
@@ -579,7 +639,7 @@ Live feed of every bus event as `event: <kind>` / `data: <json>`, with a 15s hea
 
 ### Console access on the proxy port
 
-The browser console at `http://127.0.0.1:<proxy_port>/dashboard/` fetches telemetry same-origin, i.e. from the proxy listener. That listener serves the API endpoints listed in `proxy.isConsoleAPIPath` (status/posture/flags/events/incidents/audit/fleet/firewall sources + guard pending/rules/resolve + kill + rollup + mute + allowlist(+suggestions) + `/egress/uninspected` + `/notify/rules` + advisor retriage + this SSE stream) behind the **console token**. The whitelist is kept in lockstep with the console's fetches by `TestConsoleAPIPathsCoverWebApp` — a path the console fetches but the listener doesn't whitelist 407s and the panel dies silently, which is exactly the drift that test exists to catch:
+The browser console at `http://127.0.0.1:<proxy_port>/dashboard/` fetches telemetry same-origin, i.e. from the proxy listener. That listener serves the API endpoints listed in `proxy.isConsoleAPIPath` (status/posture/flags/events/incidents/audit/fleet/firewall sources + guard pending/rules/resolve + kill + rollup + mute + allowlist(+suggestions) + `/egress/uninspected` + `/notify/rules` + advisor retriage + `/sessions/{id}/timeline` and `/sessions/{id}/report` + this SSE stream) behind the **console token**. The whitelist is kept in lockstep with the console's fetches by `TestConsoleAPIPathsCoverWebApp` — a path the console fetches but the listener doesn't whitelist 407s and the panel dies silently, which is exactly the drift that test exists to catch:
 
 - Header `X-SecureAgent-Console-Token: <token>` (fetch/XHR) or `?ct=<token>` (EventSource can't set headers).
 - The token lives at `~/.config/secure-agent/console-token` (0600), distinct from the proxy token on purpose: agents routed through the proxy carry the proxy token in their environment and must not be able to read telemetry or resolve guard prompts with it.
