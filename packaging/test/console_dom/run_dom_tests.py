@@ -186,6 +186,10 @@ def main():
         dom_act = dump_dom(chrome, tmp, "?actdemo")
         dom_actfail = dump_dom(chrome, tmp, "?actdemo&postfail")
         dom_export = dump_dom(chrome, tmp, "?raildemo&exportdemo")
+        dom_explain = dump_dom(chrome, tmp, "?explaindemo")
+        dom_explainact = dump_dom(chrome, tmp, "?explaindemo&explainact")
+        dom_explainfail = dump_dom(chrome, tmp, "?explaindemo&explainact&postfail")
+        dom_detailsprobe = dump_dom(chrome, tmp, "?explaindemo&detailsprobe")
 
         # --- session-first tab (P3) ---
         rail = dom.split('id="session-rail"', 1)[1].split('id="session-detail"', 1)[0]
@@ -716,6 +720,72 @@ def main():
               and 'class="toast danger"' in dom_actfail
               and 'data-action="allow-host" data-agent="cursor" data-host="registry.npmjs.org"' in dom_actfail,
               f"requests={pre(dom_actfail, 'mock-requests')!r}")
+
+        # --- finding card v2: the daemon's served explanation ---
+        def visible(markup):
+            return re.sub(r"<[^>]*>", " ", markup)
+
+        card = (re.search(r'<article class="finding [^"]*" data-flag-id="flag-2">.*?</article>', dom_explain, re.S)
+                or [""])[0]
+        head = (re.search(r"<header[^>]*>(.*?)</header>", card, re.S) or [None, ""])[1]
+        outside = re.sub(r"<details.*?</details>", "", card, flags=re.S)
+        check("finding card: header shows the title, never the rule id; no pid or IPv6 outside Details",
+              card != "" and "Agent read a secret, then connected out" in head
+              and "sensitive-read-then-connect" not in visible(head)
+              and not re.search(r"\bpid\b", visible(outside), re.I) and "6033" not in visible(outside)
+              and "2606:" not in visible(outside), f"card={card[:240]!r}")
+        check("finding card carries no inline handlers or styles",
+              card != "" and " onclick=" not in card and " style=" not in card)
+        buttons = re.findall(r'<button class="btn ([a-z-]+) btn-sm" data-action="explain-act" '
+                             r'data-flag-id="flag-2" data-action-id="([a-z-]+)"', card)
+        check("finding card: who, what and verdict lines; the recommended action is the first, primary button",
+              "cursor · web-app@main" in head and "3 s gap" in head
+              and '<p class="finding-what">Cursor read AWS credentials (~/.aws/credentials), then reached Cloudflare 3 s later.</p>' in card
+              and '<p class="finding-verdict">Likely benign (advisor 93 %): Cloudflare fronts the package registry this project installs from.</p>' in card
+              and buttons == [("btn-primary", "allow-host"), ("btn-ghost", "dismiss"), ("btn-danger", "kill")],
+              f"buttons={buttons}")
+        details = (re.search(r'<details class="finding-details">(.*?)</details>', card, re.S) or [None, ""])[1]
+        check("finding card: Details is closed by default and holds the chain, pid, full address and ISO timestamp",
+              details != "" and 'class="chain"' in details and "2026-09-22T16:05:01Z" in details
+              and "6033" in details and "[2606:4700::6810:84e5]:443" in details
+              and "/Users/dev/.aws/credentials" in details, f"details={details[:200]!r}")
+
+        act_reqs = pre(dom_explainact, "mock-requests")
+        flags_act = dom_explainact.split('id="flags-list"', 1)[-1].split('id="incidents-container"', 1)[0]
+        check("finding card: the recommended action sends the served request; the card leaves with an inline note",
+              'POST /allowlist' in act_reqs
+              and 'body={"agent":"cursor","host":"2606:4700::6810:84e5"}' in act_reqs
+              and 'POST /flags/acknowledge' in act_reqs
+              and 'data-flag-id="flag-2"' not in flags_act
+              and 'class="card-note">allowlisted<' in dom_explainact, f"requests={act_reqs!r}")
+        fail_reqs = pre(dom_explainfail, "mock-requests")
+        flags_fail = dom_explainfail.split('id="flags-list"', 1)[-1].split('id="incidents-container"', 1)[0]
+        check("finding card: a failed allow puts the card back and toasts danger",
+              'POST /allowlist' in fail_reqs and 'POST /flags/acknowledge' not in fail_reqs
+              and '<article class="finding disp-benign" data-flag-id="flag-2">' in flags_fail
+              and 'class="toast danger"' in dom_explainfail, f"requests={fail_reqs!r}")
+
+        attn = dom_explain.split('id="attention-center"', 1)[-1].split('id="security-findings-grid"', 1)[0]
+        attn_groups = re.findall(r'<article class="attention-group([^"]*)">(.*?)</article>', attn, re.S)
+        flag2_groups = [(cls, body) for cls, body in attn_groups if 'data-flag-id="flag-2"' in body]
+        check("attention: the flag item shows who, what, verdict and the served actions; benign-likely is not urgent",
+              len(flag2_groups) == 1 and "urgent" not in flag2_groups[0][0]
+              and 'class="attention-item kind-flag finding-item disp-benign"' in flag2_groups[0][1]
+              and "cursor · web-app@main" in flag2_groups[0][1]
+              and "Cursor read AWS credentials (~/.aws/credentials), then reached Cloudflare 3 s later." in flag2_groups[0][1]
+              and "Likely benign (advisor 93 %): Cloudflare fronts" in flag2_groups[0][1]
+              and 'data-action="explain-act" data-flag-id="flag-2" data-action-id="allow-host"' in flag2_groups[0][1]
+              and 'data-action="dismiss-flag" data-id="flag-2"' not in flag2_groups[0][1],
+              f"groups={[c for c, _ in attn_groups]}")
+        probe = pre(dom_detailsprobe, "details-probe")
+        ages = re.match(r"kept (.+) \| (.+)$", probe)
+        check("finding card: an open Details survives re-renders while the age ticks in place",
+              ages is not None and ages.group(1) != ages.group(2) and ages.group(2).endswith(" ago"),
+              f"probe={probe!r}")
+        check("finding card: flags without explain keep the legacy card",
+              dom_explain.count('class="flag-card') == 2
+              and "proxy-secret-leak — cursor (PID 6033)" in dom_explain
+              and 'data-action="dismiss-flag" data-id="flag-3"' in dom_explain)
 
         if args.screenshot:
             shot_dir = os.path.abspath(args.screenshot)

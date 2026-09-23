@@ -1146,12 +1146,17 @@ document.addEventListener('DOMContentLoaded', () => {
   // Dismiss ONE flag (acknowledge): reviewed-and-done — the flag leaves the
   // list, the rule keeps watching. The missing middle ground between "kill
   // the agent" and "suppress the class".
-  window.dismissFlag = async function(id) {
-    const revert = stage(['flags', 'flagsView', 'posture'], ['flags', 'attention', 'chart-flags', 'status', 'tab-badges'], () => {
+  // The flag leaves flags, flagsView and the attention queue; revert() puts
+  // it back.
+  function stageDropFlag(id) {
+    return stage(['flags', 'flagsView', 'posture'], ['flags', 'attention', 'chart-flags', 'status', 'tab-badges'], () => {
       telemetryData.flags = (telemetryData.flags || []).filter(x => x.id !== id);
       telemetryData.flagsView = (telemetryData.flagsView || []).filter(x => x.id !== id);
       mapAttentionItems(it => (it.kind === 'flag' && it.id === id ? null : it));
     });
+  }
+  window.dismissFlag = async function(id) {
+    const revert = stageDropFlag(id);
     try {
       const res = await apiFetch('/flags/acknowledge', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -1689,13 +1694,75 @@ document.addEventListener('DOMContentLoaded', () => {
           : `Muted ${rule} for ${host} — future flags suppressed`, 'success');
         cardNote(`#flags-list [data-action="unmute"][data-rule="${cssq(rule)}"][data-host="${cssq(host)}"]`, '.mute-row', 'flags-list', 'muted');
         fetchTelemetry();
-      } else {
-        revert();
-        showToast(`Failed to mute: ${await res.text()}`, 'danger');
+        return true;
       }
+      revert();
+      showToast(`Failed to mute: ${await res.text()}`, 'danger');
     } catch (err) {
       revert();
       showToast(`Error muting: ${err}`, 'danger');
+    }
+    return false;
+  };
+
+  // A served explanation action (finding card, attention item). The request
+  // comes from flag.explain.actions, found by flag id + action id (+ host:
+  // allow-host appears once per destination); each id runs the console's
+  // existing optimistic path. allow-host, mute and dismiss resolve the flag,
+  // so its card leaves the list; POST /allowlist does not acknowledge the
+  // flag on the daemon, so the allow is followed by /flags/acknowledge.
+  window.explainAct = async function(flagId, actionId, host) {
+    const f = (telemetryData.flags || []).find(x => x.id === flagId)
+      || (telemetryData.flagsView || []).find(x => x.id === flagId);
+    const a = f && f.explain && (f.explain.actions || []).find(x => x.id === actionId
+      && (!host || (x.body && x.body.host) === host));
+    if (!a) {
+      showToast('That action is no longer offered for this finding — the list is refreshing.', 'info');
+      fetchTelemetry();
+      return;
+    }
+    const body = a.body || {};
+    switch (a.id) {
+      case 'dismiss':
+        return window.dismissFlag(f.id);
+      case 'kill':
+        return window.killProcess(Number(body.pid), body.started_at, f.agent);
+      case 'open-incident':
+        return window.openIncidentReport(new URLSearchParams(String(a.path).split('?')[1] || '').get('id') || '');
+      case 'mute-rule-host':
+      case 'mute-class':
+        if (await window.muteFlag(body.rule, body.host)) stageDropFlag(f.id);
+        return;
+      case 'allow-host': {
+        const revertAllow = stageAllow(body.agent, [body.host]);
+        const revertDrop = stageDropFlag(f.id);
+        const send = async (method, path, payload) => {
+          const res = await apiFetch(path, {
+            method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+          });
+          if (!res.ok) throw new Error(await res.text());
+        };
+        try {
+          await send(a.method, a.path, body);
+        } catch (err) {
+          revertDrop();
+          revertAllow();
+          showToast(`Failed to allowlist ${body.host}: ${err.message || err}`, 'danger');
+          return;
+        }
+        try {
+          await send('POST', '/flags/acknowledge', { flag_id: f.id });
+        } catch (err) {
+          revertDrop();
+          showToast(`Allowlisted ${body.host}, but the flag was not marked reviewed: ${err.message || err}`, 'danger');
+          fetchTelemetry();
+          return;
+        }
+        showToast(`Allowlisted ${body.host} for ${body.agent}`, 'success');
+        cardNote('', '', 'flags-list', 'allowlisted');
+        fetchTelemetry();
+        return;
+      }
     }
   };
 
@@ -1990,6 +2057,9 @@ document.addEventListener('DOMContentLoaded', () => {
         break;
       case 'dismiss-flag':
         window.dismissFlag(d.id);
+        break;
+      case 'explain-act':
+        window.explainAct(d.flagId, d.actionId, d.host);
         break;
       case 'retriage':
         window.retriageFlag(d.id);
