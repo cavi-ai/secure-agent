@@ -142,14 +142,17 @@ func parseLaunchctlState(out string) string {
 // ESLogger is where the bytes come from: a root-written file instead of a
 // root-required child process.
 //
-// Poll-reopen model (simple, rotation-proof): every 200ms, open the file,
-// skip to the last-read offset, emit new lines, remember the offset. A
-// rotated/truncated/missing file resets the offset to "read what exists
-// now". At 200ms granularity the latency cost is negligible next to the
-// correlator's own windows.
+// Poll-reopen model (simple, rotation-proof): every 200ms, stat the file;
+// when its size or mtime moved, open it, skip to the last-read offset, emit
+// new lines, remember the offset. A rotated/truncated/missing file resets
+// the offset to "read what exists now". At 200ms granularity the latency
+// cost is negligible next to the correlator's own windows.
 type SpoolTailer struct {
 	bus  *bus.Bus
 	path string
+
+	// open is the file opener; nil means os.Open (test seam).
+	open func(string) (*os.File, error)
 
 	// OnProduce, when set, is called after any spool event is published —
 	// the supervisor's coverage heartbeat: a tailer whose spool stopped
@@ -189,9 +192,9 @@ func (t *SpoolTailer) Run(ctx context.Context) error {
 }
 
 func (t *SpoolTailer) follow(ctx context.Context) error {
-	var offset int64
+	var c spoolCursor
 	for {
-		offset = t.drainOnce(offset)
+		c = t.poll(c)
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -200,12 +203,38 @@ func (t *SpoolTailer) follow(ctx context.Context) error {
 	}
 }
 
+// spoolCursor is the tail offset plus the spool's size and mtime as stat'ed
+// before the drain that produced it.
+type spoolCursor struct {
+	offset int64
+	size   int64
+	mod    time.Time
+}
+
+// poll stats the spool and drains it only when its size or mtime changed
+// since the last drain, or unread bytes remain (a rotation reset, a skipped
+// line): an idle spool costs one stat per tick.
+func (t *SpoolTailer) poll(c spoolCursor) spoolCursor {
+	st, err := os.Stat(t.path)
+	if err != nil {
+		return spoolCursor{} // rotation window: restart from 0 next tick
+	}
+	if st.Size() == c.size && st.ModTime().Equal(c.mod) && c.offset >= c.size {
+		return c
+	}
+	return spoolCursor{offset: t.drainOnce(c.offset), size: st.Size(), mod: st.ModTime()}
+}
+
 // drainOnce reads complete lines past `offset`, publishing each as an event.
 // Returns the offset to resume from. File smaller than offset (rotation) or
 // unreadable → reset/wait, never error the supervisor: the spool is a
 // best-effort handoff and the collector rewrites it within seconds.
 func (t *SpoolTailer) drainOnce(offset int64) int64 {
-	f, err := os.Open(t.path)
+	open := t.open
+	if open == nil {
+		open = os.Open
+	}
+	f, err := open(t.path)
 	if err != nil {
 		return 0 // rotation window: restart from 0 next tick
 	}

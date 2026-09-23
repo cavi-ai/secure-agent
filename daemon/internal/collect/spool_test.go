@@ -2,6 +2,7 @@ package collect
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -134,4 +135,70 @@ func TestSpoolTailerHandlesRotationAndGarbage(t *testing.T) {
 	if got[0].PID != 7 {
 		t.Fatalf("wrong pid: %+v", got[0])
 	}
+}
+
+// An unchanged spool is not opened: the tick costs one stat. A spool whose
+// size or mtime moved is drained, and a rotated spool is re-read from 0.
+func TestSpoolPollSkipsUnchangedSpool(t *testing.T) {
+	path := t.TempDir() + "/spool.jsonl"
+	line := func(pid int) string {
+		return fmt.Sprintf(`{"event_type":0,"process":{"audit_token":{"pid":%d},"executable":{"path":"/bin/ls"}},"event":{"open":{"file":{"path":"/etc/hosts"}}},"time":"2026-09-11T12:00:00Z"}`+"\n", pid)
+	}
+	if err := os.WriteFile(path, []byte(line(1)), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	b := bus.New(64)
+	sub := b.Subscribe()
+	tailer := NewSpoolTailerAt(b, path)
+	opens := 0
+	tailer.open = func(p string) (*os.File, error) {
+		opens++
+		return os.Open(p)
+	}
+	expect := func(pid int32) {
+		t.Helper()
+		select {
+		case e := <-sub:
+			if e.PID != pid {
+				t.Fatalf("drained pid %d, want %d", e.PID, pid)
+			}
+		default:
+			t.Fatalf("no event drained, want pid %d", pid)
+		}
+	}
+
+	var c spoolCursor
+	c = tailer.poll(c)
+	expect(1)
+	for i := 0; i < 5; i++ {
+		c = tailer.poll(c)
+	}
+	if opens != 1 {
+		t.Fatalf("spool opened %d times across 5 unchanged ticks; want 1 (the first drain)", opens)
+	}
+
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o640)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(line(2)); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	c = tailer.poll(c)
+	expect(2)
+	if opens != 2 {
+		t.Fatalf("changed spool: %d opens, want 2", opens)
+	}
+
+	// Rotation: a shorter new file resets the offset, then is read from 0.
+	if err := os.WriteFile(path, []byte(line(3)), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	future := time.Now().Add(time.Minute)
+	_ = os.Chtimes(path, future, future)
+	for i := 0; i < 3; i++ {
+		c = tailer.poll(c)
+	}
+	expect(3)
 }

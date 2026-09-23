@@ -79,6 +79,18 @@ func TestConsoleAllowListMatchesTable(t *testing.T) {
 	}
 }
 
+// The owner-only profiling routes are never admitted by the console token.
+func TestConsoleAllowListRejectsPprof(t *testing.T) {
+	for _, p := range []string{"/debug/pprof/", "/debug/pprof", "/debug/pprof/heap", "/debug/pprof/profile"} {
+		if apiroutes.ConsoleAllowed(p) {
+			t.Errorf("%s is admitted to the console", p)
+		}
+		if !apiroutes.IsOwnerOnly(p) {
+			t.Errorf("%s is not owner-only", p)
+		}
+	}
+}
+
 // The flag explanation is a dynamic /flags/{id}/explain family: the console
 // admits exactly that shape, and the exact acknowledge route keeps its gate.
 func TestFlagExplainRouteGate(t *testing.T) {

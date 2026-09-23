@@ -566,6 +566,8 @@ Every connection is identified with macOS `LOCAL_PEEREPID` / `LOCAL_PEERCRED` (k
 
 `POST /kill` additionally refuses any PID that is not currently a recognized agent process, so the control socket cannot be turned into an arbitrary-process killer.
 
+`GET /debug/pprof/` (Go runtime profiles: `heap`, `goroutine`, `profile?seconds=N`, `trace`, …) is served on the unix socket only, to the Owner role (and the pinned menubar app); agents and foreign peers get 403, and the proxy listener never serves it.
+
 ## 🖥️ Web dashboard
 
 The embedded console is served at both:
