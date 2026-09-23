@@ -555,6 +555,7 @@ func (a *API) routes() map[string]http.HandlerFunc {
 		"/guard/pending":                a.handleGuardPending,
 		"/guard/resolve":                a.handleGuardResolve,
 		"/guard/rules":                  a.handleGuardRules,
+		"/debug/pprof/":                 handlePprof,
 	}
 }
 
@@ -564,10 +565,16 @@ func (a *API) routes() map[string]http.HandlerFunc {
 // ConsoleHandler() exposes it ungated for the proxy listener, where
 // authentication is the console token (peer creds don't exist on a TCP
 // connection).
-func (a *API) buildMux() *http.ServeMux {
+func (a *API) buildMux() *http.ServeMux { return a.mux(true) }
+
+// mux registers the table's routes; OwnerOnly routes only on the socket mux.
+func (a *API) mux(socket bool) *http.ServeMux {
 	mux := http.NewServeMux()
 	handlers := a.routes()
 	for _, r := range apiroutes.Table {
+		if r.OwnerOnly && !socket {
+			continue
+		}
 		if h, ok := handlers[r.Path]; ok {
 			mux.HandleFunc(r.Path, h)
 		}
@@ -579,8 +586,9 @@ func (a *API) buildMux() *http.ServeMux {
 // ConsoleHandler returns the API mux WITHOUT the unix-socket peer gate, for
 // the proxy listener's console-token-gated routes. /guard/decision is
 // deliberately absent from the proxy listener's whitelist (see
-// proxy.isConsoleAPIPath) even though it is registered here.
-func (a *API) ConsoleHandler() http.Handler { return a.buildMux() }
+// proxy.isConsoleAPIPath) even though it is registered here; OwnerOnly
+// routes (/debug/pprof/) are not registered on it at all.
+func (a *API) ConsoleHandler() http.Handler { return a.mux(false) }
 
 func (a *API) Serve(ctx context.Context) error {
 	if a.socketPath == "" {

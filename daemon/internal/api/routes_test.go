@@ -78,3 +78,15 @@ func TestConsoleAllowListMatchesTable(t *testing.T) {
 		t.Error("/guard/decision must not be reachable with the console token")
 	}
 }
+
+// The owner-only profiling routes are never admitted by the console token.
+func TestConsoleAllowListRejectsPprof(t *testing.T) {
+	for _, p := range []string{"/debug/pprof/", "/debug/pprof", "/debug/pprof/heap", "/debug/pprof/profile"} {
+		if apiroutes.ConsoleAllowed(p) {
+			t.Errorf("%s is admitted to the console", p)
+		}
+		if !apiroutes.IsOwnerOnly(p) {
+			t.Errorf("%s is not owner-only", p)
+		}
+	}
+}

@@ -13,6 +13,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/agents"
 	"github.com/cavi-ai/secure-agent/daemon/internal/api"
 	"github.com/cavi-ai/secure-agent/daemon/internal/bus"
+	"github.com/cavi-ai/secure-agent/daemon/internal/collect"
 	"github.com/cavi-ai/secure-agent/daemon/internal/config"
 	"github.com/cavi-ai/secure-agent/daemon/internal/correlate"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
@@ -65,8 +66,15 @@ func TestTranscriptTailTargets(t *testing.T) {
 	// claude, cursor (legacy logs + project transcripts), codex, agy brain,
 	// and the hook activity log. opencode is polled (SQLite), not a tail target.
 	wantSubs := []string{".claude", ".cursor/logs", ".cursor/projects", ".codex", "antigravity-cli/brain", "activity.jsonl"}
-	if len(base) != 7 {
-		t.Fatalf("expected 7 base targets, got %d: %v", len(base), base)
+	if len(base) != 10 {
+		t.Fatalf("expected 10 base targets, got %d: %v", len(base), base)
+	}
+	// Transcripts are discovered by shape: every target but the activity log
+	// is a glob, so no default target is a directory walk.
+	for _, tgt := range base {
+		if !strings.ContainsAny(tgt, "*?[") && !strings.HasSuffix(tgt, "activity.jsonl") {
+			t.Errorf("target %q is not a glob; a directory target is walked recursively", tgt)
+		}
 	}
 	for _, sub := range wantSubs {
 		found := false
@@ -81,7 +89,7 @@ func TestTranscriptTailTargets(t *testing.T) {
 		}
 	}
 	withJSONL := transcriptTailTargets("/home/x", "/var/log/events.jsonl")
-	if len(withJSONL) != 8 || withJSONL[7] != "/var/log/events.jsonl" {
+	if len(withJSONL) != 11 || withJSONL[10] != "/var/log/events.jsonl" {
 		t.Fatalf("jsonl path not appended: %v", withJSONL)
 	}
 }
@@ -488,10 +496,10 @@ func TestTranscriptTailTargetsFollowCodexHome(t *testing.T) {
 	targets := transcriptTailTargets(home, "")
 	foundDefault, foundAlt := false, false
 	for _, p := range targets {
-		if p == filepath.Join(home, ".codex", "sessions") {
+		if p == collect.CodexRolloutGlob(filepath.Join(home, ".codex")) {
 			foundDefault = true
 		}
-		if p == "/tmp/codex-alt/sessions" {
+		if p == "/tmp/codex-alt/sessions/*/*/*/rollout-*.jsonl" {
 			foundAlt = true
 		}
 	}
@@ -501,7 +509,7 @@ func TestTranscriptTailTargetsFollowCodexHome(t *testing.T) {
 	// A CODEX_HOME equal to the default must not duplicate the target.
 	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
 	for _, p := range transcriptTailTargets(home, "") {
-		if p == "/tmp/codex-alt/sessions" {
+		if strings.HasPrefix(p, "/tmp/codex-alt/") {
 			t.Fatal("stale CODEX_HOME target leaked")
 		}
 	}
@@ -525,8 +533,8 @@ func TestCodexSessionTargetsFromLiveProcesses(t *testing.T) {
 		return env[pid]
 	}
 	got := codexSessionTargetsFrom(procs, envOf, "/Users/x")
-	if len(got) != 1 || got[0] != "/data/orch/agent-a/codex-home/sessions" {
-		t.Fatalf("targets = %v, want the deduped per-process sessions dir", got)
+	if len(got) != 1 || got[0] != "/data/orch/agent-a/codex-home/sessions/*/*/*/rollout-*.jsonl" {
+		t.Fatalf("targets = %v, want the deduped per-process rollout glob", got)
 	}
 	// The default codex home is already covered by transcriptTailTargets.
 	env[100] = "/Users/x/.codex"

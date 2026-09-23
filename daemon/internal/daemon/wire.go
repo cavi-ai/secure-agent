@@ -172,11 +172,11 @@ func guardBrokerMS(hookDeadlineMS int) int {
 }
 
 // transcriptTailTargets are the log paths the transcript scanner tails: each
-// harness's activity logs plus the daemon's own JSONL sink when configured.
-// The scanner's dir walk picks up .jsonl files — codex sessions rollouts feed
-// the Layer-5 redaction scan directly. Harness logs in other formats (gemini's
-// logs.json) get format support with the P2 trace work; the dirs are listed
-// now so coverage is explicit instead of absent.
+// harness's activity logs, its session transcripts by shape
+// (collect.HarnessTranscriptGlobs — globs, never a directory walk), the hook
+// activity log, and the daemon's own JSONL sink when configured. Harness logs
+// in other formats (gemini's logs.json) get format support with the P2 trace
+// work.
 func transcriptTailTargets(home, jsonlPath string) []string {
 	// CODEX_HOME moves Codex's rollout store out of ~/.codex; sessions then
 	// run while zero transcripts are written under ~/.codex/sessions.
@@ -184,18 +184,14 @@ func transcriptTailTargets(home, jsonlPath string) []string {
 	codexHome := os.Getenv("CODEX_HOME")
 	targets := []string{
 		filepath.Join(home, ".claude", "logs", "*.jsonl"),
-		filepath.Join(home, ".claude", "projects"),
+		// Legacy Cursor logs (empty on current builds, whose transcripts are
+		// the agent-transcripts shape).
 		filepath.Join(home, ".cursor", "logs", "*.jsonl"),
-		// Cursor's real transcripts (the ~/.cursor/logs dir above is empty on
-		// current builds — the tail target is kept for older ones).
-		filepath.Join(home, ".cursor", "projects"),
-		filepath.Join(home, ".codex", "sessions"),
-		// Antigravity (agy) brain transcripts, under the .gemini tree.
-		filepath.Join(home, ".gemini", "antigravity-cli", "brain"),
-		filepath.Join(home, ".local", "state", "secure-agent", "activity.jsonl"),
 	}
+	targets = append(targets, collect.HarnessTranscriptGlobs(home)...)
+	targets = append(targets, filepath.Join(home, ".local", "state", "secure-agent", "activity.jsonl"))
 	if codexHome != "" && codexHome != filepath.Join(home, ".codex") {
-		targets = append(targets, filepath.Join(codexHome, "sessions"))
+		targets = append(targets, collect.CodexRolloutGlob(codexHome))
 	}
 	if jsonlPath != "" {
 		targets = append(targets, jsonlPath)
@@ -216,10 +212,10 @@ func codexSessionTargets(tagger *agents.Tagger, home string) []string {
 	return codexSessionTargetsFrom(tagger.TaggedPIDs(), agents.ProcEnvVar, home)
 }
 
-// codexSessionTargetsFrom is the testable core: deduped CODEX_HOME/sessions
-// dirs from tagged codex processes, minus the default already covered.
+// codexSessionTargetsFrom is the testable core: deduped rollout globs under
+// each tagged codex process's CODEX_HOME, minus the default already covered.
 func codexSessionTargetsFrom(procs map[int32]agents.AgentInfo, envOf func(int32, string) string, home string) []string {
-	def := filepath.Join(home, ".codex", "sessions")
+	def := collect.CodexRolloutGlob(filepath.Join(home, ".codex"))
 	seen := map[string]bool{}
 	var out []string
 	for pid, info := range procs {
@@ -230,12 +226,12 @@ func codexSessionTargetsFrom(procs map[int32]agents.AgentInfo, envOf func(int32,
 		if ch == "" {
 			continue
 		}
-		dir := filepath.Join(ch, "sessions")
-		if dir == def || seen[dir] {
+		glob := collect.CodexRolloutGlob(ch)
+		if glob == def || seen[glob] {
 			continue
 		}
-		seen[dir] = true
-		out = append(out, dir)
+		seen[glob] = true
+		out = append(out, glob)
 	}
 	return out
 }

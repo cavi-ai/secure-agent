@@ -126,12 +126,16 @@ func isMutation(method, path string) bool {
 
 // authorize applies the (method, path) policy to a classified role, wired
 // through the role methods above:
+//   - OwnerOnly routes (/debug/pprof/): the owner uid or the pinned UI only
 //   - POST /guard/decision: canDecide (agents asking for their own tool call)
 //   - mutations: the pinned menubar when one exists, otherwise the owner uid
 //     (direct launches, headless/ssh management)
 //   - GET reads: canRead (owner, UI, and tagged agents)
 //   - anything else (DELETE /guard/rules, unknown methods): owner-level
 func (a *API) authorize(r role, method, path string) bool {
+	if apiroutes.IsOwnerOnly(path) {
+		return r >= roleOwner
+	}
 	if apiroutes.IsDecide(method, path) {
 		return r.canDecide()
 	}
