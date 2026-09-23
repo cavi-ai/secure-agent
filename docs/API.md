@@ -751,12 +751,15 @@ GET /egress/uninspected?hours=24&limit=200
 ]
 ```
 
-- `identity` — owner of the host from the provider CIDR table, host suffix, or cached reverse DNS (`org`, `name`, `kind`, `ip`, `class`); never a network lookup.
-- `identity.class` — `vendor` (Anthropic, OpenAI, GitHub, GitHub Container Registry, npm registry, PyPI, crates.io, RubyGems, Docker Hub, Docker, Google Container Registry, Debian, Ubuntu), `telemetry` (Statsig, Sentry, Segment, PostHog, Amplitude), `cloud` (any other named org); omitted when `org` is empty.
-- The same `identity` object, `class` included, is on `GET /egress/endpoint?host=` and on each `/snapshot` `suggestions` row; vendor-class rows are not suggestions.
-- `first_seen` — first sighting of the agent+host pair; omitted when unknown.
-- `session_id` — most recent session that reached the host; omitted when none.
-- `infra` — set only for CDN/cloud carriers (Cloudflare, Google, GitHub, PTR-classified); `identity.org` can be set without it.
+- `identity` — owner of the host from the provider CIDR table, host suffix, or cached reverse DNS (`org`, `name`, `kind`, `ip`, `class`), never a network lookup.
+- `identity.class` — `vendor` (Anthropic, OpenAI, GitHub, GitHub Container Registry, npm registry, PyPI, crates.io, RubyGems, Docker Hub, Docker, Google Container Registry, Debian, Ubuntu), `telemetry` (Statsig, Sentry, Segment, PostHog, Amplitude), `cloud` (any other named org).
+- `identity.class` is omitted when `org` is empty.
+- The same `identity` object, `class` included, is on `GET /egress/endpoint?host=` and on each `/snapshot` `suggestions` row.
+- Vendor-class hosts are never `/snapshot` suggestions.
+- `first_seen` — first sighting of the agent+host pair, omitted when unknown.
+- `session_id` — most recent session that reached the host, omitted when none.
+- `infra` — set only for CDN/cloud carriers (Cloudflare, Google, GitHub, PTR-classified).
+- `identity.org` can be set without `infra`.
 
 `hours` (1–168, default 24) windows the list by last-seen; out-of-range
 values fall back to 24. Sorted most-frequent first; `assessment`/`rationale`

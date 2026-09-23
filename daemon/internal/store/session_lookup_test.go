@@ -57,3 +57,22 @@ func TestTrendForCarriesHostIdentity(t *testing.T) {
 		t.Fatalf("unknown host trend = %+v", tc)
 	}
 }
+
+// An approved parent domain covers its subdomains (dot boundary), the same
+// rule the correlator applies.
+func TestTrendForAllowedForCoversSubdomain(t *testing.T) {
+	s, err := Open("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	s.SetAllowlistSource(func() map[string][]string {
+		return map[string][]string{"claude": {"anthropic.com"}, "codex": {"openai.com"}}
+	})
+	if got := s.TrendFor("", "api.anthropic.com").AllowedFor; !slices.Equal(got, []string{"claude"}) {
+		t.Fatalf("AllowedFor(api.anthropic.com) = %v, want [claude]", got)
+	}
+	if got := s.TrendFor("", "evilanthropic.com").AllowedFor; got != nil {
+		t.Fatalf("AllowedFor(evilanthropic.com) = %v, want none", got)
+	}
+}

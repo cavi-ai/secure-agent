@@ -170,11 +170,15 @@ function vendorRollupHTML(g, advisorOn) {
       <button class="btn btn-ghost btn-sm" data-action="endpoint-detail" data-host="${escapeHTML(g.rows[0].host)}" data-agent="${agent}" title="Identify the busiest endpoint and see every connection to it"><svg class="icon"><use href="#i-activity"/></svg><span>Evidence</span></button>
     </div>
   </div>
-  <details class="infra-group"><summary>${n} ${escapeHTML(g.org)} endpoint${n === 1 ? '' : 's'} for ${agent}</summary>${g.rows.map(e => egressRowHTML(e, advisorOn)).join('')}</details>`;
+  <details class="infra-group" data-key="${escapeHTML(`vendor:${g.agent}|${g.org}`)}"><summary>${n} ${escapeHTML(g.org)} endpoint${n === 1 ? '' : 's'} for ${agent}</summary>${g.rows.map(e => egressRowHTML(e, advisorOn)).join('')}</details>`;
 }
 
 function fillUninspected(bodyEl) {
   const SA = window.SA;
+  // A refill (after allow, remove, or an advisor verdict) must not snap shut a
+  // disclosure the operator opened or jump the scroll position.
+  const opened = new Set([...bodyEl.querySelectorAll('details[data-key][open]')].map(d => d.dataset.key));
+  const scroll = bodyEl.scrollTop;
 
   const rows = SA.t.uninspected || [];
   if (rows.length === 0) {
@@ -238,9 +242,11 @@ function fillUninspected(bodyEl) {
     const orgRows = Object.entries(infraByOrg)
       .sort((a, b) => b[1].endpoints - a[1].endpoints)
       .map(([org, v]) => `<div class="mute-row"><span class="mute-pair">${escapeHTML(org)}</span><span class="fw-metric dim">${v.endpoints} endpoint${v.endpoints === 1 ? '' : 's'} · ${v.hits}× in 24h</span></div>`).join('');
-    html += `<details class="infra-group"><summary>Known cloud/CDN infrastructure (${infra.length} endpoint${infra.length === 1 ? '' : 's'}) — these are the agents' own API carriers (Anthropic, OpenAI, GitHub, AWS…); nothing to decide, shown for completeness</summary>${orgRows}</details>`;
+    html += `<details class="infra-group" data-key="carriers"><summary>Known cloud/CDN infrastructure (${infra.length} endpoint${infra.length === 1 ? '' : 's'}) — these are the agents' own API carriers (Anthropic, OpenAI, GitHub, AWS…); nothing to decide, shown for completeness</summary>${orgRows}</details>`;
   }
   bodyEl.innerHTML = html;
+  for (const d of bodyEl.querySelectorAll('details[data-key]')) if (opened.has(d.dataset.key)) d.open = true;
+  bodyEl.scrollTop = scroll;
 }
 
 // One uninspected endpoint as a decision row: what/who/when on the left, the

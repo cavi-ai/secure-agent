@@ -1246,7 +1246,7 @@ func (a *API) handleEndpointDetail(w http.ResponseWriter, r *http.Request) {
 	if a.allowlist != nil {
 		for agent, hosts := range a.allowlist.Load() {
 			for _, h := range hosts {
-				if strings.EqualFold(h, host) {
+				if correlate.HostMatches(host, h) {
 					detail.Allowed = append(detail.Allowed, EndpointAllowance{Agent: agent, Host: h})
 				}
 			}

@@ -448,3 +448,13 @@ export interface EndpointDetail {
   events: Event[];
 }
 
+export interface Suggestion {
+  agent: string;
+  host: string;
+  count: number;
+  identity: EndpointIdentity;
+  assessment?: string;
+  rationale?: string;
+  confidence?: number;
+}
+

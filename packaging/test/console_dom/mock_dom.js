@@ -715,6 +715,21 @@
   if (location.search.includes('uninspecteddemo')) {
     setTimeout(() => window.openUninspected(), 4000);
   }
+  // Auto-action: open the drill-down, open a vendor disclosure, then Allow an
+  // unknown row. The refill that follows must keep the disclosure open.
+  if (location.search.includes('keepopendemo')) {
+    setTimeout(() => window.openUninspected(), 4000);
+    setTimeout(() => {
+      const d = document.querySelector('#drawer-body details[data-key^="vendor:"]');
+      d.querySelector('summary').click();
+      d.dataset.before = '1';
+      document.querySelector('#drawer-body .egress-agent-group [data-action="allow-host"][data-host="statsig.example.com"]').click();
+    }, 5000);
+    setTimeout(() => {
+      const d = document.querySelector('#drawer-body details[data-key^="vendor:"]');
+      stamp('keepopen', `key=${d.dataset.key} rebuilt=${d.dataset.before ? 0 : 1} open=${d.open ? 1 : 0}`);
+    }, 9000);
+  }
   // Auto-action: open the endpoint Evidence detail for the unattributed IPv6.
   if (location.search.includes('endpointdemo')) {
     setTimeout(() => window.openEndpointDetail('2600:1901:0:9e23::', 'claude'), 4000);

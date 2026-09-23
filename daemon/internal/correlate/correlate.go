@@ -826,7 +826,7 @@ func (c *Correlator) isVendorHost(agentName, host string) bool {
 		return false
 	}
 	for _, allowed := range c.cfg.VendorAllowlist[agentName] {
-		if hostMatches(host, allowed) {
+		if HostMatches(host, allowed) {
 			return true
 		}
 	}
@@ -834,7 +834,7 @@ func (c *Correlator) isVendorHost(agentName, host string) bool {
 	// traffic for this agent.
 	if c.allowlistOverrides != nil {
 		for _, allowed := range c.allowlistOverrides(agentName) {
-			if hostMatches(host, allowed) {
+			if HostMatches(host, allowed) {
 				return true
 			}
 		}
@@ -842,9 +842,9 @@ func (c *Correlator) isVendorHost(agentName, host string) bool {
 	return false
 }
 
-// hostMatches: host equals allowed or is a subdomain of it (dot boundary),
+// HostMatches: host equals allowed or is a subdomain of it (dot boundary),
 // case-insensitive. The one match rule for vendor and user-approved hosts.
-func hostMatches(host, allowed string) bool {
+func HostMatches(host, allowed string) bool {
 	if host == "" || allowed == "" {
 		return false
 	}

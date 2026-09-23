@@ -53,6 +53,7 @@ func WireTypes() []any {
 		api.EndpointDetail{},
 		correlate.EndpointIdentity{},
 		api.EndpointAllowance{},
+		api.Suggestion{},
 	}
 }
 

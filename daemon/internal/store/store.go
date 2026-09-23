@@ -943,7 +943,7 @@ func (s *Store) TrendFor(rule, host string) model.TrendContext {
 	if allow != nil {
 		for agent, hosts := range allow() {
 			for _, h := range hosts {
-				if strings.EqualFold(h, host) {
+				if correlate.HostMatches(host, h) {
 					tc.AllowedFor = append(tc.AllowedFor, agent)
 					break
 				}

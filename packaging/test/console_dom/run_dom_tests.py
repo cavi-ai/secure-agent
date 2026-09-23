@@ -155,6 +155,7 @@ def main():
         dom_session = dump_dom(chrome, tmp, "?sessiondemo")
         dom_guard = dump_dom(chrome, tmp, "?guarddemo")
         dom_uninsp = dump_dom(chrome, tmp, "?uninspecteddemo")
+        dom_keepopen = dump_dom(chrome, tmp, "?keepopendemo")
         dom_endpoint = dump_dom(chrome, tmp, "?endpointdemo")
         dom_toast = dump_dom(chrome, tmp, "?toastdemo")
         dom_notify = dump_dom(chrome, tmp, "?notifydemo")
@@ -443,6 +444,11 @@ def main():
         check("drill-down allow action delegated",
               'data-action="allow-host" data-agent="cursor" data-host="registry.npmjs.org"' in dom_uninsp)
         check("drill-down explains the blind spot", "bypassing the inspection proxy" in dom_uninsp)
+        keepopen = (re.search(r'<pre id="keepopen"[^>]*>([^<]*)<', dom_keepopen) or [None, ""])[1]
+        check("drill-down vendor disclosure stays open across an Allow refill",
+              "key=vendor:openclaw|Anthropic rebuilt=1 open=1" in keepopen, keepopen)
+        check("drill-down Allow refill posted and dropped the row",
+              "POST /allowlist" in dom_keepopen and 'data-host="statsig.example.com"' not in dom_keepopen.split('id="drawer-body"', 1)[-1].split("</details>", 1)[0], keepopen)
 
         # --- endpoint evidence: an unattributed IPv6 must be identifiable ---
         check("endpoint Evidence opens a detail drawer",
