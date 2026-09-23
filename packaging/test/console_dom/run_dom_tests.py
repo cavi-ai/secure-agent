@@ -475,6 +475,15 @@ def main():
               "Agent access" in dom_file and "api-service@main" in dom_file and 'data-action="open-incident"' in dom_file)
         check("file drawer goes back to the incident report",
               'id="btn-drawer-back"' in dom_file and "Incident report" in dom_file)
+        check("file drawer shows the advisor plan and the playbook",
+              "What to do" in dom_file and "Codex printed an API key from an env dump." in dom_file
+              and "Playbook: Secret in an agent transcript" in dom_file and 'data-action-id="dismiss"' in dom_file)
+        check("finding cards offer What to do", 'data-action="open-plan" data-subject="flag:flag-2"' in dom_explain)
+        check("finding cards offer Mark as routine / not ok",
+              'data-action="mark-label" data-subject="flag:flag-2" data-label="ok"' in dom_explain)
+        check("file drawer shows the operator's history and suggestion",
+              "Your history" in dom_file and "You marked similar cases 3 as routine." in dom_file
+              and "You marked this 3 times as routine for codex." in dom_file and "my own test key" in dom_file)
         check("menubar deep link #file= opens the file drawer",
               'data-action="file-reveal"' in dom_filedeep and "Around the secret" in dom_filedeep)
         # --- endpoint evidence: an unattributed IPv6 must be identifiable ---

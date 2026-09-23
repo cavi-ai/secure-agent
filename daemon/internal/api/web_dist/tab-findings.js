@@ -377,13 +377,15 @@ function findingHTML(f, l, chainHTML, toolsHTML) {
       </header>
       <p class="finding-what">${escapeHTML(l.what)}</p>
       <p class="finding-verdict">${escapeHTML(l.verdict)}</p>
-      <div class="finding-actions">${explainActionsHTML(f)}</div>
+      ${labelsLineHTML(ex.labels)}
+      <div class="finding-actions">${explainActionsHTML(f)}<button class="btn btn-ghost btn-sm" data-action="open-plan" data-subject="flag:${escapeHTML(f.id)}">What to do</button></div>
       <details class="finding-details"><summary>Details</summary>
         ${chainHTML}
         <dl class="finding-facts">${facts.map(([k, v]) => `<dt>${escapeHTML(k)}</dt><dd>${k === 'File'
           ? `<button type="button" class="file-link" data-action="open-file" data-path="${escapeHTML(v)}">${escapeHTML(v)}</button>`
           : escapeHTML(v)}</dd>`).join('')}</dl>
         ${toolsHTML ? `<div class="flag-actions-row">${toolsHTML}</div>` : ''}
+        <div class="flag-actions-row">${markButtonsHTML('flag:' + f.id)}</div>
       </details>
     </article>`;
 }

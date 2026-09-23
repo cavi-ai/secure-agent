@@ -52,6 +52,11 @@ type Sink interface {
 	// CriticalFlagsMissingAdvisor feeds the startup backfill: flags that
 	// fired while the advisor was off and have no verdict yet.
 	CriticalFlagsMissingAdvisor(since time.Time, limit int) []model.Flag
+	// PutAdvisorPlan stores a plan keyed by its subject.
+	PutAdvisorPlan(subject string, p model.AdvisorPlan)
+	// SimilarLabels returns the operator's judgments on cases like this
+	// one (rule, agent, and the file path or host involved).
+	SimilarLabels(rule, agent, pattern string, limit int) []model.OperatorLabel
 }
 
 // IsLoopbackEndpoint reports whether the endpoint URL targets this machine.
@@ -103,7 +108,7 @@ type chatResponse struct {
 }
 
 type task struct {
-	kind      string // "flag" | "incident" | "host" | "guard" | "worktree"
+	kind      string // "flag" | "incident" | "host" | "guard" | "plan" | "worktree"
 	subjectID string
 	flag      model.Flag
 	incident  model.IncidentReport
@@ -111,6 +116,7 @@ type task struct {
 	agentName string
 	guard     model.GuardAssessmentRequest
 	worktree  model.WorktreeAdviceRequest
+	plan      PlanRequest
 }
 
 // Subscriber consumes flags/incidents and produces advisor verdicts.
@@ -130,6 +136,10 @@ type Subscriber struct {
 	// in-flight set drops duplicate requests while the model is already
 	// working on that flag. Everything is keyed by flag ID.
 	retriageLast map[string]time.Time
+
+	// planInflight: subjects whose plan is queued or being written, with
+	// the time they were queued (planPendingTTL bounds it).
+	planInflight map[string]time.Time
 }
 
 const (
@@ -196,6 +206,7 @@ func New(cfg Config, sink Sink) *Subscriber {
 		queue:        make(chan task, cfg.QueueSize),
 		client:       &http.Client{Timeout: cfg.Timeout},
 		retriageLast: map[string]time.Time{},
+		planInflight: map[string]time.Time{},
 	}
 }
 
@@ -359,7 +370,26 @@ func (s *Subscriber) Run(ctx context.Context) error {
 }
 
 func (s *Subscriber) process(ctx context.Context, t task) {
+	if t.kind == "plan" {
+		defer s.clearPlan(t.subjectID)
+	}
 	if s.circuitIsOpen() {
+		return
+	}
+	if t.kind == "plan" {
+		p, err := s.writePlan(ctx, t.plan)
+		if err != nil {
+			s.recordFailure(err)
+			return
+		}
+		s.mu.Lock()
+		s.failures = 0
+		s.lastErr = ""
+		s.mu.Unlock()
+		p.Model = s.cfg.Model
+		p.CreatedAt = time.Now().UTC()
+		p.EvidenceKey = t.plan.EvidenceKey
+		s.sink.PutAdvisorPlan(t.subjectID, p)
 		return
 	}
 	var (
@@ -596,13 +626,45 @@ func (s *Subscriber) triageFlag(ctx context.Context, fl model.Flag) (model.Advis
 	if fl.Rule == "proxy-prompt-injection" {
 		system = injectionSystem
 	}
-	user := fmt.Sprintf("Flag under review:\nrule: %s\nagent: %s (pid %d)\nseverity: %d\n%s\n\n<evidence>\n%s</evidence>",
-		fl.Rule, fl.Agent, fl.PID, fl.Severity, trendLine, ev.String())
+	user := fmt.Sprintf("Flag under review:\nrule: %s\nagent: %s (pid %d)\nseverity: %d\n%s%s\n\n<evidence>\n%s</evidence>",
+		fl.Rule, fl.Agent, fl.PID, fl.Severity, trendLine, s.operatorHistory(fl), ev.String())
 	content, err := s.chat(ctx, system, user, reasoningSafeMaxTokens)
 	if err != nil {
 		return model.AdvisorVerdict{}, err
 	}
 	return parseVerdict(content)
+}
+
+// operatorHistoryLimit bounds the similar labels a triage prompt carries.
+const operatorHistoryLimit = 5
+
+// operatorHistory renders the operator's judgments on cases like fl: the
+// same rule, agent and file path (or destination host).
+func (s *Subscriber) operatorHistory(fl model.Flag) string {
+	pattern := ""
+	for _, ev := range fl.Evidence {
+		if strings.HasPrefix(ev.Label, "/") {
+			pattern = ev.Label
+			break
+		}
+	}
+	if pattern == "" {
+		pattern = evidenceHost(fl)
+	}
+	labels := s.sink.SimilarLabels(fl.Rule, fl.Agent, pattern, operatorHistoryLimit)
+	if len(labels) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("\noperator history (their earlier judgments on similar cases):")
+	for _, l := range labels {
+		fmt.Fprintf(&b, "\n- %s via %s %s ago: rule %q agent %q on %q", l.Label, l.Source,
+			time.Since(l.CreatedAt).Round(time.Hour), l.Rule, l.Agent, l.Pattern)
+		if l.Reason != "" {
+			b.WriteString(": " + l.Reason)
+		}
+	}
+	return b.String()
 }
 
 var thinkBlockRE = regexp.MustCompile(`(?s)<think>.*?</think>`)

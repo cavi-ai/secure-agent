@@ -310,6 +310,24 @@ What the daemon knows about one evidence file, and two local actions on it. `pat
 
 ---
 
+### 2d. `GET /advisor/plan?subject=` · `POST /advisor/plan`
+
+What to do about one finding. `subject` is `flag:<id>`, `incident:<id>` or `file:<path>` (a path stored evidence names); anything else is 404. NoAgent route.
+
+`GET` returns `subject`, `playbook` (the rule's fixed response: `title`, `why`, `now`, `prevent` steps with a kind of `guard-rule`, `config`, `secret-hygiene`, `agent-instruction` or `workflow`, and served `actions`), `flag` (the subject's flag with its explanation, for the action buttons), `advisor_ready` and `reason`, `plan` when one is stored, and `status`: `none`, `pending`, `ready`, `stale` (new evidence since the plan was written; the old plan is still returned) or `disabled`.
+
+`POST {"subject": "…"}` builds the plan context on this machine (see the advisor threat model), queues it for the local advisor and answers 202 `pending`; while a plan for the subject is pending a second request queues nothing. 409 `disabled` with the reason when the advisor is off, not loopback, paused or its queue is full.
+
+The plan: `summary`, `why` (≤ 4), `risk` (`low`, `medium`, `high`), `prevent` (≤ 5 steps), `behavior` (≤ 3), `remediate` (≤ 4), `actions` (only the offered served action ids), `confidence`, `model`, `created_at`, `evidence_key`. Output off that schema is dropped and the playbook stands alone.
+
+### 2e. `POST /labels`
+
+An operator judgment on a finding's subject: `{"subject": "flag:<id>|incident:<id>|file:<path>", "label": "ok|not_ok", "reason": "…", "source": "mark|kill"}` (reason ≤ 200 characters; `source` defaults to `mark`). NoAgent route. Unknown subject 404, other values 400.
+
+Labels are also written by the daemon: `POST /allowlist` (ok, `allow-host`), `POST /mute` (ok, `mute`), `POST /guard/path-allow` (ok, `allow-path`), `POST /guard/resolve` (`guard-allow` ok / `guard-deny` not ok, from the pending prompt's agent, rule and path). Acknowledging a flag writes none. A label is keyed by rule, agent and pattern (the evidence path, else the destination host); the newest 5,000 are kept.
+
+Where they show: a flag's `explain.labels` counts ok and not_ok on the same case (same agent and pattern, or same rule and agent without a pattern); `/advisor/plan` carries `labels` (`summary`, up to 5 `similar` ranked exact case → agent and pattern → rule and agent → pattern → rule, and a `suggestion` after 3 consistent labels: ok → the offered `allow-path` or `allow-host`; not ok → the offered `kill` and the playbook's guard rule); plan and triage prompts carry the similar labels.
+
 ### 2b. `GET /patterns`
 
 Repeating findings: the flags one agent raised under one rule on one subject in the window, as one row each. Read-level; console-allowed.
