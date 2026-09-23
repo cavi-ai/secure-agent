@@ -14,7 +14,7 @@ vm.createContext(ctx);
 for (const f of ['lib.js', 'tab-findings.js']) {
   vm.runInContext(readFileSync(path.join(webDist, f), 'utf8'), ctx, { filename: f });
 }
-const { patternHTML, uncoveredFlags, patternsInView } = ctx;
+const { patternHTML, uncoveredFlags, patternsInView, patternAfterDismiss } = ctx;
 
 const KEY = 'codex|keychain-access|/Users/x/Library/Keychains/login.keychain-db';
 const hourly = Array.from({ length: 24 }, (_, i) => (i === 3 ? 323 : 0));
@@ -88,4 +88,32 @@ test('patternsInView: search, agent/rule selects and session scope apply to patt
   assert.deepEqual(keys({ rule: 'proxy-secret-leak' }), ['claude']);
   assert.deepEqual(keys({ session: 's1' }), ['codex']);
   assert.deepEqual(keys({ pids: [9] }), ['claude']);
+});
+
+test('patternsInView: a covered flag from a sixth session or pid admits the pattern to that scope; the flag stays hidden', () => {
+  const p = pattern({ sessions: ['s1', 's2', 's3', 's4', 's5'], session_count: 6, pids: [1, 2, 3, 4, 5], pid_count: 6 });
+  const other = pattern({ key: 'claude|proxy-secret-leak|api.example.com', agent: 'claude', rule: 'proxy-secret-leak',
+    sessions: ['s9'], pids: [9], flag_ids: ['c1'] });
+  const sixth = { ...flag('k3'), session_id: 's6', pid: 6 };
+  const c1 = { ...flag('c1'), agent: 'claude', rule: 'proxy-secret-leak', session_id: 's9', pid: 9 };
+  for (const scope of [{ session: 's6' }, { pids: [6] }]) {
+    const inView = patternsInView([p, other], { ...scope, flags: [sixth] });
+    assert.deepEqual(inView.map(x => x.key), [KEY]);
+    assert.deepEqual(uncoveredFlags([sixth], inView).map(f => f.id), []);
+    assert.deepEqual(uncoveredFlags([sixth, c1], inView).map(f => f.id), ['c1']);
+  }
+  assert.deepEqual(patternsInView([p], { session: 's6', flags: [] }).map(x => x.key), []);
+  assert.deepEqual(patternsInView([p], { pids: [6], flags: [flag('free')] }).map(x => x.key), []);
+});
+
+test('patternAfterDismiss: a capped dismiss-all of 500 ids leaves 2 of 502 open and the card not dismissed', () => {
+  const after = patternAfterDismiss(pattern({ count: 502, unacked: 502 }), 500);
+  const html = patternHTML(after, Date.now(), {});
+  assert.ok(html.includes('<b class="pattern-open">2 open</b>'));
+  assert.ok(!after.dismissed);
+  assert.ok(!/disabled/.test(html));
+  assert.match(html, /disp-warning/);
+  const rest = patternAfterDismiss(after, 2);
+  assert.equal(rest.dismissed, true);
+  assert.ok(patternHTML(rest, Date.now(), {}).includes('<b class="pattern-open">0 open</b>'));
 });

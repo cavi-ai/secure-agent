@@ -1929,17 +1929,16 @@ document.addEventListener('DOMContentLoaded', () => {
   };
 
   // A pattern card's served action (Attention, Flags), found by pattern key +
-  // action id (+ host). The card shows 0 open with its buttons disabled
-  // before the request (reverted if it fails); the covered flags leave the
-  // lists; the next snapshot reconciles the pattern.
-  function stagePatternDone(key) {
+  // action id (+ host). Before the request (reverted if it fails) the card's
+  // open count drops by the submitted flag ids — all of them for a mute —
+  // and reads 0 open with its buttons disabled once none is left; those
+  // flags leave the lists; the next snapshot reconciles the pattern.
+  function stagePatternDone(key, submitted) {
     return stage(['patterns', 'flags', 'flagsView'], ['flags', 'attention', 'chart-flags', 'status', 'tab-badges'], () => {
       const p = (telemetryData.patterns || []).find(x => x.key === key);
-      const ids = new Set((p && p.flag_ids) || []);
-      telemetryData.patterns = (telemetryData.patterns || []).map(x => x.key !== key ? x : {
-        ...x, unacked: 0, dismissed: true,
-        disposition: { state: 'acknowledged', text: 'Reviewed', why: x.title || '' },
-      });
+      const ids = new Set(submitted || (p && p.flag_ids) || []);
+      telemetryData.patterns = (telemetryData.patterns || []).map(x => x.key !== key ? x
+        : patternAfterDismiss(x, submitted ? submitted.length : x.unacked));
       telemetryData.flags = (telemetryData.flags || []).filter(f => !ids.has(f.id));
       telemetryData.flagsView = (telemetryData.flagsView || []).filter(f => !ids.has(f.id));
     });
@@ -1970,7 +1969,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (await window.muteFlag(body.rule, body.host)) stagePatternDone(key);
         return;
       case 'dismiss-all': {
-        const revert = stagePatternDone(key);
+        const revert = stagePatternDone(key, openIds);
         try {
           await send(a.method, a.path, body);
         } catch (err) {
@@ -1985,7 +1984,7 @@ document.addEventListener('DOMContentLoaded', () => {
       }
       case 'allow-host': {
         const revertAllow = stageAllow(body.agent, [body.host]);
-        const revert = stagePatternDone(key);
+        const revert = stagePatternDone(key, openIds);
         try {
           await send(a.method, a.path, body);
         } catch (err) {
@@ -2590,9 +2589,15 @@ document.addEventListener('DOMContentLoaded', () => {
       } catch { sparkBump(1, 0); /* unparseable frame still counts */ }
       markDirty('events');
     });
+    // Patterns and posture come only from /snapshot: a flag frame schedules
+    // one reconcile 2 s after the last frame of a burst, so a storm folds
+    // into its pattern card instead of standing as rows until the poll.
+    let flagReconcile = 0;
     es.addEventListener('flag', (msg) => {
       try { telemetryData.flags = upsertById(telemetryData.flags, JSON.parse(msg.data)); } catch { /* next reconcile repairs */ }
       markDirty('flags', 'attention', 'chart-flags', 'status', 'tab-badges');
+      clearTimeout(flagReconcile);
+      flagReconcile = setTimeout(() => fetchTelemetry({ slow: false }), 2000);
     });
     es.addEventListener('incident', (msg) => {
       // Delta incidents are the bare report (no workflow join); the 30s

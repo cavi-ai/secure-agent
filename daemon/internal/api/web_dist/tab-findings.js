@@ -82,14 +82,13 @@ function renderAttention() {
     container.innerHTML = '<div class="attention-groups"></div>';
     wrap = container.firstElementChild;
   }
-  patchList(wrap, groups, { key: group => group.key || group.label, html: group => {
-    const urgent = group.items[0] && group.items[0].priority >= 4 ? ' urgent' : '';
-    const metrics = [
-      group.rssBytes ? `<span><b>${escapeHTML(fmtRSS(group.rssBytes))}</b> memory</span>` : '',
-      group.cpuPercent ? `<span><b>${escapeHTML(fmtCPU(group.cpuPercent))}</b> CPU</span>` : '',
-      group.processCount ? `<span><b>${Number(group.processCount)}</b> process${group.processCount === 1 ? '' : 'es'}</span>` : '',
-    ].filter(Boolean).join('');
-    return `<article class="attention-group${urgent}">
+  // The group node is keyed on its identity; urgency, the metrics and the
+  // item count update in place and the items patch inside it, so an open
+  // pattern <details> or a focused button survives a memory or CPU tick.
+  const groupKey = group => group.key || group.label;
+  patchList(wrap, groups, { key: groupKey,
+    hash: group => JSON.stringify([group.key, group.label, group.agent, group.workspace]),
+    html: group => `<article class="attention-group">
       <header class="attention-group-head">
         <div class="attention-identity">
           <span class="attention-agent">${escapeHTML(group.agent || 'machine')}</span>
@@ -98,12 +97,28 @@ function renderAttention() {
             : group.key === 'machine' ? '<span class="attention-workspace">Monitoring gaps no agent session owns</span>'
             : '<span class="attention-workspace">Signals could not be safely attributed to one live session</span>'}
         </div>
-        <div class="attention-metrics">${metrics}</div>
-        <span class="attention-total">${group.items.length} item${group.items.length === 1 ? '' : 's'}</span>
+        <div class="attention-metrics"></div>
+        <span class="attention-total"></span>
       </header>
-      <div class="attention-items">${group.items.map(itemHTML).join('')}</div>
-    </article>`;
-  } });
+      <div class="attention-items"></div>
+    </article>` });
+  const nodes = new Map(Array.from(wrap.children).map(n => [n._saKey, n]));
+  for (const group of groups) {
+    const node = nodes.get(String(groupKey(group)));
+    if (!node) continue;
+    node.classList.toggle('urgent', !!(group.items[0] && group.items[0].priority >= 4));
+    const metrics = [
+      group.rssBytes ? `<span><b>${escapeHTML(fmtRSS(group.rssBytes))}</b> memory</span>` : '',
+      group.cpuPercent ? `<span><b>${escapeHTML(fmtCPU(group.cpuPercent))}</b> CPU</span>` : '',
+      group.processCount ? `<span><b>${Number(group.processCount)}</b> process${group.processCount === 1 ? '' : 'es'}</span>` : '',
+    ].filter(Boolean).join('');
+    const m = node.querySelector('.attention-metrics');
+    if (m._saHTML !== metrics) { m.innerHTML = metrics; m._saHTML = metrics; }
+    const total = `${group.items.length} item${group.items.length === 1 ? '' : 's'}`;
+    const t = node.querySelector('.attention-total');
+    if (t.textContent !== total) t.textContent = total;
+    patchList(node.querySelector('.attention-items'), group.items, { key: item => item.kind + ':' + item.id, html: itemHTML });
+  }
 }
 
 function renderIncidents() {
@@ -228,12 +243,13 @@ function renderFlags() {
     const v = (document.getElementById(id) || {}).value || 'all';
     return v === 'all' ? '' : v;
   };
+  const scopedFlags = scopedBySession(SA.t.flagsView || [], SA.timelineSession, SA.timelinePids);
   const patterns = patternsInView(allPatterns, {
     term: SA.globalSearchTerm(), agent: selected('flags-agent'), rule: selected('flags-rule'),
-    session: SA.timelineSession, pids: SA.timelinePids,
+    session: SA.timelineSession, pids: SA.timelinePids, flags: scopedFlags,
   });
-  const flags = uncoveredFlags(scopedBySession(SA.t.flagsView || [], SA.timelineSession, SA.timelinePids)
-    .filter(f => matchesSearch(SA.globalSearchTerm(), f.agent, f.rule, f.evidence, f.sessionId, f.workspace)), allPatterns);
+  const flags = uncoveredFlags(scopedFlags
+    .filter(f => matchesSearch(SA.globalSearchTerm(), f.agent, f.rule, f.evidence, f.sessionId, f.workspace)), patterns);
   SA.paintSessionChip('flags-session-filter', 'flags-session-filter-id', patterns.length + flags.length);
   badge.textContent = patterns.length + flags.length;
 
@@ -376,7 +392,8 @@ function findingHTML(f, l, chainHTML, toolsHTML) {
 const PATTERN_CONSOLE_ACTIONS = ['allow-host', 'mute-rule-host', 'mute-class', 'dismiss-all', 'kill'];
 const PATTERN_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
-// uncoveredFlags: the flags no pattern covers (flag_ids).
+// uncoveredFlags: the flags no pattern covers (flag_ids). Handed the
+// patterns in view, so a flag is hidden only behind a card that shows.
 function uncoveredFlags(flags, patterns) {
   const covered = new Set();
   for (const p of patterns || []) for (const id of p.flag_ids || []) covered.add(id);
@@ -385,19 +402,32 @@ function uncoveredFlags(flags, patterns) {
 
 // patternsInView: the patterns the Flags filters admit — the search over
 // agent, rule, title, subject and summary; the agent and rule selects; the
-// session or pid scope.
+// session or pid scope, by the pattern's capped sessions / pids or by any
+// of its flag_ids among the loaded scoped flags (opts.flags).
 function patternsInView(patterns, opts) {
   const o = opts || {};
+  const scoped = new Set((o.flags || []).map(f => f.id));
+  const coversScoped = p => (p.flag_ids || []).some(id => scoped.has(id));
   return (patterns || []).filter(p => {
     if (o.agent && p.agent !== o.agent) return false;
     if (o.rule && p.rule !== o.rule) return false;
     if (o.session) {
-      if (!(p.sessions || []).includes(o.session)) return false;
-    } else if (o.pids && o.pids.length && !(p.pids || []).some(pid => o.pids.includes(pid))) {
+      if (!(p.sessions || []).includes(o.session) && !coversScoped(p)) return false;
+    } else if (o.pids && o.pids.length && !(p.pids || []).some(pid => o.pids.includes(pid)) && !coversScoped(p)) {
       return false;
     }
     return matchesSearch(o.term, p.agent, p.rule, p.title, (p.subject || {}).label, p.summary);
   });
+}
+
+// patternAfterDismiss: the pattern once n of its open flags were
+// acknowledged. A served dismiss-all carries at most the newest 500 ids, so
+// the open count drops by n and the card reads dismissed only at 0; the next
+// /snapshot reconciles.
+function patternAfterDismiss(p, n) {
+  const unacked = Math.max(0, (Number(p.unacked) || 0) - (Number(n) || 0));
+  if (unacked > 0) return { ...p, unacked };
+  return { ...p, unacked: 0, dismissed: true, disposition: { state: 'acknowledged', text: 'Reviewed', why: p.title || '' } };
 }
 
 // patternWindowText: "03:00→03:08" in local time; a day other than today

@@ -202,6 +202,8 @@ def main():
         dom_pattern = dump_dom(chrome, tmp, "?patterndemo")
         dom_patternact = dump_dom(chrome, tmp, "?patterndemo&patternact")
         dom_patternphone = dump_dom(chrome, tmp, "?phonedemo&patterndemo")
+        dom_patternstream = dump_dom(chrome, tmp, "?patterndemo&patternstream")
+        dom_attnkeep = dump_dom(chrome, tmp, "?patterndemo&attnkeep")
 
         # --- session-first tab (P3) ---
         rail = dom.split('id="session-rail"', 1)[1].split('id="session-detail"', 1)[0]
@@ -942,6 +944,12 @@ def main():
         check("patterns: the page still fits a 375px phone, the pattern card's tab included",
               'data-hscroll="sessions:0,agents:0,resources:0,findings:0"' in dom_patternphone,
               (re.search(r'data-hscroll="[^"]*"', dom_patternphone) or [None])[0])
+        stream = pre(dom_patternstream, "pattern-stream-probe")
+        check("patterns: a streamed flag the pattern covers folds into its one card after the debounced reconcile",
+              stream == "mid cards=1 covered=0 row=1 | end cards=1 covered=1 row=0", f"probe={stream!r}")
+        keep = pre(dom_attnkeep, "attn-probe")
+        check("attention: an open pattern disclosure and a focused button survive a group RSS change",
+              keep.startswith("open=true focus=true metrics=") and "memory" in keep, f"probe={keep!r}")
 
         if args.screenshot:
             shot_dir = os.path.abspath(args.screenshot)

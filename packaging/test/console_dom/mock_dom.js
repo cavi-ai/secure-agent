@@ -1273,6 +1273,57 @@
     setTimeout(() => document.querySelector('[data-tab="findings"]').click(), 4000);
     setTimeout(() => document.querySelector('#attention-list .pattern-card [data-action-id="dismiss-all"]')?.click(), 9000);
   }
+  // patternstream (with patterndemo): Findings open, then a third keychain
+  // flag on the stream that the daemon folds into the codex pattern.
+  // <pre id="pattern-stream-probe"> reads the Flags list 300 ms after the
+  // frame (mid) and after the debounced reconcile (end).
+  if (MODE.includes('patternstream')) {
+    setTimeout(() => document.querySelector('[data-tab="findings"]').click(), 4000);
+    setTimeout(() => {
+      const f = {
+        id: 'flag-8', rule: 'keychain-access', severity: 2, ts: new Date().toISOString(), pid: 40844, agent: 'codex',
+        session_id: 'sess-codex-9', title: 'Agent touched the keychain',
+        evidence: [{ kind: 'keychain', label: '/Users/dev/Library/Keychains/login.keychain-db', sub: 'keychain access' }]
+      };
+      // New objects: the console holds the served ones until the reconcile.
+      data['/flags'] = [...data['/flags'], f];
+      const pat = data['/patterns'][0];
+      data['/patterns'] = [{ ...pat, count: pat.count + 1, unacked: pat.unacked + 1, flag_ids: ['flag-8', ...pat.flag_ids] }];
+      window.__sse.emit('flag', f);
+      const probe = () => {
+        const list = document.getElementById('flags-list');
+        const cards = list ? list.querySelectorAll('.pattern-card') : [];
+        const covered = cards.length === 1 && [...cards[0].querySelectorAll('.pattern-flag-list code')].some(c => c.textContent === 'flag-8');
+        const row = list && list.querySelector('[data-id="flag-8"], [data-flag-id="flag-8"]');
+        return `cards=${cards.length} covered=${covered ? 1 : 0} row=${row ? 1 : 0}`;
+      };
+      let mid = '';
+      setTimeout(() => { mid = probe(); }, 300);
+      setTimeout(() => stamp('pattern-stream-probe', `mid ${mid} | end ${probe()}`), 2600);
+    }, 4500);
+  }
+  // attnkeep (with patterndemo): Findings open, the codex pattern card's
+  // Individual flags opened and its first button focused, then a posture
+  // frame with a new codex RSS, read after the 3 s focus hold lets the
+  // panel render. <pre id="attn-probe"> says whether both survived and what
+  // the group's metrics read.
+  if (MODE.includes('attnkeep')) {
+    setTimeout(() => document.querySelector('[data-tab="findings"]').click(), 4000);
+    setTimeout(() => {
+      const card = document.querySelector('#attention-list .pattern-card');
+      const d = card && card.querySelector('details');
+      const btn = card && card.querySelector('.finding-actions button');
+      if (d) d.open = true;
+      if (btn) btn.focus();
+      data['/posture'].groups.find(g => g.key === 'agent:codex').rssBytes = 734003200;
+      window.__sse.emit('posture', data['/posture']);
+      setTimeout(() => {
+        const group = card && card.closest('.attention-group');
+        const metrics = group ? group.querySelector('.attention-metrics').textContent : '';
+        stamp('attn-probe', `open=${!!(d && d.isConnected && d.open)} focus=${!!(btn && document.activeElement === btn)} metrics=${metrics}`);
+      }, 3600);
+    }, 4500);
+  }
   // explainact: Findings open, press flag-2's first served action (the
   // recommended allow) late enough that the inline note and the toast are
   // still up at dump time.
