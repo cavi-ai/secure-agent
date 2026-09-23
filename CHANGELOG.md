@@ -21,6 +21,12 @@ All notable changes to `secure-agent` are documented here. The format follows
   per (path, rule) are collapsed.
 
 ### Fixed
+- Console: live-stream frames mark only the panels that read the changed data.
+- Console: only the active tab's panels, the header and the tab badges render, at most every 250 ms per panel; hidden panels render on tab switch.
+- Console: list panels (findings, attention, incidents, audit, sessions rail, agents, firewall, events) patch rows by key, so focus, open disclosures and a click during a render survive.
+- Console: a panel waits while the pointer is down in it or one of its controls has focus (up to 3 s).
+- Console: allow, mute, unmute, promote/demote, incident status, guard and resource decisions, source add/remove, allowlist remove and dismiss change the card before the request, revert on failure and leave a 4 s inline note on success.
+- Verified by DOM checks on a 300-event burst (hidden-tab render counts, an open rail group, a focused button, a mid-burst Dismiss click) and on allow success and failure.
 - Sessions: a tagged child process (a shell under a harness) joins its harness
   family's session instead of minting its own — the tagger now reports the
   family root on every tag, not only in the process listing.

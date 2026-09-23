@@ -449,17 +449,13 @@ function renderSessionBoard() {
     const shown = applySessionFilters(groups, filter);
     const sessionGroups = shown.filter(g => !g.infra);
     const infra = shown.find(g => g.infra);
-    const isOpen = (key, dflt) => (Object.prototype.hasOwnProperty.call(SA.sessionGroupOpen, key) ? !!SA.sessionGroupOpen[key] : dflt);
-    rail.innerHTML = (sessionGroups.length
-      ? sessionGroups.map(g => sessionGroupHTML(g, trees, SA.selectedSessionId, isOpen(g.key, true), !!SA.endedSessionsOpen[g.key])).join('')
-      : (filtered ? noMatch : quiet))
-      + (infra ? sessionInfraGroupHTML(infra, isOpen('infra', false)) : '');
-    applyInlineMetrics(rail);
-    rail.querySelectorAll('details.session-group').forEach(el => {
-      el.addEventListener('toggle', () => {
-        SA.sessionGroupOpen[el.dataset.harness] = el.open;
-      });
-    });
+    // A group's open state is DOM state: patchList keeps an unchanged group's
+    // node and carries open across a rebuilt one.
+    const parts = sessionGroups.length
+      ? sessionGroups.map(g => ({ key: 'group:' + g.key, html: sessionGroupHTML(g, trees, SA.selectedSessionId, true, !!SA.endedSessionsOpen[g.key]) }))
+      : [{ key: filtered ? 'empty:nomatch' : 'empty:quiet', html: filtered ? noMatch : quiet }];
+    if (infra) parts.push({ key: 'infra', html: sessionInfraGroupHTML(infra, false) });
+    patchList(rail, parts, { key: p => p.key, html: p => p.html });
     // Detail: the selected session's trace waterfall.
     const selected = durable.find(s => s.id === SA.selectedSessionId);
     if (detail) {
@@ -578,7 +574,7 @@ function renderEvents() {
     return;
   }
 
-  container.innerHTML = events.map(e => {
+  const row = (e, freshCls) => {
     let kindLabel = 'EVENT';
     let kindClass = '';
     if (e.kind === 8) { kindLabel = 'TOOL USE'; kindClass = 'tool'; }
@@ -594,13 +590,6 @@ function renderEvents() {
     const agentName = SA.agentNameFor(e.pid);
     const pidLabel = agentName ? `${agentName} · PID ${e.pid}` : `PID ${e.pid}`;
 
-    // Animate only events that weren't in the previous render — the whole
-    // list re-renders on every poll, and rows the user already saw must
-    // not flicker. The initial page load never animates.
-    let freshCls = '';
-    if (!SA.reducedMotion && !SA.firstEventRender && !SA.suppressFreshOnce && !SA.prevEventKeys.has(eventKey(e))) {
-      freshCls = e.kind === 9 ? ' fresh-sev' : ' fresh';
-    }
 
     return `
       <div class="timeline-item${freshCls}">
@@ -610,7 +599,16 @@ function renderEvents() {
         <span class="dtl">${escapeHTML(detailStr)}</span>
       </div>
     `;
-  }).join('');
+  };
+  // Animate only rows new to the container — the initial page load never
+  // animates. The hash leaves the fresh class out, so a row seen once keeps
+  // its node (and does not re-animate) on the next render.
+  patchList(container, events, {
+    key: eventKey,
+    hash: e => row(e, ''),
+    html: e => row(e, !SA.reducedMotion && !SA.firstEventRender && !SA.suppressFreshOnce && !SA.prevEventKeys.has(eventKey(e))
+      ? (e.kind === 9 ? ' fresh-sev' : ' fresh') : ''),
+  });
 
   SA.prevEventKeys = new Set(events.map(eventKey));
   SA.firstEventRender = false;
