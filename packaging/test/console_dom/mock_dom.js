@@ -586,6 +586,11 @@
       if (MODE.includes('explaindemo') && opts.body) line += ' body=' + opts.body;
       reqLog.push(line);
       stamp('mock-requests', reqLog.join('\n'));
+      if (MODE.includes('resolvedemo') && p === '/incidents/status') {
+        const text = id => (document.getElementById(id) || {}).textContent;
+        const queued = !!document.querySelector('#attention-center [data-id="inc-20260907-6033-a1b2"]');
+        stamp('resolve-probe', `badge=${text('badge-attention-count')} tab=${text('tab-badge-findings')} queued=${queued}`);
+      }
       // postfail: POST /allowlist answers 500 (the act-in-place revert path).
       if (MODE.includes('postfail') && p === '/allowlist') {
         return { ok: false, status: 500, json: async () => ({}), text: async () => 'mock failure' };
@@ -730,6 +735,26 @@
       }, 100);
     };
     setTimeout(() => { clickResolve(); acceptDialog(); }, 4000);
+  }
+  // resolvedemo: Resolve the incident from its card and accept the note
+  // prompt; POST /incidents/status stamps <pre id="resolve-probe"> with the
+  // attention counts and whether the queue still lists the incident — the
+  // optimistic render, before any reconciliation.
+  if (MODE.includes('resolvedemo')) {
+    setTimeout(() => document.querySelector('[data-tab="findings"]').click(), 4000);
+    setTimeout(() => {
+      document.querySelector('#incidents-container [data-action="incident-status"][data-status="resolved"]').click();
+      let n = 0;
+      const iv = setInterval(() => {
+        const ok = document.getElementById('confirm-ok');
+        if (ok && ok.closest('#confirm-layer') && !ok.closest('#confirm-layer').hidden) {
+          ok.click();
+          clearInterval(iv);
+        } else if (++n > 20) {
+          clearInterval(iv);
+        }
+      }, 100);
+    }, 4500);
   }
   // stickydemo: Attention tab, scroll 5000 px; <pre id="sticky-probe"> gets
   // the tablist's top, whether the posture pill shows, and its text.

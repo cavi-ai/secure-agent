@@ -1315,3 +1315,26 @@ function vendorKeyPromoteHTML(ids) {
 function sseNeedsSnapshot(kind) {
   return kind === 'exec' || kind === 'guard-prompt' || kind === 'guard-resolved' || kind === 'proxy-hit';
 }
+// attentionItemKind: the group-item kind a /posture headline item belongs to.
+function attentionItemKind(kind) {
+  return { guard_pending: 'guard', resource_pressure: 'resource', uninspected_egress: 'egress' }[kind] || kind;
+}
+// mapPostureAttention: the posture after an optimistic attention change. fn
+// maps each group item (null drops it); a dropped item leaves posture.items
+// too and needs_you is items.length, so the count, the headline items and
+// the groups agree until the next snapshot. state and summary stay the
+// daemon's.
+function mapPostureAttention(p, fn) {
+  if (!p || !p.groups) return p;
+  const dropped = new Set();
+  const groups = p.groups.map(g => ({
+    ...g,
+    items: g.items.map(it => {
+      const out = fn(it);
+      if (!out) dropped.add(it.kind + '|' + it.id);
+      return out;
+    }).filter(Boolean),
+  })).filter(g => g.items.length);
+  const items = (p.items || []).filter(it => !dropped.has(attentionItemKind(it.kind) + '|' + it.id));
+  return { ...p, groups, items, needs_you: items.length };
+}

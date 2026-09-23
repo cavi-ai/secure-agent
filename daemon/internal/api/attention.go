@@ -287,7 +287,9 @@ func (a *API) attentionQueue(st Status) ([]PostureItem, []AttentionGroup) {
 	}
 
 	// Uninspected egress: one item per group with a host rollup, and one
-	// headline item per group item.
+	// headline item per group item. Known CDN/cloud carriers (Infra set) are
+	// excluded, as in UninspectedEgressCountWindow: only unknown endpoints
+	// count.
 	var egressGroups []*AttentionGroup
 	egressItem := func(g *AttentionGroup) *AttentionItem {
 		for i := range g.Items {
@@ -299,6 +301,9 @@ func (a *API) attentionQueue(st Status) ([]PostureItem, []AttentionGroup) {
 	}
 	if a.correlator != nil {
 		for _, row := range a.correlator.UninspectedEgressSummarySince(time.Now().Add(-24 * time.Hour)) {
+			if row.Infra != "" {
+				continue
+			}
 			g := groupFor(row.Agent, 0)
 			item := egressItem(g)
 			if item == nil {
@@ -335,14 +340,16 @@ func (a *API) attentionQueue(st Status) ([]PostureItem, []AttentionGroup) {
 		})
 	}
 
-	// Incidents not yet resolved: critical/high ones, and any open more than
-	// 72h — a queue item going stale, not a finding.
+	// Incidents not yet resolved: critical ones (severity 3) and high ones
+	// (severity 2) keep their risk; any other open more than 72h is a queue
+	// item going stale, not a finding.
 	for _, inc := range a.store.RecentIncidents(25) {
 		wf, _ := a.store.IncidentStatus(inc.ID)
 		status := firstNonEmpty([]string{wf.Status, "open"})
-		serious := inc.Risk == model.RiskCritical || inc.Risk == model.RiskHigh
-		aging := time.Since(inc.Timestamp) > 72*time.Hour
-		if status == "resolved" || (!serious && !aging) {
+		critical := inc.Risk == model.RiskCritical
+		high := inc.Risk == model.RiskHigh
+		aging := !critical && !high && time.Since(inc.Timestamp) > 72*time.Hour
+		if status == "resolved" || (!critical && !high && !aging) {
 			continue
 		}
 		detail := firstNonEmpty([]string{inc.Summary, inc.Rule, "A security incident needs review."})
@@ -354,14 +361,16 @@ func (a *API) attentionQueue(st Status) ([]PostureItem, []AttentionGroup) {
 		}
 		item := AttentionItem{
 			Kind: "incident", Priority: 3, ID: inc.ID,
-			Title: "Critical incident", Detail: detail, Status: status,
+			Title: "Open incident", Detail: detail, Status: status,
 		}
-		if aging {
+		switch {
+		case critical:
+			headline.Severity = 3
+			item.Title = "Critical incident"
+		case aging:
 			headline.Title = "Aging incident: " + humanFlagTitle(inc.Rule)
 			headline.Severity = 1
 			headline.Detail = "open more than 3 days — resolve or acknowledge"
-		}
-		if !serious {
 			item.Priority = 1
 			item.Title = "Aging incident"
 		}

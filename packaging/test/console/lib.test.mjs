@@ -41,6 +41,7 @@ const {
   hbarsHTML, sessionWaterfallHTML, applyInlineMetrics, resourceHostContextHTML,
   fmtUSD, topCostRows,
   familyLabel, cappedList, resourceNeedsAttention, resourceFamilyGroups,
+  mapPostureAttention,
 } = ctx;
 
 // ---------- spend ----------
@@ -1239,4 +1240,48 @@ test('the tab bar is sticky and holds the posture pill and the scope bar', () =>
   assert.ok(bar.indexOf('id="tabs-posture" data-action="goto-top"') > bar.indexOf('</nav>'));
   assert.ok(bar.indexOf('id="scope-bar"') > bar.indexOf('id="tabs-posture"'));
   assert.match(styleCSS, /\.tabs-bar \{\s*position: sticky; top: 0; z-index: 50;[^}]*background: var\(--bg-0\);/);
+});
+
+// ---------- optimistic attention removal ----------
+
+test('mapPostureAttention: a removed item leaves items, groups and needs_you coherent', () => {
+  const posture = {
+    state: 'critical', summary: 's', needs_you: 4,
+    items: [
+      { kind: 'flag', id: 'f1' }, { kind: 'guard_pending', id: 'g1' },
+      { kind: 'resource_pressure', id: 'r1' }, { kind: 'incident', id: 'i1' },
+    ],
+    groups: [
+      { key: 'a', items: [{ kind: 'flag', id: 'f1' }, { kind: 'guard', id: 'g1' }] },
+      { key: 'b', items: [{ kind: 'resource', id: 'r1' }, { kind: 'incident', id: 'i1' }] },
+    ],
+  };
+  const sum = p => p.groups.reduce((n, g) => n + g.items.length, 0);
+  const coherent = p => {
+    assert.equal(p.needs_you, p.items.length);
+    assert.equal(sum(p), p.needs_you);
+  };
+
+  let p = mapPostureAttention(posture, it => (it.kind === 'guard' && it.id === 'g1' ? null : it));
+  assert.ok(!p.items.some(it => it.id === 'g1'));
+  assert.equal(p.needs_you, 3);
+  coherent(p);
+  assert.equal(p.state, 'critical');
+  assert.equal(p.summary, 's');
+
+  p = mapPostureAttention(p, it => (it.kind === 'resource' && it.id === 'r1' ? null : it));
+  assert.ok(!p.items.some(it => it.id === 'r1'));
+  coherent(p);
+
+  p = mapPostureAttention(p, it => (it.kind === 'incident' ? { ...it, status: 'acknowledged' } : it));
+  assert.ok(p.items.some(it => it.id === 'i1'));
+  assert.equal(p.needs_you, 2);
+  coherent(p);
+
+  p = mapPostureAttention(p, it => (it.kind === 'incident' ? null : it));
+  assert.equal(p.groups.length, 1);
+  assert.equal(p.needs_you, 1);
+  coherent(p);
+  assert.equal(posture.items.length, 4);
+  assert.equal(posture.needs_you, 4);
 });

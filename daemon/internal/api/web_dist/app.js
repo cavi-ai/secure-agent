@@ -1025,15 +1025,12 @@ document.addEventListener('DOMContentLoaded', () => {
       renderNow(panels);
     };
   }
-  // posture.groups is the attention queue: map its items, drop empty groups.
+  // posture.groups is the attention queue: map its items, drop empty groups;
+  // a dropped item leaves posture.items and needs_you with it.
   function mapAttentionItems(fn) {
     const p = telemetryData.posture;
     if (!p || !p.groups) return;
-    const count = gs => gs.reduce((n, g) => n + g.items.length, 0);
-    const groups = p.groups.map(g => ({ ...g, items: g.items.map(fn).filter(Boolean) })).filter(g => g.items.length);
-    // needs_you drops with the items so the badge and the queue stay equal.
-    const needsYou = Math.max(0, (Number(p.needs_you) || 0) - (count(p.groups) - count(groups)));
-    telemetryData.posture = { ...p, groups, needs_you: needsYou };
+    telemetryData.posture = mapPostureAttention(p, fn);
   }
   const withMode = (rules, mode) => {
     const s = telemetryData.status;
@@ -1090,7 +1087,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const revert = stage(['incidents', 'posture'], ['incidents', 'attention', 'status'], () => {
       telemetryData.incidents = (telemetryData.incidents || []).map(inc => inc.id !== id ? inc
         : { ...inc, workflow: { ...(inc.workflow || {}), status, ...(body.note ? { resolution_note: body.note } : {}) } });
-      mapAttentionItems(it => (it.kind === 'incident' && it.id === id ? { ...it, status } : it));
+      // resolved leaves the queue; acknowledged stays, marked seen.
+      mapAttentionItems(it => (it.kind !== 'incident' || it.id !== id ? it : status === 'resolved' ? null : { ...it, status }));
     });
     try {
       const r = await apiFetch('/incidents/status', {

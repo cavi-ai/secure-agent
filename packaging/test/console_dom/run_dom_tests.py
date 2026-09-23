@@ -154,6 +154,7 @@ def main():
         dom = dump_dom(chrome, tmp)
         dom_session = dump_dom(chrome, tmp, "?sessiondemo")
         dom_guard = dump_dom(chrome, tmp, "?guarddemo")
+        dom_resolve = dump_dom(chrome, tmp, "?resolvedemo")
         dom_uninsp = dump_dom(chrome, tmp, "?uninspecteddemo")
         dom_endpoint = dump_dom(chrome, tmp, "?endpointdemo")
         dom_toast = dump_dom(chrome, tmp, "?toastdemo")
@@ -680,6 +681,9 @@ def main():
         check("resolved guard request leaves the attention queue",
               f'id="tab-badge-findings">{needs_you - 1}<' in dom_guard
               and 'data-action="guard-resolve" data-id="guard-1"' not in dom_guard)
+        resolve_probe = (re.search(r'<pre id="resolve-probe"[^>]*>(.*?)</pre>', dom_resolve, re.S) or [None, ""])[1]
+        check("resolved incident leaves the attention count before reconciliation",
+              resolve_probe == f"badge={needs_you - 1} tab={needs_you - 1} queued=false", f"probe={resolve_probe!r}")
         check("posture flag item switches to findings tab",
               'data-action="goto-tab" data-tab="findings"' in dom)
         check("tab switch reveals the target panel",

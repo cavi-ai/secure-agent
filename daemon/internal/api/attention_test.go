@@ -254,3 +254,129 @@ func TestAttentionSeverityTwoFlagPriority(t *testing.T) {
 		t.Fatalf("disposition = %+v, want warning", it.Disposition)
 	}
 }
+
+// Known CDN/cloud carriers never join the per-agent egress item or its
+// headline; a group whose only egress is carriers gets no egress item.
+func TestAttentionEgressSkipsCarriers(t *testing.T) {
+	cfg, err := config.Load("/nonexistent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tg := agents.New(cfg, twoAgentProcs{})
+	tg.Refresh()
+	now := time.Now()
+	build := func(hosts ...string) (*API, *correlate.Correlator) {
+		cr := correlate.New(tg, sensitive.New(cfg), cfg)
+		for _, h := range hosts {
+			cr.Observe(event.Event{Kind: event.KindConnOpen, PID: 42, TS: now.Add(-time.Hour), RemoteHost: h, RemotePort: 443})
+		}
+		a := newTestAPI("", testStore(t), &fakeKiller{}, func() Status { return Status{Running: true} })
+		a.correlator = cr
+		return a, cr
+	}
+	const carrier, unknown = "104.16.0.1", "unknown.example.com"
+
+	a, cr := build(carrier, carrier, unknown)
+	unknownCount := -1
+	for _, row := range cr.UninspectedEgressSummarySince(time.Time{}) {
+		switch row.Host {
+		case carrier:
+			if row.Infra == "" {
+				t.Fatalf("carrier row %+v has no infra org; fixture is not a carrier", row)
+			}
+		case unknown:
+			unknownCount = row.Count
+		}
+	}
+	if unknownCount < 1 {
+		t.Fatalf("unknown row missing from summary")
+	}
+	items, groups := a.attentionQueue(Status{Running: true})
+	var egress []AttentionItem
+	for _, g := range groups {
+		for _, it := range g.Items {
+			if it.Kind == "egress" {
+				egress = append(egress, it)
+			}
+		}
+	}
+	if len(egress) != 1 {
+		t.Fatalf("egress items = %+v, want one", egress)
+	}
+	if egress[0].Count != unknownCount || len(egress[0].Hosts) != 1 || egress[0].Hosts[0] != unknown {
+		t.Fatalf("egress item = %+v, want count %d and hosts [%s]", egress[0], unknownCount, unknown)
+	}
+	headlines := 0
+	for _, it := range items {
+		if it.Kind == "uninspected_egress" {
+			headlines++
+		}
+	}
+	if headlines != 1 {
+		t.Fatalf("uninspected_egress headlines = %d, want 1\nitems=%+v", headlines, items)
+	}
+
+	a, _ = build(carrier)
+	items, groups = a.attentionQueue(Status{Running: true})
+	for _, g := range groups {
+		for _, it := range g.Items {
+			if it.Kind == "egress" {
+				t.Fatalf("carrier-only group %q has egress item %+v", g.Key, it)
+			}
+		}
+	}
+	for _, it := range items {
+		if it.Kind == "uninspected_egress" {
+			t.Fatalf("carrier-only egress produced headline %+v", it)
+		}
+	}
+}
+
+// An incident's risk sets its headline severity: critical 3 (posture
+// critical), high 2; only other risks age into severity 1.
+func TestAttentionIncidentSeverityPreservesRisk(t *testing.T) {
+	now := time.Now()
+	cases := []struct {
+		name       string
+		risk       model.RiskLevel
+		ts         time.Time
+		severity   int
+		groupTitle string
+	}{
+		{"fresh critical", model.RiskCritical, now, 3, "Critical incident"},
+		{"fresh high", model.RiskHigh, now, 2, "Open incident"},
+		{"aging medium", model.RiskMedium, now.Add(-80 * time.Hour), 1, "Aging incident"},
+		{"aging critical", model.RiskCritical, now.Add(-80 * time.Hour), 3, "Critical incident"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a := newTestAPI("", testStore(t), &fakeKiller{}, func() Status { return Status{Running: true} })
+			a.store.PutIncident(model.IncidentReport{ID: "inc-1", Rule: "sensitive-read-then-connect", Risk: tc.risk,
+				Timestamp: tc.ts, Agent: "claude", PID: 7, Summary: "s"})
+			p := a.computePosture()
+			var headline *PostureItem
+			for i := range p.Items {
+				if p.Items[i].Kind == "incident" && p.Items[i].ID == "inc-1" {
+					headline = &p.Items[i]
+				}
+			}
+			if headline == nil || headline.Severity != tc.severity {
+				t.Fatalf("headline = %+v, want severity %d\nitems=%+v", headline, tc.severity, p.Items)
+			}
+			title := ""
+			for _, g := range p.Groups {
+				for _, it := range g.Items {
+					if it.Kind == "incident" && it.ID == "inc-1" {
+						title = it.Title
+					}
+				}
+			}
+			if title != tc.groupTitle {
+				t.Fatalf("group item title = %q, want %q", title, tc.groupTitle)
+			}
+			if tc.risk == model.RiskCritical && p.State != "critical" {
+				t.Fatalf("posture state = %q, want critical", p.State)
+			}
+		})
+	}
+}
