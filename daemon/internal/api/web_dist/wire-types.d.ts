@@ -55,6 +55,63 @@ export interface AdvisorVerdict {
   created_at: string;
 }
 
+export interface ExplainSubject {
+  path: string;
+  display: string;
+  basename: string;
+  category: string;
+  category_label: string;
+  rule?: string;
+  owner_label: string;
+}
+
+export interface ExplainEgress {
+  host: string;
+  port?: number;
+  org?: string;
+  name?: string;
+  kind: string;
+  allowlisted: boolean;
+  gap_seconds: number;
+}
+
+export interface ExplainContext {
+  session_id?: string;
+  harness?: string;
+  repo?: string;
+  branch?: string;
+  workspace?: string;
+  tool?: string;
+  tool_status?: string;
+  tool_at?: string;
+  model?: string;
+}
+
+export interface Disposition {
+  state: string;
+  text: string;
+  why: string;
+}
+
+export interface ExplainAction {
+  id: string;
+  label: string;
+  consequence: string;
+  method: string;
+  path: string;
+  body?: Record<string, unknown>;
+  recommended?: boolean;
+}
+
+export interface FlagExplain {
+  what: string;
+  subject?: ExplainSubject;
+  egress?: ExplainEgress[];
+  context?: ExplainContext;
+  disposition: Disposition;
+  actions: ExplainAction[];
+}
+
 export interface Flag {
   id: string;
   rule: string;
@@ -68,6 +125,7 @@ export interface Flag {
   title?: string;
   advisor?: AdvisorVerdict;
   acknowledged?: boolean;
+  explain?: FlagExplain;
 }
 
 export interface RotateItem {
@@ -228,6 +286,7 @@ export interface AttentionItem {
   count?: number;
   hosts?: string[];
   advisor?: AdvisorVerdict;
+  disposition?: Disposition;
 }
 
 export interface AttentionGroup {

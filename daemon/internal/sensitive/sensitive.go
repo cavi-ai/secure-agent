@@ -43,6 +43,26 @@ type Match struct {
 	Rule     string // system-trust | keychain:<marker> | ssh-key | aws | env-file | path:<prefix> | glob:<pattern>
 }
 
+// CategoryForRule maps a Match.Rule string (as stamped on flag evidence) back
+// to the category the classifier assigned with it. Configured path and glob
+// rules, and unknown or empty rules, are CatOther.
+func CategoryForRule(rule string) Category {
+	switch {
+	case rule == "system-trust":
+		return CatKeychainSystem
+	case strings.HasPrefix(rule, "keychain:"):
+		return CatKeychain
+	case rule == "ssh-key":
+		return CatSSHKey
+	case rule == "aws":
+		return CatAWS
+	case rule == "env-file":
+		return CatEnvFile
+	default:
+		return CatOther
+	}
+}
+
 type Classifier interface {
 	Classify(path string) (Category, bool)
 	Match(path string) (Match, bool)

@@ -90,11 +90,14 @@ func (a *API) computePosture() Posture {
 	// operator already reviewed/dismissed must not keep demanding attention.
 	for _, f := range a.store.QueryFlags(store.FlagFilter{MinSeverity: 2, Limit: 25, Unacted: true}) {
 		if isRecent(f.TS, 24*time.Hour) {
+			// Severity follows the flag's disposition: an advisor-confirmed
+			// benign flag is a queue item, not a "critical — act now".
+			d := dispositionFor(f)
 			posture.Items = append(posture.Items, PostureItem{
 				Kind: "flag", ID: f.ID,
 				Title:     humanFlagTitle(f.Rule),
-				Severity:  f.Severity,
-				Detail:    firstEvidence(f.Evidence),
+				Severity:  dispositionSeverity(d),
+				Detail:    d.Text + " — " + firstEvidence(f.Evidence),
 				Timestamp: f.TS.UTC().Format(time.RFC3339),
 			})
 		}

@@ -111,3 +111,35 @@ func TestIdentifyPTRBroadensBeyondInfraOrg(t *testing.T) {
 		t.Fatalf("Identify should name the provider: %+v", id)
 	}
 }
+
+// IdentifyCached answers from the CIDR/suffix tables and the PTR cache only:
+// list stamping must never block on DNS.
+func TestIdentifyCachedNeverResolves(t *testing.T) {
+	orig := lookupAddr
+	t.Cleanup(func() { lookupAddr = orig })
+	ptrCache = sync.Map{}
+	calls := 0
+	lookupAddr = func(_ context.Context, ip string) ([]string, error) {
+		calls++
+		return []string{"host-9.example.org."}, nil
+	}
+	if id := IdentifyCached("2606:4700:20::681a:4a4"); id.Org != "Cloudflare" || id.Kind != "ipv6" || id.IP != "2606:4700:20::681a:4a4" || id.Name != "" {
+		t.Fatalf("IdentifyCached(cloudflare v6) = %+v", id)
+	}
+	if id := IdentifyCached("203.0.113.9"); id.Org != "" || id.Name != "" || id.Kind != "ipv4" {
+		t.Fatalf("IdentifyCached(uncached v4) = %+v", id)
+	}
+	if id := IdentifyCached("api.cloudflare.com"); id.Kind != "hostname" || id.Org != "Cloudflare" || id.Name != "api.cloudflare.com" {
+		t.Fatalf("IdentifyCached(hostname) = %+v", id)
+	}
+	if calls != 0 {
+		t.Fatalf("IdentifyCached made %d resolver calls, want 0", calls)
+	}
+	// A PTR that Identify already resolved is reused, still without a call.
+	if id := Identify("203.0.113.9"); id.Name != "host-9.example.org" || calls != 1 {
+		t.Fatalf("Identify = %+v after %d calls", id, calls)
+	}
+	if id := IdentifyCached("203.0.113.9"); id.Name != "host-9.example.org" || calls != 1 {
+		t.Fatalf("IdentifyCached after Identify = %+v, calls %d", id, calls)
+	}
+}
