@@ -14,8 +14,10 @@ import (
 // per-call token deltas; response_item function_call / function_call_output
 // pair by call_id for durations. Content (arguments, output) is NEVER
 // carried into events — names, durations and token counts only.
-// Codex rollout lines omit the model id, so model_call events carry tokens
-// without a model and cost 0 — never a fabricated price.
+// event_msg/thread_settings_applied names the model and provider; every later
+// model_call carries that model id and its cost from the price tables. An id
+// the tables do not know costs 0 (never a fabricated price), and a rollout
+// without the settings line yields model_calls with no model and cost 0.
 
 type codexLine struct {
 	Timestamp string          `json:"timestamp"`
@@ -28,8 +30,9 @@ type codexMeta struct {
 	CWD       string `json:"cwd"`
 }
 
-type codexTokenCount struct {
-	Type string `json:"type"` // token_count
+// codexEventMsg is the event_msg payload subset the tracer reads.
+type codexEventMsg struct {
+	Type string `json:"type"` // token_count | thread_settings_applied | ...
 	Info struct {
 		LastTokenUsage struct {
 			InputTokens  int64 `json:"input_tokens"`
@@ -37,6 +40,10 @@ type codexTokenCount struct {
 			OutputTokens int64 `json:"output_tokens"`
 		} `json:"last_token_usage"`
 	} `json:"info"`
+	ThreadSettings struct {
+		Model           string `json:"model"`
+		ModelProviderID string `json:"model_provider_id"`
+	} `json:"thread_settings"`
 }
 
 type codexResponseItem struct {
@@ -47,10 +54,13 @@ type codexResponseItem struct {
 }
 
 // CodexTracer turns rollout lines into trace events; stateful per file for
-// call_id pairing and the session id from session_meta.
+// call_id pairing, the session id from session_meta and the model from
+// thread_settings_applied.
 type CodexTracer struct {
 	sessionID string
 	cwd       string
+	model     string                 // model id as written by thread_settings_applied
+	provider  string                 // model_provider_id from the same line
 	pending   map[string]pendingTool // call_id → open call
 }
 
@@ -70,8 +80,14 @@ func IsCodexRolloutPath(path string) bool {
 // the first line is consumed).
 func (t *CodexTracer) Session() (id, cwd string) { return t.sessionID, t.cwd }
 
+// Model returns the model id and provider learned from the latest
+// thread_settings_applied line ("" until one is consumed).
+func (t *CodexTracer) Model() (id, provider string) { return t.model, t.provider }
+
 // ParseLine consumes one rollout line and returns zero or more trace events.
-// ok=false means the line is not a Codex rollout record.
+// ok=false means the line is not a Codex trace record; the caller still runs
+// its redaction scan on it. A thread_settings_applied line updates the
+// tracer's model and returns ok=false, so it keeps that scan.
 func (t *CodexTracer) ParseLine(line string) (events []event.Event, ok bool) {
 	trimmed := strings.TrimSpace(line)
 	if !strings.HasPrefix(trimmed, "{") || !strings.Contains(trimmed, `"payload"`) {
@@ -97,17 +113,28 @@ func (t *CodexTracer) ParseLine(line string) (events []event.Event, ok bool) {
 		}
 		return nil, true
 	case "event_msg":
-		var tc codexTokenCount
-		if err := json.Unmarshal(rec.Payload, &tc); err != nil || tc.Type != "token_count" || t.sessionID == "" {
+		var msg codexEventMsg
+		if err := json.Unmarshal(rec.Payload, &msg); err != nil {
 			return nil, false
 		}
-		u := tc.Info.LastTokenUsage
+		if msg.Type == "thread_settings_applied" {
+			if m := msg.ThreadSettings.Model; m != "" {
+				t.model = m
+				t.provider = msg.ThreadSettings.ModelProviderID
+			}
+			return nil, false
+		}
+		if msg.Type != "token_count" || t.sessionID == "" {
+			return nil, false
+		}
+		u := msg.Info.LastTokenUsage
 		if u.InputTokens == 0 && u.OutputTokens == 0 {
 			return nil, true
 		}
 		return []event.Event{{
 			Kind: event.KindModelCall, TS: ts, SessionID: t.sessionID,
-			TokensIn: u.InputTokens, TokensOut: u.OutputTokens, // model unknown: cost 0
+			Model: t.model, TokensIn: u.InputTokens, TokensOut: u.OutputTokens,
+			CostUSD: ModelCostUSD(t.model, u.InputTokens, u.OutputTokens),
 		}}, true
 	case "response_item":
 		var item codexResponseItem
