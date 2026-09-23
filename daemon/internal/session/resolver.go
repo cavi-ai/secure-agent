@@ -203,6 +203,13 @@ func (r *Resolver) Resolve(e *event.Event) string {
 	}
 	id, ok := r.byRoot[root]
 	if !ok {
+		// The session is the family root's: a child process (a shell the
+		// harness spawned) must not lend it its own start time or cwd.
+		if root != info.PID {
+			if rootInfo, tagged := r.tagger.Tag(root); tagged {
+				info = rootInfo
+			}
+		}
 		// Adopt a transcript session already known for this harness+workspace
 		// (the transcript may have been tailed before the process tree was
 		// sampled). Otherwise mint a provisional process-tree id. Either way
@@ -575,7 +582,9 @@ func (r *Resolver) Sweep() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for root, id := range r.byRoot {
-		if !live[root] {
+		// A root missing from one process-table sample is ended only when the
+		// process source confirms it is gone.
+		if !live[root] && !r.tagger.Alive(root) {
 			r.st.EndSession(id, now)
 			if sess, ok := r.st.GetSession(id); ok {
 				r.emitLocked(sess)
@@ -598,7 +607,7 @@ func (r *Resolver) Sweep() {
 	// restarted mid-session): end those whose root pid is not live, and end
 	// pid-less hook sessions after a day of silence.
 	for root, id := range r.st.SessionRoots() {
-		if _, tracked := r.byRoot[root]; !tracked && !live[root] {
+		if _, tracked := r.byRoot[root]; !tracked && !live[root] && !r.tagger.Alive(root) {
 			r.st.EndSession(id, now)
 			if sess, ok := r.st.GetSession(id); ok {
 				r.emitLocked(sess)

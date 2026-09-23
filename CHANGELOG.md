@@ -27,6 +27,11 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Console: a panel waits while the pointer is down in it or one of its controls has focus (up to 3 s).
 - Console: allow, mute, unmute, promote/demote, incident status, guard and resource decisions, source add/remove, allowlist remove and dismiss change the card before the request, revert on failure and leave a 4 s inline note on success.
 - Verified by DOM checks on a 300-event burst (hidden-tab render counts, an open rail group, a focused button, a mid-burst Dismiss click) and on allow success and failure.
+- Sessions: a tagged child process (a shell under a harness) joins its harness
+  family's session instead of minting its own — the tagger now reports the
+  family root on every tag, not only in the process listing.
+- Sessions: a session is ended only when its root process is confirmed gone,
+  not when one process-table sample happened to miss it.
 - Sessions: orchestrated runs are nested under their orchestrator's session —
   the parent lookup walks the OS ancestry past the child's own harness match
   instead of a chain that stopped at the first match.

@@ -194,6 +194,137 @@ func TestTaggedPIDsRootAndOrphan(t *testing.T) {
 	}
 }
 
+// Tag reports the family root: the highest ancestor matching the same agent
+// definition, and it agrees with TaggedPIDs.
+func TestTagReportsFamilyRoot(t *testing.T) {
+	fake := fakeProcs{
+		100: {PID: 100, PPID: 1, Exe: "/opt/homebrew/bin/codex"},
+		101: {PID: 101, PPID: 100, Exe: "/bin/zsh"},
+		200: {PID: 200, PPID: 1, Exe: "/opt/homebrew/bin/codex"},
+		201: {PID: 201, PPID: 200, Exe: "/opt/homebrew/lib/codex/bin/codex"},
+		202: {PID: 202, PPID: 201, Exe: "/bin/zsh"},
+		300: {PID: 300, PPID: 1, Exe: "/usr/local/bin/claude"},
+		301: {PID: 301, PPID: 300, Exe: "/opt/homebrew/bin/codex"},
+		302: {PID: 302, PPID: 301, Exe: "/bin/sh"},
+	}
+	c, _ := config.Load("/nonexistent")
+	tg := New(c, fake)
+	tg.Refresh()
+	// A pid spawned after the refresh is tagged through the process source.
+	fake[203] = ProcInfo{PID: 203, PPID: 202, Exe: "/bin/zsh"}
+
+	want := map[int32]int32{100: 100, 101: 100, 200: 200, 201: 200, 202: 200, 203: 200, 301: 301, 302: 301}
+	for pid, root := range want {
+		info, ok := tg.Tag(pid)
+		if !ok || info.RootPID != root {
+			t.Fatalf("Tag(%d) = root %d, %v; want %d", pid, info.RootPID, ok, root)
+		}
+	}
+	tagged := tg.TaggedPIDs()
+	for _, pid := range []int32{101, 202, 203, 302} {
+		info, _ := tg.Tag(pid)
+		if tagged[pid].RootPID != info.RootPID {
+			t.Fatalf("pid %d: TaggedPIDs root %d, Tag root %d", pid, tagged[pid].RootPID, info.RootPID)
+		}
+	}
+}
+
+// Tag and TaggedPIDs must agree on the family root even when a shell
+// between two codex processes is cached with Name "codex" through its
+// ancestry rather than by matching the agent definition itself.
+func TestFamilyRootAgreesAcrossCachedShell(t *testing.T) {
+	fake := fakeProcs{
+		100: {PID: 100, PPID: 1, Exe: "/opt/homebrew/bin/codex"},
+		101: {PID: 101, PPID: 100, Exe: "/bin/zsh"},
+		102: {PID: 102, PPID: 101, Exe: "/opt/homebrew/bin/codex"},
+	}
+	c, _ := config.Load("/nonexistent")
+
+	// Outer, then the shell (which caches as "codex" via ancestry, not its
+	// own exe), then the inner codex: familyRootLocked must recognize 101 as
+	// same-family through the cache, not just through matchLocked.
+	tg := New(c, fake)
+	if _, ok := tg.Tag(100); !ok {
+		t.Fatal("Tag(100) failed")
+	}
+	shell, ok := tg.Tag(101)
+	if !ok || shell.Name != "codex" {
+		t.Fatalf("Tag(101) = %+v, %v; want codex,true", shell, ok)
+	}
+	inner, ok := tg.Tag(102)
+	if !ok || inner.RootPID != 100 {
+		t.Fatalf("Tag(102).RootPID = %d, %v; want 100, true", inner.RootPID, ok)
+	}
+	if got := tg.TaggedPIDs()[102].RootPID; got != 100 {
+		t.Fatalf("TaggedPIDs()[102].RootPID = %d, want 100", got)
+	}
+
+	// Reverse order: the inner codex is tagged first, so at that moment the
+	// shell (101) is neither cached nor a def match. The walk must still
+	// pass through it transparently to reach the def-matched outer codex.
+	tg2 := New(c, fake)
+	inner2, ok := tg2.Tag(102)
+	if !ok || inner2.RootPID != 100 {
+		t.Fatalf("Tag(102).RootPID (reverse order) = %d, %v; want 100, true", inner2.RootPID, ok)
+	}
+}
+
+func TestFamilyRootStopsAtDifferentHarness(t *testing.T) {
+	fake := fakeProcs{
+		100: {PID: 100, PPID: 1, Exe: "/opt/homebrew/bin/codex"},
+		101: {PID: 101, PPID: 100, Exe: "/bin/zsh"},
+		102: {PID: 102, PPID: 101, Exe: "/usr/local/bin/claude"},
+		103: {PID: 103, PPID: 102, Exe: "/bin/zsh"},
+		104: {PID: 104, PPID: 103, Exe: "/opt/homebrew/bin/codex"},
+	}
+	c, _ := config.Load("/nonexistent")
+	tg := New(c, fake)
+
+	// A claude ancestor (102) sits between the inner codex (104) and the
+	// outer codex (100). The walk must stop at 102 (a different agent
+	// definition), not pass through it to reach 100.
+	inner, ok := tg.Tag(104)
+	if !ok || inner.RootPID != 104 {
+		t.Fatalf("Tag(104).RootPID = %d, %v; want 104, true", inner.RootPID, ok)
+	}
+
+	// Cache the intervening shells so the boundary is also hit through the
+	// cached+tagged branch: 101 caches as "codex" (via ancestry to 100), 103
+	// caches as "claude" (via ancestry to 102).
+	if shell1, ok := tg.Tag(101); !ok || shell1.Name != "codex" {
+		t.Fatalf("Tag(101) = %+v, %v; want codex,true", shell1, ok)
+	}
+	if shell2, ok := tg.Tag(103); !ok || shell2.Name != "claude" {
+		t.Fatalf("Tag(103) = %+v, %v; want claude,true", shell2, ok)
+	}
+
+	if got := tg.TaggedPIDs()[104].RootPID; got != 104 {
+		t.Fatalf("TaggedPIDs()[104].RootPID = %d, want 104", got)
+	}
+	outer, ok := tg.Tag(100)
+	if !ok || outer.RootPID != 100 {
+		t.Fatalf("Tag(100).RootPID = %d, %v; want 100, true", outer.RootPID, ok)
+	}
+}
+
+func TestAlive(t *testing.T) {
+	fake := fakeProcs{100: {PID: 100, PPID: 1, Exe: "/usr/local/bin/claude"}}
+	c, _ := config.Load("/nonexistent")
+	tg := New(c, fake)
+	tg.Refresh()
+	// 200 is absent from the last process table but known to the source.
+	fake[200] = ProcInfo{PID: 200, PPID: 1, Exe: "/usr/local/bin/claude"}
+	if !tg.Alive(100) || !tg.Alive(200) {
+		t.Fatalf("Alive(100)=%v Alive(200)=%v, want true, true", tg.Alive(100), tg.Alive(200))
+	}
+	if tg.Alive(300) {
+		t.Fatal("Alive(300) = true for a pid unknown to table and source")
+	}
+	if _, cached := tg.TaggedPIDs()[200]; cached {
+		t.Fatal("Alive tagged pid 200")
+	}
+}
+
 func TestRefreshIntervalIdleVsBusy(t *testing.T) {
 	if RefreshInterval(false) != 5*time.Second {
 		t.Fatalf("idle interval = %s, want 5s", RefreshInterval(false))
