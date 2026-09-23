@@ -26,6 +26,58 @@ function applyInlineMetrics(root) {
   root.querySelectorAll('[data-harness-color]').forEach(el => el.style.setProperty('--harness-color', el.dataset.harnessColor));
 }
 
+// patchList: keyed reconcile of a container's children, so a re-render keeps
+// every node whose markup did not change — focus, <details> open state,
+// scroll and hover survive. opts: key(item) → string; html(item) → one root
+// element; hash(item) → the content that drives the markup (default: the
+// html); empty → the markup for zero items. A changed item is rebuilt and
+// swapped in place (a replaced <details> keeps its open state); a missing key
+// is removed; order is enforced by moving nodes, which keeps identity. Key and
+// hash ride on the nodes as properties, so the serialized markup is exactly
+// what the renderer wrote. Touches only the container it is handed.
+function patchList(container, items, opts) {
+  if (!container) return;
+  if (!items.length) {
+    if (container._saEmpty !== opts.empty) {
+      container.innerHTML = opts.empty || '';
+      container._saEmpty = opts.empty;
+    }
+    return;
+  }
+  container._saEmpty = undefined;
+  const keyed = items.map(item => [String(opts.key(item)), item]);
+  const wanted = new Set(keyed.map(k => k[0]));
+  const old = new Map();
+  for (const n of Array.from(container.childNodes)) {
+    if (n.nodeType === 1 && n._saKey !== undefined && wanted.has(n._saKey) && !old.has(n._saKey)) old.set(n._saKey, n);
+    else n.remove();
+  }
+  const box = container.ownerDocument.createElement('div');
+  let at = container.firstChild;
+  for (const [key, item] of keyed) {
+    const markup = opts.html(item);
+    const hash = opts.hash ? String(opts.hash(item)) : markup;
+    let node = old.get(key);
+    old.delete(key);
+    if (!node || node._saHash !== hash) {
+      box.innerHTML = markup.trim();
+      applyInlineMetrics(box);
+      const fresh = box.firstElementChild;
+      if (!fresh) continue;
+      fresh._saKey = key;
+      fresh._saHash = hash;
+      if (node) {
+        if (node.tagName === 'DETAILS' && fresh.tagName === 'DETAILS') fresh.open = node.open;
+        if (node === at) at = fresh;
+        node.replaceWith(fresh);
+      }
+      node = fresh;
+    }
+    if (node === at) at = node.nextSibling;
+    else container.insertBefore(node, at);
+  }
+}
+
 // fmtTime: deterministic local HH:MM:SS. toLocaleTimeString varies by locale
 // (zero-padding, a "24:00" midnight quirk in some), which can re-wrap the
 // 68px timeline column — build the string by hand instead.

@@ -184,7 +184,7 @@ document.addEventListener('DOMContentLoaded', () => {
   let currentRawMarkdown = '';
 
   btnRefresh.addEventListener('click', () => {
-    fetchTelemetry();
+    fetchTelemetry({ full: true });
     showToast('Refreshing telemetry data...', 'info');
   });
 
@@ -583,6 +583,122 @@ document.addEventListener('DOMContentLoaded', () => {
   // carries the tab for deep links (#ct is lifted and stripped BEFORE this
   // runs, so the two never collide). "Telemetry" holds the per-source detail
   // (resource control + raw event timeline) split out of Overview.
+  // ---------- render scheduler ----------
+  // A panel renders only when the telemetryData slice it reads changed
+  // (dirty) and only when it is on screen: the active tab's panels plus the
+  // globals. A hidden panel keeps its dirty bit and renders on switchTab.
+  // Renders coalesce into one frame; a panel renders at most every 250ms
+  // (later marks wait for one trailing timer, nothing is dropped). While the
+  // pointer is down in <main>, or a control inside a panel has focus (up to
+  // 3s), that panel waits: the node under the cursor or the caret survives.
+  const PANELS = [
+    ['posture', renderPosture], ['status', renderStatus], ['resources', renderResourceMissionControl], ['history', renderResourceHistory], ['sessions', renderSessionBoard],
+    ['chart-flags', renderChartFlags], ['chart-memory', renderChartMemory], ['spend', renderSpend],
+    ['agents', renderAgents],
+    ['firewall', renderFirewall], ['incidents', renderIncidents], ['fleet', renderFleet],
+    ['audit', renderAudit], ['sources', renderSources], ['flags', renderFlags], ['attention', renderAttention],
+    ['events', renderEvents], ['activity', renderActivity], ['tab-badges', renderTabBadges]
+  ];
+  // Panel → tab; a panel absent here is global (always on screen).
+  const PANEL_TAB = {
+    'chart-flags': 'overview', 'chart-memory': 'overview', spend: 'overview', activity: 'overview',
+    sessions: 'sessions', agents: 'agents', fleet: 'agents', resources: 'resources', history: 'history',
+    events: 'events', firewall: 'egress', sources: 'egress',
+    incidents: 'findings', audit: 'findings', flags: 'findings', attention: 'findings'
+  };
+  // Panel → the element whose focused control holds its render.
+  const PANEL_EL = {
+    resources: 'resource-board', history: 'history-board', sessions: 'session-rail', agents: 'agents-container',
+    fleet: 'fleet-container', firewall: 'firewall-container', sources: 'sources-list', incidents: 'incidents-container',
+    audit: 'audit-container', flags: 'flags-list', attention: 'attention-list', events: 'events-container'
+  };
+  const SLOW_ONLY = new Set(['resources', 'history', 'fleet', 'audit', 'sources', 'activity', 'spend']);
+  const PANEL_MIN_MS = 250;
+  const FOCUS_HOLD_MS = 3000;
+  const dirtyPanels = new Set();
+  const renderCounts = {};
+  const lastRenderAt = {};
+  let booted = false; // nothing renders before the first telemetry lands
+  let renderQueued = false;
+  let trailingTimer = null;
+  let interacting = false;
+  let focusAt = 0;
+
+  function renderPanel(name, fn) {
+    lastRenderAt[name] = Date.now();
+    renderCounts[name] = (renderCounts[name] || 0) + 1;
+    try { fn(); } catch (err) { console.error(`render panel "${name}" failed:`, err); }
+  }
+  function markDirty(...names) {
+    names.forEach(n => dirtyPanels.add(n));
+    scheduleDirty();
+  }
+  function scheduleDirty() {
+    if (renderQueued) return;
+    renderQueued = true;
+    let done = false;
+    const run = () => { if (done) return; done = true; renderQueued = false; renderDirty(); };
+    // A frame when the page paints; the timer backstops a page that does not
+    // (background tab, headless).
+    if (window.requestAnimationFrame) requestAnimationFrame(run);
+    setTimeout(run, window.requestAnimationFrame ? 100 : 16);
+  }
+  // ms this panel must still wait, -1 for "until the pointer is up", 0 = go.
+  function panelHold(name) {
+    if (!PANEL_TAB[name]) return 0;
+    if (interacting) return -1;
+    const el = PANEL_EL[name] && document.getElementById(PANEL_EL[name]);
+    const a = document.activeElement;
+    if (el && a && el.contains(a) && a.matches('button, select, input, textarea, summary')) {
+      const left = FOCUS_HOLD_MS - (Date.now() - focusAt);
+      if (left > 0) return left;
+    }
+    return 0;
+  }
+  function renderDirty() {
+    if (!booted) return;
+    const now = Date.now();
+    let wait = Infinity;
+    for (const [name, fn] of PANELS) {
+      if (!dirtyPanels.has(name)) continue;
+      if (PANEL_TAB[name] && PANEL_TAB[name] !== activeTab) continue;
+      const hold = panelHold(name);
+      if (hold) { if (hold > 0) wait = Math.min(wait, hold); continue; }
+      const since = now - (lastRenderAt[name] || 0);
+      if (since < PANEL_MIN_MS) { wait = Math.min(wait, PANEL_MIN_MS - since); continue; }
+      dirtyPanels.delete(name);
+      renderPanel(name, fn);
+    }
+    if (wait !== Infinity && !trailingTimer) {
+      trailingTimer = setTimeout(() => { trailingTimer = null; renderDirty(); }, wait);
+    }
+  }
+  // User-initiated: render these panels now, visible or not.
+  function renderNow(names) {
+    for (const [name, fn] of PANELS) if (names.includes(name)) { dirtyPanels.delete(name); renderPanel(name, fn); }
+  }
+  document.querySelector('main')?.addEventListener('pointerdown', () => { interacting = true; });
+  const releasePointer = () => { if (interacting) { interacting = false; scheduleDirty(); } };
+  document.addEventListener('pointerup', releasePointer);
+  document.addEventListener('pointercancel', releasePointer);
+  window.addEventListener('blur', releasePointer);
+  document.addEventListener('focusin', () => { focusAt = Date.now(); });
+  document.addEventListener('focusout', () => scheduleDirty());
+
+  // Tab badges are the signal for HIDDEN tabs, so they cannot wait for their
+  // tab's panels: a cheap global recount of the four badges.
+  function renderTabBadges() {
+    const t = telemetryData;
+    const agents = (t.status && t.status.agents) || [];
+    const trees = t.status && t.status.trees;
+    setTabBadge('findings', ((t.posture && t.posture.groups) || []).reduce((n, g) => n + g.items.length, 0));
+    setTabBadge('egress', (t.status && t.status.uninspected_egress) || 0);
+    setTabBadge('agents', groupAgentsByHarness(agents).filter(g => !g.infra).length);
+    setTabBadge('sessions', t.sessions && t.sessions.length
+      ? groupSessionsByHarness(t.sessions, trees, agents).reduce((n, g) => n + (g.infra ? 0 : familySize(g.live)), 0)
+      : sessionRows(agents, trees).length);
+  }
+
   const TABS = ['overview', 'sessions', 'agents', 'resources', 'history', 'events', 'egress', 'findings'];
   let activeTab = 'overview';
 
@@ -599,6 +715,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!opts.skipHash && window.history.replaceState) {
       history.replaceState(null, '', location.pathname + location.search + '#' + id);
     }
+    PANELS.forEach(([name]) => { if (!PANEL_TAB[name] || PANEL_TAB[name] === id) dirtyPanels.add(name); });
+    renderDirty();
   }
 
   document.querySelectorAll('.tab-btn').forEach(b =>
@@ -703,25 +821,17 @@ document.addEventListener('DOMContentLoaded', () => {
     telemetryData.connected = !!(snap && snap.status);
     setConnState(telemetryData.connected ? 'ok' : (sawAuth ? 'auth-expired' : 'unreachable'));
 
-    renderAll();
+    if (!booted || (opts && opts.full)) renderAll();
+    else markDirty(...PANELS.map(p => p[0]).filter(n => slow || !SLOW_ONLY.has(n)));
   }
 
+  // Every panel, hidden ones included: initial load, Refresh, and actions
+  // that reshape every list (search, session select). Crash isolation: one
+  // panel's bad data must never take the whole page down with it (the /fleet
+  // shape mismatch once killed every panel after it on every poll).
   function renderAll() {
-    // Crash isolation: one panel's bad data must never take the whole page
-    // down with it. The /fleet shape mismatch (object, not array) threw in
-    // renderFleet and silently killed every panel after it — flags, events,
-    // activity — on every single poll.
-    const panels = [
-      ['posture', renderPosture], ['status', renderStatus], ['resources', renderResourceMissionControl], ['history', renderResourceHistory], ['sessions', renderSessionBoard],
-      ['chart-flags', renderChartFlags], ['chart-memory', renderChartMemory], ['spend', renderSpend],
-      ['agents', renderAgents],
-      ['firewall', renderFirewall], ['incidents', renderIncidents], ['fleet', renderFleet],
-      ['audit', renderAudit], ['sources', renderSources], ['flags', renderFlags], ['attention', renderAttention],
-      ['events', renderEvents], ['activity', renderActivity]
-    ];
-    for (const [name, fn] of panels) {
-      try { fn(); } catch (err) { console.error(`render panel "${name}" failed:`, err); }
-    }
+    booted = true;
+    for (const [name, fn] of PANELS) { dirtyPanels.delete(name); renderPanel(name, fn); }
   }
 
   // Activity rollup chart: hourly event bars with rose flag markers — the
@@ -805,7 +915,6 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   const sessionHelpOpen = {};
-  const sessionGroupOpen = {};
   const endedSessionsOpen = {}; // harness key → ended tail expanded
   const agentGroupOpen = {};
   const agentTreeOpen = {}; // instance root pid → helper disclosure open
@@ -841,6 +950,66 @@ document.addEventListener('DOMContentLoaded', () => {
   liveOnlySwitch?.addEventListener('change', () => { harnessFilter.liveOnly = liveOnlySwitch.checked; harnessFilterChanged(); });
 
 
+  // ---------- act in place ----------
+  // A mutating action applies its expected result to telemetryData and
+  // renders the affected panels BEFORE the request; the card changes under
+  // the click. stage() snapshots the top-level keys the mutation replaces
+  // (mutations assign new values, never edit in place) and returns revert(),
+  // which restores a key only if nothing (SSE, reconcile) replaced it since.
+  function stage(keys, panels, mutate) {
+    const before = keys.map(k => telemetryData[k]);
+    mutate();
+    const after = keys.map(k => telemetryData[k]);
+    renderNow(panels);
+    return () => {
+      keys.forEach((k, i) => { if (telemetryData[k] === after[i]) telemetryData[k] = before[i]; });
+      renderNow(panels);
+    };
+  }
+  // posture.groups is the attention queue: map its items, drop empty groups.
+  function mapAttentionItems(fn) {
+    const p = telemetryData.posture;
+    if (!p || !p.groups) return;
+    telemetryData.posture = { ...p, groups: p.groups.map(g => ({ ...g, items: g.items.map(fn).filter(Boolean) })).filter(g => g.items.length) };
+  }
+  const withMode = (rules, mode) => {
+    const s = telemetryData.status;
+    if (!s || !s.firewall_stats) return;
+    const stats = { ...s.firewall_stats };
+    rules.forEach(r => { if (stats[r]) stats[r] = { ...stats[r], mode }; });
+    telemetryData.status = { ...s, firewall_stats: stats };
+  };
+  const cssq = v => CSS.escape(String(v));
+  // One-line confirmation on the card the action changed, for 4s. When the
+  // action removed the card, the note sits on its panel's head.
+  function cardNote(selector, cardSel, panelId, text) {
+    const hit = selector && document.querySelector(selector);
+    let at = hit && hit.closest(cardSel);
+    if (!at) {
+      const panel = document.getElementById(panelId)?.closest('.panel');
+      at = panel && panel.querySelector('.panel-head');
+    }
+    if (!at) return;
+    const note = document.createElement('span');
+    note.className = 'card-note';
+    note.textContent = text;
+    at.appendChild(note);
+    setTimeout(() => note.remove(), 4000);
+  }
+  const allowRowSel = (agent, host) => `#firewall-container [data-action="allowlist-remove"][data-agent="${cssq(agent)}"][data-host="${cssq(host)}"]`;
+  function stageAllow(agent, hosts) {
+    const hit = x => x.agent === agent && hosts.includes(x.host);
+    return stage(['allowlist', 'suggestions', 'uninspected'], ['firewall'], () => {
+      const have = telemetryData.allowlist || [];
+      telemetryData.allowlist = have.concat(hosts.filter(h => !have.some(p => p.agent === agent && p.host === h)).map(host => ({ agent, host })));
+      telemetryData.suggestions = (telemetryData.suggestions || []).filter(x => !hit(x));
+      telemetryData.uninspected = (telemetryData.uninspected || []).filter(x => !hit(x));
+    });
+  }
+  function refillUninspected() {
+    if (drawerMode === 'uninspected' && drawer && !drawer.hidden) fillUninspected(drawerBody);
+  }
+
   // Posture headline: the one-glance answer, plus clickable jump-off points
   // into the panels below (drill-down without leaving the page).
 
@@ -855,16 +1024,22 @@ document.addEventListener('DOMContentLoaded', () => {
       if (note === null) return; // cancelled
       body.note = note;
     }
+    const revert = stage(['incidents', 'posture'], ['incidents', 'attention', 'status'], () => {
+      telemetryData.incidents = (telemetryData.incidents || []).map(inc => inc.id !== id ? inc
+        : { ...inc, workflow: { ...(inc.workflow || {}), status, ...(body.note ? { resolution_note: body.note } : {}) } });
+      mapAttentionItems(it => (it.kind === 'incident' && it.id === id ? { ...it, status } : it));
+    });
     try {
       const r = await apiFetch('/incidents/status', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body)
       });
       if (!r.ok) throw new Error(await r.text());
       showToast(status === 'resolved' ? 'Incident resolved' : 'Incident acknowledged', 'success');
+      cardNote(`#incidents-container [data-action="open-incident"][data-id="${cssq(id)}"]`, '.incident-card', 'incidents-container', status);
       fetchTelemetry();
     } catch (err) {
+      revert();
       showToast('Failed to update incident: ' + err.message, 'danger');
     }
   };
@@ -873,31 +1048,41 @@ document.addEventListener('DOMContentLoaded', () => {
     const input = document.getElementById('source-input');
     const value = (input.value || '').trim();
     if (!value) return;
+    const revert = stage(['sources'], ['sources'], () => {
+      telemetryData.sources = [...(telemetryData.sources || []), { source: value, origin: 'user' }];
+    });
     try {
       const res = await apiFetch('/firewall/sources', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ source: value, op: 'add' })
       });
-      if (!res.ok) { showToast('Failed to add source: ' + (await res.text()), 'danger'); return; }
+      if (!res.ok) { revert(); showToast('Failed to add source: ' + (await res.text()), 'danger'); return; }
       const data = await res.json();
       input.value = '';
       showToast(`Watching ${value} — ${data.registered} secret(s) registered`, 'success');
+      cardNote(`#sources-list [data-action="remove-source"][data-source="${cssq(value)}"]`, '.source-item', 'sources-list', 'watching');
       fetchTelemetry();
     } catch (err) {
+      revert();
       showToast('Failed to add source: ' + err, 'danger');
     }
   };
 
   window.removeSource = async function(source) {
+    const revert = stage(['sources'], ['sources'], () => {
+      telemetryData.sources = (telemetryData.sources || []).filter(x => x.source !== source);
+    });
     try {
       const res = await apiFetch('/firewall/sources', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ source, op: 'remove' })
       });
-      if (!res.ok) { showToast('Failed to remove source: ' + (await res.text()), 'danger'); return; }
+      if (!res.ok) { revert(); showToast('Failed to remove source: ' + (await res.text()), 'danger'); return; }
       showToast(`Stopped watching ${source}`, 'info');
+      cardNote('', '', 'sources-list', 'stopped watching');
       fetchTelemetry();
     } catch (err) {
+      revert();
       showToast('Failed to remove source: ' + err, 'danger');
     }
   };
@@ -962,20 +1147,22 @@ document.addEventListener('DOMContentLoaded', () => {
   // list, the rule keeps watching. The missing middle ground between "kill
   // the agent" and "suppress the class".
   window.dismissFlag = async function(id) {
+    const revert = stage(['flags', 'flagsView', 'posture'], ['flags', 'attention', 'chart-flags', 'status', 'tab-badges'], () => {
+      telemetryData.flags = (telemetryData.flags || []).filter(x => x.id !== id);
+      telemetryData.flagsView = (telemetryData.flagsView || []).filter(x => x.id !== id);
+      mapAttentionItems(it => (it.kind === 'flag' && it.id === id ? null : it));
+    });
     try {
       const res = await apiFetch('/flags/acknowledge', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ flag_id: id })
       });
       if (!res.ok) throw new Error(await res.text());
-      telemetryData.flags = (telemetryData.flags || []).filter(x => x.id !== id);
-      telemetryData.flagsView = (telemetryData.flagsView || []).filter(x => x.id !== id);
       showToast('Flag dismissed — the rule keeps watching', 'info');
-      renderFlags();
-      renderStatus();
+      cardNote('', '', 'flags-list', 'dismissed');
       fetchTelemetry();
     } catch (err) {
+      revert();
       showToast(`Failed to dismiss flag: ${err.message || err}`, 'danger');
     }
   };
@@ -995,7 +1182,6 @@ document.addEventListener('DOMContentLoaded', () => {
   window.SA = {
     t: telemetryData,
     sessionHelpOpen,
-    sessionGroupOpen,
     endedSessionsOpen,
     agentGroupOpen,
     agentTreeOpen,
@@ -1013,7 +1199,18 @@ document.addEventListener('DOMContentLoaded', () => {
     isFlagsFiltered,
     isEventsFiltered,
     globalSearchTerm,
+    renderCounts,
+    flushRender() {
+      for (const [name, fn] of PANELS) if (dirtyPanels.has(name)) { dirtyPanels.delete(name); renderPanel(name, fn); }
+    },
   };
+  // toggle does not bubble: one capture listener records agent group and
+  // helper-tree disclosure state for the next rebuild of that group.
+  document.getElementById('agents-container')?.addEventListener('toggle', (e) => {
+    const el = e.target;
+    if (el.matches('details.agent-group')) agentGroupOpen[el.dataset.harness] = el.open;
+    else if (el.matches('details.agent-tree')) agentTreeOpen[el.dataset.pid] = el.open;
+  }, true);
   Object.defineProperties(window.SA, {
     timelineSession: { get() { return timelineSession; }, set(v) { timelineSession = v; } },
     timelinePids: { get() { return timelinePids; }, set(v) { timelinePids = v; } },
@@ -1143,16 +1340,25 @@ document.addEventListener('DOMContentLoaded', () => {
   window.resolveResourceControl = async function(id, decision, sessionKey, actionName) {
     const verb = decision === 'dismiss' ? 'keep this session running' : decision === 'resume' ? 'resume this entire session' : `apply ${String(actionName || 'this intervention').replaceAll('_', ' ')}`;
     if (!await saConfirm(`Save this resource policy change: ${verb}?`, { title: 'Resource policy', okLabel: 'Save' })) return;
+    const revert = stage(['posture', 'resources'], ['attention', 'resources', 'tab-badges'], () => {
+      if (!id) return;
+      mapAttentionItems(it => (it.kind === 'resource' && it.id === id ? null : it));
+      const r = telemetryData.resources;
+      if (r && r.control && r.control.pending) {
+        telemetryData.resources = { ...r, control: { ...r.control, pending: r.control.pending.filter(x => x.id !== id) } };
+      }
+    });
     try {
       const res = await apiFetch('/resources/control', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
 		body: JSON.stringify({ id, decision, session_key: sessionKey || '' })
       });
       if (!res.ok) throw new Error(await res.text());
       showToast(decision === 'dismiss' ? 'Session kept running for the cooldown window.' : decision === 'resume' ? 'Session resumed.' : 'Intervention applied.', 'success');
+      cardNote('', '', activeTab === 'resources' ? 'resource-board' : 'attention-list', decision === 'dismiss' ? 'kept running' : decision === 'resume' ? 'resumed' : 'applied');
       fetchTelemetry({ slow: true });
     } catch (err) {
+      revert();
       showToast(`Resource decision failed: ${err}`, 'danger');
     }
   };
@@ -1162,16 +1368,21 @@ document.addEventListener('DOMContentLoaded', () => {
       ? (scope === 'always' ? 'allow every future path matched by this rule' : 'allow this request once')
       : 'deny this request and remember the rule';
     if (!await saConfirm(`Apply guard decision: ${action}?`, { title: 'Guard decision', okLabel: 'Apply' })) return;
+    const revert = stage(['guardPending', 'posture'], ['attention', 'tab-badges'], () => {
+      telemetryData.guardPending = (telemetryData.guardPending || []).filter(x => x.id !== id);
+      mapAttentionItems(it => (it.kind === 'guard' && it.id === id ? null : it));
+    });
     try {
       const res = await apiFetch('/guard/resolve', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id, verdict, scope })
       });
       if (!res.ok) throw new Error(await res.text());
       showToast(`Guard request ${verdict === 'allow' ? 'allowed' : 'denied'}${scope === 'always' ? ' for this rule' : ' once'}.`, 'success');
+      cardNote('', '', 'attention-list', verdict === 'allow' ? 'allowed' : 'denied');
       fetchTelemetry({ slow: false });
     } catch (err) {
+      revert();
       showToast(`Guard decision failed: ${err}`, 'danger');
     }
   };
@@ -1343,22 +1554,25 @@ document.addEventListener('DOMContentLoaded', () => {
   // allowlist is a user-owned file, not a bulk-import target.
   window.bulkAllowHosts = async function(agent, hosts) {
     const list = String(hosts || '').split(',').filter(Boolean);
+    const revert = stageAllow(agent, list);
+    refillUninspected();
     let ok = 0;
     for (const host of list) {
       try {
         const res = await apiFetch('/allowlist', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ agent, host })
         });
         if (res.ok) ok++;
       } catch { /* continue; the toast reports the tally */ }
     }
-    showToast(`Allowlisted ${ok} of ${list.length} hosts for ${agent}`, ok === list.length ? 'success' : 'warn');
+    // None landed: put everything back. A partial run keeps the optimistic
+    // rows until the reconcile below shows which ones the daemon took.
+    if (ok === 0 && list.length) { revert(); refillUninspected(); }
+    showToast(`Allowlisted ${ok} of ${list.length} hosts for ${agent}`, ok === list.length ? 'success' : ok ? 'warn' : 'danger');
     await fetchTelemetry();
-    if (drawerMode === 'uninspected' && drawer && !drawer.hidden) {
-      fillUninspected(drawerBody);
-    }
+    if (ok) list.forEach(host => cardNote(allowRowSel(agent, host), '.mute-row', 'firewall-container', 'allowlisted'));
+    refillUninspected();
   };
 
   // Ask the advisor what an endpoint is — the functionality that turns a raw
@@ -1401,23 +1615,26 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   window.allowHost = async function(agent, host) {
+    const revert = stageAllow(agent, [host]);
+    refillUninspected();
     try {
       const res = await apiFetch('/allowlist', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ agent, host })
       });
       if (res.ok) {
         showToast(`Allowlisted ${host} for ${agent}`, 'success');
+        cardNote(allowRowSel(agent, host), '.mute-row', 'firewall-container', 'allowlisted');
         await fetchTelemetry();
-        // Refresh the drill-down in place: the allowed pair should disappear.
-        if (drawerMode === 'uninspected' && drawer && !drawer.hidden) {
-          fillUninspected(drawerBody);
-        }
+        refillUninspected();
       } else {
+        revert();
+        refillUninspected();
         showToast(`Failed to allowlist ${host}.`, 'danger');
       }
     } catch (err) {
+      revert();
+      refillUninspected();
       showToast(`Error allowlisting ${host}: ${err}`, 'danger');
     }
   };
@@ -1436,97 +1653,121 @@ document.addEventListener('DOMContentLoaded', () => {
   };
 
   window.muteFlag = async function(rule, host) {
+    const revert = stage(['mutes'], ['flags'], () => {
+      telemetryData.mutes = [...(telemetryData.mutes || []), { rule, host }];
+    });
     try {
       const res = await apiFetch('/mute', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ rule, host })
       });
       if (res.ok) {
         showToast(host === '*'
           ? `Dismissed ${rule} — future flags of this class are suppressed`
           : `Muted ${rule} for ${host} — future flags suppressed`, 'success');
+        cardNote(`#flags-list [data-action="unmute"][data-rule="${cssq(rule)}"][data-host="${cssq(host)}"]`, '.mute-row', 'flags-list', 'muted');
         fetchTelemetry();
       } else {
+        revert();
         showToast(`Failed to mute: ${await res.text()}`, 'danger');
       }
     } catch (err) {
+      revert();
       showToast(`Error muting: ${err}`, 'danger');
     }
   };
 
   window.unmuteFlag = async function(rule, host) {
+    const revert = stage(['mutes'], ['flags'], () => {
+      telemetryData.mutes = (telemetryData.mutes || []).filter(m => !(m.rule === rule && m.host === host));
+    });
     try {
       const res = await apiFetch(`/mute?rule=${encodeURIComponent(rule)}&host=${encodeURIComponent(host)}`, { method: 'DELETE' });
       if (res.ok) {
         showToast(`Unmuted ${rule} for ${host}`, 'info');
+        cardNote('', '', 'flags-list', 'unmuted');
         fetchTelemetry();
       } else {
+        revert();
         showToast(`Failed to unmute.`, 'danger');
       }
     } catch (err) {
+      revert();
       showToast(`Error unmuting: ${err}`, 'danger');
     }
   };
 
   window.promoteVendorKeys = async function() {
+    const stats = (telemetryData.status && telemetryData.status.firewall_stats) || {};
+    const revert = stage(['status'], ['firewall'], () => withMode(monitorVendorKeyIDs(stats), 'block'));
     try {
       const res = await apiFetch('/firewall/mode', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ type: 'vendor-key', mode: 'block' })
       });
       if (res.ok) {
         const body = await res.json().catch(() => ({}));
         const n = (body.promoted || []).length;
         showToast(n ? `Promoted ${n} vendor-key rule${n === 1 ? '' : 's'} to block.` : 'Vendor-key rules already blocking.', 'success');
+        cardNote('', '', 'firewall-container', 'vendor keys blocking');
         fetchTelemetry();
       } else {
+        revert();
         showToast('Failed to promote vendor-key rules.', 'danger');
       }
     } catch (err) {
+      revert();
       showToast(`Error promoting vendor-key rules: ${err}`, 'danger');
     }
   };
 
   window.promoteRule = async function(rule) {
+    const revert = stage(['status'], ['firewall'], () => withMode([rule], 'block'));
     try {
       const res = await apiFetch('/firewall/mode', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ rule, mode: 'block' })
       });
       if (res.ok) {
         showToast(`Rule “${rule}” promoted to block.`, 'success');
+        cardNote(`#firewall-container [data-rule="${cssq(rule)}"]`, '.fw-rule', 'firewall-container', 'blocking');
         fetchTelemetry();
       } else {
+        revert();
         showToast(`Failed to promote “${rule}”.`, 'danger');
       }
     } catch (err) {
+      revert();
       showToast(`Error promoting “${rule}”: ${err}`, 'danger');
     }
   };
 
   // Blocking must be reversible — a rule you can only tighten is a ratchet.
   window.demoteRule = async function(rule) {
+    const revert = stage(['status'], ['firewall'], () => withMode([rule], 'monitor'));
     try {
       const res = await apiFetch('/firewall/mode', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ rule, mode: 'monitor' })
       });
       if (res.ok) {
         showToast(`Rule “${rule}” back to monitor.`, 'success');
+        cardNote(`#firewall-container [data-rule="${cssq(rule)}"]`, '.fw-rule', 'firewall-container', 'monitoring');
         fetchTelemetry();
       } else {
+        revert();
         showToast(`Failed to demote “${rule}”.`, 'danger');
       }
     } catch (err) {
+      revert();
       showToast(`Error demoting “${rule}”: ${err}`, 'danger');
     }
   };
 
   window.removeAllowlistEntry = async function(agent, host) {
+    const revert = stage(['allowlist'], ['firewall'], () => {
+      telemetryData.allowlist = (telemetryData.allowlist || []).filter(p => !(p.agent === agent && p.host === host));
+    });
     try {
       const res = await apiFetch('/allowlist', {
         method: 'DELETE',
@@ -1534,13 +1775,14 @@ document.addEventListener('DOMContentLoaded', () => {
         body: JSON.stringify({ agent, host })
       });
       if (res.ok) {
-        telemetryData.allowlist = (telemetryData.allowlist || []).filter(p => !(p.agent === agent && p.host === host));
         showToast(`Removed ${host} for ${agent}.`, 'info');
-        renderFirewall();
+        cardNote('', '', 'firewall-container', 'removed');
       } else {
+        revert();
         showToast(`Failed to remove ${host}.`, 'danger');
       }
     } catch (err) {
+      revert();
       showToast(`Error removing ${host}: ${err}`, 'danger');
     }
   };
@@ -1938,15 +2180,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const es = new EventSource(streamURL);
     es.onopen = () => { esFailures = 0; stopPolling(); };
 
-    // Typed deltas: patch local state, then one debounced render. The
-    // full-snapshot refetch per raw bus event is over — /snapshot remains
-    // for initial load and the 30s reconcile.
-    let renderPending = false;
-    const scheduleRender = () => {
-      if (renderPending) return;
-      renderPending = true;
-      setTimeout(() => { renderPending = false; renderAll(); }, 120);
-    };
+    // Typed deltas: patch local state and mark only the panels that read the
+    // changed slice; the scheduler renders the visible ones.
     const upsertById = (list, item) => {
       list = list || [];
       const i = list.findIndex(x => x && x.id === item.id);
@@ -1962,31 +2197,33 @@ document.addEventListener('DOMContentLoaded', () => {
         countedEventKeys.add(eventKey(e));
         sparkBump(1, Date.parse(e.ts) || 0);
         telemetryData.events = [e, ...(telemetryData.events || [])].slice(0, 200);
+        if (!isEventsFiltered()) telemetryData.eventsView = telemetryData.events;
         if (e.kind === 9) flashFirewallPanel(); // proxy-hit
         // The open session's waterfall follows its own trace live.
         if (selectedSessionId && e.session_id === selectedSessionId) {
-          loadSessionTimeline(selectedSessionId).then(scheduleRender);
+          loadSessionTimeline(selectedSessionId).then(() => markDirty('sessions'));
         }
       } catch { sparkBump(1, 0); /* unparseable frame still counts */ }
-      scheduleRender();
+      markDirty('events');
     });
     es.addEventListener('flag', (msg) => {
       try { telemetryData.flags = upsertById(telemetryData.flags, JSON.parse(msg.data)); } catch { /* next reconcile repairs */ }
-      scheduleRender();
+      markDirty('flags', 'attention', 'chart-flags', 'status', 'tab-badges');
     });
     es.addEventListener('incident', (msg) => {
       // Delta incidents are the bare report (no workflow join); the 30s
       // reconcile supplies workflow state.
       try { telemetryData.incidents = upsertById(telemetryData.incidents, JSON.parse(msg.data)); } catch { /* next reconcile repairs */ }
-      scheduleRender();
+      markDirty('incidents', 'attention', 'status');
     });
     es.addEventListener('session', (msg) => {
       try { telemetryData.sessions = upsertById(telemetryData.sessions, JSON.parse(msg.data)); } catch { /* next reconcile repairs */ }
-      scheduleRender();
+      markDirty('sessions', 'chart-memory', 'tab-badges');
     });
     es.addEventListener('posture', (msg) => {
+      // posture.groups is the attention queue.
       try { telemetryData.posture = JSON.parse(msg.data); } catch { /* next reconcile repairs */ }
-      scheduleRender();
+      markDirty('posture', 'attention', 'tab-badges');
     });
     // Guard lifecycle: a waiting operator decision must not wait for a
     // reconcile — keep the instant refetch for these two.
