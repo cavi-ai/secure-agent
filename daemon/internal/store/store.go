@@ -636,6 +636,7 @@ func kindBudget(kind int) int {
 type FlagFilter struct {
 	Agent       string // exact match; empty = any
 	Rule        string // exact match; empty = any
+	SessionID   string // exact match; empty = any
 	MinSeverity int    // severity >= this; 0 = any
 	Since       string // ts >= this; empty = any
 	Limit       int    // 0 = 50
@@ -799,6 +800,10 @@ func (s *Store) QueryFlags(f FlagFilter) []model.Flag {
 	if f.Rule != "" {
 		q += " AND rule = ?"
 		args = append(args, f.Rule)
+	}
+	if f.SessionID != "" {
+		q += " AND session_id = ?"
+		args = append(args, f.SessionID)
 	}
 	if f.MinSeverity > 0 {
 		q += " AND severity >= ?"

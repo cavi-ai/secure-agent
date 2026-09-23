@@ -328,6 +328,51 @@ export interface CostReport {
   rows: CostRow[];
 }
 
+export interface ReportCount {
+  key: string;
+  count: number;
+  errors?: number;
+  duration_ms?: number;
+}
+
+export interface ReportModel {
+  model: string;
+  calls: number;
+  tokens_in: number;
+  tokens_out: number;
+  cost_usd: number;
+  unpriced_calls: number;
+}
+
+export interface ReportLine {
+  ts: string;
+  kind: string;
+  label: string;
+  status?: string;
+  duration_ms?: number;
+}
+
+export interface SessionReport {
+  session: Session;
+  duration_s: number;
+  events: number;
+  turns: number;
+  tool_calls: number;
+  model_calls: number;
+  tokens_in: number;
+  tokens_out: number;
+  cost_usd: number;
+  unpriced_calls: number;
+  tools: ReportCount[];
+  models: ReportModel[];
+  files: ReportCount[];
+  hosts: ReportCount[];
+  guard: ReportLine[];
+  secret_hits: ReportLine[];
+  flags: Flag[];
+  timeline: ReportLine[];
+}
+
 export interface DoctorSummary {
   pass: number;
   fail: number;

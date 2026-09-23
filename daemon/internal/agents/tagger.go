@@ -185,6 +185,35 @@ func (t *Tagger) Tag(pid int32) (AgentInfo, bool) {
 	return t.tagLocked(pid)
 }
 
+// ParentPID returns pid's parent from the last process table, falling back to
+// the process source for a pid the table does not hold. 0, false when the pid
+// is unknown to both.
+func (t *Tagger) ParentPID(pid int32) (int32, bool) {
+	t.mu.RLock()
+	p, ok := t.table[pid]
+	t.mu.RUnlock()
+	if ok {
+		return p.PPID, true
+	}
+	if p, ok := t.ps.Info(pid); ok {
+		return p.PPID, true
+	}
+	return 0, false
+}
+
+// Alive reports whether pid exists: in the last process table, or, when one
+// sample missed it, in the process source. The cache is not touched.
+func (t *Tagger) Alive(pid int32) bool {
+	t.mu.RLock()
+	_, ok := t.table[pid]
+	t.mu.RUnlock()
+	if ok {
+		return true
+	}
+	_, ok = t.ps.Info(pid)
+	return ok
+}
+
 func (t *Tagger) tagLocked(pid int32) (AgentInfo, bool) {
 	if info, ok := t.cache[pid]; ok {
 		return info, t.tagged[pid]
@@ -201,54 +230,36 @@ func (t *Tagger) tagLocked(pid int32) (AgentInfo, bool) {
 		visited[curr] = true
 		chain = append(chain, curr)
 
-		pInfo, ok := t.table[curr]
-		if !ok || pInfo.Exe == "" {
-			if dynamicInfo, found := t.ps.Info(curr); found && dynamicInfo.Exe != "" {
-				if ok {
-					dynamicInfo = mergeProcInfo(pInfo, dynamicInfo)
-				}
-				pInfo = dynamicInfo
-				t.table[curr] = pInfo
-			} else if !ok {
-				break
-			}
+		pInfo, ok := t.procLocked(curr)
+		if !ok {
+			break
 		}
 
-		matchTarget := pInfo.Exe
-		if matchTarget == "" {
-			matchTarget = pInfo.Comm
-		}
-		if matchTarget != "" {
-			matchTargetLower := strings.ToLower(matchTarget)
-			for _, agentDef := range t.cfg.Agents {
-				for _, matchStr := range agentDef.Match {
-					if strings.Contains(matchTargetLower, strings.ToLower(matchStr)) {
-						targetProc, _ := t.table[pid]
-						exePath := targetProc.Exe
-						if exePath == "" {
-							exePath = targetProc.Comm
-						}
-						res := AgentInfo{
-							Name: agentDef.Name,
-							// Normalize here too: configs built in-process (tests)
-							// skip the loader's normalization pass.
-							Kind:      config.NormalizeAgentKind(agentDef.Kind),
-							ExePath:   exePath,
-							CWD:       targetProc.CWD,
-							PID:       pid,
-							PPID:      targetProc.PPID,
-							Chain:     chain,
-							StartedAt: targetProc.StartTime,
-							RSSBytes:  targetProc.RSSBytes,
-							CPUTime:   targetProc.CPUTime,
-							sampledAt: t.now(),
-						}
-						t.cache[pid] = res
-						t.tagged[pid] = true
-						return res, true
-					}
-				}
+		if agentDef, matched := t.matchLocked(pInfo); matched {
+			targetProc, _ := t.table[pid]
+			exePath := targetProc.Exe
+			if exePath == "" {
+				exePath = targetProc.Comm
 			}
+			res := AgentInfo{
+				Name: agentDef.Name,
+				// Normalize here too: configs built in-process (tests)
+				// skip the loader's normalization pass.
+				Kind:      config.NormalizeAgentKind(agentDef.Kind),
+				ExePath:   exePath,
+				CWD:       targetProc.CWD,
+				PID:       pid,
+				PPID:      targetProc.PPID,
+				Chain:     chain,
+				StartedAt: targetProc.StartTime,
+				RSSBytes:  targetProc.RSSBytes,
+				CPUTime:   targetProc.CPUTime,
+				RootPID:   t.familyRootLocked(curr, pInfo, agentDef.Name, visited, 32-hops-1),
+				sampledAt: t.now(),
+			}
+			t.cache[pid] = res
+			t.tagged[pid] = true
+			return res, true
 		}
 
 		curr = pInfo.PPID
@@ -259,6 +270,82 @@ func (t *Tagger) tagLocked(pid int32) (AgentInfo, bool) {
 		t.cache[pid] = AgentInfo{}
 	}
 	return AgentInfo{}, false
+}
+
+// procLocked reads pid from the process table, filling a missing entry or a
+// missing exe from the process source.
+func (t *Tagger) procLocked(pid int32) (ProcInfo, bool) {
+	pInfo, ok := t.table[pid]
+	if ok && pInfo.Exe != "" {
+		return pInfo, true
+	}
+	if dynamicInfo, found := t.ps.Info(pid); found && dynamicInfo.Exe != "" {
+		if ok {
+			dynamicInfo = mergeProcInfo(pInfo, dynamicInfo)
+		}
+		t.table[pid] = dynamicInfo
+		return dynamicInfo, true
+	}
+	return pInfo, ok
+}
+
+// matchLocked returns the first agent definition matching the process's exe
+// (or comm when the exe is unknown).
+func (t *Tagger) matchLocked(p ProcInfo) (config.AgentDef, bool) {
+	matchTarget := p.Exe
+	if matchTarget == "" {
+		matchTarget = p.Comm
+	}
+	if matchTarget == "" {
+		return config.AgentDef{}, false
+	}
+	matchTargetLower := strings.ToLower(matchTarget)
+	for _, agentDef := range t.cfg.Agents {
+		for _, matchStr := range agentDef.Match {
+			if strings.Contains(matchTargetLower, strings.ToLower(matchStr)) {
+				return agentDef, true
+			}
+		}
+	}
+	return config.AgentDef{}, false
+}
+
+// familyRootLocked walks up from the matched process while each parent
+// continues the family — cached and tagged with the same Name, or its
+// exe/comm matches the same agent definition (the def match covers ancestors
+// not yet cached) — and returns the highest such pid, the family root (a
+// harness wrapper that execs its native binary is one family). An
+// intermediate that does neither (an untagged, non-matching shell, say) is
+// walked through transparently instead of stopping the search. A parent that
+// IS cached+tagged with a different Name, or that matches a different agent
+// definition, is a different harness's process: the walk stops there instead
+// of absorbing it, within the same 32-hop/visited bounds as tagLocked.
+func (t *Tagger) familyRootLocked(matched int32, p ProcInfo, name string, visited map[int32]bool, budget int) int32 {
+	root := matched
+	for ; budget > 0; budget-- {
+		ppid := p.PPID
+		if ppid <= 0 || visited[ppid] {
+			break
+		}
+		visited[ppid] = true
+		parent, ok := t.procLocked(ppid)
+		if !ok {
+			break
+		}
+		if info, cachedOk := t.cache[ppid]; cachedOk && t.tagged[ppid] {
+			if info.Name != name {
+				break
+			}
+			root = ppid
+		} else if def, matched := t.matchLocked(parent); matched {
+			if def.Name != name {
+				break
+			}
+			root = ppid
+		}
+		p = parent
+	}
+	return root
 }
 
 // RefreshInterval is how long to wait between kern.proc.all walks.

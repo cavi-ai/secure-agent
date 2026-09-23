@@ -4,6 +4,7 @@
 //
 // Auto-actions (driven by ?domtest-flags):
 //   sessiondemo — after 4s, filter the timeline to session 7f3a9c21…
+//   exportdemo  — with raildemo: stub the clipboard, click Export at 9s
 (() => {
   const now = Date.now();
   const iso = (msAgo) => new Date(now - msAgo).toISOString();
@@ -414,6 +415,9 @@
       return { status: 'ok' };
     }
     if (p === '/allowlist') {
+      if (!data['/allowlist'].some(x => x.agent === body.agent && x.host === body.host)) {
+        data['/allowlist'].push({ agent: body.agent, host: body.host });
+      }
       data['/allowlist/suggestions'] = data['/allowlist/suggestions'].filter(s => s.host !== body.host);
       data['/egress/uninspected'] = data['/egress/uninspected'].filter(e => e.host !== body.host);
       return { status: 'ok' };
@@ -466,11 +470,27 @@
         const f = data['/flags'].find(x => x.id === body.flag_id);
         if (f) {
           f.advisor = { assessment: 'benign', confidence: 0.9, rationale: 're-triage complete: routine vendor traffic', suggested_action: 'none' };
+          // The daemon publishes the updated flag on the stream.
+          if (window.__sse) window.__sse.emit('flag', f);
         }
       }, 1200);
       return { status: 'ok', queued: true };
     }
     return { status: 'ok' };
+  };
+
+  // Request log: every mutating request as "METHOD /path", stamped into a
+  // hidden <pre id="mock-requests"> so a dump can assert what was sent. A POST
+  // /allowlist also records whether the allowlist row for its host was
+  // already on screen when the request left (row=1: optimistic render).
+  const reqLog = [];
+  const stamp = (id, text) => {
+    const put = () => {
+      let el = document.getElementById(id);
+      if (!el) { el = document.createElement('pre'); el.id = id; el.hidden = true; document.body.appendChild(el); }
+      el.textContent = text;
+    };
+    if (document.body) put(); else document.addEventListener('DOMContentLoaded', put);
   };
 
   window.fetch = async (path, opts) => {
@@ -488,6 +508,18 @@
       };
     }
     if (opts && opts.method && opts.method !== 'GET') {
+      let line = `${opts.method} ${p}`;
+      if (p === '/allowlist' && opts.method === 'POST') {
+        let host = '';
+        try { host = JSON.parse(opts.body).host; } catch { /* ignored */ }
+        line += ' row=' + (document.querySelector(`#firewall-container [data-action="allowlist-remove"][data-host="${host}"]`) ? 1 : 0);
+      }
+      reqLog.push(line);
+      stamp('mock-requests', reqLog.join('\n'));
+      // postfail: POST /allowlist answers 500 (the act-in-place revert path).
+      if (MODE.includes('postfail') && p === '/allowlist') {
+        return { ok: false, status: 500, json: async () => ({}), text: async () => 'mock failure' };
+      }
       const out = handlePost(p, opts);
       return {
         ok: true, status: 200,
@@ -510,6 +542,19 @@
         ok: true, status: 200,
         json: async () => body,
         text: async () => JSON.stringify(body)
+      };
+    }
+    // Session report: /sessions/<id>/report?format=md (markdown text)
+    const repMatch = p.match(/^\/sessions\/([^/]+)\/report$/);
+    if (repMatch) {
+      const sid = decodeURIComponent(repMatch[1]);
+      const sess = (data['/sessions'] || []).find(s => s.id === sid);
+      const md = sess ? `# ${sess.harness} · ${sess.repo}@${sess.branch} — 2026-09-09 14:00 → live (1h 0m)\n` +
+        `Session \`${sess.id}\` · ${sess.status} · identity: ${sess.confidence}\n\n## Summary\n- Turns 1 · tool calls 2 (1 errors)\n` : 'session not found';
+      return {
+        ok: !!sess, status: sess ? 200 : 404,
+        json: async () => { throw new SyntaxError('not JSON'); },
+        text: async () => md
       };
     }
     // Session timeline: /sessions/<id>/timeline
@@ -538,6 +583,7 @@
   // typed envelopes: one "event" delta per persisted event.
   window.EventSource = class {
     constructor() {
+      window.__sse = this;
       this.readyState = 1;
       this._listeners = {};
       setTimeout(() => this.onopen && this.onopen(), 0);
@@ -556,6 +602,7 @@
       }, 900);
     }
     addEventListener(kind, fn) { (this._listeners[kind] = this._listeners[kind] || []).push(fn); }
+    emit(kind, obj) { (this._listeners[kind] || []).forEach(fn => fn({ data: JSON.stringify(obj) })); }
     close() { clearInterval(this._timer); }
   };
 
@@ -567,6 +614,20 @@
   // waterfall renders.
   if (location.search.includes('raildemo')) {
     setTimeout(() => window.selectSession('sess-claude-1'), 4000);
+  }
+  // Auto-action: Export the selected session's report into a stubbed
+  // clipboard; the copied text lands on body[data-clipboard]. Fires late so
+  // the toast is still on screen when the DOM is dumped.
+  if (location.search.includes('exportdemo')) {
+    const record = (t) => { document.body.dataset.clipboard = t; };
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText: async (t) => record(t),
+        write: async (items) => record(await (await items[0].getType('text/plain')).text())
+      }
+    });
+    setTimeout(() => document.querySelector('.session-detail-head [data-action="copy-report"]').click(), 9000);
   }
   // Auto-action: resolve the guard request once; the unified queue must
   // refresh and remove that blocked tool call. The styled confirm dialog
@@ -626,7 +687,11 @@
   // Auto-action: re-run the advisor on the first flag — the pending state
   // must show, then the fresh verdict must land and replace the chip.
   if (location.search.includes('retriagedemo')) {
-    setTimeout(() => document.querySelector('[data-action="retriage"][data-id="flag-1"]').click(), 4000);
+    // Findings is opened first, as a user must: hidden panels do not render.
+    setTimeout(() => {
+      document.querySelector('[data-tab="findings"]').click();
+      document.querySelector('[data-action="retriage"][data-id="flag-1"]').click();
+    }, 4000);
   }
   // Advisor-down variant: the circuit breaker is open — retriage must render
   // as an honest "Advisor offline" state, not a clickable dead button.
@@ -787,5 +852,87 @@
       document.querySelector('[data-policy-default="true"] [data-policy-field="mode"]').value = 'terminate';
       document.querySelector('#drawer-foot [data-action="policy-save"]').click();
     }, 4000);
+  }
+
+  // ---------- SSE burst (render engine) ----------
+  // The live rate that rebuilt every panel ~8x/s: 300 kind-0 event frames
+  // (distinct paths) and 3 flag frames over 2s of virtual time. extra(i) runs
+  // with each flag frame (variants add session frames).
+  const burst = (extra) => {
+    const es = window.__sse;
+    let n = 0;
+    const iv = setInterval(() => {
+      for (let k = 0; k < 3; k++, n++) {
+        es.emit('event', { kind: 0, pid: 5821, ts: new Date().toISOString(), path: `/Users/dev/workspace/api-service/src/f${n}.ts` });
+      }
+      if (n >= 300) clearInterval(iv);
+    }, 20);
+    [500, 1000, 1500].forEach((t, i) => setTimeout(() => {
+      es.emit('flag', { id: `flag-burst-${i}`, rule: 'proxy-secret-leak', agent: 'cursor', pid: 6033, severity: 2,
+        evidence: [{ kind: 'connect', label: `burst${i}.example.com:443`, sub: 'destination' }] });
+      if (extra) extra(i);
+    }, t));
+  };
+  const renderCounts = () => (window.SA && window.SA.renderCounts) ? { ...window.SA.renderCounts } : null;
+  // burstdemo: Findings open, burst; <pre id="render-counts"> gets the
+  // per-panel render-count delta over the burst (or "missing").
+  if (MODE.includes('burstdemo')) {
+    setTimeout(() => document.querySelector('[data-tab="findings"]').click(), 4000);
+    setTimeout(() => {
+      const before = renderCounts();
+      burst();
+      setTimeout(() => {
+        const after = renderCounts();
+        if (!before || !after) { stamp('render-counts', 'missing'); return; }
+        const delta = {};
+        for (const k of Object.keys(after)) delta[k] = after[k] - (before[k] || 0);
+        stamp('render-counts', JSON.stringify(delta));
+      }, 2600);
+    }, 4500);
+  }
+  // railburst: Sessions open, the infra group opened and probed, then a burst
+  // with session frames that change the claude group.
+  if (MODE.includes('railburst')) {
+    setTimeout(() => document.querySelector('[data-tab="sessions"]').click(), 4000);
+    setTimeout(() => {
+      const d = document.querySelector('#session-rail details[data-harness="infra"]');
+      if (d) { d.open = true; d.dataset.probe = '1'; }
+      burst((i) => {
+        const s = { ...data['/sessions'].find(x => x.id === 'sess-claude-1') };
+        delete s._timeline;
+        window.__sse.emit('session', { ...s, last_seen_at: new Date().toISOString(), status: i === 1 ? 'idle' : 'active' });
+      });
+    }, 4300);
+  }
+  // focusburst: Findings open, flag-2's head button probed and focused, then a
+  // burst; <pre id="focus-probe"> says whether that node kept focus.
+  if (MODE.includes('focusburst')) {
+    setTimeout(() => document.querySelector('[data-tab="findings"]').click(), 4000);
+    setTimeout(() => {
+      const card = document.querySelector('#flags-list [data-id="flag-2"]');
+      const btn = card && card.closest('.flag-card').querySelector('.flag-head');
+      if (btn) { btn.dataset.probe = '1'; btn.focus(); }
+      burst();
+      setTimeout(() => stamp('focus-probe', btn && btn.isConnected && document.activeElement === btn ? 'kept' : 'lost'), 2600);
+    }, 4300);
+  }
+  // clickburst: press flag-3's Dismiss, burst, release and click the same
+  // node 400ms later — a real click spans renders.
+  if (MODE.includes('clickburst')) {
+    setTimeout(() => document.querySelector('[data-tab="findings"]').click(), 4000);
+    setTimeout(() => {
+      const btn = document.querySelector('#flags-list [data-action="dismiss-flag"][data-id="flag-3"]');
+      const fire = (type, Ctor) => btn && btn.dispatchEvent(new Ctor(type, { bubbles: true, cancelable: true, composed: true }));
+      fire('pointerdown', PointerEvent);
+      fire('mousedown', MouseEvent);
+      burst();
+      setTimeout(() => { fire('pointerup', PointerEvent); fire('mouseup', MouseEvent); fire('click', MouseEvent); }, 400);
+    }, 4300);
+  }
+  // actdemo: Egress open, allow the suggested host late enough that the
+  // inline note and the toast are still up at dump time (4s each).
+  if (MODE.includes('actdemo')) {
+    setTimeout(() => document.querySelector('[data-tab="egress"]').click(), 4000);
+    setTimeout(() => document.querySelector('.fw-suggestion [data-action="allow-host"]').click(), 9000);
   }
 })();

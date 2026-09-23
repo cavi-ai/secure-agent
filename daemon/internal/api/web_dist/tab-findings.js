@@ -40,7 +40,12 @@ function renderAttention() {
     return `<button class="btn btn-ghost btn-sm" data-action="open-uninspected">Review endpoints</button>`;
   };
 
-  container.innerHTML = `<div class="attention-groups">${groups.map(group => {
+  let wrap = container.firstElementChild;
+  if (!wrap || !wrap.classList.contains('attention-groups')) {
+    container.innerHTML = '<div class="attention-groups"></div>';
+    wrap = container.firstElementChild;
+  }
+  patchList(wrap, groups, { key: group => group.key || group.label, html: group => {
     const urgent = group.items[0] && group.items[0].priority >= 4 ? ' urgent' : '';
     const metrics = [
       group.rssBytes ? `<span><b>${escapeHTML(fmtRSS(group.rssBytes))}</b> memory</span>` : '',
@@ -68,7 +73,7 @@ function renderAttention() {
           <div class="attention-actions">${actions(item)}</div>
         </div>`).join('')}</div>
     </article>`;
-  }).join('')}</div>`;
+  } });
 }
 
 function renderIncidents() {
@@ -85,7 +90,7 @@ function renderIncidents() {
     return;
   }
 
-  container.innerHTML = incidents.map(inc => {
+  patchList(container, incidents, { key: inc => inc.id, html: inc => {
     const wf = inc.workflow || {};
     const status = wf.status || 'open';
     const statusChip = status === 'resolved'
@@ -124,7 +129,7 @@ function renderIncidents() {
         `).join('')}
       </div>
     </div>
-  `;}).join('');
+  `;} });
 }
 
 function renderAudit() {
@@ -146,7 +151,7 @@ function renderAudit() {
     return;
   }
 
-  container.innerHTML = audit.map(a => {
+  patchList(container, audit, { key: a => `${a.ts}|${a.action}|${a.rule || ''}|${a.detail || ''}`, html: a => {
     const timeStr = new Date(a.ts).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
     let label = escapeHTML(a.detail || '');
     let cls = '';
@@ -169,7 +174,7 @@ function renderAudit() {
         <div class="audit-dtl">${label}</div>
       </div>
     `;
-  }).join('');
+  } });
 }
 
 function renderFlags() {
@@ -205,7 +210,7 @@ function renderFlags() {
   const advisorOffline = !!(advisorHealth && advisorHealth.circuit_open);
   const vis = inspectionVisible(SA.t.status, SA.t.audit);
 
-  container.innerHTML = flags.map((f, i) => {
+  const cardHTML = (f, i) => {
     const chain = buildEvidenceChain(f);
     const chainHTML = chain.length
       ? `<div class="chain">${chain.map((n, j) => `
@@ -250,16 +255,18 @@ function renderFlags() {
         </div>
       </div></div>
     </div>`;
-  }).join('');
+  };
+  const parts = flags.map((f, i) => ({ key: 'flag:' + f.id, html: cardHTML(f, i) }));
 
   // Dispositions: muted (rule, host) pairs, visible so the quiet is
   // deliberate and reversible.
   const mutes = SA.t.mutes || [];
   if (mutes.length > 0) {
-    container.innerHTML += `<div class="mute-list"><div class="mute-head">Muted</div>` + mutes.map(m => `
+    parts.push({ key: 'mutes', html: `<div class="mute-list"><div class="mute-head">Muted</div>` + mutes.map(m => `
       <div class="mute-row">
         <span class="mute-pair">${escapeHTML(m.rule)} · ${m.host === '*' ? 'all hosts' : escapeHTML(m.host)}</span>
         <button class="source-remove" title="Unmute" data-action="unmute" data-rule="${escapeHTML(m.rule)}" data-host="${escapeHTML(m.host)}"><svg class="icon"><use href="#i-close"/></svg></button>
-      </div>`).join('') + `</div>`;
+      </div>`).join('') + `</div>` });
   }
+  patchList(container, parts, { key: p => p.key, html: p => p.html });
 }

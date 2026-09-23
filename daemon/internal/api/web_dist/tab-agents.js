@@ -29,28 +29,18 @@ function renderAgents() {
   const shown = applyAgentFilters(groups, SA.harnessFilter);
   const visible = shown.filter(g => !g.infra);
   const infra = shown.filter(g => g.infra);
+  // Group and helper-tree open state is recorded by one capture-phase toggle
+  // listener on the container (app.js); patchList keeps unchanged groups.
   const isOpen = (key, dflt) => (Object.prototype.hasOwnProperty.call(SA.agentGroupOpen, key) ? !!SA.agentGroupOpen[key] : dflt);
-  const body = visible.length
-    ? visible.map(g => agentGroupHTML(g, now, isOpen(g.key, true), SA.agentTreeOpen)).join('')
+  const parts = visible.length
+    ? visible.map(g => ({ key: 'group:' + g.key, html: agentGroupHTML(g, now, isOpen(g.key, true), SA.agentTreeOpen) }))
     : agentGroups.length
-      ? `<div class="empty"><svg class="icon"><use href="#i-agent"/></svg><span>No agents match — <button type="button" class="link-btn" data-action="clear-harness-filter">clear the filter</button></span></div>`
-      : `<div class="empty"><svg class="icon"><use href="#i-agent"/></svg><span>No agents running — only infrastructure below</span></div>`;
-  const infraSection = infra.length
-    ? `<section class="agent-infra" aria-label="Infrastructure"><h3 class="agent-infra-head">Infrastructure <span>IDEs and model servers — not counted as agents</span></h3>${infra.map(g => agentGroupHTML(g, now, isOpen(g.key, false), SA.agentTreeOpen)).join('')}</section>`
-    : '';
-  container.innerHTML = body + infraSection;
-  applyInlineMetrics(container);
-
-  container.querySelectorAll('details.agent-group').forEach(el => {
-    el.addEventListener('toggle', () => {
-      SA.agentGroupOpen[el.dataset.harness] = el.open;
-    });
-  });
-  container.querySelectorAll('details.agent-tree').forEach(el => {
-    el.addEventListener('toggle', () => {
-      SA.agentTreeOpen[el.dataset.pid] = el.open;
-    });
-  });
+      ? [{ key: 'empty:nomatch', html: `<div class="empty"><svg class="icon"><use href="#i-agent"/></svg><span>No agents match — <button type="button" class="link-btn" data-action="clear-harness-filter">clear the filter</button></span></div>` }]
+      : [{ key: 'empty:infra-only', html: `<div class="empty"><svg class="icon"><use href="#i-agent"/></svg><span>No agents running — only infrastructure below</span></div>` }];
+  if (infra.length) {
+    parts.push({ key: 'infra', html: `<section class="agent-infra" aria-label="Infrastructure"><h3 class="agent-infra-head">Infrastructure <span>IDEs and model servers — not counted as agents</span></h3>${infra.map(g => agentGroupHTML(g, now, isOpen(g.key, false), SA.agentTreeOpen)).join('')}</section>` });
+  }
+  patchList(container, parts, { key: p => p.key, html: p => p.html });
 }
 
 // One harness group: mark + display name, then instances, processes, RSS,

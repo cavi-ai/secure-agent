@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/agents"
+	"github.com/cavi-ai/secure-agent/daemon/internal/config"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
@@ -202,6 +203,13 @@ func (r *Resolver) Resolve(e *event.Event) string {
 	}
 	id, ok := r.byRoot[root]
 	if !ok {
+		// The session is the family root's: a child process (a shell the
+		// harness spawned) must not lend it its own start time or cwd.
+		if root != info.PID {
+			if rootInfo, tagged := r.tagger.Tag(root); tagged {
+				info = rootInfo
+			}
+		}
 		// Adopt a transcript session already known for this harness+workspace
 		// (the transcript may have been tailed before the process tree was
 		// sampled). Otherwise mint a provisional process-tree id. Either way
@@ -264,24 +272,41 @@ func (r *Resolver) Resolve(e *event.Event) string {
 	return id
 }
 
+// maxAncestry bounds the OS ancestry walk from a session root.
+const maxAncestry = 32
+
 // orchestratorForLocked returns the session id of the tagged family whose
-// process spawned this root (a different harness in the ancestor chain) —
-// the parent for orchestrated children. "" when the root's ancestry holds
-// no other tagged harness.
+// process spawned this root — the parent for orchestrated children. It walks
+// the OS ancestry (the tag chain stops at the root's own harness match, so it
+// never reaches the orchestrator): untagged, infra and same-harness ancestors
+// are skipped, the nearest ancestor of another agent harness names the
+// orchestrator family, and that family's session is the one held by its
+// highest contiguous ancestor. "" when the ancestry holds no other agent
+// harness or its family has no session yet.
 func (r *Resolver) orchestratorForLocked(root int32, harness string) string {
-	info, ok := r.tagger.Tag(root)
-	if !ok {
-		return ""
+	var family string
+	var run []int32
+	seen := map[int32]bool{root: true}
+	for pid, hops := root, 0; hops < maxAncestry; hops++ {
+		ppid, ok := r.tagger.ParentPID(pid)
+		if !ok || ppid <= 1 || seen[ppid] {
+			break
+		}
+		seen[ppid] = true
+		pid = ppid
+		info, tagged := r.tagger.Tag(pid)
+		if family == "" {
+			if !tagged || info.Kind == config.AgentKindInfra || info.Name == harness {
+				continue
+			}
+			family = info.Name
+		} else if !tagged || info.Name != family {
+			break
+		}
+		run = append(run, pid)
 	}
-	for _, pid := range info.Chain {
-		if pid == root {
-			continue
-		}
-		parent, ok := r.tagger.Tag(pid)
-		if !ok || parent.Name == harness {
-			continue
-		}
-		if sid, ok := r.byRoot[parent.RootPID]; ok {
+	for i := len(run) - 1; i >= 0; i-- {
+		if sid, ok := r.byRoot[run[i]]; ok {
 			return sid
 		}
 	}
@@ -557,7 +582,9 @@ func (r *Resolver) Sweep() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for root, id := range r.byRoot {
-		if !live[root] {
+		// A root missing from one process-table sample is ended only when the
+		// process source confirms it is gone.
+		if !live[root] && !r.tagger.Alive(root) {
 			r.st.EndSession(id, now)
 			if sess, ok := r.st.GetSession(id); ok {
 				r.emitLocked(sess)
@@ -580,7 +607,7 @@ func (r *Resolver) Sweep() {
 	// restarted mid-session): end those whose root pid is not live, and end
 	// pid-less hook sessions after a day of silence.
 	for root, id := range r.st.SessionRoots() {
-		if _, tracked := r.byRoot[root]; !tracked && !live[root] {
+		if _, tracked := r.byRoot[root]; !tracked && !live[root] && !r.tagger.Alive(root) {
 			r.st.EndSession(id, now)
 			if sess, ok := r.st.GetSession(id); ok {
 				r.emitLocked(sess)

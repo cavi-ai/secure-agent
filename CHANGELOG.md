@@ -12,6 +12,13 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Explain carries one disposition (`acknowledged` → `benign-likely` at advisor confidence ≥ 0.85 → `warning` → `critical`).
 - Explain lists the applicable actions with the exact request each performs; the advisor's suggestion is marked recommended.
 - `/flags` and `/snapshot` stamp `explain` on the first 25 unacknowledged flags without network lookups.
+- Session report: `GET /sessions/{id}/report?format=json|md` aggregates one
+  session's tools, models, cost, files, hosts, guard decisions, findings,
+  secret-rule hits and opening timeline (names, paths, hosts, model and rule
+  ids, counts — never content); `secure-agent session <id-or-prefix>` prints
+  it as markdown, `secure-agent sessions` lists sessions, `GET /sessions`
+  filters by `harness`, `repo`, `branch` and `since`, and the console's
+  session head gains an Export button that copies the markdown.
 - `secret-in-transcript` flag: tailed harness transcript lines are scanned with
   the firewall's known-secret fingerprints and typed patterns; a hit carries
   the rule id, transcript path, and session id (never the matched text), is
@@ -22,6 +29,20 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Posture and attention: a flag the advisor judged benign at confidence ≥ 0.85 is severity 1 (`attention`, "Finding, likely benign"), never `critical`.
 
 ### Fixed
+- Console: live-stream frames mark only the panels that read the changed data.
+- Console: only the active tab's panels, the header and the tab badges render, at most every 250 ms per panel; hidden panels render on tab switch.
+- Console: list panels (findings, attention, incidents, audit, sessions rail, agents, firewall, events) patch rows by key, so focus, open disclosures and a click during a render survive.
+- Console: a panel waits while the pointer is down in it or one of its controls has focus (up to 3 s).
+- Console: allow, mute, unmute, promote/demote, incident status, guard and resource decisions, source add/remove, allowlist remove and dismiss change the card before the request, revert on failure and leave a 4 s inline note on success.
+- Verified by DOM checks on a 300-event burst (hidden-tab render counts, an open rail group, a focused button, a mid-burst Dismiss click) and on allow success and failure.
+- Sessions: a tagged child process (a shell under a harness) joins its harness
+  family's session instead of minting its own — the tagger now reports the
+  family root on every tag, not only in the process listing.
+- Sessions: a session is ended only when its root process is confirmed gone,
+  not when one process-table sample happened to miss it.
+- Sessions: orchestrated runs are nested under their orchestrator's session —
+  the parent lookup walks the OS ancestry past the child's own harness match
+  instead of a chain that stopped at the first match.
 - Model pricing: explicit entries for every current Anthropic model (Fable
   5.x, Opus 5.5/5/4.8/4.7/4.6/4.5, Sonnet 5/4.6/4.5, Haiku 4.5) at list
   price; a family prefix only absorbs a date or `-latest` suffix, so a newer

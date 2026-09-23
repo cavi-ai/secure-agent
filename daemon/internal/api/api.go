@@ -517,7 +517,7 @@ func (a *API) routes() map[string]http.HandlerFunc {
 	return map[string]http.HandlerFunc{
 		"/status":                       a.handleStatus,
 		"/sessions":                     a.handleSessions,
-		"/sessions/":                    a.handleSessionTimeline,
+		"/sessions/":                    a.handleSessionSubpath,
 		"/resources":                    a.handleResources,
 		"/resources/episodes":           a.handleResourceEpisodes,
 		"/resources/control":            a.handleResourceControl,
@@ -646,35 +646,57 @@ func (a *API) handleStatus(w http.ResponseWriter, r *http.Request) {
 
 // handleSessions serves the durable session list — live and ended sessions
 // with harness, workspace, repo and branch. This is the spine; the process
-// tree is just its live projection. ?status=active|idle|ended, ?limit=N.
+// tree is just its live projection. ?status=active|idle|ended, ?limit=N,
+// ?harness=, ?repo=, ?branch= (exact), ?since=24h|7d|<RFC3339>.
 func (a *API) handleSessions(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	q := r.URL.Query()
-	f := store.SessionFilter{Status: q.Get("status")}
+	f := store.SessionFilter{Status: q.Get("status"), Harness: q.Get("harness"), Repo: q.Get("repo"), Branch: q.Get("branch")}
 	if n, err := strconv.Atoi(q.Get("limit")); err == nil && n > 0 {
 		f.Limit = n
+	}
+	if v := q.Get("since"); v != "" {
+		t, err := parseSince(v, time.Now())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		f.Since = t
 	}
 	writeJSON(w, a.store.ListSessions(f))
 }
 
-// handleSessionTimeline serves one session's events oldest-first — the
-// timeline the console renders for a selected session. Path shape:
-// /sessions/{id}/timeline[?limit=N].
-func (a *API) handleSessionTimeline(w http.ResponseWriter, r *http.Request) {
+// handleSessionSubpath serves the /sessions/{id}/… family: timeline and
+// report. Any other shape is 404.
+func (a *API) handleSessionSubpath(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	rest := strings.TrimPrefix(r.URL.Path, "/sessions/")
 	parts := strings.SplitN(rest, "/", 2)
-	if len(parts) != 2 || parts[0] == "" || parts[1] != "timeline" {
+	if len(parts) != 2 || parts[0] == "" {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	f := store.EventFilter{SessionID: parts[0], Limit: 500}
+	switch parts[1] {
+	case "timeline":
+		a.serveSessionTimeline(w, r, parts[0])
+	case "report":
+		a.serveSessionReport(w, r, parts[0])
+	default:
+		http.Error(w, "not found", http.StatusNotFound)
+	}
+}
+
+// serveSessionTimeline serves one session's events oldest-first — the
+// timeline the console renders for a selected session. Path shape:
+// /sessions/{id}/timeline[?limit=N].
+func (a *API) serveSessionTimeline(w http.ResponseWriter, r *http.Request, id string) {
+	f := store.EventFilter{SessionID: id, Limit: 500}
 	if n, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && n > 0 {
 		f.Limit = n
 	}

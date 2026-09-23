@@ -17,6 +17,7 @@ Env:   CHROME_BIN overrides Chrome detection.
 
 import argparse
 import http.server
+import json
 import os
 import re
 import shutil
@@ -177,6 +178,14 @@ def main():
         dom_nomatch = dump_dom(chrome, tmp, "?nomatchdemo")
         dom_phone = dump_dom(chrome, tmp, "?phonedemo")
         dom_nocosts = dump_dom(chrome, tmp, "?nocostsdemo")
+        dom_events = dump_dom(chrome, tmp, "?tab=events")
+        dom_burst = dump_dom(chrome, tmp, "?burstdemo")
+        dom_railburst = dump_dom(chrome, tmp, "?railburst")
+        dom_focus = dump_dom(chrome, tmp, "?focusburst")
+        dom_click = dump_dom(chrome, tmp, "?clickburst")
+        dom_act = dump_dom(chrome, tmp, "?actdemo")
+        dom_actfail = dump_dom(chrome, tmp, "?actdemo&postfail")
+        dom_export = dump_dom(chrome, tmp, "?raildemo&exportdemo")
 
         # --- session-first tab (P3) ---
         rail = dom.split('id="session-rail"', 1)[1].split('id="session-detail"', 1)[0]
@@ -235,6 +244,16 @@ def main():
               and '<span class="sd-harness">Claude Code</span>' in detail_head
               and '>hook</span>' in detail_head
               and 'data-action="copy-path" data-path="/Users/dev/workspace/api-service"' in detail_head)
+        check("detail head carries the Export button next to the path",
+              'data-action="copy-path"' in detail_head
+              and detail_head.index('data-action="copy-path"')
+              < detail_head.index('data-action="copy-report" data-id="sess-claude-1"')
+              and '>Export</button>' in detail_head)
+        clip = (re.search(r'data-clipboard="([^"]*)"', dom_export) or [None, ""])[1]
+        check("Export copies the markdown session report and toasts",
+              clip.startswith("# claude · api-service@main") and "## Summary" in clip
+              and 'class="toast success">Session report copied (markdown)<' in dom_export,
+              f"clipboard={clip[:60]!r}")
         check("rail selection renders trace waterfall",
               'class="wf-bar' in dom_rail and 'Bash' in dom_rail,
               "no waterfall bars in raildemo")
@@ -354,7 +373,8 @@ def main():
         # --- liveness ---
         check("sparkline has points", re.search(r'id="spark-line" points="[\d.,\- ]{20,}"', dom) is not None)
         check("sparkline rate label", re.search(r'id="spark-rate">\d+/s<', dom) is not None)
-        check("fresh timeline rows after SSE drip", "timeline-item fresh" in dom)
+        # Hidden panels do not render; the Events tab is open for this one.
+        check("fresh timeline rows after SSE drip", "timeline-item fresh" in dom_events)
         check("timeline times are HH:MM:SS",
               re.search(r'class="t">\d{2}:\d{2}:\d{2}<', dom) is not None)
 
@@ -653,6 +673,49 @@ def main():
               and "hidden" not in dom_session.split('id="flags-session-filter"')[1][:80])
         session_rows = dom_session.count('class="timeline-item')
         check("timeline filtered to 2 session events", session_rows == 2, f"rows={session_rows}")
+
+        # --- render engine: dirty, visible panels only; patch in place ---
+        def pre(dom_text, pid):
+            m = re.search(r'<pre id="%s"[^>]*>(.*?)</pre>' % pid, dom_text, re.S)
+            return m.group(1) if m else ""
+
+        counts_raw = pre(dom_burst, "render-counts")
+        try:
+            counts = json.loads(counts_raw)
+        except ValueError:
+            counts = None
+        check("burst: hidden-tab panels never render (sessions, agents, firewall = 0)",
+              counts is not None and all(counts.get(k, 0) == 0 for k in ("sessions", "agents", "firewall")),
+              f"counts={counts_raw[:200]}")
+        check("burst: flags renders at most once per flag frame (1..3)",
+              counts is not None and 1 <= counts.get("flags", 0) <= 3, f"counts={counts_raw[:200]}")
+
+        infra_tag = re.search(r'<details class="session-group infra"[^>]*>', dom_railburst)
+        infra_tag = infra_tag.group(0) if infra_tag else ""
+        check("burst: an opened rail <details> is the same node and still open",
+              ' open=""' in infra_tag and 'data-probe="1"' in infra_tag, f"tag={infra_tag}")
+
+        flags_focus = dom_focus.split('id="flags-list"', 1)[-1].split('id="incidents-container"', 1)[0]
+        check("burst: a focused flag-card button keeps identity and focus",
+              'data-probe="1"' in flags_focus and pre(dom_focus, "focus-probe") == "kept",
+              f"probe={pre(dom_focus, 'focus-probe')!r}")
+
+        flags_click = dom_click.split('id="flags-list"', 1)[-1].split('id="incidents-container"', 1)[0]
+        check("burst: a click spanning renders lands (POST /flags/acknowledge, card gone)",
+              "POST /flags/acknowledge" in pre(dom_click, "mock-requests") and 'data-id="flag-3"' not in flags_click,
+              f"requests={pre(dom_click, 'mock-requests')!r}")
+
+        act_row = dom_act.split("registry.npmjs.org · cursor", 1)[-1].split("</div>", 1)[0] \
+            if "registry.npmjs.org · cursor" in dom_act else ""
+        check("act in place: allowlist row on screen when the request leaves, with an inline note",
+              "POST /allowlist row=1" in pre(dom_act, "mock-requests") and 'class="card-note"' in act_row,
+              f"requests={pre(dom_act, 'mock-requests')!r} row={act_row[:160]!r}")
+        check("act in place: a failed allow reverts the row and toasts danger",
+              "POST /allowlist row=1" in pre(dom_actfail, "mock-requests")
+              and "registry.npmjs.org · cursor" not in dom_actfail
+              and 'class="toast danger"' in dom_actfail
+              and 'data-action="allow-host" data-agent="cursor" data-host="registry.npmjs.org"' in dom_actfail,
+              f"requests={pre(dom_actfail, 'mock-requests')!r}")
 
         if args.screenshot:
             shot_dir = os.path.abspath(args.screenshot)
