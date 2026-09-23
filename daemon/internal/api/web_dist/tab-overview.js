@@ -48,6 +48,9 @@ function resourceActivityLabel(kind) {
   return labels[kind] || 'ACTIVITY';
 }
 
+// The machine strip: headroom, memory (agents / other / available on one
+// stacked bar), CPU and swap as four compact tiles, pressure and thermal as
+// chips on the right. Same numbers the tall host block carried.
 function resourceHostContextHTML(host) {
   if (!host || !Number(host.total_memory_bytes)) return '';
   const total = Number(host.total_memory_bytes);
@@ -63,32 +66,27 @@ function resourceHostContextHTML(host) {
   const cpuUnavailable = host.system_cpu_percent === null || host.system_cpu_percent === undefined;
   const cpuAttributionUnavailable = host.agent_cpu_percent === null || host.agent_cpu_percent === undefined
     || host.non_agent_cpu_percent === null || host.non_agent_cpu_percent === undefined;
-  const cpu = cpuUnavailable ? 'Unavailable' : cpuAttributionUnavailable
-    ? `${Number(host.system_cpu_percent).toFixed(1)}% total · attribution unavailable`
-    : `${Number(host.system_cpu_percent).toFixed(1)}% total · ${Number(host.agent_cpu_percent).toFixed(1)}% agents · ${Number(host.non_agent_cpu_percent).toFixed(1)}% other`;
+  const cpu = cpuUnavailable ? 'Unavailable' : `${Number(host.system_cpu_percent).toFixed(1)}% total`;
+  const cpuSplit = cpuUnavailable ? '' : cpuAttributionUnavailable
+    ? 'attribution unavailable'
+    : `${Number(host.agent_cpu_percent).toFixed(1)}% agents · ${Number(host.non_agent_cpu_percent).toFixed(1)}% other`;
   const swap = Number(host.swap_total_bytes || 0)
     ? `${fmtRSS(host.swap_used_bytes) || '0 B'} / ${fmtRSS(host.swap_total_bytes)}`
     : 'Not configured';
-  return `<section class="resource-host-context capacity-${escapeHTML(capacity)}" aria-label="Whole-machine resource pressure">
-    <div class="resource-host-heading">
-      <div><span class="resource-eyebrow">Whole machine</span><h3>Machine headroom</h3></div>
-      <span class="resource-capacity"><b>${Number(host.headroom_score || 0)} / 100</b><small>${escapeHTML(capacity)}</small></span>
-    </div>
-    <div class="resource-host-memory">
-      <div><strong>${memoryKnown ? escapeHTML(fmtRSS(available) || '0 B') : 'Unavailable'} available</strong><span>of ${escapeHTML(fmtRSS(total))} physical memory</span></div>
-      ${memoryKnown ? `<div class="resource-host-bar" role="img" aria-label="Memory: ${agentPercent.toFixed(1)} percent agents, ${otherPercent.toFixed(1)} percent other, ${availablePercent.toFixed(1)} percent available">
+  const memory = memoryKnown
+    ? `<div class="resource-host-bar" role="img" aria-label="Memory: ${agentPercent.toFixed(1)} percent agents, ${otherPercent.toFixed(1)} percent other, ${availablePercent.toFixed(1)} percent available">
         <span class="resource-host-segment agent" data-w="${agentPercent.toFixed(1)}"></span>
         <span class="resource-host-segment other" data-w="${otherPercent.toFixed(1)}"></span>
         <span class="resource-host-segment available" data-w="${availablePercent.toFixed(1)}"></span>
       </div>
-      <div class="resource-host-legend"><span><i class="agent"></i>Agents ${agentPercent.toFixed(1)}%</span><span><i class="other"></i>Other ${otherPercent.toFixed(1)}%</span><span><i class="available"></i>Available ${availablePercent.toFixed(1)}%</span></div>` : '<div class="resource-host-legend"><span>Memory breakdown unavailable</span></div>'}
-    </div>
-    <div class="resource-host-stats">
-      <div><span>Memory pressure</span><strong>${escapeHTML(pressure)}</strong></div>
-      <div><span>CPU</span><strong>${escapeHTML(cpu)}</strong></div>
-      <div><span>Swap</span><strong>${escapeHTML(swap)}</strong></div>
-      <div><span>Thermal</span><strong>${escapeHTML(thermal)}</strong></div>
-    </div>
+      <div class="resource-host-legend"><span><i class="agent"></i>Agents ${agentPercent.toFixed(1)}%</span><span><i class="other"></i>Other ${otherPercent.toFixed(1)}%</span><span><i class="available"></i>${escapeHTML(fmtRSS(available) || '0 B')} available of ${escapeHTML(fmtRSS(total))}</span></div>`
+    : '<b>Unavailable</b>';
+  return `<section class="machine-strip capacity-${escapeHTML(capacity)}" aria-label="Whole-machine resource pressure">
+    <div class="machine-tile machine-headroom"><span class="resource-eyebrow">Machine headroom</span><b>${Number(host.headroom_score || 0)} / 100</b><small>${escapeHTML(capacity)}</small></div>
+    <div class="machine-tile machine-memory"><span class="resource-eyebrow">Memory</span>${memory}</div>
+    <div class="machine-tile"><span class="resource-eyebrow">CPU</span><b>${escapeHTML(cpu)}</b>${cpuSplit ? `<small>${escapeHTML(cpuSplit)}</small>` : ''}</div>
+    <div class="machine-tile"><span class="resource-eyebrow">Swap</span><b>${escapeHTML(swap)}</b></div>
+    <div class="machine-chips"><span class="machine-chip">${escapeHTML(pressure)} pressure</span><span class="machine-chip">${escapeHTML(thermal)} thermal</span></div>
   </section>`;
 }
 
@@ -144,6 +142,116 @@ function resourceFlightRecorderHTML(snapshot) {
   </section>`;
 }
 
+// Samples inside the last hour: the 60-minute sparklines.
+function resourceLastHour(samples, now) {
+  return (samples || []).filter(sample => {
+    const t = Date.parse(sample && sample.at);
+    return !Number.isFinite(t) || t >= now - 3600e3;
+  });
+}
+
+function resourceProcessCount(f) {
+  const n = Number(f.process_count || 0);
+  return `${n} process${n === 1 ? '' : 'es'}`;
+}
+
+// A family's pending controls: the approval pair, Resume when paused, the
+// last intervention error. Shared by the attention card and the drawer foot.
+function resourceControlHTML(f) {
+  const c = f.control || {};
+  const approval = c.pending_id ? `<span class="resource-approval">
+      <button type="button" class="btn btn-danger btn-sm" data-action="resource-control" data-id="${escapeHTML(c.pending_id)}" data-decision="apply" data-intervention="${escapeHTML(c.next_action || '')}">Apply ${escapeHTML(String(c.next_action || 'intervention').replaceAll('_', ' '))}</button>
+      <button type="button" class="btn btn-ghost btn-sm" data-action="resource-control" data-id="${escapeHTML(c.pending_id)}" data-decision="dismiss">Keep running</button>
+    </span>` : '';
+  const resume = c.paused ? `<button type="button" class="btn btn-primary btn-sm" data-action="resource-control" data-session="${escapeHTML(f.key)}" data-decision="resume">Resume session</button>` : '';
+  const error = c.last_error ? `<span class="resource-control-error">Intervention failed: ${escapeHTML(c.last_error)}</span>` : '';
+  return approval + resume + error;
+}
+
+function resourceViewFamilyHTML(f) {
+  return `<button type="button" class="btn btn-ghost btn-sm" data-action="view-family" data-key="${escapeHTML(f.key)}">View family</button>`;
+}
+
+// One needs-attention card: name, memory · CPU · processes, the diagnosis,
+// the reclaim estimate, pending controls, View family.
+function resourceAttentionCardHTML(f, sessions) {
+  const diagnoses = f.diagnoses || [];
+  const primary = diagnoses[0] || {};
+  const reclaim = fmtRSS(f.estimated_reclaim_bytes);
+  const c = f.control || {};
+  const state = c.state && c.state !== 'healthy' ? `<span class="resource-control-state">${escapeHTML(c.state)}</span>` : '';
+  const policy = c.policy_source === 'workspace'
+    ? `<span class="resource-policy-source">workspace policy · ${escapeHTML(c.policy_scope || f.workspace || '')}</span>` : '';
+  return `<article class="resource-session-card needs-attention-card pressure-${escapeHTML(primary.severity || 'warning')}" data-key="${escapeHTML(f.key)}">
+    <div class="family-name">${harnessChipHTML(f.name)}<strong>${escapeHTML(familyLabel(f, sessions))}</strong></div>
+    <div class="family-metrics"><b>${escapeHTML(fmtRSS(f.rss_bytes) || '—')}</b> memory · <b>${escapeHTML(fmtCPU(f.cpu_percent) || '—')}</b> CPU · ${resourceProcessCount(f)}</div>
+    <p class="resource-diagnosis">${resourceDiagnosisText(primary)}${diagnoses.length > 1 ? ` <small>+${diagnoses.length - 1} more</small>` : ''}</p>
+    <div class="resource-session-foot">
+      ${reclaim ? `<span class="resource-reclaim">up to ${escapeHTML(reclaim)} reclaimable</span>` : ''}
+      ${state}${policy}${resourceControlHTML(f)}
+      ${resourceViewFamilyHTML(f)}
+    </div>
+  </article>`;
+}
+
+function resourceAttentionHTML(families, sessions) {
+  const cards = families.map(f => resourceAttentionCardHTML(f, sessions)).join('');
+  return `<section class="needs-attention" aria-label="Families that need attention">
+    <h3 class="family-section-head">Needs attention${families.length ? `<span>${families.length}</span>` : ''}</h3>
+    ${cards ? `<div class="needs-attention-cards">${cards}</div>` : '<div class="needs-attention-empty">Every family is within its thresholds.</div>'}
+  </section>`;
+}
+
+// One compact family row: name, memory, CPU, processes, the 60-minute RSS
+// sparkline, View family. nested indents an orchestrated child.
+function resourceFamilyRowHTML(f, sessions, nested, now) {
+  const points = resourceSparkPoints(resourceLastHour(f.samples, now), 'rss_bytes', 120, 24);
+  const primary = (f.diagnoses || [])[0];
+  const n = Number(f.process_count || 0);
+  return `<div class="family-row${nested ? ' nested' : ''}${primary ? ` pressure-${escapeHTML(primary.severity || 'warning')}` : ''}">
+    <span class="family-name" title="${escapeHTML(f.workspace || '')}"><strong>${escapeHTML(familyLabel(f, sessions))}</strong></span>
+    <span class="resource-metric"><b>${escapeHTML(fmtRSS(f.rss_bytes) || '—')}</b><small>memory</small></span>
+    <span class="resource-metric"><b>${escapeHTML(fmtCPU(f.cpu_percent) || '—')}</b><small>CPU</small></span>
+    <span class="resource-metric"><b>${n}</b><small>process${n === 1 ? '' : 'es'}</small></span>
+    <svg class="resource-spark" viewBox="0 0 120 24" preserveAspectRatio="none" role="img" aria-label="Memory over the last hour">${points ? `<polyline class="resource-spark-memory" points="${points}"/>` : ''}</svg>
+    ${resourceViewFamilyHTML(f)}
+  </div>`;
+}
+
+// One harness group (resourceFamilyGroups): mark, name, family count, total
+// memory and CPU; open by default only when a family in it needs attention.
+function resourceFamilyGroupHTML(g, sessions, flagged, now) {
+  const open = g.rows.some(r => [r.family, ...r.children].some(f => flagged.has(f.key)));
+  const rows = g.rows.map(r => {
+    const kids = r.children.length
+      ? `<div class="family-children">${r.children.map(c => resourceFamilyRowHTML(c, sessions, true, now)).join('')}</div>` : '';
+    return `<div class="family-branch">${resourceFamilyRowHTML(r.family, sessions, false, now)}${kids}</div>`;
+  }).join('');
+  const n = g.infra ? g.rows.length : g.families;
+  const counts = `${n} ${g.infra ? 'tracked' : n === 1 ? 'family' : 'families'} · ${fmtRSS(g.rss) || '—'} · ${fmtCPU(g.cpu) || '—'} CPU`;
+  const head = g.infra ? '<span class="family-group-title">Infrastructure</span>' : harnessChipHTML(g.key, { label: true });
+  return `<details class="family-group${g.infra ? ' infra' : ''}" data-harness="${escapeHTML(g.key)}"${open ? ' open' : ''}>
+    <summary class="family-group-head">${head}<span class="family-group-counts">${escapeHTML(counts)}</span></summary>
+    <div class="family-group-body">${rows}</div>
+  </details>`;
+}
+
+function resourcePolicyLineHTML(control) {
+  const limits = [
+    control.max_rss_bytes ? `${fmtRSS(control.max_rss_bytes)} memory` : '',
+    control.max_cpu_percent ? `${fmtCPU(control.max_cpu_percent)} CPU` : ''
+  ].filter(Boolean).join(' · ');
+  const ladder = (control.interventions || []).map(step => String(step.action || '').replaceAll('_', ' ')).join(' → ');
+  const overrides = (control.workspace_overrides || []).length;
+  const pending = (control.pending || []).length;
+  return `<div class="resource-policy"><span><b>${escapeHTML(control.mode || 'observe')}</b> machine policy${limits ? ` · ${escapeHTML(limits)}` : ' · budgets disabled'}${control.sustain_seconds ? ` · ${Number(control.sustain_seconds)}s grace` : ''}${ladder ? ` · ${escapeHTML(ladder)}` : ''} · ${overrides} workspace override${overrides === 1 ? '' : 's'}</span><span><span>${pending} approval${pending === 1 ? '' : 's'} pending</span><button type="button" class="btn btn-ghost btn-sm" data-action="edit-resource-policy">Edit policy</button></span></div>`;
+}
+
+// Resources tab, top to bottom: the machine strip, needs attention (at most
+// five), families grouped by harness with orchestrated children nested and
+// infrastructure trailing, then the policy line. Keyed through patchList so
+// a group's open state survives the 30s reconcile. View family opens the
+// family drawer (app.js) instead of leaving the tab.
 function renderResourceMissionControl() {
   const SA = window.SA;
   const container = document.getElementById('resource-board');
@@ -157,108 +265,107 @@ function renderResourceMissionControl() {
     observed.textContent = age ? `${age} ago` : 'Live';
   }
 
-  const sessions = [...(snapshot.sessions || [])].sort((a, b) => {
-    const impact = resourceImpact(b) - resourceImpact(a);
-    if (impact) return impact;
-    return Number(b.rss_bytes || 0) - Number(a.rss_bytes || 0);
-  });
-  const control = snapshot.control || {};
-  const hostContext = resourceHostContextHTML(snapshot.host);
-  const limits = [
-    control.max_rss_bytes ? `${fmtRSS(control.max_rss_bytes)} memory` : '',
-    control.max_cpu_percent ? `${fmtCPU(control.max_cpu_percent)} CPU` : ''
-  ].filter(Boolean).join(' · ');
-	const ladder = (control.interventions || []).map(step => String(step.action || '').replaceAll('_', ' ')).join(' → ');
-  const policy = `<div class="resource-policy"><span><b>${escapeHTML(control.mode || 'observe')}</b> machine policy${limits ? ` · ${escapeHTML(limits)}` : ' · budgets disabled'}${control.sustain_seconds ? ` · ${Number(control.sustain_seconds)}s grace` : ''}${ladder ? ` · ${escapeHTML(ladder)}` : ''} · ${(control.workspace_overrides || []).length} workspace override${(control.workspace_overrides || []).length === 1 ? '' : 's'}</span><span><span>${(control.pending || []).length} approval${(control.pending || []).length === 1 ? '' : 's'} pending</span><button type="button" class="btn btn-ghost btn-sm" data-action="edit-resource-policy">Edit policy</button></span></div>`;
-  if (sessions.length === 0) {
-    container.innerHTML = hostContext + policy + `<div class="empty"><svg class="icon"><use href="#i-activity"/></svg><span>No attributed agent resource use right now</span></div>`;
-    applyInlineMetrics(container);
-    return;
-  }
-
-  if (SA.selectedResourceKey && !sessions.some(s => s.key === SA.selectedResourceKey)) {
+  const families = snapshot.sessions || [];
+  if (SA.selectedResourceKey && !families.some(f => f.key === SA.selectedResourceKey)) {
     SA.selectedResourceKey = '';
   }
-  const selected = sessions.find(s => s.key === SA.selectedResourceKey);
-  const totalCPU = Object.prototype.hasOwnProperty.call(snapshot, 'cpu_percent') ? fmtCPU(snapshot.cpu_percent) : '';
-  // One thin attributed-now line instead of a 66px four-cell grid: the machine
-  // numbers already fill the headroom card above, so this only carries the
-  // agent-attributed totals, and it reads as a subtitle to the list.
-  const sessionCount = Number(snapshot.session_count ?? sessions.length);
-  const infraNote = snapshot.infra_count ? ` · ${Number(snapshot.infra_count)} infra` : '';
-  const posture = `<div class="resource-attributed">
-    <span><b>${sessionCount}</b> session${sessionCount === 1 ? '' : 's'}${infraNote}</span>
-    <span><b>${escapeHTML(fmtRSS(snapshot.rss_bytes) || '—')}</b> memory</span>
-    <span><b>${escapeHTML(totalCPU || '—')}</b> CPU</span>
-    <span><b>${Number(snapshot.process_count || 0)}</b> processes</span>
-  </div>`;
-
-  const cards = sessions.map((session, index) => {
-    const label = cwdLabel(session.workspace) || familyTitle(session.name);
-    const diagnoses = session.diagnoses || [];
-    const primary = diagnoses[0];
-    const pids = (session.processes || []).map(p => Number(p.pid)).filter(Number.isFinite);
-    const memoryPoints = resourceSparkPoints(session.samples, 'rss_bytes', 140, 30);
-    const cpuPoints = resourceSparkPoints(session.samples, 'cpu_percent', 140, 30);
-    const pressure = diagnoses.length ? ` pressure-${escapeHTML(primary.severity || 'warning')}` : '';
-    const active = selected && selected.key === session.key ? ' selected' : '';
-    const reclaim = fmtRSS(session.estimated_reclaim_bytes);
-    const sessionControl = session.control || {};
-    const policySource = sessionControl.policy_source === 'workspace'
-      ? `workspace policy · ${sessionControl.policy_scope || session.workspace || ''}`
-      : 'machine default';
-    const approval = sessionControl.pending_id ? `
-      <span class="resource-approval">
-		<button type="button" class="btn btn-danger btn-sm" data-action="resource-control" data-id="${escapeHTML(sessionControl.pending_id)}" data-decision="apply" data-intervention="${escapeHTML(sessionControl.next_action || '')}">Apply ${escapeHTML(String(sessionControl.next_action || 'intervention').replaceAll('_', ' '))}</button>
-        <button type="button" class="btn btn-ghost btn-sm" data-action="resource-control" data-id="${escapeHTML(sessionControl.pending_id)}" data-decision="dismiss">Keep running</button>
-      </span>` : '';
-	const resume = sessionControl.paused ? `<button type="button" class="btn btn-primary btn-sm" data-action="resource-control" data-session="${escapeHTML(session.key)}" data-decision="resume">Resume session</button>` : '';
-	const interventionError = sessionControl.last_error ? `<span class="resource-control-error">Intervention failed: ${escapeHTML(sessionControl.last_error)}</span>` : '';
-    return `
-      <div class="resource-session-card${pressure}${active}">
-        <button type="button" class="resource-session-main" data-action="resource-session" data-key="${escapeHTML(session.key)}">
-          <span class="resource-rank">${index + 1}</span>
-          <span class="resource-identity">
-            <strong>${escapeHTML(label)}</strong>
-            <span>${escapeHTML(session.name || 'agent')} · root PID ${Number(session.root_pid || 0)} · ${Number(session.process_count || 0)} process${Number(session.process_count || 0) === 1 ? '' : 'es'}${session.kind === 'infra' ? ' · infra' : ''}</span>
-          </span>
-          <span class="resource-metric"><b>${escapeHTML(fmtRSS(session.rss_bytes) || '—')}</b><small>memory</small></span>
-          <span class="resource-metric"><b>${escapeHTML(fmtCPU(session.cpu_percent) || '—')}</b><small>CPU</small></span>
-          <svg class="resource-spark" viewBox="0 0 140 30" preserveAspectRatio="none" role="img" aria-label="Recent memory and CPU trend">
-            ${memoryPoints ? `<polyline class="resource-spark-memory" points="${memoryPoints}"/>` : ''}
-            ${cpuPoints ? `<polyline class="resource-spark-cpu" points="${cpuPoints}"/>` : ''}
-          </svg>
-        </button>
-        <div class="resource-session-foot">
-          <span class="resource-diagnosis${primary ? '' : ' quiet'}">${primary ? resourceDiagnosisText(primary) : 'Within current thresholds'}</span>
-          ${reclaim ? `<span class="resource-reclaim">up to ${escapeHTML(reclaim)} reclaimable</span>` : ''}
-          ${sessionControl.state && sessionControl.state !== 'healthy' ? `<span class="resource-control-state">${escapeHTML(sessionControl.state)}</span>` : ''}
-          <span class="resource-policy-source">${escapeHTML(policySource)}</span>
-          ${approval}
-		  ${resume}
-		  ${interventionError}
-          <button type="button" class="btn btn-ghost btn-sm" data-action="filter-pids" data-pids="${escapeHTML(pids.join(','))}" data-label="${escapeHTML(label)}">Open family activity</button>
-        </div>
-      </div>`;
-  }).join('');
-
-  let detail = `<div class="resource-detail-empty">Select a session to inspect its complete process family.</div>`;
-  if (selected) {
-    const label = cwdLabel(selected.workspace) || familyTitle(selected.name);
-    const processes = (selected.processes || []).map(process => `
-      <div class="resource-process${process.is_orphan ? ' orphan' : ''}">
-        <span><b>PID ${Number(process.pid || 0)}</b>${Number(process.pid) === Number(selected.root_pid) ? ' · root' : ` · child of ${Number(process.ppid || 0)}`}${process.is_orphan ? ' · leftover' : ''}</span>
-        <span>${escapeHTML(fmtRSS(process.rss_bytes) || '—')} · ${escapeHTML(fmtCPU(process.cpu_percent) || '—')}</span>
-      </div>`).join('');
-    detail = `
-      <div class="resource-detail">
-        <div class="resource-detail-head"><div><span class="resource-eyebrow">Process topology</span><strong>${escapeHTML(label)}</strong></div><span>root PID ${Number(selected.root_pid || 0)}</span></div>
-        <div class="resource-processes">${processes}</div>
-      </div>`;
+  const parts = [];
+  const strip = resourceHostContextHTML(snapshot.host);
+  if (strip) parts.push({ key: 'strip', html: strip });
+  if (!families.length) {
+    parts.push({ key: 'empty', html: '<div class="empty"><svg class="icon"><use href="#i-activity"/></svg><span>No attributed agent resource use right now</span></div>' });
+  } else {
+    const sessions = SA.t.sessions || [];
+    const now = Date.now();
+    const attention = resourceNeedsAttention(families, 5);
+    const flagged = new Set(attention.map(f => f.key));
+    const groups = resourceFamilyGroups(families, sessions);
+    const count = groups.reduce((n, g) => n + g.families, 0);
+    const infra = groups.filter(g => g.infra).reduce((n, g) => n + g.rows.length, 0);
+    parts.push({ key: 'attention', html: resourceAttentionHTML(attention, sessions) });
+    parts.push({ key: 'families-head', html: `<h3 class="family-section-head">Families by harness<span>${count} ${count === 1 ? 'family' : 'families'}${infra ? ` · ${infra} infrastructure` : ''}</span></h3>` });
+    for (const g of groups) parts.push({ key: 'group:' + g.key, html: resourceFamilyGroupHTML(g, sessions, flagged, now) });
   }
+  parts.push({ key: 'policy', html: resourcePolicyLineHTML(snapshot.control || {}) });
+  patchList(container, parts, { key: p => p.key, html: p => p.html });
+}
 
-  container.innerHTML = hostContext + posture + policy + `<div class="resource-layout"><div class="resource-session-list">${cards}</div><aside class="resource-detail-wrap">${detail}</aside></div>`;
-  applyInlineMetrics(container);
+// Family drawer (app.js openFamilyDrawer): the inspector View family opens
+// beside the board. Keyed sections for patchList, so the 30s refill keeps
+// the unchanged ones; the process table's Show more rides in ctx.expanded.
+// ctx: { sessions, events, flags, expanded, now }.
+function familyDrawerSections(f, ctx) {
+  const c = ctx || {};
+  const now = c.now || Date.now();
+  const procs = [...(f.processes || [])].sort((a, b) => Number(b.rss_bytes || 0) - Number(a.rss_bytes || 0));
+  const pids = new Set(procs.map(p => Number(p.pid)).filter(Number.isFinite));
+  if (f.root_pid) pids.add(Number(f.root_pid));
+  const nameOf = new Map(procs.map(p => [Number(p.pid), p.name]));
+  const ws = f.workspace && f.workspace !== '/' ? f.workspace : '';
+  const head = `<div class="family-drawer-head">${harnessChipHTML(f.name, { label: true })}${ws ? `<button type="button" class="sd-path" data-action="copy-path" data-path="${escapeHTML(ws)}" title="${escapeHTML(ws)} — click to copy">${escapeHTML(middleTruncate(ws, 48))}</button>` : ''}</div>`;
+
+  const samples = resourceLastHour(f.samples, now);
+  const memPoints = resourceSparkPoints(samples, 'rss_bytes', 480, 56);
+  const cpuPoints = resourceSparkPoints(samples, 'cpu_percent', 480, 56);
+  const diagnoses = f.diagnoses || [];
+  const evidence = diagnoses.flatMap(d => d.evidence || []);
+  const reclaim = fmtRSS(f.estimated_reclaim_bytes);
+  const usage = `<section class="family-drawer-section">
+    <h4>Memory and CPU <small>last 60 min</small></h4>
+    <div class="family-drawer-now"><span><b>${escapeHTML(fmtRSS(f.rss_bytes) || '—')}</b> memory</span><span><b>${escapeHTML(fmtCPU(f.cpu_percent) || '—')}</b> CPU</span>${reclaim ? `<span><b>${escapeHTML(reclaim)}</b> reclaimable</span>` : ''}</div>
+    <svg class="family-drawer-spark" viewBox="0 0 480 56" preserveAspectRatio="none" role="img" aria-label="Memory and CPU over the last hour">${memPoints ? `<polyline class="resource-spark-memory" points="${memPoints}"/>` : ''}${cpuPoints ? `<polyline class="resource-spark-cpu" points="${cpuPoints}"/>` : ''}</svg>
+    ${diagnoses.length ? diagnoses.map(d => `<p class="resource-diagnosis">${resourceDiagnosisText(d)}</p>`).join('') : '<p class="resource-diagnosis quiet">Within current thresholds</p>'}
+    ${evidence.length ? `<ul class="family-drawer-evidence">${evidence.map(item => `<li>${escapeHTML(item)}</li>`).join('')}</ul>` : ''}
+  </section>`;
+
+  const orphan = p => !!p.is_orphan || (Number(p.pid) !== Number(f.root_pid) && !pids.has(Number(p.ppid)));
+  const row = p => `<tr class="family-proc-row${orphan(p) ? ' orphan' : ''}">
+      <td>${escapeHTML(p.name || 'process')}${orphan(p) ? ' <span class="agent-status orphan">leftover</span>' : ''}</td>
+      <td>${Number(p.pid || 0)}</td><td>${escapeHTML(fmtRSS(p.rss_bytes) || '—')}</td><td>${escapeHTML(fmtCPU(p.cpu_percent) || '—')}</td><td>${escapeHTML(p.started_at ? fmtAge(p.started_at, now) : '—')}</td>
+    </tr>`;
+  const cap = cappedList(procs, 12, null, 'family-procs:' + f.key, c.expanded);
+  const table = `<section class="family-drawer-section">
+    <h4>Processes <small>${procs.length}</small></h4>
+    <table class="family-drawer-procs"><thead><tr><th>Name</th><th>PID</th><th>Memory</th><th>CPU</th><th>Age</th></tr></thead><tbody>${cap.shown.map(row).join('')}</tbody></table>
+    ${cap.more}
+  </section>`;
+
+  const kinds = { 8: 'TOOL USE', 9: 'PROXY HIT', 5: 'NET CONN' };
+  const recent = filterEventsByPids(c.events, [...pids]).slice(0, 30);
+  const eventRow = e => {
+    const detail = e.detail || e.path || (e.remote_host ? `${e.remote_host}:${e.remote_port}` : '');
+    return `<div class="family-event"><time>${escapeHTML(fmtTime(new Date(e.ts)))}</time><span class="event-kind">${kinds[e.kind] || 'EVENT'}</span><span><b>${escapeHTML(nameOf.get(Number(e.pid)) || 'process')}</b> ${escapeHTML(detail)}</span></div>`;
+  };
+  const activity = `<section class="family-drawer-section">
+    <h4>Recent activity <small>${recent.length}</small></h4>
+    ${recent.length ? `<div class="family-drawer-events">${recent.map(eventRow).join('')}</div>` : '<p class="family-drawer-empty">No events from these processes in the loaded window.</p>'}
+    <button type="button" class="link-btn" data-action="family-events" data-key="${escapeHTML(f.key)}">Open in Events</button>
+  </section>`;
+
+  const found = (c.flags || []).filter(fl => fl && !fl.acknowledged && pids.has(Number(fl.pid)));
+  const findingRow = fl => {
+    const sev = fl.severity >= 3 ? 's3' : fl.severity === 2 ? 's2' : 's1';
+    const age = fl.ts ? fmtAge(fl.ts, now) : '';
+    return `<div class="family-finding"><span class="sev ${sev}">●</span><span>${escapeHTML(fl.title || ruleTitle(fl.rule))}</span>${age ? `<time>${escapeHTML(age)} ago</time>` : ''}</div>`;
+  };
+  const findings = `<section class="family-drawer-section">
+    <h4>Findings <small>${found.length}</small></h4>
+    ${found.length ? found.map(findingRow).join('') + '<button type="button" class="link-btn" data-action="goto-tab" data-tab="findings">Open Findings</button>' : '<p class="family-drawer-empty">No open findings for these processes.</p>'}
+  </section>`;
+
+  return [
+    { key: 'head', html: head }, { key: 'usage', html: usage }, { key: 'procs', html: table },
+    { key: 'activity', html: activity }, { key: 'findings', html: findings },
+  ];
+}
+
+// The drawer foot: pending controls, Terminate orphans (N), Terminate family
+// (the root's process tree through the existing /kill confirm).
+function familyDrawerFootHTML(f, label) {
+  const orphans = Number(f.orphan_count || 0);
+  return resourceControlHTML(f)
+    + (orphans > 0 ? `<button type="button" class="btn btn-danger btn-sm" data-action="kill-family-orphans" data-key="${escapeHTML(f.key)}"><svg class="icon"><use href="#i-power"/></svg><span>Terminate orphans (${orphans})</span></button>` : '')
+    + `<button type="button" class="btn btn-danger btn-sm" data-action="kill" data-pid="${Number(f.root_pid || 0)}" data-started="${escapeHTML(f.root_started_at || '')}" data-family="${escapeHTML(label || '')}"><svg class="icon"><use href="#i-power"/></svg><span>Terminate family</span></button>`;
 }
 
 // History tab: the pressure flight recorder on its own page. It was stacked
@@ -328,7 +435,7 @@ function renderChartMemory() {
   let sessions = durable.map(s => {
     const live = s.root_pid ? byRoot[Number(s.root_pid)] : null;
     return {
-      label: s.repo ? `${s.harness} · ${s.repo}` : `${s.harness} · ${cwdLabel(s.workspace) || 'unknown'}`,
+      label: familyLabel({ root_pid: s.root_pid, name: s.harness, workspace: s.workspace }, [s]),
       rss: live ? Number(live.rss_bytes || 0) : 0,
       infra: s.kind === 'infra',
     };
@@ -337,7 +444,7 @@ function renderChartMemory() {
   if (!sessions.length) {
     // Legacy fallback: process-tree families.
     sessions = trees.map(t => ({
-      label: `${(t.root && t.root.name) || 'agent'} · ${cwdLabel(t.root && t.root.cwd) || 'unknown'}`,
+      label: familyLabel({ root_pid: t.root && t.root.pid, name: t.root && t.root.name, workspace: t.root && t.root.cwd }, []),
       rss: Number(t.rss_bytes || 0),
       infra: false,
     })).filter(s => s.rss > 0);
@@ -602,12 +709,16 @@ function renderEvents() {
   };
   // Animate only rows new to the container — the initial page load never
   // animates. The hash leaves the fresh class out, so a row seen once keeps
-  // its node (and does not re-animate) on the next render.
-  patchList(container, events, {
-    key: eventKey,
-    hash: e => row(e, ''),
-    html: e => row(e, !SA.reducedMotion && !SA.firstEventRender && !SA.suppressFreshOnce && !SA.prevEventKeys.has(eventKey(e))
-      ? (e.kind === 9 ? ' fresh-sev' : ' fresh') : ''),
+  // its node (and does not re-animate) on the next render. The newest 50
+  // rows show, then Show more: a live row pushes the oldest visible one out.
+  const cap = cappedList(events, 50, null, 'events', SA.expanded);
+  const items = cap.hidden ? [...cap.shown, { more: cap.more }] : cap.shown;
+  patchList(container, items, {
+    key: e => (e.more !== undefined ? 'show-more' : eventKey(e)),
+    hash: e => (e.more !== undefined ? e.more : row(e, '')),
+    html: e => (e.more !== undefined ? `<div class="list-more">${e.more}</div>`
+      : row(e, !SA.reducedMotion && !SA.firstEventRender && !SA.suppressFreshOnce && !SA.prevEventKeys.has(eventKey(e))
+        ? (e.kind === 9 ? ' fresh-sev' : ' fresh') : '')),
   });
 
   SA.prevEventKeys = new Set(events.map(eventKey));

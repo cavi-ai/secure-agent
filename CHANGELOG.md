@@ -32,6 +32,14 @@ All notable changes to `secure-agent` are documented here. The format follows
 ### Changed
 - Posture and attention: a flag the advisor judged benign at confidence ≥ 0.85 is severity 1 (`attention`, "Finding, likely benign"), never `critical`.
 - Console: an explained flag's card and Attention item show who, what and the one verdict with the served actions as buttons; raw evidence, pid and timestamps sit behind Details.
+- Console Resources: a one-row machine strip (headroom, memory, CPU, swap; pressure and thermal chips) replaces the host block.
+- Console Resources: families with a diagnosis lead as at most five needs-attention cards.
+- Console Resources: families group by harness, sorted by memory, with orchestrated children nested under their parent and infrastructure in one trailing, uncounted group.
+- Console Resources: families are named harness · repo@branch or harness · folder, never by pid; the Overview memory chart uses the same names.
+- Console Resources: View family opens a drawer with usage, processes, recent activity, findings and terminate actions instead of switching tabs.
+- Console: the Events tab lists the newest 50 rows, the family process table 12 and an Agents group 8 instances, each with Show more.
+- Console: pid-scoped event filtering opens the Events tab.
+- Console: the drawer's Copy button stays hidden outside incident reports.
 
 ### Fixed
 - Spool tailer: lines under 16 bytes or not starting with `{` are rejected

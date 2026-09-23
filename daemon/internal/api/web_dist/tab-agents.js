@@ -33,19 +33,20 @@ function renderAgents() {
   // listener on the container (app.js); patchList keeps unchanged groups.
   const isOpen = (key, dflt) => (Object.prototype.hasOwnProperty.call(SA.agentGroupOpen, key) ? !!SA.agentGroupOpen[key] : dflt);
   const parts = visible.length
-    ? visible.map(g => ({ key: 'group:' + g.key, html: agentGroupHTML(g, now, isOpen(g.key, true), SA.agentTreeOpen) }))
+    ? visible.map(g => ({ key: 'group:' + g.key, html: agentGroupHTML(g, now, isOpen(g.key, true), SA.agentTreeOpen, SA.expanded) }))
     : agentGroups.length
       ? [{ key: 'empty:nomatch', html: `<div class="empty"><svg class="icon"><use href="#i-agent"/></svg><span>No agents match — <button type="button" class="link-btn" data-action="clear-harness-filter">clear the filter</button></span></div>` }]
       : [{ key: 'empty:infra-only', html: `<div class="empty"><svg class="icon"><use href="#i-agent"/></svg><span>No agents running — only infrastructure below</span></div>` }];
   if (infra.length) {
-    parts.push({ key: 'infra', html: `<section class="agent-infra" aria-label="Infrastructure"><h3 class="agent-infra-head">Infrastructure <span>IDEs and model servers — not counted as agents</span></h3>${infra.map(g => agentGroupHTML(g, now, isOpen(g.key, false), SA.agentTreeOpen)).join('')}</section>` });
+    parts.push({ key: 'infra', html: `<section class="agent-infra" aria-label="Infrastructure"><h3 class="agent-infra-head">Infrastructure <span>IDEs and model servers — not counted as agents</span></h3>${infra.map(g => agentGroupHTML(g, now, isOpen(g.key, false), SA.agentTreeOpen, SA.expanded)).join('')}</section>` });
   }
   patchList(container, parts, { key: p => p.key, html: p => p.html });
 }
 
 // One harness group: mark + display name, then instances, processes, RSS,
-// CPU and last seen over the instances shown; leftovers get a bulk kill.
-function agentGroupHTML(g, now, open, treeOpen) {
+// CPU and last seen over the instances shown; leftovers get a bulk kill. The
+// first 8 instances list, then Show more (expanded holds opened groups).
+function agentGroupHTML(g, now, open, treeOpen, expanded) {
   const t = agentGroupTotals(g);
   const rss = fmtRSS(t.rss);
   const cpu = fmtCPU(t.cpu);
@@ -67,7 +68,7 @@ function agentGroupHTML(g, now, open, treeOpen) {
         </span>
       </summary>
       <div class="agent-instances">
-        ${g.instances.map(inst => agentInstanceHTML(inst, now, treeOpen)).join('')}
+        ${cappedList(g.instances, 8, inst => agentInstanceHTML(inst, now, treeOpen), 'agents:' + g.key, expanded).html}
       </div>
     </details>`;
 }

@@ -190,6 +190,9 @@ def main():
         dom_explainact = dump_dom(chrome, tmp, "?explaindemo&explainact")
         dom_explainfail = dump_dom(chrome, tmp, "?explaindemo&explainact&postfail")
         dom_detailsprobe = dump_dom(chrome, tmp, "?explaindemo&detailsprobe")
+        dom_fam = dump_dom(chrome, tmp, "?familiesdemo&tab=resources")
+        dom_famev = dump_dom(chrome, tmp, "?familiesdemo&familyevents&tab=resources")
+        dom_evcap = dump_dom(chrome, tmp, "?tab=events&manyevents")
 
         # --- session-first tab (P3) ---
         rail = dom.split('id="session-rail"', 1)[1].split('id="session-detail"', 1)[0]
@@ -239,8 +242,8 @@ def main():
         check("empty rail says all quiet", "All quiet. Nothing is running." in dom_quiet)
         check("filter that hides everything offers to clear it",
               "No sessions match" in dom_nomatch and 'data-action="clear-harness-filter"' in dom_nomatch)
-        check("the page, posture banner included, fits a 375px phone on Sessions and Agents",
-              'data-hscroll="sessions:0,agents:0"' in dom_phone,
+        check("the page, posture banner included, fits a 375px phone on Sessions, Agents and Resources",
+              'data-hscroll="sessions:0,agents:0,resources:0"' in dom_phone,
               (re.search(r'data-hscroll="[^"]*"', dom_phone) or [None])[0])
         detail_head = dom_rail.split('class="session-detail-head"', 1)[1].split('class="wf', 1)[0]
         check("detail head: mark, repo@branch, harness, confidence, copyable path",
@@ -540,8 +543,9 @@ def main():
               and 'data-action="filter-pids" data-pids="4412,4419,4420"' not in history_view)
         check("resource trend SVG is rendered",
               'class="resource-spark"' in resource_view and 'points="' in resource_view)
-        check("resource action targets the full family",
-              'data-action="filter-pids" data-pids="5821,5822"' in resource_view)
+        check("resource action opens the family in place",
+              'data-action="view-family" data-key="5821:1789480800000000000"' in resource_view
+              and 'data-action="filter-pids"' not in resource_view)
         check("resource policy mode and grace are visible",
               "prompt</b> machine policy" in resource_view and "30s grace" in resource_view)
         check("resource policy source is visible on sessions",
@@ -556,6 +560,65 @@ def main():
               and 'data-step-action="pause" checked' in dom_policy)
         check("policy editor adds the selected session workspace",
               'value="/Users/dev/workspace/api-service"' in dom_policy)
+        # --- resources v2: strip, needs attention, harness groups, family drawer ---
+        board = dom_fam.split('id="resource-board"', 1)[1].split('id="tab-history"', 1)[0]
+        check("resources: the machine strip renders four tiles",
+              'class="machine-strip' in board and board.count('class="machine-tile') == 4,
+              f"tiles={board.count('class=\"machine-tile')}")
+        attn = board.split('class="needs-attention"', 1)[1].split('</section>', 1)[0] if 'class="needs-attention"' in board else ''
+        attn_keys = re.findall(r'class="resource-session-card needs-attention-card[^"]*" data-key="([^"]+)"', attn)
+        check("resources: needs attention holds exactly the two diagnosed families, highest impact first",
+              attn_keys == ["5821:1789480800000000000", "6033:1789484400000000000"], f"keys={attn_keys}")
+        fam_groups = re.findall(r'<details class="family-group( infra)?" data-harness="([^"]+)"', board)
+        check("resources: infra is the one trailing group",
+              bool(fam_groups) and fam_groups[-1] == (" infra", "infra") and sum(1 for g in fam_groups if g[0]) == 1,
+              f"groups={fam_groups}")
+        infra_grp = board.split('data-harness="infra"', 1)[1] if 'data-harness="infra"' in board else ''
+        check("resources: infra families sit in Infrastructure and are not counted as families",
+              all(f'data-key="{p}:1789470000000000000"' in infra_grp for p in (7001, 7100, 7200))
+              and '9 families' in board and '12 families' not in board)
+        oc_grp = board.split('data-harness="openclaw"', 1)[1].split('<details', 1)[0] if 'data-harness="openclaw"' in board else ''
+        oc_kids = oc_grp.split('class="family-children"', 1)[1] if 'class="family-children"' in oc_grp else ''
+        codex_grp = board.split('data-harness="codex"', 1)[1].split('<details', 1)[0] if 'data-harness="codex"' in board else ''
+        check("resources: orchestrated children nest under their OpenClaw parent, not as codex rows",
+              'data-key="8100:1789470000000000000"' in oc_grp.split('class="family-children"', 1)[0]
+              and 'data-key="8201:1789470000000000000"' in oc_kids and 'data-key="8202:1789470000000000000"' in oc_kids
+              and '8201:' not in codex_grp and 'Codex · career-ops@main' in oc_kids)
+        check("resources: rows and cards carry names, never root PID",
+              'root PID' not in board and 'Claude Code · api-service@main' in board
+              and 'Codex · data-pipeline@feat/etl' in board)
+        check("resources: a group opens by default only when a family in it needs attention",
+              '<details class="family-group" data-harness="claude" open=""' in board
+              and '<details class="family-group" data-harness="codex">' in board
+              and '<details class="family-group infra" data-harness="infra">' in board)
+        check("resources: policy line sits below the groups",
+              'data-harness="infra"' in board and 'class="resource-policy"' in board
+              and board.index('data-harness="infra"') < board.index('class="resource-policy"'))
+        fam_drawer = dom_fam.split('<div id="drawer"', 1)[1].split('id="confirm-layer"', 1)[0]
+        fam_probe = (re.search(r'<pre id="family-probe"[^>]*>(.*?)</pre>', dom_fam, re.S) or [None, ""])[1]
+        check("View family opens the drawer with the family name; the tab stays Resources",
+              dom_fam.count('<div id="drawer" class="drawer">') == 1
+              and 'id="drawer-title-text">Codex · data-pipeline@feat/etl<' in fam_drawer
+              and 'class="tab-btn active" data-tab="resources"' in dom_fam)
+        check("family drawer: the process table shows 12 rows and Show 8 more, then expands in place",
+              fam_probe == "rows=12 more=Show 8 more" and fam_drawer.count('class="family-proc-row') == 20
+              and 'data-action="show-more"' not in fam_drawer, f"probe={fam_probe!r} rows={fam_drawer.count('class=\"family-proc-row')}")
+        check("family drawer: leftover marked, recent activity and findings scoped to the family",
+              'family-proc-row orphan' in fam_drawer and 'Bash → pytest -q' in fam_drawer
+              and 'npm install' not in fam_drawer and 'Keychain file access' in fam_drawer)
+        check("family drawer: footer offers Terminate orphans and Terminate family on the root",
+              'data-action="kill-family-orphans" data-key="4412:1789470000000000000"' in fam_drawer
+              and 'Terminate orphans (1)' in fam_drawer and 'data-action="kill" data-pid="4412"' in fam_drawer)
+        ev_scoped = dom_famev.split('id="events-container"', 1)[1].split('</section>', 1)[0]
+        ev_pids = set(int(x) for x in re.findall(r'<span class="pid" title="PID (\d+)"', ev_scoped))
+        check("Open in Events switches to Events scoped to the family pids",
+              'class="tab-btn active" data-tab="events"' in dom_famev
+              and len(ev_pids) >= 2 and ev_pids <= set(range(4412, 4432)), f"pids={sorted(ev_pids)}")
+        ev_cap = dom_evcap.split('id="events-container"', 1)[1].split('</section>', 1)[0]
+        check("Events tab shows the newest 50 rows and a Show more button",
+              ev_cap.count('class="timeline-item') == 50
+              and re.search(r'data-action="show-more" data-key="events"[^>]*>Show \d+ more<', ev_cap) is not None,
+              f"rows={ev_cap.count('class=\"timeline-item')}")
         check("policy editor exposes automatic containment warning",
 		      "applies every enabled intervention automatically" in dom_policy)
         check("terminate policy save requires explicit confirmation",
