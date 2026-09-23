@@ -28,7 +28,7 @@ func (f fakeProcs) Info(pid int32) (agents.ProcInfo, bool) {
 	return p, ok
 }
 
-func testResolver(t *testing.T, procs fakeProcs) (*Resolver, *store.Store) {
+func testResolver(t *testing.T, procs agents.ProcSource) (*Resolver, *store.Store) {
 	t.Helper()
 	st, err := store.Open("", "")
 	if err != nil {
@@ -62,6 +62,30 @@ func TestResolveProcessTreeTier(t *testing.T) {
 	}
 	if s.RootPID != 100 || s.RootStartedAt == "" {
 		t.Fatalf("root identity missing: %+v", s)
+	}
+}
+
+// A tagged child process (a shell the harness spawned, in another cwd) joins
+// its harness's session: one row, keyed, rooted and scoped on the harness.
+func TestChildProcessJoinsHarnessSession(t *testing.T) {
+	rootStart := time.Now().Add(-time.Hour)
+	r, st := testResolver(t, fakeProcs{
+		100: {PID: 100, PPID: 1, Exe: "/opt/homebrew/bin/codex", CWD: "/repo", StartTime: rootStart},
+		200: {PID: 200, PPID: 100, Exe: "/bin/zsh", CWD: "/repo/sub", StartTime: rootStart.Add(time.Minute)},
+	})
+	child := resolvePID(t, r, 200)
+	root := resolvePID(t, r, 100)
+	want := ProcSessionID(100, rootStart)
+	if child != want || root != want {
+		t.Fatalf("child=%q root=%q, want both %q", child, root, want)
+	}
+	sessions := st.ListSessions(store.SessionFilter{})
+	if len(sessions) != 1 {
+		t.Fatalf("sessions = %d, want 1: %+v", len(sessions), sessions)
+	}
+	s := sessions[0]
+	if s.RootPID != 100 || s.Workspace != "/repo" || s.RootStartedAt != rootStart.UTC().Format(time.RFC3339Nano) {
+		t.Fatalf("session = %+v, want root 100 in /repo started %s", s, rootStart)
 	}
 }
 
@@ -127,6 +151,65 @@ func TestSweepEndsSessionsWhoseRootExited(t *testing.T) {
 	sessions := st.ListSessions(store.SessionFilter{Status: model.SessionEnded})
 	if len(sessions) != 1 {
 		t.Fatalf("ended = %d, want 1 (%+v)", len(sessions), st.ListSessions(store.SessionFilter{}))
+	}
+}
+
+// flakyProcs serves every pid through Info but leaves hidden pids out of
+// List: a process-table sample that missed a live process.
+type flakyProcs struct {
+	procs  fakeProcs
+	hidden map[int32]bool
+}
+
+func (f *flakyProcs) List() []agents.ProcInfo {
+	out := make([]agents.ProcInfo, 0, len(f.procs))
+	for pid, p := range f.procs {
+		if !f.hidden[pid] {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+func (f *flakyProcs) Info(pid int32) (agents.ProcInfo, bool) {
+	return f.procs.Info(pid)
+}
+
+func TestSweepEndsSessionOnlyWhenRootConfirmedGone(t *testing.T) {
+	src := &flakyProcs{
+		procs:  fakeProcs{100: {PID: 100, PPID: 1, Exe: "/usr/local/bin/claude", CWD: "/repo", StartTime: time.Now().Add(-time.Hour)}},
+		hidden: map[int32]bool{},
+	}
+	r, st := testResolver(t, src)
+	id := resolvePID(t, r, 100)
+	// A restarted daemon knows the session only from the store.
+	restarted := NewResolver(st, r.tagger)
+
+	status := func() string {
+		got, _ := st.GetSession(id)
+		return got.Status
+	}
+
+	src.hidden[100] = true
+	r.tagger.Refresh()
+	r.Sweep()
+	restarted.Sweep()
+	if s := status(); s != model.SessionActive {
+		t.Fatalf("status = %q after one missed sample, want active", s)
+	}
+	if r.byRoot[100] != id {
+		t.Fatalf("byRoot[100] = %q, want %q", r.byRoot[100], id)
+	}
+
+	delete(src.procs, 100)
+	r.tagger.Refresh()
+	restarted.Sweep()
+	if s := status(); s != model.SessionEnded {
+		t.Fatalf("status = %q with root gone (store sweep), want ended", s)
+	}
+	r.Sweep()
+	if _, ok := r.byRoot[100]; ok {
+		t.Fatal("byRoot still holds the ended root")
 	}
 }
 

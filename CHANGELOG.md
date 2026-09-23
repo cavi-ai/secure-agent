@@ -21,6 +21,11 @@ All notable changes to `secure-agent` are documented here. The format follows
   per (path, rule) are collapsed.
 
 ### Fixed
+- Sessions: a tagged child process (a shell under a harness) joins its harness
+  family's session instead of minting its own — the tagger now reports the
+  family root on every tag, not only in the process listing.
+- Sessions: a session is ended only when its root process is confirmed gone,
+  not when one process-table sample happened to miss it.
 - Sessions: orchestrated runs are nested under their orchestrator's session —
   the parent lookup walks the OS ancestry past the child's own harness match
   instead of a chain that stopped at the first match.
