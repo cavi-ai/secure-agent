@@ -100,6 +100,8 @@ All notable changes to `secure-agent` are documented here. The format follows
   per (path, rule) are collapsed.
 
 ### Changed
+- Console Overview: Memory by session is Memory by family — one bar per live process family, its RSS counted once, `N sessions` in the label.
+- Console Overview: the Memory by family badge counts agent families, not infra.
 - Events carry a `(session_id, kind, id)` index; the event store writes planner statistics (`PRAGMA optimize`, `analysis_limit` 1000) at open and after each prune.
 - Untagged keychain flags name the agent the match strings give the exe.
 - Untagged keychain flags with a version-number exe name carry the directory that names it (`untagged:claude 2.1.280`).
