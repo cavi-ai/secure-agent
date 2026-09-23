@@ -105,6 +105,13 @@ All notable changes to `secure-agent` are documented here. The format follows
   behavior change.
 
 ### Added
+- **Codex model attribution.** Codex model calls carry the model id from the
+  rollout's thread settings and are priced from the price tables; a model the
+  tables do not know costs 0 and counts as unpriced — never a fabricated price.
+- **User price table.** `pricing` in `config.yaml` sets USD per 1M input and
+  output tokens by exact model id or prefix, wins over the built-in table, and
+  applies live on change. Built-in prices now cover OpenAI and Google model
+  families alongside Anthropic.
 - **Model-call spend.** `GET /costs` and `secure-agent cost` sum model calls
   by repo, branch, harness, session or model over a window (`since`,
   `until`), with tokens, distinct sessions and the dominant harness per

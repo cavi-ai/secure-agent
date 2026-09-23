@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -275,6 +276,12 @@ type OTLPConfig struct {
 	Labels   map[string]string `yaml:"labels"`
 }
 
+// priceYAML is one `pricing` entry: USD per 1M tokens.
+type priceYAML struct {
+	Input  *float64 `yaml:"input"`
+	Output *float64 `yaml:"output"`
+}
+
 type rawConfig struct {
 	DisabledAgents      []string              `yaml:"disabled_agents"`
 	SensitiveGlobs      []string              `yaml:"sensitive_globs"`
@@ -297,6 +304,9 @@ type rawConfig struct {
 	Advisor             AdvisorYAML           `yaml:"advisor"`
 	Retention           RetentionYAML         `yaml:"retention"`
 	OTLP                OTLPConfig            `yaml:"otlp"`
+	// Pricing entries are decoded one by one (parsePricing) so a single
+	// malformed entry is dropped instead of failing the whole overlay.
+	Pricing map[string]yaml.Node `yaml:"pricing"`
 }
 
 type Config struct {
@@ -321,6 +331,13 @@ type Config struct {
 	Fleet             FleetConfig
 	Advisor           AdvisorConfig
 	OTLP              OTLPConfig
+	// Pricing is the operator price table, model id or prefix → USD per 1M
+	// tokens [input, output]. It wins over the built-in table.
+	Pricing map[string][2]float64
+	// PricingSkipped names each dropped `pricing` entry and why. The loader
+	// stays silent (the watcher reloads every 2s); callers log these once
+	// when they apply the table.
+	PricingSkipped []string
 }
 
 // normalizeAgentKinds fills the zero value with the default kind so tagger
@@ -459,6 +476,7 @@ func loadWithOverlayError(explicitPath string) (Config, error, error) {
 			ManagedModel: raw.Advisor.ManagedModel,
 		},
 	}
+	cfg.Pricing, cfg.PricingSkipped = parsePricing(raw.Pricing)
 	for i := range cfg.ResourceControl.WorkspaceOverrides {
 		cfg.ResourceControl.WorkspaceOverrides[i].CwdPrefix = expandPath(cfg.ResourceControl.WorkspaceOverrides[i].CwdPrefix)
 	}
@@ -473,6 +491,42 @@ func loadWithOverlayError(explicitPath string) (Config, error, error) {
 	}
 	return cfg, overlayMalformed, nil
 }
+
+// parsePricing turns the `pricing` overlay into the price table. An entry
+// that is not an {input, output} map, lacks either price, or has a price
+// that is not a finite number > 0 is dropped and named in skipped; the rest
+// are kept, so one typo neither rejects the overlay nor unprices every model.
+func parsePricing(raw map[string]yaml.Node) (map[string][2]float64, []string) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	ids := make([]string, 0, len(raw))
+	for id := range raw {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	prices := make(map[string][2]float64, len(raw))
+	var skipped []string
+	for _, id := range ids {
+		node := raw[id]
+		var p priceYAML
+		switch {
+		case strings.TrimSpace(id) == "":
+			skipped = append(skipped, fmt.Sprintf("%q: empty model id", id))
+		case node.Decode(&p) != nil:
+			skipped = append(skipped, fmt.Sprintf("%s: not an {input, output} map of numbers", id))
+		case p.Input == nil || p.Output == nil:
+			skipped = append(skipped, fmt.Sprintf("%s: input and output are both required", id))
+		case !validPrice(*p.Input) || !validPrice(*p.Output):
+			skipped = append(skipped, fmt.Sprintf("%s: prices must be finite numbers > 0", id))
+		default:
+			prices[id] = [2]float64{*p.Input, *p.Output}
+		}
+	}
+	return prices, skipped
+}
+
+func validPrice(v float64) bool { return v > 0 && !math.IsInf(v, 0) }
 
 // Validate rejects values that would crash or silently break subsystems at
 // runtime. A non-positive sample interval reaches time.NewTicker, which panics

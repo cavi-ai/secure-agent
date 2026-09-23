@@ -5,8 +5,9 @@ package daemon
 // enroll` writes fleet.webhooks. The daemon previously required a relaunch to
 // pick either up — a Settings toggle or an enrollment should take effect
 // within one poll cycle, so a light file watcher swaps the advisor stack and
-// the fleet sink set live. Guard modes/fingerprint modes are read per-request
-// by their own subsystems; paths and firewall stay boot-static.
+// the fleet sink set live. The operator price table (`pricing`) follows the
+// same poll. Guard modes/fingerprint modes are read per-request by their own
+// subsystems; paths and firewall stay boot-static.
 import (
 	"context"
 	"encoding/json"
@@ -19,6 +20,7 @@ import (
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/api"
+	"github.com/cavi-ai/secure-agent/daemon/internal/collect"
 	"github.com/cavi-ai/secure-agent/daemon/internal/config"
 	"github.com/cavi-ai/secure-agent/daemon/internal/fleet"
 	"github.com/cavi-ai/secure-agent/daemon/internal/resource"
@@ -53,17 +55,19 @@ type configWatchDeps struct {
 	initialConfig   *config.Config
 }
 
-// watchConfig polls config.yaml and re-configures the advisor stack and the
-// fleet sinks live on change. Poll (not fsnotify): the menubar writes
-// atomically, so a 2s check is cheap and race-proof across save/rename.
-// Paths, firewall, and guard are deliberately boot-static.
+// watchConfig polls config.yaml and re-configures the advisor stack, the
+// fleet sinks, resource control and the price table live on change. Poll
+// (not fsnotify): the menubar writes atomically, so a 2s check is cheap and
+// race-proof across save/rename. Paths, firewall, and guard are deliberately
+// boot-static.
 func watchConfig(ctx context.Context, path string, deps configWatchDeps) {
 
-	var lastAdvisorKey, lastFleetKey, lastResourceKey string
+	var lastAdvisorKey, lastFleetKey, lastResourceKey, lastPricingKey string
 	if deps.initialConfig != nil {
 		lastAdvisorKey = advisorConfigKey(deps.initialConfig.Advisor)
 		lastFleetKey = fleetConfigKey(deps.initialConfig.Fleet)
 		lastResourceKey = resourceConfigKey(deps.initialConfig.ResourceControl)
+		lastPricingKey = pricingConfigKey(*deps.initialConfig)
 	}
 	check := func() {
 		// LoadStrict, not Load: a malformed overlay makes Load substitute
@@ -102,6 +106,11 @@ func watchConfig(ctx context.Context, path string, deps configWatchDeps) {
 			log.Printf("fleet config applied live (%d webhook(s), heartbeat %ds)",
 				len(data.Fleet.Webhooks), data.Fleet.HeartbeatIntervalSec)
 		}
+		if key := pricingConfigKey(data); key != lastPricingKey {
+			lastPricingKey = key
+			applyPricing(data)
+			log.Printf("pricing config applied live (%d model(s))", len(data.Pricing))
+		}
 		if key := resourceConfigKey(data.ResourceControl); key != lastResourceKey {
 			lastResourceKey = key
 			if deps.resourceControl != nil {
@@ -131,6 +140,25 @@ func watchConfig(ctx context.Context, path string, deps configWatchDeps) {
 			check()
 		}
 	}
+}
+
+// applyPricing installs the operator price table and logs each entry the
+// loader dropped. Called at boot and by the watcher only on a change, so a
+// malformed entry is logged once per load, not once per poll.
+func applyPricing(cfg config.Config) {
+	for _, s := range cfg.PricingSkipped {
+		log.Printf("config: pricing entry ignored (%s)", s)
+	}
+	collect.SetUserPrices(cfg.Pricing)
+}
+
+// pricingConfigKey fingerprints the price table and its dropped entries.
+func pricingConfigKey(c config.Config) string {
+	b, _ := json.Marshal(struct {
+		Prices  map[string][2]float64
+		Skipped []string
+	}{c.Pricing, c.PricingSkipped}) // prices are finite after config parsing
+	return string(b)
 }
 
 func resourceConfigKey(c config.ResourceControlConfig) string {
