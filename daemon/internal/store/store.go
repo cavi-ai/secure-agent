@@ -30,6 +30,7 @@ const (
 	maxFlags            = 10000 // flags are insert-only like events; cap them too
 	maxResourceEpisodes = 500   // bounded full-family pressure snapshots
 	maxAdvisorPlans     = 2000  // one plan per subject
+	maxOperatorLabels   = 5000  // operator judgments kept for recall
 	episodeSettleWindow = 30 * time.Second
 )
 
@@ -239,6 +240,15 @@ func Open(dbPath, jsonlPath string) (*Store, error) {
 			plan_json TEXT,
 			created_at TEXT
 		);`,
+		// Operator labels: every judgment (allow, mute, guard answer, kill,
+		// explicit mark) on a finding's subject, for similar-case recall.
+		`CREATE TABLE IF NOT EXISTS operator_labels (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			kind TEXT, rule TEXT, agent TEXT, pattern TEXT,
+			label TEXT, reason TEXT, source TEXT, created_at TEXT
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_operator_labels_agent_pattern ON operator_labels(agent, pattern);`,
+		`CREATE INDEX IF NOT EXISTS idx_operator_labels_rule ON operator_labels(rule);`,
 		`CREATE TABLE IF NOT EXISTS resource_episodes (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			captured_at TEXT NOT NULL,

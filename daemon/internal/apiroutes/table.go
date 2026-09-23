@@ -97,6 +97,7 @@ var Table = []Route{
 	{Path: "/files/reveal", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
 	{Path: "/files/open", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
 	{Path: "/advisor/plan", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
+	{Path: "/labels", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
 }
 
 // ConsoleAllowed reports whether the console token admits path on the proxy

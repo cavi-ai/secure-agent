@@ -62,3 +62,33 @@ test('status lines: pending disables asking; stale and disabled explain themselv
 test('planSlotHTML escapes the subject', () => {
   assert.ok(planSlotHTML('file:/w/"x"').includes('data-plan-subject="file:/w/&quot;x&quot;"'));
 });
+
+const { labelsLineHTML, markButtonsHTML, labelsHTML } = ctx;
+
+test('labels line counts routine and not-ok judgments, empty when none', () => {
+  assert.equal(labelsLineHTML({ ok: 0, not_ok: 0 }), '');
+  assert.equal(labelsLineHTML(null), '');
+  assert.ok(labelsLineHTML({ ok: 3, not_ok: 1 }).includes('You marked similar cases 3 as routine and 1 as not ok.'));
+});
+
+test('mark buttons carry the subject, escaped', () => {
+  const html = markButtonsHTML('file:/w/"x"');
+  assert.ok(html.includes('data-action="mark-label" data-subject="file:/w/&quot;x&quot;" data-label="ok"'));
+  assert.ok(html.includes('data-label="not_ok"'));
+});
+
+test('history: similar judgments escaped, suggestion button only when offered', () => {
+  const labels = {
+    summary: { ok: 3, not_ok: 0 },
+    similar: [{ label: 'ok', source: 'mark', pattern: '/w/.npmrc', reason: 'npm <routine>', created_at: '2026-09-23T18:00:00Z' }],
+    suggestion: { label: 'ok', text: 'You marked this 3 times as routine for codex.', action_id: 'dismiss' },
+  };
+  const html = labelsHTML({ subject: 'flag:f1', labels, flag }, now);
+  assert.ok(html.includes('npm &lt;routine&gt;') && html.includes('Routine · mark · 2h ago · /w/.npmrc'));
+  assert.ok(html.includes('You marked this 3 times as routine for codex.'));
+  assert.ok(html.includes('data-action="explain-act" data-flag-id="f1" data-action-id="dismiss"'));
+  const notOffered = labelsHTML({ subject: 'flag:f1', labels: { ...labels, suggestion: { ...labels.suggestion, action_id: 'allow-path' } }, flag }, now);
+  assert.ok(!notOffered.includes('data-action-id="allow-path"'));
+  const empty = labelsHTML({ subject: 'flag:f1', labels: { summary: { ok: 0, not_ok: 0 }, similar: [] } }, now);
+  assert.ok(empty.includes('No earlier judgments on cases like this.') && empty.includes('data-action="mark-label"'));
+});

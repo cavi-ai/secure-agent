@@ -38,6 +38,9 @@ home is a trust failure. The advisor therefore speaks **loopback HTTP only**.
   withheld), the rule's 7- and 30-day counts, mutes and allowlist entries,
   and the rule's playbook. The plan may recommend only the served action ids
   it was offered; each still needs the operator's click.
+- Operator history (triage and plans): up to 5 of the operator's earlier
+  labels on similar cases, each with its label, source, age, rule, agent,
+  path or host, and the operator's own reason text.
 
 **Never** secret values. The firewall's known-secret registry stays salted
 HMAC; evidence strings are paths/hosts, not payloads. The model endpoint

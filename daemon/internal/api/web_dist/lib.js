@@ -243,6 +243,53 @@ function planSlotHTML(subject) {
     + `<div class="plan-slot" data-plan-subject="${escapeHTML(subject)}"><div class="loading-spinner">Loading the playbook…</div></div></section>`;
 }
 
+// labelsLineHTML: the operator's earlier judgments on the same case, "" when
+// there are none.
+function labelsLineHTML(summary) {
+  if (!summary) return '';
+  const parts = [];
+  if (summary.ok) parts.push(`${summary.ok} as routine`);
+  if (summary.not_ok) parts.push(`${summary.not_ok} as not ok`);
+  if (!parts.length) return '';
+  return `<p class="finding-labels">You marked similar cases ${escapeHTML(parts.join(' and '))}.</p>`;
+}
+
+// markButtonsHTML: Mark as routine / Mark as not ok for a subject.
+function markButtonsHTML(subject) {
+  const s = escapeHTML(subject);
+  return `<button class="btn btn-ghost btn-sm" data-action="mark-label" data-subject="${s}" data-label="ok">Mark as routine</button>`
+    + `<button class="btn btn-ghost btn-sm" data-action="mark-label" data-subject="${s}" data-label="not_ok">Mark as not ok</button>`;
+}
+
+// labelsHTML: the What to do drawer's history — summary, similar judgments,
+// the suggestion consistent labels earn (its action as the finding's served
+// button when offered), and the mark buttons.
+function labelsHTML(resp, nowMs) {
+  const l = resp && resp.labels;
+  if (!l) return '';
+  const now = nowMs || Date.now();
+  const flag = resp.flag;
+  const similar = (l.similar || []).map(x => `<li>${escapeHTML(x.label === 'ok' ? 'Routine' : 'Not ok')} · ${escapeHTML(x.source)} · `
+    + `${escapeHTML(fmtAge(x.created_at, now))} ago${x.pattern ? ' · ' + escapeHTML(x.pattern) : ''}${x.reason ? ' · ' + escapeHTML(x.reason) : ''}</li>`).join('');
+  let suggestion = '';
+  if (l.suggestion) {
+    const a = flag && flag.explain && (flag.explain.actions || []).find(x => x.id === l.suggestion.action_id);
+    const btn = a && EXPLAIN_CONSOLE_ACTIONS.includes(a.id)
+      ? `<button class="btn btn-primary btn-sm" data-action="explain-act" data-flag-id="${escapeHTML(flag.id)}" data-action-id="${escapeHTML(a.id)}"`
+        + `${a.body && typeof a.body.host === 'string' ? ` data-host="${escapeHTML(a.body.host)}"` : ''} title="${escapeHTML(a.consequence)}">${escapeHTML(explainActionLabel(flag, a))}</button>`
+      : '';
+    suggestion = `<div class="plan-suggestion"><p>${escapeHTML(l.suggestion.text)}</p>${btn}</div>`;
+  }
+  return `
+    <div class="plan-labels">
+      <h5>Your history</h5>
+      ${labelsLineHTML(l.summary) || '<p class="plan-status">No earlier judgments on cases like this.</p>'}
+      ${similar ? `<ul class="plan-list">${similar}</ul>` : ''}
+      ${suggestion}
+      <div class="endpoint-actions">${markButtonsHTML(resp.subject)}</div>
+    </div>`;
+}
+
 // planHTML renders a /advisor/plan response: the advisor's plan when there is
 // one (why, prevention, behavior, remediation, recommended actions as
 // buttons), the rule's playbook, and the ask button. Pure; everything is
@@ -300,6 +347,7 @@ function planHTML(resp, nowMs) {
       ${advisor}
       ${p ? `<details class="plan-playbook"><summary>Playbook: ${escapeHTML(pb.title)}</summary>${playbook}</details>` : `<div class="plan-playbook">${playbook}</div>`}
       <div class="plan-ask">${ask}</div>
+      ${labelsHTML(resp, nowMs)}
     </div>`;
 }
 
