@@ -193,6 +193,7 @@ func (r *Resolver) Resolve(e *event.Event) string {
 	}
 	if id, ok := r.byPID[e.PID]; ok {
 		r.touchLocked(id, e.TS)
+		e.SessionID = id
 		return id
 	}
 	info, ok := r.tagger.Tag(e.PID)
@@ -590,6 +591,59 @@ func (r *Resolver) joinTreeLocked(sess *model.Session, pid int32, info agents.Ag
 		sess.ParentID = r.orchestratorForLocked(root, info.Name)
 	}
 	r.byRoot[root] = sess.ID
+}
+
+// JoinTranscriptPID ties a transcript session to the process that holds its
+// transcript open (a codex process appending to its rollout) — the join the
+// harness+workspace key misses when an orchestrated process runs in another
+// cwd. As joinTreeLocked: the tagged family root becomes the session's root,
+// a process-tree row holding that root is rekeyed into the session, and the
+// session nests under the orchestrator otherwise. The newest conversation
+// holds the root: a session started before the transcript session already
+// holding it records the root on its row but does not take it. Repeat calls
+// are no-ops; untagged pids and unknown sessions are ignored.
+func (r *Resolver) JoinTranscriptPID(id string, pid int32) {
+	if id == "" || pid <= 0 {
+		return
+	}
+	info, ok := r.tagger.Tag(pid)
+	if !ok {
+		return
+	}
+	root := info.RootPID
+	if root == 0 {
+		root = info.PID
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	sess, ok := r.st.GetSession(id)
+	if !ok {
+		return
+	}
+	old, held := r.byRoot[root]
+	if held && old == id && sess.RootPID == root {
+		r.byPID[pid] = id
+		return
+	}
+	if held && old != id && r.confidenceLocked(old) != model.ConfProcessTree {
+		if newer, ok := r.st.GetSession(old); ok && newer.StartedAt.After(sess.StartedAt) {
+			if sess.RootPID == root {
+				return
+			}
+			sess.RootPID = root
+			if ri, ok := r.tagger.Tag(root); ok && !ri.StartedAt.IsZero() {
+				sess.RootStartedAt = ri.StartedAt.UTC().Format(time.RFC3339Nano)
+			}
+			r.st.UpsertSession(sess)
+			r.emitLocked(sess)
+			return
+		}
+	}
+	r.joinTreeLocked(&sess, pid, info)
+	r.st.UpsertSession(sess)
+	if stored, ok := r.st.GetSession(id); ok {
+		r.emitLocked(stored)
+	}
 }
 
 // isTraceKind reports the agent-semantic kinds only trace collectors emit.

@@ -492,8 +492,8 @@ Each check has a `state` of `pass`, `fail` or `skip`, a `detail`, and on `fail` 
 | `hook-registered` | `~/.claude/settings.json` does not register the guard hook for `PreToolUse` and `PostToolUse` | home directory unknown |
 | `hook-active` | agents are running and no hook event landed in 24h | no agents |
 | `file-telemetry` | root ES service `not-loaded`, in a `spawn`/`exit` state, or `running` with agents active and the spool unwritten for over 10 min (past grace) | file telemetry is not spool-based |
-| `collectors` | a collector is stopped or abandoned, or (with agents active) silent | grace |
-| `trace-coverage` | a harness has sessions since boot but no tool-call, turn or model-call rows | grace, or no sessions since boot |
+| `collectors` | a collector is stopped or abandoned, or (with agents active) silent; passes with each polling collector's database, watermark and last poll | grace |
+| `trace-coverage` | a harness has transcript- or hook-confidence sessions seen since boot (an ended one only with an event since boot) but no tool-call, turn or model-call rows; passes listing each traced harness with its session count | grace, or no such sessions since boot |
 | `hermes` | a Hermes `state.db` could not be read (detail names the database and error); passes with each database's message watermark and the last poll time | no `state.db` under the Hermes root (`not installed`) |
 | `session-identity` | under 80% of sessions carry a harness | no sessions |
 | `session-repo` | under 50% of named sessions with a workspace since boot carry a repo, or named sessions since boot carry no workspace at all | grace, or no named sessions since boot |

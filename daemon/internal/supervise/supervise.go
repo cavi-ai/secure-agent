@@ -41,6 +41,12 @@ type Health struct {
 	// nothing. Posture compares LastProduced against a per-collector window
 	// to say "this monitor is blind".
 	LastProduced string `json:"last_produced,omitempty"`
+	// Source, LastPoll and Watermark describe a polling collector: the
+	// database it reads, when it last polled (RFC3339) and the highest row
+	// position it has read.
+	Source    string `json:"source,omitempty"`
+	LastPoll  string `json:"last_poll,omitempty"`
+	Watermark int64  `json:"watermark,omitempty"`
 }
 
 // PermanentError marks a failure that cannot succeed on retry: an
@@ -157,6 +163,17 @@ func (r *Registry) MarkProduced(name string) {
 	}
 	r.lastProduced[name] = now
 	r.mu.Unlock()
+}
+
+// MarkPolled records a polling collector's source, watermark and poll time.
+func (r *Registry) MarkPolled(name, source string, watermark int64) {
+	if r == nil {
+		return
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	r.update(name, func(h *Health) {
+		h.Source, h.Watermark, h.LastPoll = source, watermark, now
+	})
 }
 
 // Snapshot returns a copy of every tracked worker's health.

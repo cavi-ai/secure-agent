@@ -97,6 +97,8 @@ By default the daemon (`secure-agentd`) runs as a child process of the menu bar 
    | openclaw | `<openclaw_home>/lcm.db` (SQLite) | tool calls (status; durations in whole seconds), turns, model calls (tokens + cost, when openclaw records step tokens) |
    | Hermes Agent | `<hermes_home>/state.db`, `<hermes_home>/profiles/*/state.db` (SQLite) | tool calls (with durations; error only when `finish_reason` says so), turns, model calls (per model per session from `session_model_usage` when present, else per assistant message with `token_count`; cost recorded or priced from the model id) |
 
+   A codex process holds its rollout open for append. Every 30 s the daemon lists the rollouts open in live codex processes (`lsof -p … -Fn` on macOS, `/proc/<pid>/fd` on Linux; `openfiles.go`) and joins each rollout's session to the process tree holding it: that tree's process-tree session is merged into it and the tree's later events resolve to it.
+
    Uncovered-by-trace harnesses (any other agent CLI) still get process, network and resource visibility, and every tailed log is redaction-scanned for secrets.
 
 ### Event Bus & Storage

@@ -785,3 +785,132 @@ func TestNoteTranscriptSightingCarriesRepoBranchParent(t *testing.T) {
 		t.Fatalf("session = %+v (ok=%v)", s, ok)
 	}
 }
+
+// codexRolloutTree is an orchestrated codex process: its cwd is the
+// orchestrator's home while its rollout names another workspace, so the
+// harness+workspace join never matches.
+func codexRolloutTree() fakeProcs {
+	started := time.Now().Add(-time.Hour)
+	return fakeProcs{
+		100: {PID: 100, PPID: 1, Exe: "/opt/homebrew/bin/codex", CWD: "/Users/u/.openclaw", StartTime: started},
+		200: {PID: 200, PPID: 100, Exe: "/bin/zsh", CWD: "/teams/x", StartTime: started.Add(time.Minute)},
+	}
+}
+
+// The process holding a rollout open joins that rollout's session: the
+// process-tree row for its root is rekeyed into it and the tree resolves to it.
+func TestJoinTranscriptPIDRekeysProcessTreeSession(t *testing.T) {
+	r, st := testResolver(t, codexRolloutTree())
+	e := event.Event{Kind: event.KindFileOpen, PID: 100, TS: time.Now(), Path: "/teams/x/a"}
+	procID := r.Resolve(&e)
+	st.PutEvent(e)
+	r.NoteTranscriptSession("rollout-a", "codex", "/teams/x", time.Now())
+	if n := len(st.ListSessions(store.SessionFilter{})); n != 2 {
+		t.Fatalf("sessions before join = %d, want 2 (workspaces differ)", n)
+	}
+
+	r.JoinTranscriptPID("rollout-a", 100)
+
+	sessions := st.ListSessions(store.SessionFilter{})
+	if len(sessions) != 1 {
+		t.Fatalf("sessions = %+v, want one", sessions)
+	}
+	s := sessions[0]
+	if s.ID != "rollout-a" || s.RootPID != 100 || s.RootStartedAt == "" || s.Confidence != model.ConfTranscript || s.Workspace != "/teams/x" {
+		t.Fatalf("session = %+v, want rollout-a rooted at 100, transcript, /teams/x", s)
+	}
+	for _, ev := range st.RecentEvents(10) {
+		if ev.Path == "/teams/x/a" && ev.SessionID != "rollout-a" {
+			t.Fatalf("process-tree event on %q, want rollout-a (was %q)", ev.SessionID, procID)
+		}
+	}
+	if id := resolvePID(t, r, 200); id != "rollout-a" {
+		t.Fatalf("child pid resolves to %q, want rollout-a", id)
+	}
+}
+
+// A repeat join for the same session and pid changes nothing and emits nothing.
+func TestJoinTranscriptPIDRepeatIsNoop(t *testing.T) {
+	r, st := testResolver(t, codexRolloutTree())
+	r.NoteTranscriptSession("rollout-a", "codex", "/teams/x", time.Now())
+	r.JoinTranscriptPID("rollout-a", 100)
+	before, _ := st.GetSession("rollout-a")
+	emitted := 0
+	r.OnSessionChange = func(model.Session) { emitted++ }
+
+	r.JoinTranscriptPID("rollout-a", 100)
+
+	after, _ := st.GetSession("rollout-a")
+	if emitted != 0 || after != before {
+		t.Fatalf("repeat join emitted %d, row %+v → %+v; want a no-op", emitted, before, after)
+	}
+	if n := len(st.ListSessions(store.SessionFilter{})); n != 1 {
+		t.Fatalf("sessions = %d, want 1", n)
+	}
+}
+
+// A codex process that moves to a newer rollout (codex resume): the newer
+// session takes the root, the earlier keeps its row and events, and joining
+// the earlier again does not take the root back.
+func TestJoinTranscriptPIDNewerRolloutTakesRoot(t *testing.T) {
+	r, st := testResolver(t, codexRolloutTree())
+	e := event.Event{Kind: event.KindFileOpen, PID: 100, TS: time.Now(), Path: "/teams/x/a"}
+	r.Resolve(&e)
+	st.PutEvent(e)
+	r.NoteTranscriptSession("rollout-a", "codex", "/teams/x", time.Now().Add(-10*time.Minute))
+	r.JoinTranscriptPID("rollout-a", 100)
+
+	r.NoteTranscriptSession("rollout-b", "codex", "/teams/x", time.Now())
+	r.JoinTranscriptPID("rollout-b", 100)
+	r.JoinTranscriptPID("rollout-a", 100)
+
+	a, okA := st.GetSession("rollout-a")
+	b, okB := st.GetSession("rollout-b")
+	if !okA || !okB || a.RootPID != 100 || b.RootPID != 100 {
+		t.Fatalf("a = %+v %v, b = %+v %v; want both rows rooted at 100", a, okA, b, okB)
+	}
+	kept := false
+	for _, ev := range st.RecentEvents(10) {
+		if ev.Path == "/teams/x/a" && ev.SessionID == "rollout-a" {
+			kept = true
+		}
+	}
+	if !kept {
+		t.Fatal("the earlier session lost its events")
+	}
+	if id := resolvePID(t, r, 100); id != "rollout-b" {
+		t.Fatalf("root pid resolves to %q, want the newer rollout-b", id)
+	}
+	if id := resolvePID(t, r, 200); id != "rollout-b" {
+		t.Fatalf("child pid resolves to %q, want the newer rollout-b", id)
+	}
+}
+
+// A pid the tagger does not name is ignored.
+func TestJoinTranscriptPIDIgnoresUntaggedPID(t *testing.T) {
+	r, st := testResolver(t, fakeProcs{
+		300: {PID: 300, PPID: 1, Exe: "/usr/bin/vim", CWD: "/teams/x", StartTime: time.Now().Add(-time.Hour)},
+	})
+	r.NoteTranscriptSession("rollout-a", "codex", "/teams/x", time.Now())
+	r.JoinTranscriptPID("rollout-a", 300)
+	r.JoinTranscriptPID("rollout-a", 999)
+	if s, _ := st.GetSession("rollout-a"); s.RootPID != 0 {
+		t.Fatalf("session = %+v, want no root", s)
+	}
+	if len(r.byRoot) != 0 || len(r.byPID) != 0 {
+		t.Fatalf("byRoot = %v byPID = %v, want empty", r.byRoot, r.byPID)
+	}
+}
+
+// Every event from a known pid carries its session id, not only the first:
+// the drain loop stores e, not Resolve's return value.
+func TestResolveStampsEveryEventFromCachedPID(t *testing.T) {
+	r, _ := testResolver(t, codexRolloutTree())
+	first := event.Event{Kind: event.KindConnOpen, PID: 100, TS: time.Now()}
+	id := r.Resolve(&first)
+	second := event.Event{Kind: event.KindConnClose, PID: 100, TS: time.Now()}
+	r.Resolve(&second)
+	if id == "" || first.SessionID != id || second.SessionID != id {
+		t.Fatalf("first=%q second=%q, want both %q", first.SessionID, second.SessionID, id)
+	}
+}

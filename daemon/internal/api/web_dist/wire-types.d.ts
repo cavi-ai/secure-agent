@@ -227,6 +227,9 @@ export interface Health {
   restarts: number;
   last_error?: string;
   last_produced?: string;
+  source?: string;
+  last_poll?: string;
+  watermark?: number;
 }
 
 export interface ESServiceSnapshot {
