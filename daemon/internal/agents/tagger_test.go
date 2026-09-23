@@ -194,6 +194,41 @@ func TestTaggedPIDsRootAndOrphan(t *testing.T) {
 	}
 }
 
+// Tag reports the family root: the highest ancestor matching the same agent
+// definition, and it agrees with TaggedPIDs.
+func TestTagReportsFamilyRoot(t *testing.T) {
+	fake := fakeProcs{
+		100: {PID: 100, PPID: 1, Exe: "/opt/homebrew/bin/codex"},
+		101: {PID: 101, PPID: 100, Exe: "/bin/zsh"},
+		200: {PID: 200, PPID: 1, Exe: "/opt/homebrew/bin/codex"},
+		201: {PID: 201, PPID: 200, Exe: "/opt/homebrew/lib/codex/bin/codex"},
+		202: {PID: 202, PPID: 201, Exe: "/bin/zsh"},
+		300: {PID: 300, PPID: 1, Exe: "/usr/local/bin/claude"},
+		301: {PID: 301, PPID: 300, Exe: "/opt/homebrew/bin/codex"},
+		302: {PID: 302, PPID: 301, Exe: "/bin/sh"},
+	}
+	c, _ := config.Load("/nonexistent")
+	tg := New(c, fake)
+	tg.Refresh()
+	// A pid spawned after the refresh is tagged through the process source.
+	fake[203] = ProcInfo{PID: 203, PPID: 202, Exe: "/bin/zsh"}
+
+	want := map[int32]int32{100: 100, 101: 100, 200: 200, 201: 200, 202: 200, 203: 200, 301: 301, 302: 301}
+	for pid, root := range want {
+		info, ok := tg.Tag(pid)
+		if !ok || info.RootPID != root {
+			t.Fatalf("Tag(%d) = root %d, %v; want %d", pid, info.RootPID, ok, root)
+		}
+	}
+	tagged := tg.TaggedPIDs()
+	for _, pid := range []int32{101, 202, 203, 302} {
+		info, _ := tg.Tag(pid)
+		if tagged[pid].RootPID != info.RootPID {
+			t.Fatalf("pid %d: TaggedPIDs root %d, Tag root %d", pid, tagged[pid].RootPID, info.RootPID)
+		}
+	}
+}
+
 func TestRefreshIntervalIdleVsBusy(t *testing.T) {
 	if RefreshInterval(false) != 5*time.Second {
 		t.Fatalf("idle interval = %s, want 5s", RefreshInterval(false))

@@ -65,6 +65,30 @@ func TestResolveProcessTreeTier(t *testing.T) {
 	}
 }
 
+// A tagged child process (a shell the harness spawned, in another cwd) joins
+// its harness's session: one row, keyed, rooted and scoped on the harness.
+func TestChildProcessJoinsHarnessSession(t *testing.T) {
+	rootStart := time.Now().Add(-time.Hour)
+	r, st := testResolver(t, fakeProcs{
+		100: {PID: 100, PPID: 1, Exe: "/opt/homebrew/bin/codex", CWD: "/repo", StartTime: rootStart},
+		200: {PID: 200, PPID: 100, Exe: "/bin/zsh", CWD: "/repo/sub", StartTime: rootStart.Add(time.Minute)},
+	})
+	child := resolvePID(t, r, 200)
+	root := resolvePID(t, r, 100)
+	want := ProcSessionID(100, rootStart)
+	if child != want || root != want {
+		t.Fatalf("child=%q root=%q, want both %q", child, root, want)
+	}
+	sessions := st.ListSessions(store.SessionFilter{})
+	if len(sessions) != 1 {
+		t.Fatalf("sessions = %d, want 1: %+v", len(sessions), sessions)
+	}
+	s := sessions[0]
+	if s.RootPID != 100 || s.Workspace != "/repo" || s.RootStartedAt != rootStart.UTC().Format(time.RFC3339Nano) {
+		t.Fatalf("session = %+v, want root 100 in /repo started %s", s, rootStart)
+	}
+}
+
 func TestResolveHookStampedEvent(t *testing.T) {
 	r, st := testResolver(t, fakeProcs{
 		100: {PID: 100, PPID: 1, Exe: "/usr/local/bin/claude", CWD: "/repo", StartTime: time.Now()},

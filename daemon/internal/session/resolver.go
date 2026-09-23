@@ -203,6 +203,13 @@ func (r *Resolver) Resolve(e *event.Event) string {
 	}
 	id, ok := r.byRoot[root]
 	if !ok {
+		// The session is the family root's: a child process (a shell the
+		// harness spawned) must not lend it its own start time or cwd.
+		if root != info.PID {
+			if rootInfo, tagged := r.tagger.Tag(root); tagged {
+				info = rootInfo
+			}
+		}
 		// Adopt a transcript session already known for this harness+workspace
 		// (the transcript may have been tailed before the process tree was
 		// sampled). Otherwise mint a provisional process-tree id. Either way
