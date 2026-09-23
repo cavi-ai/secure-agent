@@ -82,6 +82,7 @@ By default the daemon (`secure-agentd`) runs as a child process of the menu bar 
    - Runs Layer-5 credential redaction patterns to strip secrets (JWTs, API tokens, private keys) before event persistence.
    - **Trace parsing** turns harness transcripts into agent-semantic events (tool calls, model calls, turns) — see the coverage table below. No transcript content ever crosses into an event: only tool names, durations, model ids and token counts.
    - **opencode** keeps no JSONL; its trace lives in a SQLite database and is read by a separate **read-only, watermarked poller** (`opencode_trace.go`) — never writes, never locks the app out, bounded rows per poll.
+   - **openclaw** keeps its conversations in `lcm.db` (SQLite) in its state directory, read by the same kind of read-only, watermarked poller (`openclaw_trace.go`); the watermark persists beside the store. Each conversation is a session (`openclaw:<agent>` workspace label), ended when openclaw marks it inactive or archived.
 
    **Trace coverage** (what the daemon can actually see, by harness):
 
@@ -92,6 +93,7 @@ By default the daemon (`secure-agentd`) runs as a child process of the menu bar 
    | Cursor | `~/.cursor/projects/*/agent-transcripts/*/*.jsonl` | tool calls, turns (no timestamps/results/usage in the format) |
    | Antigravity (agy) | `~/.gemini/antigravity-cli/brain/*/.system_generated/logs/transcript_full.jsonl` | tool calls (status, no duration), turns |
    | opencode | `~/.local/share/opencode/opencode.db` (SQLite) | tool calls (with durations), model calls (tokens + cost) |
+   | openclaw | `<openclaw_home>/lcm.db` (SQLite) | tool calls (status; durations in whole seconds), turns, model calls (tokens + cost, when openclaw records step tokens) |
 
    Uncovered-by-trace harnesses (any other agent CLI) still get process, network and resource visibility, and every tailed log is redaction-scanned for secrets.
 

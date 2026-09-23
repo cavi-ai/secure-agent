@@ -117,7 +117,13 @@ retention:
 socket_path: "~/.config/secure-agent/daemon.sock"
 db_path: "~/.local/state/secure-agent/events.db"
 jsonl_path: "~/.local/state/secure-agent/events.jsonl"  # flag mirror; rotates at 8 MiB
+openclaw_home: "~/.openclaw"  # openclaw state directory holding lcm.db
 ```
+
+`openclaw_home` is unset by default. Unset, the daemon uses the first of
+`$OPENCLAW_STATE_DIR`, `$OPENCLAW_HOME/.openclaw`, `~/.openclaw`, and the
+`.openclaw` directory of a running openclaw process's executable path that
+holds `lcm.db`. Set, it is the only path read.
 
 Tilde (`~`) prefixes are automatically expanded to the user's home directory. Environment variables (e.g. `$HOME`) are also resolved automatically.
 

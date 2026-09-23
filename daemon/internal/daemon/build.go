@@ -767,6 +767,23 @@ func startCollectors(ctx context.Context, sup *supervise.Supervisor, supReg *sup
 		return oc.Run(c)
 	})
 
+	// openclaw keeps its conversations in lcm.db (SQLite) in its state
+	// directory, polled the same way (read-only, watermarked). The directory
+	// comes from openclaw_home, the environment, ~/.openclaw, or a running
+	// openclaw process's executable path; none found → a silent no-op that
+	// keeps looking. The watermark persists beside the store so history is
+	// read once.
+	ocl := collect.NewOpenclawCollector(b, "", 0)
+	ocl.Configured = cfg.OpenclawHome
+	ocl.StatePath = filepath.Join(filepath.Dir(cfg.DBPath), "openclaw-watermark.json")
+	ocl.ProcessExes = func() []string { return openclawExes(tagger) }
+	ocl.OnProduce = func() { supReg.MarkProduced("openclaw") }
+	ocl.OnSessionSeen = resolver.NoteTranscriptSession
+	ocl.OnSessionEnded = resolver.EndTranscriptSession
+	go sup.Run(ctx, "openclaw", func(c context.Context) error {
+		return ocl.Run(c)
+	})
+
 	if advisorStk.Load().Sub != nil {
 		go sup.Run(ctx, "advisor", func(c context.Context) error {
 			return advisorStk.Load().Sub.Run(c)
@@ -788,6 +805,18 @@ func startCollectors(ctx context.Context, sup *supervise.Supervisor, supReg *sup
 			}
 		})
 	}
+}
+
+// openclawExes lists the executable paths of tagged openclaw processes, the
+// last-resort locator for openclaw's state directory.
+func openclawExes(tagger *agents.Tagger) []string {
+	var out []string
+	for _, info := range tagger.TaggedPIDs() {
+		if info.Name == "openclaw" && info.ExePath != "" {
+			out = append(out, info.ExePath)
+		}
+	}
+	return out
 }
 
 // spoolServiceProbe wraps collect.ESServiceState with the live tailer's
