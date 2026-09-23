@@ -199,6 +199,9 @@ def main():
         dom_sticky = dump_dom(chrome, tmp, "?stickydemo")
         dom_drawerback = dump_dom(chrome, tmp, "?drawerbackdemo")
         dom_scope = dump_dom(chrome, tmp, "?scopedemo")
+        dom_pattern = dump_dom(chrome, tmp, "?patterndemo")
+        dom_patternact = dump_dom(chrome, tmp, "?patterndemo&patternact")
+        dom_patternphone = dump_dom(chrome, tmp, "?phonedemo&patterndemo")
 
         # --- session-first tab (P3) ---
         rail = dom.split('id="session-rail"', 1)[1].split('id="session-detail"', 1)[0]
@@ -912,6 +915,33 @@ def main():
               and '<strong>This machine</strong>' in dom and 'data-action="open-fda"' in attention
               and 'data-action="dismiss-flag" data-id="flag-5"' in attention,
               f"badge={attention_badge!r} tab={tab_badge!r} needs_you={needs_you}")
+
+        # --- patterns: a repeating finding is one card ---
+        pat_attn = dom_pattern.split('id="attention-center"', 1)[-1].split('id="security-findings-grid"', 1)[0]
+        pat_cards = re.findall(r'<article class="finding pattern-card [^"]*" data-pattern-key="([^"]+)">(.*?)</article>', pat_attn, re.S)
+        check("patterns: Attention shows the storm as one pattern card with its count, summary, 24 bars and open count",
+              len(pat_cards) == 1 and "323×" in pat_cards[0][1]
+              and "codex touched the login keychain 323 times" in pat_cards[0][1]
+              and len(re.findall(r'<i class="h\d"></i>', pat_cards[0][1])) == 24
+              and '<b class="pattern-open">323 open</b>' in pat_cards[0][1]
+              and 'data-id="flag-6"' not in pat_attn and 'data-id="flag-7"' not in pat_attn,
+              f"cards={len(pat_cards)}")
+        pat_flags = dom_pattern.split('id="flags-list"', 1)[-1].split('id="incidents-container"', 1)[0]
+        check("patterns: the Flags list leads with the pattern and has no card for a covered flag",
+              'data-pattern-key="codex|keychain-access|' in pat_flags
+              and pat_flags.index('data-pattern-key=') < pat_flags.index('class="flag-card')
+              and not any(f'data-id="{fid}"' in pat_flags or f'data-flag-id="{fid}"' in pat_flags for fid in ("flag-6", "flag-7"))
+              and "(PID 40844)" not in pat_flags and "(PID 51364)" not in pat_flags
+              and 'data-id="flag-3"' in pat_flags)
+        pat_reqs = pre(dom_patternact, "mock-requests")
+        check("patterns: dismiss-all posts the served flag_ids and the card shows 0 open",
+              'POST /flags/acknowledge body={"flag_ids":["flag-7","flag-6"]}' in pat_reqs
+              and re.search(r'<article class="finding pattern-card [^"]*"[^>]*>.*?<b class="pattern-open">0 open</b>', dom_patternact, re.S) is not None
+              and '<b class="pattern-open">323 open</b>' not in dom_patternact,
+              f"requests={pat_reqs!r}")
+        check("patterns: the page still fits a 375px phone, the pattern card's tab included",
+              'data-hscroll="sessions:0,agents:0,resources:0,findings:0"' in dom_patternphone,
+              (re.search(r'data-hscroll="[^"]*"', dom_patternphone) or [None])[0])
 
         if args.screenshot:
             shot_dir = os.path.abspath(args.screenshot)

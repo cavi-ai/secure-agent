@@ -457,6 +457,43 @@
       }
     }
   }
+  // patterndemo: a 323-flag codex keychain storm served as one pattern
+  // covering fixture flags flag-6 and flag-7; /posture carries one pattern
+  // item for it in the codex group instead of flag items.
+  const PATTERN_KEY = 'codex|keychain-access|/Users/dev/Library/Keychains/login.keychain-db';
+  if (MODE.includes('patterndemo')) {
+    const kc = (id, pid, msAgo) => ({
+      id, rule: 'keychain-access', severity: 2, ts: iso(msAgo), pid, agent: 'codex', session_id: 'sess-codex-9',
+      title: 'Agent touched the keychain',
+      evidence: [{ kind: 'keychain', label: '/Users/dev/Library/Keychains/login.keychain-db', sub: 'keychain access' }]
+    });
+    data['/flags'].push(kc('flag-6', 40844, 120000), kc('flag-7', 51364, 60000));
+    data['/patterns'] = [{
+      key: PATTERN_KEY, agent: 'codex', rule: 'keychain-access', title: 'Agent touched the keychain',
+      subject: { kind: 'keychain', label: '~/Library/Keychains/login.keychain-db', sub: 'keychain' },
+      count: 323, unacked: 323, first: iso(9 * 60000), last: iso(60000),
+      median_gap_s: 1.4, bursts: 320, cadence: 'in bursts a few seconds apart',
+      hourly: Array.from({ length: 24 }, (_, i) => (i === 23 ? 323 : 0)),
+      pids: [40844, 51364], pid_count: 2, sessions: ['sess-codex-9'], session_count: 1,
+      disposition: { state: 'warning', text: 'Needs a look', why: 'Agent touched the keychain' },
+      summary: 'codex touched the login keychain 323 times between 03:00 and 03:08 (2 processes, 1 session), in bursts a few seconds apart.',
+      actions: [
+        { id: 'mute-class', label: 'Dismiss this flag class', method: 'POST', path: '/mute',
+          consequence: '"Agent touched the keychain" stops raising flags for every agent.', body: { rule: 'keychain-access', host: '*' } },
+        { id: 'dismiss-all', label: 'Dismiss all 2 open', method: 'POST', path: '/flags/acknowledge',
+          consequence: 'These flags are marked reviewed.', body: { flag_ids: ['flag-7', 'flag-6'] } }
+      ],
+      flag_ids: ['flag-7', 'flag-6']
+    }];
+    const post = data['/posture'];
+    post.items.push({ severity: 2, kind: 'pattern', id: PATTERN_KEY, title: 'Agent touched the keychain — 323×' });
+    post.needs_you = post.items.length;
+    post.groups.find(g => g.key === 'agent:codex').items.unshift({
+      kind: 'pattern', priority: 1, id: PATTERN_KEY, count: 323, rule: 'keychain-access',
+      title: 'Agent touched the keychain', detail: data['/patterns'][0].summary,
+      disposition: data['/patterns'][0].disposition
+    });
+  }
   // ?theme=dark|light pins the console theme (screenshots); app.js reads it
   // from the same storage key the masthead toggle writes.
   const theme = new URLSearchParams(MODE).get('theme');
@@ -491,8 +528,21 @@
       return { status: 'ok' };
     }
     if (p === '/flags/acknowledge') {
-      data['/flags'] = data['/flags'].filter(f => f.id !== body.flag_id);
-      return { status: 'ok', acknowledged: true };
+      const ids = new Set(body.flag_ids || [body.flag_id]);
+      data['/flags'] = data['/flags'].filter(f => !ids.has(f.id));
+      // A pattern whose open flags were all acknowledged is served at 0
+      // open without its dismiss-all, and leaves the attention queue.
+      for (const pat of data['/patterns'] || []) {
+        if (!(pat.flag_ids || []).every(id => ids.has(id))) continue;
+        Object.assign(pat, { unacked: 0, disposition: { state: 'acknowledged', text: 'Reviewed', why: pat.title },
+          actions: pat.actions.filter(a => a.id !== 'dismiss-all') });
+        const post = data['/posture'];
+        post.groups = post.groups.map(g => ({ ...g, items: g.items.filter(it => !(it.kind === 'pattern' && it.id === pat.key)) }))
+          .filter(g => g.items.length);
+        post.items = post.items.filter(it => !(it.kind === 'pattern' && it.id === pat.key));
+        post.needs_you = post.items.length;
+      }
+      return { status: 'ok', acknowledged: true, count: ids.size };
     }
     if (p === '/guard/resolve') {
       data['/guard/pending'] = data['/guard/pending'].filter(prompt => prompt.id !== body.id);
@@ -584,7 +634,7 @@
         try { host = JSON.parse(opts.body).host; } catch { /* ignored */ }
         line += ' row=' + (document.querySelector(`#firewall-container [data-action="allowlist-remove"][data-host="${host}"]`) ? 1 : 0);
       }
-      if (MODE.includes('explaindemo') && opts.body) line += ' body=' + opts.body;
+      if ((MODE.includes('explaindemo') || MODE.includes('patterndemo')) && opts.body) line += ' body=' + opts.body;
       reqLog.push(line);
       stamp('mock-requests', reqLog.join('\n'));
       if (MODE.includes('resolvedemo') && p === '/incidents/status') {
@@ -610,6 +660,7 @@
         incidents: data['/incidents'],
         events: data['/events'],
         posture: data['/posture'],
+        patterns: data['/patterns'] || [],
         suggestions: data['/allowlist/suggestions'],
         mutes: data['/mute'],
         sessions: data['/sessions']
@@ -1023,7 +1074,13 @@
       const sessions = measure('sessions');
       setTimeout(() => {
         const agents = measure('agents');
-        setTimeout(() => parent.postMessage({ hscroll: `${sessions},${agents},${measure('resources')}` }, '*'), 300);
+        setTimeout(() => {
+          const resources = measure('resources');
+          // patterndemo: the Attention/Flags tab holding the pattern card.
+          const done = findings => parent.postMessage({ hscroll: `${sessions},${agents},${resources}${findings}` }, '*');
+          if (MODE.includes('patterndemo')) setTimeout(() => done(',' + measure('findings')), 300);
+          else done('');
+        }, 300);
       }, 300);
     }, 4000);
   } else if (MODE.includes('phonedemo')) {
@@ -1034,7 +1091,7 @@
       const frame = document.createElement('iframe');
       frame.width = '375';
       frame.height = '812';
-      frame.src = 'harness.html?phoneframe&raildemo';
+      frame.src = 'harness.html?phoneframe&raildemo' + (MODE.includes('patterndemo') ? '&patterndemo' : '');
       document.body.prepend(frame);
     });
   }
@@ -1209,6 +1266,12 @@
       burst();
       setTimeout(() => stamp('details-probe', d && d.isConnected && d.open ? `kept ${before} | ${meta()}` : 'lost'), 2600);
     }, 4300);
+  }
+  // patternact (with patterndemo): Findings open, press the pattern card's
+  // dismiss-all in the Attention queue.
+  if (MODE.includes('patternact')) {
+    setTimeout(() => document.querySelector('[data-tab="findings"]').click(), 4000);
+    setTimeout(() => document.querySelector('#attention-list .pattern-card [data-action-id="dismiss-all"]')?.click(), 9000);
   }
   // explainact: Findings open, press flag-2's first served action (the
   // recommended allow) late enough that the inline note and the toast are
