@@ -37,6 +37,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Console Resources: families group by harness, sorted by memory, with orchestrated children nested under their parent and infrastructure in one trailing, uncounted group.
 - Console Resources: families are named harness · repo@branch or harness · folder, never by pid; the Overview memory chart uses the same names.
 - Console Resources: View family opens a drawer with usage, processes, recent activity, findings and terminate actions instead of switching tabs.
+- Console Resources: the board fits a 375px phone at any font metrics; family rows and long labels wrap instead of overflowing.
 - Console: the Events tab lists the newest 50 rows, the family process table 12 and an Agents group 8 instances, each with Show more.
 - Console: pid-scoped event filtering opens the Events tab.
 - Console: "View session in timeline" opens the session in the Sessions tab with its trace, keeping Events scoped to it.

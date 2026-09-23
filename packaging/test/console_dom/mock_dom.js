@@ -832,6 +832,23 @@
       }, 800);
     }, 4000);
   }
+  // Phone-frame stress: the widest Resources text the board must hold at
+  // 375px — a 60-character unbroken folder label, a 5-digit process count,
+  // 128.0 GB of memory and 100.0% CPU on the machine strip.
+  if (MODE.includes('phoneframe')) {
+    const GB = 1024 ** 3;
+    const r = data['/resources'];
+    r.host = { ...r.host, total_memory_bytes: 128 * GB, system_cpu_percent: 100, agent_cpu_percent: 100, non_agent_cpu_percent: 100,
+      swap_total_bytes: 128 * GB, swap_used_bytes: 128 * GB };
+    r.sessions = [...r.sessions, {
+      key: '9900:1789470000000000000', name: 'claude', root_pid: 9900, root_started_at: '2026-09-09T13:00:00Z',
+      workspace: '/Users/dev/workspace/' + 'a-very-long-monorepo-folder-name-for-phone-width-stress-test'.padEnd(60, 'x'),
+      last_seen_at: iso(30000), rss_bytes: 128 * GB, cpu_percent: 100, process_count: 12345, orphan_count: 0,
+      estimated_reclaim_bytes: 128 * GB,
+      samples: [{ at: iso(1800000), rss_bytes: 100 * GB, cpu_percent: 100 }, { at: iso(0), rss_bytes: 128 * GB, cpu_percent: 100 }],
+      diagnoses: [{ code: 'heavy-memory', severity: 'critical', summary: 'Heavy memory use' }]
+    }];
+  }
   // manyevents: 120 loaded events — the Events tab shows the newest 50.
   if (MODE.includes('manyevents')) {
     for (let i = 0; i < 114; i++) {
