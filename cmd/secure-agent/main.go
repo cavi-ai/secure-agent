@@ -69,6 +69,10 @@ func main() {
 		handleAudit(client)
 	case "cost":
 		handleCost(client)
+	case "sessions":
+		handleSessions(client)
+	case "session":
+		handleSession(client)
 	case "doctor":
 		handleDoctor(client)
 	case "guard":
@@ -96,6 +100,8 @@ func printUsage() {
 	fmt.Println("  secure-agent events [--limit N]          List recent raw system events")
 	fmt.Println("  secure-agent audit [--limit N]           List the policy audit trail")
 	fmt.Println("  secure-agent cost [--since D] [--by G]   Model-call spend by repo|branch|harness|session|model (--json for the raw body)")
+	fmt.Println("  secure-agent sessions [--harness H] [--repo R] [--branch B] [--since D] [--status S] [--limit N]  List sessions (--json for the raw body)")
+	fmt.Println("  secure-agent session <id-or-prefix>      Print what one session did — tools, models, cost, files, hosts, guard decisions, findings — as markdown (--json for the JSON report)")
 	fmt.Println("  secure-agent doctor [--json]             Self-check: hooks, file telemetry, collectors, traces, sessions, pairing, pricing, retention, egress; exit 1 on any failure")
 	fmt.Println("  secure-agent kill <PID>                  Terminate an agent process tree by PID")
 	fmt.Println("  secure-agent fleet                       Show THIS node's fleet identity (node_id, hostname, version) — remote rollups live at the collector's /fleet")

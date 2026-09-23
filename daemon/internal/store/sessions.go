@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
@@ -301,14 +302,64 @@ func (s *Store) RekeySession(oldID, newID string) {
 
 // SessionFilter narrows ListSessions. Status "" returns the DEFAULT view:
 // live sessions (active+idle) first, then a bounded recent-ended tail —
-// not a wall of ended stubs.
+// not a wall of ended stubs. Harness, Repo, Branch and Since narrow either
+// view; every set field must match.
 type SessionFilter struct {
-	Status string // active | idle | ended | "" = live + recent ended
-	Limit  int    // 0 = 100
+	Status  string    // active | idle | ended | "" = live + recent ended
+	Harness string    // exact match; "" = any
+	Repo    string    // exact match; "" = any
+	Branch  string    // exact match; "" = any
+	Since   time.Time // started_at or last_seen_at at or after this; zero = any
+	Limit   int       // 0 = 100
+}
+
+// where renders the Harness/Repo/Branch/Since clauses as " AND …" terms.
+func (f SessionFilter) where() (string, []any) {
+	var clause strings.Builder
+	var args []any
+	for _, c := range []struct{ col, val string }{{"harness", f.Harness}, {"repo", f.Repo}, {"branch", f.Branch}} {
+		if c.val != "" {
+			clause.WriteString(" AND " + c.col + " = ?")
+			args = append(args, c.val)
+		}
+	}
+	if !f.Since.IsZero() {
+		since := f.Since.UTC().Format(time.RFC3339Nano)
+		clause.WriteString(" AND (datetime(started_at) >= datetime(?) OR datetime(last_seen_at) >= datetime(?))")
+		args = append(args, since, since)
+	}
+	return clause.String(), args
 }
 
 // defaultEndedTail caps how many ended sessions the default view carries.
 const defaultEndedTail = 25
+
+const sessionSelect = `SELECT id, harness, workspace, repo, branch, root_pid, root_started_at, parent_id, started_at, ended_at, last_seen_at, status, confidence FROM sessions`
+
+// scanSessions reads sessionSelect rows and closes them.
+func scanSessions(rows *sql.Rows) []model.Session {
+	defer rows.Close()
+	out := []model.Session{}
+	for rows.Next() {
+		var sess model.Session
+		var endedAt sql.NullString
+		var startedAt, lastSeen string
+		if err := rows.Scan(&sess.ID, &sess.Harness, &sess.Workspace, &sess.Repo, &sess.Branch,
+			&sess.RootPID, &sess.RootStartedAt, &sess.ParentID, &startedAt, &endedAt, &lastSeen,
+			&sess.Status, &sess.Confidence); err != nil {
+			continue
+		}
+		sess.StartedAt, _ = time.Parse(time.RFC3339Nano, startedAt)
+		sess.LastSeenAt, _ = time.Parse(time.RFC3339Nano, lastSeen)
+		if endedAt.Valid && endedAt.String != "" {
+			if t, err := time.Parse(time.RFC3339Nano, endedAt.String); err == nil {
+				sess.EndedAt = &t
+			}
+		}
+		out = append(out, sess)
+	}
+	return out
+}
 
 // ListSessions returns sessions. The default (Status "") ordering: live
 // sessions by last_seen DESC, then the most recent ended ones, with the
@@ -321,55 +372,49 @@ func (s *Store) ListSessions(f SessionFilter) []model.Session {
 	if limit <= 0 {
 		limit = 100
 	}
-	sel := `SELECT id, harness, workspace, repo, branch, root_pid, root_started_at, parent_id, started_at, ended_at, last_seen_at, status, confidence FROM sessions`
-	scan := func(rows *sql.Rows) []model.Session {
-		defer rows.Close()
-		out := []model.Session{}
-		for rows.Next() {
-			var sess model.Session
-			var endedAt sql.NullString
-			var startedAt, lastSeen string
-			if err := rows.Scan(&sess.ID, &sess.Harness, &sess.Workspace, &sess.Repo, &sess.Branch,
-				&sess.RootPID, &sess.RootStartedAt, &sess.ParentID, &startedAt, &endedAt, &lastSeen,
-				&sess.Status, &sess.Confidence); err != nil {
-				continue
-			}
-			sess.StartedAt, _ = time.Parse(time.RFC3339Nano, startedAt)
-			sess.LastSeenAt, _ = time.Parse(time.RFC3339Nano, lastSeen)
-			if endedAt.Valid && endedAt.String != "" {
-				if t, err := time.Parse(time.RFC3339Nano, endedAt.String); err == nil {
-					sess.EndedAt = &t
-				}
-			}
-			out = append(out, sess)
-		}
-		return out
+	extra, extraArgs := f.where()
+	query := func(statusClause string, statusArgs []any, n int) (*sql.Rows, error) {
+		args := append(append(statusArgs, extraArgs...), n)
+		return s.db.Query(sessionSelect+` WHERE `+statusClause+extra+` ORDER BY last_seen_at DESC LIMIT ?`, args...)
 	}
 	switch f.Status {
 	case "":
 		// Default view: live first, then the recent ended tail.
-		live := sel + ` WHERE status IN (?, ?) ORDER BY last_seen_at DESC LIMIT ?`
-		rows, err := s.db.Query(live, model.SessionActive, model.SessionIdle, limit)
+		rows, err := query(`status IN (?, ?)`, []any{model.SessionActive, model.SessionIdle}, limit)
 		if err != nil {
 			return nil
 		}
-		out := scan(rows)
+		out := scanSessions(rows)
 		if len(out) >= limit {
 			return out
 		}
-		endedRows, err := s.db.Query(sel+` WHERE status = ? ORDER BY last_seen_at DESC LIMIT ?`,
-			model.SessionEnded, min(defaultEndedTail, limit-len(out)))
+		endedRows, err := query(`status = ?`, []any{model.SessionEnded}, min(defaultEndedTail, limit-len(out)))
 		if err != nil {
 			return out
 		}
-		return append(out, scan(endedRows)...)
+		return append(out, scanSessions(endedRows)...)
 	default:
-		rows, err := s.db.Query(sel+` WHERE status = ? ORDER BY last_seen_at DESC LIMIT ?`, f.Status, limit)
+		rows, err := query(`status = ?`, []any{f.Status}, limit)
 		if err != nil {
 			return nil
 		}
-		return scan(rows)
+		return scanSessions(rows)
 	}
+}
+
+// sessionByID reads one session row directly, whatever its status or age.
+func (s *Store) sessionByID(id string) (model.Session, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rows, err := s.db.Query(sessionSelect+` WHERE id = ?`, id)
+	if err != nil {
+		return model.Session{}, false
+	}
+	got := scanSessions(rows)
+	if len(got) == 0 {
+		return model.Session{}, false
+	}
+	return got[0], true
 }
 
 func min(a, b int) int {

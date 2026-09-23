@@ -4,6 +4,7 @@
 //
 // Auto-actions (driven by ?domtest-flags):
 //   sessiondemo — after 4s, filter the timeline to session 7f3a9c21…
+//   exportdemo  — with raildemo: stub the clipboard, click Export at 9s
 (() => {
   const now = Date.now();
   const iso = (msAgo) => new Date(now - msAgo).toISOString();
@@ -512,6 +513,19 @@
         text: async () => JSON.stringify(body)
       };
     }
+    // Session report: /sessions/<id>/report?format=md (markdown text)
+    const repMatch = p.match(/^\/sessions\/([^/]+)\/report$/);
+    if (repMatch) {
+      const sid = decodeURIComponent(repMatch[1]);
+      const sess = (data['/sessions'] || []).find(s => s.id === sid);
+      const md = sess ? `# ${sess.harness} · ${sess.repo}@${sess.branch} — 2026-09-09 14:00 → live (1h 0m)\n` +
+        `Session \`${sess.id}\` · ${sess.status} · identity: ${sess.confidence}\n\n## Summary\n- Turns 1 · tool calls 2 (1 errors)\n` : 'session not found';
+      return {
+        ok: !!sess, status: sess ? 200 : 404,
+        json: async () => { throw new SyntaxError('not JSON'); },
+        text: async () => md
+      };
+    }
     // Session timeline: /sessions/<id>/timeline
     const tlMatch = p.match(/^\/sessions\/([^/]+)\/timeline/);
     if (tlMatch) {
@@ -567,6 +581,20 @@
   // waterfall renders.
   if (location.search.includes('raildemo')) {
     setTimeout(() => window.selectSession('sess-claude-1'), 4000);
+  }
+  // Auto-action: Export the selected session's report into a stubbed
+  // clipboard; the copied text lands on body[data-clipboard]. Fires late so
+  // the toast is still on screen when the DOM is dumped.
+  if (location.search.includes('exportdemo')) {
+    const record = (t) => { document.body.dataset.clipboard = t; };
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText: async (t) => record(t),
+        write: async (items) => record(await (await items[0].getType('text/plain')).text())
+      }
+    });
+    setTimeout(() => document.querySelector('.session-detail-head [data-action="copy-report"]').click(), 9000);
   }
   // Auto-action: resolve the guard request once; the unified queue must
   // refresh and remove that blocked tool call. The styled confirm dialog
