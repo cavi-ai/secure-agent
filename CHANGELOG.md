@@ -115,6 +115,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Advisor host pre-assessment still covers cloud, telemetry and unknown hosts.
 
 ### Fixed
+- Secret patterns count only where the match starts a token (not after a base64 or base64url character, except a JSON `\n`, `\t` or `\r` escape): vendor-key shapes inside encrypted reasoning items and other encoded blobs no longer raise secret-in-transcript or proxy findings.
 - Endpoint detail lists an allowance whose approved parent domain covers the host.
 - Endpoint drawer resolves sessions by id, so sessions beyond the newest 1,000 are attributed.
 - A second process in the same working directory gets its own session, never another root's.
