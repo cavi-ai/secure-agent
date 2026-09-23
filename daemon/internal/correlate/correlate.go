@@ -506,10 +506,11 @@ func (c *Correlator) Observe(e event.Event) []model.Flag {
 					e2.sessionID = e.SessionID
 				}
 				// Advisor pre-assessment is for endpoints a human must judge —
-				// never spend model calls on carriers or on hosts the daemon
-				// already names (Anthropic, OpenAI, AWS, …).
+				// never spend model calls on carriers or on the agents' own
+				// vendors (Anthropic, OpenAI, GitHub, registries). Cloud and
+				// telemetry hosts can front anyone, so they are still assessed.
 				if e2.count == 3 && c.onUninspected != nil &&
-					IdentifyCached(e.RemoteHost).Org == "" && InfraOrg(e.RemoteHost) == "" {
+					IdentifyCached(e.RemoteHost).Class != "vendor" && InfraOrg(e.RemoteHost) == "" {
 					c.onUninspected(info.Name, e.RemoteHost)
 				}
 			} else if len(c.uninspected) < maxUninspectedTracked {

@@ -348,6 +348,8 @@ def main():
               and 'data-action="bulk-allow" data-agent="openclaw" data-hosts="2607:6bc0::10"' in dom_uninsp)
         check("unknown section does not list vendor endpoints",
               "2607:6bc0::10" not in uninsp_unknown and "statsig.example.com" in uninsp_unknown)
+        check("unknown section keeps cloud hosts, named",
+              re.search(r'2600:1901:0:9e23::</span> <span class="fw-metric dim">Google Cloud</span>', uninsp_unknown) is not None)
         check("egress rows show first-seen and session",
               "first seen" in dom_uninsp and "session " in dom_uninsp)
         check("egress bulk allow groups same-suffix hosts",

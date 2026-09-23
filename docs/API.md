@@ -747,11 +747,13 @@ GET /egress/uninspected?hours=24&limit=200
    "assessment": "benign", "rationale": "npm registry is routine for JS projects"},
   {"agent": "openclaw", "host": "2607:6bc0::10", "count": 94,
    "first_seen": "2026-09-23T12:00:00Z", "last_seen": "2026-09-23T13:00:00Z",
-   "identity": {"kind": "ipv6", "org": "Anthropic", "ip": "2607:6bc0::10"}}
+   "identity": {"kind": "ipv6", "org": "Anthropic", "ip": "2607:6bc0::10", "class": "vendor"}}
 ]
 ```
 
-- `identity` — owner of the host from the provider CIDR table, host suffix, or cached reverse DNS (`org`, `name`, `kind`, `ip`); never a network lookup.
+- `identity` — owner of the host from the provider CIDR table, host suffix, or cached reverse DNS (`org`, `name`, `kind`, `ip`, `class`); never a network lookup.
+- `identity.class` — `vendor` (Anthropic, OpenAI, GitHub, GitHub Container Registry, npm registry, PyPI, crates.io, RubyGems, Docker Hub, Docker, Google Container Registry, Debian, Ubuntu), `telemetry` (Statsig, Sentry, Segment, PostHog, Amplitude), `cloud` (any other named org); omitted when `org` is empty.
+- The same `identity` object, `class` included, is on `GET /egress/endpoint?host=` and on each `/snapshot` `suggestions` row; vendor-class rows are not suggestions.
 - `first_seen` — first sighting of the agent+host pair; omitted when unknown.
 - `session_id` — most recent session that reached the host; omitted when none.
 - `infra` — set only for CDN/cloud carriers (Cloudflare, Google, GitHub, PTR-classified); `identity.org` can be set without it.

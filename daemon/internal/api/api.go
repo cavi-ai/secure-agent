@@ -1068,12 +1068,13 @@ func (a *API) handleAdvisorDiscover(w http.ResponseWriter, r *http.Request) {
 // noise from nagging). Assessment carries the advisor's pre-computed host
 // legitimacy verdict when one exists.
 type Suggestion struct {
-	Agent      string  `json:"agent"`
-	Host       string  `json:"host"`
-	Count      int     `json:"count"`
-	Assessment string  `json:"assessment,omitempty"`
-	Rationale  string  `json:"rationale,omitempty"`
-	Confidence float64 `json:"confidence,omitempty"`
+	Agent      string                     `json:"agent"`
+	Host       string                     `json:"host"`
+	Count      int                        `json:"count"`
+	Identity   correlate.EndpointIdentity `json:"identity"`
+	Assessment string                     `json:"assessment,omitempty"`
+	Rationale  string                     `json:"rationale,omitempty"`
+	Confidence float64                    `json:"confidence,omitempty"`
 }
 
 // minSuggestionCount: a host must recur before we suggest anything — a single

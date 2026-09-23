@@ -35,7 +35,7 @@ function renderFirewall() {
     suggestions.forEach(sg => parts.push({ key: `sg:${sg.agent}|${sg.host}`, html: `
       <div class="fw-rule fw-suggestion">
         <div class="fw-rule-main">
-          <span class="fw-rule-id">${escapeHTML(sg.host)}</span>
+          <span class="fw-rule-id">${escapeHTML(sg.host)}</span>${identityLabel(sg) ? ` <span class="fw-metric dim">${escapeHTML(identityLabel(sg))}</span>` : ''}
           <div class="fw-metrics">
             <span class="fw-metric dim">${escapeHTML(sg.agent)} · seen <b>${sg.count}×</b> uninspected</span>
             ${vis.advisor && sg.assessment ? `<span class="advisor-chip adv-${escapeHTML(sg.assessment)}" title="${escapeHTML(sg.rationale)}">advisor: ${escapeHTML(sg.assessment)}</span>` : ''}
@@ -111,16 +111,27 @@ function renderSources() {
   }).join('');
 }
 
+// Dim label naming who a host is: the org (with "· telemetry" for analytics
+// endpoints) and the reverse name when it differs from the host.
+function identityLabel(e) {
+  const id = (e && e.identity) || {};
+  const parts = [];
+  if (id.org) parts.push(id.class === 'telemetry' ? `${id.org} · telemetry` : id.org);
+  if (id.name && id.name !== e.host) parts.push(id.name);
+  return parts.join(' · ');
+}
+
 // Split uninspected rows three ways: CDN/cloud carriers (infra set), the
-// agents' own vendor APIs (identity.org set, no infra) rolled up per
-// (agent, org), and unknowns. Pure — unit-tested in packaging/test/console.
+// agents' own vendor APIs (identity.class vendor, no infra) rolled up per
+// (agent, org), and the rest — cloud and telemetry hosts included, since
+// those can front anyone. Pure — unit-tested in packaging/test/console.
 function groupUninspected(rows) {
   const unknown = [];
   const carriers = [];
   const byKey = new Map();
   for (const e of rows || []) {
     if (e.infra) { carriers.push(e); continue; }
-    const org = e.identity && e.identity.org;
+    const org = e.identity && e.identity.class === 'vendor' && e.identity.org;
     if (!org) { unknown.push(e); continue; }
     const key = e.agent + '|' + org;
     let g = byKey.get(key);
@@ -237,7 +248,7 @@ function fillUninspected(bodyEl) {
 function egressRowHTML(e, advisorOn) {
   const first = e.first_seen ? fmtAge(e.first_seen, Date.now()) : '';
   const last = e.last_seen ? fmtAge(e.last_seen, Date.now()) : '';
-  const idName = e.identity && e.identity.name && e.identity.name !== e.host ? e.identity.name : '';
+  const idLabel = identityLabel(e);
   const facts = [
     `<b>${e.count || 0}×</b> in 24h`,
     last ? `last ${escapeHTML(last)} ago` : '',
@@ -257,7 +268,7 @@ function egressRowHTML(e, advisorOn) {
 
   return `<div class="fw-rule egress-row">
     <div class="fw-rule-main">
-      <span class="fw-rule-id">${escapeHTML(e.host)}</span>${idName ? ` <span class="fw-metric dim">${escapeHTML(idName)}</span>` : ''}
+      <span class="fw-rule-id">${escapeHTML(e.host)}</span>${idLabel ? ` <span class="fw-metric dim">${escapeHTML(idLabel)}</span>` : ''}
       <div class="fw-metrics"><span class="fw-metric dim">${facts}</span></div>
       ${advisor}
     </div>

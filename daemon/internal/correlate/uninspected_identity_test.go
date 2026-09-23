@@ -2,6 +2,7 @@ package correlate
 
 import (
 	"context"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -32,7 +33,7 @@ func TestUninspectedSummaryIdentity(t *testing.T) {
 		got[s.Host] = s
 	}
 	for _, h := range []string{"160.79.104.10", "2607:6bc0::10"} {
-		if s := got[h]; s.Identity.Org != "Anthropic" || s.Infra != "" {
+		if s := got[h]; s.Identity.Org != "Anthropic" || s.Identity.Class != "vendor" || s.Infra != "" {
 			t.Fatalf("%s: identity.org=%q infra=%q, want Anthropic and no infra", h, s.Identity.Org, s.Infra)
 		}
 	}
@@ -44,8 +45,8 @@ func TestUninspectedSummaryIdentity(t *testing.T) {
 	}
 }
 
-// The count-3 advisor pre-assessment spends a model call only on hosts the
-// daemon cannot name.
+// The count-3 advisor pre-assessment skips only the agents' own vendors;
+// cloud hosts (which can front anyone) and unknowns are still assessed.
 func TestObserveSkipsAdvisorForKnownVendor(t *testing.T) {
 	noPTR(t)
 	c := newTestCorrelator(t)
@@ -53,11 +54,29 @@ func TestObserveSkipsAdvisorForKnownVendor(t *testing.T) {
 	c.SetOnUninspected(func(_, host string) { fired = append(fired, host) })
 	now := time.Now()
 	for i := 0; i < 3; i++ {
-		for _, h := range []string{"160.79.104.10", "203.0.113.7"} {
+		for _, h := range []string{"160.79.104.10", "34.120.1.1", "203.0.113.7"} {
 			c.Observe(event.Event{Kind: event.KindConnOpen, PID: 200, TS: now, RemoteHost: h, RemotePort: 443})
 		}
 	}
-	if len(fired) != 1 || fired[0] != "203.0.113.7" {
-		t.Fatalf("advisor hook fired for %v, want only [203.0.113.7]", fired)
+	if !slices.Equal(fired, []string{"34.120.1.1", "203.0.113.7"}) {
+		t.Fatalf("advisor hook fired for %v, want [34.120.1.1 203.0.113.7]", fired)
+	}
+}
+
+func TestIdentityClass(t *testing.T) {
+	cases := map[string]string{
+		"Anthropic": "vendor", "npm registry": "vendor", "Statsig": "telemetry",
+		"Azure": "cloud", "Google Cloud": "cloud", "Akamai": "cloud", "": "",
+	}
+	for org, want := range cases {
+		if got := IdentityClass(org); got != want {
+			t.Errorf("IdentityClass(%q) = %q, want %q", org, got, want)
+		}
+	}
+	if id := IdentifyCached("api.statsig.com"); id.Class != "telemetry" {
+		t.Errorf("hostname path: %+v, want class telemetry", id)
+	}
+	if id := IdentifyCached("2607:6bc0::10"); id.Class != "vendor" {
+		t.Errorf("ip path: %+v, want class vendor", id)
 	}
 }

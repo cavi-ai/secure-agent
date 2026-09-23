@@ -414,6 +414,7 @@ export interface EndpointIdentity {
   name?: string;
   kind: string;
   ip?: string;
+  class?: string;
 }
 
 export interface UninspectedEndpoint {

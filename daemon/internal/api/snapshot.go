@@ -92,12 +92,14 @@ func (a *API) suggestionList() []Suggestion {
 		return out
 	}
 	for _, e := range a.correlator.UninspectedEgressSummary() {
-		if e.Count < minSuggestionCount || e.Infra != "" {
-			// Rare pairs and known CDN/cloud carriers are never "approve this
-			// endpoint" suggestions — suggestions exist for judgment calls.
+		if e.Count < minSuggestionCount || e.Infra != "" || e.Identity.Class == "vendor" {
+			// Rare pairs, known CDN/cloud carriers and the agents' own vendors
+			// (rolled up in the drill-down with their own bulk action) are
+			// never "approve this endpoint" suggestions — suggestions exist
+			// for judgment calls.
 			continue
 		}
-		sg := Suggestion{Agent: e.Agent, Host: e.Host, Count: e.Count}
+		sg := Suggestion{Agent: e.Agent, Host: e.Host, Count: e.Count, Identity: e.Identity}
 		if v, ok := a.store.AdvisorVerdictFor("host:"+e.Agent+"|"+e.Host, "host"); ok {
 			sg.Assessment = v.Assessment
 			sg.Rationale = v.Rationale

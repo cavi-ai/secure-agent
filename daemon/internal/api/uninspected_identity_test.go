@@ -54,7 +54,7 @@ func TestUninspectedEgressRows(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := rows[0]
-	if r.Identity.Org != "Anthropic" || r.SessionID != "sess-b" || r.FirstSeen == nil || r.FirstSeen.Unix() != first.Unix() {
+	if r.Identity.Org != "Anthropic" || r.Identity.Class != "vendor" || r.SessionID != "sess-b" || r.FirstSeen == nil || r.FirstSeen.Unix() != first.Unix() {
 		t.Fatalf("row = %+v (first_seen %v)", r, r.FirstSeen)
 	}
 }
@@ -81,5 +81,28 @@ func TestEndpointDetailFindsSessionBeyondListLimit(t *testing.T) {
 	}
 	if len(d.Sessions) != 1 || d.Sessions[0].ID != "proc-0" {
 		t.Fatalf("sessions = %+v, want proc-0", d.Sessions)
+	}
+}
+
+// Vendor-class hosts are rolled up in the drill-down, never offered one by
+// one as suggestions; a cloud host still is, carrying its identity.
+func TestSuggestionListSkipsVendor(t *testing.T) {
+	cfg, err := config.Load("/nonexistent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tg := agents.New(cfg, allowlistProcSource{})
+	tg.Refresh()
+	cr := correlate.New(tg, sensitive.New(cfg), cfg)
+	for i := 0; i < minSuggestionCount; i++ {
+		for _, h := range []string{"160.79.104.10", "34.120.1.1"} {
+			cr.Observe(event.Event{Kind: event.KindConnOpen, PID: 42, TS: time.Now(), RemoteHost: h, RemotePort: 443})
+		}
+	}
+	a := newTestAPI("", testStore(t), nil, func() Status { return Status{Running: true} })
+	a.correlator = cr
+	got := a.suggestionList()
+	if len(got) != 1 || got[0].Host != "34.120.1.1" || got[0].Identity.Org != "Google Cloud" || got[0].Identity.Class != "cloud" {
+		t.Fatalf("suggestions = %+v, want only the Google Cloud host", got)
 	}
 }
