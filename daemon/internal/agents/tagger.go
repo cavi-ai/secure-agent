@@ -311,8 +311,15 @@ func (t *Tagger) matchLocked(p ProcInfo) (config.AgentDef, bool) {
 }
 
 // familyRootLocked walks up from the matched process while each parent
-// matches the same agent definition and returns the highest such pid — the
-// family root (a harness wrapper that execs its native binary is one family).
+// continues the family — cached and tagged with the same Name, or its
+// exe/comm matches the same agent definition (the def match covers ancestors
+// not yet cached) — and returns the highest such pid, the family root (a
+// harness wrapper that execs its native binary is one family). An
+// intermediate that does neither (an untagged, non-matching shell, say) is
+// walked through transparently instead of stopping the search: the walk
+// keeps climbing and the returned root only advances past it when a
+// same-family ancestor turns up further up the chain, within the same
+// 32-hop/visited bounds as tagLocked.
 func (t *Tagger) familyRootLocked(matched int32, p ProcInfo, name string, visited map[int32]bool, budget int) int32 {
 	root := matched
 	for ; budget > 0; budget-- {
@@ -325,10 +332,12 @@ func (t *Tagger) familyRootLocked(matched int32, p ProcInfo, name string, visite
 		if !ok {
 			break
 		}
-		if def, same := t.matchLocked(parent); !same || def.Name != name {
-			break
+		if info, cachedOk := t.cache[ppid]; cachedOk && t.tagged[ppid] && info.Name == name {
+			root = ppid
+		} else if def, same := t.matchLocked(parent); same && def.Name == name {
+			root = ppid
 		}
-		root, p = ppid, parent
+		p = parent
 	}
 	return root
 }

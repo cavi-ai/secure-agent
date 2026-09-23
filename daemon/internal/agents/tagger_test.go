@@ -229,6 +229,46 @@ func TestTagReportsFamilyRoot(t *testing.T) {
 	}
 }
 
+// Tag and TaggedPIDs must agree on the family root even when a shell
+// between two codex processes is cached with Name "codex" through its
+// ancestry rather than by matching the agent definition itself.
+func TestFamilyRootAgreesAcrossCachedShell(t *testing.T) {
+	fake := fakeProcs{
+		100: {PID: 100, PPID: 1, Exe: "/opt/homebrew/bin/codex"},
+		101: {PID: 101, PPID: 100, Exe: "/bin/zsh"},
+		102: {PID: 102, PPID: 101, Exe: "/opt/homebrew/bin/codex"},
+	}
+	c, _ := config.Load("/nonexistent")
+
+	// Outer, then the shell (which caches as "codex" via ancestry, not its
+	// own exe), then the inner codex: familyRootLocked must recognize 101 as
+	// same-family through the cache, not just through matchLocked.
+	tg := New(c, fake)
+	if _, ok := tg.Tag(100); !ok {
+		t.Fatal("Tag(100) failed")
+	}
+	shell, ok := tg.Tag(101)
+	if !ok || shell.Name != "codex" {
+		t.Fatalf("Tag(101) = %+v, %v; want codex,true", shell, ok)
+	}
+	inner, ok := tg.Tag(102)
+	if !ok || inner.RootPID != 100 {
+		t.Fatalf("Tag(102).RootPID = %d, %v; want 100, true", inner.RootPID, ok)
+	}
+	if got := tg.TaggedPIDs()[102].RootPID; got != 100 {
+		t.Fatalf("TaggedPIDs()[102].RootPID = %d, want 100", got)
+	}
+
+	// Reverse order: the inner codex is tagged first, so at that moment the
+	// shell (101) is neither cached nor a def match. The walk must still
+	// pass through it transparently to reach the def-matched outer codex.
+	tg2 := New(c, fake)
+	inner2, ok := tg2.Tag(102)
+	if !ok || inner2.RootPID != 100 {
+		t.Fatalf("Tag(102).RootPID (reverse order) = %d, %v; want 100, true", inner2.RootPID, ok)
+	}
+}
+
 func TestAlive(t *testing.T) {
 	fake := fakeProcs{100: {PID: 100, PPID: 1, Exe: "/usr/local/bin/claude"}}
 	c, _ := config.Load("/nonexistent")
