@@ -155,6 +155,7 @@ def main():
         dom_session = dump_dom(chrome, tmp, "?sessiondemo")
         dom_guard = dump_dom(chrome, tmp, "?guarddemo")
         dom_uninsp = dump_dom(chrome, tmp, "?uninspecteddemo")
+        dom_keepopen = dump_dom(chrome, tmp, "?keepopendemo")
         dom_endpoint = dump_dom(chrome, tmp, "?endpointdemo")
         dom_toast = dump_dom(chrome, tmp, "?toastdemo")
         dom_notify = dump_dom(chrome, tmp, "?notifydemo")
@@ -342,6 +343,14 @@ def main():
         check("drill-down collapses CDN/cloud carriers",
               "Known cloud/CDN infrastructure (2 endpoints)" in dom_uninsp
               and "Cloudflare" in dom_uninsp and "AWS" in dom_uninsp)
+        uninsp_unknown = dom_uninsp.split('class="uninspected-expl"', 1)[-1].split("Vendor APIs", 1)[0]
+        check("drill-down rolls vendor APIs up per agent and vendor",
+              "Vendor APIs" in dom_uninsp and "openclaw → Anthropic" in dom_uninsp and "94×" in dom_uninsp
+              and 'data-action="bulk-allow" data-agent="openclaw" data-hosts="2607:6bc0::10"' in dom_uninsp)
+        check("unknown section does not list vendor endpoints",
+              "2607:6bc0::10" not in uninsp_unknown and "statsig.example.com" in uninsp_unknown)
+        check("unknown section keeps cloud hosts, named",
+              re.search(r'2600:1901:0:9e23::</span> <span class="fw-metric dim">Google Cloud</span>', uninsp_unknown) is not None)
         check("egress rows show first-seen and session",
               "first seen" in dom_uninsp and "session " in dom_uninsp)
         check("egress bulk allow groups same-suffix hosts",
@@ -435,6 +444,11 @@ def main():
         check("drill-down allow action delegated",
               'data-action="allow-host" data-agent="cursor" data-host="registry.npmjs.org"' in dom_uninsp)
         check("drill-down explains the blind spot", "bypassing the inspection proxy" in dom_uninsp)
+        keepopen = (re.search(r'<pre id="keepopen"[^>]*>([^<]*)<', dom_keepopen) or [None, ""])[1]
+        check("drill-down vendor disclosure stays open across an Allow refill",
+              "key=vendor:openclaw|Anthropic rebuilt=1 open=1" in keepopen, keepopen)
+        check("drill-down Allow refill posted and dropped the row",
+              "POST /allowlist" in dom_keepopen and 'data-host="statsig.example.com"' not in dom_keepopen.split('id="drawer-body"', 1)[-1].split("</details>", 1)[0], keepopen)
 
         # --- endpoint evidence: an unattributed IPv6 must be identifiable ---
         check("endpoint Evidence opens a detail drawer",

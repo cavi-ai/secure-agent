@@ -1068,12 +1068,13 @@ func (a *API) handleAdvisorDiscover(w http.ResponseWriter, r *http.Request) {
 // noise from nagging). Assessment carries the advisor's pre-computed host
 // legitimacy verdict when one exists.
 type Suggestion struct {
-	Agent      string  `json:"agent"`
-	Host       string  `json:"host"`
-	Count      int     `json:"count"`
-	Assessment string  `json:"assessment,omitempty"`
-	Rationale  string  `json:"rationale,omitempty"`
-	Confidence float64 `json:"confidence,omitempty"`
+	Agent      string                     `json:"agent"`
+	Host       string                     `json:"host"`
+	Count      int                        `json:"count"`
+	Identity   correlate.EndpointIdentity `json:"identity"`
+	Assessment string                     `json:"assessment,omitempty"`
+	Rationale  string                     `json:"rationale,omitempty"`
+	Confidence float64                    `json:"confidence,omitempty"`
 }
 
 // minSuggestionCount: a host must recur before we suggest anything — a single
@@ -1095,13 +1096,42 @@ func (a *API) handleAllowlistSuggestions(w http.ResponseWriter, r *http.Request)
 // posture warning: which agent reached which host without inspection, how
 // often, and when last — with the advisor's verdict when one exists.
 type UninspectedEndpoint struct {
-	Agent      string    `json:"agent"`
-	Host       string    `json:"host"`
-	Count      int       `json:"count"`
-	LastSeen   time.Time `json:"last_seen"`
-	Infra      string    `json:"infra,omitempty"`
-	Assessment string    `json:"assessment,omitempty"`
-	Rationale  string    `json:"rationale,omitempty"`
+	Agent      string                     `json:"agent"`
+	Host       string                     `json:"host"`
+	Count      int                        `json:"count"`
+	FirstSeen  *time.Time                 `json:"first_seen,omitempty"`
+	LastSeen   time.Time                  `json:"last_seen"`
+	SessionID  string                     `json:"session_id,omitempty"`
+	Infra      string                     `json:"infra,omitempty"`
+	Identity   correlate.EndpointIdentity `json:"identity"`
+	Assessment string                     `json:"assessment,omitempty"`
+	Rationale  string                     `json:"rationale,omitempty"`
+}
+
+// uninspectedRows builds the blind-spot rows last seen at or after since,
+// most frequent first, with the advisor's host verdict joined, capped at limit.
+func (a *API) uninspectedRows(since time.Time, limit int) []UninspectedEndpoint {
+	out := []UninspectedEndpoint{}
+	if a.correlator == nil {
+		return out
+	}
+	for _, e := range a.correlator.UninspectedEgressSummarySince(since) {
+		ep := UninspectedEndpoint{Agent: e.Agent, Host: e.Host, Count: e.Count, LastSeen: e.LastSeen,
+			SessionID: e.SessionID, Infra: e.Infra, Identity: e.Identity}
+		if !e.FirstSeen.IsZero() {
+			t := e.FirstSeen
+			ep.FirstSeen = &t
+		}
+		if v, ok := a.store.AdvisorVerdictFor("host:"+e.Agent+"|"+e.Host, "host"); ok {
+			ep.Assessment = v.Assessment
+			ep.Rationale = v.Rationale
+		}
+		out = append(out, ep)
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out
 }
 
 // handleUninspectedEgress lists the endpoints behind the "N connections
@@ -1118,20 +1148,7 @@ func (a *API) handleUninspectedEgress(w http.ResponseWriter, r *http.Request) {
 		hours = 24
 	}
 	limit := queryInt(r.URL.Query().Get("limit"), 200)
-	out := []UninspectedEndpoint{}
-	if a.correlator != nil {
-		for _, e := range a.correlator.UninspectedEgressSummarySince(time.Now().Add(-time.Duration(hours) * time.Hour)) {
-			ep := UninspectedEndpoint{Agent: e.Agent, Host: e.Host, Count: e.Count, LastSeen: e.LastSeen, Infra: e.Infra}
-			if v, ok := a.store.AdvisorVerdictFor("host:"+e.Agent+"|"+e.Host, "host"); ok {
-				ep.Assessment = v.Assessment
-				ep.Rationale = v.Rationale
-			}
-			out = append(out, ep)
-			if len(out) >= limit {
-				break
-			}
-		}
-	}
+	out := a.uninspectedRows(time.Now().Add(-time.Duration(hours)*time.Hour), limit)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(out)
 }
@@ -1229,7 +1246,7 @@ func (a *API) handleEndpointDetail(w http.ResponseWriter, r *http.Request) {
 	if a.allowlist != nil {
 		for agent, hosts := range a.allowlist.Load() {
 			for _, h := range hosts {
-				if strings.EqualFold(h, host) {
+				if correlate.HostMatches(host, h) {
 					detail.Allowed = append(detail.Allowed, EndpointAllowance{Agent: agent, Host: h})
 				}
 			}

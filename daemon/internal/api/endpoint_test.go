@@ -4,9 +4,11 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/cavi-ai/secure-agent/daemon/internal/correlate"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 )
 
@@ -53,5 +55,32 @@ func TestEndpointDetail(t *testing.T) {
 	a.handleEndpointDetail(rec, httptest.NewRequest(http.MethodGet, "/egress/endpoint", nil))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("missing host code=%d, want 400", rec.Code)
+	}
+}
+
+// An approved parent domain counts as an allowance for its subdomains, the
+// same rule the correlator applies; a look-alike suffix does not.
+func TestEndpointDetailAllowedCoversSubdomain(t *testing.T) {
+	a := newTestAPI("", testStore(t), nil, func() Status { return Status{Running: true} })
+	a.allowlist = correlate.NewAllowlistStore(filepath.Join(t.TempDir(), "allowlist.json"))
+	if err := a.allowlist.Add("claude", "anthropic.com"); err != nil {
+		t.Fatal(err)
+	}
+	get := func(host string) EndpointDetail {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		a.handleEndpointDetail(rec, httptest.NewRequest(http.MethodGet, "/egress/endpoint?host="+host, nil))
+		var d EndpointDetail
+		if err := json.Unmarshal(rec.Body.Bytes(), &d); err != nil {
+			t.Fatal(err)
+		}
+		return d
+	}
+	d := get("api.anthropic.com")
+	if len(d.Allowed) != 1 || d.Allowed[0].Agent != "claude" || d.Allowed[0].Host != "anthropic.com" {
+		t.Fatalf("allowed = %+v, want claude via anthropic.com", d.Allowed)
+	}
+	if d := get("evilanthropic.com"); len(d.Allowed) != 0 {
+		t.Fatalf("look-alike allowed = %+v, want none", d.Allowed)
 	}
 }

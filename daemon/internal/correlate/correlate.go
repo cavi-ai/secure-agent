@@ -110,6 +110,9 @@ type UninspectedSummary struct {
 	// (InfraOrg) — empty for genuinely unknown destinations. UIs escalate
 	// only the unknown kind; infra rows collapse into a coverage note.
 	Infra string `json:"infra,omitempty"`
+	// Identity is IdentifyCached(host): the owning org (vendor API, cloud)
+	// and cached reverse name. Never a network lookup.
+	Identity EndpointIdentity `json:"identity"`
 }
 
 // UninspectedEgressSummary lists the observed blind-spot endpoints, most
@@ -132,7 +135,8 @@ func (c *Correlator) UninspectedEgressSummarySince(since time.Time) []Uninspecte
 		}
 		agent, host, _ := strings.Cut(key, "|")
 		out = append(out, UninspectedSummary{Agent: agent, Host: host, Count: e.count,
-			FirstSeen: e.firstSeen, LastSeen: e.lastSeen, SessionID: e.sessionID, Infra: InfraOrg(host)})
+			FirstSeen: e.firstSeen, LastSeen: e.lastSeen, SessionID: e.sessionID, Infra: InfraOrg(host),
+			Identity: IdentifyCached(host)})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Count > out[j].Count })
 	return out
@@ -502,8 +506,11 @@ func (c *Correlator) Observe(e event.Event) []model.Flag {
 					e2.sessionID = e.SessionID
 				}
 				// Advisor pre-assessment is for endpoints a human must judge —
-				// never spend model calls on Cloudflare/Google/AWS carriers.
-				if e2.count == 3 && c.onUninspected != nil && InfraOrg(e.RemoteHost) == "" {
+				// never spend model calls on carriers or on the agents' own
+				// vendors (Anthropic, OpenAI, GitHub, registries). Cloud and
+				// telemetry hosts can front anyone, so they are still assessed.
+				if e2.count == 3 && c.onUninspected != nil &&
+					IdentifyCached(e.RemoteHost).Class != "vendor" && InfraOrg(e.RemoteHost) == "" {
 					c.onUninspected(info.Name, e.RemoteHost)
 				}
 			} else if len(c.uninspected) < maxUninspectedTracked {
@@ -819,7 +826,7 @@ func (c *Correlator) isVendorHost(agentName, host string) bool {
 		return false
 	}
 	for _, allowed := range c.cfg.VendorAllowlist[agentName] {
-		if hostMatches(host, allowed) {
+		if HostMatches(host, allowed) {
 			return true
 		}
 	}
@@ -827,7 +834,7 @@ func (c *Correlator) isVendorHost(agentName, host string) bool {
 	// traffic for this agent.
 	if c.allowlistOverrides != nil {
 		for _, allowed := range c.allowlistOverrides(agentName) {
-			if hostMatches(host, allowed) {
+			if HostMatches(host, allowed) {
 				return true
 			}
 		}
@@ -835,9 +842,9 @@ func (c *Correlator) isVendorHost(agentName, host string) bool {
 	return false
 }
 
-// hostMatches: host equals allowed or is a subdomain of it (dot boundary),
+// HostMatches: host equals allowed or is a subdomain of it (dot boundary),
 // case-insensitive. The one match rule for vendor and user-approved hosts.
-func hostMatches(host, allowed string) bool {
+func HostMatches(host, allowed string) bool {
 	if host == "" || allowed == "" {
 		return false
 	}

@@ -48,7 +48,7 @@ func (s *AllowlistStore) loadLocked() map[string][]string {
 // case-insensitive).
 func (s *AllowlistStore) Allows(agent, host string) bool {
 	for _, allowed := range s.Load()[agent] {
-		if hostMatches(host, allowed) {
+		if HostMatches(host, allowed) {
 			return true
 		}
 	}
