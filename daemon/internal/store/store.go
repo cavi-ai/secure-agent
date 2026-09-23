@@ -32,6 +32,9 @@ const (
 	episodeSettleWindow = 30 * time.Second
 )
 
+// pruneMinInterval is the shortest gap between two insert-driven prunes.
+var pruneMinInterval = 30 * time.Second
+
 // jsonlRotateBytes caps the forensic flag mirror. SQLite is the source of
 // truth and already prunes; JSONL is append-only unless rotated.
 var jsonlRotateBytes int64 = 8 << 20
@@ -42,6 +45,9 @@ type Store struct {
 	jsonlPath   string
 	jsonlFile   *os.File
 	insertCount uint64
+	// lastPrune gates the insert-driven prune to pruneMinInterval, so a
+	// high-rate producer does not trigger it every 1000 inserts.
+	lastPrune time.Time
 	// Per-kind time-based retention. Socket churn (conn open/close) ages out
 	// in hours; security-relevant kinds keep days. Count-based pruning stays
 	// as a backstop — a busy machine must never let conn noise evict the
@@ -117,7 +123,7 @@ func Open(dbPath, jsonlPath string) (*Store, error) {
 
 	dsn := dbPath
 	if dsn != "" {
-		dsn = dsn + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(3000)"
+		dsn = dsn + "?_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=busy_timeout(3000)"
 	} else {
 		dsn = ":memory:?_pragma=journal_mode(WAL)"
 	}
@@ -161,6 +167,7 @@ func Open(dbPath, jsonlPath string) (*Store, error) {
 			provider TEXT
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_events_pid_ts ON events(pid, ts);`,
+		`CREATE INDEX IF NOT EXISTS idx_events_kind_id ON events(kind, id);`,
 		`CREATE TABLE IF NOT EXISTS incidents (
 			id TEXT PRIMARY KEY,
 			flag_id TEXT,
@@ -556,10 +563,11 @@ func (s *Store) PutEvent(e event.Event) {
 	}
 
 	s.insertCount++
-	if s.insertCount%1000 == 0 {
+	if s.insertCount%1000 == 0 && time.Since(s.lastPrune) >= pruneMinInterval {
 		s.pruneEventsLocked()
 		s.pruneRollupLocked()
 		s.pruneSessionsLocked()
+		s.lastPrune = time.Now()
 	}
 }
 
@@ -590,7 +598,12 @@ func (s *Store) pruneEventsLocked() {
 		int(event.KindConnOpen), int(event.KindConnClose), connCutoff)
 	_, _ = s.db.Exec(`DELETE FROM events WHERE kind NOT IN (?, ?) AND datetime(ts) < datetime(?)`,
 		int(event.KindConnOpen), int(event.KindConnClose), otherCutoff)
-	rows, err := s.db.Query(`SELECT DISTINCT kind FROM events`)
+	// Distinct kinds by index skip-scan: one MIN(kind) seek per kind.
+	rows, err := s.db.Query(`WITH RECURSIVE k(v) AS (
+			SELECT MIN(kind) FROM events
+			UNION ALL
+			SELECT (SELECT MIN(kind) FROM events WHERE kind > k.v) FROM k WHERE k.v IS NOT NULL)
+		SELECT v FROM k WHERE v IS NOT NULL`)
 	if err != nil {
 		return
 	}
@@ -605,9 +618,11 @@ func (s *Store) pruneEventsLocked() {
 		log.Printf("store: prune kinds: %v", err)
 	}
 	rows.Close()
+	// Keep each kind's newest budget rows: delete below the budget-th newest
+	// id. Fewer rows than the budget yield a NULL cutoff and delete nothing.
 	for _, k := range kinds {
-		_, _ = s.db.Exec(`DELETE FROM events WHERE kind = ? AND id NOT IN
-			(SELECT id FROM events WHERE kind = ? ORDER BY id DESC LIMIT ?)`, k, k, kindBudget(k))
+		_, _ = s.db.Exec(`DELETE FROM events WHERE kind = ? AND id <
+			(SELECT id FROM events WHERE kind = ? ORDER BY id DESC LIMIT 1 OFFSET ?)`, k, k, kindBudget(k)-1)
 	}
 }
 

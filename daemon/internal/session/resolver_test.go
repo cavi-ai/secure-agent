@@ -1,8 +1,11 @@
 package session
 
 import (
+	"bytes"
+	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -912,5 +915,162 @@ func TestResolveStampsEveryEventFromCachedPID(t *testing.T) {
 	r.Resolve(&second)
 	if id == "" || first.SessionID != id || second.SessionID != id {
 		t.Fatalf("first=%q second=%q, want both %q", first.SessionID, second.SessionID, id)
+	}
+}
+
+// sharedCwdTree: an openclaw orchestrator (100) runs two codex processes in
+// its own home (300 and 400), each with a shell child elsewhere.
+func sharedCwdTree() fakeProcs {
+	started := time.Now().Add(-time.Hour)
+	return fakeProcs{
+		100: {PID: 100, PPID: 1, Exe: "/Users/u/.openclaw/node/bin/node", CWD: "/Users/u/.openclaw", StartTime: started},
+		300: {PID: 300, PPID: 100, Exe: "/opt/homebrew/bin/codex", CWD: "/Users/u/.openclaw", StartTime: started.Add(time.Minute)},
+		301: {PID: 301, PPID: 300, Exe: "/bin/zsh", CWD: "/teams/a", StartTime: started.Add(2 * time.Minute)},
+		400: {PID: 400, PPID: 100, Exe: "/opt/homebrew/bin/codex", CWD: "/Users/u/.openclaw", StartTime: started.Add(3 * time.Minute)},
+		401: {PID: 401, PPID: 400, Exe: "/bin/zsh", CWD: "/teams/b", StartTime: started.Add(4 * time.Minute)},
+	}
+}
+
+func wantRoot(t *testing.T, st *store.Store, id string, root int32, parent string) {
+	t.Helper()
+	s, ok := st.GetSession(id)
+	if !ok || s.Harness != "codex" || s.RootPID != root || s.ParentID != parent {
+		t.Fatalf("session %q = %+v, %v; want codex rooted at %d under %q", id, s, ok, root, parent)
+	}
+}
+
+// Two codex processes in one working directory: each root mints its own
+// session under the orchestrator, and repeated events from either process or
+// its children never move a root.
+func TestSameCwdRootsMintTheirOwnSessions(t *testing.T) {
+	r, st := testResolver(t, sharedCwdTree())
+	orch := resolvePID(t, r, 100)
+	a := resolvePID(t, r, 300)
+	b := resolvePID(t, r, 400)
+	if a == b {
+		t.Fatalf("both roots resolved to %q, want one session each", a)
+	}
+	wantRoot(t, st, a, 300, orch)
+	wantRoot(t, st, b, 400, orch)
+
+	for _, pid := range []int32{300, 400, 301, 401, 400, 300} {
+		want := a
+		if pid >= 400 {
+			want = b
+		}
+		if got := resolvePID(t, r, pid); got != want {
+			t.Fatalf("pid %d resolved to %q, want %q", pid, got, want)
+		}
+	}
+	wantRoot(t, st, a, 300, orch)
+	wantRoot(t, st, b, 400, orch)
+}
+
+// A root that would adopt a stored process-tree session on another root is
+// refused and the refusal logged once.
+func TestSameCwdRootMismatchLoggedOnce(t *testing.T) {
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	r, _ := testResolver(t, sharedCwdTree())
+	resolvePID(t, r, 100)
+	a := resolvePID(t, r, 300)
+	for _, pid := range []int32{400, 401, 400, 300} {
+		resolvePID(t, r, pid)
+	}
+	if n := strings.Count(buf.String(), a); n != 1 {
+		t.Fatalf("mismatch logged %d times, want once:\n%s", n, buf.String())
+	}
+}
+
+// Sweep ends each session when its own root exits, never the neighbour's.
+func TestSameCwdSweepEndsEachOnItsOwnRoot(t *testing.T) {
+	procs := sharedCwdTree()
+	r, st := testResolver(t, procs)
+	orch := resolvePID(t, r, 100)
+	a := resolvePID(t, r, 300)
+	b := resolvePID(t, r, 400)
+
+	exit := func(pids ...int32) {
+		for _, pid := range pids {
+			delete(procs, pid)
+		}
+		r.tagger = agents.New(mustConfig(t), procs)
+		r.tagger.Refresh()
+		r.Sweep()
+	}
+	status := func(id string) string {
+		s, _ := st.GetSession(id)
+		return s.Status
+	}
+
+	exit(400, 401)
+	if status(b) != model.SessionEnded || status(a) == model.SessionEnded || status(orch) == model.SessionEnded {
+		t.Fatalf("after 400 exits: a=%s b=%s orch=%s; want only b ended", status(a), status(b), status(orch))
+	}
+	exit(300, 301)
+	if status(a) != model.SessionEnded || status(orch) == model.SessionEnded {
+		t.Fatalf("after 300 exits: a=%s orch=%s; want a ended", status(a), status(orch))
+	}
+}
+
+// A transcript sighting in a working directory two processes share cannot
+// tell which one holds the rollout: neither process-tree row merges by scope.
+// The open-rollout join merges the holder's row, and each rollout ends on its
+// own root.
+func TestSameCwdTranscriptJoinsTheRootHoldingIt(t *testing.T) {
+	const home = "/Users/u/.openclaw"
+	r, st := testResolver(t, sharedCwdTree())
+	orch := resolvePID(t, r, 100)
+	ea := event.Event{Kind: event.KindFileOpen, PID: 301, TS: time.Now(), Path: "/teams/a/x"}
+	a := r.Resolve(&ea)
+	st.PutEvent(ea)
+	eb := event.Event{Kind: event.KindFileOpen, PID: 401, TS: time.Now(), Path: "/teams/b/x"}
+	b := r.Resolve(&eb)
+	st.PutEvent(eb)
+	if a == "" || a == b {
+		t.Fatalf("a=%q b=%q, want one session per root", a, b)
+	}
+
+	r.NoteTranscriptSession("rollout-a", "codex", home, time.Now())
+	for _, id := range []string{a, b} {
+		if _, ok := st.GetSession(id); !ok {
+			t.Fatalf("process-tree row %q merged by scope alone", id)
+		}
+	}
+
+	r.JoinTranscriptPID("rollout-a", 300)
+	r.NoteTranscriptSession("rollout-a", "codex", home, time.Now())
+	wantRoot(t, st, "rollout-a", 300, orch)
+	wantRoot(t, st, b, 400, orch)
+	if _, ok := st.GetSession(a); ok {
+		t.Fatalf("row %q not merged into rollout-a", a)
+	}
+
+	r.NoteTranscriptSession("rollout-b", "codex", home, time.Now())
+	r.JoinTranscriptPID("rollout-b", 400)
+	wantRoot(t, st, "rollout-a", 300, orch)
+	wantRoot(t, st, "rollout-b", 400, orch)
+	if _, ok := st.GetSession(b); ok {
+		t.Fatalf("row %q not merged into rollout-b", b)
+	}
+
+	want := map[string]string{"/teams/a/x": "rollout-a", "/teams/b/x": "rollout-b"}
+	for _, ev := range st.RecentEvents(10) {
+		if w, ok := want[ev.Path]; ok && ev.SessionID != w {
+			t.Fatalf("event %s on %q, want %q", ev.Path, ev.SessionID, w)
+		}
+	}
+	for pid, w := range map[int32]string{300: "rollout-a", 301: "rollout-a", 400: "rollout-b", 401: "rollout-b"} {
+		if got := resolvePID(t, r, pid); got != w {
+			t.Fatalf("pid %d resolves to %q, want %q", pid, got, w)
+		}
+	}
+	roots := map[int32]string{}
+	for _, s := range st.ListSessions(store.SessionFilter{Harness: "codex"}) {
+		if prev, dup := roots[s.RootPID]; dup {
+			t.Fatalf("%q and %q share root %d", prev, s.ID, s.RootPID)
+		}
+		roots[s.RootPID] = s.ID
 	}
 }
