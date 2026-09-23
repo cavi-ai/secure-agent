@@ -190,7 +190,8 @@ func TestEventRetentionBatchPruning(t *testing.T) {
 		s.PutEvent(event.Event{Kind: event.KindExec, PID: int32(i), TS: time.Now()})
 	}
 
-	s.PruneEvents(100)
+	setKindBudget(t, int(event.KindExec), 100)
+	s.PruneEvents()
 	eventsAfterPrune := s.RecentEvents(2000)
 	if len(eventsAfterPrune) != 100 {
 		t.Fatalf("events count after explicit prune = %d, want 100", len(eventsAfterPrune))
@@ -220,7 +221,7 @@ func TestEventRetentionPerKindTimeWindows(t *testing.T) {
 	put(event.KindFileOpen, 30*24*time.Hour)   // 30d old: pruned
 	put(event.KindGuardPrompt, 6*24*time.Hour) // 6d old, within 7d: kept
 
-	s.PruneEvents(10000)
+	s.PruneEvents()
 
 	got := map[event.Kind]int{}
 	for _, e := range s.RecentEvents(100) {
@@ -598,7 +599,8 @@ func TestPruneExemptsTraceKindsFromCountCap(t *testing.T) {
 	for i := 0; i < 20; i++ {
 		s.PutEvent(event.Event{Kind: event.KindToolCall, TS: now, SessionID: "s", CallID: fmt.Sprintf("c%d", i), ToolName: "Bash", ToolStatus: "ok"})
 	}
-	s.PruneEvents(50)
+	setKindBudget(t, int(event.KindConnOpen), 50)
+	s.PruneEvents()
 
 	kind := int(event.KindToolCall)
 	if n := len(s.QueryEvents(EventFilter{Kind: &kind})); n != 20 {
@@ -607,6 +609,88 @@ func TestPruneExemptsTraceKindsFromCountCap(t *testing.T) {
 	conn := int(event.KindConnOpen)
 	if n := len(s.QueryEvents(EventFilter{Kind: &conn})); n >= 60 {
 		t.Fatalf("OS rows after prune = %d, want evicted down to the cap", n)
+	}
+}
+
+func setKindBudget(t *testing.T, kind, budget int) {
+	t.Helper()
+	prev, had := kindBudgets[kind]
+	kindBudgets[kind] = budget
+	t.Cleanup(func() {
+		if had {
+			kindBudgets[kind] = prev
+		} else {
+			delete(kindBudgets, kind)
+		}
+	})
+}
+
+func countKind(t *testing.T, s *Store, kind int) int {
+	t.Helper()
+	var n int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM events WHERE kind = ?`, kind).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+// A burst in one kind must not evict another kind's rows: the file-open
+// burst is trimmed to its own budget and every other kind survives intact.
+func TestPrunePerKindBudgetsIsolateBursts(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(filepath.Join(dir, "e.db"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	setKindBudget(t, int(event.KindFileOpen), 50)
+
+	now := time.Now()
+	put := func(kind event.Kind, n int) {
+		for i := 0; i < n; i++ {
+			s.PutEvent(event.Event{Kind: kind, PID: 1, TS: now})
+		}
+	}
+	put(event.KindPluginAction, 100)
+	put(event.KindConnOpen, 100)
+	put(event.KindTranscriptHit, 100)
+	put(event.KindFileOpen, 100)
+
+	s.PruneEvents()
+
+	for _, c := range []struct {
+		kind event.Kind
+		want int
+	}{
+		{event.KindPluginAction, 100},
+		{event.KindConnOpen, 100},
+		{event.KindTranscriptHit, 100},
+		{event.KindFileOpen, 50},
+	} {
+		if got := countKind(t, s, int(c.kind)); got != c.want {
+			t.Errorf("kind %s: kept %d, want %d", c.kind, got, c.want)
+		}
+	}
+}
+
+// Pruning walks the kinds present in the table, so a kind outside the
+// event enum is still bounded.
+func TestPruneBudgetsApplyToUnlistedKinds(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(filepath.Join(dir, "e.db"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	setKindBudget(t, 99, 3)
+
+	for i := 0; i < 10; i++ {
+		s.PutEvent(event.Event{Kind: event.Kind(99), PID: 1, TS: time.Now()})
+	}
+	s.PruneEvents()
+
+	if got := countKind(t, s, 99); got != 3 {
+		t.Fatalf("kind 99 rows after prune = %d, want 3", got)
 	}
 }
 

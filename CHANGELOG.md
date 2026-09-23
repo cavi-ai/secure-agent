@@ -14,6 +14,10 @@ All notable changes to `secure-agent` are documented here. The format follows
   anywhere classified as sensitive and seeded `sensitive-read-then-connect`.
 - Flag evidence `read` items carry `rule` (which classifier rule or glob
   matched); ES file events from the daemon's own pid are dropped at ingest.
+- Event retention: every event kind has its own row budget; the shared
+  10,000-row cap over all non-trace kinds let a file-open burst evict
+  hook-activity, connection, and transcript-hit rows, which made the posture
+  hook item and the acceptance gate report a firing hook as silent.
 - ES grant flow: the Full Disk Access entry is the helper binary
   `com.cavi-ai.secure-agent-esd`, not `eslogger` — the setup card now names
   it exactly, and the retry-interval copy matches the real 60s backoff.
