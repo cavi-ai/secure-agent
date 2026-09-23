@@ -7,6 +7,11 @@ All notable changes to `secure-agent` are documented here. The format follows
 ## [Unreleased]
 
 ### Fixed
+- Model pricing: explicit entries for every current Anthropic model (Fable
+  5.x, Opus 5.5/5/4.8/4.7/4.6/4.5, Sonnet 5/4.6/4.5, Haiku 4.5) at list
+  price; a family prefix only absorbs a date or `-latest` suffix, so a newer
+  version or a `-pro`/`-mini` variant is never billed at another model's
+  price — it is unpriced until an entry exists.
 - Sensitive-path classifier: globs with a directory component
   (`~/.kube/config`, `~/.claude/settings.json`, the merged guard-rule paths)
   match the full path only; previously the file name alone matched, so any
