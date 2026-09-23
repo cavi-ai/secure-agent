@@ -272,8 +272,11 @@ func TestESServiceItemsNamesRegrantAfterHelperReplaced(t *testing.T) {
 	}
 	d := replaced[0].Detail
 	if !strings.Contains(d, "helper binary was replaced after the last write") ||
-		!strings.Contains(d, "Full Disk Access") || !strings.Contains(d, collect.ESServiceLabel) {
+		!strings.Contains(d, "grant Full Disk Access again for Secure Agent") {
 		t.Fatalf("replaced helper detail must name the re-grant, got %q", d)
+	}
+	if strings.Contains(d, collect.ESServiceLabel) {
+		t.Fatalf("user-facing detail must name the app, not the launchd label: %q", d)
 	}
 
 	unchanged := esServiceItems(collect.ESServiceSnapshot{
