@@ -8,12 +8,14 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	_ "modernc.org/sqlite"
 
+	"github.com/cavi-ai/secure-agent/daemon/internal/correlate"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/resource"
@@ -51,6 +53,17 @@ type Store struct {
 	// instead of a MAX(ts) GROUP BY scan over the events table (measured
 	// 2–4s at ~400 live pids — past the UI's 3s socket timeout).
 	lastSeen map[int32]string
+	// allowlist returns the operator's approved hosts per agent (nil until
+	// wired); TrendFor reads it for the advisor's host prompt.
+	allowlist func() map[string][]string
+}
+
+// SetAllowlistSource wires the operator allowlist (agent -> hosts) that
+// TrendFor reports as AllowedFor.
+func (s *Store) SetAllowlistSource(fn func() map[string][]string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.allowlist = fn
 }
 
 // Retention defaults; both overrideable via config (retention.conn_event_hours,
@@ -914,8 +927,36 @@ func (s *Store) RollupRange(since time.Time) []RollupPoint {
 }
 
 // TrendFor computes the trend context for a flag's rule (and host, when the
-// flag evidence names one).
+// flag evidence names one): counts from the store, the host's identity from
+// the CIDR/PTR cache (no network), and every agent the operator already
+// allowed the host for.
 func (s *Store) TrendFor(rule, host string) model.TrendContext {
+	tc, allow := s.trendCounts(rule, host)
+	if host == "" {
+		return tc
+	}
+	id := correlate.IdentifyCached(host)
+	tc.HostOrg = id.Org
+	if !strings.EqualFold(id.Name, host) {
+		tc.HostName = id.Name
+	}
+	if allow != nil {
+		for agent, hosts := range allow() {
+			for _, h := range hosts {
+				if strings.EqualFold(h, host) {
+					tc.AllowedFor = append(tc.AllowedFor, agent)
+					break
+				}
+			}
+		}
+		sort.Strings(tc.AllowedFor)
+	}
+	return tc
+}
+
+// trendCounts reads the rule/host counts under the lock and returns the
+// allowlist source so TrendFor calls it without holding mu.
+func (s *Store) trendCounts(rule, host string) (model.TrendContext, func() map[string][]string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var tc model.TrendContext
@@ -939,7 +980,7 @@ func (s *Store) TrendFor(rule, host string) model.TrendContext {
 			tc.HostFirstSeen = first.String
 		}
 	}
-	return tc
+	return tc, s.allowlist
 }
 
 // PutAdvisorVerdict stores (or replaces) the local advisor's verdict for a

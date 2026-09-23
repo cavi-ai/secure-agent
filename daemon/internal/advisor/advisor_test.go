@@ -453,3 +453,40 @@ func TestBudgetExhaustionIsNamed(t *testing.T) {
 		t.Fatal("empty model output must produce an error, not a silent empty verdict")
 	}
 }
+
+// The host prompt names the endpoint's owner and existing allowances, so the
+// model judges "Anthropic, already allowed for claude", not a bare IP.
+func TestAssessHostPromptCarriesIdentity(t *testing.T) {
+	userMsg := func(trend model.TrendContext) string {
+		stub := &chatStub{content: `{"assessment":"benign","confidence":0.95,"rationale":"Anthropic API"}`}
+		srv := newStubServer(t, stub)
+		sink := &memSink{rows: map[string]model.AdvisorVerdict{}, trend: trend}
+		sub := New(Config{Enabled: true, Endpoint: srv.URL, Model: "m", Timeout: 2 * time.Second}, sink)
+		if _, err := sub.assessHost(context.Background(), "openclaw", "160.79.104.10"); err != nil {
+			t.Fatal(err)
+		}
+		stub.mu.Lock()
+		defer stub.mu.Unlock()
+		var req chatRequest
+		if err := json.Unmarshal([]byte(stub.lastBody), &req); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(req.Messages[0].Content, "confidence ≥ 0.9") {
+			t.Fatalf("host system prompt lacks the vendor rule: %q", req.Messages[0].Content)
+		}
+		return req.Messages[1].Content
+	}
+
+	known := userMsg(model.TrendContext{HostOrg: "Anthropic", AllowedFor: []string{"claude"}})
+	if !strings.Contains(known, "identity: Anthropic") || !strings.Contains(known, "already allowed for: claude") {
+		t.Fatalf("known host prompt = %q", known)
+	}
+	named := userMsg(model.TrendContext{HostName: "edge.example.net"})
+	if !strings.Contains(named, "reverse name: edge.example.net") || strings.Contains(named, "identity:") {
+		t.Fatalf("name-only host prompt = %q", named)
+	}
+	unknown := userMsg(model.TrendContext{})
+	if strings.Contains(unknown, "identity:") || strings.Contains(unknown, "already allowed for:") || strings.Contains(unknown, "reverse name:") {
+		t.Fatalf("unknown host prompt = %q", unknown)
+	}
+}

@@ -110,6 +110,9 @@ type UninspectedSummary struct {
 	// (InfraOrg) — empty for genuinely unknown destinations. UIs escalate
 	// only the unknown kind; infra rows collapse into a coverage note.
 	Infra string `json:"infra,omitempty"`
+	// Identity is IdentifyCached(host): the owning org (vendor API, cloud)
+	// and cached reverse name. Never a network lookup.
+	Identity EndpointIdentity `json:"identity"`
 }
 
 // UninspectedEgressSummary lists the observed blind-spot endpoints, most
@@ -132,7 +135,8 @@ func (c *Correlator) UninspectedEgressSummarySince(since time.Time) []Uninspecte
 		}
 		agent, host, _ := strings.Cut(key, "|")
 		out = append(out, UninspectedSummary{Agent: agent, Host: host, Count: e.count,
-			FirstSeen: e.firstSeen, LastSeen: e.lastSeen, SessionID: e.sessionID, Infra: InfraOrg(host)})
+			FirstSeen: e.firstSeen, LastSeen: e.lastSeen, SessionID: e.sessionID, Infra: InfraOrg(host),
+			Identity: IdentifyCached(host)})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Count > out[j].Count })
 	return out
@@ -502,8 +506,10 @@ func (c *Correlator) Observe(e event.Event) []model.Flag {
 					e2.sessionID = e.SessionID
 				}
 				// Advisor pre-assessment is for endpoints a human must judge —
-				// never spend model calls on Cloudflare/Google/AWS carriers.
-				if e2.count == 3 && c.onUninspected != nil && InfraOrg(e.RemoteHost) == "" {
+				// never spend model calls on carriers or on hosts the daemon
+				// already names (Anthropic, OpenAI, AWS, …).
+				if e2.count == 3 && c.onUninspected != nil &&
+					IdentifyCached(e.RemoteHost).Org == "" && InfraOrg(e.RemoteHost) == "" {
 					c.onUninspected(info.Name, e.RemoteHost)
 				}
 			} else if len(c.uninspected) < maxUninspectedTracked {

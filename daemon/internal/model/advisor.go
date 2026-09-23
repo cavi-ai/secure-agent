@@ -25,6 +25,12 @@ type TrendContext struct {
 	RulePrior7d   int    `json:"rule_prior_7d"`
 	HostFirstSeen string `json:"host_first_seen,omitempty"` // RFC3339, empty = never seen
 	HostKnown     bool   `json:"host_known"`
+	// HostOrg / HostName identify the host (CIDR table, cached PTR) so the
+	// advisor judges a named vendor, not a bare address.
+	HostOrg  string `json:"host_org,omitempty"`
+	HostName string `json:"host_name,omitempty"`
+	// AllowedFor lists every agent the operator already allowed the host for.
+	AllowedFor []string `json:"allowed_for,omitempty"`
 }
 
 // GuardAssessmentRequest is what the advisor needs to advise on ONE blocked

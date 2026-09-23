@@ -156,6 +156,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 	fw := setupFirewall(cfg)
 
 	allowlistStore, muteStore := wireEgressOverrides(cfg, correlator, advisorStk)
+	st.SetAllowlistSource(allowlistStore.Load)
 
 	var proxyServer *proxy.ProxyServer
 	if cfg.ProxyEnabled {

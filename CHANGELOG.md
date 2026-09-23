@@ -7,6 +7,9 @@ All notable changes to `secure-agent` are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- `/egress/uninspected` rows carry `identity`, `first_seen` and `session_id`.
+- Egress drill-down groups vendor-API endpoints (`identity.org` set, no `infra`) into one row per agent and vendor with Allow all and Evidence.
+- Advisor host prompt carries the host's identity, reverse name and the agents it is already allowed for.
 - Hermes Agent process matcher (`hermes-agent`, `/.hermes/`).
 - Hermes Agent sessions from `state.db` and each profile's `state.db`: turns, tool calls and model calls; `hermes_home` setting.
 - Hermes sessions carry the repo, branch and parent session Hermes records.
@@ -54,8 +57,10 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Console: pid-scoped event filtering opens the Events tab.
 - Console: "View session in timeline" opens the session in the Sessions tab with its trace, keeping Events scoped to it.
 - Console: the drawer's Copy button stays hidden outside incident reports.
+- Advisor host pre-assessment skips hosts whose owner the daemon already names (`IdentifyCached`), not only CDN carriers.
 
 ### Fixed
+- Endpoint drawer resolves sessions by id; sessions beyond the newest 1,000 are attributed.
 - A codex rollout session joins the process holding the rollout open: root pid set, that tree's process-tree session merged in.
 - `/doctor` trace coverage counts transcript and hook sessions seen since boot, not only those started since boot.
 - A session upsert stores a new parent and never clears a stored one.
