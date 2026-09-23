@@ -116,44 +116,70 @@ function sessionShort(id) {
   return String(id || '').slice(0, 8);
 }
 
-// harnessMeta: per-harness identity for the console — a brand color and a
-// short glyph so "claude", "cursor" and "codex" rows are distinguishable at a
-// glance (they were all identical before). Mirrors the menubar's AgentIdentity
-// palette so the two surfaces agree. Pure: returns data, no DOM.
+// harnessMeta: per-harness identity for the console — display name, brand
+// color, and the sprite symbol of its mark (index.html, #logo-*). Needles
+// match the harness names the daemon reports by substring, first match wins,
+// so "cursor-ide" is listed before "cursor". Infra entries (IDEs, local model
+// servers) are tracked but shown apart and never counted as agents. Known
+// harnesses without a mark keep a text glyph. Colors must match the .hk-<key>
+// rules in style.css. Pure: returns data, no DOM.
+const HARNESS_TABLE = [
+  { needle: 'claude', key: 'claude', label: 'Claude Code', color: '#D97757', logo: 'logo-claude' },
+  { needle: 'cursor-ide', key: 'cursor-ide', label: 'Cursor', color: '#000000', logo: 'logo-cursor', tile: 'light', infra: true },
+  { needle: 'cursor', key: 'cursor', label: 'Cursor', color: '#000000', logo: 'logo-cursor', tile: 'light' },
+  { needle: 'codex', key: 'codex', label: 'Codex', color: '#10A37F', logo: 'logo-codex' },
+  { needle: 'opencode', key: 'opencode', label: 'opencode', color: '#000000', logo: 'logo-opencode' },
+  { needle: 'openclaw', key: 'openclaw', label: 'OpenClaw', color: 'hsl(342 62% 62%)', glyph: 'O' },
+  { needle: 'antigravity', key: 'agy', label: 'Antigravity', color: '#8E75B2', logo: 'logo-gemini' },
+  { needle: 'agy', key: 'agy', label: 'Antigravity', color: '#8E75B2', logo: 'logo-gemini' },
+  { needle: 'gemini', key: 'gemini', label: 'Gemini', color: '#8E75B2', logo: 'logo-gemini' },
+  { needle: 'windsurf', key: 'windsurf', label: 'Windsurf', color: '#0B100F', logo: 'logo-windsurf' },
+  { needle: 'aider', key: 'aider', label: 'Aider', color: 'hsl(20 90% 58%)', glyph: '◉' },
+  { needle: 'codeium', key: 'codeium', label: 'Codeium', color: 'hsl(201 88% 46%)', glyph: '◈' },
+  { needle: 'copilot', key: 'copilot', label: 'GitHub Copilot', color: 'hsl(220 12% 60%)', glyph: '◍' },
+  { needle: 'ollama', key: 'ollama', label: 'Ollama', color: '#000000', logo: 'logo-ollama', infra: true },
+  { needle: 'lm-studio', key: 'lm-studio', label: 'LM Studio', color: '#000000', logo: 'logo-lm-studio', infra: true },
+  { needle: 'lmstudio', key: 'lm-studio', label: 'LM Studio', color: '#000000', logo: 'logo-lm-studio', infra: true },
+];
+
 function harnessMeta(name) {
   const key = String(name || '').toLowerCase();
-  const known = [
-    ['claude', '✳', 'hsl(18 60% 58%)'],      // Anthropic clay
-    ['cursor', '▰', 'hsl(220 8% 62%)'],       // Cursor near-black (lightened)
-    ['codex', '⬡', 'hsl(168 68% 42%)'],       // OpenAI teal
-    ['opencode', '〈', 'hsl(258 90% 72%)'],
-    ['antigravity', '▲', 'hsl(233 90% 68%)'],
-    ['agy', '▲', 'hsl(233 90% 68%)'],
-    ['windsurf', '≋', 'hsl(178 82% 38%)'],
-    ['aider', '◉', 'hsl(20 90% 58%)'],
-    ['gemini', '✦', 'hsl(218 88% 64%)'],
-    ['codeium', '◈', 'hsl(201 88% 46%)'],
-    ['copilot', '◍', 'hsl(220 12% 60%)'],
-    ['ollama', '◐', 'hsl(0 0% 70%)'],
-    ['lm-studio', '◧', 'hsl(210 50% 48%)'],
-  ];
-  for (const [needle, glyph, color] of known) {
-    if (key.includes(needle)) return { glyph, color, known: true };
+  for (const h of HARNESS_TABLE) {
+    if (!key.includes(h.needle)) continue;
+    return {
+      key: h.key, label: h.label, color: h.color, logo: h.logo || '',
+      glyph: h.glyph || '', tile: h.tile || '', infra: !!h.infra, known: true,
+    };
   }
   // Unknown harness: deterministic hue from the name, first letter as glyph.
   let h = 2166136261;
   for (const b of key) h = (h ^ b.charCodeAt(0)) >>> 0, h = Math.imul(h, 16777619) >>> 0;
-  return { glyph: (name || '?').trim().slice(0, 1).toUpperCase() || '?',
-           color: `hsl(${h % 360} 62% 62%)`, known: false };
+  return {
+    key: key.trim() || 'agent', label: familyTitle(String(name || '').trim() || 'agent'),
+    color: `hsl(${h % 360} 62% 62%)`, logo: '',
+    glyph: (name || '?').trim().slice(0, 1).toUpperCase() || '?',
+    tile: '', infra: false, known: false,
+  };
 }
 
-// harnessChipHTML: the icon tile + label used in list rows. The tile carries
-// the harness color; aria-hidden so screen readers read the label once.
-function harnessChipHTML(name) {
+// harnessChipHTML: the harness mark for list rows and group heads. A known
+// mark renders white on its brand tile (Cursor dark on a light tile); the
+// tile color comes from the .hk-<key> class because the console CSP
+// (style-src 'self') drops inline style attributes. Unknown harnesses keep
+// the hashed-hue initial. opts.label appends the display name as text.
+function harnessChipHTML(name, opts) {
   const m = harnessMeta(name);
-  return `<span class="harness-chip" title="${escapeHTML(name || 'agent')}">`
-    + `<span class="harness-glyph" style="--harness-color:${m.color}" aria-hidden="true">${escapeHTML(m.glyph)}</span>`
-    + `</span>`;
+  let mark;
+  if (m.logo) {
+    mark = `<span class="harness-tile hk-${escapeHTML(m.key)}${m.tile === 'light' ? ' light' : ''}" aria-hidden="true">`
+      + `<svg class="harness-logo" aria-hidden="true"><use href="#${escapeHTML(m.logo)}"/></svg></span>`;
+  } else if (m.known) {
+    mark = `<span class="harness-glyph hk-${escapeHTML(m.key)}" aria-hidden="true">${escapeHTML(m.glyph)}</span>`;
+  } else {
+    mark = `<span class="harness-glyph" style="--harness-color:${m.color}" aria-hidden="true">${escapeHTML(m.glyph)}</span>`;
+  }
+  const label = opts && opts.label ? `<span class="harness-label">${escapeHTML(m.label)}</span>` : '';
+  return `<span class="harness-chip" title="${escapeHTML(m.known ? m.label : (name || 'agent'))}">${mark}${label}</span>`;
 }
 
 // filterEventsBySession: the timeline's session drill-down. Client-side over

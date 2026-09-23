@@ -40,6 +40,10 @@
   /* Set inline per harness element by harnessChipHTML(); default here so the
      stylesheet custom-property lint (and a missing inline value) still resolve. */
   --harness-color: var(--tx-2);
+  /* Harness mark tile: list rows, and the larger size in group heads. */
+  --harness-tile: 20px;
+  --harness-tile-lg: 26px;
+  --harness-logo: 64%;
 }
 
 /* Light theme: same structure, warm-neutral surfaces, one accent. Follows
@@ -291,6 +295,7 @@ body {
 }
 .agent-group-title .icon { color: var(--brand-2); font-size: 1.05rem; }
 .agent-group-title .harness-glyph { width: 22px; height: 22px; font-size: 14px; border-radius: 6px; }
+.agent-group-title .harness-tile { --harness-tile: var(--harness-tile-lg); }
 .agent-group-meta {
   display: flex; align-items: center; flex-wrap: wrap; gap: 8px; justify-content: flex-end;
 }
@@ -1208,7 +1213,33 @@ button.fw-uninspected .fw-drill-hint {
 .session-card .sc-head .sc-label { min-width: 0; }
 /* Per-harness mark: tinted tile + brand glyph, so claude/cursor/codex rows
    are distinguishable at a glance (previously all identical text rows). */
-.harness-chip { display: inline-flex; flex: none; }
+.harness-chip { display: inline-flex; align-items: center; gap: 7px; flex: none; min-width: 0; }
+.harness-label { font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Known marks: white on a brand-colored tile, Cursor dark on a light tile.
+   Colors are keyed by class, not set inline — the console CSP
+   (style-src 'self') drops inline style attributes. harnessMeta() in lib.js
+   carries the same values and lib.test.mjs keeps the two in step. */
+.harness-tile {
+  display: inline-grid; place-items: center; flex: none;
+  width: var(--harness-tile); height: var(--harness-tile);
+  border-radius: calc(var(--harness-tile) * 0.26);
+  background: var(--harness-color); color: #fff;
+  box-shadow: inset 0 0 0 1px hsl(0 0% 100% / 0.14);
+}
+.harness-tile.light { background: hsl(0 0% 94%); color: #000; box-shadow: inset 0 0 0 1px hsl(0 0% 0% / 0.12); }
+.harness-logo { width: var(--harness-logo); height: var(--harness-logo); }
+.hk-claude { --harness-color: #D97757; }
+.hk-cursor, .hk-cursor-ide { --harness-color: #000000; }
+.hk-codex { --harness-color: #10A37F; }
+.hk-opencode { --harness-color: #000000; }
+.hk-openclaw { --harness-color: hsl(342 62% 62%); }
+.hk-agy, .hk-gemini { --harness-color: #8E75B2; }
+.hk-windsurf { --harness-color: #0B100F; }
+.hk-aider { --harness-color: hsl(20 90% 58%); }
+.hk-codeium { --harness-color: hsl(201 88% 46%); }
+.hk-copilot { --harness-color: hsl(220 12% 60%); }
+.hk-ollama { --harness-color: #000000; }
+.hk-lm-studio { --harness-color: #000000; }
 .harness-glyph {
   display: inline-flex; align-items: center; justify-content: center;
   width: 18px; height: 18px; border-radius: 5px; font-size: 12px; line-height: 1;

@@ -14,6 +14,9 @@ const libPath = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   '../../../daemon/internal/api/web_dist/lib.js'
 );
+const webDist = path.dirname(libPath);
+const indexHTML = readFileSync(path.join(webDist, 'index.html'), 'utf8');
+const styleCSS = readFileSync(path.join(webDist, 'style.css'), 'utf8');
 const ctx = {};
 vm.runInNewContext(readFileSync(libPath, 'utf8'), ctx, { filename: 'lib.js' });
 const {
@@ -508,33 +511,114 @@ test('sessionStripHTML: labels, RSS, needs-you, opens Sessions tab', () => {
 
 // ---------- per-harness identity ----------
 
-test('harnessMeta gives each known harness a distinct glyph and color', () => {
-  const claude = harnessMeta('claude');
-  const cursor = harnessMeta('cursor');
-  const codex = harnessMeta('codex');
-  for (const m of [claude, cursor, codex]) assert.equal(m.known, true);
-  // The whole point: they must not all look the same.
-  assert.notEqual(claude.glyph, cursor.glyph);
-  assert.notEqual(cursor.glyph, codex.glyph);
-  assert.notEqual(claude.color, codex.color);
+// Relative luminance / contrast ratio (WCAG 2.x) for '#rrggbb' and
+// 'hsl(h s% l%)' colors, so the white-on-tile marks are checked, not assumed.
+function toRGB(color) {
+  const hex = /^#([0-9a-f]{6})$/i.exec(color);
+  if (hex) return [0, 2, 4].map(i => parseInt(hex[1].slice(i, i + 2), 16) / 255);
+  const m = /^hsl\((\d+(?:\.\d+)?) (\d+(?:\.\d+)?)% (\d+(?:\.\d+)?)%\)$/.exec(color);
+  assert.ok(m, `unparseable color ${color}`);
+  const [h, s, l] = [Number(m[1]), Number(m[2]) / 100, Number(m[3]) / 100];
+  const f = n => {
+    const k = (n + h / 30) % 12;
+    return l - s * Math.min(l, 1 - l) * Math.max(-1, Math.min(k - 3, 9 - k, 1));
+  };
+  return [f(0), f(8), f(4)];
+}
+function luminance(color) {
+  const [r, g, b] = toRGB(color).map(c => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4));
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+function contrast(a, b) {
+  const [x, y] = [luminance(a), luminance(b)].sort((p, q) => q - p);
+  return (x + 0.05) / (y + 0.05);
+}
+
+const LIVE_HARNESSES = {
+  claude: 'Claude Code', codex: 'Codex', cursor: 'Cursor', 'cursor-ide': 'Cursor',
+  opencode: 'opencode', agy: 'Antigravity', openclaw: 'OpenClaw', ollama: 'Ollama', 'lm-studio': 'LM Studio',
+};
+const KNOWN_HARNESSES = [...Object.keys(LIVE_HARNESSES), 'gemini', 'windsurf', 'aider', 'codeium', 'copilot'];
+// No mark for these in the sprite's sources (simple-icons, the menubar glyphs,
+// or the source license is not CC0); they render a text glyph on the tint.
+const UNMARKED = new Set(['openclaw', 'aider', 'codeium', 'copilot']);
+
+test('harnessMeta resolves every live harness key to its display name and a sprite mark', () => {
+  for (const [key, label] of Object.entries(LIVE_HARNESSES)) {
+    const m = harnessMeta(key);
+    assert.equal(m.known, true, key);
+    assert.equal(m.key, key);
+    assert.equal(m.label, label);
+    if (UNMARKED.has(key)) {
+      assert.equal(m.logo, '', key);
+      assert.ok(m.glyph, `${key} needs a text glyph`);
+      continue;
+    }
+    assert.match(m.logo, /^logo-/, key);
+    assert.ok(indexHTML.includes(`<symbol id="${m.logo}"`), `#${m.logo} for ${key} is not in index.html`);
+  }
 });
 
-test('harnessMeta matches harness variants and falls back deterministically', () => {
-  assert.equal(harnessMeta('cursor-ide').glyph, harnessMeta('cursor').glyph);
-  assert.equal(harnessMeta('lm-studio').known, true);
+test('harnessMeta maps variants onto one harness and flags infra', () => {
+  assert.equal(harnessMeta('antigravity').key, 'agy');
+  assert.equal(harnessMeta('agy').logo, 'logo-gemini');
+  assert.equal(harnessMeta('gemini').logo, 'logo-gemini');
+  assert.equal(harnessMeta('Claude-Code').key, 'claude');
+  assert.equal(harnessMeta('lmstudio').key, 'lm-studio');
+  // cursor-ide is Cursor's IDE: same mark and name, but infra.
+  assert.equal(harnessMeta('cursor-ide').logo, harnessMeta('cursor').logo);
+  assert.equal(harnessMeta('cursor-ide').infra, true);
+  assert.equal(harnessMeta('cursor').infra, false);
+  for (const k of ['ollama', 'lm-studio']) assert.equal(harnessMeta(k).infra, true, k);
+  for (const k of ['claude', 'codex', 'opencode', 'agy', 'openclaw']) assert.equal(harnessMeta(k).infra, false, k);
+});
+
+test('harnessMeta falls back to a stable hue and initial for unknown harnesses', () => {
   const a = harnessMeta('mystery-agent');
   const b = harnessMeta('mystery-agent');
   assert.equal(a.known, false);
+  assert.equal(a.logo, '');
   assert.equal(a.glyph, 'M');
+  assert.match(a.color, /^hsl\(\d+ 62% 62%\)$/);
   assert.equal(a.color, b.color); // deterministic, not random
+  assert.notEqual(harnessMeta('other-agent').color, a.color);
 });
 
-test('harnessChipHTML embeds the color token and escapes the name', () => {
-  const html = harnessChipHTML('claude');
-  assert.match(html, /--harness-color:hsl/);
-  assert.match(html, /class="harness-glyph"/);
+test('white marks keep at least 3:1 contrast on every brand tile', () => {
+  for (const key of KNOWN_HARNESSES) {
+    const m = harnessMeta(key);
+    if (!m.logo) continue;
+    const bg = m.tile === 'light' ? 'hsl(0 0% 94%)' : m.color;
+    const fg = m.tile === 'light' ? '#000000' : '#ffffff';
+    assert.ok(contrast(fg, bg) >= 3, `${key}: ${contrast(fg, bg).toFixed(2)}:1 on ${bg}`);
+  }
+});
+
+test('style.css tile colors match harnessMeta for every known harness', () => {
+  for (const key of KNOWN_HARNESSES) {
+    const m = harnessMeta(key);
+    const rule = new RegExp(`\\.hk-${key}\\b[^{]*\\{ --harness-color: ([^;]+); \\}`);
+    const hit = rule.exec(styleCSS);
+    assert.ok(hit, `no .hk-${key} rule in style.css`);
+    assert.equal(hit[1], m.color, key);
+  }
+  assert.ok(styleCSS.includes('.harness-tile.light {'), 'light tile rule missing');
+});
+
+test('harnessChipHTML renders the sprite mark by class and escapes the name', () => {
+  const claude = harnessChipHTML('claude');
+  assert.match(claude, /<svg class="harness-logo" aria-hidden="true"><use href="#logo-claude"\/><\/svg>/);
+  assert.match(claude, /class="harness-tile hk-claude"/);
+  assert.ok(!claude.includes('style='), 'known marks must not rely on inline styles');
+  assert.ok(!claude.includes('harness-label'), 'label only when asked');
+  assert.match(harnessChipHTML('cursor'), /class="harness-tile hk-cursor light"/);
+  assert.match(harnessChipHTML('claude', { label: true }), /<span class="harness-label">Claude Code<\/span>/);
+  assert.match(harnessChipHTML('openclaw'), /class="harness-glyph hk-openclaw"[^>]*>O</);
+  const unknown = harnessChipHTML('mystery-agent');
+  assert.match(unknown, /--harness-color:hsl/);
+  assert.match(unknown, /class="harness-glyph"/);
   // A malicious harness name must not break out of the title attribute.
-  const evil = harnessChipHTML('"><script>alert(1)</script>');
+  const evil = harnessChipHTML('"><script>alert(1)</script>', { label: true });
   assert.ok(!evil.includes('<script>'));
 });
 
