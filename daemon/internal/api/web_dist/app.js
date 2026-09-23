@@ -1502,6 +1502,23 @@ document.addEventListener('DOMContentLoaded', () => {
       showToast(`Could not ask the advisor: ${err.message || err}`, 'error');
     }
   };
+  // Operator labels: Mark as routine / Mark as not ok, and the kill record.
+  // The advisor reads them on the next triage and plan.
+  window.markLabel = async function(subject, label, source, { quiet } = {}) {
+    try {
+      const res = await apiFetch('/labels', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ subject, label, source: source || 'mark' })
+      });
+      if (!res.ok) throw new Error((await res.text()).trim());
+      if (!quiet) showToast(label === 'ok' ? 'Marked as routine. The advisor will use it.' : 'Marked as not ok. The advisor will use it.', 'success');
+      fetchTelemetry();
+      if (planSlots(subject).length) loadPlanSlot(subject);
+    } catch (err) {
+      if (!quiet) showToast(`Could not save the mark: ${err.message || err}`, 'error');
+    }
+  };
+
   window.openPlanDrawer = function(subject, { back } = {}) {
     if (!drawer) return;
     drawerMode = 'plan';
@@ -1631,12 +1648,13 @@ document.addEventListener('DOMContentLoaded', () => {
       if (res.ok) {
         showToast(`Process tree PID ${pid} terminated.`, 'success');
         fetchTelemetry();
-      } else {
-        showToast(`Failed to terminate PID ${pid}.`, 'danger');
+        return true;
       }
+      showToast(`Failed to terminate PID ${pid}.`, 'danger');
     } catch (err) {
       showToast(`Error terminating PID ${pid}: ${err}`, 'danger');
     }
+    return false;
   };
 
   window.resolveResourceControl = async function(id, decision, sessionKey, actionName) {
@@ -2011,7 +2029,10 @@ document.addEventListener('DOMContentLoaded', () => {
       case 'dismiss':
         return window.dismissFlag(f.id);
       case 'kill':
-        return window.killProcess(Number(body.pid), body.started_at, f.agent);
+        if (await window.killProcess(Number(body.pid), body.started_at, f.agent)) {
+          window.markLabel('flag:' + f.id, 'not_ok', 'kill', { quiet: true });
+        }
+        return;
       case 'open-incident':
         return window.openIncidentReport(new URLSearchParams(String(a.path).split('?')[1] || '').get('id') || '');
       case 'mute-rule-host':
@@ -2351,6 +2372,10 @@ document.addEventListener('DOMContentLoaded', () => {
       case 'ask-plan':
         e.preventDefault();
         window.askAdvisorPlan(d.subject);
+        break;
+      case 'mark-label':
+        e.preventDefault();
+        window.markLabel(d.subject, d.label);
         break;
       case 'file-reveal':
       case 'file-open':
