@@ -41,6 +41,7 @@ const {
   hbarsHTML, sessionWaterfallHTML, applyInlineMetrics, resourceHostContextHTML,
   fmtUSD, topCostRows,
   familyLabel, cappedList, resourceNeedsAttention, resourceFamilyGroups,
+  memoryRowsByFamily, renderChartMemory,
   mapPostureAttention,
 } = ctx;
 
@@ -1072,6 +1073,64 @@ test('familyLabel: the harness name alone, never a pid', () => {
   assert.equal(numeric, 'Codex');
   for (const f of [{ root_pid: 100, name: 'claude' }, { root_pid: 200, name: 'codex' }, { root_pid: 42 }]) {
     assert.ok(!familyLabel(f, famSessions).includes(String(f.root_pid)), JSON.stringify(f));
+  }
+});
+
+// ---------- memory by family ----------
+
+const memTrees = [
+  { root: { pid: 3432, name: 'claude', cwd: '/Applications/Claude.app' }, rss_bytes: 10522669875 },
+  { root: { pid: 999, name: 'codex', cwd: '/Users/dev/workspace/data-pipeline' }, rss_bytes: 209715200 },
+];
+const memSessions = [
+  ...Array.from({ length: 27 }, (_, i) => ({ id: `claude-${i}`, harness: 'claude', root_pid: 3432, repo: 'worktree-hunter', branch: 'main' })),
+  { id: 'codex-1', harness: 'codex', root_pid: 999, workspace: '/Users/dev/workspace/data-pipeline' },
+  { id: 'gone', harness: 'claude', root_pid: 4242, repo: 'ghost' },
+];
+
+test('memoryRowsByFamily: one row per live family, its RSS once, the session count in the label', () => {
+  const rows = memoryRowsByFamily(memSessions, memTrees);
+  assert.equal(rows.length, 2);
+  assert.equal(rows[0].label, 'Claude Code · worktree-hunter@main · 27 sessions');
+  assert.equal(rows[0].rss, 10522669875);
+  assert.equal(rows[0].infra, false);
+  assert.equal(rows[1].label, 'Codex · data-pipeline');
+  assert.equal(rows[1].rss, 209715200);
+  assert.ok(!rows.some(r => r.label.includes('ghost')));
+});
+
+test('memoryRowsByFamily: a family is infra when its live tree root is infra', () => {
+  const rows = memoryRowsByFamily([...memSessions, { id: 'ollama-1', harness: 'ollama', root_pid: 7001 }],
+    [...memTrees, { root: { pid: 7001, name: 'ollama', kind: 'infra', cwd: '/' }, rss_bytes: 820000000 }]);
+  assert.deepEqual(Array.from(rows, r => [r.pid, r.infra]), [[3432, false], [7001, true], [999, false]]);
+});
+
+test('renderChartMemory: one keyed bar per family; the badge counts agent families, not sessions or infra', () => {
+  const saved = {};
+  for (const k of ['window', 'document', 'patchList']) saved[k] = [k in ctx, ctx[k]];
+  const chart = { innerHTML: '', querySelectorAll: () => [] };
+  const badge = { textContent: '' };
+  let got = null;
+  const trees = [...memTrees, { root: { pid: 7001, name: 'ollama', kind: 'infra', cwd: '/' }, rss_bytes: 820000000 }];
+  ctx.window = { SA: { t: { status: { trees }, sessions: [...memSessions, { id: 'ollama-1', harness: 'ollama', root_pid: 7001 }] } } };
+  ctx.document = { getElementById: id => ({ 'chart-memory': chart, 'chart-mem-total': badge })[id] || null };
+  ctx.patchList = (container, items, opts) => { got = { container, items, opts }; };
+  try {
+    renderChartMemory();
+    assert.equal(badge.textContent, 2);
+    assert.equal(got.container, chart);
+    assert.deepEqual(Array.from(got.items, f => String(got.opts.key(f))), ['3432', '7001', '999']);
+    const bars = got.items.map(got.opts.html);
+    assert.ok(bars.every(b => b.startsWith('<div class="hbar-row">')));
+    assert.equal(bars.filter(b => b.includes('27 sessions')).length, 1);
+    assert.equal(bars.filter(b => b.includes('class="hbar-sub">infra<')).length, 1);
+    // Process-tree fallback (no sessions): infra still comes from the root.
+    ctx.window.SA.t.sessions = [];
+    renderChartMemory();
+    assert.equal(badge.textContent, 2);
+    assert.deepEqual(Array.from(got.items, f => [String(got.opts.key(f)), f.infra]), [['3432', false], ['7001', true], ['999', false]]);
+  } finally {
+    for (const [k, [had, prev]] of Object.entries(saved)) if (had) ctx[k] = prev; else delete ctx[k];
   }
 });
 
