@@ -185,6 +185,10 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 	uiPID := owningUIPID()
 
 	retriageFuncs, hostAssessFuncs, guardAdvisor := buildAdvisorHooks(st, advisorStk)
+
+	// Hermes Agent's collector is built before the API so /doctor reads its
+	// state; startCollectors runs it.
+	hermes := newHermesCollector(cfg, b, supReg, resolver)
 	resourcePolicyUpdater := buildResourcePolicyUpdater(opts.ConfigPath, resourceControl)
 
 	apiServer := api.New(api.Deps{
@@ -220,6 +224,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 		FleetConfigured: len(cfg.Fleet.Webhooks) > 0,
 		PublishEvent:    b.Publish,
 		DeltaHub:        deltaHub,
+		Hermes:          hermes.Status,
 	})
 
 	resourceControl.SetExecutor(makeResourceExecutor(apiServer, tagger, st))
@@ -262,7 +267,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 		}
 	}()
 
-	startCollectors(ctx, sup, supReg, cfg, b, tagger, resolver, advisorStk, proxyServer, fw.Engine)
+	startCollectors(ctx, sup, supReg, cfg, b, tagger, resolver, advisorStk, proxyServer, fw.Engine, hermes)
 
 	log.Printf("secure-agentd running on unix socket %s", cfg.SocketPath)
 	return c, nil
@@ -702,7 +707,7 @@ func makeResourceExecutor(apiServer *api.API, tagger *agents.Tagger, st *store.S
 //  1. Spool tail from the root ES LaunchDaemon (sanctioned path).
 //  2. Direct eslogger child (root dev runs only).
 //  3. Neither: degraded, not crash-looped; the transcript scanner remains.
-func startCollectors(ctx context.Context, sup *supervise.Supervisor, supReg *supervise.Registry, cfg config.Config, b *bus.Bus, tagger *agents.Tagger, resolver *session.Resolver, advisorStk *advisorStackHolder, proxyServer *proxy.ProxyServer, fwEngine *firewall.Engine) {
+func startCollectors(ctx context.Context, sup *supervise.Supervisor, supReg *supervise.Registry, cfg config.Config, b *bus.Bus, tagger *agents.Tagger, resolver *session.Resolver, advisorStk *advisorStackHolder, proxyServer *proxy.ProxyServer, fwEngine *firewall.Engine, hermes *collect.HermesCollector) {
 	if proxyServer != nil {
 		go sup.Run(ctx, "proxyserver", func(c context.Context) error {
 			return proxyServer.Serve(c)
@@ -784,6 +789,10 @@ func startCollectors(ctx context.Context, sup *supervise.Supervisor, supReg *sup
 		return ocl.Run(c)
 	})
 
+	go sup.Run(ctx, "hermes", func(c context.Context) error {
+		return hermes.Run(c)
+	})
+
 	if advisorStk.Load().Sub != nil {
 		go sup.Run(ctx, "advisor", func(c context.Context) error {
 			return advisorStk.Load().Sub.Run(c)
@@ -805,6 +814,25 @@ func startCollectors(ctx context.Context, sup *supervise.Supervisor, supReg *sup
 			}
 		})
 	}
+}
+
+// newHermesCollector builds the Hermes Agent poller: state.db and every
+// profile's state.db under hermes_home, $HERMES_HOME or ~/.hermes, read-only
+// and watermarked (the watermarks persist beside the store); none found → a
+// silent no-op that keeps looking.
+func newHermesCollector(cfg config.Config, b *bus.Bus, supReg *supervise.Registry, resolver *session.Resolver) *collect.HermesCollector {
+	h := collect.NewHermesCollector(b, 0)
+	h.Configured = cfg.HermesHome
+	h.StatePath = filepath.Join(filepath.Dir(cfg.DBPath), "hermes-watermark.json")
+	h.OnProduce = func() { supReg.MarkProduced("hermes") }
+	h.OnSessionSeen = func(s collect.HermesSighting) {
+		resolver.NoteTranscriptSighting(session.TranscriptSighting{
+			ID: s.ID, Harness: "hermes", Workspace: s.Workspace,
+			Repo: s.Repo, Branch: s.Branch, ParentID: s.ParentID, TS: s.At,
+		})
+	}
+	h.OnSessionEnded = resolver.EndTranscriptSession
+	return h
 }
 
 // openclawExes lists the executable paths of tagged openclaw processes, the

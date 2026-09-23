@@ -770,3 +770,18 @@ func TestHookEventNestsUnderOrchestrator(t *testing.T) {
 		t.Fatalf("hook session = %+v, %v; want parent %q and a root", got, ok, parent)
 	}
 }
+
+// A harness that records its own repo, branch and parent session sets them
+// on the session instead of the workspace probe.
+func TestNoteTranscriptSightingCarriesRepoBranchParent(t *testing.T) {
+	r, st := testResolver(t, fakeProcs{})
+	r.NoteTranscriptSighting(TranscriptSighting{
+		ID: "h-child", Harness: "hermes", Workspace: "/nonexistent/proj/sub",
+		Repo: "proj", Branch: "feat/x", ParentID: "h-root", TS: time.Now(),
+	})
+	s, ok := st.GetSession("h-child")
+	if !ok || s.Harness != "hermes" || s.Repo != "proj" || s.Branch != "feat/x" || s.ParentID != "h-root" ||
+		s.Workspace != "/nonexistent/proj/sub" || s.Confidence != model.ConfTranscript {
+		t.Fatalf("session = %+v (ok=%v)", s, ok)
+	}
+}

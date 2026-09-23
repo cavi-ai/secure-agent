@@ -466,3 +466,25 @@ func TestOpenclawHomeKey(t *testing.T) {
 		t.Fatalf("openclaw_home = %q, want %q", c.OpenclawHome, want)
 	}
 }
+
+func TestHermesHomeKey(t *testing.T) {
+	c, err := Load(filepath.Join(t.TempDir(), "absent.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.HermesHome != "" {
+		t.Fatalf("default hermes_home = %q, want empty (resolved at runtime)", c.HermesHome)
+	}
+	p := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(p, []byte("hermes_home: \"~/hermes-state\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c, err = Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	home, _ := os.UserHomeDir()
+	if want := filepath.Join(home, "hermes-state"); c.HermesHome != want {
+		t.Fatalf("hermes_home = %q, want %q", c.HermesHome, want)
+	}
+}

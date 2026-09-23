@@ -494,6 +494,7 @@ Each check has a `state` of `pass`, `fail` or `skip`, a `detail`, and on `fail` 
 | `file-telemetry` | root ES service `not-loaded`, in a `spawn`/`exit` state, or `running` with agents active and the spool unwritten for over 10 min (past grace) | file telemetry is not spool-based |
 | `collectors` | a collector is stopped or abandoned, or (with agents active) silent | grace |
 | `trace-coverage` | a harness has sessions since boot but no tool-call, turn or model-call rows | grace, or no sessions since boot |
+| `hermes` | a Hermes `state.db` could not be read (detail names the database and error); passes with each database's message watermark and the last poll time | no `state.db` under the Hermes root (`not installed`) |
 | `session-identity` | under 80% of sessions carry a harness | no sessions |
 | `session-repo` | under 50% of named sessions with a workspace since boot carry a repo, or named sessions since boot carry no workspace at all | grace, or no named sessions since boot |
 | `session-rate` | sessions created in the last hour exceed 2 × agents + 10 | grace, or no agents |

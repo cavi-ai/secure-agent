@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cavi-ai/secure-agent/daemon/internal/collect"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
 
@@ -76,6 +77,8 @@ type doctorFacts struct {
 	claudePriced, claudeUnpriced, allUnpriced, allCalls int
 
 	retention []store.KindRetention
+
+	hermes *collect.HermesStatus // nil when the collector is not wired
 }
 
 type doctorProbe struct {
@@ -90,6 +93,7 @@ var doctorProbes = []doctorProbe{
 	{"file-telemetry", "File telemetry", "System Settings → Privacy & Security → Full Disk Access → Secure Agent, or the Setup card — a flooding writer: Reinstall the file telemetry helper from the Setup card", checkFileTelemetry},
 	{"collectors", "Collectors", "Restart Secure Agent from the menu bar; file monitoring that keeps stopping needs Full Disk Access (Setup)", checkCollectors},
 	{"trace-coverage", "Trace coverage", "Restart Secure Agent; a harness that stays untraced has no transcript reader running", checkTraceCoverage},
+	{"hermes", "Hermes Agent trace", "Point hermes_home at the Hermes root; a state.db this version cannot read needs a Secure Agent update", checkHermes},
 	{"session-identity", "Session identity", "Check the Sessions tab for unnamed sessions; their processes were not recognized as a harness", checkSessionIdentity},
 	{"session-repo", "Session repo attribution", "Restart Secure Agent to re-resolve repo and branch; a workspace outside a git checkout has no repo", checkSessionRepo},
 	{"session-rate", "Session creation rate", "Check the Sessions tab for the harness creating stub sessions", checkSessionRate},
@@ -159,6 +163,10 @@ func (a *API) doctorFacts(now time.Time) doctorFacts {
 	f.dupePairs, f.idless = a.store.ToolCallStats(f.boot)
 	f.claudePriced, f.claudeUnpriced, f.allUnpriced, f.allCalls = a.store.PricingStats()
 	f.retention = a.store.RetentionReport()
+	if a.hermes != nil {
+		h := a.hermes()
+		f.hermes = &h
+	}
 	return f
 }
 
@@ -235,6 +243,26 @@ func checkCollectors(f doctorFacts) (string, string) {
 		return doctorFail, strings.Join(parts, " · ")
 	}
 	return doctorPass, fmt.Sprintf("%d collectors running", len(f.st.Collectors))
+}
+
+// checkHermes reports the Hermes Agent collector: not installed when no
+// state.db exists under its root, else each database's watermark and the
+// last poll, failing when a database could not be read.
+func checkHermes(f doctorFacts) (string, string) {
+	h := f.hermes
+	switch {
+	case h == nil:
+		return doctorSkip, "not wired"
+	case h.LastError != "":
+		return doctorFail, h.LastError
+	case len(h.DBs) == 0:
+		return doctorSkip, fmt.Sprintf("not installed (no state.db under %s)", h.Root)
+	}
+	dbs := make([]string, len(h.DBs))
+	for i, d := range h.DBs {
+		dbs[i] = fmt.Sprintf("%s @ message %d", d.Path, d.Watermark)
+	}
+	return doctorPass, strings.Join(dbs, ", ") + " · polled " + h.LastPoll.UTC().Format(time.RFC3339)
 }
 
 func checkTraceCoverage(f doctorFacts) (string, string) {
