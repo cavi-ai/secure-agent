@@ -293,6 +293,7 @@ type rawConfig struct {
 	SocketPath          string                `yaml:"socket_path"`
 	DBPath              string                `yaml:"db_path"`
 	JSONLPath           string                `yaml:"jsonl_path"`
+	OpenclawHome        string                `yaml:"openclaw_home"`
 	ProxyEnabled        bool                  `yaml:"proxy_enabled"`
 	ProxyPort           int                   `yaml:"proxy_port"`
 	ProxyCACertPath     string                `yaml:"proxy_ca_cert_path"`
@@ -320,6 +321,7 @@ type Config struct {
 	SocketPath        string
 	DBPath            string
 	JSONLPath         string
+	OpenclawHome      string // openclaw state dir holding lcm.db; "" = resolved at runtime
 	ProxyEnabled      bool
 	ProxyPort         int
 	ProxyCACertPath   string
@@ -454,6 +456,7 @@ func loadWithOverlayError(explicitPath string) (Config, error, error) {
 		SocketPath:        expandPath(raw.SocketPath),
 		DBPath:            expandPath(raw.DBPath),
 		JSONLPath:         expandPath(raw.JSONLPath),
+		OpenclawHome:      expandPath(raw.OpenclawHome),
 		ProxyEnabled:      raw.ProxyEnabled,
 		ProxyPort:         raw.ProxyPort,
 		ProxyCACertPath:   expandPath(raw.ProxyCACertPath),

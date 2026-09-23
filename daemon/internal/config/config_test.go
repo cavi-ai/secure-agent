@@ -444,3 +444,25 @@ func TestPricingParsesFromOverlayAndDropsMalformed(t *testing.T) {
 		t.Fatalf("no pricing key: %v %v err=%v", cfg.Pricing, cfg.PricingSkipped, err)
 	}
 }
+
+func TestOpenclawHomeKey(t *testing.T) {
+	c, err := Load(filepath.Join(t.TempDir(), "absent.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.OpenclawHome != "" {
+		t.Fatalf("default openclaw_home = %q, want empty (resolved at runtime)", c.OpenclawHome)
+	}
+	p := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(p, []byte("openclaw_home: \"~/oc-state\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c, err = Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	home, _ := os.UserHomeDir()
+	if want := filepath.Join(home, "oc-state"); c.OpenclawHome != want {
+		t.Fatalf("openclaw_home = %q, want %q", c.OpenclawHome, want)
+	}
+}

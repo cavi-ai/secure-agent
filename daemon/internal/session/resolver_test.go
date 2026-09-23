@@ -580,3 +580,193 @@ func TestTranscriptJoinThenSiblingStaysPut(t *testing.T) {
 		}
 	}
 }
+
+// A hook-stamped event from a tagged pid joins its process tree: the hook
+// session carries the family root, and untagged-by-session events of that
+// tree resolve to it instead of minting a process-tree row.
+func TestHookEventJoinsProcessTree(t *testing.T) {
+	rootStart := time.Now().Add(-time.Hour)
+	r, st := testResolver(t, fakeProcs{
+		100: {PID: 100, PPID: 1, Exe: "/opt/homebrew/bin/codex", CWD: "/repo", StartTime: rootStart},
+		200: {PID: 200, PPID: 100, Exe: "/bin/zsh", CWD: "/repo", StartTime: rootStart.Add(time.Minute)},
+	})
+	e := event.Event{Kind: event.KindPluginAction, PID: 200, SessionID: "hook-x", TS: time.Now()}
+	r.Resolve(&e)
+	s, ok := st.GetSession("hook-x")
+	if !ok || s.RootPID != 100 || s.Confidence != model.ConfHook || s.Harness != "codex" {
+		t.Fatalf("hook session = %+v (ok=%v), want root 100 codex hook", s, ok)
+	}
+	if s.RootStartedAt != rootStart.UTC().Format(time.RFC3339Nano) {
+		t.Fatalf("root_started_at = %q, want the root's start %s", s.RootStartedAt, rootStart)
+	}
+	if id := resolvePID(t, r, 100); id != "hook-x" {
+		t.Fatalf("root pid resolves to %q, want hook-x", id)
+	}
+	if n := len(st.ListSessions(store.SessionFilter{})); n != 1 {
+		t.Fatalf("sessions = %d, want 1 (no process-tree row beside the hook row)", n)
+	}
+}
+
+// A process-tree session already covering the root is rekeyed into the hook
+// session: its row, events and pid cache move to the hook id.
+func TestHookEventRekeysProcessTreeSession(t *testing.T) {
+	r, st := testResolver(t, fakeProcs{
+		100: {PID: 100, PPID: 1, Exe: "/opt/homebrew/bin/codex", CWD: "/repo", StartTime: time.Now().Add(-time.Hour)},
+	})
+	e := event.Event{Kind: event.KindFileOpen, PID: 100, TS: time.Now(), Path: "/repo/a"}
+	procID := r.Resolve(&e)
+	st.PutEvent(e)
+	if s, ok := st.GetSession(procID); !ok || s.Confidence != model.ConfProcessTree {
+		t.Fatalf("process-tree session %q not persisted: %+v", procID, s)
+	}
+
+	h := event.Event{Kind: event.KindPluginAction, PID: 100, SessionID: "hook-x", TS: time.Now()}
+	r.Resolve(&h)
+
+	sessions := st.ListSessions(store.SessionFilter{})
+	if len(sessions) != 1 || sessions[0].ID != "hook-x" || sessions[0].RootPID != 100 || sessions[0].Confidence != model.ConfHook {
+		t.Fatalf("sessions = %+v, want one hook-x rooted at 100", sessions)
+	}
+	moved := false
+	for _, ev := range st.RecentEvents(10) {
+		if ev.SessionID == procID {
+			t.Fatalf("event still attributed to rekeyed id %q", procID)
+		}
+		if ev.Path == "/repo/a" && ev.SessionID == "hook-x" {
+			moved = true
+		}
+	}
+	if !moved {
+		t.Fatal("process-tree event did not follow the rekey to hook-x")
+	}
+	if id := resolvePID(t, r, 100); id != "hook-x" {
+		t.Fatalf("pid cache resolves to %q, want hook-x", id)
+	}
+}
+
+// A deferred (below-the-floor) process-tree session is promoted under the hook
+// id: the hook named the conversation.
+func TestHookEventPromotesDeferredSession(t *testing.T) {
+	r, st := testResolver(t, fakeProcs{
+		100: {PID: 100, PPID: 1, Exe: "/opt/homebrew/bin/codex", CWD: "/repo", StartTime: time.Now()},
+	})
+	procID := resolvePID(t, r, 100)
+	if _, deferred := r.deferred[procID]; !deferred {
+		t.Fatalf("young root %q not deferred", procID)
+	}
+	h := event.Event{Kind: event.KindPluginAction, PID: 100, SessionID: "hook-x", TS: time.Now()}
+	r.Resolve(&h)
+	if len(r.deferred) != 0 {
+		t.Fatalf("deferred = %+v, want empty after the hook join", r.deferred)
+	}
+	sessions := st.ListSessions(store.SessionFilter{})
+	if len(sessions) != 1 || sessions[0].ID != "hook-x" || sessions[0].RootPID != 100 {
+		t.Fatalf("sessions = %+v, want one hook-x rooted at 100", sessions)
+	}
+}
+
+// A second hook session on the same root is a sibling conversation, never a
+// rename: the first keeps its row.
+func TestHookEventDoesNotMergeSiblingHookSession(t *testing.T) {
+	r, st := testResolver(t, fakeProcs{
+		100: {PID: 100, PPID: 1, Exe: "/opt/homebrew/bin/codex", CWD: "/repo", StartTime: time.Now().Add(-time.Hour)},
+	})
+	a := event.Event{Kind: event.KindPluginAction, PID: 100, SessionID: "hook-a", TS: time.Now()}
+	r.Resolve(&a)
+	b := event.Event{Kind: event.KindPluginAction, PID: 100, SessionID: "hook-b", TS: time.Now()}
+	r.Resolve(&b)
+	if _, ok := st.GetSession("hook-a"); !ok {
+		t.Fatal("hook-a was merged into hook-b")
+	}
+	if s, ok := st.GetSession("hook-b"); !ok || s.RootPID != 100 {
+		t.Fatalf("hook-b = %+v, want rooted at 100", s)
+	}
+	if id := resolvePID(t, r, 100); id != "hook-b" {
+		t.Fatalf("root resolves to %q, want the newest conversation hook-b", id)
+	}
+}
+
+// Race at process start: the hook event lands before the tagger knows the
+// pid. A later hook event for the same session fills the root.
+func TestHookEventLateTagFillsRoot(t *testing.T) {
+	r, st := testResolver(t, fakeProcs{})
+	e := event.Event{Kind: event.KindPluginAction, PID: 100, SessionID: "hook-x", TS: time.Now()}
+	r.Resolve(&e)
+	if s, _ := st.GetSession("hook-x"); s.RootPID != 0 {
+		t.Fatalf("untagged pid set root %d", s.RootPID)
+	}
+	r.tagger = agents.New(mustConfig(t), fakeProcs{
+		100: {PID: 100, PPID: 1, Exe: "/opt/homebrew/bin/codex", CWD: "/repo", StartTime: time.Now().Add(-time.Hour)},
+	})
+	r.tagger.Refresh()
+	e2 := event.Event{Kind: event.KindPluginAction, PID: 100, SessionID: "hook-x", TS: time.Now()}
+	r.Resolve(&e2)
+	s, _ := st.GetSession("hook-x")
+	if s.RootPID != 100 || s.Harness != "codex" {
+		t.Fatalf("session = %+v, want root 100 codex after the late tag", s)
+	}
+}
+
+// An untagged pid leaves the hook session rootless (unchanged behaviour).
+func TestHookEventUntaggedPIDKeepsNoRoot(t *testing.T) {
+	r, st := testResolver(t, fakeProcs{})
+	e := event.Event{Kind: event.KindPluginAction, PID: 999, SessionID: "hook-x", TS: time.Now()}
+	r.Resolve(&e)
+	s, ok := st.GetSession("hook-x")
+	if !ok || s.RootPID != 0 || s.Confidence != model.ConfHook {
+		t.Fatalf("session = %+v, want a rootless hook session", s)
+	}
+}
+
+// A trace event (tool/turn/model call) stamped from a harness's own
+// transcript names a transcript session, not a hook one.
+func TestTraceEventCreatesTranscriptSession(t *testing.T) {
+	r, st := testResolver(t, fakeProcs{})
+	e := event.Event{Kind: event.KindToolCall, SessionID: "conv-1", CallID: "c1", ToolName: "exec", TS: time.Now()}
+	r.Resolve(&e)
+	if s, ok := st.GetSession("conv-1"); !ok || s.Confidence != model.ConfTranscript {
+		t.Fatalf("session = %+v, want confidence transcript", s)
+	}
+	r.NoteTranscriptSession("conv-2", "openclaw", "openclaw:ember", time.Now())
+	e2 := event.Event{Kind: event.KindTurn, SessionID: "conv-2", TS: time.Now()}
+	r.Resolve(&e2)
+	if s, _ := st.GetSession("conv-2"); s.Confidence != model.ConfTranscript || s.Harness != "openclaw" {
+		t.Fatalf("session = %+v, want openclaw transcript kept", s)
+	}
+}
+
+// The harness's own state ending a conversation ends its session.
+func TestEndTranscriptSession(t *testing.T) {
+	r, st := testResolver(t, fakeProcs{})
+	r.NoteTranscriptSession("conv-1", "openclaw", "openclaw:ember", time.Now().Add(-time.Minute))
+	r.EndTranscriptSession("conv-1", time.Now())
+	if s, _ := st.GetSession("conv-1"); s.Status != model.SessionEnded {
+		t.Fatalf("status = %q, want ended", s.Status)
+	}
+}
+
+// A workspace label that is not an absolute path resolves no repo, even when
+// the daemon's cwd sits inside a checkout.
+func TestGitInfoForIgnoresNonPathWorkspace(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(dir)
+	gitCache = nil
+	if repo, branch := GitInfoFor("openclaw:ember"); repo != "" || branch != "" {
+		t.Fatalf("GitInfoFor(label) = %q@%q, want empty", repo, branch)
+	}
+}
+
+// A hook session that joins an orchestrated codex root nests under the
+// orchestrator's session, as the process-tree session it replaces would.
+func TestHookEventNestsUnderOrchestrator(t *testing.T) {
+	r, st := testResolver(t, orchestratorTree())
+	parent := resolvePID(t, r, 100)
+	h := event.Event{Kind: event.KindPluginAction, PID: 102, SessionID: "hook-x", TS: time.Now()}
+	r.Resolve(&h)
+	if got, ok := st.GetSession("hook-x"); !ok || got.ParentID != parent || got.RootPID == 0 {
+		t.Fatalf("hook session = %+v, %v; want parent %q and a root", got, ok, parent)
+	}
+}

@@ -53,7 +53,9 @@ type gitInfo struct {
 // hold the resolver mutex, so the map needs no lock of its own. Exported for
 // the store's repair pass over rows written by older resolvers.
 func GitInfoFor(workspace string) (repo, branch string) {
-	if workspace == "" {
+	// A workspace label that is not an absolute path ("openclaw:<agent>")
+	// has no checkout; walking it would resolve the daemon's own cwd.
+	if workspace == "" || !filepath.IsAbs(workspace) {
 		return "", ""
 	}
 	if gitCache == nil {
@@ -345,20 +347,7 @@ func (r *Resolver) HandleHandshake(h Handshake) {
 	// Join to the process tree: the handshake's pid is the harness process.
 	if h.PID > 0 {
 		if old, ok := r.byRoot[h.PID]; ok && old != h.SessionID {
-			r.st.RekeySession(old, h.SessionID)
-			// The hook named the conversation — promote a deferred session
-			// unconditionally (the floor applies to nameless scratch runs).
-			if sess, ok := r.deferred[old]; ok {
-				delete(r.deferred, old)
-				sess.ID = h.SessionID
-				r.st.UpsertSession(sess)
-			}
-			delete(r.byRoot, h.PID)
-			for pid, id := range r.byPID {
-				if id == old {
-					r.byPID[pid] = h.SessionID
-				}
-			}
+			r.rekeyLocked(old, h.SessionID)
 		}
 		r.byRoot[h.PID] = h.SessionID
 		r.byPID[h.PID] = h.SessionID
@@ -410,24 +399,7 @@ func (r *Resolver) NoteTranscriptSession(id, harness, workspace string, ts time.
 	if workspace != "" && harness != "" {
 		if old, ok := r.findProvisionalLocked(harness, workspace); ok && old != id {
 			if r.confidenceLocked(old) == model.ConfProcessTree {
-				r.st.RekeySession(old, id)
-				// A transcript sighting names the conversation: promote any
-				// deferred (below-the-floor) session under its new id.
-				if sess, ok := r.deferred[old]; ok {
-					delete(r.deferred, old)
-					sess.ID = id
-					r.st.UpsertSession(sess)
-				}
-				for pid, sid := range r.byPID {
-					if sid == old {
-						r.byPID[pid] = id
-					}
-				}
-				for root, sid := range r.byRoot {
-					if sid == old {
-						r.byRoot[root] = id
-					}
-				}
+				r.rekeyLocked(old, id)
 			}
 		}
 		// Keep the scope index pointing at the current id so a process-tree
@@ -446,6 +418,60 @@ func (r *Resolver) NoteTranscriptSession(id, harness, workspace string, ts time.
 		r.emitLocked(stored)
 	}
 	r.touchLocked(id, ts)
+}
+
+// EndTranscriptSession ends a conversation the harness's own state reports
+// finished (openclaw's lcm.db marks it inactive or archived). Pid-less
+// transcript sessions have no process exit to watch.
+func (r *Resolver) EndTranscriptSession(id string, ts time.Time) {
+	if id == "" {
+		return
+	}
+	if ts.IsZero() {
+		ts = r.now()
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.st.EndSession(id, ts)
+	if sess, ok := r.st.GetSession(id); ok {
+		r.emitLocked(sess)
+	}
+	for scope, sid := range r.byScope {
+		if sid == id {
+			delete(r.byScope, scope)
+		}
+	}
+}
+
+// rekeyLocked moves session old onto the authoritative id: the stored row,
+// its events and flags follow (RekeySession), a deferred session is promoted
+// under the new id unconditionally (a named conversation is not a scratch
+// run; the floor applies to nameless ones), and every in-memory index that
+// held old points at id. A scope entry for old is dropped rather than moved,
+// so a new process in that scope mints its own session instead of adopting
+// this conversation. Caller holds mu.
+func (r *Resolver) rekeyLocked(old, id string) {
+	r.st.RekeySession(old, id)
+	if sess, ok := r.deferred[old]; ok {
+		delete(r.deferred, old)
+		sess.ID = id
+		r.st.UpsertSession(sess)
+	}
+	for pid, sid := range r.byPID {
+		if sid == old {
+			r.byPID[pid] = id
+		}
+	}
+	for root, sid := range r.byRoot {
+		if sid == old {
+			r.byRoot[root] = id
+		}
+	}
+	for scope, sid := range r.byScope {
+		if sid == old {
+			delete(r.byScope, scope)
+		}
+	}
 }
 
 // findProvisionalLocked returns the process-tree session id for a
@@ -467,19 +493,26 @@ func (r *Resolver) confidenceLocked(id string) string {
 	return ""
 }
 
-// ensureHookSession creates a minimal record for a hook-stamped id seen
-// without a handshake (e.g. activity log lines predating registration).
+// ensureHookSession creates a minimal record for a stamped id seen without a
+// handshake (e.g. activity log lines predating registration). A trace record
+// (tool, turn or model call) comes from the harness's own transcript or
+// state database, so it names a transcript session; hook-origin events name
+// a hook session. A stamped event from a tagged pid joins its process tree.
 func (r *Resolver) ensureHookSession(e *event.Event) {
 	ts := e.TS
 	if ts.IsZero() {
 		ts = r.now()
+	}
+	conf := model.ConfHook
+	if isTraceKind(e.Kind) {
+		conf = model.ConfTranscript
 	}
 	sess := model.Session{
 		ID:         e.SessionID,
 		StartedAt:  ts,
 		LastSeenAt: ts,
 		Status:     model.SessionActive,
-		Confidence: model.ConfHook,
+		Confidence: conf,
 	}
 	if e.PID > 0 {
 		if info, ok := r.tagger.Tag(e.PID); ok {
@@ -487,6 +520,7 @@ func (r *Resolver) ensureHookSession(e *event.Event) {
 			if sess.Workspace == "" {
 				sess.Workspace = info.CWD
 			}
+			r.joinTreeLocked(&sess, e.PID, info)
 		}
 	}
 	if sess.Repo == "" {
@@ -496,6 +530,55 @@ func (r *Resolver) ensureHookSession(e *event.Event) {
 	if stored, ok := r.st.GetSession(e.SessionID); ok {
 		r.emitLocked(stored)
 	}
+}
+
+// joinTreeLocked ties a stamped session to the process tree its event came
+// from, as HandleHandshake does for a handshake pid: the family root becomes
+// the session's root (Sweep ends it when the root exits; the tree's unstamped
+// events resolve to it), and a provisional process-tree session holding that
+// root is rekeyed into it. A root already held by another hook or transcript
+// session is a sibling conversation in the same process — never merged; the
+// newest conversation takes the root. Runs on every stamped event, so an
+// event that raced the tagger at process start joins on the next one.
+// Caller holds mu, before the session upsert.
+func (r *Resolver) joinTreeLocked(sess *model.Session, pid int32, info agents.AgentInfo) {
+	root := info.RootPID
+	if root == 0 {
+		root = info.PID
+	}
+	rootInfo := info
+	if root != info.PID {
+		if ri, ok := r.tagger.Tag(root); ok {
+			rootInfo = ri
+		}
+	}
+	sess.RootPID = root
+	if !rootInfo.StartedAt.IsZero() {
+		sess.RootStartedAt = rootInfo.StartedAt.UTC().Format(time.RFC3339Nano)
+	}
+	r.byPID[pid] = sess.ID
+	old, held := r.byRoot[root]
+	if held && old == sess.ID {
+		return
+	}
+	if held && r.confidenceLocked(old) == model.ConfProcessTree {
+		// The rekeyed row carries its orchestrator parent with it.
+		r.rekeyLocked(old, sess.ID)
+	} else {
+		// No process-tree row to inherit from: nest under the orchestrator
+		// as the process-tree session would have.
+		sess.ParentID = r.orchestratorForLocked(root, info.Name)
+	}
+	r.byRoot[root] = sess.ID
+}
+
+// isTraceKind reports the agent-semantic kinds only trace collectors emit.
+func isTraceKind(k event.Kind) bool {
+	switch k {
+	case event.KindToolCall, event.KindTurn, event.KindModelCall:
+		return true
+	}
+	return false
 }
 
 // emitLocked notifies delta subscribers of a session change (nil-safe).
