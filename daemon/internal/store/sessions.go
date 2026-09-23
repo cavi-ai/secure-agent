@@ -273,7 +273,8 @@ func (s *Store) SessionsByRootPID() map[int32]model.Session {
 }
 
 // RekeySession renames a session id (hook id wins over the provisional
-// process-tree id) and repoints its events and flags. One transaction: a
+// process-tree id) and repoints its events, flags and child sessions; the
+// session keeps its own parent. One transaction: a
 // crash mid-rekey must not strand half the attribution.
 func (s *Store) RekeySession(oldID, newID string) {
 	if oldID == "" || newID == "" || oldID == newID {
@@ -290,10 +291,15 @@ func (s *Store) RekeySession(oldID, newID string) {
 	var n int
 	_ = tx.QueryRow(`SELECT COUNT(*) FROM sessions WHERE id = ?`, newID).Scan(&n)
 	if n > 0 {
+		// The merged row keeps the old row's parent when it has none.
+		_, _ = tx.Exec(`UPDATE sessions SET parent_id = COALESCE((SELECT parent_id FROM sessions WHERE id = ?), '')
+			WHERE id = ? AND COALESCE(parent_id, '') = ''`, oldID, newID)
 		_, _ = tx.Exec(`DELETE FROM sessions WHERE id = ?`, oldID)
 	} else {
 		_, _ = tx.Exec(`UPDATE sessions SET id = ? WHERE id = ?`, newID, oldID)
 	}
+	// Children of the old id follow it to the new one.
+	_, _ = tx.Exec(`UPDATE sessions SET parent_id = ? WHERE parent_id = ? AND id != ?`, newID, oldID, newID)
 	_, _ = tx.Exec(`UPDATE events SET session_id = ? WHERE session_id = ?`, newID, oldID)
 	_, _ = tx.Exec(`UPDATE flags SET session_id = ? WHERE session_id = ?`, newID, oldID)
 	_ = tx.Commit()
