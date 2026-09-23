@@ -24,6 +24,23 @@ proxy and flags (monitor mode) or blocks (a promoted rule) when it sees:
 A credential in the expected auth header to its own vendor host is treated as
 legitimate, not a leak. That distinction is what makes blocking safe.
 
+### Transcript scanning
+
+The daemon runs the fingerprint and typed-pattern layers over every line it
+tails from harness transcripts (Claude Code, Codex, Cursor, Antigravity) and
+the hook activity log. The entropy layer is not used here: transcripts are
+dense with ids and encoded blobs.
+
+- A hit yields a `transcript-hit` event and a `secret-in-transcript` flag that
+  carry the rule or fingerprint id, the transcript path, and the session id —
+  never the matched text. Repeats of the same (path, rule) collapse: one event
+  per 10 minutes, one flag per 15 minutes.
+- Severity: a registered secret (fingerprint layer) is 3; a typed pattern is 2.
+- Limit: only files the daemon tails are scanned. Lines appended to a tracked
+  transcript while the daemon is stopped are scanned on the next start (tail
+  offsets persist); a transcript first created while it is stopped is picked
+  up from its end, so its existing content is not scanned.
+
 ## What it does NOT defend against (out of scope)
 
 - **A determined malicious agent.** An agent that actively wants to exfiltrate

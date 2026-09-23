@@ -403,3 +403,9 @@ func TestClaudeHookRegistered(t *testing.T) {
 		t.Fatal("both events registered must read as registered")
 	}
 }
+
+func TestHumanFlagTitleSecretInTranscript(t *testing.T) {
+	if got := humanFlagTitle("secret-in-transcript"); got != "Secret appeared in an agent transcript" {
+		t.Fatalf("humanFlagTitle(secret-in-transcript) = %q", got)
+	}
+}

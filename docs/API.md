@@ -411,6 +411,52 @@ A malformed `since`/`until` or an unknown `by` returns `400` with a one-line bod
 
 Rows are sorted by cost, then calls (at most 200); `rows` is `[]` when the window is empty. `harness` is the harness with the most calls in the group (omitted for `by=harness`). Missing repo, branch, harness or model values group as `(no repo)`, `(no branch)`, `(unknown)`. `unpriced_calls` counts calls whose model is not in the pricing table: their cost is `0` and is never estimated. Read-level. CLI: `secure-agent cost [--since 24h] [--by repo] [--json]`.
 
+### 17. `GET /doctor`
+
+The daemon's self-check: whether hooks, file telemetry, collectors and traces are producing data, and whether stored sessions and events are attributed, paired, priced and retained.
+
+```
+GET /doctor
+```
+
+Each check has a `state` of `pass`, `fail` or `skip`, a `detail`, and on `fail` a one-line `fix` (`bus` reports only and has none). `grace` is `true` while uptime is under 10 minutes; checks that need steady state then `skip` with detail `inside the 10-minute boot window`. `checks` is always an array, in this order:
+
+| `id` | Fails when | Skips when |
+|---|---|---|
+| `hook-registered` | `~/.claude/settings.json` does not register the guard hook for `PreToolUse` and `PostToolUse` | home directory unknown |
+| `hook-active` | agents are running and no hook event landed in 24h | no agents |
+| `file-telemetry` | root ES service `not-loaded`, in a `spawn`/`exit` state, or `running` with agents active and the spool unwritten for over 10 min (past grace) | file telemetry is not spool-based |
+| `collectors` | a collector is stopped or abandoned, or (with agents active) silent | grace |
+| `trace-coverage` | a harness has sessions since boot but no tool-call, turn or model-call rows | grace, or no sessions since boot |
+| `session-identity` | under 80% of sessions carry a harness | no sessions |
+| `session-repo` | under 50% of named sessions with a workspace since boot carry a repo, or named sessions since boot carry no workspace at all | grace, or no named sessions since boot |
+| `session-rate` | sessions created in the last hour exceed 2 × agents + 10 | grace, or no agents |
+| `tool-pairing` | any `(session_id, call_id)` pair is stored twice, or a tool-call row since boot has no call id | — |
+| `pricing` | under 90% of `claude-*` model calls carry a cost (detail also reports unpriced calls over all models) | no Claude model calls |
+| `retention` | an event kind is at its row budget and its oldest row is under 24h old | — |
+| `egress-routing` | the proxy is on and endpoints were reached outside it (proxy off passes as `proxy off — egress not inspected`) | — |
+| `bus` | subscribers dropped events on full buffers | — |
+
+```json
+{
+  "generated_at": "2026-09-23T09:00:00Z",
+  "version": "0.9.0",
+  "uptime": "3h12m4s",
+  "grace": false,
+  "summary": {"pass": 11, "fail": 1, "skip": 1},
+  "checks": [
+    {"id": "hook-registered", "title": "Guard hook registered", "state": "pass",
+     "detail": "registered for PreToolUse and PostToolUse"},
+    {"id": "file-telemetry", "title": "File telemetry", "state": "fail",
+     "detail": "root service state: spawn scheduled",
+     "fix": "System Settings → Privacy & Security → Full Disk Access → Secure Agent, or the Setup card"},
+    {"id": "pricing", "title": "Model-call pricing", "state": "skip", "detail": "no Claude model calls"}
+  ]
+}
+```
+
+(The example shows three of the thirteen checks.) Read-level. CLI: `secure-agent doctor [--json]` prints one `PASS`/`FAIL`/`SKIP` line per check, a `fix:` line under each failure and a summary line, and exits `1` when any check fails.
+
 ---
 
 ## 🔐 Peer authentication & endpoint roles

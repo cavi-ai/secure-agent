@@ -262,7 +262,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 		}
 	}()
 
-	startCollectors(ctx, sup, supReg, cfg, b, tagger, resolver, advisorStk, proxyServer)
+	startCollectors(ctx, sup, supReg, cfg, b, tagger, resolver, advisorStk, proxyServer, fw.Engine)
 
 	log.Printf("secure-agentd running on unix socket %s", cfg.SocketPath)
 	return c, nil
@@ -702,7 +702,7 @@ func makeResourceExecutor(apiServer *api.API, tagger *agents.Tagger, st *store.S
 //  1. Spool tail from the root ES LaunchDaemon (sanctioned path).
 //  2. Direct eslogger child (root dev runs only).
 //  3. Neither: degraded, not crash-looped; the transcript scanner remains.
-func startCollectors(ctx context.Context, sup *supervise.Supervisor, supReg *supervise.Registry, cfg config.Config, b *bus.Bus, tagger *agents.Tagger, resolver *session.Resolver, advisorStk *advisorStackHolder, proxyServer *proxy.ProxyServer) {
+func startCollectors(ctx context.Context, sup *supervise.Supervisor, supReg *supervise.Registry, cfg config.Config, b *bus.Bus, tagger *agents.Tagger, resolver *session.Resolver, advisorStk *advisorStackHolder, proxyServer *proxy.ProxyServer, fwEngine *firewall.Engine) {
 	if proxyServer != nil {
 		go sup.Run(ctx, "proxyserver", func(c context.Context) error {
 			return proxyServer.Serve(c)
@@ -747,6 +747,12 @@ func startCollectors(ctx context.Context, sup *supervise.Supervisor, supReg *sup
 			})
 		}
 		ts.OnSessionSeen = resolver.NoteTranscriptSession
+		// Transcript lines get the firewall's known-secret and typed-pattern
+		// scan; a nil engine keeps the redact fallback (and avoids a typed-nil
+		// interface).
+		if fwEngine != nil {
+			ts.TextScanner = fwEngine
+		}
 		return ts.Run(c)
 	})
 

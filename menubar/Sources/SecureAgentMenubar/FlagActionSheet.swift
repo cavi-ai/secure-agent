@@ -112,6 +112,7 @@ struct FlagActionSheet: View {
         case "keychain-security-cli": return "Agent ran the keychain tool"
         case "tcc-tamper": return "Agent modified privacy permissions"
         case "proxy-prompt-injection": return "Prompt injection in a response"
+        case "secret-in-transcript": return "Secret appeared in an agent transcript"
         default: return rule
         }
     }

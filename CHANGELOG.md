@@ -6,6 +6,13 @@ All notable changes to `secure-agent` are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- `secret-in-transcript` flag: tailed harness transcript lines are scanned with
+  the firewall's known-secret fingerprints and typed patterns; a hit carries
+  the rule id, transcript path, and session id (never the matched text), is
+  severity 3 for a registered secret and 2 for a typed pattern, and repeats
+  per (path, rule) are collapsed.
+
 ### Fixed
 - Model pricing: explicit entries for every current Anthropic model (Fable
   5.x, Opus 5.5/5/4.8/4.7/4.6/4.5, Sonnet 5/4.6/4.5, Haiku 4.5) at list
@@ -117,6 +124,12 @@ All notable changes to `secure-agent` are documented here. The format follows
   output tokens by exact model id or prefix, wins over the built-in table, and
   applies live on change. Built-in prices now cover OpenAI and Google model
   families alongside Anthropic.
+- **Self-check.** `GET /doctor` and `secure-agent doctor` report pass, fail
+  or skip for guard-hook registration and activity, file telemetry,
+  collectors, per-harness trace coverage, session identity, repo attribution
+  and creation rate, tool-call pairing, Claude model-call pricing, per-kind
+  retention, egress routing and bus drops, each failure with a one-line fix;
+  the CLI exits 1 on any failure.
 - **Model-call spend.** `GET /costs` and `secure-agent cost` sum model calls
   by repo, branch, harness, session or model over a window (`since`,
   `until`), with tokens, distinct sessions and the dominant harness per

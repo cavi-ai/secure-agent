@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/collect"
-	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
@@ -328,7 +327,7 @@ func silentCollectorItems(st Status) []PostureItem {
 // is best-effort: launchctl errors are already folded into the state string.
 func esServiceItems(s collect.ESServiceSnapshot) []PostureItem {
 	var items []PostureItem
-	if strings.Contains(s.State, "spawn") || strings.Contains(s.State, "exit") {
+	if esServiceFailing(s.State) {
 		items = append(items, PostureItem{
 			Kind: "collector_silent", ID: "eslogger",
 			Title:    "File monitoring service is failing",
@@ -353,6 +352,12 @@ func esServiceItems(s collect.ESServiceSnapshot) []PostureItem {
 	return items
 }
 
+// esServiceFailing reports a root ES service state that means the writer is
+// crash-looping (spawn scheduled) or has exited.
+func esServiceFailing(state string) bool {
+	return strings.Contains(state, "spawn") || strings.Contains(state, "exit")
+}
+
 func humanCollectorSilentTitle(name string) string {
 	switch name {
 	case "eslogger":
@@ -362,6 +367,9 @@ func humanCollectorSilentTitle(name string) string {
 	}
 	return "Monitor " + name
 }
+
+// hookActivityWindow is how far back hook evidence counts as activity.
+const hookActivityWindow = 24 * time.Hour
 
 // harnessUncoveredItem flags the audited failure mode: agent processes are
 // running but no harness hook or transcript event has landed in 24h — the
@@ -376,9 +384,7 @@ func harnessUncoveredItem(st *store.Store, status Status) *PostureItem {
 	if st == nil {
 		return nil
 	}
-	since := time.Now().Add(-24 * time.Hour).UTC().Format(time.RFC3339)
-	k := int(event.KindPluginAction)
-	if len(st.QueryEvents(store.EventFilter{Kind: &k, Since: since, Limit: 1})) > 0 {
+	if st.HookEventsSince(time.Now().Add(-hookActivityWindow)) > 0 {
 		return nil
 	}
 	return &PostureItem{
@@ -399,11 +405,10 @@ func guardHookUnregisteredItem(status Status) *PostureItem {
 	if status.ActiveAgents == 0 {
 		return nil
 	}
-	home, err := os.UserHomeDir()
+	settings, err := claudeSettingsPath()
 	if err != nil {
 		return nil
 	}
-	settings := filepath.Join(home, ".claude", "settings.json")
 	if !claudeHookRegistered(settings) {
 		return &PostureItem{
 			Kind: "guard_hook_unregistered", ID: "claude-hook",
@@ -413,6 +418,16 @@ func guardHookUnregisteredItem(status Status) *PostureItem {
 		}
 	}
 	return nil
+}
+
+// claudeSettingsPath is the user-level Claude Code settings file the guard
+// hook registers in.
+func claudeSettingsPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".claude", "settings.json"), nil
 }
 
 // claudeHookRegistered reports whether settings.json registers the guard hook
@@ -506,6 +521,8 @@ func humanFlagTitle(rule string) string {
 		return "Agent modified macOS privacy permissions (TCC)"
 	case "proxy-prompt-injection":
 		return "Prompt injection in a response"
+	case "secret-in-transcript":
+		return "Secret appeared in an agent transcript"
 	default:
 		return rule
 	}
