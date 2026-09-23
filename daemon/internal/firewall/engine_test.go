@@ -199,3 +199,39 @@ func TestScanTextFindsFingerprintAndPatternHits(t *testing.T) {
 		t.Fatalf("empty text: want no hits, got %+v", got)
 	}
 }
+
+// ScanText never runs the entropy layer: text that only trips entropy in
+// Scan yields nothing, while a typed pattern still hits in both.
+func TestScanTextSkipsEntropyLayer(t *testing.T) {
+	e, err := NewEngine(config.FirewallConfig{
+		Mode: "monitor",
+		Patterns: []config.PatternConfig{
+			{ID: "aws-key", Type: TypeCloudKey, Re: `AKIA[0-9A-Z]{16}`, Mode: "monitor"},
+		},
+		Entropy: config.EntropyConfig{Enabled: true, MinLen: 20, MinBits: 4.0, Mode: "monitor"},
+	}, []byte("salt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	random := "value=Zx9Kq2Lm8Pv4Rt6Wy1Bn3Df5Gh7Jk secret"
+	if hits := e.det.Scan(random); len(hits) != 1 || hits[0].Layer != LayerEntropy {
+		t.Fatalf("Scan: want exactly one entropy hit, got %+v", hits)
+	}
+	if hits := e.ScanText(random); len(hits) != 0 {
+		t.Fatalf("ScanText: want no hits on entropy-only text, got %+v", hits)
+	}
+
+	typed := "key=AKIAIOSFODNN7EXAMPLE"
+	for name, hits := range map[string][]Hit{"Scan": e.det.Scan(typed), "ScanText": e.ScanText(typed)} {
+		found := false
+		for _, h := range hits {
+			if h.RuleID == "aws-key" && h.Layer == LayerPattern {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("%s: want aws-key pattern hit, got %+v", name, hits)
+		}
+	}
+}

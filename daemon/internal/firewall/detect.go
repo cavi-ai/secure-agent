@@ -35,19 +35,27 @@ func NewDetector(pats []config.PatternConfig, ent config.EntropyConfig) (*Detect
 	return d, nil
 }
 
+// Scan returns the typed-pattern hits plus, when enabled, one entropy hit.
 func (d *Detector) Scan(text string) []Hit {
-	var hits []Hit
-	for _, p := range d.patterns {
-		if p.re.MatchString(text) {
-			hits = append(hits, Hit{RuleID: p.id, SecretType: p.secretType, Layer: LayerPattern, Confidence: 0.9})
-		}
-	}
+	hits := d.ScanPatterns(text)
 	if d.entropy.Enabled {
 		for _, tok := range strings.FieldsFunc(text, isTokenBreak) {
 			if len(tok) >= d.entropy.MinLen && shannonBits(tok) >= d.entropy.MinBits {
 				hits = append(hits, Hit{RuleID: "entropy", SecretType: TypeUnknown, Layer: LayerEntropy, Confidence: 0.4})
 				break // one entropy hit per payload is enough signal
 			}
+		}
+	}
+	return hits
+}
+
+// ScanPatterns returns the typed-pattern hits only; the entropy layer is
+// never run.
+func (d *Detector) ScanPatterns(text string) []Hit {
+	var hits []Hit
+	for _, p := range d.patterns {
+		if p.re.MatchString(text) {
+			hits = append(hits, Hit{RuleID: p.id, SecretType: p.secretType, Layer: LayerPattern, Confidence: 0.9})
 		}
 	}
 	return hits
