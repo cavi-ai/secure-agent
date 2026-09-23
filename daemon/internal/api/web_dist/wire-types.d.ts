@@ -242,6 +242,7 @@ export interface PlanResponse {
   status: string;
   playbook: Playbook;
   plan?: AdvisorPlan;
+  flag?: Flag;
   advisor_ready: boolean;
   reason?: string;
 }

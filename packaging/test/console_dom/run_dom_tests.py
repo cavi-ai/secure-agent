@@ -472,6 +472,10 @@ def main():
               "Agent access" in dom_file and "api-service@main" in dom_file and 'data-action="open-incident"' in dom_file)
         check("file drawer goes back to the incident report",
               'id="btn-drawer-back"' in dom_file and "Incident report" in dom_file)
+        check("file drawer shows the advisor plan and the playbook",
+              "What to do" in dom_file and "Codex printed an API key from an env dump." in dom_file
+              and "Playbook: Secret in an agent transcript" in dom_file and 'data-action-id="dismiss"' in dom_file)
+        check("finding cards offer What to do", 'data-action="open-plan" data-subject="flag:flag-2"' in dom_explain)
         check("menubar deep link #file= opens the file drawer",
               'data-action="file-reveal"' in dom_filedeep and "Around the secret" in dom_filedeep)
         # --- endpoint evidence: an unattributed IPv6 must be identifiable ---

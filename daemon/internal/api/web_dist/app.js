@@ -1338,8 +1338,9 @@ document.addEventListener('DOMContentLoaded', () => {
   // Copy button) and the uninspected-egress drill-down (row actions, no
   // Copy). drawerMode tracks which one is open so action handlers can
   // re-render the right content after a mutation.
-  let drawerMode = null; // 'incident' | 'endpoint' | 'file' | 'uninspected' | 'family' | 'policy' | null
+  let drawerMode = null; // 'incident' | 'endpoint' | 'file' | 'plan' | 'uninspected' | 'family' | 'policy' | null
   let drawerFile = '';
+  let drawerPlan = '';
 
   let drawerIncident = '';
   let drawerEndpoint = null;
@@ -1364,7 +1365,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const text = await res.text();
         if (seq !== drawerSeq) return;
         currentRawMarkdown = text;
-        drawerBody.innerHTML = linkEvidencePaths(parseMarkdownToHTML(text));
+        drawerBody.innerHTML = linkEvidencePaths(parseMarkdownToHTML(text)) + planSlotHTML('incident:' + incidentId);
+        loadPlanSlot('incident:' + incidentId);
       } else {
         drawerBody.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-doc"/></svg><span>Failed to load the incident report.</span></div>`;
       }
@@ -1424,7 +1426,8 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!res.ok) throw new Error((await res.text()).trim() || 'lookup failed');
       const detail = await res.json();
       if (seq !== drawerSeq) return;
-      drawerBody.innerHTML = fileDetailHTML(detail);
+      drawerBody.innerHTML = fileDetailHTML(detail) + planSlotHTML('file:' + path);
+      loadPlanSlot('file:' + path);
     } catch (err) {
       if (seq !== drawerSeq) return;
       drawerBody.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-doc"/></svg><span>Could not read this file: ${escapeHTML(err.message || err)}</span></div>`;
@@ -1442,6 +1445,71 @@ document.addEventListener('DOMContentLoaded', () => {
     } catch (err) {
       showToast(`Could not ${action === 'reveal' ? 'reveal' : 'open'} the file: ${err.message || err}`, 'error');
     }
+  };
+
+  // Playbook and advisor plan. A slot (.plan-slot[data-plan-subject]) on any
+  // surface shows GET /advisor/plan; asking POSTs and polls every 3 s while
+  // the plan is pending (at most 90 s, and only while a slot for it is open).
+  // Flags that come with a plan are kept so its action buttons work even when
+  // the flag is outside the loaded list.
+  const planFlagCache = new Map();
+  const planPolls = new Map();
+  const planSlots = subject => Array.from(document.querySelectorAll('.plan-slot'))
+    .filter(el => el.dataset.planSubject === subject);
+  function paintPlanSlots(subject, resp) {
+    if (resp && resp.flag) planFlagCache.set(resp.flag.id, resp.flag);
+    planSlots(subject).forEach(el => { el.innerHTML = planHTML(resp); });
+  }
+  async function fetchPlan(subject) {
+    const res = await apiFetch(`/advisor/plan?subject=${encodeURIComponent(subject)}`);
+    if (!res.ok) throw new Error((await res.text()).trim() || 'no playbook');
+    return res.json();
+  }
+  function pollPlan(subject, tries = 0) {
+    clearTimeout(planPolls.get(subject));
+    if (tries >= 30) return;
+    planPolls.set(subject, setTimeout(async () => {
+      if (!planSlots(subject).length) return;
+      try {
+        const resp = await fetchPlan(subject);
+        paintPlanSlots(subject, resp);
+        if (resp.status === 'pending') pollPlan(subject, tries + 1);
+      } catch {
+        pollPlan(subject, tries + 1);
+      }
+    }, 3000));
+  }
+  async function loadPlanSlot(subject) {
+    try {
+      const resp = await fetchPlan(subject);
+      paintPlanSlots(subject, resp);
+      if (resp.status === 'pending') pollPlan(subject);
+    } catch (err) {
+      planSlots(subject).forEach(el => { el.innerHTML = `<p class="plan-status">No playbook: ${escapeHTML(err.message || err)}</p>`; });
+    }
+  }
+  window.askAdvisorPlan = async function(subject) {
+    try {
+      const res = await apiFetch('/advisor/plan', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ subject })
+      });
+      const resp = await res.json().catch(() => null);
+      if (resp) paintPlanSlots(subject, resp);
+      if (res.status === 202) pollPlan(subject);
+      else if (!res.ok) showToast((resp && resp.reason) || 'The advisor could not take the request', 'info');
+    } catch (err) {
+      showToast(`Could not ask the advisor: ${err.message || err}`, 'error');
+    }
+  };
+  window.openPlanDrawer = function(subject, { back } = {}) {
+    if (!drawer) return;
+    drawerMode = 'plan';
+    drawerPlan = subject;
+    if (btnDrawerCopy) btnDrawerCopy.hidden = true;
+    openDrawer({ title: 'What to do', icon: 'doc', onClose: () => { drawerMode = null; }, back });
+    drawerBody.innerHTML = `<div class="plan-slot" data-plan-subject="${escapeHTML(subject)}"><div class="loading-spinner">Loading the playbook…</div></div>`;
+    loadPlanSlot(subject);
   };
 
   // Deep link from the menubar: #ct=…&file=<path> opens that file's drawer.
@@ -1511,6 +1579,10 @@ document.addEventListener('DOMContentLoaded', () => {
       case 'file': {
         const p = drawerFile;
         return { label: 'File', reopen: () => window.openFileDetail(p, { back }) };
+      }
+      case 'plan': {
+        const s = drawerPlan;
+        return { label: 'What to do', reopen: () => window.openPlanDrawer(s, { back }) };
       }
       case 'family': {
         const key = familyDrawerKey;
@@ -1925,7 +1997,8 @@ document.addEventListener('DOMContentLoaded', () => {
   // flag on the daemon, so the allow is followed by /flags/acknowledge.
   window.explainAct = async function(flagId, actionId, host) {
     const f = (telemetryData.flags || []).find(x => x.id === flagId)
-      || (telemetryData.flagsView || []).find(x => x.id === flagId);
+      || (telemetryData.flagsView || []).find(x => x.id === flagId)
+      || planFlagCache.get(flagId);
     const a = f && f.explain && (f.explain.actions || []).find(x => x.id === actionId
       && (!host || (x.body && x.body.host) === host));
     if (!a) {
@@ -2270,6 +2343,14 @@ document.addEventListener('DOMContentLoaded', () => {
       case 'open-file':
         e.preventDefault();
         window.openFileDetail(d.path, { back: back() });
+        break;
+      case 'open-plan':
+        e.preventDefault();
+        window.openPlanDrawer(d.subject, { back: back() });
+        break;
+      case 'ask-plan':
+        e.preventDefault();
+        window.askAdvisorPlan(d.subject);
         break;
       case 'file-reveal':
       case 'file-open':
