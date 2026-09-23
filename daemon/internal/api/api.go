@@ -1081,17 +1081,22 @@ func (a *API) handleMute(w http.ResponseWriter, r *http.Request) {
 
 // handleAdvisorDiscover lists loopback OpenAI-compatible model servers the
 // user could link (Path B: existing Ollama/MLX/llama.cpp servers) plus the
-// curated managed-model list (Path A). Read-gated; the menubar's Advisor
-// settings pane renders its dropdowns from this so nobody types an endpoint.
+// curated managed-model list (Path A), this machine's profile and the models
+// ranked for it. Read-gated; the menubar's Advisor settings pane and
+// onboarding render from this so nobody types an endpoint.
 func (a *API) handleAdvisorDiscover(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	servers := advisor.DiscoverServers()
+	machine := advisor.MachineProfile()
 	w.Header().Set("Content-Type", "application/json")
 	writeJSON(w, map[string]any{
-		"servers":        advisor.DiscoverServers(),
-		"managed_models": advisor.DefaultManagedModels,
+		"servers":         servers,
+		"managed_models":  advisor.DefaultManagedModels,
+		"machine":         machine,
+		"recommendations": advisor.Recommend(machine, servers),
 	})
 }
 

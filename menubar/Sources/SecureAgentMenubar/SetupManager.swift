@@ -34,7 +34,6 @@ public final class SetupManager: ObservableObject {
     @Published public private(set) var lastError: String?
     /// Local advisor: whether a model server answers on the loopback endpoint
     /// and whether the daemon config has the advisor enabled.
-    @Published public private(set) var advisorServerReachable = false
     @Published public private(set) var advisorEnabled = false
     /// Last-persisted advisor config (mode/endpoint/model) — the Settings
     /// tab's restore source so the advisor persists across restarts.
@@ -153,7 +152,6 @@ public final class SetupManager: ObservableObject {
         advisorEnabled = Self.advisorConfigIsEnabled(configYAML())
         advisorPersisted = Self.advisorConfig(configYAML())
         disabledAgents = Self.disabledAgents(configYAML())
-        advisorServerReachable = await Self.probeAdvisorServer()
         advisorDiscovery = (try? await DaemonClient().fetchAdvisorDiscover())
             ?? AdvisorDiscovery(servers: [], managedModels: [])
     }
@@ -171,17 +169,6 @@ public final class SetupManager: ObservableObject {
 
     private func configYAML() -> String {
         (try? String(contentsOfFile: configPath, encoding: .utf8)) ?? ""
-    }
-
-    /// Probe the loopback model server (OpenAI-compatible /v1/models). Short
-    /// timeout: this runs on every wizard open and must never hang it.
-    public nonisolated static func probeAdvisorServer() async -> Bool {
-        guard let url = URL(string: "\(advisorEndpoint)/v1/models") else { return false }
-        var req = URLRequest(url: url)
-        req.timeoutInterval = 1.5
-        guard let (_, resp) = try? await URLSession.shared.data(for: req),
-              let http = resp as? HTTPURLResponse else { return false }
-        return (200..<300).contains(http.statusCode)
     }
 
     /// Flip advisor.enabled in config.yaml. Line-based and deliberately
@@ -264,6 +251,21 @@ public final class SetupManager: ObservableObject {
         } catch {
             report(error)
         }
+    }
+
+    /// The advisor config a recommendation writes: an installed model runs on
+    /// the server holding it; a catalog model is run by the daemon itself.
+    public nonisolated static func advisorChoice(for r: ModelRecommendationModel) -> (mode: AdvisorMode, endpoint: String?, model: String) {
+        if r.source == "installed", let ep = r.endpoint {
+            return (.existing, ep, r.modelID)
+        }
+        return (.managed, nil, r.modelID)
+    }
+
+    /// Configure and enable the advisor with a recommended model.
+    public func applyRecommendation(_ r: ModelRecommendationModel) {
+        let c = Self.advisorChoice(for: r)
+        setAdvisorConfig(mode: c.mode, endpoint: c.endpoint, model: c.model)
     }
 
     /// Replace the whole advisor block (or append one) with the given path

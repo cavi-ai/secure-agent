@@ -54,6 +54,20 @@ final class GuardTests: XCTestCase {
 
     // MARK: - advisor full-block writer (Settings advisor pane)
 
+    func testAdvisorChoiceMapsInstalledAndManagedRecommendations() throws {
+        let installed = try JSONDecoder().decode(ModelRecommendationModel.self, from: Data(#"{"id":"qwen3.8:27b-mlx","label":"qwen3.8:27b-mlx","source":"installed","endpoint":"http://127.0.0.1:11434","fit":"fits","note":"n"}"#.utf8))
+        let c1 = SetupManager.advisorChoice(for: installed)
+        XCTAssertEqual(c1.mode, .existing)
+        XCTAssertEqual(c1.endpoint, "http://127.0.0.1:11434")
+        XCTAssertEqual(c1.model, "qwen3.8:27b-mlx")
+
+        let managed = try JSONDecoder().decode(ModelRecommendationModel.self, from: Data(#"{"id":"mlx-community/Qwen3.5-9B-MLX-4bit","label":"Qwen3.5 9B","source":"managed","fit":"fits","note":"n"}"#.utf8))
+        let c2 = SetupManager.advisorChoice(for: managed)
+        XCTAssertEqual(c2.mode, .managed)
+        XCTAssertNil(c2.endpoint)
+        XCTAssertEqual(c2.model, "mlx-community/Qwen3.5-9B-MLX-4bit")
+    }
+
     func testAdvisorConfigSettingManagedWritesManagedBlock() {
         let out = SetupManager.advisorConfigSetting("proxy_enabled: true\n", mode: .managed, endpoint: nil,
                                                     model: "mlx-community/Qwen3-4B-4bit")

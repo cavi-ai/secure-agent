@@ -7,6 +7,8 @@ All notable changes to `secure-agent` are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- `/advisor/discover` returns `machine` (chip, RAM, free disk) and `recommendations`: installed chat models and a verified catalog (Qwen3.5 4B/9B, Qwen3.6 35B-A3B, Qwen3.8 27B 4-/8-bit) ranked by fit for this machine; Ollama discovery reports model sizes.
+- Menubar: Settings → Advisor lists the models recommended for this Mac with a Use button; onboarding step 9 offers the recommendation with Use recommended.
 - `GET /worktrees`: every git worktree found from session workspaces, agent worktree directories, `worktrees.roots` and a saved repo list, each with state `remove`, `review`, `keep`, `prune` or `main`, reasons, `stale` and last activity.
 - Worktree merge detection by ancestry or a zero-context patch-id match for squash merges; local git only.
 - Worktree rows list precious ignored files (`.env*`, `*.pem`, `*.key`, `.tmp/`, `.claude/`, `.remember/`) with file count and size.
