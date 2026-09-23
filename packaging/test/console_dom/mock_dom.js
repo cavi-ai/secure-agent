@@ -389,6 +389,54 @@
   //                  #ct fragment, token must come from storage).
   const MODE = location.search;
   const REQUIRE_TOKEN = MODE.includes('requiretoken');
+
+  // explaindemo: flag-2 carries the daemon's served explanation (the S2
+  // shape: Cloudflare over IPv6, advisor benign at 0.93, allow-host
+  // recommended) and its attention item the benign-likely disposition.
+  // flag-1 and flag-3 stay raw, as rows from an older daemon or past the
+  // 25-flag cap do.
+  if (MODE.includes('explaindemo')) {
+    const cfHost = '2606:4700::6810:84e5';
+    const f2 = data['/flags'].find(f => f.id === 'flag-2');
+    Object.assign(f2, {
+      title: 'Agent read a secret, then connected out',
+      ts: '2026-09-22T16:05:01Z',
+      evidence: [
+        { kind: 'read', label: '/Users/dev/.aws/credentials', sub: 'sensitive read', ts: '2026-09-22T16:04:58Z' },
+        { kind: 'connect', label: `[${cfHost}]:443`, sub: 'egress', ts: '2026-09-22T16:05:01Z' }
+      ],
+      advisor: { assessment: 'benign', confidence: 0.93, rationale: 'Cloudflare fronts the package registry this project installs from.', suggested_action: 'allow-host' },
+      explain: {
+        what: 'Cursor read AWS credentials (~/.aws/credentials), then reached Cloudflare 3 s later.',
+        subject: { path: '/Users/dev/.aws/credentials', display: '~/.aws/credentials', basename: 'credentials',
+          category: 'aws_credentials', category_label: 'AWS credentials', rule: 'cloud-creds', owner_label: 'home directory' },
+        egress: [{ host: cfHost, port: 443, org: 'Cloudflare', kind: 'ipv6', allowlisted: false, gap_seconds: 3 }],
+        context: { session_id: '7f3a9c21-4b2e-4a1d-9c55-2e8f0d1a3b77', harness: 'cursor', repo: 'web-app', branch: 'main',
+          tool: 'Read', tool_status: 'ok', tool_at: '2026-09-22T16:04:57Z' },
+        disposition: { state: 'benign-likely', text: 'Likely benign (advisor 93 %)', why: 'Cloudflare fronts the package registry this project installs from.' },
+        actions: [
+          { id: 'allow-host', label: `Allow ${cfHost} (Cloudflare) for cursor`, recommended: true,
+            consequence: `Future connections from cursor to ${cfHost} are trusted and stop being flagged.`,
+            method: 'POST', path: '/allowlist', body: { agent: 'cursor', host: cfHost } },
+          { id: 'dismiss', label: 'Dismiss this flag',
+            consequence: 'The flag is marked reviewed and stops counting as needing action; the rule keeps watching for the next one.',
+            method: 'POST', path: '/flags/acknowledge', body: { flag_id: 'flag-2' } },
+          { id: 'kill', label: 'Kill cursor (pid 6033)',
+            consequence: 'The agent process tree is terminated now; unsaved work in it is lost.',
+            method: 'POST', path: '/kill', body: { pid: 6033 } }
+        ]
+      }
+    });
+    for (const g of data['/posture'].groups) {
+      for (const it of g.items) {
+        if (it.kind === 'flag' && it.id === 'flag-2') {
+          Object.assign(it, { priority: 1, title: 'Finding, likely benign',
+            detail: 'Likely benign (advisor 93 %) — sensitive-read-then-connect — credentials then egress',
+            disposition: f2.explain.disposition });
+        }
+      }
+    }
+  }
   // ?theme=dark|light pins the console theme (screenshots); app.js reads it
   // from the same storage key the masthead toggle writes.
   const theme = new URLSearchParams(MODE).get('theme');
@@ -514,6 +562,7 @@
         try { host = JSON.parse(opts.body).host; } catch { /* ignored */ }
         line += ' row=' + (document.querySelector(`#firewall-container [data-action="allowlist-remove"][data-host="${host}"]`) ? 1 : 0);
       }
+      if (MODE.includes('explaindemo') && opts.body) line += ' body=' + opts.body;
       reqLog.push(line);
       stamp('mock-requests', reqLog.join('\n'));
       // postfail: POST /allowlist answers 500 (the act-in-place revert path).
@@ -934,5 +983,28 @@
   if (MODE.includes('actdemo')) {
     setTimeout(() => document.querySelector('[data-tab="egress"]').click(), 4000);
     setTimeout(() => document.querySelector('.fw-suggestion [data-action="allow-host"]').click(), 9000);
+  }
+  // detailsprobe (with explaindemo): flag-2 raised seconds ago, so its age
+  // changes on every render; Findings open, its Details opened and probed,
+  // then a burst. <pre id="details-probe"> says whether that node stayed
+  // connected and open, and its meta before | after.
+  if (MODE.includes('detailsprobe')) {
+    data['/flags'].find(f => f.id === 'flag-2').ts = new Date(Date.now() - 5000).toISOString();
+    setTimeout(() => document.querySelector('[data-tab="findings"]').click(), 4000);
+    setTimeout(() => {
+      const d = document.querySelector('#flags-list .finding[data-flag-id="flag-2"] details');
+      const meta = () => (d && d.closest('.finding') ? d.closest('.finding').querySelector('.finding-meta').textContent : '');
+      const before = meta();
+      if (d) { d.open = true; d.dataset.probe = '1'; }
+      burst();
+      setTimeout(() => stamp('details-probe', d && d.isConnected && d.open ? `kept ${before} | ${meta()}` : 'lost'), 2600);
+    }, 4300);
+  }
+  // explainact: Findings open, press flag-2's first served action (the
+  // recommended allow) late enough that the inline note and the toast are
+  // still up at dump time.
+  if (MODE.includes('explainact')) {
+    setTimeout(() => document.querySelector('[data-tab="findings"]').click(), 4000);
+    setTimeout(() => document.querySelector('#flags-list .finding[data-flag-id="flag-2"] .finding-actions button')?.click(), 9000);
   }
 })();
