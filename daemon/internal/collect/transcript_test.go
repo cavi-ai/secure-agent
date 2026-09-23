@@ -419,7 +419,10 @@ func TestTranscriptHitRedactFallback(t *testing.T) {
 	sub := b.Subscribe()
 	ts := NewTranscriptScanner(b, nil)
 
-	hits := appendAndTail(t, ts, sub, map[string]int64{}, path, "curl -H 'Authorization: Bearer synthetic0123456789abcdef'")
+	// Assembled from fragments at runtime so no scannable token literal
+	// appears in source (gitleaks rule curl-auth-header).
+	line := "curl -H 'Authorization: " + "Bearer " + strings.Repeat("a", 32) + "'"
+	hits := appendAndTail(t, ts, sub, map[string]int64{}, path, line)
 	if len(hits) != 1 || !strings.HasSuffix(hits[0].Detail, ":pattern:bearer-token") {
 		t.Fatalf("want one hit with Detail ending :pattern:bearer-token, got %+v", hits)
 	}
