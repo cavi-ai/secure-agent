@@ -17,6 +17,7 @@ home is a trust failure. The advisor therefore speaks **loopback HTTP only**.
 | Guarantee | Enforcement |
 |---|---|
 | **Loopback only** | Config validation rejects any non-loopback `advisor.endpoint` (`127.0.0.1`/`::1`/`localhost` only). `advisor.New` re-checks at construction and refuses to start. Two layers, both tested. |
+| **Plans only on request, only to a local model** | `POST /advisor/plan` is a NoAgent route (agent processes are refused on the socket and on the console listener) and answers 409 when the advisor is off, not loopback or paused. |
 | **Advisory only** | Verdicts are stored in `advisor_verdicts` and rendered in UIs. Nothing reads them back into rule modes, guard decisions, firewall enforcement, or the correlator. There is no code path from a verdict to an enforcement change. |
 | **Never on the critical path** | The advisor is a bus-side consumer like the fleet publisher. Guard prompts, hooks, and the drain loop never wait on a model call. |
 | **Fails silent** | Model server down/slow → circuit breaker (3 failures → 5 min cool-down, one log line). Daemon posture is unchanged; verdicts simply don't appear. |
@@ -28,6 +29,15 @@ home is a trust failure. The advisor therefore speaks **loopback HTTP only**.
   (file paths, hostnames, timestamps).
 - Incident narrative: rule, agent, risk, summary, touched files, connection
   hosts, rotate-item names and categories.
+- Plan (asked for per finding, incident or evidence file): the flag's
+  explanation and evidence strings, the incident summary, the session
+  (harness, repo, branch, duration, top tools, up to 8 timeline lines before
+  the finding), the evidence file's category and size, and at most 4 KB of
+  its text around each secret with every fingerprint and pattern hit masked
+  as `[REDACTED:<rule>]` (an excerpt whose rescan still finds a secret is
+  withheld), the rule's 7- and 30-day counts, mutes and allowlist entries,
+  and the rule's playbook. The plan may recommend only the served action ids
+  it was offered; each still needs the operator's click.
 
 **Never** secret values. The firewall's known-secret registry stays salted
 HMAC; evidence strings are paths/hosts, not payloads. The model endpoint

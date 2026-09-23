@@ -7,6 +7,9 @@ All notable changes to `secure-agent` are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- Playbooks: every rule has a fixed response — why it fires, what to do now, how to prevent it (guard rules, settings, secret handling, agent instructions, workflow), which actions apply.
+- `GET/POST /advisor/plan`: the playbook always; on request the local advisor writes a plan from this machine's context (explanation, session, masked file excerpt, history, local policy) — why, prevention, behavior changes, remediation, recommended actions; stale when new evidence arrives.
+- Console: a What to do drawer on every finding, and the playbook and plan in the incident and file drawers with Ask the advisor and the recommended actions as buttons.
 - `GET /files/detail`: facts, findings, agent-session accesses, transcript hits and a masked excerpt for a file stored evidence names.
 - `POST /files/reveal` and `POST /files/open`: Finder selects the file or the default text editor opens it; audited.
 - NoAgent route class: refused for agent processes on the socket (live family check) and on the console listener (the TCP client's process).

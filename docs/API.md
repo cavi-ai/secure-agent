@@ -310,6 +310,16 @@ What the daemon knows about one evidence file, and two local actions on it. `pat
 
 ---
 
+### 2d. `GET /advisor/plan?subject=` · `POST /advisor/plan`
+
+What to do about one finding. `subject` is `flag:<id>`, `incident:<id>` or `file:<path>` (a path stored evidence names); anything else is 404. NoAgent route.
+
+`GET` returns `subject`, `playbook` (the rule's fixed response: `title`, `why`, `now`, `prevent` steps with a kind of `guard-rule`, `config`, `secret-hygiene`, `agent-instruction` or `workflow`, and served `actions`), `flag` (the subject's flag with its explanation, for the action buttons), `advisor_ready` and `reason`, `plan` when one is stored, and `status`: `none`, `pending`, `ready`, `stale` (new evidence since the plan was written; the old plan is still returned) or `disabled`.
+
+`POST {"subject": "…"}` builds the plan context on this machine (see the advisor threat model), queues it for the local advisor and answers 202 `pending`; while a plan for the subject is pending a second request queues nothing. 409 `disabled` with the reason when the advisor is off, not loopback, paused or its queue is full.
+
+The plan: `summary`, `why` (≤ 4), `risk` (`low`, `medium`, `high`), `prevent` (≤ 5 steps), `behavior` (≤ 3), `remediate` (≤ 4), `actions` (only the offered served action ids), `confidence`, `model`, `created_at`, `evidence_key`. Output off that schema is dropped and the playbook stands alone.
+
 ### 2b. `GET /patterns`
 
 Repeating findings: the flags one agent raised under one rule on one subject in the window, as one row each. Read-level; console-allowed.
