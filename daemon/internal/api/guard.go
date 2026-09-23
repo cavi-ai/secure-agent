@@ -147,9 +147,24 @@ func (a *API) handleGuardResolve(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `Invalid payload: {"id","verdict":"allow|deny","scope":"once|always"}`, http.StatusBadRequest)
 		return
 	}
+	var pend *guard.Pending
+	for _, p := range a.guardBroker.Pending() {
+		if p.ID == req.ID {
+			pend = &p
+			break
+		}
+	}
 	ok := a.guardBroker.Resolve(req.ID, guard.Decision{Verdict: req.Verdict, Scope: req.Scope})
 	if ok {
 		a.publishGuardEvent(event.KindGuardResolved, req.Verdict+"/"+req.Scope)
+		if pend != nil {
+			label := "ok"
+			if req.Verdict == "deny" {
+				label = "not_ok"
+			}
+			a.recordLabel(model.OperatorLabel{Kind: "guard", Rule: pend.RuleID, Agent: pend.Agent, Pattern: pend.Path,
+				Label: label, Source: "guard-" + req.Verdict})
+		}
 	}
 	writeJSON(w, map[string]any{"status": "ok", "resolved": ok})
 }
@@ -183,6 +198,7 @@ func (a *API) handleGuardPathAllow(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		a.store.PutGuardPathAllow(store.GuardPathAllow{Agent: req.Agent, RuleID: req.RuleID, Path: req.Path})
+		a.recordLabel(model.OperatorLabel{Kind: "file", Rule: req.RuleID, Agent: req.Agent, Pattern: req.Path, Label: "ok", Source: "allow-path"})
 		a.store.PutAudit(store.AuditEntry{
 			Action: "guard-path-allow", Rule: req.Agent + "/" + req.RuleID,
 			Detail: "allowed path " + req.Path,

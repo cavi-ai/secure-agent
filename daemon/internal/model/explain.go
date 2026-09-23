@@ -14,6 +14,9 @@ type FlagExplain struct {
 	Context     *ExplainContext `json:"context,omitempty"`
 	Disposition Disposition     `json:"disposition"`
 	Actions     []ExplainAction `json:"actions"`
+	// Labels counts the operator's earlier judgments on the same case, when
+	// there are any.
+	Labels *LabelSummary `json:"labels,omitempty"`
 }
 
 // ExplainSubject is the file a flag is about (read, keychain and transcript

@@ -187,6 +187,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 	uiPID := owningUIPID()
 
 	retriageFuncs, hostAssessFuncs, guardAdvisor := buildAdvisorHooks(st, advisorStk)
+	planFuncs := buildPlanFuncs(advisorStk)
 
 	// Hermes Agent's collector is built before the API so /doctor reads its
 	// state; startCollectors runs it.
@@ -218,6 +219,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 		NotifyRules:  notifyRuleStore,
 		NotifyScopes: notifyScopeStore,
 		Retriage:     retriageFuncs,
+		Plan:         planFuncs,
 		HostAssess:   hostAssessFuncs,
 		GuardAdvisor: guardAdvisor,
 		PeerChecker:  api.NewPeerChecker(),
@@ -903,4 +905,33 @@ func unparsedShare(s collect.SpoolStats) float64 {
 		return 0
 	}
 	return float64(s.Lines-s.Parsed) / float64(s.Lines)
+}
+
+// buildPlanFuncs connects /advisor/plan to the CURRENT advisor stack (config
+// hot-reload swaps it); a nil subscriber reads as "advisor off".
+func buildPlanFuncs(advisorStk *advisorStackHolder) *api.PlanFuncs {
+	return &api.PlanFuncs{
+		Enqueue: func(r advisor.PlanRequest) bool {
+			if sub := advisorStk.Load().Sub; sub != nil {
+				return sub.EnqueuePlan(r)
+			}
+			return false
+		},
+		Pending: func(subject string) bool {
+			if sub := advisorStk.Load().Sub; sub != nil {
+				return sub.PlanPending(subject)
+			}
+			return false
+		},
+		Ready: func() (bool, string) {
+			sub := advisorStk.Load().Sub
+			if sub == nil {
+				return false, "the local advisor is off: enable it in Settings → Advisor"
+			}
+			if h := sub.Health(); h.CircuitOpen {
+				return false, "the local advisor is paused after repeated failures: " + h.LastError
+			}
+			return true, ""
+		},
+	}
 }

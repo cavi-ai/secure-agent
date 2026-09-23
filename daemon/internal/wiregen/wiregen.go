@@ -16,6 +16,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/correlate"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
+	"github.com/cavi-ai/secure-agent/daemon/internal/playbook"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 	"github.com/cavi-ai/secure-agent/daemon/internal/supervise"
 )
@@ -33,6 +34,15 @@ func WireTypes() []any {
 		model.FileFinding{},
 		model.FileAccess{},
 		model.FileHit{},
+		model.AdvisorPlan{},
+		model.PlanStep{},
+		model.OperatorLabel{},
+		model.LabelSummary{},
+		model.LabelSuggestion{},
+		model.LabelContext{},
+		api.PlanResponse{},
+		playbook.Playbook{},
+		playbook.Step{},
 		model.IncidentReport{},
 		model.RotateItem{},
 		model.AdvisorVerdict{},
