@@ -123,7 +123,7 @@ func Open(dbPath, jsonlPath string) (*Store, error) {
 
 	dsn := dbPath
 	if dsn != "" {
-		dsn = dsn + "?_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=busy_timeout(3000)"
+		dsn = dsn + "?_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=busy_timeout(3000)&_pragma=analysis_limit(1000)"
 	} else {
 		dsn = ":memory:?_pragma=journal_mode(WAL)"
 	}
@@ -168,6 +168,7 @@ func Open(dbPath, jsonlPath string) (*Store, error) {
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_events_pid_ts ON events(pid, ts);`,
 		`CREATE INDEX IF NOT EXISTS idx_events_kind_id ON events(kind, id);`,
+		`CREATE INDEX IF NOT EXISTS idx_events_session_kind_id ON events(session_id, kind, id);`,
 		`CREATE TABLE IF NOT EXISTS incidents (
 			id TEXT PRIMARY KEY,
 			flag_id TEXT,
@@ -439,11 +440,24 @@ func Open(dbPath, jsonlPath string) (*Store, error) {
 		}
 	}
 
+	refreshPlannerStats(db)
+
 	return &Store{
 		db:        db,
 		jsonlPath: jsonlPath,
 		jsonlFile: jsonl,
 	}, nil
+}
+
+// refreshPlannerStats keeps sqlite_stat1 current so the planner knows kind
+// has a handful of values and pid or session_id a great many; without it a
+// kind=? AND pid=? lookup walks every row of the kind through
+// idx_events_kind_id. Bounded by analysis_limit; a no-op when the stats are
+// current.
+func refreshPlannerStats(db *sql.DB) {
+	if _, err := db.Exec(`PRAGMA optimize=0x10002`); err != nil {
+		log.Printf("store: planner stats: %v", err)
+	}
 }
 
 func (s *Store) PutFlag(fl model.Flag) {
@@ -567,6 +581,7 @@ func (s *Store) PutEvent(e event.Event) {
 		s.pruneEventsLocked()
 		s.pruneRollupLocked()
 		s.pruneSessionsLocked()
+		refreshPlannerStats(s.db)
 		s.lastPrune = time.Now()
 	}
 }
