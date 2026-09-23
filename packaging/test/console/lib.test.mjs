@@ -40,6 +40,7 @@ const {
   sessionGroupCounts, sessionCountStrip, harnessPillsHTML, middleTruncate,
   hbarsHTML, sessionWaterfallHTML, applyInlineMetrics, resourceHostContextHTML,
   fmtUSD, topCostRows,
+  familyLabel, cappedList, resourceNeedsAttention, resourceFamilyGroups,
 } = ctx;
 
 // ---------- spend ----------
@@ -1045,4 +1046,117 @@ test('explainActionsHTML: recommended first, kill danger, others ghost; no pid, 
   ] }));
   assert.match(rec, /^<button class="btn btn-primary btn-sm" data-action="explain-act" data-flag-id="f1" data-action-id="allow-host"/);
   assert.equal(ctx.explainActionsHTML({ id: 'x' }), '');
+});
+
+// ---------- resources v2: names, capped lists, attention, harness groups ----------
+
+const famSessions = [
+  { id: 's-claude', harness: 'claude', repo: 'api-service', branch: 'main', workspace: '/w/api-service', root_pid: 100 },
+  { id: 's-codex', harness: 'codex', workspace: '/w/data-pipeline', root_pid: 200 },
+];
+
+test('familyLabel: harness · repo@branch from the session joined by root pid', () => {
+  assert.equal(familyLabel({ root_pid: 100, name: 'claude', workspace: '/w/elsewhere' }, famSessions), 'Claude Code · api-service@main');
+  assert.equal(familyLabel({ root_pid: 9, name: 'claude' }, [{ harness: 'claude', repo: 'x', root_pid: 9 }]), 'Claude Code · x');
+});
+
+test('familyLabel: workspace folder without a repo; the family cwd when no session joins', () => {
+  assert.equal(familyLabel({ root_pid: 200, name: 'codex', workspace: '/elsewhere' }, famSessions), 'Codex · data-pipeline');
+  assert.equal(familyLabel({ root_pid: 555, name: 'claude', workspace: '/Users/dev' }, famSessions), 'Claude Code · dev');
+});
+
+test('familyLabel: the harness name alone, never a pid', () => {
+  assert.equal(familyLabel({ root_pid: 7001, name: 'ollama', workspace: '/' }, []), 'Ollama');
+  const numeric = familyLabel({ root_pid: 3755, name: 'codex', workspace: '/private/tmp/3755' }, null);
+  assert.equal(numeric, 'Codex');
+  for (const f of [{ root_pid: 100, name: 'claude' }, { root_pid: 200, name: 'codex' }, { root_pid: 42 }]) {
+    assert.ok(!familyLabel(f, famSessions).includes(String(f.root_pid)), JSON.stringify(f));
+  }
+});
+
+test('cappedList: the first limit rows, a Show N more button, the whole list once expanded', () => {
+  const items = Array.from({ length: 20 }, (_, i) => i);
+  const row = i => `<i>${i}</i>`;
+  const c = cappedList(items, 12, row, 'family-procs:k', new Set());
+  assert.equal(c.shown.length, 12);
+  assert.equal(c.hidden, 8);
+  assert.match(c.more, /<button type="button" [^>]*data-action="show-more" data-key="family-procs:k"[^>]*>Show 8 more<\/button>/);
+  assert.equal((c.html.match(/<i>/g) || []).length, 12);
+  assert.ok(c.html.endsWith(c.more));
+  const open = cappedList(items, 12, row, 'family-procs:k', new Set(['family-procs:k']));
+  assert.equal(open.shown.length, 20);
+  assert.equal(open.hidden, 0);
+  assert.equal(open.more, '');
+  const short = cappedList([1, 2], 12, row, 'x');
+  assert.equal(short.hidden, 0);
+  assert.equal(short.more, '');
+  assert.equal(short.html, '<i>1</i><i>2</i>');
+  assert.match(cappedList(items, 1, row, '"><x', new Set()).more, /data-key="&quot;&gt;&lt;x"/);
+});
+
+test('resourceNeedsAttention: only families with a diagnosis, never infra, highest impact first, at most 5', () => {
+  const GiB = 1024 ** 3;
+  const fam = (key, rss, cpu, codes, kind) => ({ key, rss_bytes: rss * GiB, cpu_percent: cpu, kind, diagnoses: codes.map(code => ({ code })) });
+  const list = [
+    fam('quiet-big', 9, 0, []),
+    fam('a', 1, 10, ['orphan-drift']),
+    fam('b', 6, 20, ['heavy-memory']),
+    fam('c', 2, 250, ['heavy-cpu']),
+    fam('d', 3, 0, ['idle-heavy']),
+    fam('e', 2.5, 0, ['rapid-growth']),
+    fam('f', 1.5, 0, ['runaway-child']),
+    fam('infra', 10, 0, ['heavy-memory'], 'infra'),
+  ];
+  assert.deepEqual(resourceNeedsAttention(list).map(f => f.key), ['c', 'b', 'd', 'e', 'f']);
+  assert.deepEqual(resourceNeedsAttention(list, 2).map(f => f.key), ['c', 'b']);
+  assert.deepEqual([...resourceNeedsAttention([fam('q', 1, 1, [])])], []);
+  assert.deepEqual([...resourceNeedsAttention(null)], []);
+});
+
+test('resourceFamilyGroups: harness groups by memory, children nested under their orchestrator, infra trailing and uncounted', () => {
+  const MB = 1024 ** 2;
+  const f = (key, name, pid, rss, cpu, kind) => ({ key, name, root_pid: pid, rss_bytes: rss * MB, cpu_percent: cpu, kind });
+  const families = [
+    f('claude-a', 'claude', 100, 500, 10),
+    f('codex-a', 'codex', 200, 300, 5),
+    f('oc', 'openclaw', 300, 100, 1),
+    f('oc-kid-1', 'codex', 301, 800, 30),
+    f('oc-kid-2', 'codex', 302, 50, 2),
+    f('claude-b', 'claude', 110, 900, 0),
+    f('ollama', 'ollama', 700, 4000, 3, 'infra'),
+    f('lms', 'lm-studio', 701, 2000, 1, 'infra'),
+  ];
+  const sessions = [
+    { id: 's-oc', harness: 'openclaw', root_pid: 300 },
+    { id: 's-kid-1', harness: 'codex', root_pid: 301, parent_id: 's-oc' },
+    // A grandchild flattens under the top: one indent, never two.
+    { id: 's-kid-2', harness: 'codex', root_pid: 302, parent_id: 's-kid-1' },
+  ];
+  const groups = resourceFamilyGroups(families, sessions);
+  assert.deepEqual([...groups].map(g => g.key), ['claude', 'openclaw', 'codex', 'infra']);
+  const [claude, oc, codex, infra] = groups;
+  assert.equal(claude.label, 'Claude Code');
+  assert.deepEqual([...claude.rows].map(r => r.family.key), ['claude-b', 'claude-a']);
+  assert.equal(claude.families, 2);
+  assert.equal(claude.rss, 1400 * MB);
+  assert.equal(claude.cpu, 10);
+  assert.equal(oc.rows.length, 1);
+  assert.deepEqual([...oc.rows[0].children].map(c => c.key), ['oc-kid-1', 'oc-kid-2']);
+  assert.equal(oc.families, 3);
+  assert.equal(oc.rss, 950 * MB);
+  assert.equal(oc.cpu, 33);
+  assert.deepEqual([...codex.rows].map(r => r.family.key), ['codex-a']);
+  assert.equal(infra.infra, true);
+  assert.equal(infra.label, 'Infrastructure');
+  assert.deepEqual([...infra.rows].map(r => r.family.key), ['ollama', 'lms']);
+  assert.equal(groups.filter(g => !g.infra).reduce((n, g) => n + g.families, 0), 6);
+  // A parent_id cycle has no top: both families stay top-level.
+  const cyc = resourceFamilyGroups([f('x', 'codex', 1, 1, 0), f('y', 'codex', 2, 2, 0)],
+    [{ id: 'sx', root_pid: 1, parent_id: 'sy' }, { id: 'sy', root_pid: 2, parent_id: 'sx' }]);
+  assert.deepEqual([...cyc[0].rows].map(r => r.family.key), ['y', 'x']);
+  assert.ok(cyc[0].rows.every(r => r.children.length === 0));
+  // Infra never nests and nothing nests under infra.
+  const inf = resourceFamilyGroups([f('m', 'ollama', 5, 1, 0, 'infra'), f('k', 'codex', 6, 1, 0)],
+    [{ id: 'sm', root_pid: 5 }, { id: 'sk', root_pid: 6, parent_id: 'sm' }]);
+  assert.deepEqual([...inf].map(g => g.key), ['codex', 'infra']);
 });

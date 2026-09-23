@@ -823,6 +823,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (!booted || (opts && opts.full)) renderAll();
     else markDirty(...PANELS.map(p => p[0]).filter(n => slow || !SLOW_ONLY.has(n)));
+    if (resources) fillFamilyDrawer();
   }
 
   // Every panel, hidden ones included: initial load, Refresh, and actions
@@ -918,6 +919,9 @@ document.addEventListener('DOMContentLoaded', () => {
   const endedSessionsOpen = {}; // harness key → ended tail expanded
   const agentGroupOpen = {};
   const agentTreeOpen = {}; // instance root pid → helper disclosure open
+  // cappedList keys the operator expanded ("events", "agents:<harness>",
+  // "family-procs:<family key>"); re-renders keep those lists whole.
+  const expandedLists = new Set();
 
   // Harness filter shared by the Sessions and Agents tabs: pill states
   // (harness key → false when switched off), the text filter, and the
@@ -1190,6 +1194,7 @@ document.addEventListener('DOMContentLoaded', () => {
     endedSessionsOpen,
     agentGroupOpen,
     agentTreeOpen,
+    expanded: expandedLists,
     harnessFilter,
     setTabBadge,
     paintSessionChip,
@@ -1274,7 +1279,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // Copy button) and the uninspected-egress drill-down (row actions, no
   // Copy). drawerMode tracks which one is open so action handlers can
   // re-render the right content after a mutation.
-  let drawerMode = null; // 'incident' | 'uninspected' | null
+  let drawerMode = null; // 'incident' | 'endpoint' | 'uninspected' | 'family' | 'policy' | null
 
   window.openIncidentReport = async function(incidentId) {
     if (!drawer) return;
@@ -1340,6 +1345,52 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     fillUninspected(drawerBody);
   };
+
+  // Family drawer: View family on the Resources board opens the docked
+  // inspector for one process family — no tab switch. The 30s reconcile
+  // refills it in place (fetchTelemetry); the process table's Show more
+  // state lives in expandedLists. Open in Events is the way out to the full
+  // timeline.
+  let familyDrawerKey = '';
+  const familyByKey = key => ((telemetryData.resources && telemetryData.resources.sessions) || []).find(f => f.key === key);
+  window.openFamilyDrawer = function(key) {
+    const fam = familyByKey(key);
+    if (!drawer || !fam) return;
+    drawerMode = 'family';
+    familyDrawerKey = key;
+    selectedResourceKey = key;
+    if (btnDrawerCopy) btnDrawerCopy.hidden = true;
+    openDrawer({
+      title: familyLabel(fam, telemetryData.sessions),
+      icon: 'activity',
+      onClose: () => { drawerMode = null; familyDrawerKey = ''; },
+    });
+    drawerFoot._saFoot = undefined;
+    fillFamilyDrawer();
+  };
+  function fillFamilyDrawer() {
+    if (drawerMode !== 'family' || !drawer || drawer.hidden) return;
+    const fam = familyByKey(familyDrawerKey);
+    if (!fam) {
+      drawerBody.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-activity"/></svg><span>This family is no longer running.</span></div>`;
+      drawerFoot.innerHTML = '';
+      drawerFoot._saFoot = undefined;
+      drawerFoot.hidden = true;
+      return;
+    }
+    const label = familyLabel(fam, telemetryData.sessions);
+    drawerTitle.textContent = label;
+    patchList(drawerBody, familyDrawerSections(fam, {
+      sessions: telemetryData.sessions, events: telemetryData.events, flags: telemetryData.flags,
+      expanded: expandedLists, now: Date.now(),
+    }), { key: p => p.key, html: p => p.html });
+    const foot = familyDrawerFootHTML(fam, label);
+    if (drawerFoot._saFoot !== foot) {
+      drawerFoot.innerHTML = foot;
+      drawerFoot._saFoot = foot;
+    }
+    drawerFoot.hidden = false;
+  }
 
   window.killProcess = async function(pid, startedAt, family) {
     const when = startedAt ? ` started ${startedAt}` : '';
@@ -1489,13 +1540,14 @@ document.addEventListener('DOMContentLoaded', () => {
       default: resourcePolicyFromSnapshot(control),
       overrides: (control.workspace_overrides || []).map(resourcePolicyFromSnapshot)
     };
+    drawerMode = 'policy';
     openDrawer({
       title: 'Resource policy editor',
       icon: 'activity',
       variant: 'resource-policy',
       foot: `<button type="button" class="btn btn-ghost" data-action="policy-cancel">Cancel</button>`
         + `<button type="button" class="btn btn-primary" data-action="policy-save">Save and apply</button>`,
-      onClose: () => { resourcePolicyDraft = null; },
+      onClose: () => { resourcePolicyDraft = null; drawerMode = null; },
     });
     renderResourcePolicyEditor();
     drawerFoot.querySelector('[data-action="policy-cancel"]')?.addEventListener('click', closeDrawer);
@@ -1553,9 +1605,17 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  window.killOrphans = async function(family) {
+  window.killOrphans = function(family) {
     const agents = (telemetryData.status && telemetryData.status.agents) ? telemetryData.status.agents : [];
-    const orphans = agents.filter(a => harnessMeta(a.name).key === family && a.is_orphan);
+    return killLeftovers(agents.filter(a => harnessMeta(a.name).key === family && a.is_orphan), family);
+  };
+  // One family's leftovers, from the family drawer.
+  window.killFamilyOrphans = function(key) {
+    const fam = familyByKey(key);
+    if (!fam) return;
+    return killLeftovers((fam.processes || []).filter(p => p.is_orphan), familyLabel(fam, telemetryData.sessions));
+  };
+  async function killLeftovers(orphans, family) {
     if (orphans.length === 0) return;
     if (!await saConfirm(`Terminate ${orphans.length} leftover ${family} process${orphans.length === 1 ? '' : 'es'}?`, { title: 'Clean up leftovers', okLabel: 'Terminate' })) return;
     for (const a of orphans) {
@@ -1574,7 +1634,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     showToast(`Leftover ${family} processes terminated.`, 'success');
     fetchTelemetry();
-  };
+  }
 
   // Bulk allow: one click for a group the operator has already judged (all
   // hosts under one suffix for one agent). Sequential and bounded — the
@@ -1877,7 +1937,11 @@ document.addEventListener('DOMContentLoaded', () => {
   };
 
   // Session drill-down: jump from a flag to just its harness session's events.
-  window.filterTimelineToSession = function(sid) {
+  // "View session in timeline" (finding cards, Attention): open the session
+  // in the Sessions tab — its rail card selected, its trace loaded — and keep
+  // Events, Flags and Incidents scoped to it for the Events tab. Selects
+  // outright: selectSession toggles, which would close an already-open one.
+  window.filterTimelineToSession = async function(sid) {
     timelineSession = sid;
     timelinePids = null;
     timelinePidLabel = '';
@@ -1885,10 +1949,13 @@ document.addEventListener('DOMContentLoaded', () => {
     renderEvents();
     renderFlags();
     renderIncidents();
-    switchTab('overview');
-    const el = document.getElementById('events-container');
-    if (el && el.scrollIntoView) {
-      el.scrollIntoView({ behavior: reducedMotion ? 'auto' : 'smooth', block: 'nearest' });
+    selectedSessionId = sid;
+    switchTab('sessions');
+    try { await loadSessionTimeline(sid, true); } catch { /* the trace stays empty; the next select retries */ }
+    renderNow(['sessions']);
+    const card = document.querySelector(`#session-rail [data-action="select-session"][data-id="${cssq(sid)}"]`);
+    if (card && card.scrollIntoView) {
+      card.scrollIntoView({ behavior: reducedMotion ? 'auto' : 'smooth', block: 'nearest' });
     }
   };
 
@@ -1900,7 +1967,7 @@ document.addEventListener('DOMContentLoaded', () => {
     renderEvents();
     renderFlags();
     renderIncidents();
-    switchTab('overview');
+    switchTab('events');
     const el = document.getElementById('events-container');
     if (el && el.scrollIntoView) {
       el.scrollIntoView({ behavior: reducedMotion ? 'auto' : 'smooth', block: 'nearest' });
@@ -1971,9 +2038,31 @@ document.addEventListener('DOMContentLoaded', () => {
         e.preventDefault();
         window.filterTimelineToPids((d.pids || '').split(','), d.label);
         break;
-      case 'resource-session':
-        selectedResourceKey = d.key || '';
-        renderResourceMissionControl();
+      case 'view-family':
+        e.preventDefault();
+        window.openFamilyDrawer(d.key);
+        break;
+      case 'family-events': {
+        e.preventDefault();
+        const fam = familyByKey(d.key);
+        if (!fam) break;
+        const pids = [Number(fam.root_pid), ...(fam.processes || []).map(p => Number(p.pid))];
+        const label = familyLabel(fam, telemetryData.sessions);
+        closeDrawer();
+        window.filterTimelineToPids([...new Set(pids)], label);
+        break;
+      }
+      case 'kill-family-orphans':
+        e.preventDefault();
+        e.stopPropagation();
+        window.killFamilyOrphans(d.key);
+        break;
+      case 'show-more':
+        e.preventDefault();
+        expandedLists.add(d.key || '');
+        if (d.key === 'events') renderNow(['events']);
+        else if (String(d.key).startsWith('agents:')) renderNow(['agents']);
+        else fillFamilyDrawer();
         break;
       case 'resource-control':
         e.preventDefault();

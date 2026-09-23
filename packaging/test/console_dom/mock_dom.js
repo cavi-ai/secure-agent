@@ -656,6 +656,13 @@
   };
 
   // Auto-action: exercise the session drill-down like a user click would.
+  // sessionlinkdemo: flag-1 belongs to the durable session sess-claude-1;
+  // open Findings, then click its "View session in timeline".
+  if (location.search.includes('sessionlinkdemo')) {
+    data['/flags'].find(f => f.id === 'flag-1').session_id = 'sess-claude-1';
+    setTimeout(() => document.querySelector('[data-tab="findings"]').click(), 4000);
+    setTimeout(() => document.querySelector('[data-action="filter-session"][data-session="sess-claude-1"]')?.click(), 5000);
+  }
   if (location.search.includes('sessiondemo')) {
     setTimeout(() => window.filterTimelineToSession('7f3a9c21-4b2e-4a1d-9c55-2e8f0d1a3b77'), 4000);
   }
@@ -762,6 +769,92 @@
   if (location.search.includes('noresourcesdemo')) {
     data['/resources'] = { ...data['/resources'], rss_bytes: 0, cpu_percent: 0, process_count: 0, session_count: 0, sessions: [] };
   }
+  // familiesdemo: the Resources board at scale — twelve families: nine agent
+  // families (claude 5821 and cursor 6033 need attention; two codex runs are
+  // orchestrated by an OpenClaw session) and three infra, joined to /sessions
+  // by root pid. The data-pipeline codex family carries twenty processes (the
+  // drawer's capped table), one leftover, events and a finding.
+  if (MODE.includes('familiesdemo')) {
+    const GB = 1024 ** 3, MB = 1024 ** 2;
+    const fam = (pid, name, workspace, rss, cpu, extra) => ({
+      key: `${pid}:1789470000000000000`, name, root_pid: pid, root_started_at: '2026-09-09T13:00:00Z',
+      workspace, last_seen_at: iso(30000), rss_bytes: rss, cpu_percent: cpu, process_count: 1, orphan_count: 0,
+      processes: [{ pid, ppid: 1, name, rss_bytes: rss, cpu_percent: cpu, started_at: '2026-09-09T13:00:00Z' }],
+      samples: [{ at: iso(1800000), rss_bytes: Math.round(rss * 0.8), cpu_percent: cpu }, { at: iso(0), rss_bytes: rss, cpu_percent: cpu }],
+      diagnoses: [], ...(extra || {})
+    });
+    const procs = [{ pid: 4412, ppid: 1, name: 'codex', rss_bytes: 400 * MB, cpu_percent: 6, started_at: '2026-09-09T13:00:00Z' }];
+    for (let i = 1; i < 20; i++) {
+      procs.push({ pid: 4412 + i, ppid: i === 19 ? 777 : 4412, name: i % 2 ? 'node' : 'rg', rss_bytes: (40 + i) * MB,
+        cpu_percent: i / 2, started_at: '2026-09-09T13:05:00Z', ...(i === 19 ? { is_orphan: true } : {}) });
+    }
+    const pipeline = fam(4412, 'codex', '/Users/dev/workspace/data-pipeline', procs.reduce((n, p) => n + p.rss_bytes, 0), 15.5,
+      { processes: procs, process_count: 20, orphan_count: 1 });
+    const r = data['/resources'];
+    r.sessions = [
+      ...r.sessions,
+      pipeline,
+      fam(8100, 'openclaw', '/Users/dev/.openclaw', 300 * MB, 2),
+      fam(8201, 'codex', '/Users/dev/.openclaw/workspace-demo-app', 700 * MB, 12),
+      fam(8202, 'codex', '/Users/dev/.openclaw/workspace-bot', 250 * MB, 4),
+      fam(5950, 'claude', '/Users/dev/dev', 180 * MB, 1),
+      fam(4500, 'codex', '/Users/dev/scratch', 120 * MB, 0.5),
+      fam(9100, 'opencode', '/Users/dev/workspace/web-console', 90 * MB, 0.2),
+      fam(7001, 'ollama', '/', 10 * GB, 3, { kind: 'infra' }),
+      fam(7100, 'lm-studio', '/Applications/LM Studio.app', 3 * GB, 1, { kind: 'infra' }),
+      fam(7200, 'cursor-ide', '/Applications/Cursor.app', 2 * GB, 4, { kind: 'infra' })
+    ];
+    r.session_count = 9;
+    r.infra_count = 3;
+    data['/sessions'].push(
+      { id: 'sess-openclaw-1', harness: 'openclaw', workspace: '/Users/dev/.openclaw', root_pid: 8100,
+        started_at: '2026-09-09T12:00:00Z', last_seen_at: iso(15000), status: 'active', confidence: 'process-tree' },
+      { id: 'sess-oc-career', harness: 'codex', workspace: '/Users/dev/.openclaw/workspace-demo-app', repo: 'demo-app', branch: 'main',
+        root_pid: 8201, parent_id: 'sess-openclaw-1', started_at: '2026-09-09T12:10:00Z', last_seen_at: iso(16000), status: 'active', confidence: 'transcript' },
+      { id: 'sess-oc-bot', harness: 'codex', workspace: '/Users/dev/.openclaw/workspace-bot',
+        root_pid: 8202, parent_id: 'sess-openclaw-1', started_at: '2026-09-09T12:20:00Z', last_seen_at: iso(17000), status: 'active', confidence: 'transcript' }
+    );
+    data['/events'].splice(3, 0,
+      { kind: 8, ts: iso(8000), pid: 4413, detail: 'Bash → pytest -q' },
+      { kind: 5, ts: iso(9000), pid: 4412, remote_host: 'api.openai.com', remote_port: 443 });
+    data['/flags'].push({ id: 'flag-5', rule: 'keychain-access', agent: 'codex', pid: 4415, severity: 2, ts: iso(60000),
+      evidence: [{ kind: 'keychain', label: '/Users/dev/Library/Keychains/login.keychain-db', sub: 'keychain access' }] });
+    // View family on the data-pipeline row; stamp the drawer's table before
+    // expanding it (or, with familyevents, follow Open in Events).
+    setTimeout(() => {
+      document.querySelector(`#resource-board [data-action="view-family"][data-key="${pipeline.key}"]`)?.click();
+      setTimeout(() => {
+        const rows = document.querySelectorAll('#drawer-body .family-proc-row').length;
+        const more = document.querySelector('#drawer-body [data-action="show-more"]');
+        stamp('family-probe', `rows=${rows} more=${more ? more.textContent.trim() : 'none'}`);
+        if (MODE.includes('familyevents')) document.querySelector('#drawer-body [data-action="family-events"]')?.click();
+        else if (more) more.click();
+      }, 800);
+    }, 4000);
+  }
+  // Phone-frame stress: the widest Resources text the board must hold at
+  // 375px — a 60-character unbroken folder label, a 5-digit process count,
+  // 128.0 GB of memory and 100.0% CPU on the machine strip.
+  if (MODE.includes('phoneframe')) {
+    const GB = 1024 ** 3;
+    const r = data['/resources'];
+    r.host = { ...r.host, total_memory_bytes: 128 * GB, system_cpu_percent: 100, agent_cpu_percent: 100, non_agent_cpu_percent: 100,
+      swap_total_bytes: 128 * GB, swap_used_bytes: 128 * GB };
+    r.sessions = [...r.sessions, {
+      key: '9900:1789470000000000000', name: 'claude', root_pid: 9900, root_started_at: '2026-09-09T13:00:00Z',
+      workspace: '/Users/dev/workspace/' + 'a-very-long-monorepo-folder-name-for-phone-width-stress-test'.padEnd(60, 'x'),
+      last_seen_at: iso(30000), rss_bytes: 128 * GB, cpu_percent: 100, process_count: 12345, orphan_count: 0,
+      estimated_reclaim_bytes: 128 * GB,
+      samples: [{ at: iso(1800000), rss_bytes: 100 * GB, cpu_percent: 100 }, { at: iso(0), rss_bytes: 128 * GB, cpu_percent: 100 }],
+      diagnoses: [{ code: 'heavy-memory', severity: 'critical', summary: 'Heavy memory use' }]
+    }];
+  }
+  // manyevents: 120 loaded events — the Events tab shows the newest 50.
+  if (MODE.includes('manyevents')) {
+    for (let i = 0; i < 114; i++) {
+      data['/events'].push({ kind: 0, ts: iso(40000 + i * 1000), pid: 5821, path: `/Users/dev/workspace/api-service/src/m${i}.ts` });
+    }
+  }
   // Episodes live on their own endpoint now.
   data['/resources/episodes'] = (data['/resources'].episodes || []);
 
@@ -795,10 +888,10 @@
   }
   // Phone-width probe. Headless Chrome will not size its window below 500px,
   // so ?phonedemo frames the console in a 375px iframe. The framed copy
-  // (?phoneframe) opens Sessions, then Agents, measures how far any box in
+  // (?phoneframe) opens Sessions, Agents, then Resources, measures how far any box in
   // the tab panel, or the page as a whole (posture banner included), reaches
   // past the viewport, and posts it back; the result lands on
-  // <body data-hscroll="sessions:N,agents:N"> (N in px, 0 = fits).
+  // <body data-hscroll="sessions:N,agents:N,resources:N"> (N in px, 0 = fits).
   if (MODE.includes('phoneframe')) {
     const measure = (tab) => {
       document.querySelector(`[data-tab="${tab}"]`).click();
@@ -814,7 +907,10 @@
     };
     setTimeout(() => {
       const sessions = measure('sessions');
-      setTimeout(() => parent.postMessage({ hscroll: `${sessions},${measure('agents')}` }, '*'), 300);
+      setTimeout(() => {
+        const agents = measure('agents');
+        setTimeout(() => parent.postMessage({ hscroll: `${sessions},${agents},${measure('resources')}` }, '*'), 300);
+      }, 300);
     }, 4000);
   } else if (MODE.includes('phonedemo')) {
     addEventListener('message', (e) => {
@@ -895,7 +991,7 @@
   // its workspace as an override through the real delegated click path.
   if (location.search.includes('policydemo')) {
     setTimeout(() => {
-      document.querySelector('[data-action="resource-session"]').click();
+      document.querySelector('[data-action="view-family"]').click();
       document.querySelector('[data-action="edit-resource-policy"]').click();
       document.querySelector('[data-action="add-resource-override"][data-source="current"]').click();
       document.querySelector('[data-policy-default="true"] [data-policy-field="mode"]').value = 'terminate';
