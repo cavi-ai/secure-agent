@@ -602,12 +602,13 @@ func (c *Correlator) secretInTranscriptLocked(e event.Event) []model.Flag {
 		Agent:     harness,
 		SessionID: e.SessionID,
 		Evidence: []model.EvidenceItem{{
-			Kind:  "transcript",
-			Label: e.Path,
-			Sub:   layer + " match",
-			Rule:  ruleID,
-			TS:    e.TS.Format(time.RFC3339),
-			Text:  fmt.Sprintf("%s transcript %s matched %s rule %s at %s", harness, e.Path, layer, ruleID, e.TS.Format(time.RFC3339)),
+			Kind:   "transcript",
+			Label:  e.Path,
+			Sub:    layer + " match",
+			Rule:   ruleID,
+			TS:     e.TS.Format(time.RFC3339),
+			Text:   fmt.Sprintf("%s transcript %s matched %s rule %s at %s", harness, e.Path, layer, ruleID, e.TS.Format(time.RFC3339)),
+			Offset: e.Offset,
 		}},
 	}}
 }

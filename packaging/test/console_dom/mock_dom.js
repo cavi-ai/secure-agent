@@ -353,6 +353,20 @@
       { agent: 'claude', host: '2600:1901:0:9e23::', count: 2, last_seen: iso(400000), identity: { kind: 'ipv6', org: 'Google Cloud', class: 'cloud', ip: '2600:1901:0:9e23::' } },
       { agent: 'openclaw', host: '2607:6bc0::10', count: 94, first_seen: iso(3600000), last_seen: iso(60000), identity: { kind: 'ipv6', org: 'Anthropic', class: 'vendor', ip: '2607:6bc0::10' } }
     ],
+    '/files/detail': {
+      path: '/Users/dev/.codex/sessions/2026/09/23/rollout-2026-09-23T12-53-26-demo.jsonl',
+      display: '~/.codex/sessions/2026/09/23/rollout-2026-09-23T12-53-26-demo.jsonl',
+      exists: true, size: 2400000, mod_time: iso(600000), owned_by_user: true,
+      subject: { path: '/Users/dev/.codex/sessions/2026/09/23/rollout-2026-09-23T12-53-26-demo.jsonl', category: 'transcript', category_label: 'agent transcript', owner_label: 'Codex transcript' },
+      session: { id: 'sess-codex-1', harness: 'codex', workspace: '/Users/dev/workspace/api-service', repo: 'api-service', branch: 'main' },
+      findings: [
+        { kind: 'flag', id: 'flag-t1', rule: 'secret-in-transcript', severity: 3, ts: iso(500000), agent: 'codex', evidence_kind: 'transcript', evidence_rule: 'fp1', offset: 4096 },
+        { kind: 'incident', id: 'inc-file-1', rule: 'secret-in-transcript', risk: 'high', ts: iso(500000), agent: 'codex', status: 'open' }
+      ],
+      accesses: [{ kind: 'file-write', ts: iso(520000), pid: 4242, exe_path: '/usr/local/bin/codex', session_id: 'sess-codex-1' }],
+      hits: [{ flag_id: 'flag-t1', rule: 'fp1', offset: 4096, ts: iso(500000) }],
+      excerpt: '{"type":"function_call_output","output":"TOKEN=[REDACTED:fp1] ok"}'
+    },
     '/egress/endpoint': {
       host: '2600:1901:0:9e23::',
       identity: { kind: 'ipv6', org: 'Google Cloud' },
@@ -699,6 +713,12 @@
         text: async () => JSON.stringify(body)
       };
     }
+    // Incident report as markdown: its Accessed Files paths become file links.
+    if (p === '/incidents' && String(path).includes('format=markdown')) {
+      const md = '# Incident\n\n## Blast Radius Activity\n\n### Accessed Files\n' +
+        '- `/Users/dev/.codex/sessions/2026/09/23/rollout-2026-09-23T12-53-26-demo.jsonl`\n\n### Egress Connections\n- `api.openai.com:443`\n';
+      return { ok: true, status: 200, json: async () => { throw new SyntaxError('not JSON'); }, text: async () => md };
+    }
     const body = data[p];
     return {
       ok: body !== undefined,
@@ -883,6 +903,16 @@
     }, 9000);
   }
   // Auto-action: open the endpoint Evidence detail for the unattributed IPv6.
+  // Auto-action: open an incident report, then click its accessed file — the
+  // file drawer opens with a way back to the report.
+  if (location.search.includes('filedemo')) {
+    setTimeout(() => window.openIncidentReport('inc-file-1'), 3000);
+    setTimeout(() => {
+      const link = document.querySelector('#drawer [data-action="open-file"]');
+      stamp('file-link', link ? link.getAttribute('data-path') : 'none');
+      if (link) link.click();
+    }, 5000);
+  }
   if (location.search.includes('endpointdemo')) {
     setTimeout(() => window.openEndpointDetail('2600:1901:0:9e23::', 'claude'), 4000);
   }

@@ -464,15 +464,65 @@ public struct AdvisorHealthModel: Codable, Sendable {
 public struct AdvisorDiscovery: Codable, Sendable {
     public let servers: [DiscoveredServerModel]
     public let managedModels: [String]
+    /// This Mac's chip, memory and free disk, and the models ranked for it.
+    /// Absent from daemons that predate recommendations.
+    public let machine: MachineProfileModel?
+    public let recommendations: [ModelRecommendationModel]?
 
     enum CodingKeys: String, CodingKey {
         case servers
         case managedModels = "managed_models"
+        case machine
+        case recommendations
     }
 
-    public init(servers: [DiscoveredServerModel], managedModels: [String]) {
+    public init(servers: [DiscoveredServerModel], managedModels: [String],
+                machine: MachineProfileModel? = nil, recommendations: [ModelRecommendationModel]? = nil) {
         self.servers = servers
         self.managedModels = managedModels
+        self.machine = machine
+        self.recommendations = recommendations
+    }
+
+    /// The one model the daemon recommends for this Mac, if any.
+    public var recommended: ModelRecommendationModel? {
+        recommendations?.first { $0.recommended == true }
+    }
+}
+
+public struct MachineProfileModel: Codable, Sendable {
+    public let chip: String
+    public let ramBytes: UInt64
+    public let freeDiskBytes: UInt64
+
+    enum CodingKeys: String, CodingKey {
+        case chip
+        case ramBytes = "ram_bytes"
+        case freeDiskBytes = "free_disk_bytes"
+    }
+
+    /// "Apple M5 Max · 128 GB memory"
+    public var summary: String {
+        let gb = Double(ramBytes) / 1_073_741_824
+        let mem = ramBytes > 0 ? "\(Int(gb.rounded())) GB memory" : "memory unknown"
+        return chip.isEmpty ? mem : "\(chip) · \(mem)"
+    }
+}
+
+public struct ModelRecommendationModel: Codable, Identifiable, Sendable {
+    public var id: String { "\(source)|\(endpoint ?? "")|\(modelID)" }
+    public let modelID: String
+    public let label: String
+    public let source: String      // installed | managed
+    public let endpoint: String?
+    public let bytes: Int64?
+    public let fit: String         // fits | tight | too-big | unknown
+    public let note: String
+    public let recommended: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case modelID = "id"
+        case label, source, endpoint, bytes, fit, note, recommended
     }
 }
 

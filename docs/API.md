@@ -288,6 +288,28 @@ Returns one flag (with `title` and `advisor`) plus `explain`, the daemon's plain
 
 ---
 
+### 2c. `GET /files/detail?path=` · `POST /files/reveal` · `POST /files/open`
+
+What the daemon knows about one evidence file, and two local actions on it. `path` must be absolute and clean, and a stored flag's evidence, an incident's `touched_files` or an agent-session file event must name exactly that string; any other path is 404. The daemon never reads or opens a path outside stored evidence. NoAgent routes (see Peer authentication).
+
+`GET /files/detail` returns:
+
+| Field | Meaning |
+|---|---|
+| `path`, `display` | The path and its `~`-abbreviated, middle-truncated form. |
+| `exists`, `size`, `mod_time`, `owned_by_user` | From `stat`; a file deleted since the flag has `exists: false` and nothing is read. |
+| `subject` | Category, category label and owner label, as in the flag explanation. |
+| `session` | The session that touched it or owns the transcript. |
+| `findings` | Up to 20 flags and 20 incidents naming the path: kind, id, rule, severity or risk, time, agent, session; flags carry the matched evidence item's kind, rule and line `offset`. |
+| `accesses` | Up to 20 agent-session open/write/delete events on the path. |
+| `hits` | Up to 3 transcript secret hits: flag id, rule, byte offset of the line (0 = recorded before offsets; the daemon scans the first 64 MiB to find it). |
+| `excerpt` | At most 4 KB: 1.5 KB either side of each masked secret, every fingerprint and pattern hit replaced by `[REDACTED:<rule>]`. Text away from a mask marker is never shown. |
+| `excerpt_withheld` | Why there is no excerpt: masking unavailable, a secret still detected after masking (an encoded copy), or the line not found. |
+
+`POST /files/reveal {"path": "…"}` runs `open -R` (Finder selects the file); `POST /files/open {"path": "…"}` runs `open -t` (the default text editor, so nothing is executed; folders are 400). A deleted file is 410; off macOS both are 501. Each success writes an audit entry (`file-reveal`, `file-open`) with the path.
+
+---
+
 ### 2b. `GET /patterns`
 
 Repeating findings: the flags one agent raised under one rule on one subject in the window, as one row each. Read-level; console-allowed.
@@ -621,6 +643,16 @@ Empty sections read `none`. Costs use the console's rule: two decimals, `<$0.01`
 
 ---
 
+### `GET /advisor/discover`
+
+What the menubar's advisor setup renders from; loopback only, nothing is downloaded.
+
+| Field | Meaning |
+|---|---|
+| `servers` | OpenAI-compatible servers answering on loopback ports 11434, 8080, 8799, 8081, 1234: endpoint, kind (`ollama` or `openai-compatible`), model ids, and for Ollama `sizes` (bytes, from `/api/tags`). |
+| `managed_models` | The catalog ids the daemon can run itself with `mlx_lm.server`. |
+| `machine` | `chip`, `ram_bytes`, `free_disk_bytes` (home volume). |
+| `recommendations` | Installed chat models and the catalog, ranked for this machine: `id`, `label`, `source` (`installed` or `managed`), `endpoint`, `bytes`, `fit`, `note`, `recommended`. A model needs its size plus 20 %; `fits` within half the RAM, `tight` within three quarters, else `too-big`; `unknown` when a size is missing. The recommendation is the installed model of a catalog family that fits, else the best catalog model that fits, else the smallest tight one. Embedding, OCR, rerank, speech and music models, component checkpoints (encoders, decoders, tokenizers) and bare content hashes are left out; an `uncensored`, `abliterated` or `heretic` variant never counts as its catalog family. |
 ### 19. `GET /worktrees`
 
 Every git worktree the daemon can find, with a verdict on whether it can be removed.
@@ -720,6 +752,8 @@ Every connection is identified with macOS `LOCAL_PEEREPID` / `LOCAL_PEERCRED` (k
 | Foreign | Different uid | Nothing |
 
 `POST /kill` additionally refuses any PID that is not currently a recognized agent process, so the control socket cannot be turned into an arbitrary-process killer.
+
+**NoAgent routes** (`/files/detail`, `/files/reveal`, `/files/open`) refuse every agent process. On the unix socket the Agent and Foreign roles get 403, and an Owner peer whose process belongs to an agent family (checked live, so a child spawned a moment ago counts) is refused too. On the console listener the console token is not enough: the daemon identifies the TCP client's process with `lsof` and serves it only when that process is outside every agent family; an unidentified client is refused. Off macOS the console listener refuses these routes.
 
 `GET /debug/pprof/` (Go runtime profiles: `heap`, `goroutine`, `profile?seconds=N`, `trace`, …) is served on the unix socket only, to the Owner role (and the pinned menubar app); agents and foreign peers get 403, and the proxy listener never serves it.
 

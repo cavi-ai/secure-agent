@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// Incident detail sheet. Redesigned: the raw markdown the daemon generates
@@ -196,15 +197,32 @@ struct IncidentDetailView: View {
         VStack(alignment: .leading, spacing: 4) {
             evidenceHeader("Files touched", count: incident.touchedFiles.count)
             ForEach(Array(incident.touchedFiles.prefix(6).enumerated()), id: \.offset) { _, f in
+                let path = Self.filePathOnly(from: f)
                 HStack(spacing: 6) {
                     Image(systemName: "doc")
                         .font(.system(size: 9)).foregroundStyle(.secondary)
-                    Text(Self.filePathOnly(from: f))
+                    Text(path)
                         .font(.system(size: 10, design: .monospaced))
                         .lineLimit(1)
                         .truncationMode(.head)
                         .help(f)
                     Spacer(minLength: 0)
+                    if path.hasPrefix("/") {
+                        Button { state.openDashboard(file: path) } label: {
+                            Image(systemName: "info.circle").font(.system(size: 10))
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Details, the masked excerpt and actions in the console")
+                        if FileManager.default.fileExists(atPath: path) {
+                            Button {
+                                NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+                            } label: {
+                                Image(systemName: "folder").font(.system(size: 10))
+                            }
+                            .buttonStyle(.borderless)
+                            .help("Reveal in Finder")
+                        }
+                    }
                 }
             }
             if incident.touchedFiles.count > 6 {

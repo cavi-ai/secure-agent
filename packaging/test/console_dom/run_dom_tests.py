@@ -159,6 +159,8 @@ def main():
         dom_uninsp = dump_dom(chrome, tmp, "?uninspecteddemo")
         dom_keepopen = dump_dom(chrome, tmp, "?keepopendemo")
         dom_endpoint = dump_dom(chrome, tmp, "?endpointdemo")
+        dom_file = dump_dom(chrome, tmp, "?filedemo")
+        dom_filedeep = dump_dom(chrome, tmp, "#file=%2FUsers%2Fdev%2F.codex%2Fsessions%2F2026%2F09%2F23%2Frollout-2026-09-23T12-53-26-demo.jsonl")
         dom_toast = dump_dom(chrome, tmp, "?toastdemo")
         dom_notify = dump_dom(chrome, tmp, "?notifydemo")
         dom_allow = dump_dom(chrome, tmp, "?allowdemo")
@@ -462,6 +464,19 @@ def main():
         check("drill-down Allow refill posted and dropped the row",
               "POST /allowlist" in dom_keepopen and 'data-host="statsig.example.com"' not in dom_keepopen.split('id="drawer-body"', 1)[-1].split("</details>", 1)[0], keepopen)
 
+        # --- evidence file: an incident's accessed file opens the file drawer ---
+        check("incident Accessed Files path is a file link",
+              'id="file-link"' in dom_file and "rollout-2026-09-23T12-53-26-demo.jsonl" in dom_file)
+        check("file drawer shows the masked excerpt, never an unmasked value",
+              "Around the secret" in dom_file and "[REDACTED:fp1]" in dom_file)
+        check("file drawer offers Reveal in Finder and Open in editor",
+              'data-action="file-reveal"' in dom_file and 'data-action="file-open"' in dom_file)
+        check("file drawer lists findings, agent access and the session",
+              "Agent access" in dom_file and "api-service@main" in dom_file and 'data-action="open-incident"' in dom_file)
+        check("file drawer goes back to the incident report",
+              'id="btn-drawer-back"' in dom_file and "Incident report" in dom_file)
+        check("menubar deep link #file= opens the file drawer",
+              'data-action="file-reveal"' in dom_filedeep and "Around the secret" in dom_filedeep)
         # --- endpoint evidence: an unattributed IPv6 must be identifiable ---
         check("endpoint Evidence opens a detail drawer",
               'id="drawer" class="drawer"' in dom_endpoint and "2600:1901:0:9e23::" in dom_endpoint)

@@ -17,7 +17,7 @@ import (
 
 func TestScanLineTranscriptHit(t *testing.T) {
 	line := "some log output with Bearer sk-secrettoken123 in it"
-	evs := (&TranscriptScanner{}).scanLine(line, "/logs/activity.jsonl", "unknown", "")
+	evs := (&TranscriptScanner{}).scanLine(line, "/logs/activity.jsonl", "unknown", "", 0)
 	if len(evs) != 1 || evs[0].Kind != event.KindTranscriptHit {
 		t.Fatalf("scanLine = %+v; want one KindTranscriptHit", evs)
 	}
@@ -32,7 +32,7 @@ func TestScanLineTranscriptHit(t *testing.T) {
 
 func TestScanLinePluginAction(t *testing.T) {
 	line := `{"ts":"2026-08-12T19:55:00Z","tool":"Bash","command":"ls"}`
-	evs := (&TranscriptScanner{}).scanLine(line, "/logs/activity.jsonl", "unknown", "")
+	evs := (&TranscriptScanner{}).scanLine(line, "/logs/activity.jsonl", "unknown", "", 0)
 	if len(evs) != 1 || evs[0].Kind != event.KindPluginAction {
 		t.Fatalf("scanLine = %+v; want one KindPluginAction", evs)
 	}
@@ -228,7 +228,7 @@ func TestNewSessionFileReadFromStart(t *testing.T) {
 
 func TestScanLineFakeCursorActivity(t *testing.T) {
 	line := `{"file_path":"/tmp/foo/.env","pid":12345,"tool":"Read"}`
-	evs := (&TranscriptScanner{}).scanLine(line, "/logs/activity.jsonl", "unknown", "")
+	evs := (&TranscriptScanner{}).scanLine(line, "/logs/activity.jsonl", "unknown", "", 0)
 	if len(evs) != 1 || evs[0].Kind != event.KindPluginAction {
 		t.Fatalf("scanLine = %+v; want one KindPluginAction", evs)
 	}
@@ -466,5 +466,39 @@ func TestCodexTraceLineIsSecretScanned(t *testing.T) {
 	hits := appendAndTail(t, ts, sub, offsets, path, out)
 	if len(hits) != 1 || hits[0].Detail != "codex:fingerprint:fp-1" || hits[0].SessionID != "019f58e8-6230" || hits[0].Path != path {
 		t.Fatalf("want one codex hit with session and path, got %+v", hits)
+	}
+}
+
+// A transcript hit carries the byte offset of the line it was found on, on
+// the traced (codex) path and on the plain-scan path.
+func TestTranscriptHitRecordsLineOffset(t *testing.T) {
+	secret := "synthetic-known-secret-0123456789"
+	dir := filepath.Join(t.TempDir(), "sessions", "2026", "09", "22")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	codex := filepath.Join(dir, "rollout-2026-09-22T10-00-00-s.jsonl")
+	b := bus.New(64)
+	sub := b.Subscribe()
+	ts := NewTranscriptScanner(b, nil)
+	ts.TextScanner = stubTextScanner{secret: secret}
+	offsets := map[string]int64{}
+
+	appendAndTail(t, ts, sub, offsets, codex, codexMetaLine)
+	plain := `{"timestamp":"2026-09-22T10:00:01.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[]}}`
+	appendAndTail(t, ts, sub, offsets, codex, plain)
+	out := `{"timestamp":"2026-09-22T10:00:02.000Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_1","output":"` + secret + `"}}`
+	hits := appendAndTail(t, ts, sub, offsets, codex, out)
+	want := int64(len(codexMetaLine) + 1 + len(plain) + 1)
+	if len(hits) != 1 || hits[0].Offset != want {
+		t.Fatalf("codex hit offset: got %+v, want one hit at %d", hits, want)
+	}
+
+	activity := filepath.Join(t.TempDir(), "activity.jsonl")
+	first := `{"event":"noop"}`
+	appendAndTail(t, ts, sub, map[string]int64{}, activity, first)
+	hits = appendAndTail(t, ts, sub, map[string]int64{}, activity, "use "+secret)
+	if len(hits) != 1 || hits[0].Offset != int64(len(first)+1) {
+		t.Fatalf("plain-scan hit offset: got %+v, want one hit at %d", hits, len(first)+1)
 	}
 }

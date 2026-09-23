@@ -40,6 +40,11 @@ type Route struct {
 	// owner uid (or the pinned UI): never console-admitted, never registered
 	// on the proxy listener's handler, refused for agent and foreign peers.
 	OwnerOnly bool
+	// NoAgent marks a route no agent process may reach: on the unix socket
+	// only the owner uid (outside every agent family) and the pinned UI pass;
+	// on the console listener the TCP client must be identified and outside
+	// every agent family.
+	NoAgent bool
 }
 
 // Table is the canonical API surface, ordered as registered.
@@ -92,6 +97,9 @@ var Table = []Route{
 	{Path: "/guard/resolve", Console: true, MutatingMethods: []string{"POST"}},
 	{Path: "/guard/rules", Console: true, MutatingMethods: []string{"POST"}},
 	{Path: "/debug/pprof/", Prefix: true, Console: false, OwnerOnly: true},
+	{Path: "/files/detail", Console: true, NoAgent: true},
+	{Path: "/files/reveal", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
+	{Path: "/files/open", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
 }
 
 // ConsoleAllowed reports whether the console token admits path on the proxy
@@ -149,6 +157,16 @@ func IsOwnerOnly(path string) bool {
 		}
 		if path == r.Path || path == strings.TrimSuffix(r.Path, "/") || (r.Prefix && strings.HasPrefix(path, r.Path)) {
 			return true
+		}
+	}
+	return false
+}
+
+// IsNoAgent reports whether path is a NoAgent route.
+func IsNoAgent(path string) bool {
+	for _, r := range Table {
+		if r.Path == path {
+			return r.NoAgent
 		}
 	}
 	return false

@@ -11,6 +11,7 @@ export interface Event {
   remote_host?: string;
   remote_port?: number;
   detail?: string;
+  offset?: number;
   tool?: string;
   tool_status?: string;
   duration_ms?: number;
@@ -45,6 +46,7 @@ export interface EvidenceItem {
   rule?: string;
   ts?: string;
   text?: string;
+  offset?: number;
 }
 
 export interface AdvisorVerdict {
@@ -151,6 +153,53 @@ export interface Pattern {
   summary: string;
   actions: ExplainAction[];
   flag_ids: string[];
+}
+
+export interface FileFinding {
+  kind: string;
+  id: string;
+  rule: string;
+  severity?: number;
+  risk?: string;
+  ts: string;
+  agent?: string;
+  session_id?: string;
+  acknowledged?: boolean;
+  status?: string;
+  evidence_kind?: string;
+  evidence_rule?: string;
+  offset?: number;
+}
+
+export interface FileAccess {
+  kind: string;
+  ts: string;
+  pid: number;
+  exe_path?: string;
+  session_id: string;
+}
+
+export interface FileHit {
+  flag_id: string;
+  rule: string;
+  offset?: number;
+  ts: string;
+}
+
+export interface FileDetail {
+  path: string;
+  display: string;
+  exists: boolean;
+  size: number;
+  mod_time?: string;
+  owned_by_user: boolean;
+  subject?: ExplainSubject;
+  session?: Session;
+  findings: FileFinding[];
+  accesses: FileAccess[];
+  hits: FileHit[];
+  excerpt?: string;
+  excerpt_withheld?: string;
 }
 
 export interface RotateItem {
@@ -338,6 +387,31 @@ export interface Posture {
   groups?: AttentionGroup[];
   generated: string;
   connected: boolean;
+}
+
+export interface Machine {
+  chip: string;
+  ram_bytes: number;
+  free_disk_bytes: number;
+}
+
+export interface Recommendation {
+  id: string;
+  label: string;
+  source: string;
+  endpoint?: string;
+  bytes?: number;
+  fit: string;
+  note: string;
+  recommended?: boolean;
+  rank: number;
+}
+
+export interface DiscoveredServer {
+  endpoint: string;
+  kind: string;
+  models: string[];
+  sizes?: Record<string, number>;
 }
 
 export interface CostRow {

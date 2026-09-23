@@ -35,6 +35,26 @@ final class DaemonClientTests: XCTestCase {
         XCTAssertTrue(NotifyRulesResponse.fallback.overrides.isEmpty)
     }
 
+    func testAdvisorDiscoveryDecodesRecommendations() throws {
+        let json = #"{"servers":[{"endpoint":"http://127.0.0.1:11434","kind":"ollama","models":["qwen3.8:27b-mlx"],"sizes":{"qwen3.8:27b-mlx":18174721847}}],"managed_models":["mlx-community/Qwen3.8-27B-8bit"],"machine":{"chip":"Apple M5 Max","ram_bytes":137438953472,"free_disk_bytes":500000000000},"recommendations":[{"id":"qwen3.8:27b-mlx","label":"qwen3.8:27b-mlx","source":"installed","endpoint":"http://127.0.0.1:11434","bytes":18174721847,"fit":"fits","note":"18.2 GB · installed, no download · fits in memory","recommended":true},{"id":"mlx-community/Qwen3.8-27B-8bit","label":"Qwen3.8 27B · 8-bit","source":"managed","bytes":29501218479,"fit":"fits","note":"29.5 GB download"}]}"#
+            .data(using: .utf8)!
+        let d = try JSONDecoder().decode(AdvisorDiscovery.self, from: json)
+        XCTAssertEqual(d.machine?.summary, "Apple M5 Max · 128 GB memory")
+        XCTAssertEqual(d.recommendations?.count, 2)
+        XCTAssertEqual(d.recommended?.modelID, "qwen3.8:27b-mlx")
+        XCTAssertNil(d.recommendations?[1].recommended)
+        XCTAssertNil(d.recommendations?[1].endpoint)
+    }
+
+    func testAdvisorDiscoveryDecodesPayloadWithoutRecommendations() throws {
+        let json = #"{"servers":[],"managed_models":["mlx-community/Qwen3-4B-4bit"]}"#.data(using: .utf8)!
+        let d = try JSONDecoder().decode(AdvisorDiscovery.self, from: json)
+        XCTAssertNil(d.machine)
+        XCTAssertNil(d.recommendations)
+        XCTAssertNil(d.recommended)
+        XCTAssertEqual(d.managedModels, ["mlx-community/Qwen3-4B-4bit"])
+    }
+
     func testStatusDecodesAdvisorHealth() throws {
         let json = #"{"running":true,"uptime":"1m","active_agents":1,"advisor_health":{"enabled":true,"circuit_open":true,"last_error":"context deadline exceeded","queue_depth":2,"model":"qwen3:8b"}}"#
             .data(using: .utf8)!

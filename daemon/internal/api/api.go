@@ -152,6 +152,11 @@ type API struct {
 	resourcePolicy   func(config.ResourceControlConfig) error
 	resourcePolicyMu sync.Mutex
 
+	// NoAgent enforcement and the file actions (files.go, tcppeer.go).
+	isAgentPID   func(pid int32) bool
+	tcpClientPID func(remoteAddr string) (int32, error)
+	openPath     func(args ...string) error
+
 	fwEngine      *firewall.Engine
 	fwModes       *firewall.ModeStore
 	fwReload      func() error
@@ -266,6 +271,10 @@ type Deps struct {
 	PeerChecker PeerChecker
 	AgentPIDs   func() map[int32]struct{}
 	UIPID       int32
+	// IsAgentPID reports whether pid belongs to an agent family, walking its
+	// ancestry live. NoAgent routes refuse such peers; unwired, the console
+	// listener refuses every NoAgent request.
+	IsAgentPID func(pid int32) bool
 
 	// Fleet + telemetry (optional).
 	FleetSink       GuardEventSink
@@ -320,6 +329,9 @@ func New(d Deps) *API {
 		busDrops:        d.BusDrops,
 		publishEvent:    d.PublishEvent,
 		deltaHub:        d.DeltaHub,
+		isAgentPID:      d.IsAgentPID,
+		tcpClientPID:    TCPClientPID,
+		openPath:        openWithSystem,
 	}
 	a.peerChk = d.PeerChecker
 	if d.PeerChecker != nil {
@@ -603,6 +615,9 @@ func (a *API) routes() map[string]http.HandlerFunc {
 		"/guard/resolve":                a.handleGuardResolve,
 		"/guard/rules":                  a.handleGuardRules,
 		"/debug/pprof/":                 handlePprof,
+		"/files/detail":                 a.handleFileDetail,
+		"/files/reveal":                 a.handleFileReveal,
+		"/files/open":                   a.handleFileOpen,
 	}
 }
 
@@ -623,6 +638,9 @@ func (a *API) mux(socket bool) *http.ServeMux {
 			continue
 		}
 		if h, ok := handlers[r.Path]; ok {
+			if r.NoAgent && !socket {
+				h = a.consoleNoAgent(h)
+			}
 			mux.HandleFunc(r.Path, h)
 		}
 	}
@@ -1088,17 +1106,22 @@ func (a *API) handleMute(w http.ResponseWriter, r *http.Request) {
 
 // handleAdvisorDiscover lists loopback OpenAI-compatible model servers the
 // user could link (Path B: existing Ollama/MLX/llama.cpp servers) plus the
-// curated managed-model list (Path A). Read-gated; the menubar's Advisor
-// settings pane renders its dropdowns from this so nobody types an endpoint.
+// curated managed-model list (Path A), this machine's profile and the models
+// ranked for it. Read-gated; the menubar's Advisor settings pane and
+// onboarding render from this so nobody types an endpoint.
 func (a *API) handleAdvisorDiscover(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	servers := advisor.DiscoverServers()
+	machine := advisor.MachineProfile()
 	w.Header().Set("Content-Type", "application/json")
 	writeJSON(w, map[string]any{
-		"servers":        advisor.DiscoverServers(),
-		"managed_models": advisor.DefaultManagedModels,
+		"servers":         servers,
+		"managed_models":  advisor.DefaultManagedModels,
+		"machine":         machine,
+		"recommendations": advisor.Recommend(machine, servers),
 	})
 }
 
