@@ -18,6 +18,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 	"github.com/cavi-ai/secure-agent/daemon/internal/supervise"
+	"github.com/cavi-ai/secure-agent/daemon/internal/worktreehunter"
 )
 
 // WireTypes is the single list of structs that cross the daemon's API
@@ -55,6 +56,10 @@ func WireTypes() []any {
 		correlate.EndpointIdentity{},
 		api.EndpointAllowance{},
 		api.Suggestion{},
+		worktreehunter.ScanReport{},
+		worktreehunter.RepoReport{},
+		worktreehunter.Worktree{},
+		worktreehunter.ScanSummary{},
 	}
 }
 

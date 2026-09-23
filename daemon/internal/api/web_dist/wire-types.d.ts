@@ -482,3 +482,63 @@ export interface Suggestion {
   confidence?: number;
 }
 
+export interface ScanSummary {
+  repos: number;
+  worktrees: number;
+  remove: number;
+  review: number;
+  keep: number;
+  prune: number;
+  stale: number;
+}
+
+export interface Worktree {
+  path: string;
+  branch?: string;
+  head?: string;
+  detached?: boolean;
+  locked?: boolean;
+  lock_reason?: string;
+  orphan?: boolean;
+  state: string;
+  reasons: string[];
+  stale?: boolean;
+  last_activity?: string;
+  idle_days: number;
+  in_use?: boolean;
+  upstream?: string;
+  ahead?: number;
+  behind?: number;
+  upstream_gone?: boolean;
+  changed?: number;
+  untracked?: number;
+  conflicts?: number;
+  paths?: string[];
+  unique_commits?: number;
+  loose_commits?: number;
+  merged?: string;
+  stashes?: number;
+  precious_ignored?: string[];
+  other_ignored?: number;
+  error?: string;
+}
+
+export interface RepoReport {
+  path: string;
+  source?: string;
+  default_branch?: string;
+  bare?: boolean;
+  worktrees: Worktree[];
+  error?: string;
+}
+
+export interface ScanReport {
+  generated_at: string;
+  duration_ms: number;
+  cached: boolean;
+  stale_days: number;
+  summary: ScanSummary;
+  repos: RepoReport[];
+  errors?: string[];
+}
+

@@ -63,8 +63,12 @@ func handleWorktrees(client *http.Client) {
 	}
 }
 
-// runWorktrees dispatches `worktrees [add|hide <path>]` and the list view.
+// runWorktrees dispatches `worktrees [add|hide|remove|prune <path>]` and
+// the list view.
 func runWorktrees(w io.Writer, client *http.Client, args []string) error {
+	if len(args) > 0 && (args[0] == "remove" || args[0] == "prune") {
+		return runWorktreeRemove(w, client, args)
+	}
 	if len(args) > 0 && (args[0] == "add" || args[0] == "hide") {
 		if len(args) < 2 {
 			return fmt.Errorf("usage: secure-agent worktrees %s <path>", args[0])
@@ -75,6 +79,9 @@ func runWorktrees(w io.Writer, client *http.Client, args []string) error {
 		}
 		body, _ := json.Marshal(map[string]any{"path": abs, "hidden": args[0] == "hide"})
 		code, resp := request(client, http.MethodPost, "http://unix/worktrees/repos", string(body))
+		if code == http.StatusForbidden {
+			return errWorktreeForbidden(args[0])
+		}
 		if code != 200 {
 			return fmt.Errorf("worktrees %s failed (%d): %s", args[0], code, strings.TrimSpace(resp))
 		}
@@ -114,6 +121,58 @@ func runWorktrees(w io.Writer, client *http.Client, args []string) error {
 	home, _ := os.UserHomeDir()
 	fmt.Fprint(w, formatWorktrees(rep, f, home))
 	return nil
+}
+
+// runWorktreeRemove removes one worktree or prunes a repository's missing
+// ones. A refusal prints the fresh verdict and fails.
+func runWorktreeRemove(w io.Writer, client *http.Client, args []string) error {
+	if len(args) < 2 {
+		return fmt.Errorf("usage: secure-agent worktrees %s <path>", args[0])
+	}
+	abs, err := filepath.Abs(args[1])
+	if err != nil {
+		return err
+	}
+	req := map[string]any{"path": abs}
+	if args[0] == "prune" {
+		req = map[string]any{"repo": abs, "prune": true}
+	}
+	body, _ := json.Marshal(req)
+	code, resp := request(client, http.MethodPost, "http://unix/worktrees/remove", string(body))
+	var out struct {
+		Removed string   `json:"removed"`
+		Branch  string   `json:"branch"`
+		Pruned  []string `json:"pruned"`
+		State   string   `json:"state"`
+		Reasons []string `json:"reasons"`
+	}
+	_ = json.Unmarshal([]byte(resp), &out)
+	switch {
+	case code == http.StatusForbidden:
+		return errWorktreeForbidden(args[0])
+	case code == http.StatusConflict && out.State != "":
+		return fmt.Errorf("not removed: %s is %s\n  %s", abs, out.State, strings.Join(out.Reasons, "\n  "))
+	case code != 200:
+		return fmt.Errorf("worktrees %s failed (%d): %s", args[0], code, strings.TrimSpace(resp))
+	case args[0] == "prune":
+		for _, p := range out.Pruned {
+			fmt.Fprintf(w, "pruned %s\n", p)
+		}
+	default:
+		fmt.Fprintf(w, "removed %s", out.Removed)
+		if out.Branch != "" {
+			fmt.Fprintf(w, " (branch %s kept)", out.Branch)
+		}
+		fmt.Fprintln(w)
+	}
+	return nil
+}
+
+// errWorktreeForbidden explains a 403 on a worktree change: while the menu
+// bar app runs, only it (and its console) may change state, and an agent
+// session never may.
+func errWorktreeForbidden(verb string) error {
+	return fmt.Errorf("worktrees %s refused (403): while the menu bar app runs, changes go through it — use the console's Worktrees tab; agent sessions cannot make changes", verb)
 }
 
 type wtFilter struct {
@@ -181,8 +240,8 @@ func formatWorktrees(rep wtReport, f wtFilter, home string) string {
 		}
 	}
 	s := rep.Summary
-	fmt.Fprintf(&b, "%d repos · %d worktrees · %d remove · %d review · %d keep · %d prune · %d stale (idle > %dd)",
-		s.Repos, s.Worktrees, s.Remove, s.Review, s.Keep, s.Prune, s.Stale, rep.StaleDays)
+	fmt.Fprintf(&b, "%s · %s · %d remove · %d review · %d keep · %d prune · %d stale (idle > %dd)",
+		plural(s.Repos, "repo", "repos"), plural(s.Worktrees, "worktree", "worktrees"), s.Remove, s.Review, s.Keep, s.Prune, s.Stale, rep.StaleDays)
 	if rep.Cached {
 		b.WriteString(" · cached, --refresh rescans")
 	} else {
@@ -211,6 +270,13 @@ func tildePath(p, home string) string {
 		}
 	}
 	return p
+}
+
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return "1 " + one
+	}
+	return fmt.Sprintf("%d %s", n, many)
 }
 
 func clip(s string, n int) string {

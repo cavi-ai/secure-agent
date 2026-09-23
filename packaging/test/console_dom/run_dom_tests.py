@@ -59,7 +59,8 @@ def build_harness(tmp):
     """Harness page = real index.html with mock_dom.js injected between lib.js
     and app.js. Real assets are symlinked so relative paths resolve."""
     for f in ("index.html", "style.css", "lib.js", "app.js",
-              "tab-overview.js", "tab-sessions.js", "tab-agents.js", "tab-egress.js", "tab-findings.js"):
+              "tab-overview.js", "tab-sessions.js", "tab-agents.js", "tab-egress.js", "tab-findings.js",
+              "tab-worktrees.js"):
         os.symlink(os.path.join(WEB_DIST, f), os.path.join(tmp, f))
     os.symlink(MOCK, os.path.join(tmp, "mock_dom.js"))
     html = open(os.path.join(WEB_DIST, "index.html")).read()
@@ -198,6 +199,8 @@ def main():
         dom_sesslink = dump_dom(chrome, tmp, "?sessionlinkdemo")
         dom_sticky = dump_dom(chrome, tmp, "?stickydemo")
         dom_drawerback = dump_dom(chrome, tmp, "?drawerbackdemo")
+        dom_wt = dump_dom(chrome, tmp, "?tab=worktrees")
+        dom_wtremove = dump_dom(chrome, tmp, "?tab=worktrees&worktreedemo")
         dom_scope = dump_dom(chrome, tmp, "?scopedemo")
         dom_pattern = dump_dom(chrome, tmp, "?patterndemo")
         dom_patternact = dump_dom(chrome, tmp, "?patterndemo&patternact")
@@ -950,6 +953,36 @@ def main():
         keep = pre(dom_attnkeep, "attn-probe")
         check("attention: an open pattern disclosure and a focused button survive a group RSS change",
               keep.startswith("open=true focus=true metrics=") and "memory" in keep, f"probe={keep!r}")
+
+        # --- worktrees: the hunter's report, one row per worktree ---
+        def wt_block(dom_text):
+            return dom_text.split('id="worktrees-container"', 1)[-1].split('id="tab-history"', 1)[0]
+        wt = wt_block(dom_wt)
+        wt_rows = wt.count('class="wt-row')
+        wt_remove = wt.count('data-action="worktree-remove"')
+        wt_prune = wt.count('data-action="worktree-prune"')
+        check("worktrees: tab opens and renders a row per non-main worktree with its state",
+              'class="tab-btn active" data-tab="worktrees"' in dom_wt and wt_rows == 4
+              and all(f'class="wt-row wt-{s}"' in wt for s in ("remove", "review", "keep", "prune"))
+              and "main worktree of the repository" not in wt,
+              f"rows={wt_rows}")
+        check("worktrees: Remove only on the remove row, Prune only on the prune row",
+              wt_remove == 1 and wt_prune == 1
+              and 'data-action="worktree-remove" data-path="/Users/dev/workspace/api-service/.worktrees/done"' in wt,
+              f"remove={wt_remove} prune={wt_prune}")
+        check("worktrees: reasons render as text, paths inside the repo read relative",
+              "&lt;b&gt;not bold&lt;/b&gt;" in wt and "<b>not bold</b>" not in wt
+              and '<span class="wt-path" title="/Users/dev/workspace/api-service/.worktrees/done">.worktrees/done</span>' in wt)
+        check("worktrees: state pills carry counts and the summary line reads the scan",
+              'data-state="" aria-pressed="true">All <b>4</b></button>' in dom_wt
+              and 'data-state="remove" aria-pressed="false">Remove <b>1</b></button>' in dom_wt
+              and "1 repo · 4 worktrees · stale after 14 idle days · scanned in 4.2s" in dom_wt)
+        wtr = wt_block(dom_wtremove)
+        wtr_rows = wtr.count('class="wt-row')
+        wt_reqs = pre(dom_wtremove, "mock-requests")
+        check("worktrees: Remove posts /worktrees/remove after the dialog and drops the row in place",
+              "POST /worktrees/remove" in wt_reqs and ".worktrees/done" not in wtr and wtr_rows == 3,
+              f"requests={wt_reqs!r} rows={wtr_rows}")
 
         if args.screenshot:
             shot_dir = os.path.abspath(args.screenshot)

@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
+	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
 
 // Store is what the hunter reads and records. *store.Store satisfies it.
@@ -32,6 +33,7 @@ type Store interface {
 	UpsertWorktreeRepo(path, source string, at time.Time)
 	SetWorktreeRepoHidden(path string, hidden bool) bool
 	WorkspaceActivity() []model.WorkspaceActivity
+	PutAudit(store.AuditEntry)
 }
 
 // Options are the operator's knobs (config `worktrees:`).
@@ -54,19 +56,19 @@ const (
 	workers = 4
 )
 
-// Report is one scan's result.
-type Report struct {
-	GeneratedAt time.Time `json:"generated_at"`
-	DurationMS  int64     `json:"duration_ms"`
-	Cached      bool      `json:"cached"`
-	StaleDays   int       `json:"stale_days"`
-	Summary     Summary   `json:"summary"`
-	Repos       []Repo    `json:"repos"`
-	Errors      []string  `json:"errors,omitempty"`
+// ScanReport is one scan's result.
+type ScanReport struct {
+	GeneratedAt time.Time    `json:"generated_at"`
+	DurationMS  int64        `json:"duration_ms"`
+	Cached      bool         `json:"cached"`
+	StaleDays   int          `json:"stale_days"`
+	Summary     ScanSummary  `json:"summary"`
+	Repos       []RepoReport `json:"repos"`
+	Errors      []string     `json:"errors,omitempty"`
 }
 
-// Summary counts rows by state. Worktrees excludes main rows.
-type Summary struct {
+// ScanSummary counts rows by state. Worktrees excludes main rows.
+type ScanSummary struct {
 	Repos     int `json:"repos"`
 	Worktrees int `json:"worktrees"`
 	Remove    int `json:"remove"`
@@ -76,8 +78,8 @@ type Summary struct {
 	Stale     int `json:"stale"`
 }
 
-// Repo groups one repository's worktrees; the main worktree comes first.
-type Repo struct {
+// RepoReport groups one repository's worktrees; the main worktree comes first.
+type RepoReport struct {
 	Path          string     `json:"path"`
 	Source        string     `json:"source,omitempty"`
 	DefaultBranch string     `json:"default_branch,omitempty"`
@@ -94,7 +96,7 @@ type Hunter struct {
 
 	mu       sync.Mutex
 	opts     Options
-	cached   *Report
+	cached   *ScanReport
 	cachedAt time.Time
 
 	// scanMu serializes scans; a request that waited on it reuses the scan
@@ -119,6 +121,8 @@ func New(st Store, home string, opts Options) *Hunter {
 	}
 	return &Hunter{st: st, home: home, now: time.Now, opts: normalize(opts), fingerprints: map[string]fingerprintCache{}}
 }
+
+func staleDuration(days int) time.Duration { return time.Duration(days) * 24 * time.Hour }
 
 func normalize(o Options) Options {
 	if o.StaleDays <= 0 {
@@ -152,7 +156,7 @@ func (h *Hunter) invalidate() {
 // refresh is false; otherwise it scans. The scan runs under its own
 // deadline, detached from ctx's cancellation, so a client that gives up
 // still leaves a finished report for the next request.
-func (h *Hunter) Report(ctx context.Context, refresh bool) Report {
+func (h *Hunter) Report(ctx context.Context, refresh bool) ScanReport {
 	asked := h.now()
 	if r, ok := h.fresh(refresh, time.Time{}); ok {
 		return r
@@ -177,11 +181,11 @@ func (h *Hunter) Report(ctx context.Context, refresh bool) Report {
 // fresh returns the cached report when it may answer: younger than cacheTTL
 // (minRescan when a refresh is asked), or finished after `after` (a scan
 // that completed while this request waited answers even a refresh).
-func (h *Hunter) fresh(refresh bool, after time.Time) (Report, bool) {
+func (h *Hunter) fresh(refresh bool, after time.Time) (ScanReport, bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.cached == nil {
-		return Report{}, false
+		return ScanReport{}, false
 	}
 	maxAge := cacheTTL
 	if refresh {
@@ -192,7 +196,7 @@ func (h *Hunter) fresh(refresh bool, after time.Time) (Report, bool) {
 		r.Cached = true
 		return r, true
 	}
-	return Report{}, false
+	return ScanReport{}, false
 }
 
 // ErrNotRepo is returned for a path that is not inside a git repository.
@@ -228,7 +232,7 @@ func (h *Hunter) HideRepo(path string) bool {
 // repoScan is one repository's shared state during a scan.
 type repoScan struct {
 	ref     repoRef
-	out     *Repo
+	out     *RepoReport
 	def     string // full default ref
 	list    []listed
 	stashes map[string]int
@@ -238,7 +242,7 @@ type repoScan struct {
 	fpErr  error
 }
 
-func (h *Hunter) scan(ctx context.Context, opts Options) Report {
+func (h *Hunter) scan(ctx context.Context, opts Options) ScanReport {
 	start := h.now()
 	activity := h.st.WorkspaceActivity()
 	d := discover(ctx, discoverInput{Home: h.home, Roots: opts.Roots, Saved: h.st.WorktreeRepos(), Workspaces: activity})
@@ -250,12 +254,12 @@ func (h *Hunter) scan(ctx context.Context, opts Options) Report {
 		source[r.Path] = r.Source
 	}
 
-	repos := make([]Repo, len(d.Repos))
+	repos := make([]RepoReport, len(d.Repos))
 	scans := make([]*repoScan, len(d.Repos))
 	sem := make(chan struct{}, workers)
 	var wg sync.WaitGroup
 	for i, f := range d.Repos {
-		repos[i] = Repo{Path: f.Ref.Main, Source: source[f.Ref.Main], Bare: f.Ref.Bare}
+		repos[i] = RepoReport{Path: f.Ref.Main, Source: source[f.Ref.Main], Bare: f.Ref.Bare}
 		scans[i] = &repoScan{ref: f.Ref, out: &repos[i]}
 		wg.Add(1)
 		go func(rs *repoScan) {
@@ -268,7 +272,7 @@ func (h *Hunter) scan(ctx context.Context, opts Options) Report {
 	wg.Wait()
 
 	now := h.now()
-	staleAfter := time.Duration(opts.StaleDays) * 24 * time.Hour
+	staleAfter := staleDuration(opts.StaleDays)
 	for _, rs := range scans {
 		rs.out.Worktrees = make([]Worktree, len(rs.list))
 		for j, l := range rs.list {
@@ -285,7 +289,7 @@ func (h *Hunter) scan(ctx context.Context, opts Options) Report {
 	}
 	wg.Wait()
 
-	rep := Report{GeneratedAt: start.UTC(), StaleDays: opts.StaleDays}
+	rep := ScanReport{GeneratedAt: start.UTC(), StaleDays: opts.StaleDays}
 	for i := range repos {
 		rep.Repos = append(rep.Repos, dropBare(repos[i]))
 	}
@@ -445,7 +449,7 @@ func (h *Hunter) mergeState(ctx context.Context, rs *repoScan, dir string) strin
 
 // dropBare removes the bare repository's own entry: it has no working
 // directory to judge.
-func dropBare(r Repo) Repo {
+func dropBare(r RepoReport) RepoReport {
 	if !r.Bare || len(r.Worktrees) == 0 {
 		return r
 	}
@@ -455,7 +459,7 @@ func dropBare(r Repo) Repo {
 
 // attachOrphans files each orphan directory under the repository its dead
 // gitdir pointed into, creating a group when that repo was not found.
-func attachOrphans(repos []Repo, orphans []orphanDir, now time.Time, staleAfter time.Duration) []Repo {
+func attachOrphans(repos []RepoReport, orphans []orphanDir, now time.Time, staleAfter time.Duration) []RepoReport {
 	for _, o := range orphans {
 		w := Worktree{Path: o.Path, Orphan: true}
 		classify(&w, facts{IndexTime: dirTime(o.Path)}, now, staleAfter)
@@ -471,7 +475,7 @@ func attachOrphans(repos []Repo, orphans []orphanDir, now time.Time, staleAfter 
 			if name == "" {
 				name = filepath.Dir(o.Path)
 			}
-			repos = append(repos, Repo{Path: name, Error: "repository not found"})
+			repos = append(repos, RepoReport{Path: name, Error: "repository not found"})
 			i = len(repos) - 1
 		}
 		repos[i].Worktrees = append(repos[i].Worktrees, w)
@@ -487,8 +491,8 @@ func dirTime(p string) time.Time {
 	return st.ModTime().UTC()
 }
 
-func summarize(repos []Repo) Summary {
-	s := Summary{Repos: len(repos)}
+func summarize(repos []RepoReport) ScanSummary {
+	s := ScanSummary{Repos: len(repos)}
 	for _, r := range repos {
 		for _, w := range r.Worktrees {
 			if w.State == StateMain {

@@ -31,10 +31,13 @@ document.addEventListener('DOMContentLoaded', () => {
   // Every request carries a timeout: a hung endpoint must not wedge the whole
   // refresh cycle (Promise.all resolves only as fast as its slowest member).
   const FETCH_TIMEOUT_MS = 5000;
+  // opts.timeoutMs raises it for the few calls that do real work on request
+  // (a worktree scan reads every repository).
   const apiFetch = (path, opts = {}) => {
+    const { timeoutMs, ...init } = opts;
     const ctl = new AbortController();
-    const timer = setTimeout(() => ctl.abort(), FETCH_TIMEOUT_MS);
-    return fetch(path, { ...opts, signal: ctl.signal, headers: { ...authHeaders, ...(opts.headers || {}) } })
+    const timer = setTimeout(() => ctl.abort(), timeoutMs || FETCH_TIMEOUT_MS);
+    return fetch(path, { ...init, signal: ctl.signal, headers: { ...authHeaders, ...(init.headers || {}) } })
       .finally(() => clearTimeout(timer));
   };
 
@@ -651,20 +654,22 @@ document.addEventListener('DOMContentLoaded', () => {
     ['agents', renderAgents],
     ['firewall', renderFirewall], ['incidents', renderIncidents], ['fleet', renderFleet],
     ['audit', renderAudit], ['sources', renderSources], ['flags', renderFlags], ['attention', renderAttention],
-    ['events', renderEvents], ['activity', renderActivity], ['tab-badges', renderTabBadges]
+    ['events', renderEvents], ['activity', renderActivity], ['worktrees', renderWorktrees], ['tab-badges', renderTabBadges]
   ];
   // Panel → tab; a panel absent here is global (always on screen).
   const PANEL_TAB = {
     'chart-flags': 'overview', 'chart-memory': 'overview', spend: 'overview', activity: 'overview',
     sessions: 'sessions', agents: 'agents', fleet: 'agents', resources: 'resources', history: 'history',
     events: 'events', firewall: 'egress', sources: 'egress',
-    incidents: 'findings', audit: 'findings', flags: 'findings', attention: 'findings'
+    incidents: 'findings', audit: 'findings', flags: 'findings', attention: 'findings',
+    worktrees: 'worktrees'
   };
   // Panel → the element whose focused control holds its render.
   const PANEL_EL = {
     resources: 'resource-board', history: 'history-board', sessions: 'session-rail', agents: 'agents-container',
     fleet: 'fleet-container', firewall: 'firewall-container', sources: 'sources-list', incidents: 'incidents-container',
-    audit: 'audit-container', flags: 'flags-list', attention: 'attention-list', events: 'events-container'
+    audit: 'audit-container', flags: 'flags-list', attention: 'attention-list', events: 'events-container',
+    worktrees: 'worktrees-container'
   };
   const SLOW_ONLY = new Set(['resources', 'history', 'fleet', 'audit', 'sources', 'activity', 'spend']);
   const PANEL_MIN_MS = 250;
@@ -755,8 +760,45 @@ document.addEventListener('DOMContentLoaded', () => {
     paintScopeBar();
   }
 
-  const TABS = ['overview', 'sessions', 'agents', 'resources', 'history', 'events', 'egress', 'findings'];
+  const TABS = ['overview', 'sessions', 'agents', 'resources', 'history', 'worktrees', 'events', 'egress', 'findings'];
   let activeTab = 'overview';
+
+  // Worktrees are not telemetry: the tab fetches its report when opened
+  // (the daemon caches a scan for 10 minutes) and on Rescan, never on the
+  // refresh cycle.
+  const WORKTREE_TIMEOUT_MS = 200000;
+  const WORKTREE_STALE_MS = 60000;
+  const worktreesState = { report: null, loading: false, error: '', loadedAt: 0, filter: { state: '', stale: false } };
+  async function loadWorktrees(refresh) {
+    if (worktreesState.loading) return;
+    worktreesState.loading = true;
+    worktreesState.error = '';
+    markDirty('worktrees');
+    try {
+      const r = await apiFetch('/worktrees' + (refresh ? '?refresh=1' : ''), { timeoutMs: WORKTREE_TIMEOUT_MS });
+      if (!r.ok) throw new Error((await r.text()).trim() || String(r.status));
+      worktreesState.report = await r.json();
+      worktreesState.loadedAt = Date.now();
+    } catch (err) {
+      worktreesState.error = 'Worktree scan failed: ' + (err.message || err);
+      if (worktreesState.report) showToast(worktreesState.error, 'danger');
+    } finally {
+      worktreesState.loading = false;
+      markDirty('worktrees');
+    }
+  }
+  // dropWorktreeRows removes rows the daemon just removed or pruned, so the
+  // tab updates without a rescan.
+  function dropWorktreeRows(paths) {
+    const rep = worktreesState.report;
+    if (!rep) return;
+    const gone = new Set(paths);
+    for (const repo of rep.repos || []) {
+      const before = (repo.worktrees || []).length;
+      repo.worktrees = (repo.worktrees || []).filter(w => !gone.has(w.path));
+      if (rep.summary) rep.summary.worktrees = Math.max(0, (rep.summary.worktrees || 0) - (before - repo.worktrees.length));
+    }
+  }
 
   function switchTab(id, opts = {}) {
     if (!TABS.includes(id)) id = 'overview';
@@ -773,6 +815,9 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     PANELS.forEach(([name]) => { if (!PANEL_TAB[name] || PANEL_TAB[name] === id) dirtyPanels.add(name); });
     renderDirty();
+    if (id === 'worktrees' && (!worktreesState.report || Date.now() - worktreesState.loadedAt > WORKTREE_STALE_MS)) {
+      loadWorktrees(false);
+    }
   }
 
   document.querySelectorAll('.tab-btn').forEach(b =>
@@ -1107,6 +1152,86 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   };
 
+  // Worktree actions. The daemon re-inspects before removing and answers 409
+  // with the fresh verdict when the worktree is no longer removable.
+  async function postWorktree(path, body) {
+    const r = await apiFetch(path, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body), timeoutMs: WORKTREE_TIMEOUT_MS
+    });
+    const text = await r.text();
+    let json = null;
+    try { json = JSON.parse(text); } catch { /* http.Error text */ }
+    return { r, text, json };
+  }
+
+  window.removeWorktree = async function(path, branch) {
+    const ok = await window.saConfirm(
+      `git deletes ${path} and its ignored files. ${branch ? `Branch ${branch} and its commits stay.` : 'Its commits stay reachable from other refs.'}`,
+      { title: 'Remove worktree', okLabel: 'Remove' });
+    if (!ok) return;
+    try {
+      const { r, text, json } = await postWorktree('/worktrees/remove', { path });
+      if (r.status === 409 && json) {
+        showToast(`Not removed — it is now ${json.state}: ${(json.reasons || []).join('; ')}`, 'info');
+        loadWorktrees(true);
+        return;
+      }
+      if (!r.ok) throw new Error(text.trim() || String(r.status));
+      dropWorktreeRows([path]);
+      renderNow(['worktrees']);
+      showToast(`Removed ${path}`, 'success');
+    } catch (err) {
+      showToast('Failed to remove the worktree: ' + (err.message || err), 'danger');
+    }
+  };
+
+  window.pruneWorktrees = async function(repo) {
+    const ok = await window.saConfirm(`Drop git's entries for worktrees of ${repo} whose directory is gone?`,
+      { title: 'Prune worktrees', okLabel: 'Prune', danger: false });
+    if (!ok) return;
+    try {
+      const { r, text, json } = await postWorktree('/worktrees/remove', { repo, prune: true });
+      if (!r.ok) throw new Error(text.trim() || String(r.status));
+      const pruned = (json && json.pruned) || [];
+      dropWorktreeRows(pruned);
+      renderNow(['worktrees']);
+      showToast(`Pruned ${pruned.length} worktree entr${pruned.length === 1 ? 'y' : 'ies'}`, 'success');
+    } catch (err) {
+      showToast('Failed to prune: ' + (err.message || err), 'danger');
+    }
+  };
+
+  window.hideWorktreeRepo = async function(repo) {
+    try {
+      const { r, text } = await postWorktree('/worktrees/repos', { path: repo, hidden: true });
+      if (!r.ok) throw new Error(text.trim() || String(r.status));
+      const rep = worktreesState.report;
+      if (rep) rep.repos = (rep.repos || []).filter(x => x.path !== repo);
+      renderNow(['worktrees']);
+      showToast(`Hidden ${repo} — adding it again brings it back`, 'info');
+    } catch (err) {
+      showToast('Failed to hide the repository: ' + (err.message || err), 'danger');
+    }
+  };
+
+  const worktreeAddForm = document.getElementById('worktree-add-form');
+  if (worktreeAddForm) worktreeAddForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const input = document.getElementById('worktree-add-input');
+    const path = (input.value || '').trim();
+    if (!path) return;
+    try {
+      const { r, text, json } = await postWorktree('/worktrees/repos', { path });
+      if (!r.ok) throw new Error(text.trim() || String(r.status));
+      input.value = '';
+      showToast(`Added ${(json && json.path) || path}`, 'success');
+      loadWorktrees(false);
+    } catch (err) {
+      showToast('Failed to add the repository: ' + (err.message || err), 'danger');
+    }
+  });
+
   window.addSource = async function() {
     const input = document.getElementById('source-input');
     const value = (input.value || '').trim();
@@ -1269,6 +1394,7 @@ document.addEventListener('DOMContentLoaded', () => {
     isEventsFiltered,
     globalSearchTerm,
     renderCounts,
+    worktrees: worktreesState,
     flushRender() {
       for (const [name, fn] of PANELS) if (dirtyPanels.has(name)) { dirtyPanels.delete(name); renderPanel(name, fn); }
     },
@@ -2197,6 +2323,29 @@ document.addEventListener('DOMContentLoaded', () => {
         e.preventDefault();
         e.stopPropagation();
         window.killOrphans(d.family);
+        break;
+      case 'worktree-remove':
+        e.preventDefault();
+        window.removeWorktree(d.path, d.branch);
+        break;
+      case 'worktree-prune':
+        e.preventDefault();
+        window.pruneWorktrees(d.repo);
+        break;
+      case 'worktree-hide':
+        e.preventDefault();
+        window.hideWorktreeRepo(d.repo);
+        break;
+      case 'worktree-filter':
+        worktreesState.filter.state = d.state || '';
+        renderNow(['worktrees']);
+        break;
+      case 'worktree-stale':
+        worktreesState.filter.stale = !worktreesState.filter.stale;
+        renderNow(['worktrees']);
+        break;
+      case 'worktrees-rescan':
+        loadWorktrees(true);
         break;
       case 'promote':
         window.promoteRule(d.rule);

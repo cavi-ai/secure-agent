@@ -4,10 +4,12 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/apiroutes"
 	"github.com/cavi-ai/secure-agent/daemon/internal/worktreehunter"
@@ -35,13 +37,13 @@ func TestWorktreesEndpoints(t *testing.T) {
 		mux.ServeHTTP(rec, httptest.NewRequest(method, path, strings.NewReader(body)))
 		return rec
 	}
-	report := func() worktreehunter.Report {
+	report := func() worktreehunter.ScanReport {
 		t.Helper()
 		rec := do(http.MethodGet, "/worktrees?refresh=1", "")
 		if rec.Code != http.StatusOK {
 			t.Fatalf("GET /worktrees: %d %s", rec.Code, rec.Body.String())
 		}
-		var rep worktreehunter.Report
+		var rep worktreehunter.ScanReport
 		if err := json.Unmarshal(rec.Body.Bytes(), &rep); err != nil {
 			t.Fatal(err)
 		}
@@ -103,5 +105,110 @@ func TestWorktreesUnwired(t *testing.T) {
 		if rec.Code != http.StatusServiceUnavailable {
 			t.Fatalf("%s %s unwired: %d", req.Method, req.URL.Path, rec.Code)
 		}
+	}
+}
+
+func TestWorktreeRemoveEndpoint(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	home := t.TempDir()
+	for k, v := range map[string]string{
+		"GIT_CONFIG_GLOBAL": filepath.Join(home, "gitconfig"), "GIT_CONFIG_NOSYSTEM": "1",
+		"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.com", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.com",
+	} {
+		t.Setenv(k, v)
+	}
+	root, _ := filepath.EvalSymlinks(t.TempDir())
+	repo := filepath.Join(root, "repo")
+	git := func(args ...string) {
+		t.Helper()
+		if out, err := exec.Command("git", append([]string{"-C", root}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+	}
+	// Three days old: past the hunter's 24-hour grace for fresh worktrees.
+	old := time.Now().Add(-72 * time.Hour)
+	t.Setenv("GIT_COMMITTER_DATE", old.Format(time.RFC3339))
+	git("init", "-q", "-b", "main", repo)
+	git("-C", repo, "commit", "-q", "--allow-empty", "-m", "base")
+	clean := filepath.Join(repo, ".worktrees", "clean")
+	dirty := filepath.Join(repo, ".worktrees", "dirty")
+	gone := filepath.Join(repo, ".worktrees", "gone")
+	for _, p := range []string{clean, dirty, gone} {
+		git("-C", repo, "worktree", "add", "-q", "-b", "feat/"+filepath.Base(p), p, "main")
+	}
+	for _, p := range []string{clean, dirty, gone} {
+		idx := filepath.Join(repo, ".git", "worktrees", filepath.Base(p), "index")
+		if err := os.Chtimes(idx, old, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dirty, "new.txt"), []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(gone); err != nil {
+		t.Fatal(err)
+	}
+
+	st := testStore(t)
+	t.Cleanup(func() { st.Close() })
+	mux := New(Deps{Store: st, Status: func() Status { return Status{Running: true} }, Worktrees: worktreehunter.New(st, home, worktreehunter.Options{})}).buildMux()
+	post := func(body string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/worktrees/remove", strings.NewReader(body)))
+		return rec
+	}
+
+	for _, c := range []struct {
+		body string
+		want int
+	}{
+		{`{}`, http.StatusBadRequest},
+		{`{"path":"relative"}`, http.StatusBadRequest},
+		{`{"prune":true,"repo":"relative"}`, http.StatusBadRequest},
+		{`{"path":"` + repo + `"}`, http.StatusNotFound},
+		{`{"path":"` + root + `"}`, http.StatusNotFound},
+	} {
+		if rec := post(c.body); rec.Code != c.want {
+			t.Fatalf("POST %s: %d %s, want %d", c.body, rec.Code, rec.Body.String(), c.want)
+		}
+	}
+
+	rec := post(`{"path":"` + dirty + `"}`)
+	var refused struct {
+		State   string   `json:"state"`
+		Reasons []string `json:"reasons"`
+	}
+	if rec.Code != http.StatusConflict || json.Unmarshal(rec.Body.Bytes(), &refused) != nil || refused.State != "keep" {
+		t.Fatalf("dirty: %d %s, want 409 keep", rec.Code, rec.Body.String())
+	}
+	if _, err := os.Stat(dirty); err != nil {
+		t.Fatal("refused removal deleted the worktree")
+	}
+
+	if rec := post(`{"path":"` + clean + `"}`); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"removed"`) {
+		t.Fatalf("clean: %d %s", rec.Code, rec.Body.String())
+	}
+	if _, err := os.Stat(clean); err == nil {
+		t.Fatal("clean worktree still on disk")
+	}
+
+	if rec := post(`{"prune":true,"repo":"` + repo + `"}`); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), gone) {
+		t.Fatalf("prune: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := post(`{"prune":true,"repo":"` + repo + `"}`); rec.Code != http.StatusConflict {
+		t.Fatalf("second prune: %d, want 409", rec.Code)
+	}
+
+	actions := map[string]int{}
+	for _, a := range st.RecentAudit(10) {
+		actions[a.Action]++
+	}
+	if actions["worktree-remove"] != 1 || actions["worktree-prune"] != 1 {
+		t.Fatalf("audit actions = %v", actions)
+	}
+	if !apiroutes.IsMutation(http.MethodPost, "/worktrees/remove") || !apiroutes.ConsoleAllowed("/worktrees/remove") {
+		t.Fatal("/worktrees/remove must be a console-admitted mutation")
 	}
 }

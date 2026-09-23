@@ -14,6 +14,13 @@ All notable changes to `secure-agent` are documented here. The format follows
 - `POST /worktrees/repos` adds or hides a repository on the saved list.
 - `secure-agent worktrees [--state] [--repo] [--stale] [--refresh] [--json]` and `secure-agent worktrees add|hide <path>`.
 - `worktrees.roots` and `worktrees.stale_days` settings, applied live.
+- `POST /worktrees/remove`: removes a worktree only when a fresh inspection says `remove` (`git worktree remove`, never `--force`; the branch stays), or prunes missing ones; 409 carries the fresh verdict.
+- `secure-agent worktrees remove <path>` and `secure-agent worktrees prune <repo>`.
+- `worktree-remove` and `worktree-prune` audit rows.
+- A missing worktree that is locked reads `keep` (git does not prune it).
+- A worktree active in the last 24 hours is never `remove`.
+- `secure-agent worktrees` explains a 403: while the menu bar app runs, changes go through its console.
+- Console Worktrees tab: rows grouped by repository with state, stale, idle days, branch, path and reasons; state and stale filters; Remove, Prune, Hide repo, Add repository and Rescan.
 - `GET /patterns`: repeating flags grouped by agent, rule and subject, with cadence, pids, sessions, disposition, summary and actions.
 - `/snapshot` `patterns`.
 - `/posture` `pattern` items in place of the flag items a pattern covers.

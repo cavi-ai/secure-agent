@@ -107,6 +107,8 @@ func printUsage() {
 	fmt.Println("  secure-agent doctor [--json]             Self-check: hooks, file telemetry, collectors, traces, sessions, pairing, pricing, retention, egress; exit 1 on any failure")
 	fmt.Println("  secure-agent worktrees [--state S] [--repo R] [--stale] [--refresh] [--json]  Find every git worktree and say whether it can be removed (remove|review|keep|prune) and why")
 	fmt.Println("  secure-agent worktrees add|hide <path>   Put a repository on the worktree hunter's saved list, or hide it from reports")
+	fmt.Println("  secure-agent worktrees remove <path>     Remove a worktree whose fresh verdict is remove (git worktree remove, never --force; the branch stays)")
+	fmt.Println("  secure-agent worktrees prune <repo>      Drop git's entries for worktrees whose directory is gone")
 	fmt.Println("  secure-agent kill <PID>                  Terminate an agent process tree by PID")
 	fmt.Println("  secure-agent fleet                       Show THIS node's fleet identity (node_id, hostname, version) — remote rollups live at the collector's /fleet")
 	fmt.Println("  secure-agent fleet enroll <url>          Enroll this node into a collector: generate the secret, write fleet.webhooks, print the collector line")

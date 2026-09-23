@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"path/filepath"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/worktreehunter"
 )
@@ -61,4 +62,65 @@ func (a *API) handleWorktreeRepos(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]any{"status": "ok", "path": main})
+}
+
+// handleWorktreeRemove removes one worktree ({"path"}) or prunes a
+// repository's missing ones ({"repo", "prune": true}). The hunter inspects
+// the worktree again first and removes it only on a fresh remove verdict;
+// a refusal answers 409 with that verdict's state and reasons.
+func (a *API) handleWorktreeRemove(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if a.worktrees == nil {
+		http.Error(w, "worktree hunter not enabled", http.StatusServiceUnavailable)
+		return
+	}
+	limitBody(w, r)
+	var req struct {
+		Path  string `json:"path"`
+		Repo  string `json:"repo"`
+		Prune bool   `json:"prune"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || (req.Prune && req.Repo == "") || (!req.Prune && req.Path == "") {
+		http.Error(w, `Invalid payload: {"path"} or {"repo", "prune": true}`, http.StatusBadRequest)
+		return
+	}
+	target := req.Path
+	if req.Prune {
+		target = req.Repo
+	}
+	if !filepath.IsAbs(target) {
+		http.Error(w, "path must be absolute", http.StatusBadRequest)
+		return
+	}
+	if req.Prune {
+		pruned, err := a.worktrees.Prune(r.Context(), req.Repo)
+		switch {
+		case errors.Is(err, worktreehunter.ErrNotRepo):
+			http.Error(w, err.Error(), http.StatusNotFound)
+		case errors.Is(err, worktreehunter.ErrNothingToPrune):
+			http.Error(w, err.Error(), http.StatusConflict)
+		case err != nil:
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		default:
+			writeJSON(w, map[string]any{"status": "ok", "pruned": pruned})
+		}
+		return
+	}
+	row, err := a.worktrees.Remove(r.Context(), req.Path)
+	var refused *worktreehunter.NotRemovableError
+	switch {
+	case errors.As(err, &refused):
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		json.NewEncoder(w).Encode(map[string]any{"error": "not removable", "state": refused.Row.State, "reasons": refused.Row.Reasons})
+	case errors.Is(err, worktreehunter.ErrNotWorktree):
+		http.Error(w, err.Error(), http.StatusNotFound)
+	case err != nil:
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	default:
+		writeJSON(w, map[string]any{"status": "ok", "removed": row.Path, "branch": row.Branch, "reasons": row.Reasons})
+	}
 }

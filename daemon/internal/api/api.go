@@ -584,6 +584,7 @@ func (a *API) routes() map[string]http.HandlerFunc {
 		"/doctor":                       a.handleDoctor,
 		"/worktrees":                    a.handleWorktrees,
 		"/worktrees/repos":              a.handleWorktreeRepos,
+		"/worktrees/remove":             a.handleWorktreeRemove,
 		"/advisor/discover":             a.handleAdvisorDiscover,
 		"/fleet":                        a.handleFleet,
 		"/kill":                         a.handleKill,
