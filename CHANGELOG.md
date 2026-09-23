@@ -13,6 +13,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - `/doctor` `hermes` check: databases read, watermarks and last poll, or not installed.
 - openclaw conversations from `lcm.db`: sessions, turns, tool calls and model calls; `openclaw_home` setting.
 - `/doctor` trace coverage names the traced harnesses.
+- `/doctor` collectors check prints the openclaw, opencode and hermes database, watermark and last poll.
 - `/costs` rows and total split `unpriced_calls` into `unknown_model_calls`, `unpriced_model_calls`, `plan_calls` and `local_calls`.
 - `/costs?by=model` rows carry `provider` and `class`.
 - `GET /costs/unpriced`: zero-cost calls by harness, provider and model with their class.
@@ -55,6 +56,10 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Console: the drawer's Copy button stays hidden outside incident reports.
 
 ### Fixed
+- A codex rollout session joins the process holding the rollout open: root pid set, that tree's process-tree session merged in.
+- `/doctor` trace coverage counts transcript and hook sessions seen since boot, not only those started since boot.
+- A session upsert stores a new parent and never clears a stored one.
+- Every event from a pid already resolved carries its session id, not only the first.
 - A hook-stamped session carries its process tree's root pid and absorbs that tree's process-tree session.
 - Sessions first seen through a trace event record `transcript` confidence, not `hook`.
 - Codex model calls name the model from `turn_context` when the rollout has no `thread_settings_applied` line.

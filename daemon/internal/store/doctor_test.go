@@ -157,3 +157,37 @@ func TestDoctorRetentionReport(t *testing.T) {
 		t.Fatalf("empty store RetentionReport = %#v, want non-nil empty", r)
 	}
 }
+
+// Trace coverage counts sessions SEEN since boot at transcript or hook
+// confidence, whatever their start: a backfilled conversation started days ago
+// and active now counts; a process-tree guess and a stale row do not.
+func TestSessionsSeenByHarness(t *testing.T) {
+	s, err := Open("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	now := time.Now().UTC().Truncate(time.Second)
+	since := now.Add(-time.Hour)
+	for _, sess := range []model.Session{
+		{ID: "a", Harness: "codex", Confidence: model.ConfTranscript, StartedAt: now, LastSeenAt: now},
+		{ID: "b", Harness: "openclaw", Confidence: model.ConfTranscript, StartedAt: now.Add(-48 * time.Hour), LastSeenAt: now},
+		{ID: "c", Harness: "claude", Confidence: model.ConfHook, StartedAt: now.Add(-3 * time.Hour), LastSeenAt: now.Add(-time.Minute)},
+		{ID: "d", Harness: "codex", Confidence: model.ConfProcessTree, StartedAt: now, LastSeenAt: now},
+		{ID: "e", Harness: "codex", Confidence: model.ConfTranscript, StartedAt: now.Add(-3 * time.Hour), LastSeenAt: now.Add(-2 * time.Hour)},
+		{ID: "f", Confidence: model.ConfTranscript, StartedAt: now, LastSeenAt: now},
+		{ID: "g", Harness: "hermes", Confidence: model.ConfTranscript, StartedAt: now.Add(-48 * time.Hour), LastSeenAt: now.Add(-47 * time.Hour)},
+		{ID: "h", Harness: "hermes", Confidence: model.ConfTranscript, StartedAt: now.Add(-48 * time.Hour), LastSeenAt: now.Add(-47 * time.Hour)},
+	} {
+		s.UpsertSession(sess)
+	}
+	// g is only closed since: ending moves last_seen_at, but it is no activity.
+	s.EndSession("g", now)
+	// h ran since and then ended.
+	s.PutEvent(event.Event{Kind: event.KindModelCall, SessionID: "h", TS: now.Add(-time.Minute)})
+	s.EndSession("h", now)
+	got := s.SessionsSeenByHarness(since)
+	if len(got) != 4 || got["codex"] != 1 || got["openclaw"] != 1 || got["claude"] != 1 || got["hermes"] != 1 {
+		t.Fatalf("SessionsSeenByHarness = %v, want codex 1, openclaw 1, claude 1, hermes 1 (h, not g)", got)
+	}
+}

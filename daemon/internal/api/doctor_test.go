@@ -232,22 +232,39 @@ func TestDoctorChecksFromFacts(t *testing.T) {
 		}(), doctorPass, "1 collectors running"},
 		{"harness without trace", checkTraceCoverage, func() doctorFacts {
 			f := steady
-			f.sessionsByHarness = map[string]int{"claude": 2, "codex": 1}
+			f.seenByHarness = map[string]int{"claude": 2, "codex": 1}
 			f.traceByHarness = map[string]int{"claude": 9}
 			return f
 		}(), doctorFail, "no trace rows: codex"},
 		{"all harnesses traced", checkTraceCoverage, func() doctorFacts {
 			f := steady
-			f.sessionsByHarness = map[string]int{"claude": 2}
+			f.seenByHarness = map[string]int{"claude": 2}
 			f.traceByHarness = map[string]int{"claude": 9}
 			return f
 		}(), doctorPass, "1 harnesses traced"},
 		{"traced harnesses named", checkTraceCoverage, func() doctorFacts {
 			f := steady
-			f.sessionsByHarness = map[string]int{"openclaw": 3, "claude": 2}
+			f.seenByHarness = map[string]int{"openclaw": 3, "claude": 2}
 			f.traceByHarness = map[string]int{"openclaw": 12, "claude": 9}
 			return f
-		}(), doctorPass, "2 harnesses traced: claude, openclaw"},
+		}(), doctorPass, "2 harnesses traced: claude (2 sessions), openclaw (3 sessions)"},
+		{"sessions seen since boot count, not only started", checkTraceCoverage, func() doctorFacts {
+			f := steady
+			f.sessionsByHarness = map[string]int{"codex": 1}
+			f.seenByHarness = map[string]int{"codex": 5, "openclaw": 3}
+			f.traceByHarness = map[string]int{"codex": 40, "openclaw": 12}
+			return f
+		}(), doctorPass, "2 harnesses traced: codex (5 sessions), openclaw (3 sessions)"},
+		{"collector source, watermark and last poll", checkCollectors, func() doctorFacts {
+			f := steady
+			f.st.Collectors = []supervise.Health{{Name: "openclaw", Running: true, Source: "/x/lcm.db", Watermark: 42, LastPoll: "2026-09-23T04:00:00Z"}}
+			return f
+		}(), doctorPass, "openclaw /x/lcm.db @ 42 polled 2026-09-23T04:00:00Z"},
+		{"collector source printed on a failing check", checkCollectors, func() doctorFacts {
+			f := steady
+			f.st.Collectors = []supervise.Health{{Name: "eslogger"}, {Name: "opencode", Running: true, Source: "/y/opencode.db", Watermark: 7, LastPoll: "2026-09-23T04:00:00Z"}}
+			return f
+		}(), doctorFail, "down: eslogger (stopped) · opencode /y/opencode.db @ 7 polled 2026-09-23T04:00:00Z"},
 		{"unnamed sessions", checkSessionIdentity, func() doctorFacts {
 			f := steady
 			f.sessionsTotal, f.sessionsNamed = 10, 7

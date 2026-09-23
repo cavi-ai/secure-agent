@@ -77,6 +77,9 @@ type OpenclawCollector struct {
 
 	// OnProduce fires after events are published (coverage heartbeat).
 	OnProduce func()
+	// OnPoll, when set, receives the database and watermark after each poll
+	// that found the database.
+	OnPoll func(source string, watermark int64)
 	// OnSessionSeen reports a conversation (id, harness, workspace, time)
 	// before any of its events are published.
 	OnSessionSeen func(sessionID, harness, workspace string, at time.Time)
@@ -171,6 +174,9 @@ func (c *OpenclawCollector) Run(ctx context.Context) error {
 	for {
 		if n := c.pollOnce(); n > 0 && c.OnProduce != nil {
 			c.OnProduce()
+		}
+		if c.OnPoll != nil && c.dbPath != "" {
+			c.OnPoll(c.dbPath, c.watermark)
 		}
 		select {
 		case <-ctx.Done():

@@ -753,6 +753,15 @@ func startCollectors(ctx context.Context, sup *supervise.Supervisor, supReg *sup
 			})
 		}
 		ts.OnSessionSeen = resolver.NoteTranscriptSession
+		// A codex process holds its rollout open: the open-file probe joins
+		// the rollout's session to that process's tree.
+		joiner := &collect.RolloutJoiner{
+			PIDs:       func() []int32 { return codexPIDs(tagger) },
+			Probe:      collect.OpenRolloutFiles,
+			SessionFor: ts.RolloutSession,
+			Join:       resolver.JoinTranscriptPID,
+		}
+		go func() { _ = joiner.Run(c) }()
 		// Transcript lines get the firewall's known-secret and typed-pattern
 		// scan; a nil engine keeps the redact fallback (and avoids a typed-nil
 		// interface).
@@ -767,6 +776,7 @@ func startCollectors(ctx context.Context, sup *supervise.Supervisor, supReg *sup
 	// collector simply produces nothing and the coverage signal says so.
 	oc := collect.NewOpencodeCollector(b, "", 0)
 	oc.OnProduce = func() { supReg.MarkProduced("opencode") }
+	oc.OnPoll = func(src string, wm int64) { supReg.MarkPolled("opencode", src, wm) }
 	oc.OnSessionSeen = resolver.NoteTranscriptSession
 	go sup.Run(ctx, "opencode", func(c context.Context) error {
 		return oc.Run(c)
@@ -783,6 +793,7 @@ func startCollectors(ctx context.Context, sup *supervise.Supervisor, supReg *sup
 	ocl.StatePath = filepath.Join(filepath.Dir(cfg.DBPath), "openclaw-watermark.json")
 	ocl.ProcessExes = func() []string { return openclawExes(tagger) }
 	ocl.OnProduce = func() { supReg.MarkProduced("openclaw") }
+	ocl.OnPoll = func(src string, wm int64) { supReg.MarkPolled("openclaw", src, wm) }
 	ocl.OnSessionSeen = resolver.NoteTranscriptSession
 	ocl.OnSessionEnded = resolver.EndTranscriptSession
 	go sup.Run(ctx, "openclaw", func(c context.Context) error {
@@ -825,6 +836,7 @@ func newHermesCollector(cfg config.Config, b *bus.Bus, supReg *supervise.Registr
 	h.Configured = cfg.HermesHome
 	h.StatePath = filepath.Join(filepath.Dir(cfg.DBPath), "hermes-watermark.json")
 	h.OnProduce = func() { supReg.MarkProduced("hermes") }
+	h.OnPoll = func(src string, wm int64) { supReg.MarkPolled("hermes", src, wm) }
 	h.OnSessionSeen = func(s collect.HermesSighting) {
 		resolver.NoteTranscriptSighting(session.TranscriptSighting{
 			ID: s.ID, Harness: "hermes", Workspace: s.Workspace,
@@ -833,6 +845,17 @@ func newHermesCollector(cfg config.Config, b *bus.Bus, supReg *supervise.Registr
 	}
 	h.OnSessionEnded = resolver.EndTranscriptSession
 	return h
+}
+
+// codexPIDs lists the live pids the tagger names codex.
+func codexPIDs(tagger *agents.Tagger) []int32 {
+	var out []int32
+	for pid, info := range tagger.TaggedPIDs() {
+		if info.Name == "codex" {
+			out = append(out, pid)
+		}
+	}
+	return out
 }
 
 // openclawExes lists the executable paths of tagged openclaw processes, the

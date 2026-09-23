@@ -98,6 +98,7 @@ func (s *Store) upsertSessionLocked(sess model.Session) {
 		branch = excluded.branch,
 		root_pid = CASE WHEN excluded.root_pid != 0 THEN excluded.root_pid ELSE sessions.root_pid END,
 		root_started_at = CASE WHEN excluded.root_started_at != '' THEN excluded.root_started_at ELSE sessions.root_started_at END,
+		parent_id = CASE WHEN COALESCE(excluded.parent_id, '') != '' THEN excluded.parent_id ELSE sessions.parent_id END,
 		last_seen_at = excluded.last_seen_at,
 		status = excluded.status,
 		confidence = excluded.confidence`,

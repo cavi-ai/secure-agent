@@ -9,6 +9,7 @@ import (
 	"log"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/bus"
@@ -99,6 +100,34 @@ type TranscriptScanner struct {
 	// agyTracers hold per-file Antigravity transcript state (session id from
 	// the brain directory; tools + turns only).
 	agyTracers map[string]*AGYTracer
+
+	// rolloutIDs maps a codex rollout path to the session id its session_meta
+	// names, for the open-rollout joiner, which runs on its own goroutine.
+	rolloutMu  sync.Mutex
+	rolloutIDs map[string]string
+}
+
+// RolloutSession names the session a codex rollout belongs to: the id its
+// session_meta line carries once the tracer has read it, else the id in the
+// file name. Safe for concurrent use.
+func (ts *TranscriptScanner) RolloutSession(path string) string {
+	ts.rolloutMu.Lock()
+	id := ts.rolloutIDs[path]
+	ts.rolloutMu.Unlock()
+	if id != "" {
+		return id
+	}
+	return RolloutSessionID(path)
+}
+
+// noteRolloutSession records the session id a rollout's session_meta names.
+func (ts *TranscriptScanner) noteRolloutSession(path, id string) {
+	ts.rolloutMu.Lock()
+	defer ts.rolloutMu.Unlock()
+	if ts.rolloutIDs == nil {
+		ts.rolloutIDs = map[string]string{}
+	}
+	ts.rolloutIDs[path] = id
 }
 
 // Handshake is the hook's session announcement line
@@ -610,6 +639,9 @@ func (ts *TranscriptScanner) tailFile(p string, offsets map[string]int64, dirty 
 					}
 					if evs, ok := tracer.ParseLine(line); ok {
 						sid, cwd := tracer.Session()
+						if sid != "" {
+							ts.noteRolloutSession(p, sid)
+						}
 						if sid != "" && ts.OnSessionSeen != nil {
 							ts.OnSessionSeen(sid, "codex", cwd, time.Now())
 						}

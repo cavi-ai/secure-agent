@@ -197,3 +197,19 @@ func TestLastProducedCarriesAcrossRestart(t *testing.T) {
 		t.Fatal("unregistered worker's heartbeat must still persist")
 	}
 }
+
+// A polling collector's health record carries what it reads, how far it has
+// read and when it last polled.
+func TestMarkPolledRecordsSourceAndWatermark(t *testing.T) {
+	reg := NewRegistry()
+	reg.MarkPolled("openclaw", "/x/lcm.db", 42)
+	snap := reg.Snapshot()
+	if len(snap) != 1 || snap[0].Source != "/x/lcm.db" || snap[0].Watermark != 42 {
+		t.Fatalf("snapshot = %+v, want source /x/lcm.db watermark 42", snap)
+	}
+	if ts, err := time.Parse(time.RFC3339, snap[0].LastPoll); err != nil || time.Since(ts) > time.Minute {
+		t.Fatalf("LastPoll = %q, want a current RFC3339 stamp", snap[0].LastPoll)
+	}
+	var nilReg *Registry
+	nilReg.MarkPolled("x", "", 0)
+}

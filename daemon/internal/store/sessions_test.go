@@ -434,3 +434,28 @@ func TestRepairSessionGitIdentity(t *testing.T) {
 		t.Fatalf("real row = %q/%q, must be untouched", sess.Repo, sess.Branch)
 	}
 }
+
+// A parent arriving on a later upsert is stored (a session whose first
+// sighting merged into a process-tree row keeps its orchestrator); an empty
+// parent never clears it.
+func TestUpsertSessionKeepsParent(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), "e.db"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	now := time.Now()
+	st.UpsertSession(model.Session{ID: "s1", Harness: "codex", StartedAt: now, LastSeenAt: now})
+	st.UpsertSession(model.Session{ID: "s1", ParentID: "orch", StartedAt: now, LastSeenAt: now})
+	if got, _ := st.GetSession("s1"); got.ParentID != "orch" {
+		t.Fatalf("parent = %q, want orch", got.ParentID)
+	}
+	st.UpsertSession(model.Session{ID: "s1", ParentID: "orch-2", StartedAt: now, LastSeenAt: now})
+	if got, _ := st.GetSession("s1"); got.ParentID != "orch-2" {
+		t.Fatalf("parent = %q, want orch-2", got.ParentID)
+	}
+	st.UpsertSession(model.Session{ID: "s1", StartedAt: now, LastSeenAt: now})
+	if got, _ := st.GetSession("s1"); got.ParentID != "orch-2" {
+		t.Fatalf("parent = %q after an empty upsert, want orch-2 kept", got.ParentID)
+	}
+}
