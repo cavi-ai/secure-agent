@@ -731,3 +731,40 @@ func TestTurnAndModelCallDedupeOnSessionTS(t *testing.T) {
 		t.Fatalf("file opens = %d, want 2 (no dedupe for other kinds)", opens)
 	}
 }
+
+// EventFilter.Until bounds the window from above, so a nearest-event lookup
+// is not starved by a long session's newer rows.
+func TestQueryEventsUntil(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(filepath.Join(dir, "e.db"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	base := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
+	for i := 0; i < 5; i++ {
+		s.PutEvent(event.Event{Kind: event.KindToolCall, TS: base.Add(time.Duration(i) * time.Minute), SessionID: "s", ToolName: fmt.Sprint(i), CallID: fmt.Sprint("c", i)})
+	}
+	got := s.QueryEvents(EventFilter{SessionID: "s", Since: base.Add(time.Minute).Format(time.RFC3339), Until: base.Add(3 * time.Minute).Format(time.RFC3339)})
+	if len(got) != 3 || got[0].ToolName != "3" || got[2].ToolName != "1" {
+		t.Fatalf("window = %+v, want tools 3,2,1", got)
+	}
+}
+
+// IncidentIDForFlag finds the incident a flag opened or was aggregated into.
+func TestIncidentIDForFlag(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(filepath.Join(dir, "e.db"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	s.PutIncident(model.IncidentReport{ID: "inc-1", FlagID: "f1", Rule: "r", Timestamp: time.Now()})
+	s.AggregateIntoIncident("inc-1", "f2", time.Now())
+	for flagID, want := range map[string]string{"f1": "inc-1", "f2": "inc-1", "f3": ""} {
+		got, ok := s.IncidentIDForFlag(flagID)
+		if got != want || ok != (want != "") {
+			t.Errorf("IncidentIDForFlag(%s) = %q,%v, want %q", flagID, got, ok, want)
+		}
+	}
+}

@@ -7,6 +7,11 @@ All notable changes to `secure-agent` are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- `GET /flags/{id}/explain`: one plain sentence per rule, no pids.
+- Explain carries the file's category and owner, each destination's org, allowlist state and read→connect gap, the session with the nearest tool call and model.
+- Explain carries one disposition (`acknowledged` → `benign-likely` at advisor confidence ≥ 0.85 → `warning` → `critical`).
+- Explain lists the applicable actions with the exact request each performs; the advisor's suggestion is marked recommended.
+- `/flags` and `/snapshot` stamp `explain` on the first 25 unacknowledged flags without network lookups.
 - Session report: `GET /sessions/{id}/report?format=json|md` aggregates one
   session's tools, models, cost, files, hosts, guard decisions, findings,
   secret-rule hits and opening timeline (names, paths, hosts, model and rule
@@ -19,6 +24,9 @@ All notable changes to `secure-agent` are documented here. The format follows
   the rule id, transcript path, and session id (never the matched text), is
   severity 3 for a registered secret and 2 for a typed pattern, and repeats
   per (path, rule) are collapsed.
+
+### Changed
+- Posture and attention: a flag the advisor judged benign at confidence ≥ 0.85 is severity 1 (`attention`, "Finding, likely benign"), never `critical`.
 
 ### Fixed
 - Console: live-stream frames mark only the panels that read the changed data.
