@@ -621,6 +621,17 @@ Empty sections read `none`. Costs use the console's rule: two decimals, `<$0.01`
 
 ---
 
+### `GET /advisor/discover`
+
+What the menubar's advisor setup renders from; loopback only, nothing is downloaded.
+
+| Field | Meaning |
+|---|---|
+| `servers` | OpenAI-compatible servers answering on loopback ports 11434, 8080, 8799, 8081, 1234: endpoint, kind (`ollama` or `openai-compatible`), model ids, and for Ollama `sizes` (bytes, from `/api/tags`). |
+| `managed_models` | The catalog ids the daemon can run itself with `mlx_lm.server`. |
+| `machine` | `chip`, `ram_bytes`, `free_disk_bytes` (home volume). |
+| `recommendations` | Installed chat models and the catalog, ranked for this machine: `id`, `label`, `source` (`installed` or `managed`), `endpoint`, `bytes`, `fit`, `note`, `recommended`. A model needs its size plus 20 %; `fits` within half the RAM, `tight` within three quarters, else `too-big`; `unknown` when a size is missing. The recommendation is the installed model of a catalog family that fits, else the best catalog model that fits, else the smallest tight one. Embedding, OCR, rerank and speech models are left out. |
+
 ## 🔐 Peer authentication & endpoint roles
 
 Every connection is identified with macOS `LOCAL_PEEREPID` / `LOCAL_PEERCRED` (kernel-attested; not forgeable):
