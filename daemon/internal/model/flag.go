@@ -11,6 +11,7 @@ type EvidenceItem struct {
 	Kind  string `json:"kind"` // read | connect | keychain | exec | tcc | violation | text
 	Label string `json:"label"`
 	Sub   string `json:"sub,omitempty"`
+	Rule  string `json:"rule,omitempty"` // read items: the classifier rule or glob that matched
 	TS    string `json:"ts,omitempty"`
 	Text  string `json:"text,omitempty"`
 }

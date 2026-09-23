@@ -36,8 +36,16 @@ func (c Category) String() string {
 	}
 }
 
+// Match is a classification with the rule that produced it, so a flag's
+// evidence can say why a path counted as sensitive.
+type Match struct {
+	Category Category
+	Rule     string // system-trust | keychain:<marker> | ssh-key | aws | env-file | path:<prefix> | glob:<pattern>
+}
+
 type Classifier interface {
 	Classify(path string) (Category, bool)
+	Match(path string) (Match, bool)
 }
 
 type classifierImpl struct {
@@ -53,8 +61,13 @@ func New(cfg config.Config) Classifier {
 }
 
 func (c *classifierImpl) Classify(path string) (Category, bool) {
+	m, ok := c.Match(path)
+	return m.Category, ok
+}
+
+func (c *classifierImpl) Match(path string) (Match, bool) {
 	if path == "" {
-		return CatOther, false
+		return Match{Category: CatOther}, false
 	}
 	clean := filepath.Clean(path)
 	lower := strings.ToLower(clean)
@@ -66,53 +79,63 @@ func (c *classifierImpl) Classify(path string) (Category, bool) {
 	// separately so the keychain rule doesn't fire CRITICAL on it.
 	if strings.Contains(lower, "systemtrustsettings.plist") ||
 		strings.Contains(lower, "/system/library/keychains/") {
-		return CatKeychainSystem, true
+		return Match{CatKeychainSystem, "system-trust"}, true
 	}
 
 	// 1b. Keychain markers (user keychains — the actual secrets).
 	for _, marker := range c.cfg.KeychainMarkers {
 		if strings.Contains(lower, strings.ToLower(marker)) {
-			return CatKeychain, true
+			return Match{CatKeychain, "keychain:" + marker}, true
 		}
 	}
 
 	// 2. SSH key paths
 	if strings.Contains(lower, "/.ssh/") || strings.HasSuffix(lower, "/.ssh") {
 		if c.sshKeyRe.MatchString(clean) || strings.Contains(lower, "/.ssh/id_") {
-			return CatSSHKey, true
+			return Match{CatSSHKey, "ssh-key"}, true
 		}
 	}
 
 	// 3. AWS credentials
 	if strings.Contains(lower, "/.aws/") || strings.HasSuffix(lower, "/.aws") {
-		return CatAWS, true
+		return Match{CatAWS, "aws"}, true
 	}
 
 	// 4. .env files
 	base := filepath.Base(clean)
 	if base == ".env" || strings.HasPrefix(base, ".env.") {
-		return CatEnvFile, true
+		return Match{CatEnvFile, "env-file"}, true
 	}
 
 	// 5. Check configured sensitive paths (prefix)
 	for _, sp := range c.cfg.SensitivePaths {
 		spClean := filepath.Clean(sp)
 		if strings.HasPrefix(clean, spClean) {
-			return CatOther, true
+			return Match{CatOther, "path:" + sp}, true
 		}
 	}
 
 	// 6. Check configured globs
 	for _, glob := range c.cfg.SensitiveGlobs {
-		globClean := filepath.Clean(glob)
-		globBase := filepath.Base(globClean)
-		if matched, _ := filepath.Match(globBase, base); matched {
-			return CatOther, true
-		}
-		if matched, _ := filepath.Match(globClean, clean); matched {
-			return CatOther, true
+		if globMatches(filepath.Clean(glob), clean) {
+			return Match{CatOther, "glob:" + glob}, true
 		}
 	}
 
-	return CatOther, false
+	return Match{Category: CatOther}, false
+}
+
+// globMatches: a bare-name glob (".env", "*.keychain-db") or one anchored
+// with "**/" matches the file name anywhere; a glob with a directory
+// component matches the whole path only.
+func globMatches(glob, path string) bool {
+	if rest, ok := strings.CutPrefix(glob, "**/"); ok {
+		glob = rest
+	}
+	if !strings.Contains(glob, "/") {
+		ok, _ := filepath.Match(glob, filepath.Base(path))
+		return ok
+	}
+	ok, _ := filepath.Match(glob, path)
+	return ok
 }

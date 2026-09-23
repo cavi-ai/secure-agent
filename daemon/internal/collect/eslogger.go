@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -87,6 +88,10 @@ func ParseESLine(line []byte) (event.Event, bool) {
 	pid := env.Process.AuditToken.PID
 	if pid == 0 {
 		pid = env.Process.PID
+	}
+	// The daemon's own reads (transcript tailing) are not agent activity.
+	if pid == int32(os.Getpid()) {
+		return event.Event{}, false
 	}
 	exe := env.Process.Executable.Path
 
