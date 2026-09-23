@@ -223,6 +223,8 @@ struct ConsoleView: View {
                     what = "\(top.agent) changed app permissions without asking"
                 case "proxy-prompt-injection":
                     what = "a response to \(top.agent) contained an injection attempt"
+                case "secret-in-transcript":
+                    what = "Secret appeared in an agent transcript"
                 default:
                     what = "\(top.agent) triggered \(top.rule)"
                 }

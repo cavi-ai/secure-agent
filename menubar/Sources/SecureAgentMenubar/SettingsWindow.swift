@@ -365,6 +365,7 @@ struct SettingsView: View {
         ("keychain-security-cli", "Keychain CLI (security tool)"),
         ("tcc-tamper", "Privacy permissions (TCC) tamper"),
         ("proxy-prompt-injection", "Prompt injection in a response"),
+        ("secret-in-transcript", "Secret appeared in an agent transcript"),
     ]
 
     /// Three-state picker backed by the daemon's override store: "default" is

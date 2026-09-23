@@ -942,3 +942,14 @@ test('applyInlineMetrics writes the data attributes through the CSSOM', () => {
   applyInlineMetrics({ querySelectorAll: sel => found[sel] || [] });
   assert.deepEqual(set, ['left=10.00%', 'width=42.50%', '--harness-color=hsl(1 62% 62%)']);
 });
+
+test('ruleTitle falls back to the shared title for secret-in-transcript', () => {
+  const had = 'window' in ctx;
+  const prev = ctx.window;
+  ctx.window = {};
+  try {
+    assert.equal(ctx.ruleTitle('secret-in-transcript'), 'Secret appeared in an agent transcript');
+  } finally {
+    if (had) ctx.window = prev; else delete ctx.window;
+  }
+});

@@ -571,6 +571,7 @@ var RULE_TITLES = {
   'keychain-security-cli': 'Keychain CLI (security tool)',
   'tcc-tamper': 'Privacy permissions (TCC) tamper',
   'proxy-prompt-injection': 'Prompt injection in a response',
+  'secret-in-transcript': 'Secret appeared in an agent transcript',
 };
 
 function ruleTitle(rule) {
