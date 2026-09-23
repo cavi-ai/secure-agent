@@ -20,7 +20,8 @@ import (
 )
 
 // Retention caps for the API-populated tables, so an always-on daemon's DB stays
-// bounded. Events are pruned separately (batched) at 10,000.
+// bounded. Events are pruned separately (batched) under per-kind row budgets
+// (kindBudgets).
 const (
 	maxIncidents        = 5000  // one full report_json per flag
 	maxAudit            = 50000 // long-lived security log, but still bounded against abuse
@@ -542,27 +543,24 @@ func (s *Store) PutEvent(e event.Event) {
 
 	s.insertCount++
 	if s.insertCount%1000 == 0 {
-		s.pruneEventsLocked(10000)
+		s.pruneEventsLocked()
 		s.pruneRollupLocked()
 		s.pruneSessionsLocked()
 	}
 }
 
-func (s *Store) PruneEvents(maxKeep int) {
+func (s *Store) PruneEvents() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.pruneEventsLocked(maxKeep)
+	s.pruneEventsLocked()
 }
 
-func (s *Store) pruneEventsLocked(maxKeep int) {
-	if maxKeep <= 0 {
-		maxKeep = 10000
-	}
+func (s *Store) pruneEventsLocked() {
 	// Time-based per kind first (datetime() normalizes any legacy local-offset
-	// ts values), then the row-count cap as a pure backstop. Trace kinds are
-	// EXEMPT from the count cap: they are the product's memory ("what did
-	// claude do"), and socket churn at 73% of rows evicted a 7-day trace
-	// window down to 15 hours. Their time retention still applies.
+	// ts values), then per-kind row budgets as a pure backstop. Every kind
+	// present in the table is capped on its own budget (kindBudgets, else
+	// defaultKindBudget), so one kind's volume never evicts another kind's
+	// rows. Time retention still applies to every kind.
 	conn := s.connRetention
 	if conn <= 0 {
 		conn = DefaultConnEventRetention
@@ -578,25 +576,51 @@ func (s *Store) pruneEventsLocked(maxKeep int) {
 		int(event.KindConnOpen), int(event.KindConnClose), connCutoff)
 	_, _ = s.db.Exec(`DELETE FROM events WHERE kind NOT IN (?, ?) AND datetime(ts) < datetime(?)`,
 		int(event.KindConnOpen), int(event.KindConnClose), otherCutoff)
-	// Trace kinds carry their own budget (traceKindBudget each): generous but
-	// bounded, and never counted against the OS-event cap.
-	for k, budget := range traceKindBudgets {
+	rows, err := s.db.Query(`SELECT DISTINCT kind FROM events`)
+	if err != nil {
+		return
+	}
+	var kinds []int
+	for rows.Next() {
+		var k int
+		if rows.Scan(&k) == nil {
+			kinds = append(kinds, k)
+		}
+	}
+	rows.Close()
+	for _, k := range kinds {
+		budget, ok := kindBudgets[k]
+		if !ok {
+			budget = defaultKindBudget
+		}
 		_, _ = s.db.Exec(`DELETE FROM events WHERE kind = ? AND id NOT IN
 			(SELECT id FROM events WHERE kind = ? ORDER BY id DESC LIMIT ?)`, k, k, budget)
 	}
-	// Count cap applies to non-trace kinds only.
-	_, _ = s.db.Exec(`DELETE FROM events WHERE kind NOT IN (12, 13, 14) AND id NOT IN
-		(SELECT id FROM events WHERE kind NOT IN (12, 13, 14) ORDER BY id DESC LIMIT ?)`, maxKeep)
 }
 
-// traceKindBudgets: per-kind row budgets for the agent-semantic trace. Sized
-// so a week of heavy agent work fits: ~50k calls, ~100k model calls (the
-// noisiest), ~20k turns. Time retention remains the primary bound.
-var traceKindBudgets = map[int]int{
-	int(event.KindToolCall):  50000,
-	int(event.KindTurn):      20000,
-	int(event.KindModelCall): 100000,
+// kindBudgets: per-kind row budgets, the backstop under time retention. Each
+// kind is capped on its own, so a burst in one kind (file opens during a
+// build) can never evict another kind's rows (hook activity, connections,
+// transcript hits). Sized so a week of heavy agent work fits.
+var kindBudgets = map[int]int{
+	int(event.KindFileOpen):      40000,
+	int(event.KindFileWrite):     10000,
+	int(event.KindFileDelete):    2000,
+	int(event.KindExec):          10000,
+	int(event.KindTCCModify):     1000,
+	int(event.KindConnOpen):      5000,
+	int(event.KindConnClose):     5000,
+	int(event.KindTranscriptHit): 2000,
+	int(event.KindPluginAction):  10000,
+	int(event.KindProxyHit):      2000,
+	int(event.KindGuardPrompt):   2000,
+	int(event.KindGuardResolved): 2000,
+	int(event.KindToolCall):      50000,
+	int(event.KindTurn):          20000,
+	int(event.KindModelCall):     100000,
 }
+
+const defaultKindBudget = 5000 // any kind not listed above
 
 // FlagFilter narrows a flag history query. A zero value returns the most recent
 // flags — RecentFlags is exactly that. Since is any RFC3339 timestamp (any
