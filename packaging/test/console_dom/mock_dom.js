@@ -976,6 +976,19 @@
   if (location.search.includes('nocostsdemo')) {
     data['/costs'] = { ...data['/costs'], total: { key: '', calls: 0, sessions: 0, tokens_in: 0, tokens_out: 0, cost_usd: 0, unpriced_calls: 0 }, rows: [] };
   }
+  // memfamilydemo: three claude sessions share root 5821 — Memory by family
+  // shows one bar for that family with its session count, and the badge
+  // counts families (5821, 4412, 6033, 7001), not sessions.
+  if (MODE.includes('memfamilydemo')) {
+    for (const n of [5, 6]) {
+      data['/sessions'].push({
+        id: `sess-claude-${n}`, harness: 'claude', workspace: '/Users/dev/workspace/api-service',
+        repo: 'api-service', branch: 'main', root_pid: 5821,
+        started_at: '2026-09-09T14:10:00Z', last_seen_at: iso(45000),
+        status: 'active', confidence: 'hook'
+      });
+    }
+  }
   // Post-mortem variant: every live session has exited, but persisted pressure
   // episodes must remain visible.
   if (location.search.includes('noresourcesdemo')) {

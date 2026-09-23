@@ -183,6 +183,7 @@ def main():
         dom_nomatch = dump_dom(chrome, tmp, "?nomatchdemo")
         dom_phone = dump_dom(chrome, tmp, "?phonedemo")
         dom_nocosts = dump_dom(chrome, tmp, "?nocostsdemo")
+        dom_memfam = dump_dom(chrome, tmp, "?memfamilydemo")
         dom_events = dump_dom(chrome, tmp, "?tab=events")
         dom_burst = dump_dom(chrome, tmp, "?burstdemo")
         dom_railburst = dump_dom(chrome, tmp, "?railburst")
@@ -694,7 +695,15 @@ def main():
         # charts. Lists (sessions/agents/flags/events) live in their own tabs.
         check("overview leads with the activity chart", 'id="activity-chart"' in overview)
         check("overview has the findings-by-rule chart", 'id="chart-flags"' in overview)
-        check("overview has the memory-by-session chart", 'id="chart-memory"' in overview)
+        check("overview has the memory-by-family chart", 'id="chart-memory"' in overview)
+        mem_bars = dom_memfam.split('id="chart-memory"', 1)[1].split('</section>', 1)[0].split('class="hbar-row"')[1:]
+        mem_badge = re.search(r'id="chart-mem-total">(\d+)<', dom_memfam)
+        check("memory by family: three sessions on one root are one bar carrying 3 sessions",
+              len(mem_bars) == 4 and sum('api-service@main · 3 sessions' in b for b in mem_bars) == 1,
+              f"bars={len(mem_bars)}")
+        check("memory by family: the badge counts families, not sessions",
+              mem_badge is not None and int(mem_badge.group(1)) == len(mem_bars) == 4,
+              mem_badge.group(0) if mem_badge else "no badge")
         check("overview carries no list panels",
               'id="session-strip"' not in overview and 'id="events-container"' not in overview
               and 'id="resource-board"' not in overview)

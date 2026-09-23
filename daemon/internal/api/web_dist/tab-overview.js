@@ -419,8 +419,35 @@ function renderChartFlags() {
   applyInlineMetrics(el);
 }
 
-// Memory-by-session chart: resident memory per attributed session, ranked.
-// Uses the durable session rows joined with live tree RSS; falls back to the
+// memoryRowsByFamily: one memory row per live process family. Durable
+// sessions group by root pid; each family counts its tree's RSS once, however
+// many sessions share it. Sessions without a live root are dropped. Rows are
+// ranked by RSS, largest first. Pure.
+function memoryRowsByFamily(sessions, trees) {
+  const byRoot = {};
+  for (const t of trees || []) if (t && t.root) byRoot[Number(t.root.pid)] = t;
+  const families = new Map();
+  for (const s of sessions || []) {
+    const pid = Number(s && s.root_pid) || 0;
+    if (!pid || !byRoot[pid]) continue;
+    if (!families.has(pid)) families.set(pid, []);
+    families.get(pid).push(s);
+  }
+  const rows = [];
+  for (const [pid, fam] of families) {
+    const t = byRoot[pid];
+    const label = familyLabel({ root_pid: pid, name: t.root.name, workspace: t.root.cwd }, fam);
+    rows.push({
+      label: fam.length > 1 ? `${label} · ${fam.length} sessions` : label,
+      rss: Number(t.rss_bytes || 0),
+      infra: fam.every(s => s.kind === 'infra'),
+    });
+  }
+  return rows.filter(r => r.rss > 0).sort((a, b) => b.rss - a.rss);
+}
+
+// Memory-by-family chart: resident memory per live process family, ranked.
+// Uses the durable session rows grouped onto live tree RSS; falls back to the
 // process-tree families when the daemon predates the session spine.
 function renderChartMemory() {
   const SA = window.SA;
@@ -428,37 +455,26 @@ function renderChartMemory() {
   const total = document.getElementById('chart-mem-total');
   if (!el) return;
   const trees = (SA.t.status && SA.t.status.trees) || [];
-  const durable = SA.t.sessions || [];
-  const byRoot = {};
-  for (const t of trees) if (t.root) byRoot[Number(t.root.pid)] = t;
+  let families = memoryRowsByFamily(SA.t.sessions || [], trees);
 
-  let sessions = durable.map(s => {
-    const live = s.root_pid ? byRoot[Number(s.root_pid)] : null;
-    return {
-      label: familyLabel({ root_pid: s.root_pid, name: s.harness, workspace: s.workspace }, [s]),
-      rss: live ? Number(live.rss_bytes || 0) : 0,
-      infra: s.kind === 'infra',
-    };
-  }).filter(s => s.rss > 0);
-
-  if (!sessions.length) {
+  if (!families.length) {
     // Legacy fallback: process-tree families.
-    sessions = trees.map(t => ({
+    families = trees.map(t => ({
       label: familyLabel({ root_pid: t.root && t.root.pid, name: t.root && t.root.name, workspace: t.root && t.root.cwd }, []),
       rss: Number(t.rss_bytes || 0),
       infra: false,
     })).filter(s => s.rss > 0);
   }
-  if (total) total.textContent = sessions.filter(s => !s.infra).length;
-  if (!sessions.length) {
+  if (total) total.textContent = families.filter(f => !f.infra).length;
+  if (!families.length) {
     el.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-agent"/></svg><span>No attributed sessions yet</span></div>`;
     return;
   }
-  const rows = sessions.sort((a, b) => b.rss - a.rss).slice(0, 8).map(s => ({
-    label: s.label,
-    value: s.rss,
-    cls: s.infra ? 'infra' : '',
-    sub: s.infra ? 'infra' : '',
+  const rows = families.sort((a, b) => b.rss - a.rss).slice(0, 8).map(f => ({
+    label: f.label,
+    value: f.rss,
+    cls: f.infra ? 'infra' : '',
+    sub: f.infra ? 'infra' : '',
   }));
   el.innerHTML = hbarsHTML(rows, { format: v => fmtRSS(v) || '0 B' });
   applyInlineMetrics(el);
