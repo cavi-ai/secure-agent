@@ -231,30 +231,36 @@ struct OnboardingView: View {
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
-                    HStack {
-                        Image(systemName: setup.advisorServerReachable ? "checkmark.circle.fill" : "circle.dotted")
-                            .foregroundStyle(setup.advisorServerReachable ? .green : .secondary)
-                        Text(setup.advisorServerReachable
-                             ? "Model server detected at 127.0.0.1:8080"
-                             : "No model server on 127.0.0.1:8080")
-                            .font(.callout)
-                        Spacer()
-                        Button("Recheck") { Task { await setup.refreshState() } }
+                    let discovery = setup.advisorDiscovery
+                    if let m = discovery.machine {
+                        Text(m.summary).font(.caption).foregroundStyle(.secondary)
+                    }
+                    if let r = discovery.recommended {
+                        HStack(alignment: .firstTextBaseline) {
+                            Image(systemName: "sparkles").foregroundStyle(.secondary)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Recommended for this Mac: \(r.label)").font(.callout)
+                                Text((r.source == "installed" ? "On your server · " : "Managed · ") + r.note)
+                                    .font(.caption).foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            Spacer()
+                            Button("Recheck") { Task { await setup.refreshState() } }
+                        }
+                    } else {
+                        HStack {
+                            Text("No recommendation yet: the daemon is not answering.").font(.callout)
+                            Spacer()
+                            Button("Recheck") { Task { await setup.refreshState() } }
+                        }
                     }
                     if setup.advisorEnabled {
                         Label("Advisor enabled", systemImage: "checkmark.circle.fill")
                             .font(.callout).foregroundStyle(.green)
                         Button("Disable Advisor") { setup.setAdvisorEnabled(false) }
-                    } else {
-                        Button("Enable Advisor") { setup.setAdvisorEnabled(true) }
-                            .disabled(!setup.advisorServerReachable)
-                        if !setup.advisorServerReachable {
-                            Text("Start a model first, e.g.: mlx_lm.server --model mlx-community/Qwen3-4B-Instruct-2507-4bit --port 8080")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .textSelection(.enabled)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
+                    } else if let r = discovery.recommended {
+                        Button("Use recommended") { setup.applyRecommendation(r) }
+                        Text("More models in Settings → Advisor.").font(.caption).foregroundStyle(.secondary)
                     }
                     if let note = setup.advisorNote {
                         Text(note).font(.caption).foregroundStyle(.secondary)
