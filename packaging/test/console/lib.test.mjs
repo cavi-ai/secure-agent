@@ -953,3 +953,96 @@ test('ruleTitle falls back to the shared title for secret-in-transcript', () => 
     if (had) ctx.window = prev; else delete ctx.window;
   }
 });
+
+// ---------- finding card v2: the served explanation ----------
+
+const EXPLAIN_NOW = Date.parse('2026-09-23T10:02:00Z');
+const explainFlag = (over = {}) => ({
+  id: 'f1', rule: 'sensitive-read-then-connect', agent: 'claude', pid: 4242,
+  ts: '2026-09-23T10:00:00Z', severity: 3,
+  explain: {
+    what: 'Claude read a sensitive file in Claude skills (~/.claude/skills), then reached AWS 3 s later.',
+    subject: { path: '/Users/me/.claude/skills/x/config', display: '~/.claude/skills/x/config', basename: 'config',
+      category: 'other_sensitive', category_label: 'sensitive file', owner_label: 'Claude skills (~/.claude/skills)' },
+    egress: [{ host: '2600:1f10:4a1b::fd73', port: 443, org: 'AWS', kind: 'ipv6', allowlisted: false, gap_seconds: 3 }],
+    context: { harness: 'claude-code', repo: 'api', branch: 'main' },
+    disposition: { state: 'benign-likely', text: 'Likely benign (advisor 93 %)', why: 'Skill config sync.' },
+    actions: [],
+    ...over,
+  },
+});
+
+test('explainLines: who is agent · repo@branch, never a pid', () => {
+  const l = ctx.explainLines(explainFlag(), EXPLAIN_NOW);
+  assert.equal(l.who, 'claude · api@main');
+  assert.equal(ctx.explainLines(explainFlag({ context: { repo: 'api' } }), EXPLAIN_NOW).who, 'claude · api');
+  assert.ok(!/4242|pid/i.test(JSON.stringify(l)), JSON.stringify(l));
+});
+
+test('explainLines: who falls back to the harness, then the agent alone', () => {
+  assert.equal(ctx.explainLines(explainFlag({ context: { harness: 'claude-code' } }), EXPLAIN_NOW).who, 'claude · claude-code');
+  assert.equal(ctx.explainLines(explainFlag({ context: { harness: 'claude' } }), EXPLAIN_NOW).who, 'claude');
+  assert.equal(ctx.explainLines(explainFlag({ context: undefined }), EXPLAIN_NOW).who, 'claude');
+});
+
+test('explainLines: meta is the read→connect gap then the age; no gap without egress', () => {
+  assert.equal(ctx.explainLines(explainFlag(), EXPLAIN_NOW).meta, '3 s gap · 2m ago');
+  const eg = (gap) => [{ host: 'api.example.com', port: 443, kind: 'dns', allowlisted: false, gap_seconds: gap }];
+  assert.equal(ctx.explainLines(explainFlag({ egress: eg(120) }), EXPLAIN_NOW).meta, '2 min gap · 2m ago');
+  assert.equal(ctx.explainLines(explainFlag({ egress: eg(-3) }), EXPLAIN_NOW).meta, '3 s gap · 2m ago');
+  assert.equal(ctx.explainLines(explainFlag({ egress: [] }), EXPLAIN_NOW).meta, '2m ago');
+  assert.equal(ctx.explainLines(explainFlag({ egress: undefined }), EXPLAIN_NOW).meta, '2m ago');
+  // gap_seconds is 0 without a read item: no subject, no gap.
+  assert.equal(ctx.explainLines(explainFlag({ subject: undefined, egress: eg(0) }), EXPLAIN_NOW).meta, '2m ago');
+});
+
+test('explainLines: what is the served sentence; verdict is text plus why', () => {
+  const l = ctx.explainLines(explainFlag(), EXPLAIN_NOW);
+  assert.equal(l.what, 'Claude read a sensitive file in Claude skills (~/.claude/skills), then reached AWS 3 s later.');
+  assert.equal(l.verdict, 'Likely benign (advisor 93 %): Skill config sync.');
+  const bare = ctx.explainLines(explainFlag({ disposition: { state: 'critical', text: 'Act now', why: '' } }), EXPLAIN_NOW);
+  assert.equal(bare.verdict, 'Act now');
+});
+
+test('explainLines: cls follows disposition.state', () => {
+  const cls = (state) => ctx.explainLines(explainFlag({ disposition: { state, text: 't', why: '' } }), EXPLAIN_NOW).cls;
+  assert.equal(cls('acknowledged'), 'disp-acknowledged');
+  assert.equal(cls('benign-likely'), 'disp-benign');
+  assert.equal(cls('warning'), 'disp-warning');
+  assert.equal(cls('critical'), 'disp-critical');
+});
+
+test('explainLines: null without explain', () => {
+  assert.equal(ctx.explainLines({ id: 'x', rule: 'r', agent: 'a', pid: 1, evidence: [] }, EXPLAIN_NOW), null);
+});
+
+test('explainActionsHTML: recommended first, kill danger, others ghost; no pid, no IPv6 label; allow-path not offered', () => {
+  const host = '2600:1f10:4a1b::fd73';
+  const f = explainFlag({ actions: [
+    { id: 'allow-host', label: `Allow ${host} (AWS) for claude`, consequence: `Future connections from claude to ${host} are trusted.`,
+      method: 'POST', path: '/allowlist', body: { agent: 'claude', host } },
+    { id: 'allow-path', label: 'Always allow this file for claude', consequence: 'c', method: 'POST', path: '/guard/path-allow', body: {} },
+    { id: 'mute-rule-host', label: 'Stop flagging this for <b>x</b>', consequence: 'c', method: 'POST', path: '/mute',
+      body: { rule: 'sensitive-read-then-connect', host: 'x' } },
+    { id: 'dismiss', label: 'Dismiss this flag', consequence: 'c', method: 'POST', path: '/flags/acknowledge', body: { flag_id: 'f1' } },
+    { id: 'kill', label: 'Kill claude (pid 4242)', consequence: 'c', method: 'POST', path: '/kill', body: { pid: 4242 }, recommended: true },
+  ] });
+  const html = ctx.explainActionsHTML(f);
+  const ids = [...html.matchAll(/data-action-id="([^"]+)"/g)].map(m => m[1]);
+  assert.deepEqual(ids, ['kill', 'allow-host', 'mute-rule-host', 'dismiss']);
+  assert.match(html, /<button class="btn btn-danger btn-sm" data-action="explain-act" data-flag-id="f1" data-action-id="kill"/);
+  assert.match(html, /class="btn btn-ghost btn-sm" data-action="explain-act" data-flag-id="f1" data-action-id="dismiss"/);
+  assert.match(html, new RegExp(`data-action-id="allow-host" data-host="${host}"`));
+  assert.match(html, />Allow this AWS address for claude</);
+  assert.match(html, />Kill claude</);
+  assert.match(html, /Stop flagging this for &lt;b&gt;x&lt;\/b&gt;/);
+  const text = html.replace(/<[^>]*>/g, ' ');
+  assert.ok(!/\bpid\b|4242|2600:/i.test(text), text);
+  const rec = ctx.explainActionsHTML(explainFlag({ actions: [
+    { id: 'dismiss', label: 'Dismiss this flag', consequence: 'c', method: 'POST', path: '/flags/acknowledge', body: { flag_id: 'f1' } },
+    { id: 'allow-host', label: 'Allow api.example.com for claude', consequence: 'c', method: 'POST', path: '/allowlist',
+      body: { agent: 'claude', host: 'api.example.com' }, recommended: true },
+  ] }));
+  assert.match(rec, /^<button class="btn btn-primary btn-sm" data-action="explain-act" data-flag-id="f1" data-action-id="allow-host"/);
+  assert.equal(ctx.explainActionsHTML({ id: 'x' }), '');
+});

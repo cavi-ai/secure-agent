@@ -607,6 +607,83 @@ function buildEvidenceChain(flag) {
   return nodes;
 }
 
+// ---------- finding card: the daemon's served explanation ----------
+
+const DISPOSITION_CLASS = {
+  acknowledged: 'disp-acknowledged',
+  'benign-likely': 'disp-benign',
+  warning: 'disp-warning',
+  critical: 'disp-critical',
+};
+
+// fmtGap: read→connect seconds as "3 s" / "2 min" / "1 h". The sign (which
+// came first) is in the served sentence, not here.
+function fmtGap(sec) {
+  const s = Math.abs(Math.round(Number(sec) || 0));
+  if (s < 60) return s + ' s';
+  if (s < 3600) return Math.round(s / 60) + ' min';
+  return Math.round(s / 3600) + ' h';
+}
+
+// explainLines: the finding card's lines from flag.explain — who (agent and
+// repo@branch, never a pid), meta (read→connect gap and age), what (the
+// served sentence), verdict (the one disposition) and its disp-* class. null
+// when the daemon did not explain the flag (older daemon, acknowledged, or
+// past the 25-flag cap): the caller keeps the raw card. gap_seconds is 0
+// without a read item, so there is no gap without a subject.
+function explainLines(flag, nowMs) {
+  const ex = flag && flag.explain;
+  if (!ex) return null;
+  const c = ex.context || {};
+  const agent = flag.agent || 'agent';
+  const who = c.repo ? `${agent} · ${c.repo}${c.branch ? '@' + c.branch : ''}`
+    : c.harness && c.harness !== agent ? `${agent} · ${c.harness}` : agent;
+  const eg = (ex.egress || [])[0];
+  const age = fmtAge(flag.ts, nowMs);
+  const meta = [eg && ex.subject ? fmtGap(eg.gap_seconds) + ' gap' : '', age ? age + ' ago' : '']
+    .filter(Boolean).join(' · ');
+  const d = ex.disposition || {};
+  return {
+    who, meta, what: ex.what || '',
+    verdict: (d.text || '') + (d.why ? ': ' + d.why : ''),
+    cls: DISPOSITION_CLASS[d.state] || 'disp-warning',
+  };
+}
+
+// Served action ids the console performs. allow-path is left out: its route
+// (/guard/path-allow) is not console-admitted on the proxy listener.
+const EXPLAIN_CONSOLE_ACTIONS = ['allow-host', 'mute-rule-host', 'mute-class', 'open-incident', 'dismiss', 'kill'];
+
+// explainActionLabel: the served label, except where it carries a pid (kill)
+// or an IPv6 literal (allow-host) — those stay in Details and the tooltip.
+function explainActionLabel(flag, a) {
+  const agent = flag.agent || 'agent';
+  if (a.id === 'kill') return `Kill ${agent}`;
+  const host = a.body && typeof a.body.host === 'string' ? a.body.host : '';
+  if (a.id === 'allow-host' && host.includes(':')) {
+    const eg = ((flag.explain && flag.explain.egress) || []).find(e => e.host === host);
+    const org = eg && (eg.org || eg.name);
+    return `Allow this ${org ? org + ' ' : ''}address for ${agent}`;
+  }
+  return a.label || a.id;
+}
+
+// explainActionsHTML: one button per served action, the recommended one
+// first. The click handler reads the request from the served explanation
+// (flag id + action id + host), never from the markup.
+function explainActionsHTML(flag) {
+  const ex = flag && flag.explain;
+  if (!ex) return '';
+  const acts = (ex.actions || []).filter(a => a && EXPLAIN_CONSOLE_ACTIONS.includes(a.id));
+  return acts.filter(a => a.recommended).concat(acts.filter(a => !a.recommended)).map(a => {
+    const host = a.body && typeof a.body.host === 'string' ? a.body.host : '';
+    const cls = a.id === 'kill' ? 'btn-danger' : a.recommended ? 'btn-primary' : 'btn-ghost';
+    return `<button class="btn ${cls} btn-sm" data-action="explain-act" data-flag-id="${escapeHTML(flag.id)}"`
+      + ` data-action-id="${escapeHTML(a.id)}"${host ? ` data-host="${escapeHTML(host)}"` : ''}`
+      + ` title="${escapeHTML(a.consequence)}">${escapeHTML(explainActionLabel(flag, a))}</button>`;
+  }).join('');
+}
+
 // ---------- agent families ----------
 
 function familyTitle(name) {

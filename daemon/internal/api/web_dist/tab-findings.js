@@ -34,10 +34,38 @@ function renderAttention() {
       ${item.status === 'open' ? `<button class="btn btn-ghost btn-sm" data-action="incident-status" data-id="${escapeHTML(item.id)}" data-status="acknowledged">Acknowledge</button>` : ''}`;
     if (item.kind === 'flag') return `
       <button class="btn btn-ghost btn-sm" data-action="dismiss-flag" data-id="${escapeHTML(item.id)}">Dismiss</button>
-      ${!advisorVisible ? '' : advisorOffline
-        ? `<button class="btn btn-ghost btn-sm" disabled title="Advisor offline — verdicts paused (${escapeHTML(advisorHealth.last_error || 'model server unreachable')})">Advisor offline</button>`
-        : `<button class="btn btn-ghost btn-sm" data-action="retriage" data-id="${escapeHTML(item.id)}">Re-run advisor</button>`}`;
+      ${retriage(item)}`;
     return `<button class="btn btn-ghost btn-sm" data-action="open-uninspected">Review endpoints</button>`;
+  };
+  const retriage = item => !advisorVisible ? '' : advisorOffline
+    ? `<button class="btn btn-ghost btn-sm" disabled title="Advisor offline — verdicts paused (${escapeHTML(advisorHealth.last_error || 'model server unreachable')})">Advisor offline</button>`
+    : `<button class="btn btn-ghost btn-sm" data-action="retriage" data-id="${escapeHTML(item.id)}">Re-run advisor</button>`;
+
+  // A flag item whose flag the daemon explained renders the finding card's
+  // lines — who, what, verdict — and its served actions.
+  const flagsById = new Map((SA.t.flags || []).map(f => [f.id, f]));
+  const itemHTML = item => {
+    const f = item.kind === 'flag' ? flagsById.get(item.id) : null;
+    const l = f && explainLines(f);
+    if (l) return `
+        <div class="attention-item kind-flag finding-item ${l.cls}">
+          <span class="attention-kind">${harnessChipHTML(f.agent)}<span>${escapeHTML(l.who)}</span></span>
+          <div class="attention-reason">
+            <strong class="finding-what">${escapeHTML(l.what)}</strong>
+            <span class="finding-verdict">${escapeHTML(l.verdict)}</span>
+          </div>
+          <div class="attention-actions">${explainActionsHTML(f)}${retriage(item)}</div>
+        </div>`;
+    return `
+        <div class="attention-item kind-${escapeHTML(item.kind)}">
+          <span class="attention-kind">${escapeHTML(item.title)}</span>
+          <div class="attention-reason">
+            <strong>${escapeHTML(item.detail)}</strong>
+            ${item.scopeText ? `<span>${escapeHTML(item.scopeText)}</span>` : ''}
+            ${item.advisor ? advisorAdviceHTML(item.advisor) : ''}
+          </div>
+          <div class="attention-actions">${actions(item)}</div>
+        </div>`;
   };
 
   let wrap = container.firstElementChild;
@@ -62,16 +90,7 @@ function renderAttention() {
         <div class="attention-metrics">${metrics}</div>
         <span class="attention-total">${group.items.length} item${group.items.length === 1 ? '' : 's'}</span>
       </header>
-      <div class="attention-items">${group.items.map(item => `
-        <div class="attention-item kind-${escapeHTML(item.kind)}">
-          <span class="attention-kind">${escapeHTML(item.title)}</span>
-          <div class="attention-reason">
-            <strong>${escapeHTML(item.detail)}</strong>
-            ${item.scopeText ? `<span>${escapeHTML(item.scopeText)}</span>` : ''}
-            ${item.advisor ? advisorAdviceHTML(item.advisor) : ''}
-          </div>
-          <div class="attention-actions">${actions(item)}</div>
-        </div>`).join('')}</div>
+      <div class="attention-items">${group.items.map(itemHTML).join('')}</div>
     </article>`;
   } });
 }
@@ -209,6 +228,7 @@ function renderFlags() {
   const advisorHealth = (SA.t.status && SA.t.status.advisor_health) || null;
   const advisorOffline = !!(advisorHealth && advisorHealth.circuit_open);
   const vis = inspectionVisible(SA.t.status, SA.t.audit);
+  const now = Date.now();
 
   const cardHTML = (f, i) => {
     const chain = buildEvidenceChain(f);
@@ -230,6 +250,9 @@ function renderFlags() {
       : advisorOffline
         ? `<button class="btn btn-ghost btn-sm" disabled title="Advisor offline — verdicts paused (${escapeHTML(advisorHealth.last_error || 'model server unreachable')})"><svg class="icon"><use href="#i-refresh"/></svg><span>Advisor offline</span></button>`
         : `<button class="btn btn-ghost btn-sm" data-action="retriage" data-id="${escapeHTML(f.id)}" title="Ask the local model to re-read this flag"><svg class="icon"><use href="#i-refresh"/></svg><span>Re-run advisor</span></button>`;
+    const sessionBtn = f.session_id ? `<button class="btn btn-ghost btn-sm" data-action="filter-session" data-session="${escapeHTML(f.session_id)}"><svg class="icon"><use href="#i-activity"/></svg><span>View session in timeline</span></button>` : '';
+    const l = explainLines(f, now);
+    if (l) return findingHTML(f, l, chainHTML, retriageBtn + sessionBtn);
     return `
     <div class="flag-card ${f.severity >= 3 ? 'sev3' : ''}${i === 0 ? ' expanded' : ''}">
       <button class="flag-head" data-action="toggle-flag" aria-expanded="${i === 0}">
@@ -245,18 +268,27 @@ function renderFlags() {
         <div class="flag-actions-row">
           <button class="btn btn-ghost btn-sm" data-action="dismiss-flag" data-id="${escapeHTML(f.id)}" title="Mark reviewed — this flag leaves the list; the rule keeps watching"><svg class="icon"><use href="#i-shield"/></svg><span>Dismiss</span></button>
           ${retriageBtn}
-          ${f.session_id ? `<button class="btn btn-ghost btn-sm" data-action="filter-session" data-session="${escapeHTML(f.session_id)}"><svg class="icon"><use href="#i-activity"/></svg><span>View session in timeline</span></button>` : ''}
+          ${sessionBtn}
           ${f.advisor && f.advisor.assessment === 'benign' && flagHost(f) ? `<button class="btn btn-ghost btn-sm" data-action="mute-flag" data-rule="${escapeHTML(f.rule)}" data-host="${escapeHTML(flagHost(f))}" title="Stop flagging ${escapeHTML(f.rule)} for ${escapeHTML(flagHost(f))} — reversible"><svg class="icon"><use href="#i-close"/></svg><span>Mute rule+host</span></button>` : ''}
           ${isKeychain ? `<button class="btn btn-ghost btn-sm" data-action="mute-rule" data-rule="${escapeHTML(f.rule)}" title="Stop flagging ${escapeHTML(f.rule)} entirely — reversible from the muted list below"><svg class="icon"><use href="#i-close"/></svg><span>Dismiss this flag class</span></button>` : ''}
           <button class="btn btn-danger btn-sm" data-action="kill" data-pid="${f.pid}" title="Terminate the agent process tree (pid ${f.pid})"><svg class="icon"><use href="#i-power"/></svg><span>Kill ${escapeHTML(f.agent)}</span></button>
         </div>
         <div class="flag-evidence">
-          ${(f.evidence || []).map(ev => `<div>${escapeHTML(ev)}</div>`).join('')}
+          ${(f.evidence || []).map(ev => `<div>${escapeHTML(typeof ev === 'string' ? ev
+            : ev.text || (ev.sub ? (ev.label || '') + ' (' + ev.sub + ')' : ev.label))}</div>`).join('')}
         </div>
       </div></div>
     </div>`;
   };
-  const parts = flags.map((f, i) => ({ key: 'flag:' + f.id, html: cardHTML(f, i) }));
+  const parts = flags.map((f, i) => {
+    const html = cardHTML(f, i);
+    // The age in a finding's meta ticks without rebuilding the card (so an
+    // open Details and a focused button survive): the hash leaves it out and
+    // the text is set in place below. Verdict and actions stay in the hash.
+    const l = explainLines(f, now);
+    const hash = l ? html.replace(metaHTML(l.meta), metaHTML('')) : html;
+    return { key: 'flag:' + f.id, html, hash, meta: l ? l.meta : null };
+  });
 
   // Dispositions: muted (rule, host) pairs, visible so the quiet is
   // deliberate and reversible.
@@ -268,5 +300,50 @@ function renderFlags() {
         <button class="source-remove" title="Unmute" data-action="unmute" data-rule="${escapeHTML(m.rule)}" data-host="${escapeHTML(m.host)}"><svg class="icon"><use href="#i-close"/></svg></button>
       </div>`).join('') + `</div>` });
   }
-  patchList(container, parts, { key: p => p.key, html: p => p.html });
+  patchList(container, parts, { key: p => p.key, html: p => p.html, hash: p => p.hash || p.html });
+  const metaById = new Map(parts.filter(p => p.meta !== null && p.meta !== undefined).map(p => [p.key, p.meta]));
+  for (const el of container.children) {
+    const m = metaById.get(el._saKey);
+    const span = m !== undefined && el.querySelector('.finding-meta');
+    if (span && span.textContent !== m) span.textContent = m;
+  }
+}
+
+function metaHTML(meta) {
+  return `<span class="finding-meta">${escapeHTML(meta)}</span>`;
+}
+
+// findingHTML: the finding card for a flag the daemon explained — who, what,
+// the one verdict and the served actions; the raw evidence chain, pid,
+// session, ISO timestamps and full path/addresses sit behind Details.
+function findingHTML(f, l, chainHTML, toolsHTML) {
+  const ex = f.explain;
+  const c = ex.context || {};
+  const s = ex.subject || {};
+  const dest = (ex.egress || []).map(e => {
+    const addr = e.port ? (e.host.includes(':') ? `[${e.host}]:${e.port}` : `${e.host}:${e.port}`) : e.host;
+    return e.org ? `${addr} (${e.org})` : addr;
+  }).join(', ');
+  const facts = [
+    ['Rule', f.rule], ['Matched rule', s.rule], ['File', s.path], ['Destinations', dest],
+    ['PID', f.pid], ['Session', f.session_id || c.session_id], ['Raised', f.ts],
+    ['Tool', c.tool ? c.tool + (c.tool_at ? ' at ' + c.tool_at : '') : ''], ['Model', c.model],
+  ].filter(([, v]) => v !== undefined && v !== null && v !== '');
+  return `
+    <article class="finding ${l.cls}" data-flag-id="${escapeHTML(f.id)}">
+      <header class="finding-head">
+        ${harnessChipHTML(f.agent)}
+        <span class="finding-title">${escapeHTML(f.title || ruleTitle(f.rule))}</span>
+        <span class="finding-who">${escapeHTML(l.who)}</span>
+        ${metaHTML(l.meta)}
+      </header>
+      <p class="finding-what">${escapeHTML(l.what)}</p>
+      <p class="finding-verdict">${escapeHTML(l.verdict)}</p>
+      <div class="finding-actions">${explainActionsHTML(f)}</div>
+      <details class="finding-details"><summary>Details</summary>
+        ${chainHTML}
+        <dl class="finding-facts">${facts.map(([k, v]) => `<dt>${escapeHTML(k)}</dt><dd>${escapeHTML(v)}</dd>`).join('')}</dl>
+        ${toolsHTML ? `<div class="flag-actions-row">${toolsHTML}</div>` : ''}
+      </details>
+    </article>`;
 }

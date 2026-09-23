@@ -31,6 +31,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 
 ### Changed
 - Posture and attention: a flag the advisor judged benign at confidence ≥ 0.85 is severity 1 (`attention`, "Finding, likely benign"), never `critical`.
+- Console: an explained flag's card and Attention item show who, what and the one verdict with the served actions as buttons; raw evidence, pid and timestamps sit behind Details.
 
 ### Fixed
 - Spool tailer: lines under 16 bytes or not starting with `{` are rejected

@@ -665,6 +665,40 @@ body {
 .flag-evidence { margin-top: 8px; display: flex; flex-direction: column; gap: 3px; }
 .flag-actions-row { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
 
+/* finding card: the daemon's served explanation — who, what, one verdict,
+   the served actions; raw evidence behind Details. Tinted by disposition. */
+.finding {
+  display: grid; gap: 6px; margin: 10px 0; padding: 12px 14px;
+  border: 1px solid var(--line); border-left: 3px solid var(--warn); border-radius: var(--r-sm);
+  background: var(--bg-2);
+}
+.finding.disp-critical { border-left-color: var(--bad); }
+.finding.disp-benign { border-left-color: var(--ok); }
+.finding.disp-acknowledged { border-left-color: var(--line-2); }
+.finding-head { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; min-width: 0; }
+.finding-title { font: 650 0.86rem/1.3 var(--font); color: var(--tx-1); }
+.finding-who { font-size: 0.76rem; color: var(--tx-2); overflow-wrap: anywhere; }
+.finding-meta { margin-left: auto; font: 500 0.7rem/1.3 var(--mono); color: var(--tx-3); white-space: nowrap; }
+.finding-what { margin: 0; font-size: 0.84rem; line-height: 1.45; color: var(--tx-1); overflow-wrap: anywhere; }
+.finding-verdict { margin: 0; font-size: 0.78rem; font-weight: 600; line-height: 1.4; color: var(--warn); overflow-wrap: anywhere; }
+.disp-critical .finding-verdict { color: var(--bad); }
+.disp-benign .finding-verdict { color: var(--ok); }
+.disp-acknowledged .finding-verdict, .disp-acknowledged .finding-what { color: var(--tx-3); }
+.finding-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+.finding-actions:empty { display: none; }
+.finding-details summary { width: fit-content; cursor: pointer; font-size: 0.74rem; color: var(--tx-3); }
+.finding-facts {
+  display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 3px 12px;
+  margin: 10px 0 0; font-size: 0.74rem;
+}
+.finding-facts dt { color: var(--tx-3); }
+.finding-facts dd { margin: 0; font-family: var(--mono); color: var(--tx-2); overflow-wrap: anywhere; }
+/* The attention item of an explained flag: who replaces the kind label. */
+.attention-item.finding-item .attention-kind {
+  display: flex; align-items: center; gap: 6px; min-width: 0;
+  color: var(--tx-1); text-transform: none; letter-spacing: 0; font-weight: 600; overflow-wrap: anywhere;
+}
+
 /* dispositions (muted rule+host pairs) */
 .mute-list { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 10px; display: flex; flex-direction: column; gap: 4px; }
 .mute-head { font: 600 0.64rem/1 var(--font); letter-spacing: 0.06em; text-transform: uppercase; color: var(--tx-3); }
