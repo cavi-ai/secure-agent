@@ -742,10 +742,25 @@ GET /egress/uninspected?hours=24&limit=200
 ```json
 [
   {"agent": "cursor", "host": "registry.npmjs.org", "count": 14,
-   "last_seen": "2026-09-15T10:00:00Z",
-   "assessment": "benign", "rationale": "npm registry is routine for JS projects"}
+   "first_seen": "2026-09-14T10:00:00Z", "last_seen": "2026-09-15T10:00:00Z",
+   "session_id": "sess-cursor-2",
+   "identity": {"kind": "hostname", "name": "registry.npmjs.org", "org": "npm registry", "class": "vendor"},
+   "assessment": "benign", "rationale": "npm registry is routine for JS projects"},
+  {"agent": "openclaw", "host": "2607:6bc0::10", "count": 94,
+   "first_seen": "2026-09-23T12:00:00Z", "last_seen": "2026-09-23T13:00:00Z",
+   "identity": {"kind": "ipv6", "org": "Anthropic", "ip": "2607:6bc0::10", "class": "vendor"}}
 ]
 ```
+
+- `identity` — owner of the host from the provider CIDR table, host suffix, or cached reverse DNS (`org`, `name`, `kind`, `ip`, `class`), never a network lookup.
+- `identity.class` — `vendor` (Anthropic, OpenAI, GitHub, GitHub Container Registry, npm registry, PyPI, crates.io, RubyGems, Docker Hub, Docker, Google Container Registry, Debian, Ubuntu), `telemetry` (Statsig, Sentry, Segment, PostHog, Amplitude), `cloud` (any other named org).
+- `identity.class` is omitted when `org` is empty.
+- The same `identity` object, `class` included, is on `GET /egress/endpoint?host=` and on each `/snapshot` `suggestions` row.
+- Vendor-class hosts are never `/snapshot` suggestions.
+- `first_seen` — first sighting of the agent+host pair, omitted when unknown.
+- `session_id` — most recent session that reached the host, omitted when none.
+- `infra` — set only for CDN/cloud carriers (Cloudflare, Google, GitHub, PTR-classified).
+- `identity.org` can be set without `infra`.
 
 `hours` (1–168, default 24) windows the list by last-seen; out-of-range
 values fall back to 24. Sorted most-frequent first; `assessment`/`rationale`

@@ -13,6 +13,7 @@ import (
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/advisor"
 	"github.com/cavi-ai/secure-agent/daemon/internal/api"
+	"github.com/cavi-ai/secure-agent/daemon/internal/correlate"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
@@ -48,6 +49,11 @@ func WireTypes() []any {
 		store.ReportLine{},
 		api.DoctorReport{},
 		api.DoctorCheck{},
+		api.UninspectedEndpoint{},
+		api.EndpointDetail{},
+		correlate.EndpointIdentity{},
+		api.EndpointAllowance{},
+		api.Suggestion{},
 	}
 }
 

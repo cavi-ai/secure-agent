@@ -409,3 +409,52 @@ export interface DoctorReport {
   checks: DoctorCheck[];
 }
 
+export interface EndpointIdentity {
+  org?: string;
+  name?: string;
+  kind: string;
+  ip?: string;
+  class?: string;
+}
+
+export interface UninspectedEndpoint {
+  agent: string;
+  host: string;
+  count: number;
+  first_seen?: string;
+  last_seen: string;
+  session_id?: string;
+  infra?: string;
+  identity: EndpointIdentity;
+  assessment?: string;
+  rationale?: string;
+}
+
+export interface EndpointAllowance {
+  agent: string;
+  host: string;
+}
+
+export interface EndpointDetail {
+  host: string;
+  identity: EndpointIdentity;
+  agents: string[];
+  sessions: Session[];
+  count: number;
+  first_seen?: string;
+  last_seen?: string;
+  infra?: string;
+  allowed?: EndpointAllowance[];
+  events: Event[];
+}
+
+export interface Suggestion {
+  agent: string;
+  host: string;
+  count: number;
+  identity: EndpointIdentity;
+  assessment?: string;
+  rationale?: string;
+  confidence?: number;
+}
+

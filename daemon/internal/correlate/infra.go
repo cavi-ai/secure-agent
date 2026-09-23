@@ -256,6 +256,36 @@ type EndpointIdentity struct {
 	Name string `json:"name,omitempty"` // a PTR/hostname when one resolves
 	Kind string `json:"kind"`           // "ipv4" | "ipv6" | "hostname"
 	IP   string `json:"ip,omitempty"`   // the literal address when the host IS an IP
+	// Class is IdentityClass(Org): vendor | telemetry | cloud, "" when unknown.
+	Class string `json:"class,omitempty"`
+}
+
+// identityClasses maps an Org to its class. vendor = the agents' own model,
+// code-hosting or package-registry vendors; telemetry = product analytics and
+// error reporting; every other named Org is cloud (hosting that can front
+// anyone's server).
+var identityClasses = map[string]string{
+	"Anthropic": "vendor", "OpenAI": "vendor", "GitHub": "vendor",
+	"GitHub Container Registry": "vendor", "npm registry": "vendor", "PyPI": "vendor",
+	"crates.io": "vendor", "RubyGems": "vendor", "Docker Hub": "vendor", "Docker": "vendor",
+	"Google Container Registry": "vendor", "Debian": "vendor", "Ubuntu": "vendor",
+	"Statsig": "telemetry", "Sentry": "telemetry", "Segment": "telemetry",
+	"PostHog": "telemetry", "Amplitude": "telemetry",
+	"AWS": "cloud", "AWS CloudFront": "cloud", "GoogleCloud": "cloud", "Google Cloud": "cloud",
+	"Google": "cloud", "Azure": "cloud", "Microsoft": "cloud", "Cloudflare": "cloud",
+	"Fastly": "cloud", "Vercel": "cloud", "Netlify": "cloud",
+}
+
+// IdentityClass returns the class of an endpoint owner: vendor, telemetry or
+// cloud; any other named org is cloud, and no org is "".
+func IdentityClass(org string) string {
+	if org == "" {
+		return ""
+	}
+	if c, ok := identityClasses[org]; ok {
+		return c
+	}
+	return "cloud"
 }
 
 // Identify returns the endpoint's identity: its kind, the owning org when
@@ -309,10 +339,11 @@ func identify(host string, ptrLookup func(string) ptrResult) EndpointIdentity {
 				id.Org = providerBySuffix(strings.ToLower(ptr.Name))
 			}
 		}
+		id.Class = IdentityClass(id.Org)
 		return id
 	}
-	return EndpointIdentity{Kind: "hostname", Name: h,
-		Org: firstNonEmpty(infraBySuffix(h), providerBySuffix(h))}
+	org := firstNonEmpty(infraBySuffix(h), providerBySuffix(h))
+	return EndpointIdentity{Kind: "hostname", Name: h, Org: org, Class: IdentityClass(org)}
 }
 
 func firstNonEmpty(a, b string) string {
