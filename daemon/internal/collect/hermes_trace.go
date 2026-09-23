@@ -115,6 +115,10 @@ type HermesCollector struct {
 	OnSessionSeen func(HermesSighting)
 	// OnSessionEnded reports a session Hermes recorded an ended_at for.
 	OnSessionEnded func(sessionID string, at time.Time)
+	// OnPoll, when set, receives the source and watermark after each poll:
+	// the database and its watermark when there is one, else the root
+	// (the per-database watermarks are in Status).
+	OnPoll func(source string, watermark int64)
 
 	loaded    bool
 	persisted map[string]int64
@@ -215,6 +219,14 @@ func (c *HermesCollector) Run(ctx context.Context) error {
 	for {
 		if n := c.pollOnce(); n > 0 && c.OnProduce != nil {
 			c.OnProduce()
+		}
+		if c.OnPoll != nil {
+			st := c.Status()
+			if len(st.DBs) == 1 {
+				c.OnPoll(st.DBs[0].Path, st.DBs[0].Watermark)
+			} else {
+				c.OnPoll(st.Root, 0)
+			}
 		}
 		select {
 		case <-ctx.Done():

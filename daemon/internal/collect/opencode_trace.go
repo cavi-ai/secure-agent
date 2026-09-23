@@ -62,6 +62,8 @@ type OpencodeCollector struct {
 	// OnProduce, when set, fires after events are published — the coverage
 	// heartbeat (a running poller that sees nothing is "silent").
 	OnProduce func()
+	// OnPoll, when set, receives the database and watermark after each poll.
+	OnPoll func(source string, watermark int64)
 	// OnSessionSeen reports an opencode session (id, workspace, time).
 	OnSessionSeen func(sessionID, harness, workspace string, at time.Time)
 
@@ -103,6 +105,9 @@ func (c *OpencodeCollector) Run(ctx context.Context) error {
 		case <-ticker.C:
 			if n := c.pollOnce(); n > 0 && c.OnProduce != nil {
 				c.OnProduce()
+			}
+			if c.OnPoll != nil {
+				c.OnPoll(c.dbPath, c.watermark)
 			}
 		}
 	}

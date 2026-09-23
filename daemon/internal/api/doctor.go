@@ -71,6 +71,7 @@ type doctorFacts struct {
 	sessionsWithWorkspace, sessionsWRepo int
 	sessionsLastHour                     int
 	sessionsByHarness, traceByHarness    map[string]int
+	seenByHarness                        map[string]int // transcript/hook sessions seen since boot
 
 	dupePairs, idless int
 
@@ -159,6 +160,7 @@ func (a *API) doctorFacts(now time.Time) doctorFacts {
 	f.sessionsTotal, f.sessionsNamed, f.sessionsWithWorkspace, f.sessionsWRepo = a.store.SessionIdentityStats(f.boot)
 	f.sessionsLastHour = a.store.SessionsCreatedSince(now.Add(-time.Hour))
 	f.sessionsByHarness = a.store.SessionsByHarness(f.boot)
+	f.seenByHarness = a.store.SessionsSeenByHarness(f.boot)
 	f.traceByHarness = a.store.TraceRowsByHarness(f.boot)
 	f.dupePairs, f.idless = a.store.ToolCallStats(f.boot)
 	f.claudePriced, f.claudeUnpriced, f.allUnpriced, f.allCalls = a.store.PricingStats()
@@ -239,10 +241,18 @@ func checkCollectors(f doctorFacts) (string, string) {
 	if len(silent) > 0 {
 		parts = append(parts, "silent: "+strings.Join(silent, ", "))
 	}
-	if len(parts) > 0 {
-		return doctorFail, strings.Join(parts, " · ")
+	// Polling collectors name their database, watermark and last poll
+	// whatever the verdict.
+	var polls string
+	for _, c := range f.st.Collectors {
+		if c.Source != "" {
+			polls += fmt.Sprintf(" · %s %s @ %d polled %s", c.Name, c.Source, c.Watermark, c.LastPoll)
+		}
 	}
-	return doctorPass, fmt.Sprintf("%d collectors running", len(f.st.Collectors))
+	if len(parts) > 0 {
+		return doctorFail, strings.Join(parts, " · ") + polls
+	}
+	return doctorPass, fmt.Sprintf("%d collectors running", len(f.st.Collectors)) + polls
 }
 
 // checkHermes reports the Hermes Agent collector: not installed when no
@@ -265,19 +275,22 @@ func checkHermes(f doctorFacts) (string, string) {
 	return doctorPass, strings.Join(dbs, ", ") + " · polled " + h.LastPoll.UTC().Format(time.RFC3339)
 }
 
+// checkTraceCoverage counts the sessions SEEN since boot at transcript or hook
+// confidence per harness (a conversation that started before boot and is
+// active now counts) and fails for a harness with none of its trace rows.
 func checkTraceCoverage(f doctorFacts) (string, string) {
 	if f.grace {
 		return doctorSkip, doctorGraceDetail
 	}
-	if len(f.sessionsByHarness) == 0 {
+	if len(f.seenByHarness) == 0 {
 		return doctorSkip, "no sessions since boot"
 	}
 	var blind, traced []string
-	for h := range f.sessionsByHarness {
+	for h, n := range f.seenByHarness {
 		if f.traceByHarness[h] == 0 {
 			blind = append(blind, h)
 		} else {
-			traced = append(traced, h)
+			traced = append(traced, fmt.Sprintf("%s (%d sessions)", h, n))
 		}
 	}
 	if len(blind) > 0 {
