@@ -763,6 +763,77 @@ func TestPruneBudgetQueryUsesKindIndex(t *testing.T) {
 	}
 }
 
+func queryPlan(t *testing.T, s *Store, q string, args ...any) string {
+	t.Helper()
+	rows, err := s.db.Query(`EXPLAIN QUERY PLAN `+q, args...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var plan []string
+	for rows.Next() {
+		var id, parent, notused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &notused, &detail); err != nil {
+			t.Fatal(err)
+		}
+		plan = append(plan, detail)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return strings.Join(plan, " | ")
+}
+
+// The flag-explain lookup (one kind in one session around an anchor) seeks
+// (session_id, kind) instead of walking every row of the kind.
+func TestSessionKindLookupUsesSessionKindIndex(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "e.db"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	plan := queryPlan(t, s, `SELECT kind FROM events WHERE 1=1 AND kind = ? AND session_id = ?
+		AND datetime(ts) >= datetime(?) AND datetime(ts) <= datetime(?) ORDER BY id DESC LIMIT ?`,
+		12, "sess", "2026-01-01T00:00:00Z", "2026-01-02T00:00:00Z", 200)
+	if !strings.Contains(plan, "idx_events_session_kind_id") {
+		t.Fatalf("session+kind lookup plan = %q, want idx_events_session_kind_id", plan)
+	}
+}
+
+// Planner statistics are written at open and after a gated prune, so a
+// kind+pid lookup takes the pid index instead of walking the kind.
+func TestPlannerStatsRouteKindPidLookupToPidIndex(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "e.db")
+	s, err := Open(path, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	for i := 0; i < 3000; i++ {
+		s.PutEvent(event.Event{Kind: event.Kind(i % 4), PID: int32(i + 1), TS: now})
+	}
+	s.Close()
+
+	s, err = Open(path, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	var statRows int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM sqlite_stat1 WHERE tbl = 'events'`).Scan(&statRows); err != nil {
+		t.Fatalf("sqlite_stat1: %v (planner stats never written)", err)
+	}
+	if statRows == 0 {
+		t.Fatal("no planner stats for events")
+	}
+	plan := queryPlan(t, s, `SELECT kind FROM events WHERE 1=1 AND kind = ? AND pid = ? ORDER BY id DESC LIMIT ?`, 0, 42, 50)
+	if !strings.Contains(plan, "idx_events_pid_ts") {
+		t.Fatalf("kind+pid lookup plan = %q, want idx_events_pid_ts", plan)
+	}
+}
+
 // WAL with synchronous=NORMAL: commits skip the per-transaction fsync.
 func TestOpenUsesWALSynchronousNormal(t *testing.T) {
 	dir := t.TempDir()

@@ -55,6 +55,7 @@ All notable changes to `secure-agent` are documented here. The format follows
   per (path, rule) are collapsed.
 
 ### Changed
+- Events carry a `(session_id, kind, id)` index; the event store writes planner statistics (`PRAGMA optimize`, `analysis_limit` 1000) at open and after each prune.
 - `/posture` `items` and `groups` come from one pass.
 - `/posture` puts every item in exactly one group.
 - `/posture` group items sum to `needs_you`.
