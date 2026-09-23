@@ -14,6 +14,8 @@ type EvidenceItem struct {
 	Rule  string `json:"rule,omitempty"` // read items: the classifier rule or glob that matched
 	TS    string `json:"ts,omitempty"`
 	Text  string `json:"text,omitempty"`
+	// Offset: transcript items, the byte offset of the line the secret was on.
+	Offset int64 `json:"offset,omitempty"`
 }
 
 // UnmarshalJSON accepts the legacy bare-string form too.

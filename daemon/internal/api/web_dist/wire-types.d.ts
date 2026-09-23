@@ -11,6 +11,7 @@ export interface Event {
   remote_host?: string;
   remote_port?: number;
   detail?: string;
+  offset?: number;
   tool?: string;
   tool_status?: string;
   duration_ms?: number;
@@ -45,6 +46,7 @@ export interface EvidenceItem {
   rule?: string;
   ts?: string;
   text?: string;
+  offset?: number;
 }
 
 export interface AdvisorVerdict {

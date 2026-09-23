@@ -444,7 +444,7 @@ func TestSecretInTranscriptFlags(t *testing.T) {
 	c := newTestCorrelator(t)
 	base := time.Now()
 	path := "/Users/x/.claude/projects/ws/s-1.jsonl"
-	hit := event.Event{Kind: event.KindTranscriptHit, TS: base, Path: path, SessionID: "s-1", Detail: "claude:fingerprint:fp-1"}
+	hit := event.Event{Kind: event.KindTranscriptHit, TS: base, Path: path, SessionID: "s-1", Detail: "claude:fingerprint:fp-1", Offset: 4096}
 
 	f := c.Observe(hit)
 	if len(f) != 1 {
@@ -455,7 +455,7 @@ func TestSecretInTranscriptFlags(t *testing.T) {
 		t.Fatalf("flag = rule %q sev %d agent %q session %q pid %d", fl.Rule, fl.Severity, fl.Agent, fl.SessionID, fl.PID)
 	}
 	if len(fl.Evidence) != 1 || fl.Evidence[0].Kind != "transcript" || fl.Evidence[0].Label != path ||
-		fl.Evidence[0].Rule != "fp-1" || fl.Evidence[0].Sub != "fingerprint match" {
+		fl.Evidence[0].Rule != "fp-1" || fl.Evidence[0].Sub != "fingerprint match" || fl.Evidence[0].Offset != 4096 {
 		t.Fatalf("evidence = %+v", fl.Evidence)
 	}
 

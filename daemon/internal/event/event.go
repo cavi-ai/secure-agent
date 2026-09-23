@@ -80,6 +80,9 @@ type Event struct {
 	RemotePort int    `json:"remote_port,omitempty"`
 	// Transcript/plugin events:
 	Detail string `json:"detail,omitempty"` // rule id or short label; NEVER a secret value
+	// Offset is the byte offset of the transcript line a transcript hit was
+	// found on.
+	Offset int64 `json:"offset,omitempty"`
 	// Trace events (KindToolCall/KindTurn/KindModelCall):
 	ToolName   string  `json:"tool,omitempty"`        // tool_call: tool name
 	ToolStatus string  `json:"tool_status,omitempty"` // tool_call: ok | error | running
