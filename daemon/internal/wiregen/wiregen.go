@@ -77,8 +77,12 @@ func emitTS(t reflect.Type, out *strings.Builder, emitted map[string]bool) {
 		return
 	}
 	emitted[t.Name()] = true
-	// Emit referenced structs first (fields reference their names).
+	// Emit referenced structs first (fields reference their names); a
+	// json:"-" field is not on the wire, so neither is its type.
 	for i := 0; i < t.NumField(); i++ {
+		if t.Field(i).Tag.Get("json") == "-" {
+			continue
+		}
 		ft := t.Field(i).Type
 		for ft.Kind() == reflect.Pointer || ft.Kind() == reflect.Slice {
 			ft = ft.Elem()

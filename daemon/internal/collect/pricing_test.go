@@ -130,3 +130,53 @@ func TestVersionBoundaryPrefixRule(t *testing.T) {
 		}
 	}
 }
+
+// Classify names why a call is (un)priced: a price entry wins, then a
+// subscription or local provider; an empty id is a collection defect.
+func TestClassify(t *testing.T) {
+	t.Cleanup(func() { SetUserPrices(nil) })
+	SetUserPrices(map[string][2]float64{"glm-5.3-flash": {0.1, 0.4}})
+	cases := []struct{ model, provider, want string }{
+		{"claude-sonnet-4-5", "", ClassPriced},
+		{"claude-sonnet-4-5-20250929", "anthropic", ClassPriced},
+		{"z-ai/glm-5.3-flash", "openrouter", ClassPriced}, // vendor prefix stripped for the lookup
+		{"anthropic/claude-sonnet-4-5", "", ClassPriced},
+		{"k3", "kimi-for-coding", ClassPlan},
+		{"k3-256k", "kimi-code-plan-global", ClassPlan},
+		{"llama3.1:8b", "ollama", ClassLocal},
+		{"qwen3-coder", "LM-Studio", ClassLocal},
+		{"qwen3-coder", "lmstudio", ClassLocal},
+		{"gemma", "llama.cpp", ClassLocal},
+		{"gemma", "mlx", ClassLocal},
+		{"qwen3-coder", "http://127.0.0.1:1234/v1", ClassLocal},
+		{"qwen3-coder", "http://localhost:11434", ClassLocal},
+		{"", "", ClassUnknownModel},
+		{"", "kimi-for-coding", ClassUnknownModel},
+		{"gpt-5.6-sol", "custom", ClassUnpricedModel},
+		{"codex-auto-review", "openai", ClassUnpricedModel},
+		{"z-ai/glm-5.2", "openrouter", ClassUnpricedModel},
+	}
+	for _, c := range cases {
+		if got := Classify(c.model, c.provider); got != c.want {
+			t.Errorf("Classify(%q, %q) = %q, want %q", c.model, c.provider, got, c.want)
+		}
+	}
+	// A price entry wins over the plan table: cost and class agree.
+	SetUserPrices(map[string][2]float64{"k3": {0.6, 2.5}})
+	if got := Classify("k3", "kimi-for-coding"); got != ClassPriced {
+		t.Errorf("priced plan model = %q, want priced", got)
+	}
+}
+
+// The vendor prefix is stripped for the lookup only: the cost resolves, and
+// an operator entry keyed by the full id still wins.
+func TestVendorPrefixedModelCost(t *testing.T) {
+	t.Cleanup(func() { SetUserPrices(nil) })
+	if c := ModelCostUSD("anthropic/claude-sonnet-4-5", 1_000_000, 0); math.Abs(c-3) > 1e-9 {
+		t.Fatalf("anthropic/claude-sonnet-4-5 cost = %v, want 3", c)
+	}
+	SetUserPrices(map[string][2]float64{"z-ai/glm-5.3-flash": {1, 1}, "glm-5.3-flash": {2, 2}})
+	if c := ModelCostUSD("z-ai/glm-5.3-flash", 1_000_000, 0); math.Abs(c-1) > 1e-9 {
+		t.Fatalf("full-id entry cost = %v, want 1", c)
+	}
+}

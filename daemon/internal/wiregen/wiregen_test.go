@@ -3,6 +3,7 @@ package wiregen
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -19,5 +20,22 @@ func TestWireTypesDrift(t *testing.T) {
 	}
 	if Generate() != string(committed) {
 		t.Fatalf("wire-types.d.ts is stale — regenerate with: go run ./cmd/genwire (from daemon/)")
+	}
+}
+
+// A json:"-" field is off the wire: neither the field nor its struct type is
+// emitted.
+func TestTypeScriptSkipsHiddenFieldTypes(t *testing.T) {
+	type hidden struct{ X int }
+	type wire struct {
+		A string   `json:"a"`
+		H []hidden `json:"-"`
+	}
+	ts := TypeScript(wire{})
+	if strings.Contains(ts, "hidden") || strings.Contains(ts, "H:") {
+		t.Fatalf("json:\"-\" field or its type emitted:\n%s", ts)
+	}
+	if !strings.Contains(ts, "a: string;") {
+		t.Fatalf("wire field missing:\n%s", ts)
 	}
 }

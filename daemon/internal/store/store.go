@@ -144,7 +144,8 @@ func Open(dbPath, jsonlPath string) (*Store, error) {
 			tokens_in INTEGER,
 			tokens_out INTEGER,
 			cost_usd REAL,
-			call_id TEXT
+			call_id TEXT,
+			provider TEXT
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_events_pid_ts ON events(pid, ts);`,
 		`CREATE TABLE IF NOT EXISTS incidents (
@@ -260,7 +261,7 @@ func Open(dbPath, jsonlPath string) (*Store, error) {
 		log.Printf("store: migrated flags: added workspace column")
 	}
 	// Trace columns (P2): older databases gain them in place.
-	for _, col := range []string{"tool", "tool_status", "duration_ms", "model", "tokens_in", "tokens_out", "cost_usd", "call_id"} {
+	for _, col := range []string{"tool", "tool_status", "duration_ms", "model", "tokens_in", "tokens_out", "cost_usd", "call_id", "provider"} {
 		var n int
 		if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('events') WHERE name=?`, col).Scan(&n); err != nil {
 			db.Close()
@@ -517,10 +518,10 @@ func (s *Store) PutEvent(e event.Event) {
 			verb = "INSERT OR IGNORE"
 		}
 		res, err = s.db.Exec(
-			verb+` INTO events (kind, ts, pid, exe_path, session_id, path, remote_host, remote_port, detail, tool, tool_status, duration_ms, model, tokens_in, tokens_out, cost_usd)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			verb+` INTO events (kind, ts, pid, exe_path, session_id, path, remote_host, remote_port, detail, tool, tool_status, duration_ms, model, tokens_in, tokens_out, cost_usd, provider)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			int(e.Kind), tsStr, e.PID, e.ExePath, e.SessionID, e.Path, e.RemoteHost, e.RemotePort, e.Detail,
-			nullStr(e.ToolName), nullStr(e.ToolStatus), nullInt(e.DurationMs), nullStr(e.Model), nullInt(e.TokensIn), nullInt(e.TokensOut), nullFloat(e.CostUSD),
+			nullStr(e.ToolName), nullStr(e.ToolStatus), nullInt(e.DurationMs), nullStr(e.Model), nullInt(e.TokensIn), nullInt(e.TokensOut), nullFloat(e.CostUSD), nullStr(e.Provider),
 		)
 	}
 	if err != nil {
@@ -1003,7 +1004,7 @@ func (s *Store) QueryEvents(f EventFilter) []event.Event {
 	defer s.mu.Unlock()
 
 	q := `SELECT kind, ts, pid, exe_path, session_id, path, remote_host, remote_port, detail,
-		tool, tool_status, duration_ms, model, tokens_in, tokens_out, cost_usd, call_id FROM events WHERE 1=1`
+		tool, tool_status, duration_ms, model, tokens_in, tokens_out, cost_usd, call_id, provider FROM events WHERE 1=1`
 	var args []any
 	if f.Kind != nil {
 		q += " AND kind = ?"
@@ -1044,17 +1045,18 @@ func (s *Store) QueryEvents(f EventFilter) []event.Event {
 		var e event.Event
 		var kindInt int
 		var tsStr string
-		var tool, toolStatus, modelName, callID sql.NullString
+		var tool, toolStatus, modelName, callID, provider sql.NullString
 		var durMs, tokIn, tokOut sql.NullInt64
 		var cost sql.NullFloat64
 		if err := rows.Scan(&kindInt, &tsStr, &e.PID, &e.ExePath, &e.SessionID, &e.Path, &e.RemoteHost, &e.RemotePort, &e.Detail,
-			&tool, &toolStatus, &durMs, &modelName, &tokIn, &tokOut, &cost, &callID); err == nil {
+			&tool, &toolStatus, &durMs, &modelName, &tokIn, &tokOut, &cost, &callID, &provider); err == nil {
 			e.Kind = event.Kind(kindInt)
 			e.TS, _ = time.Parse(time.RFC3339Nano, tsStr)
 			e.ToolName = tool.String
 			e.ToolStatus = toolStatus.String
 			e.DurationMs = durMs.Int64
 			e.Model = modelName.String
+			e.Provider = provider.String
 			e.TokensIn = tokIn.Int64
 			e.TokensOut = tokOut.Int64
 			e.CostUSD = cost.Float64

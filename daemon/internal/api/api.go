@@ -544,6 +544,7 @@ func (a *API) routes() map[string]http.HandlerFunc {
 		"/ui/open-fda":                  a.handleOpenFDA,
 		"/stats/rollup":                 a.handleRollup,
 		"/costs":                        a.handleCosts,
+		"/costs/unpriced":               a.handleCostsUnpriced,
 		"/doctor":                       a.handleDoctor,
 		"/advisor/discover":             a.handleAdvisorDiscover,
 		"/fleet":                        a.handleFleet,

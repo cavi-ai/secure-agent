@@ -598,6 +598,11 @@ func (ts *TranscriptScanner) tailFile(p string, offsets map[string]int64, dirty 
 					tracer := ts.codexTracers[p]
 					if tracer == nil {
 						tracer = NewCodexTracer()
+						if offset > 0 {
+							// Resumed mid-file: the head holds the session
+							// and model this run has not read.
+							tracer.Prime(io.NewSectionReader(f, 0, offset))
+						}
 						if ts.codexTracers == nil {
 							ts.codexTracers = map[string]*CodexTracer{}
 						}

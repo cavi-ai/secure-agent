@@ -156,18 +156,60 @@ func TestOpencodeStepFinishGetsModelFromMessage(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := NewOpencodeCollector(nil, dbPath, time.Millisecond)
-	model := c.modelFor(db, "s1")
-	if model != "claude-sonnet-4" {
-		t.Fatalf("modelFor = %q, want claude-sonnet-4", model)
+	model, provider := c.modelFor(db, "s1")
+	if model != "claude-sonnet-4" || provider != "anthropic" {
+		t.Fatalf("modelFor nested = %q %q, want claude-sonnet-4 anthropic", model, provider)
 	}
-	if m2 := c.modelFor(db, "s1"); m2 != model {
-		t.Fatal("modelFor must be memoized per session")
-	}
-	// Current opencode carries the model top-level (modelID), not nested.
-	if _, err := db.Exec(`INSERT INTO message VALUES ('m2','s2',200,'{"role":"assistant","modelID":"k3-256k","providerID":"acme"}')`); err != nil {
+	if _, err := db.Exec(`UPDATE message SET data = '{"role":"assistant","modelID":"changed"}' WHERE id = 'm1'`); err != nil {
 		t.Fatal(err)
 	}
-	if model := c.modelFor(db, "s2"); model != "k3-256k" {
-		t.Fatalf("modelFor top-level = %q, want k3-256k", model)
+	if m2, p2 := c.modelFor(db, "s1"); m2 != model || p2 != provider {
+		t.Fatal("modelFor must be memoized per session (model and provider)")
+	}
+	// Current opencode carries the model top-level (modelID, providerID), not nested.
+	if _, err := db.Exec(`INSERT INTO message VALUES ('m2','s2',200,'{"role":"assistant","modelID":"k3-256k","providerID":"kimi-code-plan-global"}')`); err != nil {
+		t.Fatal(err)
+	}
+	if model, provider := c.modelFor(db, "s2"); model != "k3-256k" || provider != "kimi-code-plan-global" {
+		t.Fatalf("modelFor top-level = %q %q, want k3-256k kimi-code-plan-global", model, provider)
+	}
+	// Top-level model id with the provider only nested.
+	if _, err := db.Exec(`INSERT INTO message VALUES ('m3','s3',300,'{"role":"assistant","modelID":"k3","model":{"providerID":"kimi-for-coding","modelID":"k3"}}')`); err != nil {
+		t.Fatal(err)
+	}
+	if model, provider := c.modelFor(db, "s3"); model != "k3" || provider != "kimi-for-coding" {
+		t.Fatalf("modelFor mixed = %q %q, want k3 kimi-for-coding", model, provider)
+	}
+}
+
+// A polled step-finish carries the session's provider along with the model.
+func TestOpencodeStepFinishCarriesProvider(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "opencode.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{
+		`CREATE TABLE session (id TEXT PRIMARY KEY, directory TEXT, time_updated INTEGER)`,
+		`CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT, time_updated INTEGER, data TEXT)`,
+		`CREATE TABLE part (id TEXT PRIMARY KEY, session_id TEXT, time_created INTEGER, time_updated INTEGER, data TEXT)`,
+		`INSERT INTO session VALUES ('ses_1','/Users/dev/proj',100)`,
+		`INSERT INTO message VALUES ('m1','ses_1',100,'{"role":"assistant","modelID":"k3","providerID":"kimi-for-coding"}')`,
+		`INSERT INTO part VALUES ('p1','ses_1',200,200,'{"type":"step-finish","tokens":{"input":1000,"output":50},"cost":0}')`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatalf("setup %q: %v", q, err)
+		}
+	}
+	db.Close()
+	b := bus.New(16)
+	sub := b.Subscribe()
+	c := NewOpencodeCollector(b, path, 0)
+	if n := c.pollOnce(); n != 1 {
+		t.Fatalf("pollOnce published %d, want 1", n)
+	}
+	e := <-sub
+	if e.Kind != event.KindModelCall || e.Model != "k3" || e.Provider != "kimi-for-coding" || e.CostUSD != 0 {
+		t.Fatalf("model_call = %+v, want k3 via kimi-for-coding at cost 0", e)
 	}
 }

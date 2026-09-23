@@ -434,17 +434,48 @@ A malformed `since`/`until` or an unknown `by` returns `400` with a one-line bod
   "until": "2026-09-22T12:00:00Z",
   "by": "repo",
   "total": {"key": "", "calls": 4, "sessions": 3, "tokens_in": 400, "tokens_out": 40,
-            "cost_usd": 0.85, "unpriced_calls": 1},
+            "cost_usd": 0.85, "unpriced_calls": 1, "unknown_model_calls": 0,
+            "unpriced_model_calls": 1, "plan_calls": 0, "local_calls": 0},
   "rows": [
     {"key": "api-service", "harness": "claude", "calls": 2, "sessions": 1,
-     "tokens_in": 200, "tokens_out": 20, "cost_usd": 0.75, "unpriced_calls": 0},
+     "tokens_in": 200, "tokens_out": 20, "cost_usd": 0.75, "unpriced_calls": 0,
+     "unknown_model_calls": 0, "unpriced_model_calls": 0, "plan_calls": 0, "local_calls": 0},
     {"key": "(no repo)", "harness": "codex", "calls": 1, "sessions": 1,
-     "tokens_in": 100, "tokens_out": 10, "cost_usd": 0, "unpriced_calls": 1}
+     "tokens_in": 100, "tokens_out": 10, "cost_usd": 0, "unpriced_calls": 1,
+     "unknown_model_calls": 0, "unpriced_model_calls": 1, "plan_calls": 0, "local_calls": 0}
   ]
 }
 ```
 
-Rows are sorted by cost, then calls (at most 200); `rows` is `[]` when the window is empty. `harness` is the harness with the most calls in the group (omitted for `by=harness`). Missing repo, branch, harness or model values group as `(no repo)`, `(no branch)`, `(unknown)`. `unpriced_calls` counts calls whose model is not in the pricing table: their cost is `0` and is never estimated. Read-level. CLI: `secure-agent cost [--since 24h] [--by repo] [--json]`.
+Rows are sorted by cost, then calls (at most 200); `rows` is `[]` when the window is empty. `harness` is the harness with the most calls in the group (omitted for `by=harness`). Missing repo, branch, harness or model values group as `(no repo)`, `(no branch)`, `(unknown)`. `unpriced_calls` counts calls with cost `0`; a cost is never estimated. Read-level. CLI: `secure-agent cost [--since 24h] [--by repo] [--json]`; the table view adds the class breakdown and one `add a price for <model> under pricing: in ~/.config/secure-agent/config.yaml` line per `unpriced-model` id.
+
+Every row and the total split `unpriced_calls` by price class:
+
+| Field | Class | Meaning |
+|---|---|---|
+| `unknown_model_calls` | `unknown-model` | the harness recorded no model id |
+| `unpriced_model_calls` | `unpriced-model` | model id known, no price entry: add one under [`pricing`](CONFIGURATION.md) |
+| `plan_calls` | `plan` | subscription provider (`kimi-for-coding`, `kimi-code-plan-global`) |
+| `local_calls` | `local` | local runtime (`ollama`, `lmstudio`, `lm-studio`, `llama.cpp`, `mlx`, or a loopback provider) |
+
+A zero-token call of a priced model is in `unpriced_calls` and in no class counter. A price entry wins over the provider: a priced model is `priced` whatever the provider. A vendor-prefixed id (`z-ai/glm-5.3-flash`) is looked up without its prefix when the full id has no entry. `by=model` rows also carry `provider` (the provider with the most calls for the model; omitted when none is recorded) and `class` (`priced` when every call carries a cost, else the model's class).
+
+#### `GET /costs/unpriced`
+
+The zero-cost calls by harness, provider and model with their class; `priced` groups are left out. Same `since`/`until` as `/costs`. Sorted by calls; `rows` is `[]` when nothing is unpriced. Read-level; console-allowed.
+
+```json
+{
+  "since": "2026-09-22T06:30:00Z",
+  "until": "2026-09-23T06:30:00Z",
+  "rows": [
+    {"harness": "opencode", "provider": "kimi-for-coding", "model": "k3", "class": "plan",
+     "calls": 12, "tokens_in": 48000, "tokens_out": 2100},
+    {"harness": "codex", "provider": "custom", "model": "gpt-5.6-sol", "class": "unpriced-model",
+     "calls": 3, "tokens_in": 9000, "tokens_out": 400}
+  ]
+}
+```
 
 ### 17. `GET /doctor`
 
