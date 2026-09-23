@@ -111,6 +111,57 @@ function renderSources() {
   }).join('');
 }
 
+// Split uninspected rows three ways: CDN/cloud carriers (infra set), the
+// agents' own vendor APIs (identity.org set, no infra) rolled up per
+// (agent, org), and unknowns. Pure — unit-tested in packaging/test/console.
+function groupUninspected(rows) {
+  const unknown = [];
+  const carriers = [];
+  const byKey = new Map();
+  for (const e of rows || []) {
+    if (e.infra) { carriers.push(e); continue; }
+    const org = e.identity && e.identity.org;
+    if (!org) { unknown.push(e); continue; }
+    const key = e.agent + '|' + org;
+    let g = byKey.get(key);
+    if (!g) {
+      g = { agent: e.agent, org, rows: [], count: 0, first_seen: '' };
+      byKey.set(key, g);
+    }
+    g.rows.push(e);
+    g.count += e.count || 0;
+    if (e.first_seen && (!g.first_seen || Date.parse(e.first_seen) < Date.parse(g.first_seen))) g.first_seen = e.first_seen;
+  }
+  const vendors = [...byKey.values()];
+  for (const g of vendors) g.rows.sort((a, b) => (b.count || 0) - (a.count || 0));
+  vendors.sort((a, b) => b.count - a.count);
+  return { unknown, vendors, carriers };
+}
+
+// One (agent, vendor) rollup: a single decision row, the endpoints behind a
+// <details>.
+function vendorRollupHTML(g, advisorOn) {
+  const first = g.first_seen ? fmtAge(g.first_seen, Date.now()) : '';
+  const n = g.rows.length;
+  const facts = [
+    `${n} endpoint${n === 1 ? '' : 's'}`,
+    `<b>${g.count}×</b> in 24h`,
+    first ? `first seen ${escapeHTML(first)} ago` : '',
+  ].filter(Boolean).join(' · ');
+  const agent = escapeHTML(g.agent);
+  return `<div class="fw-rule egress-row">
+    <div class="fw-rule-main">
+      <span class="fw-rule-id">${agent} → ${escapeHTML(g.org)}</span>
+      <div class="fw-metrics"><span class="fw-metric dim">${facts}</span></div>
+    </div>
+    <div class="egress-actions">
+      <button class="btn btn-primary btn-sm" data-action="bulk-allow" data-agent="${agent}" data-hosts="${escapeHTML(g.rows.map(e => e.host).join(','))}" title="Mark these ${escapeHTML(g.org)} endpoints expected for ${agent}; they leave this list"><svg class="icon"><use href="#i-shield"/></svg><span>Allow all for ${agent}</span></button>
+      <button class="btn btn-ghost btn-sm" data-action="endpoint-detail" data-host="${escapeHTML(g.rows[0].host)}" data-agent="${agent}" title="Identify the busiest endpoint and see every connection to it"><svg class="icon"><use href="#i-activity"/></svg><span>Evidence</span></button>
+    </div>
+  </div>
+  <details class="infra-group"><summary>${n} ${escapeHTML(g.org)} endpoint${n === 1 ? '' : 's'} for ${agent}</summary>${g.rows.map(e => egressRowHTML(e, advisorOn)).join('')}</details>`;
+}
+
 function fillUninspected(bodyEl) {
   const SA = window.SA;
 
@@ -121,10 +172,9 @@ function fillUninspected(bodyEl) {
   }
   const vis = inspectionVisible(SA.t.status, SA.t.audit);
   const advisorOn = vis.advisor;
-  // Split actionable unknowns from CDN/cloud carriers: 130 Cloudflare IPs is
-  // one routing note, not 130 rows to review.
-  const unknown = rows.filter(e => !e.infra);
-  const infra = rows.filter(e => e.infra);
+  // Split actionable unknowns from the agents' own vendor APIs and CDN/cloud
+  // carriers: 130 Cloudflare IPs is one routing note, not 130 rows to review.
+  const { unknown, vendors, carriers: infra } = groupUninspected(rows);
   const infraByOrg = {};
   for (const e of infra) {
     (infraByOrg[e.infra] = infraByOrg[e.infra] || { endpoints: 0, hits: 0 });
@@ -141,7 +191,7 @@ function fillUninspected(bodyEl) {
   </div>`;
 
   if (unknown.length === 0) {
-    html += `<div class="empty"><svg class="icon"><use href="#i-globe"/></svg><span>No unknown endpoints — everything unrouted is known cloud/CDN infrastructure (below)</span></div>`;
+    html += `<div class="empty"><svg class="icon"><use href="#i-globe"/></svg><span>No unknown endpoints — everything unrouted is a known vendor API or cloud/CDN carrier (below)</span></div>`;
   }
 
   // Group by agent so the operator reads "cursor is reaching 12 hosts"
@@ -166,6 +216,13 @@ function fillUninspected(bodyEl) {
     </div>`;
   }).join('');
 
+  if (vendors.length > 0) {
+    html += `<div class="egress-agent-group">
+      <div class="egress-agent-head"><span class="egress-agent-name">Vendor APIs</span><span class="fw-metric dim">the agent's own model or tooling vendor, reached without the proxy — decide: Allow it, or Route the agent through the proxy</span></div>
+      ${vendors.map(g => vendorRollupHTML(g, advisorOn)).join('')}
+    </div>`;
+  }
+
   if (infra.length > 0) {
     const orgRows = Object.entries(infraByOrg)
       .sort((a, b) => b[1].endpoints - a[1].endpoints)
@@ -180,6 +237,7 @@ function fillUninspected(bodyEl) {
 function egressRowHTML(e, advisorOn) {
   const first = e.first_seen ? fmtAge(e.first_seen, Date.now()) : '';
   const last = e.last_seen ? fmtAge(e.last_seen, Date.now()) : '';
+  const idName = e.identity && e.identity.name && e.identity.name !== e.host ? e.identity.name : '';
   const facts = [
     `<b>${e.count || 0}×</b> in 24h`,
     last ? `last ${escapeHTML(last)} ago` : '',
@@ -199,7 +257,7 @@ function egressRowHTML(e, advisorOn) {
 
   return `<div class="fw-rule egress-row">
     <div class="fw-rule-main">
-      <span class="fw-rule-id">${escapeHTML(e.host)}</span>
+      <span class="fw-rule-id">${escapeHTML(e.host)}</span>${idName ? ` <span class="fw-metric dim">${escapeHTML(idName)}</span>` : ''}
       <div class="fw-metrics"><span class="fw-metric dim">${facts}</span></div>
       ${advisor}
     </div>

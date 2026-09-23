@@ -342,6 +342,12 @@ def main():
         check("drill-down collapses CDN/cloud carriers",
               "Known cloud/CDN infrastructure (2 endpoints)" in dom_uninsp
               and "Cloudflare" in dom_uninsp and "AWS" in dom_uninsp)
+        uninsp_unknown = dom_uninsp.split('class="uninspected-expl"', 1)[-1].split("Vendor APIs", 1)[0]
+        check("drill-down rolls vendor APIs up per agent and vendor",
+              "Vendor APIs" in dom_uninsp and "openclaw → Anthropic" in dom_uninsp and "94×" in dom_uninsp
+              and 'data-action="bulk-allow" data-agent="openclaw" data-hosts="2607:6bc0::10"' in dom_uninsp)
+        check("unknown section does not list vendor endpoints",
+              "2607:6bc0::10" not in uninsp_unknown and "statsig.example.com" in uninsp_unknown)
         check("egress rows show first-seen and session",
               "first seen" in dom_uninsp and "session " in dom_uninsp)
         check("egress bulk allow groups same-suffix hosts",
