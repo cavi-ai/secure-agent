@@ -269,6 +269,44 @@ func TestFamilyRootAgreesAcrossCachedShell(t *testing.T) {
 	}
 }
 
+func TestFamilyRootStopsAtDifferentHarness(t *testing.T) {
+	fake := fakeProcs{
+		100: {PID: 100, PPID: 1, Exe: "/opt/homebrew/bin/codex"},
+		101: {PID: 101, PPID: 100, Exe: "/bin/zsh"},
+		102: {PID: 102, PPID: 101, Exe: "/usr/local/bin/claude"},
+		103: {PID: 103, PPID: 102, Exe: "/bin/zsh"},
+		104: {PID: 104, PPID: 103, Exe: "/opt/homebrew/bin/codex"},
+	}
+	c, _ := config.Load("/nonexistent")
+	tg := New(c, fake)
+
+	// A claude ancestor (102) sits between the inner codex (104) and the
+	// outer codex (100). The walk must stop at 102 (a different agent
+	// definition), not pass through it to reach 100.
+	inner, ok := tg.Tag(104)
+	if !ok || inner.RootPID != 104 {
+		t.Fatalf("Tag(104).RootPID = %d, %v; want 104, true", inner.RootPID, ok)
+	}
+
+	// Cache the intervening shells so the boundary is also hit through the
+	// cached+tagged branch: 101 caches as "codex" (via ancestry to 100), 103
+	// caches as "claude" (via ancestry to 102).
+	if shell1, ok := tg.Tag(101); !ok || shell1.Name != "codex" {
+		t.Fatalf("Tag(101) = %+v, %v; want codex,true", shell1, ok)
+	}
+	if shell2, ok := tg.Tag(103); !ok || shell2.Name != "claude" {
+		t.Fatalf("Tag(103) = %+v, %v; want claude,true", shell2, ok)
+	}
+
+	if got := tg.TaggedPIDs()[104].RootPID; got != 104 {
+		t.Fatalf("TaggedPIDs()[104].RootPID = %d, want 104", got)
+	}
+	outer, ok := tg.Tag(100)
+	if !ok || outer.RootPID != 100 {
+		t.Fatalf("Tag(100).RootPID = %d, %v; want 100, true", outer.RootPID, ok)
+	}
+}
+
 func TestAlive(t *testing.T) {
 	fake := fakeProcs{100: {PID: 100, PPID: 1, Exe: "/usr/local/bin/claude"}}
 	c, _ := config.Load("/nonexistent")
