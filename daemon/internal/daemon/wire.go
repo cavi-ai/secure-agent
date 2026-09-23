@@ -246,6 +246,19 @@ func isTraceKind(k event.Kind) bool {
 	return false
 }
 
+// isUnattributedFileEvent: a file open, write or delete that resolved to no
+// session — its process is outside every agent family.
+func isUnattributedFileEvent(e event.Event) bool {
+	if e.SessionID != "" {
+		return false
+	}
+	switch e.Kind {
+	case event.KindFileOpen, event.KindFileWrite, event.KindFileDelete:
+		return true
+	}
+	return false
+}
+
 // startDrainLoop consumes the bus, persisting events and correlating flags →
 // incidents → fleet webhooks. The returned channel closes once every delivered
 // event has been persisted, so shutdown can wait for it instead of dropping
@@ -264,6 +277,15 @@ func startDrainLoop(sub <-chan event.Event, st *store.Store, cr *correlate.Corre
 			// Attribute before anything else: the stored event, the flags it
 			// triggers, and the incident all carry the session id.
 			res.Resolve(&e)
+			flags := cr.Observe(e)
+			// File activity outside every agent family is kept only as the
+			// evidence of a flag it raised: system-wide opens (indexers,
+			// builds, the daemon itself) outnumber agent file activity by
+			// orders of magnitude and would push it out of the per-kind
+			// row budget.
+			if len(flags) == 0 && isUnattributedFileEvent(e) {
+				continue
+			}
 			st.PutEvent(e)
 			if deltas != nil {
 				// Guard lifecycle keeps its own delta names (the menubar's
@@ -275,7 +297,6 @@ func startDrainLoop(sub <-chan event.Event, st *store.Store, cr *correlate.Corre
 				}
 				deltas.Publish(api.Delta{Type: kind, Data: e})
 			}
-			flags := cr.Observe(e)
 			// Traces cross the fleet wire too (opt-in per sink): a collector
 			// showing cross-node sessions needs the tool/model calls, not just
 			// the security events. Lossy by design — the publisher's in-flight
