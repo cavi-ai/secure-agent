@@ -173,11 +173,23 @@ func TestDoctorFileTelemetryFailsOnFlood(t *testing.T) {
 	st := testStore(t)
 	t.Cleanup(func() { st.Close() })
 	rep, _ := getDoctor(t, st, Status{Running: true, Uptime: "1h0m0s",
-		ESService: &collect.ESServiceSnapshot{State: "running", Flooding: true, UnparsedShare: 0.97, BytesSkipped: 6 << 20}})
+		ESService: &collect.ESServiceSnapshot{State: "running", SpoolMtime: time.Now(), Flooding: true, UnparsedShare: 0.97, BytesSkipped: 6 << 20}})
 	c := doctorCheckByID(t, rep, "file-telemetry")
 	if c.State != doctorFail || !strings.Contains(c.Detail, "did not parse") ||
 		!strings.Contains(c.Fix, "Reinstall the file telemetry helper from the Setup card") {
 		t.Fatalf("file-telemetry = %+v, want fail naming the unparsed share with the reinstall fix", c)
+	}
+}
+
+// A flood verdict from a spool nobody writes any more does not mask a
+// service that is not loaded.
+func TestDoctorFileTelemetryStaleFloodReportsNotLoaded(t *testing.T) {
+	st := testStore(t)
+	t.Cleanup(func() { st.Close() })
+	rep, _ := getDoctor(t, st, Status{Running: true, Uptime: "1h0m0s",
+		ESService: &collect.ESServiceSnapshot{State: "not-loaded", SpoolMtime: time.Now().Add(-10 * time.Minute), Flooding: true, UnparsedShare: 0.99}})
+	if c := doctorCheckByID(t, rep, "file-telemetry"); c.State != doctorFail || c.Detail != "root service not loaded" {
+		t.Fatalf("file-telemetry = %+v, want fail: root service not loaded", c)
 	}
 }
 
@@ -315,12 +327,12 @@ func TestDoctorChecksFromFacts(t *testing.T) {
 		}(), doctorFail, "not loaded"},
 		{"flooding writer", checkFileTelemetry, func() doctorFacts {
 			f := steady
-			f.st.ESService = &collect.ESServiceSnapshot{State: "running", Flooding: true}
+			f.st.ESService = &collect.ESServiceSnapshot{State: "running", SpoolMtime: time.Now(), Flooding: true}
 			return f
 		}(), doctorFail, "did not parse"},
 		{"unparsed share alone", checkFileTelemetry, func() doctorFacts {
 			f := steady
-			f.st.ESService = &collect.ESServiceSnapshot{State: "running", UnparsedShare: 0.9}
+			f.st.ESService = &collect.ESServiceSnapshot{State: "running", SpoolMtime: time.Now(), UnparsedShare: 0.9}
 			return f
 		}(), doctorFail, "did not parse"},
 		{"low unparsed share is not flooding", checkFileTelemetry, func() doctorFacts {

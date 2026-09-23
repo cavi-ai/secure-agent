@@ -260,6 +260,16 @@ func esServiceItems(s collect.ESServiceSnapshot) []PostureItem {
 			Detail:   esFloodingDetail(s),
 		}}
 	}
+	// A spool exists, so file telemetry was on; the service is gone.
+	if s.State == "not-loaded" && !s.SpoolMtime.IsZero() {
+		return []PostureItem{{
+			Kind: "collector_silent", ID: "eslogger",
+			Title:    "File monitoring is off",
+			Severity: 2,
+			Detail: "the file telemetry helper is not loaded — enable it in Setup & Permissions → File Telemetry, " +
+				"then approve Secure Agent in Login Items and Full Disk Access",
+		}}
+	}
 	var items []PostureItem
 	if esServiceFailing(s.State) {
 		items = append(items, PostureItem{
@@ -286,6 +296,9 @@ func esServiceItems(s collect.ESServiceSnapshot) []PostureItem {
 	return items
 }
 
+// esFloodFreshWindow: a flood verdict needs a spool written this recently.
+const esFloodFreshWindow = 2 * time.Minute
+
 // esServiceFailing reports a root ES service state that means the writer is
 // crash-looping (spawn scheduled) or has exited.
 func esServiceFailing(state string) bool {
@@ -297,6 +310,11 @@ func esServiceFailing(state string) bool {
 // over half even without an active skip) — a service that runs and writes
 // but is broken, not one that is down.
 func esServiceFlooding(s collect.ESServiceSnapshot) bool {
+	// Garbage in a spool nobody writes any more is leftover, not a flood:
+	// the last drain's verdict counts only while the writer is still active.
+	if s.SpoolMtime.IsZero() || time.Since(s.SpoolMtime) > esFloodFreshWindow {
+		return false
+	}
 	return s.Flooding || s.UnparsedShare > 0.5
 }
 
