@@ -146,17 +146,10 @@ final class HookRefreshTests: XCTestCase {
     }
 }
 
-/// A helper install that swaps in a different build loses the Full Disk
-/// Access grant, which is bound to the previous build.
+/// A collector build newer than the last spool write lost the Full Disk
+/// Access grant, which is bound to the previous build; the grant is proven
+/// again once the spool advances.
 final class ESRegrantTests: XCTestCase {
-    func testNeedsRegrantOnlyWhenAPreviousBuildDiffers() {
-        XCTAssertTrue(SetupManager.needsRegrant(previousHash: "aaa", newHash: "bbb"))
-        XCTAssertFalse(SetupManager.needsRegrant(previousHash: "aaa", newHash: "aaa"))
-        XCTAssertFalse(SetupManager.needsRegrant(previousHash: nil, newHash: "bbb"), "first install is a first grant, not a re-grant")
-        XCTAssertFalse(SetupManager.needsRegrant(previousHash: "", newHash: "bbb"))
-        XCTAssertFalse(SetupManager.needsRegrant(previousHash: "aaa", newHash: nil))
-    }
-
     func testRegrantResolvedWhenSpoolAdvances() {
         let installed = Date(timeIntervalSince1970: 1_000)
         XCTAssertFalse(SetupManager.regrantResolved(installSpoolMtime: installed, currentSpoolMtime: installed))

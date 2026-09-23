@@ -20,6 +20,7 @@ BUILD_NUMBER="${BUILD_NUMBER:-$(git rev-parse --short HEAD 2>/dev/null || echo 1
 BUILD_NUMBER="$(printf '%s' "$BUILD_NUMBER" | tr -cd 'a-zA-Z0-9.-')"
 CODESIGN_IDENTITY="${CODESIGN_IDENTITY:--}"
 BUNDLE_ID="com.cavi-ai.secure-agent"
+ESD_LABEL="com.cavi-ai.secure-agent-esd"
 
 echo "==> Building universal Go binaries (version ${VERSION})..."
 mkdir -p bin
@@ -50,10 +51,15 @@ NEWEST_SRC="$(find menubar/Sources menubar/Package.swift -name '*.swift' -newer 
 
 echo "==> Assembling ${APP_NAME}.app..."
 rm -rf "${APP_DIR}"
-mkdir -p "${APP_DIR}/Contents/MacOS" "${APP_DIR}/Contents/Helpers" "${APP_DIR}/Contents/Resources/hooks"
+mkdir -p "${APP_DIR}/Contents/MacOS" "${APP_DIR}/Contents/Helpers" "${APP_DIR}/Contents/Resources/hooks" \
+  "${APP_DIR}/Contents/Library/LaunchDaemons"
 
 cp "${MENUBAR_BIN}" "${APP_DIR}/Contents/MacOS/SecureAgent"
 cp bin/secure-agentd bin/secure-agent "${APP_DIR}/Contents/Helpers/"
+# The Endpoint Security collector: the same daemon binary under the name that
+# selects collector mode, registered with SMAppService.daemon from the plist
+# below so macOS attributes it (and its privacy grant) to the app.
+cp bin/secure-agentd "${APP_DIR}/Contents/MacOS/secure-agent-esd"
 
 for hook in plugin/hooks/*.py; do
   case "$(basename "${hook}")" in test_*) continue;; esac
@@ -85,10 +91,29 @@ cat > "${APP_DIR}/Contents/Info.plist" <<EOF
 </plist>
 EOF
 
+cat > "${APP_DIR}/Contents/Library/LaunchDaemons/${ESD_LABEL}.plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key><string>${ESD_LABEL}</string>
+    <key>BundleProgram</key><string>Contents/MacOS/secure-agent-esd</string>
+    <key>RunAtLoad</key><true/>
+    <key>KeepAlive</key><dict>
+        <key>SuccessfulExit</key><false/>
+        <key>Crashed</key><true/>
+    </dict>
+    <key>ThrottleInterval</key><integer>60</integer>
+    <key>StandardErrorPath</key><string>/var/log/secure-agent-esd.log</string>
+</dict>
+</plist>
+EOF
+
 echo "==> Signing (${CODESIGN_IDENTITY})..."
 codesign --force --options runtime --sign "${CODESIGN_IDENTITY}" \
   "${APP_DIR}/Contents/Helpers/secure-agentd" \
-  "${APP_DIR}/Contents/Helpers/secure-agent"
+  "${APP_DIR}/Contents/Helpers/secure-agent" \
+  "${APP_DIR}/Contents/MacOS/secure-agent-esd"
 codesign --force --options runtime --sign "${CODESIGN_IDENTITY}" "${APP_DIR}"
 
 echo "==> Done: ${APP_DIR}"

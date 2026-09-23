@@ -152,6 +152,7 @@ The menu bar's **Settings… → Updates** tab offers two channels:
 #### Signing & notarization
 
 `make dmg` ad-hoc signs by default (fine for local use; recipients must right-click → Open).
+Set `CODESIGN_IDENTITY` to a real signing identity for a build whose privacy grants survive rebuilds.
 For proper Gatekeeper distribution:
 
 ```bash
@@ -173,7 +174,7 @@ make test       # full Go + Swift + Python + E2E suites
 make install    # build "Secure Agent.app" and launch it (no LaunchAgents)
 ```
 
-> **Note**: To enable full Endpoint Security telemetry via `eslogger`, grant Full Disk Access to the helper binary `com.cavi-ai.secure-agent-esd` under **System Settings → Privacy & Security → Full Disk Access**. It appears in the list after the first denied attempt; the Settings card in the app deep-links to the pane.
+> **Note**: Endpoint Security telemetry via `eslogger` runs in a collector daemon that ships inside the app bundle and is registered with `SMAppService`. Turn it on from the File Telemetry card in **Setup & Permissions…**, then approve **Secure Agent** once in **System Settings → General → Login Items & Extensions** and once in **Privacy & Security → Full Disk Access** — no admin password. A collector installed by an earlier version under `/Library` is removed from the same card (one admin prompt).
 
 ### Plugin Hook Installation
 
@@ -447,6 +448,9 @@ python3 packaging/test/console_dom/run_dom_tests.py
 
 # 5. Run end-to-end smoke test script
 ./packaging/test/e2e_smoke.sh
+
+# 6. Check the built app bundle layout (after make app)
+./packaging/test/check_bundle_layout.sh
 ```
 
 ---

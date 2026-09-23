@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -14,7 +15,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/supervise"
 )
 
-// The privileged ES collector's spool (secure-agentd --es-collector writes it as root).
+// The privileged ES collector's spool (the collector daemon writes it as root).
 const ESPoolPath = "/var/db/secure-agent/es-spool.jsonl"
 
 // ESServiceLabel is the root LaunchDaemon label running the privileged
@@ -22,9 +23,6 @@ const ESPoolPath = "/var/db/secure-agent/es-spool.jsonl"
 // say "the root service is crash-looping" — the tailer being alive proves
 // nothing about the writer.
 const ESServiceLabel = "com.cavi-ai.secure-agent-esd"
-
-// ESHelperPath is the installed privileged collector binary the root service runs.
-const ESHelperPath = "/Library/PrivilegedHelperTools/" + ESServiceLabel
 
 // SpoolAvailable reports whether the privileged ES collector's spool exists
 // and is readable by this (unprivileged) daemon — the signal that file
@@ -41,7 +39,7 @@ func SpoolAvailable() bool {
 
 // ESServiceSnapshot is one probe of the privileged collector's real state:
 // the launchd service state string, the spool's size and mtime, and the
-// helper binary's mtime (zero when absent). The probe is injectable
+// mtime of the program launchd runs for it (zero when absent). The probe is injectable
 // (ESServiceProbe) so tests never shell out.
 type ESServiceSnapshot struct {
 	State       string    `json:"state"`
@@ -63,17 +61,14 @@ func (s ESServiceSnapshot) SpoolState() string {
 var ESServiceProbe = ESServiceState
 
 // ESServiceState probes the privileged collector's real health the only way
-// an unprivileged daemon can: stat the spool (size + mtime) and the helper
-// binary (mtime), and read the launchd service state via launchctl print.
-// Spawning/exit != 0 with a stale spool is the crash-loop signature (rapid
-// respawns while the tailer reports running).
+// an unprivileged daemon can: stat the spool (size + mtime), read the
+// launchd service state via launchctl print, and stat the program that
+// output names (mtime). Spawning/exit != 0 with a stale spool is the
+// crash-loop signature (rapid respawns while the tailer reports running).
 func ESServiceState() (ESServiceSnapshot, error) {
 	var s ESServiceSnapshot
 	if st, serr := os.Stat(ESPoolPath); serr == nil {
 		s.SpoolSize, s.SpoolMtime = st.Size(), st.ModTime()
-	}
-	if st, serr := os.Stat(ESHelperPath); serr == nil {
-		s.HelperMtime = st.ModTime()
 	}
 	out, cerr := exec.Command("/bin/launchctl", "print", "system/"+ESServiceLabel).Output()
 	if cerr != nil {
@@ -82,7 +77,37 @@ func ESServiceState() (ESServiceSnapshot, error) {
 		return s, nil
 	}
 	s.State = parseLaunchctlState(string(out))
+	s.HelperMtime = helperMtime(string(out))
 	return s, nil
+}
+
+// helperMtime stats the program named on the top-level `program =` line of
+// `launchctl print` output; zero when the line or the file is absent.
+func helperMtime(out string) time.Time {
+	program := parseLaunchctlProgram(out)
+	if program == "" {
+		return time.Time{}
+	}
+	st, err := os.Stat(program)
+	if err != nil {
+		return time.Time{}
+	}
+	return st.ModTime()
+}
+
+// parseLaunchctlProgram returns the absolute path on the top-level
+// `program =` line of `launchctl print` output, or "" when there is none.
+// Same indentation rule as parseLaunchctlState.
+func parseLaunchctlProgram(out string) string {
+	for line := range strings.SplitSeq(out, "\n") {
+		if !strings.HasPrefix(line, "\t") || strings.HasPrefix(line, "\t\t") {
+			continue
+		}
+		if program, ok := strings.CutPrefix(strings.TrimSpace(line), "program = "); ok && filepath.IsAbs(program) {
+			return program
+		}
+	}
+	return ""
 }
 
 // parseLaunchctlState extracts the service state from `launchctl print`
@@ -152,7 +177,7 @@ func (t *SpoolTailer) Run(ctx context.Context) error {
 		}
 		if time.Now().After(deadline) {
 			return supervise.Permanent(fmt.Errorf(
-				"privileged ES collector spool not present at %s — install it from Settings (admin prompt)", t.path))
+				"privileged ES collector spool not present at %s — enable file telemetry in Settings", t.path))
 		}
 		select {
 		case <-ctx.Done():

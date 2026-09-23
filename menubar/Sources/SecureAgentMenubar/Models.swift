@@ -389,11 +389,6 @@ public struct StatusResponse: Codable, Sendable {
     public var fleetConfigured: Bool?
     /// Harness coverage (nil on older daemons).
     public let coverage: CoverageModel?
-    /// Root ES LaunchDaemon probe (nil on older daemons): real service state
-    /// plus spool facts, so the UI can tell "waiting on the Settings switch"
-    /// apart from "service dead" instead of pointing at a switch that never
-    /// appears.
-    public let esService: ESServiceModel?
 
     enum CodingKeys: String, CodingKey {
         case running
@@ -412,10 +407,9 @@ public struct StatusResponse: Codable, Sendable {
         case advisorHealth = "advisor_health"
         case fleetConfigured = "fleet_configured"
         case coverage
-        case esService = "es_service"
     }
 
-    public init(running: Bool, uptime: String, activeAgents: Int, infraCount: Int? = nil, agents: [AgentSummaryModel]? = nil, trees: [AgentTreeModel]? = nil, proxyEnabled: Bool? = nil, proxyPort: Int? = nil, uninspectedEgress: Int? = nil, firewallStats: [String: RuleStatModel]? = nil, trackedProcesses: Int? = nil, collectors: [HealthModel]? = nil, version: String? = nil, advisorHealth: AdvisorHealthModel? = nil, fleetConfigured: Bool? = nil, coverage: CoverageModel? = nil, esService: ESServiceModel? = nil) {
+    public init(running: Bool, uptime: String, activeAgents: Int, infraCount: Int? = nil, agents: [AgentSummaryModel]? = nil, trees: [AgentTreeModel]? = nil, proxyEnabled: Bool? = nil, proxyPort: Int? = nil, uninspectedEgress: Int? = nil, firewallStats: [String: RuleStatModel]? = nil, trackedProcesses: Int? = nil, collectors: [HealthModel]? = nil, version: String? = nil, advisorHealth: AdvisorHealthModel? = nil, fleetConfigured: Bool? = nil, coverage: CoverageModel? = nil) {
         self.running = running
         self.version = version
         self.uptime = uptime
@@ -432,20 +426,6 @@ public struct StatusResponse: Codable, Sendable {
         self.advisorHealth = advisorHealth
         self.fleetConfigured = fleetConfigured
         self.coverage = coverage
-        self.esService = esService
-    }
-}
-
-/// The root ES LaunchDaemon probe from /status (es_service).
-public struct ESServiceModel: Codable, Sendable {
-    public let state: String
-    public let spoolSize: Int64
-    public let spoolMtime: String?
-
-    enum CodingKeys: String, CodingKey {
-        case state
-        case spoolSize = "spool_size"
-        case spoolMtime = "spool_mtime"
     }
 }
 

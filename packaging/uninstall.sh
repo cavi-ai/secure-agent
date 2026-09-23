@@ -16,6 +16,23 @@ rm -f "${PLIST_DEST}" "${MENUBAR_PLIST_DEST}"
 echo "Removing installed binaries..."
 rm -f "${BIN_DEST}" "${MENUBAR_DEST}" "${HOME}/.local/bin/secure-agent"
 
+# Endpoint Security collector installed by earlier versions outside the app
+# bundle (the in-bundle collector is unregistered by the app's Uninstall).
+ESD_LABEL="com.cavi-ai.secure-agent-esd"
+LEGACY_ESD=(
+  "/Library/LaunchDaemons/${ESD_LABEL}.plist"
+  "/Library/PrivilegedHelperTools/${ESD_LABEL}"
+  "/Library/Application Support/secure-agent/esd.binhash"
+)
+for path in "${LEGACY_ESD[@]}"; do
+  if [ -e "$path" ]; then
+    echo "Removing the old file-telemetry collector (admin password)..."
+    sudo launchctl bootout system "${LEGACY_ESD[0]}" 2>/dev/null || true
+    sudo rm -f "${LEGACY_ESD[@]}"
+    break
+  fi
+done
+
 echo "Unlinking plugin hooks..."
 # Only remove symlinks (what the installer creates) or files carrying our
 # marker comment — a user's own replacement file must not be deleted.
