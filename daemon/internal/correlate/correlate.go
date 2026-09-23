@@ -20,6 +20,7 @@ type readMark struct {
 	at       time.Time
 	path     string
 	cat      sensitive.Category
+	rule     string
 	consumed bool
 }
 
@@ -348,8 +349,9 @@ func (c *Correlator) Observe(e event.Event) []model.Flag {
 
 	switch e.Kind {
 	case event.KindFileOpen, event.KindFileWrite, event.KindPluginAction:
-		if cat, ok := c.classifier.Classify(e.Path); ok {
-			c.rememberReadLocked(rootPID, e.PID, readMark{at: e.TS, path: e.Path, cat: cat})
+		if m, ok := c.classifier.Match(e.Path); ok {
+			cat := m.Category
+			c.rememberReadLocked(rootPID, e.PID, readMark{at: e.TS, path: e.Path, cat: cat, rule: m.Rule})
 			// System trust-store reads (SystemTrustSettings, /System/Library/
 			// Keychains) are normal macOS behavior for cert-chain evaluation —
 			// any app doing TLS/code-signing touches them. They are recorded
@@ -388,6 +390,7 @@ func (c *Correlator) Observe(e event.Event) []model.Flag {
 						Kind:  "read",
 						Label: e.Path,
 						Sub:   "sensitive read",
+						Rule:  m.Rule,
 						TS:    e.TS.Format(time.RFC3339),
 						Text:  fmt.Sprintf("%s (pid %d) read %s at %s", info.Name, e.PID, e.Path, e.TS.Format(time.RFC3339)),
 					}}
@@ -526,6 +529,7 @@ func (c *Correlator) Observe(e event.Event) []model.Flag {
 				Kind:  "read",
 				Label: m.path,
 				Sub:   "sensitive read",
+				Rule:  m.rule,
 				TS:    m.at.Format(time.RFC3339),
 				Text:  fmt.Sprintf("%s (pid %d) read %s at %s", info.Name, e.PID, m.path, m.at.Format(time.RFC3339)),
 			})
@@ -616,7 +620,7 @@ func (c *Correlator) untaggedKeychainLocked(e event.Event) []model.Flag {
 	if e.ExePath == "" || isSystemExe(e.ExePath) {
 		return nil
 	}
-	if cat, ok := c.classifier.Classify(e.Path); !ok || cat != sensitive.CatKeychain {
+	if m, ok := c.classifier.Match(e.Path); !ok || m.Category != sensitive.CatKeychain {
 		return nil
 	}
 	return c.keychainAccessLocked(e, "untagged:"+filepath.Base(e.ExePath))
