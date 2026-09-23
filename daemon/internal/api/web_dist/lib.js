@@ -691,14 +691,17 @@ function groupAgentsByHarness(agents) {
 }
 
 // agentGroupTotals: the group head's figures over the instances shown —
-// instances, processes, RSS, CPU, last seen, leftovers.
+// instances, processes, RSS, CPU (null when no process reports it), last
+// seen, leftovers.
 function agentGroupTotals(g) {
-  const t = { instances: g.instances.length, processes: 0, rss: 0, cpu: 0, lastSeen: '', orphans: 0 };
+  const t = { instances: g.instances.length, processes: 0, rss: 0, cpu: null, lastSeen: '', orphans: 0 };
   for (const inst of g.instances) {
     for (const a of [inst.root, ...inst.children]) {
       t.processes++;
       t.rss += Number(a.rss_bytes || 0);
-      t.cpu += Number(a.cpu_percent || 0);
+      if (a.cpu_percent !== null && a.cpu_percent !== undefined && Number.isFinite(Number(a.cpu_percent))) {
+        t.cpu = (t.cpu || 0) + Number(a.cpu_percent);
+      }
       if (a.last_seen_at && a.last_seen_at > t.lastSeen) t.lastSeen = a.last_seen_at;
       if (a.is_orphan) t.orphans++;
     }

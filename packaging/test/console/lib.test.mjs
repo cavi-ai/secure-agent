@@ -311,7 +311,11 @@ test('groupAgentsByHarness: harness groups by recency, instances with helpers, i
   assert.equal(t.rss, 157);
   assert.equal(t.cpu, 15);
   assert.equal(t.lastSeen, at(1));
-  assert.equal(agentGroupTotals(groups.find(g => g.key === 'cursor')).orphans, 1);
+  const cursor = agentGroupTotals(groups.find(g => g.key === 'cursor'));
+  assert.equal(cursor.orphans, 1);
+  // No process reported CPU: no figure, rather than a misleading 0%.
+  assert.equal(cursor.cpu, null);
+  assert.equal(fmtCPU(cursor.cpu), '');
 });
 
 test('applyAgentFilters: shared pills and text; infra untouched', () => {
