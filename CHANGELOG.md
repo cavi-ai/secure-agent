@@ -56,6 +56,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Console: the drawer's Copy button stays hidden outside incident reports.
 
 ### Fixed
+- A second process in the same working directory gets its own session, never another root's.
 - A codex rollout session joins the process holding the rollout open: root pid set, that tree's process-tree session merged in.
 - `/doctor` trace coverage counts transcript and hook sessions seen since boot, not only those started since boot.
 - A session upsert stores a new parent and never clears a stored one.

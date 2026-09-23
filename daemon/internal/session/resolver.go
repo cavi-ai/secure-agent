@@ -6,6 +6,7 @@ package session
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -135,10 +136,12 @@ type Resolver struct {
 	mu     sync.Mutex
 	byPID  map[int32]string // pid → session id (process-tree cache)
 	byRoot map[int32]string // root pid → session id
-	// byScope maps "harness\x00workspace" → provisional process-tree session
-	// id, so a transcript sighting joins the running conversation without a
+	// byScope maps "harness\x00workspace" → the scope's newest session id,
+	// so a transcript sighting joins the running conversation without a
 	// store scan. Filled when a process-tree session is created, cleared when
-	// it ends.
+	// it ends. A join through it needs a family-root match
+	// (adoptsByScopeLocked, findProvisionalLocked): two processes in one
+	// working directory never share a session.
 	byScope map[string]string
 	touch   map[string]time.Time // session id → last TouchSession (throttle)
 	// deferred holds process-tree sessions that have not yet outlived
@@ -215,10 +218,11 @@ func (r *Resolver) Resolve(e *event.Event) string {
 		}
 		// Adopt a transcript session already known for this harness+workspace
 		// (the transcript may have been tailed before the process tree was
-		// sampled). Otherwise mint a provisional process-tree id. Either way
-		// the scope index points at the current id, so a later transcript
-		// sighting merges into it instead of creating a second row.
-		if existing, found := r.byScope[scopeKey(info.Name, info.CWD)]; found && info.CWD != "" {
+		// sampled) when it has no root yet or is on this root. Otherwise mint
+		// a provisional process-tree id. Either way the scope index points at
+		// the current id, so a later transcript sighting merges into it
+		// instead of creating a second row.
+		if existing, found := r.byScope[scopeKey(info.Name, info.CWD)]; found && info.CWD != "" && r.adoptsByScopeLocked(existing, root, info.Name, info.CWD) {
 			id = existing
 		} else {
 			id = ProcSessionID(root, info.StartedAt)
@@ -273,6 +277,49 @@ func (r *Resolver) Resolve(e *event.Event) string {
 	r.touchLocked(id, e.TS)
 	e.SessionID = id
 	return id
+}
+
+// adoptsByScopeLocked reports whether family root may adopt the scope's
+// session id: one already on this root, or one with no root yet while no
+// other family root holds a session in the scope. A second process in the
+// same working directory mints its own session; a stored process-tree row's
+// root is never overwritten, and the refusal is logged (once per session and
+// root: byRoot then holds the minted id). Caller holds mu.
+func (r *Resolver) adoptsByScopeLocked(id string, root int32, harness, workspace string) bool {
+	sess, ok := r.lookupLocked(id)
+	if !ok || sess.RootPID == 0 {
+		return !r.otherRootInScopeLocked(harness, workspace, root)
+	}
+	if sess.RootPID == root {
+		return true
+	}
+	if _, deferred := r.deferred[id]; !deferred && sess.Confidence == model.ConfProcessTree {
+		log.Printf("session: %s keeps root %d; root %d in the same %s workspace gets its own session", id, sess.RootPID, root, harness)
+	}
+	return false
+}
+
+// otherRootInScopeLocked reports whether a family root other than root holds
+// a session in the harness+workspace scope. Caller holds mu.
+func (r *Resolver) otherRootInScopeLocked(harness, workspace string, root int32) bool {
+	for other := range r.byRoot {
+		if other == root {
+			continue
+		}
+		if info, ok := r.tagger.Tag(other); ok && info.Name == harness && info.CWD == workspace {
+			return true
+		}
+	}
+	return false
+}
+
+// lookupLocked returns session id from the deferred set, then the store.
+// Caller holds mu.
+func (r *Resolver) lookupLocked(id string) (model.Session, bool) {
+	if sess, ok := r.deferred[id]; ok {
+		return sess, true
+	}
+	return r.st.GetSession(id)
 }
 
 // maxAncestry bounds the OS ancestry walk from a session root.
@@ -415,10 +462,8 @@ func (r *Resolver) NoteTranscriptSighting(s TranscriptSighting) {
 	// id is authoritative over a provisional one. A second transcript id in
 	// the same workspace is a sibling conversation, not a rename.
 	if workspace != "" && harness != "" {
-		if old, ok := r.findProvisionalLocked(harness, workspace); ok && old != id {
-			if r.confidenceLocked(old) == model.ConfProcessTree {
-				r.rekeyLocked(old, id)
-			}
+		if old, ok := r.findProvisionalLocked(id, harness, workspace); ok {
+			r.rekeyLocked(old, id)
 		}
 		// Keep the scope index pointing at the current id so a process-tree
 		// session created after this sighting adopts the conversation.
@@ -495,11 +540,32 @@ func (r *Resolver) rekeyLocked(old, id string) {
 	}
 }
 
-// findProvisionalLocked returns the process-tree session id for a
-// harness+workspace whose conversation id is not yet known. Caller holds mu.
-func (r *Resolver) findProvisionalLocked(harness, workspace string) (string, bool) {
-	id, ok := r.byScope[scopeKey(harness, workspace)]
-	return id, ok
+// findProvisionalLocked returns the process-tree session transcript session
+// id merges into: the scope's newest session, when it is a process-tree row on
+// the transcript's family root (the root JoinTranscriptPID recorded) or, before
+// the transcript has a root, when no other family root holds a session in the
+// scope. A sighting cannot tell which of two processes in one working
+// directory holds the transcript; JoinTranscriptPID settles it. Caller holds
+// mu.
+func (r *Resolver) findProvisionalLocked(id, harness, workspace string) (string, bool) {
+	old, ok := r.byScope[scopeKey(harness, workspace)]
+	if !ok || old == id {
+		return "", false
+	}
+	cand, ok := r.lookupLocked(old)
+	if !ok || cand.Confidence != model.ConfProcessTree {
+		return "", false
+	}
+	if t, ok := r.st.GetSession(id); ok && t.RootPID != 0 {
+		if t.RootPID != cand.RootPID {
+			return "", false
+		}
+		return old, true
+	}
+	if r.otherRootInScopeLocked(harness, workspace, cand.RootPID) {
+		return "", false
+	}
+	return old, true
 }
 
 // confidenceLocked reports the confidence tier of a session id: deferred
