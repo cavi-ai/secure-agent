@@ -57,6 +57,9 @@ func TestSensitiveReadThenForeignConnectFlags(t *testing.T) {
 	if f[0].Severity != 3 {
 		t.Fatalf("severity = %d, want 3", f[0].Severity)
 	}
+	if got := f[0].Evidence[0].Rule; got != "env-file" {
+		t.Fatalf("read evidence rule = %q, want env-file", got)
+	}
 }
 
 func TestConnectToVendorHostDoesNotFlag(t *testing.T) {
@@ -173,6 +176,9 @@ func TestForeignConnectThenSensitiveReadFlags(t *testing.T) {
 	f = c.Observe(event.Event{Kind: event.KindPluginAction, PID: 200, TS: base.Add(2 * time.Second), Path: "/Users/x/proj/.env"})
 	if len(f) != 1 || f[0].Rule != "sensitive-read-then-connect" {
 		t.Fatalf("expected 1 sensitive-read-then-connect flag when conn arrives before read, got %+v", f)
+	}
+	if got := f[0].Evidence[0].Rule; got != "env-file" {
+		t.Fatalf("read evidence rule = %q, want env-file", got)
 	}
 }
 

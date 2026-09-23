@@ -7,6 +7,13 @@ All notable changes to `secure-agent` are documented here. The format follows
 ## [Unreleased]
 
 ### Fixed
+- Sensitive-path classifier: globs with a directory component
+  (`~/.kube/config`, `~/.claude/settings.json`, the merged guard-rule paths)
+  match the full path only; previously the file name alone matched, so any
+  `config`, `settings.json`, `hosts.yml`, `credentials`, or shell rc file
+  anywhere classified as sensitive and seeded `sensitive-read-then-connect`.
+- Flag evidence `read` items carry `rule` (which classifier rule or glob
+  matched); ES file events from the daemon's own pid are dropped at ingest.
 - ES grant flow: the Full Disk Access entry is the helper binary
   `com.cavi-ai.secure-agent-esd`, not `eslogger` — the setup card now names
   it exactly, and the retry-interval copy matches the real 60s backoff.

@@ -41,6 +41,7 @@ export interface EvidenceItem {
   kind: string;
   label: string;
   sub?: string;
+  rule?: string;
   ts?: string;
   text?: string;
 }
