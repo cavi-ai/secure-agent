@@ -242,6 +242,12 @@ func TestDoctorChecksFromFacts(t *testing.T) {
 			f.traceByHarness = map[string]int{"claude": 9}
 			return f
 		}(), doctorPass, "1 harnesses traced"},
+		{"traced harnesses named", checkTraceCoverage, func() doctorFacts {
+			f := steady
+			f.sessionsByHarness = map[string]int{"openclaw": 3, "claude": 2}
+			f.traceByHarness = map[string]int{"openclaw": 12, "claude": 9}
+			return f
+		}(), doctorPass, "2 harnesses traced: claude, openclaw"},
 		{"unnamed sessions", checkSessionIdentity, func() doctorFacts {
 			f := steady
 			f.sessionsTotal, f.sessionsNamed = 10, 7

@@ -7,6 +7,8 @@ All notable changes to `secure-agent` are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- openclaw conversations from `lcm.db`: sessions, turns, tool calls and model calls; `openclaw_home` setting.
+- `/doctor` trace coverage names the traced harnesses.
 - `/costs` rows and total split `unpriced_calls` into `unknown_model_calls`, `unpriced_model_calls`, `plan_calls` and `local_calls`.
 - `/costs?by=model` rows carry `provider` and `class`.
 - `GET /costs/unpriced`: zero-cost calls by harness, provider and model with their class.
@@ -39,6 +41,8 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Console: an explained flag's card and Attention item show who, what and the one verdict with the served actions as buttons; raw evidence, pid and timestamps sit behind Details.
 
 ### Fixed
+- A hook-stamped session carries its process tree's root pid and absorbs that tree's process-tree session.
+- Sessions first seen through a trace event record `transcript` confidence, not `hook`.
 - Codex model calls name the model from `turn_context` when the rollout has no `thread_settings_applied` line.
 - A codex rollout resumed from a saved offset keeps its session and model.
 - Claude `<synthetic>` records no longer count as model calls.

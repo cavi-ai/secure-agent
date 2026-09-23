@@ -244,17 +244,20 @@ func checkTraceCoverage(f doctorFacts) (string, string) {
 	if len(f.sessionsByHarness) == 0 {
 		return doctorSkip, "no sessions since boot"
 	}
-	var blind []string
+	var blind, traced []string
 	for h := range f.sessionsByHarness {
 		if f.traceByHarness[h] == 0 {
 			blind = append(blind, h)
+		} else {
+			traced = append(traced, h)
 		}
 	}
 	if len(blind) > 0 {
 		sort.Strings(blind)
 		return doctorFail, "sessions since boot but no trace rows: " + strings.Join(blind, ", ")
 	}
-	return doctorPass, fmt.Sprintf("%d harnesses traced", len(f.sessionsByHarness))
+	sort.Strings(traced)
+	return doctorPass, fmt.Sprintf("%d harnesses traced: %s", len(traced), strings.Join(traced, ", "))
 }
 
 func checkSessionIdentity(f doctorFacts) (string, string) {
