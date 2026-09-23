@@ -7,6 +7,10 @@ All notable changes to `secure-agent` are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- Owner-only `GET /debug/pprof/` on the control socket: Go runtime profiles
+  for the owner uid and the pinned menubar app; refused for agent and
+  foreign peers, never admitted by the console token, not served on the
+  proxy listener.
 - `GET /flags/{id}/explain`: one plain sentence per rule, no pids.
 - Explain carries the file's category and owner, each destination's org, allowlist state and read→connect gap, the session with the nearest tool call and model.
 - Explain carries one disposition (`acknowledged` → `benign-likely` at advisor confidence ≥ 0.85 → `warning` → `critical`).
@@ -130,6 +134,12 @@ All notable changes to `secure-agent` are documented here. The format follows
   remain only as fallbacks for older daemons.
 
 ### Changed
+- Transcript discovery by harness shape: Claude, Cursor, Codex and
+  Antigravity transcripts are found by per-harness globs re-resolved every
+  15 s instead of recursive walks of their trees; files modified in the last
+  two minutes are tailed every second; tail offsets are saved at most every
+  30 s and on shutdown; the ES spool tail skips a spool whose size and mtime
+  are unchanged.
 - The Endpoint Security collector ships inside the app bundle
   (`Contents/MacOS/secure-agent-esd` plus
   `Contents/Library/LaunchDaemons/com.cavi-ai.secure-agent-esd.plist`) and is

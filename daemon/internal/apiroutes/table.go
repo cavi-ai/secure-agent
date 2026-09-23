@@ -36,6 +36,10 @@ type Route struct {
 	// Decide marks the agent-facing guard decision endpoint, which uses the
 	// weaker canDecide policy instead of canMutate.
 	Decide bool
+	// OwnerOnly marks a route served only on the unix socket and only to the
+	// owner uid (or the pinned UI): never console-admitted, never registered
+	// on the proxy listener's handler, refused for agent and foreign peers.
+	OwnerOnly bool
 }
 
 // Table is the canonical API surface, ordered as registered.
@@ -81,6 +85,7 @@ var Table = []Route{
 	{Path: "/guard/pending", Console: true},
 	{Path: "/guard/resolve", Console: true, MutatingMethods: []string{"POST"}},
 	{Path: "/guard/rules", Console: true, MutatingMethods: []string{"POST"}},
+	{Path: "/debug/pprof/", Prefix: true, Console: false, OwnerOnly: true},
 }
 
 // ConsoleAllowed reports whether the console token admits path on the proxy
@@ -125,6 +130,20 @@ func IsMutation(method, path string) bool {
 			}
 		}
 		return false
+	}
+	return false
+}
+
+// IsOwnerOnly reports whether path falls under an OwnerOnly route (the
+// subtree, or its root without the trailing slash).
+func IsOwnerOnly(path string) bool {
+	for _, r := range Table {
+		if !r.OwnerOnly {
+			continue
+		}
+		if path == r.Path || path == strings.TrimSuffix(r.Path, "/") || (r.Prefix && strings.HasPrefix(path, r.Path)) {
+			return true
+		}
 	}
 	return false
 }

@@ -6,8 +6,8 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -18,16 +18,19 @@ import (
 )
 
 const (
-	// tailInterval is how often active transcript files are tailed for new lines.
-	tailInterval = 200 * time.Millisecond
-	// resolveInterval is how often the (expensive) recursive path discovery and
-	// the active-set recomputation run.
-	resolveInterval = 5 * time.Second
+	// tailInterval is how often the active set and the explicit file targets
+	// are tailed for new lines.
+	tailInterval = time.Second
+	// resolveInterval is how often the glob and directory targets are
+	// re-expanded and the active set recomputed from that pass's stats.
+	resolveInterval = 15 * time.Second
 	// activeWindow is how recently a file must have been modified to be tailed
 	// on the fast loop. Idle historical transcripts are skipped until they are
 	// appended to again; they rejoin the active set within one resolveInterval,
 	// and their byte offset is retained, so no appended lines are missed.
 	activeWindow = 2 * time.Minute
+	// offsetSaveInterval bounds how often the tail offsets are persisted.
+	offsetSaveInterval = 30 * time.Second
 	// hitDedupeWindow collapses repeats of the same (path, rule id) secret
 	// hit: a transcript that quotes one secret on every turn is one finding.
 	hitDedupeWindow = 10 * time.Minute
@@ -48,7 +51,7 @@ type TranscriptScanner struct {
 	// lines appended while the daemon was down are never read.
 	OffsetStatePath string
 
-	// ExtraTargets, when set, is consulted on every classify pass for
+	// ExtraTargets, when set, is consulted on every resolve pass for
 	// dynamically discovered targets (e.g. CODEX_HOME read off live codex
 	// processes — a launcher that relocates the rollout store must not
 	// blind the daemon until restart).
@@ -58,6 +61,7 @@ type TranscriptScanner struct {
 	tailEvery     time.Duration
 	resolveEvery  time.Duration
 	activeWindowD time.Duration
+	saveEvery     time.Duration
 
 	// OnProduce, when set, is called after any transcript/plugin event is
 	// published — the supervisor's coverage heartbeat: a scanner whose
@@ -300,57 +304,113 @@ func (ts *TranscriptScanner) Run(ctx context.Context) error {
 	if resolveEvery <= 0 {
 		resolveEvery = resolveInterval
 	}
+	saveEvery := ts.saveEvery
+	if saveEvery <= 0 {
+		saveEvery = offsetSaveInterval
+	}
+	window := ts.activeWindowD
+	if window <= 0 {
+		window = activeWindow
+	}
+
+	// The offsets map holds one entry per transcript ever seen, so a changed
+	// map is written at most once per saveEvery, and always on shutdown.
+	dirty := false
+	var lastSave time.Time
+	save := func(now time.Time, force bool) {
+		if !dirty || (!force && now.Sub(lastSave) < saveEvery) {
+			return
+		}
+		ts.saveOffsets(offsets)
+		dirty, lastSave = false, now
+	}
 
 	// seedFile sets an unseen file's offset to its current EOF. It must NEVER
 	// touch a file already in the offsets map: resetting a live offset to EOF
 	// discards whatever was appended since the last tail tick — on the resolve
 	// cadence that skipped exactly the line that made an idle file active
 	// again (the prompt).
-	seedFile := func(p string) {
-		if _, ok := offsets[p]; ok {
+	seedFile := func(f found) {
+		if _, ok := offsets[f.path]; ok {
 			return
 		}
-		if fi, err := os.Stat(p); err == nil && !fi.IsDir() {
-			offsets[p] = fi.Size()
-		}
+		offsets[f.path] = f.size
+		dirty = true
 	}
 
-	// Targets split two ways. Directory targets (e.g. ~/.claude/projects) need a
-	// recursive walk that is expensive when the tree holds thousands of files,
-	// so they are re-walked only on the slow resolve cadence and further limited
-	// to recently-modified files. File and glob targets (the hook activity log,
-	// session logs) are cheap to resolve and are refreshed on every fast tail
-	// tick, so real-time signals are picked up with low latency. Walking the
-	// whole tree on every tail tick previously pegged the CPU at ~20%.
+	// Targets split three ways. Glob targets describe where each harness
+	// writes (HarnessTranscriptGlobs): each `*` is one directory level, so
+	// discovery lists only the directories on those shapes, never the
+	// unrelated files beside them. A directory target no shape describes is
+	// walked recursively, which reads its whole tree. Both are re-resolved
+	// only on the slow resolve cadence, and the fast tail tick visits just
+	// the files that pass found modified within the active window. Explicit
+	// file targets (the hook activity log, the daemon's JSONL sink) are cheap
+	// and tailed on every tick, so real-time signals keep low latency.
 	//
-	// Pre-existing content is seeded past exactly once per directory target —
-	// on its FIRST sighting (startup, or a dynamically discovered target).
-	// Files created afterwards are read from byte 0 by tailFile, so a session
+	// Pre-existing content is seeded past exactly once per target — on its
+	// FIRST sighting (startup, or a dynamically discovered target). Files
+	// created afterwards are read from byte 0 by tailFile, so a session
 	// transcript that appears mid-run is captured whole while history is never
 	// replayed.
-	dirTargets, cheapTargets := ts.classifyTargets()
-	cheapPaths := resolveGlobs(cheapTargets)
-	for _, p := range cheapPaths {
-		seedFile(p)
-	}
-	seededDirs := map[string]bool{}
-	var allDirPaths, dirPaths []string
-	dirty := false
-	walk := func() {
-		allDirPaths = allDirPaths[:0]
-		for _, d := range dirTargets {
-			files := walkDir(d)
-			if !seededDirs[d] {
-				seededDirs[d] = true
-				for _, p := range files {
-					seedFile(p)
+	sighted := map[string]bool{}
+	walkLogged := map[string]bool{}
+	var explicit, active []string
+	resolve := func() {
+		now := time.Now()
+		explicit = explicit[:0]
+		var shaped []found
+		live := map[string]struct{}{}
+		for _, tgt := range ts.targets() {
+			first := !sighted[tgt]
+			sighted[tgt] = true
+			var files []found
+			isExplicit := false
+			switch {
+			case hasMeta(tgt):
+				files = globFiles(tgt, os.ReadDir)
+			case isDir(tgt):
+				if !walkLogged[tgt] {
+					walkLogged[tgt] = true
+					log.Printf("collect: transcript target %s is a directory no harness shape describes; it is walked on every resolve pass, which is expensive for a large tree", tgt)
+				}
+				files = walkDir(tgt)
+			default:
+				isExplicit = true
+				explicit = append(explicit, tgt)
+				if f, ok := statFile(tgt); ok {
+					files = []found{f}
 				}
 			}
-			allDirPaths = append(allDirPaths, files...)
+			for _, f := range files {
+				if first {
+					seedFile(f)
+				}
+				if _, dup := live[f.path]; dup {
+					continue
+				}
+				live[f.path] = struct{}{}
+				if !isExplicit {
+					shaped = append(shaped, f)
+				}
+			}
 		}
-		dirPaths = ts.activePaths(allDirPaths)
+		active = activePaths(shaped, now, window)
+		// Prune offsets only for files that no longer EXIST (deleted or
+		// rotated out). Pruning inactive-but-present files forced a byte-0
+		// re-read the moment they were appended to again — the duplicate
+		// replay bug.
+		for p := range offsets {
+			if _, ok := live[p]; ok {
+				continue
+			}
+			if _, err := os.Stat(p); err != nil {
+				delete(offsets, p)
+				dirty = true
+			}
+		}
 	}
-	walk()
+	resolve()
 
 	tailTicker := time.NewTicker(tailEvery)
 	defer tailTicker.Stop()
@@ -360,124 +420,30 @@ func (ts *TranscriptScanner) Run(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
+			save(time.Now(), true)
 			return ctx.Err()
 		case <-resolveTicker.C:
-			dirTargets, cheapTargets = ts.classifyTargets()
-			walk()
-			ts.saveOffsets(offsets)
+			resolve()
+			save(time.Now(), false)
 		case <-tailTicker.C:
-			cheapPaths = resolveGlobs(cheapTargets)
-			live := make(map[string]struct{}, len(cheapPaths)+len(allDirPaths))
-			for _, p := range cheapPaths {
-				live[p] = struct{}{}
+			for _, p := range explicit {
 				ts.tailFile(p, offsets, &dirty)
 			}
-			for _, p := range dirPaths {
-				live[p] = struct{}{}
+			for _, p := range active {
 				ts.tailFile(p, offsets, &dirty)
 			}
-			if dirty {
-				dirty = false
-				ts.saveOffsets(offsets)
-			}
-			// Prune offsets only for files that no longer EXIST (deleted or
-			// rotated out). Pruning inactive-but-present files forced a byte-0
-			// re-read the moment they were appended to again — the duplicate
-			// replay bug.
-			for p := range offsets {
-				if _, ok := live[p]; ok {
-					continue
-				}
-				if _, err := os.Stat(p); err != nil {
-					delete(offsets, p)
-				}
-			}
+			save(time.Now(), false)
 		}
 	}
 }
 
-// classifyTargets splits configured targets into directory targets (which need
-// a recursive walk) and cheap targets (explicit files or globs). A target that
-// does not currently exist is treated as cheap; it costs nothing until it
-// appears. Dynamic targets (ExtraTargets) are re-evaluated on every pass.
-func (ts *TranscriptScanner) classifyTargets() (dirs, cheap []string) {
-	paths := ts.paths
-	if ts.ExtraTargets != nil {
-		paths = append(append([]string{}, paths...), ts.ExtraTargets()...)
+// targets returns the configured targets plus the dynamic ones
+// (ExtraTargets), re-evaluated on every resolve pass.
+func (ts *TranscriptScanner) targets() []string {
+	if ts.ExtraTargets == nil {
+		return ts.paths
 	}
-	for _, p := range paths {
-		if fi, err := os.Stat(p); err == nil && fi.IsDir() {
-			dirs = append(dirs, p)
-		} else {
-			cheap = append(cheap, p)
-		}
-	}
-	return dirs, cheap
-}
-
-// walkDir returns every .jsonl file beneath one directory target.
-func walkDir(dir string) []string {
-	var res []string
-	_ = filepath.WalkDir(dir, func(path string, de os.DirEntry, err error) error {
-		if err != nil || de.IsDir() || !strings.HasSuffix(path, ".jsonl") {
-			return nil
-		}
-		// agy writes the same steps three ways (transcript.jsonl,
-		// transcript_full.jsonl, and chunk files); trace only the full
-		// one so a step is never emitted — or redaction-scanned — twice.
-		if strings.Contains(filepath.ToSlash(path), "/antigravity-cli/brain/") {
-			if !strings.HasSuffix(path, "/transcript_full.jsonl") {
-				return nil
-			}
-		}
-		res = append(res, path)
-		return nil
-	})
-	return res
-}
-
-// resolveGlobs expands explicit-file and glob targets to the files that exist
-// now. A target with no match yet is returned as-is so tailFile can pick it up
-// the moment it appears.
-func resolveGlobs(targets []string) []string {
-	var res []string
-	for _, p := range targets {
-		matches, err := filepath.Glob(p)
-		if err == nil && len(matches) > 0 {
-			for _, m := range matches {
-				if fi, mErr := os.Stat(m); mErr == nil && !fi.IsDir() {
-					res = append(res, m)
-				}
-			}
-		} else {
-			res = append(res, p)
-		}
-	}
-	return res
-}
-
-// activePaths returns the subset of paths modified within the active window.
-// It runs on the slow resolve cadence so the fast tail loop can skip the
-// thousands of idle historical transcripts that never change; an idle file
-// rejoins the set within one resolve interval of being appended to, and its
-// offset is retained, so no appended lines are missed.
-func (ts *TranscriptScanner) activePaths(paths []string) []string {
-	window := ts.activeWindowD
-	if window <= 0 {
-		window = activeWindow
-	}
-	cutoff := time.Now().Add(-window)
-	res := make([]string, 0, len(paths))
-	for _, p := range paths {
-		fi, err := os.Stat(p)
-		if err != nil || fi.IsDir() {
-			continue
-		}
-		if fi.ModTime().After(cutoff) {
-			res = append(res, p)
-		}
-	}
-	return res
+	return append(append([]string{}, ts.paths...), ts.ExtraTargets()...)
 }
 
 // loadOffsets reads persisted tail offsets written by a previous daemon run.

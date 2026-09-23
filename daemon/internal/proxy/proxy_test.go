@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -498,6 +499,64 @@ func TestConsoleAPIGate(t *testing.T) {
 	r.Body.Close()
 	if r.StatusCode == http.StatusOK {
 		t.Fatal("/guard/decision must not be served on the console port")
+	}
+}
+
+// /debug/pprof/ is never served on the proxy listener, not even with the
+// console token: the console handler is never reached for it.
+func TestPprofRefusedOnProxyListener(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	ln.Close()
+
+	dir := t.TempDir()
+	clearProxyToken()
+	clearConsoleToken()
+	ct := LoadConsoleToken(filepath.Join(dir, "console-token"))
+	LoadToken(filepath.Join(dir, "proxy-token"))
+	defer clearConsoleToken()
+	defer clearProxyToken()
+
+	var reached atomic.Bool
+	ps := NewProxyServer(port, bus.New(16), nil, nil)
+	ps.SetConsoleAPI(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached.Store(true)
+		w.WriteHeader(http.StatusOK)
+	}))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go ps.Serve(ctx)
+
+	base := fmt.Sprintf("http://127.0.0.1:%d", port)
+	for i := 0; i < 50; i++ {
+		resp, err := http.Get(base + "/dashboard/")
+		if err == nil {
+			resp.Body.Close()
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	for _, p := range []string{"/debug/pprof/", "/debug/pprof/heap"} {
+		for _, hdr := range []map[string]string{nil, {"X-SecureAgent-Console-Token": ct}} {
+			req, _ := http.NewRequest("GET", base+p, nil)
+			for k, v := range hdr {
+				req.Header.Set(k, v)
+			}
+			r, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			r.Body.Close()
+			if r.StatusCode == http.StatusOK {
+				t.Fatalf("GET %s (headers %v) served on the proxy listener", p, hdr)
+			}
+		}
+	}
+	if reached.Load() {
+		t.Fatal("the console handler was reached for /debug/pprof/")
 	}
 }
 
