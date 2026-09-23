@@ -1650,3 +1650,6 @@ button.fw-uninspected .fw-drill-hint {
   .wt-path { flex-basis: 100%; order: 5; }
   .wt-reasons { margin-left: 0; }
 }
+.wt-advice { margin: 6px 0 0 68px; padding: 6px 10px; border-left: 2px solid var(--brand); background: var(--brand-bg); border-radius: var(--r-sm); font-size: 0.74rem; color: var(--tx-2); overflow-wrap: anywhere; }
+.wt-advice b { color: var(--tx-1); font-weight: 600; }
+@media (max-width: 720px) { .wt-advice { margin-left: 0; } }

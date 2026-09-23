@@ -22,7 +22,8 @@ const worktreesBody = `{"duration_ms":4200,"cached":false,"stale_days":14,` +
 	`{"path":"/Users/x/code/lib","source":"manual","default_branch":"origin/main","worktrees":[` +
 	`{"path":"/Users/x/code/lib/.worktrees/gone","branch":"feat/gone","state":"prune","idle_days":0,"reasons":["directory is gone; git still lists it"]},` +
 	`{"path":"/Users/x/code/lib/.claude/worktrees/x","branch":"feat/x","state":"review","idle_days":3,"last_activity":"2026-09-20T10:00:00Z","reasons":["ignored files that only live here: .env"]}]}],` +
-	`"errors":["/Users/x/code/broken: git worktree: not a git repository"]}`
+	`"errors":["/Users/x/code/broken: git worktree: not a git repository"],` +
+	`"advice":{"/Users/x/code/app/.worktrees/done":{"assessment":"remove","confidence":0.8,"rationale":"merged; nothing local"}}}`
 
 func TestFormatWorktrees(t *testing.T) {
 	var rep wtReport
@@ -34,6 +35,7 @@ func TestFormatWorktrees(t *testing.T) {
 		"~/code/app  (origin/main, session)\n",
 		"  remove  stale    21d  feat/done                         .worktrees/done\n",
 		"          merged into origin/main (squash)\n",
+		"          advisor: remove (80%) — merged; nothing local\n",
 		"  keep              0d  (detached)                        ~/.codex/worktrees/ab12/app\n",
 		"          an agent session is live here\n",
 		"  prune              -  feat/gone                         .worktrees/gone\n",
@@ -167,5 +169,32 @@ func TestRunWorktreeRemove(t *testing.T) {
 	}
 	if strings.Join(seen, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("bodies =\n%s\nwant\n%s", strings.Join(seen, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+func TestRunWorktreeAdvise(t *testing.T) {
+	queued := true
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/worktrees/advise" {
+			http.NotFound(w, r)
+			return
+		}
+		fmt.Fprintf(w, `{"status":"ok","queued":%v}`, queued)
+	}))
+	t.Cleanup(srv.Close)
+	addr := srv.Listener.Addr().String()
+	client := &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "tcp", addr)
+	}}}
+	var out strings.Builder
+	if err := runWorktrees(&out, client, []string{"advise", "/abs/repo/.worktrees/x"}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(out.String(), "asked the advisor about /abs/repo/.worktrees/x") {
+		t.Fatalf("output = %q", out.String())
+	}
+	queued = false
+	if err := runWorktrees(io.Discard, client, []string{"advise", "/abs/repo/.worktrees/x"}); err == nil || !strings.Contains(err.Error(), "advisor is off") {
+		t.Fatalf("unqueued err = %v", err)
 	}
 }

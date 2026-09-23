@@ -14,7 +14,7 @@ vm.createContext(ctx);
 for (const f of ['lib.js', 'tab-worktrees.js']) {
   vm.runInContext(readFileSync(path.join(webDist, f), 'utf8'), ctx, { filename: f });
 }
-const { worktreeStateCounts, worktreeGroups, worktreeRowHTML, worktreePathLabel, worktreeFilterHTML, worktreesSummaryText } = ctx;
+const { worktreeStateCounts, worktreeGroups, worktreeRowHTML, worktreeGroupHTML, worktreePathLabel, worktreeFilterHTML, worktreesSummaryText } = ctx;
 
 const REPO = '/Users/x/code/app';
 const report = () => ({
@@ -47,7 +47,7 @@ test('worktreeGroups: filters by state and stale, drops repos left empty', () =>
   assert.deepEqual([...stale.flatMap(g => g.rows.map(r => r.state))], ['remove', 'review']);
 });
 
-test('worktreeRowHTML: Remove only on remove, Prune only on prune, everything escaped', () => {
+test('worktreeRowHTML: Remove only on remove, Prune only on prune, Ask advisor on review and keep, everything escaped', () => {
   const rep = report();
   const [done, gone] = rep.repos[0].worktrees.slice(1);
   const [keep, review] = rep.repos[1].worktrees;
@@ -60,11 +60,12 @@ test('worktreeRowHTML: Remove only on remove, Prune only on prune, everything es
   assert.match(goneHTML, /data-action="worktree-prune" data-repo="\/Users\/x\/code\/app"/);
   assert.match(goneHTML, /<span class="wt-idle">—<\/span>/);
   const keepHTML = worktreeRowHTML(keep, rep.repos[1]);
-  assert.ok(!keepHTML.includes('data-action='), 'keep rows carry no action');
+  assert.deepEqual([...keepHTML.matchAll(/data-action="([a-z-]+)"/g)].map(m => m[1]), ['worktree-advise']);
   assert.ok(keepHTML.includes('&lt;img src=x onerror=alert(1)&gt;') && !keepHTML.includes('<img'));
   assert.match(keepHTML, /<span class="wt-branch">\(detached\)<\/span>/);
   const reviewHTML = worktreeRowHTML(review, rep.repos[1]);
-  assert.ok(!reviewHTML.includes('data-action='), 'review rows carry no action');
+  assert.deepEqual([...reviewHTML.matchAll(/data-action="([a-z-]+)"/g)].map(m => m[1]), ['worktree-advise']);
+  assert.ok(!doneHTML.includes('worktree-advise') && !goneHTML.includes('worktree-advise'));
   assert.ok(reviewHTML.includes('feat/&quot;q&quot;'));
 });
 
@@ -81,4 +82,16 @@ test('worktreeFilterHTML and summary line', () => {
   assert.match(html, /class="wt-pill on" data-action="worktree-stale" aria-pressed="true">Stale <b>2<\/b>/);
   assert.equal(worktreesSummaryText(report()), '2 repos · 4 worktrees · stale after 14 idle days · scanned in 36.2s');
   assert.equal(worktreesSummaryText({ ...report(), cached: true }), '2 repos · 4 worktrees · stale after 14 idle days · cached scan');
+});
+
+test('advisor notes: shown under their row, escaped, and never change the actions', () => {
+  const rep = report();
+  const keep = rep.repos[1].worktrees[0];
+  const note = { assessment: 'remove', confidence: 0.8, rationale: '<script>alert(1)</script> looks disposable' };
+  const html = worktreeRowHTML(keep, rep.repos[1], note);
+  assert.ok(html.includes('<p class="wt-advice"><b>Advisor: remove</b> 80% · &lt;script&gt;alert(1)&lt;/script&gt; looks disposable</p>'));
+  assert.ok(!html.includes('worktree-remove'), 'a remove note must not add a Remove button');
+  const group = worktreeGroupHTML({ repo: rep.repos[1], rows: rep.repos[1].worktrees }, { [keep.path]: note });
+  assert.equal((group.match(/class="wt-advice"/g) || []).length, 1);
+  assert.ok(!worktreeRowHTML(keep, rep.repos[1]).includes('wt-advice'));
 });

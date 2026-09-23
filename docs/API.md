@@ -697,7 +697,17 @@ Remove inspects the worktree again at request time and runs `git worktree remove
 | `409` | remove: `{"error":"not removable","state":"<state>","reasons":[...]}` from the fresh verdict; prune: nothing to prune |
 | `500` | git failed |
 
-Mutation (pinned UI or owner): while the menu bar app runs, the CLI gets `403` and changes go through the console. CLI: `secure-agent worktrees remove <path>`, `secure-agent worktrees prune <repo>`. Console: the Worktrees tab lists the report with a Remove button on `remove` rows and Prune on `prune` rows.
+Mutation (pinned UI or owner): while the menu bar app runs, the CLI gets `403` and changes go through the console. CLI: `secure-agent worktrees remove <path>`, `secure-agent worktrees prune <repo>`.
+
+#### `POST /worktrees/advise`
+
+Queues one worktree for a note from the local advisor (see [ADVISOR_THREAT_MODEL.md](ADVISOR_THREAT_MODEL.md)).
+
+```json
+{"path": "/Users/me/code/app/.worktrees/ui"}
+```
+
+`200 {"status":"ok","queued":true,"subject":"worktree:<path>@<head>"}`; `queued` is `false` when the advisor is off or its queue is full. `400` for a missing or relative path, `404` for a path that is not a linked worktree, `409` for a worktree whose directory is gone, `503` when advice is not wired. The model answers `{"recommendation":"remove|review|keep","confidence":0-1,"rationale":"..."}`; anything else is dropped. `GET /worktrees` returns stored notes in `advice`, keyed by worktree path, for notes taken at the row's current HEAD: `{"<path>": {"assessment": "review", "confidence": 0.6, "rationale": "...", "model": "...", "created_at": "..."}}`. A note never changes `state` or what `POST /worktrees/remove` accepts. Mutation (pinned UI or owner). CLI: `secure-agent worktrees advise <path>`; the list view prints the note under its row. Console: the Worktrees tab lists the report with a Remove button on `remove` rows and Prune on `prune` rows.
 
 ## 🔐 Peer authentication & endpoint roles
 

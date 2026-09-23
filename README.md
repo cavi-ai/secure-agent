@@ -332,8 +332,10 @@ With a local model serving the endpoint above, every flag gets an advisory
 triage verdict (`advisor: benign / suspicious / malicious` chip on the flag
 card, with the rationale as its tooltip), the posture banner and menubar hero
 summarize how many critical flags look benign, and each incident card gains a
-plain-English narrative. The advisor is async and fails silent: if the model
-is down, nothing changes except the absence of verdicts.
+plain-English narrative. On request, it also writes a one-line note on a
+worktree from the Worktrees tab or `secure-agent worktrees advise`; the note
+never changes the worktree's verdict. The advisor is async and fails silent:
+if the model is down, nothing changes except the absence of verdicts.
 
 ---
 
@@ -355,6 +357,7 @@ The Go daemon listens on a local Unix domain socket (`~/.config/secure-agent/dae
 | `/worktrees` | `GET` | Every git worktree found, with a remove/review/keep/prune verdict and its reasons (`?refresh=1` rescans). |
 | `/worktrees/repos` | `POST` | Add a repository to the worktree hunter's saved list, or hide it (`{"path": "...", "hidden": true}`). |
 | `/worktrees/remove` | `POST` | Remove a worktree whose fresh verdict is `remove` (`{"path": "..."}`), or prune missing ones (`{"repo": "...", "prune": true}`). |
+| `/worktrees/advise` | `POST` | Ask the local advisor for a note on one worktree (`{"path": "..."}`); advisory only. |
 
 ### Example Query
 

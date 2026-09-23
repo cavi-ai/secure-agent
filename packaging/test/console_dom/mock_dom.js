@@ -1041,7 +1041,10 @@
         { path: WT_REPO + '/.worktrees/gone', branch: 'feat/gone', state: 'prune', stale: true, idle_days: 0, reasons: ['directory is gone; git still lists it'] }
       ]
     }],
-    errors: []
+    errors: [],
+    advice: {
+      [WT_REPO + '/.worktrees/evidence']: { assessment: 'review', confidence: 0.6, rationale: '<i>look</i> at .tmp before removing' }
+    }
   };
   // worktreedemo: Remove the removable worktree and accept the dialog; the
   // row must leave the tab without a rescan.
