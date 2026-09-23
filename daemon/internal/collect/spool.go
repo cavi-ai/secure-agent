@@ -18,12 +18,11 @@ import (
 )
 
 // spoolDrainBudget bounds how many bytes drainOnce will scan and attempt to
-// parse in one tick. A defective privileged writer can grow the spool tens
-// of MB in seconds with near-empty garbage lines: without a budget, every
-// tick pays bufio.Scanner + the parser over the whole flood (measured: 19%
-// cum CPU in drainOnce, 6% in encoding/json.checkValid, on a spool that grew
-// 24.8 MB in 5s and never parsed a line). Past the budget the rest of the
-// tail is skipped in bulk — counted, never scanned line by line.
+// parse in one tick. A defective privileged writer can grow the spool by
+// tens of MB per second with near-empty garbage lines: without a budget,
+// every tick would pay bufio.Scanner plus the parser over the whole flood.
+// Past the budget the rest of the tail is skipped in bulk — counted, never
+// scanned line by line.
 const spoolDrainBudget = 4 << 20 // 4 MiB
 
 // SpoolStats are the tailer's counters from its most recent drain: how many
