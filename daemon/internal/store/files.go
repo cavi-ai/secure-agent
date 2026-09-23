@@ -46,11 +46,15 @@ func (s *Store) PathFindings(path string, limit int) []model.FileFinding {
 			continue
 		}
 		var ev []model.EvidenceItem
-		if json.Unmarshal([]byte(evJSON), &ev) != nil ||
-			!slices.ContainsFunc(ev, func(it model.EvidenceItem) bool { return it.Label == path }) {
+		if json.Unmarshal([]byte(evJSON), &ev) != nil {
+			continue
+		}
+		i := slices.IndexFunc(ev, func(it model.EvidenceItem) bool { return it.Label == path })
+		if i < 0 {
 			continue
 		}
 		f.Kind = "flag"
+		f.EvidenceKind, f.EvidenceRule, f.Offset = ev[i].Kind, ev[i].Rule, ev[i].Offset
 		f.Acknowledged = ack != ""
 		out = append(out, f)
 		flags++

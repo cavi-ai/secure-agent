@@ -46,6 +46,11 @@ func TestPathFindingsMatchExactly(t *testing.T) {
 	if kinds["flag"] != "f-odd" || kinds["incident"] != "inc-odd" {
 		t.Fatalf("findings = %+v", got)
 	}
+	for _, f := range got {
+		if f.Kind == "flag" && (f.EvidenceKind != "transcript" || f.EvidenceRule != "fp-1" || f.Offset != 10) {
+			t.Fatalf("flag finding evidence = %+v, want transcript fp-1 at 10", f)
+		}
+	}
 	if got := s.PathFindings("/w/none.txt", 20); got == nil || len(got) != 0 {
 		t.Fatalf("no evidence: got %#v, want empty non-nil", got)
 	}

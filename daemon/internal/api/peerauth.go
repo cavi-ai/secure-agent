@@ -104,6 +104,11 @@ func (a *API) gate(checker PeerChecker, next http.Handler) http.Handler {
 			return
 		}
 		role := a.peerRole.classify(cred)
+		// The tagged set lags a freshly spawned agent child; a NoAgent route
+		// asks the tagger about the peer's family directly.
+		if role == roleOwner && apiroutes.IsNoAgent(r.URL.Path) && a.isAgentPID != nil && a.isAgentPID(cred.PID) {
+			role = roleAgent
+		}
 		if !a.authorize(role, r.Method, r.URL.Path) {
 			// Denials are logged with the kernel-attested identity: a mute or
 			// dismiss that 403s must be diagnosable from the daemon log
@@ -133,6 +138,9 @@ func isMutation(method, path string) bool {
 //   - GET reads: canRead (owner, UI, and tagged agents)
 //   - anything else (DELETE /guard/rules, unknown methods): owner-level
 func (a *API) authorize(r role, method, path string) bool {
+	if apiroutes.IsNoAgent(path) && r < roleOwner {
+		return false
+	}
 	if apiroutes.IsOwnerOnly(path) {
 		return r >= roleOwner
 	}

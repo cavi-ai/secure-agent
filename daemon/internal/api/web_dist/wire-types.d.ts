@@ -155,6 +155,53 @@ export interface Pattern {
   flag_ids: string[];
 }
 
+export interface FileFinding {
+  kind: string;
+  id: string;
+  rule: string;
+  severity?: number;
+  risk?: string;
+  ts: string;
+  agent?: string;
+  session_id?: string;
+  acknowledged?: boolean;
+  status?: string;
+  evidence_kind?: string;
+  evidence_rule?: string;
+  offset?: number;
+}
+
+export interface FileAccess {
+  kind: string;
+  ts: string;
+  pid: number;
+  exe_path?: string;
+  session_id: string;
+}
+
+export interface FileHit {
+  flag_id: string;
+  rule: string;
+  offset?: number;
+  ts: string;
+}
+
+export interface FileDetail {
+  path: string;
+  display: string;
+  exists: boolean;
+  size: number;
+  mod_time?: string;
+  owned_by_user: boolean;
+  subject?: ExplainSubject;
+  session?: Session;
+  findings: FileFinding[];
+  accesses: FileAccess[];
+  hits: FileHit[];
+  excerpt?: string;
+  excerpt_withheld?: string;
+}
+
 export interface RotateItem {
   id: string;
   category: string;
