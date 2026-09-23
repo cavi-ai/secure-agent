@@ -1794,7 +1794,8 @@ document.addEventListener('DOMContentLoaded', () => {
     ['keychain-access', 'Keychain file access'],
     ['keychain-security-cli', 'Keychain CLI (security tool)'],
     ['tcc-tamper', 'Privacy permissions (TCC) tamper'],
-    ['proxy-prompt-injection', 'Prompt injection in a response']
+    ['proxy-prompt-injection', 'Prompt injection in a response'],
+    ['secret-in-transcript', 'Secret appeared in an agent transcript']
   ];
 
   function renderNotifyRules() {

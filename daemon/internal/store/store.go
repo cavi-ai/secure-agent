@@ -587,6 +587,9 @@ func (s *Store) pruneEventsLocked() {
 			kinds = append(kinds, k)
 		}
 	}
+	if err := rows.Err(); err != nil {
+		log.Printf("store: prune kinds: %v", err)
+	}
 	rows.Close()
 	for _, k := range kinds {
 		_, _ = s.db.Exec(`DELETE FROM events WHERE kind = ? AND id NOT IN

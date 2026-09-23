@@ -8,3 +8,6 @@
 # the follow-up commit on this branch — the test now builds it from fragments.
 40a92193b4fe5ec6c01949ad7dc9dddbf847c31a:plugin/hooks/test_activity_log.py:generic-api-key:55
 27c3f39ce52819ceb2e746b6249eb9b7a90262e7:CHANGELOG.md:generic-api-key:10
+# Fake bearer fixture in a transcript-scanner test, removed from source in the
+# follow-up commit on this branch — the test now builds it from fragments.
+3a09b9babab97a2b5fe8a2f463bb7038fc8e250c:daemon/internal/collect/transcript_test.go:curl-auth-header:422

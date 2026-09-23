@@ -27,8 +27,11 @@ func TestPostureAllClearWhenNothingPending(t *testing.T) {
 
 	cl := unixClient(sock)
 	resp, err := cl.Get("http://unix/posture")
-	if err != nil || resp.StatusCode != 200 {
-		t.Fatalf("posture get: %v status=%v", err, resp.StatusCode)
+	if err != nil {
+		t.Fatalf("posture get: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("status=%v", resp.StatusCode)
 	}
 	var p Posture
 	decodeInto(t, resp, &p)
@@ -398,5 +401,11 @@ func TestClaudeHookRegistered(t *testing.T) {
 	os.WriteFile(path, []byte(`{"hooks":{"PreToolUse":[{"hooks":[{"command":"python3 ~/.claude/hooks/secret_guard.py"}]}],"PostToolUse":[{"hooks":[{"command":"python3 ~/.claude/hooks/secret_guard.py"}]}]}}`), 0o600)
 	if !claudeHookRegistered(path) {
 		t.Fatal("both events registered must read as registered")
+	}
+}
+
+func TestHumanFlagTitleSecretInTranscript(t *testing.T) {
+	if got := humanFlagTitle("secret-in-transcript"); got != "Secret appeared in an agent transcript" {
+		t.Fatalf("humanFlagTitle(secret-in-transcript) = %q", got)
 	}
 }
