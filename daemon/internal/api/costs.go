@@ -23,7 +23,7 @@ func (a *API) handleCosts(w http.ResponseWriter, r *http.Request) {
 	now := time.Now()
 	since := now.Add(-24 * time.Hour)
 	if v := q.Get("since"); v != "" {
-		t, err := parseCostSince(v, now)
+		t, err := parseSince(v, now)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -50,9 +50,9 @@ func (a *API) handleCosts(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, a.store.CostReport(since, until, by))
 }
 
-// parseCostSince accepts a lookback ("24h", "90m", "7d") or an RFC3339
-// timestamp.
-func parseCostSince(v string, now time.Time) (time.Time, error) {
+// parseSince accepts a lookback ("24h", "90m", "7d") or an RFC3339
+// timestamp. Shared by /costs and /sessions.
+func parseSince(v string, now time.Time) (time.Time, error) {
 	if t, err := time.Parse(time.RFC3339, v); err == nil {
 		return t, nil
 	}

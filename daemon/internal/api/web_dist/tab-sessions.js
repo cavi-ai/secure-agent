@@ -59,7 +59,8 @@ function sessionInfraGroupHTML(g, open) {
 }
 
 // The selected session's head and trace: mark, repo@branch, harness name,
-// identity confidence, workspace path (click copies), then the waterfall of
+// identity confidence, workspace path (click copies), Export (copies the
+// markdown report from GET /sessions/{id}/report), then the waterfall of
 // tool calls, model usage rows, and file/net/guard dots from
 // GET /sessions/{id}/timeline.
 function sessionDetailHTML(sess, events, trees) {
@@ -79,6 +80,7 @@ function sessionDetailHTML(sess, events, trees) {
       <span class="sd-harness">${escapeHTML(harnessMeta(sess.harness).label)}</span>
       ${sess.confidence ? `<span class="ss-chip sd-conf" title="How this session was identified">${escapeHTML(sess.confidence)}</span>` : ''}
       ${path ? `<button type="button" class="sd-path" data-action="copy-path" data-path="${escapeHTML(path)}" title="${escapeHTML(path)} — click to copy">${escapeHTML(middleTruncate(path, 48))}</button>` : ''}
+      <button type="button" class="btn btn-sm btn-ghost sd-export" data-action="copy-report" data-id="${escapeHTML(sess.id)}" title="Copy this session's report as markdown"><svg class="icon"><use href="#i-copy"/></svg>Export</button>
       ${meta ? `<span class="sd-meta">${meta}</span>` : ''}
     </div>
     ${sessionWaterfallHTML(events)}`;
