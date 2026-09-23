@@ -802,6 +802,128 @@ function resourceDiagnosisText(diagnosis) {
   return escapeHTML(diagnosis.summary || fallbacks[diagnosis.code] || 'Resource pressure detected');
 }
 
+// familyLabel: a resource family by what it works on, never by pid. The
+// family's root pid joins the durable sessions (/sessions): harness ·
+// repo@branch, else harness · workspace folder (the session's, then the
+// family's own), else the harness display name. A numeric folder reads as a
+// pid, so it never names a family.
+function familyLabel(family, sessions) {
+  const f = family || {};
+  const pid = Number(f.root_pid) || 0;
+  const s = pid ? (sessions || []).find(x => x && Number(x.root_pid) === pid) : null;
+  const harness = harnessMeta((s && s.harness) || f.name).label;
+  if (s && s.repo) return `${harness} · ${s.repo}${s.branch ? '@' + s.branch : ''}`;
+  const folder = (p) => {
+    const l = p && p !== '/' ? cwdLabel(p) : '';
+    return /^\d+$/.test(l) ? '' : l;
+  };
+  const where = folder(s && s.workspace) || folder(f.workspace);
+  return where ? `${harness} · ${where}` : harness;
+}
+
+// cappedList: one pattern for long lists — the first `limit` items, then a
+// "Show N more" button (data-action="show-more", data-key=key) that reveals
+// the rest in place. expanded is the console's Set of opened list keys, so a
+// re-render keeps an opened list whole. renderRow is optional: callers that
+// patch rows themselves read shown/hidden/more. Pure.
+function cappedList(items, limit, renderRow, key, expanded) {
+  const list = items || [];
+  const open = !!(expanded && expanded.has(key));
+  const shown = open ? list : list.slice(0, Math.max(0, limit));
+  const hidden = list.length - shown.length;
+  const more = hidden > 0
+    ? `<button type="button" class="btn btn-ghost btn-sm show-more" data-action="show-more" data-key="${escapeHTML(key)}">Show ${hidden} more</button>`
+    : '';
+  return { shown, hidden, more, html: (renderRow ? shown.map(renderRow).join('') : '') + more };
+}
+
+// resourceNeedsAttention: the families the Resources tab leads with — any
+// served diagnosis (heavy memory or CPU, rapid growth, idle retention,
+// runaway child, orphan drift; a family within its thresholds carries none),
+// never infra, highest resourceImpact first, at most n (default 5).
+function resourceNeedsAttention(families, n) {
+  const cap = n == null ? 5 : n;
+  return (families || [])
+    .filter(f => f && f.kind !== 'infra' && (f.diagnoses || []).some(d => d && d.code))
+    .sort((a, b) => resourceImpact(b) - resourceImpact(a) || Number(b.rss_bytes || 0) - Number(a.rss_bytes || 0))
+    .slice(0, cap);
+}
+
+// resourceFamilyGroups: the Resources tab's families by harness. A family
+// whose durable session (joined by root pid) has a parent_id resolving to
+// another family's session nests under that family's row — one indent: a
+// grandchild lands under the top-most family, and a parent_id cycle keeps
+// its members top-level. Rows sort by memory; groups by total memory
+// (children included). Infra (kind=infra) is one trailing "Infrastructure"
+// group that never nests, never parents and never counts as families.
+// Group: { key, label, infra, rows: [{ family, children }], families, rss, cpu }.
+function resourceFamilyGroups(families, sessions) {
+  const list = (families || []).filter(Boolean);
+  const byPid = new Map();
+  for (const s of sessions || []) {
+    if (s && s.root_pid && !byPid.has(Number(s.root_pid))) byPid.set(Number(s.root_pid), s);
+  }
+  const sessionOf = (f) => byPid.get(Number(f.root_pid)) || null;
+  const famBySession = new Map();
+  for (const f of list) {
+    const s = sessionOf(f);
+    if (s && s.id && f.kind !== 'infra') famBySession.set(s.id, f);
+  }
+  const parentOf = (f) => {
+    const s = sessionOf(f);
+    const p = s && s.parent_id ? famBySession.get(s.parent_id) : null;
+    return p && p !== f ? p : null;
+  };
+  const topOf = (f) => {
+    let cur = f;
+    const seen = new Set([f]);
+    for (;;) {
+      const p = parentOf(cur);
+      if (!p) return cur;
+      if (seen.has(p)) return f;
+      seen.add(p);
+      cur = p;
+    }
+  };
+  const rss = (f) => Number(f.rss_bytes || 0);
+  const cpu = (f) => Number(f.cpu_percent || 0);
+  const byMemory = (a, b) => rss(b) - rss(a);
+
+  const rows = new Map();
+  const infra = [];
+  for (const f of list) {
+    if (f.kind === 'infra') { infra.push({ family: f, children: [] }); continue; }
+    const top = topOf(f);
+    if (!rows.has(top)) rows.set(top, { family: top, children: [] });
+    if (top !== f) rows.get(top).children.push(f);
+  }
+  const groups = new Map();
+  for (const row of rows.values()) {
+    row.children.sort(byMemory);
+    const s = sessionOf(row.family);
+    const m = harnessMeta((s && s.harness) || row.family.name);
+    if (!groups.has(m.key)) groups.set(m.key, { key: m.key, label: m.label, infra: false, rows: [], families: 0, rss: 0, cpu: 0 });
+    const g = groups.get(m.key);
+    g.rows.push(row);
+    for (const f of [row.family, ...row.children]) {
+      g.families++;
+      g.rss += rss(f);
+      g.cpu += cpu(f);
+    }
+  }
+  const ordered = [...groups.values()];
+  for (const g of ordered) g.rows.sort((a, b) => byMemory(a.family, b.family));
+  ordered.sort((a, b) => b.rss - a.rss || a.key.localeCompare(b.key));
+  if (infra.length) {
+    infra.sort((a, b) => byMemory(a.family, b.family));
+    ordered.push({
+      key: 'infra', label: 'Infrastructure', infra: true, rows: infra, families: 0,
+      rss: infra.reduce((n, r) => n + rss(r.family), 0), cpu: infra.reduce((n, r) => n + cpu(r.family), 0),
+    });
+  }
+  return ordered;
+}
+
 function fmtAge(iso, nowMs) {
   const t = Date.parse(iso);
   if (!isFinite(t)) return '';
