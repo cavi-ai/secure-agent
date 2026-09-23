@@ -694,6 +694,97 @@ func TestPruneBudgetsApplyToUnlistedKinds(t *testing.T) {
 	}
 }
 
+// The insert-driven prune runs at most once per pruneMinInterval: a
+// high-rate producer crosses the 1000-insert mark every second, and each
+// prune scans the table.
+func TestInsertDrivenPruneGatedByMinInterval(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(filepath.Join(dir, "e.db"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	setKindBudget(t, int(event.KindExec), 100)
+	put := func(n int) {
+		for i := 0; i < n; i++ {
+			s.PutEvent(event.Event{Kind: event.KindExec, PID: 1, TS: time.Now()})
+		}
+	}
+
+	put(1000)
+	if got := countKind(t, s, int(event.KindExec)); got != 100 {
+		t.Fatalf("after first 1000 inserts: %d rows, want 100 (first prune runs)", got)
+	}
+	put(1000)
+	if got := countKind(t, s, int(event.KindExec)); got != 1100 {
+		t.Fatalf("second 1000 inserts inside the interval: %d rows, want 1100 (prune gated)", got)
+	}
+
+	prev := pruneMinInterval
+	pruneMinInterval = 0
+	t.Cleanup(func() { pruneMinInterval = prev })
+	put(1000)
+	if got := countKind(t, s, int(event.KindExec)); got != 100 {
+		t.Fatalf("after the interval: %d rows, want 100", got)
+	}
+}
+
+// Budget pruning and the kind walk seek the (kind, id) index instead of
+// scanning the table.
+func TestPruneBudgetQueryUsesKindIndex(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(filepath.Join(dir, "e.db"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	rows, err := s.db.Query(`EXPLAIN QUERY PLAN DELETE FROM events WHERE kind = ? AND id <
+		(SELECT id FROM events WHERE kind = ? ORDER BY id DESC LIMIT 1 OFFSET ?)`, 0, 0, 9)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var plan []string
+	for rows.Next() {
+		var id, parent, notused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &notused, &detail); err != nil {
+			t.Fatal(err)
+		}
+		plan = append(plan, detail)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(plan, " | ")
+	if strings.Contains(joined, "SCAN events") || !strings.Contains(joined, "idx_events_kind_id") {
+		t.Fatalf("budget delete plan = %q, want index seeks on idx_events_kind_id", joined)
+	}
+}
+
+// WAL with synchronous=NORMAL: commits skip the per-transaction fsync.
+func TestOpenUsesWALSynchronousNormal(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(filepath.Join(dir, "e.db"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	var mode string
+	if err := s.db.QueryRow(`PRAGMA journal_mode`).Scan(&mode); err != nil {
+		t.Fatal(err)
+	}
+	var sync int
+	if err := s.db.QueryRow(`PRAGMA synchronous`).Scan(&sync); err != nil {
+		t.Fatal(err)
+	}
+	if mode != "wal" || sync != 1 {
+		t.Fatalf("journal_mode=%q synchronous=%d, want wal and 1 (NORMAL)", mode, sync)
+	}
+}
+
 // A transcript re-read replays the same turn/model-call record with the same
 // timestamp; the second insert must be ignored, not double-counted.
 func TestTurnAndModelCallDedupeOnSessionTS(t *testing.T) {

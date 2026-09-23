@@ -43,6 +43,9 @@ All notable changes to `secure-agent` are documented here. The format follows
 
 ### Changed
 - File opens, writes and deletes from processes outside every agent family are not stored unless they raise a flag.
+- Event pruning seeks a `(kind, id)` index: kinds by index skip-scan, each kind's budget cut at its budget-th newest id.
+- Insert-driven pruning runs at most once per 30 s.
+- The event store opens WAL with `synchronous=NORMAL`.
 - Posture and attention: a flag the advisor judged benign at confidence ≥ 0.85 is severity 1 (`attention`, "Finding, likely benign"), never `critical`.
 - Console: an explained flag's card and Attention item show who, what and the one verdict with the served actions as buttons; raw evidence, pid and timestamps sit behind Details.
 - Console Resources: a one-row machine strip (headroom, memory, CPU, swap; pressure and thermal chips) replaces the host block.
@@ -57,6 +60,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Console: the drawer's Copy button stays hidden outside incident reports.
 
 ### Fixed
+- A second process in the same working directory gets its own session, never another root's.
 - A codex rollout session joins the process holding the rollout open: root pid set, that tree's process-tree session merged in.
 - `/doctor` trace coverage counts transcript and hook sessions seen since boot, not only those started since boot.
 - A session upsert stores a new parent and never clears a stored one.
