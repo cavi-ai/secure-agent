@@ -146,6 +146,7 @@ type API struct {
 	statusFn         StatusFunc
 	hermes           func() collect.HermesStatus
 	worktrees        *worktreehunter.Hunter
+	worktreeAdvisor  func(model.WorktreeAdviceRequest) bool
 	resources        func() resource.Snapshot
 	resourceControl  *resource.Controller
 	resourcePolicy   func(config.ResourceControlConfig) error
@@ -293,6 +294,9 @@ type Deps struct {
 	// Worktrees is the worktree hunter behind /worktrees (optional; unwired
 	// answers 503).
 	Worktrees *worktreehunter.Hunter
+	// WorktreeAdvisor, when set, queues a worktree for an advisory note and
+	// reports whether it was queued (false: advisor off or queue full).
+	WorktreeAdvisor func(model.WorktreeAdviceRequest) bool
 }
 
 // New builds the API from its resolved dependencies.
@@ -304,6 +308,7 @@ func New(d Deps) *API {
 		statusFn:        d.Status,
 		hermes:          d.Hermes,
 		worktrees:       d.Worktrees,
+		worktreeAdvisor: d.WorktreeAdvisor,
 		resources:       d.Resources,
 		resourceControl: d.ResourceControl,
 		resourcePolicy:  d.ResourcePolicyUpdater,
@@ -601,6 +606,8 @@ func (a *API) routes() map[string]http.HandlerFunc {
 		"/doctor":                       a.handleDoctor,
 		"/worktrees":                    a.handleWorktrees,
 		"/worktrees/repos":              a.handleWorktreeRepos,
+		"/worktrees/remove":             a.handleWorktreeRemove,
+		"/worktrees/advise":             a.handleWorktreeAdvise,
 		"/advisor/discover":             a.handleAdvisorDiscover,
 		"/fleet":                        a.handleFleet,
 		"/kill":                         a.handleKill,

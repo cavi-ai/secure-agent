@@ -29,6 +29,13 @@ home is a trust failure. The advisor therefore speaks **loopback HTTP only**.
   (file paths, hostnames, timestamps).
 - Incident narrative: rule, agent, risk, summary, touched files, connection
   hosts, rotate-item names and categories.
+- Worktree note (on request only, `POST /worktrees/advise`): the checker's
+  state and idle days; inside `<evidence>`, the branch name, the checker's
+  reasons, up to 20 changed or untracked paths, up to 20 precious ignored
+  entries (name, file count, size) and up to 10 subjects of commits on no
+  remote. File contents are never read. The note is stored as advisor
+  verdict kind `worktree` and displayed only: the worktree's state and what
+  `POST /worktrees/remove` accepts are computed without it.
 - Plan (asked for per finding, incident or evidence file): the flag's
   explanation and evidence strings, the incident summary, the session
   (harness, repo, branch, duration, top tools, up to 8 timeline lines before

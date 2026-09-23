@@ -108,13 +108,14 @@ type chatResponse struct {
 }
 
 type task struct {
-	kind      string // "flag" | "incident" | "host" | "guard" | "plan"
+	kind      string // "flag" | "incident" | "host" | "guard" | "plan" | "worktree"
 	subjectID string
 	flag      model.Flag
 	incident  model.IncidentReport
 	host      string
 	agentName string
 	guard     model.GuardAssessmentRequest
+	worktree  model.WorktreeAdviceRequest
 	plan      PlanRequest
 }
 
@@ -404,6 +405,8 @@ func (s *Subscriber) process(ctx context.Context, t task) {
 		verdict, err = s.assessHost(ctx, t.agentName, t.host)
 	case "guard":
 		verdict, err = s.assessGuard(ctx, t.guard)
+	case "worktree":
+		verdict, err = s.assessWorktree(ctx, t.worktree)
 	}
 	if err != nil {
 		s.recordFailure(err)
@@ -666,6 +669,28 @@ func (s *Subscriber) operatorHistory(fl model.Flag) string {
 
 var thinkBlockRE = regexp.MustCompile(`(?s)<think>.*?</think>`)
 
+// jsonObject strips a <think> block and code fences and returns the JSON
+// object in the answer. Reasoning models narrate: even with thinking
+// disabled they prepend prose ("The evidence suggests...") before the JSON,
+// so the span from the first { to the last } is taken from anywhere in the
+// response instead of failing the whole verdict.
+func jsonObject(content string) string {
+	c := thinkBlockRE.ReplaceAllString(content, "")
+	c = strings.TrimSpace(c)
+	c = strings.TrimPrefix(c, "```json")
+	c = strings.TrimPrefix(c, "```")
+	c = strings.TrimSuffix(c, "```")
+	c = strings.TrimSpace(c)
+	if !strings.HasPrefix(c, "{") {
+		if start := strings.IndexByte(c, '{'); start >= 0 {
+			if end := strings.LastIndexByte(c, '}'); end > start {
+				c = c[start : end+1]
+			}
+		}
+	}
+	return c
+}
+
 // parseVerdict strictly validates the model's JSON. Anything malformed,
 // off-schema, or carrying an unknown assessment is dropped — an advisory
 // layer must fail empty, never invent a verdict. Reasoning models may wrap
@@ -691,24 +716,7 @@ func normalizeAction(s string) string {
 }
 
 func parseVerdict(content string) (model.AdvisorVerdict, error) {
-	c := thinkBlockRE.ReplaceAllString(content, "")
-	c = strings.TrimSpace(c)
-	c = strings.TrimPrefix(c, "```json")
-	c = strings.TrimPrefix(c, "```")
-	c = strings.TrimSuffix(c, "```")
-	c = strings.TrimSpace(c)
-
-	// Reasoning models narrate. Even with thinking disabled, they prepend
-	// prose ("The evidence suggests...") before the JSON. Extract the first
-	// balanced {...} object from anywhere in the response instead of failing
-	// the whole verdict — the JSON is what we need, the prose is noise.
-	if !strings.HasPrefix(c, "{") {
-		if start := strings.IndexByte(c, '{'); start >= 0 {
-			if end := strings.LastIndexByte(c, '}'); end > start {
-				c = c[start : end+1]
-			}
-		}
-	}
+	c := jsonObject(content)
 
 	var v struct {
 		Assessment      string  `json:"assessment"`

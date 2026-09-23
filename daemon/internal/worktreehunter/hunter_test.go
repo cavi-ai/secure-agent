@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
+	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
 
 // isolateGit points git at an empty config and home so fixtures never pick
@@ -110,6 +111,7 @@ type memStore struct {
 	mu       sync.Mutex
 	repos    map[string]model.WorktreeRepo
 	activity []model.WorkspaceActivity
+	audit    []store.AuditEntry
 }
 
 func newMemStore() *memStore { return &memStore{repos: map[string]model.WorktreeRepo{}} }
@@ -151,7 +153,13 @@ func (m *memStore) SetWorktreeRepoHidden(path string, hidden bool) bool {
 
 func (m *memStore) WorkspaceActivity() []model.WorkspaceActivity { return m.activity }
 
-func findRow(t *testing.T, rep Report, path string) Worktree {
+func (m *memStore) PutAudit(a store.AuditEntry) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.audit = append(m.audit, a)
+}
+
+func findRow(t *testing.T, rep ScanReport, path string) Worktree {
 	t.Helper()
 	for _, r := range rep.Repos {
 		for _, w := range r.Worktrees {
@@ -259,19 +267,21 @@ func TestScanClassifiesEveryRule(t *testing.T) {
 		{Workspace: f.main, LastSeen: time.Now()},
 	}
 	h := New(st, home, Options{})
+	// Two days on: past the 24-hour grace every fresh fixture would sit in.
+	h.now = func() time.Time { return time.Now().Add(48 * time.Hour) }
 	rep := h.Report(ctx, true)
 	if len(rep.Errors) != 0 {
 		t.Fatalf("scan errors: %v", rep.Errors)
 	}
 
 	wantState(t, findRow(t, rep, f.main), StateMain, "")
-	wantState(t, findRow(t, rep, merged), StateRemove, "merged into origin/main")
+	wantState(t, findRow(t, rep, merged), StateRemove, "contained in origin/main")
 	wantState(t, findRow(t, rep, squash), StateRemove, "(squash)")
 	wantState(t, findRow(t, rep, dirty), StateKeep, "1 uncommitted change")
 	wantState(t, findRow(t, rep, untracked), StateKeep, "1 untracked file")
 	wantState(t, findRow(t, rep, unpushed), StateReview, "1 commit on no remote and not in origin/main")
-	wantState(t, findRow(t, rep, pushedActive), StateKeep, "not merged; active 0 days ago")
-	wantState(t, findRow(t, rep, pushedIdle), StateRemove, "every commit is on a remote; idle 40 days")
+	wantState(t, findRow(t, rep, pushedActive), StateKeep, "not merged; active 2 days ago")
+	wantState(t, findRow(t, rep, pushedIdle), StateRemove, "every commit is on a remote; idle 42 days")
 	wantState(t, findRow(t, rep, locked), StateKeep, "locked: agent busy")
 	wantState(t, findRow(t, rep, missing), StatePrune, "directory is gone")
 	wantState(t, findRow(t, rep, env), StateReview, "ignored files that only live here: .env (17 B)")
@@ -282,7 +292,7 @@ func TestScanClassifiesEveryRule(t *testing.T) {
 	wantState(t, findRow(t, rep, stashed), StateReview, "1 stash on this branch")
 
 	g := findRow(t, rep, gone)
-	wantState(t, g, StateRemove, "merged into origin/main")
+	wantState(t, g, StateRemove, "contained in origin/main")
 	if !g.UpstreamGone || !g.Stale {
 		t.Errorf("gone-upstream: upstream_gone=%v stale=%v, want both", g.UpstreamGone, g.Stale)
 	}
@@ -438,6 +448,30 @@ func TestReportCaches(t *testing.T) {
 	now = now.Add(cacheTTL + time.Second)
 	if r := h.Report(context.Background(), false); r.Cached {
 		t.Fatal("expired cache served")
+	}
+}
+
+// A worktree touched in the last day is never remove, merged or not: a
+// fresh one an agent is about to use has no commits and reads as merged.
+func TestClassifyActiveGrace(t *testing.T) {
+	now := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
+	for _, c := range []struct {
+		ago   time.Duration
+		state string
+		stale bool
+	}{
+		{time.Hour, StateKeep, false},
+		{23 * time.Hour, StateKeep, false},
+		{25 * time.Hour, StateRemove, true},
+	} {
+		w := Worktree{Merged: mergedAncestor}
+		classify(&w, facts{DefaultBranch: "origin/main", IndexTime: now.Add(-c.ago)}, now, 14*24*time.Hour)
+		if w.State != c.state || w.Stale != c.stale {
+			t.Errorf("merged, touched %v ago: state %s stale %v, want %s %v (%q)", c.ago, w.State, w.Stale, c.state, c.stale, w.Reasons)
+		}
+		if c.state == StateKeep && !strings.Contains(strings.Join(w.Reasons, " "), "active in the last 24 hours") {
+			t.Errorf("grace reason missing: %q", w.Reasons)
+		}
 	}
 }
 

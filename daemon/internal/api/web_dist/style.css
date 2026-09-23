@@ -1649,3 +1649,52 @@ button.fw-uninspected .fw-drill-hint {
   .hbar-sub { display: none; }
   .hbar-row { grid-template-columns: minmax(90px, 1.2fr) minmax(60px, 2fr) auto; }
 }
+
+/* ---------- worktrees ---------- */
+.wt-add { display: flex; gap: 6px; flex: 1 1 260px; max-width: 420px; margin-left: auto; }
+.wt-add .harness-filter-text { max-width: none; margin-left: 0; }
+.wt-pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 10px; border: 1px solid var(--line-2); border-radius: 999px;
+  background: var(--bg-2); color: var(--tx-2); font: inherit; font-size: 12px; cursor: pointer;
+}
+.wt-pill b { font: 600 0.72rem/1 var(--mono); color: var(--tx-1); }
+.wt-pill:hover { border-color: var(--brand); }
+.wt-pill:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
+.wt-pill.on { background: var(--brand-bg); border-color: var(--brand); color: var(--brand-2); }
+.wt-summary { margin: 0; padding: 8px 16px 0; font-size: 0.75rem; color: var(--tx-3); }
+.wt-errors { margin: 8px 16px 0; padding: 8px 12px 8px 28px; border-radius: var(--r-sm); background: var(--warn-bg); color: var(--warn); font-size: 0.75rem; }
+.wt-errors[hidden] { display: none; }
+.wt-repo { display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: var(--r-md); overflow: hidden; }
+.wt-repo-head {
+  display: flex; align-items: center; gap: 10px; min-width: 0;
+  padding: 8px 12px; background: var(--bg-2); border-bottom: 1px solid var(--line);
+}
+.wt-repo-path { font: 600 0.78rem/1.3 var(--mono); color: var(--tx-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.wt-repo-meta { font-size: 0.72rem; color: var(--tx-3); white-space: nowrap; }
+.wt-hide { margin-left: auto; font-size: 0.72rem; white-space: nowrap; }
+.wt-row { padding: 8px 12px; border-top: 1px solid var(--line); }
+.wt-row:first-of-type { border-top: 0; }
+.wt-main { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.wt-state {
+  flex: none; min-width: 58px; text-align: center;
+  font: 600 0.68rem/1 var(--mono); text-transform: uppercase; letter-spacing: 0.04em;
+  padding: 4px 6px; border-radius: 999px; background: var(--bg-3); color: var(--tx-2);
+}
+.wt-remove .wt-state { background: var(--ok-bg); color: var(--ok); }
+.wt-review .wt-state { background: var(--warn-bg); color: var(--warn); }
+.wt-keep .wt-state { background: var(--bad-bg); color: var(--bad); }
+.wt-stale { flex: none; font-size: 0.68rem; color: var(--tx-3); border: 1px solid var(--line-2); border-radius: 999px; padding: 2px 6px; }
+.wt-branch { flex: none; max-width: 240px; font: 500 0.76rem/1.3 var(--mono); color: var(--tx-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wt-path { flex: 1 1 auto; min-width: 0; font: 0.74rem/1.3 var(--mono); color: var(--tx-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wt-idle { flex: none; font-size: 0.72rem; color: var(--tx-3); white-space: nowrap; }
+.wt-reasons { margin: 6px 0 0 68px; padding: 0 0 0 14px; font-size: 0.74rem; color: var(--tx-2); }
+.wt-reasons li { margin: 2px 0; overflow-wrap: anywhere; }
+@media (max-width: 720px) {
+  .wt-main { flex-wrap: wrap; }
+  .wt-path { flex-basis: 100%; order: 5; }
+  .wt-reasons { margin-left: 0; }
+}
+.wt-advice { margin: 6px 0 0 68px; padding: 6px 10px; border-left: 2px solid var(--brand); background: var(--brand-bg); border-radius: var(--r-sm); font-size: 0.74rem; color: var(--tx-2); overflow-wrap: anywhere; }
+.wt-advice b { color: var(--tx-1); font-weight: 600; }
+@media (max-width: 720px) { .wt-advice { margin-left: 0; } }
