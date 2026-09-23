@@ -431,15 +431,9 @@ func min(a, b int) int {
 	return b
 }
 
-// GetSession returns one session by id.
+// GetSession returns one session by id, whatever its status or age.
 func (s *Store) GetSession(id string) (model.Session, bool) {
-	got := s.ListSessions(SessionFilter{Limit: 1000})
-	for _, sess := range got {
-		if sess.ID == id {
-			return sess, true
-		}
-	}
-	return model.Session{}, false
+	return s.sessionByID(id)
 }
 
 // pruneSessionsLocked bounds the ended-session tail: ended rows older than

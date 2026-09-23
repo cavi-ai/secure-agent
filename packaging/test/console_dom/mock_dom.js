@@ -345,12 +345,13 @@
       { rule: 'keychain-security-cli', host: '*' }
     ],
     '/egress/uninspected': [
-      { agent: 'cursor', host: 'registry.npmjs.org', count: 14, first_seen: iso(86400000), last_seen: iso(300000), session_id: 'sess-cursor-2', assessment: 'benign', rationale: 'npm registry is routine for JS projects' },
-      { agent: 'claude', host: 'statsig.example.com', count: 3, first_seen: iso(7200000), last_seen: iso(900000), session_id: 'sess-claude-1' },
-      { agent: 'claude', host: 'telemetry.example.com', count: 5, first_seen: iso(5400000), last_seen: iso(600000), session_id: 'sess-claude-1' },
-      { agent: 'cursor', host: '2606:4700:4408::ac40:9bd1', count: 56, last_seen: iso(600000), infra: 'Cloudflare' },
-      { agent: 'codex', host: 'ec2-98-90-104-193.compute-1.amazonaws.com', count: 11, last_seen: iso(700000), infra: 'AWS' },
-      { agent: 'claude', host: '2600:1901:0:9e23::', count: 2, last_seen: iso(400000) }
+      { agent: 'cursor', host: 'registry.npmjs.org', count: 14, first_seen: iso(86400000), last_seen: iso(300000), session_id: 'sess-cursor-2', assessment: 'benign', rationale: 'npm registry is routine for JS projects', identity: { kind: 'hostname', name: 'registry.npmjs.org' } },
+      { agent: 'claude', host: 'statsig.example.com', count: 3, first_seen: iso(7200000), last_seen: iso(900000), session_id: 'sess-claude-1', identity: { kind: 'hostname', name: 'statsig.example.com' } },
+      { agent: 'claude', host: 'telemetry.example.com', count: 5, first_seen: iso(5400000), last_seen: iso(600000), session_id: 'sess-claude-1', identity: { kind: 'hostname', name: 'telemetry.example.com' } },
+      { agent: 'cursor', host: '2606:4700:4408::ac40:9bd1', count: 56, last_seen: iso(600000), infra: 'Cloudflare', identity: { kind: 'ipv6', org: 'Cloudflare', class: 'cloud', ip: '2606:4700:4408::ac40:9bd1' } },
+      { agent: 'codex', host: 'ec2-98-90-104-193.compute-1.amazonaws.com', count: 11, last_seen: iso(700000), infra: 'AWS', identity: { kind: 'hostname', name: 'ec2-98-90-104-193.compute-1.amazonaws.com', org: 'AWS', class: 'cloud' } },
+      { agent: 'claude', host: '2600:1901:0:9e23::', count: 2, last_seen: iso(400000), identity: { kind: 'ipv6', org: 'Google Cloud', class: 'cloud', ip: '2600:1901:0:9e23::' } },
+      { agent: 'openclaw', host: '2607:6bc0::10', count: 94, first_seen: iso(3600000), last_seen: iso(60000), identity: { kind: 'ipv6', org: 'Anthropic', class: 'vendor', ip: '2607:6bc0::10' } }
     ],
     '/egress/endpoint': {
       host: '2600:1901:0:9e23::',
@@ -811,6 +812,21 @@
   // Auto-action: open the uninspected-egress drill-down modal.
   if (location.search.includes('uninspecteddemo')) {
     setTimeout(() => window.openUninspected(), 4000);
+  }
+  // Auto-action: open the drill-down, open a vendor disclosure, then Allow an
+  // unknown row. The refill that follows must keep the disclosure open.
+  if (location.search.includes('keepopendemo')) {
+    setTimeout(() => window.openUninspected(), 4000);
+    setTimeout(() => {
+      const d = document.querySelector('#drawer-body details[data-key^="vendor:"]');
+      d.querySelector('summary').click();
+      d.dataset.before = '1';
+      document.querySelector('#drawer-body .egress-agent-group [data-action="allow-host"][data-host="statsig.example.com"]').click();
+    }, 5000);
+    setTimeout(() => {
+      const d = document.querySelector('#drawer-body details[data-key^="vendor:"]');
+      stamp('keepopen', `key=${d.dataset.key} rebuilt=${d.dataset.before ? 0 : 1} open=${d.open ? 1 : 0}`);
+    }, 9000);
   }
   // Auto-action: open the endpoint Evidence detail for the unattributed IPv6.
   if (location.search.includes('endpointdemo')) {

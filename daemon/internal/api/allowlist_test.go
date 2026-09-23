@@ -48,7 +48,7 @@ func TestAllowlistSuggestApproveRoundTrip(t *testing.T) {
 
 	// Recurring uninspected egress: below threshold = no suggestion.
 	now := time.Now()
-	conn := event.Event{Kind: event.KindConnOpen, PID: 42, RemoteHost: "registry.npmjs.org", RemotePort: 443}
+	conn := event.Event{Kind: event.KindConnOpen, PID: 42, RemoteHost: "downloads.example.com", RemotePort: 443}
 	for i := 0; i < minSuggestionCount-1; i++ {
 		conn.TS = now.Add(time.Duration(i) * time.Second)
 		cr.Observe(conn)
@@ -85,7 +85,7 @@ func TestAllowlistSuggestApproveRoundTrip(t *testing.T) {
 	conn.TS = now.Add(minSuggestionCount * time.Second)
 	cr.Observe(conn)
 	got := get("/allowlist/suggestions")
-	if len(got) != 1 || got[0].Host != "registry.npmjs.org" || got[0].Agent != "cursor" || got[0].Count != minSuggestionCount {
+	if len(got) != 1 || got[0].Host != "downloads.example.com" || got[0].Agent != "cursor" || got[0].Count != minSuggestionCount {
 		t.Fatalf("suggestion wrong: %+v", got)
 	}
 
@@ -102,7 +102,7 @@ func TestAllowlistSuggestApproveRoundTrip(t *testing.T) {
 
 	// Approve: persists, purges the blind spot, audits.
 	resp, err = cl.Post("http://unix/allowlist", "application/json",
-		strings.NewReader(`{"agent":"cursor","host":"registry.npmjs.org"}`))
+		strings.NewReader(`{"agent":"cursor","host":"downloads.example.com"}`))
 	if err != nil {
 		t.Fatalf("approve: %v", err)
 	}
@@ -111,7 +111,7 @@ func TestAllowlistSuggestApproveRoundTrip(t *testing.T) {
 	}
 	resp.Body.Close()
 
-	if hosts := al.Load()["cursor"]; len(hosts) != 1 || hosts[0] != "registry.npmjs.org" {
+	if hosts := al.Load()["cursor"]; len(hosts) != 1 || hosts[0] != "downloads.example.com" {
 		t.Fatalf("override not persisted: %v", hosts)
 	}
 	if got := get("/allowlist/suggestions"); len(got) != 0 {
@@ -123,7 +123,7 @@ func TestAllowlistSuggestApproveRoundTrip(t *testing.T) {
 	audit := st.RecentAudit(10)
 	found := false
 	for _, e := range audit {
-		if e.Action == "allowlist-add" && strings.Contains(e.Detail, "registry.npmjs.org") {
+		if e.Action == "allowlist-add" && strings.Contains(e.Detail, "downloads.example.com") {
 			found = true
 		}
 	}

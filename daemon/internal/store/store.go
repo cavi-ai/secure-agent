@@ -8,12 +8,14 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	_ "modernc.org/sqlite"
 
+	"github.com/cavi-ai/secure-agent/daemon/internal/correlate"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/resource"
@@ -30,6 +32,9 @@ const (
 	episodeSettleWindow = 30 * time.Second
 )
 
+// pruneMinInterval is the shortest gap between two insert-driven prunes.
+var pruneMinInterval = 30 * time.Second
+
 // jsonlRotateBytes caps the forensic flag mirror. SQLite is the source of
 // truth and already prunes; JSONL is append-only unless rotated.
 var jsonlRotateBytes int64 = 8 << 20
@@ -40,6 +45,9 @@ type Store struct {
 	jsonlPath   string
 	jsonlFile   *os.File
 	insertCount uint64
+	// lastPrune gates the insert-driven prune to pruneMinInterval, so a
+	// high-rate producer does not trigger it every 1000 inserts.
+	lastPrune time.Time
 	// Per-kind time-based retention. Socket churn (conn open/close) ages out
 	// in hours; security-relevant kinds keep days. Count-based pruning stays
 	// as a backstop — a busy machine must never let conn noise evict the
@@ -51,6 +59,17 @@ type Store struct {
 	// instead of a MAX(ts) GROUP BY scan over the events table (measured
 	// 2–4s at ~400 live pids — past the UI's 3s socket timeout).
 	lastSeen map[int32]string
+	// allowlist returns the operator's approved hosts per agent (nil until
+	// wired); TrendFor reads it for the advisor's host prompt.
+	allowlist func() map[string][]string
+}
+
+// SetAllowlistSource wires the operator allowlist (agent -> hosts) that
+// TrendFor reports as AllowedFor.
+func (s *Store) SetAllowlistSource(fn func() map[string][]string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.allowlist = fn
 }
 
 // Retention defaults; both overrideable via config (retention.conn_event_hours,
@@ -104,7 +123,7 @@ func Open(dbPath, jsonlPath string) (*Store, error) {
 
 	dsn := dbPath
 	if dsn != "" {
-		dsn = dsn + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(3000)"
+		dsn = dsn + "?_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=busy_timeout(3000)"
 	} else {
 		dsn = ":memory:?_pragma=journal_mode(WAL)"
 	}
@@ -148,6 +167,7 @@ func Open(dbPath, jsonlPath string) (*Store, error) {
 			provider TEXT
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_events_pid_ts ON events(pid, ts);`,
+		`CREATE INDEX IF NOT EXISTS idx_events_kind_id ON events(kind, id);`,
 		`CREATE TABLE IF NOT EXISTS incidents (
 			id TEXT PRIMARY KEY,
 			flag_id TEXT,
@@ -543,10 +563,11 @@ func (s *Store) PutEvent(e event.Event) {
 	}
 
 	s.insertCount++
-	if s.insertCount%1000 == 0 {
+	if s.insertCount%1000 == 0 && time.Since(s.lastPrune) >= pruneMinInterval {
 		s.pruneEventsLocked()
 		s.pruneRollupLocked()
 		s.pruneSessionsLocked()
+		s.lastPrune = time.Now()
 	}
 }
 
@@ -577,7 +598,12 @@ func (s *Store) pruneEventsLocked() {
 		int(event.KindConnOpen), int(event.KindConnClose), connCutoff)
 	_, _ = s.db.Exec(`DELETE FROM events WHERE kind NOT IN (?, ?) AND datetime(ts) < datetime(?)`,
 		int(event.KindConnOpen), int(event.KindConnClose), otherCutoff)
-	rows, err := s.db.Query(`SELECT DISTINCT kind FROM events`)
+	// Distinct kinds by index skip-scan: one MIN(kind) seek per kind.
+	rows, err := s.db.Query(`WITH RECURSIVE k(v) AS (
+			SELECT MIN(kind) FROM events
+			UNION ALL
+			SELECT (SELECT MIN(kind) FROM events WHERE kind > k.v) FROM k WHERE k.v IS NOT NULL)
+		SELECT v FROM k WHERE v IS NOT NULL`)
 	if err != nil {
 		return
 	}
@@ -592,9 +618,11 @@ func (s *Store) pruneEventsLocked() {
 		log.Printf("store: prune kinds: %v", err)
 	}
 	rows.Close()
+	// Keep each kind's newest budget rows: delete below the budget-th newest
+	// id. Fewer rows than the budget yield a NULL cutoff and delete nothing.
 	for _, k := range kinds {
-		_, _ = s.db.Exec(`DELETE FROM events WHERE kind = ? AND id NOT IN
-			(SELECT id FROM events WHERE kind = ? ORDER BY id DESC LIMIT ?)`, k, k, kindBudget(k))
+		_, _ = s.db.Exec(`DELETE FROM events WHERE kind = ? AND id <
+			(SELECT id FROM events WHERE kind = ? ORDER BY id DESC LIMIT 1 OFFSET ?)`, k, k, kindBudget(k)-1)
 	}
 }
 
@@ -914,8 +942,36 @@ func (s *Store) RollupRange(since time.Time) []RollupPoint {
 }
 
 // TrendFor computes the trend context for a flag's rule (and host, when the
-// flag evidence names one).
+// flag evidence names one): counts from the store, the host's identity from
+// the CIDR/PTR cache (no network), and every agent the operator already
+// allowed the host for.
 func (s *Store) TrendFor(rule, host string) model.TrendContext {
+	tc, allow := s.trendCounts(rule, host)
+	if host == "" {
+		return tc
+	}
+	id := correlate.IdentifyCached(host)
+	tc.HostOrg = id.Org
+	if !strings.EqualFold(id.Name, host) {
+		tc.HostName = id.Name
+	}
+	if allow != nil {
+		for agent, hosts := range allow() {
+			for _, h := range hosts {
+				if correlate.HostMatches(host, h) {
+					tc.AllowedFor = append(tc.AllowedFor, agent)
+					break
+				}
+			}
+		}
+		sort.Strings(tc.AllowedFor)
+	}
+	return tc
+}
+
+// trendCounts reads the rule/host counts under the lock and returns the
+// allowlist source so TrendFor calls it without holding mu.
+func (s *Store) trendCounts(rule, host string) (model.TrendContext, func() map[string][]string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var tc model.TrendContext
@@ -939,7 +995,7 @@ func (s *Store) TrendFor(rule, host string) model.TrendContext {
 			tc.HostFirstSeen = first.String
 		}
 	}
-	return tc
+	return tc, s.allowlist
 }
 
 // PutAdvisorVerdict stores (or replaces) the local advisor's verdict for a

@@ -291,6 +291,7 @@ Returns one flag (with `title` and `advisor`) plus `explain`, the daemon's plain
 ### 3. `GET /events`
 
 Retrieves raw system telemetry events captured by the file watcher and network sampler.
+File opens, writes and deletes are stored for processes inside an agent family, and otherwise only as the evidence of a flag.
 
 #### Query Parameters
 - `limit` *(optional, integer)*: Maximum number of events to return (default: `50`).
@@ -708,7 +709,7 @@ Invariant: every item in `items` appears in exactly one of `groups`, and the gro
 
 ### `GET /events/stream` (SSE)
 
-Live feed of every bus event as `event: <kind>` / `data: <json>`, with a 15s heartbeat comment. Replaces polling for UIs that can hold a connection — **the menu bar app and the web console both consume this stream** (guard prompts surface at push latency), falling back to polling when the endpoint is unavailable. One bus subscription per connection, released on disconnect.
+Live feed of every stored event as `event: <kind>` / `data: <json>`, with a 15s heartbeat comment. Replaces polling for UIs that can hold a connection — **the menu bar app and the web console both consume this stream** (guard prompts surface at push latency), falling back to polling when the endpoint is unavailable. One bus subscription per connection, released on disconnect.
 
 ### Console access on the proxy port
 
@@ -743,10 +744,25 @@ GET /egress/uninspected?hours=24&limit=200
 ```json
 [
   {"agent": "cursor", "host": "registry.npmjs.org", "count": 14,
-   "last_seen": "2026-09-15T10:00:00Z",
-   "assessment": "benign", "rationale": "npm registry is routine for JS projects"}
+   "first_seen": "2026-09-14T10:00:00Z", "last_seen": "2026-09-15T10:00:00Z",
+   "session_id": "sess-cursor-2",
+   "identity": {"kind": "hostname", "name": "registry.npmjs.org", "org": "npm registry", "class": "vendor"},
+   "assessment": "benign", "rationale": "npm registry is routine for JS projects"},
+  {"agent": "openclaw", "host": "2607:6bc0::10", "count": 94,
+   "first_seen": "2026-09-23T12:00:00Z", "last_seen": "2026-09-23T13:00:00Z",
+   "identity": {"kind": "ipv6", "org": "Anthropic", "ip": "2607:6bc0::10", "class": "vendor"}}
 ]
 ```
+
+- `identity` — owner of the host from the provider CIDR table, host suffix, or cached reverse DNS (`org`, `name`, `kind`, `ip`, `class`), never a network lookup.
+- `identity.class` — `vendor` (Anthropic, OpenAI, GitHub, GitHub Container Registry, npm registry, PyPI, crates.io, RubyGems, Docker Hub, Docker, Google Container Registry, Debian, Ubuntu), `telemetry` (Statsig, Sentry, Segment, PostHog, Amplitude), `cloud` (any other named org).
+- `identity.class` is omitted when `org` is empty.
+- The same `identity` object, `class` included, is on `GET /egress/endpoint?host=` and on each `/snapshot` `suggestions` row.
+- Vendor-class hosts are never `/snapshot` suggestions.
+- `first_seen` — first sighting of the agent+host pair, omitted when unknown.
+- `session_id` — most recent session that reached the host, omitted when none.
+- `infra` — set only for CDN/cloud carriers (Cloudflare, Google, GitHub, PTR-classified).
+- `identity.org` can be set without `infra`.
 
 `hours` (1–168, default 24) windows the list by last-seen; out-of-range
 values fall back to 24. Sorted most-frequent first; `assessment`/`rationale`
