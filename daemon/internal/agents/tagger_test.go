@@ -425,3 +425,22 @@ func TestTagHermesAsAgent(t *testing.T) {
 		}
 	}
 }
+
+// MatchExe applies the agent match strings to a bare exe path, so a pid the
+// tagger has not cached is still named by its binary.
+func TestMatchExeNamesAgentBeforeTag(t *testing.T) {
+	c, err := config.Load("/nonexistent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tg := New(c, fakeProcs{})
+	if name, ok := tg.MatchExe("/Users/x/.local/share/claude/versions/2.1.280"); !ok || name != "claude" {
+		t.Fatalf("MatchExe(claude versions) = %q, %v; want claude, true", name, ok)
+	}
+	if name, ok := tg.MatchExe("/usr/local/bin/hermesc"); ok {
+		t.Fatalf("MatchExe(hermesc) = %q, true; want no hit", name)
+	}
+	if _, ok := tg.MatchExe(""); ok {
+		t.Fatal("MatchExe(\"\") hit; want no hit")
+	}
+}

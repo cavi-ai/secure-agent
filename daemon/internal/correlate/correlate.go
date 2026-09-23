@@ -663,9 +663,10 @@ func isSystemExe(exe string) bool {
 }
 
 // untaggedKeychainLocked applies the keychain-access rule to a process the
-// tagger does not know. Only login-keychain file opens and writes by an
-// executable outside the system prefixes qualify; the flag names the process
-// as "untagged:<exe basename>". Callers hold c.mu.
+// tagger has not tagged. Only login-keychain file opens and writes by an
+// executable outside the system prefixes qualify. An exe the agent match
+// strings name joins that agent's flags; any other is "untagged:<label>".
+// Callers hold c.mu.
 func (c *Correlator) untaggedKeychainLocked(e event.Event) []model.Flag {
 	if e.Kind != event.KindFileOpen && e.Kind != event.KindFileWrite {
 		return nil
@@ -676,7 +677,47 @@ func (c *Correlator) untaggedKeychainLocked(e event.Event) []model.Flag {
 	if m, ok := c.classifier.Match(e.Path); !ok || m.Category != sensitive.CatKeychain {
 		return nil
 	}
-	return c.keychainAccessLocked(e, "untagged:"+filepath.Base(e.ExePath))
+	agent := untaggedLabel(e.ExePath)
+	if name, ok := c.tagger.MatchExe(e.ExePath); ok {
+		agent = name
+	}
+	return c.keychainAccessLocked(e, agent)
+}
+
+// genericExeDirs name directories that say nothing about who ships the
+// binary under them.
+var genericExeDirs = map[string]bool{"versions": true, "version": true, "bin": true, "libexec": true, "current": true}
+
+// untaggedLabel is "untagged:<exe basename>"; a version-number basename
+// (".../claude/versions/2.1.280") is prefixed with the nearest parent that is
+// neither generic nor a version: "untagged:claude 2.1.280".
+func untaggedLabel(exe string) string {
+	base := filepath.Base(exe)
+	if !isVersionString(base) {
+		return "untagged:" + base
+	}
+	for dir := filepath.Dir(exe); dir != "/" && dir != "."; dir = filepath.Dir(dir) {
+		name := filepath.Base(dir)
+		if genericExeDirs[strings.ToLower(name)] || isVersionString(name) {
+			continue
+		}
+		return "untagged:" + name + " " + base
+	}
+	return "untagged:" + base
+}
+
+// isVersionString: digits and dots only, at least one digit.
+func isVersionString(s string) bool {
+	digit := false
+	for _, r := range s {
+		switch {
+		case r >= '0' && r <= '9':
+			digit = true
+		case r != '.':
+			return false
+		}
+	}
+	return digit
 }
 
 func (c *Correlator) rememberReadLocked(pid int32, directPID int32, rm readMark) {
