@@ -422,6 +422,26 @@
         { key: '(no repo)', calls: 2, sessions: 1, tokens_in: 1000, tokens_out: 0, cost_usd: 0, unpriced_calls: 2 },
         { key: 'infra-tools', harness: 'opencode', calls: 7, sessions: 1, tokens_in: 120000, tokens_out: 7000, cost_usd: 3.2, unpriced_calls: 0 }
       ]
+    },
+    // /costs keyed by the query's `by` (the fetch stub below): the Spend
+    // card's provider and day views.
+    '/costs?by=provider': {
+      since: iso(24 * 3600000), until: iso(0), by: 'provider',
+      total: { key: '', calls: 40, sessions: 7, tokens_in: 912000, tokens_out: 48000, cost_usd: 36.674, unpriced_calls: 2 },
+      rows: [
+        { key: 'anthropic', harness: 'claude', calls: 21, sessions: 3, tokens_in: 600000, tokens_out: 32000, cost_usd: 28.35, unpriced_calls: 0 },
+        { key: 'openai-codex', harness: 'codex', calls: 9, sessions: 2, tokens_in: 210000, tokens_out: 9000, cost_usd: 8.124, unpriced_calls: 0 },
+        { key: 'openai', harness: 'opencode', calls: 7, sessions: 1, tokens_in: 100000, tokens_out: 7000, cost_usd: 0.2, unpriced_calls: 0 },
+        { key: '(unknown)', harness: 'codex', calls: 3, sessions: 1, tokens_in: 2000, tokens_out: 0, cost_usd: 0, unpriced_calls: 3 }
+      ]
+    },
+    '/costs?by=day': {
+      since: iso(7 * 24 * 3600000), until: iso(0), by: 'day',
+      total: { key: '', calls: 70, sessions: 12, tokens_in: 4000000, tokens_out: 200000, cost_usd: 2194.1, unpriced_calls: 0 },
+      rows: ['2026-09-17', '2026-09-18', '2026-09-19', '2026-09-20', '2026-09-21', '2026-09-22', '2026-09-23'].map((key, i) => ({
+        key, harness: 'claude', calls: 10, sessions: 2, tokens_in: 500000, tokens_out: 25000,
+        cost_usd: [120.5, 210, 88.25, 0, 335.84, 676.54, 449.74][i], unpriced_calls: 0
+      }))
     }
   };
 
@@ -531,6 +551,10 @@
   if (MODE.includes('tokenseed')) {
     try { sessionStorage.setItem('sa.console-token', 'test-token'); } catch { /* ignored */ }
   }
+  // spenddaydemo: a tab whose saved Spend view is by day over 7d (a reload).
+  if (MODE.includes('spenddaydemo')) {
+    try { sessionStorage.setItem('sa.spend-view', JSON.stringify({ by: 'day', since: '7d' })); } catch { /* ignored */ }
+  }
 
   // Stateful POST handling: mutations change the fixture so the DOM tests
   // can assert that actions VISIBLY update the lists (the "allow does
@@ -635,6 +659,7 @@
   // /allowlist also records whether the allowlist row for its host was
   // already on screen when the request left (row=1: optimistic render).
   const reqLog = [];
+  const costLog = [];
   const stamp = (id, text) => {
     const put = () => {
       let el = document.getElementById(id);
@@ -733,7 +758,15 @@
         '- `/Users/dev/.codex/sessions/2026/09/23/rollout-2026-09-23T12-53-26-demo.jsonl`\n\n### Egress Connections\n- `api.openai.com:443`\n';
       return { ok: true, status: 200, json: async () => { throw new SyntaxError('not JSON'); }, text: async () => md };
     }
-    const body = data[p];
+    let body = data[p];
+    // /costs answers by its `by` query; every /costs query lands, in order,
+    // on <pre id="mock-costs">.
+    if (p === '/costs') {
+      const by = new URLSearchParams(String(path).split('?')[1] || '').get('by');
+      if (by && data['/costs?by=' + by]) body = data['/costs?by=' + by];
+      costLog.push(String(path).split('?')[1] || '');
+      stamp('mock-costs', costLog.join('\n'));
+    }
     return {
       ok: body !== undefined,
       status: body !== undefined ? 200 : 404,
@@ -971,6 +1004,57 @@
   if (location.search.includes('nofleetdemo')) {
     data['/fleet'] = { ...data['/fleet'], fleet_configured: false };
   }
+  // spenddemo: switch the Spend card to by provider, then a full refresh
+  // re-renders every panel; the probe records the select and the saved view
+  // after that re-render on <pre id="spend-probe">.
+  if (MODE.includes('spenddemo')) {
+    setTimeout(() => {
+      const sel = document.getElementById('spend-by');
+      sel.value = 'provider';
+      sel.dispatchEvent(new Event('change', { bubbles: true }));
+    }, 4000);
+    setTimeout(() => document.getElementById('btn-refresh').click(), 5000);
+    setTimeout(() => {
+      let saved = '';
+      try { saved = sessionStorage.getItem('sa.spend-view') || ''; } catch { /* ignored */ }
+      stamp('spend-probe', `select=${document.getElementById('spend-by').value} saved=${saved}`);
+    }, 6000);
+  }
+  // spendkeepdemo (with spenddaydemo): the slow refresh keeps the Spend
+  // card's nodes. Mark the first day column and scroll the narrowed day bars,
+  // refresh; then switch to by repo, mark the first list row, refresh again.
+  // The results land on <pre id="spend-keep-probe">.
+  if (MODE.includes('spendkeepdemo')) {
+    const q = sel => document.querySelector('#spend-card ' + sel);
+    const costFetches = () => ((document.getElementById('mock-costs') || {}).textContent || '').split('\n').length;
+    const out = [];
+    let col, bars, left, fetches, row;
+    setTimeout(() => {
+      bars = q('.spend-bars');
+      col = q('.spend-day');
+      bars.style.width = '80px';
+      bars.scrollLeft = 60;
+      left = bars.scrollLeft;
+      fetches = costFetches();
+      document.getElementById('btn-refresh').click();
+    }, 4000);
+    setTimeout(() => {
+      const now = q('.spend-bars');
+      out.push(`day same=${q('.spend-day') === col && now === bars} left=${left}->${now ? now.scrollLeft : -1} refetched=${costFetches() > fetches}`);
+      const sel = document.getElementById('spend-by');
+      sel.value = 'repo';
+      sel.dispatchEvent(new Event('change', { bubbles: true }));
+    }, 5000);
+    setTimeout(() => {
+      row = q('.spend-row');
+      fetches = costFetches();
+      document.getElementById('btn-refresh').click();
+    }, 6000);
+    setTimeout(() => {
+      out.push(`list same=${!!row && q('.spend-row') === row} refetched=${costFetches() > fetches}`);
+      stamp('spend-keep-probe', out.join('\n'));
+    }, 7000);
+  }
   // No-spend variant: an empty /costs report — the tile reads an em dash and
   // the card shows its empty state.
   if (location.search.includes('nocostsdemo')) {
@@ -1165,6 +1249,7 @@
           // patterndemo: the Attention/Flags tab holding the pattern card.
           const done = findings => parent.postMessage({ hscroll: `${sessions},${agents},${resources}${findings}` }, '*');
           if (MODE.includes('patterndemo')) setTimeout(() => done(',' + measure('findings')), 300);
+          else if (MODE.includes('spenddaydemo')) setTimeout(() => done(',' + measure('overview')), 300);
           else done('');
         }, 300);
       }, 300);
@@ -1177,7 +1262,8 @@
       const frame = document.createElement('iframe');
       frame.width = '375';
       frame.height = '812';
-      frame.src = 'harness.html?phoneframe&raildemo' + (MODE.includes('patterndemo') ? '&patterndemo' : '');
+      frame.src = 'harness.html?phoneframe&raildemo' + (MODE.includes('patterndemo') ? '&patterndemo' : '')
+        + (MODE.includes('spenddaydemo') ? '&spenddaydemo' : '');
       document.body.prepend(frame);
     });
   }

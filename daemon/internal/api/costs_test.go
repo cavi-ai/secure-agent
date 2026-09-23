@@ -174,3 +174,72 @@ func TestCostsClassifyUnpricedCalls(t *testing.T) {
 		}
 	}
 }
+
+// tz is whole minutes within ±14h; anything else is a 400.
+func TestCostsRejectsBadTZ(t *testing.T) {
+	st := testStore(t)
+	t.Cleanup(func() { st.Close() })
+	mux := newTestAPI("", st, nil, func() Status { return Status{Running: true} }).buildMux()
+	for path, want := range map[string]int{
+		"/costs?by=day&tz=900":  http.StatusBadRequest,
+		"/costs?by=day&tz=-900": http.StatusBadRequest,
+		"/costs?by=day&tz=abc":  http.StatusBadRequest,
+		"/costs?by=day&tz=-240": http.StatusOK,
+		"/costs?by=day&tz=840":  http.StatusOK,
+	} {
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code != want {
+			t.Errorf("%s: status %d, want %d (%s)", path, rec.Code, want, rec.Body.String())
+		}
+	}
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/costs?by=nope", nil))
+	if !strings.Contains(rec.Body.String(), "provider, day") {
+		t.Fatalf("by error lists %q, want every grouping", rec.Body.String())
+	}
+}
+
+// by=provider end to end: an unrecorded provider is named from the price
+// tables, a recorded one is kept and still classifies its unpriced calls.
+func TestCostsByProvider(t *testing.T) {
+	st := testStore(t)
+	t.Cleanup(func() { st.Close() })
+	now := time.Now()
+	for i, c := range []struct {
+		sid, model, provider string
+		cost                 float64
+	}{
+		{"s1", "claude-opus-5-5", "", 2},
+		{"s2", "claude-opus-5-5", "", 1},
+		{"s2", "gpt-5", "openai-codex", 0.5},
+		{"s3", "k3", "kimi-for-coding", 0},
+		{"s3", "mystery-model", "", 0},
+	} {
+		st.PutEvent(event.Event{Kind: event.KindModelCall, TS: now.Add(-time.Duration(i+1) * time.Second), SessionID: c.sid,
+			Model: c.model, Provider: c.provider, TokensIn: 10, CostUSD: c.cost})
+	}
+	mux := newTestAPI("", st, nil, func() Status { return Status{Running: true} }).buildMux()
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/costs?since=24h&by=provider", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d body %q", rec.Code, rec.Body.String())
+	}
+	var rep store.CostReport
+	if err := json.Unmarshal(rec.Body.Bytes(), &rep); err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, r := range rep.Rows {
+		got = append(got, fmt.Sprintf("%s|%d|%d|%.2f|plan=%d|unpriced=%d", r.Key, r.Calls, r.Sessions, r.CostUSD, r.Plan, r.UnpricedModel))
+	}
+	want := []string{
+		"anthropic|2|2|3.00|plan=0|unpriced=0",
+		"openai-codex|1|1|0.50|plan=0|unpriced=0",
+		"(unknown)|1|1|0.00|plan=0|unpriced=1",
+		"kimi-for-coding|1|1|0.00|plan=1|unpriced=0",
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("by=provider rows =\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}

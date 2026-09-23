@@ -107,16 +107,52 @@ func ModelCostUSD(model string, in, out int64) float64 {
 // built-in table. A vendor-prefixed id ("z-ai/glm-5.3-flash") that matches
 // nothing as written is looked up again without its prefix.
 func lookupPrice(model string) ([2]float64, bool) {
+	return resolveModelID(model, lookupPriceExact)
+}
+
+// resolveModelID applies match to model as written, then, for a
+// vendor-prefixed id, to the part after its last '/'.
+func resolveModelID[T any](model string, match func(string) (T, bool)) (T, bool) {
+	var zero T
 	if model == "" {
-		return [2]float64{}, false
+		return zero, false
 	}
-	if p, ok := lookupPriceExact(model); ok {
-		return p, true
+	if v, ok := match(model); ok {
+		return v, true
 	}
 	if i := strings.LastIndexByte(model, '/'); i >= 0 && i+1 < len(model) {
-		return lookupPriceExact(model[i+1:])
+		return match(model[i+1:])
 	}
-	return [2]float64{}, false
+	return zero, false
+}
+
+// builtinVendor names the vendor table each built-in price entry comes from.
+var builtinVendor = vendorOf(map[string]map[string][2]float64{
+	"anthropic": anthropicPrices,
+	"openai":    openAIPrices,
+	"google":    googlePrices,
+})
+
+func vendorOf(tables map[string]map[string][2]float64) map[string]string {
+	out := map[string]string{}
+	for vendor, t := range tables {
+		for id := range t {
+			out[id] = vendor
+		}
+	}
+	return out
+}
+
+// VendorForModel names the vendor whose built-in price table resolves model
+// under the lookup rule ("anthropic", "openai" or "google"), or "" when no
+// built-in entry matches. The operator table names no vendor, so it is not
+// consulted.
+func VendorForModel(model string) string {
+	vendor, _ := resolveModelID(model, func(id string) (string, bool) {
+		key, ok := matchPriceKey(builtinPrices, id)
+		return builtinVendor[key], ok
+	})
+	return vendor
 }
 
 func lookupPriceExact(model string) ([2]float64, bool) {
@@ -183,8 +219,15 @@ var versionSuffixRE = regexp.MustCompile(`^(-latest|-\d{8}|-\d{4}-\d{2}-\d{2}|@\
 // matchPrice resolves a model id by exact match first, then the longest
 // prefix P in table where model[len(P):] matches versionSuffixRE.
 func matchPrice(table map[string][2]float64, model string) ([2]float64, bool) {
-	if p, ok := table[model]; ok {
-		return p, true
+	key, ok := matchPriceKey(table, model)
+	return table[key], ok
+}
+
+// matchPriceKey returns the entry of table that resolves model under the
+// matchPrice rule.
+func matchPriceKey(table map[string][2]float64, model string) (string, bool) {
+	if _, ok := table[model]; ok {
+		return model, true
 	}
 	best := ""
 	for prefix := range table {
@@ -198,8 +241,5 @@ func matchPrice(table map[string][2]float64, model string) ([2]float64, bool) {
 			best = prefix
 		}
 	}
-	if best == "" {
-		return [2]float64{}, false
-	}
-	return table[best], true
+	return best, best != ""
 }
