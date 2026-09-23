@@ -85,4 +85,8 @@ type Flag struct {
 	// Acknowledged flags stop counting as critical and render dimmed —
 	// "acted upon" instead of an endless red row.
 	Acknowledged bool `json:"acknowledged,omitempty"`
+	// Explain is the plain-language reading of the flag, stamped at serve
+	// time (GET /flags/{id}/explain, and the first 25 unacknowledged flags
+	// of /flags and /snapshot). Not persisted.
+	Explain *FlagExplain `json:"explain,omitempty"`
 }

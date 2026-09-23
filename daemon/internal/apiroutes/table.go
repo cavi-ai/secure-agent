@@ -9,7 +9,10 @@
 // touches one, and a test asserts the table and the handler map agree.
 package apiroutes
 
-import "strings"
+import (
+	"slices"
+	"strings"
+)
 
 // Route describes one API endpoint's path and its two derived classifications.
 type Route struct {
@@ -17,9 +20,11 @@ type Route struct {
 	// Prefix) served by a single handler.
 	Path string
 	// Prefix marks a dynamic route family matched by path prefix; only the
-	// console-admission shapes (/sessions/{id}/timeline, /sessions/{id}/report)
-	// are admitted.
+	// console-admission shape Path + {id} + "/" + one of Leaves is admitted.
 	Prefix bool
+	// Leaves are the sub-resources a Prefix route serves ("timeline" and
+	// "report" for /sessions/{id}/…, "explain" for /flags/{id}/explain).
+	Leaves []string
 	// Console is true when the console token admits this path on the proxy
 	// listener (the browser console's same-origin telemetry surface).
 	Console bool
@@ -37,7 +42,7 @@ type Route struct {
 var Table = []Route{
 	{Path: "/status", Console: true},
 	{Path: "/sessions", Console: true},
-	{Path: "/sessions/", Prefix: true, Console: true},
+	{Path: "/sessions/", Prefix: true, Leaves: []string{"timeline", "report"}, Console: true},
 	{Path: "/resources", Console: true},
 	{Path: "/resources/episodes", Console: true},
 	{Path: "/resources/control", Console: true, MutatingMethods: []string{"POST"}},
@@ -45,6 +50,7 @@ var Table = []Route{
 	{Path: "/snapshot", Console: true},
 	{Path: "/posture", Console: true},
 	{Path: "/flags", Console: true},
+	{Path: "/flags/", Prefix: true, Leaves: []string{"explain"}, Console: true},
 	{Path: "/events", Console: true},
 	{Path: "/events/stream", Console: true},
 	{Path: "/incidents", Console: true},
@@ -77,14 +83,12 @@ var Table = []Route{
 	{Path: "/guard/rules", Console: true, MutatingMethods: []string{"POST"}},
 }
 
-// sessionSubpaths are the leaves served under /sessions/{id}/.
-var sessionSubpaths = map[string]bool{"timeline": true, "report": true}
-
 // ConsoleAllowed reports whether the console token admits path on the proxy
-// listener. Exact table paths are admitted directly; the dynamic session
-// family is admitted only in its exact shapes, /sessions/{id}/timeline and
-// /sessions/{id}/report (no traversal, non-empty id). Anything else falls
-// through to the proxy-token challenge.
+// listener. Exact table paths are admitted directly; a dynamic family
+// (/sessions/{id}/timeline, /sessions/{id}/report, /flags/{id}/explain) is
+// admitted only in its exact shape: a non-empty id that is not "." or "..",
+// then one of the route's Leaves. Anything else falls through to the
+// proxy-token challenge.
 func ConsoleAllowed(path string) bool {
 	for _, r := range Table {
 		if !r.Console {
@@ -96,7 +100,7 @@ func ConsoleAllowed(path string) bool {
 			}
 			rest := strings.TrimPrefix(path, r.Path)
 			parts := strings.SplitN(rest, "/", 2)
-			if len(parts) == 2 && parts[0] != "" && sessionSubpaths[parts[1]] {
+			if len(parts) == 2 && parts[0] != "" && parts[0] != "." && parts[0] != ".." && slices.Contains(r.Leaves, parts[1]) {
 				return true
 			}
 			continue

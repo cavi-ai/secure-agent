@@ -54,6 +54,7 @@ func (a *API) currentSnapshot() Snapshot {
 	for i := range flags {
 		flags[i].Title = humanFlagTitle(flags[i].Rule)
 	}
+	a.stampExplains(flags)
 	return Snapshot{
 		Status:      a.currentStatus(),
 		Flags:       flags,

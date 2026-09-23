@@ -525,6 +525,7 @@ func (a *API) routes() map[string]http.HandlerFunc {
 		"/snapshot":                     a.handleSnapshot,
 		"/posture":                      a.handlePosture,
 		"/flags":                        a.handleFlags,
+		"/flags/":                       a.handleFlagExplain,
 		"/events":                       a.handleEvents,
 		"/events/stream":                a.handleEventStream,
 		"/incidents":                    a.handleIncidents,
@@ -781,6 +782,7 @@ func (a *API) handleFlags(w http.ResponseWriter, r *http.Request) {
 	for i := range flags {
 		flags[i].Title = humanFlagTitle(flags[i].Rule)
 	}
+	a.stampExplains(flags)
 	json.NewEncoder(w).Encode(flags)
 }
 
@@ -983,7 +985,7 @@ func (a *API) handleMute(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, `Invalid payload: {"rule":"<id>","host":"<host>"}`, http.StatusBadRequest)
 			return
 		}
-		if strings.ContainsAny(req.Host, "/:@") || len(req.Host) > 253 {
+		if !validMuteHost(req.Host) {
 			http.Error(w, "host must be a bare hostname", http.StatusBadRequest)
 			return
 		}
@@ -1011,7 +1013,7 @@ func (a *API) handleMute(w http.ResponseWriter, r *http.Request) {
 		// Same host validation as POST: a bare hostname only (a mute value
 		// with URL structure or absurd length could poison the store and
 		// the ledger UI). Rule must match the id charset.
-		if !guardTokenRE.MatchString(rule) || strings.ContainsAny(host, "/:@") || len(host) > 253 {
+		if !guardTokenRE.MatchString(rule) || !validMuteHost(host) {
 			http.Error(w, "invalid rule/host", http.StatusBadRequest)
 			return
 		}

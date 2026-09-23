@@ -409,3 +409,30 @@ func TestHumanFlagTitleSecretInTranscript(t *testing.T) {
 		t.Fatalf("humanFlagTitle(secret-in-transcript) = %q", got)
 	}
 }
+
+// A severity-3 flag the advisor judged benign with high confidence is a
+// queue item, not an emergency: posture reads "attention", never "critical".
+func TestPostureBenignLikelyFlagIsAttention(t *testing.T) {
+	put := func(withAdvisor bool) Posture {
+		st := testStore(t)
+		st.PutFlag(model.Flag{ID: "fp", Rule: "sensitive-read-then-connect", Severity: 3, TS: time.Now(), Agent: "claude",
+			Evidence: []model.EvidenceItem{{Kind: "read", Label: "/Users/x/.claude/skills/s/config", Sub: "sensitive read"}}})
+		if withAdvisor {
+			st.PutAdvisorVerdict("fp", "flag", model.AdvisorVerdict{Assessment: "benign", Confidence: 0.93, Rationale: "Own skill config.", SuggestedAction: "allow-host", CreatedAt: time.Now()})
+		}
+		return newTestAPI("", st, &fakeKiller{}, func() Status { return Status{Running: true} }).computePosture()
+	}
+	p := put(true)
+	if p.State != "attention" || len(p.Items) != 1 || p.Items[0].Severity != 1 {
+		t.Fatalf("benign-likely posture = %+v, want attention with one severity-1 item", p)
+	}
+	if strings.HasSuffix(p.Summary, "act now.") {
+		t.Fatalf("summary %q must not demand action for a likely-benign flag", p.Summary)
+	}
+	if !strings.HasPrefix(p.Items[0].Detail, "Likely benign (advisor 93 %) — ") {
+		t.Fatalf("detail = %q, want the disposition first", p.Items[0].Detail)
+	}
+	if q := put(false); q.State != "critical" || q.Items[0].Severity != 3 || !strings.HasPrefix(q.Items[0].Detail, "Act now — ") {
+		t.Fatalf("no-advisor posture = %+v, want critical", q)
+	}
+}

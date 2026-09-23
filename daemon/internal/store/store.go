@@ -653,6 +653,7 @@ type EventFilter struct {
 	SessionID  string // exact session; "" = any
 	RemoteHost string // exact remote host; "" = any
 	Since      string // ts >= this; empty = any
+	Until      string // ts <= this; empty = any
 	Limit      int    // 0 = 50
 }
 
@@ -1024,6 +1025,10 @@ func (s *Store) QueryEvents(f EventFilter) []event.Event {
 		q += " AND datetime(ts) >= datetime(?)"
 		args = append(args, f.Since)
 	}
+	if f.Until != "" {
+		q += " AND datetime(ts) <= datetime(?)"
+		args = append(args, f.Until)
+	}
 	q += " ORDER BY id DESC LIMIT ?"
 	args = append(args, normalizeLimit(f.Limit))
 
@@ -1146,6 +1151,27 @@ func (s *Store) GetIncident(id string) (*model.IncidentReport, error) {
 		inc.AdvisorNarrative = v.Rationale
 	}
 	return &inc, nil
+}
+
+// IncidentIDForFlag returns the incident a flag opened or was aggregated
+// into (newest first).
+func (s *Store) IncidentIDForFlag(flagID string) (string, bool) {
+	if flagID == "" {
+		return "", false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var id string
+	err := s.db.QueryRow(
+		`SELECT id FROM incidents
+		 WHERE flag_id = ? OR EXISTS (SELECT 1 FROM json_each(COALESCE(flag_ids,'[]')) WHERE value = ?)
+		 ORDER BY datetime(created_at) DESC LIMIT 1`,
+		flagID, flagID,
+	).Scan(&id)
+	if err != nil {
+		return "", false
+	}
+	return id, true
 }
 
 // FindOpenIncident returns the open (unresolved) incident matching the
