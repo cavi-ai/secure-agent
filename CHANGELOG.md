@@ -17,6 +17,11 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Playbooks: every rule has a fixed response — why it fires, what to do now, how to prevent it (guard rules, settings, secret handling, agent instructions, workflow), which actions apply.
 - `GET/POST /advisor/plan`: the playbook always; on request the local advisor writes a plan from this machine's context (explanation, session, masked file excerpt, history, local policy) — why, prevention, behavior changes, remediation, recommended actions; stale when new evidence arrives.
 - Console: a What to do drawer on every finding, and the playbook and plan in the incident and file drawers with Ask the advisor and the recommended actions as buttons.
+- `GET /costs?by=provider`: recorded provider, else the vendor whose price table resolves the model, else `(unknown)`.
+- `GET /costs?by=day&tz=<minutes>`: spend per local calendar day, oldest first; `tz` outside `-840..840` is a `400`.
+- `secure-agent cost --by provider|day` and `--tz <minutes>` (default: this machine's offset).
+- Claude Code model calls record provider `anthropic`.
+- Console Spend card: dimension (repo, provider, model, day) and window (24h, 7d, 30d) controls, kept per tab; day view as bars.
 - `GET /files/detail`: facts, findings, agent-session accesses, transcript hits and a masked excerpt for a file stored evidence names.
 - `POST /files/reveal` and `POST /files/open`: Finder selects the file or the default text editor opens it; audited.
 - NoAgent route class: refused for agent processes on the socket (live family check) and on the console listener (the TCP client's process).

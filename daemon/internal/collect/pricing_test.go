@@ -180,3 +180,25 @@ func TestVendorPrefixedModelCost(t *testing.T) {
 		t.Fatalf("full-id entry cost = %v, want 1", c)
 	}
 }
+
+// The vendor comes from the built-in table that resolves the id, under the
+// same exact/suffix/vendor-prefix rule as the price; the operator table and
+// unmatched ids name no vendor.
+func TestVendorForModel(t *testing.T) {
+	t.Cleanup(func() { SetUserPrices(nil) })
+	SetUserPrices(map[string][2]float64{"k3": {1, 1}, "claude-opus-5-5": {9, 9}})
+	for model, want := range map[string]string{
+		"claude-opus-5-5":            "anthropic",
+		"claude-sonnet-4-5-20250929": "anthropic",
+		"anthropic/claude-opus-5-5":  "anthropic",
+		"gpt-5-mini":                 "openai",
+		"gpt-5.6-sol":                "",
+		"gemini-2.5-pro":             "google",
+		"k3":                         "",
+		"":                           "",
+	} {
+		if got := VendorForModel(model); got != want {
+			t.Errorf("VendorForModel(%q) = %q, want %q", model, got, want)
+		}
+	}
+}
