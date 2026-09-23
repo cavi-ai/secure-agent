@@ -53,6 +53,60 @@ func TestCodexTraceMetaTokensAndToolPairing(t *testing.T) {
 	}
 }
 
+const codexSettingsLine = `{"timestamp":"2026-09-18T19:21:40.000Z","type":"event_msg","payload":{"type":"thread_settings_applied","thread_id":"019f58e8-6230","thread_settings":{"model":"m-test","model_provider_id":"custom","cwd":"/Volumes/x/repo"}}}`
+
+// thread_settings_applied names the model: later model_calls carry it, priced
+// only when a price table knows the id.
+func TestCodexTraceAttributesModelFromThreadSettings(t *testing.T) {
+	t.Cleanup(func() { SetUserPrices(nil) })
+	parse := func() event.Event {
+		t.Helper()
+		tr := NewCodexTracer()
+		tr.ParseLine(codexMetaLine)
+		// The settings line emits nothing and stays eligible for the
+		// caller's redaction scan (ok=false).
+		if evs, ok := tr.ParseLine(codexSettingsLine); ok || len(evs) != 0 {
+			t.Fatalf("settings line = %+v ok=%v, want no events and ok=false", evs, ok)
+		}
+		if id, provider := tr.Model(); id != "m-test" || provider != "custom" {
+			t.Fatalf("tracer model = %q %q", id, provider)
+		}
+		evs, ok := tr.ParseLine(codexTokenLine)
+		if !ok || len(evs) != 1 || evs[0].Kind != event.KindModelCall {
+			t.Fatalf("token_count evs = %+v", evs)
+		}
+		return evs[0]
+	}
+
+	mc := parse()
+	if mc.Model != "m-test" || mc.CostUSD != 0 {
+		t.Fatalf("unknown id must be attributed and unpriced, got %q $%v", mc.Model, mc.CostUSD)
+	}
+
+	SetUserPrices(map[string][2]float64{"m-test": {1, 2}})
+	mc = parse()
+	want := (float64(94510)*1 + float64(1200)*2) / 1e6
+	if mc.Model != "m-test" || mc.CostUSD != want {
+		t.Fatalf("priced call = %q $%v, want $%v", mc.Model, mc.CostUSD, want)
+	}
+}
+
+// A rollout without the settings line keeps model_calls model-less and cost 0,
+// whatever the price tables hold.
+func TestCodexTraceWithoutThreadSettingsStaysUnpriced(t *testing.T) {
+	t.Cleanup(func() { SetUserPrices(nil) })
+	SetUserPrices(map[string][2]float64{"m-test": {1, 2}})
+	tr := NewCodexTracer()
+	tr.ParseLine(codexMetaLine)
+	evs, ok := tr.ParseLine(codexTokenLine)
+	if !ok || len(evs) != 1 {
+		t.Fatalf("token_count evs = %+v", evs)
+	}
+	if evs[0].Model != "" || evs[0].CostUSD != 0 {
+		t.Fatalf("no settings line: got %q $%v, want empty model and cost 0", evs[0].Model, evs[0].CostUSD)
+	}
+}
+
 func TestCodexTraceRejectsForeign(t *testing.T) {
 	tr := NewCodexTracer()
 	if _, ok := tr.ParseLine(`{"tool":"Read","pid":1}`); ok {

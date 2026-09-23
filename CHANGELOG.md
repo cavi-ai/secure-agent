@@ -20,6 +20,14 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Console: a panel waits while the pointer is down in it or one of its controls has focus (up to 3 s).
 - Console: allow, mute, unmute, promote/demote, incident status, guard and resource decisions, source add/remove, allowlist remove and dismiss change the card before the request, revert on failure and leave a 4 s inline note on success.
 - Verified by DOM checks on a 300-event burst (hidden-tab render counts, an open rail group, a focused button, a mid-burst Dismiss click) and on allow success and failure.
+- Sessions: orchestrated runs are nested under their orchestrator's session —
+  the parent lookup walks the OS ancestry past the child's own harness match
+  instead of a chain that stopped at the first match.
+- Model pricing: explicit entries for every current Anthropic model (Fable
+  5.x, Opus 5.5/5/4.8/4.7/4.6/4.5, Sonnet 5/4.6/4.5, Haiku 4.5) at list
+  price; a family prefix only absorbs a date or `-latest` suffix, so a newer
+  version or a `-pro`/`-mini` variant is never billed at another model's
+  price — it is unpriced until an entry exists.
 - Sensitive-path classifier: globs with a directory component
   (`~/.kube/config`, `~/.claude/settings.json`, the merged guard-rule paths)
   match the full path only; previously the file name alone matched, so any
@@ -118,6 +126,19 @@ All notable changes to `secure-agent` are documented here. The format follows
   behavior change.
 
 ### Added
+- **Codex model attribution.** Codex model calls carry the model id from the
+  rollout's thread settings and are priced from the price tables; a model the
+  tables do not know costs 0 and counts as unpriced — never a fabricated price.
+- **User price table.** `pricing` in `config.yaml` sets USD per 1M input and
+  output tokens by exact model id or prefix, wins over the built-in table, and
+  applies live on change. Built-in prices now cover OpenAI and Google model
+  families alongside Anthropic.
+- **Self-check.** `GET /doctor` and `secure-agent doctor` report pass, fail
+  or skip for guard-hook registration and activity, file telemetry,
+  collectors, per-harness trace coverage, session identity, repo attribution
+  and creation rate, tool-call pairing, Claude model-call pricing, per-kind
+  retention, egress routing and bus drops, each failure with a one-line fix;
+  the CLI exits 1 on any failure.
 - **Model-call spend.** `GET /costs` and `secure-agent cost` sum model calls
   by repo, branch, harness, session or model over a window (`since`,
   `until`), with tokens, distinct sessions and the dominant harness per

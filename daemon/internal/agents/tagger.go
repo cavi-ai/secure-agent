@@ -185,6 +185,22 @@ func (t *Tagger) Tag(pid int32) (AgentInfo, bool) {
 	return t.tagLocked(pid)
 }
 
+// ParentPID returns pid's parent from the last process table, falling back to
+// the process source for a pid the table does not hold. 0, false when the pid
+// is unknown to both.
+func (t *Tagger) ParentPID(pid int32) (int32, bool) {
+	t.mu.RLock()
+	p, ok := t.table[pid]
+	t.mu.RUnlock()
+	if ok {
+		return p.PPID, true
+	}
+	if p, ok := t.ps.Info(pid); ok {
+		return p.PPID, true
+	}
+	return 0, false
+}
+
 func (t *Tagger) tagLocked(pid int32) (AgentInfo, bool) {
 	if info, ok := t.cache[pid]; ok {
 		return info, t.tagged[pid]

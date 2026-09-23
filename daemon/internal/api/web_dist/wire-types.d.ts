@@ -269,3 +269,26 @@ export interface CostReport {
   rows: CostRow[];
 }
 
+export interface DoctorSummary {
+  pass: number;
+  fail: number;
+  skip: number;
+}
+
+export interface DoctorCheck {
+  id: string;
+  title: string;
+  state: string;
+  detail?: string;
+  fix?: string;
+}
+
+export interface DoctorReport {
+  generated_at: string;
+  version: string;
+  uptime: string;
+  grace: boolean;
+  summary: DoctorSummary;
+  checks: DoctorCheck[];
+}
+

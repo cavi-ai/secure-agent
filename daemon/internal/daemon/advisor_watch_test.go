@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cavi-ai/secure-agent/daemon/internal/collect"
 	"github.com/cavi-ai/secure-agent/daemon/internal/config"
 	"github.com/cavi-ai/secure-agent/daemon/internal/fleet"
 	"github.com/cavi-ai/secure-agent/daemon/internal/resource"
@@ -233,6 +234,43 @@ func TestWatchConfigHotSwapsResourcePolicy(t *testing.T) {
 			policy.WorkspaceOverrides[0].CwdPrefix == "/work/app" &&
 			policy.WorkspaceOverrides[0].Mode == resource.ModePrompt
 	})
+}
+
+// The watcher re-applies the operator price table on change: a new entry
+// prices its model within a poll cycle, an edit reprices it, removal unprices.
+func TestWatchConfigAppliesPricingLive(t *testing.T) {
+	t.Cleanup(func() { collect.SetUserPrices(nil) })
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	st, err := store.Open(filepath.Join(dir, "e.db"), filepath.Join(dir, "e.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	write := func(src string) {
+		if err := os.WriteFile(cfgPath, []byte(src), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cost := func() float64 { return collect.ModelCostUSD("m-watch", 1_000_000, 0) }
+	if cost() != 0 {
+		t.Fatal("m-watch must start unpriced")
+	}
+
+	write("pricing:\n  m-watch: { input: 1, output: 2 }\n")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go watchConfig(ctx, cfgPath, configWatchDeps{
+		st: st, stk: &advisorStackHolder{}, pub: fleet.NewPublisher(), fleetCfg: &fleetConfigHolder{},
+	})
+	waitFor(t, 5*time.Second, func() bool { return cost() == 1 })
+
+	write("pricing:\n  m-watch: { input: 3, output: 2 }\n")
+	waitFor(t, 5*time.Second, func() bool { return cost() == 3 })
+
+	write("advisor:\n  enabled: false\n")
+	waitFor(t, 5*time.Second, func() bool { return cost() == 0 })
 }
 
 // The fleet fingerprint must distinguish every fleet-relevant field — a

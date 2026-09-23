@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -393,5 +394,53 @@ func TestMalformedOverlayLoggingContract(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "compiled-in defaults") {
 		t.Fatalf("boot warning must name the fallback behavior: %q", buf.String())
+	}
+}
+
+// `pricing` parses from an overlay; each malformed entry is dropped and named
+// while the valid entries are kept and the overlay still loads.
+func TestPricingParsesFromOverlayAndDropsMalformed(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	src := "pricing:\n" +
+		"  gpt-5.6-sol:  { input: 1.25, output: 10 }\n" +
+		"  k3-256k:      { input: 0.60, output: 2.50 }\n" +
+		"  negative:     { input: -1, output: 2 }\n" +
+		"  zero:         { input: 0, output: 2 }\n" +
+		"  no-output:    { input: 1 }\n" +
+		"  not-a-number: { input: cheap, output: 1 }\n" +
+		"  scalar:       3\n"
+	if err := os.WriteFile(path, []byte(src), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadStrict(path)
+	if err != nil {
+		t.Fatalf("a malformed pricing entry must not fail the overlay: %v", err)
+	}
+	want := map[string][2]float64{"gpt-5.6-sol": {1.25, 10}, "k3-256k": {0.60, 2.50}}
+	if !reflect.DeepEqual(cfg.Pricing, want) {
+		t.Fatalf("pricing = %v, want %v", cfg.Pricing, want)
+	}
+	if len(cfg.PricingSkipped) != 5 {
+		t.Fatalf("skipped = %q, want 5 entries", cfg.PricingSkipped)
+	}
+	for _, id := range []string{"negative", "zero", "no-output", "not-a-number", "scalar"} {
+		found := false
+		for _, s := range cfg.PricingSkipped {
+			if strings.HasPrefix(s, id+":") {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("skipped %q does not name %s", cfg.PricingSkipped, id)
+		}
+	}
+
+	// No pricing key: empty table, nothing skipped.
+	if err := os.WriteFile(path, []byte("net_sample_interval_ms: 5000\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = LoadStrict(path)
+	if err != nil || len(cfg.Pricing) != 0 || len(cfg.PricingSkipped) != 0 {
+		t.Fatalf("no pricing key: %v %v err=%v", cfg.Pricing, cfg.PricingSkipped, err)
 	}
 }

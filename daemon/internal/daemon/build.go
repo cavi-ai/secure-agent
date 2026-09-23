@@ -128,6 +128,10 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 	advisorStk := &advisorStackHolder{}
 	advisorStk.Store(setupAdvisor(cfg, st))
 
+	// Operator price table from config.yaml, applied before any collector
+	// emits a model call; the config watcher re-applies it on change.
+	applyPricing(cfg)
+
 	// Supervisor with a shared health registry so /status reports each
 	// collector's real state (running / restarting / abandoned). Coverage
 	// heartbeats (last_produced) are carried across restarts from the state
