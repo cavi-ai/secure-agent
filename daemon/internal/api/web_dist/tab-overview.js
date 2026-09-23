@@ -494,19 +494,29 @@ function renderSpend() {
     el.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-activity"/></svg><span>No priced model calls in this window.</span></div>`;
     return;
   }
-  el.innerHTML = card.by === 'day'
-    ? spendDayBarsHTML(rows)
-    : spendListHTML(rows, 8, { by: card.by, expanded: SA.expanded });
-  applyInlineMetrics(el);
+  // Keyed through patchList so the slow refresh keeps unchanged rows and
+  // the day bars' horizontal scroll.
+  const day = card.by === 'day';
+  const cls = day ? 'spend-bars' : 'spend-list';
+  let wrap = el.firstElementChild;
+  if (!wrap || el.childElementCount !== 1 || wrap.className !== cls) {
+    el.innerHTML = `<div class="${cls}"></div>`;
+    wrap = el.firstElementChild;
+  }
+  const left = wrap.scrollLeft;
+  const items = day ? spendDayItems(rows) : spendListItems(rows, 8, { by: card.by, expanded: SA.expanded });
+  patchList(wrap, items, { key: i => i.key, html: i => i.html });
+  wrap.scrollLeft = left;
 }
 
-// spendListHTML: the Spend card's repo/provider/model list — the top n rows
-// by cost (key, harness chip, calls, cost), the rest behind Show more
-// (list key "spend"). opts: { by, expanded }. A by=provider "(unknown)" row
-// says the provider was not recorded.
-function spendListHTML(rows, n, opts) {
+// spendListItems: the Spend card's repo/provider/model list as patchList
+// items { key: "<by>:<row key>", html } — the top n rows by cost (key,
+// harness chip, calls, cost), then the Show more button (list key "spend").
+// opts: { by, expanded }. A by=provider "(unknown)" row says the provider
+// was not recorded.
+function spendListItems(rows, n, opts) {
   opts = opts || {};
-  const sorted = topCostRows({ rows: rows || [] }, (rows || []).length);
+  const list = rows || [];
   const row = r => {
     const calls = Number(r.calls) || 0;
     const unknown = opts.by === 'provider' && r.key === '(unknown)';
@@ -518,29 +528,34 @@ function spendListHTML(rows, n, opts) {
       <span class="spend-cost">${escapeHTML(fmtUSD(r.cost_usd))}</span>
     </div>`;
   };
-  const cap = cappedList(sorted, n, row, 'spend', opts.expanded);
-  return `<div class="spend-list">${cap.html}</div>`;
+  const cap = cappedList(topCostRows({ rows: list }, list.length), n, null, 'spend', opts.expanded);
+  const items = cap.shown.map(r => ({ key: `${opts.by}:${r.key}`, html: row(r) }));
+  if (cap.more) items.push({ key: 'more:spend', html: cap.more });
+  return items;
 }
 
-// spendDayBarsHTML: the Spend card's by=day view — one column per row in
-// key order (YYYY-MM-DD), bar height by share of the costliest day, a
-// "Mon 23" label and the cost under the bar; calls in the title.
-function spendDayBarsHTML(rows) {
-  const list = rows || [];
+// spendDayItems: the Spend card's by=day view as patchList items
+// { key: "day:<YYYY-MM-DD>", html } — one column per row in ascending key
+// order, bar height by share of the costliest day, a "Mon 23" label and the
+// cost under the bar; calls in the title.
+function spendDayItems(rows) {
+  const list = [...(rows || [])].sort((a, b) => {
+    const x = String(a.key), y = String(b.key);
+    return x < y ? -1 : x > y ? 1 : 0;
+  });
   const max = Math.max(0, ...list.map(r => Number(r.cost_usd) || 0));
-  const cols = list.map(r => {
+  return list.map(r => {
     const cost = Number(r.cost_usd) || 0;
     const calls = Number(r.calls) || 0;
     const pct = max > 0 ? (cost / max) * 100 : 0;
     const label = spendDayLabel(r.key);
     const title = `${r.key} · ${fmtUSD(cost)} · ${calls} call${calls === 1 ? '' : 's'}`;
-    return `<div class="spend-day" title="${escapeHTML(title)}">
+    return { key: `day:${r.key}`, html: `<div class="spend-day" title="${escapeHTML(title)}">
       <span class="spend-day-track"><span class="spend-day-bar" data-h="${pct.toFixed(1)}"></span></span>
       <span class="spend-day-cost">${escapeHTML(fmtUSDCompact(cost))}</span>
       <span class="spend-day-label">${escapeHTML(label)}</span>
-    </div>`;
+    </div>` };
   });
-  return `<div class="spend-bars">${cols.join('')}</div>`;
 }
 
 // spendDayLabel: "2026-09-23" → "Wed 23"; anything else as given.

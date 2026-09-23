@@ -1020,6 +1020,41 @@
       stamp('spend-probe', `select=${document.getElementById('spend-by').value} saved=${saved}`);
     }, 6000);
   }
+  // spendkeepdemo (with spenddaydemo): the slow refresh keeps the Spend
+  // card's nodes. Mark the first day column and scroll the narrowed day bars,
+  // refresh; then switch to by repo, mark the first list row, refresh again.
+  // The results land on <pre id="spend-keep-probe">.
+  if (MODE.includes('spendkeepdemo')) {
+    const q = sel => document.querySelector('#spend-card ' + sel);
+    const costFetches = () => ((document.getElementById('mock-costs') || {}).textContent || '').split('\n').length;
+    const out = [];
+    let col, bars, left, fetches, row;
+    setTimeout(() => {
+      bars = q('.spend-bars');
+      col = q('.spend-day');
+      bars.style.width = '80px';
+      bars.scrollLeft = 60;
+      left = bars.scrollLeft;
+      fetches = costFetches();
+      document.getElementById('btn-refresh').click();
+    }, 4000);
+    setTimeout(() => {
+      const now = q('.spend-bars');
+      out.push(`day same=${q('.spend-day') === col && now === bars} left=${left}->${now ? now.scrollLeft : -1} refetched=${costFetches() > fetches}`);
+      const sel = document.getElementById('spend-by');
+      sel.value = 'repo';
+      sel.dispatchEvent(new Event('change', { bubbles: true }));
+    }, 5000);
+    setTimeout(() => {
+      row = q('.spend-row');
+      fetches = costFetches();
+      document.getElementById('btn-refresh').click();
+    }, 6000);
+    setTimeout(() => {
+      out.push(`list same=${!!row && q('.spend-row') === row} refetched=${costFetches() > fetches}`);
+      stamp('spend-keep-probe', out.join('\n'));
+    }, 7000);
+  }
   // No-spend variant: an empty /costs report — the tile reads an em dash and
   // the card shows its empty state.
   if (location.search.includes('nocostsdemo')) {

@@ -305,3 +305,28 @@ func TestCostReportByProviderResolvesVendor(t *testing.T) {
 		t.Fatalf("no resolver rows = %+v, want recorded provider or (unknown)", bare)
 	}
 }
+
+// TestCostReportProviderResolverMayReenterStore: the by=provider resolver
+// runs with the store mutex released, so a resolver that calls a locking
+// store method returns instead of deadlocking.
+func TestCostReportProviderResolverMayReenterStore(t *testing.T) {
+	now := time.Now()
+	s := seedCostStore(t, now)
+	resolve := func(m string) string {
+		s.QueryEvents(EventFilter{Limit: 1})
+		return map[string]string{"m1": "anthropic", "m2": "openai"}[m]
+	}
+	done := make(chan CostReport, 1)
+	go func() {
+		done <- s.CostReport(now.Add(-24*time.Hour), now, "provider", CostOptions{ProviderFor: resolve})
+	}()
+	select {
+	case rep := <-done:
+		rows := costRowsByKey(rep.Rows)
+		if rows["anthropic"].Calls != 2 || rows["openai"].Calls != 1 || rows["(unknown)"].Calls != 1 {
+			t.Fatalf("rows = %+v", rep.Rows)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("CostReport did not return within 5s: resolver ran under the store mutex")
+	}
+}

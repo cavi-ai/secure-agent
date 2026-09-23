@@ -111,16 +111,17 @@ func (s *Store) CostReport(since, until time.Time, by string, opts CostOptions) 
 		COALESCE(SUM(e.tokens_in),0), COALESCE(SUM(e.tokens_out),0), COALESCE(SUM(e.cost_usd),0),
 		COALESCE(SUM(CASE WHEN e.cost_usd IS NULL OR e.cost_usd = 0 THEN 1 ELSE 0 END),0)`
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	keyExpr, keyArgs := costGroupExprs[by], []any(nil)
 	switch by {
 	case "day":
 		keyExpr = costDayExpr(opts.TZMinutes)
 	case "provider":
-		keyExpr, keyArgs = s.costProviderExprLocked(opts.ProviderFor, sinceStr, untilStr)
+		// ProviderFor is caller code: it runs with s.mu released.
+		keyExpr, keyArgs = costProviderExpr(opts.ProviderFor, s.costProviderModels(opts.ProviderFor, sinceStr, untilStr))
 	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	windowArgs := func(extra ...any) []any {
 		return append(append(slices.Clone(keyArgs), sinceStr, untilStr), extra...)
 	}
@@ -199,38 +200,55 @@ func costDayExpr(tzMinutes int) string {
 	return fmt.Sprintf(`substr(datetime(e.ts,'%+d minutes'),1,10)`, tzMinutes)
 }
 
-// costProviderExprLocked builds the by=provider key: the recorded provider,
-// else the vendor providerFor names for the model id, else (unknown). Model
-// ids and vendors are bound parameters, returned with the expression.
-// Caller holds s.mu.
-func (s *Store) costProviderExprLocked(providerFor func(string) string, sinceStr, untilStr string) (string, []any) {
+// costProviderModels lists the distinct model ids in the window with no
+// recorded provider, or nil when providerFor is nil. It takes s.mu.
+func (s *Store) costProviderModels(providerFor func(string) string, sinceStr, untilStr string) []string {
+	if providerFor == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rows, err := s.db.Query(`SELECT DISTINCT COALESCE(e.model,'') AS m`+costFrom+`
+		AND COALESCE(e.provider,'') = '' ORDER BY m`, sinceStr, untilStr)
+	if err != nil {
+		log.Printf("store: cost provider models error: %v", err)
+		return nil
+	}
+	defer rows.Close()
+	var models []string
+	for rows.Next() {
+		var m string
+		if err := rows.Scan(&m); err == nil && m != "" {
+			models = append(models, m)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		log.Printf("store: cost provider models cursor error: %v", err)
+	}
+	return models
+}
+
+// costProviderExpr builds the by=provider key: the recorded provider, else
+// the vendor providerFor names for the model id, else (unknown). Model ids
+// and vendors are bound parameters, returned with the expression. It calls
+// providerFor and must run without s.mu held.
+func costProviderExpr(providerFor func(string) string, models []string) (string, []any) {
 	const recorded = `CASE WHEN NULLIF(e.provider,'') IS NOT NULL THEN e.provider`
 	const unknown = ` ELSE '(unknown)' END`
 	if providerFor == nil {
 		return recorded + unknown, nil
 	}
-	rows, err := s.db.Query(`SELECT DISTINCT COALESCE(e.model,'') AS m`+costFrom+`
-		AND COALESCE(e.provider,'') = '' ORDER BY m`, sinceStr, untilStr)
-	if err != nil {
-		log.Printf("store: cost provider models error: %v", err)
-		return recorded + unknown, nil
-	}
 	byVendor := map[string][]any{}
 	bound := 0
-	for rows.Next() && bound < maxProviderModels {
-		var m string
-		if err := rows.Scan(&m); err != nil || m == "" {
-			continue
+	for _, m := range models {
+		if bound >= maxProviderModels {
+			break
 		}
 		if v := providerFor(m); v != "" {
 			byVendor[v] = append(byVendor[v], m)
 			bound++
 		}
 	}
-	if err := rows.Err(); err != nil {
-		log.Printf("store: cost provider models cursor error: %v", err)
-	}
-	rows.Close()
 
 	var b strings.Builder
 	b.WriteString(recorded)

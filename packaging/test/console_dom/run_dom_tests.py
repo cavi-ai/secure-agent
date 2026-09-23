@@ -187,6 +187,7 @@ def main():
         dom_spend = dump_dom(chrome, tmp, "?spenddemo")
         dom_spendday = dump_dom(chrome, tmp, "?spenddaydemo")
         dom_spendphone = dump_dom(chrome, tmp, "?phonedemo&spenddaydemo")
+        dom_spendkeep = dump_dom(chrome, tmp, "?tab=overview&spenddaydemo&spendkeepdemo")
         dom_events = dump_dom(chrome, tmp, "?tab=events")
         dom_burst = dump_dom(chrome, tmp, "?burstdemo")
         dom_railburst = dump_dom(chrome, tmp, "?railburst")
@@ -342,6 +343,13 @@ def main():
               and 'data-h="100.0"' in day_card.split("Tue 22", 1)[0].rsplit('class="spend-day"', 1)[1]
               and any(q.startswith("since=7d&by=day&tz=") for q in html.unescape(pre(dom_spendday, "mock-costs")).split("\n")),
               f"labels={day_labels}")
+        keep = html.unescape(pre(dom_spendkeep, "spend-keep-probe")).split("\n")
+        keep_day = re.fullmatch(r"day same=(\w+) left=(-?\d+)->(-?\d+) refetched=(\w+)", keep[0])
+        check("spend: a slow refresh keeps the day column nodes and the day bars' scrollLeft",
+              bool(keep_day) and keep_day.group(1) == "true" and int(keep_day.group(2)) > 0
+              and keep_day.group(2) == keep_day.group(3) and keep_day.group(4) == "true", f"probe={keep}")
+        check("spend: a slow refresh keeps the list row nodes",
+              len(keep) > 1 and keep[1] == "list same=true refetched=true", f"probe={keep}")
         check("spend: the Overview tab with the day bars fits a 375px phone",
               'data-hscroll="sessions:0,agents:0,resources:0,overview:0"' in dom_spendphone,
               (re.search(r'data-hscroll="[^"]*"', dom_spendphone) or [None])[0])
