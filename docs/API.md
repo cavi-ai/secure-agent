@@ -499,9 +499,10 @@ GET /costs?since=24h&by=repo
 |---|---|---|
 | `since` | lookback (`24h`, `90m`, `7d`) or RFC3339 timestamp | `24h` |
 | `until` | RFC3339 timestamp | now |
-| `by` | `repo`, `branch` (`repo@branch`), `harness`, `session`, `model` | `repo` |
+| `by` | `repo`, `branch` (`repo@branch`), `harness`, `session`, `model`, `provider`, `day` (`YYYY-MM-DD`) | `repo` |
+| `tz` | local offset in minutes east of UTC, `-840`..`840` (`by=day` buckets on this calendar day) | `0` |
 
-A malformed `since`/`until` or an unknown `by` returns `400` with a one-line body.
+A malformed `since`/`until`, an unknown `by` or a `tz` that is not a whole number in range returns `400` with a one-line body.
 
 ```json
 {
@@ -522,7 +523,7 @@ A malformed `since`/`until` or an unknown `by` returns `400` with a one-line bod
 }
 ```
 
-Rows are sorted by cost, then calls (at most 200); `rows` is `[]` when the window is empty. `harness` is the harness with the most calls in the group (omitted for `by=harness`). Missing repo, branch, harness or model values group as `(no repo)`, `(no branch)`, `(unknown)`. `unpriced_calls` counts calls with cost `0`; a cost is never estimated. Read-level. CLI: `secure-agent cost [--since 24h] [--by repo] [--json]`; the table view adds the class breakdown and one `add a price for <model> under pricing: in ~/.config/secure-agent/config.yaml` line per `unpriced-model` id.
+Rows are sorted by cost, then calls (at most 200); `by=day` rows run oldest first (the newest 200 days); `rows` is `[]` when the window is empty. `harness` is the harness with the most calls in the group (omitted for `by=harness`). Missing repo, branch, harness or model values group as `(no repo)`, `(no branch)`, `(unknown)`. `unpriced_calls` counts calls with cost `0`; a cost is never estimated. Read-level. CLI: `secure-agent cost [--since 24h] [--by repo] [--tz <minutes>] [--json]` (`--tz` defaults to this machine's offset; day rows print oldest first); the table view adds the class breakdown and one `add a price for <model> under pricing: in ~/.config/secure-agent/config.yaml` line per `unpriced-model` id.
 
 Every row and the total split `unpriced_calls` by price class:
 
@@ -534,6 +535,14 @@ Every row and the total split `unpriced_calls` by price class:
 | `local_calls` | `local` | local runtime (`ollama`, `lmstudio`, `lm-studio`, `llama.cpp`, `mlx`, or a loopback provider) |
 
 A zero-token call of a priced model is in `unpriced_calls` and in no class counter. A price entry wins over the provider: a priced model is `priced` whatever the provider. A vendor-prefixed id (`z-ai/glm-5.3-flash`) is looked up without its prefix when the full id has no entry. `by=model` rows also carry `provider` (the provider with the most calls for the model; omitted when none is recorded) and `class` (`priced` when every call carries a cost, else the model's class).
+
+`by=provider` keys each call by:
+
+- the provider the harness recorded (`openai-codex`, `kimi-for-coding`), kept as written;
+- else the vendor whose built-in price table resolves the model id (`anthropic`, `openai`, `google`), by the same exact/dated/vendor-prefix rule as the price; the operator `pricing` table names no vendor;
+- else `(unknown)`.
+
+Claude Code model calls record provider `anthropic`. At most 500 distinct unrecorded model ids are resolved per report; the rest group as `(unknown)`. `sessions` stays a distinct count per provider.
 
 #### `GET /costs/unpriced`
 

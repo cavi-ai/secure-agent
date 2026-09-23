@@ -4,11 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestFormatCostTable(t *testing.T) {
@@ -131,5 +135,44 @@ func TestRunCostClassesAndHints(t *testing.T) {
 	}
 	if strings.Contains(clean.String(), "unpriced:") {
 		t.Fatalf("breakdown printed with nothing unpriced:\n%s", clean.String())
+	}
+}
+
+// --by day --tz -240 reach /costs as by=day&tz=-240; --tz defaults to this
+// machine's offset; day rows print oldest first.
+func TestRunCostByDayPassesTZ(t *testing.T) {
+	var got []url.Values
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/costs" {
+			got = append(got, r.URL.Query())
+		}
+		fmt.Fprint(w, `{"by":"day","total":{"calls":3,"cost_usd":3},"rows":[`+
+			`{"key":"2026-09-23","calls":1,"cost_usd":1},{"key":"2026-09-21","calls":1,"cost_usd":1},{"key":"2026-09-22","calls":1,"cost_usd":1}]}`)
+	}))
+	t.Cleanup(srv.Close)
+	addr := srv.Listener.Addr().String()
+	client := &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "tcp", addr)
+	}}}
+
+	var out strings.Builder
+	if err := runCost(&out, client, []string{"--since", "7d", "--by", "day", "--tz", "-240"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Get("by") != "day" || got[0].Get("tz") != "-240" || got[0].Get("since") != "7d" {
+		t.Fatalf("/costs query = %v, want since=7d by=day tz=-240", got)
+	}
+	text := out.String()
+	a, b, c := strings.Index(text, "2026-09-21"), strings.Index(text, "2026-09-22"), strings.Index(text, "2026-09-23")
+	if a < 0 || !(a < b && b < c) {
+		t.Fatalf("day rows not oldest first:\n%s", text)
+	}
+
+	if err := runCost(io.Discard, client, []string{"--by", "day"}); err != nil {
+		t.Fatal(err)
+	}
+	_, offset := time.Now().Zone()
+	if tz := got[1].Get("tz"); tz != strconv.Itoa(offset/60) {
+		t.Fatalf("default tz = %q, want this machine's offset %d", tz, offset/60)
 	}
 }

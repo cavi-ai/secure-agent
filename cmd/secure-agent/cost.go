@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // costRow and costReport mirror the daemon's GET /costs body.
@@ -56,12 +57,15 @@ func handleCost(client *http.Client) {
 
 // runCost prints GET /costs as a table (or the raw body with --json), then,
 // when calls are unpriced, their class breakdown and a pricing hint per
-// unpriced model id from GET /costs/unpriced.
+// unpriced model id from GET /costs/unpriced. --tz (minutes east of UTC)
+// defaults to this machine's current offset.
 func runCost(w io.Writer, client *http.Client, args []string) error {
 	since := queryFlag(args, "--since", "24h")
+	_, offset := time.Now().Zone()
 	q := url.Values{}
 	q.Set("since", since)
 	q.Set("by", queryFlag(args, "--by", "repo"))
+	q.Set("tz", queryFlag(args, "--tz", strconv.Itoa(offset/60)))
 	code, body := request(client, http.MethodGet, "http://unix/costs?"+q.Encode(), "")
 	if code != 200 {
 		return fmt.Errorf("cost failed (%d): %s", code, strings.TrimSpace(body))
@@ -109,8 +113,12 @@ func formatCostClasses(total costRow, rows []unpricedRow) string {
 const costKeyMaxWidth = 48
 
 // formatCostTable renders a CostReport as a fixed-width table with a TOTAL
-// line.
+// line; by=day rows print oldest first.
 func formatCostTable(rep costReport) string {
+	if rep.By == "day" {
+		rep.Rows = slices.Clone(rep.Rows)
+		slices.SortStableFunc(rep.Rows, func(a, b costRow) int { return strings.Compare(a.Key, b.Key) })
+	}
 	keyW, harnessW := len("TOTAL"), len("HARNESS")
 	for _, r := range rep.Rows {
 		keyW = max(keyW, len([]rune(r.Key)))

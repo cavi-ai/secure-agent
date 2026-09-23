@@ -1645,6 +1645,16 @@ button.fw-uninspected .fw-drill-hint {
 .spend-row { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .spend-key { flex: 1 1 auto; min-width: 0; font-size: 0.8rem; color: var(--tx-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .spend-cost { font: 600 0.78rem/1 var(--mono); color: var(--tx-1); font-variant-numeric: tabular-nums; }
+.spend-calls { font-size: 0.7rem; color: var(--tx-3); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.spend-hint { font-size: 0.68rem; color: var(--tx-3); white-space: nowrap; }
+.spend-list .show-more { align-self: flex-start; }
+.spend-controls { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; min-width: 0; }
+.spend-bars { display: flex; align-items: flex-end; gap: 4px; overflow-x: auto; padding-bottom: 2px; }
+.spend-day { flex: 1 0 34px; min-width: 34px; display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.spend-day-track { display: flex; align-items: flex-end; width: 100%; max-width: 28px; height: 96px; border-radius: 4px; background: var(--bg-2); overflow: hidden; }
+.spend-day-bar { display: block; width: 100%; min-height: 2px; border-radius: 4px 4px 0 0; background: var(--brand); opacity: 0.8; }
+.spend-day-cost { font: 600 0.66rem/1 var(--mono); color: var(--tx-1); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.spend-day-label { font-size: 0.66rem; color: var(--tx-3); white-space: nowrap; }
 @media (max-width: 560px) {
   .hbar-sub { display: none; }
   .hbar-row { grid-template-columns: minmax(90px, 1.2fr) minmax(60px, 2fr) auto; }

@@ -1,6 +1,7 @@
 package collect
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
@@ -201,6 +202,26 @@ func TestClaudeTraceDropsSyntheticModel(t *testing.T) {
 	for _, e := range evs {
 		if e.Kind == event.KindModelCall {
 			t.Fatalf("<synthetic> emitted a model_call: %+v", e)
+		}
+	}
+}
+
+// Every Claude model call names its provider, priced model or not.
+func TestClaudeModelCallCarriesProvider(t *testing.T) {
+	unpriced := strings.Replace(claudeAssistantLine, `"model":"claude-sonnet-4-5"`, `"model":"claude-future-9"`, 1)
+	for _, line := range []string{claudeAssistantLine, unpriced} {
+		evs, _, _ := NewClaudeTracer().ParseLine(line)
+		n := 0
+		for _, e := range evs {
+			if e.Kind == event.KindModelCall {
+				n++
+				if e.Provider != "anthropic" {
+					t.Fatalf("model %s provider = %q, want anthropic", e.Model, e.Provider)
+				}
+			}
+		}
+		if n != 1 {
+			t.Fatalf("want one model_call, got %d", n)
 		}
 	}
 }
