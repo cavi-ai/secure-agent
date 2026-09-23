@@ -65,6 +65,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Advisor host pre-assessment still covers cloud, telemetry and unknown hosts.
 
 ### Fixed
+- Endpoint detail lists an allowance whose approved parent domain covers the host.
 - Endpoint drawer resolves sessions by id, so sessions beyond the newest 1,000 are attributed.
 - A codex rollout session joins the process holding the rollout open: root pid set, that tree's process-tree session merged in.
 - `/doctor` trace coverage counts transcript and hook sessions seen since boot, not only those started since boot.
