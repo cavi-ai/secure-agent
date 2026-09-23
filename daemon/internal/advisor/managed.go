@@ -32,13 +32,6 @@ type ManagedSpec struct {
 	Bin string
 }
 
-// DefaultManagedModels is the curated short list the Settings pane offers —
-// small enough for a laptop, strong enough for triage JSON.
-var DefaultManagedModels = []string{
-	"mlx-community/Qwen3-4B-4bit",
-	"mlx-community/Llama-3.2-3B-Instruct-4bit",
-}
-
 // LaunchManaged starts `mlx_lm.server` for the spec on a free loopback port
 // and returns the command (caller supervises it) plus the endpoint to point
 // the advisor at. The server downloads the model on first start — readiness
@@ -102,6 +95,9 @@ type DiscoveredServer struct {
 	Endpoint string   `json:"endpoint"` // e.g. "http://127.0.0.1:11434"
 	Kind     string   `json:"kind"`     // "ollama" | "openai-compatible"
 	Models   []string `json:"models"`
+	// Sizes: model name → bytes on disk, from Ollama's /api/tags (other
+	// servers do not report sizes).
+	Sizes map[string]int64 `json:"sizes,omitempty"`
 }
 
 // discoverPorts are the loopback ports probed, most common first: Ollama,
@@ -165,8 +161,34 @@ func probePort(port int) *DiscoveredServer {
 	}
 	sort.Strings(models)
 	kind := "openai-compatible"
+	var sizes map[string]int64
 	if port == 11434 {
 		kind = "ollama" // Ollama's well-known port; /v1/models is its compat surface
+		sizes = ollamaSizes(client, endpoint)
 	}
-	return &DiscoveredServer{Endpoint: endpoint, Kind: kind, Models: models}
+	return &DiscoveredServer{Endpoint: endpoint, Kind: kind, Models: models, Sizes: sizes}
+}
+
+// ollamaSizes reads model sizes from Ollama's native /api/tags; nil when it
+// does not answer.
+func ollamaSizes(client *http.Client, endpoint string) map[string]int64 {
+	resp, err := client.Get(endpoint + "/api/tags")
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+	var body struct {
+		Models []struct {
+			Name string `json:"name"`
+			Size int64  `json:"size"`
+		} `json:"models"`
+	}
+	if resp.StatusCode != http.StatusOK || json.NewDecoder(resp.Body).Decode(&body) != nil {
+		return nil
+	}
+	sizes := make(map[string]int64, len(body.Models))
+	for _, m := range body.Models {
+		sizes[m.Name] = m.Size
+	}
+	return sizes
 }
