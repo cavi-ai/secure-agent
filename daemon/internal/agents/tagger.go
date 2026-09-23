@@ -289,6 +289,16 @@ func (t *Tagger) procLocked(pid int32) (ProcInfo, bool) {
 	return pInfo, ok
 }
 
+// MatchExe names the agent whose match strings hit exe: the test Tag applies
+// to a process, for a caller holding only the executable path (a file event
+// from a pid the tagger has not cached yet).
+func (t *Tagger) MatchExe(exe string) (string, bool) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	def, ok := t.matchLocked(ProcInfo{Exe: exe})
+	return def.Name, ok
+}
+
 // matchLocked returns the first agent definition matching the process's exe
 // (or comm when the exe is unknown).
 func (t *Tagger) matchLocked(p ProcInfo) (config.AgentDef, bool) {

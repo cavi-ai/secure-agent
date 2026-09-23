@@ -129,6 +129,30 @@ export interface Flag {
   explain?: FlagExplain;
 }
 
+export interface Pattern {
+  key: string;
+  agent: string;
+  rule: string;
+  title: string;
+  subject: EvidenceItem;
+  count: number;
+  unacked: number;
+  first: string;
+  last: string;
+  median_gap_s: number;
+  bursts: number;
+  cadence: string;
+  hourly: number[];
+  pids: number[];
+  pid_count: number;
+  sessions: string[];
+  session_count: number;
+  disposition: Disposition;
+  summary: string;
+  actions: ExplainAction[];
+  flag_ids: string[];
+}
+
 export interface RotateItem {
   id: string;
   category: string;

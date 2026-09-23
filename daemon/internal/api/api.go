@@ -352,9 +352,11 @@ func (a *API) handleAdvisorAssessHost(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(resp)
 }
 
-// handleFlagAcknowledge marks one flag acted-upon (idempotent). Called by
-// the UI when a disposition is applied so the flag stops counting as
-// critical — the operator's action and the flag's state stay in sync.
+// handleFlagAcknowledge marks flags acted-upon (idempotent): one
+// {"flag_id"}, or a pattern's {"flag_ids"} (at most model.PatternFlagIDCap)
+// in one transaction. Called by the UI when a disposition is applied so the
+// flag stops counting as critical — the operator's action and the flag's
+// state stay in sync.
 func (a *API) handleFlagAcknowledge(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -362,16 +364,36 @@ func (a *API) handleFlagAcknowledge(w http.ResponseWriter, r *http.Request) {
 	}
 	limitBody(w, r)
 	var req struct {
-		FlagID string `json:"flag_id"`
+		FlagID  string   `json:"flag_id"`
+		FlagIDs []string `json:"flag_ids"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.FlagID == "" ||
-		!guardTokenRE.MatchString(req.FlagID) {
-		http.Error(w, `Invalid payload: {"flag_id"} (id must match ^[A-Za-z0-9_.-]+$)`, http.StatusBadRequest)
+	const invalid = `Invalid payload: {"flag_id"} or {"flag_ids":[...]} (at most 500; ids must match ^[A-Za-z0-9_.-]+$)`
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || (req.FlagID == "") == (len(req.FlagIDs) == 0) {
+		http.Error(w, invalid, http.StatusBadRequest)
 		return
 	}
-	ok := a.store.AcknowledgeFlag(req.FlagID)
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{"status": "ok", "acknowledged": ok})
+	if req.FlagID != "" {
+		if !guardTokenRE.MatchString(req.FlagID) {
+			http.Error(w, invalid, http.StatusBadRequest)
+			return
+		}
+		ok := a.store.AcknowledgeFlag(req.FlagID)
+		json.NewEncoder(w).Encode(map[string]any{"status": "ok", "acknowledged": ok})
+		return
+	}
+	if len(req.FlagIDs) > model.PatternFlagIDCap {
+		http.Error(w, invalid, http.StatusBadRequest)
+		return
+	}
+	for _, id := range req.FlagIDs {
+		if !guardTokenRE.MatchString(id) {
+			http.Error(w, invalid, http.StatusBadRequest)
+			return
+		}
+	}
+	n := a.store.AcknowledgeFlags(req.FlagIDs)
+	json.NewEncoder(w).Encode(map[string]any{"status": "ok", "acknowledged": n > 0, "count": n})
 }
 
 // handleAdvisorRetriage re-queues one flag for a fresh advisor verdict.
@@ -547,6 +569,7 @@ func (a *API) routes() map[string]http.HandlerFunc {
 		"/advisor/retriage":             a.handleAdvisorRetriage,
 		"/advisor/assess-host":          a.handleAdvisorAssessHost,
 		"/flags/acknowledge":            a.handleFlagAcknowledge,
+		"/patterns":                     a.handlePatterns,
 		"/ui/open-fda":                  a.handleOpenFDA,
 		"/stats/rollup":                 a.handleRollup,
 		"/costs":                        a.handleCosts,
@@ -784,7 +807,7 @@ func (a *API) handleFlags(w http.ResponseWriter, r *http.Request) {
 		Agent: q.Get("agent"),
 		Rule:  q.Get("rule"),
 		Since: q.Get("since"),
-		Limit: queryInt(q.Get("limit"), 50),
+		Limit: min(queryInt(q.Get("limit"), 50), 1000),
 	}
 	f.MinSeverity = queryInt(q.Get("min_severity"), 0)
 	// ?unacted=1 excludes acknowledged flags — reviewed rows must not bury

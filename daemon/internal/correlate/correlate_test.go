@@ -104,7 +104,7 @@ func TestUntaggedKeychainAccessFlags(t *testing.T) {
 	c := newTestCorrelator(t)
 	base := time.Unix(1_700_000_000, 0)
 	ev := event.Event{Kind: event.KindFileOpen, PID: 999, TS: base,
-		ExePath: "/Volumes/x/.openclaw/node-v24/bin/node",
+		ExePath: "/Volumes/x/tools/node-v24/bin/node",
 		Path:    "/Users/x/Library/Keychains/login.keychain-db"}
 
 	var flags []model.Flag
@@ -116,6 +116,46 @@ func TestUntaggedKeychainAccessFlags(t *testing.T) {
 	}
 	if flags[0].Agent != "untagged:node" || flags[0].Severity != 1 {
 		t.Fatalf("flag agent/severity = %q/%d, want untagged:node/1", flags[0].Agent, flags[0].Severity)
+	}
+}
+
+// An exe the tagger has not cached is named by the agent match strings
+// (the flag joins that agent's flags); a miss whose basename is a version
+// number carries the directory that names it.
+func TestUntaggedLabelVersionBasename(t *testing.T) {
+	cfg, err := config.Load("/nonexistent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	observe := func(cfg config.Config, pid int32, exe string) string {
+		t.Helper()
+		c := New(agents.New(cfg, fakeProcSource{}), sensitive.New(cfg), cfg)
+		flags := c.Observe(event.Event{Kind: event.KindFileOpen, PID: pid, TS: time.Unix(1_700_000_000, 0),
+			ExePath: exe, Path: "/Users/x/Library/Keychains/login.keychain-db"})
+		if len(flags) != 1 || flags[0].Rule != "keychain-access" {
+			t.Fatalf("exe %s: flags = %+v, want one keychain-access flag", exe, flags)
+		}
+		return flags[0].Agent
+	}
+	const claudeExe = "/Users/x/.local/share/claude/versions/2.1.280"
+	if got := observe(cfg, 997, claudeExe); got != "claude" {
+		t.Fatalf("default cfg agent = %q, want claude (the match strings name the exe)", got)
+	}
+	if got := observe(cfg, 996, "/Volumes/x/.openclaw/node-v24/bin/node"); got != "openclaw" {
+		t.Fatalf("openclaw node agent = %q, want openclaw", got)
+	}
+	noClaude := cfg
+	noClaude.Agents = nil
+	for _, def := range cfg.Agents {
+		if def.Name != "claude" {
+			noClaude.Agents = append(noClaude.Agents, def)
+		}
+	}
+	if got := observe(noClaude, 998, claudeExe); got != "untagged:claude 2.1.280" {
+		t.Fatalf("cfg without claude: agent = %q, want untagged:claude 2.1.280", got)
+	}
+	if got := observe(noClaude, 995, "/opt/tools/2.0/bin/1.4"); got != "untagged:tools 1.4" {
+		t.Fatalf("version dirs skipped: agent = %q, want untagged:tools 1.4", got)
 	}
 }
 

@@ -46,9 +46,14 @@ function renderAttention() {
     : `<button class="btn btn-ghost btn-sm" data-action="retriage" data-id="${escapeHTML(item.id)}">Re-run advisor</button>`;
 
   // A flag item whose flag the daemon explained renders the finding card's
-  // lines — who, what, verdict — and its served actions.
+  // lines — who, what, verdict — and its served actions; a pattern item
+  // renders its pattern card.
   const flagsById = new Map((SA.t.flags || []).map(f => [f.id, f]));
+  const patternsByKey = new Map((SA.t.patterns || []).map(p => [p.key, p]));
+  const now = Date.now();
   const itemHTML = item => {
+    const p = item.kind === 'pattern' ? patternsByKey.get(item.id) : null;
+    if (p) return patternHTML(p, now, { flags: SA.t.flags, expanded: SA.expanded });
     const f = item.kind === 'flag' ? flagsById.get(item.id) : null;
     const l = f && explainLines(f);
     if (l) return `
@@ -77,14 +82,13 @@ function renderAttention() {
     container.innerHTML = '<div class="attention-groups"></div>';
     wrap = container.firstElementChild;
   }
-  patchList(wrap, groups, { key: group => group.key || group.label, html: group => {
-    const urgent = group.items[0] && group.items[0].priority >= 4 ? ' urgent' : '';
-    const metrics = [
-      group.rssBytes ? `<span><b>${escapeHTML(fmtRSS(group.rssBytes))}</b> memory</span>` : '',
-      group.cpuPercent ? `<span><b>${escapeHTML(fmtCPU(group.cpuPercent))}</b> CPU</span>` : '',
-      group.processCount ? `<span><b>${Number(group.processCount)}</b> process${group.processCount === 1 ? '' : 'es'}</span>` : '',
-    ].filter(Boolean).join('');
-    return `<article class="attention-group${urgent}">
+  // The group node is keyed on its identity; urgency, the metrics and the
+  // item count update in place and the items patch inside it, so an open
+  // pattern <details> or a focused button survives a memory or CPU tick.
+  const groupKey = group => group.key || group.label;
+  patchList(wrap, groups, { key: groupKey,
+    hash: group => JSON.stringify([group.key, group.label, group.agent, group.workspace]),
+    html: group => `<article class="attention-group">
       <header class="attention-group-head">
         <div class="attention-identity">
           <span class="attention-agent">${escapeHTML(group.agent || 'machine')}</span>
@@ -93,12 +97,28 @@ function renderAttention() {
             : group.key === 'machine' ? '<span class="attention-workspace">Monitoring gaps no agent session owns</span>'
             : '<span class="attention-workspace">Signals could not be safely attributed to one live session</span>'}
         </div>
-        <div class="attention-metrics">${metrics}</div>
-        <span class="attention-total">${group.items.length} item${group.items.length === 1 ? '' : 's'}</span>
+        <div class="attention-metrics"></div>
+        <span class="attention-total"></span>
       </header>
-      <div class="attention-items">${group.items.map(itemHTML).join('')}</div>
-    </article>`;
-  } });
+      <div class="attention-items"></div>
+    </article>` });
+  const nodes = new Map(Array.from(wrap.children).map(n => [n._saKey, n]));
+  for (const group of groups) {
+    const node = nodes.get(String(groupKey(group)));
+    if (!node) continue;
+    node.classList.toggle('urgent', !!(group.items[0] && group.items[0].priority >= 4));
+    const metrics = [
+      group.rssBytes ? `<span><b>${escapeHTML(fmtRSS(group.rssBytes))}</b> memory</span>` : '',
+      group.cpuPercent ? `<span><b>${escapeHTML(fmtCPU(group.cpuPercent))}</b> CPU</span>` : '',
+      group.processCount ? `<span><b>${Number(group.processCount)}</b> process${group.processCount === 1 ? '' : 'es'}</span>` : '',
+    ].filter(Boolean).join('');
+    const m = node.querySelector('.attention-metrics');
+    if (m._saHTML !== metrics) { m.innerHTML = metrics; m._saHTML = metrics; }
+    const total = `${group.items.length} item${group.items.length === 1 ? '' : 's'}`;
+    const t = node.querySelector('.attention-total');
+    if (t.textContent !== total) t.textContent = total;
+    patchList(node.querySelector('.attention-items'), group.items, { key: item => item.kind + ':' + item.id, html: itemHTML });
+  }
 }
 
 function renderIncidents() {
@@ -210,20 +230,30 @@ function renderFlags() {
 
   // Seed the filter dropdowns from the unfiltered flags so options don't
   // vanish once a filter narrows the view.
-  (SA.t.flags || []).forEach(f => {
+  const allPatterns = SA.t.patterns || [];
+  [...(SA.t.flags || []), ...allPatterns].forEach(f => {
     if (f.agent) SA.seenAgents.add(f.agent);
     if (f.rule) SA.seenRules.add(f.rule);
   });
   SA.syncSelect('flags-agent', SA.seenAgents);
   SA.syncSelect('flags-rule', SA.seenRules);
 
-  const flags = scopedBySession(SA.t.flagsView || [], SA.timelineSession, SA.timelinePids)
-    .filter(f => matchesSearch(SA.globalSearchTerm(), f.agent, f.rule, f.evidence, f.sessionId, f.workspace));
-  const scopedInc = scopedBySession(SA.t.incidents || [], SA.timelineSession, SA.timelinePids);
-  SA.paintSessionChip('flags-session-filter', 'flags-session-filter-id', flags.length);
-  badge.textContent = flags.length;
+  // Patterns lead; a flag a pattern covers is shown by its card, not as a row.
+  const selected = id => {
+    const v = (document.getElementById(id) || {}).value || 'all';
+    return v === 'all' ? '' : v;
+  };
+  const scopedFlags = scopedBySession(SA.t.flagsView || [], SA.timelineSession, SA.timelinePids);
+  const patterns = patternsInView(allPatterns, {
+    term: SA.globalSearchTerm(), agent: selected('flags-agent'), rule: selected('flags-rule'),
+    session: SA.timelineSession, pids: SA.timelinePids, flags: scopedFlags,
+  });
+  const flags = uncoveredFlags(scopedFlags
+    .filter(f => matchesSearch(SA.globalSearchTerm(), f.agent, f.rule, f.evidence, f.sessionId, f.workspace)), patterns);
+  SA.paintSessionChip('flags-session-filter', 'flags-session-filter-id', patterns.length + flags.length);
+  badge.textContent = patterns.length + flags.length;
 
-  if (flags.length === 0) {
+  if (flags.length === 0 && patterns.length === 0) {
     const msg = SA.sessionScopeOn()
       ? `No flags for ${SA.sessionScopeTag()} in the loaded window`
       : SA.isFlagsFiltered() ? 'No flags match the current filter' : 'No security flags — agent egress looks clean';
@@ -286,7 +316,9 @@ function renderFlags() {
       </div></div>
     </div>`;
   };
-  const parts = flags.map((f, i) => {
+  const parts = patterns.map(p => ({
+    key: 'pattern:' + p.key, html: patternHTML(p, now, { flags: SA.t.flags, expanded: SA.expanded }),
+  })).concat(flags.map((f, i) => {
     const html = cardHTML(f, i);
     // The age in a finding's meta ticks without rebuilding the card (so an
     // open Details and a focused button survive): the hash leaves it out and
@@ -294,7 +326,7 @@ function renderFlags() {
     const l = explainLines(f, now);
     const hash = l ? html.replace(metaHTML(l.meta), metaHTML('')) : html;
     return { key: 'flag:' + f.id, html, hash, meta: l ? l.meta : null };
-  });
+  }));
 
   // Dispositions: muted (rule, host) pairs, visible so the quiet is
   // deliberate and reversible.
@@ -350,6 +382,135 @@ function findingHTML(f, l, chainHTML, toolsHTML) {
         ${chainHTML}
         <dl class="finding-facts">${facts.map(([k, v]) => `<dt>${escapeHTML(k)}</dt><dd>${escapeHTML(v)}</dd>`).join('')}</dl>
         ${toolsHTML ? `<div class="flag-actions-row">${toolsHTML}</div>` : ''}
+      </details>
+    </article>`;
+}
+
+// ---------- patterns: a repeating finding as one card ----------
+
+// Served pattern action ids the console performs.
+const PATTERN_CONSOLE_ACTIONS = ['allow-host', 'mute-rule-host', 'mute-class', 'dismiss-all', 'kill'];
+const PATTERN_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+// uncoveredFlags: the flags no pattern covers (flag_ids). Handed the
+// patterns in view, so a flag is hidden only behind a card that shows.
+function uncoveredFlags(flags, patterns) {
+  const covered = new Set();
+  for (const p of patterns || []) for (const id of p.flag_ids || []) covered.add(id);
+  return (flags || []).filter(f => !covered.has(f.id));
+}
+
+// patternsInView: the patterns the Flags filters admit — the search over
+// agent, rule, title, subject and summary; the agent and rule selects; the
+// session or pid scope, by the pattern's capped sessions / pids or by any
+// of its flag_ids among the loaded scoped flags (opts.flags).
+function patternsInView(patterns, opts) {
+  const o = opts || {};
+  const scoped = new Set((o.flags || []).map(f => f.id));
+  const coversScoped = p => (p.flag_ids || []).some(id => scoped.has(id));
+  return (patterns || []).filter(p => {
+    if (o.agent && p.agent !== o.agent) return false;
+    if (o.rule && p.rule !== o.rule) return false;
+    if (o.session) {
+      if (!(p.sessions || []).includes(o.session) && !coversScoped(p)) return false;
+    } else if (o.pids && o.pids.length && !(p.pids || []).some(pid => o.pids.includes(pid)) && !coversScoped(p)) {
+      return false;
+    }
+    return matchesSearch(o.term, p.agent, p.rule, p.title, (p.subject || {}).label, p.summary);
+  });
+}
+
+// patternAfterDismiss: the pattern once n of its open flags were
+// acknowledged. A served dismiss-all carries at most the newest 500 ids, so
+// the open count drops by n and the card reads dismissed only at 0; the next
+// /snapshot reconciles.
+function patternAfterDismiss(p, n) {
+  const unacked = Math.max(0, (Number(p.unacked) || 0) - (Number(n) || 0));
+  if (unacked > 0) return { ...p, unacked };
+  return { ...p, unacked: 0, dismissed: true, disposition: { state: 'acknowledged', text: 'Reviewed', why: p.title || '' } };
+}
+
+// patternWindowText: "03:00→03:08" in local time; a day other than today
+// leads with its date.
+function patternWindowText(p, nowMs) {
+  const pad = n => String(n).padStart(2, '0');
+  const first = new Date(p.first), last = new Date(p.last);
+  if (isNaN(first) || isNaN(last)) return '';
+  const hm = d => pad(d.getHours()) + ':' + pad(d.getMinutes());
+  const day = d => `${PATTERN_MONTHS[d.getMonth()]} ${d.getDate()} `;
+  const today = new Date(nowMs || Date.now()).toDateString();
+  const a = (first.toDateString() === today ? '' : day(first)) + hm(first);
+  const b = (last.toDateString() === first.toDateString() ? '' : day(last)) + hm(last);
+  return a === b ? a : `${a}→${b}`;
+}
+
+// patternBarsHTML: 24 bars, heights as classes h0..h8 relative to the
+// busiest bucket (a non-empty bucket is at least h1).
+function patternBarsHTML(hourly) {
+  const h = Array.from({ length: 24 }, (_, i) => Math.max(0, Number((hourly || [])[i]) || 0));
+  const max = Math.max(1, ...h);
+  return h.map(n => `<i class="h${n ? Math.max(1, Math.round(n / max * 8)) : 0}"></i>`).join('');
+}
+
+function patternActionLabel(p, a) {
+  const agent = p.agent || 'agent';
+  if (a.id === 'kill') return `Kill ${agent}`;
+  const host = a.body && typeof a.body.host === 'string' ? a.body.host : '';
+  if (a.id === 'allow-host' && host.includes(':')) return `Allow this address for ${agent}`;
+  return a.label || a.id;
+}
+
+// patternActionsHTML: one button per served action, recommended first; the
+// click handler reads the request from the served pattern (key + action id
+// + host). A card dismissed in place keeps its buttons, disabled.
+function patternActionsHTML(p) {
+  const acts = (p.actions || []).filter(a => a && PATTERN_CONSOLE_ACTIONS.includes(a.id));
+  const off = p.dismissed ? ' disabled' : '';
+  return acts.filter(a => a.recommended).concat(acts.filter(a => !a.recommended)).map(a => {
+    const host = a.body && typeof a.body.host === 'string' ? a.body.host : '';
+    const cls = a.id === 'kill' ? 'btn-danger' : a.recommended ? 'btn-primary' : 'btn-ghost';
+    return `<button class="btn ${cls} btn-sm" data-action="explain-act" data-pattern-key="${escapeHTML(p.key)}"`
+      + ` data-action-id="${escapeHTML(a.id)}"${host ? ` data-host="${escapeHTML(host)}"` : ''}`
+      + ` title="${escapeHTML(a.consequence)}"${off}>${escapeHTML(patternActionLabel(p, a))}</button>`;
+  }).join('');
+}
+
+// patternHTML: one repeating finding — title, count and window; the served
+// summary; the cadence strip (24 bars, the cadence phrase, open count); the
+// disposition; the served actions; the covered flags behind Details.
+// opts.flags are the loaded flags (the covered ones list), opts.expanded
+// the console's opened-list keys.
+function patternHTML(p, nowMs, opts) {
+  const o = opts || {};
+  const d = p.disposition || {};
+  const count = Number(p.count) || 0;
+  const open = p.dismissed ? 0 : Number(p.unacked) || 0;
+  const covered = new Set(p.flag_ids || []);
+  const rows = (o.flags || []).filter(f => covered.has(f.id));
+  const cap = cappedList(rows, 10, null, 'pattern:' + p.key, o.expanded);
+  const row = f => {
+    const t = new Date(f.ts);
+    const at = isNaN(t) ? String(f.ts || '') : t.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    return `<li><span>${escapeHTML(at)}</span><span>pid ${Number(f.pid) || 0}</span>`
+      + `${f.session_id ? `<span>session ${escapeHTML(sessionShort(f.session_id))}</span>` : ''}<code>${escapeHTML(f.id)}</code></li>`;
+  };
+  return `
+    <article class="finding pattern-card ${DISPOSITION_CLASS[d.state] || 'disp-warning'}" data-pattern-key="${escapeHTML(p.key)}">
+      <header class="finding-head pattern-head">
+        ${harnessChipHTML(p.agent)}
+        <strong class="finding-title">${escapeHTML(p.title || ruleTitle(p.rule))}</strong>
+        <span class="pattern-meta">${count}× · ${escapeHTML(patternWindowText(p, nowMs))}</span>
+      </header>
+      <p class="pattern-summary">${escapeHTML(p.summary)}</p>
+      <div class="pattern-cadence">
+        <span class="pattern-bars" role="img" aria-label="Flags per bucket over the window, oldest first">${patternBarsHTML(p.hourly)}</span>
+        <span class="pattern-cadence-text">${p.cadence ? escapeHTML(p.cadence) + ' · ' : ''}<b class="pattern-open">${open} open</b></span>
+      </div>
+      <p class="finding-verdict">${escapeHTML((d.text || '') + (d.why ? ': ' + d.why : ''))}</p>
+      <div class="finding-actions">${patternActionsHTML(p)}</div>
+      <details class="finding-details pattern-flags"><summary>Individual flags (${count})</summary>
+        ${rows.length ? `<ul class="pattern-flag-list">${cap.shown.map(row).join('')}</ul>${cap.more}`
+          : '<p class="pattern-flags-note">None of them is open in the loaded window.</p>'}
       </details>
     </article>`;
 }
