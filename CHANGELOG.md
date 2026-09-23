@@ -77,6 +77,15 @@ All notable changes to `secure-agent` are documented here. The format follows
   remain only as fallbacks for older daemons.
 
 ### Changed
+- The Endpoint Security collector ships inside the app bundle
+  (`Contents/MacOS/secure-agent-esd` plus
+  `Contents/Library/LaunchDaemons/com.cavi-ai.secure-agent-esd.plist`) and is
+  registered with `SMAppService.daemon`: the user approves Secure Agent in
+  Login Items and Full Disk Access, with no admin password. The collector
+  verifies its code signature instead of an install-time hash, the setup card
+  names Secure Agent instead of the launchd label, and a collector installed
+  by an earlier version under `/Library` is removed from the card (one admin
+  prompt) or by `packaging/uninstall.sh`.
 - API HTTP handlers for resources, kill, firewall, and guard live in their own files (`api.go` 1662→940). Same package, no behavior change.
 - The daemon composition root is split into named stages (`buildResourceStack`,
   `buildFleetAndOTLP`, `runResourceLoop`, `wireEgressOverrides`,

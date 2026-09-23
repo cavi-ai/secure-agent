@@ -12,16 +12,18 @@ public final class SetupManager: ObservableObject {
     public static let shared = SetupManager()
 
     public static let daemonLabel = "com.cavi-ai.secure-agentd"
-    /// The privileged Endpoint Security collector (root LaunchDaemon).
+    /// The privileged Endpoint Security collector: a LaunchDaemon shipped in
+    /// the bundle (Contents/Library/LaunchDaemons) and registered with
+    /// SMAppService.daemon, so macOS attributes it to Secure Agent.
     public static let esCollectorLabel = "com.cavi-ai.secure-agent-esd"
-    /// Root-owned helper path the LaunchDaemon executes. The bundle copy is
-    /// user-writable, so the installer stages the binary to a path neither
-    /// the login user nor a plain admin can overwrite without a prompt.
-    public static let esCollectorHelperPath = "/Library/PrivilegedHelperTools/\(esCollectorLabel)"
-    /// Legacy install path (the in-bundle binary); kept so the uninstaller
-    /// and the migration boot-out can clean it up.
-    public static let esCollectorInstallPath = Bundle.main.bundleURL
-        .appendingPathComponent("Contents/Helpers/secure-agentd").path
+    public static let esCollectorPlistName = "\(esCollectorLabel).plist"
+    /// The collector executable the plist's BundleProgram names.
+    public static let esCollectorExecutable = "Contents/MacOS/secure-agent-esd"
+    /// Where earlier versions installed the collector outside the bundle;
+    /// `removeLegacyESHelper` deletes these.
+    static let legacyESPlistPath = "/Library/LaunchDaemons/\(esCollectorPlistName)"
+    static let legacyESHelperPath = "/Library/PrivilegedHelperTools/\(esCollectorLabel)"
+    static let legacyESHashPath = "/Library/Application Support/secure-agent/esd.binhash"
 
     @Published public private(set) var isDaemonRunning = false
     @Published public private(set) var areHooksInstalled = false
@@ -80,20 +82,15 @@ public final class SetupManager: ObservableObject {
     /// Neutral guidance after an advisor toggle (the daemon reads config at
     /// start, so a change needs an app restart). Not an error.
     @Published public private(set) var advisorNote: String?
-    /// Root ES LaunchDaemon state as probed by the daemon ("running",
-    /// "not running (last exit 1)", "not-loaded"). Nil until the first
-    /// status fetch lands. Lets the ES card tell "waiting on the Settings
-    /// switch" apart from "service dead" — only the former should point at
-    /// System Settings.
-    @Published public private(set) var esServiceState: String?
-    /// Set when an ES helper install replaced a previously installed build
-    /// with a different binary: the privacy grant is bound to the old build,
-    /// so file telemetry stays dark until Full Disk Access is granted again.
-    /// Cleared once the spool is written after that install.
-    @Published public private(set) var esNeedsRegrant = false
-    /// Spool mtime recorded right after the hash-changing install; a later
-    /// write proves the new build holds the grant.
-    private var regrantSpoolMtime: Date?
+    /// Registration status of the in-bundle collector daemon.
+    @Published public private(set) var esServiceStatus: SMAppService.Status = .notRegistered
+    /// Whether a collector installed by an earlier version (outside the
+    /// bundle, same launchd label) is still present.
+    @Published public private(set) var esLegacyHelperInstalled = false
+    /// Spool mtime when this app last registered the collector; a later
+    /// write proves the registered daemon holds its privacy grant.
+    private var esRegisterSpoolMtime: Date?
+    private let esService = SMAppService.daemon(plistName: SetupManager.esCollectorPlistName)
     /// Loopback model servers + the curated managed list, from the daemon's
     /// /advisor/discover. Drives the Advisor settings dropdowns.
     @Published public private(set) var advisorDiscovery = AdvisorDiscovery(servers: [], managedModels: [])
@@ -133,18 +130,18 @@ public final class SetupManager: ObservableObject {
 
     public var isBundled: Bool { bundledDaemonPath != nil }
 
-    private init() {}
+    private init() {
+        esServiceStatus = esService.status
+        esLegacyHelperInstalled = fm.fileExists(atPath: Self.legacyESPlistPath)
+    }
 
     // MARK: - State
 
     public func refreshState() async {
         let status = try? await DaemonClient().fetchStatus()
         isDaemonRunning = DaemonSupervisor.shared.isRunning || (status?.running ?? false)
-        esServiceState = status?.esService?.state
-        if esNeedsRegrant,
-           Self.regrantResolved(installSpoolMtime: regrantSpoolMtime, currentSpoolMtime: esSpoolMtime()) {
-            esNeedsRegrant = false
-        }
+        esServiceStatus = esService.status
+        esLegacyHelperInstalled = fm.fileExists(atPath: Self.legacyESPlistPath)
         // ALL harnesses must carry the hook — `contains` used to announce
         // "Hooks installed" when only one of three targets had it, leaving the
         // other two unprotected while the wizard claimed otherwise. Claude Code
@@ -742,21 +739,32 @@ public final class SetupManager: ObservableObject {
 
     // MARK: - Privileged ES collector
 
-    /// Whether the LaunchDaemon plist exists AND the root-owned helper is
-    /// in place (the collector is installed, regardless of whether TCC has
-    /// granted eslogger yet).
+    /// Whether the collector daemon is registered and allowed to run
+    /// (regardless of whether it holds its privacy grant yet).
     public var esCollectorDaemonInstalled: Bool {
-        FileManager.default.fileExists(atPath: "/Library/LaunchDaemons/\(Self.esCollectorLabel).plist") &&
-        FileManager.default.fileExists(atPath: Self.esCollectorHelperPath)
+        esService.status == .enabled
     }
 
-    /// Whether file telemetry is actually live: the privileged helper is
-    /// running AND writing the spool (proof eslogger got its ES client —
-    /// i.e. the user has flipped the eslogger switch in Settings).
+    /// Whether the spool has data at all (some collector build wrote it).
     public var isESCollectorInstalled: Bool {
         guard let attrs = try? FileManager.default.attributesOfItem(atPath: Self.esSpoolPath),
               let size = attrs[.size] as? UInt64, size > 0 else { return false }
         return true
+    }
+
+    /// Whether the collector holds its privacy grant: the spool has data
+    /// and, when this app registered the collector, was written after that.
+    public var esSpoolFlowing: Bool {
+        isESCollectorInstalled &&
+            Self.regrantResolved(installSpoolMtime: esRegisterSpoolMtime, currentSpoolMtime: esSpoolMtime())
+    }
+
+    /// Whether the collector executable is newer than the last spool write:
+    /// an ad-hoc signed build's privacy grant is bound to the build that
+    /// received it, so a replaced executable stays dark until re-granted.
+    public var esHelperReplaced: Bool {
+        guard let spool = esSpoolMtime(), let helper = esHelperMtime() else { return false }
+        return !Self.regrantResolved(installSpoolMtime: helper, currentSpoolMtime: spool)
     }
 
     /// The privileged collector's spool, written as root and readable here.
@@ -766,64 +774,31 @@ public final class SetupManager: ObservableObject {
         (try? fm.attributesOfItem(atPath: Self.esSpoolPath))?[.modificationDate] as? Date
     }
 
-    /// A reinstall needs a fresh Full Disk Access grant when it replaced a
-    /// previously installed helper with a different build.
-    public nonisolated static func needsRegrant(previousHash: String?, newHash: String?) -> Bool {
-        guard let previousHash, !previousHash.isEmpty, let newHash, !newHash.isEmpty else { return false }
-        return previousHash != newHash
+    private func esHelperMtime() -> Date? {
+        let path = Bundle.main.bundleURL.appendingPathComponent(Self.esCollectorExecutable).path
+        return (try? fm.attributesOfItem(atPath: path))?[.modificationDate] as? Date
     }
 
-    /// The re-grant is proven once the spool is written after the install.
+    /// The grant is proven once the spool is written after `installSpoolMtime`.
     public nonisolated static func regrantResolved(installSpoolMtime: Date?, currentSpoolMtime: Date?) -> Bool {
         guard let current = currentSpoolMtime else { return false }
         guard let installed = installSpoolMtime else { return true }
         return current > installed
     }
 
-    private nonisolated static func readBinHash(_ path: String) -> String? {
-        (try? String(contentsOfFile: path, encoding: .utf8))?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    /// Installs the privileged ES collector: root-owned helper copy in
-    /// /Library/PrivilegedHelperTools, SHA-256 recorded in
-    /// /Library/Application Support/secure-agent/esd.binhash (a root-owned
-    /// directory — the spool dir is chowned to the console user, so a hash
-    /// there could be swapped out from under the integrity check),
-    /// LaunchDaemon plist, bootstrap. One osascript admin prompt. Order
-    /// matters: stage files, boot out any job loaded under this label, write
-    /// the plist, bootstrap — booting out after the bootstrap would tear
-    /// down the just-installed job.
+    /// Registers the in-bundle collector daemon. A first registration leaves
+    /// it awaiting the user's approval in Login Items; that is the expected
+    /// outcome, not an error.
     public func installESCollector() throws {
         lastError = nil
-        guard let src = bundledDaemonPath else { throw SetupError.notBundled }
-        let label = Self.esCollectorLabel
-        let helper = "/Library/PrivilegedHelperTools/\(label)"
-        let stateDir = "/Library/Application Support/secure-agent"
-        let hashPath = "\(stateDir)/esd.binhash"
-        let plistPath = "/Library/LaunchDaemons/\(label).plist"
-        let plist = Self.esPlistB64
-        let previousHash = Self.readBinHash(hashPath)
-        let shell =
-            "mkdir -p /Library/PrivilegedHelperTools /var/db/secure-agent /Library/Logs/secure-agent '\(stateDir)'" +
-            " && cp -f '\(src)' '\(helper)'" +
-            " && chown root:wheel '\(helper)' && chmod 755 '\(helper)'" +
-            " && /usr/bin/shasum -a 256 '\(helper)' | awk '{printf $1}' > '\(hashPath)'" +
-            " && chown root:wheel '\(hashPath)' && chmod 644 '\(hashPath)'" +
-            " && chown root:wheel '\(stateDir)' && chmod 755 '\(stateDir)'" +
-            " && { launchctl bootout system '\(plistPath)' 2>/dev/null || true; }" +
-            " && echo '\(plist)' | base64 -d > '\(plistPath)'" +
-            " && chown root:wheel '\(plistPath)' && chmod 644 '\(plistPath)'" +
-            " && launchctl bootstrap system '\(plistPath)'"
-        let script = "do shell script \(shellAppleScriptLiteral(shell)) with administrator privileges"
-        guard runAppleScriptAdmin(script) else {
-            if lastError == nil { lastError = "the privileged collector install was cancelled" }
-            throw SetupError.notBundled
+        esRegisterSpoolMtime = esSpoolMtime()
+        do {
+            try esService.register()
+        } catch {
+            esServiceStatus = esService.status
+            guard esServiceStatus == .requiresApproval else { throw error }
         }
-        if Self.needsRegrant(previousHash: previousHash, newHash: Self.readBinHash(hashPath)) {
-            regrantSpoolMtime = esSpoolMtime()
-            esNeedsRegrant = true
-        }
+        esServiceStatus = esService.status
         Task { await refreshState() }
     }
 
@@ -838,52 +813,40 @@ public final class SetupManager: ObservableObject {
         try installESCollector()
     }
 
-    /// Deep-link System Settings → Full Disk Access (the pane where the
-    /// eslogger switch lives after the helper's first failed run).
+    /// Deep-link System Settings → Full Disk Access, where the collector
+    /// appears as Secure Agent.
     public func openESPermissions() {
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles") {
             NSWorkspace.shared.open(url)
         }
     }
 
-    /// Removes the LaunchDaemon + helper (root-owned and any legacy in-bundle
-    /// copy). Also called by uninstallAll.
-    public func uninstallESCollector() {
-        let script = "do shell script \"launchctl bootout system /Library/LaunchDaemons/\(Self.esCollectorLabel).plist 2>/dev/null; rm -f /Library/LaunchDaemons/\(Self.esCollectorLabel).plist '\(Self.esCollectorHelperPath)' '\(Self.esCollectorInstallPath)' '/Library/Application Support/secure-agent/esd.binhash' /var/db/secure-agent/esd.binhash; true\" with administrator privileges"
-        _ = Self.run(["/usr/bin/osascript", "-e", script])
+    /// Opens System Settings → Login Items, where a registered daemon awaits
+    /// approval.
+    public func openESLoginItems() {
+        SMAppService.openSystemSettingsLoginItems()
     }
 
-    /// LaunchDaemon definition: RunAtLoad with an exit-code-aware
-    /// SuccessfulExit/FailedKeepAlive pair, NOT a blanket KeepAlive — a
-    /// failing collector must back off (launchd's ThrottleInterval applies
-    /// to failed respawns) instead of respawning every 10 s forever, and a
-    /// clean exit must not be relaunched mid-shutdown.
-    static var esPlistXML: String {
-        """
-        <?xml version="1.0" encoding="UTF-8"?>
-        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-        <plist version="1.0"><dict>
-            <key>Label</key><string>\(esCollectorLabel)</string>
-            <key>ProgramArguments</key><array>
-                <string>/Library/PrivilegedHelperTools/\(esCollectorLabel)</string>
-                <string>--es-collector</string>
-            </array>
-            <key>RunAtLoad</key><true/>
-            <key>KeepAlive</key><dict>
-                <key>SuccessfulExit</key><false/>
-                <key>Crashed</key><true/>
-            </dict>
-            <key>ThrottleInterval</key><integer>60</integer>
-            <key>StandardOutPath</key><string>/Library/Logs/secure-agent/esd-out.log</string>
-            <key>StandardErrorPath</key><string>/Library/Logs/secure-agent/esd-err.log</string>
-        </dict></plist>
-        """
+    /// Unregisters the collector daemon. Also called by uninstallAll.
+    public func uninstallESCollector() throws {
+        lastError = nil
+        try esService.unregister()
+        esServiceStatus = esService.status
     }
 
-    /// The plist, base64-encoded so it can pass through the osascript →
-    /// do-shell-script layer without any quoting hazards.
-    static var esPlistB64: String {
-        Data(esPlistXML.utf8).base64EncodedString()
+    /// Removes the collector an earlier version installed outside the bundle
+    /// (it shares the launchd label with the in-bundle daemon): boot out the
+    /// job, delete its plist, helper binary and integrity hash. The only
+    /// admin prompt in the app.
+    public func removeLegacyESHelper() {
+        lastError = nil
+        let plist = Self.legacyESPlistPath
+        let shell =
+            "launchctl bootout system '\(plist)' 2>/dev/null;" +
+            " rm -f '\(plist)' '\(Self.legacyESHelperPath)' '\(Self.legacyESHashPath)'"
+        let script = "do shell script \(shellAppleScriptLiteral(shell)) with administrator privileges"
+        _ = runAppleScriptAdmin(script)
+        esLegacyHelperInstalled = fm.fileExists(atPath: plist)
     }
 
     /// Runs an AppleScript that shells out with administrator privileges.
@@ -902,13 +865,13 @@ public final class SetupManager: ObservableObject {
             if p.terminationStatus != 0 {
                 let msg = String(data: errPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
                 if !msg.contains("User canceled") {
-                    lastError = "collector install failed: \(msg.prefix(160))"
+                    lastError = "old helper removal failed: \(msg.prefix(160))"
                 }
                 return false
             }
             return true
         } catch {
-            lastError = "collector install failed: \(error.localizedDescription)"
+            lastError = "old helper removal failed: \(error.localizedDescription)"
             return false
         }
     }
@@ -1095,11 +1058,9 @@ public final class SetupManager: ObservableObject {
         lastError = nil
         // Stop the child daemon this app is running.
         DaemonSupervisor.shared.stop()
-        // The privileged ES collector is root-installed; remove it too
-        // (best-effort: if the admin prompt is cancelled, the helper stays
-        // but the app is gone — the plist self-heals nothing without its
-        // binary, so a cancelled prompt leaves a harmless, spool-less daemon).
-        uninstallESCollector()
+        // Unregister the in-bundle ES collector daemon (best-effort: a
+        // collector that was never registered has nothing to remove).
+        try? uninstallESCollector()
         // Tear down any legacy LaunchAgent from an older install.
         let uid = getuid()
         Self.run(["/bin/launchctl", "bootout", "gui/\(uid)/\(Self.daemonLabel)"])

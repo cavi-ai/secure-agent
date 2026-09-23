@@ -16,14 +16,14 @@ import (
 func main() {
 	configPath := flag.String("config", "", "path to config.yaml overlay")
 	esCollector := flag.Bool("es-collector", false,
-		"run ONLY the ES collector: spawn eslogger and write its output to the spool (/var/db/secure-agent/es-spool.jsonl). Used by the root LaunchDaemon so the FDA grant already held by THIS binary covers the ES client — no separate drag step.")
+		"run ONLY the ES collector: spawn eslogger and write its output to the spool (/var/db/secure-agent/es-spool.jsonl). Also selected when the binary runs as "+esCollectorName+".")
 	flag.Parse()
 
-	// The privileged ES-collector mode reuses THIS binary (which the operator
-	// already granted Full Disk Access in Settings) so the Endpoint Security
-	// client is created by a process macOS already trusts — that's the whole
-	// point of the "one FDA grant covers everything" UX.
-	if *esCollector {
+	// The privileged ES-collector mode reuses THIS binary: the app bundle
+	// ships it a second time as secure-agent-esd and registers that copy as
+	// a LaunchDaemon, so the Endpoint Security client runs under the app's
+	// identity and the app's one Full Disk Access grant.
+	if isESCollectorInvocation(os.Args[0], *esCollector) {
 		if err := runESCollector(); err != nil {
 			if IsESPermanentFailure(err) {
 				// Exit 0: the refusal cannot clear on respawn (wrong user,

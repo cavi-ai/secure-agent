@@ -65,6 +65,8 @@ test:
 	python3 plugin/hooks/test_activity_log.py
 	@echo "==> Checking console assets..."
 	./packaging/test/check_console_css.sh
+	@echo "==> Checking app bundle layout..."
+	./packaging/test/check_bundle_layout.sh
 	@echo "==> Running console JS unit tests..."
 	node --test 'packaging/test/console/*.test.mjs'
 	@echo "==> Running console DOM tests..."

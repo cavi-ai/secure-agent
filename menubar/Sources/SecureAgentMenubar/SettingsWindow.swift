@@ -1,4 +1,5 @@
 import AppKit
+import ServiceManagement
 import SwiftUI
 
 /// The Settings window: the single place for deliberate configuration —
@@ -597,34 +598,27 @@ struct SettingsView: View {
 }
 
 
-/// The guided file-telemetry card: five states.
-///   A. helper missing          → "Enable File Telemetry" (one admin prompt)
-///   B. helper dead             → "Reinstall"
-///   C. helper running, TCC out → "Open Permissions" + inline instruction,
-///                                 polling live
-///   D. helper replaced         → "Open Permissions": the grant belongs to the
-///                                 previous build; polling live until the
-///                                 spool is written again
-///   E. spool flowing           → green, done. Remove stays available.
+/// The guided file-telemetry card, one state per step of the in-bundle
+/// collector daemon's lifecycle (see `esCardState`):
+///   A. not registered     → "Enable file telemetry" (registers the daemon)
+///   B. requires approval  → "Allow in Login Items"
+///   C. enabled, no grant  → "Open Permissions" + "turn on Secure Agent",
+///                           polling live
+///   D. collector replaced → C plus the re-grant sentence: the grant belongs
+///                           to the previous build until the spool advances
+///   E. plist not found    → "Rebuild the app"
+///   active                → green, done. Remove stays available.
+/// A collector installed by an earlier version outside the bundle shares
+/// the launchd label, so "Remove old helper" comes before everything else.
 @MainActor
 struct ESFileTelemetryCard: View {
     @ObservedObject var setup: SetupManager
-    @State private var polling = false
 
     private var stage: ESStage {
-        // An old spool still has bytes, so a replaced helper would read as
-        // active; the re-grant flag outranks it until the spool advances.
-        if setup.esNeedsRegrant && setup.esCollectorDaemonInstalled { return .needsRegrant }
-        if setup.isESCollectorInstalled { return .active }
-        if setup.esCollectorDaemonInstalled {
-            // A stopped service never registers a TCC entry, so grant
-            // instructions would point at a switch that does not exist.
-            if let svc = setup.esServiceState, svc != "running", !svc.hasPrefix("waiting") {
-                return .dead
-            }
-            return .needsGrant
-        }
-        return .notInstalled
+        if setup.esLegacyHelperInstalled { return .legacyInstalled }
+        return esCardState(status: setup.esServiceStatus,
+                           tccGranted: setup.esSpoolFlowing,
+                           helperReplaced: setup.esHelperReplaced)
     }
 
     var body: some View {
@@ -640,13 +634,8 @@ struct ESFileTelemetryCard: View {
                 Spacer()
                 controls
             }
-            if stage == .needsGrant {
-                // The TCC entry is the root helper binary, not eslogger:
-                // TCC attributes the grant to the responsible process, which
-                // for a launchd job is the daemon binary itself. Its list
-                // entry is the binary filename: "com.cavi-ai.secure-agent-esd".
-                Label("In the pane that just opened: turn ON the switch for **com.cavi-ai.secure-agent-esd** (the file-telemetry helper). This card turns green automatically — nothing else to do.",
-                      systemImage: "cursorarrow.click.2")
+            if stage == .needsGrant || stage == .needsRegrant {
+                Label(ESStage.grantInstruction, systemImage: "cursorarrow.click.2")
                     .font(.caption).foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -666,94 +655,130 @@ struct ESFileTelemetryCard: View {
     @ViewBuilder
     private var controls: some View {
         switch stage {
-        case .notInstalled:
-            Button("Enable File Telemetry") {
+        case .legacyInstalled:
+            Button("Remove old helper") {
+                setup.removeLegacyESHelper()
+                Task { await setup.refreshState() }
+            }
+            .buttonStyle(.borderedProminent).tint(.brand).controlSize(.small)
+        case .notRegistered:
+            Button("Enable file telemetry") {
                 Task {
                     do { try await setup.installESCollectorAsync() }
-                    catch { /* reported via lastError */ }
+                    catch { setup.report(error) }
                     await pollWhileNeeded()
                 }
             }
             .buttonStyle(.borderedProminent).tint(.brand).controlSize(.small)
-        case .dead:
-            Button("Reinstall") {
-                Task {
-                    do { try await setup.installESCollectorAsync() }
-                    catch { /* reported via lastError */ }
-                    await pollWhileNeeded()
-                }
-            }
-            .buttonStyle(.borderedProminent).tint(.brand).controlSize(.small)
+        case .requiresApproval:
+            Button("Allow in Login Items") { setup.openESLoginItems() }
+                .buttonStyle(.borderedProminent).tint(.brand).controlSize(.small)
         case .needsGrant, .needsRegrant:
             Button("Open Permissions") { setup.openESPermissions() }
                 .buttonStyle(.borderedProminent).tint(.brand).controlSize(.small)
+        case .notFound:
+            EmptyView()
         case .active:
             Button("Remove", role: .destructive) {
-                Task {
-                    setup.uninstallESCollector()
-                    await setup.refreshState()
-                }
+                do { try setup.uninstallESCollector() }
+                catch { setup.report(error) }
+                Task { await setup.refreshState() }
             }
             .controlSize(.small)
         }
     }
 
-    /// Poll the spool while waiting for the grant (or a reinstall to take):
-    /// the card flips to green within a second of the switch flipping — no
-    /// manual refresh.
+    /// Poll while waiting on the user in System Settings (Login Items or
+    /// Full Disk Access): the card moves on within a second of the switch
+    /// flipping — no manual refresh.
     private func pollWhileNeeded() async {
-        guard stage == .needsGrant || stage == .dead || stage == .needsRegrant else { return }
-        while !Task.isCancelled, setup.esCollectorDaemonInstalled,
-              setup.esNeedsRegrant || !setup.isESCollectorInstalled {
+        while !Task.isCancelled, stage.awaitsUser {
             try? await Task.sleep(nanoseconds: 1_000_000_000)
             await setup.refreshState()
         }
     }
 }
 
-enum ESStage {
-    case notInstalled, dead, needsGrant, needsRegrant, active
+/// Maps the collector daemon's registration status and the spool facts to
+/// the card state. Registration comes first: until the daemon is enabled
+/// nothing can hold a grant.
+func esCardState(status: SMAppService.Status, tccGranted: Bool, helperReplaced: Bool) -> ESStage {
+    switch status {
+    case .notFound:
+        return .notFound
+    case .requiresApproval:
+        return .requiresApproval
+    case .enabled:
+        // An old spool still has bytes, so a replaced collector would read
+        // as active; the re-grant outranks it until the spool advances.
+        if helperReplaced { return .needsRegrant }
+        return tccGranted ? .active : .needsGrant
+    case .notRegistered:
+        return .notRegistered
+    @unknown default:
+        return .notRegistered
+    }
+}
+
+enum ESStage: CaseIterable {
+    case legacyInstalled, notRegistered, requiresApproval, needsGrant, needsRegrant, notFound, active
+
+    /// The Full Disk Access step, shown under C and D.
+    static let grantInstruction = "In the pane that just opened: turn on Secure Agent. This card turns green automatically — nothing else to do."
+
+    /// States that wait on a switch in System Settings.
+    var awaitsUser: Bool {
+        self == .requiresApproval || self == .needsGrant || self == .needsRegrant
+    }
 
     var title: String {
         switch self {
-        case .notInstalled: return "File telemetry is off"
-        case .dead: return "File telemetry service is not running"
-        case .needsGrant: return "One switch left: allow the file-telemetry helper"
-        case .needsRegrant: return "Re-grant Full Disk Access: the helper changed"
+        case .legacyInstalled: return "Remove the old file-telemetry helper"
+        case .notRegistered: return "File telemetry is off"
+        case .requiresApproval: return "Allow Secure Agent in Login Items"
+        case .needsGrant: return "One switch left: allow Secure Agent"
+        case .needsRegrant: return "Re-grant Full Disk Access: Secure Agent changed"
+        case .notFound: return "Rebuild the app"
         case .active: return "File telemetry active"
         }
     }
 
     var detail: String {
         switch self {
-        case .notInstalled:
-            return "macOS requires file telemetry (eslogger) to run as root. One admin prompt installs a minimal helper that runs eslogger and nothing else."
-        case .dead:
-            return "The helper is installed but the service isn't running, so its switch never appears in Settings. Reinstall restarts it (one admin prompt)."
+        case .legacyInstalled:
+            return "An earlier version installed file telemetry outside the app. Remove it (one admin prompt), then enable file telemetry here."
+        case .notRegistered:
+            return "File telemetry runs eslogger from a background service inside Secure Agent. No admin password: macOS asks you to allow Secure Agent in Login Items."
+        case .requiresApproval:
+            return "The file-telemetry service is listed under Secure Agent in Login Items. Turn it on there; this card updates automatically."
         case .needsGrant:
-            return "The helper is installed and retrying every 60s. It's waiting on one macOS permission."
+            return "The service is running and retrying every 60s. It's waiting on Full Disk Access for Secure Agent."
         case .needsRegrant:
-            return "A new helper build was installed and macOS tied the permission to the previous one. Turn the com.cavi-ai.secure-agent-esd switch off and on again in Full Disk Access."
+            return "A new build of Secure Agent was installed and macOS tied the permission to the previous one. Turn Secure Agent off and on again in Full Disk Access."
+        case .notFound:
+            return "This build of Secure Agent does not contain the file-telemetry service. Rebuild the app, then open the new copy."
         case .active:
-            return "The privileged collector is running and the daemon is reading its stream."
+            return "The file-telemetry service is running and the daemon is reading its stream."
         }
     }
 
     var icon: String {
         switch self {
-        case .notInstalled: return "waveform.path.ecg"
-        case .dead: return "exclamationmark.triangle"
+        case .legacyInstalled: return "trash"
+        case .notRegistered: return "waveform.path.ecg"
+        case .requiresApproval: return "switch.2"
         case .needsGrant: return "lock.open"
         case .needsRegrant: return "lock.rotation"
+        case .notFound: return "hammer"
         case .active: return "checkmark.seal.fill"
         }
     }
 
     var tint: Color {
         switch self {
-        case .notInstalled: return .secondary
-        case .dead: return .warn
-        case .needsGrant, .needsRegrant: return .orange
+        case .legacyInstalled, .notFound: return .warn
+        case .notRegistered: return .secondary
+        case .requiresApproval, .needsGrant, .needsRegrant: return .orange
         case .active: return .ok
         }
     }

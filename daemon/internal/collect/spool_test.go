@@ -69,6 +69,48 @@ func TestParseLaunchctlStateTakesFirstTopLevelState(t *testing.T) {
 	}
 }
 
+func TestParseLaunchctlProgramTakesTopLevelAbsolutePath(t *testing.T) {
+	out := "system/com.cavi-ai.secure-agent-esd = {\n" +
+		"\tactive count = 1\n" +
+		"\tstate = running\n" +
+		"\tprogram = /Applications/Secure Agent.app/Contents/MacOS/secure-agent-esd\n" +
+		"\tendpoints = {\n" +
+		"\t\tprogram = /usr/libexec/other\n" +
+		"\t}\n" +
+		"}\n"
+	if got := parseLaunchctlProgram(out); got != "/Applications/Secure Agent.app/Contents/MacOS/secure-agent-esd" {
+		t.Fatalf("program = %q", got)
+	}
+	nested := "\tstate = running\n\tendpoints = {\n\t\tprogram = /usr/libexec/other\n\t}\n"
+	if got := parseLaunchctlProgram(nested); got != "" {
+		t.Fatalf("nested-only program = %q, want empty", got)
+	}
+	if got := parseLaunchctlProgram("\tprogram = relative/path\n"); got != "" {
+		t.Fatalf("relative program = %q, want empty", got)
+	}
+}
+
+func TestHelperMtimeStatsTheLaunchctlProgram(t *testing.T) {
+	helper := t.TempDir() + "/secure-agent-esd"
+	if err := os.WriteFile(helper, []byte("bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stamp := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	if err := os.Chtimes(helper, stamp, stamp); err != nil {
+		t.Fatal(err)
+	}
+	out := "system/com.cavi-ai.secure-agent-esd = {\n\tstate = running\n\tprogram = " + helper + "\n}\n"
+	if got := helperMtime(out); !got.Equal(stamp) {
+		t.Fatalf("helperMtime = %v, want %v", got, stamp)
+	}
+	if got := helperMtime("\tstate = running\n"); !got.IsZero() {
+		t.Fatalf("no program line: helperMtime = %v, want zero", got)
+	}
+	if got := helperMtime("\tprogram = " + helper + ".missing\n"); !got.IsZero() {
+		t.Fatalf("missing program file: helperMtime = %v, want zero", got)
+	}
+}
+
 func TestSpoolTailerParsesAndPublishes(t *testing.T) {
 	// An ES open-event envelope exactly like eslogger emits.
 	line := `{"event_type":0,"process":{"audit_token":{"pid":4242},"pid":4242,"executable":{"path":"/usr/bin/cat"}},"event":{"open":{"file":{"path":"/Users/x/.ssh/id_ed25519"}}},"time":"2026-09-11T12:00:00.000000Z"}`

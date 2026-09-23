@@ -333,15 +333,15 @@ func esServiceItems(s collect.ESServiceSnapshot) []PostureItem {
 			Kind: "collector_silent", ID: "eslogger",
 			Title:    "File monitoring service is failing",
 			Severity: 2,
-			Detail:   "root ES collector service state: " + s.State + " — spool " + s.SpoolState() + " — check /Library/Logs/secure-agent/esd-err.log",
+			Detail:   "root ES collector service state: " + s.State + " — spool " + s.SpoolState() + " — check /var/log/secure-agent-esd.log",
 		})
 	} else if time.Since(s.SpoolMtime) > 30*time.Minute {
 		detail := "root ES collector reports " + s.State + " but the spool " + s.SpoolState() + " — file telemetry may be blind"
-		// The privacy grant is bound to one build of the ad-hoc signed
-		// helper: a binary installed after the last spool write lost it.
+		// An ad-hoc signed build's privacy grant is bound to that build: a
+		// collector binary installed after the last spool write lost it.
 		if s.State == "running" && !s.SpoolMtime.IsZero() && s.HelperMtime.After(s.SpoolMtime) {
 			detail = "root ES collector reports running but the spool " + s.SpoolState() +
-				" — the helper binary was replaced after the last write; grant Full Disk Access again for " + collect.ESServiceLabel
+				" — the helper binary was replaced after the last write; grant Full Disk Access again for Secure Agent"
 		}
 		items = append(items, PostureItem{
 			Kind: "collector_silent", ID: "eslogger",
