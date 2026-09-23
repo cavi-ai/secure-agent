@@ -259,6 +259,7 @@ var repeatWindows = map[string]time.Duration{
 	"tcc-tamper":             60 * time.Minute,
 	"proxy-secret-leak":      5 * time.Minute,
 	"proxy-prompt-injection": 15 * time.Minute,
+	"secret-in-transcript":   15 * time.Minute,
 }
 
 // shouldFlag reports whether this (rule, pid, subject) fire is new within
@@ -333,6 +334,11 @@ func (c *Correlator) Observe(e event.Event) []model.Flag {
 				}},
 			},
 		}
+	}
+
+	// Transcript hits carry no pid: the harness named in Detail is the agent.
+	if e.Kind == event.KindTranscriptHit {
+		return c.secretInTranscriptLocked(e)
 	}
 
 	info, isAgent := c.tagger.Tag(e.PID)
@@ -557,6 +563,46 @@ func (c *Correlator) Observe(e event.Event) []model.Flag {
 	}
 
 	return flags
+}
+
+// secretInTranscriptLocked applies the secret-in-transcript rule to one
+// transcript hit (Detail "<harness>:<layer>:<rule id>"). A registered known
+// secret (fingerprint layer) is severity 3; a typed pattern is severity 2.
+// Callers hold c.mu.
+func (c *Correlator) secretInTranscriptLocked(e event.Event) []model.Flag {
+	const rule = "secret-in-transcript"
+	parts := strings.SplitN(e.Detail, ":", 3)
+	if len(parts) != 3 || parts[2] == "" {
+		return nil
+	}
+	harness, layer, ruleID := parts[0], parts[1], parts[2]
+	if c.isMuted != nil && c.isMuted(rule, "*") {
+		c.mutedCount++
+		return nil
+	}
+	if !c.shouldFlag(rule, 0, e.Path+"|"+ruleID, e.TS, repeatWindows[rule]) {
+		return nil
+	}
+	severity := 2
+	if layer == "fingerprint" {
+		severity = 3
+	}
+	return []model.Flag{{
+		ID:        hashFlagID(rule+"|"+e.Path+"|"+ruleID, 0, e.TS),
+		Rule:      rule,
+		Severity:  severity,
+		TS:        e.TS,
+		Agent:     harness,
+		SessionID: e.SessionID,
+		Evidence: []model.EvidenceItem{{
+			Kind:  "transcript",
+			Label: e.Path,
+			Sub:   layer + " match",
+			Rule:  ruleID,
+			TS:    e.TS.Format(time.RFC3339),
+			Text:  fmt.Sprintf("%s transcript %s matched %s rule %s at %s", harness, e.Path, layer, ruleID, e.TS.Format(time.RFC3339)),
+		}},
+	}}
 }
 
 // keychainAccessLocked applies the keychain-access rule to one login-keychain

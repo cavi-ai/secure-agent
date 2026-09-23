@@ -6,6 +6,13 @@ All notable changes to `secure-agent` are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- `secret-in-transcript` flag: tailed harness transcript lines are scanned with
+  the firewall's known-secret fingerprints and typed patterns; a hit carries
+  the rule id, transcript path, and session id (never the matched text), is
+  severity 3 for a registered secret and 2 for a typed pattern, and repeats
+  per (path, rule) are collapsed.
+
 ### Fixed
 - Sensitive-path classifier: globs with a directory component
   (`~/.kube/config`, `~/.claude/settings.json`, the merged guard-rule paths)
