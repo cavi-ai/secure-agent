@@ -374,6 +374,12 @@
   //                  #ct fragment, token must come from storage).
   const MODE = location.search;
   const REQUIRE_TOKEN = MODE.includes('requiretoken');
+  // ?theme=dark|light pins the console theme (screenshots); app.js reads it
+  // from the same storage key the masthead toggle writes.
+  const theme = new URLSearchParams(MODE).get('theme');
+  if (theme === 'dark' || theme === 'light') {
+    try { localStorage.setItem('sa-theme', theme); } catch { /* ignored */ }
+  }
   if (MODE.includes('tokenseed')) {
     try { sessionStorage.setItem('sa.console-token', 'test-token'); } catch { /* ignored */ }
   }
@@ -692,10 +698,21 @@
     setTimeout(() => document.querySelector('[data-tab="egress"]').click(), 4000);
   }
   // Auto-action: switch to a named tab once telemetry has landed, then hold
-  // long enough for a screenshot — ?tab=<name> for visual QA.
+  // long enough for a screenshot — ?tab=<name> for visual QA. ?shot also
+  // hides everything above the tab bar so the tab fills the frame (headless
+  // --screenshot captures from the top of the page and ignores scrolling).
   {
-    const tab = new URLSearchParams(location.search).get('tab');
-    if (tab) setTimeout(() => document.querySelector(`[data-tab="${tab}"]`)?.click(), 1500);
+    const params = new URLSearchParams(location.search);
+    const tab = params.get('tab');
+    if (tab) {
+      setTimeout(() => {
+        document.querySelector(`[data-tab="${tab}"]`)?.click();
+        const bar = document.querySelector('nav.tabs');
+        if (params.has('shot') && bar) {
+          for (let el = bar.previousElementSibling; el; el = el.previousElementSibling) el.style.display = 'none';
+        }
+      }, 1500);
+    }
   }
   // Auto-action: save a view, type a search, then apply the view — exercises
   // the saved-view + search paths through the real UI.

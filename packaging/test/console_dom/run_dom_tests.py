@@ -7,10 +7,13 @@ Covers the layer lib.test.mjs cannot: fetch orchestration, panel renderers,
 the delegation dispatch, liveness classes, and the structural guarantee that
 no inline handlers exist in the rendered page.
 
-Usage: python3 packaging/test/console_dom/run_dom_tests.py
+Usage: python3 packaging/test/console_dom/run_dom_tests.py [--screenshot DIR]
+       --screenshot DIR also writes the mock-rendered Sessions and Agents
+       tabs at 1280x800 in both themes: DIR/{sessions,agents}-{dark,light}.png
 Env:   CHROME_BIN overrides Chrome detection.
 """
 
+import argparse
 import os
 import re
 import shutil
@@ -75,7 +78,31 @@ def dump_dom(chrome, tmp, query=""):
     return out.stdout
 
 
+SHOT_SIZE = (1280, 800)
+SHOTS = {
+    "sessions": "?tab=sessions&shot&raildemo",
+    "agents": "?tab=agents&shot",
+}
+
+
+def screenshot(chrome, tmp, query, path):
+    out = subprocess.run(
+        [chrome, "--headless=new", "--disable-gpu", "--no-sandbox", "--hide-scrollbars",
+         f"--window-size={SHOT_SIZE[0]},{SHOT_SIZE[1]}",
+         "--virtual-time-budget=" + str(VIRTUAL_TIME_MS), f"--screenshot={path}",
+         f"file://{tmp}/harness.html{query}"],
+        capture_output=True, text=True, timeout=120,
+    )
+    if out.returncode != 0 or not os.path.isfile(path) or os.path.getsize(path) == 0:
+        print(out.stderr[-2000:], file=sys.stderr)
+        raise SystemExit(f"chrome --screenshot failed: {path}")
+
+
 def main():
+    ap = argparse.ArgumentParser(description="DOM-level console tests")
+    ap.add_argument("--screenshot", metavar="DIR",
+                    help="also write {sessions,agents}-{dark,light}.png of the mock-rendered tabs to DIR")
+    args = ap.parse_args()
     chrome = find_chrome()
     if not chrome:
         raise SystemExit("no Chrome found (set CHROME_BIN)")
@@ -565,6 +592,15 @@ def main():
               and "hidden" not in dom_session.split('id="flags-session-filter"')[1][:80])
         session_rows = dom_session.count('class="timeline-item')
         check("timeline filtered to 2 session events", session_rows == 2, f"rows={session_rows}")
+
+        if args.screenshot:
+            shot_dir = os.path.abspath(args.screenshot)
+            os.makedirs(shot_dir, exist_ok=True)
+            for name, query in SHOTS.items():
+                for theme in ("dark", "light"):
+                    path = os.path.join(shot_dir, f"{name}-{theme}.png")
+                    screenshot(chrome, tmp, f"{query}&theme={theme}", path)
+                    print(f"  shot  {path}")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
