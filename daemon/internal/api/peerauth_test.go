@@ -109,8 +109,11 @@ func TestGateAllowsOwnerReadsWithCheckerSet(t *testing.T) {
 
 	cl := unixClient(sock)
 	resp, err := cl.Get("http://unix/status")
-	if err != nil || resp.StatusCode != 200 {
-		t.Fatalf("status as owner: %v status=%v", err, resp.StatusCode)
+	if err != nil {
+		t.Fatalf("status as owner: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("status=%v", resp.StatusCode)
 	}
 }
 
@@ -160,16 +163,22 @@ func TestKillEndpointRejectsNonAgentPIDWhenAllowlistSet(t *testing.T) {
 
 	cl := unixClient(sock)
 	resp, err := cl.Post("http://unix/kill", "application/json", strings.NewReader(`{"pid":7}`))
-	if err != nil || resp.StatusCode != http.StatusForbidden {
-		t.Fatalf("kill non-agent pid: %v status=%v, want 403", err, resp.StatusCode)
+	if err != nil {
+		t.Fatalf("kill non-agent pid: %v", err)
+	}
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("status=%v, want 403", resp.StatusCode)
 	}
 	if fk.killed != 0 {
 		t.Fatal("killer must not fire for a non-agent pid")
 	}
 
 	resp, err = cl.Post("http://unix/kill", "application/json", strings.NewReader(`{"pid":42}`))
-	if err != nil || resp.StatusCode != 200 {
-		t.Fatalf("kill tagged agent pid: %v status=%v", err, resp.StatusCode)
+	if err != nil {
+		t.Fatalf("kill tagged agent pid: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("status=%v", resp.StatusCode)
 	}
 	if fk.killed != 42 {
 		t.Fatalf("killer got pid %d, want 42", fk.killed)
@@ -216,8 +225,11 @@ func TestGateRejectsNonUIMutationWhenUIPinned(t *testing.T) {
 
 	// Reads stay available to the owner.
 	resp, err = cl.Get("http://unix/status")
-	if err != nil || resp.StatusCode != 200 {
-		t.Fatalf("read as owner when pinned: %v status=%v", err, resp.StatusCode)
+	if err != nil {
+		t.Fatalf("read as owner when pinned: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("status=%v", resp.StatusCode)
 	}
 	resp.Body.Close()
 }
@@ -332,8 +344,11 @@ func TestGateAgentRolePolicy(t *testing.T) {
 
 	// Reads: allowed.
 	resp, err := cl.Get("http://unix/status")
-	if err != nil || resp.StatusCode != 200 {
-		t.Fatalf("agent read /status: %v status=%v, want 200", err, resp.StatusCode)
+	if err != nil {
+		t.Fatalf("agent read /status: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("status=%v, want 200", resp.StatusCode)
 	}
 	resp.Body.Close()
 
