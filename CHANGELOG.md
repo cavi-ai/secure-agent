@@ -14,6 +14,11 @@ All notable changes to `secure-agent` are documented here. The format follows
   per (path, rule) are collapsed.
 
 ### Fixed
+- Model pricing: explicit entries for every current Anthropic model (Fable
+  5.x, Opus 5.5/5/4.8/4.7/4.6/4.5, Sonnet 5/4.6/4.5, Haiku 4.5) at list
+  price; a family prefix only absorbs a date or `-latest` suffix, so a newer
+  version or a `-pro`/`-mini` variant is never billed at another model's
+  price — it is unpriced until an entry exists.
 - Sensitive-path classifier: globs with a directory component
   (`~/.kube/config`, `~/.claude/settings.json`, the merged guard-rule paths)
   match the full path only; previously the file name alone matched, so any
@@ -112,6 +117,13 @@ All notable changes to `secure-agent` are documented here. The format follows
   behavior change.
 
 ### Added
+- **Codex model attribution.** Codex model calls carry the model id from the
+  rollout's thread settings and are priced from the price tables; a model the
+  tables do not know costs 0 and counts as unpriced — never a fabricated price.
+- **User price table.** `pricing` in `config.yaml` sets USD per 1M input and
+  output tokens by exact model id or prefix, wins over the built-in table, and
+  applies live on change. Built-in prices now cover OpenAI and Google model
+  families alongside Anthropic.
 - **Self-check.** `GET /doctor` and `secure-agent doctor` report pass, fail
   or skip for guard-hook registration and activity, file telemetry,
   collectors, per-harness trace coverage, session identity, repo attribution

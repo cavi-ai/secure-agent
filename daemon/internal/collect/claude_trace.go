@@ -92,54 +92,6 @@ func NewClaudeTracer() *ClaudeTracer {
 	return &ClaudeTracer{pending: map[string]pendingTool{}}
 }
 
-// modelPricePerMillion holds Anthropic list prices (USD per 1M tokens) as
-// [input, output]. Keys are matched by PREFIX so a dated id
-// ("claude-sonnet-4-5-20250929") resolves to its family price without a
-// per-date table. Cost is approximate by design: cache-read discounts and
-// tier pricing are not modeled; an unknown model costs 0 rather than a
-// fabricated number.
-var modelPricePerMillion = map[string][2]float64{
-	"claude-fable":      {3, 15},
-	"claude-opus-5":     {5, 25},
-	"claude-opus-4":     {15, 75},
-	"claude-sonnet-5":   {3, 15},
-	"claude-sonnet-4":   {3, 15},
-	"claude-haiku-4-5":  {1, 5},
-	"claude-haiku-4":    {1, 5},
-	"claude-haiku-3-5":  {0.80, 4},
-	"claude-3-5-sonnet": {3, 15},
-	"claude-3-opus":     {15, 75},
-	"claude-3-haiku":    {0.25, 1.25},
-}
-
-// ModelCostUSD approximates one call's cost. Cache-read tokens are billed as
-// input here (the approximation is documented); unknown models return 0.
-func ModelCostUSD(model string, in, out int64) float64 {
-	price, ok := lookupPrice(model)
-	if !ok {
-		return 0
-	}
-	return (float64(in)*price[0] + float64(out)*price[1]) / 1e6
-}
-
-// lookupPrice resolves a model id to its price by exact match first, then the
-// longest matching family prefix (so dated ids and minor suffixes work).
-func lookupPrice(model string) ([2]float64, bool) {
-	if p, ok := modelPricePerMillion[model]; ok {
-		return p, true
-	}
-	best := ""
-	for prefix := range modelPricePerMillion {
-		if strings.HasPrefix(model, prefix) && len(prefix) > len(best) {
-			best = prefix
-		}
-	}
-	if best == "" {
-		return [2]float64{}, false
-	}
-	return modelPricePerMillion[best], true
-}
-
 // IsClaudeTranscriptPath reports whether a tailed file is a Claude Code
 // project transcript (vs the plugin activity log or another harness's log).
 func IsClaudeTranscriptPath(path string) bool {
