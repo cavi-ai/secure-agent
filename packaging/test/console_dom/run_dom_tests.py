@@ -106,12 +106,64 @@ def main():
         dom_demote = dump_dom(chrome, tmp, "?demotedemo")
         dom_allowrm = dump_dom(chrome, tmp, "?allowlistdemo")
         dom_rail = dump_dom(chrome, tmp, "?raildemo")
+        dom_pill = dump_dom(chrome, tmp, "?pilldemo")
+        dom_quiet = dump_dom(chrome, tmp, "?quietdemo")
+        dom_nomatch = dump_dom(chrome, tmp, "?nomatchdemo")
 
         # --- session-first tab (P3) ---
+        rail = dom.split('id="session-rail"', 1)[1].split('id="session-detail"', 1)[0]
         check("session rail renders durable sessions", dom.count('class="session-card') >= 2,
               f"cards={dom.count('class=\"session-card')}")
-        check("rail shows names not pids", "claude · api-service@main" in dom)
+        check("rail titles are repo@branch, not harness · repo",
+              '>api-service@main<' in rail and 'claude · ' not in rail)
         check("ended session marked", 'session-card ended' in dom)
+
+        # --- sessions: harness-first rail ---
+        rail_groups = re.findall(r'<details class="session-group[^"]*" data-harness="([^"]+)"', rail)
+        check("sessions rail renders one group per live harness, newest first, infra last",
+              rail_groups == ["codex", "claude", "infra"], f"groups={rail_groups}")
+        check("group head carries mark, display name and counts",
+              'data-harness="claude" open=""' in rail
+              and '<span class="harness-label">Claude Code</span>' in rail
+              and '1 active · 1 idle · 1 ended' in rail)
+        logo_refs = set(re.findall(r'<use href="#(logo-[a-z-]+)"', rail))
+        check("harness marks resolve to sprite symbols",
+              logo_refs >= {"logo-claude", "logo-codex", "logo-ollama"}
+              and all(f'<symbol id="{ref}"' in dom for ref in logo_refs), f"refs={sorted(logo_refs)}")
+        claude_group = rail.split('data-harness="claude"', 1)[1].split('<details', 1)[0]
+        check("sub-session nests under its parent",
+              claude_group.index('data-id="sess-claude-1"') < claude_group.index('session-card idle nested')
+              < claude_group.index('data-id="sess-claude-sub"'))
+        check("ended tail is collapsed by default",
+              '<div class="session-ended">' in claude_group
+              and 'data-action="toggle-ended-sessions" data-harness="claude" aria-expanded="false">Ended (1)' in claude_group)
+        infra_group = rail.split('data-harness="infra"', 1)[1]
+        check("infra sits in the last group, collapsed, with RSS totals only",
+              '<details class="session-group infra" data-harness="infra">' in rail
+              and "Ollama" in infra_group and "782 MB" in infra_group
+              and "session-card" not in infra_group and "sess-ollama-4" not in rail)
+        check("live only hides a harness with nothing running", 'data-harness="cursor"' not in rail)
+        check("live cards carry kill, ended cards do not",
+              'data-action="kill" data-pid="5821"' in rail
+              and 'data-action="kill"' not in rail.split('class="session-ended-body"', 1)[1].split('</details>', 1)[0])
+        check("count strip shows sessions, harnesses and coverage",
+              'id="session-count-strip">Sessions 3 · Harnesses 2 · seeing 2/3<' in dom)
+        check("one filter pill per live harness",
+              re.findall(r'data-action="toggle-harness" data-harness="([^"]+)" aria-pressed="true"',
+                         dom.split('id="session-harness-pills"', 1)[1].split('</div>', 1)[0]) == ["codex", "claude"])
+        pill_rail = dom_pill.split('id="session-rail"', 1)[1].split('id="session-detail"', 1)[0]
+        check("a switched-off pill hides its group",
+              'data-harness="claude"' not in pill_rail and 'data-harness="codex"' in pill_rail
+              and 'class="harness-pill off" data-action="toggle-harness" data-harness="claude" aria-pressed="false"' in dom_pill)
+        check("empty rail says all quiet", "All quiet. Nothing is running." in dom_quiet)
+        check("filter that hides everything offers to clear it",
+              "No sessions match" in dom_nomatch and 'data-action="clear-harness-filter"' in dom_nomatch)
+        detail_head = dom_rail.split('class="session-detail-head"', 1)[1].split('class="wf', 1)[0]
+        check("detail head: mark, repo@branch, harness, confidence, copyable path",
+              '<h3>api-service@main</h3>' in detail_head and '#logo-claude' in detail_head
+              and '<span class="sd-harness">Claude Code</span>' in detail_head
+              and '>hook</span>' in detail_head
+              and 'data-action="copy-path" data-path="/Users/dev/workspace/api-service"' in detail_head)
         check("rail selection renders trace waterfall",
               'class="wf-bar' in dom_rail and 'Bash' in dom_rail,
               "no waterfall bars in raildemo")
@@ -392,10 +444,10 @@ def main():
               and 'id="resource-board"' not in overview)
         check("session board has project filter", 'id="session-cwd-filter"' in dom)
         sessions = dom.split('id="session-rail"', 1)[1].split('id="session-detail"', 1)[0]
-        check("session rail lists two sessions", sessions.count('class="session-card') == 2,
+        check("session rail lists live cards and the ended tail", sessions.count('class="session-card') == 4,
               f"cards={sessions.count('class=\"session-card')}")
-        check("session cards labeled by project folder",
-              "api-service" in sessions and "web-app" in sessions)
+        check("session cards labeled by repo@branch or folder",
+              "api-service@main" in sessions and "data-pipeline@feat/etl" in sessions and ">auth<" in sessions)
         check("session card selects the session trace",
               'data-action="select-session" data-id="sess-claude-1"' in sessions)
         check("egress tab badge shows uninspected count",

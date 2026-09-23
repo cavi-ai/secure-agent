@@ -31,8 +31,9 @@ const {
   scopedBySession, unactedLast24h, filterSessionRows, sseNeedsSnapshot,
   sessionStripRows, sessionNeedsYou, sessionStripHTML,
   harnessMeta, harnessChipHTML, advisorAdviceHTML,
-  groupSessionSections, endpointIdentityLine, endpointDetailHTML,
-  sessionLabelDurable, sessionRowsDurable,
+  endpointIdentityLine, endpointDetailHTML,
+  sessionTitle, groupSessionsByHarness, applySessionFilters, familySize,
+  sessionGroupCounts, sessionCountStrip, harnessPillsHTML, middleTruncate,
 } = ctx;
 
 // ---------- unified attention center ----------
@@ -642,24 +643,151 @@ test('advisorAdviceHTML maps assessment to a recommendation and escapes text', (
   assert.ok(!evil.includes('<script>'));
 });
 
-// ---------- session board organization ----------
+// ---------- harness-first session rail ----------
 
-test('groupSessionSections separates live from ended and collapses history', () => {
-  const rows = [
-    { id: 'a', status: 'active', lastSeen: '2026-01-01T10:00:00Z' },
-    { id: 'b', status: 'ended', lastSeen: '2026-01-01T09:00:00Z' },
-    { id: 'c', status: 'idle', lastSeen: '2026-01-01T08:00:00Z' },
-    { id: 'd', status: 'ended', lastSeen: '2026-01-01T07:00:00Z' },
-    { id: 'e', status: 'active', lastSeen: '2026-01-01T11:00:00Z' },
+// lib.js runs in its own VM realm: compare its arrays structurally.
+const same = (actual, expected, msg) => assert.deepEqual(JSON.parse(JSON.stringify(actual)), expected, msg);
+const T = (min) => new Date(Date.UTC(2026, 0, 1, 12, 0) - min * 60000).toISOString();
+const railSessions = () => [
+  { id: 'c1', harness: 'claude', repo: 'api', branch: 'main', status: 'active', last_seen_at: T(5) },
+  { id: 'c2', harness: 'claude', repo: 'api', branch: 'main', status: 'idle', last_seen_at: T(1) },
+  { id: 'c3', harness: 'claude', workspace: '/w/docs', status: 'ended', last_seen_at: T(90) },
+  { id: 'c4', harness: 'claude', workspace: '/w/web', status: 'ended', last_seen_at: T(30) },
+  { id: 'x1', harness: 'codex', repo: 'etl', branch: 'feat/x', status: 'active', last_seen_at: T(2) },
+  { id: 'u1', harness: 'cursor', workspace: '/w/app', status: 'ended', last_seen_at: T(10) },
+  { id: 'o1', harness: 'opencode', workspace: '/w/tool', status: 'ended', last_seen_at: T(20) },
+];
+
+test('groupSessionsByHarness orders groups by live recency and sinks ended-only groups', () => {
+  const groups = groupSessionsByHarness(railSessions(), [], []);
+  // codex (live 2m) before claude (live 5m; its idle 1m does not outrank an
+  // active session inside the group but does count for group recency).
+  same(groups.map(g => g.key), ['claude', 'codex', 'cursor', 'opencode']);
+  const claude = groups[0];
+  assert.equal(claude.label, 'Claude Code');
+  // Active before idle, then the ended tail newest first.
+  same(claude.live.map(f => f.session.id), ['c1', 'c2']);
+  same(claude.ended.map(f => f.session.id), ['c4', 'c3']);
+  assert.equal(sessionGroupCounts(claude), '1 active · 1 idle · 2 ended');
+  // Ended-only groups keep their newest-first order at the bottom.
+  same(groups.slice(2).map(g => g.live.length), [0, 0]);
+  assert.ok(groups.every(g => g.infra === false));
+});
+
+test('groupSessionsByHarness nests sub-sessions one level under the top-most parent', () => {
+  const sessions = [
+    { id: 'p', harness: 'claude', repo: 'api', status: 'active', last_seen_at: T(9) },
+    { id: 'k1', harness: 'claude', parent_id: 'p', status: 'active', last_seen_at: T(1) },
+    { id: 'k2', harness: 'claude', parent_id: 'k1', status: 'idle', last_seen_at: T(3) }, // grandchild flattens
+    { id: 'gone', harness: 'claude', status: 'ended', last_seen_at: T(60) },
+    { id: 'orphan', harness: 'claude', parent_id: 'gone', status: 'active', last_seen_at: T(4) }, // live under an ended parent
+    { id: 'cross', harness: 'codex', parent_id: 'p', status: 'active', last_seen_at: T(2) }, // other harness
+    { id: 'missing', harness: 'claude', parent_id: 'not-listed', status: 'idle', last_seen_at: T(7) },
+    { id: 'loopA', harness: 'claude', parent_id: 'loopB', status: 'ended', last_seen_at: T(70) },
+    { id: 'loopB', harness: 'claude', parent_id: 'loopA', status: 'ended', last_seen_at: T(80) },
+    { id: 'intoLoop', harness: 'claude', parent_id: 'loopA', status: 'ended', last_seen_at: T(85) },
   ];
-  const s = groupSessionSections(rows);
-  assert.equal(s.map(x => x.key).join(','), 'active,idle,ended');
-  assert.equal(s[0].rows.map(r => r.id).join(','), 'e,a'); // newest active first
-  assert.equal(s[1].rows.map(r => r.id).join(','), 'c');
-  assert.equal(s[2].collapsed, true);
-  assert.equal(s[2].rows.length, 2);
-  // No ended sessions → no empty section.
-  assert.equal(groupSessionSections([{ id: 'x', status: 'active' }]).map(x => x.key).join(','), 'active');
+  const [claude, codex] = groupSessionsByHarness(sessions, [], []);
+  const fam = claude.live.find(f => f.session.id === 'p');
+  same(fam.children.map(s => s.id), ['k1', 'k2']);
+  same(claude.live.map(f => f.session.id), ['p', 'orphan', 'missing']);
+  assert.equal(codex.key, 'codex');
+  same(codex.live.map(f => f.session.id), ['cross']);
+  assert.equal(familySize(claude.live), 5);
+  // A parent_id cycle terminates and keeps every session exactly once.
+  const endedIds = claude.ended.flatMap(f => [f.session.id, ...f.children.map(c => c.id)]).sort();
+  same(endedIds, ['gone', 'intoLoop', 'loopA', 'loopB']);
+});
+
+test('groupSessionsByHarness folds infra into one trailing group of RSS totals', () => {
+  const sessions = [
+    ...railSessions(),
+    { id: 'm1', harness: 'ollama', status: 'active', last_seen_at: T(0) },
+    { id: 'i1', harness: 'cursor-ide', status: 'active', last_seen_at: T(0) },
+    { id: 'z1', harness: 'modelsrv', status: 'active', last_seen_at: T(0) },
+  ];
+  const agents = [
+    { pid: 1, name: 'ollama', kind: 'infra', rss_bytes: 3000 },
+    { pid: 2, name: 'modelsrv', kind: 'infra', rss_bytes: 500 },
+    { pid: 3, name: 'cursor-ide', kind: 'infra', rss_bytes: 1000 },
+    { pid: 4, name: 'claude', kind: 'agent', rss_bytes: 99999 },
+  ];
+  const flat = groupSessionsByHarness(sessions, [], agents);
+  const keys = flat.map(g => g.key);
+  for (const k of ['ollama', 'cursor-ide', 'modelsrv']) assert.ok(!keys.includes(k), `${k} leaked into the rail`);
+  const infra = flat[flat.length - 1];
+  assert.equal(infra.key, 'infra');
+  assert.equal(infra.infra, true);
+  assert.equal(infra.label, 'Infrastructure');
+  same(infra.items.map(i => [i.key, i.rss]), [['ollama', 3000], ['cursor-ide', 1000], ['modelsrv', 500]]);
+  assert.equal(infra.rss, 4500);
+  // Live trees, when present, are the RSS source (helpers included).
+  const trees = [
+    { root: { pid: 1, name: 'ollama', kind: 'infra' }, children: [{ pid: 9 }], rss_bytes: 7000 },
+    { root: { pid: 4, name: 'claude', kind: 'agent' }, children: [], rss_bytes: 1 },
+  ];
+  const withTrees = groupSessionsByHarness(sessions, trees, agents);
+  same(withTrees[withTrees.length - 1].items.map(i => [i.key, i.rss]), [['ollama', 7000]]);
+  // No infra anywhere → no infra group.
+  assert.ok(groupSessionsByHarness(railSessions(), [], []).every(g => !g.infra));
+});
+
+test('applySessionFilters: pills, text over repo/branch/workspace, live only', () => {
+  const agents = [{ pid: 1, name: 'ollama', kind: 'infra', rss_bytes: 10 }];
+  const groups = groupSessionsByHarness(railSessions(), [], agents);
+  const keys = (gs) => gs.map(g => g.key);
+  // No options: everything, infra last.
+  same(keys(applySessionFilters(groups, {})), ['claude', 'codex', 'cursor', 'opencode', 'infra']);
+  // A pill switched off hides only its group.
+  same(keys(applySessionFilters(groups, { harnesses: { claude: false } })), ['codex', 'cursor', 'opencode', 'infra']);
+  // Live only drops ended-only groups but keeps a live group's ended tail.
+  const live = applySessionFilters(groups, { liveOnly: true });
+  same(keys(live), ['claude', 'codex', 'infra']);
+  assert.equal(live[0].ended.length, 2);
+  // Text matches repo, branch, repo@branch, and workspace.
+  same(keys(applySessionFilters(groups, { text: 'FEAT/' })), ['codex', 'infra']);
+  same(keys(applySessionFilters(groups, { text: 'api@main' })), ['claude', 'infra']);
+  const docs = applySessionFilters(groups, { text: '/w/docs' });
+  same(keys(docs), ['claude', 'infra']);
+  same(docs[0].live, []);
+  same(docs[0].ended.map(f => f.session.id), ['c3']);
+  // A family stays whole when only a sub-session matches.
+  const nested = groupSessionsByHarness([
+    { id: 'p', harness: 'claude', repo: 'api', status: 'active', last_seen_at: T(1) },
+    { id: 'k', harness: 'claude', parent_id: 'p', workspace: '/w/special', status: 'active', last_seen_at: T(1) },
+  ], [], []);
+  const hit = applySessionFilters(nested, { text: 'special' });
+  assert.equal(hit[0].live[0].session.id, 'p');
+  assert.equal(hit[0].live[0].children[0].id, 'k');
+  // The input groups are not mutated.
+  assert.equal(groups[0].ended.length, 2);
+});
+
+test('sessionCountStrip counts live sessions and harnesses and shows coverage', () => {
+  const groups = groupSessionsByHarness(railSessions(), [], [{ pid: 1, name: 'ollama', kind: 'infra' }]);
+  assert.equal(sessionCountStrip(groups, { harnesses_active: 3, harnesses_seen: 2 }), 'Sessions 3 · Harnesses 2 · seeing 2/3');
+  assert.equal(sessionCountStrip(groups, null), 'Sessions 3 · Harnesses 2');
+  assert.equal(sessionCountStrip(groups, { harnesses_active: 0, harnesses_seen: 0 }), 'Sessions 3 · Harnesses 2');
+  assert.equal(sessionCountStrip([], null), 'Sessions 0 · Harnesses 0');
+});
+
+test('harnessPillsHTML renders a delegated toggle per harness', () => {
+  const html = harnessPillsHTML(['claude', 'codex'], { codex: false });
+  assert.match(html, /class="harness-pill" data-action="toggle-harness" data-harness="claude" aria-pressed="true"/);
+  assert.match(html, /class="harness-pill off" data-action="toggle-harness" data-harness="codex" aria-pressed="false"/);
+  assert.match(html, /#logo-claude/);
+  assert.match(html, /<span class="harness-label">Codex<\/span>/);
+  assert.ok(!harnessPillsHTML(['"><img src=x>'], {}).includes('<img'));
+  assert.equal(harnessPillsHTML([], {}), '');
+});
+
+test('middleTruncate keeps both ends of a long path', () => {
+  assert.equal(middleTruncate('/short', 20), '/short');
+  const out = middleTruncate('/Users/dev/workspace/deeply/nested/api-service', 24);
+  assert.equal(out.length, 24);
+  assert.ok(out.startsWith('/Users/dev'));
+  assert.ok(out.endsWith('api-service'));
+  assert.ok(out.includes('…'));
 });
 
 // ---------- endpoint identity ----------
@@ -692,22 +820,16 @@ test('endpointDetailHTML renders identity, agents, sessions and escapes', () => 
   assert.ok(!evil.includes('<script>'));
 });
 
-// ---------- session labels ----------
+// ---------- session titles ----------
 
-test('sessionLabelDurable falls back to the live tree cwd, not the session id', () => {
+test('sessionTitle names the work, never the harness', () => {
   // repo wins.
-  assert.equal(sessionLabelDurable({ harness: 'claude', repo: 'secure-agent', branch: 'main' }), 'claude · secure-agent@main');
+  assert.equal(sessionTitle({ harness: 'claude', repo: 'secure-agent', branch: 'main' }), 'secure-agent@main');
+  assert.equal(sessionTitle({ harness: 'claude', repo: 'secure-agent' }), 'secure-agent');
   // workspace next.
-  assert.equal(sessionLabelDurable({ harness: 'codex', workspace: '/work/api' }), 'codex · api');
+  assert.equal(sessionTitle({ harness: 'codex', workspace: '/work/api' }), 'api');
   // Unhelpful workspace "/" → use the joined process tree's cwd.
-  assert.equal(sessionLabelDurable({ harness: 'claude', workspace: '/', id: 'proc-132' }, '/work/myrepo'), 'claude · myrepo');
+  assert.equal(sessionTitle({ harness: 'claude', workspace: '/', id: 'proc-132' }, '/work/myrepo'), 'myrepo');
   // Nothing usable → short id, never a bare "/".
-  assert.equal(sessionLabelDurable({ harness: 'claude', workspace: '/', id: 'proc-132' }), 'claude · proc-132');
-});
-
-test('sessionRowsDurable passes the live tree cwd into the label', () => {
-  const sessions = [{ id: 'proc-1', harness: 'claude', workspace: '/', status: 'active', root_pid: 10 }];
-  const trees = [{ root: { pid: 10, name: 'claude', cwd: '/Volumes/work/alpha' }, children: [], rss_bytes: 100 }];
-  const rows = sessionRowsDurable(sessions, trees);
-  assert.equal(rows[0].label, 'claude · alpha');
+  assert.equal(sessionTitle({ harness: 'claude', workspace: '/', id: 'proc-132' }), 'proc-132');
 });

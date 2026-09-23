@@ -213,30 +213,183 @@ function filterSessionRows(rows, q) {
   });
 }
 
-// groupSessionSections: organize the session rail so live and dead work are
-// not interleaved. Active first, then idle, then ended — and the ended ones
-// collapse into their own section so a hundred finished codex runs do not
-// bury the three sessions that are actually working. Pure; the console and
-// the DOM tests both consume it.
-function groupSessionSections(rows) {
-  const active = [];
-  const idle = [];
-  const ended = [];
-  for (const r of rows || []) {
-    const st = (r && r.status) || 'active';
-    if (st === 'ended') ended.push(r);
-    else if (st === 'idle') idle.push(r);
-    else active.push(r);
+// groupSessionsByHarness: the Sessions rail, harness-first. One group per
+// harness with its live families (active before idle, newest first) and an
+// ended tail. A session whose parent_id names another listed session nests
+// one level under its top-most listed ancestor, walking up only while the
+// ancestor sits in the same group and the same live/ended half. Groups order
+// by their most recent live activity; groups with nothing live sink to the
+// bottom. Infra (by harness, or by the /status agent kind) never joins the
+// rail: it folds into one trailing "Infrastructure" group of RSS totals.
+// Pure; the console and the tests both consume it.
+function groupSessionsByHarness(sessions, trees, agents) {
+  const list = (sessions || []).filter(Boolean);
+  const infraKeys = new Set();
+  for (const a of agents || []) if (a && a.kind === 'infra') infraKeys.add(harnessMeta(a.name).key);
+  const isInfra = (m) => m.infra || infraKeys.has(m.key);
+  const statusOf = (s) => (s.status === 'ended' || s.status === 'idle' ? s.status : 'active');
+  const isLive = (s) => statusOf(s) !== 'ended';
+  const seenOf = (s) => String(s.last_seen_at || '');
+  const keyOf = new Map(list.map(s => [s, harnessMeta(s.harness).key]));
+  const byId = new Map(list.map(s => [s.id, s]));
+
+  // A parent_id cycle has no top: its members stay top-level.
+  const topOf = (s) => {
+    let cur = s;
+    const visited = new Set([s]);
+    for (;;) {
+      const p = cur.parent_id ? byId.get(cur.parent_id) : null;
+      if (p && visited.has(p)) return s;
+      if (!p || keyOf.get(p) !== keyOf.get(s) || isLive(p) !== isLive(s)) return cur;
+      visited.add(p);
+      cur = p;
+    }
+  };
+
+  const groups = new Map();
+  const families = new Map();
+  for (const s of list) {
+    const m = harnessMeta(s.harness);
+    if (isInfra(m)) continue;
+    if (!groups.has(m.key)) groups.set(m.key, { key: m.key, label: m.label, infra: false, live: [], ended: [], lastLive: '', lastSeen: '' });
+    const g = groups.get(m.key);
+    if (seenOf(s) > g.lastSeen) g.lastSeen = seenOf(s);
+    if (isLive(s) && seenOf(s) > g.lastLive) g.lastLive = seenOf(s);
+    const top = topOf(s);
+    if (!families.has(top)) {
+      const fam = { session: top, children: [] };
+      families.set(top, fam);
+      (isLive(top) ? g.live : g.ended).push(fam);
+    }
+    if (top !== s) families.get(top).children.push(s);
   }
-  const byRecency = (a, b) => String(b.last_seen_at || b.lastSeen || '') < String(a.last_seen_at || a.lastSeen || '') ? -1 : 1;
-  active.sort(byRecency);
-  idle.sort(byRecency);
-  ended.sort(byRecency);
-  const sections = [];
-  if (active.length) sections.push({ key: 'active', label: 'Working now', rows: active });
-  if (idle.length) sections.push({ key: 'idle', label: 'Idle', rows: idle });
-  if (ended.length) sections.push({ key: 'ended', label: 'Ended', rows: ended, collapsed: true });
-  return sections;
+
+  const byRecency = (a, b) => (seenOf(b) > seenOf(a) ? 1 : seenOf(b) < seenOf(a) ? -1 : 0);
+  const famSeen = (f) => [f.session, ...f.children].map(seenOf).sort().pop();
+  const famRank = (f) => ([f.session, ...f.children].some(s => statusOf(s) === 'active') ? 0 : 1);
+  for (const g of groups.values()) {
+    for (const f of [...g.live, ...g.ended]) f.children.sort(byRecency);
+    g.live.sort((a, b) => famRank(a) - famRank(b) || (famSeen(b) > famSeen(a) ? 1 : famSeen(b) < famSeen(a) ? -1 : 0));
+    g.ended.sort((a, b) => (famSeen(b) > famSeen(a) ? 1 : famSeen(b) < famSeen(a) ? -1 : 0));
+  }
+  const ordered = [...groups.values()].sort((a, b) => {
+    if (!!a.lastLive !== !!b.lastLive) return a.lastLive ? -1 : 1;
+    const ka = a.lastLive || a.lastSeen, kb = b.lastLive || b.lastSeen;
+    if (ka !== kb) return kb > ka ? 1 : -1;
+    return a.key.localeCompare(b.key);
+  });
+
+  // Infra totals: live process trees when the daemon sends them, else the
+  // flat /status agent list.
+  const infra = new Map();
+  const bump = (m, rss) => {
+    if (!infra.has(m.key)) infra.set(m.key, { key: m.key, label: m.label, rss: 0 });
+    infra.get(m.key).rss += rss;
+  };
+  if (trees && trees.length) {
+    for (const t of trees) {
+      const r = (t && t.root) || {};
+      const m = harnessMeta(r.name);
+      if (isInfra(m) || r.kind === 'infra') bump(m, Number(t.rss_bytes || 0));
+    }
+  } else {
+    for (const a of agents || []) {
+      const m = harnessMeta(a && a.name);
+      if (a && (isInfra(m) || a.kind === 'infra')) bump(m, Number(a.rss_bytes || 0));
+    }
+  }
+  if (infra.size) {
+    const items = [...infra.values()].sort((a, b) => b.rss - a.rss || a.key.localeCompare(b.key));
+    ordered.push({
+      key: 'infra', label: 'Infrastructure', infra: true, live: [], ended: [],
+      items, rss: items.reduce((n, it) => n + it.rss, 0),
+    });
+  }
+  return ordered;
+}
+
+// sessionMatchesText: the text filter's fields — repo, branch, repo@branch
+// and workspace, case-insensitive. An empty query matches everything.
+function sessionMatchesText(s, text) {
+  const q = String(text || '').trim().toLowerCase();
+  if (!q) return true;
+  const repoBranch = s.repo ? `${s.repo}${s.branch ? '@' + s.branch : ''}` : '';
+  return [s.repo, s.branch, repoBranch, s.workspace]
+    .some(f => String(f || '').toLowerCase().includes(q));
+}
+
+// applySessionFilters: the rail's filter row over groupSessionsByHarness
+// output. opts.harnesses maps a harness key to false when its pill is off;
+// opts.text keeps a family when any member matches; opts.liveOnly drops
+// groups with nothing live. The infra group carries totals, not sessions, and
+// is never filtered. Pure; returns new group objects.
+function applySessionFilters(groups, opts) {
+  const o = opts || {};
+  const off = o.harnesses || {};
+  const keep = (fams) => fams.filter(f => [f.session, ...f.children].some(s => sessionMatchesText(s, o.text)));
+  const out = [];
+  for (const g of groups || []) {
+    if (g.infra) { out.push(g); continue; }
+    if (off[g.key] === false) continue;
+    const live = keep(g.live);
+    const ended = keep(g.ended);
+    if (!live.length && !ended.length) continue;
+    if (o.liveOnly && !live.length) continue;
+    out.push({ ...g, live, ended });
+  }
+  return out;
+}
+
+// familySize: sessions in a list of families, sub-sessions included.
+function familySize(fams) {
+  return (fams || []).reduce((n, f) => n + 1 + f.children.length, 0);
+}
+
+// sessionGroupCounts: the group head's "3 active · 1 idle · 12 ended".
+function sessionGroupCounts(g) {
+  const c = { active: 0, idle: 0, ended: 0 };
+  for (const f of [...(g.live || []), ...(g.ended || [])]) {
+    for (const s of [f.session, ...f.children]) {
+      c[s.status === 'ended' || s.status === 'idle' ? s.status : 'active']++;
+    }
+  }
+  return ['active', 'idle', 'ended'].filter(k => c[k]).map(k => `${c[k]} ${k}`).join(' · ');
+}
+
+// sessionCountStrip: the rail's one-line census — live sessions, harnesses
+// with live work, and the daemon's coverage (/status.coverage) when it has a
+// live harness count.
+function sessionCountStrip(groups, coverage) {
+  let n = 0;
+  let k = 0;
+  for (const g of groups || []) {
+    if (g.infra) continue;
+    const live = familySize(g.live);
+    n += live;
+    if (live) k++;
+  }
+  const parts = [`Sessions ${n}`, `Harnesses ${k}`];
+  if (coverage && coverage.harnesses_active > 0) parts.push(`seeing ${coverage.harnesses_seen}/${coverage.harnesses_active}`);
+  return parts.join(' · ');
+}
+
+// harnessPillsHTML: one toggle pill per harness, shared by the Sessions and
+// Agents filter rows. harnesses[key] === false renders the pill off.
+function harnessPillsHTML(keys, harnesses) {
+  const off = harnesses || {};
+  return (keys || []).map(k => {
+    const on = off[k] !== false;
+    return `<button type="button" class="harness-pill${on ? '' : ' off'}" data-action="toggle-harness" data-harness="${escapeHTML(k)}" aria-pressed="${on}">${harnessChipHTML(k, { label: true })}</button>`;
+  }).join('');
+}
+
+// middleTruncate: keep both ends of a long path — the root says where, the
+// tail says which — and elide the middle.
+function middleTruncate(str, max) {
+  const s = String(str || '');
+  if (s.length <= max) return s;
+  const keep = max - 1;
+  return s.slice(0, Math.ceil(keep / 2)) + '…' + s.slice(s.length - Math.floor(keep / 2));
 }
 
 function unactedLast24h(flags, nowMs) {
@@ -623,92 +776,13 @@ function fmtCompact(n) {
   return String(n);
 }
 
-// Durable sessions (GET /sessions via /snapshot): one row per harness
-// session, alive or ended — history survives process exit. Live process
-// trees are joined by root pid for RSS/helpers/kill; ended rows render
-// dimmed with their end time and no actions.
-//
-// liveCwd is the joined process tree's working directory, used only when the
-// session's own workspace is unhelpful ("/" or empty) — a provisional
-// process-tree session otherwise rendered as "claude · proc-132", which tells
-// the operator nothing about which project the session is working in.
-function sessionLabelDurable(s, liveCwd) {
-  const name = s.harness || 'agent';
-  if (s.repo) return `${name} · ${s.repo}${s.branch ? '@' + s.branch : ''}`;
-  const ws = cwdLabel(s.workspace);
-  if (ws) return `${name} · ${ws}`;
-  const live = cwdLabel(liveCwd);
-  if (live) return `${name} · ${live}`;
-  const short = sessionShort(s.id);
-  return short ? `${name} · ${short}` : name;
-}
-
-function sessionRowsDurable(sessions, trees) {
-  const byRoot = {};
-  (trees || []).forEach(t => {
-    if (t.root && t.root.pid) byRoot[Number(t.root.pid)] = t;
-  });
-  return (sessions || []).map(s => {
-    const live = s.root_pid ? byRoot[Number(s.root_pid)] : null;
-    const children = live ? (live.children || []) : [];
-    const liveCwd = (live && live.root && live.root.cwd) || '';
-    const root = live ? live.root : {
-      pid: Number(s.root_pid || 0),
-      name: s.harness || 'agent',
-      cwd: s.workspace || '',
-      started_at: s.root_started_at || '',
-    };
-    return {
-      id: s.id || '',
-      root,
-      children,
-      label: sessionLabelDurable(s, liveCwd),
-      rss: live ? Number(live.rss_bytes || 0) : 0,
-      lastSeen: s.last_seen_at || '',
-      status: s.status || 'active',
-      confidence: s.confidence || '',
-      endedAt: s.ended_at || '',
-      pids: live ? [Number(live.root.pid), ...children.map(k => Number(k.pid))] : [],
-    };
-  });
-}
-
-function sessionBoardDurableHTML(rows, now, helpOpen) {
-  helpOpen = helpOpen || {};
-  return rows.map(row => {
-    const a = row.root;
-    const rss = fmtRSS(row.rss);
-    const ended = row.status === 'ended';
-    const seenAge = row.lastSeen ? fmtAge(row.lastSeen, now) : '';
-    const open = helpOpen[row.id] ? ' open' : '';
-    const statusChip = ended
-      ? `<span class="agent-meta-item">ended${row.endedAt ? ' ' + escapeHTML(fmtAge(row.endedAt, now)) + ' ago' : ''}</span>`
-      : row.status === 'idle'
-        ? `<span class="agent-meta-item">idle</span>`
-        : '';
-    const helpers = row.children.length
-      ? `<details class="session-helpers"${open} data-pid="${escapeHTML(row.id)}"><summary class="session-helpers-sum">${row.children.length} helper${row.children.length === 1 ? '' : 's'}</summary>${row.children.map(c => renderProcessRow(c, now, true)).join('')}</details>`
-      : '';
-    const kill = !ended && a.pid
-      ? `<button type="button" class="btn btn-danger btn-sm" data-action="kill" data-pid="${a.pid}" data-started="${escapeHTML(a.started_at || '')}" data-family="${escapeHTML(a.name || '')}"><svg class="icon"><use href="#i-power"/></svg><span>Terminate</span></button>`
-      : '';
-    const main = row.pids.length
-      ? `<button type="button" class="session-main" data-action="filter-pids" data-pids="${escapeHTML(row.pids.join(','))}" data-label="${escapeHTML(row.label)}" title="${escapeHTML(a.cwd || '')}">`
-      : `<span class="session-main" title="${escapeHTML(a.cwd || '')}">`;
-    const mainEnd = row.pids.length ? '</button>' : '</span>';
-    return `
-      <div class="session-row${ended ? ' stale' : ''}">
-        ${main}
-          <span class="session-label">${escapeHTML(row.label)}</span>
-          <span class="agent-pid">${escapeHTML(a.name)}${a.pid ? ' · PID ' + a.pid : ''}</span>
-          ${statusChip}
-          ${seenAge ? `<span class="agent-meta-item agent-lastseen">active ${escapeHTML(seenAge)} ago</span>` : `<span class="agent-meta-item agent-lastseen">no activity</span>`}
-          ${rss ? `<span class="agent-meta-item">${escapeHTML(rss)}</span>` : ''}
-        ${mainEnd}
-        ${kill}
-        ${helpers}
-      </div>`;
-  }).join('');
+// sessionTitle: what a session is working on — repo@branch, else the
+// workspace folder, else the live process tree's folder (a provisional
+// session's workspace can be "/"), else the short id. No harness prefix: the
+// rail group and the detail head name the harness beside it.
+function sessionTitle(s, liveCwd) {
+  if (s.repo) return `${s.repo}${s.branch ? '@' + s.branch : ''}`;
+  return cwdLabel(s.workspace) || cwdLabel(liveCwd) || sessionShort(s.id);
 }
 
 // matchesSearch: the global-search lens. Free text (already lowercased by the

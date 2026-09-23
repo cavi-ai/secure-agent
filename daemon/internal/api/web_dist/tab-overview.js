@@ -378,53 +378,55 @@ function renderSessionBoard() {
   const detail = document.getElementById('session-detail');
   const legacy = document.getElementById('session-board');
   const badge = document.getElementById('badge-session-count');
+  const pills = document.getElementById('session-harness-pills');
+  const strip = document.getElementById('session-count-strip');
   if (!rail) return;
   const agents = (SA.t.status && SA.t.status.agents) ? SA.t.status.agents : [];
   const trees = SA.t.status && SA.t.status.trees;
-  const q = (document.getElementById('session-cwd-filter') || {}).value || '';
+  const filter = SA.harnessFilter;
+  const q = filter.text || '';
+  const filtered = !!String(q).trim() || Object.values(filter.harnesses).some(v => v === false);
+  const noMatch = `<div class="empty"><svg class="icon"><use href="#i-agent"/></svg><span>No sessions match — <button type="button" class="link-btn" data-action="clear-harness-filter">clear the filter</button></span></div>`;
+  const quiet = `<div class="empty"><svg class="icon"><use href="#i-agent"/></svg><span>All quiet. Nothing is running.</span></div>`;
   // The durable session spine (/sessions) is the source of truth when the
   // daemon provides it; process-tree grouping is the fallback for older
   // daemons.
   const durable = SA.t.sessions;
   const useDurable = !!(durable && durable.length);
-  const rows = useDurable
-    ? filterSessionRows(sessionRowsDurable(durable, trees), q)
-    : filterSessionRows(sessionRows(agents, trees), q);
-  const liveCount = rows.filter(r => r.status !== 'ended').length;
-  if (badge) badge.textContent = liveCount;
-  SA.setTabBadge('sessions', liveCount);
 
   if (useDurable) {
     if (legacy) legacy.hidden = true;
     rail.hidden = false;
     if (detail) detail.hidden = false;
-    // Rail: durable sessions, grouped so live work is not buried under a
-    // hundred ended runs. Active → idle → ended; ended collapses.
-    if (rows.length) {
-      const sections = groupSessionSections(rows);
-      const endedOpen = !!SA.endedSessionsOpen;
-      rail.innerHTML = sections.map(section => {
-        const cards = section.rows
-          .map(r => sessionRailCardHTML(durable.find(s => s.id === r.id) || r, trees, SA.selectedSessionId))
-          .join('');
-        if (!section.collapsed) {
-          return `<div class="session-section"><div class="session-section-head">${escapeHTML(section.label)} <span>${section.rows.length}</span></div><div class="session-section-body">${cards}</div></div>`;
-        }
-        return `<div class="session-section collapsed${endedOpen ? ' open' : ''}">
-          <button type="button" class="session-section-head as-button" data-action="toggle-ended-sessions" aria-expanded="${endedOpen}">
-            ${escapeHTML(section.label)} <span>${section.rows.length}</span> <svg class="icon"><use href="#i-arrow"/></svg>
-          </button>
-          <div class="session-section-body">${cards}</div>
-        </div>`;
-      }).join('');
-    } else {
-      rail.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-agent"/></svg><span>${q ? 'No sessions match' : 'No sessions yet — start a harness and it appears here'}</span></div>`;
+    // Rail: one group per harness, live work first; ended runs collapse
+    // into a per-harness tail and infra sits in the last group.
+    const groups = groupSessionsByHarness(durable, trees, agents);
+    const liveCount = groups.reduce((n, g) => n + (g.infra ? 0 : familySize(g.live)), 0);
+    if (badge) badge.textContent = liveCount;
+    SA.setTabBadge('sessions', liveCount);
+    if (strip) strip.textContent = sessionCountStrip(groups, SA.t.status && SA.t.status.coverage);
+    if (pills) {
+      const present = applySessionFilters(groups, { liveOnly: filter.liveOnly }).filter(g => !g.infra).map(g => g.key);
+      pills.innerHTML = harnessPillsHTML(present, filter.harnesses);
     }
+    const shown = applySessionFilters(groups, filter);
+    const sessionGroups = shown.filter(g => !g.infra);
+    const infra = shown.find(g => g.infra);
+    const isOpen = (key, dflt) => (Object.prototype.hasOwnProperty.call(SA.sessionGroupOpen, key) ? !!SA.sessionGroupOpen[key] : dflt);
+    rail.innerHTML = (sessionGroups.length
+      ? sessionGroups.map(g => sessionGroupHTML(g, trees, SA.selectedSessionId, isOpen(g.key, true), !!SA.endedSessionsOpen[g.key])).join('')
+      : (filtered ? noMatch : quiet))
+      + (infra ? sessionInfraGroupHTML(infra, isOpen('infra', false)) : '');
+    rail.querySelectorAll('details.session-group').forEach(el => {
+      el.addEventListener('toggle', () => {
+        SA.sessionGroupOpen[el.dataset.harness] = el.open;
+      });
+    });
     // Detail: the selected session's trace waterfall.
     const selected = durable.find(s => s.id === SA.selectedSessionId);
     if (detail) {
       if (selected) {
-        detail.innerHTML = sessionDetailHTML(selected, SA.sessionTimeline || []);
+        detail.innerHTML = sessionDetailHTML(selected, SA.sessionTimeline || [], trees);
       } else if (SA.selectedSessionId) {
         detail.innerHTML = `<div class="empty"><span>Session no longer listed</span></div>`;
       } else {
@@ -434,15 +436,17 @@ function renderSessionBoard() {
     return;
   }
 
-  // Legacy fallback: process-tree board, no rail.
+  // Legacy fallback: process-tree board, no rail, no harness grouping.
+  const rows = filterSessionRows(sessionRows(agents, trees), q);
+  if (badge) badge.textContent = rows.length;
+  SA.setTabBadge('sessions', rows.length);
+  if (pills) pills.innerHTML = '';
+  if (strip) strip.textContent = '';
   rail.hidden = true;
   if (detail) detail.hidden = true;
   if (legacy) legacy.hidden = false;
   if (rows.length === 0) {
-    const msg = String(q).trim()
-      ? `No sessions match “${escapeHTML(String(q).trim())}”`
-      : 'No agents running yet — start Claude Code, Cursor, or Codex and they\'ll appear here';
-    legacy.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-agent"/></svg><span>${msg}</span></div>`;
+    legacy.innerHTML = String(q).trim() ? noMatch : quiet;
     return;
   }
   const now = Date.now();
