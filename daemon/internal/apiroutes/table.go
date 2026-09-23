@@ -17,7 +17,8 @@ type Route struct {
 	// Prefix) served by a single handler.
 	Path string
 	// Prefix marks a dynamic route family matched by path prefix; only the
-	// console-admission shape (/sessions/{id}/timeline) is admitted.
+	// console-admission shapes (/sessions/{id}/timeline, /sessions/{id}/report)
+	// are admitted.
 	Prefix bool
 	// Console is true when the console token admits this path on the proxy
 	// listener (the browser console's same-origin telemetry surface).
@@ -76,10 +77,14 @@ var Table = []Route{
 	{Path: "/guard/rules", Console: true, MutatingMethods: []string{"POST"}},
 }
 
+// sessionSubpaths are the leaves served under /sessions/{id}/.
+var sessionSubpaths = map[string]bool{"timeline": true, "report": true}
+
 // ConsoleAllowed reports whether the console token admits path on the proxy
 // listener. Exact table paths are admitted directly; the dynamic session
-// timeline family is admitted only in its exact shape (no traversal, non-empty
-// id). Anything else falls through to the proxy-token challenge.
+// family is admitted only in its exact shapes, /sessions/{id}/timeline and
+// /sessions/{id}/report (no traversal, non-empty id). Anything else falls
+// through to the proxy-token challenge.
 func ConsoleAllowed(path string) bool {
 	for _, r := range Table {
 		if !r.Console {
@@ -91,7 +96,7 @@ func ConsoleAllowed(path string) bool {
 			}
 			rest := strings.TrimPrefix(path, r.Path)
 			parts := strings.SplitN(rest, "/", 2)
-			if len(parts) == 2 && parts[0] != "" && parts[1] == "timeline" {
+			if len(parts) == 2 && parts[0] != "" && sessionSubpaths[parts[1]] {
 				return true
 			}
 			continue

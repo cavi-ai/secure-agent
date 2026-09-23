@@ -177,6 +177,7 @@ def main():
         dom_nomatch = dump_dom(chrome, tmp, "?nomatchdemo")
         dom_phone = dump_dom(chrome, tmp, "?phonedemo")
         dom_nocosts = dump_dom(chrome, tmp, "?nocostsdemo")
+        dom_export = dump_dom(chrome, tmp, "?raildemo&exportdemo")
 
         # --- session-first tab (P3) ---
         rail = dom.split('id="session-rail"', 1)[1].split('id="session-detail"', 1)[0]
@@ -235,6 +236,16 @@ def main():
               and '<span class="sd-harness">Claude Code</span>' in detail_head
               and '>hook</span>' in detail_head
               and 'data-action="copy-path" data-path="/Users/dev/workspace/api-service"' in detail_head)
+        check("detail head carries the Export button next to the path",
+              'data-action="copy-path"' in detail_head
+              and detail_head.index('data-action="copy-path"')
+              < detail_head.index('data-action="copy-report" data-id="sess-claude-1"')
+              and '>Export</button>' in detail_head)
+        clip = (re.search(r'data-clipboard="([^"]*)"', dom_export) or [None, ""])[1]
+        check("Export copies the markdown session report and toasts",
+              clip.startswith("# claude · api-service@main") and "## Summary" in clip
+              and 'class="toast success">Session report copied (markdown)<' in dom_export,
+              f"clipboard={clip[:60]!r}")
         check("rail selection renders trace waterfall",
               'class="wf-bar' in dom_rail and 'Bash' in dom_rail,
               "no waterfall bars in raildemo")
