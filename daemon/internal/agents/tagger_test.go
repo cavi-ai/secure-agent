@@ -229,6 +229,24 @@ func TestTagReportsFamilyRoot(t *testing.T) {
 	}
 }
 
+func TestAlive(t *testing.T) {
+	fake := fakeProcs{100: {PID: 100, PPID: 1, Exe: "/usr/local/bin/claude"}}
+	c, _ := config.Load("/nonexistent")
+	tg := New(c, fake)
+	tg.Refresh()
+	// 200 is absent from the last process table but known to the source.
+	fake[200] = ProcInfo{PID: 200, PPID: 1, Exe: "/usr/local/bin/claude"}
+	if !tg.Alive(100) || !tg.Alive(200) {
+		t.Fatalf("Alive(100)=%v Alive(200)=%v, want true, true", tg.Alive(100), tg.Alive(200))
+	}
+	if tg.Alive(300) {
+		t.Fatal("Alive(300) = true for a pid unknown to table and source")
+	}
+	if _, cached := tg.TaggedPIDs()[200]; cached {
+		t.Fatal("Alive tagged pid 200")
+	}
+}
+
 func TestRefreshIntervalIdleVsBusy(t *testing.T) {
 	if RefreshInterval(false) != 5*time.Second {
 		t.Fatalf("idle interval = %s, want 5s", RefreshInterval(false))

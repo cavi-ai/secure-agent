@@ -201,6 +201,19 @@ func (t *Tagger) ParentPID(pid int32) (int32, bool) {
 	return 0, false
 }
 
+// Alive reports whether pid exists: in the last process table, or, when one
+// sample missed it, in the process source. The cache is not touched.
+func (t *Tagger) Alive(pid int32) bool {
+	t.mu.RLock()
+	_, ok := t.table[pid]
+	t.mu.RUnlock()
+	if ok {
+		return true
+	}
+	_, ok = t.ps.Info(pid)
+	return ok
+}
+
 func (t *Tagger) tagLocked(pid int32) (AgentInfo, bool) {
 	if info, ok := t.cache[pid]; ok {
 		return info, t.tagged[pid]
