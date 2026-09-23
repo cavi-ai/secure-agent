@@ -149,6 +149,9 @@ type API struct {
 	resourcePolicy   func(config.ResourceControlConfig) error
 	resourcePolicyMu sync.Mutex
 
+	// plan connects /advisor/plan to the current advisor (plan.go).
+	plan *PlanFuncs
+
 	// NoAgent enforcement and the file actions (files.go, tcppeer.go).
 	isAgentPID   func(pid int32) bool
 	tcpClientPID func(remoteAddr string) (int32, error)
@@ -259,6 +262,7 @@ type Deps struct {
 	// Advisor hooks (optional).
 	Retriage   *RetriageFuncs
 	HostAssess *HostAssessFuncs
+	Plan       *PlanFuncs
 
 	// GuardAdvisor, when set, is offered each newly blocked guard prompt for an
 	// advisory recommendation. NEVER resolves the prompt — the human decides.
@@ -318,6 +322,7 @@ func New(d Deps) *API {
 		publishEvent:    d.PublishEvent,
 		deltaHub:        d.DeltaHub,
 		isAgentPID:      d.IsAgentPID,
+		plan:            d.Plan,
 		tcpClientPID:    TCPClientPID,
 		openPath:        openWithSystem,
 	}
@@ -602,6 +607,7 @@ func (a *API) routes() map[string]http.HandlerFunc {
 		"/files/detail":                 a.handleFileDetail,
 		"/files/reveal":                 a.handleFileReveal,
 		"/files/open":                   a.handleFileOpen,
+		"/advisor/plan":                 a.handleAdvisorPlan,
 	}
 }
 
