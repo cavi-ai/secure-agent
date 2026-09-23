@@ -130,6 +130,7 @@ holds `lcm.db`. Set, it is the only path read.
 `~/.hermes`. It reads `state.db` there and each `profiles/<name>/state.db`;
 none present, the Hermes collector stays idle and `/doctor` reports `hermes`
 as not installed.
+A Hermes installed outside `~/.hermes` without a `hermes-agent` path needs an `agents:` override to be tagged.
 
 Tilde (`~`) prefixes are automatically expanded to the user's home directory. Environment variables (e.g. `$HOME`) are also resolved automatically.
 

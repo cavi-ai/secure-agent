@@ -400,20 +400,28 @@ func TestRefreshDoesNotCarryResourcesAcrossPIDReuse(t *testing.T) {
 	}
 }
 
-// Hermes Agent: the hermes binary, or anything under its hermes-agent
-// install, is the harness.
+// Hermes Agent: the hermes-agent launcher, or anything under the .hermes
+// home, is the harness. React Native's hermes engine binaries are not.
 func TestTagHermesAsAgent(t *testing.T) {
 	fake := fakeProcs{
-		100: {PID: 100, PPID: 1, Exe: "/opt/homebrew/bin/hermes"},
-		200: {PID: 200, PPID: 1, Exe: "/Users/x/.hermes/hermes-agent/venv/bin/python3.11"},
+		100: {PID: 100, PPID: 1, Exe: "/Users/x/.hermes/hermes-agent/venv/bin/python3.11"},
+		101: {PID: 101, PPID: 1, Exe: "/opt/hermes-agent/bin/hermes-agent"},
+		102: {PID: 102, PPID: 1, Exe: "/Users/x/.hermes/bin/hermes"},
+		200: {PID: 200, PPID: 1, Exe: "/usr/local/bin/hermesc"},
+		201: {PID: 201, PPID: 1, Exe: "/x/node_modules/hermes-engine/bin/hermes"},
 	}
 	c, _ := config.Load("/nonexistent")
 	tg := New(c, fake)
 	tg.Refresh()
-	for _, pid := range []int32{100, 200} {
+	for _, pid := range []int32{100, 101, 102} {
 		info, ok := tg.Tag(pid)
 		if !ok || info.Name != "hermes" || info.Kind != "agent" {
 			t.Fatalf("Tag(%d) = %+v, %v; want hermes/agent", pid, info, ok)
+		}
+	}
+	for _, pid := range []int32{200, 201} {
+		if info, ok := tg.Tag(pid); ok {
+			t.Fatalf("Tag(%d) = %+v; a React Native hermes binary is not the Hermes agent", pid, info)
 		}
 	}
 }
