@@ -4,22 +4,26 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/bus"
+	"github.com/cavi-ai/secure-agent/daemon/internal/config"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
+	"github.com/cavi-ai/secure-agent/daemon/internal/firewall"
 )
 
 func TestScanLineTranscriptHit(t *testing.T) {
 	line := "some log output with Bearer sk-secrettoken123 in it"
-	e, ok := ScanLine(line)
-	if !ok || e.Kind != event.KindTranscriptHit {
-		t.Fatalf("ScanLine kind = %v, ok = %v; want KindTranscriptHit, true", e.Kind, ok)
+	evs := (&TranscriptScanner{}).scanLine(line, "/logs/activity.jsonl", "unknown", "")
+	if len(evs) != 1 || evs[0].Kind != event.KindTranscriptHit {
+		t.Fatalf("scanLine = %+v; want one KindTranscriptHit", evs)
 	}
-	if e.Detail != "bearer-token" {
-		t.Fatalf("Detail = %q, want bearer-token", e.Detail)
+	e := evs[0]
+	if e.Detail != "unknown:pattern:bearer-token" || e.Path != "/logs/activity.jsonl" {
+		t.Fatalf("Detail = %q Path = %q, want unknown:pattern:bearer-token on the tailed path", e.Detail, e.Path)
 	}
 	if strings.Contains(e.Detail, "sk-secrettoken123") {
 		t.Fatal("secret token leaked into event detail!")
@@ -28,10 +32,11 @@ func TestScanLineTranscriptHit(t *testing.T) {
 
 func TestScanLinePluginAction(t *testing.T) {
 	line := `{"ts":"2026-08-12T19:55:00Z","tool":"Bash","command":"ls"}`
-	e, ok := ScanLine(line)
-	if !ok || e.Kind != event.KindPluginAction {
-		t.Fatalf("ScanLine kind = %v, ok = %v; want KindPluginAction, true", e.Kind, ok)
+	evs := (&TranscriptScanner{}).scanLine(line, "/logs/activity.jsonl", "unknown", "")
+	if len(evs) != 1 || evs[0].Kind != event.KindPluginAction {
+		t.Fatalf("scanLine = %+v; want one KindPluginAction", evs)
 	}
+	e := evs[0]
 	if e.Detail != "Bash" {
 		t.Fatalf("Detail = %q, want Bash", e.Detail)
 	}
@@ -223,10 +228,11 @@ func TestNewSessionFileReadFromStart(t *testing.T) {
 
 func TestScanLineFakeCursorActivity(t *testing.T) {
 	line := `{"file_path":"/tmp/foo/.env","pid":12345,"tool":"Read"}`
-	e, ok := ScanLine(line)
-	if !ok || e.Kind != event.KindPluginAction {
-		t.Fatalf("ScanLine kind = %v, ok = %v; want KindPluginAction, true", e.Kind, ok)
+	evs := (&TranscriptScanner{}).scanLine(line, "/logs/activity.jsonl", "unknown", "")
+	if len(evs) != 1 || evs[0].Kind != event.KindPluginAction {
+		t.Fatalf("scanLine = %+v; want one KindPluginAction", evs)
 	}
+	e := evs[0]
 	if e.PID != 12345 {
 		t.Fatalf("PID = %d, want 12345", e.PID)
 	}
@@ -325,5 +331,137 @@ func TestOffsetsSurviveRestart(t *testing.T) {
 		case <-deadline:
 			t.Fatal("line appended while the daemon was down was lost across restart")
 		}
+	}
+}
+
+// stubTextScanner reports a fingerprint hit (and an entropy hit, which the
+// tailer must drop) for any text containing secret.
+type stubTextScanner struct{ secret string }
+
+func (s stubTextScanner) ScanText(text string) []firewall.Hit {
+	if !strings.Contains(text, s.secret) {
+		return nil
+	}
+	return []firewall.Hit{
+		{RuleID: "fp-1", SecretType: firewall.TypeEnvValue, Layer: firewall.LayerFingerprint, Confidence: 1},
+		{RuleID: "entropy", SecretType: firewall.TypeUnknown, Layer: firewall.LayerEntropy, Confidence: 0.4},
+	}
+}
+
+// appendAndTail appends line to path and runs one tail pass, returning the
+// transcript-hit events published.
+func appendAndTail(t *testing.T, ts *TranscriptScanner, sub <-chan event.Event, offsets map[string]int64, path, line string) []event.Event {
+	t.Helper()
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(line + "\n"); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	ts.tailFile(path, offsets, nil)
+	var hits []event.Event
+	for {
+		select {
+		case e := <-sub:
+			if e.Kind == event.KindTranscriptHit {
+				hits = append(hits, e)
+			}
+		default:
+			return hits
+		}
+	}
+}
+
+// A secret in a tailed Claude transcript line yields one transcript hit that
+// carries the path, the session and the rule id, never the text; the same
+// (path, rule) inside the dedupe window yields nothing more.
+func TestTranscriptHitCarriesPathSessionAndRuleOnly(t *testing.T) {
+	secret := "synthetic-known-secret-0123456789"
+	dir := filepath.Join(t.TempDir(), ".claude", "projects", "ws")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "s-1.jsonl")
+	line := `{"sessionId":"s-1","type":"user","timestamp":"2026-09-22T10:00:00Z","message":{"content":"use ` + secret + `"}}`
+
+	b := bus.New(64)
+	sub := b.Subscribe()
+	ts := NewTranscriptScanner(b, nil)
+	ts.TextScanner = stubTextScanner{secret: secret}
+	offsets := map[string]int64{}
+
+	hits := appendAndTail(t, ts, sub, offsets, path, line)
+	if len(hits) != 1 {
+		t.Fatalf("want exactly one transcript hit (entropy dropped), got %d", len(hits))
+	}
+	e := hits[0]
+	if e.Path != path || e.SessionID != "s-1" || e.Detail != "claude:fingerprint:fp-1" {
+		t.Fatalf("hit Path=%q SessionID=%q Detail=%q; want %q s-1 claude:fingerprint:fp-1", e.Path, e.SessionID, e.Detail, path)
+	}
+	v := reflect.ValueOf(e)
+	for i := 0; i < v.NumField(); i++ {
+		if f := v.Field(i); f.Kind() == reflect.String && strings.Contains(f.String(), secret) {
+			t.Fatalf("event field %s carries the secret text", v.Type().Field(i).Name)
+		}
+	}
+
+	if again := appendAndTail(t, ts, sub, offsets, path, line); len(again) != 0 {
+		t.Fatalf("same (path, rule) inside the dedupe window must not re-emit, got %d", len(again))
+	}
+}
+
+// With no TextScanner the redact patterns still fire, in the same Detail shape.
+func TestTranscriptHitRedactFallback(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "activity.jsonl")
+	b := bus.New(64)
+	sub := b.Subscribe()
+	ts := NewTranscriptScanner(b, nil)
+
+	hits := appendAndTail(t, ts, sub, map[string]int64{}, path, "curl -H 'Authorization: Bearer synthetic0123456789abcdef'")
+	if len(hits) != 1 || !strings.HasSuffix(hits[0].Detail, ":pattern:bearer-token") {
+		t.Fatalf("want one hit with Detail ending :pattern:bearer-token, got %+v", hits)
+	}
+}
+
+// Detail is "<harness>:<layer>:<rule id>"; a rule id with ":" would be
+// ambiguous to parse.
+func TestSecretRuleIDsCarryNoColon(t *testing.T) {
+	cfg, err := config.Load(filepath.Join(t.TempDir(), "absent.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := []string{"bearer-token", "jwt-token", "aws-access-key", "fp-1"}
+	for _, p := range cfg.Firewall.Patterns {
+		ids = append(ids, p.ID)
+	}
+	for _, id := range ids {
+		if strings.Contains(id, ":") {
+			t.Errorf("rule id %q contains ':'", id)
+		}
+	}
+}
+
+// Codex rollout lines the tracer consumes still get the secret scan, tagged
+// with the session id from session_meta.
+func TestCodexTraceLineIsSecretScanned(t *testing.T) {
+	secret := "synthetic-known-secret-0123456789"
+	dir := filepath.Join(t.TempDir(), "sessions", "2026", "09", "22")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "rollout-2026-09-22T10-00-00-s.jsonl")
+	b := bus.New(64)
+	sub := b.Subscribe()
+	ts := NewTranscriptScanner(b, nil)
+	ts.TextScanner = stubTextScanner{secret: secret}
+	offsets := map[string]int64{}
+
+	appendAndTail(t, ts, sub, offsets, path, codexMetaLine)
+	out := `{"timestamp":"2026-09-22T10:00:01.000Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_1","output":"` + secret + `"}}`
+	hits := appendAndTail(t, ts, sub, offsets, path, out)
+	if len(hits) != 1 || hits[0].Detail != "codex:fingerprint:fp-1" || hits[0].SessionID != "019f58e8-6230" || hits[0].Path != path {
+		t.Fatalf("want one codex hit with session and path, got %+v", hits)
 	}
 }

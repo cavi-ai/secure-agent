@@ -396,3 +396,49 @@ func TestUninspectedSummaryCarriesFirstSeenAndSession(t *testing.T) {
 		t.Fatalf("count = %d, want 2", sum[0].Count)
 	}
 }
+
+// A transcript hit flags secret-in-transcript on the harness named in Detail:
+// severity 3 for a registered known secret, 2 for a typed pattern; a repeat
+// of the same (path, rule) inside the window and a muted rule flag nothing.
+func TestSecretInTranscriptFlags(t *testing.T) {
+	c := newTestCorrelator(t)
+	base := time.Now()
+	path := "/Users/x/.claude/projects/ws/s-1.jsonl"
+	hit := event.Event{Kind: event.KindTranscriptHit, TS: base, Path: path, SessionID: "s-1", Detail: "claude:fingerprint:fp-1"}
+
+	f := c.Observe(hit)
+	if len(f) != 1 {
+		t.Fatalf("fingerprint hit: want 1 flag, got %d", len(f))
+	}
+	fl := f[0]
+	if fl.Rule != "secret-in-transcript" || fl.Severity != 3 || fl.Agent != "claude" || fl.SessionID != "s-1" || fl.PID != 0 {
+		t.Fatalf("flag = rule %q sev %d agent %q session %q pid %d", fl.Rule, fl.Severity, fl.Agent, fl.SessionID, fl.PID)
+	}
+	if len(fl.Evidence) != 1 || fl.Evidence[0].Kind != "transcript" || fl.Evidence[0].Label != path ||
+		fl.Evidence[0].Rule != "fp-1" || fl.Evidence[0].Sub != "fingerprint match" {
+		t.Fatalf("evidence = %+v", fl.Evidence)
+	}
+
+	repeat := hit
+	repeat.TS = base.Add(10 * time.Minute)
+	if f := c.Observe(repeat); len(f) != 0 {
+		t.Fatalf("same (path, rule) inside 15 minutes must not re-flag, got %d", len(f))
+	}
+
+	pat := hit
+	pat.TS = base.Add(11 * time.Minute)
+	pat.Detail = "codex:pattern:aws-key"
+	f = c.Observe(pat)
+	if len(f) != 1 || f[0].Severity != 2 || f[0].Agent != "codex" || f[0].Evidence[0].Rule != "aws-key" {
+		t.Fatalf("pattern hit: want 1 severity-2 codex flag, got %+v", f)
+	}
+
+	muted := newTestCorrelator(t)
+	muted.SetMuteChecker(func(rule, host string) bool { return rule == "secret-in-transcript" && host == "*" })
+	if f := muted.Observe(hit); len(f) != 0 {
+		t.Fatalf("muted rule must not flag, got %d", len(f))
+	}
+	if got := muted.MutedCount(); got != 1 {
+		t.Fatalf("muted fire must be counted, got %d", got)
+	}
+}

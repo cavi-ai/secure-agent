@@ -168,6 +168,7 @@ public final class NotificationManager: NSObject, @unchecked Sendable {
         case "keychain-security-cli": return "Agent ran the keychain CLI"
         case "tcc-tamper": return "Agent modified macOS permissions (TCC)"
         case "proxy-prompt-injection": return "Prompt injection in a response"
+        case "secret-in-transcript": return "Secret appeared in an agent transcript"
         default: return flag.rule
         }
     }

@@ -506,6 +506,8 @@ func humanFlagTitle(rule string) string {
 		return "Agent modified macOS privacy permissions (TCC)"
 	case "proxy-prompt-injection":
 		return "Prompt injection in a response"
+	case "secret-in-transcript":
+		return "Secret appeared in an agent transcript"
 	default:
 		return rule
 	}

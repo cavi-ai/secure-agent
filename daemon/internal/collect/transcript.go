@@ -13,6 +13,7 @@ import (
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/bus"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
+	"github.com/cavi-ai/secure-agent/daemon/internal/firewall"
 	"github.com/cavi-ai/secure-agent/daemon/internal/redact"
 )
 
@@ -27,7 +28,16 @@ const (
 	// appended to again; they rejoin the active set within one resolveInterval,
 	// and their byte offset is retained, so no appended lines are missed.
 	activeWindow = 2 * time.Minute
+	// hitDedupeWindow collapses repeats of the same (path, rule id) secret
+	// hit: a transcript that quotes one secret on every turn is one finding.
+	hitDedupeWindow = 10 * time.Minute
 )
+
+// TextScanner finds secrets in free text and reports them by rule id.
+// *firewall.Engine satisfies it (known-secret fingerprints + typed patterns).
+type TextScanner interface {
+	ScanText(text string) []firewall.Hit
+}
 
 type TranscriptScanner struct {
 	bus   *bus.Bus
@@ -65,6 +75,14 @@ type TranscriptScanner struct {
 	// harness+workspace.
 	OnSessionSeen func(sessionID, harness, workspace string, at time.Time)
 
+	// TextScanner, when set, scans every tailed line for known and typed
+	// secrets. Nil falls back to the redact package's patterns.
+	TextScanner TextScanner
+
+	// hitSeen records when each (path, rule id) secret hit was last emitted,
+	// for hitDedupeWindow. The tail loop is single-goroutine, so no lock.
+	hitSeen map[string]time.Time
+
 	// tracers hold per-file Claude trace state (open tool_use ids). The
 	// scanner's tail loop is single-goroutine, so no lock.
 	tracers map[string]*ClaudeTracer
@@ -91,8 +109,8 @@ type Handshake struct {
 	TS        string `json:"ts"`
 }
 
-// ParseHandshake recognizes session_start lines. Kept separate from ScanLine
-// so the redaction scan never misfires on handshake metadata.
+// ParseHandshake recognizes session_start lines. Kept separate from scanLine
+// so the secret scan never misfires on handshake metadata.
 func ParseHandshake(line string) (Handshake, bool) {
 	trimmed := strings.TrimSpace(line)
 	if !strings.HasPrefix(trimmed, "{") || !strings.Contains(trimmed, `"session_start"`) {
@@ -124,48 +142,151 @@ type pluginLogLine struct {
 	FilePath  string `json:"file_path"`
 }
 
-func ScanLine(line string) (event.Event, bool) {
+// scanLine scans one tailed line for secrets. A line carrying a secret yields
+// one transcript-hit event per (path, rule id) not already emitted within
+// hitDedupeWindow — the path, session and rule id only, never the text — and
+// is not parsed further. Any other line may be a hook activity record.
+func (ts *TranscriptScanner) scanLine(line, path, harness, sessionID string) []event.Event {
 	if line == "" {
-		return event.Event{}, false
+		return nil
 	}
-
-	// 1. Check for credential redaction match
-	if rule, found := redact.Detect(line); found {
-		return event.Event{
-			Kind:   event.KindTranscriptHit,
-			TS:     time.Now(),
-			Detail: rule,
-		}, true
-	}
-
-	// 2. Check for plugin activity JSON line
-	if strings.HasPrefix(strings.TrimSpace(line), "{") && strings.Contains(line, `"tool"`) {
-		var pl pluginLogLine
-		if err := json.Unmarshal([]byte(line), &pl); err == nil && pl.Tool != "" {
-			ts := time.Now()
-			if pl.TS != "" {
-				if t, err := time.Parse(time.RFC3339Nano, pl.TS); err == nil {
-					ts = t
-				} else if t, err := time.Parse(time.RFC3339, pl.TS); err == nil {
-					ts = t
-				}
+	if hits := ts.secretHits(line); len(hits) > 0 {
+		now := time.Now()
+		var evs []event.Event
+		for _, h := range hits {
+			if !ts.firstHit(path, h.rule, now) {
+				continue
 			}
-			path := pl.FilePath
-			if path == "" {
-				path = pl.Command
-			}
-			return event.Event{
-				Kind:      event.KindPluginAction,
-				TS:        ts,
-				PID:       pl.PID,
-				SessionID: pl.SessionID,
+			evs = append(evs, event.Event{
+				Kind:      event.KindTranscriptHit,
+				TS:        now,
 				Path:      path,
-				Detail:    pl.Tool,
-			}, true
+				SessionID: sessionID,
+				Detail:    harness + ":" + h.layer + ":" + h.rule,
+			})
+		}
+		return evs
+	}
+	if e, ok := parsePluginLine(line); ok {
+		return []event.Event{e}
+	}
+	return nil
+}
+
+type secretHit struct{ layer, rule string }
+
+// secretHits returns the layer and rule id of each secret in line. Entropy
+// hits are dropped: transcripts are dense with ids, hashes and encoded blobs.
+func (ts *TranscriptScanner) secretHits(line string) []secretHit {
+	if ts.TextScanner == nil {
+		if rule, found := redact.Detect(line); found {
+			return []secretHit{{layer: "pattern", rule: rule}}
+		}
+		return nil
+	}
+	var out []secretHit
+	for _, h := range ts.TextScanner.ScanText(line) {
+		switch h.Layer {
+		case firewall.LayerFingerprint:
+			out = append(out, secretHit{layer: "fingerprint", rule: h.RuleID})
+		case firewall.LayerPattern:
+			out = append(out, secretHit{layer: "pattern", rule: h.RuleID})
 		}
 	}
+	return out
+}
 
-	return event.Event{}, false
+// firstHit reports whether (path, rule) was not emitted within
+// hitDedupeWindow, recording it when new. Expired entries are pruned on insert.
+func (ts *TranscriptScanner) firstHit(path, rule string, now time.Time) bool {
+	key := path + "\x00" + rule
+	if last, ok := ts.hitSeen[key]; ok && now.Sub(last) < hitDedupeWindow {
+		return false
+	}
+	if ts.hitSeen == nil {
+		ts.hitSeen = map[string]time.Time{}
+	}
+	for k, at := range ts.hitSeen {
+		if now.Sub(at) >= hitDedupeWindow {
+			delete(ts.hitSeen, k)
+		}
+	}
+	ts.hitSeen[key] = now
+	return true
+}
+
+// publishHits publishes the transcript-hit events in a trace line; the
+// tracer has already published the line's trace events.
+func (ts *TranscriptScanner) publishHits(line, path, harness, sessionID string) {
+	for _, e := range ts.scanLine(line, path, harness, sessionID) {
+		if e.Kind == event.KindTranscriptHit {
+			ts.bus.Publish(e)
+		}
+	}
+}
+
+// harnessForPath names the harness whose transcript layout the path matches;
+// "unknown" for hook activity logs and other tailed files.
+func harnessForPath(p string) string {
+	switch {
+	case IsClaudeTranscriptPath(p):
+		return "claude"
+	case IsCodexRolloutPath(p):
+		return "codex"
+	case IsCursorTranscriptPath(p):
+		return "cursor"
+	case IsAGYTranscriptPath(p):
+		return "agy"
+	}
+	return "unknown"
+}
+
+// knownSession returns the session id a tracer already holds for path.
+func (ts *TranscriptScanner) knownSession(p string) string {
+	if t := ts.codexTracers[p]; t != nil {
+		id, _ := t.Session()
+		return id
+	}
+	if t := ts.cursorTracers[p]; t != nil {
+		id, _ := t.Session()
+		return id
+	}
+	if t := ts.agyTracers[p]; t != nil {
+		id, _ := t.Session()
+		return id
+	}
+	return ""
+}
+
+// parsePluginLine recognizes a hook activity record ({"tool": ...}).
+func parsePluginLine(line string) (event.Event, bool) {
+	if !strings.HasPrefix(strings.TrimSpace(line), "{") || !strings.Contains(line, `"tool"`) {
+		return event.Event{}, false
+	}
+	var pl pluginLogLine
+	if err := json.Unmarshal([]byte(line), &pl); err != nil || pl.Tool == "" {
+		return event.Event{}, false
+	}
+	ts := time.Now()
+	if pl.TS != "" {
+		if t, err := time.Parse(time.RFC3339Nano, pl.TS); err == nil {
+			ts = t
+		} else if t, err := time.Parse(time.RFC3339, pl.TS); err == nil {
+			ts = t
+		}
+	}
+	path := pl.FilePath
+	if path == "" {
+		path = pl.Command
+	}
+	return event.Event{
+		Kind:      event.KindPluginAction,
+		TS:        ts,
+		PID:       pl.PID,
+		SessionID: pl.SessionID,
+		Path:      path,
+		Detail:    pl.Tool,
+	}, true
 }
 
 func (ts *TranscriptScanner) Run(ctx context.Context) error {
@@ -498,12 +619,9 @@ func (ts *TranscriptScanner) tailFile(p string, offsets map[string]int64, dirty 
 						if ts.OnSessionSeen != nil {
 							ts.OnSessionSeen(evs[0].SessionID, "claude", cwd, evs[0].TS)
 						}
-						// Trace lines still get the redaction scan — an
+						// Trace lines still get the secret scan — an
 						// assistant message can carry a secret in its text.
-						if e, hit := ScanLine(line); hit && e.Kind == event.KindTranscriptHit {
-							e.SessionID = evs[0].SessionID
-							ts.bus.Publish(e)
-						}
+						ts.publishHits(line, p, "claude", evs[0].SessionID)
 						continue
 					}
 					// Not a trace record: still run the redaction scan.
@@ -520,7 +638,8 @@ func (ts *TranscriptScanner) tailFile(p string, offsets map[string]int64, dirty 
 						ts.codexTracers[p] = tracer
 					}
 					if evs, ok := tracer.ParseLine(line); ok {
-						if sid, cwd := tracer.Session(); sid != "" && ts.OnSessionSeen != nil {
+						sid, cwd := tracer.Session()
+						if sid != "" && ts.OnSessionSeen != nil {
 							ts.OnSessionSeen(sid, "codex", cwd, time.Now())
 						}
 						for _, e := range evs {
@@ -529,6 +648,7 @@ func (ts *TranscriptScanner) tailFile(p string, offsets map[string]int64, dirty 
 						if len(evs) > 0 && ts.OnProduce != nil {
 							ts.OnProduce()
 						}
+						ts.publishHits(line, p, "codex", sid)
 						continue
 					}
 				}
@@ -554,6 +674,7 @@ func (ts *TranscriptScanner) tailFile(p string, offsets map[string]int64, dirty 
 						if ts.OnProduce != nil {
 							ts.OnProduce()
 						}
+						ts.publishHits(line, p, "cursor", sid)
 						continue
 					}
 				}
@@ -578,11 +699,14 @@ func (ts *TranscriptScanner) tailFile(p string, offsets map[string]int64, dirty 
 						if ts.OnProduce != nil {
 							ts.OnProduce()
 						}
+						ts.publishHits(line, p, "agy", sid)
 						continue
 					}
 				}
-				if e, ok := ScanLine(line); ok {
-					ts.bus.Publish(e)
+				if evs := ts.scanLine(line, p, harnessForPath(p), ts.knownSession(p)); len(evs) > 0 {
+					for _, e := range evs {
+						ts.bus.Publish(e)
+					}
 					if ts.OnProduce != nil {
 						ts.OnProduce()
 					}

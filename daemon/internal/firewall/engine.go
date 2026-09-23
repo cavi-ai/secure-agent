@@ -142,6 +142,17 @@ func (e *Engine) tally(findings []Finding) {
 	}
 }
 
+// ScanText returns the known-secret (fingerprint) and typed-pattern hits in
+// free text. No field context, no policy verdict, no tally: callers that are
+// not proxying a request (e.g. the transcript tailer) only need the rule ids.
+func (e *Engine) ScanText(text string) []Hit {
+	if text == "" {
+		return nil
+	}
+	hits := e.reg.Load().Match([]byte(text))
+	return append(hits, e.det.Scan(text)...)
+}
+
 // Inspect scans each field of the request, classifies every hit in its field
 // context, and resolves the strongest action. Callers treat the returned
 // Decision as authoritative and otherwise fail open.
