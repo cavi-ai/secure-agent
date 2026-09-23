@@ -27,8 +27,11 @@ func TestPostureAllClearWhenNothingPending(t *testing.T) {
 
 	cl := unixClient(sock)
 	resp, err := cl.Get("http://unix/posture")
-	if err != nil || resp.StatusCode != 200 {
-		t.Fatalf("posture get: %v status=%v", err, resp.StatusCode)
+	if err != nil {
+		t.Fatalf("posture get: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("status=%v", resp.StatusCode)
 	}
 	var p Posture
 	decodeInto(t, resp, &p)
