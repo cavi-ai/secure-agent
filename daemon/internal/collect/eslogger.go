@@ -28,6 +28,11 @@ func NewESLogger(b *bus.Bus) *ESLogger {
 	return &ESLogger{bus: b}
 }
 
+// unmarshalES is a test seam: production always calls json.Unmarshal; tests
+// swap it to count calls and prove the fast-reject path in ParseESLine never
+// reaches it for fragments.
+var unmarshalES = json.Unmarshal
+
 type esEnvelope struct {
 	EventType int `json:"event_type"`
 	Process   struct {
@@ -76,12 +81,20 @@ type esEnvelope struct {
 	Timestamp string `json:"timestamp"`
 }
 
+// minESLineLen is the shortest possible real ES envelope; anything shorter
+// is a fragment (a defective writer's partial/garbage line) and is rejected
+// without ever reaching json.Unmarshal.
+const minESLineLen = 16
+
 func ParseESLine(line []byte) (event.Event, bool) {
-	if len(line) == 0 {
+	if len(line) < minESLineLen {
+		return event.Event{}, false
+	}
+	if b := bytes.TrimLeft(line, " \t"); len(b) == 0 || b[0] != '{' {
 		return event.Event{}, false
 	}
 	var env esEnvelope
-	if err := json.Unmarshal(line, &env); err != nil {
+	if err := unmarshalES(line, &env); err != nil {
 		return event.Event{}, false
 	}
 

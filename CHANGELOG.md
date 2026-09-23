@@ -34,6 +34,10 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Console: an explained flag's card and Attention item show who, what and the one verdict with the served actions as buttons; raw evidence, pid and timestamps sit behind Details.
 
 ### Fixed
+- Spool tailer: lines under 16 bytes or not starting with `{` are rejected
+  before JSON parsing; a per-tick 4 MiB drain budget skips the rest of a
+  flooded tail in bulk instead of scanning it, and posture/doctor report a
+  flooding writer (unparsed share, MB skipped) instead of parsing garbage.
 - Console: live-stream frames mark only the panels that read the changed data.
 - Console: only the active tab's panels, the header and the tab badges render, at most every 250 ms per panel; hidden panels render on tab switch.
 - Console: list panels (findings, attention, incidents, audit, sessions rail, agents, firewall, events) patch rows by key, so focus, open disclosures and a click during a render survive.

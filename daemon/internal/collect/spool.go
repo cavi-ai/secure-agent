@@ -2,6 +2,7 @@ package collect
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"fmt"
 	"log"
@@ -9,11 +10,34 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/bus"
 	"github.com/cavi-ai/secure-agent/daemon/internal/supervise"
 )
+
+// spoolDrainBudget bounds how many bytes drainOnce will scan and attempt to
+// parse in one tick. A defective privileged writer can grow the spool by
+// tens of MB per second with near-empty garbage lines: without a budget,
+// every tick would pay bufio.Scanner plus the parser over the whole flood.
+// Past the budget the rest of the tail is skipped in bulk — counted, never
+// scanned line by line.
+const spoolDrainBudget = 4 << 20 // 4 MiB
+
+// SpoolStats are the tailer's counters from its most recent drain: how many
+// lines it saw, how many parsed, how many it skipped past the per-tick
+// budget without attempting to parse, and how many bytes that was.
+// FloodSince is zero unless the tailer is currently having to skip; it is
+// set the first tick that skips and cleared the first tick that drains
+// fully within budget.
+type SpoolStats struct {
+	Lines        uint64
+	Parsed       uint64
+	Skipped      uint64
+	BytesSkipped uint64
+	FloodSince   time.Time
+}
 
 // The privileged ES collector's spool (the collector daemon writes it as root).
 const ESPoolPath = "/var/db/secure-agent/es-spool.jsonl"
@@ -46,6 +70,15 @@ type ESServiceSnapshot struct {
 	SpoolSize   int64     `json:"spool_size"`
 	SpoolMtime  time.Time `json:"spool_mtime"`
 	HelperMtime time.Time `json:"helper_mtime"`
+
+	// Flooding and UnparsedShare come from the tailer's drain stats (nil
+	// when the daemon does not tail a spool): Flooding is true while the
+	// tailer is having to skip past its per-tick budget; UnparsedShare is
+	// the fraction of lines in the last drain that did not parse.
+	// BytesSkipped is how many tail bytes the last drain skipped in bulk.
+	Flooding      bool    `json:"flooding"`
+	UnparsedShare float64 `json:"unparsed_share"`
+	BytesSkipped  uint64  `json:"bytes_skipped"`
 }
 
 // SpoolState renders the spool facts for humans ("3.2 MB, updated 12 min ago").
@@ -158,6 +191,32 @@ type SpoolTailer struct {
 	// the supervisor's coverage heartbeat: a tailer whose spool stopped
 	// growing must not read as healthy coverage.
 	OnProduce func()
+
+	statsMu sync.Mutex
+	stats   SpoolStats
+}
+
+// Stats returns the counters from the tailer's most recent drain. Safe to
+// call from another goroutine (the status probe) while the tailer polls.
+func (t *SpoolTailer) Stats() SpoolStats {
+	t.statsMu.Lock()
+	defer t.statsMu.Unlock()
+	return t.stats
+}
+
+// recordDrain publishes one tick's counters. FloodSince starts on the first
+// skipping tick and holds until a tick drains fully within budget.
+func (t *SpoolTailer) recordDrain(s SpoolStats, skipped bool) {
+	t.statsMu.Lock()
+	defer t.statsMu.Unlock()
+	if skipped {
+		if t.stats.FloodSince.IsZero() {
+			s.FloodSince = time.Now()
+		} else {
+			s.FloodSince = t.stats.FloodSince
+		}
+	}
+	t.stats = s
 }
 
 func NewSpoolTailer(b *bus.Bus) *SpoolTailer {
@@ -251,17 +310,28 @@ func (t *SpoolTailer) drainOnce(offset int64) int64 {
 		return offset
 	}
 
+	unread := st.Size() - offset
+	overBudget := unread > spoolDrainBudget
+
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
 	var lastGood int64
+	var linesThisTick, parsedThisTick uint64
 	published := false
+	budgetHit := false
 	for scanner.Scan() {
 		line := scanner.Bytes()
+		linesThisTick++
 		if e, ok := ParseESLine(line); ok {
 			t.bus.Publish(e)
 			published = true
+			parsedThisTick++
 		}
 		lastGood += int64(len(line)) + 1
+		if overBudget && lastGood >= spoolDrainBudget {
+			budgetHit = true
+			break
+		}
 	}
 	if published && t.OnProduce != nil {
 		t.OnProduce()
@@ -276,7 +346,9 @@ func (t *SpoolTailer) drainOnce(offset int64) int64 {
 			if rest := info.Size() - offset - lastGood; rest > 0 {
 				// Skip the stuck line plus its terminator.
 				if skip := rest; skip > 8<<20 {
-					return offset + lastGood + skip // giant garbage: drop it all
+					resume := offset + lastGood + skip // giant garbage: drop it all
+					t.recordDrain(SpoolStats{Lines: linesThisTick, Parsed: parsedThisTick, Skipped: 1, BytesSkipped: uint64(skip)}, false)
+					return resume
 				}
 				skipBuf := make([]byte, 64*1024)
 				for rest := info.Size() - offset - lastGood; rest > 0; {
@@ -289,17 +361,71 @@ func (t *SpoolTailer) drainOnce(offset int64) int64 {
 						break
 					}
 					if i := indexByte(skipBuf[:read], '\n'); i >= 0 {
-						return offset + lastGood + int64(i) + 1
+						resume := offset + lastGood + int64(i) + 1
+						t.recordDrain(SpoolStats{Lines: linesThisTick, Parsed: parsedThisTick}, false)
+						return resume
 					}
 					rest -= int64(read)
 					lastGood += int64(read)
 				}
+				t.recordDrain(SpoolStats{Lines: linesThisTick, Parsed: parsedThisTick}, false)
 				return offset + lastGood
 			}
 		}
 		log.Printf("collect: spool scanner error at offset %d: %v", offset+lastGood, err)
 	}
-	return offset + lastGood
+
+	resume := offset + lastGood
+	if budgetHit {
+		// The unread tail exceeded the budget and the scan loop cut off
+		// mid-tail (not on a parse error): the rest is skipped in bulk —
+		// counted by newline, never handed to the scanner or the parser.
+		skipTo, skippedLines, skippedBytes := skipTail(f, resume, st.Size())
+		t.recordDrain(SpoolStats{
+			Lines:        linesThisTick + skippedLines,
+			Parsed:       parsedThisTick,
+			Skipped:      skippedLines,
+			BytesSkipped: skippedBytes,
+		}, true)
+		return skipTo
+	}
+	t.recordDrain(SpoolStats{Lines: linesThisTick, Parsed: parsedThisTick}, false)
+	return resume
+}
+
+// skipTail counts complete lines and bytes from `from` to `to` without
+// parsing them, reading in fixed chunks so an arbitrarily large tail costs
+// O(bytes) newline-scanning, not a scanner token per line. It returns the
+// offset to resume from: `to` when the tail ends on a newline, otherwise the
+// last newline before `to` — a still-being-written partial line is left for
+// the next tick to complete.
+func skipTail(f *os.File, from, to int64) (resume int64, lines, bytesSkipped uint64) {
+	if to <= from {
+		return from, 0, 0
+	}
+	buf := make([]byte, 64*1024)
+	lastNL := from
+	pos := from
+	for pos < to {
+		n := int64(len(buf))
+		if rem := to - pos; rem < n {
+			n = rem
+		}
+		read, err := f.ReadAt(buf[:n], pos)
+		if read <= 0 {
+			break
+		}
+		chunk := buf[:read]
+		lines += uint64(bytes.Count(chunk, []byte{'\n'}))
+		if i := bytes.LastIndexByte(chunk, '\n'); i >= 0 {
+			lastNL = pos + int64(i) + 1
+		}
+		pos += int64(read)
+		if err != nil {
+			break
+		}
+	}
+	return lastNL, lines, uint64(lastNL - from)
 }
 
 func indexByte(b []byte, c byte) int {

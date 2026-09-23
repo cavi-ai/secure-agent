@@ -87,7 +87,7 @@ type doctorProbe struct {
 var doctorProbes = []doctorProbe{
 	{"hook-registered", "Guard hook registered", "Run Setup → Harness hooks", checkHookRegistered},
 	{"hook-active", "Guard hook active", "Run Setup → Harness hooks; the hook fires on every agent Bash tool call", checkHookActive},
-	{"file-telemetry", "File telemetry", "System Settings → Privacy & Security → Full Disk Access → Secure Agent, or the Setup card", checkFileTelemetry},
+	{"file-telemetry", "File telemetry", "System Settings → Privacy & Security → Full Disk Access → Secure Agent, or the Setup card — a flooding writer: Reinstall the file telemetry helper from the Setup card", checkFileTelemetry},
 	{"collectors", "Collectors", "Restart Secure Agent from the menu bar; file monitoring that keeps stopping needs Full Disk Access (Setup)", checkCollectors},
 	{"trace-coverage", "Trace coverage", "Restart Secure Agent; a harness that stays untraced has no transcript reader running", checkTraceCoverage},
 	{"session-identity", "Session identity", "Check the Sessions tab for unnamed sessions; their processes were not recognized as a harness", checkSessionIdentity},
@@ -190,6 +190,8 @@ func checkFileTelemetry(f doctorFacts) (string, string) {
 		return doctorSkip, "not spool-based"
 	}
 	switch {
+	case esServiceFlooding(*es):
+		return doctorFail, esFloodingDetail(*es)
 	case es.State == "not-loaded":
 		return doctorFail, "root service not loaded"
 	case esServiceFailing(es.State):

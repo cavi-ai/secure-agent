@@ -711,10 +711,11 @@ func startCollectors(ctx context.Context, sup *supervise.Supervisor, supReg *sup
 
 	switch {
 	case collect.SpoolAvailable():
+		tailer := collect.NewSpoolTailer(b)
+		collect.ESServiceProbe = spoolServiceProbe(tailer)
 		go sup.Run(ctx, "eslogger", func(c context.Context) error {
-			t := collect.NewSpoolTailer(b)
-			t.OnProduce = func() { supReg.MarkProduced("eslogger") }
-			return t.Run(c)
+			tailer.OnProduce = func() { supReg.MarkProduced("eslogger") }
+			return tailer.Run(c)
 		})
 		log.Printf("file telemetry: tailing privileged ES collector spool")
 	case os.Geteuid() == 0 && collect.ESLoggerAvailable():
@@ -787,4 +788,31 @@ func startCollectors(ctx context.Context, sup *supervise.Supervisor, supReg *sup
 			}
 		})
 	}
+}
+
+// spoolServiceProbe wraps collect.ESServiceState with the live tailer's
+// drain stats, so a flooding writer (garbage lines drowning the per-tick
+// budget) reads as a posture/doctor failure even while the root service and
+// the tailer's own produce-heartbeat both look healthy.
+func spoolServiceProbe(t *collect.SpoolTailer) func() (collect.ESServiceSnapshot, error) {
+	return func() (collect.ESServiceSnapshot, error) {
+		snap, err := collect.ESServiceState()
+		if err != nil {
+			return snap, err
+		}
+		stats := t.Stats()
+		snap.Flooding = !stats.FloodSince.IsZero()
+		snap.UnparsedShare = unparsedShare(stats)
+		snap.BytesSkipped = stats.BytesSkipped
+		return snap, nil
+	}
+}
+
+// unparsedShare is the fraction of lines in the tailer's last drain that did
+// not parse; 0 when the tailer has not drained anything yet.
+func unparsedShare(s collect.SpoolStats) float64 {
+	if s.Lines == 0 {
+		return 0
+	}
+	return float64(s.Lines-s.Parsed) / float64(s.Lines)
 }
