@@ -14,6 +14,18 @@ function escapeHTML(str) {
     .replace(/"/g, '&quot;');
 }
 
+// applyInlineMetrics: the console CSP (style-src 'self') drops style
+// attributes parsed from markup, so renderers carry sizes in data attributes
+// (data-left / data-w in percent, data-harness-color) and callers apply them
+// here after each innerHTML assignment — CSSOM writes from script are
+// allowed under that policy. Touches only the subtree it is handed.
+function applyInlineMetrics(root) {
+  if (!root) return;
+  root.querySelectorAll('[data-left]').forEach(el => el.style.setProperty('left', el.dataset.left + '%'));
+  root.querySelectorAll('[data-w]').forEach(el => el.style.setProperty('width', el.dataset.w + '%'));
+  root.querySelectorAll('[data-harness-color]').forEach(el => el.style.setProperty('--harness-color', el.dataset.harnessColor));
+}
+
 // fmtTime: deterministic local HH:MM:SS. toLocaleTimeString varies by locale
 // (zero-padding, a "24:00" midnight quirk in some), which can re-wrap the
 // 68px timeline column — build the string by hand instead.
@@ -116,44 +128,71 @@ function sessionShort(id) {
   return String(id || '').slice(0, 8);
 }
 
-// harnessMeta: per-harness identity for the console — a brand color and a
-// short glyph so "claude", "cursor" and "codex" rows are distinguishable at a
-// glance (they were all identical before). Mirrors the menubar's AgentIdentity
-// palette so the two surfaces agree. Pure: returns data, no DOM.
+// harnessMeta: per-harness identity for the console — display name, brand
+// color, and the sprite symbol of its mark (index.html, #logo-*). Needles
+// match the harness names the daemon reports by substring, first match wins,
+// so "cursor-ide" is listed before "cursor". Infra entries (IDEs, local model
+// servers) are tracked but shown apart and never counted as agents. Known
+// harnesses without a mark keep a text glyph. Colors must match the .hk-<key>
+// rules in style.css. Pure: returns data, no DOM.
+const HARNESS_TABLE = [
+  { needle: 'claude', key: 'claude', label: 'Claude Code', color: '#D97757', logo: 'logo-claude' },
+  { needle: 'cursor-ide', key: 'cursor-ide', label: 'Cursor', color: '#000000', logo: 'logo-cursor', tile: 'light', infra: true },
+  { needle: 'cursor', key: 'cursor', label: 'Cursor', color: '#000000', logo: 'logo-cursor', tile: 'light' },
+  { needle: 'codex', key: 'codex', label: 'Codex', color: '#10A37F', logo: 'logo-codex' },
+  { needle: 'opencode', key: 'opencode', label: 'opencode', color: '#000000', logo: 'logo-opencode' },
+  { needle: 'openclaw', key: 'openclaw', label: 'OpenClaw', color: 'hsl(342 62% 62%)', glyph: 'O' },
+  { needle: 'antigravity', key: 'agy', label: 'Antigravity', color: '#8E75B2', logo: 'logo-gemini' },
+  { needle: 'agy', key: 'agy', label: 'Antigravity', color: '#8E75B2', logo: 'logo-gemini' },
+  { needle: 'gemini', key: 'gemini', label: 'Gemini', color: '#8E75B2', logo: 'logo-gemini' },
+  { needle: 'windsurf', key: 'windsurf', label: 'Windsurf', color: '#0B100F', logo: 'logo-windsurf' },
+  { needle: 'aider', key: 'aider', label: 'Aider', color: 'hsl(20 90% 58%)', glyph: '◉' },
+  { needle: 'codeium', key: 'codeium', label: 'Codeium', color: 'hsl(201 88% 46%)', glyph: '◈' },
+  { needle: 'copilot', key: 'copilot', label: 'GitHub Copilot', color: 'hsl(220 12% 60%)', glyph: '◍' },
+  { needle: 'ollama', key: 'ollama', label: 'Ollama', color: '#000000', logo: 'logo-ollama', infra: true },
+  { needle: 'lm-studio', key: 'lm-studio', label: 'LM Studio', color: '#000000', logo: 'logo-lm-studio', infra: true },
+  { needle: 'lmstudio', key: 'lm-studio', label: 'LM Studio', color: '#000000', logo: 'logo-lm-studio', infra: true },
+];
+
 function harnessMeta(name) {
   const key = String(name || '').toLowerCase();
-  const known = [
-    ['claude', '✳', 'hsl(18 60% 58%)'],      // Anthropic clay
-    ['cursor', '▰', 'hsl(220 8% 62%)'],       // Cursor near-black (lightened)
-    ['codex', '⬡', 'hsl(168 68% 42%)'],       // OpenAI teal
-    ['opencode', '〈', 'hsl(258 90% 72%)'],
-    ['antigravity', '▲', 'hsl(233 90% 68%)'],
-    ['agy', '▲', 'hsl(233 90% 68%)'],
-    ['windsurf', '≋', 'hsl(178 82% 38%)'],
-    ['aider', '◉', 'hsl(20 90% 58%)'],
-    ['gemini', '✦', 'hsl(218 88% 64%)'],
-    ['codeium', '◈', 'hsl(201 88% 46%)'],
-    ['copilot', '◍', 'hsl(220 12% 60%)'],
-    ['ollama', '◐', 'hsl(0 0% 70%)'],
-    ['lm-studio', '◧', 'hsl(210 50% 48%)'],
-  ];
-  for (const [needle, glyph, color] of known) {
-    if (key.includes(needle)) return { glyph, color, known: true };
+  for (const h of HARNESS_TABLE) {
+    if (!key.includes(h.needle)) continue;
+    return {
+      key: h.key, label: h.label, color: h.color, logo: h.logo || '',
+      glyph: h.glyph || '', tile: h.tile || '', infra: !!h.infra, known: true,
+    };
   }
   // Unknown harness: deterministic hue from the name, first letter as glyph.
   let h = 2166136261;
   for (const b of key) h = (h ^ b.charCodeAt(0)) >>> 0, h = Math.imul(h, 16777619) >>> 0;
-  return { glyph: (name || '?').trim().slice(0, 1).toUpperCase() || '?',
-           color: `hsl(${h % 360} 62% 62%)`, known: false };
+  return {
+    key: key.trim() || 'agent', label: familyTitle(String(name || '').trim() || 'agent'),
+    color: `hsl(${h % 360} 62% 62%)`, logo: '',
+    glyph: (name || '?').trim().slice(0, 1).toUpperCase() || '?',
+    tile: '', infra: false, known: false,
+  };
 }
 
-// harnessChipHTML: the icon tile + label used in list rows. The tile carries
-// the harness color; aria-hidden so screen readers read the label once.
-function harnessChipHTML(name) {
+// harnessChipHTML: the harness mark for list rows and group heads. A known
+// mark renders white on its brand tile (Cursor dark on a light tile); the
+// tile color comes from the .hk-<key> class because the console CSP
+// (style-src 'self') drops inline style attributes. Unknown harnesses keep
+// the hashed-hue initial, applied by applyInlineMetrics. opts.label appends
+// the display name as text.
+function harnessChipHTML(name, opts) {
   const m = harnessMeta(name);
-  return `<span class="harness-chip" title="${escapeHTML(name || 'agent')}">`
-    + `<span class="harness-glyph" style="--harness-color:${m.color}" aria-hidden="true">${escapeHTML(m.glyph)}</span>`
-    + `</span>`;
+  let mark;
+  if (m.logo) {
+    mark = `<span class="harness-tile hk-${escapeHTML(m.key)}${m.tile === 'light' ? ' light' : ''}" aria-hidden="true">`
+      + `<svg class="harness-logo" aria-hidden="true"><use href="#${escapeHTML(m.logo)}"/></svg></span>`;
+  } else if (m.known) {
+    mark = `<span class="harness-glyph hk-${escapeHTML(m.key)}" aria-hidden="true">${escapeHTML(m.glyph)}</span>`;
+  } else {
+    mark = `<span class="harness-glyph" data-harness-color="${escapeHTML(m.color)}" aria-hidden="true">${escapeHTML(m.glyph)}</span>`;
+  }
+  const label = opts && opts.label ? `<span class="harness-label">${escapeHTML(m.label)}</span>` : '';
+  return `<span class="harness-chip" title="${escapeHTML(m.known ? m.label : (name || 'agent'))}">${mark}${label}</span>`;
 }
 
 // filterEventsBySession: the timeline's session drill-down. Client-side over
@@ -187,30 +226,183 @@ function filterSessionRows(rows, q) {
   });
 }
 
-// groupSessionSections: organize the session rail so live and dead work are
-// not interleaved. Active first, then idle, then ended — and the ended ones
-// collapse into their own section so a hundred finished codex runs do not
-// bury the three sessions that are actually working. Pure; the console and
-// the DOM tests both consume it.
-function groupSessionSections(rows) {
-  const active = [];
-  const idle = [];
-  const ended = [];
-  for (const r of rows || []) {
-    const st = (r && r.status) || 'active';
-    if (st === 'ended') ended.push(r);
-    else if (st === 'idle') idle.push(r);
-    else active.push(r);
+// groupSessionsByHarness: the Sessions rail, harness-first. One group per
+// harness with its live families (active before idle, newest first) and an
+// ended tail. A session whose parent_id names another listed session nests
+// one level under its top-most listed ancestor, walking up only while the
+// ancestor sits in the same group and the same live/ended half. Groups order
+// by their most recent live activity; groups with nothing live sink to the
+// bottom. Infra (by harness, or by the /status agent kind) never joins the
+// rail: it folds into one trailing "Infrastructure" group of RSS totals.
+// Pure; the console and the tests both consume it.
+function groupSessionsByHarness(sessions, trees, agents) {
+  const list = (sessions || []).filter(Boolean);
+  const infraKeys = new Set();
+  for (const a of agents || []) if (a && a.kind === 'infra') infraKeys.add(harnessMeta(a.name).key);
+  const isInfra = (m) => m.infra || infraKeys.has(m.key);
+  const statusOf = (s) => (s.status === 'ended' || s.status === 'idle' ? s.status : 'active');
+  const isLive = (s) => statusOf(s) !== 'ended';
+  const seenOf = (s) => String(s.last_seen_at || '');
+  const keyOf = new Map(list.map(s => [s, harnessMeta(s.harness).key]));
+  const byId = new Map(list.map(s => [s.id, s]));
+
+  // A parent_id cycle has no top: its members stay top-level.
+  const topOf = (s) => {
+    let cur = s;
+    const visited = new Set([s]);
+    for (;;) {
+      const p = cur.parent_id ? byId.get(cur.parent_id) : null;
+      if (p && visited.has(p)) return s;
+      if (!p || keyOf.get(p) !== keyOf.get(s) || isLive(p) !== isLive(s)) return cur;
+      visited.add(p);
+      cur = p;
+    }
+  };
+
+  const groups = new Map();
+  const families = new Map();
+  for (const s of list) {
+    const m = harnessMeta(s.harness);
+    if (isInfra(m)) continue;
+    if (!groups.has(m.key)) groups.set(m.key, { key: m.key, label: m.label, infra: false, live: [], ended: [], lastLive: '', lastSeen: '' });
+    const g = groups.get(m.key);
+    if (seenOf(s) > g.lastSeen) g.lastSeen = seenOf(s);
+    if (isLive(s) && seenOf(s) > g.lastLive) g.lastLive = seenOf(s);
+    const top = topOf(s);
+    if (!families.has(top)) {
+      const fam = { session: top, children: [] };
+      families.set(top, fam);
+      (isLive(top) ? g.live : g.ended).push(fam);
+    }
+    if (top !== s) families.get(top).children.push(s);
   }
-  const byRecency = (a, b) => String(b.last_seen_at || b.lastSeen || '') < String(a.last_seen_at || a.lastSeen || '') ? -1 : 1;
-  active.sort(byRecency);
-  idle.sort(byRecency);
-  ended.sort(byRecency);
-  const sections = [];
-  if (active.length) sections.push({ key: 'active', label: 'Working now', rows: active });
-  if (idle.length) sections.push({ key: 'idle', label: 'Idle', rows: idle });
-  if (ended.length) sections.push({ key: 'ended', label: 'Ended', rows: ended, collapsed: true });
-  return sections;
+
+  const byRecency = (a, b) => (seenOf(b) > seenOf(a) ? 1 : seenOf(b) < seenOf(a) ? -1 : 0);
+  const famSeen = (f) => [f.session, ...f.children].map(seenOf).sort().pop();
+  const famRank = (f) => ([f.session, ...f.children].some(s => statusOf(s) === 'active') ? 0 : 1);
+  for (const g of groups.values()) {
+    for (const f of [...g.live, ...g.ended]) f.children.sort(byRecency);
+    g.live.sort((a, b) => famRank(a) - famRank(b) || (famSeen(b) > famSeen(a) ? 1 : famSeen(b) < famSeen(a) ? -1 : 0));
+    g.ended.sort((a, b) => (famSeen(b) > famSeen(a) ? 1 : famSeen(b) < famSeen(a) ? -1 : 0));
+  }
+  const ordered = [...groups.values()].sort((a, b) => {
+    if (!!a.lastLive !== !!b.lastLive) return a.lastLive ? -1 : 1;
+    const ka = a.lastLive || a.lastSeen, kb = b.lastLive || b.lastSeen;
+    if (ka !== kb) return kb > ka ? 1 : -1;
+    return a.key.localeCompare(b.key);
+  });
+
+  // Infra totals: live process trees when the daemon sends them, else the
+  // flat /status agent list.
+  const infra = new Map();
+  const bump = (m, rss) => {
+    if (!infra.has(m.key)) infra.set(m.key, { key: m.key, label: m.label, rss: 0 });
+    infra.get(m.key).rss += rss;
+  };
+  if (trees && trees.length) {
+    for (const t of trees) {
+      const r = (t && t.root) || {};
+      const m = harnessMeta(r.name);
+      if (isInfra(m) || r.kind === 'infra') bump(m, Number(t.rss_bytes || 0));
+    }
+  } else {
+    for (const a of agents || []) {
+      const m = harnessMeta(a && a.name);
+      if (a && (isInfra(m) || a.kind === 'infra')) bump(m, Number(a.rss_bytes || 0));
+    }
+  }
+  if (infra.size) {
+    const items = [...infra.values()].sort((a, b) => b.rss - a.rss || a.key.localeCompare(b.key));
+    ordered.push({
+      key: 'infra', label: 'Infrastructure', infra: true, live: [], ended: [],
+      items, rss: items.reduce((n, it) => n + it.rss, 0),
+    });
+  }
+  return ordered;
+}
+
+// sessionMatchesText: the text filter's fields — repo, branch, repo@branch
+// and workspace, case-insensitive. An empty query matches everything.
+function sessionMatchesText(s, text) {
+  const q = String(text || '').trim().toLowerCase();
+  if (!q) return true;
+  const repoBranch = s.repo ? `${s.repo}${s.branch ? '@' + s.branch : ''}` : '';
+  return [s.repo, s.branch, repoBranch, s.workspace]
+    .some(f => String(f || '').toLowerCase().includes(q));
+}
+
+// applySessionFilters: the rail's filter row over groupSessionsByHarness
+// output. opts.harnesses maps a harness key to false when its pill is off;
+// opts.text keeps a family when any member matches; opts.liveOnly drops
+// groups with nothing live. The infra group carries totals, not sessions, and
+// is never filtered. Pure; returns new group objects.
+function applySessionFilters(groups, opts) {
+  const o = opts || {};
+  const off = o.harnesses || {};
+  const keep = (fams) => fams.filter(f => [f.session, ...f.children].some(s => sessionMatchesText(s, o.text)));
+  const out = [];
+  for (const g of groups || []) {
+    if (g.infra) { out.push(g); continue; }
+    if (off[g.key] === false) continue;
+    const live = keep(g.live);
+    const ended = keep(g.ended);
+    if (!live.length && !ended.length) continue;
+    if (o.liveOnly && !live.length) continue;
+    out.push({ ...g, live, ended });
+  }
+  return out;
+}
+
+// familySize: sessions in a list of families, sub-sessions included.
+function familySize(fams) {
+  return (fams || []).reduce((n, f) => n + 1 + f.children.length, 0);
+}
+
+// sessionGroupCounts: the group head's "3 active · 1 idle · 12 ended".
+function sessionGroupCounts(g) {
+  const c = { active: 0, idle: 0, ended: 0 };
+  for (const f of [...(g.live || []), ...(g.ended || [])]) {
+    for (const s of [f.session, ...f.children]) {
+      c[s.status === 'ended' || s.status === 'idle' ? s.status : 'active']++;
+    }
+  }
+  return ['active', 'idle', 'ended'].filter(k => c[k]).map(k => `${c[k]} ${k}`).join(' · ');
+}
+
+// sessionCountStrip: the rail's one-line census — live sessions, harnesses
+// with live work, and the daemon's coverage (/status.coverage) when it has a
+// live harness count.
+function sessionCountStrip(groups, coverage) {
+  let n = 0;
+  let k = 0;
+  for (const g of groups || []) {
+    if (g.infra) continue;
+    const live = familySize(g.live);
+    n += live;
+    if (live) k++;
+  }
+  const parts = [`Sessions ${n}`, `Harnesses ${k}`];
+  if (coverage && coverage.harnesses_active > 0) parts.push(`seeing ${coverage.harnesses_seen}/${coverage.harnesses_active}`);
+  return parts.join(' · ');
+}
+
+// harnessPillsHTML: one toggle pill per harness, shared by the Sessions and
+// Agents filter rows. harnesses[key] === false renders the pill off.
+function harnessPillsHTML(keys, harnesses) {
+  const off = harnesses || {};
+  return (keys || []).map(k => {
+    const on = off[k] !== false;
+    return `<button type="button" class="harness-pill${on ? '' : ' off'}" data-action="toggle-harness" data-harness="${escapeHTML(k)}" aria-pressed="${on}">${harnessChipHTML(k, { label: true })}</button>`;
+  }).join('');
+}
+
+// middleTruncate: keep both ends of a long path — the root says where, the
+// tail says which — and elide the middle.
+function middleTruncate(str, max) {
+  const s = String(str || '');
+  if (s.length <= max) return s;
+  const keep = max - 1;
+  return s.slice(0, Math.ceil(keep / 2)) + '…' + s.slice(s.length - Math.floor(keep / 2));
 }
 
 function unactedLast24h(flags, nowMs) {
@@ -399,7 +591,7 @@ function hbarsHTML(rows, opts) {
     const pct = Math.max(2, (r.value / max) * 100);
     return `<div class="hbar-row">
       <span class="hbar-label" title="${escapeHTML(r.titleAttr || r.label)}">${escapeHTML(r.label)}</span>
-      <span class="hbar-track"><span class="hbar-fill ${r.cls || ''}" style="width:${pct.toFixed(1)}%"></span></span>
+      <span class="hbar-track"><span class="hbar-fill ${r.cls || ''}" data-w="${pct.toFixed(1)}"></span></span>
       <span class="hbar-val">${escapeHTML(fmt(r.value))}</span>
       ${r.sub ? `<span class="hbar-sub">${escapeHTML(r.sub)}</span>` : ''}
     </div>`;
@@ -483,43 +675,69 @@ function childrenOf(root, members) {
   return (members || []).filter(m => Number(m.pid) !== rid && Number(m.root_pid || m.ppid) === rid);
 }
 
-function groupAgents(agents) {
-  const byName = new Map();
+// groupAgentsByHarness: the Agents tab, harness-first like the Sessions
+// rail. One group per harness holding its instances (process-tree roots,
+// most recent activity first) with their helper processes. Groups order by
+// most recent activity. A group is infra when the harness is (IDEs, model
+// servers) or the daemon tags a member kind=infra; callers show infra apart
+// and never count it as agents. Pure.
+function groupAgentsByHarness(agents) {
+  const byKey = new Map();
   for (const a of agents || []) {
-    const name = a.name || 'unknown';
-    if (!byName.has(name)) byName.set(name, []);
-    byName.get(name).push(a);
+    if (!a) continue;
+    const m = harnessMeta(a.name);
+    if (!byKey.has(m.key)) byKey.set(m.key, { key: m.key, label: m.label, infra: m.infra, members: [], lastSeen: '' });
+    const g = byKey.get(m.key);
+    if (a.kind === 'infra') g.infra = true;
+    if (a.last_seen_at && a.last_seen_at > g.lastSeen) g.lastSeen = a.last_seen_at;
+    g.members.push(a);
   }
-  const families = [];
-  for (const [name, members] of byName) {
-    const roots = members.filter(a => isFamilyRoot(a, members));
-    let earliest = '';
-    let rss = 0;
-    let orphanCount = 0;
-    for (const m of members) {
-      if (m.rss_bytes) rss += Number(m.rss_bytes);
-      if (m.is_orphan) orphanCount++;
-      if (m.started_at && (!earliest || m.started_at < earliest)) earliest = m.started_at;
-    }
-    families.push({
-      name,
-      title: familyTitle(name),
-      members,
-      roots,
-      earliest,
-      rss,
-      orphanCount
-    });
-  }
-  families.sort((a, b) => a.name.localeCompare(b.name));
-  return families;
+  const newest = (x, y) => (x > y ? -1 : x < y ? 1 : 0);
+  const groups = [...byKey.values()].map(g => {
+    const instances = g.members
+      .filter(a => isFamilyRoot(a, g.members))
+      .map(root => ({ root, children: childrenOf(root, g.members) }))
+      .sort((x, y) => newest(String(x.root.last_seen_at || ''), String(y.root.last_seen_at || '')));
+    return { key: g.key, label: g.label, infra: g.infra, lastSeen: g.lastSeen, instances };
+  });
+  return groups.sort((a, b) => newest(a.lastSeen, b.lastSeen) || a.key.localeCompare(b.key));
 }
 
-function familyShouldExpand(family, familyCount, totalInstances, userOpen) {
-  if (userOpen && Object.prototype.hasOwnProperty.call(userOpen, family.name)) {
-    return !!userOpen[family.name];
+// agentGroupTotals: the group head's figures over the instances shown —
+// instances, processes, RSS, CPU (null when no process reports it), last
+// seen, leftovers.
+function agentGroupTotals(g) {
+  const t = { instances: g.instances.length, processes: 0, rss: 0, cpu: null, lastSeen: '', orphans: 0 };
+  for (const inst of g.instances) {
+    for (const a of [inst.root, ...inst.children]) {
+      t.processes++;
+      t.rss += Number(a.rss_bytes || 0);
+      if (a.cpu_percent !== null && a.cpu_percent !== undefined && Number.isFinite(Number(a.cpu_percent))) {
+        t.cpu = (t.cpu || 0) + Number(a.cpu_percent);
+      }
+      if (a.last_seen_at && a.last_seen_at > t.lastSeen) t.lastSeen = a.last_seen_at;
+      if (a.is_orphan) t.orphans++;
+    }
   }
-  return familyCount === 1 || totalInstances <= 3 || family.orphanCount > 0;
+  return t;
+}
+
+// applyAgentFilters: the Agents filter row, the same pill and text state as
+// the Sessions rail. Text matches an instance's repo, branch, workspace or
+// cwd; helpers ride along with their instance. Infra groups are never
+// filtered. Pure; returns new group objects.
+function applyAgentFilters(groups, opts) {
+  const o = opts || {};
+  const off = o.harnesses || {};
+  const hit = a => sessionMatchesText(a, o.text) || sessionMatchesText({ workspace: a.cwd }, o.text);
+  const out = [];
+  for (const g of groups || []) {
+    if (g.infra) { out.push(g); continue; }
+    if (off[g.key] === false) continue;
+    const instances = g.instances.filter(i => [i.root, ...i.children].some(hit));
+    if (instances.length) out.push({ ...g, instances });
+  }
+  return out;
 }
 
 function cwdLabel(cwd) {
@@ -559,7 +777,7 @@ function sessionWaterfallHTML(events) {
   const bars = toolCalls.map(e => {
     const err = e.tool_status === 'error' ? ' error' : '';
     const dur = e.duration_ms ? fmtDurationMs(e.duration_ms) : '';
-    return `<div class="wf-row"><span class="wf-name">${escapeHTML(e.tool || 'tool')}<span class="wf-dur">${escapeHTML(dur)}</span></span><span class="wf-track"><span class="wf-bar${err}" style="left:${pct(startOf(e)).toFixed(2)}%;width:${wid(startOf(e), endOf(e)).toFixed(2)}%"></span></span></div>`;
+    return `<div class="wf-row"><span class="wf-name">${escapeHTML(e.tool || 'tool')}<span class="wf-dur">${escapeHTML(dur)}</span></span><span class="wf-track"><span class="wf-bar${err}" data-left="${pct(startOf(e)).toFixed(2)}" data-w="${wid(startOf(e), endOf(e)).toFixed(2)}"></span></span></div>`;
   }).join('');
 
   const dotCls = e => {
@@ -568,7 +786,7 @@ function sessionWaterfallHTML(events) {
     return '';
   };
   const dotRow = dots.length
-    ? `<div class="wf-row"><span class="wf-name">file · net · guard</span><span class="wf-track">${dots.map(e => `<span class="wf-dot ${dotCls(e)}" style="left:${pct(startOf(e)).toFixed(2)}%"></span>`).join('')}</span></div>`
+    ? `<div class="wf-row"><span class="wf-name">file · net · guard</span><span class="wf-track">${dots.map(e => `<span class="wf-dot ${dotCls(e)}" data-left="${pct(startOf(e)).toFixed(2)}"></span>`).join('')}</span></div>`
     : '';
 
   const modelRows = modelCalls.map(e => {
@@ -597,92 +815,13 @@ function fmtCompact(n) {
   return String(n);
 }
 
-// Durable sessions (GET /sessions via /snapshot): one row per harness
-// session, alive or ended — history survives process exit. Live process
-// trees are joined by root pid for RSS/helpers/kill; ended rows render
-// dimmed with their end time and no actions.
-//
-// liveCwd is the joined process tree's working directory, used only when the
-// session's own workspace is unhelpful ("/" or empty) — a provisional
-// process-tree session otherwise rendered as "claude · proc-132", which tells
-// the operator nothing about which project the session is working in.
-function sessionLabelDurable(s, liveCwd) {
-  const name = s.harness || 'agent';
-  if (s.repo) return `${name} · ${s.repo}${s.branch ? '@' + s.branch : ''}`;
-  const ws = cwdLabel(s.workspace);
-  if (ws) return `${name} · ${ws}`;
-  const live = cwdLabel(liveCwd);
-  if (live) return `${name} · ${live}`;
-  const short = sessionShort(s.id);
-  return short ? `${name} · ${short}` : name;
-}
-
-function sessionRowsDurable(sessions, trees) {
-  const byRoot = {};
-  (trees || []).forEach(t => {
-    if (t.root && t.root.pid) byRoot[Number(t.root.pid)] = t;
-  });
-  return (sessions || []).map(s => {
-    const live = s.root_pid ? byRoot[Number(s.root_pid)] : null;
-    const children = live ? (live.children || []) : [];
-    const liveCwd = (live && live.root && live.root.cwd) || '';
-    const root = live ? live.root : {
-      pid: Number(s.root_pid || 0),
-      name: s.harness || 'agent',
-      cwd: s.workspace || '',
-      started_at: s.root_started_at || '',
-    };
-    return {
-      id: s.id || '',
-      root,
-      children,
-      label: sessionLabelDurable(s, liveCwd),
-      rss: live ? Number(live.rss_bytes || 0) : 0,
-      lastSeen: s.last_seen_at || '',
-      status: s.status || 'active',
-      confidence: s.confidence || '',
-      endedAt: s.ended_at || '',
-      pids: live ? [Number(live.root.pid), ...children.map(k => Number(k.pid))] : [],
-    };
-  });
-}
-
-function sessionBoardDurableHTML(rows, now, helpOpen) {
-  helpOpen = helpOpen || {};
-  return rows.map(row => {
-    const a = row.root;
-    const rss = fmtRSS(row.rss);
-    const ended = row.status === 'ended';
-    const seenAge = row.lastSeen ? fmtAge(row.lastSeen, now) : '';
-    const open = helpOpen[row.id] ? ' open' : '';
-    const statusChip = ended
-      ? `<span class="agent-meta-item">ended${row.endedAt ? ' ' + escapeHTML(fmtAge(row.endedAt, now)) + ' ago' : ''}</span>`
-      : row.status === 'idle'
-        ? `<span class="agent-meta-item">idle</span>`
-        : '';
-    const helpers = row.children.length
-      ? `<details class="session-helpers"${open} data-pid="${escapeHTML(row.id)}"><summary class="session-helpers-sum">${row.children.length} helper${row.children.length === 1 ? '' : 's'}</summary>${row.children.map(c => renderProcessRow(c, now, true)).join('')}</details>`
-      : '';
-    const kill = !ended && a.pid
-      ? `<button type="button" class="btn btn-danger btn-sm" data-action="kill" data-pid="${a.pid}" data-started="${escapeHTML(a.started_at || '')}" data-family="${escapeHTML(a.name || '')}"><svg class="icon"><use href="#i-power"/></svg><span>Terminate</span></button>`
-      : '';
-    const main = row.pids.length
-      ? `<button type="button" class="session-main" data-action="filter-pids" data-pids="${escapeHTML(row.pids.join(','))}" data-label="${escapeHTML(row.label)}" title="${escapeHTML(a.cwd || '')}">`
-      : `<span class="session-main" title="${escapeHTML(a.cwd || '')}">`;
-    const mainEnd = row.pids.length ? '</button>' : '</span>';
-    return `
-      <div class="session-row${ended ? ' stale' : ''}">
-        ${main}
-          <span class="session-label">${escapeHTML(row.label)}</span>
-          <span class="agent-pid">${escapeHTML(a.name)}${a.pid ? ' · PID ' + a.pid : ''}</span>
-          ${statusChip}
-          ${seenAge ? `<span class="agent-meta-item agent-lastseen">active ${escapeHTML(seenAge)} ago</span>` : `<span class="agent-meta-item agent-lastseen">no activity</span>`}
-          ${rss ? `<span class="agent-meta-item">${escapeHTML(rss)}</span>` : ''}
-        ${mainEnd}
-        ${kill}
-        ${helpers}
-      </div>`;
-  }).join('');
+// sessionTitle: what a session is working on — repo@branch, else the
+// workspace folder, else the live process tree's folder (a provisional
+// session's workspace can be "/"), else the short id. No harness prefix: the
+// rail group and the detail head name the harness beside it.
+function sessionTitle(s, liveCwd) {
+  if (s.repo) return `${s.repo}${s.branch ? '@' + s.branch : ''}`;
+  return cwdLabel(s.workspace) || cwdLabel(liveCwd) || sessionShort(s.id);
 }
 
 // matchesSearch: the global-search lens. Free text (already lowercased by the

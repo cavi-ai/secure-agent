@@ -802,11 +802,40 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   const sessionHelpOpen = {};
-
-  document.getElementById('session-cwd-filter')?.addEventListener('input', () => renderSessionBoard());
-
-
+  const sessionGroupOpen = {};
+  const endedSessionsOpen = {}; // harness key → ended tail expanded
   const agentGroupOpen = {};
+  const agentTreeOpen = {}; // instance root pid → helper disclosure open
+
+  // Harness filter shared by the Sessions and Agents tabs: pill states
+  // (harness key → false when switched off), the text filter, and the
+  // Sessions "live only" switch. Kept for the life of the tab, like the
+  // selected console tab.
+  const HARNESS_FILTER_KEY = 'sa.harness-filter';
+  const harnessFilter = { harnesses: {}, text: '', liveOnly: true };
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(HARNESS_FILTER_KEY) || '{}') || {};
+    if (saved.harnesses && typeof saved.harnesses === 'object') harnessFilter.harnesses = saved.harnesses;
+    if (typeof saved.text === 'string') harnessFilter.text = saved.text;
+    if (typeof saved.liveOnly === 'boolean') harnessFilter.liveOnly = saved.liveOnly;
+  } catch { /* private mode or unreadable: defaults */ }
+  const harnessTextInputs = ['session-cwd-filter', 'agent-filter-text'].map(id => document.getElementById(id)).filter(Boolean);
+  const liveOnlySwitch = document.getElementById('session-live-only');
+  function syncHarnessFilterControls() {
+    for (const el of harnessTextInputs) if (el.value !== harnessFilter.text) el.value = harnessFilter.text;
+    if (liveOnlySwitch) liveOnlySwitch.checked = harnessFilter.liveOnly;
+  }
+  function harnessFilterChanged() {
+    try { sessionStorage.setItem(HARNESS_FILTER_KEY, JSON.stringify(harnessFilter)); } catch { /* private mode */ }
+    syncHarnessFilterControls();
+    renderSessionBoard();
+    renderAgents();
+  }
+  syncHarnessFilterControls();
+  for (const el of harnessTextInputs) {
+    el.addEventListener('input', () => { harnessFilter.text = el.value; harnessFilterChanged(); });
+  }
+  liveOnlySwitch?.addEventListener('change', () => { harnessFilter.liveOnly = liveOnlySwitch.checked; harnessFilterChanged(); });
 
 
   // Posture headline: the one-glance answer, plus clickable jump-off points
@@ -963,7 +992,11 @@ document.addEventListener('DOMContentLoaded', () => {
   window.SA = {
     t: telemetryData,
     sessionHelpOpen,
+    sessionGroupOpen,
+    endedSessionsOpen,
     agentGroupOpen,
+    agentTreeOpen,
+    harnessFilter,
     setTabBadge,
     paintSessionChip,
     sessionScopeOn,
@@ -989,7 +1022,6 @@ document.addEventListener('DOMContentLoaded', () => {
     selectedResourceKey: { get() { return selectedResourceKey; }, set(v) { selectedResourceKey = v; } },
     selectedSessionId: { get() { return selectedSessionId; }, set(v) { selectedSessionId = v; } },
     sessionTimeline: { get() { return sessionTimeline; }, set(v) { sessionTimeline = v; } },
-    endedSessionsOpen: { get() { return endedSessionsOpen; }, set(v) { endedSessionsOpen = v; } },
   });
 
   // Session-first tab: selection + its trace. The timeline refetches on
@@ -997,7 +1029,6 @@ document.addEventListener('DOMContentLoaded', () => {
   let selectedSessionId = '';
   let sessionTimeline = [];
   let sessionTimelineAt = 0;
-  let endedSessionsOpen = false;
   async function loadSessionTimeline(id, force) {
     if (!id) { sessionTimeline = []; return; }
     // Throttle refetches: deltas for the selected session arrive per event.
@@ -1283,7 +1314,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   window.killOrphans = async function(family) {
     const agents = (telemetryData.status && telemetryData.status.agents) ? telemetryData.status.agents : [];
-    const orphans = agents.filter(a => a.name === family && a.is_orphan);
+    const orphans = agents.filter(a => harnessMeta(a.name).key === family && a.is_orphan);
     if (orphans.length === 0) return;
     if (!await saConfirm(`Terminate ${orphans.length} leftover ${family} process${orphans.length === 1 ? '' : 'es'}?`, { title: 'Clean up leftovers', okLabel: 'Terminate' })) return;
     for (const a of orphans) {
@@ -1663,8 +1694,23 @@ document.addEventListener('DOMContentLoaded', () => {
         window.selectSession(d.id);
         break;
       case 'toggle-ended-sessions':
-        endedSessionsOpen = !endedSessionsOpen;
+        endedSessionsOpen[d.harness] = !endedSessionsOpen[d.harness];
         renderSessionBoard();
+        break;
+      case 'toggle-harness':
+        if (harnessFilter.harnesses[d.harness] === false) delete harnessFilter.harnesses[d.harness];
+        else harnessFilter.harnesses[d.harness] = false;
+        harnessFilterChanged();
+        break;
+      case 'clear-harness-filter':
+        harnessFilter.harnesses = {};
+        harnessFilter.text = '';
+        harnessFilterChanged();
+        break;
+      case 'copy-path':
+        (navigator.clipboard ? navigator.clipboard.writeText(d.path || '') : Promise.reject(new Error('no clipboard'))).then(
+          () => showToast('Path copied', 'success'),
+          () => showToast('Copy failed — select the path from its tooltip', 'danger'));
         break;
       case 'mute-flag':
         window.muteFlag(d.rule, d.host);

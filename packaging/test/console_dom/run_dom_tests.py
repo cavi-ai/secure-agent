@@ -7,16 +7,23 @@ Covers the layer lib.test.mjs cannot: fetch orchestration, panel renderers,
 the delegation dispatch, liveness classes, and the structural guarantee that
 no inline handlers exist in the rendered page.
 
-Usage: python3 packaging/test/console_dom/run_dom_tests.py
+Usage: python3 packaging/test/console_dom/run_dom_tests.py [--screenshot DIR]
+       --screenshot DIR also writes the mock-rendered Sessions and Agents
+       tabs at 1280x800 in both themes: DIR/{sessions,agents}-{dark,light}.png,
+       and the Overview tab as DIR/overview-dark.png. Screenshots load under
+       the daemon's Content-Security-Policy header, as the console is served.
 Env:   CHROME_BIN overrides Chrome detection.
 """
 
+import argparse
+import http.server
 import os
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 WEB_DIST = os.path.join(REPO, "daemon", "internal", "api", "web_dist")
@@ -62,8 +69,39 @@ def build_harness(tmp):
         f.write(html)
 
 
-def dump_dom(chrome, tmp, query=""):
-    url = f"file://{tmp}/harness.html{query}"
+def csp_header():
+    """The Content-Security-Policy value the daemon sends, read from web.go so
+    the served harness and the daemon cannot drift."""
+    src = open(os.path.join(REPO, "daemon", "internal", "api", "web.go")).read()
+    m = re.search(r'"Content-Security-Policy",\s*"([^"]+)"', src)
+    assert m, "Content-Security-Policy header not found in web.go"
+    return m.group(1)
+
+
+def serve_with_csp(tmp):
+    """Serve the harness on loopback HTTP with the daemon's CSP header. A
+    file:// load applies no policy, so markup the policy drops (inline style
+    attributes) renders there and passes."""
+    policy = csp_header()
+
+    class Handler(http.server.SimpleHTTPRequestHandler):
+        def __init__(self, *a, **kw):
+            super().__init__(*a, directory=tmp, **kw)
+
+        def end_headers(self):
+            self.send_header("Content-Security-Policy", policy)
+            super().end_headers()
+
+        def log_message(self, *a):
+            pass
+
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv, f"http://127.0.0.1:{srv.server_address[1]}"
+
+
+def dump_dom(chrome, tmp, query="", origin=None):
+    url = f"{origin or 'file://' + tmp}/harness.html{query}"
     out = subprocess.run(
         [chrome, "--headless=new", "--disable-gpu", "--no-sandbox",
          "--virtual-time-budget=" + str(VIRTUAL_TIME_MS), "--dump-dom", url],
@@ -75,15 +113,43 @@ def dump_dom(chrome, tmp, query=""):
     return out.stdout
 
 
+SHOT_SIZE = (1280, 800)
+SHOTS = (
+    ("sessions", "?tab=sessions&shot&raildemo", ("dark", "light")),
+    ("agents", "?tab=agents&shot", ("dark", "light")),
+    ("overview", "?tab=overview&shot", ("dark",)),
+)
+
+
+def screenshot(chrome, origin, query, path):
+    out = subprocess.run(
+        [chrome, "--headless=new", "--disable-gpu", "--no-sandbox", "--hide-scrollbars",
+         f"--window-size={SHOT_SIZE[0]},{SHOT_SIZE[1]}",
+         "--virtual-time-budget=" + str(VIRTUAL_TIME_MS), f"--screenshot={path}",
+         f"{origin}/harness.html{query}"],
+        capture_output=True, text=True, timeout=120,
+    )
+    if out.returncode != 0 or not os.path.isfile(path) or os.path.getsize(path) == 0:
+        print(out.stderr[-2000:], file=sys.stderr)
+        raise SystemExit(f"chrome --screenshot failed: {path}")
+
+
 def main():
+    ap = argparse.ArgumentParser(description="DOM-level console tests")
+    ap.add_argument("--screenshot", metavar="DIR",
+                    help="also write {sessions,agents}-{dark,light}.png and overview-dark.png of the mock-rendered tabs to DIR")
+    args = ap.parse_args()
     chrome = find_chrome()
     if not chrome:
         raise SystemExit("no Chrome found (set CHROME_BIN)")
     print(f"console dom tests (chrome: {chrome})")
 
     tmp = tempfile.mkdtemp(prefix="console-dom-")
+    srv = None
     try:
         build_harness(tmp)
+        srv, origin = serve_with_csp(tmp)
+        dom_csp = dump_dom(chrome, tmp, "?cspdemo&raildemo", origin)
         dom = dump_dom(chrome, tmp)
         dom_session = dump_dom(chrome, tmp, "?sessiondemo")
         dom_guard = dump_dom(chrome, tmp, "?guarddemo")
@@ -106,18 +172,83 @@ def main():
         dom_demote = dump_dom(chrome, tmp, "?demotedemo")
         dom_allowrm = dump_dom(chrome, tmp, "?allowlistdemo")
         dom_rail = dump_dom(chrome, tmp, "?raildemo")
+        dom_pill = dump_dom(chrome, tmp, "?pilldemo")
+        dom_quiet = dump_dom(chrome, tmp, "?quietdemo")
+        dom_nomatch = dump_dom(chrome, tmp, "?nomatchdemo")
+        dom_phone = dump_dom(chrome, tmp, "?phonedemo")
 
         # --- session-first tab (P3) ---
+        rail = dom.split('id="session-rail"', 1)[1].split('id="session-detail"', 1)[0]
         check("session rail renders durable sessions", dom.count('class="session-card') >= 2,
               f"cards={dom.count('class=\"session-card')}")
-        check("rail shows names not pids", "claude · api-service@main" in dom)
+        check("rail titles are repo@branch, not harness · repo",
+              '>api-service@main<' in rail and 'claude · ' not in rail)
         check("ended session marked", 'session-card ended' in dom)
+
+        # --- sessions: harness-first rail ---
+        rail_groups = re.findall(r'<details class="session-group[^"]*" data-harness="([^"]+)"', rail)
+        check("sessions rail renders one group per live harness, newest first, infra last",
+              rail_groups == ["codex", "claude", "infra"], f"groups={rail_groups}")
+        check("group head carries mark, display name and counts",
+              'data-harness="claude" open=""' in rail
+              and '<span class="harness-label">Claude Code</span>' in rail
+              and '1 active · 1 idle · 1 ended' in rail)
+        logo_refs = set(re.findall(r'<use href="#(logo-[a-z-]+)"', rail))
+        check("harness marks resolve to sprite symbols",
+              logo_refs >= {"logo-claude", "logo-codex", "logo-ollama"}
+              and all(f'<symbol id="{ref}"' in dom for ref in logo_refs), f"refs={sorted(logo_refs)}")
+        claude_group = rail.split('data-harness="claude"', 1)[1].split('<details', 1)[0]
+        check("sub-session nests under its parent",
+              claude_group.index('data-id="sess-claude-1"') < claude_group.index('session-card idle nested')
+              < claude_group.index('data-id="sess-claude-sub"'))
+        check("ended tail is collapsed by default",
+              '<div class="session-ended">' in claude_group
+              and 'data-action="toggle-ended-sessions" data-harness="claude" aria-expanded="false">Ended (1)' in claude_group)
+        infra_group = rail.split('data-harness="infra"', 1)[1]
+        check("infra sits in the last group, collapsed, with RSS totals only",
+              '<details class="session-group infra" data-harness="infra">' in rail
+              and "Ollama" in infra_group and "782 MB" in infra_group
+              and "session-card" not in infra_group and "sess-ollama-4" not in rail)
+        check("live only hides a harness with nothing running", 'data-harness="cursor"' not in rail)
+        check("live cards carry kill, ended cards do not",
+              'data-action="kill" data-pid="5821"' in rail
+              and 'data-action="kill"' not in rail.split('class="session-ended-body"', 1)[1].split('</details>', 1)[0])
+        check("count strip shows sessions, harnesses and coverage",
+              'id="session-count-strip">Sessions 3 · Harnesses 2 · seeing 2/3<' in dom)
+        check("one filter pill per live harness",
+              re.findall(r'data-action="toggle-harness" data-harness="([^"]+)" aria-pressed="true"',
+                         dom.split('id="session-harness-pills"', 1)[1].split('</div>', 1)[0]) == ["codex", "claude"])
+        pill_rail = dom_pill.split('id="session-rail"', 1)[1].split('id="session-detail"', 1)[0]
+        check("a switched-off pill hides its group",
+              'data-harness="claude"' not in pill_rail and 'data-harness="codex"' in pill_rail
+              and 'class="harness-pill off" data-action="toggle-harness" data-harness="claude" aria-pressed="false"' in dom_pill)
+        check("empty rail says all quiet", "All quiet. Nothing is running." in dom_quiet)
+        check("filter that hides everything offers to clear it",
+              "No sessions match" in dom_nomatch and 'data-action="clear-harness-filter"' in dom_nomatch)
+        check("the page, posture banner included, fits a 375px phone on Sessions and Agents",
+              'data-hscroll="sessions:0,agents:0"' in dom_phone,
+              (re.search(r'data-hscroll="[^"]*"', dom_phone) or [None])[0])
+        detail_head = dom_rail.split('class="session-detail-head"', 1)[1].split('class="wf', 1)[0]
+        check("detail head: mark, repo@branch, harness, confidence, copyable path",
+              '<h3>api-service@main</h3>' in detail_head and '#logo-claude' in detail_head
+              and '<span class="sd-harness">Claude Code</span>' in detail_head
+              and '>hook</span>' in detail_head
+              and 'data-action="copy-path" data-path="/Users/dev/workspace/api-service"' in detail_head)
         check("rail selection renders trace waterfall",
               'class="wf-bar' in dom_rail and 'Bash' in dom_rail,
               "no waterfall bars in raildemo")
         check("waterfall carries model usage row",
               "claude-sonnet-4-5" in dom_rail and "46.2k in" in dom_rail)
         check("waterfall marks tool errors", 'wf-bar error' in dom_rail)
+        csp_widths = (re.search(r'data-csp-widths="([^"]*)"', dom_csp) or [None, ""])[1]
+        widths = {k: float(v) for k, v in (kv.split(":") for kv in csp_widths.split(",") if kv)}
+        # Bash spans 31s of the 90s trace; agents hold 34.4% of memory; the
+        # smallest memory-ranked bar is 85 MB of the 782 MB leader. A dropped width
+        # renders the bar at its 2px floor, the segment at 0, the fill full.
+        check("under the daemon CSP the waterfall bar, ranked bar and memory segment keep their widths",
+              abs(widths.get("wf-bar", 0) - 34.4) < 1
+              and abs(widths.get("hbar-fill", 0) - 10.9) < 1
+              and abs(widths.get("resource-host-segment", 0) - 34.4) < 1, f"widths={csp_widths!r}")
 
         # --- telemetry wiring ---
         check("version badge comes from /status", 'id="app-version">v9.9.9-domtest<' in dom)
@@ -126,7 +257,27 @@ def main():
         check("KPI agents count", 'id="count-agents">3<' in dom)
         check("KPI flags are unacted last 24h", 'id="count-flags">2<' in dom)
         check("KPI incidents count", 'id="count-incidents">1<' in dom)
-        check("agent families grouped", dom.count('class="agent-group"') == 2)
+        agents_view = dom.split('id="agents-container"', 1)[1].split('id="fleet-col"', 1)[0]
+        agent_groups = re.findall(r'<details class="agent-group" data-harness="([^"]+)"', agents_view)
+        check("agents tab renders one group per harness, newest first",
+              agent_groups == ["codex", "claude", "cursor"], f"groups={agent_groups}")
+        check("agent group head: mark, name, instances, processes, RSS, CPU",
+              '#logo-codex' in agents_view and '<span class="harness-label">Claude Code</span>' in agents_view
+              and '1 instance · 2 processes' in agents_view and '14.5% CPU' in agents_view)
+        check("agents infra section sits last and is not counted",
+              agents_view.index('class="agent-infra"') > agents_view.rindex('<details class="agent-group" ')
+              and 'data-harness="ollama"' in agents_view.split('class="agent-infra"', 1)[1]
+              and 'id="badge-agents-count">3<' in dom)
+        check("agent instances lead with repo@branch, pid secondary",
+              '<span class="agent-row-title">api-service@main</span>' in agents_view
+              and '<span class="agent-pid">PID 5821</span>' in agents_view)
+        check("agent helpers sit behind a disclosure",
+              'PID 5822' in agents_view.split('<details class="session-helpers agent-tree" data-pid="5821"', 1)[1].split('</details>', 1)[0])
+        pill_agents = dom_pill.split('id="agents-container"', 1)[1].split('id="fleet-col"', 1)[0]
+        check("a switched-off pill hides the harness in Agents too (shared state)",
+              'data-harness="claude"' not in pill_agents and 'data-harness="codex"' in pill_agents
+              and 'class="harness-pill off" data-action="toggle-harness" data-harness="claude"'
+              in dom_pill.split('id="agent-harness-pills"', 1)[1].split('</div>', 1)[0])
         check("claude instance pid", "PID 5821" in dom)
         check("nested helper pid", "PID 5822" in dom)
         check("leftover cursor status", "leftover" in dom)
@@ -392,10 +543,10 @@ def main():
               and 'id="resource-board"' not in overview)
         check("session board has project filter", 'id="session-cwd-filter"' in dom)
         sessions = dom.split('id="session-rail"', 1)[1].split('id="session-detail"', 1)[0]
-        check("session rail lists two sessions", sessions.count('class="session-card') == 2,
+        check("session rail lists live cards and the ended tail", sessions.count('class="session-card') == 4,
               f"cards={sessions.count('class=\"session-card')}")
-        check("session cards labeled by project folder",
-              "api-service" in sessions and "web-app" in sessions)
+        check("session cards labeled by repo@branch or folder",
+              "api-service@main" in sessions and "data-pipeline@feat/etl" in sessions and ">auth<" in sessions)
         check("session card selects the session trace",
               'data-action="select-session" data-id="sess-claude-1"' in sessions)
         check("egress tab badge shows uninspected count",
@@ -489,7 +640,19 @@ def main():
               and "hidden" not in dom_session.split('id="flags-session-filter"')[1][:80])
         session_rows = dom_session.count('class="timeline-item')
         check("timeline filtered to 2 session events", session_rows == 2, f"rows={session_rows}")
+
+        if args.screenshot:
+            shot_dir = os.path.abspath(args.screenshot)
+            os.makedirs(shot_dir, exist_ok=True)
+            for name, query, themes in SHOTS:
+                for theme in themes:
+                    path = os.path.join(shot_dir, f"{name}-{theme}.png")
+                    screenshot(chrome, origin, f"{query}&theme={theme}", path)
+                    print(f"  shot  {path}")
     finally:
+        if srv:
+            srv.shutdown()
+            srv.server_close()
         shutil.rmtree(tmp, ignore_errors=True)
 
     print(f"\n{len(passed)} passed, {len(failed)} failed")

@@ -14,22 +14,31 @@ const libPath = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   '../../../daemon/internal/api/web_dist/lib.js'
 );
+const webDist = path.dirname(libPath);
+const indexHTML = readFileSync(path.join(webDist, 'index.html'), 'utf8');
+const styleCSS = readFileSync(path.join(webDist, 'style.css'), 'utf8');
 const ctx = {};
 vm.runInNewContext(readFileSync(libPath, 'utf8'), ctx, { filename: 'lib.js' });
+// tab-overview.js declares functions only, so its renderers evaluate in the
+// same context on top of lib.js.
+vm.runInContext(readFileSync(path.join(webDist, 'tab-overview.js'), 'utf8'), ctx, { filename: 'tab-overview.js' });
 const {
   escapeHTML, fmtTime, eventKey,
   advanceBuckets, bucketIndexFor, sparkPoints,
   parseMarkdownToHTML, buildEvidenceChain,
   sessionShort, filterEventsBySession, rollupSeries, flagHost,
-  familyTitle, fmtRSS, fmtAge, isFamilyRoot, childrenOf, groupAgents, familyShouldExpand,
+  familyTitle, fmtRSS, fmtAge, isFamilyRoot, childrenOf,
+  groupAgentsByHarness, agentGroupTotals, applyAgentFilters,
   cwdLabel, sessionRows, filterEventsByPids, sessionBoardHTML,
   fmtCPU, resourceImpact, resourceSparkPoints, resourceDiagnosisText,
   monitorVendorKeyIDs, inspectionVisible, vendorKeyPromoteHTML,
   scopedBySession, unactedLast24h, filterSessionRows, sseNeedsSnapshot,
   sessionStripRows, sessionNeedsYou, sessionStripHTML,
   harnessMeta, harnessChipHTML, advisorAdviceHTML,
-  groupSessionSections, endpointIdentityLine, endpointDetailHTML,
-  sessionLabelDurable, sessionRowsDurable,
+  endpointIdentityLine, endpointDetailHTML,
+  sessionTitle, groupSessionsByHarness, applySessionFilters, familySize,
+  sessionGroupCounts, sessionCountStrip, harnessPillsHTML, middleTruncate,
+  hbarsHTML, sessionWaterfallHTML, applyInlineMetrics, resourceHostContextHTML,
 } = ctx;
 
 // ---------- unified attention center ----------
@@ -281,30 +290,59 @@ test('rollupSeries: 7d window labels switch to day form', () => {
   assert.match(s.labels[167], /^\d{1,2}\/\d{1,2}$/);
 });
 
-test('groupAgents: families, roots, earliest, rss, orphans', () => {
-  const families = groupAgents([
-    { pid: 1, name: 'claude', root_pid: 1, started_at: '2026-09-09T14:00:00Z', rss_bytes: 100 },
-    { pid: 2, name: 'claude', root_pid: 1, ppid: 1, started_at: '2026-09-09T14:01:00Z', rss_bytes: 50 },
-    { pid: 3, name: 'cursor', root_pid: 3, started_at: '2026-09-09T15:00:00Z', rss_bytes: 10, is_orphan: true },
+test('groupAgentsByHarness: harness groups by recency, instances with helpers, infra apart', () => {
+  const at = (min) => new Date(Date.UTC(2026, 0, 1, 12, 0) - min * 60000).toISOString();
+  const groups = groupAgentsByHarness([
+    { pid: 1, name: 'claude', root_pid: 1, last_seen_at: at(9), rss_bytes: 100, cpu_percent: 10, repo: 'api', branch: 'main' },
+    { pid: 2, name: 'claude', root_pid: 1, ppid: 1, last_seen_at: at(1), rss_bytes: 50, cpu_percent: 5 },
+    { pid: 5, name: 'claude-code', root_pid: 5, last_seen_at: at(3), rss_bytes: 7, workspace: '/w/web' },
+    { pid: 3, name: 'cursor', root_pid: 3, last_seen_at: at(60), rss_bytes: 10, is_orphan: true },
+    { pid: 4, name: 'codex', root_pid: 4, last_seen_at: at(2), rss_bytes: 20 },
+    { pid: 6, name: 'ollama', root_pid: 6, last_seen_at: at(0), rss_bytes: 900 },
+    { pid: 7, name: 'modelsrv', kind: 'infra', root_pid: 7, last_seen_at: at(0), rss_bytes: 30 },
   ]);
-  assert.equal(families.length, 2);
-  assert.equal(families[0].name, 'claude');
-  assert.equal(families[0].roots.length, 1);
-  assert.equal(families[0].roots[0].pid, 1);
-  assert.equal(childrenOf(families[0].roots[0], families[0].members).length, 1);
-  assert.equal(families[0].earliest, '2026-09-09T14:00:00Z');
-  assert.equal(families[0].rss, 150);
-  assert.equal(families[1].orphanCount, 1);
+  // Newest activity first; infra flagged, whatever its position.
+  assert.equal(groups.map(g => g.key).join(','), 'modelsrv,ollama,claude,codex,cursor');
+  assert.equal(groups.filter(g => g.infra).map(g => g.key).join(','), 'modelsrv,ollama');
+  const claude = groups.find(g => g.key === 'claude');
+  assert.equal(claude.label, 'Claude Code');
+  // claude and claude-code are one harness; instances newest first.
+  assert.equal(claude.instances.map(i => i.root.pid).join(','), '5,1');
+  assert.equal(claude.instances[1].children.map(c => c.pid).join(','), '2');
+  const t = agentGroupTotals(claude);
+  assert.equal(t.instances, 2);
+  assert.equal(t.processes, 3);
+  assert.equal(t.rss, 157);
+  assert.equal(t.cpu, 15);
+  assert.equal(t.lastSeen, at(1));
+  const cursor = agentGroupTotals(groups.find(g => g.key === 'cursor'));
+  assert.equal(cursor.orphans, 1);
+  // No process reported CPU: no figure, rather than a misleading 0%.
+  assert.equal(cursor.cpu, null);
+  assert.equal(fmtCPU(cursor.cpu), '');
 });
 
-test('familyShouldExpand: one family, few instances, orphans, user override', () => {
-  const claude = { name: 'claude', roots: [1, 2], orphanCount: 0 };
-  assert.equal(familyShouldExpand(claude, 1, 10, {}), true);
-  assert.equal(familyShouldExpand(claude, 2, 2, {}), true);
-  assert.equal(familyShouldExpand(claude, 2, 8, {}), false);
-  assert.equal(familyShouldExpand({ name: 'x', orphanCount: 1 }, 2, 8, {}), true);
-  assert.equal(familyShouldExpand(claude, 2, 8, { claude: true }), true);
-  assert.equal(familyShouldExpand(claude, 1, 1, { claude: false }), false);
+test('applyAgentFilters: shared pills and text; infra untouched', () => {
+  const groups = groupAgentsByHarness([
+    { pid: 1, name: 'claude', root_pid: 1, repo: 'api', branch: 'main' },
+    { pid: 2, name: 'claude', root_pid: 1, ppid: 1, cwd: '/w/api/special' },
+    { pid: 3, name: 'claude', root_pid: 3, workspace: '/w/docs' },
+    { pid: 4, name: 'codex', root_pid: 4, cwd: '/w/etl' },
+    { pid: 6, name: 'ollama', root_pid: 6 },
+  ]);
+  const keys = (gs) => gs.map(g => g.key).join(',');
+  assert.equal(keys(applyAgentFilters(groups, {})), keys(groups));
+  assert.equal(keys(applyAgentFilters(groups, { harnesses: { claude: false } })).split(',').sort().join(','), 'codex,ollama');
+  const docs = applyAgentFilters(groups, { text: 'DOCS' });
+  assert.equal(keys(docs).split(',').sort().join(','), 'claude,ollama');
+  assert.equal(docs.find(g => g.key === 'claude').instances.map(i => i.root.pid).join(','), '3');
+  // cwd matches, and a helper's match keeps its whole instance.
+  assert.equal(applyAgentFilters(groups, { text: '/w/etl' }).map(g => g.key).sort().join(','), 'codex,ollama');
+  const special = applyAgentFilters(groups, { text: 'special' }).find(g => g.key === 'claude');
+  assert.equal(special.instances[0].root.pid, 1);
+  assert.equal(special.instances[0].children[0].pid, 2);
+  // Input untouched.
+  assert.equal(groups.find(g => g.key === 'claude').instances.length, 2);
 });
 
 test('fmtRSS and fmtAge', () => {
@@ -508,33 +546,123 @@ test('sessionStripHTML: labels, RSS, needs-you, opens Sessions tab', () => {
 
 // ---------- per-harness identity ----------
 
-test('harnessMeta gives each known harness a distinct glyph and color', () => {
-  const claude = harnessMeta('claude');
-  const cursor = harnessMeta('cursor');
-  const codex = harnessMeta('codex');
-  for (const m of [claude, cursor, codex]) assert.equal(m.known, true);
-  // The whole point: they must not all look the same.
-  assert.notEqual(claude.glyph, cursor.glyph);
-  assert.notEqual(cursor.glyph, codex.glyph);
-  assert.notEqual(claude.color, codex.color);
+// Relative luminance / contrast ratio (WCAG 2.x) for '#rrggbb' and
+// 'hsl(h s% l%)' colors, so the white-on-tile marks are checked, not assumed.
+function toRGB(color) {
+  const hex = /^#([0-9a-f]{6})$/i.exec(color);
+  if (hex) return [0, 2, 4].map(i => parseInt(hex[1].slice(i, i + 2), 16) / 255);
+  const m = /^hsl\((\d+(?:\.\d+)?) (\d+(?:\.\d+)?)% (\d+(?:\.\d+)?)%\)$/.exec(color);
+  assert.ok(m, `unparseable color ${color}`);
+  const [h, s, l] = [Number(m[1]), Number(m[2]) / 100, Number(m[3]) / 100];
+  const f = n => {
+    const k = (n + h / 30) % 12;
+    return l - s * Math.min(l, 1 - l) * Math.max(-1, Math.min(k - 3, 9 - k, 1));
+  };
+  return [f(0), f(8), f(4)];
+}
+function luminance(color) {
+  const [r, g, b] = toRGB(color).map(c => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4));
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+function contrast(a, b) {
+  const [x, y] = [luminance(a), luminance(b)].sort((p, q) => q - p);
+  return (x + 0.05) / (y + 0.05);
+}
+
+const LIVE_HARNESSES = {
+  claude: 'Claude Code', codex: 'Codex', cursor: 'Cursor', 'cursor-ide': 'Cursor',
+  opencode: 'opencode', agy: 'Antigravity', openclaw: 'OpenClaw', ollama: 'Ollama', 'lm-studio': 'LM Studio',
+};
+const KNOWN_HARNESSES = [...Object.keys(LIVE_HARNESSES), 'gemini', 'windsurf', 'aider', 'codeium', 'copilot'];
+// No mark for these in the sprite's sources (simple-icons, the menubar glyphs,
+// or the source license is not CC0); they render a text glyph on the tint.
+const UNMARKED = new Set(['openclaw', 'aider', 'codeium', 'copilot']);
+
+test('harnessMeta resolves every live harness key to its display name and a sprite mark', () => {
+  for (const [key, label] of Object.entries(LIVE_HARNESSES)) {
+    const m = harnessMeta(key);
+    assert.equal(m.known, true, key);
+    assert.equal(m.key, key);
+    assert.equal(m.label, label);
+    if (UNMARKED.has(key)) {
+      assert.equal(m.logo, '', key);
+      assert.ok(m.glyph, `${key} needs a text glyph`);
+      continue;
+    }
+    assert.match(m.logo, /^logo-/, key);
+    assert.ok(indexHTML.includes(`<symbol id="${m.logo}"`), `#${m.logo} for ${key} is not in index.html`);
+  }
 });
 
-test('harnessMeta matches harness variants and falls back deterministically', () => {
-  assert.equal(harnessMeta('cursor-ide').glyph, harnessMeta('cursor').glyph);
-  assert.equal(harnessMeta('lm-studio').known, true);
+test('harnessMeta maps variants onto one harness and flags infra', () => {
+  assert.equal(harnessMeta('antigravity').key, 'agy');
+  assert.equal(harnessMeta('agy').logo, 'logo-gemini');
+  assert.equal(harnessMeta('gemini').logo, 'logo-gemini');
+  assert.equal(harnessMeta('Claude-Code').key, 'claude');
+  assert.equal(harnessMeta('lmstudio').key, 'lm-studio');
+  // cursor-ide is Cursor's IDE: same mark and name, but infra.
+  assert.equal(harnessMeta('cursor-ide').logo, harnessMeta('cursor').logo);
+  assert.equal(harnessMeta('cursor-ide').infra, true);
+  assert.equal(harnessMeta('cursor').infra, false);
+  for (const k of ['ollama', 'lm-studio']) assert.equal(harnessMeta(k).infra, true, k);
+  for (const k of ['claude', 'codex', 'opencode', 'agy', 'openclaw']) assert.equal(harnessMeta(k).infra, false, k);
+});
+
+test('harnessMeta falls back to a stable hue and initial for unknown harnesses', () => {
   const a = harnessMeta('mystery-agent');
   const b = harnessMeta('mystery-agent');
   assert.equal(a.known, false);
+  assert.equal(a.logo, '');
   assert.equal(a.glyph, 'M');
+  assert.match(a.color, /^hsl\(\d+ 62% 62%\)$/);
   assert.equal(a.color, b.color); // deterministic, not random
+  assert.notEqual(harnessMeta('other-agent').color, a.color);
 });
 
-test('harnessChipHTML embeds the color token and escapes the name', () => {
-  const html = harnessChipHTML('claude');
-  assert.match(html, /--harness-color:hsl/);
-  assert.match(html, /class="harness-glyph"/);
+test('white marks keep at least 3:1 contrast on every brand tile', () => {
+  for (const key of KNOWN_HARNESSES) {
+    const m = harnessMeta(key);
+    if (!m.logo) continue;
+    const bg = m.tile === 'light' ? 'hsl(0 0% 94%)' : m.color;
+    const fg = m.tile === 'light' ? '#000000' : '#ffffff';
+    assert.ok(contrast(fg, bg) >= 3, `${key}: ${contrast(fg, bg).toFixed(2)}:1 on ${bg}`);
+  }
+});
+
+test('style.css tile colors match harnessMeta for every known harness', () => {
+  for (const key of KNOWN_HARNESSES) {
+    const m = harnessMeta(key);
+    const rule = new RegExp(`\\.hk-${key}\\b[^{]*\\{ --harness-color: ([^;]+); \\}`);
+    const hit = rule.exec(styleCSS);
+    assert.ok(hit, `no .hk-${key} rule in style.css`);
+    assert.equal(hit[1], m.color, key);
+  }
+  assert.ok(styleCSS.includes('.harness-tile.light {'), 'light tile rule missing');
+});
+
+test('the session pulse animates only when motion is allowed; reduce stops transitions', () => {
+  const uses = [...styleCSS.matchAll(/animation:\s*sc-breathe/g)];
+  assert.equal(uses.length, 1);
+  const guard = styleCSS.lastIndexOf('@media (prefers-reduced-motion: no-preference) {', uses[0].index);
+  assert.ok(guard >= 0 && !styleCSS.slice(guard, uses[0].index).includes('}'),
+    'the pulse animation must sit inside the no-preference block');
+  assert.match(styleCSS, /@media \(prefers-reduced-motion: reduce\) \{\s*\* \{ animation: none !important; transition: none !important; \}/);
+});
+
+test('harnessChipHTML renders the sprite mark by class and escapes the name', () => {
+  const claude = harnessChipHTML('claude');
+  assert.match(claude, /<svg class="harness-logo" aria-hidden="true"><use href="#logo-claude"\/><\/svg>/);
+  assert.match(claude, /class="harness-tile hk-claude"/);
+  assert.ok(!claude.includes('style='), 'known marks must not rely on inline styles');
+  assert.ok(!claude.includes('harness-label'), 'label only when asked');
+  assert.match(harnessChipHTML('cursor'), /class="harness-tile hk-cursor light"/);
+  assert.match(harnessChipHTML('claude', { label: true }), /<span class="harness-label">Claude Code<\/span>/);
+  assert.match(harnessChipHTML('openclaw'), /class="harness-glyph hk-openclaw"[^>]*>O</);
+  const unknown = harnessChipHTML('mystery-agent');
+  assert.match(unknown, /data-harness-color="hsl\(\d+ 62% 62%\)"/);
+  assert.match(unknown, /class="harness-glyph"/);
   // A malicious harness name must not break out of the title attribute.
-  const evil = harnessChipHTML('"><script>alert(1)</script>');
+  const evil = harnessChipHTML('"><script>alert(1)</script>', { label: true });
   assert.ok(!evil.includes('<script>'));
 });
 
@@ -558,24 +686,151 @@ test('advisorAdviceHTML maps assessment to a recommendation and escapes text', (
   assert.ok(!evil.includes('<script>'));
 });
 
-// ---------- session board organization ----------
+// ---------- harness-first session rail ----------
 
-test('groupSessionSections separates live from ended and collapses history', () => {
-  const rows = [
-    { id: 'a', status: 'active', lastSeen: '2026-01-01T10:00:00Z' },
-    { id: 'b', status: 'ended', lastSeen: '2026-01-01T09:00:00Z' },
-    { id: 'c', status: 'idle', lastSeen: '2026-01-01T08:00:00Z' },
-    { id: 'd', status: 'ended', lastSeen: '2026-01-01T07:00:00Z' },
-    { id: 'e', status: 'active', lastSeen: '2026-01-01T11:00:00Z' },
+// lib.js runs in its own VM realm: compare its arrays structurally.
+const same = (actual, expected, msg) => assert.deepEqual(JSON.parse(JSON.stringify(actual)), expected, msg);
+const T = (min) => new Date(Date.UTC(2026, 0, 1, 12, 0) - min * 60000).toISOString();
+const railSessions = () => [
+  { id: 'c1', harness: 'claude', repo: 'api', branch: 'main', status: 'active', last_seen_at: T(5) },
+  { id: 'c2', harness: 'claude', repo: 'api', branch: 'main', status: 'idle', last_seen_at: T(1) },
+  { id: 'c3', harness: 'claude', workspace: '/w/docs', status: 'ended', last_seen_at: T(90) },
+  { id: 'c4', harness: 'claude', workspace: '/w/web', status: 'ended', last_seen_at: T(30) },
+  { id: 'x1', harness: 'codex', repo: 'etl', branch: 'feat/x', status: 'active', last_seen_at: T(2) },
+  { id: 'u1', harness: 'cursor', workspace: '/w/app', status: 'ended', last_seen_at: T(10) },
+  { id: 'o1', harness: 'opencode', workspace: '/w/tool', status: 'ended', last_seen_at: T(20) },
+];
+
+test('groupSessionsByHarness orders groups by live recency and sinks ended-only groups', () => {
+  const groups = groupSessionsByHarness(railSessions(), [], []);
+  // codex (live 2m) before claude (live 5m; its idle 1m does not outrank an
+  // active session inside the group but does count for group recency).
+  same(groups.map(g => g.key), ['claude', 'codex', 'cursor', 'opencode']);
+  const claude = groups[0];
+  assert.equal(claude.label, 'Claude Code');
+  // Active before idle, then the ended tail newest first.
+  same(claude.live.map(f => f.session.id), ['c1', 'c2']);
+  same(claude.ended.map(f => f.session.id), ['c4', 'c3']);
+  assert.equal(sessionGroupCounts(claude), '1 active · 1 idle · 2 ended');
+  // Ended-only groups keep their newest-first order at the bottom.
+  same(groups.slice(2).map(g => g.live.length), [0, 0]);
+  assert.ok(groups.every(g => g.infra === false));
+});
+
+test('groupSessionsByHarness nests sub-sessions one level under the top-most parent', () => {
+  const sessions = [
+    { id: 'p', harness: 'claude', repo: 'api', status: 'active', last_seen_at: T(9) },
+    { id: 'k1', harness: 'claude', parent_id: 'p', status: 'active', last_seen_at: T(1) },
+    { id: 'k2', harness: 'claude', parent_id: 'k1', status: 'idle', last_seen_at: T(3) }, // grandchild flattens
+    { id: 'gone', harness: 'claude', status: 'ended', last_seen_at: T(60) },
+    { id: 'orphan', harness: 'claude', parent_id: 'gone', status: 'active', last_seen_at: T(4) }, // live under an ended parent
+    { id: 'cross', harness: 'codex', parent_id: 'p', status: 'active', last_seen_at: T(2) }, // other harness
+    { id: 'missing', harness: 'claude', parent_id: 'not-listed', status: 'idle', last_seen_at: T(7) },
+    { id: 'loopA', harness: 'claude', parent_id: 'loopB', status: 'ended', last_seen_at: T(70) },
+    { id: 'loopB', harness: 'claude', parent_id: 'loopA', status: 'ended', last_seen_at: T(80) },
+    { id: 'intoLoop', harness: 'claude', parent_id: 'loopA', status: 'ended', last_seen_at: T(85) },
   ];
-  const s = groupSessionSections(rows);
-  assert.equal(s.map(x => x.key).join(','), 'active,idle,ended');
-  assert.equal(s[0].rows.map(r => r.id).join(','), 'e,a'); // newest active first
-  assert.equal(s[1].rows.map(r => r.id).join(','), 'c');
-  assert.equal(s[2].collapsed, true);
-  assert.equal(s[2].rows.length, 2);
-  // No ended sessions → no empty section.
-  assert.equal(groupSessionSections([{ id: 'x', status: 'active' }]).map(x => x.key).join(','), 'active');
+  const [claude, codex] = groupSessionsByHarness(sessions, [], []);
+  const fam = claude.live.find(f => f.session.id === 'p');
+  same(fam.children.map(s => s.id), ['k1', 'k2']);
+  same(claude.live.map(f => f.session.id), ['p', 'orphan', 'missing']);
+  assert.equal(codex.key, 'codex');
+  same(codex.live.map(f => f.session.id), ['cross']);
+  assert.equal(familySize(claude.live), 5);
+  // A parent_id cycle terminates and keeps every session exactly once.
+  const endedIds = claude.ended.flatMap(f => [f.session.id, ...f.children.map(c => c.id)]).sort();
+  same(endedIds, ['gone', 'intoLoop', 'loopA', 'loopB']);
+});
+
+test('groupSessionsByHarness folds infra into one trailing group of RSS totals', () => {
+  const sessions = [
+    ...railSessions(),
+    { id: 'm1', harness: 'ollama', status: 'active', last_seen_at: T(0) },
+    { id: 'i1', harness: 'cursor-ide', status: 'active', last_seen_at: T(0) },
+    { id: 'z1', harness: 'modelsrv', status: 'active', last_seen_at: T(0) },
+  ];
+  const agents = [
+    { pid: 1, name: 'ollama', kind: 'infra', rss_bytes: 3000 },
+    { pid: 2, name: 'modelsrv', kind: 'infra', rss_bytes: 500 },
+    { pid: 3, name: 'cursor-ide', kind: 'infra', rss_bytes: 1000 },
+    { pid: 4, name: 'claude', kind: 'agent', rss_bytes: 99999 },
+  ];
+  const flat = groupSessionsByHarness(sessions, [], agents);
+  const keys = flat.map(g => g.key);
+  for (const k of ['ollama', 'cursor-ide', 'modelsrv']) assert.ok(!keys.includes(k), `${k} leaked into the rail`);
+  const infra = flat[flat.length - 1];
+  assert.equal(infra.key, 'infra');
+  assert.equal(infra.infra, true);
+  assert.equal(infra.label, 'Infrastructure');
+  same(infra.items.map(i => [i.key, i.rss]), [['ollama', 3000], ['cursor-ide', 1000], ['modelsrv', 500]]);
+  assert.equal(infra.rss, 4500);
+  // Live trees, when present, are the RSS source (helpers included).
+  const trees = [
+    { root: { pid: 1, name: 'ollama', kind: 'infra' }, children: [{ pid: 9 }], rss_bytes: 7000 },
+    { root: { pid: 4, name: 'claude', kind: 'agent' }, children: [], rss_bytes: 1 },
+  ];
+  const withTrees = groupSessionsByHarness(sessions, trees, agents);
+  same(withTrees[withTrees.length - 1].items.map(i => [i.key, i.rss]), [['ollama', 7000]]);
+  // No infra anywhere → no infra group.
+  assert.ok(groupSessionsByHarness(railSessions(), [], []).every(g => !g.infra));
+});
+
+test('applySessionFilters: pills, text over repo/branch/workspace, live only', () => {
+  const agents = [{ pid: 1, name: 'ollama', kind: 'infra', rss_bytes: 10 }];
+  const groups = groupSessionsByHarness(railSessions(), [], agents);
+  const keys = (gs) => gs.map(g => g.key);
+  // No options: everything, infra last.
+  same(keys(applySessionFilters(groups, {})), ['claude', 'codex', 'cursor', 'opencode', 'infra']);
+  // A pill switched off hides only its group.
+  same(keys(applySessionFilters(groups, { harnesses: { claude: false } })), ['codex', 'cursor', 'opencode', 'infra']);
+  // Live only drops ended-only groups but keeps a live group's ended tail.
+  const live = applySessionFilters(groups, { liveOnly: true });
+  same(keys(live), ['claude', 'codex', 'infra']);
+  assert.equal(live[0].ended.length, 2);
+  // Text matches repo, branch, repo@branch, and workspace.
+  same(keys(applySessionFilters(groups, { text: 'FEAT/' })), ['codex', 'infra']);
+  same(keys(applySessionFilters(groups, { text: 'api@main' })), ['claude', 'infra']);
+  const docs = applySessionFilters(groups, { text: '/w/docs' });
+  same(keys(docs), ['claude', 'infra']);
+  same(docs[0].live, []);
+  same(docs[0].ended.map(f => f.session.id), ['c3']);
+  // A family stays whole when only a sub-session matches.
+  const nested = groupSessionsByHarness([
+    { id: 'p', harness: 'claude', repo: 'api', status: 'active', last_seen_at: T(1) },
+    { id: 'k', harness: 'claude', parent_id: 'p', workspace: '/w/special', status: 'active', last_seen_at: T(1) },
+  ], [], []);
+  const hit = applySessionFilters(nested, { text: 'special' });
+  assert.equal(hit[0].live[0].session.id, 'p');
+  assert.equal(hit[0].live[0].children[0].id, 'k');
+  // The input groups are not mutated.
+  assert.equal(groups[0].ended.length, 2);
+});
+
+test('sessionCountStrip counts live sessions and harnesses and shows coverage', () => {
+  const groups = groupSessionsByHarness(railSessions(), [], [{ pid: 1, name: 'ollama', kind: 'infra' }]);
+  assert.equal(sessionCountStrip(groups, { harnesses_active: 3, harnesses_seen: 2 }), 'Sessions 3 · Harnesses 2 · seeing 2/3');
+  assert.equal(sessionCountStrip(groups, null), 'Sessions 3 · Harnesses 2');
+  assert.equal(sessionCountStrip(groups, { harnesses_active: 0, harnesses_seen: 0 }), 'Sessions 3 · Harnesses 2');
+  assert.equal(sessionCountStrip([], null), 'Sessions 0 · Harnesses 0');
+});
+
+test('harnessPillsHTML renders a delegated toggle per harness', () => {
+  const html = harnessPillsHTML(['claude', 'codex'], { codex: false });
+  assert.match(html, /class="harness-pill" data-action="toggle-harness" data-harness="claude" aria-pressed="true"/);
+  assert.match(html, /class="harness-pill off" data-action="toggle-harness" data-harness="codex" aria-pressed="false"/);
+  assert.match(html, /#logo-claude/);
+  assert.match(html, /<span class="harness-label">Codex<\/span>/);
+  assert.ok(!harnessPillsHTML(['"><img src=x>'], {}).includes('<img'));
+  assert.equal(harnessPillsHTML([], {}), '');
+});
+
+test('middleTruncate keeps both ends of a long path', () => {
+  assert.equal(middleTruncate('/short', 20), '/short');
+  const out = middleTruncate('/Users/dev/workspace/deeply/nested/api-service', 24);
+  assert.equal(out.length, 24);
+  assert.ok(out.startsWith('/Users/dev'));
+  assert.ok(out.endsWith('api-service'));
+  assert.ok(out.includes('…'));
 });
 
 // ---------- endpoint identity ----------
@@ -608,22 +863,57 @@ test('endpointDetailHTML renders identity, agents, sessions and escapes', () => 
   assert.ok(!evil.includes('<script>'));
 });
 
-// ---------- session labels ----------
+// ---------- session titles ----------
 
-test('sessionLabelDurable falls back to the live tree cwd, not the session id', () => {
+test('sessionTitle names the work, never the harness', () => {
   // repo wins.
-  assert.equal(sessionLabelDurable({ harness: 'claude', repo: 'secure-agent', branch: 'main' }), 'claude · secure-agent@main');
+  assert.equal(sessionTitle({ harness: 'claude', repo: 'secure-agent', branch: 'main' }), 'secure-agent@main');
+  assert.equal(sessionTitle({ harness: 'claude', repo: 'secure-agent' }), 'secure-agent');
   // workspace next.
-  assert.equal(sessionLabelDurable({ harness: 'codex', workspace: '/work/api' }), 'codex · api');
+  assert.equal(sessionTitle({ harness: 'codex', workspace: '/work/api' }), 'api');
   // Unhelpful workspace "/" → use the joined process tree's cwd.
-  assert.equal(sessionLabelDurable({ harness: 'claude', workspace: '/', id: 'proc-132' }, '/work/myrepo'), 'claude · myrepo');
+  assert.equal(sessionTitle({ harness: 'claude', workspace: '/', id: 'proc-132' }, '/work/myrepo'), 'myrepo');
   // Nothing usable → short id, never a bare "/".
-  assert.equal(sessionLabelDurable({ harness: 'claude', workspace: '/', id: 'proc-132' }), 'claude · proc-132');
+  assert.equal(sessionTitle({ harness: 'claude', workspace: '/', id: 'proc-132' }), 'proc-132');
 });
 
-test('sessionRowsDurable passes the live tree cwd into the label', () => {
-  const sessions = [{ id: 'proc-1', harness: 'claude', workspace: '/', status: 'active', root_pid: 10 }];
-  const trees = [{ root: { pid: 10, name: 'claude', cwd: '/Volumes/work/alpha' }, children: [], rss_bytes: 100 }];
-  const rows = sessionRowsDurable(sessions, trees);
-  assert.equal(rows[0].label, 'claude · alpha');
+// ---------- CSP: no inline style attributes ----------
+// The daemon serves the console with style-src 'self', which drops style
+// attributes parsed from markup; sizes ride in data attributes instead.
+
+test('percentage-sized renderers emit no style attributes', () => {
+  const html = {
+    hbars: hbarsHTML([{ label: 'a', value: 4 }, { label: 'b', value: 1 }]),
+    waterfall: sessionWaterfallHTML([
+      { kind: 12, ts: '2026-01-01T00:00:00Z', duration_ms: 2000, tool: 'Bash' },
+      { kind: 5, ts: '2026-01-01T00:00:01Z' },
+    ]),
+    unknownChip: harnessChipHTML('mystery-agent'),
+    hostMemory: resourceHostContextHTML({
+      total_memory_bytes: 8 * 1024 ** 3, available_memory_bytes: 4 * 1024 ** 3,
+      memory_pressure: 'normal', agent_memory_percent: 25, non_agent_memory_bytes: 2 * 1024 ** 3,
+    }),
+  };
+  for (const [name, h] of Object.entries(html)) assert.ok(!h.includes('style='), `${name}: ${h}`);
+  assert.match(html.hbars, /class="hbar-fill " data-w="100\.0"/);
+  assert.match(html.hbars, /class="hbar-fill " data-w="25\.0"/);
+  assert.match(html.waterfall, /class="wf-bar" data-left="0\.00" data-w="100\.00"/);
+  assert.match(html.waterfall, /class="wf-dot conn" data-left="50\.00"/);
+  assert.match(html.hostMemory, /class="resource-host-segment agent" data-w="25\.0"/);
+  assert.match(html.hostMemory, /class="resource-host-segment other" data-w="25\.0"/);
+  assert.match(html.hostMemory, /class="resource-host-segment available" data-w="50\.0"/);
+});
+
+test('index.html carries no style attributes', () => {
+  assert.ok(!/\sstyle=/.test(indexHTML), 'index.html: move inline styles into style.css');
+});
+
+test('applyInlineMetrics writes the data attributes through the CSSOM', () => {
+  const set = [];
+  const el = dataset => ({ dataset, style: { setProperty: (k, v) => set.push(`${k}=${v}`) } });
+  const bar = el({ left: '10.00', w: '42.50' });
+  const glyph = el({ harnessColor: 'hsl(1 62% 62%)' });
+  const found = { '[data-left]': [bar], '[data-w]': [bar], '[data-harness-color]': [glyph] };
+  applyInlineMetrics({ querySelectorAll: sel => found[sel] || [] });
+  assert.deepEqual(set, ['left=10.00%', 'width=42.50%', '--harness-color=hsl(1 62% 62%)']);
 });

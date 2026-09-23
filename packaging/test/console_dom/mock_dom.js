@@ -28,6 +28,32 @@
         repo: '', branch: '', root_pid: 6033,
         started_at: '2026-09-09T15:00:00Z', ended_at: '2026-09-09T17:30:00Z', last_seen_at: iso(3600000),
         status: 'ended', confidence: 'process-tree'
+      },
+      // Sub-agent of sess-claude-1: nests under its parent in the rail.
+      {
+        id: 'sess-claude-sub', harness: 'claude', parent_id: 'sess-claude-1',
+        workspace: '/Users/dev/workspace/api-service/packages/auth',
+        started_at: '2026-09-09T14:05:00Z', last_seen_at: iso(90000),
+        status: 'idle', confidence: 'hook'
+      },
+      // Finished claude run: the collapsed ended tail of the claude group.
+      {
+        id: 'sess-claude-0', harness: 'claude', workspace: '/Users/dev/workspace/docs-site',
+        repo: 'docs-site', branch: 'main',
+        started_at: '2026-09-09T09:00:00Z', ended_at: '2026-09-09T11:00:00Z', last_seen_at: iso(7200000),
+        status: 'ended', confidence: 'hook'
+      },
+      {
+        id: 'sess-codex-3', harness: 'codex', workspace: '/Users/dev/workspace/data-pipeline',
+        repo: 'data-pipeline', branch: 'feat/etl', root_pid: 4412,
+        started_at: '2026-09-09T13:00:00Z', last_seen_at: iso(20000),
+        status: 'active', confidence: 'transcript'
+      },
+      // Local model server: infra, never a rail card.
+      {
+        id: 'sess-ollama-4', harness: 'ollama', workspace: '/', root_pid: 7001,
+        started_at: '2026-09-09T08:00:00Z', last_seen_at: iso(5000),
+        status: 'active', confidence: 'process-tree'
       }
     ],
     '/status': {
@@ -35,10 +61,21 @@
       version: 'v9.9.9-domtest',
       uptime: '4h 12m 8s',
       active_agents: 3,
+      infra_count: 1,
+      coverage: { harnesses_active: 3, harnesses_seen: 2 },
       agents: [
-        { pid: 5821, name: 'claude', cwd: '/Users/dev/workspace/api-service', ppid: 1, root_pid: 5821, started_at: '2026-09-09T14:00:00Z', last_seen_at: iso(60000), rss_bytes: 120000000 },
+        { pid: 5821, name: 'claude', cwd: '/Users/dev/workspace/api-service', ppid: 1, root_pid: 5821, started_at: '2026-09-09T14:00:00Z', last_seen_at: iso(60000), rss_bytes: 120000000, cpu_percent: 14.5, repo: 'api-service', branch: 'main', workspace: '/Users/dev/workspace/api-service' },
         { pid: 5822, name: 'claude', ppid: 5821, root_pid: 5821, started_at: '2026-09-09T14:01:00Z', last_seen_at: iso(120000), rss_bytes: 40000000 },
-        { pid: 6033, name: 'cursor', cwd: '/Users/dev/projects/web-app', ppid: 1, root_pid: 6033, started_at: '2026-09-09T15:00:00Z', last_seen_at: iso(3600000), rss_bytes: 89000000, is_orphan: true }
+        { pid: 6033, name: 'cursor', cwd: '/Users/dev/projects/web-app', ppid: 1, root_pid: 6033, started_at: '2026-09-09T15:00:00Z', last_seen_at: iso(3600000), rss_bytes: 89000000, is_orphan: true },
+        { pid: 4412, name: 'codex', cwd: '/Users/dev/workspace/data-pipeline', ppid: 1, root_pid: 4412, started_at: '2026-09-09T13:00:00Z', last_seen_at: iso(20000), rss_bytes: 210000000, cpu_percent: 22, repo: 'data-pipeline', branch: 'feat/etl', workspace: '/Users/dev/workspace/data-pipeline' },
+        { pid: 7001, name: 'ollama', kind: 'infra', ppid: 1, root_pid: 7001, started_at: '2026-09-09T08:00:00Z', last_seen_at: iso(5000), rss_bytes: 820000000, cpu_percent: 3 }
+      ],
+      // Live process trees, joined to sessions by root pid (RSS, kill).
+      trees: [
+        { root: { pid: 5821, name: 'claude', kind: 'agent', cwd: '/Users/dev/workspace/api-service', started_at: '2026-09-09T14:00:00Z' }, children: [{ pid: 5822, name: 'claude' }], rss_bytes: 160000000, cpu_percent: 16, last_seen_at: iso(60000) },
+        { root: { pid: 4412, name: 'codex', kind: 'agent', cwd: '/Users/dev/workspace/data-pipeline', started_at: '2026-09-09T13:00:00Z' }, children: [], rss_bytes: 210000000, cpu_percent: 22, last_seen_at: iso(20000) },
+        { root: { pid: 6033, name: 'cursor', kind: 'agent', cwd: '/Users/dev/projects/web-app', started_at: '2026-09-09T15:00:00Z', is_orphan: true }, children: [], rss_bytes: 89000000, last_seen_at: iso(3600000) },
+        { root: { pid: 7001, name: 'ollama', kind: 'infra', started_at: '2026-09-09T08:00:00Z' }, children: [], rss_bytes: 820000000, cpu_percent: 3, last_seen_at: iso(5000) }
       ],
       proxy_enabled: true,
       proxy_port: 8443,
@@ -337,6 +374,12 @@
   //                  #ct fragment, token must come from storage).
   const MODE = location.search;
   const REQUIRE_TOKEN = MODE.includes('requiretoken');
+  // ?theme=dark|light pins the console theme (screenshots); app.js reads it
+  // from the same storage key the masthead toggle writes.
+  const theme = new URLSearchParams(MODE).get('theme');
+  if (theme === 'dark' || theme === 'light') {
+    try { localStorage.setItem('sa-theme', theme); } catch { /* ignored */ }
+  }
   if (MODE.includes('tokenseed')) {
     try { sessionStorage.setItem('sa.console-token', 'test-token'); } catch { /* ignored */ }
   }
@@ -598,15 +641,106 @@
     setTimeout(() => document.querySelector('[data-action="allowlist-remove"]').click(), 4000);
   }
 
+  // Quiet machine: no sessions and no agents — the rail's empty state.
+  if (location.search.includes('quietdemo')) {
+    data['/sessions'] = [];
+    data['/status'] = { ...data['/status'], agents: [], trees: [] };
+  }
+  // Auto-action: type a filter that matches nothing — the rail must say so
+  // and offer to clear it.
+  if (location.search.includes('nomatchdemo')) {
+    setTimeout(() => {
+      const q = document.getElementById('session-cwd-filter');
+      q.value = 'no-such-repo';
+      q.dispatchEvent(new Event('input', { bubbles: true }));
+    }, 4000);
+  }
+  // Auto-action: switch the claude harness pill off — its group must leave
+  // the Sessions rail and the Agents list (one shared filter state).
+  if (location.search.includes('pilldemo')) {
+    setTimeout(() => document.querySelector('#session-harness-pills [data-action="toggle-harness"][data-harness="claude"]').click(), 4000);
+  }
+  // Phone-width probe. Headless Chrome will not size its window below 500px,
+  // so ?phonedemo frames the console in a 375px iframe. The framed copy
+  // (?phoneframe) opens Sessions, then Agents, measures how far any box in
+  // the tab panel, or the page as a whole (posture banner included), reaches
+  // past the viewport, and posts it back; the result lands on
+  // <body data-hscroll="sessions:N,agents:N"> (N in px, 0 = fits).
+  if (MODE.includes('phoneframe')) {
+    const measure = (tab) => {
+      document.querySelector(`[data-tab="${tab}"]`).click();
+      const panel = document.getElementById('tab-' + tab);
+      const width = document.documentElement.clientWidth;
+      let past = 0;
+      for (const el of [panel, ...panel.querySelectorAll('*')]) {
+        const box = el.getBoundingClientRect();
+        if (box.width) past = Math.max(past, box.right - width);
+      }
+      past = Math.max(past, document.documentElement.scrollWidth - width);
+      return `${tab}:${Math.round(past)}`;
+    };
+    setTimeout(() => {
+      const sessions = measure('sessions');
+      setTimeout(() => parent.postMessage({ hscroll: `${sessions},${measure('agents')}` }, '*'), 300);
+    }, 4000);
+  } else if (MODE.includes('phonedemo')) {
+    addEventListener('message', (e) => {
+      if (e.data && e.data.hscroll) document.body.dataset.hscroll = e.data.hscroll;
+    });
+    document.addEventListener('DOMContentLoaded', () => {
+      const frame = document.createElement('iframe');
+      frame.width = '375';
+      frame.height = '812';
+      frame.src = 'harness.html?phoneframe&raildemo';
+      document.body.prepend(frame);
+    });
+  }
+  // CSP probe: run_dom_tests.py serves ?cspdemo&raildemo with the daemon's
+  // Content-Security-Policy header. Once the rail has selected a session,
+  // this opens the tab holding each percentage-sized bar and records its
+  // rendered width as a percent of its track on <body data-csp-widths=
+  // "wf-bar:N,hbar-fill:N,resource-host-segment:N"> — the first tool bar,
+  // the smallest ranked bar, the agent memory segment.
+  if (MODE.includes('cspdemo')) {
+    const probes = [
+      ['wf-bar', 'sessions', '.wf-bar'],
+      ['hbar-fill', 'overview', '#chart-memory .hbar-row:last-child .hbar-fill'],
+      ['resource-host-segment', 'resources', '.resource-host-segment.agent'],
+    ];
+    const widths = [];
+    const next = () => {
+      const [name, tab, sel] = probes[widths.length];
+      document.querySelector(`[data-tab="${tab}"]`).click();
+      setTimeout(() => {
+        const el = document.querySelector(sel);
+        const pct = el ? el.getBoundingClientRect().width / el.parentElement.getBoundingClientRect().width * 100 : -1;
+        widths.push(`${name}:${pct.toFixed(1)}`);
+        if (widths.length < probes.length) next();
+        else document.body.dataset.cspWidths = widths.join(',');
+      }, 300);
+    };
+    setTimeout(next, 5000);
+  }
   // Auto-action: switch to the Egress tab — panels must hide/show correctly.
   if (location.search.includes('tabdemo')) {
     setTimeout(() => document.querySelector('[data-tab="egress"]').click(), 4000);
   }
   // Auto-action: switch to a named tab once telemetry has landed, then hold
-  // long enough for a screenshot — ?tab=<name> for visual QA.
+  // long enough for a screenshot — ?tab=<name> for visual QA. ?shot also
+  // hides everything above the tab bar so the tab fills the frame (headless
+  // --screenshot captures from the top of the page and ignores scrolling).
   {
-    const tab = new URLSearchParams(location.search).get('tab');
-    if (tab) setTimeout(() => document.querySelector(`[data-tab="${tab}"]`)?.click(), 1500);
+    const params = new URLSearchParams(location.search);
+    const tab = params.get('tab');
+    if (tab) {
+      setTimeout(() => {
+        document.querySelector(`[data-tab="${tab}"]`)?.click();
+        const bar = document.querySelector('nav.tabs');
+        if (params.has('shot') && bar) {
+          for (let el = bar.previousElementSibling; el; el = el.previousElementSibling) el.style.display = 'none';
+        }
+      }, 1500);
+    }
   }
   // Auto-action: save a view, type a search, then apply the view — exercises
   // the saved-view + search paths through the real UI.

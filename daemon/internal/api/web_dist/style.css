@@ -40,6 +40,10 @@
   /* Set inline per harness element by harnessChipHTML(); default here so the
      stylesheet custom-property lint (and a missing inline value) still resolve. */
   --harness-color: var(--tx-2);
+  /* Harness mark tile: list rows, and the larger size in group heads. */
+  --harness-tile: 20px;
+  --harness-tile-lg: 26px;
+  --harness-logo: 64%;
 }
 
 /* Light theme: same structure, warm-neutral surfaces, one accent. Follows
@@ -224,10 +228,39 @@ body {
   font-size: 0.9rem; font-weight: 650; letter-spacing: -0.01em; color: var(--tx-1);
 }
 .panel-head h2 .icon { font-size: 1.05rem; color: var(--tx-2); }
-#session-cwd-filter {
-  width: 180px; flex: 0 1 200px; margin-left: auto;
-  padding: 6px 10px; font-size: 0.78rem;
+/* Harness filter row, shared by the Sessions and Agents tabs: one pill per
+   harness present, a text filter, and (Sessions) the live-only switch. */
+.harness-filter {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  padding: 10px 16px; border-bottom: 1px solid var(--line);
 }
+.harness-pills { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; }
+.harness-pills:empty { display: none; }
+.harness-pill {
+  display: inline-flex; align-items: center; min-width: 0;
+  padding: 3px 10px 3px 3px; border: 1px solid var(--line-2); border-radius: 999px;
+  background: var(--bg-2); color: var(--tx-1); font: inherit; font-size: 12px; cursor: pointer;
+}
+.harness-pill:hover { border-color: var(--brand); }
+.harness-pill:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
+.harness-pill .harness-chip { gap: 6px; }
+.harness-pill.off { opacity: 0.5; background: transparent; }
+.harness-pill.off .harness-label { text-decoration: line-through; }
+.harness-filter-text { flex: 1 1 160px; max-width: 280px; margin-left: auto; padding: 6px 10px; font-size: 0.78rem; }
+.switch { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--tx-2); cursor: pointer; user-select: none; }
+.switch input {
+  appearance: none; flex: none; position: relative; margin: 0; cursor: pointer;
+  width: 28px; height: 16px; border-radius: 999px;
+  background: var(--bg-3); border: 1px solid var(--line-2); transition: background .16s var(--ease);
+}
+.switch input::after {
+  content: ''; position: absolute; top: 1px; left: 1px; width: 12px; height: 12px;
+  border-radius: 50%; background: var(--tx-2); transition: transform .16s var(--ease);
+}
+.switch input:checked { background: var(--brand); border-color: var(--brand); }
+.switch input:checked::after { transform: translateX(12px); background: #fff; }
+.switch input:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+.link-btn { background: none; border: 0; padding: 0; font: inherit; color: var(--brand-2); text-decoration: underline; cursor: pointer; }
 .panel-body { padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
 .timeline { max-height: 460px; overflow-y: auto; gap: 2px; }
 
@@ -291,6 +324,7 @@ body {
 }
 .agent-group-title .icon { color: var(--brand-2); font-size: 1.05rem; }
 .agent-group-title .harness-glyph { width: 22px; height: 22px; font-size: 14px; border-radius: 6px; }
+.agent-group-title .harness-tile { --harness-tile: var(--harness-tile-lg); }
 .agent-group-meta {
   display: flex; align-items: center; flex-wrap: wrap; gap: 8px; justify-content: flex-end;
 }
@@ -308,6 +342,16 @@ body {
 .agent-instance.nested { margin-left: 16px; }
 .agent-instance.orphan { border-color: hsl(38 92% 56% / 0.45); }
 .agent-instance.stale { opacity: 0.62; }
+/* Instance row: what it works on first, the pid as the secondary fact. */
+.agent-instance.has-tree { flex-wrap: wrap; }
+.agent-row-main { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; flex: 1; min-width: 0; }
+.agent-row-title { font-weight: 650; font-size: 13px; min-width: 0; overflow-wrap: anywhere; }
+.agent-tree .agent-instance { margin-top: 6px; }
+/* Infrastructure: IDEs and model servers, set apart and never counted. */
+.agent-infra { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; padding-top: 12px; border-top: 1px dashed var(--line-2); }
+.agent-infra-head { font-size: 10px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--tx-3); }
+.agent-infra-head span { margin-left: 6px; font-weight: 500; letter-spacing: 0; text-transform: none; }
+.agent-group.infra { background: transparent; border-style: dashed; }
 .session-row {
   display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
   padding: 8px 10px; border-radius: var(--r-sm);
@@ -1109,6 +1153,11 @@ button.fw-uninspected .fw-drill-hint {
 .posture-items li .sev.s1 { color: var(--brand); }
 .posture-items li a { color: var(--brand); text-decoration: none; }
 .posture-items li a:hover { text-decoration: underline; }
+/* Phone: the headline does not shrink (flex: none), so side by side the items
+   list collapses to a sliver and its words spill past the viewport; stack. */
+@media (max-width: 560px) {
+  .posture { flex-direction: column; gap: 10px; }
+}
 @keyframes pulse-opacity { 50% { opacity: 0.45; } }
 
 /* ---------- incident workflow chips ---------- */
@@ -1169,38 +1218,57 @@ button.fw-uninspected .fw-drill-hint {
 
 /* Session-first: rail of durable sessions + selected session timeline. */
 .session-split { display: grid; grid-template-columns: 300px minmax(0, 1fr); min-height: 420px; }
+/* Narrow screens: the rail stacks above the trace instead of squeezing it. */
+@media (max-width: 680px) {
+  .session-split { grid-template-columns: minmax(0, 1fr); }
+  .session-rail { border-right: 0; border-bottom: 1px solid var(--line); max-height: none; }
+  .harness-filter-text { flex-basis: 100%; max-width: none; margin-left: 0; }
+  .agent-group-meta { justify-content: flex-start; }
+}
 .session-rail {
   border-right: 1px solid var(--line); overflow-y: auto; max-height: 70vh;
   padding: 8px; display: flex; flex-direction: column; gap: 6px;
 }
-.session-card {
-  display: block; width: 100%; text-align: left; border: 1px solid var(--line);
-  border-radius: var(--r-md); background: var(--bg-1); padding: 9px 11px;
-  cursor: pointer; font: inherit; color: var(--tx-1);
+.session-count-strip { padding: 6px 16px; font: 500 0.72rem/1.4 var(--mono); color: var(--tx-3); border-bottom: 1px solid var(--line); }
+.session-count-strip:empty { display: none; }
+/* Harness groups: mark + name + counts, live work first, a collapsed ended
+   tail per harness, and infra in a trailing group of RSS totals. */
+.session-group-head {
+  display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 4px 8px;
+  padding: 6px; border-radius: var(--r-sm); cursor: pointer; list-style: none;
 }
-/* Grouped rail: Working now / Idle / Ended. A busy machine has many ended
-   runs; they collapse so live work stays visible instead of scrolled away. */
-.session-section { margin-bottom: 10px; }
-.session-section-head {
-  display: flex; align-items: center; gap: 6px;
-  font-size: 10px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase;
-  color: var(--tx-3); padding: 4px 5px 6px;
-}
-.session-section-head span { color: var(--tx-3); font-weight: 600; }
-.session-section-head.as-button {
-  width: 100%; background: none; border: 0; font: inherit;
-  font-size: 10px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase;
+.session-group-head::-webkit-details-marker { display: none; }
+.session-group-head::marker { display: none; content: ''; }
+.session-group-head:hover { background: var(--bg-2); }
+.session-group-head:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
+.session-group-head .harness-tile { --harness-tile: var(--harness-tile-lg); }
+.session-group-counts { font: 500 0.7rem/1 var(--mono); color: var(--tx-3); white-space: nowrap; }
+.session-group-body { display: flex; flex-direction: column; gap: 6px; padding: 2px 0 10px; }
+.session-group.infra { margin-top: 6px; border-top: 1px solid var(--line); padding-top: 6px; }
+.session-group-title { font-size: 10px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--tx-3); }
+.infra-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 3px 6px; color: var(--tx-2); }
+.session-ended-toggle {
+  display: flex; align-items: center; gap: 6px; width: 100%; padding: 6px 5px 4px;
+  background: none; border: 0; font: 700 10px/1 var(--font); letter-spacing: 0.05em; text-transform: uppercase;
   color: var(--tx-3); cursor: pointer; text-align: left;
 }
-.session-section-head.as-button:hover { color: var(--tx-2); }
-.session-section-head.as-button .icon { width: 11px; height: 11px; transition: transform .18s var(--ease); }
-.session-section.collapsed .session-section-body { display: none; }
-.session-section.collapsed.open .session-section-body { display: block; }
-.session-section.collapsed.open .session-section-head.as-button .icon { transform: rotate(90deg); }
-.session-section-body { display: flex; flex-direction: column; gap: 6px; }
-.session-section .session-card { margin-bottom: 0; }
+.session-ended-toggle:hover { color: var(--tx-2); }
+.session-ended-toggle .icon { width: 11px; height: 11px; transition: transform .18s var(--ease); }
+.session-ended-body { display: none; }
+.session-ended.open .session-ended-body { display: flex; flex-direction: column; gap: 6px; }
+.session-ended.open .session-ended-toggle .icon { transform: rotate(90deg); }
+.session-card {
+  display: flex; align-items: center; gap: 4px; width: 100%;
+  border: 1px solid var(--line); border-radius: var(--r-md); background: var(--bg-1); color: var(--tx-1);
+}
+.session-card .sc-main {
+  flex: 1; min-width: 0; display: block; padding: 9px 11px; text-align: left;
+  background: none; border: 0; border-radius: inherit; font: inherit; color: inherit; cursor: pointer;
+}
+.session-card .sc-main:focus-visible { outline: 2px solid var(--brand); outline-offset: -2px; }
+.session-card .sc-kill { flex: none; margin-right: 6px; padding: 5px 7px; }
+.session-card.nested { margin-left: 14px; width: calc(100% - 14px); border-left: 2px solid var(--line-2); }
 .session-card:hover { background: var(--bg-2); }
-.session-card:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
 .session-card.selected { border-color: var(--brand); background: var(--brand-bg); }
 .session-card.ended { opacity: 0.55; }
 .session-card .sc-label { font-weight: 600; font-size: 13px; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1208,7 +1276,33 @@ button.fw-uninspected .fw-drill-hint {
 .session-card .sc-head .sc-label { min-width: 0; }
 /* Per-harness mark: tinted tile + brand glyph, so claude/cursor/codex rows
    are distinguishable at a glance (previously all identical text rows). */
-.harness-chip { display: inline-flex; flex: none; }
+.harness-chip { display: inline-flex; align-items: center; gap: 7px; flex: none; min-width: 0; }
+.harness-label { font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Known marks: white on a brand-colored tile, Cursor dark on a light tile.
+   Colors are keyed by class, not set inline — the console CSP
+   (style-src 'self') drops inline style attributes. harnessMeta() in lib.js
+   carries the same values and lib.test.mjs keeps the two in step. */
+.harness-tile {
+  display: inline-grid; place-items: center; flex: none;
+  width: var(--harness-tile); height: var(--harness-tile);
+  border-radius: calc(var(--harness-tile) * 0.26);
+  background: var(--harness-color); color: #fff;
+  box-shadow: inset 0 0 0 1px hsl(0 0% 100% / 0.14);
+}
+.harness-tile.light { background: hsl(0 0% 94%); color: #000; box-shadow: inset 0 0 0 1px hsl(0 0% 0% / 0.12); }
+.harness-logo { width: var(--harness-logo); height: var(--harness-logo); }
+.hk-claude { --harness-color: #D97757; }
+.hk-cursor, .hk-cursor-ide { --harness-color: #000000; }
+.hk-codex { --harness-color: #10A37F; }
+.hk-opencode { --harness-color: #000000; }
+.hk-openclaw { --harness-color: hsl(342 62% 62%); }
+.hk-agy, .hk-gemini { --harness-color: #8E75B2; }
+.hk-windsurf { --harness-color: #0B100F; }
+.hk-aider { --harness-color: hsl(20 90% 58%); }
+.hk-codeium { --harness-color: hsl(201 88% 46%); }
+.hk-copilot { --harness-color: hsl(220 12% 60%); }
+.hk-ollama { --harness-color: #000000; }
+.hk-lm-studio { --harness-color: #000000; }
 .harness-glyph {
   display: inline-flex; align-items: center; justify-content: center;
   width: 18px; height: 18px; border-radius: 5px; font-size: 12px; line-height: 1;
@@ -1228,8 +1322,17 @@ button.fw-uninspected .fw-drill-hint {
   @keyframes sc-breathe { 0%, 100% { opacity: 0.5; } 50% { opacity: 1; } }
 }
 .session-detail { padding: 14px 16px; overflow-y: auto; max-height: 70vh; min-width: 0; }
-.session-detail-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
-.session-detail-head h3 { font-size: 15px; }
+.session-detail-head { display: flex; align-items: center; gap: 6px 10px; flex-wrap: wrap; margin-bottom: 10px; min-width: 0; }
+.session-detail-head h3 { font-size: 15px; min-width: 0; overflow-wrap: anywhere; }
+.session-detail-head .harness-tile { --harness-tile: var(--harness-tile-lg); }
+.sd-harness { color: var(--tx-2); font-size: 12px; font-weight: 600; }
+.sd-conf { color: var(--tx-2); background: var(--bg-2); border-color: var(--line-2); }
+.sd-path {
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font: 500 0.72rem/1.2 var(--mono); color: var(--tx-3); cursor: copy;
+  background: none; border: 1px dashed transparent; border-radius: 5px; padding: 2px 5px;
+}
+.sd-path:hover, .sd-path:focus-visible { color: var(--tx-2); border-color: var(--line-2); outline: none; }
 .session-detail-head .sd-meta { color: var(--tx-3); font-size: 12px; }
 
 /* Timeline waterfall: one row per tool call, dots for everything else. */
@@ -1256,6 +1359,8 @@ button.fw-uninspected .fw-drill-hint {
   position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
   overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
 }
+/* Icon sprite sheets: out of flow, so the 0x0 <svg> adds no line box. */
+.sprite-sheet { position: absolute; }
 .confirm-message { color: var(--tx-2); margin: 6px 0 12px; }
 .confirm-input { width: 100%; margin-bottom: 12px; }
 .confirm-actions { display: flex; justify-content: flex-end; gap: 8px; }
