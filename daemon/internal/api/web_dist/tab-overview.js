@@ -421,8 +421,9 @@ function renderChartFlags() {
 
 // memoryRowsByFamily: one memory row per live process family. Durable
 // sessions group by root pid; each family counts its tree's RSS once, however
-// many sessions share it. Sessions without a live root are dropped. Rows are
-// ranked by RSS, largest first. Pure.
+// many sessions share it. Sessions without a live root are dropped. A family
+// is infra when its tree root is (sessions carry no kind). Rows are ranked by
+// RSS, largest first. Pure.
 function memoryRowsByFamily(sessions, trees) {
   const byRoot = {};
   for (const t of trees || []) if (t && t.root) byRoot[Number(t.root.pid)] = t;
@@ -438,9 +439,10 @@ function memoryRowsByFamily(sessions, trees) {
     const t = byRoot[pid];
     const label = familyLabel({ root_pid: pid, name: t.root.name, workspace: t.root.cwd }, fam);
     rows.push({
+      pid,
       label: fam.length > 1 ? `${label} · ${fam.length} sessions` : label,
       rss: Number(t.rss_bytes || 0),
-      infra: fam.every(s => s.kind === 'infra'),
+      infra: t.root.kind === 'infra',
     });
   }
   return rows.filter(r => r.rss > 0).sort((a, b) => b.rss - a.rss);
@@ -448,7 +450,8 @@ function memoryRowsByFamily(sessions, trees) {
 
 // Memory-by-family chart: resident memory per live process family, ranked.
 // Uses the durable session rows grouped onto live tree RSS; falls back to the
-// process-tree families when the daemon predates the session spine.
+// process-tree families when the daemon predates the session spine. Rows are
+// keyed by family root pid, so an unchanged row keeps its node.
 function renderChartMemory() {
   const SA = window.SA;
   const el = document.getElementById('chart-memory');
@@ -460,9 +463,10 @@ function renderChartMemory() {
   if (!families.length) {
     // Legacy fallback: process-tree families.
     families = trees.map(t => ({
+      pid: t.root && t.root.pid,
       label: familyLabel({ root_pid: t.root && t.root.pid, name: t.root && t.root.name, workspace: t.root && t.root.cwd }, []),
       rss: Number(t.rss_bytes || 0),
-      infra: false,
+      infra: !!(t.root && t.root.kind === 'infra'),
     })).filter(s => s.rss > 0);
   }
   if (total) total.textContent = families.filter(f => !f.infra).length;
@@ -470,13 +474,13 @@ function renderChartMemory() {
     el.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-agent"/></svg><span>No attributed sessions yet</span></div>`;
     return;
   }
-  const rows = families.sort((a, b) => b.rss - a.rss).slice(0, 8).map(f => ({
-    label: f.label,
-    value: f.rss,
-    cls: f.infra ? 'infra' : '',
-    sub: f.infra ? 'infra' : '',
-  }));
-  el.innerHTML = hbarsHTML(rows, { format: v => fmtRSS(v) || '0 B' });
+  const top = families.sort((a, b) => b.rss - a.rss).slice(0, 8);
+  const max = Math.max(1, ...top.map(f => f.rss));
+  const fmt = v => fmtRSS(v) || '0 B';
+  patchList(el, top, {
+    key: f => f.pid,
+    html: f => hbarRowHTML({ label: f.label, value: f.rss, cls: f.infra ? 'infra' : '', sub: f.infra ? 'infra' : '' }, max, fmt),
+  });
   applyInlineMetrics(el);
 }
 

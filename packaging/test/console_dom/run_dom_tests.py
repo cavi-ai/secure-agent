@@ -184,6 +184,7 @@ def main():
         dom_phone = dump_dom(chrome, tmp, "?phonedemo")
         dom_nocosts = dump_dom(chrome, tmp, "?nocostsdemo")
         dom_memfam = dump_dom(chrome, tmp, "?memfamilydemo")
+        dom_memprobe = dump_dom(chrome, tmp, "?memprobe")
         dom_events = dump_dom(chrome, tmp, "?tab=events")
         dom_burst = dump_dom(chrome, tmp, "?burstdemo")
         dom_railburst = dump_dom(chrome, tmp, "?railburst")
@@ -701,9 +702,10 @@ def main():
         check("memory by family: three sessions on one root are one bar carrying 3 sessions",
               len(mem_bars) == 4 and sum('api-service@main · 3 sessions' in b for b in mem_bars) == 1,
               f"bars={len(mem_bars)}")
-        check("memory by family: the badge counts families, not sessions",
-              mem_badge is not None and int(mem_badge.group(1)) == len(mem_bars) == 4,
-              mem_badge.group(0) if mem_badge else "no badge")
+        mem_infra = sum('class="hbar-sub">infra<' in b for b in mem_bars)
+        check("memory by family: the badge counts agent families, not sessions or infra",
+              mem_badge is not None and mem_infra == 1 and int(mem_badge.group(1)) == len(mem_bars) - mem_infra == 3,
+              f"{mem_badge.group(0) if mem_badge else 'no badge'} infra={mem_infra}")
         check("overview carries no list panels",
               'id="session-strip"' not in overview and 'id="events-container"' not in overview
               and 'id="resource-board"' not in overview)
@@ -843,6 +845,12 @@ def main():
         check("burst: a focused flag-card button keeps identity and focus",
               'data-probe="1"' in flags_focus and pre(dom_focus, "focus-probe") == "kept",
               f"probe={pre(dom_focus, 'focus-probe')!r}")
+
+        mem_probe = re.match(r"renders=(\d+) kept=(\d+)/(\d+)$", pre(dom_memprobe, "mem-probe"))
+        check("memory by family: a re-render keeps every unchanged family row as the same node",
+              mem_probe is not None and int(mem_probe.group(1)) >= 1 and int(mem_probe.group(3)) == 4
+              and mem_probe.group(2) == mem_probe.group(3),
+              f"probe={pre(dom_memprobe, 'mem-probe')!r}")
 
         flags_click = dom_click.split('id="flags-list"', 1)[-1].split('id="incidents-container"', 1)[0]
         check("burst: a click spanning renders lands (POST /flags/acknowledge, card gone)",

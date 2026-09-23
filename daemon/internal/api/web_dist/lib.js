@@ -939,17 +939,21 @@ function ruleTitle(rule) {
 // rows: [{label, value, sub, cls}], value compared against the max.
 function hbarsHTML(rows, opts) {
   opts = opts || {};
-  const fmt = opts.format || (v => String(v));
   const max = Math.max(1, ...rows.map(r => r.value));
-  return rows.map(r => {
-    const pct = Math.max(2, (r.value / max) * 100);
-    return `<div class="hbar-row">
+  return rows.map(r => hbarRowHTML(r, max, opts.format)).join('');
+}
+
+// hbarRowHTML: one hbarsHTML row, its fill scaled against max; fmt formats
+// the value (default String).
+function hbarRowHTML(r, max, fmt) {
+  fmt = fmt || (v => String(v));
+  const pct = Math.max(2, (r.value / max) * 100);
+  return `<div class="hbar-row">
       <span class="hbar-label" title="${escapeHTML(r.titleAttr || r.label)}">${escapeHTML(r.label)}</span>
       <span class="hbar-track"><span class="hbar-fill ${r.cls || ''}" data-w="${pct.toFixed(1)}"></span></span>
       <span class="hbar-val">${escapeHTML(fmt(r.value))}</span>
       ${r.sub ? `<span class="hbar-sub">${escapeHTML(r.sub)}</span>` : ''}
     </div>`;
-  }).join('');
 }
 
 

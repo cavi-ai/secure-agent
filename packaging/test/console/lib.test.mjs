@@ -1097,24 +1097,38 @@ test('memoryRowsByFamily: one row per live family, its RSS once, the session cou
   assert.equal(rows[1].label, 'Codex · data-pipeline');
   assert.equal(rows[1].rss, 209715200);
   assert.ok(!rows.some(r => r.label.includes('ghost')));
-  const infra = memoryRowsByFamily([{ root_pid: 7001, harness: 'ollama', kind: 'infra' }],
-    [{ root: { pid: 7001, name: 'ollama' }, rss_bytes: 1 }]);
-  assert.equal(infra[0].infra, true);
 });
 
-test('renderChartMemory: one bar per family; the badge counts families, not sessions', () => {
+test('memoryRowsByFamily: a family is infra when its live tree root is infra', () => {
+  const rows = memoryRowsByFamily([...memSessions, { id: 'ollama-1', harness: 'ollama', root_pid: 7001 }],
+    [...memTrees, { root: { pid: 7001, name: 'ollama', kind: 'infra', cwd: '/' }, rss_bytes: 820000000 }]);
+  assert.deepEqual(Array.from(rows, r => [r.pid, r.infra]), [[3432, false], [7001, true], [999, false]]);
+});
+
+test('renderChartMemory: one keyed bar per family; the badge counts agent families, not sessions or infra', () => {
   const saved = {};
-  for (const k of ['window', 'document']) saved[k] = [k in ctx, ctx[k]];
+  for (const k of ['window', 'document', 'patchList']) saved[k] = [k in ctx, ctx[k]];
   const chart = { innerHTML: '', querySelectorAll: () => [] };
   const badge = { textContent: '' };
-  ctx.window = { SA: { t: { status: { trees: memTrees }, sessions: memSessions } } };
+  let got = null;
+  const trees = [...memTrees, { root: { pid: 7001, name: 'ollama', kind: 'infra', cwd: '/' }, rss_bytes: 820000000 }];
+  ctx.window = { SA: { t: { status: { trees }, sessions: [...memSessions, { id: 'ollama-1', harness: 'ollama', root_pid: 7001 }] } } };
   ctx.document = { getElementById: id => ({ 'chart-memory': chart, 'chart-mem-total': badge })[id] || null };
+  ctx.patchList = (container, items, opts) => { got = { container, items, opts }; };
   try {
     renderChartMemory();
     assert.equal(badge.textContent, 2);
-    const bars = chart.innerHTML.split('class="hbar-row"').slice(1);
-    assert.equal(bars.length, 2);
+    assert.equal(got.container, chart);
+    assert.deepEqual(Array.from(got.items, f => String(got.opts.key(f))), ['3432', '7001', '999']);
+    const bars = got.items.map(got.opts.html);
+    assert.ok(bars.every(b => b.startsWith('<div class="hbar-row">')));
     assert.equal(bars.filter(b => b.includes('27 sessions')).length, 1);
+    assert.equal(bars.filter(b => b.includes('class="hbar-sub">infra<')).length, 1);
+    // Process-tree fallback (no sessions): infra still comes from the root.
+    ctx.window.SA.t.sessions = [];
+    renderChartMemory();
+    assert.equal(badge.textContent, 2);
+    assert.deepEqual(Array.from(got.items, f => [String(got.opts.key(f)), f.infra]), [['3432', false], ['7001', true], ['999', false]]);
   } finally {
     for (const [k, [had, prev]] of Object.entries(saved)) if (had) ctx[k] = prev; else delete ctx[k];
   }

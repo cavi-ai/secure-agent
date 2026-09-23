@@ -978,7 +978,7 @@
   }
   // memfamilydemo: three claude sessions share root 5821 — Memory by family
   // shows one bar for that family with its session count, and the badge
-  // counts families (5821, 4412, 6033, 7001), not sessions.
+  // counts agent families (5821, 4412, 6033), not sessions or infra (7001).
   if (MODE.includes('memfamilydemo')) {
     for (const n of [5, 6]) {
       data['/sessions'].push({
@@ -1304,6 +1304,24 @@
         stamp('render-counts', JSON.stringify(delta));
       }, 2600);
     }, 4500);
+  }
+  // memprobe: Overview open, every Memory by family row probed, then the same
+  // session re-emitted three times. <pre id="mem-probe"> gets the chart-memory
+  // renders in between and how many probed rows are still connected.
+  if (MODE.includes('memprobe')) {
+    setTimeout(() => {
+      const rows = Array.from(document.querySelectorAll('#chart-memory .hbar-row'));
+      rows.forEach(r => { r.dataset.probe = '1'; });
+      const before = renderCounts();
+      const s = { ...data['/sessions'].find(x => x.id === 'sess-claude-1') };
+      delete s._timeline;
+      [0, 400, 800].forEach(t => setTimeout(() => window.__sse.emit('session', s), t));
+      setTimeout(() => {
+        const after = renderCounts();
+        const renders = before && after ? (after['chart-memory'] || 0) - (before['chart-memory'] || 0) : -1;
+        stamp('mem-probe', `renders=${renders} kept=${rows.filter(r => r.isConnected).length}/${rows.length}`);
+      }, 2000);
+    }, 4300);
   }
   // railburst: Sessions open, the infra group opened and probed, then a burst
   // with session frames that change the claude group.
