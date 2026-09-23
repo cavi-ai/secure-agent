@@ -1,7 +1,10 @@
 package collect
 
 import (
+	"bufio"
+	"bytes"
 	"encoding/json"
+	"io"
 	"path/filepath"
 	"strings"
 	"time"
@@ -14,10 +17,12 @@ import (
 // per-call token deltas; response_item function_call / function_call_output
 // pair by call_id for durations. Content (arguments, output) is NEVER
 // carried into events — names, durations and token counts only.
-// event_msg/thread_settings_applied names the model and provider; every later
-// model_call carries that model id and its cost from the price tables. An id
-// the tables do not know costs 0 (never a fabricated price), and a rollout
-// without the settings line yields model_calls with no model and cost 0.
+// The model comes from event_msg/thread_settings_applied when the rollout has
+// one (it wins), else from the latest turn_context (one per turn; current
+// codex writes no settings line). The provider comes from the settings line,
+// else session_meta's model_provider. Every model_call carries the model id,
+// the provider and the cost from the price tables; an id the tables do not
+// know costs 0 (never a fabricated price).
 
 type codexLine struct {
 	Timestamp string          `json:"timestamp"`
@@ -26,8 +31,14 @@ type codexLine struct {
 }
 
 type codexMeta struct {
-	SessionID string `json:"session_id"`
-	CWD       string `json:"cwd"`
+	SessionID     string `json:"session_id"`
+	CWD           string `json:"cwd"`
+	ModelProvider string `json:"model_provider"`
+}
+
+// codexTurnContext is the turn_context payload subset the tracer reads.
+type codexTurnContext struct {
+	Model string `json:"model"`
 }
 
 // codexEventMsg is the event_msg payload subset the tracer reads.
@@ -55,17 +66,58 @@ type codexResponseItem struct {
 
 // CodexTracer turns rollout lines into trace events; stateful per file for
 // call_id pairing, the session id from session_meta and the model from
-// thread_settings_applied.
+// thread_settings_applied or turn_context.
 type CodexTracer struct {
-	sessionID string
-	cwd       string
-	model     string                 // model id as written by thread_settings_applied
-	provider  string                 // model_provider_id from the same line
-	pending   map[string]pendingTool // call_id → open call
+	sessionID        string
+	cwd              string
+	settingsModel    string                 // model id from the latest thread_settings_applied
+	settingsProvider string                 // model_provider_id from the same line
+	contextModel     string                 // model id from the latest turn_context
+	metaProvider     string                 // session_meta model_provider
+	pending          map[string]pendingTool // call_id → open call
 }
 
 func NewCodexTracer() *CodexTracer {
 	return &CodexTracer{pending: map[string]pendingTool{}}
+}
+
+// codexPrimeMaxBytes bounds the head read that restores a resumed rollout's
+// session and model. The first turn_context sits past 256 KB in about a fifth
+// of real rollouts (p95 1.5 MB, max 4.7 MB), so the cap is 8 MiB.
+const codexPrimeMaxBytes = 8 << 20
+
+// codexPrimeTags are the record types Prime replays; each sits in a line's
+// first bytes ("timestamp" then "type", or event_msg's payload type).
+var codexPrimeTags = [][]byte{[]byte(`"session_meta"`), []byte(`"turn_context"`), []byte(`"thread_settings_applied"`)}
+
+// Prime replays the rollout head (at most codexPrimeMaxBytes of it) for
+// session_meta, turn_context and thread_settings_applied, so a tracer that
+// starts at a persisted offset after a daemon restart still knows the session
+// and model. It emits nothing: those lines were published by the earlier run.
+// Only complete lines are read; a line over 1 MiB is skipped.
+func (t *CodexTracer) Prime(head io.Reader) {
+	br := bufio.NewReaderSize(io.LimitReader(head, codexPrimeMaxBytes), 1024*1024)
+	for {
+		line, err := br.ReadSlice('\n')
+		overlong := false
+		for err == bufio.ErrBufferFull {
+			overlong = true
+			_, err = br.ReadSlice('\n')
+		}
+		if err != nil {
+			return
+		}
+		if overlong {
+			continue
+		}
+		prefix := line[:min(len(line), 256)]
+		for _, tag := range codexPrimeTags {
+			if bytes.Contains(prefix, tag) {
+				t.ParseLine(string(line))
+				break
+			}
+		}
+	}
 }
 
 // IsCodexRolloutPath reports whether a tailed file is a Codex rollout log —
@@ -80,14 +132,24 @@ func IsCodexRolloutPath(path string) bool {
 // the first line is consumed).
 func (t *CodexTracer) Session() (id, cwd string) { return t.sessionID, t.cwd }
 
-// Model returns the model id and provider learned from the latest
-// thread_settings_applied line ("" until one is consumed).
-func (t *CodexTracer) Model() (id, provider string) { return t.model, t.provider }
+// Model returns the model id and provider: thread_settings_applied wins,
+// else the latest turn_context model and session_meta's model_provider (""
+// until one is consumed).
+func (t *CodexTracer) Model() (id, provider string) {
+	id, provider = t.settingsModel, t.settingsProvider
+	if id == "" {
+		id = t.contextModel
+	}
+	if provider == "" {
+		provider = t.metaProvider
+	}
+	return id, provider
+}
 
 // ParseLine consumes one rollout line and returns zero or more trace events.
 // ok=false means the line is not a Codex trace record; the caller still runs
-// its redaction scan on it. A thread_settings_applied line updates the
-// tracer's model and returns ok=false, so it keeps that scan.
+// its redaction scan on it. A thread_settings_applied or turn_context line
+// updates the tracer's model and returns ok=false, so it keeps that scan.
 func (t *CodexTracer) ParseLine(line string) (events []event.Event, ok bool) {
 	trimmed := strings.TrimSpace(line)
 	if !strings.HasPrefix(trimmed, "{") || !strings.Contains(trimmed, `"payload"`) {
@@ -110,8 +172,15 @@ func (t *CodexTracer) ParseLine(line string) (events []event.Event, ok bool) {
 		if err := json.Unmarshal(rec.Payload, &meta); err == nil {
 			t.sessionID = meta.SessionID
 			t.cwd = meta.CWD
+			t.metaProvider = meta.ModelProvider
 		}
 		return nil, true
+	case "turn_context":
+		var tc codexTurnContext
+		if err := json.Unmarshal(rec.Payload, &tc); err == nil && tc.Model != "" {
+			t.contextModel = tc.Model
+		}
+		return nil, false
 	case "event_msg":
 		var msg codexEventMsg
 		if err := json.Unmarshal(rec.Payload, &msg); err != nil {
@@ -119,8 +188,8 @@ func (t *CodexTracer) ParseLine(line string) (events []event.Event, ok bool) {
 		}
 		if msg.Type == "thread_settings_applied" {
 			if m := msg.ThreadSettings.Model; m != "" {
-				t.model = m
-				t.provider = msg.ThreadSettings.ModelProviderID
+				t.settingsModel = m
+				t.settingsProvider = msg.ThreadSettings.ModelProviderID
 			}
 			return nil, false
 		}
@@ -131,10 +200,11 @@ func (t *CodexTracer) ParseLine(line string) (events []event.Event, ok bool) {
 		if u.InputTokens == 0 && u.OutputTokens == 0 {
 			return nil, true
 		}
+		model, provider := t.Model()
 		return []event.Event{{
 			Kind: event.KindModelCall, TS: ts, SessionID: t.sessionID,
-			Model: t.model, TokensIn: u.InputTokens, TokensOut: u.OutputTokens,
-			CostUSD: ModelCostUSD(t.model, u.InputTokens, u.OutputTokens),
+			Model: model, Provider: provider, TokensIn: u.InputTokens, TokensOut: u.OutputTokens,
+			CostUSD: ModelCostUSD(model, u.InputTokens, u.OutputTokens),
 		}}, true
 	case "response_item":
 		var item codexResponseItem

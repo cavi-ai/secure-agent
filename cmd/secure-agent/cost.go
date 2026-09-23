@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -13,14 +14,20 @@ import (
 
 // costRow and costReport mirror the daemon's GET /costs body.
 type costRow struct {
-	Key       string  `json:"key"`
-	Harness   string  `json:"harness,omitempty"`
-	Calls     int     `json:"calls"`
-	Sessions  int     `json:"sessions"`
-	TokensIn  int64   `json:"tokens_in"`
-	TokensOut int64   `json:"tokens_out"`
-	CostUSD   float64 `json:"cost_usd"`
-	Unpriced  int     `json:"unpriced_calls"`
+	Key           string  `json:"key"`
+	Harness       string  `json:"harness,omitempty"`
+	Provider      string  `json:"provider,omitempty"`
+	Class         string  `json:"class,omitempty"`
+	Calls         int     `json:"calls"`
+	Sessions      int     `json:"sessions"`
+	TokensIn      int64   `json:"tokens_in"`
+	TokensOut     int64   `json:"tokens_out"`
+	CostUSD       float64 `json:"cost_usd"`
+	Unpriced      int     `json:"unpriced_calls"`
+	UnknownModel  int     `json:"unknown_model_calls"`
+	UnpricedModel int     `json:"unpriced_model_calls"`
+	Plan          int     `json:"plan_calls"`
+	Local         int     `json:"local_calls"`
 }
 
 type costReport struct {
@@ -31,26 +38,72 @@ type costReport struct {
 	Rows  []costRow `json:"rows"`
 }
 
+// unpricedRow mirrors one row of the daemon's GET /costs/unpriced body.
+type unpricedRow struct {
+	Harness  string `json:"harness"`
+	Provider string `json:"provider"`
+	Model    string `json:"model"`
+	Class    string `json:"class"`
+	Calls    int    `json:"calls"`
+}
+
 func handleCost(client *http.Client) {
-	args := os.Args[2:]
+	if err := runCost(os.Stdout, client, os.Args[2:]); err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+}
+
+// runCost prints GET /costs as a table (or the raw body with --json), then,
+// when calls are unpriced, their class breakdown and a pricing hint per
+// unpriced model id from GET /costs/unpriced.
+func runCost(w io.Writer, client *http.Client, args []string) error {
+	since := queryFlag(args, "--since", "24h")
 	q := url.Values{}
-	q.Set("since", queryFlag(args, "--since", "24h"))
+	q.Set("since", since)
 	q.Set("by", queryFlag(args, "--by", "repo"))
 	code, body := request(client, http.MethodGet, "http://unix/costs?"+q.Encode(), "")
 	if code != 200 {
-		fmt.Printf("cost failed (%d): %s\n", code, strings.TrimSpace(body))
-		os.Exit(1)
+		return fmt.Errorf("cost failed (%d): %s", code, strings.TrimSpace(body))
 	}
 	if slices.Contains(args, "--json") {
-		fmt.Println(body)
-		return
+		fmt.Fprintln(w, body)
+		return nil
 	}
 	var rep costReport
 	if err := json.Unmarshal([]byte(body), &rep); err != nil {
-		fmt.Printf("cost: unreadable response: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("cost: unreadable response: %v", err)
 	}
-	fmt.Print(formatCostTable(rep))
+	fmt.Fprint(w, formatCostTable(rep))
+	if rep.Total.Unpriced == 0 {
+		return nil
+	}
+	// An older daemon has no /costs/unpriced: the breakdown prints without hints.
+	var unpriced struct {
+		Rows []unpricedRow `json:"rows"`
+	}
+	if code, body := request(client, http.MethodGet, "http://unix/costs/unpriced?"+url.Values{"since": {since}}.Encode(), ""); code == 200 {
+		_ = json.Unmarshal([]byte(body), &unpriced)
+	}
+	fmt.Fprint(w, formatCostClasses(rep.Total, unpriced.Rows))
+	return nil
+}
+
+// formatCostClasses renders why calls are unpriced and one hint per model id
+// that only needs a price entry.
+func formatCostClasses(total costRow, rows []unpricedRow) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "\nunpriced: %d calls — %d unknown model, %d unpriced model, %d plan, %d local\n",
+		total.Unpriced, total.UnknownModel, total.UnpricedModel, total.Plan, total.Local)
+	seen := map[string]bool{}
+	for _, r := range rows {
+		if r.Class != "unpriced-model" || seen[r.Model] {
+			continue
+		}
+		seen[r.Model] = true
+		fmt.Fprintf(&b, "add a price for %s under pricing: in ~/.config/secure-agent/config.yaml\n", r.Model)
+	}
+	return b.String()
 }
 
 const costKeyMaxWidth = 48

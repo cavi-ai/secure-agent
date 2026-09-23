@@ -70,9 +70,9 @@ type OpencodeCollector struct {
 	// tail, which is idempotent (the session spine dedupes by id).
 	watermark int64
 
-	// modelCache: session id → last-seen assistant model id, so the per-part
-	// model lookup is one bounded query per session, not per event.
-	modelCache map[string]string
+	// modelCache: session id → last-seen assistant model and provider, so
+	// the per-part lookup is one bounded query per session, not per event.
+	modelCache map[string]opencodeModel
 }
 
 // NewOpencodeCollector builds the poller. Empty dbPath resolves the default.
@@ -173,11 +173,11 @@ func (c *OpencodeCollector) pollOnce() int {
 			maxSeen = updated
 		}
 		for _, e := range OpencodePartEvents(sessionID, data, updated) {
-			// Stamp the model: step-finish rows otherwise carry no model id
-			// and land unpriced. Best-effort; empty is honest when the
-			// message row has none.
+			// Stamp the model and provider: step-finish rows otherwise carry
+			// neither and land unexplained. Best-effort; empty is honest
+			// when the message row has none.
 			if e.Kind == event.KindModelCall && e.Model == "" {
-				e.Model = c.modelFor(db, sessionID)
+				e.Model, e.Provider = c.modelFor(db, sessionID)
 				if e.Model != "" && e.CostUSD == 0 {
 					e.CostUSD = ModelCostUSD(e.Model, e.TokensIn, e.TokensOut)
 				}
@@ -198,12 +198,15 @@ func (c *OpencodeCollector) pollOnce() int {
 	return published
 }
 
-// modelFor reads the model id off a session's most recent assistant message
-// (message.data JSON carries model: {providerID, modelID}). Bounded to one
-// small row; a schema drift degrades to "" quietly.
-func (c *OpencodeCollector) modelFor(db *sql.DB, sessionID string) string {
+// opencodeModel is a session's model id and provider id.
+type opencodeModel struct{ id, provider string }
+
+// modelFor reads the model and provider ids off a session's most recent
+// assistant message (message.data JSON carries modelID and providerID).
+// Bounded to one small row; a schema drift degrades to "" quietly.
+func (c *OpencodeCollector) modelFor(db *sql.DB, sessionID string) (model, provider string) {
 	if v, ok := c.modelCache[sessionID]; ok {
-		return v
+		return v.id, v.provider
 	}
 	var data string
 	err := db.QueryRow(`
@@ -211,32 +214,37 @@ func (c *OpencodeCollector) modelFor(db *sql.DB, sessionID string) string {
 		WHERE session_id = ? AND json_extract(data, '$.role') = 'assistant'
 		ORDER BY time_updated DESC LIMIT 1`, sessionID).Scan(&data)
 	if err != nil {
-		return ""
+		return "", ""
 	}
-	// opencode's message.data has carried the model two ways: nested
-	// (model.modelID) on older builds and top-level (modelID) on current
-	// ones. Read both; top-level wins.
+	// opencode's message.data has carried the ids two ways: nested
+	// (model.modelID, model.providerID) on older builds and top-level
+	// (modelID, providerID) on current ones. Read both; top-level wins.
 	var m struct {
-		ModelID string `json:"modelID"`
-		Model   struct {
-			ModelID string `json:"modelID"`
+		ModelID    string `json:"modelID"`
+		ProviderID string `json:"providerID"`
+		Model      struct {
+			ModelID    string `json:"modelID"`
+			ProviderID string `json:"providerID"`
 		} `json:"model"`
 	}
 	if json.Unmarshal([]byte(data), &m) != nil {
-		return ""
+		return "", ""
 	}
-	id := m.ModelID
-	if id == "" {
-		id = m.Model.ModelID
+	v := opencodeModel{id: m.ModelID, provider: m.ProviderID}
+	if v.id == "" {
+		v.id = m.Model.ModelID
 	}
-	if id == "" {
-		return ""
+	if v.provider == "" {
+		v.provider = m.Model.ProviderID
+	}
+	if v.id == "" {
+		return "", ""
 	}
 	if c.modelCache == nil {
-		c.modelCache = map[string]string{}
+		c.modelCache = map[string]opencodeModel{}
 	}
-	c.modelCache[sessionID] = id
-	return id
+	c.modelCache[sessionID] = v
+	return v.id, v.provider
 }
 
 // OpencodePartEvents maps one opencode `part` row to trace events. Pure and

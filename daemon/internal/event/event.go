@@ -85,6 +85,7 @@ type Event struct {
 	ToolStatus string  `json:"tool_status,omitempty"` // tool_call: ok | error | running
 	DurationMs int64   `json:"duration_ms,omitempty"` // tool_call: start→result
 	Model      string  `json:"model,omitempty"`       // model_call: model id
+	Provider   string  `json:"provider,omitempty"`    // model_call: provider id as the harness names it (opencode providerID, codex model_provider)
 	TokensIn   int64   `json:"tokens_in,omitempty"`   // model_call: input + cache-creation tokens
 	TokensOut  int64   `json:"tokens_out,omitempty"`  // model_call: output tokens
 	CostUSD    float64 `json:"cost_usd,omitempty"`    // model_call: approximate, from the pricing table (0 = unknown model)

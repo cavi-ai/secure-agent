@@ -7,6 +7,11 @@ All notable changes to `secure-agent` are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- `/costs` rows and total split `unpriced_calls` into `unknown_model_calls`, `unpriced_model_calls`, `plan_calls` and `local_calls`.
+- `/costs?by=model` rows carry `provider` and `class`.
+- `GET /costs/unpriced`: zero-cost calls by harness, provider and model with their class.
+- `secure-agent cost` prints the class breakdown and one pricing hint per unpriced model id.
+- opencode and codex model calls record the provider.
 - Owner-only `GET /debug/pprof/` on the control socket: Go runtime profiles
   for the owner uid and the pinned menubar app; refused for agent and
   foreign peers, never admitted by the console token, not served on the
@@ -34,6 +39,10 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Console: an explained flag's card and Attention item show who, what and the one verdict with the served actions as buttons; raw evidence, pid and timestamps sit behind Details.
 
 ### Fixed
+- Codex model calls name the model from `turn_context` when the rollout has no `thread_settings_applied` line.
+- A codex rollout resumed from a saved offset keeps its session and model.
+- Claude `<synthetic>` records no longer count as model calls.
+- A vendor-prefixed model id is priced by its unprefixed entry.
 - Spool tailer: lines under 16 bytes or not starting with `{` are rejected
   before JSON parsing; a per-tick 4 MiB drain budget skips the rest of a
   flooded tail in bulk instead of scanning it, and posture/doctor report a

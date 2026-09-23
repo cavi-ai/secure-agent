@@ -15,6 +15,7 @@ export interface Event {
   tool_status?: string;
   duration_ms?: number;
   model?: string;
+  provider?: string;
   tokens_in?: number;
   tokens_out?: number;
   cost_usd?: number;
@@ -315,12 +316,18 @@ export interface Posture {
 export interface CostRow {
   key: string;
   harness?: string;
+  provider?: string;
+  class?: string;
   calls: number;
   sessions: number;
   tokens_in: number;
   tokens_out: number;
   cost_usd: number;
   unpriced_calls: number;
+  unknown_model_calls: number;
+  unpriced_model_calls: number;
+  plan_calls: number;
+  local_calls: number;
 }
 
 export interface CostReport {

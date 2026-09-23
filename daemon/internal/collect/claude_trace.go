@@ -124,7 +124,8 @@ func (t *ClaudeTracer) ParseLine(line string) (events []event.Event, cwd string,
 
 	switch rec.Type {
 	case "assistant":
-		if rec.Message.Usage != nil && rec.Message.Model != "" {
+		// "<synthetic>" is Claude Code's own zero-usage turn, not a model call.
+		if rec.Message.Usage != nil && rec.Message.Model != "" && rec.Message.Model != "<synthetic>" {
 			u := rec.Message.Usage
 			in := u.InputTokens + u.CacheCreationTokens
 			events = append(events, event.Event{
