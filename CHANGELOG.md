@@ -7,6 +7,9 @@ All notable changes to `secure-agent` are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- Operator labels: allow, mute, path allow and guard answers record ok or not ok for the case (rule, agent, path or host); `POST /labels` takes Mark as routine / Mark as not ok and kills from a finding.
+- Flag explanations count the operator's labels on the same case; `/advisor/plan` shows the 5 most similar and, after 3 consistent labels, suggests the offered allow (or kill); triage and plan prompts carry the similar labels.
+- Console: Mark as routine / not ok on finding cards and in the What to do drawer, with your history and the suggestion.
 - Playbooks: every rule has a fixed response — why it fires, what to do now, how to prevent it (guard rules, settings, secret handling, agent instructions, workflow), which actions apply.
 - `GET/POST /advisor/plan`: the playbook always; on request the local advisor writes a plan from this machine's context (explanation, session, masked file excerpt, history, local policy) — why, prevention, behavior changes, remediation, recommended actions; stale when new evidence arrives.
 - Console: a What to do drawer on every finding, and the playbook and plan in the incident and file drawers with Ask the advisor and the recommended actions as buttons.
