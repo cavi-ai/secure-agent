@@ -62,6 +62,7 @@ var Table = []Route{
 	{Path: "/ui/open-fda", Console: true, MutatingMethods: []string{"POST"}},
 	{Path: "/stats/rollup", Console: true},
 	{Path: "/costs", Console: true},
+	{Path: "/doctor", Console: true},
 	{Path: "/advisor/discover"},
 	{Path: "/fleet", Console: true},
 	{Path: "/kill", Console: true, MutatingMethods: []string{"POST"}},

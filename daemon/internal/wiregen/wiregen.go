@@ -42,6 +42,8 @@ func WireTypes() []any {
 		advisor.HealthSnapshot{},
 		store.CostRow{},
 		store.CostReport{},
+		api.DoctorReport{},
+		api.DoctorCheck{},
 	}
 }
 

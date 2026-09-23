@@ -589,12 +589,8 @@ func (s *Store) pruneEventsLocked() {
 	}
 	rows.Close()
 	for _, k := range kinds {
-		budget, ok := kindBudgets[k]
-		if !ok {
-			budget = defaultKindBudget
-		}
 		_, _ = s.db.Exec(`DELETE FROM events WHERE kind = ? AND id NOT IN
-			(SELECT id FROM events WHERE kind = ? ORDER BY id DESC LIMIT ?)`, k, k, budget)
+			(SELECT id FROM events WHERE kind = ? ORDER BY id DESC LIMIT ?)`, k, k, kindBudget(k))
 	}
 }
 
@@ -621,6 +617,14 @@ var kindBudgets = map[int]int{
 }
 
 const defaultKindBudget = 5000 // any kind not listed above
+
+// kindBudget is the row budget for one event kind.
+func kindBudget(kind int) int {
+	if b, ok := kindBudgets[kind]; ok {
+		return b
+	}
+	return defaultKindBudget
+}
 
 // FlagFilter narrows a flag history query. A zero value returns the most recent
 // flags — RecentFlags is exactly that. Since is any RFC3339 timestamp (any

@@ -105,6 +105,12 @@ All notable changes to `secure-agent` are documented here. The format follows
   behavior change.
 
 ### Added
+- **Self-check.** `GET /doctor` and `secure-agent doctor` report pass, fail
+  or skip for guard-hook registration and activity, file telemetry,
+  collectors, per-harness trace coverage, session identity, repo attribution
+  and creation rate, tool-call pairing, Claude model-call pricing, per-kind
+  retention, egress routing and bus drops, each failure with a one-line fix;
+  the CLI exits 1 on any failure.
 - **Model-call spend.** `GET /costs` and `secure-agent cost` sum model calls
   by repo, branch, harness, session or model over a window (`since`,
   `until`), with tokens, distinct sessions and the dominant harness per

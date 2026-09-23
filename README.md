@@ -59,6 +59,7 @@ As AI coding agents (Claude Code, Cursor, Codex, Gemini, opencode, Copilot, etc.
 
 - 🛠️ **Native `secure-agent` CLI Tool**  
   Pure-Go terminal utility (`secure-agent status`, `flags`, `incidents`, `kill`, `fleet`, `service`) for inspecting security posture directly from terminal prompts. `secure-agent service install` runs the daemon headless under launchd for fleet/CI nodes with no GUI login.
+  - `secure-agent doctor` — hooks, file telemetry, collectors, trace coverage, sessions, pairing, pricing, retention, egress; exit 1 on any failure, for CI.
 
 - 🔌 **Local Control & Query API**  
   Exposes a secure HTTP API over a Unix domain socket (`~/.config/secure-agent/daemon.sock`) for querying status, events, flags, incidents, and initiating process termination.
