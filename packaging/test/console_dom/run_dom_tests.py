@@ -176,6 +176,7 @@ def main():
         dom_quiet = dump_dom(chrome, tmp, "?quietdemo")
         dom_nomatch = dump_dom(chrome, tmp, "?nomatchdemo")
         dom_phone = dump_dom(chrome, tmp, "?phonedemo")
+        dom_nocosts = dump_dom(chrome, tmp, "?nocostsdemo")
 
         # --- session-first tab (P3) ---
         rail = dom.split('id="session-rail"', 1)[1].split('id="session-detail"', 1)[0]
@@ -257,6 +258,18 @@ def main():
         check("KPI agents count", 'id="count-agents">3<' in dom)
         check("KPI flags are unacted last 24h", 'id="count-flags">2<' in dom)
         check("KPI incidents count", 'id="count-incidents">1<' in dom)
+        check("spend tile shows the 24h total", 'id="count-spend">$36.67<' in dom)
+        check("spend tile sub-line counts calls and unpriced calls",
+              'id="hint-spend">40 calls · 2 unpriced<' in dom)
+        spend_card = dom.split('id="spend-by-repo"', 1)[1].split('</section>', 1)[0]
+        spend_keys = re.findall(r'<span class="spend-key" title="[^"]*">([^<]+)</span>', spend_card)
+        check("spend card lists the top 5 repos by cost",
+              spend_keys == ["api-service", "web-console", "infra-tools", "scratch", "(no repo)"]
+              and '<span class="spend-cost">$24.50</span>' in spend_card
+              and '#logo-claude' in spend_card, f"keys={spend_keys}")
+        check("empty spend report: tile reads an em dash, card shows its empty state",
+              'id="count-spend">—<' in dom_nocosts and 'id="hint-spend"><' in dom_nocosts
+              and "No priced model calls in the last 24h." in dom_nocosts)
         agents_view = dom.split('id="agents-container"', 1)[1].split('id="fleet-col"', 1)[0]
         agent_groups = re.findall(r'<details class="agent-group" data-harness="([^"]+)"', agents_view)
         check("agents tab renders one group per harness, newest first",

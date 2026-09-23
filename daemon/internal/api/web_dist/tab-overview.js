@@ -357,6 +357,38 @@ function renderChartMemory() {
   applyInlineMetrics(el);
 }
 
+// Spend: the stat-strip tile (24h total) and the top-repos card, both from
+// the /costs report. Unpriced calls (unknown model) are counted, never priced.
+function renderSpend() {
+  const SA = window.SA;
+  const report = SA.t.costs;
+  const total = (report && report.total) || {};
+  const calls = Number(total.calls) || 0;
+  const num = document.getElementById('count-spend');
+  const hint = document.getElementById('hint-spend');
+  if (num) num.textContent = calls ? fmtUSD(total.cost_usd) : '—';
+  if (hint) {
+    const unpriced = Number(total.unpriced_calls) || 0;
+    hint.textContent = calls
+      ? `${calls} call${calls === 1 ? '' : 's'}` + (unpriced ? ` · ${unpriced} unpriced` : '')
+      : '';
+  }
+
+  const el = document.getElementById('spend-by-repo');
+  if (!el) return;
+  const rows = topCostRows(report, 5);
+  if (!rows.some(row => Number(row.cost_usd) > 0)) {
+    el.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-activity"/></svg><span>No priced model calls in the last 24h.</span></div>`;
+    return;
+  }
+  el.innerHTML = rows.map(row => `<div class="spend-row">
+      <span class="spend-key" title="${escapeHTML(row.key)}">${escapeHTML(row.key)}</span>
+      ${row.harness ? harnessChipHTML(row.harness) : ''}
+      <span class="spend-cost">${escapeHTML(fmtUSD(row.cost_usd))}</span>
+    </div>`).join('');
+  applyInlineMetrics(el);
+}
+
 function renderSessionStrip() {
   const SA = window.SA;
   const panel = document.getElementById('session-strip-panel');

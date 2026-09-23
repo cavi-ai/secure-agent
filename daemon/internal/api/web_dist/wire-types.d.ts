@@ -249,3 +249,22 @@ export interface Posture {
   connected: boolean;
 }
 
+export interface CostRow {
+  key: string;
+  harness?: string;
+  calls: number;
+  sessions: number;
+  tokens_in: number;
+  tokens_out: number;
+  cost_usd: number;
+  unpriced_calls: number;
+}
+
+export interface CostReport {
+  since: string;
+  until: string;
+  by: string;
+  total: CostRow;
+  rows: CostRow[];
+}
+

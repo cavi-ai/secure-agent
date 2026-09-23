@@ -98,6 +98,12 @@ All notable changes to `secure-agent` are documented here. The format follows
   behavior change.
 
 ### Added
+- **Model-call spend.** `GET /costs` and `secure-agent cost` sum model calls
+  by repo, branch, harness, session or model over a window (`since`,
+  `until`), with tokens, distinct sessions and the dominant harness per
+  group. Calls from models outside the pricing table are counted as
+  `unpriced_calls` and never assigned a cost. The console Overview shows a
+  24h spend tile and a top-5 spend-by-repo card.
 - **Unified Attention Center.** The console now groups resource approvals,
   blocked guard requests, critical findings and incidents, and uninspected
   egress by complete agent session. Each group shows its workspace, process

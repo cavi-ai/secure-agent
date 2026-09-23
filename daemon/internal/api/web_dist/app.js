@@ -219,6 +219,7 @@ document.addEventListener('DOMContentLoaded', () => {
     uninspected: [],  // /egress/uninspected rows — the drill-down list
     guardPending: [], // blocked tool calls waiting for an operator decision
     notifyCfg: null,  // /notify/rules payload — notification preferences
+    costs: null,      // /costs report (24h, by repo) — spend tile and card
     connected: true
   };
 
@@ -663,7 +664,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     if (slow) {
-      const [fleet, audit, sources, rollup, uninspected, notifyCfg, allowlist, episodes] = await Promise.all([
+      const [fleet, audit, sources, rollup, uninspected, notifyCfg, allowlist, episodes, costs] = await Promise.all([
         grab('fleet', '/fleet'),
         grab('audit', '/audit?limit=50'),
         grab('firewall sources', '/firewall/sources'),
@@ -671,7 +672,8 @@ document.addEventListener('DOMContentLoaded', () => {
         grab('uninspected egress', '/egress/uninspected?hours=24&limit=200'),
         grab('notification rules', '/notify/rules'),
         grab('allowlist', '/allowlist'),
-        grab('resource episodes', '/resources/episodes')
+        grab('resource episodes', '/resources/episodes'),
+        grab('spend', '/costs?since=24h&by=repo')
       ]);
       if (fleet) telemetryData.fleet = fleet || [];
       if (audit) telemetryData.audit = audit || [];
@@ -681,6 +683,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (episodes) telemetryData.episodes = episodes || [];
       if (notifyCfg) telemetryData.notifyCfg = notifyCfg;
       if (allowlist) telemetryData.allowlist = allowlist || [];
+      if (costs) telemetryData.costs = costs;
     }
 
     telemetryData.flagsView = telemetryData.flags;
@@ -710,7 +713,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // activity — on every single poll.
     const panels = [
       ['posture', renderPosture], ['status', renderStatus], ['resources', renderResourceMissionControl], ['history', renderResourceHistory], ['sessions', renderSessionBoard],
-      ['chart-flags', renderChartFlags], ['chart-memory', renderChartMemory],
+      ['chart-flags', renderChartFlags], ['chart-memory', renderChartMemory], ['spend', renderSpend],
       ['agents', renderAgents],
       ['firewall', renderFirewall], ['incidents', renderIncidents], ['fleet', renderFleet],
       ['audit', renderAudit], ['sources', renderSources], ['flags', renderFlags], ['attention', renderAttention],

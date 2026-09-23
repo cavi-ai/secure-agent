@@ -39,7 +39,32 @@ const {
   sessionTitle, groupSessionsByHarness, applySessionFilters, familySize,
   sessionGroupCounts, sessionCountStrip, harnessPillsHTML, middleTruncate,
   hbarsHTML, sessionWaterfallHTML, applyInlineMetrics, resourceHostContextHTML,
+  fmtUSD, topCostRows,
 } = ctx;
+
+// ---------- spend ----------
+
+test('fmtUSD: two decimals, thousands separators, sub-cent floor', () => {
+  assert.equal(fmtUSD(0), '$0.00');
+  assert.equal(fmtUSD(0.004), '<$0.01');
+  assert.equal(fmtUSD(36.674), '$36.67');
+  assert.equal(fmtUSD(1234.5), '$1,234.50');
+  assert.equal(fmtUSD(undefined), '$0.00');
+});
+
+test('topCostRows sorts by cost desc, then calls, slices, and tolerates missing data', () => {
+  const report = { rows: [
+    { key: 'b', cost_usd: 0.1, calls: 1 },
+    { key: 'c', cost_usd: 0, calls: 9 },
+    { key: 'a', cost_usd: 5, calls: 2 },
+    { key: 'd', cost_usd: 0, calls: 3 },
+  ] };
+  assert.deepEqual([...topCostRows(report, 3)].map(r => r.key), ['a', 'b', 'c']);
+  assert.deepEqual(report.rows.map(r => r.key), ['b', 'c', 'a', 'd'], 'input not mutated');
+  assert.deepEqual([...topCostRows(undefined, 5)], []);
+  assert.deepEqual([...topCostRows({}, 5)], []);
+  assert.deepEqual([...topCostRows({ rows: null }, 5)], []);
+});
 
 // ---------- unified attention center ----------
 // The grouping itself is computed daemon-side (daemon/internal/api/attention.go,

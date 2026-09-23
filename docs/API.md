@@ -377,6 +377,40 @@ Resolves a pending prompt: `{"id","verdict":"allow|deny","scope":"once|always"}`
 
 Lists stored guard decisions (GET); revokes one (DELETE `?agent=&rule_id=`), forcing a fresh prompt next time.
 
+### 16. `GET /costs`
+
+Model-call spend over a window, grouped by one dimension, across every traced harness.
+
+```
+GET /costs?since=24h&by=repo
+```
+
+| Param | Values | Default |
+|---|---|---|
+| `since` | lookback (`24h`, `90m`, `7d`) or RFC3339 timestamp | `24h` |
+| `until` | RFC3339 timestamp | now |
+| `by` | `repo`, `branch` (`repo@branch`), `harness`, `session`, `model` | `repo` |
+
+A malformed `since`/`until` or an unknown `by` returns `400` with a one-line body.
+
+```json
+{
+  "since": "2026-09-21T12:00:00Z",
+  "until": "2026-09-22T12:00:00Z",
+  "by": "repo",
+  "total": {"key": "", "calls": 4, "sessions": 3, "tokens_in": 400, "tokens_out": 40,
+            "cost_usd": 0.85, "unpriced_calls": 1},
+  "rows": [
+    {"key": "api-service", "harness": "claude", "calls": 2, "sessions": 1,
+     "tokens_in": 200, "tokens_out": 20, "cost_usd": 0.75, "unpriced_calls": 0},
+    {"key": "(no repo)", "harness": "codex", "calls": 1, "sessions": 1,
+     "tokens_in": 100, "tokens_out": 10, "cost_usd": 0, "unpriced_calls": 1}
+  ]
+}
+```
+
+Rows are sorted by cost, then calls (at most 200); `rows` is `[]` when the window is empty. `harness` is the harness with the most calls in the group (omitted for `by=harness`). Missing repo, branch, harness or model values group as `(no repo)`, `(no branch)`, `(unknown)`. `unpriced_calls` counts calls whose model is not in the pricing table: their cost is `0` and is never estimated. Read-level. CLI: `secure-agent cost [--since 24h] [--by repo] [--json]`.
+
 ---
 
 ## 🔐 Peer authentication & endpoint roles
