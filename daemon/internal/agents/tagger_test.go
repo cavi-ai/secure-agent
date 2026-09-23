@@ -46,6 +46,27 @@ func TestTagInheritsFromAgentParent(t *testing.T) {
 	}
 }
 
+func TestParentPID(t *testing.T) {
+	fake := fakeProcs{
+		100: {PID: 100, PPID: 1, Exe: "/usr/local/bin/codex"},
+		200: {PID: 200, PPID: 100, Exe: "/usr/local/bin/codex"},
+	}
+	c, _ := config.Load("/nonexistent")
+	tg := New(c, fake)
+	tg.Refresh()
+	if ppid, ok := tg.ParentPID(200); !ok || ppid != 100 {
+		t.Fatalf("ParentPID(200) = %d, %v; want 100, true", ppid, ok)
+	}
+	if ppid, ok := tg.ParentPID(999); ok || ppid != 0 {
+		t.Fatalf("ParentPID(999) = %d, %v; want 0, false", ppid, ok)
+	}
+	// A pid spawned after the last refresh is read from the process source.
+	fake[300] = ProcInfo{PID: 300, PPID: 200, Exe: "/bin/zsh"}
+	if ppid, ok := tg.ParentPID(300); !ok || ppid != 200 {
+		t.Fatalf("ParentPID(300) = %d, %v; want 200, true", ppid, ok)
+	}
+}
+
 // The Cursor IDE and local model servers are shared infrastructure, not
 // agents: still tagged (monitored, killable) but marked kind=infra so counts
 // and the "reclaimable" headline exclude them.

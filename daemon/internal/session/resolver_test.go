@@ -304,6 +304,89 @@ func TestAgedWorkspacePersistsRegardlessOfPath(t *testing.T) {
 	}
 }
 
+// orchestratorTree is an openclaw family root (100) whose node child (101)
+// spawns a codex run (102): the codex tag chain stops at codex itself.
+func orchestratorTree() fakeProcs {
+	started := time.Now().Add(-time.Hour)
+	return fakeProcs{
+		100: {PID: 100, PPID: 1, Exe: "/Users/u/.openclaw/node/bin/node", CWD: "/ws", StartTime: started},
+		101: {PID: 101, PPID: 100, Exe: "/Users/u/.openclaw/node/bin/node", CWD: "/ws", StartTime: started},
+		102: {PID: 102, PPID: 101, Exe: "/opt/homebrew/bin/codex", CWD: "/ws/run", StartTime: started},
+	}
+}
+
+func resolvePID(t *testing.T, r *Resolver, pid int32) string {
+	t.Helper()
+	e := event.Event{Kind: event.KindFileOpen, PID: pid, TS: time.Now()}
+	id := r.Resolve(&e)
+	if id == "" {
+		t.Fatalf("pid %d not attributed", pid)
+	}
+	return id
+}
+
+func TestOrchestratedRunNestsUnderOrchestrator(t *testing.T) {
+	r, st := testResolver(t, orchestratorTree())
+	parent := resolvePID(t, r, 100)
+	child := resolvePID(t, r, 102)
+	got, ok := st.GetSession(child)
+	if !ok || got.Harness != "codex" || got.ParentID != parent {
+		t.Fatalf("codex session = %+v, %v; want parent %q", got, ok, parent)
+	}
+}
+
+// The orchestrator family's session is the one held by its highest ancestor,
+// even when a nearer family member resolved a session of its own.
+func TestOrchestratorParentIsFamilyRootSession(t *testing.T) {
+	r, st := testResolver(t, orchestratorTree())
+	parent := resolvePID(t, r, 100)
+	resolvePID(t, r, 101)
+	child := resolvePID(t, r, 102)
+	if got, _ := st.GetSession(child); got.ParentID != parent {
+		t.Fatalf("codex parent = %q, want %q", got.ParentID, parent)
+	}
+}
+
+// No session is invented for an orchestrator family that has none yet.
+func TestOrchestratorWithoutSessionLeavesParentEmpty(t *testing.T) {
+	r, st := testResolver(t, orchestratorTree())
+	child := resolvePID(t, r, 102)
+	if got, ok := st.GetSession(child); !ok || got.ParentID != "" {
+		t.Fatalf("codex session = %+v, %v; want no parent", got, ok)
+	}
+}
+
+func TestRootWithoutOtherHarnessHasNoParent(t *testing.T) {
+	started := time.Now().Add(-time.Hour)
+	r, st := testResolver(t, fakeProcs{
+		300: {PID: 300, PPID: 1, Exe: "/bin/zsh", StartTime: started},
+		301: {PID: 301, PPID: 300, Exe: "/opt/homebrew/bin/codex", CWD: "/a", StartTime: started},
+		302: {PID: 302, PPID: 301, Exe: "/opt/homebrew/bin/codex", CWD: "/b", StartTime: started},
+	})
+	for _, pid := range []int32{301, 302} {
+		id := resolvePID(t, r, pid)
+		if got, _ := st.GetSession(id); got.ParentID != "" {
+			t.Fatalf("pid %d parent = %q, want none", pid, got.ParentID)
+		}
+	}
+}
+
+// An IDE is infrastructure, not an orchestrator: an agent started from its
+// terminal stays top-level even when the IDE has a session.
+func TestInfraAncestorIsNotOrchestrator(t *testing.T) {
+	started := time.Now().Add(-time.Hour)
+	r, st := testResolver(t, fakeProcs{
+		400: {PID: 400, PPID: 1, Exe: "/Applications/Cursor.app/Contents/MacOS/Cursor", StartTime: started},
+		401: {PID: 401, PPID: 400, Exe: "/bin/zsh", StartTime: started},
+		402: {PID: 402, PPID: 401, Exe: "/usr/local/bin/claude", CWD: "/repo", StartTime: started},
+	})
+	resolvePID(t, r, 400)
+	child := resolvePID(t, r, 402)
+	if got, _ := st.GetSession(child); got.ParentID != "" {
+		t.Fatalf("claude parent = %q, want none", got.ParentID)
+	}
+}
+
 func mustConfig(t *testing.T) config.Config {
 	t.Helper()
 	cfg, _ := config.Load("/nonexistent")
