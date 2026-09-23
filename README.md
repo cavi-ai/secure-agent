@@ -61,6 +61,7 @@ As AI coding agents (Claude Code, Cursor, Codex, Gemini, opencode, Copilot, etc.
 - 🛠️ **Native `secure-agent` CLI Tool**  
   Pure-Go terminal utility (`secure-agent status`, `flags`, `incidents`, `kill`, `fleet`, `service`) for inspecting security posture directly from terminal prompts. `secure-agent service install` runs the daemon headless under launchd for fleet/CI nodes with no GUI login.
   - `secure-agent doctor` — hooks, file telemetry, collectors, trace coverage, sessions, pairing, pricing, retention, egress; exit 1 on any failure, for CI.
+  - `secure-agent worktrees` — every git worktree from agent sessions, agent worktree directories and a saved repo list, each marked remove, review, keep or prune with the reasons.
 
 - 🔌 **Local Control & Query API**  
   Exposes a secure HTTP API over a Unix domain socket (`~/.config/secure-agent/daemon.sock`) for querying status, events, flags, incidents, and initiating process termination.
@@ -351,6 +352,8 @@ The Go daemon listens on a local Unix domain socket (`~/.config/secure-agent/dae
 | `/events` | `GET` | Returns recent raw system events (accepts optional `?limit=N`). |
 | `/incidents` | `GET` | Returns rotation intel postmortem reports & checklists (`?id=ID`, `?format=markdown`). |
 | `/kill` | `POST` | Terminate an agent process tree by PID (`{"pid": 12345}`). |
+| `/worktrees` | `GET` | Every git worktree found, with a remove/review/keep/prune verdict and its reasons (`?refresh=1` rescans). |
+| `/worktrees/repos` | `POST` | Add a repository to the worktree hunter's saved list, or hide it (`{"path": "...", "hidden": true}`). |
 
 ### Example Query
 

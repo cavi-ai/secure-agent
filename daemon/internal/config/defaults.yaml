@@ -137,3 +137,9 @@ otlp:
   service: "secure-agent"
   headers: {}
   labels: {}
+# Worktree hunter (`secure-agent worktrees`, console Worktrees tab). Repos are
+# found from agent sessions, the usual worktree directories and a saved list;
+# roots adds directories to search for repos (depth 3).
+worktrees:
+  roots: []
+  stale_days: 14                    # idle age that marks a worktree stale

@@ -75,6 +75,8 @@ func main() {
 		handleSession(client)
 	case "doctor":
 		handleDoctor(client)
+	case "worktrees":
+		handleWorktrees(client)
 	case "guard":
 		handleGuard(client, os.Args[2:])
 	case "firewall":
@@ -103,6 +105,8 @@ func printUsage() {
 	fmt.Println("  secure-agent sessions [--harness H] [--repo R] [--branch B] [--since D] [--status S] [--limit N]  List sessions (--json for the raw body)")
 	fmt.Println("  secure-agent session <id-or-prefix>      Print what one session did — tools, models, cost, files, hosts, guard decisions, findings — as markdown (--json for the JSON report)")
 	fmt.Println("  secure-agent doctor [--json]             Self-check: hooks, file telemetry, collectors, traces, sessions, pairing, pricing, retention, egress; exit 1 on any failure")
+	fmt.Println("  secure-agent worktrees [--state S] [--repo R] [--stale] [--refresh] [--json]  Find every git worktree and say whether it can be removed (remove|review|keep|prune) and why")
+	fmt.Println("  secure-agent worktrees add|hide <path>   Put a repository on the worktree hunter's saved list, or hide it from reports")
 	fmt.Println("  secure-agent kill <PID>                  Terminate an agent process tree by PID")
 	fmt.Println("  secure-agent fleet                       Show THIS node's fleet identity (node_id, hostname, version) — remote rollups live at the collector's /fleet")
 	fmt.Println("  secure-agent fleet enroll <url>          Enroll this node into a collector: generate the secret, write fleet.webhooks, print the collector line")

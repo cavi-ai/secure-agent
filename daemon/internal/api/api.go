@@ -30,6 +30,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/resource"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 	"github.com/cavi-ai/secure-agent/daemon/internal/supervise"
+	"github.com/cavi-ai/secure-agent/daemon/internal/worktreehunter"
 	"golang.org/x/sys/unix"
 )
 
@@ -144,6 +145,7 @@ type API struct {
 	killer           Killer
 	statusFn         StatusFunc
 	hermes           func() collect.HermesStatus
+	worktrees        *worktreehunter.Hunter
 	resources        func() resource.Snapshot
 	resourceControl  *resource.Controller
 	resourcePolicy   func(config.ResourceControlConfig) error
@@ -274,6 +276,10 @@ type Deps struct {
 	// Hermes reports the Hermes Agent collector's state for /doctor
 	// (optional; unwired reads "not wired").
 	Hermes func() collect.HermesStatus
+
+	// Worktrees is the worktree hunter behind /worktrees (optional; unwired
+	// answers 503).
+	Worktrees *worktreehunter.Hunter
 }
 
 // New builds the API from its resolved dependencies.
@@ -284,6 +290,7 @@ func New(d Deps) *API {
 		killer:          d.Killer,
 		statusFn:        d.Status,
 		hermes:          d.Hermes,
+		worktrees:       d.Worktrees,
 		resources:       d.Resources,
 		resourceControl: d.ResourceControl,
 		resourcePolicy:  d.ResourcePolicyUpdater,
@@ -575,6 +582,8 @@ func (a *API) routes() map[string]http.HandlerFunc {
 		"/costs":                        a.handleCosts,
 		"/costs/unpriced":               a.handleCostsUnpriced,
 		"/doctor":                       a.handleDoctor,
+		"/worktrees":                    a.handleWorktrees,
+		"/worktrees/repos":              a.handleWorktreeRepos,
 		"/advisor/discover":             a.handleAdvisorDiscover,
 		"/fleet":                        a.handleFleet,
 		"/kill":                         a.handleKill,
