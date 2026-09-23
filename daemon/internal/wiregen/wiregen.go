@@ -15,6 +15,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/api"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
+	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 	"github.com/cavi-ai/secure-agent/daemon/internal/supervise"
 )
 
@@ -39,6 +40,8 @@ func WireTypes() []any {
 		api.AttentionItem{},
 		supervise.Health{},
 		advisor.HealthSnapshot{},
+		store.CostRow{},
+		store.CostReport{},
 	}
 }
 

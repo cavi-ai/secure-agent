@@ -1451,6 +1451,10 @@ button.fw-uninspected .fw-drill-hint {
 .hbar-fill.infra { background: var(--tx-3); }
 .hbar-val { font: 600 0.78rem/1 var(--mono); color: var(--tx-1); font-variant-numeric: tabular-nums; }
 .hbar-sub { font-size: 0.68rem; color: var(--bad); white-space: nowrap; }
+.spend-list { display: flex; flex-direction: column; gap: 8px; }
+.spend-row { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.spend-key { flex: 1 1 auto; min-width: 0; font-size: 0.8rem; color: var(--tx-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.spend-cost { font: 600 0.78rem/1 var(--mono); color: var(--tx-1); font-variant-numeric: tabular-nums; }
 @media (max-width: 560px) {
   .hbar-sub { display: none; }
   .hbar-row { grid-template-columns: minmax(90px, 1.2fr) minmax(60px, 2fr) auto; }

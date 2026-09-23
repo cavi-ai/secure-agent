@@ -165,6 +165,11 @@
         <span class="ss-num" id="count-proxy">0</span>
         <span class="ss-label">proxy hits</span>
       </div>
+      <div class="ss-item">
+        <span class="ss-num" id="count-spend">—</span>
+        <span class="ss-label">spend · 24h</span>
+        <span class="ss-hint" id="hint-spend"></span>
+      </div>
       <span class="ss-spacer"></span>
       <div class="ss-meta">
         <span class="ss-chip" id="coverage-chip" hidden></span>
@@ -250,6 +255,17 @@
             <div class="panel-body">
               <div id="chart-memory" class="hbars">
                 <div class="empty"><svg class="icon"><use href="#i-agent"/></svg><span>No attributed sessions yet</span></div>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel chart-panel">
+            <div class="panel-head">
+              <h2><svg class="icon"><use href="#i-activity"/></svg>Spend by repo · 24h</h2>
+            </div>
+            <div class="panel-body">
+              <div id="spend-by-repo" class="spend-list">
+                <div class="empty"><svg class="icon"><use href="#i-activity"/></svg><span>No priced model calls in the last 24h.</span></div>
               </div>
             </div>
           </section>

@@ -33,6 +33,7 @@ As AI coding agents (Claude Code, Cursor, Codex, Gemini, opencode, Copilot, etc.
 
 - 🧭 **Harness Trace Coverage**  
   Parses agent-semantic trace events (tool calls, model calls, turns) from Claude Code, Codex, Cursor, Antigravity (agy), and opencode transcripts — a metadata-only trace (names, durations, models, tokens; never content). opencode stores its trace in SQLite and is read by a read-only, watermarked poller. Coverage table in `docs/ARCHITECTURE.md`.
+  - `/costs` and `secure-agent cost`: model-call spend by repo, branch, harness, session or model, across every traced harness.
 
 - 🔗 **Sliding-Window Event Correlation Engine**  
   Correlates process file activity with network egress. Automatically raises security flags when an agent process reads a sensitive file (e.g. `~/.aws/credentials` or `.env`) followed by an outbound socket connection to a domain outside its pre-approved vendor allowlist.
