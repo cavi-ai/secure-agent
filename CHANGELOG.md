@@ -14,6 +14,8 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Transcript secret hits and their flag evidence carry the byte offset of the line.
 - Console: evidence paths (incident Accessed Files, a finding's File) open a file drawer with Reveal in Finder and Open in editor; `#file=<path>` deep link.
 - Menubar: an incident's files reveal in Finder or open their console file drawer.
+- `/advisor/discover` returns `machine` (chip, RAM, free disk) and `recommendations`: installed chat models and a verified catalog (Qwen3.5 4B/9B, Qwen3.6 35B-A3B, Qwen3.8 27B 4-/8-bit) ranked by fit for this machine; Ollama discovery reports model sizes.
+- Menubar: Settings → Advisor lists the models recommended for this Mac with a Use button; onboarding step 9 offers the recommendation with Use recommended.
 - `GET /worktrees`: every git worktree found from session workspaces, agent worktree directories, `worktrees.roots` and a saved repo list, each with state `remove`, `review`, `keep`, `prune` or `main`, reasons, `stale` and last activity.
 - Worktree merge detection by ancestry or a zero-context patch-id match for squash merges; local git only.
 - Worktree rows list precious ignored files (`.env*`, `*.pem`, `*.key`, `.tmp/`, `.claude/`, `.remember/`) with file count and size.
@@ -111,6 +113,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Advisor host pre-assessment still covers cloud, telemetry and unknown hosts.
 
 ### Fixed
+- Secret patterns count only where the match starts a token (not after a base64 or base64url character, except a JSON `\n`, `\t` or `\r` escape): vendor-key shapes inside encrypted reasoning items and other encoded blobs no longer raise secret-in-transcript or proxy findings.
 - Endpoint detail lists an allowance whose approved parent domain covers the host.
 - Endpoint drawer resolves sessions by id, so sessions beyond the newest 1,000 are attributed.
 - A second process in the same working directory gets its own session, never another root's.
