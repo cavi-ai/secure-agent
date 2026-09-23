@@ -631,6 +631,62 @@ What the menubar's advisor setup renders from; loopback only, nothing is downloa
 | `managed_models` | The catalog ids the daemon can run itself with `mlx_lm.server`. |
 | `machine` | `chip`, `ram_bytes`, `free_disk_bytes` (home volume). |
 | `recommendations` | Installed chat models and the catalog, ranked for this machine: `id`, `label`, `source` (`installed` or `managed`), `endpoint`, `bytes`, `fit`, `note`, `recommended`. A model needs its size plus 20 %; `fits` within half the RAM, `tight` within three quarters, else `too-big`; `unknown` when a size is missing. The recommendation is the installed model of a catalog family that fits, else the best catalog model that fits, else the smallest tight one. Embedding, OCR, rerank, speech and music models, component checkpoints (encoders, decoders, tokenizers) and bare content hashes are left out; an `uncensored`, `abliterated` or `heretic` variant never counts as its catalog family. |
+### 19. `GET /worktrees`
+
+Every git worktree the daemon can find, with a verdict on whether it can be removed.
+
+```
+GET /worktrees
+GET /worktrees?refresh=1
+```
+
+Repositories come from four sources: absolute session workspaces, the worktree directories agent apps use (`~/.codex/worktrees/*/*`, `~/.cursor/worktrees/*/*`, `~/.claude/worktrees/*`, `~/conductor/workspaces/*/*`), `worktrees.roots` in the config (searched to depth 3), and the saved list (`POST /worktrees/repos`). Each repository's worktrees come from `git worktree list`; each repository's `.worktrees`, `worktrees`, `.claude/worktrees`, `.claude/.worktrees`, `.codex/worktrees` and `.cursor/worktrees` directories are also read for worktrees git no longer knows (`orphan`). Found repositories are saved.
+
+The scan runs `git` read-only: `GIT_OPTIONAL_LOCKS=0` (no index refresh), `core.fsmonitor=false`, no fetch, no network, no object writes. A scan is cached for 10 minutes; `refresh=1` rescans unless the last scan is under 30 seconds old (`cached: true`).
+
+| `state` | Meaning |
+|---|---|
+| `main` | the repository's main worktree |
+| `prune` | the directory is gone; git still lists it |
+| `keep` | locked, conflicts, uncommitted changes, untracked files, detached-HEAD commits no ref keeps, or a live agent session under the path; also a branch that is neither merged nor idle past `stale_days` |
+| `review` | nothing git-tracked is lost, but something only lives here: precious ignored files (`.env*`, `*.pem`, `*.key`, `.tmp/`, `.claude/`, `.remember/`, with file count and size), commits on no remote and not in the default branch, stashes on the branch, an orphan directory, or an inspection error |
+| `remove` | none of the above, and merged into the default branch (ancestor, squash, or no net change) or every commit on a remote and idle past `stale_days` |
+
+Merge detection is local. The default branch is `origin/HEAD`'s target, else the first of `origin/main`, `origin/master`, `main`, `master`. `merged` is `ancestor` (HEAD reachable from it), `squash` (the branch's zero-context diff from the merge-base has the patch id of one of the newest 1,000 non-merge commits on it), `empty` (no net change), `no`, or `unknown` (no merge-base, or more than 1,000 commits behind). `stale` is `true` when idle past `stale_days`, merged, or the upstream branch is gone. Last activity is the newest of HEAD's commit time, the worktree index's mtime and the newest session seen under the path.
+
+```json
+{
+  "generated_at": "2026-09-23T19:40:02Z",
+  "duration_ms": 36211,
+  "cached": false,
+  "stale_days": 14,
+  "summary": {"repos": 31, "worktrees": 131, "remove": 42, "review": 64, "keep": 21, "prune": 4, "stale": 114},
+  "repos": [
+    {"path": "/Users/me/code/app", "source": "session", "default_branch": "origin/main", "worktrees": [
+      {"path": "/Users/me/code/app", "branch": "main", "state": "main", "reasons": ["main worktree of the repository"], "idle_days": 0},
+      {"path": "/Users/me/code/app/.worktrees/ui", "branch": "feat/ui", "head": "518e4bb2c1d0",
+       "state": "review", "reasons": ["ignored files that only live here: .tmp/ (660 files, 207.3 MB)"],
+       "stale": true, "last_activity": "2026-09-23T06:30:41Z", "idle_days": 0,
+       "upstream": "origin/feat/ui", "merged": "squash", "other_ignored": 3,
+       "precious_ignored": [".tmp/ (660 files, 207.3 MB)"]}
+    ]}
+  ],
+  "errors": []
+}
+```
+
+Read-level. CLI: `secure-agent worktrees [--state S] [--repo R] [--stale] [--refresh] [--json]` prints one block per repository with a line per worktree (state, stale, idle days, branch, path) and its reasons, then the summary.
+
+#### `POST /worktrees/repos`
+
+Adds the repository containing `path` to the saved list (source `manual`, unhiding it), or hides it from reports with `"hidden": true`.
+
+```json
+{"path": "/Users/me/code/app/sub/dir"}
+{"path": "/Users/me/code/app", "hidden": true}
+```
+
+`200 {"status":"ok","path":"<main worktree>"}`; `400` for a relative path; `404` when `path` is not inside a git repository, or a hidden repo is not on the list. Mutation (pinned UI or owner). CLI: `secure-agent worktrees add|hide <path>`.
 
 ## 🔐 Peer authentication & endpoint roles
 

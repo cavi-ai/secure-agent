@@ -276,6 +276,14 @@ type OTLPConfig struct {
 	Labels   map[string]string `yaml:"labels"`
 }
 
+// WorktreesConfig configures the worktree hunter. Roots are extra
+// directories searched for repositories; StaleDays is the idle age that
+// marks a worktree stale (0 = the hunter's default).
+type WorktreesConfig struct {
+	Roots     []string `yaml:"roots"`
+	StaleDays int      `yaml:"stale_days"`
+}
+
 // priceYAML is one `pricing` entry: USD per 1M tokens.
 type priceYAML struct {
 	Input  *float64 `yaml:"input"`
@@ -306,6 +314,7 @@ type rawConfig struct {
 	Advisor             AdvisorYAML           `yaml:"advisor"`
 	Retention           RetentionYAML         `yaml:"retention"`
 	OTLP                OTLPConfig            `yaml:"otlp"`
+	Worktrees           WorktreesConfig       `yaml:"worktrees"`
 	// Pricing entries are decoded one by one (parsePricing) so a single
 	// malformed entry is dropped instead of failing the whole overlay.
 	Pricing map[string]yaml.Node `yaml:"pricing"`
@@ -335,6 +344,7 @@ type Config struct {
 	Fleet             FleetConfig
 	Advisor           AdvisorConfig
 	OTLP              OTLPConfig
+	Worktrees         WorktreesConfig
 	// Pricing is the operator price table, model id or prefix → USD per 1M
 	// tokens [input, output]. It wins over the built-in table.
 	Pricing map[string][2]float64
@@ -473,6 +483,10 @@ func loadWithOverlayError(explicitPath string) (Config, error, error) {
 			Event:     time.Duration(raw.Retention.EventDays) * 24 * time.Hour,
 		},
 		OTLP: raw.OTLP,
+		Worktrees: WorktreesConfig{
+			Roots:     expandPaths(raw.Worktrees.Roots),
+			StaleDays: raw.Worktrees.StaleDays,
+		},
 		Advisor: AdvisorConfig{
 			Enabled:      raw.Advisor.Enabled,
 			Endpoint:     raw.Advisor.Endpoint,
@@ -554,6 +568,14 @@ func (c Config) Validate() error {
 	}
 	if c.Fleet.HeartbeatIntervalSec < 0 {
 		return fmt.Errorf("fleet.heartbeat_interval_sec must be >= 0, got %d", c.Fleet.HeartbeatIntervalSec)
+	}
+	if c.Worktrees.StaleDays < 0 || c.Worktrees.StaleDays > 365 {
+		return fmt.Errorf("worktrees.stale_days must be 0-365, got %d", c.Worktrees.StaleDays)
+	}
+	for _, root := range c.Worktrees.Roots {
+		if !filepath.IsAbs(root) {
+			return fmt.Errorf("worktrees.roots entries must be absolute (~ is expanded), got %q", root)
+		}
 	}
 	// The advisor's privacy guarantee is enforced, not promised: it may only
 	// talk to a loopback endpoint. Anything else is a config error, not a

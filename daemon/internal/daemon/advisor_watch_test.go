@@ -13,6 +13,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/fleet"
 	"github.com/cavi-ai/secure-agent/daemon/internal/resource"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
+	"github.com/cavi-ai/secure-agent/daemon/internal/worktreehunter"
 )
 
 // The hot-reload loop swaps the advisor stack when config.yaml changes, and
@@ -302,4 +303,34 @@ func TestFleetConfigKeyDistinguishesFields(t *testing.T) {
 	if fleetConfigKey(e) != fleetConfigKey(f) {
 		t.Fatal("key must be order-independent for labels")
 	}
+}
+
+// The watcher applies worktrees.roots and stale_days live.
+func TestWatchConfigAppliesWorktrees(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	st, err := store.Open(filepath.Join(dir, "e.db"), filepath.Join(dir, "e.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if err := os.WriteFile(cfgPath, []byte("worktrees:\n  stale_days: 14\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	hunter := worktreehunter.New(st, dir, worktreehunter.Options{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go watchConfig(ctx, cfgPath, configWatchDeps{
+		st: st, stk: &advisorStackHolder{}, pub: fleet.NewPublisher(), fleetCfg: &fleetConfigHolder{},
+		worktrees: hunter,
+	})
+
+	src := "worktrees:\n  roots: [\"" + dir + "\"]\n  stale_days: 30\n"
+	if err := os.WriteFile(cfgPath, []byte(src), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, 5*time.Second, func() bool {
+		o := hunter.Options()
+		return o.StaleDays == 30 && len(o.Roots) == 1 && o.Roots[0] == dir
+	})
 }
