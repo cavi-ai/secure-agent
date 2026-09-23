@@ -1937,7 +1937,11 @@ document.addEventListener('DOMContentLoaded', () => {
   };
 
   // Session drill-down: jump from a flag to just its harness session's events.
-  window.filterTimelineToSession = function(sid) {
+  // "View session in timeline" (finding cards, Attention): open the session
+  // in the Sessions tab — its rail card selected, its trace loaded — and keep
+  // Events, Flags and Incidents scoped to it for the Events tab. Selects
+  // outright: selectSession toggles, which would close an already-open one.
+  window.filterTimelineToSession = async function(sid) {
     timelineSession = sid;
     timelinePids = null;
     timelinePidLabel = '';
@@ -1945,10 +1949,13 @@ document.addEventListener('DOMContentLoaded', () => {
     renderEvents();
     renderFlags();
     renderIncidents();
-    switchTab('overview');
-    const el = document.getElementById('events-container');
-    if (el && el.scrollIntoView) {
-      el.scrollIntoView({ behavior: reducedMotion ? 'auto' : 'smooth', block: 'nearest' });
+    selectedSessionId = sid;
+    switchTab('sessions');
+    try { await loadSessionTimeline(sid, true); } catch { /* the trace stays empty; the next select retries */ }
+    renderNow(['sessions']);
+    const card = document.querySelector(`#session-rail [data-action="select-session"][data-id="${cssq(sid)}"]`);
+    if (card && card.scrollIntoView) {
+      card.scrollIntoView({ behavior: reducedMotion ? 'auto' : 'smooth', block: 'nearest' });
     }
   };
 

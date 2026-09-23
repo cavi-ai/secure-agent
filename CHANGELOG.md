@@ -39,6 +39,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Console Resources: View family opens a drawer with usage, processes, recent activity, findings and terminate actions instead of switching tabs.
 - Console: the Events tab lists the newest 50 rows, the family process table 12 and an Agents group 8 instances, each with Show more.
 - Console: pid-scoped event filtering opens the Events tab.
+- Console: "View session in timeline" opens the session in the Sessions tab with its trace, keeping Events scoped to it.
 - Console: the drawer's Copy button stays hidden outside incident reports.
 
 ### Fixed

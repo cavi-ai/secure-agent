@@ -193,6 +193,7 @@ def main():
         dom_fam = dump_dom(chrome, tmp, "?familiesdemo&tab=resources")
         dom_famev = dump_dom(chrome, tmp, "?familiesdemo&familyevents&tab=resources")
         dom_evcap = dump_dom(chrome, tmp, "?tab=events&manyevents")
+        dom_sesslink = dump_dom(chrome, tmp, "?sessionlinkdemo")
 
         # --- session-first tab (P3) ---
         rail = dom.split('id="session-rail"', 1)[1].split('id="session-detail"', 1)[0]
@@ -737,6 +738,13 @@ def main():
         check("zero inline onclick handlers in rendered DOM", " onclick=" not in dom)
 
         # --- session drill-down (auto-action run) ---
+        link_rail = dom_sesslink.split('id="session-rail"', 1)[1].split('id="session-detail"', 1)[0]
+        check("View session in timeline opens the session in the Sessions tab: card selected, trace rendered",
+              'class="tab-btn active" data-tab="sessions"' in dom_sesslink
+              and re.search(r'<div class="session-card active selected">\s*<button type="button" class="sc-main" '
+                            r'data-action="select-session" data-id="sess-claude-1" aria-pressed="true"', link_rail) is not None
+              and '<h3>api-service@main</h3>' in dom_sesslink.split('id="session-detail"', 1)[1]
+              and 'class="wf-bar' in dom_sesslink)
         check("session chip appears", 'id="session-filter" class="session-filter"' in dom_session
               or ('id="session-filter"' in dom_session and "hidden" not in
                   dom_session.split('id="session-filter"')[1][:80]))

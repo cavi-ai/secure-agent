@@ -656,6 +656,13 @@
   };
 
   // Auto-action: exercise the session drill-down like a user click would.
+  // sessionlinkdemo: flag-1 belongs to the durable session sess-claude-1;
+  // open Findings, then click its "View session in timeline".
+  if (location.search.includes('sessionlinkdemo')) {
+    data['/flags'].find(f => f.id === 'flag-1').session_id = 'sess-claude-1';
+    setTimeout(() => document.querySelector('[data-tab="findings"]').click(), 4000);
+    setTimeout(() => document.querySelector('[data-action="filter-session"][data-session="sess-claude-1"]')?.click(), 5000);
+  }
   if (location.search.includes('sessiondemo')) {
     setTimeout(() => window.filterTimelineToSession('7f3a9c21-4b2e-4a1d-9c55-2e8f0d1a3b77'), 4000);
   }
