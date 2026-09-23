@@ -76,6 +76,8 @@ var Table = []Route{
 	{Path: "/costs", Console: true},
 	{Path: "/costs/unpriced", Console: true},
 	{Path: "/doctor", Console: true},
+	{Path: "/worktrees", Console: true},
+	{Path: "/worktrees/repos", Console: true, MutatingMethods: []string{"POST"}},
 	{Path: "/advisor/discover"},
 	{Path: "/fleet", Console: true},
 	{Path: "/kill", Console: true, MutatingMethods: []string{"POST"}},

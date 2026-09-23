@@ -7,6 +7,13 @@ All notable changes to `secure-agent` are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- `GET /worktrees`: every git worktree found from session workspaces, agent worktree directories, `worktrees.roots` and a saved repo list, each with state `remove`, `review`, `keep`, `prune` or `main`, reasons, `stale` and last activity.
+- Worktree merge detection by ancestry or a zero-context patch-id match for squash merges; local git only.
+- Worktree rows list precious ignored files (`.env*`, `*.pem`, `*.key`, `.tmp/`, `.claude/`, `.remember/`) with file count and size.
+- Worktree directories git no longer lists are reported as orphans.
+- `POST /worktrees/repos` adds or hides a repository on the saved list.
+- `secure-agent worktrees [--state] [--repo] [--stale] [--refresh] [--json]` and `secure-agent worktrees add|hide <path>`.
+- `worktrees.roots` and `worktrees.stale_days` settings, applied live.
 - `GET /patterns`: repeating flags grouped by agent, rule and subject, with cadence, pids, sessions, disposition, summary and actions.
 - `/snapshot` `patterns`.
 - `/posture` `pattern` items in place of the flag items a pattern covers.
