@@ -24,7 +24,8 @@ const {
   advanceBuckets, bucketIndexFor, sparkPoints,
   parseMarkdownToHTML, buildEvidenceChain,
   sessionShort, filterEventsBySession, rollupSeries, flagHost,
-  familyTitle, fmtRSS, fmtAge, isFamilyRoot, childrenOf, groupAgents, familyShouldExpand,
+  familyTitle, fmtRSS, fmtAge, isFamilyRoot, childrenOf,
+  groupAgentsByHarness, agentGroupTotals, applyAgentFilters,
   cwdLabel, sessionRows, filterEventsByPids, sessionBoardHTML,
   fmtCPU, resourceImpact, resourceSparkPoints, resourceDiagnosisText,
   monitorVendorKeyIDs, inspectionVisible, vendorKeyPromoteHTML,
@@ -285,30 +286,55 @@ test('rollupSeries: 7d window labels switch to day form', () => {
   assert.match(s.labels[167], /^\d{1,2}\/\d{1,2}$/);
 });
 
-test('groupAgents: families, roots, earliest, rss, orphans', () => {
-  const families = groupAgents([
-    { pid: 1, name: 'claude', root_pid: 1, started_at: '2026-09-09T14:00:00Z', rss_bytes: 100 },
-    { pid: 2, name: 'claude', root_pid: 1, ppid: 1, started_at: '2026-09-09T14:01:00Z', rss_bytes: 50 },
-    { pid: 3, name: 'cursor', root_pid: 3, started_at: '2026-09-09T15:00:00Z', rss_bytes: 10, is_orphan: true },
+test('groupAgentsByHarness: harness groups by recency, instances with helpers, infra apart', () => {
+  const at = (min) => new Date(Date.UTC(2026, 0, 1, 12, 0) - min * 60000).toISOString();
+  const groups = groupAgentsByHarness([
+    { pid: 1, name: 'claude', root_pid: 1, last_seen_at: at(9), rss_bytes: 100, cpu_percent: 10, repo: 'api', branch: 'main' },
+    { pid: 2, name: 'claude', root_pid: 1, ppid: 1, last_seen_at: at(1), rss_bytes: 50, cpu_percent: 5 },
+    { pid: 5, name: 'claude-code', root_pid: 5, last_seen_at: at(3), rss_bytes: 7, workspace: '/w/web' },
+    { pid: 3, name: 'cursor', root_pid: 3, last_seen_at: at(60), rss_bytes: 10, is_orphan: true },
+    { pid: 4, name: 'codex', root_pid: 4, last_seen_at: at(2), rss_bytes: 20 },
+    { pid: 6, name: 'ollama', root_pid: 6, last_seen_at: at(0), rss_bytes: 900 },
+    { pid: 7, name: 'modelsrv', kind: 'infra', root_pid: 7, last_seen_at: at(0), rss_bytes: 30 },
   ]);
-  assert.equal(families.length, 2);
-  assert.equal(families[0].name, 'claude');
-  assert.equal(families[0].roots.length, 1);
-  assert.equal(families[0].roots[0].pid, 1);
-  assert.equal(childrenOf(families[0].roots[0], families[0].members).length, 1);
-  assert.equal(families[0].earliest, '2026-09-09T14:00:00Z');
-  assert.equal(families[0].rss, 150);
-  assert.equal(families[1].orphanCount, 1);
+  // Newest activity first; infra flagged, whatever its position.
+  assert.equal(groups.map(g => g.key).join(','), 'modelsrv,ollama,claude,codex,cursor');
+  assert.equal(groups.filter(g => g.infra).map(g => g.key).join(','), 'modelsrv,ollama');
+  const claude = groups.find(g => g.key === 'claude');
+  assert.equal(claude.label, 'Claude Code');
+  // claude and claude-code are one harness; instances newest first.
+  assert.equal(claude.instances.map(i => i.root.pid).join(','), '5,1');
+  assert.equal(claude.instances[1].children.map(c => c.pid).join(','), '2');
+  const t = agentGroupTotals(claude);
+  assert.equal(t.instances, 2);
+  assert.equal(t.processes, 3);
+  assert.equal(t.rss, 157);
+  assert.equal(t.cpu, 15);
+  assert.equal(t.lastSeen, at(1));
+  assert.equal(agentGroupTotals(groups.find(g => g.key === 'cursor')).orphans, 1);
 });
 
-test('familyShouldExpand: one family, few instances, orphans, user override', () => {
-  const claude = { name: 'claude', roots: [1, 2], orphanCount: 0 };
-  assert.equal(familyShouldExpand(claude, 1, 10, {}), true);
-  assert.equal(familyShouldExpand(claude, 2, 2, {}), true);
-  assert.equal(familyShouldExpand(claude, 2, 8, {}), false);
-  assert.equal(familyShouldExpand({ name: 'x', orphanCount: 1 }, 2, 8, {}), true);
-  assert.equal(familyShouldExpand(claude, 2, 8, { claude: true }), true);
-  assert.equal(familyShouldExpand(claude, 1, 1, { claude: false }), false);
+test('applyAgentFilters: shared pills and text; infra untouched', () => {
+  const groups = groupAgentsByHarness([
+    { pid: 1, name: 'claude', root_pid: 1, repo: 'api', branch: 'main' },
+    { pid: 2, name: 'claude', root_pid: 1, ppid: 1, cwd: '/w/api/special' },
+    { pid: 3, name: 'claude', root_pid: 3, workspace: '/w/docs' },
+    { pid: 4, name: 'codex', root_pid: 4, cwd: '/w/etl' },
+    { pid: 6, name: 'ollama', root_pid: 6 },
+  ]);
+  const keys = (gs) => gs.map(g => g.key).join(',');
+  assert.equal(keys(applyAgentFilters(groups, {})), keys(groups));
+  assert.equal(keys(applyAgentFilters(groups, { harnesses: { claude: false } })).split(',').sort().join(','), 'codex,ollama');
+  const docs = applyAgentFilters(groups, { text: 'DOCS' });
+  assert.equal(keys(docs).split(',').sort().join(','), 'claude,ollama');
+  assert.equal(docs.find(g => g.key === 'claude').instances.map(i => i.root.pid).join(','), '3');
+  // cwd matches, and a helper's match keeps its whole instance.
+  assert.equal(applyAgentFilters(groups, { text: '/w/etl' }).map(g => g.key).sort().join(','), 'codex,ollama');
+  const special = applyAgentFilters(groups, { text: 'special' }).find(g => g.key === 'claude');
+  assert.equal(special.instances[0].root.pid, 1);
+  assert.equal(special.instances[0].children[0].pid, 2);
+  // Input untouched.
+  assert.equal(groups.find(g => g.key === 'claude').instances.length, 2);
 });
 
 test('fmtRSS and fmtAge', () => {

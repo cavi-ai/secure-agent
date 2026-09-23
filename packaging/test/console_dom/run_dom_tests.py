@@ -178,7 +178,27 @@ def main():
         check("KPI agents count", 'id="count-agents">3<' in dom)
         check("KPI flags are unacted last 24h", 'id="count-flags">2<' in dom)
         check("KPI incidents count", 'id="count-incidents">1<' in dom)
-        check("agent families grouped", dom.count('class="agent-group"') == 2)
+        agents_view = dom.split('id="agents-container"', 1)[1].split('id="fleet-col"', 1)[0]
+        agent_groups = re.findall(r'<details class="agent-group" data-harness="([^"]+)"', agents_view)
+        check("agents tab renders one group per harness, newest first",
+              agent_groups == ["codex", "claude", "cursor"], f"groups={agent_groups}")
+        check("agent group head: mark, name, instances, processes, RSS, CPU",
+              '#logo-codex' in agents_view and '<span class="harness-label">Claude Code</span>' in agents_view
+              and '1 instance · 2 processes' in agents_view and '14.5% CPU' in agents_view)
+        check("agents infra section sits last and is not counted",
+              agents_view.index('class="agent-infra"') > agents_view.rindex('<details class="agent-group" ')
+              and 'data-harness="ollama"' in agents_view.split('class="agent-infra"', 1)[1]
+              and 'id="badge-agents-count">3<' in dom)
+        check("agent instances lead with repo@branch, pid secondary",
+              '<span class="agent-row-title">api-service@main</span>' in agents_view
+              and '<span class="agent-pid">PID 5821</span>' in agents_view)
+        check("agent helpers sit behind a disclosure",
+              'PID 5822' in agents_view.split('<details class="session-helpers agent-tree" data-pid="5821"', 1)[1].split('</details>', 1)[0])
+        pill_agents = dom_pill.split('id="agents-container"', 1)[1].split('id="fleet-col"', 1)[0]
+        check("a switched-off pill hides the harness in Agents too (shared state)",
+              'data-harness="claude"' not in pill_agents and 'data-harness="codex"' in pill_agents
+              and 'class="harness-pill off" data-action="toggle-harness" data-harness="claude"'
+              in dom_pill.split('id="agent-harness-pills"', 1)[1].split('</div>', 1)[0])
         check("claude instance pid", "PID 5821" in dom)
         check("nested helper pid", "PID 5822" in dom)
         check("leftover cursor status", "leftover" in dom)

@@ -352,6 +352,10 @@
                 <h2><svg class="icon"><use href="#i-agent"/></svg>Active agent processes</h2>
                 <span class="badge" id="badge-agents-count">0</span>
               </div>
+              <div class="harness-filter" role="group" aria-label="Filter agents">
+                <div class="harness-pills" id="agent-harness-pills"></div>
+                <input type="search" id="agent-filter-text" class="input harness-filter-text" placeholder="Filter by repo, branch, or folder…" aria-label="Filter agents by repo, branch, or folder" autocomplete="off" spellcheck="false">
+              </div>
               <div class="panel-body" id="agents-container">
                 <div class="empty"><svg class="icon"><use href="#i-agent"/></svg><span>No active AI agent processes detected</span></div>
               </div>

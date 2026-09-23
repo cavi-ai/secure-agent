@@ -342,6 +342,16 @@ body {
 .agent-instance.nested { margin-left: 16px; }
 .agent-instance.orphan { border-color: hsl(38 92% 56% / 0.45); }
 .agent-instance.stale { opacity: 0.62; }
+/* Instance row: what it works on first, the pid as the secondary fact. */
+.agent-instance.has-tree { flex-wrap: wrap; }
+.agent-row-main { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; flex: 1; min-width: 0; }
+.agent-row-title { font-weight: 650; font-size: 13px; min-width: 0; overflow-wrap: anywhere; }
+.agent-tree .agent-instance { margin-top: 6px; }
+/* Infrastructure: IDEs and model servers, set apart and never counted. */
+.agent-infra { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; padding-top: 12px; border-top: 1px dashed var(--line-2); }
+.agent-infra-head { font-size: 10px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--tx-3); }
+.agent-infra-head span { margin-left: 6px; font-weight: 500; letter-spacing: 0; text-transform: none; }
+.agent-group.infra { background: transparent; border-style: dashed; }
 .session-row {
   display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
   padding: 8px 10px; border-radius: var(--r-sm);

@@ -662,43 +662,66 @@ function childrenOf(root, members) {
   return (members || []).filter(m => Number(m.pid) !== rid && Number(m.root_pid || m.ppid) === rid);
 }
 
-function groupAgents(agents) {
-  const byName = new Map();
+// groupAgentsByHarness: the Agents tab, harness-first like the Sessions
+// rail. One group per harness holding its instances (process-tree roots,
+// most recent activity first) with their helper processes. Groups order by
+// most recent activity. A group is infra when the harness is (IDEs, model
+// servers) or the daemon tags a member kind=infra; callers show infra apart
+// and never count it as agents. Pure.
+function groupAgentsByHarness(agents) {
+  const byKey = new Map();
   for (const a of agents || []) {
-    const name = a.name || 'unknown';
-    if (!byName.has(name)) byName.set(name, []);
-    byName.get(name).push(a);
+    if (!a) continue;
+    const m = harnessMeta(a.name);
+    if (!byKey.has(m.key)) byKey.set(m.key, { key: m.key, label: m.label, infra: m.infra, members: [], lastSeen: '' });
+    const g = byKey.get(m.key);
+    if (a.kind === 'infra') g.infra = true;
+    if (a.last_seen_at && a.last_seen_at > g.lastSeen) g.lastSeen = a.last_seen_at;
+    g.members.push(a);
   }
-  const families = [];
-  for (const [name, members] of byName) {
-    const roots = members.filter(a => isFamilyRoot(a, members));
-    let earliest = '';
-    let rss = 0;
-    let orphanCount = 0;
-    for (const m of members) {
-      if (m.rss_bytes) rss += Number(m.rss_bytes);
-      if (m.is_orphan) orphanCount++;
-      if (m.started_at && (!earliest || m.started_at < earliest)) earliest = m.started_at;
-    }
-    families.push({
-      name,
-      title: familyTitle(name),
-      members,
-      roots,
-      earliest,
-      rss,
-      orphanCount
-    });
-  }
-  families.sort((a, b) => a.name.localeCompare(b.name));
-  return families;
+  const newest = (x, y) => (x > y ? -1 : x < y ? 1 : 0);
+  const groups = [...byKey.values()].map(g => {
+    const instances = g.members
+      .filter(a => isFamilyRoot(a, g.members))
+      .map(root => ({ root, children: childrenOf(root, g.members) }))
+      .sort((x, y) => newest(String(x.root.last_seen_at || ''), String(y.root.last_seen_at || '')));
+    return { key: g.key, label: g.label, infra: g.infra, lastSeen: g.lastSeen, instances };
+  });
+  return groups.sort((a, b) => newest(a.lastSeen, b.lastSeen) || a.key.localeCompare(b.key));
 }
 
-function familyShouldExpand(family, familyCount, totalInstances, userOpen) {
-  if (userOpen && Object.prototype.hasOwnProperty.call(userOpen, family.name)) {
-    return !!userOpen[family.name];
+// agentGroupTotals: the group head's figures over the instances shown —
+// instances, processes, RSS, CPU, last seen, leftovers.
+function agentGroupTotals(g) {
+  const t = { instances: g.instances.length, processes: 0, rss: 0, cpu: 0, lastSeen: '', orphans: 0 };
+  for (const inst of g.instances) {
+    for (const a of [inst.root, ...inst.children]) {
+      t.processes++;
+      t.rss += Number(a.rss_bytes || 0);
+      t.cpu += Number(a.cpu_percent || 0);
+      if (a.last_seen_at && a.last_seen_at > t.lastSeen) t.lastSeen = a.last_seen_at;
+      if (a.is_orphan) t.orphans++;
+    }
   }
-  return familyCount === 1 || totalInstances <= 3 || family.orphanCount > 0;
+  return t;
+}
+
+// applyAgentFilters: the Agents filter row, the same pill and text state as
+// the Sessions rail. Text matches an instance's repo, branch, workspace or
+// cwd; helpers ride along with their instance. Infra groups are never
+// filtered. Pure; returns new group objects.
+function applyAgentFilters(groups, opts) {
+  const o = opts || {};
+  const off = o.harnesses || {};
+  const hit = a => sessionMatchesText(a, o.text) || sessionMatchesText({ workspace: a.cwd }, o.text);
+  const out = [];
+  for (const g of groups || []) {
+    if (g.infra) { out.push(g); continue; }
+    if (off[g.key] === false) continue;
+    const instances = g.instances.filter(i => [i.root, ...i.children].some(hit));
+    if (instances.length) out.push({ ...g, instances });
+  }
+  return out;
 }
 
 function cwdLabel(cwd) {

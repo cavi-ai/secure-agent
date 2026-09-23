@@ -805,6 +805,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const sessionGroupOpen = {};
   const endedSessionsOpen = {}; // harness key → ended tail expanded
   const agentGroupOpen = {};
+  const agentTreeOpen = {}; // instance root pid → helper disclosure open
 
   // Harness filter shared by the Sessions and Agents tabs: pill states
   // (harness key → false when switched off), the text filter, and the
@@ -818,7 +819,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (typeof saved.text === 'string') harnessFilter.text = saved.text;
     if (typeof saved.liveOnly === 'boolean') harnessFilter.liveOnly = saved.liveOnly;
   } catch { /* private mode or unreadable: defaults */ }
-  const harnessTextInputs = ['session-cwd-filter'].map(id => document.getElementById(id)).filter(Boolean);
+  const harnessTextInputs = ['session-cwd-filter', 'agent-filter-text'].map(id => document.getElementById(id)).filter(Boolean);
   const liveOnlySwitch = document.getElementById('session-live-only');
   function syncHarnessFilterControls() {
     for (const el of harnessTextInputs) if (el.value !== harnessFilter.text) el.value = harnessFilter.text;
@@ -828,6 +829,7 @@ document.addEventListener('DOMContentLoaded', () => {
     try { sessionStorage.setItem(HARNESS_FILTER_KEY, JSON.stringify(harnessFilter)); } catch { /* private mode */ }
     syncHarnessFilterControls();
     renderSessionBoard();
+    renderAgents();
   }
   syncHarnessFilterControls();
   for (const el of harnessTextInputs) {
@@ -993,6 +995,7 @@ document.addEventListener('DOMContentLoaded', () => {
     sessionGroupOpen,
     endedSessionsOpen,
     agentGroupOpen,
+    agentTreeOpen,
     harnessFilter,
     setTabBadge,
     paintSessionChip,
@@ -1311,7 +1314,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   window.killOrphans = async function(family) {
     const agents = (telemetryData.status && telemetryData.status.agents) ? telemetryData.status.agents : [];
-    const orphans = agents.filter(a => a.name === family && a.is_orphan);
+    const orphans = agents.filter(a => harnessMeta(a.name).key === family && a.is_orphan);
     if (orphans.length === 0) return;
     if (!await saConfirm(`Terminate ${orphans.length} leftover ${family} process${orphans.length === 1 ? '' : 'es'}?`, { title: 'Clean up leftovers', okLabel: 'Terminate' })) return;
     for (const a of orphans) {
