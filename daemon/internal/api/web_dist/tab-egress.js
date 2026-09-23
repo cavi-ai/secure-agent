@@ -21,17 +21,18 @@ function renderFirewall() {
     return;
   }
 
-  let html = '';
+  const parts = [];
   if (uninspected > 0) {
-    html += `<button type="button" class="fw-uninspected fw-drill" data-action="open-uninspected"><svg class="icon"><use href="#i-globe"/></svg><span>${uninspected} endpoint${uninspected === 1 ? '' : 's'} reached without inspection in the last 24h (pinned or unrouted)</span><span class="fw-drill-hint">view endpoints</span></button>`;
+    parts.push({ key: 'uninspected', html: `<button type="button" class="fw-uninspected fw-drill" data-action="open-uninspected"><svg class="icon"><use href="#i-globe"/></svg><span>${uninspected} endpoint${uninspected === 1 ? '' : 's'} reached without inspection in the last 24h (pinned or unrouted)</span><span class="fw-drill-hint">view endpoints</span></button>` });
   }
-  html += vendorKeyPromoteHTML(monitorVendorKeyIDs(stats));
+  const vendor = vendorKeyPromoteHTML(monitorVendorKeyIDs(stats));
+  if (vendor) parts.push({ key: 'vendor', html: vendor });
   // Egress suggestions: recurring uninspected endpoints the user can approve
   // into the vendor allowlist with one click (drives the blind spot to zero).
   const suggestions = SA.t.suggestions || [];
   if (suggestions.length > 0) {
     const vis = inspectionVisible(SA.t.status, SA.t.audit);
-    html += suggestions.map(sg => `
+    suggestions.forEach(sg => parts.push({ key: `sg:${sg.agent}|${sg.host}`, html: `
       <div class="fw-rule fw-suggestion">
         <div class="fw-rule-main">
           <span class="fw-rule-id">${escapeHTML(sg.host)}</span>
@@ -41,9 +42,9 @@ function renderFirewall() {
           </div>
         </div>
         <button class="btn btn-ghost btn-sm" data-action="allow-host" data-agent="${escapeHTML(sg.agent)}" data-host="${escapeHTML(sg.host)}"><svg class="icon"><use href="#i-shield"/></svg><span>Allow for ${escapeHTML(sg.agent)}</span></button>
-      </div>`).join('');
+      </div>` }));
   }
-  html += rules.map(r => {
+  for (const r of rules) {
     const st = stats[r];
     const blocking = st.mode === 'block';
     // A rule whose blocked/would-block counters grew since the last render
@@ -54,7 +55,7 @@ function renderFirewall() {
     const action = blocking
       ? `<span class="mode-chip block">blocking</span><button class="btn btn-ghost btn-sm" data-action="demote" data-rule="${escapeHTML(r)}" title="Back to monitor-only — blocking is reversible"><svg class="icon"><use href="#i-arrow"/></svg><span>Demote to monitor</span></button>`
       : `<button class="btn btn-primary btn-sm" data-action="promote" data-rule="${escapeHTML(r)}"><svg class="icon"><use href="#i-arrow"/></svg><span>Promote to block</span></button>`;
-    return `
+    parts.push({ key: 'rule:' + r, html: `
       <div class="fw-rule${grew ? ' fw-flash' : ''}">
         <div class="fw-rule-main">
           <span class="fw-rule-id">${escapeHTML(r)}</span>
@@ -65,18 +66,18 @@ function renderFirewall() {
           </div>
         </div>
         ${action}
-      </div>`;
-  }).join('');
+      </div>` });
+  }
   // User-approved (agent, host) allowlist entries — every one reversible.
   const allowlist = SA.t.allowlist || [];
   if (allowlist.length > 0) {
-    html += `<div class="mute-list"><div class="mute-head">Allowed endpoints</div>` + allowlist.map(p => `
+    parts.push({ key: 'allowlist', html: `<div class="mute-list"><div class="mute-head">Allowed endpoints</div>` + allowlist.map(p => `
       <div class="mute-row">
         <span class="mute-pair">${escapeHTML(p.host)} · ${escapeHTML(p.agent)}</span>
         <button class="source-remove" title="Remove — the endpoint goes back to uninspected" data-action="allowlist-remove" data-agent="${escapeHTML(p.agent)}" data-host="${escapeHTML(p.host)}"><svg class="icon"><use href="#i-close"/></svg></button>
-      </div>`).join('') + `</div>`;
+      </div>`).join('') + `</div>` });
   }
-  container.innerHTML = html;
+  patchList(container, parts, { key: p => p.key, html: p => p.html });
   SA.prevFwStats = stats;
 }
 
