@@ -32,6 +32,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/session"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 	"github.com/cavi-ai/secure-agent/daemon/internal/supervise"
+	"github.com/cavi-ai/secure-agent/daemon/internal/worktreehunter"
 )
 
 // Options are the composition inputs that are not part of config.Config.
@@ -192,6 +193,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 	hermes := newHermesCollector(cfg, b, supReg, resolver)
 	resourcePolicyUpdater := buildResourcePolicyUpdater(opts.ConfigPath, resourceControl)
 
+	hunter := worktreehunter.New(st, "", worktreeOptions(cfg.Worktrees))
 	apiServer := api.New(api.Deps{
 		SocketPath:            cfg.SocketPath,
 		Store:                 st,
@@ -230,6 +232,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 		PublishEvent:    b.Publish,
 		DeltaHub:        deltaHub,
 		Hermes:          hermes.Status,
+		Worktrees:       hunter,
 	})
 
 	resourceControl.SetExecutor(makeResourceExecutor(apiServer, tagger, st))
@@ -249,7 +252,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 		go watchConfig(ctx, opts.ConfigPath, configWatchDeps{
 			st: st, stk: advisorStk, pub: fleetPub, fleetCfg: fleetCfgLive,
 			logDir: filepath.Dir(cfg.DBPath), apiServer: apiServer, resourceControl: resourceControl,
-			initialConfig: &cfg,
+			initialConfig: &cfg, worktrees: hunter,
 		})
 	}
 	postureHook.fn = apiServer.PublishPostureIfChanged

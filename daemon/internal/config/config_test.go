@@ -488,3 +488,36 @@ func TestHermesHomeKey(t *testing.T) {
 		t.Fatalf("hermes_home = %q, want %q", c.HermesHome, want)
 	}
 }
+
+func TestWorktreesKey(t *testing.T) {
+	c, err := Load(filepath.Join(t.TempDir(), "absent.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Worktrees.StaleDays != 14 || len(c.Worktrees.Roots) != 0 {
+		t.Fatalf("default worktrees = %+v, want stale_days 14 and no roots", c.Worktrees)
+	}
+	p := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(p, []byte("worktrees:\n  roots: [\"~/code\"]\n  stale_days: 30\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if c, err = Load(p); err != nil {
+		t.Fatal(err)
+	}
+	home, _ := os.UserHomeDir()
+	if c.Worktrees.StaleDays != 30 || len(c.Worktrees.Roots) != 1 || c.Worktrees.Roots[0] != filepath.Join(home, "code") {
+		t.Fatalf("worktrees = %+v", c.Worktrees)
+	}
+	for _, bad := range []string{
+		"worktrees:\n  stale_days: -1\n",
+		"worktrees:\n  stale_days: 366\n",
+		"worktrees:\n  roots: [\"relative/dir\"]\n",
+	} {
+		if err := os.WriteFile(p, []byte(bad), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Load(p); err == nil || !strings.Contains(err.Error(), "worktrees.") {
+			t.Fatalf("overlay %q: err = %v, want a worktrees validation error", bad, err)
+		}
+	}
+}

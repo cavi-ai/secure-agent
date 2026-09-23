@@ -1,0 +1,222 @@
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"time"
+)
+
+// wtRow, wtRepo and wtReport mirror the daemon's GET /worktrees body.
+type wtRow struct {
+	Path     string   `json:"path"`
+	Branch   string   `json:"branch"`
+	Detached bool     `json:"detached"`
+	State    string   `json:"state"`
+	Reasons  []string `json:"reasons"`
+	Stale    bool     `json:"stale"`
+	IdleDays int      `json:"idle_days"`
+	// LastActivity is absent when nothing dates the worktree (its
+	// directory is gone); the table prints "-" instead of 0 days.
+	LastActivity string `json:"last_activity"`
+	InUse        bool   `json:"in_use"`
+}
+
+type wtRepo struct {
+	Path          string  `json:"path"`
+	Source        string  `json:"source"`
+	DefaultBranch string  `json:"default_branch"`
+	Worktrees     []wtRow `json:"worktrees"`
+}
+
+type wtReport struct {
+	DurationMS int64 `json:"duration_ms"`
+	Cached     bool  `json:"cached"`
+	StaleDays  int   `json:"stale_days"`
+	Summary    struct {
+		Repos     int `json:"repos"`
+		Worktrees int `json:"worktrees"`
+		Remove    int `json:"remove"`
+		Review    int `json:"review"`
+		Keep      int `json:"keep"`
+		Prune     int `json:"prune"`
+		Stale     int `json:"stale"`
+	} `json:"summary"`
+	Repos  []wtRepo `json:"repos"`
+	Errors []string `json:"errors"`
+}
+
+// wtScanTimeout covers a full scan: the daemon bounds one at 3 minutes.
+const wtScanTimeout = 200 * time.Second
+
+func handleWorktrees(client *http.Client) {
+	c := *client
+	c.Timeout = wtScanTimeout
+	if err := runWorktrees(os.Stdout, &c, os.Args[2:]); err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+}
+
+// runWorktrees dispatches `worktrees [add|hide <path>]` and the list view.
+func runWorktrees(w io.Writer, client *http.Client, args []string) error {
+	if len(args) > 0 && (args[0] == "add" || args[0] == "hide") {
+		if len(args) < 2 {
+			return fmt.Errorf("usage: secure-agent worktrees %s <path>", args[0])
+		}
+		abs, err := filepath.Abs(args[1])
+		if err != nil {
+			return err
+		}
+		body, _ := json.Marshal(map[string]any{"path": abs, "hidden": args[0] == "hide"})
+		code, resp := request(client, http.MethodPost, "http://unix/worktrees/repos", string(body))
+		if code != 200 {
+			return fmt.Errorf("worktrees %s failed (%d): %s", args[0], code, strings.TrimSpace(resp))
+		}
+		var out struct {
+			Path string `json:"path"`
+		}
+		_ = json.Unmarshal([]byte(resp), &out)
+		if args[0] == "add" {
+			fmt.Fprintf(w, "added %s\n", out.Path)
+		} else {
+			fmt.Fprintf(w, "hid %s\n", abs)
+		}
+		return nil
+	}
+
+	path := "http://unix/worktrees"
+	if slices.Contains(args, "--refresh") {
+		path += "?refresh=1"
+	}
+	code, body := request(client, http.MethodGet, path, "")
+	if code != 200 {
+		return fmt.Errorf("worktrees failed (%d): %s", code, strings.TrimSpace(body))
+	}
+	if slices.Contains(args, "--json") {
+		fmt.Fprintln(w, body)
+		return nil
+	}
+	var rep wtReport
+	if err := json.Unmarshal([]byte(body), &rep); err != nil {
+		return fmt.Errorf("worktrees: unreadable response: %v", err)
+	}
+	f := wtFilter{
+		State: queryFlag(args, "--state", ""),
+		Repo:  queryFlag(args, "--repo", ""),
+		Stale: slices.Contains(args, "--stale"),
+	}
+	home, _ := os.UserHomeDir()
+	fmt.Fprint(w, formatWorktrees(rep, f, home))
+	return nil
+}
+
+type wtFilter struct {
+	State string
+	Repo  string
+	Stale bool
+}
+
+func (f wtFilter) keep(repo string, r wtRow) bool {
+	if r.State == "main" {
+		return false
+	}
+	if f.State != "" && r.State != f.State {
+		return false
+	}
+	if f.Repo != "" && !strings.Contains(repo, f.Repo) {
+		return false
+	}
+	return !f.Stale || r.Stale
+}
+
+// formatWorktrees prints one block per repository with matching non-main
+// rows, then the summary line and the scan's errors.
+func formatWorktrees(rep wtReport, f wtFilter, home string) string {
+	var b strings.Builder
+	for _, repo := range rep.Repos {
+		var rows []wtRow
+		for _, r := range repo.Worktrees {
+			if f.keep(repo.Path, r) {
+				rows = append(rows, r)
+			}
+		}
+		if len(rows) == 0 {
+			continue
+		}
+		meta := []string{}
+		if repo.DefaultBranch != "" {
+			meta = append(meta, repo.DefaultBranch)
+		}
+		if repo.Source != "" {
+			meta = append(meta, repo.Source)
+		}
+		fmt.Fprintf(&b, "%s", tildePath(repo.Path, home))
+		if len(meta) > 0 {
+			fmt.Fprintf(&b, "  (%s)", strings.Join(meta, ", "))
+		}
+		b.WriteString("\n")
+		for _, r := range rows {
+			stale := ""
+			if r.Stale {
+				stale = "stale"
+			}
+			branch := r.Branch
+			if branch == "" && r.Detached {
+				branch = "(detached)"
+			}
+			idle := "-"
+			if r.LastActivity != "" {
+				idle = fmt.Sprintf("%dd", r.IdleDays)
+			}
+			fmt.Fprintf(&b, "  %-6s  %-5s  %5s  %-32s  %s\n", r.State, stale, idle, clip(branch, 32), relPath(r.Path, repo.Path, home))
+			for _, reason := range r.Reasons {
+				fmt.Fprintf(&b, "          %s\n", reason)
+			}
+		}
+	}
+	s := rep.Summary
+	fmt.Fprintf(&b, "%d repos · %d worktrees · %d remove · %d review · %d keep · %d prune · %d stale (idle > %dd)",
+		s.Repos, s.Worktrees, s.Remove, s.Review, s.Keep, s.Prune, s.Stale, rep.StaleDays)
+	if rep.Cached {
+		b.WriteString(" · cached, --refresh rescans")
+	} else {
+		fmt.Fprintf(&b, " · scan %.1fs", float64(rep.DurationMS)/1000)
+	}
+	b.WriteString("\n")
+	for _, e := range rep.Errors {
+		fmt.Fprintf(&b, "error: %s\n", e)
+	}
+	return b.String()
+}
+
+// relPath shows a worktree inside its repository relative to it, and any
+// other path under the home directory with ~.
+func relPath(p, repo, home string) string {
+	if rel, ok := strings.CutPrefix(p, strings.TrimSuffix(repo, "/")+"/"); ok {
+		return rel
+	}
+	return tildePath(p, home)
+}
+
+func tildePath(p, home string) string {
+	if home != "" {
+		if rest, ok := strings.CutPrefix(p, strings.TrimSuffix(home, "/")+"/"); ok {
+			return "~/" + rest
+		}
+	}
+	return p
+}
+
+func clip(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n-1]) + "…"
+}
