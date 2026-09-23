@@ -191,3 +191,16 @@ func TestClaudeTraceMetaAndSidechainNotTurns(t *testing.T) {
 		t.Fatalf("real prompt evs = %+v, want one turn", evs)
 	}
 }
+
+// Claude Code's `<synthetic>` records are internal turns with zero usage, not
+// model calls: no kind-14 event.
+func TestClaudeTraceDropsSyntheticModel(t *testing.T) {
+	tr := NewClaudeTracer()
+	line := `{"type":"assistant","sessionId":"s1","timestamp":"2026-09-23T06:00:00Z","message":{"model":"<synthetic>","usage":{"input_tokens":0,"output_tokens":0},"content":[{"type":"text","text":"No response requested."}]}}`
+	evs, _, _ := tr.ParseLine(line)
+	for _, e := range evs {
+		if e.Kind == event.KindModelCall {
+			t.Fatalf("<synthetic> emitted a model_call: %+v", e)
+		}
+	}
+}

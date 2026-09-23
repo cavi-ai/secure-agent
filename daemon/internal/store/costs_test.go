@@ -3,6 +3,7 @@ package store
 import (
 	"encoding/json"
 	"math"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -121,5 +122,67 @@ func TestCostReportEmptyStoreRowsNeverNull(t *testing.T) {
 	b, _ := json.Marshal(rep)
 	if !strings.Contains(string(b), `"rows":[]`) {
 		t.Fatalf("empty report JSON = %s, want rows: []", b)
+	}
+}
+
+// The provider round-trips through the store; by=model rows carry the
+// model's dominant provider; Groups break the zero-cost calls down by
+// (group, model, provider) for classification, excluding priced calls.
+func TestCostReportProviderAndUnpricedGroups(t *testing.T) {
+	now := time.Now()
+	s, err := Open("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+	for _, sess := range []model.Session{{ID: "oc", Harness: "opencode"}, {ID: "cx", Harness: "codex"}} {
+		sess.StartedAt, sess.LastSeenAt, sess.Status = now, now, model.SessionActive
+		s.UpsertSession(sess)
+	}
+	call := func(sid, mdl, provider string, cost float64, ago time.Duration) {
+		s.PutEvent(event.Event{Kind: event.KindModelCall, TS: now.Add(-ago), SessionID: sid,
+			Model: mdl, Provider: provider, TokensIn: 100, TokensOut: 10, CostUSD: cost})
+	}
+	call("oc", "k3", "kimi-for-coding", 0, time.Minute)
+	call("oc", "k3", "kimi-for-coding", 0, 2*time.Minute)
+	call("oc", "k3", "openrouter", 0.2, 3*time.Minute)
+	call("cx", "gpt-5.6-sol", "custom", 0, time.Minute)
+	call("cx", "", "", 0, 2*time.Minute)
+
+	kind := int(event.KindModelCall)
+	var providers []string
+	for _, e := range s.QueryEvents(EventFilter{Kind: &kind, Limit: 10}) {
+		providers = append(providers, e.Provider)
+	}
+	if strings.Join(providers, ",") != ",custom,openrouter,kimi-for-coding,kimi-for-coding" {
+		t.Fatalf("stored providers (newest first) = %q", providers)
+	}
+
+	rep := s.CostReport(now.Add(-time.Hour), now, "model")
+	byModel := costRowsByKey(rep.Rows)
+	if r := byModel["k3"]; r.Provider != "kimi-for-coding" || r.Calls != 3 || r.Unpriced != 2 {
+		t.Fatalf("k3 row = %+v, want dominant provider kimi-for-coding, 3 calls, 2 unpriced", r)
+	}
+	if r := byModel["(unknown)"]; r.Provider != "" {
+		t.Fatalf("(unknown) row provider = %q, want empty", r.Provider)
+	}
+	type g struct {
+		key, model, provider string
+		calls                int
+	}
+	var got []g
+	for _, x := range rep.Groups {
+		got = append(got, g{x.Key, x.Model, x.Provider, x.Calls})
+	}
+	want := []g{{"k3", "k3", "kimi-for-coding", 2}, {"(unknown)", "", "", 1}, {"gpt-5.6-sol", "gpt-5.6-sol", "custom", 1}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("groups = %+v, want %+v", got, want)
+	}
+	byHarness := s.CostReport(now.Add(-time.Hour), now, "harness")
+	if n := len(byHarness.Groups); n != 3 || byHarness.Groups[0].Key != "opencode" {
+		t.Fatalf("by=harness groups = %+v, want opencode first of 3", byHarness.Groups)
+	}
+	if raw, _ := json.Marshal(rep); strings.Contains(string(raw), `"groups"`) || strings.Contains(string(raw), `"Groups"`) {
+		t.Fatalf("groups are internal, not on the wire: %s", raw)
 	}
 }

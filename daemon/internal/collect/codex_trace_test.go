@@ -1,8 +1,11 @@
 package collect
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
+	"github.com/cavi-ai/secure-agent/daemon/internal/bus"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 )
 
@@ -123,5 +126,98 @@ func TestIsCodexRolloutPath(t *testing.T) {
 	}
 	if IsCodexRolloutPath("/Users/x/.claude/projects/-r/abc.jsonl") {
 		t.Fatal("claude transcript misclassified as codex rollout")
+	}
+}
+
+// Real rollout shapes (codex 0.146): session_meta names the provider but no
+// model; turn_context (one per turn) names the model; no settings line.
+const codexRealMetaLine = `{"timestamp":"2026-09-23T02:30:21.000Z","type":"session_meta","payload":{"session_id":"019f-sol","id":"019f-sol","timestamp":"2026-09-23T02:30:21.000Z","cwd":"/Volumes/x/repo","originator":"codex_exec","cli_version":"0.146.0","source":"exec","model_provider":"custom","base_instructions":{"text":"x"}}}`
+
+func codexTurnContextLine(model string) string {
+	return `{"timestamp":"2026-09-23T02:30:22.000Z","type":"turn_context","payload":{"turn_id":"t1","cwd":"/Volumes/x/repo","approval_policy":"never","model":"` + model + `","effort":"high","summary":"auto"}}`
+}
+
+func codexModelCall(t *testing.T, tr *CodexTracer) event.Event {
+	t.Helper()
+	evs, ok := tr.ParseLine(codexTokenLine)
+	if !ok || len(evs) != 1 || evs[0].Kind != event.KindModelCall {
+		t.Fatalf("token_count evs = %+v ok=%v", evs, ok)
+	}
+	return evs[0]
+}
+
+// turn_context names the model and session_meta the provider when no
+// thread_settings_applied line exists.
+func TestCodexTraceModelFromTurnContext(t *testing.T) {
+	tr := NewCodexTracer()
+	tr.ParseLine(codexRealMetaLine)
+	if evs, ok := tr.ParseLine(codexTurnContextLine("gpt-5.6-sol")); ok || len(evs) != 0 {
+		t.Fatalf("turn_context = %+v ok=%v, want no events and ok=false (redaction scan kept)", evs, ok)
+	}
+	mc := codexModelCall(t, tr)
+	if mc.Model != "gpt-5.6-sol" || mc.Provider != "custom" || mc.SessionID != "019f-sol" {
+		t.Fatalf("model_call = model %q provider %q session %q, want gpt-5.6-sol/custom/019f-sol", mc.Model, mc.Provider, mc.SessionID)
+	}
+}
+
+// thread_settings_applied wins over turn_context, whichever comes first.
+func TestCodexTraceThreadSettingsWinsOverTurnContext(t *testing.T) {
+	for name, lines := range map[string][]string{
+		"settings first": {codexRealMetaLine, codexSettingsLine, codexTurnContextLine("gpt-5.6-sol")},
+		"context first":  {codexRealMetaLine, codexTurnContextLine("gpt-5.6-sol"), codexSettingsLine},
+	} {
+		tr := NewCodexTracer()
+		for _, l := range lines {
+			tr.ParseLine(l)
+		}
+		if mc := codexModelCall(t, tr); mc.Model != "m-test" || mc.Provider != "custom" {
+			t.Errorf("%s: model %q provider %q, want m-test/custom", name, mc.Model, mc.Provider)
+		}
+	}
+}
+
+// A later turn_context switches the model for the calls after it.
+func TestCodexTraceTurnContextModelChange(t *testing.T) {
+	tr := NewCodexTracer()
+	tr.ParseLine(codexRealMetaLine)
+	tr.ParseLine(codexTurnContextLine("gpt-5.6-sol"))
+	if mc := codexModelCall(t, tr); mc.Model != "gpt-5.6-sol" {
+		t.Fatalf("first call model %q", mc.Model)
+	}
+	tr.ParseLine(codexTurnContextLine("gpt-5.6-terra"))
+	if mc := codexModelCall(t, tr); mc.Model != "gpt-5.6-terra" {
+		t.Fatalf("after the switch model %q, want gpt-5.6-terra", mc.Model)
+	}
+}
+
+// A daemon restart resumes a rollout from its persisted offset: the tracer
+// must still learn the session and model from the file head.
+func TestCodexResumeFromOffsetPrimesSessionAndModel(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "sessions", "2026", "09", "23")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(dir, "rollout-2026-09-23T02-30-21-019f-sol.jsonl")
+	head := codexRealMetaLine + "\n" + codexTurnContextLine("gpt-5.6-sol") + "\n"
+	if err := os.WriteFile(p, []byte(head+codexTokenLine+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	b := bus.New(16)
+	sub := b.Subscribe()
+	ts := NewTranscriptScanner(b, nil)
+	ts.tailFile(p, map[string]int64{p: int64(len(head))}, nil)
+	for {
+		select {
+		case e := <-sub:
+			if e.Kind != event.KindModelCall {
+				continue
+			}
+			if e.Model != "gpt-5.6-sol" || e.Provider != "custom" || e.SessionID != "019f-sol" {
+				t.Fatalf("resumed model_call = model %q provider %q session %q", e.Model, e.Provider, e.SessionID)
+			}
+			return
+		default:
+			t.Fatal("resumed tail published no model_call")
+		}
 	}
 }

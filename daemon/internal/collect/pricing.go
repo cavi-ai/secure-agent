@@ -104,17 +104,73 @@ func ModelCostUSD(model string, in, out int64) float64 {
 }
 
 // lookupPrice resolves a model id against the operator table first, then the
-// built-in table.
+// built-in table. A vendor-prefixed id ("z-ai/glm-5.3-flash") that matches
+// nothing as written is looked up again without its prefix.
 func lookupPrice(model string) ([2]float64, bool) {
 	if model == "" {
 		return [2]float64{}, false
 	}
+	if p, ok := lookupPriceExact(model); ok {
+		return p, true
+	}
+	if i := strings.LastIndexByte(model, '/'); i >= 0 && i+1 < len(model) {
+		return lookupPriceExact(model[i+1:])
+	}
+	return [2]float64{}, false
+}
+
+func lookupPriceExact(model string) ([2]float64, bool) {
 	if user := userPrices.Load(); user != nil {
 		if p, ok := matchPrice(*user, model); ok {
 			return p, true
 		}
 	}
 	return matchPrice(builtinPrices, model)
+}
+
+// Price classes: why a model call does or does not carry a cost.
+const (
+	ClassPriced        = "priced"         // a price entry resolves the model id
+	ClassPlan          = "plan"           // a subscription provider: no per-call price exists
+	ClassLocal         = "local"          // a local runtime: no per-call price exists
+	ClassUnknownModel  = "unknown-model"  // the harness recorded no model id
+	ClassUnpricedModel = "unpriced-model" // the id is known, no entry prices it: add one under `pricing`
+)
+
+// planProviders are subscription plans billed per seat, not per token, as the
+// harness names the provider (opencode providerID).
+var planProviders = map[string]bool{
+	"kimi-for-coding":       true,
+	"kimi-code-plan-global": true,
+}
+
+// localProviders are local model runtimes.
+var localProviders = map[string]bool{
+	"ollama":    true,
+	"lmstudio":  true,
+	"lm-studio": true,
+	"llama.cpp": true,
+	"mlx":       true,
+}
+
+// Classify names a model call's price class. An empty id is unknown-model
+// whatever the provider (the harness failed to name it); a price entry wins
+// over the provider tables, so class and ModelCostUSD agree.
+func Classify(model, provider string) string {
+	if model == "" {
+		return ClassUnknownModel
+	}
+	if _, ok := lookupPrice(model); ok {
+		return ClassPriced
+	}
+	p := strings.ToLower(provider)
+	switch {
+	case planProviders[p]:
+		return ClassPlan
+	case localProviders[p], strings.Contains(p, "localhost"), strings.Contains(p, "127.0.0.1"), strings.Contains(p, "[::1]"):
+		return ClassLocal
+	}
+	return ClassUnpricedModel
 }
 
 // versionSuffixRE is the only remainder a prefix may absorb past an exact

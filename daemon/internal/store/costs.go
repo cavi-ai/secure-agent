@@ -7,14 +7,21 @@ import (
 
 // CostRow is one group of model calls in a CostReport.
 type CostRow struct {
-	Key       string  `json:"key"`               // group value: repo | harness | session id | model | repo@branch
-	Harness   string  `json:"harness,omitempty"` // harness with the most calls in the group (empty for by=harness)
+	Key       string  `json:"key"`                // group value: repo | harness | session id | model | repo@branch
+	Harness   string  `json:"harness,omitempty"`  // harness with the most calls in the group (empty for by=harness)
+	Provider  string  `json:"provider,omitempty"` // by=model: provider with the most calls for the model
+	Class     string  `json:"class,omitempty"`    // by=model: price class, set by the API from the pricing tables
 	Calls     int     `json:"calls"`
 	Sessions  int     `json:"sessions"` // distinct session ids in the group
 	TokensIn  int64   `json:"tokens_in"`
 	TokensOut int64   `json:"tokens_out"`
 	CostUSD   float64 `json:"cost_usd"`
-	Unpriced  int     `json:"unpriced_calls"` // calls with cost 0 (unknown model); never assigned a price
+	Unpriced  int     `json:"unpriced_calls"` // calls with cost 0; never assigned a price
+	// Why the unpriced calls carry no cost, set by the API from Groups.
+	UnknownModel  int `json:"unknown_model_calls"`  // no model id recorded
+	UnpricedModel int `json:"unpriced_model_calls"` // model id with no price entry
+	Plan          int `json:"plan_calls"`           // subscription provider
+	Local         int `json:"local_calls"`          // local runtime
 }
 
 // CostReport is model-call spend over a window, grouped by one dimension.
@@ -24,6 +31,20 @@ type CostReport struct {
 	By    string    `json:"by"`
 	Total CostRow   `json:"total"` // Key ""; Sessions = distinct sessions overall
 	Rows  []CostRow `json:"rows"`  // cost desc, then calls desc; at most costRowLimit; never nil
+	// Groups is every zero-cost call bucketed by (group key, model,
+	// provider), read in the same pass as Rows, for the API to classify.
+	Groups []UnpricedGroup `json:"-"`
+}
+
+// UnpricedGroup counts the zero-cost model calls of one (group key, model,
+// provider). Model and Provider are raw ("" when not recorded).
+type UnpricedGroup struct {
+	Key       string
+	Model     string
+	Provider  string
+	Calls     int
+	TokensIn  int64
+	TokensOut int64
 }
 
 const costRowLimit = 200
@@ -90,30 +111,66 @@ func (s *Store) CostReport(since, until time.Time, by string) CostReport {
 	}
 	rows.Close()
 
-	if by == "harness" || len(rep.Rows) == 0 {
-		return rep
-	}
-	// Dominant harness per group: most calls wins, ties break alphabetically.
-	hrows, err := s.db.Query(`SELECT `+keyExpr+` AS k, s.harness AS h, COUNT(*) AS n`+costFrom+`
-		AND s.harness IS NOT NULL AND s.harness != ''
-		GROUP BY k, h ORDER BY k, n DESC, h ASC`, sinceStr, untilStr)
+	grows, err := s.db.Query(`SELECT `+keyExpr+` AS k, COALESCE(e.model,'') AS m, COALESCE(e.provider,'') AS p,
+		COUNT(*), COALESCE(SUM(e.tokens_in),0), COALESCE(SUM(e.tokens_out),0)`+costFrom+`
+		AND (e.cost_usd IS NULL OR e.cost_usd = 0)
+		GROUP BY k, m, p ORDER BY 4 DESC, k, m, p`, sinceStr, untilStr)
 	if err != nil {
-		log.Printf("store: cost harness error: %v", err)
+		log.Printf("store: cost unpriced groups error: %v", err)
+	} else {
+		for grows.Next() {
+			var g UnpricedGroup
+			if err := grows.Scan(&g.Key, &g.Model, &g.Provider, &g.Calls, &g.TokensIn, &g.TokensOut); err == nil {
+				rep.Groups = append(rep.Groups, g)
+			}
+		}
+		if err := grows.Err(); err != nil {
+			log.Printf("store: cost unpriced groups cursor error: %v", err)
+		}
+		grows.Close()
+	}
+
+	if len(rep.Rows) == 0 {
 		return rep
 	}
+	if by != "harness" {
+		harness := s.dominantLocked(keyExpr, "s.harness", sinceStr, untilStr)
+		for i := range rep.Rows {
+			rep.Rows[i].Harness = harness[rep.Rows[i].Key]
+		}
+	}
+	if by == "model" {
+		provider := s.dominantLocked(keyExpr, "e.provider", sinceStr, untilStr)
+		for i := range rep.Rows {
+			rep.Rows[i].Provider = provider[rep.Rows[i].Key]
+		}
+	}
+	return rep
+}
+
+// dominantLocked maps each group key to the non-empty value of col with the
+// most calls in the window; ties break alphabetically. Caller holds s.mu.
+func (s *Store) dominantLocked(keyExpr, col, sinceStr, untilStr string) map[string]string {
 	dominant := map[string]string{}
-	for hrows.Next() {
-		var k, h string
+	rows, err := s.db.Query(`SELECT `+keyExpr+` AS k, `+col+` AS v, COUNT(*) AS n`+costFrom+`
+		AND `+col+` IS NOT NULL AND `+col+` != ''
+		GROUP BY k, v ORDER BY k, n DESC, v ASC`, sinceStr, untilStr)
+	if err != nil {
+		log.Printf("store: cost dominant %s error: %v", col, err)
+		return dominant
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var k, v string
 		var n int
-		if err := hrows.Scan(&k, &h, &n); err == nil {
+		if err := rows.Scan(&k, &v, &n); err == nil {
 			if _, seen := dominant[k]; !seen {
-				dominant[k] = h
+				dominant[k] = v
 			}
 		}
 	}
-	hrows.Close()
-	for i := range rep.Rows {
-		rep.Rows[i].Harness = dominant[rep.Rows[i].Key]
+	if err := rows.Err(); err != nil {
+		log.Printf("store: cost dominant %s cursor error: %v", col, err)
 	}
-	return rep
+	return dominant
 }
