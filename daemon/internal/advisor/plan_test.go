@@ -11,6 +11,13 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 )
 
+func (m *memSink) SimilarLabels(rule, agent, pattern string, limit int) []model.OperatorLabel {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.labelQuery = rule + "|" + agent + "|" + pattern
+	return m.labels
+}
+
 func (m *memSink) PutAdvisorPlan(subject string, p model.AdvisorPlan) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -132,5 +139,30 @@ func TestEnqueuePlanRefusedWhenCircuitOpen(t *testing.T) {
 	sub.mu.Unlock()
 	if sub.EnqueuePlan(planReq()) || len(sub.queue) != 0 {
 		t.Fatal("plan queued while the circuit is open")
+	}
+}
+
+// Triage reads the operator's similar labels and sends them as history.
+func TestTriagePromptCarriesOperatorHistory(t *testing.T) {
+	stub := &chatStub{content: `{"assessment":"benign","confidence":0.9,"rationale":"routine","suggested_action":"none"}`}
+	srv := newStubServer(t, stub)
+	sink := &memSink{rows: map[string]model.AdvisorVerdict{}, labels: []model.OperatorLabel{
+		{Rule: "sensitive-read-then-connect", Agent: "cursor", Pattern: "registry.npmjs.org", Label: "ok", Source: "allow-host",
+			Reason: "npm installs are routine", CreatedAt: time.Now().Add(-48 * time.Hour)},
+	}}
+	sub := New(Config{Enabled: true, Endpoint: srv.URL, Model: "m", Timeout: 2 * time.Second}, sink)
+	fl := model.Flag{ID: "f1", Rule: "sensitive-read-then-connect", Agent: "cursor",
+		Evidence: model.EvidenceFromStrings("cursor (pid 42) read ~/.npmrc at 2026-09-08T10:00:00Z", "then connected to registry.npmjs.org:443 at 2026-09-08T10:00:04Z")}
+	sub.process(context.Background(), task{kind: "flag", subjectID: "f1", flag: fl})
+	var body chatRequest
+	if err := json.Unmarshal([]byte(stub.lastBody), &body); err != nil {
+		t.Fatal(err)
+	}
+	user := body.Messages[1].Content
+	if !strings.Contains(user, "operator history") || !strings.Contains(user, "ok via allow-host") || !strings.Contains(user, "npm installs are routine") {
+		t.Fatalf("triage prompt lacks operator history:\n%s", user)
+	}
+	if sink.labelQuery != "sensitive-read-then-connect|cursor|registry.npmjs.org" {
+		t.Fatalf("labels queried with %q", sink.labelQuery)
 	}
 }

@@ -54,11 +54,13 @@ func (s *chatStub) handler(t *testing.T) http.HandlerFunc {
 }
 
 type memSink struct {
-	mu       sync.Mutex
-	rows     map[string]model.AdvisorVerdict
-	trend    model.TrendContext
-	backfill []model.Flag
-	plans    map[string]model.AdvisorPlan
+	mu         sync.Mutex
+	rows       map[string]model.AdvisorVerdict
+	trend      model.TrendContext
+	backfill   []model.Flag
+	plans      map[string]model.AdvisorPlan
+	labels     []model.OperatorLabel
+	labelQuery string
 }
 
 func (m *memSink) PutAdvisorVerdict(subjectID, kind string, v model.AdvisorVerdict) {
