@@ -28,6 +28,7 @@ func WireTypes() []any {
 		event.Event{},
 		model.Session{},
 		model.Flag{},
+		model.Pattern{},
 		model.IncidentReport{},
 		model.RotateItem{},
 		model.AdvisorVerdict{},
@@ -128,7 +129,7 @@ func tsTypeOf(t reflect.Type) string {
 		return "boolean"
 	case reflect.Int, reflect.Int32, reflect.Int64, reflect.Float64, reflect.Uint64, reflect.Int16, reflect.Uint32:
 		return "number"
-	case reflect.Slice:
+	case reflect.Slice, reflect.Array:
 		return tsTypeOf(t.Elem()) + "[]"
 	case reflect.Map:
 		return "Record<string, " + tsTypeOf(t.Elem()) + ">"

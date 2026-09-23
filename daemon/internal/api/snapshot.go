@@ -14,13 +14,16 @@ import (
 // refresh when a bus event lands. Slow panels (fleet, audit, sources,
 // rollup, uninspected, notify rules) stay on their own 30s cadence.
 type Snapshot struct {
-	Status      Status        `json:"status"`
-	Flags       []model.Flag  `json:"flags"`
-	Incidents   any           `json:"incidents"`
-	Events      []event.Event `json:"events"`
-	Posture     Posture       `json:"posture"`
-	Suggestions []Suggestion  `json:"suggestions"`
-	Mutes       []MutePair    `json:"mutes"`
+	Status Status       `json:"status"`
+	Flags  []model.Flag `json:"flags"`
+	// Patterns are the repeating findings of the same 24h (at least 3 flags
+	// each); the console renders them instead of the flags they cover.
+	Patterns    []model.Pattern `json:"patterns"`
+	Incidents   any             `json:"incidents"`
+	Events      []event.Event   `json:"events"`
+	Posture     Posture         `json:"posture"`
+	Suggestions []Suggestion    `json:"suggestions"`
+	Mutes       []MutePair      `json:"mutes"`
 	// Sessions is the durable session spine (live and recently ended) — the
 	// Sessions tab renders from this, not from process-tree guesswork.
 	Sessions []model.Session `json:"sessions"`
@@ -58,6 +61,7 @@ func (a *API) currentSnapshot() Snapshot {
 	return Snapshot{
 		Status:      a.currentStatus(),
 		Flags:       flags,
+		Patterns:    a.computePatterns(time.Now().Add(-24*time.Hour), patternDefaultMin),
 		Incidents:   out,
 		Events:      a.store.QueryEvents(store.EventFilter{Limit: 50}),
 		Posture:     a.computePosture(),

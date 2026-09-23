@@ -288,6 +288,40 @@ Returns one flag (with `title` and `advisor`) plus `explain`, the daemon's plain
 
 ---
 
+### 2b. `GET /patterns`
+
+Repeating findings: the flags one agent raised under one rule on one subject in the window, as one row each. Read-level; console-allowed.
+
+| Query | Meaning |
+|---|---|
+| `hours` | Window ending now, `1`..`720`, default `24`. |
+| `min` | Flags a pattern needs, `>= 2`, default `3`. |
+
+`400` for `hours` or `min` out of range. Sorted by `unacked`, then `count`, descending; `[]` when none.
+
+| Field | Meaning |
+|---|---|
+| `key` | `agent\|rule\|subject`; the `id` of the pattern's `/posture` item. |
+| `agent`, `rule`, `title` | Agent, rule id, served rule title. |
+| `subject` | Evidence item: the file `explain.subject` names (`label` = display path, `sub` = category), else the first destination host (`kind: "connect"`, `sub` = org), else empty. |
+| `count`, `unacked` | Flags in the window; unacknowledged ones. |
+| `first`, `last` | First and last flag timestamps. |
+| `median_gap_s`, `bursts` | Median seconds between consecutive flags; gaps under 5 s. |
+| `cadence` | Phrase for `median_gap_s`: `in bursts under a second apart`, `in bursts a few seconds apart`, `about every N seconds` (or minutes, hours). |
+| `hourly` | 24 equal buckets over the window, oldest first (one hour each at `hours=24`). |
+| `pids`, `pid_count` | Busiest 5 pids; distinct pids. |
+| `sessions`, `session_count` | Busiest 5 session ids; distinct sessions. |
+| `disposition` | Worst among unacknowledged flags (`critical` > `warning` > `benign-likely`); `acknowledged` when `unacked` is 0. |
+| `summary` | One sentence: agent, action, count, local time window, processes and sessions, cadence. No flag ids. |
+| `actions` | `explain.actions` shapes, in order, only those that apply: `allow-host` (egress subject not yet allowlisted), `mute-rule-host` (egress subject) or `mute-class` (keychain rules), `dismiss-all` (`POST /flags/acknowledge` `{"flag_ids"}`, the open ids, at most 500), `kill` (busiest live pid). `recommended`: `benign-likely` → `allow-host`, else the mute; `critical` → `kill`. |
+| `flag_ids` | Covered flag ids, open first, newest first, at most 500. |
+
+`/snapshot` carries `patterns` (24 h, `min` 3) next to `flags`.
+
+### 2c. `POST /flags/acknowledge`
+
+`{"flag_id":"<id>"}` → `{"status":"ok","acknowledged":<bool>}`, or `{"flag_ids":["<id>",…]}` (1..500 ids) in one transaction → `{"status":"ok","acknowledged":<bool>,"count":<rows>}`. Ids match `^[A-Za-z0-9_.-]+$`. `400` for both fields, neither, more than 500 ids, or an invalid id.
+
 ### 3. `GET /events`
 
 Retrieves raw system telemetry events captured by the file watcher and network sampler.
@@ -703,9 +737,9 @@ The headline answer — *"do I need to look at this machine, and what first?"*:
 
 Flag items take their `severity` from the flag's disposition (`critical` 3, `warning` 2, `benign-likely` 1) and their `detail` starts with the disposition text (`"Likely benign (advisor 93 %) — …"`), so an advisor-confirmed benign flag yields `attention`, never `critical`. In `groups`, flag items carry `disposition`; a `benign-likely` flag has priority 1 and title "Finding, likely benign".
 
-Item kinds: `flag` (recent ≤24h, severity ≥2, human-titled), `guard_pending` (unresolved prompts), `collector_down` (dead/abandoned monitors), `collector_silent`, `harness_uncovered` and `guard_hook_unregistered` (coverage gaps while agents run), `uninspected_egress` (connections that bypassed the firewall, one item per group that carries them), `incident` (unresolved critical/high, or open more than 72h), `resource_pressure` (a pending resource intervention). Derived live — never a second source of truth.
+Item kinds: `flag` (recent ≤24h, severity ≥2, human-titled), `pattern` (the flags one `/patterns` row covers, as one item: `id` = pattern `key`, `detail` = its `summary`; in `groups` also `count`, `rule`, `disposition`; the covered flags have no `flag` items), `guard_pending` (unresolved prompts), `collector_down` (dead/abandoned monitors), `collector_silent`, `harness_uncovered` and `guard_hook_unregistered` (coverage gaps while agents run), `uninspected_egress` (connections that bypassed the firewall, one item per group that carries them), `incident` (unresolved critical/high, or open more than 72h), `resource_pressure` (a pending resource intervention). Derived live — never a second source of truth.
 
-Invariant: every item in `items` appears in exactly one of `groups`, and the group item counts sum to `needs_you` (= `len(items)`). Groups are agent sessions (`session:<key>`), agent buckets (`agent:<name>`), and `machine` (`agent: ""`, `label: "This machine"`), which holds the agent-less items: dead or silent collectors, missing hooks, and the machine-wide uninspected item when no agent group carries egress. Group item priorities: guard 5, resource 4, incident 3 (aging below high risk 1), flag 2 (severity 2 or likely benign 1), machine 2 (1 below severity 2), egress 1.
+Invariant: every item in `items` appears in exactly one of `groups`, and the group item counts sum to `needs_you` (= `len(items)`). Groups are agent sessions (`session:<key>`), agent buckets (`agent:<name>`), and `machine` (`agent: ""`, `label: "This machine"`), which holds the agent-less items: dead or silent collectors, missing hooks, and the machine-wide uninspected item when no agent group carries egress. Group item priorities: guard 5, resource 4, incident 3 (aging below high risk 1), flag 2 (severity 2 or likely benign 1), pattern 2 (below critical 1), machine 2 (1 below severity 2), egress 1.
 
 ### `GET /events/stream` (SSE)
 
