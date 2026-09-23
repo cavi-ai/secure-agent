@@ -29,6 +29,7 @@ const (
 	maxAudit            = 50000 // long-lived security log, but still bounded against abuse
 	maxFlags            = 10000 // flags are insert-only like events; cap them too
 	maxResourceEpisodes = 500   // bounded full-family pressure snapshots
+	maxAdvisorPlans     = 2000  // one plan per subject
 	episodeSettleWindow = 30 * time.Second
 )
 
@@ -229,6 +230,13 @@ func Open(dbPath, jsonlPath string) (*Store, error) {
 			rationale TEXT,
 			suggested_action TEXT,
 			model TEXT,
+			created_at TEXT
+		);`,
+		// Local-advisor plans, keyed by subject ("flag:<id>", "incident:<id>",
+		// "file:<path>"); the plan JSON carries its evidence key.
+		`CREATE TABLE IF NOT EXISTS advisor_plans (
+			subject_id TEXT PRIMARY KEY,
+			plan_json TEXT,
 			created_at TEXT
 		);`,
 		`CREATE TABLE IF NOT EXISTS resource_episodes (
