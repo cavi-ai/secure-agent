@@ -100,3 +100,33 @@ func TestMatchReportsRule(t *testing.T) {
 		}
 	}
 }
+
+// CategoryForRule maps a stamped Match.Rule back to its category, so served
+// evidence can be labelled without re-classifying the path.
+func TestCategoryForRule(t *testing.T) {
+	for rule, want := range map[string]Category{
+		"system-trust":             CatKeychainSystem,
+		"keychain:login.keychain":  CatKeychain,
+		"ssh-key":                  CatSSHKey,
+		"aws":                      CatAWS,
+		"env-file":                 CatEnvFile,
+		"path:/etc/secrets":        CatOther,
+		"glob:~/.claude/skills/**": CatOther,
+		"":                         CatOther,
+	} {
+		if got := CategoryForRule(rule); got != want {
+			t.Errorf("CategoryForRule(%q) = %v, want %v", rule, got, want)
+		}
+	}
+	// Round trip: every rule the classifier stamps maps back to its category.
+	c := classifier(t)
+	for _, p := range []string{"/Users/x/.ssh/id_ed25519", "/Users/x/.aws/credentials", "/Users/x/work/.env", "/System/Library/Keychains/SystemRootCertificates.keychain"} {
+		m, ok := c.Match(p)
+		if !ok {
+			t.Fatalf("Match(%s) did not classify", p)
+		}
+		if got := CategoryForRule(m.Rule); got != m.Category {
+			t.Errorf("CategoryForRule(%q) = %v, want %v", m.Rule, got, m.Category)
+		}
+	}
+}

@@ -93,3 +93,32 @@ func TestAllowlistStoreRoundTrip(t *testing.T) {
 		t.Fatalf("allowlist overrides must be 0600, got %o", info.Mode().Perm())
 	}
 }
+
+// Allows applies the correlator's vendor-host match rule: exact host or a
+// dot-boundary suffix, case-insensitive, per agent.
+func TestAllowlistStoreAllows(t *testing.T) {
+	s := NewAllowlistStore(filepath.Join(t.TempDir(), "allow.json"))
+	if s.Allows("claude", "api.example.com") {
+		t.Fatal("empty store allows nothing")
+	}
+	if err := s.Add("claude", "Example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Add("claude", "2606:4700:20::681a:4a4"); err != nil {
+		t.Fatal(err)
+	}
+	for host, want := range map[string]bool{
+		"example.com":            true,
+		"API.example.com":        true,
+		"badexample.com":         false,
+		"example.com.evil.net":   false,
+		"2606:4700:20::681a:4a4": true,
+	} {
+		if got := s.Allows("claude", host); got != want {
+			t.Errorf("Allows(claude, %s) = %v, want %v", host, got, want)
+		}
+	}
+	if s.Allows("codex", "example.com") {
+		t.Error("approvals are per agent")
+	}
+}

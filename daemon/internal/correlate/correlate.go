@@ -818,13 +818,8 @@ func (c *Correlator) isVendorHost(agentName, host string) bool {
 	if host == "" {
 		return false
 	}
-	hostLower := strings.ToLower(host)
-	matches := func(allowed string) bool {
-		allowedLower := strings.ToLower(allowed)
-		return hostLower == allowedLower || strings.HasSuffix(hostLower, "."+allowedLower)
-	}
 	for _, allowed := range c.cfg.VendorAllowlist[agentName] {
-		if matches(allowed) {
+		if hostMatches(host, allowed) {
 			return true
 		}
 	}
@@ -832,12 +827,22 @@ func (c *Correlator) isVendorHost(agentName, host string) bool {
 	// traffic for this agent.
 	if c.allowlistOverrides != nil {
 		for _, allowed := range c.allowlistOverrides(agentName) {
-			if matches(allowed) {
+			if hostMatches(host, allowed) {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+// hostMatches: host equals allowed or is a subdomain of it (dot boundary),
+// case-insensitive. The one match rule for vendor and user-approved hosts.
+func hostMatches(host, allowed string) bool {
+	if host == "" || allowed == "" {
+		return false
+	}
+	h, a := strings.ToLower(host), strings.ToLower(allowed)
+	return h == a || strings.HasSuffix(h, "."+a)
 }
 
 func hashFlagID(rule string, pid int32, ts time.Time) string {

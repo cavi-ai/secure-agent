@@ -89,4 +89,28 @@ func TestConsoleAllowListRejectsPprof(t *testing.T) {
 			t.Errorf("%s is not owner-only", p)
 		}
 	}
+// The flag explanation is a dynamic /flags/{id}/explain family: the console
+// admits exactly that shape, and the exact acknowledge route keeps its gate.
+func TestFlagExplainRouteGate(t *testing.T) {
+	if !apiroutes.ConsoleAllowed("/flags/abc/explain") {
+		t.Fatal("/flags/{id}/explain must be console-allowed")
+	}
+	for _, p := range []string{"/flags/../explain", "/flags/./explain", "/flags//explain", "/flags/abc", "/flags/abc/timeline",
+		"/flags/abc/explain/x", "/sessions/abc/explain", "/flags/"} {
+		if apiroutes.ConsoleAllowed(p) {
+			t.Errorf("ConsoleAllowed(%q) = true, want false", p)
+		}
+	}
+	if !apiroutes.ConsoleAllowed("/sessions/abc/timeline") || apiroutes.ConsoleAllowed("/sessions/../timeline") {
+		t.Error("session timeline shape changed")
+	}
+	if !apiroutes.ConsoleAllowed("/flags/acknowledge") || !apiroutes.ConsoleAllowed("/flags") {
+		t.Error("exact /flags routes must stay console-allowed")
+	}
+	if !apiroutes.IsMutation("POST", "/flags/acknowledge") {
+		t.Error("POST /flags/acknowledge must stay a mutation")
+	}
+	if apiroutes.IsMutation("GET", "/flags/abc/explain") || apiroutes.IsMutation("POST", "/flags/abc/explain") {
+		t.Error("the explain route is a read")
+	}
 }

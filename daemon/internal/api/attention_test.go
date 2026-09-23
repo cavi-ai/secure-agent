@@ -114,3 +114,23 @@ func TestAttentionGroupsAcknowledgedFlagsExcluded(t *testing.T) {
 		t.Fatalf("groups = %+v, want only the unacknowledged flag", groups)
 	}
 }
+
+// Flag items carry their disposition; a likely-benign one drops below the
+// critical findings.
+func TestAttentionGroupsFlagDisposition(t *testing.T) {
+	a := attentionAPI(t, []resource.Session{mkResourceSession(1, "claude", "/w")})
+	a.store.PutFlag(model.Flag{ID: "fp", Rule: "sensitive-read-then-connect", Severity: 3, TS: time.Now(), PID: 1, Agent: "claude"})
+	a.store.PutAdvisorVerdict("fp", "flag", model.AdvisorVerdict{Assessment: "benign", Confidence: 0.93, Rationale: "Own config.", CreatedAt: time.Now()})
+	a.store.PutFlag(model.Flag{ID: "real", Rule: "tcc-tamper", Severity: 3, TS: time.Now(), PID: 1, Agent: "claude"})
+	groups := a.computeAttentionGroups(Status{Running: true})
+	if len(groups) != 1 || len(groups[0].Items) != 2 {
+		t.Fatalf("groups = %+v, want one group with two flag items", groups)
+	}
+	first, second := groups[0].Items[0], groups[0].Items[1]
+	if first.ID != "real" || first.Priority != 2 || first.Title != "Critical finding" || first.Disposition == nil || first.Disposition.State != "critical" {
+		t.Fatalf("first item = %+v, want the critical finding", first)
+	}
+	if second.ID != "fp" || second.Priority != 1 || second.Title != "Finding, likely benign" || second.Disposition == nil || second.Disposition.State != "benign-likely" {
+		t.Fatalf("second item = %+v, want the likely-benign finding", second)
+	}
+}

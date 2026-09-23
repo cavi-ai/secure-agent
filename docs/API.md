@@ -251,6 +251,41 @@ Host: unix
 ]
 ```
 
+#### Explanation stamping
+
+`GET /flags` stamps `explain` (below) on the first **25 unacknowledged** flags of the response, without network lookups (endpoint identity comes from the CIDR/suffix tables and the reverse-DNS cache only). Acknowledged flags and rows past the cap stay raw. `/snapshot` stamps its `flags` the same way.
+
+### 2a. `GET /flags/{id}/explain`
+
+Returns one flag (with `title` and `advisor`) plus `explain`, the daemon's plain-language reading of it. Destinations may take one bounded reverse-DNS lookup. `404` for an unknown id or any other shape under `/flags/`; `405` for a non-GET. Console-admitted on the proxy listener in exactly this shape (non-empty id, not `.`/`..`). `POST /flags/acknowledge` is a separate exact route and is unaffected.
+
+```json
+{
+  "id": "3f9c2a1b7d4e6f80",
+  "rule": "sensitive-read-then-connect",
+  "title": "Agent read a secret, then connected out",
+  "explain": {
+    "what": "Claude read a sensitive file in Claude skills (~/.claude/skills), then reached AWS 3 s later.",
+    "subject": {"path": "/Users/me/.claude/skills/…/config", "display": "~/.claude/skills/…/config", "basename": "config",
+                "category": "other_sensitive", "category_label": "sensitive file", "owner_label": "Claude skills (~/.claude/skills)"},
+    "egress": [{"host": "2600:1f10:…:fd73", "port": 443, "org": "AWS", "kind": "ipv6", "allowlisted": false, "gap_seconds": 3}],
+    "context": {"session_id": "…", "harness": "claude", "repo": "api", "branch": "main", "tool": "Read", "tool_status": "ok", "tool_at": "…", "model": "…"},
+    "disposition": {"state": "benign-likely", "text": "Likely benign (advisor 93 %)", "why": "<advisor rationale, first sentence>"},
+    "actions": [{"id": "allow-host", "label": "Allow 2600:1f10:…:fd73 (AWS) for claude", "consequence": "…",
+                 "method": "POST", "path": "/allowlist", "body": {"agent": "claude", "host": "2600:1f10:…:fd73"}, "recommended": true}]
+  }
+}
+```
+
+| Field | Content |
+|---|---|
+| `what` | One sentence per rule; no pids; the destination's org over its address. |
+| `subject` | The file from the first `read`/`keychain`/`transcript` item (or a `violation` carrying a path). `category`: `env_file`, `ssh_key`, `aws_credentials`, `keychain`, `keychain_system_trust`, `other_sensitive`, `transcript`. `owner_label`: `Claude skills (~/.claude/skills)`, `Claude Code config (~/.claude)`, `Cursor config`, `opencode config`, `repo <name>` (under the session workspace), `temp directory`, `home directory`, `system`. `display`: `~`-abbreviated, middle-truncated to 64 runes. |
+| `egress` | Every `connect` item, deduped by host:port, in evidence order. `org`/`name`/`kind` from the endpoint identity table. `allowlisted`: the host is approved for the flag's agent (exact or dot-suffix match). `gap_seconds`: connect time − read time (negative when the connection came first; `0` without a read item). |
+| `context` | The flag's session (harness, repo, branch, workspace), the same-session tool call nearest the read time within ±60 s (`tool`, `tool_status`, `tool_at`), and the nearest model call within ±60 s (`model`). Absent when the flag has no session. |
+| `disposition` | One verdict, in precedence order: `acknowledged` ("Reviewed") → `benign-likely` (advisor `benign` with confidence ≥ 0.85; "Likely benign (advisor N %)", `why` = the rationale's first sentence) → `critical` (severity ≥ 3, "Act now") → `warning` ("Needs a look"). `why` is otherwise the rule title. |
+| `actions` | In order, only those that apply: `allow-host` (per destination host not yet allowlisted), `allow-path` (env/ssh/cloud/keychain files; guard rules `env-files`, `ssh-keys`, `cloud-creds`, `keychain`), `mute-rule-host` (first destination `POST /mute` accepts — IPv6 literals are not), `mute-class` (keychain rules, `host: "*"`), `open-incident` (an incident holds the flag), `dismiss` (unacknowledged), `kill` (the pid is a live agent). Each carries the request (`method`, `path`, `body`) and a one-line `consequence`. `recommended` marks the action matching the advisor's `suggested_action` (`allow-host` → first `allow-host`; `mute-rule` → `mute-rule-host`, else `mute-class`; `kill-agent` → `kill`; `rotate-credentials` → `open-incident`). |
+
 ---
 
 ### 3. `GET /events`
@@ -633,6 +668,8 @@ The headline answer — *"do I need to look at this machine, and what first?"*:
 }
 ```
 
+Flag items take their `severity` from the flag's disposition (`critical` 3, `warning` 2, `benign-likely` 1) and their `detail` starts with the disposition text (`"Likely benign (advisor 93 %) — …"`), so an advisor-confirmed benign flag yields `attention`, never `critical`. In `groups`, flag items carry `disposition`; a `benign-likely` flag has priority 1 and title "Finding, likely benign".
+
 Item kinds: `flag` (recent ≤24h, severity ≥2, human-titled), `guard_pending` (unresolved prompts), `collector_down` (dead/abandoned monitors), `uninspected_egress` (connections that bypassed the firewall). Derived live — never a second source of truth.
 
 ### `GET /events/stream` (SSE)
@@ -641,7 +678,7 @@ Live feed of every bus event as `event: <kind>` / `data: <json>`, with a 15s hea
 
 ### Console access on the proxy port
 
-The browser console at `http://127.0.0.1:<proxy_port>/dashboard/` fetches telemetry same-origin, i.e. from the proxy listener. That listener serves the API endpoints listed in `proxy.isConsoleAPIPath` (status/posture/flags/events/incidents/audit/fleet/firewall sources + guard pending/rules/resolve + kill + rollup + mute + allowlist(+suggestions) + `/egress/uninspected` + `/notify/rules` + advisor retriage + `/sessions/{id}/timeline` and `/sessions/{id}/report` + this SSE stream) behind the **console token**. The whitelist is kept in lockstep with the console's fetches by `TestConsoleAPIPathsCoverWebApp` — a path the console fetches but the listener doesn't whitelist 407s and the panel dies silently, which is exactly the drift that test exists to catch:
+The browser console at `http://127.0.0.1:<proxy_port>/dashboard/` fetches telemetry same-origin, i.e. from the proxy listener. That listener serves the API endpoints listed in `proxy.isConsoleAPIPath` (status/posture/flags/events/incidents/audit/fleet/firewall sources + guard pending/rules/resolve + kill + rollup + mute + allowlist(+suggestions) + `/egress/uninspected` + `/notify/rules` + advisor retriage + `/sessions/{id}/timeline` and `/sessions/{id}/report` + `/flags/{id}/explain` + this SSE stream) behind the **console token**. The whitelist is kept in lockstep with the console's fetches by `TestConsoleAPIPathsCoverWebApp` — a path the console fetches but the listener doesn't whitelist 407s and the panel dies silently, which is exactly the drift that test exists to catch:
 
 - Header `X-SecureAgent-Console-Token: <token>` (fetch/XHR) or `?ct=<token>` (EventSource can't set headers).
 - The token lives at `~/.config/secure-agent/console-token` (0600), distinct from the proxy token on purpose: agents routed through the proxy carry the proxy token in their environment and must not be able to read telemetry or resolve guard prompts with it.
