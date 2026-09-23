@@ -51,6 +51,11 @@ type Worktree struct {
 	Loose  int    `json:"loose_commits,omitempty"`
 	Merged string `json:"merged,omitempty"`
 
+	// SizeBytes is the allocated size of the working directory, measured by
+	// the background sizer; SizePartial marks a walk that hit its bound.
+	SizeBytes   int64 `json:"size_bytes,omitempty"`
+	SizePartial bool  `json:"size_partial,omitempty"`
+
 	Stashes         int      `json:"stashes,omitempty"`
 	PreciousIgnored []string `json:"precious_ignored,omitempty"`
 	OtherIgnored    int      `json:"other_ignored,omitempty"`

@@ -724,6 +724,10 @@ Merge detection is local. The default branch is `origin/HEAD`'s target, else the
 }
 ```
 
+Sizes: each linked worktree's `size_bytes` is the allocated size of its directory (st_blocks, symlinks not followed, other worktrees nested inside left out), measured by a background pass (two walks at a time, each bounded at 30 s / 1,000,000 entries — `size_partial: true` when a bound hit) and cached for an hour. A report taken before a worktree is measured has `sizing: true` and lower-bound totals. `size_bytes` on each repository and `summary.size_bytes` / `summary.removable_bytes` sum the measured rows; `volumes` lists each disk holding a scanned repository (`mount`, `total_bytes`, `free_bytes`; volumes reporting the same capacity and free space, like APFS volumes in one container, are one row with their mounts joined by ` + `); `reclaimed` sums the cleanup ledger (`bytes`, `count`, `bytes_30d`, `count_30d`).
+
+Agent processes cannot reach any `/worktrees*` or `/cleanup/*` route (NoAgent).
+
 Read-level. CLI: `secure-agent worktrees [--state S] [--repo R] [--stale] [--refresh] [--json]` prints one block per repository with a line per worktree (state, stale, idle days, branch, path) and its reasons, then the summary.
 
 #### `POST /worktrees/repos`
@@ -746,11 +750,15 @@ Removes one worktree, or prunes a repository's entries for worktrees whose direc
 {"repo": "/Users/me/code/app", "prune": true}
 ```
 
-Remove inspects the worktree again at request time and runs `git worktree remove` (never `--force`) only when that fresh verdict is `remove`; git still refuses a tree that turned dirty in between. The branch and its commits stay. Prune runs `git worktree prune` when the repository lists at least one unlocked worktree whose directory is gone. Both write an audit row (`worktree-remove`, `worktree-prune`) and drop the cached scan.
+Remove measures the worktree (a fresh walk) and inspects it again at request time and runs `git worktree remove` (never `--force`) only when that fresh verdict is `remove`; git still refuses a tree that turned dirty in between. The branch and its commits stay. Prune runs `git worktree prune` when the repository lists at least one unlocked worktree whose directory is gone. Both write an audit row and a cleanup ledger row (`worktree-remove` with the bytes measured before removal; `worktree-prune` with 0) and drop the cached scan.
+
+#### `GET /cleanup/ledger`
+
+The cleanup ledger, newest first: `{"totals": {"bytes", "count", "bytes_30d", "count_30d"}, "entries": [{"id", "ts", "action", "path", "repo", "bytes", "detail"}]}`. `?limit=N` (default 100, max 1000). The ledger keeps the newest 20,000 rows. Read-level, NoAgent. CLI: `secure-agent cleanup log [--limit N] [--json]`.
 
 | Status | Body |
 |---|---|
-| `200` | `{"status":"ok","removed":"<path>","branch":"<branch>","reasons":[...]}` or `{"status":"ok","pruned":["<path>", ...]}` |
+| `200` | `{"status":"ok","removed":"<path>","branch":"<branch>","reasons":[...],"bytes":<n>,"bytes_partial":false}` or `{"status":"ok","pruned":["<path>", ...]}` |
 | `400` | missing or relative `path` / `repo` |
 | `404` | `path` is not a linked worktree git lists (the main worktree included), or `repo` is not inside a git repository |
 | `409` | remove: `{"error":"not removable","state":"<state>","reasons":[...]}` from the fresh verdict; prune: nothing to prune |

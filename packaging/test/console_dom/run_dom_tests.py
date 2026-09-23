@@ -1058,11 +1058,17 @@ def main():
         check("worktrees: the advisor note renders escaped under its row; Ask advisor sits on review and keep rows only",
               '<p class="wt-advice"><b>Advisor: review</b> 60% · &lt;i&gt;look&lt;/i&gt; at .tmp before removing</p>' in wt
               and wt.count('data-action="worktree-advise"') == 2)
+        check("worktrees: the disk card shows the volume, worktree and removable totals and what cleanups reclaimed",
+              "512.0 GB free of 2.0 TB" in dom_wt and 'data-w="75"' in dom_wt
+              and "<b>Worktrees</b> 1.5 GB" in dom_wt and "<b>Removable</b> 1.5 GB" in dom_wt
+              and "<b>Reclaimed</b> 3.0 GB over 3 cleanups · 1.0 GB in 30 days" in dom_wt
+              and '<span class="wt-size">1.5 GB</span>' in wt)
         wtr = wt_block(dom_wtremove)
         wtr_rows = wtr.count('class="wt-row')
         wt_reqs = pre(dom_wtremove, "mock-requests")
         check("worktrees: Remove posts /worktrees/remove after the dialog and drops the row in place",
-              "POST /worktrees/remove" in wt_reqs and ".worktrees/done" not in wtr and wtr_rows == 3,
+              "POST /worktrees/remove" in wt_reqs and ".worktrees/done" not in wtr and wtr_rows == 3
+              and "<b>Reclaimed</b> 4.5 GB over 4 cleanups" in dom_wtremove and "<b>Removable</b> 0 B" in dom_wtremove,
               f"requests={wt_reqs!r} rows={wtr_rows}")
 
         if args.screenshot:
