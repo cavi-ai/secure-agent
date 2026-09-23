@@ -211,6 +211,7 @@ func isESPermissionFailure(err error) bool {
 // spoolWriter serializes appends with size-capped rotation.
 type spoolWriter struct {
 	mu   sync.Mutex
+	path string
 	f    *os.File
 	size int64
 }
@@ -219,11 +220,11 @@ type spoolWriter struct {
 // already there. Existing content is preserved — unread events are the
 // tailer's data, not garbage.
 func (w *spoolWriter) open() error {
-	f, err := os.OpenFile(collect.ESPoolPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o640)
+	f, err := os.OpenFile(w.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o640)
 	if err != nil {
 		return fmt.Errorf("open spool: %w", err)
 	}
-	if err := chownSpoolFileToConsoleUser(collect.ESPoolPath); err != nil {
+	if err := chownSpoolFileToConsoleUser(w.path); err != nil {
 		log.Printf("es-collector: chown spool (daemon may not read it): %v", err)
 	}
 	info, err := f.Stat()
@@ -256,14 +257,14 @@ func (w *spoolWriter) rotateLocked() error {
 	if w.f != nil {
 		_ = w.f.Close()
 	}
-	_ = os.Remove(collect.ESPoolPath + ".1")
-	_ = os.Rename(collect.ESPoolPath, collect.ESPoolPath+".1")
-	_ = chownSpoolFileToConsoleUser(collect.ESPoolPath + ".1")
-	f, err := os.OpenFile(collect.ESPoolPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o640)
+	_ = os.Remove(w.path + ".1")
+	_ = os.Rename(w.path, w.path+".1")
+	_ = chownSpoolFileToConsoleUser(w.path + ".1")
+	f, err := os.OpenFile(w.path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o640)
 	if err != nil {
 		return fmt.Errorf("reopen spool: %w", err)
 	}
-	if err := chownSpoolFileToConsoleUser(collect.ESPoolPath); err != nil {
+	if err := chownSpoolFileToConsoleUser(w.path); err != nil {
 		return err
 	}
 	w.f = f
@@ -272,7 +273,13 @@ func (w *spoolWriter) rotateLocked() error {
 }
 
 func pumpToSpool(stdout interface{ Read([]byte) (int, error) }) error {
-	w := &spoolWriter{}
+	return pumpToSpoolAt(stdout, collect.ESPoolPath)
+}
+
+// pumpToSpoolAt copies newline-delimited records from stdout to the spool
+// at path, skipping empty lines.
+func pumpToSpoolAt(stdout interface{ Read([]byte) (int, error) }, path string) error {
+	w := &spoolWriter{path: path}
 	// Open WITHOUT rotating: the spool may hold events the tailer has not
 	// drained yet (this process may have crash-looped; destroying unread
 	// data on every respawn loses evidence). Rotation happens on
@@ -294,14 +301,14 @@ func pumpToSpool(stdout interface{ Read([]byte) (int, error) }) error {
 					}
 					break
 				}
+				// line aliases buf, so it is written before buf is compacted.
 				line := buf[:nl]
+				if len(bytes.TrimSpace(line)) > 0 { // empty lines are skipped
+					if err := w.writeLine(line); err != nil {
+						return fmt.Errorf("spool write: %w", err)
+					}
+				}
 				buf = append(buf[:0], buf[nl+1:]...)
-				if len(bytes.TrimSpace(line)) == 0 {
-					continue // eslogger emits blank lines on drop paths; keep them out of the spool
-				}
-				if err := w.writeLine(line); err != nil {
-					return fmt.Errorf("spool write: %w", err)
-				}
 			}
 		}
 		if err != nil {
