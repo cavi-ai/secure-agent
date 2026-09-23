@@ -179,7 +179,8 @@ type pluginLogLine struct {
 // one transcript-hit event per (path, rule id) not already emitted within
 // hitDedupeWindow — the path, session and rule id only, never the text — and
 // is not parsed further. Any other line may be a hook activity record.
-func (ts *TranscriptScanner) scanLine(line, path, harness, sessionID string) []event.Event {
+// lineStart is the byte offset of line in path.
+func (ts *TranscriptScanner) scanLine(line, path, harness, sessionID string, lineStart int64) []event.Event {
 	if line == "" {
 		return nil
 	}
@@ -196,6 +197,7 @@ func (ts *TranscriptScanner) scanLine(line, path, harness, sessionID string) []e
 				Path:      path,
 				SessionID: sessionID,
 				Detail:    harness + ":" + h.layer + ":" + h.rule,
+				Offset:    lineStart,
 			})
 		}
 		return evs
@@ -250,8 +252,8 @@ func (ts *TranscriptScanner) firstHit(path, rule string, now time.Time) bool {
 
 // publishHits publishes the transcript-hit events in a trace line; the
 // tracer has already published the line's trace events.
-func (ts *TranscriptScanner) publishHits(line, path, harness, sessionID string) {
-	for _, e := range ts.scanLine(line, path, harness, sessionID) {
+func (ts *TranscriptScanner) publishHits(line, path, harness, sessionID string, lineStart int64) {
+	for _, e := range ts.scanLine(line, path, harness, sessionID, lineStart) {
 		if e.Kind == event.KindTranscriptHit {
 			ts.bus.Publish(e)
 		}
@@ -574,6 +576,7 @@ func (ts *TranscriptScanner) tailFile(p string, offsets map[string]int64, dirty 
 		} else if len(frag) > 0 {
 			if bytes.HasSuffix(frag, []byte("\n")) {
 				newOffset += lineLen
+				lineStart := newOffset - lineLen
 				line := strings.TrimRight(string(frag), "\r\n")
 				if h, ok := ParseHandshake(line); ok {
 					if ts.OnHandshake != nil {
@@ -616,7 +619,7 @@ func (ts *TranscriptScanner) tailFile(p string, offsets map[string]int64, dirty 
 						}
 						// Trace lines still get the secret scan — an
 						// assistant message can carry a secret in its text.
-						ts.publishHits(line, p, "claude", evs[0].SessionID)
+						ts.publishHits(line, p, "claude", evs[0].SessionID, lineStart)
 						continue
 					}
 					// Not a trace record: still run the redaction scan.
@@ -651,7 +654,7 @@ func (ts *TranscriptScanner) tailFile(p string, offsets map[string]int64, dirty 
 						if len(evs) > 0 && ts.OnProduce != nil {
 							ts.OnProduce()
 						}
-						ts.publishHits(line, p, "codex", sid)
+						ts.publishHits(line, p, "codex", sid, lineStart)
 						continue
 					}
 				}
@@ -677,7 +680,7 @@ func (ts *TranscriptScanner) tailFile(p string, offsets map[string]int64, dirty 
 						if ts.OnProduce != nil {
 							ts.OnProduce()
 						}
-						ts.publishHits(line, p, "cursor", sid)
+						ts.publishHits(line, p, "cursor", sid, lineStart)
 						continue
 					}
 				}
@@ -702,11 +705,11 @@ func (ts *TranscriptScanner) tailFile(p string, offsets map[string]int64, dirty 
 						if ts.OnProduce != nil {
 							ts.OnProduce()
 						}
-						ts.publishHits(line, p, "agy", sid)
+						ts.publishHits(line, p, "agy", sid, lineStart)
 						continue
 					}
 				}
-				if evs := ts.scanLine(line, p, harnessForPath(p), ts.knownSession(p)); len(evs) > 0 {
+				if evs := ts.scanLine(line, p, harnessForPath(p), ts.knownSession(p), lineStart); len(evs) > 0 {
 					for _, e := range evs {
 						ts.bus.Publish(e)
 					}

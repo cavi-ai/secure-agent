@@ -7,6 +7,13 @@ All notable changes to `secure-agent` are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- `GET /files/detail`: facts, findings, agent-session accesses, transcript hits and a masked excerpt for a file stored evidence names.
+- `POST /files/reveal` and `POST /files/open`: Finder selects the file or the default text editor opens it; audited.
+- NoAgent route class: refused for agent processes on the socket (live family check) and on the console listener (the TCP client's process).
+- Firewall `Engine.Mask`: fingerprint and pattern hits replaced by `[REDACTED:<rule>]`, with a rescan that reports anything left.
+- Transcript secret hits and their flag evidence carry the byte offset of the line.
+- Console: evidence paths (incident Accessed Files, a finding's File) open a file drawer with Reveal in Finder and Open in editor; `#file=<path>` deep link.
+- Menubar: an incident's files reveal in Finder or open their console file drawer.
 - `/advisor/discover` returns `machine` (chip, RAM, free disk) and `recommendations`: installed chat models and a verified catalog (Qwen3.5 4B/9B, Qwen3.6 35B-A3B, Qwen3.8 27B 4-/8-bit) ranked by fit for this machine; Ollama discovery reports model sizes.
 - Menubar: Settings → Advisor lists the models recommended for this Mac with a Use button; onboarding step 9 offers the recommendation with Use recommended.
 - `GET /worktrees`: every git worktree found from session workspaces, agent worktree directories, `worktrees.roots` and a saved repo list, each with state `remove`, `review`, `keep`, `prune` or `main`, reasons, `stale` and last activity.

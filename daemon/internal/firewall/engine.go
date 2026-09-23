@@ -142,6 +142,15 @@ func (e *Engine) tally(findings []Finding) {
 	}
 }
 
+// Mask returns text with every typed-pattern and fingerprint hit replaced by
+// [REDACTED:<rule id>], and whether a rescan of the result is clean. A secret
+// the rescan still finds (one present only encoded, matched in a decoded view)
+// leaves clean false: callers withhold the text rather than show it.
+func (e *Engine) Mask(text string) (string, bool) {
+	masked := e.reg.Load().MaskTokens(e.det.MaskPatterns(text))
+	return masked, len(e.ScanText(masked)) == 0
+}
+
 // ScanText returns the known-secret (fingerprint) and typed-pattern hits in
 // free text. The entropy layer is not run, and there is no field context, no
 // policy verdict and no tally: callers that are not proxying a request (e.g.
