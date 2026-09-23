@@ -274,7 +274,8 @@ function renderFlags() {
           <button class="btn btn-danger btn-sm" data-action="kill" data-pid="${f.pid}" title="Terminate the agent process tree (pid ${f.pid})"><svg class="icon"><use href="#i-power"/></svg><span>Kill ${escapeHTML(f.agent)}</span></button>
         </div>
         <div class="flag-evidence">
-          ${(f.evidence || []).map(ev => `<div>${escapeHTML(ev)}</div>`).join('')}
+          ${(f.evidence || []).map(ev => `<div>${escapeHTML(typeof ev === 'string' ? ev
+            : ev.text || (ev.sub ? (ev.label || '') + ' (' + ev.sub + ')' : ev.label))}</div>`).join('')}
         </div>
       </div></div>
     </div>`;

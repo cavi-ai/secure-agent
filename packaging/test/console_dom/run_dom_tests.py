@@ -373,6 +373,12 @@ def main():
         check("chain node: egress destination", "logs.example.com:443" in dom)
         check("chain verdict node", "cn-verdict-bad" in dom and "Critical flag raised" in dom)
         check("second flag collapsed", 'flag-card sev3">' in dom)
+        flag1_card = dom.split('class="flag-card', 1)[1].split('class="flag-card', 1)[0]
+        flags_region = dom.split('id="flags-list"', 1)[-1].split('id="incidents-container"', 1)[0]
+        check("legacy card evidence rows render as text, not [object Object]",
+              '<div>proxy-secret-leak: anthropic-key (payload inspection)</div>' in flag1_card
+              and '<div>logs.example.com:443 (destination)</div>' in flag1_card
+              and "[object Object]" not in flags_region)
 
         # --- liveness ---
         check("sparkline has points", re.search(r'id="spark-line" points="[\d.,\- ]{20,}"', dom) is not None)
