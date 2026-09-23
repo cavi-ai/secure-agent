@@ -1,16 +1,15 @@
 package main
 
-// The privileged ES-collector mode: runs as root under launchd, spawns
-// eslogger, appends its JSON to the spool the unprivileged daemon tails.
-// Touches nothing else: no store, no socket, no API.
+// The privileged ES-collector mode: runs as root under launchd (the app
+// registers it with SMAppService.daemon from its bundle), spawns eslogger,
+// appends its JSON to the spool the unprivileged daemon tails. Touches
+// nothing else: no store, no socket, no API.
 //
-// TCC attributes the ES grant to the responsible process — this binary — so
-// the operator's one FDA grant covers the whole chain.
+// TCC attributes the ES grant to the app bundle that ships this binary, so
+// the operator's one Full Disk Access grant for the app covers the chain.
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"log"
@@ -27,12 +26,10 @@ import (
 )
 
 const (
-	esSpoolDir = "/var/db/secure-agent"
-	// esStateDir holds the integrity hash. It must NOT be the spool dir:
-	// the spool dir is chowned to the console user (so the unprivileged
-	// daemon can read the spool), and a hash file in a user-owned directory
-	// can be swapped out from under the check.
-	esStateDir = "/Library/Application Support/secure-agent"
+	// esCollectorName is the executable name the app bundle gives this
+	// binary for the collector daemon; running under it selects the mode.
+	esCollectorName = "secure-agent-esd"
+	esSpoolDir      = "/var/db/secure-agent"
 	// 32MB handoff buffer: the user daemon drains continuously; rotation
 	// prevents unbounded root-written growth on pathological activity.
 	maxSpoolBytes = 32 << 20
@@ -54,16 +51,26 @@ func permanent(err error) error { return fmt.Errorf("%w: %v", errESPermanent, er
 // caller exits 0 for those).
 func IsESPermanentFailure(err error) bool { return errors.Is(err, errESPermanent) }
 
-// verifyOwnIntegrity refuses to run as root from a binary the login user (or
-// any admin) could have swapped since install. The LaunchDaemon executes this
-// binary as root; a writable binary converts "monitoring tool" into
-// "root on request". The binary's own SHA-256 is recorded in
-// /Library/Application Support/secure-agent/esd.binhash at install time (a
-// root-owned directory, written by the privileged install step — NOT the
-// spool dir, which is chowned to the console user); on every start the
-// running file must still match. A missing hash file is treated as
-// unverified: the installer always writes one, so its absence means tampering
-// or a stale install — both fail closed.
+// isESCollectorInvocation reports whether this process runs the ES
+// collector: launched under the in-bundle collector name, or with
+// --es-collector (the flag older LaunchDaemon plists pass).
+func isESCollectorInvocation(argv0 string, flag bool) bool {
+	return flag || filepath.Base(argv0) == esCollectorName
+}
+
+// codesignVerify checks path's code signature; tests replace it.
+var codesignVerify = func(path string) error {
+	out, err := exec.Command("/usr/bin/codesign", "--verify", "--strict", path).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%w (%s)", err, oneLine(string(out)))
+	}
+	return nil
+}
+
+// verifyOwnIntegrity refuses to run as root from a binary that is
+// group/world-writable or whose code signature no longer verifies. The
+// binary lives in the app bundle, which SMAppService validates against the
+// app's signature at registration; a modified file breaks that signature.
 func verifyOwnIntegrity() error {
 	exe, err := os.Executable()
 	if err != nil {
@@ -73,58 +80,21 @@ func verifyOwnIntegrity() error {
 	if err == nil {
 		exe = real
 	}
+	return verifyExecutable(exe)
+}
+
+func verifyExecutable(exe string) error {
 	info, err := os.Stat(exe)
 	if err != nil {
 		return fmt.Errorf("stat self: %w", err)
 	}
-	// Mode AND ownership are the cheap half: a 0755 binary owned by the
-	// login user is exactly as swappable as a writable one. Refuse anything
-	// not owned by root with no group/world write bits.
 	if info.Mode().Perm()&0o022 != 0 {
 		return fmt.Errorf("refusing: %s is group/world-writable (perms %#o)", exe, info.Mode().Perm())
 	}
-	if st, ok := info.Sys().(*syscall.Stat_t); !ok || st.Uid != 0 {
-		return fmt.Errorf("refusing: %s is not owned by root", exe)
-	}
-	hashPath := filepath.Join(esStateDir, "esd.binhash")
-	want, err := os.ReadFile(hashPath)
-	if err != nil {
-		return fmt.Errorf("refusing: integrity hash %s unreadable (stale or tampered install): %w", hashPath, err)
-	}
-	got, err := fileSHA256(exe)
-	if err != nil {
-		return fmt.Errorf("hash self: %w", err)
-	}
-	// The installer records the hash via `shasum | awk > file`, which leaves
-	// a trailing newline — compare trimmed or every start reads as tampered.
-	if got != strings.TrimSpace(string(want)) {
-		return fmt.Errorf("refusing: %s changed since install (hash mismatch)", exe)
+	if err := codesignVerify(exe); err != nil {
+		return fmt.Errorf("refusing: %s fails code signature verification: %w", exe, err)
 	}
 	return nil
-}
-
-func fileSHA256(path string) (string, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return "", err
-	}
-	defer f.Close()
-	h := sha256.New()
-	buf := make([]byte, 256*1024)
-	for {
-		n, err := f.Read(buf)
-		if n > 0 {
-			if _, err := h.Write(buf[:n]); err != nil {
-				return "", err
-			}
-		}
-		if err != nil {
-			if err.Error() == "EOF" {
-				return hex.EncodeToString(h.Sum(nil)), nil
-			}
-			return "", err
-		}
-	}
 }
 
 // runESCollector never returns except on fatal setup error.
@@ -132,8 +102,8 @@ func runESCollector() error {
 	if os.Geteuid() != 0 {
 		return permanent(fmt.Errorf("must run as root (Endpoint Security requires it)"))
 	}
-	// Fail closed on a binary the login user could have replaced. This runs
-	// BEFORE anything else touches the spool or eslogger.
+	// Fail closed on a modified or writable binary. This runs BEFORE
+	// anything else touches the spool or eslogger.
 	if err := verifyOwnIntegrity(); err != nil {
 		return permanent(err)
 	}
