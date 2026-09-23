@@ -173,6 +173,13 @@ func (a *API) explainFlagIn(f model.Flag, full bool, env *explainEnv) *model.Fla
 	ex.Context = a.explainContext(f, sess, workspace, anchor)
 	ex.What = explainWhat(f, ex, sess)
 	ex.Actions = a.explainActions(f, ex, env)
+	pattern := flagEvidencePath(f)
+	if pattern == "" {
+		pattern = flagEvidenceHost(f)
+	}
+	if sum := a.store.LabelSummary(f.Agent, pattern, f.Rule); sum.OK+sum.NotOK > 0 {
+		ex.Labels = &sum
+	}
 	return ex
 }
 

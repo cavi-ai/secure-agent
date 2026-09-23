@@ -229,6 +229,128 @@ function fileDetailHTML(d, nowMs) {
     ${accesses ? `<section class="endpoint-section"><h4>Agent access</h4>${accesses}</section>` : ''}`;
 }
 
+// ---------- playbook and advisor plan ----------
+
+const PLAN_STEP_KINDS = {
+  'guard-rule': 'Guard rule', config: 'Setting', 'secret-hygiene': 'Secrets',
+  'agent-instruction': 'Agent instructions', workflow: 'Workflow',
+};
+
+// planSlotHTML: where a surface shows the playbook and the advisor's plan
+// for subject ("flag:<id>", "incident:<id>", "file:<path>").
+function planSlotHTML(subject) {
+  return `<section class="endpoint-section"><h4>What to do</h4>`
+    + `<div class="plan-slot" data-plan-subject="${escapeHTML(subject)}"><div class="loading-spinner">Loading the playbook…</div></div></section>`;
+}
+
+// labelsLineHTML: the operator's earlier judgments on the same case, "" when
+// there are none.
+function labelsLineHTML(summary) {
+  if (!summary) return '';
+  const parts = [];
+  if (summary.ok) parts.push(`${summary.ok} as routine`);
+  if (summary.not_ok) parts.push(`${summary.not_ok} as not ok`);
+  if (!parts.length) return '';
+  return `<p class="finding-labels">You marked similar cases ${escapeHTML(parts.join(' and '))}.</p>`;
+}
+
+// markButtonsHTML: Mark as routine / Mark as not ok for a subject.
+function markButtonsHTML(subject) {
+  const s = escapeHTML(subject);
+  return `<button class="btn btn-ghost btn-sm" data-action="mark-label" data-subject="${s}" data-label="ok">Mark as routine</button>`
+    + `<button class="btn btn-ghost btn-sm" data-action="mark-label" data-subject="${s}" data-label="not_ok">Mark as not ok</button>`;
+}
+
+// labelsHTML: the What to do drawer's history — summary, similar judgments,
+// the suggestion consistent labels earn (its action as the finding's served
+// button when offered), and the mark buttons.
+function labelsHTML(resp, nowMs) {
+  const l = resp && resp.labels;
+  if (!l) return '';
+  const now = nowMs || Date.now();
+  const flag = resp.flag;
+  const similar = (l.similar || []).map(x => `<li>${escapeHTML(x.label === 'ok' ? 'Routine' : 'Not ok')} · ${escapeHTML(x.source)} · `
+    + `${escapeHTML(fmtAge(x.created_at, now))} ago${x.pattern ? ' · ' + escapeHTML(x.pattern) : ''}${x.reason ? ' · ' + escapeHTML(x.reason) : ''}</li>`).join('');
+  let suggestion = '';
+  if (l.suggestion) {
+    const a = flag && flag.explain && (flag.explain.actions || []).find(x => x.id === l.suggestion.action_id);
+    const btn = a && EXPLAIN_CONSOLE_ACTIONS.includes(a.id)
+      ? `<button class="btn btn-primary btn-sm" data-action="explain-act" data-flag-id="${escapeHTML(flag.id)}" data-action-id="${escapeHTML(a.id)}"`
+        + `${a.body && typeof a.body.host === 'string' ? ` data-host="${escapeHTML(a.body.host)}"` : ''} title="${escapeHTML(a.consequence)}">${escapeHTML(explainActionLabel(flag, a))}</button>`
+      : '';
+    suggestion = `<div class="plan-suggestion"><p>${escapeHTML(l.suggestion.text)}</p>${btn}</div>`;
+  }
+  return `
+    <div class="plan-labels">
+      <h5>Your history</h5>
+      ${labelsLineHTML(l.summary) || '<p class="plan-status">No earlier judgments on cases like this.</p>'}
+      ${similar ? `<ul class="plan-list">${similar}</ul>` : ''}
+      ${suggestion}
+      <div class="endpoint-actions">${markButtonsHTML(resp.subject)}</div>
+    </div>`;
+}
+
+// planHTML renders a /advisor/plan response: the advisor's plan when there is
+// one (why, prevention, behavior, remediation, recommended actions as
+// buttons), the rule's playbook, and the ask button. Pure; everything is
+// escaped.
+function planHTML(resp, nowMs) {
+  if (!resp || !resp.playbook) return '';
+  const pb = resp.playbook;
+  const p = resp.plan;
+  const flag = resp.flag;
+  const list = (items, tag) => (items && items.length)
+    ? `<${tag || 'ul'} class="plan-list">${items.map(x => `<li>${escapeHTML(x)}</li>`).join('')}</${tag || 'ul'}>` : '';
+  const steps = items => (items && items.length) ? `<ul class="plan-list">${items.map(s =>
+    `<li><span class="plan-kind">${escapeHTML(PLAN_STEP_KINDS[s.kind] || s.kind)}</span> <strong>${escapeHTML(s.step)}</strong>. ${escapeHTML(s.detail)}</li>`).join('')}</ul>` : '';
+
+  const status = {
+    pending: 'The advisor is writing a plan from this finding\'s local context…',
+    stale: 'Written before newer evidence arrived. Ask again for an updated plan.',
+    disabled: resp.reason || 'The local advisor is off.',
+  }[resp.status] || '';
+
+  let advisor = '';
+  if (p) {
+    const offered = (flag && flag.explain && flag.explain.actions) || [];
+    const acts = (p.actions || []).map(id => offered.find(a => a.id === id))
+      .filter(a => a && EXPLAIN_CONSOLE_ACTIONS.includes(a.id));
+    const buttons = acts.map(a => {
+      const host = a.body && typeof a.body.host === 'string' ? a.body.host : '';
+      return `<button class="btn ${a.id === 'kill' ? 'btn-danger' : 'btn-ghost'} btn-sm" data-action="explain-act" data-flag-id="${escapeHTML(flag.id)}"`
+        + ` data-action-id="${escapeHTML(a.id)}"${host ? ` data-host="${escapeHTML(host)}"` : ''} title="${escapeHTML(a.consequence)}">${escapeHTML(explainActionLabel(flag, a))}</button>`;
+    }).join('');
+    advisor = `
+      <div class="plan-advisor">
+        <p class="plan-summary"><span class="plan-risk plan-risk-${escapeHTML(p.risk)}">${escapeHTML(p.risk)} risk</span> ${escapeHTML(p.summary)}</p>
+        ${p.why && p.why.length ? `<h5>Why it happened</h5>${list(p.why)}` : ''}
+        ${p.remediate && p.remediate.length ? `<h5>Do now</h5>${list(p.remediate, 'ol')}` : ''}
+        ${p.prevent && p.prevent.length ? `<h5>Prevent it</h5>${steps(p.prevent)}` : ''}
+        ${p.behavior && p.behavior.length ? `<h5>Change how you work</h5>${list(p.behavior)}` : ''}
+        ${buttons ? `<div class="endpoint-actions">${buttons}</div>` : ''}
+        <p class="plan-meta">Local advisor${p.model ? ' · ' + escapeHTML(p.model) : ''}${p.created_at ? ' · ' + escapeHTML(fmtAge(p.created_at, nowMs || Date.now())) + ' ago' : ''}</p>
+      </div>`;
+  }
+
+  const playbook = `
+    <p class="plan-why">${escapeHTML(pb.why)}</p>
+    ${pb.now && pb.now.length ? `<h5>Do now</h5>${list(pb.now, 'ol')}` : ''}
+    ${pb.prevent && pb.prevent.length ? `<h5>Prevent it</h5>${steps(pb.prevent)}` : ''}`;
+
+  const canAsk = resp.advisor_ready && resp.status !== 'pending';
+  const ask = `<button class="btn btn-primary btn-sm" data-action="ask-plan" data-subject="${escapeHTML(resp.subject)}"${canAsk ? '' : ' disabled'}>`
+    + `${p ? 'Ask the advisor again' : 'Ask the advisor for a plan'}</button>`;
+
+  return `
+    <div class="plan">
+      ${status ? `<p class="plan-status plan-status-${escapeHTML(resp.status)}">${escapeHTML(status)}</p>` : ''}
+      ${advisor}
+      ${p ? `<details class="plan-playbook"><summary>Playbook: ${escapeHTML(pb.title)}</summary>${playbook}</details>` : `<div class="plan-playbook">${playbook}</div>`}
+      <div class="plan-ask">${ask}</div>
+      ${labelsHTML(resp, nowMs)}
+    </div>`;
+}
+
 // linkEvidencePaths turns each inline code span holding an absolute path into
 // a file-drawer link. Input is parseMarkdownToHTML output, already escaped,
 // so the captured text is safe as the attribute and the label.

@@ -151,6 +151,9 @@ type API struct {
 	resourcePolicy   func(config.ResourceControlConfig) error
 	resourcePolicyMu sync.Mutex
 
+	// plan connects /advisor/plan to the current advisor (plan.go).
+	plan *PlanFuncs
+
 	// NoAgent enforcement and the file actions (files.go, tcppeer.go).
 	isAgentPID   func(pid int32) bool
 	tcpClientPID func(remoteAddr string) (int32, error)
@@ -261,6 +264,7 @@ type Deps struct {
 	// Advisor hooks (optional).
 	Retriage   *RetriageFuncs
 	HostAssess *HostAssessFuncs
+	Plan       *PlanFuncs
 
 	// GuardAdvisor, when set, is offered each newly blocked guard prompt for an
 	// advisory recommendation. NEVER resolves the prompt — the human decides.
@@ -325,6 +329,7 @@ func New(d Deps) *API {
 		publishEvent:    d.PublishEvent,
 		deltaHub:        d.DeltaHub,
 		isAgentPID:      d.IsAgentPID,
+		plan:            d.Plan,
 		tcpClientPID:    TCPClientPID,
 		openPath:        openWithSystem,
 	}
@@ -611,6 +616,8 @@ func (a *API) routes() map[string]http.HandlerFunc {
 		"/files/detail":                 a.handleFileDetail,
 		"/files/reveal":                 a.handleFileReveal,
 		"/files/open":                   a.handleFileOpen,
+		"/advisor/plan":                 a.handleAdvisorPlan,
+		"/labels":                       a.handleLabels,
 	}
 }
 
@@ -1063,6 +1070,7 @@ func (a *API) handleMute(w http.ResponseWriter, r *http.Request) {
 		// mute suppresses only FUTURE flags and the operator sees "nothing
 		// happened" — the old rows sit there, red, forever.
 		acked := a.store.AcknowledgeRuleHost(req.Rule, req.Host)
+		a.recordLabel(model.OperatorLabel{Kind: "host", Rule: req.Rule, Pattern: req.Host, Label: "ok", Source: "mute"})
 		a.store.PutAudit(store.AuditEntry{
 			Action: "mute-add", Rule: req.Rule,
 			Detail: fmt.Sprintf("muted %s for %s (%d existing flags acknowledged)", req.Host, req.Rule, acked),
@@ -1392,6 +1400,7 @@ func (a *API) handleAllowlistAdd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.correlator.NoteAllowlistAdded(req.Agent, req.Host)
+	a.recordLabel(model.OperatorLabel{Kind: "host", Agent: req.Agent, Pattern: req.Host, Label: "ok", Source: "allow-host"})
 	a.store.PutAudit(store.AuditEntry{
 		Action: "allowlist-add", Rule: req.Agent,
 		Detail: fmt.Sprintf("approved %s for %s", req.Host, req.Agent),

@@ -353,6 +353,20 @@
       { agent: 'claude', host: '2600:1901:0:9e23::', count: 2, last_seen: iso(400000), identity: { kind: 'ipv6', org: 'Google Cloud', class: 'cloud', ip: '2600:1901:0:9e23::' } },
       { agent: 'openclaw', host: '2607:6bc0::10', count: 94, first_seen: iso(3600000), last_seen: iso(60000), identity: { kind: 'ipv6', org: 'Anthropic', class: 'vendor', ip: '2607:6bc0::10' } }
     ],
+    '/advisor/plan': {
+      subject: 'file:/Users/dev/.codex/sessions/2026/09/23/rollout-2026-09-23T12-53-26-demo.jsonl',
+      status: 'ready', advisor_ready: true,
+      playbook: { rule: 'secret-in-transcript', title: 'Secret in an agent transcript', why: 'A secret appeared in text the agent saw.',
+        now: ['Rotate the secret.'], prevent: [{ kind: 'guard-rule', step: 'Deny commands that print secrets', detail: 'Refuse env for this agent.' }], actions: ['open-incident', 'dismiss'] },
+      plan: { summary: 'Codex printed an API key from an env dump.', why: ['A tool call ran env.'], risk: 'high',
+        prevent: [{ kind: 'agent-instruction', step: 'Tell codex not to echo keys', detail: 'Add a line to AGENTS.md.' }],
+        behavior: ['Reference keys by variable name.'], remediate: ['Rotate the key.'], actions: ['dismiss'], confidence: 0.8,
+        model: 'qwen3.8:27b-mlx', created_at: iso(120000) },
+      labels: { summary: { ok: 3, not_ok: 0 }, similar: [{ label: 'ok', source: 'mark', pattern: '/Users/dev/.codex/sessions/2026/09/23/rollout-2026-09-23T12-53-26-demo.jsonl', reason: 'my own test key', created_at: iso(86400000) }],
+        suggestion: { label: 'ok', text: 'You marked this 3 times as routine for codex.', action_id: 'dismiss' } },
+      flag: { id: 'flag-t1', agent: 'codex', rule: 'secret-in-transcript', explain: { actions: [
+        { id: 'dismiss', label: 'Dismiss this flag', consequence: 'marks it reviewed', method: 'POST', path: '/flags/acknowledge', body: { flag_id: 'flag-t1' } }] } }
+    },
     '/files/detail': {
       path: '/Users/dev/.codex/sessions/2026/09/23/rollout-2026-09-23T12-53-26-demo.jsonl',
       display: '~/.codex/sessions/2026/09/23/rollout-2026-09-23T12-53-26-demo.jsonl',
