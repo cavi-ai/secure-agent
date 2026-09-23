@@ -16,7 +16,7 @@ import (
 
 // PostureItem is one thing the operator may need to act on.
 type PostureItem struct {
-	Kind      string `json:"kind"` // flag | incident | guard_pending | collector_down | uninspected_egress
+	Kind      string `json:"kind"` // flag | incident | guard_pending | collector_down | collector_silent | harness_uncovered | guard_hook_unregistered | uninspected_egress | resource_pressure
 	ID        string `json:"id"`
 	Title     string `json:"title"`
 	Severity  int    `json:"severity"` // 3 critical, 2 high, 1 medium, 0 info
@@ -27,12 +27,18 @@ type PostureItem struct {
 // Posture is the single headline answer: "do I need to look at this machine,
 // and what is the one thing to look at first?" Every UI (console, menubar,
 // fleet collector) renders from this instead of re-deriving it from raw lists.
+//
+// Invariant: every item in Items appears in exactly one of Groups, and the
+// group item counts sum to NeedsYou (= len(Items)). Items and Groups come
+// from one pass (attentionQueue); uninspected egress is one item per group
+// that carries it, or one machine-wide item when no group does.
 type Posture struct {
 	State    string        `json:"state"` // all-clear | attention | critical
 	NeedsYou int           `json:"needs_you"`
 	Summary  string        `json:"summary"`
 	Items    []PostureItem `json:"items"`
-	// Groups is the session-grouped attention queue every surface renders.
+	// Groups is the session-grouped attention queue every surface renders;
+	// agent-less items sit in the "machine" group.
 	Groups    []AttentionGroup `json:"groups,omitempty"`
 	Generated string           `json:"generated"`
 	Connected bool             `json:"connected"`
@@ -81,97 +87,11 @@ func (a *API) PublishPostureIfChanged() {
 func (a *API) computePosture() Posture {
 	st := a.statusFn()
 	posture := Posture{
-		Items:     []PostureItem{},
 		Generated: time.Now().UTC().Format(time.RFC3339Nano),
 		Connected: st.Running,
 	}
-
-	// 1. Critical/high flags — the security signal. Unacted only: a flag the
-	// operator already reviewed/dismissed must not keep demanding attention.
-	for _, f := range a.store.QueryFlags(store.FlagFilter{MinSeverity: 2, Limit: 25, Unacted: true}) {
-		if isRecent(f.TS, 24*time.Hour) {
-			// Severity follows the flag's disposition: an advisor-confirmed
-			// benign flag is a queue item, not a "critical — act now".
-			d := dispositionFor(f)
-			posture.Items = append(posture.Items, PostureItem{
-				Kind: "flag", ID: f.ID,
-				Title:     humanFlagTitle(f.Rule),
-				Severity:  dispositionSeverity(d),
-				Detail:    d.Text + " — " + firstEvidence(f.Evidence),
-				Timestamp: f.TS.UTC().Format(time.RFC3339),
-			})
-		}
-	}
-
-	// 2. Guard prompts waiting — the operator is actively being asked.
-	if a.guardBroker != nil {
-		for _, p := range a.guardBroker.Pending() {
-			posture.Items = append(posture.Items, PostureItem{
-				Kind: "guard_pending", ID: p.ID,
-				Title:     p.Agent + " wants " + humanPath(p.Path),
-				Severity:  1,
-				Detail:    "Rule: " + p.RuleID,
-				Timestamp: p.TS,
-			})
-		}
-	}
-
-	// 3. Dead collectors — a monitor that stopped is a blind spot, not a detail.
-	for _, c := range st.Collectors {
-		if !c.Running || c.Abandoned {
-			posture.Items = append(posture.Items, PostureItem{
-				Kind: "collector_down", ID: c.Name,
-				Title:    humanCollectorTitle(c.Name, c.Abandoned),
-				Severity: 2,
-				Detail:   humanCollectorDetail(c.Name, c.LastError),
-			})
-		}
-	}
-
-	// 3b. Silent collectors — running but producing nothing while agents are
-	// active. Liveness is not coverage: the worst failure mode a monitor can
-	// have is reporting green while blind (both audited live: the eslogger
-	// spool untouched for days, zero hook events for 17h, all "healthy").
-	if st.ActiveAgents > 0 {
-		for _, item := range silentCollectorItems(st) {
-			posture.Items = append(posture.Items, item)
-		}
-		if item := harnessUncoveredItem(a.store, st); item != nil {
-			posture.Items = append(posture.Items, *item)
-		}
-		if item := guardHookUnregisteredItem(st); item != nil {
-			posture.Items = append(posture.Items, *item)
-		}
-	}
-
-	// 4. Uninspected egress — visibility gap made explicit.
-	if st.UninspectedEgress > 0 {
-		posture.Items = append(posture.Items, PostureItem{
-			Kind: "uninspected_egress", ID: "uninspected-egress",
-			Title:    uninspectedTitle(st.UninspectedEgress),
-			Severity: 1,
-		})
-	}
-
-	// 5. Aging incidents — an open incident older than 72h is a queue item
-	// going stale, not a finding. Resolve it or acknowledge it.
-	for _, inc := range a.store.RecentIncidents(25) {
-		wf, _ := a.store.IncidentStatus(inc.ID)
-		if wf.Status == "resolved" {
-			continue
-		}
-		if time.Since(inc.Timestamp) > 72*time.Hour {
-			posture.Items = append(posture.Items, PostureItem{
-				Kind: "incident", ID: inc.ID,
-				Title:    "Aging incident: " + humanFlagTitle(inc.Rule),
-				Severity: 1,
-				Detail:   "open more than 3 days — resolve or acknowledge",
-			})
-		}
-	}
-
+	posture.Items, posture.Groups = a.attentionQueue(st)
 	posture.NeedsYou = len(posture.Items)
-	posture.Groups = a.computeAttentionGroups(st)
 	switch {
 	case posture.NeedsYou == 0:
 		posture.State = "all-clear"

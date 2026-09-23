@@ -154,6 +154,7 @@ def main():
         dom = dump_dom(chrome, tmp)
         dom_session = dump_dom(chrome, tmp, "?sessiondemo")
         dom_guard = dump_dom(chrome, tmp, "?guarddemo")
+        dom_resolve = dump_dom(chrome, tmp, "?resolvedemo")
         dom_uninsp = dump_dom(chrome, tmp, "?uninspecteddemo")
         dom_keepopen = dump_dom(chrome, tmp, "?keepopendemo")
         dom_endpoint = dump_dom(chrome, tmp, "?endpointdemo")
@@ -195,6 +196,9 @@ def main():
         dom_famev = dump_dom(chrome, tmp, "?familiesdemo&familyevents&tab=resources")
         dom_evcap = dump_dom(chrome, tmp, "?tab=events&manyevents")
         dom_sesslink = dump_dom(chrome, tmp, "?sessionlinkdemo")
+        dom_sticky = dump_dom(chrome, tmp, "?stickydemo")
+        dom_drawerback = dump_dom(chrome, tmp, "?drawerbackdemo")
+        dom_scope = dump_dom(chrome, tmp, "?scopedemo")
 
         # --- session-first tab (P3) ---
         rail = dom.split('id="session-rail"', 1)[1].split('id="session-detail"', 1)[0]
@@ -672,8 +676,9 @@ def main():
               'data-action="select-session" data-id="sess-claude-1"' in sessions)
         check("egress tab badge shows uninspected count",
               'id="tab-badge-egress">2<' in dom)
+        needs_you = int(re.search(r"needs_you: (\d+),", open(MOCK).read()).group(1))
         check("findings tab badge shows needs-you count",
-              'id="tab-badge-findings">8<' in dom)
+              f'id="tab-badge-findings">{needs_you}<' in dom)
         attention = dom.split('id="attention-center"', 1)[1].split('id="security-findings-grid"', 1)[0]
         check("attention center groups the whole api-service session",
               'class="attention-group' in attention and "api-service" in attention
@@ -688,8 +693,11 @@ def main():
         check("attention shows blast-radius copy", "approves every path under rule" in attention)
         check("attention egress opens endpoint evidence", 'data-action="open-uninspected"' in attention)
         check("resolved guard request leaves the attention queue",
-              'id="tab-badge-findings">7<' in dom_guard
+              f'id="tab-badge-findings">{needs_you - 1}<' in dom_guard
               and 'data-action="guard-resolve" data-id="guard-1"' not in dom_guard)
+        resolve_probe = (re.search(r'<pre id="resolve-probe"[^>]*>(.*?)</pre>', dom_resolve, re.S) or [None, ""])[1]
+        check("resolved incident leaves the attention count before reconciliation",
+              resolve_probe == f"badge={needs_you - 1} tab={needs_you - 1} queued=false", f"probe={resolve_probe!r}")
         check("posture flag item switches to findings tab",
               'data-action="goto-tab" data-tab="findings"' in dom)
         check("tab switch reveals the target panel",
@@ -877,6 +885,33 @@ def main():
               dom_explain.count('class="flag-card') == 2
               and "proxy-secret-leak — cursor (PID 6033)" in dom_explain
               and 'data-action="dismiss-flag" data-id="flag-3"' in dom_explain)
+
+        # --- navigation: sticky tabs, drawer back-stack, scope bar, one count ---
+        sticky = pre(dom_sticky, "sticky-probe")
+        m = re.match(r"top=(-?\d+) scroll=(\d+) stuck=(\w+) pill=(\w+):(.*)$", sticky)
+        check("sticky tabs: after scrolling 5000 px on Attention the tablist sits at the top with the posture pill",
+              m is not None and 0 <= int(m.group(1)) < 60 and int(m.group(2)) > 0 and m.group(3) == "true"
+              and m.group(4) == "visible" and m.group(5) == f"{needs_you} need you", f"probe={sticky!r}")
+        back = pre(dom_drawerback, "drawer-back-probe")
+        m = re.match(r"chained: back=(.*) title=(.*) \| back: title=(.*) rows=(\d+) button=(\w+) open=(\w+)$", back)
+        check("drawer back: Evidence from the Uninspected drawer shows ‹ Uninspected egress; Back reopens the list",
+              m is not None and m.group(1) == "‹ Uninspected egress" and m.group(2) == "Endpoint detail"
+              and m.group(3) == "Uninspected egress — last 24h" and int(m.group(4)) > 0
+              and m.group(5) == "absent" and m.group(6) == "true", f"probe={back!r}")
+        scope = pre(dom_scope, "scope-probe")
+        m = re.match(r"tab=(\w+) bar=(\w+):(.*) \| scoped rows=(\d+) \| cleared bar=(\w+):(.*) rows=(\d+) chip=(\w+)$", scope)
+        check("scope bar: View session shows the scope on Sessions; Clear hides it and Events shows every row",
+              m is not None and m.group(1) == "sessions" and m.group(2) == "visible"
+              and m.group(3).startswith("Scoped to session ") and re.search(r" · \d+ events? · \d+ flags?Clear$", m.group(3))
+              and m.group(5) == "hidden" and m.group(6) == "" and int(m.group(7)) > int(m.group(4))
+              and m.group(8) == "hidden", f"probe={scope!r}")
+        attention_badge = (re.search(r'id="badge-attention-count"[^>]*>(\d+)<', dom) or [None, ""])[1]
+        tab_badge = (re.search(r'id="tab-badge-findings"[^>]*>(\d+)<', dom) or [None, ""])[1]
+        check("attention badge and tab badge equal posture.needs_you; the machine group renders",
+              attention_badge == str(needs_you) and tab_badge == str(needs_you)
+              and '<strong>This machine</strong>' in dom and 'data-action="open-fda"' in attention
+              and 'data-action="dismiss-flag" data-id="flag-5"' in attention,
+              f"badge={attention_badge!r} tab={tab_badge!r} needs_you={needs_you}")
 
         if args.screenshot:
             shot_dir = os.path.abspath(args.screenshot)

@@ -66,11 +66,22 @@ document.addEventListener('DOMContentLoaded', () => {
   // actions. Only one is open at a time; closing restores focus to the opener.
   let drawerOpener = null;
   let drawerOnClose = null;
+  let drawerBack = null;
+  // Bumped on every open: an async opener writes its body only while its
+  // drawer is still the one showing.
+  let drawerSeq = 0;
+  const drawerHead = drawer && drawer.querySelector('.drawer-head');
+  const drawerTitleEl = document.getElementById('drawer-title');
 
-  function openDrawer({ title, icon, body, foot, variant, onClose }) {
+  function openDrawer({ title, icon, body, foot, variant, onClose, back }) {
     if (!drawer) return false;
-    drawerOpener = document.activeElement;
+    // A drawer opened from inside the open one keeps the original opener, so
+    // closing still returns focus to the page.
+    if (drawer.hidden) drawerOpener = document.activeElement;
     drawerOnClose = onClose || null;
+    drawerBack = back || null;
+    drawerSeq++;
+    if (drawerHead && drawerTitleEl) paintDrawerBack(drawerHead, drawerTitleEl, drawerBack);
     drawerTitle.textContent = title || 'Details';
     if (icon && drawerTitleIcon) drawerTitleIcon.setAttribute('href', '#i-' + icon);
     drawerBody.innerHTML = body || '';
@@ -94,6 +105,8 @@ document.addEventListener('DOMContentLoaded', () => {
     drawerBody.innerHTML = '';
     drawerFoot.innerHTML = '';
     drawerFoot.hidden = true;
+    drawerBack = null;
+    if (drawerHead && drawerTitleEl) paintDrawerBack(drawerHead, drawerTitleEl, null);
     const app = document.querySelector('.app');
     if (app) app.classList.remove('drawer-open', 'drawer-wide');
     const fn = drawerOnClose;
@@ -400,6 +413,46 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
+  // Scope bar under the tabs: visible on every tab while Events, Flags and
+  // Incidents are narrowed; Clear drops the scope everywhere.
+  function paintScopeBar() {
+    const bar = document.getElementById('scope-bar');
+    if (!bar) return;
+    const t = telemetryData;
+    const html = sessionScopeOn() ? scopeBarHTML({
+      session: timelineSession, pids: timelinePids, pidLabel: timelinePidLabel,
+      events: scopedBySession(t.eventsView || [], timelineSession, timelinePids).length,
+      flags: scopedBySession(t.flagsView || [], timelineSession, timelinePids).length,
+    }) : '';
+    bar.hidden = !html;
+    if (bar._saHTML !== html) {
+      bar.innerHTML = html;
+      bar._saHTML = html;
+    }
+  }
+
+  // Posture pill on the stuck tab bar: the hero's count; a click goes back
+  // to the top.
+  function paintTabsPosture() {
+    const pill = document.getElementById('tabs-posture');
+    const text = document.getElementById('tabs-posture-text');
+    if (!pill || !text) return;
+    const p = telemetryData.posture;
+    const n = attentionCount(p);
+    pill.dataset.state = (p && p.state) || 'all-clear';
+    text.textContent = n ? `${n} need${n === 1 ? 's' : ''} you` : 'All clear';
+  }
+  const tabsBar = document.getElementById('tabs-bar');
+  function syncTabsStuck() {
+    if (!tabsBar) return;
+    const stuck = window.scrollY > 0 && tabsBar.getBoundingClientRect().top <= 0;
+    tabsBar.classList.toggle('is-stuck', stuck);
+    const pill = document.getElementById('tabs-posture');
+    if (pill) pill.hidden = !stuck;
+  }
+  window.addEventListener('scroll', syncTabsStuck, { passive: true });
+  window.addEventListener('resize', syncTabsStuck);
+
   // Firewall diff: which rules gained blocked/would-block counts since the
   // last render (i.e. a fresh interception).
   let prevFwStats = null;
@@ -691,12 +744,14 @@ document.addEventListener('DOMContentLoaded', () => {
     const t = telemetryData;
     const agents = (t.status && t.status.agents) || [];
     const trees = t.status && t.status.trees;
-    setTabBadge('findings', ((t.posture && t.posture.groups) || []).reduce((n, g) => n + g.items.length, 0));
+    setTabBadge('findings', attentionCount(t.posture));
     setTabBadge('egress', (t.status && t.status.uninspected_egress) || 0);
     setTabBadge('agents', groupAgentsByHarness(agents).filter(g => !g.infra).length);
     setTabBadge('sessions', t.sessions && t.sessions.length
       ? groupSessionsByHarness(t.sessions, trees, agents).reduce((n, g) => n + (g.infra ? 0 : familySize(g.live)), 0)
       : sessionRows(agents, trees).length);
+    paintTabsPosture();
+    paintScopeBar();
   }
 
   const TABS = ['overview', 'sessions', 'agents', 'resources', 'history', 'events', 'egress', 'findings'];
@@ -970,11 +1025,12 @@ document.addEventListener('DOMContentLoaded', () => {
       renderNow(panels);
     };
   }
-  // posture.groups is the attention queue: map its items, drop empty groups.
+  // posture.groups is the attention queue: map its items, drop empty groups;
+  // a dropped item leaves posture.items and needs_you with it.
   function mapAttentionItems(fn) {
     const p = telemetryData.posture;
     if (!p || !p.groups) return;
-    telemetryData.posture = { ...p, groups: p.groups.map(g => ({ ...g, items: g.items.map(fn).filter(Boolean) })).filter(g => g.items.length) };
+    telemetryData.posture = mapPostureAttention(p, fn);
   }
   const withMode = (rules, mode) => {
     const s = telemetryData.status;
@@ -1031,7 +1087,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const revert = stage(['incidents', 'posture'], ['incidents', 'attention', 'status'], () => {
       telemetryData.incidents = (telemetryData.incidents || []).map(inc => inc.id !== id ? inc
         : { ...inc, workflow: { ...(inc.workflow || {}), status, ...(body.note ? { resolution_note: body.note } : {}) } });
-      mapAttentionItems(it => (it.kind === 'incident' && it.id === id ? { ...it, status } : it));
+      // resolved leaves the queue; acknowledged stays, marked seen.
+      mapAttentionItems(it => (it.kind !== 'incident' || it.id !== id ? it : status === 'resolved' ? null : { ...it, status }));
     });
     try {
       const r = await apiFetch('/incidents/status', {
@@ -1281,27 +1338,35 @@ document.addEventListener('DOMContentLoaded', () => {
   // re-render the right content after a mutation.
   let drawerMode = null; // 'incident' | 'endpoint' | 'uninspected' | 'family' | 'policy' | null
 
-  window.openIncidentReport = async function(incidentId) {
+  let drawerIncident = '';
+  let drawerEndpoint = null;
+  window.openIncidentReport = async function(incidentId, { back } = {}) {
     if (!drawer) return;
     drawerMode = 'incident';
+    drawerIncident = incidentId;
     if (btnDrawerCopy) btnDrawerCopy.hidden = false;
     openDrawer({
       title: `Incident report — ${incidentId}`,
       icon: 'doc',
       body: `<div class="loading-spinner">Fetching incident report…</div>`,
       onClose: () => { drawerMode = null; },
+      back,
     });
+    const seq = drawerSeq;
 
     try {
       const res = await apiFetch(`/incidents?id=${encodeURIComponent(incidentId)}&format=markdown`);
+      if (seq !== drawerSeq) return;
       if (res.ok) {
         const text = await res.text();
+        if (seq !== drawerSeq) return;
         currentRawMarkdown = text;
         drawerBody.innerHTML = parseMarkdownToHTML(text);
       } else {
         drawerBody.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-doc"/></svg><span>Failed to load the incident report.</span></div>`;
       }
     } catch (err) {
+      if (seq !== drawerSeq) return;
       drawerBody.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-doc"/></svg><span>Error: ${escapeHTML(err.message)}</span></div>`;
     }
   };
@@ -1310,22 +1375,27 @@ document.addEventListener('DOMContentLoaded', () => {
   // an unknown IPv6 is explained (owner org, PTR name, which agents/sessions
   // reached it, recent connections) instead of being a bare address that looks
   // safe to block.
-  window.openEndpointDetail = async function(host, agent) {
+  window.openEndpointDetail = async function(host, agent, { back } = {}) {
     if (!drawer) return;
     drawerMode = 'endpoint';
+    drawerEndpoint = { host, agent };
     if (btnDrawerCopy) btnDrawerCopy.hidden = true;
     openDrawer({
       title: 'Endpoint detail',
       icon: 'globe',
       onClose: () => { drawerMode = null; },
+      back,
     });
+    const seq = drawerSeq;
     drawerBody.innerHTML = `<div class="loading-spinner">Identifying ${escapeHTML(host)}…</div>`;
     try {
       const res = await apiFetch(`/egress/endpoint?host=${encodeURIComponent(host)}`);
       if (!res.ok) throw new Error((await res.text()).trim() || 'lookup failed');
       const detail = await res.json();
+      if (seq !== drawerSeq) return;
       drawerBody.innerHTML = endpointDetailHTML(detail, agent);
     } catch (err) {
+      if (seq !== drawerSeq) return;
       drawerBody.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-globe"/></svg><span>Could not identify this endpoint: ${escapeHTML(err.message || err)}</span></div>`;
     }
   };
@@ -1334,7 +1404,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // list the operator can act on (allow the endpoint, read the advisor's
   // verdict) instead of a dead end.
 
-  window.openUninspected = function() {
+  window.openUninspected = function({ back } = {}) {
     if (!drawer) return;
     drawerMode = 'uninspected';
     if (btnDrawerCopy) btnDrawerCopy.hidden = true;
@@ -1342,6 +1412,7 @@ document.addEventListener('DOMContentLoaded', () => {
       title: 'Uninspected egress — last 24h',
       icon: 'globe',
       onClose: () => { drawerMode = null; },
+      back,
     });
     fillUninspected(drawerBody);
   };
@@ -1353,9 +1424,11 @@ document.addEventListener('DOMContentLoaded', () => {
   // timeline.
   let familyDrawerKey = '';
   const familyByKey = key => ((telemetryData.resources && telemetryData.resources.sessions) || []).find(f => f.key === key);
-  window.openFamilyDrawer = function(key) {
+  window.openFamilyDrawer = function(key, { back } = {}) {
     const fam = familyByKey(key);
     if (!drawer || !fam) return;
+    // View family on the family already showing keeps its own way back.
+    if (drawerMode === 'family' && familyDrawerKey === key && !drawer.hidden) back = drawerBack;
     drawerMode = 'family';
     familyDrawerKey = key;
     selectedResourceKey = key;
@@ -1364,10 +1437,37 @@ document.addEventListener('DOMContentLoaded', () => {
       title: familyLabel(fam, telemetryData.sessions),
       icon: 'activity',
       onClose: () => { drawerMode = null; familyDrawerKey = ''; },
+      back,
     });
     drawerFoot._saFoot = undefined;
     fillFamilyDrawer();
   };
+
+  // The open drawer as a way back to it. reopen re-runs its opener (with the
+  // back it had), so the previous drawer renders from live data, never from
+  // stale HTML. The policy editor has none: reopening would drop its draft.
+  function currentDrawerBack() {
+    if (!drawer || drawer.hidden) return null;
+    const back = drawerBack || undefined;
+    switch (drawerMode) {
+      case 'uninspected':
+        return { label: 'Uninspected egress', reopen: () => window.openUninspected({ back }) };
+      case 'endpoint': {
+        const { host, agent } = drawerEndpoint;
+        return { label: 'Endpoint detail', reopen: () => window.openEndpointDetail(host, agent, { back }) };
+      }
+      case 'incident': {
+        const id = drawerIncident;
+        return { label: 'Incident report', reopen: () => window.openIncidentReport(id, { back }) };
+      }
+      case 'family': {
+        const key = familyDrawerKey;
+        const fam = familyByKey(key);
+        return { label: fam ? familyLabel(fam, telemetryData.sessions) : 'Process family', reopen: () => window.openFamilyDrawer(key, { back }) };
+      }
+    }
+    return null;
+  }
   function fillFamilyDrawer() {
     if (drawerMode !== 'family' || !drawer || drawer.hidden) return;
     const fam = familyByKey(familyDrawerKey);
@@ -1949,6 +2049,7 @@ document.addEventListener('DOMContentLoaded', () => {
     renderEvents();
     renderFlags();
     renderIncidents();
+    paintScopeBar();
     selectedSessionId = sid;
     switchTab('sessions');
     try { await loadSessionTimeline(sid, true); } catch { /* the trace stays empty; the next select retries */ }
@@ -1967,6 +2068,7 @@ document.addEventListener('DOMContentLoaded', () => {
     renderEvents();
     renderFlags();
     renderIncidents();
+    paintScopeBar();
     switchTab('events');
     const el = document.getElementById('events-container');
     if (el && el.scrollIntoView) {
@@ -1982,6 +2084,7 @@ document.addEventListener('DOMContentLoaded', () => {
     renderEvents();
     renderFlags();
     renderIncidents();
+    paintScopeBar();
   };
 
   const btnSessionClear = document.getElementById('session-clear');
@@ -1998,6 +2101,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const el = e.target.closest('[data-action]');
     if (!el) return;
     const d = el.dataset;
+    // A drawer opened from inside the open drawer can go back to it.
+    const back = () => (el.closest('#drawer') ? currentDrawerBack() : null);
     switch (d.action) {
       case 'kill':
         e.preventDefault();
@@ -2023,7 +2128,7 @@ document.addEventListener('DOMContentLoaded', () => {
         break;
       case 'open-incident':
         e.preventDefault();
-        window.openIncidentReport(d.id);
+        window.openIncidentReport(d.id, { back: back() });
         break;
       case 'incident-status':
         window.setIncidentStatus(d.id, d.status);
@@ -2040,7 +2145,7 @@ document.addEventListener('DOMContentLoaded', () => {
         break;
       case 'view-family':
         e.preventDefault();
-        window.openFamilyDrawer(d.key);
+        window.openFamilyDrawer(d.key, { back: back() });
         break;
       case 'family-events': {
         e.preventDefault();
@@ -2093,7 +2198,7 @@ document.addEventListener('DOMContentLoaded', () => {
         break;
       case 'endpoint-detail':
         e.preventDefault();
-        window.openEndpointDetail(d.host, d.agent);
+        window.openEndpointDetail(d.host, d.agent, { back: back() });
         break;
       case 'notify-scope-add':
         window.addNotifyScope();
@@ -2155,7 +2260,15 @@ document.addEventListener('DOMContentLoaded', () => {
         break;
       case 'open-uninspected':
         e.preventDefault();
-        window.openUninspected();
+        window.openUninspected({ back: back() });
+        break;
+      case 'goto-top':
+        e.preventDefault();
+        window.scrollTo({ top: 0, behavior: reducedMotion ? 'auto' : 'smooth' });
+        break;
+      case 'clear-scope':
+        e.preventDefault();
+        window.clearTimelineSession();
         break;
       case 'goto-tab':
         e.preventDefault();

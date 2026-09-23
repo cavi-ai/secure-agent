@@ -200,14 +200,23 @@
         }
       }]
     },
+    // The daemon's invariant: every item sits in exactly one group and the
+    // group items sum to needs_you (= items.length).
     '/posture': {
       state: 'critical',
-      summary: '1 critical flag and 1 open incident need review',
+      needs_you: 10,
+      summary: '10 items need you — first: proxy-secret-leak — cursor sent an anthropic-key to logs.example.com — act now.',
       items: [
-        { severity: 3, kind: 'flag', title: 'proxy-secret-leak — cursor sent an anthropic-key to logs.example.com' },
+        { severity: 3, kind: 'flag', id: 'flag-1', title: 'proxy-secret-leak — cursor sent an anthropic-key to logs.example.com' },
+        { severity: 3, kind: 'flag', id: 'flag-2', title: 'Agent read a secret, then connected out' },
+        { severity: 3, kind: 'flag', id: 'flag-4', title: 'Agent modified macOS privacy permissions (TCC)' },
+        { severity: 2, kind: 'flag', id: 'flag-5', title: 'Agent touched the keychain' },
+        { severity: 1, kind: 'guard_pending', id: 'guard-1', title: 'claude wants .env' },
+        { severity: 2, kind: 'collector_down', id: 'eslogger', title: 'File monitoring is off', detail: 'usually missing Full Disk Access — open Setup & Permissions in the menu bar' },
+        { severity: 1, kind: 'uninspected_egress', id: 'uninspected-egress:session:5821:1789480800000000000', title: '7 connections bypassed the egress firewall — claude' },
+        { severity: 2, kind: 'uninspected_egress', id: 'uninspected-egress:agent:codex', title: '2 endpoints reached without inspection' },
         { severity: 3, kind: 'incident', id: 'inc-20260907-6033-a1b2', title: 'sensitive-read-then-connect — cursor (PID 6033)' },
-        { severity: 2, kind: 'uninspected_egress', title: '2 endpoints reached without inspection' },
-        { severity: 2, kind: 'collector_down', title: 'File monitoring is off', detail: 'usually missing Full Disk Access — open Setup & Permissions in the menu bar' }
+        { severity: 1, kind: 'resource_pressure', id: 'resource-1', title: 'Resource pressure: api-service' }
       ],
       // The attention tab renders this served queue verbatim — the daemon
       // groups it; the console never re-derives it.
@@ -223,7 +232,7 @@
               scopeText: 'Allow Always approves every path under rule "cloud-creds" for agent "claude", not just this one.' },
             { kind: 'resource', priority: 4, id: 'resource-1', action: 'pause',
               title: 'Resource pressure', detail: 'Memory grew 1.4 GB in 15 minutes.' },
-            { kind: 'egress', priority: 1, title: 'Uninspected egress', count: 7,
+            { kind: 'egress', priority: 1, id: 'uninspected-egress:session:5821:1789480800000000000', title: 'Uninspected egress', count: 7,
               hosts: ['registry.npmjs.org'],
               detail: '7 connections across 1 endpoint bypassed inspection.' }
           ]
@@ -240,13 +249,23 @@
             { kind: 'flag', priority: 2, id: 'flag-2',
               title: 'Critical finding', detail: 'sensitive-read-then-connect — credentials then egress' },
             { kind: 'flag', priority: 2, id: 'flag-4',
-              title: 'Critical finding', detail: 'tcc-tamper — modified TCC service' }
+              title: 'Critical finding', detail: 'tcc-tamper — modified TCC service' },
+            { kind: 'flag', priority: 1, id: 'flag-5',
+              title: 'Agent touched the keychain', detail: 'keychain-access — security find-generic-password',
+              disposition: { state: 'warning', text: 'Needs a look' } }
+          ]
+        },
+        {
+          key: 'machine', label: 'This machine', agent: '',
+          items: [
+            { kind: 'collector_down', priority: 2, id: 'eslogger', title: 'File monitoring is off',
+              detail: 'usually missing Full Disk Access — open Setup & Permissions in the menu bar' }
           ]
         },
         {
           key: 'agent:codex', label: 'codex activity', agent: 'codex',
           items: [
-            { kind: 'egress', priority: 1, title: 'Uninspected egress', count: 2,
+            { kind: 'egress', priority: 1, id: 'uninspected-egress:agent:codex', title: 'Uninspected egress', count: 2,
               hosts: ['example.com'],
               detail: '2 connections across 1 endpoint bypassed inspection.' }
           ]
@@ -483,6 +502,8 @@
         g.items = g.items.filter(item => !(item.kind === 'guard' && item.id === body.id));
       }
       data['/posture'].groups = (data['/posture'].groups || []).filter(g => g.items.length > 0);
+      data['/posture'].items = data['/posture'].items.filter(item => !(item.kind === 'guard_pending' && item.id === body.id));
+      data['/posture'].needs_you = data['/posture'].items.length;
     }
     if (p === '/advisor/assess-host') {
       // Cached verdict for a known host; a fresh (unknown) host queues.
@@ -566,6 +587,11 @@
       if (MODE.includes('explaindemo') && opts.body) line += ' body=' + opts.body;
       reqLog.push(line);
       stamp('mock-requests', reqLog.join('\n'));
+      if (MODE.includes('resolvedemo') && p === '/incidents/status') {
+        const text = id => (document.getElementById(id) || {}).textContent;
+        const queued = !!document.querySelector('#attention-center [data-id="inc-20260907-6033-a1b2"]');
+        stamp('resolve-probe', `badge=${text('badge-attention-count')} tab=${text('tab-badge-findings')} queued=${queued}`);
+      }
       // postfail: POST /allowlist answers 500 (the act-in-place revert path).
       if (MODE.includes('postfail') && p === '/allowlist') {
         return { ok: false, status: 500, json: async () => ({}), text: async () => 'mock failure' };
@@ -710,6 +736,78 @@
       }, 100);
     };
     setTimeout(() => { clickResolve(); acceptDialog(); }, 4000);
+  }
+  // resolvedemo: Resolve the incident from its card and accept the note
+  // prompt; POST /incidents/status stamps <pre id="resolve-probe"> with the
+  // attention counts and whether the queue still lists the incident — the
+  // optimistic render, before any reconciliation.
+  if (MODE.includes('resolvedemo')) {
+    setTimeout(() => document.querySelector('[data-tab="findings"]').click(), 4000);
+    setTimeout(() => {
+      document.querySelector('#incidents-container [data-action="incident-status"][data-status="resolved"]').click();
+      let n = 0;
+      const iv = setInterval(() => {
+        const ok = document.getElementById('confirm-ok');
+        if (ok && ok.closest('#confirm-layer') && !ok.closest('#confirm-layer').hidden) {
+          ok.click();
+          clearInterval(iv);
+        } else if (++n > 20) {
+          clearInterval(iv);
+        }
+      }, 100);
+    }, 4500);
+  }
+  // stickydemo: Attention tab, scroll 5000 px; <pre id="sticky-probe"> gets
+  // the tablist's top, whether the posture pill shows, and its text.
+  if (MODE.includes('stickydemo')) {
+    setTimeout(() => document.querySelector('[data-tab="findings"]').click(), 4000);
+    // Virtual time runs no frames, so the browser never dispatches the scroll
+    // event a real scroll fires; dispatch it after scrolling.
+    setTimeout(() => { window.scrollTo(0, 5000); window.dispatchEvent(new Event('scroll')); }, 4500);
+    setTimeout(() => {
+      const nav = document.querySelector('nav.tabs[role="tablist"]');
+      const pill = document.getElementById('tabs-posture');
+      const shown = pill && !pill.hidden && getComputedStyle(pill).display !== 'none' && pill.getBoundingClientRect().height > 0;
+      stamp('sticky-probe', `top=${Math.round(nav.getBoundingClientRect().top)} scroll=${Math.round(window.scrollY)} `
+        + `stuck=${document.getElementById('tabs-bar').classList.contains('is-stuck')} pill=${shown ? 'visible' : 'hidden'}:${pill ? pill.textContent.trim() : ''}`);
+    }, 5500);
+  }
+  // drawerbackdemo: Uninspected drawer → first Evidence → Back; <pre
+  // id="drawer-back-probe"> gets the back button after the chained open and
+  // the drawer after the click.
+  if (MODE.includes('drawerbackdemo')) {
+    setTimeout(() => window.openUninspected(), 4000);
+    setTimeout(() => document.querySelector('#drawer-body [data-action="endpoint-detail"]').click(), 4500);
+    setTimeout(() => {
+      const back = document.getElementById('btn-drawer-back');
+      const chained = `chained: back=${back ? back.textContent : 'none'} title=${document.getElementById('drawer-title-text').textContent}`;
+      if (back) back.click();
+      setTimeout(() => {
+        const rows = document.querySelectorAll('#drawer-body .egress-row').length;
+        stamp('drawer-back-probe', `${chained} | back: title=${document.getElementById('drawer-title-text').textContent} rows=${rows} `
+          + `button=${document.getElementById('btn-drawer-back') ? 'present' : 'absent'} open=${!document.getElementById('drawer').hidden}`);
+      }, 500);
+    }, 5500);
+  }
+  // scopedemo: Attention → first "View session in timeline" (Sessions tab),
+  // then Events, then Clear on the scope bar; <pre id="scope-probe"> gets the
+  // bar on Sessions, the scoped Events rows, and the bar and rows after Clear.
+  if (MODE.includes('scopedemo')) {
+    const bar = () => document.getElementById('scope-bar');
+    const barState = () => `${bar().hidden ? 'hidden' : 'visible'}:${bar().textContent.trim()}`;
+    const rows = () => document.querySelectorAll('#events-container .timeline-item').length;
+    setTimeout(() => document.querySelector('[data-tab="findings"]').click(), 4000);
+    setTimeout(() => document.querySelector('[data-action="filter-session"]').click(), 4500);
+    setTimeout(() => {
+      const onSessions = `tab=${document.querySelector('.tab-btn.active').dataset.tab} bar=${barState()}`;
+      document.querySelector('[data-tab="events"]').click();
+      setTimeout(() => {
+        const scoped = rows();
+        document.querySelector('#scope-bar [data-action="clear-scope"]').click();
+        setTimeout(() => stamp('scope-probe', `${onSessions} | scoped rows=${scoped} | cleared bar=${barState()} rows=${rows()} `
+          + `chip=${document.getElementById('session-filter').hidden ? 'hidden' : 'visible'}`), 500);
+      }, 500);
+    }, 5500);
   }
   // Auto-action: open the uninspected-egress drill-down modal.
   if (location.search.includes('uninspecteddemo')) {
@@ -980,7 +1078,7 @@
     if (tab) {
       setTimeout(() => {
         document.querySelector(`[data-tab="${tab}"]`)?.click();
-        const bar = document.querySelector('nav.tabs');
+        const bar = document.querySelector('.tabs-bar') || document.querySelector('nav.tabs');
         if (params.has('shot') && bar) {
           for (let el = bar.previousElementSibling; el; el = el.previousElementSibling) el.style.display = 'none';
         }
