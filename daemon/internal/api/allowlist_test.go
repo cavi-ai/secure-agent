@@ -92,16 +92,22 @@ func TestAllowlistSuggestApproveRoundTrip(t *testing.T) {
 	// Host with smuggled structure is rejected.
 	resp, err := cl.Post("http://unix/allowlist", "application/json",
 		strings.NewReader(`{"agent":"cursor","host":"evil.xyz/redirect"}`))
-	if err != nil || resp.StatusCode != http.StatusBadRequest {
-		t.Fatalf("structured host must be rejected: %v status=%v", err, resp.StatusCode)
+	if err != nil {
+		t.Fatalf("structured host must be rejected: %v", err)
+	}
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status=%v", resp.StatusCode)
 	}
 	resp.Body.Close()
 
 	// Approve: persists, purges the blind spot, audits.
 	resp, err = cl.Post("http://unix/allowlist", "application/json",
 		strings.NewReader(`{"agent":"cursor","host":"registry.npmjs.org"}`))
-	if err != nil || resp.StatusCode != 200 {
-		t.Fatalf("approve: %v status=%v", err, resp.StatusCode)
+	if err != nil {
+		t.Fatalf("approve: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("status=%v", resp.StatusCode)
 	}
 	resp.Body.Close()
 
@@ -160,16 +166,22 @@ func TestMuteEndpointRoundTrip(t *testing.T) {
 
 	// Structured host rejected.
 	resp, err := cl.Post("http://unix/mute", "application/json", strings.NewReader(`{"rule":"r","host":"evil.xyz/x"}`))
-	if err != nil || resp.StatusCode != http.StatusBadRequest {
-		t.Fatalf("structured host must 400: %v %v", err, resp.StatusCode)
+	if err != nil {
+		t.Fatalf("structured host must 400: %v", err)
+	}
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("%v", resp.StatusCode)
 	}
 	resp.Body.Close()
 
 	// Mute → listed → suppression is live → DELETE removes.
 	resp, err = cl.Post("http://unix/mute", "application/json",
 		strings.NewReader(`{"rule":"proxy-prompt-injection","host":"blog.example.com"}`))
-	if err != nil || resp.StatusCode != 200 {
-		t.Fatalf("mute post: %v %v", err, resp.StatusCode)
+	if err != nil {
+		t.Fatalf("mute post: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("%v", resp.StatusCode)
 	}
 	resp.Body.Close()
 
@@ -191,8 +203,11 @@ func TestMuteEndpointRoundTrip(t *testing.T) {
 
 	req, _ := http.NewRequest(http.MethodDelete, "http://unix/mute?rule=proxy-prompt-injection&host=blog.example.com", nil)
 	resp, err = cl.Do(req)
-	if err != nil || resp.StatusCode != 200 {
-		t.Fatalf("unmute: %v %v", err, resp.StatusCode)
+	if err != nil {
+		t.Fatalf("unmute: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("%v", resp.StatusCode)
 	}
 	resp.Body.Close()
 	if len(ms.Load()) != 0 {
