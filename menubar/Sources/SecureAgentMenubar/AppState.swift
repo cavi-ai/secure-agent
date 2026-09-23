@@ -775,7 +775,7 @@ public final class AppState: ObservableObject {
         return nil
     }
 
-    public func openDashboard(tab: String? = nil) {
+    public func openDashboard(tab: String? = nil, file: String? = nil) {
         // The console is served on the proxy's loopback HTTP port (and on the
         // unix API). Only open it when the daemon is connected and the proxy
         // is actually running — a stale port from a dead daemon opens a
@@ -795,6 +795,9 @@ public final class AppState: ObservableObject {
             query = "#ct=\(DaemonClient.urlQueryEscape(token))"
             if let tab {
                 query += "&tab=\(DaemonClient.urlQueryEscape(tab))"
+            }
+            if let file {
+                query += "&file=\(DaemonClient.urlQueryEscape(file))"
             }
         }
         if let url = URL(string: "http://127.0.0.1:\(port)/dashboard/\(query)") {

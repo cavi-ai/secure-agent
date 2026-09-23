@@ -380,7 +380,9 @@ function findingHTML(f, l, chainHTML, toolsHTML) {
       <div class="finding-actions">${explainActionsHTML(f)}</div>
       <details class="finding-details"><summary>Details</summary>
         ${chainHTML}
-        <dl class="finding-facts">${facts.map(([k, v]) => `<dt>${escapeHTML(k)}</dt><dd>${escapeHTML(v)}</dd>`).join('')}</dl>
+        <dl class="finding-facts">${facts.map(([k, v]) => `<dt>${escapeHTML(k)}</dt><dd>${k === 'File'
+          ? `<button type="button" class="file-link" data-action="open-file" data-path="${escapeHTML(v)}">${escapeHTML(v)}</button>`
+          : escapeHTML(v)}</dd>`).join('')}</dl>
         ${toolsHTML ? `<div class="flag-actions-row">${toolsHTML}</div>` : ''}
       </details>
     </article>`;

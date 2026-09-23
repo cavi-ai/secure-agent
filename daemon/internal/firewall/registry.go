@@ -38,6 +38,24 @@ func NewRegistry(salt []byte, fps []config.Fingerprint) *Registry {
 	return r
 }
 
+// MaskTokens replaces every raw token of text whose HMAC matches a registered
+// fingerprint with [REDACTED:<fingerprint id>]. Encoded forms are not
+// decoded here; Engine.Mask rescans to catch them.
+func (r *Registry) MaskTokens(text string) string {
+	if len(r.byHMAC) == 0 {
+		return text
+	}
+	for _, tok := range strings.FieldsFunc(text, isTokenBreak) {
+		if _, ok := r.byLen[len(tok)]; !ok {
+			continue
+		}
+		if fp, ok := r.byHMAC[Fingerprint(r.salt, tok)]; ok {
+			text = strings.ReplaceAll(text, tok, "[REDACTED:"+fp.ID+"]")
+		}
+	}
+	return text
+}
+
 // Match tokenizes each normalized view of data and reports any token whose
 // HMAC matches a registered fingerprint. Only tokens whose length matches a
 // registered length are hashed, keeping the scan cheap.

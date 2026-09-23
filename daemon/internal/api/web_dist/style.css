@@ -955,6 +955,18 @@ body {
 .endpoint-session-id, .endpoint-event-time { font-family: var(--mono); font-size: 0.72rem; color: var(--tx-3); }
 .endpoint-event-port { font-family: var(--mono); color: var(--tx-3); }
 .endpoint-event-agent { margin-left: auto; }
+/* Evidence file: a path that opens the file drawer, and its masked excerpt. */
+.file-link {
+  background: none; border: 0; padding: 0; font: inherit; font-family: var(--mono);
+  color: var(--brand-2); text-align: left; word-break: break-all; cursor: pointer;
+}
+.file-link:hover { text-decoration: underline; }
+.file-excerpt {
+  margin: 0; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--r-sm);
+  background: var(--bg-1); font-family: var(--mono); font-size: 0.72rem; color: var(--tx-2);
+  white-space: pre-wrap; word-break: break-all; max-height: 260px; overflow: auto;
+}
+.file-withheld { margin: 0; font-size: 0.78rem; color: var(--tx-3); }
 /* While the inspector is open, reserve its width so it never sits ON TOP of
    the content — the page shifts rather than being covered. */
 @media (min-width: 1100px) {
