@@ -274,11 +274,24 @@
 
           <section class="panel chart-panel">
             <div class="panel-head">
-              <h2><svg class="icon"><use href="#i-activity"/></svg>Spend by repo · 24h</h2>
+              <h2><svg class="icon"><use href="#i-activity"/></svg>Spend</h2>
+              <div class="spend-controls">
+                <select id="spend-by" class="select select-sm" aria-label="Group spend by">
+                  <option value="repo">By repo</option>
+                  <option value="provider">By provider</option>
+                  <option value="model">By model</option>
+                  <option value="day">By day</option>
+                </select>
+                <select id="spend-since" class="select select-sm" aria-label="Spend window">
+                  <option value="24h">24h</option>
+                  <option value="7d">7d</option>
+                  <option value="30d">30d</option>
+                </select>
+              </div>
             </div>
             <div class="panel-body">
-              <div id="spend-by-repo" class="spend-list">
-                <div class="empty"><svg class="icon"><use href="#i-activity"/></svg><span>No priced model calls in the last 24h.</span></div>
+              <div id="spend-card" class="spend-card">
+                <div class="empty"><span>Loading spend…</span></div>
               </div>
             </div>
           </section>

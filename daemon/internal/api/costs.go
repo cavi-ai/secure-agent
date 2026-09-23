@@ -12,9 +12,12 @@ import (
 )
 
 // handleCosts serves model-call spend over a window, grouped by repo, branch,
-// harness, session or model, with every unpriced call classified. Read-level.
+// harness, session, model, provider or local day, with every unpriced call
+// classified. by=provider names a call with no recorded provider by the
+// vendor whose price table resolves its model; by=day buckets at tz minutes
+// from UTC. Read-level.
 //
-//	GET /costs?since=24h|7d|<RFC3339>&until=<RFC3339>&by=repo|branch|harness|session|model
+//	GET /costs?since=24h|7d|<RFC3339>&until=<RFC3339>&by=repo|branch|harness|session|model|provider|day&tz=<minutes>
 func (a *API) handleCosts(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -30,10 +33,19 @@ func (a *API) handleCosts(w http.ResponseWriter, r *http.Request) {
 		by = "repo"
 	}
 	if !store.ValidCostGroup(by) {
-		http.Error(w, "by must be one of repo, branch, harness, session, model", http.StatusBadRequest)
+		http.Error(w, "by must be one of repo, branch, harness, session, model, provider, day", http.StatusBadRequest)
 		return
 	}
-	rep := a.store.CostReport(since, until, by)
+	tz := 0
+	if v := r.URL.Query().Get("tz"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < -store.MaxTZMinutes || n > store.MaxTZMinutes {
+			http.Error(w, fmt.Sprintf("tz must be minutes east of UTC, -%d..%d", store.MaxTZMinutes, store.MaxTZMinutes), http.StatusBadRequest)
+			return
+		}
+		tz = n
+	}
+	rep := a.store.CostReport(since, until, by, store.CostOptions{TZMinutes: tz, ProviderFor: collect.VendorForModel})
 	classifyCosts(&rep)
 	writeJSON(w, rep)
 }
@@ -65,7 +77,7 @@ func (a *API) handleCostsUnpriced(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	rep := a.store.CostReport(since, until, "harness")
+	rep := a.store.CostReport(since, until, "harness", store.CostOptions{})
 	out := struct {
 		Since string            `json:"since"`
 		Until string            `json:"until"`

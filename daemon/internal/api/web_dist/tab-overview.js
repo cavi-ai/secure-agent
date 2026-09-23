@@ -484,8 +484,9 @@ function renderChartMemory() {
   applyInlineMetrics(el);
 }
 
-// Spend: the stat-strip tile (24h total) and the top-repos card, both from
-// the /costs report. Unpriced calls (unknown model) are counted, never priced.
+// Spend: the stat-strip tile (24h total, by repo, from SA.t.costs) and the
+// Spend card (SA.t.costsCard: the dimension and window its controls chose).
+// Unpriced calls (unknown model) are counted, never priced.
 function renderSpend() {
   const SA = window.SA;
   const report = SA.t.costs;
@@ -501,19 +502,98 @@ function renderSpend() {
       : '';
   }
 
-  const el = document.getElementById('spend-by-repo');
+  const el = document.getElementById('spend-card');
   if (!el) return;
-  const rows = topCostRows(report, 5);
-  if (!rows.some(row => Number(row.cost_usd) > 0)) {
-    el.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-activity"/></svg><span>No priced model calls in the last 24h.</span></div>`;
+  const card = SA.t.costsCard;
+  if (!card) {
+    el.innerHTML = `<div class="empty"><span>Loading spend…</span></div>`;
     return;
   }
-  el.innerHTML = rows.map(row => `<div class="spend-row">
-      <span class="spend-key" title="${escapeHTML(row.key)}">${escapeHTML(row.key)}</span>
-      ${row.harness ? harnessChipHTML(row.harness) : ''}
-      <span class="spend-cost">${escapeHTML(fmtUSD(row.cost_usd))}</span>
-    </div>`).join('');
-  applyInlineMetrics(el);
+  const rows = Array.isArray(card.rows) ? card.rows : [];
+  if (!rows.some(row => Number(row.cost_usd) > 0)) {
+    el.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-activity"/></svg><span>No priced model calls in this window.</span></div>`;
+    return;
+  }
+  // Keyed through patchList so the slow refresh keeps unchanged rows and
+  // the day bars' horizontal scroll.
+  const day = card.by === 'day';
+  const cls = day ? 'spend-bars' : 'spend-list';
+  let wrap = el.firstElementChild;
+  if (!wrap || el.childElementCount !== 1 || wrap.className !== cls) {
+    el.innerHTML = `<div class="${cls}"></div>`;
+    wrap = el.firstElementChild;
+  }
+  const left = wrap.scrollLeft;
+  const items = day ? spendDayItems(rows) : spendListItems(rows, 8, { by: card.by, expanded: SA.expanded });
+  patchList(wrap, items, { key: i => i.key, html: i => i.html });
+  wrap.scrollLeft = left;
+}
+
+// spendListItems: the Spend card's repo/provider/model list as patchList
+// items { key: "<by>:<row key>", html } — the top n rows by cost (key,
+// harness chip, calls, cost), then the Show more button (list key "spend").
+// opts: { by, expanded }. A by=provider "(unknown)" row says the provider
+// was not recorded.
+function spendListItems(rows, n, opts) {
+  opts = opts || {};
+  const list = rows || [];
+  const row = r => {
+    const calls = Number(r.calls) || 0;
+    const unknown = opts.by === 'provider' && r.key === '(unknown)';
+    return `<div class="spend-row">
+      <span class="spend-key" title="${escapeHTML(r.key)}">${escapeHTML(r.key)}</span>
+      ${unknown ? '<span class="spend-hint">provider not recorded</span>' : ''}
+      ${r.harness ? harnessChipHTML(r.harness) : ''}
+      <span class="spend-calls">${calls} call${calls === 1 ? '' : 's'}</span>
+      <span class="spend-cost">${escapeHTML(fmtUSD(r.cost_usd))}</span>
+    </div>`;
+  };
+  const cap = cappedList(topCostRows({ rows: list }, list.length), n, null, 'spend', opts.expanded);
+  const items = cap.shown.map(r => ({ key: `${opts.by}:${r.key}`, html: row(r) }));
+  if (cap.more) items.push({ key: 'more:spend', html: cap.more });
+  return items;
+}
+
+// spendDayItems: the Spend card's by=day view as patchList items
+// { key: "day:<YYYY-MM-DD>", html } — one column per row in ascending key
+// order, bar height by share of the costliest day, a "Mon 23" label and the
+// cost under the bar; calls in the title.
+function spendDayItems(rows) {
+  const list = [...(rows || [])].sort((a, b) => {
+    const x = String(a.key), y = String(b.key);
+    return x < y ? -1 : x > y ? 1 : 0;
+  });
+  const max = Math.max(0, ...list.map(r => Number(r.cost_usd) || 0));
+  return list.map(r => {
+    const cost = Number(r.cost_usd) || 0;
+    const calls = Number(r.calls) || 0;
+    const pct = max > 0 ? (cost / max) * 100 : 0;
+    const label = spendDayLabel(r.key);
+    const title = `${r.key} · ${fmtUSD(cost)} · ${calls} call${calls === 1 ? '' : 's'}`;
+    return { key: `day:${r.key}`, html: `<div class="spend-day" title="${escapeHTML(title)}">
+      <span class="spend-day-track"><span class="spend-day-bar" data-h="${pct.toFixed(1)}"></span></span>
+      <span class="spend-day-cost">${escapeHTML(fmtUSDCompact(cost))}</span>
+      <span class="spend-day-label">${escapeHTML(label)}</span>
+    </div>` };
+  });
+}
+
+// spendDayLabel: "2026-09-23" → "Wed 23"; anything else as given.
+function spendDayLabel(key) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(key || ''));
+  if (!m) return String(key || '');
+  const day = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]))).getUTCDay();
+  return `${['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][day]} ${Number(m[3])}`;
+}
+
+// fmtUSDCompact: a cost that fits under a day bar — "$0", "$0.42", "$677",
+// "$1.2k".
+function fmtUSDCompact(v) {
+  const n = Number(v) || 0;
+  if (n >= 1000) return `$${(n / 1000).toFixed(1)}k`;
+  if (n >= 10) return `$${Math.round(n)}`;
+  if (n > 0) return `$${n.toFixed(2)}`;
+  return '$0';
 }
 
 function renderSessionStrip() {
