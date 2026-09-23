@@ -16,13 +16,14 @@ function escapeHTML(str) {
 
 // applyInlineMetrics: the console CSP (style-src 'self') drops style
 // attributes parsed from markup, so renderers carry sizes in data attributes
-// (data-left / data-w in percent, data-harness-color) and callers apply them
+// (data-left / data-w / data-h in percent, data-harness-color) and callers apply them
 // here after each innerHTML assignment — CSSOM writes from script are
 // allowed under that policy. Touches only the subtree it is handed.
 function applyInlineMetrics(root) {
   if (!root) return;
   root.querySelectorAll('[data-left]').forEach(el => el.style.setProperty('left', el.dataset.left + '%'));
   root.querySelectorAll('[data-w]').forEach(el => el.style.setProperty('width', el.dataset.w + '%'));
+  root.querySelectorAll('[data-h]').forEach(el => el.style.setProperty('height', el.dataset.h + '%'));
   root.querySelectorAll('[data-harness-color]').forEach(el => el.style.setProperty('--harness-color', el.dataset.harnessColor));
 }
 

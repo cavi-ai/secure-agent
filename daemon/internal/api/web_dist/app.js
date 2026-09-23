@@ -236,9 +236,24 @@ document.addEventListener('DOMContentLoaded', () => {
     uninspected: [],  // /egress/uninspected rows — the drill-down list
     guardPending: [], // blocked tool calls waiting for an operator decision
     notifyCfg: null,  // /notify/rules payload — notification preferences
-    costs: null,      // /costs report (24h, by repo) — spend tile and card
+    costs: null,      // /costs report (24h, by repo) — the spend tile
+    costsCard: null,  // /costs report for the Spend card's saved view
     connected: true
   };
+
+  // Spend card view: dimension and window, kept for the tab in
+  // sessionStorage. The tile keeps its own 24h/by-repo fetch.
+  const SPEND_VIEW_KEY = 'sa.spend-view';
+  const SPEND_BY = ['repo', 'provider', 'model', 'day'];
+  const SPEND_SINCE = ['24h', '7d', '30d'];
+  let spendView = { by: 'repo', since: '24h' };
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(SPEND_VIEW_KEY) || '{}') || {};
+    if (SPEND_BY.includes(saved.by)) spendView.by = saved.by;
+    if (SPEND_SINCE.includes(saved.since)) spendView.since = saved.since;
+  } catch { /* private mode or a corrupt entry: the default view */ }
+  const spendCardPath = () =>
+    `/costs?since=${spendView.since}&by=${spendView.by}&tz=${-(new Date()).getTimezoneOffset()}`;
 
   // ---------- connectivity ----------
   // Three honest states, never conflated:
@@ -883,8 +898,9 @@ document.addEventListener('DOMContentLoaded', () => {
       if (snap.sessions) telemetryData.sessions = snap.sessions || [];
     }
 
+    const cardPath = spendCardPath();
     if (slow) {
-      const [fleet, audit, sources, rollup, uninspected, notifyCfg, allowlist, episodes, costs] = await Promise.all([
+      const [fleet, audit, sources, rollup, uninspected, notifyCfg, allowlist, episodes, costs, costsCard] = await Promise.all([
         grab('fleet', '/fleet'),
         grab('audit', '/audit?limit=50'),
         grab('firewall sources', '/firewall/sources'),
@@ -893,7 +909,8 @@ document.addEventListener('DOMContentLoaded', () => {
         grab('notification rules', '/notify/rules'),
         grab('allowlist', '/allowlist'),
         grab('resource episodes', '/resources/episodes'),
-        grab('spend', '/costs?since=24h&by=repo')
+        grab('spend', '/costs?since=24h&by=repo'),
+        grab('spend card', cardPath)
       ]);
       if (fleet) telemetryData.fleet = fleet || [];
       if (audit) telemetryData.audit = audit || [];
@@ -904,6 +921,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (notifyCfg) telemetryData.notifyCfg = notifyCfg;
       if (allowlist) telemetryData.allowlist = allowlist || [];
       if (costs) telemetryData.costs = costs;
+      if (costsCard && cardPath === spendCardPath()) telemetryData.costsCard = costsCard;
     }
 
     telemetryData.flagsView = telemetryData.flags;
@@ -941,6 +959,35 @@ document.addEventListener('DOMContentLoaded', () => {
   // "is this normal for this machine?" answer at a glance. The 24h/7d toggle
   // re-slices the same 7d fetch locally (no refetch).
   document.getElementById('activity-window')?.addEventListener('change', renderActivity);
+
+  // Spend card controls: a change saves the view, clears the card and fetches
+  // the new report; a response for a view since replaced is dropped.
+  const spendBySel = document.getElementById('spend-by');
+  const spendSinceSel = document.getElementById('spend-since');
+  if (spendBySel) spendBySel.value = spendView.by;
+  if (spendSinceSel) spendSinceSel.value = spendView.since;
+  async function loadSpendCard() {
+    const path = spendCardPath();
+    try {
+      const r = await apiFetch(path);
+      if (!r.ok) { noteEndpointFailure('spend card'); return; }
+      const rep = await r.json();
+      if (path !== spendCardPath()) return;
+      failedEndpoints.delete('spend card');
+      telemetryData.costsCard = rep;
+      renderNow(['spend']);
+    } catch { /* network error: the next slow refresh retries */ }
+  }
+  const onSpendView = () => {
+    const by = spendBySel && spendBySel.value, since = spendSinceSel && spendSinceSel.value;
+    spendView = { by: SPEND_BY.includes(by) ? by : 'repo', since: SPEND_SINCE.includes(since) ? since : '24h' };
+    try { sessionStorage.setItem(SPEND_VIEW_KEY, JSON.stringify(spendView)); } catch { /* private mode */ }
+    telemetryData.costsCard = null;
+    renderNow(['spend']);
+    loadSpendCard();
+  };
+  spendBySel?.addEventListener('change', onSpendView);
+  spendSinceSel?.addEventListener('change', onSpendView);
 
   function renderStatus() {
     const chip = document.getElementById('system-status');
@@ -2598,6 +2645,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (d.key === 'events') renderNow(['events']);
         else if (String(d.key).startsWith('agents:')) renderNow(['agents']);
         else if (String(d.key).startsWith('pattern:')) renderNow(['attention', 'flags']);
+        else if (d.key === 'spend') renderNow(['spend']);
         else fillFamilyDrawer();
         break;
       case 'resource-control':

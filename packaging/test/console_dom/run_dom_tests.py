@@ -19,6 +19,7 @@ import argparse
 import http.server
 import json
 import os
+import html
 import re
 import shutil
 import subprocess
@@ -183,6 +184,9 @@ def main():
         dom_nomatch = dump_dom(chrome, tmp, "?nomatchdemo")
         dom_phone = dump_dom(chrome, tmp, "?phonedemo")
         dom_nocosts = dump_dom(chrome, tmp, "?nocostsdemo")
+        dom_spend = dump_dom(chrome, tmp, "?spenddemo")
+        dom_spendday = dump_dom(chrome, tmp, "?spenddaydemo")
+        dom_spendphone = dump_dom(chrome, tmp, "?phonedemo&spenddaydemo")
         dom_events = dump_dom(chrome, tmp, "?tab=events")
         dom_burst = dump_dom(chrome, tmp, "?burstdemo")
         dom_railburst = dump_dom(chrome, tmp, "?railburst")
@@ -303,15 +307,44 @@ def main():
         check("spend tile shows the 24h total", 'id="count-spend">$36.67<' in dom)
         check("spend tile sub-line counts calls and unpriced calls",
               'id="hint-spend">40 calls · 2 unpriced<' in dom)
-        spend_card = dom.split('id="spend-by-repo"', 1)[1].split('</section>', 1)[0]
-        spend_keys = re.findall(r'<span class="spend-key" title="[^"]*">([^<]+)</span>', spend_card)
-        check("spend card lists the top 5 repos by cost",
-              spend_keys == ["api-service", "web-console", "infra-tools", "scratch", "(no repo)"]
+        def pre(dom_text, pid):
+            m = re.search(r'<pre id="%s"[^>]*>(.*?)</pre>' % pid, dom_text, re.S)
+            return m.group(1) if m else ""
+
+        def spend_card_of(d):
+            return d.split('id="spend-card"', 1)[1].split('</section>', 1)[0]
+        spend_key_re = r'<span class="spend-key" title="[^"]*">([^<]+)</span>'
+        spend_card = spend_card_of(dom)
+        spend_keys = re.findall(spend_key_re, spend_card)
+        check("spend card defaults to repos by cost over 24h",
+              spend_keys == ["api-service", "web-console", "infra-tools", "scratch", "(no repo)", "docs"]
               and '<span class="spend-cost">$24.50</span>' in spend_card
               and '#logo-claude' in spend_card, f"keys={spend_keys}")
         check("empty spend report: tile reads an em dash, card shows its empty state",
               'id="count-spend">—<' in dom_nocosts and 'id="hint-spend"><' in dom_nocosts
-              and "No priced model calls in the last 24h." in dom_nocosts)
+              and "No priced model calls in this window." in spend_card_of(dom_nocosts))
+        spend_q = html.unescape(pre(dom_spend, "mock-costs")).split("\n")
+        tz_ok = all(re.search(r"&tz=-?\d+$", q) for q in spend_q if q != "since=24h&by=repo")
+        check("spend: switching the dimension fetches by=provider and renders the provider rows",
+              any(q.startswith("since=24h&by=provider&tz=") for q in spend_q) and tz_ok
+              and re.findall(spend_key_re, spend_card_of(dom_spend)) == ["anthropic", "openai-codex", "openai", "(unknown)"]
+              and "provider not recorded" in spend_card_of(dom_spend), f"queries={spend_q}")
+        check("spend: the tile keeps its 24h by-repo fetch and meaning",
+              "since=24h&by=repo" in spend_q and 'id="count-spend">$36.67<' in dom_spend, f"queries={spend_q}")
+        check("spend: the chosen view survives a full re-render and is saved for the tab",
+              pre(dom_spend, "spend-probe") == 'select=provider saved={"by":"provider","since":"24h"}'
+              and spend_q[-1].startswith("since=24h&by=provider&tz="),
+              f"probe={pre(dom_spend, 'spend-probe')!r} last={spend_q[-1]!r}")
+        day_card = spend_card_of(dom_spendday)
+        day_labels = re.findall(r'<span class="spend-day-label">([^<]+)</span>', day_card)
+        check("spend: a saved by-day view renders one column per day, oldest first, the costliest at full height",
+              day_labels == ["Thu 17", "Fri 18", "Sat 19", "Sun 20", "Mon 21", "Tue 22", "Wed 23"]
+              and 'data-h="100.0"' in day_card.split("Tue 22", 1)[0].rsplit('class="spend-day"', 1)[1]
+              and any(q.startswith("since=7d&by=day&tz=") for q in html.unescape(pre(dom_spendday, "mock-costs")).split("\n")),
+              f"labels={day_labels}")
+        check("spend: the Overview tab with the day bars fits a 375px phone",
+              'data-hscroll="sessions:0,agents:0,resources:0,overview:0"' in dom_spendphone,
+              (re.search(r'data-hscroll="[^"]*"', dom_spendphone) or [None])[0])
         agents_view = dom.split('id="agents-container"', 1)[1].split('id="fleet-col"', 1)[0]
         agent_groups = re.findall(r'<details class="agent-group" data-harness="([^"]+)"', agents_view)
         check("agents tab renders one group per harness, newest first",
@@ -810,10 +843,6 @@ def main():
         check("timeline filtered to 2 session events", session_rows == 2, f"rows={session_rows}")
 
         # --- render engine: dirty, visible panels only; patch in place ---
-        def pre(dom_text, pid):
-            m = re.search(r'<pre id="%s"[^>]*>(.*?)</pre>' % pid, dom_text, re.S)
-            return m.group(1) if m else ""
-
         counts_raw = pre(dom_burst, "render-counts")
         try:
             counts = json.loads(counts_raw)
