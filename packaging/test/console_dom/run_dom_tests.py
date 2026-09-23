@@ -109,6 +109,7 @@ def main():
         dom_pill = dump_dom(chrome, tmp, "?pilldemo")
         dom_quiet = dump_dom(chrome, tmp, "?quietdemo")
         dom_nomatch = dump_dom(chrome, tmp, "?nomatchdemo")
+        dom_phone = dump_dom(chrome, tmp, "?phonedemo")
 
         # --- session-first tab (P3) ---
         rail = dom.split('id="session-rail"', 1)[1].split('id="session-detail"', 1)[0]
@@ -158,6 +159,9 @@ def main():
         check("empty rail says all quiet", "All quiet. Nothing is running." in dom_quiet)
         check("filter that hides everything offers to clear it",
               "No sessions match" in dom_nomatch and 'data-action="clear-harness-filter"' in dom_nomatch)
+        check("Sessions and Agents fit a 375px phone without sideways scroll",
+              'data-hscroll="sessions:0,agents:0"' in dom_phone,
+              (re.search(r'data-hscroll="[^"]*"', dom_phone) or [None])[0])
         detail_head = dom_rail.split('class="session-detail-head"', 1)[1].split('class="wf', 1)[0]
         check("detail head: mark, repo@branch, harness, confidence, copyable path",
               '<h3>api-service@main</h3>' in detail_head and '#logo-claude' in detail_head

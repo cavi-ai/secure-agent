@@ -1213,6 +1213,13 @@ button.fw-uninspected .fw-drill-hint {
 
 /* Session-first: rail of durable sessions + selected session timeline. */
 .session-split { display: grid; grid-template-columns: 300px minmax(0, 1fr); min-height: 420px; }
+/* Narrow screens: the rail stacks above the trace instead of squeezing it. */
+@media (max-width: 680px) {
+  .session-split { grid-template-columns: minmax(0, 1fr); }
+  .session-rail { border-right: 0; border-bottom: 1px solid var(--line); max-height: none; }
+  .harness-filter-text { flex-basis: 100%; max-width: none; margin-left: 0; }
+  .agent-group-meta { justify-content: flex-start; }
+}
 .session-rail {
   border-right: 1px solid var(--line); overflow-y: auto; max-height: 70vh;
   padding: 8px; display: flex; flex-direction: column; gap: 6px;
@@ -1314,6 +1321,7 @@ button.fw-uninspected .fw-drill-hint {
 .session-detail-head h3 { font-size: 15px; min-width: 0; overflow-wrap: anywhere; }
 .session-detail-head .harness-tile { --harness-tile: var(--harness-tile-lg); }
 .sd-harness { color: var(--tx-2); font-size: 12px; font-weight: 600; }
+.sd-conf { color: var(--tx-2); background: var(--bg-2); border-color: var(--line-2); }
 .sd-path {
   max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   font: 500 0.72rem/1.2 var(--mono); color: var(--tx-3); cursor: copy;

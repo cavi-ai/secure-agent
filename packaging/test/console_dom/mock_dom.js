@@ -654,6 +654,39 @@
   if (location.search.includes('pilldemo')) {
     setTimeout(() => document.querySelector('#session-harness-pills [data-action="toggle-harness"][data-harness="claude"]').click(), 4000);
   }
+  // Phone-width probe. Headless Chrome will not size its window below 500px,
+  // so ?phonedemo frames the console in a 375px iframe. The framed copy
+  // (?phoneframe) opens Sessions, then Agents, measures how far any box in
+  // the tab panel reaches past the viewport, and posts it back; the result
+  // lands on <body data-hscroll="sessions:N,agents:N"> (N in px, 0 = fits).
+  if (MODE.includes('phoneframe')) {
+    const measure = (tab) => {
+      document.querySelector(`[data-tab="${tab}"]`).click();
+      const panel = document.getElementById('tab-' + tab);
+      const width = document.documentElement.clientWidth;
+      let past = 0;
+      for (const el of [panel, ...panel.querySelectorAll('*')]) {
+        const box = el.getBoundingClientRect();
+        if (box.width) past = Math.max(past, box.right - width);
+      }
+      return `${tab}:${Math.round(past)}`;
+    };
+    setTimeout(() => {
+      const sessions = measure('sessions');
+      setTimeout(() => parent.postMessage({ hscroll: `${sessions},${measure('agents')}` }, '*'), 300);
+    }, 4000);
+  } else if (MODE.includes('phonedemo')) {
+    addEventListener('message', (e) => {
+      if (e.data && e.data.hscroll) document.body.dataset.hscroll = e.data.hscroll;
+    });
+    document.addEventListener('DOMContentLoaded', () => {
+      const frame = document.createElement('iframe');
+      frame.width = '375';
+      frame.height = '812';
+      frame.src = 'harness.html?phoneframe&raildemo';
+      document.body.prepend(frame);
+    });
+  }
   // Auto-action: switch to the Egress tab — panels must hide/show correctly.
   if (location.search.includes('tabdemo')) {
     setTimeout(() => document.querySelector('[data-tab="egress"]').click(), 4000);
