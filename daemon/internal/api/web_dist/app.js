@@ -1444,6 +1444,10 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   };
 
+  // Deep link from the menubar: #ct=…&file=<path> opens that file's drawer.
+  const deepFile = hashParams.get('file');
+  if (deepFile) window.openFileDetail(deepFile);
+
   // Uninspected-egress drill-down: the count in the firewall panel becomes a
   // list the operator can act on (allow the endpoint, read the advisor's
   // verdict) instead of a dead end.
