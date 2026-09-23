@@ -36,8 +36,11 @@ func TestFleetEndpointReturnsNodeStatus(t *testing.T) {
 
 	cl := unixClient(sock)
 	resp, err := cl.Get("http://unix/fleet")
-	if err != nil || resp.StatusCode != 200 {
-		t.Fatalf("fleet get: %v status=%v", err, resp.StatusCode)
+	if err != nil {
+		t.Fatalf("fleet get: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("status=%v", resp.StatusCode)
 	}
 	defer resp.Body.Close()
 

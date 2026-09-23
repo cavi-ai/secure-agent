@@ -121,8 +121,11 @@ func TestNotifyRulesEndpoint(t *testing.T) {
 	// Set a false override (never notify for this class).
 	resp, err := cl.Post("http://unix/notify/rules", "application/json",
 		strings.NewReader(`{"rule":"keychain-access","notify":false}`))
-	if err != nil || resp.StatusCode != 200 {
-		t.Fatalf("set: %v status=%v", err, resp.StatusCode)
+	if err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("status=%v", resp.StatusCode)
 	}
 	resp.Body.Close()
 	p = get()
@@ -133,16 +136,22 @@ func TestNotifyRulesEndpoint(t *testing.T) {
 	// Invalid rule id rejected.
 	resp, err = cl.Post("http://unix/notify/rules", "application/json",
 		strings.NewReader(`{"rule":"bad rule!","notify":true}`))
-	if err != nil || resp.StatusCode != http.StatusBadRequest {
-		t.Fatalf("invalid rule must be rejected: %v status=%v", err, resp.StatusCode)
+	if err != nil {
+		t.Fatalf("invalid rule must be rejected: %v", err)
+	}
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status=%v", resp.StatusCode)
 	}
 	resp.Body.Close()
 
 	// Null clears the override.
 	resp, err = cl.Post("http://unix/notify/rules", "application/json",
 		strings.NewReader(`{"rule":"keychain-access","notify":null}`))
-	if err != nil || resp.StatusCode != 200 {
-		t.Fatalf("clear: %v status=%v", err, resp.StatusCode)
+	if err != nil {
+		t.Fatalf("clear: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("status=%v", resp.StatusCode)
 	}
 	resp.Body.Close()
 	p = get()
@@ -292,8 +301,11 @@ func TestNotifyWorkspaceScopes(t *testing.T) {
 	}
 	resp, err := cl.Post("http://unix/notify/rules", "application/json",
 		strings.NewReader(`{"workspace":"/Users/dev/prod","rule":"proxy-secret-leak","notify":true}`))
-	if err != nil || resp.StatusCode != 200 {
-		t.Fatalf("set scope: %v status=%v", err, resp.StatusCode)
+	if err != nil {
+		t.Fatalf("set scope: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("status=%v", resp.StatusCode)
 	}
 	resp.Body.Close()
 
@@ -305,8 +317,11 @@ func TestNotifyWorkspaceScopes(t *testing.T) {
 	// Clear via null notify.
 	resp, err = cl.Post("http://unix/notify/rules", "application/json",
 		strings.NewReader(`{"workspace":"/Users/dev/prod","rule":"proxy-secret-leak","notify":null}`))
-	if err != nil || resp.StatusCode != 200 {
-		t.Fatalf("clear scope: %v status=%v", err, resp.StatusCode)
+	if err != nil {
+		t.Fatalf("clear scope: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("status=%v", resp.StatusCode)
 	}
 	resp.Body.Close()
 	if len(get().Scopes) != 0 {

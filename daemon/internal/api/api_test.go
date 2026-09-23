@@ -81,8 +81,11 @@ func TestKillEndpointInvokesKiller(t *testing.T) {
 
 	cl := unixClient(sock)
 	resp, err := cl.Post("http://unix/kill", "application/json", strings.NewReader(`{"pid":7}`))
-	if err != nil || resp.StatusCode != 200 {
-		t.Fatalf("kill post: %v status=%v", err, resp.StatusCode)
+	if err != nil {
+		t.Fatalf("kill post: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("status=%v", resp.StatusCode)
 	}
 	if fk.killed != 7 {
 		t.Fatalf("killer got pid %d, want 7", fk.killed)
@@ -114,8 +117,11 @@ func TestFirewallModeEndpointPromotesAndPersists(t *testing.T) {
 
 	cl := unixClient(sock)
 	resp, err := cl.Post("http://unix/firewall/mode", "application/json", strings.NewReader(`{"rule":"aws-key","mode":"block"}`))
-	if err != nil || resp.StatusCode != 200 {
-		t.Fatalf("firewall mode post: %v status=%v", err, resp.StatusCode)
+	if err != nil {
+		t.Fatalf("firewall mode post: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("status=%v", resp.StatusCode)
 	}
 	if eng.RuleMode("aws-key") != firewall.ModeBlock {
 		t.Fatal("rule was not promoted to block in the engine")
@@ -152,8 +158,11 @@ func TestFirewallModePromotesAllOfTypeLeavesOthers(t *testing.T) {
 
 	cl := unixClient(sock)
 	resp, err := cl.Post("http://unix/firewall/mode", "application/json", strings.NewReader(`{"type":"vendor-key","mode":"block"}`))
-	if err != nil || resp.StatusCode != 200 {
-		t.Fatalf("firewall type post: %v status=%v", err, resp.StatusCode)
+	if err != nil {
+		t.Fatalf("firewall type post: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("status=%v", resp.StatusCode)
 	}
 	body, _ := io.ReadAll(resp.Body)
 	if !strings.Contains(string(body), `"anthropic-key"`) || !strings.Contains(string(body), `"openai-key"`) {
@@ -193,8 +202,11 @@ func TestFlagsAndEventsEndpointsApplyFilters(t *testing.T) {
 
 	get := func(path string) string {
 		resp, err := cl.Get("http://unix" + path)
-		if err != nil || resp.StatusCode != 200 {
-			t.Fatalf("GET %s: %v status=%v", path, err, resp.StatusCode)
+		if err != nil {
+			t.Fatalf("GET %s: %v", path, err)
+		}
+		if resp.StatusCode != 200 {
+			t.Fatalf("status=%v", resp.StatusCode)
 		}
 		b, _ := io.ReadAll(resp.Body)
 		return string(b)
@@ -238,8 +250,11 @@ func TestFirewallModePromotionIsAudited(t *testing.T) {
 
 	cl := unixClient(sock)
 	resp, err := cl.Post("http://unix/firewall/mode", "application/json", strings.NewReader(`{"rule":"aws-key","mode":"block"}`))
-	if err != nil || resp.StatusCode != 200 {
-		t.Fatalf("firewall mode post: %v status=%v", err, resp.StatusCode)
+	if err != nil {
+		t.Fatalf("firewall mode post: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("status=%v", resp.StatusCode)
 	}
 
 	auditResp, err := cl.Get("http://unix/audit")
@@ -273,8 +288,11 @@ func TestFingerprintIngestEndpointReturnsLabels(t *testing.T) {
 
 	cl := unixClient(sock)
 	resp, err := cl.Post("http://unix/firewall/fingerprints/ingest", "application/json", nil)
-	if err != nil || resp.StatusCode != 200 {
-		t.Fatalf("ingest post: %v status=%v", err, resp.StatusCode)
+	if err != nil {
+		t.Fatalf("ingest post: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("status=%v", resp.StatusCode)
 	}
 	if !called {
 		t.Fatal("ingest callback was not invoked")
@@ -323,8 +341,11 @@ func TestFirewallSourcesAddRemoveAndAudit(t *testing.T) {
 
 	// add the real source
 	resp, err := cl.Post("http://unix/firewall/sources", "application/json", strings.NewReader(fmt.Sprintf(`{"source":%q,"op":"add"}`, srcFile)))
-	if err != nil || resp.StatusCode != 200 {
-		t.Fatalf("add post: %v status=%v", err, resp.StatusCode)
+	if err != nil {
+		t.Fatalf("add post: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("status=%v", resp.StatusCode)
 	}
 	if ingestCalls != 1 {
 		t.Fatalf("add should re-ingest once, got %d calls", ingestCalls)
@@ -720,8 +741,11 @@ func TestSessionsEndpoint(t *testing.T) {
 	cl := unixClient(sock)
 
 	resp, err := cl.Get("http://unix/sessions")
-	if err != nil || resp.StatusCode != 200 {
-		t.Fatalf("GET /sessions: %v status=%v", err, resp.StatusCode)
+	if err != nil {
+		t.Fatalf("GET /sessions: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("status=%v", resp.StatusCode)
 	}
 	var all []model.Session
 	decodeInto(t, resp, &all)
@@ -761,8 +785,11 @@ func TestSessionTimelineEndpoint(t *testing.T) {
 
 	cl := unixClient(sock)
 	resp, err := cl.Get("http://unix/sessions/s1/timeline")
-	if err != nil || resp.StatusCode != 200 {
-		t.Fatalf("GET timeline: %v status=%v", err, resp.StatusCode)
+	if err != nil {
+		t.Fatalf("GET timeline: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("status=%v", resp.StatusCode)
 	}
 	var tl []event.Event
 	decodeInto(t, resp, &tl)
