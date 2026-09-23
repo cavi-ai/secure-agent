@@ -42,6 +42,7 @@ All notable changes to `secure-agent` are documented here. The format follows
   per (path, rule) are collapsed.
 
 ### Changed
+- File opens, writes and deletes from processes outside every agent family are not stored unless they raise a flag.
 - Event pruning seeks a `(kind, id)` index: kinds by index skip-scan, each kind's budget cut at its budget-th newest id.
 - Insert-driven pruning runs at most once per 30 s.
 - The event store opens WAL with `synchronous=NORMAL`.

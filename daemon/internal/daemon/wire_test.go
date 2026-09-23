@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -381,6 +382,64 @@ func TestStartDrainLoopPersistsAndCloses(t *testing.T) {
 	incidents := st.RecentIncidents(10)
 	if len(incidents) == 0 {
 		t.Fatal("drain loop must turn the flag into an incident report")
+	}
+}
+
+// File activity from a process outside every agent family is not stored
+// unless it raised a flag; agent file activity and non-file kinds are.
+func TestDrainLoopDropsUnattributedFileEvents(t *testing.T) {
+	dir := t.TempDir()
+	st, err := store.Open(filepath.Join(dir, "t.db"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+
+	cfg, _ := config.Load("/nonexistent")
+	tagger := agents.New(cfg, fakeProcSource{})
+	tagger.Refresh()
+	cr := correlate.New(tagger, sensitive.New(cfg), cfg)
+
+	b := bus.New(64)
+	res := session.NewResolver(st, tagger)
+	done := startDrainLoop(b.Subscribe(), st, cr, fleet.NewPublisher(), res, nil, nil, nil, nil)
+
+	now := time.Now()
+	b.Publish(event.Event{Kind: event.KindFileOpen, TS: now, PID: 500, Path: "/Users/x/project/main.go"})
+	b.Publish(event.Event{Kind: event.KindFileOpen, TS: now, PID: 777, ExePath: "/System/Library/mds", Path: "/Users/x/notes.txt"})
+	b.Publish(event.Event{Kind: event.KindFileWrite, TS: now, PID: 777, ExePath: "/System/Library/mds", Path: "/Users/x/notes.txt"})
+	b.Publish(event.Event{Kind: event.KindFileDelete, TS: now, PID: 777, ExePath: "/System/Library/mds", Path: "/Users/x/notes.txt"})
+	b.Publish(event.Event{Kind: event.KindExec, TS: now, PID: 777, ExePath: "/bin/ls", Path: "/bin/ls"})
+	b.Publish(event.Event{Kind: event.KindFileOpen, TS: now, PID: 778, ExePath: "/Volumes/x/.openclaw/node-v24/bin/node",
+		Path: "/Users/x/Library/Keychains/login.keychain-db"})
+
+	b.Close()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("drain loop did not finish after bus close")
+	}
+
+	got := map[string]bool{}
+	for _, e := range st.RecentEvents(100) {
+		got[fmt.Sprintf("%d/%s/%v", e.PID, e.Kind, e.SessionID != "")] = true
+	}
+	want := map[string]bool{
+		fmt.Sprintf("500/%s/true", event.KindFileOpen):  true,
+		fmt.Sprintf("777/%s/false", event.KindExec):     true,
+		fmt.Sprintf("778/%s/false", event.KindFileOpen): true,
+	}
+	if len(got) != len(want) {
+		t.Fatalf("stored events = %v, want %v", got, want)
+	}
+	for k := range want {
+		if !got[k] {
+			t.Fatalf("stored events = %v, missing %s", got, k)
+		}
+	}
+	flags := st.RecentFlags(10)
+	if len(flags) != 1 || flags[0].Rule != "keychain-access" {
+		t.Fatalf("flags = %+v, want the one keychain-access flag", flags)
 	}
 }
 
