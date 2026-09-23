@@ -65,8 +65,11 @@ func ValidCostGroup(by string) bool {
 	return ok
 }
 
+// costFrom leaves out `<synthetic>` rows: Claude Code's zero-usage internal
+// turns, recorded as model calls before ingest dropped them.
 const costFrom = ` FROM events e LEFT JOIN sessions s ON s.id = e.session_id
-	WHERE e.kind = 14 AND datetime(e.ts) >= datetime(?) AND datetime(e.ts) < datetime(?)`
+	WHERE e.kind = 14 AND COALESCE(e.model,'') != '<synthetic>'
+	AND datetime(e.ts) >= datetime(?) AND datetime(e.ts) < datetime(?)`
 
 // CostReport sums model calls (kind 14) in [since, until) grouped by repo,
 // branch, harness, session or model. An unknown grouping falls back to repo.

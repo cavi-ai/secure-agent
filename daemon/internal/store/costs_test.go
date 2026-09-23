@@ -158,8 +158,14 @@ func TestCostReportProviderAndUnpricedGroups(t *testing.T) {
 		t.Fatalf("stored providers (newest first) = %q", providers)
 	}
 
+	// A <synthetic> row stored before ingest dropped them is not a model call.
+	call("oc", "<synthetic>", "", 0, 4*time.Minute)
+
 	rep := s.CostReport(now.Add(-time.Hour), now, "model")
 	byModel := costRowsByKey(rep.Rows)
+	if _, ok := byModel["<synthetic>"]; ok || rep.Total.Calls != 5 || rep.Total.Unpriced != 4 {
+		t.Fatalf("<synthetic> counted: total %+v rows %+v", rep.Total, rep.Rows)
+	}
 	if r := byModel["k3"]; r.Provider != "kimi-for-coding" || r.Calls != 3 || r.Unpriced != 2 {
 		t.Fatalf("k3 row = %+v, want dominant provider kimi-for-coding, 3 calls, 2 unpriced", r)
 	}
