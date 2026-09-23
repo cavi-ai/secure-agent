@@ -222,6 +222,7 @@ document.addEventListener('DOMContentLoaded', () => {
     status: null,
     resources: null,
     flags: [],       // unfiltered — feeds KPIs
+    patterns: [],    // /snapshot patterns: repeating findings, one card each
     flagsView: [],   // filtered — feeds the flags panel
     incidents: [],
     events: [],       // unfiltered — feeds KPIs
@@ -828,6 +829,7 @@ document.addEventListener('DOMContentLoaded', () => {
         telemetryData.status = status;
       }
       if (snap.flags) telemetryData.flags = (snap.flags || []).filter(f => !f.acknowledged);
+      if (snap.patterns) telemetryData.patterns = snap.patterns || [];
       if (snap.incidents) telemetryData.incidents = snap.incidents || [];
       if (snap.events) telemetryData.events = snap.events || [];
       if (snap.posture) telemetryData.posture = snap.posture;
@@ -1926,6 +1928,88 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   };
 
+  // A pattern card's served action (Attention, Flags), found by pattern key +
+  // action id (+ host). Before the request (reverted if it fails) the card's
+  // open count drops by the submitted flag ids — all of them for a mute —
+  // and reads 0 open with its buttons disabled once none is left; those
+  // flags leave the lists; the next snapshot reconciles the pattern.
+  function stagePatternDone(key, submitted) {
+    return stage(['patterns', 'flags', 'flagsView'], ['flags', 'attention', 'chart-flags', 'status', 'tab-badges'], () => {
+      const p = (telemetryData.patterns || []).find(x => x.key === key);
+      const ids = new Set(submitted || (p && p.flag_ids) || []);
+      telemetryData.patterns = (telemetryData.patterns || []).map(x => x.key !== key ? x
+        : patternAfterDismiss(x, submitted ? submitted.length : x.unacked));
+      telemetryData.flags = (telemetryData.flags || []).filter(f => !ids.has(f.id));
+      telemetryData.flagsView = (telemetryData.flagsView || []).filter(f => !ids.has(f.id));
+    });
+  }
+  window.patternAct = async function(key, actionId, host) {
+    const p = (telemetryData.patterns || []).find(x => x.key === key);
+    const a = p && !p.dismissed && (p.actions || []).find(x => x.id === actionId
+      && (!host || (x.body && x.body.host) === host));
+    if (!a) {
+      showToast('That action is no longer offered for this pattern — the list is refreshing.', 'info');
+      fetchTelemetry();
+      return;
+    }
+    const body = a.body || {};
+    const send = async (method, path, payload) => {
+      const res = await apiFetch(path, {
+        method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+      });
+      if (!res.ok) throw new Error(await res.text());
+    };
+    const dismiss = (p.actions || []).find(x => x.id === 'dismiss-all');
+    const openIds = (dismiss && dismiss.body && dismiss.body.flag_ids) || [];
+    switch (a.id) {
+      case 'kill':
+        return window.killProcess(Number(body.pid), body.started_at, p.agent);
+      case 'mute-rule-host':
+      case 'mute-class':
+        if (await window.muteFlag(body.rule, body.host)) stagePatternDone(key);
+        return;
+      case 'dismiss-all': {
+        const revert = stagePatternDone(key, openIds);
+        try {
+          await send(a.method, a.path, body);
+        } catch (err) {
+          revert();
+          showToast(`Failed to dismiss the pattern: ${err.message || err}`, 'danger');
+          return;
+        }
+        showToast(`Dismissed ${openIds.length} flag${openIds.length === 1 ? '' : 's'} — the rule keeps watching`, 'info');
+        cardNote(`[data-pattern-key="${cssq(key)}"] .pattern-open`, '.pattern-card', 'flags-list', 'dismissed');
+        fetchTelemetry();
+        return;
+      }
+      case 'allow-host': {
+        const revertAllow = stageAllow(body.agent, [body.host]);
+        const revert = stagePatternDone(key, openIds);
+        try {
+          await send(a.method, a.path, body);
+        } catch (err) {
+          revert();
+          revertAllow();
+          showToast(`Failed to allowlist ${body.host}: ${err.message || err}`, 'danger');
+          return;
+        }
+        if (openIds.length) {
+          try {
+            await send('POST', '/flags/acknowledge', { flag_ids: openIds });
+          } catch (err) {
+            revert();
+            showToast(`Allowlisted ${body.host}, but its flags were not marked reviewed: ${err.message || err}`, 'danger');
+            fetchTelemetry();
+            return;
+          }
+        }
+        showToast(`Allowlisted ${body.host} for ${body.agent}`, 'success');
+        fetchTelemetry();
+        return;
+      }
+    }
+  };
+
   window.unmuteFlag = async function(rule, host) {
     const revert = stage(['mutes'], ['flags'], () => {
       telemetryData.mutes = (telemetryData.mutes || []).filter(m => !(m.rule === rule && m.host === host));
@@ -2167,6 +2251,7 @@ document.addEventListener('DOMContentLoaded', () => {
         expandedLists.add(d.key || '');
         if (d.key === 'events') renderNow(['events']);
         else if (String(d.key).startsWith('agents:')) renderNow(['agents']);
+        else if (String(d.key).startsWith('pattern:')) renderNow(['attention', 'flags']);
         else fillFamilyDrawer();
         break;
       case 'resource-control':
@@ -2253,7 +2338,8 @@ document.addEventListener('DOMContentLoaded', () => {
         window.dismissFlag(d.id);
         break;
       case 'explain-act':
-        window.explainAct(d.flagId, d.actionId, d.host);
+        if (d.patternKey) window.patternAct(d.patternKey, d.actionId, d.host);
+        else window.explainAct(d.flagId, d.actionId, d.host);
         break;
       case 'retriage':
         window.retriageFlag(d.id);
@@ -2503,9 +2589,15 @@ document.addEventListener('DOMContentLoaded', () => {
       } catch { sparkBump(1, 0); /* unparseable frame still counts */ }
       markDirty('events');
     });
+    // Patterns and posture come only from /snapshot: a flag frame schedules
+    // one reconcile 2 s after the last frame of a burst, so a storm folds
+    // into its pattern card instead of standing as rows until the poll.
+    let flagReconcile = 0;
     es.addEventListener('flag', (msg) => {
       try { telemetryData.flags = upsertById(telemetryData.flags, JSON.parse(msg.data)); } catch { /* next reconcile repairs */ }
       markDirty('flags', 'attention', 'chart-flags', 'status', 'tab-badges');
+      clearTimeout(flagReconcile);
+      flagReconcile = setTimeout(() => fetchTelemetry({ slow: false }), 2000);
     });
     es.addEventListener('incident', (msg) => {
       // Delta incidents are the bare report (no workflow join); the 30s

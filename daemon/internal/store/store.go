@@ -811,6 +811,46 @@ func (s *Store) AcknowledgeFlag(id string) bool {
 	return n > 0
 }
 
+// AcknowledgeFlags marks every id acted-upon in one transaction and returns
+// how many rows it touched (a re-ack counts; an unknown id does not). Any
+// error rolls the batch back and returns 0.
+func (s *Store) AcknowledgeFlags(ids []string) int {
+	if len(ids) == 0 {
+		return 0
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tx, err := s.db.Begin()
+	if err != nil {
+		log.Printf("store: acknowledge flags begin: %v", err)
+		return 0
+	}
+	stmt, err := tx.Prepare(`UPDATE flags SET acknowledged = ? WHERE id = ?`)
+	if err != nil {
+		_ = tx.Rollback()
+		log.Printf("store: acknowledge flags prepare: %v", err)
+		return 0
+	}
+	defer stmt.Close()
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	n := 0
+	for _, id := range ids {
+		res, err := stmt.Exec(now, id)
+		if err != nil {
+			_ = tx.Rollback()
+			log.Printf("store: acknowledge flags error: %v", err)
+			return 0
+		}
+		k, _ := res.RowsAffected()
+		n += int(k)
+	}
+	if err := tx.Commit(); err != nil {
+		log.Printf("store: acknowledge flags commit: %v", err)
+		return 0
+	}
+	return n
+}
+
 func (s *Store) GetFlag(id string) (model.Flag, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -864,7 +904,7 @@ func (s *Store) QueryFlags(f FlagFilter) []model.Flag {
 	// stamps sort wrong lexicographically across a DST change, which with LIMIT
 	// can drop the truly-newest rows.
 	q += " ORDER BY datetime(ts) DESC, ts DESC LIMIT ?"
-	args = append(args, normalizeLimit(f.Limit))
+	args = append(args, flagLimit(f.Limit))
 
 	rows, err := s.db.Query(q, args...)
 	if err != nil {
@@ -1139,6 +1179,20 @@ func (s *Store) QueryEvents(f EventFilter) []event.Event {
 		log.Printf("store: events cursor error (result may be truncated): %v", err)
 	}
 	return events
+}
+
+// maxFlagQuery bounds QueryFlags above normalizeLimit's 1000 so a pattern
+// window reads a whole flag storm in one query.
+const maxFlagQuery = 5000
+
+func flagLimit(limit int) int {
+	if limit > maxFlagQuery {
+		return maxFlagQuery
+	}
+	if limit > 1000 {
+		return limit
+	}
+	return normalizeLimit(limit)
 }
 
 func normalizeLimit(limit int) int {

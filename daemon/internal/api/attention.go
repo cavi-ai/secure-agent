@@ -17,10 +17,10 @@ import (
 // the Attention tab count the same set.
 
 // AttentionItem priorities (higher first): guard 5, resource 4, incident 3
-// (1 for an aging incident below high risk), flag 2 (1 when the flag is
-// likely benign or severity 2), machine 2 (1 below severity 2), egress 1.
+// (1 for an aging incident below high risk), flag and pattern 2 (1 when
+// likely benign or below critical), machine 2 (1 below severity 2), egress 1.
 type AttentionItem struct {
-	Kind      string                `json:"kind"` // resource | guard | incident | flag | egress | collector_down | collector_silent | harness_uncovered | guard_hook_unregistered
+	Kind      string                `json:"kind"` // resource | guard | incident | flag | pattern | egress | collector_down | collector_silent | harness_uncovered | guard_hook_unregistered
 	Priority  int                   `json:"priority"`
 	ID        string                `json:"id,omitempty"`
 	Action    string                `json:"action,omitempty"`
@@ -33,8 +33,8 @@ type AttentionItem struct {
 	Count     int                   `json:"count,omitempty"`
 	Hosts     []string              `json:"hosts,omitempty"`
 	Advisor   *model.AdvisorVerdict `json:"advisor,omitempty"`
-	// Disposition is set on flag items: the same verdict /flags/{id}/explain
-	// serves.
+	// Disposition is set on flag items (the same verdict /flags/{id}/explain
+	// serves) and pattern items (the worst open flag's).
 	Disposition *model.Disposition `json:"disposition,omitempty"`
 }
 
@@ -228,8 +228,40 @@ func (a *API) attentionQueue(st Status) ([]PostureItem, []AttentionGroup) {
 	// Flags — the security signal. Unacted only: a flag the operator already
 	// reviewed/dismissed must not keep demanding attention. Headline severity
 	// follows the disposition: an advisor-confirmed benign flag is a queue
-	// item, not a "critical — act now".
+	// item, not a "critical — act now". Flags a pattern covers are ONE
+	// pattern item (headline and group), in the group of its newest flag.
+	patterns := a.computePatterns(time.Now().Add(-24*time.Hour), patternDefaultMin)
+	patternOf := map[string]int{}
+	for i, p := range patterns {
+		for _, id := range p.FlagIDs {
+			patternOf[id] = i
+		}
+	}
+	patternAdded := map[int]bool{}
 	for _, f := range a.attentionFlags() {
+		if i, ok := patternOf[f.ID]; ok {
+			if !patternAdded[i] {
+				patternAdded[i] = true
+				p := patterns[i]
+				d := p.Disposition
+				priority := 1
+				if d.State == model.DispositionCritical {
+					priority = 2
+				}
+				add(groupFor(f.Agent, f.PID), PostureItem{
+					Kind: "pattern", ID: p.Key,
+					Title:     fmt.Sprintf("%s — %d×", p.Title, p.Count),
+					Severity:  dispositionSeverity(d),
+					Detail:    p.Summary,
+					Timestamp: p.Last.UTC().Format(time.RFC3339),
+				}, AttentionItem{
+					Kind: "pattern", Priority: priority, ID: p.Key,
+					Count: p.Count, Title: p.Title, Detail: p.Summary,
+					Disposition: &d, Rule: p.Rule,
+				})
+			}
+			continue
+		}
 		d := dispositionFor(f)
 		detail := f.Rule
 		if len(f.Evidence) > 0 {

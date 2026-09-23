@@ -7,6 +7,11 @@ All notable changes to `secure-agent` are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- `GET /patterns`: repeating flags grouped by agent, rule and subject, with cadence, pids, sessions, disposition, summary and actions.
+- `/snapshot` `patterns`.
+- `/posture` `pattern` items in place of the flag items a pattern covers.
+- `POST /flags/acknowledge` accepts `flag_ids` (up to 500) in one transaction.
+- Console pattern card on Attention and Flags: count, window, summary, 24-bar cadence strip, open count, served actions, individual flags.
 - Console tab bar stays at the top while the page scrolls.
 - Console tab bar shows a posture pill once stuck.
 - Console posture pill scrolls the page back to the top.
@@ -56,6 +61,9 @@ All notable changes to `secure-agent` are documented here. The format follows
 
 ### Changed
 - Events carry a `(session_id, kind, id)` index; the event store writes planner statistics (`PRAGMA optimize`, `analysis_limit` 1000) at open and after each prune.
+- Untagged keychain flags name the agent the match strings give the exe.
+- Untagged keychain flags with a version-number exe name carry the directory that names it (`untagged:claude 2.1.280`).
+- Console Flags list hides flags a pattern covers.
 - `/posture` `items` and `groups` come from one pass.
 - `/posture` puts every item in exactly one group.
 - `/posture` group items sum to `needs_you`.

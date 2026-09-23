@@ -737,6 +737,40 @@ body {
   color: var(--tx-1); text-transform: none; letter-spacing: 0; font-weight: 600; overflow-wrap: anywhere;
 }
 
+/* pattern card: a repeating finding as one card — count and window, served
+   summary, a 24-bar cadence strip (heights h0..h8 of the busiest bucket),
+   disposition, served actions; the covered flags behind Details. */
+.pattern-meta { margin-left: auto; font: 500 0.72rem/1.3 var(--mono); color: var(--tx-2); white-space: nowrap; }
+.pattern-summary { margin: 0; font-size: 0.84rem; line-height: 1.45; color: var(--tx-1); overflow-wrap: anywhere; }
+.pattern-cadence { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 6px 12px; min-width: 0; }
+.pattern-bars {
+  display: grid; grid-template-columns: repeat(24, minmax(2px, 6px)); grid-template-rows: 100%; align-items: end; gap: 2px;
+  height: 28px; padding-bottom: 1px; border-bottom: 1px solid var(--line);
+}
+.pattern-bars i { display: block; height: 0; border-radius: 1px 1px 0 0; background: var(--warn); }
+.pattern-card.disp-critical .pattern-bars i { background: var(--bad); }
+.pattern-card.disp-benign .pattern-bars i { background: var(--ok); }
+.pattern-card.disp-acknowledged .pattern-bars i { background: var(--line-2); }
+.pattern-bars i.h1 { height: 12.5%; }
+.pattern-bars i.h2 { height: 25%; }
+.pattern-bars i.h3 { height: 37.5%; }
+.pattern-bars i.h4 { height: 50%; }
+.pattern-bars i.h5 { height: 62.5%; }
+.pattern-bars i.h6 { height: 75%; }
+.pattern-bars i.h7 { height: 87.5%; }
+.pattern-bars i.h8 { height: 100%; }
+.pattern-cadence-text { font-size: 0.76rem; color: var(--tx-2); overflow-wrap: anywhere; }
+.pattern-open { font-weight: 650; color: var(--tx-1); }
+.pattern-card.disp-acknowledged .pattern-summary, .pattern-card.disp-acknowledged .pattern-open { color: var(--tx-3); }
+.pattern-flag-list { margin: 8px 0 0; padding: 0; list-style: none; display: grid; gap: 3px; }
+.pattern-flag-list li {
+  display: flex; flex-wrap: wrap; gap: 2px 10px; min-width: 0;
+  font: 500 0.72rem/1.4 var(--mono); color: var(--tx-2);
+}
+.pattern-flag-list code { color: var(--tx-3); overflow-wrap: anywhere; }
+.pattern-flags-note { margin: 6px 0 0; font-size: 0.74rem; color: var(--tx-3); }
+.attention-items > .pattern-card { margin: 8px 0; }
+
 /* dispositions (muted rule+host pairs) */
 .mute-list { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 10px; display: flex; flex-direction: column; gap: 4px; }
 .mute-head { font: 600 0.64rem/1 var(--font); letter-spacing: 0.06em; text-transform: uppercase; color: var(--tx-3); }

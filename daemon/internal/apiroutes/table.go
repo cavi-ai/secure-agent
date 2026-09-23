@@ -70,6 +70,7 @@ var Table = []Route{
 	{Path: "/advisor/retriage", Console: true, MutatingMethods: []string{"POST"}},
 	{Path: "/advisor/assess-host", Console: true},
 	{Path: "/flags/acknowledge", Console: true, MutatingMethods: []string{"POST"}},
+	{Path: "/patterns", Console: true},
 	{Path: "/ui/open-fda", Console: true, MutatingMethods: []string{"POST"}},
 	{Path: "/stats/rollup", Console: true},
 	{Path: "/costs", Console: true},
