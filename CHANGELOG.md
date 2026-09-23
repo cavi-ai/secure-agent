@@ -7,6 +7,10 @@ All notable changes to `secure-agent` are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- `POST /worktrees/advise`: queues a worktree for a local-advisor note (`remove`, `review` or `keep` with a rationale); branch names, paths and commit subjects go to the model inside `<evidence>`.
+- `GET /worktrees` `advice`: the stored note per worktree path at its current HEAD; notes never change the state or what `POST /worktrees/remove` accepts.
+- `secure-agent worktrees advise <path>`; the list view prints the note under its row.
+- Console Worktrees tab: Ask advisor on review and keep rows; the note shows under the row.
 - Operator labels: allow, mute, path allow and guard answers record ok or not ok for the case (rule, agent, path or host); `POST /labels` takes Mark as routine / Mark as not ok and kills from a finding.
 - Flag explanations count the operator's labels on the same case; `/advisor/plan` shows the 5 most similar and, after 3 consistent labels, suggests the offered allow (or kill); triage and plan prompts carry the similar labels.
 - Console: Mark as routine / not ok on finding cards and in the What to do drawer, with your history and the suggestion.
@@ -29,6 +33,13 @@ All notable changes to `secure-agent` are documented here. The format follows
 - `POST /worktrees/repos` adds or hides a repository on the saved list.
 - `secure-agent worktrees [--state] [--repo] [--stale] [--refresh] [--json]` and `secure-agent worktrees add|hide <path>`.
 - `worktrees.roots` and `worktrees.stale_days` settings, applied live.
+- `POST /worktrees/remove`: removes a worktree only when a fresh inspection says `remove` (`git worktree remove`, never `--force`; the branch stays), or prunes missing ones; 409 carries the fresh verdict.
+- `secure-agent worktrees remove <path>` and `secure-agent worktrees prune <repo>`.
+- `worktree-remove` and `worktree-prune` audit rows.
+- A missing worktree that is locked reads `keep` (git does not prune it).
+- A worktree active in the last 24 hours is never `remove`.
+- `secure-agent worktrees` explains a 403: while the menu bar app runs, changes go through its console.
+- Console Worktrees tab: rows grouped by repository with state, stale, idle days, branch, path and reasons; state and stale filters; Remove, Prune, Hide repo, Add repository and Rescan.
 - `GET /patterns`: repeating flags grouped by agent, rule and subject, with cadence, pids, sessions, disposition, summary and actions.
 - `/snapshot` `patterns`.
 - `/posture` `pattern` items in place of the flag items a pattern covers.

@@ -40,6 +40,7 @@
       <symbol id="i-close" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></symbol>
       <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></symbol>
       <symbol id="i-history" viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 1 2.3 5.6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M3.5 19v-4.5H8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M12 8v4.5l3 1.8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="i-branch" viewBox="0 0 24 24"><circle cx="7" cy="5.5" r="2.2" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="7" cy="18.5" r="2.2" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="17" cy="8" r="2.2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M7 7.7v8.6M17 10.2c0 4-4 4.3-9.3 6.4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
       <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6 9.5a6 6 0 1 1 12 0c0 4.5 2 6 2 6H4s2-1.5 2-6z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M10 19a2.2 2.2 0 0 0 4 0" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
     </defs>
   </svg>
@@ -204,6 +205,9 @@
       <button class="tab-btn" data-tab="history" role="tab" aria-selected="false" aria-controls="tab-history">
         <svg class="icon"><use href="#i-history"/></svg><span>History</span>
       </button>
+      <button class="tab-btn" data-tab="worktrees" role="tab" aria-selected="false" aria-controls="tab-worktrees">
+        <svg class="icon"><use href="#i-branch"/></svg><span>Worktrees</span>
+      </button>
       <button class="tab-btn" data-tab="events" role="tab" aria-selected="false" aria-controls="tab-events">
         <svg class="icon"><use href="#i-activity"/></svg><span>Events</span>
       </button>
@@ -298,6 +302,27 @@
            Resources so the live view stays about "now" and the dense
            post-mortem review lives where it belongs — this is the panel that
            opened a full episode inline and made the Resources tab unreadable. -->
+      <div class="tabpanel" id="tab-worktrees" role="tabpanel" hidden>
+        <section class="panel">
+          <div class="panel-head">
+            <h2><svg class="icon"><use href="#i-branch"/></svg>Worktrees</h2>
+            <button type="button" class="btn btn-sm" data-action="worktrees-rescan"><svg class="icon"><use href="#i-refresh"/></svg>Rescan</button>
+          </div>
+          <div class="harness-filter">
+            <div class="harness-pills" id="worktree-pills"></div>
+            <form class="wt-add" id="worktree-add-form">
+              <input type="text" id="worktree-add-input" class="input harness-filter-text" placeholder="Add a repository: /path/to/repo" aria-label="Repository path to add" autocomplete="off" spellcheck="false">
+              <button type="submit" class="btn btn-sm">Add</button>
+            </form>
+          </div>
+          <p class="wt-summary" id="worktrees-summary"></p>
+          <ul class="wt-errors" id="worktrees-errors" hidden></ul>
+          <div class="panel-body" id="worktrees-container">
+            <div class="loading">Scanning worktrees…</div>
+          </div>
+        </section>
+      </div>
+
       <div class="tabpanel" id="tab-history" role="tabpanel" hidden>
         <section class="panel resource-panel">
           <div class="panel-head">
@@ -560,6 +585,7 @@
   <script src="tab-agents.js"></script>
   <script src="tab-egress.js"></script>
   <script src="tab-findings.js"></script>
+  <script src="tab-worktrees.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

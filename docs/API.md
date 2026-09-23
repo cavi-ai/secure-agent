@@ -688,11 +688,11 @@ The scan runs `git` read-only: `GIT_OPTIONAL_LOCKS=0` (no index refresh), `core.
 |---|---|
 | `main` | the repository's main worktree |
 | `prune` | the directory is gone; git still lists it |
-| `keep` | locked, conflicts, uncommitted changes, untracked files, detached-HEAD commits no ref keeps, or a live agent session under the path; also a branch that is neither merged nor idle past `stale_days` |
+| `keep` | locked, conflicts, uncommitted changes, untracked files, detached-HEAD commits no ref keeps, or a live agent session under the path; a branch that is neither merged nor idle past `stale_days`; anything otherwise removable that was active in the last 24 hours |
 | `review` | nothing git-tracked is lost, but something only lives here: precious ignored files (`.env*`, `*.pem`, `*.key`, `.tmp/`, `.claude/`, `.remember/`, with file count and size), commits on no remote and not in the default branch, stashes on the branch, an orphan directory, or an inspection error |
-| `remove` | none of the above, and merged into the default branch (ancestor, squash, or no net change) or every commit on a remote and idle past `stale_days` |
+| `remove` | none of the above, no activity in the last 24 hours, and contained in the default branch (ancestor, squash, or no net change) or every commit on a remote and idle past `stale_days` |
 
-Merge detection is local. The default branch is `origin/HEAD`'s target, else the first of `origin/main`, `origin/master`, `main`, `master`. `merged` is `ancestor` (HEAD reachable from it), `squash` (the branch's zero-context diff from the merge-base has the patch id of one of the newest 1,000 non-merge commits on it), `empty` (no net change), `no`, or `unknown` (no merge-base, or more than 1,000 commits behind). `stale` is `true` when idle past `stale_days`, merged, or the upstream branch is gone. Last activity is the newest of HEAD's commit time, the worktree index's mtime and the newest session seen under the path.
+Merge detection is local. The default branch is `origin/HEAD`'s target, else the first of `origin/main`, `origin/master`, `main`, `master`. `merged` is `ancestor` (HEAD reachable from it), `squash` (the branch's zero-context diff from the merge-base has the patch id of one of the newest 1,000 non-merge commits on it), `empty` (no net change), `no`, or `unknown` (no merge-base, or more than 1,000 commits behind). `stale` is `true` when idle past `stale_days`, or merged or its upstream branch gone with no activity in the last 24 hours. Last activity is the newest of HEAD's commit time, the worktree index's mtime and the newest session seen under the path.
 
 ```json
 {
@@ -727,6 +727,37 @@ Adds the repository containing `path` to the saved list (source `manual`, unhidi
 ```
 
 `200 {"status":"ok","path":"<main worktree>"}`; `400` for a relative path; `404` when `path` is not inside a git repository, or a hidden repo is not on the list. Mutation (pinned UI or owner). CLI: `secure-agent worktrees add|hide <path>`.
+
+#### `POST /worktrees/remove`
+
+Removes one worktree, or prunes a repository's entries for worktrees whose directory is gone.
+
+```json
+{"path": "/Users/me/code/app/.worktrees/done"}
+{"repo": "/Users/me/code/app", "prune": true}
+```
+
+Remove inspects the worktree again at request time and runs `git worktree remove` (never `--force`) only when that fresh verdict is `remove`; git still refuses a tree that turned dirty in between. The branch and its commits stay. Prune runs `git worktree prune` when the repository lists at least one unlocked worktree whose directory is gone. Both write an audit row (`worktree-remove`, `worktree-prune`) and drop the cached scan.
+
+| Status | Body |
+|---|---|
+| `200` | `{"status":"ok","removed":"<path>","branch":"<branch>","reasons":[...]}` or `{"status":"ok","pruned":["<path>", ...]}` |
+| `400` | missing or relative `path` / `repo` |
+| `404` | `path` is not a linked worktree git lists (the main worktree included), or `repo` is not inside a git repository |
+| `409` | remove: `{"error":"not removable","state":"<state>","reasons":[...]}` from the fresh verdict; prune: nothing to prune |
+| `500` | git failed |
+
+Mutation (pinned UI or owner): while the menu bar app runs, the CLI gets `403` and changes go through the console. CLI: `secure-agent worktrees remove <path>`, `secure-agent worktrees prune <repo>`.
+
+#### `POST /worktrees/advise`
+
+Queues one worktree for a note from the local advisor (see [ADVISOR_THREAT_MODEL.md](ADVISOR_THREAT_MODEL.md)).
+
+```json
+{"path": "/Users/me/code/app/.worktrees/ui"}
+```
+
+`200 {"status":"ok","queued":true,"subject":"worktree:<path>@<head>"}`; `queued` is `false` when the advisor is off or its queue is full. `400` for a missing or relative path, `404` for a path that is not a linked worktree, `409` for a worktree whose directory is gone, `503` when advice is not wired. The model answers `{"recommendation":"remove|review|keep","confidence":0-1,"rationale":"..."}`; anything else is dropped. `GET /worktrees` returns stored notes in `advice`, keyed by worktree path, for notes taken at the row's current HEAD: `{"<path>": {"assessment": "review", "confidence": 0.6, "rationale": "...", "model": "...", "created_at": "..."}}`. A note never changes `state` or what `POST /worktrees/remove` accepts. Mutation (pinned UI or owner). CLI: `secure-agent worktrees advise <path>`; the list view prints the note under its row. Console: the Worktrees tab lists the report with a Remove button on `remove` rows and Prune on `prune` rows.
 
 ## 🔐 Peer authentication & endpoint roles
 

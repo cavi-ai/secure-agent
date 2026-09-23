@@ -83,6 +83,8 @@ var Table = []Route{
 	{Path: "/doctor", Console: true},
 	{Path: "/worktrees", Console: true},
 	{Path: "/worktrees/repos", Console: true, MutatingMethods: []string{"POST"}},
+	{Path: "/worktrees/remove", Console: true, MutatingMethods: []string{"POST"}},
+	{Path: "/worktrees/advise", Console: true, MutatingMethods: []string{"POST"}},
 	{Path: "/advisor/discover"},
 	{Path: "/fleet", Console: true},
 	{Path: "/kill", Console: true, MutatingMethods: []string{"POST"}},

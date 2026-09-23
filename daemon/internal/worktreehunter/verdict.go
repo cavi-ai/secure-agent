@@ -58,6 +58,11 @@ type Worktree struct {
 	Error string `json:"error,omitempty"`
 }
 
+// activeGrace keeps a worktree touched in the last day off the remove list:
+// a fresh worktree an agent is about to use has no commits of its own and
+// reads as merged, and its session may be recorded at the repo root.
+const activeGrace = 24 * time.Hour
+
 // facts carries the inputs classify reads beyond the row itself.
 type facts struct {
 	Main          bool
@@ -75,7 +80,8 @@ type facts struct {
 // directory. Branches, stashes and every commit a ref reaches survive it.
 // keep  = uncommitted or unreachable work, a lock, or a live agent session.
 // review = nothing git-tracked is lost, but something only lives here.
-// remove = merged, or pushed and idle past staleAfter.
+// remove = merged, or pushed and idle past staleAfter; either way untouched
+// for activeGrace.
 func classify(w *Worktree, f facts, now time.Time, staleAfter time.Duration) {
 	last := latest(f.HeadTime, f.IndexTime, f.LastSession)
 	if !last.IsZero() {
@@ -84,13 +90,19 @@ func classify(w *Worktree, f facts, now time.Time, staleAfter time.Duration) {
 	}
 	merged := w.Merged == mergedAncestor || w.Merged == mergedSquash || w.Merged == mergedEmpty
 	idle := !last.IsZero() && now.Sub(last) > staleAfter
-	w.Stale = idle || merged || w.UpstreamGone
+	recent := !last.IsZero() && now.Sub(last) < activeGrace
+	w.Stale = idle || ((merged || w.UpstreamGone) && !recent)
 	w.Reasons = []string{}
 
 	switch {
 	case f.Main:
 		w.State = StateMain
 		w.Reasons = append(w.Reasons, "main worktree of the repository")
+		return
+	case f.Missing && w.Locked:
+		// git worktree prune skips locked entries.
+		w.State = StateKeep
+		w.Reasons = append(w.Reasons, lockedReason(w), "directory is gone; unlock it to prune")
 		return
 	case f.Missing:
 		w.State = StatePrune
@@ -100,11 +112,7 @@ func classify(w *Worktree, f facts, now time.Time, staleAfter time.Duration) {
 
 	var keep, review []string
 	if w.Locked {
-		if w.LockReason != "" {
-			keep = append(keep, "locked: "+w.LockReason)
-		} else {
-			keep = append(keep, "locked")
-		}
+		keep = append(keep, lockedReason(w))
 	}
 	if w.Conflicts > 0 {
 		keep = append(keep, plural(w.Conflicts, "unresolved conflict", "unresolved conflicts"))
@@ -146,6 +154,9 @@ func classify(w *Worktree, f facts, now time.Time, staleAfter time.Duration) {
 	case len(review) > 0:
 		w.State = StateReview
 		w.Reasons = review
+	case merged && recent:
+		w.State = StateKeep
+		w.Reasons = append(w.Reasons, mergedReason(w.Merged, f.DefaultBranch)+"; active in the last 24 hours")
 	case merged:
 		w.State = StateRemove
 		w.Reasons = append(w.Reasons, mergedReason(w.Merged, f.DefaultBranch))
@@ -162,6 +173,13 @@ func classify(w *Worktree, f facts, now time.Time, staleAfter time.Duration) {
 	}
 }
 
+func lockedReason(w *Worktree) string {
+	if w.LockReason != "" {
+		return "locked: " + w.LockReason
+	}
+	return "locked"
+}
+
 func mergedReason(how, def string) string {
 	switch how {
 	case mergedSquash:
@@ -169,7 +187,9 @@ func mergedReason(how, def string) string {
 	case mergedEmpty:
 		return "changes nothing against " + orDefault(def)
 	default:
-		return "merged into " + orDefault(def)
+		// Ancestry covers a merged branch and a fresh one with no commits
+		// of its own alike.
+		return "contained in " + orDefault(def)
 	}
 }
 
