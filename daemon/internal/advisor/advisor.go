@@ -52,6 +52,8 @@ type Sink interface {
 	// CriticalFlagsMissingAdvisor feeds the startup backfill: flags that
 	// fired while the advisor was off and have no verdict yet.
 	CriticalFlagsMissingAdvisor(since time.Time, limit int) []model.Flag
+	// PutAdvisorPlan stores a plan keyed by its subject.
+	PutAdvisorPlan(subject string, p model.AdvisorPlan)
 }
 
 // IsLoopbackEndpoint reports whether the endpoint URL targets this machine.
@@ -103,13 +105,14 @@ type chatResponse struct {
 }
 
 type task struct {
-	kind      string // "flag" | "incident" | "host" | "guard"
+	kind      string // "flag" | "incident" | "host" | "guard" | "plan"
 	subjectID string
 	flag      model.Flag
 	incident  model.IncidentReport
 	host      string
 	agentName string
 	guard     model.GuardAssessmentRequest
+	plan      PlanRequest
 }
 
 // Subscriber consumes flags/incidents and produces advisor verdicts.
@@ -129,6 +132,10 @@ type Subscriber struct {
 	// in-flight set drops duplicate requests while the model is already
 	// working on that flag. Everything is keyed by flag ID.
 	retriageLast map[string]time.Time
+
+	// planInflight: subjects whose plan is queued or being written, with
+	// the time they were queued (planPendingTTL bounds it).
+	planInflight map[string]time.Time
 }
 
 const (
@@ -195,6 +202,7 @@ func New(cfg Config, sink Sink) *Subscriber {
 		queue:        make(chan task, cfg.QueueSize),
 		client:       &http.Client{Timeout: cfg.Timeout},
 		retriageLast: map[string]time.Time{},
+		planInflight: map[string]time.Time{},
 	}
 }
 
@@ -358,7 +366,26 @@ func (s *Subscriber) Run(ctx context.Context) error {
 }
 
 func (s *Subscriber) process(ctx context.Context, t task) {
+	if t.kind == "plan" {
+		defer s.clearPlan(t.subjectID)
+	}
 	if s.circuitIsOpen() {
+		return
+	}
+	if t.kind == "plan" {
+		p, err := s.writePlan(ctx, t.plan)
+		if err != nil {
+			s.recordFailure(err)
+			return
+		}
+		s.mu.Lock()
+		s.failures = 0
+		s.lastErr = ""
+		s.mu.Unlock()
+		p.Model = s.cfg.Model
+		p.CreatedAt = time.Now().UTC()
+		p.EvidenceKey = t.plan.EvidenceKey
+		s.sink.PutAdvisorPlan(t.subjectID, p)
 		return
 	}
 	var (

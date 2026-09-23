@@ -58,6 +58,7 @@ type memSink struct {
 	rows     map[string]model.AdvisorVerdict
 	trend    model.TrendContext
 	backfill []model.Flag
+	plans    map[string]model.AdvisorPlan
 }
 
 func (m *memSink) PutAdvisorVerdict(subjectID, kind string, v model.AdvisorVerdict) {
