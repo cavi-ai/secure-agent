@@ -64,3 +64,21 @@ func TestCostsRowsEmitEmptyArrayNeverNull(t *testing.T) {
 		t.Fatalf("/costs: body = %q — rows must be [] (never null)", body)
 	}
 }
+
+// /doctor carries its checks in a field; on an empty store it must still be an
+// array, never null.
+func TestDoctorChecksEmitArrayNeverNull(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	st := testStore(t)
+	t.Cleanup(func() { st.Close() })
+	a := newTestAPI("", st, &fakeKiller{}, func() Status { return Status{Running: true} })
+	rec := httptest.NewRecorder()
+	a.buildMux().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/doctor", nil))
+	body := strings.TrimSpace(rec.Body.String())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("/doctor: status %d (body %q)", rec.Code, body)
+	}
+	if !strings.Contains(body, `"checks":[`) || strings.Contains(body, `"checks":null`) {
+		t.Fatalf("/doctor: body = %q — checks must be an array (never null)", body)
+	}
+}
