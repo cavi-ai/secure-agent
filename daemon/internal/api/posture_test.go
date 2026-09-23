@@ -297,7 +297,7 @@ func TestESServiceItemsNamesRegrantAfterHelperReplaced(t *testing.T) {
 // supersedes the ordinary not-writing/crash-loop items: the operator needs
 // to see "flooding", not a generic silence report.
 func TestESServiceItemsFlooding(t *testing.T) {
-	flooding := esServiceItems(collect.ESServiceSnapshot{State: "running", Flooding: true})
+	flooding := esServiceItems(collect.ESServiceSnapshot{State: "running", SpoolMtime: time.Now(), Flooding: true})
 	if len(flooding) != 1 || flooding[0].Title != "File monitoring writer is flooding" {
 		t.Fatalf("Flooding=true: items = %+v, want one flooding item", flooding)
 	}
@@ -308,6 +308,20 @@ func TestESServiceItemsFlooding(t *testing.T) {
 	ok := esServiceItems(collect.ESServiceSnapshot{State: "running", SpoolMtime: time.Now(), UnparsedShare: 0.1})
 	if len(ok) != 0 {
 		t.Fatalf("UnparsedShare=0.1: items = %+v, want none", ok)
+	}
+}
+
+// Garbage left in a spool nobody writes is not a flood: once the writer
+// stops, the verdict yields to the service's real state.
+func TestESServiceItemsStaleFloodYieldsToServiceState(t *testing.T) {
+	idle := time.Now().Add(-10 * time.Minute)
+	off := esServiceItems(collect.ESServiceSnapshot{State: "not-loaded", SpoolMtime: idle, Flooding: true, UnparsedShare: 0.99})
+	if len(off) != 1 || off[0].Title != "File monitoring is off" || !strings.Contains(off[0].Detail, "Full Disk Access") {
+		t.Fatalf("not-loaded after a flood: items = %+v, want one File monitoring is off item", off)
+	}
+	quiet := esServiceItems(collect.ESServiceSnapshot{State: "running", SpoolMtime: idle, Flooding: true, UnparsedShare: 0.99})
+	if len(quiet) != 0 {
+		t.Fatalf("running, spool idle 10 min, stale flood stats: items = %+v, want none", quiet)
 	}
 }
 
