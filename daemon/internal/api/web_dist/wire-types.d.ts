@@ -106,6 +106,11 @@ export interface ExplainAction {
   recommended?: boolean;
 }
 
+export interface LabelSummary {
+  ok: number;
+  not_ok: number;
+}
+
 export interface FlagExplain {
   what: string;
   subject?: ExplainSubject;
@@ -113,6 +118,7 @@ export interface FlagExplain {
   context?: ExplainContext;
   disposition: Disposition;
   actions: ExplainAction[];
+  labels?: LabelSummary;
 }
 
 export interface Flag {
@@ -222,6 +228,30 @@ export interface AdvisorPlan {
   evidence_key: string;
 }
 
+export interface OperatorLabel {
+  id: number;
+  kind: string;
+  rule?: string;
+  agent?: string;
+  pattern?: string;
+  label: string;
+  reason?: string;
+  source: string;
+  created_at: string;
+}
+
+export interface LabelSuggestion {
+  label: string;
+  text: string;
+  action_id?: string;
+}
+
+export interface LabelContext {
+  summary: LabelSummary;
+  similar: OperatorLabel[];
+  suggestion?: LabelSuggestion;
+}
+
 export interface Step {
   kind: string;
   step: string;
@@ -243,6 +273,7 @@ export interface PlanResponse {
   playbook: Playbook;
   plan?: AdvisorPlan;
   flag?: Flag;
+  labels?: LabelContext;
   advisor_ready: boolean;
   reason?: string;
 }

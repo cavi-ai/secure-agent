@@ -34,9 +34,12 @@ type PlanResponse struct {
 	Plan     *model.AdvisorPlan `json:"plan,omitempty"`
 	// Flag is the subject's flag with its explanation, so the served
 	// actions a plan recommends can be performed from any surface.
-	Flag         *model.Flag `json:"flag,omitempty"`
-	AdvisorReady bool        `json:"advisor_ready"`
-	Reason       string      `json:"reason,omitempty"`
+	Flag *model.Flag `json:"flag,omitempty"`
+	// Labels: the operator's earlier judgments on cases like this one and
+	// the suggestion they earn.
+	Labels       *model.LabelContext `json:"labels,omitempty"`
+	AdvisorReady bool                `json:"advisor_ready"`
+	Reason       string              `json:"reason,omitempty"`
 }
 
 // Plan context bounds.
@@ -196,6 +199,7 @@ func (a *API) servePlan(w http.ResponseWriter, subject string) {
 		return
 	}
 	resp := PlanResponse{Subject: subject, Status: "none", Playbook: playbook.For(t.rule), Flag: a.planFlag(t)}
+	resp.Labels = a.labelContext(t, a.offeredActions(t))
 	resp.AdvisorReady, resp.Reason = a.planReady()
 	if p, ok := a.store.AdvisorPlanFor(subject); ok {
 		resp.Plan = &p
@@ -220,6 +224,7 @@ func (a *API) requestPlan(w http.ResponseWriter, subject string) {
 		return
 	}
 	resp := PlanResponse{Subject: subject, Playbook: playbook.For(t.rule), Flag: a.planFlag(t)}
+	resp.Labels = a.labelContext(t, a.offeredActions(t))
 	resp.AdvisorReady, resp.Reason = a.planReady()
 	if !resp.AdvisorReady {
 		resp.Status = "disabled"
@@ -341,6 +346,8 @@ func (a *API) planContext(t planTarget, pb playbook.Playbook) []string {
 			add("local policy: hosts allowed for %s: %s", t.agent, strings.Join(hosts, ", "))
 		}
 	}
+	rule, agent, pattern := labelKeys(t)
+	c = append(c, labelLines(a.store.SimilarLabels(rule, agent, pattern, labelSimilarLimit), time.Now())...)
 	add("PLAYBOOK why: %s", pb.Why)
 	for _, n := range pb.Now {
 		add("PLAYBOOK now: %s", n)
