@@ -1338,7 +1338,8 @@ document.addEventListener('DOMContentLoaded', () => {
   // Copy button) and the uninspected-egress drill-down (row actions, no
   // Copy). drawerMode tracks which one is open so action handlers can
   // re-render the right content after a mutation.
-  let drawerMode = null; // 'incident' | 'endpoint' | 'uninspected' | 'family' | 'policy' | null
+  let drawerMode = null; // 'incident' | 'endpoint' | 'file' | 'uninspected' | 'family' | 'policy' | null
+  let drawerFile = '';
 
   let drawerIncident = '';
   let drawerEndpoint = null;
@@ -1363,7 +1364,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const text = await res.text();
         if (seq !== drawerSeq) return;
         currentRawMarkdown = text;
-        drawerBody.innerHTML = parseMarkdownToHTML(text);
+        drawerBody.innerHTML = linkEvidencePaths(parseMarkdownToHTML(text));
       } else {
         drawerBody.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-doc"/></svg><span>Failed to load the incident report.</span></div>`;
       }
@@ -1399,6 +1400,47 @@ document.addEventListener('DOMContentLoaded', () => {
     } catch (err) {
       if (seq !== drawerSeq) return;
       drawerBody.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-globe"/></svg><span>Could not identify this endpoint: ${escapeHTML(err.message || err)}</span></div>`;
+    }
+  };
+
+  // File detail: an evidence path opens what the daemon knows about the file —
+  // facts, the masked excerpt around each secret, findings and agent access —
+  // with Reveal in Finder and Open in editor.
+  window.openFileDetail = async function(path, { back } = {}) {
+    if (!drawer) return;
+    drawerMode = 'file';
+    drawerFile = path;
+    if (btnDrawerCopy) btnDrawerCopy.hidden = true;
+    openDrawer({
+      title: 'File',
+      icon: 'doc',
+      onClose: () => { drawerMode = null; },
+      back,
+    });
+    const seq = drawerSeq;
+    drawerBody.innerHTML = `<div class="loading-spinner">Reading ${escapeHTML(path)}…</div>`;
+    try {
+      const res = await apiFetch(`/files/detail?path=${encodeURIComponent(path)}`);
+      if (!res.ok) throw new Error((await res.text()).trim() || 'lookup failed');
+      const detail = await res.json();
+      if (seq !== drawerSeq) return;
+      drawerBody.innerHTML = fileDetailHTML(detail);
+    } catch (err) {
+      if (seq !== drawerSeq) return;
+      drawerBody.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-doc"/></svg><span>Could not read this file: ${escapeHTML(err.message || err)}</span></div>`;
+    }
+  };
+
+  window.fileAction = async function(action, path) {
+    try {
+      const r = await apiFetch(action === 'reveal' ? '/files/reveal' : '/files/open', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path })
+      });
+      if (!r.ok) throw new Error((await r.text()).trim());
+      showToast(action === 'reveal' ? 'Shown in Finder' : 'Opened in your editor', 'success');
+    } catch (err) {
+      showToast(`Could not ${action === 'reveal' ? 'reveal' : 'open'} the file: ${err.message || err}`, 'error');
     }
   };
 
@@ -1461,6 +1503,10 @@ document.addEventListener('DOMContentLoaded', () => {
       case 'incident': {
         const id = drawerIncident;
         return { label: 'Incident report', reopen: () => window.openIncidentReport(id, { back }) };
+      }
+      case 'file': {
+        const p = drawerFile;
+        return { label: 'File', reopen: () => window.openFileDetail(p, { back }) };
       }
       case 'family': {
         const key = familyDrawerKey;
@@ -2216,6 +2262,15 @@ document.addEventListener('DOMContentLoaded', () => {
         break;
       case 'incident-status':
         window.setIncidentStatus(d.id, d.status);
+        break;
+      case 'open-file':
+        e.preventDefault();
+        window.openFileDetail(d.path, { back: back() });
+        break;
+      case 'file-reveal':
+      case 'file-open':
+        e.preventDefault();
+        window.fileAction(d.action === 'file-reveal' ? 'reveal' : 'open', d.path);
         break;
       case 'remove-source':
         window.removeSource(d.source);

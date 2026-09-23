@@ -175,6 +175,68 @@ function endpointDetailHTML(detail, clickedAgent) {
     <section class="endpoint-section"><h4>Recent connections</h4>${events}</section>`;
 }
 
+// fileDetailHTML: the evidence file drawer — facts, the masked excerpt around
+// each secret, who touched it, and Reveal / Open. Pure function — the node
+// and DOM tests drive it.
+function fileDetailHTML(d, nowMs) {
+  if (!d || !d.path) {
+    return '<div class="empty"><span>No file data</span></div>';
+  }
+  const now = nowMs || Date.now();
+  const s = d.subject || {};
+  const facts = [
+    d.exists ? fmtRSS(d.size) || '0 B' : 'deleted since it was flagged',
+    d.exists && d.mod_time ? `modified ${fmtAge(d.mod_time, now)} ago` : '',
+    d.exists && !d.owned_by_user ? 'owned by another user' : '',
+  ].filter(Boolean).join(' · ');
+  const actions = d.exists ? `
+    <button type="button" class="btn btn-ghost btn-sm" data-action="file-reveal" data-path="${escapeHTML(d.path)}">Reveal in Finder</button>
+    <button type="button" class="btn btn-ghost btn-sm" data-action="file-open" data-path="${escapeHTML(d.path)}">Open in editor</button>` : '';
+  const sess = d.session ? `
+    <div class="endpoint-session">
+      <strong>${escapeHTML(familyTitle(d.session.harness || 'agent'))}</strong>
+      <span>${escapeHTML(d.session.repo ? d.session.repo + (d.session.branch ? '@' + d.session.branch : '') : (d.session.workspace || ''))}</span>
+      <span class="endpoint-session-id">${escapeHTML(sessionShort(d.session.id))}</span>
+    </div>` : '';
+  const excerpt = d.excerpt
+    ? `<pre class="file-excerpt">${escapeHTML(d.excerpt)}</pre>`
+    : d.excerpt_withheld ? `<p class="file-withheld">${escapeHTML(d.excerpt_withheld)}</p>` : '';
+  const findings = (d.findings || []).map(f => `
+    <div class="endpoint-event">
+      <span class="endpoint-event-time">${escapeHTML(fmtAge(f.ts, now))} ago</span>
+      <span>${escapeHTML(f.kind === 'incident' ? 'Incident · ' + (f.risk || '') : ruleTitle(f.rule))}</span>
+      ${f.kind === 'incident'
+        ? `<button type="button" class="btn btn-ghost btn-sm endpoint-event-agent" data-action="open-incident" data-id="${escapeHTML(f.id)}">Open</button>`
+        : `<span class="endpoint-event-agent">${escapeHTML(f.acknowledged ? 'reviewed' : familyTitle(f.agent || ''))}</span>`}
+    </div>`).join('');
+  const accesses = (d.accesses || []).map(a => `
+    <div class="endpoint-event">
+      <span class="endpoint-event-time">${escapeHTML(fmtAge(a.ts, now))} ago</span>
+      <span>${escapeHTML(String(a.kind || '').replace('file-', ''))}</span>
+      <span class="endpoint-event-agent">${escapeHTML((a.exe_path ? String(a.exe_path).split('/').pop() + ' · ' : '') + 'session ' + sessionShort(a.session_id))}</span>
+    </div>`).join('');
+  return `
+    <div class="endpoint-head">
+      <div class="endpoint-host">${escapeHTML(d.display || d.path)}</div>
+      ${s.category_label ? `<span class="endpoint-kind">${escapeHTML(s.category_label)}</span>` : ''}
+    </div>
+    ${s.owner_label ? `<p class="endpoint-identity">${escapeHTML(s.owner_label)}</p>` : ''}
+    <p class="endpoint-facts">${escapeHTML(facts)}</p>
+    <div class="endpoint-actions">${actions}</div>
+    ${sess ? `<section class="endpoint-section"><h4>Session</h4>${sess}</section>` : ''}
+    ${excerpt ? `<section class="endpoint-section"><h4>Around the secret</h4>${excerpt}</section>` : ''}
+    ${findings ? `<section class="endpoint-section"><h4>Findings</h4>${findings}</section>` : ''}
+    ${accesses ? `<section class="endpoint-section"><h4>Agent access</h4>${accesses}</section>` : ''}`;
+}
+
+// linkEvidencePaths turns each inline code span holding an absolute path into
+// a file-drawer link. Input is parseMarkdownToHTML output, already escaped,
+// so the captured text is safe as the attribute and the label.
+function linkEvidencePaths(html) {
+  return String(html || '').replace(/<code class="md-inline-code">(\/[^<]*)<\/code>/g,
+    (_, p) => `<button type="button" class="file-link" data-action="open-file" data-path="${p}">${p}</button>`);
+}
+
 // shared by the flag card chip and the timeline filter chip.
 function sessionShort(id) {
   return String(id || '').slice(0, 8);
