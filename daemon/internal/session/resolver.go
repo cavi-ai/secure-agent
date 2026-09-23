@@ -384,6 +384,23 @@ func (r *Resolver) HandleHandshake(h Handshake) {
 // is provisional; the harness's own id is authoritative, so the merge rekeys
 // the process row's events onto the transcript id.
 func (r *Resolver) NoteTranscriptSession(id, harness, workspace string, ts time.Time) {
+	r.NoteTranscriptSighting(TranscriptSighting{ID: id, Harness: harness, Workspace: workspace, TS: ts})
+}
+
+// TranscriptSighting is a harness's own record of a conversation. Repo and
+// Branch, when the harness records them (Hermes's git_repo_root and
+// git_branch), win over the workspace probe; ParentID nests a continuation or
+// subagent conversation under the one that spawned it.
+type TranscriptSighting struct {
+	ID, Harness, Workspace string
+	Repo, Branch, ParentID string
+	TS                     time.Time
+}
+
+// NoteTranscriptSighting is NoteTranscriptSession with the harness's own
+// repo, branch and parent.
+func (r *Resolver) NoteTranscriptSighting(s TranscriptSighting) {
+	id, harness, workspace, ts := s.ID, s.Harness, s.Workspace, s.TS
 	if id == "" {
 		return
 	}
@@ -407,10 +424,13 @@ func (r *Resolver) NoteTranscriptSession(id, harness, workspace string, ts time.
 		r.byScope[scopeKey(harness, workspace)] = id
 	}
 
-	repo, branch := GitInfoFor(workspace)
+	repo, branch := s.Repo, s.Branch
+	if repo == "" {
+		repo, branch = GitInfoFor(workspace)
+	}
 	r.st.UpsertSession(model.Session{
 		ID: id, Harness: harness, Workspace: workspace,
-		Repo: repo, Branch: branch,
+		Repo: repo, Branch: branch, ParentID: s.ParentID,
 		StartedAt: ts, LastSeenAt: ts,
 		Status: model.SessionActive, Confidence: model.ConfTranscript,
 	})

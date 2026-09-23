@@ -294,6 +294,7 @@ type rawConfig struct {
 	DBPath              string                `yaml:"db_path"`
 	JSONLPath           string                `yaml:"jsonl_path"`
 	OpenclawHome        string                `yaml:"openclaw_home"`
+	HermesHome          string                `yaml:"hermes_home"`
 	ProxyEnabled        bool                  `yaml:"proxy_enabled"`
 	ProxyPort           int                   `yaml:"proxy_port"`
 	ProxyCACertPath     string                `yaml:"proxy_ca_cert_path"`
@@ -322,6 +323,7 @@ type Config struct {
 	DBPath            string
 	JSONLPath         string
 	OpenclawHome      string // openclaw state dir holding lcm.db; "" = resolved at runtime
+	HermesHome        string // Hermes Agent root holding state.db; "" = $HERMES_HOME or ~/.hermes
 	ProxyEnabled      bool
 	ProxyPort         int
 	ProxyCACertPath   string
@@ -457,6 +459,7 @@ func loadWithOverlayError(explicitPath string) (Config, error, error) {
 		DBPath:            expandPath(raw.DBPath),
 		JSONLPath:         expandPath(raw.JSONLPath),
 		OpenclawHome:      expandPath(raw.OpenclawHome),
+		HermesHome:        expandPath(raw.HermesHome),
 		ProxyEnabled:      raw.ProxyEnabled,
 		ProxyPort:         raw.ProxyPort,
 		ProxyCACertPath:   expandPath(raw.ProxyCACertPath),

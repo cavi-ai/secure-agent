@@ -399,3 +399,21 @@ func TestRefreshDoesNotCarryResourcesAcrossPIDReuse(t *testing.T) {
 		t.Fatalf("replacement inherited resources: %+v", info)
 	}
 }
+
+// Hermes Agent: the hermes binary, or anything under its hermes-agent
+// install, is the harness.
+func TestTagHermesAsAgent(t *testing.T) {
+	fake := fakeProcs{
+		100: {PID: 100, PPID: 1, Exe: "/opt/homebrew/bin/hermes"},
+		200: {PID: 200, PPID: 1, Exe: "/Users/x/.hermes/hermes-agent/venv/bin/python3.11"},
+	}
+	c, _ := config.Load("/nonexistent")
+	tg := New(c, fake)
+	tg.Refresh()
+	for _, pid := range []int32{100, 200} {
+		info, ok := tg.Tag(pid)
+		if !ok || info.Name != "hermes" || info.Kind != "agent" {
+			t.Fatalf("Tag(%d) = %+v, %v; want hermes/agent", pid, info, ok)
+		}
+	}
+}

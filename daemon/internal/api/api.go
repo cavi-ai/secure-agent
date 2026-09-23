@@ -143,6 +143,7 @@ type API struct {
 	store            *store.Store
 	killer           Killer
 	statusFn         StatusFunc
+	hermes           func() collect.HermesStatus
 	resources        func() resource.Snapshot
 	resourceControl  *resource.Controller
 	resourcePolicy   func(config.ResourceControlConfig) error
@@ -269,6 +270,10 @@ type Deps struct {
 	BusDrops        func() uint64
 	PublishEvent    func(event.Event)
 	DeltaHub        *DeltaHub
+
+	// Hermes reports the Hermes Agent collector's state for /doctor
+	// (optional; unwired reads "not wired").
+	Hermes func() collect.HermesStatus
 }
 
 // New builds the API from its resolved dependencies.
@@ -278,6 +283,7 @@ func New(d Deps) *API {
 		store:           d.Store,
 		killer:          d.Killer,
 		statusFn:        d.Status,
+		hermes:          d.Hermes,
 		resources:       d.Resources,
 		resourceControl: d.ResourceControl,
 		resourcePolicy:  d.ResourcePolicyUpdater,
