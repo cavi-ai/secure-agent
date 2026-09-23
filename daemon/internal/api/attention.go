@@ -11,13 +11,16 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
 
-// Attention groups: computed once here and served from /posture; every
-// surface renders the same queue.
+// Attention queue: computed once here and served from /posture. Every signal
+// that needs the operator is appended once as a headline item (Items) and
+// once as an item in exactly one group, so needs_you, the console hero and
+// the Attention tab count the same set.
 
-// AttentionItem priorities (higher first): guard 5, resource 4, incident 3,
-// flag 2 (1 when the flag is likely benign), egress 1.
+// AttentionItem priorities (higher first): guard 5, resource 4, incident 3
+// (1 for an aging incident below high risk), flag 2 (1 when the flag is
+// likely benign or severity 2), machine 2 (1 below severity 2), egress 1.
 type AttentionItem struct {
-	Kind      string                `json:"kind"` // resource | guard | incident | flag | egress
+	Kind      string                `json:"kind"` // resource | guard | incident | flag | egress | collector_down | collector_silent | harness_uncovered | guard_hook_unregistered
 	Priority  int                   `json:"priority"`
 	ID        string                `json:"id,omitempty"`
 	Action    string                `json:"action,omitempty"`
@@ -35,8 +38,9 @@ type AttentionItem struct {
 	Disposition *model.Disposition `json:"disposition,omitempty"`
 }
 
-// AttentionGroup is one agent session (or an explicit unattributed bucket)
-// with its pending decisions, worst first.
+// AttentionGroup is one agent session, an explicit unattributed bucket, or
+// the machine group (Key "machine") for signals no agent owns, with its
+// pending decisions, worst first.
 type AttentionGroup struct {
 	Key          string          `json:"key"`
 	Label        string          `json:"label"`
@@ -49,6 +53,10 @@ type AttentionGroup struct {
 	ProcessCount int             `json:"processCount,omitempty"`
 	Items        []AttentionItem `json:"items"`
 }
+
+// machineGroupKey keys the group holding agent-less signals: dead or silent
+// monitors, missing hooks, egress no agent group carries.
+const machineGroupKey = "machine"
 
 // attentionSession: a live session a signal can be attributed to.
 type attentionSession struct {
@@ -65,9 +73,52 @@ type attentionSession struct {
 	control      *resource.SessionControl
 }
 
-// Signals without a PID join a live session only when the agent name
+// attentionFlags is the one flag query behind the queue: unacknowledged
+// flags of severity 2 or more raised in the last 24h.
+func (a *API) attentionFlags() []model.Flag {
+	var out []model.Flag
+	for _, f := range a.store.QueryFlags(store.FlagFilter{MinSeverity: 2, Limit: 25, Unacted: true}) {
+		if isRecent(f.TS, 24*time.Hour) {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// machineAttentionItems are the signals no agent owns: dead collectors, and
+// while agents are active, silent collectors and missing hooks.
+func (a *API) machineAttentionItems(st Status) []PostureItem {
+	var items []PostureItem
+	// A monitor that stopped is a blind spot, not a detail.
+	for _, c := range st.Collectors {
+		if !c.Running || c.Abandoned {
+			items = append(items, PostureItem{
+				Kind: "collector_down", ID: c.Name,
+				Title:    humanCollectorTitle(c.Name, c.Abandoned),
+				Severity: 2,
+				Detail:   humanCollectorDetail(c.Name, c.LastError),
+			})
+		}
+	}
+	// Liveness is not coverage: the worst failure mode a monitor can have is
+	// reporting green while blind (both audited live: the eslogger spool
+	// untouched for days, zero hook events for 17h, all "healthy").
+	if st.ActiveAgents > 0 {
+		items = append(items, silentCollectorItems(st)...)
+		if item := harnessUncoveredItem(a.store, st); item != nil {
+			items = append(items, *item)
+		}
+		if item := guardHookUnregisteredItem(st); item != nil {
+			items = append(items, *item)
+		}
+	}
+	return items
+}
+
+// attentionQueue returns the headline items and the grouped queue from one
+// pass. Signals without a PID join a live session only when the agent name
 // identifies exactly one; ambiguous work stays in an agent-level group.
-func (a *API) computeAttentionGroups(st Status) []AttentionGroup {
+func (a *API) attentionQueue(st Status) ([]PostureItem, []AttentionGroup) {
 	var sessions []attentionSession
 	if a.resources != nil {
 		for _, s := range a.resources().Sessions {
@@ -160,9 +211,161 @@ func (a *API) computeAttentionGroups(st Status) []AttentionGroup {
 		}
 		return g
 	}
-	add := func(agent string, pid int32, item AttentionItem) {
-		g := groupFor(agent, pid)
+	machine := func() *AttentionGroup {
+		g, ok := groups[machineGroupKey]
+		if !ok {
+			g = &AttentionGroup{Key: machineGroupKey, Label: "This machine", Items: []AttentionItem{}}
+			groups[machineGroupKey] = g
+		}
+		return g
+	}
+	items := []PostureItem{}
+	add := func(g *AttentionGroup, headline PostureItem, item AttentionItem) {
+		items = append(items, headline)
 		g.Items = append(g.Items, item)
+	}
+
+	// Flags — the security signal. Unacted only: a flag the operator already
+	// reviewed/dismissed must not keep demanding attention. Headline severity
+	// follows the disposition: an advisor-confirmed benign flag is a queue
+	// item, not a "critical — act now".
+	for _, f := range a.attentionFlags() {
+		d := dispositionFor(f)
+		detail := f.Rule
+		if len(f.Evidence) > 0 {
+			detail = f.Rule + " — " + f.Evidence[0].String()
+		}
+		item := AttentionItem{
+			Kind: "flag", Priority: 2, ID: f.ID,
+			Title: "Critical finding", Detail: detail, Disposition: &d,
+		}
+		switch {
+		case d.State == model.DispositionBenignLikely:
+			item.Priority = 1
+			item.Title = "Finding, likely benign"
+		case f.Severity < 3:
+			item.Priority = 1
+			item.Title = humanFlagTitle(f.Rule)
+		}
+		add(groupFor(f.Agent, f.PID), PostureItem{
+			Kind: "flag", ID: f.ID,
+			Title:     humanFlagTitle(f.Rule),
+			Severity:  dispositionSeverity(d),
+			Detail:    d.Text + " — " + firstEvidence(f.Evidence),
+			Timestamp: f.TS.UTC().Format(time.RFC3339),
+		}, item)
+	}
+
+	// Guard prompts waiting — the operator is actively being asked.
+	if a.guardBroker != nil {
+		for _, p := range a.guardBroker.Pending() {
+			tool := firstNonEmpty([]string{p.Tool, "Tool"})
+			path := firstNonEmpty([]string{p.Path, "a protected path"})
+			add(groupFor(p.Agent, 0), PostureItem{
+				Kind: "guard_pending", ID: p.ID,
+				Title:     p.Agent + " wants " + humanPath(p.Path),
+				Severity:  1,
+				Detail:    "Rule: " + p.RuleID,
+				Timestamp: p.TS,
+			}, AttentionItem{
+				Kind: "guard", Priority: 5, ID: p.ID,
+				Title:  "Guard decision",
+				Detail: tool + " wants access to " + path,
+				Rule:   p.RuleID, Path: p.Path,
+				ScopeText: p.ScopeText, Advisor: p.Advisor,
+			})
+		}
+	}
+
+	// Monitoring gaps no agent owns.
+	for _, it := range a.machineAttentionItems(st) {
+		priority := 1
+		if it.Severity >= 2 {
+			priority = 2
+		}
+		add(machine(), it, AttentionItem{Kind: it.Kind, Priority: priority, ID: it.ID, Title: it.Title, Detail: it.Detail})
+	}
+
+	// Uninspected egress: one item per group with a host rollup, and one
+	// headline item per group item.
+	var egressGroups []*AttentionGroup
+	egressItem := func(g *AttentionGroup) *AttentionItem {
+		for i := range g.Items {
+			if g.Items[i].Kind == "egress" {
+				return &g.Items[i]
+			}
+		}
+		return nil
+	}
+	if a.correlator != nil {
+		for _, row := range a.correlator.UninspectedEgressSummarySince(time.Now().Add(-24 * time.Hour)) {
+			g := groupFor(row.Agent, 0)
+			item := egressItem(g)
+			if item == nil {
+				g.Items = append(g.Items, AttentionItem{Kind: "egress", Priority: 1, ID: "uninspected-egress:" + g.Key, Title: "Uninspected egress", Hosts: []string{}})
+				item = &g.Items[len(g.Items)-1]
+				egressGroups = append(egressGroups, g)
+			}
+			item.Count += row.Count
+			if row.Host != "" && !containsString(item.Hosts, row.Host) {
+				item.Hosts = append(item.Hosts, row.Host)
+			}
+			item.Detail = fmt.Sprintf("%d connection%s across %d endpoint%s bypassed inspection.",
+				item.Count, plural(item.Count), len(item.Hosts), plural(len(item.Hosts)))
+		}
+	}
+	for _, g := range egressGroups {
+		item := egressItem(g)
+		items = append(items, PostureItem{
+			Kind: "uninspected_egress", ID: item.ID,
+			Title:    uninspectedTitle(item.Count) + " — " + g.Agent,
+			Severity: 1,
+			Detail:   item.Detail,
+		})
+	}
+	// The status total with no per-agent rollup behind it is machine-wide.
+	if len(egressGroups) == 0 && st.UninspectedEgress > 0 {
+		add(machine(), PostureItem{
+			Kind: "uninspected_egress", ID: "uninspected-egress",
+			Title:    uninspectedTitle(st.UninspectedEgress),
+			Severity: 1,
+		}, AttentionItem{
+			Kind: "egress", Priority: 1, ID: "uninspected-egress", Title: "Uninspected egress",
+			Count: st.UninspectedEgress, Detail: uninspectedTitle(st.UninspectedEgress) + ".",
+		})
+	}
+
+	// Incidents not yet resolved: critical/high ones, and any open more than
+	// 72h — a queue item going stale, not a finding.
+	for _, inc := range a.store.RecentIncidents(25) {
+		wf, _ := a.store.IncidentStatus(inc.ID)
+		status := firstNonEmpty([]string{wf.Status, "open"})
+		serious := inc.Risk == model.RiskCritical || inc.Risk == model.RiskHigh
+		aging := time.Since(inc.Timestamp) > 72*time.Hour
+		if status == "resolved" || (!serious && !aging) {
+			continue
+		}
+		detail := firstNonEmpty([]string{inc.Summary, inc.Rule, "A security incident needs review."})
+		headline := PostureItem{
+			Kind: "incident", ID: inc.ID,
+			Title:    "Open incident: " + humanFlagTitle(inc.Rule),
+			Severity: 2,
+			Detail:   detail,
+		}
+		item := AttentionItem{
+			Kind: "incident", Priority: 3, ID: inc.ID,
+			Title: "Critical incident", Detail: detail, Status: status,
+		}
+		if aging {
+			headline.Title = "Aging incident: " + humanFlagTitle(inc.Rule)
+			headline.Severity = 1
+			headline.Detail = "open more than 3 days — resolve or acknowledge"
+		}
+		if !serious {
+			item.Priority = 1
+			item.Title = "Aging incident"
+		}
+		add(groupFor(inc.Agent, inc.PID), headline, item)
 	}
 
 	// Resource pressure: sessions with a pending intervention decision.
@@ -175,89 +378,16 @@ func (a *API) computeAttentionGroups(st Status) []AttentionGroup {
 		if len(s.diagnoses) > 0 && s.diagnoses[0].Summary != "" {
 			detail = s.diagnoses[0].Summary
 		}
-		add(s.agent, s.rootPID, AttentionItem{
+		add(groupFor(s.agent, s.rootPID), PostureItem{
+			Kind: "resource_pressure", ID: s.control.PendingID,
+			Title:    "Resource pressure: " + s.label,
+			Severity: 1,
+			Detail:   detail,
+		}, AttentionItem{
 			Kind: "resource", Priority: 4, ID: s.control.PendingID,
-			Action: string(s.control.NextAction),
+			Action: firstNonEmpty([]string{string(s.control.NextAction), "intervention"}),
 			Title:  "Resource pressure", Detail: detail,
 		})
-		if s.control.NextAction == "" {
-			g := groupFor(s.agent, s.rootPID)
-			g.Items[len(g.Items)-1].Action = "intervention"
-		}
-	}
-
-	// Guard prompts waiting on the operator.
-	if a.guardBroker != nil {
-		for _, p := range a.guardBroker.Pending() {
-			tool := firstNonEmpty([]string{p.Tool, "Tool"})
-			path := firstNonEmpty([]string{p.Path, "a protected path"})
-			add(p.Agent, 0, AttentionItem{
-				Kind: "guard", Priority: 5, ID: p.ID,
-				Title:  "Guard decision",
-				Detail: tool + " wants access to " + path,
-				Rule:   p.RuleID, Path: p.Path,
-				ScopeText: p.ScopeText, Advisor: p.Advisor,
-			})
-		}
-	}
-
-	// Critical/high incidents not yet resolved.
-	for _, inc := range a.store.RecentIncidents(25) {
-		wf, _ := a.store.IncidentStatus(inc.ID)
-		status := wf.Status
-		if status == "" {
-			status = "open"
-		}
-		if status == "resolved" || (inc.Risk != model.RiskCritical && inc.Risk != model.RiskHigh) {
-			continue
-		}
-		detail := firstNonEmpty([]string{inc.Summary, inc.Rule, "A security incident needs review."})
-		add(inc.Agent, inc.PID, AttentionItem{
-			Kind: "incident", Priority: 3, ID: inc.ID,
-			Title: "Critical incident", Detail: detail, Status: status,
-		})
-	}
-
-	// Unacknowledged critical flags; a likely-benign one ranks below them.
-	for _, f := range a.store.QueryFlags(store.FlagFilter{MinSeverity: 3, Limit: 50, Unacted: true}) {
-		detail := f.Rule
-		if len(f.Evidence) > 0 {
-			detail = f.Rule + " — " + f.Evidence[0].String()
-		}
-		d := dispositionFor(f)
-		item := AttentionItem{
-			Kind: "flag", Priority: 2, ID: f.ID,
-			Title: "Critical finding", Detail: detail, Disposition: &d,
-		}
-		if d.State == model.DispositionBenignLikely {
-			item.Priority = 1
-			item.Title = "Finding, likely benign"
-		}
-		add(f.Agent, f.PID, item)
-	}
-
-	// Uninspected egress, one item per group with host rollup.
-	if a.correlator != nil {
-		for _, row := range a.correlator.UninspectedEgressSummarySince(time.Now().Add(-24 * time.Hour)) {
-			g := groupFor(row.Agent, 0)
-			var item *AttentionItem
-			for i := range g.Items {
-				if g.Items[i].Kind == "egress" {
-					item = &g.Items[i]
-					break
-				}
-			}
-			if item == nil {
-				g.Items = append(g.Items, AttentionItem{Kind: "egress", Priority: 1, Title: "Uninspected egress", Hosts: []string{}})
-				item = &g.Items[len(g.Items)-1]
-			}
-			item.Count += row.Count
-			if row.Host != "" && !containsString(item.Hosts, row.Host) {
-				item.Hosts = append(item.Hosts, row.Host)
-			}
-			item.Detail = fmt.Sprintf("%d connection%s across %d endpoint%s bypassed inspection.",
-				item.Count, plural(item.Count), len(item.Hosts), plural(len(item.Hosts)))
-		}
 	}
 
 	out := make([]AttentionGroup, 0, len(groups))
@@ -278,7 +408,7 @@ func (a *API) computeAttentionGroups(st Status) []AttentionGroup {
 		}
 		return out[i].Label < out[j].Label
 	})
-	return out
+	return items, out
 }
 
 func cwdBase(cwd string) string {

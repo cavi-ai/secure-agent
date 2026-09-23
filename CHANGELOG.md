@@ -7,6 +7,10 @@ All notable changes to `secure-agent` are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- Console tab bar stays at the top while the page scrolls; once stuck it shows a posture pill that scrolls back to the top.
+- Console scope bar under the tabs names the session or process family Events, Flags and Incidents are narrowed to, with a Clear button.
+- Console drawers opened from inside another drawer show a Back button that reopens the previous drawer.
+- `/posture` `machine` group for collector, hook and machine-wide egress items.
 - Hermes Agent process matcher (`hermes-agent`, `/.hermes/`).
 - Hermes Agent sessions from `state.db` and each profile's `state.db`: turns, tool calls and model calls; `hermes_home` setting.
 - Hermes sessions carry the repo, branch and parent session Hermes records.
@@ -42,6 +46,10 @@ All notable changes to `secure-agent` are documented here. The format follows
   per (path, rule) are collapsed.
 
 ### Changed
+- `/posture` `items` and `groups` come from one pass: every item sits in exactly one group and the group items sum to `needs_you`.
+- `/posture` `groups` include unacknowledged severity-2 flags (priority 1, rule title, disposition) and pending resource decisions as `resource_pressure` items.
+- `/posture` `items` carry one `uninspected_egress` item per group with uninspected egress, and critical/high incidents open under 72h.
+- Console Attention badge shows `posture.needs_you`.
 - Posture and attention: a flag the advisor judged benign at confidence ≥ 0.85 is severity 1 (`attention`, "Finding, likely benign"), never `critical`.
 - Console: an explained flag's card and Attention item show who, what and the one verdict with the served actions as buttons; raw evidence, pid and timestamps sit behind Details.
 - Console Resources: a one-row machine strip (headroom, memory, CPU, swap; pressure and thermal chips) replaces the host block.

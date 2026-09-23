@@ -7,9 +7,10 @@ function renderAttention() {
   const badge = document.getElementById('badge-attention-count');
   if (!container) return;
   // The daemon serves the grouped queue on /posture — one derivation, no
-  // client-side regrouping that could disagree with the menubar.
+  // client-side regrouping that could disagree with the menubar. The count
+  // is the hero's needs_you, which the daemon keeps equal to the groups.
   const groups = (SA.t.posture && SA.t.posture.groups) || [];
-  const count = groups.reduce((sum, group) => sum + group.items.length, 0);
+  const count = attentionCount(SA.t.posture);
   if (badge) badge.textContent = count;
   SA.setTabBadge('findings', count);
   if (!groups.length) {
@@ -35,6 +36,9 @@ function renderAttention() {
     if (item.kind === 'flag') return `
       <button class="btn btn-ghost btn-sm" data-action="dismiss-flag" data-id="${escapeHTML(item.id)}">Dismiss</button>
       ${retriage(item)}`;
+    if (item.kind === 'collector_down' && item.id === 'eslogger') return `
+      <button class="btn btn-ghost btn-sm" data-action="open-fda">Open Full Disk Access settings</button>`;
+    if (item.kind !== 'egress') return '';
     return `<button class="btn btn-ghost btn-sm" data-action="open-uninspected">Review endpoints</button>`;
   };
   const retriage = item => !advisorVisible ? '' : advisorOffline
@@ -83,9 +87,11 @@ function renderAttention() {
     return `<article class="attention-group${urgent}">
       <header class="attention-group-head">
         <div class="attention-identity">
-          <span class="attention-agent">${escapeHTML(group.agent)}</span>
+          <span class="attention-agent">${escapeHTML(group.agent || 'machine')}</span>
           <strong>${escapeHTML(group.label)}</strong>
-          ${group.workspace ? `<span class="attention-workspace">${escapeHTML(group.workspace)}</span>` : '<span class="attention-workspace">Signals could not be safely attributed to one live session</span>'}
+          ${group.workspace ? `<span class="attention-workspace">${escapeHTML(group.workspace)}</span>`
+            : group.key === 'machine' ? '<span class="attention-workspace">Monitoring gaps no agent session owns</span>'
+            : '<span class="attention-workspace">Signals could not be safely attributed to one live session</span>'}
         </div>
         <div class="attention-metrics">${metrics}</div>
         <span class="attention-total">${group.items.length} item${group.items.length === 1 ? '' : 's'}</span>

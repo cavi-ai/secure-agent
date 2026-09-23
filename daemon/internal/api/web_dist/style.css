@@ -881,7 +881,8 @@ body {
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
   padding: 15px 20px; border-bottom: 1px solid var(--line); flex: none;
 }
-.drawer-head h3 { display: flex; align-items: center; gap: 9px; font-size: 0.95rem; font-weight: 650; }
+.drawer-head h3 { display: flex; align-items: center; gap: 9px; font-size: 0.95rem; font-weight: 650; flex: 1 1 auto; min-width: 0; }
+.drawer-head .drawer-back { flex: none; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .drawer-actions { display: flex; gap: 8px; }
 .drawer-actions .btn[hidden] { display: none; }
 .drawer-body { padding: 20px; overflow-y: auto; flex: 1 1 auto; min-height: 0; }
@@ -998,6 +999,37 @@ body {
 .offline-banner[hidden] { display: none; }
 
 /* ---------- tabs ---------- */
+/* Sticky over the content, opaque so rows do not show through. The negative
+   margin keeps the .app gap unchanged around the padded bar. */
+.tabs-bar {
+  position: sticky; top: 0; z-index: 50;
+  display: flex; flex-direction: column; gap: 6px;
+  margin: -8px 0; padding: 8px 0;
+  background: var(--bg-0);
+  min-width: 0;
+}
+.tabs-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.tabs-row .tabs { flex: 1 1 auto; }
+.tabs-posture {
+  display: inline-flex; align-items: center; gap: 7px; flex: none;
+  padding: 7px 12px; border: 1px solid var(--line); border-radius: 999px;
+  background: var(--bg-1); color: var(--tx-1);
+  font: 600 0.78rem/1 var(--font); white-space: nowrap; cursor: pointer;
+}
+.tabs-posture[hidden] { display: none; }
+.tabs-posture:hover { background: var(--bg-2); }
+.tabs-posture .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); }
+.tabs-posture[data-state="attention"] .dot { background: var(--warn); }
+.tabs-posture[data-state="critical"] .dot { background: var(--bad); }
+.scope-bar {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px;
+  padding: 7px 12px; border-radius: var(--r-md);
+  background: var(--brand-bg); border: 1px solid var(--line);
+  color: var(--tx-2); font-size: 0.8rem; min-width: 0;
+}
+.scope-bar[hidden] { display: none; }
+.scope-bar b { color: var(--tx-1); overflow-wrap: anywhere; }
+.scope-bar .btn { margin-left: auto; }
 .tabs {
   display: flex; gap: 4px;
   padding: 4px; border-radius: var(--r-md);

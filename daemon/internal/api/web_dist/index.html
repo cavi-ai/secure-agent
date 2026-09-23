@@ -181,6 +181,11 @@
          data source — "is this normal?" (Overview), "what ran, grouped by
          run?" (Sessions), "what's running?" (Agents), "where is traffic
          going?" (Egress), "what needs my decision?" (Attention). -->
+    <!-- The tab bar stays on screen while the page scrolls: once stuck it
+         carries the posture pill (back to top), and the scope bar under it
+         says when Events, Flags and Incidents are narrowed to one session. -->
+    <div class="tabs-bar" id="tabs-bar">
+    <div class="tabs-row">
     <nav class="tabs" role="tablist" aria-label="Console sections">
       <button class="tab-btn active" data-tab="overview" role="tab" aria-selected="true" aria-controls="tab-overview">
         <svg class="icon"><use href="#i-activity"/></svg><span>Overview</span>
@@ -211,6 +216,10 @@
         <span class="tab-badge tab-badge-warn" id="tab-badge-findings" hidden></span>
       </button>
     </nav>
+    <button type="button" class="tabs-posture" id="tabs-posture" data-action="goto-top" title="Back to top" data-state="all-clear" hidden><span class="dot" aria-hidden="true"></span><span id="tabs-posture-text">All clear</span></button>
+    </div>
+    <div class="scope-bar" id="scope-bar" role="status" hidden></div>
+    </div>
 
     <main>
       <!-- Overview: the visual summary — three charts, nothing else. Every
