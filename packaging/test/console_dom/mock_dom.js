@@ -695,6 +695,32 @@
       document.body.prepend(frame);
     });
   }
+  // CSP probe: run_dom_tests.py serves ?cspdemo&raildemo with the daemon's
+  // Content-Security-Policy header. Once the rail has selected a session,
+  // this opens the tab holding each percentage-sized bar and records its
+  // rendered width as a percent of its track on <body data-csp-widths=
+  // "wf-bar:N,hbar-fill:N,resource-host-segment:N"> — the first tool bar,
+  // the smallest ranked bar, the agent memory segment.
+  if (MODE.includes('cspdemo')) {
+    const probes = [
+      ['wf-bar', 'sessions', '.wf-bar'],
+      ['hbar-fill', 'overview', '#chart-memory .hbar-row:last-child .hbar-fill'],
+      ['resource-host-segment', 'resources', '.resource-host-segment.agent'],
+    ];
+    const widths = [];
+    const next = () => {
+      const [name, tab, sel] = probes[widths.length];
+      document.querySelector(`[data-tab="${tab}"]`).click();
+      setTimeout(() => {
+        const el = document.querySelector(sel);
+        const pct = el ? el.getBoundingClientRect().width / el.parentElement.getBoundingClientRect().width * 100 : -1;
+        widths.push(`${name}:${pct.toFixed(1)}`);
+        if (widths.length < probes.length) next();
+        else document.body.dataset.cspWidths = widths.join(',');
+      }, 300);
+    };
+    setTimeout(next, 5000);
+  }
   // Auto-action: switch to the Egress tab — panels must hide/show correctly.
   if (location.search.includes('tabdemo')) {
     setTimeout(() => document.querySelector('[data-tab="egress"]').click(), 4000);

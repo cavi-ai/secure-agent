@@ -15,7 +15,10 @@ function renderAgents() {
   // Infra is never counted as an agent.
   badge.textContent = agentGroups.length;
   SA.setTabBadge('agents', agentGroups.length); // informative count, neutral styling
-  if (pills) pills.innerHTML = harnessPillsHTML(agentGroups.map(g => g.key), SA.harnessFilter.harnesses);
+  if (pills) {
+    pills.innerHTML = harnessPillsHTML(agentGroups.map(g => g.key), SA.harnessFilter.harnesses);
+    applyInlineMetrics(pills);
+  }
 
   if (agents.length === 0) {
     container.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-agent"/></svg><span>No agents running yet — start Claude Code, Cursor, or Codex and they'll appear here</span></div>`;
@@ -36,6 +39,7 @@ function renderAgents() {
     ? `<section class="agent-infra" aria-label="Infrastructure"><h3 class="agent-infra-head">Infrastructure <span>IDEs and model servers — not counted as agents</span></h3>${infra.map(g => agentGroupHTML(g, now, isOpen(g.key, false), SA.agentTreeOpen)).join('')}</section>`
     : '';
   container.innerHTML = body + infraSection;
+  applyInlineMetrics(container);
 
   container.querySelectorAll('details.agent-group').forEach(el => {
     el.addEventListener('toggle', () => {

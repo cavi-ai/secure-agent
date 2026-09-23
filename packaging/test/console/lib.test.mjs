@@ -19,6 +19,9 @@ const indexHTML = readFileSync(path.join(webDist, 'index.html'), 'utf8');
 const styleCSS = readFileSync(path.join(webDist, 'style.css'), 'utf8');
 const ctx = {};
 vm.runInNewContext(readFileSync(libPath, 'utf8'), ctx, { filename: 'lib.js' });
+// tab-overview.js declares functions only, so its renderers evaluate in the
+// same context on top of lib.js.
+vm.runInContext(readFileSync(path.join(webDist, 'tab-overview.js'), 'utf8'), ctx, { filename: 'tab-overview.js' });
 const {
   escapeHTML, fmtTime, eventKey,
   advanceBuckets, bucketIndexFor, sparkPoints,
@@ -35,6 +38,7 @@ const {
   endpointIdentityLine, endpointDetailHTML,
   sessionTitle, groupSessionsByHarness, applySessionFilters, familySize,
   sessionGroupCounts, sessionCountStrip, harnessPillsHTML, middleTruncate,
+  hbarsHTML, sessionWaterfallHTML, applyInlineMetrics, resourceHostContextHTML,
 } = ctx;
 
 // ---------- unified attention center ----------
@@ -655,7 +659,7 @@ test('harnessChipHTML renders the sprite mark by class and escapes the name', ()
   assert.match(harnessChipHTML('claude', { label: true }), /<span class="harness-label">Claude Code<\/span>/);
   assert.match(harnessChipHTML('openclaw'), /class="harness-glyph hk-openclaw"[^>]*>O</);
   const unknown = harnessChipHTML('mystery-agent');
-  assert.match(unknown, /--harness-color:hsl/);
+  assert.match(unknown, /data-harness-color="hsl\(\d+ 62% 62%\)"/);
   assert.match(unknown, /class="harness-glyph"/);
   // A malicious harness name must not break out of the title attribute.
   const evil = harnessChipHTML('"><script>alert(1)</script>', { label: true });
@@ -871,4 +875,45 @@ test('sessionTitle names the work, never the harness', () => {
   assert.equal(sessionTitle({ harness: 'claude', workspace: '/', id: 'proc-132' }, '/work/myrepo'), 'myrepo');
   // Nothing usable → short id, never a bare "/".
   assert.equal(sessionTitle({ harness: 'claude', workspace: '/', id: 'proc-132' }), 'proc-132');
+});
+
+// ---------- CSP: no inline style attributes ----------
+// The daemon serves the console with style-src 'self', which drops style
+// attributes parsed from markup; sizes ride in data attributes instead.
+
+test('percentage-sized renderers emit no style attributes', () => {
+  const html = {
+    hbars: hbarsHTML([{ label: 'a', value: 4 }, { label: 'b', value: 1 }]),
+    waterfall: sessionWaterfallHTML([
+      { kind: 12, ts: '2026-01-01T00:00:00Z', duration_ms: 2000, tool: 'Bash' },
+      { kind: 5, ts: '2026-01-01T00:00:01Z' },
+    ]),
+    unknownChip: harnessChipHTML('mystery-agent'),
+    hostMemory: resourceHostContextHTML({
+      total_memory_bytes: 8 * 1024 ** 3, available_memory_bytes: 4 * 1024 ** 3,
+      memory_pressure: 'normal', agent_memory_percent: 25, non_agent_memory_bytes: 2 * 1024 ** 3,
+    }),
+  };
+  for (const [name, h] of Object.entries(html)) assert.ok(!h.includes('style='), `${name}: ${h}`);
+  assert.match(html.hbars, /class="hbar-fill " data-w="100\.0"/);
+  assert.match(html.hbars, /class="hbar-fill " data-w="25\.0"/);
+  assert.match(html.waterfall, /class="wf-bar" data-left="0\.00" data-w="100\.00"/);
+  assert.match(html.waterfall, /class="wf-dot conn" data-left="50\.00"/);
+  assert.match(html.hostMemory, /class="resource-host-segment agent" data-w="25\.0"/);
+  assert.match(html.hostMemory, /class="resource-host-segment other" data-w="25\.0"/);
+  assert.match(html.hostMemory, /class="resource-host-segment available" data-w="50\.0"/);
+});
+
+test('index.html carries no style attributes', () => {
+  assert.ok(!/\sstyle=/.test(indexHTML), 'index.html: move inline styles into style.css');
+});
+
+test('applyInlineMetrics writes the data attributes through the CSSOM', () => {
+  const set = [];
+  const el = dataset => ({ dataset, style: { setProperty: (k, v) => set.push(`${k}=${v}`) } });
+  const bar = el({ left: '10.00', w: '42.50' });
+  const glyph = el({ harnessColor: 'hsl(1 62% 62%)' });
+  const found = { '[data-left]': [bar], '[data-w]': [bar], '[data-harness-color]': [glyph] };
+  applyInlineMetrics({ querySelectorAll: sel => found[sel] || [] });
+  assert.deepEqual(set, ['left=10.00%', 'width=42.50%', '--harness-color=hsl(1 62% 62%)']);
 });

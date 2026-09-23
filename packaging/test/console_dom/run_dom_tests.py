@@ -9,17 +9,21 @@ no inline handlers exist in the rendered page.
 
 Usage: python3 packaging/test/console_dom/run_dom_tests.py [--screenshot DIR]
        --screenshot DIR also writes the mock-rendered Sessions and Agents
-       tabs at 1280x800 in both themes: DIR/{sessions,agents}-{dark,light}.png
+       tabs at 1280x800 in both themes: DIR/{sessions,agents}-{dark,light}.png,
+       and the Overview tab as DIR/overview-dark.png. Screenshots load under
+       the daemon's Content-Security-Policy header, as the console is served.
 Env:   CHROME_BIN overrides Chrome detection.
 """
 
 import argparse
+import http.server
 import os
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 WEB_DIST = os.path.join(REPO, "daemon", "internal", "api", "web_dist")
@@ -65,8 +69,39 @@ def build_harness(tmp):
         f.write(html)
 
 
-def dump_dom(chrome, tmp, query=""):
-    url = f"file://{tmp}/harness.html{query}"
+def csp_header():
+    """The Content-Security-Policy value the daemon sends, read from web.go so
+    the served harness and the daemon cannot drift."""
+    src = open(os.path.join(REPO, "daemon", "internal", "api", "web.go")).read()
+    m = re.search(r'"Content-Security-Policy",\s*"([^"]+)"', src)
+    assert m, "Content-Security-Policy header not found in web.go"
+    return m.group(1)
+
+
+def serve_with_csp(tmp):
+    """Serve the harness on loopback HTTP with the daemon's CSP header. A
+    file:// load applies no policy, so markup the policy drops (inline style
+    attributes) renders there and passes."""
+    policy = csp_header()
+
+    class Handler(http.server.SimpleHTTPRequestHandler):
+        def __init__(self, *a, **kw):
+            super().__init__(*a, directory=tmp, **kw)
+
+        def end_headers(self):
+            self.send_header("Content-Security-Policy", policy)
+            super().end_headers()
+
+        def log_message(self, *a):
+            pass
+
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv, f"http://127.0.0.1:{srv.server_address[1]}"
+
+
+def dump_dom(chrome, tmp, query="", origin=None):
+    url = f"{origin or 'file://' + tmp}/harness.html{query}"
     out = subprocess.run(
         [chrome, "--headless=new", "--disable-gpu", "--no-sandbox",
          "--virtual-time-budget=" + str(VIRTUAL_TIME_MS), "--dump-dom", url],
@@ -79,18 +114,19 @@ def dump_dom(chrome, tmp, query=""):
 
 
 SHOT_SIZE = (1280, 800)
-SHOTS = {
-    "sessions": "?tab=sessions&shot&raildemo",
-    "agents": "?tab=agents&shot",
-}
+SHOTS = (
+    ("sessions", "?tab=sessions&shot&raildemo", ("dark", "light")),
+    ("agents", "?tab=agents&shot", ("dark", "light")),
+    ("overview", "?tab=overview&shot", ("dark",)),
+)
 
 
-def screenshot(chrome, tmp, query, path):
+def screenshot(chrome, origin, query, path):
     out = subprocess.run(
         [chrome, "--headless=new", "--disable-gpu", "--no-sandbox", "--hide-scrollbars",
          f"--window-size={SHOT_SIZE[0]},{SHOT_SIZE[1]}",
          "--virtual-time-budget=" + str(VIRTUAL_TIME_MS), f"--screenshot={path}",
-         f"file://{tmp}/harness.html{query}"],
+         f"{origin}/harness.html{query}"],
         capture_output=True, text=True, timeout=120,
     )
     if out.returncode != 0 or not os.path.isfile(path) or os.path.getsize(path) == 0:
@@ -101,7 +137,7 @@ def screenshot(chrome, tmp, query, path):
 def main():
     ap = argparse.ArgumentParser(description="DOM-level console tests")
     ap.add_argument("--screenshot", metavar="DIR",
-                    help="also write {sessions,agents}-{dark,light}.png of the mock-rendered tabs to DIR")
+                    help="also write {sessions,agents}-{dark,light}.png and overview-dark.png of the mock-rendered tabs to DIR")
     args = ap.parse_args()
     chrome = find_chrome()
     if not chrome:
@@ -109,8 +145,11 @@ def main():
     print(f"console dom tests (chrome: {chrome})")
 
     tmp = tempfile.mkdtemp(prefix="console-dom-")
+    srv = None
     try:
         build_harness(tmp)
+        srv, origin = serve_with_csp(tmp)
+        dom_csp = dump_dom(chrome, tmp, "?cspdemo&raildemo", origin)
         dom = dump_dom(chrome, tmp)
         dom_session = dump_dom(chrome, tmp, "?sessiondemo")
         dom_guard = dump_dom(chrome, tmp, "?guarddemo")
@@ -201,6 +240,15 @@ def main():
         check("waterfall carries model usage row",
               "claude-sonnet-4-5" in dom_rail and "46.2k in" in dom_rail)
         check("waterfall marks tool errors", 'wf-bar error' in dom_rail)
+        csp_widths = (re.search(r'data-csp-widths="([^"]*)"', dom_csp) or [None, ""])[1]
+        widths = {k: float(v) for k, v in (kv.split(":") for kv in csp_widths.split(",") if kv)}
+        # Bash spans 31s of the 90s trace; agents hold 34.4% of memory; the
+        # smallest memory-ranked bar is 85 MB of the 782 MB leader. A dropped width
+        # renders the bar at its 2px floor, the segment at 0, the fill full.
+        check("under the daemon CSP the waterfall bar, ranked bar and memory segment keep their widths",
+              abs(widths.get("wf-bar", 0) - 34.4) < 1
+              and abs(widths.get("hbar-fill", 0) - 10.9) < 1
+              and abs(widths.get("resource-host-segment", 0) - 34.4) < 1, f"widths={csp_widths!r}")
 
         # --- telemetry wiring ---
         check("version badge comes from /status", 'id="app-version">v9.9.9-domtest<' in dom)
@@ -596,12 +644,15 @@ def main():
         if args.screenshot:
             shot_dir = os.path.abspath(args.screenshot)
             os.makedirs(shot_dir, exist_ok=True)
-            for name, query in SHOTS.items():
-                for theme in ("dark", "light"):
+            for name, query, themes in SHOTS:
+                for theme in themes:
                     path = os.path.join(shot_dir, f"{name}-{theme}.png")
-                    screenshot(chrome, tmp, f"{query}&theme={theme}", path)
+                    screenshot(chrome, origin, f"{query}&theme={theme}", path)
                     print(f"  shot  {path}")
     finally:
+        if srv:
+            srv.shutdown()
+            srv.server_close()
         shutil.rmtree(tmp, ignore_errors=True)
 
     print(f"\n{len(passed)} passed, {len(failed)} failed")

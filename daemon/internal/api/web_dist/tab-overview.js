@@ -77,9 +77,9 @@ function resourceHostContextHTML(host) {
     <div class="resource-host-memory">
       <div><strong>${memoryKnown ? escapeHTML(fmtRSS(available) || '0 B') : 'Unavailable'} available</strong><span>of ${escapeHTML(fmtRSS(total))} physical memory</span></div>
       ${memoryKnown ? `<div class="resource-host-bar" role="img" aria-label="Memory: ${agentPercent.toFixed(1)} percent agents, ${otherPercent.toFixed(1)} percent other, ${availablePercent.toFixed(1)} percent available">
-        <span class="resource-host-segment agent" style="width:${agentPercent.toFixed(1)}%"></span>
-        <span class="resource-host-segment other" style="width:${otherPercent.toFixed(1)}%"></span>
-        <span class="resource-host-segment available" style="width:${availablePercent.toFixed(1)}%"></span>
+        <span class="resource-host-segment agent" data-w="${agentPercent.toFixed(1)}"></span>
+        <span class="resource-host-segment other" data-w="${otherPercent.toFixed(1)}"></span>
+        <span class="resource-host-segment available" data-w="${availablePercent.toFixed(1)}"></span>
       </div>
       <div class="resource-host-legend"><span><i class="agent"></i>Agents ${agentPercent.toFixed(1)}%</span><span><i class="other"></i>Other ${otherPercent.toFixed(1)}%</span><span><i class="available"></i>Available ${availablePercent.toFixed(1)}%</span></div>` : '<div class="resource-host-legend"><span>Memory breakdown unavailable</span></div>'}
     </div>
@@ -172,6 +172,7 @@ function renderResourceMissionControl() {
   const policy = `<div class="resource-policy"><span><b>${escapeHTML(control.mode || 'observe')}</b> machine policy${limits ? ` · ${escapeHTML(limits)}` : ' · budgets disabled'}${control.sustain_seconds ? ` · ${Number(control.sustain_seconds)}s grace` : ''}${ladder ? ` · ${escapeHTML(ladder)}` : ''} · ${(control.workspace_overrides || []).length} workspace override${(control.workspace_overrides || []).length === 1 ? '' : 's'}</span><span><span>${(control.pending || []).length} approval${(control.pending || []).length === 1 ? '' : 's'} pending</span><button type="button" class="btn btn-ghost btn-sm" data-action="edit-resource-policy">Edit policy</button></span></div>`;
   if (sessions.length === 0) {
     container.innerHTML = hostContext + policy + `<div class="empty"><svg class="icon"><use href="#i-activity"/></svg><span>No attributed agent resource use right now</span></div>`;
+    applyInlineMetrics(container);
     return;
   }
 
@@ -257,6 +258,7 @@ function renderResourceMissionControl() {
   }
 
   container.innerHTML = hostContext + posture + policy + `<div class="resource-layout"><div class="resource-session-list">${cards}</div><aside class="resource-detail-wrap">${detail}</aside></div>`;
+  applyInlineMetrics(container);
 }
 
 // History tab: the pressure flight recorder on its own page. It was stacked
@@ -307,6 +309,7 @@ function renderChartFlags() {
       titleAttr: rule,
     }));
   el.innerHTML = hbarsHTML(rows);
+  applyInlineMetrics(el);
 }
 
 // Memory-by-session chart: resident memory per attributed session, ranked.
@@ -351,6 +354,7 @@ function renderChartMemory() {
     sub: s.infra ? 'infra' : '',
   }));
   el.innerHTML = hbarsHTML(rows, { format: v => fmtRSS(v) || '0 B' });
+  applyInlineMetrics(el);
 }
 
 function renderSessionStrip() {
@@ -408,6 +412,7 @@ function renderSessionBoard() {
     if (pills) {
       const present = applySessionFilters(groups, { liveOnly: filter.liveOnly }).filter(g => !g.infra).map(g => g.key);
       pills.innerHTML = harnessPillsHTML(present, filter.harnesses);
+      applyInlineMetrics(pills);
     }
     const shown = applySessionFilters(groups, filter);
     const sessionGroups = shown.filter(g => !g.infra);
@@ -417,6 +422,7 @@ function renderSessionBoard() {
       ? sessionGroups.map(g => sessionGroupHTML(g, trees, SA.selectedSessionId, isOpen(g.key, true), !!SA.endedSessionsOpen[g.key])).join('')
       : (filtered ? noMatch : quiet))
       + (infra ? sessionInfraGroupHTML(infra, isOpen('infra', false)) : '');
+    applyInlineMetrics(rail);
     rail.querySelectorAll('details.session-group').forEach(el => {
       el.addEventListener('toggle', () => {
         SA.sessionGroupOpen[el.dataset.harness] = el.open;
@@ -427,6 +433,7 @@ function renderSessionBoard() {
     if (detail) {
       if (selected) {
         detail.innerHTML = sessionDetailHTML(selected, SA.sessionTimeline || [], trees);
+        applyInlineMetrics(detail);
       } else if (SA.selectedSessionId) {
         detail.innerHTML = `<div class="empty"><span>Session no longer listed</span></div>`;
       } else {

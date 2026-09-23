@@ -14,6 +14,18 @@ function escapeHTML(str) {
     .replace(/"/g, '&quot;');
 }
 
+// applyInlineMetrics: the console CSP (style-src 'self') drops style
+// attributes parsed from markup, so renderers carry sizes in data attributes
+// (data-left / data-w in percent, data-harness-color) and callers apply them
+// here after each innerHTML assignment — CSSOM writes from script are
+// allowed under that policy. Touches only the subtree it is handed.
+function applyInlineMetrics(root) {
+  if (!root) return;
+  root.querySelectorAll('[data-left]').forEach(el => el.style.setProperty('left', el.dataset.left + '%'));
+  root.querySelectorAll('[data-w]').forEach(el => el.style.setProperty('width', el.dataset.w + '%'));
+  root.querySelectorAll('[data-harness-color]').forEach(el => el.style.setProperty('--harness-color', el.dataset.harnessColor));
+}
+
 // fmtTime: deterministic local HH:MM:SS. toLocaleTimeString varies by locale
 // (zero-padding, a "24:00" midnight quirk in some), which can re-wrap the
 // 68px timeline column — build the string by hand instead.
@@ -166,7 +178,8 @@ function harnessMeta(name) {
 // mark renders white on its brand tile (Cursor dark on a light tile); the
 // tile color comes from the .hk-<key> class because the console CSP
 // (style-src 'self') drops inline style attributes. Unknown harnesses keep
-// the hashed-hue initial. opts.label appends the display name as text.
+// the hashed-hue initial, applied by applyInlineMetrics. opts.label appends
+// the display name as text.
 function harnessChipHTML(name, opts) {
   const m = harnessMeta(name);
   let mark;
@@ -176,7 +189,7 @@ function harnessChipHTML(name, opts) {
   } else if (m.known) {
     mark = `<span class="harness-glyph hk-${escapeHTML(m.key)}" aria-hidden="true">${escapeHTML(m.glyph)}</span>`;
   } else {
-    mark = `<span class="harness-glyph" style="--harness-color:${m.color}" aria-hidden="true">${escapeHTML(m.glyph)}</span>`;
+    mark = `<span class="harness-glyph" data-harness-color="${escapeHTML(m.color)}" aria-hidden="true">${escapeHTML(m.glyph)}</span>`;
   }
   const label = opts && opts.label ? `<span class="harness-label">${escapeHTML(m.label)}</span>` : '';
   return `<span class="harness-chip" title="${escapeHTML(m.known ? m.label : (name || 'agent'))}">${mark}${label}</span>`;
@@ -578,7 +591,7 @@ function hbarsHTML(rows, opts) {
     const pct = Math.max(2, (r.value / max) * 100);
     return `<div class="hbar-row">
       <span class="hbar-label" title="${escapeHTML(r.titleAttr || r.label)}">${escapeHTML(r.label)}</span>
-      <span class="hbar-track"><span class="hbar-fill ${r.cls || ''}" style="width:${pct.toFixed(1)}%"></span></span>
+      <span class="hbar-track"><span class="hbar-fill ${r.cls || ''}" data-w="${pct.toFixed(1)}"></span></span>
       <span class="hbar-val">${escapeHTML(fmt(r.value))}</span>
       ${r.sub ? `<span class="hbar-sub">${escapeHTML(r.sub)}</span>` : ''}
     </div>`;
@@ -764,7 +777,7 @@ function sessionWaterfallHTML(events) {
   const bars = toolCalls.map(e => {
     const err = e.tool_status === 'error' ? ' error' : '';
     const dur = e.duration_ms ? fmtDurationMs(e.duration_ms) : '';
-    return `<div class="wf-row"><span class="wf-name">${escapeHTML(e.tool || 'tool')}<span class="wf-dur">${escapeHTML(dur)}</span></span><span class="wf-track"><span class="wf-bar${err}" style="left:${pct(startOf(e)).toFixed(2)}%;width:${wid(startOf(e), endOf(e)).toFixed(2)}%"></span></span></div>`;
+    return `<div class="wf-row"><span class="wf-name">${escapeHTML(e.tool || 'tool')}<span class="wf-dur">${escapeHTML(dur)}</span></span><span class="wf-track"><span class="wf-bar${err}" data-left="${pct(startOf(e)).toFixed(2)}" data-w="${wid(startOf(e), endOf(e)).toFixed(2)}"></span></span></div>`;
   }).join('');
 
   const dotCls = e => {
@@ -773,7 +786,7 @@ function sessionWaterfallHTML(events) {
     return '';
   };
   const dotRow = dots.length
-    ? `<div class="wf-row"><span class="wf-name">file · net · guard</span><span class="wf-track">${dots.map(e => `<span class="wf-dot ${dotCls(e)}" style="left:${pct(startOf(e)).toFixed(2)}%"></span>`).join('')}</span></div>`
+    ? `<div class="wf-row"><span class="wf-name">file · net · guard</span><span class="wf-track">${dots.map(e => `<span class="wf-dot ${dotCls(e)}" data-left="${pct(startOf(e)).toFixed(2)}"></span>`).join('')}</span></div>`
     : '';
 
   const modelRows = modelCalls.map(e => {

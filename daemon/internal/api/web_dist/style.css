@@ -1359,6 +1359,8 @@ button.fw-uninspected .fw-drill-hint {
   position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
   overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
 }
+/* Icon sprite sheets: out of flow, so the 0x0 <svg> adds no line box. */
+.sprite-sheet { position: absolute; }
 .confirm-message { color: var(--tx-2); margin: 6px 0 12px; }
 .confirm-input { width: 100%; margin-bottom: 12px; }
 .confirm-actions { display: flex; justify-content: flex-end; gap: 8px; }
