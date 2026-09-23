@@ -125,3 +125,26 @@ func TestMachineProfileReadsRAM(t *testing.T) {
 		t.Fatalf("MachineProfile() = %+v, want RAM", m)
 	}
 }
+
+// Component checkpoints and content hashes are not offered; a modified
+// (safety-stripped) variant never counts as its catalog family.
+func TestRecommendFiltersComponentsAndModifiedVariants(t *testing.T) {
+	servers := []DiscoveredServer{{
+		Endpoint: "http://127.0.0.1:11434", Kind: "ollama",
+		Models: []string{"0555d34cb1ed80c0e61a5635194c70027b4c2ff3", "audio_tokenizer", "encoder", "spkr-verf",
+			"qwen3.8-27b-uncensored", "qwen3.8:27b-mlx"},
+		Sizes: map[string]int64{"qwen3.8-27b-uncensored": 16 * gb, "qwen3.8:27b-mlx": 18 * gb},
+	}}
+	recs := Recommend(Machine{RAMBytes: 128 << 30}, servers)
+	for _, id := range []string{"0555d34cb1ed80c0e61a5635194c70027b4c2ff3", "audio_tokenizer", "encoder", "spkr-verf"} {
+		if _, ok := recByID(recs, id); ok {
+			t.Errorf("%s must not be offered", id)
+		}
+	}
+	if got := recommended(recs); len(got) != 1 || got[0] != "qwen3.8:27b-mlx" {
+		t.Fatalf("recommended = %v, want the unmodified qwen3.8:27b-mlx", got)
+	}
+	if catalogRank("qwen3.8-27b-uncensored") != 0 || catalogRank("qwen3.8:27b-mlx") == 0 {
+		t.Fatal("modified variant must not take the catalog family's rank")
+	}
+}

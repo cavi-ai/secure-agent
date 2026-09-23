@@ -2,6 +2,7 @@ package advisor
 
 import (
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 	"unicode"
@@ -37,9 +38,23 @@ func fit(bytes int64, ram uint64) string {
 	return "too-big"
 }
 
-// notChat marks models that cannot triage: embeddings, OCR, rerankers,
-// speech.
-var notChat = []string{"embed", "ocr", "rerank", "whisper", "tts"}
+// notChat marks entries that cannot triage: embeddings, OCR, rerankers,
+// speech and music models, and the component checkpoints some servers list
+// (encoders, decoders, tokenizers, aligners, speaker verification).
+var notChat = []string{"embed", "ocr", "rerank", "whisper", "tts", "music", "tokenizer", "encoder", "decoder", "aligner", "spkr"}
+
+// modified marks fine-tunes that strip a model's safety training; they never
+// count as the catalog model they derive from.
+var modified = []string{"uncensored", "abliterated", "heretic"}
+
+var hexID = regexp.MustCompile(`^[0-9a-f]{10,}$`)
+
+// isChatModel reports whether a served model name is a chat model worth
+// offering: not a component, not a bare content hash.
+func isChatModel(name string) bool {
+	lower := strings.ToLower(name)
+	return !hexID.MatchString(lower) && !slices.ContainsFunc(notChat, func(s string) bool { return strings.Contains(lower, s) })
+}
 
 func modelTokens(name string) []string {
 	return strings.FieldsFunc(strings.ToLower(name), func(r rune) bool {
@@ -51,6 +66,10 @@ func modelTokens(name string) []string {
 // tokens the model name carries, 0 when none.
 func catalogRank(name string) int {
 	toks := modelTokens(name)
+	lower := strings.ToLower(name)
+	if slices.ContainsFunc(modified, func(s string) bool { return strings.Contains(lower, s) }) {
+		return 0
+	}
 	best := 0
 	for _, c := range Catalog {
 		if c.Rank > best && !slices.ContainsFunc(c.Match, func(m string) bool { return !slices.Contains(toks, m) }) {
@@ -83,8 +102,7 @@ func Recommend(m Machine, servers []DiscoveredServer) []Recommendation {
 	var recs []Recommendation
 	for _, srv := range servers {
 		for _, name := range srv.Models {
-			lower := strings.ToLower(name)
-			if slices.ContainsFunc(notChat, func(s string) bool { return strings.Contains(lower, s) }) {
+			if !isChatModel(name) {
 				continue
 			}
 			b := srv.Sizes[name]
