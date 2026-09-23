@@ -1,6 +1,7 @@
 package collect
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -201,4 +202,66 @@ func TestSpoolPollSkipsUnchangedSpool(t *testing.T) {
 		c = tailer.poll(c)
 	}
 	expect(3)
+}
+
+// A flooding spool (a defective writer's near-empty garbage lines, far past
+// the per-tick drain budget) is drained past the budget and the rest of the
+// tail skipped in one tick — not scanned line by line — and reported via
+// Stats(). A following tick with real lines drains normally and clears the
+// flood signal.
+func TestSpoolTailerSkipsFloodPastBudget(t *testing.T) {
+	path := t.TempDir() + "/spool.jsonl"
+	body := bytes.Repeat([]byte("ab\n"), (10<<20)/3) // ~10 MiB of 2-byte lines
+	if err := os.WriteFile(path, body, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	b := bus.New(64)
+	sub := b.Subscribe()
+	tailer := NewSpoolTailerAt(b, path)
+
+	c := tailer.poll(spoolCursor{})
+	if c.offset != int64(len(body)) {
+		t.Fatalf("offset after flood tick = %d, want EOF %d", c.offset, len(body))
+	}
+	stats := tailer.Stats()
+	if stats.BytesSkipped == 0 {
+		t.Fatal("BytesSkipped = 0 after a tick well past the drain budget, want > 0")
+	}
+	if stats.FloodSince.IsZero() {
+		t.Fatal("FloodSince not set after a flooding tick")
+	}
+
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o640)
+	if err != nil {
+		t.Fatal(err)
+	}
+	valid := `{"event_type":0,"process":{"audit_token":{"pid":9},"executable":{"path":"/bin/ls"}},"event":{"open":{"file":{"path":"/etc/hosts"}}},"time":"2026-09-11T12:00:00Z"}` + "\n"
+	for i := 0; i < 100; i++ {
+		if _, err := f.WriteString(valid); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	c = tailer.poll(c)
+	if c.offset != int64(len(body))+int64(len(valid))*100 {
+		t.Fatalf("offset after clean tick = %d, want end of the appended lines", c.offset)
+	}
+	stats = tailer.Stats()
+	if stats.Parsed != 100 {
+		t.Fatalf("Parsed = %d, want 100 — the valid lines must still be drained after a flood", stats.Parsed)
+	}
+	if !stats.FloodSince.IsZero() {
+		t.Fatal("FloodSince not cleared after a tick that drained fully within budget")
+	}
+	select {
+	case e := <-sub:
+		if e.PID != 9 {
+			t.Fatalf("published event pid = %d, want 9", e.PID)
+		}
+	default:
+		t.Fatal("no parsed event published after the flood cleared")
+	}
 }
