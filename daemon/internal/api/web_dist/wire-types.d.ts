@@ -465,6 +465,31 @@ export interface Posture {
   connected: boolean;
 }
 
+export interface Machine {
+  chip: string;
+  ram_bytes: number;
+  free_disk_bytes: number;
+}
+
+export interface Recommendation {
+  id: string;
+  label: string;
+  source: string;
+  endpoint?: string;
+  bytes?: number;
+  fit: string;
+  note: string;
+  recommended?: boolean;
+  rank: number;
+}
+
+export interface DiscoveredServer {
+  endpoint: string;
+  kind: string;
+  models: string[];
+  sizes?: Record<string, number>;
+}
+
 export interface CostRow {
   key: string;
   harness?: string;

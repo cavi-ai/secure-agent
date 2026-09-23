@@ -427,6 +427,19 @@ struct SettingsView: View {
     @State private var selectedServerID = ""
     @State private var selectedModel = ""
 
+    /// Point the pickers at a recommendation and write the config.
+    private func useRecommendation(_ r: ModelRecommendationModel) {
+        let c = SetupManager.advisorChoice(for: r)
+        advisorMode = c.mode
+        if c.mode == .managed {
+            selectedManagedModel = c.model
+        } else {
+            selectedServerID = c.endpoint ?? selectedServerID
+            selectedModel = c.model
+        }
+        setup.applyRecommendation(r)
+    }
+
     private var advisorTab: some View {
         let discovery = setup.advisorDiscovery
         let selectedServer = discovery.servers.first { $0.id == selectedServerID } ?? discovery.servers.first
@@ -439,6 +452,34 @@ struct SettingsView: View {
                     Text("Use my existing server").tag(SetupManager.AdvisorMode.existing)
                 }
                 .pickerStyle(.radioGroup)
+            }
+
+            if let recs = discovery.recommendations, !recs.isEmpty {
+                Section("Recommended for this Mac") {
+                    if let m = discovery.machine {
+                        Text(m.summary).font(.caption).foregroundStyle(.secondary)
+                    }
+                    ForEach(Array(recs.prefix(4))) { r in
+                        HStack(alignment: .firstTextBaseline) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                HStack(spacing: 6) {
+                                    Text(r.label).font(.callout.weight(r.recommended == true ? .semibold : .regular))
+                                    if r.recommended == true {
+                                        Text("Recommended").font(.caption2.weight(.semibold))
+                                            .padding(.horizontal, 5).padding(.vertical, 1)
+                                            .background(Capsule().fill(Color.accentColor.opacity(0.18)))
+                                    }
+                                }
+                                Text((r.source == "installed" ? "On your server · " : "Managed · ") + r.note)
+                                    .font(.caption).foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            Spacer()
+                            Button("Use") { useRecommendation(r) }
+                                .disabled(r.fit == "too-big")
+                        }
+                    }
+                }
             }
 
             if advisorMode == .managed {
@@ -517,6 +558,17 @@ struct SettingsView: View {
                     selectedManagedModel = model
                 } else {
                     selectedModel = model
+                }
+            }
+            // Nothing configured yet: the pickers start on the recommendation.
+            if setup.advisorPersisted.mode == nil, let r = discovery.recommended {
+                let c = SetupManager.advisorChoice(for: r)
+                advisorMode = c.mode
+                if c.mode == .managed {
+                    selectedManagedModel = c.model
+                } else {
+                    selectedServerID = c.endpoint ?? ""
+                    selectedModel = c.model
                 }
             }
             if selectedManagedModel.isEmpty { selectedManagedModel = discovery.managedModels.first ?? "" }

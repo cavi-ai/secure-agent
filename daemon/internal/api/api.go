@@ -30,6 +30,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/resource"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 	"github.com/cavi-ai/secure-agent/daemon/internal/supervise"
+	"github.com/cavi-ai/secure-agent/daemon/internal/worktreehunter"
 	"golang.org/x/sys/unix"
 )
 
@@ -144,6 +145,7 @@ type API struct {
 	killer           Killer
 	statusFn         StatusFunc
 	hermes           func() collect.HermesStatus
+	worktrees        *worktreehunter.Hunter
 	resources        func() resource.Snapshot
 	resourceControl  *resource.Controller
 	resourcePolicy   func(config.ResourceControlConfig) error
@@ -287,6 +289,10 @@ type Deps struct {
 	// Hermes reports the Hermes Agent collector's state for /doctor
 	// (optional; unwired reads "not wired").
 	Hermes func() collect.HermesStatus
+
+	// Worktrees is the worktree hunter behind /worktrees (optional; unwired
+	// answers 503).
+	Worktrees *worktreehunter.Hunter
 }
 
 // New builds the API from its resolved dependencies.
@@ -297,6 +303,7 @@ func New(d Deps) *API {
 		killer:          d.Killer,
 		statusFn:        d.Status,
 		hermes:          d.Hermes,
+		worktrees:       d.Worktrees,
 		resources:       d.Resources,
 		resourceControl: d.ResourceControl,
 		resourcePolicy:  d.ResourcePolicyUpdater,
@@ -592,6 +599,8 @@ func (a *API) routes() map[string]http.HandlerFunc {
 		"/costs":                        a.handleCosts,
 		"/costs/unpriced":               a.handleCostsUnpriced,
 		"/doctor":                       a.handleDoctor,
+		"/worktrees":                    a.handleWorktrees,
+		"/worktrees/repos":              a.handleWorktreeRepos,
 		"/advisor/discover":             a.handleAdvisorDiscover,
 		"/fleet":                        a.handleFleet,
 		"/kill":                         a.handleKill,
@@ -1098,17 +1107,22 @@ func (a *API) handleMute(w http.ResponseWriter, r *http.Request) {
 
 // handleAdvisorDiscover lists loopback OpenAI-compatible model servers the
 // user could link (Path B: existing Ollama/MLX/llama.cpp servers) plus the
-// curated managed-model list (Path A). Read-gated; the menubar's Advisor
-// settings pane renders its dropdowns from this so nobody types an endpoint.
+// curated managed-model list (Path A), this machine's profile and the models
+// ranked for it. Read-gated; the menubar's Advisor settings pane and
+// onboarding render from this so nobody types an endpoint.
 func (a *API) handleAdvisorDiscover(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	servers := advisor.DiscoverServers()
+	machine := advisor.MachineProfile()
 	w.Header().Set("Content-Type", "application/json")
 	writeJSON(w, map[string]any{
-		"servers":        advisor.DiscoverServers(),
-		"managed_models": advisor.DefaultManagedModels,
+		"servers":         servers,
+		"managed_models":  advisor.DefaultManagedModels,
+		"machine":         machine,
+		"recommendations": advisor.Recommend(machine, servers),
 	})
 }
 

@@ -25,6 +25,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/fleet"
 	"github.com/cavi-ai/secure-agent/daemon/internal/resource"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
+	"github.com/cavi-ai/secure-agent/daemon/internal/worktreehunter"
 )
 
 // advisorStackHolder is the atomic, swap-safe reference the drain loop and
@@ -52,6 +53,7 @@ type configWatchDeps struct {
 	logDir          string   // webhook delivery log dir (filepath.Dir(cfg.DBPath))
 	apiServer       *api.API // SetFleetConfigured follows the webhook set
 	resourceControl *resource.Controller
+	worktrees       *worktreehunter.Hunter
 	initialConfig   *config.Config
 }
 
@@ -62,12 +64,13 @@ type configWatchDeps struct {
 // boot-static.
 func watchConfig(ctx context.Context, path string, deps configWatchDeps) {
 
-	var lastAdvisorKey, lastFleetKey, lastResourceKey, lastPricingKey string
+	var lastAdvisorKey, lastFleetKey, lastResourceKey, lastPricingKey, lastWorktreesKey string
 	if deps.initialConfig != nil {
 		lastAdvisorKey = advisorConfigKey(deps.initialConfig.Advisor)
 		lastFleetKey = fleetConfigKey(deps.initialConfig.Fleet)
 		lastResourceKey = resourceConfigKey(deps.initialConfig.ResourceControl)
 		lastPricingKey = pricingConfigKey(*deps.initialConfig)
+		lastWorktreesKey = worktreesConfigKey(deps.initialConfig.Worktrees)
 	}
 	check := func() {
 		// LoadStrict, not Load: a malformed overlay makes Load substitute
@@ -110,6 +113,12 @@ func watchConfig(ctx context.Context, path string, deps configWatchDeps) {
 			lastPricingKey = key
 			applyPricing(data)
 			log.Printf("pricing config applied live (%d model(s))", len(data.Pricing))
+		}
+		if key := worktreesConfigKey(data.Worktrees); key != lastWorktreesKey && deps.worktrees != nil {
+			lastWorktreesKey = key
+			deps.worktrees.SetOptions(worktreeOptions(data.Worktrees))
+			log.Printf("worktrees config applied live (%d root(s), stale after %d days)",
+				len(data.Worktrees.Roots), worktreeOptions(data.Worktrees).StaleDays)
 		}
 		if key := resourceConfigKey(data.ResourceControl); key != lastResourceKey {
 			lastResourceKey = key
@@ -159,6 +168,21 @@ func pricingConfigKey(c config.Config) string {
 		Skipped []string
 	}{c.Pricing, c.PricingSkipped}) // prices are finite after config parsing
 	return string(b)
+}
+
+func worktreesConfigKey(c config.WorktreesConfig) string {
+	b, _ := json.Marshal(c)
+	return string(b)
+}
+
+// worktreeOptions maps the config key onto the hunter's options (0 stale
+// days = the hunter's default).
+func worktreeOptions(c config.WorktreesConfig) worktreehunter.Options {
+	o := worktreehunter.Options{Roots: c.Roots, StaleDays: c.StaleDays}
+	if o.StaleDays <= 0 {
+		o.StaleDays = worktreehunter.DefaultStaleDays
+	}
+	return o
 }
 
 func resourceConfigKey(c config.ResourceControlConfig) string {
