@@ -43,6 +43,18 @@ func (s *AllowlistStore) loadLocked() map[string][]string {
 	return out
 }
 
+// Allows reports whether host is approved for agent, by the same match rule
+// the correlator applies to vendor hosts (exact or dot-boundary suffix,
+// case-insensitive).
+func (s *AllowlistStore) Allows(agent, host string) bool {
+	for _, allowed := range s.Load()[agent] {
+		if hostMatches(host, allowed) {
+			return true
+		}
+	}
+	return false
+}
+
 // Add records host under agent and writes the file atomically (0600).
 // Idempotent: adding an existing host is a no-op write.
 func (s *AllowlistStore) Add(agent, host string) error {

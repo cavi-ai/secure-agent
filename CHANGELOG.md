@@ -7,11 +7,21 @@ All notable changes to `secure-agent` are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- `GET /flags/{id}/explain`: one sentence per rule, the file's category and
+  owner, destinations with org, allowlist state and read→connect gap, the
+  session with the nearest tool call and model, one disposition, and the
+  applicable actions with their requests; `/flags` and `/snapshot` stamp it
+  on the first 25 unacknowledged flags.
 - `secret-in-transcript` flag: tailed harness transcript lines are scanned with
   the firewall's known-secret fingerprints and typed patterns; a hit carries
   the rule id, transcript path, and session id (never the matched text), is
   severity 3 for a registered secret and 2 for a typed pattern, and repeats
   per (path, rule) are collapsed.
+
+### Changed
+- Posture and attention: a flag the advisor judged benign with confidence
+  ≥ 0.85 counts as severity 1 (`attention`, "Finding, likely benign"), not
+  critical.
 
 ### Fixed
 - Model pricing: explicit entries for every current Anthropic model (Fable

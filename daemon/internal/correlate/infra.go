@@ -262,6 +262,26 @@ type EndpointIdentity struct {
 // known, and a resolved name when the address is a bare IP. Best-effort and
 // cached; never blocks long (a pointer lookup is time-bounded).
 func Identify(host string) EndpointIdentity {
+	return identify(host, ptrOrgName)
+}
+
+// IdentifyCached is Identify without the network: bare IPs consult the CIDR
+// table and whatever the PTR cache already holds, never the resolver. For
+// list stamping, where a lookup per row would stall the response.
+func IdentifyCached(host string) EndpointIdentity {
+	return identify(host, ptrCached)
+}
+
+// ptrCached returns the cached PTR result for ip, or empty when none is held.
+func ptrCached(ip string) ptrResult {
+	if v, ok := ptrCache.Load(ip); ok {
+		e := v.(ptrEntry)
+		return ptrResult{Org: e.org, Name: e.name}
+	}
+	return ptrResult{}
+}
+
+func identify(host string, ptrLookup func(string) ptrResult) EndpointIdentity {
 	h := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
 	if h == "" {
 		return EndpointIdentity{Kind: "unknown"}
@@ -277,7 +297,7 @@ func Identify(host string) EndpointIdentity {
 				break
 			}
 		}
-		if ptr := ptrOrgName(h); ptr.Name != "" {
+		if ptr := ptrLookup(h); ptr.Name != "" {
 			id.Name = ptr.Name
 			if id.Org == "" {
 				id.Org = ptr.Org

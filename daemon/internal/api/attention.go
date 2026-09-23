@@ -15,7 +15,7 @@ import (
 // surface renders the same queue.
 
 // AttentionItem priorities (higher first): guard 5, resource 4, incident 3,
-// flag 2, egress 1.
+// flag 2 (1 when the flag is likely benign), egress 1.
 type AttentionItem struct {
 	Kind      string                `json:"kind"` // resource | guard | incident | flag | egress
 	Priority  int                   `json:"priority"`
@@ -30,6 +30,9 @@ type AttentionItem struct {
 	Count     int                   `json:"count,omitempty"`
 	Hosts     []string              `json:"hosts,omitempty"`
 	Advisor   *model.AdvisorVerdict `json:"advisor,omitempty"`
+	// Disposition is set on flag items: the same verdict /flags/{id}/explain
+	// serves.
+	Disposition *model.Disposition `json:"disposition,omitempty"`
 }
 
 // AttentionGroup is one agent session (or an explicit unattributed bucket)
@@ -215,16 +218,22 @@ func (a *API) computeAttentionGroups(st Status) []AttentionGroup {
 		})
 	}
 
-	// Unacknowledged critical flags.
+	// Unacknowledged critical flags; a likely-benign one ranks below them.
 	for _, f := range a.store.QueryFlags(store.FlagFilter{MinSeverity: 3, Limit: 50, Unacted: true}) {
 		detail := f.Rule
 		if len(f.Evidence) > 0 {
 			detail = f.Rule + " — " + f.Evidence[0].String()
 		}
-		add(f.Agent, f.PID, AttentionItem{
+		d := dispositionFor(f)
+		item := AttentionItem{
 			Kind: "flag", Priority: 2, ID: f.ID,
-			Title: "Critical finding", Detail: detail,
-		})
+			Title: "Critical finding", Detail: detail, Disposition: &d,
+		}
+		if d.State == model.DispositionBenignLikely {
+			item.Priority = 1
+			item.Title = "Finding, likely benign"
+		}
+		add(f.Agent, f.PID, item)
 	}
 
 	// Uninspected egress, one item per group with host rollup.
