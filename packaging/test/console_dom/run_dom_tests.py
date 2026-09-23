@@ -977,6 +977,9 @@ def main():
               'data-state="" aria-pressed="true">All <b>4</b></button>' in dom_wt
               and 'data-state="remove" aria-pressed="false">Remove <b>1</b></button>' in dom_wt
               and "1 repo · 4 worktrees · stale after 14 idle days · scanned in 4.2s" in dom_wt)
+        check("worktrees: the advisor note renders escaped under its row; Ask advisor sits on review and keep rows only",
+              '<p class="wt-advice"><b>Advisor: review</b> 60% · &lt;i&gt;look&lt;/i&gt; at .tmp before removing</p>' in wt
+              and wt.count('data-action="worktree-advise"') == 2)
         wtr = wt_block(dom_wtremove)
         wtr_rows = wtr.count('class="wt-row')
         wt_reqs = pre(dom_wtremove, "mock-requests")

@@ -134,3 +134,40 @@ func TestPrune(t *testing.T) {
 		t.Fatalf("Prune(non-repo) err = %v, want ErrNotRepo", err)
 	}
 }
+
+func TestAdviceRequest(t *testing.T) {
+	home := isolateGit(t)
+	f := newFixture(t)
+	ctx := context.Background()
+
+	wt := f.worktree(t, "wip")
+	commit(t, wt, "a.txt", "a\n", "add the parser")
+	commit(t, wt, "b.txt", "b\n", "wire the parser")
+	write(t, filepath.Join(wt, "scratch.txt"), "s\n")
+	write(t, filepath.Join(wt, ".env"), "K=[REDACTED]\n")
+	gone := f.worktree(t, "gone")
+	if err := os.RemoveAll(gone); err != nil {
+		t.Fatal(err)
+	}
+
+	h := New(newMemStore(), home, Options{})
+	req, err := h.AdviceRequest(ctx, wt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if req.State != StateKeep || req.Branch != "feat/wip" || req.Head == "" || req.Path != wt {
+		t.Fatalf("request = %+v", req)
+	}
+	if strings.Join(req.Commits, "|") != "wire the parser|add the parser" {
+		t.Fatalf("commits = %q", req.Commits)
+	}
+	if strings.Join(req.Paths, "|") != "scratch.txt" || len(req.Precious) != 1 || !strings.HasPrefix(req.Precious[0], ".env") {
+		t.Fatalf("paths = %q precious = %q", req.Paths, req.Precious)
+	}
+	if _, err := h.AdviceRequest(ctx, gone); !errors.Is(err, ErrNothingToAdvise) {
+		t.Fatalf("gone: err = %v, want ErrNothingToAdvise", err)
+	}
+	if _, err := h.AdviceRequest(ctx, f.main); !errors.Is(err, ErrNotWorktree) {
+		t.Fatalf("main: err = %v, want ErrNotWorktree", err)
+	}
+}

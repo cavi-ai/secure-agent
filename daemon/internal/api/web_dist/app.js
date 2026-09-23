@@ -1186,6 +1186,34 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   };
 
+  // Ask the local advisor for a note. The note is looked up on every GET, so
+  // a few cheap re-reads of the cached report pick it up when the model
+  // answers; no rescan.
+  const WORKTREE_NOTE_POLLS = 6;
+  const WORKTREE_NOTE_EVERY_MS = 10000;
+  window.adviseWorktree = async function(path) {
+    try {
+      const { r, text, json } = await postWorktree('/worktrees/advise', { path });
+      if (!r.ok) throw new Error(text.trim() || String(r.status));
+      if (!json || !json.queued) {
+        showToast('The advisor is off or busy — no note queued', 'info');
+        return;
+      }
+      showToast('Asked the local advisor — the note appears under the row when it answers', 'info');
+      for (let i = 0; i < WORKTREE_NOTE_POLLS; i++) {
+        await new Promise(res => setTimeout(res, WORKTREE_NOTE_EVERY_MS));
+        const g = await apiFetch('/worktrees', { timeoutMs: WORKTREE_TIMEOUT_MS });
+        if (!g.ok) break;
+        const rep = await g.json();
+        worktreesState.report = rep;
+        markDirty('worktrees');
+        if (rep.advice && rep.advice[path]) break;
+      }
+    } catch (err) {
+      showToast('Failed to ask the advisor: ' + (err.message || err), 'danger');
+    }
+  };
+
   window.pruneWorktrees = async function(repo) {
     const ok = await window.saConfirm(`Drop git's entries for worktrees of ${repo} whose directory is gone?`,
       { title: 'Prune worktrees', okLabel: 'Prune', danger: false });
@@ -2335,6 +2363,10 @@ document.addEventListener('DOMContentLoaded', () => {
       case 'worktree-hide':
         e.preventDefault();
         window.hideWorktreeRepo(d.repo);
+        break;
+      case 'worktree-advise':
+        e.preventDefault();
+        window.adviseWorktree(d.path);
         break;
       case 'worktree-filter':
         worktreesState.filter.state = d.state || '';

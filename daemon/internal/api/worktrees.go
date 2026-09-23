@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"path/filepath"
 
+	"github.com/cavi-ai/secure-agent/daemon/internal/advisor"
+	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/worktreehunter"
 )
 
@@ -21,7 +23,67 @@ func (a *API) handleWorktrees(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	refresh := r.URL.Query().Get("refresh") == "1"
-	writeJSON(w, a.worktrees.Report(r.Context(), refresh))
+	rep := a.worktrees.Report(r.Context(), refresh)
+	rep.Advice = a.worktreeNotes(rep)
+	writeJSON(w, rep)
+}
+
+// worktreeNotes looks up the stored advisor note for each row at its current
+// HEAD. rep is the handler's copy: the map is new, the cached scan untouched.
+func (a *API) worktreeNotes(rep worktreehunter.ScanReport) map[string]model.AdvisorVerdict {
+	if a.store == nil {
+		return nil
+	}
+	notes := map[string]model.AdvisorVerdict{}
+	for _, repo := range rep.Repos {
+		for _, wt := range repo.Worktrees {
+			if wt.Head == "" || wt.State == worktreehunter.StateMain {
+				continue
+			}
+			if v, ok := a.store.AdvisorVerdictFor(advisor.WorktreeSubjectID(wt.Path, wt.Head), "worktree"); ok {
+				notes[wt.Path] = v
+			}
+		}
+	}
+	if len(notes) == 0 {
+		return nil
+	}
+	return notes
+}
+
+// handleWorktreeAdvise queues one worktree ({"path"}) for an advisory note
+// from the local model. The note is displayed beside the row; it never
+// changes the verdict or what Remove accepts.
+func (a *API) handleWorktreeAdvise(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if a.worktrees == nil || a.worktreeAdvisor == nil {
+		http.Error(w, "worktree advice not enabled", http.StatusServiceUnavailable)
+		return
+	}
+	limitBody(w, r)
+	var req struct {
+		Path string `json:"path"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || !filepath.IsAbs(req.Path) {
+		http.Error(w, `Invalid payload: {"path"} (absolute)`, http.StatusBadRequest)
+		return
+	}
+	adv, err := a.worktrees.AdviceRequest(r.Context(), req.Path)
+	switch {
+	case errors.Is(err, worktreehunter.ErrNotWorktree):
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	case errors.Is(err, worktreehunter.ErrNothingToAdvise):
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	case err != nil:
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]any{"status": "ok", "queued": a.worktreeAdvisor(adv), "subject": advisor.WorktreeSubjectID(adv.Path, adv.Head)})
 }
 
 // handleWorktreeRepos edits the saved repo list: {"path"} adds the repository

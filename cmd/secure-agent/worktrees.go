@@ -49,6 +49,14 @@ type wtReport struct {
 	} `json:"summary"`
 	Repos  []wtRepo `json:"repos"`
 	Errors []string `json:"errors"`
+	// Advice is the local advisor's note per worktree path.
+	Advice map[string]wtNote `json:"advice"`
+}
+
+type wtNote struct {
+	Assessment string  `json:"assessment"`
+	Confidence float64 `json:"confidence"`
+	Rationale  string  `json:"rationale"`
 }
 
 // wtScanTimeout covers a full scan: the daemon bounds one at 3 minutes.
@@ -68,6 +76,9 @@ func handleWorktrees(client *http.Client) {
 func runWorktrees(w io.Writer, client *http.Client, args []string) error {
 	if len(args) > 0 && (args[0] == "remove" || args[0] == "prune") {
 		return runWorktreeRemove(w, client, args)
+	}
+	if len(args) > 0 && args[0] == "advise" {
+		return runWorktreeAdvise(w, client, args)
 	}
 	if len(args) > 0 && (args[0] == "add" || args[0] == "hide") {
 		if len(args) < 2 {
@@ -168,6 +179,34 @@ func runWorktreeRemove(w io.Writer, client *http.Client, args []string) error {
 	return nil
 }
 
+// runWorktreeAdvise asks the local advisor for a note on one worktree.
+func runWorktreeAdvise(w io.Writer, client *http.Client, args []string) error {
+	if len(args) < 2 {
+		return fmt.Errorf("usage: secure-agent worktrees advise <path>")
+	}
+	abs, err := filepath.Abs(args[1])
+	if err != nil {
+		return err
+	}
+	body, _ := json.Marshal(map[string]any{"path": abs})
+	code, resp := request(client, http.MethodPost, "http://unix/worktrees/advise", string(body))
+	switch {
+	case code == http.StatusForbidden:
+		return errWorktreeForbidden("advise")
+	case code != 200:
+		return fmt.Errorf("worktrees advise failed (%d): %s", code, strings.TrimSpace(resp))
+	}
+	var out struct {
+		Queued bool `json:"queued"`
+	}
+	_ = json.Unmarshal([]byte(resp), &out)
+	if !out.Queued {
+		return fmt.Errorf("not queued: the advisor is off or its queue is full")
+	}
+	fmt.Fprintf(w, "asked the advisor about %s; the note shows under the row in `secure-agent worktrees` once the local model answers\n", abs)
+	return nil
+}
+
 // errWorktreeForbidden explains a 403 on a worktree change: while the menu
 // bar app runs, only it (and its console) may change state, and an agent
 // session never may.
@@ -236,6 +275,9 @@ func formatWorktrees(rep wtReport, f wtFilter, home string) string {
 			fmt.Fprintf(&b, "  %-6s  %-5s  %5s  %-32s  %s\n", r.State, stale, idle, clip(branch, 32), relPath(r.Path, repo.Path, home))
 			for _, reason := range r.Reasons {
 				fmt.Fprintf(&b, "          %s\n", reason)
+			}
+			if n, ok := rep.Advice[r.Path]; ok {
+				fmt.Fprintf(&b, "          advisor: %s (%.0f%%) — %s\n", n.Assessment, n.Confidence*100, n.Rationale)
 			}
 		}
 	}

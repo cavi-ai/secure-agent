@@ -65,6 +65,10 @@ type ScanReport struct {
 	Summary     ScanSummary  `json:"summary"`
 	Repos       []RepoReport `json:"repos"`
 	Errors      []string     `json:"errors,omitempty"`
+	// Advice holds the local advisor's note per worktree path, for notes
+	// taken at the row's current HEAD. The API fills it on its copy of the
+	// report; the scan never reads it.
+	Advice map[string]model.AdvisorVerdict `json:"advice,omitempty"`
 }
 
 // ScanSummary counts rows by state. Worktrees excludes main rows.

@@ -540,5 +540,6 @@ export interface ScanReport {
   summary: ScanSummary;
   repos: RepoReport[];
   errors?: string[];
+  advice?: Record<string, AdvisorVerdict>;
 }
 

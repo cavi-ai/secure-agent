@@ -7,6 +7,10 @@ All notable changes to `secure-agent` are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- `POST /worktrees/advise`: queues a worktree for a local-advisor note (`remove`, `review` or `keep` with a rationale); branch names, paths and commit subjects go to the model inside `<evidence>`.
+- `GET /worktrees` `advice`: the stored note per worktree path at its current HEAD; notes never change the state or what `POST /worktrees/remove` accepts.
+- `secure-agent worktrees advise <path>`; the list view prints the note under its row.
+- Console Worktrees tab: Ask advisor on review and keep rows; the note shows under the row.
 - `GET /worktrees`: every git worktree found from session workspaces, agent worktree directories, `worktrees.roots` and a saved repo list, each with state `remove`, `review`, `keep`, `prune` or `main`, reasons, `stale` and last activity.
 - Worktree merge detection by ancestry or a zero-context patch-id match for squash merges; local git only.
 - Worktree rows list precious ignored files (`.env*`, `*.pem`, `*.key`, `.tmp/`, `.claude/`, `.remember/`) with file count and size.

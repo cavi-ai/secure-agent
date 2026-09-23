@@ -186,7 +186,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 	agentPIDSet := taggedPIDSet(tagger)
 	uiPID := owningUIPID()
 
-	retriageFuncs, hostAssessFuncs, guardAdvisor := buildAdvisorHooks(st, advisorStk)
+	retriageFuncs, hostAssessFuncs, guardAdvisor, worktreeAdvisor := buildAdvisorHooks(st, advisorStk)
 
 	// Hermes Agent's collector is built before the API so /doctor reads its
 	// state; startCollectors runs it.
@@ -229,6 +229,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 		DeltaHub:        deltaHub,
 		Hermes:          hermes.Status,
 		Worktrees:       hunter,
+		WorktreeAdvisor: worktreeAdvisor,
 	})
 
 	resourceControl.SetExecutor(makeResourceExecutor(apiServer, tagger, st))
@@ -580,7 +581,7 @@ func wireEgressOverrides(cfg config.Config, correlator *correlate.Correlator, ad
 
 // buildAdvisorHooks wires the advisor-facing API closures; each resolves
 // the subscriber per call (hot-reload swaps the stack).
-func buildAdvisorHooks(st *store.Store, advisorStk *advisorStackHolder) (*api.RetriageFuncs, *api.HostAssessFuncs, func(model.GuardAssessmentRequest)) {
+func buildAdvisorHooks(st *store.Store, advisorStk *advisorStackHolder) (*api.RetriageFuncs, *api.HostAssessFuncs, func(model.GuardAssessmentRequest), func(model.WorktreeAdviceRequest) bool) {
 	// Re-triage: look up the stored flag, enqueue through the CURRENT stack.
 	retriage := &api.RetriageFuncs{
 		LookupFlag: func(id string) (model.Flag, bool) { return st.GetFlag(id) },
@@ -615,7 +616,15 @@ func buildAdvisorHooks(st *store.Store, advisorStk *advisorStackHolder) (*api.Re
 			sub.EnqueueGuard(req)
 		}
 	}
-	return retriage, hostAssess, guardAdvisor
+	// Worktree notes: queued on request through the current stack; false
+	// when the advisor is off or its queue is full.
+	worktreeAdvisor := func(req model.WorktreeAdviceRequest) bool {
+		if sub := advisorStk.Load().Sub; sub != nil {
+			return sub.EnqueueWorktree(req)
+		}
+		return false
+	}
+	return retriage, hostAssess, guardAdvisor, worktreeAdvisor
 }
 
 // buildResourcePolicyUpdater: nil without a config file (tests).

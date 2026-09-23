@@ -32,3 +32,18 @@ type WorkspaceActivity struct {
 	LastSeen  time.Time
 	Live      bool
 }
+
+// WorktreeAdviceRequest is what the local advisor sees for one worktree:
+// the checker's verdict and the repository data behind it. Branch, reasons,
+// paths and commit subjects come from the repository and are untrusted.
+type WorktreeAdviceRequest struct {
+	Path     string   `json:"path"`
+	Head     string   `json:"head"`
+	Branch   string   `json:"branch,omitempty"`
+	State    string   `json:"state"`
+	IdleDays int      `json:"idle_days"`
+	Reasons  []string `json:"reasons,omitempty"`
+	Paths    []string `json:"paths,omitempty"`
+	Precious []string `json:"precious,omitempty"`
+	Commits  []string `json:"commits,omitempty"` // subjects of commits on no remote and not in the default branch
+}
