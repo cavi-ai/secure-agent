@@ -186,7 +186,7 @@ def main():
         check("empty rail says all quiet", "All quiet. Nothing is running." in dom_quiet)
         check("filter that hides everything offers to clear it",
               "No sessions match" in dom_nomatch and 'data-action="clear-harness-filter"' in dom_nomatch)
-        check("Sessions and Agents fit a 375px phone without sideways scroll",
+        check("the page, posture banner included, fits a 375px phone on Sessions and Agents",
               'data-hscroll="sessions:0,agents:0"' in dom_phone,
               (re.search(r'data-hscroll="[^"]*"', dom_phone) or [None])[0])
         detail_head = dom_rail.split('class="session-detail-head"', 1)[1].split('class="wf', 1)[0]

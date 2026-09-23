@@ -663,8 +663,9 @@
   // Phone-width probe. Headless Chrome will not size its window below 500px,
   // so ?phonedemo frames the console in a 375px iframe. The framed copy
   // (?phoneframe) opens Sessions, then Agents, measures how far any box in
-  // the tab panel reaches past the viewport, and posts it back; the result
-  // lands on <body data-hscroll="sessions:N,agents:N"> (N in px, 0 = fits).
+  // the tab panel, or the page as a whole (posture banner included), reaches
+  // past the viewport, and posts it back; the result lands on
+  // <body data-hscroll="sessions:N,agents:N"> (N in px, 0 = fits).
   if (MODE.includes('phoneframe')) {
     const measure = (tab) => {
       document.querySelector(`[data-tab="${tab}"]`).click();
@@ -675,6 +676,7 @@
         const box = el.getBoundingClientRect();
         if (box.width) past = Math.max(past, box.right - width);
       }
+      past = Math.max(past, document.documentElement.scrollWidth - width);
       return `${tab}:${Math.round(past)}`;
     };
     setTimeout(() => {

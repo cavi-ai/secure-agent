@@ -1153,6 +1153,11 @@ button.fw-uninspected .fw-drill-hint {
 .posture-items li .sev.s1 { color: var(--brand); }
 .posture-items li a { color: var(--brand); text-decoration: none; }
 .posture-items li a:hover { text-decoration: underline; }
+/* Phone: the headline does not shrink (flex: none), so side by side the items
+   list collapses to a sliver and its words spill past the viewport; stack. */
+@media (max-width: 560px) {
+  .posture { flex-direction: column; gap: 10px; }
+}
 @keyframes pulse-opacity { 50% { opacity: 0.45; } }
 
 /* ---------- incident workflow chips ---------- */
