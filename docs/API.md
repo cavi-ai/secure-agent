@@ -743,7 +743,7 @@ GET /egress/uninspected?hours=24&limit=200
   {"agent": "cursor", "host": "registry.npmjs.org", "count": 14,
    "first_seen": "2026-09-14T10:00:00Z", "last_seen": "2026-09-15T10:00:00Z",
    "session_id": "sess-cursor-2",
-   "identity": {"kind": "hostname", "name": "registry.npmjs.org"},
+   "identity": {"kind": "hostname", "name": "registry.npmjs.org", "org": "npm registry", "class": "vendor"},
    "assessment": "benign", "rationale": "npm registry is routine for JS projects"},
   {"agent": "openclaw", "host": "2607:6bc0::10", "count": 94,
    "first_seen": "2026-09-23T12:00:00Z", "last_seen": "2026-09-23T13:00:00Z",
