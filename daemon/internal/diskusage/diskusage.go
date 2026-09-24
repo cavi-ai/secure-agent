@@ -17,8 +17,8 @@ import (
 // reports a partial, lower-bound result.
 const WalkTimeout = 30 * time.Second
 
-// MaxEntries bounds the entries one walk visits (a var for tests).
-var MaxEntries = 1_000_000
+// MaxEntries bounds the entries one walk visits.
+const MaxEntries = 1_000_000
 
 // Usage is one directory's measurement.
 type Usage struct {
@@ -31,6 +31,11 @@ type Usage struct {
 // Dir walks root and sums allocated bytes. It never follows symlinks and
 // does not descend into skip (for example other worktrees nested inside).
 func Dir(ctx context.Context, root string, skip map[string]bool) Usage {
+	return DirLimit(ctx, root, skip, MaxEntries)
+}
+
+// DirLimit is Dir with an explicit entry bound.
+func DirLimit(ctx context.Context, root string, skip map[string]bool, limit int) Usage {
 	ctx, cancel := context.WithTimeout(ctx, WalkTimeout)
 	defer cancel()
 	var u Usage
@@ -40,7 +45,7 @@ func Dir(ctx context.Context, root string, skip map[string]bool) Usage {
 			return nil
 		}
 		entries++
-		if entries > MaxEntries || (entries%4096 == 0 && ctx.Err() != nil) {
+		if entries > limit || (entries%4096 == 0 && ctx.Err() != nil) {
 			u.Partial = true
 			return filepath.SkipAll
 		}

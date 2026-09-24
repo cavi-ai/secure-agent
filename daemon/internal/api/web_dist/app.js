@@ -784,6 +784,18 @@ document.addEventListener('DOMContentLoaded', () => {
   const WORKTREE_TIMEOUT_MS = 200000;
   const WORKTREE_STALE_MS = 60000;
   const worktreesState = { report: null, loading: false, error: '', loadedAt: 0, filter: { state: '', stale: false } };
+  // While the daemon is still measuring sizes, the open tab re-reads the
+  // cached report (cheap: no rescan) until the sizes land.
+  const WORKTREE_SIZING_POLL_MS = 5000;
+  const WORKTREE_SIZING_POLLS = 60;
+  let worktreeSizingTimer = null;
+  let worktreeSizingPolls = 0;
+  function followWorktreeSizing() {
+    const rep = worktreesState.report;
+    if (!rep || !rep.sizing || activeTab !== 'worktrees' || worktreeSizingTimer || worktreeSizingPolls >= WORKTREE_SIZING_POLLS) return;
+    worktreeSizingPolls++;
+    worktreeSizingTimer = setTimeout(() => { worktreeSizingTimer = null; loadWorktrees(false); }, WORKTREE_SIZING_POLL_MS);
+  }
   async function loadWorktrees(refresh) {
     if (worktreesState.loading) return;
     worktreesState.loading = true;
@@ -794,12 +806,14 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!r.ok) throw new Error((await r.text()).trim() || String(r.status));
       worktreesState.report = await r.json();
       worktreesState.loadedAt = Date.now();
+      if (!worktreesState.report.sizing) worktreeSizingPolls = 0;
     } catch (err) {
       worktreesState.error = 'Worktree scan failed: ' + (err.message || err);
       if (worktreesState.report) showToast(worktreesState.error, 'danger');
     } finally {
       worktreesState.loading = false;
       markDirty('worktrees');
+      followWorktreeSizing();
     }
   }
   // dropWorktreeRows removes rows the daemon just removed or pruned, so the

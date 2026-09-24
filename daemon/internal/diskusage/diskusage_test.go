@@ -47,10 +47,7 @@ func TestDirCountsAllocatedBytesNewestAndSkips(t *testing.T) {
 	if skipped.Bytes >= all.Bytes || skipped.Bytes < 15000 {
 		t.Fatalf("with nested skipped = %d (all %d)", skipped.Bytes, all.Bytes)
 	}
-	prev := MaxEntries
-	MaxEntries = 2
-	t.Cleanup(func() { MaxEntries = prev })
-	if u := Dir(context.Background(), root, nil); !u.Partial {
+	if u := DirLimit(context.Background(), root, nil, 2); !u.Partial {
 		t.Fatal("a walk past MaxEntries must report partial")
 	}
 }
