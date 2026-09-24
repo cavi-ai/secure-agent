@@ -28,10 +28,7 @@ func TestDirSizeCountsAllocatedBytesAndSkipsNestedWorktrees(t *testing.T) {
 		t.Fatalf("with nested skipped = %d (all %d)", skipped, all)
 	}
 
-	old := maxSizeEntries
-	maxSizeEntries = 2
-	t.Cleanup(func() { maxSizeEntries = old })
-	if _, partial := dirSize(context.Background(), root, nil); !partial {
+	if _, partial := dirSizeLimit(context.Background(), root, nil, 2); !partial {
 		t.Fatal("a walk past maxSizeEntries must report partial")
 	}
 }

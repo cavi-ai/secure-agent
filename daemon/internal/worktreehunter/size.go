@@ -19,14 +19,19 @@ const (
 	sizeTTL = time.Hour
 )
 
-// maxSizeEntries bounds the entries one walk visits (a var for tests).
-var maxSizeEntries = 1_000_000
+// maxSizeEntries bounds the entries one walk visits.
+const maxSizeEntries = 1_000_000
 
 // dirSize sums the allocated bytes (st_blocks × 512) of every file under
 // root: the space removal gives back. It never follows symlinks and does not
 // descend into skip (other worktrees nested inside this one). partial is
 // true when the walk stopped at a bound or ctx ended.
 func dirSize(ctx context.Context, root string, skip map[string]bool) (bytes int64, partial bool) {
+	return dirSizeLimit(ctx, root, skip, maxSizeEntries)
+}
+
+// dirSizeLimit is dirSize with an explicit entry bound.
+func dirSizeLimit(ctx context.Context, root string, skip map[string]bool, limit int) (bytes int64, partial bool) {
 	ctx, cancel := context.WithTimeout(ctx, sizeTimeout)
 	defer cancel()
 	entries := 0
@@ -35,7 +40,7 @@ func dirSize(ctx context.Context, root string, skip map[string]bool) (bytes int6
 			return nil
 		}
 		entries++
-		if entries > maxSizeEntries || (entries%4096 == 0 && ctx.Err() != nil) {
+		if entries > limit || (entries%4096 == 0 && ctx.Err() != nil) {
 			partial = true
 			return filepath.SkipAll
 		}

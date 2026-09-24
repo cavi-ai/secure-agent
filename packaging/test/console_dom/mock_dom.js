@@ -1189,6 +1189,18 @@
       [WT_REPO + '/.worktrees/evidence']: { assessment: 'review', confidence: 0.6, rationale: '<i>look</i> at .tmp before removing' }
     }
   };
+  // sizingdemo: the first /worktrees answers still sizing with no sizes;
+  // the tab must re-read until the sizes land.
+  if (MODE.includes('sizingdemo')) {
+    const sized = data['/worktrees'];
+    const pending = JSON.parse(JSON.stringify(sized));
+    pending.sizing = true;
+    pending.summary.size_bytes = 0;
+    pending.summary.removable_bytes = 0;
+    for (const r of pending.repos) { r.size_bytes = 0; for (const w of r.worktrees) delete w.size_bytes; }
+    let reads = 0;
+    Object.defineProperty(data, '/worktrees', { get: () => (reads++ === 0 ? pending : sized) });
+  }
   // worktreedemo: Remove the removable worktree and accept the dialog; the
   // row must leave the tab without a rescan.
   if (MODE.includes('worktreedemo')) {

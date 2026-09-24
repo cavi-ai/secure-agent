@@ -11,7 +11,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Cleanup ledger: every worktree removal books the bytes it gave back, every prune a row; `GET /cleanup/ledger` and `secure-agent cleanup log`.
 - `POST /worktrees/remove` answers the bytes reclaimed.
 - `secure-agent worktrees` lists the biggest projects first with sizes, disk free per volume, worktree and removable totals and reclaimed so far.
-- Console Worktrees tab: disk card (volume bar, worktree, removable and reclaimed totals), sizes per project and worktree, biggest projects first; a removal updates the totals in place.
+- Console Worktrees tab: disk card (volume bar, worktree, removable and reclaimed totals), sizes per project and worktree, biggest projects first; a removal updates the totals in place; while sizes are measured the tab re-reads the cached report every 5 s (up to 5 minutes).
 - `POST /worktrees/advise`: queues a worktree for a local-advisor note (`remove`, `review` or `keep` with a rationale); branch names, paths and commit subjects go to the model inside `<evidence>`.
 - `GET /worktrees` `advice`: the stored note per worktree path at its current HEAD; notes never change the state or what `POST /worktrees/remove` accepts.
 - `secure-agent worktrees advise <path>`; the list view prints the note under its row.
