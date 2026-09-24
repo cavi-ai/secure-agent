@@ -58,7 +58,7 @@ func planUser(req PlanRequest) string {
 
 // writePlan asks the model for a plan and validates it.
 func (s *Subscriber) writePlan(ctx context.Context, req PlanRequest) (model.AdvisorPlan, error) {
-	content, err := s.chat(ctx, planSystem, planUser(req), planMaxTokens)
+	content, err := s.chatOnRequest(ctx, planSystem, planUser(req), planMaxTokens)
 	if err != nil {
 		return model.AdvisorPlan{}, err
 	}
