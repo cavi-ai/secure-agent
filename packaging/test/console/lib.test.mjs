@@ -43,6 +43,7 @@ const {
   familyLabel, cappedList, resourceNeedsAttention, resourceFamilyGroups,
   memoryRowsByFamily, renderChartMemory,
   mapPostureAttention,
+  originAgent, fmtHHMM, collapseSessionFamilies, collapseFamilyRows,
 } = ctx;
 
 // ---------- spend ----------
@@ -1343,4 +1344,69 @@ test('mapPostureAttention: a removed item leaves items, groups and needs_you coh
   coherent(p);
   assert.equal(posture.items.length, 4);
   assert.equal(posture.needs_you, 4);
+});
+
+// ---------- session origin: who spawned a session; identical rows fold ----------
+const plain = (x) => JSON.parse(JSON.stringify(x));
+
+
+test('sessionTitle appends the spawning agent when the session has an origin', () => {
+  assert.equal(originAgent({ origin: 'martina (openclaw)' }), 'martina');
+  assert.equal(originAgent({}), '');
+  assert.equal(sessionTitle({ harness: 'codex', repo: 'career-ops', branch: 'main', origin: 'martina (openclaw)' }), 'career-ops@main · martina');
+  assert.equal(sessionTitle({ harness: 'codex', workspace: '/Volumes/M/.openclaw', origin: 'margaret (openclaw)' }), '.openclaw · margaret');
+  assert.equal(sessionTitle({ harness: 'codex', repo: 'career-ops', branch: 'main' }), 'career-ops@main');
+});
+
+test('familyLabel names the spawning agent of the joined session', () => {
+  const sessions = [{ id: 'c1', harness: 'codex', repo: 'career-ops', branch: 'main', root_pid: 300, origin: 'martina (openclaw)' }];
+  assert.equal(familyLabel({ root_pid: 300, name: 'codex', workspace: '/w' }, sessions), `${harnessMeta('codex').label} · martina`);
+  assert.equal(familyLabel({ root_pid: 301, name: 'codex', workspace: '/w/api' }, sessions), `${harnessMeta('codex').label} · api`);
+});
+
+test('collapseSessionFamilies folds identical titles into one keyed row, stable across reorder', () => {
+  const s = (id, started, status, extra) => ({ id, harness: 'codex', repo: 'career-ops', branch: 'main', started_at: started, status, ...(extra || {}) });
+  const a = s('a', '2026-09-24T10:00:00Z', 'idle');
+  const b = s('b', '2026-09-24T11:00:00Z', 'active');
+  const c = s('c', '2026-09-24T09:00:00Z', 'active', { repo: 'api' });
+  const fam = x => ({ session: x, children: [] });
+  const title = x => sessionTitle(x);
+  const rows = collapseSessionFamilies([fam(a), fam(c), fam(b)], 'codex', title);
+  assert.equal(rows.length, 2);
+  assert.deepEqual(plain(rows.map(r => r.key)), ['group:codex|career-ops@main', 'c']);
+  assert.equal(rows[0].dup, true);
+  assert.deepEqual(plain(rows[0].sessions.map(x => x.id)), ['b', 'a'], 'newest start first');
+  assert.equal(rows[0].status, 'active', 'the most active member');
+  assert.equal(rows[1].dup, false);
+  const again = collapseSessionFamilies([fam(c), fam(b), fam(a)], 'codex', title);
+  assert.deepEqual(plain(again.map(r => r.key).sort()), plain(rows.map(r => r.key).sort()));
+  assert.deepEqual(plain(again.find(r => r.dup).sessions.map(x => x.id)), ['b', 'a']);
+  // A family with sub-sessions never folds; a lone title stays a plain row.
+  const parent = { session: s('p', '2026-09-24T08:00:00Z', 'active'), children: [s('k', '2026-09-24T08:30:00Z', 'active', { repo: 'x' })] };
+  const mixed = collapseSessionFamilies([parent, fam(a)], 'codex', title);
+  assert.deepEqual(plain(mixed.map(r => [r.key, r.dup])), [['p', false], ['a', false]]);
+});
+
+test('fmtHHMM reads a timestamp as local HH:MM', () => {
+  const d = new Date(2026, 8, 24, 7, 5);
+  assert.equal(fmtHHMM(d.toISOString()), '07:05');
+  assert.equal(fmtHHMM(''), '');
+});
+
+test('collapseFamilyRows folds identical labels with summed memory, CPU and processes', () => {
+  const sessions = [1, 2, 3].map(i => ({ id: 'm' + i, harness: 'codex', root_pid: 400 + i, origin: 'martina (openclaw)' }));
+  const f = (pid, rss, cpu, n) => ({ key: `${pid}:1`, name: 'codex', root_pid: pid, rss_bytes: rss, cpu_percent: cpu, process_count: n });
+  const rows = [f(401, 100, 1, 2), f(402, 300, 2, 3), f(999, 50, 1, 1), f(403, 200, 4, 1)].map(x => ({ family: x, children: [] }));
+  const out = collapseFamilyRows(rows, 'codex', x => familyLabel(x, sessions));
+  assert.equal(out.length, 2);
+  const dup = out[0];
+  assert.equal(dup.key, `group:codex|${harnessMeta('codex').label} · martina`);
+  assert.equal(dup.families.length, 3);
+  assert.deepEqual(plain([dup.rss_bytes, dup.cpu_percent, dup.process_count]), [600, 7, 6]);
+  assert.deepEqual(plain(dup.families.map(x => x.root_pid)), [402, 403, 401], 'by memory');
+  assert.equal(out[1].key, '999:1');
+  const html = ctx.resourceFamilyGroupHTML({ key: 'codex', rows, families: 4, rss: 650, cpu: 8 }, sessions, new Set(), Date.now(), {});
+  assert.match(html, /data-action="toggle-family-dup" data-key="group:codex\|[^"]*martina" aria-expanded="false"><strong>[^<]*martina<\/strong><span class="family-dup-count">×3<\/span>/);
+  const open = ctx.resourceFamilyGroupHTML({ key: 'codex', rows, families: 4, rss: 650, cpu: 8 }, sessions, new Set(), Date.now(), { [dup.key]: true });
+  assert.equal((open.match(/class="family-row nested/g) || []).length, 3, 'expanded lists each family');
 });

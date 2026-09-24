@@ -1604,6 +1604,52 @@
       }, 2000);
     }, 4300);
   }
+  // dupdemo: five codex sessions spawned by the openclaw agent martina on one
+  // repo@branch, and three by margaret with resource families. The rail folds
+  // each set into one "×N" row. Sessions: the martina row is expanded, a
+  // member selected, then session frames patch the rail; <pre id="dup-probe">
+  // reports the row's patchList key, whether it stayed open and the selected
+  // cards. With tab=resources the families fold the same way.
+  if (MODE.includes('dupdemo')) {
+    const MB = 1024 ** 2;
+    for (let i = 1; i <= 5; i++) {
+      data['/sessions'].push({ id: `sess-dup-${i}`, harness: 'codex', workspace: '/Users/dev/.openclaw/workspace-career-ops',
+        repo: 'career-ops', branch: 'main', origin: 'martina (openclaw)',
+        started_at: new Date(now - i * 600000).toISOString(), last_seen_at: iso(20000 + i * 1000),
+        status: i === 2 ? 'active' : 'idle', confidence: 'transcript' });
+    }
+    for (let i = 1; i <= 3; i++) {
+      const pid = 8300 + i;
+      data['/sessions'].push({ id: `sess-marg-${i}`, harness: 'codex', workspace: '/Users/dev/.openclaw', origin: 'margaret (openclaw)',
+        root_pid: pid, started_at: new Date(now - i * 900000).toISOString(), last_seen_at: iso(25000 + i * 1000),
+        status: 'active', confidence: 'transcript' });
+      data['/resources'].sessions.push({ key: `${pid}:1789470000000000000`, name: 'codex', root_pid: pid,
+        root_started_at: '2026-09-09T13:00:00Z', workspace: '/Users/dev/.openclaw', last_seen_at: iso(30000),
+        rss_bytes: 100 * i * MB, cpu_percent: i, process_count: i, orphan_count: 0,
+        processes: [{ pid, ppid: 1, name: 'codex', rss_bytes: 100 * i * MB, cpu_percent: i }], samples: [], diagnoses: [] });
+    }
+    if (!MODE.includes('tab=resources')) {
+      const martina = 'group:codex|career-ops@main · martina';
+      setTimeout(() => openTab('sessions'), 4000);
+      setTimeout(() => {
+        document.querySelector(`#session-rail [data-action="toggle-session-dup"][data-key="${martina}"]`)?.click();
+        setTimeout(() => document.querySelector('#session-rail [data-action="select-session"][data-id="sess-dup-3"]')?.click(), 300);
+        setTimeout(() => {
+          const four = data['/sessions'].find(x => x.id === 'sess-dup-4');
+          window.__sse.emit('session', { ...four, last_seen_at: new Date().toISOString(), status: 'active' });
+          const claude = { ...data['/sessions'].find(x => x.id === 'sess-claude-1') };
+          delete claude._timeline;
+          window.__sse.emit('session', { ...claude, last_seen_at: new Date().toISOString() });
+        }, 1200);
+        setTimeout(() => {
+          const row = Array.from(document.querySelectorAll('#session-rail .session-dup'))
+            .find(n => n.querySelector(`[data-key="${martina}"]`));
+          const selected = Array.from(document.querySelectorAll('#session-rail .session-card.selected [data-action="select-session"]')).map(b => b.dataset.id);
+          stamp('dup-probe', JSON.stringify({ key: row ? row._saKey : null, open: !!(row && row.classList.contains('open')), selected }));
+        }, 3000);
+      }, 4300);
+    }
+  }
   // railburst: Sessions open, the infra group opened and probed, then a burst
   // with session frames that change the claude group.
   if (MODE.includes('railburst')) {

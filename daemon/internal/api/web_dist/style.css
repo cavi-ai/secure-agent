@@ -1510,6 +1510,28 @@ button.fw-uninspected .fw-drill-hint {
 .session-card.selected { border-color: var(--brand); background: var(--brand-bg); }
 .session-card.ended { opacity: 0.55; }
 .session-card .sc-label { font-weight: 600; font-size: 13px; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Rail rows: a family (card + indented sub-sessions) and a folded row of
+   identical-title sessions ("title ×N") that expands to its members. */
+.session-rows, .session-family, .session-dup-body { display: flex; flex-direction: column; gap: 6px; }
+.session-dup { display: flex; flex-direction: column; gap: 6px; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--bg-1); }
+.session-dup.ended { opacity: 0.55; }
+.session-dup-toggle {
+  display: block; width: 100%; min-width: 0; padding: 9px 11px; text-align: left;
+  background: none; border: 0; border-radius: inherit; font: inherit; color: var(--tx-1); cursor: pointer;
+}
+.session-dup-toggle:hover { background: var(--bg-2); }
+.session-dup-toggle:focus-visible { outline: 2px solid var(--brand); outline-offset: -2px; }
+.session-dup-toggle .sc-head { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.session-dup-toggle .sc-label { min-width: 0; font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.session-dup-count, .family-dup-count { flex: none; font: 600 0.72rem/1 var(--mono); color: var(--tx-3); }
+.session-dup-toggle .icon, .family-dup-toggle .icon { flex: none; width: 11px; height: 11px; color: var(--tx-3); transition: transform .18s var(--ease); }
+.session-dup.open .session-dup-toggle .icon, .family-dup.open .family-dup-toggle .icon { transform: rotate(90deg); }
+.session-dup-body { padding: 0 6px 6px 0; }
+.family-dup-toggle {
+  display: flex; align-items: center; gap: 8px; min-width: 0; padding: 0;
+  background: none; border: 0; font: inherit; color: inherit; cursor: pointer; text-align: left;
+}
+.family-dup-toggle:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
 .session-card .sc-head { display: flex; align-items: center; gap: 7px; min-width: 0; }
 .session-card .sc-head .sc-label { min-width: 0; }
 /* Per-harness mark: tinted tile + brand glyph, so claude/cursor/codex rows

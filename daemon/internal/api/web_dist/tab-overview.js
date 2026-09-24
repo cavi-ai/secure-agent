@@ -218,14 +218,41 @@ function resourceFamilyRowHTML(f, sessions, nested, now) {
   </div>`;
 }
 
+// A folded family row (collapseFamilyRows): "label ×N" with summed memory,
+// CPU and processes; open, it lists each family as a nested row.
+function resourceFamilyDupHTML(d, sessions, open, now) {
+  const n = Number(d.process_count || 0);
+  const kids = open
+    ? `<div class="family-children">${d.families.map(f => resourceFamilyRowHTML(f, sessions, true, now)).join('')}</div>` : '';
+  return `<div class="family-branch family-dup${open ? ' open' : ''}">
+    <div class="family-row">
+      <span class="family-name"><button type="button" class="family-dup-toggle" data-action="toggle-family-dup" data-key="${escapeHTML(d.key)}" aria-expanded="${open}"><strong>${escapeHTML(d.label)}</strong><span class="family-dup-count">×${d.families.length}</span><svg class="icon"><use href="#i-arrow"/></svg></button></span>
+      <span class="resource-metric"><b>${escapeHTML(fmtRSS(d.rss_bytes) || '—')}</b><small>memory</small></span>
+      <span class="resource-metric"><b>${escapeHTML(fmtCPU(d.cpu_percent) || '—')}</b><small>CPU</small></span>
+      <span class="resource-metric"><b>${n}</b><small>process${n === 1 ? '' : 'es'}</small></span>
+    </div>${kids}
+  </div>`;
+}
+
 // One harness group (resourceFamilyGroups): mark, name, family count, total
 // memory and CPU; open by default only when a family in it needs attention.
-function resourceFamilyGroupHTML(g, sessions, flagged, now) {
+// Families with an identical label fold into one expandable row; dupOpen maps
+// a folded row's key to its expanded state (unset: open while it holds a
+// family that needs attention).
+function resourceFamilyGroupHTML(g, sessions, flagged, now, dupOpen) {
   const open = g.rows.some(r => [r.family, ...r.children].some(f => flagged.has(f.key)));
-  const rows = g.rows.map(r => {
+  const branch = r => {
     const kids = r.children.length
       ? `<div class="family-children">${r.children.map(c => resourceFamilyRowHTML(c, sessions, true, now)).join('')}</div>` : '';
     return `<div class="family-branch">${resourceFamilyRowHTML(r.family, sessions, false, now)}${kids}</div>`;
+  };
+  const folded = g.infra
+    ? g.rows.map(r => ({ dup: false, row: r }))
+    : collapseFamilyRows(g.rows, g.key, f => familyLabel(f, sessions));
+  const rows = folded.map(x => {
+    if (!x.dup) return branch(x.row);
+    const set = dupOpen && Object.prototype.hasOwnProperty.call(dupOpen, x.key);
+    return resourceFamilyDupHTML(x, sessions, set ? !!dupOpen[x.key] : x.families.some(f => flagged.has(f.key)), now);
   }).join('');
   const n = g.infra ? g.rows.length : g.families;
   const counts = `${n} ${g.infra ? 'tracked' : n === 1 ? 'family' : 'families'} · ${fmtRSS(g.rss) || '—'} · ${fmtCPU(g.cpu) || '—'} CPU`;
@@ -284,7 +311,7 @@ function renderResourceMissionControl() {
     const infra = groups.filter(g => g.infra).reduce((n, g) => n + g.rows.length, 0);
     parts.push({ key: 'attention', html: resourceAttentionHTML(attention, sessions) });
     parts.push({ key: 'families-head', html: `<h3 class="family-section-head">Families by harness<span>${count} ${count === 1 ? 'family' : 'families'}${infra ? ` · ${infra} infrastructure` : ''}</span></h3>` });
-    for (const g of groups) parts.push({ key: 'group:' + g.key, html: resourceFamilyGroupHTML(g, sessions, flagged, now) });
+    for (const g of groups) parts.push({ key: 'group:' + g.key, html: resourceFamilyGroupHTML(g, sessions, flagged, now, SA.familyDupOpen) });
   }
   parts.push({ key: 'policy', html: resourcePolicyLineHTML(snapshot.control || {}) });
   patchList(container, parts, { key: p => p.key, html: p => p.html });
@@ -716,11 +743,22 @@ function renderSessionBoard() {
     const infra = shown.find(g => g.infra);
     // A group's open state is DOM state: patchList keeps an unchanged group's
     // node and carries open across a rebuilt one.
+    // Rows patch inside each group's shell, keyed by session id or folded
+    // title, so a selected or expanded row survives a reconcile.
     const parts = sessionGroups.length
-      ? sessionGroups.map(g => ({ key: 'group:' + g.key, html: sessionGroupHTML(g, trees, SA.selectedSessionId, true, !!SA.endedSessionsOpen[g.key]) }))
+      ? sessionGroups.map(g => ({ key: 'group:' + g.key, group: g, html: sessionGroupHTML(g, true, !!SA.endedSessionsOpen[g.key]) }))
       : [{ key: filtered ? 'empty:nomatch' : 'empty:quiet', html: filtered ? noMatch : quiet }];
     if (infra) parts.push({ key: 'infra', html: sessionInfraGroupHTML(infra, false) });
     patchList(rail, parts, { key: p => p.key, html: p => p.html });
+    const rowOpts = { key: r => r.key, html: r => r.html };
+    for (const p of parts) {
+      if (!p.group) continue;
+      const node = Array.from(rail.children).find(n => n._saKey === p.key);
+      if (!node) continue;
+      const rows = fams => sessionRailRows(fams, p.group.key, trees, SA.selectedSessionId, SA.sessionDupOpen);
+      patchList(node.querySelector('.session-rows'), rows(p.group.live), rowOpts);
+      patchList(node.querySelector('.session-ended-body'), rows(p.group.ended), rowOpts);
+    }
     // Detail: the selected session's trace waterfall.
     const selected = durable.find(s => s.id === SA.selectedSessionId);
     if (detail) {

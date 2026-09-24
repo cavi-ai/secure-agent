@@ -7,6 +7,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- Sessions carry `origin`, the openclaw agent behind a Codex session, named in console titles and "×N" folded rows.
 - `GET /costs/plans` serves each Codex home's plan headroom, shown as a line and bar per plan on the console Spend card.
 - Codex calls on a ChatGPT plan (provider `chatgpt`) and Hermes `openai-codex` calls count as plan calls, not unpriced.
 - `POST /cleanup/advise`: queues a project (a repository, or `machine` for caches outside any repository) for a local-advisor cleanup plan built from its worktrees and clutter: a summary and at most 5 steps; paths, branch names and reasons go to the model inside `<evidence>`.
