@@ -843,7 +843,7 @@ document.addEventListener('DOMContentLoaded', () => {
   let worktreeSizingPolls = 0;
   function followWorktreeSizing() {
     const rep = worktreesState.report;
-    if (!rep || !rep.sizing || activeTab !== 'worktrees' || worktreeSizingTimer || worktreeSizingPolls >= WORKTREE_SIZING_POLLS) return;
+    if (!rep || !rep.sizing || !(activeTab === 'sessions' && activeSub === 'worktrees') || worktreeSizingTimer || worktreeSizingPolls >= WORKTREE_SIZING_POLLS) return;
     worktreeSizingPolls++;
     worktreeSizingTimer = setTimeout(() => { worktreeSizingTimer = null; loadWorktrees(false); }, WORKTREE_SIZING_POLL_MS);
   }
