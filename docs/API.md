@@ -487,6 +487,12 @@ Resolves a pending prompt: `{"id","verdict":"allow|deny","scope":"once|always"}`
 
 Lists stored guard decisions (GET); revokes one (DELETE `?agent=&rule_id=`), forcing a fresh prompt next time.
 
+`GET|POST|DELETE /guard/path-allow` lists per-path exceptions (GET), adds one (POST `{"agent","rule_id","path"}`) and revokes one (DELETE `?agent=&rule_id=&path=`).
+
+- Console-admitted on the proxy listener.
+- `POST` is a mutation: the pinned UI, or the owner uid when no UI is pinned.
+- `DELETE` stays owner-level.
+
 ### 16. `GET /costs`
 
 Model-call spend over a window, grouped by one dimension, across every traced harness.
@@ -904,11 +910,12 @@ Live feed of every stored event as `event: <kind>` / `data: <json>`, with a 15s 
 
 ### Console access on the proxy port
 
-The browser console at `http://127.0.0.1:<proxy_port>/dashboard/` fetches telemetry same-origin, i.e. from the proxy listener. That listener serves the API endpoints listed in `proxy.isConsoleAPIPath` (status/posture/flags/events/incidents/audit/fleet/firewall sources + guard pending/rules/resolve + kill + rollup + mute + allowlist(+suggestions) + `/egress/uninspected` + `/notify/rules` + advisor retriage + `/sessions/{id}/timeline` and `/sessions/{id}/report` + `/flags/{id}/explain` + this SSE stream) behind the **console token**. The whitelist is kept in lockstep with the console's fetches by `TestConsoleAPIPathsCoverWebApp` — a path the console fetches but the listener doesn't whitelist 407s and the panel dies silently, which is exactly the drift that test exists to catch:
+The browser console at `http://127.0.0.1:<proxy_port>/dashboard/` fetches telemetry same-origin, i.e. from the proxy listener. That listener serves the API endpoints listed in `proxy.isConsoleAPIPath` (status/posture/flags/events/incidents/audit/fleet/firewall sources + guard pending/rules/resolve/path-allow + kill + rollup + mute + allowlist(+suggestions) + `/egress/uninspected` + `/notify/rules` + advisor retriage + `/sessions/{id}/timeline` and `/sessions/{id}/report` + `/flags/{id}/explain` + this SSE stream) behind the **console token**. The whitelist is kept in lockstep with the console's fetches by `TestConsoleAPIPathsCoverWebApp` — a path the console fetches but the listener doesn't whitelist 407s and the panel dies silently, which is exactly the drift that test exists to catch:
 
 - Header `X-SecureAgent-Console-Token: <token>` (fetch/XHR) or `?ct=<token>` (EventSource can't set headers).
 - The token lives at `~/.config/secure-agent/console-token` (0600), distinct from the proxy token on purpose: agents routed through the proxy carry the proxy token in their environment and must not be able to read telemetry or resolve guard prompts with it.
 - `/guard/decision` is **not** served on this listener at all — it stays on the peer-attested unix socket.
+- Admission is method-aware: GET/HEAD pass on every whitelisted route, but a mutating method is admitted only when `apiroutes.Table` lists it in that route's `MutatingMethods` or `ConsoleMethods` — so the console token can drive `POST /guard/path-allow` and `DELETE /mute` but not `DELETE /guard/rules` or `DELETE /guard/path-allow`, which stay owner-level on the unix socket.
 
 Besides telemetry kinds (`file-open`, `conn-open`, `proxy-hit`, …), the stream carries the guard lifecycle:
 

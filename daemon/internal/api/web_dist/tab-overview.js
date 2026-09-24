@@ -350,7 +350,7 @@ function familyDrawerSections(f, ctx) {
   };
   const findings = `<section class="family-drawer-section">
     <h4>Findings <small>${found.length}</small></h4>
-    ${found.length ? found.map(findingRow).join('') + '<button type="button" class="link-btn" data-action="goto-tab" data-tab="findings">Open Findings</button>' : '<p class="family-drawer-empty">No open findings for these processes.</p>'}
+    ${found.length ? found.map(findingRow).join('') + '<button type="button" class="link-btn" data-action="goto-tab" data-tab="home" data-group="findings">Open Findings</button>' : '<p class="family-drawer-empty">No open findings for these processes.</p>'}
   </section>`;
 
   return [
@@ -734,7 +734,7 @@ function renderPosture() {
   const items = (p.items || []).map(it => {
     const sev = it.severity >= 3 ? 's3' : it.severity === 2 ? 's2' : 's1';
     let link = '';
-    if (it.kind === 'flag') link = `<a href="#" data-action="goto-tab" data-tab="findings">view evidence</a>`;
+    if (it.kind === 'flag') link = `<a href="#" data-action="goto-tab" data-tab="home" data-group="findings">view evidence</a>`;
     if (it.kind === 'incident') link = `<a href="#" data-action="open-incident" data-id="${escapeHTML(it.id)}">view report</a>`;
     if (it.kind === 'guard_pending') link = `<span>resolve it in the menu bar app</span>`;
     if (it.kind === 'collector_down') link = `<span>— ${escapeHTML(it.detail || 'collector stopped')} <a href="#" data-action="open-fda">open Full Disk Access settings</a></span>`;

@@ -2,6 +2,7 @@ package api
 
 import (
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -463,12 +464,20 @@ func cwdBase(cwd string) string {
 	return s
 }
 
+// familyTitle title-cases a plain harness name ("claude" → "Claude"). Any
+// other id, e.g. "untagged:node", is returned unchanged: it names a process,
+// not a product.
 func familyTitle(name string) string {
 	if name == "" {
 		return "Unknown"
 	}
+	if !plainHarnessRE.MatchString(name) {
+		return name
+	}
 	return strings.ToUpper(name[:1]) + name[1:]
 }
+
+var plainHarnessRE = regexp.MustCompile(`^[a-z0-9-]+$`)
 
 func firstPID(values ...int32) int32 {
 	for _, v := range values {

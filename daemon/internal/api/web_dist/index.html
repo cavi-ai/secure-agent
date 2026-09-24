@@ -104,17 +104,9 @@
           </div>
         </div>
         <div class="notify-wrap">
-          <button class="btn btn-ghost btn-icon" id="btn-notify" title="Notification preferences">
+          <button class="btn btn-ghost btn-icon" id="btn-notify" data-action="goto-tab" data-tab="policy" title="Notification preferences (Policy)">
             <svg class="icon"><use href="#i-bell"/></svg>
           </button>
-          <div class="notify-pop" id="notify-pop" hidden>
-            <div class="notify-pop-head">Notifications</div>
-            <div class="notify-pop-sub">Default: only critical flags notify. Strongest rule first: a workspace scope beats a per-rule override, which beats the default. Applies to the menu bar app and this console.</div>
-            <div id="notify-rules-list"></div>
-            <div class="notify-pop-head notify-scope-head">Per-workspace scopes</div>
-            <div class="notify-pop-sub">Page me for a rule only in one repo (or silence it there), matched by path prefix. Example: always notify for <code>proxy-secret-leak</code> under <code>/Users/me/work/prod</code>.</div>
-            <div id="notify-scopes-list"></div>
-          </div>
         </div>
         <div class="theme-toggle" role="group" aria-label="Theme">
           <button type="button" id="theme-system" aria-pressed="false" title="Follow the system theme"><svg class="icon"><use href="#i-activity"/></svg></button>
@@ -126,6 +118,13 @@
         </button>
       </div>
     </header>
+
+    <!-- Honest ended state: without a console token (or after a 403) this is
+         the only thing on the page. -->
+    <section class="session-ended-page" id="session-ended" role="alert" hidden>
+      <h1>Console session ended.</h1>
+      <p>Open it again from the Secure Agent menu bar.</p>
+    </section>
 
     <!-- Offline banner (shown when the daemon is unreachable) -->
     <div class="offline-banner" id="offline-banner" hidden>
@@ -178,46 +177,29 @@
       </div>
     </section>
 
-    <!-- Primary navigation: the console is organized by question, not by
-         data source — "is this normal?" (Overview), "what ran, grouped by
-         run?" (Sessions), "what's running?" (Agents), "where is traffic
-         going?" (Egress), "what needs my decision?" (Attention). -->
+    <!-- Primary navigation, by question: "what needs me?" (Home), "what ran,
+         and what is it costing?" (Sessions), "where is traffic going?"
+         (Egress), "what have I decided?" (Policy). -->
     <!-- The tab bar stays on screen while the page scrolls: once stuck it
          carries the posture pill (back to top), and the scope bar under it
          says when Events, Flags and Incidents are narrowed to one session. -->
     <div class="tabs-bar" id="tabs-bar">
     <div class="tabs-row">
     <nav class="tabs" role="tablist" aria-label="Console sections">
-      <button class="tab-btn active" data-tab="overview" role="tab" aria-selected="true" aria-controls="tab-overview">
-        <svg class="icon"><use href="#i-activity"/></svg><span>Overview</span>
+      <button class="tab-btn active" data-tab="home" role="tab" aria-selected="true" aria-controls="tab-home">
+        <svg class="icon"><use href="#i-alert"/></svg><span>Home</span>
+        <span class="tab-badge tab-badge-warn" id="tab-badge-home" hidden></span>
       </button>
       <button class="tab-btn" data-tab="sessions" role="tab" aria-selected="false" aria-controls="tab-sessions">
         <svg class="icon"><use href="#i-agent"/></svg><span>Sessions</span>
         <span class="tab-badge" id="tab-badge-sessions" hidden></span>
       </button>
-      <button class="tab-btn" data-tab="agents" role="tab" aria-selected="false" aria-controls="tab-agents">
-        <svg class="icon"><use href="#i-agent"/></svg><span>Agents</span>
-        <span class="tab-badge" id="tab-badge-agents" hidden></span>
-      </button>
-      <button class="tab-btn" data-tab="resources" role="tab" aria-selected="false" aria-controls="tab-resources">
-        <svg class="icon"><use href="#i-server"/></svg><span>Resources</span>
-      </button>
-      <button class="tab-btn" data-tab="history" role="tab" aria-selected="false" aria-controls="tab-history">
-        <svg class="icon"><use href="#i-history"/></svg><span>History</span>
-      </button>
-      <button class="tab-btn" data-tab="worktrees" role="tab" aria-selected="false" aria-controls="tab-worktrees">
-        <svg class="icon"><use href="#i-branch"/></svg><span>Worktrees</span>
-      </button>
-      <button class="tab-btn" data-tab="events" role="tab" aria-selected="false" aria-controls="tab-events">
-        <svg class="icon"><use href="#i-activity"/></svg><span>Events</span>
-      </button>
       <button class="tab-btn" data-tab="egress" role="tab" aria-selected="false" aria-controls="tab-egress">
         <svg class="icon"><use href="#i-shield"/></svg><span>Egress</span>
         <span class="tab-badge tab-badge-warn" id="tab-badge-egress" hidden></span>
       </button>
-      <button class="tab-btn" data-tab="findings" role="tab" aria-selected="false" aria-controls="tab-findings">
-        <svg class="icon"><use href="#i-alert"/></svg><span>Attention</span>
-        <span class="tab-badge tab-badge-warn" id="tab-badge-findings" hidden></span>
+      <button class="tab-btn" data-tab="policy" role="tab" aria-selected="false" aria-controls="tab-policy">
+        <svg class="icon"><use href="#i-doc"/></svg><span>Policy</span>
       </button>
     </nav>
     <button type="button" class="tabs-posture" id="tabs-posture" data-action="goto-top" title="Back to top" data-state="all-clear" hidden><span class="dot" aria-hidden="true"></span><span id="tabs-posture-text">All clear</span></button>
@@ -226,164 +208,153 @@
     </div>
 
     <main>
-      <!-- Overview: the visual summary — three charts, nothing else. Every
-           list (sessions, agents, flags, events) has its own tab; this page
-           answers "what does the shape of today look like?" at a glance. -->
-      <div class="tabpanel" id="tab-overview" role="tabpanel">
+      <!-- Home: decisions first, then spend; the evidence and the charts sit
+           in closed groups that render only when opened. -->
+      <div class="tabpanel" id="tab-home" role="tabpanel">
+        <section class="panel attention-panel" id="attention-center">
+          <div class="panel-head attention-head">
+            <div>
+              <span class="attention-eyebrow">Operator queue</span>
+              <h2><svg class="icon"><use href="#i-alert"/></svg>Needs your attention</h2>
+              <p>Decisions grouped by the complete agent session they affect.</p>
+            </div>
+            <span class="badge badge-amber" id="badge-attention-count">0</span>
+          </div>
+          <div class="panel-body" id="attention-list">
+            <div class="empty"><svg class="icon"><use href="#i-shield"/></svg><span>No decisions waiting</span></div>
+          </div>
+        </section>
         <section class="panel chart-panel">
           <div class="panel-head">
-            <h2><svg class="icon"><use href="#i-activity"/></svg>Activity over time</h2>
-            <select id="activity-window" class="select">
-              <option value="24">Last 24h</option>
-              <option value="168">Last 7 days</option>
-            </select>
-          </div>
-          <div class="panel-body act-body">
-            <svg id="activity-chart" viewBox="0 0 1200 120" preserveAspectRatio="none" role="img" aria-label="Hourly agent activity"></svg>
-            <div class="act-legend">
-              <span class="act-key"><span class="act-swatch act-sw-events"></span>events</span>
-              <span class="act-key"><span class="act-swatch act-sw-flags"></span>flags</span>
-            </div>
-          </div>
-        </section>
-
-        <div class="chart-grid">
-          <section class="panel chart-panel">
-            <div class="panel-head">
-              <h2><svg class="icon"><use href="#i-alert"/></svg>Findings by rule</h2>
-              <span class="badge" id="chart-flags-total">0</span>
-            </div>
-            <div class="panel-body">
-              <div id="chart-flags" class="hbars">
-                <div class="empty"><svg class="icon"><use href="#i-alert"/></svg><span>No findings in the window</span></div>
-              </div>
-            </div>
-          </section>
-
-          <section class="panel chart-panel">
-            <div class="panel-head">
-              <h2><svg class="icon"><use href="#i-agent"/></svg>Memory by family</h2>
-              <span class="badge" id="chart-mem-total">0</span>
-            </div>
-            <div class="panel-body">
-              <div id="chart-memory" class="hbars">
-                <div class="empty"><svg class="icon"><use href="#i-agent"/></svg><span>No attributed sessions yet</span></div>
-              </div>
-            </div>
-          </section>
-
-          <section class="panel chart-panel">
-            <div class="panel-head">
-              <h2><svg class="icon"><use href="#i-activity"/></svg>Spend</h2>
-              <div class="spend-controls">
-                <select id="spend-by" class="select select-sm" aria-label="Group spend by">
-                  <option value="repo">By repo</option>
-                  <option value="provider">By provider</option>
-                  <option value="model">By model</option>
-                  <option value="day">By day</option>
-                </select>
-                <select id="spend-since" class="select select-sm" aria-label="Spend window">
-                  <option value="24h">24h</option>
-                  <option value="7d">7d</option>
-                  <option value="30d">30d</option>
-                </select>
-              </div>
-            </div>
-            <div class="panel-body">
-              <div id="spend-card" class="spend-card">
-                <div class="empty"><span>Loading spend…</span></div>
-              </div>
-            </div>
-          </section>
-        </div>
-      </div>
-
-      <!-- Resources: attributed CPU/memory per session. -->
-      <div class="tabpanel" id="tab-resources" role="tabpanel" hidden>
-        <section class="panel resource-panel" id="resource-mission-control">
-          <div class="panel-head">
-            <h2><svg class="icon"><use href="#i-activity"/></svg>Resources now</h2>
-            <span class="badge" id="resource-observed">Live</span>
-          </div>
-          <div class="panel-body" id="resource-board">
-            <div class="empty"><svg class="icon"><use href="#i-activity"/></svg><span>Waiting for attributed CPU and memory samples…</span></div>
-          </div>
-        </section>
-      </div>
-
-      <!-- History: pressure episodes (the flight recorder). Separated from
-           Resources so the live view stays about "now" and the dense
-           post-mortem review lives where it belongs — this is the panel that
-           opened a full episode inline and made the Resources tab unreadable. -->
-      <div class="tabpanel" id="tab-worktrees" role="tabpanel" hidden>
-        <section class="panel">
-          <div class="panel-head">
-            <h2><svg class="icon"><use href="#i-branch"/></svg>Worktrees</h2>
-            <button type="button" class="btn btn-sm" data-action="worktrees-rescan"><svg class="icon"><use href="#i-refresh"/></svg>Rescan</button>
-          </div>
-          <div class="harness-filter">
-            <div class="harness-pills" id="worktree-pills"></div>
-            <form class="wt-add" id="worktree-add-form">
-              <input type="text" id="worktree-add-input" class="input harness-filter-text" placeholder="Add a repository: /path/to/repo" aria-label="Repository path to add" autocomplete="off" spellcheck="false">
-              <button type="submit" class="btn btn-sm">Add</button>
-            </form>
-          </div>
-          <div class="wt-disk" id="worktrees-disk"></div>
-          <p class="wt-summary" id="worktrees-summary"></p>
-          <ul class="wt-errors" id="worktrees-errors" hidden></ul>
-          <div class="panel-body" id="worktrees-container">
-            <div class="loading">Scanning worktrees…</div>
-          </div>
-        </section>
-      </div>
-
-      <div class="tabpanel" id="tab-history" role="tabpanel" hidden>
-        <section class="panel resource-panel">
-          <div class="panel-head">
-            <h2><svg class="icon"><use href="#i-history"/></svg>Pressure history</h2>
-            <span class="badge" id="history-observed">—</span>
-          </div>
-          <div class="panel-body" id="history-board">
-            <div class="empty"><svg class="icon"><use href="#i-history"/></svg><span>The recorder is armed. Episodes appear here when a session becomes heavy, grows rapidly, or leaves resource-holding processes behind.</span></div>
-          </div>
-        </section>
-      </div>
-
-      <!-- Events: the raw event timeline. -->
-      <div class="tabpanel" id="tab-events" role="tabpanel" hidden>
-        <section class="panel panel-grow">
-          <div class="panel-head">
-            <h2><svg class="icon"><use href="#i-activity"/></svg>Event timeline</h2>
-             <div class="head-filters">
-               <span class="session-filter" id="session-filter" hidden>
-                 session <b id="session-filter-id"></b>
-                 <button class="session-clear" id="session-clear" title="Show all sessions"><svg class="icon"><use href="#i-close"/></svg></button>
-               </span>
-               <select id="event-filter" class="select">
-                <option value="all">All events</option>
-                <option value="8">Tool use</option>
-                <option value="9">Proxy hits</option>
-                <option value="5">Connections</option>
-                <option value="0">File opens</option>
+            <h2><svg class="icon"><use href="#i-activity"/></svg>Spend</h2>
+            <div class="spend-controls">
+              <select id="spend-by" class="select select-sm" aria-label="Group spend by">
+                <option value="repo">By repo</option>
+                <option value="provider">By provider</option>
+                <option value="model">By model</option>
+                <option value="day">By day</option>
               </select>
-              <select id="event-window" class="select">
-                <option value="all">All time</option>
-                <option value="1h">Last hour</option>
-                <option value="24h">Last 24h</option>
-                <option value="7d">Last 7 days</option>
+              <select id="spend-since" class="select select-sm" aria-label="Spend window">
+                <option value="24h">24h</option>
+                <option value="7d">7d</option>
+                <option value="30d">30d</option>
               </select>
             </div>
           </div>
-          <div class="panel-body timeline" id="events-container">
-            <div class="empty"><svg class="icon"><use href="#i-activity"/></svg><span>No system events logged</span></div>
+          <div class="panel-body">
+            <div id="spend-card" class="spend-card">
+              <div class="empty"><span>Loading spend…</span></div>
+            </div>
           </div>
         </section>
+
+        <details class="home-group" id="home-findings" data-group="findings">
+          <summary><svg class="icon"><use href="#i-alert"/></svg>Findings history</summary>
+          <div class="grid" id="security-findings-grid">
+            <div class="col">
+                <section class="panel">
+                  <div class="panel-head">
+                    <h2><svg class="icon"><use href="#i-alert"/></svg>Security flags</h2>
+                    <span class="badge badge-amber" id="badge-flags-count">0</span>
+                    <button class="btn btn-ghost btn-sm" data-action="export" data-what="flags" title="Download the current flags as JSON"><svg class="icon"><use href="#i-doc"/></svg><span>Export</span></button>
+                  </div>
+                  <div class="panel-body">
+                    <div class="filter-bar">
+                      <span class="session-filter" id="flags-session-filter" hidden>
+                        session <b id="flags-session-filter-id"></b>
+                        <button class="session-clear" id="flags-session-clear" title="Show all sessions"><svg class="icon"><use href="#i-close"/></svg></button>
+                      </span>
+                      <select id="flags-agent" class="select"><option value="all">All agents</option></select>
+                      <select id="flags-rule" class="select"><option value="all">All rules</option></select>
+                      <select id="flags-severity" class="select">
+                        <option value="all">Any severity</option>
+                        <option value="2">Warning &amp; up</option>
+                        <option value="3">Critical only</option>
+                      </select>
+                      <select id="flags-window" class="select">
+                        <option value="all">All time</option>
+                        <option value="1h">Last hour</option>
+                        <option value="24h">Last 24h</option>
+                        <option value="7d">Last 7 days</option>
+                      </select>
+                    </div>
+                    <div id="flags-list">
+                      <div class="empty"><svg class="icon"><use href="#i-alert"/></svg><span>No security correlation flags active</span></div>
+                    </div>
+                  </div>
+                </section>
+            </div>
+            <div class="col">
+                <section class="panel">
+                  <div class="panel-head">
+                    <h2><svg class="icon"><use href="#i-incident"/></svg>Incidents &amp; auto-rotation</h2>
+                    <span class="badge badge-rose" id="badge-incidents-count">0</span>
+                    <button class="btn btn-ghost btn-sm" data-action="export" data-what="incidents" title="Download the current incidents as JSON"><svg class="icon"><use href="#i-doc"/></svg><span>Export</span></button>
+                  </div>
+                  <div class="panel-body" id="incidents-container">
+                    <div class="empty"><svg class="icon"><use href="#i-incident"/></svg><span>No containment incidents recorded</span></div>
+                  </div>
+                </section>
+            </div>
+          </div>
+        </details>
+
+        <details class="home-group" id="home-trends" data-group="trends">
+          <summary><svg class="icon"><use href="#i-activity"/></svg>Trends</summary>
+          <section class="panel chart-panel">
+            <div class="panel-head">
+              <h2><svg class="icon"><use href="#i-activity"/></svg>Activity over time</h2>
+              <select id="activity-window" class="select">
+                <option value="24">Last 24h</option>
+                <option value="168">Last 7 days</option>
+              </select>
+            </div>
+            <div class="panel-body act-body">
+              <svg id="activity-chart" viewBox="0 0 1200 120" preserveAspectRatio="none" role="img" aria-label="Hourly agent activity"></svg>
+              <div class="act-legend">
+                <span class="act-key"><span class="act-swatch act-sw-events"></span>events</span>
+                <span class="act-key"><span class="act-swatch act-sw-flags"></span>flags</span>
+              </div>
+            </div>
+          </section>
+          <div class="chart-grid">
+            <section class="panel chart-panel">
+              <div class="panel-head">
+                <h2><svg class="icon"><use href="#i-alert"/></svg>Findings by rule</h2>
+                <span class="badge" id="chart-flags-total">0</span>
+              </div>
+              <div class="panel-body">
+                <div id="chart-flags" class="hbars">
+                  <div class="empty"><svg class="icon"><use href="#i-alert"/></svg><span>No findings in the window</span></div>
+                </div>
+              </div>
+            </section>
+            <section class="panel chart-panel">
+              <div class="panel-head">
+                <h2><svg class="icon"><use href="#i-agent"/></svg>Memory by family</h2>
+                <span class="badge" id="chart-mem-total">0</span>
+              </div>
+              <div class="panel-body">
+                <div id="chart-memory" class="hbars">
+                  <div class="empty"><svg class="icon"><use href="#i-agent"/></svg><span>No attributed sessions yet</span></div>
+                </div>
+              </div>
+            </section>
+          </div>
+        </details>
       </div>
 
-      <!-- Sessions: session-first — a rail of durable sessions grouped by
-           harness (alive and ended) with the selected session's trace
-           waterfall beside it. -->
+      <!-- Sessions: one sub-view at a time — the session board, the live
+           processes, resources, worktrees and the raw event timeline. -->
       <div class="tabpanel" id="tab-sessions" role="tabpanel" hidden>
+        <div class="subtabs" role="tablist" aria-label="Sessions views">
+          <button type="button" class="subtab-btn active" data-subtab="board" role="tab" aria-selected="true" aria-controls="sub-board">Sessions<span class="tab-badge" id="subtab-badge-board" hidden></span></button>
+          <button type="button" class="subtab-btn" data-subtab="processes" role="tab" aria-selected="false" aria-controls="sub-processes">Processes<span class="tab-badge" id="subtab-badge-processes" hidden></span></button>
+          <button type="button" class="subtab-btn" data-subtab="resources" role="tab" aria-selected="false" aria-controls="sub-resources">Resources</button>
+          <button type="button" class="subtab-btn" data-subtab="worktrees" role="tab" aria-selected="false" aria-controls="sub-worktrees">Worktrees</button>
+          <button type="button" class="subtab-btn" data-subtab="events" role="tab" aria-selected="false" aria-controls="sub-events">Events</button>
+        </div>
+        <div class="subview" id="sub-board" role="tabpanel">
         <section class="panel" id="session-board-panel">
           <div class="panel-head">
             <h2><svg class="icon"><use href="#i-agent"/></svg>Sessions</h2>
@@ -405,10 +376,8 @@
                process-tree board here. -->
           <div class="panel-body" id="session-board" hidden></div>
         </section>
-      </div>
-
-      <!-- Agents: "what is running right now, and what does it cost?" -->
-      <div class="tabpanel" id="tab-agents" role="tabpanel" hidden>
+        </div>
+        <div class="subview" id="sub-processes" role="tabpanel" hidden>
         <div class="grid">
           <div class="col">
             <section class="panel">
@@ -436,6 +405,77 @@
               </div>
             </section>
           </div>
+        </div>
+        </div>
+        <div class="subview" id="sub-resources" role="tabpanel" hidden>
+        <section class="panel resource-panel" id="resource-mission-control">
+          <div class="panel-head">
+            <h2><svg class="icon"><use href="#i-activity"/></svg>Resources now</h2>
+            <span class="badge" id="resource-observed">Live</span>
+          </div>
+          <div class="panel-body" id="resource-board">
+            <div class="empty"><svg class="icon"><use href="#i-activity"/></svg><span>Waiting for attributed CPU and memory samples…</span></div>
+          </div>
+        </section>
+        <section class="panel resource-panel" id="history-panel">
+          <div class="panel-head">
+            <h2><svg class="icon"><use href="#i-history"/></svg>Pressure history</h2>
+            <span class="badge" id="history-observed">—</span>
+          </div>
+          <div class="panel-body" id="history-board">
+            <div class="empty"><svg class="icon"><use href="#i-history"/></svg><span>The recorder is armed. Episodes appear here when a session becomes heavy, grows rapidly, or leaves resource-holding processes behind.</span></div>
+          </div>
+        </section>
+        </div>
+        <div class="subview" id="sub-worktrees" role="tabpanel" hidden>
+        <section class="panel">
+          <div class="panel-head">
+            <h2><svg class="icon"><use href="#i-branch"/></svg>Worktrees</h2>
+            <button type="button" class="btn btn-sm" data-action="worktrees-rescan"><svg class="icon"><use href="#i-refresh"/></svg>Rescan</button>
+          </div>
+          <div class="harness-filter">
+            <div class="harness-pills" id="worktree-pills"></div>
+            <form class="wt-add" id="worktree-add-form">
+              <input type="text" id="worktree-add-input" class="input harness-filter-text" placeholder="Add a repository: /path/to/repo" aria-label="Repository path to add" autocomplete="off" spellcheck="false">
+              <button type="submit" class="btn btn-sm">Add</button>
+            </form>
+          </div>
+          <div class="wt-disk" id="worktrees-disk"></div>
+          <p class="wt-summary" id="worktrees-summary"></p>
+          <ul class="wt-errors" id="worktrees-errors" hidden></ul>
+          <div class="panel-body" id="worktrees-container">
+            <div class="loading">Scanning worktrees…</div>
+          </div>
+        </section>
+        </div>
+        <div class="subview" id="sub-events" role="tabpanel" hidden>
+        <section class="panel panel-grow">
+          <div class="panel-head">
+            <h2><svg class="icon"><use href="#i-activity"/></svg>Event timeline</h2>
+             <div class="head-filters">
+               <span class="session-filter" id="session-filter" hidden>
+                 session <b id="session-filter-id"></b>
+                 <button class="session-clear" id="session-clear" title="Show all sessions"><svg class="icon"><use href="#i-close"/></svg></button>
+               </span>
+               <select id="event-filter" class="select">
+                <option value="all">All events</option>
+                <option value="8">Tool use</option>
+                <option value="9">Proxy hits</option>
+                <option value="5">Connections</option>
+                <option value="0">File opens</option>
+              </select>
+              <select id="event-window" class="select">
+                <option value="all">All time</option>
+                <option value="1h">Last hour</option>
+                <option value="24h">Last 24h</option>
+                <option value="7d">Last 7 days</option>
+              </select>
+            </div>
+          </div>
+          <div class="panel-body timeline" id="events-container">
+            <div class="empty"><svg class="icon"><use href="#i-activity"/></svg><span>No system events logged</span></div>
+          </div>
+        </section>
         </div>
       </div>
 
@@ -473,67 +513,54 @@
         </div>
       </div>
 
-      <!-- Attention: session-grouped decisions first, detailed evidence below. -->
-      <div class="tabpanel" id="tab-findings" role="tabpanel" hidden>
-        <section class="panel attention-panel" id="attention-center">
-          <div class="panel-head attention-head">
-            <div>
-              <span class="attention-eyebrow">Operator queue</span>
-              <h2><svg class="icon"><use href="#i-alert"/></svg>Needs your attention</h2>
-              <p>Decisions grouped by the complete agent session they affect.</p>
-            </div>
-            <span class="badge badge-amber" id="badge-attention-count">0</span>
+      <!-- Policy: what the operator has decided — notification rules, guard
+           decisions, file exceptions, muted flag classes, and the audit of
+           every change. The lists are read-only here. -->
+      <div class="tabpanel" id="tab-policy" role="tabpanel" hidden>
+        <section class="panel" id="notify-pop">
+          <div class="panel-head">
+            <h2><svg class="icon"><use href="#i-bell"/></svg>Notifications</h2>
           </div>
-          <div class="panel-body" id="attention-list">
-            <div class="empty"><svg class="icon"><use href="#i-shield"/></svg><span>No decisions waiting</span></div>
+          <div class="panel-body">
+            <div class="notify-pop-sub">Default: only critical flags notify. Strongest rule first: a workspace scope beats a per-rule override, which beats the default. Applies to the menu bar app and this console.</div>
+            <div id="notify-rules-list"></div>
+            <div class="notify-pop-head notify-scope-head">Per-workspace scopes</div>
+            <div class="notify-pop-sub">Page me for a rule only in one repo (or silence it there), matched by path prefix. Example: always notify for <code>proxy-secret-leak</code> under <code>/Users/me/work/prod</code>.</div>
+            <div id="notify-scopes-list"></div>
           </div>
         </section>
-        <div class="grid" id="security-findings-grid">
+        <div class="grid">
           <div class="col">
-            <section class="panel">
+            <section class="panel" id="policy-guard-panel">
               <div class="panel-head">
-                <h2><svg class="icon"><use href="#i-alert"/></svg>Security flags</h2>
-                <span class="badge badge-amber" id="badge-flags-count">0</span>
-                <button class="btn btn-ghost btn-sm" data-action="export" data-what="flags" title="Download the current flags as JSON"><svg class="icon"><use href="#i-doc"/></svg><span>Export</span></button>
+                <h2><svg class="icon"><use href="#i-shield"/></svg>Guard decisions</h2>
+                <span class="badge" id="badge-guard-rules">0</span>
+                <button type="button" class="btn btn-ghost btn-sm" data-action="policy-refresh" title="Reload the policy lists"><svg class="icon"><use href="#i-refresh"/></svg><span>Refresh</span></button>
               </div>
-              <div class="panel-body">
-                <div class="filter-bar">
-                  <span class="session-filter" id="flags-session-filter" hidden>
-                    session <b id="flags-session-filter-id"></b>
-                    <button class="session-clear" id="flags-session-clear" title="Show all sessions"><svg class="icon"><use href="#i-close"/></svg></button>
-                  </span>
-                  <select id="flags-agent" class="select"><option value="all">All agents</option></select>
-                  <select id="flags-rule" class="select"><option value="all">All rules</option></select>
-                  <select id="flags-severity" class="select">
-                    <option value="all">Any severity</option>
-                    <option value="2">Warning &amp; up</option>
-                    <option value="3">Critical only</option>
-                  </select>
-                  <select id="flags-window" class="select">
-                    <option value="all">All time</option>
-                    <option value="1h">Last hour</option>
-                    <option value="24h">Last 24h</option>
-                    <option value="7d">Last 7 days</option>
-                  </select>
-                </div>
-                <div id="flags-list">
-                  <div class="empty"><svg class="icon"><use href="#i-alert"/></svg><span>No security correlation flags active</span></div>
-                </div>
+              <div class="panel-body" id="policy-guard-rules">
+                <div class="loading">Loading guard decisions…</div>
+              </div>
+            </section>
+            <section class="panel" id="policy-path-panel">
+              <div class="panel-head">
+                <h2><svg class="icon"><use href="#i-doc"/></svg>File exceptions</h2>
+                <span class="badge" id="badge-path-allows">0</span>
+              </div>
+              <div class="panel-body" id="policy-path-allows">
+                <div class="loading">Loading file exceptions…</div>
+              </div>
+            </section>
+            <section class="panel" id="policy-mute-panel">
+              <div class="panel-head">
+                <h2><svg class="icon"><use href="#i-bell"/></svg>Muted flag classes</h2>
+                <span class="badge" id="badge-mutes">0</span>
+              </div>
+              <div class="panel-body" id="policy-mutes">
+                <div class="loading">Loading muted flag classes…</div>
               </div>
             </section>
           </div>
           <div class="col">
-            <section class="panel">
-              <div class="panel-head">
-                <h2><svg class="icon"><use href="#i-incident"/></svg>Incidents &amp; auto-rotation</h2>
-                <span class="badge badge-rose" id="badge-incidents-count">0</span>
-                <button class="btn btn-ghost btn-sm" data-action="export" data-what="incidents" title="Download the current incidents as JSON"><svg class="icon"><use href="#i-doc"/></svg><span>Export</span></button>
-              </div>
-              <div class="panel-body" id="incidents-container">
-                <div class="empty"><svg class="icon"><use href="#i-incident"/></svg><span>No containment incidents recorded</span></div>
-              </div>
-            </section>
-
             <section class="panel" id="audit-panel">
               <div class="panel-head">
                 <h2><svg class="icon"><use href="#i-history"/></svg>Policy audit</h2>

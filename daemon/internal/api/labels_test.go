@@ -26,7 +26,7 @@ func postJSON(h func(http.ResponseWriter, *http.Request), path string, body any)
 }
 
 func TestLabelsRouteIsNoAgent(t *testing.T) {
-	if !apiroutes.IsNoAgent("/labels") || !apiroutes.ConsoleAllowed("/labels") || !apiroutes.IsMutation("POST", "/labels") {
+	if !apiroutes.IsNoAgent("/labels") || !apiroutes.ConsoleAllowed("GET", "/labels") || !apiroutes.IsMutation("POST", "/labels") {
 		t.Fatal("/labels must be NoAgent, console-admitted, POST mutating")
 	}
 }
