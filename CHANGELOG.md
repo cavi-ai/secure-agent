@@ -14,6 +14,11 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Console Policy: notification rules, guard decisions, file exceptions, muted flag classes and the policy audit.
 - Console: a load without a console token, or a revoked token, shows only "Console session ended."
 - Console: a new `#ct=` in the address bar reloads the page with that token.
+- `GET /worktrees` sizes: `size_bytes` per worktree and per repository (allocated bytes, measured in the background and cached for an hour; `sizing` while pending), `summary.size_bytes`, `summary.removable_bytes`, `volumes` (mount, total, free) and `reclaimed` totals.
+- Cleanup ledger: every worktree removal books the bytes it gave back, every prune a row; `GET /cleanup/ledger` and `secure-agent cleanup log`.
+- `POST /worktrees/remove` answers the bytes reclaimed.
+- `secure-agent worktrees` lists the biggest projects first with sizes, disk free per volume, worktree and removable totals and reclaimed so far.
+- Console Worktrees tab: disk card (volume bar, worktree, removable and reclaimed totals), sizes per project and worktree, biggest projects first; a removal updates the totals in place; while sizes are measured the tab re-reads the cached report every 5 s (up to 5 minutes).
 - `POST /worktrees/advise`: queues a worktree for a local-advisor note (`remove`, `review` or `keep` with a rationale); branch names, paths and commit subjects go to the model inside `<evidence>`.
 - `GET /worktrees` `advice`: the stored note per worktree path at its current HEAD; notes never change the state or what `POST /worktrees/remove` accepts.
 - `secure-agent worktrees advise <path>`; the list view prints the note under its row.
@@ -113,6 +118,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Console finding cards offer the served allow-path action.
 - Menu bar Open console loads the fresh console link into the existing console tab before focusing it.
 - Console notification preferences moved from the header to the Policy tab.
+- `/worktrees*` routes are NoAgent: agent processes cannot read or change the machine's worktrees.
 - Console Overview: Memory by session is Memory by family — one bar per live process family, its RSS counted once, `N sessions` in the label.
 - Console Overview: the Memory by family badge counts agent families, not infra.
 - Events carry a `(session_id, kind, id)` index; the event store writes planner statistics (`PRAGMA optimize`, `analysis_limit` 1000) at open and after each prune.

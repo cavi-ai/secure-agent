@@ -112,3 +112,74 @@ func (s *Store) WorkspaceActivity() []model.WorkspaceActivity {
 	}
 	return out
 }
+
+// cleanup_log is the ledger of tidying actions and the bytes each gave back.
+const cleanupLogSchema = `CREATE TABLE IF NOT EXISTS cleanup_log (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	ts TEXT NOT NULL,
+	action TEXT NOT NULL,
+	path TEXT NOT NULL,
+	repo TEXT,
+	bytes INTEGER NOT NULL DEFAULT 0,
+	detail TEXT
+);`
+
+// maxCleanupLog bounds the ledger like the audit log: rows come from
+// API-triggerable actions.
+const maxCleanupLog = 20000
+
+// PutCleanup appends a ledger row, stamped now when TS is zero.
+func (s *Store) PutCleanup(e model.CleanupEntry) {
+	if e.TS.IsZero() {
+		e.TS = time.Now()
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, err := s.db.Exec(`INSERT INTO cleanup_log (ts, action, path, repo, bytes, detail) VALUES (?, ?, ?, ?, ?, ?)`,
+		e.TS.UTC().Format(time.RFC3339Nano), e.Action, e.Path, e.Repo, e.Bytes, e.Detail); err != nil {
+		log.Printf("store: insert cleanup row: %v", err)
+		return
+	}
+	_, _ = s.db.Exec(`DELETE FROM cleanup_log WHERE id NOT IN (SELECT id FROM cleanup_log ORDER BY id DESC LIMIT ?)`, maxCleanupLog)
+}
+
+// CleanupLog returns the newest ledger rows first.
+func (s *Store) CleanupLog(limit int) []model.CleanupEntry {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rows, err := s.db.Query(`SELECT id, ts, action, path, COALESCE(repo, ''), bytes, COALESCE(detail, '') FROM cleanup_log ORDER BY id DESC LIMIT ?`, normalizeLimit(limit))
+	if err != nil {
+		log.Printf("store: query cleanup log: %v", err)
+		return nil
+	}
+	defer rows.Close()
+	out := []model.CleanupEntry{}
+	for rows.Next() {
+		var e model.CleanupEntry
+		var ts string
+		if err := rows.Scan(&e.ID, &ts, &e.Action, &e.Path, &e.Repo, &e.Bytes, &e.Detail); err != nil {
+			continue
+		}
+		e.TS, _ = time.Parse(time.RFC3339Nano, ts)
+		out = append(out, e)
+	}
+	if err := rows.Err(); err != nil {
+		log.Printf("store: cleanup log cursor error (result may be truncated): %v", err)
+	}
+	return out
+}
+
+// CleanupTotals sums the ledger over all time and the 30 days before now.
+func (s *Store) CleanupTotals(now time.Time) model.CleanupTotals {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var t model.CleanupTotals
+	cut := now.Add(-30 * 24 * time.Hour).UTC().Format(time.RFC3339Nano)
+	err := s.db.QueryRow(`SELECT COALESCE(SUM(bytes), 0), COUNT(*),
+		COALESCE(SUM(CASE WHEN ts >= ? THEN bytes ELSE 0 END), 0), COALESCE(SUM(ts >= ?), 0)
+		FROM cleanup_log`, cut, cut).Scan(&t.Bytes, &t.Count, &t.Bytes30d, &t.Count30d)
+	if err != nil {
+		log.Printf("store: cleanup totals: %v", err)
+	}
+	return t
+}

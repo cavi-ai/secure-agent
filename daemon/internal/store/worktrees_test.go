@@ -76,3 +76,24 @@ func TestWorkspaceActivity(t *testing.T) {
 		t.Fatalf("/w/two = %+v, want live (idle)", two)
 	}
 }
+
+func TestCleanupLedger(t *testing.T) {
+	s, err := Open("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	now := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
+	s.PutCleanup(model.CleanupEntry{TS: now.Add(-40 * 24 * time.Hour), Action: "worktree-remove", Path: "/r/.worktrees/old", Repo: "/r", Bytes: 1000})
+	s.PutCleanup(model.CleanupEntry{TS: now.Add(-time.Hour), Action: "worktree-remove", Path: "/r/.worktrees/new", Repo: "/r", Bytes: 250, Detail: "branch feat/new kept"})
+	s.PutCleanup(model.CleanupEntry{TS: now, Action: "worktree-prune", Path: "/r/.worktrees/gone", Repo: "/r"})
+
+	log := s.CleanupLog(10)
+	if len(log) != 3 || log[0].Action != "worktree-prune" || log[1].Bytes != 250 || log[1].Detail != "branch feat/new kept" || !log[2].TS.Equal(now.Add(-40*24*time.Hour)) {
+		t.Fatalf("log = %+v", log)
+	}
+	tot := s.CleanupTotals(now)
+	if tot.Bytes != 1250 || tot.Count != 3 || tot.Bytes30d != 250 || tot.Count30d != 2 {
+		t.Fatalf("totals = %+v", tot)
+	}
+}

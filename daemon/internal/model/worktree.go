@@ -47,3 +47,24 @@ type WorktreeAdviceRequest struct {
 	Precious []string `json:"precious,omitempty"`
 	Commits  []string `json:"commits,omitempty"` // subjects of commits on no remote and not in the default branch
 }
+
+// CleanupEntry is one row of the cleanup ledger: what was removed, where,
+// and how many bytes it gave back. The ledger is what "reclaimed" totals
+// and the history of tidying the machine read from.
+type CleanupEntry struct {
+	ID     int64     `json:"id"`
+	TS     time.Time `json:"ts"`
+	Action string    `json:"action"` // worktree-remove | worktree-prune
+	Path   string    `json:"path"`
+	Repo   string    `json:"repo,omitempty"`
+	Bytes  int64     `json:"bytes"`
+	Detail string    `json:"detail,omitempty"`
+}
+
+// CleanupTotals sums the ledger: all time and the last 30 days.
+type CleanupTotals struct {
+	Bytes    int64 `json:"bytes"`
+	Count    int   `json:"count"`
+	Bytes30d int64 `json:"bytes_30d"`
+	Count30d int   `json:"count_30d"`
+}

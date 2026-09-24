@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
 
@@ -48,6 +49,14 @@ func (h *Hunter) Remove(ctx context.Context, path string) (Worktree, error) {
 	if row.State != StateRemove {
 		return row, &NotRemovableError{Row: row}
 	}
+	// Measured now, not from the cache: this is the space the ledger books.
+	skip := map[string]bool{}
+	for _, o := range rs.list {
+		if o.Path != l.Path {
+			skip[o.Path] = true
+		}
+	}
+	row.SizeBytes, row.SizePartial = dirSize(ctx, l.Path, skip)
 	if _, err := git(ctx, rs.ref.Main, "worktree", "remove", l.Path); err != nil {
 		return row, err
 	}
@@ -55,6 +64,11 @@ func (h *Hunter) Remove(ctx context.Context, path string) (Worktree, error) {
 		Action: "worktree-remove",
 		Detail: fmt.Sprintf("path=%s branch=%s head=%s reason=%s", l.Path, orDetached(l.Branch), shortSHA(l.Head), strings.Join(row.Reasons, "; ")),
 	})
+	h.st.PutCleanup(model.CleanupEntry{
+		TS: h.now(), Action: "worktree-remove", Path: l.Path, Repo: rs.ref.Main, Bytes: row.SizeBytes,
+		Detail: "branch " + orDetached(l.Branch) + " kept; " + strings.Join(row.Reasons, "; "),
+	})
+	h.forgetSize(l.Path)
 	h.invalidate()
 	return row, nil
 }
@@ -96,6 +110,9 @@ func (h *Hunter) Prune(ctx context.Context, repo string) ([]string, error) {
 		Action: "worktree-prune",
 		Detail: fmt.Sprintf("repo=%s pruned=%s", ref.Main, strings.Join(gone, ",")),
 	})
+	for _, p := range gone {
+		h.st.PutCleanup(model.CleanupEntry{TS: h.now(), Action: "worktree-prune", Path: p, Repo: ref.Main, Detail: "directory was already gone"})
+	}
 	h.invalidate()
 	return gone, nil
 }

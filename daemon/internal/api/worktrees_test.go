@@ -194,7 +194,7 @@ func TestWorktreeRemoveEndpoint(t *testing.T) {
 		t.Fatal("refused removal deleted the worktree")
 	}
 
-	if rec := post(`{"path":"` + clean + `"}`); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"removed"`) {
+	if rec := post(`{"path":"` + clean + `"}`); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"removed"`) || !strings.Contains(rec.Body.String(), `"bytes":`) {
 		t.Fatalf("clean: %d %s", rec.Code, rec.Body.String())
 	}
 	if _, err := os.Stat(clean); err == nil {
@@ -215,7 +215,33 @@ func TestWorktreeRemoveEndpoint(t *testing.T) {
 	if actions["worktree-remove"] != 1 || actions["worktree-prune"] != 1 {
 		t.Fatalf("audit actions = %v", actions)
 	}
-	if !apiroutes.IsMutation(http.MethodPost, "/worktrees/remove") || !apiroutes.ConsoleAllowed("GET", "/worktrees/remove") {
+
+	// The ledger books both actions; the report carries its totals.
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/cleanup/ledger?limit=10", nil))
+	var ledger struct {
+		Totals  model.CleanupTotals  `json:"totals"`
+		Entries []model.CleanupEntry `json:"entries"`
+	}
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &ledger) != nil ||
+		len(ledger.Entries) != 2 || ledger.Entries[0].Action != "worktree-prune" || ledger.Entries[1].Path != clean ||
+		ledger.Totals.Count != 2 || ledger.Totals.Bytes != ledger.Entries[1].Bytes {
+		t.Fatalf("ledger: %d %s", rec.Code, rec.Body.String())
+	}
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/worktrees", nil))
+	var rep worktreehunter.ScanReport
+	if json.Unmarshal(rec.Body.Bytes(), &rep) != nil || rep.Reclaimed == nil || rep.Reclaimed.Count != 2 {
+		t.Fatalf("report reclaimed: %s", rec.Body.String())
+	}
+	for _, r := range apiroutes.Table {
+		if strings.HasPrefix(r.Path, "/worktrees") || r.Path == "/cleanup/ledger" {
+			if !r.NoAgent {
+				t.Errorf("%s must be NoAgent: agents never read or change the machine's worktrees", r.Path)
+			}
+		}
+	}
+	if !apiroutes.IsMutation(http.MethodPost, "/worktrees/remove") || !apiroutes.ConsoleAllowed(http.MethodPost, "/worktrees/remove") {
 		t.Fatal("/worktrees/remove must be a console-admitted mutation")
 	}
 }
@@ -281,7 +307,7 @@ func TestWorktreeAdviseAndNotes(t *testing.T) {
 	if rec := do(http.MethodPost, "/worktrees/remove", `{"path":"`+dirty+`"}`); rec.Code != http.StatusConflict {
 		t.Fatalf("remove after a remove note: %d %s, want 409", rec.Code, rec.Body.String())
 	}
-	if !apiroutes.IsMutation(http.MethodPost, "/worktrees/advise") || !apiroutes.ConsoleAllowed("GET", "/worktrees/advise") {
+	if !apiroutes.IsMutation(http.MethodPost, "/worktrees/advise") || !apiroutes.ConsoleAllowed(http.MethodPost, "/worktrees/advise") {
 		t.Fatal("/worktrees/advise must be a console-admitted mutation")
 	}
 
