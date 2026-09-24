@@ -366,9 +366,12 @@ Repeating findings: the flags one agent raised under one rule on one subject in 
 
 Retrieves raw system telemetry events captured by the file watcher and network sampler.
 File opens, writes and deletes are stored for processes inside an agent family, and otherwise only as the evidence of a flag.
+Trace rows (kind `12` tool call, `13` turn, `14` model call) carry pid `0` and `session_id`.
+A model call carries `model`, `tokens_in`, `tokens_out`, `cost_usd` and `price_class` (`priced`, `plan`, `local`, `unknown-model` or `unpriced-model`); `price_class` is set when served, never stored.
 
 #### Query Parameters
 - `limit` *(optional, integer)*: Maximum number of events to return (default: `50`).
+- `kind` *(optional, integer)*: Only events of this kind.
 
 #### Request
 ```http

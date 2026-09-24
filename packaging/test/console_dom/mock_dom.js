@@ -1277,6 +1277,13 @@
       data['/events'].push({ kind: 0, ts: iso(40000 + i * 1000), pid: 5821, path: `/Users/dev/workspace/api-service/src/m${i}.ts` });
     }
   }
+  // traceevents: a model_call and a tool_call as the trace collectors write
+  // them — pid 0, a session id, no path or detail.
+  if (MODE.includes('traceevents')) {
+    data['/events'].push(
+      { kind: 14, ts: iso(90000), pid: 0, session_id: 'sess-claude-1', model: 'claude-sonnet-4-5', tokens_in: 12000, tokens_out: 340, cost_usd: 0.0412, price_class: 'priced' },
+      { kind: 12, ts: iso(91000), pid: 0, session_id: 'sess-claude-1', tool: 'Bash', tool_status: 'ok', duration_ms: 2500, call_id: 'c-1' });
+  }
   // Episodes live on their own endpoint now.
   data['/resources/episodes'] = (data['/resources'].episodes || []);
 

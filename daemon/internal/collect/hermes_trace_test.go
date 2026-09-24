@@ -3,6 +3,7 @@ package collect
 import (
 	"database/sql"
 	"fmt"
+	"log"
 	"math"
 	"os"
 	"path/filepath"
@@ -113,6 +114,8 @@ func newTestHermes(t *testing.T, root string) (*HermesCollector, <-chan event.Ev
 	sub := b.Subscribe()
 	c := NewHermesCollector(b, time.Second)
 	c.Configured = root
+	// The fixture's messages are an hour old: all inside the first-sight window.
+	c.now = func() time.Time { return hermesAt(3600) }
 	var seen []HermesSighting
 	var ended []hermesEnd
 	c.OnSessionSeen = func(s HermesSighting) { seen = append(seen, s) }
@@ -318,5 +321,70 @@ func TestHermesSchemaDriftReported(t *testing.T) {
 	}
 	if st := c.Status(); len(st.DBs) != 1 || st.DBs[0].Watermark != 0 || !strings.Contains(st.LastError, "messages") {
 		t.Fatalf("status = %+v, want the messages error and no progress", st)
+	}
+}
+
+// TestHermesFirstSightStartsAtLastDay: a database with no persisted watermark
+// starts at the newest message older than 24h — the first poll emits only
+// the last day, and s-old (begun before the start) contributes its usage
+// totals as a baseline, not as a model call. A persisted watermark is used
+// unchanged, even one older than the window.
+func TestHermesFirstSightStartsAtLastDay(t *testing.T) {
+	root := t.TempDir()
+	db, err := sql.Open("sqlite", filepath.Join(root, "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	now := time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC)
+	at := func(ago time.Duration) float64 { return float64(now.Add(-ago).UnixNano()) / 1e9 }
+	hermesExec(t, db, hermesDDL, hermesUsageDDL,
+		fmt.Sprintf(`INSERT INTO sessions (id, source, model, started_at, input_tokens) VALUES
+		 ('s-old', 'cli', 'claude-sonnet-4-5', %f, 900), ('s-new', 'cli', 'claude-sonnet-4-5', %f, 0)`, at(48*time.Hour), at(time.Minute)),
+		fmt.Sprintf(`INSERT INTO messages (id, session_id, role, content, timestamp) VALUES
+		 (1, 's-old', 'user', 'x', %f), (2, 's-old', 'user', 'x', %f),
+		 (3, 's-old', 'user', 'x', %f), (4, 's-new', 'user', 'x', %f)`,
+			at(48*time.Hour), at(30*time.Hour), at(2*time.Hour), at(time.Minute)),
+		`INSERT INTO session_model_usage (session_id, model, input_tokens, output_tokens, estimated_cost_usd) VALUES
+		 ('s-old', 'claude-sonnet-4-5', 900, 90, 0.01)`)
+
+	var logBuf strings.Builder
+	log.SetOutput(&logBuf)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+	state := filepath.Join(t.TempDir(), "hermes-watermark.json")
+	c, sub, _, _ := newTestHermes(t, root)
+	c.now = func() time.Time { return now }
+	c.StatePath = state
+	n := c.pollOnce()
+	evs := drainOpenclaw(sub, n)
+	if n != 2 || evs[0].Kind != event.KindTurn || !evs[0].TS.Equal(now.Add(-2*time.Hour)) ||
+		evs[1].Kind != event.KindTurn || evs[1].SessionID != "s-new" || !evs[1].TS.Equal(now.Add(-time.Minute)) {
+		t.Fatalf("first poll = %d events %+v, want the turns at now-2h and now-1m only", n, evs)
+	}
+	if want := "from message 2 (first sight: last 24h)"; !strings.Contains(logBuf.String(), want) {
+		t.Fatalf("log = %q, want %q", logBuf.String(), want)
+	}
+	if st := c.Status(); st.DBs[0].Watermark != 4 {
+		t.Fatalf("watermark = %d, want 4", st.DBs[0].Watermark)
+	}
+
+	// A persisted watermark older than the window resumes exactly there.
+	if err := os.WriteFile(state, []byte(fmt.Sprintf(`{"dbs":{%q:1}}`, filepath.Join(root, "state.db"))), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c2, sub2, _, _ := newTestHermes(t, root)
+	c2.now = func() time.Time { return now }
+	c2.StatePath = state
+	n = c2.pollOnce()
+	evs = drainOpenclaw(sub2, n)
+	var turns int
+	for _, e := range evs {
+		if e.Kind == event.KindTurn {
+			turns++
+		}
+	}
+	if turns != 3 || !evs[0].TS.Equal(now.Add(-30*time.Hour)) {
+		t.Fatalf("resumed poll = %+v, want the turns of messages 2, 3 and 4", evs)
 	}
 }

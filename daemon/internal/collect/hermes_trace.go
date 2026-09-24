@@ -36,7 +36,10 @@ import (
 //     written, never locked against Hermes.
 //   - Watermarked per database on messages.id (INTEGER PRIMARY KEY
 //     AUTOINCREMENT) and bounded to maxHermesMessages per poll; a backlog
-//     drains over polls. The watermarks persist beside the store.
+//     drains over polls. The watermarks persist beside the store. A database
+//     with no persisted watermark (a first run, a new profile) starts at the
+//     newest message older than traceFirstSightWindow, not message 0: its
+//     history never backfills over the recent rows of the per-kind budgets.
 //   - Content columns (messages.content and reasoning, sessions.title and
 //     system_prompt, tool call arguments) are never selected: tool_calls is
 //     read inside SQLite through json_each for each call's id and function
@@ -75,6 +78,9 @@ const (
 	// hermesLiveWindow drops a session from the re-read set once it has been
 	// quiet this long (a crashed session never gets ended_at).
 	hermesLiveWindow = 6 * time.Hour
+	// traceFirstSightWindow is how far back a Hermes or openclaw database
+	// with no persisted watermark is read on first sight.
+	traceFirstSightWindow = 24 * time.Hour
 )
 
 // HermesSighting is a Hermes session as its state.db records it.
@@ -120,6 +126,7 @@ type HermesCollector struct {
 	// (the per-database watermarks are in Status).
 	OnPoll func(source string, watermark int64)
 
+	now       func() time.Time // the clock the first-sight window counts back from
 	loaded    bool
 	persisted map[string]int64
 	idle      bool // the "not found" line was logged
@@ -136,6 +143,9 @@ type hermesDB struct {
 	// startMark is the watermark this run began reading from: a session whose
 	// first message is past it was born after the run started.
 	startMark int64
+	// started is true once the starting watermark is known: persisted, or
+	// found in the database on first sight.
+	started   bool
 	lastErr   string // this poll's read failure, for the doctor
 	logged    string // the failure last logged; cleared by a clean poll
 	noted     map[string]bool
@@ -161,7 +171,7 @@ func NewHermesCollector(b *bus.Bus, interval time.Duration) *HermesCollector {
 	if interval <= 0 {
 		interval = hermesPollInterval
 	}
-	return &HermesCollector{bus: b, interval: interval, dbs: map[string]*hermesDB{}}
+	return &HermesCollector{bus: b, interval: interval, now: time.Now, dbs: map[string]*hermesDB{}}
 }
 
 // HermesHome picks Hermes's root: the configured path, else $HERMES_HOME,
@@ -269,21 +279,38 @@ func (c *HermesCollector) pollOnce() int {
 	return published
 }
 
-// db returns the read state for path, created on first sight at its
-// persisted watermark.
+// db returns the read state for path, created at its persisted watermark;
+// with none, pollDB finds the first-sight watermark on the first open.
 func (c *HermesCollector) db(path string) *hermesDB {
 	if d, ok := c.dbs[path]; ok {
 		return d
 	}
-	wm := c.persisted[path]
+	wm, resumed := c.persisted[path]
 	d := &hermesDB{
-		path: path, watermark: wm, startMark: wm,
+		path: path, watermark: wm, startMark: wm, started: resumed,
 		noted: map[string]bool{}, ended: map[string]bool{}, live: map[string]time.Time{},
 		inputSeen: map[string]int64{}, usage: map[string]hermesUsage{}, callStart: map[string]hermesCall{},
 	}
 	c.dbs[path] = d
-	log.Printf("hermes: polling %s from message %d", path, wm)
+	if resumed {
+		log.Printf("hermes: polling %s from message %d", path, wm)
+	}
 	return d
+}
+
+// hermesFirstSightMark is the watermark a database with none persisted
+// starts from: the highest message id older than cutoff (0 when none is).
+// messages has no timestamp index; the scan walks the primary key down from
+// the newest message and stops at the first older one, so it touches only
+// the messages the next polls read anyway.
+func hermesFirstSightMark(db *sql.DB, cutoff time.Time) (int64, error) {
+	var id int64
+	err := db.QueryRow(`SELECT id FROM messages WHERE timestamp < ? ORDER BY id DESC LIMIT 1`,
+		float64(cutoff.UnixNano())/1e9).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+	return id, err
 }
 
 func openHermesReadOnly(path string) (*sql.DB, error) {
@@ -372,6 +399,17 @@ func (c *HermesCollector) pollDB(d *hermesDB) int {
 	if err != nil {
 		d.fail("messages", err)
 		return 0
+	}
+	if !d.started {
+		// startMark moves with the watermark: a session whose first message
+		// is at or before it has its usage totals taken as a baseline.
+		wm, err := hermesFirstSightMark(db, c.now().Add(-traceFirstSightWindow))
+		if err != nil {
+			d.fail("first sight", err)
+			return 0
+		}
+		d.watermark, d.startMark, d.started = wm, wm, true
+		log.Printf("hermes: polling %s from message %d (first sight: last 24h)", d.path, wm)
 	}
 	sessCols, err := hermesTableColumns(db, "sessions")
 	if err == nil && !sessCols["id"] {

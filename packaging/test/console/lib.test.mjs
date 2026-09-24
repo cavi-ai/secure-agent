@@ -23,7 +23,7 @@ vm.runInNewContext(readFileSync(libPath, 'utf8'), ctx, { filename: 'lib.js' });
 // same context on top of lib.js.
 vm.runInContext(readFileSync(path.join(webDist, 'tab-overview.js'), 'utf8'), ctx, { filename: 'tab-overview.js' });
 const {
-  escapeHTML, fmtTime, eventKey,
+  escapeHTML, fmtTime, eventKey, eventTime, eventsNewestFirst, eventRow, eventWho,
   advanceBuckets, bucketIndexFor, sparkPoints,
   parseMarkdownToHTML, buildEvidenceChain,
   sessionShort, filterEventsBySession, rollupSeries, flagHost,
@@ -1343,4 +1343,61 @@ test('mapPostureAttention: a removed item leaves items, groups and needs_you coh
   coherent(p);
   assert.equal(posture.items.length, 4);
   assert.equal(posture.needs_you, 4);
+});
+
+// ---------- Events rows (trace legibility) ----------
+
+test('eventRow labels each kind and details it from the /events fields', () => {
+  const row = (e) => { const r = eventRow(e); return `${r.label}|${r.cls}|${r.detail}`; };
+  assert.equal(row({ kind: 12, pid: 0, tool: 'Bash', tool_status: 'ok', duration_ms: 2500 }), 'TOOL|tool|Bash · ok · 2.5s');
+  assert.equal(row({ kind: 12, pid: 0, tool: 'read_file', tool_status: 'running' }), 'TOOL|tool|read_file · running');
+  assert.equal(row({ kind: 13, pid: 0, session_id: 's' }), 'TURN||');
+  assert.equal(row({ kind: 14, pid: 0, model: 'claude-sonnet-4-5', tokens_in: 12000, tokens_out: 340, cost_usd: 0.0412 }),
+    'MODEL||claude-sonnet-4-5 · 12.0k in / 340 out · $0.04');
+  assert.equal(row({ kind: 14, pid: 0, model: 'gpt-5', tokens_in: 900, tokens_out: 12, cost_usd: 0.0021 }),
+    'MODEL||gpt-5 · 900 in / 12 out · $0.0021');
+  assert.equal(row({ kind: 14, pid: 0, model: 'kimi-k2', tokens_in: 10, tokens_out: 5, price_class: 'plan' }), 'MODEL||kimi-k2 · 10 in / 5 out · plan');
+  assert.equal(row({ kind: 14, pid: 0, model: 'odd-model', tokens_in: 10, tokens_out: 5, price_class: 'unpriced-model' }), 'MODEL||odd-model · 10 in / 5 out · unpriced');
+  assert.equal(row({ kind: 14, pid: 0, tokens_in: 1, tokens_out: 1 }), 'MODEL||unknown model · 1 in / 1 out · unpriced');
+  assert.equal(row({ kind: 0, pid: 7, path: '/a/.env' }), 'OPEN||/a/.env');
+  assert.equal(row({ kind: 1, pid: 7, path: '/a/b.ts' }), 'WRITE||/a/b.ts');
+  assert.equal(row({ kind: 2, pid: 7, path: '/a/c.ts' }), 'DELETE||/a/c.ts');
+  assert.equal(row({ kind: 3, pid: 7, exe_path: '/usr/bin/curl' }), 'EXEC||/usr/bin/curl');
+  assert.equal(row({ kind: 5, pid: 7, remote_host: 'api.example.com', remote_port: 443 }), 'CONN|conn|api.example.com:443');
+  assert.equal(row({ kind: 6, pid: 7, remote_host: '10.0.0.1', remote_port: 22 }), 'CONN|conn|10.0.0.1:22');
+  assert.equal(row({ kind: 8, pid: 7, detail: 'Bash' }), 'TOOL USE|tool|Bash');
+  assert.equal(row({ kind: 9, pid: 7, detail: 'aws-key' }), 'PROXY HIT|proxy|aws-key');
+  assert.equal(row({ kind: 4, pid: 7, path: '/tcc' }), 'EVENT||/tcc');
+});
+
+test('eventWho names a pid-0 row by its session, else agent · PID', () => {
+  const sessions = [{ id: 'sess-9', harness: 'hermes', repo: 'api-service', branch: 'main' }];
+  const who = eventWho({ kind: 14, pid: 0, session_id: 'sess-9' }, sessions, '');
+  assert.equal(who.text, 'api-service@main');
+  assert.equal(who.harness, 'hermes');
+  assert.ok(!who.text.includes('PID'));
+  const unknown = eventWho({ kind: 12, pid: 0, session_id: 'abcdef1234567890' }, sessions, '');
+  assert.ok(unknown.text.startsWith('session ') && !unknown.text.includes('PID'), unknown.text);
+  assert.equal(eventWho({ kind: 0, pid: 42 }, sessions, 'Claude Code').text, 'Claude Code · PID 42');
+  assert.equal(eventWho({ kind: 0, pid: 42 }, sessions, '').text, 'PID 42');
+  assert.equal(eventWho({ kind: 0, pid: 42 }, sessions, '').title, 'PID 42');
+});
+
+test('eventTime shows HH:MM:SS today and the date on any other day', () => {
+  const now = new Date(2026, 8, 24, 15, 0, 0);
+  assert.equal(eventTime(new Date(2026, 8, 24, 9, 5, 7), now), '09:05:07');
+  assert.equal(eventTime(new Date(2026, 4, 22, 13, 21, 7), now), 'May 22 13:21');
+  assert.equal(eventTime(new Date(2026, 8, 23, 23, 59, 0), now), 'Sep 23 23:59');
+});
+
+test('eventsNewestFirst orders rows by ts descending without touching the input', () => {
+  const input = [
+    { ts: '2026-09-24T10:00:00.123456789Z', kind: 13 },
+    { ts: '2026-05-22T13:21:07Z', kind: 12 },
+    { ts: '2026-09-24T12:00:00-04:00', kind: 14 },
+    { ts: '2026-09-24T10:00:01Z', kind: 0 },
+  ];
+  const out = eventsNewestFirst(input);
+  assert.deepEqual(out.map(e => e.kind), [14, 0, 13, 12]);
+  assert.equal(input[0].kind, 13);
 });

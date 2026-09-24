@@ -32,6 +32,8 @@ import (
 //     written, never locked against the gateway.
 //   - Watermarked on messages.message_id (monotonic AUTOINCREMENT) and
 //     bounded to maxOpenclawMessages per poll; a backlog drains over polls.
+//     With no persisted watermark the first poll starts at the newest
+//     message older than traceFirstSightWindow, not message 0.
 //   - Content columns (messages.content, tool input/output, text) are never
 //     selected: only ids, roles, tool names, statuses, token counts, model
 //     ids and timestamps.
@@ -89,6 +91,10 @@ type OpenclawCollector struct {
 
 	dbPath    string // resolved lcm.db; "" until found
 	watermark int64  // highest messages.message_id read
+	now       func() time.Time
+	resumed   bool   // watermark came from StatePath
+	started   bool   // the starting watermark is known
+	startErr  string // the first-sight failure last logged
 	noted     map[string]bool
 	ended     map[string]bool
 	callStart map[string]time.Time // session\x00call id → call message time
@@ -101,7 +107,7 @@ func NewOpenclawCollector(b *bus.Bus, dbPath string, interval time.Duration) *Op
 		interval = openclawPollInterval
 	}
 	return &OpenclawCollector{
-		bus: b, dbPath: dbPath, interval: interval,
+		bus: b, dbPath: dbPath, interval: interval, now: time.Now,
 		noted: map[string]bool{}, ended: map[string]bool{}, callStart: map[string]time.Time{},
 	}
 }
@@ -163,7 +169,6 @@ func (c *OpenclawCollector) resolve() bool {
 	}
 	c.dbPath = filepath.Join(dir, "lcm.db")
 	c.loadState()
-	log.Printf("openclaw: polling %s from message %d", c.dbPath, c.watermark)
 	return true
 }
 
@@ -253,11 +258,52 @@ func (c *OpenclawCollector) pollOnce() int {
 	}
 	defer db.Close()
 
+	if !c.start(db) {
+		return 0
+	}
 	published, ok := c.readMessages(db)
 	if ok {
 		c.endClosed(db)
 	}
 	return published
+}
+
+// start fixes the starting watermark on the first open: the persisted one,
+// else the first-sight one. False while the database cannot answer.
+func (c *OpenclawCollector) start(db *sql.DB) bool {
+	if c.started {
+		return true
+	}
+	if c.resumed {
+		c.started = true
+		log.Printf("openclaw: polling %s from message %d", c.dbPath, c.watermark)
+		return true
+	}
+	wm, err := openclawFirstSightMark(db, c.now().Add(-traceFirstSightWindow))
+	if err != nil {
+		if msg := err.Error(); msg != c.startErr {
+			c.startErr = msg
+			log.Printf("openclaw: %s: first sight: %v (schema drift?)", c.dbPath, err)
+		}
+		return false
+	}
+	c.watermark, c.started = wm, true
+	log.Printf("openclaw: polling %s from message %d (first sight: last 24h)", c.dbPath, wm)
+	return true
+}
+
+// openclawFirstSightMark is the highest message id created before cutoff (0
+// when none is). created_at has no index; the scan walks the primary key
+// down from the newest message and stops at the first older one. datetime()
+// reads both SQLite's "YYYY-MM-DD HH:MM:SS" and RFC 3339.
+func openclawFirstSightMark(db *sql.DB, cutoff time.Time) (int64, error) {
+	var id int64
+	err := db.QueryRow(`SELECT message_id FROM messages WHERE datetime(created_at) < ? ORDER BY message_id DESC LIMIT 1`,
+		cutoff.UTC().Format(openclawTimeLayout)).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+	return id, err
 }
 
 func (c *OpenclawCollector) readMessages(db *sql.DB) (int, bool) {
@@ -444,7 +490,7 @@ func (c *OpenclawCollector) loadState() {
 	}
 	var st openclawState
 	if json.Unmarshal(data, &st) == nil && st.DB == c.dbPath && st.MessageID > 0 {
-		c.watermark = st.MessageID
+		c.watermark, c.resumed = st.MessageID, true
 	}
 }
 

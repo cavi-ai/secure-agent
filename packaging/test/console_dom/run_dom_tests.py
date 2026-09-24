@@ -215,6 +215,7 @@ def main():
         dom_fam = dump_dom(chrome, tmp, "?familiesdemo&tab=resources")
         dom_famev = dump_dom(chrome, tmp, "?familiesdemo&familyevents&tab=resources")
         dom_evcap = dump_dom(chrome, tmp, "?tab=events&manyevents")
+        dom_evtrace = dump_dom(chrome, tmp, "?tab=events&traceevents")
         dom_sesslink = dump_dom(chrome, tmp, "?sessionlinkdemo")
         dom_sticky = dump_dom(chrome, tmp, "?stickydemo")
         dom_drawerback = dump_dom(chrome, tmp, "?drawerbackdemo")
@@ -796,6 +797,12 @@ def main():
               ev_cap.count('class="timeline-item') == 50
               and re.search(r'data-action="show-more" data-key="events"[^>]*>Show \d+ more<', ev_cap) is not None,
               f"rows={ev_cap.count('class=\"timeline-item')}")
+        ev_trace = dom_evtrace.split('id="events-container"', 1)[1].split('</section>', 1)[0]
+        check("Events rows name trace kinds: MODEL and TOOL with their session, never PID 0",
+              '>MODEL<' in ev_trace and '>TOOL<' in ev_trace and 'Bash · ok · 2.5s' in ev_trace
+              and 'claude-sonnet-4-5 · 12.0k in / 340 out · $0.04' in ev_trace
+              and 'api-service@main' in ev_trace and 'PID 0' not in ev_trace,
+              f"model={'>MODEL<' in ev_trace} tool={'>TOOL<' in ev_trace} pid0={'PID 0' in ev_trace}")
         check("policy editor exposes automatic containment warning",
 		      "applies every enabled intervention automatically" in dom_policy)
         check("terminate policy save requires explicit confirmation",
