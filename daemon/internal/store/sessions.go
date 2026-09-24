@@ -27,7 +27,8 @@ const sessionsSchema = `CREATE TABLE IF NOT EXISTS sessions (
 	ended_at TEXT,
 	last_seen_at TEXT,
 	status TEXT,
-	confidence TEXT
+	confidence TEXT,
+	origin TEXT
 );`
 
 // UpsertSession inserts or refreshes a session. Metadata fields are filled
@@ -89,8 +90,8 @@ func (s *Store) upsertSessionLocked(sess model.Session) {
 	}
 
 	_, _ = s.db.Exec(`INSERT INTO sessions
-		(id, harness, workspace, repo, branch, root_pid, root_started_at, parent_id, started_at, ended_at, last_seen_at, status, confidence)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		(id, harness, workspace, repo, branch, root_pid, root_started_at, parent_id, started_at, ended_at, last_seen_at, status, confidence, origin)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 		harness = excluded.harness,
 		workspace = excluded.workspace,
@@ -101,11 +102,12 @@ func (s *Store) upsertSessionLocked(sess model.Session) {
 		parent_id = CASE WHEN COALESCE(excluded.parent_id, '') != '' THEN excluded.parent_id ELSE sessions.parent_id END,
 		last_seen_at = excluded.last_seen_at,
 		status = excluded.status,
-		confidence = excluded.confidence`,
+		confidence = excluded.confidence,
+		origin = CASE WHEN COALESCE(excluded.origin, '') != '' THEN excluded.origin ELSE sessions.origin END`,
 		sess.ID, sess.Harness, sess.Workspace, sess.Repo, sess.Branch,
 		sess.RootPID, sess.RootStartedAt, sess.ParentID,
 		sess.StartedAt.UTC().Format(time.RFC3339Nano), nil,
-		sess.LastSeenAt.UTC().Format(time.RFC3339Nano), sess.Status, sess.Confidence)
+		sess.LastSeenAt.UTC().Format(time.RFC3339Nano), sess.Status, sess.Confidence, sess.Origin)
 }
 
 // TouchSession bumps last_seen_at and reactivates an idle session. Ended
@@ -253,7 +255,7 @@ func (s *Store) SessionRoots() map[int32]string {
 func (s *Store) SessionsByRootPID() map[int32]model.Session {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	rows, err := s.db.Query(`SELECT id, harness, workspace, repo, branch, root_pid, root_started_at, parent_id, started_at, ended_at, last_seen_at, status, confidence
+	rows, err := s.db.Query(`SELECT id, harness, workspace, repo, branch, root_pid, root_started_at, parent_id, started_at, ended_at, last_seen_at, status, confidence, COALESCE(origin, '')
 		FROM sessions WHERE status != ? AND root_pid != 0`, model.SessionEnded)
 	if err != nil {
 		return nil
@@ -266,7 +268,7 @@ func (s *Store) SessionsByRootPID() map[int32]model.Session {
 		var startedAt, lastSeen string
 		if err := rows.Scan(&sess.ID, &sess.Harness, &sess.Workspace, &sess.Repo, &sess.Branch,
 			&sess.RootPID, &sess.RootStartedAt, &sess.ParentID, &startedAt, &endedAt, &lastSeen,
-			&sess.Status, &sess.Confidence); err != nil {
+			&sess.Status, &sess.Confidence, &sess.Origin); err != nil {
 			continue
 		}
 		out[sess.RootPID] = sess
@@ -293,9 +295,11 @@ func (s *Store) RekeySession(oldID, newID string) {
 	var n int
 	_ = tx.QueryRow(`SELECT COUNT(*) FROM sessions WHERE id = ?`, newID).Scan(&n)
 	if n > 0 {
-		// The merged row keeps the old row's parent when it has none.
+		// The merged row keeps the old row's parent and origin when it has none.
 		_, _ = tx.Exec(`UPDATE sessions SET parent_id = COALESCE((SELECT parent_id FROM sessions WHERE id = ?), '')
 			WHERE id = ? AND COALESCE(parent_id, '') = ''`, oldID, newID)
+		_, _ = tx.Exec(`UPDATE sessions SET origin = COALESCE((SELECT origin FROM sessions WHERE id = ?), '')
+			WHERE id = ? AND COALESCE(origin, '') = ''`, oldID, newID)
 		_, _ = tx.Exec(`DELETE FROM sessions WHERE id = ?`, oldID)
 	} else {
 		_, _ = tx.Exec(`UPDATE sessions SET id = ? WHERE id = ?`, newID, oldID)
@@ -341,7 +345,7 @@ func (f SessionFilter) where() (string, []any) {
 // defaultEndedTail caps how many ended sessions the default view carries.
 const defaultEndedTail = 25
 
-const sessionSelect = `SELECT id, harness, workspace, repo, branch, root_pid, root_started_at, parent_id, started_at, ended_at, last_seen_at, status, confidence FROM sessions`
+const sessionSelect = `SELECT id, harness, workspace, repo, branch, root_pid, root_started_at, parent_id, started_at, ended_at, last_seen_at, status, confidence, COALESCE(origin, '') FROM sessions`
 
 // scanSessions reads sessionSelect rows and closes them.
 func scanSessions(rows *sql.Rows) []model.Session {
@@ -353,7 +357,7 @@ func scanSessions(rows *sql.Rows) []model.Session {
 		var startedAt, lastSeen string
 		if err := rows.Scan(&sess.ID, &sess.Harness, &sess.Workspace, &sess.Repo, &sess.Branch,
 			&sess.RootPID, &sess.RootStartedAt, &sess.ParentID, &startedAt, &endedAt, &lastSeen,
-			&sess.Status, &sess.Confidence); err != nil {
+			&sess.Status, &sess.Confidence, &sess.Origin); err != nil {
 			continue
 		}
 		sess.StartedAt, _ = time.Parse(time.RFC3339Nano, startedAt)

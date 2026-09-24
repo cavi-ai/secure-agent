@@ -832,3 +832,56 @@ func TestSessionTimelineEndpoint(t *testing.T) {
 	}
 	resp2.Body.Close()
 }
+
+// A session's origin round-trips through /sessions, the session report and
+// /snapshot; a session without one serves none.
+func TestSessionOriginServed(t *testing.T) {
+	st := testStore(t)
+	now := time.Now()
+	st.UpsertSession(model.Session{ID: "oc", Harness: "codex", Origin: "martina (openclaw)",
+		StartedAt: now, LastSeenAt: now, Status: model.SessionActive, Confidence: model.ConfTranscript})
+	st.UpsertSession(model.Session{ID: "own", Harness: "codex",
+		StartedAt: now.Add(-time.Minute), LastSeenAt: now.Add(-time.Minute), Status: model.SessionActive, Confidence: model.ConfTranscript})
+	a := newTestAPI("", st, &fakeKiller{}, func() Status { return Status{Running: true} })
+	get := func(path string, into any) string {
+		t.Helper()
+		rr := httptest.NewRecorder()
+		a.buildMux().ServeHTTP(rr, httptest.NewRequest("GET", path, nil))
+		if rr.Code != 200 {
+			t.Fatalf("GET %s code=%d", path, rr.Code)
+		}
+		if err := json.Unmarshal(rr.Body.Bytes(), into); err != nil {
+			t.Fatalf("GET %s: %v", path, err)
+		}
+		return rr.Body.String()
+	}
+	origins := func(l []model.Session) map[string]string {
+		m := map[string]string{}
+		for _, s := range l {
+			m[s.ID] = s.Origin
+		}
+		return m
+	}
+	var list []model.Session
+	body := get("/sessions", &list)
+	if o := origins(list); o["oc"] != "martina (openclaw)" || o["own"] != "" {
+		t.Fatalf("/sessions origins = %v", o)
+	}
+	if strings.Count(body, `"origin"`) != 1 {
+		t.Fatalf("/sessions: want origin on exactly one row (omitempty), body has %d", strings.Count(body, `"origin"`))
+	}
+	var rep struct {
+		Session model.Session `json:"session"`
+	}
+	get("/sessions/oc/report?format=json", &rep)
+	if rep.Session.Origin != "martina (openclaw)" {
+		t.Fatalf("report session origin = %q", rep.Session.Origin)
+	}
+	var snap struct {
+		Sessions []model.Session `json:"sessions"`
+	}
+	get("/snapshot", &snap)
+	if o := origins(snap.Sessions); o["oc"] != "martina (openclaw)" || o["own"] != "" {
+		t.Fatalf("/snapshot origins = %v", o)
+	}
+}

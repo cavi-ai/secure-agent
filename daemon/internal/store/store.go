@@ -302,6 +302,19 @@ func Open(dbPath, jsonlPath string) (*Store, error) {
 		}
 		log.Printf("store: migrated flags: added workspace column")
 	}
+	// sessions.origin: who spawned a session (an openclaw agent's Codex).
+	var originN int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name='origin'`).Scan(&originN); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to inspect sessions.origin: %w", err)
+	}
+	if originN == 0 {
+		if _, err := db.Exec(`ALTER TABLE sessions ADD COLUMN origin TEXT`); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("failed to migrate sessions.origin: %w", err)
+		}
+		log.Printf("store: migrated sessions: added origin column")
+	}
 	// Trace columns (P2): older databases gain them in place.
 	for _, col := range []string{"tool", "tool_status", "duration_ms", "model", "tokens_in", "tokens_out", "cost_usd", "call_id", "provider"} {
 		var n int
