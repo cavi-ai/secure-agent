@@ -563,7 +563,7 @@
     let body = {};
     try { body = JSON.parse((opts && opts.body) || '{}'); } catch { /* ignored */ }
     if (p === '/worktrees/remove') {
-      return { status: 'ok', removed: body.path, branch: 'feat/done', reasons: ['merged into origin/main (squash)'] };
+      return { status: 'ok', removed: body.path, branch: 'feat/done', reasons: ['merged into origin/main (squash)'], bytes: 1610612736 };
     }
     if (p === '/allowlist' && opts && opts.method === 'DELETE') {
       data['/allowlist'] = data['/allowlist'].filter(x => !(x.agent === body.agent && x.host === body.host));
@@ -1173,11 +1173,13 @@
   const WT_REPO = '/Users/dev/workspace/api-service';
   data['/worktrees'] = {
     generated_at: iso(0), duration_ms: 4200, cached: false, stale_days: 14,
-    summary: { repos: 1, worktrees: 4, remove: 1, review: 1, keep: 1, prune: 1, stale: 2 },
+    summary: { repos: 1, worktrees: 4, remove: 1, review: 1, keep: 1, prune: 1, stale: 2, size_bytes: 1612709888, removable_bytes: 1610612736 },
+    volumes: [{ mount: '/Volumes/Work', total_bytes: 2199023255552, free_bytes: 549755813888 }],
+    reclaimed: { bytes: 3221225472, count: 3, bytes_30d: 1073741824, count_30d: 1 },
     repos: [{
-      path: WT_REPO, source: 'session', default_branch: 'origin/main', worktrees: [
+      path: WT_REPO, source: 'session', default_branch: 'origin/main', size_bytes: 1612709888, worktrees: [
         { path: WT_REPO, branch: 'main', state: 'main', reasons: ['main worktree of the repository'], idle_days: 0 },
-        { path: WT_REPO + '/.worktrees/done', branch: 'feat/done', state: 'remove', stale: true, last_activity: iso(21 * 86400000), idle_days: 21, reasons: ['merged into origin/main (squash)'] },
+        { path: WT_REPO + '/.worktrees/done', branch: 'feat/done', state: 'remove', stale: true, last_activity: iso(21 * 86400000), idle_days: 21, size_bytes: 1610612736, reasons: ['merged into origin/main (squash)'] },
         { path: WT_REPO + '/.worktrees/evidence', branch: 'feat/evidence', state: 'review', last_activity: iso(3600000), idle_days: 0, reasons: ['ignored files that only live here: .tmp/ (3 files, 1.2 MB)', '<b>not bold</b>'] },
         { path: '/Users/dev/.codex/worktrees/ab12/api-service', branch: '', detached: true, state: 'keep', last_activity: iso(60000), idle_days: 0, reasons: ['2 uncommitted changes', 'an agent session is live here'] },
         { path: WT_REPO + '/.worktrees/gone', branch: 'feat/gone', state: 'prune', stale: true, idle_days: 0, reasons: ['directory is gone; git still lists it'] }
@@ -1188,6 +1190,18 @@
       [WT_REPO + '/.worktrees/evidence']: { assessment: 'review', confidence: 0.6, rationale: '<i>look</i> at .tmp before removing' }
     }
   };
+  // sizingdemo: the first /worktrees answers still sizing with no sizes;
+  // the tab must re-read until the sizes land.
+  if (MODE.includes('sizingdemo')) {
+    const sized = data['/worktrees'];
+    const pending = JSON.parse(JSON.stringify(sized));
+    pending.sizing = true;
+    pending.summary.size_bytes = 0;
+    pending.summary.removable_bytes = 0;
+    for (const r of pending.repos) { r.size_bytes = 0; for (const w of r.worktrees) delete w.size_bytes; }
+    let reads = 0;
+    Object.defineProperty(data, '/worktrees', { get: () => (reads++ === 0 ? pending : sized) });
+  }
   // worktreedemo: Remove the removable worktree and accept the dialog; the
   // row must leave the tab without a rescan.
   if (MODE.includes('worktreedemo')) {

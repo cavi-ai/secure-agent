@@ -112,6 +112,7 @@ type memStore struct {
 	repos    map[string]model.WorktreeRepo
 	activity []model.WorkspaceActivity
 	audit    []store.AuditEntry
+	cleanup  []model.CleanupEntry
 }
 
 func newMemStore() *memStore { return &memStore{repos: map[string]model.WorktreeRepo{}} }
@@ -152,6 +153,12 @@ func (m *memStore) SetWorktreeRepoHidden(path string, hidden bool) bool {
 }
 
 func (m *memStore) WorkspaceActivity() []model.WorkspaceActivity { return m.activity }
+
+func (m *memStore) PutCleanup(e model.CleanupEntry) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.cleanup = append(m.cleanup, e)
+}
 
 func (m *memStore) PutAudit(a store.AuditEntry) {
 	m.mu.Lock()
