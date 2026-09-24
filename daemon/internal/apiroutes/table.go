@@ -70,7 +70,7 @@ var Table = []Route{
 	{Path: "/egress/uninspected", Console: true},
 	{Path: "/egress/endpoint", Console: true},
 	{Path: "/notify/rules", Console: true},
-	{Path: "/guard/path-allow"},
+	{Path: "/guard/path-allow", Console: true, MutatingMethods: []string{"POST"}},
 	{Path: "/mute", Console: true, MutatingMethods: []string{"POST"}},
 	{Path: "/advisor/retriage", Console: true, MutatingMethods: []string{"POST"}},
 	{Path: "/advisor/assess-host", Console: true},

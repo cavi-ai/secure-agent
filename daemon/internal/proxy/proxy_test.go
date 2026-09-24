@@ -488,6 +488,31 @@ func TestConsoleAPIGate(t *testing.T) {
 	if code := get(base+"/status?ct="+ct, nil); code != http.StatusOK {
 		t.Fatalf("/status with ct query: %d, want 200 (EventSource can't set headers)", code)
 	}
+	// /guard/path-allow: the console token admits GET and POST (the Explain
+	// card's allow-path action); the proxy token agents carry does not.
+	post := func(path string, headers map[string]string) int {
+		req, _ := http.NewRequest("POST", path, strings.NewReader(`{"agent":"claude","rule_id":"env-file","path":"/x/.env"}`))
+		for k, v := range headers {
+			req.Header.Set(k, v)
+		}
+		r, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.Body.Close()
+		return r.StatusCode
+	}
+	if code := get(base+"/guard/path-allow", map[string]string{"X-SecureAgent-Console-Token": ct}); code != http.StatusOK {
+		t.Fatalf("GET /guard/path-allow with console token: %d, want 200", code)
+	}
+	if code := post(base+"/guard/path-allow", map[string]string{"X-SecureAgent-Console-Token": ct}); code != http.StatusOK {
+		t.Fatalf("POST /guard/path-allow with console token: %d, want 200", code)
+	}
+	for _, hdr := range []map[string]string{nil, {"X-SecureAgent-Proxy-Token": pt}} {
+		if code := post(base+"/guard/path-allow", hdr); code == http.StatusOK {
+			t.Fatalf("POST /guard/path-allow with %v: %d, want refused", hdr, code)
+		}
+	}
 	// /guard/decision is the agent-facing endpoint and must never be reachable
 	// on this listener, even with the console token.
 	req, _ := http.NewRequest("POST", base+"/guard/decision", strings.NewReader(`{}`))

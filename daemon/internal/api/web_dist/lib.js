@@ -875,9 +875,9 @@ function explainLines(flag, nowMs) {
   };
 }
 
-// Served action ids the console performs. allow-path is left out: its route
-// (/guard/path-allow) is not console-admitted on the proxy listener.
-const EXPLAIN_CONSOLE_ACTIONS = ['allow-host', 'mute-rule-host', 'mute-class', 'open-incident', 'dismiss', 'kill'];
+// Served action ids the console performs; each posts the served
+// method/path/body on the proxy listener.
+const EXPLAIN_CONSOLE_ACTIONS = ['allow-host', 'allow-path', 'mute-rule-host', 'mute-class', 'open-incident', 'dismiss', 'kill'];
 
 // explainActionLabel: the served label, except where it carries a pid (kill)
 // or an IPv6 literal (allow-host) — those stay in Details and the tooltip.
@@ -1526,4 +1526,89 @@ function mapPostureAttention(p, fn) {
   })).filter(g => g.items.length);
   const items = (p.items || []).filter(it => !dropped.has(attentionItemKind(it.kind) + '|' + it.id));
   return { ...p, groups, items, needs_you: items.length };
+}
+
+// ---------- console navigation ----------
+// Four tabs; Sessions holds five sub-views. Old tab ids (menu bar deep
+// links, saved views, the stored tab, in-page links) resolve through one
+// alias table.
+const CONSOLE_TABS = ['home', 'sessions', 'egress', 'policy'];
+const SESSIONS_SUBS = ['board', 'processes', 'resources', 'worktrees', 'events'];
+const TAB_ALIASES = {
+  overview: { tab: 'home' },
+  findings: { tab: 'home', focus: 'attention' },
+  agents: { tab: 'sessions', sub: 'processes' },
+  resources: { tab: 'sessions', sub: 'resources' },
+  history: { tab: 'sessions', sub: 'resources' },
+  worktrees: { tab: 'sessions', sub: 'worktrees' },
+  events: { tab: 'sessions', sub: 'events' },
+};
+
+// isConsoleRoute: whether id (a tab, "sessions/<sub>", an old tab id, with
+// or without "#") names a console view.
+function isConsoleRoute(id) {
+  const head = String(id || '').replace(/^#/, '').split('/')[0];
+  return CONSOLE_TABS.includes(head) || Object.prototype.hasOwnProperty.call(TAB_ALIASES, head);
+}
+
+// resolveConsoleRoute: any route → { tab, sub, focus }. sub is the Sessions
+// sub-view ('board' by default, '' on other tabs); focus 'attention' scrolls
+// the attention panel into view. Unknown → Home.
+function resolveConsoleRoute(id) {
+  const [head, rest] = String(id || '').replace(/^#/, '').split('/');
+  if (Object.prototype.hasOwnProperty.call(TAB_ALIASES, head)) {
+    const a = TAB_ALIASES[head];
+    return { tab: a.tab, sub: a.tab === 'sessions' ? a.sub : '', focus: a.focus || '' };
+  }
+  if (!CONSOLE_TABS.includes(head)) return { tab: 'home', sub: '', focus: '' };
+  if (head === 'sessions') return { tab: 'sessions', sub: SESSIONS_SUBS.includes(rest) ? rest : 'board', focus: '' };
+  return { tab: head, sub: '', focus: '' };
+}
+
+// routeKey: "tab" or "sessions/<sub>" — what the stored tab and saved views keep.
+function routeKey(r) {
+  return r.tab === 'sessions' ? 'sessions/' + (r.sub || 'board') : r.tab;
+}
+
+// consoleRouteHash: the address-bar form, "#sessions/<sub>" for a sub-view
+// and "#sessions" for the board.
+function consoleRouteHash(r) {
+  return '#' + (r.tab === 'sessions' && r.sub && r.sub !== 'board' ? 'sessions/' + r.sub : r.tab);
+}
+
+// consoleBootState: 'ended' when the page has no console token — none in
+// the #ct= fragment and none kept for this tab — else 'normal'.
+function consoleBootState(hashToken, storedToken) {
+  return hashToken || storedToken ? 'normal' : 'ended';
+}
+
+// policyListHTML: one read-only Policy list — guard decisions ('guard'),
+// file exceptions ('path'), muted flag classes ('mute'). st carries the
+// loading and error state; each empty list says what fills it.
+function policyListHTML(kind, rows, st) {
+  const s = st || {};
+  if (!rows) {
+    if (s.error) return `<div class="empty"><span>${escapeHTML(s.error)}</span></div>`;
+    return `<div class="loading">Loading…</div>`;
+  }
+  const EMPTY = {
+    guard: 'No guard decisions yet. Answering a guard prompt with Always allow or Always deny stores one here.',
+    path: 'No file exceptions yet. Always allow this file, on a finding, adds one here.',
+    mute: 'No muted flag classes. Stop flagging this, on a finding, adds one here.',
+  };
+  if (!rows.length) return `<div class="empty"><span>${EMPTY[kind]}</span></div>`;
+  const row = (main, sub, meta) => `<div class="policy-row"><div class="policy-row-main">${main}</div>`
+    + `<div class="policy-row-sub">${sub}</div>${meta ? `<span class="policy-row-meta">${meta}</span>` : ''}</div>`;
+  const when = r => r.created_at ? escapeHTML(String(r.created_at).slice(0, 10)) : '';
+  const items = rows.map(r => {
+    if (kind === 'guard') {
+      return row(`<span class="policy-decision ${r.decision === 'deny' ? 'deny' : 'allow'}">${escapeHTML(r.decision || '')}</span> `
+        + `<b>${escapeHTML(r.rule_id || '')}</b> for ${escapeHTML(r.agent || '')}`, escapeHTML(r.source || ''), when(r));
+    }
+    if (kind === 'path') {
+      return row(`<code>${escapeHTML(r.path || '')}</code>`, `${escapeHTML(r.rule_id || '')} for ${escapeHTML(r.agent || '')}`, when(r));
+    }
+    return row(`<b>${escapeHTML(r.title || r.rule || '')}</b>`, r.host === '*' ? 'all hosts' : escapeHTML(r.host || ''), '');
+  });
+  return `<div class="policy-list" data-policy="${kind}">${items.join('')}</div>`;
 }

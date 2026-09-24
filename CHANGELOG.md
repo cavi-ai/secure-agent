@@ -7,6 +7,13 @@ All notable changes to `secure-agent` are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- Console: four tabs (Home, Sessions, Egress, Policy) replace nine.
+- Console: old tab links, menu bar deep links and saved views open the matching tab or sub-view.
+- Console Home: Needs your attention first, then Spend, then collapsed Findings history and Trends.
+- Console Sessions: Sessions, Processes, Resources, Worktrees and Events sub-views.
+- Console Policy: notification rules, guard decisions, file exceptions, muted flag classes and the policy audit.
+- Console: a load without a console token, or a revoked token, shows only "Console session ended."
+- Console: a new `#ct=` in the address bar reloads the page with that token.
 - `POST /worktrees/advise`: queues a worktree for a local-advisor note (`remove`, `review` or `keep` with a rationale); branch names, paths and commit subjects go to the model inside `<evidence>`.
 - `GET /worktrees` `advice`: the stored note per worktree path at its current HEAD; notes never change the state or what `POST /worktrees/remove` accepts.
 - `secure-agent worktrees advise <path>`; the list view prints the note under its row.
@@ -100,6 +107,11 @@ All notable changes to `secure-agent` are documented here. The format follows
   per (path, rule) are collapsed.
 
 ### Changed
+- `/guard/path-allow` is console-admitted on the proxy listener.
+- `POST /guard/path-allow` is a pinned-UI mutation.
+- Console finding cards offer the served allow-path action.
+- Menu bar Open console loads the fresh console link into the existing console tab before focusing it.
+- Console notification preferences moved from the header to the Policy tab.
 - Console Overview: Memory by session is Memory by family — one bar per live process family, its RSS counted once, `N sessions` in the label.
 - Console Overview: the Memory by family badge counts agent families, not infra.
 - Events carry a `(session_id, kind, id)` index; the event store writes planner statistics (`PRAGMA optimize`, `analysis_limit` 1000) at open and after each prune.
@@ -139,6 +151,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Advisor host pre-assessment still covers cloud, telemetry and unknown hosts.
 
 ### Fixed
+- Flag sentences and attention labels keep agent ids such as `untagged:node` as written.
 - Posture and `/doctor` report "File monitoring writer is flooding" only while the spool is still being written (within 2 min); garbage left by a removed writer no longer masks the service state. A spool whose service is not loaded shows "File monitoring is off" with the steps to enable it.
 - Secret patterns count only where the match starts a token (not after a base64 or base64url character, except a JSON `\n`, `\t` or `\r` escape): vendor-key shapes inside encrypted reasoning items and other encoded blobs no longer raise secret-in-transcript or proxy findings.
 - Endpoint detail lists an allowance whose approved parent domain covers the host.

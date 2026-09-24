@@ -257,6 +257,7 @@ func TestGateDispositionEndpointsPolicy(t *testing.T) {
 		{"/allowlist", `{"agent":"cursor","host":"example.com"}`},
 		{"/advisor/retriage", `{"flag_id":"abc123"}`},
 		{"/resources/control", `{"id":"resource-1","decision":"dismiss"}`},
+		{"/guard/path-allow", `{"agent":"claude","rule_id":"env-file","path":"/x/.env"}`},
 	} {
 		resp, err := cl.Post("http://unix"+tc.path, "application/json", strings.NewReader(tc.body))
 		if err != nil {
@@ -308,6 +309,7 @@ func TestGateDispositionEndpointsAsPinnedUI(t *testing.T) {
 		{"/flags/acknowledge", `{"flag_id":"abc123"}`},
 		{"/allowlist", `{"agent":"cursor","host":"example.com"}`},
 		{"/resources/control", `{"id":"resource-1","decision":"dismiss"}`},
+		{"/guard/path-allow", `{"agent":"claude","rule_id":"env-file","path":"/x/.env"}`},
 	} {
 		resp, err := cl.Post("http://unix"+tc.path, "application/json", strings.NewReader(tc.body))
 		if err != nil {
@@ -375,6 +377,17 @@ func TestGateAgentRolePolicy(t *testing.T) {
 	}
 	if fk.killed != 0 {
 		t.Fatal("killer must not fire for an agent-role caller")
+	}
+
+	// POST /guard/path-allow: a mutation, forbidden for agents.
+	resp, err = cl.Post("http://unix/guard/path-allow", "application/json",
+		strings.NewReader(`{"agent":"claude","rule_id":"env-file","path":"/x/.env"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("agent POST /guard/path-allow: status=%d, want 403", resp.StatusCode)
 	}
 
 	// DELETE /guard/rules: owner-level, forbidden for agents.
