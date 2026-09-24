@@ -7,6 +7,11 @@ All notable changes to `secure-agent` are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- `POST /mute` takes an optional `agent` that scopes the mute to that agent only.
+- `GET /mute`, `/snapshot` `mutes` and `DELETE /mute` carry the mute's `agent`.
+- Flag explanations and patterns serve `mute-class` / `mute-rule-host` with the agent in `body` and a label naming it ("Mute keychain access for codex").
+- Console Muted list shows the agent of a scoped mute.
+- Console Policy: muted flag classes show the mute's agent, or "all agents".
 - `GET /mute` rows carry `title`, the rule's human title.
 - Menu bar: the top unacted finding shows under the hero with its served title, explanation and disposition.
 - Menu bar: the finding's recommended allow host, allow path, mute or dismiss action runs from the popover.
@@ -172,6 +177,10 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Menu bar: the unused flag action, incident detail and process detail sheets.
 
 ### Fixed
+- A daemon writes `guard-cwd-overrides.json` beside its own socket.
+- A second daemon with a socket elsewhere no longer rewrites the default `guard-cwd-overrides.json` the hook reads.
+- Keychain flags from the last hour stamped `untagged:<exe>` are relabeled to the agent when the tagger tags that pid.
+- The console receives each relabeled keychain flag as a flag delta.
 - Menu bar: a lost daemon connection also clears posture and the pending guard prompt.
 - Menu bar: the Sessions header count matches the "more" overflow count.
 - The console token no longer reaches the owner-level `DELETE /guard/rules`.

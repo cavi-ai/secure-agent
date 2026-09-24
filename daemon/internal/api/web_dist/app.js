@@ -2369,20 +2369,22 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   };
 
-  window.muteFlag = async function(rule, host) {
+  window.muteFlag = async function(rule, host, agent) {
+    agent = agent || '';
     const revert = stage(['mutes'], ['flags'], () => {
-      telemetryData.mutes = [...(telemetryData.mutes || []), { rule, host }];
+      telemetryData.mutes = [...(telemetryData.mutes || []), agent ? { rule, host, agent } : { rule, host }];
     });
     try {
       const res = await apiFetch('/mute', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ rule, host })
+        body: JSON.stringify(agent ? { rule, host, agent } : { rule, host })
       });
       if (res.ok) {
+        const who = agent ? ` from ${agent}` : '';
         showToast(host === '*'
-          ? `Dismissed ${rule} — future flags of this class are suppressed`
-          : `Muted ${rule} for ${host} — future flags suppressed`, 'success');
-        cardNote(`#flags-list [data-action="unmute"][data-rule="${cssq(rule)}"][data-host="${cssq(host)}"]`, '.mute-row', 'flags-list', 'muted');
+          ? `Dismissed ${rule}${who} — future flags of this class are suppressed`
+          : `Muted ${rule} for ${host}${who} — future flags suppressed`, 'success');
+        cardNote(`#flags-list [data-action="unmute"][data-rule="${cssq(rule)}"][data-host="${cssq(host)}"][data-agent="${cssq(agent)}"]`, '.mute-row', 'flags-list', 'muted');
         fetchTelemetry();
         return true;
       }
@@ -2425,7 +2427,7 @@ document.addEventListener('DOMContentLoaded', () => {
         return window.openIncidentReport(new URLSearchParams(String(a.path).split('?')[1] || '').get('id') || '');
       case 'mute-rule-host':
       case 'mute-class':
-        if (await window.muteFlag(body.rule, body.host)) stageDropFlag(f.id);
+        if (await window.muteFlag(body.rule, body.host, body.agent)) stageDropFlag(f.id);
         return;
       case 'allow-host': {
         const revertAllow = stageAllow(body.agent, [body.host]);
@@ -2512,7 +2514,7 @@ document.addEventListener('DOMContentLoaded', () => {
         return window.killProcess(Number(body.pid), body.started_at, p.agent);
       case 'mute-rule-host':
       case 'mute-class':
-        if (await window.muteFlag(body.rule, body.host)) stagePatternDone(key);
+        if (await window.muteFlag(body.rule, body.host, body.agent)) stagePatternDone(key);
         return;
       case 'dismiss-all': {
         const revert = stagePatternDone(key, openIds);
@@ -2556,14 +2558,16 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   };
 
-  window.unmuteFlag = async function(rule, host) {
+  window.unmuteFlag = async function(rule, host, agent) {
+    agent = agent || '';
     const revert = stage(['mutes'], ['flags'], () => {
-      telemetryData.mutes = (telemetryData.mutes || []).filter(m => !(m.rule === rule && m.host === host));
+      telemetryData.mutes = (telemetryData.mutes || []).filter(m => !(m.rule === rule && m.host === host && (m.agent || '') === agent));
     });
     try {
-      const res = await apiFetch(`/mute?rule=${encodeURIComponent(rule)}&host=${encodeURIComponent(host)}`, { method: 'DELETE' });
+      const q = `rule=${encodeURIComponent(rule)}&host=${encodeURIComponent(host)}` + (agent ? `&agent=${encodeURIComponent(agent)}` : '');
+      const res = await apiFetch(`/mute?${q}`, { method: 'DELETE' });
       if (res.ok) {
-        showToast(`Unmuted ${rule} for ${host}`, 'info');
+        showToast(`Unmuted ${rule} for ${host}${agent ? ` from ${agent}` : ''}`, 'info');
         cardNote('', '', 'flags-list', 'unmuted');
         fetchTelemetry();
       } else {
@@ -2924,10 +2928,10 @@ document.addEventListener('DOMContentLoaded', () => {
           () => showToast('Copy failed — select the path from its tooltip', 'danger'));
         break;
       case 'mute-flag':
-        window.muteFlag(d.rule, d.host);
+        window.muteFlag(d.rule, d.host, d.agent);
         break;
       case 'mute-rule':
-        window.muteFlag(d.rule, '*');
+        window.muteFlag(d.rule, '*', d.agent);
         break;
       case 'dismiss-flag':
         window.dismissFlag(d.id);
@@ -2960,7 +2964,7 @@ document.addEventListener('DOMContentLoaded', () => {
         loadPolicy();
         break;
       case 'unmute':
-        window.unmuteFlag(d.rule, d.host);
+        window.unmuteFlag(d.rule, d.host, d.agent);
         break;
       case 'open-fda':
         e.preventDefault();

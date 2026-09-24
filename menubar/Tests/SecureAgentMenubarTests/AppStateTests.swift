@@ -43,9 +43,9 @@ final class StubDaemonClient: DaemonClientProtocol, @unchecked Sendable {
     func setIncidentStatus(id: String, status: String, note: String?) async throws { }
     func fetchGuardPathAllows() async throws -> [GuardPathAllowModel] { [] }
     func deleteGuardPathAllow(agent: String, ruleID: String, path: String) async throws { }
-    func muteAdd(rule: String, host: String) async throws { }
-    func fetchMutes() async throws -> [(rule: String, host: String, title: String?)] { [] }
-    func muteRemove(rule: String, host: String) async throws { }
+    func muteAdd(rule: String, host: String, agent: String?) async throws { }
+    func fetchMutes() async throws -> [(rule: String, host: String, agent: String?, title: String?)] { [] }
+    func muteRemove(rule: String, host: String, agent: String?) async throws { }
     var notifyRules = NotifyRulesResponse.fallback
     var setNotifyRuleCalls: [(rule: String, notify: Bool?)] = []
     func fetchNotifyRules() async throws -> NotifyRulesResponse { notifyRules }

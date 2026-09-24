@@ -117,3 +117,21 @@ test('patternAfterDismiss: a capped dismiss-all of 500 ids leaves 2 of 502 open 
   assert.equal(rest.dismissed, true);
   assert.ok(patternHTML(rest, Date.now(), {}).includes('<b class="pattern-open">0 open</b>'));
 });
+
+test('muteRowHTML: an agent-scoped mute names its agent and carries it on the unmute button', () => {
+  const scoped = ctx.muteRowHTML({ rule: 'keychain-access', host: '*', agent: 'codex' });
+  assert.ok(scoped.includes('<span class="mute-pair">keychain-access · all hosts · codex</span>'));
+  assert.match(scoped, /data-action="unmute" data-rule="keychain-access" data-host="\*" data-agent="codex"/);
+  const every = ctx.muteRowHTML({ rule: 'proxy-secret-leak', host: 'api.example.com' });
+  assert.ok(every.includes('<span class="mute-pair">proxy-secret-leak · api.example.com</span>'));
+  assert.match(every, /data-agent=""/);
+  assert.ok(ctx.muteRowHTML({ rule: 'r', host: 'h', agent: '<b>x</b>' }).includes('&lt;b&gt;x&lt;/b&gt;'));
+});
+
+test('patternHTML: the served agent-scoped mute label is the button text', () => {
+  const actions = pattern().actions.map(a => a.id === 'mute-class'
+    ? { ...a, label: 'Mute keychain access for codex', body: { rule: 'keychain-access', host: '*', agent: 'codex' } }
+    : a);
+  const html = patternHTML(pattern({ actions }), Date.parse('2026-09-23T12:00:00Z'), {});
+  assert.match(html, /data-action-id="mute-class"[^>]*>Mute keychain access for codex<\/button>/);
+});

@@ -632,6 +632,13 @@ export interface Suggestion {
   confidence?: number;
 }
 
+export interface MutePair {
+  rule: string;
+  host: string;
+  agent?: string;
+  title?: string;
+}
+
 export interface ScanSummary {
   repos: number;
   worktrees: number;

@@ -203,6 +203,7 @@ def main():
         dom_railburst = dump_dom(chrome, tmp, "?railburst")
         dom_focus = dump_dom(chrome, tmp, "?focusburst")
         dom_click = dump_dom(chrome, tmp, "?clickburst")
+        dom_rawmute = dump_dom(chrome, tmp, "?rawmute")
         dom_act = dump_dom(chrome, tmp, "?actdemo")
         dom_actfail = dump_dom(chrome, tmp, "?actdemo&postfail")
         dom_export = dump_dom(chrome, tmp, "?raildemo&exportdemo")
@@ -978,6 +979,14 @@ def main():
         check("burst: a click spanning renders lands (POST /flags/acknowledge, card gone)",
               "POST /flags/acknowledge" in pre(dom_click, "mock-requests") and 'data-id="flag-3"' not in flags_click,
               f"requests={pre(dom_click, 'mock-requests')!r}")
+
+        raw_reqs = pre(dom_rawmute, "mock-requests")
+        check("raw card mute carries the flag's agent (no global mute)",
+              'POST /mute body={"rule":"keychain-access","host":"*","agent":"codex"}' in raw_reqs,
+              f"requests={raw_reqs!r}")
+        check("mutes ledger: a new scoped mute keeps the focused unmute button",
+              pre(dom_rawmute, "mute-focus-probe") == "kept rows=3",
+              f"probe={pre(dom_rawmute, 'mute-focus-probe')!r}")
 
         act_row = dom_act.split("registry.npmjs.org · cursor", 1)[-1].split("</div>", 1)[0] \
             if "registry.npmjs.org · cursor" in dom_act else ""

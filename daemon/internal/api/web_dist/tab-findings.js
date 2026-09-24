@@ -305,8 +305,8 @@ function renderFlags() {
           <button class="btn btn-ghost btn-sm" data-action="dismiss-flag" data-id="${escapeHTML(f.id)}" title="Mark reviewed — this flag leaves the list; the rule keeps watching"><svg class="icon"><use href="#i-shield"/></svg><span>Dismiss</span></button>
           ${retriageBtn}
           ${sessionBtn}
-          ${f.advisor && f.advisor.assessment === 'benign' && flagHost(f) ? `<button class="btn btn-ghost btn-sm" data-action="mute-flag" data-rule="${escapeHTML(f.rule)}" data-host="${escapeHTML(flagHost(f))}" title="Stop flagging ${escapeHTML(f.rule)} for ${escapeHTML(flagHost(f))} — reversible"><svg class="icon"><use href="#i-close"/></svg><span>Mute rule+host</span></button>` : ''}
-          ${isKeychain ? `<button class="btn btn-ghost btn-sm" data-action="mute-rule" data-rule="${escapeHTML(f.rule)}" title="Stop flagging ${escapeHTML(f.rule)} entirely — reversible from the muted list below"><svg class="icon"><use href="#i-close"/></svg><span>Dismiss this flag class</span></button>` : ''}
+          ${f.advisor && f.advisor.assessment === 'benign' && flagHost(f) ? `<button class="btn btn-ghost btn-sm" data-action="mute-flag" data-rule="${escapeHTML(f.rule)}" data-host="${escapeHTML(flagHost(f))}" data-agent="${escapeHTML(f.agent || '')}" title="Stop flagging ${escapeHTML(f.rule)} for ${escapeHTML(flagHost(f))} — reversible"><svg class="icon"><use href="#i-close"/></svg><span>Mute rule+host</span></button>` : ''}
+          ${isKeychain ? `<button class="btn btn-ghost btn-sm" data-action="mute-rule" data-rule="${escapeHTML(f.rule)}" data-agent="${escapeHTML(f.agent || '')}" title="Stop flagging ${escapeHTML(f.rule)} ${f.agent ? 'for ' + escapeHTML(f.agent) : 'entirely'} — reversible from the muted list below"><svg class="icon"><use href="#i-close"/></svg><span>Dismiss this flag class</span></button>` : ''}
           <button class="btn btn-danger btn-sm" data-action="kill" data-pid="${f.pid}" title="Terminate the agent process tree (pid ${f.pid})"><svg class="icon"><use href="#i-power"/></svg><span>Kill ${escapeHTML(f.agent)}</span></button>
         </div>
         <div class="flag-evidence">
@@ -328,23 +328,35 @@ function renderFlags() {
     return { key: 'flag:' + f.id, html, hash, meta: l ? l.meta : null };
   }));
 
-  // Dispositions: muted (rule, host) pairs, visible so the quiet is
-  // deliberate and reversible.
+  // Dispositions: muted (rule, host, agent) rows, visible so the quiet is
+  // deliberate and reversible. The list node persists; its rows patch one by
+  // one, so a change leaves the other rows (and a focused unmute) in place.
   const mutes = SA.t.mutes || [];
-  if (mutes.length > 0) {
-    parts.push({ key: 'mutes', html: `<div class="mute-list"><div class="mute-head">Muted</div>` + mutes.map(m => `
-      <div class="mute-row">
-        <span class="mute-pair">${escapeHTML(m.rule)} · ${m.host === '*' ? 'all hosts' : escapeHTML(m.host)}</span>
-        <button class="source-remove" title="Unmute" data-action="unmute" data-rule="${escapeHTML(m.rule)}" data-host="${escapeHTML(m.host)}"><svg class="icon"><use href="#i-close"/></svg></button>
-      </div>`).join('') + `</div>` });
-  }
+  if (mutes.length > 0) parts.push({ key: 'mutes', html: '<div class="mute-list"></div>' });
   patchList(container, parts, { key: p => p.key, html: p => p.html, hash: p => p.hash || p.html });
+  const muteList = Array.from(container.children).find(el => el._saKey === 'mutes');
+  if (muteList) {
+    patchList(muteList, [{ key: 'head', html: '<div class="mute-head">Muted</div>' }]
+      .concat(mutes.map(m => ({ key: `${m.rule}|${m.host}|${m.agent || ''}`, html: muteRowHTML(m) }))),
+    { key: p => p.key, html: p => p.html });
+  }
   const metaById = new Map(parts.filter(p => p.meta !== null && p.meta !== undefined).map(p => [p.key, p.meta]));
   for (const el of container.children) {
     const m = metaById.get(el._saKey);
     const span = m !== undefined && el.querySelector('.finding-meta');
     if (span && span.textContent !== m) span.textContent = m;
   }
+}
+
+// muteRowHTML: one disposition in the Muted list — rule, host, and the agent
+// when the mute is scoped to one ("all agents" is implied when it is not).
+function muteRowHTML(m) {
+  const agent = m.agent ? ` · ${escapeHTML(m.agent)}` : '';
+  return `
+      <div class="mute-row">
+        <span class="mute-pair">${escapeHTML(m.rule)} · ${m.host === '*' ? 'all hosts' : escapeHTML(m.host)}${agent}</span>
+        <button class="source-remove" title="Unmute" data-action="unmute" data-rule="${escapeHTML(m.rule)}" data-host="${escapeHTML(m.host)}" data-agent="${escapeHTML(m.agent || '')}"><svg class="icon"><use href="#i-close"/></svg></button>
+      </div>`;
 }
 
 function metaHTML(meta) {

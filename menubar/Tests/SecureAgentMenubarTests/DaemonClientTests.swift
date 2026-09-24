@@ -223,6 +223,23 @@ final class DaemonClientTests: XCTestCase {
         XCTAssertEqual(line, "GET /audit?limit=42 HTTP/1.1", "request line must carry a clean query string")
     }
 
+    func testMuteRequestsCarryAgent() throws {
+        let rows = try DaemonClient.parseMutes(Data(#"[{"rule":"keychain-access","host":"*","agent":"codex","title":"Agent touched the keychain"},{"rule":"proxy-secret-leak","host":"api.example.com"}]"#.utf8))
+        XCTAssertEqual(rows.count, 2)
+        XCTAssertEqual(rows[0].agent, "codex")
+        XCTAssertEqual(rows[0].title, "Agent touched the keychain")
+        XCTAssertNil(rows[1].agent)
+        XCTAssertNil(rows[1].title)
+        XCTAssertEqual(DaemonClient.mutePayload(rule: "keychain-access", host: "*", agent: "codex"),
+                       ["rule": "keychain-access", "host": "*", "agent": "codex"])
+        XCTAssertEqual(DaemonClient.mutePayload(rule: "keychain-access", host: "*", agent: ""),
+                       ["rule": "keychain-access", "host": "*"])
+        XCTAssertEqual(DaemonClient.muteDeletePath(rule: "keychain-access", host: "*", agent: "untagged:claude 2.1"),
+                       "/mute?rule=keychain-access&host=%2A&agent=untagged%3Aclaude%202.1")
+        XCTAssertEqual(DaemonClient.muteDeletePath(rule: "keychain-access", host: "api.example.com", agent: nil),
+                       "/mute?rule=keychain-access&host=api.example.com")
+    }
+
     // MARK: - HTTP response parsing (the hand-rolled transport)
 
     func testParseHTTPResponseExtractsBody() throws {
