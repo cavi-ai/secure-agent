@@ -82,6 +82,8 @@ func newTestOpenclaw(t *testing.T, dir string) (*OpenclawCollector, <-chan event
 	b := bus.New(64)
 	sub := b.Subscribe()
 	c := NewOpenclawCollector(b, filepath.Join(dir, "lcm.db"), time.Second)
+	// The fixture's messages are an hour old: all inside the first-sight window.
+	c.now = func() time.Time { return time.Date(2026, 9, 23, 8, 0, 0, 0, time.UTC) }
 	var seen []openclawSighting
 	var ended []string
 	c.OnSessionSeen = func(id, harness, ws string, _ time.Time) {
@@ -264,5 +266,68 @@ func TestOpenclawWorkspaceLabel(t *testing.T) {
 		if got := OpenclawWorkspaceLabel(key); got != want {
 			t.Fatalf("label(%q) = %q, want %q", key, got, want)
 		}
+	}
+}
+
+// TestOpenclawFirstSightStartsAtLastDay: with no persisted watermark the first
+// poll starts at the newest message older than 24h; a persisted watermark
+// older than the window resumes exactly there.
+func TestOpenclawFirstSightStartsAtLastDay(t *testing.T) {
+	dir := t.TempDir()
+	db, err := sql.Open("sqlite", filepath.Join(dir, "lcm.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	now := time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC)
+	at := func(ago time.Duration) string { return now.Add(-ago).Format(openclawTimeLayout) }
+	stmts := []string{openclawDDL,
+		`INSERT INTO conversations (session_id, session_key) VALUES ('s-1', 'agent:juniper:main')`,
+		fmt.Sprintf(`INSERT INTO messages (message_id, conversation_id, seq, role, content, token_count, created_at) VALUES
+		 (1, 1, 1, 'user', 'x', 1, '%s'), (2, 1, 2, 'user', 'x', 1, '%s'),
+		 (3, 1, 3, 'user', 'x', 1, '%s'), (4, 1, 4, 'user', 'x', 1, '%s')`,
+			at(48*time.Hour), at(30*time.Hour), at(2*time.Hour), at(time.Minute)),
+	}
+	for _, s := range stmts {
+		if _, err := db.Exec(s); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c, sub, _, _ := newTestOpenclaw(t, dir)
+	c.now = func() time.Time { return now }
+	n := c.pollOnce()
+	evs := drainOpenclaw(sub, n)
+	if n != 2 || !evs[0].TS.Equal(now.Add(-2*time.Hour)) || !evs[1].TS.Equal(now.Add(-time.Minute)) {
+		t.Fatalf("first poll = %d events %+v, want the turns at now-2h and now-1m only", n, evs)
+	}
+
+	state := filepath.Join(t.TempDir(), "openclaw-watermark.json")
+	if err := os.WriteFile(state, []byte(fmt.Sprintf(`{"db":%q,"message_id":1}`, filepath.Join(dir, "lcm.db"))), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c2, sub2, _, _ := newTestOpenclaw(t, dir)
+	c2.now = func() time.Time { return now }
+	c2.StatePath = state
+	c2.loadState()
+	n = c2.pollOnce()
+	evs = drainOpenclaw(sub2, n)
+	if n != 3 || !evs[0].TS.Equal(now.Add(-30*time.Hour)) {
+		t.Fatalf("resumed poll = %d events %+v, want the turns of messages 2, 3 and 4", n, evs)
+	}
+
+	// A persisted watermark of 0 is still a resume, not a first sight: the
+	// next poll reads every message from id 0, not just the last 24h.
+	state2 := filepath.Join(t.TempDir(), "openclaw-watermark-zero.json")
+	if err := os.WriteFile(state2, []byte(fmt.Sprintf(`{"db":%q,"message_id":0}`, filepath.Join(dir, "lcm.db"))), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c3, sub3, _, _ := newTestOpenclaw(t, dir)
+	c3.now = func() time.Time { return now }
+	c3.StatePath = state2
+	c3.loadState()
+	n = c3.pollOnce()
+	evs = drainOpenclaw(sub3, n)
+	if n != 4 || !evs[0].TS.Equal(now.Add(-48*time.Hour)) {
+		t.Fatalf("resumed-at-zero poll = %d events %+v, want all 4 turns starting at message 1", n, evs)
 	}
 }
