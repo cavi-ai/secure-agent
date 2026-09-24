@@ -59,3 +59,57 @@ func TestParseProjectPlan(t *testing.T) {
 		}
 	}
 }
+
+// Calls someone asked for outlast the triage deadline: a local reasoning
+// model takes minutes on a finding plan, a worktree note or a cleanup plan.
+func TestOnRequestCallsOutlastTheTriageDeadline(t *testing.T) {
+	stub := &chatStub{hangFor: 400 * time.Millisecond}
+	srv := newStubServer(t, stub)
+	sink := &memSink{rows: map[string]model.AdvisorVerdict{}, plans: map[string]model.AdvisorPlan{}}
+	sub := New(Config{Enabled: true, Endpoint: srv.URL, Model: "m", Timeout: 150 * time.Millisecond}, sink)
+	set := func(content string) {
+		stub.mu.Lock()
+		stub.content = content
+		stub.mu.Unlock()
+	}
+
+	set(`{"assessment":"benign","confidence":0.9,"rationale":"routine","suggested_action":"mute-rule"}`)
+	if _, err := sub.chat(context.Background(), "s", "u", 16); err == nil {
+		t.Fatal("a triage call outlived the triage deadline")
+	}
+
+	set(`{"summary":"Old build output holds most of it.","steps":["Move /r/target to the Trash"]}`)
+	if !sub.EnqueueProject(model.ProjectCleanupRequest{Project: "/r", Clutter: []model.ProjectClutter{{Kind: "repo-cache", Path: "/r/target"}}}) {
+		t.Fatal("enqueue refused")
+	}
+	sub.process(context.Background(), <-sub.queue)
+	if v, ok := sink.rows[ProjectSubjectID("/r")]; !ok || v.SuggestedAction != "Move /r/target to the Trash" {
+		t.Fatalf("cleanup plan = %+v (%v); last error %q", v, ok, sub.Health().LastError)
+	}
+
+	set(`{"recommendation":"keep","confidence":0.8,"rationale":"two commits nobody pushed"}`)
+	if _, err := sub.assessWorktree(context.Background(), model.WorktreeAdviceRequest{Path: "/r/.worktrees/x", State: "keep"}); err != nil {
+		t.Fatalf("worktree note: %v", err)
+	}
+
+	set(goodPlan)
+	if _, err := sub.writePlan(context.Background(), planReq()); err != nil {
+		t.Fatalf("finding plan: %v", err)
+	}
+}
+
+func TestProjectPlanBudget(t *testing.T) {
+	stub := &chatStub{content: `{"summary":"ok","steps":["a"]}`}
+	srv := newStubServer(t, stub)
+	sub := New(Config{Enabled: true, Endpoint: srv.URL, Model: "m", Timeout: 2 * time.Second}, &memSink{rows: map[string]model.AdvisorVerdict{}})
+	if _, err := sub.assessProject(context.Background(), model.ProjectCleanupRequest{Project: "/r"}); err != nil {
+		t.Fatal(err)
+	}
+	var cr chatRequest
+	stub.mu.Lock()
+	err := json.Unmarshal([]byte(stub.lastBody), &cr)
+	stub.mu.Unlock()
+	if err != nil || cr.MaxTokens != 4096 {
+		t.Fatalf("max_tokens = %d (%v), want 4096", cr.MaxTokens, err)
+	}
+}

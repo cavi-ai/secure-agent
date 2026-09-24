@@ -95,7 +95,86 @@ function fmtDayClock(d) {
   return `${['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d.getDay()]} ${h}:${m} ${d.getHours() < 12 ? 'AM' : 'PM'}`;
 }
 
+// eventTime: an Events row's time — HH:MM:SS for today, "Mon DD HH:MM" for
+// any other day (local time), so an old row never reads as today's.
+const EVENT_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+function eventTime(d, now) {
+  now = now || new Date();
+  if (d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate()) {
+    return fmtTime(d);
+  }
+  const p = (n) => String(n).padStart(2, '0');
+  return `${EVENT_MONTHS[d.getMonth()]} ${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+// eventsNewestFirst: rows by ts, newest first (a copy; ties keep their order).
+function eventsNewestFirst(events) {
+  const t = (e) => { const v = Date.parse(e.ts); return isNaN(v) ? 0 : v; };
+  return (events || []).slice().sort((a, b) => t(b) - t(a));
+}
+
+// EVENT_KIND_LABELS: the Events row label per event kind
+// (daemon/internal/event/event.go); other kinds read "EVENT".
+const EVENT_KIND_LABELS = {
+  0: 'OPEN', 1: 'WRITE', 2: 'DELETE', 3: 'EXEC', 5: 'CONN', 6: 'CONN',
+  8: 'TOOL USE', 9: 'PROXY HIT', 12: 'TOOL', 13: 'TURN', 14: 'MODEL',
+};
+
+// eventCostLabel: a model call's cost, else its price class — "plan" and
+// "local" have no per-call price; anything else unpriced reads "unpriced".
+function eventCostLabel(e) {
+  const usd = Number(e.cost_usd) || 0;
+  if (usd > 0) return usd < 0.01 ? '$' + usd.toFixed(4) : fmtUSD(usd);
+  if (e.price_class === 'plan' || e.price_class === 'local') return e.price_class;
+  if (e.price_class === 'priced') return fmtUSD(0);
+  return 'unpriced';
+}
+
+// eventRow: an Events row's label, CSS class and detail, all from the fields
+// /events returns.
+function eventRow(e) {
+  const hostPort = e.remote_host ? `${e.remote_host}:${e.remote_port}` : '';
+  const fallback = e.detail || e.path || hostPort;
+  const k = Number(e.kind);
+  const cls = (k === 8 || k === 12) ? 'tool' : k === 9 ? 'proxy' : (k === 5 || k === 6) ? 'conn' : '';
+  let detail = fallback;
+  if (k === 0 || k === 1 || k === 2) detail = e.path || fallback;
+  else if (k === 3) detail = e.exe_path || fallback;
+  else if (k === 5 || k === 6) detail = hostPort || fallback;
+  else if (k === 12) {
+    detail = [e.tool, e.tool_status, e.duration_ms ? fmtDurationMs(e.duration_ms) : ''].filter(Boolean).join(' · ');
+  } else if (k === 13) detail = '';
+  else if (k === 14) {
+    detail = [e.model || 'unknown model',
+      `${fmtCompact(e.tokens_in)} in / ${fmtCompact(e.tokens_out)} out`, eventCostLabel(e)].join(' · ');
+  }
+  return { label: EVENT_KIND_LABELS[k] || 'EVENT', cls, detail };
+}
+
+// eventWho: the Events row's who column. A trace row (pid 0) names its
+// session — the harness and sessionTitle of the session the console holds,
+// else the short id; any other row is "agent · PID n", else "PID n".
+function eventWho(e, sessions, agentName) {
+  if (!Number(e.pid) && e.session_id) {
+    const s = (sessions || []).find(x => x && x.id === e.session_id);
+    return s
+      ? { text: sessionTitle(s), title: `${harnessMeta(s.harness).label} session ${e.session_id}`, harness: s.harness }
+      : { text: `session ${sessionShort(e.session_id)}`, title: `session ${e.session_id}`, harness: '' };
+  }
+  return { text: agentName ? `${agentName} · PID ${e.pid}` : `PID ${e.pid}`, title: `PID ${e.pid}`, harness: '' };
+}
+
+// eventKey: a stable identity for a rendered Events row. Trace rows (pid 0)
+// share a ts across several calls in one turn (Hermes writes them at one
+// timestamp), so the default ts|pid|kind|detail shape collapses them into
+// one row: tool_call keys on its own call id, turn and model_call key on
+// session + ts + model + tokens. Every other kind keeps the default shape.
 function eventKey(e) {
+  const k = Number(e.kind);
+  if (k === 12) return `12|${e.session_id || ''}|${e.call_id || ''}`;
+  if (k === 13 || k === 14) {
+    return `${k}|${e.session_id || ''}|${e.ts}|${e.model || ''}|${e.tokens_in || 0}|${e.tokens_out || 0}`;
+  }
   return `${e.ts}|${e.pid}|${e.kind}|${e.detail || e.path || e.remote_host || ''}`;
 }
 

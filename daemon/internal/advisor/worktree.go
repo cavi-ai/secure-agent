@@ -76,7 +76,7 @@ func worktreePrompt(req model.WorktreeAdviceRequest) string {
 }
 
 func (s *Subscriber) assessWorktree(ctx context.Context, req model.WorktreeAdviceRequest) (model.AdvisorVerdict, error) {
-	content, err := s.chat(ctx, worktreeSystem, worktreePrompt(req), reasoningSafeMaxTokens)
+	content, err := s.chatOnRequest(ctx, worktreeSystem, worktreePrompt(req), reasoningSafeMaxTokens)
 	if err != nil {
 		return model.AdvisorVerdict{}, err
 	}

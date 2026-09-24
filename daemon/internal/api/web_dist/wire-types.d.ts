@@ -20,6 +20,7 @@ export interface Event {
   tokens_in?: number;
   tokens_out?: number;
   cost_usd?: number;
+  price_class?: string;
   call_id?: string;
 }
 
