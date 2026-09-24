@@ -323,7 +323,7 @@ advisor:
   enabled: false                     # flip to true once a local model is serving
   endpoint: "http://127.0.0.1:8080"  # must be loopback
   model: ""                          # e.g. "qwen3-4b-instruct"
-  timeout_ms: 8000
+  timeout_ms: 8000                   # per triage call; plans and notes you ask for get at least 5 minutes
 ```
 
 ### 🧠 Local advisor

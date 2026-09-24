@@ -122,10 +122,11 @@ type task struct {
 
 // Subscriber consumes flags/incidents and produces advisor verdicts.
 type Subscriber struct {
-	cfg    Config
-	sink   Sink
-	client *http.Client
-	queue  chan task
+	cfg       Config
+	sink      Sink
+	client    *http.Client
+	onRequest *http.Client
+	queue     chan task
 
 	mu          sync.Mutex
 	failures    int
@@ -206,6 +207,7 @@ func New(cfg Config, sink Sink) *Subscriber {
 		sink:         sink,
 		queue:        make(chan task, cfg.QueueSize),
 		client:       &http.Client{Timeout: cfg.Timeout},
+		onRequest:    &http.Client{Timeout: max(cfg.Timeout, onRequestTimeout)},
 		retriageLast: map[string]time.Time{},
 		planInflight: map[string]time.Time{},
 	}
@@ -462,8 +464,22 @@ func (s *Subscriber) recordFailure(err error) {
 	}
 }
 
-// chat performs one completion call.
+// onRequestTimeout is the least time a call someone asked for gets (a
+// finding plan, a worktree note, a cleanup plan): larger prompts and
+// answers than a triage, which a local reasoning model spends minutes on.
+const onRequestTimeout = 5 * time.Minute
+
+// chat performs one completion call under the triage deadline.
 func (s *Subscriber) chat(ctx context.Context, system, user string, maxTokens int) (string, error) {
+	return s.complete(ctx, s.client, system, user, maxTokens)
+}
+
+// chatOnRequest performs one completion call under the on-request deadline.
+func (s *Subscriber) chatOnRequest(ctx context.Context, system, user string, maxTokens int) (string, error) {
+	return s.complete(ctx, s.onRequest, system, user, maxTokens)
+}
+
+func (s *Subscriber) complete(ctx context.Context, client *http.Client, system, user string, maxTokens int) (string, error) {
 	// Reasoning models (qwen3 et al) burn budget thinking before answering;
 	// with a tight budget the content arrives EMPTY (all tokens spent on the
 	// trace). Ollama's OpenAI-compatible endpoint accepts the native
@@ -495,7 +511,7 @@ func (s *Subscriber) chat(ctx context.Context, system, user string, maxTokens in
 		return "", err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := s.client.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return "", err
 	}

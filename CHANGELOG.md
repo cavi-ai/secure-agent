@@ -9,6 +9,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 ### Added
 - `GET /costs/plans` serves each Codex home's plan headroom, shown as a line and bar per plan on the console Spend card.
 - Codex calls on a ChatGPT plan (provider `chatgpt`) and Hermes `openai-codex` calls count as plan calls, not unpriced.
+- Events rows name every trace kind (TOOL, TURN, MODEL), key tool calls by session and call id and turns/model calls by session, timestamp, model and tokens so same-timestamp rows never collide, sort newest first with the date shown when not from today, and carry `price_class`; a Hermes or openclaw database resumes from its saved watermark, zero included, instead of restarting at the last 24 h.
 - `POST /cleanup/advise`: queues a project (a repository, or `machine` for caches outside any repository) for a local-advisor cleanup plan built from its worktrees and clutter: a summary and at most 5 steps; paths, branch names and reasons go to the model inside `<evidence>`.
 - `GET /cleanup` `advice`: the stored plan per project; plans never change a verdict or what an action accepts.
 - `secure-agent cleanup advise <repo|machine>`; `secure-agent cleanup` prints each project's plan under it.
@@ -193,6 +194,8 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Menu bar: the unused flag action, incident detail and process detail sheets.
 
 ### Fixed
+- Local advisor: finding plans, worktree notes and cleanup plans run under a deadline of at least 5 minutes instead of the triage `timeout_ms`; a reasoning model at 60 s timed them out.
+- Local advisor: cleanup plans get 4,096 tokens (was 2,048); a reasoning model spent the whole 2,048 thinking and returned no plan.
 - A daemon writes `guard-cwd-overrides.json` beside its own socket.
 - A second daemon with a socket elsewhere no longer rewrites the default `guard-cwd-overrides.json` the hook reads.
 - Keychain flags from the last hour stamped `untagged:<exe>` are relabeled to the agent when the tagger tags that pid.

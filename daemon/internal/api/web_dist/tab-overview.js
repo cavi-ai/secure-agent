@@ -822,6 +822,7 @@ function renderEvents() {
   else if (SA.timelinePids && SA.timelinePids.length) events = filterEventsByPids(allEvents, SA.timelinePids);
   const term = SA.globalSearchTerm ? SA.globalSearchTerm() : '';
   if (term) events = events.filter(e => matchesSearch(term, e.path, e.remote_host, e.detail, e.exe_path, e.session_id));
+  events = eventsNewestFirst(events);
 
   const chip = document.getElementById('session-filter');
   if (chip) SA.paintSessionChip('session-filter', 'session-filter-id', events.length);
@@ -839,29 +840,23 @@ function renderEvents() {
     return;
   }
 
+  const now = new Date();
   const row = (e, freshCls) => {
-    let kindLabel = 'EVENT';
-    let kindClass = '';
-    if (e.kind === 8) { kindLabel = 'TOOL USE'; kindClass = 'tool'; }
-    else if (e.kind === 9) { kindLabel = 'PROXY HIT'; kindClass = 'proxy'; }
-    else if (e.kind === 5) { kindLabel = 'NET CONN'; kindClass = 'conn'; }
-
-    // fmtTime (lib.js) keeps the 68px time column single-line and
-    // locale-proof ("16:03:58", always zero-padded).
-    const timeStr = fmtTime(new Date(e.ts));
-    const detailStr = e.detail || e.path || (e.remote_host ? `${e.remote_host}:${e.remote_port}` : '');
-    // A bare PID is the ambiguous-process complaint — prefix the agent
-    // name when the tagged tree can supply one.
-    const agentName = SA.agentNameFor(e.pid);
-    const pidLabel = agentName ? `${agentName} · PID ${e.pid}` : `PID ${e.pid}`;
-
+    const { label, cls, detail } = eventRow(e);
+    // eventTime (lib.js): locale-proof HH:MM:SS today, "Mon DD HH:MM" on
+    // another day, so a backfilled row cannot pass for a live one.
+    const timeStr = eventTime(new Date(e.ts), now);
+    // A bare PID is the ambiguous-process complaint: a trace row names its
+    // session, any other row prefixes the agent name the tagged tree gives.
+    const who = eventWho(e, SA.t.sessions, Number(e.pid) ? SA.agentNameFor(e.pid) : '');
+    const mark = who.harness ? harnessChipHTML(who.harness) : '';
 
     return `
       <div class="timeline-item${freshCls}">
-        <span class="t">${timeStr}</span>
-        <span class="event-kind ${kindClass}">${kindLabel}</span>
-        <span class="pid" title="PID ${e.pid}">${escapeHTML(pidLabel)}</span>
-        <span class="dtl">${escapeHTML(detailStr)}</span>
+        <span class="t">${escapeHTML(timeStr)}</span>
+        <span class="event-kind ${cls}">${label}</span>
+        <span class="pid" title="${escapeHTML(who.title)}">${mark}${escapeHTML(who.text)}</span>
+        <span class="dtl">${escapeHTML(detail)}</span>
       </div>
     `;
   };
@@ -878,6 +873,7 @@ function renderEvents() {
       : row(e, !SA.reducedMotion && !SA.firstEventRender && !SA.suppressFreshOnce && !SA.prevEventKeys.has(eventKey(e))
         ? (e.kind === 9 ? ' fresh-sev' : ' fresh') : '')),
   });
+  applyInlineMetrics(container);
 
   SA.prevEventKeys = new Set(events.map(eventKey));
   SA.firstEventRender = false;

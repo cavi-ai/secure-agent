@@ -4,6 +4,8 @@ import (
 	"regexp"
 	"strings"
 	"sync/atomic"
+
+	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 )
 
 // Model price tables, USD per 1M tokens as [input, output], one map per
@@ -212,6 +214,15 @@ func Classify(model, provider string) string {
 		return ClassLocal
 	}
 	return ClassUnpricedModel
+}
+
+// EventPriceClass is a model_call event's price class ("" for any other
+// kind): the console's Events row names it where cost_usd is 0.
+func EventPriceClass(e event.Event) string {
+	if e.Kind != event.KindModelCall {
+		return ""
+	}
+	return Classify(e.Model, e.Provider)
 }
 
 // versionSuffixRE is the only remainder a prefix may absorb past an exact
