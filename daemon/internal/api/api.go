@@ -18,7 +18,9 @@ import (
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/advisor"
+	"github.com/cavi-ai/secure-agent/daemon/internal/agentask"
 	"github.com/cavi-ai/secure-agent/daemon/internal/apiroutes"
+	"github.com/cavi-ai/secure-agent/daemon/internal/clutter"
 	"github.com/cavi-ai/secure-agent/daemon/internal/collect"
 	"github.com/cavi-ai/secure-agent/daemon/internal/config"
 	"github.com/cavi-ai/secure-agent/daemon/internal/correlate"
@@ -147,6 +149,8 @@ type API struct {
 	hermes           func() collect.HermesStatus
 	worktrees        *worktreehunter.Hunter
 	worktreeAdvisor  func(model.WorktreeAdviceRequest) bool
+	clutter          *clutter.Clutter
+	asker            *agentask.Asker
 	resources        func() resource.Snapshot
 	resourceControl  *resource.Controller
 	resourcePolicy   func(config.ResourceControlConfig) error
@@ -294,6 +298,11 @@ type Deps struct {
 	// Worktrees is the worktree hunter behind /worktrees (optional; unwired
 	// answers 503).
 	Worktrees *worktreehunter.Hunter
+	// Clutter is the cleanup inventory behind /cleanup (optional; unwired
+	// answers 503).
+	Clutter *clutter.Clutter
+	// Asker resumes a worktree's owning agent for /worktrees/ask (optional).
+	Asker *agentask.Asker
 	// WorktreeAdvisor, when set, queues a worktree for an advisory note and
 	// reports whether it was queued (false: advisor off or queue full).
 	WorktreeAdvisor func(model.WorktreeAdviceRequest) bool
@@ -309,6 +318,8 @@ func New(d Deps) *API {
 		hermes:          d.Hermes,
 		worktrees:       d.Worktrees,
 		worktreeAdvisor: d.WorktreeAdvisor,
+		clutter:         d.Clutter,
+		asker:           d.Asker,
 		resources:       d.Resources,
 		resourceControl: d.ResourceControl,
 		resourcePolicy:  d.ResourcePolicyUpdater,
@@ -609,6 +620,11 @@ func (a *API) routes() map[string]http.HandlerFunc {
 		"/worktrees/remove":             a.handleWorktreeRemove,
 		"/worktrees/advise":             a.handleWorktreeAdvise,
 		"/cleanup/ledger":               a.handleCleanupLedger,
+		"/cleanup":                      a.handleCleanup,
+		"/worktrees/ask":                a.handleWorktreeAsk,
+		"/worktrees/asks":               a.handleWorktreeAsks,
+		"/cleanup/trash":                a.handleCleanupTrash,
+		"/cleanup/clean":                a.handleCleanupClean,
 		"/advisor/discover":             a.handleAdvisorDiscover,
 		"/fleet":                        a.handleFleet,
 		"/kill":                         a.handleKill,

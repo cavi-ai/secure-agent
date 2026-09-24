@@ -87,13 +87,47 @@ func TestCleanupLedger(t *testing.T) {
 	s.PutCleanup(model.CleanupEntry{TS: now.Add(-40 * 24 * time.Hour), Action: "worktree-remove", Path: "/r/.worktrees/old", Repo: "/r", Bytes: 1000})
 	s.PutCleanup(model.CleanupEntry{TS: now.Add(-time.Hour), Action: "worktree-remove", Path: "/r/.worktrees/new", Repo: "/r", Bytes: 250, Detail: "branch feat/new kept"})
 	s.PutCleanup(model.CleanupEntry{TS: now, Action: "worktree-prune", Path: "/r/.worktrees/gone", Repo: "/r"})
+	s.PutCleanup(model.CleanupEntry{TS: now, Action: "trash:tmp", Path: "/r/.tmp", Repo: "/r", Bytes: 4096})
 
 	log := s.CleanupLog(10)
-	if len(log) != 3 || log[0].Action != "worktree-prune" || log[1].Bytes != 250 || log[1].Detail != "branch feat/new kept" || !log[2].TS.Equal(now.Add(-40*24*time.Hour)) {
+	if len(log) != 4 || log[0].Action != "trash:tmp" || log[1].Action != "worktree-prune" || log[2].Bytes != 250 || log[2].Detail != "branch feat/new kept" || !log[3].TS.Equal(now.Add(-40*24*time.Hour)) {
 		t.Fatalf("log = %+v", log)
 	}
 	tot := s.CleanupTotals(now)
-	if tot.Bytes != 1250 || tot.Count != 3 || tot.Bytes30d != 250 || tot.Count30d != 2 {
+	if tot.Bytes != 1250 || tot.Count != 3 || tot.Bytes30d != 250 || tot.Count30d != 2 || tot.TrashedBytes != 4096 || tot.TrashedCount != 1 {
 		t.Fatalf("totals = %+v", tot)
+	}
+}
+
+func TestAgentAsksAndSessionsInWorkspace(t *testing.T) {
+	s, err := Open("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	t0 := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
+	for _, sess := range []model.Session{
+		{ID: "claude-old", Harness: "claude", Workspace: "/r/.worktrees/a", StartedAt: t0, LastSeenAt: t0, Confidence: model.ConfHook},
+		{ID: "codex-new", Harness: "codex", Workspace: "/r/.worktrees/a/pkg", StartedAt: t0, LastSeenAt: t0.Add(time.Hour), Confidence: model.ConfTranscript},
+		{ID: "proc-1", Harness: "claude", Workspace: "/r/.worktrees/a", StartedAt: t0, LastSeenAt: t0.Add(2 * time.Hour), Confidence: model.ConfProcessTree},
+		{ID: "other", Harness: "claude", Workspace: "/r/.worktrees/ab", StartedAt: t0, LastSeenAt: t0, Confidence: model.ConfHook},
+		{ID: "wild", Harness: "claude", Workspace: "/r/.worktrees/a_b", StartedAt: t0, LastSeenAt: t0, Confidence: model.ConfHook},
+	} {
+		s.UpsertSession(sess)
+	}
+	got := s.SessionsInWorkspace("/r/.worktrees/a")
+	if len(got) != 2 || got[0].ID != "codex-new" || got[1].ID != "claude-old" {
+		t.Fatalf("sessions = %+v (want the resumable ones under the path, newest first)", got)
+	}
+	if n := len(s.SessionsInWorkspace("/r/.worktrees/a_")); n != 0 {
+		t.Fatalf("an underscore must not act as a LIKE wildcard: %d", n)
+	}
+
+	id := s.PutAgentAsk(model.AgentAsk{TS: t0, Path: "/r/.worktrees/a", Repo: "/r", Harness: "claude", SessionID: "claude-old", Status: "running"})
+	fin := t0.Add(time.Minute)
+	s.FinishAgentAsk(model.AgentAsk{ID: id, Status: "answered", Verdict: "pr", Detail: "https://example.test/pr/1", CostUSD: 0.12, Output: "done", FinishedAt: &fin})
+	asks := s.AgentAsks(5)
+	if len(asks) != 1 || asks[0].Verdict != "pr" || asks[0].CostUSD != 0.12 || asks[0].FinishedAt == nil || !asks[0].FinishedAt.Equal(fin) || asks[0].SessionID != "claude-old" {
+		t.Fatalf("asks = %+v", asks)
 	}
 }

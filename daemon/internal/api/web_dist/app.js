@@ -705,7 +705,7 @@ document.addEventListener('DOMContentLoaded', () => {
     ['agents', renderAgents],
     ['firewall', renderFirewall], ['incidents', renderIncidents], ['fleet', renderFleet],
     ['audit', renderAudit], ['sources', renderSources], ['flags', renderFlags], ['attention', renderAttention],
-    ['events', renderEvents], ['activity', renderActivity], ['worktrees', renderWorktrees], ['tab-badges', renderTabBadges],
+    ['events', renderEvents], ['activity', renderActivity], ['worktrees', renderWorktrees], ['clutter', renderClutter], ['tab-badges', renderTabBadges],
     ['notify', renderNotifyRules], ['policy', renderPolicyLists]
   ];
   // Panel → where it lives: tab, tab/sub-view, or tab:group (a Home
@@ -716,7 +716,7 @@ document.addEventListener('DOMContentLoaded', () => {
     activity: 'home:trends', 'chart-flags': 'home:trends', 'chart-memory': 'home:trends',
     sessions: 'sessions/board', agents: 'sessions/processes', fleet: 'sessions/processes',
     resources: 'sessions/resources', history: 'sessions/resources',
-    worktrees: 'sessions/worktrees', events: 'sessions/events',
+    worktrees: 'sessions/worktrees', clutter: 'sessions/worktrees', events: 'sessions/events',
     firewall: 'egress', sources: 'egress',
     notify: 'policy', policy: 'policy', audit: 'policy'
   };
@@ -735,7 +735,7 @@ document.addEventListener('DOMContentLoaded', () => {
     resources: 'resource-board', history: 'history-board', sessions: 'session-rail', agents: 'agents-container',
     fleet: 'fleet-container', firewall: 'firewall-container', sources: 'sources-list', incidents: 'incidents-container',
     audit: 'audit-container', flags: 'flags-list', attention: 'attention-list', events: 'events-container',
-    worktrees: 'worktrees-container', notify: 'notify-pop'
+    worktrees: 'worktrees-container', clutter: 'clutter-container', notify: 'notify-pop'
   };
   const SLOW_ONLY = new Set(['resources', 'history', 'fleet', 'audit', 'sources', 'activity', 'spend']);
   const PANEL_MIN_MS = 250;
@@ -841,9 +841,11 @@ document.addEventListener('DOMContentLoaded', () => {
   const WORKTREE_SIZING_POLLS = 60;
   let worktreeSizingTimer = null;
   let worktreeSizingPolls = 0;
+  // Also while an agent ask runs: its answer lands in the report's asks.
   function followWorktreeSizing() {
     const rep = worktreesState.report;
-    if (!rep || !rep.sizing || !(activeTab === 'sessions' && activeSub === 'worktrees') || worktreeSizingTimer || worktreeSizingPolls >= WORKTREE_SIZING_POLLS) return;
+    const asking = rep && Object.values(rep.asks || {}).some(a => a.status === 'running');
+    if (!rep || !(rep.sizing || asking) || !(activeTab === 'sessions' && activeSub === 'worktrees') || worktreeSizingTimer || worktreeSizingPolls >= WORKTREE_SIZING_POLLS) return;
     worktreeSizingPolls++;
     worktreeSizingTimer = setTimeout(() => { worktreeSizingTimer = null; loadWorktrees(false); }, WORKTREE_SIZING_POLL_MS);
   }
@@ -857,7 +859,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!r.ok) throw new Error((await r.text()).trim() || String(r.status));
       worktreesState.report = await r.json();
       worktreesState.loadedAt = Date.now();
-      if (!worktreesState.report.sizing) worktreeSizingPolls = 0;
+      if (!worktreesState.report.sizing && !Object.values(worktreesState.report.asks || {}).some(a => a.status === 'running')) worktreeSizingPolls = 0;
     } catch (err) {
       worktreesState.error = 'Worktree scan failed: ' + (err.message || err);
       if (worktreesState.report) showToast(worktreesState.error, 'danger');
@@ -867,6 +869,35 @@ document.addEventListener('DOMContentLoaded', () => {
       followWorktreeSizing();
     }
   }
+  // Clutter: loaded with the tab like worktrees; re-read while sizes land.
+  const clutterState = { report: null, loading: false, error: '', loadedAt: 0, filter: { kind: '' }, expanded: new Set() };
+  let clutterSizingTimer = null;
+  let clutterSizingPolls = 0;
+  async function loadClutter(refresh) {
+    if (clutterState.loading) return;
+    clutterState.loading = true;
+    clutterState.error = '';
+    markDirty('clutter');
+    try {
+      const r = await apiFetch('/cleanup' + (refresh ? '?refresh=1' : ''), { timeoutMs: WORKTREE_TIMEOUT_MS });
+      if (!r.ok) throw new Error((await r.text()).trim() || String(r.status));
+      clutterState.report = await r.json();
+      clutterState.loadedAt = Date.now();
+      if (!clutterState.report.sizing) clutterSizingPolls = 0;
+    } catch (err) {
+      clutterState.error = 'Clutter scan failed: ' + (err.message || err);
+      if (clutterState.report) showToast(clutterState.error, 'danger');
+    } finally {
+      clutterState.loading = false;
+      markDirty('clutter');
+      const rep = clutterState.report;
+      if (rep && rep.sizing && activeTab === 'sessions' && activeSub === 'worktrees' && !clutterSizingTimer && clutterSizingPolls < WORKTREE_SIZING_POLLS) {
+        clutterSizingPolls++;
+        clutterSizingTimer = setTimeout(() => { clutterSizingTimer = null; loadClutter(false); }, WORKTREE_SIZING_POLL_MS);
+      }
+    }
+  }
+
   // Policy lists are not telemetry either: they load when the Policy tab
   // opens and on its Refresh, never on the refresh cycle.
   const policyState = { guardRules: null, pathAllows: null, mutes: null, loading: false, error: '' };
@@ -987,6 +1018,10 @@ document.addEventListener('DOMContentLoaded', () => {
     if (activeTab === 'sessions' && activeSub === 'worktrees'
       && (!worktreesState.report || Date.now() - worktreesState.loadedAt > WORKTREE_STALE_MS)) {
       loadWorktrees(false);
+    }
+    if (activeTab === 'sessions' && activeSub === 'worktrees'
+      && (!clutterState.report || Date.now() - clutterState.loadedAt > WORKTREE_STALE_MS)) {
+      loadClutter(false);
     }
     if (activeTab === 'policy' && from !== 'policy') loadPolicy();
     const focus = r.focus === 'attention' ? document.getElementById('attention-center') : group;
@@ -1448,6 +1483,67 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   };
 
+  window.trashClutter = async function(path) {
+    const ok = await window.saConfirm(`Move ${path} to the Trash? You can put it back from the Trash until you empty it.`,
+      { title: 'Move to Trash', okLabel: 'Move to Trash' });
+    if (!ok) return;
+    try {
+      const { r, text, json } = await postWorktree('/cleanup/trash', { path });
+      if (!r.ok) throw new Error(text.trim() || String(r.status));
+      const bytes = Number(json && json.result && json.result.bytes) || 0;
+      const rep = clutterState.report;
+      if (rep) {
+        rep.items = (rep.items || []).filter(it => it.path !== path);
+        const t = rep.reclaimed || (rep.reclaimed = { bytes: 0, count: 0, bytes_30d: 0, count_30d: 0, trashed_bytes: 0, trashed_count: 0 });
+        t.trashed_bytes = (Number(t.trashed_bytes) || 0) + bytes;
+        t.trashed_count = (Number(t.trashed_count) || 0) + 1;
+      }
+      renderNow(['clutter']);
+      showToast(`Moved ${path} to the Trash — ${fmtDisk(bytes)} frees when you empty it`, 'success');
+    } catch (err) {
+      showToast('Failed to move to the Trash: ' + (err.message || err), 'danger');
+    }
+  };
+
+  window.cleanClutter = async function(name) {
+    const it = ((clutterState.report && clutterState.report.items) || []).find(x => x.name === name && x.action === 'clean');
+    const ok = await window.saConfirm(`Run \`${(it && it.command) || name}\`? The tool clears its own cache; it may take a few minutes.`,
+      { title: 'Clean cache', okLabel: 'Run', danger: false });
+    if (!ok) return;
+    showToast(`Running ${(it && it.command) || name}…`, 'info');
+    try {
+      const { r, text, json } = await postWorktree('/cleanup/clean', { name });
+      if (!r.ok) throw new Error(text.trim() || String(r.status));
+      const bytes = Number(json && json.result && json.result.bytes) || 0;
+      showToast(`${name}: ${fmtDisk(bytes)} reclaimed`, 'success');
+      loadClutter(false);
+    } catch (err) {
+      showToast('Clean failed: ' + (err.message || err), 'danger');
+    }
+  };
+
+  // Resume the agent that worked in the worktree with the cleanup request;
+  // its answer arrives in the report's asks (the tab re-reads meanwhile).
+  window.askWorktreeAgent = async function(path) {
+    const ok = await window.saConfirm(
+      `Resume the agent that worked in ${path}? It gets a fixed request: open a pull request for work worth keeping, or say the worktree can go. It runs with your agent settings (it may commit and push), capped at $1.00 for Claude Code and 15 minutes.`,
+      { title: 'Ask the agent', okLabel: 'Ask', danger: false });
+    if (!ok) return;
+    try {
+      const { r, text, json } = await postWorktree('/worktrees/ask', { path });
+      if (!r.ok) throw new Error(text.trim() || String(r.status));
+      const ask = json && json.ask;
+      const rep = worktreesState.report;
+      if (rep && ask) (rep.asks || (rep.asks = {}))[path] = ask;
+      renderNow(['worktrees']);
+      showToast(`Asked ${ask ? ask.harness : 'the agent'} — its answer shows under the row`, 'info');
+      worktreeSizingPolls = 0;
+      followWorktreeSizing();
+    } catch (err) {
+      showToast('Could not ask the agent: ' + (err.message || err), 'danger');
+    }
+  };
+
   window.pruneWorktrees = async function(repo) {
     const ok = await window.saConfirm(`Drop git's entries for worktrees of ${repo} whose directory is gone?`,
       { title: 'Prune worktrees', okLabel: 'Prune', danger: false });
@@ -1657,6 +1753,7 @@ document.addEventListener('DOMContentLoaded', () => {
     globalSearchTerm,
     renderCounts,
     worktrees: worktreesState,
+    clutter: clutterState,
     flushRender() {
       for (const [name, fn] of PANELS) if (dirtyPanels.has(name)) { dirtyPanels.delete(name); renderPanel(name, fn); }
     },
@@ -2764,6 +2861,10 @@ document.addEventListener('DOMContentLoaded', () => {
         e.preventDefault();
         window.adviseWorktree(d.path);
         break;
+      case 'worktree-ask':
+        e.preventDefault();
+        window.askWorktreeAgent(d.path);
+        break;
       case 'worktree-filter':
         worktreesState.filter.state = d.state || '';
         renderNow(['worktrees']);
@@ -2774,6 +2875,25 @@ document.addEventListener('DOMContentLoaded', () => {
         break;
       case 'worktrees-rescan':
         loadWorktrees(true);
+        break;
+      case 'clutter-rescan':
+        loadClutter(true);
+        break;
+      case 'clutter-filter':
+        clutterState.filter.kind = d.kind || '';
+        renderNow(['clutter']);
+        break;
+      case 'clutter-more':
+        clutterState.expanded.add(d.project || '');
+        renderNow(['clutter']);
+        break;
+      case 'clutter-trash':
+        e.preventDefault();
+        window.trashClutter(d.path);
+        break;
+      case 'clutter-clean':
+        e.preventDefault();
+        window.cleanClutter(d.name);
         break;
       case 'promote':
         window.promoteRule(d.rule);

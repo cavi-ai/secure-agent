@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/cavi-ai/secure-agent/daemon/internal/diskusage"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
@@ -56,7 +57,8 @@ func (h *Hunter) Remove(ctx context.Context, path string) (Worktree, error) {
 			skip[o.Path] = true
 		}
 	}
-	row.SizeBytes, row.SizePartial = dirSize(ctx, l.Path, skip)
+	u := diskusage.Dir(ctx, l.Path, skip)
+	row.SizeBytes, row.SizePartial = u.Bytes, u.Partial
 	if _, err := git(ctx, rs.ref.Main, "worktree", "remove", l.Path); err != nil {
 		return row, err
 	}

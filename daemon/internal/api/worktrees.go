@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/advisor"
+	"github.com/cavi-ai/secure-agent/daemon/internal/agentask"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/worktreehunter"
 )
@@ -26,11 +27,88 @@ func (a *API) handleWorktrees(w http.ResponseWriter, r *http.Request) {
 	refresh := r.URL.Query().Get("refresh") == "1"
 	rep := a.worktrees.Report(r.Context(), refresh)
 	rep.Advice = a.worktreeNotes(rep)
+	rep.Asks = a.latestAsks()
 	if a.store != nil {
 		t := a.store.CleanupTotals(time.Now())
 		rep.Reclaimed = &t
 	}
 	writeJSON(w, rep)
+}
+
+// latestAsks maps each worktree path to its newest agent ask.
+func (a *API) latestAsks() map[string]model.AgentAsk {
+	if a.store == nil {
+		return nil
+	}
+	out := map[string]model.AgentAsk{}
+	for _, ask := range a.store.AgentAsks(500) {
+		if _, seen := out[ask.Path]; !seen {
+			out[ask.Path] = ask
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// handleWorktreeAsk resumes the conversation of the agent that worked in a
+// keep or review worktree ({"path"}) and asks it to open a pull request for
+// work worth keeping or to say the worktree can go. The answer arrives
+// later in GET /worktrees/asks and the report's asks.
+func (a *API) handleWorktreeAsk(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if a.worktrees == nil || a.asker == nil {
+		http.Error(w, "asking agents is not enabled", http.StatusServiceUnavailable)
+		return
+	}
+	limitBody(w, r)
+	var req struct {
+		Path string `json:"path"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || !filepath.IsAbs(req.Path) {
+		http.Error(w, `Invalid payload: {"path"} (absolute)`, http.StatusBadRequest)
+		return
+	}
+	row, repo, err := a.worktrees.Inspect(r.Context(), req.Path)
+	switch {
+	case errors.Is(err, worktreehunter.ErrNotWorktree):
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	case err != nil:
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	case row.State != worktreehunter.StateKeep && row.State != worktreehunter.StateReview:
+		http.Error(w, "only a keep or review worktree has work to sort out; this one is "+row.State, http.StatusConflict)
+		return
+	}
+	ask, err := a.asker.Ask(agentask.Request{Path: row.Path, Repo: repo, Branch: row.Branch, State: row.State, Reasons: row.Reasons})
+	switch {
+	case errors.Is(err, agentask.ErrNoSession):
+		http.Error(w, err.Error(), http.StatusNotFound)
+	case errors.Is(err, agentask.ErrBusy):
+		http.Error(w, err.Error(), http.StatusConflict)
+	case err != nil:
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+	default:
+		writeJSON(w, map[string]any{"status": "ok", "ask": ask})
+	}
+}
+
+// handleWorktreeAsks lists agent asks, newest first.
+func (a *API) handleWorktreeAsks(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if a.store == nil {
+		http.Error(w, "store not wired", http.StatusServiceUnavailable)
+		return
+	}
+	writeJSON(w, a.store.AgentAsks(queryInt(r.URL.Query().Get("limit"), 50)))
 }
 
 // handleCleanupLedger serves the cleanup ledger: what was removed and the

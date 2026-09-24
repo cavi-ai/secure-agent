@@ -2,148 +2,20 @@ package worktreehunter
 
 import (
 	"context"
-	"io/fs"
-	"path/filepath"
 	"sync"
-	"syscall"
 	"time"
 
-	"golang.org/x/sys/unix"
+	"github.com/cavi-ai/secure-agent/daemon/internal/diskusage"
 )
 
-const (
-	// sizeTimeout bounds one directory walk; a walk that hits it (or
-	// maxSizeEntries) reports a partial, lower-bound size.
-	sizeTimeout = 30 * time.Second
-	// sizeTTL is how long a measured size answers without a new walk.
-	sizeTTL = time.Hour
-)
-
-// maxSizeEntries bounds the entries one walk visits.
-const maxSizeEntries = 1_000_000
-
-// dirSize sums the allocated bytes (st_blocks × 512) of every file under
-// root: the space removal gives back. It never follows symlinks and does not
-// descend into skip (other worktrees nested inside this one). partial is
-// true when the walk stopped at a bound or ctx ended.
-func dirSize(ctx context.Context, root string, skip map[string]bool) (bytes int64, partial bool) {
-	return dirSizeLimit(ctx, root, skip, maxSizeEntries)
-}
-
-// dirSizeLimit is dirSize with an explicit entry bound.
-func dirSizeLimit(ctx context.Context, root string, skip map[string]bool, limit int) (bytes int64, partial bool) {
-	ctx, cancel := context.WithTimeout(ctx, sizeTimeout)
-	defer cancel()
-	entries := 0
-	_ = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return nil
-		}
-		entries++
-		if entries > limit || (entries%4096 == 0 && ctx.Err() != nil) {
-			partial = true
-			return filepath.SkipAll
-		}
-		if d.IsDir() {
-			if p != root && skip[p] {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		info, err := d.Info()
-		if err != nil {
-			return nil
-		}
-		if st, ok := info.Sys().(*syscall.Stat_t); ok {
-			bytes += st.Blocks * 512
-		} else {
-			bytes += info.Size()
-		}
-		return nil
-	})
-	return bytes, partial
-}
+// sizeTTL is how long a measured size answers without a new walk.
+const sizeTTL = time.Hour
 
 // sizeEntry is one cached measurement.
 type sizeEntry struct {
 	bytes   int64
 	partial bool
 	at      time.Time
-}
-
-// VolumeUsage is one mounted volume holding scanned repositories.
-type VolumeUsage struct {
-	Mount      string `json:"mount"`
-	TotalBytes uint64 `json:"total_bytes"`
-	FreeBytes  uint64 `json:"free_bytes"`
-}
-
-// volumeUsage groups paths by volume (filesystem id) and reads each one's
-// capacity and free space once.
-func volumeUsage(paths []string) []VolumeUsage {
-	seen := map[[2]int32]int{}
-	var out []VolumeUsage
-	for _, p := range paths {
-		var st unix.Statfs_t
-		if unix.Statfs(p, &st) != nil {
-			continue
-		}
-		key := [2]int32{int32(st.Fsid.Val[0]), int32(st.Fsid.Val[1])}
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		seen[key] = len(out)
-		mount := mountPoint(&st)
-		if mount == "" {
-			mount = volumeRoot(p)
-		}
-		out = append(out, VolumeUsage{
-			Mount:      mount,
-			TotalBytes: uint64(st.Blocks) * uint64(st.Bsize),
-			FreeBytes:  uint64(st.Bavail) * uint64(st.Bsize),
-		})
-	}
-	return mergeShared(out)
-}
-
-// mergeShared folds volumes that report the same capacity and free space
-// into one row: APFS volumes in one container share both, and listing them
-// separately reads as two disks.
-func mergeShared(vs []VolumeUsage) []VolumeUsage {
-	var out []VolumeUsage
-	for _, v := range vs {
-		merged := false
-		for i := range out {
-			if out[i].TotalBytes == v.TotalBytes && out[i].FreeBytes == v.FreeBytes {
-				out[i].Mount += " + " + v.Mount
-				merged = true
-				break
-			}
-		}
-		if !merged {
-			out = append(out, v)
-		}
-	}
-	return out
-}
-
-// volumeRoot walks up from p while the device stays the same.
-func volumeRoot(p string) string {
-	var st unix.Stat_t
-	if unix.Stat(p, &st) != nil {
-		return p
-	}
-	dev := st.Dev
-	for {
-		parent := filepath.Dir(p)
-		if parent == p {
-			return p
-		}
-		if unix.Stat(parent, &st) != nil || st.Dev != dev {
-			return p
-		}
-		p = parent
-	}
 }
 
 // sizeJob is one worktree the sizer measures, with the other worktrees of
@@ -199,9 +71,9 @@ func (h *Hunter) startSizing(jobs []sizeJob) {
 			go func() {
 				defer wg.Done()
 				for j := range ch {
-					b, partial := dirSize(context.Background(), j.path, j.skip)
+					u := diskusage.Dir(context.Background(), j.path, j.skip)
 					h.sizeMu.Lock()
-					h.sizes[j.path] = sizeEntry{bytes: b, partial: partial, at: h.now()}
+					h.sizes[j.path] = sizeEntry{bytes: u.Bytes, partial: u.Partial, at: h.now()}
 					h.sizeMu.Unlock()
 				}
 			}()
@@ -258,7 +130,7 @@ func (h *Hunter) withSizes(rep ScanReport) ScanReport {
 	}
 	rep.Repos = repos
 	rep.Sizing = len(jobs) > 0
-	rep.Volumes = volumeUsage(roots)
+	rep.Volumes = diskusage.Volumes(roots)
 	h.startSizing(jobs)
 	return rep
 }

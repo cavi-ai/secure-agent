@@ -1769,3 +1769,12 @@ button.fw-uninspected .fw-drill-hint {
 .wt-size { flex: none; min-width: 64px; text-align: right; font: 0.72rem/1.3 var(--mono); color: var(--tx-2); white-space: nowrap; }
 .wt-repo-size { font: 600 0.72rem/1.3 var(--mono); color: var(--tx-2); white-space: nowrap; }
 @media (max-width: 720px) { .wt-vol { grid-template-columns: 1fr; } }
+.cl-kind { min-width: 92px; }
+.cl-tmp .cl-kind, .cl-quarantine .cl-kind { background: var(--warn-bg); color: var(--warn); }
+.cl-repo-cache .cl-kind, .cl-tool-cache .cl-kind, .cl-app-cache .cl-kind { background: var(--brand-bg); color: var(--brand-2); }
+.cl-more { align-self: flex-start; margin: 6px 12px 8px; font-size: 0.74rem; }
+.wt-ask { margin: 6px 0 0 68px; padding: 6px 10px; border-left: 2px solid var(--ok); background: var(--ok-bg); border-radius: var(--r-sm); font-size: 0.74rem; color: var(--tx-2); overflow-wrap: anywhere; }
+.wt-ask b { color: var(--tx-1); font-weight: 600; }
+.wt-ask-running { border-left-color: var(--warn); background: var(--warn-bg); }
+.wt-ask-failed, .wt-ask-timeout { border-left-color: var(--bad); background: var(--bad-bg); }
+@media (max-width: 720px) { .wt-ask { margin-left: 0; } }

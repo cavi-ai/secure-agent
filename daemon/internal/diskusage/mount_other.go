@@ -1,6 +1,6 @@
 //go:build !darwin
 
-package worktreehunter
+package diskusage
 
 import "golang.org/x/sys/unix"
 

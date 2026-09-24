@@ -13,7 +13,9 @@ import (
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/advisor"
 	"github.com/cavi-ai/secure-agent/daemon/internal/api"
+	"github.com/cavi-ai/secure-agent/daemon/internal/clutter"
 	"github.com/cavi-ai/secure-agent/daemon/internal/correlate"
+	"github.com/cavi-ai/secure-agent/daemon/internal/diskusage"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/playbook"
@@ -78,9 +80,15 @@ func WireTypes() []any {
 		worktreehunter.RepoReport{},
 		worktreehunter.Worktree{},
 		worktreehunter.ScanSummary{},
-		worktreehunter.VolumeUsage{},
+		diskusage.Volume{},
+		clutter.ClutterReport{},
+		clutter.ClutterItem{},
+		clutter.ClutterKindTotal{},
+		clutter.ClutterProjectTotal{},
+		clutter.ClutterResult{},
 		model.CleanupEntry{},
 		model.CleanupTotals{},
+		model.AgentAsk{},
 	}
 }
 

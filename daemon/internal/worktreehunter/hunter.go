@@ -23,6 +23,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cavi-ai/secure-agent/daemon/internal/diskusage"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
@@ -70,9 +71,12 @@ type ScanReport struct {
 	// sizer; their size is missing and the totals are lower bounds.
 	Sizing bool `json:"sizing,omitempty"`
 	// Volumes are the disks holding the scanned repositories.
-	Volumes []VolumeUsage `json:"volumes,omitempty"`
+	Volumes []diskusage.Volume `json:"volumes,omitempty"`
 	// Reclaimed sums the cleanup ledger; the API fills it.
 	Reclaimed *model.CleanupTotals `json:"reclaimed,omitempty"`
+	// Asks holds the latest request to each worktree's owning agent, by
+	// path; the API fills it.
+	Asks map[string]model.AgentAsk `json:"asks,omitempty"`
 	// Advice holds the local advisor's note per worktree path, for notes
 	// taken at the row's current HEAD. The API fills it on its copy of the
 	// report; the scan never reads it.
