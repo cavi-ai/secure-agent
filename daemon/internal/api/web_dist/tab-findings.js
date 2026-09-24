@@ -92,10 +92,8 @@ function renderAttention() {
       <header class="attention-group-head">
         <div class="attention-identity">
           <span class="attention-agent">${escapeHTML(group.agent || 'machine')}</span>
-          <strong>${escapeHTML(group.label)}</strong>
-          ${group.workspace ? `<span class="attention-workspace">${escapeHTML(group.workspace)}</span>`
-            : group.key === 'machine' ? '<span class="attention-workspace">Monitoring gaps no agent session owns</span>'
-            : '<span class="attention-workspace">Signals could not be safely attributed to one live session</span>'}
+          <strong>${escapeHTML(group.agent && group.label === group.agent ? familyTitle(group.agent) : group.label)}</strong>
+          ${attentionSubtitle(group) ? `<span class="attention-workspace">${escapeHTML(attentionSubtitle(group))}</span>` : ''}
         </div>
         <div class="attention-metrics"></div>
         <span class="attention-total"></span>

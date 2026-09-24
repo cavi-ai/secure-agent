@@ -6,6 +6,9 @@ All notable changes to `secure-agent` are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- Console: the posture banner lists no items on Home and at most 3 elsewhere, agent ids keep their case, Egress opens on the uninspected endpoints with zero-hit rules folded into one row, and Processes spans the full width.
+
 ### Added
 - `POST /cleanup/advise`: queues a project (a repository, or `machine` for caches outside any repository) for a local-advisor cleanup plan built from its worktrees and clutter: a summary and at most 5 steps; paths, branch names and reasons go to the model inside `<evidence>`.
 - `GET /cleanup` `advice`: the stored plan per project; plans never change a verdict or what an action accepts.

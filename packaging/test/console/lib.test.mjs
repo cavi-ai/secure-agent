@@ -1344,3 +1344,45 @@ test('mapPostureAttention: a removed item leaves items, groups and needs_you coh
   assert.equal(posture.items.length, 4);
   assert.equal(posture.needs_you, 4);
 });
+
+test('posture banner: Home lists nothing (the queue is the list)', () => {
+  const items = [{ severity: 3, kind: 'flag', id: 'f1', title: 'a' }, { severity: 2, kind: 'flag', id: 'f2', title: 'b' }];
+  assert.equal(ctx.postureItemsHTML(items, 'home', ['<li class="posture-advisor">x</li>']), '');
+});
+
+test('posture banner: other tabs list at most 3 items, then "and N more" to Home', () => {
+  const items = Array.from({ length: 7 }, (_, i) => ({ severity: 1, kind: 'uninspected_egress', id: 'u' + i, title: 'item ' + i }));
+  const html = ctx.postureItemsHTML(items, 'egress', ['<li class="posture-advisor">advisor</li>']);
+  assert.equal((html.match(/class="posture-item"/g) || []).length, 3);
+  assert.match(html, /<li class="posture-more"><a href="#" data-action="goto-tab" data-tab="home">and 4 more<\/a><\/li>/);
+  assert.ok(html.includes('item 2') && !html.includes('item 3'));
+  assert.ok(html.endsWith('<li class="posture-advisor">advisor</li>'));
+  assert.match(html, /data-action="open-uninspected">see endpoints</);
+});
+
+test('posture banner: 3 or fewer items render all, no "more" link', () => {
+  const items = [{ severity: 3, kind: 'incident', id: 'i<1', title: 'x' }];
+  const html = ctx.postureItemsHTML(items, 'sessions', []);
+  assert.equal((html.match(/class="posture-item"/g) || []).length, 1);
+  assert.ok(!html.includes('posture-more'));
+  assert.ok(html.includes('data-id="i&lt;1"'));
+});
+
+test('familyTitle: a known harness id shows its label; any other id keeps its case', () => {
+  assert.equal(familyTitle('claude'), 'Claude Code');
+  assert.equal(familyTitle('cursor-ide'), 'Cursor');
+  assert.equal(familyTitle('lm-studio'), 'LM Studio');
+  assert.equal(familyTitle('untagged:node'), 'untagged:node');
+  assert.equal(familyTitle('lm-server'), 'lm-server');
+  assert.equal(familyTitle(''), 'Unknown');
+  assert.equal(ctx.harnessMeta('my-agent').label, 'my-agent');
+  assert.equal(ctx.capFirst('nominal'), 'Nominal');
+  assert.ok(!/\.egress-agent-name\s*\{[^}]*text-transform/.test(styleCSS), 'agent ids render in their own case');
+});
+
+test('attention subtitle: workspace "/" renders none; empty says why', () => {
+  assert.equal(ctx.attentionSubtitle({ workspace: '/' }), '');
+  assert.equal(ctx.attentionSubtitle({ workspace: '/Users/dev/api' }), '/Users/dev/api');
+  assert.equal(ctx.attentionSubtitle({ key: 'machine' }), 'Monitoring gaps no agent session owns');
+  assert.equal(ctx.attentionSubtitle({ key: 'agent:x', workspace: '' }), 'Signals could not be safely attributed to one live session');
+});

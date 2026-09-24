@@ -378,7 +378,7 @@
         </section>
         </div>
         <div class="subview" id="sub-processes" role="tabpanel" hidden>
-        <div class="grid">
+        <div class="grid grid-stack">
           <div class="col">
             <section class="panel">
               <div class="panel-head">
@@ -494,6 +494,14 @@
 
       <!-- Egress: "where is traffic going, and what must never leave?" -->
       <div class="tabpanel" id="tab-egress" role="tabpanel" hidden>
+        <section class="panel" id="endpoints-panel">
+          <div class="panel-head">
+            <h2><svg class="icon"><use href="#i-globe"/></svg><span id="endpoints-title">Uninspected endpoints in 24 h</span></h2>
+          </div>
+          <div class="panel-body" id="endpoints-container">
+            <div class="empty"><svg class="icon"><use href="#i-globe"/></svg><span>No uninspected endpoints in the last 24h — the blind spot is closed</span></div>
+          </div>
+        </section>
         <div class="grid">
           <div class="col">
             <section class="panel" id="firewall-panel">
