@@ -295,7 +295,9 @@ func startDrainLoop(sub <-chan event.Event, st *store.Store, cr *correlate.Corre
 				if e.Kind == event.KindGuardPrompt || e.Kind == event.KindGuardResolved {
 					kind = e.Kind.String()
 				}
-				deltas.Publish(api.Delta{Type: kind, Data: e})
+				de := e
+				de.PriceClass = collect.EventPriceClass(e)
+				deltas.Publish(api.Delta{Type: kind, Data: de})
 			}
 			// Traces cross the fleet wire too (opt-in per sink): a collector
 			// showing cross-node sessions needs the tool/model calls, not just

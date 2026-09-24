@@ -63,7 +63,7 @@ func (a *API) currentSnapshot() Snapshot {
 		Flags:       flags,
 		Patterns:    a.computePatterns(time.Now().Add(-24*time.Hour), patternDefaultMin),
 		Incidents:   out,
-		Events:      a.store.QueryEvents(store.EventFilter{Limit: 50}),
+		Events:      priceClassed(a.store.QueryEvents(store.EventFilter{Limit: 50})),
 		Posture:     a.computePosture(),
 		Suggestions: a.suggestionList(),
 		Mutes:       a.mutePairs(),

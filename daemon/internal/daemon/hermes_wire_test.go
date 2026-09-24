@@ -3,9 +3,11 @@ package daemon
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/bus"
 	"github.com/cavi-ai/secure-agent/daemon/internal/config"
@@ -36,8 +38,9 @@ func TestHermesCollectorWiring(t *testing.T) {
 		`CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT, model TEXT, parent_session_id TEXT, started_at REAL,
 		  ended_at REAL, cwd TEXT, git_branch TEXT, git_repo_root TEXT, input_tokens INTEGER)`,
 		`CREATE TABLE messages (id INTEGER PRIMARY KEY, session_id TEXT, role TEXT, content TEXT, timestamp REAL, token_count INTEGER)`,
-		`INSERT INTO sessions VALUES ('h-1', 'cli', 'gpt-5', 'h-0', 1790150400, NULL, '/nonexistent/proj', 'main', '/nonexistent/proj', 0)`,
-		`INSERT INTO messages VALUES (1, 'h-1', 'user', 'x', 1790150401, 1)`,
+		// A minute old: inside the window a first-sight database starts from.
+		fmt.Sprintf(`INSERT INTO sessions VALUES ('h-1', 'cli', 'gpt-5', 'h-0', %d, NULL, '/nonexistent/proj', 'main', '/nonexistent/proj', 0)`, time.Now().Unix()-60),
+		fmt.Sprintf(`INSERT INTO messages VALUES (1, 'h-1', 'user', 'x', %d, 1)`, time.Now().Unix()-59),
 	} {
 		if _, err := db.Exec(q); err != nil {
 			t.Fatal(err)

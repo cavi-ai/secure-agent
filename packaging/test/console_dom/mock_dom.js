@@ -1277,6 +1277,29 @@
       data['/events'].push({ kind: 0, ts: iso(40000 + i * 1000), pid: 5821, path: `/Users/dev/workspace/api-service/src/m${i}.ts` });
     }
   }
+  // traceevents: a model_call and a tool_call as the trace collectors write
+  // them — pid 0, a session id, no path or detail.
+  if (MODE.includes('traceevents')) {
+    data['/events'].push(
+      { kind: 14, ts: iso(90000), pid: 0, session_id: 'sess-claude-1', model: 'claude-sonnet-4-5', tokens_in: 12000, tokens_out: 340, cost_usd: 0.0412, price_class: 'priced' },
+      { kind: 12, ts: iso(91000), pid: 0, session_id: 'sess-claude-1', tool: 'Bash', tool_status: 'ok', duration_ms: 2500, call_id: 'c-1' });
+  }
+  // duptrace: two tool_call rows at the identical ts with different call
+  // ids — eventKey must key on call_id, not collapse them into one row.
+  if (MODE.includes('duptrace')) {
+    data['/events'].push(
+      { kind: 12, ts: iso(92000), pid: 0, session_id: 'sess-claude-1', tool: 'Read', tool_status: 'ok', duration_ms: 10, call_id: 'dup-1' },
+      { kind: 12, ts: iso(92000), pid: 0, session_id: 'sess-claude-1', tool: 'Write', tool_status: 'ok', duration_ms: 20, call_id: 'dup-2' });
+  }
+  // eventsorderdemo: events arrive out of ts order, one stamped ~4 months
+  // old — the render must sort them newest first and date the old row.
+  if (MODE.includes('eventsorderdemo')) {
+    data['/events'] = [
+      { kind: 0, ts: iso(1000), pid: 5821, path: '/Users/dev/workspace/api-service/src/new.ts' },
+      { kind: 0, ts: iso(4 * 30 * 86400000), pid: 5821, path: '/Users/dev/workspace/api-service/src/old.ts' },
+      { kind: 0, ts: iso(2000), pid: 5821, path: '/Users/dev/workspace/api-service/src/mid.ts' },
+    ];
+  }
   // Episodes live on their own endpoint now.
   data['/resources/episodes'] = (data['/resources'].episodes || []);
 
