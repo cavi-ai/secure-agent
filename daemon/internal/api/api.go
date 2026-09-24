@@ -1042,10 +1042,12 @@ func (a *API) handleOpenFDA(w http.ResponseWriter, r *http.Request) {
 }
 
 // MutePair is one operator disposition: (rule, host) suppressed at the
-// correlator (counted, never flagged).
+// correlator (counted, never flagged). Title is the rule's human title,
+// served on reads only; POST ignores it.
 type MutePair struct {
-	Rule string `json:"rule"`
-	Host string `json:"host"`
+	Rule  string `json:"rule"`
+	Host  string `json:"host"`
+	Title string `json:"title,omitempty"`
 }
 
 // handleMute lists dispositions (GET, read-gated), records one (POST,

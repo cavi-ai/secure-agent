@@ -34,7 +34,7 @@
   "actions": [
     {
       "id": "allow-host",
-      "label": "Allow 2600:1f10:4fa9:a02:3441:aad6:bb1a:fd73 (AWS) for claude",
+      "label": "Allow this AWS address for claude",
       "consequence": "Future connections from claude to 2600:1f10:4fa9:a02:3441:aad6:bb1a:fd73 are trusted and stop being flagged.",
       "method": "POST",
       "path": "/allowlist",
@@ -46,7 +46,7 @@
     },
     {
       "id": "allow-host",
-      "label": "Allow 2606:4700:20::681a:4a4 (Cloudflare) for claude",
+      "label": "Allow this Cloudflare address for claude",
       "consequence": "Future connections from claude to 2606:4700:20::681a:4a4 are trusted and stop being flagged.",
       "method": "POST",
       "path": "/allowlist",
