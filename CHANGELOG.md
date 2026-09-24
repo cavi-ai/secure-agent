@@ -11,6 +11,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - `GET /mute`, `/snapshot` `mutes` and `DELETE /mute` carry the mute's `agent`.
 - Flag explanations and patterns serve `mute-class` / `mute-rule-host` with the agent in `body` and a label naming it ("Mute keychain access for codex").
 - Console Muted list shows the agent of a scoped mute.
+- Console Policy: muted flag classes show the mute's agent, or "all agents".
 - `GET /mute` rows carry `title`, the rule's human title.
 - Menu bar: the top unacted finding shows under the hero with its served title, explanation and disposition.
 - Menu bar: the finding's recommended allow host, allow path, mute or dismiss action runs from the popover.

@@ -636,6 +636,7 @@ export interface MutePair {
   rule: string;
   host: string;
   agent?: string;
+  title?: string;
 }
 
 export interface ScanSummary {

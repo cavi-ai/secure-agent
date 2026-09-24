@@ -1585,12 +1585,13 @@
       setTimeout(() => { fire('pointerup', PointerEvent); fire('mouseup', MouseEvent); fire('click', MouseEvent); }, 400);
     }, 4300);
   }
-  // rawmute: Findings open, focus the blog.example.com unmute button, then
-  // press flag-3's raw-card "Dismiss this flag class". The POST lands in the
-  // /mute fixture, so the re-render adds a codex-scoped row beside the
-  // focused one. <pre id="mute-focus-probe"> says whether focus stayed.
+  // rawmute: Home's Findings history open (openTab('findings')), focus the
+  // blog.example.com unmute button in its Muted ledger, then press flag-3's
+  // raw-card "Dismiss this flag class". The POST lands in the /mute fixture,
+  // so the re-render adds a codex-scoped row beside the focused one.
+  // <pre id="mute-focus-probe"> says whether focus stayed.
   if (MODE.includes('rawmute')) {
-    setTimeout(() => document.querySelector('[data-tab="findings"]').click(), 4000);
+    setTimeout(() => openTab('findings'), 4000);
     setTimeout(() => {
       const un = document.querySelector('#flags-list [data-action="unmute"][data-host="blog.example.com"]');
       if (un) { un.dataset.probe = '1'; un.focus(); }

@@ -1608,7 +1608,8 @@ function policyListHTML(kind, rows, st) {
     if (kind === 'path') {
       return row(`<code>${escapeHTML(r.path || '')}</code>`, `${escapeHTML(r.rule_id || '')} for ${escapeHTML(r.agent || '')}`, when(r));
     }
-    return row(`<b>${escapeHTML(r.title || r.rule || '')}</b>`, r.host === '*' ? 'all hosts' : escapeHTML(r.host || ''), '');
+    const scope = (r.host === '*' ? 'all hosts' : escapeHTML(r.host || '')) + ' · ' + (r.agent ? escapeHTML(r.agent) : 'all agents');
+    return row(`<b>${escapeHTML(r.title || r.rule || '')}</b>`, scope, '');
   });
   return `<div class="policy-list" data-policy="${kind}">${items.join('')}</div>`;
 }
