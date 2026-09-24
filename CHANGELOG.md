@@ -10,6 +10,8 @@ All notable changes to `secure-agent` are documented here. The format follows
 - `GET /mute` rows carry `title`, the rule's human title.
 - Menu bar: the top unacted finding shows under the hero with its served title, explanation and disposition.
 - Menu bar: the finding's recommended allow host, allow path, mute or dismiss action runs from the popover.
+- Menu bar: an allow host or allow path from the popover also dismisses the finding.
+- Menu bar: a popover action runs only when its method, path and body keys match its action id.
 - `POST /worktrees/advise`: queues a worktree for a local-advisor note (`remove`, `review` or `keep` with a rationale); branch names, paths and commit subjects go to the model inside `<evidence>`.
 - `GET /worktrees` `advice`: the stored note per worktree path at its current HEAD; notes never change the state or what `POST /worktrees/remove` accepts.
 - `secure-agent worktrees advise <path>`; the list view prints the note under its row.
@@ -103,6 +105,8 @@ All notable changes to `secure-agent` are documented here. The format follows
   per (path, rule) are collapsed.
 
 ### Changed
+- A stored advisor verdict publishes its flag as a stream delta.
+- The served allow-host label for an IPv6 address names the address owner instead of the literal.
 - Menu bar hero: state, color and subtitle come from `/posture`.
 - Menu bar: flags refetch only on `flag`, `posture`, `guard-prompt` and `guard-resolved` stream frames.
 - Menu bar: an identical flags refetch leaves the popover unchanged.
@@ -149,11 +153,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Menu bar: the unused flag action, incident detail and process detail sheets.
 
 ### Fixed
-- Menu bar: an allow-host or allow-path in-place action acknowledges the served flag after the mutation succeeds.
 - Menu bar: a lost daemon connection also clears posture and the pending guard prompt.
-- Advisor verdicts publish an immediate flag delta instead of waiting for the popover's poll.
-- `GET /flags/{id}/explain` allow-host label drops the IPv6 literal, matching the console.
-- Menu bar: an in-place action is validated against its exact served method, path and body keys.
 - Menu bar: the Sessions header count matches the "more" overflow count.
 - Posture and `/doctor` report "File monitoring writer is flooding" only while the spool is still being written (within 2 min); garbage left by a removed writer no longer masks the service state. A spool whose service is not loaded shows "File monitoring is off" with the steps to enable it.
 - Secret patterns count only where the match starts a token (not after a base64 or base64url character, except a JSON `\n`, `\t` or `\r` escape): vendor-key shapes inside encrypted reasoning items and other encoded blobs no longer raise secret-in-transcript or proxy findings.
