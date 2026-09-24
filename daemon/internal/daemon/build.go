@@ -195,6 +195,12 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 	uiPID := owningUIPID()
 
 	retriageFuncs, hostAssessFuncs, guardAdvisor, worktreeAdvisor := buildAdvisorHooks(st, advisorStk)
+	projectAdvisor := func(req model.ProjectCleanupRequest) bool {
+		if sub := advisorStk.Load().Sub; sub != nil {
+			return sub.EnqueueProject(req)
+		}
+		return false
+	}
 	planFuncs := buildPlanFuncs(advisorStk)
 
 	// Hermes Agent's collector is built before the API so /doctor reads its
@@ -248,6 +254,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 		WorktreeAdvisor: worktreeAdvisor,
 		Clutter:         cleanup,
 		Asker:           asker,
+		ProjectAdvisor:  projectAdvisor,
 	})
 
 	resourceControl.SetExecutor(makeResourceExecutor(apiServer, tagger, st))

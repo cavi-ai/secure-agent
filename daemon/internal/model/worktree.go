@@ -91,3 +91,31 @@ type AgentAsk struct {
 	Output     string     `json:"output,omitempty"` // the reply's last lines
 	FinishedAt *time.Time `json:"finished_at,omitempty"`
 }
+
+// ProjectCleanupRequest is what the local advisor sees for one project's
+// recommendation: its worktrees and its clutter as the checkers left them.
+// Paths, branches and reasons come from the repository and are untrusted.
+type ProjectCleanupRequest struct {
+	Project   string            `json:"project"` // repository path, or "machine" for machine-wide caches
+	Worktrees []ProjectWorktree `json:"worktrees,omitempty"`
+	Clutter   []ProjectClutter  `json:"clutter,omitempty"`
+}
+
+// ProjectWorktree is one worktree line of a project request.
+type ProjectWorktree struct {
+	Path      string   `json:"path"`
+	Branch    string   `json:"branch,omitempty"`
+	State     string   `json:"state"`
+	SizeBytes int64    `json:"size_bytes,omitempty"`
+	IdleDays  int      `json:"idle_days"`
+	Reasons   []string `json:"reasons,omitempty"`
+}
+
+// ProjectClutter is one clutter line of a project request.
+type ProjectClutter struct {
+	Kind      string `json:"kind"`
+	Path      string `json:"path"`
+	SizeBytes int64  `json:"size_bytes,omitempty"`
+	IdleDays  int    `json:"idle_days"`
+	Action    string `json:"action"`
+}

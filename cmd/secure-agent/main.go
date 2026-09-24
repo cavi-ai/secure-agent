@@ -118,6 +118,7 @@ func printUsage() {
 	fmt.Println("  secure-agent cleanup [--kind K] [--project P] [--refresh] [--json]  .tmp and .quarantine folders, build output, tool and app caches: size, last touched, project, how to clear")
 	fmt.Println("  secure-agent cleanup trash <path>        Move one inventory item to the Trash on its volume")
 	fmt.Println("  secure-agent cleanup clean <tool>        Run a tool cache's own clean command (npm, go build, Homebrew, ...)")
+	fmt.Println("  secure-agent cleanup advise <repo|machine>  Ask the local advisor for a cleanup plan for one project (advisory)")
 	fmt.Println("  secure-agent cleanup log [--limit N] [--json]  What cleanups removed and the disk space each gave back")
 	fmt.Println("  secure-agent kill <PID>                  Terminate an agent process tree by PID")
 	fmt.Println("  secure-agent fleet                       Show THIS node's fleet identity (node_id, hostname, version) — remote rollups live at the collector's /fleet")

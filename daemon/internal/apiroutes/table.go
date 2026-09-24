@@ -106,6 +106,7 @@ var Table = []Route{
 	{Path: "/cleanup", Console: true, NoAgent: true},
 	{Path: "/cleanup/trash", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
 	{Path: "/cleanup/clean", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
+	{Path: "/cleanup/advise", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
 	{Path: "/advisor/discover"},
 	{Path: "/fleet", Console: true},
 	{Path: "/kill", Console: true, MutatingMethods: []string{"POST"}},

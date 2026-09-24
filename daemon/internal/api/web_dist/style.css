@@ -1778,3 +1778,6 @@ button.fw-uninspected .fw-drill-hint {
 .wt-ask-running { border-left-color: var(--warn); background: var(--warn-bg); }
 .wt-ask-failed, .wt-ask-timeout { border-left-color: var(--bad); background: var(--bad-bg); }
 @media (max-width: 720px) { .wt-ask { margin-left: 0; } }
+.cl-plan { margin: 8px 12px 0; }
+.cl-plan ol { margin: 4px 0 0; padding-left: 18px; }
+.cl-plan li { margin: 2px 0; }
