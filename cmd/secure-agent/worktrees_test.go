@@ -232,7 +232,8 @@ func TestFormatCleanup(t *testing.T) {
 		`{"kind":"tmp","name":".tmp","path":"/Users/x/code/app/.tmp","project":"/Users/x/code/app","size_bytes":1048576,"last_touched":"2026-09-01T10:00:00Z","idle_days":22,"action":"trash"},` +
 		`{"kind":"tool-cache","name":"Hugging Face models","path":"/Users/x/.cache/huggingface","size_bytes":1024,"action":"none","note":"downloaded models: remove per model"}],` +
 		`"kinds":[{"kind":"tmp","bytes":1048576,"count":1},{"kind":"tool-cache","bytes":8589935616,"count":2}],` +
-		`"reclaimed":{"bytes":0,"count":0,"bytes_30d":0,"count_30d":0,"trashed_bytes":2097152,"trashed_count":2}}`
+		`"reclaimed":{"bytes":0,"count":0,"bytes_30d":0,"count_30d":0,"trashed_bytes":2097152,"trashed_count":2},` +
+		`"advice":{"/Users/x/code/app":{"rationale":"Old build output holds most of it.","suggested_action":"Move ~/code/app/.tmp to the Trash\nAsk the agent about feat/x"}}}`
 	var rep clReport
 	if err := json.Unmarshal([]byte(body), &rep); err != nil {
 		t.Fatal(err)
@@ -246,6 +247,7 @@ func TestFormatCleanup(t *testing.T) {
 		"              downloaded models: remove per model\n",
 		"tmp 1.0 MB (1) · tool-cache 8.0 GB (2)\n",
 		"in the Trash from cleanups: 2.0 MB over 2 items (the space frees when the Trash is emptied)\n",
+		"advisor on ~/code/app: Old build output holds most of it.\n  - Move ~/code/app/.tmp to the Trash\n  - Ask the agent about feat/x\n",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("missing %q:\n%s", want, out)

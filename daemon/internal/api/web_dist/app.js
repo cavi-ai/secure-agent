@@ -1505,6 +1505,33 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   };
 
+  // Ask the local advisor for a project's cleanup plan; the plan arrives in
+  // GET /cleanup's advice, re-read every 5 s for up to a minute.
+  const CLUTTER_PLAN_POLLS = 12;
+  const CLUTTER_PLAN_EVERY_MS = 5000;
+  window.adviseClutterProject = async function(project) {
+    try {
+      const { r, text, json } = await postWorktree('/cleanup/advise', { project });
+      if (!r.ok) throw new Error(text.trim() || String(r.status));
+      if (!json || !json.queued) {
+        showToast('The advisor is off or busy — no plan queued', 'info');
+        return;
+      }
+      showToast('Asked the local advisor for a plan — it appears under the project when it answers', 'info');
+      for (let i = 0; i < CLUTTER_PLAN_POLLS; i++) {
+        await new Promise(res => setTimeout(res, CLUTTER_PLAN_EVERY_MS));
+        const g = await apiFetch('/cleanup', { timeoutMs: WORKTREE_TIMEOUT_MS });
+        if (!g.ok) break;
+        const rep = await g.json();
+        clutterState.report = rep;
+        markDirty('clutter');
+        if (rep.advice && rep.advice[project]) break;
+      }
+    } catch (err) {
+      showToast('Failed to ask the advisor: ' + (err.message || err), 'danger');
+    }
+  };
+
   window.cleanClutter = async function(name) {
     const it = ((clutterState.report && clutterState.report.items) || []).find(x => x.name === name && x.action === 'clean');
     const ok = await window.saConfirm(`Run \`${(it && it.command) || name}\`? The tool clears its own cache; it may take a few minutes.`,
@@ -2886,6 +2913,10 @@ document.addEventListener('DOMContentLoaded', () => {
       case 'clutter-more':
         clutterState.expanded.add(d.project || '');
         renderNow(['clutter']);
+        break;
+      case 'clutter-advise':
+        e.preventDefault();
+        window.adviseClutterProject(d.project);
         break;
       case 'clutter-trash':
         e.preventDefault();

@@ -36,6 +36,14 @@ home is a trust failure. The advisor therefore speaks **loopback HTTP only**.
   remote. File contents are never read. The note is stored as advisor
   verdict kind `worktree` and displayed only: the worktree's state and what
   `POST /worktrees/remove` accepts are computed without it.
+- Project cleanup plan (on request only, `POST /cleanup/advise`): inside
+  `<evidence>`, the project path; up to 20 of its non-main worktrees (path,
+  checker state, branch, size, idle days, up to 3 of the checker's reasons);
+  up to 25 clutter items (kind, path, size, idle days, offered action). Each
+  line is capped at the evidence line limit. File contents are never read.
+  The plan (a summary and at most 5 steps) is stored as advisor verdict kind
+  `project` and displayed only: no worktree state, removal, Trash move or
+  clean command reads it.
 - Plan (asked for per finding, incident or evidence file): the flag's
   explanation and evidence strings, the incident summary, the session
   (harness, repo, branch, duration, top tools, up to 8 timeline lines before

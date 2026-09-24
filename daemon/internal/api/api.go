@@ -151,6 +151,7 @@ type API struct {
 	worktreeAdvisor  func(model.WorktreeAdviceRequest) bool
 	clutter          *clutter.Clutter
 	asker            *agentask.Asker
+	projectAdvisor   func(model.ProjectCleanupRequest) bool
 	resources        func() resource.Snapshot
 	resourceControl  *resource.Controller
 	resourcePolicy   func(config.ResourceControlConfig) error
@@ -303,6 +304,9 @@ type Deps struct {
 	Clutter *clutter.Clutter
 	// Asker resumes a worktree's owning agent for /worktrees/ask (optional).
 	Asker *agentask.Asker
+	// ProjectAdvisor queues a project for a cleanup plan and reports
+	// whether it was queued (optional).
+	ProjectAdvisor func(model.ProjectCleanupRequest) bool
 	// WorktreeAdvisor, when set, queues a worktree for an advisory note and
 	// reports whether it was queued (false: advisor off or queue full).
 	WorktreeAdvisor func(model.WorktreeAdviceRequest) bool
@@ -320,6 +324,7 @@ func New(d Deps) *API {
 		worktreeAdvisor: d.WorktreeAdvisor,
 		clutter:         d.Clutter,
 		asker:           d.Asker,
+		projectAdvisor:  d.ProjectAdvisor,
 		resources:       d.Resources,
 		resourceControl: d.ResourceControl,
 		resourcePolicy:  d.ResourcePolicyUpdater,
@@ -625,6 +630,7 @@ func (a *API) routes() map[string]http.HandlerFunc {
 		"/worktrees/asks":               a.handleWorktreeAsks,
 		"/cleanup/trash":                a.handleCleanupTrash,
 		"/cleanup/clean":                a.handleCleanupClean,
+		"/cleanup/advise":               a.handleCleanupAdvise,
 		"/advisor/discover":             a.handleAdvisorDiscover,
 		"/fleet":                        a.handleFleet,
 		"/kill":                         a.handleKill,

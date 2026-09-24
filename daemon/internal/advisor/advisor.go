@@ -108,7 +108,7 @@ type chatResponse struct {
 }
 
 type task struct {
-	kind      string // "flag" | "incident" | "host" | "guard" | "plan" | "worktree"
+	kind      string // "flag" | "incident" | "host" | "guard" | "plan" | "worktree" | "project"
 	subjectID string
 	flag      model.Flag
 	incident  model.IncidentReport
@@ -117,6 +117,7 @@ type task struct {
 	guard     model.GuardAssessmentRequest
 	worktree  model.WorktreeAdviceRequest
 	plan      PlanRequest
+	project   model.ProjectCleanupRequest
 }
 
 // Subscriber consumes flags/incidents and produces advisor verdicts.
@@ -407,6 +408,8 @@ func (s *Subscriber) process(ctx context.Context, t task) {
 		verdict, err = s.assessGuard(ctx, t.guard)
 	case "worktree":
 		verdict, err = s.assessWorktree(ctx, t.worktree)
+	case "project":
+		verdict, err = s.assessProject(ctx, t.project)
 	}
 	if err != nil {
 		s.recordFailure(err)
