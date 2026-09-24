@@ -579,7 +579,7 @@ function spendPlanItems(plans) {
       const cls = pct >= 90 ? ' crit' : pct >= 75 ? ' warn' : '';
       return `<span class="hbar-track" title="${escapeHTML(planWindowLabel(w.window_minutes))}"><span class="hbar-fill${cls}" data-w="${pct.toFixed(1)}"></span></span>`;
     }).join('');
-    return { key: `plan:${p.home}`, html: `<div class="spend-plan">
+    return { key: `plan:${p.home_path || p.home}`, html: `<div class="spend-plan">
       <span class="spend-plan-text">${escapeHTML(planLineText(p))}</span>${bars}
     </div>` };
   });

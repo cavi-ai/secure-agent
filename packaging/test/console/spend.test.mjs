@@ -102,6 +102,14 @@ test('spendPlanItems: one item per plan keyed plan:<home>, a bar per window at u
   assert.equal(spendPlanItems(undefined).length, 0);
 });
 
+test('spendPlanItems: two same-label plans key apart by home_path', () => {
+  const items = spendPlanItems([
+    { ...proPlan, home_path: '/Users/a/.codex' },
+    { ...proPlan, home_path: '/Users/b/.codex' },
+  ]);
+  assert.deepEqual(Array.from(items, i => i.key), ['plan:/Users/a/.codex', 'plan:/Users/b/.codex']);
+});
+
 test('spendListItems: a row whose calls are all on plans reads "plan", not $0.00', () => {
   const rows = [
     { key: 'anthropic', calls: 5, cost_usd: 4, plan_calls: 0 },

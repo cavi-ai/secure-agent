@@ -307,30 +307,50 @@ func TestCodexHomeLabel(t *testing.T) {
 }
 
 // The registry keeps the newest snapshot per home by seen_at: an older line
-// (a backfilled rollout) never replaces a newer one.
+// (a backfilled rollout) never replaces a newer one. Two homes sharing a
+// label (e.g. two ".codex" dirs) are both served, keyed apart by home_path.
 func TestRecordPlanKeepsNewestPerHome(t *testing.T) {
 	home := "/tmp/registry-test-home"
+	home2 := home + "-2"
 	t0 := time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC)
 	snap := func(pct float64, at time.Time) PlanSnapshot {
 		return PlanSnapshot{Harness: "codex", Home: "registry-test", PlanType: "pro",
 			Windows: []PlanWindow{{WindowMinutes: 300, UsedPercent: pct}}, SeenAt: at}
 	}
+	byPath := func(path string) (PlanSnapshot, bool) {
+		for _, p := range Plans() {
+			if p.HomePath == path {
+				return p, true
+			}
+		}
+		return PlanSnapshot{}, false
+	}
+
 	RecordPlan(home, snap(10, t0))
-	RecordPlan(home, snap(5, t0.Add(-time.Hour)))
-	RecordPlan(home+"-2", snap(90, t0.Add(-2*time.Hour)))
-	var mine []PlanSnapshot
-	for _, p := range Plans() {
-		if p.Home == "registry-test" {
-			mine = append(mine, p)
-		}
+	RecordPlan(home, snap(5, t0.Add(-time.Hour))) // older: must not replace
+	RecordPlan(home2, snap(90, t0.Add(-2*time.Hour)))
+
+	p1, ok := byPath(home)
+	if !ok || p1.Windows[0].UsedPercent != 10 {
+		t.Fatalf("home snapshot after an older line: %+v (ok=%v)", p1, ok)
 	}
-	if len(mine) != 2 || mine[0].Windows[0].UsedPercent != 10 || mine[1].Windows[0].UsedPercent != 90 {
-		t.Fatalf("after an older line: %+v", mine)
+	p2, ok := byPath(home2)
+	if !ok || p2.Windows[0].UsedPercent != 90 {
+		t.Fatalf("home2 snapshot: %+v (ok=%v)", p2, ok)
 	}
+	if p1.HomePath == p2.HomePath || p1.Home != p2.Home {
+		t.Fatalf("expected a shared label with distinct home_path, got %+v and %+v", p1, p2)
+	}
+
 	RecordPlan(home, snap(20, t0.Add(time.Minute)))
-	for _, p := range Plans() {
-		if p.Home == "registry-test" && p.SeenAt.Equal(t0.Add(time.Minute)) && p.Windows[0].UsedPercent != 20 {
-			t.Fatalf("newer line not kept: %+v", p)
-		}
+	p1, ok = byPath(home)
+	if !ok || !p1.SeenAt.Equal(t0.Add(time.Minute)) || p1.Windows[0].UsedPercent != 20 {
+		t.Fatalf("newer line not kept: %+v (ok=%v)", p1, ok)
+	}
+
+	RecordPlan(home, snap(1, t0)) // older than the line just kept: must not replace
+	p1, ok = byPath(home)
+	if !ok || p1.Windows[0].UsedPercent != 20 {
+		t.Fatalf("an older line replaced the newest: %+v (ok=%v)", p1, ok)
 	}
 }

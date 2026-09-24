@@ -524,6 +524,7 @@ export interface PlanWindow {
 export interface PlanSnapshot {
   harness: string;
   home: string;
+  home_path: string;
   plan_type: string;
   limit_id: string;
   windows: PlanWindow[];

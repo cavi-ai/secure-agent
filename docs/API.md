@@ -569,12 +569,12 @@ The zero-cost calls by harness, provider and model with their class; `priced` gr
 
 #### `GET /costs/plans`
 
-The latest plan headroom per harness home, read from Codex `token_count` lines on a ChatGPT-plan login; sorted by `home`. Memory only: `plans` is `[]` after a daemon restart until the next `token_count` line. Read-level; console-allowed; other methods return `405`.
+The latest plan headroom per harness home, read from Codex `token_count` lines on a ChatGPT-plan login; sorted by `home`, then `home_path`. Memory only: `plans` is `[]` after a daemon restart until the next `token_count` line. Read-level; console-allowed; other methods return `405`.
 
 ```json
 {
   "plans": [
-    {"harness": "codex", "home": "codex", "plan_type": "pro", "limit_id": "codex",
+    {"harness": "codex", "home": "codex", "home_path": "/Users/dev/.codex", "plan_type": "pro", "limit_id": "codex",
      "windows": [{"window_minutes": 10080, "used_percent": 52, "resets_at": "2026-09-29T14:30:38Z"}],
      "unlimited": false, "seen_at": "2026-09-24T10:00:00Z"}
   ]
@@ -584,6 +584,7 @@ The latest plan headroom per harness home, read from Codex `token_count` lines o
 | Field | Meaning |
 |---|---|
 | `home` | `codex` for a `.codex` home, `<name> (openclaw)` for `…/.openclaw/agents/<name>/agent/codex-home`, else the home's directory name |
+| `home_path` | the home directory the snapshot is keyed by; two homes can share a `home` label, never a `home_path` |
 | `windows` | the primary window, then the secondary when reported; `resets_at` RFC3339, `""` when not reported |
 | `unlimited` | `rate_limits.credits.unlimited` |
 | `seen_at` | timestamp of the line that carried the snapshot; the newest per home is kept |

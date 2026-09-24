@@ -19,7 +19,8 @@ type PlanWindow struct {
 // PlanSnapshot is the latest plan headroom one harness home reported.
 type PlanSnapshot struct {
 	Harness   string       `json:"harness"`
-	Home      string       `json:"home"` // CodexHomeLabel of the home
+	Home      string       `json:"home"`      // CodexHomeLabel of the home
+	HomePath  string       `json:"home_path"` // the home directory RecordPlan is keyed by
 	PlanType  string       `json:"plan_type"`
 	LimitID   string       `json:"limit_id"`
 	Windows   []PlanWindow `json:"windows"` // primary first, then secondary when reported
@@ -40,11 +41,14 @@ func RecordPlan(home string, s PlanSnapshot) {
 	if old, ok := plans.byHome[home]; ok && old.SeenAt.After(s.SeenAt) {
 		return
 	}
+	s.HomePath = home
 	s.Windows = slices.Clone(s.Windows)
 	plans.byHome[home] = s
 }
 
-// Plans returns every home's snapshot sorted by label, then newest first.
+// Plans returns every home's snapshot sorted by label, then by home path:
+// two homes sharing a label (any two dirs named ".codex", two openclaw
+// agents with the same name) still serve as distinct, ordered rows.
 func Plans() []PlanSnapshot {
 	plans.mu.Lock()
 	out := make([]PlanSnapshot, 0, len(plans.byHome))
@@ -54,7 +58,7 @@ func Plans() []PlanSnapshot {
 	}
 	plans.mu.Unlock()
 	slices.SortFunc(out, func(a, b PlanSnapshot) int {
-		return cmp.Or(strings.Compare(a.Home, b.Home), b.SeenAt.Compare(a.SeenAt))
+		return cmp.Or(strings.Compare(a.Home, b.Home), strings.Compare(a.HomePath, b.HomePath))
 	})
 	return out
 }
