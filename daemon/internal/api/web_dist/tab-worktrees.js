@@ -93,10 +93,21 @@ function worktreeNoteHTML(note) {
   return `<p class="wt-advice"><b>Advisor: ${escapeHTML(note.assessment || '')}</b>${escapeHTML(conf)} · ${escapeHTML(note.rationale || '')}</p>`;
 }
 
+// worktreeAskHTML: the latest request to the worktree's owning agent.
+function worktreeAskHTML(ask) {
+  if (!ask) return '';
+  let text;
+  if (ask.status === 'running') text = `waiting for ${ask.harness}'s answer…`;
+  else if (ask.status === 'answered' && ask.verdict !== 'none') {
+    text = `${ask.verdict}${ask.detail ? ' — ' + ask.detail : ''}${ask.cost_usd ? ` ($${Number(ask.cost_usd).toFixed(2)})` : ''}`;
+  } else text = `${ask.status}${ask.detail ? ' — ' + ask.detail : ''}`;
+  return `<p class="wt-ask wt-ask-${escapeHTML(ask.status)}"><b>Asked ${escapeHTML(ask.harness)}:</b> ${escapeHTML(text)}</p>`;
+}
+
 // worktreeRowHTML: one worktree. Remove only on state remove, Prune only on
 // state prune; the daemon enforces the same rule again on the request. Ask
-// advisor on review and keep rows, where a second opinion helps.
-function worktreeRowHTML(w, repo, note) {
+// the agent and Ask advisor on review and keep rows, where work may remain.
+function worktreeRowHTML(w, repo, note, ask) {
   const branch = w.branch || (w.detached ? '(detached)' : '');
   const reasons = (w.reasons || []).map(r => `<li>${escapeHTML(r)}</li>`).join('');
   let action = '';
@@ -105,7 +116,9 @@ function worktreeRowHTML(w, repo, note) {
   } else if (w.state === 'prune') {
     action = `<button type="button" class="btn btn-sm" data-action="worktree-prune" data-repo="${escapeHTML(repo.path)}">Prune</button>`;
   } else if (w.state === 'review' || w.state === 'keep') {
-    action = `<button type="button" class="btn btn-sm" data-action="worktree-advise" data-path="${escapeHTML(w.path)}">Ask advisor</button>`;
+    const busy = ask && ask.status === 'running' ? ' disabled' : '';
+    action = `<button type="button" class="btn btn-sm" data-action="worktree-ask" data-path="${escapeHTML(w.path)}"${busy}>Ask the agent</button>`
+      + `<button type="button" class="btn btn-sm" data-action="worktree-advise" data-path="${escapeHTML(w.path)}">Ask advisor</button>`;
   }
   return `<div class="wt-row wt-${escapeHTML(w.state)}" data-path="${escapeHTML(w.path)}">
     <div class="wt-main">
@@ -118,12 +131,13 @@ function worktreeRowHTML(w, repo, note) {
     </div>
     ${reasons ? `<ul class="wt-reasons">${reasons}</ul>` : ''}
     ${worktreeNoteHTML(note)}
+    ${worktreeAskHTML(ask)}
   </div>`;
 }
 
 // worktreeGroupHTML: one repository block with its rows and a Hide button.
-// advice maps a worktree path to its advisor note.
-function worktreeGroupHTML(g, advice) {
+// advice and asks map a worktree path to its advisor note and latest ask.
+function worktreeGroupHTML(g, advice, asks) {
   const meta = [g.repo.default_branch, g.repo.source].filter(Boolean).join(' · ');
   return `<section class="wt-repo">
     <div class="wt-repo-head">
@@ -132,7 +146,7 @@ function worktreeGroupHTML(g, advice) {
       ${g.repo.size_bytes ? `<span class="wt-repo-size">${escapeHTML(fmtDisk(g.repo.size_bytes))}</span>` : ''}
       <button type="button" class="link-btn wt-hide" data-action="worktree-hide" data-repo="${escapeHTML(g.repo.path)}">Hide repo</button>
     </div>
-    ${g.rows.map(w => worktreeRowHTML(w, g.repo, (advice || {})[w.path])).join('')}
+    ${g.rows.map(w => worktreeRowHTML(w, g.repo, (advice || {})[w.path], (asks || {})[w.path])).join('')}
   </section>`;
 }
 
@@ -189,6 +203,124 @@ function renderWorktrees() {
   }
   const groups = worktreeGroups(rep, state.filter);
   container.innerHTML = groups.length
-    ? groups.map(g => worktreeGroupHTML(g, rep.advice)).join('')
+    ? groups.map(g => worktreeGroupHTML(g, rep.advice, rep.asks)).join('')
     : `<div class="empty"><svg class="icon"><use href="#i-branch"/></svg><span>${counts.all ? 'No worktree matches this filter.' : 'No linked worktrees found. Add a repository above if one is missing.'}</span></div>`;
+}
+
+// ---------- clutter ----------
+// .tmp and .quarantine folders, build output, tool and app caches from
+// GET /cleanup, grouped by project (machine-wide caches under "This
+// machine"), biggest first. Move to Trash and tool clean post
+// /cleanup/trash and /cleanup/clean; the daemon re-checks each request.
+
+const CLUTTER_KINDS = [
+  ['tmp', '.tmp'], ['quarantine', '.quarantine'], ['repo-cache', 'Build output'],
+  ['tool-cache', 'Tool caches'], ['app-cache', 'App caches'],
+];
+
+function clutterKindLabel(kind) {
+  const k = CLUTTER_KINDS.find(([id]) => id === kind);
+  return k ? k[1] : kind;
+}
+
+// clutterGroups: items the filter keeps, grouped by project, biggest group
+// first; items keep the daemon's biggest-first order.
+function clutterGroups(rep, filter) {
+  const f = filter || {};
+  const byProject = new Map();
+  for (const it of (rep && rep.items) || []) {
+    if (f.kind && it.kind !== f.kind) continue;
+    const key = it.project || '';
+    if (!byProject.has(key)) byProject.set(key, { project: key, items: [], bytes: 0 });
+    const g = byProject.get(key);
+    g.items.push(it);
+    g.bytes += Number(it.size_bytes) || 0;
+  }
+  return [...byProject.values()].sort((a, b) => b.bytes - a.bytes);
+}
+
+function clutterItemHTML(it, project) {
+  const size = it.size_bytes ? (it.size_partial ? '≥' : '') + fmtDisk(it.size_bytes) : '';
+  const idle = it.last_touched ? (it.idle_days === 0 ? 'today' : `${it.idle_days}d idle`) : '—';
+  const label = project ? worktreePathLabel(it.path, project) : it.path;
+  let action = '';
+  if (it.action === 'trash') {
+    action = `<button type="button" class="btn btn-danger btn-sm" data-action="clutter-trash" data-path="${escapeHTML(it.path)}">Move to Trash</button>`;
+  } else if (it.action === 'clean') {
+    action = `<button type="button" class="btn btn-sm" data-action="clutter-clean" data-name="${escapeHTML(it.name)}" title="${escapeHTML(it.command || '')}">Run ${escapeHTML(it.command || 'clean')}</button>`;
+  }
+  const notes = [it.note].filter(Boolean).map(n => `<li>${escapeHTML(n)}</li>`).join('');
+  return `<div class="wt-row cl-row cl-${escapeHTML(it.kind)}" data-path="${escapeHTML(it.path)}">
+    <div class="wt-main">
+      <span class="wt-state cl-kind">${escapeHTML(clutterKindLabel(it.kind))}</span>
+      <span class="wt-branch">${escapeHTML(it.name)}</span>
+      <span class="wt-path" title="${escapeHTML(it.path)}">${escapeHTML(label)}</span>
+      <span class="wt-size">${escapeHTML(size)}</span>
+      <span class="wt-idle">${escapeHTML(idle)}</span>
+      ${action}
+    </div>
+    ${notes ? `<ul class="wt-reasons">${notes}</ul>` : ''}
+  </div>`;
+}
+
+// CLUTTER_GROUP_ROWS caps the rows a project shows until expanded: a
+// machine holds thousands of build folders.
+const CLUTTER_GROUP_ROWS = 8;
+
+function clutterGroupHTML(g, expanded) {
+  const title = g.project || 'This machine';
+  const open = expanded && expanded.has(g.project);
+  const shown = open ? g.items : g.items.slice(0, CLUTTER_GROUP_ROWS);
+  const more = g.items.length - shown.length;
+  return `<section class="wt-repo">
+    <div class="wt-repo-head">
+      <span class="wt-repo-path" title="${escapeHTML(title)}">${escapeHTML(title)}</span>
+      <span class="wt-repo-meta">${g.items.length} item${g.items.length === 1 ? '' : 's'}</span>
+      ${g.bytes ? `<span class="wt-repo-size">${escapeHTML(fmtDisk(g.bytes))}</span>` : ''}
+    </div>
+    ${shown.map(it => clutterItemHTML(it, g.project)).join('')}
+    ${more > 0 ? `<button type="button" class="link-btn cl-more" data-action="clutter-more" data-project="${escapeHTML(g.project)}">Show ${more} more</button>` : ''}
+  </section>`;
+}
+
+function clutterPillsHTML(rep, filter) {
+  const f = filter || {};
+  const total = ((rep && rep.kinds) || []).reduce((n, k) => n + (Number(k.bytes) || 0), 0);
+  const pill = (kind, label, bytes) => `<button type="button" class="wt-pill${(f.kind || '') === kind ? ' on' : ''}" data-action="clutter-filter" data-kind="${kind}" aria-pressed="${(f.kind || '') === kind}">${escapeHTML(label)} <b>${escapeHTML(fmtDisk(bytes))}</b></button>`;
+  return pill('', 'All', total) + ((rep && rep.kinds) || []).map(k => pill(k.kind, clutterKindLabel(k.kind), k.bytes)).join('');
+}
+
+function clutterSummaryText(rep) {
+  if (!rep) return '';
+  const items = rep.items || [];
+  const clearable = items.filter(it => it.action !== 'none').reduce((n, it) => n + (Number(it.size_bytes) || 0), 0);
+  let text = `${items.length} item${items.length === 1 ? '' : 's'} · ${fmtDisk(clearable)} clearable`;
+  if (rep.sizing) text += ' · measuring…';
+  const r = rep.reclaimed;
+  if (r && r.trashed_count) text += ` · ${fmtDisk(r.trashed_bytes)} moved to the Trash by cleanups (frees when the Trash is emptied)`;
+  return text;
+}
+
+function renderClutter() {
+  const SA = window.SA;
+  const container = document.getElementById('clutter-container');
+  const pills = document.getElementById('clutter-pills');
+  const summary = document.getElementById('clutter-summary');
+  if (!container) return;
+  const state = SA.clutter;
+  const rep = state.report;
+  if (!rep) {
+    container.innerHTML = state.loading
+      ? '<div class="loading">Looking for clutter…</div>'
+      : `<div class="empty"><svg class="icon"><use href="#i-server"/></svg><span>${escapeHTML(state.error || 'No inventory yet.')}</span></div>`;
+    if (pills) pills.innerHTML = '';
+    if (summary) summary.textContent = '';
+    return;
+  }
+  if (pills) pills.innerHTML = clutterPillsHTML(rep, state.filter);
+  if (summary) summary.textContent = clutterSummaryText(rep) + (state.loading ? ' · rescanning…' : '');
+  const groups = clutterGroups(rep, state.filter);
+  container.innerHTML = groups.length
+    ? groups.map(g => clutterGroupHTML(g, state.expanded)).join('')
+    : '<div class="empty"><svg class="icon"><use href="#i-server"/></svg><span>Nothing to clear.</span></div>';
 }

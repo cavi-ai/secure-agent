@@ -61,10 +61,33 @@ type CleanupEntry struct {
 	Detail string    `json:"detail,omitempty"`
 }
 
-// CleanupTotals sums the ledger: all time and the last 30 days.
+// CleanupTotals sums the ledger: all time and the last 30 days. Moves to
+// the Trash are counted apart (Trashed*): their space frees only when the
+// Trash is emptied.
 type CleanupTotals struct {
-	Bytes    int64 `json:"bytes"`
-	Count    int   `json:"count"`
-	Bytes30d int64 `json:"bytes_30d"`
-	Count30d int   `json:"count_30d"`
+	TrashedBytes int64 `json:"trashed_bytes"`
+	TrashedCount int   `json:"trashed_count"`
+	Bytes        int64 `json:"bytes"`
+	Count        int   `json:"count"`
+	Bytes30d     int64 `json:"bytes_30d"`
+	Count30d     int   `json:"count_30d"`
+}
+
+// AgentAsk is one request to the agent that owns a worktree: resume its
+// conversation and have it open a pull request for work worth keeping or
+// say the worktree can go. The record is kept so the machine's tidying
+// history includes what agents answered.
+type AgentAsk struct {
+	ID         int64      `json:"id"`
+	TS         time.Time  `json:"ts"`
+	Path       string     `json:"path"`
+	Repo       string     `json:"repo,omitempty"`
+	Harness    string     `json:"harness"`
+	SessionID  string     `json:"session_id"`
+	Status     string     `json:"status"`            // running | answered | failed | timeout
+	Verdict    string     `json:"verdict,omitempty"` // pr | removable | keep | none
+	Detail     string     `json:"detail,omitempty"`  // the PR URL or the agent's reason
+	CostUSD    float64    `json:"cost_usd,omitempty"`
+	Output     string     `json:"output,omitempty"` // the reply's last lines
+	FinishedAt *time.Time `json:"finished_at,omitempty"`
 }

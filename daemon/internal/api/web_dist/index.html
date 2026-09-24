@@ -351,7 +351,7 @@
           <button type="button" class="subtab-btn active" data-subtab="board" role="tab" aria-selected="true" aria-controls="sub-board">Sessions<span class="tab-badge" id="subtab-badge-board" hidden></span></button>
           <button type="button" class="subtab-btn" data-subtab="processes" role="tab" aria-selected="false" aria-controls="sub-processes">Processes<span class="tab-badge" id="subtab-badge-processes" hidden></span></button>
           <button type="button" class="subtab-btn" data-subtab="resources" role="tab" aria-selected="false" aria-controls="sub-resources">Resources</button>
-          <button type="button" class="subtab-btn" data-subtab="worktrees" role="tab" aria-selected="false" aria-controls="sub-worktrees">Worktrees</button>
+          <button type="button" class="subtab-btn" data-subtab="worktrees" role="tab" aria-selected="false" aria-controls="sub-worktrees">Cleanup</button>
           <button type="button" class="subtab-btn" data-subtab="events" role="tab" aria-selected="false" aria-controls="sub-events">Events</button>
         </div>
         <div class="subview" id="sub-board" role="tabpanel">
@@ -445,6 +445,19 @@
           <ul class="wt-errors" id="worktrees-errors" hidden></ul>
           <div class="panel-body" id="worktrees-container">
             <div class="loading">Scanning worktrees…</div>
+          </div>
+        </section>
+        <section class="panel">
+          <div class="panel-head">
+            <h2><svg class="icon"><use href="#i-server"/></svg>Clutter</h2>
+            <button type="button" class="btn btn-sm" data-action="clutter-rescan"><svg class="icon"><use href="#i-refresh"/></svg>Rescan</button>
+          </div>
+          <div class="harness-filter">
+            <div class="harness-pills" id="clutter-pills"></div>
+          </div>
+          <p class="wt-summary" id="clutter-summary"></p>
+          <div class="panel-body" id="clutter-container">
+            <div class="loading">Looking for clutter…</div>
           </div>
         </section>
         </div>

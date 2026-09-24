@@ -221,6 +221,7 @@ def main():
         dom_wt = dump_dom(chrome, tmp, "?tab=worktrees")
         dom_wtremove = dump_dom(chrome, tmp, "?tab=worktrees&worktreedemo")
         dom_wtsizing = dump_dom(chrome, tmp, "?tab=worktrees&sizingdemo")
+        dom_clutter = dump_dom(chrome, tmp, "?tab=worktrees&clutterdemo")
         dom_scope = dump_dom(chrome, tmp, "?scopedemo")
         dom_pattern = dump_dom(chrome, tmp, "?patterndemo")
         dom_patternact = dump_dom(chrome, tmp, "?patterndemo&patternact")
@@ -1133,7 +1134,10 @@ def main():
 
         # --- worktrees: the hunter's report, one row per worktree ---
         def wt_block(dom_text):
-            return dom_text.split('id="worktrees-container"', 1)[-1].split('id="sub-events"', 1)[0]
+            return dom_text.split('id="worktrees-container"', 1)[-1].split('data-action="clutter-rescan"', 1)[0]
+
+        def cl_block(dom_text):
+            return dom_text.split('id="clutter-container"', 1)[-1].split('id="sub-events"', 1)[0]
         wt = wt_block(dom_wt)
         wt_rows = wt.count('class="wt-row')
         wt_remove = wt.count('data-action="worktree-remove"')
@@ -1157,6 +1161,9 @@ def main():
         check("worktrees: the advisor note renders escaped under its row; Ask advisor sits on review and keep rows only",
               '<p class="wt-advice"><b>Advisor: review</b> 60% · &lt;i&gt;look&lt;/i&gt; at .tmp before removing</p>' in wt
               and wt.count('data-action="worktree-advise"') == 2)
+        check("worktrees: Ask the agent sits on review and keep rows; the latest answer shows under its row",
+              wt.count('data-action="worktree-ask"') == 2
+              and '<p class="wt-ask wt-ask-answered"><b>Asked claude:</b> pr — https://github.com/o/r/pull/9 ($0.21)</p>' in wt)
         check("worktrees: the disk card shows the volume, worktree and removable totals and what cleanups reclaimed",
               "512.0 GB free of 2.0 TB" in dom_wt and 'data-w="75"' in dom_wt
               and "<b>Worktrees</b> 1.5 GB" in dom_wt and "<b>Removable</b> 1.5 GB" in dom_wt
@@ -1165,6 +1172,18 @@ def main():
         check("worktrees: while the daemon is still measuring, the tab re-reads until sizes land",
               '<span class="wt-size">1.5 GB</span>' in wt_block(dom_wtsizing) and "measuring…" not in dom_wtsizing
               and "<b>Worktrees</b> 1.5 GB" in dom_wtsizing)
+        cl = cl_block(dom_wt)
+        check("clutter: items grouped by project with kind, size, idle; Trash and Run only where the item offers them",
+              cl.count('class="wt-row cl-row') == 3
+              and 'data-action="clutter-trash" data-path="/Users/dev/workspace/api-service/.tmp">Move to Trash</button>' in cl
+              and 'data-action="clutter-clean" data-name="go build" title="go clean -cache">Run go clean -cache</button>' in cl
+              and cl.count('data-action="clutter-') == 2
+              and "&lt;i&gt;downloaded&lt;/i&gt; models" in cl and "<i>downloaded</i>" not in cl
+              and '<span class="wt-repo-path" title="This machine">This machine</span>' in cl)
+        clr = cl_block(dom_clutter)
+        check("clutter: Move to Trash posts after the dialog, drops the row and counts it as in the Trash",
+              "POST /cleanup/trash" in pre(dom_clutter, "mock-requests") and "/api-service/.tmp" not in clr
+              and "1.0 MB moved to the Trash by cleanups" in dom_clutter)
         wtr = wt_block(dom_wtremove)
         wtr_rows = wtr.count('class="wt-row')
         wt_reqs = pre(dom_wtremove, "mock-requests")

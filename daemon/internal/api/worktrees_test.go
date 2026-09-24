@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/advisor"
+	"github.com/cavi-ai/secure-agent/daemon/internal/agentask"
 	"github.com/cavi-ai/secure-agent/daemon/internal/apiroutes"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/worktreehunter"
@@ -316,5 +317,76 @@ func TestWorktreeAdviseAndNotes(t *testing.T) {
 	unwired.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/worktrees/advise", strings.NewReader(`{"path":"`+dirty+`"}`)))
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("advise without an advisor: %d, want 503", rec.Code)
+	}
+}
+
+func TestWorktreeAskEndpoint(t *testing.T) {
+	home, root, repo, clean, dirty, _ := worktreeFixture(t)
+	st := testStore(t)
+	t.Cleanup(func() { st.Close() })
+	bin := filepath.Join(root, "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	script := "#!/bin/sh\nprintf '%s\\n' '{\"result\":\"Nothing needed.\\nWORKTREE-VERDICT: removable scratch file only\",\"total_cost_usd\":0.05}'\n"
+	if err := os.WriteFile(filepath.Join(bin, "claude"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Join(bin, "claude"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", "/usr/bin:/bin")
+	asker := agentask.New(st, home).WithBinDirs([]string{bin})
+	hunter := worktreehunter.New(st, home, worktreehunter.Options{})
+	mux := New(Deps{Store: st, Status: func() Status { return Status{Running: true} }, Worktrees: hunter, Asker: asker}).buildMux()
+	do := func(method, path, body string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest(method, path, strings.NewReader(body)))
+		return rec
+	}
+
+	for _, c := range []struct {
+		body string
+		want int
+	}{
+		{`{"path":"relative"}`, http.StatusBadRequest},
+		{`{"path":"` + repo + `"}`, http.StatusNotFound},  // main worktree
+		{`{"path":"` + clean + `"}`, http.StatusConflict}, // state remove: nothing to sort out
+		{`{"path":"` + dirty + `"}`, http.StatusNotFound}, // no resumable session recorded
+	} {
+		if rec := do(http.MethodPost, "/worktrees/ask", c.body); rec.Code != c.want {
+			t.Fatalf("ask %s: %d %s, want %d", c.body, rec.Code, rec.Body.String(), c.want)
+		}
+	}
+	now := time.Now()
+	st.UpsertSession(model.Session{ID: "0199aaaa-bbbb-cccc-dddd-eeeeffff0000", Harness: "claude", Workspace: dirty,
+		StartedAt: now, LastSeenAt: now, Confidence: model.ConfHook})
+	rec := do(http.MethodPost, "/worktrees/ask", `{"path":"`+dirty+`"}`)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"status":"running"`) {
+		t.Fatalf("ask dirty: %d %s", rec.Code, rec.Body.String())
+	}
+	asker.Wait()
+
+	var asks []model.AgentAsk
+	if err := json.Unmarshal(do(http.MethodGet, "/worktrees/asks", "").Body.Bytes(), &asks); err != nil || len(asks) != 1 ||
+		asks[0].Verdict != "removable" || asks[0].Detail != "scratch file only" || asks[0].CostUSD != 0.05 {
+		t.Fatalf("asks = %+v (%v)", asks, err)
+	}
+	if rec := do(http.MethodPost, "/worktrees/repos", `{"path":"`+repo+`"}`); rec.Code != http.StatusOK {
+		t.Fatalf("add repo: %d", rec.Code)
+	}
+	var rep worktreehunter.ScanReport
+	if err := json.Unmarshal(do(http.MethodGet, "/worktrees?refresh=1", "").Body.Bytes(), &rep); err != nil || rep.Asks[dirty].Verdict != "removable" {
+		t.Fatalf("report asks = %+v (%v)", rep.Asks, err)
+	}
+	for _, p := range []string{"/worktrees/ask", "/worktrees/asks"} {
+		for _, r := range apiroutes.Table {
+			if r.Path == p && (!r.NoAgent || !r.Console) {
+				t.Errorf("%s must be console-admitted and NoAgent", p)
+			}
+		}
+	}
+	if !apiroutes.IsMutation(http.MethodPost, "/worktrees/ask") {
+		t.Fatal("/worktrees/ask must be a mutation")
 	}
 }
