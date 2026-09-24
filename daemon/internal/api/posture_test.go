@@ -56,7 +56,10 @@ func TestPostureExcludesAcknowledgedFlags(t *testing.T) {
 	waitForSocket(t, sock)
 
 	cl := unixClient(sock)
-	resp, _ := cl.Get("http://unix/posture")
+	resp, err := cl.Get("http://unix/posture")
+	if err != nil {
+		t.Fatalf("GET /posture: %v", err)
+	}
 	var p Posture
 	decodeInto(t, resp, &p)
 	if p.NeedsYou != 1 {
@@ -81,7 +84,10 @@ func TestPostureCriticalFlagDrivesState(t *testing.T) {
 	waitForSocket(t, sock)
 
 	cl := unixClient(sock)
-	resp, _ := cl.Get("http://unix/posture")
+	resp, err := cl.Get("http://unix/posture")
+	if err != nil {
+		t.Fatalf("GET /posture: %v", err)
+	}
 	var p Posture
 	decodeInto(t, resp, &p)
 	if p.State != "critical" || p.NeedsYou != 1 {
@@ -111,7 +117,10 @@ func TestPostureCountsUninspectedEgressAndDeadCollectors(t *testing.T) {
 	waitForSocket(t, sock)
 
 	cl := unixClient(sock)
-	resp, _ := cl.Get("http://unix/posture")
+	resp, err := cl.Get("http://unix/posture")
+	if err != nil {
+		t.Fatalf("GET /posture: %v", err)
+	}
 	var p Posture
 	decodeInto(t, resp, &p)
 	if p.State != "attention" || p.NeedsYou != 2 {
@@ -174,7 +183,10 @@ func TestPostureFlagsSilentCollectorsAndUncoveredHarnesses(t *testing.T) {
 	waitForSocket(t, sock)
 
 	cl := unixClient(sock)
-	resp, _ := cl.Get("http://unix/posture")
+	resp, err := cl.Get("http://unix/posture")
+	if err != nil {
+		t.Fatalf("GET /posture: %v", err)
+	}
 	var p Posture
 	decodeInto(t, resp, &p)
 
@@ -218,7 +230,10 @@ func TestPostureFlagsCrashLoopingRootService(t *testing.T) {
 	waitForSocket(t, sock)
 
 	cl := unixClient(sock)
-	resp, _ := cl.Get("http://unix/posture")
+	resp, err := cl.Get("http://unix/posture")
+	if err != nil {
+		t.Fatalf("GET /posture: %v", err)
+	}
 	var p Posture
 	decodeInto(t, resp, &p)
 	found := false
@@ -342,7 +357,10 @@ func TestPostureNoSilenceFlagsWhenIdle(t *testing.T) {
 	waitForSocket(t, sock)
 
 	cl := unixClient(sock)
-	resp, _ := cl.Get("http://unix/posture")
+	resp, err := cl.Get("http://unix/posture")
+	if err != nil {
+		t.Fatalf("GET /posture: %v", err)
+	}
 	var p Posture
 	decodeInto(t, resp, &p)
 	if p.NeedsYou != 0 {
@@ -362,7 +380,10 @@ func TestPostureOldFlagsDoNotCount(t *testing.T) {
 	waitForSocket(t, sock)
 
 	cl := unixClient(sock)
-	resp, _ := cl.Get("http://unix/posture")
+	resp, err := cl.Get("http://unix/posture")
+	if err != nil {
+		t.Fatalf("GET /posture: %v", err)
+	}
 	var p Posture
 	decodeInto(t, resp, &p)
 	if p.NeedsYou != 0 {
@@ -373,6 +394,9 @@ func TestPostureOldFlagsDoNotCount(t *testing.T) {
 // decodeInto is a tiny helper so tests stay flat.
 func decodeInto(t *testing.T, resp *http.Response, v any) {
 	t.Helper()
+	if resp == nil {
+		t.Fatal("decode: no response")
+	}
 	defer resp.Body.Close()
 	if err := jsonDecode(resp.Body, v); err != nil {
 		t.Fatalf("decode: %v", err)

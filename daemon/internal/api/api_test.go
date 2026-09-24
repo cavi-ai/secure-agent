@@ -50,7 +50,9 @@ func unixClient(socketPath string) *http.Client {
 				return net.Dial("unix", socketPath)
 			},
 		},
-		Timeout: 2 * time.Second,
+		// A loaded -race -shuffle run can stall a handler for seconds; a
+		// hung handler still fails the test, only later.
+		Timeout: 30 * time.Second,
 	}
 }
 
@@ -334,7 +336,10 @@ func TestFirewallSourcesAddRemoveAndAudit(t *testing.T) {
 
 	// A system path is refused: the daemon reads sources as root, so source-add
 	// must not become an arbitrary-file-read.
-	sysResp, _ := cl.Post("http://unix/firewall/sources", "application/json", strings.NewReader(`{"source":"/etc/master.passwd","op":"add"}`))
+	sysResp, err := cl.Post("http://unix/firewall/sources", "application/json", strings.NewReader(`{"source":"/etc/master.passwd","op":"add"}`))
+	if err != nil {
+		t.Fatalf("POST /firewall/sources: %v", err)
+	}
 	if sysResp.StatusCode != 400 {
 		t.Fatalf("add of system path status=%d, want 400", sysResp.StatusCode)
 	}
@@ -352,7 +357,10 @@ func TestFirewallSourcesAddRemoveAndAudit(t *testing.T) {
 	}
 
 	// GET shows config (read-only) + the user source
-	getResp, _ := cl.Get("http://unix/firewall/sources")
+	getResp, err := cl.Get("http://unix/firewall/sources")
+	if err != nil {
+		t.Fatalf("GET /firewall/sources: %v", err)
+	}
 	body, _ := io.ReadAll(getResp.Body)
 	if !strings.Contains(string(body), `"source":"/etc/agent/defaults.env","origin":"config"`) {
 		t.Fatalf("sources GET missing config source: %s", body)
@@ -362,20 +370,29 @@ func TestFirewallSourcesAddRemoveAndAudit(t *testing.T) {
 	}
 
 	// audit row carries the path
-	auditResp, _ := cl.Get("http://unix/audit")
+	auditResp, err := cl.Get("http://unix/audit")
+	if err != nil {
+		t.Fatalf("GET /audit: %v", err)
+	}
 	auditBody, _ := io.ReadAll(auditResp.Body)
 	if !strings.Contains(string(auditBody), `"action":"source-add"`) || !strings.Contains(string(auditBody), srcFile) {
 		t.Fatalf("audit missing source-add row with path: %s", auditBody)
 	}
 
 	// removing a config source is rejected
-	badResp, _ := cl.Post("http://unix/firewall/sources", "application/json", strings.NewReader(`{"source":"/etc/agent/defaults.env","op":"remove"}`))
+	badResp, err := cl.Post("http://unix/firewall/sources", "application/json", strings.NewReader(`{"source":"/etc/agent/defaults.env","op":"remove"}`))
+	if err != nil {
+		t.Fatalf("POST /firewall/sources: %v", err)
+	}
 	if badResp.StatusCode != 400 {
 		t.Fatalf("remove of config source status=%d, want 400", badResp.StatusCode)
 	}
 
 	// removing the user source succeeds and re-ingests again
-	rmResp, _ := cl.Post("http://unix/firewall/sources", "application/json", strings.NewReader(fmt.Sprintf(`{"source":%q,"op":"remove"}`, srcFile)))
+	rmResp, err := cl.Post("http://unix/firewall/sources", "application/json", strings.NewReader(fmt.Sprintf(`{"source":%q,"op":"remove"}`, srcFile)))
+	if err != nil {
+		t.Fatalf("POST /firewall/sources: %v", err)
+	}
 	if rmResp.StatusCode != 200 {
 		t.Fatalf("remove user source status=%d, want 200", rmResp.StatusCode)
 	}
@@ -759,7 +776,10 @@ func TestSessionsEndpoint(t *testing.T) {
 		t.Fatalf("second session = %+v, want ended with ended_at", all[1])
 	}
 
-	resp2, _ := cl.Get("http://unix/sessions?status=ended")
+	resp2, err := cl.Get("http://unix/sessions?status=ended")
+	if err != nil {
+		t.Fatalf("GET /sessions?status=ended: %v", err)
+	}
 	var ended []model.Session
 	decodeInto(t, resp2, &ended)
 	if len(ended) != 1 || ended[0].ID != "s2" {
@@ -803,7 +823,10 @@ func TestSessionTimelineEndpoint(t *testing.T) {
 		t.Fatalf("trace fields lost: %+v %+v", tl[0], tl[1])
 	}
 
-	resp2, _ := cl.Get("http://unix/sessions/s1")
+	resp2, err := cl.Get("http://unix/sessions/s1")
+	if err != nil {
+		t.Fatalf("GET /sessions/s1: %v", err)
+	}
 	if resp2.StatusCode != 404 {
 		t.Fatalf("GET /sessions/s1 without subpath: %d, want 404", resp2.StatusCode)
 	}
