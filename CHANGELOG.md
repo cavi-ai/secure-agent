@@ -107,7 +107,7 @@ All notable changes to `secure-agent` are documented here. The format follows
   per (path, rule) are collapsed.
 
 ### Changed
-- Console admission is method-aware: GET/HEAD pass on any console-admitted route, but a mutating method needs that route's `MutatingMethods` or `ConsoleMethods` — the console token can no longer reach an owner-level `DELETE` such as `/guard/rules` or `/guard/path-allow`.
+- The console token admits a method other than GET or HEAD only when the route lists it in `MutatingMethods` or `ConsoleMethods`.
 - `/guard/path-allow` is console-admitted on the proxy listener.
 - `POST /guard/path-allow` is a pinned-UI mutation.
 - Console finding cards offer the served allow-path action.
@@ -152,6 +152,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Advisor host pre-assessment still covers cloud, telemetry and unknown hosts.
 
 ### Fixed
+- The console token no longer reaches the owner-level `DELETE /guard/rules`.
 - Flag sentences and attention labels keep agent ids such as `untagged:node` as written.
 - Posture and `/doctor` report "File monitoring writer is flooding" only while the spool is still being written (within 2 min); garbage left by a removed writer no longer masks the service state. A spool whose service is not loaded shows "File monitoring is off" with the steps to enable it.
 - Secret patterns count only where the match starts a token (not after a base64 or base64url character, except a JSON `\n`, `\t` or `\r` escape): vendor-key shapes inside encrypted reasoning items and other encoded blobs no longer raise secret-in-transcript or proxy findings.
