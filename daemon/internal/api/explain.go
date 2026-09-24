@@ -582,6 +582,20 @@ func muteAgentSuffix(agent string) string {
 	return " (agent " + agent + ")"
 }
 
+// allowHostLabel is the served allow-host button text. An IPv6 literal never
+// appears in it — the popover and web console (web_dist/lib.js
+// explainActionLabel) both drop it in favor of "this <Org> address" — while
+// a hostname or IPv4 host keeps the readable "Allow <name> for <agent>" form.
+func allowHostLabel(name, host, org, agent string) string {
+	if strings.Contains(host, ":") {
+		if org != "" {
+			return "Allow this " + org + " address for " + agent
+		}
+		return "Allow this address for " + agent
+	}
+	return "Allow " + name + " for " + agent
+}
+
 // explainActions lists the actions that apply to f, in a fixed order, each
 // with the exact request that performs it. Recommended marks the one the
 // advisor suggested.
@@ -608,7 +622,7 @@ func (a *API) explainActions(f model.Flag, ex *model.FlagExplain, env *explainEn
 				name += " (" + eg.Org + ")"
 			}
 			acts = append(acts, model.ExplainAction{
-				ID: "allow-host", Label: "Allow " + name + " for " + agent,
+				ID: "allow-host", Label: allowHostLabel(name, eg.Host, eg.Org, agent),
 				Consequence: "Future connections from " + agent + " to " + eg.Host + " are trusted and stop being flagged.",
 				Method:      http.MethodPost, Path: "/allowlist",
 				Body: map[string]any{"agent": agent, "host": eg.Host},

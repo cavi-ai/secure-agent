@@ -88,7 +88,7 @@ func TestMuteAgentRoundTrip(t *testing.T) {
 	if f, _ := st.GetFlag("k2"); f.Acknowledged {
 		t.Fatal("claude flag must stay open")
 	}
-	if w := do("GET", "/mute", ""); !strings.Contains(w.Body.String(), `{"rule":"keychain-access","host":"*","agent":"codex"}`) {
+	if w := do("GET", "/mute", ""); !strings.Contains(w.Body.String(), `{"rule":"keychain-access","host":"*","agent":"codex","title":"Agent touched the keychain"}`) {
 		t.Fatalf("mute list = %s", w.Body.String())
 	}
 	if w := do("POST", "/mute", `{"rule":"keychain-access","host":"*","agent":"bad/agent"}`); w.Code != 400 {

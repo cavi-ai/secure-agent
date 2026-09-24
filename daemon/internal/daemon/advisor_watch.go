@@ -55,6 +55,11 @@ type configWatchDeps struct {
 	resourceControl *resource.Controller
 	worktrees       *worktreehunter.Hunter
 	initialConfig   *config.Config
+	// deltaHub/postureChanged follow the advisor stack into setupAdvisor so
+	// a verdict landing after a config-driven advisor swap still gets the
+	// immediate flag delta (see verdictPublishingSink in wire.go).
+	deltaHub       *api.DeltaHub
+	postureChanged func()
 }
 
 // watchConfig polls config.yaml and re-configures the advisor stack, the
@@ -92,7 +97,7 @@ func watchConfig(ctx context.Context, path string, deps configWatchDeps) {
 			// Swapping is the signal: the drain loop re-loads the stack per
 			// event, so the old subscriber simply goes inert (its supervised
 			// Run exits cleanly at daemon shutdown). No close needed.
-			deps.stk.Store(setupAdvisor(data, deps.st))
+			deps.stk.Store(setupAdvisor(data, deps.st, deps.deltaHub, deps.postureChanged))
 			log.Printf("advisor config applied live (enabled=%v mode=%s model=%q)",
 				data.Advisor.Enabled, map[bool]string{true: "managed", false: "existing"}[data.Advisor.Managed], data.Advisor.Model)
 		}

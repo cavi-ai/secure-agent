@@ -78,7 +78,7 @@ func (a *API) mutePairs() []MutePair {
 	}
 	for rule, mutes := range a.mutes.Load() {
 		for _, m := range mutes {
-			out = append(out, MutePair{Rule: rule, Host: m.Host, Agent: m.Agent})
+			out = append(out, MutePair{Rule: rule, Host: m.Host, Agent: m.Agent, Title: humanFlagTitle(rule)})
 		}
 	}
 	sort.Slice(out, func(i, j int) bool {

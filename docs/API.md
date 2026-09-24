@@ -1003,11 +1003,16 @@ old rows leave the critical list. This is the recourse for noisy host-less
 rules (`keychain-access`, `keychain-security-cli`) — the console and menu bar
 expose it as "Dismiss this flag class". Reversible with `DELETE /mute`.
 
+`GET /mute` lists dispositions as `[{"rule", "host", "agent", "title"}]`,
+sorted by rule, host, then agent; `title` is the rule's human title (the rule
+id when it has none). `POST /mute` takes `{"rule", "host", "agent"}`; it
+ignores `title`.
+
 ### Per-agent mutes (`agent`)
 
 ```
 POST   /mute   {"rule": "keychain-access", "host": "*", "agent": "codex"}
-GET    /mute   → [{"rule": "keychain-access", "host": "*", "agent": "codex"}, {"rule": "proxy-secret-leak", "host": "api.example.com"}]
+GET    /mute   → [{"rule": "keychain-access", "host": "*", "agent": "codex", "title": "Agent touched the keychain"}]
 DELETE /mute?rule=keychain-access&host=*&agent=codex
 ```
 
