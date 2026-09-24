@@ -163,7 +163,7 @@ struct SettingsView: View {
                         Image(systemName: "eye.slash")
                             .font(.system(size: 10)).foregroundStyle(.secondary)
                         VStack(alignment: .leading, spacing: 1) {
-                            Text(FlagActionSheet.humanTitle(m.rule))
+                            Text(m.title ?? m.rule)
                                 .font(.system(.body, weight: .medium))
                             Text(m.host == "*" ? "entire class (all hosts)" : "host: \(m.host)")
                                 .font(.system(.caption, design: .monospaced))
@@ -319,7 +319,7 @@ struct SettingsView: View {
     // MARK: Guard
 
     @State private var pathAllows: [GuardPathAllowModel] = []
-    @State private var mutes: [(rule: String, host: String)] = []
+    @State private var mutes: [(rule: String, host: String, title: String?)] = []
 
     private func loadMutes() {
         Task {

@@ -127,7 +127,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 	// Local triage advisor (opt-in): flags/incidents are offered to it from
 	// the drain loop; it never touches the enforcement path.
 	advisorStk := &advisorStackHolder{}
-	advisorStk.Store(setupAdvisor(cfg, st))
+	advisorStk.Store(setupAdvisor(cfg, st, deltaHub, postureHook.run))
 
 	// Operator price table from config.yaml, applied before any collector
 	// emits a model call; the config watcher re-applies it on change.
@@ -256,6 +256,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 			st: st, stk: advisorStk, pub: fleetPub, fleetCfg: fleetCfgLive,
 			logDir: filepath.Dir(cfg.DBPath), apiServer: apiServer, resourceControl: resourceControl,
 			initialConfig: &cfg, worktrees: hunter,
+			deltaHub: deltaHub, postureChanged: postureHook.run,
 		})
 	}
 	postureHook.fn = apiServer.PublishPostureIfChanged

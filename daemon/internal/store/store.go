@@ -891,6 +891,21 @@ func (s *Store) GetFlag(id string) (model.Flag, bool) {
 	return fl, true
 }
 
+// GetFlagWithAdvisor is GetFlag with its advisor verdict joined — the shape
+// a flag delta publishes (wire.go), so a verdict that lands after the flag
+// itself can be re-pushed with the same fields the popover already renders.
+func (s *Store) GetFlagWithAdvisor(id string) (model.Flag, bool) {
+	fl, ok := s.GetFlag(id)
+	if !ok {
+		return fl, false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	flags := []model.Flag{fl}
+	s.attachAdvisorLocked(flags)
+	return flags[0], true
+}
+
 func (s *Store) QueryFlags(f FlagFilter) []model.Flag {
 	s.mu.Lock()
 	defer s.mu.Unlock()

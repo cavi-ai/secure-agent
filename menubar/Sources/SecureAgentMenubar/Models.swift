@@ -430,7 +430,7 @@ public struct StatusResponse: Codable, Sendable {
 }
 
 /// /posture headline; attention state is derived daemon-side only.
-public struct PostureModel: Codable, Sendable {
+public struct PostureModel: Codable, Sendable, Equatable {
     public let state: String // all-clear | attention | critical
     public let needsYou: Int
     public let summary: String
@@ -660,14 +660,17 @@ public struct FlagModel: Codable, Identifiable, Sendable {
     public let workspace: String?
     /// Local advisor triage verdict when one exists. Advisory only.
     public let advisor: AdvisorVerdictModel?
-    /// Daemon-served rule title; nil on older daemons (title(for:) falls back).
+    /// Daemon-served rule title.
     public let title: String?
+    /// The daemon's reading of an unacknowledged flag: what happened, one
+    /// disposition, and the actions that apply with their exact requests.
+    public let explain: FlagExplain?
     /// True when the operator applied a disposition on this flag — it stops
     /// counting as critical and renders dimmed instead of endlessly red.
     public let acknowledged: Bool?
 
     enum CodingKeys: String, CodingKey {
-        case id, rule, severity, ts, pid, agent, evidence, advisor, title
+        case id, rule, severity, ts, pid, agent, evidence, advisor, title, explain
         case sessionId = "session_id"
         case workspace
         case acknowledged
@@ -677,7 +680,8 @@ public struct FlagModel: Codable, Identifiable, Sendable {
                 evidence: [EvidenceItemModel], sessionId: String? = nil, workspace: String? = nil,
                 advisor: AdvisorVerdictModel? = nil,
                 acknowledged: Bool? = nil,
-                title: String? = nil) {
+                title: String? = nil,
+                explain: FlagExplain? = nil) {
         self.id = id
         self.rule = rule
         self.severity = severity
@@ -689,6 +693,7 @@ public struct FlagModel: Codable, Identifiable, Sendable {
         self.workspace = workspace
         self.advisor = advisor
         self.title = title
+        self.explain = explain
         self.acknowledged = acknowledged
     }
 
@@ -697,7 +702,104 @@ public struct FlagModel: Codable, Identifiable, Sendable {
     public func acknowledgedCopy() -> FlagModel {
         FlagModel(id: id, rule: rule, severity: severity, ts: ts, pid: pid, agent: agent,
                   evidence: evidence, sessionId: sessionId, advisor: advisor,
-                  acknowledged: true, title: title)
+                  acknowledged: true, title: title, explain: explain)
+    }
+}
+
+/// `explain` on a /flags row (daemon `model.FlagExplain`); the fields the
+/// menu bar reads.
+public struct FlagExplain: Codable, Sendable, Equatable {
+    public let what: String
+    public let disposition: FlagDisposition
+    public let actions: [FlagExplainAction]
+
+    public init(what: String, disposition: FlagDisposition, actions: [FlagExplainAction]) {
+        self.what = what
+        self.disposition = disposition
+        self.actions = actions
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        what = try c.decodeIfPresent(String.self, forKey: .what) ?? ""
+        disposition = try c.decode(FlagDisposition.self, forKey: .disposition)
+        actions = try c.decodeIfPresent([FlagExplainAction].self, forKey: .actions) ?? []
+    }
+
+    private enum CodingKeys: String, CodingKey { case what, disposition, actions }
+
+    /// The action the daemon recommends, if any.
+    public var recommended: FlagExplainAction? { actions.first { $0.recommended == true } }
+}
+
+/// The one verdict every surface renders for a flag.
+public struct FlagDisposition: Codable, Sendable, Equatable {
+    /// acknowledged | benign-likely | warning | critical
+    public let state: String
+    public let text: String
+    public let why: String
+
+    public init(state: String, text: String, why: String) {
+        self.state = state
+        self.text = text
+        self.why = why
+    }
+}
+
+/// One served operator action with the exact request that performs it.
+public struct FlagExplainAction: Codable, Sendable, Equatable, Identifiable {
+    public let id: String
+    public let label: String
+    public let consequence: String
+    public let method: String
+    public let path: String
+    public let body: [String: JSONValue]?
+    public let recommended: Bool?
+
+    public init(id: String, label: String, consequence: String, method: String, path: String,
+                body: [String: JSONValue]? = nil, recommended: Bool? = nil) {
+        self.id = id
+        self.label = label
+        self.consequence = consequence
+        self.method = method
+        self.path = path
+        self.body = body
+        self.recommended = recommended
+    }
+}
+
+/// Any JSON value; re-encodes to the same JSON it decoded from.
+public enum JSONValue: Codable, Sendable, Equatable {
+    case string(String)
+    case int(Int)
+    case double(Double)
+    case bool(Bool)
+    case object([String: JSONValue])
+    case array([JSONValue])
+    case null
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.singleValueContainer()
+        if c.decodeNil() { self = .null }
+        else if let b = try? c.decode(Bool.self) { self = .bool(b) }
+        else if let i = try? c.decode(Int.self) { self = .int(i) }
+        else if let d = try? c.decode(Double.self) { self = .double(d) }
+        else if let s = try? c.decode(String.self) { self = .string(s) }
+        else if let a = try? c.decode([JSONValue].self) { self = .array(a) }
+        else { self = .object(try c.decode([String: JSONValue].self)) }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.singleValueContainer()
+        switch self {
+        case .string(let s): try c.encode(s)
+        case .int(let i): try c.encode(i)
+        case .double(let d): try c.encode(d)
+        case .bool(let b): try c.encode(b)
+        case .object(let o): try c.encode(o)
+        case .array(let a): try c.encode(a)
+        case .null: try c.encodeNil()
+        }
     }
 }
 
