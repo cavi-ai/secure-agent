@@ -486,7 +486,7 @@ func TestAcknowledgeRuleHost(t *testing.T) {
 	s.PutFlag(model.Flag{ID: "f4", Rule: "proxy-secret-leak", Severity: 3, PID: 7, Agent: "cursor",
 		Evidence: model.EvidenceFromStrings("then connected to localhost:1234 at 2026-09-11T12:00:04Z")})
 
-	n := s.AcknowledgeRuleHost("sensitive-read-then-connect", "localhost")
+	n := s.AcknowledgeRuleHost("sensitive-read-then-connect", "localhost", "")
 	// f1 (localhost) + f3 (127.0.0.1 — localhost alias) ack'd; f2 (other host) + f4 (other rule) untouched.
 	if n != 2 {
 		t.Fatalf("acknowledged %d flags; want 2", n)
@@ -504,7 +504,7 @@ func TestAcknowledgeRuleHost(t *testing.T) {
 		t.Fatal("f3 (127.0.0.1 alias of localhost) must be acknowledged")
 	}
 	// Idempotent: second run acknowledges nothing new.
-	if n2 := s.AcknowledgeRuleHost("sensitive-read-then-connect", "localhost"); n2 != 0 {
+	if n2 := s.AcknowledgeRuleHost("sensitive-read-then-connect", "localhost", ""); n2 != 0 {
 		t.Fatalf("second pass acknowledged %d; want 0", n2)
 	}
 }
@@ -526,7 +526,7 @@ func TestAcknowledgeRuleHostWildcard(t *testing.T) {
 	s.PutFlag(model.Flag{ID: "o1", Rule: "proxy-secret-leak", Severity: 3, PID: 7, Agent: "codex",
 		Evidence: model.EvidenceFromStrings("anthropic-key in request body to api.example.com")})
 
-	if n := s.AcknowledgeRuleHost("keychain-access", "*"); n != 2 {
+	if n := s.AcknowledgeRuleHost("keychain-access", "*", ""); n != 2 {
 		t.Fatalf("wildcard ack = %d, want 2", n)
 	}
 	if f, _ := s.GetFlag("k1"); !f.Acknowledged {
@@ -964,5 +964,26 @@ func TestReattributeFlagsRelabelsUntaggedRowsForPIDInWindow(t *testing.T) {
 	}
 	if n := s.ReattributeFlags(42, "claude", since); n != 0 {
 		t.Fatalf("second ReattributeFlags = %d, want 0", n)
+	}
+}
+
+// An agent-scoped mute acknowledges only that agent's open flags of the rule.
+func TestAcknowledgeRuleHostScopedToAgent(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(filepath.Join(dir, "a.db"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	s.PutFlag(model.Flag{ID: "k1", Rule: "keychain-access", Severity: 1, PID: 7, Agent: "codex"})
+	s.PutFlag(model.Flag{ID: "k2", Rule: "keychain-access", Severity: 1, PID: 9, Agent: "cursor"})
+	if n := s.AcknowledgeRuleHost("keychain-access", "*", "codex"); n != 1 {
+		t.Fatalf("agent-scoped ack = %d, want 1", n)
+	}
+	if f, _ := s.GetFlag("k1"); !f.Acknowledged {
+		t.Fatal("codex flag must be acknowledged")
+	}
+	if f, _ := s.GetFlag("k2"); f.Acknowledged {
+		t.Fatal("cursor flag must stay open")
 	}
 }

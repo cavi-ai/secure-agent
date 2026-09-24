@@ -575,14 +575,7 @@ func wireEgressOverrides(cfg config.Config, correlator *correlate.Correlator, ad
 	allowlistStore := correlate.NewAllowlistStore(filepath.Join(stateDir, "allowlist-overrides.json"))
 	correlator.SetAllowlistOverrides(func(agent string) []string { return allowlistStore.Load()[agent] })
 	muteStore := correlate.NewMuteStore(filepath.Join(stateDir, "muted.json"))
-	correlator.SetMuteChecker(func(rule, host string) bool {
-		for _, h := range muteStore.Load()[rule] {
-			if h == host || h == "*" {
-				return true
-			}
-		}
-		return false
-	})
+	correlator.SetMuteChecker(muteStore.Muted)
 	correlator.SetOnUninspected(func(agent, host string) {
 		if sub := advisorStk.Load().Sub; sub != nil {
 			sub.EnqueueHost(agent, host)

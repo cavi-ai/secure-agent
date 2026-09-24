@@ -332,11 +332,7 @@ function renderFlags() {
   // deliberate and reversible.
   const mutes = SA.t.mutes || [];
   if (mutes.length > 0) {
-    parts.push({ key: 'mutes', html: `<div class="mute-list"><div class="mute-head">Muted</div>` + mutes.map(m => `
-      <div class="mute-row">
-        <span class="mute-pair">${escapeHTML(m.rule)} · ${m.host === '*' ? 'all hosts' : escapeHTML(m.host)}</span>
-        <button class="source-remove" title="Unmute" data-action="unmute" data-rule="${escapeHTML(m.rule)}" data-host="${escapeHTML(m.host)}"><svg class="icon"><use href="#i-close"/></svg></button>
-      </div>`).join('') + `</div>` });
+    parts.push({ key: 'mutes', html: `<div class="mute-list"><div class="mute-head">Muted</div>` + mutes.map(muteRowHTML).join('') + `</div>` });
   }
   patchList(container, parts, { key: p => p.key, html: p => p.html, hash: p => p.hash || p.html });
   const metaById = new Map(parts.filter(p => p.meta !== null && p.meta !== undefined).map(p => [p.key, p.meta]));
@@ -345,6 +341,17 @@ function renderFlags() {
     const span = m !== undefined && el.querySelector('.finding-meta');
     if (span && span.textContent !== m) span.textContent = m;
   }
+}
+
+// muteRowHTML: one disposition in the Muted list — rule, host, and the agent
+// when the mute is scoped to one ("all agents" is implied when it is not).
+function muteRowHTML(m) {
+  const agent = m.agent ? ` · ${escapeHTML(m.agent)}` : '';
+  return `
+      <div class="mute-row">
+        <span class="mute-pair">${escapeHTML(m.rule)} · ${m.host === '*' ? 'all hosts' : escapeHTML(m.host)}${agent}</span>
+        <button class="source-remove" title="Unmute" data-action="unmute" data-rule="${escapeHTML(m.rule)}" data-host="${escapeHTML(m.host)}" data-agent="${escapeHTML(m.agent || '')}"><svg class="icon"><use href="#i-close"/></svg></button>
+      </div>`;
 }
 
 function metaHTML(meta) {

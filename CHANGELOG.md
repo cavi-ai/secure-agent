@@ -7,6 +7,9 @@ All notable changes to `secure-agent` are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- `POST /mute` takes an optional `agent`: the mute covers that agent only; `GET /mute`, `/snapshot` `mutes` and `DELETE /mute` carry it.
+- Flag explanations and patterns serve `mute-class` / `mute-rule-host` with the agent in `body` and a label naming it ("Mute keychain access for codex").
+- Console Muted list shows the agent of a scoped mute.
 - `POST /worktrees/advise`: queues a worktree for a local-advisor note (`remove`, `review` or `keep` with a rationale); branch names, paths and commit subjects go to the model inside `<evidence>`.
 - `GET /worktrees` `advice`: the stored note per worktree path at its current HEAD; notes never change the state or what `POST /worktrees/remove` accepts.
 - `secure-agent worktrees advise <path>`; the list view prints the note under its row.

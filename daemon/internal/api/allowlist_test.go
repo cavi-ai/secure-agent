@@ -145,14 +145,7 @@ func TestMuteEndpointRoundTrip(t *testing.T) {
 	tg.Refresh()
 	cr := correlate.New(tg, sensitive.New(cfg), cfg)
 	ms := correlate.NewMuteStore(filepath.Join(dir, "muted.json"))
-	cr.SetMuteChecker(func(rule, host string) bool {
-		for _, h := range ms.Load()[rule] {
-			if h == host {
-				return true
-			}
-		}
-		return false
-	})
+	cr.SetMuteChecker(ms.Muted)
 
 	st := testStore(t)
 	a := newTestAPI(sock, st, &fakeKiller{}, func() Status { return Status{Running: true} })

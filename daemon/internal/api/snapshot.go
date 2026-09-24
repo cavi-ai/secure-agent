@@ -76,16 +76,19 @@ func (a *API) mutePairs() []MutePair {
 	if a.mutes == nil {
 		return out
 	}
-	for rule, hosts := range a.mutes.Load() {
-		for _, h := range hosts {
-			out = append(out, MutePair{Rule: rule, Host: h})
+	for rule, mutes := range a.mutes.Load() {
+		for _, m := range mutes {
+			out = append(out, MutePair{Rule: rule, Host: m.Host, Agent: m.Agent})
 		}
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Rule != out[j].Rule {
 			return out[i].Rule < out[j].Rule
 		}
-		return out[i].Host < out[j].Host
+		if out[i].Host != out[j].Host {
+			return out[i].Host < out[j].Host
+		}
+		return out[i].Agent < out[j].Agent
 	})
 	return out
 }

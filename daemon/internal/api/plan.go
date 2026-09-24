@@ -337,7 +337,15 @@ func (a *API) planContext(t planTarget, pb playbook.Playbook) []string {
 		add("history: rule %s fired %d times for this agent in the last 7 days, %d in 30 days", t.rule, d7, d30)
 	}
 	if a.mutes != nil {
-		if hosts := a.mutes.Load()[t.rule]; len(hosts) > 0 {
+		var hosts []string
+		for _, m := range a.mutes.Load()[t.rule] {
+			if m.Agent == "" {
+				hosts = append(hosts, m.Host)
+			} else if m.Agent == t.agent {
+				hosts = append(hosts, m.Host+" (agent "+m.Agent+")")
+			}
+		}
+		if len(hosts) > 0 {
 			add("local policy: flags of this rule are muted for %s", strings.Join(hosts, ", "))
 		}
 	}

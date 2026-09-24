@@ -77,8 +77,8 @@ type Correlator struct {
 	// top of the config allowlist. Nil until wired.
 	allowlistOverrides func(agent string) []string
 	// isMuted answers whether a (rule, host) pair has been dispositioned away
-	// by the operator. Nil until wired.
-	isMuted    func(rule, host string) bool
+	// by the operator for agent. Nil until wired.
+	isMuted    func(rule, host, agent string) bool
 	mutedCount int
 	// onUninspected fires once when an endpoint first crosses the suggestion
 	// threshold — the advisor's cue to pre-assess the host before the
@@ -169,9 +169,9 @@ func (c *Correlator) NoteAllowlistAdded(agent, host string) {
 	delete(c.uninspected, agent+"|"+strings.ToLower(host))
 }
 
-// SetMuteChecker wires operator dispositions: muted (rule, host) pairs are
-// counted, not flagged.
-func (c *Correlator) SetMuteChecker(fn func(rule, host string) bool) {
+// SetMuteChecker wires operator dispositions: (rule, host) pairs muted for
+// the flag's agent are counted, not flagged.
+func (c *Correlator) SetMuteChecker(fn func(rule, host, agent string) bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.isMuted = fn
@@ -309,8 +309,8 @@ func (c *Correlator) Observe(e event.Event) []model.Flag {
 			agentName = info.Name
 		}
 		// Operator disposition: muted (rule, host) pairs are counted, not flagged.
-		if c.isMuted != nil && (c.isMuted(ruleName, e.RemoteHost) ||
-			(isLocalhost(e.RemoteHost) && c.isMuted(ruleName, "localhost"))) {
+		if c.isMuted != nil && (c.isMuted(ruleName, e.RemoteHost, agentName) ||
+			(isLocalhost(e.RemoteHost) && c.isMuted(ruleName, "localhost", agentName))) {
 			c.mutedCount++
 			return nil
 		}
@@ -384,7 +384,7 @@ func (c *Correlator) Observe(e event.Event) []model.Flag {
 						if isLocalhost(h) {
 							h = "localhost" // canonical alias: one mute covers the family
 						}
-						if !c.isMuted("sensitive-read-then-connect", h) {
+						if !c.isMuted("sensitive-read-then-connect", h, info.Name) {
 							mutedAll = false
 							break
 						}
@@ -437,7 +437,7 @@ func (c *Correlator) Observe(e event.Event) []model.Flag {
 		// untrusted from eslogger.
 		base := strings.ToLower(filepath.Base(e.ExePath))
 		if base == "security" {
-			if c.isMuted != nil && c.isMuted("keychain-security-cli", "*") {
+			if c.isMuted != nil && c.isMuted("keychain-security-cli", "*", info.Name) {
 				c.mutedCount++
 				return nil
 			}
@@ -527,7 +527,7 @@ func (c *Correlator) Observe(e event.Event) []model.Flag {
 
 		// Operator disposition: a muted (rule, host) pair is counted, not
 		// flagged — the read-then-connect evidence would only repeat it.
-		if c.isMuted != nil && c.isMuted("sensitive-read-then-connect", e.RemoteHost) {
+		if c.isMuted != nil && c.isMuted("sensitive-read-then-connect", e.RemoteHost, info.Name) {
 			c.mutedCount++
 			c.markReadConsumedLocked(rootPID, e.PID)
 			c.markConnConsumedLocked(rootPID, e.PID)
@@ -583,7 +583,7 @@ func (c *Correlator) secretInTranscriptLocked(e event.Event) []model.Flag {
 		return nil
 	}
 	harness, layer, ruleID := parts[0], parts[1], parts[2]
-	if c.isMuted != nil && c.isMuted(rule, "*") {
+	if c.isMuted != nil && c.isMuted(rule, "*", harness) {
 		c.mutedCount++
 		return nil
 	}
@@ -618,7 +618,7 @@ func (c *Correlator) secretInTranscriptLocked(e event.Event) []model.Flag {
 func (c *Correlator) keychainAccessLocked(e event.Event, agent string) []model.Flag {
 	// Operator disposition: a rule-level mute (host "*") silences the
 	// class — counted so the quiet is deliberate, never hidden.
-	if c.isMuted != nil && c.isMuted("keychain-access", "*") {
+	if c.isMuted != nil && c.isMuted("keychain-access", "*", agent) {
 		c.mutedCount++
 		return nil
 	}

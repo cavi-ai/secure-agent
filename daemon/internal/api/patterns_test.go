@@ -174,7 +174,7 @@ func TestPatternSummaryAndActions(t *testing.T) {
 		t.Fatalf("summary/cadence = %q/%q", kc.Summary, kc.Cadence)
 	}
 	mute, dismiss, kill := actionByID(kc.Actions, "mute-class"), actionByID(kc.Actions, "dismiss-all"), actionByID(kc.Actions, "kill")
-	if mute == nil || mute.Body["rule"] != "keychain-access" || mute.Body["host"] != "*" {
+	if mute == nil || mute.Body["rule"] != "keychain-access" || mute.Body["host"] != "*" || mute.Body["agent"] != "codex" || mute.Label != "Mute keychain access for codex" {
 		t.Fatalf("mute = %+v", mute)
 	}
 	if dismiss == nil || dismiss.Path != "/flags/acknowledge" || len(dismiss.Body["flag_ids"].([]string)) != 4 {
@@ -194,6 +194,9 @@ func TestPatternSummaryAndActions(t *testing.T) {
 	allow := actionByID(eg.Actions, "allow-host")
 	if allow == nil || !allow.Recommended || allow.Body["host"] != "api.example.com" || allow.Body["agent"] != "claude" {
 		t.Fatalf("allow-host = %+v, want recommended for a benign-likely egress pattern", allow)
+	}
+	if m := actionByID(eg.Actions, "mute-rule-host"); m == nil || m.Body["agent"] != "claude" || m.Label != "Stop flagging this for api.example.com from claude" {
+		t.Fatalf("mute-rule-host = %+v, want scoped to claude", m)
 	}
 	if actionByID(eg.Actions, "mute-rule-host") == nil || actionByID(eg.Actions, "kill") != nil {
 		t.Fatalf("egress actions = %+v, want mute-rule-host and no kill (pid 9 is not live)", eg.Actions)

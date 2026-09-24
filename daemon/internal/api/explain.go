@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -514,6 +515,69 @@ func validMuteHost(host string) bool {
 	return host != "" && !strings.ContainsAny(host, "/:@") && len(host) <= 253
 }
 
+// muteAgentRE bounds a mute's agent: a configured agent name or an
+// "untagged:<exe>" label ("untagged:claude 2.1.280").
+var muteAgentRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_. :-]{0,127}$`)
+
+// validMuteAgent accepts empty (every agent) or a bounded agent label.
+func validMuteAgent(agent string) bool {
+	return agent == "" || muteAgentRE.MatchString(agent)
+}
+
+// muteClassNoun names a rule class in a mute label ("Mute keychain access
+// for codex").
+var muteClassNoun = map[string]string{
+	"keychain-access":       "keychain access",
+	"keychain-security-cli": "keychain tool runs",
+}
+
+// muteRuleHostAction is the served mute-rule-host request for rule at host.
+// A valid agent scopes the mute to that agent and the label names it;
+// otherwise the mute covers every agent.
+func muteRuleHostAction(rule, title, host, agent string) model.ExplainAction {
+	label, who := "Stop flagging this for "+host, ""
+	body := map[string]any{"rule": rule, "host": host}
+	if agent != "" && validMuteAgent(agent) {
+		label, who = "Stop flagging this for "+host+" from "+agent, " from "+agent
+		body["agent"] = agent
+	}
+	return model.ExplainAction{
+		ID: "mute-rule-host", Label: label,
+		Consequence: "\"" + title + "\" stops being flagged for " + host + who + "; the host stays monitored and its open flags of this rule are marked reviewed.",
+		Method:      http.MethodPost, Path: "/mute",
+		Body: body,
+	}
+}
+
+// muteClassAction is the served mute-class request for a keychain rule;
+// false for any other rule. Agent scoping as muteRuleHostAction.
+func muteClassAction(rule, title, agent string) (model.ExplainAction, bool) {
+	noun := muteClassNoun[rule]
+	if noun == "" {
+		return model.ExplainAction{}, false
+	}
+	label, scope := "Dismiss this flag class", "for every agent"
+	body := map[string]any{"rule": rule, "host": "*"}
+	if agent != "" && validMuteAgent(agent) {
+		label, scope = "Mute "+noun+" for "+agent, "for "+agent+"; other agents still flag"
+		body["agent"] = agent
+	}
+	return model.ExplainAction{
+		ID: "mute-class", Label: label,
+		Consequence: "\"" + title + "\" stops raising flags " + scope + "; monitoring continues and suppressed hits are counted.",
+		Method:      http.MethodPost, Path: "/mute",
+		Body: body,
+	}, true
+}
+
+// muteAgentSuffix is " (agent X)" for an agent-scoped mute, "" otherwise.
+func muteAgentSuffix(agent string) string {
+	if agent == "" {
+		return ""
+	}
+	return " (agent " + agent + ")"
+}
+
 // explainActions lists the actions that apply to f, in a fixed order, each
 // with the exact request that performs it. Recommended marks the one the
 // advisor suggested.
@@ -562,21 +626,11 @@ func (a *API) explainActions(f model.Flag, ex *model.FlagExplain, env *explainEn
 			if !validMuteHost(eg.Host) {
 				continue
 			}
-			acts = append(acts, model.ExplainAction{
-				ID: "mute-rule-host", Label: "Stop flagging this for " + eg.Host,
-				Consequence: "\"" + title + "\" stops being flagged for " + eg.Host + "; the host stays monitored and its open flags of this rule are marked reviewed.",
-				Method:      http.MethodPost, Path: "/mute",
-				Body: map[string]any{"rule": f.Rule, "host": eg.Host},
-			})
+			acts = append(acts, muteRuleHostAction(f.Rule, title, eg.Host, agent))
 			break
 		}
-		if f.Rule == "keychain-access" || f.Rule == "keychain-security-cli" {
-			acts = append(acts, model.ExplainAction{
-				ID: "mute-class", Label: "Dismiss this flag class",
-				Consequence: "\"" + title + "\" stops raising flags; monitoring continues and suppressed hits are counted.",
-				Method:      http.MethodPost, Path: "/mute",
-				Body: map[string]any{"rule": f.Rule, "host": "*"},
-			})
+		if act, ok := muteClassAction(f.Rule, title, agent); ok {
+			acts = append(acts, act)
 		}
 	}
 	if id, ok := a.store.IncidentIDForFlag(f.ID); ok {
