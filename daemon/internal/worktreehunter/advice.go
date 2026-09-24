@@ -53,3 +53,18 @@ func (h *Hunter) AdviceRequest(ctx context.Context, path string) (model.Worktree
 	}
 	return req, nil
 }
+
+// Inspect inspects path now and returns its row and its repository's main
+// worktree path.
+func (h *Hunter) Inspect(ctx context.Context, path string) (Worktree, string, error) {
+	if !filepath.IsAbs(path) {
+		return Worktree{}, "", errors.New("path must be absolute")
+	}
+	h.scanMu.Lock()
+	defer h.scanMu.Unlock()
+	rs, l, err := h.locate(ctx, path)
+	if err != nil {
+		return Worktree{}, "", err
+	}
+	return h.judge(ctx, rs, l), rs.ref.Main, nil
+}

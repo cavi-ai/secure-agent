@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/advisor"
+	"github.com/cavi-ai/secure-agent/daemon/internal/agentask"
 	"github.com/cavi-ai/secure-agent/daemon/internal/agents"
 	"github.com/cavi-ai/secure-agent/daemon/internal/api"
 	"github.com/cavi-ai/secure-agent/daemon/internal/bus"
@@ -197,6 +198,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 
 	hunter := worktreehunter.New(st, "", worktreeOptions(cfg.Worktrees))
 	cleanup := clutter.New(st, "", clutterPlaces(hunter))
+	asker := agentask.New(st, "")
 	apiServer := api.New(api.Deps{
 		SocketPath:            cfg.SocketPath,
 		Store:                 st,
@@ -239,6 +241,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 		Worktrees:       hunter,
 		WorktreeAdvisor: worktreeAdvisor,
 		Clutter:         cleanup,
+		Asker:           asker,
 	})
 
 	resourceControl.SetExecutor(makeResourceExecutor(apiServer, tagger, st))

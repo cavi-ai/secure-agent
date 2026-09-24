@@ -361,6 +361,7 @@ The Go daemon listens on a local Unix domain socket (`~/.config/secure-agent/dae
 | `/cleanup/ledger` | `GET` | What cleanups removed and the bytes each gave back, with all-time and 30-day totals. |
 | `/cleanup` | `GET` | `.tmp` and `.quarantine` folders, build output, tool and app caches: size, last touched, project, how to clear. |
 | `/cleanup/trash`, `/cleanup/clean` | `POST` | Move one item to the Trash, or run a tool cache's own clean command. |
+| `/worktrees/ask` | `POST` | Resume the agent that worked in a keep/review worktree: it opens a PR for its work or says the worktree can go (`GET /worktrees/asks` lists answers). |
 
 ### Example Query
 

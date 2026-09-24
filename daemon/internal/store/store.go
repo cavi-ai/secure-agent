@@ -261,6 +261,7 @@ func Open(dbPath, jsonlPath string) (*Store, error) {
 		`CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status, last_seen_at);`,
 		worktreeReposSchema,
 		cleanupLogSchema,
+		agentAsksSchema,
 	}
 
 	for _, q := range createQueries {

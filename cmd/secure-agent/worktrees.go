@@ -65,6 +65,17 @@ type wtReport struct {
 	Errors    []string  `json:"errors"`
 	// Advice is the local advisor's note per worktree path.
 	Advice map[string]wtNote `json:"advice"`
+	// Asks is the latest request to each worktree's owning agent.
+	Asks map[string]wtAsk `json:"asks"`
+}
+
+type wtAsk struct {
+	TS      time.Time `json:"ts"`
+	Harness string    `json:"harness"`
+	Status  string    `json:"status"`
+	Verdict string    `json:"verdict"`
+	Detail  string    `json:"detail"`
+	CostUSD float64   `json:"cost_usd"`
 }
 
 // wtTotals mirrors the cleanup ledger totals.
@@ -103,6 +114,9 @@ func runWorktrees(w io.Writer, client *http.Client, args []string) error {
 	}
 	if len(args) > 0 && args[0] == "advise" {
 		return runWorktreeAdvise(w, client, args)
+	}
+	if len(args) > 0 && args[0] == "ask" {
+		return runWorktreeAsk(w, client, args)
 	}
 	if len(args) > 0 && (args[0] == "add" || args[0] == "hide") {
 		if len(args) < 2 {
@@ -204,6 +218,50 @@ func runWorktreeRemove(w io.Writer, client *http.Client, args []string) error {
 		}
 		fmt.Fprintln(w)
 	}
+	return nil
+}
+
+// askLine renders an agent ask for the list view.
+func askLine(a wtAsk) string {
+	switch a.Status {
+	case "running":
+		return fmt.Sprintf("asked %s: waiting for its answer", a.Harness)
+	case "answered":
+		if a.Verdict == "none" {
+			return fmt.Sprintf("asked %s: answered without a verdict", a.Harness)
+		}
+		line := fmt.Sprintf("asked %s: %s — %s", a.Harness, a.Verdict, a.Detail)
+		if a.CostUSD > 0 {
+			line += fmt.Sprintf(" ($%.2f)", a.CostUSD)
+		}
+		return line
+	default:
+		return fmt.Sprintf("asked %s: %s — %s", a.Harness, a.Status, a.Detail)
+	}
+}
+
+// runWorktreeAsk resumes the worktree's owning agent with the cleanup request.
+func runWorktreeAsk(w io.Writer, client *http.Client, args []string) error {
+	if len(args) < 2 {
+		return fmt.Errorf("usage: secure-agent worktrees ask <path>")
+	}
+	abs, err := filepath.Abs(args[1])
+	if err != nil {
+		return err
+	}
+	body, _ := json.Marshal(map[string]any{"path": abs})
+	code, resp := request(client, http.MethodPost, "http://unix/worktrees/ask", string(body))
+	switch {
+	case code == http.StatusForbidden:
+		return errWorktreeForbidden("ask")
+	case code != 200:
+		return fmt.Errorf("worktrees ask failed (%d): %s", code, strings.TrimSpace(resp))
+	}
+	var out struct {
+		Ask wtAsk `json:"ask"`
+	}
+	_ = json.Unmarshal([]byte(resp), &out)
+	fmt.Fprintf(w, "asked %s to sort out %s; its answer shows under the row in `secure-agent worktrees`\n", out.Ask.Harness, abs)
 	return nil
 }
 
@@ -319,6 +377,9 @@ func formatWorktrees(rep wtReport, f wtFilter, home string) string {
 			}
 			if n, ok := rep.Advice[r.Path]; ok {
 				fmt.Fprintf(&b, "          advisor: %s (%.0f%%) — %s\n", n.Assessment, n.Confidence*100, n.Rationale)
+			}
+			if a, ok := rep.Asks[r.Path]; ok {
+				fmt.Fprintf(&b, "          %s\n", askLine(a))
 			}
 		}
 	}

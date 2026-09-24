@@ -7,6 +7,10 @@ All notable changes to `secure-agent` are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- `POST /worktrees/ask`: resumes the Claude Code or Codex session that worked in a keep or review worktree with a fixed request — open a pull request for work worth keeping, or say the worktree can go; `--fork-session`, $1.00 cap (Claude Code), 15-minute bound, own process group, one at a time.
+- Agent answers (`pr`, `removable`, `keep`) are recorded in `agent_asks`, the audit trail and the cleanup ledger; `GET /worktrees/asks`; `/worktrees` carries each worktree's newest ask.
+- `secure-agent worktrees ask <path>`; console Ask the agent on keep and review rows, with the answer under the row.
+- Tool clean commands and agent asks run in their own process group: a timeout stops everything they started.
 - `GET /cleanup`: `.tmp` and `.quarantine` directories in and around repositories, build output inside repositories, developer tool caches and per-app caches, each with size, last touched, project and how to clear it.
 - `POST /cleanup/trash` moves one inventory item to the Trash on its volume; `POST /cleanup/clean` runs a tool cache's own clean command; both re-check the inventory and skip places with a live agent session.
 - Items inside a repository are offered for the Trash only when git ignores them and they hold no tracked files.

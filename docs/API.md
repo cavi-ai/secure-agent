@@ -752,6 +752,12 @@ Removes one worktree, or prunes a repository's entries for worktrees whose direc
 
 Remove measures the worktree (a fresh walk) and inspects it again at request time and runs `git worktree remove` (never `--force`) only when that fresh verdict is `remove`; git still refuses a tree that turned dirty in between. The branch and its commits stay. Prune runs `git worktree prune` when the repository lists at least one unlocked worktree whose directory is gone. Both write an audit row and a cleanup ledger row (`worktree-remove` with the bytes measured before removal; `worktree-prune` with 0) and drop the cached scan.
 
+#### `POST /worktrees/ask` and `GET /worktrees/asks`
+
+`{"path": "<keep or review worktree>"}` resumes the newest Claude Code or Codex session recorded in that worktree (hook or transcript identity; its id is the harness's own) and sends it a fixed request: open a pull request for work worth keeping (`WORKTREE-VERDICT: pr <url>`), or say the worktree can go (`removable <reason>`) or must stay (`keep <reason>`), and never delete the worktree itself. Claude Code runs as `claude --resume <id> --fork-session -p <request> --output-format json --max-budget-usd 1.00`; Codex as `codex exec resume <id> <request> --skip-git-repo-check -o <file>`. Both run in the worktree with the user's own agent settings and hooks, in their own process group, bounded at 15 minutes; one ask runs at a time. The request carries the checker's state and reasons; nothing else from the repository.
+
+`200 {"status":"ok","ask":{"id","ts","path","repo","harness","session_id","status":"running"}}`; `400` bad path; `404` not a linked worktree, or no resumable session recorded in it; `409` the worktree is not `keep` or `review`, or another ask is running; `503` asking is not wired or the CLI is not installed. The answer lands in the `agent_asks` table (`status`: `answered`, `failed`, `timeout`; `verdict`: `pr`, `removable`, `keep`, `none`; `detail`; `cost_usd` for Claude Code; `output`, the reply's last lines), an audit row `worktree-ask` and a ledger row `ask:<verdict>`. `GET /worktrees/asks?limit=N` lists asks newest first; `GET /worktrees` carries each worktree's newest ask in `asks`, keyed by path. The answer is displayed only; it never changes `state` or what `POST /worktrees/remove` accepts. Mutation, NoAgent. CLI: `secure-agent worktrees ask <path>`; the list view prints the answer under its row.
+
 #### `GET /cleanup`
 
 Everything besides worktrees that can be cleared, each with its size, last touched time and project:
