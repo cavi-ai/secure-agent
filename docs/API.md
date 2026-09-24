@@ -584,7 +584,7 @@ The latest plan headroom per harness home, read from Codex `token_count` lines o
 | Field | Meaning |
 |---|---|
 | `home` | `codex` for a `.codex` home, `<name> (openclaw)` for `…/.openclaw/agents/<name>/agent/codex-home`, else the home's directory name |
-| `windows` | the primary window, then the secondary when reported; `resets_at` RFC3339 |
+| `windows` | the primary window, then the secondary when reported; `resets_at` RFC3339, `""` when not reported |
 | `unlimited` | `rate_limits.credits.unlimited` |
 | `seen_at` | timestamp of the line that carried the snapshot; the newest per home is kept |
 

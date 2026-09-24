@@ -277,6 +277,20 @@ func TestCodexTracePlanLoginBillsChatGPT(t *testing.T) {
 	if c := Classify("gpt-5.6-sol", "chatgpt"); c != ClassPlan {
 		t.Fatalf(`Classify("gpt-5.6-sol","chatgpt") = %q, want plan`, c)
 	}
+
+	// A window with no resets_at serves "" (never the epoch); info null
+	// (a rate-limits-only line) still records the snapshot.
+	agent := NewCodexTracer("/Volumes/x/.openclaw/agents/scout/agent/codex-home/sessions/2026/09/24/rollout-s.jsonl")
+	agent.ParseLine(`{"timestamp":"2026-09-24T11:00:00.000Z","type":"event_msg","payload":{"type":"token_count","info":null,` +
+		`"rate_limits":{"plan_type":"plus","limit_id":"codex","primary":{"used_percent":3,"window_minutes":300},"secondary":null}}}`)
+	for _, p := range Plans() {
+		if p.Home == "scout (openclaw)" && (p.PlanType != "plus" || len(p.Windows) != 1 || p.Windows[0].ResetsAt != "" || p.Windows[0].WindowMinutes != 300) {
+			t.Fatalf("scout snapshot = %+v", p)
+		}
+	}
+	if !slices.ContainsFunc(Plans(), func(p PlanSnapshot) bool { return p.Home == "scout (openclaw)" }) {
+		t.Fatalf("no scout snapshot: %+v", Plans())
+	}
 }
 
 func TestCodexHomeLabel(t *testing.T) {

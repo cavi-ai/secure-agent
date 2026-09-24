@@ -297,10 +297,11 @@ func (t *CodexTracer) notePlan(raw json.RawMessage, ts time.Time) bool {
 		if w == nil {
 			continue
 		}
-		snap.Windows = append(snap.Windows, PlanWindow{
-			WindowMinutes: int(w.WindowMinutes), UsedPercent: w.UsedPercent,
-			ResetsAt: time.Unix(int64(w.ResetsAt), 0).UTC().Format(time.RFC3339),
-		})
+		pw := PlanWindow{WindowMinutes: int(w.WindowMinutes), UsedPercent: w.UsedPercent}
+		if w.ResetsAt > 0 {
+			pw.ResetsAt = time.Unix(int64(w.ResetsAt), 0).UTC().Format(time.RFC3339)
+		}
+		snap.Windows = append(snap.Windows, pw)
 	}
 	if rl.Credits != nil {
 		snap.Unlimited = rl.Credits.Unlimited

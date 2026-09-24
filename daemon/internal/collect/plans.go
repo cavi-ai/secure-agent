@@ -13,7 +13,7 @@ import (
 type PlanWindow struct {
 	WindowMinutes int     `json:"window_minutes"`
 	UsedPercent   float64 `json:"used_percent"`
-	ResetsAt      string  `json:"resets_at"` // RFC3339
+	ResetsAt      string  `json:"resets_at"` // RFC3339; "" when not reported
 }
 
 // PlanSnapshot is the latest plan headroom one harness home reported.
