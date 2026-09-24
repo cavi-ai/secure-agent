@@ -7,6 +7,9 @@ All notable changes to `secure-agent` are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- `GET /mute` rows carry `title`, the rule's human title.
+- Menu bar: the top unacted finding shows under the hero with its served title, explanation and disposition.
+- Menu bar: the finding's recommended allow host, allow path, mute or dismiss action runs from the popover.
 - `POST /worktrees/advise`: queues a worktree for a local-advisor note (`remove`, `review` or `keep` with a rationale); branch names, paths and commit subjects go to the model inside `<evidence>`.
 - `GET /worktrees` `advice`: the stored note per worktree path at its current HEAD; notes never change the state or what `POST /worktrees/remove` accepts.
 - `secure-agent worktrees advise <path>`; the list view prints the note under its row.
@@ -100,6 +103,10 @@ All notable changes to `secure-agent` are documented here. The format follows
   per (path, rule) are collapsed.
 
 ### Changed
+- Menu bar hero: state, color and subtitle come from `/posture`.
+- Menu bar: flags refetch only on `flag`, `posture`, `guard-prompt` and `guard-resolved` stream frames.
+- Menu bar: an identical flags refetch leaves the popover unchanged.
+- Menu bar: notification and mute-list titles come from the daemon.
 - Console Overview: Memory by session is Memory by family — one bar per live process family, its RSS counted once, `N sessions` in the label.
 - Console Overview: the Memory by family badge counts agent families, not infra.
 - Events carry a `(session_id, kind, id)` index; the event store writes planner statistics (`PRAGMA optimize`, `analysis_limit` 1000) at open and after each prune.
@@ -137,6 +144,9 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Console: the drawer's Copy button stays hidden outside incident reports.
 - Advisor host pre-assessment skips vendor-class hosts as well as CDN carriers.
 - Advisor host pre-assessment still covers cloud, telemetry and unknown hosts.
+
+### Removed
+- Menu bar: the unused flag action, incident detail and process detail sheets.
 
 ### Fixed
 - Posture and `/doctor` report "File monitoring writer is flooding" only while the spool is still being written (within 2 min); garbage left by a removed writer no longer masks the service state. A spool whose service is not loaded shows "File monitoring is off" with the steps to enable it.

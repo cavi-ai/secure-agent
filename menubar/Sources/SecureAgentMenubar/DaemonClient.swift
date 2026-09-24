@@ -9,6 +9,8 @@ public enum DaemonClientError: Error, Equatable {
     case transport(String)
     case http(Int)
     case decode(String)
+    /// A served action whose method or path cannot go on the request line.
+    case invalidAction(String)
 }
 
 /// Human-readable failure reasons. Without this, every daemon error surfaced
@@ -26,6 +28,8 @@ extension DaemonClientError: LocalizedError {
             return "daemon answered HTTP \(code)"
         case .decode(let detail):
             return "daemon answered unexpectedly (\(detail))"
+        case .invalidAction(let detail):
+            return "action not sent (\(detail))"
         }
     }
 }
@@ -64,8 +68,9 @@ public protocol DaemonClientProtocol: Sendable {
     /// POST /mute — suppress one rule+host pair (noise control; monitoring
     /// of the host continues).
     func muteAdd(rule: String, host: String) async throws
-    /// GET /mute — persisted dispositions (the "ignore" ledger).
-    func fetchMutes() async throws -> [(rule: String, host: String)]
+    /// GET /mute — persisted dispositions (the "ignore" ledger); title is
+    /// the daemon's rule title.
+    func fetchMutes() async throws -> [(rule: String, host: String, title: String?)]
     /// DELETE /mute — remove one disposition.
     func muteRemove(rule: String, host: String) async throws
     /// GET /notify/rules — notification policy: default severity bar +
@@ -80,6 +85,9 @@ public protocol DaemonClientProtocol: Sendable {
     func fetchGuardPathAllows() async throws -> [GuardPathAllowModel]
     func deleteGuardPathAllow(agent: String, ruleID: String, path: String) async throws
     func streamEvents(onEvent: @escaping @Sendable (SSEFrame) -> Void) async throws
+    /// Send one served flag action (`explain.actions[]`) exactly as served:
+    /// its method, path and JSON body.
+    func perform(_ action: FlagExplainAction) async throws
 }
 
 extension DaemonClient: DaemonClientProtocol {}
@@ -253,12 +261,33 @@ public final class DaemonClient: Sendable {
         _ = try await request(method: "DELETE", path: pathQ)
     }
 
-    public func fetchMutes() async throws -> [(rule: String, host: String)] {
+    public func fetchMutes() async throws -> [(rule: String, host: String, title: String?)] {
         let data = try await request(method: "GET", path: "/mute")
         guard let arr = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return [] }
         return arr.compactMap { d in
             guard let rule = d["rule"] as? String, let host = d["host"] as? String else { return nil }
-            return (rule, host)
+            return (rule, host, d["title"] as? String)
+        }
+    }
+
+    public func perform(_ action: FlagExplainAction) async throws {
+        try Self.validate(action)
+        let body = try action.body.map { try JSONEncoder().encode($0) }
+        _ = try await request(method: action.method, path: action.path, body: body)
+    }
+
+    /// The served method and path go on a hand-written request line: only
+    /// the four HTTP verbs the API uses, and an absolute path with no space
+    /// or control character.
+    static func validate(_ action: FlagExplainAction) throws {
+        guard ["GET", "POST", "DELETE", "PUT"].contains(action.method) else {
+            throw DaemonClientError.invalidAction("method \(action.method)")
+        }
+        let badPath = action.path.unicodeScalars.contains {
+            $0.value <= 0x20 || $0.value == 0x7F || !$0.isASCII
+        }
+        guard action.path.hasPrefix("/"), !badPath else {
+            throw DaemonClientError.invalidAction("path")
         }
     }
 

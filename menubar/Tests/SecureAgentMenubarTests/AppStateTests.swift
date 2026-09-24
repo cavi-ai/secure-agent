@@ -17,11 +17,14 @@ final class StubDaemonClient: DaemonClientProtocol, @unchecked Sendable {
         return status
     }
     func fetchResources() async throws -> ResourceSnapshotModel { resources }
-    func fetchFlags(limit: Int) async throws -> [FlagModel] { flags }
-    func fetchIncidents(limit: Int) async throws -> [IncidentReportModel] { [] }
-    func fetchPosture() async throws -> PostureModel {
-        PostureModel(state: "all-clear", needsYou: 0, summary: "", connected: true)
+    var fetchFlagsCalls = 0
+    func fetchFlags(limit: Int) async throws -> [FlagModel] {
+        fetchFlagsCalls += 1
+        return flags
     }
+    func fetchIncidents(limit: Int) async throws -> [IncidentReportModel] { [] }
+    var posture = PostureModel(state: "all-clear", needsYou: 0, summary: "", connected: true)
+    func fetchPosture() async throws -> PostureModel { posture }
     func fetchIncidentMarkdown(id: String) async throws -> String { "" }
     func fetchEvents(limit: Int) async throws -> [EventModel] { [] }
     func fetchEventsFor(pid: Int32, limit: Int) async throws -> [EventModel] { [] }
@@ -33,7 +36,7 @@ final class StubDaemonClient: DaemonClientProtocol, @unchecked Sendable {
     func fetchGuardPathAllows() async throws -> [GuardPathAllowModel] { [] }
     func deleteGuardPathAllow(agent: String, ruleID: String, path: String) async throws { }
     func muteAdd(rule: String, host: String) async throws { }
-    func fetchMutes() async throws -> [(rule: String, host: String)] { [] }
+    func fetchMutes() async throws -> [(rule: String, host: String, title: String?)] { [] }
     func muteRemove(rule: String, host: String) async throws { }
     var notifyRules = NotifyRulesResponse.fallback
     var setNotifyRuleCalls: [(rule: String, notify: Bool?)] = []
@@ -58,6 +61,12 @@ final class StubDaemonClient: DaemonClientProtocol, @unchecked Sendable {
     func fetchAudit(limit: Int) async throws -> [AuditEntryModel] { [] }
     func streamEvents(onEvent: @escaping @Sendable (SSEFrame) -> Void) async throws {
         try await Task.sleep(nanoseconds: 60_000_000_000) // tests don't drive SSE
+    }
+    var performed: [FlagExplainAction] = []
+    var performError: Error?
+    func perform(_ action: FlagExplainAction) async throws {
+        if let performError { throw performError }
+        performed.append(action)
     }
 }
 
@@ -345,14 +354,6 @@ func testWorkspaceScopeBeatsRuleOverrideAndDefault() async {
         XCTAssertEqual(state.unactedFlags.map(\.id), ["warn"])
     }
 
-    func testMuteHostFallsBackToWildcardForHostlessEvidence() {
-        let keychainEv: [EvidenceItemModel] = [.legacy("codex (pid 901) accessed keychain file /Users/x/Library/Keychains/login.keychain-db at 2026-09-15T10:00:00Z")]
-        XCTAssertEqual(FlagActionSheet.muteHost(evidence: keychainEv), "*")
-        let connEv: [EvidenceItemModel] = [.legacy("cursor (pid 7) read /a at 2026-09-11T12:00:00Z"),
-                      .legacy("then connected to api.example.com:443 at 2026-09-11T12:00:01Z")]
-        XCTAssertEqual(FlagActionSheet.muteHost(evidence: connEv), "api.example.com")
-    }
-
     func testTransportErrorClearsAllDaemonState() async {
         let stub = StubDaemonClient()
         stub.flags = [flag("f1")]
@@ -591,73 +592,6 @@ final class WeeklyDigestTests: XCTestCase {
                        "3 flags · 1 blocked leak · 2 allowlist approvals · 0 open incidents")
         XCTAssertEqual(AppState.weeklyDigestText(flags7d: 1, blockedLeaks: 2, approvals: 1, openIncidents: 1),
                        "1 flag · 2 blocked leaks · 1 allowlist approval · 1 open incident")
-    }
-}
-
-
-// MARK: - Incident evidence parsing (Little-Snitch dispositions depend on it)
-
-final class IncidentEvidenceParsingTests: XCTestCase {
-    func testFilePathOnlyExtractsPathFromProse() {
-        XCTAssertEqual(
-            IncidentDetailView.filePathOnly(from: "claude (pid 123) read /Users/x/.ssh/id_ed25519 at 2026-09-11T12:00:00Z"),
-            "/Users/x/.ssh/id_ed25519")
-    }
-
-    func testFilePathOnlyPassesThroughNonProse() {
-        XCTAssertEqual(IncidentDetailView.filePathOnly(from: "/a/b"), "/a/b")
-    }
-
-    func testConnHostPortExtractsFromProse() {
-        XCTAssertEqual(
-            IncidentDetailView.connHostPort(from: "then connected to api.anthropic.com:443 at 2026-09-11T12:00:01Z"),
-            "api.anthropic.com:443")
-    }
-
-    func testHostFromHostPort() {
-        XCTAssertEqual(IncidentDetailView.host(from: "api.anthropic.com:443"), "api.anthropic.com")
-        XCTAssertEqual(IncidentDetailView.host(from: "[::1]:443"), "::1")
-        // Bare IPv6 (no port) returned as-is — never split at the wrong colon.
-        XCTAssertEqual(IncidentDetailView.host(from: "2606:4700::ac40"), "2606:4700::ac40")
-    }
-
-    func testHostFromProseConnection() {
-        XCTAssertEqual(
-            IncidentDetailView.host(from: IncidentDetailView.connHostPort(
-                from: "then connected to 160.79.104.10:443 at 2026-09-11T12:00:01Z")),
-            "160.79.104.10")
-    }
-}
-
-
-// MARK: - Flag action sheet (actionable criticals)
-
-final class FlagActionSheetTests: XCTestCase {
-    func testHumanTitleMapsRules() {
-        XCTAssertEqual(FlagActionSheet.humanTitle("sensitive-read-then-connect"), "Agent read a secret, then connected out")
-        XCTAssertEqual(FlagActionSheet.humanTitle("unknown-rule"), "unknown-rule")
-    }
-
-    func testHostFromEvidence() {
-        XCTAssertEqual(
-            FlagActionSheet.hostIn(evidence: [
-                .legacy("cursor (pid 9) read /Users/x/.env at 2026-09-11T12:00:00Z"),
-                .legacy("then connected to api.example.com:443 at 2026-09-11T12:00:01Z"),
-            ]),
-            "api.example.com")
-        XCTAssertNil(FlagActionSheet.hostIn(evidence: [.legacy("no connections here")]))
-    }
-
-    func testHostFromHostPortIPv6() {
-        XCTAssertEqual(FlagActionSheet.hostFromHostPort("[2606:4700::1]:443"), "2606:4700::1")
-        XCTAssertEqual(FlagActionSheet.hostFromHostPort("160.79.104.10:443"), "160.79.104.10")
-    }
-
-    func testTimestampInExtractsEvidenceTime() {
-        XCTAssertEqual(
-            FlagActionSheet.timestampIn(.legacy("claude read /a at 2026-09-11T12:00:05Z")),
-            "2026-09-11T12:00:05Z")
-        XCTAssertEqual(FlagActionSheet.timestampIn(.legacy("no time here")), "")
     }
 }
 
@@ -966,36 +900,6 @@ final class DisabledAgentsTests: XCTestCase {
         let out = SetupManager.setDisabledAgents(yaml, disabled: [])
         XCTAssertFalse(out.contains("disabled_agents"))
         XCTAssertTrue(out.contains("other: 1"))
-    }
-}
-
-
-// MARK: - Advisor → action mapping (suggested_action must become a button)
-
-@MainActor
-final class AdvisorActionMappingTests: XCTestCase {
-    private let flag = FlagModel(id: "f1", rule: "sensitive-read-then-connect",
-                                 severity: 3, ts: "", pid: 7, agent: "cursor", evidence: [])
-
-    func testAllowHostMapsWhenHostPresent() {
-        let m = FlagActionSheet.mappedAction("allow-host", flag: flag, evidenceHost: "api.example.com")
-        XCTAssertEqual(m?.kind, "allow-host")
-        XCTAssertTrue(m!.title.contains("api.example.com"))
-    }
-
-    func testAllowHostNilWithoutHost() {
-        XCTAssertNil(FlagActionSheet.mappedAction("allow-host", flag: flag, evidenceHost: nil))
-    }
-
-    func testAllFourActionsMap() {
-        XCTAssertEqual(FlagActionSheet.mappedAction("mute-rule", flag: flag, evidenceHost: nil)?.kind, "mute-rule")
-        XCTAssertEqual(FlagActionSheet.mappedAction("rotate-credentials", flag: flag, evidenceHost: nil)?.kind, "rotate")
-        XCTAssertEqual(FlagActionSheet.mappedAction("kill-agent", flag: flag, evidenceHost: nil)?.kind, "kill")
-    }
-
-    func testUnknownActionMapsToNothing() {
-        XCTAssertNil(FlagActionSheet.mappedAction("do-something-random", flag: flag, evidenceHost: nil))
-        XCTAssertNil(FlagActionSheet.mappedAction(nil, flag: flag, evidenceHost: nil))
     }
 }
 

@@ -988,6 +988,10 @@ old rows leave the critical list. This is the recourse for noisy host-less
 rules (`keychain-access`, `keychain-security-cli`) — the console and menu bar
 expose it as "Dismiss this flag class". Reversible with `DELETE /mute`.
 
+`GET /mute` lists dispositions as `[{"rule", "host", "title"}]`, sorted by
+rule then host; `title` is the rule's human title (the rule id when it has
+none). `POST /mute` takes `{"rule", "host"}` only.
+
 ---
 
 ## 📥 Reference collector (`cmd/secure-agent-collector`)
