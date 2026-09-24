@@ -150,6 +150,8 @@ directory_guard:
 
 Each entry pins a directory subtree to specific rule modes; rules not listed fall back to the global override file, then shipped defaults.
 
+The daemon writes these entries at every start to `guard-cwd-overrides.json` in the directory of `socket_path` (default `~/.config/secure-agent/guard-cwd-overrides.json`, the path the hook reads). A daemon run with a socket elsewhere writes its own copy beside that socket and leaves the default file untouched.
+
 ### `fleet` (Map)
 
 Downstream webhook delivery for fleet oversight:

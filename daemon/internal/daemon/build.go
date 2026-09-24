@@ -64,6 +64,14 @@ type Components struct {
 	shutdownOnce sync.Once
 }
 
+// writeCwdOverrides serializes per-project guard policies for the stdlib-only
+// hook to read, beside this daemon's socket.
+func writeCwdOverrides(cfg config.Config) {
+	if err := config.WriteCwdOverrides(config.CwdOverridesPath(cfg), cfg.DirectoryGuard.CwdOverrides); err != nil {
+		log.Printf("failed to write guard cwd overrides: %v", err)
+	}
+}
+
 // Build resolves and wires every component from cfg, starting the collectors
 // and servers. Returns a Components the caller shuts down. On failure it tears
 // down whatever it had already built before returning the error.
@@ -71,10 +79,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 	ctx, cancel := context.WithCancel(parent)
 	c := &Components{cfg: cfg, cancel: cancel}
 
-	// Serialize per-project guard policies for the stdlib-only hook to read.
-	if err := config.WriteCwdOverrides(config.DefaultCwdOverridesPath(), cfg.DirectoryGuard.CwdOverrides); err != nil {
-		log.Printf("failed to write guard cwd overrides: %v", err)
-	}
+	writeCwdOverrides(cfg)
 
 	st, err := store.Open(cfg.DBPath, cfg.JSONLPath)
 	if err != nil {
