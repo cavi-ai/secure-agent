@@ -930,3 +930,39 @@ func TestIncidentIDForFlag(t *testing.T) {
 		}
 	}
 }
+
+func TestReattributeFlagsRelabelsUntaggedRowsForPIDInWindow(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(filepath.Join(dir, "e.db"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	now := time.Now().UTC()
+	since := now.Add(-time.Hour)
+	put := func(id string, pid int32, agent string, ts time.Time) {
+		s.PutFlag(model.Flag{ID: id, Rule: "keychain-access", Severity: 3, TS: ts, PID: pid, Agent: agent})
+	}
+	put("in-1", 42, "untagged:node", now.Add(-5*time.Minute))
+	put("in-2", 42, "untagged:claude 2.1.280", now.Add(-30*time.Minute))
+	put("old", 42, "untagged:node", now.Add(-2*time.Hour))
+	put("other-pid", 43, "untagged:node", now.Add(-5*time.Minute))
+	put("tagged", 42, "codex", now.Add(-5*time.Minute))
+
+	if n := s.ReattributeFlags(42, "claude", since); n != 2 {
+		t.Fatalf("ReattributeFlags = %d, want 2", n)
+	}
+	want := map[string]string{
+		"in-1": "claude", "in-2": "claude",
+		"old": "untagged:node", "other-pid": "untagged:node", "tagged": "codex",
+	}
+	for id, agent := range want {
+		fl, ok := s.GetFlag(id)
+		if !ok || fl.Agent != agent {
+			t.Errorf("flag %s agent = %q (found %v), want %q", id, fl.Agent, ok, agent)
+		}
+	}
+	if n := s.ReattributeFlags(42, "claude", since); n != 0 {
+		t.Fatalf("second ReattributeFlags = %d, want 0", n)
+	}
+}

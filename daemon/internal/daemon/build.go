@@ -110,6 +110,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 	// initial load and reconciliation only.
 	deltaHub := api.NewDeltaHub()
 	c.deltaHub = deltaHub
+	tagger.SetOnTagged(reattributeUntaggedFlags(st, deltaHub, time.Now))
 	// postureHook is armed once the API server exists (it owns posture).
 	postureHook := &postureHookHolder{}
 

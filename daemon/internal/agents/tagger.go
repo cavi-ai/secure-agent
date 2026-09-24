@@ -51,6 +51,9 @@ type Tagger struct {
 	cache  map[int32]AgentInfo
 	tagged map[int32]bool
 	now    func() time.Time
+	// onTagged is told, after Refresh releases mu, about each pid that
+	// Refresh tagged which was not tagged before the call.
+	onTagged func(pid int32, info AgentInfo)
 }
 
 func New(cfg config.Config, ps ProcSource) *Tagger {
@@ -95,9 +98,30 @@ func (t *Tagger) isCandidateLocked(pid int32) bool {
 	return false
 }
 
+// SetOnTagged registers fn to hear about pids Refresh newly tags. fn runs
+// after Refresh releases the tagger lock, so it may call back into the tagger.
+func (t *Tagger) SetOnTagged(fn func(pid int32, info AgentInfo)) {
+	t.mu.Lock()
+	t.onTagged = fn
+	t.mu.Unlock()
+}
+
 func (t *Tagger) Refresh() {
 	t.mu.Lock()
-	defer t.mu.Unlock()
+	newly := t.refreshLocked()
+	fn := t.onTagged
+	t.mu.Unlock()
+	if fn == nil {
+		return
+	}
+	for _, info := range newly {
+		fn(info.PID, info)
+	}
+}
+
+// refreshLocked rebuilds the process table and tags candidates, returning the
+// pids it tagged that were not tagged when it started. Callers hold t.mu.
+func (t *Tagger) refreshLocked() []AgentInfo {
 	sampledAt := t.now()
 
 	procs := t.ps.List()
@@ -160,11 +184,16 @@ func (t *Tagger) Refresh() {
 	}
 
 	// Pre-populate tagging for candidate process trees without discarding existing positively tagged agent cache
+	var newly []AgentInfo
 	for pid := range t.table {
 		if t.isCandidateLocked(pid) {
-			t.tagLocked(pid)
+			wasTagged := t.tagged[pid]
+			if info, ok := t.tagLocked(pid); ok && !wasTagged {
+				newly = append(newly, info)
+			}
 		}
 	}
+	return newly
 }
 
 func (t *Tagger) Tag(pid int32) (AgentInfo, bool) {

@@ -870,6 +870,23 @@ func (s *Store) AcknowledgeFlags(ids []string) int {
 	return n
 }
 
+// ReattributeFlags relabels pid's "untagged:" flags stamped at or after since
+// to agent, once the tagger has caught up with the process. Returns how many
+// rows changed.
+func (s *Store) ReattributeFlags(pid int32, agent string, since time.Time) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	res, err := s.db.Exec(
+		`UPDATE flags SET agent = ? WHERE pid = ? AND agent LIKE 'untagged:%' AND datetime(ts) >= datetime(?)`,
+		agent, pid, since.UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		log.Printf("store: reattribute flags error: %v", err)
+		return 0
+	}
+	n, _ := res.RowsAffected()
+	return int(n)
+}
+
 func (s *Store) GetFlag(id string) (model.Flag, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
