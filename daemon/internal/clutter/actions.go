@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -144,6 +145,15 @@ func (c *Clutter) moveToTrash(path string) (string, error) {
 	}
 	if err := os.Rename(path, dest); err != nil {
 		return "", fmt.Errorf("move to Trash: %w", err)
+	}
+	if c.goos != "darwin" {
+		// freedesktop Trash: a .trashinfo beside files/ lets the desktop
+		// show the item's origin and restore it.
+		info := filepath.Join(filepath.Dir(dir), "info", filepath.Base(dest)+".trashinfo")
+		body := "[Trash Info]\nPath=" + (&url.URL{Path: path}).EscapedPath() + "\nDeletionDate=" + c.now().Format("2006-01-02T15:04:05") + "\n"
+		if err := os.MkdirAll(filepath.Dir(info), 0o700); err == nil {
+			_ = os.WriteFile(info, []byte(body), 0o600)
+		}
 	}
 	return dest, nil
 }

@@ -261,3 +261,22 @@ func TestLivePlacesPicksTheDeepestPlace(t *testing.T) {
 		t.Fatalf("live = %v", live)
 	}
 }
+
+func TestTrashOnLinuxWritesTrashInfo(t *testing.T) {
+	m := newMachine(t)
+	t.Setenv("PATH", "/usr/bin:/bin")
+	c := m.clutter(&memStore{})
+	c.goos = "linux"
+	target := filepath.Join(m.repo, ".tmp")
+	res, err := c.Trash(context.Background(), target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.TrashAt != filepath.Join(m.home, ".local", "share", "Trash", "files", ".tmp") {
+		t.Fatalf("trash path = %s", res.TrashAt)
+	}
+	info, err := os.ReadFile(filepath.Join(m.home, ".local", "share", "Trash", "info", ".tmp.trashinfo"))
+	if err != nil || !strings.Contains(string(info), "Path="+target+"\n") || !strings.HasPrefix(string(info), "[Trash Info]\n") {
+		t.Fatalf("trashinfo = %q, %v", info, err)
+	}
+}
