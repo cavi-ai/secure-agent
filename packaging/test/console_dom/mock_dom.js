@@ -423,6 +423,8 @@
         { key: 'infra-tools', harness: 'opencode', calls: 7, sessions: 1, tokens_in: 120000, tokens_out: 7000, cost_usd: 3.2, unpriced_calls: 0 }
       ]
     },
+    // /costs/plans: no plan headroom reported (plansdemo fills it).
+    '/costs/plans': { plans: [] },
     // /costs keyed by the query's `by` (the fetch stub below): the Spend
     // card's provider and day views.
     '/costs?by=provider': {
@@ -1168,6 +1170,14 @@
   // the card shows its empty state.
   if (location.search.includes('nocostsdemo')) {
     data['/costs'] = { ...data['/costs'], total: { key: '', calls: 0, sessions: 0, tokens_in: 0, tokens_out: 0, cost_usd: 0, unpriced_calls: 0 }, rows: [] };
+  }
+  // plansdemo: /costs/plans reports a Codex Pro weekly window and the 24h
+  // total counts plan calls — the Spend card heads its rows with the plan
+  // line and bar; the stat strip says how many calls ran on plans.
+  if (location.search.includes('plansdemo')) {
+    data['/costs/plans'] = { plans: [{ harness: 'codex', home: 'codex', plan_type: 'pro', limit_id: 'codex',
+      windows: [{ window_minutes: 10080, used_percent: 52, resets_at: iso(-3 * 24 * 3600000) }], unlimited: false, seen_at: iso(0) }] };
+    data['/costs'] = { ...data['/costs'], total: { ...data['/costs'].total, plan_calls: 12 } };
   }
   // memfamilydemo: three claude sessions share root 5821 — Memory by family
   // shows one bar for that family with its session count, and the badge

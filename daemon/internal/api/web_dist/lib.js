@@ -87,6 +87,14 @@ function fmtTime(d) {
   return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
 
+// fmtDayClock: deterministic local "Fri 3:10 PM", built by hand like
+// fmtTime.
+function fmtDayClock(d) {
+  const h = d.getHours() % 12 || 12;
+  const m = String(d.getMinutes()).padStart(2, '0');
+  return `${['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d.getDay()]} ${h}:${m} ${d.getHours() < 12 ? 'AM' : 'PM'}`;
+}
+
 // eventTime: an Events row's time — HH:MM:SS for today, "Mon DD HH:MM" for
 // any other day (local time), so an old row never reads as today's.
 const EVENT_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];

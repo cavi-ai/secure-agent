@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/apiroutes"
+	"github.com/cavi-ai/secure-agent/daemon/internal/collect"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
@@ -107,8 +108,8 @@ func TestCostsClassifyUnpricedCalls(t *testing.T) {
 	var byModel store.CostReport
 	get("/costs?by=model", &byModel)
 	tot := byModel.Total
-	if tot.Unpriced != 5 || tot.UnknownModel != 1 || tot.UnpricedModel != 1 || tot.Plan != 2 || tot.Local != 1 {
-		t.Fatalf("total = %+v, want unpriced 5 = unknown 1 + unpriced-model 1 + plan 2 + local 1", tot)
+	if tot.Unpriced != 2 || tot.UnknownModel != 1 || tot.UnpricedModel != 1 || tot.Plan != 2 || tot.Local != 1 {
+		t.Fatalf("total = %+v, want unpriced 2 = unknown 1 + unpriced-model 1, plan 2, local 1", tot)
 	}
 	rows := map[string]store.CostRow{}
 	for _, r := range byModel.Rows {
@@ -125,7 +126,7 @@ func TestCostsClassifyUnpricedCalls(t *testing.T) {
 			t.Errorf("row %s = provider %q class %q, want %q %q", key, r.Provider, r.Class, want[0], want[1])
 		}
 	}
-	if r := rows["k3"]; r.Plan != 2 || r.Unpriced != 2 {
+	if r := rows["k3"]; r.Plan != 2 || r.Unpriced != 0 {
 		t.Errorf("k3 row counters = %+v", r)
 	}
 
@@ -241,5 +242,91 @@ func TestCostsByProvider(t *testing.T) {
 	}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("by=provider rows =\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+// unpriced_calls counts only the calls a price entry could fix (unknown-model
+// and unpriced-model); plan and local calls sit in their own counters, rows
+// and total alike.
+func TestCostsSplitPlanAndLocalFromUnpriced(t *testing.T) {
+	st := testStore(t)
+	t.Cleanup(func() { st.Close() })
+	now := time.Now()
+	s := model.Session{ID: "mix", Harness: "codex", StartedAt: now, LastSeenAt: now}
+	st.UpsertSession(s)
+	for i, c := range []struct {
+		model, provider string
+		cost            float64
+	}{
+		{"claude-sonnet-4-5", "", 0.5},     // priced
+		{"gpt-5.6-sol", "chatgpt", 0},      // plan
+		{"k3", "kimi-code-plan-global", 0}, // plan
+		{"llama3.1:8b", "ollama", 0},       // local
+		{"gpt-5.6-sol", "custom", 0},       // unpriced-model
+	} {
+		st.PutEvent(event.Event{Kind: event.KindModelCall, TS: now.Add(-time.Duration(i+1) * time.Minute), SessionID: "mix",
+			Model: c.model, Provider: c.provider, TokensIn: 100, TokensOut: 10, CostUSD: c.cost})
+	}
+	mux := newTestAPI("", st, nil, func() Status { return Status{Running: true} }).buildMux()
+	for _, by := range []string{"repo", "provider"} {
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/costs?by="+by, nil))
+		var rep store.CostReport
+		if err := json.Unmarshal(rec.Body.Bytes(), &rep); err != nil {
+			t.Fatal(err)
+		}
+		tot := rep.Total
+		priced := tot.Calls - tot.Plan - tot.Local - tot.Unpriced
+		if priced != 1 || tot.Plan != 2 || tot.Local != 1 || tot.Unpriced != 1 || tot.UnpricedModel != 1 {
+			t.Fatalf("by=%s total = %+v, want priced 1 / plan 2 / local 1 / unpriced 1", by, tot)
+		}
+		rows := map[string]store.CostRow{}
+		for _, r := range rep.Rows {
+			rows[r.Key] = r
+		}
+		if by == "repo" {
+			if r := rows["(no repo)"]; r.Plan != 2 || r.Local != 1 || r.Unpriced != 1 {
+				t.Fatalf("repo row = %+v", r)
+			}
+		} else if r := rows["chatgpt"]; r.Calls != 1 || r.Plan != 1 || r.Unpriced != 0 {
+			t.Fatalf("chatgpt provider row = %+v", r)
+		}
+	}
+}
+
+// GET /costs/plans serves the recorded plan headroom; other methods are 405.
+func TestCostsPlansServesSnapshot(t *testing.T) {
+	seen := time.Date(2026, 9, 24, 10, 0, 0, 0, time.UTC)
+	collect.RecordPlan("/Users/dev/.codex", collect.PlanSnapshot{
+		Harness: "codex", Home: "codex", PlanType: "pro", LimitID: "codex",
+		Windows: []collect.PlanWindow{{WindowMinutes: 10080, UsedPercent: 52, ResetsAt: "2026-09-29T14:30:38Z"}},
+		SeenAt:  seen,
+	})
+	st := testStore(t)
+	t.Cleanup(func() { st.Close() })
+	mux := newTestAPI("", st, nil, func() Status { return Status{Running: true} }).buildMux()
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/costs/plans", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /costs/plans: status %d", rec.Code)
+	}
+	var body struct {
+		Plans []collect.PlanSnapshot `json:"plans"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Plans) != 1 {
+		t.Fatalf("plans = %+v", body.Plans)
+	}
+	p := body.Plans[0]
+	if p.Harness != "codex" || p.Home != "codex" || p.PlanType != "pro" || !p.SeenAt.Equal(seen) ||
+		len(p.Windows) != 1 || p.Windows[0].WindowMinutes != 10080 || p.Windows[0].UsedPercent != 52 {
+		t.Fatalf("plan = %+v", p)
+	}
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/costs/plans", nil))
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("POST /costs/plans: status %d, want 405", rec.Code)
 	}
 }

@@ -81,9 +81,9 @@ func fakeDaemon(t *testing.T, costs, unpriced string) *http.Client {
 }
 
 const costsWithClasses = `{"since":"2026-09-22T06:30:00Z","until":"2026-09-23T06:30:00Z","by":"repo",` +
-	`"total":{"key":"","calls":8,"sessions":3,"tokens_in":800,"tokens_out":80,"cost_usd":0.5,"unpriced_calls":7,` +
+	`"total":{"key":"","calls":8,"sessions":3,"tokens_in":800,"tokens_out":80,"cost_usd":0.5,"unpriced_calls":4,` +
 	`"unknown_model_calls":1,"unpriced_model_calls":3,"plan_calls":2,"local_calls":1},` +
-	`"rows":[{"key":"A","harness":"codex","calls":8,"sessions":3,"tokens_in":800,"tokens_out":80,"cost_usd":0.5,"unpriced_calls":7,` +
+	`"rows":[{"key":"A","harness":"codex","calls":8,"sessions":3,"tokens_in":800,"tokens_out":80,"cost_usd":0.5,"unpriced_calls":4,` +
 	`"unknown_model_calls":1,"unpriced_model_calls":3,"plan_calls":2,"local_calls":1}]}`
 
 const unpricedRows = `{"since":"2026-09-22T06:30:00Z","until":"2026-09-23T06:30:00Z","rows":[` +
@@ -106,7 +106,7 @@ func TestRunCostClassesAndHints(t *testing.T) {
 	if err := json.Unmarshal([]byte(js.String()), &rep); err != nil {
 		t.Fatalf("--json output is not the /costs body: %v", err)
 	}
-	if tot := rep.Total; tot.UnknownModel != 1 || tot.UnpricedModel != 3 || tot.Plan != 2 || tot.Local != 1 || tot.Unpriced != 7 {
+	if tot := rep.Total; tot.UnknownModel != 1 || tot.UnpricedModel != 3 || tot.Plan != 2 || tot.Local != 1 || tot.Unpriced != 4 {
 		t.Fatalf("--json total = %+v", tot)
 	}
 
@@ -116,7 +116,7 @@ func TestRunCostClassesAndHints(t *testing.T) {
 	}
 	text := out.String()
 	for _, want := range []string{
-		"unpriced: 7 calls — 1 unknown model, 3 unpriced model, 2 plan, 1 local",
+		"plan: 2 · local: 1 · unpriced: 4 — 1 unknown model, 3 unpriced model",
 		"add a price for gpt-5.6-sol under pricing: in ~/.config/secure-agent/config.yaml",
 	} {
 		if !strings.Contains(text, want) {
@@ -127,14 +127,26 @@ func TestRunCostClassesAndHints(t *testing.T) {
 		t.Fatalf("want one hint per unpriced model id, got %d:\n%s", c, text)
 	}
 
-	// Nothing unpriced: no breakdown, no hints.
+	// Plan calls only: the split line prints, no hints.
+	var planOnly strings.Builder
+	onPlans := strings.NewReplacer(`"unpriced_calls":4`, `"unpriced_calls":0`, `"local_calls":1`, `"local_calls":0`,
+		`"unknown_model_calls":1`, `"unknown_model_calls":0`, `"unpriced_model_calls":3`, `"unpriced_model_calls":0`).Replace(costsWithClasses)
+	if err := runCost(&planOnly, fakeDaemon(t, onPlans, unpricedRows), nil); err != nil {
+		t.Fatal(err)
+	}
+	if text := planOnly.String(); !strings.Contains(text, "plan: 2 · local: 0 · unpriced: 0 — 0 unknown model, 0 unpriced model") ||
+		strings.Contains(text, "add a price for") {
+		t.Fatalf("plan-only split:\n%s", text)
+	}
+
+	// Nothing on plans, local or unpriced: no split line, no hints.
 	var clean strings.Builder
-	allPriced := strings.NewReplacer(`"unpriced_calls":7`, `"unpriced_calls":0`).Replace(costsWithClasses)
+	allPriced := strings.NewReplacer(`"plan_calls":2`, `"plan_calls":0`).Replace(onPlans)
 	if err := runCost(&clean, fakeDaemon(t, allPriced, `{"rows":[]}`), nil); err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(clean.String(), "unpriced:") {
-		t.Fatalf("breakdown printed with nothing unpriced:\n%s", clean.String())
+		t.Fatalf("split printed with every call priced:\n%s", clean.String())
 	}
 }
 
