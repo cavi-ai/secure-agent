@@ -56,9 +56,9 @@ func handleCost(client *http.Client) {
 }
 
 // runCost prints GET /costs as a table (or the raw body with --json), then,
-// when calls are unpriced, their class breakdown and a pricing hint per
-// unpriced model id from GET /costs/unpriced. --tz (minutes east of UTC)
-// defaults to this machine's current offset.
+// when calls are on plans, local or unpriced, the split line and a pricing
+// hint per unpriced model id from GET /costs/unpriced. --tz (minutes east of
+// UTC) defaults to this machine's current offset.
 func runCost(w io.Writer, client *http.Client, args []string) error {
 	since := queryFlag(args, "--since", "24h")
 	_, offset := time.Now().Zone()
@@ -79,26 +79,29 @@ func runCost(w io.Writer, client *http.Client, args []string) error {
 		return fmt.Errorf("cost: unreadable response: %v", err)
 	}
 	fmt.Fprint(w, formatCostTable(rep))
-	if rep.Total.Unpriced == 0 {
+	if t := rep.Total; t.Unpriced == 0 && t.Plan == 0 && t.Local == 0 {
 		return nil
 	}
 	// An older daemon has no /costs/unpriced: the breakdown prints without hints.
 	var unpriced struct {
 		Rows []unpricedRow `json:"rows"`
 	}
-	if code, body := request(client, http.MethodGet, "http://unix/costs/unpriced?"+url.Values{"since": {since}}.Encode(), ""); code == 200 {
-		_ = json.Unmarshal([]byte(body), &unpriced)
+	if rep.Total.Unpriced > 0 {
+		if code, body := request(client, http.MethodGet, "http://unix/costs/unpriced?"+url.Values{"since": {since}}.Encode(), ""); code == 200 {
+			_ = json.Unmarshal([]byte(body), &unpriced)
+		}
 	}
 	fmt.Fprint(w, formatCostClasses(rep.Total, unpriced.Rows))
 	return nil
 }
 
-// formatCostClasses renders why calls are unpriced and one hint per model id
-// that only needs a price entry.
+// formatCostClasses renders the calls with no per-call price — on plans,
+// local, unpriced and why — and one hint per model id that only needs a price
+// entry.
 func formatCostClasses(total costRow, rows []unpricedRow) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "\nunpriced: %d calls — %d unknown model, %d unpriced model, %d plan, %d local\n",
-		total.Unpriced, total.UnknownModel, total.UnpricedModel, total.Plan, total.Local)
+	fmt.Fprintf(&b, "\nplan: %d · local: %d · unpriced: %d — %d unknown model, %d unpriced model\n",
+		total.Plan, total.Local, total.Unpriced, total.UnknownModel, total.UnpricedModel)
 	seen := map[string]bool{}
 	for _, r := range rows {
 		if r.Class != "unpriced-model" || seen[r.Model] {

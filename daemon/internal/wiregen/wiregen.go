@@ -14,6 +14,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/advisor"
 	"github.com/cavi-ai/secure-agent/daemon/internal/api"
 	"github.com/cavi-ai/secure-agent/daemon/internal/clutter"
+	"github.com/cavi-ai/secure-agent/daemon/internal/collect"
 	"github.com/cavi-ai/secure-agent/daemon/internal/correlate"
 	"github.com/cavi-ai/secure-agent/daemon/internal/diskusage"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
@@ -64,6 +65,8 @@ func WireTypes() []any {
 		advisor.DiscoveredServer{},
 		store.CostRow{},
 		store.CostReport{},
+		collect.PlanSnapshot{},
+		collect.PlanWindow{},
 		store.SessionReport{},
 		store.ReportCount{},
 		store.ReportModel{},
