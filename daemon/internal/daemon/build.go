@@ -18,6 +18,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/agents"
 	"github.com/cavi-ai/secure-agent/daemon/internal/api"
 	"github.com/cavi-ai/secure-agent/daemon/internal/bus"
+	"github.com/cavi-ai/secure-agent/daemon/internal/clutter"
 	"github.com/cavi-ai/secure-agent/daemon/internal/collect"
 	"github.com/cavi-ai/secure-agent/daemon/internal/config"
 	"github.com/cavi-ai/secure-agent/daemon/internal/correlate"
@@ -195,6 +196,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 	resourcePolicyUpdater := buildResourcePolicyUpdater(opts.ConfigPath, resourceControl)
 
 	hunter := worktreehunter.New(st, "", worktreeOptions(cfg.Worktrees))
+	cleanup := clutter.New(st, "", clutterPlaces(hunter))
 	apiServer := api.New(api.Deps{
 		SocketPath:            cfg.SocketPath,
 		Store:                 st,
@@ -236,6 +238,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 		Hermes:          hermes.Status,
 		Worktrees:       hunter,
 		WorktreeAdvisor: worktreeAdvisor,
+		Clutter:         cleanup,
 	})
 
 	resourceControl.SetExecutor(makeResourceExecutor(apiServer, tagger, st))
@@ -942,5 +945,26 @@ func buildPlanFuncs(advisorStk *advisorStackHolder) *api.PlanFuncs {
 			}
 			return true, ""
 		},
+	}
+}
+
+// clutterPlaces lists what the cleanup inventory searches: every repository
+// the worktree hunter knows and each of its worktrees whose directory
+// exists (orphans included; their files are the only copy).
+func clutterPlaces(h *worktreehunter.Hunter) func(context.Context) []clutter.Place {
+	return func(ctx context.Context) []clutter.Place {
+		var out []clutter.Place
+		for _, r := range h.Report(ctx, false).Repos {
+			if r.Error == "" && !r.Bare {
+				out = append(out, clutter.Place{Path: r.Path, Project: r.Path})
+			}
+			for _, w := range r.Worktrees {
+				if w.State == worktreehunter.StateMain || w.State == worktreehunter.StatePrune {
+					continue
+				}
+				out = append(out, clutter.Place{Path: w.Path, Project: r.Path, Worktree: w.Path})
+			}
+		}
+		return out
 	}
 }

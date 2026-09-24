@@ -87,13 +87,14 @@ func TestCleanupLedger(t *testing.T) {
 	s.PutCleanup(model.CleanupEntry{TS: now.Add(-40 * 24 * time.Hour), Action: "worktree-remove", Path: "/r/.worktrees/old", Repo: "/r", Bytes: 1000})
 	s.PutCleanup(model.CleanupEntry{TS: now.Add(-time.Hour), Action: "worktree-remove", Path: "/r/.worktrees/new", Repo: "/r", Bytes: 250, Detail: "branch feat/new kept"})
 	s.PutCleanup(model.CleanupEntry{TS: now, Action: "worktree-prune", Path: "/r/.worktrees/gone", Repo: "/r"})
+	s.PutCleanup(model.CleanupEntry{TS: now, Action: "trash:tmp", Path: "/r/.tmp", Repo: "/r", Bytes: 4096})
 
 	log := s.CleanupLog(10)
-	if len(log) != 3 || log[0].Action != "worktree-prune" || log[1].Bytes != 250 || log[1].Detail != "branch feat/new kept" || !log[2].TS.Equal(now.Add(-40*24*time.Hour)) {
+	if len(log) != 4 || log[0].Action != "trash:tmp" || log[1].Action != "worktree-prune" || log[2].Bytes != 250 || log[2].Detail != "branch feat/new kept" || !log[3].TS.Equal(now.Add(-40*24*time.Hour)) {
 		t.Fatalf("log = %+v", log)
 	}
 	tot := s.CleanupTotals(now)
-	if tot.Bytes != 1250 || tot.Count != 3 || tot.Bytes30d != 250 || tot.Count30d != 2 {
+	if tot.Bytes != 1250 || tot.Count != 3 || tot.Bytes30d != 250 || tot.Count30d != 2 || tot.TrashedBytes != 4096 || tot.TrashedCount != 1 {
 		t.Fatalf("totals = %+v", tot)
 	}
 }

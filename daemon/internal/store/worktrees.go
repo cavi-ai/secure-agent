@@ -175,9 +175,12 @@ func (s *Store) CleanupTotals(now time.Time) model.CleanupTotals {
 	defer s.mu.Unlock()
 	var t model.CleanupTotals
 	cut := now.Add(-30 * 24 * time.Hour).UTC().Format(time.RFC3339Nano)
-	err := s.db.QueryRow(`SELECT COALESCE(SUM(bytes), 0), COUNT(*),
-		COALESCE(SUM(CASE WHEN ts >= ? THEN bytes ELSE 0 END), 0), COALESCE(SUM(ts >= ?), 0)
-		FROM cleanup_log`, cut, cut).Scan(&t.Bytes, &t.Count, &t.Bytes30d, &t.Count30d)
+	err := s.db.QueryRow(`SELECT
+		COALESCE(SUM(CASE WHEN trashed THEN 0 ELSE bytes END), 0), COALESCE(SUM(NOT trashed), 0),
+		COALESCE(SUM(CASE WHEN ts >= ? AND NOT trashed THEN bytes ELSE 0 END), 0), COALESCE(SUM(ts >= ? AND NOT trashed), 0),
+		COALESCE(SUM(CASE WHEN trashed THEN bytes ELSE 0 END), 0), COALESCE(SUM(trashed), 0)
+		FROM (SELECT ts, bytes, action LIKE 'trash:%' AS trashed FROM cleanup_log)`, cut, cut).
+		Scan(&t.Bytes, &t.Count, &t.Bytes30d, &t.Count30d, &t.TrashedBytes, &t.TrashedCount)
 	if err != nil {
 		log.Printf("store: cleanup totals: %v", err)
 	}

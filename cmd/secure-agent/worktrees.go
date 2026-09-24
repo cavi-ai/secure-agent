@@ -69,10 +69,12 @@ type wtReport struct {
 
 // wtTotals mirrors the cleanup ledger totals.
 type wtTotals struct {
-	Bytes    int64 `json:"bytes"`
-	Count    int   `json:"count"`
-	Bytes30d int64 `json:"bytes_30d"`
-	Count30d int   `json:"count_30d"`
+	Bytes        int64 `json:"bytes"`
+	Count        int   `json:"count"`
+	Bytes30d     int64 `json:"bytes_30d"`
+	Count30d     int   `json:"count_30d"`
+	TrashedBytes int64 `json:"trashed_bytes"`
+	TrashedCount int   `json:"trashed_count"`
 }
 
 type wtNote struct {

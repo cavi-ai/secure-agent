@@ -61,10 +61,14 @@ type CleanupEntry struct {
 	Detail string    `json:"detail,omitempty"`
 }
 
-// CleanupTotals sums the ledger: all time and the last 30 days.
+// CleanupTotals sums the ledger: all time and the last 30 days. Moves to
+// the Trash are counted apart (Trashed*): their space frees only when the
+// Trash is emptied.
 type CleanupTotals struct {
-	Bytes    int64 `json:"bytes"`
-	Count    int   `json:"count"`
-	Bytes30d int64 `json:"bytes_30d"`
-	Count30d int   `json:"count_30d"`
+	TrashedBytes int64 `json:"trashed_bytes"`
+	TrashedCount int   `json:"trashed_count"`
+	Bytes        int64 `json:"bytes"`
+	Count        int   `json:"count"`
+	Bytes30d     int64 `json:"bytes_30d"`
+	Count30d     int   `json:"count_30d"`
 }

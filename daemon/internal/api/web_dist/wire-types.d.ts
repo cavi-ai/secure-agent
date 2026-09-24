@@ -687,7 +687,7 @@ export interface RepoReport {
   error?: string;
 }
 
-export interface VolumeUsage {
+export interface Volume {
   mount: string;
   total_bytes: number;
   free_bytes: number;
@@ -709,7 +709,7 @@ export interface ScanReport {
   repos: RepoReport[];
   errors?: string[];
   sizing?: boolean;
-  volumes?: VolumeUsage[];
+  volumes?: Volume[];
   reclaimed?: CleanupTotals;
   advice?: Record<string, AdvisorVerdict>;
 }

@@ -225,3 +225,36 @@ func TestFormatCleanupLog(t *testing.T) {
 		t.Fatalf("cleanup log =\n%s\nwant\n%s", out, want)
 	}
 }
+
+func TestFormatCleanup(t *testing.T) {
+	body := `{"sizing":false,"items":[` +
+		`{"kind":"tool-cache","name":"go build","path":"/Users/x/Library/Caches/go-build","size_bytes":8589934592,"last_touched":"2026-09-22T10:00:00Z","idle_days":1,"action":"clean","command":"go clean -cache"},` +
+		`{"kind":"tmp","name":".tmp","path":"/Users/x/code/app/.tmp","project":"/Users/x/code/app","size_bytes":1048576,"last_touched":"2026-09-01T10:00:00Z","idle_days":22,"action":"trash"},` +
+		`{"kind":"tool-cache","name":"Hugging Face models","path":"/Users/x/.cache/huggingface","size_bytes":1024,"action":"none","note":"downloaded models: remove per model"}],` +
+		`"kinds":[{"kind":"tmp","bytes":1048576,"count":1},{"kind":"tool-cache","bytes":8589935616,"count":2}],` +
+		`"reclaimed":{"bytes":0,"count":0,"bytes_30d":0,"count_30d":0,"trashed_bytes":2097152,"trashed_count":2}}`
+	var rep clReport
+	if err := json.Unmarshal([]byte(body), &rep); err != nil {
+		t.Fatal(err)
+	}
+	out := formatCleanup(rep, "", "", "/Users/x")
+	for _, want := range []string{
+		"  tool-cache     8.0 GB     1d  ~/Library/Caches/go-build\n",
+		"              clear: secure-agent cleanup clean 'go build'  (runs `go clean -cache`)\n",
+		"  tmp            1.0 MB    22d  ~/code/app/.tmp\n",
+		"              clear: secure-agent cleanup trash ~/code/app/.tmp\n",
+		"              downloaded models: remove per model\n",
+		"tmp 1.0 MB (1) · tool-cache 8.0 GB (2)\n",
+		"in the Trash from cleanups: 2.0 MB over 2 items (the space frees when the Trash is emptied)\n",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q:\n%s", want, out)
+		}
+	}
+	if only := formatCleanup(rep, "tmp", "", "/Users/x"); strings.Contains(only, "go-build") || !strings.Contains(only, "~/code/app/.tmp") {
+		t.Fatalf("--kind tmp:\n%s", only)
+	}
+	if only := formatCleanup(rep, "", "app", "/Users/x"); strings.Contains(only, "go-build") {
+		t.Fatalf("--project app:\n%s", only)
+	}
+}
