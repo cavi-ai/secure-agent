@@ -273,8 +273,10 @@ func TestGateDispositionEndpointsPolicy(t *testing.T) {
 		t.Fatal(err)
 	}
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusForbidden {
-		t.Fatalf("DELETE /mute as owner when UI pinned: status=%d, want 403", resp.StatusCode)
+	// DELETE /mute is owner-level: unmuting only brings alerts back, and
+	// headless fleets revoke mutes over ssh.
+	if resp.StatusCode == http.StatusForbidden {
+		t.Fatal("DELETE /mute as owner when UI pinned: got 403, want the owner-level gate to pass")
 	}
 
 	// /notify/rules is owner-level (headless/ssh management like

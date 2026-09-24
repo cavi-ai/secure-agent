@@ -30,8 +30,8 @@ type Route struct {
 	Console bool
 	// MutatingMethods lists the HTTP methods on this path that require the
 	// pinned UI (or the owner uid when no UI is pinned). Empty = not a
-	// mutation. GET is never a mutation; a DELETE not listed stays
-	// owner-level (headless fleets revoke over ssh).
+	// mutation. GET is never a mutation; DELETE stays owner-level (headless
+	// fleets revoke over ssh).
 	MutatingMethods []string
 	// Decide marks the agent-facing guard decision endpoint, which uses the
 	// weaker canDecide policy instead of canMutate.
@@ -71,7 +71,7 @@ var Table = []Route{
 	{Path: "/egress/endpoint", Console: true},
 	{Path: "/notify/rules", Console: true},
 	{Path: "/guard/path-allow"},
-	{Path: "/mute", Console: true, MutatingMethods: []string{"POST", "DELETE"}},
+	{Path: "/mute", Console: true, MutatingMethods: []string{"POST"}},
 	{Path: "/advisor/retriage", Console: true, MutatingMethods: []string{"POST"}},
 	{Path: "/advisor/assess-host", Console: true},
 	{Path: "/flags/acknowledge", Console: true, MutatingMethods: []string{"POST"}},
