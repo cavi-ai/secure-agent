@@ -7,6 +7,10 @@ All notable changes to `secure-agent` are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- `POST /cleanup/advise`: queues a project (a repository, or `machine` for caches outside any repository) for a local-advisor cleanup plan built from its worktrees and clutter: a summary and at most 5 steps; paths, branch names and reasons go to the model inside `<evidence>`.
+- `GET /cleanup` `advice`: the stored plan per project; plans never change a verdict or what an action accepts.
+- `secure-agent cleanup advise <repo|machine>`; `secure-agent cleanup` prints each project's plan under it.
+- Console Clutter panel: Ask advisor on every project header; the plan shows under the header.
 - `POST /worktrees/ask`: resumes the Claude Code or Codex session that worked in a keep or review worktree with a fixed request — open a pull request for work worth keeping, or say the worktree can go; `--fork-session`, $1.00 cap (Claude Code), 15-minute bound, own process group, one at a time.
 - Agent answers (`pr`, `removable`, `keep`) are recorded in `agent_asks`, the audit trail and the cleanup ledger; `GET /worktrees/asks`; `/worktrees` carries each worktree's newest ask.
 - `secure-agent worktrees ask <path>`; console Ask the agent on keep and review rows, with the answer under the row.

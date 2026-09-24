@@ -333,8 +333,9 @@ triage verdict (`advisor: benign / suspicious / malicious` chip on the flag
 card, with the rationale as its tooltip), the posture banner and menubar hero
 summarize how many critical flags look benign, and each incident card gains a
 plain-English narrative. On request, it also writes a one-line note on a
-worktree from the Worktrees tab or `secure-agent worktrees advise`; the note
-never changes the worktree's verdict. The advisor is async and fails silent:
+worktree from the Worktrees tab or `secure-agent worktrees advise`, and a
+short cleanup plan for a project's worktrees and clutter from the Cleanup tab
+or `secure-agent cleanup advise`; neither changes a verdict or an action. The advisor is async and fails silent:
 if the model is down, nothing changes except the absence of verdicts.
 
 ---
@@ -361,6 +362,7 @@ The Go daemon listens on a local Unix domain socket (`~/.config/secure-agent/dae
 | `/cleanup/ledger` | `GET` | What cleanups removed and the bytes each gave back, with all-time and 30-day totals. |
 | `/cleanup` | `GET` | `.tmp` and `.quarantine` folders, build output, tool and app caches: size, last touched, project, how to clear. |
 | `/cleanup/trash`, `/cleanup/clean` | `POST` | Move one item to the Trash, or run a tool cache's own clean command. |
+| `/cleanup/advise` | `POST` | Ask the local advisor for a cleanup plan for one project (`{"project": "<repo path or machine>"}`); advisory only. |
 | `/worktrees/ask` | `POST` | Resume the agent that worked in a keep/review worktree: it opens a PR for its work or says the worktree can go (`GET /worktrees/asks` lists answers). |
 
 ### Example Query

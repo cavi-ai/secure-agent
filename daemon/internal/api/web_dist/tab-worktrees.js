@@ -267,8 +267,17 @@ function clutterItemHTML(it, project) {
 // machine holds thousands of build folders.
 const CLUTTER_GROUP_ROWS = 8;
 
-function clutterGroupHTML(g, expanded) {
+// clutterPlanHTML: the local advisor's plan for a project: a summary and
+// its steps, as text.
+function clutterPlanHTML(plan) {
+  if (!plan) return '';
+  const steps = String(plan.suggested_action || '').split('\n').filter(Boolean).map(s => `<li>${escapeHTML(s)}</li>`).join('');
+  return `<div class="wt-advice cl-plan"><b>Advisor:</b> ${escapeHTML(plan.rationale || '')}${steps ? `<ol>${steps}</ol>` : ''}</div>`;
+}
+
+function clutterGroupHTML(g, expanded, advice) {
   const title = g.project || 'This machine';
+  const key = g.project || 'machine';
   const open = expanded && expanded.has(g.project);
   const shown = open ? g.items : g.items.slice(0, CLUTTER_GROUP_ROWS);
   const more = g.items.length - shown.length;
@@ -277,7 +286,9 @@ function clutterGroupHTML(g, expanded) {
       <span class="wt-repo-path" title="${escapeHTML(title)}">${escapeHTML(title)}</span>
       <span class="wt-repo-meta">${g.items.length} item${g.items.length === 1 ? '' : 's'}</span>
       ${g.bytes ? `<span class="wt-repo-size">${escapeHTML(fmtDisk(g.bytes))}</span>` : ''}
+      <button type="button" class="link-btn wt-hide" data-action="clutter-advise" data-project="${escapeHTML(key)}">Ask advisor</button>
     </div>
+    ${clutterPlanHTML((advice || {})[key])}
     ${shown.map(it => clutterItemHTML(it, g.project)).join('')}
     ${more > 0 ? `<button type="button" class="link-btn cl-more" data-action="clutter-more" data-project="${escapeHTML(g.project)}">Show ${more} more</button>` : ''}
   </section>`;
@@ -321,6 +332,6 @@ function renderClutter() {
   if (summary) summary.textContent = clutterSummaryText(rep) + (state.loading ? ' · rescanning…' : '');
   const groups = clutterGroups(rep, state.filter);
   container.innerHTML = groups.length
-    ? groups.map(g => clutterGroupHTML(g, state.expanded)).join('')
+    ? groups.map(g => clutterGroupHTML(g, state.expanded, rep.advice)).join('')
     : '<div class="empty"><svg class="icon"><use href="#i-server"/></svg><span>Nothing to clear.</span></div>';
 }

@@ -562,6 +562,10 @@
   const handlePost = (p, opts) => {
     let body = {};
     try { body = JSON.parse((opts && opts.body) || '{}'); } catch { /* ignored */ }
+    if (p === '/cleanup/advise') {
+      data['/cleanup'].advice = { ...(data['/cleanup'].advice || {}), [body.project]: { rationale: 'Caches are small; nothing urgent.', suggested_action: 'Run go clean -cache' } };
+      return { status: 'ok', queued: true, subject: 'project:' + body.project };
+    }
     if (p === '/cleanup/trash') {
       return { status: 'ok', result: { bytes: 1048576, trash_path: '/Users/dev/.Trash/.tmp' } };
     }
@@ -1207,7 +1211,16 @@
     kinds: [{ kind: 'tmp', bytes: 1048576, count: 1 }, { kind: 'tool-cache', bytes: 8589935616, count: 2 }],
     projects: [],
     reclaimed: { bytes: 0, count: 0, bytes_30d: 0, count_30d: 0, trashed_bytes: 0, trashed_count: 0 },
+    advice: { [WT_REPO]: { rationale: '<b>Old</b> scratch holds most of it.', suggested_action: 'Move .tmp to the Trash\nAsk the agent about feat/x' } },
   };
+  // clutteradvise: Ask advisor on the machine group; the plan must appear
+  // under it once the re-read sees it.
+  if (MODE.includes('clutteradvise')) {
+    const iv = setInterval(() => {
+      const btn = document.querySelector('#clutter-container [data-action="clutter-advise"][data-project="machine"]');
+      if (btn) { clearInterval(iv); btn.click(); }
+    }, 200);
+  }
   if (MODE.includes('clutterdemo')) {
     setTimeout(() => {
       const btn = document.querySelector('#clutter-container [data-action="clutter-trash"]');

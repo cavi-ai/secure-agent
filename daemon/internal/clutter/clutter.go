@@ -84,6 +84,9 @@ type ClutterReport struct {
 	Projects    []ClutterProjectTotal `json:"projects"`
 	Volumes     []diskusage.Volume    `json:"volumes,omitempty"`
 	Reclaimed   *model.CleanupTotals  `json:"reclaimed,omitempty"` // the API fills it
+	// Advice is the local advisor's plan per project ("machine" for
+	// machine-wide caches); the API fills it.
+	Advice map[string]model.AdvisorVerdict `json:"advice,omitempty"`
 }
 
 // Place is a directory the inventory searches: a repository's main

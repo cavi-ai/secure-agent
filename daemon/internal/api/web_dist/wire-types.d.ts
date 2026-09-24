@@ -754,6 +754,7 @@ export interface ClutterReport {
   projects: ClutterProjectTotal[];
   volumes?: Volume[];
   reclaimed?: CleanupTotals;
+  advice?: Record<string, AdvisorVerdict>;
 }
 
 export interface ClutterResult {

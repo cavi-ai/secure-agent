@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sort"
 	"strings"
 	"time"
 )
@@ -51,6 +52,12 @@ type clReport struct {
 		Count int    `json:"count"`
 	} `json:"kinds"`
 	Reclaimed *wtTotals `json:"reclaimed"`
+	// Advice is the local advisor's plan per project ("machine" for
+	// machine-wide caches).
+	Advice map[string]struct {
+		Rationale       string `json:"rationale"`
+		SuggestedAction string `json:"suggested_action"`
+	} `json:"advice"`
 }
 
 func handleCleanup(client *http.Client) {
@@ -66,6 +73,9 @@ func handleCleanup(client *http.Client) {
 func runCleanup(w io.Writer, client *http.Client, args []string) error {
 	if len(args) > 0 && (args[0] == "trash" || args[0] == "clean") {
 		return runCleanupAction(w, client, args)
+	}
+	if len(args) > 0 && args[0] == "advise" {
+		return runCleanupAdvise(w, client, args)
 	}
 	if len(args) == 0 || args[0] != "log" {
 		return runCleanupList(w, client, args)
@@ -172,11 +182,60 @@ func formatCleanup(rep clReport, kind, project, home string) string {
 		b.WriteString(" · still measuring: lower bounds")
 	}
 	b.WriteString("\n")
+	projects := make([]string, 0, len(rep.Advice))
+	for p := range rep.Advice {
+		if project == "" || strings.Contains(p, project) {
+			projects = append(projects, p)
+		}
+	}
+	sort.Strings(projects)
+	for _, p := range projects {
+		a := rep.Advice[p]
+		fmt.Fprintf(&b, "advisor on %s: %s\n", tildePath(p, home), a.Rationale)
+		for _, step := range strings.Split(a.SuggestedAction, "\n") {
+			if step != "" {
+				fmt.Fprintf(&b, "  - %s\n", step)
+			}
+		}
+	}
 	if t := rep.Reclaimed; t != nil && t.TrashedCount > 0 {
 		fmt.Fprintf(&b, "in the Trash from cleanups: %s over %s (the space frees when the Trash is emptied)\n",
 			humanBytes(t.TrashedBytes), plural(t.TrashedCount, "item", "items"))
 	}
 	return b.String()
+}
+
+// runCleanupAdvise asks the local advisor for a cleanup plan for one
+// project: a repository path, or "machine" for machine-wide caches.
+func runCleanupAdvise(w io.Writer, client *http.Client, args []string) error {
+	if len(args) < 2 {
+		return fmt.Errorf("usage: secure-agent cleanup advise <repository path | machine>")
+	}
+	project := args[1]
+	if project != "machine" {
+		abs, err := filepath.Abs(project)
+		if err != nil {
+			return err
+		}
+		project = abs
+	}
+	body, _ := json.Marshal(map[string]string{"project": project})
+	code, resp := request(client, http.MethodPost, "http://unix/cleanup/advise", string(body))
+	switch {
+	case code == http.StatusForbidden:
+		return fmt.Errorf("cleanup advise refused (403): while the menu bar app runs, changes go through it — use the console's Cleanup tab; agent sessions cannot make changes")
+	case code != 200:
+		return fmt.Errorf("cleanup advise failed (%d): %s", code, strings.TrimSpace(resp))
+	}
+	var out struct {
+		Queued bool `json:"queued"`
+	}
+	_ = json.Unmarshal([]byte(resp), &out)
+	if !out.Queued {
+		return fmt.Errorf("not queued: the advisor is off or its queue is full")
+	}
+	fmt.Fprintf(w, "asked the advisor for a cleanup plan for %s; it shows in `secure-agent cleanup` once the local model answers\n", project)
+	return nil
 }
 
 func quoteIfSpaced(s string) string {

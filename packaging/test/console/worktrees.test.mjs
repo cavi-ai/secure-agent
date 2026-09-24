@@ -180,6 +180,18 @@ test('clutter: a project shows 8 rows until expanded', () => {
   assert.ok(!open.includes('clutter-more'));
 });
 
+test('clutter: Ask advisor on every project, "machine" for machine caches; the plan renders escaped, one step per line', () => {
+  const g = { project: REPO, items: [], bytes: 0 };
+  const plain = clutterGroupHTML(g, new Set());
+  assert.ok(plain.includes('data-action="clutter-advise" data-project="/Users/x/code/app">Ask advisor</button>'));
+  assert.ok(!plain.includes('cl-plan'));
+  const machine = clutterGroupHTML({ project: '', items: [], bytes: 0 }, new Set(), { machine: { rationale: 'ok' } });
+  assert.ok(machine.includes('data-action="clutter-advise" data-project="machine">Ask advisor</button>'));
+  assert.ok(machine.includes('<div class="wt-advice cl-plan"><b>Advisor:</b> ok</div>'));
+  const planned = clutterGroupHTML(g, new Set(), { [REPO]: { rationale: '<b>old</b> scratch', suggested_action: 'Trash .tmp\n\n<i>ask</i> feat/x' } });
+  assert.ok(planned.includes('<b>Advisor:</b> &lt;b&gt;old&lt;/b&gt; scratch<ol><li>Trash .tmp</li><li>&lt;i&gt;ask&lt;/i&gt; feat/x</li></ol></div>'));
+});
+
 test('agent asks: status line under the row, escaped; Ask the agent disabled while one runs', () => {
   const rep = report();
   const keep = rep.repos[1].worktrees[0];

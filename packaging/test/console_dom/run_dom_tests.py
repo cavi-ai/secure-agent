@@ -212,6 +212,7 @@ def main():
         dom_wtremove = dump_dom(chrome, tmp, "?tab=worktrees&worktreedemo")
         dom_wtsizing = dump_dom(chrome, tmp, "?tab=worktrees&sizingdemo")
         dom_clutter = dump_dom(chrome, tmp, "?tab=worktrees&clutterdemo")
+        dom_clutteradvise = dump_dom(chrome, tmp, "?tab=worktrees&clutteradvise")
         dom_scope = dump_dom(chrome, tmp, "?scopedemo")
         dom_pattern = dump_dom(chrome, tmp, "?patterndemo")
         dom_patternact = dump_dom(chrome, tmp, "?patterndemo&patternact")
@@ -1079,9 +1080,19 @@ def main():
               cl.count('class="wt-row cl-row') == 3
               and 'data-action="clutter-trash" data-path="/Users/dev/workspace/api-service/.tmp">Move to Trash</button>' in cl
               and 'data-action="clutter-clean" data-name="go build" title="go clean -cache">Run go clean -cache</button>' in cl
-              and cl.count('data-action="clutter-') == 2
+              and cl.count('data-action="clutter-trash"') + cl.count('data-action="clutter-clean"') == 2
               and "&lt;i&gt;downloaded&lt;/i&gt; models" in cl and "<i>downloaded</i>" not in cl
               and '<span class="wt-repo-path" title="This machine">This machine</span>' in cl)
+        check("clutter: each project has Ask advisor; its plan renders escaped under the header with one step per line",
+              cl.count('data-action="clutter-advise"') == 2
+              and 'data-action="clutter-advise" data-project="machine">Ask advisor</button>' in cl
+              and '<div class="wt-advice cl-plan"><b>Advisor:</b> &lt;b&gt;Old&lt;/b&gt; scratch holds most of it.'
+                  '<ol><li>Move .tmp to the Trash</li><li>Ask the agent about feat/x</li></ol></div>' in cl
+              and "Caches are small" not in cl)
+        cla = cl_block(dom_clutteradvise)
+        check("clutter: Ask advisor posts /cleanup/advise and the plan appears once the re-read has it",
+              "POST /cleanup/advise" in pre(dom_clutteradvise, "mock-requests")
+              and '<b>Advisor:</b> Caches are small; nothing urgent.<ol><li>Run go clean -cache</li></ol>' in cla)
         clr = cl_block(dom_clutter)
         check("clutter: Move to Trash posts after the dialog, drops the row and counts it as in the Trash",
               "POST /cleanup/trash" in pre(dom_clutter, "mock-requests") and "/api-service/.tmp" not in clr
