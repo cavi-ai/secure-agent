@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sort"
 	"strings"
 	"time"
 )
@@ -25,12 +26,15 @@ type wtRow struct {
 	// directory is gone); the table prints "-" instead of 0 days.
 	LastActivity string `json:"last_activity"`
 	InUse        bool   `json:"in_use"`
+	SizeBytes    int64  `json:"size_bytes"`
+	SizePartial  bool   `json:"size_partial"`
 }
 
 type wtRepo struct {
 	Path          string  `json:"path"`
 	Source        string  `json:"source"`
 	DefaultBranch string  `json:"default_branch"`
+	SizeBytes     int64   `json:"size_bytes"`
 	Worktrees     []wtRow `json:"worktrees"`
 }
 
@@ -46,11 +50,29 @@ type wtReport struct {
 		Keep      int `json:"keep"`
 		Prune     int `json:"prune"`
 		Stale     int `json:"stale"`
+		// Sizes are lower bounds while Sizing.
+		SizeBytes      int64 `json:"size_bytes"`
+		RemovableBytes int64 `json:"removable_bytes"`
 	} `json:"summary"`
-	Repos  []wtRepo `json:"repos"`
-	Errors []string `json:"errors"`
+	Sizing  bool `json:"sizing"`
+	Volumes []struct {
+		Mount      string `json:"mount"`
+		TotalBytes uint64 `json:"total_bytes"`
+		FreeBytes  uint64 `json:"free_bytes"`
+	} `json:"volumes"`
+	Reclaimed *wtTotals `json:"reclaimed"`
+	Repos     []wtRepo  `json:"repos"`
+	Errors    []string  `json:"errors"`
 	// Advice is the local advisor's note per worktree path.
 	Advice map[string]wtNote `json:"advice"`
+}
+
+// wtTotals mirrors the cleanup ledger totals.
+type wtTotals struct {
+	Bytes    int64 `json:"bytes"`
+	Count    int   `json:"count"`
+	Bytes30d int64 `json:"bytes_30d"`
+	Count30d int   `json:"count_30d"`
 }
 
 type wtNote struct {
@@ -152,6 +174,7 @@ func runWorktreeRemove(w io.Writer, client *http.Client, args []string) error {
 	code, resp := request(client, http.MethodPost, "http://unix/worktrees/remove", string(body))
 	var out struct {
 		Removed string   `json:"removed"`
+		Bytes   int64    `json:"bytes"`
 		Branch  string   `json:"branch"`
 		Pruned  []string `json:"pruned"`
 		State   string   `json:"state"`
@@ -171,6 +194,9 @@ func runWorktreeRemove(w io.Writer, client *http.Client, args []string) error {
 		}
 	default:
 		fmt.Fprintf(w, "removed %s", out.Removed)
+		if out.Bytes > 0 {
+			fmt.Fprintf(w, " — %s reclaimed", humanBytes(out.Bytes))
+		}
 		if out.Branch != "" {
 			fmt.Fprintf(w, " (branch %s kept)", out.Branch)
 		}
@@ -237,7 +263,10 @@ func (f wtFilter) keep(repo string, r wtRow) bool {
 // rows, then the summary line and the scan's errors.
 func formatWorktrees(rep wtReport, f wtFilter, home string) string {
 	var b strings.Builder
-	for _, repo := range rep.Repos {
+	// Biggest projects first: the list is where to reclaim disk.
+	repos := append([]wtRepo(nil), rep.Repos...)
+	sort.SliceStable(repos, func(i, j int) bool { return repos[i].SizeBytes > repos[j].SizeBytes })
+	for _, repo := range repos {
 		var rows []wtRow
 		for _, r := range repo.Worktrees {
 			if f.keep(repo.Path, r) {
@@ -258,6 +287,9 @@ func formatWorktrees(rep wtReport, f wtFilter, home string) string {
 		if len(meta) > 0 {
 			fmt.Fprintf(&b, "  (%s)", strings.Join(meta, ", "))
 		}
+		if repo.SizeBytes > 0 {
+			fmt.Fprintf(&b, " · %s", humanBytes(repo.SizeBytes))
+		}
 		b.WriteString("\n")
 		for _, r := range rows {
 			stale := ""
@@ -272,7 +304,14 @@ func formatWorktrees(rep wtReport, f wtFilter, home string) string {
 			if r.LastActivity != "" {
 				idle = fmt.Sprintf("%dd", r.IdleDays)
 			}
-			fmt.Fprintf(&b, "  %-6s  %-5s  %5s  %-32s  %s\n", r.State, stale, idle, clip(branch, 32), relPath(r.Path, repo.Path, home))
+			size := "-"
+			if r.SizeBytes > 0 {
+				size = humanBytes(r.SizeBytes)
+				if r.SizePartial {
+					size = "≥" + size
+				}
+			}
+			fmt.Fprintf(&b, "  %-6s  %-5s  %5s  %9s  %-32s  %s\n", r.State, stale, idle, size, clip(branch, 32), relPath(r.Path, repo.Path, home))
 			for _, reason := range r.Reasons {
 				fmt.Fprintf(&b, "          %s\n", reason)
 			}
@@ -290,10 +329,35 @@ func formatWorktrees(rep wtReport, f wtFilter, home string) string {
 		fmt.Fprintf(&b, " · scan %.1fs", float64(rep.DurationMS)/1000)
 	}
 	b.WriteString("\n")
+	fmt.Fprintf(&b, "worktrees use %s; %s in state remove", humanBytes(s.SizeBytes), humanBytes(s.RemovableBytes))
+	if rep.Sizing {
+		b.WriteString(" (still measuring: lower bounds)")
+	}
+	b.WriteString("\n")
+	for _, v := range rep.Volumes {
+		fmt.Fprintf(&b, "disk %s: %s free of %s\n", v.Mount, humanBytes(int64(v.FreeBytes)), humanBytes(int64(v.TotalBytes)))
+	}
+	if t := rep.Reclaimed; t != nil && t.Count > 0 {
+		fmt.Fprintf(&b, "reclaimed %s over %s (%s in the last 30 days)\n", humanBytes(t.Bytes), plural(t.Count, "cleanup", "cleanups"), humanBytes(t.Bytes30d))
+	}
 	for _, e := range rep.Errors {
 		fmt.Fprintf(&b, "error: %s\n", e)
 	}
 	return b.String()
+}
+
+// humanBytes renders a byte count in 1024 units: 512 B, 1.5 KB, 3.2 GB.
+func humanBytes(n int64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
+	}
+	div, exp := int64(unit), 0
+	for m := n / unit; m >= unit; m /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(n)/float64(div), "KMGTPE"[exp])
 }
 
 // relPath shows a worktree inside its repository relative to it, and any

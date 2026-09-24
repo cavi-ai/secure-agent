@@ -784,6 +784,18 @@ document.addEventListener('DOMContentLoaded', () => {
   const WORKTREE_TIMEOUT_MS = 200000;
   const WORKTREE_STALE_MS = 60000;
   const worktreesState = { report: null, loading: false, error: '', loadedAt: 0, filter: { state: '', stale: false } };
+  // While the daemon is still measuring sizes, the open tab re-reads the
+  // cached report (cheap: no rescan) until the sizes land.
+  const WORKTREE_SIZING_POLL_MS = 5000;
+  const WORKTREE_SIZING_POLLS = 60;
+  let worktreeSizingTimer = null;
+  let worktreeSizingPolls = 0;
+  function followWorktreeSizing() {
+    const rep = worktreesState.report;
+    if (!rep || !rep.sizing || activeTab !== 'worktrees' || worktreeSizingTimer || worktreeSizingPolls >= WORKTREE_SIZING_POLLS) return;
+    worktreeSizingPolls++;
+    worktreeSizingTimer = setTimeout(() => { worktreeSizingTimer = null; loadWorktrees(false); }, WORKTREE_SIZING_POLL_MS);
+  }
   async function loadWorktrees(refresh) {
     if (worktreesState.loading) return;
     worktreesState.loading = true;
@@ -794,24 +806,41 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!r.ok) throw new Error((await r.text()).trim() || String(r.status));
       worktreesState.report = await r.json();
       worktreesState.loadedAt = Date.now();
+      if (!worktreesState.report.sizing) worktreeSizingPolls = 0;
     } catch (err) {
       worktreesState.error = 'Worktree scan failed: ' + (err.message || err);
       if (worktreesState.report) showToast(worktreesState.error, 'danger');
     } finally {
       worktreesState.loading = false;
       markDirty('worktrees');
+      followWorktreeSizing();
     }
   }
   // dropWorktreeRows removes rows the daemon just removed or pruned, so the
   // tab updates without a rescan.
-  function dropWorktreeRows(paths) {
+  // reclaimedBytes, when given, is what the daemon booked for the removal:
+  // the sizes and the reclaimed total move with it.
+  function dropWorktreeRows(paths, reclaimedBytes) {
     const rep = worktreesState.report;
     if (!rep) return;
     const gone = new Set(paths);
     for (const repo of rep.repos || []) {
-      const before = (repo.worktrees || []).length;
-      repo.worktrees = (repo.worktrees || []).filter(w => !gone.has(w.path));
-      if (rep.summary) rep.summary.worktrees = Math.max(0, (rep.summary.worktrees || 0) - (before - repo.worktrees.length));
+      const dropped = (repo.worktrees || []).filter(w => gone.has(w.path));
+      if (!dropped.length) continue;
+      repo.worktrees = repo.worktrees.filter(w => !gone.has(w.path));
+      for (const w of dropped) {
+        const size = Number(w.size_bytes) || 0;
+        repo.size_bytes = Math.max(0, (Number(repo.size_bytes) || 0) - size);
+        if (rep.summary) {
+          rep.summary.worktrees = Math.max(0, (rep.summary.worktrees || 0) - 1);
+          rep.summary.size_bytes = Math.max(0, (Number(rep.summary.size_bytes) || 0) - size);
+          if (w.state === 'remove') rep.summary.removable_bytes = Math.max(0, (Number(rep.summary.removable_bytes) || 0) - size);
+        }
+      }
+    }
+    if (reclaimedBytes !== undefined) {
+      const r = rep.reclaimed || (rep.reclaimed = { bytes: 0, count: 0, bytes_30d: 0, count_30d: 0 });
+      r.bytes += reclaimedBytes; r.bytes_30d += reclaimedBytes; r.count++; r.count_30d++;
     }
   }
 
@@ -1225,9 +1254,10 @@ document.addEventListener('DOMContentLoaded', () => {
         return;
       }
       if (!r.ok) throw new Error(text.trim() || String(r.status));
-      dropWorktreeRows([path]);
+      const bytes = Number(json && json.bytes) || 0;
+      dropWorktreeRows([path], bytes);
       renderNow(['worktrees']);
-      showToast(`Removed ${path}`, 'success');
+      showToast(bytes ? `Removed ${path} — ${fmtDisk(bytes)} reclaimed` : `Removed ${path}`, 'success');
     } catch (err) {
       showToast('Failed to remove the worktree: ' + (err.message || err), 'danger');
     }

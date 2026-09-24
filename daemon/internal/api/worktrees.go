@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"path/filepath"
+	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/advisor"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
@@ -25,7 +26,28 @@ func (a *API) handleWorktrees(w http.ResponseWriter, r *http.Request) {
 	refresh := r.URL.Query().Get("refresh") == "1"
 	rep := a.worktrees.Report(r.Context(), refresh)
 	rep.Advice = a.worktreeNotes(rep)
+	if a.store != nil {
+		t := a.store.CleanupTotals(time.Now())
+		rep.Reclaimed = &t
+	}
 	writeJSON(w, rep)
+}
+
+// handleCleanupLedger serves the cleanup ledger: what was removed and the
+// bytes it gave back, newest first, with all-time and 30-day totals.
+func (a *API) handleCleanupLedger(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if a.store == nil {
+		http.Error(w, "store not wired", http.StatusServiceUnavailable)
+		return
+	}
+	writeJSON(w, map[string]any{
+		"totals":  a.store.CleanupTotals(time.Now()),
+		"entries": a.store.CleanupLog(queryInt(r.URL.Query().Get("limit"), 100)),
+	})
 }
 
 // worktreeNotes looks up the stored advisor note for each row at its current
@@ -183,6 +205,7 @@ func (a *API) handleWorktreeRemove(w http.ResponseWriter, r *http.Request) {
 	case err != nil:
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	default:
-		writeJSON(w, map[string]any{"status": "ok", "removed": row.Path, "branch": row.Branch, "reasons": row.Reasons})
+		writeJSON(w, map[string]any{"status": "ok", "removed": row.Path, "branch": row.Branch, "reasons": row.Reasons,
+			"bytes": row.SizeBytes, "bytes_partial": row.SizePartial})
 	}
 }

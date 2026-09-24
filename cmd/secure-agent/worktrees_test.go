@@ -10,18 +10,21 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 const worktreesBody = `{"duration_ms":4200,"cached":false,"stale_days":14,` +
-	`"summary":{"repos":2,"worktrees":3,"remove":1,"review":1,"keep":1,"prune":0,"stale":1},` +
+	`"summary":{"repos":2,"worktrees":3,"remove":1,"review":1,"keep":1,"prune":0,"stale":1,"size_bytes":1615859712,"removable_bytes":1610612736},` +
+	`"sizing":true,"volumes":[{"mount":"/Volumes/Work","total_bytes":2199023255552,"free_bytes":879609302220}],` +
+	`"reclaimed":{"bytes":3758096384,"count":4,"bytes_30d":1073741824,"count_30d":1},` +
 	`"repos":[` +
-	`{"path":"/Users/x/code/app","source":"session","default_branch":"origin/main","worktrees":[` +
-	`{"path":"/Users/x/code/app","branch":"main","state":"main","reasons":["main worktree of the repository"]},` +
-	`{"path":"/Users/x/code/app/.worktrees/done","branch":"feat/done","state":"remove","stale":true,"idle_days":21,"last_activity":"2026-09-02T10:00:00Z","reasons":["merged into origin/main (squash)"]},` +
-	`{"path":"/Users/x/.codex/worktrees/ab12/app","branch":"","detached":true,"state":"keep","idle_days":0,"last_activity":"2026-09-23T10:00:00Z","reasons":["2 uncommitted changes","an agent session is live here"]}]},` +
-	`{"path":"/Users/x/code/lib","source":"manual","default_branch":"origin/main","worktrees":[` +
+	`{"path":"/Users/x/code/lib","source":"manual","default_branch":"origin/main","size_bytes":5242880,"worktrees":[` +
 	`{"path":"/Users/x/code/lib/.worktrees/gone","branch":"feat/gone","state":"prune","idle_days":0,"reasons":["directory is gone; git still lists it"]},` +
-	`{"path":"/Users/x/code/lib/.claude/worktrees/x","branch":"feat/x","state":"review","idle_days":3,"last_activity":"2026-09-20T10:00:00Z","reasons":["ignored files that only live here: .env"]}]}],` +
+	`{"path":"/Users/x/code/lib/.claude/worktrees/x","branch":"feat/x","state":"review","idle_days":3,"last_activity":"2026-09-20T10:00:00Z","size_bytes":5242880,"size_partial":true,"reasons":["ignored files that only live here: .env"]}]},` +
+	`{"path":"/Users/x/code/app","source":"session","default_branch":"origin/main","size_bytes":1610614784,"worktrees":[` +
+	`{"path":"/Users/x/code/app","branch":"main","state":"main","reasons":["main worktree of the repository"]},` +
+	`{"path":"/Users/x/code/app/.worktrees/done","branch":"feat/done","state":"remove","stale":true,"idle_days":21,"last_activity":"2026-09-02T10:00:00Z","size_bytes":1610612736,"reasons":["merged into origin/main (squash)"]},` +
+	`{"path":"/Users/x/.codex/worktrees/ab12/app","branch":"","detached":true,"state":"keep","idle_days":0,"last_activity":"2026-09-23T10:00:00Z","size_bytes":2048,"reasons":["2 uncommitted changes","an agent session is live here"]}]}],` +
 	`"errors":["/Users/x/code/broken: git worktree: not a git repository"],` +
 	`"advice":{"/Users/x/code/app/.worktrees/done":{"assessment":"remove","confidence":0.8,"rationale":"merged; nothing local"}}}`
 
@@ -32,15 +35,19 @@ func TestFormatWorktrees(t *testing.T) {
 	}
 	out := formatWorktrees(rep, wtFilter{}, "/Users/x")
 	for _, want := range []string{
-		"~/code/app  (origin/main, session)\n",
-		"  remove  stale    21d  feat/done                         .worktrees/done\n",
+		"~/code/app  (origin/main, session) · 1.5 GB\n",
+		"  remove  stale    21d     1.5 GB  feat/done                         .worktrees/done\n",
 		"          merged into origin/main (squash)\n",
 		"          advisor: remove (80%) — merged; nothing local\n",
-		"  keep              0d  (detached)                        ~/.codex/worktrees/ab12/app\n",
+		"  keep              0d     2.0 KB  (detached)                        ~/.codex/worktrees/ab12/app\n",
 		"          an agent session is live here\n",
-		"  prune              -  feat/gone                         .worktrees/gone\n",
-		"~/code/lib  (origin/main, manual)\n",
+		"  prune              -          -  feat/gone                         .worktrees/gone\n",
+		"  review            3d    ≥5.0 MB  feat/x",
+		"~/code/lib  (origin/main, manual) · 5.0 MB\n",
 		"2 repos · 3 worktrees · 1 remove · 1 review · 1 keep · 0 prune · 1 stale (idle > 14d) · scan 4.2s\n",
+		"worktrees use 1.5 GB; 1.5 GB in state remove (still measuring: lower bounds)\n",
+		"disk /Volumes/Work: 819.2 GB free of 2.0 TB\n",
+		"reclaimed 3.5 GB over 4 cleanups (1.0 GB in the last 30 days)\n",
 		"error: /Users/x/code/broken: git worktree: not a git repository\n",
 	} {
 		if !strings.Contains(out, want) {
@@ -49,6 +56,9 @@ func TestFormatWorktrees(t *testing.T) {
 	}
 	if strings.Contains(out, "main worktree of the repository") {
 		t.Fatalf("main rows must not print:\n%s", out)
+	}
+	if strings.Index(out, "~/code/app  (") > strings.Index(out, "~/code/lib  (") {
+		t.Fatalf("projects must list biggest first:\n%s", out)
 	}
 
 	only := formatWorktrees(rep, wtFilter{State: "review"}, "/Users/x")
@@ -196,5 +206,22 @@ func TestRunWorktreeAdvise(t *testing.T) {
 	queued = false
 	if err := runWorktrees(io.Discard, client, []string{"advise", "/abs/repo/.worktrees/x"}); err == nil || !strings.Contains(err.Error(), "advisor is off") {
 		t.Fatalf("unqueued err = %v", err)
+	}
+}
+
+func TestFormatCleanupLog(t *testing.T) {
+	l := cleanupLedger{
+		Totals: wtTotals{Bytes: 1610614784, Count: 2, Bytes30d: 1610614784, Count30d: 2},
+		Entries: []cleanupEntry{
+			{TS: time.Date(2026, 9, 23, 18, 5, 0, 0, time.UTC), Action: "worktree-prune", Path: "/Users/x/code/app/.worktrees/gone"},
+			{TS: time.Date(2026, 9, 23, 17, 0, 0, 0, time.UTC), Action: "worktree-remove", Path: "/Users/x/code/app/.worktrees/done", Bytes: 1610612736},
+		},
+	}
+	out := formatCleanupLog(l, "/Users/x", time.UTC)
+	want := "2026-09-23 18:05  worktree-prune            -  ~/code/app/.worktrees/gone\n" +
+		"2026-09-23 17:00  worktree-remove      1.5 GB  ~/code/app/.worktrees/done\n" +
+		"reclaimed 1.5 GB over 2 cleanups; 1.5 GB in the last 30 days\n"
+	if out != want {
+		t.Fatalf("cleanup log =\n%s\nwant\n%s", out, want)
 	}
 }

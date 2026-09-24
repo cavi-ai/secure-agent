@@ -34,6 +34,7 @@ type Store interface {
 	SetWorktreeRepoHidden(path string, hidden bool) bool
 	WorkspaceActivity() []model.WorkspaceActivity
 	PutAudit(store.AuditEntry)
+	PutCleanup(model.CleanupEntry)
 }
 
 // Options are the operator's knobs (config `worktrees:`).
@@ -65,6 +66,13 @@ type ScanReport struct {
 	Summary     ScanSummary  `json:"summary"`
 	Repos       []RepoReport `json:"repos"`
 	Errors      []string     `json:"errors,omitempty"`
+	// Sizing is true while some worktrees still wait for the background
+	// sizer; their size is missing and the totals are lower bounds.
+	Sizing bool `json:"sizing,omitempty"`
+	// Volumes are the disks holding the scanned repositories.
+	Volumes []VolumeUsage `json:"volumes,omitempty"`
+	// Reclaimed sums the cleanup ledger; the API fills it.
+	Reclaimed *model.CleanupTotals `json:"reclaimed,omitempty"`
 	// Advice holds the local advisor's note per worktree path, for notes
 	// taken at the row's current HEAD. The API fills it on its copy of the
 	// report; the scan never reads it.
@@ -80,16 +88,23 @@ type ScanSummary struct {
 	Keep      int `json:"keep"`
 	Prune     int `json:"prune"`
 	Stale     int `json:"stale"`
+	// SizeBytes and RemovableBytes sum the measured worktrees (all, and
+	// those in state remove); while Sizing, they are lower bounds.
+	SizeBytes      int64 `json:"size_bytes"`
+	RemovableBytes int64 `json:"removable_bytes"`
 }
 
 // RepoReport groups one repository's worktrees; the main worktree comes first.
 type RepoReport struct {
-	Path          string     `json:"path"`
-	Source        string     `json:"source,omitempty"`
-	DefaultBranch string     `json:"default_branch,omitempty"`
-	Bare          bool       `json:"bare,omitempty"`
-	Worktrees     []Worktree `json:"worktrees"`
-	Error         string     `json:"error,omitempty"`
+	Path          string `json:"path"`
+	Source        string `json:"source,omitempty"`
+	DefaultBranch string `json:"default_branch,omitempty"`
+	Bare          bool   `json:"bare,omitempty"`
+	// SizeBytes sums the repository's measured linked worktrees (the main
+	// worktree is never removable, so it is not measured).
+	SizeBytes int64      `json:"size_bytes"`
+	Worktrees []Worktree `json:"worktrees"`
+	Error     string     `json:"error,omitempty"`
 }
 
 // Hunter owns scans and their cache.
@@ -111,6 +126,13 @@ type Hunter struct {
 	// fingerprints caches each repository's default-branch patch ids by
 	// the branch tip they were computed at.
 	fingerprints map[string]fingerprintCache
+
+	// sizes caches measured worktree sizes by path; sizing is true while
+	// the background sizer runs (one at a time); sizeWG lets tests wait.
+	sizeMu sync.Mutex
+	sizes  map[string]sizeEntry
+	sizing bool
+	sizeWG sync.WaitGroup
 }
 
 type fingerprintCache struct {
@@ -123,7 +145,8 @@ func New(st Store, home string, opts Options) *Hunter {
 	if home == "" {
 		home, _ = os.UserHomeDir()
 	}
-	return &Hunter{st: st, home: home, now: time.Now, opts: normalize(opts), fingerprints: map[string]fingerprintCache{}}
+	return &Hunter{st: st, home: home, now: time.Now, opts: normalize(opts),
+		fingerprints: map[string]fingerprintCache{}, sizes: map[string]sizeEntry{}}
 }
 
 func staleDuration(days int) time.Duration { return time.Duration(days) * 24 * time.Hour }
@@ -156,11 +179,18 @@ func (h *Hunter) invalidate() {
 	h.cached = nil
 }
 
-// Report returns the cached scan when it is younger than cacheTTL and
+// Report returns the scan with sizes and volume usage laid over it. Sizes
+// come from the size cache; worktrees not measured yet are queued for the
+// background sizer and the report says Sizing.
+func (h *Hunter) Report(ctx context.Context, refresh bool) ScanReport {
+	return h.withSizes(h.report(ctx, refresh))
+}
+
+// report returns the cached scan when it is younger than cacheTTL and
 // refresh is false; otherwise it scans. The scan runs under its own
 // deadline, detached from ctx's cancellation, so a client that gives up
 // still leaves a finished report for the next request.
-func (h *Hunter) Report(ctx context.Context, refresh bool) ScanReport {
+func (h *Hunter) report(ctx context.Context, refresh bool) ScanReport {
 	asked := h.now()
 	if r, ok := h.fresh(refresh, time.Time{}); ok {
 		return r

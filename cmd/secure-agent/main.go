@@ -77,6 +77,8 @@ func main() {
 		handleDoctor(client)
 	case "worktrees":
 		handleWorktrees(client)
+	case "cleanup":
+		handleCleanup(client)
 	case "guard":
 		handleGuard(client, os.Args[2:])
 	case "firewall":
@@ -112,6 +114,7 @@ func printUsage() {
 	fmt.Println("  secure-agent worktrees remove <path>     Remove a worktree whose fresh verdict is remove (git worktree remove, never --force; the branch stays)")
 	fmt.Println("  secure-agent worktrees prune <repo>      Drop git's entries for worktrees whose directory is gone")
 	fmt.Println("  secure-agent worktrees advise <path>     Ask the local advisor for a note on one worktree (advisory; never changes the verdict)")
+	fmt.Println("  secure-agent cleanup log [--limit N] [--json]  What cleanups removed and the disk space each gave back")
 	fmt.Println("  secure-agent kill <PID>                  Terminate an agent process tree by PID")
 	fmt.Println("  secure-agent fleet                       Show THIS node's fleet identity (node_id, hostname, version) — remote rollups live at the collector's /fleet")
 	fmt.Println("  secure-agent fleet enroll <url>          Enroll this node into a collector: generate the secret, write fleet.webhooks, print the collector line")
