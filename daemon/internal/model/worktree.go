@@ -72,3 +72,22 @@ type CleanupTotals struct {
 	Bytes30d     int64 `json:"bytes_30d"`
 	Count30d     int   `json:"count_30d"`
 }
+
+// AgentAsk is one request to the agent that owns a worktree: resume its
+// conversation and have it open a pull request for work worth keeping or
+// say the worktree can go. The record is kept so the machine's tidying
+// history includes what agents answered.
+type AgentAsk struct {
+	ID         int64      `json:"id"`
+	TS         time.Time  `json:"ts"`
+	Path       string     `json:"path"`
+	Repo       string     `json:"repo,omitempty"`
+	Harness    string     `json:"harness"`
+	SessionID  string     `json:"session_id"`
+	Status     string     `json:"status"`            // running | answered | failed | timeout
+	Verdict    string     `json:"verdict,omitempty"` // pr | removable | keep | none
+	Detail     string     `json:"detail,omitempty"`  // the PR URL or the agent's reason
+	CostUSD    float64    `json:"cost_usd,omitempty"`
+	Output     string     `json:"output,omitempty"` // the reply's last lines
+	FinishedAt *time.Time `json:"finished_at,omitempty"`
+}

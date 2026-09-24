@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -14,6 +13,7 @@ import (
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/diskusage"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
+	"github.com/cavi-ai/secure-agent/daemon/internal/toolpath"
 )
 
 var (
@@ -80,19 +80,15 @@ func (c *Clutter) Clean(ctx context.Context, name string) (ClutterResult, error)
 			tc = t
 		}
 	}
-	bin := lookTool(tc.command[0], c.binDirs)
+	bin := toolpath.Look(tc.command[0], c.binDirs)
 	if bin == "" {
 		return ClutterResult{}, fmt.Errorf("%s is not installed", tc.command[0])
 	}
 	before := diskusage.Dir(ctx, it.Path, nil)
 	cctx, cancel := context.WithTimeout(ctx, cleanTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(cctx, bin, tc.command[1:]...)
+	cmd := toolpath.Command(cctx, bin, c.binDirs, tc.command[1:]...)
 	cmd.Dir = c.home
-	// The tool's own directory first (npm needs its node), then the install
-	// directories, then the daemon's PATH and the system directories.
-	path := append(append([]string{filepath.Dir(bin)}, c.binDirs...), os.Getenv("PATH"), "/usr/bin", "/bin")
-	cmd.Env = append(os.Environ(), "PATH="+strings.Join(path, ":"))
 	var out bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &out
 	runErr := cmd.Run()

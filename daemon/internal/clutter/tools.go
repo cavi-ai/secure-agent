@@ -1,7 +1,6 @@
 package clutter
 
 import (
-	"os/exec"
 	"path/filepath"
 	"runtime"
 )
@@ -53,29 +52,4 @@ func appCacheRoots(home, goos string) []string {
 		return []string{filepath.Join(home, "Library", "Caches"), filepath.Join(home, ".cache")}
 	}
 	return []string{filepath.Join(home, ".cache")}
-}
-
-// toolDirs are where developer tools install outside launchd's PATH.
-func toolDirs(home string) []string {
-	return []string{
-		"/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin",
-		filepath.Join(home, ".local", "bin"), filepath.Join(home, ".cargo", "bin"),
-		filepath.Join(home, "go", "bin"), filepath.Join(home, ".volta", "bin"),
-		filepath.Join(home, ".bun", "bin"), filepath.Join(home, "Library", "pnpm"),
-	}
-}
-
-// lookTool resolves a tool binary: the daemon's PATH first, then dirs (the
-// usual install directories). "" when not installed.
-func lookTool(name string, dirs []string) string {
-	if p, err := exec.LookPath(name); err == nil {
-		return p
-	}
-	for _, d := range dirs {
-		p := filepath.Join(d, name)
-		if st, err := exec.LookPath(p); err == nil {
-			return st
-		}
-	}
-	return ""
 }

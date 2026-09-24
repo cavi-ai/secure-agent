@@ -713,6 +713,7 @@ export interface ScanReport {
   sizing?: boolean;
   volumes?: Volume[];
   reclaimed?: CleanupTotals;
+  asks?: Record<string, AgentAsk>;
   advice?: Record<string, AdvisorVerdict>;
 }
 
@@ -771,5 +772,20 @@ export interface CleanupEntry {
   repo?: string;
   bytes: number;
   detail?: string;
+}
+
+export interface AgentAsk {
+  id: number;
+  ts: string;
+  path: string;
+  repo?: string;
+  harness: string;
+  session_id: string;
+  status: string;
+  verdict?: string;
+  detail?: string;
+  cost_usd?: number;
+  output?: string;
+  finished_at?: string;
 }
 

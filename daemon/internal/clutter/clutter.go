@@ -24,6 +24,7 @@ import (
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/diskusage"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
+	"github.com/cavi-ai/secure-agent/daemon/internal/toolpath"
 )
 
 // ClutterItem kinds.
@@ -148,7 +149,7 @@ func New(st Store, home string, places func(context.Context) []Place) *Clutter {
 		home, _ = os.UserHomeDir()
 	}
 	return &Clutter{st: st, home: home, places: places, now: time.Now, goos: runtimeGOOS,
-		binDirs: toolDirs(home), sizes: map[string]sizeEntry{}}
+		binDirs: toolpath.Dirs(home), sizes: map[string]sizeEntry{}}
 }
 
 // Report returns the inventory with sizes laid over it; items not measured
@@ -247,7 +248,7 @@ func (c *Clutter) collect(ctx context.Context) []ClutterItem {
 		case tc.listOnly:
 			it.Action = ActionNone
 		case len(tc.command) > 0:
-			if bin := lookTool(tc.command[0], c.binDirs); bin != "" {
+			if bin := toolpath.Look(tc.command[0], c.binDirs); bin != "" {
 				it.Action, it.Command = ActionClean, strings.Join(tc.command, " ")
 			}
 		}

@@ -93,10 +93,21 @@ function worktreeNoteHTML(note) {
   return `<p class="wt-advice"><b>Advisor: ${escapeHTML(note.assessment || '')}</b>${escapeHTML(conf)} · ${escapeHTML(note.rationale || '')}</p>`;
 }
 
+// worktreeAskHTML: the latest request to the worktree's owning agent.
+function worktreeAskHTML(ask) {
+  if (!ask) return '';
+  let text;
+  if (ask.status === 'running') text = `waiting for ${ask.harness}'s answer…`;
+  else if (ask.status === 'answered' && ask.verdict !== 'none') {
+    text = `${ask.verdict}${ask.detail ? ' — ' + ask.detail : ''}${ask.cost_usd ? ` ($${Number(ask.cost_usd).toFixed(2)})` : ''}`;
+  } else text = `${ask.status}${ask.detail ? ' — ' + ask.detail : ''}`;
+  return `<p class="wt-ask wt-ask-${escapeHTML(ask.status)}"><b>Asked ${escapeHTML(ask.harness)}:</b> ${escapeHTML(text)}</p>`;
+}
+
 // worktreeRowHTML: one worktree. Remove only on state remove, Prune only on
 // state prune; the daemon enforces the same rule again on the request. Ask
-// advisor on review and keep rows, where a second opinion helps.
-function worktreeRowHTML(w, repo, note) {
+// the agent and Ask advisor on review and keep rows, where work may remain.
+function worktreeRowHTML(w, repo, note, ask) {
   const branch = w.branch || (w.detached ? '(detached)' : '');
   const reasons = (w.reasons || []).map(r => `<li>${escapeHTML(r)}</li>`).join('');
   let action = '';
@@ -105,7 +116,9 @@ function worktreeRowHTML(w, repo, note) {
   } else if (w.state === 'prune') {
     action = `<button type="button" class="btn btn-sm" data-action="worktree-prune" data-repo="${escapeHTML(repo.path)}">Prune</button>`;
   } else if (w.state === 'review' || w.state === 'keep') {
-    action = `<button type="button" class="btn btn-sm" data-action="worktree-advise" data-path="${escapeHTML(w.path)}">Ask advisor</button>`;
+    const busy = ask && ask.status === 'running' ? ' disabled' : '';
+    action = `<button type="button" class="btn btn-sm" data-action="worktree-ask" data-path="${escapeHTML(w.path)}"${busy}>Ask the agent</button>`
+      + `<button type="button" class="btn btn-sm" data-action="worktree-advise" data-path="${escapeHTML(w.path)}">Ask advisor</button>`;
   }
   return `<div class="wt-row wt-${escapeHTML(w.state)}" data-path="${escapeHTML(w.path)}">
     <div class="wt-main">
@@ -118,12 +131,13 @@ function worktreeRowHTML(w, repo, note) {
     </div>
     ${reasons ? `<ul class="wt-reasons">${reasons}</ul>` : ''}
     ${worktreeNoteHTML(note)}
+    ${worktreeAskHTML(ask)}
   </div>`;
 }
 
 // worktreeGroupHTML: one repository block with its rows and a Hide button.
-// advice maps a worktree path to its advisor note.
-function worktreeGroupHTML(g, advice) {
+// advice and asks map a worktree path to its advisor note and latest ask.
+function worktreeGroupHTML(g, advice, asks) {
   const meta = [g.repo.default_branch, g.repo.source].filter(Boolean).join(' · ');
   return `<section class="wt-repo">
     <div class="wt-repo-head">
@@ -132,7 +146,7 @@ function worktreeGroupHTML(g, advice) {
       ${g.repo.size_bytes ? `<span class="wt-repo-size">${escapeHTML(fmtDisk(g.repo.size_bytes))}</span>` : ''}
       <button type="button" class="link-btn wt-hide" data-action="worktree-hide" data-repo="${escapeHTML(g.repo.path)}">Hide repo</button>
     </div>
-    ${g.rows.map(w => worktreeRowHTML(w, g.repo, (advice || {})[w.path])).join('')}
+    ${g.rows.map(w => worktreeRowHTML(w, g.repo, (advice || {})[w.path], (asks || {})[w.path])).join('')}
   </section>`;
 }
 
@@ -189,7 +203,7 @@ function renderWorktrees() {
   }
   const groups = worktreeGroups(rep, state.filter);
   container.innerHTML = groups.length
-    ? groups.map(g => worktreeGroupHTML(g, rep.advice)).join('')
+    ? groups.map(g => worktreeGroupHTML(g, rep.advice, rep.asks)).join('')
     : `<div class="empty"><svg class="icon"><use href="#i-branch"/></svg><span>${counts.all ? 'No worktree matches this filter.' : 'No linked worktrees found. Add a repository above if one is missing.'}</span></div>`;
 }
 

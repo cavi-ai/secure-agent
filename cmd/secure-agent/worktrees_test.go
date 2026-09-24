@@ -258,3 +258,34 @@ func TestFormatCleanup(t *testing.T) {
 		t.Fatalf("--project app:\n%s", only)
 	}
 }
+
+func TestAskLineAndRunWorktreeAsk(t *testing.T) {
+	for a, want := range map[wtAsk]string{
+		{Harness: "claude", Status: "running"}: "asked claude: waiting for its answer",
+		{Harness: "claude", Status: "answered", Verdict: "pr", Detail: "https://x/pull/9", CostUSD: 0.21}: "asked claude: pr — https://x/pull/9 ($0.21)",
+		{Harness: "codex", Status: "answered", Verdict: "removable", Detail: "merged"}:                    "asked codex: removable — merged",
+		{Harness: "codex", Status: "timeout", Verdict: "none", Detail: "no answer within 15m0s"}:          "asked codex: timeout — no answer within 15m0s",
+	} {
+		if got := askLine(a); got != want {
+			t.Errorf("askLine(%+v) = %q, want %q", a, got, want)
+		}
+	}
+	var body string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		body = r.URL.Path + " " + string(b)
+		fmt.Fprint(w, `{"status":"ok","ask":{"harness":"claude","status":"running"}}`)
+	}))
+	t.Cleanup(srv.Close)
+	addr := srv.Listener.Addr().String()
+	client := &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "tcp", addr)
+	}}}
+	var out strings.Builder
+	if err := runWorktrees(&out, client, []string{"ask", "/abs/repo/.worktrees/wip"}); err != nil {
+		t.Fatal(err)
+	}
+	if body != `/worktrees/ask {"path":"/abs/repo/.worktrees/wip"}` || !strings.HasPrefix(out.String(), "asked claude to sort out /abs/repo/.worktrees/wip") {
+		t.Fatalf("request %q output %q", body, out.String())
+	}
+}

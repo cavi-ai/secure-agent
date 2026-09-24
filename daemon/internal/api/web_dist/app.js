@@ -790,9 +790,11 @@ document.addEventListener('DOMContentLoaded', () => {
   const WORKTREE_SIZING_POLLS = 60;
   let worktreeSizingTimer = null;
   let worktreeSizingPolls = 0;
+  // Also while an agent ask runs: its answer lands in the report's asks.
   function followWorktreeSizing() {
     const rep = worktreesState.report;
-    if (!rep || !rep.sizing || activeTab !== 'worktrees' || worktreeSizingTimer || worktreeSizingPolls >= WORKTREE_SIZING_POLLS) return;
+    const asking = rep && Object.values(rep.asks || {}).some(a => a.status === 'running');
+    if (!rep || !(rep.sizing || asking) || activeTab !== 'worktrees' || worktreeSizingTimer || worktreeSizingPolls >= WORKTREE_SIZING_POLLS) return;
     worktreeSizingPolls++;
     worktreeSizingTimer = setTimeout(() => { worktreeSizingTimer = null; loadWorktrees(false); }, WORKTREE_SIZING_POLL_MS);
   }
@@ -806,7 +808,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!r.ok) throw new Error((await r.text()).trim() || String(r.status));
       worktreesState.report = await r.json();
       worktreesState.loadedAt = Date.now();
-      if (!worktreesState.report.sizing) worktreeSizingPolls = 0;
+      if (!worktreesState.report.sizing && !Object.values(worktreesState.report.asks || {}).some(a => a.status === 'running')) worktreeSizingPolls = 0;
     } catch (err) {
       worktreesState.error = 'Worktree scan failed: ' + (err.message || err);
       if (worktreesState.report) showToast(worktreesState.error, 'danger');
@@ -1359,6 +1361,28 @@ document.addEventListener('DOMContentLoaded', () => {
       loadClutter(false);
     } catch (err) {
       showToast('Clean failed: ' + (err.message || err), 'danger');
+    }
+  };
+
+  // Resume the agent that worked in the worktree with the cleanup request;
+  // its answer arrives in the report's asks (the tab re-reads meanwhile).
+  window.askWorktreeAgent = async function(path) {
+    const ok = await window.saConfirm(
+      `Resume the agent that worked in ${path}? It gets a fixed request: open a pull request for work worth keeping, or say the worktree can go. It runs with your agent settings (it may commit and push), capped at $1.00 for Claude Code and 15 minutes.`,
+      { title: 'Ask the agent', okLabel: 'Ask', danger: false });
+    if (!ok) return;
+    try {
+      const { r, text, json } = await postWorktree('/worktrees/ask', { path });
+      if (!r.ok) throw new Error(text.trim() || String(r.status));
+      const ask = json && json.ask;
+      const rep = worktreesState.report;
+      if (rep && ask) (rep.asks || (rep.asks = {}))[path] = ask;
+      renderNow(['worktrees']);
+      showToast(`Asked ${ask ? ask.harness : 'the agent'} — its answer shows under the row`, 'info');
+      worktreeSizingPolls = 0;
+      followWorktreeSizing();
+    } catch (err) {
+      showToast('Could not ask the agent: ' + (err.message || err), 'danger');
     }
   };
 
@@ -2660,6 +2684,10 @@ document.addEventListener('DOMContentLoaded', () => {
       case 'worktree-advise':
         e.preventDefault();
         window.adviseWorktree(d.path);
+        break;
+      case 'worktree-ask':
+        e.preventDefault();
+        window.askWorktreeAgent(d.path);
         break;
       case 'worktree-filter':
         worktreesState.filter.state = d.state || '';

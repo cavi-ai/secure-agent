@@ -1063,6 +1063,9 @@ def main():
         check("worktrees: the advisor note renders escaped under its row; Ask advisor sits on review and keep rows only",
               '<p class="wt-advice"><b>Advisor: review</b> 60% · &lt;i&gt;look&lt;/i&gt; at .tmp before removing</p>' in wt
               and wt.count('data-action="worktree-advise"') == 2)
+        check("worktrees: Ask the agent sits on review and keep rows; the latest answer shows under its row",
+              wt.count('data-action="worktree-ask"') == 2
+              and '<p class="wt-ask wt-ask-answered"><b>Asked claude:</b> pr — https://github.com/o/r/pull/9 ($0.21)</p>' in wt)
         check("worktrees: the disk card shows the volume, worktree and removable totals and what cleanups reclaimed",
               "512.0 GB free of 2.0 TB" in dom_wt and 'data-w="75"' in dom_wt
               and "<b>Worktrees</b> 1.5 GB" in dom_wt and "<b>Removable</b> 1.5 GB" in dom_wt

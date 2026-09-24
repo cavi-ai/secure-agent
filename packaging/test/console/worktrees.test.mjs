@@ -61,12 +61,13 @@ test('worktreeRowHTML: Remove only on remove, Prune only on prune, Ask advisor o
   assert.match(goneHTML, /data-action="worktree-prune" data-repo="\/Users\/x\/code\/app"/);
   assert.match(goneHTML, /<span class="wt-idle">—<\/span>/);
   const keepHTML = worktreeRowHTML(keep, rep.repos[1]);
-  assert.deepEqual([...keepHTML.matchAll(/data-action="([a-z-]+)"/g)].map(m => m[1]), ['worktree-advise']);
+  assert.deepEqual([...keepHTML.matchAll(/data-action="([a-z-]+)"/g)].map(m => m[1]), ['worktree-ask', 'worktree-advise']);
   assert.ok(keepHTML.includes('&lt;img src=x onerror=alert(1)&gt;') && !keepHTML.includes('<img'));
   assert.match(keepHTML, /<span class="wt-branch">\(detached\)<\/span>/);
   const reviewHTML = worktreeRowHTML(review, rep.repos[1]);
-  assert.deepEqual([...reviewHTML.matchAll(/data-action="([a-z-]+)"/g)].map(m => m[1]), ['worktree-advise']);
+  assert.deepEqual([...reviewHTML.matchAll(/data-action="([a-z-]+)"/g)].map(m => m[1]), ['worktree-ask', 'worktree-advise']);
   assert.ok(!doneHTML.includes('worktree-advise') && !goneHTML.includes('worktree-advise'));
+  assert.ok(!doneHTML.includes('worktree-ask') && !goneHTML.includes('worktree-ask'));
   assert.ok(reviewHTML.includes('feat/&quot;q&quot;'));
 });
 
@@ -177,4 +178,17 @@ test('clutter: a project shows 8 rows until expanded', () => {
   const open = clutterGroupHTML(g, new Set([REPO]));
   assert.equal((open.match(/class="wt-row cl-row/g) || []).length, 11);
   assert.ok(!open.includes('clutter-more'));
+});
+
+test('agent asks: status line under the row, escaped; Ask the agent disabled while one runs', () => {
+  const rep = report();
+  const keep = rep.repos[1].worktrees[0];
+  const answered = worktreeRowHTML(keep, rep.repos[1], null,
+    { harness: 'claude', status: 'answered', verdict: 'pr', detail: 'https://x/pull/<9>', cost_usd: 0.21 });
+  assert.ok(answered.includes('<p class="wt-ask wt-ask-answered"><b>Asked claude:</b> pr — https://x/pull/&lt;9&gt; ($0.21)</p>'));
+  const running = worktreeRowHTML(keep, rep.repos[1], null, { harness: 'codex', status: 'running' });
+  assert.ok(running.includes("waiting for codex&#39;s answer…") || running.includes("waiting for codex's answer…"));
+  assert.match(running, /data-action="worktree-ask" data-path="[^"]+" disabled>Ask the agent<\/button>/);
+  const failed = worktreeRowHTML(keep, rep.repos[1], null, { harness: 'codex', status: 'timeout', verdict: 'none', detail: 'no answer within 15m0s' });
+  assert.ok(failed.includes('wt-ask-timeout') && failed.includes('timeout — no answer within 15m0s'));
 });

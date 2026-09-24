@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
@@ -185,4 +186,107 @@ func (s *Store) CleanupTotals(now time.Time) model.CleanupTotals {
 		log.Printf("store: cleanup totals: %v", err)
 	}
 	return t
+}
+
+// agent_asks records each request to a worktree's owning agent and what
+// it answered.
+const agentAsksSchema = `CREATE TABLE IF NOT EXISTS agent_asks (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	ts TEXT NOT NULL,
+	path TEXT NOT NULL,
+	repo TEXT,
+	harness TEXT NOT NULL,
+	session_id TEXT NOT NULL,
+	status TEXT NOT NULL,
+	verdict TEXT,
+	detail TEXT,
+	cost_usd REAL,
+	output TEXT,
+	finished_at TEXT
+);`
+
+// maxAgentAsks bounds the table (rows come from API-triggered asks).
+const maxAgentAsks = 5000
+
+// PutAgentAsk inserts an ask and returns its id.
+func (s *Store) PutAgentAsk(a model.AgentAsk) int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	res, err := s.db.Exec(`INSERT INTO agent_asks (ts, path, repo, harness, session_id, status, verdict, detail, cost_usd, output)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		a.TS.UTC().Format(time.RFC3339Nano), a.Path, a.Repo, a.Harness, a.SessionID, a.Status, a.Verdict, a.Detail, a.CostUSD, a.Output)
+	if err != nil {
+		log.Printf("store: insert agent ask: %v", err)
+		return 0
+	}
+	_, _ = s.db.Exec(`DELETE FROM agent_asks WHERE id NOT IN (SELECT id FROM agent_asks ORDER BY id DESC LIMIT ?)`, maxAgentAsks)
+	id, _ := res.LastInsertId()
+	return id
+}
+
+// FinishAgentAsk records an ask's outcome.
+func (s *Store) FinishAgentAsk(a model.AgentAsk) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	fin := ""
+	if a.FinishedAt != nil {
+		fin = a.FinishedAt.UTC().Format(time.RFC3339Nano)
+	}
+	if _, err := s.db.Exec(`UPDATE agent_asks SET status = ?, verdict = ?, detail = ?, cost_usd = ?, output = ?, finished_at = ? WHERE id = ?`,
+		a.Status, a.Verdict, a.Detail, a.CostUSD, a.Output, fin, a.ID); err != nil {
+		log.Printf("store: finish agent ask: %v", err)
+	}
+}
+
+// AgentAsks returns asks newest first.
+func (s *Store) AgentAsks(limit int) []model.AgentAsk {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rows, err := s.db.Query(`SELECT id, ts, path, COALESCE(repo, ''), harness, session_id, status, COALESCE(verdict, ''),
+		COALESCE(detail, ''), COALESCE(cost_usd, 0), COALESCE(output, ''), COALESCE(finished_at, '')
+		FROM agent_asks ORDER BY id DESC LIMIT ?`, normalizeLimit(limit))
+	if err != nil {
+		log.Printf("store: query agent asks: %v", err)
+		return nil
+	}
+	defer rows.Close()
+	out := []model.AgentAsk{}
+	for rows.Next() {
+		var a model.AgentAsk
+		var ts, fin string
+		if err := rows.Scan(&a.ID, &ts, &a.Path, &a.Repo, &a.Harness, &a.SessionID, &a.Status, &a.Verdict, &a.Detail, &a.CostUSD, &a.Output, &fin); err != nil {
+			continue
+		}
+		a.TS, _ = time.Parse(time.RFC3339Nano, ts)
+		if t, err := time.Parse(time.RFC3339Nano, fin); err == nil {
+			a.FinishedAt = &t
+		}
+		out = append(out, a)
+	}
+	if err := rows.Err(); err != nil {
+		log.Printf("store: agent asks cursor error (result may be truncated): %v", err)
+	}
+	return out
+}
+
+// SessionsInWorkspace returns hook- and transcript-identified sessions
+// whose workspace is dir or under it, newest first: their ids are the
+// harness's own, so they can be resumed.
+func (s *Store) SessionsInWorkspace(dir string) []model.Session {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rows, err := s.db.Query(sessionSelect+` WHERE (workspace = ? OR workspace LIKE ? ESCAPE '\') AND confidence IN (?, ?)
+		ORDER BY last_seen_at DESC LIMIT 20`,
+		dir, likePrefix(dir)+"/%", model.ConfHook, model.ConfTranscript)
+	if err != nil {
+		log.Printf("store: sessions in workspace: %v", err)
+		return nil
+	}
+	return scanSessions(rows)
+}
+
+// likePrefix escapes LIKE wildcards in a literal path.
+func likePrefix(p string) string {
+	r := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+	return r.Replace(p)
 }

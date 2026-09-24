@@ -1190,6 +1190,9 @@
     errors: [],
     advice: {
       [WT_REPO + '/.worktrees/evidence']: { assessment: 'review', confidence: 0.6, rationale: '<i>look</i> at .tmp before removing' }
+    },
+    asks: {
+      [WT_REPO + '/.worktrees/evidence']: { harness: 'claude', status: 'answered', verdict: 'pr', detail: 'https://github.com/o/r/pull/9', cost_usd: 0.21 }
     }
   };
   // Clutter inventory: a repo .tmp, a tool cache with a clean command and a
