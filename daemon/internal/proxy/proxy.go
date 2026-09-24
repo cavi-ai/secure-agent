@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/cavi-ai/secure-agent/daemon/internal/apiroutes"
 	"github.com/cavi-ai/secure-agent/daemon/internal/bus"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 	"github.com/cavi-ai/secure-agent/daemon/internal/firewall"
@@ -143,6 +144,18 @@ func (ps *ProxyServer) serveHTTP(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusForbidden)
 			_, _ = w.Write([]byte(`{"error":"console token required"}`))
+			return
+		}
+		// The path is on the console surface, but the console token does not
+		// admit every method on it: GET/HEAD always pass, a mutation only
+		// when apiroutes.Table lists it (MutatingMethods or ConsoleMethods).
+		// Without this, the console token — issued to the browser, not an
+		// owner credential — could reach an owner-level DELETE such as
+		// /guard/rules or /guard/path-allow.
+		if !apiroutes.ConsoleAllowed(r.Method, r.URL.Path) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`{"error":"method not permitted for the console token"}`))
 			return
 		}
 		ps.consoleAPI.ServeHTTP(w, r)

@@ -544,3 +544,28 @@ func TestFlagsListStampsExplainOnFirst25Unacked(t *testing.T) {
 		t.Fatalf("snapshot stamped = %d, want 25", stamped)
 	}
 }
+
+// familyTitle title-cases only a plain harness name; an id carrying a
+// namespace ("untagged:node") is served verbatim, in the sentence too.
+func TestFamilyTitleKeepsIDs(t *testing.T) {
+	for in, want := range map[string]string{
+		"":              "Unknown",
+		"claude":        "Claude",
+		"claude-code":   "Claude-code",
+		"codex":         "Codex",
+		"untagged:node": "untagged:node",
+		"untagged:bun":  "untagged:bun",
+		"Cursor":        "Cursor",
+	} {
+		if got := familyTitle(in); got != want {
+			t.Errorf("familyTitle(%q) = %q, want %q", in, got, want)
+		}
+	}
+	a := explainTestAPI(t)
+	f := model.Flag{ID: "w-untagged", Rule: "keychain-security-cli", Severity: 3, TS: time.Now(), PID: 4242, Agent: "untagged:node",
+		Evidence: []model.EvidenceItem{{Kind: "exec", Label: "/usr/bin/security", Sub: "keychain CLI", TS: time.Now().Format(time.RFC3339)}}}
+	ex := a.explainFlag(f, false)
+	if !strings.Contains(ex.What, "untagged:node") || strings.Contains(ex.What, "Untagged") {
+		t.Fatalf("what = %q, want the agent id untagged:node verbatim", ex.What)
+	}
+}

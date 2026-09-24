@@ -12,10 +12,19 @@ enum ConsoleOpener {
     /// The URL substring identifying a console tab (loopback dashboard).
     static func tabMatch(port: Int) -> String { "127.0.0.1:\(port)/dashboard" }
 
-    /// AppleScript that activates a matching tab and returns "focused", or
-    /// returns "none" when no tab matches. Pure builder — unit-tested; nil
-    /// for browsers without a tab model we speak.
-    static func focusScript(browserBundleID: String, match: String) -> String? {
+    /// Escapes a string for an AppleScript double-quoted literal.
+    static func appleScriptLiteral(_ s: String) -> String {
+        s.replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+    }
+
+    /// AppleScript that loads url into a matching tab, activates it and
+    /// returns "focused", or returns "none" when no tab matches. Loading the
+    /// URL hands the focused tab the fresh console token (#ct=), so a tab
+    /// whose session ended recovers. Pure builder — unit-tested; nil for
+    /// browsers without a tab model we speak.
+    static func focusScript(browserBundleID: String, match: String, url: String) -> String? {
+        let target = appleScriptLiteral(url)
         switch browserBundleID {
         case "com.apple.Safari":
             return """
@@ -23,6 +32,7 @@ enum ConsoleOpener {
                 repeat with w in windows
                     repeat with t in tabs of w
                         if URL of t contains "\(match)" then
+                            set URL of t to "\(target)"
                             set current tab of w to t
                             set index of w to 1
                             activate
@@ -39,6 +49,7 @@ enum ConsoleOpener {
                 repeat with w in windows
                     repeat with i from 1 to (count of tabs of w)
                         if URL of (tab i of w) contains "\(match)" then
+                            set URL of (tab i of w) to "\(target)"
                             set active tab index of w to i
                             set index of w to 1
                             activate
@@ -62,7 +73,7 @@ enum ConsoleOpener {
             var focused = false
             if let browserURL = NSWorkspace.shared.urlForApplication(toOpen: url),
                let bundleID = Bundle(url: browserURL)?.bundleIdentifier,
-               let source = focusScript(browserBundleID: bundleID, match: match),
+               let source = focusScript(browserBundleID: bundleID, match: match, url: url.absoluteString),
                let script = NSAppleScript(source: source) {
                 var err: NSDictionary?
                 let result = script.executeAndReturnError(&err)

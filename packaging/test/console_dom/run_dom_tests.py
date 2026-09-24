@@ -164,6 +164,7 @@ def main():
         dom_filedeep = dump_dom(chrome, tmp, "#file=%2FUsers%2Fdev%2F.codex%2Fsessions%2F2026%2F09%2F23%2Frollout-2026-09-23T12-53-26-demo.jsonl")
         dom_toast = dump_dom(chrome, tmp, "?toastdemo")
         dom_notify = dump_dom(chrome, tmp, "?notifydemo")
+        dom_notifyfocus = dump_dom(chrome, tmp, "?notifyfocusdemo")
         dom_allow = dump_dom(chrome, tmp, "?allowdemo")
         dom_dismiss = dump_dom(chrome, tmp, "?dismissdemo")
         dom_retriage = dump_dom(chrome, tmp, "?retriagedemo")
@@ -171,6 +172,13 @@ def main():
         dom_view = dump_dom(chrome, tmp, "?viewdemo")
         dom_advdown = dump_dom(chrome, tmp, "?advisordown")
         dom_authfail = dump_dom(chrome, tmp, "?authfail")
+        dom_notoken = dump_dom(chrome, tmp, "?notoken")
+        dom_hashagents = dump_dom(chrome, tmp, "#agents")
+        dom_hashfindings = dump_dom(chrome, tmp, "#findings")
+        dom_trends = dump_dom(chrome, tmp, "?trendsprobe")
+        dom_hiddenrender = dump_dom(chrome, tmp, "?hiddenrenderprobe")
+        dom_policylists = dump_dom(chrome, tmp, "?policylists")
+        dom_policyempty = dump_dom(chrome, tmp, "?policylists&emptypolicy")
         dom_netfail = dump_dom(chrome, tmp, "?netfail")
         dom_tokenseed = dump_dom(chrome, tmp, "?requiretoken&tokenseed")
         dom_nofleet = dump_dom(chrome, tmp, "?nofleetdemo")
@@ -201,6 +209,7 @@ def main():
         dom_export = dump_dom(chrome, tmp, "?raildemo&exportdemo")
         dom_explain = dump_dom(chrome, tmp, "?explaindemo")
         dom_explainact = dump_dom(chrome, tmp, "?explaindemo&explainact")
+        dom_allowpathact = dump_dom(chrome, tmp, "?explaindemo&allowpathact")
         dom_explainfail = dump_dom(chrome, tmp, "?explaindemo&explainact&postfail")
         dom_detailsprobe = dump_dom(chrome, tmp, "?explaindemo&detailsprobe")
         dom_fam = dump_dom(chrome, tmp, "?familiesdemo&tab=resources")
@@ -553,14 +562,31 @@ def main():
               and 'data-action="notify-scope-remove" data-rule="proxy-secret-leak" data-workspace="/Users/dev/work/prod"' in dom_notify)
         check("notify popover offers adding a workspace scope",
               'id="notify-scope-path"' in dom_notify and 'data-action="notify-scope-add"' in dom_notify)
+        nfp = pre(dom_notifyfocus, "notify-focus-probe")
+        check("notify add-scope input survives a reconcile that changes notifyCfg: same node, value and focus",
+              nfp == "same=true value=in-progress-edit focused=true probe=1", f"probe={nfp!r}")
 
         # --- connection states (the "trouble connecting" regressions) ---
-        check("auth-expired shows honest re-auth guidance, not 'daemon down'",
-              "Session expired — reopen the console from the Secure Agent menu bar" in dom_authfail
-              and "Can&#x27;t reach the Secure Agent daemon" not in dom_authfail
-              and "Can't reach the Secure Agent daemon" not in dom_authfail)
-        check("auth-expired sets the status chip",
-              'id="status-text">Session expired<' in dom_authfail)
+        check("auth-expired shows the ended state, not 'daemon down'",
+              'id="session-ended" role="alert">' in dom_authfail
+              and "Console session ended." in dom_authfail
+              and "Open it again from the Secure Agent menu bar." in dom_authfail
+              and "Can&#x27;t reach the Secure Agent daemon" not in dom_authfail.split('id="session-ended"', 1)[1].split('</section>', 1)[0])
+        check("a 403 hides the posture, counts and panels and closes the stream",
+              'class="is-ended"' in dom_authfail
+              and re.search(r'<section class="posture" id="posture-banner"[^>]*\bhidden\b', dom_authfail) is not None
+              and re.search(r'<main[^>]*\bhidden\b', dom_authfail) is not None
+              and '<pre id="sse-state" hidden="">closed</pre>' in dom_authfail,
+              (re.search(r'<pre id="sse-state"[^>]*>[^<]*</pre>', dom_authfail) or [None])[0])
+        nt_fetches = (re.search(r'<pre id="fetch-count"[^>]*>(\d+)</pre>', dom_notoken) or [None, "missing"])[1]
+        check("no token at load: only the ended state, no posture, zero fetches, no stream",
+              'id="session-ended" role="alert">' in dom_notoken
+              and re.search(r'<section class="posture" id="posture-banner"[^>]*\bhidden\b', dom_notoken) is not None
+              and re.search(r'<section class="statstrip"[^>]*\bhidden\b', dom_notoken) is not None
+              and nt_fetches == "0" and 'id="sse-state"' not in dom_notoken,
+              f"fetches={nt_fetches}")
+        check("a token at load: the console renders, the ended state stays hidden",
+              'id="session-ended" role="alert" hidden' in dom and 'id="count-agents">3<' in dom)
         check("unreachable shows the retry banner",
               "reach the Secure Agent daemon" in dom_netfail)
         check("unreachable sets Disconnected chip",
@@ -583,23 +609,75 @@ def main():
               and dom.count('class="audit-item') == 2)
 
         # --- tabs (console IA) ---
-        check("tab bar renders all five tabs",
-              dom.count('class="tab-btn') >= 5
-              and all(f'data-tab="{t}"' in dom for t in ("overview", "sessions", "agents", "egress", "findings")))
-        check("findings destination is presented as attention", '>Attention<' in dom)
-        check("overview tab active by default",
-              'class="tab-btn active" data-tab="overview"' in dom)
+        tab_ids = re.findall(r'class="tab-btn[^"]*" data-tab="(\w+)"', dom)
+        tab_labels = re.findall(r'data-tab="\w+" role="tab"[^>]*>\s*<svg[^>]*>.*?</svg><span>([^<]+)</span>', dom, re.S)
+        check("tab bar renders exactly four tabs, Home first",
+              dom.count('class="tab-btn') == 4 and tab_ids == ["home", "sessions", "egress", "policy"]
+              and tab_labels == ["Home", "Sessions", "Egress", "Policy"], f"ids={tab_ids} labels={tab_labels}")
+        check("the attention panel lives in Home, first",
+              dom.index('id="tab-home"') < dom.index('id="attention-center"') < dom.index('id="spend-card"')
+              < dom.index('id="home-findings"') < dom.index('id="home-trends"') < dom.index('id="tab-sessions"'))
+        check("home tab active by default",
+              'class="tab-btn active" data-tab="home"' in dom)
         check("non-active panels hidden",
               'id="tab-sessions" role="tabpanel" hidden' in dom
-              and 'id="tab-agents" role="tabpanel" hidden' in dom
-              and 'id="tab-findings" role="tabpanel" hidden' in dom)
-        check("overview panel visible",
-              'id="tab-overview" role="tabpanel">' in dom)
+              and 'id="tab-egress" role="tabpanel" hidden' in dom
+              and 'id="tab-policy" role="tabpanel" hidden' in dom)
+        check("home panel visible",
+              'id="tab-home" role="tabpanel">' in dom)
+        check("home groups are closed by default",
+              '<details class="home-group" id="home-findings" data-group="findings">' in dom
+              and '<details class="home-group" id="home-trends" data-group="trends">' in dom)
+        check("hash #agents opens Sessions on the Processes sub-view",
+              'class="tab-btn active" data-tab="sessions"' in dom_hashagents
+              and 'class="subtab-btn active" data-subtab="processes"' in dom_hashagents
+              and 'id="sub-processes" role="tabpanel">' in dom_hashagents
+              and 'id="sub-board" role="tabpanel" hidden' in dom_hashagents
+              and 'id="tab-sessions" role="tabpanel">' in dom_hashagents)
+        check("hash #findings opens Home",
+              'class="tab-btn active" data-tab="home"' in dom_hashfindings
+              and 'id="tab-home" role="tabpanel">' in dom_hashfindings)
+        trends = (re.search(r'<pre id="trends-probe"[^>]*>(.*?)</pre>', dom_trends, re.S) or [None, ""])[1]
+        tm = re.match(r"closed\(open=false\):activity=(\d+),chart-flags=(\d+),chart-memory=(\d+) \| opened:activity=(\d+),chart-flags=(\d+),chart-memory=(\d+)$", trends)
+        check("Trends closed: its chart panels render 0 times through a burst, then render when opened",
+              tm is not None and tm.group(1, 2, 3) == ("0", "0", "0") and all(int(x) >= 1 for x in tm.group(4, 5, 6)),
+              f"probe={trends!r}")
+        # renderAll() (boot, Refresh, search) must not paint a panel that
+        # isn't on screen: absolute render count 0 for the Trends charts and
+        # the Sessions/Resources sub-view through all three, then >= 1 once
+        # each is actually shown.
+        hrp = (re.search(r'<pre id="hidden-render-probe"[^>]*>(.*?)</pre>', dom_hiddenrender, re.S) or [None, ""])[1]
+        hrp_stages = dict(re.findall(r'(boot|refresh|search|shown):((?:[a-z-]+=\d+,?)+)', hrp))
+        def hrp_zero(stage):
+            counts = dict(re.findall(r'([a-z-]+)=(\d+)', hrp_stages.get(stage, '')))
+            return len(counts) == 4 and all(v == '0' for v in counts.values())
+        def hrp_shown():
+            counts = dict(re.findall(r'([a-z-]+)=(\d+)', hrp_stages.get('shown', '')))
+            return len(counts) == 4 and all(int(v) >= 1 for v in counts.values())
+        check("hidden panels (Trends charts, Sessions/Resources) render 0 times across boot, Refresh and search, then render once shown",
+              hrp_zero('boot') and hrp_zero('refresh') and hrp_zero('search') and hrp_shown(),
+              f"probe={hrp!r}")
+        def policy_rows(kind):
+            block = dom_policylists.split(f'data-policy="{kind}"', 1)
+            return block[1].split('</div></div></div>', 1)[0].count('class="policy-row"') if len(block) == 2 else -1
+        check("Policy lists guard decisions, file exceptions and muted classes from their endpoints",
+              'class="tab-btn active" data-tab="policy"' in dom_policylists
+              and policy_rows("guard") == 2 and policy_rows("path") == 1 and policy_rows("mute") == 2
+              and 'id="badge-guard-rules">2<' in dom_policylists and 'id="badge-path-allows">1<' in dom_policylists
+              and '.env.example</code>' in dom_policylists and "keychain-security-cli" in dom_policylists.split('data-policy="mute"', 1)[-1],
+              f"guard={policy_rows('guard')} path={policy_rows('path')} mute={policy_rows('mute')}")
+        check("Policy empty lists say what fills them",
+              "No guard decisions yet." in dom_policyempty and "No file exceptions yet." in dom_policyempty
+              and "No muted flag classes." in dom_policyempty)
+        check("notification rules live in the Policy tab; the bell links there",
+              dom.index('id="tab-policy"') < dom.index('id="notify-rules-list"')
+              and 'id="btn-notify" data-action="goto-tab" data-tab="policy"' in dom
+              and dom.index('id="tab-policy"') < dom.index('id="audit-panel"'))
         check("resource mission control is present", 'id="resource-mission-control"' in dom)
         # The live Resources tab ends where the History tab begins: the flight
         # recorder moved out, so it must NOT be inside the resource view.
-        resource_view = dom.split('id="resource-mission-control"', 1)[1].split('id="tab-history"', 1)[0]
-        history_view = dom.split('id="tab-history"', 1)[1].split('id="tab-events"', 1)[0]
+        resource_view = dom.split('id="resource-mission-control"', 1)[1].split('id="history-panel"', 1)[0]
+        history_view = dom.split('id="history-panel"', 1)[1].split('id="sub-worktrees"', 1)[0]
         check("whole-machine headroom is visible",
               "Machine headroom" in resource_view and "25 / 100" in resource_view
               and "4.0 GB available" in resource_view)
@@ -657,7 +735,7 @@ def main():
         check("policy editor adds the selected session workspace",
               'value="/Users/dev/workspace/api-service"' in dom_policy)
         # --- resources v2: strip, needs attention, harness groups, family drawer ---
-        board = dom_fam.split('id="resource-board"', 1)[1].split('id="tab-history"', 1)[0]
+        board = dom_fam.split('id="resource-board"', 1)[1].split('id="history-panel"', 1)[0]
         check("resources: the machine strip renders four tiles",
               'class="machine-strip' in board and board.count('class="machine-tile') == 4,
               f"tiles={board.count('class=\"machine-tile')}")
@@ -695,7 +773,8 @@ def main():
         check("View family opens the drawer with the family name; the tab stays Resources",
               dom_fam.count('<div id="drawer" class="drawer">') == 1
               and 'id="drawer-title-text">Codex · data-pipeline@feat/etl<' in fam_drawer
-              and 'class="tab-btn active" data-tab="resources"' in dom_fam)
+              and 'class="tab-btn active" data-tab="sessions"' in dom_fam
+              and 'class="subtab-btn active" data-subtab="resources"' in dom_fam)
         check("family drawer: the process table shows 12 rows and Show 8 more, then expands in place",
               fam_probe == "rows=12 more=Show 8 more" and fam_drawer.count('class="family-proc-row') == 20
               and 'data-action="show-more"' not in fam_drawer, f"probe={fam_probe!r} rows={fam_drawer.count('class=\"family-proc-row')}")
@@ -708,7 +787,7 @@ def main():
         ev_scoped = dom_famev.split('id="events-container"', 1)[1].split('</section>', 1)[0]
         ev_pids = set(int(x) for x in re.findall(r'<span class="pid" title="PID (\d+)"', ev_scoped))
         check("Open in Events switches to Events scoped to the family pids",
-              'class="tab-btn active" data-tab="events"' in dom_famev
+              'class="subtab-btn active" data-subtab="events"' in dom_famev
               and len(ev_pids) >= 2 and ev_pids <= set(range(4412, 4432)), f"pids={sorted(ev_pids)}")
         ev_cap = dom_evcap.split('id="events-container"', 1)[1].split('</section>', 1)[0]
         check("Events tab shows the newest 50 rows and a Show more button",
@@ -731,15 +810,15 @@ def main():
               "Intervention failed: rollback failed: permission denied" in resource_view)
         check("sessions panel lives in the sessions tab",
               dom.index('id="tab-sessions"') < dom.index('id="session-board"')
-              and dom.index('id="session-board"') < dom.index('id="tab-agents"'))
-        check("overview has no session board",
-              'id="session-board"' not in dom.split('id="tab-overview"', 1)[1].split('id="tab-sessions"', 1)[0])
-        overview = dom.split('id="tab-overview"', 1)[1].split('id="tab-resources"', 1)[0]
-        # Overview is charts-only: the activity chart plus the two ranked-bar
-        # charts. Lists (sessions/agents/flags/events) live in their own tabs.
-        check("overview leads with the activity chart", 'id="activity-chart"' in overview)
-        check("overview has the findings-by-rule chart", 'id="chart-flags"' in overview)
-        check("overview has the memory-by-family chart", 'id="chart-memory"' in overview)
+              and dom.index('id="session-board"') < dom.index('id="sub-processes"'))
+        check("home has no session board",
+              'id="session-board"' not in dom.split('id="tab-home"', 1)[1].split('id="tab-sessions"', 1)[0])
+        overview = dom.split('id="home-trends"', 1)[1].split('id="tab-sessions"', 1)[0]
+        # Trends is charts-only: the activity chart plus the two ranked-bar
+        # charts. Lists (sessions/agents/flags/events) live elsewhere.
+        check("trends lead with the activity chart", 'id="activity-chart"' in overview)
+        check("trends have the findings-by-rule chart", 'id="chart-flags"' in overview)
+        check("trends have the memory-by-family chart", 'id="chart-memory"' in overview)
         mem_bars = dom_memfam.split('id="chart-memory"', 1)[1].split('</section>', 1)[0].split('class="hbar-row"')[1:]
         mem_badge = re.search(r'id="chart-mem-total">(\d+)<', dom_memfam)
         check("memory by family: three sessions on one root are one bar carrying 3 sessions",
@@ -749,7 +828,7 @@ def main():
         check("memory by family: the badge counts agent families, not sessions or infra",
               mem_badge is not None and mem_infra == 1 and int(mem_badge.group(1)) == len(mem_bars) - mem_infra == 3,
               f"{mem_badge.group(0) if mem_badge else 'no badge'} infra={mem_infra}")
-        check("overview carries no list panels",
+        check("trends carry no list panels",
               'id="session-strip"' not in overview and 'id="events-container"' not in overview
               and 'id="resource-board"' not in overview)
         check("session board has project filter", 'id="session-cwd-filter"' in dom)
@@ -763,8 +842,13 @@ def main():
         check("egress tab badge shows uninspected count",
               'id="tab-badge-egress">2<' in dom)
         needs_you = int(re.search(r"needs_you: (\d+),", open(MOCK).read()).group(1))
-        check("findings tab badge shows needs-you count",
-              f'id="tab-badge-findings">{needs_you}<' in dom)
+        check("home tab badge shows needs-you count",
+              f'id="tab-badge-home">{needs_you}<' in dom)
+        check("sessions and processes counts sit on the sub-view buttons; the Sessions tab keeps the live count",
+              re.search(r'id="subtab-badge-board">\d+<', dom) is not None
+              and re.search(r'id="subtab-badge-processes">\d+<', dom) is not None
+              and (re.search(r'id="tab-badge-sessions">(\d+)<', dom) or [None, "a"])[1]
+              == (re.search(r'id="subtab-badge-board">(\d+)<', dom) or [None, "b"])[1])
         attention = dom.split('id="attention-center"', 1)[1].split('id="security-findings-grid"', 1)[0]
         check("attention center groups the whole api-service session",
               'class="attention-group' in attention and "api-service" in attention
@@ -779,32 +863,32 @@ def main():
         check("attention shows blast-radius copy", "approves every path under rule" in attention)
         check("attention egress opens endpoint evidence", 'data-action="open-uninspected"' in attention)
         check("resolved guard request leaves the attention queue",
-              f'id="tab-badge-findings">{needs_you - 1}<' in dom_guard
+              f'id="tab-badge-home">{needs_you - 1}<' in dom_guard
               and 'data-action="guard-resolve" data-id="guard-1"' not in dom_guard)
         resolve_probe = (re.search(r'<pre id="resolve-probe"[^>]*>(.*?)</pre>', dom_resolve, re.S) or [None, ""])[1]
         check("resolved incident leaves the attention count before reconciliation",
               resolve_probe == f"badge={needs_you - 1} tab={needs_you - 1} queued=false", f"probe={resolve_probe!r}")
-        check("posture flag item switches to findings tab",
-              'data-action="goto-tab" data-tab="findings"' in dom)
+        check("posture flag item opens Home with Findings history",
+              'data-action="goto-tab" data-tab="home" data-group="findings"' in dom)
         check("tab switch reveals the target panel",
               'id="tab-egress" role="tabpanel">' in dom_tab
-              and 'id="tab-overview" role="tabpanel" hidden' in dom_tab)
-        # The old catch-all "Telemetry" tab split into two coherent ones.
-        check("resources and events are separate tabs",
-              'id="tab-resources" role="tabpanel" hidden' in dom
-              and 'id="tab-events" role="tabpanel" hidden' in dom)
-        check("history is its own tab",
-              'id="tab-history" role="tabpanel" hidden' in dom
-              and 'data-tab="history"' in dom)
-        check("resource panel lives in the resources tab",
-              dom.index('id="tab-resources"') < dom.index('id="resource-board"')
-              and dom.index('id="resource-board"') < dom.index('id="tab-history"'))
-        check("flight recorder lives in the history tab",
-              dom.index('id="tab-history"') < dom.index('id="history-board"')
-              and dom.index('id="history-board"') < dom.index('id="tab-events"'))
-        check("event timeline lives in the events tab",
-              dom.index('id="tab-events"') < dom.index('id="events-container"')
-              and dom.index('id="events-container"') < dom.index('id="tab-sessions"'))
+              and 'id="tab-home" role="tabpanel" hidden' in dom_tab)
+        # Sessions holds one sub-view at a time.
+        check("resources and events are separate sub-views",
+              'id="sub-resources" role="tabpanel" hidden' in dom
+              and 'id="sub-events" role="tabpanel" hidden' in dom
+              and 'class="subtabs" role="tablist"' in dom)
+        check("pressure history sits in the Resources sub-view",
+              dom.index('id="sub-resources"') < dom.index('id="history-panel"') < dom.index('id="sub-worktrees"'))
+        check("resource panel lives in the resources sub-view",
+              dom.index('id="sub-resources"') < dom.index('id="resource-board"')
+              and dom.index('id="resource-board"') < dom.index('id="history-panel"'))
+        check("flight recorder lives in the resources sub-view",
+              dom.index('id="history-panel"') < dom.index('id="history-board"')
+              and dom.index('id="history-board"') < dom.index('id="sub-worktrees"'))
+        check("event timeline lives in the events sub-view",
+              dom.index('id="sub-events"') < dom.index('id="events-container"')
+              and dom.index('id="events-container"') < dom.index('id="tab-egress"'))
 
         # --- saved views, search, export (P5) ---
         check("saved-view menu is present", 'id="btn-views"' in dom and 'id="views-pop"' in dom)
@@ -937,7 +1021,7 @@ def main():
               "cursor · web-app@main" in head and "3 s gap" in head
               and '<p class="finding-what">Cursor read AWS credentials (~/.aws/credentials), then reached Cloudflare 3 s later.</p>' in card
               and '<p class="finding-verdict">Likely benign (advisor 93 %): Cloudflare fronts the package registry this project installs from.</p>' in card
-              and buttons == [("btn-primary", "allow-host"), ("btn-ghost", "dismiss"), ("btn-danger", "kill")],
+              and buttons == [("btn-primary", "allow-host"), ("btn-ghost", "allow-path"), ("btn-ghost", "dismiss"), ("btn-danger", "kill")],
               f"buttons={buttons}")
         details = (re.search(r'<details class="finding-details">(.*?)</details>', card, re.S) or [None, ""])[1]
         check("finding card: Details is closed by default and holds the chain, pid, full address and ISO timestamp",
@@ -953,6 +1037,11 @@ def main():
               and 'POST /flags/acknowledge' in act_reqs
               and 'data-flag-id="flag-2"' not in flags_act
               and 'class="card-note">allowlisted<' in dom_explainact, f"requests={act_reqs!r}")
+        allowpath_reqs = pre(dom_allowpathact, "mock-requests")
+        check("finding card: the allow-path action (not the first/recommended button) sends its own served request",
+              'POST /guard/path-allow body={"agent":"cursor","rule_id":"cloud-creds","path":"/Users/dev/.aws/credentials"}' in allowpath_reqs
+              and 'POST /allowlist' not in allowpath_reqs,
+              f"requests={allowpath_reqs!r}")
         fail_reqs = pre(dom_explainfail, "mock-requests")
         flags_fail = dom_explainfail.split('id="flags-list"', 1)[-1].split('id="incidents-container"', 1)[0]
         check("finding card: a failed allow puts the card back and toasts danger",
@@ -1002,7 +1091,7 @@ def main():
               and m.group(5) == "hidden" and m.group(6) == "" and int(m.group(7)) > int(m.group(4))
               and m.group(8) == "hidden", f"probe={scope!r}")
         attention_badge = (re.search(r'id="badge-attention-count"[^>]*>(\d+)<', dom) or [None, ""])[1]
-        tab_badge = (re.search(r'id="tab-badge-findings"[^>]*>(\d+)<', dom) or [None, ""])[1]
+        tab_badge = (re.search(r'id="tab-badge-home"[^>]*>(\d+)<', dom) or [None, ""])[1]
         check("attention badge and tab badge equal posture.needs_you; the machine group renders",
               attention_badge == str(needs_you) and tab_badge == str(needs_you)
               and '<strong>This machine</strong>' in dom and 'data-action="open-fda"' in attention
@@ -1044,13 +1133,13 @@ def main():
 
         # --- worktrees: the hunter's report, one row per worktree ---
         def wt_block(dom_text):
-            return dom_text.split('id="worktrees-container"', 1)[-1].split('id="tab-history"', 1)[0]
+            return dom_text.split('id="worktrees-container"', 1)[-1].split('id="sub-events"', 1)[0]
         wt = wt_block(dom_wt)
         wt_rows = wt.count('class="wt-row')
         wt_remove = wt.count('data-action="worktree-remove"')
         wt_prune = wt.count('data-action="worktree-prune"')
         check("worktrees: tab opens and renders a row per non-main worktree with its state",
-              'class="tab-btn active" data-tab="worktrees"' in dom_wt and wt_rows == 4
+              'class="subtab-btn active" data-subtab="worktrees"' in dom_wt and wt_rows == 4
               and all(f'class="wt-row wt-{s}"' in wt for s in ("remove", "review", "keep", "prune"))
               and "main worktree of the repository" not in wt,
               f"rows={wt_rows}")

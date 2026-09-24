@@ -56,7 +56,8 @@ final class ConsoleAccessTests: XCTestCase {
 
     func testFocusScriptTargetsExistingTab() {
         for browser in ["com.apple.Safari", "com.google.Chrome"] {
-            let script = ConsoleOpener.focusScript(browserBundleID: browser, match: "127.0.0.1:8443/dashboard")
+            let script = ConsoleOpener.focusScript(browserBundleID: browser, match: "127.0.0.1:8443/dashboard",
+                                                   url: "http://127.0.0.1:8443/dashboard/#ct=abc")
             XCTAssertNotNil(script, "missing script for \(browser)")
             XCTAssertTrue(script!.contains("127.0.0.1:8443/dashboard"), "script must match the console URL")
             XCTAssertTrue(script!.contains("activate"), "script must raise the browser")
@@ -65,7 +66,31 @@ final class ConsoleAccessTests: XCTestCase {
     }
 
     func testFocusScriptNilForUnknownBrowsers() {
-        XCTAssertNil(ConsoleOpener.focusScript(browserBundleID: "com.arc.browser", match: "x"))
-        XCTAssertNil(ConsoleOpener.focusScript(browserBundleID: "org.mozilla.firefox", match: "x"))
+        XCTAssertNil(ConsoleOpener.focusScript(browserBundleID: "com.arc.browser", match: "x", url: "x"))
+        XCTAssertNil(ConsoleOpener.focusScript(browserBundleID: "org.mozilla.firefox", match: "x", url: "x"))
+    }
+
+    /// An expired console tab only recovers when the focused tab receives the
+    /// fresh #ct= token, so the script loads the full URL before activating.
+    func testFocusScriptLoadsFreshURLBeforeActivating() {
+        let url = "http://127.0.0.1:8443/dashboard/#ct=fresh&tab=egress"
+        let expect = [
+            "com.apple.Safari": "set URL of t to \"\(url)\"",
+            "com.google.Chrome": "set URL of (tab i of w) to \"\(url)\"",
+        ]
+        for (browser, line) in expect {
+            let script = ConsoleOpener.focusScript(browserBundleID: browser, match: "127.0.0.1:8443/dashboard", url: url)!
+            XCTAssertTrue(script.contains(line), "\(browser) script must load the fresh URL")
+            let set = script.range(of: "set URL")!.lowerBound
+            let raise = script.range(of: "activate")!.lowerBound
+            XCTAssertTrue(set < raise, "\(browser) must load the URL before activating")
+        }
+    }
+
+    func testFocusScriptEscapesURLForAppleScriptLiteral() {
+        let url = #"http://127.0.0.1:8443/dashboard/#ct=a"b\c"#
+        let script = ConsoleOpener.focusScript(browserBundleID: "com.google.Chrome", match: "x", url: url)!
+        XCTAssertTrue(script.contains(#"to "http://127.0.0.1:8443/dashboard/#ct=a\"b\\c""#), script)
+        XCTAssertEqual(ConsoleOpener.appleScriptLiteral(#"a"b\c"#), #"a\"b\\c"#)
     }
 }
