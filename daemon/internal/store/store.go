@@ -728,15 +728,20 @@ func (s *Store) RecentFlags(limit int) []model.Flag {
 // GetFlag fetches one flag by ID (for the re-triage endpoint). Absent ID →
 // ok=false; the caller answers 404 rather than re-enqueueing a ghost.
 // AcknowledgeRuleHost marks every UNacknowledged flag of `rule` whose
-// evidence cites `host` as acted-upon. Called when the operator mutes a
+// evidence cites `host` (of `agent` when set) as acted-upon. Called when the operator mutes a
 // rule+host pair: the mute suppresses future flags AND the existing ones
 // leave the critical list — otherwise "ignore" looks like it did nothing.
 // Idempotent; returns the number of flags newly acknowledged.
-func (s *Store) AcknowledgeRuleHost(rule, host string) int {
+func (s *Store) AcknowledgeRuleHost(rule, host, agent string) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	rows, err := s.db.Query(
-		`SELECT id, evidence FROM flags WHERE rule = ? AND (acknowledged IS NULL OR acknowledged = '')`, rule)
+	q := `SELECT id, evidence FROM flags WHERE rule = ? AND (acknowledged IS NULL OR acknowledged = '')`
+	args := []any{rule}
+	if agent != "" {
+		q += ` AND agent = ?`
+		args = append(args, agent)
+	}
+	rows, err := s.db.Query(q, args...)
 	if err != nil {
 		log.Printf("store: acknowledge-rule-host query error: %v", err)
 		return 0
@@ -869,6 +874,23 @@ func (s *Store) AcknowledgeFlags(ids []string) int {
 		return 0
 	}
 	return n
+}
+
+// ReattributeFlags relabels pid's "untagged:" flags stamped at or after since
+// to agent, once the tagger has caught up with the process. Returns how many
+// rows changed.
+func (s *Store) ReattributeFlags(pid int32, agent string, since time.Time) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	res, err := s.db.Exec(
+		`UPDATE flags SET agent = ? WHERE pid = ? AND agent LIKE 'untagged:%' AND datetime(ts) >= datetime(?)`,
+		agent, pid, since.UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		log.Printf("store: reattribute flags error: %v", err)
+		return 0
+	}
+	n, _ := res.RowsAffected()
+	return int(n)
 }
 
 func (s *Store) GetFlag(id string) (model.Flag, bool) {

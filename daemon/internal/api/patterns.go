@@ -342,21 +342,12 @@ func (a *API) patternActions(p model.Pattern, openIDs []string, env *explainEnv)
 		})
 	}
 	if a.mutes != nil {
-		switch {
-		case host != "" && validMuteHost(host):
-			acts = append(acts, model.ExplainAction{
-				ID: "mute-rule-host", Label: "Stop flagging this for " + host,
-				Consequence: "\"" + p.Title + "\" stops being flagged for " + host + "; the host stays monitored and its open flags of this rule are marked reviewed.",
-				Method:      http.MethodPost, Path: "/mute",
-				Body: map[string]any{"rule": p.Rule, "host": host},
-			})
-		case p.Rule == "keychain-access" || p.Rule == "keychain-security-cli":
-			acts = append(acts, model.ExplainAction{
-				ID: "mute-class", Label: "Dismiss this flag class",
-				Consequence: "\"" + p.Title + "\" stops raising flags for every agent; monitoring continues and suppressed hits are counted.",
-				Method:      http.MethodPost, Path: "/mute",
-				Body: map[string]any{"rule": p.Rule, "host": "*"},
-			})
+		if host != "" && validMuteHost(host) {
+			if act, ok := muteRuleHostAction(p.Rule, p.Title, host, p.Agent); ok {
+				acts = append(acts, act)
+			}
+		} else if act, ok := muteClassAction(p.Rule, p.Title, p.Agent); ok {
+			acts = append(acts, act)
 		}
 	}
 	if len(openIDs) > 0 {

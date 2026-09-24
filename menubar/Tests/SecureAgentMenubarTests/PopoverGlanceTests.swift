@@ -201,6 +201,13 @@ final class PopoverGlanceTests: XCTestCase {
         XCTAssertNoThrow(try DaemonClient.validate(action(
             id: "mute-class", method: "POST", path: "/mute",
             body: ["rule": .string("keychain-access"), "host": .string("*")])))
+        // Agent-scoped mutes (served with the flag's agent in body): accepted.
+        XCTAssertNoThrow(try DaemonClient.validate(action(
+            id: "mute-rule-host", method: "POST", path: "/mute",
+            body: ["rule": .string("keychain-access"), "host": .string("h"), "agent": .string("codex")])))
+        XCTAssertNoThrow(try DaemonClient.validate(action(
+            id: "mute-class", method: "POST", path: "/mute",
+            body: ["rule": .string("keychain-access"), "host": .string("*"), "agent": .string("codex")])))
         XCTAssertNoThrow(try DaemonClient.validate(action(
             id: "dismiss", method: "POST", path: "/flags/acknowledge", body: ["flag_id": .string("f1")])))
         XCTAssertNoThrow(try DaemonClient.validate(action(

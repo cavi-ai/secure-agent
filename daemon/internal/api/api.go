@@ -1042,11 +1042,13 @@ func (a *API) handleOpenFDA(w http.ResponseWriter, r *http.Request) {
 }
 
 // MutePair is one operator disposition: (rule, host) suppressed at the
-// correlator (counted, never flagged). Title is the rule's human title,
-// served on reads only; POST ignores it.
+// correlator (counted, never flagged) for Agent, or for every agent when
+// Agent is empty. Title is the rule's human title, served on reads only;
+// POST ignores it.
 type MutePair struct {
 	Rule  string `json:"rule"`
 	Host  string `json:"host"`
+	Agent string `json:"agent,omitempty"`
 	Title string `json:"title,omitempty"`
 }
 
@@ -1064,14 +1066,18 @@ func (a *API) handleMute(w http.ResponseWriter, r *http.Request) {
 		limitBody(w, r)
 		var req MutePair
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Rule == "" || req.Host == "" {
-			http.Error(w, `Invalid payload: {"rule":"<id>","host":"<host>"}`, http.StatusBadRequest)
+			http.Error(w, `Invalid payload: {"rule":"<id>","host":"<host>","agent":"<optional agent>"}`, http.StatusBadRequest)
 			return
 		}
 		if !validMuteHost(req.Host) {
 			http.Error(w, "host must be a bare hostname", http.StatusBadRequest)
 			return
 		}
-		if err := a.mutes.Add(req.Rule, req.Host); err != nil {
+		if !validMuteAgent(req.Agent) {
+			http.Error(w, "invalid agent", http.StatusBadRequest)
+			return
+		}
+		if err := a.mutes.Add(req.Rule, req.Host, req.Agent); err != nil {
 			http.Error(w, fmt.Sprintf("persist failed: %v", err), http.StatusInternalServerError)
 			return
 		}
@@ -1079,34 +1085,38 @@ func (a *API) handleMute(w http.ResponseWriter, r *http.Request) {
 		// rule citing this host leaves the critical list. Without this, a
 		// mute suppresses only FUTURE flags and the operator sees "nothing
 		// happened" — the old rows sit there, red, forever.
-		acked := a.store.AcknowledgeRuleHost(req.Rule, req.Host)
-		a.recordLabel(model.OperatorLabel{Kind: "host", Rule: req.Rule, Pattern: req.Host, Label: "ok", Source: "mute"})
+		acked := a.store.AcknowledgeRuleHost(req.Rule, req.Host, req.Agent)
+		a.recordLabel(model.OperatorLabel{Kind: "host", Rule: req.Rule, Agent: req.Agent, Pattern: req.Host, Label: "ok", Source: "mute"})
 		a.store.PutAudit(store.AuditEntry{
 			Action: "mute-add", Rule: req.Rule,
-			Detail: fmt.Sprintf("muted %s for %s (%d existing flags acknowledged)", req.Host, req.Rule, acked),
+			Detail: fmt.Sprintf("muted %s for %s%s (%d existing flags acknowledged)", req.Host, req.Rule, muteAgentSuffix(req.Agent), acked),
 		})
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{"status": "ok", "rule": req.Rule, "host": req.Host})
+		resp := map[string]string{"status": "ok", "rule": req.Rule, "host": req.Host}
+		if req.Agent != "" {
+			resp["agent"] = req.Agent
+		}
+		json.NewEncoder(w).Encode(resp)
 	case http.MethodDelete:
-		rule, host := r.URL.Query().Get("rule"), r.URL.Query().Get("host")
+		rule, host, agent := r.URL.Query().Get("rule"), r.URL.Query().Get("host"), r.URL.Query().Get("agent")
 		if rule == "" || host == "" {
-			http.Error(w, "DELETE requires ?rule=<id>&host=<host>", http.StatusBadRequest)
+			http.Error(w, "DELETE requires ?rule=<id>&host=<host>[&agent=<agent>]", http.StatusBadRequest)
 			return
 		}
 		// Same host validation as POST: a bare hostname only (a mute value
 		// with URL structure or absurd length could poison the store and
 		// the ledger UI). Rule must match the id charset.
-		if !guardTokenRE.MatchString(rule) || !validMuteHost(host) {
-			http.Error(w, "invalid rule/host", http.StatusBadRequest)
+		if !guardTokenRE.MatchString(rule) || !validMuteHost(host) || !validMuteAgent(agent) {
+			http.Error(w, "invalid rule/host/agent", http.StatusBadRequest)
 			return
 		}
-		if err := a.mutes.Remove(rule, host); err != nil {
+		if err := a.mutes.Remove(rule, host, agent); err != nil {
 			http.Error(w, fmt.Sprintf("persist failed: %v", err), http.StatusInternalServerError)
 			return
 		}
 		a.store.PutAudit(store.AuditEntry{
 			Action: "mute-remove", Rule: rule,
-			Detail: fmt.Sprintf("unmuted %s for %s", host, rule),
+			Detail: fmt.Sprintf("unmuted %s for %s%s", host, rule, muteAgentSuffix(agent)),
 		})
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})

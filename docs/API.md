@@ -284,7 +284,7 @@ Returns one flag (with `title` and `advisor`) plus `explain`, the daemon's plain
 | `egress` | Every `connect` item, deduped by host:port, in evidence order. `org`/`name`/`kind` from the endpoint identity table. `allowlisted`: the host is approved for the flag's agent (exact or dot-suffix match). `gap_seconds`: connect time − read time (negative when the connection came first; `0` without a read item). |
 | `context` | The flag's session (harness, repo, branch, workspace), the same-session tool call nearest the read time within ±60 s (`tool`, `tool_status`, `tool_at`), and the nearest model call within ±60 s (`model`). Absent when the flag has no session. |
 | `disposition` | One verdict, in precedence order: `acknowledged` ("Reviewed") → `benign-likely` (advisor `benign` with confidence ≥ 0.85; "Likely benign (advisor N %)", `why` = the rationale's first sentence) → `critical` (severity ≥ 3, "Act now") → `warning` ("Needs a look"). `why` is otherwise the rule title. |
-| `actions` | In order, only those that apply: `allow-host` (per destination host not yet allowlisted), `allow-path` (env/ssh/cloud/keychain files; guard rules `env-files`, `ssh-keys`, `cloud-creds`, `keychain`), `mute-rule-host` (first destination `POST /mute` accepts — IPv6 literals are not), `mute-class` (keychain rules, `host: "*"`), `open-incident` (an incident holds the flag), `dismiss` (unacknowledged), `kill` (the pid is a live agent). Each carries the request (`method`, `path`, `body`) and a one-line `consequence`. `recommended` marks the action matching the advisor's `suggested_action` (`allow-host` → first `allow-host`; `mute-rule` → `mute-rule-host`, else `mute-class`; `kill-agent` → `kill`; `rotate-credentials` → `open-incident`). |
+| `actions` | In order, only those that apply: `allow-host` (per destination host not yet allowlisted), `allow-path` (env/ssh/cloud/keychain files; guard rules `env-files`, `ssh-keys`, `cloud-creds`, `keychain`), `mute-rule-host` (first destination `POST /mute` accepts — IPv6 literals are not), `mute-class` (keychain rules, `host: "*"`; label "Mute keychain access for <agent>"), both with the flag's `agent` in `body` when it has one, `open-incident` (an incident holds the flag), `dismiss` (unacknowledged), `kill` (the pid is a live agent). Each carries the request (`method`, `path`, `body`) and a one-line `consequence`. `recommended` marks the action matching the advisor's `suggested_action` (`allow-host` → first `allow-host`; `mute-rule` → `mute-rule-host`, else `mute-class`; `kill-agent` → `kill`; `rotate-credentials` → `open-incident`). |
 
 ---
 
@@ -353,7 +353,7 @@ Repeating findings: the flags one agent raised under one rule on one subject in 
 | `sessions`, `session_count` | Busiest 5 session ids; distinct sessions. |
 | `disposition` | Worst among unacknowledged flags (`critical` > `warning` > `benign-likely`); `acknowledged` when `unacked` is 0. |
 | `summary` | One sentence: agent, action, count, local time window, processes and sessions, cadence. No flag ids. |
-| `actions` | `explain.actions` shapes, in order, only those that apply: `allow-host` (egress subject not yet allowlisted), `mute-rule-host` (egress subject) or `mute-class` (keychain rules), `dismiss-all` (`POST /flags/acknowledge` `{"flag_ids"}`, the open ids, at most 500), `kill` (busiest live pid). `recommended`: `benign-likely` → `allow-host`, else the mute; `critical` → `kill`. |
+| `actions` | `explain.actions` shapes, in order, only those that apply: `allow-host` (egress subject not yet allowlisted), `mute-rule-host` (egress subject) or `mute-class` (keychain rules), both with the pattern's `agent` in `body`, `dismiss-all` (`POST /flags/acknowledge` `{"flag_ids"}`, the open ids, at most 500), `kill` (busiest live pid). `recommended`: `benign-likely` → `allow-host`, else the mute; `critical` → `kill`. |
 | `flag_ids` | Covered flag ids, open first, newest first, at most 500. |
 
 `/snapshot` carries `patterns` (24 h, `min` 3) next to `flags`.
@@ -1003,9 +1003,25 @@ old rows leave the critical list. This is the recourse for noisy host-less
 rules (`keychain-access`, `keychain-security-cli`) — the console and menu bar
 expose it as "Dismiss this flag class". Reversible with `DELETE /mute`.
 
-`GET /mute` lists dispositions as `[{"rule", "host", "title"}]`, sorted by
-rule then host; `title` is the rule's human title (the rule id when it has
-none). `POST /mute` takes `{"rule", "host"}` only.
+`GET /mute` lists dispositions as `[{"rule", "host", "agent", "title"}]`,
+sorted by rule, host, then agent; `title` is the rule's human title (the rule
+id when it has none). `POST /mute` takes `{"rule", "host", "agent"}`; it
+ignores `title`.
+
+### Per-agent mutes (`agent`)
+
+```
+POST   /mute   {"rule": "keychain-access", "host": "*", "agent": "codex"}
+GET    /mute   → [{"rule": "keychain-access", "host": "*", "agent": "codex", "title": "Agent touched the keychain"}]
+DELETE /mute?rule=keychain-access&host=*&agent=codex
+```
+
+- `agent` is optional; absent or empty mutes the pair for every agent.
+- With `agent`, only that agent's hits are counted instead of flagged; other agents still flag.
+- With `agent`, `POST` acknowledges only that agent's open flags of the rule.
+- `agent` is a configured agent name or an `untagged:<exe>` label: `^[A-Za-z0-9][A-Za-z0-9_. :-]{0,127}$`.
+- `DELETE` removes the entry with the same `agent` (omit it for an every-agent mute).
+- `GET /mute` and `/snapshot` `mutes` return `agent` only for scoped mutes.
 
 ---
 

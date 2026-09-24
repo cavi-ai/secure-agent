@@ -60,6 +60,8 @@ test('policy lists: rows escaped, empty states say what fills them, loading and 
   assert.ok(guard.includes('env&lt;file') && guard.includes('class="policy-decision deny"') && guard.includes('2026-09-20'));
   const mute = policyListHTML('mute', [{ rule: 'keychain-access', host: '*' }, { rule: 'r', title: 'Nice <title>', host: 'x.com' }], {});
   assert.ok(mute.includes('<b>keychain-access</b>') && mute.includes('all hosts') && mute.includes('Nice &lt;title&gt;') && !mute.includes('<b>r</b>'));
+  const scoped = policyListHTML('mute', [{ rule: 'keychain-access', host: '*', agent: 'co<dex' }, { rule: 'keychain-access', host: '*' }], {});
+  assert.ok(scoped.includes('all hosts · co&lt;dex') && scoped.includes('all hosts · all agents'), 'a scoped mute names its agent; an unscoped one says all agents');
   assert.ok(policyListHTML('path', [], {}).includes('No file exceptions yet.'));
   assert.ok(policyListHTML('guard', [], {}).includes('No guard decisions yet.'));
   assert.ok(policyListHTML('mute', [], {}).includes('No muted flag classes.'));

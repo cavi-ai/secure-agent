@@ -878,3 +878,26 @@ func watchParentExit(initialPPID int) <-chan struct{} {
 	}()
 	return parentGone
 }
+
+// reattributeUntaggedFlags is the tagger's onTagged hook: a pid the tagger
+// just caught up with takes over its "untagged:" flags from the last hour,
+// and each relabeled flag goes out as a flag delta so the console upserts it
+// and reconciles.
+func reattributeUntaggedFlags(st *store.Store, deltas *api.DeltaHub, now func() time.Time) func(pid int32, info agents.AgentInfo) {
+	return func(pid int32, info agents.AgentInfo) {
+		since := now().Add(-time.Hour)
+		if st.ReattributeFlags(pid, info.Name, since) == 0 {
+			return
+		}
+		log.Printf("reattributed untagged flags for pid %d to %s", pid, info.Name)
+		if deltas == nil {
+			return
+		}
+		filter := store.FlagFilter{Agent: info.Name, Since: since.UTC().Format(time.RFC3339Nano), Limit: model.PatternFlagIDCap}
+		for _, fl := range st.QueryFlags(filter) {
+			if fl.PID == pid {
+				deltas.Publish(api.Delta{Type: "flag", Data: fl})
+			}
+		}
+	}
+}
