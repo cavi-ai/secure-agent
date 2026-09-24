@@ -85,7 +85,9 @@ func TestCleanupEndpoints(t *testing.T) {
 	var out struct {
 		Result clutter.ClutterResult `json:"result"`
 	}
-	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &out) != nil || out.Result.Bytes < 4000 || !strings.Contains(out.Result.TrashAt, ".Trash") {
+	// ~/.Trash on macOS, the freedesktop ~/.local/share/Trash/files elsewhere.
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &out) != nil || out.Result.Bytes < 4000 ||
+		!strings.HasPrefix(out.Result.TrashAt, home+"/") || !strings.Contains(out.Result.TrashAt, "Trash") {
 		t.Fatalf("trash: %d %s", rec.Code, rec.Body.String())
 	}
 	var ledger struct {
