@@ -188,6 +188,12 @@ func (t *Tagger) refreshLocked() []AgentInfo {
 	for pid := range t.table {
 		if t.isCandidateLocked(pid) {
 			wasTagged := t.tagged[pid]
+			if !wasTagged {
+				// A negative entry from a Tag made while the matching
+				// ancestor was absent must not hide the match now.
+				delete(t.cache, pid)
+				delete(t.tagged, pid)
+			}
 			if info, ok := t.tagLocked(pid); ok && !wasTagged {
 				newly = append(newly, info)
 			}

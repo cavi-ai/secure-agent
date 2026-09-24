@@ -2727,10 +2727,10 @@ document.addEventListener('DOMContentLoaded', () => {
           () => showToast('Copy failed — select the path from its tooltip', 'danger'));
         break;
       case 'mute-flag':
-        window.muteFlag(d.rule, d.host);
+        window.muteFlag(d.rule, d.host, d.agent);
         break;
       case 'mute-rule':
-        window.muteFlag(d.rule, '*');
+        window.muteFlag(d.rule, '*', d.agent);
         break;
       case 'dismiss-flag':
         window.dismissFlag(d.id);

@@ -73,6 +73,7 @@ func WireTypes() []any {
 		correlate.EndpointIdentity{},
 		api.EndpointAllowance{},
 		api.Suggestion{},
+		api.MutePair{},
 		worktreehunter.ScanReport{},
 		worktreehunter.RepoReport{},
 		worktreehunter.Worktree{},

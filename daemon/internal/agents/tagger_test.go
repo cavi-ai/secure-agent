@@ -499,3 +499,28 @@ func TestOnTaggedRunsOutsideTheLock(t *testing.T) {
 		t.Fatalf("Tag from the callback = %+v, want claude", got)
 	}
 }
+
+func TestRefreshRetriesPreviouslyUntaggedPID(t *testing.T) {
+	fake := fakeProcs{
+		200: {PID: 200, PPID: 100, Exe: "/usr/local/bin/node"},
+	}
+	c, _ := config.Load("/nonexistent")
+	tg := New(c, fake)
+	calls := map[int32]int{}
+	tg.SetOnTagged(func(pid int32, _ AgentInfo) { calls[pid]++ })
+
+	if info, ok := tg.Tag(200); ok {
+		t.Fatalf("Tag(200) with its parent absent = %+v, want untagged", info)
+	}
+
+	fake[100] = ProcInfo{PID: 100, PPID: 1, Exe: "/usr/local/bin/claude"}
+	tg.Refresh()
+	tg.Refresh()
+	info, ok := tg.Tag(200)
+	if !ok || info.Name != "claude" {
+		t.Fatalf("Tag(200) after the parent appeared = %+v, %v, want claude", info, ok)
+	}
+	if calls[200] != 1 {
+		t.Fatalf("onTagged calls for 200 = %d, want 1", calls[200])
+	}
+}

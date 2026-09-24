@@ -319,6 +319,26 @@ func TestExplainMuteActionsCarryAgent(t *testing.T) {
 	}
 }
 
+func TestExplainOmitsMuteForUnscopableAgent(t *testing.T) {
+	home := "/Users/tester"
+	pinExplainHome(t, home)
+	a := explainTestAPI(t)
+	const agent = "team/bot"
+	flags := []model.Flag{
+		{ID: "k1", Rule: "keychain-access", Severity: 1, PID: 999, Agent: agent,
+			Evidence: []model.EvidenceItem{{Kind: "keychain", Label: home + "/Library/Keychains/login.keychain-db"}}},
+		{ID: "p1", Rule: "proxy-secret-leak", Severity: 3, Agent: agent,
+			Evidence: []model.EvidenceItem{{Kind: "violation", Label: "proxy-secret-leak:aws-key"}, {Kind: "connect", Label: "api.example.com:443"}}},
+	}
+	for _, f := range flags {
+		for _, act := range a.explainFlag(f, false).Actions {
+			if act.Path == "/mute" {
+				t.Fatalf("%s: agent %q cannot scope a mute, yet %s was served with body %v", f.Rule, agent, act.ID, act.Body)
+			}
+		}
+	}
+}
+
 // 7. Actions per rule, in order, only those that apply.
 func TestExplainActions(t *testing.T) {
 	home := "/Users/tester"

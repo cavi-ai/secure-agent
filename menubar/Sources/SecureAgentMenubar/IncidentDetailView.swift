@@ -363,7 +363,7 @@ struct IncidentDetailView: View {
                 try await state.uiClient.guardPathAllowAdd(agent: incident.agent, ruleID: incident.rule, path: p)
             case .muteRuleHost:
                 guard let host else { return }
-                try await state.uiClient.muteAdd(rule: incident.rule, host: host)
+                try await state.uiClient.muteAdd(rule: incident.rule, host: host, agent: incident.agent)
             case .killAgent:
                 _ = try await state.uiClient.killProcess(pid: incident.pid)
             }

@@ -343,7 +343,9 @@ func (a *API) patternActions(p model.Pattern, openIDs []string, env *explainEnv)
 	}
 	if a.mutes != nil {
 		if host != "" && validMuteHost(host) {
-			acts = append(acts, muteRuleHostAction(p.Rule, p.Title, host, p.Agent))
+			if act, ok := muteRuleHostAction(p.Rule, p.Title, host, p.Agent); ok {
+				acts = append(acts, act)
+			}
 		} else if act, ok := muteClassAction(p.Rule, p.Title, p.Agent); ok {
 			acts = append(acts, act)
 		}

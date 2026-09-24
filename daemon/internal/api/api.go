@@ -1050,7 +1050,7 @@ type MutePair struct {
 }
 
 // handleMute lists dispositions (GET, read-gated), records one (POST,
-// mutation-gated), or removes one (DELETE, owner-level).
+// mutation-gated), or removes one (DELETE, mutation-gated).
 func (a *API) handleMute(w http.ResponseWriter, r *http.Request) {
 	if a.mutes == nil {
 		http.Error(w, "mute store not enabled", http.StatusServiceUnavailable)

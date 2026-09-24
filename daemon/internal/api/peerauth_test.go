@@ -267,10 +267,19 @@ func TestGateDispositionEndpointsPolicy(t *testing.T) {
 			t.Fatalf("POST %s as owner when UI pinned: status=%d, want 403", tc.path, resp.StatusCode)
 		}
 	}
+	del, _ := http.NewRequest(http.MethodDelete, "http://unix/mute?rule=keychain-access&host=api.example.com", nil)
+	resp, err := cl.Do(del)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("DELETE /mute as owner when UI pinned: status=%d, want 403", resp.StatusCode)
+	}
 
 	// /notify/rules is owner-level (headless/ssh management like
 	// DELETE /guard/rules): the owner passes even with a UI pinned.
-	resp, err := cl.Post("http://unix/notify/rules", "application/json",
+	resp, err = cl.Post("http://unix/notify/rules", "application/json",
 		strings.NewReader(`{"rule":"keychain-access","notify":false}`))
 	if err != nil {
 		t.Fatal(err)
@@ -317,6 +326,15 @@ func TestGateDispositionEndpointsAsPinnedUI(t *testing.T) {
 		if resp.StatusCode == http.StatusForbidden {
 			t.Fatalf("POST %s as pinned UI: got 403 — the menubar's dismiss flow is broken", tc.path)
 		}
+	}
+	del, _ := http.NewRequest(http.MethodDelete, "http://unix/mute?rule=keychain-access&host=api.example.com", nil)
+	resp, err := cl.Do(del)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode == http.StatusForbidden {
+		t.Fatal("DELETE /mute as pinned UI: got 403 — the menubar's unmute is broken")
 	}
 }
 

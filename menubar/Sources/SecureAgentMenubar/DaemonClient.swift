@@ -61,13 +61,13 @@ public protocol DaemonClientProtocol: Sendable {
     func acknowledgeFlag(id: String) async throws
     func retriageFlag(id: String) async throws
     func allowlistAdd(agent: String, host: String) async throws
-    /// POST /mute — suppress one rule+host pair (noise control; monitoring
-    /// of the host continues).
-    func muteAdd(rule: String, host: String) async throws
+    /// POST /mute — suppress one rule+host pair, for one agent when agent is
+    /// set (noise control; monitoring of the host continues).
+    func muteAdd(rule: String, host: String, agent: String?) async throws
     /// GET /mute — persisted dispositions (the "ignore" ledger).
-    func fetchMutes() async throws -> [(rule: String, host: String)]
+    func fetchMutes() async throws -> [(rule: String, host: String, agent: String?)]
     /// DELETE /mute — remove one disposition.
-    func muteRemove(rule: String, host: String) async throws
+    func muteRemove(rule: String, host: String, agent: String?) async throws
     /// GET /notify/rules — notification policy: default severity bar +
     /// per-rule overrides (true = always page, false = never).
     func fetchNotifyRules() async throws -> NotifyRulesResponse
@@ -253,22 +253,38 @@ public final class DaemonClient: Sendable {
         _ = try await request(method: "DELETE", path: pathQ)
     }
 
-    public func fetchMutes() async throws -> [(rule: String, host: String)] {
-        let data = try await request(method: "GET", path: "/mute")
+    public func fetchMutes() async throws -> [(rule: String, host: String, agent: String?)] {
+        try Self.parseMutes(try await request(method: "GET", path: "/mute"))
+    }
+
+    public func muteRemove(rule: String, host: String, agent: String?) async throws {
+        _ = try await request(method: "DELETE", path: Self.muteDeletePath(rule: rule, host: host, agent: agent))
+    }
+
+    public func muteAdd(rule: String, host: String, agent: String?) async throws {
+        try await postJSON("/mute", payload: Self.mutePayload(rule: rule, host: host, agent: agent))
+    }
+
+    /// GET /mute rows; an empty or absent agent is a mute for every agent.
+    static func parseMutes(_ data: Data) throws -> [(rule: String, host: String, agent: String?)] {
         guard let arr = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return [] }
         return arr.compactMap { d in
             guard let rule = d["rule"] as? String, let host = d["host"] as? String else { return nil }
-            return (rule, host)
+            let agent = (d["agent"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+            return (rule, host, agent)
         }
     }
 
-    public func muteRemove(rule: String, host: String) async throws {
-        let q = "?rule=\(Self.urlQueryEscape(rule))&host=\(Self.urlQueryEscape(host))"
-        _ = try await request(method: "DELETE", path: "/mute\(q)")
+    static func mutePayload(rule: String, host: String, agent: String?) -> [String: String] {
+        var payload = ["rule": rule, "host": host]
+        if let agent, !agent.isEmpty { payload["agent"] = agent }
+        return payload
     }
 
-    public func muteAdd(rule: String, host: String) async throws {
-        try await postJSON("/mute", payload: ["rule": rule, "host": host])
+    static func muteDeletePath(rule: String, host: String, agent: String?) -> String {
+        var path = "/mute?rule=\(urlQueryEscape(rule))&host=\(urlQueryEscape(host))"
+        if let agent, !agent.isEmpty { path += "&agent=\(urlQueryEscape(agent))" }
+        return path
     }
 
     /// Older daemons (pre-/notify/rules) answer 404 — degrade to the shipped

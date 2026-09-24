@@ -532,12 +532,16 @@ var muteClassNoun = map[string]string{
 }
 
 // muteRuleHostAction is the served mute-rule-host request for rule at host.
-// A valid agent scopes the mute to that agent and the label names it;
-// otherwise the mute covers every agent.
-func muteRuleHostAction(rule, title, host, agent string) model.ExplainAction {
+// An agent scopes the mute to that agent and the label names it; no agent
+// mutes every agent. False for an agent POST /mute cannot scope to, so the
+// served mute never widens to every agent.
+func muteRuleHostAction(rule, title, host, agent string) (model.ExplainAction, bool) {
+	if !validMuteAgent(agent) {
+		return model.ExplainAction{}, false
+	}
 	label, who := "Stop flagging this for "+host, ""
 	body := map[string]any{"rule": rule, "host": host}
-	if agent != "" && validMuteAgent(agent) {
+	if agent != "" {
 		label, who = "Stop flagging this for "+host+" from "+agent, " from "+agent
 		body["agent"] = agent
 	}
@@ -546,19 +550,19 @@ func muteRuleHostAction(rule, title, host, agent string) model.ExplainAction {
 		Consequence: "\"" + title + "\" stops being flagged for " + host + who + "; the host stays monitored and its open flags of this rule are marked reviewed.",
 		Method:      http.MethodPost, Path: "/mute",
 		Body: body,
-	}
+	}, true
 }
 
 // muteClassAction is the served mute-class request for a keychain rule;
 // false for any other rule. Agent scoping as muteRuleHostAction.
 func muteClassAction(rule, title, agent string) (model.ExplainAction, bool) {
 	noun := muteClassNoun[rule]
-	if noun == "" {
+	if noun == "" || !validMuteAgent(agent) {
 		return model.ExplainAction{}, false
 	}
 	label, scope := "Dismiss this flag class", "for every agent"
 	body := map[string]any{"rule": rule, "host": "*"}
-	if agent != "" && validMuteAgent(agent) {
+	if agent != "" {
 		label, scope = "Mute "+noun+" for "+agent, "for "+agent+"; other agents still flag"
 		body["agent"] = agent
 	}
@@ -626,7 +630,9 @@ func (a *API) explainActions(f model.Flag, ex *model.FlagExplain, env *explainEn
 			if !validMuteHost(eg.Host) {
 				continue
 			}
-			acts = append(acts, muteRuleHostAction(f.Rule, title, eg.Host, agent))
+			if act, ok := muteRuleHostAction(f.Rule, title, eg.Host, agent); ok {
+				acts = append(acts, act)
+			}
 			break
 		}
 		if act, ok := muteClassAction(f.Rule, title, agent); ok {

@@ -351,7 +351,7 @@ struct FlagActionSheet: View {
                         title: "Dismiss future flags of this kind?",
                         message: "\(flag.rule) keeps monitoring \(host), but stops flagging incidents like this one against it.",
                         buttonLabel: "Dismiss", destructive: false,
-                        fire: { try await state.uiClient.muteAdd(rule: flag.rule, host: host) },
+                        fire: { try await state.uiClient.muteAdd(rule: flag.rule, host: host, agent: flag.agent) },
                         doneLabel: "dismissed — future flags of this rule for \(host) are suppressed")) {}
             }
             // Keychain rules have no host to mute against — their recourse is
@@ -361,12 +361,12 @@ struct FlagActionSheet: View {
                 actionRow(
                     icon: "eye.slash", tint: Color.warn,
                     title: "Dismiss this flag class",
-                    subtitle: "Stop flagging \(Self.humanTitle(flag.rule).lowercased()) entirely. Monitoring continues; reversible in Settings → Muted flag classes.",
+                    subtitle: "Stop flagging \(Self.humanTitle(flag.rule).lowercased()) \(flag.agent.isEmpty ? "entirely" : "for \(flag.agent)"). Monitoring continues; reversible in Settings → Muted flag classes.",
                     pending: PendingAction(
                         title: "Dismiss future flags of this kind?",
                         message: "\(Self.humanTitle(flag.rule)) stops raising flags and notifications. The daemon keeps watching and counts what was suppressed.",
                         buttonLabel: "Dismiss", destructive: false,
-                        fire: { try await state.uiClient.muteAdd(rule: flag.rule, host: "*") },
+                        fire: { try await state.uiClient.muteAdd(rule: flag.rule, host: "*", agent: flag.agent) },
                         doneLabel: "dismissed — future flags of this class are suppressed")) {}
             }
             actionRow(
@@ -456,7 +456,7 @@ struct FlagActionSheet: View {
                 applied = "\(host) allowlisted — this pair stops flagging"
             case "mute-rule":
                 guard let host = evidenceHost else { return }
-                try await state.uiClient.muteAdd(rule: flag.rule, host: host)
+                try await state.uiClient.muteAdd(rule: flag.rule, host: host, agent: flag.agent)
                 applied = "dismissed — future flags of this rule are suppressed"
             case "rotate":
                 if state.incidents.contains(where: { $0.flagId == flag.id }) {

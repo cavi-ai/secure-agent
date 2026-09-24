@@ -690,7 +690,8 @@
         try { host = JSON.parse(opts.body).host; } catch { /* ignored */ }
         line += ' row=' + (document.querySelector(`#firewall-container [data-action="allowlist-remove"][data-host="${host}"]`) ? 1 : 0);
       }
-      if ((MODE.includes('explaindemo') || MODE.includes('patterndemo')) && opts.body) line += ' body=' + opts.body;
+      if ((MODE.includes('explaindemo') || MODE.includes('patterndemo') || MODE.includes('rawmute')) && opts.body) line += ' body=' + opts.body;
+      if (MODE.includes('rawmute') && p === '/mute' && opts.method === 'POST') data['/mute'].push(JSON.parse(opts.body));
       reqLog.push(line);
       stamp('mock-requests', reqLog.join('\n'));
       if (MODE.includes('resolvedemo') && p === '/incidents/status') {
@@ -1446,6 +1447,22 @@
       fire('mousedown', MouseEvent);
       burst();
       setTimeout(() => { fire('pointerup', PointerEvent); fire('mouseup', MouseEvent); fire('click', MouseEvent); }, 400);
+    }, 4300);
+  }
+  // rawmute: Findings open, focus the blog.example.com unmute button, then
+  // press flag-3's raw-card "Dismiss this flag class". The POST lands in the
+  // /mute fixture, so the re-render adds a codex-scoped row beside the
+  // focused one. <pre id="mute-focus-probe"> says whether focus stayed.
+  if (MODE.includes('rawmute')) {
+    setTimeout(() => document.querySelector('[data-tab="findings"]').click(), 4000);
+    setTimeout(() => {
+      const un = document.querySelector('#flags-list [data-action="unmute"][data-host="blog.example.com"]');
+      if (un) { un.dataset.probe = '1'; un.focus(); }
+      const dismiss = document.querySelector('#flags-list [data-action="dismiss-flag"][data-id="flag-3"]');
+      const mute = dismiss && dismiss.closest('.flag-card').querySelector('[data-action="mute-rule"]');
+      if (mute) mute.click();
+      setTimeout(() => stamp('mute-focus-probe',
+        `${un && un.isConnected && document.activeElement === un ? 'kept' : 'lost'} rows=${document.querySelectorAll('#flags-list .mute-row').length}`), 2600);
     }, 4300);
   }
   // actdemo: Egress open, allow the suggested host late enough that the
