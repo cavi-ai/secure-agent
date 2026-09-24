@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -45,6 +46,9 @@ type machine struct {
 
 func newMachine(t *testing.T) machine {
 	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
 	root, _ := filepath.EvalSymlinks(t.TempDir())
 	m := machine{home: filepath.Join(root, "home"), ws: filepath.Join(root, "work", "team")}
 	m.repo = filepath.Join(m.ws, "app")
@@ -61,6 +65,24 @@ func newMachine(t *testing.T) machine {
 	mk(t, filepath.Join(m.home, ".cache", "huggingface", "model.bin"), 6000)
 	mk(t, filepath.Join(m.home, ".cache", "someapp", "blob"), 1500)
 	mk(t, filepath.Join(m.home, "Library", "Caches", "com.example.App", "c.db"), 2500)
+	// A real repository: only what git ignores is offered; build/ here is
+	// tracked source and must never be offered for the Trash.
+	mk(t, filepath.Join(m.repo, "build", "release.sh"), 50)
+	if err := os.WriteFile(filepath.Join(m.repo, ".gitignore"), []byte("node_modules/\n.tmp/\n.quarantine/\n.worktrees/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", m.repo}, args...)...)
+		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL="+filepath.Join(root, "gitconfig"), "GIT_CONFIG_NOSYSTEM=1",
+			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.com", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.com")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+	}
+	git("init", "-q", "-b", "main")
+	git("add", ".gitignore", "build", "src")
+	git("commit", "-q", "-m", "base")
 	m.places = []Place{{Path: m.repo, Project: m.repo}, {Path: m.wt, Project: m.repo, Worktree: m.wt}}
 	return m
 }
@@ -73,7 +95,7 @@ func (m machine) clutter(st *memStore) *Clutter {
 	return c
 }
 
-func byPath(t *testing.T, rep ClutterReport, p string) Item {
+func byPath(t *testing.T, rep ClutterReport, p string) ClutterItem {
 	t.Helper()
 	for _, it := range rep.Items {
 		if it.Path == p {
@@ -81,7 +103,7 @@ func byPath(t *testing.T, rep ClutterReport, p string) Item {
 		}
 	}
 	t.Fatalf("no item for %s in %+v", p, rep.Items)
-	return Item{}
+	return ClutterItem{}
 }
 
 func TestInventoryKindsProjectsAndLiveSessions(t *testing.T) {
@@ -95,6 +117,7 @@ func TestInventoryKindsProjectsAndLiveSessions(t *testing.T) {
 		filepath.Join(m.repo, ".tmp"):                                 {KindTmp, m.repo, ActionTrash},
 		filepath.Join(m.repo, "node_modules"):                         {KindRepoCache, m.repo, ActionTrash},
 		filepath.Join(m.repo, "packages", "ui", "node_modules"):       {KindRepoCache, m.repo, ActionTrash},
+		filepath.Join(m.repo, "build"):                                {KindRepoCache, m.repo, ActionNone},
 		filepath.Join(m.wt, ".tmp"):                                   {KindTmp, m.repo, ActionNone},
 		filepath.Join(m.wt, ".quarantine"):                            {KindQuarantine, m.repo, ActionNone},
 		filepath.Join(m.ws, ".quarantine"):                            {KindQuarantine, "", ActionTrash},
@@ -115,6 +138,9 @@ func TestInventoryKindsProjectsAndLiveSessions(t *testing.T) {
 	}
 	if it := byPath(t, rep, filepath.Join(m.wt, ".tmp")); it.Note != "an agent session is live here" {
 		t.Errorf("live worktree note = %q", it.Note)
+	}
+	if it := byPath(t, rep, filepath.Join(m.repo, "build")); !strings.Contains(it.Note, "not a cache") {
+		t.Errorf("tracked build/ note = %q", it.Note)
 	}
 	if !rep.Sizing {
 		t.Fatal("first report must be sizing")

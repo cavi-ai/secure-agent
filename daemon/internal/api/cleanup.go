@@ -40,15 +40,15 @@ func (a *API) handleCleanupClean(w http.ResponseWriter, r *http.Request) {
 	a.cleanupAction(w, r, "name", a.clutterClean)
 }
 
-func (a *API) clutterTrash(r *http.Request, key string) (clutter.Result, error) {
+func (a *API) clutterTrash(r *http.Request, key string) (clutter.ClutterResult, error) {
 	return a.clutter.Trash(r.Context(), key)
 }
 
-func (a *API) clutterClean(r *http.Request, key string) (clutter.Result, error) {
+func (a *API) clutterClean(r *http.Request, key string) (clutter.ClutterResult, error) {
 	return a.clutter.Clean(r.Context(), key)
 }
 
-func (a *API) cleanupAction(w http.ResponseWriter, r *http.Request, field string, act func(*http.Request, string) (clutter.Result, error)) {
+func (a *API) cleanupAction(w http.ResponseWriter, r *http.Request, field string, act func(*http.Request, string) (clutter.ClutterResult, error)) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return

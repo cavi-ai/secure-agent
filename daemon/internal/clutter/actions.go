@@ -28,33 +28,33 @@ var (
 // cleanTimeout bounds one tool clean command.
 const cleanTimeout = 10 * time.Minute
 
-// Result is what one action gave back.
-type Result struct {
-	Item    Item   `json:"item"`
-	Bytes   int64  `json:"bytes"`
-	Partial bool   `json:"bytes_partial,omitempty"`
-	TrashAt string `json:"trash_path,omitempty"`
-	Output  string `json:"output,omitempty"` // the clean command's last lines
+// ClutterResult is what one action gave back.
+type ClutterResult struct {
+	Item    ClutterItem `json:"item"`
+	Bytes   int64       `json:"bytes"`
+	Partial bool        `json:"bytes_partial,omitempty"`
+	TrashAt string      `json:"trash_path,omitempty"`
+	Output  string      `json:"output,omitempty"` // the clean command's last lines
 }
 
 // Trash moves one inventory item to the Trash on its own volume and books
 // its size in the ledger as trashed (the space frees when the Trash is
 // emptied).
-func (c *Clutter) Trash(ctx context.Context, path string) (Result, error) {
+func (c *Clutter) Trash(ctx context.Context, path string) (ClutterResult, error) {
 	c.scanMu.Lock()
 	defer c.scanMu.Unlock()
 	it, err := c.findLocked(ctx, path, ActionTrash)
 	if err != nil {
-		return Result{}, err
+		return ClutterResult{}, err
 	}
 	st, err := os.Lstat(it.Path)
 	if err != nil || !st.IsDir() {
-		return Result{}, ErrChanged
+		return ClutterResult{}, ErrChanged
 	}
 	u := diskusage.Dir(ctx, it.Path, nil)
 	dest, err := c.moveToTrash(it.Path)
 	if err != nil {
-		return Result{}, err
+		return ClutterResult{}, err
 	}
 	c.st.PutCleanup(model.CleanupEntry{
 		TS: c.now(), Action: "trash:" + it.Kind, Path: it.Path, Repo: it.Project, Bytes: u.Bytes,
@@ -62,17 +62,17 @@ func (c *Clutter) Trash(ctx context.Context, path string) (Result, error) {
 	})
 	c.forgetSize(it.Path)
 	c.invalidate()
-	return Result{Item: it, Bytes: u.Bytes, Partial: u.Partial, TrashAt: dest}, nil
+	return ClutterResult{Item: it, Bytes: u.Bytes, Partial: u.Partial, TrashAt: dest}, nil
 }
 
 // Clean runs a tool cache's own clean command and books what the cache
 // shrank by.
-func (c *Clutter) Clean(ctx context.Context, name string) (Result, error) {
+func (c *Clutter) Clean(ctx context.Context, name string) (ClutterResult, error) {
 	c.scanMu.Lock()
 	defer c.scanMu.Unlock()
 	it, err := c.findLocked(ctx, name, ActionClean)
 	if err != nil {
-		return Result{}, err
+		return ClutterResult{}, err
 	}
 	var tc toolCache
 	for _, t := range toolCaches(c.home, c.goos) {
@@ -82,7 +82,7 @@ func (c *Clutter) Clean(ctx context.Context, name string) (Result, error) {
 	}
 	bin := lookTool(tc.command[0], c.binDirs)
 	if bin == "" {
-		return Result{}, fmt.Errorf("%s is not installed", tc.command[0])
+		return ClutterResult{}, fmt.Errorf("%s is not installed", tc.command[0])
 	}
 	before := diskusage.Dir(ctx, it.Path, nil)
 	cctx, cancel := context.WithTimeout(ctx, cleanTimeout)
@@ -101,7 +101,7 @@ func (c *Clutter) Clean(ctx context.Context, name string) (Result, error) {
 	if freed < 0 {
 		freed = 0
 	}
-	res := Result{Item: it, Bytes: freed, Partial: before.Partial || after.Partial, Output: tail(out.String(), 5)}
+	res := ClutterResult{Item: it, Bytes: freed, Partial: before.Partial || after.Partial, Output: tail(out.String(), 5)}
 	if runErr != nil {
 		return res, fmt.Errorf("%s: %v: %s", it.Command, runErr, res.Output)
 	}
@@ -116,7 +116,7 @@ func (c *Clutter) Clean(ctx context.Context, name string) (Result, error) {
 // findLocked rebuilds the inventory now (the caller holds scanMu) and
 // returns key's item when it offers action: a session that went live, or a
 // directory that went away, since the last report is seen here.
-func (c *Clutter) findLocked(ctx context.Context, key, action string) (Item, error) {
+func (c *Clutter) findLocked(ctx context.Context, key, action string) (ClutterItem, error) {
 	items := c.collect(ctx)
 	rep := ClutterReport{GeneratedAt: c.now().UTC(), Items: items}
 	c.mu.Lock()
@@ -127,7 +127,7 @@ func (c *Clutter) findLocked(ctx context.Context, key, action string) (Item, err
 			return it, nil
 		}
 	}
-	return Item{}, ErrNotInInventory
+	return ClutterItem{}, ErrNotInInventory
 }
 
 // moveToTrash renames path into the Trash on its own volume: ~/.Trash for

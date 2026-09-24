@@ -26,7 +26,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 )
 
-// Item kinds.
+// ClutterItem kinds.
 const (
 	KindTmp        = "tmp"        // .tmp directories: scratch files and evidence
 	KindQuarantine = "quarantine" // .quarantine directories: set aside to delete
@@ -42,8 +42,8 @@ const (
 	ActionNone  = "none"  // listed only
 )
 
-// Item is one clearable directory.
-type Item struct {
+// ClutterItem is one clearable directory.
+type ClutterItem struct {
 	ID          string     `json:"id"`
 	Kind        string     `json:"kind"`
 	Name        string     `json:"name"`
@@ -60,15 +60,15 @@ type Item struct {
 	Note        string     `json:"note,omitempty"`
 }
 
-// KindTotal sums one kind.
-type KindTotal struct {
+// ClutterKindTotal sums one kind.
+type ClutterKindTotal struct {
 	Kind  string `json:"kind"`
 	Bytes int64  `json:"bytes"`
 	Count int    `json:"count"`
 }
 
-// ProjectTotal sums one project's items.
-type ProjectTotal struct {
+// ClutterProjectTotal sums one project's items.
+type ClutterProjectTotal struct {
 	Project string `json:"project"`
 	Bytes   int64  `json:"bytes"`
 	Count   int    `json:"count"`
@@ -76,13 +76,13 @@ type ProjectTotal struct {
 
 // ClutterReport is one inventory.
 type ClutterReport struct {
-	GeneratedAt time.Time            `json:"generated_at"`
-	Sizing      bool                 `json:"sizing,omitempty"`
-	Items       []Item               `json:"items"`
-	Kinds       []KindTotal          `json:"kinds"`
-	Projects    []ProjectTotal       `json:"projects"`
-	Volumes     []diskusage.Volume   `json:"volumes,omitempty"`
-	Reclaimed   *model.CleanupTotals `json:"reclaimed,omitempty"` // the API fills it
+	GeneratedAt time.Time             `json:"generated_at"`
+	Sizing      bool                  `json:"sizing,omitempty"`
+	Items       []ClutterItem         `json:"items"`
+	Kinds       []ClutterKindTotal    `json:"kinds"`
+	Projects    []ClutterProjectTotal `json:"projects"`
+	Volumes     []diskusage.Volume    `json:"volumes,omitempty"`
+	Reclaimed   *model.CleanupTotals  `json:"reclaimed,omitempty"` // the API fills it
 }
 
 // Place is a directory the inventory searches: a repository's main
@@ -182,7 +182,7 @@ func (c *Clutter) invalidate() {
 
 // collect gathers every item: per place, around places, then the machine's
 // tool and app caches.
-func (c *Clutter) collect(ctx context.Context) []Item {
+func (c *Clutter) collect(ctx context.Context) []ClutterItem {
 	places := c.places(ctx)
 	placeSet := map[string]bool{}
 	for _, p := range places {
@@ -190,8 +190,8 @@ func (c *Clutter) collect(ctx context.Context) []Item {
 	}
 	live := livePlaces(places, c.st.WorkspaceActivity())
 	seen := map[string]bool{}
-	var items []Item
-	add := func(it Item) {
+	var items []ClutterItem
+	add := func(it ClutterItem) {
 		if seen[it.Path] {
 			return
 		}
@@ -200,11 +200,20 @@ func (c *Clutter) collect(ctx context.Context) []Item {
 		items = append(items, it)
 	}
 	for _, p := range places {
-		for _, found := range search(p.Path, placeSet) {
-			it := Item{Kind: found.kind, Name: filepath.Base(found.path), Path: found.path,
+		hits := search(p.Path, placeSet)
+		paths := make([]string, len(hits))
+		for i, h := range hits {
+			paths[i] = h.path
+		}
+		ok := disposable(ctx, p.Path, paths)
+		for _, found := range hits {
+			it := ClutterItem{Kind: found.kind, Name: filepath.Base(found.path), Path: found.path,
 				Project: p.Project, Worktree: p.Worktree, Action: ActionTrash}
-			if live[p.Path] {
+			switch {
+			case live[p.Path]:
 				it.Action, it.Note = ActionNone, "an agent session is live here"
+			case !ok[found.path]:
+				it.Action, it.Note = ActionNone, "not ignored by git, or holds tracked files: not a cache"
 			}
 			add(it)
 		}
@@ -222,7 +231,7 @@ func (c *Clutter) collect(ctx context.Context) []Item {
 			for name, kind := range map[string]string{".tmp": KindTmp, ".quarantine": KindQuarantine} {
 				d := filepath.Join(dir, name)
 				if isDir(d) {
-					add(Item{Kind: kind, Name: name, Path: d, Action: ActionTrash, Note: "workspace-level, outside any repository"})
+					add(ClutterItem{Kind: kind, Name: name, Path: d, Action: ActionTrash, Note: "workspace-level, outside any repository"})
 				}
 			}
 		}
@@ -233,7 +242,7 @@ func (c *Clutter) collect(ctx context.Context) []Item {
 			continue
 		}
 		claimed[tc.path] = true
-		it := Item{Kind: KindToolCache, Name: tc.name, Path: tc.path, Action: ActionTrash, Note: tc.note}
+		it := ClutterItem{Kind: KindToolCache, Name: tc.name, Path: tc.path, Action: ActionTrash, Note: tc.note}
 		switch {
 		case tc.listOnly:
 			it.Action = ActionNone
@@ -254,7 +263,7 @@ func (c *Clutter) collect(ctx context.Context) []Item {
 			if !e.IsDir() || claimed[p] || claimsParent(claimed, p) {
 				continue
 			}
-			add(Item{Kind: KindAppCache, Name: e.Name(), Path: p, Action: ActionTrash, Note: "quit the app first"})
+			add(ClutterItem{Kind: KindAppCache, Name: e.Name(), Path: p, Action: ActionTrash, Note: "quit the app first"})
 		}
 	}
 	return items
@@ -350,11 +359,11 @@ func isDir(p string) bool {
 // withSizes copies rep and lays cached sizes, idle days and totals over it;
 // items without a fresh size go to the background sizer.
 func (c *Clutter) withSizes(rep ClutterReport) ClutterReport {
-	items := append([]Item(nil), rep.Items...)
+	items := append([]ClutterItem(nil), rep.Items...)
 	now := c.now()
 	var pending []string
-	kinds := map[string]*KindTotal{}
-	projects := map[string]*ProjectTotal{}
+	kinds := map[string]*ClutterKindTotal{}
+	projects := map[string]*ClutterProjectTotal{}
 	var vols []string
 	for i := range items {
 		it := &items[i]
@@ -371,7 +380,7 @@ func (c *Clutter) withSizes(rep ClutterReport) ClutterReport {
 		}
 		k := kinds[it.Kind]
 		if k == nil {
-			k = &KindTotal{Kind: it.Kind}
+			k = &ClutterKindTotal{Kind: it.Kind}
 			kinds[it.Kind] = k
 		}
 		k.Bytes += it.SizeBytes
@@ -382,7 +391,7 @@ func (c *Clutter) withSizes(rep ClutterReport) ClutterReport {
 		}
 		pt := projects[proj]
 		if pt == nil {
-			pt = &ProjectTotal{Project: proj}
+			pt = &ClutterProjectTotal{Project: proj}
 			projects[proj] = pt
 		}
 		pt.Bytes += it.SizeBytes

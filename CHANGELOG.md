@@ -7,6 +7,12 @@ All notable changes to `secure-agent` are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- `GET /cleanup`: `.tmp` and `.quarantine` directories in and around repositories, build output inside repositories, developer tool caches and per-app caches, each with size, last touched, project and how to clear it.
+- `POST /cleanup/trash` moves one inventory item to the Trash on its volume; `POST /cleanup/clean` runs a tool cache's own clean command; both re-check the inventory and skip places with a live agent session.
+- Items inside a repository are offered for the Trash only when git ignores them and they hold no tracked files.
+- Cleanup ledger books `trash:<kind>` and `clean:<tool>` rows; totals count Trash moves apart as `trashed_bytes`.
+- `secure-agent cleanup [--kind] [--project] [--refresh] [--json]`, `cleanup trash <path>`, `cleanup clean <tool>`.
+- Console Cleanup tab (was Worktrees): a Clutter panel grouped by project (8 rows until Show more) with kind filters, Move to Trash and Run <clean command>.
 - `GET /worktrees` sizes: `size_bytes` per worktree and per repository (allocated bytes, measured in the background and cached for an hour; `sizing` while pending), `summary.size_bytes`, `summary.removable_bytes`, `volumes` (mount, total, free) and `reclaimed` totals.
 - Cleanup ledger: every worktree removal books the bytes it gave back, every prune a row; `GET /cleanup/ledger` and `secure-agent cleanup log`.
 - `POST /worktrees/remove` answers the bytes reclaimed.

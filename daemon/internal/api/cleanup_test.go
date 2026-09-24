@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -29,6 +30,17 @@ func TestCleanupEndpoints(t *testing.T) {
 		if err := os.WriteFile(p, make([]byte, n), 0o644); err != nil {
 			t.Fatal(err)
 		}
+	}
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	if err := os.WriteFile(filepath.Join(repo, ".gitignore"), []byte(".tmp/\n.quarantine/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("git", "-C", repo, "init", "-q", "-b", "main")
+	cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL="+filepath.Join(root, "gitconfig"), "GIT_CONFIG_NOSYSTEM=1")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v %s", err, out)
 	}
 	st := testStore(t)
 	t.Cleanup(func() { st.Close() })
@@ -71,7 +83,7 @@ func TestCleanupEndpoints(t *testing.T) {
 
 	rec = do(http.MethodPost, "/cleanup/trash", `{"path":"`+filepath.Join(repo, ".tmp")+`"}`)
 	var out struct {
-		Result clutter.Result `json:"result"`
+		Result clutter.ClutterResult `json:"result"`
 	}
 	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &out) != nil || out.Result.Bytes < 4000 || !strings.Contains(out.Result.TrashAt, ".Trash") {
 		t.Fatalf("trash: %d %s", rec.Code, rec.Body.String())

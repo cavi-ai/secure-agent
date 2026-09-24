@@ -694,6 +694,8 @@ export interface Volume {
 }
 
 export interface CleanupTotals {
+  trashed_bytes: number;
+  trashed_count: number;
   bytes: number;
   count: number;
   bytes_30d: number;
@@ -712,6 +714,53 @@ export interface ScanReport {
   volumes?: Volume[];
   reclaimed?: CleanupTotals;
   advice?: Record<string, AdvisorVerdict>;
+}
+
+export interface ClutterItem {
+  id: string;
+  kind: string;
+  name: string;
+  path: string;
+  project?: string;
+  worktree?: string;
+  size_bytes?: number;
+  files?: number;
+  size_partial?: boolean;
+  last_touched?: string;
+  idle_days: number;
+  action: string;
+  command?: string;
+  note?: string;
+}
+
+export interface ClutterKindTotal {
+  kind: string;
+  bytes: number;
+  count: number;
+}
+
+export interface ClutterProjectTotal {
+  project: string;
+  bytes: number;
+  count: number;
+}
+
+export interface ClutterReport {
+  generated_at: string;
+  sizing?: boolean;
+  items: ClutterItem[];
+  kinds: ClutterKindTotal[];
+  projects: ClutterProjectTotal[];
+  volumes?: Volume[];
+  reclaimed?: CleanupTotals;
+}
+
+export interface ClutterResult {
+  item: ClutterItem;
+  bytes: number;
+  bytes_partial?: boolean;
+  trash_path?: string;
+  output?: string;
 }
 
 export interface CleanupEntry {

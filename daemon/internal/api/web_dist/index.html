@@ -206,7 +206,7 @@
         <svg class="icon"><use href="#i-history"/></svg><span>History</span>
       </button>
       <button class="tab-btn" data-tab="worktrees" role="tab" aria-selected="false" aria-controls="tab-worktrees">
-        <svg class="icon"><use href="#i-branch"/></svg><span>Worktrees</span>
+        <svg class="icon"><use href="#i-branch"/></svg><span>Cleanup</span>
       </button>
       <button class="tab-btn" data-tab="events" role="tab" aria-selected="false" aria-controls="tab-events">
         <svg class="icon"><use href="#i-activity"/></svg><span>Events</span>
@@ -333,6 +333,19 @@
           <ul class="wt-errors" id="worktrees-errors" hidden></ul>
           <div class="panel-body" id="worktrees-container">
             <div class="loading">Scanning worktrees…</div>
+          </div>
+        </section>
+        <section class="panel">
+          <div class="panel-head">
+            <h2><svg class="icon"><use href="#i-server"/></svg>Clutter</h2>
+            <button type="button" class="btn btn-sm" data-action="clutter-rescan"><svg class="icon"><use href="#i-refresh"/></svg>Rescan</button>
+          </div>
+          <div class="harness-filter">
+            <div class="harness-pills" id="clutter-pills"></div>
+          </div>
+          <p class="wt-summary" id="clutter-summary"></p>
+          <div class="panel-body" id="clutter-container">
+            <div class="loading">Looking for clutter…</div>
           </div>
         </section>
       </div>

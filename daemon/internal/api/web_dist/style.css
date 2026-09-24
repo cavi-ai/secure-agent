@@ -1721,3 +1721,7 @@ button.fw-uninspected .fw-drill-hint {
 .wt-size { flex: none; min-width: 64px; text-align: right; font: 0.72rem/1.3 var(--mono); color: var(--tx-2); white-space: nowrap; }
 .wt-repo-size { font: 600 0.72rem/1.3 var(--mono); color: var(--tx-2); white-space: nowrap; }
 @media (max-width: 720px) { .wt-vol { grid-template-columns: 1fr; } }
+.cl-kind { min-width: 92px; }
+.cl-tmp .cl-kind, .cl-quarantine .cl-kind { background: var(--warn-bg); color: var(--warn); }
+.cl-repo-cache .cl-kind, .cl-tool-cache .cl-kind, .cl-app-cache .cl-kind { background: var(--brand-bg); color: var(--brand-2); }
+.cl-more { align-self: flex-start; margin: 6px 12px 8px; font-size: 0.74rem; }

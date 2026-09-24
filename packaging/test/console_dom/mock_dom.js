@@ -562,6 +562,9 @@
   const handlePost = (p, opts) => {
     let body = {};
     try { body = JSON.parse((opts && opts.body) || '{}'); } catch { /* ignored */ }
+    if (p === '/cleanup/trash') {
+      return { status: 'ok', result: { bytes: 1048576, trash_path: '/Users/dev/.Trash/.tmp' } };
+    }
     if (p === '/worktrees/remove') {
       return { status: 'ok', removed: body.path, branch: 'feat/done', reasons: ['merged into origin/main (squash)'], bytes: 1610612736 };
     }
@@ -1189,6 +1192,35 @@
       [WT_REPO + '/.worktrees/evidence']: { assessment: 'review', confidence: 0.6, rationale: '<i>look</i> at .tmp before removing' }
     }
   };
+  // Clutter inventory: a repo .tmp, a tool cache with a clean command and a
+  // list-only one whose note carries markup that must render as text.
+  data['/cleanup'] = {
+    generated_at: iso(0), sizing: false,
+    items: [
+      { id: 'tool-cache:/Users/dev/Library/Caches/go-build', kind: 'tool-cache', name: 'go build', path: '/Users/dev/Library/Caches/go-build', size_bytes: 8589934592, last_touched: iso(86400000), idle_days: 1, action: 'clean', command: 'go clean -cache' },
+      { id: 'tmp:' + WT_REPO + '/.tmp', kind: 'tmp', name: '.tmp', path: WT_REPO + '/.tmp', project: WT_REPO, size_bytes: 1048576, last_touched: iso(22 * 86400000), idle_days: 22, action: 'trash' },
+      { id: 'tool-cache:/Users/dev/.cache/huggingface', kind: 'tool-cache', name: 'Hugging Face models', path: '/Users/dev/.cache/huggingface', size_bytes: 1024, action: 'none', note: '<i>downloaded</i> models' },
+    ],
+    kinds: [{ kind: 'tmp', bytes: 1048576, count: 1 }, { kind: 'tool-cache', bytes: 8589935616, count: 2 }],
+    projects: [],
+    reclaimed: { bytes: 0, count: 0, bytes_30d: 0, count_30d: 0, trashed_bytes: 0, trashed_count: 0 },
+  };
+  if (MODE.includes('clutterdemo')) {
+    setTimeout(() => {
+      const btn = document.querySelector('#clutter-container [data-action="clutter-trash"]');
+      if (btn) btn.click();
+      let n = 0;
+      const iv = setInterval(() => {
+        const ok = document.getElementById('confirm-ok');
+        if (ok && ok.closest('#confirm-layer') && !ok.closest('#confirm-layer').hidden) {
+          ok.click();
+          clearInterval(iv);
+        } else if (++n > 20) {
+          clearInterval(iv);
+        }
+      }, 100);
+    }, 4000);
+  }
   // sizingdemo: the first /worktrees answers still sizing with no sizes;
   // the tab must re-read until the sizes land.
   if (MODE.includes('sizingdemo')) {

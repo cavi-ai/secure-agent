@@ -14,7 +14,8 @@ vm.createContext(ctx);
 for (const f of ['lib.js', 'tab-worktrees.js']) {
   vm.runInContext(readFileSync(path.join(webDist, f), 'utf8'), ctx, { filename: f });
 }
-const { worktreeStateCounts, worktreeGroups, worktreeRowHTML, worktreeGroupHTML, worktreePathLabel, worktreeFilterHTML, worktreesSummaryText, worktreeDiskHTML, worktreeSizeLabel, fmtDisk } = ctx;
+const { worktreeStateCounts, worktreeGroups, worktreeRowHTML, worktreeGroupHTML, worktreePathLabel, worktreeFilterHTML, worktreesSummaryText, worktreeDiskHTML, worktreeSizeLabel, fmtDisk,
+  clutterGroups, clutterItemHTML, clutterGroupHTML, clutterPillsHTML, clutterSummaryText } = ctx;
 
 const REPO = '/Users/x/code/app';
 const report = () => ({
@@ -123,4 +124,57 @@ test('sizes: row label, lower bound, repo groups biggest first', () => {
   assert.deepEqual([...worktreeGroups(rep, {}).map(g => g.repo.path)], ['/Users/x/code/lib', REPO]);
   const row = worktreeRowHTML({ ...rep.repos[0].worktrees[1], size_bytes: 1610612736 }, rep.repos[0]);
   assert.ok(row.includes('<span class="wt-size">1.5 GB</span>'));
+});
+
+const clutterReport = () => ({
+  sizing: false,
+  items: [
+    { kind: 'tool-cache', name: 'go build', path: '/Users/x/Library/Caches/go-build', size_bytes: 8589934592, last_touched: '2026-09-22T00:00:00Z', idle_days: 1, action: 'clean', command: 'go clean -cache' },
+    { kind: 'tmp', name: '.tmp', path: REPO + '/.tmp', project: REPO, size_bytes: 1048576, last_touched: '2026-09-01T00:00:00Z', idle_days: 22, action: 'trash' },
+    { kind: 'repo-cache', name: 'node_modules', path: REPO + '/node_modules', project: REPO, size_bytes: 2097152, action: 'trash' },
+    { kind: 'tool-cache', name: 'Hugging Face models', path: '/Users/x/.cache/huggingface', size_bytes: 1024, action: 'none', note: '<b>downloaded</b> models' },
+  ],
+  kinds: [{ kind: 'tmp', bytes: 1048576, count: 1 }, { kind: 'repo-cache', bytes: 2097152, count: 1 }, { kind: 'tool-cache', bytes: 8589935616, count: 2 }],
+  reclaimed: { trashed_bytes: 3145728, trashed_count: 2 },
+});
+
+test('clutter: groups by project biggest first, machine caches under This machine, kind filter', () => {
+  const groups = clutterGroups(clutterReport(), {});
+  assert.deepEqual([...groups.map(g => g.project)], ['', REPO]);
+  assert.equal(groups[1].bytes, 3145728);
+  assert.deepEqual([...clutterGroups(clutterReport(), { kind: 'tmp' }).map(g => g.items.length)], [1]);
+});
+
+test('clutter: Move to Trash on trash items, Run <command> on clean items, nothing on list-only; escaped', () => {
+  const rep = clutterReport();
+  const trash = clutterItemHTML(rep.items[1], REPO);
+  assert.match(trash, /data-action="clutter-trash" data-path="\/Users\/x\/code\/app\/\.tmp">Move to Trash<\/button>/);
+  assert.ok(trash.includes('<span class="wt-path" title="/Users/x/code/app/.tmp">.tmp</span>'));
+  assert.ok(trash.includes('<span class="wt-idle">22d idle</span>'));
+  const clean = clutterItemHTML(rep.items[0], '');
+  assert.match(clean, /data-action="clutter-clean" data-name="go build" title="go clean -cache">Run go clean -cache<\/button>/);
+  assert.ok(clean.includes('<span class="wt-size">8.0 GB</span>'));
+  const none = clutterItemHTML(rep.items[3], '');
+  assert.ok(!none.includes('data-action='));
+  assert.ok(none.includes('&lt;b&gt;downloaded&lt;/b&gt; models'));
+});
+
+test('clutter: pills carry bytes per kind; summary counts clearable bytes and what went to the Trash', () => {
+  const pills = clutterPillsHTML(clutterReport(), { kind: 'tmp' });
+  assert.ok(pills.includes('data-kind="" aria-pressed="false">All <b>8.0 GB</b>'));
+  assert.ok(pills.includes('class="wt-pill on" data-action="clutter-filter" data-kind="tmp" aria-pressed="true">.tmp <b>1.0 MB</b>'));
+  assert.equal(clutterSummaryText(clutterReport()),
+    '4 items · 8.0 GB clearable · 3.0 MB moved to the Trash by cleanups (frees when the Trash is emptied)');
+});
+
+test('clutter: a project shows 8 rows until expanded', () => {
+  const items = Array.from({ length: 11 }, (_, i) => ({ kind: 'repo-cache', name: 'node_modules', path: REPO + '/p' + i + '/node_modules', project: REPO, size_bytes: 1000 - i, action: 'trash' }));
+  const g = { project: REPO, items, bytes: 0 };
+  const closed = clutterGroupHTML(g, new Set());
+  assert.equal((closed.match(/class="wt-row cl-row/g) || []).length, 8);
+  assert.ok(closed.includes('data-action="clutter-more" data-project="/Users/x/code/app">Show 3 more</button>'));
+  assert.ok(closed.includes('<span class="wt-repo-meta">11 items</span>'));
+  const open = clutterGroupHTML(g, new Set([REPO]));
+  assert.equal((open.match(/class="wt-row cl-row/g) || []).length, 11);
+  assert.ok(!open.includes('clutter-more'));
 });

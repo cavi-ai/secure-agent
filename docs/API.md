@@ -752,9 +752,27 @@ Removes one worktree, or prunes a repository's entries for worktrees whose direc
 
 Remove measures the worktree (a fresh walk) and inspects it again at request time and runs `git worktree remove` (never `--force`) only when that fresh verdict is `remove`; git still refuses a tree that turned dirty in between. The branch and its commits stay. Prune runs `git worktree prune` when the repository lists at least one unlocked worktree whose directory is gone. Both write an audit row and a cleanup ledger row (`worktree-remove` with the bytes measured before removal; `worktree-prune` with 0) and drop the cached scan.
 
+#### `GET /cleanup`
+
+Everything besides worktrees that can be cleared, each with its size, last touched time and project:
+
+| `kind` | What | Where it is looked for | Clear with |
+|---|---|---|---|
+| `tmp` | `.tmp` directories | in every scanned repository and worktree (3 levels deep), and up to 3 directories above a repository | Trash |
+| `quarantine` | `.quarantine` directories | same | Trash |
+| `repo-cache` | `node_modules`, `.next`, `.nuxt`, `.turbo`, `.parcel-cache`, `dist`, `build`, `target`, `.venv`, `venv`, `__pycache__`, `.pytest_cache`, `.mypy_cache`, `.ruff_cache`, `.gradle`, `DerivedData`, `.build`, `.swiftpm` | inside repositories and worktrees, 3 levels deep | Trash |
+| `tool-cache` | npm, yarn, pnpm, go build, go modules, pip, uv, Homebrew, cargo registry, Gradle, Playwright browsers, Xcode DerivedData; Hugging Face models (listed only) | the tool's default cache path | the tool's own command (`npm cache clean --force`, `go clean -cache`, `brew cleanup --prune=all`, ...) when the tool is installed, else Trash |
+| `app-cache` | one directory per app under `~/Library/Caches` and `~/.cache` | | Trash (quit the app first) |
+
+Each item: `id`, `kind`, `name`, `path`, `project` (the repository, for items inside one), `worktree`, `size_bytes`, `files`, `size_partial`, `last_touched` (newest modification time under it), `idle_days`, `action` (`trash`, `clean`, `none`), `command` and `note`. Items are biggest first; `kinds` and `projects` sum them. Sizes come from the same bounded background walk as worktree sizes (`sizing` while pending). An item inside a repository or worktree is offered only when git ignores it and no tracked file lives under it (a `build/` or `dist/` that is source reads `action: none`, note `not ignored by git, or holds tracked files: not a cache`); one where an agent session is live reads `action: none` too. `reclaimed` is the ledger totals. `?refresh=1` rebuilds the inventory (otherwise cached 10 minutes). Read-level, NoAgent. CLI: `secure-agent cleanup [--kind K] [--project P] [--refresh] [--json]`.
+
+#### `POST /cleanup/trash` and `POST /cleanup/clean`
+
+`{"path": "<item path>"}` moves one `trash` item to the Trash on its own volume (`~/.Trash` on the home volume, `<volume>/.Trashes/<uid>` elsewhere; a name already there gets a time suffix). `{"name": "<tool>"}` runs one `clean` item's command (10-minute bound) and books how much the cache shrank. Both rebuild the inventory at request time and act only on an item it still offers with that action. `200 {"status":"ok","result":{"item", "bytes", "bytes_partial", "trash_path", "output"}}`; `400` bad payload; `404` not in the inventory with that action (including an item whose place now has a live agent session); `409` the directory changed; `500` the move or command failed. The ledger books `trash:<kind>` (counted as `trashed_bytes`: the space frees when the Trash is emptied) or `clean:<tool>`. Mutations, NoAgent. CLI: `secure-agent cleanup trash <path>`, `secure-agent cleanup clean <tool>`.
+
 #### `GET /cleanup/ledger`
 
-The cleanup ledger, newest first: `{"totals": {"bytes", "count", "bytes_30d", "count_30d"}, "entries": [{"id", "ts", "action", "path", "repo", "bytes", "detail"}]}`. `?limit=N` (default 100, max 1000). The ledger keeps the newest 20,000 rows. Read-level, NoAgent. CLI: `secure-agent cleanup log [--limit N] [--json]`.
+The cleanup ledger, newest first: `{"totals": {"bytes", "count", "bytes_30d", "count_30d", "trashed_bytes", "trashed_count"}, "entries": [{"id", "ts", "action", "path", "repo", "bytes", "detail"}]}`. `?limit=N` (default 100, max 1000). The ledger keeps the newest 20,000 rows. Read-level, NoAgent. CLI: `secure-agent cleanup log [--limit N] [--json]`.
 
 | Status | Body |
 |---|---|

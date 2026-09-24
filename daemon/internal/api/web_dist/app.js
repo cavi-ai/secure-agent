@@ -669,7 +669,7 @@ document.addEventListener('DOMContentLoaded', () => {
     ['agents', renderAgents],
     ['firewall', renderFirewall], ['incidents', renderIncidents], ['fleet', renderFleet],
     ['audit', renderAudit], ['sources', renderSources], ['flags', renderFlags], ['attention', renderAttention],
-    ['events', renderEvents], ['activity', renderActivity], ['worktrees', renderWorktrees], ['tab-badges', renderTabBadges]
+    ['events', renderEvents], ['activity', renderActivity], ['worktrees', renderWorktrees], ['clutter', renderClutter], ['tab-badges', renderTabBadges]
   ];
   // Panel → tab; a panel absent here is global (always on screen).
   const PANEL_TAB = {
@@ -677,14 +677,14 @@ document.addEventListener('DOMContentLoaded', () => {
     sessions: 'sessions', agents: 'agents', fleet: 'agents', resources: 'resources', history: 'history',
     events: 'events', firewall: 'egress', sources: 'egress',
     incidents: 'findings', audit: 'findings', flags: 'findings', attention: 'findings',
-    worktrees: 'worktrees'
+    worktrees: 'worktrees', clutter: 'worktrees'
   };
   // Panel → the element whose focused control holds its render.
   const PANEL_EL = {
     resources: 'resource-board', history: 'history-board', sessions: 'session-rail', agents: 'agents-container',
     fleet: 'fleet-container', firewall: 'firewall-container', sources: 'sources-list', incidents: 'incidents-container',
     audit: 'audit-container', flags: 'flags-list', attention: 'attention-list', events: 'events-container',
-    worktrees: 'worktrees-container'
+    worktrees: 'worktrees-container', clutter: 'clutter-container'
   };
   const SLOW_ONLY = new Set(['resources', 'history', 'fleet', 'audit', 'sources', 'activity', 'spend']);
   const PANEL_MIN_MS = 250;
@@ -816,6 +816,35 @@ document.addEventListener('DOMContentLoaded', () => {
       followWorktreeSizing();
     }
   }
+  // Clutter: loaded with the tab like worktrees; re-read while sizes land.
+  const clutterState = { report: null, loading: false, error: '', loadedAt: 0, filter: { kind: '' }, expanded: new Set() };
+  let clutterSizingTimer = null;
+  let clutterSizingPolls = 0;
+  async function loadClutter(refresh) {
+    if (clutterState.loading) return;
+    clutterState.loading = true;
+    clutterState.error = '';
+    markDirty('clutter');
+    try {
+      const r = await apiFetch('/cleanup' + (refresh ? '?refresh=1' : ''), { timeoutMs: WORKTREE_TIMEOUT_MS });
+      if (!r.ok) throw new Error((await r.text()).trim() || String(r.status));
+      clutterState.report = await r.json();
+      clutterState.loadedAt = Date.now();
+      if (!clutterState.report.sizing) clutterSizingPolls = 0;
+    } catch (err) {
+      clutterState.error = 'Clutter scan failed: ' + (err.message || err);
+      if (clutterState.report) showToast(clutterState.error, 'danger');
+    } finally {
+      clutterState.loading = false;
+      markDirty('clutter');
+      const rep = clutterState.report;
+      if (rep && rep.sizing && activeTab === 'worktrees' && !clutterSizingTimer && clutterSizingPolls < WORKTREE_SIZING_POLLS) {
+        clutterSizingPolls++;
+        clutterSizingTimer = setTimeout(() => { clutterSizingTimer = null; loadClutter(false); }, WORKTREE_SIZING_POLL_MS);
+      }
+    }
+  }
+
   // dropWorktreeRows removes rows the daemon just removed or pruned, so the
   // tab updates without a rescan.
   // reclaimedBytes, when given, is what the daemon booked for the removal:
@@ -861,6 +890,9 @@ document.addEventListener('DOMContentLoaded', () => {
     renderDirty();
     if (id === 'worktrees' && (!worktreesState.report || Date.now() - worktreesState.loadedAt > WORKTREE_STALE_MS)) {
       loadWorktrees(false);
+    }
+    if (id === 'worktrees' && (!clutterState.report || Date.now() - clutterState.loadedAt > WORKTREE_STALE_MS)) {
+      loadClutter(false);
     }
   }
 
@@ -1291,6 +1323,45 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   };
 
+  window.trashClutter = async function(path) {
+    const ok = await window.saConfirm(`Move ${path} to the Trash? You can put it back from the Trash until you empty it.`,
+      { title: 'Move to Trash', okLabel: 'Move to Trash' });
+    if (!ok) return;
+    try {
+      const { r, text, json } = await postWorktree('/cleanup/trash', { path });
+      if (!r.ok) throw new Error(text.trim() || String(r.status));
+      const bytes = Number(json && json.result && json.result.bytes) || 0;
+      const rep = clutterState.report;
+      if (rep) {
+        rep.items = (rep.items || []).filter(it => it.path !== path);
+        const t = rep.reclaimed || (rep.reclaimed = { bytes: 0, count: 0, bytes_30d: 0, count_30d: 0, trashed_bytes: 0, trashed_count: 0 });
+        t.trashed_bytes = (Number(t.trashed_bytes) || 0) + bytes;
+        t.trashed_count = (Number(t.trashed_count) || 0) + 1;
+      }
+      renderNow(['clutter']);
+      showToast(`Moved ${path} to the Trash — ${fmtDisk(bytes)} frees when you empty it`, 'success');
+    } catch (err) {
+      showToast('Failed to move to the Trash: ' + (err.message || err), 'danger');
+    }
+  };
+
+  window.cleanClutter = async function(name) {
+    const it = ((clutterState.report && clutterState.report.items) || []).find(x => x.name === name && x.action === 'clean');
+    const ok = await window.saConfirm(`Run \`${(it && it.command) || name}\`? The tool clears its own cache; it may take a few minutes.`,
+      { title: 'Clean cache', okLabel: 'Run', danger: false });
+    if (!ok) return;
+    showToast(`Running ${(it && it.command) || name}…`, 'info');
+    try {
+      const { r, text, json } = await postWorktree('/cleanup/clean', { name });
+      if (!r.ok) throw new Error(text.trim() || String(r.status));
+      const bytes = Number(json && json.result && json.result.bytes) || 0;
+      showToast(`${name}: ${fmtDisk(bytes)} reclaimed`, 'success');
+      loadClutter(false);
+    } catch (err) {
+      showToast('Clean failed: ' + (err.message || err), 'danger');
+    }
+  };
+
   window.pruneWorktrees = async function(repo) {
     const ok = await window.saConfirm(`Drop git's entries for worktrees of ${repo} whose directory is gone?`,
       { title: 'Prune worktrees', okLabel: 'Prune', danger: false });
@@ -1500,6 +1571,7 @@ document.addEventListener('DOMContentLoaded', () => {
     globalSearchTerm,
     renderCounts,
     worktrees: worktreesState,
+    clutter: clutterState,
     flushRender() {
       for (const [name, fn] of PANELS) if (dirtyPanels.has(name)) { dirtyPanels.delete(name); renderPanel(name, fn); }
     },
@@ -2599,6 +2671,25 @@ document.addEventListener('DOMContentLoaded', () => {
         break;
       case 'worktrees-rescan':
         loadWorktrees(true);
+        break;
+      case 'clutter-rescan':
+        loadClutter(true);
+        break;
+      case 'clutter-filter':
+        clutterState.filter.kind = d.kind || '';
+        renderNow(['clutter']);
+        break;
+      case 'clutter-more':
+        clutterState.expanded.add(d.project || '');
+        renderNow(['clutter']);
+        break;
+      case 'clutter-trash':
+        e.preventDefault();
+        window.trashClutter(d.path);
+        break;
+      case 'clutter-clean':
+        e.preventDefault();
+        window.cleanClutter(d.name);
         break;
       case 'promote':
         window.promoteRule(d.rule);
