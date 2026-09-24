@@ -6,7 +6,13 @@ import Foundation
 /// and the AppDelegate updates the status-bar icon via `onChange`.
 @MainActor
 public final class AppState: ObservableObject {
-    @Published public private(set) var status: StatusResponse?
+    @Published public private(set) var status: StatusResponse? {
+        didSet { statusGeneration &+= 1 }
+    }
+    /// Bumped on every `status` assignment: the identity the session-board
+    /// memo keys on.
+    private var statusGeneration = 0
+    private var sessionRowsMemo: (generation: Int, sort: AgentSort, rows: [AgentRow])?
     /// /posture headline; drives needsAttention. Nil until first fetch.
     @Published public private(set) var posture: PostureModel?
     @Published public private(set) var resources: ResourceSnapshotModel?
@@ -109,6 +115,13 @@ public final class AppState: ObservableObject {
         self.flags = f
     }
 
+    /// Test hook: seed the /posture headline and a pending guard prompt
+    /// (hero tests, render proofs).
+    func seedPostureForTesting(_ p: PostureModel?, pendingGuard: GuardPending? = nil) {
+        self.posture = p
+        self.pendingGuard = pendingGuard
+    }
+
     /// Test hook: age a pending re-triage past its timeout (expiry path).
     func agePendingRetriageForTesting(id: String) {
         pendingRetriage[id] = Date(timeIntervalSinceNow: -120)
@@ -160,7 +173,7 @@ public final class AppState: ObservableObject {
         }
     }
 
-    private func handleStreamEvent(_ frame: SSEFrame) {
+    func handleStreamEvent(_ frame: SSEFrame) {
         streamFailureCount = 0
         // The stream being alive at all is proof of daemon liveness. On
         // reconnect, pull full state once (events seen while disconnected
@@ -170,38 +183,86 @@ public final class AppState: ObservableObject {
             scheduleTimer(30.0) // stream carries freshness; slow poll for uptime
             fetch()
         }
-        switch frame.event {
-        case "guard-prompt", "guard-resolved":
-            // Instant path: a waiting user decision must not wait for a poll.
-            scheduleLightRefresh(immediately: true)
-        default:
-            // Any bus event can precede a new flag (correlator consumes the
-            // same bus) — debounce to one refresh per burst.
-            scheduleLightRefresh(immediately: false)
+        let need = Self.streamRefresh(for: frame.event)
+        guard !need.isEmpty else { return }
+        // Instant path: a waiting user decision must not wait for a poll.
+        scheduleLightRefresh(need, immediately: need.contains(.guardPending))
+    }
+
+    /// What one SSE frame makes the popover refetch.
+    struct StreamRefresh: OptionSet, Sendable {
+        let rawValue: Int
+        static let flags = StreamRefresh(rawValue: 1)
+        static let posture = StreamRefresh(rawValue: 2)
+        static let guardPending = StreamRefresh(rawValue: 4)
+    }
+
+    /// Frame names the daemon writes on /events/stream (`event: <type>`):
+    ///   event          — every stored bus event (≈76/s live): no refetch
+    ///   session        — session spine upsert: no refetch
+    ///   incident       — incident report written: no refetch (slow poll)
+    ///   flag           — a new flag: flags + posture
+    ///   posture        — posture state or count changed: flags + posture
+    ///   guard-prompt   — a guard decision is waiting: flags + guard pending
+    ///   guard-resolved — a guard decision was made: flags + guard pending
+    static func streamRefresh(for event: String) -> StreamRefresh {
+        switch event {
+        case "flag", "posture": return [.flags, .posture]
+        case "guard-prompt", "guard-resolved": return [.flags, .guardPending]
+        default: return []
         }
     }
 
-    /// Debounced partial refresh: flags + guard pending only (status/uptime
+    /// Debounce for flag/posture frames: one refetch per burst.
+    var streamDebounceNanos: UInt64 = 400_000_000
+    private var pendingStreamRefresh: StreamRefresh = []
+
+    /// Debounced partial refresh of what the frames asked for (status/uptime
     /// stay on the slow poll — they change on a seconds scale, not per event).
-    private func scheduleLightRefresh(immediately: Bool) {
+    private func scheduleLightRefresh(_ need: StreamRefresh, immediately: Bool) {
+        pendingStreamRefresh.formUnion(need)
         refreshTask?.cancel()
         refreshTask = Task { [weak self] in
-            if !immediately {
-                try? await Task.sleep(nanoseconds: 400_000_000)
+            if !immediately, let delay = self?.streamDebounceNanos, delay > 0 {
+                try? await Task.sleep(nanoseconds: delay)
             }
             guard !Task.isCancelled, let self, !self.isPaused else { return }
-            do {
-                let flags = try await self.client.fetchFlags(limit: 20)
-                guard !Task.isCancelled else { return }
-                self.flags = flags
-                self.processNewFlags(flags)
-                self.onChange?()
-                let pending = try await self.client.fetchGuardPending()
-                self.presentGuardPromptIfNeeded(pending)
-            } catch {
-                // The next stream event or poll tick retries; no state flip here.
-            }
+            let need = self.pendingStreamRefresh
+            self.pendingStreamRefresh = []
+            await self.lightRefresh(need)
         }
+    }
+
+    private func lightRefresh(_ need: StreamRefresh) async {
+        var changed = false
+        do {
+            if need.contains(.flags) {
+                let fetched = try await client.fetchFlags(limit: 20)
+                if Self.flagsSignature(fetched) != Self.flagsSignature(flags) {
+                    flags = fetched
+                    processNewFlags(fetched)
+                    changed = true
+                }
+            }
+            if need.contains(.posture), let p = try? await client.fetchPosture(), p != posture {
+                posture = p
+                changed = true
+            }
+            if changed { onChange?() }
+            if need.contains(.guardPending) {
+                let pending = try await client.fetchGuardPending()
+                presentGuardPromptIfNeeded(pending)
+            }
+        } catch {
+            if changed { onChange?() }
+            // The next stream event or poll tick retries; no state flip here.
+        }
+    }
+
+    /// What a refetch must change to be worth a re-render: ids, acknowledged
+    /// and served disposition state.
+    static func flagsSignature(_ flags: [FlagModel]) -> [String] {
+        flags.map { "\($0.id)|\($0.acknowledged == true)|\($0.explain?.disposition.state ?? "")" }
     }
 
     private func scheduleTimer(_ interval: TimeInterval) {
@@ -321,13 +382,19 @@ public final class AppState: ObservableObject {
             self.connected = false
             // Drop ALL daemon-derived state: stale flags/incidents driving
             // the icon and console while the header says "Disconnected" is
-            // how a user kills the wrong process.
+            // how a user kills the wrong process. posture and pendingGuard
+            // are included — otherwise needsAttention can keep the critical
+            // icon lit, and the popover can keep exposing a guard mutation
+            // button, while disconnected.
             self.status = nil
             self.resources = nil
             self.flags = []
             self.incidents = []
             self.events = []
             self.guardRules = []
+            self.posture = nil
+            self.pendingGuard = nil
+            self.inPlaceAction = nil
             self.lastError = error.localizedDescription
             if wasConnected { self.scheduleTimer(5.0) }
             self.onChange?()
@@ -1064,7 +1131,18 @@ public final class AppState: ObservableObject {
 
     /// Session board: one row per tree root, helpers omitted. No cap — the
     /// popover scrolls. cwdLeaf on the agent is the glance label.
+    /// Memoised on the `status` it was built from: a render with the same
+    /// status and sort reuses the rows.
     public func sessionBoardRows(sortedBy sort: AgentSort) -> [AgentRow] {
+        if let memo = sessionRowsMemo, memo.generation == statusGeneration, memo.sort == sort {
+            return memo.rows
+        }
+        let rows = buildSessionBoardRows(sort)
+        sessionRowsMemo = (statusGeneration, sort, rows)
+        return rows
+    }
+
+    private func buildSessionBoardRows(_ sort: AgentSort) -> [AgentRow] {
         if let trees = status?.trees, !trees.isEmpty {
             let rows = trees.map { t in
                 AgentRow(agent: t.root, depth: 0,
@@ -1109,11 +1187,101 @@ public final class AppState: ObservableObject {
         return order.map { SessionFamily(name: $0, rows: byName[$0]!) }
     }
 
-    /// What tapping the hero does. Every hero state that names a count must
-    /// have one — a number with no action behind it is noise.
-    public enum HeroAction {
-        case flag(FlagModel)
+    /// The hero's one button under the top flag: the served recommended
+    /// action run in place, or the console.
+    public enum HeroAction: Equatable {
+        case perform(FlagExplainAction)
         case openConsole(tab: String)
+    }
+
+    /// Served action ids the popover runs in place (no confirmation); any
+    /// other recommendation (`kill`, `open-incident`) opens the console.
+    static let inPlaceActionIDs: Set<String> = ["allow-host", "allow-path", "mute-rule-host", "mute-class", "dismiss"]
+
+    static func heroAction(for flag: FlagModel) -> HeroAction {
+        if let rec = flag.explain?.recommended, inPlaceActionIDs.contains(rec.id) {
+            return .perform(rec)
+        }
+        return .openConsole(tab: "findings")
+    }
+
+    /// Precedence of served dispositions: critical > warning > benign-likely.
+    static func dispositionRank(_ flag: FlagModel) -> Int {
+        switch flag.explain?.disposition.state {
+        case "critical": return 0
+        case "warning": return 1
+        case "benign-likely": return 2
+        default: return 3
+        }
+    }
+
+    /// The flag the hero names: unacted, highest served disposition, newest
+    /// within a tier (/flags is newest first).
+    public var heroFlag: FlagModel? {
+        unactedFlags.enumerated()
+            .min { (Self.dispositionRank($0.element), $0.offset) < (Self.dispositionRank($1.element), $1.offset) }?
+            .element
+    }
+
+    /// The in-place action the hero ran last and how it went.
+    public struct InPlaceAction: Equatable {
+        public enum Phase: Equatable {
+            case running, done
+            /// The mutation succeeded but the follow-up flag acknowledge did
+            /// not — the button stays disabled (re-running the mutation
+            /// would repeat it) while the message says the finding still
+            /// needs a look.
+            case doneWithWarning(String)
+            case failed(String)
+
+            /// Whether the act button should stay disabled: true for every
+            /// terminal-success outcome, false only when the action itself
+            /// failed and is safe to retry.
+            var keepsButtonDisabled: Bool {
+                switch self {
+                case .running, .done, .doneWithWarning: return true
+                case .failed: return false
+                }
+            }
+        }
+        public let flagID: String
+        public let action: FlagExplainAction
+        public var phase: Phase
+    }
+    @Published public private(set) var inPlaceAction: InPlaceAction?
+
+    /// allow-host and allow-path only mutate policy on the daemon — unlike
+    /// the web console (web_dist/app.js explainAct), they don't acknowledge
+    /// the flag they were served for. mute-rule-host, mute-class and dismiss
+    /// already close the loop server-side (POST /mute's AcknowledgeRuleHost,
+    /// POST /flags/acknowledge itself), so only these two need the follow-up.
+    static let actionsRequiringAcknowledge: Set<String> = ["allow-host", "allow-path"]
+
+    /// Run a served action from the popover. The button disables while it
+    /// runs; success refetches flags and posture, failure re-enables it with
+    /// the error. allow-host/allow-path additionally acknowledge the flag
+    /// after the mutation succeeds — if that fails, the mutation already
+    /// happened (retrying would repeat it), so the button stays disabled and
+    /// the result line names the partial failure.
+    public func performInPlace(_ action: FlagExplainAction, on flag: FlagModel) async {
+        if inPlaceAction?.phase == .running { return }
+        inPlaceAction = InPlaceAction(flagID: flag.id, action: action, phase: .running)
+        do {
+            try await client.perform(action)
+            if Self.actionsRequiringAcknowledge.contains(action.id) {
+                do {
+                    try await client.acknowledgeFlag(id: flag.id)
+                    inPlaceAction?.phase = .done
+                } catch {
+                    inPlaceAction?.phase = .doneWithWarning("Allowed · dismiss failed: \(error.localizedDescription)")
+                }
+            } else {
+                inPlaceAction?.phase = .done
+            }
+            await lightRefresh([.flags, .posture])
+        } catch {
+            inPlaceAction?.phase = .failed(error.localizedDescription)
+        }
     }
 
     private func sortSessionRows(_ rows: [AgentRow], by sort: AgentSort) -> [AgentRow] {

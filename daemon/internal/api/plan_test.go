@@ -88,7 +88,7 @@ func seedTranscriptFinding(t *testing.T, a *API) string {
 }
 
 func TestPlanRouteIsNoAgent(t *testing.T) {
-	if !apiroutes.IsNoAgent("/advisor/plan") || !apiroutes.ConsoleAllowed("/advisor/plan") ||
+	if !apiroutes.IsNoAgent("/advisor/plan") || !apiroutes.ConsoleAllowed("GET", "/advisor/plan") ||
 		!apiroutes.IsMutation("POST", "/advisor/plan") || apiroutes.IsMutation("GET", "/advisor/plan") {
 		t.Fatal("/advisor/plan must be NoAgent, console-admitted, POST mutating")
 	}

@@ -10,8 +10,8 @@ import (
 
 // WriteCwdOverrides renders the hook-readable per-project policy file from
 // config. The hook is a stdlib-only Python process and cannot parse YAML, so
-// the daemon serializes its parsed view to ~/.config/secure-agent/
-// guard-cwd-overrides.json (0600, user-private). An empty list clears the file
+// the daemon serializes its parsed view to guard-cwd-overrides.json beside
+// its socket (CwdOverridesPath; 0600, user-private). An empty list clears the file
 // (the hook then falls back to global modes).
 func WriteCwdOverrides(path string, overrides []CwdOverride) error {
 	if path == "" {
@@ -40,4 +40,15 @@ func WriteCwdOverrides(path string, overrides []CwdOverride) error {
 func DefaultCwdOverridesPath() string {
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".config", "secure-agent", "guard-cwd-overrides.json")
+}
+
+// CwdOverridesPath returns where this daemon writes the hook policy file:
+// beside its own control socket, so a second daemon (another -config, a test
+// run) never rewrites the primary's file. The default socket lives in
+// ~/.config/secure-agent/, so the default daemon's path is unchanged.
+func CwdOverridesPath(cfg Config) string {
+	if cfg.SocketPath == "" {
+		return DefaultCwdOverridesPath()
+	}
+	return filepath.Join(filepath.Dir(cfg.SocketPath), "guard-cwd-overrides.json")
 }

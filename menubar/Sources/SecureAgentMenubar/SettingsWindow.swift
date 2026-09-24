@@ -163,16 +163,19 @@ struct SettingsView: View {
                         Image(systemName: "eye.slash")
                             .font(.system(size: 10)).foregroundStyle(.secondary)
                         VStack(alignment: .leading, spacing: 1) {
-                            Text(FlagActionSheet.humanTitle(m.rule))
+                            Text(m.title ?? m.rule)
                                 .font(.system(.body, weight: .medium))
                             Text(m.host == "*" ? "entire class (all hosts)" : "host: \(m.host)")
+                                .font(.system(.caption, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                            Text(m.agent.map { "agent: \($0)" } ?? "all agents")
                                 .font(.system(.caption, design: .monospaced))
                                 .foregroundStyle(.secondary)
                         }
                         Spacer()
                         Button("Unmute", role: .destructive) {
                             Task {
-                                try? await state.uiClient.muteRemove(rule: m.rule, host: m.host)
+                                try? await state.uiClient.muteRemove(rule: m.rule, host: m.host, agent: m.agent)
                                 loadMutes()
                             }
                         }
@@ -319,12 +322,12 @@ struct SettingsView: View {
     // MARK: Guard
 
     @State private var pathAllows: [GuardPathAllowModel] = []
-    @State private var mutes: [(rule: String, host: String)] = []
+    @State private var mutes: [(rule: String, host: String, agent: String?, title: String?)] = []
 
     private func loadMutes() {
         Task {
             let rows = (try? await state.uiClient.fetchMutes()) ?? []
-            await MainActor.run { mutes = rows.sorted { ($0.rule, $0.host) < ($1.rule, $1.host) } }
+            await MainActor.run { mutes = rows.sorted { ($0.rule, $0.host, $0.agent ?? "") < ($1.rule, $1.host, $1.agent ?? "") } }
         }
     }
 

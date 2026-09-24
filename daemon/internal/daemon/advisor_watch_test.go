@@ -70,7 +70,7 @@ func TestWatchConfigKeepsAlreadyAppliedStartupState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	initial := setupAdvisor(cfg, st)
+	initial := setupAdvisor(cfg, st, nil, nil)
 	stk := &advisorStackHolder{}
 	stk.Store(initial)
 	ctx, cancel := context.WithCancel(context.Background())

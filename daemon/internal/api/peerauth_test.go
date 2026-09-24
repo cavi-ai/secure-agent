@@ -257,6 +257,7 @@ func TestGateDispositionEndpointsPolicy(t *testing.T) {
 		{"/allowlist", `{"agent":"cursor","host":"example.com"}`},
 		{"/advisor/retriage", `{"flag_id":"abc123"}`},
 		{"/resources/control", `{"id":"resource-1","decision":"dismiss"}`},
+		{"/guard/path-allow", `{"agent":"claude","rule_id":"env-file","path":"/x/.env"}`},
 	} {
 		resp, err := cl.Post("http://unix"+tc.path, "application/json", strings.NewReader(tc.body))
 		if err != nil {
@@ -267,10 +268,21 @@ func TestGateDispositionEndpointsPolicy(t *testing.T) {
 			t.Fatalf("POST %s as owner when UI pinned: status=%d, want 403", tc.path, resp.StatusCode)
 		}
 	}
+	del, _ := http.NewRequest(http.MethodDelete, "http://unix/mute?rule=keychain-access&host=api.example.com", nil)
+	resp, err := cl.Do(del)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	// DELETE /mute is owner-level: unmuting only brings alerts back, and
+	// headless fleets revoke mutes over ssh.
+	if resp.StatusCode == http.StatusForbidden {
+		t.Fatal("DELETE /mute as owner when UI pinned: got 403, want the owner-level gate to pass")
+	}
 
 	// /notify/rules is owner-level (headless/ssh management like
 	// DELETE /guard/rules): the owner passes even with a UI pinned.
-	resp, err := cl.Post("http://unix/notify/rules", "application/json",
+	resp, err = cl.Post("http://unix/notify/rules", "application/json",
 		strings.NewReader(`{"rule":"keychain-access","notify":false}`))
 	if err != nil {
 		t.Fatal(err)
@@ -308,6 +320,7 @@ func TestGateDispositionEndpointsAsPinnedUI(t *testing.T) {
 		{"/flags/acknowledge", `{"flag_id":"abc123"}`},
 		{"/allowlist", `{"agent":"cursor","host":"example.com"}`},
 		{"/resources/control", `{"id":"resource-1","decision":"dismiss"}`},
+		{"/guard/path-allow", `{"agent":"claude","rule_id":"env-file","path":"/x/.env"}`},
 	} {
 		resp, err := cl.Post("http://unix"+tc.path, "application/json", strings.NewReader(tc.body))
 		if err != nil {
@@ -317,6 +330,15 @@ func TestGateDispositionEndpointsAsPinnedUI(t *testing.T) {
 		if resp.StatusCode == http.StatusForbidden {
 			t.Fatalf("POST %s as pinned UI: got 403 — the menubar's dismiss flow is broken", tc.path)
 		}
+	}
+	del, _ := http.NewRequest(http.MethodDelete, "http://unix/mute?rule=keychain-access&host=api.example.com", nil)
+	resp, err := cl.Do(del)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode == http.StatusForbidden {
+		t.Fatal("DELETE /mute as pinned UI: got 403 — the menubar's unmute is broken")
 	}
 }
 
@@ -375,6 +397,17 @@ func TestGateAgentRolePolicy(t *testing.T) {
 	}
 	if fk.killed != 0 {
 		t.Fatal("killer must not fire for an agent-role caller")
+	}
+
+	// POST /guard/path-allow: a mutation, forbidden for agents.
+	resp, err = cl.Post("http://unix/guard/path-allow", "application/json",
+		strings.NewReader(`{"agent":"claude","rule_id":"env-file","path":"/x/.env"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("agent POST /guard/path-allow: status=%d, want 403", resp.StatusCode)
 	}
 
 	// DELETE /guard/rules: owner-level, forbidden for agents.

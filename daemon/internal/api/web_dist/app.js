@@ -13,6 +13,14 @@ document.addEventListener('DOMContentLoaded', () => {
   // and never touches disk-backed storage.
   const SS_TOKEN_KEY = 'sa.console-token';
   const hashParams = new URLSearchParams(location.hash.slice(1));
+  // The menu bar loads a fresh #ct= into an existing console tab (a tab
+  // whose session ended included): keep the new token and start over.
+  window.addEventListener('hashchange', () => {
+    const fresh = new URLSearchParams(location.hash.slice(1)).get('ct');
+    if (!fresh) return;
+    try { sessionStorage.setItem(SS_TOKEN_KEY, fresh); } catch { /* private mode: the reload reads the hash */ }
+    location.reload();
+  });
   let consoleToken = hashParams.get('ct') || '';
   if (consoleToken) {
     try { sessionStorage.setItem(SS_TOKEN_KEY, consoleToken); } catch { /* private mode: memory only */ }
@@ -25,6 +33,21 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   } else {
     try { consoleToken = sessionStorage.getItem(SS_TOKEN_KEY) || ''; } catch { consoleToken = ''; }
+  }
+  // Honest ended state: without a token nothing else paints — no posture,
+  // no counts, no panels, no fetches, no stream. Only the menu bar can mint
+  // a session.
+  function showSessionEnded() {
+    document.body.classList.add('is-ended');
+    const ended = document.getElementById('session-ended');
+    document.querySelectorAll('.app > *, .masthead-right, #drawer, #confirm-layer').forEach(el => {
+      if (el !== ended && !el.classList.contains('masthead')) el.hidden = true;
+    });
+    if (ended) ended.hidden = false;
+  }
+  if (consoleBootState(hashParams.get('ct'), consoleToken) === 'ended') {
+    showSessionEnded();
+    return;
   }
   const authHeaders = consoleToken ? { 'X-SecureAgent-Console-Token': consoleToken } : {};
 
@@ -240,6 +263,10 @@ document.addEventListener('DOMContentLoaded', () => {
     costsCard: null,  // /costs report for the Spend card's saved view
     connected: true
   };
+  // Last-seen /notify/rules payload hash — gates 'notify' dirty-marking on
+  // the reconcile poll so a config that hasn't changed never re-renders the
+  // panel (and erases an in-progress edit); see fetchTelemetry.
+  let notifyCfgHash = '';
 
   // Spend card view: dimension and window, kept for the tab in
   // sessionStorage. The tile keeps its own 24h/by-repo fetch.
@@ -256,14 +283,15 @@ document.addEventListener('DOMContentLoaded', () => {
     `/costs?since=${spendView.since}&by=${spendView.by}&tz=${-(new Date()).getTimezoneOffset()}`;
 
   // ---------- connectivity ----------
-  // Three honest states, never conflated:
+  // Two honest live states, never conflated:
   //  - 'ok':           fetches succeed.
-  //  - 'auth-expired': the daemon answers 403 — the token is missing or
-  //                    rotated. Only the menubar can mint a fresh session;
-  //                    say so instead of pretending the daemon is down.
   //  - 'unreachable':  network-level failure — the daemon or its proxy
   //                    listener is gone; the last known state stays visible.
+  // A 403 is neither: the token is missing or rotated, only the menu bar can
+  // mint a fresh session, and the page switches to the ended state
+  // (endSession).
   let connState = 'ok';
+  let sessionEnded = false;
   let prevUptimeSec = 0;
   // Endpoints that failed in the last cycle — each failure surfaces ONCE as a
   // toast so a dying endpoint can't silently blank its panel.
@@ -293,11 +321,20 @@ document.addEventListener('DOMContentLoaded', () => {
     const text = banner.querySelector('span');
     if (connState === 'ok') { banner.hidden = true; return; }
     banner.hidden = false;
-    if (text) {
-      text.textContent = connState === 'auth-expired'
-        ? 'Session expired — reopen the console from the Secure Agent menu bar to reconnect.'
-        : "Can't reach the Secure Agent daemon — showing the last known state and retrying…";
-    }
+    if (text) text.textContent = "Can't reach the Secure Agent daemon — showing the last known state and retrying…";
+  }
+
+  // endSession: a 403 means the token is dead. Drop it, stop every timer and
+  // the stream, and show only the ended state; nothing retries.
+  function endSession() {
+    if (sessionEnded) return;
+    sessionEnded = true;
+    try { sessionStorage.removeItem(SS_TOKEN_KEY); } catch { /* private mode */ }
+    clearInterval(slowTimer);
+    clearInterval(sparkTimer);
+    stopPolling();
+    if (es) es.close();
+    showSessionEnded();
   }
 
   function setConnState(next) {
@@ -349,7 +386,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (rate) rate.textContent = `${sparkBuckets[SPARK_BUCKETS - 1]}/s`;
   }
 
-  setInterval(() => { sparkAdvance(); drawSpark(); }, 1000);
+  const sparkTimer = setInterval(() => { sparkAdvance(); drawSpark(); }, 1000);
 
   // Count events the poll path surfaced that SSE didn't announce (fallback
   // mode), so the sparkline stays honest when push is unavailable.
@@ -542,7 +579,7 @@ document.addEventListener('DOMContentLoaded', () => {
   function currentViewSnapshot(name) {
     return {
       name,
-      tab: activeTab,
+      tab: routeKey({ tab: activeTab, sub: activeSub }),
       search: (document.getElementById('global-search') || {}).value || '',
       flags: { ...filters.flags },
       events: { ...filters.events },
@@ -569,7 +606,7 @@ document.addEventListener('DOMContentLoaded', () => {
     syncFilterControls();
     const pop = document.getElementById('views-pop');
     if (pop) pop.hidden = true;
-    if (view.tab && TABS.includes(view.tab)) switchTab(view.tab);
+    if (view.tab && isConsoleRoute(view.tab)) switchTab(view.tab);
     suppressFreshOnce = true;
     fetchTelemetry();
     showToast(`View applied: ${name}`, 'info');
@@ -650,11 +687,10 @@ document.addEventListener('DOMContentLoaded', () => {
   };
 
   // ---------- tabs ----------
-  // The console is organized by question (Overview / Agents / Egress /
-  // Findings), not by data source. State persists per tab-session; the hash
-  // carries the tab for deep links (#ct is lifted and stripped BEFORE this
-  // runs, so the two never collide). "Telemetry" holds the per-source detail
-  // (resource control + raw event timeline) split out of Overview.
+  // The console is organized by question (Home / Sessions / Egress /
+  // Policy), not by data source. State persists per tab-session; the hash
+  // carries the tab (and the Sessions sub-view) for deep links (#ct is lifted
+  // and stripped BEFORE this runs, so the two never collide).
   // ---------- render scheduler ----------
   // A panel renders only when the telemetryData slice it reads changed
   // (dirty) and only when it is on screen: the active tab's panels plus the
@@ -669,22 +705,37 @@ document.addEventListener('DOMContentLoaded', () => {
     ['agents', renderAgents],
     ['firewall', renderFirewall], ['incidents', renderIncidents], ['fleet', renderFleet],
     ['audit', renderAudit], ['sources', renderSources], ['flags', renderFlags], ['attention', renderAttention],
-    ['events', renderEvents], ['activity', renderActivity], ['worktrees', renderWorktrees], ['clutter', renderClutter], ['tab-badges', renderTabBadges]
+    ['events', renderEvents], ['activity', renderActivity], ['worktrees', renderWorktrees], ['clutter', renderClutter], ['tab-badges', renderTabBadges],
+    ['notify', renderNotifyRules], ['policy', renderPolicyLists]
   ];
-  // Panel → tab; a panel absent here is global (always on screen).
-  const PANEL_TAB = {
-    'chart-flags': 'overview', 'chart-memory': 'overview', spend: 'overview', activity: 'overview',
-    sessions: 'sessions', agents: 'agents', fleet: 'agents', resources: 'resources', history: 'history',
-    events: 'events', firewall: 'egress', sources: 'egress',
-    incidents: 'findings', audit: 'findings', flags: 'findings', attention: 'findings',
-    worktrees: 'worktrees', clutter: 'worktrees'
+  // Panel → where it lives: tab, tab/sub-view, or tab:group (a Home
+  // <details> group). A panel absent here is global (always on screen).
+  const PANEL_VIEW = {
+    attention: 'home', spend: 'home',
+    flags: 'home:findings', incidents: 'home:findings',
+    activity: 'home:trends', 'chart-flags': 'home:trends', 'chart-memory': 'home:trends',
+    sessions: 'sessions/board', agents: 'sessions/processes', fleet: 'sessions/processes',
+    resources: 'sessions/resources', history: 'sessions/resources',
+    worktrees: 'sessions/worktrees', clutter: 'sessions/worktrees', events: 'sessions/events',
+    firewall: 'egress', sources: 'egress',
+    notify: 'policy', policy: 'policy', audit: 'policy'
   };
+  // A panel is on screen when its tab is active, its sub-view is the open
+  // one, and its Home group is expanded.
+  function panelOnScreen(name) {
+    const v = PANEL_VIEW[name];
+    if (!v) return true;
+    const [route, group] = v.split(':');
+    const [tab, sub] = route.split('/');
+    if (tab !== activeTab || (sub && sub !== activeSub)) return false;
+    return !group || homeGroupOpen(group);
+  }
   // Panel → the element whose focused control holds its render.
   const PANEL_EL = {
     resources: 'resource-board', history: 'history-board', sessions: 'session-rail', agents: 'agents-container',
     fleet: 'fleet-container', firewall: 'firewall-container', sources: 'sources-list', incidents: 'incidents-container',
     audit: 'audit-container', flags: 'flags-list', attention: 'attention-list', events: 'events-container',
-    worktrees: 'worktrees-container', clutter: 'clutter-container'
+    worktrees: 'worktrees-container', clutter: 'clutter-container', notify: 'notify-pop'
   };
   const SLOW_ONLY = new Set(['resources', 'history', 'fleet', 'audit', 'sources', 'activity', 'spend']);
   const PANEL_MIN_MS = 250;
@@ -719,7 +770,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
   // ms this panel must still wait, -1 for "until the pointer is up", 0 = go.
   function panelHold(name) {
-    if (!PANEL_TAB[name]) return 0;
+    if (!PANEL_VIEW[name]) return 0;
     if (interacting) return -1;
     const el = PANEL_EL[name] && document.getElementById(PANEL_EL[name]);
     const a = document.activeElement;
@@ -730,12 +781,12 @@ document.addEventListener('DOMContentLoaded', () => {
     return 0;
   }
   function renderDirty() {
-    if (!booted) return;
+    if (!booted || sessionEnded) return;
     const now = Date.now();
     let wait = Infinity;
     for (const [name, fn] of PANELS) {
       if (!dirtyPanels.has(name)) continue;
-      if (PANEL_TAB[name] && PANEL_TAB[name] !== activeTab) continue;
+      if (!panelOnScreen(name)) continue;
       const hold = panelHold(name);
       if (hold) { if (hold > 0) wait = Math.min(wait, hold); continue; }
       const since = now - (lastRenderAt[name] || 0);
@@ -765,9 +816,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const t = telemetryData;
     const agents = (t.status && t.status.agents) || [];
     const trees = t.status && t.status.trees;
-    setTabBadge('findings', attentionCount(t.posture));
+    setTabBadge('home', attentionCount(t.posture));
     setTabBadge('egress', (t.status && t.status.uninspected_egress) || 0);
-    setTabBadge('agents', groupAgentsByHarness(agents).filter(g => !g.infra).length);
+    setTabBadge('processes', groupAgentsByHarness(agents).filter(g => !g.infra).length);
     setTabBadge('sessions', t.sessions && t.sessions.length
       ? groupSessionsByHarness(t.sessions, trees, agents).reduce((n, g) => n + (g.infra ? 0 : familySize(g.live)), 0)
       : sessionRows(agents, trees).length);
@@ -775,8 +826,8 @@ document.addEventListener('DOMContentLoaded', () => {
     paintScopeBar();
   }
 
-  const TABS = ['overview', 'sessions', 'agents', 'resources', 'history', 'worktrees', 'events', 'egress', 'findings'];
-  let activeTab = 'overview';
+  let activeTab = 'home';
+  let activeSub = 'board';
 
   // Worktrees are not telemetry: the tab fetches its report when opened
   // (the daemon caches a scan for 10 minutes) and on Rescan, never on the
@@ -794,7 +845,7 @@ document.addEventListener('DOMContentLoaded', () => {
   function followWorktreeSizing() {
     const rep = worktreesState.report;
     const asking = rep && Object.values(rep.asks || {}).some(a => a.status === 'running');
-    if (!rep || !(rep.sizing || asking) || activeTab !== 'worktrees' || worktreeSizingTimer || worktreeSizingPolls >= WORKTREE_SIZING_POLLS) return;
+    if (!rep || !(rep.sizing || asking) || !(activeTab === 'sessions' && activeSub === 'worktrees') || worktreeSizingTimer || worktreeSizingPolls >= WORKTREE_SIZING_POLLS) return;
     worktreeSizingPolls++;
     worktreeSizingTimer = setTimeout(() => { worktreeSizingTimer = null; loadWorktrees(false); }, WORKTREE_SIZING_POLL_MS);
   }
@@ -840,11 +891,48 @@ document.addEventListener('DOMContentLoaded', () => {
       clutterState.loading = false;
       markDirty('clutter');
       const rep = clutterState.report;
-      if (rep && rep.sizing && activeTab === 'worktrees' && !clutterSizingTimer && clutterSizingPolls < WORKTREE_SIZING_POLLS) {
+      if (rep && rep.sizing && activeTab === 'sessions' && activeSub === 'worktrees' && !clutterSizingTimer && clutterSizingPolls < WORKTREE_SIZING_POLLS) {
         clutterSizingPolls++;
         clutterSizingTimer = setTimeout(() => { clutterSizingTimer = null; loadClutter(false); }, WORKTREE_SIZING_POLL_MS);
       }
     }
+  }
+
+  // Policy lists are not telemetry either: they load when the Policy tab
+  // opens and on its Refresh, never on the refresh cycle.
+  const policyState = { guardRules: null, pathAllows: null, mutes: null, loading: false, error: '' };
+  async function loadPolicy() {
+    if (policyState.loading) return;
+    policyState.loading = true;
+    policyState.error = '';
+    markDirty('policy');
+    const get = async (path) => {
+      const r = await apiFetch(path);
+      if (r.status === 403) { endSession(); throw new Error('session ended'); }
+      if (!r.ok) throw new Error((await r.text()).trim() || String(r.status));
+      return (await r.json()) || [];
+    };
+    try {
+      const [rules, paths, mutes] = await Promise.all([get('/guard/rules'), get('/guard/path-allow'), get('/mute')]);
+      Object.assign(policyState, { guardRules: rules, pathAllows: paths, mutes });
+    } catch (err) {
+      policyState.error = "Couldn't load the policy lists: " + (err.message || err);
+    } finally {
+      policyState.loading = false;
+      markDirty('policy');
+    }
+  }
+  function renderPolicyLists() {
+    const put = (id, badge, rows, html) => {
+      const el = document.getElementById(id);
+      if (el) el.innerHTML = html;
+      const b = document.getElementById(badge);
+      if (b) b.textContent = rows ? rows.length : 0;
+    };
+    const st = policyState;
+    put('policy-guard-rules', 'badge-guard-rules', st.guardRules, policyListHTML('guard', st.guardRules, st));
+    put('policy-path-allows', 'badge-path-allows', st.pathAllows, policyListHTML('path', st.pathAllows, st));
+    put('policy-mutes', 'badge-mutes', st.mutes, policyListHTML('mute', st.mutes, st));
   }
 
   // dropWorktreeRows removes rows the daemon just removed or pruned, so the
@@ -875,53 +963,107 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
+  // Home groups: closed by default, open state kept for the tab. A panel
+  // in a closed group does not render; opening the group renders it.
+  const HOME_GROUPS_KEY = 'sa.home-groups';
+  function homeGroupOpen(group) {
+    const el = document.getElementById('home-' + group);
+    return !!(el && el.open);
+  }
+  function persistHomeGroups() {
+    const state = {};
+    document.querySelectorAll('details.home-group').forEach(d => { state[d.dataset.group] = d.open; });
+    try { sessionStorage.setItem(HOME_GROUPS_KEY, JSON.stringify(state)); } catch { /* private mode */ }
+  }
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(HOME_GROUPS_KEY) || '{}') || {};
+    document.querySelectorAll('details.home-group').forEach(d => { if (saved[d.dataset.group]) d.open = true; });
+  } catch { /* private mode or corrupt value: groups stay closed */ }
+  document.querySelectorAll('details.home-group').forEach(d => d.addEventListener('toggle', () => {
+    persistHomeGroups();
+    if (!d.open) return;
+    PANELS.forEach(([name]) => { if (PANEL_VIEW[name] === 'home:' + d.dataset.group) dirtyPanels.add(name); });
+    renderDirty();
+  }));
+
+  // switchTab takes any route: a tab, "sessions/<sub>", or an old tab id
+  // (menu bar deep link, saved view, stored tab, in-page link) through the
+  // alias table. opts.group expands that Home group.
   function switchTab(id, opts = {}) {
-    if (!TABS.includes(id)) id = 'overview';
-    activeTab = id;
+    const r = resolveConsoleRoute(id);
+    const from = activeTab;
+    activeTab = r.tab;
+    if (r.tab === 'sessions') activeSub = r.sub;
     document.querySelectorAll('.tab-btn').forEach(b => {
-      const on = b.dataset.tab === id;
+      const on = b.dataset.tab === activeTab;
       b.classList.toggle('active', on);
       b.setAttribute('aria-selected', on ? 'true' : 'false');
     });
-    document.querySelectorAll('.tabpanel').forEach(p => { p.hidden = p.id !== 'tab-' + id; });
-    try { sessionStorage.setItem('sa.console-tab', id); } catch { /* private mode */ }
+    document.querySelectorAll('.tabpanel').forEach(p => { p.hidden = p.id !== 'tab-' + activeTab; });
+    document.querySelectorAll('.subtab-btn').forEach(b => {
+      const on = b.dataset.subtab === activeSub;
+      b.classList.toggle('active', on);
+      b.setAttribute('aria-selected', on ? 'true' : 'false');
+    });
+    document.querySelectorAll('.subview').forEach(v => { v.hidden = v.id !== 'sub-' + activeSub; });
+    const group = opts.group && document.getElementById('home-' + opts.group);
+    if (group && activeTab === 'home' && !group.open) group.open = true;
+    const key = routeKey({ tab: activeTab, sub: activeSub });
+    try { sessionStorage.setItem('sa.console-tab', key); } catch { /* private mode */ }
     if (!opts.skipHash && window.history.replaceState) {
-      history.replaceState(null, '', location.pathname + location.search + '#' + id);
+      history.replaceState(null, '', location.pathname + location.search + consoleRouteHash({ tab: activeTab, sub: activeSub }));
     }
-    PANELS.forEach(([name]) => { if (!PANEL_TAB[name] || PANEL_TAB[name] === id) dirtyPanels.add(name); });
+    PANELS.forEach(([name]) => { if (panelOnScreen(name)) dirtyPanels.add(name); });
     renderDirty();
-    if (id === 'worktrees' && (!worktreesState.report || Date.now() - worktreesState.loadedAt > WORKTREE_STALE_MS)) {
+    if (activeTab === 'sessions' && activeSub === 'worktrees'
+      && (!worktreesState.report || Date.now() - worktreesState.loadedAt > WORKTREE_STALE_MS)) {
       loadWorktrees(false);
     }
-    if (id === 'worktrees' && (!clutterState.report || Date.now() - clutterState.loadedAt > WORKTREE_STALE_MS)) {
+    if (activeTab === 'sessions' && activeSub === 'worktrees'
+      && (!clutterState.report || Date.now() - clutterState.loadedAt > WORKTREE_STALE_MS)) {
       loadClutter(false);
+    }
+    if (activeTab === 'policy' && from !== 'policy') loadPolicy();
+    const focus = r.focus === 'attention' ? document.getElementById('attention-center') : group;
+    if (focus && focus.scrollIntoView) focus.scrollIntoView({ behavior: 'auto', block: 'start' });
+  }
+
+  // The Sessions tab reopens its last sub-view.
+  document.querySelectorAll('.tab-btn').forEach(b =>
+    b.addEventListener('click', () => switchTab(b.dataset.tab === 'sessions' ? 'sessions/' + activeSub : b.dataset.tab)));
+  document.querySelectorAll('.subtab-btn').forEach(b =>
+    b.addEventListener('click', () => switchTab('sessions/' + b.dataset.subtab)));
+
+  // Tab badges: the "something needs you here" signal for hidden panels.
+  // home, sessions, egress are tab badges; the sessions and processes
+  // counts also sit on their sub-view buttons.
+  const BADGE_ELS = {
+    home: ['tab-badge-home'], egress: ['tab-badge-egress'],
+    sessions: ['tab-badge-sessions', 'subtab-badge-board'], processes: ['subtab-badge-processes']
+  };
+  function setTabBadge(id, n) {
+    for (const elId of BADGE_ELS[id] || []) {
+      const el = document.getElementById(elId);
+      if (!el) continue;
+      el.hidden = !(n > 0);
+      el.textContent = n > 0 ? n : '';
     }
   }
 
-  document.querySelectorAll('.tab-btn').forEach(b =>
-    b.addEventListener('click', () => switchTab(b.dataset.tab)));
-
-  // Initial tab: hash (deep link) > session memory > overview.
+  // Initial tab: hash (deep link, old ids included) > session memory > Home.
   let initialTab = (location.hash || '').replace('#', '');
-  if (!TABS.includes(initialTab)) {
-    try { initialTab = sessionStorage.getItem('sa.console-tab') || 'overview'; }
-    catch { initialTab = 'overview'; }
+  if (!isConsoleRoute(initialTab)) {
+    try { initialTab = sessionStorage.getItem('sa.console-tab') || 'home'; }
+    catch { initialTab = 'home'; }
   }
   switchTab(initialTab, { skipHash: true });
 
-  // Tab badges: the "something needs you here" signal for hidden panels.
-  function setTabBadge(id, n) {
-    const el = document.getElementById('tab-badge-' + id);
-    if (!el) return;
-    el.hidden = !(n > 0);
-    el.textContent = n > 0 ? n : '';
-  }
-
   async function fetchTelemetry(opts) {
     // grab(): one fetch with honest failure semantics. 403 = the session is
-    // dead (drives the auth-expired state); other HTTP errors mark just that
+    // dead (drives the ended state); other HTTP errors mark just that
     // endpoint failed; network errors drive the unreachable state. A failed
     // endpoint NEVER overwrites the panel's last good data.
+    if (sessionEnded) return;
     const slow = !opts || opts.slow !== false;
     let sawAuth = false;
     const grab = async (key, path) => {
@@ -981,7 +1123,13 @@ document.addEventListener('DOMContentLoaded', () => {
       if (rollup) telemetryData.rollup = rollup || [];
       if (uninspected) telemetryData.uninspected = uninspected || [];
       if (episodes) telemetryData.episodes = episodes || [];
-      if (notifyCfg) telemetryData.notifyCfg = notifyCfg;
+      if (notifyCfg) {
+        // A reconcile while the operator is typing a workspace path must not
+        // dirty (and re-render) the notify panel unless the served config
+        // actually changed — a stable hash, not the poll cadence, decides.
+        const h = JSON.stringify(notifyCfg);
+        if (h !== notifyCfgHash) { notifyCfgHash = h; telemetryData.notifyCfg = notifyCfg; markDirty('notify'); }
+      }
       if (allowlist) telemetryData.allowlist = allowlist || [];
       if (costs) telemetryData.costs = costs;
       if (costsCard && cardPath === spendCardPath()) telemetryData.costsCard = costsCard;
@@ -1002,20 +1150,31 @@ document.addEventListener('DOMContentLoaded', () => {
     reconcileRetriage();
 
     telemetryData.connected = !!(snap && snap.status);
-    setConnState(telemetryData.connected ? 'ok' : (sawAuth ? 'auth-expired' : 'unreachable'));
+    if (!telemetryData.connected && sawAuth) { endSession(); return; }
+    setConnState(telemetryData.connected ? 'ok' : 'unreachable');
 
     if (!booted || (opts && opts.full)) renderAll();
-    else markDirty(...PANELS.map(p => p[0]).filter(n => slow || !SLOW_ONLY.has(n)));
+    // 'notify' is excluded here: it dirties itself above, only when its
+    // fetched config actually changed, so an unrelated poll tick never
+    // erases an in-progress workspace-scope edit.
+    else markDirty(...PANELS.map(p => p[0]).filter(n => (slow || !SLOW_ONLY.has(n)) && n !== 'notify'));
     if (resources) fillFamilyDrawer();
   }
 
-  // Every panel, hidden ones included: initial load, Refresh, and actions
-  // that reshape every list (search, session select). Crash isolation: one
-  // panel's bad data must never take the whole page down with it (the /fleet
-  // shape mismatch once killed every panel after it on every poll).
+  // Every panel is a candidate: initial load, Refresh, and actions that
+  // reshape every list (search, session select). "Candidate" does not mean
+  // "rendered" — renderDirty() still runs each through panelOnScreen, so a
+  // closed Home group or a hidden Sessions sub-view stays dirty instead of
+  // painting off-screen DOM, and picks up its render the moment it is shown
+  // (switchTab/openHomeGroup mark it dirty again, or it is already dirty
+  // here). Crash isolation is unchanged: renderDirty still renders each
+  // panel through renderPanel, so one panel's bad data never takes the whole
+  // page down with it (the /fleet shape mismatch once killed every panel
+  // after it on every poll).
   function renderAll() {
     booted = true;
-    for (const [name, fn] of PANELS) { dirtyPanels.delete(name); renderPanel(name, fn); }
+    for (const [name] of PANELS) dirtyPanels.add(name);
+    renderDirty();
   }
 
   // Activity rollup chart: hourly event bars with rose flag markers — the
@@ -1056,8 +1215,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const chip = document.getElementById('system-status');
     if (!telemetryData.connected) {
       if (chip) chip.className = 'status-chip down';
-      document.getElementById('status-text').textContent =
-        connState === 'auth-expired' ? 'Session expired' : 'Disconnected';
+      document.getElementById('status-text').textContent = 'Disconnected';
       return; // keep last-known metrics visible
     }
 
@@ -2002,7 +2160,7 @@ document.addEventListener('DOMContentLoaded', () => {
       });
       if (!res.ok) throw new Error(await res.text());
       showToast(decision === 'dismiss' ? 'Session kept running for the cooldown window.' : decision === 'resume' ? 'Session resumed.' : 'Intervention applied.', 'success');
-      cardNote('', '', activeTab === 'resources' ? 'resource-board' : 'attention-list', decision === 'dismiss' ? 'kept running' : decision === 'resume' ? 'resumed' : 'applied');
+      cardNote('', '', activeTab === 'sessions' && activeSub === 'resources' ? 'resource-board' : 'attention-list', decision === 'dismiss' ? 'kept running' : decision === 'resume' ? 'resumed' : 'applied');
       fetchTelemetry({ slow: true });
     } catch (err) {
       revert();
@@ -2308,20 +2466,22 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   };
 
-  window.muteFlag = async function(rule, host) {
+  window.muteFlag = async function(rule, host, agent) {
+    agent = agent || '';
     const revert = stage(['mutes'], ['flags'], () => {
-      telemetryData.mutes = [...(telemetryData.mutes || []), { rule, host }];
+      telemetryData.mutes = [...(telemetryData.mutes || []), agent ? { rule, host, agent } : { rule, host }];
     });
     try {
       const res = await apiFetch('/mute', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ rule, host })
+        body: JSON.stringify(agent ? { rule, host, agent } : { rule, host })
       });
       if (res.ok) {
+        const who = agent ? ` from ${agent}` : '';
         showToast(host === '*'
-          ? `Dismissed ${rule} — future flags of this class are suppressed`
-          : `Muted ${rule} for ${host} — future flags suppressed`, 'success');
-        cardNote(`#flags-list [data-action="unmute"][data-rule="${cssq(rule)}"][data-host="${cssq(host)}"]`, '.mute-row', 'flags-list', 'muted');
+          ? `Dismissed ${rule}${who} — future flags of this class are suppressed`
+          : `Muted ${rule} for ${host}${who} — future flags suppressed`, 'success');
+        cardNote(`#flags-list [data-action="unmute"][data-rule="${cssq(rule)}"][data-host="${cssq(host)}"][data-agent="${cssq(agent)}"]`, '.mute-row', 'flags-list', 'muted');
         fetchTelemetry();
         return true;
       }
@@ -2364,7 +2524,7 @@ document.addEventListener('DOMContentLoaded', () => {
         return window.openIncidentReport(new URLSearchParams(String(a.path).split('?')[1] || '').get('id') || '');
       case 'mute-rule-host':
       case 'mute-class':
-        if (await window.muteFlag(body.rule, body.host)) stageDropFlag(f.id);
+        if (await window.muteFlag(body.rule, body.host, body.agent)) stageDropFlag(f.id);
         return;
       case 'allow-host': {
         const revertAllow = stageAllow(body.agent, [body.host]);
@@ -2393,6 +2553,20 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         showToast(`Allowlisted ${body.host} for ${body.agent}`, 'success');
         cardNote('', '', 'flags-list', 'allowlisted');
+        fetchTelemetry();
+        return;
+      }
+      case 'allow-path': {
+        try {
+          const res = await apiFetch(a.path, {
+            method: a.method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+          });
+          if (!res.ok) throw new Error(await res.text());
+        } catch (err) {
+          showToast(`Failed to allow ${body.path}: ${err.message || err}`, 'danger');
+          return;
+        }
+        showToast(`Allowed ${body.path} for ${body.agent}`, 'success');
         fetchTelemetry();
         return;
       }
@@ -2437,7 +2611,7 @@ document.addEventListener('DOMContentLoaded', () => {
         return window.killProcess(Number(body.pid), body.started_at, p.agent);
       case 'mute-rule-host':
       case 'mute-class':
-        if (await window.muteFlag(body.rule, body.host)) stagePatternDone(key);
+        if (await window.muteFlag(body.rule, body.host, body.agent)) stagePatternDone(key);
         return;
       case 'dismiss-all': {
         const revert = stagePatternDone(key, openIds);
@@ -2481,14 +2655,16 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   };
 
-  window.unmuteFlag = async function(rule, host) {
+  window.unmuteFlag = async function(rule, host, agent) {
+    agent = agent || '';
     const revert = stage(['mutes'], ['flags'], () => {
-      telemetryData.mutes = (telemetryData.mutes || []).filter(m => !(m.rule === rule && m.host === host));
+      telemetryData.mutes = (telemetryData.mutes || []).filter(m => !(m.rule === rule && m.host === host && (m.agent || '') === agent));
     });
     try {
-      const res = await apiFetch(`/mute?rule=${encodeURIComponent(rule)}&host=${encodeURIComponent(host)}`, { method: 'DELETE' });
+      const q = `rule=${encodeURIComponent(rule)}&host=${encodeURIComponent(host)}` + (agent ? `&agent=${encodeURIComponent(agent)}` : '');
+      const res = await apiFetch(`/mute?${q}`, { method: 'DELETE' });
       if (res.ok) {
-        showToast(`Unmuted ${rule} for ${host}`, 'info');
+        showToast(`Unmuted ${rule} for ${host}${agent ? ` from ${agent}` : ''}`, 'info');
         cardNote('', '', 'flags-list', 'unmuted');
         fetchTelemetry();
       } else {
@@ -2872,10 +3048,10 @@ document.addEventListener('DOMContentLoaded', () => {
           () => showToast('Copy failed — select the path from its tooltip', 'danger'));
         break;
       case 'mute-flag':
-        window.muteFlag(d.rule, d.host);
+        window.muteFlag(d.rule, d.host, d.agent);
         break;
       case 'mute-rule':
-        window.muteFlag(d.rule, '*');
+        window.muteFlag(d.rule, '*', d.agent);
         break;
       case 'dismiss-flag':
         window.dismissFlag(d.id);
@@ -2901,10 +3077,14 @@ document.addEventListener('DOMContentLoaded', () => {
         break;
       case 'goto-tab':
         e.preventDefault();
-        switchTab(d.tab);
+        switchTab(d.tab, { group: d.group });
+        break;
+      case 'policy-refresh':
+        e.preventDefault();
+        loadPolicy();
         break;
       case 'unmute':
-        window.unmuteFlag(d.rule, d.host);
+        window.unmuteFlag(d.rule, d.host, d.agent);
         break;
       case 'open-fda':
         e.preventDefault();
@@ -2966,13 +3146,20 @@ document.addEventListener('DOMContentLoaded', () => {
     ['secret-in-transcript', 'Secret appeared in an agent transcript']
   ];
 
+  // patchList-keyed by rule id: a reconcile while nothing changed for a row
+  // (or a different row's override changed) leaves that row's <select> node
+  // alone — no lost focus mid-pick.
   function renderNotifyRules() {
     const list = document.getElementById('notify-rules-list');
     if (!list) return;
     const overrides = (telemetryData.notifyCfg && telemetryData.notifyCfg.overrides) || {};
-    list.innerHTML = NOTIFY_RULES.map(([rule, label]) => {
-      const cur = rule in overrides ? (overrides[rule] ? 'always' : 'never') : 'default';
-      return `<div class="notify-rule-row">
+    const curOf = (rule) => rule in overrides ? (overrides[rule] ? 'always' : 'never') : 'default';
+    patchList(list, NOTIFY_RULES, {
+      key: ([rule]) => rule,
+      hash: ([rule]) => curOf(rule),
+      html: ([rule, label]) => {
+        const cur = curOf(rule);
+        return `<div class="notify-rule-row">
         <span class="notify-rule-name" title="${escapeHTML(rule)}">${escapeHTML(label)}</span>
         <select class="select select-sm" data-notify-rule="${escapeHTML(rule)}" aria-label="Notifications for ${escapeHTML(label)}">
           <option value="default"${cur === 'default' ? ' selected' : ''}>Default</option>
@@ -2980,24 +3167,44 @@ document.addEventListener('DOMContentLoaded', () => {
           <option value="never"${cur === 'never' ? ' selected' : ''}>Never</option>
         </select>
       </div>`;
-    }).join('');
+      }
+    });
     renderNotifyScopes();
   }
 
-  // Per-workspace scopes: existing ones with a remove button, plus a compact
-  // add form (rule + path prefix + page/silence). The daemon matches by path
-  // prefix, longest first.
+  // Per-workspace scopes: existing ones with a remove button, patchList-keyed
+  // by rule+workspace, plus a compact add form (rule + path prefix +
+  // page/silence). The daemon matches by path prefix, longest first. The add
+  // form is static DOM outside the patched list — a reconcile while the
+  // operator is typing a workspace path must never touch it.
   function renderNotifyScopes() {
     const list = document.getElementById('notify-scopes-list');
     if (!list) return;
     const scopes = (telemetryData.notifyCfg && telemetryData.notifyCfg.scopes) || [];
-    const rows = scopes.map(s => `<div class="notify-rule-row">
+    patchList(list, scopes, {
+      key: s => s.rule + '|' + s.workspace,
+      hash: s => s.notify,
+      html: s => `<div class="notify-rule-row">
         <span class="notify-rule-name" title="${escapeHTML(s.workspace)}">${escapeHTML(s.rule)} <span class="notify-scope-path">${escapeHTML(s.workspace)}</span></span>
         <span class="notify-scope-mode ${s.notify ? 'on' : 'off'}">${s.notify ? 'page' : 'quiet'}</span>
         <button class="source-remove" title="Remove this scope" data-action="notify-scope-remove" data-rule="${escapeHTML(s.rule)}" data-workspace="${escapeHTML(s.workspace)}"><svg class="icon"><use href="#i-close"/></svg></button>
-      </div>`).join('');
-    list.innerHTML = (rows || '<div class="notify-scope-empty">No workspace scopes yet</div>') + `
-      <div class="notify-scope-add">
+      </div>`,
+      empty: '<div class="notify-scope-empty">No workspace scopes yet</div>'
+    });
+    ensureNotifyScopeAddForm();
+  }
+
+  // Built once and left alone on every later render: the add-form's own
+  // inputs (the workspace path in particular) must survive a telemetry
+  // reconcile while the operator is mid-edit.
+  function ensureNotifyScopeAddForm() {
+    if (document.getElementById('notify-scope-add-form')) return;
+    const list = document.getElementById('notify-scopes-list');
+    if (!list || !list.parentNode) return;
+    const form = document.createElement('div');
+    form.className = 'notify-scope-add';
+    form.id = 'notify-scope-add-form';
+    form.innerHTML = `
         <select class="select select-sm" id="notify-scope-rule" aria-label="Rule for the workspace scope">
           ${NOTIFY_RULES.map(([rule, label]) => `<option value="${escapeHTML(rule)}">${escapeHTML(label)}</option>`).join('')}
         </select>
@@ -3006,8 +3213,8 @@ document.addEventListener('DOMContentLoaded', () => {
           <option value="always">Page</option>
           <option value="never">Quiet</option>
         </select>
-        <button class="btn btn-ghost btn-sm" data-action="notify-scope-add" title="Add this workspace scope"><svg class="icon"><use href="#i-arrow"/></svg><span>Add</span></button>
-      </div>`;
+        <button class="btn btn-ghost btn-sm" data-action="notify-scope-add" title="Add this workspace scope"><svg class="icon"><use href="#i-arrow"/></svg><span>Add</span></button>`;
+    list.parentNode.insertBefore(form, list.nextSibling);
   }
 
   window.addNotifyScope = async function() {
@@ -3039,17 +3246,10 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  const btnNotify = document.getElementById('btn-notify');
+  // Notification rules live in the Policy tab (the header bell is a link to
+  // it); the panel keeps the popover's element ids.
   const notifyPop = document.getElementById('notify-pop');
-  if (btnNotify && notifyPop) {
-    btnNotify.addEventListener('click', (e) => {
-      e.stopPropagation();
-      renderNotifyRules();
-      notifyPop.hidden = !notifyPop.hidden;
-    });
-    document.addEventListener('click', (e) => {
-      if (!notifyPop.hidden && !e.target.closest('.notify-wrap')) notifyPop.hidden = true;
-    });
+  if (notifyPop) {
     notifyPop.addEventListener('change', async (e) => {
       const sel = e.target.closest('select[data-notify-rule]');
       if (!sel) return;
@@ -3079,13 +3279,12 @@ document.addEventListener('DOMContentLoaded', () => {
   // prompts surface immediately instead of up to 2s late. A slow 30s refresh
   // always runs for status/uptime, which change without any bus event.
   fetchTelemetry();
-  setInterval(fetchTelemetry, 30000);
+  const slowTimer = setInterval(fetchTelemetry, 30000);
 
   let pollTimer = null;
+  let es = null;
   const startPolling = () => {
-    // Auth-expired sessions retry on the slow 30s cadence only — a dead token
-    // doesn't deserve a 2s hammer against a wall of 403s.
-    if (connState === 'auth-expired') return;
+    if (sessionEnded) return;
     if (!pollTimer) pollTimer = setInterval(fetchTelemetry, 2000);
   };
   const stopPolling = () => { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } };
@@ -3103,7 +3302,7 @@ document.addEventListener('DOMContentLoaded', () => {
       refreshPending = true;
       setTimeout(() => { refreshPending = false; fetchTelemetry({ slow: false }); }, 400);
     };
-    const es = new EventSource(streamURL);
+    es = new EventSource(streamURL);
     es.onopen = () => { esFailures = 0; stopPolling(); };
 
     // Typed deltas: patch local state and mark only the panels that read the

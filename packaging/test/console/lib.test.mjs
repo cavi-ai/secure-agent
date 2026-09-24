@@ -1019,7 +1019,7 @@ test('explainLines: null without explain', () => {
   assert.equal(ctx.explainLines({ id: 'x', rule: 'r', agent: 'a', pid: 1, evidence: [] }, EXPLAIN_NOW), null);
 });
 
-test('explainActionsHTML: recommended first, kill danger, others ghost; no pid, no IPv6 label; allow-path not offered', () => {
+test('explainActionsHTML: recommended first, kill danger, others ghost; no pid, no IPv6 label; allow-path offered', () => {
   const host = '2600:1f10:4a1b::fd73';
   const f = explainFlag({ actions: [
     { id: 'allow-host', label: `Allow ${host} (AWS) for claude`, consequence: `Future connections from claude to ${host} are trusted.`,
@@ -1032,7 +1032,7 @@ test('explainActionsHTML: recommended first, kill danger, others ghost; no pid, 
   ] });
   const html = ctx.explainActionsHTML(f);
   const ids = [...html.matchAll(/data-action-id="([^"]+)"/g)].map(m => m[1]);
-  assert.deepEqual(ids, ['kill', 'allow-host', 'mute-rule-host', 'dismiss']);
+  assert.deepEqual(ids, ['kill', 'allow-host', 'allow-path', 'mute-rule-host', 'dismiss']);
   assert.match(html, /<button class="btn btn-danger btn-sm" data-action="explain-act" data-flag-id="f1" data-action-id="kill"/);
   assert.match(html, /class="btn btn-ghost btn-sm" data-action="explain-act" data-flag-id="f1" data-action-id="dismiss"/);
   assert.match(html, new RegExp(`data-action-id="allow-host" data-host="${host}"`));

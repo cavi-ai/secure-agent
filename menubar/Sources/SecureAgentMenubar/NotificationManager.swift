@@ -158,18 +158,9 @@ public final class NotificationManager: NSObject, @unchecked Sendable {
         }
     }
 
-    /// Daemon-served flag.title first; the switch is the older-daemon fallback.
+    /// The daemon-served rule title; the rule id when none is served.
     static func title(for flag: FlagModel) -> String {
         if let served = flag.title, !served.isEmpty { return served }
-        switch flag.rule {
-        case "proxy-secret-leak": return "Secret leaving in agent traffic"
-        case "sensitive-read-then-connect": return "Agent read a secret, then connected out"
-        case "keychain-access": return "Agent touched the keychain"
-        case "keychain-security-cli": return "Agent ran the keychain CLI"
-        case "tcc-tamper": return "Agent modified macOS permissions (TCC)"
-        case "proxy-prompt-injection": return "Prompt injection in a response"
-        case "secret-in-transcript": return "Secret appeared in an agent transcript"
-        default: return flag.rule
-        }
+        return flag.rule
     }
 }

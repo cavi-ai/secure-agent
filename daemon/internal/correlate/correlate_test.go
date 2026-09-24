@@ -294,7 +294,7 @@ func TestKeychainCLIRuleIgnoresOtherExecs(t *testing.T) {
 // the quiet is deliberate and measurable, not hidden.
 func TestKeychainRuleLevelMute(t *testing.T) {
 	c := newTestCorrelator(t)
-	c.SetMuteChecker(func(rule, host string) bool { return host == "*" })
+	c.SetMuteChecker(func(rule, host, agent string) bool { return host == "*" })
 	base := time.Now()
 
 	if f := c.Observe(event.Event{Kind: event.KindFileOpen, PID: 200, TS: base, Path: "/Users/x/Library/Keychains/login.keychain-db"}); len(f) != 0 {
@@ -474,7 +474,7 @@ func TestSecretInTranscriptFlags(t *testing.T) {
 	}
 
 	muted := newTestCorrelator(t)
-	muted.SetMuteChecker(func(rule, host string) bool { return rule == "secret-in-transcript" && host == "*" })
+	muted.SetMuteChecker(func(rule, host, agent string) bool { return rule == "secret-in-transcript" && host == "*" })
 	if f := muted.Observe(hit); len(f) != 0 {
 		t.Fatalf("muted rule must not flag, got %d", len(f))
 	}

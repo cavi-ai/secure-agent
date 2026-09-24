@@ -87,7 +87,7 @@ func TestWorktreesEndpoints(t *testing.T) {
 		t.Fatalf("GET /worktrees/repos: %d", rec.Code)
 	}
 
-	if !apiroutes.ConsoleAllowed("/worktrees") || !apiroutes.ConsoleAllowed("/worktrees/repos") {
+	if !apiroutes.ConsoleAllowed("GET", "/worktrees") || !apiroutes.ConsoleAllowed("GET", "/worktrees/repos") {
 		t.Fatal("worktree routes not console-admitted")
 	}
 	if !apiroutes.IsMutation(http.MethodPost, "/worktrees/repos") || apiroutes.IsMutation(http.MethodGet, "/worktrees") {
@@ -242,7 +242,7 @@ func TestWorktreeRemoveEndpoint(t *testing.T) {
 			}
 		}
 	}
-	if !apiroutes.IsMutation(http.MethodPost, "/worktrees/remove") || !apiroutes.ConsoleAllowed("/worktrees/remove") {
+	if !apiroutes.IsMutation(http.MethodPost, "/worktrees/remove") || !apiroutes.ConsoleAllowed(http.MethodPost, "/worktrees/remove") {
 		t.Fatal("/worktrees/remove must be a console-admitted mutation")
 	}
 }
@@ -308,7 +308,7 @@ func TestWorktreeAdviseAndNotes(t *testing.T) {
 	if rec := do(http.MethodPost, "/worktrees/remove", `{"path":"`+dirty+`"}`); rec.Code != http.StatusConflict {
 		t.Fatalf("remove after a remove note: %d %s, want 409", rec.Code, rec.Body.String())
 	}
-	if !apiroutes.IsMutation(http.MethodPost, "/worktrees/advise") || !apiroutes.ConsoleAllowed("/worktrees/advise") {
+	if !apiroutes.IsMutation(http.MethodPost, "/worktrees/advise") || !apiroutes.ConsoleAllowed(http.MethodPost, "/worktrees/advise") {
 		t.Fatal("/worktrees/advise must be a console-admitted mutation")
 	}
 

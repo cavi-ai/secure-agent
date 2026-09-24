@@ -247,8 +247,8 @@ func TestFileOpenUnsupported(t *testing.T) {
 // The file routes are console-admitted, NoAgent, and reveal/open mutate.
 func TestFileRoutesAreNoAgent(t *testing.T) {
 	for _, p := range []string{"/files/detail", "/files/reveal", "/files/open"} {
-		if !apiroutes.IsNoAgent(p) || !apiroutes.ConsoleAllowed(p) {
-			t.Errorf("%s: NoAgent=%v console=%v", p, apiroutes.IsNoAgent(p), apiroutes.ConsoleAllowed(p))
+		if !apiroutes.IsNoAgent(p) || !apiroutes.ConsoleAllowed("GET", p) {
+			t.Errorf("%s: NoAgent=%v console=%v", p, apiroutes.IsNoAgent(p), apiroutes.ConsoleAllowed("GET", p))
 		}
 	}
 	if !apiroutes.IsMutation("POST", "/files/reveal") || !apiroutes.IsMutation("POST", "/files/open") || apiroutes.IsMutation("GET", "/files/detail") {

@@ -66,6 +66,14 @@ type Components struct {
 	shutdownOnce sync.Once
 }
 
+// writeCwdOverrides serializes per-project guard policies for the stdlib-only
+// hook to read, beside this daemon's socket.
+func writeCwdOverrides(cfg config.Config) {
+	if err := config.WriteCwdOverrides(config.CwdOverridesPath(cfg), cfg.DirectoryGuard.CwdOverrides); err != nil {
+		log.Printf("failed to write guard cwd overrides: %v", err)
+	}
+}
+
 // Build resolves and wires every component from cfg, starting the collectors
 // and servers. Returns a Components the caller shuts down. On failure it tears
 // down whatever it had already built before returning the error.
@@ -73,10 +81,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 	ctx, cancel := context.WithCancel(parent)
 	c := &Components{cfg: cfg, cancel: cancel}
 
-	// Serialize per-project guard policies for the stdlib-only hook to read.
-	if err := config.WriteCwdOverrides(config.DefaultCwdOverridesPath(), cfg.DirectoryGuard.CwdOverrides); err != nil {
-		log.Printf("failed to write guard cwd overrides: %v", err)
-	}
+	writeCwdOverrides(cfg)
 
 	st, err := store.Open(cfg.DBPath, cfg.JSONLPath)
 	if err != nil {
@@ -107,6 +112,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 	// initial load and reconciliation only.
 	deltaHub := api.NewDeltaHub()
 	c.deltaHub = deltaHub
+	tagger.SetOnTagged(reattributeUntaggedFlags(st, deltaHub, time.Now))
 	// postureHook is armed once the API server exists (it owns posture).
 	postureHook := &postureHookHolder{}
 
@@ -129,7 +135,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 	// Local triage advisor (opt-in): flags/incidents are offered to it from
 	// the drain loop; it never touches the enforcement path.
 	advisorStk := &advisorStackHolder{}
-	advisorStk.Store(setupAdvisor(cfg, st))
+	advisorStk.Store(setupAdvisor(cfg, st, deltaHub, postureHook.run))
 
 	// Operator price table from config.yaml, applied before any collector
 	// emits a model call; the config watcher re-applies it on change.
@@ -262,6 +268,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 			st: st, stk: advisorStk, pub: fleetPub, fleetCfg: fleetCfgLive,
 			logDir: filepath.Dir(cfg.DBPath), apiServer: apiServer, resourceControl: resourceControl,
 			initialConfig: &cfg, worktrees: hunter,
+			deltaHub: deltaHub, postureChanged: postureHook.run,
 		})
 	}
 	postureHook.fn = apiServer.PublishPostureIfChanged
@@ -575,14 +582,7 @@ func wireEgressOverrides(cfg config.Config, correlator *correlate.Correlator, ad
 	allowlistStore := correlate.NewAllowlistStore(filepath.Join(stateDir, "allowlist-overrides.json"))
 	correlator.SetAllowlistOverrides(func(agent string) []string { return allowlistStore.Load()[agent] })
 	muteStore := correlate.NewMuteStore(filepath.Join(stateDir, "muted.json"))
-	correlator.SetMuteChecker(func(rule, host string) bool {
-		for _, h := range muteStore.Load()[rule] {
-			if h == host || h == "*" {
-				return true
-			}
-		}
-		return false
-	})
+	correlator.SetMuteChecker(muteStore.Muted)
 	correlator.SetOnUninspected(func(agent, host string) {
 		if sub := advisorStk.Load().Sub; sub != nil {
 			sub.EnqueueHost(agent, host)
