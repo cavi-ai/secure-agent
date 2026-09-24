@@ -12,7 +12,7 @@ function renderAttention() {
   const groups = (SA.t.posture && SA.t.posture.groups) || [];
   const count = attentionCount(SA.t.posture);
   if (badge) badge.textContent = count;
-  SA.setTabBadge('findings', count);
+  SA.setTabBadge('home', count);
   if (!groups.length) {
     container.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-shield"/></svg><span>No decisions waiting — monitored sessions are within policy</span></div>`;
     return;
