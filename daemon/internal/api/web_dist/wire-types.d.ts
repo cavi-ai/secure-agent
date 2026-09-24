@@ -515,6 +515,22 @@ export interface CostReport {
   rows: CostRow[];
 }
 
+export interface PlanWindow {
+  window_minutes: number;
+  used_percent: number;
+  resets_at: string;
+}
+
+export interface PlanSnapshot {
+  harness: string;
+  home: string;
+  plan_type: string;
+  limit_id: string;
+  windows: PlanWindow[];
+  unlimited: boolean;
+  seen_at: string;
+}
+
 export interface ReportCount {
   key: string;
   count: number;

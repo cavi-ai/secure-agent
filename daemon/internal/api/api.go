@@ -619,6 +619,7 @@ func (a *API) routes() map[string]http.HandlerFunc {
 		"/stats/rollup":                 a.handleRollup,
 		"/costs":                        a.handleCosts,
 		"/costs/unpriced":               a.handleCostsUnpriced,
+		"/costs/plans":                  a.handleCostsPlans,
 		"/doctor":                       a.handleDoctor,
 		"/worktrees":                    a.handleWorktrees,
 		"/worktrees/repos":              a.handleWorktreeRepos,

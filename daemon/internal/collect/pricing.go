@@ -174,8 +174,10 @@ const (
 )
 
 // planProviders are subscription plans billed per seat, not per token, as the
-// harness names the provider (opencode providerID).
+// harness names the provider (opencode providerID; "chatgpt" is the billing
+// provider the Codex tracer names for a ChatGPT-plan login).
 var planProviders = map[string]bool{
+	"chatgpt":               true,
 	"kimi-for-coding":       true,
 	"kimi-code-plan-global": true,
 }

@@ -1696,6 +1696,10 @@ button.fw-uninspected .fw-drill-hint {
 .spend-calls { font-size: 0.7rem; color: var(--tx-3); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .spend-hint { font-size: 0.68rem; color: var(--tx-3); white-space: nowrap; }
 .spend-list .show-more { align-self: flex-start; }
+.spend-plans { display: flex; flex-direction: column; gap: 8px; }
+.spend-plans:not(:empty) { margin-bottom: 12px; }
+.spend-plan { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.spend-plan-text { font-size: 0.75rem; color: var(--tx-2); overflow-wrap: anywhere; }
 .spend-controls { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; min-width: 0; }
 .spend-bars { display: flex; align-items: flex-end; gap: 4px; overflow-x: auto; padding-bottom: 2px; }
 .spend-day { flex: 1 0 34px; min-width: 34px; display: flex; flex-direction: column; align-items: center; gap: 4px; }

@@ -195,6 +195,7 @@ def main():
         dom_memfam = dump_dom(chrome, tmp, "?memfamilydemo")
         dom_memprobe = dump_dom(chrome, tmp, "?memprobe")
         dom_spend = dump_dom(chrome, tmp, "?spenddemo")
+        dom_plans = dump_dom(chrome, tmp, "?plansdemo")
         dom_spendday = dump_dom(chrome, tmp, "?spenddaydemo")
         dom_spendphone = dump_dom(chrome, tmp, "?phonedemo&spenddaydemo")
         dom_spendkeep = dump_dom(chrome, tmp, "?tab=overview&spenddaydemo&spendkeepdemo")
@@ -339,6 +340,15 @@ def main():
         check("empty spend report: tile reads an em dash, card shows its empty state",
               'id="count-spend">—<' in dom_nocosts and 'id="hint-spend"><' in dom_nocosts
               and "No priced model calls in this window." in spend_card_of(dom_nocosts))
+        plans_card = spend_card_of(dom_plans)
+        check("spend: a /costs/plans entry renders its plan line and a bar at used_percent above the rows; none when empty",
+              re.search(r'<div class="spend-plans"><div class="spend-plan">\s*<span class="spend-plan-text">'
+                        r'Codex Pro · codex · weekly 52% used · resets (Sun|Mon|Tue|Wed|Thu|Fri|Sat) \d{1,2}:\d{2} (AM|PM)</span>'
+                        r'<span class="hbar-track" title="weekly"><span class="hbar-fill" data-w="52.0"', plans_card) is not None
+              and plans_card.index('class="spend-plans"') < plans_card.index('class="spend-key"')
+              and '<div class="spend-plans"></div>' in spend_card, plans_card[:600])
+        check("spend: the stat strip counts calls on plans before unpriced",
+              'id="hint-spend">40 calls · 12 on plans · 2 unpriced<' in dom_plans)
         spend_q = html.unescape(pre(dom_spend, "mock-costs")).split("\n")
         tz_ok = all(re.search(r"&tz=-?\d+$", q) for q in spend_q if q != "since=24h&by=repo")
         check("spend: switching the dimension fetches by=provider and renders the provider rows",
