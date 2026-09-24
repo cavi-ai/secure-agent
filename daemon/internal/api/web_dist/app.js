@@ -683,11 +683,10 @@ document.addEventListener('DOMContentLoaded', () => {
   };
 
   // ---------- tabs ----------
-  // The console is organized by question (Overview / Agents / Egress /
-  // Findings), not by data source. State persists per tab-session; the hash
-  // carries the tab for deep links (#ct is lifted and stripped BEFORE this
-  // runs, so the two never collide). "Telemetry" holds the per-source detail
-  // (resource control + raw event timeline) split out of Overview.
+  // The console is organized by question (Home / Sessions / Egress /
+  // Policy), not by data source. State persists per tab-session; the hash
+  // carries the tab (and the Sessions sub-view) for deep links (#ct is lifted
+  // and stripped BEFORE this runs, so the two never collide).
   // ---------- render scheduler ----------
   // A panel renders only when the telemetryData slice it reads changed
   // (dirty) and only when it is on screen: the active tab's panels plus the
@@ -852,7 +851,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
   // Policy lists are not telemetry either: they load when the Policy tab
   // opens and on its Refresh, never on the refresh cycle.
-  const policyState = { guardRules: null, pathAllows: null, mutes: null, loading: false, loadedAt: 0, error: '' };
+  const policyState = { guardRules: null, pathAllows: null, mutes: null, loading: false, error: '' };
   async function loadPolicy() {
     if (policyState.loading) return;
     policyState.loading = true;
@@ -866,7 +865,7 @@ document.addEventListener('DOMContentLoaded', () => {
     };
     try {
       const [rules, paths, mutes] = await Promise.all([get('/guard/rules'), get('/guard/path-allow'), get('/mute')]);
-      Object.assign(policyState, { guardRules: rules, pathAllows: paths, mutes, loadedAt: Date.now() });
+      Object.assign(policyState, { guardRules: rules, pathAllows: paths, mutes });
     } catch (err) {
       policyState.error = "Couldn't load the policy lists: " + (err.message || err);
     } finally {
@@ -928,6 +927,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // alias table. opts.group expands that Home group.
   function switchTab(id, opts = {}) {
     const r = resolveConsoleRoute(id);
+    const from = activeTab;
     activeTab = r.tab;
     if (r.tab === 'sessions') activeSub = r.sub;
     document.querySelectorAll('.tab-btn').forEach(b => {
@@ -955,7 +955,7 @@ document.addEventListener('DOMContentLoaded', () => {
       && (!worktreesState.report || Date.now() - worktreesState.loadedAt > WORKTREE_STALE_MS)) {
       loadWorktrees(false);
     }
-    if (activeTab === 'policy' && !policyState.loading && !policyState.loadedAt) loadPolicy();
+    if (activeTab === 'policy' && from !== 'policy') loadPolicy();
     const focus = r.focus === 'attention' ? document.getElementById('attention-center') : group;
     if (focus && focus.scrollIntoView) focus.scrollIntoView({ behavior: 'auto', block: 'start' });
   }
@@ -2418,7 +2418,6 @@ document.addEventListener('DOMContentLoaded', () => {
           return;
         }
         showToast(`Allowed ${body.path} for ${body.agent}`, 'success');
-        policyState.loadedAt = 0;
         fetchTelemetry();
         return;
       }
