@@ -175,9 +175,12 @@ const (
 
 // planProviders are subscription plans billed per seat, not per token, as the
 // harness names the provider (opencode providerID; "chatgpt" is the billing
-// provider the Codex tracer names for a ChatGPT-plan login).
+// provider the Codex tracer names for a ChatGPT-plan login; "openai-codex" is
+// Hermes's billing_provider for the same login, billing_mode
+// "subscription_included").
 var planProviders = map[string]bool{
 	"chatgpt":               true,
+	"openai-codex":          true,
 	"kimi-for-coding":       true,
 	"kimi-code-plan-global": true,
 }

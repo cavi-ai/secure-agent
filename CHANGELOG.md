@@ -8,6 +8,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 
 ### Added
 - `GET /costs/plans` serves each Codex home's plan headroom, shown as a line and bar per plan on the console Spend card.
+- Codex calls on a ChatGPT plan (provider `chatgpt`) and Hermes `openai-codex` calls count as plan calls, not unpriced.
 - `POST /cleanup/advise`: queues a project (a repository, or `machine` for caches outside any repository) for a local-advisor cleanup plan built from its worktrees and clutter: a summary and at most 5 steps; paths, branch names and reasons go to the model inside `<evidence>`.
 - `GET /cleanup` `advice`: the stored plan per project; plans never change a verdict or what an action accepts.
 - `secure-agent cleanup advise <repo|machine>`; `secure-agent cleanup` prints each project's plan under it.

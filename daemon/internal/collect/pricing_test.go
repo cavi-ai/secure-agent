@@ -143,6 +143,7 @@ func TestClassify(t *testing.T) {
 		{"anthropic/claude-sonnet-4-5", "", ClassPriced},
 		{"k3", "kimi-for-coding", ClassPlan},
 		{"k3-256k", "kimi-code-plan-global", ClassPlan},
+		{"gpt-5.5", "openai-codex", ClassPlan},
 		{"llama3.1:8b", "ollama", ClassLocal},
 		{"qwen3-coder", "LM-Studio", ClassLocal},
 		{"qwen3-coder", "lmstudio", ClassLocal},
