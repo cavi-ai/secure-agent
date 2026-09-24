@@ -20,8 +20,9 @@ function worktreeStateCounts(rep) {
   return out;
 }
 
-// worktreeGroups: repositories with the rows the filter keeps. filter.state
-// is '' (all) or a state; filter.stale keeps stale rows only.
+// worktreeGroups: repositories with the rows the filter keeps, biggest
+// first (the list is where disk comes back). filter.state is '' (all) or a
+// state; filter.stale keeps stale rows only.
 function worktreeGroups(rep, filter) {
   const f = filter || {};
   const groups = [];
@@ -30,7 +31,47 @@ function worktreeGroups(rep, filter) {
       && (!f.state || w.state === f.state) && (!f.stale || w.stale));
     if (rows.length) groups.push({ repo, rows });
   }
-  return groups;
+  return groups.sort((a, b) => (Number(b.repo.size_bytes) || 0) - (Number(a.repo.size_bytes) || 0));
+}
+
+// fmtDisk: fmtRSS up to GB, then TB (volumes are terabytes).
+function fmtDisk(n) {
+  n = Number(n);
+  if (n >= 1099511627776) return (n / 1099511627776).toFixed(1) + ' TB';
+  return fmtRSS(n) || '0 B';
+}
+
+// worktreeDiskHTML: the volumes holding the repositories (used share as a
+// bar), what worktrees occupy and what is removable, and what cleanups
+// have given back so far.
+function worktreeDiskHTML(rep) {
+  if (!rep) return '';
+  const s = rep.summary || {};
+  const vols = (rep.volumes || []).map(v => {
+    const total = Number(v.total_bytes) || 0;
+    const used = total ? Math.min(100, Math.round((1 - (Number(v.free_bytes) || 0) / total) * 100)) : 0;
+    return `<div class="wt-vol"><span class="wt-vol-name">${escapeHTML(v.mount)}</span>
+      <span class="wt-vol-bar" aria-hidden="true"><i class="wt-vol-used" data-w="${used}"></i></span>
+      <span class="wt-vol-free">${escapeHTML(fmtDisk(v.free_bytes))} free of ${escapeHTML(fmtDisk(total))}</span></div>`;
+  }).join('');
+  const measuring = rep.sizing ? ' <span class="wt-measuring">measuring…</span>' : '';
+  const r = rep.reclaimed;
+  const reclaimed = r && r.count
+    ? `${escapeHTML(fmtDisk(r.bytes))} over ${r.count} cleanup${r.count === 1 ? '' : 's'} · ${escapeHTML(fmtDisk(r.bytes_30d))} in 30 days`
+    : 'nothing yet';
+  return `${vols}
+    <div class="wt-disk-stats">
+      <span><b>Worktrees</b> ${escapeHTML(fmtDisk(s.size_bytes))}${measuring}</span>
+      <span><b>Removable</b> ${escapeHTML(fmtDisk(s.removable_bytes))}</span>
+      <span><b>Reclaimed</b> ${reclaimed}</span>
+    </div>`;
+}
+
+// worktreeSizeLabel: a row's measured size; a walk that hit its bound reads
+// as a lower bound.
+function worktreeSizeLabel(w) {
+  if (!w.size_bytes) return '';
+  return (w.size_partial ? '≥' : '') + fmtDisk(w.size_bytes);
 }
 
 // worktreePathLabel: a worktree inside its repository reads relative to it.
@@ -71,6 +112,7 @@ function worktreeRowHTML(w, repo, note) {
       <span class="wt-state">${escapeHTML(w.state)}</span>${w.stale ? '<span class="wt-stale">stale</span>' : ''}
       <span class="wt-branch">${escapeHTML(branch)}</span>
       <span class="wt-path" title="${escapeHTML(w.path)}">${escapeHTML(worktreePathLabel(w.path, repo.path))}</span>
+      <span class="wt-size">${escapeHTML(worktreeSizeLabel(w))}</span>
       <span class="wt-idle">${escapeHTML(worktreeIdleLabel(w))}</span>
       ${action}
     </div>
@@ -87,6 +129,7 @@ function worktreeGroupHTML(g, advice) {
     <div class="wt-repo-head">
       <span class="wt-repo-path" title="${escapeHTML(g.repo.path)}">${escapeHTML(g.repo.path)}</span>
       ${meta ? `<span class="wt-repo-meta">${escapeHTML(meta)}</span>` : ''}
+      ${g.repo.size_bytes ? `<span class="wt-repo-size">${escapeHTML(fmtDisk(g.repo.size_bytes))}</span>` : ''}
       <button type="button" class="link-btn wt-hide" data-action="worktree-hide" data-repo="${escapeHTML(g.repo.path)}">Hide repo</button>
     </div>
     ${g.rows.map(w => worktreeRowHTML(w, g.repo, (advice || {})[w.path])).join('')}
@@ -116,6 +159,7 @@ function renderWorktrees() {
   const container = document.getElementById('worktrees-container');
   const pills = document.getElementById('worktree-pills');
   const summary = document.getElementById('worktrees-summary');
+  const disk = document.getElementById('worktrees-disk');
   const errors = document.getElementById('worktrees-errors');
   if (!container) return;
   const state = SA.worktrees;
@@ -127,12 +171,17 @@ function renderWorktrees() {
       : `<div class="empty"><svg class="icon"><use href="#i-branch"/></svg><span>${escapeHTML(state.error || 'No scan yet.')}</span></div>`;
     if (pills) pills.innerHTML = '';
     if (summary) summary.textContent = '';
+    if (disk) disk.innerHTML = '';
     if (errors) errors.hidden = true;
     return;
   }
   const counts = worktreeStateCounts(rep);
   if (pills) pills.innerHTML = worktreeFilterHTML(counts, state.filter);
   if (summary) summary.textContent = worktreesSummaryText(rep) + (state.loading ? ' · rescanning…' : '');
+  if (disk) {
+    disk.innerHTML = worktreeDiskHTML(rep);
+    applyInlineMetrics(disk);
+  }
   if (errors) {
     const list = rep.errors || [];
     errors.hidden = list.length === 0;

@@ -14,7 +14,7 @@ vm.createContext(ctx);
 for (const f of ['lib.js', 'tab-worktrees.js']) {
   vm.runInContext(readFileSync(path.join(webDist, f), 'utf8'), ctx, { filename: f });
 }
-const { worktreeStateCounts, worktreeGroups, worktreeRowHTML, worktreeGroupHTML, worktreePathLabel, worktreeFilterHTML, worktreesSummaryText } = ctx;
+const { worktreeStateCounts, worktreeGroups, worktreeRowHTML, worktreeGroupHTML, worktreePathLabel, worktreeFilterHTML, worktreesSummaryText, worktreeDiskHTML, worktreeSizeLabel, fmtDisk } = ctx;
 
 const REPO = '/Users/x/code/app';
 const report = () => ({
@@ -94,4 +94,33 @@ test('advisor notes: shown under their row, escaped, and never change the action
   const group = worktreeGroupHTML({ repo: rep.repos[1], rows: rep.repos[1].worktrees }, { [keep.path]: note });
   assert.equal((group.match(/class="wt-advice"/g) || []).length, 1);
   assert.ok(!worktreeRowHTML(keep, rep.repos[1]).includes('wt-advice'));
+});
+
+test('disk: volumes with a used bar, worktree and removable totals, reclaimed', () => {
+  const html = worktreeDiskHTML({
+    sizing: true,
+    summary: { size_bytes: 3 * 1073741824, removable_bytes: 1073741824 },
+    volumes: [{ mount: '/Volumes/<Work>', total_bytes: 2 * 1099511627776, free_bytes: 0.5 * 1099511627776 }],
+    reclaimed: { bytes: 1610612736, count: 2, bytes_30d: 536870912, count_30d: 1 },
+  });
+  assert.ok(html.includes('<span class="wt-vol-name">/Volumes/&lt;Work&gt;</span>'));
+  assert.ok(html.includes('data-w="75"'));
+  assert.ok(html.includes('512.0 GB free of 2.0 TB'));
+  assert.ok(html.includes('<b>Worktrees</b> 3.0 GB <span class="wt-measuring">measuring…</span>'));
+  assert.ok(html.includes('<b>Removable</b> 1.0 GB'));
+  assert.ok(html.includes('<b>Reclaimed</b> 1.5 GB over 2 cleanups · 512 MB in 30 days'));
+  assert.ok(worktreeDiskHTML({ summary: {}, volumes: [] }).includes('<b>Reclaimed</b> nothing yet'));
+});
+
+test('sizes: row label, lower bound, repo groups biggest first', () => {
+  assert.equal(worktreeSizeLabel({ size_bytes: 1610612736 }), '1.5 GB');
+  assert.equal(worktreeSizeLabel({ size_bytes: 5242880, size_partial: true }), '≥5.0 MB');
+  assert.equal(worktreeSizeLabel({}), '');
+  assert.equal(fmtDisk(3 * 1099511627776), '3.0 TB');
+  const rep = report();
+  rep.repos[0].size_bytes = 10;
+  rep.repos[1].size_bytes = 1000;
+  assert.deepEqual([...worktreeGroups(rep, {}).map(g => g.repo.path)], ['/Users/x/code/lib', REPO]);
+  const row = worktreeRowHTML({ ...rep.repos[0].worktrees[1], size_bytes: 1610612736 }, rep.repos[0]);
+  assert.ok(row.includes('<span class="wt-size">1.5 GB</span>'));
 });

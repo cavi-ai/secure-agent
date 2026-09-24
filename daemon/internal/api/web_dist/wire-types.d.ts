@@ -640,6 +640,8 @@ export interface ScanSummary {
   keep: number;
   prune: number;
   stale: number;
+  size_bytes: number;
+  removable_bytes: number;
 }
 
 export interface Worktree {
@@ -667,6 +669,8 @@ export interface Worktree {
   unique_commits?: number;
   loose_commits?: number;
   merged?: string;
+  size_bytes?: number;
+  size_partial?: boolean;
   stashes?: number;
   precious_ignored?: string[];
   other_ignored?: number;
@@ -678,8 +682,22 @@ export interface RepoReport {
   source?: string;
   default_branch?: string;
   bare?: boolean;
+  size_bytes: number;
   worktrees: Worktree[];
   error?: string;
+}
+
+export interface VolumeUsage {
+  mount: string;
+  total_bytes: number;
+  free_bytes: number;
+}
+
+export interface CleanupTotals {
+  bytes: number;
+  count: number;
+  bytes_30d: number;
+  count_30d: number;
 }
 
 export interface ScanReport {
@@ -690,6 +708,19 @@ export interface ScanReport {
   summary: ScanSummary;
   repos: RepoReport[];
   errors?: string[];
+  sizing?: boolean;
+  volumes?: VolumeUsage[];
+  reclaimed?: CleanupTotals;
   advice?: Record<string, AdvisorVerdict>;
+}
+
+export interface CleanupEntry {
+  id: number;
+  ts: string;
+  action: string;
+  path: string;
+  repo?: string;
+  bytes: number;
+  detail?: string;
 }
 
