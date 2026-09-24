@@ -66,15 +66,15 @@ func TestConsoleAllowListMatchesTable(t *testing.T) {
 		if r.Prefix {
 			continue // dynamic family, shape-checked separately
 		}
-		if r.Console && !apiroutes.ConsoleAllowed(r.Path) {
+		if r.Console && !apiroutes.ConsoleAllowed("GET", r.Path) {
 			t.Errorf("route %s is console-facing but not admitted", r.Path)
 		}
-		if !r.Console && apiroutes.ConsoleAllowed(r.Path) {
+		if !r.Console && apiroutes.ConsoleAllowed("GET", r.Path) {
 			t.Errorf("route %s is admitted to the console but not marked console-facing", r.Path)
 		}
 	}
 	// The guard decision endpoint is agent-facing and must never be admitted.
-	if apiroutes.ConsoleAllowed("/guard/decision") {
+	if apiroutes.ConsoleAllowed("GET", "/guard/decision") {
 		t.Error("/guard/decision must not be reachable with the console token")
 	}
 }
@@ -82,7 +82,7 @@ func TestConsoleAllowListMatchesTable(t *testing.T) {
 // The owner-only profiling routes are never admitted by the console token.
 func TestConsoleAllowListRejectsPprof(t *testing.T) {
 	for _, p := range []string{"/debug/pprof/", "/debug/pprof", "/debug/pprof/heap", "/debug/pprof/profile"} {
-		if apiroutes.ConsoleAllowed(p) {
+		if apiroutes.ConsoleAllowed("GET", p) {
 			t.Errorf("%s is admitted to the console", p)
 		}
 		if !apiroutes.IsOwnerOnly(p) {
@@ -94,19 +94,19 @@ func TestConsoleAllowListRejectsPprof(t *testing.T) {
 // The flag explanation is a dynamic /flags/{id}/explain family: the console
 // admits exactly that shape, and the exact acknowledge route keeps its gate.
 func TestFlagExplainRouteGate(t *testing.T) {
-	if !apiroutes.ConsoleAllowed("/flags/abc/explain") {
+	if !apiroutes.ConsoleAllowed("GET", "/flags/abc/explain") {
 		t.Fatal("/flags/{id}/explain must be console-allowed")
 	}
 	for _, p := range []string{"/flags/../explain", "/flags/./explain", "/flags//explain", "/flags/abc", "/flags/abc/timeline",
 		"/flags/abc/explain/x", "/sessions/abc/explain", "/flags/"} {
-		if apiroutes.ConsoleAllowed(p) {
-			t.Errorf("ConsoleAllowed(%q) = true, want false", p)
+		if apiroutes.ConsoleAllowed("GET", p) {
+			t.Errorf("ConsoleAllowed(GET, %q) = true, want false", p)
 		}
 	}
-	if !apiroutes.ConsoleAllowed("/sessions/abc/timeline") || apiroutes.ConsoleAllowed("/sessions/../timeline") {
+	if !apiroutes.ConsoleAllowed("GET", "/sessions/abc/timeline") || apiroutes.ConsoleAllowed("GET", "/sessions/../timeline") {
 		t.Error("session timeline shape changed")
 	}
-	if !apiroutes.ConsoleAllowed("/flags/acknowledge") || !apiroutes.ConsoleAllowed("/flags") {
+	if !apiroutes.ConsoleAllowed("GET", "/flags/acknowledge") || !apiroutes.ConsoleAllowed("GET", "/flags") {
 		t.Error("exact /flags routes must stay console-allowed")
 	}
 	if !apiroutes.IsMutation("POST", "/flags/acknowledge") {

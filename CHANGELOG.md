@@ -107,6 +107,7 @@ All notable changes to `secure-agent` are documented here. The format follows
   per (path, rule) are collapsed.
 
 ### Changed
+- Console admission is method-aware: GET/HEAD pass on any console-admitted route, but a mutating method needs that route's `MutatingMethods` or `ConsoleMethods` — the console token can no longer reach an owner-level `DELETE` such as `/guard/rules` or `/guard/path-allow`.
 - `/guard/path-allow` is console-admitted on the proxy listener.
 - `POST /guard/path-allow` is a pinned-UI mutation.
 - Console finding cards offer the served allow-path action.

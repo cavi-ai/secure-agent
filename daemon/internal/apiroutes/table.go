@@ -31,8 +31,23 @@ type Route struct {
 	// MutatingMethods lists the HTTP methods on this path that require the
 	// pinned UI (or the owner uid when no UI is pinned). Empty = not a
 	// mutation. GET is never a mutation; DELETE stays owner-level (headless
-	// fleets revoke over ssh).
+	// fleets revoke over ssh). A method here is also console-admitted (see
+	// ConsoleAllowed): the console runs as the pinned UI's own surface, so a
+	// mutation it is allowed to trigger it is also allowed to reach directly.
 	MutatingMethods []string
+	// ConsoleMethods lists non-GET/HEAD methods the console token admits on
+	// this path WITHOUT marking them a pinned-UI mutation on the unix socket
+	// (unlike MutatingMethods, ConsoleMethods has no effect on authorize/
+	// canMutate). Used for the two console-only DELETEs and the two POSTs
+	// below that stay owner-level on the socket. Enumerated from every
+	// `apiFetch(path, { method: ... })` in web_dist/*.js:
+	//   DELETE /mute            app.js:2514 (mute revoke)
+	//   DELETE /allowlist       app.js:2602 (allow revoke)
+	//   POST   /notify/rules    app.js:3034, 3060 (notify scope/override)
+	//   POST   /advisor/assess-host  app.js:2252 (host reassess)
+	// Every other (method, path) pair fetched by web_dist/*.js is GET (always
+	// admitted) or POST/PUT already covered by MutatingMethods above.
+	ConsoleMethods []string
 	// Decide marks the agent-facing guard decision endpoint, which uses the
 	// weaker canDecide policy instead of canMutate.
 	Decide bool
@@ -66,14 +81,14 @@ var Table = []Route{
 	{Path: "/incidents/status", Console: true, MutatingMethods: []string{"POST"}},
 	{Path: "/audit", Console: true},
 	{Path: "/allowlist/suggestions", Console: true},
-	{Path: "/allowlist", Console: true, MutatingMethods: []string{"POST"}},
+	{Path: "/allowlist", Console: true, MutatingMethods: []string{"POST"}, ConsoleMethods: []string{"DELETE"}},
 	{Path: "/egress/uninspected", Console: true},
 	{Path: "/egress/endpoint", Console: true},
-	{Path: "/notify/rules", Console: true},
+	{Path: "/notify/rules", Console: true, ConsoleMethods: []string{"POST"}},
 	{Path: "/guard/path-allow", Console: true, MutatingMethods: []string{"POST"}},
-	{Path: "/mute", Console: true, MutatingMethods: []string{"POST"}},
+	{Path: "/mute", Console: true, MutatingMethods: []string{"POST"}, ConsoleMethods: []string{"DELETE"}},
 	{Path: "/advisor/retriage", Console: true, MutatingMethods: []string{"POST"}},
-	{Path: "/advisor/assess-host", Console: true},
+	{Path: "/advisor/assess-host", Console: true, ConsoleMethods: []string{"POST"}},
 	{Path: "/flags/acknowledge", Console: true, MutatingMethods: []string{"POST"}},
 	{Path: "/patterns", Console: true},
 	{Path: "/ui/open-fda", Console: true, MutatingMethods: []string{"POST"}},
@@ -104,31 +119,38 @@ var Table = []Route{
 	{Path: "/labels", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
 }
 
-// ConsoleAllowed reports whether the console token admits path on the proxy
-// listener. Exact table paths are admitted directly; a dynamic family
-// (/sessions/{id}/timeline, /sessions/{id}/report, /flags/{id}/explain) is
-// admitted only in its exact shape: a non-empty id that is not "." or "..",
-// then one of the route's Leaves. Anything else falls through to the
+// ConsoleAllowed reports whether the console token admits (method, path) on
+// the proxy listener. Exact table paths are admitted directly; a dynamic
+// family (/sessions/{id}/timeline, /sessions/{id}/report, /flags/{id}/explain)
+// is admitted only in its exact shape: a non-empty id that is not "." or
+// "..", then one of the route's Leaves. GET and HEAD pass on every
+// Console: true route; any other method is admitted only when it appears in
+// that route's MutatingMethods or ConsoleMethods. Anything else — an unknown
+// path, or a method the matched route does not list — falls through to the
 // proxy-token challenge.
-func ConsoleAllowed(path string) bool {
+func ConsoleAllowed(method, path string) bool {
 	for _, r := range Table {
 		if !r.Console {
 			continue
 		}
+		matched := false
 		if r.Prefix {
 			if !strings.HasPrefix(path, r.Path) {
 				continue
 			}
 			rest := strings.TrimPrefix(path, r.Path)
 			parts := strings.SplitN(rest, "/", 2)
-			if len(parts) == 2 && parts[0] != "" && parts[0] != "." && parts[0] != ".." && slices.Contains(r.Leaves, parts[1]) {
-				return true
-			}
+			matched = len(parts) == 2 && parts[0] != "" && parts[0] != "." && parts[0] != ".." && slices.Contains(r.Leaves, parts[1])
+		} else {
+			matched = r.Path == path
+		}
+		if !matched {
 			continue
 		}
-		if r.Path == path {
+		if method == "GET" || method == "HEAD" {
 			return true
 		}
+		return slices.Contains(r.MutatingMethods, method) || slices.Contains(r.ConsoleMethods, method)
 	}
 	return false
 }

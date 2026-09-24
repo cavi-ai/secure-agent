@@ -263,6 +263,10 @@ document.addEventListener('DOMContentLoaded', () => {
     costsCard: null,  // /costs report for the Spend card's saved view
     connected: true
   };
+  // Last-seen /notify/rules payload hash — gates 'notify' dirty-marking on
+  // the reconcile poll so a config that hasn't changed never re-renders the
+  // panel (and erases an in-progress edit); see fetchTelemetry.
+  let notifyCfgHash = '';
 
   // Spend card view: dimension and window, kept for the tab in
   // sessionStorage. The tile keeps its own 24h/by-repo fetch.
@@ -731,7 +735,7 @@ document.addEventListener('DOMContentLoaded', () => {
     resources: 'resource-board', history: 'history-board', sessions: 'session-rail', agents: 'agents-container',
     fleet: 'fleet-container', firewall: 'firewall-container', sources: 'sources-list', incidents: 'incidents-container',
     audit: 'audit-container', flags: 'flags-list', attention: 'attention-list', events: 'events-container',
-    worktrees: 'worktrees-container'
+    worktrees: 'worktrees-container', notify: 'notify-pop'
   };
   const SLOW_ONLY = new Set(['resources', 'history', 'fleet', 'audit', 'sources', 'activity', 'spend']);
   const PANEL_MIN_MS = 250;
@@ -1055,7 +1059,13 @@ document.addEventListener('DOMContentLoaded', () => {
       if (rollup) telemetryData.rollup = rollup || [];
       if (uninspected) telemetryData.uninspected = uninspected || [];
       if (episodes) telemetryData.episodes = episodes || [];
-      if (notifyCfg) telemetryData.notifyCfg = notifyCfg;
+      if (notifyCfg) {
+        // A reconcile while the operator is typing a workspace path must not
+        // dirty (and re-render) the notify panel unless the served config
+        // actually changed — a stable hash, not the poll cadence, decides.
+        const h = JSON.stringify(notifyCfg);
+        if (h !== notifyCfgHash) { notifyCfgHash = h; telemetryData.notifyCfg = notifyCfg; markDirty('notify'); }
+      }
       if (allowlist) telemetryData.allowlist = allowlist || [];
       if (costs) telemetryData.costs = costs;
       if (costsCard && cardPath === spendCardPath()) telemetryData.costsCard = costsCard;
@@ -1080,17 +1090,27 @@ document.addEventListener('DOMContentLoaded', () => {
     setConnState(telemetryData.connected ? 'ok' : 'unreachable');
 
     if (!booted || (opts && opts.full)) renderAll();
-    else markDirty(...PANELS.map(p => p[0]).filter(n => slow || !SLOW_ONLY.has(n)));
+    // 'notify' is excluded here: it dirties itself above, only when its
+    // fetched config actually changed, so an unrelated poll tick never
+    // erases an in-progress workspace-scope edit.
+    else markDirty(...PANELS.map(p => p[0]).filter(n => (slow || !SLOW_ONLY.has(n)) && n !== 'notify'));
     if (resources) fillFamilyDrawer();
   }
 
-  // Every panel, hidden ones included: initial load, Refresh, and actions
-  // that reshape every list (search, session select). Crash isolation: one
-  // panel's bad data must never take the whole page down with it (the /fleet
-  // shape mismatch once killed every panel after it on every poll).
+  // Every panel is a candidate: initial load, Refresh, and actions that
+  // reshape every list (search, session select). "Candidate" does not mean
+  // "rendered" — renderDirty() still runs each through panelOnScreen, so a
+  // closed Home group or a hidden Sessions sub-view stays dirty instead of
+  // painting off-screen DOM, and picks up its render the moment it is shown
+  // (switchTab/openHomeGroup mark it dirty again, or it is already dirty
+  // here). Crash isolation is unchanged: renderDirty still renders each
+  // panel through renderPanel, so one panel's bad data never takes the whole
+  // page down with it (the /fleet shape mismatch once killed every panel
+  // after it on every poll).
   function renderAll() {
     booted = true;
-    for (const [name, fn] of PANELS) { dirtyPanels.delete(name); renderPanel(name, fn); }
+    for (const [name] of PANELS) dirtyPanels.add(name);
+    renderDirty();
   }
 
   // Activity rollup chart: hourly event bars with rose flag markers — the
@@ -2972,13 +2992,20 @@ document.addEventListener('DOMContentLoaded', () => {
     ['secret-in-transcript', 'Secret appeared in an agent transcript']
   ];
 
+  // patchList-keyed by rule id: a reconcile while nothing changed for a row
+  // (or a different row's override changed) leaves that row's <select> node
+  // alone — no lost focus mid-pick.
   function renderNotifyRules() {
     const list = document.getElementById('notify-rules-list');
     if (!list) return;
     const overrides = (telemetryData.notifyCfg && telemetryData.notifyCfg.overrides) || {};
-    list.innerHTML = NOTIFY_RULES.map(([rule, label]) => {
-      const cur = rule in overrides ? (overrides[rule] ? 'always' : 'never') : 'default';
-      return `<div class="notify-rule-row">
+    const curOf = (rule) => rule in overrides ? (overrides[rule] ? 'always' : 'never') : 'default';
+    patchList(list, NOTIFY_RULES, {
+      key: ([rule]) => rule,
+      hash: ([rule]) => curOf(rule),
+      html: ([rule, label]) => {
+        const cur = curOf(rule);
+        return `<div class="notify-rule-row">
         <span class="notify-rule-name" title="${escapeHTML(rule)}">${escapeHTML(label)}</span>
         <select class="select select-sm" data-notify-rule="${escapeHTML(rule)}" aria-label="Notifications for ${escapeHTML(label)}">
           <option value="default"${cur === 'default' ? ' selected' : ''}>Default</option>
@@ -2986,24 +3013,44 @@ document.addEventListener('DOMContentLoaded', () => {
           <option value="never"${cur === 'never' ? ' selected' : ''}>Never</option>
         </select>
       </div>`;
-    }).join('');
+      }
+    });
     renderNotifyScopes();
   }
 
-  // Per-workspace scopes: existing ones with a remove button, plus a compact
-  // add form (rule + path prefix + page/silence). The daemon matches by path
-  // prefix, longest first.
+  // Per-workspace scopes: existing ones with a remove button, patchList-keyed
+  // by rule+workspace, plus a compact add form (rule + path prefix +
+  // page/silence). The daemon matches by path prefix, longest first. The add
+  // form is static DOM outside the patched list — a reconcile while the
+  // operator is typing a workspace path must never touch it.
   function renderNotifyScopes() {
     const list = document.getElementById('notify-scopes-list');
     if (!list) return;
     const scopes = (telemetryData.notifyCfg && telemetryData.notifyCfg.scopes) || [];
-    const rows = scopes.map(s => `<div class="notify-rule-row">
+    patchList(list, scopes, {
+      key: s => s.rule + '|' + s.workspace,
+      hash: s => s.notify,
+      html: s => `<div class="notify-rule-row">
         <span class="notify-rule-name" title="${escapeHTML(s.workspace)}">${escapeHTML(s.rule)} <span class="notify-scope-path">${escapeHTML(s.workspace)}</span></span>
         <span class="notify-scope-mode ${s.notify ? 'on' : 'off'}">${s.notify ? 'page' : 'quiet'}</span>
         <button class="source-remove" title="Remove this scope" data-action="notify-scope-remove" data-rule="${escapeHTML(s.rule)}" data-workspace="${escapeHTML(s.workspace)}"><svg class="icon"><use href="#i-close"/></svg></button>
-      </div>`).join('');
-    list.innerHTML = (rows || '<div class="notify-scope-empty">No workspace scopes yet</div>') + `
-      <div class="notify-scope-add">
+      </div>`,
+      empty: '<div class="notify-scope-empty">No workspace scopes yet</div>'
+    });
+    ensureNotifyScopeAddForm();
+  }
+
+  // Built once and left alone on every later render: the add-form's own
+  // inputs (the workspace path in particular) must survive a telemetry
+  // reconcile while the operator is mid-edit.
+  function ensureNotifyScopeAddForm() {
+    if (document.getElementById('notify-scope-add-form')) return;
+    const list = document.getElementById('notify-scopes-list');
+    if (!list || !list.parentNode) return;
+    const form = document.createElement('div');
+    form.className = 'notify-scope-add';
+    form.id = 'notify-scope-add-form';
+    form.innerHTML = `
         <select class="select select-sm" id="notify-scope-rule" aria-label="Rule for the workspace scope">
           ${NOTIFY_RULES.map(([rule, label]) => `<option value="${escapeHTML(rule)}">${escapeHTML(label)}</option>`).join('')}
         </select>
@@ -3012,8 +3059,8 @@ document.addEventListener('DOMContentLoaded', () => {
           <option value="always">Page</option>
           <option value="never">Quiet</option>
         </select>
-        <button class="btn btn-ghost btn-sm" data-action="notify-scope-add" title="Add this workspace scope"><svg class="icon"><use href="#i-arrow"/></svg><span>Add</span></button>
-      </div>`;
+        <button class="btn btn-ghost btn-sm" data-action="notify-scope-add" title="Add this workspace scope"><svg class="icon"><use href="#i-arrow"/></svg><span>Add</span></button>`;
+    list.parentNode.insertBefore(form, list.nextSibling);
   }
 
   window.addNotifyScope = async function() {

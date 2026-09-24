@@ -464,6 +464,8 @@
   // flag-1 and flag-3 stay raw, as rows from an older daemon or past the
   // 25-flag cap do.
   if (MODE.includes('explaindemo')) {
+    // Findings is opened first, as a user must: hidden panels do not render.
+    setTimeout(() => openTab('findings'), 1500);
     const cfHost = '2606:4700::6810:84e5';
     const f2 = data['/flags'].find(f => f.id === 'flag-2');
     Object.assign(f2, {
@@ -486,6 +488,9 @@
           { id: 'allow-host', label: `Allow ${cfHost} (Cloudflare) for cursor`, recommended: true,
             consequence: `Future connections from cursor to ${cfHost} are trusted and stop being flagged.`,
             method: 'POST', path: '/allowlist', body: { agent: 'cursor', host: cfHost } },
+          { id: 'allow-path', label: 'Always allow this file for cursor',
+            consequence: 'cursor may open ~/.aws/credentials without a guard prompt; other files under the cloud-creds rule still ask.',
+            method: 'POST', path: '/guard/path-allow', body: { agent: 'cursor', rule_id: 'cloud-creds', path: '/Users/dev/.aws/credentials' } },
           { id: 'dismiss', label: 'Dismiss this flag',
             consequence: 'The flag is marked reviewed and stops counting as needing action; the rule keeps watching for the next one.',
             method: 'POST', path: '/flags/acknowledge', body: { flag_id: 'flag-2' } },
@@ -510,6 +515,8 @@
   // item for it in the codex group instead of flag items.
   const PATTERN_KEY = 'codex|keychain-access|/Users/dev/Library/Keychains/login.keychain-db';
   if (MODE.includes('patterndemo')) {
+    // Findings is opened first, as a user must: hidden panels do not render.
+    setTimeout(() => openTab('findings'), 1500);
     const kc = (id, pid, msAgo) => ({
       id, rule: 'keychain-access', severity: 2, ts: iso(msAgo), pid, agent: 'codex', session_id: 'sess-codex-9',
       title: 'Agent touched the keychain',
@@ -837,6 +844,37 @@
     return r;
   };
 
+  // Auto-action: the plain default dump (no query string, no hash — every
+  // other dump adds one or the other) is the one many checks below read for
+  // content across every tab, sub-view and Home group at once. Since
+  // renderAll() now only marks panels dirty and lets panelOnScreen gate the
+  // actual render (a hidden panel stays unrendered until shown), that
+  // single dump only has real content where a real user would: tour every
+  // view once, exactly as openTab's callers do elsewhere in this file, so
+  // each panel's dirty bit is cleared by an on-screen render before the
+  // dump. A panel's rendered DOM persists after switching away (only the
+  // `hidden` attribute toggles), so the tour then lands back on Home with
+  // both groups closed — the boot-default checks (active tab, closed
+  // groups, hidden tabpanels) read the same dump and must still see it.
+  if (location.search === '' && location.hash === '') {
+    setTimeout(() => {
+      openTab('findings');
+      openTab('overview');
+      openTab('sessions/board');
+      openTab('sessions/processes');
+      openTab('sessions/resources');
+      openTab('sessions/events');
+      openTab('sessions/worktrees');
+      openTab('egress');
+      openTab('policy');
+      openTab('home');
+      const findings = document.getElementById('home-findings');
+      const trends = document.getElementById('home-trends');
+      if (findings) findings.open = false;
+      if (trends) trends.open = false;
+    }, 1500);
+  }
+
   // Auto-action: exercise the session drill-down like a user click would.
   // sessionlinkdemo: flag-1 belongs to the durable session sess-claude-1;
   // open Findings, then click its "View session in timeline".
@@ -849,8 +887,10 @@
     setTimeout(() => window.filterTimelineToSession('7f3a9c21-4b2e-4a1d-9c55-2e8f0d1a3b77'), 4000);
   }
   // Auto-action: select a session in the session-first rail so the trace
-  // waterfall renders.
+  // waterfall renders. The Sessions tab is not the default, and the rail
+  // only renders on screen, so open it before selecting.
   if (location.search.includes('raildemo')) {
+    setTimeout(() => openTab('sessions'), 1500);
     setTimeout(() => window.selectSession('sess-claude-1'), 4000);
   }
   // Auto-action: Export the selected session's report into a stubbed
@@ -1011,12 +1051,37 @@
   if (location.search.includes('notifydemo')) {
     setTimeout(() => document.getElementById('btn-notify').click(), 4000);
   }
+  // notifyfocusdemo: typing a workspace path in the add-scope form must
+  // survive a telemetry reconcile that actually changes notifyCfg — the add
+  // form is static DOM outside the patched list, and 'notify' now holds
+  // focus (PANEL_EL) the same as any other panel.
+  if (location.search.includes('notifyfocusdemo')) {
+    setTimeout(() => {
+      openTab('policy');
+      const input = document.getElementById('notify-scope-path');
+      input.focus();
+      input.value = 'in-progress-edit';
+      input.dataset.probe = '1';
+      data['/notify/rules'] = {
+        ...data['/notify/rules'],
+        overrides: { ...(data['/notify/rules'].overrides || {}), 'keychain-access': true }
+      };
+      document.getElementById('btn-refresh').click();
+      setTimeout(() => {
+        const same = document.getElementById('notify-scope-path');
+        stamp('notify-focus-probe',
+          `same=${same === input} value=${same.value} focused=${document.activeElement === same} probe=${same.dataset.probe}`);
+      }, 2000);
+    }, 1500);
+  }
   // Auto-action: allow the suggested host — the suggestion must disappear.
   if (location.search.includes('allowdemo')) {
     setTimeout(() => document.querySelector('.fw-suggestion [data-action="allow-host"]').click(), 4000);
   }
   // Auto-action: dismiss the keychain flag — the card must leave the list.
   if (location.search.includes('dismissdemo')) {
+    // Findings is opened first, as a user must: hidden panels do not render.
+    setTimeout(() => openTab('findings'), 1500);
     setTimeout(() => document.querySelector('[data-action="dismiss-flag"][data-id="flag-3"]').click(), 4000);
   }
   // Auto-action: re-run the advisor on the first flag — the pending state
@@ -1037,6 +1102,8 @@
   // hide entirely instead of carrying a permanently-empty placeholder.
   if (location.search.includes('nofleetdemo')) {
     data['/fleet'] = { ...data['/fleet'], fleet_configured: false };
+    // The fleet panel lives on Sessions/Processes, not the default Home tab.
+    setTimeout(() => openTab('sessions/processes'), 1500);
   }
   // spenddemo: switch the Spend card to by provider, then a full refresh
   // re-renders every panel; the probe records the select and the saved view
@@ -1098,6 +1165,8 @@
   // shows one bar for that family with its session count, and the badge
   // counts agent families (5821, 4412, 6033), not sessions or infra (7001).
   if (MODE.includes('memfamilydemo')) {
+    // Memory by family is a Trends chart, under the Home:Trends group.
+    setTimeout(() => openTab('overview'), 1500);
     for (const n of [5, 6]) {
       data['/sessions'].push({
         id: `sess-claude-${n}`, harness: 'claude', workspace: '/Users/dev/workspace/api-service',
@@ -1111,6 +1180,8 @@
   // episodes must remain visible.
   if (location.search.includes('noresourcesdemo')) {
     data['/resources'] = { ...data['/resources'], rss_bytes: 0, cpu_percent: 0, process_count: 0, session_count: 0, sessions: [] };
+    // The resource board and its flight recorder live on Sessions/Resources.
+    setTimeout(() => openTab('sessions/resources'), 1500);
   }
   // familiesdemo: the Resources board at scale — twelve families: nine agent
   // families (claude 5821 and cursor 6033 need attention; two codex runs are
@@ -1242,6 +1313,8 @@
 
   // Auto-action: demote a blocking rule — it must flip back to Promote.
   if (location.search.includes('demotedemo')) {
+    // The firewall rule list lives on the Egress tab, not the default Home tab.
+    setTimeout(() => openTab('egress'), 1500);
     setTimeout(() => document.querySelector('[data-action="demote"][data-rule="aws-key"]').click(), 4000);
   }
   // Auto-action: remove an allowlist entry — the row must leave the list.
@@ -1249,14 +1322,19 @@
     setTimeout(() => document.querySelector('[data-action="allowlist-remove"]').click(), 4000);
   }
 
-  // Quiet machine: no sessions and no agents — the rail's empty state.
+  // Quiet machine: no sessions and no agents — the rail's empty state. The
+  // Sessions tab is not active by default, and the rail only renders once
+  // it is on screen (renderAll no longer paints hidden panels), so open it.
   if (location.search.includes('quietdemo')) {
     data['/sessions'] = [];
     data['/status'] = { ...data['/status'], agents: [], trees: [] };
+    setTimeout(() => openTab('sessions'), 1500);
   }
   // Auto-action: type a filter that matches nothing — the rail must say so
-  // and offer to clear it.
+  // and offer to clear it. Sessions is not the default tab, so open it
+  // before typing: the rail only renders on screen.
   if (location.search.includes('nomatchdemo')) {
+    setTimeout(() => openTab('sessions'), 1500);
     setTimeout(() => {
       const q = document.getElementById('session-cwd-filter');
       q.value = 'no-such-repo';
@@ -1264,9 +1342,14 @@
     }, 4000);
   }
   // Auto-action: switch the claude harness pill off — its group must leave
-  // the Sessions rail and the Agents list (one shared filter state).
+  // the Sessions rail and the Agents list (one shared filter state). Both
+  // live on the Sessions tab (board and processes sub-views), not the
+  // default Home tab, so open both before the toggle click, and re-show the
+  // board (where the pill itself lives) afterward so its state renders too.
   if (location.search.includes('pilldemo')) {
+    setTimeout(() => { openTab('sessions/processes'); openTab('sessions/board'); }, 1500);
     setTimeout(() => document.querySelector('#session-harness-pills [data-action="toggle-harness"][data-harness="claude"]').click(), 4000);
+    setTimeout(() => openTab('sessions/processes'), 4300);
   }
   // Phone-width probe. Headless Chrome will not size its window below 500px,
   // so ?phonedemo frames the console in a 375px iframe. The framed copy
@@ -1382,6 +1465,8 @@
   // Auto-action: select a session, open the resource policy editor, and add
   // its workspace as an override through the real delegated click path.
   if (location.search.includes('policydemo')) {
+    // The resource board (and its family drawer) lives on Sessions/Resources.
+    setTimeout(() => openTab('sessions/resources'), 1500);
     setTimeout(() => {
       document.querySelector('[data-action="view-family"]').click();
       document.querySelector('[data-action="edit-resource-policy"]').click();
@@ -1581,6 +1666,40 @@
       }, 2600);
     }, 4500);
   }
+  // hiddenrenderprobe: renderAll() (boot, Refresh, search) must not paint a
+  // panel that isn't on screen — Home is active by default, so the Trends
+  // charts (closed group) and the Sessions/Resources sub-view stay hidden
+  // throughout. <pre id="hidden-render-probe"> reports each panel's
+  // absolute render count after boot, after Refresh, after a search, and
+  // again once each panel is actually shown.
+  if (MODE.includes('hiddenrenderprobe')) {
+    const hidden = ['activity', 'chart-flags', 'chart-memory', 'resources'];
+    const snap = () => hidden.map(k => `${k}=${(renderCounts() || {})[k] || 0}`).join(',');
+    setTimeout(() => {
+      const afterBoot = snap();
+      document.getElementById('btn-refresh').click();
+      setTimeout(() => {
+        const afterRefresh = snap();
+        const search = document.getElementById('global-search');
+        search.value = 'nothing-matches-this';
+        search.dispatchEvent(new Event('input', { bubbles: true }));
+        setTimeout(() => {
+          const afterSearch = snap();
+          // The <details> "toggle" event queues as its own task, so it must
+          // settle (and render Trends while Home is still the active tab)
+          // before switching to Sessions for the resources sub-view.
+          document.querySelector('#home-trends > summary').click();
+          setTimeout(() => {
+            openTab('sessions/resources');
+            setTimeout(() => {
+              stamp('hidden-render-probe',
+                `boot:${afterBoot} | refresh:${afterRefresh} | search:${afterSearch} | shown:${snap()}`);
+            }, 500);
+          }, 300);
+        }, 300);
+      }, 300);
+    }, 1000);
+  }
   // policylists: the Policy tab, opened once telemetry has landed.
   if (MODE.includes('policylists')) {
     setTimeout(() => openTab('policy'), 4000);
@@ -1591,5 +1710,12 @@
   if (MODE.includes('explainact')) {
     setTimeout(() => openTab('findings'), 4000);
     setTimeout(() => document.querySelector('#flags-list .finding[data-flag-id="flag-2"] .finding-actions button')?.click(), 9000);
+  }
+  // allowpathact (with explaindemo): Findings open, press flag-2's allow-path
+  // action specifically (not the first/recommended button) — proves the
+  // request served for that action, not just whichever renders first.
+  if (MODE.includes('allowpathact')) {
+    setTimeout(() => openTab('findings'), 4000);
+    setTimeout(() => document.querySelector('#flags-list .finding[data-flag-id="flag-2"] [data-action-id="allow-path"]')?.click(), 9000);
   }
 })();

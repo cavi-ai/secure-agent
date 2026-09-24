@@ -82,6 +82,13 @@ func consoleAuthorized(r *http.Request) bool {
 // one place. TestConsoleAPIPathsCoverWebApp still asserts every path the
 // console fetches is admitted — a missing path falls through to the
 // proxy-token challenge (407) and the panel dies silently.
+//
+// isConsoleAPIPath answers the PATH question only (does this route belong to
+// the console surface at all), using GET as the probe method: GET and HEAD
+// pass on every Console: true route, so this is true exactly when some
+// Console: true route matches p. serveHTTP uses it to pick the auth realm
+// (console token vs. proxy token), then separately checks
+// apiroutes.ConsoleAllowed(r.Method, p) to gate the actual method.
 func isConsoleAPIPath(p string) bool {
-	return apiroutes.ConsoleAllowed(p)
+	return apiroutes.ConsoleAllowed("GET", p)
 }

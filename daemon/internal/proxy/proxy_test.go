@@ -513,6 +513,50 @@ func TestConsoleAPIGate(t *testing.T) {
 			t.Fatalf("POST /guard/path-allow with %v: %d, want refused", hdr, code)
 		}
 	}
+	// The console token is a browser credential, not an owner one: it must
+	// not reach the owner-level DELETEs even though GET and POST on the same
+	// paths are console-admitted above.
+	del := func(path string, headers map[string]string) int {
+		req, _ := http.NewRequest("DELETE", path, nil)
+		for k, v := range headers {
+			req.Header.Set(k, v)
+		}
+		r, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.Body.Close()
+		return r.StatusCode
+	}
+	if code := del(base+"/guard/rules?agent=x&rule_id=y", map[string]string{"X-SecureAgent-Console-Token": ct}); code != http.StatusForbidden {
+		t.Fatalf("DELETE /guard/rules with console token: %d, want 403 (owner-level revoke, not the browser console)", code)
+	}
+	if code := del(base+"/guard/path-allow?agent=x&rule_id=y&path=/x", map[string]string{"X-SecureAgent-Console-Token": ct}); code != http.StatusForbidden {
+		t.Fatalf("DELETE /guard/path-allow with console token: %d, want 403 (owner-level revoke, not the browser console)", code)
+	}
+	// /mute and /allowlist DELETE are the console's own revoke buttons
+	// (app.js:2514, app.js:2602) and must stay admitted.
+	if code := del(base+"/mute?rule=x&host=y", map[string]string{"X-SecureAgent-Console-Token": ct}); code != http.StatusOK {
+		t.Fatalf("DELETE /mute with console token: %d, want 200", code)
+	}
+	if code := del(base+"/allowlist?agent=x&host=y", map[string]string{"X-SecureAgent-Console-Token": ct}); code != http.StatusOK {
+		t.Fatalf("DELETE /allowlist with console token: %d, want 200", code)
+	}
+	put := func(path string, headers map[string]string) int {
+		req, _ := http.NewRequest("PUT", path, strings.NewReader(`{}`))
+		for k, v := range headers {
+			req.Header.Set(k, v)
+		}
+		r, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.Body.Close()
+		return r.StatusCode
+	}
+	if code := put(base+"/resources/policy", map[string]string{"X-SecureAgent-Console-Token": ct}); code != http.StatusOK {
+		t.Fatalf("PUT /resources/policy with console token: %d, want 200", code)
+	}
 	// /guard/decision is the agent-facing endpoint and must never be reachable
 	// on this listener, even with the console token.
 	req, _ := http.NewRequest("POST", base+"/guard/decision", strings.NewReader(`{}`))

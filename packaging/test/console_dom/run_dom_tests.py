@@ -164,6 +164,7 @@ def main():
         dom_filedeep = dump_dom(chrome, tmp, "#file=%2FUsers%2Fdev%2F.codex%2Fsessions%2F2026%2F09%2F23%2Frollout-2026-09-23T12-53-26-demo.jsonl")
         dom_toast = dump_dom(chrome, tmp, "?toastdemo")
         dom_notify = dump_dom(chrome, tmp, "?notifydemo")
+        dom_notifyfocus = dump_dom(chrome, tmp, "?notifyfocusdemo")
         dom_allow = dump_dom(chrome, tmp, "?allowdemo")
         dom_dismiss = dump_dom(chrome, tmp, "?dismissdemo")
         dom_retriage = dump_dom(chrome, tmp, "?retriagedemo")
@@ -175,6 +176,7 @@ def main():
         dom_hashagents = dump_dom(chrome, tmp, "#agents")
         dom_hashfindings = dump_dom(chrome, tmp, "#findings")
         dom_trends = dump_dom(chrome, tmp, "?trendsprobe")
+        dom_hiddenrender = dump_dom(chrome, tmp, "?hiddenrenderprobe")
         dom_policylists = dump_dom(chrome, tmp, "?policylists")
         dom_policyempty = dump_dom(chrome, tmp, "?policylists&emptypolicy")
         dom_netfail = dump_dom(chrome, tmp, "?netfail")
@@ -206,6 +208,7 @@ def main():
         dom_export = dump_dom(chrome, tmp, "?raildemo&exportdemo")
         dom_explain = dump_dom(chrome, tmp, "?explaindemo")
         dom_explainact = dump_dom(chrome, tmp, "?explaindemo&explainact")
+        dom_allowpathact = dump_dom(chrome, tmp, "?explaindemo&allowpathact")
         dom_explainfail = dump_dom(chrome, tmp, "?explaindemo&explainact&postfail")
         dom_detailsprobe = dump_dom(chrome, tmp, "?explaindemo&detailsprobe")
         dom_fam = dump_dom(chrome, tmp, "?familiesdemo&tab=resources")
@@ -557,6 +560,9 @@ def main():
               and 'data-action="notify-scope-remove" data-rule="proxy-secret-leak" data-workspace="/Users/dev/work/prod"' in dom_notify)
         check("notify popover offers adding a workspace scope",
               'id="notify-scope-path"' in dom_notify and 'data-action="notify-scope-add"' in dom_notify)
+        nfp = pre(dom_notifyfocus, "notify-focus-probe")
+        check("notify add-scope input survives a reconcile that changes notifyCfg: same node, value and focus",
+              nfp == "same=true value=in-progress-edit focused=true probe=1", f"probe={nfp!r}")
 
         # --- connection states (the "trouble connecting" regressions) ---
         check("auth-expired shows the ended state, not 'daemon down'",
@@ -634,6 +640,21 @@ def main():
         check("Trends closed: its chart panels render 0 times through a burst, then render when opened",
               tm is not None and tm.group(1, 2, 3) == ("0", "0", "0") and all(int(x) >= 1 for x in tm.group(4, 5, 6)),
               f"probe={trends!r}")
+        # renderAll() (boot, Refresh, search) must not paint a panel that
+        # isn't on screen: absolute render count 0 for the Trends charts and
+        # the Sessions/Resources sub-view through all three, then >= 1 once
+        # each is actually shown.
+        hrp = (re.search(r'<pre id="hidden-render-probe"[^>]*>(.*?)</pre>', dom_hiddenrender, re.S) or [None, ""])[1]
+        hrp_stages = dict(re.findall(r'(boot|refresh|search|shown):((?:[a-z-]+=\d+,?)+)', hrp))
+        def hrp_zero(stage):
+            counts = dict(re.findall(r'([a-z-]+)=(\d+)', hrp_stages.get(stage, '')))
+            return len(counts) == 4 and all(v == '0' for v in counts.values())
+        def hrp_shown():
+            counts = dict(re.findall(r'([a-z-]+)=(\d+)', hrp_stages.get('shown', '')))
+            return len(counts) == 4 and all(int(v) >= 1 for v in counts.values())
+        check("hidden panels (Trends charts, Sessions/Resources) render 0 times across boot, Refresh and search, then render once shown",
+              hrp_zero('boot') and hrp_zero('refresh') and hrp_zero('search') and hrp_shown(),
+              f"probe={hrp!r}")
         def policy_rows(kind):
             block = dom_policylists.split(f'data-policy="{kind}"', 1)
             return block[1].split('</div></div></div>', 1)[0].count('class="policy-row"') if len(block) == 2 else -1
@@ -990,7 +1011,7 @@ def main():
               "cursor · web-app@main" in head and "3 s gap" in head
               and '<p class="finding-what">Cursor read AWS credentials (~/.aws/credentials), then reached Cloudflare 3 s later.</p>' in card
               and '<p class="finding-verdict">Likely benign (advisor 93 %): Cloudflare fronts the package registry this project installs from.</p>' in card
-              and buttons == [("btn-primary", "allow-host"), ("btn-ghost", "dismiss"), ("btn-danger", "kill")],
+              and buttons == [("btn-primary", "allow-host"), ("btn-ghost", "allow-path"), ("btn-ghost", "dismiss"), ("btn-danger", "kill")],
               f"buttons={buttons}")
         details = (re.search(r'<details class="finding-details">(.*?)</details>', card, re.S) or [None, ""])[1]
         check("finding card: Details is closed by default and holds the chain, pid, full address and ISO timestamp",
@@ -1006,6 +1027,11 @@ def main():
               and 'POST /flags/acknowledge' in act_reqs
               and 'data-flag-id="flag-2"' not in flags_act
               and 'class="card-note">allowlisted<' in dom_explainact, f"requests={act_reqs!r}")
+        allowpath_reqs = pre(dom_allowpathact, "mock-requests")
+        check("finding card: the allow-path action (not the first/recommended button) sends its own served request",
+              'POST /guard/path-allow body={"agent":"cursor","rule_id":"cloud-creds","path":"/Users/dev/.aws/credentials"}' in allowpath_reqs
+              and 'POST /allowlist' not in allowpath_reqs,
+              f"requests={allowpath_reqs!r}")
         fail_reqs = pre(dom_explainfail, "mock-requests")
         flags_fail = dom_explainfail.split('id="flags-list"', 1)[-1].split('id="incidents-container"', 1)[0]
         check("finding card: a failed allow puts the card back and toasts danger",

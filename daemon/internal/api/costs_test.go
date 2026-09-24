@@ -163,7 +163,7 @@ func TestCostsClassifyUnpricedCalls(t *testing.T) {
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("/costs/unpriced rows =\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
-	if !apiroutes.ConsoleAllowed("/costs/unpriced") {
+	if !apiroutes.ConsoleAllowed("GET", "/costs/unpriced") {
 		t.Fatal("/costs/unpriced must be admitted for the console")
 	}
 	for _, bad := range []string{"/costs/unpriced?since=garbage", "/costs/unpriced?until=yesterday"} {
