@@ -54,6 +54,54 @@ func TestMuteFlowAcknowledgesExistingFlags(t *testing.T) {
 	}
 }
 
+// POST /mute with an agent persists the scoped mute, acknowledges only that
+// agent's open flags, lists it with its agent, and DELETE with the agent
+// removes it.
+func TestMuteAgentRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	st, err := store.Open(dir+"/e.db", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	st.PutFlag(model.Flag{ID: "k1", Rule: "keychain-access", Severity: 1, PID: 7, Agent: "codex"})
+	st.PutFlag(model.Flag{ID: "k2", Rule: "keychain-access", Severity: 1, PID: 9, Agent: "claude"})
+	mutes := correlate.NewMuteStore(dir + "/muted.json")
+	a := newTestAPI(dir+"/d.sock", st, nil, nil)
+	a.mutes = mutes
+	h := a.buildMux()
+	do := func(method, target, body string) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest(method, target, strings.NewReader(body)))
+		return w
+	}
+
+	if w := do("POST", "/mute", `{"rule":"keychain-access","host":"*","agent":"codex"}`); w.Code != 200 || !strings.Contains(w.Body.String(), `"agent":"codex"`) {
+		t.Fatalf("mute POST: %d %s", w.Code, w.Body.String())
+	}
+	if !mutes.Muted("keychain-access", "*", "codex") || mutes.Muted("keychain-access", "*", "claude") {
+		t.Fatal("the mute must cover codex only")
+	}
+	if f, _ := st.GetFlag("k1"); !f.Acknowledged {
+		t.Fatal("codex flag must be acknowledged")
+	}
+	if f, _ := st.GetFlag("k2"); f.Acknowledged {
+		t.Fatal("claude flag must stay open")
+	}
+	if w := do("GET", "/mute", ""); !strings.Contains(w.Body.String(), `{"rule":"keychain-access","host":"*","agent":"codex","title":"Agent touched the keychain"}`) {
+		t.Fatalf("mute list = %s", w.Body.String())
+	}
+	if w := do("POST", "/mute", `{"rule":"keychain-access","host":"*","agent":"bad/agent"}`); w.Code != 400 {
+		t.Fatalf("invalid agent: %d, want 400", w.Code)
+	}
+	if w := do("DELETE", "/mute?rule=keychain-access&host=*&agent=codex", ""); w.Code != 200 {
+		t.Fatalf("mute DELETE: %d %s", w.Code, w.Body.String())
+	}
+	if len(mutes.Load()) != 0 {
+		t.Fatalf("mutes after DELETE = %+v", mutes.Load())
+	}
+}
+
 func flagFor(id, rule, evidence string) model.Flag {
 	return model.Flag{ID: id, Rule: rule, Severity: 3, PID: 7, Agent: "cursor", Evidence: model.EvidenceFromStrings(evidence)}
 }

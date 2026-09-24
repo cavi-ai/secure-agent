@@ -294,6 +294,51 @@ func recommendedID(ex *model.FlagExplain) string {
 	return ""
 }
 
+// Served mute actions carry the flag's agent in the body and name it in the
+// label; an agent-less flag keeps the every-agent mute.
+func TestExplainMuteActionsCarryAgent(t *testing.T) {
+	home := "/Users/tester"
+	pinExplainHome(t, home)
+	a := explainTestAPI(t)
+	kc := a.explainFlag(model.Flag{ID: "k1", Rule: "keychain-access", Severity: 1, PID: 999, Agent: "codex",
+		Evidence: []model.EvidenceItem{{Kind: "keychain", Label: home + "/Library/Keychains/login.keychain-db"}}}, false)
+	mute := actionByID(kc.Actions, "mute-class")
+	if mute == nil || mute.Label != "Mute keychain access for codex" || mute.Body["agent"] != "codex" || mute.Body["host"] != "*" {
+		t.Fatalf("mute-class = %+v", mute)
+	}
+	eg := a.explainFlag(model.Flag{ID: "p1", Rule: "proxy-secret-leak", Severity: 3, Agent: "claude",
+		Evidence: []model.EvidenceItem{{Kind: "violation", Label: "proxy-secret-leak:aws-key"}, {Kind: "connect", Label: "api.example.com:443"}}}, false)
+	host := actionByID(eg.Actions, "mute-rule-host")
+	if host == nil || host.Label != "Stop flagging this for api.example.com from claude" || host.Body["agent"] != "claude" || host.Body["host"] != "api.example.com" {
+		t.Fatalf("mute-rule-host = %+v", host)
+	}
+	anon := a.explainFlag(model.Flag{ID: "k2", Rule: "keychain-access", Severity: 1, PID: 999,
+		Evidence: []model.EvidenceItem{{Kind: "keychain", Label: home + "/Library/Keychains/login.keychain-db"}}}, false)
+	if m := actionByID(anon.Actions, "mute-class"); m == nil || m.Label != "Dismiss this flag class" || m.Body["agent"] != nil {
+		t.Fatalf("agent-less mute-class = %+v", m)
+	}
+}
+
+func TestExplainOmitsMuteForUnscopableAgent(t *testing.T) {
+	home := "/Users/tester"
+	pinExplainHome(t, home)
+	a := explainTestAPI(t)
+	const agent = "team/bot"
+	flags := []model.Flag{
+		{ID: "k1", Rule: "keychain-access", Severity: 1, PID: 999, Agent: agent,
+			Evidence: []model.EvidenceItem{{Kind: "keychain", Label: home + "/Library/Keychains/login.keychain-db"}}},
+		{ID: "p1", Rule: "proxy-secret-leak", Severity: 3, Agent: agent,
+			Evidence: []model.EvidenceItem{{Kind: "violation", Label: "proxy-secret-leak:aws-key"}, {Kind: "connect", Label: "api.example.com:443"}}},
+	}
+	for _, f := range flags {
+		for _, act := range a.explainFlag(f, false).Actions {
+			if act.Path == "/mute" {
+				t.Fatalf("%s: agent %q cannot scope a mute, yet %s was served with body %v", f.Rule, agent, act.ID, act.Body)
+			}
+		}
+	}
+}
+
 // 7. Actions per rule, in order, only those that apply.
 func TestExplainActions(t *testing.T) {
 	home := "/Users/tester"
@@ -497,5 +542,30 @@ func TestFlagsListStampsExplainOnFirst25Unacked(t *testing.T) {
 	}
 	if stamped != 25 {
 		t.Fatalf("snapshot stamped = %d, want 25", stamped)
+	}
+}
+
+// familyTitle title-cases only a plain harness name; an id carrying a
+// namespace ("untagged:node") is served verbatim, in the sentence too.
+func TestFamilyTitleKeepsIDs(t *testing.T) {
+	for in, want := range map[string]string{
+		"":              "Unknown",
+		"claude":        "Claude",
+		"claude-code":   "Claude-code",
+		"codex":         "Codex",
+		"untagged:node": "untagged:node",
+		"untagged:bun":  "untagged:bun",
+		"Cursor":        "Cursor",
+	} {
+		if got := familyTitle(in); got != want {
+			t.Errorf("familyTitle(%q) = %q, want %q", in, got, want)
+		}
+	}
+	a := explainTestAPI(t)
+	f := model.Flag{ID: "w-untagged", Rule: "keychain-security-cli", Severity: 3, TS: time.Now(), PID: 4242, Agent: "untagged:node",
+		Evidence: []model.EvidenceItem{{Kind: "exec", Label: "/usr/bin/security", Sub: "keychain CLI", TS: time.Now().Format(time.RFC3339)}}}
+	ex := a.explainFlag(f, false)
+	if !strings.Contains(ex.What, "untagged:node") || strings.Contains(ex.What, "Untagged") {
+		t.Fatalf("what = %q, want the agent id untagged:node verbatim", ex.What)
 	}
 }

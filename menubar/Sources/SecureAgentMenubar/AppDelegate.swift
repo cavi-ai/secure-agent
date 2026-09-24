@@ -110,8 +110,8 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificat
         if state.isPaused {
             name = "pause.shield"
         } else if state.needsAttention {
-            // unactedCriticals + unresolvedIncidents: the same predicate the
-            // hero and console use. Previously this counted raw flags and
+            // /posture state: the same verdict the hero and console use.
+            // Previously this counted raw flags and
             // incidents, so an acknowledged flag or resolved incident kept the
             // warning lit forever — the "always there no matter what" report.
             name = "exclamationmark.shield.fill"

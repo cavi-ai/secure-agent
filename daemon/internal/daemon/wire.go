@@ -381,11 +381,42 @@ type advisorStack struct {
 	Managed *exec.Cmd // nil unless advisor.managed
 }
 
+// verdictPublishingSink lets an async advisor verdict update the popover
+// immediately instead of waiting for its 30s poll: the popover now refetches
+// only on flag/posture/guard delta frames, but store.PutAdvisorVerdict
+// itself publishes nothing, so a verdict landing after the flag's own delta
+// was invisible until the timer ticked. Wrapping the sink (rather than
+// changing the store, which has no delta hub) republishes the flag — with
+// its verdict attached, the same shape the drain loop publishes — and
+// triggers a posture recompute, exactly like a fresh flag does.
+type verdictPublishingSink struct {
+	*store.Store
+	deltaHub       *api.DeltaHub
+	postureChanged func()
+}
+
+func (v *verdictPublishingSink) PutAdvisorVerdict(subjectID, kind string, verdict model.AdvisorVerdict) {
+	v.Store.PutAdvisorVerdict(subjectID, kind, verdict)
+	if kind != "flag" {
+		return
+	}
+	fl, ok := v.Store.GetFlagWithAdvisor(subjectID)
+	if !ok {
+		return
+	}
+	v.deltaHub.Publish(api.Delta{Type: "flag", Data: fl})
+	if v.postureChanged != nil {
+		v.postureChanged()
+	}
+}
+
 // setupAdvisor builds the local triage advisor: nil unless explicitly
 // enabled in config (and silently nil never happens — a misconfigured
 // endpoint logs why). In managed mode the model server is spawned here and
-// supervised alongside the subscriber in main.
-func setupAdvisor(cfg config.Config, st *store.Store) advisorStack {
+// supervised alongside the subscriber in main. deltaHub/postureChanged are
+// nil in tests that don't care about the immediate-verdict delta; the sink
+// then falls back to the bare store, matching prior behavior.
+func setupAdvisor(cfg config.Config, st *store.Store, deltaHub *api.DeltaHub, postureChanged func()) advisorStack {
 	endpoint := cfg.Advisor.Endpoint
 	model := cfg.Advisor.Model
 	var managed *exec.Cmd
@@ -397,12 +428,16 @@ func setupAdvisor(cfg config.Config, st *store.Store) advisorStack {
 		}
 		managed, endpoint, model = cmd, ep, cfg.Advisor.ManagedModel
 	}
+	var sink advisor.Sink = st
+	if deltaHub != nil {
+		sink = &verdictPublishingSink{Store: st, deltaHub: deltaHub, postureChanged: postureChanged}
+	}
 	sub := advisor.New(advisor.Config{
 		Enabled:  cfg.Advisor.Enabled,
 		Endpoint: endpoint,
 		Model:    model,
 		Timeout:  cfg.Advisor.Timeout,
-	}, st)
+	}, sink)
 	if sub != nil {
 		log.Printf("advisor: local triage enabled via %s (model %q)", endpoint, model)
 	} else if managed != nil {
@@ -842,4 +877,27 @@ func watchParentExit(initialPPID int) <-chan struct{} {
 		}
 	}()
 	return parentGone
+}
+
+// reattributeUntaggedFlags is the tagger's onTagged hook: a pid the tagger
+// just caught up with takes over its "untagged:" flags from the last hour,
+// and each relabeled flag goes out as a flag delta so the console upserts it
+// and reconciles.
+func reattributeUntaggedFlags(st *store.Store, deltas *api.DeltaHub, now func() time.Time) func(pid int32, info agents.AgentInfo) {
+	return func(pid int32, info agents.AgentInfo) {
+		since := now().Add(-time.Hour)
+		if st.ReattributeFlags(pid, info.Name, since) == 0 {
+			return
+		}
+		log.Printf("reattributed untagged flags for pid %d to %s", pid, info.Name)
+		if deltas == nil {
+			return
+		}
+		filter := store.FlagFilter{Agent: info.Name, Since: since.UTC().Format(time.RFC3339Nano), Limit: model.PatternFlagIDCap}
+		for _, fl := range st.QueryFlags(filter) {
+			if fl.PID == pid {
+				deltas.Publish(api.Delta{Type: "flag", Data: fl})
+			}
+		}
+	}
 }

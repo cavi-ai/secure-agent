@@ -464,6 +464,8 @@
   // flag-1 and flag-3 stay raw, as rows from an older daemon or past the
   // 25-flag cap do.
   if (MODE.includes('explaindemo')) {
+    // Findings is opened first, as a user must: hidden panels do not render.
+    setTimeout(() => openTab('findings'), 1500);
     const cfHost = '2606:4700::6810:84e5';
     const f2 = data['/flags'].find(f => f.id === 'flag-2');
     Object.assign(f2, {
@@ -486,6 +488,9 @@
           { id: 'allow-host', label: `Allow ${cfHost} (Cloudflare) for cursor`, recommended: true,
             consequence: `Future connections from cursor to ${cfHost} are trusted and stop being flagged.`,
             method: 'POST', path: '/allowlist', body: { agent: 'cursor', host: cfHost } },
+          { id: 'allow-path', label: 'Always allow this file for cursor',
+            consequence: 'cursor may open ~/.aws/credentials without a guard prompt; other files under the cloud-creds rule still ask.',
+            method: 'POST', path: '/guard/path-allow', body: { agent: 'cursor', rule_id: 'cloud-creds', path: '/Users/dev/.aws/credentials' } },
           { id: 'dismiss', label: 'Dismiss this flag',
             consequence: 'The flag is marked reviewed and stops counting as needing action; the rule keeps watching for the next one.',
             method: 'POST', path: '/flags/acknowledge', body: { flag_id: 'flag-2' } },
@@ -510,6 +515,8 @@
   // item for it in the codex group instead of flag items.
   const PATTERN_KEY = 'codex|keychain-access|/Users/dev/Library/Keychains/login.keychain-db';
   if (MODE.includes('patterndemo')) {
+    // Findings is opened first, as a user must: hidden panels do not render.
+    setTimeout(() => openTab('findings'), 1500);
     const kc = (id, pid, msAgo) => ({
       id, rule: 'keychain-access', severity: 2, ts: iso(msAgo), pid, agent: 'codex', session_id: 'sess-codex-9',
       title: 'Agent touched the keychain',
@@ -548,8 +555,23 @@
   if (theme === 'dark' || theme === 'light') {
     try { localStorage.setItem('sa-theme', theme); } catch { /* ignored */ }
   }
-  if (MODE.includes('tokenseed')) {
+  // Every mode but notoken runs as a tab that holds a console token (the
+  // console shows only the ended state without one).
+  if (MODE.includes('tokenseed') || !MODE.includes('notoken')) {
     try { sessionStorage.setItem('sa.console-token', 'test-token'); } catch { /* ignored */ }
+  }
+  // Policy lists (GET /guard/rules, /guard/path-allow; /mute is above).
+  data['/guard/rules'] = [
+    { id: 1, agent: 'claude', rule_id: 'env-file', decision: 'allow', source: 'prompt', created_at: '2026-09-20T10:00:00Z' },
+    { id: 2, agent: 'codex', rule_id: 'ssh-keys', decision: 'deny', source: 'onboarding', created_at: '2026-09-21T10:00:00Z' },
+  ];
+  data['/guard/path-allow'] = [
+    { agent: 'claude', rule_id: 'env-file', path: '/Users/dev/workspace/api-service/.env.example', created_at: '2026-09-22T10:00:00Z' },
+  ];
+  if (MODE.includes('emptypolicy')) {
+    data['/guard/rules'] = [];
+    data['/guard/path-allow'] = [];
+    data['/mute'] = [];
   }
   // spenddaydemo: a tab whose saved Spend view is by day over 7d (a reload).
   if (MODE.includes('spenddaydemo')) {
@@ -676,7 +698,12 @@
     if (document.body) put(); else document.addEventListener('DOMContentLoaded', put);
   };
 
+  // Every fetch the console issues is counted on <pre id="fetch-count">.
+  let fetchCount = 0;
+  stamp('fetch-count', '0');
   window.fetch = async (path, opts) => {
+    fetchCount++;
+    stamp('fetch-count', String(fetchCount));
     const p = String(path).split('?')[0];
     // Failure modes apply to API paths only (assets are served statically).
     if (MODE.includes('netfail')) {
@@ -697,13 +724,14 @@
         try { host = JSON.parse(opts.body).host; } catch { /* ignored */ }
         line += ' row=' + (document.querySelector(`#firewall-container [data-action="allowlist-remove"][data-host="${host}"]`) ? 1 : 0);
       }
-      if ((MODE.includes('explaindemo') || MODE.includes('patterndemo')) && opts.body) line += ' body=' + opts.body;
+      if ((MODE.includes('explaindemo') || MODE.includes('patterndemo') || MODE.includes('rawmute')) && opts.body) line += ' body=' + opts.body;
+      if (MODE.includes('rawmute') && p === '/mute' && opts.method === 'POST') data['/mute'].push(JSON.parse(opts.body));
       reqLog.push(line);
       stamp('mock-requests', reqLog.join('\n'));
       if (MODE.includes('resolvedemo') && p === '/incidents/status') {
         const text = id => (document.getElementById(id) || {}).textContent;
         const queued = !!document.querySelector('#attention-center [data-id="inc-20260907-6033-a1b2"]');
-        stamp('resolve-probe', `badge=${text('badge-attention-count')} tab=${text('tab-badge-findings')} queued=${queued}`);
+        stamp('resolve-probe', `badge=${text('badge-attention-count')} tab=${text('tab-badge-home')} queued=${queued}`);
       }
       // postfail: POST /allowlist answers 500 (the act-in-place revert path).
       if (MODE.includes('postfail') && p === '/allowlist') {
@@ -807,23 +835,70 @@
     }
     addEventListener(kind, fn) { (this._listeners[kind] = this._listeners[kind] || []).push(fn); }
     emit(kind, obj) { (this._listeners[kind] || []).forEach(fn => fn({ data: JSON.stringify(obj) })); }
-    close() { clearInterval(this._timer); }
+    close() { clearInterval(this._timer); this.readyState = 2; stamp('sse-state', 'closed'); }
   };
+
+  // openTab: open a view by its old or new id through the console's alias
+  // table (resolveConsoleRoute), clicking the tab and sub-view buttons a
+  // user would. The old Attention tab ('findings') also held the flags and
+  // incidents, and the old Overview the charts: those ids expand Findings
+  // history and Trends.
+  const openTab = (id) => {
+    const r = resolveConsoleRoute(id);
+    document.querySelector(`.tab-btn[data-tab="${r.tab}"]`).click();
+    if (r.sub) document.querySelector(`.subtab-btn[data-subtab="${r.sub}"]`).click();
+    const group = document.getElementById({ findings: 'home-findings', overview: 'home-trends' }[id] || '');
+    if (group && !group.open) group.open = true;
+    return r;
+  };
+
+  // Auto-action: the plain default dump (no query string, no hash — every
+  // other dump adds one or the other) is the one many checks below read for
+  // content across every tab, sub-view and Home group at once. Since
+  // renderAll() now only marks panels dirty and lets panelOnScreen gate the
+  // actual render (a hidden panel stays unrendered until shown), that
+  // single dump only has real content where a real user would: tour every
+  // view once, exactly as openTab's callers do elsewhere in this file, so
+  // each panel's dirty bit is cleared by an on-screen render before the
+  // dump. A panel's rendered DOM persists after switching away (only the
+  // `hidden` attribute toggles), so the tour then lands back on Home with
+  // both groups closed — the boot-default checks (active tab, closed
+  // groups, hidden tabpanels) read the same dump and must still see it.
+  if (location.search === '' && location.hash === '') {
+    setTimeout(() => {
+      openTab('findings');
+      openTab('overview');
+      openTab('sessions/board');
+      openTab('sessions/processes');
+      openTab('sessions/resources');
+      openTab('sessions/events');
+      openTab('sessions/worktrees');
+      openTab('egress');
+      openTab('policy');
+      openTab('home');
+      const findings = document.getElementById('home-findings');
+      const trends = document.getElementById('home-trends');
+      if (findings) findings.open = false;
+      if (trends) trends.open = false;
+    }, 1500);
+  }
 
   // Auto-action: exercise the session drill-down like a user click would.
   // sessionlinkdemo: flag-1 belongs to the durable session sess-claude-1;
   // open Findings, then click its "View session in timeline".
   if (location.search.includes('sessionlinkdemo')) {
     data['/flags'].find(f => f.id === 'flag-1').session_id = 'sess-claude-1';
-    setTimeout(() => document.querySelector('[data-tab="findings"]').click(), 4000);
+    setTimeout(() => openTab('findings'), 4000);
     setTimeout(() => document.querySelector('[data-action="filter-session"][data-session="sess-claude-1"]')?.click(), 5000);
   }
   if (location.search.includes('sessiondemo')) {
     setTimeout(() => window.filterTimelineToSession('7f3a9c21-4b2e-4a1d-9c55-2e8f0d1a3b77'), 4000);
   }
   // Auto-action: select a session in the session-first rail so the trace
-  // waterfall renders.
+  // waterfall renders. The Sessions tab is not the default, and the rail
+  // only renders on screen, so open it before selecting.
   if (location.search.includes('raildemo')) {
+    setTimeout(() => openTab('sessions'), 1500);
     setTimeout(() => window.selectSession('sess-claude-1'), 4000);
   }
   // Auto-action: Export the selected session's report into a stubbed
@@ -870,7 +945,7 @@
   // attention counts and whether the queue still lists the incident — the
   // optimistic render, before any reconciliation.
   if (MODE.includes('resolvedemo')) {
-    setTimeout(() => document.querySelector('[data-tab="findings"]').click(), 4000);
+    setTimeout(() => openTab('findings'), 4000);
     setTimeout(() => {
       document.querySelector('#incidents-container [data-action="incident-status"][data-status="resolved"]').click();
       let n = 0;
@@ -888,7 +963,7 @@
   // stickydemo: Attention tab, scroll 5000 px; <pre id="sticky-probe"> gets
   // the tablist's top, whether the posture pill shows, and its text.
   if (MODE.includes('stickydemo')) {
-    setTimeout(() => document.querySelector('[data-tab="findings"]').click(), 4000);
+    setTimeout(() => openTab('findings'), 4000);
     // Virtual time runs no frames, so the browser never dispatches the scroll
     // event a real scroll fires; dispatch it after scrolling.
     setTimeout(() => { window.scrollTo(0, 5000); window.dispatchEvent(new Event('scroll')); }, 4500);
@@ -924,11 +999,11 @@
     const bar = () => document.getElementById('scope-bar');
     const barState = () => `${bar().hidden ? 'hidden' : 'visible'}:${bar().textContent.trim()}`;
     const rows = () => document.querySelectorAll('#events-container .timeline-item').length;
-    setTimeout(() => document.querySelector('[data-tab="findings"]').click(), 4000);
+    setTimeout(() => openTab('findings'), 4000);
     setTimeout(() => document.querySelector('[data-action="filter-session"]').click(), 4500);
     setTimeout(() => {
       const onSessions = `tab=${document.querySelector('.tab-btn.active').dataset.tab} bar=${barState()}`;
-      document.querySelector('[data-tab="events"]').click();
+      openTab('events');
       setTimeout(() => {
         const scoped = rows();
         document.querySelector('#scope-bar [data-action="clear-scope"]').click();
@@ -984,12 +1059,37 @@
   if (location.search.includes('notifydemo')) {
     setTimeout(() => document.getElementById('btn-notify').click(), 4000);
   }
+  // notifyfocusdemo: typing a workspace path in the add-scope form must
+  // survive a telemetry reconcile that actually changes notifyCfg — the add
+  // form is static DOM outside the patched list, and 'notify' now holds
+  // focus (PANEL_EL) the same as any other panel.
+  if (location.search.includes('notifyfocusdemo')) {
+    setTimeout(() => {
+      openTab('policy');
+      const input = document.getElementById('notify-scope-path');
+      input.focus();
+      input.value = 'in-progress-edit';
+      input.dataset.probe = '1';
+      data['/notify/rules'] = {
+        ...data['/notify/rules'],
+        overrides: { ...(data['/notify/rules'].overrides || {}), 'keychain-access': true }
+      };
+      document.getElementById('btn-refresh').click();
+      setTimeout(() => {
+        const same = document.getElementById('notify-scope-path');
+        stamp('notify-focus-probe',
+          `same=${same === input} value=${same.value} focused=${document.activeElement === same} probe=${same.dataset.probe}`);
+      }, 2000);
+    }, 1500);
+  }
   // Auto-action: allow the suggested host — the suggestion must disappear.
   if (location.search.includes('allowdemo')) {
     setTimeout(() => document.querySelector('.fw-suggestion [data-action="allow-host"]').click(), 4000);
   }
   // Auto-action: dismiss the keychain flag — the card must leave the list.
   if (location.search.includes('dismissdemo')) {
+    // Findings is opened first, as a user must: hidden panels do not render.
+    setTimeout(() => openTab('findings'), 1500);
     setTimeout(() => document.querySelector('[data-action="dismiss-flag"][data-id="flag-3"]').click(), 4000);
   }
   // Auto-action: re-run the advisor on the first flag — the pending state
@@ -997,7 +1097,7 @@
   if (location.search.includes('retriagedemo')) {
     // Findings is opened first, as a user must: hidden panels do not render.
     setTimeout(() => {
-      document.querySelector('[data-tab="findings"]').click();
+      openTab('findings');
       document.querySelector('[data-action="retriage"][data-id="flag-1"]').click();
     }, 4000);
   }
@@ -1010,6 +1110,8 @@
   // hide entirely instead of carrying a permanently-empty placeholder.
   if (location.search.includes('nofleetdemo')) {
     data['/fleet'] = { ...data['/fleet'], fleet_configured: false };
+    // The fleet panel lives on Sessions/Processes, not the default Home tab.
+    setTimeout(() => openTab('sessions/processes'), 1500);
   }
   // spenddemo: switch the Spend card to by provider, then a full refresh
   // re-renders every panel; the probe records the select and the saved view
@@ -1071,6 +1173,8 @@
   // shows one bar for that family with its session count, and the badge
   // counts agent families (5821, 4412, 6033), not sessions or infra (7001).
   if (MODE.includes('memfamilydemo')) {
+    // Memory by family is a Trends chart, under the Home:Trends group.
+    setTimeout(() => openTab('overview'), 1500);
     for (const n of [5, 6]) {
       data['/sessions'].push({
         id: `sess-claude-${n}`, harness: 'claude', workspace: '/Users/dev/workspace/api-service',
@@ -1084,6 +1188,8 @@
   // episodes must remain visible.
   if (location.search.includes('noresourcesdemo')) {
     data['/resources'] = { ...data['/resources'], rss_bytes: 0, cpu_percent: 0, process_count: 0, session_count: 0, sessions: [] };
+    // The resource board and its flight recorder live on Sessions/Resources.
+    setTimeout(() => openTab('sessions/resources'), 1500);
   }
   // familiesdemo: the Resources board at scale — twelve families: nine agent
   // families (claude 5821 and cursor 6033 need attention; two codex runs are
@@ -1270,6 +1376,8 @@
 
   // Auto-action: demote a blocking rule — it must flip back to Promote.
   if (location.search.includes('demotedemo')) {
+    // The firewall rule list lives on the Egress tab, not the default Home tab.
+    setTimeout(() => openTab('egress'), 1500);
     setTimeout(() => document.querySelector('[data-action="demote"][data-rule="aws-key"]').click(), 4000);
   }
   // Auto-action: remove an allowlist entry — the row must leave the list.
@@ -1277,14 +1385,19 @@
     setTimeout(() => document.querySelector('[data-action="allowlist-remove"]').click(), 4000);
   }
 
-  // Quiet machine: no sessions and no agents — the rail's empty state.
+  // Quiet machine: no sessions and no agents — the rail's empty state. The
+  // Sessions tab is not active by default, and the rail only renders once
+  // it is on screen (renderAll no longer paints hidden panels), so open it.
   if (location.search.includes('quietdemo')) {
     data['/sessions'] = [];
     data['/status'] = { ...data['/status'], agents: [], trees: [] };
+    setTimeout(() => openTab('sessions'), 1500);
   }
   // Auto-action: type a filter that matches nothing — the rail must say so
-  // and offer to clear it.
+  // and offer to clear it. Sessions is not the default tab, so open it
+  // before typing: the rail only renders on screen.
   if (location.search.includes('nomatchdemo')) {
+    setTimeout(() => openTab('sessions'), 1500);
     setTimeout(() => {
       const q = document.getElementById('session-cwd-filter');
       q.value = 'no-such-repo';
@@ -1292,9 +1405,14 @@
     }, 4000);
   }
   // Auto-action: switch the claude harness pill off — its group must leave
-  // the Sessions rail and the Agents list (one shared filter state).
+  // the Sessions rail and the Agents list (one shared filter state). Both
+  // live on the Sessions tab (board and processes sub-views), not the
+  // default Home tab, so open both before the toggle click, and re-show the
+  // board (where the pill itself lives) afterward so its state renders too.
   if (location.search.includes('pilldemo')) {
+    setTimeout(() => { openTab('sessions/processes'); openTab('sessions/board'); }, 1500);
     setTimeout(() => document.querySelector('#session-harness-pills [data-action="toggle-harness"][data-harness="claude"]').click(), 4000);
+    setTimeout(() => openTab('sessions/processes'), 4300);
   }
   // Phone-width probe. Headless Chrome will not size its window below 500px,
   // so ?phonedemo frames the console in a 375px iframe. The framed copy
@@ -1303,12 +1421,14 @@
   // past the viewport, and posts it back; the result lands on
   // <body data-hscroll="sessions:N,agents:N,resources:N"> (N in px, 0 = fits).
   if (MODE.includes('phoneframe')) {
+    // Content inside a horizontal scroller (the Sessions sub-view control)
+    // is clipped by it, so the scroller's own box is what must fit.
     const measure = (tab) => {
-      document.querySelector(`[data-tab="${tab}"]`).click();
-      const panel = document.getElementById('tab-' + tab);
+      const panel = document.getElementById('tab-' + openTab(tab).tab);
       const width = document.documentElement.clientWidth;
       let past = 0;
       for (const el of [panel, ...panel.querySelectorAll('*')]) {
+        if (el.parentElement && el.parentElement.closest('.subtabs')) continue;
         const box = el.getBoundingClientRect();
         if (box.width) past = Math.max(past, box.right - width);
       }
@@ -1357,7 +1477,7 @@
     const widths = [];
     const next = () => {
       const [name, tab, sel] = probes[widths.length];
-      document.querySelector(`[data-tab="${tab}"]`).click();
+      openTab(tab);
       setTimeout(() => {
         const el = document.querySelector(sel);
         const pct = el ? el.getBoundingClientRect().width / el.parentElement.getBoundingClientRect().width * 100 : -1;
@@ -1370,7 +1490,7 @@
   }
   // Auto-action: switch to the Egress tab — panels must hide/show correctly.
   if (location.search.includes('tabdemo')) {
-    setTimeout(() => document.querySelector('[data-tab="egress"]').click(), 4000);
+    setTimeout(() => openTab('egress'), 4000);
   }
   // Auto-action: switch to a named tab once telemetry has landed, then hold
   // long enough for a screenshot — ?tab=<name> for visual QA. ?shot also
@@ -1381,7 +1501,7 @@
     const tab = params.get('tab');
     if (tab) {
       setTimeout(() => {
-        document.querySelector(`[data-tab="${tab}"]`)?.click();
+        openTab(tab);
         const bar = document.querySelector('.tabs-bar') || document.querySelector('nav.tabs');
         if (params.has('shot') && bar) {
           for (let el = bar.previousElementSibling; el; el = el.previousElementSibling) el.style.display = 'none';
@@ -1408,6 +1528,8 @@
   // Auto-action: select a session, open the resource policy editor, and add
   // its workspace as an override through the real delegated click path.
   if (location.search.includes('policydemo')) {
+    // The resource board (and its family drawer) lives on Sessions/Resources.
+    setTimeout(() => openTab('sessions/resources'), 1500);
     setTimeout(() => {
       document.querySelector('[data-action="view-family"]').click();
       document.querySelector('[data-action="edit-resource-policy"]').click();
@@ -1440,7 +1562,7 @@
   // burstdemo: Findings open, burst; <pre id="render-counts"> gets the
   // per-panel render-count delta over the burst (or "missing").
   if (MODE.includes('burstdemo')) {
-    setTimeout(() => document.querySelector('[data-tab="findings"]').click(), 4000);
+    setTimeout(() => openTab('findings'), 4000);
     setTimeout(() => {
       const before = renderCounts();
       burst();
@@ -1457,6 +1579,7 @@
   // session re-emitted three times. <pre id="mem-probe"> gets the chart-memory
   // renders in between and how many probed rows are still connected.
   if (MODE.includes('memprobe')) {
+    setTimeout(() => openTab('overview'), 3500);
     setTimeout(() => {
       const rows = Array.from(document.querySelectorAll('#chart-memory .hbar-row'));
       rows.forEach(r => { r.dataset.probe = '1'; });
@@ -1474,7 +1597,7 @@
   // railburst: Sessions open, the infra group opened and probed, then a burst
   // with session frames that change the claude group.
   if (MODE.includes('railburst')) {
-    setTimeout(() => document.querySelector('[data-tab="sessions"]').click(), 4000);
+    setTimeout(() => openTab('sessions'), 4000);
     setTimeout(() => {
       const d = document.querySelector('#session-rail details[data-harness="infra"]');
       if (d) { d.open = true; d.dataset.probe = '1'; }
@@ -1488,7 +1611,7 @@
   // focusburst: Findings open, flag-2's head button probed and focused, then a
   // burst; <pre id="focus-probe"> says whether that node kept focus.
   if (MODE.includes('focusburst')) {
-    setTimeout(() => document.querySelector('[data-tab="findings"]').click(), 4000);
+    setTimeout(() => openTab('findings'), 4000);
     setTimeout(() => {
       const card = document.querySelector('#flags-list [data-id="flag-2"]');
       const btn = card && card.closest('.flag-card').querySelector('.flag-head');
@@ -1500,7 +1623,7 @@
   // clickburst: press flag-3's Dismiss, burst, release and click the same
   // node 400ms later — a real click spans renders.
   if (MODE.includes('clickburst')) {
-    setTimeout(() => document.querySelector('[data-tab="findings"]').click(), 4000);
+    setTimeout(() => openTab('findings'), 4000);
     setTimeout(() => {
       const btn = document.querySelector('#flags-list [data-action="dismiss-flag"][data-id="flag-3"]');
       const fire = (type, Ctor) => btn && btn.dispatchEvent(new Ctor(type, { bubbles: true, cancelable: true, composed: true }));
@@ -1510,10 +1633,27 @@
       setTimeout(() => { fire('pointerup', PointerEvent); fire('mouseup', MouseEvent); fire('click', MouseEvent); }, 400);
     }, 4300);
   }
+  // rawmute: Home's Findings history open (openTab('findings')), focus the
+  // blog.example.com unmute button in its Muted ledger, then press flag-3's
+  // raw-card "Dismiss this flag class". The POST lands in the /mute fixture,
+  // so the re-render adds a codex-scoped row beside the focused one.
+  // <pre id="mute-focus-probe"> says whether focus stayed.
+  if (MODE.includes('rawmute')) {
+    setTimeout(() => openTab('findings'), 4000);
+    setTimeout(() => {
+      const un = document.querySelector('#flags-list [data-action="unmute"][data-host="blog.example.com"]');
+      if (un) { un.dataset.probe = '1'; un.focus(); }
+      const dismiss = document.querySelector('#flags-list [data-action="dismiss-flag"][data-id="flag-3"]');
+      const mute = dismiss && dismiss.closest('.flag-card').querySelector('[data-action="mute-rule"]');
+      if (mute) mute.click();
+      setTimeout(() => stamp('mute-focus-probe',
+        `${un && un.isConnected && document.activeElement === un ? 'kept' : 'lost'} rows=${document.querySelectorAll('#flags-list .mute-row').length}`), 2600);
+    }, 4300);
+  }
   // actdemo: Egress open, allow the suggested host late enough that the
   // inline note and the toast are still up at dump time (4s each).
   if (MODE.includes('actdemo')) {
-    setTimeout(() => document.querySelector('[data-tab="egress"]').click(), 4000);
+    setTimeout(() => openTab('egress'), 4000);
     setTimeout(() => document.querySelector('.fw-suggestion [data-action="allow-host"]').click(), 9000);
   }
   // detailsprobe (with explaindemo): flag-2 raised seconds ago, so its age
@@ -1522,7 +1662,7 @@
   // connected and open, and its meta before | after.
   if (MODE.includes('detailsprobe')) {
     data['/flags'].find(f => f.id === 'flag-2').ts = new Date(Date.now() - 5000).toISOString();
-    setTimeout(() => document.querySelector('[data-tab="findings"]').click(), 4000);
+    setTimeout(() => openTab('findings'), 4000);
     setTimeout(() => {
       const d = document.querySelector('#flags-list .finding[data-flag-id="flag-2"] details');
       const meta = () => (d && d.closest('.finding') ? d.closest('.finding').querySelector('.finding-meta').textContent : '');
@@ -1535,7 +1675,7 @@
   // patternact (with patterndemo): Findings open, press the pattern card's
   // dismiss-all in the Attention queue.
   if (MODE.includes('patternact')) {
-    setTimeout(() => document.querySelector('[data-tab="findings"]').click(), 4000);
+    setTimeout(() => openTab('findings'), 4000);
     setTimeout(() => document.querySelector('#attention-list .pattern-card [data-action-id="dismiss-all"]')?.click(), 9000);
   }
   // patternstream (with patterndemo): Findings open, then a third keychain
@@ -1543,7 +1683,7 @@
   // <pre id="pattern-stream-probe"> reads the Flags list 300 ms after the
   // frame (mid) and after the debounced reconcile (end).
   if (MODE.includes('patternstream')) {
-    setTimeout(() => document.querySelector('[data-tab="findings"]').click(), 4000);
+    setTimeout(() => openTab('findings'), 4000);
     setTimeout(() => {
       const f = {
         id: 'flag-8', rule: 'keychain-access', severity: 2, ts: new Date().toISOString(), pid: 40844, agent: 'codex',
@@ -1573,7 +1713,7 @@
   // panel render. <pre id="attn-probe"> says whether both survived and what
   // the group's metrics read.
   if (MODE.includes('attnkeep')) {
-    setTimeout(() => document.querySelector('[data-tab="findings"]').click(), 4000);
+    setTimeout(() => openTab('findings'), 4000);
     setTimeout(() => {
       const card = document.querySelector('#attention-list .pattern-card');
       const d = card && card.querySelector('details');
@@ -1589,11 +1729,73 @@
       }, 3600);
     }, 4500);
   }
+  // trendsprobe: Home open, Trends closed; a burst of flags and a session
+  // update lands. <pre id="trends-probe"> gets the Trends panels' render
+  // delta while closed, then after the group is opened.
+  if (MODE.includes('trendsprobe')) {
+    const trendDelta = (a, b) => ['activity', 'chart-flags', 'chart-memory']
+      .map(k => `${k}=${(b[k] || 0) - (a[k] || 0)}`).join(',');
+    setTimeout(() => {
+      const before = renderCounts();
+      burst(() => window.__sse.emit('session', { ...data['/sessions'].find(x => x.id === 'sess-claude-1') }));
+      setTimeout(() => {
+        const closed = renderCounts();
+        const open = document.getElementById('home-trends').open;
+        document.querySelector('#home-trends > summary').click();
+        setTimeout(() => stamp('trends-probe', `closed(open=${open}):${trendDelta(before, closed)} | opened:${trendDelta(closed, renderCounts())}`), 800);
+      }, 2600);
+    }, 4500);
+  }
+  // hiddenrenderprobe: renderAll() (boot, Refresh, search) must not paint a
+  // panel that isn't on screen — Home is active by default, so the Trends
+  // charts (closed group) and the Sessions/Resources sub-view stay hidden
+  // throughout. <pre id="hidden-render-probe"> reports each panel's
+  // absolute render count after boot, after Refresh, after a search, and
+  // again once each panel is actually shown.
+  if (MODE.includes('hiddenrenderprobe')) {
+    const hidden = ['activity', 'chart-flags', 'chart-memory', 'resources'];
+    const snap = () => hidden.map(k => `${k}=${(renderCounts() || {})[k] || 0}`).join(',');
+    setTimeout(() => {
+      const afterBoot = snap();
+      document.getElementById('btn-refresh').click();
+      setTimeout(() => {
+        const afterRefresh = snap();
+        const search = document.getElementById('global-search');
+        search.value = 'nothing-matches-this';
+        search.dispatchEvent(new Event('input', { bubbles: true }));
+        setTimeout(() => {
+          const afterSearch = snap();
+          // The <details> "toggle" event queues as its own task, so it must
+          // settle (and render Trends while Home is still the active tab)
+          // before switching to Sessions for the resources sub-view.
+          document.querySelector('#home-trends > summary').click();
+          setTimeout(() => {
+            openTab('sessions/resources');
+            setTimeout(() => {
+              stamp('hidden-render-probe',
+                `boot:${afterBoot} | refresh:${afterRefresh} | search:${afterSearch} | shown:${snap()}`);
+            }, 500);
+          }, 300);
+        }, 300);
+      }, 300);
+    }, 1000);
+  }
+  // policylists: the Policy tab, opened once telemetry has landed.
+  if (MODE.includes('policylists')) {
+    setTimeout(() => openTab('policy'), 4000);
+  }
   // explainact: Findings open, press flag-2's first served action (the
   // recommended allow) late enough that the inline note and the toast are
   // still up at dump time.
   if (MODE.includes('explainact')) {
-    setTimeout(() => document.querySelector('[data-tab="findings"]').click(), 4000);
+    setTimeout(() => openTab('findings'), 4000);
     setTimeout(() => document.querySelector('#flags-list .finding[data-flag-id="flag-2"] .finding-actions button')?.click(), 9000);
+  }
+  // allowpathact (with explaindemo): Findings open, press flag-2's allow-path
+  // action specifically (not the first/recommended button) — proves the
+  // request served for that action, not just whichever renders first.
+  if (MODE.includes('allowpathact')) {
+    setTimeout(() => openTab('findings'), 4000);
+    setTimeout(() => document.querySelector('#flags-list .finding[data-flag-id="flag-2"] [data-action-id="allow-path"]')?.click(), 9000);
   }
 })();

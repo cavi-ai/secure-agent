@@ -145,14 +145,7 @@ func TestMuteEndpointRoundTrip(t *testing.T) {
 	tg.Refresh()
 	cr := correlate.New(tg, sensitive.New(cfg), cfg)
 	ms := correlate.NewMuteStore(filepath.Join(dir, "muted.json"))
-	cr.SetMuteChecker(func(rule, host string) bool {
-		for _, h := range ms.Load()[rule] {
-			if h == host {
-				return true
-			}
-		}
-		return false
-	})
+	cr.SetMuteChecker(ms.Muted)
 
 	st := testStore(t)
 	a := newTestAPI(sock, st, &fakeKiller{}, func() Status { return Status{Running: true} })
@@ -269,7 +262,10 @@ func TestAllowlistListAndRemove(t *testing.T) {
 	post(http.MethodPost, `{"agent":"claude","host":"cdn.anthropic.com"}`).Body.Close()
 
 	// GET lists all three, sorted by agent then host.
-	resp, _ := cl.Get("http://unix/allowlist")
+	resp, err := cl.Get("http://unix/allowlist")
+	if err != nil {
+		t.Fatalf("GET /allowlist: %v", err)
+	}
 	var got []struct {
 		Agent string `json:"agent"`
 		Host  string `json:"host"`
@@ -282,7 +278,10 @@ func TestAllowlistListAndRemove(t *testing.T) {
 
 	// DELETE removes exactly one pair.
 	post(http.MethodDelete, `{"agent":"cursor","host":"example.com"}`).Body.Close()
-	resp2, _ := cl.Get("http://unix/allowlist")
+	resp2, err := cl.Get("http://unix/allowlist")
+	if err != nil {
+		t.Fatalf("GET /allowlist: %v", err)
+	}
 	got = nil
 	json.NewDecoder(resp2.Body).Decode(&got)
 	resp2.Body.Close()

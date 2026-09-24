@@ -20,7 +20,24 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Items inside a repository are offered for the Trash only when git ignores them and they hold no tracked files.
 - Cleanup ledger books `trash:<kind>` and `clean:<tool>` rows; totals count Trash moves apart as `trashed_bytes`.
 - `secure-agent cleanup [--kind] [--project] [--refresh] [--json]`, `cleanup trash <path>`, `cleanup clean <tool>`.
-- Console Cleanup tab (was Worktrees): a Clutter panel grouped by project (8 rows until Show more) with kind filters, Move to Trash and Run <clean command>.
+- Console Sessions › Cleanup sub-view (was Worktrees): a Clutter panel grouped by project (8 rows until Show more) with kind filters, Move to Trash and Run <clean command>.
+- `POST /mute` takes an optional `agent` that scopes the mute to that agent only.
+- `GET /mute`, `/snapshot` `mutes` and `DELETE /mute` carry the mute's `agent`.
+- Flag explanations and patterns serve `mute-class` / `mute-rule-host` with the agent in `body` and a label naming it ("Mute keychain access for codex").
+- Console Muted list shows the agent of a scoped mute.
+- Console Policy: muted flag classes show the mute's agent, or "all agents".
+- `GET /mute` rows carry `title`, the rule's human title.
+- Menu bar: the top unacted finding shows under the hero with its served title, explanation and disposition.
+- Menu bar: the finding's recommended allow host, allow path, mute or dismiss action runs from the popover.
+- Menu bar: an allow host or allow path from the popover also dismisses the finding.
+- Menu bar: a popover action runs only when its method, path and body keys match its action id.
+- Console: four tabs (Home, Sessions, Egress, Policy) replace nine.
+- Console: old tab links, menu bar deep links and saved views open the matching tab or sub-view.
+- Console Home: Needs your attention first, then Spend, then collapsed Findings history and Trends.
+- Console Sessions: Sessions, Processes, Resources, Worktrees and Events sub-views.
+- Console Policy: notification rules, guard decisions, file exceptions, muted flag classes and the policy audit.
+- Console: a load without a console token, or a revoked token, shows only "Console session ended."
+- Console: a new `#ct=` in the address bar reloads the page with that token.
 - `GET /worktrees` sizes: `size_bytes` per worktree and per repository (allocated bytes, measured in the background and cached for an hour; `sizing` while pending), `summary.size_bytes`, `summary.removable_bytes`, `volumes` (mount, total, free) and `reclaimed` totals.
 - Cleanup ledger: every worktree removal books the bytes it gave back, every prune a row; `GET /cleanup/ledger` and `secure-agent cleanup log`.
 - `POST /worktrees/remove` answers the bytes reclaimed.
@@ -119,6 +136,18 @@ All notable changes to `secure-agent` are documented here. The format follows
   per (path, rule) are collapsed.
 
 ### Changed
+- A stored advisor verdict publishes its flag as a stream delta.
+- The served allow-host label for an IPv6 address names the address owner instead of the literal.
+- Menu bar hero: state, color and subtitle come from `/posture`.
+- Menu bar: flags refetch only on `flag`, `posture`, `guard-prompt` and `guard-resolved` stream frames.
+- Menu bar: an identical flags refetch leaves the popover unchanged.
+- Menu bar: notification and mute-list titles come from the daemon.
+- The console token admits a method other than GET or HEAD only when the route lists it in `MutatingMethods` or `ConsoleMethods`.
+- `/guard/path-allow` is console-admitted on the proxy listener.
+- `POST /guard/path-allow` is a pinned-UI mutation.
+- Console finding cards offer the served allow-path action.
+- Menu bar Open console loads the fresh console link into the existing console tab before focusing it.
+- Console notification preferences moved from the header to the Policy tab.
 - `/worktrees*` routes are NoAgent: agent processes cannot read or change the machine's worktrees.
 - Console Overview: Memory by session is Memory by family — one bar per live process family, its RSS counted once, `N sessions` in the label.
 - Console Overview: the Memory by family badge counts agent families, not infra.
@@ -158,7 +187,18 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Advisor host pre-assessment skips vendor-class hosts as well as CDN carriers.
 - Advisor host pre-assessment still covers cloud, telemetry and unknown hosts.
 
+### Removed
+- Menu bar: the unused flag action, incident detail and process detail sheets.
+
 ### Fixed
+- A daemon writes `guard-cwd-overrides.json` beside its own socket.
+- A second daemon with a socket elsewhere no longer rewrites the default `guard-cwd-overrides.json` the hook reads.
+- Keychain flags from the last hour stamped `untagged:<exe>` are relabeled to the agent when the tagger tags that pid.
+- The console receives each relabeled keychain flag as a flag delta.
+- Menu bar: a lost daemon connection also clears posture and the pending guard prompt.
+- Menu bar: the Sessions header count matches the "more" overflow count.
+- The console token no longer reaches the owner-level `DELETE /guard/rules`.
+- Flag sentences and attention labels keep agent ids such as `untagged:node` as written.
 - Posture and `/doctor` report "File monitoring writer is flooding" only while the spool is still being written (within 2 min); garbage left by a removed writer no longer masks the service state. A spool whose service is not loaded shows "File monitoring is off" with the steps to enable it.
 - Secret patterns count only where the match starts a token (not after a base64 or base64url character, except a JSON `\n`, `\t` or `\r` escape): vendor-key shapes inside encrypted reasoning items and other encoded blobs no longer raise secret-in-transcript or proxy findings.
 - Endpoint detail lists an allowance whose approved parent domain covers the host.

@@ -14,7 +14,7 @@ function renderAgents() {
 
   // Infra is never counted as an agent.
   badge.textContent = agentGroups.length;
-  SA.setTabBadge('agents', agentGroups.length); // informative count, neutral styling
+  SA.setTabBadge('processes', agentGroups.length); // informative count, neutral styling
   if (pills) {
     pills.innerHTML = harnessPillsHTML(agentGroups.map(g => g.key), SA.harnessFilter.harnesses);
     applyInlineMetrics(pills);

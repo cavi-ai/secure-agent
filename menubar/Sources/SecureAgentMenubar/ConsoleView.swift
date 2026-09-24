@@ -6,9 +6,10 @@ import SwiftUI
 /// does anything need me right now" and gets out of the way. Drill-downs
 /// (agent sort, family trees, subagent nesting, flag/incident/process sheets)
 /// live in the web console — a 340×420 popover doing a work surface's job was
-/// the audited complexity. What stays: the posture hero, any collector/error
-/// banner, the pending guard decision inline, up to three session cards with
-/// a live heartbeat, and the one button that opens the console.
+/// the audited complexity. What stays: the posture hero with the top finding
+/// and its recommended action, any collector/error banner, the pending guard
+/// decision inline, up to three session cards with a live heartbeat, and the
+/// button that opens the console.
 @MainActor
 struct ConsoleView: View {
     @ObservedObject var state: AppState
@@ -46,7 +47,7 @@ struct ConsoleView: View {
                 collectorBanner(abandoned)
             }
             hero
-            if let pending = state.pendingGuard { guardDecisionCard(pending) }
+            if let pending = state.pendingGuard, state.connected { guardDecisionCard(pending) }
             if !state.agentRoots.isEmpty { sessionCards }
         }
     }
@@ -141,25 +142,36 @@ struct ConsoleView: View {
 
     // MARK: hero
 
-    /// The one-glance answer, mirroring the web console's posture banner:
-    /// Protected / Attention / Action needed (+ Disconnected). The hero IS the
-    /// action when action is needed: tapping it opens the top flag's sheet in
-    /// the console, or the egress drill-down for uninspected egress.
+    /// What the hero renders. State, color and icon come from /posture; the
+    /// flag block is the top unacted flag by served disposition.
+    struct HeroModel {
+        let icon: String
+        let color: Color
+        let title: String
+        let subtitle: String
+        let flag: FlagModel?
+        let action: AppState.HeroAction?
+
+        /// Served title, then `explain.what`, then the disposition text.
+        var flagLines: [String] {
+            guard let flag else { return [] }
+            let title = (flag.title?.isEmpty == false) ? flag.title! : flag.rule
+            return [title, flag.explain?.what ?? "", flag.explain?.disposition.text ?? ""]
+                .filter { !$0.isEmpty }
+        }
+
+        var buttonLabel: String? {
+            switch action {
+            case .perform(let a): return a.label
+            case .openConsole: return "Open in console"
+            case nil: return nil
+            }
+        }
+    }
+
     private var hero: some View {
         let m = heroModel
-        let actionable = m.action != nil
-        return Button {
-            switch m.action {
-            case .flag:
-                // Per-flag deep-links aren't part of the console URL protocol
-                // yet; open its home tab where the row is first in the list.
-                state.openDashboard(tab: "findings")
-            case .openConsole(let tab):
-                state.openDashboard(tab: tab)
-            case nil:
-                break
-            }
-        } label: {
+        return VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 12) {
                 Image(systemName: m.icon)
                     .font(.system(size: 20, weight: .semibold))
@@ -173,102 +185,116 @@ struct ConsoleView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 0)
-                if actionable {
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 9, weight: .bold))
-                        .foregroundStyle(m.color.opacity(0.7))
-                }
             }
-            .padding(12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(m.color.opacity(0.07))
-            .clipShape(RoundedRectangle(cornerRadius: 10))
-            .contentShape(Rectangle())
+            if let flag = m.flag {
+                heroFlagBlock(flag, lines: m.flagLines, action: m.action, label: m.buttonLabel)
+            }
         }
-        .buttonStyle(.plain)
-        .disabled(!actionable)
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(m.color.opacity(0.07))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
         .animation(.easeInOut(duration: 0.25), value: m.title)
     }
 
+    private func heroFlagBlock(_ flag: FlagModel, lines: [String], action: AppState.HeroAction?, label: String?) -> some View {
+        let run = state.inPlaceAction?.flagID == flag.id ? state.inPlaceAction : nil
+        let running = run?.phase == .running
+        let done = run?.phase.keepsButtonDisabled ?? false
+        return VStack(alignment: .leading, spacing: 6) {
+            ForEach(Array(lines.enumerated()), id: \.offset) { i, line in
+                Text(line)
+                    .font(.system(size: i == 0 ? 12 : 11, weight: i == 0 ? .semibold : .regular))
+                    .foregroundStyle(i == 0 ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if let action, let label, state.connected {
+                Button {
+                    switch action {
+                    case .perform(let a):
+                        Task { await state.performInPlace(a, on: flag) }
+                    case .openConsole(let tab):
+                        state.openDashboard(tab: tab)
+                    }
+                } label: {
+                    Text(label).font(.system(size: 11, weight: .semibold))
+                        .lineLimit(2).multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .buttonStyle(.borderedProminent).tint(Color.brand).controlSize(.small)
+                .disabled(running || done)
+                .help(Self.actionHelp(action))
+            }
+            if case .perform = action {
+                Button { state.openDashboard(tab: "findings") } label: {
+                    Text("Open console").font(.system(size: 10)).foregroundStyle(Color.brand)
+                }
+                .buttonStyle(.plain)
+            }
+            if let run {
+                Group {
+                    switch run.phase {
+                    case .running:
+                        Text("Working…").foregroundStyle(.secondary)
+                    case .done:
+                        Text("Done: \(run.action.label)").foregroundStyle(Color.ok)
+                    case .doneWithWarning(let message):
+                        Text(message).foregroundStyle(Color.warn)
+                    case .failed(let message):
+                        Text(message).foregroundStyle(Color.bad)
+                    }
+                }
+                .font(.system(size: 10))
+                .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    static func actionHelp(_ action: AppState.HeroAction) -> String {
+        switch action {
+        case .perform(let a): return a.consequence
+        case .openConsole: return "Open this finding in the web console"
+        }
+    }
+
     // Internal (not private) so the hero regression tests can drive it.
-    var heroModel: (icon: String, color: Color, title: String, subtitle: String, action: AppState.HeroAction?) {
+    var heroModel: HeroModel {
         if state.isPaused {
-            return ("pause.circle.fill", .secondary, "Paused",
-                    "Alerts silenced — agents still run, decisions still prompt", nil)
+            return HeroModel(icon: "pause.circle.fill", color: .secondary, title: "Paused",
+                             subtitle: "Alerts silenced — agents still run, decisions still prompt",
+                             flag: nil, action: nil)
         }
         if !state.connected {
-            return ("shield.slash", .secondary, "Disconnected",
-                    "Not monitoring — the daemon is unreachable", nil)
+            return HeroModel(icon: "shield.slash", color: .secondary, title: "Disconnected",
+                             subtitle: "Not monitoring — the daemon is unreachable",
+                             flag: nil, action: nil)
         }
-        let criticalFlags = state.unactedCriticals
-        if !state.unresolvedIncidents.isEmpty || !criticalFlags.isEmpty {
-            // Prose-first: name what happened + what to do, not counts.
-            let top = criticalFlags.first
-                ?? state.unresolvedIncidents.first.map { inc in
-                    FlagModel(id: inc.flagId, rule: inc.rule, severity: 3, ts: inc.timestamp,
-                              pid: inc.pid, agent: inc.agent, evidence: [])
-                }
-            if let top {
-                let what: String
-                switch top.rule {
-                case "sensitive-read-then-connect":
-                    what = "\(top.agent) read a sensitive file, then connected out"
-                case "proxy-secret-leak":
-                    what = "\(top.agent) sent a secret to a remote host"
-                case "keychain-access":
-                    what = "\(top.agent) opened your keychain"
-                case "keychain-security-cli":
-                    what = "\(top.agent) read keychain secrets via the CLI"
-                case "tcc-tamper":
-                    what = "\(top.agent) changed app permissions without asking"
-                case "proxy-prompt-injection":
-                    what = "a response to \(top.agent) contained an injection attempt"
-                case "secret-in-transcript":
-                    what = "Secret appeared in an agent transcript"
-                default:
-                    what = "\(top.agent) triggered \(top.rule)"
-                }
-                let advice: String
-                switch top.advisor?.suggestedAction {
-                case "allow-host": advice = "review it in the console"
-                case "mute-rule": advice = "dismiss the class in the console"
-                case "rotate-credentials": advice = "rotate the credential"
-                case "kill-agent": advice = "stop the agent"
-                default: advice = "review it in the console"
-                }
-                return ("exclamationmark.shield.fill", .bad, "Action needed",
-                        "\(what) — \(advice).", .flag(top))
-            }
-            return ("exclamationmark.shield.fill", .bad, "Action needed",
-                    "Review the flagged activity in the console.", nil)
+        let top = state.heroFlag
+        let action = top.map(AppState.heroAction(for:))
+        let summary = state.posture?.summary ?? ""
+        let subtitle = summary.isEmpty ? monitoredLine : summary
+        switch state.posture?.state ?? fallbackPostureState {
+        case "critical":
+            return HeroModel(icon: "exclamationmark.shield.fill", color: .bad, title: "Action needed",
+                             subtitle: subtitle, flag: top, action: action)
+        case "attention":
+            return HeroModel(icon: "exclamationmark.triangle.fill", color: .warn, title: "Needs a look",
+                             subtitle: subtitle, flag: top, action: action)
+        default:
+            return HeroModel(icon: "checkmark.shield.fill", color: .ok, title: "Protected",
+                             subtitle: subtitle, flag: top, action: action)
         }
-        // Unacted only: a flag the operator already reviewed/dismissed must
-        // not keep demanding attention in the hero (the "20 flags to review"
-        // that were all long-handled). Same filter as the attention section.
-        let warnFlags = state.unactedFlags.count
-        if warnFlags > 0 || state.uninspectedEgress > 0 || state.firewallWouldBlock > 0 {
-            var parts: [String] = []
-            if warnFlags > 0 { parts.append("\(warnFlags) flag\(warnFlags == 1 ? "" : "s") to review") }
-            if state.firewallWouldBlock > 0 { parts.append("\(state.firewallWouldBlock) would-block") }
-            if state.uninspectedEgress > 0 { parts.append("\(state.uninspectedEgress) uninspected") }
-            // Every count in the subtitle is clickable: flags open the top
-            // one's sheet in the console; uninspected/would-block open the
-            // egress drill-down. "If I can't click it I don't wanna see it."
-            let action: AppState.HeroAction?
-            if let topWarn = state.unactedFlags.first {
-                action = .flag(topWarn)
-            } else {
-                action = .openConsole(tab: "egress")
-            }
-            return ("exclamationmark.triangle.fill", .warn, "Attention",
-                    parts.joined(separator: " · "), action)
-        }
+    }
+
+    /// Posture state before the first /posture answer arrives.
+    private var fallbackPostureState: String {
+        if !state.unresolvedIncidents.isEmpty || !state.unactedCriticals.isEmpty { return "critical" }
+        return state.heroFlag == nil ? "all-clear" : "attention"
+    }
+
+    private var monitoredLine: String {
         let n = state.activeAgentCount
-        let procs = state.trackedProcessCount
-        let sub = procs > n
-            ? "\(n) agent\(n == 1 ? "" : "s") monitored · \(procs) processes tracked · firewall \(state.isEnforcing ? "enforcing" : "monitoring")"
-            : "\(n) agent\(n == 1 ? "" : "s") monitored · firewall \(state.isEnforcing ? "enforcing" : "monitoring")"
-        return ("checkmark.shield.fill", .ok, "Protected", sub, nil)
+        return "\(n) agent\(n == 1 ? "" : "s") monitored · firewall \(state.isEnforcing ? "enforcing" : "monitoring")"
     }
 
     // MARK: guard decision (inline consent)
@@ -331,15 +357,16 @@ struct ConsoleView: View {
     /// Up to three sessions with a live heartbeat. The full board, sorts and
     /// trees live in the console.
     private var sessionCards: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            sectionHeader("Sessions", trailing: "\(state.activeAgentCount)")
-            let rows = state.sessionBoardRows(sortedBy: .lastActivity)
+        let rows = state.sessionBoardRows(sortedBy: .lastActivity)
+        let summary = Self.sessionCardsSummary(rowCount: rows.count, maxCards: maxSessionCards)
+        return VStack(alignment: .leading, spacing: 8) {
+            sectionHeader("Sessions", trailing: "\(summary.headerCount)")
             ForEach(rows.prefix(maxSessionCards)) { row in
                 sessionCard(row)
             }
-            if rows.count > maxSessionCards {
+            if summary.overflowCount > 0 {
                 Button { state.openDashboard(tab: "sessions") } label: {
-                    Text("+ \(rows.count - maxSessionCards) more — open the console")
+                    Text("+ \(summary.overflowCount) more — open the console")
                         .font(.system(size: 10, weight: .medium))
                         .foregroundStyle(.secondary)
                         .contentShape(Rectangle())
@@ -347,6 +374,15 @@ struct ConsoleView: View {
                 .buttonStyle(.plain)
             }
         }
+    }
+
+    /// The header count and the "+N more" overflow both derive from the same
+    /// row count. Before this, the header showed `activeAgentCount` (agent
+    /// families — 43) while the overflow math used the flattened row count
+    /// (46 rows), so the two numbers on the same section disagreed whenever
+    /// a family had children.
+    static func sessionCardsSummary(rowCount: Int, maxCards: Int) -> (headerCount: Int, overflowCount: Int) {
+        (rowCount, max(0, rowCount - maxCards))
     }
 
     /// One session card: harness glyph, project@branch-ish label, elapsed,
@@ -598,5 +634,48 @@ private struct HeartbeatDot: View {
                 value: active
             )
             .help(active ? "Working — activity in the last minute" : "Idle")
+    }
+}
+
+/// Compact relative time for session cards: "14s", "3m", "2h", "5d".
+func relativeTime(_ iso: String, now: Date = Date()) -> String? {
+    guard let t = EventTime.parse(iso) else { return nil }
+    let d = Int(now.timeIntervalSince(t))
+    if d < 0 { return "now" }
+    if d < 60 { return "\(d)s" }
+    if d < 3600 { return "\(d / 60)m" }
+    if d < 86400 { return "\(d / 3600)h" }
+    return "\(d / 86400)d"
+}
+
+/// One shared parser: the daemon emits RFC3339Nano; parsing cost is paid once
+/// per row, not per style. The formatters are immutable after config, so a
+/// shared nonisolated instance is safe (the classic formatter caveat is
+/// mutation, and nothing mutates these).
+enum EventTime {
+    nonisolated(unsafe) static let rfc3339: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+
+    /// The daemon also emits plain RFC3339 (no fractional seconds) in some
+    /// paths; try both before giving up.
+    nonisolated(unsafe) static let rfc3339NoFrac: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime]
+        return f
+    }()
+
+    static func parse(_ iso: String) -> Date? {
+        rfc3339.date(from: iso) ?? rfc3339NoFrac.date(from: iso)
+    }
+}
+
+/// Memory formatting shared with the agents list.
+enum ByteCount {
+    static func short(_ bytes: UInt64?) -> String? {
+        guard let bytes, bytes > 0 else { return nil }
+        return ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .memory)
     }
 }

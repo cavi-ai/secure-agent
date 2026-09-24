@@ -444,3 +444,83 @@ func TestMatchExeNamesAgentBeforeTag(t *testing.T) {
 		t.Fatal("MatchExe(\"\") hit; want no hit")
 	}
 }
+
+func TestRefreshReportsNewlyTaggedPIDsOnce(t *testing.T) {
+	fake := fakeProcs{
+		1:   {PID: 1, PPID: 0, Comm: "launchd"},
+		999: {PID: 999, PPID: 1, Exe: "/bin/ls"},
+	}
+	c, _ := config.Load("/nonexistent")
+	tg := New(c, fake)
+	calls := map[int32]int{}
+	tg.SetOnTagged(func(pid int32, info AgentInfo) {
+		if info.PID != pid || info.Name != "claude" {
+			t.Errorf("onTagged(%d, %+v): want claude for the same pid", pid, info)
+		}
+		calls[pid]++
+	})
+
+	tg.Refresh()
+	if len(calls) != 0 {
+		t.Fatalf("a Refresh that tags nothing reported %v", calls)
+	}
+
+	fake[100] = ProcInfo{PID: 100, PPID: 1, Exe: "/usr/local/bin/claude"}
+	fake[200] = ProcInfo{PID: 200, PPID: 100, Exe: "/usr/local/bin/node"}
+	tg.Refresh()
+	tg.Refresh()
+	tg.Refresh()
+	if len(calls) != 2 || calls[100] != 1 || calls[200] != 1 {
+		t.Fatalf("onTagged calls = %v, want pid 100 and 200 once each", calls)
+	}
+}
+
+func TestOnTaggedRunsOutsideTheLock(t *testing.T) {
+	fake := fakeProcs{
+		100: {PID: 100, PPID: 1, Exe: "/usr/local/bin/claude"},
+	}
+	c, _ := config.Load("/nonexistent")
+	tg := New(c, fake)
+	var got AgentInfo
+	tg.SetOnTagged(func(pid int32, _ AgentInfo) {
+		got, _ = tg.Tag(pid) // deadlocks if the callback runs under t.mu
+	})
+	done := make(chan struct{})
+	go func() {
+		tg.Refresh()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Refresh deadlocked: onTagged ran under the tagger lock")
+	}
+	if got.Name != "claude" {
+		t.Fatalf("Tag from the callback = %+v, want claude", got)
+	}
+}
+
+func TestRefreshRetriesPreviouslyUntaggedPID(t *testing.T) {
+	fake := fakeProcs{
+		200: {PID: 200, PPID: 100, Exe: "/usr/local/bin/node"},
+	}
+	c, _ := config.Load("/nonexistent")
+	tg := New(c, fake)
+	calls := map[int32]int{}
+	tg.SetOnTagged(func(pid int32, _ AgentInfo) { calls[pid]++ })
+
+	if info, ok := tg.Tag(200); ok {
+		t.Fatalf("Tag(200) with its parent absent = %+v, want untagged", info)
+	}
+
+	fake[100] = ProcInfo{PID: 100, PPID: 1, Exe: "/usr/local/bin/claude"}
+	tg.Refresh()
+	tg.Refresh()
+	info, ok := tg.Tag(200)
+	if !ok || info.Name != "claude" {
+		t.Fatalf("Tag(200) after the parent appeared = %+v, %v, want claude", info, ok)
+	}
+	if calls[200] != 1 {
+		t.Fatalf("onTagged calls for 200 = %d, want 1", calls[200])
+	}
+}

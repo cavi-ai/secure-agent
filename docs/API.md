@@ -284,7 +284,7 @@ Returns one flag (with `title` and `advisor`) plus `explain`, the daemon's plain
 | `egress` | Every `connect` item, deduped by host:port, in evidence order. `org`/`name`/`kind` from the endpoint identity table. `allowlisted`: the host is approved for the flag's agent (exact or dot-suffix match). `gap_seconds`: connect time − read time (negative when the connection came first; `0` without a read item). |
 | `context` | The flag's session (harness, repo, branch, workspace), the same-session tool call nearest the read time within ±60 s (`tool`, `tool_status`, `tool_at`), and the nearest model call within ±60 s (`model`). Absent when the flag has no session. |
 | `disposition` | One verdict, in precedence order: `acknowledged` ("Reviewed") → `benign-likely` (advisor `benign` with confidence ≥ 0.85; "Likely benign (advisor N %)", `why` = the rationale's first sentence) → `critical` (severity ≥ 3, "Act now") → `warning` ("Needs a look"). `why` is otherwise the rule title. |
-| `actions` | In order, only those that apply: `allow-host` (per destination host not yet allowlisted), `allow-path` (env/ssh/cloud/keychain files; guard rules `env-files`, `ssh-keys`, `cloud-creds`, `keychain`), `mute-rule-host` (first destination `POST /mute` accepts — IPv6 literals are not), `mute-class` (keychain rules, `host: "*"`), `open-incident` (an incident holds the flag), `dismiss` (unacknowledged), `kill` (the pid is a live agent). Each carries the request (`method`, `path`, `body`) and a one-line `consequence`. `recommended` marks the action matching the advisor's `suggested_action` (`allow-host` → first `allow-host`; `mute-rule` → `mute-rule-host`, else `mute-class`; `kill-agent` → `kill`; `rotate-credentials` → `open-incident`). |
+| `actions` | In order, only those that apply: `allow-host` (per destination host not yet allowlisted), `allow-path` (env/ssh/cloud/keychain files; guard rules `env-files`, `ssh-keys`, `cloud-creds`, `keychain`), `mute-rule-host` (first destination `POST /mute` accepts — IPv6 literals are not), `mute-class` (keychain rules, `host: "*"`; label "Mute keychain access for <agent>"), both with the flag's `agent` in `body` when it has one, `open-incident` (an incident holds the flag), `dismiss` (unacknowledged), `kill` (the pid is a live agent). Each carries the request (`method`, `path`, `body`) and a one-line `consequence`. `recommended` marks the action matching the advisor's `suggested_action` (`allow-host` → first `allow-host`; `mute-rule` → `mute-rule-host`, else `mute-class`; `kill-agent` → `kill`; `rotate-credentials` → `open-incident`). |
 
 ---
 
@@ -353,7 +353,7 @@ Repeating findings: the flags one agent raised under one rule on one subject in 
 | `sessions`, `session_count` | Busiest 5 session ids; distinct sessions. |
 | `disposition` | Worst among unacknowledged flags (`critical` > `warning` > `benign-likely`); `acknowledged` when `unacked` is 0. |
 | `summary` | One sentence: agent, action, count, local time window, processes and sessions, cadence. No flag ids. |
-| `actions` | `explain.actions` shapes, in order, only those that apply: `allow-host` (egress subject not yet allowlisted), `mute-rule-host` (egress subject) or `mute-class` (keychain rules), `dismiss-all` (`POST /flags/acknowledge` `{"flag_ids"}`, the open ids, at most 500), `kill` (busiest live pid). `recommended`: `benign-likely` → `allow-host`, else the mute; `critical` → `kill`. |
+| `actions` | `explain.actions` shapes, in order, only those that apply: `allow-host` (egress subject not yet allowlisted), `mute-rule-host` (egress subject) or `mute-class` (keychain rules), both with the pattern's `agent` in `body`, `dismiss-all` (`POST /flags/acknowledge` `{"flag_ids"}`, the open ids, at most 500), `kill` (busiest live pid). `recommended`: `benign-likely` → `allow-host`, else the mute; `critical` → `kill`. |
 | `flag_ids` | Covered flag ids, open first, newest first, at most 500. |
 
 `/snapshot` carries `patterns` (24 h, `min` 3) next to `flags`.
@@ -486,6 +486,12 @@ Resolves a pending prompt: `{"id","verdict":"allow|deny","scope":"once|always"}`
 ### 15. `GET|DELETE /guard/rules`
 
 Lists stored guard decisions (GET); revokes one (DELETE `?agent=&rule_id=`), forcing a fresh prompt next time.
+
+`GET|POST|DELETE /guard/path-allow` lists per-path exceptions (GET), adds one (POST `{"agent","rule_id","path"}`) and revokes one (DELETE `?agent=&rule_id=&path=`).
+
+- Console-admitted on the proxy listener.
+- `POST` is a mutation: the pinned UI, or the owner uid when no UI is pinned.
+- `DELETE` stays owner-level.
 
 ### 16. `GET /costs`
 
@@ -932,11 +938,12 @@ Live feed of every stored event as `event: <kind>` / `data: <json>`, with a 15s 
 
 ### Console access on the proxy port
 
-The browser console at `http://127.0.0.1:<proxy_port>/dashboard/` fetches telemetry same-origin, i.e. from the proxy listener. That listener serves the API endpoints listed in `proxy.isConsoleAPIPath` (status/posture/flags/events/incidents/audit/fleet/firewall sources + guard pending/rules/resolve + kill + rollup + mute + allowlist(+suggestions) + `/egress/uninspected` + `/notify/rules` + advisor retriage + `/sessions/{id}/timeline` and `/sessions/{id}/report` + `/flags/{id}/explain` + this SSE stream) behind the **console token**. The whitelist is kept in lockstep with the console's fetches by `TestConsoleAPIPathsCoverWebApp` — a path the console fetches but the listener doesn't whitelist 407s and the panel dies silently, which is exactly the drift that test exists to catch:
+The browser console at `http://127.0.0.1:<proxy_port>/dashboard/` fetches telemetry same-origin, i.e. from the proxy listener. That listener serves the API endpoints listed in `proxy.isConsoleAPIPath` (status/posture/flags/events/incidents/audit/fleet/firewall sources + guard pending/rules/resolve/path-allow + kill + rollup + mute + allowlist(+suggestions) + `/egress/uninspected` + `/notify/rules` + advisor retriage + `/sessions/{id}/timeline` and `/sessions/{id}/report` + `/flags/{id}/explain` + this SSE stream) behind the **console token**. The whitelist is kept in lockstep with the console's fetches by `TestConsoleAPIPathsCoverWebApp` — a path the console fetches but the listener doesn't whitelist 407s and the panel dies silently, which is exactly the drift that test exists to catch:
 
 - Header `X-SecureAgent-Console-Token: <token>` (fetch/XHR) or `?ct=<token>` (EventSource can't set headers).
 - The token lives at `~/.config/secure-agent/console-token` (0600), distinct from the proxy token on purpose: agents routed through the proxy carry the proxy token in their environment and must not be able to read telemetry or resolve guard prompts with it.
 - `/guard/decision` is **not** served on this listener at all — it stays on the peer-attested unix socket.
+- Admission is method-aware: GET/HEAD pass on every whitelisted route, but a mutating method is admitted only when `apiroutes.Table` lists it in that route's `MutatingMethods` or `ConsoleMethods` — so the console token can drive `POST /guard/path-allow` and `DELETE /mute` but not `DELETE /guard/rules` or `DELETE /guard/path-allow`, which stay owner-level on the unix socket.
 
 Besides telemetry kinds (`file-open`, `conn-open`, `proxy-hit`, …), the stream carries the guard lifecycle:
 
@@ -1023,6 +1030,26 @@ flag class stops raising flags (silenced fires are counted in
 old rows leave the critical list. This is the recourse for noisy host-less
 rules (`keychain-access`, `keychain-security-cli`) — the console and menu bar
 expose it as "Dismiss this flag class". Reversible with `DELETE /mute`.
+
+`GET /mute` lists dispositions as `[{"rule", "host", "agent", "title"}]`,
+sorted by rule, host, then agent; `title` is the rule's human title (the rule
+id when it has none). `POST /mute` takes `{"rule", "host", "agent"}`; it
+ignores `title`.
+
+### Per-agent mutes (`agent`)
+
+```
+POST   /mute   {"rule": "keychain-access", "host": "*", "agent": "codex"}
+GET    /mute   → [{"rule": "keychain-access", "host": "*", "agent": "codex", "title": "Agent touched the keychain"}]
+DELETE /mute?rule=keychain-access&host=*&agent=codex
+```
+
+- `agent` is optional; absent or empty mutes the pair for every agent.
+- With `agent`, only that agent's hits are counted instead of flagged; other agents still flag.
+- With `agent`, `POST` acknowledges only that agent's open flags of the rule.
+- `agent` is a configured agent name or an `untagged:<exe>` label: `^[A-Za-z0-9][A-Za-z0-9_. :-]{0,127}$`.
+- `DELETE` removes the entry with the same `agent` (omit it for an every-agent mute).
+- `GET /mute` and `/snapshot` `mutes` return `agent` only for scoped mutes.
 
 ---
 

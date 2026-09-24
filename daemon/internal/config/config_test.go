@@ -215,6 +215,17 @@ func TestWriteCwdOverridesRoundTrip(t *testing.T) {
 	}
 }
 
+func TestCwdOverridesPathFollowsSocket(t *testing.T) {
+	dir := t.TempDir()
+	got := CwdOverridesPath(Config{SocketPath: filepath.Join(dir, "daemon.sock")})
+	if want := filepath.Join(dir, "guard-cwd-overrides.json"); got != want {
+		t.Fatalf("CwdOverridesPath = %q, want %q (beside the socket)", got, want)
+	}
+	if got := CwdOverridesPath(Config{}); got != DefaultCwdOverridesPath() {
+		t.Fatalf("empty socket: CwdOverridesPath = %q, want default %q", got, DefaultCwdOverridesPath())
+	}
+}
+
 func TestWriteCwdOverridesEmptyClears(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "guard-cwd-overrides.json")
 	if err := WriteCwdOverrides(p, nil); err != nil {

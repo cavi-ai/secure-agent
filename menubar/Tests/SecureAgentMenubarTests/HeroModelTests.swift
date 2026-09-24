@@ -1,16 +1,13 @@
 import XCTest
 @testable import SecureAgentMenubar
 
-/// Regression: the popover hero counted EVERY severity≥2 flag in the fetch
-/// window — including ones the operator had already reviewed/dismissed — so
-/// it read "20 flags to review" over a list where all 20 were long handled.
-/// The hero must use the same unacted filter as the attention section:
-/// acknowledged flags never demand attention again.
+/// The popover hero reads the daemon's verdict: state from /posture, the top
+/// unacted flag by served disposition, and its recommended action.
 @MainActor
 final class HeroModelTests: XCTestCase {
 
-    private func state(flags: [FlagModel], uninspected: Int = 0, wouldBlock: Int = 0) -> AppState {
-        AppState.previewFlags(flags, uninspected: uninspected, wouldBlock: wouldBlock)
+    private func state(flags: [FlagModel]) -> AppState {
+        AppState.previewFlags(flags)
     }
 
     private func flag(id: String, sev: Int, acked: Bool) -> FlagModel {
@@ -18,52 +15,124 @@ final class HeroModelTests: XCTestCase {
                   pid: 901, agent: "cursor", evidence: [], acknowledged: acked)
     }
 
+    private func served(_ id: String, sev: Int = 3, disposition: String, text: String,
+                        rec: String? = nil, acked: Bool = false) -> FlagModel {
+        let actions = ["allow-host", "dismiss"].map {
+            FlagExplainAction(id: $0, label: $0 == "allow-host" ? "Allow api.example.com for cursor" : "Dismiss",
+                              consequence: "c-\($0)", method: "POST", path: $0 == "allow-host" ? "/allowlist" : "/flags/acknowledge",
+                              body: ["agent": .string("cursor")], recommended: $0 == rec ? true : nil)
+        }
+        return FlagModel(id: id, rule: "sensitive-read-then-connect", severity: sev, ts: "", pid: 901, agent: "cursor",
+                         evidence: [], acknowledged: acked, title: "Agent read a secret, then connected out",
+                         explain: FlagExplain(what: "Cursor read a sensitive file, then reached api.example.com.",
+                                              disposition: FlagDisposition(state: disposition, text: text, why: ""),
+                                              actions: actions))
+    }
+
+    private func posture(_ state: String, _ summary: String) -> PostureModel {
+        PostureModel(state: state, needsYou: state == "all-clear" ? 0 : 1, summary: summary, connected: true)
+    }
+
     func testReviewedFlagsDoNotDemandReview() {
-        // The screenshot case: 20 sev-2 flags, ALL acknowledged → no
-        // "N flags to review" in the hero.
+        // 20 sev-2 flags, ALL acknowledged → no flag in the hero.
         let s = state(flags: (1...20).map { flag(id: "f\($0)", sev: 2, acked: true) })
         let hero = ConsoleView(state: s, scrollable: false).heroModel
         XCTAssertEqual(hero.title, "Protected")
-        XCTAssertFalse(hero.subtitle.contains("to review"), "hero lied: \(hero.subtitle)")
+        XCTAssertNil(hero.flag)
         XCTAssertNil(hero.action)
     }
 
-    func testUnactedWarningFlagCounts() {
-        let s = state(flags: [flag(id: "f1", sev: 2, acked: false),
-                              flag(id: "f2", sev: 2, acked: true)])
+    /// The reported lie: a 93 %-benign severity-3 flag read "Action needed"
+    /// while /posture and the console said attention.
+    func testBenignLikelyCriticalSeverityFollowsPosture() {
+        let s = state(flags: [served("b1", disposition: "benign-likely", text: "Likely benign (advisor 93 %)", rec: "allow-host")])
+        s.seedPostureForTesting(posture("attention", "1 item needs you — first: Finding, likely benign."))
         let hero = ConsoleView(state: s, scrollable: false).heroModel
-        XCTAssertEqual(hero.title, "Attention")
-        XCTAssertTrue(hero.subtitle.contains("1 flag to review"), "hero: \(hero.subtitle)")
-        // "N flags to review" must be clickable — the top unacted flag's sheet.
-        guard case .flag = hero.action else {
-            XCTFail("flags-to-review hero must open the top flag's action sheet")
+        XCTAssertNotEqual(hero.title, "Action needed")
+        XCTAssertEqual(hero.title, "Needs a look")
+        XCTAssertEqual(hero.color, .warn)
+        XCTAssertEqual(hero.subtitle, "1 item needs you — first: Finding, likely benign.")
+        XCTAssertEqual(hero.flag?.id, "b1")
+        XCTAssertEqual(hero.flagLines, ["Agent read a secret, then connected out",
+                                        "Cursor read a sensitive file, then reached api.example.com.",
+                                        "Likely benign (advisor 93 %)"])
+        XCTAssertEqual(hero.buttonLabel, "Allow api.example.com for cursor")
+        guard case .perform(let a) = hero.action else {
+            XCTFail("recommended allow-host must run in place")
             return
         }
+        XCTAssertEqual(a.id, "allow-host")
+        XCTAssertEqual(ConsoleView.actionHelp(hero.action!), "c-allow-host")
     }
 
-    func testUninspectedAloneStillEarnsAttention() {
-        // Zero unacted flags but a real blind spot — Attention stays, and the
-        // subtitle names only the true item. And it is CLICKABLE: the egress
-        // drill-down in the console ("if I can't click it I don't wanna see it").
-        let s = state(flags: [flag(id: "f1", sev: 2, acked: true)], uninspected: 34)
+    func testPostureCriticalStylesCritical() {
+        let s = state(flags: [served("c1", disposition: "critical", text: "Act now")])
+        s.seedPostureForTesting(posture("critical", "Agent read a secret, then connected out — act now."))
         let hero = ConsoleView(state: s, scrollable: false).heroModel
-        XCTAssertEqual(hero.title, "Attention")
-        XCTAssertEqual(hero.subtitle, "34 uninspected")
-        guard case .openConsole(let tab) = hero.action else {
-            XCTFail("uninspected hero must open the console egress tab")
+        XCTAssertEqual(hero.title, "Action needed")
+        XCTAssertEqual(hero.color, .bad)
+        XCTAssertEqual(hero.icon, "exclamationmark.shield.fill")
+        XCTAssertEqual(hero.subtitle, "Agent read a secret, then connected out — act now.")
+        XCTAssertEqual(hero.buttonLabel, "Open in console")
+    }
+
+    func testPostureAllClearIsProtected() {
+        let s = state(flags: [])
+        s.seedPostureForTesting(posture("all-clear", "All clear — agents monitored, no action needed."))
+        let hero = ConsoleView(state: s, scrollable: false).heroModel
+        XCTAssertEqual(hero.title, "Protected")
+        XCTAssertEqual(hero.color, .ok)
+        XCTAssertEqual(hero.subtitle, "All clear — agents monitored, no action needed.")
+    }
+
+    /// critical > warning > benign-likely, whatever the list order.
+    func testTopFlagByDispositionPrecedence() {
+        let s = state(flags: [served("b", disposition: "benign-likely", text: "Likely benign (advisor 90 %)"),
+                              served("w", disposition: "warning", text: "Needs a look"),
+                              served("c", sev: 2, disposition: "critical", text: "Act now"),
+                              served("a", disposition: "acknowledged", text: "Reviewed", acked: true)])
+        XCTAssertEqual(s.heroFlag?.id, "c")
+        let noCritical = state(flags: [served("b", disposition: "benign-likely", text: "x"),
+                                       served("w", disposition: "warning", text: "y")])
+        XCTAssertEqual(noCritical.heroFlag?.id, "w")
+    }
+
+    func testPickerAllowHostPerforms() {
+        guard case .perform(let a) = AppState.heroAction(for: served("f", disposition: "benign-likely", text: "x", rec: "allow-host")) else {
+            XCTFail("allow-host must perform")
             return
         }
-        XCTAssertEqual(tab, "egress")
+        XCTAssertEqual(a.id, "allow-host")
+        XCTAssertEqual(a.path, "/allowlist")
     }
 
-    func testCriticalUnactedStillEscalates() {
+    func testPickerKillOpensConsole() {
+        let kill = FlagExplainAction(id: "kill", label: "Stop cursor", consequence: "", method: "POST",
+                                     path: "/kill", body: ["pid": .int(901)], recommended: true)
+        let f = FlagModel(id: "k", rule: "proxy-secret-leak", severity: 3, ts: "", pid: 901, agent: "cursor", evidence: [],
+                          explain: FlagExplain(what: "w", disposition: FlagDisposition(state: "critical", text: "Act now", why: ""),
+                                               actions: [kill]))
+        XCTAssertEqual(AppState.heroAction(for: f), .openConsole(tab: "findings"))
+    }
+
+    func testPickerNoRecommendationOpensConsole() {
+        XCTAssertEqual(AppState.heroAction(for: served("n", disposition: "warning", text: "Needs a look")),
+                       .openConsole(tab: "findings"))
+        XCTAssertEqual(AppState.heroAction(for: flag(id: "old", sev: 3, acked: false)), .openConsole(tab: "findings"))
+    }
+
+    func testUnactedFlagWithoutPostureNeedsALook() {
+        let s = state(flags: [flag(id: "f1", sev: 2, acked: false), flag(id: "f2", sev: 2, acked: true)])
+        let hero = ConsoleView(state: s, scrollable: false).heroModel
+        XCTAssertEqual(hero.title, "Needs a look")
+        XCTAssertEqual(hero.flag?.id, "f1")
+    }
+
+    func testCriticalUnactedWithoutPostureStillEscalates() {
         let s = state(flags: [flag(id: "f1", sev: 3, acked: false)])
         let hero = ConsoleView(state: s, scrollable: false).heroModel
         XCTAssertEqual(hero.title, "Action needed")
-        guard case .flag = hero.action else {
-            XCTFail("critical hero must open the flag's action sheet")
-            return
-        }
+        XCTAssertEqual(hero.buttonLabel, "Open in console")
     }
 
     // MARK: status-icon sync
@@ -105,5 +174,23 @@ final class HeroModelTests: XCTestCase {
         let s = AppState.previewFlagsAndIncidents([], [incident("i1", status: "resolved")])
         let hero = ConsoleView(state: s, scrollable: false).heroModel
         XCTAssertEqual(hero.title, "Protected", "resolved incident must not say Action needed")
+    }
+
+    // MARK: session cards summary
+
+    /// The reported lie: the Sessions header showed `activeAgentCount` (43
+    /// agent families) while the "+N more" line counted the flattened row
+    /// list (46 rows), so the two numbers on the same section disagreed
+    /// whenever a family had children. Both now come from one row count.
+    func testSessionCardsSummaryUsesOneRowCountForBothNumbers() {
+        let summary = ConsoleView.sessionCardsSummary(rowCount: 46, maxCards: 3)
+        XCTAssertEqual(summary.headerCount, 46)
+        XCTAssertEqual(summary.overflowCount, 43)
+    }
+
+    func testSessionCardsSummaryHasNoOverflowWhenRowsFit() {
+        let summary = ConsoleView.sessionCardsSummary(rowCount: 2, maxCards: 3)
+        XCTAssertEqual(summary.headerCount, 2)
+        XCTAssertEqual(summary.overflowCount, 0)
     }
 }
