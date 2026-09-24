@@ -276,18 +276,45 @@ public final class DaemonClient: Sendable {
         _ = try await request(method: action.method, path: action.path, body: body)
     }
 
-    /// The served method and path go on a hand-written request line: only
-    /// the four HTTP verbs the API uses, and an absolute path with no space
-    /// or control character.
+    /// The exact method, path and required body keys for each in-place
+    /// action id (AppState.inPlaceActionIDs) — read off the requests
+    /// explain.go serves for each id.
+    private struct ActionShape {
+        let method: String
+        let path: String
+        let requiredBodyKeys: Set<String>
+    }
+
+    private static let actionShapes: [String: ActionShape] = [
+        "allow-host": ActionShape(method: "POST", path: "/allowlist", requiredBodyKeys: ["agent", "host"]),
+        "allow-path": ActionShape(method: "POST", path: "/guard/path-allow", requiredBodyKeys: ["agent", "rule_id", "path"]),
+        "mute-rule-host": ActionShape(method: "POST", path: "/mute", requiredBodyKeys: ["rule", "host"]),
+        "mute-class": ActionShape(method: "POST", path: "/mute", requiredBodyKeys: ["rule", "host"]),
+        "dismiss": ActionShape(method: "POST", path: "/flags/acknowledge", requiredBodyKeys: []),
+    ]
+
+    /// A served action id runs with exactly the method/path/body keys the
+    /// daemon serves for that id — never whatever method/path/body happens
+    /// to arrive on the FlagExplainAction. Without this, a malformed or
+    /// tampered action could carry any syntactically valid method and path
+    /// for an otherwise-allowed id (e.g. `dismiss` pointed at `/kill`), and
+    /// the pinned UI would send it as a confused deputy.
     static func validate(_ action: FlagExplainAction) throws {
-        guard ["GET", "POST", "DELETE", "PUT"].contains(action.method) else {
-            throw DaemonClientError.invalidAction("method \(action.method)")
+        guard let shape = actionShapes[action.id] else {
+            throw DaemonClientError.invalidAction("id \(action.id)")
         }
-        let badPath = action.path.unicodeScalars.contains {
-            $0.value <= 0x20 || $0.value == 0x7F || !$0.isASCII
+        guard action.method == shape.method, action.path == shape.path else {
+            throw DaemonClientError.invalidAction("\(action.id) must be \(shape.method) \(shape.path)")
         }
-        guard action.path.hasPrefix("/"), !badPath else {
-            throw DaemonClientError.invalidAction("path")
+        let keys: Set<String> = action.body.map { Set($0.keys) } ?? []
+        if action.id == "dismiss" {
+            guard keys.contains("flag_id") || keys.contains("flag_ids") else {
+                throw DaemonClientError.invalidAction("dismiss missing flag_id or flag_ids")
+            }
+        } else {
+            guard shape.requiredBodyKeys.isSubset(of: keys) else {
+                throw DaemonClientError.invalidAction("\(action.id) missing required body keys")
+            }
         }
     }
 

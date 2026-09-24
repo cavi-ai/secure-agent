@@ -47,7 +47,7 @@ struct ConsoleView: View {
                 collectorBanner(abandoned)
             }
             hero
-            if let pending = state.pendingGuard { guardDecisionCard(pending) }
+            if let pending = state.pendingGuard, state.connected { guardDecisionCard(pending) }
             if !state.agentRoots.isEmpty { sessionCards }
         }
     }
@@ -200,7 +200,7 @@ struct ConsoleView: View {
     private func heroFlagBlock(_ flag: FlagModel, lines: [String], action: AppState.HeroAction?, label: String?) -> some View {
         let run = state.inPlaceAction?.flagID == flag.id ? state.inPlaceAction : nil
         let running = run?.phase == .running
-        let done = run?.phase == .done
+        let done = run?.phase.keepsButtonDisabled ?? false
         return VStack(alignment: .leading, spacing: 6) {
             ForEach(Array(lines.enumerated()), id: \.offset) { i, line in
                 Text(line)
@@ -208,7 +208,7 @@ struct ConsoleView: View {
                     .foregroundStyle(i == 0 ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
                     .fixedSize(horizontal: false, vertical: true)
             }
-            if let action, let label {
+            if let action, let label, state.connected {
                 Button {
                     switch action {
                     case .perform(let a):
@@ -238,6 +238,8 @@ struct ConsoleView: View {
                         Text("Working…").foregroundStyle(.secondary)
                     case .done:
                         Text("Done: \(run.action.label)").foregroundStyle(Color.ok)
+                    case .doneWithWarning(let message):
+                        Text(message).foregroundStyle(Color.warn)
                     case .failed(let message):
                         Text(message).foregroundStyle(Color.bad)
                     }
@@ -355,15 +357,16 @@ struct ConsoleView: View {
     /// Up to three sessions with a live heartbeat. The full board, sorts and
     /// trees live in the console.
     private var sessionCards: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            sectionHeader("Sessions", trailing: "\(state.activeAgentCount)")
-            let rows = state.sessionBoardRows(sortedBy: .lastActivity)
+        let rows = state.sessionBoardRows(sortedBy: .lastActivity)
+        let summary = Self.sessionCardsSummary(rowCount: rows.count, maxCards: maxSessionCards)
+        return VStack(alignment: .leading, spacing: 8) {
+            sectionHeader("Sessions", trailing: "\(summary.headerCount)")
             ForEach(rows.prefix(maxSessionCards)) { row in
                 sessionCard(row)
             }
-            if rows.count > maxSessionCards {
+            if summary.overflowCount > 0 {
                 Button { state.openDashboard(tab: "sessions") } label: {
-                    Text("+ \(rows.count - maxSessionCards) more — open the console")
+                    Text("+ \(summary.overflowCount) more — open the console")
                         .font(.system(size: 10, weight: .medium))
                         .foregroundStyle(.secondary)
                         .contentShape(Rectangle())
@@ -371,6 +374,15 @@ struct ConsoleView: View {
                 .buttonStyle(.plain)
             }
         }
+    }
+
+    /// The header count and the "+N more" overflow both derive from the same
+    /// row count. Before this, the header showed `activeAgentCount` (agent
+    /// families — 43) while the overflow math used the flattened row count
+    /// (46 rows), so the two numbers on the same section disagreed whenever
+    /// a family had children.
+    static func sessionCardsSummary(rowCount: Int, maxCards: Int) -> (headerCount: Int, overflowCount: Int) {
+        (rowCount, max(0, rowCount - maxCards))
     }
 
     /// One session card: harness glyph, project@branch-ish label, elapsed,

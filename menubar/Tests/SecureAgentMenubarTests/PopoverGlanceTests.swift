@@ -6,7 +6,7 @@ import XCTest
 final class PopoverGlanceTests: XCTestCase {
 
     private func liveFlags() throws -> [FlagModel] {
-        try JSONDecoder().decode([FlagModel].self, from: Data(LiveFlagsFixture.json.utf8))
+        try JSONDecoder().decode([FlagModel].self, from: Data(FlagsExplainFixture.json.utf8))
     }
 
     func testLiveFlagsDecodeExplain() throws {
@@ -34,7 +34,7 @@ final class PopoverGlanceTests: XCTestCase {
 
     /// The served body goes back to the daemon byte-for-byte in meaning.
     func testServedBodyReencodesLosslessly() throws {
-        let raw = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(LiveFlagsFixture.json.utf8)) as? [[String: Any]])
+        let raw = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(FlagsExplainFixture.json.utf8)) as? [[String: Any]])
         let flags = try liveFlags()
         for (row, flag) in zip(raw, flags) {
             let rawActions = try XCTUnwrap((row["explain"] as? [String: Any])?["actions"] as? [[String: Any]])
@@ -119,13 +119,45 @@ final class PopoverGlanceTests: XCTestCase {
 
     func testPerformInPlaceSendsServedActionAndRefetches() async {
         let stub = StubDaemonClient()
-        let state = connectedState(stub)
         let f = FlagModel(id: "f1", rule: "sensitive-read-then-connect", severity: 3, ts: "", pid: 1,
                           agent: "cursor", evidence: [])
+        stub.flags = [f]
+        let state = connectedState(stub)
+        state.seedFlagsForTesting([f])
+        XCTAssertEqual(state.heroFlag?.id, "f1")
+
         await state.performInPlace(allowHost, on: f)
+
         XCTAssertEqual(stub.performed, [allowHost])
+        // allow-host mutates policy only — unlike mute/dismiss it does not
+        // close the flag on the daemon, so performInPlace must follow it
+        // with an acknowledge (matching the web console's explainAct).
+        XCTAssertEqual(stub.acknowledgedFlagIDs, ["f1"])
         XCTAssertEqual(state.inPlaceAction?.phase, .done)
         XCTAssertEqual(stub.fetchFlagsCalls, 1)
+        XCTAssertNil(state.heroFlag, "the acknowledged flag must not still demand review after the refetch")
+    }
+
+    /// allow-host's mutation can succeed while the follow-up acknowledge
+    /// fails (e.g. the daemon restarts between the two requests) — the
+    /// finding still needs a look, so the result line must say so and the
+    /// button must stay disabled rather than silently reading "Done".
+    func testPerformInPlacePartialFailureKeepsButtonDisabled() async {
+        let stub = StubDaemonClient()
+        let f = FlagModel(id: "f1", rule: "sensitive-read-then-connect", severity: 3, ts: "", pid: 1,
+                          agent: "cursor", evidence: [])
+        stub.flags = [f]
+        stub.acknowledgeError = DaemonClientError.transport("daemon restarting")
+        let state = connectedState(stub)
+        state.seedFlagsForTesting([f])
+
+        await state.performInPlace(allowHost, on: f)
+
+        XCTAssertEqual(stub.performed, [allowHost])
+        XCTAssertTrue(stub.acknowledgedFlagIDs.isEmpty)
+        XCTAssertEqual(state.inPlaceAction?.phase,
+                       .doneWithWarning("Allowed · dismiss failed: daemon unreachable (daemon restarting)"))
+        XCTAssertTrue(state.inPlaceAction?.phase.keepsButtonDisabled ?? false)
     }
 
     func testPerformInPlaceFailureReenablesWithError() async {
@@ -138,15 +170,41 @@ final class PopoverGlanceTests: XCTestCase {
         XCTAssertTrue(stub.performed.isEmpty)
     }
 
-    func testPerformRefusesUnsafeRequestLine() {
-        func action(_ method: String, _ path: String) -> FlagExplainAction {
-            FlagExplainAction(id: "x", label: "x", consequence: "", method: method, path: path)
+    /// Table-driven: perform() only trusts an id's exact served method, path
+    /// and required body keys — never whatever a malformed or tampered
+    /// action happens to carry for that id.
+    func testPerformValidatesAgainstServedActionTable() {
+        func action(id: String, method: String, path: String, body: [String: JSONValue]?) -> FlagExplainAction {
+            FlagExplainAction(id: id, label: "x", consequence: "", method: method, path: path, body: body)
         }
-        XCTAssertNoThrow(try DaemonClient.validate(action("POST", "/allowlist")))
-        XCTAssertNoThrow(try DaemonClient.validate(action("GET", "/incidents?id=inc-1-2&format=markdown")))
-        XCTAssertThrowsError(try DaemonClient.validate(action("TRACE", "/allowlist")))
-        XCTAssertThrowsError(try DaemonClient.validate(action("POST", "allowlist")))
-        XCTAssertThrowsError(try DaemonClient.validate(action("POST", "/x HTTP/1.1\r\nHost: evil")))
+
+        // dismiss targeting /kill: refused — wrong path for the id.
+        XCTAssertThrowsError(try DaemonClient.validate(action(
+            id: "dismiss", method: "POST", path: "/kill", body: ["flag_id": .string("f1")])))
+        // Right method/path, missing required key: refused.
+        XCTAssertThrowsError(try DaemonClient.validate(action(
+            id: "allow-host", method: "POST", path: "/allowlist", body: ["agent": .string("cursor")])))
+        // An id outside the served table: refused regardless of method/path.
+        XCTAssertThrowsError(try DaemonClient.validate(action(
+            id: "kill", method: "POST", path: "/kill", body: nil)))
+
+        // Each valid (id, method, path, body) pair: accepted.
+        XCTAssertNoThrow(try DaemonClient.validate(action(
+            id: "allow-host", method: "POST", path: "/allowlist",
+            body: ["agent": .string("cursor"), "host": .string("api.example.com")])))
+        XCTAssertNoThrow(try DaemonClient.validate(action(
+            id: "allow-path", method: "POST", path: "/guard/path-allow",
+            body: ["agent": .string("cursor"), "rule_id": .string("env-files"), "path": .string("/p/.env")])))
+        XCTAssertNoThrow(try DaemonClient.validate(action(
+            id: "mute-rule-host", method: "POST", path: "/mute",
+            body: ["rule": .string("keychain-access"), "host": .string("h")])))
+        XCTAssertNoThrow(try DaemonClient.validate(action(
+            id: "mute-class", method: "POST", path: "/mute",
+            body: ["rule": .string("keychain-access"), "host": .string("*")])))
+        XCTAssertNoThrow(try DaemonClient.validate(action(
+            id: "dismiss", method: "POST", path: "/flags/acknowledge", body: ["flag_id": .string("f1")])))
+        XCTAssertNoThrow(try DaemonClient.validate(action(
+            id: "dismiss", method: "POST", path: "/flags/acknowledge", body: ["flag_ids": .array([.string("f1")])])))
     }
 
     // MARK: session board memo

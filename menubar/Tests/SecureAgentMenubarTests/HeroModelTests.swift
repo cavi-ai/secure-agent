@@ -175,4 +175,22 @@ final class HeroModelTests: XCTestCase {
         let hero = ConsoleView(state: s, scrollable: false).heroModel
         XCTAssertEqual(hero.title, "Protected", "resolved incident must not say Action needed")
     }
+
+    // MARK: session cards summary
+
+    /// The reported lie: the Sessions header showed `activeAgentCount` (43
+    /// agent families) while the "+N more" line counted the flattened row
+    /// list (46 rows), so the two numbers on the same section disagreed
+    /// whenever a family had children. Both now come from one row count.
+    func testSessionCardsSummaryUsesOneRowCountForBothNumbers() {
+        let summary = ConsoleView.sessionCardsSummary(rowCount: 46, maxCards: 3)
+        XCTAssertEqual(summary.headerCount, 46)
+        XCTAssertEqual(summary.overflowCount, 43)
+    }
+
+    func testSessionCardsSummaryHasNoOverflowWhenRowsFit() {
+        let summary = ConsoleView.sessionCardsSummary(rowCount: 2, maxCards: 3)
+        XCTAssertEqual(summary.headerCount, 2)
+        XCTAssertEqual(summary.overflowCount, 0)
+    }
 }

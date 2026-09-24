@@ -31,7 +31,15 @@ final class StubDaemonClient: DaemonClientProtocol, @unchecked Sendable {
     func allowlistAdd(agent: String, host: String) async throws { }
     func guardPathAllowAdd(agent: String, ruleID: String, path: String) async throws { }
     func retriageFlag(id: String) async throws { }
-    func acknowledgeFlag(id: String) async throws { }
+    var acknowledgedFlagIDs: [String] = []
+    var acknowledgeError: Error?
+    func acknowledgeFlag(id: String) async throws {
+        if let acknowledgeError { throw acknowledgeError }
+        acknowledgedFlagIDs.append(id)
+        // Mirrors the real daemon closing the loop: the next /flags read
+        // shows the flag acknowledged.
+        flags = flags.map { $0.id == id ? $0.acknowledgedCopy() : $0 }
+    }
     func setIncidentStatus(id: String, status: String, note: String?) async throws { }
     func fetchGuardPathAllows() async throws -> [GuardPathAllowModel] { [] }
     func deleteGuardPathAllow(agent: String, ruleID: String, path: String) async throws { }
@@ -361,6 +369,16 @@ func testWorkspaceScopeBeatsRuleOverrideAndDefault() async {
         await state.performFetch()
         XCTAssertTrue(state.connected)
         XCTAssertFalse(state.flags.isEmpty)
+        // Critical posture and a pending guard: both must survive one
+        // tolerated failure and be dropped, like everything else, on the
+        // second — otherwise needsAttention can keep the critical icon lit,
+        // and the popover can keep exposing a guard mutation button, while
+        // disconnected.
+        state.seedPostureForTesting(
+            PostureModel(state: "critical", needsYou: 1, summary: "1 item needs you", connected: true),
+            pendingGuard: GuardPending(id: "g1", agent: "claude", tool: "Read", path: "/p/.env",
+                                       ruleID: "env-files", ts: "", scopeText: nil, advisor: nil))
+        XCTAssertTrue(state.needsAttention)
 
         stub.statusError = DaemonClientError.transport("daemon gone")
         await state.performFetch()
@@ -370,6 +388,8 @@ func testWorkspaceScopeBeatsRuleOverrideAndDefault() async {
         // the last-known state and the connected posture.
         XCTAssertTrue(state.connected, "a single timeout must not flip to Disconnected")
         XCTAssertNotNil(state.lastError)
+        XCTAssertNotNil(state.posture, "one tolerated failure must not drop posture")
+        XCTAssertNotNil(state.pendingGuard, "one tolerated failure must not drop the pending guard")
 
         // Second consecutive transport failure: really gone. Drop everything.
         await state.performFetch()
@@ -377,6 +397,9 @@ func testWorkspaceScopeBeatsRuleOverrideAndDefault() async {
         XCTAssertTrue(state.flags.isEmpty)
         XCTAssertTrue(state.guardRules.isEmpty)
         XCTAssertNil(state.status)
+        XCTAssertNil(state.posture)
+        XCTAssertNil(state.pendingGuard)
+        XCTAssertFalse(state.needsAttention)
         XCTAssertNotNil(state.lastError)
     }
 

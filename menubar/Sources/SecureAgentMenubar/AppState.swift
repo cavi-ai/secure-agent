@@ -382,13 +382,19 @@ public final class AppState: ObservableObject {
             self.connected = false
             // Drop ALL daemon-derived state: stale flags/incidents driving
             // the icon and console while the header says "Disconnected" is
-            // how a user kills the wrong process.
+            // how a user kills the wrong process. posture and pendingGuard
+            // are included — otherwise needsAttention can keep the critical
+            // icon lit, and the popover can keep exposing a guard mutation
+            // button, while disconnected.
             self.status = nil
             self.resources = nil
             self.flags = []
             self.incidents = []
             self.events = []
             self.guardRules = []
+            self.posture = nil
+            self.pendingGuard = nil
+            self.inPlaceAction = nil
             self.lastError = error.localizedDescription
             if wasConnected { self.scheduleTimer(5.0) }
             self.onChange?()
@@ -1219,22 +1225,59 @@ public final class AppState: ObservableObject {
 
     /// The in-place action the hero ran last and how it went.
     public struct InPlaceAction: Equatable {
-        public enum Phase: Equatable { case running, done, failed(String) }
+        public enum Phase: Equatable {
+            case running, done
+            /// The mutation succeeded but the follow-up flag acknowledge did
+            /// not — the button stays disabled (re-running the mutation
+            /// would repeat it) while the message says the finding still
+            /// needs a look.
+            case doneWithWarning(String)
+            case failed(String)
+
+            /// Whether the act button should stay disabled: true for every
+            /// terminal-success outcome, false only when the action itself
+            /// failed and is safe to retry.
+            var keepsButtonDisabled: Bool {
+                switch self {
+                case .running, .done, .doneWithWarning: return true
+                case .failed: return false
+                }
+            }
+        }
         public let flagID: String
         public let action: FlagExplainAction
         public var phase: Phase
     }
     @Published public private(set) var inPlaceAction: InPlaceAction?
 
+    /// allow-host and allow-path only mutate policy on the daemon — unlike
+    /// the web console (web_dist/app.js explainAct), they don't acknowledge
+    /// the flag they were served for. mute-rule-host, mute-class and dismiss
+    /// already close the loop server-side (POST /mute's AcknowledgeRuleHost,
+    /// POST /flags/acknowledge itself), so only these two need the follow-up.
+    static let actionsRequiringAcknowledge: Set<String> = ["allow-host", "allow-path"]
+
     /// Run a served action from the popover. The button disables while it
     /// runs; success refetches flags and posture, failure re-enables it with
-    /// the error.
+    /// the error. allow-host/allow-path additionally acknowledge the flag
+    /// after the mutation succeeds — if that fails, the mutation already
+    /// happened (retrying would repeat it), so the button stays disabled and
+    /// the result line names the partial failure.
     public func performInPlace(_ action: FlagExplainAction, on flag: FlagModel) async {
         if inPlaceAction?.phase == .running { return }
         inPlaceAction = InPlaceAction(flagID: flag.id, action: action, phase: .running)
         do {
             try await client.perform(action)
-            inPlaceAction?.phase = .done
+            if Self.actionsRequiringAcknowledge.contains(action.id) {
+                do {
+                    try await client.acknowledgeFlag(id: flag.id)
+                    inPlaceAction?.phase = .done
+                } catch {
+                    inPlaceAction?.phase = .doneWithWarning("Allowed · dismiss failed: \(error.localizedDescription)")
+                }
+            } else {
+                inPlaceAction?.phase = .done
+            }
             await lightRefresh([.flags, .posture])
         } catch {
             inPlaceAction?.phase = .failed(error.localizedDescription)

@@ -149,6 +149,12 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Menu bar: the unused flag action, incident detail and process detail sheets.
 
 ### Fixed
+- Menu bar: an allow-host or allow-path in-place action acknowledges the served flag after the mutation succeeds.
+- Menu bar: a lost daemon connection also clears posture and the pending guard prompt.
+- Advisor verdicts publish an immediate flag delta instead of waiting for the popover's poll.
+- `GET /flags/{id}/explain` allow-host label drops the IPv6 literal, matching the console.
+- Menu bar: an in-place action is validated against its exact served method, path and body keys.
+- Menu bar: the Sessions header count matches the "more" overflow count.
 - Posture and `/doctor` report "File monitoring writer is flooding" only while the spool is still being written (within 2 min); garbage left by a removed writer no longer masks the service state. A spool whose service is not loaded shows "File monitoring is off" with the steps to enable it.
 - Secret patterns count only where the match starts a token (not after a base64 or base64url character, except a JSON `\n`, `\t` or `\r` escape): vendor-key shapes inside encrypted reasoning items and other encoded blobs no longer raise secret-in-transcript or proxy findings.
 - Endpoint detail lists an allowance whose approved parent domain covers the host.
