@@ -489,7 +489,9 @@ func (c *OpenclawCollector) loadState() {
 		return
 	}
 	var st openclawState
-	if json.Unmarshal(data, &st) == nil && st.DB == c.dbPath && st.MessageID > 0 {
+	// A persisted watermark is a resume, zero included: a database seen
+	// empty before is not a first sight on the next poll.
+	if json.Unmarshal(data, &st) == nil && st.DB == c.dbPath {
 		c.watermark, c.resumed = st.MessageID, true
 	}
 }

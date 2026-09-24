@@ -314,4 +314,20 @@ func TestOpenclawFirstSightStartsAtLastDay(t *testing.T) {
 	if n != 3 || !evs[0].TS.Equal(now.Add(-30*time.Hour)) {
 		t.Fatalf("resumed poll = %d events %+v, want the turns of messages 2, 3 and 4", n, evs)
 	}
+
+	// A persisted watermark of 0 is still a resume, not a first sight: the
+	// next poll reads every message from id 0, not just the last 24h.
+	state2 := filepath.Join(t.TempDir(), "openclaw-watermark-zero.json")
+	if err := os.WriteFile(state2, []byte(fmt.Sprintf(`{"db":%q,"message_id":0}`, filepath.Join(dir, "lcm.db"))), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c3, sub3, _, _ := newTestOpenclaw(t, dir)
+	c3.now = func() time.Time { return now }
+	c3.StatePath = state2
+	c3.loadState()
+	n = c3.pollOnce()
+	evs = drainOpenclaw(sub3, n)
+	if n != 4 || !evs[0].TS.Equal(now.Add(-48*time.Hour)) {
+		t.Fatalf("resumed-at-zero poll = %d events %+v, want all 4 turns starting at message 1", n, evs)
+	}
 }

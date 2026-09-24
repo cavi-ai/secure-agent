@@ -146,6 +146,24 @@ test('eventKey prefers detail, then path, then remote_host', () => {
   assert.equal(eventKey({ ...base }), 't|1|9|');
 });
 
+test('eventKey: tool_call rows key by session + call id, so same-ts calls differ', () => {
+  const a = { ts: 't', pid: 0, kind: 12, session_id: 's1', call_id: 'c1' };
+  const b = { ts: 't', pid: 0, kind: 12, session_id: 's1', call_id: 'c2' };
+  assert.equal(eventKey(a), '12|s1|c1');
+  assert.notEqual(eventKey(a), eventKey(b));
+});
+
+test('eventKey: model_call rows key by session, ts, model and tokens, so same-ts calls with different tokens differ', () => {
+  const a = { ts: 't', pid: 0, kind: 14, session_id: 's1', model: 'claude-sonnet-4-5', tokens_in: 100, tokens_out: 10 };
+  const b = { ts: 't', pid: 0, kind: 14, session_id: 's1', model: 'claude-sonnet-4-5', tokens_in: 200, tokens_out: 10 };
+  assert.equal(eventKey(a), '14|s1|t|claude-sonnet-4-5|100|10');
+  assert.notEqual(eventKey(a), eventKey(b));
+});
+
+test('eventKey: a file_open key is unchanged', () => {
+  assert.equal(eventKey({ ts: 't', pid: 1, kind: 0, path: 'p' }), 't|1|0|p');
+});
+
 // ---------- sparkline helpers ----------
 
 test('advanceBuckets shifts in fresh zero buckets and caps at length', () => {

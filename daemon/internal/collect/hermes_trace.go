@@ -789,10 +789,11 @@ func (c *HermesCollector) loadState() {
 	}
 	var st hermesState
 	if json.Unmarshal(data, &st) == nil {
+		// Every persisted key is a resume, zero watermark included: a database
+		// seen empty before is not a first sight on the next poll (db() reads
+		// resumed from key presence, not from the watermark's value).
 		for p, wm := range st.DBs {
-			if wm > 0 {
-				c.persisted[p] = wm
-			}
+			c.persisted[p] = wm
 		}
 	}
 }

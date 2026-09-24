@@ -372,6 +372,8 @@ A model call carries `model`, `tokens_in`, `tokens_out`, `cost_usd` and `price_c
 #### Query Parameters
 - `limit` *(optional, integer)*: Maximum number of events to return (default: `50`).
 - `kind` *(optional, integer)*: Only events of this kind.
+- `pid` *(optional, integer)*: Only events for this pid; values `<= 0` are ignored.
+- `since` *(optional, string)*: Only events with `ts` at or after this timestamp.
 
 #### Request
 ```http
@@ -383,15 +385,36 @@ Host: unix
 ```json
 [
   {
-    "id": 105,
-    "type": "file_read",
+    "kind": 1,
+    "ts": "2026-08-12T19:41:59-04:00",
     "pid": 58210,
-    "process_name": "fake-cursor",
-    "path": "/Users/dev/project/.env",
-    "timestamp": "2026-08-12T19:41:59-04:00"
+    "session_id": "sess-abc123",
+    "path": "/Users/dev/project/.env"
+  },
+  {
+    "kind": 14,
+    "ts": "2026-08-12T19:42:04-04:00",
+    "pid": 0,
+    "session_id": "sess-abc123",
+    "model": "claude-sonnet-4-5",
+    "provider": "anthropic",
+    "tokens_in": 12000,
+    "tokens_out": 340,
+    "cost_usd": 0.0412,
+    "price_class": "priced"
   }
 ]
 ```
+
+| Field | Meaning |
+|---|---|
+| `kind` | Event kind: `0` open, `1` write, `2` delete, `3` exec, `5`/`6` connect open/close, `7` TCC modify, `8` plugin tool-use, `9` proxy hit, `10`/`11` guard prompt/resolved, `12` tool call, `13` turn, `14` model call. |
+| `ts`, `pid`, `session_id` | When it happened, the process, and the agent session (trace rows carry pid `0` and `session_id`). |
+| `path`, `exe_path` | File or executable path, for file and exec kinds. |
+| `remote_host`, `remote_port` | Destination, for connect kinds. |
+| `tool`, `tool_status`, `duration_ms`, `call_id` | Tool call fields (kind `12`): name, `ok`\|`error`\|`running`, start→result duration, the harness's own call id. |
+| `model`, `provider`, `tokens_in`, `tokens_out`, `cost_usd` | Model call fields (kind `14`). |
+| `price_class` | `priced`, `plan`, `local`, `unknown-model` or `unpriced-model`; computed when served, never stored. |
 
 ---
 

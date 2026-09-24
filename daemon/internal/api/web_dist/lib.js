@@ -156,7 +156,17 @@ function eventWho(e, sessions, agentName) {
   return { text: agentName ? `${agentName} · PID ${e.pid}` : `PID ${e.pid}`, title: `PID ${e.pid}`, harness: '' };
 }
 
+// eventKey: a stable identity for a rendered Events row. Trace rows (pid 0)
+// share a ts across several calls in one turn (Hermes writes them at one
+// timestamp), so the default ts|pid|kind|detail shape collapses them into
+// one row: tool_call keys on its own call id, turn and model_call key on
+// session + ts + model + tokens. Every other kind keeps the default shape.
 function eventKey(e) {
+  const k = Number(e.kind);
+  if (k === 12) return `12|${e.session_id || ''}|${e.call_id || ''}`;
+  if (k === 13 || k === 14) {
+    return `${k}|${e.session_id || ''}|${e.ts}|${e.model || ''}|${e.tokens_in || 0}|${e.tokens_out || 0}`;
+  }
   return `${e.ts}|${e.pid}|${e.kind}|${e.detail || e.path || e.remote_host || ''}`;
 }
 

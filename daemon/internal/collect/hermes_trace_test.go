@@ -387,4 +387,24 @@ func TestHermesFirstSightStartsAtLastDay(t *testing.T) {
 	if turns != 3 || !evs[0].TS.Equal(now.Add(-30*time.Hour)) {
 		t.Fatalf("resumed poll = %+v, want the turns of messages 2, 3 and 4", evs)
 	}
+
+	// A persisted watermark of 0 is still a resume, not a first sight: the
+	// next poll reads every message from id 0, not just the last 24h.
+	if err := os.WriteFile(state, []byte(fmt.Sprintf(`{"dbs":{%q:0}}`, filepath.Join(root, "state.db"))), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c3, sub3, _, _ := newTestHermes(t, root)
+	c3.now = func() time.Time { return now }
+	c3.StatePath = state
+	n = c3.pollOnce()
+	evs = drainOpenclaw(sub3, n)
+	turns = 0
+	for _, e := range evs {
+		if e.Kind == event.KindTurn {
+			turns++
+		}
+	}
+	if turns != 4 || !evs[0].TS.Equal(now.Add(-48*time.Hour)) {
+		t.Fatalf("resumed-at-zero poll = %+v, want all 4 turns starting at message 1", evs)
+	}
 }
