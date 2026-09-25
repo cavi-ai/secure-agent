@@ -230,6 +230,8 @@ def main():
         dom_drawerback = dump_dom(chrome, tmp, "?drawerbackdemo")
         dom_wt = dump_dom(chrome, tmp, "?tab=worktrees")
         dom_wtremove = dump_dom(chrome, tmp, "?tab=worktrees&worktreedemo")
+        dom_wtorphan = dump_dom(chrome, tmp, "?tab=worktrees&orphandemo")
+        dom_wtorphantrash = dump_dom(chrome, tmp, "?tab=worktrees&orphandemo&orphantrash")
         dom_wtremoving = dump_dom(chrome, tmp, "?tab=worktrees&worktreedemo&removerunning")
         dom_wtremovefail = dump_dom(chrome, tmp, "?tab=worktrees&worktreedemo&removefaildemo")
         dom_wtsizing = dump_dom(chrome, tmp, "?tab=worktrees&sizingdemo")
@@ -1337,6 +1339,17 @@ def main():
               and "<b>Reclaimed</b> 4.5 GB over 4 cleanups" in dom_wtremove and "<b>Removable</b> 0 B" in dom_wtremove
               and "wt-removal" not in wtr,
               f"requests={wt_reqs!r} rows={wtr_rows}")
+        wto = wt_block(dom_wtorphan)
+        check("worktrees: a missing repository's folders are listed first with the reason and Open folder / Move to Trash",
+              wto.index('/Users/dev/gone-app') < wto.index('/Users/dev/workspace/api-service')
+              and 'repository not found (moved or deleted) — the folders below still point to it' in wto
+              and 'data-action="worktree-reveal" data-path="/Users/dev/.cursor/worktrees/gone-app/ctnj">Open folder</button>' in wto
+              and 'data-action="worktree-trash-orphan"' in wto
+              and "1 folder still points to it (listed first below)" in dom_wtorphan)
+        wtot = wt_block(dom_wtorphantrash)
+        check("worktrees: Move to Trash on an orphan posts /worktrees/trash after the dialog and the group and its error leave",
+              "POST /worktrees/trash" in pre(dom_wtorphantrash, "mock-requests")
+              and "gone-app" not in wtot and "1 folder still points to it" not in dom_wtorphantrash)
         wtg = wt_block(dom_wtremoving)
         check("worktrees: while a removal runs its row shows the step and Remove is disabled",
               '<p class="wt-removal wt-removal-running" role="status"><b>Removing…</b> deleting</p>' in wtg

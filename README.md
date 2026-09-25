@@ -359,6 +359,7 @@ The Go daemon listens on a local Unix domain socket (`~/.config/secure-agent/dae
 | `/worktrees/repos` | `POST` | Add a repository to the worktree hunter's saved list, or hide it (`{"path": "...", "hidden": true}`). |
 | `/worktrees/remove` | `POST` | Remove a worktree whose fresh verdict is `remove` (`{"path": "..."}`), or prune missing ones (`{"repo": "...", "prune": true}`). |
 | `/worktrees/advise` | `POST` | Ask the local advisor for a note on one worktree (`{"path": "..."}`); advisory only. |
+| `/worktrees/reveal`, `/worktrees/reconnect`, `/worktrees/trash` | `POST` | For a folder whose repository moved or was deleted: open it in Finder, link it again with `git worktree repair`, or move it to the Trash. |
 | `/cleanup/ledger` | `GET` | What cleanups removed and the bytes each gave back, with all-time and 30-day totals. |
 | `/cleanup` | `GET` | `.tmp` and `.quarantine` folders, build output, tool and app caches: size, last touched, project, how to clear. |
 | `/cleanup/trash`, `/cleanup/clean` | `POST` | Move one item to the Trash, or run a tool cache's own clean command. |

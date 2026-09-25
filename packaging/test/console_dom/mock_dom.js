@@ -607,6 +607,13 @@
     if (p === '/cleanup/trash') {
       return { status: 'ok', result: { bytes: 1048576, trash_path: '/Users/dev/.Trash/.tmp' } };
     }
+    if (p === '/worktrees/trash') {
+      const rep = data['/worktrees'];
+      for (const r of rep.repos) r.worktrees = r.worktrees.filter(w => w.path !== body.path);
+      rep.repos = rep.repos.filter(r => !r.error || r.worktrees.length);
+      rep.errors = (rep.errors || []).filter(e => rep.repos.some(r => e.startsWith(r.path + ': ')));
+      return { status: 'ok', result: { path: body.path, bytes: 52428800, trash_path: '/Users/dev/.Trash/ctnj' } };
+    }
     if (p === '/worktrees/remove') {
       // The daemon removes in the background: running now, the outcome
       // lands in GET /worktrees removals (removerunning: never finishes;
@@ -1412,6 +1419,31 @@
         }
       }, 100);
     }, 4000);
+  }
+  // orphandemo: a repository that moved away leaves a folder pointing at it;
+  // orphantrash moves the folder to the Trash from its row.
+  if (MODE.includes('orphandemo')) {
+    const rep = data['/worktrees'];
+    rep.repos.push({ path: '/Users/dev/gone-app', error: 'repository not found (moved or deleted)', size_bytes: 0, worktrees: [
+      { path: '/Users/dev/.cursor/worktrees/gone-app/ctnj', state: 'review', orphan: true, reasons: ['directory is not registered with git; its files are the only copy'] },
+    ] });
+    rep.errors = ['/Users/dev/gone-app: repository not found (moved or deleted); 1 folder still points to it (listed first below)'];
+    if (MODE.includes('orphantrash')) {
+      setTimeout(() => {
+        const btn = document.querySelector('#worktrees-container [data-action="worktree-trash-orphan"]');
+        if (btn) btn.click();
+        let n = 0;
+        const iv = setInterval(() => {
+          const ok = document.getElementById('confirm-ok');
+          if (ok && ok.closest('#confirm-layer') && !ok.closest('#confirm-layer').hidden) {
+            ok.click();
+            clearInterval(iv);
+          } else if (++n > 20) {
+            clearInterval(iv);
+          }
+        }, 100);
+      }, 4000);
+    }
   }
   // refreshdemo: the first /worktrees and /cleanup answer from an old cached
   // scan while the daemon rescans; the tab must re-read until it lands.
