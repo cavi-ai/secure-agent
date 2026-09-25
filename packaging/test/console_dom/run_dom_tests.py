@@ -230,6 +230,8 @@ def main():
         dom_drawerback = dump_dom(chrome, tmp, "?drawerbackdemo")
         dom_wt = dump_dom(chrome, tmp, "?tab=worktrees")
         dom_wtremove = dump_dom(chrome, tmp, "?tab=worktrees&worktreedemo")
+        dom_wtremoving = dump_dom(chrome, tmp, "?tab=worktrees&worktreedemo&removerunning")
+        dom_wtremovefail = dump_dom(chrome, tmp, "?tab=worktrees&worktreedemo&removefaildemo")
         dom_wtsizing = dump_dom(chrome, tmp, "?tab=worktrees&sizingdemo")
         dom_wtrefresh = dump_dom(chrome, tmp, "?tab=worktrees&refreshdemo")
         dom_clutter = dump_dom(chrome, tmp, "?tab=worktrees&clutterdemo")
@@ -1330,10 +1332,21 @@ def main():
         wtr = wt_block(dom_wtremove)
         wtr_rows = wtr.count('class="wt-row')
         wt_reqs = pre(dom_wtremove, "mock-requests")
-        check("worktrees: Remove posts /worktrees/remove after the dialog and drops the row in place",
+        check("worktrees: Remove starts a background removal after the dialog; when it lands the row leaves and the totals move",
               "POST /worktrees/remove" in wt_reqs and ".worktrees/done" not in wtr and wtr_rows == 3
-              and "<b>Reclaimed</b> 4.5 GB over 4 cleanups" in dom_wtremove and "<b>Removable</b> 0 B" in dom_wtremove,
+              and "<b>Reclaimed</b> 4.5 GB over 4 cleanups" in dom_wtremove and "<b>Removable</b> 0 B" in dom_wtremove
+              and "wt-removal" not in wtr,
               f"requests={wt_reqs!r} rows={wtr_rows}")
+        wtg = wt_block(dom_wtremoving)
+        check("worktrees: while a removal runs its row shows the step and Remove is disabled",
+              '<p class="wt-removal wt-removal-running" role="status"><b>Removing…</b> deleting</p>' in wtg
+              and '<button type="button" class="btn btn-danger btn-sm" disabled="">Removing…</button>' in wtg
+              and 'data-action="worktree-remove"' not in wtg)
+        wtf = wt_block(dom_wtremovefail)
+        check("worktrees: a failed removal keeps the row with the error as text and offers Try again",
+              '.worktrees/done' in wtf
+              and '<p class="wt-removal wt-removal-failed" role="alert"><b>Removal failed:</b> git worktree: &lt;b&gt;fatal&lt;/b&gt; could not remove' in wtf
+              and '>Try again</button>' in wtf)
 
         if args.screenshot:
             shot_dir = os.path.abspath(args.screenshot)
