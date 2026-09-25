@@ -15,7 +15,7 @@ for (const f of ['lib.js', 'tab-worktrees.js']) {
   vm.runInContext(readFileSync(path.join(webDist, f), 'utf8'), ctx, { filename: f });
 }
 const { worktreeStateCounts, worktreeGroups, worktreeRowHTML, worktreeGroupHTML, worktreePathLabel, worktreeFilterHTML, worktreesSummaryText, worktreeDiskHTML, worktreeSizeLabel, fmtDisk,
-  clutterGroups, clutterItemHTML, clutterGroupHTML, clutterPillsHTML, clutterSummaryText } = ctx;
+  clutterGroups, clutterItemHTML, clutterGroupHTML, clutterPillsHTML, clutterSummaryText, removalBatchSummary } = ctx;
 
 const REPO = '/Users/x/code/app';
 const report = () => ({
@@ -238,6 +238,29 @@ test('orphans: a missing repository comes first with its error; its folders offe
   assert.ok(a.includes(`data-action="worktree-trash-orphan" data-path="${lost}">Move to Trash</button>`));
   assert.ok(!a.includes('worktree-reconnect') && !a.includes('worktree-ask') && !a.includes('worktree-advise'));
   assert.ok(b.includes(`data-action="worktree-reconnect" data-path="${moved}" data-repo="/new/app">Reconnect</button>`));
+});
+
+test('Remove all: offered for two or more removable rows with count and size; running removals do not count', () => {
+  const rep = report();
+  const repo = rep.repos[0];
+  const one = worktreeGroupHTML({ repo, rows: repo.worktrees });
+  assert.ok(!one.includes('worktree-remove-all'));
+  const done = repo.worktrees.find(w => w.state === 'remove');
+  repo.worktrees.push({ ...done, path: REPO + '/.worktrees/old', size_bytes: 1073741824 }, { ...done, path: REPO + '/.worktrees/older', size_bytes: 1073741824 });
+  done.size_bytes = 1073741824;
+  const three = worktreeGroupHTML({ repo, rows: repo.worktrees });
+  assert.ok(three.includes(`data-action="worktree-remove-all" data-repo="${repo.path}">Remove all 3 · 3.0 GB</button>`));
+  const running = worktreeGroupHTML({ repo, rows: repo.worktrees }, {}, {}, { [done.path]: { state: 'running' } });
+  assert.ok(running.includes('>Remove all 2 · 2.0 GB</button>'));
+});
+
+test('removalBatchSummary: nothing while one runs, then counts, bytes and failures', () => {
+  const paths = ['/a', '/b', '/c'];
+  assert.equal(removalBatchSummary(paths, { '/a': { state: 'removed', bytes: 1073741824 }, '/b': { state: 'running' }, '/c': { state: 'removed' } }), '');
+  assert.equal(removalBatchSummary(paths, { '/a': { state: 'removed', bytes: 1073741824 }, '/b': { state: 'removed', bytes: 1073741824 }, '/c': { state: 'removed' } }),
+    'Removed 3 of 3 worktrees — 2.0 GB reclaimed');
+  assert.equal(removalBatchSummary(paths, { '/a': { state: 'removed', bytes: 1073741824 }, '/b': { state: 'failed' }, '/c': { state: 'removed' } }),
+    'Removed 2 of 3 worktrees — 1.0 GB reclaimed; 1 not removed, see its row');
 });
 
 test('agent asks: status line under the row, escaped; Ask the agent disabled while one runs', () => {
