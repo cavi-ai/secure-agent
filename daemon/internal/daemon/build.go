@@ -215,6 +215,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 	asker := agentask.New(st, "")
 	sysAgent := sysagent.New(st, filepath.Join(filepath.Dir(cfg.Firewall.Registry.SaltRef), "sysagent"), sysAgentMask(fw.Engine))
 	sysAgent.SetConfig(cfg.SystemAgent)
+	sysAgent.Recover()
 	apiServer := api.New(api.Deps{
 		SocketPath:            cfg.SocketPath,
 		Store:                 st,

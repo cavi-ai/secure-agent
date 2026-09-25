@@ -46,7 +46,7 @@ func (a *Agent) Dispatch(ctx context.Context, in DispatchInput) (model.SysAgentR
 	if !ok {
 		return model.SysAgentRun{}, ErrNotFound
 	}
-	if p.Status == "running" {
+	if a.planRunning(p) {
 		return model.SysAgentRun{}, fmt.Errorf("%w: plan %d is running", ErrBusy, p.ID)
 	}
 	if in.Mode != "" {
@@ -63,6 +63,11 @@ func (a *Agent) Dispatch(ctx context.Context, in DispatchInput) (model.SysAgentR
 	}
 	if fi, err := os.Stat(p.Workdir); err != nil || !fi.IsDir() {
 		return model.SysAgentRun{}, fmt.Errorf("%w: the folder %s does not exist", ErrInvalid, p.Workdir)
+	}
+	// A headless harness is sandboxed to its folder; / would scope it to
+	// the whole disk.
+	if p.Mode == ModeHeadless && p.Workdir == string(filepath.Separator) {
+		return model.SysAgentRun{}, fmt.Errorf("%w: a headless run needs a folder narrower than /; pick one, or open it in a terminal", ErrInvalid)
 	}
 	h, _ := harnessByID(p.Harness)
 	info := probe(ctx, a.client, cfg.Endpoint)

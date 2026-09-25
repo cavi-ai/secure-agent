@@ -16,6 +16,10 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Console: shows the posture banner capped at 3 rows off Home and empty on Home, agent ids in their own case, Egress led by the uninspected endpoints with zero-hit rules folded into one row, and Processes at full width.
 
 ### Added
+- System agent (opt-in, `system_agent` in config.yaml, applied live): a chat with a model on the local Ollama that proposes work for Claude Code, Codex, OpenClaw or Hermes Agent and dispatches it — headless in a folder or in a Terminal window — against the same Ollama. Harnesses keep their own sandbox and approvals; a proposal whose harness cannot run yet is saved as a plan with the reason. See `docs/SYSTEM_AGENT.md`.
+- Seven built-in skills for the system agent: `ssh`, `git`, `signing`, `claude`, `codex`, `openclaw`, `hermes`.
+- `/agent/status`, `/agent/skills`, `/agent/chat`, `/agent/plans`, `/agent/dispatch`, `/agent/runs` (console-admitted, NoAgent). Text is masked by the firewall before it is stored or sent to the model; a secret that cannot be masked is refused.
+- Console: an Agent tab — conversation, a Route to dropdown and folder, Save as plan, proposals with Run headless / Open in terminal, plans with why a harness cannot run, runs with their output and command.
 - Console Cleanup view: Remove all on a repository with two or more removable worktrees (count and size on the button); one dialog, each removal checked again by the daemon, each row shows its steps, one line when the batch ends.
 - Worktree folders whose repository moved or was deleted: `POST /worktrees/reveal` (Finder), `POST /worktrees/reconnect` (`git worktree repair` in the repository that still records the folder, named in the row's `reconnect`), `POST /worktrees/trash` (Trash on its volume, booked as `trash:orphan-worktree`).
 - Console Cleanup view: a missing repository's group comes first with "the folders below still point to it"; its folders offer Open folder, Reconnect (when a repository still records them) and Move to Trash.

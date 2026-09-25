@@ -978,6 +978,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const AGENT_POLL_LIMIT = 1200;
   const AGENT_TIMEOUT_MS = 15000;
   const agentState = { status: null, chat: null, plans: null, runs: null, skills: null, error: '', polls: 0, lastCount: 0 };
+  // Literal paths: the proxy's console allow-list test reads them from here.
+  const AGENT_PATHS = { status: '/agent/status', chat: '/agent/chat', plans: '/agent/plans', runs: '/agent/runs' };
   let agentPollTimer = null;
   const agentComposer = document.getElementById('agent-composer');
   const agentInput = document.getElementById('agent-input');
@@ -1003,7 +1005,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const want = parts || ['status', 'chat', 'plans', 'runs'];
     const wasBusy = agentBusy();
     try {
-      const got = await Promise.all(want.map(p => agentFetch('/agent/' + p)));
+      const got = await Promise.all(want.map(p => agentFetch(AGENT_PATHS[p])));
       want.forEach((p, i) => { agentState[p] = got[i]; });
       agentState.error = '';
       if (want.includes('status')) fillAgentHarnesses();

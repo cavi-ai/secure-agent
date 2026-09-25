@@ -343,7 +343,7 @@ func (a *Agent) SavePlan(in PlanInput) (model.SysAgentPlan, error) {
 		if !ok {
 			return p, ErrNotFound
 		}
-		if old.Status == "running" {
+		if a.planRunning(old) {
 			return p, fmt.Errorf("%w: plan %d is running", ErrBusy, in.ID)
 		}
 		p = old
@@ -465,7 +465,7 @@ func (a *Agent) DeletePlan(id int64) error {
 	if !ok {
 		return ErrNotFound
 	}
-	if p.Status == "running" {
+	if a.planRunning(p) {
 		return fmt.Errorf("%w: plan %d is running", ErrBusy, id)
 	}
 	a.st.DeleteSysAgentPlan(id)
@@ -479,6 +479,32 @@ func knownHarness(id string) string {
 		return id
 	}
 	return ""
+}
+
+// planRunning reports whether p's headless run is in flight in this
+// process (a "running" status left by a stopped daemon is not).
+func (a *Agent) planRunning(p model.SysAgentPlan) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return p.Status == "running" && a.running != 0 && a.running == p.RunID
+}
+
+// Recover closes runs and plans a stopped daemon left "running": their
+// outcome was never recorded. Call once at start, before serving.
+func (a *Agent) Recover() {
+	fin := a.now()
+	for _, r := range a.st.SysAgentRuns(1000) {
+		if r.Status == "running" {
+			r.Status, r.FinishedAt, r.Detail = "failed", &fin, "the daemon stopped during the run; its outcome was not recorded"
+			a.st.PutSysAgentRun(r)
+		}
+	}
+	for _, p := range a.st.SysAgentPlans(1000) {
+		if p.Status == "running" {
+			p.Status = "failed"
+			a.st.PutSysAgentPlan(p)
+		}
+	}
 }
 
 // Chatting reports whether a reply is being written.

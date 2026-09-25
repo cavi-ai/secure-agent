@@ -395,6 +395,9 @@ func TestDispatchUnavailableKeepsThePlan(t *testing.T) {
 	if _, err := a.Dispatch(context.Background(), DispatchInput{PlanID: p.ID, Workdir: "/does/not/exist"}); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("missing folder: %v", err)
 	}
+	if _, err := a.Dispatch(context.Background(), DispatchInput{PlanID: p.ID, Workdir: "/"}); !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "narrower than /") {
+		t.Fatalf("headless in /: %v", err)
+	}
 	if _, err := a.SavePlan(PlanInput{Harness: "claude", Mode: ModeHeadless, Workdir: "rel", Task: "t"}); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("relative folder: %v", err)
 	}
@@ -434,5 +437,30 @@ func TestComposeTask(t *testing.T) {
 	if strings.HasPrefix(got, "-") || !strings.Contains(got, "Work in /w.") || !strings.Contains(got, "1. one") ||
 		!strings.Contains(got, "<skill id=\"ssh\">") || !strings.Contains(got, "Never print, copy or send secret values") {
 		t.Fatalf("task = %s", got)
+	}
+}
+
+// A daemon that stopped mid-run leaves a "running" plan and run; the next
+// start closes both and the plan can be dispatched and deleted again.
+func TestRecoverClosesRunsAStoppedDaemonLeft(t *testing.T) {
+	ol := newFakeOllama(t, "0.15.1", "qwen3")
+	a, st := testAgent(t, ol.URL, nil)
+	p, err := a.SavePlan(PlanInput{Harness: "codex", Mode: ModeHeadless, Workdir: t.TempDir(), Task: "t"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runID := st.PutSysAgentRun(model.SysAgentRun{PlanID: p.ID, Harness: "codex", Status: "running"})
+	p.Status, p.RunID = "running", runID
+	st.PutSysAgentPlan(p)
+	if err := a.DeletePlan(p.ID); err != nil {
+		t.Fatalf("a run that is not in flight here must not block the plan: %v", err)
+	}
+	p.ID = st.PutSysAgentPlan(model.SysAgentPlan{Harness: "codex", Mode: ModeHeadless, Workdir: "/tmp", Task: "t", Status: "running", RunID: runID})
+	a.Recover()
+	if runs := st.SysAgentRuns(5); runs[0].Status != "failed" || runs[0].FinishedAt == nil || !strings.Contains(runs[0].Detail, "daemon stopped") {
+		t.Fatalf("runs = %+v", runs)
+	}
+	if got, _ := st.GetSysAgentPlan(p.ID); got.Status != "failed" {
+		t.Fatalf("plan = %+v", got)
 	}
 }
