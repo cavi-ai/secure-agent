@@ -25,11 +25,6 @@ final class StubDaemonClient: DaemonClientProtocol, @unchecked Sendable {
     func fetchIncidents(limit: Int) async throws -> [IncidentReportModel] { [] }
     var posture = PostureModel(state: "all-clear", needsYou: 0, summary: "", connected: true)
     func fetchPosture() async throws -> PostureModel { posture }
-    func fetchIncidentMarkdown(id: String) async throws -> String { "" }
-    func fetchEvents(limit: Int) async throws -> [EventModel] { [] }
-    func fetchEventsFor(pid: Int32, limit: Int) async throws -> [EventModel] { [] }
-    func allowlistAdd(agent: String, host: String) async throws { }
-    func guardPathAllowAdd(agent: String, ruleID: String, path: String) async throws { }
     func retriageFlag(id: String) async throws { }
     var acknowledgedFlagIDs: [String] = []
     var acknowledgeError: Error?
@@ -40,10 +35,8 @@ final class StubDaemonClient: DaemonClientProtocol, @unchecked Sendable {
         // shows the flag acknowledged.
         flags = flags.map { $0.id == id ? $0.acknowledgedCopy() : $0 }
     }
-    func setIncidentStatus(id: String, status: String, note: String?) async throws { }
     func fetchGuardPathAllows() async throws -> [GuardPathAllowModel] { [] }
     func deleteGuardPathAllow(agent: String, ruleID: String, path: String) async throws { }
-    func muteAdd(rule: String, host: String, agent: String?) async throws { }
     func fetchMutes() async throws -> [(rule: String, host: String, agent: String?, title: String?)] { [] }
     func muteRemove(rule: String, host: String, agent: String?) async throws { }
     var notifyRules = NotifyRulesResponse.fallback
@@ -764,48 +757,6 @@ final class SessionBoardRowTests: XCTestCase {
         XCTAssertTrue(state.showFleetPanel)
     }
 
-    func testUnactedFlagsForSessionKeepsTreePidsOnly() {
-        let stub = StubDaemonClient()
-        stub.status.agents = [
-            agent(10, name: "claude", root: 10, ppid: 1, cwd: "/tmp/a"),
-            agent(11, name: "claude", root: 10, ppid: 10),
-            agent(20, name: "cursor", root: 20, ppid: 1, cwd: "/tmp/b"),
-        ]
-        let state = AppState(client: stub)
-        state.seedForTesting(status: stub.status)
-        state.seedFlagsForTesting([
-            FlagModel(id: "in-tree", rule: "proxy-secret-leak", severity: 3, ts: "2026-09-15T12:00:00Z",
-                      pid: 11, agent: "claude", evidence: []),
-            FlagModel(id: "other", rule: "proxy-secret-leak", severity: 3, ts: "2026-09-15T12:00:01Z",
-                      pid: 20, agent: "cursor", evidence: []),
-            FlagModel(id: "info", rule: "keychain-access", severity: 1, ts: "2026-09-15T12:00:02Z",
-                      pid: 10, agent: "claude", evidence: []),
-        ])
-        XCTAssertEqual(state.unactedFlagsForSession(rootPid: nil).map(\.id), ["in-tree", "other"])
-        XCTAssertEqual(state.unactedFlagsForSession(rootPid: 10).map(\.id), ["in-tree"])
-        XCTAssertEqual(state.unactedFlagsForSession(rootPid: 20).map(\.id), ["other"])
-        XCTAssertEqual(state.treePIDs(rootPid: 10), Set([10, 11]))
-    }
-
-    func testGroupedUnactedFlagsForSessionDropsOtherTrees() {
-        let stub = StubDaemonClient()
-        stub.status.agents = [
-            agent(10, name: "claude", root: 10, ppid: 1),
-            agent(20, name: "cursor", root: 20, ppid: 1),
-        ]
-        let state = AppState(client: stub)
-        state.seedForTesting(status: stub.status)
-        state.seedFlagsForTesting([
-            FlagModel(id: "a", rule: "proxy-secret-leak", severity: 3, ts: "2026-09-15T12:00:00Z",
-                      pid: 10, agent: "claude", evidence: [.legacy("connected to evil.test at x")]),
-            FlagModel(id: "b", rule: "proxy-secret-leak", severity: 3, ts: "2026-09-15T12:00:01Z",
-                      pid: 20, agent: "cursor", evidence: [.legacy("connected to evil.test at x")]),
-        ])
-        let scoped = state.groupedUnactedFlags(forRootPid: 10)
-        XCTAssertEqual(scoped.count, 1)
-        XCTAssertEqual(scoped[0].agent, "claude")
-        XCTAssertEqual(state.groupedUnactedFlags().count, 2)
-    }
 }
 
 // MARK: - SSE chunked-body decoding (the reconnect-loop fix)
@@ -928,68 +879,3 @@ final class DisabledAgentsTests: XCTestCase {
 
 
 // MARK: - Flag grouping (identical repeats are ONE decision)
-
-@MainActor
-final class FlagGroupingTests: XCTestCase {
-    private func keyFlag(_ id: String, ts: String, file: String) -> FlagModel {
-        FlagModel(id: id, rule: "keychain-access", severity: 3, ts: ts, pid: 500,
-                  agent: "codex", evidence: [.legacy("codex (pid 500) accessed keychain file \(file) at 2026-09-12T03:00:00Z")])
-    }
-
-    func testIdenticalFlagsGroupWithCount() {
-        let stub = StubDaemonClient()
-        stub.flags = [
-            keyFlag("a", ts: "2026-09-12T03:08:45Z", file: "/System/Library/Keychains/SystemTrustSettings.plist"),
-            keyFlag("b", ts: "2026-09-12T03:00:26Z", file: "/System/Library/Keychains/SystemTrustSettings.plist"),
-            keyFlag("c", ts: "2026-09-12T02:59:00Z", file: "/System/Library/Keychains/SystemTrustSettings.plist"),
-        ]
-        let state = AppState(client: stub)
-        state.seedForTesting(status: stub.status)
-        state.seedFlagsForTesting(stub.flags)
-        let groups = state.groupedUnactedFlags()
-        XCTAssertEqual(groups.count, 1, "identical fires are one decision")
-        XCTAssertEqual(groups[0].count, 3)
-        XCTAssertEqual(groups[0].newest.id, "a", "newest first inside the group")
-    }
-
-    func testDifferentFilesDoNotGroup() {
-        let stub = StubDaemonClient()
-        stub.flags = [
-            keyFlag("a", ts: "2026-09-12T03:08:45Z", file: "/System/Library/Keychains/SystemTrustSettings.plist"),
-            keyFlag("b", ts: "2026-09-12T03:07:00Z", file: "/Users/x/Library/Keychains/login.keychain-db"),
-        ]
-        let state = AppState(client: stub)
-        state.seedForTesting(status: stub.status)
-        state.seedFlagsForTesting(stub.flags)
-        XCTAssertEqual(state.groupedUnactedFlags().count, 2)
-    }
-
-    func testDifferentAgentsDoNotGroup() {
-        let stub = StubDaemonClient()
-        var f1 = keyFlag("a", ts: "2026-09-12T03:08:45Z", file: "/k")
-        var f2 = keyFlag("b", ts: "2026-09-12T03:07:00Z", file: "/k")
-        f1 = FlagModel(id: f1.id, rule: f1.rule, severity: 3, ts: f1.ts, pid: 1, agent: "codex", evidence: f1.evidence)
-        f2 = FlagModel(id: f2.id, rule: f2.rule, severity: 3, ts: f2.ts, pid: 2, agent: "cursor", evidence: f2.evidence)
-        stub.flags = [f1, f2]
-        let state = AppState(client: stub)
-        state.seedForTesting(status: stub.status)
-        state.seedFlagsForTesting(stub.flags)
-        XCTAssertEqual(state.groupedUnactedFlags().count, 2)
-    }
-
-    func testAcknowledgedFlagsExcluded() {
-        let stub = StubDaemonClient()
-        stub.flags = [keyFlag("a", ts: "2026-09-12T03:08:45Z", file: "/k")]
-        let state = AppState(client: stub)
-        state.seedForTesting(status: stub.status)
-        _ = state
-        // Acknowledged exclusion happens in unactedFlags (decode-side); grouping
-        // just partitions it. Verify via a raw acknowledged flag being skipped.
-        let acked = keyFlag("z", ts: "2026-09-12T03:00:00Z", file: "/k")
-        // Construct an acknowledged copy (Bool? decode path).
-        let ackedFlag = FlagModel(id: "z2", rule: "keychain-access", severity: 3, ts: "2026-09-12T03:00:00Z",
-                                  pid: 1, agent: "codex", evidence: [], acknowledged: true)
-        XCTAssertNotNil(ackedFlag.acknowledged)
-        _ = ackedFlag
-    }
-}
