@@ -14,7 +14,7 @@ vm.createContext(ctx);
 for (const f of ['lib.js', 'tab-overview.js']) {
   vm.runInContext(readFileSync(path.join(webDist, f), 'utf8'), ctx, { filename: f });
 }
-const { spendListItems, spendDayItems, spendHintText, planWindowLabel, planLineText, spendPlanItems } = ctx;
+const { spendListItems, spendDayItems, spendHintText, spendCacheText, spendUpdating, planWindowLabel, planLineText, spendPlanItems } = ctx;
 const joined = items => items.map(i => i.html).join('');
 
 const keysOf = html => [...html.matchAll(/<span class="spend-key" title="[^"]*">([^<]+)<\/span>/g)].map(m => m[1]);
@@ -79,6 +79,24 @@ test('spendHintText: calls, then plan and unpriced only when non-zero', () => {
   assert.equal(spendHintText({ calls: 1 }), '1 call');
   assert.equal(spendHintText({ calls: 0, plan_calls: 3 }), '');
   assert.equal(spendHintText(undefined), '');
+});
+
+test('spendCacheText: the notice while a shown report a minute old or more refreshes, with the oldest one\'s age', () => {
+  const now = Date.parse('2026-09-25T12:00:00Z');
+  const at = ms => new Date(now - ms).toISOString();
+  assert.equal(spendCacheText([{ refreshing: false, generated_at: at(9 * 3600000) }, null], now), '');
+  assert.equal(spendCacheText([], now), '');
+  assert.equal(spendCacheText(undefined, now), '');
+  // The console's own 30 s refresh: no notice.
+  assert.equal(spendCacheText([{ refreshing: true, generated_at: at(30000) }], now), '');
+  assert.equal(spendUpdating({ refreshing: true, generated_at: at(30000) }, now), false);
+  assert.equal(spendUpdating({ refreshing: true, generated_at: at(60000) }, now), true);
+  assert.equal(spendUpdating(null, now), false);
+  assert.equal(spendCacheText([{ refreshing: true, generated_at: at(3 * 3600000) }, { refreshing: true, generated_at: at(5 * 60000) }], now),
+    'Updating usage cache… (cached 3h ago)');
+  assert.equal(spendCacheText([{ refreshing: false, generated_at: at(9 * 3600000) }, { refreshing: true, generated_at: at(5 * 60000) }], now),
+    'Updating usage cache… (cached 5m ago)');
+  assert.equal(spendCacheText([{ refreshing: true }], now), 'Updating usage cache…');
 });
 
 // A local Friday 3:10 PM, so the expected clock holds in any TZ.

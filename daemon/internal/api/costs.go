@@ -1,6 +1,7 @@
 package api
 
 import (
+	"cmp"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -15,9 +16,11 @@ import (
 // harness, session, model, provider or local day, with every unpriced call
 // classified. by=provider names a call with no recorded provider by the
 // vendor whose price table resolves its model; by=day buckets at tz minutes
-// from UTC. Read-level.
+// from UTC. cached=1 answers at once from the last report for the same
+// parameters, however old (also one saved by an earlier run), while a newer
+// one is computed in the background (refreshing: true). Read-level.
 //
-//	GET /costs?since=24h|7d|<RFC3339>&until=<RFC3339>&by=repo|branch|harness|session|model|provider|day&tz=<minutes>
+//	GET /costs?since=24h|7d|<RFC3339>&until=<RFC3339>&by=repo|branch|harness|session|model|provider|day&tz=<minutes>&cached=1
 func (a *API) handleCosts(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -28,16 +31,14 @@ func (a *API) handleCosts(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	by := r.URL.Query().Get("by")
-	if by == "" {
-		by = "repo"
-	}
+	q := r.URL.Query()
+	by := cmp.Or(q.Get("by"), "repo")
 	if !store.ValidCostGroup(by) {
 		http.Error(w, "by must be one of repo, branch, harness, session, model, provider, day", http.StatusBadRequest)
 		return
 	}
 	tz := 0
-	if v := r.URL.Query().Get("tz"); v != "" {
+	if v := q.Get("tz"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil || n < -store.MaxTZMinutes || n > store.MaxTZMinutes {
 			http.Error(w, fmt.Sprintf("tz must be minutes east of UTC, -%d..%d", store.MaxTZMinutes, store.MaxTZMinutes), http.StatusBadRequest)
@@ -45,11 +46,15 @@ func (a *API) handleCosts(w http.ResponseWriter, r *http.Request) {
 		}
 		tz = n
 	}
-	writeJSON(w, a.costs.get(costKey("costs", by, since, until, tz), func() any {
+	key := costKey("costs", by, cmp.Or(q.Get("since"), "24h"), q.Get("until"), tz)
+	rep, at, refreshing := a.costs.get(key, q.Get("cached") == "1", func() store.CostReport {
 		rep := a.store.CostReport(since, until, by, store.CostOptions{TZMinutes: tz, ProviderFor: collect.VendorForModel})
 		classifyCosts(&rep)
 		return rep
-	}))
+	})
+	rep.GeneratedAt = at.UTC().Format(time.RFC3339)
+	rep.Refreshing = refreshing
+	writeJSON(w, rep)
 }
 
 // unpricedCostRow is one (harness, provider, model) whose calls carry no
@@ -79,9 +84,12 @@ func (a *API) handleCostsUnpriced(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	writeJSON(w, a.costs.get(costKey("unpriced", "harness", since, until, 0), func() any {
-		return unpricedCosts(a.store.CostReport(since, until, "harness", store.CostOptions{}))
-	}))
+	q := r.URL.Query()
+	rep, _, _ := a.unpriced.get(costKey("unpriced", "harness", cmp.Or(q.Get("since"), "24h"), q.Get("until"), 0), false,
+		func() unpricedCostReport {
+			return unpricedCosts(a.store.CostReport(since, until, "harness", store.CostOptions{}))
+		})
+	writeJSON(w, rep)
 }
 
 // unpricedCostReport is the /costs/unpriced body.

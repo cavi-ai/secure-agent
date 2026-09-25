@@ -541,7 +541,9 @@ function renderChartMemory() {
 // Spend: the stat-strip tile (24h total, by repo, from SA.t.costs) and the
 // Spend card (SA.t.costsCard: the dimension and window its controls chose),
 // headed by one plan-headroom line per SA.t.costPlans entry. Plan and
-// unpriced calls are counted, never priced.
+// unpriced calls are counted, never priced. While the daemon recomputes an
+// old report it answered from its usage cache (spendUpdating), the card head
+// says so and the tile's line ends "updating".
 function renderSpend() {
   const SA = window.SA;
   const report = SA.t.costs;
@@ -549,7 +551,13 @@ function renderSpend() {
   const num = document.getElementById('count-spend');
   const hint = document.getElementById('hint-spend');
   if (num) num.textContent = Number(total.calls) ? fmtUSD(total.cost_usd) : '—';
-  if (hint) hint.textContent = spendHintText(total);
+  if (hint) hint.textContent = [spendHintText(total), spendUpdating(report) ? 'updating…' : ''].filter(Boolean).join(' · ');
+  const notice = document.getElementById('spend-cache');
+  if (notice) {
+    const text = spendCacheText([report, SA.t.costsCard]);
+    notice.textContent = text;
+    notice.hidden = !text;
+  }
 
   const el = document.getElementById('spend-card');
   if (!el) return;
@@ -586,6 +594,27 @@ function renderSpend() {
   const items = day ? spendDayItems(rows) : spendListItems(rows, 8, { by: card.by, expanded: SA.expanded });
   patchList(wrap, items, { key: i => i.key, html: i => i.html });
   wrap.scrollLeft = left;
+}
+
+// spendUpdating: whether a /costs report is shown while the daemon
+// recomputes it (refreshing) and is at least a minute old: older than the
+// console's 30 s refresh keeps it, so it came from the usage cache (a
+// restart, a view not asked lately). One that does not say when it was
+// computed counts.
+function spendUpdating(r, nowMs) {
+  if (!r || !r.refreshing) return false;
+  const at = Date.parse(r.generated_at);
+  return !isFinite(at) || (nowMs || Date.now()) - at >= 60000;
+}
+
+// spendCacheText: the Spend card's notice while spendUpdating holds for a
+// shown report — "Updating usage cache… (cached 3h ago)", the oldest one's
+// age; '' when it holds for none.
+function spendCacheText(reports, nowMs) {
+  const shown = (reports || []).filter(r => spendUpdating(r, nowMs));
+  if (!shown.length) return '';
+  const at = Math.min(...shown.map(r => Date.parse(r.generated_at)).filter(isFinite));
+  return 'Updating usage cache…' + (isFinite(at) ? ` (cached ${fmtAge(new Date(at).toISOString(), nowMs)} ago)` : '');
 }
 
 // spendHintText: the stat-strip line under the 24h spend — "N calls", then
