@@ -616,7 +616,7 @@ function contrast(a, b) {
 }
 
 const LIVE_HARNESSES = {
-  claude: 'Claude Code', codex: 'Codex', cursor: 'Cursor', 'cursor-ide': 'Cursor',
+  claude: 'Claude Code', 'claude-desktop': 'Claude', codex: 'Codex', cursor: 'Cursor', 'cursor-ide': 'Cursor',
   opencode: 'opencode', agy: 'Antigravity', openclaw: 'OpenClaw', ollama: 'Ollama', 'lm-studio': 'LM Studio',
 };
 const KNOWN_HARNESSES = [...Object.keys(LIVE_HARNESSES), 'gemini', 'windsurf', 'aider', 'codeium', 'copilot'];
@@ -650,6 +650,9 @@ test('harnessMeta maps variants onto one harness and flags infra', () => {
   assert.equal(harnessMeta('cursor-ide').logo, harnessMeta('cursor').logo);
   assert.equal(harnessMeta('cursor-ide').infra, true);
   assert.equal(harnessMeta('cursor').infra, false);
+  // claude-desktop is the Claude app hosting Code conversations: Claude's mark, infra.
+  assert.equal(harnessMeta('claude-desktop').logo, harnessMeta('claude').logo);
+  assert.equal(harnessMeta('claude-desktop').infra, true);
   for (const k of ['ollama', 'lm-studio']) assert.equal(harnessMeta(k).infra, true, k);
   for (const k of ['claude', 'codex', 'opencode', 'agy', 'openclaw']) assert.equal(harnessMeta(k).infra, false, k);
 });

@@ -14,6 +14,11 @@ keychain_markers:
   - ".keychain-db"
   - "login.keychain"
 agents:
+  # The Claude desktop app hosts one claude process per Code conversation.
+  # Listed as infra BEFORE claude (first match wins) so a conversation's
+  # family root is its own claude process, not the app: the session ends
+  # when that conversation's process exits, not when the app quits.
+  - { name: claude-desktop, match: ["/Applications/Claude.app/"], kind: infra }
   - { name: claude,      match: ["claude"] }
   # The Cursor IDE is infrastructure, not an agent — it must be listed BEFORE
   # the cursor CLI entry (first match wins) so Cursor.app and its helpers are
