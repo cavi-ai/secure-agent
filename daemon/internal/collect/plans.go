@@ -28,10 +28,12 @@ type PlanSnapshot struct {
 	SeenAt    time.Time    `json:"seen_at"` // timestamp of the line that carried it
 }
 
-// plans holds the newest snapshot per home directory, in memory only.
+// plans holds the newest snapshot per home directory; the daemon saves them
+// for its next run (PlansVersion says when they changed).
 var plans = struct {
-	mu     sync.Mutex
-	byHome map[string]PlanSnapshot
+	mu      sync.Mutex
+	byHome  map[string]PlanSnapshot
+	version uint64 // snapshots kept so far
 }{byHome: map[string]PlanSnapshot{}}
 
 // RecordPlan keeps s as home's snapshot unless the one held was seen later.
@@ -44,6 +46,15 @@ func RecordPlan(home string, s PlanSnapshot) {
 	s.HomePath = home
 	s.Windows = slices.Clone(s.Windows)
 	plans.byHome[home] = s
+	plans.version++
+}
+
+// PlansVersion counts the snapshots RecordPlan kept: unchanged, Plans()
+// holds what it did when it was last read.
+func PlansVersion() uint64 {
+	plans.mu.Lock()
+	defer plans.mu.Unlock()
+	return plans.version
 }
 
 // Plans returns every home's snapshot sorted by label, then by home path:

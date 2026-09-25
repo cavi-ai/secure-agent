@@ -516,6 +516,8 @@ export interface CostReport {
   by: string;
   total: CostRow;
   rows: CostRow[];
+  generated_at?: string;
+  refreshing?: boolean;
 }
 
 export interface PlanWindow {
