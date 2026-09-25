@@ -36,9 +36,9 @@ CREATE TABLE message_parts (
 
 const openclawSecret = "SECRET-CONTENT-never-in-an-event"
 
-// openclawFixture writes an lcm.db with two conversations: sigmund's cron run
+// openclawFixture writes an lcm.db with two conversations: ember's cron run
 // (a user turn, two tool calls — one ok after 3s, one failed — and a step
-// with tokens) and marco's main session (one user turn).
+// with tokens) and juniper's main session (one user turn).
 func openclawFixture(t *testing.T) (dir string, db *sql.DB) {
 	t.Helper()
 	dir = t.TempDir()
@@ -49,8 +49,8 @@ func openclawFixture(t *testing.T) (dir string, db *sql.DB) {
 	t.Cleanup(func() { db.Close() })
 	stmts := []string{openclawDDL,
 		`INSERT INTO conversations (session_id, session_key, active, created_at, updated_at) VALUES
-		 ('s-sig', 'agent:sigmund:cron:7:run:9', 1, '2026-09-23 07:00:00', '2026-09-23 07:00:10'),
-		 ('s-mar', 'agent:marco:main', 1, '2026-09-23 07:01:00', '2026-09-23 07:01:00')`,
+		 ('s-sig', 'agent:ember:cron:7:run:9', 1, '2026-09-23 07:00:00', '2026-09-23 07:00:10'),
+		 ('s-mar', 'agent:juniper:main', 1, '2026-09-23 07:01:00', '2026-09-23 07:01:00')`,
 		fmt.Sprintf(`INSERT INTO messages (message_id, conversation_id, seq, role, content, token_count, created_at) VALUES
 		 (1, 1, 1, 'user', '%[1]s', 5, '2026-09-23 07:00:00'),
 		 (2, 1, 2, 'assistant', '%[1]s', 5, '2026-09-23 07:00:01'),
@@ -111,7 +111,7 @@ func TestOpenclawPollEmitsTrace(t *testing.T) {
 	}
 	evs := drainOpenclaw(sub, n)
 
-	wantSeen := []openclawSighting{{"s-sig", "openclaw", "openclaw:sigmund"}, {"s-mar", "openclaw", "openclaw:marco"}}
+	wantSeen := []openclawSighting{{"s-sig", "openclaw", "openclaw:ember"}, {"s-mar", "openclaw", "openclaw:juniper"}}
 	if fmt.Sprint(*seen) != fmt.Sprint(wantSeen) {
 		t.Fatalf("sessions noted = %+v, want %+v", *seen, wantSeen)
 	}
@@ -258,10 +258,10 @@ func TestOpenclawHomeResolution(t *testing.T) {
 
 func TestOpenclawWorkspaceLabel(t *testing.T) {
 	for key, want := range map[string]string{
-		"agent:sigmund:cron:1:run:2": "openclaw:sigmund",
-		"agent:marco":                "openclaw:marco",
-		"":                           "openclaw",
-		"cron:1":                     "openclaw",
+		"agent:ember:cron:1:run:2": "openclaw:ember",
+		"agent:juniper":            "openclaw:juniper",
+		"":                         "openclaw",
+		"cron:1":                   "openclaw",
 	} {
 		if got := OpenclawWorkspaceLabel(key); got != want {
 			t.Fatalf("label(%q) = %q, want %q", key, got, want)
@@ -282,7 +282,7 @@ func TestOpenclawFirstSightStartsAtLastDay(t *testing.T) {
 	now := time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC)
 	at := func(ago time.Duration) string { return now.Add(-ago).Format(openclawTimeLayout) }
 	stmts := []string{openclawDDL,
-		`INSERT INTO conversations (session_id, session_key) VALUES ('s-1', 'agent:marco:main')`,
+		`INSERT INTO conversations (session_id, session_key) VALUES ('s-1', 'agent:juniper:main')`,
 		fmt.Sprintf(`INSERT INTO messages (message_id, conversation_id, seq, role, content, token_count, created_at) VALUES
 		 (1, 1, 1, 'user', 'x', 1, '%s'), (2, 1, 2, 'user', 'x', 1, '%s'),
 		 (3, 1, 3, 'user', 'x', 1, '%s'), (4, 1, 4, 'user', 'x', 1, '%s')`,

@@ -730,7 +730,7 @@ func TestTraceEventCreatesTranscriptSession(t *testing.T) {
 	if s, ok := st.GetSession("conv-1"); !ok || s.Confidence != model.ConfTranscript {
 		t.Fatalf("session = %+v, want confidence transcript", s)
 	}
-	r.NoteTranscriptSession("conv-2", "openclaw", "openclaw:sigmund", time.Now())
+	r.NoteTranscriptSession("conv-2", "openclaw", "openclaw:ember", time.Now())
 	e2 := event.Event{Kind: event.KindTurn, SessionID: "conv-2", TS: time.Now()}
 	r.Resolve(&e2)
 	if s, _ := st.GetSession("conv-2"); s.Confidence != model.ConfTranscript || s.Harness != "openclaw" {
@@ -741,7 +741,7 @@ func TestTraceEventCreatesTranscriptSession(t *testing.T) {
 // The harness's own state ending a conversation ends its session.
 func TestEndTranscriptSession(t *testing.T) {
 	r, st := testResolver(t, fakeProcs{})
-	r.NoteTranscriptSession("conv-1", "openclaw", "openclaw:sigmund", time.Now().Add(-time.Minute))
+	r.NoteTranscriptSession("conv-1", "openclaw", "openclaw:ember", time.Now().Add(-time.Minute))
 	r.EndTranscriptSession("conv-1", time.Now())
 	if s, _ := st.GetSession("conv-1"); s.Status != model.SessionEnded {
 		t.Fatalf("status = %q, want ended", s.Status)
@@ -757,7 +757,7 @@ func TestGitInfoForIgnoresNonPathWorkspace(t *testing.T) {
 	}
 	t.Chdir(dir)
 	gitCache = nil
-	if repo, branch := GitInfoFor("openclaw:sigmund"); repo != "" || branch != "" {
+	if repo, branch := GitInfoFor("openclaw:ember"); repo != "" || branch != "" {
 		t.Fatalf("GitInfoFor(label) = %q@%q, want empty", repo, branch)
 	}
 }

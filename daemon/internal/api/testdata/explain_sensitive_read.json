@@ -1,8 +1,8 @@
 {
   "what": "Claude read a sensitive file in Claude skills (~/.claude/skills), then reached AWS 3 s later.",
   "subject": {
-    "path": "/Users/franco/.claude/skills/synced/02e126c1-8b1e-4482-9fef-643b59f422a6_b2ded7ac-f376-4f9d-b545-241ef76b3ce8/bookmark-librarian/config",
-    "display": "~/.claude/skills/synced/02e126c…6b3ce8/bookmark-librarian/config",
+    "path": "/Users/dev/.claude/skills/synced/00000000-0000-4000-8000-000000000001_00000000-0000-4000-8000-000000000002/example-skill/config",
+    "display": "~/.claude/skills/synced/0000000…00000000002/example-skill/config",
     "basename": "config",
     "category": "other_sensitive",
     "category_label": "sensitive file",
@@ -29,7 +29,7 @@
   "disposition": {
     "state": "benign-likely",
     "text": "Likely benign (advisor 93 %)",
-    "why": "The Claude agent read its own bookmark-librarian skill config under ~/.claude/skills/synced/ and then made HTTPS connections to Cloudflare (2600:1f10:4fa9 / 2606:4700:20::), which is a standard API/CDN endpoint, not an exfiltration target."
+    "why": "The Claude agent read its own example-skill skill config under ~/.claude/skills/synced/ and then made HTTPS connections to Cloudflare (2600:1f10:4fa9 / 2606:4700:20::), which is a standard API/CDN endpoint, not an exfiltration target."
   },
   "actions": [
     {
