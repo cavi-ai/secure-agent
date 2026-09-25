@@ -63,6 +63,7 @@ type TranscriptScanner struct {
 	resolveEvery  time.Duration
 	activeWindowD time.Duration
 	saveEvery     time.Duration
+	readDir       readDirFunc // nil: os.ReadDir
 
 	// OnProduce, when set, is called after any transcript/plugin event is
 	// published — the supervisor's coverage heartbeat: a scanner whose
@@ -390,6 +391,12 @@ func (ts *TranscriptScanner) Run(ctx context.Context) error {
 	// replayed.
 	sighted := map[string]bool{}
 	walkLogged := map[string]bool{}
+	read := ts.readDir
+	if read == nil {
+		read = os.ReadDir
+	}
+	// Glob targets list a directory again only when its mtime moved.
+	dirs := newDirCache(read)
 	var explicit, active []string
 	resolve := func() {
 		now := time.Now()
@@ -403,7 +410,7 @@ func (ts *TranscriptScanner) Run(ctx context.Context) error {
 			isExplicit := false
 			switch {
 			case hasMeta(tgt):
-				files = globFiles(tgt, os.ReadDir)
+				files = globFiles(tgt, dirs.readDir)
 			case isDir(tgt):
 				if !walkLogged[tgt] {
 					walkLogged[tgt] = true
@@ -430,6 +437,7 @@ func (ts *TranscriptScanner) Run(ctx context.Context) error {
 				}
 			}
 		}
+		dirs.sweep()
 		active = activePaths(shaped, now, window)
 		// Prune offsets only for files that no longer EXIST (deleted or
 		// rotated out). Pruning inactive-but-present files forced a byte-0

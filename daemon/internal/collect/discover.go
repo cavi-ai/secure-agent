@@ -51,6 +51,71 @@ type found struct {
 // wrapper in tests.
 type readDirFunc func(string) ([]os.DirEntry, error)
 
+// dirSettle is how old a directory's modification time must be before its
+// listing is reused: a filesystem with coarse timestamps can take a second
+// change inside the same tick without moving the mtime.
+const dirSettle = 2 * time.Second
+
+// dirCache lists a directory again only when its modification time moved.
+// Creating, removing or renaming an entry changes a directory's mtime, so a
+// directory whose mtime is unchanged returns its previous listing, and a new
+// transcript is still found on the next resolve pass. The listing is taken
+// after the stat, so a change between the two reads as changed next pass.
+type dirCache struct {
+	read    readDirFunc
+	now     func() time.Time // nil: time.Now
+	entries map[string]dirListing
+	seen    map[string]bool // directories listed or reused since the last sweep
+}
+
+type dirListing struct {
+	mod     time.Time
+	entries []os.DirEntry
+}
+
+func newDirCache(read readDirFunc) *dirCache {
+	return &dirCache{read: read, entries: map[string]dirListing{}, seen: map[string]bool{}}
+}
+
+// readDir is a readDirFunc backed by the cache.
+func (c *dirCache) readDir(d string) ([]os.DirEntry, error) {
+	fi, err := os.Stat(d)
+	if err != nil {
+		delete(c.entries, d)
+		return nil, err
+	}
+	c.seen[d] = true
+	if l, ok := c.entries[d]; ok && l.mod.Equal(fi.ModTime()) {
+		return l.entries, nil
+	}
+	entries, err := c.read(d)
+	if err != nil {
+		delete(c.entries, d)
+		return nil, err
+	}
+	now := time.Now
+	if c.now != nil {
+		now = c.now
+	}
+	if now().Sub(fi.ModTime()) >= dirSettle {
+		c.entries[d] = dirListing{mod: fi.ModTime(), entries: entries}
+	} else {
+		delete(c.entries, d)
+	}
+	return entries, nil
+}
+
+// sweep drops the listings of directories no lookup reached since the last
+// sweep, so the cache holds only the directories the targets still name.
+func (c *dirCache) sweep() {
+	for d := range c.entries {
+		if !c.seen[d] {
+			delete(c.entries, d)
+		}
+	}
+	clear(c.seen)
+}
+
 // hasMeta reports whether a path segment holds glob syntax.
 func hasMeta(s string) bool {
 	return strings.ContainsAny(s, `*?[\`)

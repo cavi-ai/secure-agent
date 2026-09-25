@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"sync"
 	"testing"
 	"time"
 
@@ -308,5 +309,124 @@ func BenchmarkDiscoverWalk(b *testing.B) {
 			n += len(walkDir(r))
 		}
 		b.ReportMetric(float64(n), "files")
+	}
+}
+
+// An unchanged tree is not listed again; a file added to one directory is
+// found on the next pass, which lists only that directory.
+func TestDirCacheListsOnlyChangedDirectories(t *testing.T) {
+	home := t.TempDir()
+	want, _ := buildShapedTree(t, home)
+	reads := 0
+	cache := newDirCache(func(d string) ([]os.DirEntry, error) {
+		reads++
+		return os.ReadDir(d)
+	})
+	cache.now = func() time.Time { return time.Now().Add(time.Minute) }
+	pass := func() []string {
+		var got []string
+		for _, tgt := range HarnessTranscriptGlobs(home) {
+			for _, f := range globFiles(tgt, cache.readDir) {
+				got = append(got, f.path)
+			}
+		}
+		cache.sweep()
+		sort.Strings(got)
+		return got
+	}
+	if got := pass(); len(got) != len(want) || reads == 0 {
+		t.Fatalf("first pass found %d files with %d listings, want %d", len(got), reads, len(want))
+	}
+	first := reads
+	if got := pass(); len(got) != len(want) || reads != first {
+		t.Fatalf("unchanged tree: found %d files, listed %d more directories, want %d and 0", len(got), reads-first, len(want))
+	}
+	added := filepath.Join(home, ".claude", "projects", "-repo-0", "new-session.jsonl")
+	if err := os.WriteFile(added, []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := pass()
+	if i := sort.SearchStrings(got, added); len(got) != len(want)+1 || i == len(got) || got[i] != added {
+		t.Fatalf("after adding %s: found %d files, want %d including it", added, len(got), len(want)+1)
+	}
+	if reads != first+1 {
+		t.Fatalf("after one directory changed: listed %d directories, want 1", reads-first)
+	}
+
+	// A directory modified within dirSettle is listed again every pass.
+	cache.now = nil
+	if err := os.WriteFile(added+".2", []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		before := reads
+		pass()
+		if reads == before {
+			t.Fatalf("pass %d reused the listing of a directory modified within dirSettle", i+1)
+		}
+	}
+}
+
+// The scanner's resolve pass reuses the listing of a directory whose mtime
+// has not moved, and still reads a transcript created in it afterwards.
+func TestScannerResolveReusesUnchangedDirectories(t *testing.T) {
+	home := t.TempDir()
+	projects := filepath.Join(home, ".claude", "projects")
+	repo := filepath.Join(projects, "-repo")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "old.jsonl"), []byte(`{"tool":"Old"}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-time.Hour)
+	for _, d := range []string{projects, repo} {
+		if err := os.Chtimes(d, old, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var mu sync.Mutex
+	listed := map[string]int{}
+	b := bus.New(64)
+	sub := b.Subscribe()
+	ts := NewTranscriptScanner(b, HarnessTranscriptGlobs(home))
+	ts.tailEvery = 10 * time.Millisecond
+	ts.resolveEvery = 20 * time.Millisecond
+	ts.readDir = func(d string) ([]os.DirEntry, error) {
+		mu.Lock()
+		listed[d]++
+		mu.Unlock()
+		return os.ReadDir(d)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go ts.Run(ctx)
+	time.Sleep(200 * time.Millisecond)
+	mu.Lock()
+	settled := fmt.Sprint(listed)
+	mu.Unlock()
+	if want := fmt.Sprint(map[string]int{projects: 1, repo: 1}); settled != want {
+		t.Fatalf("listings over ~10 resolve passes = %s, want %s", settled, want)
+	}
+
+	if err := os.WriteFile(filepath.Join(repo, "new.jsonl"), []byte(`{"tool":"New"}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.After(5 * time.Second)
+	for found := false; !found; {
+		select {
+		case e := <-sub:
+			if e.Kind == event.KindPluginAction && e.Detail == "Old" {
+				t.Fatal("pre-existing transcript content was replayed")
+			}
+			found = e.Kind == event.KindPluginAction && e.Detail == "New"
+		case <-deadline:
+			t.Fatal("transcript created in a listed directory was never read")
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if listed[projects] != 1 || listed[repo] < 2 {
+		t.Fatalf("listings = %v, want %s once and %s again after its change", listed, projects, repo)
 	}
 }
