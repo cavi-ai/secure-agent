@@ -961,8 +961,8 @@ document.addEventListener('DOMContentLoaded', () => {
     put('policy-mutes', 'badge-mutes', st.mutes, policyListHTML('mute', st.mutes, st));
   }
 
-  // dropWorktreeRows removes rows the daemon just pruned, so the tab updates
-  // without a rescan.
+  // dropWorktreeRows removes rows the daemon just pruned or moved to the
+  // Trash, so the tab updates without a rescan.
   function dropWorktreeRows(paths) {
     const rep = worktreesState.report;
     if (!rep) return;
@@ -1474,6 +1474,46 @@ document.addEventListener('DOMContentLoaded', () => {
       followWorktreeSizing();
     } catch (err) {
       showToast('Could not start the removal: ' + (err.message || err), 'danger');
+    }
+  };
+
+  // Folders git no longer records: open in Finder, link again to the
+  // repository that still records them, or move to the Trash.
+  window.revealWorktree = async function(path) {
+    try {
+      const { r, text } = await postWorktree('/worktrees/reveal', { path });
+      if (!r.ok) throw new Error(text.trim() || String(r.status));
+    } catch (err) {
+      showToast('Could not open the folder: ' + (err.message || err), 'danger');
+    }
+  };
+  window.reconnectWorktree = async function(path, repo) {
+    const ok = await window.saConfirm(`git worktree repair links ${path} to ${repo} again. Nothing is deleted.`,
+      { title: 'Reconnect worktree', okLabel: 'Reconnect' });
+    if (!ok) return;
+    try {
+      const { r, text } = await postWorktree('/worktrees/reconnect', { path });
+      if (!r.ok) throw new Error(text.trim() || String(r.status));
+      showToast(`Reconnected ${path} to ${repo}`, 'success');
+      loadWorktrees(false);
+    } catch (err) {
+      showToast('Could not reconnect: ' + (err.message || err), 'danger');
+    }
+  };
+  window.trashOrphanWorktree = async function(path) {
+    const ok = await window.saConfirm(`Move ${path} to the Trash? Git no longer records it, so its files are the only copy; you can put it back from the Trash until you empty it.`,
+      { title: 'Move to Trash', okLabel: 'Move to Trash' });
+    if (!ok) return;
+    try {
+      const { r, text, json } = await postWorktree('/worktrees/trash', { path });
+      if (!r.ok) throw new Error(text.trim() || String(r.status));
+      const bytes = Number(json && json.result && json.result.bytes) || 0;
+      dropWorktreeRows([path]);
+      renderNow(['worktrees']);
+      showToast(bytes ? `Moved ${path} to the Trash — ${fmtDisk(bytes)}` : `Moved ${path} to the Trash`, 'success');
+      loadWorktrees(false);
+    } catch (err) {
+      showToast('Could not move it to the Trash: ' + (err.message || err), 'danger');
     }
   };
 
@@ -2908,6 +2948,18 @@ document.addEventListener('DOMContentLoaded', () => {
       case 'worktree-hide':
         e.preventDefault();
         window.hideWorktreeRepo(d.repo);
+        break;
+      case 'worktree-reveal':
+        e.preventDefault();
+        window.revealWorktree(d.path);
+        break;
+      case 'worktree-reconnect':
+        e.preventDefault();
+        window.reconnectWorktree(d.path, d.repo);
+        break;
+      case 'worktree-trash-orphan':
+        e.preventDefault();
+        window.trashOrphanWorktree(d.path);
         break;
       case 'worktree-advise':
         e.preventDefault();

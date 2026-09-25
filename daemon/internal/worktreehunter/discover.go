@@ -49,6 +49,8 @@ type orphanDir struct {
 	// Main is the repository the dead gitdir pointed into, when the path
 	// has the <main>/.git/worktrees/<name> shape.
 	Main string
+	// Name is the admin entry the dead gitdir named (<name> above).
+	Name string
 }
 
 // resolveRepo walks up from dir to the nearest .git entry, the way git
@@ -92,7 +94,7 @@ func resolveGitFile(dir, dotGit string) (repoRef, *orphanDir, bool) {
 		gitdir = filepath.Join(dir, gitdir)
 	}
 	if _, err := os.Stat(gitdir); err != nil {
-		return repoRef{}, &orphanDir{Path: canonical(dir), Main: mainFromAdminDir(gitdir)}, false
+		return repoRef{}, &orphanDir{Path: canonical(dir), Main: mainFromAdminDir(gitdir), Name: filepath.Base(filepath.Clean(gitdir))}, false
 	}
 	common := gitdir
 	if c, err := os.ReadFile(filepath.Join(gitdir, "commondir")); err == nil {

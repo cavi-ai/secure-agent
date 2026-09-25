@@ -25,6 +25,10 @@ type Worktree struct {
 	// LockReason is the text given to `git worktree lock --reason`.
 	LockReason string `json:"lock_reason,omitempty"`
 	Orphan     bool   `json:"orphan,omitempty"`
+	// Reconnect names a known repository whose worktree record still points
+	// at this orphan (the repository moved): `git worktree repair` there
+	// links it again.
+	Reconnect string `json:"reconnect,omitempty"`
 
 	State   string   `json:"state"`
 	Reasons []string `json:"reasons"`
