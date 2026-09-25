@@ -2,8 +2,12 @@
 # Builds universal binaries and assembles "Secure Agent.app".
 #
 # Environment:
-#   CODESIGN_IDENTITY  Signing identity (default "-" = ad-hoc).
-#                      Use "Developer ID Application: <Name> (<TeamID>)" for distribution.
+#   CODESIGN_IDENTITY  Signing identity. Unset resolves via
+#                      packaging/lib/sign_identity.sh: first "Apple
+#                      Development" identity, else first "Developer ID
+#                      Application" identity, else "-" (ad-hoc — file
+#                      telemetry's Full Disk Access grant does not survive
+#                      the next rebuild under ad-hoc).
 #   VERSION            Marketing version (default: git describe or 0.1.0).
 set -euo pipefail
 
@@ -18,9 +22,13 @@ VERSION="${VERSION:-$(git describe --tags --always --dirty 2>/dev/null || echo 0
 VERSION="$(printf '%s' "$VERSION" | tr -d '<>&"'"'"'')"
 BUILD_NUMBER="${BUILD_NUMBER:-$(git rev-parse --short HEAD 2>/dev/null || echo 1)}"
 BUILD_NUMBER="$(printf '%s' "$BUILD_NUMBER" | tr -cd 'a-zA-Z0-9.-')"
-CODESIGN_IDENTITY="${CODESIGN_IDENTITY:--}"
 BUNDLE_ID="com.cavi-ai.secure-agent"
+DAEMON_ID="com.cavi-ai.secure-agent.daemon"
+CLI_ID="com.cavi-ai.secure-agent.cli"
 ESD_LABEL="com.cavi-ai.secure-agent-esd"
+
+source "${REPO_ROOT}/packaging/lib/sign_identity.sh"
+CODESIGN_IDENTITY="$(resolve_sign_identity)"
 
 echo "==> Building universal Go binaries (version ${VERSION})..."
 mkdir -p bin
@@ -113,11 +121,29 @@ cat > "${APP_DIR}/Contents/Library/LaunchDaemons/${ESD_LABEL}.plist" <<EOF
 EOF
 
 echo "==> Signing (${CODESIGN_IDENTITY})..."
+# Every codesign call gets an explicit --identifier: left to itself, codesign
+# derives one from the file name + content, so the ES helper's identity (and
+# with it, its Full Disk Access / Background Task Management grant) changes
+# on every rebuild even under a stable signing identity.
 codesign --force --options runtime --sign "${CODESIGN_IDENTITY}" \
-  "${APP_DIR}/Contents/Helpers/secure-agentd" \
-  "${APP_DIR}/Contents/Helpers/secure-agent" \
+  --identifier "${DAEMON_ID}" \
+  "${APP_DIR}/Contents/Helpers/secure-agentd"
+codesign --force --options runtime --sign "${CODESIGN_IDENTITY}" \
+  --identifier "${CLI_ID}" \
+  "${APP_DIR}/Contents/Helpers/secure-agent"
+codesign --force --options runtime --sign "${CODESIGN_IDENTITY}" \
+  --identifier "${ESD_LABEL}" \
   "${APP_DIR}/Contents/MacOS/secure-agent-esd"
-codesign --force --options runtime --sign "${CODESIGN_IDENTITY}" "${APP_DIR}"
+codesign --force --options runtime --sign "${CODESIGN_IDENTITY}" \
+  --identifier "${BUNDLE_ID}" \
+  "${APP_DIR}"
+
+ESD_REQ="$(codesign -d -r- "${APP_DIR}/Contents/MacOS/secure-agent-esd" 2>&1 | sed -n 's/^#* *designated => //p')"
+echo "==> ${ESD_LABEL} designated requirement: ${ESD_REQ}"
+if [[ "${CODESIGN_IDENTITY}" != "-" && "${ESD_REQ}" == cdhash* ]]; then
+  echo "error: ${ESD_LABEL} got a cdhash-only designated requirement under a non-ad-hoc identity (${CODESIGN_IDENTITY}) — its Full Disk Access grant would not survive a rebuild" >&2
+  exit 1
+fi
 
 echo "==> Done: ${APP_DIR}"
 codesign -dv "${APP_DIR}" 2>&1 | grep -E "Identifier|Signature|TeamIdentifier" || true
