@@ -98,6 +98,7 @@ type OpenclawCollector struct {
 	noted     map[string]bool
 	ended     map[string]bool
 	callStart map[string]time.Time // session\x00call id → call message time
+	change    dbChange             // skips a poll while lcm.db is unchanged
 }
 
 // NewOpenclawCollector builds the poller. dbPath, when non-empty, pins the
@@ -249,6 +250,10 @@ func (c *OpenclawCollector) pollOnce() int {
 	if !c.resolve() {
 		return 0
 	}
+	fp, run := c.change.begin(c.dbPath)
+	if !run {
+		return 0
+	}
 	db, err := c.openReadOnly()
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
@@ -261,9 +266,10 @@ func (c *OpenclawCollector) pollOnce() int {
 	if !c.start(db) {
 		return 0
 	}
-	published, ok := c.readMessages(db)
-	if ok {
-		c.endClosed(db)
+	from := c.watermark
+	published, ok, clean := c.readMessages(db)
+	if ok && c.endClosed(db) && clean && c.watermark == from {
+		c.change.done(fp)
 	}
 	return published
 }
@@ -306,15 +312,16 @@ func openclawFirstSightMark(db *sql.DB, cutoff time.Time) (int64, error) {
 	return id, err
 }
 
-func (c *OpenclawCollector) readMessages(db *sql.DB) (int, bool) {
+// readMessages publishes the next batch past the watermark. ok is false when
+// the query failed; clean is false when the query or its cursor failed.
+func (c *OpenclawCollector) readMessages(db *sql.DB) (published int, ok, clean bool) {
 	rows, err := db.Query(openclawMessagesQuery, c.watermark, maxOpenclawMessages)
 	if err != nil {
 		log.Printf("openclaw: query failed (schema drift?): %v", err)
-		return 0, false
+		return 0, false, false
 	}
 	defer rows.Close()
 
-	published := 0
 	maxSeen := c.watermark
 	var lastMsg int64
 	for rows.Next() {
@@ -345,14 +352,16 @@ func (c *OpenclawCollector) readMessages(db *sql.DB) (int, bool) {
 			published++
 		}
 	}
+	clean = true
 	if err := rows.Err(); err != nil {
 		log.Printf("openclaw: cursor error (partial poll): %v", err)
+		clean = false
 	}
 	if maxSeen > c.watermark {
 		c.watermark = maxSeen
 		c.saveState()
 	}
-	return published, true
+	return published, true, clean
 }
 
 // rowEvents maps one message × part row to trace events. first is true for
@@ -410,15 +419,16 @@ func (c *OpenclawCollector) rowEvents(r openclawRow, ts time.Time, first bool) [
 
 // endClosed ends every session whose conversations openclaw has all marked
 // inactive or archived, once all of its messages have been read (so its
-// session exists before it ends). Once per session per daemon run.
-func (c *OpenclawCollector) endClosed(db *sql.DB) {
+// session exists before it ends). Once per session per daemon run. False
+// when the state query or its cursor failed.
+func (c *OpenclawCollector) endClosed(db *sql.DB) bool {
 	if c.OnSessionEnded == nil {
-		return
+		return true
 	}
 	rows, err := db.Query(openclawStateQuery)
 	if err != nil {
 		log.Printf("openclaw: conversation state query failed: %v", err)
-		return
+		return false
 	}
 	defer rows.Close()
 	for rows.Next() {
@@ -435,6 +445,7 @@ func (c *OpenclawCollector) endClosed(db *sql.DB) {
 		c.ended[sid] = true
 		c.OnSessionEnded(sid, parseOpenclawTime(at.String))
 	}
+	return rows.Err() == nil
 }
 
 // OpenclawWorkspaceLabel names a conversation's workspace from its
