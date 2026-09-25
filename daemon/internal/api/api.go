@@ -204,6 +204,9 @@ type API struct {
 	lastPostureMu    sync.Mutex
 	lastPostureState string
 	lastPostureCount int
+
+	// costs caches /costs and /costs/unpriced reports (costcache.go).
+	costs costCache
 }
 
 // GuardEventSink receives guard decisions (allow/deny) for downstream

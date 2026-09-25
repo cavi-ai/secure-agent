@@ -45,9 +45,11 @@ func (a *API) handleCosts(w http.ResponseWriter, r *http.Request) {
 		}
 		tz = n
 	}
-	rep := a.store.CostReport(since, until, by, store.CostOptions{TZMinutes: tz, ProviderFor: collect.VendorForModel})
-	classifyCosts(&rep)
-	writeJSON(w, rep)
+	writeJSON(w, a.costs.get(costKey("costs", by, since, until, tz), func() any {
+		rep := a.store.CostReport(since, until, by, store.CostOptions{TZMinutes: tz, ProviderFor: collect.VendorForModel})
+		classifyCosts(&rep)
+		return rep
+	}))
 }
 
 // unpricedCostRow is one (harness, provider, model) whose calls carry no
@@ -77,12 +79,21 @@ func (a *API) handleCostsUnpriced(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	rep := a.store.CostReport(since, until, "harness", store.CostOptions{})
-	out := struct {
-		Since string            `json:"since"`
-		Until string            `json:"until"`
-		Rows  []unpricedCostRow `json:"rows"`
-	}{Since: rep.Since, Until: rep.Until, Rows: []unpricedCostRow{}}
+	writeJSON(w, a.costs.get(costKey("unpriced", "harness", since, until, 0), func() any {
+		return unpricedCosts(a.store.CostReport(since, until, "harness", store.CostOptions{}))
+	}))
+}
+
+// unpricedCostReport is the /costs/unpriced body.
+type unpricedCostReport struct {
+	Since string            `json:"since"`
+	Until string            `json:"until"`
+	Rows  []unpricedCostRow `json:"rows"`
+}
+
+// unpricedCosts keeps the groups of rep whose calls are not priced.
+func unpricedCosts(rep store.CostReport) unpricedCostReport {
+	out := unpricedCostReport{Since: rep.Since, Until: rep.Until, Rows: []unpricedCostRow{}}
 	for _, g := range rep.Groups {
 		class := collect.Classify(g.Model, g.Provider)
 		if class == collect.ClassPriced {
@@ -93,7 +104,7 @@ func (a *API) handleCostsUnpriced(w http.ResponseWriter, r *http.Request) {
 			Calls: g.Calls, TokensIn: g.TokensIn, TokensOut: g.TokensOut,
 		})
 	}
-	writeJSON(w, out)
+	return out
 }
 
 // handleCostsPlans serves the latest plan headroom snapshot per harness
