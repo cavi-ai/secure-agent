@@ -186,7 +186,7 @@ public struct AgentSummaryModel: Codable, Identifiable, Sendable {
     public let workspace: String?
     public let repo: String?
     public let branch: String?
-    /// The agent that spawned the session ("martina (openclaw)"); nil for
+    /// The agent that spawned the session ("quill (openclaw)"); nil for
     /// the user's own sessions and older daemons.
     public let origin: String?
 
@@ -233,7 +233,7 @@ public struct AgentSummaryModel: Codable, Identifiable, Sendable {
         self.origin = origin
     }
 
-    /// The spawning agent's name ("martina (openclaw)" → "martina"); "" for
+    /// The spawning agent's name ("quill (openclaw)" → "quill"); "" for
     /// the user's own sessions.
     public var originAgent: String {
         guard let origin, !origin.isEmpty else { return "" }

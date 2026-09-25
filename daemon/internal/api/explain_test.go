@@ -40,7 +40,7 @@ func explainTestAPI(t *testing.T, agents ...AgentSummary) *API {
 	return a
 }
 
-const liveFixturePath = "/Users/franco/.claude/skills/synced/02e126c1-8b1e-4482-9fef-643b59f422a6_b2ded7ac-f376-4f9d-b545-241ef76b3ce8/bookmark-librarian/config"
+const liveFixturePath = "/Users/dev/.claude/skills/synced/00000000-0000-4000-8000-000000000001_00000000-0000-4000-8000-000000000002/example-skill/config"
 
 // liveFixtureFlag is flag 12e7022e2de04005 as stored by the live daemon on
 // 2026-09-23 (evidence copied from the store).
@@ -64,7 +64,7 @@ func liveFixtureFlag() model.Flag {
 func liveFixtureVerdict() model.AdvisorVerdict {
 	return model.AdvisorVerdict{
 		Assessment: "benign", Confidence: 0.93,
-		Rationale:       "The Claude agent read its own bookmark-librarian skill config under ~/.claude/skills/synced/ and then made HTTPS connections to Cloudflare (2600:1f10:4fa9 / 2606:4700:20::), which is a standard API/CDN endpoint, not an exfiltration target.",
+		Rationale:       "The Claude agent read its own example-skill skill config under ~/.claude/skills/synced/ and then made HTTPS connections to Cloudflare (2600:1f10:4fa9 / 2606:4700:20::), which is a standard API/CDN endpoint, not an exfiltration target.",
 		SuggestedAction: "allow-host",
 		CreatedAt:       time.Date(2026, 9, 23, 0, 2, 0, 0, time.UTC),
 	}
@@ -199,7 +199,7 @@ func TestExplainWhatPerRule(t *testing.T) {
 
 // 5. Egress: dedupe by host:port, gap from the live fixture, allowlist state.
 func TestExplainEgress(t *testing.T) {
-	pinExplainHome(t, "/Users/franco")
+	pinExplainHome(t, "/Users/dev")
 	a := explainTestAPI(t)
 	f := liveFixtureFlag()
 	ex := a.explainFlag(f, false)
@@ -423,7 +423,7 @@ func TestExplainActions(t *testing.T) {
 
 // 9. Contract: the live FP flag's explanation, byte for byte.
 func TestExplainGoldenSensitiveRead(t *testing.T) {
-	pinExplainHome(t, "/Users/franco")
+	pinExplainHome(t, "/Users/dev")
 	a := explainTestAPI(t)
 	f := liveFixtureFlag()
 	a.store.PutFlag(f)

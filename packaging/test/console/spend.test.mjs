@@ -88,13 +88,13 @@ const proPlan = { harness: 'codex', home: 'codex', plan_type: 'pro', limit_id: '
 
 test('planLineText: plan, home, window, percent and the local reset time', () => {
   assert.equal(planLineText(proPlan), 'Codex Pro · codex · weekly 52% used · resets Fri 3:10 PM');
-  const two = { ...proPlan, home: 'scout (openclaw)', windows: [proPlan.windows[0], { window_minutes: 300, used_percent: 7.5, resets_at: 'bad' }] };
-  assert.equal(planLineText(two), 'Codex Pro · scout (openclaw) · weekly 52% used · resets Fri 3:10 PM · 5-hour 8% used');
+  const two = { ...proPlan, home: 'birch (openclaw)', windows: [proPlan.windows[0], { window_minutes: 300, used_percent: 7.5, resets_at: 'bad' }] };
+  assert.equal(planLineText(two), 'Codex Pro · birch (openclaw) · weekly 52% used · resets Fri 3:10 PM · 5-hour 8% used');
 });
 
 test('spendPlanItems: one item per plan keyed plan:<home>, a bar per window at used_percent; none for an empty list', () => {
-  const items = spendPlanItems([proPlan, { ...proPlan, home: 'scout (openclaw)', windows: [{ window_minutes: 300, used_percent: 95, resets_at: friday }] }]);
-  assert.deepEqual(Array.from(items, i => i.key), ['plan:codex', 'plan:scout (openclaw)']);
+  const items = spendPlanItems([proPlan, { ...proPlan, home: 'birch (openclaw)', windows: [{ window_minutes: 300, used_percent: 95, resets_at: friday }] }]);
+  assert.deepEqual(Array.from(items, i => i.key), ['plan:codex', 'plan:birch (openclaw)']);
   assert.match(items[0].html, /<span class="spend-plan-text">Codex Pro · codex · weekly 52% used · resets Fri 3:10 PM<\/span>/);
   assert.match(items[0].html, /class="hbar-fill" data-w="52\.0"/);
   assert.match(items[1].html, /class="hbar-fill crit" data-w="95\.0"/);

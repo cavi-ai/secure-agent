@@ -1088,7 +1088,7 @@ test('familyLabel: harness · repo@branch from the session joined by root pid', 
 
 test('familyLabel: workspace folder without a repo; the family cwd when no session joins', () => {
   assert.equal(familyLabel({ root_pid: 200, name: 'codex', workspace: '/elsewhere' }, famSessions), 'Codex · data-pipeline');
-  assert.equal(familyLabel({ root_pid: 555, name: 'claude', workspace: '/Users/franco' }, famSessions), 'Claude Code · franco');
+  assert.equal(familyLabel({ root_pid: 555, name: 'claude', workspace: '/Users/dev' }, famSessions), 'Claude Code · dev');
 });
 
 test('familyLabel: the harness name alone, never a pid', () => {
@@ -1374,21 +1374,21 @@ const plain = (x) => JSON.parse(JSON.stringify(x));
 
 
 test('sessionTitle appends the spawning agent when the session has an origin', () => {
-  assert.equal(originAgent({ origin: 'martina (openclaw)' }), 'martina');
+  assert.equal(originAgent({ origin: 'quill (openclaw)' }), 'quill');
   assert.equal(originAgent({}), '');
-  assert.equal(sessionTitle({ harness: 'codex', repo: 'career-ops', branch: 'main', origin: 'martina (openclaw)' }), 'career-ops@main · martina');
-  assert.equal(sessionTitle({ harness: 'codex', workspace: '/Volumes/M/.openclaw', origin: 'margaret (openclaw)' }), '.openclaw · margaret');
-  assert.equal(sessionTitle({ harness: 'codex', repo: 'career-ops', branch: 'main' }), 'career-ops@main');
+  assert.equal(sessionTitle({ harness: 'codex', repo: 'demo-app', branch: 'main', origin: 'quill (openclaw)' }), 'demo-app@main · quill');
+  assert.equal(sessionTitle({ harness: 'codex', workspace: '/Volumes/M/.openclaw', origin: 'fennel (openclaw)' }), '.openclaw · fennel');
+  assert.equal(sessionTitle({ harness: 'codex', repo: 'demo-app', branch: 'main' }), 'demo-app@main');
 });
 
 test('familyLabel names the spawning agent of the joined session', () => {
-  const sessions = [{ id: 'c1', harness: 'codex', repo: 'career-ops', branch: 'main', root_pid: 300, origin: 'martina (openclaw)' }];
-  assert.equal(familyLabel({ root_pid: 300, name: 'codex', workspace: '/w' }, sessions), `${harnessMeta('codex').label} · martina`);
+  const sessions = [{ id: 'c1', harness: 'codex', repo: 'demo-app', branch: 'main', root_pid: 300, origin: 'quill (openclaw)' }];
+  assert.equal(familyLabel({ root_pid: 300, name: 'codex', workspace: '/w' }, sessions), `${harnessMeta('codex').label} · quill`);
   assert.equal(familyLabel({ root_pid: 301, name: 'codex', workspace: '/w/api' }, sessions), `${harnessMeta('codex').label} · api`);
 });
 
 test('collapseSessionFamilies folds identical titles into one keyed row, stable across reorder', () => {
-  const s = (id, started, status, extra) => ({ id, harness: 'codex', repo: 'career-ops', branch: 'main', started_at: started, status, ...(extra || {}) });
+  const s = (id, started, status, extra) => ({ id, harness: 'codex', repo: 'demo-app', branch: 'main', started_at: started, status, ...(extra || {}) });
   const a = s('a', '2026-09-24T10:00:00Z', 'idle');
   const b = s('b', '2026-09-24T11:00:00Z', 'active');
   const c = s('c', '2026-09-24T09:00:00Z', 'active', { repo: 'api' });
@@ -1396,7 +1396,7 @@ test('collapseSessionFamilies folds identical titles into one keyed row, stable 
   const title = x => sessionTitle(x);
   const rows = collapseSessionFamilies([fam(a), fam(c), fam(b)], 'codex', title);
   assert.equal(rows.length, 2);
-  assert.deepEqual(plain(rows.map(r => r.key)), ['group:codex|career-ops@main', 'c']);
+  assert.deepEqual(plain(rows.map(r => r.key)), ['group:codex|demo-app@main', 'c']);
   assert.equal(rows[0].dup, true);
   assert.deepEqual(plain(rows[0].sessions.map(x => x.id)), ['b', 'a'], 'newest start first');
   assert.equal(rows[0].status, 'active', 'the most active member');
@@ -1417,13 +1417,13 @@ test('fmtHHMM reads a timestamp as local HH:MM', () => {
 });
 
 test('collapseFamilyRows folds identical labels with summed memory, CPU and processes', () => {
-  const sessions = [1, 2, 3].map(i => ({ id: 'm' + i, harness: 'codex', root_pid: 400 + i, origin: 'martina (openclaw)' }));
+  const sessions = [1, 2, 3].map(i => ({ id: 'm' + i, harness: 'codex', root_pid: 400 + i, origin: 'quill (openclaw)' }));
   const f = (pid, rss, cpu, n) => ({ key: `${pid}:1`, name: 'codex', root_pid: pid, rss_bytes: rss, cpu_percent: cpu, process_count: n });
   const rows = [f(401, 100, 1, 2), f(402, 300, 2, 3), f(999, 50, 1, 1), f(403, 200, 4, 1)].map(x => ({ family: x, children: [] }));
   const out = collapseFamilyRows(rows, 'codex', x => familyLabel(x, sessions));
   assert.equal(out.length, 2);
   const dup = out[0];
-  assert.equal(dup.key, `group:codex|${harnessMeta('codex').label} · martina`);
+  assert.equal(dup.key, `group:codex|${harnessMeta('codex').label} · quill`);
   assert.equal(dup.families.length, 3);
   assert.deepEqual(plain([dup.rss_bytes, dup.cpu_percent, dup.process_count]), [600, 7, 6]);
   assert.deepEqual(plain(dup.families.map(x => x.root_pid)), [402, 403, 401], 'by memory');
@@ -1434,7 +1434,7 @@ test('collapseFamilyRows folds identical labels with summed memory, CPU and proc
   const items = ctx.resourceFamilyGroupRows(g, sessions, new Set(), Date.now(), {});
   assert.deepEqual(plain(items.map(r => r.key)), [dup.key, '999:1'], 'body rows keyed by fold key and family key');
   const html = items.map(r => r.html).join('');
-  assert.match(html, /data-action="toggle-family-dup" data-key="group:codex\|[^"]*martina" aria-expanded="false"><strong>[^<]*martina<\/strong><span class="family-dup-count">×3<\/span>/);
+  assert.match(html, /data-action="toggle-family-dup" data-key="group:codex\|[^"]*quill" aria-expanded="false"><strong>[^<]*quill<\/strong><span class="family-dup-count">×3<\/span>/);
   const open = ctx.resourceFamilyGroupRows(g, sessions, new Set(), Date.now(), { [dup.key]: true }).map(r => r.html).join('');
   assert.equal((open.match(/class="family-row nested/g) || []).length, 3, 'expanded lists each family');
 });
@@ -1553,20 +1553,20 @@ test('eventsNewestFirst orders rows by ts descending without touching the input'
 
 test('applySessionFilters: text matches the spawning agent and the raw origin', () => {
   const groups = groupSessionsByHarness([
-    { id: 'o1', harness: 'codex', repo: 'career-ops', branch: 'main', origin: 'martina (openclaw)', status: 'active', last_seen_at: T(1) },
-    { id: 'o2', harness: 'codex', repo: 'career-ops', branch: 'main', status: 'active', last_seen_at: T(2) },
+    { id: 'o1', harness: 'codex', repo: 'demo-app', branch: 'main', origin: 'quill (openclaw)', status: 'active', last_seen_at: T(1) },
+    { id: 'o2', harness: 'codex', repo: 'demo-app', branch: 'main', status: 'active', last_seen_at: T(2) },
   ], [], []);
   const ids = (gs) => gs.flatMap(g => g.live.map(f => f.session.id));
-  assert.deepEqual(plain(ids(applySessionFilters(groups, { text: 'martina' }))), ['o1']);
-  assert.deepEqual(plain(ids(applySessionFilters(groups, { text: 'MARTINA (openclaw)' }))), ['o1']);
-  assert.deepEqual(plain(ids(applySessionFilters(groups, { text: 'career-ops' }))), ['o1', 'o2']);
+  assert.deepEqual(plain(ids(applySessionFilters(groups, { text: 'quill' }))), ['o1']);
+  assert.deepEqual(plain(ids(applySessionFilters(groups, { text: 'QUILL (openclaw)' }))), ['o1']);
+  assert.deepEqual(plain(ids(applySessionFilters(groups, { text: 'demo-app' }))), ['o1', 'o2']);
 });
 
 test('Processes row: a root whose /status tree root carries an origin names the agent', () => {
   const a = { pid: 4412, name: 'codex', cwd: '/Users/dev/.openclaw', root_pid: 4412 };
-  const roots = new Map([[4412, { pid: 4412, name: 'codex', session_id: 's1', repo: 'career-ops', branch: 'main', origin: 'martina (openclaw)' }]]);
+  const roots = new Map([[4412, { pid: 4412, name: 'codex', session_id: 's1', repo: 'demo-app', branch: 'main', origin: 'quill (openclaw)' }]]);
   const html = ctx.agentInstanceHTML({ root: a, children: [] }, Date.now(), {}, roots);
-  assert.match(html, /<span class="agent-row-title">career-ops@main · martina<\/span>/);
+  assert.match(html, /<span class="agent-row-title">demo-app@main · quill<\/span>/);
   const bare = ctx.agentInstanceHTML({ root: a, children: [] }, Date.now(), {}, new Map());
   assert.match(bare, /<span class="agent-row-title">\.openclaw<\/span>/);
 });

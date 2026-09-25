@@ -65,11 +65,11 @@ func TestVolumesOneRowPerVolume(t *testing.T) {
 
 func TestMergeSharedVolumes(t *testing.T) {
 	got := mergeShared([]Volume{
-		{Mount: "/Volumes/MIRZA", TotalBytes: 8000, FreeBytes: 500},
+		{Mount: "/Volumes/Work", TotalBytes: 8000, FreeBytes: 500},
 		{Mount: "/Volumes/USB", TotalBytes: 1000, FreeBytes: 900},
 		{Mount: "/System/Volumes/Data", TotalBytes: 8000, FreeBytes: 500},
 	})
-	if len(got) != 2 || got[0].Mount != "/Volumes/MIRZA + /System/Volumes/Data" || got[1].Mount != "/Volumes/USB" {
+	if len(got) != 2 || got[0].Mount != "/Volumes/Work + /System/Volumes/Data" || got[1].Mount != "/Volumes/USB" {
 		t.Fatalf("merged = %+v", got)
 	}
 }

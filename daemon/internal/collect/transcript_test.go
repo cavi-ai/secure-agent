@@ -544,10 +544,10 @@ func TestCodexSessionSeenCarriesOrigin(t *testing.T) {
 
 func TestCodexOrigin(t *testing.T) {
 	for path, want := range map[string]string{
-		"/Volumes/M/.openclaw/agents/martina/agent/codex-home/sessions/2026/09/24/rollout-a.jsonl": "martina (openclaw)",
-		"/Users/u/.codex/sessions/2026/09/24/rollout-a.jsonl":                                      "",
-		"/Users/u/custom-home/sessions/2026/09/24/rollout-a.jsonl":                                 "",
-		"/Users/u/rollout-a.jsonl": "",
+		"/Volumes/M/.openclaw/agents/quill/agent/codex-home/sessions/2026/09/24/rollout-a.jsonl": "quill (openclaw)",
+		"/Users/u/.codex/sessions/2026/09/24/rollout-a.jsonl":                                    "",
+		"/Users/u/custom-home/sessions/2026/09/24/rollout-a.jsonl":                               "",
+		"/Users/u/rollout-a.jsonl":                                                               "",
 	} {
 		if got := CodexOrigin(path); got != want {
 			t.Errorf("CodexOrigin(%q) = %q, want %q", path, got, want)

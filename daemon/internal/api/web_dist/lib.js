@@ -1481,7 +1481,7 @@ function sessionTitle(s, liveCwd) {
 }
 
 // originAgent: the agent that spawned a session, from its origin
-// ("martina (openclaw)" → "martina"); "" for the user's own sessions.
+// ("quill (openclaw)" → "quill"); "" for the user's own sessions.
 function originAgent(s) {
   return String((s && s.origin) || '').replace(/ \(openclaw\)$/, '');
 }
