@@ -455,11 +455,12 @@ function sessionShort(id) {
 // harnessMeta: per-harness identity for the console — display name, brand
 // color, and the sprite symbol of its mark (index.html, #logo-*). Needles
 // match the harness names the daemon reports by substring, first match wins,
-// so "cursor-ide" is listed before "cursor". Infra entries (IDEs, local model
+// so "claude-desktop" is listed before "claude" and "cursor-ide" before "cursor". Infra entries (IDEs, local model
 // servers) are tracked but shown apart and never counted as agents. Known
 // harnesses without a mark keep a text glyph. Colors must match the .hk-<key>
 // rules in style.css. Pure: returns data, no DOM.
 const HARNESS_TABLE = [
+  { needle: 'claude-desktop', key: 'claude-desktop', label: 'Claude', color: '#D97757', logo: 'logo-claude', infra: true },
   { needle: 'claude', key: 'claude', label: 'Claude Code', color: '#D97757', logo: 'logo-claude' },
   { needle: 'cursor-ide', key: 'cursor-ide', label: 'Cursor', color: '#000000', logo: 'logo-cursor', tile: 'light', infra: true },
   { needle: 'cursor', key: 'cursor', label: 'Cursor', color: '#000000', logo: 'logo-cursor', tile: 'light' },

@@ -1529,7 +1529,7 @@ button.fw-uninspected .fw-drill-hint {
 }
 .harness-tile.light { background: hsl(0 0% 94%); color: #000; box-shadow: inset 0 0 0 1px hsl(0 0% 0% / 0.12); }
 .harness-logo { width: var(--harness-logo); height: var(--harness-logo); }
-.hk-claude { --harness-color: #D97757; }
+.hk-claude, .hk-claude-desktop { --harness-color: #D97757; }
 .hk-cursor, .hk-cursor-ide { --harness-color: #000000; }
 .hk-codex { --harness-color: #10A37F; }
 .hk-opencode { --harness-color: #000000; }
