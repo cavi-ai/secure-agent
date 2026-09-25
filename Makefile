@@ -8,11 +8,12 @@ dmg:
 
 # Signed release build: Developer ID Application cert + notarization.
 # Usage: make release [VERSION=x.y.z]
-# Env: CODESIGN_IDENTITY (default: Apple Development for stable TCC grants)
+# Env: CODESIGN_IDENTITY (default: same resolution as `make install` —
+#      packaging/lib/sign_identity.sh — for stable TCC grants)
 #      NOTARY_PROFILE (keychain profile for notarytool — required for
 #      distribution beyond this machine)
 release: VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-release: CODESIGN_IDENTITY ?= $(shell security find-identity -v -p codesigning 2>/dev/null | grep -oE '"[^"]*Apple Development[^"]*"' | head -1 | tr -d '"')
+release: CODESIGN_IDENTITY ?= $(shell bash -c '. packaging/lib/sign_identity.sh && resolve_sign_identity' 2>/dev/null)
 release:
 	VERSION=$(VERSION) CODESIGN_IDENTITY="$(CODESIGN_IDENTITY)" NOTARY_PROFILE="$(NOTARY_PROFILE)" ./packaging/make_dmg.sh
 

@@ -7,6 +7,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 ## [Unreleased]
 
 ### Changed
+- `make install`/`make app`/`make dmg` sign with the first Apple Development identity when one exists (else Developer ID Application, else ad-hoc) and give every bundled binary a stable `--identifier`, so file telemetry's Full Disk Access grant survives rebuilds instead of resetting on every install.
 - Console Cleanup view: each worktree row has a state stripe (green remove, amber review, violet keep, grey prune); the keep chip is violet instead of red.
 - CI fails when a tracked file holds a `/Users/<name>` or `/Volumes/<name>` path outside the placeholder names fixtures use.
 - `live_acceptance.sh` reads the workspace root from `SECURE_AGENT_WORKSPACE_ROOT`, defaulting to two levels above the main checkout.

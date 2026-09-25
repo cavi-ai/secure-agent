@@ -80,6 +80,10 @@ jobs:
           go-version-file: go.mod
       - name: smoke
         run: ./packaging/test/e2e_smoke.sh
+      - name: sign identity unit tests
+        run: bash packaging/test/test_sign_identity.sh
+      - name: install status unit tests
+        run: bash packaging/test/test_install_status.sh
 
   linux:
     name: Linux CGO=0 build + vet + test
