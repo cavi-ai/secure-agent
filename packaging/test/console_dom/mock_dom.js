@@ -1676,8 +1676,9 @@
   // foldpatch (with dupdemo): two ended sessions share the live martina
   // title, so the codex group holds a live and an ended fold with one key.
   // The ended fold is expanded, the live fold's toggle focused, then a frame
-  // ends another codex session. <pre id="fold-probe">: focus kept, the group
-  // the same open node, each fold's aria-expanded, the head counts around it.
+  // ends another codex session; the probe waits out the render engine's
+  // 3 s focus hold. <pre id="fold-probe">: focus kept, the group the same
+  // open node, each fold's aria-expanded, the head counts around it.
   if (MODE.includes('dupdemo') && MODE.includes('foldpatch')) {
     for (let i = 6; i <= 7; i++) {
       data['/sessions'].push({ id: `sess-dup-${i}`, harness: 'codex', workspace: '/Users/dev/.openclaw/workspace-career-ops',
@@ -1706,15 +1707,19 @@
           const exp = (b) => { const t = fold(b); return t ? t.getAttribute('aria-expanded') : 'missing'; };
           stamp('fold-probe', JSON.stringify({ focus: !!btn && btn.isConnected && document.activeElement === btn,
             group: !!group && now2 === group && group.open, live: exp('live'), ended: exp('ended'), before, after: counts() }));
-        }, 1500);
+        }, 4000);
       }, 900);
     }, 4300);
   }
   // familypatch (with dupdemo&tab=resources): the margaret fold expanded, a
-  // View family button inside it focused, then the codex data-pipeline
-  // family's memory and CPU change. <pre id="family-probe">: focus kept, the
-  // group the same open node, the fold still expanded, the head counts.
+  // View family button inside it focused, then a fourth codex family's
+  // memory and CPU change. <pre id="family-probe">: focus kept, the group the
+  // same open node, the fold still expanded, the head counts.
   if (MODE.includes('dupdemo') && MODE.includes('familypatch')) {
+    data['/resources'].sessions.push({ key: '8400:1789470000000000000', name: 'codex', root_pid: 8400,
+      root_started_at: '2026-09-09T13:00:00Z', workspace: '/Users/dev/workspace/etl-sidecar', last_seen_at: iso(30000),
+      rss_bytes: 50 * 1024 ** 2, cpu_percent: 2, process_count: 1, orphan_count: 0,
+      processes: [{ pid: 8400, ppid: 1, name: 'codex', rss_bytes: 50 * 1024 ** 2, cpu_percent: 2 }], samples: [], diagnoses: [] });
     const marg = 'group:codex|Codex · margaret';
     setTimeout(() => {
       const board = document.getElementById('resource-board');
@@ -1727,7 +1732,7 @@
         const counts = () => { const c = board.querySelector('details.family-group[data-harness="codex"] .family-group-counts'); return c ? c.textContent : ''; };
         const before = counts();
         const SA = window.SA;
-        SA.t.resources = { ...SA.t.resources, sessions: SA.t.resources.sessions.map(f => f.key === '4412:1789470000000000000'
+        SA.t.resources = { ...SA.t.resources, sessions: SA.t.resources.sessions.map(f => f.key === '8400:1789470000000000000'
           ? { ...f, rss_bytes: Number(f.rss_bytes) + 512 * 1024 ** 2, cpu_percent: Number(f.cpu_percent) + 7 } : f) };
         renderResourceMissionControl();
         setTimeout(() => {
