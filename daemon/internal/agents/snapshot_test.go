@@ -66,9 +66,9 @@ func TestSnapshotNamesLauncherFromAncestry(t *testing.T) {
 
 func TestSanitizeArgv0CutsEnvironmentAndScrubs(t *testing.T) {
 	for in, want := range map[string]string{
-		"claude":                          "claude",
+		"claude":                           "claude",
 		"Cursor Helper (Plugin): host A=1": "Cursor Helper (Plugin): host",
-		"tool AKIAABCDEFGHIJKLMNOP":       "tool [REDACTED]",
+		"tool AKIAABCDEFGHIJKLMNOP":        "tool [REDACTED]",
 	} {
 		if got := SanitizeArgv0(in); got != want {
 			t.Fatalf("SanitizeArgv0(%q) = %q, want %q", in, got, want)
@@ -78,10 +78,10 @@ func TestSanitizeArgv0CutsEnvironmentAndScrubs(t *testing.T) {
 
 func TestHarnessLabel(t *testing.T) {
 	for exe, want := range map[string]string{
-		claudeCodeExe:                                      "claude-code 2.1.281",
+		claudeCodeExe: "claude-code 2.1.281",
 		"/Users/dev/.local/share/claude/versions/2.1.281": "claude 2.1.281",
-		"/Applications/Cursor.app/Contents/MacOS/Cursor":   "Cursor.app",
-		"/opt/homebrew/bin/opencode":                       "opencode",
+		"/Applications/Cursor.app/Contents/MacOS/Cursor":  "Cursor.app",
+		"/opt/homebrew/bin/opencode":                      "opencode",
 	} {
 		if got := HarnessLabel(exe); got != want {
 			t.Fatalf("HarnessLabel(%q) = %q, want %q", exe, got, want)
