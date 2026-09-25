@@ -234,13 +234,32 @@ function resourceFamilyDupHTML(d, sessions, open, now) {
   </div>`;
 }
 
-// One harness group (resourceFamilyGroups): mark, name, family count, total
-// memory and CPU; open by default only when a family in it needs attention.
-// Families with an identical label fold into one expandable row; dupOpen maps
-// a folded row's key to its expanded state (unset: open while it holds a
-// family that needs attention).
-function resourceFamilyGroupHTML(g, sessions, flagged, now, dupOpen) {
+// resourceFamilyGroupCounts: a harness group's head text — family count,
+// total memory and CPU.
+function resourceFamilyGroupCounts(g) {
+  const n = g.infra ? g.rows.length : g.families;
+  return `${n} ${g.infra ? 'tracked' : n === 1 ? 'family' : 'families'} · ${fmtRSS(g.rss) || '—'} · ${fmtCPU(g.cpu) || '—'} CPU`;
+}
+
+// One harness group's shell (resourceFamilyGroups): mark, name and
+// resourceFamilyGroupCounts in the head, an empty body that
+// resourceFamilyGroupRows fills through patchList; open by default only when
+// a family in it needs attention.
+function resourceFamilyGroupHTML(g, sessions, flagged) {
   const open = g.rows.some(r => [r.family, ...r.children].some(f => flagged.has(f.key)));
+  const head = g.infra ? '<span class="family-group-title">Infrastructure</span>' : harnessChipHTML(g.key, { label: true });
+  return `<details class="family-group${g.infra ? ' infra' : ''}" data-harness="${escapeHTML(g.key)}"${open ? ' open' : ''}>
+    <summary class="family-group-head">${head}<span class="family-group-counts">${escapeHTML(resourceFamilyGroupCounts(g))}</span></summary>
+    <div class="family-group-body"></div>
+  </details>`;
+}
+
+// resourceFamilyGroupRows: a harness group's body as patchList items keyed
+// by family key, or by group:<harness>|<label> for families with an
+// identical label folded into one expandable row; dupOpen maps a folded
+// row's key to its expanded state (unset: open while it holds a family that
+// needs attention).
+function resourceFamilyGroupRows(g, sessions, flagged, now, dupOpen) {
   const branch = r => {
     const kids = r.children.length
       ? `<div class="family-children">${r.children.map(c => resourceFamilyRowHTML(c, sessions, true, now)).join('')}</div>` : '';
@@ -249,18 +268,11 @@ function resourceFamilyGroupHTML(g, sessions, flagged, now, dupOpen) {
   const folded = g.infra
     ? g.rows.map(r => ({ dup: false, row: r }))
     : collapseFamilyRows(g.rows, g.key, f => familyLabel(f, sessions));
-  const rows = folded.map(x => {
-    if (!x.dup) return branch(x.row);
+  return folded.map(x => {
+    if (!x.dup) return { key: String(x.row.family.key), html: branch(x.row) };
     const set = dupOpen && Object.prototype.hasOwnProperty.call(dupOpen, x.key);
-    return resourceFamilyDupHTML(x, sessions, set ? !!dupOpen[x.key] : x.families.some(f => flagged.has(f.key)), now);
-  }).join('');
-  const n = g.infra ? g.rows.length : g.families;
-  const counts = `${n} ${g.infra ? 'tracked' : n === 1 ? 'family' : 'families'} · ${fmtRSS(g.rss) || '—'} · ${fmtCPU(g.cpu) || '—'} CPU`;
-  const head = g.infra ? '<span class="family-group-title">Infrastructure</span>' : harnessChipHTML(g.key, { label: true });
-  return `<details class="family-group${g.infra ? ' infra' : ''}" data-harness="${escapeHTML(g.key)}"${open ? ' open' : ''}>
-    <summary class="family-group-head">${head}<span class="family-group-counts">${escapeHTML(counts)}</span></summary>
-    <div class="family-group-body">${rows}</div>
-  </details>`;
+    return { key: x.key, html: resourceFamilyDupHTML(x, sessions, set ? !!dupOpen[x.key] : x.families.some(f => flagged.has(f.key)), now) };
+  });
 }
 
 function resourcePolicyLineHTML(control) {
@@ -297,6 +309,7 @@ function renderResourceMissionControl() {
     SA.selectedResourceKey = '';
   }
   const parts = [];
+  let rowsOf = null;
   const strip = resourceHostContextHTML(snapshot.host);
   if (strip) parts.push({ key: 'strip', html: strip });
   if (!families.length) {
@@ -311,10 +324,24 @@ function renderResourceMissionControl() {
     const infra = groups.filter(g => g.infra).reduce((n, g) => n + g.rows.length, 0);
     parts.push({ key: 'attention', html: resourceAttentionHTML(attention, sessions) });
     parts.push({ key: 'families-head', html: `<h3 class="family-section-head">Families by harness<span>${count} ${count === 1 ? 'family' : 'families'}${infra ? ` · ${infra} infrastructure` : ''}</span></h3>` });
-    for (const g of groups) parts.push({ key: 'group:' + g.key, html: resourceFamilyGroupHTML(g, sessions, flagged, now, SA.familyDupOpen) });
+    // A group's shell hashes by key alone: its counts change in place and
+    // its body reconciles per row, so a metric update rebuilds only the rows
+    // that changed.
+    for (const g of groups) parts.push({ key: 'group:' + g.key, group: g, shell: 'group:' + g.key, html: resourceFamilyGroupHTML(g, sessions, flagged) });
+    rowsOf = g => resourceFamilyGroupRows(g, sessions, flagged, now, SA.familyDupOpen);
   }
   parts.push({ key: 'policy', html: resourcePolicyLineHTML(snapshot.control || {}) });
-  patchList(container, parts, { key: p => p.key, html: p => p.html });
+  patchList(container, parts, { key: p => p.key, html: p => p.html, hash: p => p.shell || p.html });
+  const rowOpts = { key: r => r.key, html: r => r.html };
+  for (const p of parts) {
+    if (!p.group || !rowsOf) continue;
+    const node = Array.from(container.children).find(n => n._saKey === p.key);
+    if (!node) continue;
+    const counts = node.querySelector('.family-group-counts');
+    const text = resourceFamilyGroupCounts(p.group);
+    if (counts && counts.textContent !== text) counts.textContent = text;
+    patchList(node.querySelector('.family-group-body'), rowsOf(p.group), rowOpts);
+  }
 }
 
 // Family drawer (app.js openFamilyDrawer): the inspector View family opens
@@ -744,20 +771,23 @@ function renderSessionBoard() {
     // A group's open state is DOM state: patchList keeps an unchanged group's
     // node and carries open across a rebuilt one.
     // Rows patch inside each group's shell, keyed by session id or folded
-    // title, so a selected or expanded row survives a reconcile.
+    // title, so a selected or expanded row survives a reconcile. The shell
+    // hashes by key and whether it has an ended tail: its counts change in
+    // place (syncSessionGroupShell), never by rebuilding the group.
     const parts = sessionGroups.length
-      ? sessionGroups.map(g => ({ key: 'group:' + g.key, group: g, html: sessionGroupHTML(g, true, !!SA.endedSessionsOpen[g.key]) }))
+      ? sessionGroups.map(g => ({ key: 'group:' + g.key, group: g, shell: `group:${g.key}|${g.ended.length ? 'ended' : ''}`, html: sessionGroupHTML(g, true, !!SA.endedSessionsOpen[g.key]) }))
       : [{ key: filtered ? 'empty:nomatch' : 'empty:quiet', html: filtered ? noMatch : quiet }];
     if (infra) parts.push({ key: 'infra', html: sessionInfraGroupHTML(infra, false) });
-    patchList(rail, parts, { key: p => p.key, html: p => p.html });
+    patchList(rail, parts, { key: p => p.key, html: p => p.html, hash: p => p.shell || p.html });
     const rowOpts = { key: r => r.key, html: r => r.html };
     for (const p of parts) {
       if (!p.group) continue;
       const node = Array.from(rail.children).find(n => n._saKey === p.key);
       if (!node) continue;
-      const rows = fams => sessionRailRows(fams, p.group.key, trees, SA.selectedSessionId, SA.sessionDupOpen);
-      patchList(node.querySelector('.session-rows'), rows(p.group.live), rowOpts);
-      patchList(node.querySelector('.session-ended-body'), rows(p.group.ended), rowOpts);
+      syncSessionGroupShell(node, p.group, !!SA.endedSessionsOpen[p.group.key]);
+      const rows = (fams, bucket) => sessionRailRows(fams, p.group.key, trees, SA.selectedSessionId, SA.sessionDupOpen, bucket);
+      patchList(node.querySelector('.session-rows'), rows(p.group.live, 'live'), rowOpts);
+      patchList(node.querySelector('.session-ended-body'), rows(p.group.ended, 'ended'), rowOpts);
     }
     // Detail: the selected session's trace waterfall.
     const selected = durable.find(s => s.id === SA.selectedSessionId);

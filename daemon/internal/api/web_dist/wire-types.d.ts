@@ -348,6 +348,7 @@ export interface AgentSummary {
   workspace?: string;
   repo?: string;
   branch?: string;
+  origin?: string;
 }
 
 export interface AgentTree {

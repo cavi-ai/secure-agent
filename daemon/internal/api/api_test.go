@@ -607,7 +607,11 @@ func TestGroupAgentTreesOneRowPerRootHelpersFolded(t *testing.T) {
 }
 
 func TestStatusJSONIncludesTrees(t *testing.T) {
-	a := newTestAPI("", testStore(t), &fakeKiller{}, func() Status {
+	db := testStore(t)
+	now := time.Now()
+	db.UpsertSession(model.Session{ID: "s-origin", Harness: "claude", RootPID: 10, Repo: "career-ops", Branch: "main",
+		Origin: "martina (openclaw)", StartedAt: now, LastSeenAt: now, Status: model.SessionActive, Confidence: model.ConfProcessTree})
+	a := newTestAPI("", db, &fakeKiller{}, func() Status {
 		return Status{Running: true, Agents: []AgentSummary{
 			{PID: 10, Name: "claude", RootPID: 10, CPUPercent: 60},
 			{PID: 11, Name: "claude", RootPID: 10, CPUPercent: 15},
@@ -627,6 +631,13 @@ func TestStatusJSONIncludesTrees(t *testing.T) {
 	}
 	if st.Agents[0].CPUPercent != 60 || st.Trees[0].CPUPercent != 75 {
 		t.Fatalf("CPU serialization/aggregation failed: agents=%+v trees=%+v", st.Agents, st.Trees)
+	}
+	// The root joins its session by root pid, the spawning agent included.
+	if r := st.Trees[0].Root; r.SessionID != "s-origin" || r.Repo != "career-ops" || r.Origin != "martina (openclaw)" {
+		t.Fatalf("tree root join = %+v, want session s-origin, repo career-ops, origin martina (openclaw)", r)
+	}
+	if !strings.Contains(rr.Body.String(), `"origin":"martina (openclaw)"`) {
+		t.Fatalf("/status body carries no root origin: %s", rr.Body.String())
 	}
 }
 

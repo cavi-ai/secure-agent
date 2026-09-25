@@ -39,6 +39,10 @@ means the model server has failed repeatedly and verdicts are paused
 (`last_error` says why) — the UIs render this so advisor actions never look
 like dead buttons. Absent on older daemons.
 
+Each `trees[].root` whose pid roots a recorded session carries that session's
+`session_id`, `workspace`, `repo`, `branch` and `origin` (the spawning agent,
+as on `/sessions`); each is omitted when empty.
+
 ### Resource telemetry: `GET /resources`
 
 Returns a point-in-time rollup of resources attributed to tagged agent process

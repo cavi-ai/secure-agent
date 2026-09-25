@@ -204,6 +204,8 @@ def main():
         dom_railburst = dump_dom(chrome, tmp, "?railburst")
         dom_dup = dump_dom(chrome, tmp, "?dupdemo")
         dom_dupres = dump_dom(chrome, tmp, "?dupdemo&tab=resources")
+        dom_foldpatch = dump_dom(chrome, tmp, "?dupdemo&foldpatch")
+        dom_familypatch = dump_dom(chrome, tmp, "?dupdemo&tab=resources&familypatch")
         dom_focus = dump_dom(chrome, tmp, "?focusburst")
         dom_click = dump_dom(chrome, tmp, "?clickburst")
         dom_rawmute = dump_dom(chrome, tmp, "?rawmute")
@@ -1022,6 +1024,26 @@ def main():
               re.search(r'data-action="toggle-family-dup" data-key="group:codex\|Codex · margaret" aria-expanded="false">'
                         r'<strong>Codex · margaret</strong><span class="family-dup-count">×3</span>', dup_board) is not None
               and '<b>600 MB</b><small>memory</small>' in dup_board and '<b>6</b><small>processes</small>' in dup_board)
+        try:
+            fold_probe = json.loads(pre(dom_foldpatch, "fold-probe") or "null")
+        except ValueError:
+            fold_probe = None
+        check("a status change patches a session group in place: a focused row keeps identity and focus, the group stays open, the counts update",
+              isinstance(fold_probe, dict) and fold_probe.get("focus") is True and fold_probe.get("group") is True
+              and fold_probe.get("before") and fold_probe.get("after") and fold_probe.get("before") != fold_probe.get("after"),
+              f"probe={fold_probe}")
+        check("a live and an ended fold with one title expand independently",
+              isinstance(fold_probe, dict) and fold_probe.get("live") == "false" and fold_probe.get("ended") == "true",
+              f"probe={fold_probe}")
+        try:
+            family_probe = json.loads(pre(dom_familypatch, "family-probe") or "null")
+        except ValueError:
+            family_probe = None
+        check("a metric update patches a Resources group per row: a focused family control keeps identity and focus, the fold stays expanded",
+              isinstance(family_probe, dict) and family_probe.get("focus") is True and family_probe.get("group") is True
+              and family_probe.get("fold") == "true"
+              and family_probe.get("before") and family_probe.get("after") and family_probe.get("before") != family_probe.get("after"),
+              f"probe={family_probe}")
 
         infra_tag = re.search(r'<details class="session-group infra"[^>]*>', dom_railburst)
         infra_tag = infra_tag.group(0) if infra_tag else ""

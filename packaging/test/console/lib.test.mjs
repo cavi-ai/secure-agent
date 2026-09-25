@@ -22,6 +22,8 @@ vm.runInNewContext(readFileSync(libPath, 'utf8'), ctx, { filename: 'lib.js' });
 // tab-overview.js declares functions only, so its renderers evaluate in the
 // same context on top of lib.js.
 vm.runInContext(readFileSync(path.join(webDist, 'tab-overview.js'), 'utf8'), ctx, { filename: 'tab-overview.js' });
+// tab-agents.js declares functions only too (the Processes rows).
+vm.runInContext(readFileSync(path.join(webDist, 'tab-agents.js'), 'utf8'), ctx, { filename: 'tab-agents.js' });
 const {
   escapeHTML, fmtTime, eventKey, eventTime, eventsNewestFirst, eventRow, eventWho,
   advanceBuckets, bucketIndexFor, sparkPoints,
@@ -1423,9 +1425,14 @@ test('collapseFamilyRows folds identical labels with summed memory, CPU and proc
   assert.deepEqual(plain([dup.rss_bytes, dup.cpu_percent, dup.process_count]), [600, 7, 6]);
   assert.deepEqual(plain(dup.families.map(x => x.root_pid)), [402, 403, 401], 'by memory');
   assert.equal(out[1].key, '999:1');
-  const html = ctx.resourceFamilyGroupHTML({ key: 'codex', rows, families: 4, rss: 650, cpu: 8 }, sessions, new Set(), Date.now(), {});
+  const g = { key: 'codex', rows, families: 4, rss: 650, cpu: 8 };
+  const shell = ctx.resourceFamilyGroupHTML(g, sessions, new Set());
+  assert.match(shell, /<span class="family-group-counts">4 families · [^<]* CPU<\/span><\/summary>\s*<div class="family-group-body"><\/div>/, 'the shell carries counts and an empty body');
+  const items = ctx.resourceFamilyGroupRows(g, sessions, new Set(), Date.now(), {});
+  assert.deepEqual(plain(items.map(r => r.key)), [dup.key, '999:1'], 'body rows keyed by fold key and family key');
+  const html = items.map(r => r.html).join('');
   assert.match(html, /data-action="toggle-family-dup" data-key="group:codex\|[^"]*martina" aria-expanded="false"><strong>[^<]*martina<\/strong><span class="family-dup-count">×3<\/span>/);
-  const open = ctx.resourceFamilyGroupHTML({ key: 'codex', rows, families: 4, rss: 650, cpu: 8 }, sessions, new Set(), Date.now(), { [dup.key]: true });
+  const open = ctx.resourceFamilyGroupRows(g, sessions, new Set(), Date.now(), { [dup.key]: true }).map(r => r.html).join('');
   assert.equal((open.match(/class="family-row nested/g) || []).length, 3, 'expanded lists each family');
 });
 
@@ -1484,4 +1491,24 @@ test('eventsNewestFirst orders rows by ts descending without touching the input'
   const out = eventsNewestFirst(input);
   assert.deepEqual(out.map(e => e.kind), [14, 0, 13, 12]);
   assert.equal(input[0].kind, 13);
+});
+
+test('applySessionFilters: text matches the spawning agent and the raw origin', () => {
+  const groups = groupSessionsByHarness([
+    { id: 'o1', harness: 'codex', repo: 'career-ops', branch: 'main', origin: 'martina (openclaw)', status: 'active', last_seen_at: T(1) },
+    { id: 'o2', harness: 'codex', repo: 'career-ops', branch: 'main', status: 'active', last_seen_at: T(2) },
+  ], [], []);
+  const ids = (gs) => gs.flatMap(g => g.live.map(f => f.session.id));
+  assert.deepEqual(plain(ids(applySessionFilters(groups, { text: 'martina' }))), ['o1']);
+  assert.deepEqual(plain(ids(applySessionFilters(groups, { text: 'MARTINA (openclaw)' }))), ['o1']);
+  assert.deepEqual(plain(ids(applySessionFilters(groups, { text: 'career-ops' }))), ['o1', 'o2']);
+});
+
+test('Processes row: a root whose /status tree root carries an origin names the agent', () => {
+  const a = { pid: 4412, name: 'codex', cwd: '/Users/dev/.openclaw', root_pid: 4412 };
+  const roots = new Map([[4412, { pid: 4412, name: 'codex', session_id: 's1', repo: 'career-ops', branch: 'main', origin: 'martina (openclaw)' }]]);
+  const html = ctx.agentInstanceHTML({ root: a, children: [] }, Date.now(), {}, roots);
+  assert.match(html, /<span class="agent-row-title">career-ops@main · martina<\/span>/);
+  const bare = ctx.agentInstanceHTML({ root: a, children: [] }, Date.now(), {}, new Map());
+  assert.match(bare, /<span class="agent-row-title">\.openclaw<\/span>/);
 });

@@ -685,13 +685,14 @@ function groupSessionsByHarness(sessions, trees, agents) {
   return ordered;
 }
 
-// sessionMatchesText: the text filter's fields — repo, branch, repo@branch
-// and workspace, case-insensitive. An empty query matches everything.
+// sessionMatchesText: the text filter's fields — repo, branch, repo@branch,
+// workspace, and the spawning agent (originAgent and the raw origin),
+// case-insensitive. An empty query matches everything.
 function sessionMatchesText(s, text) {
   const q = String(text || '').trim().toLowerCase();
   if (!q) return true;
   const repoBranch = s.repo ? `${s.repo}${s.branch ? '@' + s.branch : ''}` : '';
-  return [s.repo, s.branch, repoBranch, s.workspace]
+  return [s.repo, s.branch, repoBranch, s.workspace, originAgent(s), s.origin]
     .some(f => String(f || '').toLowerCase().includes(q));
 }
 
