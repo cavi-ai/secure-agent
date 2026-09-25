@@ -36,18 +36,21 @@ lipo -create -output bin/secure-agent  bin/secure-agent-arm64  bin/secure-agent-
 rm -f bin/secure-agentd-arm64 bin/secure-agentd-amd64 bin/secure-agent-arm64 bin/secure-agent-amd64
 
 echo "==> Building universal menubar app..."
-(cd menubar && swift build -c release --arch arm64 --arch x86_64)
 # Locate the product via SwiftPM itself: hardcoded .build/apple/... paths go
 # silently stale when the scratch dir differs (custom SWIFTPM build dir,
 # Xcode/SwiftPM layout changes) — the build then "succeeds" while shipping a
 # days-old binary. --show-bin-path always tells the truth.
 MENUBAR_BIN="$(cd menubar && swift build -c release --arch arm64 --arch x86_64 --show-bin-path)/secure-agent-menubar"
+# A source edit that compiles to identical objects (comments, whitespace)
+# skips the relink and leaves the product older than the source. Deleting it
+# makes this build write it again from its current objects.
+rm -f "${MENUBAR_BIN}"
+(cd menubar && swift build -c release --arch arm64 --arch x86_64)
 [[ -x "${MENUBAR_BIN}" ]] || { echo "error: menubar binary not found at ${MENUBAR_BIN}" >&2; exit 1; }
-# Freshness assertion: the product must be newer than every Swift source.
-# A stale product here means the build lied — fail loudly instead of
-# assembling an app with yesterday's menubar.
+# Freshness assertion: a source newer than the product just written was
+# edited during the build — fail instead of assembling a stale menubar.
 NEWEST_SRC="$(find menubar/Sources menubar/Package.swift -name '*.swift' -newer "${MENUBAR_BIN}" | head -1)"
-[[ -z "${NEWEST_SRC}" ]] || { echo "error: menubar binary is STALE (older than ${NEWEST_SRC}) — clean menubar/.build and retry" >&2; exit 1; }
+[[ -z "${NEWEST_SRC}" ]] || { echo "error: menubar binary is STALE (${NEWEST_SRC} changed during the build) — retry" >&2; exit 1; }
 
 echo "==> Assembling ${APP_NAME}.app..."
 rm -rf "${APP_DIR}"

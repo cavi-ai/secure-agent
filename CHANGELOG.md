@@ -6,6 +6,11 @@ All notable changes to `secure-agent` are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- CI fails when a tracked file holds a `/Users/<name>` or `/Volumes/<name>` path outside the placeholder names fixtures use.
+- `live_acceptance.sh` reads the workspace root from `SECURE_AGENT_WORKSPACE_ROOT`, defaulting to two levels above the main checkout.
+- Console: shows the posture banner capped at 3 rows off Home and empty on Home, agent ids in their own case, Egress led by the uninspected endpoints with zero-hit rules folded into one row, and Processes at full width.
+
 ### Added
 - Sessions carry `origin`, the openclaw agent behind a Codex session, named in console titles and "×N" folded rows.
 - `GET /costs/plans` serves each Codex home's plan headroom, shown as a line and bar per plan on the console Spend card.
@@ -226,6 +231,224 @@ All notable changes to `secure-agent` are documented here. The format follows
   the rule id, transcript path, and session id (never the matched text), is
   severity 3 for a registered secret and 2 for a typed pattern, and repeats
   per (path, rule) are collapsed.
+
+### Changed
+- `GET /worktrees` and `GET /cleanup` answer from the last scan at once; one older than 10 minutes answers while a background rescan replaces it (`refreshing: true`).
+- Worktree and clutter sizes older than an hour keep answering while measured again, instead of dropping to "measuring…".
+- The last worktree scan, cleanup inventory and their sizes are saved in the store (`scan_cache`) and answer after a daemon restart.
+- Console Cleanup view: re-reads while a report is refreshing; the scan line names the cached scan's age.
+- A stored advisor verdict publishes its flag as a stream delta.
+- The served allow-host label for an IPv6 address names the address owner instead of the literal.
+- Menu bar hero: state, color and subtitle come from `/posture`.
+- Menu bar: flags refetch only on `flag`, `posture`, `guard-prompt` and `guard-resolved` stream frames.
+- Menu bar: an identical flags refetch leaves the popover unchanged.
+- Menu bar: notification and mute-list titles come from the daemon.
+- The console token admits a method other than GET or HEAD only when the route lists it in `MutatingMethods` or `ConsoleMethods`.
+- `/guard/path-allow` is console-admitted on the proxy listener.
+- `POST /guard/path-allow` is a pinned-UI mutation.
+- Console finding cards offer the served allow-path action.
+- Menu bar Open console loads the fresh console link into the existing console tab before focusing it.
+- Console notification preferences moved from the header to the Policy tab.
+- `/worktrees*` routes are NoAgent: agent processes cannot read or change the machine's worktrees.
+- Console Overview: Memory by session is Memory by family — one bar per live process family, its RSS counted once, `N sessions` in the label.
+- Console Overview: the Memory by family badge counts agent families, not infra.
+- Events carry a `(session_id, kind, id)` index; the event store writes planner statistics (`PRAGMA optimize`, `analysis_limit` 1000) at open and after each prune.
+- Untagged keychain flags name the agent the match strings give the exe.
+- Untagged keychain flags with a version-number exe name carry the directory that names it (`untagged:claude 2.1.280`).
+- Console Flags list hides flags a pattern covers.
+- `/posture` `items` and `groups` come from one pass.
+- `/posture` puts every item in exactly one group.
+- `/posture` group items sum to `needs_you`.
+- `/posture` `groups` include unacknowledged severity-2 flags with priority 1, rule title and disposition.
+- `/posture` `groups` include pending resource decisions as `resource` items.
+- `/posture` `items` include pending resource decisions as `resource_pressure` items.
+- `/posture` `items` carry one `uninspected_egress` item per group with uninspected egress to unknown endpoints.
+- `/posture` egress items and their counts exclude known CDN/cloud carriers.
+- `/posture` `items` carry open critical incidents at severity 3.
+- `/posture` `state` is `critical` while a critical incident is open.
+- `/posture` `items` carry open high incidents at severity 2.
+- `/posture` `items` carry other incidents open more than 72h at severity 1.
+- Console Attention badge shows `posture.needs_you`.
+- File opens, writes and deletes from processes outside every agent family are not stored unless they raise a flag.
+- Event pruning seeks a `(kind, id)` index: kinds by index skip-scan, each kind's budget cut at its budget-th newest id.
+- Insert-driven pruning runs at most once per 30 s.
+- The event store opens WAL with `synchronous=NORMAL`.
+- Posture and attention: a flag the advisor judged benign at confidence ≥ 0.85 is severity 1 (`attention`, "Finding, likely benign"), never `critical`.
+- Console: an explained flag's card and Attention item show who, what and the one verdict with the served actions as buttons; raw evidence, pid and timestamps sit behind Details.
+- Console Resources: a one-row machine strip (headroom, memory, CPU, swap; pressure and thermal chips) replaces the host block.
+- Console Resources: families with a diagnosis lead as at most five needs-attention cards.
+- Console Resources: families group by harness, sorted by memory, with orchestrated children nested under their parent and infrastructure in one trailing, uncounted group.
+- Console Resources: families are named harness · repo@branch or harness · folder, never by pid; the Overview memory chart uses the same names.
+- Console Resources: View family opens a drawer with usage, processes, recent activity, findings and terminate actions instead of switching tabs.
+- Console Resources: the board fits a 375px phone at any font metrics; family rows and long labels wrap instead of overflowing.
+- Console: the Events tab lists the newest 50 rows, the family process table 12 and an Agents group 8 instances, each with Show more.
+- Console: pid-scoped event filtering opens the Events tab.
+- Console: "View session in timeline" opens the session in the Sessions tab with its trace, keeping Events scoped to it.
+- Console: the drawer's Copy button stays hidden outside incident reports.
+- Advisor host pre-assessment skips vendor-class hosts as well as CDN carriers.
+- Advisor host pre-assessment still covers cloud, telemetry and unknown hosts.
+
+### Removed
+- Menu bar: the unused flag action, incident detail and process detail sheets.
+
+### Fixed
+- `make app` / `make install`: a Swift edit that compiles to identical objects (comments, whitespace) no longer fails the build as a stale menubar binary; the product is rewritten on every build.
+- Worktree removal: `git worktree remove` runs under a 10-minute deadline instead of the 10-second read limit that killed it mid-delete on large trees (200,000 files take 16 s), and finishes when the request is canceled.
+- A git failure during removal says whether the worktree is still on disk and registered.
+- A Code conversation in the Claude desktop app is rooted at its own `claude` process and ends when that process exits; the app (`claude-desktop`, infra) no longer holds every conversation open until it quits.
+- Console: `claude-desktop` shows as Claude, counted as infra.
+- Local advisor: finding plans, worktree notes and cleanup plans run under a deadline of at least 5 minutes instead of the triage `timeout_ms`; a reasoning model at 60 s timed them out.
+- Local advisor: cleanup plans get 4,096 tokens (was 2,048); a reasoning model spent the whole 2,048 thinking and returned no plan.
+- A daemon writes `guard-cwd-overrides.json` beside its own socket.
+- A second daemon with a socket elsewhere no longer rewrites the default `guard-cwd-overrides.json` the hook reads.
+- Keychain flags from the last hour stamped `untagged:<exe>` are relabeled to the agent when the tagger tags that pid.
+- The console receives each relabeled keychain flag as a flag delta.
+- Menu bar: a lost daemon connection also clears posture and the pending guard prompt.
+- Menu bar: the Sessions header count matches the "more" overflow count.
+- The console token no longer reaches the owner-level `DELETE /guard/rules`.
+- Flag sentences and attention labels keep agent ids such as `untagged:node` as written.
+- Posture and `/doctor` report "File monitoring writer is flooding" only while the spool is still being written (within 2 min); garbage left by a removed writer no longer masks the service state. A spool whose service is not loaded shows "File monitoring is off" with the steps to enable it.
+- Secret patterns count only where the match starts a token (not after a base64 or base64url character, except a JSON `\n`, `\t` or `\r` escape): vendor-key shapes inside encrypted reasoning items and other encoded blobs no longer raise secret-in-transcript or proxy findings.
+- Endpoint detail lists an allowance whose approved parent domain covers the host.
+- Endpoint drawer resolves sessions by id, so sessions beyond the newest 1,000 are attributed.
+- A second process in the same working directory gets its own session, never another root's.
+- A codex rollout session joins the process holding the rollout open: root pid set, that tree's process-tree session merged in.
+- `/doctor` trace coverage counts transcript and hook sessions seen since boot, not only those started since boot.
+- A session upsert stores a new parent and never clears a stored one.
+- Every event from a pid already resolved carries its session id, not only the first.
+- A hook-stamped session carries its process tree's root pid and absorbs that tree's process-tree session.
+- Sessions first seen through a trace event record `transcript` confidence, not `hook`.
+- Codex model calls name the model from `turn_context` when the rollout has no `thread_settings_applied` line.
+- A codex rollout resumed from a saved offset keeps its session and model.
+- Claude `<synthetic>` records no longer count as model calls.
+- A vendor-prefixed model id is priced by its unprefixed entry.
+- Spool tailer: lines under 16 bytes or not starting with `{` are rejected
+  before JSON parsing; a per-tick 4 MiB drain budget skips the rest of a
+  flooded tail in bulk instead of scanning it, and posture/doctor report a
+  flooding writer (unparsed share, MB skipped) instead of parsing garbage.
+- Console: live-stream frames mark only the panels that read the changed data.
+- Console: only the active tab's panels, the header and the tab badges render, at most every 250 ms per panel; hidden panels render on tab switch.
+- Console: list panels (findings, attention, incidents, audit, sessions rail, agents, firewall, events) patch rows by key, so focus, open disclosures and a click during a render survive.
+- Console: a panel waits while the pointer is down in it or one of its controls has focus (up to 3 s).
+- Console: allow, mute, unmute, promote/demote, incident status, guard and resource decisions, source add/remove, allowlist remove and dismiss change the card before the request, revert on failure and leave a 4 s inline note on success.
+- Verified by DOM checks on a 300-event burst (hidden-tab render counts, an open rail group, a focused button, a mid-burst Dismiss click) and on allow success and failure.
+- Sessions: a tagged child process (a shell under a harness) joins its harness
+  family's session instead of minting its own — the tagger now reports the
+  family root on every tag, not only in the process listing.
+- Sessions: a session is ended only when its root process is confirmed gone,
+  not when one process-table sample happened to miss it.
+- Sessions: orchestrated runs are nested under their orchestrator's session —
+  the parent lookup walks the OS ancestry past the child's own harness match
+  instead of a chain that stopped at the first match.
+- Model pricing: explicit entries for every current Anthropic model (Fable
+  5.x, Opus 5.5/5/4.8/4.7/4.6/4.5, Sonnet 5/4.6/4.5, Haiku 4.5) at list
+  price; a family prefix only absorbs a date or `-latest` suffix, so a newer
+  version or a `-pro`/`-mini` variant is never billed at another model's
+  price — it is unpriced until an entry exists.
+- Sensitive-path classifier: globs with a directory component
+  (`~/.kube/config`, `~/.claude/settings.json`, the merged guard-rule paths)
+  match the full path only; previously the file name alone matched, so any
+  `config`, `settings.json`, `hosts.yml`, `credentials`, or shell rc file
+  anywhere classified as sensitive and seeded `sensitive-read-then-connect`.
+- Flag evidence `read` items carry `rule` (which classifier rule or glob
+  matched); ES file events from the daemon's own pid are dropped at ingest.
+- Event retention: every event kind has its own row budget; the shared
+  10,000-row cap over all non-trace kinds let a file-open burst evict
+  hook-activity, connection, and transcript-hit rows, which made the posture
+  hook item and the acceptance gate report a firing hook as silent.
+- ES grant flow: the Full Disk Access entry is the helper binary
+  `com.cavi-ai.secure-agent-esd`, not `eslogger` — the setup card now names
+  it exactly, and the retry-interval copy matches the real 60s backoff.
+- ES service probe parses the FIRST top-level `state =` from `launchctl print`
+  (nested sections repeat the key and previously overwrote the real service
+  state); the last-exit-code annotation is kept.
+- Posture emits at most one item per collector: the spool-based ES probe
+  supersedes the tailer heartbeat when it reports a failure, so a crash-looping
+  root service no longer double-counts under the `eslogger` id.
+- Session repo identity walks up to the enclosing git root (workspaces are
+  often subdirectories of a checkout), reports empty when no repo encloses the
+  workspace instead of inventing one from the basename, and the memoized
+  resolution expires after 10 minutes instead of living for the process
+  lifetime.
+- Codex rollout discovery reads `CODEX_HOME` off live codex processes (same
+  mechanism as `ps eww`), so orchestrators that relocate the rollout store no
+  longer blind codex tracing until a daemon restart.
+- opencode model attribution reads the current schema (`message.data.modelID`
+  top-level) with the older nested `model.modelID` as fallback — model calls
+  carry their model id again instead of landing unpriced with an empty model.
+- Privileged ES collector: the integrity hash moved from the console-user-owned
+  spool directory to root-owned `/Library/Application Support/secure-agent`,
+  the binary self-check now refuses non-root-owned executables in addition to
+  writable ones, and the expected pre-grant eslogger permission failure retries
+  inside the process (60s backoff) instead of respawn-churning through launchd.
+- Acceptance gate: the ES service check no longer parses JSON through
+  quote-broken shell interpolation (every probe read as absent), treats
+  `not-loaded` as a failure when spool-based, asserts guard hook ACTIVITY
+  (events in the last hour) instead of settings.json registration, and scopes
+  the repo-coverage and turn-ratio assertions to the current daemon's boot
+  window — rows and transcript records from before boot cannot be fixed
+  retroactively and previously made the ratio assertions measure old binaries.
+- Acceptance gate: time-window queries wrap stored RFC3339 timestamps in
+  `datetime()` before comparing — the raw string compare against sqlite's
+  space-separated format made every row from the same day read as "in the
+  last hour", which hid session floods and inflated hook-activity counts.
+- Transcript tailer no longer skips new content: a boot re-seed only applies
+  to files the tailer was already following (tracked files keep their saved
+  offsets), and a transcript discovered for the first time under an already-
+  tracked target is read from the start instead of from its current end —
+  session one in a workspace and lines written while the daemon was down are
+  ingested again.
+- Daemon startup repairs rows written by older resolvers: sessions whose repo
+  carries the old basename heuristic's signature are re-resolved against the
+  enclosing git root, and tool-call rows stranded at "running" past ten
+  minutes (lost completion lines) are closed as error.
+- Process-discovered sessions stamp `started_at` with the process's real
+  start time instead of the discovery time — a daemon restart no longer makes
+  every live agent look like a session created in the last hour.
+- Guard hook: read-only socket reads against the agent daemon are allow-listed
+  by RESOLVED target (a `$SOCK` variable or `http://unix/<path>` URL now
+  matches the socket path, not the literal token), covering GETs to /status,
+  /resources, /healthz and /posture; any write verb or /guard path against the
+  socket is still denied, and loopback /guard requests are denied regardless.
+- Privileged ES collector exits 0 on failures launchd cannot fix (not root,
+  binary-integrity failure, eslogger missing) so the service stops
+  crash-looping; genuine startup failures still exit non-zero.
+- ES collector integrity check trims the recorded hash — the installer wrote
+  it via `awk '{print $1}' > file`, leaving a trailing newline that made every
+  start read as tampered; the installer now writes it without one.
+- Flag evidence is structured (`kind`/`label`/`sub`/`ts`) instead of display
+  strings every client re-parsed with its own regexes; the console evidence
+  chain and the menubar action sheet render the served fields, and rows
+  written by older daemons still decode as plain-text items.
+- Flag rule titles are served by the daemon (`flag.title`) instead of being
+  copied into the console's `RULE_TITLES`, the menubar notification switch,
+  and the posture copy — one table, every surface agrees; the client tables
+  remain only as fallbacks for older daemons.
+
+### Changed
+- Transcript discovery by harness shape: Claude, Cursor, Codex and
+  Antigravity transcripts are found by per-harness globs re-resolved every
+  15 s instead of recursive walks of their trees; files modified in the last
+  two minutes are tailed every second; tail offsets are saved at most every
+  30 s and on shutdown; the ES spool tail skips a spool whose size and mtime
+  are unchanged.
+- The Endpoint Security collector ships inside the app bundle
+  (`Contents/MacOS/secure-agent-esd` plus
+  `Contents/Library/LaunchDaemons/com.cavi-ai.secure-agent-esd.plist`) and is
+  registered with `SMAppService.daemon`: the user approves Secure Agent in
+  Login Items and Full Disk Access, with no admin password. The collector
+  verifies its code signature instead of an install-time hash, the setup card
+  names Secure Agent instead of the launchd label, and a collector installed
+  by an earlier version under `/Library` is removed from the card (one admin
+  prompt) or by `packaging/uninstall.sh`.
+- API HTTP handlers for resources, kill, firewall, and guard live in their own files (`api.go` 1662→940). Same package, no behavior change.
+- The daemon composition root is split into named stages (`buildResourceStack`,
+  `buildFleetAndOTLP`, `runResourceLoop`, `wireEgressOverrides`,
+  `buildAdvisorHooks`, `buildResourcePolicyUpdater`, `makeResourceExecutor`,
+  `startCollectors`) — `Build` 477→197 lines of sequencing. Same wiring, no
+  behavior change.
+
+### Added
 - **Codex model attribution.** Codex model calls carry the model id from the
   rollout's thread settings and are priced from the price tables; a model the
   tables do not know costs 0 and counts as unpriced — never a fabricated price.
