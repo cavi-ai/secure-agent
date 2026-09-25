@@ -1,13 +1,13 @@
-70f6dca90714673158faf29c7e10537c95d58e54:daemon/internal/firewall/detect_test.go:gitlab-pat:28
-70f6dca90714673158faf29c7e10537c95d58e54:daemon/internal/firewall/testdata/leak_requests.json:gitlab-pat:6
-4a87db7fb8f4137c590f887ea5047bc5abedf6d8:daemon/internal/api/api_test.go:generic-api-key
-4a87db7fb8f4137c590f887ea5047bc5abedf6d8:daemon/internal/intel/rotator_test.go:generic-api-key
-4a87db7fb8f4137c590f887ea5047bc5abedf6d8:daemon/internal/api/api_test.go:generic-api-key:81
-4a87db7fb8f4137c590f887ea5047bc5abedf6d8:daemon/internal/intel/rotator_test.go:generic-api-key:16
+8db07b129832dcbfd5907fa2188e10bbb0a33f92:daemon/internal/firewall/detect_test.go:gitlab-pat:28
+8db07b129832dcbfd5907fa2188e10bbb0a33f92:daemon/internal/firewall/testdata/leak_requests.json:gitlab-pat:6
+f1e0eedfd2a4cfac9795177605b79ec78d248a21:daemon/internal/api/api_test.go:generic-api-key
+f1e0eedfd2a4cfac9795177605b79ec78d248a21:daemon/internal/intel/rotator_test.go:generic-api-key
+f1e0eedfd2a4cfac9795177605b79ec78d248a21:daemon/internal/api/api_test.go:generic-api-key:81
+f1e0eedfd2a4cfac9795177605b79ec78d248a21:daemon/internal/intel/rotator_test.go:generic-api-key:16
 # Fake redaction-test value (AWS docs example shape), removed from source in
 # the follow-up commit on this branch — the test now builds it from fragments.
-40a92193b4fe5ec6c01949ad7dc9dddbf847c31a:plugin/hooks/test_activity_log.py:generic-api-key:55
-27c3f39ce52819ceb2e746b6249eb9b7a90262e7:CHANGELOG.md:generic-api-key:10
+52c13d6f418252587064d0d09b40c570e151c2af:plugin/hooks/test_activity_log.py:generic-api-key:55
+7a0c81d2ccd403120b6eab714dcacc1bbe233a81:CHANGELOG.md:generic-api-key:10
 # Fake bearer fixture in a transcript-scanner test, removed from source in the
 # follow-up commit on this branch — the test now builds it from fragments.
 3a09b9babab97a2b5fe8a2f463bb7038fc8e250c:daemon/internal/collect/transcript_test.go:curl-auth-header:422
