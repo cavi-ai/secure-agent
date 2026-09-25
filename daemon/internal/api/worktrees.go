@@ -229,7 +229,9 @@ func (a *API) handleWorktreeRepos(w http.ResponseWriter, r *http.Request) {
 // handleWorktreeRemove removes one worktree ({"path"}) or prunes a
 // repository's missing ones ({"repo", "prune": true}). The hunter inspects
 // the worktree again first and removes it only on a fresh remove verdict;
-// a refusal answers 409 with that verdict's state and reasons.
+// a refusal answers 409 with that verdict's state and reasons. With
+// "async": true it answers 202 at once and GET /worktrees reports the
+// removal's steps and outcome under "removals".
 func (a *API) handleWorktreeRemove(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -244,6 +246,7 @@ func (a *API) handleWorktreeRemove(w http.ResponseWriter, r *http.Request) {
 		Path  string `json:"path"`
 		Repo  string `json:"repo"`
 		Prune bool   `json:"prune"`
+		Async bool   `json:"async"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || (req.Prune && req.Repo == "") || (!req.Prune && req.Path == "") {
 		http.Error(w, `Invalid payload: {"path"} or {"repo", "prune": true}`, http.StatusBadRequest)
@@ -271,9 +274,26 @@ func (a *API) handleWorktreeRemove(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	if req.Async {
+		rm, err := a.worktrees.StartRemove(req.Path)
+		if errors.Is(err, worktreehunter.ErrRemoving) {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		json.NewEncoder(w).Encode(map[string]any{"status": "accepted", "removal": rm})
+		return
+	}
 	row, err := a.worktrees.Remove(r.Context(), req.Path)
 	var refused *worktreehunter.NotRemovableError
 	switch {
+	case errors.Is(err, worktreehunter.ErrRemoving):
+		http.Error(w, err.Error(), http.StatusConflict)
 	case errors.As(err, &refused):
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusConflict)

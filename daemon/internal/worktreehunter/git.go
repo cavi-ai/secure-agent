@@ -11,9 +11,10 @@ import (
 	"time"
 )
 
-// gitTimeout bounds one git invocation. A wedged repository (network mount,
-// giant untracked tree) costs one row, never the scan.
-const gitTimeout = 10 * time.Second
+// gitTimeout bounds one read-only git invocation. A wedged repository
+// (network mount, giant untracked tree) costs one row, never the scan.
+// A variable so a test can shrink it.
+var gitTimeout = 10 * time.Second
 
 // gitEnv makes every call read-only toward the repositories it inspects:
 // GIT_OPTIONAL_LOCKS=0 stops `git status` from refreshing and rewriting the
@@ -42,7 +43,12 @@ func gitCommand(ctx context.Context, dir string, args ...string) *exec.Cmd {
 // line, which is what an operator needs ("detected dubious ownership", "not
 // a git repository").
 func git(ctx context.Context, dir string, args ...string) (string, error) {
-	ctx, cancel := context.WithTimeout(ctx, gitTimeout)
+	return gitWithin(ctx, gitTimeout, dir, args...)
+}
+
+// gitWithin is git under its own deadline.
+func gitWithin(ctx context.Context, timeout time.Duration, dir string, args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cmd := gitCommand(ctx, dir, args...)
 	var out, errb bytes.Buffer

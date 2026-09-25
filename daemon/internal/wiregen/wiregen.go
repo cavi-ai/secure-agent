@@ -83,6 +83,7 @@ func WireTypes() []any {
 		worktreehunter.RepoReport{},
 		worktreehunter.Worktree{},
 		worktreehunter.ScanSummary{},
+		worktreehunter.Removal{},
 		diskusage.Volume{},
 		clutter.ClutterReport{},
 		clutter.ClutterItem{},

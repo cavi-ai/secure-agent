@@ -608,7 +608,30 @@
       return { status: 'ok', result: { bytes: 1048576, trash_path: '/Users/dev/.Trash/.tmp' } };
     }
     if (p === '/worktrees/remove') {
-      return { status: 'ok', removed: body.path, branch: 'feat/done', reasons: ['merged into origin/main (squash)'], bytes: 1610612736 };
+      // The daemon removes in the background: running now, the outcome
+      // lands in GET /worktrees removals (removerunning: never finishes;
+      // removefaildemo: git fails).
+      const rep = data['/worktrees'];
+      const running = { path: body.path, state: 'running', step: 'deleting', started_at: iso(0) };
+      rep.removals = { ...(rep.removals || {}), [body.path]: running };
+      if (!MODE.includes('removerunning')) {
+        setTimeout(() => {
+          if (MODE.includes('removefaildemo')) {
+            rep.removals[body.path] = { ...running, state: 'failed', step: '', finished_at: iso(0),
+              error: 'git worktree: <b>fatal</b> could not remove (the worktree is still on disk and registered with git)' };
+            return;
+          }
+          const size = 1610612736;
+          for (const r of rep.repos) r.worktrees = r.worktrees.filter(w => w.path !== body.path);
+          Object.assign(rep.summary, { worktrees: rep.summary.worktrees - 1, remove: rep.summary.remove - 1,
+            size_bytes: rep.summary.size_bytes - size, removable_bytes: rep.summary.removable_bytes - size });
+          rep.repos[0].size_bytes -= size;
+          Object.assign(rep.reclaimed, { bytes: rep.reclaimed.bytes + size, count: rep.reclaimed.count + 1,
+            bytes_30d: rep.reclaimed.bytes_30d + size, count_30d: rep.reclaimed.count_30d + 1 });
+          rep.removals[body.path] = { ...running, state: 'removed', step: '', bytes: size, branch: 'feat/done', finished_at: iso(0) };
+        }, 2000);
+      }
+      return { status: 'accepted', removal: running };
     }
     if (p === '/allowlist' && opts && opts.method === 'DELETE') {
       data['/allowlist'] = data['/allowlist'].filter(x => !(x.agent === body.agent && x.host === body.host));

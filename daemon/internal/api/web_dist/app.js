@@ -843,12 +843,35 @@ document.addEventListener('DOMContentLoaded', () => {
   let worktreeSizingTimer = null;
   let worktreeSizingPolls = 0;
   // Also while an agent ask runs: its answer lands in the report's asks.
+  // While a removal runs, every 1.5 s and without a cap: the daemon bounds
+  // a removal at 10 minutes.
+  const WORKTREE_REMOVAL_POLL_MS = 1500;
+  const removalRunning = rep => rep && Object.values(rep.removals || {}).some(r => r.state === 'running');
   function followWorktreeSizing() {
     const rep = worktreesState.report;
     const asking = rep && Object.values(rep.asks || {}).some(a => a.status === 'running');
-    if (!rep || !(rep.sizing || rep.refreshing || asking) || !(activeTab === 'sessions' && activeSub === 'worktrees') || worktreeSizingTimer || worktreeSizingPolls >= WORKTREE_SIZING_POLLS) return;
-    worktreeSizingPolls++;
-    worktreeSizingTimer = setTimeout(() => { worktreeSizingTimer = null; loadWorktrees(false); }, WORKTREE_SIZING_POLL_MS);
+    const removing = removalRunning(rep);
+    if (!rep || !(rep.sizing || rep.refreshing || asking || removing) || !(activeTab === 'sessions' && activeSub === 'worktrees') || worktreeSizingTimer) return;
+    if (!removing) {
+      if (worktreeSizingPolls >= WORKTREE_SIZING_POLLS) return;
+      worktreeSizingPolls++;
+    }
+    worktreeSizingTimer = setTimeout(() => { worktreeSizingTimer = null; loadWorktrees(false); }, removing ? WORKTREE_REMOVAL_POLL_MS : WORKTREE_SIZING_POLL_MS);
+  }
+  // announceRemovals toasts each removal this page saw running that has
+  // since finished.
+  function announceRemovals(before, after) {
+    for (const [path, was] of Object.entries((before && before.removals) || {})) {
+      const now = ((after && after.removals) || {})[path];
+      if (was.state !== 'running' || !now || now.state === 'running') continue;
+      if (now.state === 'removed') {
+        showToast(now.bytes ? `Removed ${path} — ${fmtDisk(now.bytes)} reclaimed` : `Removed ${path}`, 'success');
+      } else if (now.row_state) {
+        showToast(`Not removed — ${path} is now ${now.row_state}: ${(now.reasons || []).join('; ')}`, 'info');
+      } else {
+        showToast(`Could not remove ${path}: ${now.error || 'unknown error'}`, 'danger');
+      }
+    }
   }
   async function loadWorktrees(refresh) {
     if (worktreesState.loading) return;
@@ -858,8 +881,10 @@ document.addEventListener('DOMContentLoaded', () => {
     try {
       const r = await apiFetch('/worktrees' + (refresh ? '?refresh=1' : ''), { timeoutMs: WORKTREE_TIMEOUT_MS });
       if (!r.ok) throw new Error((await r.text()).trim() || String(r.status));
+      const before = worktreesState.report;
       worktreesState.report = await r.json();
       worktreesState.loadedAt = Date.now();
+      announceRemovals(before, worktreesState.report);
       if (!worktreesState.report.sizing && !worktreesState.report.refreshing && !Object.values(worktreesState.report.asks || {}).some(a => a.status === 'running')) worktreeSizingPolls = 0;
     } catch (err) {
       worktreesState.error = 'Worktree scan failed: ' + (err.message || err);
@@ -936,11 +961,9 @@ document.addEventListener('DOMContentLoaded', () => {
     put('policy-mutes', 'badge-mutes', st.mutes, policyListHTML('mute', st.mutes, st));
   }
 
-  // dropWorktreeRows removes rows the daemon just removed or pruned, so the
-  // tab updates without a rescan.
-  // reclaimedBytes, when given, is what the daemon booked for the removal:
-  // the sizes and the reclaimed total move with it.
-  function dropWorktreeRows(paths, reclaimedBytes) {
+  // dropWorktreeRows removes rows the daemon just pruned, so the tab updates
+  // without a rescan.
+  function dropWorktreeRows(paths) {
     const rep = worktreesState.report;
     if (!rep) return;
     const gone = new Set(paths);
@@ -957,10 +980,6 @@ document.addEventListener('DOMContentLoaded', () => {
           if (w.state === 'remove') rep.summary.removable_bytes = Math.max(0, (Number(rep.summary.removable_bytes) || 0) - size);
         }
       }
-    }
-    if (reclaimedBytes !== undefined) {
-      const r = rep.reclaimed || (rep.reclaimed = { bytes: 0, count: 0, bytes_30d: 0, count_30d: 0 });
-      r.bytes += reclaimedBytes; r.bytes_30d += reclaimedBytes; r.count++; r.count_30d++;
     }
   }
 
@@ -1444,20 +1463,17 @@ document.addEventListener('DOMContentLoaded', () => {
       `git deletes ${path} and its ignored files. ${branch ? `Branch ${branch} and its commits stay.` : 'Its commits stay reachable from other refs.'}`,
       { title: 'Remove worktree', okLabel: 'Remove' });
     if (!ok) return;
+    // The daemon removes in the background; the row shows each step and the
+    // outcome, which the re-reads pick up.
     try {
-      const { r, text, json } = await postWorktree('/worktrees/remove', { path });
-      if (r.status === 409 && json) {
-        showToast(`Not removed — it is now ${json.state}: ${(json.reasons || []).join('; ')}`, 'info');
-        loadWorktrees(true);
-        return;
-      }
-      if (!r.ok) throw new Error(text.trim() || String(r.status));
-      const bytes = Number(json && json.bytes) || 0;
-      dropWorktreeRows([path], bytes);
+      const { r, text, json } = await postWorktree('/worktrees/remove', { path, async: true });
+      if (!r.ok || !json || !json.removal) throw new Error(text.trim() || String(r.status));
+      const rep = worktreesState.report;
+      if (rep) (rep.removals || (rep.removals = {}))[path] = json.removal;
       renderNow(['worktrees']);
-      showToast(bytes ? `Removed ${path} — ${fmtDisk(bytes)} reclaimed` : `Removed ${path}`, 'success');
+      followWorktreeSizing();
     } catch (err) {
-      showToast('Failed to remove the worktree: ' + (err.message || err), 'danger');
+      showToast('Could not start the removal: ' + (err.message || err), 'danger');
     }
   };
 
