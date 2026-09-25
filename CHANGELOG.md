@@ -8,6 +8,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 
 ### Changed
 - File telemetry's root helper drops open events on system paths (OS libraries and frameworks, app-bundle contents, Homebrew Cellar, `/dev` nodes, user caches) that no sensitive-file rule matches before they reach the spool.
+- File events from a process that already exited cost one process lookup per tagger refresh instead of one per event.
 - Cleanup totals no longer count an agent's answer (`ask:*` ledger rows) as a cleanup.
 - Menu bar icon and agent count are drawn in the console's brand purple, a lighter shade on a dark menu bar.
 - Console Spend opens on the last usage reports: `GET /costs?cached=1` answers at once from the daemon's usage cache (saved in the store, so it outlives a restart) while a fresh report is computed; the card reads "Updating usage cache… (cached 3h ago)" and the tile's line "updating…" until it lands. Spend no longer holds the console's first render, and `/costs/plans` keeps plan headroom across restarts (snapshots under a week old).
