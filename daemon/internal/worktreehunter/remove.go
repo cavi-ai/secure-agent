@@ -101,7 +101,8 @@ func (h *Hunter) remove(ctx context.Context, path string, step func(string)) (Wo
 	return row, nil
 }
 
-// dropRow takes a removed worktree out of the cached scan and marks the
+// dropRow takes a removed worktree out of the cached scan, with the group
+// and error line of a missing repository it leaves empty, and marks the
 // scan old, so the next report answers without it while a background
 // rescan confirms.
 func (h *Hunter) dropRow(path string) {
@@ -111,16 +112,27 @@ func (h *Hunter) dropRow(path string) {
 		return
 	}
 	rep := *h.cached
-	rep.Repos = make([]RepoReport, len(h.cached.Repos))
-	for i, r := range h.cached.Repos {
+	rep.Repos = nil
+	gone := map[string]bool{}
+	for _, r := range h.cached.Repos {
 		kept := make([]Worktree, 0, len(r.Worktrees))
 		for _, w := range r.Worktrees {
 			if w.Path != path {
 				kept = append(kept, w)
 			}
 		}
+		if r.Error == ErrRepoMissing && len(kept) == 0 {
+			gone[r.Path] = true
+			continue
+		}
 		r.Worktrees = kept
-		rep.Repos[i] = r
+		rep.Repos = append(rep.Repos, r)
+	}
+	rep.Errors = nil
+	for _, e := range h.cached.Errors {
+		if repo, _, _ := strings.Cut(e, ": "); !gone[repo] {
+			rep.Errors = append(rep.Errors, e)
+		}
 	}
 	rep.Summary = summarize(rep.Repos)
 	h.cached, h.cachedAt = &rep, time.Time{}

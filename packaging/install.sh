@@ -13,6 +13,14 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_NAME="Secure Agent"
 APP_DIR="${REPO_ROOT}/dist/${APP_NAME}.app"
 
+source "${REPO_ROOT}/packaging/lib/sign_identity.sh"
+source "${REPO_ROOT}/packaging/lib/telemetry_status.sh"
+
+# Resolve once and export, so make_app.sh signs with the exact identity this
+# script reports below.
+CODESIGN_IDENTITY="$(resolve_sign_identity)"
+export CODESIGN_IDENTITY
+
 "${REPO_ROOT}/packaging/make_app.sh"
 
 echo "============================================================"
@@ -39,3 +47,27 @@ if pgrep -f "${APP_DIR}/Contents/MacOS/" >/dev/null 2>&1; then
 fi
 
 open "${APP_DIR}"
+
+# Report whether file telemetry is actually running post-install. Best
+# effort only — never fails the install.
+report_file_telemetry() {
+  local ad_hoc=0 config default_socket socket state=""
+  [[ "${CODESIGN_IDENTITY}" == "-" ]] && ad_hoc=1
+
+  if [[ "${CODESIGN_IDENTITY}" == "-" ]]; then
+    echo "Signing mode: ad-hoc"
+  else
+    echo "Signing mode: ${CODESIGN_IDENTITY}"
+  fi
+
+  config="${HOME}/.config/secure-agent/config.yaml"
+  default_socket="${HOME}/.config/secure-agent/daemon.sock"
+  socket="$(resolve_socket_path "${config}" "${default_socket}")"
+
+  if command -v python3 >/dev/null 2>&1 && wait_for_socket "${socket}" 30; then
+    state="$(es_service_state "$(read_status_json "${socket}")")"
+  fi
+
+  telemetry_status_line "${state}" "${ad_hoc}"
+}
+report_file_telemetry || true

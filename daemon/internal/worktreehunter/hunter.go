@@ -20,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -127,6 +128,8 @@ type Hunter struct {
 	st   Store
 	home string
 	now  func() time.Time
+	// goos picks the Trash layout (macOS or freedesktop); tests pin it.
+	goos string
 
 	mu       sync.Mutex
 	opts     Options
@@ -170,7 +173,7 @@ func New(st Store, home string, opts Options) *Hunter {
 	if home == "" {
 		home, _ = os.UserHomeDir()
 	}
-	return &Hunter{st: st, home: home, now: time.Now, opts: normalize(opts),
+	return &Hunter{st: st, home: home, now: time.Now, goos: runtime.GOOS, opts: normalize(opts),
 		fingerprints: map[string]fingerprintCache{}, sizes: map[string]sizeEntry{}, removals: map[string]*Removal{}}
 }
 
@@ -461,9 +464,14 @@ func (h *Hunter) scan(ctx context.Context, opts Options) ScanReport {
 	rep.Repos = attachOrphans(rep.Repos, d.Orphans, now, staleAfter)
 	sort.Slice(rep.Repos, func(i, j int) bool { return rep.Repos[i].Path < rep.Repos[j].Path })
 	for _, r := range rep.Repos {
-		if r.Error != "" {
-			rep.Errors = append(rep.Errors, r.Path+": "+r.Error)
+		if r.Error == "" {
+			continue
 		}
+		line := r.Path + ": " + r.Error
+		if r.Error == ErrRepoMissing && len(r.Worktrees) > 0 {
+			line += "; " + plural(len(r.Worktrees), "folder still points", "folders still point") + " to it (listed first below)"
+		}
+		rep.Errors = append(rep.Errors, line)
 	}
 	rep.Summary = summarize(rep.Repos)
 	if ctx.Err() != nil {
@@ -635,12 +643,16 @@ func attachOrphans(repos []RepoReport, orphans []orphanDir, now time.Time, stale
 				break
 			}
 		}
+		if c := reconnectCandidate(repos, o); c != "" {
+			w.Reconnect = c
+			w.Reasons = append(w.Reasons, c+" still records this worktree: Reconnect links it again")
+		}
 		if i < 0 {
 			name := o.Main
 			if name == "" {
 				name = filepath.Dir(o.Path)
 			}
-			repos = append(repos, RepoReport{Path: name, Error: "repository not found"})
+			repos = append(repos, RepoReport{Path: name, Error: ErrRepoMissing})
 			i = len(repos) - 1
 		}
 		repos[i].Worktrees = append(repos[i].Worktrees, w)

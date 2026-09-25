@@ -8,12 +8,16 @@ All notable changes to `secure-agent` are documented here. The format follows
 
 ### Changed
 - Idle daemon: opencode, openclaw and Hermes polls skip an unchanged database, `/costs` and `/costs/unpriced` reuse a report for 30 s, and transcript discovery re-lists only directories whose mtime moved.
+- `make install`/`make app`/`make dmg` sign with the first Apple Development identity when one exists (else Developer ID Application, else ad-hoc) and give every bundled binary a stable `--identifier`, so file telemetry's Full Disk Access grant survives rebuilds instead of resetting on every install.
 - Console Cleanup view: each worktree row has a state stripe (green remove, amber review, violet keep, grey prune); the keep chip is violet instead of red.
 - CI fails when a tracked file holds a `/Users/<name>` or `/Volumes/<name>` path outside the placeholder names fixtures use.
 - `live_acceptance.sh` reads the workspace root from `SECURE_AGENT_WORKSPACE_ROOT`, defaulting to two levels above the main checkout.
 - Console: shows the posture banner capped at 3 rows off Home and empty on Home, agent ids in their own case, Egress led by the uninspected endpoints with zero-hit rules folded into one row, and Processes at full width.
 
 ### Added
+- Worktree folders whose repository moved or was deleted: `POST /worktrees/reveal` (Finder), `POST /worktrees/reconnect` (`git worktree repair` in the repository that still records the folder, named in the row's `reconnect`), `POST /worktrees/trash` (Trash on its volume, booked as `trash:orphan-worktree`).
+- Console Cleanup view: a missing repository's group comes first with "the folders below still point to it"; its folders offer Open folder, Reconnect (when a repository still records them) and Move to Trash.
+- The `errors` line of a missing repository counts the folders that still point to it.
 - Sessions carry `origin`, the openclaw agent behind a Codex session, named in console titles and "×N" folded rows.
 - `GET /costs/plans` serves each Codex home's plan headroom, shown as a line and bar per plan on the console Spend card.
 - Console Clutter panel: Ask advisor on every project header; the plan shows under the header.

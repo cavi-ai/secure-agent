@@ -220,6 +220,26 @@ test('state styles: each state has its own stripe and chip color; keep is not re
   assert.ok(!rule('.wt-keep .wt-state').includes('--bad') && !rule('.wt-row.wt-keep').includes('--bad'), 'keep must not use the error red');
 });
 
+test('orphans: a missing repository comes first with its error; its folders offer Open folder, Reconnect when possible, Move to Trash', () => {
+  const rep = report();
+  const lost = '/Users/x/.cursor/worktrees/app/ctnj';
+  const moved = '/Users/x/agents/wip';
+  rep.repos.push({ path: '/gone/<b>app</b>', error: 'repository not found (moved or deleted)', size_bytes: 0, worktrees: [
+    { path: lost, state: 'review', orphan: true, reasons: ['directory is not registered with git; its files are the only copy'] },
+    { path: moved, state: 'review', orphan: true, reconnect: '/new/app', reasons: ['/new/app still records this worktree: Reconnect links it again'] },
+  ] });
+  const groups = worktreeGroups(rep, {});
+  assert.equal(groups[0].repo.path, '/gone/<b>app</b>');
+  const html = worktreeGroupHTML(groups[0]);
+  assert.ok(html.includes('<span class="wt-repo-error">repository not found (moved or deleted) — the folders below still point to it</span>'));
+  assert.ok(html.includes('&lt;b&gt;app&lt;/b&gt;') && !html.includes('worktree-hide'));
+  const [a, b] = html.split('class="wt-row').slice(1);
+  assert.ok(a.includes(`data-action="worktree-reveal" data-path="${lost}">Open folder</button>`));
+  assert.ok(a.includes(`data-action="worktree-trash-orphan" data-path="${lost}">Move to Trash</button>`));
+  assert.ok(!a.includes('worktree-reconnect') && !a.includes('worktree-ask') && !a.includes('worktree-advise'));
+  assert.ok(b.includes(`data-action="worktree-reconnect" data-path="${moved}" data-repo="/new/app">Reconnect</button>`));
+});
+
 test('agent asks: status line under the row, escaped; Ask the agent disabled while one runs', () => {
   const rep = report();
   const keep = rep.repos[1].worktrees[0];

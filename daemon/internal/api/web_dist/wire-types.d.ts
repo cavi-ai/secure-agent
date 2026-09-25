@@ -679,6 +679,7 @@ export interface Worktree {
   locked?: boolean;
   lock_reason?: string;
   orphan?: boolean;
+  reconnect?: string;
   state: string;
   reasons: string[];
   stale?: boolean;
