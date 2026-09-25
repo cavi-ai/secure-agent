@@ -281,7 +281,18 @@ document.addEventListener('DOMContentLoaded', () => {
     if (SPEND_SINCE.includes(saved.since)) spendView.since = saved.since;
   } catch { /* private mode or a corrupt entry: the default view */ }
   const spendCardPath = () =>
-    `/costs?since=${spendView.since}&by=${spendView.by}&tz=${-(new Date()).getTimezoneOffset()}`;
+    `/costs?since=${spendView.since}&by=${spendView.by}&tz=${-(new Date()).getTimezoneOffset()}&cached=1`;
+  // Spend reads the daemon's usage cache (cached=1): each report's last copy
+  // answers at once, one saved before a restart too, while the daemon
+  // computes a fresh one (refreshing: true). The card says so and re-reads
+  // every 2 s, at most 30 times in a row, until it lands. Every slow cycle
+  // starts a load (loadSpend) beside its other fetches; a newer load drops an
+  // older one's answer.
+  const SPEND_POLL_MS = 2000;
+  const SPEND_POLLS = 30;
+  let spendGen = 0;
+  let spendPollTimer = null;
+  let spendPolls = 0;
 
   // ---------- connectivity ----------
   // Two honest live states, never conflated:
@@ -1226,6 +1237,7 @@ document.addEventListener('DOMContentLoaded', () => {
       } catch { return null; } // network error, timeout, or corrupt JSON
     };
 
+    if (slow) loadSpend(); // beside this cycle: its reports never hold the first render
     const requests = [grab('snapshot', '/snapshot'), grab('guard decisions', '/guard/pending')];
     if (slow) requests.push(grab('resources', '/resources'));
     const [snap, guardPending, resources] = await Promise.all(requests);
@@ -1253,9 +1265,8 @@ document.addEventListener('DOMContentLoaded', () => {
       if (snap.sessions) telemetryData.sessions = snap.sessions || [];
     }
 
-    const cardPath = spendCardPath();
     if (slow) {
-      const [fleet, audit, sources, rollup, uninspected, notifyCfg, allowlist, episodes, costs, costsCard, costPlans] = await Promise.all([
+      const [fleet, audit, sources, rollup, uninspected, notifyCfg, allowlist, episodes] = await Promise.all([
         grab('fleet', '/fleet'),
         grab('audit', '/audit?limit=50'),
         grab('firewall sources', '/firewall/sources'),
@@ -1263,10 +1274,7 @@ document.addEventListener('DOMContentLoaded', () => {
         grab('uninspected egress', '/egress/uninspected?hours=24&limit=200'),
         grab('notification rules', '/notify/rules'),
         grab('allowlist', '/allowlist'),
-        grab('resource episodes', '/resources/episodes'),
-        grab('spend', '/costs?since=24h&by=repo'),
-        grab('spend card', cardPath),
-        grab('spend plans', '/costs/plans')
+        grab('resource episodes', '/resources/episodes')
       ]);
       if (fleet) telemetryData.fleet = fleet || [];
       if (audit) telemetryData.audit = audit || [];
@@ -1282,9 +1290,6 @@ document.addEventListener('DOMContentLoaded', () => {
         if (h !== notifyCfgHash) { notifyCfgHash = h; telemetryData.notifyCfg = notifyCfg; markDirty('notify'); }
       }
       if (allowlist) telemetryData.allowlist = allowlist || [];
-      if (costs) telemetryData.costs = costs;
-      if (costPlans) telemetryData.costPlans = costPlans;
-      if (costsCard && cardPath === spendCardPath()) telemetryData.costsCard = costsCard;
     }
 
     telemetryData.flagsView = telemetryData.flags;
@@ -1334,31 +1339,52 @@ document.addEventListener('DOMContentLoaded', () => {
   // re-slices the same 7d fetch locally (no refetch).
   document.getElementById('activity-window')?.addEventListener('change', renderActivity);
 
-  // Spend card controls: a change saves the view, clears the card and fetches
-  // the new report; a response for a view since replaced is dropped.
+  // loadSpend reads the three spend reports from the usage cache; now renders
+  // at once (a view the user just chose), else when the panel may.
+  async function loadSpend(now) {
+    if (sessionEnded) return;
+    const gen = ++spendGen;
+    clearTimeout(spendPollTimer);
+    spendPollTimer = null;
+    const cardPath = spendCardPath();
+    const grab = async (key, path) => {
+      try {
+        const r = await apiFetch(path);
+        if (!r.ok) { if (r.status !== 403) noteEndpointFailure(key); return null; } // 403: the snapshot ends the session
+        failedEndpoints.delete(key);
+        return await r.json();
+      } catch { return null; } // network error: the next load retries
+    };
+    const [costs, costsCard, costPlans] = await Promise.all([
+      grab('spend', '/costs?since=24h&by=repo&cached=1'),
+      grab('spend card', cardPath),
+      grab('spend plans', '/costs/plans')
+    ]);
+    if (gen !== spendGen) return;
+    if (costs) telemetryData.costs = costs;
+    if (costPlans) telemetryData.costPlans = costPlans;
+    if (costsCard && cardPath === spendCardPath()) telemetryData.costsCard = costsCard;
+    if (now) renderNow(['spend']); else markDirty('spend');
+    if (![telemetryData.costs, telemetryData.costsCard].some(r => r && r.refreshing)) { spendPolls = 0; return; }
+    if (spendPolls >= SPEND_POLLS) return; // the slow cycle keeps asking
+    spendPolls++;
+    spendPollTimer = setTimeout(() => loadSpend(false), SPEND_POLL_MS);
+  }
+
+  // Spend card controls: a change saves the view, clears the card and loads
+  // the new report.
   const spendBySel = document.getElementById('spend-by');
   const spendSinceSel = document.getElementById('spend-since');
   if (spendBySel) spendBySel.value = spendView.by;
   if (spendSinceSel) spendSinceSel.value = spendView.since;
-  async function loadSpendCard() {
-    const path = spendCardPath();
-    try {
-      const r = await apiFetch(path);
-      if (!r.ok) { noteEndpointFailure('spend card'); return; }
-      const rep = await r.json();
-      if (path !== spendCardPath()) return;
-      failedEndpoints.delete('spend card');
-      telemetryData.costsCard = rep;
-      renderNow(['spend']);
-    } catch { /* network error: the next slow refresh retries */ }
-  }
   const onSpendView = () => {
     const by = spendBySel && spendBySel.value, since = spendSinceSel && spendSinceSel.value;
     spendView = { by: SPEND_BY.includes(by) ? by : 'repo', since: SPEND_SINCE.includes(since) ? since : '24h' };
     try { sessionStorage.setItem(SPEND_VIEW_KEY, JSON.stringify(spendView)); } catch { /* private mode */ }
     telemetryData.costsCard = null;
+    spendPolls = 0;
     renderNow(['spend']);
-    loadSpendCard();
+    loadSpend(true);
   };
   spendBySel?.addEventListener('change', onSpendView);
   spendSinceSel?.addEventListener('change', onSpendView);

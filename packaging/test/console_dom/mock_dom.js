@@ -859,6 +859,16 @@
       if (by && data['/costs?by=' + by]) body = data['/costs?by=' + by];
       costLog.push(String(path).split('?')[1] || '');
       stamp('mock-costs', costLog.join('\n'));
+      // spendcachedemo: the first two rounds (tile + card each) answer from
+      // the usage cache — a 3 h old report being recomputed — then the fresh
+      // one, $1 more.
+      if (MODE.includes('spendcachedemo') && body) {
+        body = costLog.length <= 4
+          ? { ...body, refreshing: true, generated_at: iso(3 * 3600000) }
+          : { ...body, generated_at: iso(0), total: { ...body.total, cost_usd: body.total.cost_usd + 1 } };
+      }
+      // spendslowdemo: every /costs answer takes 6 s (a report computed cold).
+      if (MODE.includes('spendslowdemo')) await new Promise(r => setTimeout(r, 6000));
     }
     return {
       ok: body !== undefined,
@@ -1221,6 +1231,22 @@
       out.push(`list same=${!!row && q('.spend-row') === row} refetched=${costFetches() > fetches}`);
       stamp('spend-keep-probe', out.join('\n'));
     }, 7000);
+  }
+  // spendcachedemo: at 1 s (the first answers came from the usage cache)
+  // record the card's notice and the tile's line on <pre id="spend-cache-probe">.
+  // spendslowdemo: at 3 s (the /costs answers are still out) record the
+  // agents KPI and the Spend card's text on <pre id="spend-slow-probe">.
+  if (MODE.includes('spendcachedemo')) {
+    setTimeout(() => {
+      const n = document.getElementById('spend-cache');
+      stamp('spend-cache-probe', `notice=${n.hidden ? '' : n.textContent} hint=${document.getElementById('hint-spend').textContent}`);
+    }, 1000);
+  }
+  if (MODE.includes('spendslowdemo')) {
+    setTimeout(() => {
+      stamp('spend-slow-probe', `agents=${document.getElementById('count-agents').textContent} `
+        + `spend=${document.getElementById('spend-card').textContent.trim()}`);
+    }, 3000);
   }
   // No-spend variant: an empty /costs report — the tile reads an em dash and
   // the card shows its empty state.
