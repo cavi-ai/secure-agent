@@ -49,8 +49,8 @@ check "running, ad-hoc adds the rebuild caveat" \
 check "not-loaded names the two grants to check" \
   "File telemetry: not-loaded — approve Secure Agent in System Settings → General → Login Items & Extensions, then allow it in Privacy & Security → Full Disk Access (once per signing identity)" \
   "$(telemetry_status_line not-loaded 0)"
-check "unreachable when state is empty" \
-  "File telemetry: unreachable — approve Secure Agent in System Settings → General → Login Items & Extensions, then allow it in Privacy & Security → Full Disk Access (once per signing identity); ad-hoc builds lose this grant on every rebuild" \
+check "unknown, without approval steps, when the daemon did not answer" \
+  "File telemetry: unknown — the daemon did not answer in time; the menu bar shows the state once it is up; ad-hoc builds lose this grant on every rebuild" \
   "$(telemetry_status_line '' 1)"
 
 # --- resolve_socket_path: fixture config.yaml ---
@@ -66,30 +66,6 @@ check "resolve_socket_path reads a bare value" \
   "${WORK}/daemon.sock" "$(resolve_socket_path "${WORK}/bare.yaml" "/default/sock")"
 check "resolve_socket_path falls back when config is missing" \
   "/default/sock" "$(resolve_socket_path "${WORK}/missing.yaml" "/default/sock")"
-
-# --- wait_for_socket: real socket file appears / never appears ---
-SOCK="${WORK}/daemon.sock"
-if wait_for_socket "${SOCK}" 1; then
-  echo "not ok - wait_for_socket should time out on a socket that never appears"
-  fail=$((fail + 1))
-else
-  echo "ok - wait_for_socket times out when the socket never appears"
-  pass=$((pass + 1))
-fi
-
-python3 -c '
-import socket, sys
-s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-s.bind(sys.argv[1])
-' "${SOCK}"
-if wait_for_socket "${SOCK}" 2; then
-  echo "ok - wait_for_socket succeeds once the socket file exists"
-  pass=$((pass + 1))
-else
-  echo "not ok - wait_for_socket succeeds once the socket file exists"
-  fail=$((fail + 1))
-fi
-rm -f "${SOCK}"
 
 # --- read_status_json + es_service_state: fake HTTP-over-unix-socket server ---
 cat > "${WORK}/fake_status_server.py" <<'PYSRV'
@@ -120,9 +96,32 @@ srv = UnixHTTPServer(sys.argv[1], Handler)
 srv.serve_forever()
 PYSRV
 
-python3 "${WORK}/fake_status_server.py" "${SOCK}" > "${WORK}/server.log" 2>&1 &
+SOCK="${WORK}/daemon.sock"
+
+# A stale socket file (the previous daemon's, nobody listening) is not an
+# answer: wait_for_status times out and prints nothing.
+python3 -c '
+import socket, sys
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+s.bind(sys.argv[1])
+' "${SOCK}"
+if STALE="$(wait_for_status "${SOCK}" 2)"; then
+  echo "not ok - wait_for_status times out on a stale socket file"
+  fail=$((fail + 1))
+else
+  check "wait_for_status prints nothing on a stale socket file" "" "${STALE}"
+fi
+rm -f "${SOCK}"
+
+# The daemon comes up while install.sh waits: the state is read once it answers.
+( sleep 2; exec python3 "${WORK}/fake_status_server.py" "${SOCK}" ) > "${WORK}/server.log" 2>&1 &
 SERVER_PID=$!
-wait_for_socket "${SOCK}" 5 >/dev/null
+if LATE="$(wait_for_status "${SOCK}" 15)"; then
+  check "wait_for_status reads the state of a daemon that starts during the wait" "running" "${LATE}"
+else
+  echo "not ok - wait_for_status reads the state of a daemon that starts during the wait"
+  fail=$((fail + 1))
+fi
 
 BODY="$(read_status_json "${SOCK}")"
 check "read_status_json reaches the fake daemon" '{"es_service": {"state": "running"}}' "${BODY}"

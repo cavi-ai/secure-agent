@@ -27,8 +27,11 @@ telemetry_status_line() {
   if [[ "${state}" == "running" ]]; then
     line="File telemetry: running"
   else
-    [[ -n "${state}" ]] || state="unreachable"
-    line="File telemetry: ${state} — approve Secure Agent in System Settings → General → Login Items & Extensions, then allow it in Privacy & Security → Full Disk Access (once per signing identity)"
+    if [[ -z "${state}" ]]; then
+      line="File telemetry: unknown — the daemon did not answer in time; the menu bar shows the state once it is up"
+    else
+      line="File telemetry: ${state} — approve Secure Agent in System Settings → General → Login Items & Extensions, then allow it in Privacy & Security → Full Disk Access (once per signing identity)"
+    fi
   fi
   if [[ "${ad_hoc}" == "1" ]]; then
     line="${line}; ad-hoc builds lose this grant on every rebuild"
@@ -52,18 +55,27 @@ resolve_socket_path() {
   fi
 }
 
-# wait_for_socket <path> <timeout_seconds>
-# Polls once a second until a unix-socket file exists at <path>.
-wait_for_socket() {
-  local path="$1" timeout="${2:-30}" waited=0
-  while [[ ! -S "${path}" ]]; do
+# wait_for_status <path> <timeout_seconds>
+# Polls /status once a second until the daemon at <path> answers with an
+# es_service state, and prints it; returns 1 after the timeout. The socket
+# file alone proves nothing: the previous daemon's file stays in place until
+# the new daemon binds.
+wait_for_status() {
+  local path="$1" timeout="${2:-90}" waited=0 state=""
+  while :; do
+    if [[ -S "${path}" ]]; then
+      state="$(es_service_state "$(read_status_json "${path}")")"
+      if [[ -n "${state}" ]]; then
+        printf '%s\n' "${state}"
+        return 0
+      fi
+    fi
     if (( waited >= timeout )); then
       return 1
     fi
     sleep 1
     waited=$(( waited + 1 ))
   done
-  return 0
 }
 
 # read_status_json <socket_path>
