@@ -7,6 +7,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 source "${REPO_ROOT}/packaging/lib/sign_identity.sh"
 
+mkdir -p "${REPO_ROOT}/.tmp"
 WORK="$(mktemp -d "${REPO_ROOT}/.tmp/test_sign_identity.XXXXXX")"
 trap 'mkdir -p "${REPO_ROOT}/.quarantine" 2>/dev/null; mv "${WORK}" "${REPO_ROOT}/.quarantine/" 2>/dev/null || true' EXIT
 STUB_BIN="${WORK}/bin"
