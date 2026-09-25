@@ -161,7 +161,36 @@ function worktreeRowHTML(w, repo, note, ask, removal) {
   </div>`;
 }
 
+// removableRows: a repository's rows in state remove with no removal
+// running.
+function removableRows(repo, removals) {
+  return ((repo && repo.worktrees) || []).filter(w => w.state === 'remove' && !w.orphan
+    && !((removals || {})[w.path] && removals[w.path].state === 'running'));
+}
+
+// removalBatchSummary: one line for a batch once none of its removals
+// runs; '' while one still does.
+function removalBatchSummary(paths, removals) {
+  let removed = 0;
+  let bytes = 0;
+  let failed = 0;
+  for (const p of paths) {
+    const r = (removals || {})[p];
+    if (!r || r.state === 'running') return '';
+    if (r.state === 'removed') {
+      removed++;
+      bytes += Number(r.bytes) || 0;
+    } else {
+      failed++;
+    }
+  }
+  let text = `Removed ${removed} of ${paths.length} worktrees` + (bytes ? ` — ${fmtDisk(bytes)} reclaimed` : '');
+  if (failed) text += `; ${failed} not removed, see ${failed === 1 ? 'its row' : 'their rows'}`;
+  return text;
+}
+
 // worktreeGroupHTML: one repository block with its rows and a Hide button.
+// Two or more removable rows add Remove all with their count and size.
 // advice, asks and removals map a worktree path to its advisor note, latest
 // ask and latest removal.
 function worktreeGroupHTML(g, advice, asks, removals) {
@@ -173,10 +202,18 @@ function worktreeGroupHTML(g, advice, asks, removals) {
       ${g.repo.size_bytes ? `<span class="wt-repo-size">${escapeHTML(fmtDisk(g.repo.size_bytes))}</span>` : ''}
       ${g.repo.error
         ? `<span class="wt-repo-error">${escapeHTML(g.repo.error)} — the folders below still point to it</span>`
-        : `<button type="button" class="link-btn wt-hide" data-action="worktree-hide" data-repo="${escapeHTML(g.repo.path)}">Hide repo</button>`}
+        : worktreeRemoveAllHTML(g.repo, removals)
+          + `<button type="button" class="link-btn wt-hide" data-action="worktree-hide" data-repo="${escapeHTML(g.repo.path)}">Hide repo</button>`}
     </div>
     ${g.rows.map(w => worktreeRowHTML(w, g.repo, (advice || {})[w.path], (asks || {})[w.path], (removals || {})[w.path])).join('')}
   </section>`;
+}
+
+function worktreeRemoveAllHTML(repo, removals) {
+  const rows = removableRows(repo, removals);
+  if (rows.length < 2) return '';
+  const bytes = rows.reduce((n, w) => n + (Number(w.size_bytes) || 0), 0);
+  return `<button type="button" class="btn btn-danger btn-sm wt-remove-all" data-action="worktree-remove-all" data-repo="${escapeHTML(repo.path)}">Remove all ${rows.length}${bytes ? ' · ' + escapeHTML(fmtDisk(bytes)) : ''}</button>`;
 }
 
 // worktreeFilterHTML: one pill per state with its count, then stale.

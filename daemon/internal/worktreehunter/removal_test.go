@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -107,5 +108,30 @@ func TestStartRemoveReportsStepsAndOutcome(t *testing.T) {
 	h.now = func() time.Time { return time.Now().Add(48*time.Hour + removalTTL + time.Minute) }
 	if left := h.Removals(); len(left) != 0 {
 		t.Fatalf("finished removals kept past removalTTL: %+v", left)
+	}
+}
+
+// Remove all starts one removal per row at once: they queue on the scan
+// lock and every one lands.
+func TestStartRemoveManyInOneRepository(t *testing.T) {
+	h, f := removalFixture(t)
+	var paths []string
+	for _, n := range []string{"a", "b", "c", "d"} {
+		paths = append(paths, f.worktree(t, n))
+	}
+	for _, p := range paths {
+		if _, err := h.StartRemove(p); err != nil {
+			t.Fatalf("StartRemove(%s): %v", p, err)
+		}
+	}
+	h.remWG.Wait()
+	all := h.Removals()
+	for _, p := range paths {
+		if all[p].State != RemovalRemoved || exists(p) {
+			t.Fatalf("%s: %+v, on disk %v", p, all[p], exists(p))
+		}
+	}
+	if list := run(t, f.main, "worktree", "list", "--porcelain"); strings.Count(list, "worktree ") != 1 {
+		t.Fatalf("git still lists linked worktrees:\n%s", list)
 	}
 }

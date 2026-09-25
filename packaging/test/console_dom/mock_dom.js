@@ -1420,6 +1420,27 @@
       }, 100);
     }, 4000);
   }
+  // batchdemo: three removable worktrees in one repository; Remove all
+  // removes them after one dialog.
+  if (MODE.includes('batchdemo')) {
+    const repo = data['/worktrees'].repos[0];
+    const done = repo.worktrees.find(w => w.state === 'remove');
+    repo.worktrees.push({ ...done, path: WT_REPO + '/.worktrees/old-a', branch: 'feat/old-a' }, { ...done, path: WT_REPO + '/.worktrees/old-b', branch: 'feat/old-b' });
+    setTimeout(() => {
+      const btn = document.querySelector('#worktrees-container [data-action="worktree-remove-all"]');
+      if (btn) btn.click();
+      let n = 0;
+      const iv = setInterval(() => {
+        const ok = document.getElementById('confirm-ok');
+        if (ok && ok.closest('#confirm-layer') && !ok.closest('#confirm-layer').hidden) {
+          ok.click();
+          clearInterval(iv);
+        } else if (++n > 20) {
+          clearInterval(iv);
+        }
+      }, 100);
+    }, 3000);
+  }
   // orphandemo: a repository that moved away leaves a folder pointing at it;
   // orphantrash moves the folder to the Trash from its row.
   if (MODE.includes('orphandemo')) {

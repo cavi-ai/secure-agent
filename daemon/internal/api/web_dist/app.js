@@ -859,11 +859,20 @@ document.addEventListener('DOMContentLoaded', () => {
     worktreeSizingTimer = setTimeout(() => { worktreeSizingTimer = null; loadWorktrees(false); }, removing ? WORKTREE_REMOVAL_POLL_MS : WORKTREE_SIZING_POLL_MS);
   }
   // announceRemovals toasts each removal this page saw running that has
-  // since finished.
+  // since finished; a Remove all batch gets one line when its last
+  // removal ends.
+  const removalBatches = [];
   function announceRemovals(before, after) {
+    const batched = new Set(removalBatches.flatMap(b => b.paths));
+    for (let i = removalBatches.length - 1; i >= 0; i--) {
+      const text = removalBatchSummary(removalBatches[i].paths, after && after.removals);
+      if (!text) continue;
+      showToast(text, text.includes('not removed') ? 'info' : 'success');
+      removalBatches.splice(i, 1);
+    }
     for (const [path, was] of Object.entries((before && before.removals) || {})) {
       const now = ((after && after.removals) || {})[path];
-      if (was.state !== 'running' || !now || now.state === 'running') continue;
+      if (batched.has(path) || was.state !== 'running' || !now || now.state === 'running') continue;
       if (now.state === 'removed') {
         showToast(now.bytes ? `Removed ${path} — ${fmtDisk(now.bytes)} reclaimed` : `Removed ${path}`, 'success');
       } else if (now.row_state) {
@@ -1475,6 +1484,34 @@ document.addEventListener('DOMContentLoaded', () => {
     } catch (err) {
       showToast('Could not start the removal: ' + (err.message || err), 'danger');
     }
+  };
+
+  // Remove all: every removable row of one repository, each checked again
+  // by the daemon before it goes; one line when the batch ends.
+  window.removeAllWorktrees = async function(repoPath) {
+    const rep = worktreesState.report;
+    const repo = rep && (rep.repos || []).find(r => r.path === repoPath);
+    const rows = removableRows(repo, rep && rep.removals);
+    if (!rows.length) return;
+    const bytes = rows.reduce((n, w) => n + (Number(w.size_bytes) || 0), 0);
+    const ok = await window.saConfirm(
+      `git deletes ${rows.length} worktrees of ${repoPath}${bytes ? ` (${fmtDisk(bytes)})` : ''} and their ignored files. Their branches and commits stay; each is checked again before it goes.`,
+      { title: 'Remove all', okLabel: `Remove ${rows.length}` });
+    if (!ok) return;
+    const started = [];
+    for (const w of rows) {
+      try {
+        const { r, text, json } = await postWorktree('/worktrees/remove', { path: w.path, async: true });
+        if (!r.ok || !json || !json.removal) throw new Error(text.trim() || String(r.status));
+        (rep.removals || (rep.removals = {}))[w.path] = json.removal;
+        started.push(w.path);
+      } catch (err) {
+        showToast(`Could not start removing ${w.path}: ${err.message || err}`, 'danger');
+      }
+    }
+    if (started.length) removalBatches.push({ paths: started });
+    renderNow(['worktrees']);
+    followWorktreeSizing();
   };
 
   // Folders git no longer records: open in Finder, link again to the
@@ -2948,6 +2985,10 @@ document.addEventListener('DOMContentLoaded', () => {
       case 'worktree-hide':
         e.preventDefault();
         window.hideWorktreeRepo(d.repo);
+        break;
+      case 'worktree-remove-all':
+        e.preventDefault();
+        window.removeAllWorktrees(d.repo);
         break;
       case 'worktree-reveal':
         e.preventDefault();
