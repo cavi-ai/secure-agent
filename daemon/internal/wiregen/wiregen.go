@@ -92,6 +92,7 @@ func WireTypes() []any {
 		clutter.ClutterResult{},
 		model.CleanupEntry{},
 		model.CleanupTotals{},
+		model.CleanupDay{},
 		model.AgentAsk{},
 	}
 }

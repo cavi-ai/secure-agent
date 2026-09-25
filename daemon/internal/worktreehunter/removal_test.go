@@ -135,3 +135,62 @@ func TestStartRemoveManyInOneRepository(t *testing.T) {
 		t.Fatalf("git still lists linked worktrees:\n%s", list)
 	}
 }
+
+type phaseRecorder struct {
+	seen  []string
+	bytes int64
+	files int
+}
+
+func (r *phaseRecorder) phase(p string) {
+	if p == PhaseDeleting && r.files > 0 {
+		p += "(measured)"
+	}
+	r.seen = append(r.seen, p)
+}
+
+func (r *phaseRecorder) measured(bytes int64, files int) { r.bytes, r.files = bytes, files }
+
+// A removal passes its phases in order and reports the measured size of
+// the tree before it starts deleting it.
+func TestRemovePassesPhasesInOrderAndMeasuresBeforeDeleting(t *testing.T) {
+	h, f := removalFixture(t)
+	wt := f.worktree(t, "done")
+	for i := 0; i < 20; i++ {
+		write(t, filepath.Join(wt, "node_modules", fmt.Sprintf("f%d.js", i)), "x\n")
+	}
+	rec := &phaseRecorder{}
+	if _, err := h.remove(context.Background(), wt, rec); err != nil || exists(wt) {
+		t.Fatalf("remove = %v, still on disk %v", err, exists(wt))
+	}
+	if got := strings.Join(rec.seen, ","); got != "checking,measuring,deleting(measured)" {
+		t.Fatalf("phases = %s", got)
+	}
+	if rec.bytes <= 0 || rec.files < 20 {
+		t.Fatalf("measured %d bytes, %d files; want > 0 and >= 20", rec.bytes, rec.files)
+	}
+}
+
+// While a removal runs, Removals names its phase, when that phase began
+// and, once measured, the size and file count being deleted; the phase
+// clears when it ends and the size stays.
+func TestRemovalReportsPhaseSizeAndFilesWhileRunning(t *testing.T) {
+	h, f := removalFixture(t)
+	wt := f.worktree(t, "done")
+	job, err := h.beginRemoval(wt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	job.phase(PhaseMeasuring)
+	job.measured(4096, 7)
+	job.phase(PhaseDeleting)
+	got := h.Removals()[wt]
+	if got.State != RemovalRunning || got.Phase != PhaseDeleting || got.Step != StepDeleting || got.StepAt == nil || got.Bytes != 4096 || got.Files != 7 {
+		t.Fatalf("running removal = %+v", got)
+	}
+	job.finish(Worktree{Branch: "feat/done", SizeBytes: 4096}, nil)
+	got = h.Removals()[wt]
+	if got.State != RemovalRemoved || got.Phase != "" || got.Step != "" || got.StepAt != nil || got.Bytes != 4096 || got.Files != 7 {
+		t.Fatalf("finished removal = %+v", got)
+	}
+}

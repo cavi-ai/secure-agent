@@ -115,6 +115,7 @@ func (a *API) handleWorktreeAsks(w http.ResponseWriter, r *http.Request) {
 
 // handleCleanupLedger serves the cleanup ledger: what was removed and the
 // bytes it gave back, newest first, with all-time and 30-day totals.
+// ?days=N adds the daily series of the N days ending today.
 func (a *API) handleCleanupLedger(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -124,10 +125,15 @@ func (a *API) handleCleanupLedger(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "store not wired", http.StatusServiceUnavailable)
 		return
 	}
-	writeJSON(w, map[string]any{
-		"totals":  a.store.CleanupTotals(time.Now()),
+	now := time.Now()
+	out := map[string]any{
+		"totals":  a.store.CleanupTotals(now),
 		"entries": a.store.CleanupLog(queryInt(r.URL.Query().Get("limit"), 100)),
-	})
+	}
+	if days := queryInt(r.URL.Query().Get("days"), 0); days > 0 {
+		out["daily"] = a.store.CleanupDaily(now, days)
+	}
+	writeJSON(w, out)
 }
 
 // worktreeNotes looks up the stored advisor note for each row at its current

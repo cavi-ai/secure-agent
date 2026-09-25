@@ -171,6 +171,7 @@ func (s *Store) CleanupLog(limit int) []model.CleanupEntry {
 }
 
 // CleanupTotals sums the ledger over all time and the 30 days before now.
+// An agent's answer (ask:*) is history, not a cleanup: it is not counted.
 func (s *Store) CleanupTotals(now time.Time) model.CleanupTotals {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -180,12 +181,75 @@ func (s *Store) CleanupTotals(now time.Time) model.CleanupTotals {
 		COALESCE(SUM(CASE WHEN trashed THEN 0 ELSE bytes END), 0), COALESCE(SUM(NOT trashed), 0),
 		COALESCE(SUM(CASE WHEN ts >= ? AND NOT trashed THEN bytes ELSE 0 END), 0), COALESCE(SUM(ts >= ? AND NOT trashed), 0),
 		COALESCE(SUM(CASE WHEN trashed THEN bytes ELSE 0 END), 0), COALESCE(SUM(trashed), 0)
-		FROM (SELECT ts, bytes, action LIKE 'trash:%' AS trashed FROM cleanup_log)`, cut, cut).
+		FROM (SELECT ts, bytes, action LIKE 'trash:%' AS trashed FROM cleanup_log WHERE action NOT LIKE 'ask:%')`, cut, cut).
 		Scan(&t.Bytes, &t.Count, &t.Bytes30d, &t.Count30d, &t.TrashedBytes, &t.TrashedCount)
 	if err != nil {
 		log.Printf("store: cleanup totals: %v", err)
 	}
 	return t
+}
+
+// maxCleanupDays bounds the daily series.
+const maxCleanupDays = 366
+
+// CleanupDaily sums the ledger per calendar day in now's location for the
+// days days ending today, oldest first; a day without cleanups is listed
+// with zeros. Like CleanupTotals, moves to the Trash sum and count apart
+// and an agent's answer is not counted.
+func (s *Store) CleanupDaily(now time.Time, days int) []model.CleanupDay {
+	if days <= 0 {
+		return nil
+	}
+	if days > maxCleanupDays {
+		days = maxCleanupDays
+	}
+	loc := now.Location()
+	y, m, d := now.Date()
+	out := make([]model.CleanupDay, days)
+	index := make(map[string]int, days)
+	for i := range out {
+		out[i].Day = time.Date(y, m, d-days+1+i, 0, 0, 0, 0, loc).Format(time.DateOnly)
+		index[out[i].Day] = i
+	}
+	// ts is text: fractional seconds make the string comparison fuzzy by
+	// under a second, so the query starts a second early and the day index
+	// decides.
+	first := time.Date(y, m, d-days+1, 0, 0, 0, 0, loc).Add(-time.Second)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rows, err := s.db.Query(`SELECT ts, action, bytes FROM cleanup_log WHERE ts >= ? AND action NOT LIKE 'ask:%'`,
+		first.UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		log.Printf("store: cleanup daily: %v", err)
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var ts, action string
+		var bytes int64
+		if err := rows.Scan(&ts, &action, &bytes); err != nil {
+			continue
+		}
+		at, err := time.Parse(time.RFC3339Nano, ts)
+		if err != nil {
+			continue
+		}
+		i, ok := index[at.In(loc).Format(time.DateOnly)]
+		if !ok {
+			continue
+		}
+		if strings.HasPrefix(action, "trash:") {
+			out[i].TrashedBytes += bytes
+			out[i].TrashedCount++
+		} else {
+			out[i].Bytes += bytes
+			out[i].Count++
+		}
+	}
+	if err := rows.Err(); err != nil {
+		log.Printf("store: cleanup daily cursor error (result may be truncated): %v", err)
+	}
+	return out
 }
 
 // agent_asks records each request to a worktree's owning agent and what
