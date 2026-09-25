@@ -2,13 +2,15 @@ package worktreehunter
 
 import (
 	"context"
+	"encoding/json"
 	"sync"
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/diskusage"
 )
 
-// sizeTTL is how long a measured size answers without a new walk.
+// sizeTTL is how long a measured size answers without a new walk; an older
+// size still answers while the sizer measures it again.
 const sizeTTL = time.Hour
 
 // sizeEntry is one cached measurement.
@@ -29,15 +31,26 @@ type sizeJob struct {
 // must not starve the daemon.
 const sizerWorkers = 2
 
-// cachedSize returns a measurement younger than sizeTTL.
-func (h *Hunter) cachedSize(path string) (sizeEntry, bool) {
+// cachedSize returns the last measurement of path and whether it is older
+// than sizeTTL.
+func (h *Hunter) cachedSize(path string) (sizeEntry, bool, bool) {
 	h.sizeMu.Lock()
 	defer h.sizeMu.Unlock()
 	e, ok := h.sizes[path]
-	if !ok || h.now().Sub(e.at) > sizeTTL {
-		return sizeEntry{}, false
+	return e, ok && h.now().Sub(e.at) > sizeTTL, ok
+}
+
+// saveSizes stores the measured sizes.
+func (h *Hunter) saveSizes() {
+	h.sizeMu.Lock()
+	saved := make(map[string]savedSize, len(h.sizes))
+	for p, e := range h.sizes {
+		saved[p] = savedSize{Bytes: e.bytes, Partial: e.partial, At: e.at}
 	}
-	return e, true
+	h.sizeMu.Unlock()
+	if body, err := json.Marshal(saved); err == nil {
+		h.st.PutScanCache(cacheSizesKey, body, h.now())
+	}
 }
 
 func (h *Hunter) forgetSize(path string) {
@@ -83,15 +96,18 @@ func (h *Hunter) startSizing(jobs []sizeJob) {
 		}
 		close(ch)
 		wg.Wait()
+		h.saveSizes()
 	}()
 }
 
 // withSizes deep-copies rep (the cached scan stays untouched) and fills
 // each measurable row's size, the repository and summary totals and the
-// volumes; rows without a fresh size are queued for the sizer.
+// volumes; rows never measured, or measured more than sizeTTL ago, are
+// queued for the sizer. An old size answers until the new one lands.
 func (h *Hunter) withSizes(rep ScanReport) ScanReport {
 	repos := make([]RepoReport, len(rep.Repos))
 	var jobs []sizeJob
+	missing := 0
 	var roots []string
 	rep.Summary.SizeBytes, rep.Summary.RemovableBytes = 0, 0
 	for i, r := range rep.Repos {
@@ -106,14 +122,19 @@ func (h *Hunter) withSizes(rep ScanReport) ScanReport {
 			if w.State == StateMain || w.State == StatePrune {
 				continue
 			}
-			if e, ok := h.cachedSize(w.Path); ok {
+			e, old, ok := h.cachedSize(w.Path)
+			if ok {
 				w.SizeBytes, w.SizePartial = e.bytes, e.partial
 				r.SizeBytes += e.bytes
 				rep.Summary.SizeBytes += e.bytes
 				if w.State == StateRemove {
 					rep.Summary.RemovableBytes += e.bytes
 				}
-				continue
+				if !old {
+					continue
+				}
+			} else {
+				missing++
 			}
 			skip := map[string]bool{}
 			for p := range all {
@@ -129,7 +150,8 @@ func (h *Hunter) withSizes(rep ScanReport) ScanReport {
 		repos[i] = r
 	}
 	rep.Repos = repos
-	rep.Sizing = len(jobs) > 0
+	rep.Sizing = missing > 0
+	rep.Refreshing = rep.Refreshing || len(jobs) > missing
 	rep.Volumes = diskusage.Volumes(roots)
 	h.startSizing(jobs)
 	return rep

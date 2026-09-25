@@ -84,6 +84,9 @@ test('worktreeFilterHTML and summary line', () => {
   assert.match(html, /class="wt-pill on" data-action="worktree-stale" aria-pressed="true">Stale <b>2<\/b>/);
   assert.equal(worktreesSummaryText(report()), '2 repos · 4 worktrees · stale after 14 idle days · scanned in 36.2s');
   assert.equal(worktreesSummaryText({ ...report(), cached: true }), '2 repos · 4 worktrees · stale after 14 idle days · cached scan');
+  const at = Date.parse('2026-09-25T12:00:00Z');
+  assert.equal(worktreesSummaryText({ ...report(), cached: true, generated_at: '2026-09-25T11:48:00Z', refreshing: true }, at),
+    '2 repos · 4 worktrees · stale after 14 idle days · scanned 12m ago · refreshing…');
 });
 
 test('advisor notes: shown under their row, escaped, and never change the actions', () => {
@@ -164,6 +167,7 @@ test('clutter: pills carry bytes per kind; summary counts clearable bytes and wh
   const pills = clutterPillsHTML(clutterReport(), { kind: 'tmp' });
   assert.ok(pills.includes('data-kind="" aria-pressed="false">All <b>8.0 GB</b>'));
   assert.ok(pills.includes('class="wt-pill on" data-action="clutter-filter" data-kind="tmp" aria-pressed="true">.tmp <b>1.0 MB</b>'));
+  assert.ok(clutterSummaryText({ ...clutterReport(), refreshing: true }).startsWith('4 items · 8.0 GB clearable · refreshing…'));
   assert.equal(clutterSummaryText(clutterReport()),
     '4 items · 8.0 GB clearable · 3.0 MB moved to the Trash by cleanups (frees when the Trash is emptied)');
 });

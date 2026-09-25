@@ -113,6 +113,7 @@ type memStore struct {
 	activity []model.WorkspaceActivity
 	audit    []store.AuditEntry
 	cleanup  []model.CleanupEntry
+	scan     map[string]scanEntry
 }
 
 func newMemStore() *memStore { return &memStore{repos: map[string]model.WorktreeRepo{}} }
@@ -153,6 +154,27 @@ func (m *memStore) SetWorktreeRepoHidden(path string, hidden bool) bool {
 }
 
 func (m *memStore) WorkspaceActivity() []model.WorkspaceActivity { return m.activity }
+
+type scanEntry struct {
+	body []byte
+	at   time.Time
+}
+
+func (m *memStore) ScanCache(name string) ([]byte, time.Time, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	e, ok := m.scan[name]
+	return e.body, e.at, ok
+}
+
+func (m *memStore) PutScanCache(name string, body []byte, at time.Time) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.scan == nil {
+		m.scan = map[string]scanEntry{}
+	}
+	m.scan[name] = scanEntry{body: append([]byte(nil), body...), at: at}
+}
 
 func (m *memStore) PutCleanup(e model.CleanupEntry) {
 	m.mu.Lock()
@@ -453,8 +475,13 @@ func TestReportCaches(t *testing.T) {
 		t.Fatal("refresh after minRescan served the cache")
 	}
 	now = now.Add(cacheTTL + time.Second)
-	if r := h.Report(context.Background(), false); r.Cached {
-		t.Fatal("expired cache served")
+	stale := h.Report(context.Background(), false)
+	if !stale.Cached || !stale.Refreshing {
+		t.Fatalf("an expired scan must answer while a rescan runs: cached=%v refreshing=%v", stale.Cached, stale.Refreshing)
+	}
+	h.bgWG.Wait()
+	if r := h.Report(context.Background(), false); r.Refreshing || !r.GeneratedAt.After(stale.GeneratedAt) {
+		t.Fatalf("the background rescan did not replace the scan: refreshing=%v at %v (was %v)", r.Refreshing, r.GeneratedAt, stale.GeneratedAt)
 	}
 }
 

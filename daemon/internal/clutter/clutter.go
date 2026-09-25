@@ -15,6 +15,7 @@ package clutter
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"sort"
@@ -77,13 +78,16 @@ type ClutterProjectTotal struct {
 
 // ClutterReport is one inventory.
 type ClutterReport struct {
-	GeneratedAt time.Time             `json:"generated_at"`
-	Sizing      bool                  `json:"sizing,omitempty"`
-	Items       []ClutterItem         `json:"items"`
-	Kinds       []ClutterKindTotal    `json:"kinds"`
-	Projects    []ClutterProjectTotal `json:"projects"`
-	Volumes     []diskusage.Volume    `json:"volumes,omitempty"`
-	Reclaimed   *model.CleanupTotals  `json:"reclaimed,omitempty"` // the API fills it
+	GeneratedAt time.Time `json:"generated_at"`
+	Sizing      bool      `json:"sizing,omitempty"`
+	// Refreshing is true while a background rebuild or re-measure replaces
+	// this cached inventory.
+	Refreshing bool                  `json:"refreshing,omitempty"`
+	Items      []ClutterItem         `json:"items"`
+	Kinds      []ClutterKindTotal    `json:"kinds"`
+	Projects   []ClutterProjectTotal `json:"projects"`
+	Volumes    []diskusage.Volume    `json:"volumes,omitempty"`
+	Reclaimed  *model.CleanupTotals  `json:"reclaimed,omitempty"` // the API fills it
 	// Advice is the local advisor's plan per project ("machine" for
 	// machine-wide caches); the API fills it.
 	Advice map[string]model.AdvisorVerdict `json:"advice,omitempty"`
@@ -101,12 +105,16 @@ type Place struct {
 type Store interface {
 	PutCleanup(model.CleanupEntry)
 	WorkspaceActivity() []model.WorkspaceActivity
+	ScanCache(name string) ([]byte, time.Time, bool)
+	PutScanCache(name string, body []byte, at time.Time)
 }
 
 const (
-	// cacheTTL is how long an inventory answers without a rebuild.
+	// cacheTTL is how long an inventory answers without a rebuild; an older
+	// one still answers while a background rebuild replaces it.
 	cacheTTL = 10 * time.Minute
-	// sizeTTL is how long a measured size answers without a new walk.
+	// sizeTTL is how long a measured size answers without a new walk; an
+	// older size still answers while the sizer measures it again.
 	sizeTTL = time.Hour
 	// sizerWorkers bounds concurrent walks.
 	sizerWorkers = 2
@@ -133,6 +141,10 @@ type Clutter struct {
 	cachedAt time.Time
 
 	scanMu sync.Mutex
+	// loaded is set once the saved inventory and sizes were read from the
+	// store; bgWG lets tests wait for a background rebuild.
+	loaded bool
+	bgWG   sync.WaitGroup
 
 	sizeMu sync.Mutex
 	sizes  map[string]sizeEntry
@@ -161,21 +173,111 @@ func (c *Clutter) Report(ctx context.Context, refresh bool) ClutterReport {
 	return c.withSizes(c.inventory(ctx, refresh))
 }
 
+// inventory answers from the cached inventory unless refresh is asked: one
+// older than cacheTTL answers at once while a background rebuild replaces
+// it. Without one, or on refresh, it rebuilds.
 func (c *Clutter) inventory(ctx context.Context, refresh bool) ClutterReport {
+	c.load()
 	c.mu.Lock()
-	if c.cached != nil && !refresh && c.now().Sub(c.cachedAt) < cacheTTL {
+	if c.cached != nil && !refresh {
 		r := *c.cached
+		stale := c.now().Sub(c.cachedAt) >= cacheTTL
 		c.mu.Unlock()
+		if stale {
+			c.rebuildInBackground()
+			r.Refreshing = true
+		}
 		return r
 	}
 	c.mu.Unlock()
 	c.scanMu.Lock()
 	defer c.scanMu.Unlock()
+	return c.rebuildLocked(ctx)
+}
+
+// rebuildLocked collects, caches and saves the inventory. Caller holds
+// scanMu.
+func (c *Clutter) rebuildLocked(ctx context.Context) ClutterReport {
 	rep := ClutterReport{GeneratedAt: c.now().UTC(), Items: c.collect(ctx)}
+	at := c.now()
 	c.mu.Lock()
-	c.cached, c.cachedAt = &rep, c.now()
+	c.cached, c.cachedAt = &rep, at
 	c.mu.Unlock()
+	if body, err := json.Marshal(rep); err == nil {
+		c.st.PutScanCache(cacheInventoryKey, body, at)
+	}
 	return rep
+}
+
+// rebuildInBackground starts a rebuild unless one (or an action) is running.
+func (c *Clutter) rebuildInBackground() {
+	if !c.scanMu.TryLock() {
+		return
+	}
+	c.bgWG.Add(1)
+	go func() {
+		defer c.bgWG.Done()
+		defer c.scanMu.Unlock()
+		c.rebuildLocked(context.Background())
+	}()
+}
+
+const (
+	cacheInventoryKey = "cleanup.inventory"
+	cacheSizesKey     = "cleanup.sizes"
+)
+
+// savedSize is one stored measurement.
+type savedSize struct {
+	Usage diskusage.Usage `json:"usage"`
+	At    time.Time       `json:"at"`
+}
+
+// load reads the saved inventory and sizes once, so a restarted daemon
+// answers from them while it rebuilds.
+func (c *Clutter) load() {
+	c.mu.Lock()
+	if c.loaded {
+		c.mu.Unlock()
+		return
+	}
+	c.loaded = true
+	c.mu.Unlock()
+	if body, at, ok := c.st.ScanCache(cacheInventoryKey); ok {
+		var rep ClutterReport
+		if json.Unmarshal(body, &rep) == nil {
+			c.mu.Lock()
+			if c.cached == nil {
+				c.cached, c.cachedAt = &rep, at
+			}
+			c.mu.Unlock()
+		}
+	}
+	if body, _, ok := c.st.ScanCache(cacheSizesKey); ok {
+		var saved map[string]savedSize
+		if json.Unmarshal(body, &saved) == nil {
+			c.sizeMu.Lock()
+			for p, s := range saved {
+				if _, have := c.sizes[p]; !have {
+					c.sizes[p] = sizeEntry{u: s.Usage, at: s.At}
+				}
+			}
+			c.sizeMu.Unlock()
+		}
+	}
+}
+
+// saveSizes stores the measured sizes.
+func (c *Clutter) saveSizes() {
+	c.sizeMu.Lock()
+	saved := make(map[string]savedSize, len(c.sizes))
+	for p, e := range c.sizes {
+		saved[p] = savedSize{Usage: e.u, At: e.at}
+	}
+	c.sizeMu.Unlock()
+	if body, err := json.Marshal(saved); err == nil {
+		c.st.PutScanCache(cacheSizesKey, body, c.now())
+	}
 }
 
 func (c *Clutter) invalidate() {
@@ -361,19 +463,24 @@ func isDir(p string) bool {
 }
 
 // withSizes copies rep and lays cached sizes, idle days and totals over it;
-// items without a fresh size go to the background sizer.
+// items never measured, or measured more than sizeTTL ago, go to the
+// background sizer. An old size answers until the new one lands.
 func (c *Clutter) withSizes(rep ClutterReport) ClutterReport {
 	items := append([]ClutterItem(nil), rep.Items...)
 	now := c.now()
 	var pending []string
+	missing := 0
 	kinds := map[string]*ClutterKindTotal{}
 	projects := map[string]*ClutterProjectTotal{}
 	var vols []string
 	for i := range items {
 		it := &items[i]
-		e, ok := c.cachedSize(it.Path)
-		if !ok {
+		e, old, ok := c.cachedSize(it.Path)
+		if !ok || old {
 			pending = append(pending, it.Path)
+		}
+		if !ok {
+			missing++
 		} else {
 			it.SizeBytes, it.Files, it.SizePartial = e.u.Bytes, e.u.Files, e.u.Partial
 			if !e.u.Newest.IsZero() {
@@ -415,7 +522,8 @@ func (c *Clutter) withSizes(rep ClutterReport) ClutterReport {
 		rep.Projects = append(rep.Projects, *p)
 	}
 	sort.Slice(rep.Projects, func(i, j int) bool { return rep.Projects[i].Bytes > rep.Projects[j].Bytes })
-	rep.Sizing = len(pending) > 0
+	rep.Sizing = missing > 0
+	rep.Refreshing = rep.Refreshing || len(pending) > missing
 	rep.Volumes = diskusage.Volumes(uniqueRoots(vols))
 	c.startSizing(pending)
 	return rep
@@ -440,14 +548,13 @@ func uniqueRoots(paths []string) []string {
 	return out
 }
 
-func (c *Clutter) cachedSize(p string) (sizeEntry, bool) {
+// cachedSize returns the last measurement of p and whether it is older
+// than sizeTTL.
+func (c *Clutter) cachedSize(p string) (sizeEntry, bool, bool) {
 	c.sizeMu.Lock()
 	defer c.sizeMu.Unlock()
 	e, ok := c.sizes[p]
-	if !ok || c.now().Sub(e.at) > sizeTTL {
-		return sizeEntry{}, false
-	}
-	return e, true
+	return e, ok && c.now().Sub(e.at) > sizeTTL, ok
 }
 
 func (c *Clutter) putSize(p string, u diskusage.Usage) {
@@ -495,5 +602,6 @@ func (c *Clutter) startSizing(paths []string) {
 		}
 		close(ch)
 		wg.Wait()
+		c.saveSizes()
 	}()
 }

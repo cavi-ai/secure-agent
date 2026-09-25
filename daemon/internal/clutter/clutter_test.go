@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 )
@@ -17,6 +18,7 @@ type memStore struct {
 	mu       sync.Mutex
 	ledger   []model.CleanupEntry
 	activity []model.WorkspaceActivity
+	scan     map[string]scanEntry
 }
 
 func (m *memStore) PutCleanup(e model.CleanupEntry) {
@@ -26,6 +28,27 @@ func (m *memStore) PutCleanup(e model.CleanupEntry) {
 }
 
 func (m *memStore) WorkspaceActivity() []model.WorkspaceActivity { return m.activity }
+
+type scanEntry struct {
+	body []byte
+	at   time.Time
+}
+
+func (m *memStore) ScanCache(name string) ([]byte, time.Time, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	e, ok := m.scan[name]
+	return e.body, e.at, ok
+}
+
+func (m *memStore) PutScanCache(name string, body []byte, at time.Time) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.scan == nil {
+		m.scan = map[string]scanEntry{}
+	}
+	m.scan[name] = scanEntry{body: append([]byte(nil), body...), at: at}
+}
 
 func mk(t *testing.T, p string, n int) {
 	t.Helper()

@@ -139,6 +139,10 @@ All notable changes to `secure-agent` are documented here. The format follows
   per (path, rule) are collapsed.
 
 ### Changed
+- `GET /worktrees` and `GET /cleanup` answer from the last scan at once; one older than 10 minutes answers while a background rescan replaces it (`refreshing: true`).
+- Worktree and clutter sizes older than an hour keep answering while measured again, instead of dropping to "measuring…".
+- The last worktree scan, cleanup inventory and their sizes are saved in the store (`scan_cache`) and answer after a daemon restart.
+- Console Cleanup view: re-reads while a report is refreshing; the scan line names the cached scan's age.
 - A stored advisor verdict publishes its flag as a stream delta.
 - The served allow-host label for an IPv6 address names the address owner instead of the literal.
 - Menu bar hero: state, color and subtitle come from `/posture`.
