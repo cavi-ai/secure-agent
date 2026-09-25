@@ -537,6 +537,7 @@ GET /costs?since=24h&by=repo
 | `until` | RFC3339 timestamp | now |
 | `by` | `repo`, `branch` (`repo@branch`), `harness`, `session`, `model`, `provider`, `day` (`YYYY-MM-DD`) | `repo` |
 | `tz` | local offset in minutes east of UTC, `-840`..`840` (`by=day` buckets on this calendar day) | `0` |
+| `cached` | `1`: answer at once from the usage cache (see below) | off |
 
 A malformed `since`/`until`, an unknown `by` or a `tz` that is not a whole number in range returns `400` with a one-line body.
 
@@ -555,11 +556,14 @@ A malformed `since`/`until`, an unknown `by` or a `tz` that is not a whole numbe
     {"key": "(no repo)", "harness": "codex", "calls": 1, "sessions": 1,
      "tokens_in": 100, "tokens_out": 10, "cost_usd": 0, "unpriced_calls": 1,
      "unknown_model_calls": 0, "unpriced_model_calls": 1, "plan_calls": 0, "local_calls": 0}
-  ]
+  ],
+  "generated_at": "2026-09-22T12:00:00Z"
 }
 ```
 
 Rows are sorted by cost, then calls (at most 200); `by=day` rows run oldest first (the newest 200 days); `rows` is `[]` when the window is empty. `harness` is the harness with the most calls in the group (omitted for `by=harness`). Missing repo, branch, harness or model values group as `(no repo)`, `(no branch)`, `(unknown)`. `unpriced_calls` counts the calls a price entry could fix (`unknown_model_calls` + `unpriced_model_calls`); plan and local calls are counted apart; a cost is never estimated. Read-level. CLI: `secure-agent cost [--since 24h] [--by repo] [--tz <minutes>] [--json]` (`--tz` defaults to this machine's offset; day rows print oldest first); the table view adds a `plan: P · local: L · unpriced: U — K unknown model, M unpriced model` line when any is non-zero and one `add a price for <model> under pricing: in ~/.config/secure-agent/config.yaml` line per `unpriced-model` id.
+
+Usage cache: a report is kept per parameter set as asked (`since=24h` is one set however late it is asked) and answers the same parameters again for 30 s; `generated_at` is when it was computed. Without `cached`, a report older than that is computed again before the answer. With `cached=1`, the last report for the parameters answers at once however old, and one older than 30 s is computed again in the background (`refreshing: true` until then; ask again for it); with none kept yet, it is computed before the answer. The 32 most recently asked reports are saved in the store, so a restarted daemon answers `cached=1` from them. The console asks with `cached=1`.
 
 Every row and the total count their zero-cost calls by price class:
 
@@ -599,7 +603,7 @@ The zero-cost calls by harness, provider and model with their class; `priced` gr
 
 #### `GET /costs/plans`
 
-The latest plan headroom per harness home, read from Codex `token_count` lines on a ChatGPT-plan login; sorted by `home`, then `home_path`. Memory only: `plans` is `[]` after a daemon restart until the next `token_count` line. Read-level; console-allowed; other methods return `405`.
+The latest plan headroom per harness home, read from Codex `token_count` lines on a ChatGPT-plan login; sorted by `home`, then `home_path`. Each change is saved in the store; a restarted daemon answers with the saved snapshots seen in the last 7 days until a newer `token_count` line replaces them (`seen_at` says when a snapshot was read). Read-level; console-allowed; other methods return `405`.
 
 ```json
 {
@@ -811,7 +815,7 @@ Removes one worktree, or prunes a repository's entries for worktrees whose direc
 {"repo": "/Users/me/code/app", "prune": true}
 ```
 
-`"async": true` answers `202 {"status":"accepted","removal":{...}}` at once and removes in the background; `409` when a removal of that path is already running; `400` for a relative path. Every removal, async or not, is listed in `GET /worktrees` under `removals` by path while it runs and for 30 minutes after: `state` (`running`, `removed`, `failed`), `step` while running (`waiting for the current scan`, `checking it is still safe to remove`, `measuring`, `deleting`), `error`, and for a refusal `row_state` and `reasons`; `branch`, `bytes`, `started_at`, `finished_at`. `git worktree remove` runs under a 10-minute deadline (read-only git calls keep 10 seconds) and finishes even when the request is canceled. A removed worktree leaves the cached report at once, and a background rescan follows.
+`"async": true` answers `202 {"status":"accepted","removal":{...}}` at once and removes in the background; `409` when a removal of that path is already running; `400` for a relative path. Every removal, async or not, is listed in `GET /worktrees` under `removals` by path while it runs and for 30 minutes after: `state` (`running`, `removed`, `failed`), while running `phase` (`waiting`, `checking`, `measuring`, `deleting`, in that order), its `step` text (`waiting for the current scan`, `checking it is still safe to remove`, `measuring`, `deleting`) and `step_at` (when the phase began), `error`, and for a refusal `row_state` and `reasons`; `branch`, `bytes` and `files` (the measured tree, known from the `deleting` phase on), `started_at`, `finished_at`. `git worktree remove` runs under a 10-minute deadline (read-only git calls keep 10 seconds) and finishes even when the request is canceled. A removed worktree leaves the cached report at once, and a background rescan follows.
 
 Remove measures the worktree (a fresh walk) and inspects it again at request time and runs `git worktree remove` only when that fresh verdict is `remove`; git still refuses a tree that turned dirty in between. A worktree with populated submodules is removed with `--force` (git refuses it otherwise): its verdict already requires the worktree and each submodule clean, and every submodule commit on a branch, HEAD or stash to be on a remote (`submodules`, and `submodule_local` naming work that only lives there, which keeps the worktree). The branch and its commits stay. Prune runs `git worktree prune` when the repository lists at least one unlocked worktree whose directory is gone. Both write an audit row and a cleanup ledger row (`worktree-remove` with the bytes measured before removal; `worktree-prune` with 0); a prune drops the cached scan.
 
@@ -855,7 +859,7 @@ Each item: `id`, `kind`, `name`, `path`, `project` (the repository, for items in
 
 #### `GET /cleanup/ledger`
 
-The cleanup ledger, newest first: `{"totals": {"bytes", "count", "bytes_30d", "count_30d", "trashed_bytes", "trashed_count"}, "entries": [{"id", "ts", "action", "path", "repo", "bytes", "detail"}]}`. `?limit=N` (default 100, max 1000). The ledger keeps the newest 20,000 rows. Read-level, NoAgent. CLI: `secure-agent cleanup log [--limit N] [--json]`.
+The cleanup ledger, newest first: `{"totals": {"bytes", "count", "bytes_30d", "count_30d", "trashed_bytes", "trashed_count"}, "entries": [{"id", "ts", "action", "path", "repo", "bytes", "detail"}]}`. `?limit=N` (default 100, max 1000). `?days=N` (max 366) adds `"daily": [{"day": "YYYY-MM-DD", "bytes", "count", "trashed_bytes", "trashed_count"}]`: the N calendar days ending today in the daemon's local time, oldest first, zero-filled, counted like `totals`. Actions: `worktree-remove`, `worktree-prune`, `trash:<kind>` (moves to the Trash, summed in `trashed_*`), `clean:<tool>`, `ask:<verdict>` (an agent's answer: listed, not counted in `count` or `daily`). The ledger keeps the newest 20,000 rows. Read-level, NoAgent. CLI: `secure-agent cleanup log [--limit N] [--json]`.
 
 | Status | Body |
 |---|---|

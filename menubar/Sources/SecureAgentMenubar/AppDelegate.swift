@@ -19,6 +19,9 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificat
         DaemonSupervisor.shared.start()
         NotificationManager.shared.requestAuthorization()
         UNUserNotificationCenter.current().delegate = self
+        // File telemetry turns itself on: register once per launch, then open
+        // the pane for each switch the user has to flip.
+        SetupManager.shared.refreshESState()
 
         setupStatusItem()
         setupPopover()
@@ -42,12 +45,22 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificat
         DaemonSupervisor.shared.stop()
     }
 
+    /// The console's `--brand` purple (style.css): hsl(248 92% 70%) on a dark
+    /// menu bar, hsl(248 62% 52%) on a light one. Tints the template symbol
+    /// and the agent count, so every icon state stays readable in both.
+    static let statusTint = NSColor(name: "SecureAgentBrand") { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(srgbRed: 0.498, green: 0.424, blue: 0.976, alpha: 1)
+            : NSColor(srgbRed: 0.302, green: 0.222, blue: 0.818, alpha: 1)
+    }
+
     private func setupStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = statusItem.button {
             let img = NSImage(systemSymbolName: "shield", accessibilityDescription: "Secure Agent")
             img?.isTemplate = true
             button.image = img
+            button.contentTintColor = Self.statusTint
             button.title = ""
             button.target = self
             button.action = #selector(statusItemClicked)
@@ -94,6 +107,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificat
                           state.isPaused ? "play.circle" : "pause.circle", #selector(pauseClicked)))
         menu.addItem(item("Settings…", "gearshape.2", #selector(settingsClicked), ","))
         menu.addItem(item("Setup & Permissions…", "gearshape", #selector(setupClicked)))
+        menu.addItem(item("Run Doctor…", "stethoscope", #selector(doctorClicked)))
         menu.addItem(item("Uninstall…", "trash", #selector(uninstallClicked)))
         menu.addItem(.separator())
         menu.addItem(item("Quit Secure Agent", "power", #selector(quitClicked), "q"))
@@ -185,6 +199,11 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificat
     @objc private func settingsClicked() { SettingsWindowController.shared.show() }
 
     @objc private func setupClicked() { OnboardingWindowController.shared.show() }
+
+    @objc private func doctorClicked() {
+        SettingsWindowController.shared.show(tab: .telemetry)
+        Task { await SetupManager.shared.runDoctor() }
+    }
 
     @objc private func quitClicked() { NSApp.terminate(nil) }
 

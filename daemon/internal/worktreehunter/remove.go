@@ -50,19 +50,19 @@ func (h *Hunter) Remove(ctx context.Context, path string) (Worktree, error) {
 	if err != nil {
 		return Worktree{}, err
 	}
-	row, err := h.remove(context.WithoutCancel(ctx), path, job.step)
+	row, err := h.remove(context.WithoutCancel(ctx), path, job)
 	job.finish(row, err)
 	return row, err
 }
 
-func (h *Hunter) remove(ctx context.Context, path string, step func(string)) (Worktree, error) {
+func (h *Hunter) remove(ctx context.Context, path string, p removalProgress) (Worktree, error) {
 	if !h.scanMu.TryLock() {
-		step(StepWaiting)
+		p.phase(PhaseWaiting)
 		h.scanMu.Lock()
 	}
 	defer h.scanMu.Unlock()
 
-	step(StepChecking)
+	p.phase(PhaseChecking)
 	rs, l, err := h.locate(ctx, path)
 	if err != nil {
 		return Worktree{}, err
@@ -72,7 +72,7 @@ func (h *Hunter) remove(ctx context.Context, path string, step func(string)) (Wo
 		return row, &NotRemovableError{Row: row}
 	}
 	// Measured now, not from the cache: this is the space the ledger books.
-	step(StepMeasuring)
+	p.phase(PhaseMeasuring)
 	skip := map[string]bool{}
 	for _, o := range rs.list {
 		if o.Path != l.Path {
@@ -81,7 +81,8 @@ func (h *Hunter) remove(ctx context.Context, path string, step func(string)) (Wo
 	}
 	u := diskusage.Dir(ctx, l.Path, skip)
 	row.SizeBytes, row.SizePartial = u.Bytes, u.Partial
-	step(StepDeleting)
+	p.measured(u.Bytes, u.Files)
+	p.phase(PhaseDeleting)
 	// git refuses a worktree with submodules unless forced. The fresh
 	// verdict above already found the worktree and each submodule clean and
 	// every submodule commit on a remote; --force skips only git's own

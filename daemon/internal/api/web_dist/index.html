@@ -25,6 +25,7 @@
       <symbol id="i-doc" viewBox="0 0 24 24"><path d="M7 3h7l4 4v14H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M13 3v5h5" stroke="currentColor" stroke-width="1.5"/></symbol>
       <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" fill="none" stroke="currentColor" stroke-width="1.6"/></symbol>
       <symbol id="i-close" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></symbol>
+      <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></symbol>
       <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></symbol>
       <symbol id="i-history" viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 1 2.3 5.6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M3.5 19v-4.5H8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M12 8v4.5l3 1.8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></symbol>
       <symbol id="i-branch" viewBox="0 0 24 24"><circle cx="7" cy="5.5" r="2.2" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="7" cy="18.5" r="2.2" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="17" cy="8" r="2.2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M7 7.7v8.6M17 10.2c0 4-4 4.3-9.3 6.4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
@@ -219,6 +220,7 @@
           <div class="panel-head">
             <h2><svg class="icon"><use href="#i-activity"/></svg>Spend</h2>
             <div class="spend-controls">
+              <span id="spend-cache" class="spend-cache" role="status" hidden></span>
               <select id="spend-by" class="select select-sm" aria-label="Group spend by">
                 <option value="repo">By repo</option>
                 <option value="provider">By provider</option>
@@ -422,16 +424,24 @@
         <section class="panel">
           <div class="panel-head">
             <h2><svg class="icon"><use href="#i-branch"/></svg>Worktrees</h2>
-            <button type="button" class="btn btn-sm" data-action="worktrees-rescan"><svg class="icon"><use href="#i-refresh"/></svg>Rescan</button>
+            <div class="wt-head-actions">
+              <button type="button" class="btn btn-sm" data-action="worktrees-history"><svg class="icon"><use href="#i-history"/></svg>History</button>
+              <button type="button" class="btn btn-sm" data-action="worktrees-rescan"><svg class="icon"><use href="#i-refresh"/></svg>Rescan</button>
+            </div>
           </div>
+          <div class="rc-wrap">
+            <div class="rc" id="worktrees-reclaim"></div>
+            <div class="rc-tip" id="reclaim-tip" role="tooltip" hidden></div>
+          </div>
+          <div class="wt-disk" id="worktrees-disk"></div>
           <div class="harness-filter">
             <div class="harness-pills" id="worktree-pills"></div>
+            <input type="search" id="worktree-search" class="input harness-filter-text wt-search" placeholder="Filter by branch, folder or repo…" aria-label="Filter worktrees by branch, folder or repository" autocomplete="off" spellcheck="false">
             <form class="wt-add" id="worktree-add-form">
               <input type="text" id="worktree-add-input" class="input harness-filter-text" placeholder="Add a repository: /path/to/repo" aria-label="Repository path to add" autocomplete="off" spellcheck="false">
               <button type="submit" class="btn btn-sm">Add</button>
             </form>
           </div>
-          <div class="wt-disk" id="worktrees-disk"></div>
           <p class="wt-summary" id="worktrees-summary"></p>
           <ul class="wt-errors" id="worktrees-errors" hidden></ul>
           <div class="panel-body" id="worktrees-container">

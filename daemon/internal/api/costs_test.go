@@ -23,7 +23,7 @@ func TestCostsEndpoint(t *testing.T) {
 	st.UpsertSession(model.Session{ID: "s1", Harness: "claude", Repo: "A", Branch: "main", StartedAt: now, LastSeenAt: now})
 	st.PutEvent(event.Event{Kind: event.KindModelCall, TS: now.Add(-time.Hour), SessionID: "s1", Model: "m1", CostUSD: 0.5})
 	st.PutEvent(event.Event{Kind: event.KindModelCall, TS: now.Add(-3 * 24 * time.Hour), SessionID: "s1", Model: "m1", CostUSD: 2})
-	mux := newTestAPI("", st, nil, func() Status { return Status{Running: true} }).buildMux()
+	mux := newCostsTestAPI(t, st).buildMux()
 
 	get := func(path string) *httptest.ResponseRecorder {
 		rec := httptest.NewRecorder()
@@ -92,7 +92,7 @@ func TestCostsClassifyUnpricedCalls(t *testing.T) {
 	call("oc", "llama3.1:8b", "ollama", 0)   // local
 	call("cx", "", "", 0)                    // unknown-model
 	call("cx", "gpt-5.6-sol", "custom", 0)   // unpriced-model
-	mux := newTestAPI("", st, nil, func() Status { return Status{Running: true} }).buildMux()
+	mux := newCostsTestAPI(t, st).buildMux()
 	get := func(path string, v any) {
 		t.Helper()
 		rec := httptest.NewRecorder()
@@ -180,7 +180,7 @@ func TestCostsClassifyUnpricedCalls(t *testing.T) {
 func TestCostsRejectsBadTZ(t *testing.T) {
 	st := testStore(t)
 	t.Cleanup(func() { st.Close() })
-	mux := newTestAPI("", st, nil, func() Status { return Status{Running: true} }).buildMux()
+	mux := newCostsTestAPI(t, st).buildMux()
 	for path, want := range map[string]int{
 		"/costs?by=day&tz=900":  http.StatusBadRequest,
 		"/costs?by=day&tz=-900": http.StatusBadRequest,
@@ -220,7 +220,7 @@ func TestCostsByProvider(t *testing.T) {
 		st.PutEvent(event.Event{Kind: event.KindModelCall, TS: now.Add(-time.Duration(i+1) * time.Second), SessionID: c.sid,
 			Model: c.model, Provider: c.provider, TokensIn: 10, CostUSD: c.cost})
 	}
-	mux := newTestAPI("", st, nil, func() Status { return Status{Running: true} }).buildMux()
+	mux := newCostsTestAPI(t, st).buildMux()
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/costs?since=24h&by=provider", nil))
 	if rec.Code != http.StatusOK {
@@ -267,7 +267,7 @@ func TestCostsSplitPlanAndLocalFromUnpriced(t *testing.T) {
 		st.PutEvent(event.Event{Kind: event.KindModelCall, TS: now.Add(-time.Duration(i+1) * time.Minute), SessionID: "mix",
 			Model: c.model, Provider: c.provider, TokensIn: 100, TokensOut: 10, CostUSD: c.cost})
 	}
-	mux := newTestAPI("", st, nil, func() Status { return Status{Running: true} }).buildMux()
+	mux := newCostsTestAPI(t, st).buildMux()
 	for _, by := range []string{"repo", "provider"} {
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/costs?by="+by, nil))
@@ -304,7 +304,7 @@ func TestCostsPlansServesSnapshot(t *testing.T) {
 	})
 	st := testStore(t)
 	t.Cleanup(func() { st.Close() })
-	mux := newTestAPI("", st, nil, func() Status { return Status{Running: true} }).buildMux()
+	mux := newCostsTestAPI(t, st).buildMux()
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/costs/plans", nil))
 	if rec.Code != http.StatusOK {

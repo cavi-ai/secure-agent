@@ -54,7 +54,7 @@ type WorktreeAdviceRequest struct {
 type CleanupEntry struct {
 	ID     int64     `json:"id"`
 	TS     time.Time `json:"ts"`
-	Action string    `json:"action"` // worktree-remove | worktree-prune
+	Action string    `json:"action"` // worktree-remove | worktree-prune | trash:<kind> | clean:<tool> | ask:<verdict>
 	Path   string    `json:"path"`
 	Repo   string    `json:"repo,omitempty"`
 	Bytes  int64     `json:"bytes"`
@@ -71,6 +71,17 @@ type CleanupTotals struct {
 	Count        int   `json:"count"`
 	Bytes30d     int64 `json:"bytes_30d"`
 	Count30d     int   `json:"count_30d"`
+}
+
+// CleanupDay sums one calendar day of the ledger (the daemon's local
+// time) like CleanupTotals: bytes freed and the cleanups that freed them,
+// moves to the Trash apart.
+type CleanupDay struct {
+	Day          string `json:"day"` // YYYY-MM-DD
+	Bytes        int64  `json:"bytes"`
+	Count        int    `json:"count"`
+	TrashedBytes int64  `json:"trashed_bytes"`
+	TrashedCount int    `json:"trashed_count"`
 }
 
 // AgentAsk is one request to the agent that owns a worktree: resume its

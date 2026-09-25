@@ -516,6 +516,8 @@ export interface CostReport {
   by: string;
   total: CostRow;
   rows: CostRow[];
+  generated_at?: string;
+  refreshing?: boolean;
 }
 
 export interface PlanWindow {
@@ -752,12 +754,15 @@ export interface ScanReport {
 export interface Removal {
   path: string;
   state: string;
+  phase?: string;
   step?: string;
+  step_at?: string;
   error?: string;
   row_state?: string;
   reasons?: string[];
   branch?: string;
   bytes?: number;
+  files?: number;
   started_at: string;
   finished_at?: string;
 }
@@ -819,6 +824,14 @@ export interface CleanupEntry {
   repo?: string;
   bytes: number;
   detail?: string;
+}
+
+export interface CleanupDay {
+  day: string;
+  bytes: number;
+  count: number;
+  trashed_bytes: number;
+  trashed_count: number;
 }
 
 export interface AgentAsk {

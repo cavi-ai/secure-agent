@@ -207,8 +207,10 @@ type API struct {
 	lastPostureState string
 	lastPostureCount int
 
-	// costs caches /costs and /costs/unpriced reports (costcache.go).
-	costs costCache
+	// costs caches /costs reports, saved in the store; unpriced caches
+	// /costs/unpriced reports in memory (costcache.go).
+	costs    costCache[store.CostReport]
+	unpriced costCache[unpricedCostReport]
 }
 
 // GuardEventSink receives guard decisions (allow/deny) for downstream
@@ -369,6 +371,9 @@ func New(d Deps) *API {
 	a.peerChk = d.PeerChecker
 	if d.PeerChecker != nil {
 		a.peerRole = &peers{OwnerUID: os.Getuid(), UIPID: d.UIPID, AgentPIDs: d.AgentPIDs}
+	}
+	if d.Store != nil {
+		a.costs.st, a.costs.saveAs = d.Store, costsCacheName
 	}
 	return a
 }

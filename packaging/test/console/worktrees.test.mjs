@@ -15,7 +15,9 @@ for (const f of ['lib.js', 'tab-worktrees.js']) {
   vm.runInContext(readFileSync(path.join(webDist, f), 'utf8'), ctx, { filename: f });
 }
 const { worktreeStateCounts, worktreeGroups, worktreeRowHTML, worktreeGroupHTML, worktreePathLabel, worktreeFilterHTML, worktreesSummaryText, worktreeDiskHTML, worktreeSizeLabel, fmtDisk,
-  clutterGroups, clutterItemHTML, clutterGroupHTML, clutterPillsHTML, clutterSummaryText, removalBatchSummary } = ctx;
+  clutterGroups, clutterItemHTML, clutterGroupHTML, clutterPillsHTML, clutterSummaryText,
+  worktreeMatches, niceBytesCeil, removableEverywhere, reclaimTilesHTML, reclaimChartHTML, cleanupHistoryHTML, cleanupKind, cleanupEntryTitle,
+  localDayKey, fmtDayKey, fmtElapsed, removalToastModel, removalToastHTML, reclaimDayText } = ctx;
 
 const REPO = '/Users/x/code/app';
 const report = () => ({
@@ -61,11 +63,15 @@ test('worktreeRowHTML: Remove only on remove, Prune only on prune, Ask advisor o
   assert.match(goneHTML, /data-action="worktree-prune" data-repo="\/Users\/x\/code\/app"/);
   assert.match(goneHTML, /<span class="wt-idle">—<\/span>/);
   const keepHTML = worktreeRowHTML(keep, rep.repos[1]);
-  assert.deepEqual([...keepHTML.matchAll(/data-action="([a-z-]+)"/g)].map(m => m[1]), ['worktree-ask', 'worktree-advise']);
+  assert.deepEqual([...keepHTML.matchAll(/data-action="([a-z-]+)"/g)].map(m => m[1]), ['copy-path', 'worktree-reveal', 'worktree-ask', 'worktree-advise']);
   assert.ok(keepHTML.includes('&lt;img src=x onerror=alert(1)&gt;') && !keepHTML.includes('<img'));
   assert.match(keepHTML, /<span class="wt-branch">\(detached\)<\/span>/);
   const reviewHTML = worktreeRowHTML(review, rep.repos[1]);
-  assert.deepEqual([...reviewHTML.matchAll(/data-action="([a-z-]+)"/g)].map(m => m[1]), ['worktree-ask', 'worktree-advise']);
+  assert.deepEqual([...reviewHTML.matchAll(/data-action="([a-z-]+)"/g)].map(m => m[1]), ['copy-path', 'worktree-reveal', 'worktree-ask', 'worktree-advise']);
+  // The path copies the full path; Show in Finder on every folder still on
+  // disk (a prune row's folder is gone).
+  assert.match(doneHTML, /<button type="button" class="wt-path" data-action="copy-path" data-path="\/Users\/x\/code\/app\/\.worktrees\/done" title="\/Users\/x\/code\/app\/\.worktrees\/done — click to copy">\.worktrees\/done<\/button>/);
+  assert.ok(doneHTML.includes('data-action="worktree-reveal"') && !goneHTML.includes('worktree-reveal'));
   assert.ok(!doneHTML.includes('worktree-advise') && !goneHTML.includes('worktree-advise'));
   assert.ok(!doneHTML.includes('worktree-ask') && !goneHTML.includes('worktree-ask'));
   assert.ok(reviewHTML.includes('feat/&quot;q&quot;'));
@@ -112,9 +118,8 @@ test('disk: volumes with a used bar, worktree and removable totals, reclaimed', 
   assert.ok(html.includes('data-w="75"'));
   assert.ok(html.includes('512.0 GB free of 2.0 TB'));
   assert.ok(html.includes('<b>Worktrees</b> 3.0 GB <span class="wt-measuring">measuring…</span>'));
-  assert.ok(html.includes('<b>Removable</b> 1.0 GB'));
-  assert.ok(html.includes('<b>Reclaimed</b> 1.5 GB over 2 cleanups · 512 MB in 30 days'));
-  assert.ok(worktreeDiskHTML({ summary: {}, volumes: [] }).includes('<b>Reclaimed</b> nothing yet'));
+  // Removable and reclaimed moved to the tiles above.
+  assert.ok(!html.includes('Removable') && !html.includes('Reclaimed'));
 });
 
 test('sizes: row label, lower bound, repo groups biggest first', () => {
@@ -199,8 +204,10 @@ test('clutter: Ask advisor on every project, "machine" for machine caches; the p
 test('removals: step while running with Remove disabled; refusal and failure stay on the row, escaped', () => {
   const rep = report();
   const w = rep.repos[0].worktrees.find(x => x.state === 'remove');
-  const running = worktreeRowHTML(w, rep.repos[0], null, null, { state: 'running', step: 'deleting' });
-  assert.ok(running.includes('<p class="wt-removal wt-removal-running" role="status"><b>Removing…</b> deleting</p>'));
+  const running = worktreeRowHTML(w, rep.repos[0], null, null, { state: 'running', phase: 'deleting', step: 'deleting', bytes: 1610612736, files: 184203 });
+  assert.ok(running.includes('<p class="wt-removal wt-removal-running" role="status"><span class="wt-steps" aria-hidden="true"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i></span><b>Removing…</b> deleting · 1.5 GB · 184,203 files</p>'));
+  const checking = worktreeRowHTML(w, rep.repos[0], null, null, { state: 'running', phase: 'checking', step: 'checking it is still safe to remove' });
+  assert.ok(checking.includes('<i class="on"></i><i class="on"></i><i class=""></i><i class=""></i></span><b>Removing…</b> checking it is still safe to remove</p>'));
   assert.ok(running.includes('disabled>Removing…</button>') && !running.includes('data-action="worktree-remove"'));
   const refused = worktreeRowHTML(w, rep.repos[0], null, null, { state: 'failed', row_state: 'keep', reasons: ['1 <b>untracked</b> file'] });
   assert.ok(refused.includes('<b>Not removed:</b> it is now keep — 1 &lt;b&gt;untracked&lt;/b&gt; file</p>'));
@@ -254,15 +261,6 @@ test('Remove all: offered for two or more removable rows with count and size; ru
   assert.ok(running.includes('>Remove all 2 · 2.0 GB</button>'));
 });
 
-test('removalBatchSummary: nothing while one runs, then counts, bytes and failures', () => {
-  const paths = ['/a', '/b', '/c'];
-  assert.equal(removalBatchSummary(paths, { '/a': { state: 'removed', bytes: 1073741824 }, '/b': { state: 'running' }, '/c': { state: 'removed' } }), '');
-  assert.equal(removalBatchSummary(paths, { '/a': { state: 'removed', bytes: 1073741824 }, '/b': { state: 'removed', bytes: 1073741824 }, '/c': { state: 'removed' } }),
-    'Removed 3 of 3 worktrees — 2.0 GB reclaimed');
-  assert.equal(removalBatchSummary(paths, { '/a': { state: 'removed', bytes: 1073741824 }, '/b': { state: 'failed' }, '/c': { state: 'removed' } }),
-    'Removed 2 of 3 worktrees — 1.0 GB reclaimed; 1 not removed, see its row');
-});
-
 test('agent asks: status line under the row, escaped; Ask the agent disabled while one runs', () => {
   const rep = report();
   const keep = rep.repos[1].worktrees[0];
@@ -274,4 +272,172 @@ test('agent asks: status line under the row, escaped; Ask the agent disabled whi
   assert.match(running, /data-action="worktree-ask" data-path="[^"]+" disabled>Ask the agent<\/button>/);
   const failed = worktreeRowHTML(keep, rep.repos[1], null, { harness: 'codex', status: 'timeout', verdict: 'none', detail: 'no answer within 15m0s' });
   assert.ok(failed.includes('wt-ask-timeout') && failed.includes('timeout — no answer within 15m0s'));
+});
+
+test('search: rows whose branch, path or repository contains the text, any case', () => {
+  const rep = report();
+  assert.ok(worktreeMatches({ branch: 'feat/Done', path: '/x' }, { path: '/r' }, 'done'));
+  assert.ok(worktreeMatches({ path: '/Users/x/code/app/.worktrees/a' }, { path: '/r' }, 'WORKTREES/A'));
+  assert.ok(worktreeMatches({ path: '/x' }, { path: '/Users/x/code/lib' }, 'lib'));
+  assert.ok(!worktreeMatches({ branch: 'feat/a', path: '/x' }, { path: '/r' }, 'zzz'));
+  assert.ok(worktreeMatches({}, {}, '  '));
+  const groups = worktreeGroups(rep, { q: 'ev' });
+  assert.equal(JSON.stringify(groups.map(g => g.rows.map(w => w.path))), JSON.stringify([['/Users/x/code/lib/.worktrees/ev']]));
+  assert.equal(JSON.stringify(worktreeGroups(rep, { q: 'feat/', state: 'remove' }).map(g => g.rows.length)), '[1]');
+});
+
+test('niceBytesCeil: 1, 2 or 5 × a power of ten in the printed unit', () => {
+  const GB = 1073741824, MB = 1048576;
+  assert.equal(niceBytesCeil(0), 0);
+  assert.equal(niceBytesCeil(-5), 0);
+  assert.equal(niceBytesCeil(1.2 * GB), 2 * GB);
+  assert.equal(niceBytesCeil(3 * GB), 5 * GB);
+  assert.equal(niceBytesCeil(6 * GB), 10 * GB);
+  assert.equal(niceBytesCeil(420 * MB), 500 * MB);
+  assert.equal(niceBytesCeil(1000), 1000);
+  assert.equal(niceBytesCeil(1023 * MB), 2000 * MB);
+  assert.equal(fmtDisk(niceBytesCeil(700 * GB)), fmtDisk(1000 * GB));
+});
+
+test('tiles: freed over the charted days, all time, removable now with Remove all across repositories, in the Trash', () => {
+  const GB = 1073741824;
+  const rep = report();
+  rep.repos[0].worktrees.push({ path: REPO + '/.worktrees/old', branch: 'feat/old', state: 'remove', size_bytes: GB, reasons: [] });
+  rep.repos[0].worktrees.find(w => w.state === 'remove').size_bytes = GB;
+  rep.repos.push({ path: '/Users/x/gone', error: 'repository not found (moved or deleted)', worktrees: [
+    { path: '/Users/x/.cursor/worktrees/gone/a', state: 'remove', orphan: true, size_bytes: 5 * GB, reasons: [] }] });
+  const ledger = { totals: { bytes: 7 * GB, count: 9, trashed_bytes: 512 * 1048576, trashed_count: 2 },
+    daily: [{ day: '2026-09-24', bytes: GB, trashed_bytes: 0, count: 1 }, { day: '2026-09-25', bytes: 2 * GB, trashed_bytes: 0, count: 2 }] };
+  const html = reclaimTilesHTML(rep, ledger);
+  const tile = cls => html.split(`class="rc-tile ${cls}"`)[1].split('</div>')[0];
+  assert.match(tile('rc-freed'), /Freed · last 2 days[\s\S]*3\.0 GB[\s\S]*3 cleanups/);
+  assert.match(tile('rc-alltime'), /Freed · all time[\s\S]*7\.0 GB[\s\S]*9 cleanups/);
+  // Orphans and unreadable repositories never count as removable.
+  assert.match(tile('rc-removable'), /Removable now[\s\S]*2\.0 GB[\s\S]*2 worktrees/);
+  assert.ok(tile('rc-removable').includes('data-action="worktrees-remove-removable">Remove all 2</button>'));
+  assert.match(tile('rc-trash'), /In the Trash[\s\S]*512 MB[\s\S]*frees when the Trash is emptied/);
+  assert.equal(removableEverywhere(rep).rows.length, 2);
+  // A running removal leaves the count; one removable row offers no Remove all.
+  rep.removals = { [REPO + '/.worktrees/old']: { state: 'running' } };
+  const one = reclaimTilesHTML(rep, ledger);
+  assert.ok(!one.includes('worktrees-remove-removable') && one.includes('1 worktree<'));
+  // Before the ledger loads, the report's totals stand in.
+  const early = reclaimTilesHTML({ ...report(), reclaimed: { bytes: GB, count: 1, bytes_30d: GB, count_30d: 1, trashed_bytes: 0 } }, null);
+  assert.match(early, /Freed · last 30 days[\s\S]*1\.0 GB[\s\S]*1 cleanup</);
+});
+
+test('chart: a column per day on one axis, freed under Trash, buttons only on days with cleanups, escaped', () => {
+  const GB = 1073741824;
+  const daily = [
+    { day: '2026-09-23', bytes: 0, trashed_bytes: 0, count: 0 },
+    { day: '2026-09-24', bytes: GB, trashed_bytes: GB, count: 2 },
+    { day: '2026-09-25', bytes: 3 * GB, trashed_bytes: 0, count: 1 },
+  ];
+  const html = reclaimChartHTML(daily, '2026-09-25');
+  assert.equal((html.match(/class="rc-col"/g) || []).length, 3);
+  assert.equal((html.match(/data-action="reclaim-day"/g) || []).length, 2);
+  // Axis top 5 GB: 2 GB is 40 %, split 50/50; 3 GB is 60 %, all freed.
+  assert.ok(html.includes('data-day="2026-09-24"') && html.includes('<span class="rc-stack rc-some" data-h="40">'));
+  assert.ok(html.includes('<i class="rc-seg rc-seg-trash" data-h="50"></i>') && html.includes('<i class="rc-seg rc-seg-freed" data-h="50"></i>'));
+  assert.ok(html.includes('<span class="rc-stack rc-some" data-h="60">'));
+  assert.ok(html.includes('aria-label="Yesterday: 1.0 GB freed by 2 cleanups, 1.0 GB moved to the Trash by 0 cleanups"'));
+  assert.ok(html.includes('aria-label="Today: 3.0 GB freed by 1 cleanup"'));
+  assert.ok(html.includes('<span>5.0 GB</span><span>2.5 GB</span><span>0</span>'));
+  assert.ok(html.includes('<span>Sep 23</span><span>Sep 24</span><span>Today</span>'));
+  assert.ok(html.includes('rc-key-freed') && html.includes('rc-key-trash'));
+  // A day's column counts every cleanup; the Freed tile counts those that
+  // freed space, like the all-time totals.
+  const split = [{ day: '2026-09-25', bytes: GB, count: 1, trashed_bytes: GB, trashed_count: 2 }];
+  assert.ok(reclaimChartHTML(split, '2026-09-25').includes('data-count="1" data-trash="1073741824" data-trash-count="2"'));
+  assert.ok(reclaimChartHTML(split, '2026-09-25').includes('aria-label="Today: 1.0 GB freed by 1 cleanup, 1.0 GB moved to the Trash by 2 cleanups"'));
+  assert.equal(JSON.stringify(reclaimDayText(0, 0, 5, 1)), JSON.stringify(['0 B freed by 0 cleanups', '5 B moved to the Trash by 1 cleanup']));
+  assert.ok(reclaimChartHTML([{ day: '2026-09-25', bytes: 0, count: 0, trashed_bytes: 0, trashed_count: 1 }], '2026-09-25').includes('data-action="reclaim-day"'));
+  assert.match(reclaimTilesHTML(report(), { totals: { count: 1 }, daily: split }), /Freed · last 1 days[\s\S]*1 cleanup</);
+  const quiet = reclaimChartHTML([{ day: '2026-09-25', bytes: 0, trashed_bytes: 0, count: 0 }], '2026-09-25');
+  assert.ok(quiet.includes('Nothing reclaimed in the last 1 days') && !quiet.includes('reclaim-day'));
+  assert.equal(reclaimChartHTML([], '2026-09-25'), '');
+  assert.ok(reclaimChartHTML([{ day: '<b>', bytes: 1, count: 1 }]).includes('data-day="&lt;b&gt;"'));
+});
+
+test('days: local keys, labels by hand, Today and Yesterday', () => {
+  assert.equal(localDayKey(new Date(2026, 8, 5, 23, 59)), '2026-09-05');
+  assert.equal(localDayKey('nonsense'), '');
+  assert.equal(fmtDayKey('2026-09-25', '2026-09-25'), 'Today');
+  assert.equal(fmtDayKey('2026-09-24', '2026-09-25'), 'Yesterday');
+  assert.equal(fmtDayKey('2026-08-31', '2026-09-01'), 'Yesterday');
+  assert.equal(fmtDayKey('2026-09-20', '2026-09-25'), 'Sep 20');
+  assert.equal(fmtDayKey('2026-09-20', '2026-09-25', true), 'Sun, Sep 20');
+  assert.equal(fmtElapsed(4200), '4s');
+  assert.equal(fmtElapsed(72000), '1m 12s');
+});
+
+test('history: newest first by local day with bytes, kind and day filters, titles per action, escaped', () => {
+  const GB = 1073741824;
+  const at = (d, h, m) => new Date(2026, 8, d, h, m).toISOString();
+  const ledger = { limit: 500, entries: [
+    { ts: at(25, 15, 10), action: 'worktree-remove', path: '/r/app/.worktrees/done', repo: '/r/app', bytes: GB, detail: 'branch feat/done kept; merged into origin/main' },
+    { ts: at(25, 11, 0), action: 'trash:orphan-worktree', path: '/r/.cursor/worktrees/app/ctnj', repo: '/r/app', bytes: 512 * 1048576 },
+    { ts: at(25, 9, 0), action: 'ask:pr', path: '/r/app/.worktrees/ev', repo: '/r/app', detail: 'claude answered: <b>pr</b>' },
+    { ts: at(23, 18, 5), action: 'clean:go', path: '/Users/x/Library/Caches/go-build', bytes: 2 * GB, detail: 'go clean -cache' },
+    { ts: at(23, 8, 0), action: 'worktree-prune', path: '/r/app/.worktrees/gone', repo: '/r/app', detail: 'directory was already gone' },
+  ] };
+  const now = new Date(2026, 8, 25, 18, 0).getTime();
+  const html = cleanupHistoryHTML(ledger, {}, now);
+  assert.equal((html.match(/class="hx-day"/g) || []).length, 2);
+  assert.ok(html.indexOf('Today') < html.indexOf('Wed, Sep 23'));
+  assert.ok(html.includes('5 entries · 3.0 GB freed · 512 MB moved to the Trash'));
+  assert.ok(html.includes('<span class="hx-day-bytes">1.0 GB freed</span>') && html.includes('<span class="hx-day-bytes">2.0 GB freed</span>'));
+  assert.ok(html.includes('<span class="hx-title">Removed worktree</span>') && html.includes('.worktrees/done · app'));
+  assert.ok(html.includes('Moved an orphan folder to the Trash') && html.includes('Ran go clean -cache') && html.includes('Pruned a missing worktree'));
+  assert.ok(html.includes('Agent answered: pr') && html.includes('claude answered: &lt;b&gt;pr&lt;/b&gt;') && !html.includes('<b>pr</b>'));
+  assert.ok(html.includes('<time class="hx-time" datetime="' + at(25, 15, 10) + '">3:10 PM</time>'));
+  const removed = cleanupHistoryHTML(ledger, { kind: 'removed' }, now);
+  assert.ok(removed.includes('1 entry · 1.0 GB freed') && !removed.includes('Ran go'));
+  assert.ok(removed.includes('data-action="history-kind" data-kind="removed" aria-pressed="true"'));
+  const day = cleanupHistoryHTML(ledger, { day: '2026-09-23' }, now);
+  assert.ok(day.includes('2 entries · 2.0 GB freed') && day.includes('data-action="history-day" data-day=""') && day.includes('Wed, Sep 23 ×'));
+  assert.ok(cleanupHistoryHTML(ledger, { kind: 'trash', day: '2026-09-23' }, now).includes('Nothing matches this filter.'));
+  assert.ok(cleanupHistoryHTML({ entries: [] }, {}, now).includes('No cleanups yet.'));
+  assert.ok(cleanupHistoryHTML({ entries: ledger.entries, limit: 5 }, {}, now).includes('Showing the newest 5 entries.'));
+  assert.equal(cleanupKind('clean:npm'), 'clean');
+  assert.equal(cleanupEntryTitle({ action: 'trash:tmp' }), 'Moved .tmp to the Trash');
+});
+
+test('progress toast: phases add up to one bar, running rows first with size and time, the end names what was reclaimed', () => {
+  const GB = 1073741824;
+  const paths = ['/r/a', '/r/b', '/r/c'];
+  const running = removalToastModel(paths, {
+    '/r/a': { state: 'removed', bytes: GB, branch: 'feat/a' },
+    '/r/b': { state: 'running', phase: 'deleting', step: 'deleting', step_at: '2026-09-25T10:00:00Z', bytes: 2 * GB, files: 184203 },
+    '/r/c': { state: 'running', phase: 'waiting', step: 'waiting for the current scan', started_at: '2026-09-25T09:59:58Z' },
+  }, { '/r/b': 'feat/<b>' });
+  assert.equal(running.running, 2);
+  assert.equal(running.percent, Math.round((1 + 0.5 + 0.05) / 3 * 100));
+  const html = removalToastHTML(running);
+  assert.ok(html.includes('<p class="rt-title" role="status">Removing 3 worktrees</p>'));
+  assert.ok(html.includes('<p class="rt-sub">1 of 3 done · 1.0 GB reclaimed so far</p>'));
+  assert.ok(html.includes('aria-valuenow="52"><i data-w="52"></i>') && html.includes('rt-bar-running'));
+  assert.ok(html.includes('<span class="rt-label">feat/&lt;b&gt;</span>') && html.includes('deleting · 2.0 GB · 184,203 files'));
+  assert.ok(html.includes('data-since="2026-09-25T10:00:00Z"') && html.includes('data-since="2026-09-25T09:59:58Z"'));
+  assert.ok(!html.includes('feat/a') && !html.includes('View cleanup history'));
+  const unknown = removalToastModel(['/x/y'], {}, {});
+  assert.ok(removalToastHTML(unknown).includes('Removing y') && removalToastHTML(unknown).includes('starting'));
+  assert.ok(!removalToastHTML(unknown).includes('rt-sub'));
+  const fresh = removalToastHTML(removalToastModel(['/r/a', '/r/b'], {}));
+  assert.ok(fresh.includes('<p class="rt-sub">0 of 2 done</p>'));
+
+  const done = removalToastModel(paths, {
+    '/r/a': { state: 'removed', bytes: GB }, '/r/b': { state: 'removed', bytes: 2 * GB },
+    '/r/c': { state: 'failed', row_state: 'keep', reasons: ['2 uncommitted changes'] },
+  });
+  const end = removalToastHTML(done);
+  assert.ok(end.includes('Removed 2 of 3 worktrees') && end.includes('3.0 GB reclaimed · 1 not removed'));
+  assert.ok(end.includes('rt-bar-partial') && end.includes('now keep — 2 uncommitted changes'));
+  assert.ok(end.includes('data-action="worktrees-history">View cleanup history</button>'));
+  const single = removalToastHTML(removalToastModel(['/r/a'], { '/r/a': { state: 'removed', bytes: GB, branch: 'feat/a' } }));
+  assert.ok(single.includes('Removed feat/a</p>') && single.includes('1.0 GB reclaimed') && single.includes('rt-bar-done'));
+  const refused = removalToastHTML(removalToastModel(['/r/a'], { '/r/a': { state: 'failed', error: 'git worktree: exit 128' } }, { '/r/a': 'feat/a' }));
+  assert.ok(refused.includes('Not removed: feat/a') && refused.includes('git worktree: exit 128') && refused.includes('rt-bar-failed'));
+  const many = removalToastModel(['/1', '/2', '/3', '/4', '/5', '/6'], {});
+  assert.ok(removalToastHTML(many).includes('<li class="rt-more">and 2 more</li>'));
 });

@@ -409,6 +409,9 @@ public struct StatusResponse: Codable, Sendable {
     public var fleetConfigured: Bool?
     /// Harness coverage (nil on older daemons).
     public let coverage: CoverageModel?
+    /// The file-telemetry collector's service and spool facts (nil on older
+    /// daemons and when the daemon does not probe it).
+    public var esService: ESServiceSnapshotModel?
 
     enum CodingKeys: String, CodingKey {
         case running
@@ -427,6 +430,7 @@ public struct StatusResponse: Codable, Sendable {
         case advisorHealth = "advisor_health"
         case fleetConfigured = "fleet_configured"
         case coverage
+        case esService = "es_service"
     }
 
     public init(running: Bool, uptime: String, activeAgents: Int, infraCount: Int? = nil, agents: [AgentSummaryModel]? = nil, trees: [AgentTreeModel]? = nil, proxyEnabled: Bool? = nil, proxyPort: Int? = nil, uninspectedEgress: Int? = nil, firewallStats: [String: RuleStatModel]? = nil, trackedProcesses: Int? = nil, collectors: [HealthModel]? = nil, version: String? = nil, advisorHealth: AdvisorHealthModel? = nil, fleetConfigured: Bool? = nil, coverage: CoverageModel? = nil) {
@@ -447,6 +451,67 @@ public struct StatusResponse: Codable, Sendable {
         self.fleetConfigured = fleetConfigured
         self.coverage = coverage
     }
+}
+
+/// `/status` `es_service`: the file-telemetry collector's launchd state and
+/// its spool's size, mtime and drain stats.
+public struct ESServiceSnapshotModel: Codable, Sendable, Equatable {
+    public let state: String
+    public let spoolSize: Int64?
+    /// RFC 3339; Go's zero time when the spool is absent.
+    public let spoolMtime: String?
+    public let flooding: Bool?
+    public let unparsedShare: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case state
+        case spoolSize = "spool_size"
+        case spoolMtime = "spool_mtime"
+        case flooding
+        case unparsedShare = "unparsed_share"
+    }
+
+    public init(state: String, spoolSize: Int64? = nil, spoolMtime: String? = nil,
+                flooding: Bool? = nil, unparsedShare: Double? = nil) {
+        self.state = state
+        self.spoolSize = spoolSize
+        self.spoolMtime = spoolMtime
+        self.flooding = flooding
+        self.unparsedShare = unparsedShare
+    }
+
+    /// The spool mtime; nil when absent, unparseable, or Go's zero time.
+    public var spoolMtimeDate: Date? {
+        guard let spoolMtime else { return nil }
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        guard let date = fractional.date(from: spoolMtime) ?? ISO8601DateFormatter().date(from: spoolMtime),
+              date.timeIntervalSince1970 > 0 else { return nil }
+        return date
+    }
+}
+
+/// One `/doctor` check as the daemon serves it.
+public struct DaemonDoctorCheckModel: Codable, Sendable, Equatable {
+    public let id: String
+    public let title: String
+    /// pass | fail | skip
+    public let state: String
+    public let detail: String?
+    public let fix: String?
+
+    public init(id: String, title: String, state: String, detail: String? = nil, fix: String? = nil) {
+        self.id = id
+        self.title = title
+        self.state = state
+        self.detail = detail
+        self.fix = fix
+    }
+}
+
+/// `/doctor`: the daemon's health checks in fixed order.
+public struct DaemonDoctorReportModel: Codable, Sendable {
+    public let checks: [DaemonDoctorCheckModel]
 }
 
 /// /posture headline; attention state is derived daemon-side only.

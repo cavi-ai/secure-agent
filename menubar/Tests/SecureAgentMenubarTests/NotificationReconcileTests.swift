@@ -44,4 +44,31 @@ final class NotificationReconcileTests: XCTestCase {
             delivered: delivered, acknowledgedIDs: [], maxAge: week, now: now)
         XCTAssertTrue(remove.isEmpty)
     }
+
+    /// The poll runs once a second; reconciling must not. Same set within a
+    /// minute: once. Changed set: again. Same set a minute later: again.
+    func testSameSetWithinAMinuteReconcilesOnce() {
+        let manager = NotificationManager()
+        var now = Date(timeIntervalSince1970: 1_790_000_000)
+        var runs = 0
+        manager.clock = { now }
+        manager.reconcileRunner = { _, _ in runs += 1 }
+
+        manager.reconcileDeliveredNotifications(acknowledgedIDs: ["flag-a"])
+        now += 1
+        manager.reconcileDeliveredNotifications(acknowledgedIDs: ["flag-a"])
+        XCTAssertEqual(runs, 1, "same set one second later")
+
+        now += 1
+        manager.reconcileDeliveredNotifications(acknowledgedIDs: ["flag-a", "flag-b"])
+        XCTAssertEqual(runs, 2, "a newly acknowledged flag reconciles at once")
+
+        now += 59
+        manager.reconcileDeliveredNotifications(acknowledgedIDs: ["flag-a", "flag-b"])
+        XCTAssertEqual(runs, 2, "same set 59 s later")
+
+        now += 1
+        manager.reconcileDeliveredNotifications(acknowledgedIDs: ["flag-a", "flag-b"])
+        XCTAssertEqual(runs, 3, "same set a minute after the last run")
+    }
 }
