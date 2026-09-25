@@ -64,8 +64,8 @@ report_file_telemetry() {
   default_socket="${HOME}/.config/secure-agent/daemon.sock"
   socket="$(resolve_socket_path "${config}" "${default_socket}")"
 
-  if command -v python3 >/dev/null 2>&1 && wait_for_socket "${socket}" 30; then
-    state="$(es_service_state "$(read_status_json "${socket}")")"
+  if command -v python3 >/dev/null 2>&1; then
+    state="$(wait_for_status "${socket}" 90 || true)"
   fi
 
   telemetry_status_line "${state}" "${ad_hoc}"
