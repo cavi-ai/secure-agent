@@ -846,12 +846,14 @@ document.addEventListener('DOMContentLoaded', () => {
   // refresh cycle.
   const WORKTREE_TIMEOUT_MS = 200000;
   const WORKTREE_STALE_MS = 60000;
-  const worktreesState = { report: null, loading: false, error: '', loadedAt: 0, filter: { state: '', stale: false } };
+  const worktreesState = { report: null, loading: false, error: '', loadedAt: 0, filter: { state: '', stale: false, q: '' },
+    ledger: null, ledgerLoading: false, ledgerAt: 0 };
   // While the daemon is still measuring sizes, the open tab re-reads the
   // cached report (cheap: no rescan) until the sizes land.
   const WORKTREE_SIZING_POLL_MS = 5000;
   const WORKTREE_SIZING_POLLS = 60;
   let worktreeSizingTimer = null;
+  let worktreeSizingFast = false;
   let worktreeSizingPolls = 0;
   // Also while an agent ask runs: its answer lands in the report's asks.
   // While a removal runs, every 1.5 s and without a cap: the daemon bounds
@@ -862,36 +864,107 @@ document.addEventListener('DOMContentLoaded', () => {
     const rep = worktreesState.report;
     const asking = rep && Object.values(rep.asks || {}).some(a => a.status === 'running');
     const removing = removalRunning(rep);
-    if (!rep || !(rep.sizing || rep.refreshing || asking || removing) || !(activeTab === 'sessions' && activeSub === 'worktrees') || worktreeSizingTimer) return;
-    if (!removing) {
+    // A running removal keeps the re-reads going on any tab: its toast
+    // follows it to the end.
+    if (!rep || !(rep.sizing || rep.refreshing || asking || removing)) return;
+    if (!removing && !(activeTab === 'sessions' && activeSub === 'worktrees')) return;
+    if (worktreeSizingTimer) {
+      // A removal that starts while a sizing re-read waits gets its own
+      // cadence at once.
+      if (!removing || worktreeSizingFast) return;
+      clearTimeout(worktreeSizingTimer);
+    } else if (!removing) {
       if (worktreeSizingPolls >= WORKTREE_SIZING_POLLS) return;
       worktreeSizingPolls++;
     }
+    worktreeSizingFast = removing;
     worktreeSizingTimer = setTimeout(() => { worktreeSizingTimer = null; loadWorktrees(false); }, removing ? WORKTREE_REMOVAL_POLL_MS : WORKTREE_SIZING_POLL_MS);
   }
-  // announceRemovals toasts each removal this page saw running that has
-  // since finished; a Remove all batch gets one line when its last
-  // removal ends.
-  const removalBatches = [];
-  function announceRemovals(before, after) {
-    const batched = new Set(removalBatches.flatMap(b => b.paths));
-    for (let i = removalBatches.length - 1; i >= 0; i--) {
-      const text = removalBatchSummary(removalBatches[i].paths, after && after.removals);
-      if (!text) continue;
-      showToast(text, text.includes('not removed') ? 'info' : 'success');
-      removalBatches.splice(i, 1);
+  // Removal progress: one toast follows the removals this page started or
+  // saw running (another tab, the CLI) from the first step to what they
+  // reclaimed. A removal that starts after the group finished opens a new
+  // group. The rows show the same progress, so hiding the toast loses
+  // nothing.
+  const REMOVAL_TOAST_LINGER_MS = 8000;
+  const removalGroup = { paths: [], labels: {}, hidden: false, finished: false };
+  let removalTicker = null;
+  let removalLinger = null;
+  function removalGroupRunning() {
+    const removals = (worktreesState.report && worktreesState.report.removals) || {};
+    return removalGroup.paths.some(p => !removals[p] || removals[p].state === 'running');
+  }
+  function trackRemovals(paths, labels) {
+    if (!paths.length) return;
+    if (!removalGroupRunning()) Object.assign(removalGroup, { paths: [], labels: {} });
+    for (const p of paths) if (!removalGroup.paths.includes(p)) removalGroup.paths.push(p);
+    Object.assign(removalGroup.labels, labels || {});
+    removalGroup.hidden = false;
+    removalGroup.finished = false;
+    clearTimeout(removalLinger);
+    paintRemovalToast();
+  }
+  // adoptRemovals: removals running in a fresh report that no group
+  // tracks, labeled with their row's branch.
+  function adoptRemovals(rep) {
+    const running = Object.entries((rep && rep.removals) || {})
+      .filter(([p, r]) => r.state === 'running' && !removalGroup.paths.includes(p)).map(([p]) => p);
+    if (!running.length) return;
+    const labels = {};
+    for (const repo of rep.repos || []) {
+      for (const w of repo.worktrees || []) if (w.branch && running.includes(w.path)) labels[w.path] = w.branch;
     }
-    for (const [path, was] of Object.entries((before && before.removals) || {})) {
-      const now = ((after && after.removals) || {})[path];
-      if (batched.has(path) || was.state !== 'running' || !now || now.state === 'running') continue;
-      if (now.state === 'removed') {
-        showToast(now.bytes ? `Removed ${path} — ${fmtDisk(now.bytes)} reclaimed` : `Removed ${path}`, 'success');
-      } else if (now.row_state) {
-        showToast(`Not removed — ${path} is now ${now.row_state}: ${(now.reasons || []).join('; ')}`, 'info');
-      } else {
-        showToast(`Could not remove ${path}: ${now.error || 'unknown error'}`, 'danger');
-      }
+    trackRemovals(running, labels);
+  }
+  function tickRemovalElapsed() {
+    const now = Date.now();
+    document.querySelectorAll('#removal-toast .rt-elapsed[data-since]').forEach(el => {
+      const t = Date.parse(el.dataset.since);
+      el.textContent = isFinite(t) ? fmtElapsed(now - t) : '';
+    });
+  }
+  function closeRemovalToast() {
+    removalGroup.hidden = true;
+    if (!removalGroupRunning()) Object.assign(removalGroup, { paths: [], labels: {} });
+    paintRemovalToast();
+  }
+  function paintRemovalToast() {
+    const host = document.getElementById('toast-container');
+    let el = document.getElementById('removal-toast');
+    const running = removalGroupRunning();
+    const m = removalToastModel(removalGroup.paths, worktreesState.report && worktreesState.report.removals, removalGroup.labels);
+    // The group's end: the ledger has new rows; a clean finish closes the
+    // toast after a moment, a failure keeps it until closed.
+    if (removalGroup.paths.length && !running && !removalGroup.finished) {
+      removalGroup.finished = true;
+      loadLedger();
+      if (!m.failed) removalLinger = setTimeout(closeRemovalToast, REMOVAL_TOAST_LINGER_MS);
     }
+    if (!running) {
+      clearInterval(removalTicker);
+      removalTicker = null;
+    }
+    if (!host || !removalGroup.paths.length || removalGroup.hidden) {
+      if (el) el.remove();
+      clearInterval(removalTicker);
+      removalTicker = null;
+      if (host) hideToastHostWhenEmpty(host);
+      return;
+    }
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'removal-toast';
+      host.appendChild(el);
+      showToastHost(host);
+    }
+    el.className = 'toast toast-sticky removal-toast ' + (running ? 'info' : m.failed ? (m.removed ? 'info' : 'danger') : 'success');
+    const html = removalToastHTML(m);
+    if (el._html !== html) {
+      el.innerHTML = html;
+      el._html = html;
+      applyInlineMetrics(el);
+    }
+    tickRemovalElapsed();
+    if (running && !removalTicker) removalTicker = setInterval(tickRemovalElapsed, 1000);
   }
   async function loadWorktrees(refresh) {
     if (worktreesState.loading) return;
@@ -901,10 +974,10 @@ document.addEventListener('DOMContentLoaded', () => {
     try {
       const r = await apiFetch('/worktrees' + (refresh ? '?refresh=1' : ''), { timeoutMs: WORKTREE_TIMEOUT_MS });
       if (!r.ok) throw new Error((await r.text()).trim() || String(r.status));
-      const before = worktreesState.report;
       worktreesState.report = await r.json();
       worktreesState.loadedAt = Date.now();
-      announceRemovals(before, worktreesState.report);
+      adoptRemovals(worktreesState.report);
+      if (removalGroup.paths.length) paintRemovalToast();
       if (!worktreesState.report.sizing && !worktreesState.report.refreshing && !Object.values(worktreesState.report.asks || {}).some(a => a.status === 'running')) worktreeSizingPolls = 0;
     } catch (err) {
       worktreesState.error = 'Worktree scan failed: ' + (err.message || err);
@@ -915,6 +988,50 @@ document.addEventListener('DOMContentLoaded', () => {
       followWorktreeSizing();
     }
   }
+  // The cleanup ledger: the daily series behind the reclaimed chart and the
+  // entries behind the history drawer. Loaded with the tab, after a
+  // cleanup lands, and when the history opens.
+  const LEDGER_LIMIT = 500;
+  async function loadLedger() {
+    if (worktreesState.ledgerLoading) return;
+    worktreesState.ledgerLoading = true;
+    markDirty('worktrees');
+    try {
+      const r = await apiFetch(`/cleanup/ledger?days=${RECLAIM_DAYS}&limit=${LEDGER_LIMIT}`);
+      if (!r.ok) throw new Error((await r.text()).trim() || String(r.status));
+      worktreesState.ledger = { ...(await r.json()), limit: LEDGER_LIMIT };
+      worktreesState.ledgerAt = Date.now();
+    } catch (err) {
+      if (historyState.seq) showToast("Couldn't read the cleanup history: " + (err.message || err), 'danger');
+    } finally {
+      worktreesState.ledgerLoading = false;
+      markDirty('worktrees');
+      paintHistory();
+    }
+  }
+
+  // History drawer: the ledger grouped by day, filtered by kind or by the
+  // day picked in the chart. seq is the drawer it painted, so a reload
+  // never writes into another drawer.
+  const historyState = { seq: 0, kind: '', day: '' };
+  function paintHistory() {
+    if (!historyState.seq || historyState.seq !== drawerSeq || drawer.hidden) return;
+    drawerBody.innerHTML = worktreesState.ledger
+      ? cleanupHistoryHTML(worktreesState.ledger, historyState, Date.now())
+      : '<div class="loading">Reading the cleanup ledger…</div>';
+  }
+  function openHistory(day) {
+    if (day !== undefined) historyState.day = day;
+    if (!(historyState.seq && historyState.seq === drawerSeq && !drawer.hidden)) {
+      const opened = openDrawer({ title: 'Cleanup history', icon: 'history',
+        onClose: () => Object.assign(historyState, { seq: 0, kind: '', day: '' }) });
+      if (!opened) return;
+      historyState.seq = drawerSeq;
+      if (!worktreesState.ledger || Date.now() - worktreesState.ledgerAt > WORKTREE_STALE_MS) loadLedger();
+    }
+    paintHistory();
+  }
+
   // Clutter: loaded with the tab like worktrees; re-read while sizes land.
   const clutterState = { report: null, loading: false, error: '', loadedAt: 0, filter: { kind: '' }, expanded: new Set() };
   let clutterSizingTimer = null;
@@ -1062,6 +1179,10 @@ document.addEventListener('DOMContentLoaded', () => {
     if (activeTab === 'sessions' && activeSub === 'worktrees'
       && (!clutterState.report || Date.now() - clutterState.loadedAt > WORKTREE_STALE_MS)) {
       loadClutter(false);
+    }
+    if (activeTab === 'sessions' && activeSub === 'worktrees'
+      && (!worktreesState.ledger || Date.now() - worktreesState.ledgerAt > WORKTREE_STALE_MS)) {
+      loadLedger();
     }
     if (activeTab === 'policy' && from !== 'policy') loadPolicy();
     const focus = r.focus === 'attention' ? document.getElementById('attention-center') : group;
@@ -1498,22 +1619,32 @@ document.addEventListener('DOMContentLoaded', () => {
       `git deletes ${path} and its ignored files. ${branch ? `Branch ${branch} and its commits stay.` : 'Its commits stay reachable from other refs.'}`,
       { title: 'Remove worktree', okLabel: 'Remove' });
     if (!ok) return;
-    // The daemon removes in the background; the row shows each step and the
-    // outcome, which the re-reads pick up.
-    try {
-      const { r, text, json } = await postWorktree('/worktrees/remove', { path, async: true });
-      if (!r.ok || !json || !json.removal) throw new Error(text.trim() || String(r.status));
-      const rep = worktreesState.report;
-      if (rep) (rep.removals || (rep.removals = {}))[path] = json.removal;
-      renderNow(['worktrees']);
-      followWorktreeSizing();
-    } catch (err) {
-      showToast('Could not start the removal: ' + (err.message || err), 'danger');
-    }
+    await startRemovals([{ path, branch }]);
   };
 
-  // Remove all: every removable row of one repository, each checked again
-  // by the daemon before it goes; one line when the batch ends.
+  // startRemovals: one background removal per row; the daemon checks each
+  // again before it goes. The progress toast and the rows follow them.
+  async function startRemovals(rows) {
+    const rep = worktreesState.report;
+    const started = [];
+    const labels = {};
+    for (const w of rows) {
+      try {
+        const { r, text, json } = await postWorktree('/worktrees/remove', { path: w.path, async: true });
+        if (!r.ok || !json || !json.removal) throw new Error(text.trim() || String(r.status));
+        if (rep) (rep.removals || (rep.removals = {}))[w.path] = json.removal;
+        started.push(w.path);
+        if (w.branch) labels[w.path] = w.branch;
+      } catch (err) {
+        showToast(`Could not start removing ${w.path}: ${err.message || err}`, 'danger');
+      }
+    }
+    trackRemovals(started, labels);
+    renderNow(['worktrees']);
+    followWorktreeSizing();
+  }
+
+  // Remove all: every removable row of one repository after one dialog.
   window.removeAllWorktrees = async function(repoPath) {
     const rep = worktreesState.report;
     const repo = rep && (rep.repos || []).find(r => r.path === repoPath);
@@ -1524,20 +1655,22 @@ document.addEventListener('DOMContentLoaded', () => {
       `git deletes ${rows.length} worktrees of ${repoPath}${bytes ? ` (${fmtDisk(bytes)})` : ''} and their ignored files. Their branches and commits stay; each is checked again before it goes.`,
       { title: 'Remove all', okLabel: `Remove ${rows.length}` });
     if (!ok) return;
-    const started = [];
-    for (const w of rows) {
-      try {
-        const { r, text, json } = await postWorktree('/worktrees/remove', { path: w.path, async: true });
-        if (!r.ok || !json || !json.removal) throw new Error(text.trim() || String(r.status));
-        (rep.removals || (rep.removals = {}))[w.path] = json.removal;
-        started.push(w.path);
-      } catch (err) {
-        showToast(`Could not start removing ${w.path}: ${err.message || err}`, 'danger');
-      }
-    }
-    if (started.length) removalBatches.push({ paths: started });
-    renderNow(['worktrees']);
-    followWorktreeSizing();
+    await startRemovals(rows);
+  };
+
+  // Remove every removable worktree of every repository after one dialog
+  // that counts them per repository.
+  window.removeAllRemovable = async function() {
+    const { rows, bytes } = removableEverywhere(worktreesState.report);
+    if (!rows.length) return;
+    const perRepo = new Map();
+    for (const { repo } of rows) perRepo.set(repo.path, (perRepo.get(repo.path) || 0) + 1);
+    const list = [...perRepo].map(([p, n]) => `${p} (${n})`).join(', ');
+    const ok = await window.saConfirm(
+      `git deletes ${rows.length} worktrees${bytes ? ` (${fmtDisk(bytes)})` : ''} and their ignored files: ${list}. Their branches and commits stay; each is checked again before it goes.`,
+      { title: 'Remove all removable worktrees', okLabel: `Remove ${rows.length}` });
+    if (!ok) return;
+    await startRemovals(rows.map(r => r.w));
   };
 
   // Folders git no longer records: open in Finder, link again to the
@@ -1575,6 +1708,7 @@ document.addEventListener('DOMContentLoaded', () => {
       renderNow(['worktrees']);
       showToast(bytes ? `Moved ${path} to the Trash — ${fmtDisk(bytes)}` : `Moved ${path} to the Trash`, 'success');
       loadWorktrees(false);
+      loadLedger();
     } catch (err) {
       showToast('Could not move it to the Trash: ' + (err.message || err), 'danger');
     }
@@ -1625,6 +1759,7 @@ document.addEventListener('DOMContentLoaded', () => {
       }
       renderNow(['clutter']);
       showToast(`Moved ${path} to the Trash — ${fmtDisk(bytes)} frees when you empty it`, 'success');
+      loadLedger();
     } catch (err) {
       showToast('Failed to move to the Trash: ' + (err.message || err), 'danger');
     }
@@ -1669,6 +1804,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const bytes = Number(json && json.result && json.result.bytes) || 0;
       showToast(`${name}: ${fmtDisk(bytes)} reclaimed`, 'success');
       loadClutter(false);
+      loadLedger();
     } catch (err) {
       showToast('Clean failed: ' + (err.message || err), 'danger');
     }
@@ -1707,6 +1843,7 @@ document.addEventListener('DOMContentLoaded', () => {
       dropWorktreeRows(pruned);
       renderNow(['worktrees']);
       showToast(`Pruned ${pruned.length} worktree entr${pruned.length === 1 ? 'y' : 'ies'}`, 'success');
+      loadLedger();
     } catch (err) {
       showToast('Failed to prune: ' + (err.message || err), 'danger');
     }
@@ -1724,6 +1861,45 @@ document.addEventListener('DOMContentLoaded', () => {
       showToast('Failed to hide the repository: ' + (err.message || err), 'danger');
     }
   };
+
+  const worktreeSearch = document.getElementById('worktree-search');
+  if (worktreeSearch) worktreeSearch.addEventListener('input', () => {
+    worktreesState.filter.q = worktreeSearch.value;
+    renderNow(['worktrees']);
+  });
+
+  // Reclaimed chart tooltip: a day's numbers above its column on hover and
+  // keyboard focus, value first. The column's label carries the same.
+  const reclaimEl = document.getElementById('worktrees-reclaim');
+  const reclaimTip = document.getElementById('reclaim-tip');
+  function showReclaimTip(col) {
+    if (!reclaimTip || !col || !col.dataset.day) return;
+    const line = (cls, text) => {
+      const el = document.createElement(cls === 'rc-tip-value' ? 'strong' : 'span');
+      el.className = cls;
+      el.textContent = text;
+      return el;
+    };
+    const [freed, trash] = reclaimDayText(col.dataset.freed, col.dataset.count, col.dataset.trash, col.dataset.trashCount);
+    reclaimTip.replaceChildren(
+      line('rc-tip-value', freed),
+      ...(trash ? [line('rc-tip-line', trash)] : []),
+      line('rc-tip-meta', fmtDayKey(col.dataset.day, localDayKey(new Date()), true)));
+    reclaimTip.hidden = false;
+    const box = reclaimTip.offsetParent ? reclaimTip.offsetParent.getBoundingClientRect() : { left: 0, top: 0, width: window.innerWidth };
+    const r = col.getBoundingClientRect();
+    const w = reclaimTip.offsetWidth;
+    const left = Math.max(8, Math.min(box.width - w - 8, r.left - box.left + r.width / 2 - w / 2));
+    reclaimTip.style.setProperty('left', left + 'px');
+    reclaimTip.style.setProperty('top', (r.top - box.top - reclaimTip.offsetHeight - 6) + 'px');
+  }
+  function hideReclaimTip() { if (reclaimTip) reclaimTip.hidden = true; }
+  if (reclaimEl) {
+    reclaimEl.addEventListener('pointerover', e => showReclaimTip(e.target.closest('.rc-col[data-day]')));
+    reclaimEl.addEventListener('pointerleave', hideReclaimTip);
+    reclaimEl.addEventListener('focusin', e => showReclaimTip(e.target.closest('.rc-col[data-day]')));
+    reclaimEl.addEventListener('focusout', hideReclaimTip);
+  }
 
   const worktreeAddForm = document.getElementById('worktree-add-form');
   if (worktreeAddForm) worktreeAddForm.addEventListener('submit', async (e) => {
@@ -3046,6 +3222,30 @@ document.addEventListener('DOMContentLoaded', () => {
         break;
       case 'worktrees-rescan':
         loadWorktrees(true);
+        loadLedger();
+        break;
+      case 'worktrees-remove-removable':
+        e.preventDefault();
+        window.removeAllRemovable();
+        break;
+      case 'worktrees-history':
+        e.preventDefault();
+        openHistory();
+        break;
+      case 'reclaim-day':
+        e.preventDefault();
+        openHistory(historyState.seq && historyState.day === d.day ? '' : d.day);
+        break;
+      case 'history-kind':
+        historyState.kind = d.kind || '';
+        paintHistory();
+        break;
+      case 'history-day':
+        historyState.day = d.day || '';
+        paintHistory();
+        break;
+      case 'removal-toast-close':
+        closeRemovalToast();
         break;
       case 'clutter-rescan':
         loadClutter(true);
@@ -3282,6 +3482,23 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
+  // The toast host is a top-layer popover shown while it holds a toast.
+  function showToastHost(host) {
+    if (typeof host.showPopover !== 'function') return;
+    try {
+      if (host.matches(':popover-open')) host.hidePopover();
+      host.showPopover();
+    } catch { /* unsupported */ }
+  }
+  function hideToastHostWhenEmpty(host) {
+    if (host.childElementCount) return;
+    if (host.classList.contains('toast-host')) {
+      host.remove();
+    } else if (host.id === 'toast-container' && typeof host.hidePopover === 'function' && host.matches(':popover-open')) {
+      try { host.hidePopover(); } catch { /* ok */ }
+    }
+  }
+
   function showToast(msg, type = 'info') {
     const toast = document.createElement('div');
     toast.className = `toast ${type}`;
@@ -3292,26 +3509,23 @@ document.addEventListener('DOMContentLoaded', () => {
     // the old "append inside the <dialog>" dance that native modals required.
     const host = document.getElementById('toast-container');
     if (!host) return;
-    if (typeof host.showPopover === 'function') {
-      try {
-        if (host.matches(':popover-open')) host.hidePopover();
-        host.showPopover();
-      } catch { /* unsupported */ }
-    }
+    showToastHost(host);
 
-    host.appendChild(toast);
+    // A sticky toast (removal progress) stays last in the stack.
+    const sticky = host.querySelector('.toast-sticky');
+    host.insertBefore(toast, sticky);
     // Keep the stack short: an endpoint-failure burst must not build a toast
     // column taller than the viewport (which pushes the oldest ones off-screen).
-    while (host.childElementCount > 4) host.firstElementChild.remove();
+    // The sticky toast is never dropped.
+    let brief = host.querySelectorAll('.toast:not(.toast-sticky)');
+    while (brief.length > (sticky ? 3 : 4)) {
+      brief[0].remove();
+      brief = host.querySelectorAll('.toast:not(.toast-sticky)');
+    }
 
     setTimeout(() => {
       toast.remove();
-      if (host.classList.contains('toast-host') && !host.childElementCount) {
-        host.remove();
-      } else if (host.id === 'toast-container' && !host.childElementCount &&
-                 typeof host.hidePopover === 'function' && host.matches(':popover-open')) {
-        try { host.hidePopover(); } catch { /* ok */ }
-      }
+      hideToastHostWhenEmpty(host);
     }, 4000);
   }
 

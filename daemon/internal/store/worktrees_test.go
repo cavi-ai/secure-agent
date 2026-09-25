@@ -88,14 +88,60 @@ func TestCleanupLedger(t *testing.T) {
 	s.PutCleanup(model.CleanupEntry{TS: now.Add(-time.Hour), Action: "worktree-remove", Path: "/r/.worktrees/new", Repo: "/r", Bytes: 250, Detail: "branch feat/new kept"})
 	s.PutCleanup(model.CleanupEntry{TS: now, Action: "worktree-prune", Path: "/r/.worktrees/gone", Repo: "/r"})
 	s.PutCleanup(model.CleanupEntry{TS: now, Action: "trash:tmp", Path: "/r/.tmp", Repo: "/r", Bytes: 4096})
+	s.PutCleanup(model.CleanupEntry{TS: now, Action: "ask:none", Path: "/r/.worktrees/new", Repo: "/r", Detail: "claude answered: none"})
 
 	log := s.CleanupLog(10)
-	if len(log) != 4 || log[0].Action != "trash:tmp" || log[1].Action != "worktree-prune" || log[2].Bytes != 250 || log[2].Detail != "branch feat/new kept" || !log[3].TS.Equal(now.Add(-40*24*time.Hour)) {
+	if len(log) != 5 || log[0].Action != "ask:none" || log[1].Action != "trash:tmp" || log[2].Action != "worktree-prune" || log[3].Bytes != 250 || log[3].Detail != "branch feat/new kept" || !log[4].TS.Equal(now.Add(-40*24*time.Hour)) {
 		t.Fatalf("log = %+v", log)
 	}
 	tot := s.CleanupTotals(now)
 	if tot.Bytes != 1250 || tot.Count != 3 || tot.Bytes30d != 250 || tot.Count30d != 2 || tot.TrashedBytes != 4096 || tot.TrashedCount != 1 {
-		t.Fatalf("totals = %+v", tot)
+		t.Fatalf("totals = %+v (an agent's answer is not a cleanup)", tot)
+	}
+}
+
+// The daily series covers the requested days ending today in the caller's
+// location, zero-filled and oldest first; a cleanup lands on its local
+// day, Trash moves sum and count apart (so a day's count agrees with
+// CleanupTotals) and an agent's answer is not counted.
+func TestCleanupDaily(t *testing.T) {
+	s, err := Open("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	loc := time.FixedZone("UTC-4", -4*3600)
+	now := time.Date(2026, 9, 25, 10, 0, 0, 0, loc)
+	put := func(at time.Time, action string, bytes int64) {
+		s.PutCleanup(model.CleanupEntry{TS: at, Action: action, Path: "/r/x", Repo: "/r", Bytes: bytes})
+	}
+	put(now.Add(-time.Hour), "worktree-remove", 100)
+	put(now.Add(-2*time.Hour), "trash:orphan-worktree", 40)
+	put(now.Add(-3*time.Hour), "ask:pr", 0)
+	// 01:30 UTC on the 25th is 21:30 on the 24th here.
+	put(time.Date(2026, 9, 25, 1, 30, 0, 0, time.UTC), "clean:go", 7)
+	put(time.Date(2026, 9, 23, 0, 0, 0, 500000000, loc), "worktree-remove", 3)
+	put(time.Date(2026, 9, 22, 23, 59, 59, 0, loc), "worktree-remove", 1000)
+
+	days := s.CleanupDaily(now, 3)
+	want := []model.CleanupDay{
+		{Day: "2026-09-23", Bytes: 3, Count: 1},
+		{Day: "2026-09-24", Bytes: 7, Count: 1},
+		{Day: "2026-09-25", Bytes: 100, Count: 1, TrashedBytes: 40, TrashedCount: 1},
+	}
+	if len(days) != len(want) {
+		t.Fatalf("days = %+v", days)
+	}
+	for i := range want {
+		if days[i] != want[i] {
+			t.Fatalf("day %d = %+v, want %+v (all: %+v)", i, days[i], want[i], days)
+		}
+	}
+	if got := s.CleanupDaily(now, 0); got != nil {
+		t.Fatalf("0 days = %+v", got)
+	}
+	if got := s.CleanupDaily(now, 10000); len(got) != maxCleanupDays || got[len(got)-1].Day != "2026-09-25" {
+		t.Fatalf("capped series: %d days ending %+v", len(got), got[len(got)-1])
 	}
 }
 

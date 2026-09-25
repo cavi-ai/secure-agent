@@ -8,6 +8,7 @@
 (() => {
   const now = Date.now();
   const iso = (msAgo) => new Date(now - msAgo).toISOString();
+  let bookCleanup = () => {};
 
   const data = {
     // Durable sessions (the P1 spine) — drives the session-first rail.
@@ -615,11 +616,13 @@
       return { status: 'ok', result: { path: body.path, bytes: 52428800, trash_path: '/Users/dev/.Trash/ctnj' } };
     }
     if (p === '/worktrees/remove') {
+      if (MODE.includes('removecadence')) window.__removePostedAt = Date.now();
       // The daemon removes in the background: running now, the outcome
       // lands in GET /worktrees removals (removerunning: never finishes;
       // removefaildemo: git fails).
       const rep = data['/worktrees'];
-      const running = { path: body.path, state: 'running', step: 'deleting', started_at: iso(0) };
+      const running = { path: body.path, state: 'running', phase: 'deleting', step: 'deleting', started_at: iso(0), step_at: iso(0),
+        bytes: 1610612736, files: 184203 };
       rep.removals = { ...(rep.removals || {}), [body.path]: running };
       if (!MODE.includes('removerunning')) {
         setTimeout(() => {
@@ -635,7 +638,10 @@
           rep.repos[0].size_bytes -= size;
           Object.assign(rep.reclaimed, { bytes: rep.reclaimed.bytes + size, count: rep.reclaimed.count + 1,
             bytes_30d: rep.reclaimed.bytes_30d + size, count_30d: rep.reclaimed.count_30d + 1 });
-          rep.removals[body.path] = { ...running, state: 'removed', step: '', bytes: size, branch: 'feat/done', finished_at: iso(0) };
+          bookCleanup({ ts: new Date().toISOString(), action: 'worktree-remove', path: body.path, repo: WT_REPO, bytes: size,
+            detail: 'branch kept; merged into origin/main (squash)' });
+          rep.removals[body.path] = { ...running, state: 'removed', phase: '', step: '', step_at: undefined, bytes: size,
+            branch: body.path.split('/').pop() === 'done' ? 'feat/done' : 'feat/' + body.path.split('/').pop(), finished_at: iso(0) };
         }, 2000);
       }
       return { status: 'accepted', removal: running };
@@ -838,6 +844,12 @@
       const md = '# Incident\n\n## Blast Radius Activity\n\n### Accessed Files\n' +
         '- `/Users/dev/.codex/sessions/2026/09/23/rollout-2026-09-23T12-53-26-demo.jsonl`\n\n### Egress Connections\n- `api.openai.com:443`\n';
       return { ok: true, status: 200, json: async () => { throw new SyntaxError('not JSON'); }, text: async () => md };
+    }
+    // removecadence: the gap between starting a removal and the next
+    // /worktrees read lands on <pre id="remove-cadence">.
+    if (MODE.includes('removecadence') && p === '/worktrees' && window.__removePostedAt && !window.__removeGap) {
+      window.__removeGap = Date.now() - window.__removePostedAt;
+      stamp('remove-cadence', String(window.__removeGap));
     }
     let body = data[p];
     // /costs answers by its `by` query; every /costs query lands, in order,
@@ -1408,6 +1420,36 @@
       [WT_REPO + '/.worktrees/evidence']: { harness: 'claude', status: 'answered', verdict: 'pr', detail: 'https://github.com/o/r/pull/9', cost_usd: 0.21 }
     }
   };
+  // Cleanup ledger: three rows (one older than the charted days); the daily
+  // series is bucketed from the rows by local day, like the daemon's, and a
+  // removal the mock completes books a row (bookCleanup).
+  const ledgerEntries = [
+    { id: 3, ts: iso(2 * 86400000), action: 'worktree-remove', path: WT_REPO + '/.worktrees/shipped', repo: WT_REPO, bytes: 1073741824, detail: 'branch feat/shipped kept; merged into origin/main (squash)' },
+    { id: 2, ts: iso(2 * 86400000 + 60000), action: 'trash:orphan-worktree', path: '/Users/dev/.cursor/worktrees/api-service/ab', repo: WT_REPO, bytes: 52428800 },
+    { id: 1, ts: iso(40 * 86400000), action: 'worktree-remove', path: WT_REPO + '/.worktrees/old', repo: WT_REPO, bytes: 2147483648, detail: '<b>branch</b> feat/old kept' },
+  ];
+  const ledgerTotals = { bytes: 3221225472, count: 2, bytes_30d: 1073741824, count_30d: 1, trashed_bytes: 52428800, trashed_count: 1 };
+  bookCleanup = (e) => {
+    ledgerEntries.unshift({ id: ledgerEntries.length + 1, ...e });
+    ledgerTotals.bytes += e.bytes;
+    ledgerTotals.count += 1;
+    ledgerTotals.bytes_30d += e.bytes;
+    ledgerTotals.count_30d += 1;
+  };
+  const localKey = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  Object.defineProperty(data, '/cleanup/ledger', { configurable: true, get: () => {
+    const today = new Date();
+    const daily = Array.from({ length: 30 }, (_, i) => ({
+      day: localKey(new Date(today.getFullYear(), today.getMonth(), today.getDate() - 29 + i)), bytes: 0, trashed_bytes: 0, count: 0 }));
+    for (const e of ledgerEntries) {
+      const d = daily.find(x => x.day === localKey(new Date(e.ts)));
+      if (!d) continue;
+      if (e.action.startsWith('trash:')) { d.trashed_bytes += e.bytes; d.trashed_count = (d.trashed_count || 0) + 1; }
+      else { d.bytes += e.bytes; d.count++; }
+    }
+    return { totals: { ...ledgerTotals }, daily, entries: ledgerEntries.slice() };
+  } });
+
   // Clutter inventory: a repo .tmp, a tool cache with a clean command and a
   // list-only one whose note carries markup that must render as text.
   data['/cleanup'] = {
@@ -1535,6 +1577,95 @@
         }
       }, 100);
     }, 4000);
+  }
+
+  // Confirm the next dialog (the console's saConfirm layer).
+  const confirmNext = () => {
+    let n = 0;
+    const iv = setInterval(() => {
+      const ok = document.getElementById('confirm-ok');
+      if (ok && ok.closest('#confirm-layer') && !ok.closest('#confirm-layer').hidden) {
+        ok.click();
+        clearInterval(iv);
+      } else if (++n > 20) {
+        clearInterval(iv);
+      }
+    }, 100);
+  };
+  // removeremovabledemo: three removable rows in one repository and one in
+  // another; the Removable now tile's Remove all removes all four.
+  if (MODE.includes('removeremovabledemo')) {
+    const repo = data['/worktrees'].repos[0];
+    const done = repo.worktrees.find(w => w.state === 'remove');
+    repo.worktrees.push({ ...done, path: WT_REPO + '/.worktrees/old-a', branch: 'feat/old-a' }, { ...done, path: WT_REPO + '/.worktrees/old-b', branch: 'feat/old-b' });
+    data['/worktrees'].repos.push({ path: '/Users/dev/workspace/web-app', size_bytes: 1610612736, worktrees: [
+      { path: '/Users/dev/workspace/web-app', branch: 'main', state: 'main', reasons: [] },
+      { ...done, path: '/Users/dev/workspace/web-app/.worktrees/landed', branch: 'feat/landed' }] });
+    setTimeout(() => {
+      stamp('removable-tile', (document.querySelector('.rc-removable') || {}).textContent || '');
+      const btn = document.querySelector('#worktrees-reclaim [data-action="worktrees-remove-removable"]');
+      if (btn) btn.click();
+      confirmNext();
+    }, 3000);
+  }
+  // historydemo: History opens the cleanup history in the drawer; then the
+  // Removed chip filters it. reclaimdaydemo: a chart column opens it at
+  // that day.
+  if (MODE.includes('historydemo')) {
+    setTimeout(() => document.querySelector('[data-action="worktrees-history"]').click(), 3000);
+    setTimeout(() => {
+      stamp('history-all', (document.getElementById('drawer-body') || {}).innerHTML || '');
+      const chip = document.querySelector('#drawer-body [data-action="history-kind"][data-kind="removed"]');
+      if (chip) chip.click();
+    }, 4500);
+  }
+  if (MODE.includes('reclaimdaydemo')) {
+    setTimeout(() => {
+      const col = document.querySelector('#worktrees-reclaim [data-action="reclaim-day"]');
+      if (col) {
+        col.dispatchEvent(new PointerEvent('pointerover', { bubbles: true }));
+        const tip = document.getElementById('reclaim-tip');
+        stamp('reclaim-tip-probe', tip && !tip.hidden ? tip.textContent : 'hidden');
+        col.click();
+      }
+    }, 3000);
+  }
+  // wtsearchdemo: the search box keeps the rows whose branch, folder or
+  // repository matches.
+  if (MODE.includes('wtsearchdemo')) {
+    setTimeout(() => {
+      const input = document.getElementById('worktree-search');
+      input.value = 'EVIDENCE';
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    }, 3000);
+  }
+  // removecadence: sizes never land, so a 5 s re-read is always pending;
+  // Remove is clicked right after one. The removal's first re-read must
+  // come on its own 1.5 s cadence, not the pending 5 s one.
+  if (MODE.includes('removecadence')) {
+    const rep = data['/worktrees'];
+    rep.sizing = true;
+    let clicked = false;
+    let reads = 0;
+    const orig = Object.getOwnPropertyDescriptor(data, '/worktrees');
+    Object.defineProperty(data, '/worktrees', { configurable: true, get: () => {
+      reads++;
+      if (reads === 2 && !clicked) {
+        clicked = true;
+        setTimeout(() => {
+          const btn = document.querySelector('#worktrees-container [data-action="worktree-remove"]');
+          if (btn) btn.click();
+          confirmNext();
+        }, 50);
+      }
+      return orig && orig.get ? orig.get() : rep;
+    } });
+  }
+  // adoptdemo: a removal started elsewhere is running when the tab opens;
+  // the progress toast follows it without a click.
+  if (MODE.includes('adoptdemo')) {
+    const p = WT_REPO + '/.worktrees/done';
+    data['/worktrees'].removals = { [p]: { path: p, state: 'running', phase: 'checking', step: 'checking it is still safe to remove', started_at: iso(5000), step_at: iso(1000) } };
   }
 
   // Auto-action: demote a blocking rule — it must flip back to Promote.

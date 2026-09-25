@@ -20,15 +20,23 @@ function worktreeStateCounts(rep) {
   return out;
 }
 
+// worktreeMatches: the search box keeps rows whose branch, path or
+// repository contains the text, ignoring case.
+function worktreeMatches(w, repo, q) {
+  const needle = String(q || '').trim().toLowerCase();
+  if (!needle) return true;
+  return [w.branch, w.path, repo && repo.path].some(s => String(s || '').toLowerCase().includes(needle));
+}
+
 // worktreeGroups: repositories with the rows the filter keeps, biggest
 // first (the list is where disk comes back). filter.state is '' (all) or a
-// state; filter.stale keeps stale rows only.
+// state; filter.stale keeps stale rows only; filter.q is the search text.
 function worktreeGroups(rep, filter) {
   const f = filter || {};
   const groups = [];
   for (const repo of (rep && rep.repos) || []) {
     const rows = (repo.worktrees || []).filter(w => w.state !== 'main'
-      && (!f.state || w.state === f.state) && (!f.stale || w.stale));
+      && (!f.state || w.state === f.state) && (!f.stale || w.stale) && worktreeMatches(w, repo, f.q));
     if (rows.length) groups.push({ repo, rows });
   }
   // A repository that could not be read (moved, deleted) comes first: its
@@ -45,8 +53,8 @@ function fmtDisk(n) {
 }
 
 // worktreeDiskHTML: the volumes holding the repositories (used share as a
-// bar), what worktrees occupy and what is removable, and what cleanups
-// have given back so far.
+// bar) and what worktrees occupy. Removable and reclaimed space are the
+// tiles above (reclaimTilesHTML).
 function worktreeDiskHTML(rep) {
   if (!rep) return '';
   const s = rep.summary || {};
@@ -58,16 +66,303 @@ function worktreeDiskHTML(rep) {
       <span class="wt-vol-free">${escapeHTML(fmtDisk(v.free_bytes))} free of ${escapeHTML(fmtDisk(total))}</span></div>`;
   }).join('');
   const measuring = rep.sizing ? ' <span class="wt-measuring">measuring…</span>' : '';
-  const r = rep.reclaimed;
-  const reclaimed = r && r.count
-    ? `${escapeHTML(fmtDisk(r.bytes))} over ${r.count} cleanup${r.count === 1 ? '' : 's'} · ${escapeHTML(fmtDisk(r.bytes_30d))} in 30 days`
-    : 'nothing yet';
   return `${vols}
     <div class="wt-disk-stats">
       <span><b>Worktrees</b> ${escapeHTML(fmtDisk(s.size_bytes))}${measuring}</span>
-      <span><b>Removable</b> ${escapeHTML(fmtDisk(s.removable_bytes))}</span>
-      <span><b>Reclaimed</b> ${reclaimed}</span>
     </div>`;
+}
+
+// ---------- reclaimed space: tiles, daily chart, history ----------
+// The ledger (GET /cleanup/ledger?days=30) books every cleanup with the
+// bytes it gave back; moves to the Trash count apart until the Trash is
+// emptied.
+
+const RECLAIM_DAYS = 30;
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+// localDayKey: YYYY-MM-DD of a timestamp in this browser's time zone (the
+// daemon's daily series uses the same machine's zone).
+function localDayKey(ts) {
+  const d = ts instanceof Date ? ts : new Date(ts);
+  if (!isFinite(d.getTime())) return '';
+  const p = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+// fmtDayKey: "Sep 25" from YYYY-MM-DD, parsed by hand (Date.parse reads a
+// bare date as UTC); "Today" and "Yesterday" relative to todayKey.
+function fmtDayKey(key, todayKey, withWeekday) {
+  const [y, m, d] = String(key || '').split('-').map(Number);
+  if (!y || !m || !d) return String(key || '');
+  if (todayKey && key === todayKey) return 'Today';
+  const date = new Date(y, m - 1, d);
+  if (todayKey) {
+    const [ty, tm, td] = todayKey.split('-').map(Number);
+    const yesterday = new Date(ty, tm - 1, td - 1);
+    if (localDayKey(yesterday) === key) return 'Yesterday';
+  }
+  const label = `${MONTHS[m - 1]} ${d}`;
+  return withWeekday ? `${['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][date.getDay()]}, ${label}` : label;
+}
+
+// niceBytesCeil: the axis top for max bytes: 1, 2 or 5 × a power of ten in
+// the unit fmtDisk would print max in.
+function niceBytesCeil(max) {
+  max = Number(max) || 0;
+  if (max <= 0) return 0;
+  let unit = 1;
+  while (max / unit >= 1024 && unit < 1099511627776) unit *= 1024;
+  const v = max / unit;
+  const mag = Math.pow(10, Math.floor(Math.log10(v)));
+  const f = v / mag;
+  const nice = f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10;
+  return nice * mag * unit;
+}
+
+// removableEverywhere: every removable row of every readable repository
+// with no removal running, and their bytes.
+function removableEverywhere(rep) {
+  const rows = [];
+  for (const repo of (rep && rep.repos) || []) {
+    if (repo.error) continue;
+    for (const w of removableRows(repo, rep.removals)) rows.push({ w, repo });
+  }
+  return { rows, bytes: rows.reduce((n, r) => n + (Number(r.w.size_bytes) || 0), 0) };
+}
+
+// reclaimTilesHTML: what the charted days freed, what cleanups freed all
+// time, what Remove can free now (Remove all across repositories when two
+// or more rows are removable), and what waits in the Trash. Before the
+// ledger loads the report's totals stand in.
+function reclaimTilesHTML(rep, ledger) {
+  const totals = (ledger && ledger.totals) || (rep && rep.reclaimed) || {};
+  const daily = (ledger && ledger.daily) || null;
+  const freed = daily ? daily.reduce((n, d) => n + (Number(d.bytes) || 0), 0) : Number(totals.bytes_30d) || 0;
+  const freedCount = daily ? daily.reduce((n, d) => n + (Number(d.count) || 0), 0) : Number(totals.count_30d) || 0;
+  const rm = removableEverywhere(rep);
+  const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+  const tile = (cls, label, value, hint, extra) => `<div class="rc-tile ${cls}">
+      <span class="rc-tile-label">${label}</span>
+      <span class="rc-tile-value">${escapeHTML(value)}</span>
+      <span class="rc-tile-hint">${hint}</span>${extra || ''}
+    </div>`;
+  const removeAll = rm.rows.length >= 2
+    ? `<button type="button" class="btn btn-danger btn-sm rc-remove-all" data-action="worktrees-remove-removable">Remove all ${rm.rows.length}</button>`
+    : '';
+  return tile('rc-freed', `Freed · last ${daily ? daily.length : RECLAIM_DAYS} days`, fmtDisk(freed), escapeHTML(plural(freedCount, 'cleanup', 'cleanups')))
+    + tile('rc-alltime', 'Freed · all time', fmtDisk(totals.bytes), escapeHTML(plural(Number(totals.count) || 0, 'cleanup', 'cleanups')))
+    + tile('rc-removable', 'Removable now', fmtDisk(rm.bytes), escapeHTML(plural(rm.rows.length, 'worktree', 'worktrees')) + (rep && rep.sizing ? ' · measuring…' : ''), removeAll)
+    + tile('rc-trash', 'In the Trash', fmtDisk(totals.trashed_bytes), 'frees when the Trash is emptied');
+}
+
+// reclaimDayText: a day's numbers as the column label and tooltip read
+// them: freed with its cleanups, then what went to the Trash.
+function reclaimDayText(bytes, count, trashBytes, trashCount) {
+  const n = (v, one, many) => `${v} ${v === 1 ? one : many}`;
+  const lines = [`${fmtDisk(bytes)} freed by ${n(Number(count) || 0, 'cleanup', 'cleanups')}`];
+  if (Number(trashBytes) || Number(trashCount)) lines.push(`${fmtDisk(trashBytes)} moved to the Trash by ${n(Number(trashCount) || 0, 'cleanup', 'cleanups')}`);
+  return lines;
+}
+
+// reclaimChartHTML: one column per day of the daily series on one byte
+// axis: bytes freed at the base, bytes moved to the Trash stacked on top.
+// A day with cleanups is a button that opens the history at that day; its
+// numbers ride in data attributes for the tooltip and in its label.
+function reclaimChartHTML(daily, todayKey) {
+  if (!daily || !daily.length) return '';
+  const total = d => (Number(d.bytes) || 0) + (Number(d.trashed_bytes) || 0);
+  const top = niceBytesCeil(Math.max(...daily.map(total)));
+  const cols = daily.map(d => {
+    const sum = total(d);
+    const count = Number(d.count) || 0;
+    const trashCount = Number(d.trashed_count) || 0;
+    if (!sum && !count && !trashCount) return '<span class="rc-col" aria-hidden="true"></span>';
+    const freedPct = sum ? Math.round((Number(d.bytes) || 0) / sum * 100) : 0;
+    const label = `${fmtDayKey(d.day, todayKey)}: ${reclaimDayText(d.bytes, count, d.trashed_bytes, trashCount).join(', ')}`;
+    return `<button type="button" class="rc-col" data-action="reclaim-day" data-day="${escapeHTML(d.day)}"
+        data-freed="${Number(d.bytes) || 0}" data-count="${count}" data-trash="${Number(d.trashed_bytes) || 0}" data-trash-count="${trashCount}" aria-label="${escapeHTML(label)}">
+        <span class="rc-stack${sum ? ' rc-some' : ''}" data-h="${top ? Math.round(sum / top * 1000) / 10 : 0}">
+          ${d.trashed_bytes ? `<i class="rc-seg rc-seg-trash" data-h="${100 - freedPct}"></i>` : ''}
+          ${d.bytes ? `<i class="rc-seg rc-seg-freed" data-h="${freedPct}"></i>` : ''}
+        </span>
+      </button>`;
+  }).join('');
+  const mid = Math.floor(daily.length / 2);
+  const empty = top ? '' : `<span class="rc-empty">Nothing reclaimed in the last ${daily.length} days</span>`;
+  return `<div class="rc-chart-head">
+      <span class="rc-chart-title">Reclaimed per day</span>
+      <span class="rc-legend"><span class="rc-key rc-key-freed"></span>Freed<span class="rc-key rc-key-trash"></span>Moved to the Trash</span>
+    </div>
+    <div class="rc-chart" role="group" aria-label="Space reclaimed per day, last ${daily.length} days">
+      <div class="rc-yaxis" aria-hidden="true"><span>${escapeHTML(top ? fmtDisk(top) : '')}</span><span>${escapeHTML(top ? fmtDisk(top / 2) : '')}</span><span>0</span></div>
+      <div class="rc-plot">
+        <div class="rc-grid" aria-hidden="true"><i></i><i></i><i></i></div>
+        <div class="rc-cols">${cols}</div>
+        ${empty}
+      </div>
+      <div class="rc-xaxis" aria-hidden="true"><span>${escapeHTML(fmtDayKey(daily[0].day))}</span><span>${escapeHTML(fmtDayKey(daily[mid].day))}</span><span>${escapeHTML(fmtDayKey(daily[daily.length - 1].day, todayKey))}</span></div>
+    </div>`;
+}
+
+// History kinds: filter chips over the ledger's actions.
+const CLEANUP_KINDS = [['removed', 'Removed'], ['trash', 'Moved to Trash'], ['clean', 'Cleaned'], ['prune', 'Pruned'], ['ask', 'Agent answers']];
+
+function cleanupKind(action) {
+  const a = String(action || '');
+  if (a === 'worktree-remove') return 'removed';
+  if (a === 'worktree-prune') return 'prune';
+  if (a.startsWith('trash:')) return 'trash';
+  if (a.startsWith('clean:')) return 'clean';
+  if (a.startsWith('ask:')) return 'ask';
+  return 'other';
+}
+
+function cleanupEntryTitle(e) {
+  const a = String(e.action || '');
+  const rest = a.slice(a.indexOf(':') + 1);
+  switch (cleanupKind(a)) {
+    case 'removed': return 'Removed worktree';
+    case 'prune': return 'Pruned a missing worktree';
+    case 'trash': return rest === 'orphan-worktree' ? 'Moved an orphan folder to the Trash' : `Moved ${clutterKindLabel(rest)} to the Trash`;
+    case 'clean': return `Ran ${e.detail || rest + ' clean'}`;
+    case 'ask': return `Agent answered: ${rest}`;
+    default: return a;
+  }
+}
+
+// cleanupHistoryHTML: the ledger newest first, grouped by local day with
+// each day's bytes; filter.kind keeps one kind, filter.day one day.
+function cleanupHistoryHTML(ledger, filter, nowMs) {
+  const f = filter || {};
+  const all = (ledger && ledger.entries) || [];
+  const todayKey = localDayKey(new Date(nowMs || Date.now()));
+  const entries = all.filter(e => (!f.kind || cleanupKind(e.action) === f.kind) && (!f.day || localDayKey(e.ts) === f.day));
+  const trashed = e => cleanupKind(e.action) === 'trash';
+  const freed = entries.reduce((n, e) => n + (trashed(e) ? 0 : Number(e.bytes) || 0), 0);
+  const toTrash = entries.reduce((n, e) => n + (trashed(e) ? Number(e.bytes) || 0 : 0), 0);
+  const chip = (kind, label) => `<button type="button" class="wt-pill${(f.kind || '') === kind ? ' on' : ''}" data-action="history-kind" data-kind="${kind}" aria-pressed="${(f.kind || '') === kind}">${escapeHTML(label)}</button>`;
+  const chips = chip('', 'All') + CLEANUP_KINDS.map(([k, l]) => chip(k, l)).join('')
+    + (f.day ? `<button type="button" class="wt-pill on hx-day-chip" data-action="history-day" data-day="" aria-label="Show every day">${escapeHTML(fmtDayKey(f.day, todayKey, true))} ×</button>` : '');
+  const summary = `${entries.length} entr${entries.length === 1 ? 'y' : 'ies'} · ${fmtDisk(freed)} freed`
+    + (toTrash ? ` · ${fmtDisk(toTrash)} moved to the Trash` : '');
+  const days = [];
+  for (const e of entries) {
+    const key = localDayKey(e.ts);
+    if (!days.length || days[days.length - 1].key !== key) days.push({ key, entries: [], bytes: 0 });
+    const day = days[days.length - 1];
+    day.entries.push(e);
+    if (!trashed(e)) day.bytes += Number(e.bytes) || 0;
+  }
+  const entryHTML = e => {
+    const kind = cleanupKind(e.action);
+    const at = new Date(e.ts);
+    const repoName = e.repo ? String(e.repo).replace(/\/$/, '').split('/').pop() : '';
+    const where = e.repo ? `${worktreePathLabel(e.path, e.repo)} · ${repoName}` : String(e.path || '');
+    return `<li class="hx-entry hx-${kind}">
+        <div class="hx-main">
+          <span class="hx-title">${escapeHTML(cleanupEntryTitle(e))}</span>
+          <span class="hx-bytes">${e.bytes ? escapeHTML(fmtDisk(e.bytes)) : ''}</span>
+          <time class="hx-time" datetime="${escapeHTML(e.ts)}">${isFinite(at.getTime()) ? escapeHTML(fmtDayClock(at).split(' ').slice(1).join(' ')) : ''}</time>
+        </div>
+        <div class="hx-path" title="${escapeHTML(e.path)}">${escapeHTML(where)}</div>
+        ${e.detail && kind !== 'clean' ? `<p class="hx-detail">${escapeHTML(e.detail)}</p>` : ''}
+      </li>`;
+  };
+  const body = days.length
+    ? days.map(d => `<section class="hx-day">
+        <div class="hx-day-head"><span>${escapeHTML(fmtDayKey(d.key, todayKey, true))}</span><span class="hx-day-bytes">${d.bytes ? escapeHTML(fmtDisk(d.bytes)) + ' freed' : ''}</span></div>
+        <ul class="hx-list">${d.entries.map(entryHTML).join('')}</ul>
+      </section>`).join('')
+    : `<div class="empty"><svg class="icon"><use href="#i-history"/></svg><span>${all.length ? 'Nothing matches this filter.' : 'No cleanups yet. Removing a worktree or clearing clutter books it here.'}</span></div>`;
+  const capped = ledger && ledger.limit && all.length >= ledger.limit
+    ? `<p class="hx-note">Showing the newest ${all.length} entries.</p>` : '';
+  return `<div class="hx">
+      <div class="harness-pills hx-chips" role="group" aria-label="Filter the history">${chips}</div>
+      <p class="hx-summary">${escapeHTML(summary)}</p>
+      ${body}
+      ${capped}
+    </div>`;
+}
+
+// ---------- removal progress (toast) ----------
+// The share of a removal done when each phase begins; the delete itself
+// has no progress of its own.
+const REMOVAL_PHASE_DONE = { waiting: 0.05, checking: 0.15, measuring: 0.3, deleting: 0.5 };
+
+// fmtElapsed: "4s", "1m 12s".
+function fmtElapsed(ms) {
+  const s = Math.max(0, Math.floor((Number(ms) || 0) / 1000));
+  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s`;
+}
+
+// removalToastModel: the removals of one group as the toast shows them.
+// labels maps a path to its branch as the row showed it.
+function removalToastModel(paths, removals, labels) {
+  const items = (paths || []).map(p => {
+    const r = (removals || {})[p] || { path: p, state: 'running' };
+    return {
+      path: p, label: (labels || {})[p] || r.branch || String(p).split('/').filter(Boolean).pop() || String(p),
+      state: r.state || 'running', phase: r.phase || '', step: r.step || 'starting',
+      since: r.step_at || r.started_at || '', bytes: Number(r.bytes) || 0, files: Number(r.files) || 0,
+      error: r.error || '', rowState: r.row_state || '', reasons: r.reasons || [],
+    };
+  });
+  let removed = 0, failed = 0, bytes = 0, progress = 0;
+  for (const it of items) {
+    if (it.state === 'removed') { removed++; bytes += it.bytes; progress += 1; }
+    else if (it.state === 'failed') { failed++; progress += 1; }
+    else progress += REMOVAL_PHASE_DONE[it.phase] || 0;
+  }
+  const total = items.length;
+  return { items, total, removed, failed, running: total - removed - failed, bytes,
+    percent: total ? Math.round(progress / total * 100) : 0 };
+}
+
+// removalSizeText: "1.5 GB · 184,203 files" once measured.
+function removalSizeText(bytes, files) {
+  return [bytes ? fmtDisk(bytes) : '', files ? `${Number(files).toLocaleString('en-US')} files` : ''].filter(Boolean).join(' · ');
+}
+
+// removalToastHTML: the progress toast: a title, one bar for the group,
+// the running removals with their phase, size and time in it, and what
+// failed. Finished, it names what was reclaimed and links the history.
+function removalToastHTML(m) {
+  const done = m.running === 0;
+  const first = m.items[0] || {};
+  let title;
+  if (!done) title = m.total === 1 ? `Removing ${first.label}` : `Removing ${m.total} worktrees`;
+  else if (m.total === 1 && m.removed) title = `Removed ${first.label}`;
+  else if (m.total === 1) title = `Not removed: ${first.label}`;
+  else title = `Removed ${m.removed} of ${m.total} worktrees`;
+  // A single running removal's phase and size are its item line.
+  const sub = done
+    ? [m.bytes ? `${fmtDisk(m.bytes)} reclaimed` : '', m.failed && m.total > 1 ? `${m.failed} not removed` : ''].filter(Boolean).join(' · ')
+    : m.total === 1 ? ''
+      : [`${m.removed + m.failed} of ${m.total} done`, m.bytes ? `${fmtDisk(m.bytes)} reclaimed so far` : ''].filter(Boolean).join(' · ');
+  const shown = m.items.filter(it => it.state !== 'removed').sort((a, b) => (a.state === 'running' ? 0 : 1) - (b.state === 'running' ? 0 : 1));
+  const cap = 4;
+  const itemHTML = it => {
+    if (it.state === 'failed') {
+      const why = it.rowState ? `now ${it.rowState}${it.reasons.length ? ' — ' + it.reasons.join('; ') : ''}` : it.error;
+      return `<li class="rt-item rt-failed"><span class="rt-label">${escapeHTML(it.label)}</span><span class="rt-step">${escapeHTML(why || 'failed')}</span></li>`;
+    }
+    const size = removalSizeText(it.bytes, it.files);
+    return `<li class="rt-item rt-running rt-${escapeHTML(it.phase || 'starting')}">
+        <span class="rt-label">${escapeHTML(it.label)}</span>
+        <span class="rt-step">${escapeHTML(it.step)}${size ? ` · ${escapeHTML(size)}` : ''}</span>
+        <span class="rt-elapsed" data-since="${escapeHTML(it.since)}"></span>
+      </li>`;
+  };
+  const more = shown.length > cap ? `<li class="rt-more">and ${shown.length - cap} more</li>` : '';
+  const state = done ? (m.failed ? (m.removed ? 'partial' : 'failed') : 'done') : 'running';
+  return `<div class="rt-head">
+      <p class="rt-title" role="status">${escapeHTML(title)}</p>
+      <button type="button" class="btn btn-icon rt-close" data-action="removal-toast-close" title="${done ? 'Close' : 'Hide — the rows keep the progress'}" aria-label="Close"><svg class="icon"><use href="#i-close"/></svg></button>
+    </div>
+    ${sub ? `<p class="rt-sub">${escapeHTML(sub)}</p>` : ''}
+    <span class="rt-bar rt-bar-${state}" role="progressbar" aria-label="Removal progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${m.percent}"><i data-w="${m.percent}"></i></span>
+    ${shown.length ? `<ul class="rt-items">${shown.slice(0, cap).map(itemHTML).join('')}${more}</ul>` : ''}
+    ${done ? '<button type="button" class="link-btn rt-history" data-action="worktrees-history">View cleanup history</button>' : ''}`;
 }
 
 // worktreeSizeLabel: a row's measured size; a walk that hit its bound reads
@@ -107,12 +402,16 @@ function worktreeAskHTML(ask) {
   return `<p class="wt-ask wt-ask-${escapeHTML(ask.status)}"><b>Asked ${escapeHTML(ask.harness)}:</b> ${escapeHTML(text)}</p>`;
 }
 
-// worktreeRemovalHTML: a removal's step while it runs, or why it did not
+// worktreeRemovalHTML: a removal's step while it runs (with the size being
+// deleted once measured and a mark per phase passed), or why it did not
 // remove the worktree.
 function worktreeRemovalHTML(rm) {
   if (!rm || rm.state === 'removed') return '';
   if (rm.state === 'running') {
-    return `<p class="wt-removal wt-removal-running" role="status"><b>Removing…</b> ${escapeHTML(rm.step || 'starting')}</p>`;
+    const at = Object.keys(REMOVAL_PHASE_DONE).indexOf(rm.phase);
+    const marks = Object.keys(REMOVAL_PHASE_DONE).map((p, i) => `<i class="${i <= at ? 'on' : ''}"></i>`).join('');
+    const size = removalSizeText(rm.bytes, rm.files);
+    return `<p class="wt-removal wt-removal-running" role="status"><span class="wt-steps" aria-hidden="true">${marks}</span><b>Removing…</b> ${escapeHTML(rm.step || 'starting')}${size ? ` · ${escapeHTML(size)}` : ''}</p>`;
   }
   const text = rm.row_state
     ? `<b>Not removed:</b> it is now ${escapeHTML(rm.row_state)}${(rm.reasons || []).length ? ' — ' + escapeHTML(rm.reasons.join('; ')) : ''}`
@@ -145,14 +444,18 @@ function worktreeRowHTML(w, repo, note, ask, removal) {
     action = `<button type="button" class="btn btn-sm" data-action="worktree-ask" data-path="${escapeHTML(w.path)}"${busy}>Ask the agent</button>`
       + `<button type="button" class="btn btn-sm" data-action="worktree-advise" data-path="${escapeHTML(w.path)}">Ask advisor</button>`;
   }
+  // Every folder still on disk opens in Finder; orphans carry Open folder
+  // in their actions already.
+  const open = w.orphan || w.state === 'prune' ? ''
+    : `<button type="button" class="btn btn-ghost btn-sm wt-open" data-action="worktree-reveal" data-path="${escapeHTML(w.path)}" title="Show in Finder" aria-label="Show ${escapeHTML(branch || w.path)} in Finder"><svg class="icon"><use href="#i-folder"/></svg></button>`;
   return `<div class="wt-row wt-${escapeHTML(w.state)}" data-path="${escapeHTML(w.path)}">
     <div class="wt-main">
       <span class="wt-state">${escapeHTML(w.state)}</span>${w.stale ? '<span class="wt-stale">stale</span>' : ''}
       <span class="wt-branch">${escapeHTML(branch)}</span>
-      <span class="wt-path" title="${escapeHTML(w.path)}">${escapeHTML(worktreePathLabel(w.path, repo.path))}</span>
+      <button type="button" class="wt-path" data-action="copy-path" data-path="${escapeHTML(w.path)}" title="${escapeHTML(w.path)} — click to copy">${escapeHTML(worktreePathLabel(w.path, repo.path))}</button>
       <span class="wt-size">${escapeHTML(worktreeSizeLabel(w))}</span>
       <span class="wt-idle">${escapeHTML(worktreeIdleLabel(w))}</span>
-      ${action}
+      ${open}${action}
     </div>
     ${reasons ? `<ul class="wt-reasons">${reasons}</ul>` : ''}
     ${worktreeNoteHTML(note)}
@@ -166,27 +469,6 @@ function worktreeRowHTML(w, repo, note, ask, removal) {
 function removableRows(repo, removals) {
   return ((repo && repo.worktrees) || []).filter(w => w.state === 'remove' && !w.orphan
     && !((removals || {})[w.path] && removals[w.path].state === 'running'));
-}
-
-// removalBatchSummary: one line for a batch once none of its removals
-// runs; '' while one still does.
-function removalBatchSummary(paths, removals) {
-  let removed = 0;
-  let bytes = 0;
-  let failed = 0;
-  for (const p of paths) {
-    const r = (removals || {})[p];
-    if (!r || r.state === 'running') return '';
-    if (r.state === 'removed') {
-      removed++;
-      bytes += Number(r.bytes) || 0;
-    } else {
-      failed++;
-    }
-  }
-  let text = `Removed ${removed} of ${paths.length} worktrees` + (bytes ? ` — ${fmtDisk(bytes)} reclaimed` : '');
-  if (failed) text += `; ${failed} not removed, see ${failed === 1 ? 'its row' : 'their rows'}`;
-  return text;
 }
 
 // worktreeGroupHTML: one repository block with its rows and a Hide button.
@@ -244,9 +526,18 @@ function renderWorktrees() {
   const summary = document.getElementById('worktrees-summary');
   const disk = document.getElementById('worktrees-disk');
   const errors = document.getElementById('worktrees-errors');
+  const reclaim = document.getElementById('worktrees-reclaim');
   if (!container) return;
   const state = SA.worktrees;
   const rep = state.report;
+  if (reclaim) {
+    const ledger = state.ledger;
+    reclaim.innerHTML = rep || ledger
+      ? `<div class="rc-tiles">${reclaimTilesHTML(rep, ledger)}</div>${ledger ? reclaimChartHTML(ledger.daily, localDayKey(new Date())) : ''}`
+      : '';
+    reclaim.classList.toggle('rc-reloading', !!state.ledgerLoading && !!ledger);
+    applyInlineMetrics(reclaim);
+  }
 
   if (!rep) {
     container.innerHTML = state.loading

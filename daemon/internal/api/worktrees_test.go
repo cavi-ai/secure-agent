@@ -275,6 +275,19 @@ func TestWorktreeRemoveEndpoint(t *testing.T) {
 		ledger.Totals.Count != 2 || ledger.Totals.Bytes != ledger.Entries[1].Bytes {
 		t.Fatalf("ledger: %d %s", rec.Code, rec.Body.String())
 	}
+	if strings.Contains(rec.Body.String(), `"daily"`) {
+		t.Fatalf("ledger without ?days carries a daily series: %s", rec.Body.String())
+	}
+	// ?days adds the daily series ending today; today holds the removal.
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/cleanup/ledger?days=7", nil))
+	var daily struct {
+		Daily []model.CleanupDay `json:"daily"`
+	}
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &daily) != nil || len(daily.Daily) != 7 ||
+		daily.Daily[6].Day != time.Now().Format(time.DateOnly) || daily.Daily[6].Bytes != ledger.Totals.Bytes || daily.Daily[6].Count != ledger.Totals.Count {
+		t.Fatalf("ledger daily: %d %s", rec.Code, rec.Body.String())
+	}
 	rec = httptest.NewRecorder()
 	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/worktrees", nil))
 	var rep worktreehunter.ScanReport
