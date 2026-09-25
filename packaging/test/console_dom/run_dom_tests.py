@@ -231,6 +231,7 @@ def main():
         dom_wt = dump_dom(chrome, tmp, "?tab=worktrees")
         dom_wtremove = dump_dom(chrome, tmp, "?tab=worktrees&worktreedemo")
         dom_wtorphan = dump_dom(chrome, tmp, "?tab=worktrees&orphandemo")
+        dom_wtbatch = dump_dom(chrome, tmp, "?tab=worktrees&batchdemo")
         dom_wtorphantrash = dump_dom(chrome, tmp, "?tab=worktrees&orphandemo&orphantrash")
         dom_wtremoving = dump_dom(chrome, tmp, "?tab=worktrees&worktreedemo&removerunning")
         dom_wtremovefail = dump_dom(chrome, tmp, "?tab=worktrees&worktreedemo&removefaildemo")
@@ -1339,6 +1340,12 @@ def main():
               and "<b>Reclaimed</b> 4.5 GB over 4 cleanups" in dom_wtremove and "<b>Removable</b> 0 B" in dom_wtremove
               and "wt-removal" not in wtr,
               f"requests={wt_reqs!r} rows={wtr_rows}")
+        wtb = wt_block(dom_wtbatch)
+        batch_posts = pre(dom_wtbatch, "mock-requests").count("POST /worktrees/remove")
+        check("worktrees: Remove all removes every removable row of the repository after one dialog",
+              batch_posts == 3 and "old-a" not in wtb and "old-b" not in wtb and ".worktrees/done" not in wtb
+              and "worktree-remove-all" not in wtb,
+              f"posts={batch_posts}")
         wto = wt_block(dom_wtorphan)
         check("worktrees: a missing repository's folders are listed first with the reason and Open folder / Move to Trash",
               wto.index('/Users/dev/gone-app') < wto.index('/Users/dev/workspace/api-service')
