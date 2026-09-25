@@ -607,7 +607,11 @@ func TestGroupAgentTreesOneRowPerRootHelpersFolded(t *testing.T) {
 }
 
 func TestStatusJSONIncludesTrees(t *testing.T) {
-	a := newTestAPI("", testStore(t), &fakeKiller{}, func() Status {
+	db := testStore(t)
+	now := time.Now()
+	db.UpsertSession(model.Session{ID: "s-origin", Harness: "claude", RootPID: 10, Repo: "demo-app", Branch: "main",
+		Origin: "quill (openclaw)", StartedAt: now, LastSeenAt: now, Status: model.SessionActive, Confidence: model.ConfProcessTree})
+	a := newTestAPI("", db, &fakeKiller{}, func() Status {
 		return Status{Running: true, Agents: []AgentSummary{
 			{PID: 10, Name: "claude", RootPID: 10, CPUPercent: 60},
 			{PID: 11, Name: "claude", RootPID: 10, CPUPercent: 15},
@@ -627,6 +631,13 @@ func TestStatusJSONIncludesTrees(t *testing.T) {
 	}
 	if st.Agents[0].CPUPercent != 60 || st.Trees[0].CPUPercent != 75 {
 		t.Fatalf("CPU serialization/aggregation failed: agents=%+v trees=%+v", st.Agents, st.Trees)
+	}
+	// The root joins its session by root pid, the spawning agent included.
+	if r := st.Trees[0].Root; r.SessionID != "s-origin" || r.Repo != "demo-app" || r.Origin != "quill (openclaw)" {
+		t.Fatalf("tree root join = %+v, want session s-origin, repo demo-app, origin quill (openclaw)", r)
+	}
+	if !strings.Contains(rr.Body.String(), `"origin":"quill (openclaw)"`) {
+		t.Fatalf("/status body carries no root origin: %s", rr.Body.String())
 	}
 }
 
@@ -831,4 +842,57 @@ func TestSessionTimelineEndpoint(t *testing.T) {
 		t.Fatalf("GET /sessions/s1 without subpath: %d, want 404", resp2.StatusCode)
 	}
 	resp2.Body.Close()
+}
+
+// A session's origin round-trips through /sessions, the session report and
+// /snapshot; a session without one serves none.
+func TestSessionOriginServed(t *testing.T) {
+	st := testStore(t)
+	now := time.Now()
+	st.UpsertSession(model.Session{ID: "oc", Harness: "codex", Origin: "quill (openclaw)",
+		StartedAt: now, LastSeenAt: now, Status: model.SessionActive, Confidence: model.ConfTranscript})
+	st.UpsertSession(model.Session{ID: "own", Harness: "codex",
+		StartedAt: now.Add(-time.Minute), LastSeenAt: now.Add(-time.Minute), Status: model.SessionActive, Confidence: model.ConfTranscript})
+	a := newTestAPI("", st, &fakeKiller{}, func() Status { return Status{Running: true} })
+	get := func(path string, into any) string {
+		t.Helper()
+		rr := httptest.NewRecorder()
+		a.buildMux().ServeHTTP(rr, httptest.NewRequest("GET", path, nil))
+		if rr.Code != 200 {
+			t.Fatalf("GET %s code=%d", path, rr.Code)
+		}
+		if err := json.Unmarshal(rr.Body.Bytes(), into); err != nil {
+			t.Fatalf("GET %s: %v", path, err)
+		}
+		return rr.Body.String()
+	}
+	origins := func(l []model.Session) map[string]string {
+		m := map[string]string{}
+		for _, s := range l {
+			m[s.ID] = s.Origin
+		}
+		return m
+	}
+	var list []model.Session
+	body := get("/sessions", &list)
+	if o := origins(list); o["oc"] != "quill (openclaw)" || o["own"] != "" {
+		t.Fatalf("/sessions origins = %v", o)
+	}
+	if strings.Count(body, `"origin"`) != 1 {
+		t.Fatalf("/sessions: want origin on exactly one row (omitempty), body has %d", strings.Count(body, `"origin"`))
+	}
+	var rep struct {
+		Session model.Session `json:"session"`
+	}
+	get("/sessions/oc/report?format=json", &rep)
+	if rep.Session.Origin != "quill (openclaw)" {
+		t.Fatalf("report session origin = %q", rep.Session.Origin)
+	}
+	var snap struct {
+		Sessions []model.Session `json:"sessions"`
+	}
+	get("/snapshot", &snap)
+	if o := origins(snap.Sessions); o["oc"] != "quill (openclaw)" || o["own"] != "" {
+		t.Fatalf("/snapshot origins = %v", o)
+	}
 }

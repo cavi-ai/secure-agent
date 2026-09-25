@@ -502,3 +502,55 @@ func TestTranscriptHitRecordsLineOffset(t *testing.T) {
 		t.Fatalf("plain-scan hit offset: got %+v, want one hit at %d", hits, len(first)+1)
 	}
 }
+
+// A Codex rollout under an openclaw agent's Codex home notes that agent as
+// the session's origin; one under the user's own ~/.codex notes none.
+func TestCodexSessionSeenCarriesOrigin(t *testing.T) {
+	root := t.TempDir()
+	agent := filepath.Join(root, ".openclaw", "agents", "x", "agent", "codex-home", "sessions", "2026", "09", "22")
+	own := filepath.Join(root, ".codex", "sessions", "2026", "09", "22")
+	for _, d := range []string{agent, own} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	b := bus.New(64)
+	sub := b.Subscribe()
+	ts := NewTranscriptScanner(b, nil)
+	var origins []string
+	ts.OnCodexSessionSeen = func(id, _, origin string, _ time.Time) {
+		if id == "" {
+			t.Errorf("empty session id")
+		}
+		origins = append(origins, origin)
+	}
+	offsets := map[string]int64{}
+
+	appendAndTail(t, ts, sub, offsets, filepath.Join(agent, "rollout-2026-09-22T10-00-00-a.jsonl"), codexMetaLine)
+	if len(origins) == 0 || origins[len(origins)-1] != "x (openclaw)" {
+		t.Fatalf("openclaw agent rollout origins = %q, want x (openclaw)", origins)
+	}
+	origins = nil
+	appendAndTail(t, ts, sub, offsets, filepath.Join(own, "rollout-2026-09-22T10-00-00-b.jsonl"), codexMetaLine)
+	if len(origins) == 0 {
+		t.Fatal("own codex rollout: session not noted")
+	}
+	for _, o := range origins {
+		if o != "" {
+			t.Fatalf("own codex rollout origin = %q, want none", o)
+		}
+	}
+}
+
+func TestCodexOrigin(t *testing.T) {
+	for path, want := range map[string]string{
+		"/Volumes/M/.openclaw/agents/quill/agent/codex-home/sessions/2026/09/24/rollout-a.jsonl": "quill (openclaw)",
+		"/Users/u/.codex/sessions/2026/09/24/rollout-a.jsonl":                                      "",
+		"/Users/u/custom-home/sessions/2026/09/24/rollout-a.jsonl":                                 "",
+		"/Users/u/rollout-a.jsonl": "",
+	} {
+		if got := CodexOrigin(path); got != want {
+			t.Errorf("CodexOrigin(%q) = %q, want %q", path, got, want)
+		}
+	}
+}

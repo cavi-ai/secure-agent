@@ -17,7 +17,11 @@ type Session struct {
 	RootPID       int32  `json:"root_pid,omitempty"`
 	RootStartedAt string `json:"root_started_at,omitempty"`
 	// ParentID nests subagent sessions under their spawning session.
-	ParentID   string     `json:"parent_id,omitempty"`
+	ParentID string `json:"parent_id,omitempty"`
+	// Origin names who spawned the session when it is not the user's own
+	// harness: "<agent> (openclaw)" for a Codex rollout under an openclaw
+	// agent's Codex home; empty otherwise.
+	Origin     string     `json:"origin,omitempty"`
 	StartedAt  time.Time  `json:"started_at"`
 	EndedAt    *time.Time `json:"ended_at,omitempty"`
 	LastSeenAt time.Time  `json:"last_seen_at"`

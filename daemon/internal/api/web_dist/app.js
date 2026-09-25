@@ -1290,6 +1290,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const sessionHelpOpen = {};
   const endedSessionsOpen = {}; // harness key → ended tail expanded
+  const sessionDupOpen = {}; // '<live|ended>|<folded rail row key>' → expanded
+  const familyDupOpen = {}; // folded Resources family row key → expanded
   const agentGroupOpen = {};
   const agentTreeOpen = {}; // instance root pid → helper disclosure open
   // cappedList keys the operator expanded ("events", "agents:<harness>",
@@ -1765,6 +1767,8 @@ document.addEventListener('DOMContentLoaded', () => {
     t: telemetryData,
     sessionHelpOpen,
     endedSessionsOpen,
+    sessionDupOpen,
+    familyDupOpen,
     agentGroupOpen,
     agentTreeOpen,
     expanded: expandedLists,
@@ -3064,6 +3068,14 @@ document.addEventListener('DOMContentLoaded', () => {
       case 'toggle-ended-sessions':
         endedSessionsOpen[d.harness] = !endedSessionsOpen[d.harness];
         renderSessionBoard();
+        break;
+      case 'toggle-session-dup':
+        sessionDupOpen[(d.bucket ? d.bucket + '|' : '') + d.key] = el.getAttribute('aria-expanded') !== 'true';
+        renderSessionBoard();
+        break;
+      case 'toggle-family-dup':
+        familyDupOpen[d.key] = el.getAttribute('aria-expanded') !== 'true';
+        renderResourceMissionControl();
         break;
       case 'toggle-harness':
         if (harnessFilter.harnesses[d.harness] === false) delete harnessFilter.harnesses[d.harness];

@@ -80,6 +80,10 @@ type TranscriptScanner struct {
 	// harness+workspace.
 	OnSessionSeen func(sessionID, harness, workspace string, at time.Time)
 
+	// OnCodexSessionSeen, when set, reports a Codex rollout's session with
+	// its workspace and CodexOrigin (who spawned it; "" for the user's own).
+	OnCodexSessionSeen func(sessionID, workspace, origin string, at time.Time)
+
 	// TextScanner, when set, scans every tailed line for known and typed
 	// secrets. Nil falls back to the redact package's patterns.
 	TextScanner TextScanner
@@ -645,8 +649,8 @@ func (ts *TranscriptScanner) tailFile(p string, offsets map[string]int64, dirty 
 						if sid != "" {
 							ts.noteRolloutSession(p, sid)
 						}
-						if sid != "" && ts.OnSessionSeen != nil {
-							ts.OnSessionSeen(sid, "codex", cwd, time.Now())
+						if sid != "" && ts.OnCodexSessionSeen != nil {
+							ts.OnCodexSessionSeen(sid, cwd, CodexOrigin(p), time.Now())
 						}
 						for _, e := range evs {
 							ts.bus.Publish(e)

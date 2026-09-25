@@ -459,3 +459,78 @@ func TestUpsertSessionKeepsParent(t *testing.T) {
 		t.Fatalf("parent = %q after an empty upsert, want orch-2 kept", got.ParentID)
 	}
 }
+
+// Origin is set on first sight and survives an upsert without one; every
+// session read (by id, list, root pid) carries it.
+func TestUpsertSessionKeepsOrigin(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), "e.db"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	now := time.Now()
+	st.UpsertSession(model.Session{ID: "s1", Harness: "codex", RootPID: 42, Origin: "quill (openclaw)", StartedAt: now, LastSeenAt: now})
+	st.UpsertSession(model.Session{ID: "s1", Harness: "codex", StartedAt: now, LastSeenAt: now})
+	if got, _ := st.GetSession("s1"); got.Origin != "quill (openclaw)" {
+		t.Fatalf("origin = %q after an empty upsert, want quill (openclaw) kept", got.Origin)
+	}
+	if l := st.ListSessions(SessionFilter{}); len(l) != 1 || l[0].Origin != "quill (openclaw)" {
+		t.Fatalf("ListSessions origin: %+v", l)
+	}
+	if m := st.SessionsByRootPID(); m[42].Origin != "quill (openclaw)" {
+		t.Fatalf("SessionsByRootPID origin: %+v", m[42])
+	}
+	st.UpsertSession(model.Session{ID: "s2", Harness: "codex", StartedAt: now, LastSeenAt: now})
+	if got, _ := st.GetSession("s2"); got.Origin != "" {
+		t.Fatalf("origin = %q for a session never given one", got.Origin)
+	}
+}
+
+// A rekey that merges into an existing row keeps the old row's origin when
+// the surviving row has none.
+func TestRekeySessionKeepsOrigin(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), "e.db"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	now := time.Now()
+	st.UpsertSession(model.Session{ID: "old", Harness: "codex", Origin: "fennel (openclaw)", StartedAt: now, LastSeenAt: now})
+	st.UpsertSession(model.Session{ID: "new", Harness: "codex", StartedAt: now, LastSeenAt: now})
+	st.RekeySession("old", "new")
+	if got, _ := st.GetSession("new"); got.Origin != "fennel (openclaw)" {
+		t.Fatalf("merged origin = %q, want fennel (openclaw)", got.Origin)
+	}
+}
+
+// A sessions table from before origin opens, reads its rows with an empty
+// origin, and stores one afterwards.
+func TestOpenMigratesSessionsOrigin(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "old.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE sessions (id TEXT PRIMARY KEY, harness TEXT, workspace TEXT, repo TEXT, branch TEXT,
+		root_pid INTEGER, root_started_at TEXT, parent_id TEXT, started_at TEXT, ended_at TEXT, last_seen_at TEXT, status TEXT, confidence TEXT)`); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := db.Exec(`INSERT INTO sessions VALUES ('pre', 'codex', '', '', '', 0, '', '', ?, NULL, ?, 'active', 'transcript')`, now, now); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+
+	st, err := Open(path, "")
+	if err != nil {
+		t.Fatalf("Open on a pre-origin DB failed: %v", err)
+	}
+	defer st.Close()
+	if got, ok := st.GetSession("pre"); !ok || got.Origin != "" {
+		t.Fatalf("pre-origin row: ok=%v origin=%q", ok, got.Origin)
+	}
+	st.UpsertSession(model.Session{ID: "pre", Origin: "x (openclaw)", StartedAt: time.Now(), LastSeenAt: time.Now()})
+	if got, _ := st.GetSession("pre"); got.Origin != "x (openclaw)" {
+		t.Fatalf("origin after migration = %q", got.Origin)
+	}
+}

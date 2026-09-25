@@ -442,11 +442,13 @@ func (r *Resolver) NoteTranscriptSession(id, harness, workspace string, ts time.
 type TranscriptSighting struct {
 	ID, Harness, Workspace string
 	Repo, Branch, ParentID string
-	TS                     time.Time
+	// Origin names who spawned the conversation (model.Session.Origin).
+	Origin string
+	TS     time.Time
 }
 
 // NoteTranscriptSighting is NoteTranscriptSession with the harness's own
-// repo, branch and parent.
+// repo, branch, parent and origin.
 func (r *Resolver) NoteTranscriptSighting(s TranscriptSighting) {
 	id, harness, workspace, ts := s.ID, s.Harness, s.Workspace, s.TS
 	if id == "" {
@@ -476,7 +478,7 @@ func (r *Resolver) NoteTranscriptSighting(s TranscriptSighting) {
 	}
 	r.st.UpsertSession(model.Session{
 		ID: id, Harness: harness, Workspace: workspace,
-		Repo: repo, Branch: branch, ParentID: s.ParentID,
+		Repo: repo, Branch: branch, ParentID: s.ParentID, Origin: s.Origin,
 		StartedAt: ts, LastSeenAt: ts,
 		Status: model.SessionActive, Confidence: model.ConfTranscript,
 	})

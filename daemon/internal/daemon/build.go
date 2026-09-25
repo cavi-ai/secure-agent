@@ -785,6 +785,11 @@ func startCollectors(ctx context.Context, sup *supervise.Supervisor, supReg *sup
 			})
 		}
 		ts.OnSessionSeen = resolver.NoteTranscriptSession
+		ts.OnCodexSessionSeen = func(id, workspace, origin string, at time.Time) {
+			resolver.NoteTranscriptSighting(session.TranscriptSighting{
+				ID: id, Harness: "codex", Workspace: workspace, Origin: origin, TS: at,
+			})
+		}
 		// A codex process holds its rollout open: the open-file probe joins
 		// the rollout's session to that process's tree.
 		joiner := &collect.RolloutJoiner{

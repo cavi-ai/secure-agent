@@ -397,7 +397,7 @@ struct ConsoleView: View {
             AgentIdentity.tile(agent.name, size: 18, fontSize: 9)
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 5) {
-                    Text(agent.cwdLeaf)
+                    Text(agent.cardTitle)
                         .font(.system(size: 12, weight: .semibold))
                         .lineLimit(1).truncationMode(.middle)
                     HeartbeatDot(active: working)

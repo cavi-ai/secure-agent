@@ -186,6 +186,9 @@ public struct AgentSummaryModel: Codable, Identifiable, Sendable {
     public let workspace: String?
     public let repo: String?
     public let branch: String?
+    /// The agent that spawned the session ("quill (openclaw)"); nil for
+    /// the user's own sessions and older daemons.
+    public let origin: String?
 
     enum CodingKeys: String, CodingKey {
         case pid
@@ -204,12 +207,13 @@ public struct AgentSummaryModel: Codable, Identifiable, Sendable {
         case workspace
         case repo
         case branch
+        case origin
     }
 
     public init(pid: Int32, name: String, kind: String? = nil, exePath: String? = nil, cwd: String? = nil, rootPid: Int32? = nil,
                 ppid: Int32? = nil, startedAt: String? = nil, lastSeenAt: String? = nil, rssBytes: UInt64? = nil,
                 isOrphan: Bool? = nil, cpuPercent: Double? = nil, sessionID: String? = nil,
-                workspace: String? = nil, repo: String? = nil, branch: String? = nil) {
+                workspace: String? = nil, repo: String? = nil, branch: String? = nil, origin: String? = nil) {
         self.pid = pid
         self.name = name
         self.kind = kind
@@ -226,6 +230,22 @@ public struct AgentSummaryModel: Codable, Identifiable, Sendable {
         self.workspace = workspace
         self.repo = repo
         self.branch = branch
+        self.origin = origin
+    }
+
+    /// The spawning agent's name ("quill (openclaw)" → "quill"); "" for
+    /// the user's own sessions.
+    public var originAgent: String {
+        guard let origin, !origin.isEmpty else { return "" }
+        let suffix = " (openclaw)"
+        return origin.hasSuffix(suffix) ? String(origin.dropLast(suffix.count)) : origin
+    }
+
+    /// Session-card title: cwdLeaf, then " · <agent>" when an agent spawned
+    /// the session (the console's sessionTitle rule).
+    public var cardTitle: String {
+        let agent = originAgent
+        return agent.isEmpty ? cwdLeaf : "\(cwdLeaf) · \(agent)"
     }
 
     /// Glance label: the project folder, falling back to the harness name.

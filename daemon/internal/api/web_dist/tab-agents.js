@@ -31,14 +31,17 @@ function renderAgents() {
   const infra = shown.filter(g => g.infra);
   // Group and helper-tree open state is recorded by one capture-phase toggle
   // listener on the container (app.js); patchList keeps unchanged groups.
+  // /status joins session identity (repo, branch, the spawning agent) onto
+  // tree roots only; a row reads it from the root of its own tree.
+  const roots = new Map(((SA.t.status && SA.t.status.trees) || []).filter(t => t && t.root).map(t => [Number(t.root.pid), t.root]));
   const isOpen = (key, dflt) => (Object.prototype.hasOwnProperty.call(SA.agentGroupOpen, key) ? !!SA.agentGroupOpen[key] : dflt);
   const parts = visible.length
-    ? visible.map(g => ({ key: 'group:' + g.key, html: agentGroupHTML(g, now, isOpen(g.key, true), SA.agentTreeOpen, SA.expanded) }))
+    ? visible.map(g => ({ key: 'group:' + g.key, html: agentGroupHTML(g, now, isOpen(g.key, true), SA.agentTreeOpen, SA.expanded, roots) }))
     : agentGroups.length
       ? [{ key: 'empty:nomatch', html: `<div class="empty"><svg class="icon"><use href="#i-agent"/></svg><span>No agents match — <button type="button" class="link-btn" data-action="clear-harness-filter">clear the filter</button></span></div>` }]
       : [{ key: 'empty:infra-only', html: `<div class="empty"><svg class="icon"><use href="#i-agent"/></svg><span>No agents running — only infrastructure below</span></div>` }];
   if (infra.length) {
-    parts.push({ key: 'infra', html: `<section class="agent-infra" aria-label="Infrastructure"><h3 class="agent-infra-head">Infrastructure <span>IDEs and model servers — not counted as agents</span></h3>${infra.map(g => agentGroupHTML(g, now, isOpen(g.key, false), SA.agentTreeOpen, SA.expanded)).join('')}</section>` });
+    parts.push({ key: 'infra', html: `<section class="agent-infra" aria-label="Infrastructure"><h3 class="agent-infra-head">Infrastructure <span>IDEs and model servers — not counted as agents</span></h3>${infra.map(g => agentGroupHTML(g, now, isOpen(g.key, false), SA.agentTreeOpen, SA.expanded, roots)).join('')}</section>` });
   }
   patchList(container, parts, { key: p => p.key, html: p => p.html });
 }
@@ -46,7 +49,7 @@ function renderAgents() {
 // One harness group: mark + display name, then instances, processes, RSS,
 // CPU and last seen over the instances shown; leftovers get a bulk kill. The
 // first 8 instances list, then Show more (expanded holds opened groups).
-function agentGroupHTML(g, now, open, treeOpen, expanded) {
+function agentGroupHTML(g, now, open, treeOpen, expanded, roots) {
   const t = agentGroupTotals(g);
   const rss = fmtRSS(t.rss);
   const cpu = fmtCPU(t.cpu);
@@ -68,17 +71,19 @@ function agentGroupHTML(g, now, open, treeOpen, expanded) {
         </span>
       </summary>
       <div class="agent-instances">
-        ${cappedList(g.instances, 8, inst => agentInstanceHTML(inst, now, treeOpen), 'agents:' + g.key, expanded).html}
+        ${cappedList(g.instances, 8, inst => agentInstanceHTML(inst, now, treeOpen, roots), 'agents:' + g.key, expanded).html}
       </div>
     </details>`;
 }
 
 // One instance: what it works on (repo@branch, else its folder) with the pid
 // beside it, leftover badge, activity, RSS of its tree, kill; helper
-// processes sit behind a disclosure.
-function agentInstanceHTML(inst, now, treeOpen) {
+// processes sit behind a disclosure. roots maps a pid to its /status tree
+// root, which carries the session join (" · <agent>" via sessionTitle).
+function agentInstanceHTML(inst, now, treeOpen, roots) {
   const a = inst.root;
-  const title = sessionTitle(a, a.cwd) || harnessMeta(a.name).label;
+  const joined = roots && roots.get(Number(a.pid));
+  const title = sessionTitle(joined ? { ...a, ...joined } : a, a.cwd) || harnessMeta(a.name).label;
   const seenAge = a.last_seen_at ? fmtAge(a.last_seen_at, now) : '';
   const stale = a.last_seen_at ? (now - Date.parse(a.last_seen_at)) > 10 * 60 * 1000 : true;
   const rss = fmtRSS([a, ...inst.children].reduce((n, p) => n + Number(p.rss_bytes || 0), 0));

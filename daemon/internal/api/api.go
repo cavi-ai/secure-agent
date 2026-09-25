@@ -74,6 +74,9 @@ type AgentSummary struct {
 	Workspace string `json:"workspace,omitempty"`
 	Repo      string `json:"repo,omitempty"`
 	Branch    string `json:"branch,omitempty"`
+	// Origin names the agent that spawned the session ("quill (openclaw)");
+	// empty for the user's own sessions.
+	Origin string `json:"origin,omitempty"`
 }
 
 type Status struct {
@@ -846,6 +849,9 @@ func (a *API) currentStatus() Status {
 				}
 				if root.Branch == "" {
 					root.Branch = sess.Branch
+				}
+				if root.Origin == "" {
+					root.Origin = sess.Origin
 				}
 			}
 		}

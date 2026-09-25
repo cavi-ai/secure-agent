@@ -10,6 +10,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Console: shows the posture banner capped at 3 rows off Home and empty on Home, agent ids in their own case, Egress led by the uninspected endpoints with zero-hit rules folded into one row, and Processes at full width.
 
 ### Added
+- Sessions carry `origin`, the openclaw agent behind a Codex session, named in console titles and "×N" folded rows.
 - `GET /costs/plans` serves each Codex home's plan headroom, shown as a line and bar per plan on the console Spend card.
 - Codex calls on a ChatGPT plan (provider `chatgpt`) and Hermes `openai-codex` calls count as plan calls, not unpriced.
 - Events rows name every trace kind (TOOL, TURN, MODEL), key tool calls by session and call id and turns/model calls by session, timestamp, model and tokens so same-timestamp rows never collide, sort newest first with the date shown when not from today, and carry `price_class`; a Hermes or openclaw database resumes from its saved watermark, zero included, instead of restarting at the last 24 h.
