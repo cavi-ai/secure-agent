@@ -42,12 +42,22 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificat
         DaemonSupervisor.shared.stop()
     }
 
+    /// The console's `--brand` purple (style.css): hsl(248 92% 70%) on a dark
+    /// menu bar, hsl(248 62% 52%) on a light one. Tints the template symbol
+    /// and the agent count, so every icon state stays readable in both.
+    static let statusTint = NSColor(name: "SecureAgentBrand") { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(srgbRed: 0.498, green: 0.424, blue: 0.976, alpha: 1)
+            : NSColor(srgbRed: 0.302, green: 0.222, blue: 0.818, alpha: 1)
+    }
+
     private func setupStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = statusItem.button {
             let img = NSImage(systemSymbolName: "shield", accessibilityDescription: "Secure Agent")
             img?.isTemplate = true
             button.image = img
+            button.contentTintColor = Self.statusTint
             button.title = ""
             button.target = self
             button.action = #selector(statusItemClicked)

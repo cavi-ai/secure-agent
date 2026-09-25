@@ -7,6 +7,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 ## [Unreleased]
 
 ### Changed
+- Menu bar icon and agent count are drawn in the console's brand purple, a lighter shade on a dark menu bar.
 - Idle daemon: opencode, openclaw and Hermes polls skip an unchanged database, `/costs` and `/costs/unpriced` reuse a report for 30 s, and transcript discovery re-lists only directories whose mtime moved.
 - `make install` waits up to 90 s for the restarted daemon to answer `/status` before reporting file telemetry, and says "unknown" instead of asking for approvals when it gets no answer.
 - `make install`/`make app`/`make dmg` sign with the first Apple Development identity when one exists (else Developer ID Application, else ad-hoc) and give every bundled binary a stable `--identifier`, so file telemetry's Full Disk Access grant survives rebuilds instead of resetting on every install.
