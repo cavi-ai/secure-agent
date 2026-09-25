@@ -69,10 +69,13 @@ All notable changes to `secure-agent` are documented here. The format follows
 - **Daemon-restart signal in the console.** An uptime that moves backwards
   is reported as "Daemon restarted — reconnected" instead of silently
   pretending continuous state.
-- Console: Sessions and Agents tabs lead with the harness identity and a brand mark, and the bar chart geometry holds under the console's content security policy.
-- Console: saved views, a global search, and CSV export.
-- Console: light and dark themes follow the system setting, and a session-first Sessions tab shows the trace as a waterfall.
+- Console: sessions and processes lead with the harness identity and a brand mark.
+- Console: bar charts keep their geometry under the content security policy.
+- Console: saved views and a global search.
+- Console: light and dark themes follow the system setting.
+- Console: a session's trace shows as a waterfall.
 - Console: a Sessions tab renders durable sessions.
+- Console Cleanup view: Remove shows "Removing…" with the current step, then drops the row and moves the totals, or keeps the row with the error or the refusal and a Try again button; a toast reports each outcome.
 - Menu bar: the top unacted finding shows under the hero with its served title, explanation and disposition.
 - Menu bar: the finding's recommended allow host, allow path, mute or dismiss action runs from the popover.
 - Menu bar: an allow host or allow path from the popover also dismisses the finding.
@@ -148,7 +151,6 @@ All notable changes to `secure-agent` are documented here. The format follows
   `/flags/acknowledge`, `/allowlist`, `/notify/rules`, `DaemonClientError`
   human descriptions, `advisor_health` decoding, `NotifyRulesResponse`
   decoding).
-- Menu bar: an incident can be acknowledged or resolved from its sheet.
 - Codex calls on a ChatGPT plan (provider `chatgpt`) and Hermes `openai-codex` calls count as plan calls, not unpriced.
 - Events rows name every trace kind (TOOL, TURN, MODEL), key tool calls by session and call id and turns/model calls by session, timestamp, model and tokens so same-timestamp rows never collide, sort newest first with the date shown when not from today, and carry `price_class`; a Hermes or openclaw database resumes from its saved watermark, zero included, instead of restarting at the last 24 h.
 - `POST /cleanup/advise`: queues a project (a repository, or `machine` for caches outside any repository) for a local-advisor cleanup plan built from its worktrees and clutter: a summary and at most 5 steps; paths, branch names and reasons go to the model inside `<evidence>`.
@@ -271,7 +273,8 @@ All notable changes to `secure-agent` are documented here. The format follows
   reviewed flag stops demanding attention everywhere.
 - Notification scopes can be set per workspace.
 - Sessions and traces export as OTLP/HTTP JSON spans.
-- Codex sessions are traced by parsing rollout files, and stream deltas are typed instead of raw event fan-out.
+- Codex sessions are traced from their rollout files.
+- Stream deltas are typed per kind.
 - `GET /sessions`: durable sessions with lifecycle state, attributed from a session-start hook handshake as work begins.
 - `secure-agent cleanup advise <repo|machine>`; `secure-agent cleanup` prints each project's plan under it.
 - `secure-agent cleanup [--kind] [--project] [--refresh] [--json]`, `cleanup trash <path>`, `cleanup clean <tool>`.
@@ -296,7 +299,9 @@ All notable changes to `secure-agent` are documented here. The format follows
   hunt the node id, invent a secret, edit two files, restart the daemon — is
   gone.
 - `secure-agent`: a headless service install command registers the daemon with launchd.
+- `secure-agent worktrees remove` waits up to 14 minutes.
 - CI: cancel stale runs, job timeouts, credential-free checkout, cgo-free Linux gate, go mod tidy, govulncheck, Dependabot, Go test shuffle. Proxy token and CA permission contracts now have unit tests (the old 0600 check was asserting a different temp path). Go toolchain 1.26.6.
+- `POST /worktrees/remove` `"async": true` removes in the background; `GET /worktrees` `removals` reports each removal's step and outcome for 30 minutes.
 
 ### Changed
 - Console: shows the posture banner capped at 3 rows off Home and empty on Home, agent ids in their own case, Egress led by the uninspected endpoints with zero-hit rules folded into one row, and Processes at full width.
@@ -334,9 +339,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Menu bar: notification and mute-list titles come from the daemon.
 - Menu bar Open console loads the fresh console link into the existing console tab before focusing it.
 - Menubar sessions are grouped by harness family again (collapsed headers with session/memory/activity aggregates, small families expanded), capped at 6 groups with a "+N more — open the console" link. The flat 50-row list is gone.
-- Menu bar popover: reduced to a glance-and-act view, with a main-actor fix removing a UI warning.
-- Menu bar: incidents that share a flag group show as one row instead of one per incident.
-- Menu bar popover: identical repeated flags show as one row and one decision.
+- Menu bar popover: a glance-and-act view.
 - `GET /worktrees` and `GET /cleanup` answer from the last scan at once; one older than 10 minutes answers while a background rescan replaces it (`refreshing: true`).
 - Worktree and clutter sizes older than an hour keep answering while measured again, instead of dropping to "measuring…".
 - The last worktree scan, cleanup inventory and their sizes are saved in the store (`scan_cache`) and answer after a daemon restart.
@@ -400,6 +403,7 @@ All notable changes to `secure-agent` are documented here. The format follows
   by an earlier version under `/Library` is removed from the card (one admin
   prompt) or by `packaging/uninstall.sh`.
 
+- `live_acceptance.sh` reads the workspace root from `SECURE_AGENT_WORKSPACE_ROOT`, defaulting to two levels above the main checkout.
 ### Removed
 - Menu bar: the unused flag action, incident detail and process detail sheets.
 
@@ -444,9 +448,10 @@ All notable changes to `secure-agent` are documented here. The format follows
   blank half the page again. The DOM harness's `/fleet` fixture lied (array)
   — it now matches the real endpoint, with a regression check that panels
   after fleet render.
-- Console: the inspector docks in place without a background scrim, and IPv6 addresses are accepted as allowed endpoints.
-- Console: session rows show the harness icon next to the session name, and a guard-prompt drawer shows the advisor's recommendation.
-- Console Overview: the first page renders as charts instead of a wall of numbers.
+- Console: the inspector docks in place without a background scrim.
+- Console: IPv6 addresses are accepted as allowed endpoints.
+- Console: session rows show the harness icon next to the session name.
+- Console: the guard-prompt drawer shows the advisor's recommendation.
 - Menu bar: a lost daemon connection also clears posture and the pending guard prompt.
 - Menu bar: the Sessions header count matches the "more" overflow count.
 - Flag evidence is structured (`kind`/`label`/`sub`/`ts`) instead of display
@@ -508,7 +513,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Menu bar: the status icon and the hero read the same attention predicate.
 - Menu bar: Settings signals when the Endpoint Security helper needs to be re-granted after an update.
 - Menu bar: Claude Code hook registration refreshes automatically instead of only at install.
-- A resolved incident leaves the active set, clearing it from the popover's critical list.
+- A resolved incident leaves the active set.
 - A Code conversation in the Claude desktop app is rooted at its own `claude` process and ends when that process exits; the app (`claude-desktop`, infra) no longer holds every conversation open until it quits.
 - Local advisor: finding plans, worktree notes and cleanup plans run under a deadline of at least 5 minutes instead of the triage `timeout_ms`; a reasoning model at 60 s timed them out.
 - Local advisor: cleanup plans get 4,096 tokens (was 2,048); a reasoning model spent the whole 2,048 thinking and returned no plan.
@@ -635,14 +640,19 @@ All notable changes to `secure-agent` are documented here. The format follows
 - **"Re-run the advisor" acknowledged the flag.** The old flow marked the
   flag acted-upon after an *informational* action, closing the loop the
   operator hadn't closed; only true dispositions acknowledge now.
-- Endpoint Security collector: the spool line writes to disk before the read buffer compacts, preventing a still-open line from being dropped.
-- Posture: a stale-by-age spool file gates the file-monitoring status instead of only its presence.
-- Trace: call ids survive a daemon restart, turn lines over 4KB are read in full instead of truncated, and the installer's step order is fixed so each dependency is ready before it runs.
-- Sessions: a tool call is stored as one row regardless of retries, and the originating harness is preserved through a session join.
+- Endpoint Security collector: a spool line is written before the read buffer compacts.
+- Posture: the file-monitoring status reads the spool file's age, not only its presence.
+- Trace: call ids survive a daemon restart.
+- Trace: turn lines over 4 KB are read in full.
+- Installer: steps run in dependency order.
+- Sessions: a tool call is stored as one row regardless of retries.
+- Sessions: a session join keeps the originating harness.
 - Config: a corrupted overlay file no longer crashes the loader.
 - **`secure-agent fleet` help text** claimed remote node telemetry; it shows
   this node's fleet identity (remote rollups live at the collector).
 - Verified by DOM checks on a 300-event burst (hidden-tab render counts, an open rail group, a focused button, a mid-burst Dismiss click) and on allow success and failure.
+- Worktree removal: `git worktree remove` runs under a 10-minute deadline instead of the 10-second read limit that killed it mid-delete on large trees (200,000 files take 16 s), and finishes when the request is canceled.
+- A git failure during removal says whether the worktree is still on disk and registered.
 - Packaging: the release build always rebuilds the menu bar binary instead of reusing a stale one.
 
 ### Security

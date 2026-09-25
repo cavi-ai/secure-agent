@@ -74,7 +74,7 @@ type AgentSummary struct {
 	Workspace string `json:"workspace,omitempty"`
 	Repo      string `json:"repo,omitempty"`
 	Branch    string `json:"branch,omitempty"`
-	// Origin names the agent that spawned the session ("martina (openclaw)");
+	// Origin names the agent that spawned the session ("quill (openclaw)");
 	// empty for the user's own sessions.
 	Origin string `json:"origin,omitempty"`
 }

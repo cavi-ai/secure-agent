@@ -609,8 +609,8 @@ func TestGroupAgentTreesOneRowPerRootHelpersFolded(t *testing.T) {
 func TestStatusJSONIncludesTrees(t *testing.T) {
 	db := testStore(t)
 	now := time.Now()
-	db.UpsertSession(model.Session{ID: "s-origin", Harness: "claude", RootPID: 10, Repo: "career-ops", Branch: "main",
-		Origin: "martina (openclaw)", StartedAt: now, LastSeenAt: now, Status: model.SessionActive, Confidence: model.ConfProcessTree})
+	db.UpsertSession(model.Session{ID: "s-origin", Harness: "claude", RootPID: 10, Repo: "demo-app", Branch: "main",
+		Origin: "quill (openclaw)", StartedAt: now, LastSeenAt: now, Status: model.SessionActive, Confidence: model.ConfProcessTree})
 	a := newTestAPI("", db, &fakeKiller{}, func() Status {
 		return Status{Running: true, Agents: []AgentSummary{
 			{PID: 10, Name: "claude", RootPID: 10, CPUPercent: 60},
@@ -633,10 +633,10 @@ func TestStatusJSONIncludesTrees(t *testing.T) {
 		t.Fatalf("CPU serialization/aggregation failed: agents=%+v trees=%+v", st.Agents, st.Trees)
 	}
 	// The root joins its session by root pid, the spawning agent included.
-	if r := st.Trees[0].Root; r.SessionID != "s-origin" || r.Repo != "career-ops" || r.Origin != "martina (openclaw)" {
-		t.Fatalf("tree root join = %+v, want session s-origin, repo career-ops, origin martina (openclaw)", r)
+	if r := st.Trees[0].Root; r.SessionID != "s-origin" || r.Repo != "demo-app" || r.Origin != "quill (openclaw)" {
+		t.Fatalf("tree root join = %+v, want session s-origin, repo demo-app, origin quill (openclaw)", r)
 	}
-	if !strings.Contains(rr.Body.String(), `"origin":"martina (openclaw)"`) {
+	if !strings.Contains(rr.Body.String(), `"origin":"quill (openclaw)"`) {
 		t.Fatalf("/status body carries no root origin: %s", rr.Body.String())
 	}
 }
@@ -849,7 +849,7 @@ func TestSessionTimelineEndpoint(t *testing.T) {
 func TestSessionOriginServed(t *testing.T) {
 	st := testStore(t)
 	now := time.Now()
-	st.UpsertSession(model.Session{ID: "oc", Harness: "codex", Origin: "martina (openclaw)",
+	st.UpsertSession(model.Session{ID: "oc", Harness: "codex", Origin: "quill (openclaw)",
 		StartedAt: now, LastSeenAt: now, Status: model.SessionActive, Confidence: model.ConfTranscript})
 	st.UpsertSession(model.Session{ID: "own", Harness: "codex",
 		StartedAt: now.Add(-time.Minute), LastSeenAt: now.Add(-time.Minute), Status: model.SessionActive, Confidence: model.ConfTranscript})
@@ -875,7 +875,7 @@ func TestSessionOriginServed(t *testing.T) {
 	}
 	var list []model.Session
 	body := get("/sessions", &list)
-	if o := origins(list); o["oc"] != "martina (openclaw)" || o["own"] != "" {
+	if o := origins(list); o["oc"] != "quill (openclaw)" || o["own"] != "" {
 		t.Fatalf("/sessions origins = %v", o)
 	}
 	if strings.Count(body, `"origin"`) != 1 {
@@ -885,14 +885,14 @@ func TestSessionOriginServed(t *testing.T) {
 		Session model.Session `json:"session"`
 	}
 	get("/sessions/oc/report?format=json", &rep)
-	if rep.Session.Origin != "martina (openclaw)" {
+	if rep.Session.Origin != "quill (openclaw)" {
 		t.Fatalf("report session origin = %q", rep.Session.Origin)
 	}
 	var snap struct {
 		Sessions []model.Session `json:"sessions"`
 	}
 	get("/snapshot", &snap)
-	if o := origins(snap.Sessions); o["oc"] != "martina (openclaw)" || o["own"] != "" {
+	if o := origins(snap.Sessions); o["oc"] != "quill (openclaw)" || o["own"] != "" {
 		t.Fatalf("/snapshot origins = %v", o)
 	}
 }

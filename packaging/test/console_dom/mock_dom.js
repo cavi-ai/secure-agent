@@ -608,7 +608,30 @@
       return { status: 'ok', result: { bytes: 1048576, trash_path: '/Users/dev/.Trash/.tmp' } };
     }
     if (p === '/worktrees/remove') {
-      return { status: 'ok', removed: body.path, branch: 'feat/done', reasons: ['merged into origin/main (squash)'], bytes: 1610612736 };
+      // The daemon removes in the background: running now, the outcome
+      // lands in GET /worktrees removals (removerunning: never finishes;
+      // removefaildemo: git fails).
+      const rep = data['/worktrees'];
+      const running = { path: body.path, state: 'running', step: 'deleting', started_at: iso(0) };
+      rep.removals = { ...(rep.removals || {}), [body.path]: running };
+      if (!MODE.includes('removerunning')) {
+        setTimeout(() => {
+          if (MODE.includes('removefaildemo')) {
+            rep.removals[body.path] = { ...running, state: 'failed', step: '', finished_at: iso(0),
+              error: 'git worktree: <b>fatal</b> could not remove (the worktree is still on disk and registered with git)' };
+            return;
+          }
+          const size = 1610612736;
+          for (const r of rep.repos) r.worktrees = r.worktrees.filter(w => w.path !== body.path);
+          Object.assign(rep.summary, { worktrees: rep.summary.worktrees - 1, remove: rep.summary.remove - 1,
+            size_bytes: rep.summary.size_bytes - size, removable_bytes: rep.summary.removable_bytes - size });
+          rep.repos[0].size_bytes -= size;
+          Object.assign(rep.reclaimed, { bytes: rep.reclaimed.bytes + size, count: rep.reclaimed.count + 1,
+            bytes_30d: rep.reclaimed.bytes_30d + size, count_30d: rep.reclaimed.count_30d + 1 });
+          rep.removals[body.path] = { ...running, state: 'removed', step: '', bytes: size, branch: 'feat/done', finished_at: iso(0) };
+        }, 2000);
+      }
+      return { status: 'accepted', removal: running };
     }
     if (p === '/allowlist' && opts && opts.method === 'DELETE') {
       data['/allowlist'] = data['/allowlist'].filter(x => !(x.agent === body.agent && x.host === body.host));
@@ -1241,7 +1264,7 @@
       ...r.sessions,
       pipeline,
       fam(8100, 'openclaw', '/Users/dev/.openclaw', 300 * MB, 2),
-      fam(8201, 'codex', '/Users/dev/.openclaw/workspace-career-ops', 700 * MB, 12),
+      fam(8201, 'codex', '/Users/dev/.openclaw/workspace-demo-app', 700 * MB, 12),
       fam(8202, 'codex', '/Users/dev/.openclaw/workspace-bot', 250 * MB, 4),
       fam(5950, 'claude', '/Users/dev/franco', 180 * MB, 1),
       fam(4500, 'codex', '/Users/dev/scratch', 120 * MB, 0.5),
@@ -1255,7 +1278,7 @@
     data['/sessions'].push(
       { id: 'sess-openclaw-1', harness: 'openclaw', workspace: '/Users/dev/.openclaw', root_pid: 8100,
         started_at: '2026-09-09T12:00:00Z', last_seen_at: iso(15000), status: 'active', confidence: 'process-tree' },
-      { id: 'sess-oc-career', harness: 'codex', workspace: '/Users/dev/.openclaw/workspace-career-ops', repo: 'career-ops', branch: 'main',
+      { id: 'sess-oc-career', harness: 'codex', workspace: '/Users/dev/.openclaw/workspace-demo-app', repo: 'demo-app', branch: 'main',
         root_pid: 8201, parent_id: 'sess-openclaw-1', started_at: '2026-09-09T12:10:00Z', last_seen_at: iso(16000), status: 'active', confidence: 'transcript' },
       { id: 'sess-oc-bot', harness: 'codex', workspace: '/Users/dev/.openclaw/workspace-bot',
         root_pid: 8202, parent_id: 'sess-openclaw-1', started_at: '2026-09-09T12:20:00Z', last_seen_at: iso(17000), status: 'active', confidence: 'transcript' }
@@ -1717,23 +1740,23 @@
       }, 2000);
     }, 4300);
   }
-  // dupdemo: five codex sessions spawned by the openclaw agent martina on one
-  // repo@branch, and three by margaret with resource families. The rail folds
-  // each set into one "×N" row. Sessions: the martina row is expanded, a
+  // dupdemo: five codex sessions spawned by the openclaw agent quill on one
+  // repo@branch, and three by fennel with resource families. The rail folds
+  // each set into one "×N" row. Sessions: the quill row is expanded, a
   // member selected, then session frames patch the rail; <pre id="dup-probe">
   // reports the row's patchList key, whether it stayed open and the selected
   // cards. With tab=resources the families fold the same way.
   if (MODE.includes('dupdemo')) {
     const MB = 1024 ** 2;
     for (let i = 1; i <= 5; i++) {
-      data['/sessions'].push({ id: `sess-dup-${i}`, harness: 'codex', workspace: '/Users/dev/.openclaw/workspace-career-ops',
-        repo: 'career-ops', branch: 'main', origin: 'martina (openclaw)',
+      data['/sessions'].push({ id: `sess-dup-${i}`, harness: 'codex', workspace: '/Users/dev/.openclaw/workspace-demo-app',
+        repo: 'demo-app', branch: 'main', origin: 'quill (openclaw)',
         started_at: new Date(now - i * 600000).toISOString(), last_seen_at: iso(20000 + i * 1000),
         status: i === 2 ? 'active' : 'idle', confidence: 'transcript' });
     }
     for (let i = 1; i <= 3; i++) {
       const pid = 8300 + i;
-      data['/sessions'].push({ id: `sess-marg-${i}`, harness: 'codex', workspace: '/Users/dev/.openclaw', origin: 'margaret (openclaw)',
+      data['/sessions'].push({ id: `sess-marg-${i}`, harness: 'codex', workspace: '/Users/dev/.openclaw', origin: 'fennel (openclaw)',
         root_pid: pid, started_at: new Date(now - i * 900000).toISOString(), last_seen_at: iso(25000 + i * 1000),
         status: 'active', confidence: 'transcript' });
       data['/resources'].sessions.push({ key: `${pid}:1789470000000000000`, name: 'codex', root_pid: pid,
@@ -1742,10 +1765,10 @@
         processes: [{ pid, ppid: 1, name: 'codex', rss_bytes: 100 * i * MB, cpu_percent: i }], samples: [], diagnoses: [] });
     }
     if (!MODE.includes('tab=resources') && !MODE.includes('foldpatch')) {
-      const martina = 'group:codex|career-ops@main · martina';
+      const quill = 'group:codex|demo-app@main · quill';
       setTimeout(() => openTab('sessions'), 4000);
       setTimeout(() => {
-        document.querySelector(`#session-rail [data-action="toggle-session-dup"][data-key="${martina}"]`)?.click();
+        document.querySelector(`#session-rail [data-action="toggle-session-dup"][data-key="${quill}"]`)?.click();
         setTimeout(() => document.querySelector('#session-rail [data-action="select-session"][data-id="sess-dup-3"]')?.click(), 300);
         setTimeout(() => {
           const four = data['/sessions'].find(x => x.id === 'sess-dup-4');
@@ -1756,14 +1779,14 @@
         }, 1200);
         setTimeout(() => {
           const row = Array.from(document.querySelectorAll('#session-rail .session-dup'))
-            .find(n => n.querySelector(`[data-key="${martina}"]`));
+            .find(n => n.querySelector(`[data-key="${quill}"]`));
           const selected = Array.from(document.querySelectorAll('#session-rail .session-card.selected [data-action="select-session"]')).map(b => b.dataset.id);
           stamp('dup-probe', JSON.stringify({ key: row ? row._saKey : null, open: !!(row && row.classList.contains('open')), selected }));
         }, 3000);
       }, 4300);
     }
   }
-  // foldpatch (with dupdemo): two ended sessions share the live martina
+  // foldpatch (with dupdemo): two ended sessions share the live quill
   // title, so the codex group holds a live and an ended fold with one key.
   // The ended fold is expanded, the live fold's toggle focused, then a frame
   // ends another codex session; the probe waits out the render engine's
@@ -1771,14 +1794,14 @@
   // open node, each fold's aria-expanded, the head counts around it.
   if (MODE.includes('dupdemo') && MODE.includes('foldpatch')) {
     for (let i = 6; i <= 7; i++) {
-      data['/sessions'].push({ id: `sess-dup-${i}`, harness: 'codex', workspace: '/Users/dev/.openclaw/workspace-career-ops',
-        repo: 'career-ops', branch: 'main', origin: 'martina (openclaw)',
+      data['/sessions'].push({ id: `sess-dup-${i}`, harness: 'codex', workspace: '/Users/dev/.openclaw/workspace-demo-app',
+        repo: 'demo-app', branch: 'main', origin: 'quill (openclaw)',
         started_at: new Date(now - i * 600000).toISOString(), last_seen_at: iso(40000 + i * 1000),
         ended_at: iso(40000 + i * 1000), status: 'ended', confidence: 'transcript' });
     }
-    const martina = 'group:codex|career-ops@main · martina';
+    const quill = 'group:codex|demo-app@main · quill';
     const rail = () => document.getElementById('session-rail');
-    const fold = (bucket) => rail().querySelector(`[data-action="toggle-session-dup"][data-bucket="${bucket}"][data-key="${martina}"]`);
+    const fold = (bucket) => rail().querySelector(`[data-action="toggle-session-dup"][data-bucket="${bucket}"][data-key="${quill}"]`);
     setTimeout(() => openTab('sessions'), 4000);
     setTimeout(() => {
       rail().querySelector('[data-action="toggle-ended-sessions"][data-harness="codex"]')?.click();
@@ -1801,7 +1824,7 @@
       }, 900);
     }, 4300);
   }
-  // familypatch (with dupdemo&tab=resources): the margaret fold expanded, a
+  // familypatch (with dupdemo&tab=resources): the fennel fold expanded, a
   // View family button inside it focused, then a fourth codex family's
   // memory and CPU change. <pre id="family-probe">: focus kept, the group the
   // same open node, the fold still expanded, the head counts.
@@ -1810,7 +1833,7 @@
       root_started_at: '2026-09-09T13:00:00Z', workspace: '/Users/dev/workspace/etl-sidecar', last_seen_at: iso(30000),
       rss_bytes: 50 * 1024 ** 2, cpu_percent: 2, process_count: 1, orphan_count: 0,
       processes: [{ pid: 8400, ppid: 1, name: 'codex', rss_bytes: 50 * 1024 ** 2, cpu_percent: 2 }], samples: [], diagnoses: [] });
-    const marg = 'group:codex|Codex · margaret';
+    const marg = 'group:codex|Codex · fennel';
     setTimeout(() => {
       const board = document.getElementById('resource-board');
       board.querySelector(`[data-action="toggle-family-dup"][data-key="${marg}"]`)?.click();

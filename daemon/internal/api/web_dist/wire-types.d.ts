@@ -739,10 +739,24 @@ export interface ScanReport {
   errors?: string[];
   sizing?: boolean;
   refreshing?: boolean;
+  removals?: Record<string, Removal>;
   volumes?: Volume[];
   reclaimed?: CleanupTotals;
   asks?: Record<string, AgentAsk>;
   advice?: Record<string, AdvisorVerdict>;
+}
+
+export interface Removal {
+  path: string;
+  state: string;
+  step?: string;
+  error?: string;
+  row_state?: string;
+  reasons?: string[];
+  branch?: string;
+  bytes?: number;
+  started_at: string;
+  finished_at?: string;
 }
 
 export interface ClutterItem {

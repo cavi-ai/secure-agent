@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/diskusage"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
@@ -31,17 +32,37 @@ func (e *NotRemovableError) Error() string {
 	return fmt.Sprintf("worktree is %s, not remove: %s", e.Row.State, strings.Join(e.Row.Reasons, "; "))
 }
 
+// removeTimeout bounds `git worktree remove`, which deletes the whole
+// tree: 200,000 files take 16 s on an external disk, past gitTimeout.
+const removeTimeout = 10 * time.Minute
+
 // Remove inspects path again now and runs `git worktree remove` (never
 // --force) only when that fresh verdict is remove. The branch and every
 // commit stay; git itself still refuses a tree that turned dirty in between.
-// It holds the scan lock, so no scan interleaves with a removal.
+// It holds the scan lock, so no scan interleaves with a removal, and it
+// finishes even when ctx is canceled: a half-deleted worktree is worse than
+// a late answer. Its progress shows in Removals.
 func (h *Hunter) Remove(ctx context.Context, path string) (Worktree, error) {
 	if !filepath.IsAbs(path) {
 		return Worktree{}, errors.New("path must be absolute")
 	}
-	h.scanMu.Lock()
+	job, err := h.beginRemoval(path)
+	if err != nil {
+		return Worktree{}, err
+	}
+	row, err := h.remove(context.WithoutCancel(ctx), path, job.step)
+	job.finish(row, err)
+	return row, err
+}
+
+func (h *Hunter) remove(ctx context.Context, path string, step func(string)) (Worktree, error) {
+	if !h.scanMu.TryLock() {
+		step(StepWaiting)
+		h.scanMu.Lock()
+	}
 	defer h.scanMu.Unlock()
 
+	step(StepChecking)
 	rs, l, err := h.locate(ctx, path)
 	if err != nil {
 		return Worktree{}, err
@@ -51,6 +72,7 @@ func (h *Hunter) Remove(ctx context.Context, path string) (Worktree, error) {
 		return row, &NotRemovableError{Row: row}
 	}
 	// Measured now, not from the cache: this is the space the ledger books.
+	step(StepMeasuring)
 	skip := map[string]bool{}
 	for _, o := range rs.list {
 		if o.Path != l.Path {
@@ -59,7 +81,11 @@ func (h *Hunter) Remove(ctx context.Context, path string) (Worktree, error) {
 	}
 	u := diskusage.Dir(ctx, l.Path, skip)
 	row.SizeBytes, row.SizePartial = u.Bytes, u.Partial
-	if _, err := git(ctx, rs.ref.Main, "worktree", "remove", l.Path); err != nil {
+	step(StepDeleting)
+	if _, err := gitWithin(ctx, removeTimeout, rs.ref.Main, "worktree", "remove", l.Path); err != nil {
+		if _, statErr := os.Stat(l.Path); statErr == nil {
+			return row, fmt.Errorf("%w (the worktree is still on disk and registered with git)", err)
+		}
 		return row, err
 	}
 	h.st.PutAudit(store.AuditEntry{
@@ -71,8 +97,33 @@ func (h *Hunter) Remove(ctx context.Context, path string) (Worktree, error) {
 		Detail: "branch " + orDetached(l.Branch) + " kept; " + strings.Join(row.Reasons, "; "),
 	})
 	h.forgetSize(l.Path)
-	h.invalidate()
+	h.dropRow(l.Path)
 	return row, nil
+}
+
+// dropRow takes a removed worktree out of the cached scan and marks the
+// scan old, so the next report answers without it while a background
+// rescan confirms.
+func (h *Hunter) dropRow(path string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.cached == nil {
+		return
+	}
+	rep := *h.cached
+	rep.Repos = make([]RepoReport, len(h.cached.Repos))
+	for i, r := range h.cached.Repos {
+		kept := make([]Worktree, 0, len(r.Worktrees))
+		for _, w := range r.Worktrees {
+			if w.Path != path {
+				kept = append(kept, w)
+			}
+		}
+		r.Worktrees = kept
+		rep.Repos[i] = r
+	}
+	rep.Summary = summarize(rep.Repos)
+	h.cached, h.cachedAt = &rep, time.Time{}
 }
 
 // Prune runs `git worktree prune` in the repository containing repo when it

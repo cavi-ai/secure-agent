@@ -469,15 +469,15 @@ func TestUpsertSessionKeepsOrigin(t *testing.T) {
 	}
 	defer st.Close()
 	now := time.Now()
-	st.UpsertSession(model.Session{ID: "s1", Harness: "codex", RootPID: 42, Origin: "martina (openclaw)", StartedAt: now, LastSeenAt: now})
+	st.UpsertSession(model.Session{ID: "s1", Harness: "codex", RootPID: 42, Origin: "quill (openclaw)", StartedAt: now, LastSeenAt: now})
 	st.UpsertSession(model.Session{ID: "s1", Harness: "codex", StartedAt: now, LastSeenAt: now})
-	if got, _ := st.GetSession("s1"); got.Origin != "martina (openclaw)" {
-		t.Fatalf("origin = %q after an empty upsert, want martina (openclaw) kept", got.Origin)
+	if got, _ := st.GetSession("s1"); got.Origin != "quill (openclaw)" {
+		t.Fatalf("origin = %q after an empty upsert, want quill (openclaw) kept", got.Origin)
 	}
-	if l := st.ListSessions(SessionFilter{}); len(l) != 1 || l[0].Origin != "martina (openclaw)" {
+	if l := st.ListSessions(SessionFilter{}); len(l) != 1 || l[0].Origin != "quill (openclaw)" {
 		t.Fatalf("ListSessions origin: %+v", l)
 	}
-	if m := st.SessionsByRootPID(); m[42].Origin != "martina (openclaw)" {
+	if m := st.SessionsByRootPID(); m[42].Origin != "quill (openclaw)" {
 		t.Fatalf("SessionsByRootPID origin: %+v", m[42])
 	}
 	st.UpsertSession(model.Session{ID: "s2", Harness: "codex", StartedAt: now, LastSeenAt: now})
@@ -495,11 +495,11 @@ func TestRekeySessionKeepsOrigin(t *testing.T) {
 	}
 	defer st.Close()
 	now := time.Now()
-	st.UpsertSession(model.Session{ID: "old", Harness: "codex", Origin: "margaret (openclaw)", StartedAt: now, LastSeenAt: now})
+	st.UpsertSession(model.Session{ID: "old", Harness: "codex", Origin: "fennel (openclaw)", StartedAt: now, LastSeenAt: now})
 	st.UpsertSession(model.Session{ID: "new", Harness: "codex", StartedAt: now, LastSeenAt: now})
 	st.RekeySession("old", "new")
-	if got, _ := st.GetSession("new"); got.Origin != "margaret (openclaw)" {
-		t.Fatalf("merged origin = %q, want margaret (openclaw)", got.Origin)
+	if got, _ := st.GetSession("new"); got.Origin != "fennel (openclaw)" {
+		t.Fatalf("merged origin = %q, want fennel (openclaw)", got.Origin)
 	}
 }
 

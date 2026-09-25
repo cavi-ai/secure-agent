@@ -104,15 +104,31 @@ function worktreeAskHTML(ask) {
   return `<p class="wt-ask wt-ask-${escapeHTML(ask.status)}"><b>Asked ${escapeHTML(ask.harness)}:</b> ${escapeHTML(text)}</p>`;
 }
 
+// worktreeRemovalHTML: a removal's step while it runs, or why it did not
+// remove the worktree.
+function worktreeRemovalHTML(rm) {
+  if (!rm || rm.state === 'removed') return '';
+  if (rm.state === 'running') {
+    return `<p class="wt-removal wt-removal-running" role="status"><b>Removing…</b> ${escapeHTML(rm.step || 'starting')}</p>`;
+  }
+  const text = rm.row_state
+    ? `<b>Not removed:</b> it is now ${escapeHTML(rm.row_state)}${(rm.reasons || []).length ? ' — ' + escapeHTML(rm.reasons.join('; ')) : ''}`
+    : `<b>Removal failed:</b> ${escapeHTML(rm.error || 'unknown error')}`;
+  return `<p class="wt-removal wt-removal-failed" role="alert">${text}</p>`;
+}
+
 // worktreeRowHTML: one worktree. Remove only on state remove, Prune only on
 // state prune; the daemon enforces the same rule again on the request. Ask
 // the agent and Ask advisor on review and keep rows, where work may remain.
-function worktreeRowHTML(w, repo, note, ask) {
+// A running removal disables Remove and shows its step.
+function worktreeRowHTML(w, repo, note, ask, removal) {
   const branch = w.branch || (w.detached ? '(detached)' : '');
   const reasons = (w.reasons || []).map(r => `<li>${escapeHTML(r)}</li>`).join('');
   let action = '';
   if (w.state === 'remove') {
-    action = `<button type="button" class="btn btn-danger btn-sm" data-action="worktree-remove" data-path="${escapeHTML(w.path)}" data-branch="${escapeHTML(branch)}">Remove</button>`;
+    action = removal && removal.state === 'running'
+      ? '<button type="button" class="btn btn-danger btn-sm" disabled>Removing…</button>'
+      : `<button type="button" class="btn btn-danger btn-sm" data-action="worktree-remove" data-path="${escapeHTML(w.path)}" data-branch="${escapeHTML(branch)}">${removal && removal.state === 'failed' ? 'Try again' : 'Remove'}</button>`;
   } else if (w.state === 'prune') {
     action = `<button type="button" class="btn btn-sm" data-action="worktree-prune" data-repo="${escapeHTML(repo.path)}">Prune</button>`;
   } else if (w.state === 'review' || w.state === 'keep') {
@@ -132,12 +148,14 @@ function worktreeRowHTML(w, repo, note, ask) {
     ${reasons ? `<ul class="wt-reasons">${reasons}</ul>` : ''}
     ${worktreeNoteHTML(note)}
     ${worktreeAskHTML(ask)}
+    ${worktreeRemovalHTML(removal)}
   </div>`;
 }
 
 // worktreeGroupHTML: one repository block with its rows and a Hide button.
-// advice and asks map a worktree path to its advisor note and latest ask.
-function worktreeGroupHTML(g, advice, asks) {
+// advice, asks and removals map a worktree path to its advisor note, latest
+// ask and latest removal.
+function worktreeGroupHTML(g, advice, asks, removals) {
   const meta = [g.repo.default_branch, g.repo.source].filter(Boolean).join(' · ');
   return `<section class="wt-repo">
     <div class="wt-repo-head">
@@ -146,7 +164,7 @@ function worktreeGroupHTML(g, advice, asks) {
       ${g.repo.size_bytes ? `<span class="wt-repo-size">${escapeHTML(fmtDisk(g.repo.size_bytes))}</span>` : ''}
       <button type="button" class="link-btn wt-hide" data-action="worktree-hide" data-repo="${escapeHTML(g.repo.path)}">Hide repo</button>
     </div>
-    ${g.rows.map(w => worktreeRowHTML(w, g.repo, (advice || {})[w.path], (asks || {})[w.path])).join('')}
+    ${g.rows.map(w => worktreeRowHTML(w, g.repo, (advice || {})[w.path], (asks || {})[w.path], (removals || {})[w.path])).join('')}
   </section>`;
 }
 
@@ -206,7 +224,7 @@ function renderWorktrees() {
   }
   const groups = worktreeGroups(rep, state.filter);
   container.innerHTML = groups.length
-    ? groups.map(g => worktreeGroupHTML(g, rep.advice, rep.asks)).join('')
+    ? groups.map(g => worktreeGroupHTML(g, rep.advice, rep.asks, rep.removals)).join('')
     : `<div class="empty"><svg class="icon"><use href="#i-branch"/></svg><span>${counts.all ? 'No worktree matches this filter.' : 'No linked worktrees found. Add a repository above if one is missing.'}</span></div>`;
 }
 

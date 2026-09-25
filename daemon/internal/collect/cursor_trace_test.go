@@ -13,12 +13,12 @@ const cursorUserLine = `{"role":"user","message":{"content":[{"type":"text","tex
 const cursorAssistantLine = `{"role":"assistant","message":{"content":[{"type":"text","text":"Checking remotes."},{"type":"tool_use","name":"Shell","input":{"command":"git remote -v"}},{"type":"tool_use","name":"Glob","input":{"glob_pattern":"**/.gitignore"}}]}}`
 
 func TestCursorTraceToolsAndTurns(t *testing.T) {
-	tr := NewCursorTracer("/Users/x/.cursor/projects/Volumes-MIRZA-hermes/agent-transcripts/abc/abcdef12-3456.jsonl")
+	tr := NewCursorTracer("/Users/x/.cursor/projects/Volumes-Work-hermes/agent-transcripts/abc/abcdef12-3456.jsonl")
 	id, ws := tr.Session()
 	if id != "abcdef12-3456" {
 		t.Fatalf("session id = %q, want the filename uuid", id)
 	}
-	if ws != "/Volumes/MIRZA/hermes" {
+	if ws != "/Volumes/Work/hermes" {
 		t.Fatalf("workspace = %q, want the decoded slug", ws)
 	}
 
@@ -70,7 +70,7 @@ func TestIsCursorTranscriptPath(t *testing.T) {
 }
 
 func TestWorkspaceFromCursorSlugOnlyTrustedRoots(t *testing.T) {
-	if got := workspaceFromCursorSlug("Volumes-MIRZA-hermes"); got != "/Volumes/MIRZA/hermes" {
+	if got := workspaceFromCursorSlug("Volumes-Work-hermes"); got != "/Volumes/Work/hermes" {
 		t.Fatalf("slug decode = %q", got)
 	}
 	// A slug that does not start at a known root is left empty, never guessed.

@@ -100,7 +100,7 @@ func countCursorToolCalls(path string) int {
 }
 
 // workspaceFromCursorSlug best-effort decodes Cursor's lossy project slug
-// ("Volumes-MIRZA-hermes" → "/Volumes/MIRZA/hermes"). Dashes inside real path
+// ("Volumes-Work-hermes" → "/Volumes/Work/hermes"). Dashes inside real path
 // components are indistinguishable from separators, so this is only trusted
 // when the slug starts at a known root; otherwise it is left empty rather
 // than guessed into a wrong path.

@@ -230,6 +230,8 @@ def main():
         dom_drawerback = dump_dom(chrome, tmp, "?drawerbackdemo")
         dom_wt = dump_dom(chrome, tmp, "?tab=worktrees")
         dom_wtremove = dump_dom(chrome, tmp, "?tab=worktrees&worktreedemo")
+        dom_wtremoving = dump_dom(chrome, tmp, "?tab=worktrees&worktreedemo&removerunning")
+        dom_wtremovefail = dump_dom(chrome, tmp, "?tab=worktrees&worktreedemo&removefaildemo")
         dom_wtsizing = dump_dom(chrome, tmp, "?tab=worktrees&sizingdemo")
         dom_wtrefresh = dump_dom(chrome, tmp, "?tab=worktrees&refreshdemo")
         dom_clutter = dump_dom(chrome, tmp, "?tab=worktrees&clutterdemo")
@@ -821,7 +823,7 @@ def main():
         check("resources: orchestrated children nest under their OpenClaw parent, not as codex rows",
               'data-key="8100:1789470000000000000"' in oc_grp.split('class="family-children"', 1)[0]
               and 'data-key="8201:1789470000000000000"' in oc_kids and 'data-key="8202:1789470000000000000"' in oc_kids
-              and '8201:' not in codex_grp and 'Codex · career-ops@main' in oc_kids)
+              and '8201:' not in codex_grp and 'Codex · demo-app@main' in oc_kids)
         check("resources: rows and cards carry names, never root PID",
               'root PID' not in board and 'Claude Code · api-service@main' in board
               and 'Codex · data-pipeline@feat/etl' in board)
@@ -1046,28 +1048,28 @@ def main():
 
         # --- session origin: identical rows fold into one "×N" row ---
         dup_rail = dom_dup.split('id="session-rail"', 1)[1].split('id="session-detail"', 1)[0]
-        martina_key = 'group:codex|career-ops@main · martina'
+        quill_key = 'group:codex|demo-app@main · quill'
         check("identical-title sessions fold into one row titled with the spawning agent",
-              dup_rail.count(f'data-action="toggle-session-dup" data-key="{martina_key}"') == 1
-              and '<span class="sc-label">career-ops@main · martina</span><span class="session-dup-count">×5</span>' in dup_rail
-              and '<span class="sc-label">.openclaw · margaret</span><span class="session-dup-count">×3</span>' in dup_rail)
-        dup_row = dup_rail.split(f'data-key="{martina_key}"', 1)[1].split('toggle-session-dup', 1)[0]
+              dup_rail.count(f'data-action="toggle-session-dup" data-key="{quill_key}"') == 1
+              and '<span class="sc-label">demo-app@main · quill</span><span class="session-dup-count">×5</span>' in dup_rail
+              and '<span class="sc-label">.openclaw · fennel</span><span class="session-dup-count">×3</span>' in dup_rail)
+        dup_row = dup_rail.split(f'data-key="{quill_key}"', 1)[1].split('toggle-session-dup', 1)[0]
         dup_ids = re.findall(r'data-action="select-session" data-id="(sess-dup-\d)"', dup_row)
         dup_labels = re.findall(r'<span class="sc-label">(\d\d:\d\d)</span>', dup_row)
         check("an expanded folded row lists its five sessions newest first with HH:MM start times",
               dup_ids == [f"sess-dup-{i}" for i in range(1, 6)] and len(dup_labels) == 5
-              and f'data-key="{martina_key}" aria-expanded="true"' in dup_rail,
+              and f'data-key="{quill_key}" aria-expanded="true"' in dup_rail,
               f"ids={dup_ids} labels={dup_labels}")
         try:
             dup_probe = json.loads(pre(dom_dup, "dup-probe") or "null")
         except ValueError:
             dup_probe = None
         check("a selected member of a folded row keeps its selection across a patch",
-              dup_probe == {"key": martina_key, "open": True, "selected": ["sess-dup-3"]}, f"probe={dup_probe}")
+              dup_probe == {"key": quill_key, "open": True, "selected": ["sess-dup-3"]}, f"probe={dup_probe}")
         dup_board = dom_dupres.split('id="resource-board"', 1)[1]
         check("Resources folds identical family labels into one row with summed memory, CPU and processes",
-              re.search(r'data-action="toggle-family-dup" data-key="group:codex\|Codex · margaret" aria-expanded="false">'
-                        r'<strong>Codex · margaret</strong><span class="family-dup-count">×3</span>', dup_board) is not None
+              re.search(r'data-action="toggle-family-dup" data-key="group:codex\|Codex · fennel" aria-expanded="false">'
+                        r'<strong>Codex · fennel</strong><span class="family-dup-count">×3</span>', dup_board) is not None
               and '<b>600 MB</b><small>memory</small>' in dup_board and '<b>6</b><small>processes</small>' in dup_board)
         try:
             fold_probe = json.loads(pre(dom_foldpatch, "fold-probe") or "null")
@@ -1330,10 +1332,21 @@ def main():
         wtr = wt_block(dom_wtremove)
         wtr_rows = wtr.count('class="wt-row')
         wt_reqs = pre(dom_wtremove, "mock-requests")
-        check("worktrees: Remove posts /worktrees/remove after the dialog and drops the row in place",
+        check("worktrees: Remove starts a background removal after the dialog; when it lands the row leaves and the totals move",
               "POST /worktrees/remove" in wt_reqs and ".worktrees/done" not in wtr and wtr_rows == 3
-              and "<b>Reclaimed</b> 4.5 GB over 4 cleanups" in dom_wtremove and "<b>Removable</b> 0 B" in dom_wtremove,
+              and "<b>Reclaimed</b> 4.5 GB over 4 cleanups" in dom_wtremove and "<b>Removable</b> 0 B" in dom_wtremove
+              and "wt-removal" not in wtr,
               f"requests={wt_reqs!r} rows={wtr_rows}")
+        wtg = wt_block(dom_wtremoving)
+        check("worktrees: while a removal runs its row shows the step and Remove is disabled",
+              '<p class="wt-removal wt-removal-running" role="status"><b>Removing…</b> deleting</p>' in wtg
+              and '<button type="button" class="btn btn-danger btn-sm" disabled="">Removing…</button>' in wtg
+              and 'data-action="worktree-remove"' not in wtg)
+        wtf = wt_block(dom_wtremovefail)
+        check("worktrees: a failed removal keeps the row with the error as text and offers Try again",
+              '.worktrees/done' in wtf
+              and '<p class="wt-removal wt-removal-failed" role="alert"><b>Removal failed:</b> git worktree: &lt;b&gt;fatal&lt;/b&gt; could not remove' in wtf
+              and '>Try again</button>' in wtf)
 
         if args.screenshot:
             shot_dir = os.path.abspath(args.screenshot)
