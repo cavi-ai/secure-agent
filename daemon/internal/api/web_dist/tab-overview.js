@@ -61,8 +61,8 @@ function resourceHostContextHTML(host) {
     Number(host.non_agent_memory_bytes || 0) / total * 100));
   const availablePercent = Math.max(0, 100 - agentPercent - otherPercent);
   const capacity = String(host.capacity || 'unknown');
-  const pressure = familyTitle(host.memory_pressure || 'unknown');
-  const thermal = familyTitle(host.thermal_state || 'unknown');
+  const pressure = capFirst(host.memory_pressure || 'unknown');
+  const thermal = capFirst(host.thermal_state || 'unknown');
   const cpuUnavailable = host.system_cpu_percent === null || host.system_cpu_percent === undefined;
   const cpuAttributionUnavailable = host.agent_cpu_percent === null || host.agent_cpu_percent === undefined
     || host.non_agent_cpu_percent === null || host.non_agent_cpu_percent === undefined;
@@ -107,7 +107,7 @@ function resourceFlightRecorderHTML(snapshot) {
       const correlations = episode.correlations || [];
       const correlation = correlations[0];
       const host = episode.host;
-      const hostAtCapture = host ? `<div class="resource-episode-host"><span class="resource-eyebrow">Host at capture</span><strong>${escapeHTML(fmtRSS(host.available_memory_bytes) || 'Unavailable')} available</strong><span>${escapeHTML(familyTitle(host.memory_pressure || 'unknown'))} pressure · ${escapeHTML(familyTitle(host.thermal_state || 'unknown'))} thermal · headroom ${Number(host.headroom_score || 0)} / 100</span></div>` : '';
+      const hostAtCapture = host ? `<div class="resource-episode-host"><span class="resource-eyebrow">Host at capture</span><strong>${escapeHTML(fmtRSS(host.available_memory_bytes) || 'Unavailable')} available</strong><span>${escapeHTML(capFirst(host.memory_pressure || 'unknown'))} pressure · ${escapeHTML(capFirst(host.thermal_state || 'unknown'))} thermal · headroom ${Number(host.headroom_score || 0)} / 100</span></div>` : '';
       const drivers = visibleProcesses.map(process => {
         const share = session.rss_bytes ? Math.round(Number(process.rss_bytes || 0) / Number(session.rss_bytes) * 100) : 0;
         return `<div class="resource-episode-process"><span><b>${escapeHTML(process.name || 'process')}</b> · PID ${Number(process.pid || 0)}${process.is_orphan ? ' · leftover' : ''}</span><span>${escapeHTML(fmtRSS(process.rss_bytes) || '—')} · ${share}%</span></div>`;
@@ -826,6 +826,38 @@ function renderSessionBoard() {
   });
 }
 
+// One posture item: severity dot, title, and the link to where it is acted on.
+function postureItemHTML(it) {
+  const sev = it.severity >= 3 ? 's3' : it.severity === 2 ? 's2' : 's1';
+  let link = '';
+  if (it.kind === 'flag') link = `<a href="#" data-action="goto-tab" data-tab="home" data-group="findings">view evidence</a>`;
+  if (it.kind === 'incident') link = `<a href="#" data-action="open-incident" data-id="${escapeHTML(it.id)}">view report</a>`;
+  if (it.kind === 'guard_pending') link = `<span>resolve it in the menu bar app</span>`;
+  if (it.kind === 'collector_down') link = `<span>— ${escapeHTML(it.detail || 'collector stopped')} <a href="#" data-action="open-fda">open Full Disk Access settings</a></span>`;
+  if (it.kind === 'uninspected_egress') link = `<a href="#" data-action="open-uninspected">see endpoints</a>`;
+  return `<li class="posture-item"><span class="sev ${sev}">●</span><span>${escapeHTML(it.title)} ${link}</span></li>`;
+}
+
+// The banner summarises, the queue lists. On Home the attention queue below
+// is the list, so the banner lists nothing (''); on any other tab it lists
+// the first POSTURE_ITEM_CAP items and links the rest to Home. extra holds
+// summary lines (the advisor's triage) that follow the list. Pure.
+const POSTURE_ITEM_CAP = 3;
+function postureItemsHTML(items, tab, extra) {
+  if (tab === 'home') return '';
+  const list = items || [];
+  const extraList = extra || [];
+  // extra (the advisor's triage summary) counts toward the cap too: content
+  // rows (items + extra) never exceed POSTURE_ITEM_CAP, and the "more" link
+  // — not a content row itself — counts only the items it hides.
+  const itemSlots = Math.max(0, POSTURE_ITEM_CAP - extraList.length);
+  const shown = list.slice(0, itemSlots);
+  const out = shown.map(postureItemHTML);
+  const more = list.length - shown.length;
+  if (more > 0) out.push(`<li class="posture-more"><a href="#" data-action="goto-tab" data-tab="home">and ${more} more</a></li>`);
+  return out.concat(extraList).join('');
+}
+
 function renderPosture() {
   const SA = window.SA;
 
@@ -855,18 +887,6 @@ function renderPosture() {
   }
   summaryEl.textContent = p.summary || '';
 
-  // Each item deep-links to its panel: flags/incidents scroll to their
-  // section, guard prompts open the resolve flow, collectors explain.
-  const items = (p.items || []).map(it => {
-    const sev = it.severity >= 3 ? 's3' : it.severity === 2 ? 's2' : 's1';
-    let link = '';
-    if (it.kind === 'flag') link = `<a href="#" data-action="goto-tab" data-tab="home" data-group="findings">view evidence</a>`;
-    if (it.kind === 'incident') link = `<a href="#" data-action="open-incident" data-id="${escapeHTML(it.id)}">view report</a>`;
-    if (it.kind === 'guard_pending') link = `<span>resolve it in the menu bar app</span>`;
-    if (it.kind === 'collector_down') link = `<span>— ${escapeHTML(it.detail || 'collector stopped')} <a href="#" data-action="open-fda">open Full Disk Access settings</a></span>`;
-    if (it.kind === 'uninspected_egress') link = `<a href="#" data-action="open-uninspected">see endpoints</a>`;
-    return `<li><span class="sev ${sev}">●</span><span>${escapeHTML(it.title)} ${link}</span></li>`;
-  });
   // The fatigue reducer: when the local advisor has triaged the critical
   // flags and some read benign, say so at the one-glance level.
   const vis = inspectionVisible(SA.t.status, SA.t.audit);
@@ -874,10 +894,12 @@ function renderPosture() {
     ? (SA.t.flags || []).filter(f => f.severity >= 3 && f.advisor && f.advisor.assessment)
     : [];
   const benignCount = criticals.filter(f => f.advisor.assessment === 'benign').length;
-  if (criticals.length > 0) {
-    items.push(`<li><span class="sev s1">●</span><span>advisor: ${benignCount} of ${criticals.length} triaged critical flags look benign</span></li>`);
-  }
-  itemsEl.innerHTML = items.join('');
+  const extra = criticals.length > 0
+    ? [`<li class="posture-advisor"><span class="sev s1">●</span><span>advisor: ${benignCount} of ${criticals.length} triaged critical flags look benign</span></li>`]
+    : [];
+  const html = postureItemsHTML(p.items, SA.activeTab, extra);
+  itemsEl.innerHTML = html;
+  itemsEl.hidden = !html;
 }
 
 function renderEvents() {

@@ -67,3 +67,31 @@ test('groupUninspected tolerates no rows', () => {
   const g = groupUninspected(undefined);
   assert.equal(g.unknown.length + g.vendors.length + g.carriers.length, 0);
 });
+
+test('foldRules: rules with any hit stay listed, all-zero rules fold', () => {
+  const stats = {
+    'b-key': { would_block: 0, blocked: 0, legit: 3 },
+    'a-key': { would_block: 2, blocked: 0, legit: 0 },
+    'z-key': { would_block: 0, blocked: 0, legit: 0 },
+    'c-key': { would_block: 0, blocked: 0, legit: 0, mode: 'block' },
+  };
+  assert.deepEqual(JSON.parse(JSON.stringify(ctx.foldRules(stats))), { hit: ['a-key', 'b-key'], quiet: ['c-key', 'z-key'] });
+  assert.deepEqual(JSON.parse(JSON.stringify(ctx.foldRules(undefined))), { hit: [], quiet: [] });
+});
+
+test('uninspectedParts: one keyed part per endpoint, vendor rollups, carriers', () => {
+  const parts = ctx.uninspectedParts(rows, true);
+  const keys = parts.map(p => p.key);
+  assert.equal(new Set(keys).size, keys.length);
+  assert.ok(keys.includes('vendor:openclaw|Anthropic'));
+  assert.ok(keys.includes('ep:claude|34.120.1.1'));
+  assert.ok(keys.includes('carriers'));
+  for (const p of parts) {
+    const html = p.html.trim();
+    assert.ok(html.startsWith('<div') || html.startsWith('<details'), p.key);
+  }
+  const vendor = parts.find(p => p.key === 'vendor:openclaw|Anthropic').html;
+  assert.match(vendor, /^<div class="egress-vendor">/);
+  assert.match(vendor, /data-action="bulk-allow" data-agent="openclaw"/);
+  assert.ok(keys.indexOf('agent:claude') < keys.indexOf('ep:claude|34.120.1.1'));
+});

@@ -1,4 +1,5 @@
-// Egress tab: firewall rules, watched sources, uninspected drill-down.
+// Egress tab: where traffic went (uninspected endpoints), firewall rules,
+// watched sources, and the uninspected drill-down drawer.
 
 function renderFirewall() {
   const SA = window.SA;
@@ -22,9 +23,6 @@ function renderFirewall() {
   }
 
   const parts = [];
-  if (uninspected > 0) {
-    parts.push({ key: 'uninspected', html: `<button type="button" class="fw-uninspected fw-drill" data-action="open-uninspected"><svg class="icon"><use href="#i-globe"/></svg><span>${uninspected} endpoint${uninspected === 1 ? '' : 's'} reached without inspection in the last 24h (pinned or unrouted)</span><span class="fw-drill-hint">view endpoints</span></button>` });
-  }
   const vendor = vendorKeyPromoteHTML(monitorVendorKeyIDs(stats));
   if (vendor) parts.push({ key: 'vendor', html: vendor });
   // Egress suggestions: recurring uninspected endpoints the user can approve
@@ -44,29 +42,23 @@ function renderFirewall() {
         <button class="btn btn-ghost btn-sm" data-action="allow-host" data-agent="${escapeHTML(sg.agent)}" data-host="${escapeHTML(sg.host)}"><svg class="icon"><use href="#i-shield"/></svg><span>Allow for ${escapeHTML(sg.agent)}</span></button>
       </div>` }));
   }
-  for (const r of rules) {
+  // A rule whose blocked/would-block counters grew since the last render
+  // just intercepted something — flash its row once.
+  const grew = r => {
     const st = stats[r];
-    const blocking = st.mode === 'block';
-    // A rule whose blocked/would-block counters grew since the last render
-    // just intercepted something — flash its row once.
     const prev = SA.prevFwStats ? SA.prevFwStats[r] : null;
-    const grew = !SA.reducedMotion && SA.prevFwStats !== null &&
-      prev && ((st.blocked || 0) > (prev.blocked || 0) || (st.would_block || 0) > (prev.would_block || 0));
-    const action = blocking
-      ? `<span class="mode-chip block">blocking</span><button class="btn btn-ghost btn-sm" data-action="demote" data-rule="${escapeHTML(r)}" title="Back to monitor-only — blocking is reversible"><svg class="icon"><use href="#i-arrow"/></svg><span>Demote to monitor</span></button>`
-      : `<button class="btn btn-primary btn-sm" data-action="promote" data-rule="${escapeHTML(r)}"><svg class="icon"><use href="#i-arrow"/></svg><span>Promote to block</span></button>`;
-    parts.push({ key: 'rule:' + r, html: `
-      <div class="fw-rule${grew ? ' fw-flash' : ''}">
-        <div class="fw-rule-main">
-          <span class="fw-rule-id">${escapeHTML(r)}</span>
-          <div class="fw-metrics">
-            <span class="fw-metric"><b>${st.would_block || 0}</b> would-block</span>
-            <span class="fw-metric"><b>${st.blocked || 0}</b> blocked</span>
-            <span class="fw-metric dim"><b>${st.legit || 0}</b> legit</span>
-          </div>
-        </div>
-        ${action}
-      </div>` });
+    return !SA.reducedMotion && SA.prevFwStats !== null &&
+      !!prev && ((st.blocked || 0) > (prev.blocked || 0) || (st.would_block || 0) > (prev.would_block || 0));
+  };
+  // Rules with hits stay listed; the rest fold into one collapsed row. The
+  // fold's outer <details> is a stable shell (constant hash below) so a
+  // change to one quiet rule never rebuilds the rows of every other one —
+  // its summary text is patched directly and its rows reconcile through
+  // their own keyed patchList, so an unchanged Promote button keeps focus.
+  const { hit, quiet } = foldRules(stats);
+  for (const r of hit) parts.push({ key: 'rule:' + r, html: fwRuleHTML(r, stats[r], grew(r)) });
+  if (quiet.length > 0) {
+    parts.push({ key: 'rules-quiet', html: `<details class="fw-fold" data-key="rules-quiet"><summary></summary><div class="fw-fold-rows"></div></details>` });
   }
   // User-approved (agent, host) allowlist entries — every one reversible.
   const allowlist = SA.t.allowlist || [];
@@ -77,8 +69,132 @@ function renderFirewall() {
         <button class="source-remove" title="Remove — the endpoint goes back to uninspected" data-action="allowlist-remove" data-agent="${escapeHTML(p.agent)}" data-host="${escapeHTML(p.host)}"><svg class="icon"><use href="#i-close"/></svg></button>
       </div>`).join('') + `</div>` });
   }
-  patchList(container, parts, { key: p => p.key, html: p => p.html });
+  patchList(container, parts, { key: p => p.key, html: p => p.html,
+    hash: p => p.key === 'rules-quiet' ? 'rules-quiet' : p.html,
+    empty: `<div class="empty"><svg class="icon"><use href="#i-shield"/></svg><span>No egress inspected yet — traffic is scanned as your agents run</span></div>` });
+  const fold = container.querySelector('details[data-key="rules-quiet"]');
+  if (fold) {
+    fold.querySelector('summary').textContent = `${quiet.length} rule${quiet.length === 1 ? '' : 's'} with no hits in 24 h`;
+    patchList(fold.querySelector('.fw-fold-rows'), quiet.map(r => ({ key: r, html: fwRuleHTML(r, stats[r], false) })), { key: p => p.key, html: p => p.html });
+  }
   SA.prevFwStats = stats;
+}
+
+// Split rule ids into those with any would-block, blocked or legit hit and
+// the quiet ones (every counter 0), each sorted. Pure.
+function foldRules(stats) {
+  const hit = [];
+  const quiet = [];
+  for (const r of Object.keys(stats || {}).sort()) {
+    const st = stats[r] || {};
+    ((st.would_block || 0) + (st.blocked || 0) + (st.legit || 0) > 0 ? hit : quiet).push(r);
+  }
+  return { hit, quiet };
+}
+
+// One firewall rule: its counters and the Promote (or Demote) action.
+function fwRuleHTML(r, st, flash) {
+  const action = st.mode === 'block'
+    ? `<span class="mode-chip block">blocking</span><button class="btn btn-ghost btn-sm" data-action="demote" data-rule="${escapeHTML(r)}" title="Back to monitor-only — blocking is reversible"><svg class="icon"><use href="#i-arrow"/></svg><span>Demote to monitor</span></button>`
+    : `<button class="btn btn-primary btn-sm" data-action="promote" data-rule="${escapeHTML(r)}"><svg class="icon"><use href="#i-arrow"/></svg><span>Promote to block</span></button>`;
+  return `
+      <div class="fw-rule${flash ? ' fw-flash' : ''}">
+        <div class="fw-rule-main">
+          <span class="fw-rule-id">${escapeHTML(r)}</span>
+          <div class="fw-metrics">
+            <span class="fw-metric"><b>${st.would_block || 0}</b> would-block</span>
+            <span class="fw-metric"><b>${st.blocked || 0}</b> blocked</span>
+            <span class="fw-metric dim"><b>${st.legit || 0}</b> legit</span>
+          </div>
+        </div>
+        ${action}
+      </div>`;
+}
+
+// Where traffic went: the uninspected endpoints, inline as the Egress tab's
+// first panel. Same rows, rollups and actions as the drill-down drawer; one
+// node per endpoint, so an Allow drops only its row and an open disclosure
+// or a focused button survives a refresh.
+function renderEndpoints() {
+  const SA = window.SA;
+  const container = document.getElementById('endpoints-container');
+  const title = document.getElementById('endpoints-title');
+  if (!container) return;
+  const rows = SA.t.uninspected || [];
+  const parts = uninspectedParts(rows, inspectionVisible(SA.t.status, SA.t.audit).advisor);
+  // The title counts what this panel actually renders (every part's share of
+  // distinct endpoints), never the status counters — those exclude
+  // infrastructure endpoints that the list still renders.
+  const n = parts.reduce((sum, part) => sum + (part.count || 0), 0);
+  if (title) title.textContent = `${n} endpoint${n === 1 ? '' : 's'} reached without inspection in 24 h`;
+  const opened = new Set([...container.querySelectorAll('details[data-key][open]')].map(d => d.dataset.key));
+  patchList(container, parts, {
+    key: p => p.key, html: p => p.html,
+    empty: `<div class="empty"><svg class="icon"><use href="#i-globe"/></svg><span>No uninspected endpoints in the last 24h — the blind spot is closed</span></div>`,
+  });
+  for (const d of container.querySelectorAll('details[data-key]')) if (opened.has(d.dataset.key)) d.open = true;
+}
+
+// The uninspected list as keyed parts, one root element each: per agent a
+// head (with its bulk-allow buttons) then one row per endpoint, the vendor
+// API rollups, and the CDN/cloud carriers. Pure but for fmtAge's clock.
+function uninspectedParts(rows, advisorOn) {
+  const { unknown, vendors, carriers } = groupUninspected(rows);
+  const parts = [];
+  for (const [agent, list] of unknownByAgent(unknown)) {
+    parts.push({ key: 'agent:' + agent, html: `<div class="egress-agent-lead"><div class="egress-agent-head">${agentHeadInnerHTML(agent, list)}</div>${bulkAllowHTML(agent, list)}</div>` });
+    for (const e of list) parts.push({ key: `ep:${e.agent}|${e.host}`, html: egressRowHTML(e, advisorOn), count: 1 });
+  }
+  if (vendors.length > 0) {
+    parts.push({ key: 'vendors', html: `<div class="egress-agent-lead"><div class="egress-agent-head">${VENDOR_HEAD_HTML}</div></div>` });
+    for (const g of vendors) parts.push({ key: `vendor:${g.agent}|${g.org}`, html: `<div class="egress-vendor">${vendorRollupHTML(g, advisorOn)}</div>`, count: g.rows.length });
+  }
+  if (carriers.length > 0) parts.push({ key: 'carriers', html: carriersHTML(carriers), count: carriers.length });
+  return parts;
+}
+
+// Unknown endpoints grouped by agent, most-used first within an agent.
+function unknownByAgent(unknown) {
+  const byAgent = new Map();
+  for (const e of unknown) {
+    if (!byAgent.has(e.agent)) byAgent.set(e.agent, []);
+    byAgent.get(e.agent).push(e);
+  }
+  for (const list of byAgent.values()) list.sort((a, b) => (b.count || 0) - (a.count || 0));
+  return [...byAgent.entries()];
+}
+
+// An agent's head: its name and the endpoint count.
+function agentHeadInnerHTML(agent, list) {
+  return `<span class="egress-agent-name">${escapeHTML(agent)}</span><span class="fw-metric dim">${list.length} uninspected endpoint${list.length === 1 ? '' : 's'}</span>`;
+}
+
+// One bulk decision per host-suffix family that has two or more hosts.
+function bulkAllowHTML(agent, list) {
+  const bulkGroups = {};
+  for (const e of list) (bulkGroups[hostSuffix(e.host)] = bulkGroups[hostSuffix(e.host)] || []).push(e);
+  const bulkButtons = Object.entries(bulkGroups)
+    .filter(([, g]) => g.length >= 2)
+    .sort((a, b) => b[1].length - a[1].length)
+    .map(([suffix, g]) =>
+      `<button class="btn btn-ghost btn-sm" data-action="bulk-allow" data-agent="${escapeHTML(agent)}" data-hosts="${escapeHTML(g.map(e => e.host).join(','))}"><svg class="icon"><use href="#i-shield"/></svg><span>Allow all ${g.length} ${escapeHTML(suffix)} hosts</span></button>`).join('');
+  return bulkButtons ? `<div class="bulk-allow">${bulkButtons}</div>` : '';
+}
+
+const VENDOR_HEAD_HTML = `<span class="egress-agent-name">Vendor APIs</span><span class="fw-metric dim">the agent's own model or tooling vendor, reached without the proxy — decide: Allow it, or Route the agent through the proxy</span>`;
+
+// CDN/cloud carriers: one routing note per org, collapsed.
+function carriersHTML(infra) {
+  const infraByOrg = {};
+  for (const e of infra) {
+    (infraByOrg[e.infra] = infraByOrg[e.infra] || { endpoints: 0, hits: 0 });
+    infraByOrg[e.infra].endpoints += 1;
+    infraByOrg[e.infra].hits += e.count || 0;
+  }
+  const orgRows = Object.entries(infraByOrg)
+    .sort((a, b) => b[1].endpoints - a[1].endpoints)
+    .map(([org, v]) => `<div class="mute-row"><span class="mute-pair">${escapeHTML(org)}</span><span class="fw-metric dim">${v.endpoints} endpoint${v.endpoints === 1 ? '' : 's'} · ${v.hits}× in 24h</span></div>`).join('');
+  return `<details class="infra-group" data-key="carriers"><summary>Known cloud/CDN infrastructure (${infra.length} endpoint${infra.length === 1 ? '' : 's'}) — these are the agents' own API carriers (Anthropic, OpenAI, GitHub, AWS…); nothing to decide, shown for completeness</summary>${orgRows}</details>`;
 }
 
 function renderSources() {
@@ -190,12 +306,6 @@ function fillUninspected(bodyEl) {
   // Split actionable unknowns from the agents' own vendor APIs and CDN/cloud
   // carriers: 130 Cloudflare IPs is one routing note, not 130 rows to review.
   const { unknown, vendors, carriers: infra } = groupUninspected(rows);
-  const infraByOrg = {};
-  for (const e of infra) {
-    (infraByOrg[e.infra] = infraByOrg[e.infra] || { endpoints: 0, hits: 0 });
-    infraByOrg[e.infra].endpoints += 1;
-    infraByOrg[e.infra].hits += e.count || 0;
-  }
 
   // Frame the job: these are connections the agents made that bypassed the
   // inspection proxy, so the operator's decision is "is this expected for
@@ -210,40 +320,21 @@ function fillUninspected(bodyEl) {
   }
 
   // Group by agent so the operator reads "cursor is reaching 12 hosts"
-  // rather than twelve loose rows. Within an agent, most-used first.
-  const byAgent = {};
-  for (const e of unknown) (byAgent[e.agent] = byAgent[e.agent] || []).push(e);
-
-  html += Object.entries(byAgent).map(([agent, list]) => {
-    list.sort((a, b) => (b.count || 0) - (a.count || 0));
-    // One bulk decision per agent when several hosts share a suffix family.
-    const bulkGroups = {};
-    for (const e of list) (bulkGroups[hostSuffix(e.host)] = bulkGroups[hostSuffix(e.host)] || []).push(e);
-    const bulkButtons = Object.entries(bulkGroups)
-      .filter(([, g]) => g.length >= 2)
-      .sort((a, b) => b[1].length - a[1].length)
-      .map(([suffix, g]) =>
-        `<button class="btn btn-ghost btn-sm" data-action="bulk-allow" data-agent="${escapeHTML(agent)}" data-hosts="${escapeHTML(g.map(e => e.host).join(','))}"><svg class="icon"><use href="#i-shield"/></svg><span>Allow all ${g.length} ${escapeHTML(suffix)} hosts</span></button>`).join('');
-    return `<div class="egress-agent-group">
-      <div class="egress-agent-head"><span class="egress-agent-name">${escapeHTML(agent)}</span><span class="fw-metric dim">${list.length} uninspected endpoint${list.length === 1 ? '' : 's'}</span></div>
-      ${bulkButtons ? `<div class="bulk-allow">${bulkButtons}</div>` : ''}
+  // rather than twelve loose rows.
+  html += unknownByAgent(unknown).map(([agent, list]) => `<div class="egress-agent-group">
+      <div class="egress-agent-head">${agentHeadInnerHTML(agent, list)}</div>
+      ${bulkAllowHTML(agent, list)}
       ${list.map(e => egressRowHTML(e, advisorOn)).join('')}
-    </div>`;
-  }).join('');
+    </div>`).join('');
 
   if (vendors.length > 0) {
     html += `<div class="egress-agent-group">
-      <div class="egress-agent-head"><span class="egress-agent-name">Vendor APIs</span><span class="fw-metric dim">the agent's own model or tooling vendor, reached without the proxy — decide: Allow it, or Route the agent through the proxy</span></div>
+      <div class="egress-agent-head">${VENDOR_HEAD_HTML}</div>
       ${vendors.map(g => vendorRollupHTML(g, advisorOn)).join('')}
     </div>`;
   }
 
-  if (infra.length > 0) {
-    const orgRows = Object.entries(infraByOrg)
-      .sort((a, b) => b[1].endpoints - a[1].endpoints)
-      .map(([org, v]) => `<div class="mute-row"><span class="mute-pair">${escapeHTML(org)}</span><span class="fw-metric dim">${v.endpoints} endpoint${v.endpoints === 1 ? '' : 's'} · ${v.hits}× in 24h</span></div>`).join('');
-    html += `<details class="infra-group" data-key="carriers"><summary>Known cloud/CDN infrastructure (${infra.length} endpoint${infra.length === 1 ? '' : 's'}) — these are the agents' own API carriers (Anthropic, OpenAI, GitHub, AWS…); nothing to decide, shown for completeness</summary>${orgRows}</details>`;
-  }
+  if (infra.length > 0) html += carriersHTML(infra);
   bodyEl.innerHTML = html;
   for (const d of bodyEl.querySelectorAll('details[data-key]')) if (opened.has(d.dataset.key)) d.open = true;
   bodyEl.scrollTop = scroll;

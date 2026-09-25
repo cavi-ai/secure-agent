@@ -557,6 +557,20 @@
   if (theme === 'dark' || theme === 'light') {
     try { localStorage.setItem('sa-theme', theme); } catch { /* ignored */ }
   }
+  // ?themefirst (served under the CSP): store 'light', reload once, then
+  // record data-theme as it stands when this script runs — after
+  // theme-init.js, before app.js.
+  if (MODE.includes('themefirst')) {
+    let seeded = null;
+    try { seeded = sessionStorage.getItem('sa-themefirst'); } catch { /* ignored */ }
+    if (!seeded) {
+      try { localStorage.setItem('sa-theme', 'light'); sessionStorage.setItem('sa-themefirst', '1'); } catch { /* ignored */ }
+      location.reload();
+    } else {
+      const themeBeforeApp = document.documentElement.dataset.theme || 'unset';
+      setTimeout(() => stamp('theme-first', `before-app=${themeBeforeApp}`), 1500);
+    }
+  }
   // Every mode but notoken runs as a tab that holds a console token (the
   // console shows only the ended state without one).
   if (MODE.includes('tokenseed') || !MODE.includes('notoken')) {
@@ -1520,6 +1534,68 @@
       }, 300);
     };
     setTimeout(next, 5000);
+  }
+  // Posture banner off Home: 3 items and "and N more"; the link lands on Home,
+  // where the banner lists nothing.
+  if (location.search.includes('posturemoredemo')) {
+    const banner = () => {
+      const ul = document.getElementById('posture-items');
+      const more = ul.querySelector('.posture-more a');
+      return `items=${ul.querySelectorAll('.posture-item').length} more=${more ? more.textContent : 'none'} hidden=${ul.hidden ? 1 : 0}`;
+    };
+    setTimeout(() => openTab('egress'), 1500);
+    setTimeout(() => {
+      stamp('posture-egress', banner());
+      document.querySelector('#posture-items .posture-more a').click();
+    }, 4000);
+    setTimeout(() => stamp('posture-home', `tab=${document.querySelector('.tab-btn.active').dataset.tab} ${banner()}`), 6000);
+  }
+  // Egress fold: 2 rules with hits stay listed, 20 quiet rules fold into one
+  // row; the open fold survives an SSE-driven refetch that changes its count.
+  if (location.search.includes('folddemo')) {
+    const fs = {
+      'hit-a': { type: 'vendor-key', mode: 'monitor', would_block: 3, blocked: 0, legit: 1 },
+      'hit-b': { type: 'cloud-key', mode: 'monitor', would_block: 0, blocked: 0, legit: 2 },
+    };
+    for (let i = 0; i < 20; i++) fs['quiet-' + String(i).padStart(2, '0')] = { type: 'env-value', mode: 'monitor', would_block: 0, blocked: 0, legit: 0 };
+    data['/status'].firewall_stats = fs;
+    const fold = () => document.querySelector('#firewall-container > details.fw-fold');
+    const probe = () => {
+      const c = document.getElementById('firewall-container');
+      const d = fold();
+      return `top=${c.querySelectorAll(':scope > .fw-rule [data-rule]').length} `
+        + `fold=${d ? d.querySelector('summary').textContent : 'none'} inside=${d ? d.querySelectorAll('[data-action="promote"]').length : 0} `
+        + `open=${d && d.open ? 1 : 0} rebuilt=${d && d.dataset.before ? 0 : 1}`;
+    };
+    let focusedPromote = null;
+    setTimeout(() => openTab('egress'), 1500);
+    setTimeout(() => {
+      stamp('fold-before', probe());
+      const d = fold();
+      d.open = true;
+      d.dataset.before = '1';
+      // Focus an UNCHANGED quiet rule's Promote button, then change a
+      // DIFFERENT quiet rule's counters (moving it out of the fold) — the
+      // focused button must survive as the same node, still focused.
+      focusedPromote = d.querySelector('[data-rule="quiet-01"][data-action="promote"]');
+      if (focusedPromote) focusedPromote.focus();
+      data['/status'].firewall_stats['quiet-00'].legit = 1;
+      window.__sse.emit('guard-resolved', {});
+    }, 4000);
+    setTimeout(() => {
+      stamp('fold-after', probe());
+      const kept = !!focusedPromote && document.contains(focusedPromote) && document.activeElement === focusedPromote;
+      stamp('fold-focus', `kept=${kept ? 1 : 0}`);
+    }, 7000);
+  }
+  // Processes fills the width: panel width vs sub-view width at 1440 px.
+  if (location.search.includes('procwidthdemo')) {
+    setTimeout(() => openTab('sessions/processes'), 1500);
+    setTimeout(() => {
+      const sub = document.getElementById('sub-processes');
+      const panel = sub.querySelector('.panel');
+      stamp('proc-width', `panel=${Math.round(panel.getBoundingClientRect().width)} content=${Math.round(sub.getBoundingClientRect().width)} viewport=${window.innerWidth}`);
+    }, 4000);
   }
   // Auto-action: switch to the Egress tab — panels must hide/show correctly.
   if (location.search.includes('tabdemo')) {

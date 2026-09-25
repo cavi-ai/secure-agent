@@ -215,6 +215,7 @@ body {
 /* ---------- grid + panels ---------- */
 .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; align-items: start; }
 .col { display: flex; flex-direction: column; gap: 18px; }
+.grid.grid-stack { grid-template-columns: minmax(0, 1fr); }
 .panel {
   background: var(--bg-1); border: 1px solid var(--line); border-radius: var(--r-md);
   box-shadow: var(--sh-1); overflow: hidden;
@@ -1251,23 +1252,6 @@ body.is-ended .masthead-right { display: none !important; }
 /* ---------- firewall panel ---------- */
 .badge-ok { color: var(--ok); background: var(--ok-bg); border-color: transparent; }
 .btn-sm { padding: 6px 10px; font-size: 0.75rem; }
-.fw-uninspected {
-  display: flex; align-items: center; gap: 8px;
-  padding: 9px 11px; border-radius: var(--r-sm);
-  background: var(--warn-bg); color: var(--warn); font-size: 0.8rem;
-}
-.fw-uninspected .icon { flex: none; }
-/* Clickable variant: the warning is the drill-down entry point, not a dead
-   end. Button reset keeps it visually identical to the old div. */
-button.fw-uninspected {
-  width: 100%; border: none; font: inherit; text-align: left; cursor: pointer;
-  transition: filter .16s var(--ease);
-}
-button.fw-uninspected:hover { filter: brightness(1.25); }
-button.fw-uninspected .fw-drill-hint {
-  margin-left: auto; flex: none; font-size: 0.72rem; font-weight: 600;
-  text-decoration: underline; text-underline-offset: 2px; opacity: 0.85;
-}
 
 /* ---------- notification preferences popover ---------- */
 .notify-wrap { position: relative; }
@@ -1391,6 +1375,8 @@ button.fw-uninspected .fw-drill-hint {
 .posture-items li .sev.s1 { color: var(--brand); }
 .posture-items li a { color: var(--brand); text-decoration: none; }
 .posture-items li a:hover { text-decoration: underline; }
+.posture-items[hidden] { display: none; }
+.posture-items li.posture-more { padding-left: 16px; }
 /* Phone: the headline does not shrink (flex: none), so side by side the items
    list collapses to a sliver and its words spill past the viewport; stack. */
 @media (max-width: 560px) {
@@ -1551,7 +1537,7 @@ button.fw-uninspected .fw-drill-hint {
 }
 .harness-tile.light { background: hsl(0 0% 94%); color: #000; box-shadow: inset 0 0 0 1px hsl(0 0% 0% / 0.12); }
 .harness-logo { width: var(--harness-logo); height: var(--harness-logo); }
-.hk-claude { --harness-color: #D97757; }
+.hk-claude, .hk-claude-desktop { --harness-color: #D97757; }
 .hk-cursor, .hk-cursor-ide { --harness-color: #000000; }
 .hk-codex { --harness-color: #10A37F; }
 .hk-opencode { --harness-color: #000000; }
@@ -1634,9 +1620,17 @@ button.fw-uninspected .fw-drill-hint {
 /* Egress decision modal: agent-grouped rows with facts, advisor read, actions. */
 .egress-agent-group { margin: 0 0 14px; border: 1px solid var(--line); border-radius: var(--r-md); overflow: hidden; }
 .egress-agent-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 9px 12px; background: var(--bg-2); }
-.egress-agent-name { font-weight: 650; font-size: 0.86rem; text-transform: capitalize; }
+.egress-agent-name { font-weight: 650; font-size: 0.86rem; }
 .egress-agent-group .fw-rule { border: 0; border-top: 1px solid var(--line); border-radius: 0; margin: 0; }
 .egress-agent-group .bulk-allow { padding: 8px 12px 0; margin: 0; }
+#endpoints-panel { margin-bottom: 18px; }
+.egress-agent-lead { margin: 12px 0 6px; }
+.egress-agent-lead:first-child { margin-top: 0; }
+.egress-agent-lead .egress-agent-head { border-radius: var(--r-md); }
+.egress-agent-lead .bulk-allow { padding: 8px 0 0; margin: 0; }
+.fw-fold { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 8px; }
+.fw-fold > summary { color: var(--tx-3); font-size: 12px; cursor: pointer; }
+.fw-fold[open] > summary { margin-bottom: 8px; }
 .egress-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 10px 12px; }
 .egress-row .fw-rule-main { flex: 1 1 auto; min-width: 0; }
 .egress-actions { display: flex; gap: 6px; flex: none; }

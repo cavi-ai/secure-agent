@@ -455,11 +455,12 @@ function sessionShort(id) {
 // harnessMeta: per-harness identity for the console — display name, brand
 // color, and the sprite symbol of its mark (index.html, #logo-*). Needles
 // match the harness names the daemon reports by substring, first match wins,
-// so "cursor-ide" is listed before "cursor". Infra entries (IDEs, local model
+// so "claude-desktop" is listed before "claude" and "cursor-ide" before "cursor". Infra entries (IDEs, local model
 // servers) are tracked but shown apart and never counted as agents. Known
 // harnesses without a mark keep a text glyph. Colors must match the .hk-<key>
 // rules in style.css. Pure: returns data, no DOM.
 const HARNESS_TABLE = [
+  { needle: 'claude-desktop', key: 'claude-desktop', label: 'Claude', color: '#D97757', logo: 'logo-claude', infra: true },
   { needle: 'claude', key: 'claude', label: 'Claude Code', color: '#D97757', logo: 'logo-claude' },
   { needle: 'cursor-ide', key: 'cursor-ide', label: 'Cursor', color: '#000000', logo: 'logo-cursor', tile: 'light', infra: true },
   { needle: 'cursor', key: 'cursor', label: 'Cursor', color: '#000000', logo: 'logo-cursor', tile: 'light' },
@@ -491,7 +492,7 @@ function harnessMeta(name) {
   let h = 2166136261;
   for (const b of key) h = (h ^ b.charCodeAt(0)) >>> 0, h = Math.imul(h, 16777619) >>> 0;
   return {
-    key: key.trim() || 'agent', label: familyTitle(String(name || '').trim() || 'agent'),
+    key: key.trim() || 'agent', label: String(name || '').trim() || 'agent',
     color: `hsl(${h % 360} 62% 62%)`, logo: '',
     glyph: (name || '?').trim().slice(0, 1).toUpperCase() || '?',
     tile: '', infra: false, known: false,
@@ -999,9 +1000,32 @@ function explainActionsHTML(flag) {
 
 // ---------- agent families ----------
 
+// familyTitle: the display name for an agent id — the harness label when the
+// id is a known harness ("cursor-ide" → "Cursor"), otherwise the id as-is
+// ("lm-server", "untagged:node"): it names a process, not a product.
 function familyTitle(name) {
-  const s = String(name || 'unknown');
+  const s = String(name || '').trim();
+  if (!s) return 'Unknown';
+  const m = harnessMeta(s);
+  return m.known ? m.label : s;
+}
+
+// capFirst: sentence-case a state word from the daemon ("nominal" → "Nominal").
+function capFirst(word) {
+  const s = String(word || '');
   return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+// attentionSubtitle: the line under an attention group's name — its
+// workspace, or why it has none. A workspace of "/" says nothing, so the
+// group renders no subtitle ('').
+function attentionSubtitle(group) {
+  const g = group || {};
+  const ws = String(g.workspace || '').trim();
+  if (ws === '/') return '';
+  if (ws) return ws;
+  if (g.key === 'machine') return 'Monitoring gaps no agent session owns';
+  return 'Signals could not be safely attributed to one live session';
 }
 
 // Operator-facing rule titles come from the daemon (flag.title); this table
