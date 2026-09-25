@@ -66,9 +66,9 @@ func TestSnapshotNamesLauncherFromAncestry(t *testing.T) {
 
 func TestSanitizeArgv0CutsEnvironmentAndScrubs(t *testing.T) {
 	for in, want := range map[string]string{
-		"claude":                           "claude",
-		"Cursor Helper (Plugin): host A=1": "Cursor Helper (Plugin): host",
-		"tool AKIAABCDEFGHIJKLMNOP":        "tool [REDACTED]",
+		"claude":                              "claude",
+		"Cursor Helper (Plugin): host A=1":    "Cursor Helper (Plugin): host",
+		"tool AKIA" + "ABCDEFGH" + "IJKLMNOP": "tool [REDACTED]",
 	} {
 		if got := SanitizeArgv0(in); got != want {
 			t.Fatalf("SanitizeArgv0(%q) = %q, want %q", in, got, want)
