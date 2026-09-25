@@ -1363,6 +1363,61 @@ test('mapPostureAttention: a removed item leaves items, groups and needs_you coh
   assert.equal(posture.needs_you, 4);
 });
 
+test('posture banner: Home lists nothing (the queue is the list)', () => {
+  const items = [{ severity: 3, kind: 'flag', id: 'f1', title: 'a' }, { severity: 2, kind: 'flag', id: 'f2', title: 'b' }];
+  assert.equal(ctx.postureItemsHTML(items, 'home', ['<li class="posture-advisor">x</li>']), '');
+});
+
+test('posture banner: other tabs cap content rows (items + extra) at 3, then "and N more" to Home', () => {
+  const items = Array.from({ length: 7 }, (_, i) => ({ severity: 1, kind: 'uninspected_egress', id: 'u' + i, title: 'item ' + i }));
+  const html = ctx.postureItemsHTML(items, 'egress', ['<li class="posture-advisor">advisor</li>']);
+  // extra (1 line) counts toward the cap: only 2 items fit alongside it.
+  assert.equal((html.match(/class="posture-item"/g) || []).length, 2);
+  assert.match(html, /<li class="posture-more"><a href="#" data-action="goto-tab" data-tab="home">and 5 more<\/a><\/li>/);
+  assert.ok(html.includes('item 1') && !html.includes('item 2'));
+  assert.ok(html.endsWith('<li class="posture-advisor">advisor</li>'));
+  assert.match(html, /data-action="open-uninspected">see endpoints</);
+});
+
+test('posture banner: content rows (items + extra) at exactly 3 need no "more" link', () => {
+  const items = [
+    { severity: 1, kind: 'uninspected_egress', id: 'u0', title: 'item 0' },
+    { severity: 1, kind: 'uninspected_egress', id: 'u1', title: 'item 1' },
+  ];
+  const html = ctx.postureItemsHTML(items, 'egress', ['<li class="posture-advisor">advisor</li>']);
+  assert.equal((html.match(/class="posture-item"/g) || []).length, 2);
+  assert.ok(!html.includes('posture-more'));
+  assert.ok(html.includes('item 0') && html.includes('item 1'));
+  assert.ok(html.endsWith('<li class="posture-advisor">advisor</li>'));
+});
+
+test('posture banner: 3 or fewer items render all, no "more" link', () => {
+  const items = [{ severity: 3, kind: 'incident', id: 'i<1', title: 'x' }];
+  const html = ctx.postureItemsHTML(items, 'sessions', []);
+  assert.equal((html.match(/class="posture-item"/g) || []).length, 1);
+  assert.ok(!html.includes('posture-more'));
+  assert.ok(html.includes('data-id="i&lt;1"'));
+});
+
+test('familyTitle: a known harness id shows its label; any other id keeps its case', () => {
+  assert.equal(familyTitle('claude'), 'Claude Code');
+  assert.equal(familyTitle('cursor-ide'), 'Cursor');
+  assert.equal(familyTitle('lm-studio'), 'LM Studio');
+  assert.equal(familyTitle('untagged:node'), 'untagged:node');
+  assert.equal(familyTitle('lm-server'), 'lm-server');
+  assert.equal(familyTitle(''), 'Unknown');
+  assert.equal(ctx.harnessMeta('my-agent').label, 'my-agent');
+  assert.equal(ctx.capFirst('nominal'), 'Nominal');
+  assert.ok(!/\.egress-agent-name\s*\{[^}]*text-transform/.test(styleCSS), 'agent ids render in their own case');
+});
+
+test('attention subtitle: workspace "/" renders none; empty says why', () => {
+  assert.equal(ctx.attentionSubtitle({ workspace: '/' }), '');
+  assert.equal(ctx.attentionSubtitle({ workspace: '/Users/dev/api' }), '/Users/dev/api');
+  assert.equal(ctx.attentionSubtitle({ key: 'machine' }), 'Monitoring gaps no agent session owns');
+  assert.equal(ctx.attentionSubtitle({ key: 'agent:x', workspace: '' }), 'Signals could not be safely attributed to one live session');
+});
+
 // ---------- Events rows (trace legibility) ----------
 
 test('eventRow labels each kind and details it from the /events fields', () => {

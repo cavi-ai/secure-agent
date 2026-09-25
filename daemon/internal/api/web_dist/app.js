@@ -704,7 +704,7 @@ document.addEventListener('DOMContentLoaded', () => {
     ['posture', renderPosture], ['status', renderStatus], ['resources', renderResourceMissionControl], ['history', renderResourceHistory], ['sessions', renderSessionBoard],
     ['chart-flags', renderChartFlags], ['chart-memory', renderChartMemory], ['spend', renderSpend],
     ['agents', renderAgents],
-    ['firewall', renderFirewall], ['incidents', renderIncidents], ['fleet', renderFleet],
+    ['endpoints', renderEndpoints], ['firewall', renderFirewall], ['incidents', renderIncidents], ['fleet', renderFleet],
     ['audit', renderAudit], ['sources', renderSources], ['flags', renderFlags], ['attention', renderAttention],
     ['events', renderEvents], ['activity', renderActivity], ['worktrees', renderWorktrees], ['clutter', renderClutter], ['tab-badges', renderTabBadges],
     ['notify', renderNotifyRules], ['policy', renderPolicyLists]
@@ -718,7 +718,7 @@ document.addEventListener('DOMContentLoaded', () => {
     sessions: 'sessions/board', agents: 'sessions/processes', fleet: 'sessions/processes',
     resources: 'sessions/resources', history: 'sessions/resources',
     worktrees: 'sessions/worktrees', clutter: 'sessions/worktrees', events: 'sessions/events',
-    firewall: 'egress', sources: 'egress',
+    endpoints: 'egress', firewall: 'egress', sources: 'egress',
     notify: 'policy', policy: 'policy', audit: 'policy'
   };
   // A panel is on screen when its tab is active, its sub-view is the open
@@ -734,7 +734,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // Panel → the element whose focused control holds its render.
   const PANEL_EL = {
     resources: 'resource-board', history: 'history-board', sessions: 'session-rail', agents: 'agents-container',
-    fleet: 'fleet-container', firewall: 'firewall-container', sources: 'sources-list', incidents: 'incidents-container',
+    fleet: 'fleet-container', endpoints: 'endpoints-container', firewall: 'firewall-container', sources: 'sources-list', incidents: 'incidents-container',
     audit: 'audit-container', flags: 'flags-list', attention: 'attention-list', events: 'events-container',
     worktrees: 'worktrees-container', clutter: 'clutter-container', notify: 'notify-pop'
   };
@@ -1377,7 +1377,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const allowRowSel = (agent, host) => `#firewall-container [data-action="allowlist-remove"][data-agent="${cssq(agent)}"][data-host="${cssq(host)}"]`;
   function stageAllow(agent, hosts) {
     const hit = x => x.agent === agent && hosts.includes(x.host);
-    return stage(['allowlist', 'suggestions', 'uninspected'], ['firewall'], () => {
+    return stage(['allowlist', 'suggestions', 'uninspected'], ['firewall', 'endpoints'], () => {
       const have = telemetryData.allowlist || [];
       telemetryData.allowlist = have.concat(hosts.filter(h => !have.some(p => p.agent === agent && p.host === h)).map(host => ({ agent, host })));
       telemetryData.suggestions = (telemetryData.suggestions || []).filter(x => !hit(x));
@@ -1385,6 +1385,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
   function refillUninspected() {
+    markDirty('endpoints');
     if (drawerMode === 'uninspected' && drawer && !drawer.hidden) fillUninspected(drawerBody);
   }
 
@@ -1796,6 +1797,7 @@ document.addEventListener('DOMContentLoaded', () => {
     else if (el.matches('details.agent-tree')) agentTreeOpen[el.dataset.pid] = el.open;
   }, true);
   Object.defineProperties(window.SA, {
+    activeTab: { get() { return activeTab; } },
     timelineSession: { get() { return timelineSession; }, set(v) { timelineSession = v; } },
     timelinePids: { get() { return timelinePids; }, set(v) { timelinePids = v; } },
     timelinePidLabel: { get() { return timelinePidLabel; }, set(v) { timelinePidLabel = v; } },
