@@ -196,6 +196,20 @@ test('clutter: Ask advisor on every project, "machine" for machine caches; the p
   assert.ok(planned.includes('<b>Advisor:</b> &lt;b&gt;old&lt;/b&gt; scratch<ol><li>Trash .tmp</li><li>&lt;i&gt;ask&lt;/i&gt; feat/x</li></ol></div>'));
 });
 
+test('removals: step while running with Remove disabled; refusal and failure stay on the row, escaped', () => {
+  const rep = report();
+  const w = rep.repos[0].worktrees.find(x => x.state === 'remove');
+  const running = worktreeRowHTML(w, rep.repos[0], null, null, { state: 'running', step: 'deleting' });
+  assert.ok(running.includes('<p class="wt-removal wt-removal-running" role="status"><b>Removing…</b> deleting</p>'));
+  assert.ok(running.includes('disabled>Removing…</button>') && !running.includes('data-action="worktree-remove"'));
+  const refused = worktreeRowHTML(w, rep.repos[0], null, null, { state: 'failed', row_state: 'keep', reasons: ['1 <b>untracked</b> file'] });
+  assert.ok(refused.includes('<b>Not removed:</b> it is now keep — 1 &lt;b&gt;untracked&lt;/b&gt; file</p>'));
+  assert.ok(refused.includes('>Try again</button>'));
+  const failed = worktreeRowHTML(w, rep.repos[0], null, null, { state: 'failed', error: 'git worktree: signal: killed' });
+  assert.ok(failed.includes('<p class="wt-removal wt-removal-failed" role="alert"><b>Removal failed:</b> git worktree: signal: killed</p>'));
+  assert.ok(!worktreeRowHTML(w, rep.repos[0]).includes('wt-removal'));
+});
+
 test('agent asks: status line under the row, escaped; Ask the agent disabled while one runs', () => {
   const rep = report();
   const keep = rep.repos[1].worktrees[0];

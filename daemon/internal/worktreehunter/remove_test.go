@@ -86,9 +86,18 @@ func TestRemoveOnlyOnFreshRemoveVerdict(t *testing.T) {
 	if len(st.audit) != 1 || st.audit[0].Action != "worktree-remove" || !strings.Contains(st.audit[0].Detail, "branch=feat/merged") {
 		t.Fatalf("audit = %+v", st.audit)
 	}
-	if rep := h.Report(ctx, false); rep.Cached {
-		t.Fatal("removal did not drop the cached report")
+	rep = h.Report(ctx, false)
+	for _, r := range rep.Repos {
+		for _, w := range r.Worktrees {
+			if w.Path == merged {
+				t.Fatal("the removed worktree is still in the report")
+			}
+		}
 	}
+	if rm := rep.Removals[merged]; !rep.Refreshing || rm.State != RemovalRemoved || rm.Branch != "feat/merged" || rm.FinishedAt == nil {
+		t.Fatalf("after removal: refreshing=%v removal=%+v", rep.Refreshing, rm)
+	}
+	h.bgWG.Wait()
 }
 
 func TestPrune(t *testing.T) {

@@ -807,10 +807,13 @@ Removes one worktree, or prunes a repository's entries for worktrees whose direc
 
 ```json
 {"path": "/Users/me/code/app/.worktrees/done"}
+{"path": "/Users/me/code/app/.worktrees/done", "async": true}
 {"repo": "/Users/me/code/app", "prune": true}
 ```
 
-Remove measures the worktree (a fresh walk) and inspects it again at request time and runs `git worktree remove` (never `--force`) only when that fresh verdict is `remove`; git still refuses a tree that turned dirty in between. The branch and its commits stay. Prune runs `git worktree prune` when the repository lists at least one unlocked worktree whose directory is gone. Both write an audit row and a cleanup ledger row (`worktree-remove` with the bytes measured before removal; `worktree-prune` with 0) and drop the cached scan.
+`"async": true` answers `202 {"status":"accepted","removal":{...}}` at once and removes in the background; `409` when a removal of that path is already running; `400` for a relative path. Every removal, async or not, is listed in `GET /worktrees` under `removals` by path while it runs and for 30 minutes after: `state` (`running`, `removed`, `failed`), `step` while running (`waiting for the current scan`, `checking it is still safe to remove`, `measuring`, `deleting`), `error`, and for a refusal `row_state` and `reasons`; `branch`, `bytes`, `started_at`, `finished_at`. `git worktree remove` runs under a 10-minute deadline (read-only git calls keep 10 seconds) and finishes even when the request is canceled. A removed worktree leaves the cached report at once, and a background rescan follows.
+
+Remove measures the worktree (a fresh walk) and inspects it again at request time and runs `git worktree remove` (never `--force`) only when that fresh verdict is `remove`; git still refuses a tree that turned dirty in between. The branch and its commits stay. Prune runs `git worktree prune` when the repository lists at least one unlocked worktree whose directory is gone. Both write an audit row and a cleanup ledger row (`worktree-remove` with the bytes measured before removal; `worktree-prune` with 0); a prune drops the cached scan.
 
 #### `POST /worktrees/ask` and `GET /worktrees/asks`
 

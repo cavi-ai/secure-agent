@@ -97,6 +97,10 @@ type wtNote struct {
 // wtScanTimeout covers a full scan: the daemon bounds one at 3 minutes.
 const wtScanTimeout = 200 * time.Second
 
+// wtRemoveTimeout covers a removal: a scan it waits for, then git deleting
+// the tree, which the daemon bounds at 10 minutes.
+const wtRemoveTimeout = 14 * time.Minute
+
 func handleWorktrees(client *http.Client) {
 	c := *client
 	c.Timeout = wtScanTimeout
@@ -110,7 +114,9 @@ func handleWorktrees(client *http.Client) {
 // the list view.
 func runWorktrees(w io.Writer, client *http.Client, args []string) error {
 	if len(args) > 0 && (args[0] == "remove" || args[0] == "prune") {
-		return runWorktreeRemove(w, client, args)
+		c := *client
+		c.Timeout = wtRemoveTimeout
+		return runWorktreeRemove(w, &c, args)
 	}
 	if len(args) > 0 && args[0] == "advise" {
 		return runWorktreeAdvise(w, client, args)

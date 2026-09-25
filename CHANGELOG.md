@@ -10,6 +10,9 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Console: shows the posture banner capped at 3 rows off Home and empty on Home, agent ids in their own case, Egress led by the uninspected endpoints with zero-hit rules folded into one row, and Processes at full width.
 
 ### Added
+- `POST /worktrees/remove` `"async": true` removes in the background; `GET /worktrees` `removals` reports each removal's step and outcome for 30 minutes.
+- Console Cleanup view: Remove shows "Removing…" with the current step, then drops the row and moves the totals, or keeps the row with the error or the refusal and a Try again button; a toast reports each outcome.
+- `secure-agent worktrees remove` waits up to 14 minutes.
 - Sessions carry `origin`, the openclaw agent behind a Codex session, named in console titles and "×N" folded rows.
 - `GET /costs/plans` serves each Codex home's plan headroom, shown as a line and bar per plan on the console Spend card.
 - Codex calls on a ChatGPT plan (provider `chatgpt`) and Hermes `openai-codex` calls count as plan calls, not unpriced.
@@ -202,6 +205,8 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Menu bar: the unused flag action, incident detail and process detail sheets.
 
 ### Fixed
+- Worktree removal: `git worktree remove` runs under a 10-minute deadline instead of the 10-second read limit that killed it mid-delete on large trees (200,000 files take 16 s), and finishes when the request is canceled.
+- A git failure during removal says whether the worktree is still on disk and registered.
 - A Code conversation in the Claude desktop app is rooted at its own `claude` process and ends when that process exits; the app (`claude-desktop`, infra) no longer holds every conversation open until it quits.
 - Console: `claude-desktop` shows as Claude, counted as infra.
 - Local advisor: finding plans, worktree notes and cleanup plans run under a deadline of at least 5 minutes instead of the triage `timeout_ms`; a reasoning model at 60 s timed them out.

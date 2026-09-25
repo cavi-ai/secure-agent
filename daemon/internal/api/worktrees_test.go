@@ -156,6 +156,52 @@ func worktreeFixture(t *testing.T) (home, root, repo, clean, dirty, gone string)
 	return home, root, repo, clean, dirty, gone
 }
 
+// With "async": true the removal answers 202 at once; GET /worktrees
+// reports its outcome under removals and drops the row.
+func TestWorktreeRemoveAsync(t *testing.T) {
+	home, _, _, clean, dirty, _ := worktreeFixture(t)
+	st := testStore(t)
+	t.Cleanup(func() { st.Close() })
+	mux := New(Deps{Store: st, Status: func() Status { return Status{Running: true} }, Worktrees: worktreehunter.New(st, home, worktreehunter.Options{})}).buildMux()
+	do := func(method, path, body string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest(method, path, strings.NewReader(body)))
+		return rec
+	}
+	if rec := do(http.MethodPost, "/worktrees/remove", `{"path":"relative","async":true}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("relative async: %d", rec.Code)
+	}
+	for _, p := range []string{clean, dirty} {
+		rec := do(http.MethodPost, "/worktrees/remove", `{"path":"`+p+`","async":true}`)
+		var out struct {
+			Removal worktreehunter.Removal `json:"removal"`
+		}
+		if rec.Code != http.StatusAccepted || json.Unmarshal(rec.Body.Bytes(), &out) != nil || out.Removal.State != worktreehunter.RemovalRunning {
+			t.Fatalf("async %s: %d %s", filepath.Base(p), rec.Code, rec.Body.String())
+		}
+	}
+	var rep worktreehunter.ScanReport
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		if err := json.Unmarshal(do(http.MethodGet, "/worktrees", "").Body.Bytes(), &rep); err != nil {
+			t.Fatal(err)
+		}
+		if rep.Removals[clean].State != worktreehunter.RemovalRunning && rep.Removals[dirty].State != worktreehunter.RemovalRunning {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("removals still running: %+v", rep.Removals)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if c, d := rep.Removals[clean], rep.Removals[dirty]; c.State != worktreehunter.RemovalRemoved || d.State != worktreehunter.RemovalFailed || d.RowState != "keep" {
+		t.Fatalf("outcomes: clean %+v dirty %+v", c, d)
+	}
+	if _, err := os.Stat(clean); err == nil {
+		t.Fatal("clean worktree still on disk")
+	}
+}
+
 func TestWorktreeRemoveEndpoint(t *testing.T) {
 	home, root, repo, clean, dirty, gone := worktreeFixture(t)
 

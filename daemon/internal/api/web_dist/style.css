@@ -1801,3 +1801,7 @@ body.is-ended .masthead-right { display: none !important; }
 .cl-plan { margin: 8px 12px 0; }
 .cl-plan ol { margin: 4px 0 0; padding-left: 18px; }
 .cl-plan li { margin: 2px 0; }
+.wt-removal { margin: 6px 0 0 68px; padding: 6px 10px; border-left: 2px solid var(--warn); background: var(--warn-bg); border-radius: var(--r-sm); font-size: 0.74rem; color: var(--tx-2); overflow-wrap: anywhere; }
+.wt-removal b { color: var(--tx-1); font-weight: 600; }
+.wt-removal-failed { border-left-color: var(--bad); background: var(--bad-bg); }
+@media (max-width: 720px) { .wt-removal { margin-left: 0; } }

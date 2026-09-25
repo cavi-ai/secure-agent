@@ -78,6 +78,9 @@ type ScanReport struct {
 	// Refreshing is true while a background rescan or re-measure replaces
 	// this cached report.
 	Refreshing bool `json:"refreshing,omitempty"`
+	// Removals are the running removals and those that ended in the last
+	// 30 minutes, by path.
+	Removals map[string]Removal `json:"removals,omitempty"`
 	// Volumes are the disks holding the scanned repositories.
 	Volumes []diskusage.Volume `json:"volumes,omitempty"`
 	// Reclaimed sums the cleanup ledger; the API fills it.
@@ -138,6 +141,12 @@ type Hunter struct {
 	loaded bool
 	bgWG   sync.WaitGroup
 
+	// removals tracks each removal's steps and outcome by path; remWG lets
+	// tests wait for background removals.
+	remMu    sync.Mutex
+	removals map[string]*Removal
+	remWG    sync.WaitGroup
+
 	fpMu sync.Mutex
 	// fingerprints caches each repository's default-branch patch ids by
 	// the branch tip they were computed at.
@@ -162,7 +171,7 @@ func New(st Store, home string, opts Options) *Hunter {
 		home, _ = os.UserHomeDir()
 	}
 	return &Hunter{st: st, home: home, now: time.Now, opts: normalize(opts),
-		fingerprints: map[string]fingerprintCache{}, sizes: map[string]sizeEntry{}}
+		fingerprints: map[string]fingerprintCache{}, sizes: map[string]sizeEntry{}, removals: map[string]*Removal{}}
 }
 
 func staleDuration(days int) time.Duration { return time.Duration(days) * 24 * time.Hour }
@@ -199,7 +208,11 @@ func (h *Hunter) invalidate() {
 // come from the size cache; worktrees not measured yet are queued for the
 // background sizer and the report says Sizing.
 func (h *Hunter) Report(ctx context.Context, refresh bool) ScanReport {
-	return h.withSizes(h.report(ctx, refresh))
+	rep := h.withSizes(h.report(ctx, refresh))
+	if rm := h.Removals(); len(rm) > 0 {
+		rep.Removals = rm
+	}
+	return rep
 }
 
 // report answers from the cached scan unless refresh is asked: one older
