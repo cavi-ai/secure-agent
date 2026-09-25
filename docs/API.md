@@ -366,9 +366,14 @@ Repeating findings: the flags one agent raised under one rule on one subject in 
 
 Retrieves raw system telemetry events captured by the file watcher and network sampler.
 File opens, writes and deletes are stored for processes inside an agent family, and otherwise only as the evidence of a flag.
+Trace rows (kind `12` tool call, `13` turn, `14` model call) carry pid `0` and `session_id`.
+A model call carries `model`, `tokens_in`, `tokens_out`, `cost_usd` and `price_class` (`priced`, `plan`, `local`, `unknown-model` or `unpriced-model`); `price_class` is set when served, never stored.
 
 #### Query Parameters
 - `limit` *(optional, integer)*: Maximum number of events to return (default: `50`).
+- `kind` *(optional, integer)*: Only events of this kind.
+- `pid` *(optional, integer)*: Only events for this pid; values `<= 0` are ignored.
+- `since` *(optional, string)*: Only events with `ts` at or after this timestamp.
 
 #### Request
 ```http
@@ -380,15 +385,36 @@ Host: unix
 ```json
 [
   {
-    "id": 105,
-    "type": "file_read",
+    "kind": 1,
+    "ts": "2026-08-12T19:41:59-04:00",
     "pid": 58210,
-    "process_name": "fake-cursor",
-    "path": "/Users/dev/project/.env",
-    "timestamp": "2026-08-12T19:41:59-04:00"
+    "session_id": "sess-abc123",
+    "path": "/Users/dev/project/.env"
+  },
+  {
+    "kind": 14,
+    "ts": "2026-08-12T19:42:04-04:00",
+    "pid": 0,
+    "session_id": "sess-abc123",
+    "model": "claude-sonnet-4-5",
+    "provider": "anthropic",
+    "tokens_in": 12000,
+    "tokens_out": 340,
+    "cost_usd": 0.0412,
+    "price_class": "priced"
   }
 ]
 ```
+
+| Field | Meaning |
+|---|---|
+| `kind` | Event kind: `0` open, `1` write, `2` delete, `3` exec, `5`/`6` connect open/close, `7` TCC modify, `8` plugin tool-use, `9` proxy hit, `10`/`11` guard prompt/resolved, `12` tool call, `13` turn, `14` model call. |
+| `ts`, `pid`, `session_id` | When it happened, the process, and the agent session (trace rows carry pid `0` and `session_id`). |
+| `path`, `exe_path` | File or executable path, for file and exec kinds. |
+| `remote_host`, `remote_port` | Destination, for connect kinds. |
+| `tool`, `tool_status`, `duration_ms`, `call_id` | Tool call fields (kind `12`): name, `ok`\|`error`\|`running`, start→result duration, the harness's own call id. |
+| `model`, `provider`, `tokens_in`, `tokens_out`, `cost_usd` | Model call fields (kind `14`). |
+| `price_class` | `priced`, `plan`, `local`, `unknown-model` or `unpriced-model`; computed when served, never stored. |
 
 ---
 
@@ -529,18 +555,18 @@ A malformed `since`/`until`, an unknown `by` or a `tz` that is not a whole numbe
 }
 ```
 
-Rows are sorted by cost, then calls (at most 200); `by=day` rows run oldest first (the newest 200 days); `rows` is `[]` when the window is empty. `harness` is the harness with the most calls in the group (omitted for `by=harness`). Missing repo, branch, harness or model values group as `(no repo)`, `(no branch)`, `(unknown)`. `unpriced_calls` counts calls with cost `0`; a cost is never estimated. Read-level. CLI: `secure-agent cost [--since 24h] [--by repo] [--tz <minutes>] [--json]` (`--tz` defaults to this machine's offset; day rows print oldest first); the table view adds the class breakdown and one `add a price for <model> under pricing: in ~/.config/secure-agent/config.yaml` line per `unpriced-model` id.
+Rows are sorted by cost, then calls (at most 200); `by=day` rows run oldest first (the newest 200 days); `rows` is `[]` when the window is empty. `harness` is the harness with the most calls in the group (omitted for `by=harness`). Missing repo, branch, harness or model values group as `(no repo)`, `(no branch)`, `(unknown)`. `unpriced_calls` counts the calls a price entry could fix (`unknown_model_calls` + `unpriced_model_calls`); plan and local calls are counted apart; a cost is never estimated. Read-level. CLI: `secure-agent cost [--since 24h] [--by repo] [--tz <minutes>] [--json]` (`--tz` defaults to this machine's offset; day rows print oldest first); the table view adds a `plan: P · local: L · unpriced: U — K unknown model, M unpriced model` line when any is non-zero and one `add a price for <model> under pricing: in ~/.config/secure-agent/config.yaml` line per `unpriced-model` id.
 
-Every row and the total split `unpriced_calls` by price class:
+Every row and the total count their zero-cost calls by price class:
 
 | Field | Class | Meaning |
 |---|---|---|
 | `unknown_model_calls` | `unknown-model` | the harness recorded no model id |
 | `unpriced_model_calls` | `unpriced-model` | model id known, no price entry: add one under [`pricing`](CONFIGURATION.md) |
-| `plan_calls` | `plan` | subscription provider (`kimi-for-coding`, `kimi-code-plan-global`) |
-| `local_calls` | `local` | local runtime (`ollama`, `lmstudio`, `lm-studio`, `llama.cpp`, `mlx`, or a loopback provider) |
+| `plan_calls` | `plan` | subscription provider (`chatgpt`, `kimi-for-coding`, `kimi-code-plan-global`); not in `unpriced_calls` |
+| `local_calls` | `local` | local runtime (`ollama`, `lmstudio`, `lm-studio`, `llama.cpp`, `mlx`, or a loopback provider); not in `unpriced_calls` |
 
-A zero-token call of a priced model is in `unpriced_calls` and in no class counter. A price entry wins over the provider: a priced model is `priced` whatever the provider. A vendor-prefixed id (`z-ai/glm-5.3-flash`) is looked up without its prefix when the full id has no entry. `by=model` rows also carry `provider` (the provider with the most calls for the model; omitted when none is recorded) and `class` (`priced` when every call carries a cost, else the model's class).
+A Codex model call on a ChatGPT-plan login (its `token_count` line reports `rate_limits.plan_type`) records provider `chatgpt`; an API-key login keeps the rollout's provider; rows stored before this rule keep theirs. A zero-token call of a priced model is in no class counter and not in `unpriced_calls`. A price entry wins over the provider: a priced model is `priced` whatever the provider. A vendor-prefixed id (`z-ai/glm-5.3-flash`) is looked up without its prefix when the full id has no entry. `by=model` rows also carry `provider` (the provider with the most calls for the model; omitted when none is recorded) and `class` (`priced` when every call carries a cost, else the model's class).
 
 `by=provider` keys each call by:
 
@@ -566,6 +592,28 @@ The zero-cost calls by harness, provider and model with their class; `priced` gr
   ]
 }
 ```
+
+#### `GET /costs/plans`
+
+The latest plan headroom per harness home, read from Codex `token_count` lines on a ChatGPT-plan login; sorted by `home`, then `home_path`. Memory only: `plans` is `[]` after a daemon restart until the next `token_count` line. Read-level; console-allowed; other methods return `405`.
+
+```json
+{
+  "plans": [
+    {"harness": "codex", "home": "codex", "home_path": "/Users/dev/.codex", "plan_type": "pro", "limit_id": "codex",
+     "windows": [{"window_minutes": 10080, "used_percent": 52, "resets_at": "2026-09-29T14:30:38Z"}],
+     "unlimited": false, "seen_at": "2026-09-24T10:00:00Z"}
+  ]
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `home` | `codex` for a `.codex` home, `<name> (openclaw)` for `…/.openclaw/agents/<name>/agent/codex-home`, else the home's directory name |
+| `home_path` | the home directory the snapshot is keyed by; two homes can share a `home` label, never a `home_path` |
+| `windows` | the primary window, then the secondary when reported; `resets_at` RFC3339, `""` when not reported |
+| `unlimited` | `rate_limits.credits.unlimited` |
+| `seen_at` | timestamp of the line that carried the snapshot; the newest per home is kept |
 
 ### 17. `GET /doctor`
 

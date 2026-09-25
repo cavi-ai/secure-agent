@@ -485,43 +485,48 @@ function renderChartMemory() {
 }
 
 // Spend: the stat-strip tile (24h total, by repo, from SA.t.costs) and the
-// Spend card (SA.t.costsCard: the dimension and window its controls chose).
-// Unpriced calls (unknown model) are counted, never priced.
+// Spend card (SA.t.costsCard: the dimension and window its controls chose),
+// headed by one plan-headroom line per SA.t.costPlans entry. Plan and
+// unpriced calls are counted, never priced.
 function renderSpend() {
   const SA = window.SA;
   const report = SA.t.costs;
   const total = (report && report.total) || {};
-  const calls = Number(total.calls) || 0;
   const num = document.getElementById('count-spend');
   const hint = document.getElementById('hint-spend');
-  if (num) num.textContent = calls ? fmtUSD(total.cost_usd) : '—';
-  if (hint) {
-    const unpriced = Number(total.unpriced_calls) || 0;
-    hint.textContent = calls
-      ? `${calls} call${calls === 1 ? '' : 's'}` + (unpriced ? ` · ${unpriced} unpriced` : '')
-      : '';
-  }
+  if (num) num.textContent = Number(total.calls) ? fmtUSD(total.cost_usd) : '—';
+  if (hint) hint.textContent = spendHintText(total);
 
   const el = document.getElementById('spend-card');
   if (!el) return;
+  let plansEl = el.firstElementChild;
+  let body = plansEl && plansEl.nextElementSibling;
+  if (el.childElementCount !== 2 || plansEl.className !== 'spend-plans' || body.className !== 'spend-body') {
+    el.innerHTML = '<div class="spend-plans"></div><div class="spend-body"></div>';
+    plansEl = el.firstElementChild;
+    body = plansEl.nextElementSibling;
+  }
+  const plans = SA.t.costPlans && Array.isArray(SA.t.costPlans.plans) ? SA.t.costPlans.plans : [];
+  patchList(plansEl, spendPlanItems(plans), { key: i => i.key, html: i => i.html });
+
   const card = SA.t.costsCard;
   if (!card) {
-    el.innerHTML = `<div class="empty"><span>Loading spend…</span></div>`;
+    body.innerHTML = `<div class="empty"><span>Loading spend…</span></div>`;
     return;
   }
   const rows = Array.isArray(card.rows) ? card.rows : [];
-  if (!rows.some(row => Number(row.cost_usd) > 0)) {
-    el.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-activity"/></svg><span>No priced model calls in this window.</span></div>`;
+  if (!rows.some(row => Number(row.cost_usd) > 0 || Number(row.plan_calls) > 0)) {
+    body.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-activity"/></svg><span>No priced model calls in this window.</span></div>`;
     return;
   }
   // Keyed through patchList so the slow refresh keeps unchanged rows and
   // the day bars' horizontal scroll.
   const day = card.by === 'day';
   const cls = day ? 'spend-bars' : 'spend-list';
-  let wrap = el.firstElementChild;
-  if (!wrap || el.childElementCount !== 1 || wrap.className !== cls) {
-    el.innerHTML = `<div class="${cls}"></div>`;
-    wrap = el.firstElementChild;
+  let wrap = body.firstElementChild;
+  if (!wrap || body.childElementCount !== 1 || wrap.className !== cls) {
+    body.innerHTML = `<div class="${cls}"></div>`;
+    wrap = body.firstElementChild;
   }
   const left = wrap.scrollLeft;
   const items = day ? spendDayItems(rows) : spendListItems(rows, 8, { by: card.by, expanded: SA.expanded });
@@ -529,23 +534,76 @@ function renderSpend() {
   wrap.scrollLeft = left;
 }
 
+// spendHintText: the stat-strip line under the 24h spend — "N calls", then
+// " · P on plans" and " · U unpriced" when non-zero; '' with no calls.
+function spendHintText(total) {
+  const t = total || {};
+  const calls = Number(t.calls) || 0;
+  if (!calls) return '';
+  const plan = Number(t.plan_calls) || 0;
+  const unpriced = Number(t.unpriced_calls) || 0;
+  return `${calls} call${calls === 1 ? '' : 's'}`
+    + (plan ? ` · ${plan} on plans` : '')
+    + (unpriced ? ` · ${unpriced} unpriced` : '');
+}
+
+// planWindowLabel: a rate-limit window's length — 10080 min "weekly", 300
+// "5-hour", else "<n>h".
+function planWindowLabel(minutes) {
+  const m = Number(minutes) || 0;
+  if (m === 10080) return 'weekly';
+  if (m === 300) return '5-hour';
+  return `${Math.round((m / 60) * 10) / 10}h`;
+}
+
+// planLineText: one /costs/plans entry as "Codex Pro · codex · weekly 52%
+// used · resets Fri 3:10 PM" (local time), one clause per window.
+function planLineText(p) {
+  const cap = s => { s = String(s || ''); return s ? s[0].toUpperCase() + s.slice(1) : ''; };
+  const parts = [[cap(p.harness), cap(p.plan_type)].filter(Boolean).join(' '), String(p.home || '')];
+  for (const w of Array.isArray(p.windows) ? p.windows : []) {
+    const reset = Date.parse(w.resets_at);
+    parts.push(`${planWindowLabel(w.window_minutes)} ${Math.round(Number(w.used_percent) || 0)}% used`
+      + (isNaN(reset) ? '' : ` · resets ${fmtDayClock(new Date(reset))}`));
+  }
+  return parts.filter(Boolean).join(' · ');
+}
+
+// spendPlanItems: the Spend card's plan-headroom lines as patchList items
+// { key: "plan:<home>", html } — the line, then one bar per window filled to
+// used_percent. No items for an empty list.
+function spendPlanItems(plans) {
+  return (plans || []).map(p => {
+    const bars = (Array.isArray(p.windows) ? p.windows : []).map(w => {
+      const pct = Math.min(100, Math.max(0, Number(w.used_percent) || 0));
+      const cls = pct >= 90 ? ' crit' : pct >= 75 ? ' warn' : '';
+      return `<span class="hbar-track" title="${escapeHTML(planWindowLabel(w.window_minutes))}"><span class="hbar-fill${cls}" data-w="${pct.toFixed(1)}"></span></span>`;
+    }).join('');
+    return { key: `plan:${p.home_path || p.home}`, html: `<div class="spend-plan">
+      <span class="spend-plan-text">${escapeHTML(planLineText(p))}</span>${bars}
+    </div>` };
+  });
+}
+
 // spendListItems: the Spend card's repo/provider/model list as patchList
 // items { key: "<by>:<row key>", html } — the top n rows by cost (key,
 // harness chip, calls, cost), then the Show more button (list key "spend").
 // opts: { by, expanded }. A by=provider "(unknown)" row says the provider
-// was not recorded.
+// was not recorded; a row whose calls are all on plans reads "plan" where
+// the cost goes.
 function spendListItems(rows, n, opts) {
   opts = opts || {};
   const list = rows || [];
   const row = r => {
     const calls = Number(r.calls) || 0;
+    const onPlan = calls > 0 && Number(r.plan_calls) === calls;
     const unknown = opts.by === 'provider' && r.key === '(unknown)';
     return `<div class="spend-row">
       <span class="spend-key" title="${escapeHTML(r.key)}">${escapeHTML(r.key)}</span>
       ${unknown ? '<span class="spend-hint">provider not recorded</span>' : ''}
       ${r.harness ? harnessChipHTML(r.harness) : ''}
       <span class="spend-calls">${calls} call${calls === 1 ? '' : 's'}</span>
-      <span class="spend-cost">${escapeHTML(fmtUSD(r.cost_usd))}</span>
+      <span class="spend-cost">${onPlan ? 'plan' : escapeHTML(fmtUSD(r.cost_usd))}</span>
     </div>`;
   };
   const cap = cappedList(topCostRows({ rows: list }, list.length), n, null, 'spend', opts.expanded);
@@ -786,6 +844,7 @@ function renderEvents() {
   else if (SA.timelinePids && SA.timelinePids.length) events = filterEventsByPids(allEvents, SA.timelinePids);
   const term = SA.globalSearchTerm ? SA.globalSearchTerm() : '';
   if (term) events = events.filter(e => matchesSearch(term, e.path, e.remote_host, e.detail, e.exe_path, e.session_id));
+  events = eventsNewestFirst(events);
 
   const chip = document.getElementById('session-filter');
   if (chip) SA.paintSessionChip('session-filter', 'session-filter-id', events.length);
@@ -803,29 +862,23 @@ function renderEvents() {
     return;
   }
 
+  const now = new Date();
   const row = (e, freshCls) => {
-    let kindLabel = 'EVENT';
-    let kindClass = '';
-    if (e.kind === 8) { kindLabel = 'TOOL USE'; kindClass = 'tool'; }
-    else if (e.kind === 9) { kindLabel = 'PROXY HIT'; kindClass = 'proxy'; }
-    else if (e.kind === 5) { kindLabel = 'NET CONN'; kindClass = 'conn'; }
-
-    // fmtTime (lib.js) keeps the 68px time column single-line and
-    // locale-proof ("16:03:58", always zero-padded).
-    const timeStr = fmtTime(new Date(e.ts));
-    const detailStr = e.detail || e.path || (e.remote_host ? `${e.remote_host}:${e.remote_port}` : '');
-    // A bare PID is the ambiguous-process complaint — prefix the agent
-    // name when the tagged tree can supply one.
-    const agentName = SA.agentNameFor(e.pid);
-    const pidLabel = agentName ? `${agentName} · PID ${e.pid}` : `PID ${e.pid}`;
-
+    const { label, cls, detail } = eventRow(e);
+    // eventTime (lib.js): locale-proof HH:MM:SS today, "Mon DD HH:MM" on
+    // another day, so a backfilled row cannot pass for a live one.
+    const timeStr = eventTime(new Date(e.ts), now);
+    // A bare PID is the ambiguous-process complaint: a trace row names its
+    // session, any other row prefixes the agent name the tagged tree gives.
+    const who = eventWho(e, SA.t.sessions, Number(e.pid) ? SA.agentNameFor(e.pid) : '');
+    const mark = who.harness ? harnessChipHTML(who.harness) : '';
 
     return `
       <div class="timeline-item${freshCls}">
-        <span class="t">${timeStr}</span>
-        <span class="event-kind ${kindClass}">${kindLabel}</span>
-        <span class="pid" title="PID ${e.pid}">${escapeHTML(pidLabel)}</span>
-        <span class="dtl">${escapeHTML(detailStr)}</span>
+        <span class="t">${escapeHTML(timeStr)}</span>
+        <span class="event-kind ${cls}">${label}</span>
+        <span class="pid" title="${escapeHTML(who.title)}">${mark}${escapeHTML(who.text)}</span>
+        <span class="dtl">${escapeHTML(detail)}</span>
       </div>
     `;
   };
@@ -842,6 +895,7 @@ function renderEvents() {
       : row(e, !SA.reducedMotion && !SA.firstEventRender && !SA.suppressFreshOnce && !SA.prevEventKeys.has(eventKey(e))
         ? (e.kind === 9 ? ' fresh-sev' : ' fresh') : '')),
   });
+  applyInlineMetrics(container);
 
   SA.prevEventKeys = new Set(events.map(eventKey));
   SA.firstEventRender = false;

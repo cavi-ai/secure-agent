@@ -96,6 +96,21 @@ func (a *API) handleCostsUnpriced(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, out)
 }
 
+// handleCostsPlans serves the latest plan headroom snapshot per harness
+// home, sorted by home label. Memory only: empty after a restart until the
+// next line that reports it. Read-level.
+//
+//	GET /costs/plans
+func (a *API) handleCostsPlans(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	writeJSON(w, struct {
+		Plans []collect.PlanSnapshot `json:"plans"`
+	}{Plans: collect.Plans()})
+}
+
 // costWindow reads since (default 24h ago) and until (default now).
 func costWindow(r *http.Request) (since, until time.Time, err error) {
 	q := r.URL.Query()
@@ -114,9 +129,10 @@ func costWindow(r *http.Request) (since, until time.Time, err error) {
 	return since, until, nil
 }
 
-// classifyCosts splits each row's and the total's unpriced calls by price
-// class, and names the class of each by=model row: priced when every call
-// carries a cost, else the model's class under its dominant provider.
+// classifyCosts splits each row's and the total's zero-cost calls by price
+// class, names the class of each by=model row (priced when every call
+// carries a cost, else the model's class under its dominant provider), then
+// narrows unpriced_calls to the unknown-model and unpriced-model calls.
 func classifyCosts(rep *store.CostReport) {
 	idx := make(map[string]int, len(rep.Rows))
 	for i, r := range rep.Rows {
@@ -129,20 +145,21 @@ func classifyCosts(rep *store.CostReport) {
 			addPriceClass(&rep.Rows[i], class, g.Calls)
 		}
 	}
-	if rep.By != "model" {
-		return
-	}
 	for i := range rep.Rows {
 		r := &rep.Rows[i]
-		switch {
-		case r.Unpriced == 0:
-			r.Class = collect.ClassPriced
-		case r.Key == "(unknown)":
-			r.Class = collect.ClassUnknownModel
-		default:
-			r.Class = collect.Classify(r.Key, r.Provider)
+		if rep.By == "model" {
+			switch {
+			case r.Unpriced == 0:
+				r.Class = collect.ClassPriced
+			case r.Key == "(unknown)":
+				r.Class = collect.ClassUnknownModel
+			default:
+				r.Class = collect.Classify(r.Key, r.Provider)
+			}
 		}
+		r.Unpriced = r.UnknownModel + r.UnpricedModel
 	}
+	rep.Total.Unpriced = rep.Total.UnknownModel + rep.Total.UnpricedModel
 }
 
 func addPriceClass(r *store.CostRow, class string, n int) {

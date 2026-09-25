@@ -197,6 +197,7 @@ def main():
         dom_memfam = dump_dom(chrome, tmp, "?memfamilydemo")
         dom_memprobe = dump_dom(chrome, tmp, "?memprobe")
         dom_spend = dump_dom(chrome, tmp, "?spenddemo")
+        dom_plans = dump_dom(chrome, tmp, "?plansdemo")
         dom_spendday = dump_dom(chrome, tmp, "?spenddaydemo")
         dom_spendphone = dump_dom(chrome, tmp, "?phonedemo&spenddaydemo")
         dom_spendkeep = dump_dom(chrome, tmp, "?tab=overview&spenddaydemo&spendkeepdemo")
@@ -217,6 +218,9 @@ def main():
         dom_fam = dump_dom(chrome, tmp, "?familiesdemo&tab=resources")
         dom_famev = dump_dom(chrome, tmp, "?familiesdemo&familyevents&tab=resources")
         dom_evcap = dump_dom(chrome, tmp, "?tab=events&manyevents")
+        dom_evtrace = dump_dom(chrome, tmp, "?tab=events&traceevents")
+        dom_duptrace = dump_dom(chrome, tmp, "?tab=events&duptrace")
+        dom_evorder = dump_dom(chrome, tmp, "?tab=events&eventsorderdemo")
         dom_sesslink = dump_dom(chrome, tmp, "?sessionlinkdemo")
         dom_sticky = dump_dom(chrome, tmp, "?stickydemo")
         dom_drawerback = dump_dom(chrome, tmp, "?drawerbackdemo")
@@ -347,6 +351,15 @@ def main():
         check("empty spend report: tile reads an em dash, card shows its empty state",
               'id="count-spend">—<' in dom_nocosts and 'id="hint-spend"><' in dom_nocosts
               and "No priced model calls in this window." in spend_card_of(dom_nocosts))
+        plans_card = spend_card_of(dom_plans)
+        check("spend: a /costs/plans entry renders its plan line and a bar at used_percent above the rows; none when empty",
+              re.search(r'<div class="spend-plans"><div class="spend-plan">\s*<span class="spend-plan-text">'
+                        r'Codex Pro · codex · weekly 52% used · resets (Sun|Mon|Tue|Wed|Thu|Fri|Sat) \d{1,2}:\d{2} (AM|PM)</span>'
+                        r'<span class="hbar-track" title="weekly"><span class="hbar-fill" data-w="52.0"', plans_card) is not None
+              and plans_card.index('class="spend-plans"') < plans_card.index('class="spend-key"')
+              and '<div class="spend-plans"></div>' in spend_card, plans_card[:600])
+        check("spend: the stat strip counts calls on plans before unpriced",
+              'id="hint-spend">40 calls · 12 on plans · 2 unpriced<' in dom_plans)
         spend_q = html.unescape(pre(dom_spend, "mock-costs")).split("\n")
         tz_ok = all(re.search(r"&tz=-?\d+$", q) for q in spend_q if q != "since=24h&by=repo")
         check("spend: switching the dimension fetches by=provider and renders the provider rows",
@@ -840,6 +853,27 @@ def main():
               ev_cap.count('class="timeline-item') == 50
               and re.search(r'data-action="show-more" data-key="events"[^>]*>Show \d+ more<', ev_cap) is not None,
               f"rows={ev_cap.count('class=\"timeline-item')}")
+        ev_trace = dom_evtrace.split('id="events-container"', 1)[1].split('</section>', 1)[0]
+        check("Events rows name trace kinds: MODEL and TOOL with their session, never PID 0",
+              '>MODEL<' in ev_trace and '>TOOL<' in ev_trace and 'Bash · ok · 2.5s' in ev_trace
+              and 'claude-sonnet-4-5 · 12.0k in / 340 out · $0.04' in ev_trace
+              and 'api-service@main' in ev_trace and 'PID 0' not in ev_trace,
+              f"model={'>MODEL<' in ev_trace} tool={'>TOOL<' in ev_trace} pid0={'PID 0' in ev_trace}")
+        ev_dup = dom_duptrace.split('id="events-container"', 1)[1].split('</section>', 1)[0]
+        check("Events: two tool calls at the same ts with different call ids render as two rows",
+              ev_dup.count('class="timeline-item') >= 2 and 'Read · ok' in ev_dup and 'Write · ok' in ev_dup,
+              f"rows={ev_dup.count('class=\"timeline-item')}")
+        ev_order = dom_evorder.split('id="events-container"', 1)[1].split('</section>', 1)[0]
+        # The SSE stub drips unrelated live rows (kinds 5/8/9) into every dump
+        # regardless of fixture; keep only this fixture's three file rows and
+        # check their relative order (the drip's own newer rows lead them).
+        order_rows = re.findall(r'<div class="timeline-item[^"]*">.*?</div>', ev_order, re.S)
+        order_names = [m.group(1) for r in order_rows if (m := re.search(r'/(\w+)\.ts<', r))]
+        old_row = next((r for r in order_rows if 'old.ts' in r), '')
+        old_dated = re.search(r'<span class="t">[A-Za-z]{3} \d{2} \d{2}:\d{2}</span>', old_row) is not None
+        check("Events: out-of-order rows sort newest first and the 4-month-old row shows a date, not a clock time",
+              order_names == ['new', 'mid', 'old'] and old_dated,
+              f"order={order_names} old_dated={old_dated}")
         check("policy editor exposes automatic containment warning",
 		      "applies every enabled intervention automatically" in dom_policy)
         check("terminate policy save requires explicit confirmation",

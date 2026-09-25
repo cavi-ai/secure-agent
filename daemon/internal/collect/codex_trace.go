@@ -20,9 +20,12 @@ import (
 // The model comes from event_msg/thread_settings_applied when the rollout has
 // one (it wins), else from the latest turn_context (one per turn; current
 // codex writes no settings line). The provider comes from the settings line,
-// else session_meta's model_provider. Every model_call carries the model id,
-// the provider and the cost from the price tables; an id the tables do not
-// know costs 0 (never a fabricated price).
+// else session_meta's model_provider. A token_count line whose rate_limits
+// name a plan_type is a ChatGPT-plan login: its model_call's provider is
+// "chatgpt" (the billing provider) and the line's windows are the home's plan
+// headroom snapshot (RecordPlan). Every model_call carries the model id, the
+// provider and the cost from the price tables; an id the tables do not know
+// costs 0 (never a fabricated price).
 
 type codexLine struct {
 	Timestamp string          `json:"timestamp"`
@@ -55,7 +58,30 @@ type codexEventMsg struct {
 		Model           string `json:"model"`
 		ModelProviderID string `json:"model_provider_id"`
 	} `json:"thread_settings"`
+	// RateLimits stays raw: a shape the tracer does not expect costs the
+	// headroom snapshot, never the model call.
+	RateLimits json.RawMessage `json:"rate_limits"`
 }
+
+// codexRateLimits is the token_count rate_limits subset the tracer reads.
+type codexRateLimits struct {
+	PlanType  string           `json:"plan_type"`
+	LimitID   string           `json:"limit_id"`
+	Primary   *codexRateWindow `json:"primary"`
+	Secondary *codexRateWindow `json:"secondary"`
+	Credits   *struct {
+		Unlimited bool `json:"unlimited"`
+	} `json:"credits"`
+}
+
+type codexRateWindow struct {
+	UsedPercent   float64 `json:"used_percent"`
+	WindowMinutes float64 `json:"window_minutes"`
+	ResetsAt      float64 `json:"resets_at"` // epoch seconds
+}
+
+// codexPlanProvider is the billing provider of a ChatGPT-plan login.
+const codexPlanProvider = "chatgpt"
 
 type codexResponseItem struct {
 	Type   string `json:"type"` // function_call | function_call_output | ...
@@ -68,6 +94,8 @@ type codexResponseItem struct {
 // call_id pairing, the session id from session_meta and the model from
 // thread_settings_applied or turn_context.
 type CodexTracer struct {
+	home             string // CODEX_HOME the rollout lives under ("" when unknown)
+	homeLabel        string // CodexHomeLabel of the rollout
 	sessionID        string
 	cwd              string
 	settingsModel    string                 // model id from the latest thread_settings_applied
@@ -77,8 +105,10 @@ type CodexTracer struct {
 	pending          map[string]pendingTool // call_id → open call
 }
 
-func NewCodexTracer() *CodexTracer {
-	return &CodexTracer{pending: map[string]pendingTool{}}
+// NewCodexTracer returns a tracer for the rollout at path; path names the
+// Codex home whose plan headroom the tracer records ("" records none).
+func NewCodexTracer(path string) *CodexTracer {
+	return &CodexTracer{home: codexHomeOf(path), homeLabel: CodexHomeLabel(path), pending: map[string]pendingTool{}}
 }
 
 // codexPrimeMaxBytes bounds the head read that restores a resumed rollout's
@@ -193,7 +223,11 @@ func (t *CodexTracer) ParseLine(line string) (events []event.Event, ok bool) {
 			}
 			return nil, false
 		}
-		if msg.Type != "token_count" || t.sessionID == "" {
+		if msg.Type != "token_count" {
+			return nil, false
+		}
+		plan := t.notePlan(msg.RateLimits, ts)
+		if t.sessionID == "" {
 			return nil, false
 		}
 		u := msg.Info.LastTokenUsage
@@ -201,6 +235,9 @@ func (t *CodexTracer) ParseLine(line string) (events []event.Event, ok bool) {
 			return nil, true
 		}
 		model, provider := t.Model()
+		if plan {
+			provider = codexPlanProvider
+		}
 		return []event.Event{{
 			Kind: event.KindModelCall, TS: ts, SessionID: t.sessionID,
 			Model: model, Provider: provider, TokensIn: u.InputTokens, TokensOut: u.OutputTokens,
@@ -236,4 +273,39 @@ func (t *CodexTracer) ParseLine(line string) (events []event.Event, ok bool) {
 		return nil, true
 	}
 	return nil, false
+}
+
+// notePlan reads a token_count line's rate_limits: when they name a
+// plan_type it records the home's headroom snapshot (seen at ts) and reports
+// true. Absent or unreadable rate_limits report false.
+func (t *CodexTracer) notePlan(raw json.RawMessage, ts time.Time) bool {
+	if len(raw) == 0 {
+		return false
+	}
+	var rl codexRateLimits
+	if err := json.Unmarshal(raw, &rl); err != nil || rl.PlanType == "" {
+		return false
+	}
+	if t.home == "" {
+		return true
+	}
+	snap := PlanSnapshot{
+		Harness: "codex", Home: t.homeLabel,
+		PlanType: rl.PlanType, LimitID: rl.LimitID, Windows: []PlanWindow{}, SeenAt: ts.UTC(),
+	}
+	for _, w := range []*codexRateWindow{rl.Primary, rl.Secondary} {
+		if w == nil {
+			continue
+		}
+		pw := PlanWindow{WindowMinutes: int(w.WindowMinutes), UsedPercent: w.UsedPercent}
+		if w.ResetsAt > 0 {
+			pw.ResetsAt = time.Unix(int64(w.ResetsAt), 0).UTC().Format(time.RFC3339)
+		}
+		snap.Windows = append(snap.Windows, pw)
+	}
+	if rl.Credits != nil {
+		snap.Unlimited = rl.Credits.Unlimited
+	}
+	RecordPlan(t.home, snap)
+	return true
 }

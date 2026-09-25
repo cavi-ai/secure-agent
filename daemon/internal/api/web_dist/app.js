@@ -261,6 +261,7 @@ document.addEventListener('DOMContentLoaded', () => {
     notifyCfg: null,  // /notify/rules payload — notification preferences
     costs: null,      // /costs report (24h, by repo) — the spend tile
     costsCard: null,  // /costs report for the Spend card's saved view
+    costPlans: null,  // /costs/plans — plan headroom per harness home
     connected: true
   };
   // Last-seen /notify/rules payload hash — gates 'notify' dirty-marking on
@@ -1105,7 +1106,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const cardPath = spendCardPath();
     if (slow) {
-      const [fleet, audit, sources, rollup, uninspected, notifyCfg, allowlist, episodes, costs, costsCard] = await Promise.all([
+      const [fleet, audit, sources, rollup, uninspected, notifyCfg, allowlist, episodes, costs, costsCard, costPlans] = await Promise.all([
         grab('fleet', '/fleet'),
         grab('audit', '/audit?limit=50'),
         grab('firewall sources', '/firewall/sources'),
@@ -1115,7 +1116,8 @@ document.addEventListener('DOMContentLoaded', () => {
         grab('allowlist', '/allowlist'),
         grab('resource episodes', '/resources/episodes'),
         grab('spend', '/costs?since=24h&by=repo'),
-        grab('spend card', cardPath)
+        grab('spend card', cardPath),
+        grab('spend plans', '/costs/plans')
       ]);
       if (fleet) telemetryData.fleet = fleet || [];
       if (audit) telemetryData.audit = audit || [];
@@ -1132,6 +1134,7 @@ document.addEventListener('DOMContentLoaded', () => {
       }
       if (allowlist) telemetryData.allowlist = allowlist || [];
       if (costs) telemetryData.costs = costs;
+      if (costPlans) telemetryData.costPlans = costPlans;
       if (costsCard && cardPath === spendCardPath()) telemetryData.costsCard = costsCard;
     }
 

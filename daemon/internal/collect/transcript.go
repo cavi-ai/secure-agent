@@ -629,7 +629,7 @@ func (ts *TranscriptScanner) tailFile(p string, offsets map[string]int64, dirty 
 				if IsCodexRolloutPath(p) {
 					tracer := ts.codexTracers[p]
 					if tracer == nil {
-						tracer = NewCodexTracer()
+						tracer = NewCodexTracer(p)
 						if offset > 0 {
 							// Resumed mid-file: the head holds the session
 							// and model this run has not read.

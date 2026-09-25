@@ -619,6 +619,7 @@ func (a *API) routes() map[string]http.HandlerFunc {
 		"/stats/rollup":                 a.handleRollup,
 		"/costs":                        a.handleCosts,
 		"/costs/unpriced":               a.handleCostsUnpriced,
+		"/costs/plans":                  a.handleCostsPlans,
 		"/doctor":                       a.handleDoctor,
 		"/worktrees":                    a.handleWorktrees,
 		"/worktrees/repos":              a.handleWorktreeRepos,
@@ -907,7 +908,16 @@ func (a *API) handleEvents(w http.ResponseWriter, r *http.Request) {
 		f.PID = int32(pid)
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(a.store.QueryEvents(f))
+	json.NewEncoder(w).Encode(priceClassed(a.store.QueryEvents(f)))
+}
+
+// priceClassed stamps each model_call row with its price class, so the
+// console can say "plan" or "unpriced" where cost_usd is 0.
+func priceClassed(evs []event.Event) []event.Event {
+	for i := range evs {
+		evs[i].PriceClass = collect.EventPriceClass(evs[i])
+	}
+	return evs
 }
 
 // queryInt parses a query-param int, returning def when absent or invalid.

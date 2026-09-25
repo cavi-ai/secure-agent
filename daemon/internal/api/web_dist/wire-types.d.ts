@@ -20,6 +20,7 @@ export interface Event {
   tokens_in?: number;
   tokens_out?: number;
   cost_usd?: number;
+  price_class?: string;
   call_id?: string;
 }
 
@@ -513,6 +514,23 @@ export interface CostReport {
   by: string;
   total: CostRow;
   rows: CostRow[];
+}
+
+export interface PlanWindow {
+  window_minutes: number;
+  used_percent: number;
+  resets_at: string;
+}
+
+export interface PlanSnapshot {
+  harness: string;
+  home: string;
+  home_path: string;
+  plan_type: string;
+  limit_id: string;
+  windows: PlanWindow[];
+  unlimited: boolean;
+  seen_at: string;
 }
 
 export interface ReportCount {

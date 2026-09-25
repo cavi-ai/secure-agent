@@ -423,6 +423,8 @@
         { key: 'infra-tools', harness: 'opencode', calls: 7, sessions: 1, tokens_in: 120000, tokens_out: 7000, cost_usd: 3.2, unpriced_calls: 0 }
       ]
     },
+    // /costs/plans: no plan headroom reported (plansdemo fills it).
+    '/costs/plans': { plans: [] },
     // /costs keyed by the query's `by` (the fetch stub below): the Spend
     // card's provider and day views.
     '/costs?by=provider': {
@@ -1183,6 +1185,14 @@
   if (location.search.includes('nocostsdemo')) {
     data['/costs'] = { ...data['/costs'], total: { key: '', calls: 0, sessions: 0, tokens_in: 0, tokens_out: 0, cost_usd: 0, unpriced_calls: 0 }, rows: [] };
   }
+  // plansdemo: /costs/plans reports a Codex Pro weekly window and the 24h
+  // total counts plan calls — the Spend card heads its rows with the plan
+  // line and bar; the stat strip says how many calls ran on plans.
+  if (location.search.includes('plansdemo')) {
+    data['/costs/plans'] = { plans: [{ harness: 'codex', home: 'codex', plan_type: 'pro', limit_id: 'codex',
+      windows: [{ window_minutes: 10080, used_percent: 52, resets_at: iso(-3 * 24 * 3600000) }], unlimited: false, seen_at: iso(0) }] };
+    data['/costs'] = { ...data['/costs'], total: { ...data['/costs'].total, plan_calls: 12 } };
+  }
   // memfamilydemo: three claude sessions share root 5821 — Memory by family
   // shows one bar for that family with its session count, and the badge
   // counts agent families (5821, 4412, 6033), not sessions or infra (7001).
@@ -1290,6 +1300,29 @@
     for (let i = 0; i < 114; i++) {
       data['/events'].push({ kind: 0, ts: iso(40000 + i * 1000), pid: 5821, path: `/Users/dev/workspace/api-service/src/m${i}.ts` });
     }
+  }
+  // traceevents: a model_call and a tool_call as the trace collectors write
+  // them — pid 0, a session id, no path or detail.
+  if (MODE.includes('traceevents')) {
+    data['/events'].push(
+      { kind: 14, ts: iso(90000), pid: 0, session_id: 'sess-claude-1', model: 'claude-sonnet-4-5', tokens_in: 12000, tokens_out: 340, cost_usd: 0.0412, price_class: 'priced' },
+      { kind: 12, ts: iso(91000), pid: 0, session_id: 'sess-claude-1', tool: 'Bash', tool_status: 'ok', duration_ms: 2500, call_id: 'c-1' });
+  }
+  // duptrace: two tool_call rows at the identical ts with different call
+  // ids — eventKey must key on call_id, not collapse them into one row.
+  if (MODE.includes('duptrace')) {
+    data['/events'].push(
+      { kind: 12, ts: iso(92000), pid: 0, session_id: 'sess-claude-1', tool: 'Read', tool_status: 'ok', duration_ms: 10, call_id: 'dup-1' },
+      { kind: 12, ts: iso(92000), pid: 0, session_id: 'sess-claude-1', tool: 'Write', tool_status: 'ok', duration_ms: 20, call_id: 'dup-2' });
+  }
+  // eventsorderdemo: events arrive out of ts order, one stamped ~4 months
+  // old — the render must sort them newest first and date the old row.
+  if (MODE.includes('eventsorderdemo')) {
+    data['/events'] = [
+      { kind: 0, ts: iso(1000), pid: 5821, path: '/Users/dev/workspace/api-service/src/new.ts' },
+      { kind: 0, ts: iso(4 * 30 * 86400000), pid: 5821, path: '/Users/dev/workspace/api-service/src/old.ts' },
+      { kind: 0, ts: iso(2000), pid: 5821, path: '/Users/dev/workspace/api-service/src/mid.ts' },
+    ];
   }
   // Episodes live on their own endpoint now.
   data['/resources/episodes'] = (data['/resources'].episodes || []);

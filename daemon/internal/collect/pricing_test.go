@@ -3,6 +3,8 @@ package collect
 import (
 	"math"
 	"testing"
+
+	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 )
 
 // One id per provider family resolves, exact and dated/suffixed; a suffix
@@ -143,6 +145,7 @@ func TestClassify(t *testing.T) {
 		{"anthropic/claude-sonnet-4-5", "", ClassPriced},
 		{"k3", "kimi-for-coding", ClassPlan},
 		{"k3-256k", "kimi-code-plan-global", ClassPlan},
+		{"gpt-5.5", "openai-codex", ClassPlan},
 		{"llama3.1:8b", "ollama", ClassLocal},
 		{"qwen3-coder", "LM-Studio", ClassLocal},
 		{"qwen3-coder", "lmstudio", ClassLocal},
@@ -199,6 +202,25 @@ func TestVendorForModel(t *testing.T) {
 	} {
 		if got := VendorForModel(model); got != want {
 			t.Errorf("VendorForModel(%q) = %q, want %q", model, got, want)
+		}
+	}
+}
+
+// TestEventPriceClass: a model_call row carries its price class; any other
+// kind carries none.
+func TestEventPriceClass(t *testing.T) {
+	for _, tc := range []struct {
+		e    event.Event
+		want string
+	}{
+		{event.Event{Kind: event.KindModelCall, Model: "claude-sonnet-4-5"}, ClassPriced},
+		{event.Event{Kind: event.KindModelCall, Model: "kimi-k2", Provider: "kimi-for-coding"}, ClassPlan},
+		{event.Event{Kind: event.KindModelCall, Model: "no-such-model-x"}, ClassUnpricedModel},
+		{event.Event{Kind: event.KindModelCall}, ClassUnknownModel},
+		{event.Event{Kind: event.KindToolCall, Model: "claude-sonnet-4-5"}, ""},
+	} {
+		if got := EventPriceClass(tc.e); got != tc.want {
+			t.Errorf("EventPriceClass(%+v) = %q, want %q", tc.e, got, tc.want)
 		}
 	}
 }

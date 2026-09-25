@@ -20,7 +20,7 @@ type CostRow struct {
 	TokensIn  int64   `json:"tokens_in"`
 	TokensOut int64   `json:"tokens_out"`
 	CostUSD   float64 `json:"cost_usd"`
-	Unpriced  int     `json:"unpriced_calls"` // calls with cost 0; never assigned a price
+	Unpriced  int     `json:"unpriced_calls"` // calls with cost 0 as read; /costs narrows it to unknown-model + unpriced-model
 	// Why the unpriced calls carry no cost, set by the API from Groups.
 	UnknownModel  int `json:"unknown_model_calls"`  // no model id recorded
 	UnpricedModel int `json:"unpriced_model_calls"` // model id with no price entry
