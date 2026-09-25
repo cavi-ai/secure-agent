@@ -61,7 +61,7 @@ def build_harness(tmp):
     and app.js. Real assets are symlinked so relative paths resolve."""
     for f in ("index.html", "style.css", "lib.js", "app.js",
               "tab-overview.js", "tab-sessions.js", "tab-agents.js", "tab-egress.js", "tab-findings.js",
-              "tab-worktrees.js"):
+              "tab-worktrees.js", "theme-init.js", "icon.svg"):
         os.symlink(os.path.join(WEB_DIST, f), os.path.join(tmp, f))
     os.symlink(MOCK, os.path.join(tmp, "mock_dom.js"))
     html = open(os.path.join(WEB_DIST, "index.html")).read()
@@ -154,6 +154,7 @@ def main():
         build_harness(tmp)
         srv, origin = serve_with_csp(tmp)
         dom_csp = dump_dom(chrome, tmp, "?cspdemo&raildemo", origin)
+        dom_themefirst = dump_dom(chrome, tmp, "?themefirst", origin)
         dom = dump_dom(chrome, tmp)
         dom_session = dump_dom(chrome, tmp, "?sessiondemo")
         dom_guard = dump_dom(chrome, tmp, "?guarddemo")
@@ -307,6 +308,9 @@ def main():
         check("waterfall carries model usage row",
               "claude-sonnet-4-5" in dom_rail and "46.2k in" in dom_rail)
         check("waterfall marks tool errors", 'wf-bar error' in dom_rail)
+        theme_first = (re.search(r'<pre id="theme-first"[^>]*>([^<]*)<', dom_themefirst) or [None, ""])[1]
+        check("theme: a stored light theme is on <html> before app.js runs, under the served CSP",
+              theme_first == "before-app=light", theme_first)
         csp_widths = (re.search(r'data-csp-widths="([^"]*)"', dom_csp) or [None, ""])[1]
         widths = {k: float(v) for k, v in (kv.split(":") for kv in csp_widths.split(",") if kv)}
         # Bash spans 31s of the 90s trace; agents hold 34.4% of memory; the
@@ -399,7 +403,11 @@ def main():
         check("terminate not labelled Kill", "Terminate" in dom and "Kill</span>" not in dom)
         check("firewall enforcing badge",
               'class="badge badge-ok" id="badge-firewall-mode">enforcing<' in dom)
-        check("uninspected-egress warning", "2 endpoints reached without inspection" in dom)
+        # status.uninspected_egress is 2 (it excludes the 2 infrastructure
+        # endpoints); the title must count what the panel renders instead: 4
+        # unknown + 1 vendor rollup (covering 1 endpoint) + 2 infrastructure = 7.
+        check("uninspected-egress title counts rendered endpoints, not the status counter",
+              "7 endpoints reached without inspection" in dom)
 
         # --- reversible enforcement (block is not a ratchet) ---
         check("blocking rule shows demote button",
@@ -515,8 +523,8 @@ def main():
               re.search(r'<ul class="posture-items" id="posture-items" hidden(="")?></ul>', dom) is not None
               and 'class="posture-item"' not in dom and 'data-action="guard-resolve" data-id="guard-1"' in dom)
         posture_egress = (re.search(r'<pre id="posture-egress"[^>]*>([^<]*)<', dom_posturemore) or [None, ""])[1]
-        check("Egress: the posture banner lists 3 items and \"and 7 more\"",
-              posture_egress == "items=3 more=and 7 more hidden=0", posture_egress)
+        check("Egress: the posture banner lists 3 content rows (2 items + the advisor line) and \"and 8 more\"",
+              posture_egress == "items=2 more=and 8 more hidden=0", posture_egress)
         posture_home = (re.search(r'<pre id="posture-home"[^>]*>([^<]*)<', dom_posturemore) or [None, ""])[1]
         check("\"and N more\" lands on Home, where the banner lists nothing",
               posture_home == "tab=home items=0 more=none hidden=1", posture_home)
@@ -525,8 +533,11 @@ def main():
         check("Egress: 2 rules with hits listed, 20 quiet rules fold into one row with their Promote buttons",
               fold_before == "top=2 fold=20 rules with no hits in 24 h inside=20 open=0 rebuilt=1", fold_before)
         fold_after = (re.search(r'<pre id="fold-after"[^>]*>([^<]*)<', dom_fold) or [None, ""])[1]
-        check("Egress: the open fold stays open across an SSE-driven patch that changes its count",
-              fold_after == "top=3 fold=19 rules with no hits in 24 h inside=19 open=1 rebuilt=1", fold_after)
+        check("Egress: the open fold stays open, and its outer node is never rebuilt, across an SSE-driven patch that changes its count",
+              fold_after == "top=3 fold=19 rules with no hits in 24 h inside=19 open=1 rebuilt=0", fold_after)
+        fold_focus = (re.search(r'<pre id="fold-focus"[^>]*>([^<]*)<', dom_fold) or [None, ""])[1]
+        check("Egress: an unchanged quiet rule's focused Promote button keeps its node identity and focus across the patch",
+              fold_focus == "kept=1", fold_focus)
         endpoints = dom_fold.split('id="endpoints-container"', 1)[-1].split('id="firewall-panel"', 1)[0]
         check("Egress: the endpoints list is the first panel, inline, with a vendor rollup and row actions",
               dom_fold.index('id="endpoints-panel"') < dom_fold.index('id="firewall-panel"')

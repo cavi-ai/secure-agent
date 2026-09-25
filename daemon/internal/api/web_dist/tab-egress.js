@@ -50,11 +50,15 @@ function renderFirewall() {
     return !SA.reducedMotion && SA.prevFwStats !== null &&
       !!prev && ((st.blocked || 0) > (prev.blocked || 0) || (st.would_block || 0) > (prev.would_block || 0));
   };
-  // Rules with hits stay listed; the rest fold into one collapsed row.
+  // Rules with hits stay listed; the rest fold into one collapsed row. The
+  // fold's outer <details> is a stable shell (constant hash below) so a
+  // change to one quiet rule never rebuilds the rows of every other one —
+  // its summary text is patched directly and its rows reconcile through
+  // their own keyed patchList, so an unchanged Promote button keeps focus.
   const { hit, quiet } = foldRules(stats);
   for (const r of hit) parts.push({ key: 'rule:' + r, html: fwRuleHTML(r, stats[r], grew(r)) });
   if (quiet.length > 0) {
-    parts.push({ key: 'rules-quiet', html: `<details class="fw-fold" data-key="rules-quiet"><summary>${quiet.length} rule${quiet.length === 1 ? '' : 's'} with no hits in 24 h</summary>${quiet.map(r => fwRuleHTML(r, stats[r], false)).join('')}</details>` });
+    parts.push({ key: 'rules-quiet', html: `<details class="fw-fold" data-key="rules-quiet"><summary></summary><div class="fw-fold-rows"></div></details>` });
   }
   // User-approved (agent, host) allowlist entries — every one reversible.
   const allowlist = SA.t.allowlist || [];
@@ -66,7 +70,13 @@ function renderFirewall() {
       </div>`).join('') + `</div>` });
   }
   patchList(container, parts, { key: p => p.key, html: p => p.html,
+    hash: p => p.key === 'rules-quiet' ? 'rules-quiet' : p.html,
     empty: `<div class="empty"><svg class="icon"><use href="#i-shield"/></svg><span>No egress inspected yet — traffic is scanned as your agents run</span></div>` });
+  const fold = container.querySelector('details[data-key="rules-quiet"]');
+  if (fold) {
+    fold.querySelector('summary').textContent = `${quiet.length} rule${quiet.length === 1 ? '' : 's'} with no hits in 24 h`;
+    patchList(fold.querySelector('.fw-fold-rows'), quiet.map(r => ({ key: r, html: fwRuleHTML(r, stats[r], false) })), { key: p => p.key, html: p => p.html });
+  }
   SA.prevFwStats = stats;
 }
 
@@ -111,11 +121,14 @@ function renderEndpoints() {
   const title = document.getElementById('endpoints-title');
   if (!container) return;
   const rows = SA.t.uninspected || [];
-  const s = SA.t.status;
-  const n = (s && s.uninspected_egress) || rows.length;
+  const parts = uninspectedParts(rows, inspectionVisible(SA.t.status, SA.t.audit).advisor);
+  // The title counts what this panel actually renders (every part's share of
+  // distinct endpoints), never the status counters — those exclude
+  // infrastructure endpoints that the list still renders.
+  const n = parts.reduce((sum, part) => sum + (part.count || 0), 0);
   if (title) title.textContent = `${n} endpoint${n === 1 ? '' : 's'} reached without inspection in 24 h`;
   const opened = new Set([...container.querySelectorAll('details[data-key][open]')].map(d => d.dataset.key));
-  patchList(container, uninspectedParts(rows, inspectionVisible(SA.t.status, SA.t.audit).advisor), {
+  patchList(container, parts, {
     key: p => p.key, html: p => p.html,
     empty: `<div class="empty"><svg class="icon"><use href="#i-globe"/></svg><span>No uninspected endpoints in the last 24h — the blind spot is closed</span></div>`,
   });
@@ -130,13 +143,13 @@ function uninspectedParts(rows, advisorOn) {
   const parts = [];
   for (const [agent, list] of unknownByAgent(unknown)) {
     parts.push({ key: 'agent:' + agent, html: `<div class="egress-agent-lead"><div class="egress-agent-head">${agentHeadInnerHTML(agent, list)}</div>${bulkAllowHTML(agent, list)}</div>` });
-    for (const e of list) parts.push({ key: `ep:${e.agent}|${e.host}`, html: egressRowHTML(e, advisorOn) });
+    for (const e of list) parts.push({ key: `ep:${e.agent}|${e.host}`, html: egressRowHTML(e, advisorOn), count: 1 });
   }
   if (vendors.length > 0) {
     parts.push({ key: 'vendors', html: `<div class="egress-agent-lead"><div class="egress-agent-head">${VENDOR_HEAD_HTML}</div></div>` });
-    for (const g of vendors) parts.push({ key: `vendor:${g.agent}|${g.org}`, html: `<div class="egress-vendor">${vendorRollupHTML(g, advisorOn)}</div>` });
+    for (const g of vendors) parts.push({ key: `vendor:${g.agent}|${g.org}`, html: `<div class="egress-vendor">${vendorRollupHTML(g, advisorOn)}</div>`, count: g.rows.length });
   }
-  if (carriers.length > 0) parts.push({ key: 'carriers', html: carriersHTML(carriers) });
+  if (carriers.length > 0) parts.push({ key: 'carriers', html: carriersHTML(carriers), count: carriers.length });
   return parts;
 }
 

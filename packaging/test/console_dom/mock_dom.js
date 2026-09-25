@@ -555,6 +555,20 @@
   if (theme === 'dark' || theme === 'light') {
     try { localStorage.setItem('sa-theme', theme); } catch { /* ignored */ }
   }
+  // ?themefirst (served under the CSP): store 'light', reload once, then
+  // record data-theme as it stands when this script runs — after
+  // theme-init.js, before app.js.
+  if (MODE.includes('themefirst')) {
+    let seeded = null;
+    try { seeded = sessionStorage.getItem('sa-themefirst'); } catch { /* ignored */ }
+    if (!seeded) {
+      try { localStorage.setItem('sa-theme', 'light'); sessionStorage.setItem('sa-themefirst', '1'); } catch { /* ignored */ }
+      location.reload();
+    } else {
+      const themeBeforeApp = document.documentElement.dataset.theme || 'unset';
+      setTimeout(() => stamp('theme-first', `before-app=${themeBeforeApp}`), 1500);
+    }
+  }
   // Every mode but notoken runs as a tab that holds a console token (the
   // console shows only the ended state without one).
   if (MODE.includes('tokenseed') || !MODE.includes('notoken')) {
@@ -1520,16 +1534,26 @@
         + `fold=${d ? d.querySelector('summary').textContent : 'none'} inside=${d ? d.querySelectorAll('[data-action="promote"]').length : 0} `
         + `open=${d && d.open ? 1 : 0} rebuilt=${d && d.dataset.before ? 0 : 1}`;
     };
+    let focusedPromote = null;
     setTimeout(() => openTab('egress'), 1500);
     setTimeout(() => {
       stamp('fold-before', probe());
       const d = fold();
       d.open = true;
       d.dataset.before = '1';
+      // Focus an UNCHANGED quiet rule's Promote button, then change a
+      // DIFFERENT quiet rule's counters (moving it out of the fold) — the
+      // focused button must survive as the same node, still focused.
+      focusedPromote = d.querySelector('[data-rule="quiet-01"][data-action="promote"]');
+      if (focusedPromote) focusedPromote.focus();
       data['/status'].firewall_stats['quiet-00'].legit = 1;
       window.__sse.emit('guard-resolved', {});
     }, 4000);
-    setTimeout(() => stamp('fold-after', probe()), 7000);
+    setTimeout(() => {
+      stamp('fold-after', probe());
+      const kept = !!focusedPromote && document.contains(focusedPromote) && document.activeElement === focusedPromote;
+      stamp('fold-focus', `kept=${kept ? 1 : 0}`);
+    }, 7000);
   }
   // Processes fills the width: panel width vs sub-view width at 1440 px.
   if (location.search.includes('procwidthdemo')) {

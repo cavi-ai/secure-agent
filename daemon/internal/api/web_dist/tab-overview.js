@@ -720,10 +720,16 @@ const POSTURE_ITEM_CAP = 3;
 function postureItemsHTML(items, tab, extra) {
   if (tab === 'home') return '';
   const list = items || [];
-  const out = list.slice(0, POSTURE_ITEM_CAP).map(postureItemHTML);
-  const more = list.length - POSTURE_ITEM_CAP;
+  const extraList = extra || [];
+  // extra (the advisor's triage summary) counts toward the cap too: content
+  // rows (items + extra) never exceed POSTURE_ITEM_CAP, and the "more" link
+  // — not a content row itself — counts only the items it hides.
+  const itemSlots = Math.max(0, POSTURE_ITEM_CAP - extraList.length);
+  const shown = list.slice(0, itemSlots);
+  const out = shown.map(postureItemHTML);
+  const more = list.length - shown.length;
   if (more > 0) out.push(`<li class="posture-more"><a href="#" data-action="goto-tab" data-tab="home">and ${more} more</a></li>`);
-  return out.concat(extra || []).join('');
+  return out.concat(extraList).join('');
 }
 
 function renderPosture() {

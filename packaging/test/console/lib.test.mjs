@@ -1350,14 +1350,27 @@ test('posture banner: Home lists nothing (the queue is the list)', () => {
   assert.equal(ctx.postureItemsHTML(items, 'home', ['<li class="posture-advisor">x</li>']), '');
 });
 
-test('posture banner: other tabs list at most 3 items, then "and N more" to Home', () => {
+test('posture banner: other tabs cap content rows (items + extra) at 3, then "and N more" to Home', () => {
   const items = Array.from({ length: 7 }, (_, i) => ({ severity: 1, kind: 'uninspected_egress', id: 'u' + i, title: 'item ' + i }));
   const html = ctx.postureItemsHTML(items, 'egress', ['<li class="posture-advisor">advisor</li>']);
-  assert.equal((html.match(/class="posture-item"/g) || []).length, 3);
-  assert.match(html, /<li class="posture-more"><a href="#" data-action="goto-tab" data-tab="home">and 4 more<\/a><\/li>/);
-  assert.ok(html.includes('item 2') && !html.includes('item 3'));
+  // extra (1 line) counts toward the cap: only 2 items fit alongside it.
+  assert.equal((html.match(/class="posture-item"/g) || []).length, 2);
+  assert.match(html, /<li class="posture-more"><a href="#" data-action="goto-tab" data-tab="home">and 5 more<\/a><\/li>/);
+  assert.ok(html.includes('item 1') && !html.includes('item 2'));
   assert.ok(html.endsWith('<li class="posture-advisor">advisor</li>'));
   assert.match(html, /data-action="open-uninspected">see endpoints</);
+});
+
+test('posture banner: content rows (items + extra) at exactly 3 need no "more" link', () => {
+  const items = [
+    { severity: 1, kind: 'uninspected_egress', id: 'u0', title: 'item 0' },
+    { severity: 1, kind: 'uninspected_egress', id: 'u1', title: 'item 1' },
+  ];
+  const html = ctx.postureItemsHTML(items, 'egress', ['<li class="posture-advisor">advisor</li>']);
+  assert.equal((html.match(/class="posture-item"/g) || []).length, 2);
+  assert.ok(!html.includes('posture-more'));
+  assert.ok(html.includes('item 0') && html.includes('item 1'));
+  assert.ok(html.endsWith('<li class="posture-advisor">advisor</li>'));
 });
 
 test('posture banner: 3 or fewer items render all, no "more" link', () => {
