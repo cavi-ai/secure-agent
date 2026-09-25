@@ -699,6 +699,8 @@ export interface Worktree {
   merged?: string;
   size_bytes?: number;
   size_partial?: boolean;
+  submodules?: number;
+  submodule_local?: string[];
   stashes?: number;
   precious_ignored?: string[];
   other_ignored?: number;

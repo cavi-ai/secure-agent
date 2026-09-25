@@ -60,6 +60,11 @@ type Worktree struct {
 	SizeBytes   int64 `json:"size_bytes,omitempty"`
 	SizePartial bool  `json:"size_partial,omitempty"`
 
+	// Submodules counts populated submodules; SubmoduleLocal names work in
+	// them no remote has, which removal would lose.
+	Submodules     int      `json:"submodules,omitempty"`
+	SubmoduleLocal []string `json:"submodule_local,omitempty"`
+
 	Stashes         int      `json:"stashes,omitempty"`
 	PreciousIgnored []string `json:"precious_ignored,omitempty"`
 	OtherIgnored    int      `json:"other_ignored,omitempty"`
@@ -138,6 +143,7 @@ func classify(w *Worktree, f facts, now time.Time, staleAfter time.Duration) {
 	if w.InUse {
 		keep = append(keep, "an agent session is live here")
 	}
+	keep = append(keep, w.SubmoduleLocal...)
 
 	if w.Orphan {
 		review = append(review, "directory is not registered with git; its files are the only copy")
@@ -179,6 +185,9 @@ func classify(w *Worktree, f facts, now time.Time, staleAfter time.Duration) {
 		} else {
 			w.Reasons = append(w.Reasons, fmt.Sprintf("not merged; active %d days ago", w.IdleDays))
 		}
+	}
+	if w.State == StateRemove && w.Submodules > 0 {
+		w.Reasons = append(w.Reasons, plural(w.Submodules, "submodule", "submodules")+" with every commit on a remote")
 	}
 }
 

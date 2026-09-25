@@ -290,6 +290,16 @@ func headTime(ctx context.Context, dir string) time.Time {
 // indexTime is the mtime of the worktree's index: every agent `git add` or
 // `git status` refreshes it, so it tracks work that has no commit yet.
 func indexTime(dir string) time.Time {
+	st, err := os.Stat(filepath.Join(adminDir(dir), "index"))
+	if err != nil {
+		return time.Time{}
+	}
+	return st.ModTime().UTC()
+}
+
+// adminDir is the worktree's own git dir: the target of its .git file, or
+// <dir>/.git.
+func adminDir(dir string) string {
 	gitdir := filepath.Join(dir, ".git")
 	if data, err := os.ReadFile(gitdir); err == nil {
 		if rest, ok := strings.CutPrefix(strings.TrimSpace(string(data)), "gitdir:"); ok {
@@ -299,11 +309,55 @@ func indexTime(dir string) time.Time {
 			}
 		}
 	}
-	st, err := os.Stat(filepath.Join(gitdir, "index"))
-	if err != nil {
-		return time.Time{}
+	return gitdir
+}
+
+// submoduleFacts are the worktree's populated submodules and the work
+// that lives only in their git dirs, which sit under the worktree's own
+// git dir (modules/) and go with it on removal.
+type submoduleFacts struct {
+	Populated int
+	Local     []string
+}
+
+// readSubmodules lists populated submodules (recursively) and, for each,
+// commits on its branches or HEAD that no remote has, and a stash.
+func readSubmodules(ctx context.Context, dir string) (submoduleFacts, error) {
+	var s submoduleFacts
+	_, errMods := os.Stat(filepath.Join(dir, ".gitmodules"))
+	_, errDir := os.Stat(filepath.Join(adminDir(dir), "modules"))
+	if errMods != nil && errDir != nil {
+		return s, nil
 	}
-	return st.ModTime().UTC()
+	out, err := git(ctx, dir, "submodule", "status", "--recursive")
+	if err != nil {
+		return s, err
+	}
+	for _, line := range strings.Split(out, "\n") {
+		if len(line) < 2 || line[0] == '-' {
+			continue
+		}
+		fields := strings.Fields(line[1:])
+		if len(fields) < 2 {
+			continue
+		}
+		path := fields[1]
+		sub := filepath.Join(dir, path)
+		s.Populated++
+		n, err := countCommits(ctx, sub, "--branches", "HEAD", "--not", "--remotes")
+		if err != nil {
+			return s, err
+		}
+		if n > 0 {
+			s.Local = append(s.Local, fmt.Sprintf("submodule %s has %s on no remote (removal loses them)", path, plural(n, "commit", "commits")))
+		}
+		if ok, err := gitOK(ctx, sub, "rev-parse", "--quiet", "--verify", "refs/stash"); err != nil {
+			return s, err
+		} else if ok {
+			s.Local = append(s.Local, "submodule "+path+" has a stash (removal loses it)")
+		}
+	}
+	return s, nil
 }
 
 // countCommits runs `git rev-list --count <args>`.
