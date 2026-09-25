@@ -562,6 +562,13 @@ func (h *Hunter) inspectOne(ctx context.Context, rs *repoScan, isMain bool, l li
 	}
 	w.PreciousIgnored, w.OtherIgnored = ign.Precious, ign.Other
 
+	subs, err := readSubmodules(ctx, l.Path)
+	if err != nil {
+		w.Error = err.Error()
+		return w, f
+	}
+	w.Submodules, w.SubmoduleLocal = subs.Populated, subs.Local
+
 	if l.Detached {
 		if w.Loose, err = countCommits(ctx, l.Path, "HEAD", "--not", "--branches", "--tags", "--remotes"); err != nil {
 			w.Error = err.Error()

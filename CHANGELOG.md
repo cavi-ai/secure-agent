@@ -300,6 +300,8 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Menu bar: the unused flag action, incident detail and process detail sheets.
 
 ### Fixed
+- Worktree removal: a worktree with populated submodules failed with git's "working trees containing submodules cannot be moved or removed"; it is removed with `--force` once each submodule is clean and every submodule commit (branches, HEAD, stash) is on a remote.
+- A submodule commit or stash that lives only in the worktree's own git dir keeps the worktree, with the submodule named in the reasons.
 - `make app` / `make install`: a Swift edit that compiles to identical objects (comments, whitespace) no longer fails the build as a stale menubar binary; the product is rewritten on every build.
 - Worktree removal: `git worktree remove` runs under a 10-minute deadline instead of the 10-second read limit that killed it mid-delete on large trees (200,000 files take 16 s), and finishes when the request is canceled.
 - A git failure during removal says whether the worktree is still on disk and registered.

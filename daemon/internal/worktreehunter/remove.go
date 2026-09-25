@@ -82,7 +82,15 @@ func (h *Hunter) remove(ctx context.Context, path string, step func(string)) (Wo
 	u := diskusage.Dir(ctx, l.Path, skip)
 	row.SizeBytes, row.SizePartial = u.Bytes, u.Partial
 	step(StepDeleting)
-	if _, err := gitWithin(ctx, removeTimeout, rs.ref.Main, "worktree", "remove", l.Path); err != nil {
+	// git refuses a worktree with submodules unless forced. The fresh
+	// verdict above already found the worktree and each submodule clean and
+	// every submodule commit on a remote; --force skips only git's own
+	// repeat of that check.
+	args := []string{"worktree", "remove"}
+	if row.Submodules > 0 {
+		args = append(args, "--force")
+	}
+	if _, err := gitWithin(ctx, removeTimeout, rs.ref.Main, append(args, l.Path)...); err != nil {
 		if _, statErr := os.Stat(l.Path); statErr == nil {
 			return row, fmt.Errorf("%w (the worktree is still on disk and registered with git)", err)
 		}
