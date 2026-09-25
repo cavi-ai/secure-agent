@@ -686,13 +686,14 @@ function groupSessionsByHarness(sessions, trees, agents) {
   return ordered;
 }
 
-// sessionMatchesText: the text filter's fields — repo, branch, repo@branch
-// and workspace, case-insensitive. An empty query matches everything.
+// sessionMatchesText: the text filter's fields — repo, branch, repo@branch,
+// workspace, and the spawning agent (originAgent and the raw origin),
+// case-insensitive. An empty query matches everything.
 function sessionMatchesText(s, text) {
   const q = String(text || '').trim().toLowerCase();
   if (!q) return true;
   const repoBranch = s.repo ? `${s.repo}${s.branch ? '@' + s.branch : ''}` : '';
-  return [s.repo, s.branch, repoBranch, s.workspace]
+  return [s.repo, s.branch, repoBranch, s.workspace, originAgent(s), s.origin]
     .some(f => String(f || '').toLowerCase().includes(q));
 }
 
@@ -1143,7 +1144,8 @@ function resourceDiagnosisText(diagnosis) {
 }
 
 // familyLabel: a resource family by what it works on, never by pid. The
-// family's root pid joins the durable sessions (/sessions): harness ·
+// family's root pid joins the durable sessions (/sessions): harness · agent
+// when an agent spawned the session (originAgent), else harness ·
 // repo@branch, else harness · workspace folder (the session's, then the
 // family's own), else the harness display name. A numeric folder reads as a
 // pid, so it never names a family.
@@ -1152,6 +1154,8 @@ function familyLabel(family, sessions) {
   const pid = Number(f.root_pid) || 0;
   const s = pid ? (sessions || []).find(x => x && Number(x.root_pid) === pid) : null;
   const harness = harnessMeta((s && s.harness) || f.name).label;
+  const agent = originAgent(s);
+  if (agent) return `${harness} · ${agent}`;
   if (s && s.repo) return `${harness} · ${s.repo}${s.branch ? '@' + s.branch : ''}`;
   const folder = (p) => {
     const l = p && p !== '/' ? cwdLabel(p) : '';
@@ -1159,6 +1163,44 @@ function familyLabel(family, sessions) {
   };
   const where = folder(s && s.workspace) || folder(f.workspace);
   return where ? `${harness} · ${where}` : harness;
+}
+
+// collapseFamilyRows: one Resources harness group's rows with families of
+// an identical label folded into { dup: true, key: 'group:<harness>|<label>',
+// label, families (by memory), rss_bytes, cpu_percent, process_count } at
+// the place of its first member; a row with orchestrated children never
+// folds and stays { dup: false, key: <family key>, row }. labelOf(family) →
+// the family label. Pure.
+function collapseFamilyRows(rows, harness, labelOf) {
+  const list = rows || [];
+  const labels = new Map();
+  const byLabel = new Map();
+  for (const r of list) {
+    if (r.children.length) continue;
+    const l = labelOf(r.family);
+    labels.set(r, l);
+    if (!byLabel.has(l)) byLabel.set(l, []);
+    byLabel.get(l).push(r.family);
+  }
+  const out = [];
+  const placed = new Set();
+  for (const r of list) {
+    const l = labels.get(r);
+    const same = l === undefined ? null : byLabel.get(l);
+    if (!same || same.length < 2) {
+      out.push({ dup: false, key: String(r.family.key), row: r });
+      continue;
+    }
+    if (placed.has(l)) continue;
+    placed.add(l);
+    const families = [...same].sort((a, b) => Number(b.rss_bytes || 0) - Number(a.rss_bytes || 0));
+    const sum = (k) => families.reduce((n, f) => n + Number(f[k] || 0), 0);
+    out.push({
+      dup: true, key: `group:${harness}|${l}`, label: l, families,
+      rss_bytes: sum('rss_bytes'), cpu_percent: sum('cpu_percent'), process_count: sum('process_count'),
+    });
+  }
+  return out;
 }
 
 // cappedList: one pattern for long lists — the first `limit` items, then a
@@ -1427,11 +1469,68 @@ function fmtCompact(n) {
 
 // sessionTitle: what a session is working on — repo@branch, else the
 // workspace folder, else the live process tree's folder (a provisional
-// session's workspace can be "/"), else the short id. No harness prefix: the
-// rail group and the detail head name the harness beside it.
+// session's workspace can be "/"), else the short id — then " · <agent>"
+// when an agent spawned it (originAgent). No harness prefix: the rail group
+// and the detail head name the harness beside it.
 function sessionTitle(s, liveCwd) {
-  if (s.repo) return `${s.repo}${s.branch ? '@' + s.branch : ''}`;
-  return cwdLabel(s.workspace) || cwdLabel(liveCwd) || sessionShort(s.id);
+  const work = s.repo
+    ? `${s.repo}${s.branch ? '@' + s.branch : ''}`
+    : cwdLabel(s.workspace) || cwdLabel(liveCwd) || sessionShort(s.id);
+  const agent = originAgent(s);
+  return agent ? `${work} · ${agent}` : work;
+}
+
+// originAgent: the agent that spawned a session, from its origin
+// ("martina (openclaw)" → "martina"); "" for the user's own sessions.
+function originAgent(s) {
+  return String((s && s.origin) || '').replace(/ \(openclaw\)$/, '');
+}
+
+// fmtHHMM: a timestamp's local wall-clock HH:MM; "" when unparseable.
+function fmtHHMM(ts) {
+  const d = new Date(ts || '');
+  if (isNaN(d.getTime())) return '';
+  return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+}
+
+// collapseSessionFamilies: one half (live or ended) of a rail harness group
+// as rows. Families without sub-sessions whose titles are identical fold into
+// one row { dup: true, key: 'group:<harness>|<title>', title, sessions
+// (newest start first), status (the most active member's) } at the place of
+// its first member; every other family is { dup: false, key: <session id>,
+// family }. titleOf(session) → the rail title. Pure.
+function collapseSessionFamilies(fams, harness, titleOf) {
+  const rank = { active: 0, idle: 1, ended: 2 };
+  const statusOf = (s) => (s.status === 'ended' || s.status === 'idle' ? s.status : 'active');
+  const list = fams || [];
+  const titles = new Map();
+  const byTitle = new Map();
+  for (const f of list) {
+    if (f.children.length) continue;
+    const t = titleOf(f.session);
+    titles.set(f, t);
+    if (!byTitle.has(t)) byTitle.set(t, []);
+    byTitle.get(t).push(f.session);
+  }
+  const rows = [];
+  const placed = new Set();
+  for (const f of list) {
+    const t = titles.get(f);
+    const same = t === undefined ? null : byTitle.get(t);
+    if (!same || same.length < 2) {
+      rows.push({ dup: false, key: String(f.session.id), family: f });
+      continue;
+    }
+    if (placed.has(t)) continue;
+    placed.add(t);
+    const sessions = [...same].sort((a, b) => {
+      const sa = String(a.started_at || ''), sb = String(b.started_at || '');
+      return sa !== sb ? (sb > sa ? 1 : -1) : String(a.id).localeCompare(String(b.id));
+    });
+    const status = sessions.map(statusOf).sort((a, b) => rank[a] - rank[b])[0];
+    rows.push({ dup: true, key: `group:${harness}|${t}`, title: t, sessions, status });
+  }
+  return rows;
 }
 
 // matchesSearch: the global-search lens. Free text (already lowercased by the

@@ -39,6 +39,10 @@ means the model server has failed repeatedly and verdicts are paused
 (`last_error` says why) — the UIs render this so advisor actions never look
 like dead buttons. Absent on older daemons.
 
+Each `trees[].root` whose pid roots a recorded session carries that session's
+`session_id`, `workspace`, `repo`, `branch` and `origin` (the spawning agent,
+as on `/sessions`); each is omitted when empty.
+
 ### Resource telemetry: `GET /resources`
 
 Returns a point-in-time rollup of resources attributed to tagged agent process
@@ -721,6 +725,8 @@ Session `<id>` · <status> · identity: <confidence>
 Empty sections read `none`. Costs use the console's rule: two decimals, `<$0.01` under a cent. Read-level; admitted on the proxy listener with the console token. CLI: `secure-agent session <id-or-prefix> [--json]` prints the markdown (or the JSON); a unique id prefix of at least 6 characters resolves, an ambiguous one lists its candidates and exits `1`.
 
 `GET /sessions` (the session list) narrows with exact-match `harness`, `repo` and `branch`, and `since` (`24h`, `7d` or RFC3339, as `/costs`; a session matches when it started or was last seen at or after it), alongside `status` (`active`, `idle`, `ended`; default: live sessions, then the 25 most recent ended ones) and `limit` (default 100). A malformed `since` returns `400`. CLI: `secure-agent sessions [--harness H] [--repo R] [--branch B] [--since D] [--status S] [--limit N] [--json]`.
+
+A session row carries `origin` when an agent spawned it: `"<agent> (openclaw)"` for a Codex session whose rollout is under an openclaw agent's Codex home (`…/.openclaw/agents/<agent>/agent/codex-home`). It is omitted for the user's own `~/.codex` and every other harness, set on first sight, and kept by later updates that carry none. The same field is on `/snapshot` `sessions` and the `/sessions/{id}/report` `session`.
 
 ---
 

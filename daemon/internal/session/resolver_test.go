@@ -1112,3 +1112,14 @@ func TestSameCwdTranscriptJoinsTheRootHoldingIt(t *testing.T) {
 		roots[s.RootPID] = s.ID
 	}
 }
+
+// A sighting's origin lands on the session and a later sighting without one
+// keeps it.
+func TestNoteTranscriptSightingCarriesOrigin(t *testing.T) {
+	r, st := testResolver(t, fakeProcs{})
+	r.NoteTranscriptSighting(TranscriptSighting{ID: "c1", Harness: "codex", Workspace: "/nonexistent/w", Origin: "x (openclaw)", TS: time.Now()})
+	r.NoteTranscriptSession("c1", "codex", "/nonexistent/w", time.Now())
+	if s, ok := st.GetSession("c1"); !ok || s.Origin != "x (openclaw)" {
+		t.Fatalf("session = %+v (ok=%v)", s, ok)
+	}
+}

@@ -86,10 +86,29 @@ func CodexHomeLabel(path string) string {
 	if base == ".codex" {
 		return "codex"
 	}
+	if agent := openclawCodexAgent(home); agent != "" {
+		return agent + " (openclaw)"
+	}
+	return base
+}
+
+// openclawCodexAgent is <name> when home is an openclaw agent's
+// …/.openclaw/agents/<name>/agent/codex-home, else "". Pure.
+func openclawCodexAgent(home string) string {
 	parts := strings.Split(home, "/")
 	if n := len(parts); n >= 5 && parts[n-1] == "codex-home" && parts[n-2] == "agent" &&
 		parts[n-4] == "agents" && parts[n-5] == ".openclaw" && parts[n-3] != "" {
-		return parts[n-3] + " (openclaw)"
+		return parts[n-3]
 	}
-	return base
+	return ""
+}
+
+// CodexOrigin names who spawned the Codex session of a rollout path:
+// CodexHomeLabel ("<name> (openclaw)") for a rollout under an openclaw
+// agent's Codex home, "" for the user's own Codex and every other home. Pure.
+func CodexOrigin(path string) string {
+	if openclawCodexAgent(codexHomeOf(path)) == "" {
+		return ""
+	}
+	return CodexHomeLabel(path)
 }

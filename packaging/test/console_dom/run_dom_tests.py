@@ -204,6 +204,10 @@ def main():
         dom_events = dump_dom(chrome, tmp, "?tab=events")
         dom_burst = dump_dom(chrome, tmp, "?burstdemo")
         dom_railburst = dump_dom(chrome, tmp, "?railburst")
+        dom_dup = dump_dom(chrome, tmp, "?dupdemo")
+        dom_dupres = dump_dom(chrome, tmp, "?dupdemo&tab=resources")
+        dom_foldpatch = dump_dom(chrome, tmp, "?dupdemo&foldpatch")
+        dom_familypatch = dump_dom(chrome, tmp, "?dupdemo&tab=resources&familypatch")
         dom_focus = dump_dom(chrome, tmp, "?focusburst")
         dom_click = dump_dom(chrome, tmp, "?clickburst")
         dom_rawmute = dump_dom(chrome, tmp, "?rawmute")
@@ -1038,6 +1042,52 @@ def main():
               f"counts={counts_raw[:200]}")
         check("burst: flags renders at most once per flag frame (1..3)",
               counts is not None and 1 <= counts.get("flags", 0) <= 3, f"counts={counts_raw[:200]}")
+
+        # --- session origin: identical rows fold into one "×N" row ---
+        dup_rail = dom_dup.split('id="session-rail"', 1)[1].split('id="session-detail"', 1)[0]
+        martina_key = 'group:codex|career-ops@main · martina'
+        check("identical-title sessions fold into one row titled with the spawning agent",
+              dup_rail.count(f'data-action="toggle-session-dup" data-key="{martina_key}"') == 1
+              and '<span class="sc-label">career-ops@main · martina</span><span class="session-dup-count">×5</span>' in dup_rail
+              and '<span class="sc-label">.openclaw · margaret</span><span class="session-dup-count">×3</span>' in dup_rail)
+        dup_row = dup_rail.split(f'data-key="{martina_key}"', 1)[1].split('toggle-session-dup', 1)[0]
+        dup_ids = re.findall(r'data-action="select-session" data-id="(sess-dup-\d)"', dup_row)
+        dup_labels = re.findall(r'<span class="sc-label">(\d\d:\d\d)</span>', dup_row)
+        check("an expanded folded row lists its five sessions newest first with HH:MM start times",
+              dup_ids == [f"sess-dup-{i}" for i in range(1, 6)] and len(dup_labels) == 5
+              and f'data-key="{martina_key}" aria-expanded="true"' in dup_rail,
+              f"ids={dup_ids} labels={dup_labels}")
+        try:
+            dup_probe = json.loads(pre(dom_dup, "dup-probe") or "null")
+        except ValueError:
+            dup_probe = None
+        check("a selected member of a folded row keeps its selection across a patch",
+              dup_probe == {"key": martina_key, "open": True, "selected": ["sess-dup-3"]}, f"probe={dup_probe}")
+        dup_board = dom_dupres.split('id="resource-board"', 1)[1]
+        check("Resources folds identical family labels into one row with summed memory, CPU and processes",
+              re.search(r'data-action="toggle-family-dup" data-key="group:codex\|Codex · margaret" aria-expanded="false">'
+                        r'<strong>Codex · margaret</strong><span class="family-dup-count">×3</span>', dup_board) is not None
+              and '<b>600 MB</b><small>memory</small>' in dup_board and '<b>6</b><small>processes</small>' in dup_board)
+        try:
+            fold_probe = json.loads(pre(dom_foldpatch, "fold-probe") or "null")
+        except ValueError:
+            fold_probe = None
+        check("a status change patches a session group in place: a focused row keeps identity and focus, the group stays open, the counts update",
+              isinstance(fold_probe, dict) and fold_probe.get("focus") is True and fold_probe.get("group") is True
+              and fold_probe.get("before") and fold_probe.get("after") and fold_probe.get("before") != fold_probe.get("after"),
+              f"probe={fold_probe}")
+        check("a live and an ended fold with one title expand independently",
+              isinstance(fold_probe, dict) and fold_probe.get("live") == "false" and fold_probe.get("ended") == "true",
+              f"probe={fold_probe}")
+        try:
+            family_probe = json.loads(pre(dom_familypatch, "family-probe") or "null")
+        except ValueError:
+            family_probe = None
+        check("a metric update patches a Resources group per row: a focused family control keeps identity and focus, the fold stays expanded",
+              isinstance(family_probe, dict) and family_probe.get("focus") is True and family_probe.get("group") is True
+              and family_probe.get("fold") == "true"
+              and family_probe.get("before") and family_probe.get("after") and family_probe.get("before") != family_probe.get("after"),
+              f"probe={family_probe}")
 
         infra_tag = re.search(r'<details class="session-group infra"[^>]*>', dom_railburst)
         infra_tag = infra_tag.group(0) if infra_tag else ""

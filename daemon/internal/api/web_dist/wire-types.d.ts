@@ -33,6 +33,7 @@ export interface Session {
   root_pid?: number;
   root_started_at?: string;
   parent_id?: string;
+  origin?: string;
   started_at: string;
   ended_at?: string;
   last_seen_at: string;
@@ -347,6 +348,7 @@ export interface AgentSummary {
   workspace?: string;
   repo?: string;
   branch?: string;
+  origin?: string;
 }
 
 export interface AgentTree {

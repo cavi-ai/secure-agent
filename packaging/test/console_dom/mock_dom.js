@@ -1703,6 +1703,123 @@
       }, 2000);
     }, 4300);
   }
+  // dupdemo: five codex sessions spawned by the openclaw agent martina on one
+  // repo@branch, and three by margaret with resource families. The rail folds
+  // each set into one "×N" row. Sessions: the martina row is expanded, a
+  // member selected, then session frames patch the rail; <pre id="dup-probe">
+  // reports the row's patchList key, whether it stayed open and the selected
+  // cards. With tab=resources the families fold the same way.
+  if (MODE.includes('dupdemo')) {
+    const MB = 1024 ** 2;
+    for (let i = 1; i <= 5; i++) {
+      data['/sessions'].push({ id: `sess-dup-${i}`, harness: 'codex', workspace: '/Users/dev/.openclaw/workspace-career-ops',
+        repo: 'career-ops', branch: 'main', origin: 'martina (openclaw)',
+        started_at: new Date(now - i * 600000).toISOString(), last_seen_at: iso(20000 + i * 1000),
+        status: i === 2 ? 'active' : 'idle', confidence: 'transcript' });
+    }
+    for (let i = 1; i <= 3; i++) {
+      const pid = 8300 + i;
+      data['/sessions'].push({ id: `sess-marg-${i}`, harness: 'codex', workspace: '/Users/dev/.openclaw', origin: 'margaret (openclaw)',
+        root_pid: pid, started_at: new Date(now - i * 900000).toISOString(), last_seen_at: iso(25000 + i * 1000),
+        status: 'active', confidence: 'transcript' });
+      data['/resources'].sessions.push({ key: `${pid}:1789470000000000000`, name: 'codex', root_pid: pid,
+        root_started_at: '2026-09-09T13:00:00Z', workspace: '/Users/dev/.openclaw', last_seen_at: iso(30000),
+        rss_bytes: 100 * i * MB, cpu_percent: i, process_count: i, orphan_count: 0,
+        processes: [{ pid, ppid: 1, name: 'codex', rss_bytes: 100 * i * MB, cpu_percent: i }], samples: [], diagnoses: [] });
+    }
+    if (!MODE.includes('tab=resources') && !MODE.includes('foldpatch')) {
+      const martina = 'group:codex|career-ops@main · martina';
+      setTimeout(() => openTab('sessions'), 4000);
+      setTimeout(() => {
+        document.querySelector(`#session-rail [data-action="toggle-session-dup"][data-key="${martina}"]`)?.click();
+        setTimeout(() => document.querySelector('#session-rail [data-action="select-session"][data-id="sess-dup-3"]')?.click(), 300);
+        setTimeout(() => {
+          const four = data['/sessions'].find(x => x.id === 'sess-dup-4');
+          window.__sse.emit('session', { ...four, last_seen_at: new Date().toISOString(), status: 'active' });
+          const claude = { ...data['/sessions'].find(x => x.id === 'sess-claude-1') };
+          delete claude._timeline;
+          window.__sse.emit('session', { ...claude, last_seen_at: new Date().toISOString() });
+        }, 1200);
+        setTimeout(() => {
+          const row = Array.from(document.querySelectorAll('#session-rail .session-dup'))
+            .find(n => n.querySelector(`[data-key="${martina}"]`));
+          const selected = Array.from(document.querySelectorAll('#session-rail .session-card.selected [data-action="select-session"]')).map(b => b.dataset.id);
+          stamp('dup-probe', JSON.stringify({ key: row ? row._saKey : null, open: !!(row && row.classList.contains('open')), selected }));
+        }, 3000);
+      }, 4300);
+    }
+  }
+  // foldpatch (with dupdemo): two ended sessions share the live martina
+  // title, so the codex group holds a live and an ended fold with one key.
+  // The ended fold is expanded, the live fold's toggle focused, then a frame
+  // ends another codex session; the probe waits out the render engine's
+  // 3 s focus hold. <pre id="fold-probe">: focus kept, the group the same
+  // open node, each fold's aria-expanded, the head counts around it.
+  if (MODE.includes('dupdemo') && MODE.includes('foldpatch')) {
+    for (let i = 6; i <= 7; i++) {
+      data['/sessions'].push({ id: `sess-dup-${i}`, harness: 'codex', workspace: '/Users/dev/.openclaw/workspace-career-ops',
+        repo: 'career-ops', branch: 'main', origin: 'martina (openclaw)',
+        started_at: new Date(now - i * 600000).toISOString(), last_seen_at: iso(40000 + i * 1000),
+        ended_at: iso(40000 + i * 1000), status: 'ended', confidence: 'transcript' });
+    }
+    const martina = 'group:codex|career-ops@main · martina';
+    const rail = () => document.getElementById('session-rail');
+    const fold = (bucket) => rail().querySelector(`[data-action="toggle-session-dup"][data-bucket="${bucket}"][data-key="${martina}"]`);
+    setTimeout(() => openTab('sessions'), 4000);
+    setTimeout(() => {
+      rail().querySelector('[data-action="toggle-ended-sessions"][data-harness="codex"]')?.click();
+      setTimeout(() => fold('ended')?.click(), 200);
+      setTimeout(() => {
+        const group = rail().querySelector('details.session-group[data-harness="codex"]');
+        const btn = fold('live');
+        if (group) group.dataset.probe = '1';
+        if (btn) { btn.dataset.probe = '1'; btn.focus(); }
+        const counts = () => { const g = rail().querySelector('details.session-group[data-harness="codex"] .session-group-counts'); return g ? g.textContent : ''; };
+        const before = counts();
+        const marg = data['/sessions'].find(x => x.id === 'sess-marg-1');
+        window.__sse.emit('session', { ...marg, last_seen_at: new Date().toISOString(), ended_at: new Date().toISOString(), status: 'ended' });
+        setTimeout(() => {
+          const now2 = rail().querySelector('details.session-group[data-harness="codex"]');
+          const exp = (b) => { const t = fold(b); return t ? t.getAttribute('aria-expanded') : 'missing'; };
+          stamp('fold-probe', JSON.stringify({ focus: !!btn && btn.isConnected && document.activeElement === btn,
+            group: !!group && now2 === group && group.open, live: exp('live'), ended: exp('ended'), before, after: counts() }));
+        }, 4000);
+      }, 900);
+    }, 4300);
+  }
+  // familypatch (with dupdemo&tab=resources): the margaret fold expanded, a
+  // View family button inside it focused, then a fourth codex family's
+  // memory and CPU change. <pre id="family-probe">: focus kept, the group the
+  // same open node, the fold still expanded, the head counts.
+  if (MODE.includes('dupdemo') && MODE.includes('familypatch')) {
+    data['/resources'].sessions.push({ key: '8400:1789470000000000000', name: 'codex', root_pid: 8400,
+      root_started_at: '2026-09-09T13:00:00Z', workspace: '/Users/dev/workspace/etl-sidecar', last_seen_at: iso(30000),
+      rss_bytes: 50 * 1024 ** 2, cpu_percent: 2, process_count: 1, orphan_count: 0,
+      processes: [{ pid: 8400, ppid: 1, name: 'codex', rss_bytes: 50 * 1024 ** 2, cpu_percent: 2 }], samples: [], diagnoses: [] });
+    const marg = 'group:codex|Codex · margaret';
+    setTimeout(() => {
+      const board = document.getElementById('resource-board');
+      board.querySelector(`[data-action="toggle-family-dup"][data-key="${marg}"]`)?.click();
+      setTimeout(() => {
+        const group = board.querySelector('details.family-group[data-harness="codex"]');
+        if (group) { group.open = true; group.dataset.probe = '1'; }
+        const btn = board.querySelector('.family-dup [data-action="view-family"][data-key="8301:1789470000000000000"]');
+        if (btn) { btn.dataset.probe = '1'; btn.focus(); }
+        const counts = () => { const c = board.querySelector('details.family-group[data-harness="codex"] .family-group-counts'); return c ? c.textContent : ''; };
+        const before = counts();
+        const SA = window.SA;
+        SA.t.resources = { ...SA.t.resources, sessions: SA.t.resources.sessions.map(f => f.key === '8400:1789470000000000000'
+          ? { ...f, rss_bytes: Number(f.rss_bytes) + 512 * 1024 ** 2, cpu_percent: Number(f.cpu_percent) + 7 } : f) };
+        renderResourceMissionControl();
+        setTimeout(() => {
+          const now2 = board.querySelector('details.family-group[data-harness="codex"]');
+          const t = board.querySelector(`[data-action="toggle-family-dup"][data-key="${marg}"]`);
+          stamp('family-probe', JSON.stringify({ focus: !!btn && btn.isConnected && document.activeElement === btn,
+            group: !!group && now2 === group && group.open, fold: t ? t.getAttribute('aria-expanded') : 'missing', before, after: counts() }));
+        }, 500);
+      }, 400);
+    }, 4300);
+  }
   // railburst: Sessions open, the infra group opened and probed, then a burst
   // with session frames that change the claude group.
   if (MODE.includes('railburst')) {
