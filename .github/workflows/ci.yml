@@ -133,6 +133,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4 (SHA-pinned)
         with:
           persist-credentials: false
+      - name: no personal paths guard
+        run: ./packaging/test/check_no_personal_paths.sh
       - name: css token & keyframes guard
         run: ./packaging/test/check_console_css.sh
       - name: console js unit tests
