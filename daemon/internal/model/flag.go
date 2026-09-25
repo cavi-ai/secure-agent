@@ -87,8 +87,27 @@ type Flag struct {
 	// Acknowledged flags stop counting as critical and render dimmed —
 	// "acted upon" instead of an endless red row.
 	Acknowledged bool `json:"acknowledged,omitempty"`
+	// AckReason says why the daemon acknowledged the flag itself (a start-up
+	// reclassification); empty when the operator acted on it.
+	AckReason string `json:"ack_reason,omitempty"`
+	// Process is the raising process as it was when the flag was raised, so a
+	// finding still names its process after the process exits.
+	Process *FlagProcess `json:"process,omitempty"`
 	// Explain is the plain-language reading of the flag, stamped at serve
 	// time (GET /flags/{id}/explain, and the first 25 unacknowledged flags
 	// of /flags and /snapshot). Not persisted.
 	Explain *FlagExplain `json:"explain,omitempty"`
+}
+
+// FlagProcess snapshots the process that raised a flag. Never argv beyond
+// argv[0], never the environment.
+type FlagProcess struct {
+	Exe  string `json:"exe,omitempty"`
+	Name string `json:"name"`
+	// Args0 is argv[0], secret-shaped values scrubbed.
+	Args0 string `json:"args0,omitempty"`
+	PPID  int32  `json:"ppid,omitempty"`
+	// Launcher is the nearest ancestor app bundle and the harness root,
+	// e.g. "Claude.app › claude-code 2.1.281".
+	Launcher string `json:"launcher,omitempty"`
 }

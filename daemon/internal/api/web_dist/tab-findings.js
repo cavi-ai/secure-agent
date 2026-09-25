@@ -87,7 +87,7 @@ function renderAttention() {
   // pattern <details> or a focused button survives a memory or CPU tick.
   const groupKey = group => group.key || group.label;
   patchList(wrap, groups, { key: groupKey,
-    hash: group => JSON.stringify([group.key, group.label, group.agent, group.workspace]),
+    hash: group => JSON.stringify([group.key, group.label, group.agent, group.workspace, group.summary]),
     html: group => `<article class="attention-group">
       <header class="attention-group-head">
         <div class="attention-identity">
@@ -516,6 +516,7 @@ function patternHTML(p, nowMs, opts) {
         <span class="pattern-meta">${count}× · ${escapeHTML(patternWindowText(p, nowMs))}</span>
       </header>
       <p class="pattern-summary">${escapeHTML(p.summary)}</p>
+      ${patternProcessesText(p.processes) ? `<p class="pattern-processes">${escapeHTML(patternProcessesText(p.processes))}</p>` : ''}
       <div class="pattern-cadence">
         <span class="pattern-bars" role="img" aria-label="Flags per bucket over the window, oldest first">${patternBarsHTML(p.hourly)}</span>
         <span class="pattern-cadence-text">${p.cadence ? escapeHTML(p.cadence) + ' · ' : ''}<b class="pattern-open">${open} open</b></span>

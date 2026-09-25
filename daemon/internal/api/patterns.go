@@ -161,6 +161,7 @@ func (a *API) fillPattern(p model.Pattern, flags []model.Flag, since, now time.T
 	p.Unacked = len(open)
 	p.PIDs, p.PIDCount = busiest(pidN), len(pidN)
 	p.Sessions, p.SessionCount = busiest(sessionN), len(sessionN)
+	p.Processes = patternProcesses(sorted)
 	ids := make([]string, 0, len(open)+len(closed))
 	p.FlagIDs = capList(append(append(ids, open...), closed...), model.PatternFlagIDCap)
 	if p.Unacked == 0 {
@@ -171,6 +172,37 @@ func (a *API) fillPattern(p model.Pattern, flags []model.Flag, since, now time.T
 	p.Summary = patternSummary(p, now)
 	p.Actions = a.patternActions(p, capList(open, model.PatternFlagIDCap), env)
 	return p
+}
+
+// patternProcesses groups the flags' process snapshots by name and
+// launcher, counting distinct pids; busiest PatternListCap first. Never nil.
+func patternProcesses(flags []model.Flag) []model.PatternProcess {
+	type procKey struct{ name, launcher string }
+	pids := map[procKey]map[int32]bool{}
+	for _, f := range flags {
+		if f.Process == nil || f.Process.Name == "" {
+			continue
+		}
+		k := procKey{f.Process.Name, f.Process.Launcher}
+		if pids[k] == nil {
+			pids[k] = map[int32]bool{}
+		}
+		pids[k][f.PID] = true
+	}
+	out := make([]model.PatternProcess, 0, len(pids))
+	for k, set := range pids {
+		out = append(out, model.PatternProcess{Name: k.name, Launcher: k.launcher, Count: len(set)})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Count != out[j].Count {
+			return out[i].Count > out[j].Count
+		}
+		if out[i].Name != out[j].Name {
+			return out[i].Name < out[j].Name
+		}
+		return out[i].Launcher < out[j].Launcher
+	})
+	return capList(out, model.PatternListCap)
 }
 
 // dispositionRank orders open dispositions: critical > warning > benign-likely.

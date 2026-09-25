@@ -7,6 +7,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 ## [Unreleased]
 
 ### Changed
+- Findings skip shell rc and harness-settings reads as secret reads and name the raising process and its launcher.
 - Cleanup totals no longer count an agent's answer (`ask:*` ledger rows) as a cleanup.
 - Menu bar icon and agent count are drawn in the console's brand purple, a lighter shade on a dark menu bar.
 - Console Spend opens on the last usage reports: `GET /costs?cached=1` answers at once from the daemon's usage cache (saved in the store, so it outlives a restart) while a fresh report is computed; the card reads "Updating usage cache… (cached 3h ago)" and the tile's line "updating…" until it lands. Spend no longer holds the console's first render, and `/costs/plans` keeps plan headroom across restarts (snapshots under a week old).

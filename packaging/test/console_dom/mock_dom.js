@@ -265,6 +265,7 @@
         },
         {
           key: 'agent:codex', label: 'codex activity', agent: 'codex',
+          summary: '2 processes (codex 0.46.0 via Terminal.app) across 2 sessions, all exited',
           items: [
             { kind: 'egress', priority: 1, id: 'uninspected-egress:agent:codex', title: 'Uninspected egress', count: 2,
               hosts: ['example.com'],

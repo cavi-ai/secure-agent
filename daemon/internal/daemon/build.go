@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -107,6 +108,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 	resolver := session.NewResolver(st, tagger)
 
 	repairStoredRows(st)
+	reclassifyReadFlags(st, classifier)
 
 	// Typed deltas: SSE clients patch state from these; /snapshot is for
 	// initial load and reconciliation only.
@@ -544,6 +546,26 @@ func repairStoredRows(st *store.Store) {
 	if n := st.SweepStaleRunningCalls(time.Now().Add(-10 * time.Minute)); n > 0 {
 		log.Printf("sessions: closed %d stale running tool-call rows", n)
 	}
+}
+
+// reclassifyReadFlags acknowledges, with a stored reason and one audit
+// entry, the open sensitive-read-then-connect flags whose read the current
+// classifier no longer counts as a secret read. Returns how many it
+// acknowledged.
+func reclassifyReadFlags(st *store.Store, cl sensitive.Classifier) int {
+	open := st.QueryFlags(store.FlagFilter{Rule: "sensitive-read-then-connect", Unacted: true, Limit: math.MaxInt32})
+	ids := correlate.StaleReadFlagIDs(open, cl)
+	if len(ids) == 0 {
+		return 0
+	}
+	n := st.AcknowledgeFlagsReason(ids, correlate.ReclassifiedReadReason)
+	st.PutAudit(store.AuditEntry{
+		Action: "flag-reclassify",
+		Rule:   "sensitive-read-then-connect",
+		Detail: fmt.Sprintf("%d flags acknowledged: %s", n, correlate.ReclassifiedReadReason),
+	})
+	log.Printf("flags: acknowledged %d sensitive-read-then-connect flags whose read is no longer a secret read", n)
+	return n
 }
 
 // buildFleetAndOTLP constructs the fleet webhook fan-out and the OTLP
