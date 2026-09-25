@@ -1437,6 +1437,8 @@ test('collapseFamilyRows folds identical labels with summed memory, CPU and proc
   assert.match(html, /data-action="toggle-family-dup" data-key="group:codex\|[^"]*martina" aria-expanded="false"><strong>[^<]*martina<\/strong><span class="family-dup-count">×3<\/span>/);
   const open = ctx.resourceFamilyGroupRows(g, sessions, new Set(), Date.now(), { [dup.key]: true }).map(r => r.html).join('');
   assert.equal((open.match(/class="family-row nested/g) || []).length, 3, 'expanded lists each family');
+});
+
 test('posture banner: Home lists nothing (the queue is the list)', () => {
   const items = [{ severity: 3, kind: 'flag', id: 'f1', title: 'a' }, { severity: 2, kind: 'flag', id: 'f2', title: 'b' }];
   assert.equal(ctx.postureItemsHTML(items, 'home', ['<li class="posture-advisor">x</li>']), '');
