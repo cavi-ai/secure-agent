@@ -41,11 +41,6 @@ public protocol DaemonClientProtocol: Sendable {
     func fetchFlags(limit: Int) async throws -> [FlagModel]
     func fetchIncidents(limit: Int) async throws -> [IncidentReportModel]
     func fetchPosture() async throws -> PostureModel
-    func fetchIncidentMarkdown(id: String) async throws -> String
-    func fetchEvents(limit: Int) async throws -> [EventModel]
-    func fetchEventsFor(pid: Int32, limit: Int) async throws -> [EventModel]
-    /// POST /incidents/status — transition open → acknowledged → resolved.
-    func setIncidentStatus(id: String, status: String, note: String?) async throws
     func fetchGuardRules() async throws -> [GuardRuleModel]
     func fetchGuardPending() async throws -> [GuardPending]
     func resolveGuard(_ req: GuardResolveRequest) async throws
@@ -64,10 +59,6 @@ public protocol DaemonClientProtocol: Sendable {
     /// POST /flags/acknowledge — mark a flag acted-upon (idempotent).
     func acknowledgeFlag(id: String) async throws
     func retriageFlag(id: String) async throws
-    func allowlistAdd(agent: String, host: String) async throws
-    /// POST /mute — suppress one rule+host pair, for one agent when agent is
-    /// set (noise control; monitoring of the host continues).
-    func muteAdd(rule: String, host: String, agent: String?) async throws
     /// GET /mute — persisted dispositions (the "ignore" ledger); title is
     /// the daemon's rule title.
     func fetchMutes() async throws -> [(rule: String, host: String, agent: String?, title: String?)]
@@ -79,9 +70,6 @@ public protocol DaemonClientProtocol: Sendable {
     /// POST /notify/rules — set (true/false) or clear (nil) one rule's
     /// override; nil returns the rule to the default policy.
     func setNotifyRule(rule: String, notify: Bool?) async throws
-    /// POST /guard/path-allow — allow ONE path (and descendants) for one
-    /// agent under one rule, without widening the rule itself.
-    func guardPathAllowAdd(agent: String, ruleID: String, path: String) async throws
     func fetchGuardPathAllows() async throws -> [GuardPathAllowModel]
     func deleteGuardPathAllow(agent: String, ruleID: String, path: String) async throws
     func streamEvents(onEvent: @escaping @Sendable (SSEFrame) -> Void) async throws
@@ -124,17 +112,6 @@ public final class DaemonClient: Sendable {
         try await getDecodable("/flags?limit=\(limit)")
     }
 
-    public func fetchEvents(limit: Int = 50) async throws -> [EventModel] {
-        try await getDecodable("/events?limit=\(limit)")
-    }
-
-    /// Per-process transcript: events attributed to one pid. The daemon
-    /// filters server-side (/events?pid=), so this stays cheap even for
-    /// chatty processes.
-    public func fetchEventsFor(pid: Int32, limit: Int = 300) async throws -> [EventModel] {
-        try await getDecodable("/events?pid=\(pid)&limit=\(limit)")
-    }
-
     public func fetchIncidents(limit: Int = 20) async throws -> [IncidentReportModel] {
         try await getDecodable("/incidents?limit=\(limit)")
     }
@@ -142,11 +119,6 @@ public final class DaemonClient: Sendable {
     /// /posture headline; attention derives from it, never locally.
     public func fetchPosture() async throws -> PostureModel {
         try await getDecodable("/posture")
-    }
-
-    public func fetchIncidentMarkdown(id: String) async throws -> String {
-        let body = try await request(method: "GET", path: "/incidents?id=\(Self.urlQueryEscape(id))&format=markdown")
-        return String(data: body, encoding: .utf8) ?? ""
     }
 
     /// Returns true only when the daemon's JSON response actually says
@@ -195,13 +167,6 @@ public final class DaemonClient: Sendable {
         _ = try await request(method: "POST", path: "/guard/resolve", body: data)
     }
 
-    public func setIncidentStatus(id: String, status: String, note: String?) async throws {
-        var body: [String: Any] = ["id": id, "status": status]
-        if let note, !note.isEmpty { body["note"] = note }
-        let data = try JSONSerialization.data(withJSONObject: body)
-        _ = try await request(method: "POST", path: "/incidents/status", body: data)
-    }
-
     public func fetchGuardRules() async throws -> [GuardRuleModel] {
         try await getDecodable("/guard/rules")
     }
@@ -241,17 +206,6 @@ public final class DaemonClient: Sendable {
         _ = try await request(method: "POST", path: "/advisor/retriage", body: body)
     }
 
-    public func allowlistAdd(agent: String, host: String) async throws {
-        try await postJSON("/allowlist", payload: ["agent": agent, "host": host])
-    }
-
-    public func guardPathAllowAdd(agent: String, ruleID: String, path: String) async throws {
-        let body = try JSONSerialization.data(withJSONObject: [
-            "agent": agent, "rule_id": ruleID, "path": path,
-        ])
-        _ = try await request(method: "POST", path: "/guard/path-allow", body: body)
-    }
-
     public func fetchGuardPathAllows() async throws -> [GuardPathAllowModel] {
         try await getDecodable("/guard/path-allow")
     }
@@ -267,10 +221,6 @@ public final class DaemonClient: Sendable {
 
     public func muteRemove(rule: String, host: String, agent: String?) async throws {
         _ = try await request(method: "DELETE", path: Self.muteDeletePath(rule: rule, host: host, agent: agent))
-    }
-
-    public func muteAdd(rule: String, host: String, agent: String?) async throws {
-        try await postJSON("/mute", payload: Self.mutePayload(rule: rule, host: host, agent: agent))
     }
 
     /// GET /mute rows; an empty or absent agent is a mute for every agent.
