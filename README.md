@@ -155,9 +155,9 @@ The menu bar's **Settings… → Updates** tab offers two channels:
 
 #### Signing & notarization
 
-`make dmg` ad-hoc signs by default (fine for local use; recipients must right-click → Open).
-Set `CODESIGN_IDENTITY` to a real signing identity for a build whose privacy grants survive rebuilds.
-For proper Gatekeeper distribution:
+`make install`, `make app`, and `make dmg` all resolve `CODESIGN_IDENTITY` the same way (`packaging/lib/sign_identity.sh`): the first "Apple Development" identity in your keychain, else the first "Developer ID Application" identity, else ad-hoc (`-`) as the fallback. Signing with a real identity — Apple Development or Developer ID — is what lets the ES helper's Full Disk Access and Login Items grants survive rebuilds; the first build under a new identity still needs one Login Items approval and one Full Disk Access grant. An ad-hoc build loses both grants on every rebuild.
+
+Override the identity explicitly, e.g. for proper Gatekeeper distribution:
 
 ```bash
 export CODESIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)"
