@@ -210,6 +210,16 @@ test('removals: step while running with Remove disabled; refusal and failure sta
   assert.ok(!worktreeRowHTML(w, rep.repos[0]).includes('wt-removal'));
 });
 
+test('state styles: each state has its own stripe and chip color; keep is not red', () => {
+  const css = readFileSync(path.join(webDist, 'style.css'), 'utf8');
+  const rule = sel => (css.match(new RegExp(sel.replace(/\./g, '\\.') + '\\s*\\{([^}]*)\\}')) || [])[1] || '';
+  const stripes = ['remove', 'review', 'keep', 'prune'].map(st => rule(`.wt-row.wt-${st}`).match(/var\(--[a-z0-9-]+\)/)?.[0]);
+  assert.equal(new Set(stripes).size, 4, `stripes ${stripes}`);
+  const chips = ['remove', 'review', 'keep'].map(st => rule(`.wt-${st} .wt-state`).match(/color: (var\(--[a-z0-9-]+\))/)?.[1]);
+  assert.equal(new Set(chips).size, 3, `chips ${chips}`);
+  assert.ok(!rule('.wt-keep .wt-state').includes('--bad') && !rule('.wt-row.wt-keep').includes('--bad'), 'keep must not use the error red');
+});
+
 test('agent asks: status line under the row, escaped; Ask the agent disabled while one runs', () => {
   const rep = report();
   const keep = rep.repos[1].worktrees[0];
