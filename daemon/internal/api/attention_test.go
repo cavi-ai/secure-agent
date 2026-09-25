@@ -76,6 +76,17 @@ func TestAttentionGroupsGuardPendingJoinsLiveSession(t *testing.T) {
 	}
 }
 
+func TestAttentionGroupLabelKeepsAgentIDCaseAtRootWorkspace(t *testing.T) {
+	a := attentionAPI(t, []resource.Session{mkResourceSession(43, "cursor-ide", "/")})
+	a.guardBroker = guard.NewBroker(time.Minute)
+	go a.guardBroker.Request(guard.Pending{ID: "g3", Agent: "cursor-ide", Tool: "Read", Path: "/Users/x/.aws/credentials"})
+	waitFor(t, func() bool { return len(a.guardBroker.Pending()) == 1 })
+	_, groups := a.attentionQueue(Status{Running: true})
+	if len(groups) != 1 || groups[0].Label != "cursor-ide" {
+		t.Fatalf("groups = %+v, want one group labelled %q", groups, "cursor-ide")
+	}
+}
+
 func TestAttentionGroupsUnmatchedGuardGetsAgentBucket(t *testing.T) {
 	a := attentionAPI(t, nil)
 	a.guardBroker = guard.NewBroker(time.Minute)
