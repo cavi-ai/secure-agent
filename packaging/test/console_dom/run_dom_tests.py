@@ -201,6 +201,8 @@ def main():
         dom_spendday = dump_dom(chrome, tmp, "?spenddaydemo")
         dom_spendphone = dump_dom(chrome, tmp, "?phonedemo&spenddaydemo")
         dom_spendkeep = dump_dom(chrome, tmp, "?tab=overview&spenddaydemo&spendkeepdemo")
+        dom_spendcache = dump_dom(chrome, tmp, "?spendcachedemo")
+        dom_spendslow = dump_dom(chrome, tmp, "?spendslowdemo")
         dom_events = dump_dom(chrome, tmp, "?tab=events")
         dom_burst = dump_dom(chrome, tmp, "?burstdemo")
         dom_railburst = dump_dom(chrome, tmp, "?railburst")
@@ -371,13 +373,13 @@ def main():
         check("spend: the stat strip counts calls on plans before unpriced",
               'id="hint-spend">40 calls · 12 on plans · 2 unpriced<' in dom_plans)
         spend_q = html.unescape(pre(dom_spend, "mock-costs")).split("\n")
-        tz_ok = all(re.search(r"&tz=-?\d+$", q) for q in spend_q if q != "since=24h&by=repo")
+        tz_ok = all(re.search(r"&tz=-?\d+&cached=1$", q) for q in spend_q if q != "since=24h&by=repo&cached=1")
         check("spend: switching the dimension fetches by=provider and renders the provider rows",
               any(q.startswith("since=24h&by=provider&tz=") for q in spend_q) and tz_ok
               and re.findall(spend_key_re, spend_card_of(dom_spend)) == ["anthropic", "openai-codex", "openai", "(unknown)"]
               and "provider not recorded" in spend_card_of(dom_spend), f"queries={spend_q}")
         check("spend: the tile keeps its 24h by-repo fetch and meaning",
-              "since=24h&by=repo" in spend_q and 'id="count-spend">$36.67<' in dom_spend, f"queries={spend_q}")
+              "since=24h&by=repo&cached=1" in spend_q and 'id="count-spend">$36.67<' in dom_spend, f"queries={spend_q}")
         check("spend: the chosen view survives a full re-render and is saved for the tab",
               pre(dom_spend, "spend-probe") == 'select=provider saved={"by":"provider","since":"24h"}'
               and spend_q[-1].startswith("since=24h&by=provider&tz="),
@@ -399,6 +401,20 @@ def main():
         check("spend: the Overview tab with the day bars fits a 375px phone",
               'data-hscroll="sessions:0,agents:0,resources:0,overview:0"' in dom_spendphone,
               (re.search(r'data-hscroll="[^"]*"', dom_spendphone) or [None])[0])
+        cache_probe = html.unescape(pre(dom_spendcache, "spend-cache-probe"))
+        check("spend: a report from the usage cache shows at once with the updating notice and its age",
+              cache_probe == "notice=Updating usage cache… (cached 3h ago) hint=40 calls · 2 unpriced · updating…",
+              f"probe={cache_probe!r}")
+        cache_q = html.unescape(pre(dom_spendcache, "mock-costs")).split("\n")
+        check("spend: the card re-reads until the fresh report lands, then the notice goes",
+              len(cache_q) == 6 and 'id="count-spend">$37.67<' in dom_spendcache
+              and 'id="hint-spend">40 calls · 2 unpriced<' in dom_spendcache
+              and 'id="spend-cache" class="spend-cache" role="status" hidden=""' in dom_spendcache,
+              f"queries={cache_q}")
+        slow_probe = html.unescape(pre(dom_spendslow, "spend-slow-probe"))
+        check("spend: a report computed cold never holds the first render of the other panels",
+              slow_probe == "agents=3 spend=Loading spend…" and 'id="count-spend">$36.67<' in dom_spendslow,
+              f"probe={slow_probe!r}")
         agents_view = dom.split('id="agents-container"', 1)[1].split('id="fleet-col"', 1)[0]
         agent_groups = re.findall(r'<details class="agent-group" data-harness="([^"]+)"', agents_view)
         check("agents tab renders one group per harness, newest first",

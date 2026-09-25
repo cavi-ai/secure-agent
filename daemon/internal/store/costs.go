@@ -35,6 +35,10 @@ type CostReport struct {
 	By    string    `json:"by"`
 	Total CostRow   `json:"total"` // Key ""; Sessions = distinct sessions overall
 	Rows  []CostRow `json:"rows"`  // cost desc, then calls desc (by=day: day asc); at most costRowLimit; never nil
+	// When the report was computed (RFC3339), and whether a newer one is
+	// being computed to replace it; both set by the API's report cache.
+	GeneratedAt string `json:"generated_at,omitempty"`
+	Refreshing  bool   `json:"refreshing,omitempty"`
 	// Groups is every zero-cost call bucketed by (group key, model,
 	// provider), read in the same pass as Rows, for the API to classify.
 	Groups []UnpricedGroup `json:"-"`
