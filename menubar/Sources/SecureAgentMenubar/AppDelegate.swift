@@ -19,6 +19,9 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificat
         DaemonSupervisor.shared.start()
         NotificationManager.shared.requestAuthorization()
         UNUserNotificationCenter.current().delegate = self
+        // File telemetry turns itself on: register once per launch, then open
+        // the pane for each switch the user has to flip.
+        SetupManager.shared.refreshESState()
 
         setupStatusItem()
         setupPopover()
@@ -94,6 +97,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificat
                           state.isPaused ? "play.circle" : "pause.circle", #selector(pauseClicked)))
         menu.addItem(item("Settings…", "gearshape.2", #selector(settingsClicked), ","))
         menu.addItem(item("Setup & Permissions…", "gearshape", #selector(setupClicked)))
+        menu.addItem(item("Run Doctor…", "stethoscope", #selector(doctorClicked)))
         menu.addItem(item("Uninstall…", "trash", #selector(uninstallClicked)))
         menu.addItem(.separator())
         menu.addItem(item("Quit Secure Agent", "power", #selector(quitClicked), "q"))
@@ -185,6 +189,11 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificat
     @objc private func settingsClicked() { SettingsWindowController.shared.show() }
 
     @objc private func setupClicked() { OnboardingWindowController.shared.show() }
+
+    @objc private func doctorClicked() {
+        SettingsWindowController.shared.show(tab: .telemetry)
+        Task { await SetupManager.shared.runDoctor() }
+    }
 
     @objc private func quitClicked() { NSApp.terminate(nil) }
 

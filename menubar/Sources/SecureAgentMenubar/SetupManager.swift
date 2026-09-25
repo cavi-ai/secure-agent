@@ -15,8 +15,8 @@ public final class SetupManager: ObservableObject {
     /// The privileged Endpoint Security collector: a LaunchDaemon shipped in
     /// the bundle (Contents/Library/LaunchDaemons) and registered with
     /// SMAppService.daemon, so macOS attributes it to Secure Agent.
-    public static let esCollectorLabel = "com.cavi-ai.secure-agent-esd"
-    public static let esCollectorPlistName = "\(esCollectorLabel).plist"
+    public nonisolated static let esCollectorLabel = "com.cavi-ai.secure-agent-esd"
+    public nonisolated static let esCollectorPlistName = "\(esCollectorLabel).plist"
     /// The collector executable the plist's BundleProgram names.
     public static let esCollectorExecutable = "Contents/MacOS/secure-agent-esd"
     /// Where earlier versions installed the collector outside the bundle;
@@ -86,10 +86,24 @@ public final class SetupManager: ObservableObject {
     /// Whether a collector installed by an earlier version (outside the
     /// bundle, same launchd label) is still present.
     @Published public private(set) var esLegacyHelperInstalled = false
+    /// The file-telemetry card's stage, recomputed by `refreshESState`.
+    @Published private(set) var esStage: ESStage = .notRegistered
     /// Spool mtime when this app last registered the collector; a later
     /// write proves the registered daemon holds its privacy grant.
     private var esRegisterSpoolMtime: Date?
-    private let esService = SMAppService.daemon(plistName: SetupManager.esCollectorPlistName)
+    private let esService: any ESServiceControl
+    private let esMemory: ESAutopilotMemory
+    private let esPlistCheck: () -> Bool
+    private let esOpenPane: (ESSettingsPane) -> Void
+    /// The autopilot registers at most once per launch.
+    private var esRegisterAttemptedThisLaunch = false
+    /// The 1 s poll while a System Settings switch is pending.
+    private var esPollTask: Task<Void, Never>?
+    /// Telemetry Doctor results, in check order.
+    @Published private(set) var doctorChecks: [DoctorCheck] = []
+    @Published private(set) var doctorRunning = false
+    /// Id of the check whose fix is running.
+    @Published private(set) var doctorFixing: String?
     /// Loopback model servers + the curated managed list, from the daemon's
     /// /advisor/discover. Drives the Advisor settings dropdowns.
     @Published public private(set) var advisorDiscovery = AdvisorDiscovery(servers: [], managedModels: [])
@@ -129,9 +143,26 @@ public final class SetupManager: ObservableObject {
 
     public var isBundled: Bool { bundledDaemonPath != nil }
 
-    private init() {
+    /// Tests inject the service, defaults, plist check and pane opener;
+    /// the app uses the defaults.
+    init(esService: any ESServiceControl = SMAppService.daemon(plistName: SetupManager.esCollectorPlistName),
+         defaults: UserDefaults = .standard,
+         plistPresent: (() -> Bool)? = nil,
+         openPane: ((ESSettingsPane) -> Void)? = nil) {
+        self.esService = esService
+        esMemory = ESAutopilotMemory(
+            defaults: defaults,
+            build: Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "")
+        esPlistCheck = plistPresent ?? {
+            FileManager.default.fileExists(atPath: Bundle.main.bundleURL
+                .appendingPathComponent("Contents/Library/LaunchDaemons/\(SetupManager.esCollectorPlistName)").path)
+        }
+        esOpenPane = openPane ?? { pane in
+            MainActor.assumeIsolated { SetupManager.openSettingsPane(pane) }
+        }
         esServiceStatus = esService.status
         esLegacyHelperInstalled = fm.fileExists(atPath: Self.legacyESPlistPath)
+        esStage = currentESStage()
     }
 
     // MARK: - State
@@ -139,8 +170,7 @@ public final class SetupManager: ObservableObject {
     public func refreshState() async {
         let status = try? await DaemonClient().fetchStatus()
         isDaemonRunning = DaemonSupervisor.shared.isRunning || (status?.running ?? false)
-        esServiceStatus = esService.status
-        esLegacyHelperInstalled = fm.fileExists(atPath: Self.legacyESPlistPath)
+        refreshESState()
         // ALL harnesses must carry the hook — `contains` used to announce
         // "Hooks installed" when only one of three targets had it, leaving the
         // other two unprotected while the wizard claimed otherwise. Claude Code
@@ -788,11 +818,18 @@ public final class SetupManager: ObservableObject {
         return current > installed
     }
 
-    /// Registers the in-bundle collector daemon. A first registration leaves
-    /// it awaiting the user's approval in Login Items; that is the expected
-    /// outcome, not an error.
+    /// The card's Enable: clears the user's Remove and registers the
+    /// in-bundle collector daemon.
     public func installESCollector() throws {
         lastError = nil
+        esMemory.userDisabled = false
+        try registerESService()
+        refreshESState()
+    }
+
+    /// A first registration leaves the daemon awaiting the user's approval in
+    /// Login Items; that is the expected outcome, not an error.
+    private func registerESService() throws {
         esRegisterSpoolMtime = esSpoolMtime()
         do {
             try esService.register()
@@ -801,7 +838,93 @@ public final class SetupManager: ObservableObject {
             guard esServiceStatus == .requiresApproval else { throw error }
         }
         esServiceStatus = esService.status
-        Task { await refreshState() }
+    }
+
+    /// Whether the bundle carries the collector's launchd plist.
+    var esPlistPresent: Bool { esPlistCheck() }
+
+    private func currentESStage() -> ESStage {
+        if esLegacyHelperInstalled { return .legacyInstalled }
+        return esCardState(status: esServiceStatus, plistPresent: esPlistPresent,
+                           tccGranted: esSpoolFlowing, helperReplaced: esHelperReplaced)
+    }
+
+    /// Re-reads the collector's registration, recomputes the card stage, runs
+    /// one autopilot step, and starts or stops the 1 s poll. Runs at launch,
+    /// on every `refreshState`, and on each poll tick.
+    public func refreshESState() {
+        // Assign only on change: the poll ticks every second and every
+        // @Published write re-renders each observing view.
+        let status = esService.status
+        if status != esServiceStatus { esServiceStatus = status }
+        let legacy = fm.fileExists(atPath: Self.legacyESPlistPath)
+        if legacy != esLegacyHelperInstalled { esLegacyHelperInstalled = legacy }
+        let stage = currentESStage()
+        if stage != esStage { esStage = stage }
+        runESAutopilot()
+        manageESPoll()
+    }
+
+    /// Executes `ESAutopilot.decide`. Each action flips the flag that
+    /// suppresses it (attempted this launch, pane opened for this build), so
+    /// the follow-up step after a registration terminates.
+    private func runESAutopilot() {
+        let action = ESAutopilot.decide(stage: esStage, userDisabled: esMemory.userDisabled,
+                                        attemptedThisLaunch: esRegisterAttemptedThisLaunch,
+                                        panesOpenedForBuild: esMemory.panesOpenedForBuild)
+        switch action {
+        case .none:
+            return
+        case .register:
+            esRegisterAttemptedThisLaunch = true
+            do {
+                try registerESService()
+            } catch {
+                lastError = "file telemetry: \(error.localizedDescription)"
+            }
+            esStage = currentESStage()
+            runESAutopilot()
+        case .open(let pane):
+            esMemory.markOpened(pane)
+            esOpenPane(pane)
+        }
+    }
+
+    /// Polls once a second while the stage waits on a System Settings switch
+    /// and the user has not removed file telemetry; stops otherwise.
+    private func manageESPoll() {
+        let wanted = esStage.awaitsUser && !esMemory.userDisabled
+        if wanted, esPollTask == nil {
+            esPollTask = Task { [weak self] in
+                while !Task.isCancelled {
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)
+                    guard let self, self.esPollTask != nil else { return }
+                    self.refreshESState()
+                }
+            }
+        } else if !wanted, let task = esPollTask {
+            task.cancel()
+            esPollTask = nil
+        }
+    }
+
+    /// The autopilot's pane opener: the pane plus a notification naming the
+    /// switch to flip.
+    private static func openSettingsPane(_ pane: ESSettingsPane) {
+        switch pane {
+        case .loginItems:
+            SMAppService.openSystemSettingsLoginItems()
+            NotificationManager.shared.sendSetupNotification(
+                "Turn on Secure Agent's file-telemetry service in Login Items",
+                identifier: "secure-agent.setup.login-items")
+        case .fullDiskAccess:
+            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles") {
+                NSWorkspace.shared.open(url)
+            }
+            NotificationManager.shared.sendSetupNotification(
+                "Turn on Secure Agent in Full Disk Access",
+                identifier: "secure-agent.setup.full-disk-access")
+        }
     }
 
     /// Escapes a shell command into an AppleScript string literal.
@@ -835,6 +958,17 @@ public final class SetupManager: ObservableObject {
         try esService.unregister()
         esServiceStatus = esService.status
     }
+
+    /// The card's Remove: records the user's choice so the autopilot stops
+    /// registering, then unregisters.
+    public func removeESCollector() throws {
+        esMemory.userDisabled = true
+        defer { refreshESState() }
+        try uninstallESCollector()
+    }
+
+    /// Whether the user removed file telemetry (cleared by Enable).
+    var esUserDisabled: Bool { esMemory.userDisabled }
 
     /// Removes the collector an earlier version installed outside the bundle
     /// (it shares the launchd label with the in-bundle daemon): boot out the
@@ -1016,6 +1150,113 @@ public final class SetupManager: ObservableObject {
         } catch {
             report(error)
         }
+    }
+
+    // MARK: - Telemetry Doctor
+
+    /// The collector's stderr log (StandardErrorPath in its plist).
+    nonisolated static let esHelperLogPath = "/var/log/secure-agent-esd.log"
+
+    /// Collects the Doctor's facts: signatures, the launchd job, the helper's
+    /// log tail and the spool on disk (off the main actor), then the daemon's
+    /// `/status` and `/doctor`.
+    func collectTelemetryFacts() async -> TelemetryFacts {
+        let appPath = Bundle.main.bundleURL.path
+        let helperPath = Bundle.main.bundleURL.appendingPathComponent(Self.esCollectorExecutable).path
+        let probe = await Task.detached { () -> (CodeSignature?, CodeSignature?, LaunchdProbe, String?, Date?) in
+            let app = CodeSignature.parse(Self.capture(["/usr/bin/codesign", "-dv", appPath]))
+            let helper = CodeSignature.parse(Self.capture(["/usr/bin/codesign", "-dv", helperPath]))
+            let job = LaunchdProbe.parse(Self.capture(["/bin/launchctl", "print", "system/\(Self.esCollectorLabel)"]))
+            let logLine = TelemetryDoctor.lastLine(ofFileAt: Self.esHelperLogPath)
+            let mtime = (try? FileManager.default.attributesOfItem(atPath: Self.esSpoolPath))?[.modificationDate] as? Date
+            return (app, helper, job, logLine, mtime)
+        }.value
+        let client = DaemonClient()
+        let status = try? await client.fetchStatus()
+        let doctor = try? await client.fetchDoctor()
+        return TelemetryFacts(
+            now: Date(), appSignature: probe.0, helperSignature: probe.1,
+            plistPresent: esPlistPresent, serviceStatus: esService.status, launchd: probe.2,
+            helperLogLastLine: probe.3, spoolMtime: probe.4, esService: status?.esService,
+            legacyInstalled: fm.fileExists(atPath: Self.legacyESPlistPath), daemonChecks: doctor?.checks)
+    }
+
+    /// Runs the Doctor once and publishes its checks.
+    public func runDoctor() async {
+        doctorRunning = true
+        defer { doctorRunning = false }
+        refreshESState()
+        doctorChecks = TelemetryDoctor.evaluate(await collectTelemetryFacts())
+    }
+
+    /// Applies one check's fix and re-runs the Doctor. With `waitForUser`, a
+    /// fix that needs a System Settings switch polls every 2 s until the check
+    /// passes or 5 minutes pass.
+    func fixDoctorCheck(_ check: DoctorCheck, waitForUser: Bool) async {
+        guard let fix = check.fix else { return }
+        doctorFixing = check.id
+        defer { doctorFixing = nil }
+        applyDoctorFix(fix)
+        await runDoctor()
+        guard waitForUser, fix.needsUser else { return }
+        let deadline = Date().addingTimeInterval(300)
+        while !Task.isCancelled, Date() < deadline,
+              doctorChecks.first(where: { $0.id == check.id })?.state != .pass {
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            await runDoctor()
+        }
+    }
+
+    /// Runs every offered fix in check order, each check at most once; later
+    /// checks are re-evaluated after each fix.
+    public func fixAllDoctorChecks() async {
+        await runDoctor()
+        var tried: Set<String> = []
+        while let next = doctorChecks.first(where: { $0.state != .pass && $0.fix != nil && !tried.contains($0.id) }) {
+            tried.insert(next.id)
+            await fixDoctorCheck(next, waitForUser: true)
+        }
+    }
+
+    private func applyDoctorFix(_ fix: DoctorFix) {
+        lastError = nil
+        switch fix {
+        case .register:
+            do { try installESCollector() } catch { report(error) }
+        case .reregister:
+            do {
+                try? esService.unregister()
+                try installESCollector()
+            } catch { report(error) }
+        case .openLoginItems:
+            openESLoginItems()
+        case .openFullDiskAccess:
+            openESPermissions()
+        case .setAsideSpool:
+            do { _ = try TelemetryDoctor.setAsideSpool(spoolPath: Self.esSpoolPath, now: Date()) }
+            catch { report(error) }
+        case .removeLegacy:
+            removeLegacyESHelper()
+        }
+        refreshESState()
+    }
+
+    /// Runs a read-only tool and returns stdout and stderr together.
+    private nonisolated static func capture(_ args: [String]) -> String {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: args[0])
+        p.arguments = Array(args.dropFirst())
+        let pipe = Pipe()
+        p.standardOutput = pipe
+        p.standardError = pipe
+        do {
+            try p.run()
+        } catch {
+            return ""
+        }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        p.waitUntilExit()
+        return String(decoding: data, as: UTF8.self)
     }
 
     // MARK: - Full Disk Access

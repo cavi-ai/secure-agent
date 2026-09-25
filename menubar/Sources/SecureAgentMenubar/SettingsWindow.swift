@@ -21,6 +21,12 @@ public final class SettingsWindowController: NSObject, NSWindowDelegate {
         show(state: appState)
     }
 
+    /// Opens Settings on one tab.
+    func show(tab: SettingsTab) {
+        SettingsNavigation.shared.tab = tab
+        show()
+    }
+
     public func show(state: AppState) {
         appState = state
         if let window {
@@ -44,23 +50,45 @@ public final class SettingsWindowController: NSObject, NSWindowDelegate {
 
     public func windowWillClose(_ notification: Notification) {
         window = nil
+        // A reopened window starts on the first tab, as before tab selection
+        // was bindable.
+        SettingsNavigation.shared.tab = .protection
     }
+}
+
+enum SettingsTab: Hashable {
+    case protection, providers, telemetry, decisions, app, advisor, updates
+}
+
+/// The Settings window's selected tab, so the menu bar can open it on one.
+@MainActor
+final class SettingsNavigation: ObservableObject {
+    static let shared = SettingsNavigation()
+    @Published var tab: SettingsTab = .protection
 }
 
 @MainActor
 struct SettingsView: View {
     @ObservedObject var state: AppState
     @ObservedObject private var setup = SetupManager.shared
+    @ObservedObject private var nav = SettingsNavigation.shared
 
     var body: some View {
-        TabView {
+        TabView(selection: $nav.tab) {
             protectionTab.tabItem { Label("Protection", systemImage: "shield.lefthalf.filled") }
+                .tag(SettingsTab.protection)
             providersTab.tabItem { Label("Providers", systemImage: "app.connected") }
+                .tag(SettingsTab.providers)
             visibilityTab.tabItem { Label("Telemetry", systemImage: "waveform.path.ecg") }
+                .tag(SettingsTab.telemetry)
             policyTab.tabItem { Label("Decisions", systemImage: "checklist") }
+                .tag(SettingsTab.decisions)
             generalTab.tabItem { Label("App", systemImage: "gearshape") }
+                .tag(SettingsTab.app)
             advisorTab.tabItem { Label("Advisor", systemImage: "brain") }
+                .tag(SettingsTab.advisor)
             updatesTab.tabItem { Label("Updates", systemImage: "arrow.triangle.2.circlepath") }
+                .tag(SettingsTab.updates)
         }
         .padding(20)
         .frame(width: 560, height: 480)
@@ -125,6 +153,9 @@ struct SettingsView: View {
         Form {
             Section("File telemetry (Endpoint Security)") {
                 ESFileTelemetryCard(setup: setup)
+            }
+            Section("Doctor") {
+                TelemetryDoctorSection(setup: setup)
             }
             Section("Transcript & network coverage") {
                 HStack {
@@ -662,20 +693,17 @@ struct SettingsView: View {
 ///                           polling live
 ///   D. collector replaced → C plus the re-grant sentence: the grant belongs
 ///                           to the previous build until the spool advances
-///   E. plist not found    → "Rebuild the app"
+///   E. plist not in the bundle → "Rebuild the app"
 ///   active                → green, done. Remove stays available.
 /// A collector installed by an earlier version outside the bundle shares
 /// the launchd label, so "Remove old helper" comes before everything else.
+/// SetupManager's autopilot takes A–D on its own and polls while C/D wait;
+/// every stage but active offers "Run Doctor".
 @MainActor
 struct ESFileTelemetryCard: View {
     @ObservedObject var setup: SetupManager
 
-    private var stage: ESStage {
-        if setup.esLegacyHelperInstalled { return .legacyInstalled }
-        return esCardState(status: setup.esServiceStatus,
-                           tccGranted: setup.esSpoolFlowing,
-                           helperReplaced: setup.esHelperReplaced)
-    }
+    private var stage: ESStage { setup.esStage }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -689,6 +717,11 @@ struct ESFileTelemetryCard: View {
                 }
                 Spacer()
                 controls
+                if stage != .active {
+                    Button("Run Doctor") { Task { await setup.runDoctor() } }
+                        .controlSize(.small)
+                        .disabled(setup.doctorRunning)
+                }
             }
             if stage == .needsGrant || stage == .needsRegrant {
                 Label(ESStage.grantInstruction, systemImage: "cursorarrow.click.2")
@@ -696,7 +729,6 @@ struct ESFileTelemetryCard: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .task { await pollWhileNeeded() }
     }
 
     private var stageBadge: some View {
@@ -722,7 +754,6 @@ struct ESFileTelemetryCard: View {
                 Task {
                     do { try await setup.installESCollectorAsync() }
                     catch { setup.report(error) }
-                    await pollWhileNeeded()
                 }
             }
             .buttonStyle(.borderedProminent).tint(.brand).controlSize(.small)
@@ -736,32 +767,82 @@ struct ESFileTelemetryCard: View {
             EmptyView()
         case .active:
             Button("Remove", role: .destructive) {
-                do { try setup.uninstallESCollector() }
+                do { try setup.removeESCollector() }
                 catch { setup.report(error) }
-                Task { await setup.refreshState() }
             }
             .controlSize(.small)
         }
     }
+}
 
-    /// Poll while waiting on the user in System Settings (Login Items or
-    /// Full Disk Access): the card moves on within a second of the switch
-    /// flipping — no manual refresh.
-    private func pollWhileNeeded() async {
-        while !Task.isCancelled, stage.awaitsUser {
-            try? await Task.sleep(nanoseconds: 1_000_000_000)
-            await setup.refreshState()
+/// The Telemetry Doctor: one row per check with its state, cause and fix,
+/// plus "Fix all" (fixes in check order, waiting on System Settings switches).
+@MainActor
+struct TelemetryDoctorSection: View {
+    @ObservedObject var setup: SetupManager
+
+    private var busy: Bool { setup.doctorRunning || setup.doctorFixing != nil }
+    private var hasFixes: Bool { setup.doctorChecks.contains { $0.state != .pass && $0.fix != nil } }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(summary).font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                if busy { ProgressView().controlSize(.small) }
+                Button("Run Doctor") { Task { await setup.runDoctor() } }
+                    .controlSize(.small).disabled(busy)
+                Button("Fix all") { Task { await setup.fixAllDoctorChecks() } }
+                    .buttonStyle(.borderedProminent).tint(.brand).controlSize(.small)
+                    .disabled(busy || !hasFixes)
+            }
+            ForEach(setup.doctorChecks) { check in
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: check.state.icon)
+                        .foregroundStyle(tint(check.state))
+                        .frame(width: 16)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(check.title).font(.system(.body, weight: .medium))
+                        Text(check.cause)
+                            .font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer()
+                    if let fix = check.fix, check.state != .pass {
+                        Button(fix.title) { Task { await setup.fixDoctorCheck(check, waitForUser: false) } }
+                            .controlSize(.small).disabled(busy)
+                    }
+                }
+            }
+        }
+        .task { if setup.doctorChecks.isEmpty { await setup.runDoctor() } }
+    }
+
+    private var summary: String {
+        if setup.doctorChecks.isEmpty { return setup.doctorRunning ? "Checking…" : "Not run yet" }
+        let fail = setup.doctorChecks.filter { $0.state == .fail }.count
+        let warn = setup.doctorChecks.filter { $0.state == .warn }.count
+        return "\(fail) failing, \(warn) warning, \(setup.doctorChecks.count - fail - warn) passing"
+    }
+
+    private func tint(_ state: DoctorState) -> Color {
+        switch state {
+        case .pass: return .ok
+        case .warn: return .warn
+        case .fail: return .bad
         }
     }
 }
 
 /// Maps the collector daemon's registration status and the spool facts to
 /// the card state. Registration comes first: until the daemon is enabled
-/// nothing can hold a grant.
-func esCardState(status: SMAppService.Status, tccGranted: Bool, helperReplaced: Bool) -> ESStage {
+/// nothing can hold a grant. macOS answers `.notFound` for a service it has
+/// never seen, so with the plist in the bundle that means "not registered
+/// yet"; only a missing plist means the build lacks the service.
+func esCardState(status: SMAppService.Status, plistPresent: Bool, tccGranted: Bool, helperReplaced: Bool) -> ESStage {
     switch status {
     case .notFound:
-        return .notFound
+        return plistPresent ? .notRegistered : .notFound
     case .requiresApproval:
         return .requiresApproval
     case .enabled:

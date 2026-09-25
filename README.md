@@ -178,7 +178,16 @@ make test       # full Go + Swift + Python + E2E suites
 make install    # build "Secure Agent.app" and launch it (no LaunchAgents)
 ```
 
-> **Note**: Endpoint Security telemetry via `eslogger` runs in a collector daemon that ships inside the app bundle and is registered with `SMAppService`. Turn it on from the File Telemetry card in **Setup & Permissions…**, then approve **Secure Agent** once in **System Settings → General → Login Items & Extensions** and once in **Privacy & Security → Full Disk Access** — no admin password. A collector installed by an earlier version under `/Library` is removed from the same card (one admin prompt).
+### File telemetry
+
+Endpoint Security telemetry via `eslogger` runs in a collector daemon that ships inside the app bundle and is registered with `SMAppService` — no admin password.
+
+- **Automatic:** at launch the app registers the collector (once per launch), opens System Settings at each switch still off (once per build), and posts a notification naming the switch.
+- **Your two switches:** **Secure Agent** in **System Settings → General → Login Items & Extensions**, then **Secure Agent** in **Privacy & Security → Full Disk Access**; the File Telemetry card in **Settings → Telemetry** turns green on its own.
+- **Doctor:** **Run Doctor…** in the menu bar menu, or **Run Doctor** on the card, checks signing, the service in the bundle, registration, Login Items, the launchd job, Full Disk Access, spool health, an old helper under `/Library`, and the daemon's `/doctor`.
+- **Fixes:** each failing check has a Fix button; **Fix all** runs them in check order and waits up to 5 minutes on each System Settings switch.
+- **Off:** Remove on the card keeps file telemetry off until Enable.
+- **Old helper:** a collector installed by an earlier version under `/Library` is removed from the same card (one admin prompt).
 
 ### Plugin Hook Installation
 
