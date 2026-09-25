@@ -7,6 +7,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 ## [Unreleased]
 
 ### Changed
+- Console Spend opens on the last usage reports: `GET /costs?cached=1` answers at once from the daemon's usage cache (saved in the store, so it outlives a restart) while a fresh report is computed; the card reads "Updating usage cache… (cached 3h ago)" and the tile's line "updating…" until it lands. Spend no longer holds the console's first render, and `/costs/plans` keeps plan headroom across restarts (snapshots under a week old).
 - `.gitleaksignore` fingerprints name the rewritten commits of the six known test fixtures.
 - Idle daemon: opencode, openclaw and Hermes polls skip an unchanged database, `/costs` and `/costs/unpriced` reuse a report for 30 s, and transcript discovery re-lists only directories whose mtime moved.
 - `make install` waits up to 90 s for the restarted daemon to answer `/status` before reporting file telemetry, and says "unknown" instead of asking for approvals when it gets no answer.

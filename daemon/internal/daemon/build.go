@@ -140,6 +140,9 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 	// Operator price table from config.yaml, applied before any collector
 	// emits a model call; the config watcher re-applies it on change.
 	applyPricing(cfg)
+	// Plan headroom saved by the previous run answers /costs/plans until the
+	// next token_count line; the resource loop saves each change.
+	plans := restorePlans(st, time.Now())
 
 	// Supervisor with a shared health registry so /status reports each
 	// collector's real state (running / restarting / abandoned). Coverage
@@ -158,7 +161,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 		func() *advisor.Subscriber { return advisorStk.Load().Sub })
 
 	// Periodic process tagger refresh: 5s while idle, 1s while agents live.
-	go runResourceLoop(ctx, tagger, resolver, resourceTracker, resourceControl, resourceEpisodes, st, cfg.DBPath, supReg)
+	go runResourceLoop(ctx, tagger, resolver, resourceTracker, resourceControl, resourceEpisodes, st, cfg.DBPath, supReg, plans)
 
 	// Firewall engine + persisted overrides, used by the proxy for egress
 	// inspection and surfaced as per-rule stats in status.
@@ -560,8 +563,8 @@ func buildFleetAndOTLP(cfg config.Config) (*fleet.Publisher, *fleetConfigHolder,
 }
 
 // runResourceLoop: tagger refresh (5s idle, 1s under agents), session sweep,
-// resource observe, heartbeat persist.
-func runResourceLoop(ctx context.Context, tagger *agents.Tagger, resolver *session.Resolver, tracker *resource.Tracker, control *resource.Controller, episodes *resourceEpisodeWriter, st *store.Store, dbPath string, supReg *supervise.Registry) {
+// resource observe, heartbeat and plan headroom persist.
+func runResourceLoop(ctx context.Context, tagger *agents.Tagger, resolver *session.Resolver, tracker *resource.Tracker, control *resource.Controller, episodes *resourceEpisodeWriter, st *store.Store, dbPath string, supReg *supervise.Registry, plans *planSaver) {
 	timer := time.NewTimer(agents.RefreshInterval(tagger.Any()))
 	defer timer.Stop()
 	for {
@@ -576,6 +579,7 @@ func runResourceLoop(ctx context.Context, tagger *agents.Tagger, resolver *sessi
 			control.Observe(tracker.Snapshot(), now)
 			episodes.Observe(control.Snapshot())
 			persistLastProduced(dbPath, supReg)
+			plans.save()
 			timer.Reset(agents.RefreshInterval(tagger.Any()))
 		}
 	}
