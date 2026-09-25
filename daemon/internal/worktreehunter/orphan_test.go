@@ -38,6 +38,7 @@ func TestOrphansOfMovedAndDeletedRepositories(t *testing.T) {
 	st.activity = []model.WorkspaceActivity{{Workspace: newMain}, {Workspace: wt}, {Workspace: lost}}
 	h := New(st, home, Options{})
 	h.now = func() time.Time { return time.Now().Add(48 * time.Hour) }
+	h.goos = "darwin" // the macOS Trash layout; the freedesktop one is the trash package's
 	rep := h.Report(context.Background(), true)
 
 	w := findRow(t, rep, wt)
