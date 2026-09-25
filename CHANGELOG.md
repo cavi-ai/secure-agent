@@ -206,6 +206,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Menu bar: the unused flag action, incident detail and process detail sheets.
 
 ### Fixed
+- `make app` / `make install`: a Swift edit that compiles to identical objects (comments, whitespace) no longer fails the build as a stale menubar binary; the product is rewritten on every build.
 - Worktree removal: `git worktree remove` runs under a 10-minute deadline instead of the 10-second read limit that killed it mid-delete on large trees (200,000 files take 16 s), and finishes when the request is canceled.
 - A git failure during removal says whether the worktree is still on disk and registered.
 - A Code conversation in the Claude desktop app is rooted at its own `claude` process and ends when that process exits; the app (`claude-desktop`, infra) no longer holds every conversation open until it quits.
