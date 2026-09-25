@@ -154,6 +154,7 @@ type hermesDB struct {
 	inputSeen map[string]int64     // session → input_tokens already attributed
 	usage     map[string]hermesUsage
 	callStart map[string]hermesCall
+	change    dbChange // skips a poll while the database is unchanged
 }
 
 type hermesUsage struct {
@@ -383,6 +384,11 @@ func (d *hermesDB) fail(what string, err error) {
 // and the live set belong to, usage totals, and ends.
 func (c *HermesCollector) pollDB(d *hermesDB) int {
 	d.lastErr = ""
+	fp, run := d.change.begin(d.path)
+	if !run {
+		return 0
+	}
+	from := d.watermark
 	db, err := openHermesReadOnly(d.path)
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
@@ -422,7 +428,7 @@ func (c *HermesCollector) pollDB(d *hermesDB) int {
 	usageCols, _ := hermesTableColumns(db, "session_model_usage")
 	usageMode := usageCols["session_id"] && usageCols["model"] && (usageCols["input_tokens"] || usageCols["output_tokens"])
 
-	rows, err := c.readMessages(db, d, msgCols)
+	rows, clean, err := c.readMessages(db, d, msgCols)
 	if err != nil {
 		d.fail("messages query", err)
 		return 0
@@ -482,6 +488,9 @@ func (c *HermesCollector) pollDB(d *hermesDB) int {
 	c.pruneLive(d)
 	if d.lastErr == "" {
 		d.logged = ""
+		if clean && d.watermark == from {
+			d.change.done(fp)
+		}
 	}
 	if published > 0 || len(rows) > 0 {
 		c.saveState()
@@ -489,7 +498,9 @@ func (c *HermesCollector) pollDB(d *hermesDB) int {
 	return published
 }
 
-func (c *HermesCollector) readMessages(db *sql.DB, d *hermesDB, cols hermesCols) ([]hermesRow, error) {
+// readMessages reads the next batch past the watermark; clean is false when
+// the cursor failed partway.
+func (c *HermesCollector) readMessages(db *sql.DB, d *hermesDB, cols hermesCols) (out []hermesRow, clean bool, err error) {
 	calls := cols.col("m", "tool_calls")
 	q := fmt.Sprintf(`
 SELECT m.id, COALESCE(m.session_id, ''), COALESCE(m.role, ''), COALESCE(m.timestamp, 0),
@@ -503,10 +514,9 @@ ORDER BY m.id, j.key`,
 		cols.col("m", "tool_call_id"), cols.col("m", "tool_name"), cols.col("m", "token_count"), cols.col("m", "finish_reason"), calls)
 	rows, err := db.Query(q, d.watermark, maxHermesMessages)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	defer rows.Close()
-	var out []hermesRow
 	for rows.Next() {
 		var r hermesRow
 		if err := rows.Scan(&r.msgID, &r.sessionID, &r.role, &r.ts, &r.toolCallID, &r.toolName,
@@ -517,8 +527,9 @@ ORDER BY m.id, j.key`,
 	}
 	if err := rows.Err(); err != nil {
 		log.Printf("hermes: %s: cursor error (partial poll): %v", d.path, err)
+		return out, false, nil
 	}
-	return out, nil
+	return out, true, nil
 }
 
 func readHermesSessions(db *sql.DB, cols hermesCols, ids []string) (map[string]hermesSession, error) {

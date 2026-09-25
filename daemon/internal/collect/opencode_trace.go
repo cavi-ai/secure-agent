@@ -75,6 +75,10 @@ type OpencodeCollector struct {
 	// modelCache: session id → last-seen assistant model and provider, so
 	// the per-part lookup is one bounded query per session, not per event.
 	modelCache map[string]opencodeModel
+
+	// change skips a poll while the database is unchanged: part has no
+	// index on time_updated, so every query is a full table scan.
+	change dbChange
 }
 
 // NewOpencodeCollector builds the poller. Empty dbPath resolves the default.
@@ -139,6 +143,10 @@ func (c *OpencodeCollector) primeWatermark() {
 // pollOnce reads new parts past the watermark and publishes their events,
 // returning how many events were published.
 func (c *OpencodeCollector) pollOnce() int {
+	fp, run := c.change.begin(c.dbPath)
+	if !run {
+		return 0
+	}
 	db, err := c.openReadOnly()
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
@@ -196,6 +204,8 @@ func (c *OpencodeCollector) pollOnce() int {
 	}
 	if err := rows.Err(); err != nil {
 		log.Printf("opencode: cursor error (partial poll): %v", err)
+	} else if maxSeen <= c.watermark {
+		c.change.done(fp)
 	}
 	if maxSeen > c.watermark {
 		c.watermark = maxSeen
