@@ -815,6 +815,16 @@ Removes one worktree, or prunes a repository's entries for worktrees whose direc
 
 Remove measures the worktree (a fresh walk) and inspects it again at request time and runs `git worktree remove` (never `--force`) only when that fresh verdict is `remove`; git still refuses a tree that turned dirty in between. The branch and its commits stay. Prune runs `git worktree prune` when the repository lists at least one unlocked worktree whose directory is gone. Both write an audit row and a cleanup ledger row (`worktree-remove` with the bytes measured before removal; `worktree-prune` with 0); a prune drops the cached scan.
 
+#### `POST /worktrees/reveal`, `POST /worktrees/reconnect`, `POST /worktrees/trash`
+
+`{"path": "<absolute path>"}` each. A folder whose `.git` file names a worktree record that no longer exists (its repository moved or was deleted) is listed as an `orphan` row under a group whose `error` is `repository not found (moved or deleted)`; the `errors` line reads `<repo>: repository not found (moved or deleted); N folders still point to it (listed first below)`. When a scanned repository's `.git/worktrees/<name>/gitdir` still points at the folder (the repository moved), the row carries `reconnect: "<that repository>"`.
+
+- `reveal`: Finder selects a folder the current report lists. `200 {"ok":true}`; `404` not listed; `410` gone; `501` off macOS.
+- `reconnect`: runs `git worktree repair <path>` in the `reconnect` repository. `200 {"status":"ok","repo"}`; `404` not an orphan; `409` no known repository records it.
+- `trash`: moves an orphan folder to the Trash on its volume. `200 {"status":"ok","result":{"path","bytes","trash_path"}}`; `404` not an orphan. The ledger books `trash:orphan-worktree` (counted in `trashed_bytes`); the row, and a missing-repository group it leaves empty with its `errors` line, leave the cached report.
+
+All three write an audit row. Mutations, NoAgent.
+
 #### `POST /worktrees/ask` and `GET /worktrees/asks`
 
 `{"path": "<keep or review worktree>"}` resumes the newest Claude Code or Codex session recorded in that worktree (hook or transcript identity; its id is the harness's own) and sends it a fixed request: open a pull request for work worth keeping (`WORKTREE-VERDICT: pr <url>`), or say the worktree can go (`removable <reason>`) or must stay (`keep <reason>`), and never delete the worktree itself. Claude Code runs as `claude --resume <id> --fork-session -p <request> --output-format json --max-budget-usd 1.00`; Codex as `codex exec resume <id> <request> --skip-git-repo-check -o <file>`. Both run in the worktree with the user's own agent settings and hooks, in their own process group, bounded at 15 minutes; one ask runs at a time. The request carries the checker's state and reasons; nothing else from the repository.

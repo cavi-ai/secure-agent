@@ -5,16 +5,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/url"
 	"os"
-	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/diskusage"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/toolpath"
+	"github.com/cavi-ai/secure-agent/daemon/internal/trash"
 )
 
 var (
@@ -53,7 +51,7 @@ func (c *Clutter) Trash(ctx context.Context, path string) (ClutterResult, error)
 		return ClutterResult{}, ErrChanged
 	}
 	u := diskusage.Dir(ctx, it.Path, nil)
-	dest, err := c.moveToTrash(it.Path)
+	dest, err := trash.Mover{Home: c.home, GOOS: c.goos, Now: c.now}.Move(it.Path)
 	if err != nil {
 		return ClutterResult{}, err
 	}
@@ -125,55 +123,6 @@ func (c *Clutter) findLocked(ctx context.Context, key, action string) (ClutterIt
 		}
 	}
 	return ClutterItem{}, ErrNotInInventory
-}
-
-// moveToTrash renames path into the Trash on its own volume: ~/.Trash for
-// the home volume, <volume>/.Trashes/<uid> for others (what Finder uses).
-// A name already in the Trash gets a time suffix, as Finder does.
-func (c *Clutter) moveToTrash(path string) (string, error) {
-	dir, err := c.trashDir(path)
-	if err != nil {
-		return "", err
-	}
-	dest := filepath.Join(dir, filepath.Base(path))
-	if _, err := os.Lstat(dest); err == nil {
-		dest = filepath.Join(dir, filepath.Base(path)+" "+c.now().Format("15.04.05.000"))
-	}
-	if err := os.Rename(path, dest); err != nil {
-		return "", fmt.Errorf("move to Trash: %w", err)
-	}
-	if c.goos != "darwin" {
-		// freedesktop Trash: a .trashinfo beside files/ lets the desktop
-		// show the item's origin and restore it.
-		info := filepath.Join(filepath.Dir(dir), "info", filepath.Base(dest)+".trashinfo")
-		body := "[Trash Info]\nPath=" + (&url.URL{Path: path}).EscapedPath() + "\nDeletionDate=" + c.now().Format("2006-01-02T15:04:05") + "\n"
-		if err := os.MkdirAll(filepath.Dir(info), 0o700); err == nil {
-			_ = os.WriteFile(info, []byte(body), 0o600)
-		}
-	}
-	return dest, nil
-}
-
-func (c *Clutter) trashDir(path string) (string, error) {
-	if c.goos != "darwin" {
-		dir := filepath.Join(c.home, ".local", "share", "Trash", "files")
-		if err := os.MkdirAll(dir, 0o700); err != nil {
-			return "", err
-		}
-		if !diskusage.SameDevice(dir, path) {
-			return "", errors.New("the Trash is on another volume")
-		}
-		return dir, nil
-	}
-	home := filepath.Join(c.home, ".Trash")
-	if diskusage.SameDevice(c.home, path) {
-		return home, os.MkdirAll(home, 0o700)
-	}
-	dir := filepath.Join(diskusage.Root(path), ".Trashes", strconv.Itoa(os.Getuid()))
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return "", fmt.Errorf("volume Trash: %w", err)
-	}
-	return dir, nil
 }
 
 func tail(s string, n int) string {

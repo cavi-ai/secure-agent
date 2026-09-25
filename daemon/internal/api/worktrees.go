@@ -4,12 +4,14 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"os"
 	"path/filepath"
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/advisor"
 	"github.com/cavi-ai/secure-agent/daemon/internal/agentask"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
+	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 	"github.com/cavi-ai/secure-agent/daemon/internal/worktreehunter"
 )
 
@@ -305,5 +307,89 @@ func (a *API) handleWorktreeRemove(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeJSON(w, map[string]any{"status": "ok", "removed": row.Path, "branch": row.Branch, "reasons": row.Reasons,
 			"bytes": row.SizeBytes, "bytes_partial": row.SizePartial})
+	}
+}
+
+// worktreePath decodes {"path"} for the worktree folder actions.
+func (a *API) worktreePath(w http.ResponseWriter, r *http.Request) (string, bool) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return "", false
+	}
+	if a.worktrees == nil {
+		http.Error(w, "worktree hunter not enabled", http.StatusServiceUnavailable)
+		return "", false
+	}
+	limitBody(w, r)
+	var req filePathRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || !filepath.IsAbs(req.Path) {
+		http.Error(w, `Invalid payload: {"path": "<absolute path>"}`, http.StatusBadRequest)
+		return "", false
+	}
+	return filepath.Clean(req.Path), true
+}
+
+// handleWorktreeReveal serves POST /worktrees/reveal: Finder selects a
+// folder the current worktree report lists.
+func (a *API) handleWorktreeReveal(w http.ResponseWriter, r *http.Request) {
+	p, ok := a.worktreePath(w, r)
+	if !ok {
+		return
+	}
+	if !a.worktrees.Listed(p) {
+		http.Error(w, "not a folder the worktree report lists", http.StatusNotFound)
+		return
+	}
+	if _, err := os.Stat(p); err != nil {
+		http.Error(w, "the folder no longer exists", http.StatusGone)
+		return
+	}
+	if err := a.openPath("-R", p); err != nil {
+		if errors.Is(err, errors.ErrUnsupported) {
+			http.Error(w, "opening folders is supported on macOS only", http.StatusNotImplemented)
+			return
+		}
+		http.Error(w, "open failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	a.store.PutAudit(store.AuditEntry{Action: "worktree-reveal", Detail: p})
+	writeJSON(w, map[string]bool{"ok": true})
+}
+
+// handleWorktreeReconnect serves POST /worktrees/reconnect: `git worktree
+// repair` in the repository that still records an orphan folder.
+func (a *API) handleWorktreeReconnect(w http.ResponseWriter, r *http.Request) {
+	p, ok := a.worktreePath(w, r)
+	if !ok {
+		return
+	}
+	repo, err := a.worktrees.Reconnect(r.Context(), p)
+	switch {
+	case errors.Is(err, worktreehunter.ErrNotOrphan):
+		http.Error(w, err.Error(), http.StatusNotFound)
+	case errors.Is(err, worktreehunter.ErrNoReconnect):
+		http.Error(w, err.Error(), http.StatusConflict)
+	case err != nil:
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	default:
+		writeJSON(w, map[string]any{"status": "ok", "repo": repo})
+	}
+}
+
+// handleWorktreeTrash serves POST /worktrees/trash: an orphan folder goes
+// to the Trash on its volume.
+func (a *API) handleWorktreeTrash(w http.ResponseWriter, r *http.Request) {
+	p, ok := a.worktreePath(w, r)
+	if !ok {
+		return
+	}
+	res, err := a.worktrees.TrashOrphan(r.Context(), p)
+	switch {
+	case errors.Is(err, worktreehunter.ErrNotOrphan):
+		http.Error(w, err.Error(), http.StatusNotFound)
+	case err != nil:
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	default:
+		writeJSON(w, map[string]any{"status": "ok", "result": res})
 	}
 }

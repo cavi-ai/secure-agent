@@ -436,3 +436,84 @@ func TestWorktreeAskEndpoint(t *testing.T) {
 		t.Fatal("/worktrees/ask must be a mutation")
 	}
 }
+
+// An orphan folder (its repository deleted) is listed; reveal opens it in
+// Finder, reconnect refuses with nothing to reconnect to, trash moves it to
+// the Trash. Paths the report does not list are refused.
+func TestWorktreeOrphanEndpoints(t *testing.T) {
+	home, root, repo, _, _, _ := worktreeFixture(t)
+	orphan := filepath.Join(root, "agents", "lost")
+	if out, err := exec.Command("git", "-C", repo, "worktree", "add", "-q", "-b", "feat/lost", orphan, "main").CombinedOutput(); err != nil {
+		t.Fatalf("worktree add: %v %s", err, out)
+	}
+	if err := os.WriteFile(filepath.Join(orphan, "notes.txt"), []byte("only copy\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(filepath.Join(repo, ".git", "worktrees", "lost")); err != nil {
+		t.Fatal(err)
+	}
+	st := testStore(t)
+	t.Cleanup(func() { st.Close() })
+	st.UpsertSession(model.Session{ID: "s-lost", Harness: "claude", Workspace: orphan, Status: model.SessionEnded,
+		StartedAt: time.Now().Add(-72 * time.Hour), LastSeenAt: time.Now().Add(-72 * time.Hour)})
+	a := New(Deps{Store: st, Status: func() Status { return Status{Running: true} }, Worktrees: worktreehunter.New(st, home, worktreehunter.Options{})})
+	var opened []string
+	a.openPath = func(args ...string) error { opened = append(opened, strings.Join(args, " ")); return nil }
+	mux := a.buildMux()
+	do := func(path, body string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		method := http.MethodPost
+		if body == "" {
+			method = http.MethodGet
+		}
+		mux.ServeHTTP(rec, httptest.NewRequest(method, path, strings.NewReader(body)))
+		return rec
+	}
+	var rep worktreehunter.ScanReport
+	if err := json.Unmarshal(do("/worktrees", "").Body.Bytes(), &rep); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, r := range rep.Repos {
+		for _, w := range r.Worktrees {
+			found = found || (w.Path == orphan && w.Orphan)
+		}
+	}
+	if !found {
+		t.Fatalf("orphan not listed: %+v", rep.Repos)
+	}
+
+	for _, c := range []struct {
+		path, body string
+		want       int
+	}{
+		{"/worktrees/reveal", `{"path":"relative"}`, http.StatusBadRequest},
+		{"/worktrees/reveal", `{"path":"/not/listed"}`, http.StatusNotFound},
+		{"/worktrees/reveal", `{"path":"` + orphan + `"}`, http.StatusOK},
+		{"/worktrees/reconnect", `{"path":"` + orphan + `"}`, http.StatusConflict},
+		{"/worktrees/reconnect", `{"path":"` + repo + `"}`, http.StatusNotFound},
+		{"/worktrees/trash", `{"path":"` + repo + `"}`, http.StatusNotFound},
+	} {
+		if rec := do(c.path, c.body); rec.Code != c.want {
+			t.Fatalf("POST %s %s: %d %s, want %d", c.path, c.body, rec.Code, rec.Body.String(), c.want)
+		}
+	}
+	if len(opened) != 1 || opened[0] != "-R "+orphan {
+		t.Fatalf("opened = %q", opened)
+	}
+	rec := do("/worktrees/trash", `{"path":"`+orphan+`"}`)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"trash_path"`) {
+		t.Fatalf("trash: %d %s", rec.Code, rec.Body.String())
+	}
+	if _, err := os.Stat(orphan); err == nil {
+		t.Fatal("orphan still on disk")
+	}
+	if rec := do("/worktrees/reveal", `{"path":"`+orphan+`"}`); rec.Code != http.StatusNotFound {
+		t.Fatalf("reveal after trash: %d, want 404", rec.Code)
+	}
+	for _, p := range []string{"/worktrees/reveal", "/worktrees/reconnect", "/worktrees/trash"} {
+		if !apiroutes.IsMutation(http.MethodPost, p) || !apiroutes.ConsoleAllowed(http.MethodPost, p) {
+			t.Fatalf("%s must be a console-admitted mutation", p)
+		}
+	}
+}

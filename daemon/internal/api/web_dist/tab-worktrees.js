@@ -31,7 +31,10 @@ function worktreeGroups(rep, filter) {
       && (!f.state || w.state === f.state) && (!f.stale || w.stale));
     if (rows.length) groups.push({ repo, rows });
   }
-  return groups.sort((a, b) => (Number(b.repo.size_bytes) || 0) - (Number(a.repo.size_bytes) || 0));
+  // A repository that could not be read (moved, deleted) comes first: its
+  // folders need a decision. Then the biggest.
+  return groups.sort((a, b) => (b.repo.error ? 1 : 0) - (a.repo.error ? 1 : 0)
+    || (Number(b.repo.size_bytes) || 0) - (Number(a.repo.size_bytes) || 0));
 }
 
 // fmtDisk: fmtRSS up to GB, then TB (volumes are terabytes).
@@ -125,7 +128,13 @@ function worktreeRowHTML(w, repo, note, ask, removal) {
   const branch = w.branch || (w.detached ? '(detached)' : '');
   const reasons = (w.reasons || []).map(r => `<li>${escapeHTML(r)}</li>`).join('');
   let action = '';
-  if (w.state === 'remove') {
+  if (w.orphan) {
+    // Git no longer records this folder: open it, link it to the repository
+    // that still records it (moved repo), or move it to the Trash.
+    action = `<button type="button" class="btn btn-sm" data-action="worktree-reveal" data-path="${escapeHTML(w.path)}">Open folder</button>`
+      + (w.reconnect ? `<button type="button" class="btn btn-sm" data-action="worktree-reconnect" data-path="${escapeHTML(w.path)}" data-repo="${escapeHTML(w.reconnect)}">Reconnect</button>` : '')
+      + `<button type="button" class="btn btn-danger btn-sm" data-action="worktree-trash-orphan" data-path="${escapeHTML(w.path)}">Move to Trash</button>`;
+  } else if (w.state === 'remove') {
     action = removal && removal.state === 'running'
       ? '<button type="button" class="btn btn-danger btn-sm" disabled>Removing…</button>'
       : `<button type="button" class="btn btn-danger btn-sm" data-action="worktree-remove" data-path="${escapeHTML(w.path)}" data-branch="${escapeHTML(branch)}">${removal && removal.state === 'failed' ? 'Try again' : 'Remove'}</button>`;
@@ -162,7 +171,9 @@ function worktreeGroupHTML(g, advice, asks, removals) {
       <span class="wt-repo-path" title="${escapeHTML(g.repo.path)}">${escapeHTML(g.repo.path)}</span>
       ${meta ? `<span class="wt-repo-meta">${escapeHTML(meta)}</span>` : ''}
       ${g.repo.size_bytes ? `<span class="wt-repo-size">${escapeHTML(fmtDisk(g.repo.size_bytes))}</span>` : ''}
-      <button type="button" class="link-btn wt-hide" data-action="worktree-hide" data-repo="${escapeHTML(g.repo.path)}">Hide repo</button>
+      ${g.repo.error
+        ? `<span class="wt-repo-error">${escapeHTML(g.repo.error)} — the folders below still point to it</span>`
+        : `<button type="button" class="link-btn wt-hide" data-action="worktree-hide" data-repo="${escapeHTML(g.repo.path)}">Hide repo</button>`}
     </div>
     ${g.rows.map(w => worktreeRowHTML(w, g.repo, (advice || {})[w.path], (asks || {})[w.path], (removals || {})[w.path])).join('')}
   </section>`;
