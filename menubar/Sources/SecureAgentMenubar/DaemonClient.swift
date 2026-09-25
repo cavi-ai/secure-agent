@@ -108,6 +108,10 @@ public final class DaemonClient: Sendable {
         try await getDecodable("/resources")
     }
 
+    public func fetchDoctor() async throws -> DaemonDoctorReportModel {
+        try await getDecodable("/doctor")
+    }
+
     public func fetchFlags(limit: Int = 20) async throws -> [FlagModel] {
         try await getDecodable("/flags?limit=\(limit)")
     }
