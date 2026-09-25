@@ -16,6 +16,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Console: shows the posture banner capped at 3 rows off Home and empty on Home, agent ids in their own case, Egress led by the uninspected endpoints with zero-hit rules folded into one row, and Processes at full width.
 
 ### Added
+- File telemetry registers itself at launch, opens its two System Settings panes once per build, and has a Doctor with per-check fixes (menu bar: Run Doctor…).
 - Console Cleanup view: Remove all on a repository with two or more removable worktrees (count and size on the button); one dialog, each removal checked again by the daemon, each row shows its steps, one line when the batch ends.
 - Worktree folders whose repository moved or was deleted: `POST /worktrees/reveal` (Finder), `POST /worktrees/reconnect` (`git worktree repair` in the repository that still records the folder, named in the row's `reconnect`), `POST /worktrees/trash` (Trash on its volume, booked as `trash:orphan-worktree`).
 - Console Cleanup view: a missing repository's group comes first with "the folders below still point to it"; its folders offer Open folder, Reconnect (when a repository still records them) and Move to Trash.

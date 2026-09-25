@@ -10,7 +10,9 @@ public final class NotificationManager: NSObject, @unchecked Sendable {
 
     private var isSupported: Bool { Bundle.main.bundleIdentifier != nil }
 
-    override private init() { super.init() }
+    /// Internal (not private) so tests build an instance with their own
+    /// clock and reconcile seam.
+    override init() { super.init() }
 
     /// Whether the user granted notification permission. When denied, security
     /// alerts would vanish silently — the app surfaces this state instead.
@@ -102,14 +104,36 @@ public final class NotificationManager: NSObject, @unchecked Sendable {
         }
     }
 
+    /// Clock for the reconcile gate; tests inject their own.
+    var clock: () -> Date = { Date() }
+    /// The reconcile pass itself; tests replace it with a counter.
+    lazy var reconcileRunner: (Set<String>, TimeInterval) -> Void = { [unowned self] ids, maxAge in
+        self.reconcileNow(acknowledgedIDs: ids, maxAge: maxAge)
+    }
+    private var lastReconciledIDs: Set<String>?
+    private var lastReconcileAt: Date?
+    /// A poll with an unchanged acknowledged set reconciles at most this often.
+    static let reconcileInterval: TimeInterval = 60
+
     /// Notification Center must track live posture, not accumulate grey
     /// history: banners whose flag the operator already acted on (dismissed
     /// in either UI, muted, or retro-acknowledged daemon-side — all converge
     /// to `acknowledged`) are withdrawn, and anything older than maxAge is
-    /// pruned. Called on every poll so the Center can never pile up handled
-    /// alerts again.
+    /// pruned. Called on every poll; runs when the acknowledged set changed
+    /// since the last run, else at most once a minute.
     public func reconcileDeliveredNotifications(acknowledgedIDs: Set<String>,
                                                 maxAge: TimeInterval = 7 * 24 * 3600) {
+        let now = clock()
+        if acknowledgedIDs == lastReconciledIDs, let last = lastReconcileAt,
+           now.timeIntervalSince(last) < Self.reconcileInterval {
+            return
+        }
+        lastReconciledIDs = acknowledgedIDs
+        lastReconcileAt = now
+        reconcileRunner(acknowledgedIDs, maxAge)
+    }
+
+    private func reconcileNow(acknowledgedIDs: Set<String>, maxAge: TimeInterval) {
         // getDeliveredNotifications needs a real app bundle proxy — it throws
         // NSInternalInconsistencyException in the xctest host, where Bundle
         // lookups otherwise succeed (bundleURL ends in usr/bin, not .app).
@@ -135,6 +159,24 @@ public final class NotificationManager: NSObject, @unchecked Sendable {
             if acknowledgedIDs.contains(item.id) { return item.id }
             if now.timeIntervalSince(item.date) > maxAge { return item.id }
             return nil
+        }
+    }
+
+    /// A setup step the user has to take in System Settings. One banner per
+    /// identifier: a repeat replaces the earlier one.
+    public func sendSetupNotification(_ title: String, identifier: String) {
+        guard isSupported else {
+            print("[secure-agent-menubar] Setup: \(title)")
+            return
+        }
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.interruptionLevel = .active
+        let request = UNNotificationRequest(identifier: identifier, content: content, trigger: nil)
+        UNUserNotificationCenter.current().add(request) { error in
+            if let error {
+                NSLog("[secure-agent] Failed to deliver setup notification: \(error.localizedDescription)")
+            }
         }
     }
 
