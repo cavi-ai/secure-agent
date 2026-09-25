@@ -29,11 +29,13 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/otlp"
 	"github.com/cavi-ai/secure-agent/daemon/internal/proxy"
+	"github.com/cavi-ai/secure-agent/daemon/internal/redact"
 	"github.com/cavi-ai/secure-agent/daemon/internal/resource"
 	"github.com/cavi-ai/secure-agent/daemon/internal/sensitive"
 	"github.com/cavi-ai/secure-agent/daemon/internal/session"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 	"github.com/cavi-ai/secure-agent/daemon/internal/supervise"
+	"github.com/cavi-ai/secure-agent/daemon/internal/sysagent"
 	"github.com/cavi-ai/secure-agent/daemon/internal/worktreehunter"
 )
 
@@ -211,6 +213,8 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 	hunter := worktreehunter.New(st, "", worktreeOptions(cfg.Worktrees))
 	cleanup := clutter.New(st, "", clutterPlaces(hunter))
 	asker := agentask.New(st, "")
+	sysAgent := sysagent.New(st, filepath.Join(filepath.Dir(cfg.Firewall.Registry.SaltRef), "sysagent"), sysAgentMask(fw.Engine))
+	sysAgent.SetConfig(cfg.SystemAgent)
 	apiServer := api.New(api.Deps{
 		SocketPath:            cfg.SocketPath,
 		Store:                 st,
@@ -254,6 +258,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 		WorktreeAdvisor: worktreeAdvisor,
 		Clutter:         cleanup,
 		Asker:           asker,
+		SysAgent:        sysAgent,
 		ProjectAdvisor:  projectAdvisor,
 	})
 
@@ -274,7 +279,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 		go watchConfig(ctx, opts.ConfigPath, configWatchDeps{
 			st: st, stk: advisorStk, pub: fleetPub, fleetCfg: fleetCfgLive,
 			logDir: filepath.Dir(cfg.DBPath), apiServer: apiServer, resourceControl: resourceControl,
-			initialConfig: &cfg, worktrees: hunter,
+			initialConfig: &cfg, worktrees: hunter, sysAgent: sysAgent,
 			deltaHub: deltaHub, postureChanged: postureHook.run,
 		})
 	}
@@ -961,6 +966,16 @@ func buildPlanFuncs(advisorStk *advisorStackHolder) *api.PlanFuncs {
 			return true, ""
 		},
 	}
+}
+
+// sysAgentMask masks secrets in system agent text with the firewall's typed
+// patterns and registered fingerprints; without an engine, the built-in
+// token patterns.
+func sysAgentMask(eng *firewall.Engine) func(string) (string, bool) {
+	if eng != nil {
+		return eng.Mask
+	}
+	return func(s string) (string, bool) { return redact.Scrub(s), true }
 }
 
 // clutterPlaces lists what the cleanup inventory searches: every repository

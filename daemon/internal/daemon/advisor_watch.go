@@ -25,6 +25,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/fleet"
 	"github.com/cavi-ai/secure-agent/daemon/internal/resource"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
+	"github.com/cavi-ai/secure-agent/daemon/internal/sysagent"
 	"github.com/cavi-ai/secure-agent/daemon/internal/worktreehunter"
 )
 
@@ -54,6 +55,7 @@ type configWatchDeps struct {
 	apiServer       *api.API // SetFleetConfigured follows the webhook set
 	resourceControl *resource.Controller
 	worktrees       *worktreehunter.Hunter
+	sysAgent        *sysagent.Agent
 	initialConfig   *config.Config
 	// deltaHub/postureChanged follow the advisor stack into setupAdvisor so
 	// a verdict landing after a config-driven advisor swap still gets the
@@ -69,13 +71,14 @@ type configWatchDeps struct {
 // boot-static.
 func watchConfig(ctx context.Context, path string, deps configWatchDeps) {
 
-	var lastAdvisorKey, lastFleetKey, lastResourceKey, lastPricingKey, lastWorktreesKey string
+	var lastAdvisorKey, lastFleetKey, lastResourceKey, lastPricingKey, lastWorktreesKey, lastSysAgentKey string
 	if deps.initialConfig != nil {
 		lastAdvisorKey = advisorConfigKey(deps.initialConfig.Advisor)
 		lastFleetKey = fleetConfigKey(deps.initialConfig.Fleet)
 		lastResourceKey = resourceConfigKey(deps.initialConfig.ResourceControl)
 		lastPricingKey = pricingConfigKey(*deps.initialConfig)
 		lastWorktreesKey = worktreesConfigKey(deps.initialConfig.Worktrees)
+		lastSysAgentKey = sysAgentConfigKey(deps.initialConfig.SystemAgent)
 	}
 	check := func() {
 		// LoadStrict, not Load: a malformed overlay makes Load substitute
@@ -125,6 +128,12 @@ func watchConfig(ctx context.Context, path string, deps configWatchDeps) {
 			log.Printf("worktrees config applied live (%d root(s), stale after %d days)",
 				len(data.Worktrees.Roots), worktreeOptions(data.Worktrees).StaleDays)
 		}
+		if key := sysAgentConfigKey(data.SystemAgent); key != lastSysAgentKey && deps.sysAgent != nil {
+			lastSysAgentKey = key
+			deps.sysAgent.SetConfig(data.SystemAgent)
+			log.Printf("system agent config applied live (enabled=%v endpoint=%s model=%q harness_model=%q)",
+				data.SystemAgent.Enabled, data.SystemAgent.Endpoint, data.SystemAgent.Model, data.SystemAgent.HarnessModel)
+		}
 		if key := resourceConfigKey(data.ResourceControl); key != lastResourceKey {
 			lastResourceKey = key
 			if deps.resourceControl != nil {
@@ -172,6 +181,11 @@ func pricingConfigKey(c config.Config) string {
 		Prices  map[string][2]float64
 		Skipped []string
 	}{c.Pricing, c.PricingSkipped}) // prices are finite after config parsing
+	return string(b)
+}
+
+func sysAgentConfigKey(c config.SystemAgentConfig) string {
+	b, _ := json.Marshal(c)
 	return string(b)
 }
 

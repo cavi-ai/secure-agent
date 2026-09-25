@@ -22,6 +22,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/playbook"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 	"github.com/cavi-ai/secure-agent/daemon/internal/supervise"
+	"github.com/cavi-ai/secure-agent/daemon/internal/sysagent"
 	"github.com/cavi-ai/secure-agent/daemon/internal/worktreehunter"
 )
 
@@ -93,6 +94,15 @@ func WireTypes() []any {
 		model.CleanupEntry{},
 		model.CleanupTotals{},
 		model.AgentAsk{},
+		api.AgentChat{},
+		model.SysAgentMessage{},
+		model.SysAgentProposal{},
+		model.SysAgentPlan{},
+		model.SysAgentRun{},
+		sysagent.AgentStatus{},
+		sysagent.HarnessStatus{},
+		sysagent.SkillInfo{},
+		sysagent.Skill{},
 	}
 }
 

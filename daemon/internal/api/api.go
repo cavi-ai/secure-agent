@@ -32,6 +32,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/resource"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 	"github.com/cavi-ai/secure-agent/daemon/internal/supervise"
+	"github.com/cavi-ai/secure-agent/daemon/internal/sysagent"
 	"github.com/cavi-ai/secure-agent/daemon/internal/worktreehunter"
 	"golang.org/x/sys/unix"
 )
@@ -154,6 +155,7 @@ type API struct {
 	worktreeAdvisor  func(model.WorktreeAdviceRequest) bool
 	clutter          *clutter.Clutter
 	asker            *agentask.Asker
+	sysAgent         *sysagent.Agent
 	projectAdvisor   func(model.ProjectCleanupRequest) bool
 	resources        func() resource.Snapshot
 	resourceControl  *resource.Controller
@@ -310,6 +312,9 @@ type Deps struct {
 	Clutter *clutter.Clutter
 	// Asker resumes a worktree's owning agent for /worktrees/ask (optional).
 	Asker *agentask.Asker
+	// SysAgent is the system agent behind /agent/* (optional; unwired
+	// answers 503).
+	SysAgent *sysagent.Agent
 	// ProjectAdvisor queues a project for a cleanup plan and reports
 	// whether it was queued (optional).
 	ProjectAdvisor func(model.ProjectCleanupRequest) bool
@@ -330,6 +335,7 @@ func New(d Deps) *API {
 		worktreeAdvisor: d.WorktreeAdvisor,
 		clutter:         d.Clutter,
 		asker:           d.Asker,
+		sysAgent:        d.SysAgent,
 		projectAdvisor:  d.ProjectAdvisor,
 		resources:       d.Resources,
 		resourceControl: d.ResourceControl,
@@ -658,6 +664,12 @@ func (a *API) routes() map[string]http.HandlerFunc {
 		"/files/open":                   a.handleFileOpen,
 		"/advisor/plan":                 a.handleAdvisorPlan,
 		"/labels":                       a.handleLabels,
+		"/agent/status":                 a.handleAgentStatus,
+		"/agent/skills":                 a.handleAgentSkills,
+		"/agent/chat":                   a.handleAgentChat,
+		"/agent/plans":                  a.handleAgentPlans,
+		"/agent/dispatch":               a.handleAgentDispatch,
+		"/agent/runs":                   a.handleAgentRuns,
 	}
 }
 
