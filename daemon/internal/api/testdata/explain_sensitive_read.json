@@ -2,7 +2,7 @@
   "what": "Claude read a sensitive file in Claude skills (~/.claude/skills), then reached AWS 3 s later.",
   "subject": {
     "path": "/Users/dev/.claude/skills/synced/00000000-0000-4000-8000-000000000001_00000000-0000-4000-8000-000000000002/example-skill/config",
-    "display": "~/.claude/skills/synced/02e126c…6b3ce8/example-skill/config",
+    "display": "~/.claude/skills/synced/0000000…00000000002/example-skill/config",
     "basename": "config",
     "category": "other_sensitive",
     "category_label": "sensitive file",

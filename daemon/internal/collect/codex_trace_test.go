@@ -295,10 +295,10 @@ func TestCodexTracePlanLoginBillsChatGPT(t *testing.T) {
 
 func TestCodexHomeLabel(t *testing.T) {
 	for path, want := range map[string]string{
-		"/Users/dev/.codex/sessions/2026/09/24/rollout-a.jsonl":                                      "codex",
+		"/Users/dev/.codex/sessions/2026/09/24/rollout-a.jsonl":                                     "codex",
 		"/Volumes/Work/.openclaw/agents/birch/agent/codex-home/sessions/2026/09/24/rollout-b.jsonl": "birch (openclaw)",
-		"/srv/ci/codex-runner/sessions/2026/09/24/rollout-c.jsonl":                                   "codex-runner",
-		"/Users/dev/notes/rollout-d.jsonl":                                                           "",
+		"/srv/ci/codex-runner/sessions/2026/09/24/rollout-c.jsonl":                                  "codex-runner",
+		"/Users/dev/notes/rollout-d.jsonl":                                                          "",
 	} {
 		if got := CodexHomeLabel(path); got != want {
 			t.Errorf("CodexHomeLabel(%q) = %q, want %q", path, got, want)

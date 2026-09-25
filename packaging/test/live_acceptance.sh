@@ -12,6 +12,8 @@ set -uo pipefail
 
 SOCK="${SECURE_AGENT_SOCK:-$HOME/.config/secure-agent/daemon.sock}"
 DB="${SECURE_AGENT_DB:-$HOME/.local/state/secure-agent/events.db}"
+# Sessions under this root count as workspace-backed; default: two levels above the main checkout.
+WORKSPACE_ROOT="${SECURE_AGENT_WORKSPACE_ROOT:-$(dirname "$(dirname "$(dirname "$(git -C "$(dirname "$0")" rev-parse --path-format=absolute --git-common-dir)")")")}"
 
 pass=0; fail=0
 ok()   { printf '  PASS  %s\n' "$1"; pass=$((pass+1)); }
@@ -73,8 +75,8 @@ if [ "$grace" = 1 ]; then
     # still reflect whatever their original resolver saw at ingest time.
     scope="datetime(started_at) > datetime('now', '-' || $uptime_s || ' seconds')"
     boot_sessions="$(q "select count(*) from sessions where $scope and harness != '';")"
-    ws_sessions="$(q "select count(*) from sessions where $scope and harness != '' and workspace like '/Volumes/Work/workspace/%';")"
-    with_repo="$(q "select count(*) from sessions where $scope and harness != '' and workspace like '/Volumes/Work/workspace/%' and repo != '';")"
+    ws_sessions="$(q "select count(*) from sessions where $scope and harness != '' and workspace like '${WORKSPACE_ROOT}/%';")"
+    with_repo="$(q "select count(*) from sessions where $scope and harness != '' and workspace like '${WORKSPACE_ROOT}/%' and repo != '';")"
     if [ "${ws_sessions:-0}" -eq 0 ]; then
       # Vacuous pass hid a real gap: at 34min uptime with sessions resolved,
       # "no workspace-backed sessions" means attribution dropped them.

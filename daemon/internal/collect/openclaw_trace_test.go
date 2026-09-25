@@ -259,9 +259,9 @@ func TestOpenclawHomeResolution(t *testing.T) {
 func TestOpenclawWorkspaceLabel(t *testing.T) {
 	for key, want := range map[string]string{
 		"agent:ember:cron:1:run:2": "openclaw:ember",
-		"agent:juniper":                "openclaw:juniper",
-		"":                           "openclaw",
-		"cron:1":                     "openclaw",
+		"agent:juniper":            "openclaw:juniper",
+		"":                         "openclaw",
+		"cron:1":                   "openclaw",
 	} {
 		if got := OpenclawWorkspaceLabel(key); got != want {
 			t.Fatalf("label(%q) = %q, want %q", key, got, want)
