@@ -159,13 +159,16 @@ function worktreeFilterHTML(counts, filter) {
     + `<button type="button" class="wt-pill${f.stale ? ' on' : ''}" data-action="worktree-stale" aria-pressed="${!!f.stale}">Stale <b>${counts.stale}</b></button>`;
 }
 
-// worktreesSummaryText: the scan line under the header.
-function worktreesSummaryText(rep) {
+// worktreesSummaryText: the scan line under the header. A cached scan
+// names its age; a background rescan says so.
+function worktreesSummaryText(rep, nowMs) {
   if (!rep) return '';
   const s = rep.summary || {};
-  const when = rep.cached ? 'cached scan' : `scanned in ${(Number(rep.duration_ms || 0) / 1000).toFixed(1)}s`;
+  const age = rep.cached && fmtAge(rep.generated_at, nowMs);
+  const when = rep.cached ? (age ? `scanned ${age} ago` : 'cached scan') : `scanned in ${(Number(rep.duration_ms || 0) / 1000).toFixed(1)}s`;
   const n = (v, one, many) => `${v || 0} ${v === 1 ? one : many}`;
-  return `${n(s.repos, 'repo', 'repos')} · ${n(s.worktrees, 'worktree', 'worktrees')} · stale after ${rep.stale_days || 0} idle days · ${when}`;
+  return `${n(s.repos, 'repo', 'repos')} · ${n(s.worktrees, 'worktree', 'worktrees')} · stale after ${rep.stale_days || 0} idle days · ${when}`
+    + (rep.refreshing ? ' · refreshing…' : '');
 }
 
 function renderWorktrees() {
@@ -307,6 +310,7 @@ function clutterSummaryText(rep) {
   const clearable = items.filter(it => it.action !== 'none').reduce((n, it) => n + (Number(it.size_bytes) || 0), 0);
   let text = `${items.length} item${items.length === 1 ? '' : 's'} · ${fmtDisk(clearable)} clearable`;
   if (rep.sizing) text += ' · measuring…';
+  else if (rep.refreshing) text += ' · refreshing…';
   const r = rep.reclaimed;
   if (r && r.trashed_count) text += ` · ${fmtDisk(r.trashed_bytes)} moved to the Trash by cleanups (frees when the Trash is emptied)`;
   return text;

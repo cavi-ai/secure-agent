@@ -846,7 +846,7 @@ document.addEventListener('DOMContentLoaded', () => {
   function followWorktreeSizing() {
     const rep = worktreesState.report;
     const asking = rep && Object.values(rep.asks || {}).some(a => a.status === 'running');
-    if (!rep || !(rep.sizing || asking) || !(activeTab === 'sessions' && activeSub === 'worktrees') || worktreeSizingTimer || worktreeSizingPolls >= WORKTREE_SIZING_POLLS) return;
+    if (!rep || !(rep.sizing || rep.refreshing || asking) || !(activeTab === 'sessions' && activeSub === 'worktrees') || worktreeSizingTimer || worktreeSizingPolls >= WORKTREE_SIZING_POLLS) return;
     worktreeSizingPolls++;
     worktreeSizingTimer = setTimeout(() => { worktreeSizingTimer = null; loadWorktrees(false); }, WORKTREE_SIZING_POLL_MS);
   }
@@ -860,7 +860,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!r.ok) throw new Error((await r.text()).trim() || String(r.status));
       worktreesState.report = await r.json();
       worktreesState.loadedAt = Date.now();
-      if (!worktreesState.report.sizing && !Object.values(worktreesState.report.asks || {}).some(a => a.status === 'running')) worktreeSizingPolls = 0;
+      if (!worktreesState.report.sizing && !worktreesState.report.refreshing && !Object.values(worktreesState.report.asks || {}).some(a => a.status === 'running')) worktreeSizingPolls = 0;
     } catch (err) {
       worktreesState.error = 'Worktree scan failed: ' + (err.message || err);
       if (worktreesState.report) showToast(worktreesState.error, 'danger');
@@ -884,7 +884,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!r.ok) throw new Error((await r.text()).trim() || String(r.status));
       clutterState.report = await r.json();
       clutterState.loadedAt = Date.now();
-      if (!clutterState.report.sizing) clutterSizingPolls = 0;
+      if (!clutterState.report.sizing && !clutterState.report.refreshing) clutterSizingPolls = 0;
     } catch (err) {
       clutterState.error = 'Clutter scan failed: ' + (err.message || err);
       if (clutterState.report) showToast(clutterState.error, 'danger');
@@ -892,7 +892,7 @@ document.addEventListener('DOMContentLoaded', () => {
       clutterState.loading = false;
       markDirty('clutter');
       const rep = clutterState.report;
-      if (rep && rep.sizing && activeTab === 'sessions' && activeSub === 'worktrees' && !clutterSizingTimer && clutterSizingPolls < WORKTREE_SIZING_POLLS) {
+      if (rep && (rep.sizing || rep.refreshing) && activeTab === 'sessions' && activeSub === 'worktrees' && !clutterSizingTimer && clutterSizingPolls < WORKTREE_SIZING_POLLS) {
         clutterSizingPolls++;
         clutterSizingTimer = setTimeout(() => { clutterSizingTimer = null; loadClutter(false); }, WORKTREE_SIZING_POLL_MS);
       }
