@@ -7,6 +7,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 ## [Unreleased]
 
 ### Changed
+- Cleanup totals no longer count an agent's answer (`ask:*` ledger rows) as a cleanup.
 - Idle daemon: opencode, openclaw and Hermes polls skip an unchanged database, `/costs` and `/costs/unpriced` reuse a report for 30 s, and transcript discovery re-lists only directories whose mtime moved.
 - `make install` waits up to 90 s for the restarted daemon to answer `/status` before reporting file telemetry, and says "unknown" instead of asking for approvals when it gets no answer.
 - `make install`/`make app`/`make dmg` sign with the first Apple Development identity when one exists (else Developer ID Application, else ad-hoc) and give every bundled binary a stable `--identifier`, so file telemetry's Full Disk Access grant survives rebuilds instead of resetting on every install.
@@ -16,6 +17,19 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Console: shows the posture banner capped at 3 rows off Home and empty on Home, agent ids in their own case, Egress led by the uninspected endpoints with zero-hit rules folded into one row, and Processes at full width.
 
 ### Added
+- Console Cleanup view: a progress toast for every removal started in this tab, another tab or the CLI, with phase, size and files being deleted, time in the phase and one bar per group.
+- Console Cleanup view: a finished removal's toast names the bytes reclaimed and links the history.
+- Console Cleanup view: a failed removal's toast stays until closed.
+- Console Cleanup view: tiles for space freed in 30 days and all time, removable now and in the Trash.
+- Console Cleanup view: Remove all across repositories on the Removable now tile, one dialog counting worktrees per repository.
+- Console Cleanup view: a 30-day chart of bytes freed and moved to the Trash per day, with a tooltip per day.
+- Console Cleanup view: History drawer listing the cleanup ledger by day, with filters by kind.
+- Console Cleanup view: a chart column opens the history at that day.
+- Console Cleanup view: search by branch, folder or repository.
+- Console Cleanup view: click a row's path to copy it.
+- Console Cleanup view: Show in Finder on every worktree still on disk.
+- `GET /cleanup/ledger?days=N`: daily bytes and cleanups freed and moved to the Trash for the N days ending today.
+- Worktree removals report `phase`, `step_at` and the measured `bytes` and `files` while they run.
 - Console Cleanup view: Remove all on a repository with two or more removable worktrees (count and size on the button); one dialog, each removal checked again by the daemon, each row shows its steps, one line when the batch ends.
 - Worktree folders whose repository moved or was deleted: `POST /worktrees/reveal` (Finder), `POST /worktrees/reconnect` (`git worktree repair` in the repository that still records the folder, named in the row's `reconnect`), `POST /worktrees/trash` (Trash on its volume, booked as `trash:orphan-worktree`).
 - Console Cleanup view: a missing repository's group comes first with "the folders below still point to it"; its folders offer Open folder, Reconnect (when a repository still records them) and Move to Trash.

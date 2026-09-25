@@ -122,6 +122,8 @@ SHOTS = (
     ("sessions", "?tab=sessions&shot&raildemo", ("dark", "light")),
     ("agents", "?tab=agents&shot", ("dark", "light")),
     ("overview", "?tab=overview&shot", ("dark",)),
+    ("worktrees-removing", "?tab=worktrees&shot&worktreedemo&removerunning", ("dark", "light")),
+    ("worktrees-history", "?tab=worktrees&shot&historydemo", ("dark", "light")),
 )
 
 
@@ -238,6 +240,12 @@ def main():
         dom_wtsizing = dump_dom(chrome, tmp, "?tab=worktrees&sizingdemo")
         dom_wtrefresh = dump_dom(chrome, tmp, "?tab=worktrees&refreshdemo")
         dom_clutter = dump_dom(chrome, tmp, "?tab=worktrees&clutterdemo")
+        dom_wtremovable = dump_dom(chrome, tmp, "?tab=worktrees&removeremovabledemo")
+        dom_wthistory = dump_dom(chrome, tmp, "?tab=worktrees&historydemo")
+        dom_wtday = dump_dom(chrome, tmp, "?tab=worktrees&reclaimdaydemo")
+        dom_wtsearch = dump_dom(chrome, tmp, "?tab=worktrees&wtsearchdemo")
+        dom_wtadopt = dump_dom(chrome, tmp, "?tab=worktrees&adoptdemo")
+        dom_wtcadence = dump_dom(chrome, tmp, "?tab=worktrees&removecadence")
         dom_clutteradvise = dump_dom(chrome, tmp, "?tab=worktrees&clutteradvise")
         dom_scope = dump_dom(chrome, tmp, "?scopedemo")
         dom_pattern = dump_dom(chrome, tmp, "?patterndemo")
@@ -1288,7 +1296,8 @@ def main():
               f"remove={wt_remove} prune={wt_prune}")
         check("worktrees: reasons render as text, paths inside the repo read relative",
               "&lt;b&gt;not bold&lt;/b&gt;" in wt and "<b>not bold</b>" not in wt
-              and '<span class="wt-path" title="/Users/dev/workspace/api-service/.worktrees/done">.worktrees/done</span>' in wt)
+              and '<button type="button" class="wt-path" data-action="copy-path" data-path="/Users/dev/workspace/api-service/.worktrees/done"'
+                  ' title="/Users/dev/workspace/api-service/.worktrees/done — click to copy">.worktrees/done</button>' in wt)
         check("worktrees: state pills carry counts and the summary line reads the scan",
               'data-state="" aria-pressed="true">All <b>4</b></button>' in dom_wt
               and 'data-state="remove" aria-pressed="false">Remove <b>1</b></button>' in dom_wt
@@ -1299,11 +1308,32 @@ def main():
         check("worktrees: Ask the agent sits on review and keep rows; the latest answer shows under its row",
               wt.count('data-action="worktree-ask"') == 2
               and '<p class="wt-ask wt-ask-answered"><b>Asked claude:</b> pr — https://github.com/o/r/pull/9 ($0.21)</p>' in wt)
-        check("worktrees: the disk card shows the volume, worktree and removable totals and what cleanups reclaimed",
+        check("worktrees: the disk card shows the volume and what worktrees occupy",
               "512.0 GB free of 2.0 TB" in dom_wt and 'data-w="75"' in dom_wt
-              and "<b>Worktrees</b> 1.5 GB" in dom_wt and "<b>Removable</b> 1.5 GB" in dom_wt
-              and "<b>Reclaimed</b> 3.0 GB over 3 cleanups · 1.0 GB in 30 days" in dom_wt
+              and "<b>Worktrees</b> 1.5 GB" in dom_wt
               and '<span class="wt-size">1.5 GB</span>' in wt)
+
+        def rc_block(dom_text):
+            return dom_text.split('id="worktrees-reclaim"', 1)[-1].split('id="reclaim-tip"', 1)[0]
+
+        def tile(dom_text, cls):
+            return rc_block(dom_text).split(f'class="rc-tile {cls}"', 1)[-1].split('</div>', 1)[0]
+        rc = rc_block(dom_wt)
+        check("worktrees: tiles lead the tab: freed in 30 days, all time, removable now, in the Trash",
+              "Freed · last 30 days" in tile(dom_wt, "rc-freed") and "1.0 GB" in tile(dom_wt, "rc-freed")
+              and "1 cleanup<" in tile(dom_wt, "rc-freed")
+              and "3.0 GB" in tile(dom_wt, "rc-alltime") and "2 cleanups" in tile(dom_wt, "rc-alltime")
+              and "1.5 GB" in tile(dom_wt, "rc-removable") and "1 worktree<" in tile(dom_wt, "rc-removable")
+              and "worktrees-remove-removable" not in rc
+              and "50 MB" in tile(dom_wt, "rc-trash"),
+              rc[:600])
+        check("worktrees: the reclaimed chart has a column per day; only days with cleanups are buttons, labeled with their numbers",
+              rc.count('class="rc-col"') == 30 and rc.count('data-action="reclaim-day"') == 1
+              and 'aria-label="Space reclaimed per day, last 30 days"' in rc
+              and ': 1.0 GB freed by 1 cleanup, 50 MB moved to the Trash by 1 cleanup"' in rc
+              and 'class="rc-seg rc-seg-trash" data-h="5"' in rc
+              and "<span>2.0 GB</span><span>1.0 GB</span><span>0</span>" in rc,
+              f"cols={rc.count('class=\"rc-col\"')} days={rc.count('data-action=\"reclaim-day\"')}")
         check("worktrees: an old cached scan shows at once and the tab re-reads until the rescan lands",
               "gone-since" not in wt_block(dom_wtrefresh) and "refreshing…" not in dom_wtrefresh
               and "scanned in 4.2s" in dom_wtrefresh)
@@ -1335,11 +1365,23 @@ def main():
         wtr = wt_block(dom_wtremove)
         wtr_rows = wtr.count('class="wt-row')
         wt_reqs = pre(dom_wtremove, "mock-requests")
-        check("worktrees: Remove starts a background removal after the dialog; when it lands the row leaves and the totals move",
+        check("worktrees: Remove starts a background removal after the dialog; when it lands the row leaves and the tiles move",
               "POST /worktrees/remove" in wt_reqs and ".worktrees/done" not in wtr and wtr_rows == 3
-              and "<b>Reclaimed</b> 4.5 GB over 4 cleanups" in dom_wtremove and "<b>Removable</b> 0 B" in dom_wtremove
+              and "4.5 GB" in tile(dom_wtremove, "rc-alltime") and "3 cleanups" in tile(dom_wtremove, "rc-alltime")
+              and "2.5 GB" in tile(dom_wtremove, "rc-freed") and "0 B" in tile(dom_wtremove, "rc-removable")
               and "wt-removal" not in wtr,
               f"requests={wt_reqs!r} rows={wtr_rows}")
+
+        def toast_block(dom_text):
+            return dom_text.split('id="removal-toast"', 1)[-1].split('</ul>', 1)[0] if 'id="removal-toast"' in dom_text else ''
+        tr = dom_wtremove.split('id="removal-toast"', 1)[-1].split('id="drawer"', 1)[0] if 'id="removal-toast"' in dom_wtremove else ''
+        check("worktrees: when the removal lands its toast names what it reclaimed and links the history",
+              'class="toast toast-sticky removal-toast success"' in dom_wtremove
+              and '<p class="rt-title" role="status">Removed feat/done</p>' in tr
+              and '<p class="rt-sub">1.5 GB reclaimed</p>' in tr
+              and 'data-action="worktrees-history">View cleanup history</button>' in tr
+              and 'aria-valuenow="100"' in tr,
+              tr[:400])
         wtb = wt_block(dom_wtbatch)
         batch_posts = pre(dom_wtbatch, "mock-requests").count("POST /worktrees/remove")
         check("worktrees: Remove all removes every removable row of the repository after one dialog",
@@ -1358,8 +1400,17 @@ def main():
               "POST /worktrees/trash" in pre(dom_wtorphantrash, "mock-requests")
               and "gone-app" not in wtot and "1 folder still points to it" not in dom_wtorphantrash)
         wtg = wt_block(dom_wtremoving)
-        check("worktrees: while a removal runs its row shows the step and Remove is disabled",
-              '<p class="wt-removal wt-removal-running" role="status"><b>Removing…</b> deleting</p>' in wtg
+        tg = toast_block(dom_wtremoving)
+        check("worktrees: while a removal runs a toast follows it: phase, size and files, time in the phase, the bar",
+              'class="toast toast-sticky removal-toast info"' in dom_wtremoving
+              and '<p class="rt-title" role="status">Removing feat/done</p>' in tg
+              and '<span class="rt-step">deleting · 1.5 GB · 184,203 files</span>' in tg
+              and 'role="progressbar"' in tg and 'aria-valuenow="50"' in tg and "rt-bar-running" in tg
+              and '<span class="rt-elapsed" data-since="' in tg and "s</span>" in tg,
+              tg[:600])
+        check("worktrees: while a removal runs its row shows the phase marks, step and size, and Remove is disabled",
+              '<span class="wt-steps" aria-hidden="true"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i></span>'
+              '<b>Removing…</b> deleting · 1.5 GB · 184,203 files</p>' in wtg
               and '<button type="button" class="btn btn-danger btn-sm" disabled="">Removing…</button>' in wtg
               and 'data-action="worktree-remove"' not in wtg)
         wtf = wt_block(dom_wtremovefail)
@@ -1367,6 +1418,50 @@ def main():
               '.worktrees/done' in wtf
               and '<p class="wt-removal wt-removal-failed" role="alert"><b>Removal failed:</b> git worktree: &lt;b&gt;fatal&lt;/b&gt; could not remove' in wtf
               and '>Try again</button>' in wtf)
+        tf = toast_block(dom_wtremovefail)
+        check("worktrees: a failed removal's toast stays with the error as text",
+              'class="toast toast-sticky removal-toast danger"' in dom_wtremovefail
+              and '<p class="rt-title" role="status">Not removed: feat/done</p>' in tf
+              and 'git worktree: &lt;b&gt;fatal&lt;/b&gt; could not remove' in tf and "<b>fatal</b>" not in tf
+              and "rt-bar-failed" in tf,
+              tf[:400])
+        tb = dom_wtbatch.split('id="removal-toast"', 1)[-1].split('id="drawer"', 1)[0] if 'id="removal-toast"' in dom_wtbatch else ''
+        check("worktrees: Remove all runs under one toast that ends with the count and bytes",
+              '<p class="rt-title" role="status">Removed 3 of 3 worktrees</p>' in tb and "4.5 GB reclaimed" in tb,
+              tb[:300])
+        rm_posts = pre(dom_wtremovable, "mock-requests").count("POST /worktrees/remove")
+        check("worktrees: Removable now counts every repository's removable rows and Remove all there removes all of them",
+              "6.0 GB" in pre(dom_wtremovable, "removable-tile") and "4 worktrees" in pre(dom_wtremovable, "removable-tile")
+              and "Remove all 4" in pre(dom_wtremovable, "removable-tile")
+              and rm_posts == 4 and "web-app/.worktrees/landed" not in wt_block(dom_wtremovable),
+              f"tile={pre(dom_wtremovable, 'removable-tile')!r} posts={rm_posts}")
+        hx_all = html.unescape(pre(dom_wthistory, "history-all"))
+        hx = dom_wthistory.split('id="drawer-body"', 1)[-1].split('id="drawer-foot"', 1)[0]
+        check("worktrees: History opens the ledger in the drawer by day, escaped; the Removed chip filters it",
+              'id="drawer-title-text">Cleanup history<' in dom_wthistory
+              and "3 entries · 3.0 GB freed · 50 MB moved to the Trash" in hx_all
+              and "Moved an orphan folder to the Trash" in hx_all
+              and "&lt;b&gt;branch&lt;/b&gt; feat/old kept" in hx_all and "<b>branch</b>" not in hx_all
+              and "2 entries · 3.0 GB freed" in hx and "Moved an orphan folder" not in hx
+              and 'data-kind="removed" aria-pressed="true"' in hx,
+              hx_all[:300])
+        hd = dom_wtday.split('id="drawer-body"', 1)[-1].split('id="drawer-foot"', 1)[0]
+        check("worktrees: a chart column shows its numbers on hover and opens the history at that day",
+              "1.0 GB freed by 1 cleanup50 MB moved to the Trash by 1 cleanup" in pre(dom_wtday, "reclaim-tip-probe")
+              and "2 entries · 1.0 GB freed · 50 MB moved to the Trash" in hd and 'data-action="history-day" data-day=""' in hd
+              and "feat/old" not in hd,
+              f"tip={pre(dom_wtday, 'reclaim-tip-probe')!r} {hd[:200]}")
+        ws = wt_block(dom_wtsearch)
+        check("worktrees: the search box keeps rows whose branch, folder or repository matches, any case",
+              ws.count('class="wt-row') == 1 and ".worktrees/evidence" in ws,
+              f"rows={ws.count('class=\"wt-row')}")
+        gap = pre(dom_wtcadence, "remove-cadence")
+        check("worktrees: a removal started while a 5 s sizing re-read waits is re-read on its own 1.5 s cadence",
+              gap.isdigit() and int(gap) < 2000, f"gap={gap!r}ms")
+        ta = toast_block(dom_wtadopt)
+        check("worktrees: a removal already running when the tab opens gets the progress toast without a click",
+              '<p class="rt-title" role="status">Removing feat/done</p>' in ta and "checking it is still safe to remove" in ta,
+              ta[:300])
 
         if args.screenshot:
             shot_dir = os.path.abspath(args.screenshot)
