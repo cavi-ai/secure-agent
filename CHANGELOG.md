@@ -197,6 +197,8 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Menu bar: the unused flag action, incident detail and process detail sheets.
 
 ### Fixed
+- A Code conversation in the Claude desktop app is rooted at its own `claude` process and ends when that process exits; the app (`claude-desktop`, infra) no longer holds every conversation open until it quits.
+- Console: `claude-desktop` shows as Claude, counted as infra.
 - Local advisor: finding plans, worktree notes and cleanup plans run under a deadline of at least 5 minutes instead of the triage `timeout_ms`; a reasoning model at 60 s timed them out.
 - Local advisor: cleanup plans get 4,096 tokens (was 2,048); a reasoning model spent the whole 2,048 thinking and returned no plan.
 - A daemon writes `guard-cwd-overrides.json` beside its own socket.

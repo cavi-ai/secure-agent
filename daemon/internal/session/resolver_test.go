@@ -983,6 +983,44 @@ func TestSameCwdRootMismatchLoggedOnce(t *testing.T) {
 	}
 }
 
+// A Code conversation in the Claude desktop app ends when its own claude
+// process exits; the app and the other conversations keep running.
+func TestDesktopConversationEndsWithItsOwnProcess(t *testing.T) {
+	started := time.Now().Add(-time.Hour)
+	procs := fakeProcs{
+		100: {PID: 100, PPID: 1, Exe: "/Applications/Claude.app/Contents/MacOS/Claude", StartTime: started},
+		110: {PID: 110, PPID: 100, Exe: "/Applications/Claude.app/Contents/Helpers/disclaimer", StartTime: started},
+		111: {PID: 111, PPID: 110, Exe: "/Users/x/Library/Application Support/Claude/claude-code/2.1.281/claude.app/Contents/MacOS/claude", CWD: "/repo/.worktrees/a", StartTime: started},
+		112: {PID: 112, PPID: 111, Exe: "/usr/bin/python3", CWD: "/repo/.worktrees/a", StartTime: started},
+		120: {PID: 120, PPID: 100, Exe: "/Applications/Claude.app/Contents/Helpers/disclaimer", StartTime: started},
+		121: {PID: 121, PPID: 120, Exe: "/Users/x/Library/Application Support/Claude/claude-code/2.1.281/claude.app/Contents/MacOS/claude", CWD: "/repo/.worktrees/b", StartTime: started},
+		122: {PID: 122, PPID: 121, Exe: "/usr/bin/python3", CWD: "/repo/.worktrees/b", StartTime: started},
+	}
+	r, st := testResolver(t, procs)
+	for _, e := range []event.Event{
+		{Kind: event.KindPluginAction, PID: 112, SessionID: "conv-a", TS: time.Now()},
+		{Kind: event.KindPluginAction, PID: 122, SessionID: "conv-b", TS: time.Now()},
+	} {
+		r.Resolve(&e)
+	}
+	a, _ := st.GetSession("conv-a")
+	b, _ := st.GetSession("conv-b")
+	if a.RootPID != 111 || b.RootPID != 121 || a.Harness != "claude" {
+		t.Fatalf("roots a=%d b=%d harness=%q; want each conversation's claude process", a.RootPID, b.RootPID, a.Harness)
+	}
+
+	delete(procs, 111)
+	delete(procs, 112)
+	r.tagger = agents.New(mustConfig(t), procs)
+	r.tagger.Refresh()
+	r.Sweep()
+	a, _ = st.GetSession("conv-a")
+	b, _ = st.GetSession("conv-b")
+	if a.Status != model.SessionEnded || b.Status == model.SessionEnded {
+		t.Fatalf("after conversation a exits: a=%s b=%s; want only a ended", a.Status, b.Status)
+	}
+}
+
 // Sweep ends each session when its own root exits, never the neighbour's.
 func TestSameCwdSweepEndsEachOnItsOwnRoot(t *testing.T) {
 	procs := sharedCwdTree()

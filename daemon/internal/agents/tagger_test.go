@@ -95,6 +95,32 @@ func TestTagMarksIDEAndModelServersAsInfra(t *testing.T) {
 	}
 }
 
+// The Claude desktop app, its helpers and its launch wrapper are infra; the
+// claude process each Code conversation runs (bundled under Application
+// Support) stays an agent and is its own family root.
+func TestClaudeDesktopIsInfraAndConversationIsItsOwnRoot(t *testing.T) {
+	fake := fakeProcs{
+		100: {PID: 100, PPID: 1, Exe: "/Applications/Claude.app/Contents/MacOS/Claude"},
+		101: {PID: 101, PPID: 100, Exe: "/Applications/Claude.app/Contents/Frameworks/Claude Helper (Renderer).app/Contents/MacOS/Claude Helper (Renderer)"},
+		102: {PID: 102, PPID: 100, Exe: "/Applications/Claude.app/Contents/Helpers/disclaimer"},
+		103: {PID: 103, PPID: 102, Exe: "/Users/x/Library/Application Support/Claude/claude-code/2.1.281/claude.app/Contents/MacOS/claude"},
+		104: {PID: 104, PPID: 103, Exe: "/usr/bin/python3"},
+	}
+	c, _ := config.Load("/nonexistent")
+	tg := New(c, fake)
+	tg.Refresh()
+	for _, pid := range []int32{100, 101, 102} {
+		if info, ok := tg.Tag(pid); !ok || info.Name != "claude-desktop" || info.Kind != config.AgentKindInfra {
+			t.Fatalf("Tag(%d) = %+v, %v; want claude-desktop/infra", pid, info, ok)
+		}
+	}
+	for _, pid := range []int32{103, 104} {
+		if info, ok := tg.Tag(pid); !ok || info.Name != "claude" || info.Kind != "agent" || info.RootPID != 103 {
+			t.Fatalf("Tag(%d) = %+v, %v; want claude/agent rooted at 103", pid, info, ok)
+		}
+	}
+}
+
 // OpenClaw runs its bundled node from under ~/.openclaw; the path segment,
 // not the node basename, is what identifies the harness.
 func TestTagOpenClawAsAgent(t *testing.T) {
