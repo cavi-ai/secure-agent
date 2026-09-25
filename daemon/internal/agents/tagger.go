@@ -300,10 +300,14 @@ func (t *Tagger) tagLocked(pid int32) (AgentInfo, bool) {
 		curr = pInfo.PPID
 	}
 
-	if targetProc, ok := t.table[pid]; ok && (targetProc.Exe != "" || targetProc.Comm != "") {
-		t.tagged[pid] = false
-		t.cache[pid] = AgentInfo{}
-	}
+	// No match, and the walk cannot go any further — pid resolved to nothing
+	// (never in the table, ps.Info failed), an ancestor's ps.Info
+	// failed, or we ran out of hops/parents to match against. Cache the miss
+	// unconditionally: refreshLocked prunes cache entries for pids missing
+	// from its table on every refresh, so a pid that is genuinely dead costs
+	// at most one lookup per refresh interval instead of one per event.
+	t.tagged[pid] = false
+	t.cache[pid] = AgentInfo{}
 	return AgentInfo{}, false
 }
 
