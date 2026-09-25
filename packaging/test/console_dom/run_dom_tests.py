@@ -231,6 +231,7 @@ def main():
         dom_wt = dump_dom(chrome, tmp, "?tab=worktrees")
         dom_wtremove = dump_dom(chrome, tmp, "?tab=worktrees&worktreedemo")
         dom_wtsizing = dump_dom(chrome, tmp, "?tab=worktrees&sizingdemo")
+        dom_wtrefresh = dump_dom(chrome, tmp, "?tab=worktrees&refreshdemo")
         dom_clutter = dump_dom(chrome, tmp, "?tab=worktrees&clutterdemo")
         dom_clutteradvise = dump_dom(chrome, tmp, "?tab=worktrees&clutteradvise")
         dom_scope = dump_dom(chrome, tmp, "?scopedemo")
@@ -1298,6 +1299,9 @@ def main():
               and "<b>Worktrees</b> 1.5 GB" in dom_wt and "<b>Removable</b> 1.5 GB" in dom_wt
               and "<b>Reclaimed</b> 3.0 GB over 3 cleanups · 1.0 GB in 30 days" in dom_wt
               and '<span class="wt-size">1.5 GB</span>' in wt)
+        check("worktrees: an old cached scan shows at once and the tab re-reads until the rescan lands",
+              "gone-since" not in wt_block(dom_wtrefresh) and "refreshing…" not in dom_wtrefresh
+              and "scanned in 4.2s" in dom_wtrefresh)
         check("worktrees: while the daemon is still measuring, the tab re-reads until sizes land",
               '<span class="wt-size">1.5 GB</span>' in wt_block(dom_wtsizing) and "measuring…" not in dom_wtsizing
               and "<b>Worktrees</b> 1.5 GB" in dom_wtsizing)

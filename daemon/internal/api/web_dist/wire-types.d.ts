@@ -738,6 +738,7 @@ export interface ScanReport {
   repos: RepoReport[];
   errors?: string[];
   sizing?: boolean;
+  refreshing?: boolean;
   volumes?: Volume[];
   reclaimed?: CleanupTotals;
   asks?: Record<string, AgentAsk>;
@@ -776,6 +777,7 @@ export interface ClutterProjectTotal {
 export interface ClutterReport {
   generated_at: string;
   sizing?: boolean;
+  refreshing?: boolean;
   items: ClutterItem[];
   kinds: ClutterKindTotal[];
   projects: ClutterProjectTotal[];

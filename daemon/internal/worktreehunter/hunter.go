@@ -15,9 +15,11 @@ package worktreehunter
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -36,6 +38,8 @@ type Store interface {
 	WorkspaceActivity() []model.WorkspaceActivity
 	PutAudit(store.AuditEntry)
 	PutCleanup(model.CleanupEntry)
+	ScanCache(name string) ([]byte, time.Time, bool)
+	PutScanCache(name string, body []byte, at time.Time)
 }
 
 // Options are the operator's knobs (config `worktrees:`).
@@ -47,7 +51,8 @@ type Options struct {
 const (
 	// DefaultStaleDays is the idle age that marks a worktree stale.
 	DefaultStaleDays = 14
-	// cacheTTL is how long a scan answers GET without rescanning.
+	// cacheTTL is how long a scan answers GET without a rescan; an older
+	// scan still answers while a background rescan replaces it.
 	cacheTTL = 10 * time.Minute
 	// minRescan is the floor under refresh: a console or script asking for a
 	// rescan in a loop gets the last scan instead of a git process storm.
@@ -70,6 +75,9 @@ type ScanReport struct {
 	// Sizing is true while some worktrees still wait for the background
 	// sizer; their size is missing and the totals are lower bounds.
 	Sizing bool `json:"sizing,omitempty"`
+	// Refreshing is true while a background rescan or re-measure replaces
+	// this cached report.
+	Refreshing bool `json:"refreshing,omitempty"`
 	// Volumes are the disks holding the scanned repositories.
 	Volumes []diskusage.Volume `json:"volumes,omitempty"`
 	// Reclaimed sums the cleanup ledger; the API fills it.
@@ -125,6 +133,10 @@ type Hunter struct {
 	// scanMu serializes scans; a request that waited on it reuses the scan
 	// that finished meanwhile.
 	scanMu sync.Mutex
+	// loaded is set once the saved report and sizes were read from the
+	// store; bgWG lets tests wait for a background rescan.
+	loaded bool
+	bgWG   sync.WaitGroup
 
 	fpMu sync.Mutex
 	// fingerprints caches each repository's default-branch patch ids by
@@ -190,11 +202,22 @@ func (h *Hunter) Report(ctx context.Context, refresh bool) ScanReport {
 	return h.withSizes(h.report(ctx, refresh))
 }
 
-// report returns the cached scan when it is younger than cacheTTL and
-// refresh is false; otherwise it scans. The scan runs under its own
-// deadline, detached from ctx's cancellation, so a client that gives up
-// still leaves a finished report for the next request.
+// report answers from the cached scan unless refresh is asked: one older
+// than cacheTTL answers at once while a background rescan replaces it.
+// Without a cached scan, or on refresh, it scans under its own deadline,
+// detached from ctx's cancellation, so a client that gives up still leaves
+// a finished report for the next request.
 func (h *Hunter) report(ctx context.Context, refresh bool) ScanReport {
+	h.load()
+	if !refresh {
+		if r, stale, ok := h.cachedCopy(); ok {
+			if stale {
+				h.rescanInBackground()
+				r.Refreshing = true
+			}
+			return r
+		}
+	}
 	asked := h.now()
 	if r, ok := h.fresh(refresh, time.Time{}); ok {
 		return r
@@ -206,14 +229,105 @@ func (h *Hunter) report(ctx context.Context, refresh bool) ScanReport {
 	}
 	sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), scanTimeout)
 	defer cancel()
+	return h.scanLocked(sctx)
+}
+
+// scanLocked scans, caches and saves the report. Caller holds scanMu.
+func (h *Hunter) scanLocked(ctx context.Context) ScanReport {
 	h.mu.Lock()
 	opts := h.opts
 	h.mu.Unlock()
-	rep := h.scan(sctx, opts)
+	rep := h.scan(ctx, opts)
+	at := h.now()
 	h.mu.Lock()
-	h.cached, h.cachedAt = &rep, h.now()
+	h.cached, h.cachedAt = &rep, at
 	h.mu.Unlock()
+	if body, err := json.Marshal(savedReport{Options: opts, Report: rep}); err == nil {
+		h.st.PutScanCache(cacheReportKey, body, at)
+	}
 	return rep
+}
+
+// rescanInBackground starts a rescan unless one is running.
+func (h *Hunter) rescanInBackground() {
+	if !h.scanMu.TryLock() {
+		return
+	}
+	h.bgWG.Add(1)
+	go func() {
+		defer h.bgWG.Done()
+		defer h.scanMu.Unlock()
+		ctx, cancel := context.WithTimeout(context.Background(), scanTimeout)
+		defer cancel()
+		h.scanLocked(ctx)
+	}()
+}
+
+// cachedCopy returns the cached scan at any age, and whether it is older
+// than cacheTTL.
+func (h *Hunter) cachedCopy() (ScanReport, bool, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.cached == nil {
+		return ScanReport{}, false, false
+	}
+	r := *h.cached
+	r.Cached = true
+	return r, h.now().Sub(h.cachedAt) >= cacheTTL, true
+}
+
+const (
+	cacheReportKey = "worktrees.report"
+	cacheSizesKey  = "worktrees.sizes"
+)
+
+// savedReport is the stored scan with the options it was taken under; a
+// scan under other options is not loaded.
+type savedReport struct {
+	Options Options    `json:"options"`
+	Report  ScanReport `json:"report"`
+}
+
+// savedSize is one stored measurement.
+type savedSize struct {
+	Bytes   int64     `json:"bytes"`
+	Partial bool      `json:"partial,omitempty"`
+	At      time.Time `json:"at"`
+}
+
+// load reads the saved report and sizes once, so a restarted daemon
+// answers from them while it rescans.
+func (h *Hunter) load() {
+	h.mu.Lock()
+	if h.loaded {
+		h.mu.Unlock()
+		return
+	}
+	h.loaded = true
+	opts := h.opts
+	h.mu.Unlock()
+	if body, at, ok := h.st.ScanCache(cacheReportKey); ok {
+		var saved savedReport
+		if json.Unmarshal(body, &saved) == nil && reflect.DeepEqual(normalize(saved.Options), opts) {
+			h.mu.Lock()
+			if h.cached == nil {
+				h.cached, h.cachedAt = &saved.Report, at
+			}
+			h.mu.Unlock()
+		}
+	}
+	if body, _, ok := h.st.ScanCache(cacheSizesKey); ok {
+		var saved map[string]savedSize
+		if json.Unmarshal(body, &saved) == nil {
+			h.sizeMu.Lock()
+			for p, s := range saved {
+				if _, have := h.sizes[p]; !have {
+					h.sizes[p] = sizeEntry{bytes: s.Bytes, partial: s.Partial, at: s.At}
+				}
+			}
+			h.sizeMu.Unlock()
+		}
+	}
 }
 
 // fresh returns the cached report when it may answer: younger than cacheTTL

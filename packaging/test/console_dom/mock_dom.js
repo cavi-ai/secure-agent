@@ -1390,6 +1390,20 @@
       }, 100);
     }, 4000);
   }
+  // refreshdemo: the first /worktrees and /cleanup answer from an old cached
+  // scan while the daemon rescans; the tab must re-read until it lands.
+  if (MODE.includes('refreshdemo')) {
+    const freshW = data['/worktrees'];
+    const oldW = JSON.parse(JSON.stringify(freshW));
+    Object.assign(oldW, { cached: true, refreshing: true, generated_at: iso(3 * 3600000) });
+    oldW.repos[0].worktrees = oldW.repos[0].worktrees.concat([{ ...oldW.repos[0].worktrees[1], path: WT_REPO + '/.worktrees/gone-since', branch: 'feat/gone' }]);
+    let wReads = 0;
+    Object.defineProperty(data, '/worktrees', { get: () => (wReads++ === 0 ? oldW : freshW) });
+    const freshC = data['/cleanup'];
+    const oldC = { ...JSON.parse(JSON.stringify(freshC)), refreshing: true };
+    let cReads = 0;
+    Object.defineProperty(data, '/cleanup', { get: () => (cReads++ === 0 ? oldC : freshC) });
+  }
   // sizingdemo: the first /worktrees answers still sizing with no sizes;
   // the tab must re-read until the sizes land.
   if (MODE.includes('sizingdemo')) {

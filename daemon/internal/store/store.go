@@ -262,6 +262,7 @@ func Open(dbPath, jsonlPath string) (*Store, error) {
 		worktreeReposSchema,
 		cleanupLogSchema,
 		agentAsksSchema,
+		scanCacheSchema,
 	}
 
 	for _, q := range createQueries {
