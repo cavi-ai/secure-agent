@@ -20,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -127,6 +128,8 @@ type Hunter struct {
 	st   Store
 	home string
 	now  func() time.Time
+	// goos picks the Trash layout (macOS or freedesktop); tests pin it.
+	goos string
 
 	mu       sync.Mutex
 	opts     Options
@@ -170,7 +173,7 @@ func New(st Store, home string, opts Options) *Hunter {
 	if home == "" {
 		home, _ = os.UserHomeDir()
 	}
-	return &Hunter{st: st, home: home, now: time.Now, opts: normalize(opts),
+	return &Hunter{st: st, home: home, now: time.Now, goos: runtime.GOOS, opts: normalize(opts),
 		fingerprints: map[string]fingerprintCache{}, sizes: map[string]sizeEntry{}, removals: map[string]*Removal{}}
 }
 

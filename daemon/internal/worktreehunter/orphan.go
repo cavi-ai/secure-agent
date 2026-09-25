@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"time"
 
@@ -115,7 +114,7 @@ func (h *Hunter) TrashOrphan(ctx context.Context, path string) (TrashedOrphan, e
 		return TrashedOrphan{}, ErrNotOrphan
 	}
 	u := diskusage.Dir(context.WithoutCancel(ctx), o.Path, nil)
-	dest, err := trash.Mover{Home: h.home, GOOS: runtime.GOOS, Now: h.now}.Move(o.Path)
+	dest, err := trash.Mover{Home: h.home, GOOS: h.goos, Now: h.now}.Move(o.Path)
 	if err != nil {
 		return TrashedOrphan{}, err
 	}
