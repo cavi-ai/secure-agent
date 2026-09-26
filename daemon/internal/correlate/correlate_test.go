@@ -39,6 +39,29 @@ func newTestCorrelator(t *testing.T) *Correlator {
 	return New(tg, cl, cfg)
 }
 
+// The store keeps sensitive file events past the row cap; trust-store reads,
+// ordinary files and non-file kinds stay bulk.
+func TestSensitiveFile(t *testing.T) {
+	c := newTestCorrelator(t)
+	for _, tc := range []struct {
+		e    event.Event
+		want bool
+	}{
+		{event.Event{Kind: event.KindFileOpen, Path: "/Users/x/.ssh/id_ed25519"}, true},
+		{event.Event{Kind: event.KindFileWrite, Path: "/Users/x/project/.env"}, true},
+		{event.Event{Kind: event.KindFileDelete, Path: "/Users/x/.aws/credentials"}, true},
+		{event.Event{Kind: event.KindFileOpen, Path: "/Users/x/Library/Keychains/login.keychain-db"}, true},
+		{event.Event{Kind: event.KindFileOpen, Path: "/System/Library/Keychains/SystemTrustSettings.plist"}, false},
+		{event.Event{Kind: event.KindFileOpen, Path: "/Users/x/project/node_modules/a/index.js"}, false},
+		{event.Event{Kind: event.KindPluginAction, Path: "/Users/x/project/.env"}, false},
+		{event.Event{Kind: event.KindExec, Path: "/Users/x/.ssh/id_rsa"}, false},
+	} {
+		if got := c.SensitiveFile(tc.e); got != tc.want {
+			t.Errorf("SensitiveFile(%s %s) = %v, want %v", tc.e.Kind, tc.e.Path, got, tc.want)
+		}
+	}
+}
+
 func TestSensitiveReadThenForeignConnectFlags(t *testing.T) {
 	c := newTestCorrelator(t) // tagger says pid 200 = "cursor"; classifier from defaults
 	base := time.Unix(1_700_000_000, 0)

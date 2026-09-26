@@ -269,6 +269,9 @@ func TestOpenMigratesOldEventsTableForCallIndex(t *testing.T) {
 	if _, err := db.Exec(`CREATE TABLE events (id INTEGER PRIMARY KEY AUTOINCREMENT, kind INT, ts TEXT, pid INT, exe_path TEXT, session_id TEXT, path TEXT, remote_host TEXT, remote_port INT, detail TEXT)`); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := db.Exec(`INSERT INTO events (kind, ts, pid, path) VALUES (0, ?, 1, '/Users/x/.ssh/id_rsa')`, time.Now().Format(time.RFC3339Nano)); err != nil {
+		t.Fatal(err)
+	}
 	db.Close()
 
 	st, err := Open(path, "")
@@ -276,6 +279,11 @@ func TestOpenMigratesOldEventsTableForCallIndex(t *testing.T) {
 		t.Fatalf("Open on an old DB failed: %v", err)
 	}
 	defer st.Close()
+	// Rows written before the record column existed are bulk rows.
+	var record int
+	if err := st.db.QueryRow(`SELECT record FROM events WHERE kind = 0`).Scan(&record); err != nil || record != 0 {
+		t.Fatalf("legacy row record = %d (%v), want 0", record, err)
+	}
 	// And the upsert works end to end on the migrated table.
 	st.PutEvent(event.Event{Kind: event.KindToolCall, TS: time.Now(), SessionID: "s", CallID: "c1", ToolStatus: "running"})
 	st.PutEvent(event.Event{Kind: event.KindToolCall, TS: time.Now(), SessionID: "s", CallID: "c1", ToolStatus: "ok"})

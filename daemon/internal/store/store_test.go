@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -673,6 +674,77 @@ func TestPrunePerKindBudgetsIsolateBursts(t *testing.T) {
 	}
 }
 
+// A build's file flood trims the kind to its budget, but the record rows it
+// would have pushed out stay.
+func TestPruneKeepsRecordRowsPastTheBudget(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "e.db"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	setKindBudget(t, int(event.KindFileOpen), 50)
+
+	now := time.Now()
+	for i := 0; i < 5; i++ {
+		s.PutEvent(event.Event{Kind: event.KindFileOpen, PID: 1, TS: now, Path: "/Users/x/.ssh/id_rsa", Record: true})
+	}
+	for i := 0; i < 100; i++ {
+		s.PutEvent(event.Event{Kind: event.KindFileOpen, PID: 1, TS: now, Path: "/Users/x/p/node_modules/a.js"})
+	}
+	s.PruneEvents()
+
+	if got := countKind(t, s, int(event.KindFileOpen)); got != 55 {
+		t.Fatalf("file-open rows = %d, want the newest 50 plus 5 record rows", got)
+	}
+	if got := countRecord(t, s, int(event.KindFileOpen)); got != 5 {
+		t.Fatalf("record rows = %d, want all 5", got)
+	}
+}
+
+// Record rows keep their own newest recordBudget.
+func TestPruneCapsRecordRows(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "e.db"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	prev := recordBudget
+	recordBudget = 3
+	t.Cleanup(func() { recordBudget = prev })
+
+	now := time.Now()
+	for i := 0; i < 10; i++ {
+		s.PutEvent(event.Event{Kind: event.KindFileOpen, PID: int32(i), TS: now, Path: "/Users/x/.aws/credentials", Record: true})
+	}
+	s.PruneEvents()
+
+	var pids []int
+	rows, err := s.db.Query(`SELECT pid FROM events WHERE kind = ? AND record = 1 ORDER BY id`, int(event.KindFileOpen))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var p int
+		if err := rows.Scan(&p); err != nil {
+			t.Fatal(err)
+		}
+		pids = append(pids, p)
+	}
+	if !slices.Equal(pids, []int{7, 8, 9}) {
+		t.Fatalf("record rows kept = %v, want the newest three [7 8 9]", pids)
+	}
+}
+
+func countRecord(t *testing.T, s *Store, kind int) int {
+	t.Helper()
+	var n int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM events WHERE kind = ? AND record = 1`, kind).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
 // Pruning walks the kinds present in the table, so a kind outside the
 // event enum is still bounded.
 func TestPruneBudgetsApplyToUnlistedKinds(t *testing.T) {
@@ -739,27 +811,15 @@ func TestPruneBudgetQueryUsesKindIndex(t *testing.T) {
 	}
 	defer s.Close()
 
-	rows, err := s.db.Query(`EXPLAIN QUERY PLAN DELETE FROM events WHERE kind = ? AND id <
+	joined := queryPlan(t, s, `DELETE FROM events WHERE kind = ? AND record = 0 AND id <
 		(SELECT id FROM events WHERE kind = ? ORDER BY id DESC LIMIT 1 OFFSET ?)`, 0, 0, 9)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer rows.Close()
-	var plan []string
-	for rows.Next() {
-		var id, parent, notused int
-		var detail string
-		if err := rows.Scan(&id, &parent, &notused, &detail); err != nil {
-			t.Fatal(err)
-		}
-		plan = append(plan, detail)
-	}
-	if err := rows.Err(); err != nil {
-		t.Fatal(err)
-	}
-	joined := strings.Join(plan, " | ")
 	if strings.Contains(joined, "SCAN events") || !strings.Contains(joined, "idx_events_kind_id") {
 		t.Fatalf("budget delete plan = %q, want index seeks on idx_events_kind_id", joined)
+	}
+	joined = queryPlan(t, s, `DELETE FROM events WHERE kind = ? AND record = 1 AND id <
+		(SELECT id FROM events WHERE kind = ? AND record = 1 ORDER BY id DESC LIMIT 1 OFFSET ?)`, 0, 0, 9)
+	if strings.Contains(joined, "SCAN events") || !strings.Contains(joined, "idx_events_record") {
+		t.Fatalf("record delete plan = %q, want index seeks on idx_events_record", joined)
 	}
 }
 

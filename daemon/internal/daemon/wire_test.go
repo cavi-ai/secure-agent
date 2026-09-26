@@ -385,6 +385,54 @@ func TestStartDrainLoopPersistsAndCloses(t *testing.T) {
 	}
 }
 
+// The drain loop stores a flag's own event and an agent's sensitive file
+// event as record rows; everything else is bulk.
+func TestDrainLoopMarksRecordRows(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "t.db"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+
+	cfg, _ := config.Load("/nonexistent")
+	tagger := agents.New(cfg, fakeProcSource{})
+	tagger.Refresh()
+	cr := correlate.New(tagger, sensitive.New(cfg), cfg)
+
+	b := bus.New(64)
+	res := session.NewResolver(st, tagger)
+	done := startDrainLoop(b.Subscribe(), st, cr, fleet.NewPublisher(), res, nil, nil, nil, nil)
+
+	now := time.Now()
+	b.Publish(event.Event{Kind: event.KindFileOpen, TS: now, PID: 500, Path: "/Users/x/project/main.go"})
+	b.Publish(event.Event{Kind: event.KindFileOpen, TS: now, PID: 500, Path: "/System/Library/Keychains/SystemTrustSettings.plist"})
+	b.Publish(event.Event{Kind: event.KindFileOpen, TS: now, PID: 500, Path: "/Users/x/.ssh/id_rsa"})
+	time.Sleep(50 * time.Millisecond)
+	b.Publish(event.Event{Kind: event.KindConnOpen, TS: now.Add(100 * time.Millisecond), PID: 500, RemoteHost: "evil.example.com", RemotePort: 443})
+	b.Publish(event.Event{Kind: event.KindConnOpen, TS: now.Add(200 * time.Millisecond), PID: 500, RemoteHost: "other.example.com", RemotePort: 443})
+
+	b.Close()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("drain loop did not finish after bus close")
+	}
+
+	if flags := st.RecentFlags(10); len(flags) != 1 || flags[0].Rule != "sensitive-read-then-connect" {
+		t.Fatalf("flags = %v, want the one read-then-connect", flags)
+	}
+	got := map[string][2]int{}
+	for _, r := range st.RetentionReport() {
+		got[r.Name] = [2]int{r.Rows, r.RecordRows}
+	}
+	if want := [2]int{3, 1}; got["file-open"] != want {
+		t.Errorf("file-open rows/record = %v, want %v (the ssh key read only)", got["file-open"], want)
+	}
+	if want := [2]int{2, 1}; got["conn-open"] != want {
+		t.Errorf("conn-open rows/record = %v, want %v (the flagged connect only)", got["conn-open"], want)
+	}
+}
+
 // File activity from a process outside every agent family is not stored
 // unless it raised a flag; agent file activity and non-file kinds are.
 func TestDrainLoopDropsUnattributedFileEvents(t *testing.T) {
