@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -42,11 +43,12 @@ var pruneMinInterval = 30 * time.Second
 var jsonlRotateBytes int64 = 8 << 20
 
 type Store struct {
-	mu          sync.Mutex
-	db          *sql.DB
-	jsonlPath   string
-	jsonlFile   *os.File
-	insertCount uint64
+	mu                  sync.Mutex
+	db                  *sql.DB
+	jsonlPath           string
+	jsonlFile           *os.File
+	insertCount         uint64
+	guardDecisionWrites atomic.Uint64
 	// lastPrune gates the insert-driven prune to pruneMinInterval, so a
 	// high-rate producer does not trigger it every 1000 inserts.
 	lastPrune time.Time

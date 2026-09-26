@@ -26,16 +26,58 @@ const guardDecisionsSchema = `CREATE TABLE IF NOT EXISTS guard_decisions (
 );
 CREATE INDEX IF NOT EXISTS idx_guard_decisions_session_at ON guard_decisions(session_id, at, id);`
 
+const (
+	guardDecisionTimeLayout = "2006-01-02T15:04:05.000000000Z"
+	maxGuardDecisions       = 10000
+	guardDecisionPruneEvery = 256
+)
+
 // PutGuardDecision is best effort with a short deadline, so a busy database
 // cannot hold the operator's answer behind SQLite's normal busy timeout.
 func (s *Store) PutGuardDecision(d GuardDecision) {
 	if d.ID == "" {
 		return
 	}
+	at, err := time.Parse(time.RFC3339Nano, d.At)
+	if err != nil {
+		return
+	}
+	// Fixed-width UTC sorts by instant in SQLite's TEXT index. RFC3339Nano's
+	// variable fractional precision does not.
+	d.At = at.UTC().Format(guardDecisionTimeLayout)
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
-	_, _ = s.db.ExecContext(ctx, `INSERT OR IGNORE INTO guard_decisions (id, session_id, rule_id, verdict, scope, at) VALUES (?, ?, ?, ?, ?, ?)`,
+	result, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO guard_decisions (id, session_id, rule_id, verdict, scope, at) VALUES (?, ?, ?, ?, ?, ?)`,
 		d.ID, d.SessionID, d.RuleID, d.Verdict, d.Scope, d.At)
+	if err != nil {
+		return
+	}
+	if n, _ := result.RowsAffected(); n == 0 {
+		return
+	}
+	writes := s.guardDecisionWrites.Add(1)
+	if writes != 1 && writes%guardDecisionPruneEvery != 0 {
+		return
+	}
+	s.mu.Lock()
+	retention := s.eventRetention
+	s.mu.Unlock()
+	if retention <= 0 {
+		retention = DefaultEventRetention
+	}
+	pruneCtx, pruneCancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer pruneCancel()
+	_ = s.pruneGuardDecisions(pruneCtx, retention, maxGuardDecisions)
+}
+
+// pruneGuardDecisions applies the configured event age limit and a count
+// backstop. It runs periodically on guard inserts, including the first insert
+// after startup, without holding the store's event publication lock.
+func (s *Store) pruneGuardDecisions(ctx context.Context, retention time.Duration, cap int) error {
+	cutoff := time.Now().Add(-retention).UTC().Format(guardDecisionTimeLayout)
+	_, err := s.db.ExecContext(ctx, `DELETE FROM guard_decisions WHERE at < ? OR id NOT IN (
+		SELECT id FROM guard_decisions ORDER BY at DESC, id DESC LIMIT ?)`, cutoff, cap)
+	return err
 }
 
 // ListGuardDecisions selects only rows explicitly attributed to sessionID.

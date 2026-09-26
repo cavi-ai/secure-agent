@@ -71,7 +71,7 @@ func TestGuardOutcomePersistence(t *testing.T) {
 			st.UpsertSession(model.Session{ID: "session-1", Harness: "claude", StartedAt: now, LastSeenAt: now})
 			a := newTestAPI("", st, &fakeKiller{}, func() Status { return Status{Running: true} })
 			brokerTimeout := 25 * time.Millisecond
-			if tc.setup == "full" {
+			if tc.setup == "full" || tc.setup == "operator" {
 				brokerTimeout = time.Second
 			}
 			a.guardBroker = guard.NewBroker(brokerTimeout)
@@ -149,5 +149,38 @@ func TestUnknownGuardSessionUnattributed(t *testing.T) {
 	rows := st.ListGuardDecisions("", 10)
 	if len(rows) != 1 || rows[0].SessionID != "" {
 		t.Fatalf("rows=%+v", rows)
+	}
+}
+
+func TestDeduplicatedGuardRequestsPersistSeparately(t *testing.T) {
+	st := testStore(t)
+	now := time.Now()
+	st.UpsertSession(model.Session{ID: "session-1", Harness: "claude", StartedAt: now, LastSeenAt: now})
+	a := newTestAPI("", st, &fakeKiller{}, func() Status { return Status{Running: true} })
+	a.guardBroker = guard.NewBroker(2 * time.Second)
+	done := make(chan struct{}, 2)
+	for i := 0; i < 2; i++ {
+		go func() {
+			req := httptest.NewRequest(http.MethodPost, "/guard/decision", strings.NewReader(`{"agent":"claude","tool":"Read","path":"/secret","rule_id":"cloud-creds","session_id":"session-1"}`))
+			a.handleGuardDecision(httptest.NewRecorder(), req)
+			done <- struct{}{}
+		}()
+	}
+	deadline := time.Now().Add(time.Second)
+	for len(a.guardBroker.Pending()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	pending := a.guardBroker.Pending()
+	if len(pending) != 1 {
+		t.Fatalf("pending=%+v", pending)
+	}
+	// Give the second request time to join the first waiter's fan-out.
+	time.Sleep(20 * time.Millisecond)
+	a.guardBroker.Resolve(pending[0].ID, guard.Decision{Verdict: "deny", Scope: "once"})
+	<-done
+	<-done
+	rows := st.ListGuardDecisions("session-1", 10)
+	if len(rows) != 2 || rows[0].ID == rows[1].ID {
+		t.Fatalf("rows=%+v, want distinct persisted outcomes", rows)
 	}
 }
