@@ -53,17 +53,23 @@ func (c *Correlator) credentialOwners(path string) []string {
 	return nil
 }
 
-// ownerUse reports whether cm is every read's credential used with its
-// owner: the connection came from the reader's own process tree and an org
-// that owns the credential is the destination. An agent tool read never
-// qualifies: it put the file into the model's context.
+// ownerUse reports whether cm is the credential in every file read used
+// with its owner: for each file, a read of it came from the connection's own
+// process tree, and an org that owns the file is the destination. Other
+// processes reading the same file do not change that. An agent tool read
+// never qualifies: it put the file into the model's context.
 func (c *Correlator) ownerUse(reads []readMark, cm connMark) bool {
 	org := IdentifyCached(cm.host).Org
-	if org == "" || cm.pid == 0 {
+	if org == "" || cm.pid == 0 || len(reads) == 0 {
 		return false
 	}
+	explained := map[string]bool{}
 	for _, r := range reads {
-		if r.kind != event.KindFileOpen || !sameTree(r, cm) || !slices.Contains(c.credentialOwners(r.path), org) {
+		ok := r.kind == event.KindFileOpen && sameTree(r, cm) && slices.Contains(c.credentialOwners(r.path), org)
+		explained[r.path] = explained[r.path] || ok
+	}
+	for _, ok := range explained {
+		if !ok {
 			return false
 		}
 	}
