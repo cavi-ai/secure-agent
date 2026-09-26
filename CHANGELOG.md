@@ -7,6 +7,8 @@ All notable changes to `secure-agent` are documented here. The format follows
 ## [Unreleased]
 
 ### Changed
+- Console header event rate keeps a fixed width, so the status chip does not shift as events per second change.
+- Console switches set `-webkit-user-select` so Safari does not select the switch label.
 - Findings skip shell rc and harness-settings reads as secret reads and name the raising process and its launcher.
 - File telemetry's root helper drops open events on system paths (OS libraries and frameworks, app-bundle contents, Homebrew Cellar, `/dev` nodes, user caches) that no sensitive-file rule matches before they reach the spool.
 - File events from a process that already exited cost one process lookup per tagger refresh instead of one per event.
@@ -23,6 +25,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Console: shows the posture banner capped at 3 rows off Home and empty on Home, agent ids in their own case, Egress led by the uninspected endpoints with zero-hit rules folded into one row, and Processes at full width.
 
 ### Added
+- Console Resources: machine headroom `?` explains the score. It is the lowest of memory still available, CPU still idle, swap still free, and thermal headroom. Under 15 is critical. `headroom_limiter` names which input set the score.
 - System agent (opt-in, `system_agent` in config.yaml, applied live): a chat with a model on the local Ollama that proposes work for Claude Code, Codex, OpenClaw or Hermes Agent and dispatches it — headless in a folder or in a Terminal window — against the same Ollama. Harnesses keep their own sandbox and approvals; a proposal whose harness cannot run yet is saved as a plan with the reason. See `docs/SYSTEM_AGENT.md`.
 - Seven built-in skills for the system agent: `ssh`, `git`, `signing`, `claude`, `codex`, `openclaw`, `hermes`.
 - `/agent/status`, `/agent/skills`, `/agent/chat`, `/agent/plans`, `/agent/dispatch`, `/agent/runs` (console-admitted, NoAgent). Text is masked by the firewall before it is stored or sent to the model; a secret that cannot be masked is refused.

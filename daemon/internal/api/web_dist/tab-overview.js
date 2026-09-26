@@ -51,6 +51,18 @@ function resourceActivityLabel(kind) {
 // The machine strip: headroom, memory (agents / other / available on one
 // stacked bar), CPU and swap as four compact tiles, pressure and thermal as
 // chips on the right. Same numbers the tall host block carried.
+function headroomHintText(host) {
+  host = host || {};
+  let text = 'The score is the tightest limit, not free RAM. It is the lowest of memory still available, CPU still idle, swap still free, and thermal headroom. Under 15 is critical. Under 50 is constrained. 50 or more is ample. Critical pressure is separate: available memory under 10%, or swap at least 80% full.';
+  const why = {
+    memory: ' Right now the score is memory still available.',
+    cpu: ' Right now the score is CPU still idle.',
+    swap: ' Right now the score is swap still free. A full swap file can make this critical while plenty of RAM is still available.',
+    thermal: ' Right now the score is the thermal cap.',
+  };
+  return text + (why[host.headroom_limiter] || '');
+}
+
 function resourceHostContextHTML(host) {
   if (!host || !Number(host.total_memory_bytes)) return '';
   const total = Number(host.total_memory_bytes);
@@ -82,7 +94,10 @@ function resourceHostContextHTML(host) {
       <div class="resource-host-legend"><span><i class="agent"></i>Agents ${agentPercent.toFixed(1)}%</span><span><i class="other"></i>Other ${otherPercent.toFixed(1)}%</span><span><i class="available"></i>${escapeHTML(fmtRSS(available) || '0 B')} available of ${escapeHTML(fmtRSS(total))}</span></div>`
     : '<b>Unavailable</b>';
   return `<section class="machine-strip capacity-${escapeHTML(capacity)}" aria-label="Whole-machine resource pressure">
-    <div class="machine-tile machine-headroom"><span class="resource-eyebrow">Machine headroom</span><b>${Number(host.headroom_score || 0)} / 100</b><small>${escapeHTML(capacity)}</small></div>
+    <div class="machine-tile machine-headroom">
+      <div class="machine-eyebrow-row"><span class="resource-eyebrow">Machine headroom</span><details class="headroom-hint"><summary aria-label="What machine headroom means">?</summary><p class="headroom-hint-box">${escapeHTML(headroomHintText(host))}</p></details></div>
+      <b>${Number(host.headroom_score || 0)} / 100</b><small>${escapeHTML(capacity)}</small>
+    </div>
     <div class="machine-tile machine-memory"><span class="resource-eyebrow">Memory</span>${memory}</div>
     <div class="machine-tile"><span class="resource-eyebrow">CPU</span><b>${escapeHTML(cpu)}</b>${cpuSplit ? `<small>${escapeHTML(cpuSplit)}</small>` : ''}</div>
     <div class="machine-tile"><span class="resource-eyebrow">Swap</span><b>${escapeHTML(swap)}</b></div>
