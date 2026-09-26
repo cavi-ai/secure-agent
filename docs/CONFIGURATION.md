@@ -43,6 +43,18 @@ sensitive_paths:
 
 ---
 
+### `not_secret_paths` (List of Strings)
+Directory prefixes that hold no secret, checked before `sensitive_paths` and `sensitive_globs`. A read under one is never a sensitive read.
+
+```yaml
+not_secret_paths:
+  - "~/.docker/completions"   # on zsh's fpath: read at every shell start
+```
+
+`.env` templates (`.env.example`, `.env.sample`, `.env.template`, `.env.dist`) are never sensitive.
+
+---
+
 ### `keychain_markers` (List of Strings)
 Path substrings identifying macOS Keychain database files.
 
@@ -87,6 +99,20 @@ vendor_allowlist:
   codex:
     - "openai.com"
     - "api.openai.com"
+```
+
+---
+
+### `credential_owners` (List of Objects)
+The orgs each credential file, or every file under a directory, is meant for, spelled as the endpoint identity table names them (the `org` a flag explanation shows under `egress`). When the process that read the file connects to one of them, the connection is counted in `status.credential_owner_uses` and not flagged. Another process in the agent family, an agent tool read of the file, or any other destination still flags.
+
+```yaml
+credential_owners:
+  - { path: "~/.config/gh/hosts.yml", orgs: ["GitHub"] }
+  - { path: "~/.aws",                 orgs: ["AWS", "AWS CloudFront"] }
+  - { path: "~/.azure",               orgs: ["Azure", "Microsoft"] }
+  - { path: "~/.config/gcloud",       orgs: ["Google", "Google Cloud"] }
+  - { path: "~/.docker",              orgs: ["Docker Hub", "Docker", "GitHub Container Registry"] }
 ```
 
 ---

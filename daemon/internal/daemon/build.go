@@ -117,6 +117,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 	deltaHub := api.NewDeltaHub()
 	c.deltaHub = deltaHub
 	tagger.SetOnTagged(reattributeUntaggedFlags(st, deltaHub, time.Now))
+	correlator.SetOnRepeat(foldFlagRepeat(st, deltaHub))
 	// postureHook is armed once the API server exists (it owns posture).
 	postureHook := &postureHookHolder{}
 

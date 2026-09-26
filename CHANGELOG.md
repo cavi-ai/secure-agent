@@ -9,6 +9,9 @@ All notable changes to `secure-agent` are documented here. The format follows
 ### Fixed
 - Findings: a macOS trust-store read, or a keychain file opened by a TLS client, no longer counts as a secret read for "read a secret, then connected out"; a keychain file opened by a byte-copy tool (`cat`, `cp`, `tar`, `curl`, …) or read by an agent tool still does. Open flags from those reads are acknowledged at start.
 - Findings: a read item names the process that opened the file (`evidence[].pid`, `evidence[].exe`), not the process that connected out.
+- Findings: a credential used with its owner (gh's token to GitHub, `~/.aws` to AWS, `~/.azure` to Azure, `~/.config/gcloud` to Google, `~/.docker` to Docker registries) by the process that read it is counted in `status.credential_owner_uses`, not flagged; `credential_owners` config.
+- Findings: one read-then-connect pattern (agent, reader, file, destination org) raises one flag per hour; repeats fold into it (`repeats`, `last_seen`) and patterns count them.
+- Findings: `.env` templates and `~/.docker/completions` (`not_secret_paths`) are not secret reads; open flags from them are acknowledged at start.
 
 ### Changed
 - Event store: a flag's own event and file events on sensitive paths stay past their kind's row cap for the full retention, up to 20,000 rows per kind; `file-open`, `file-delete` and `exec` keep only their newest rows.

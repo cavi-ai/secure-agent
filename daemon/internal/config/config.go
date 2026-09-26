@@ -320,9 +320,11 @@ type rawConfig struct {
 	DisabledAgents      []string              `yaml:"disabled_agents"`
 	SensitiveGlobs      []string              `yaml:"sensitive_globs"`
 	SensitivePaths      []string              `yaml:"sensitive_paths"`
+	NotSecretPaths      []string              `yaml:"not_secret_paths"`
 	KeychainMarkers     []string              `yaml:"keychain_markers"`
 	Agents              []AgentDef            `yaml:"agents"`
 	VendorAllowlist     map[string][]string   `yaml:"vendor_allowlist"`
+	CredentialOwners    []CredentialOwner     `yaml:"credential_owners"`
 	NetSampleIntervalMS int64                 `yaml:"net_sample_interval_ms"`
 	SocketPath          string                `yaml:"socket_path"`
 	DBPath              string                `yaml:"db_path"`
@@ -350,9 +352,11 @@ type rawConfig struct {
 type Config struct {
 	SensitiveGlobs    []string
 	SensitivePaths    []string
+	NotSecretPaths    []string
 	KeychainMarkers   []string
 	Agents            []AgentDef
 	VendorAllowlist   map[string][]string
+	CredentialOwners  []CredentialOwner
 	DisabledAgents    []string
 	NetSampleInterval time.Duration
 	SocketPath        string
@@ -489,9 +493,11 @@ func loadWithOverlayError(explicitPath string) (Config, error, error) {
 	cfg := Config{
 		SensitiveGlobs:    expandPaths(raw.SensitiveGlobs),
 		SensitivePaths:    expandPaths(raw.SensitivePaths),
+		NotSecretPaths:    expandPaths(raw.NotSecretPaths),
 		KeychainMarkers:   raw.KeychainMarkers,
 		Agents:            normalizeAgentKinds(filterDisabledAgents(raw.Agents, raw.DisabledAgents)),
 		VendorAllowlist:   raw.VendorAllowlist,
+		CredentialOwners:  expandOwners(raw.CredentialOwners),
 		NetSampleInterval: time.Duration(raw.NetSampleIntervalMS) * time.Millisecond,
 		SocketPath:        expandPath(raw.SocketPath),
 		DBPath:            expandPath(raw.DBPath),
@@ -767,6 +773,26 @@ func expandPath(p string) string {
 		}
 	}
 	return os.ExpandEnv(p)
+}
+
+// CredentialOwner names the orgs a credential file, or every file under a
+// directory, is meant for, spelled as correlate.Identify names them. The
+// process that read it connecting to one of them is the credential in use,
+// not a secret leaving.
+type CredentialOwner struct {
+	Path string   `yaml:"path"`
+	Orgs []string `yaml:"orgs"`
+}
+
+func expandOwners(owners []CredentialOwner) []CredentialOwner {
+	out := make([]CredentialOwner, 0, len(owners))
+	for _, o := range owners {
+		if o.Path == "" || len(o.Orgs) == 0 {
+			continue
+		}
+		out = append(out, CredentialOwner{Path: filepath.Clean(expandPath(o.Path)), Orgs: o.Orgs})
+	}
+	return out
 }
 
 func expandPaths(paths []string) []string {

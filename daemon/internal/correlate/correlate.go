@@ -21,8 +21,9 @@ type readMark struct {
 	path     string
 	cat      sensitive.Category
 	rule     string
-	pid      int32  // the process that opened the file
-	exe      string // its executable, when the event carried one
+	pid      int32      // the process that opened the file
+	exe      string     // its executable, when the event carried one
+	kind     event.Kind // file open, or an agent tool read (plugin action)
 	consumed bool
 }
 
@@ -30,6 +31,7 @@ type connMark struct {
 	at       time.Time
 	host     string
 	port     int
+	pid      int32 // the process that connected
 	consumed bool
 }
 
@@ -86,6 +88,13 @@ type Correlator struct {
 	// threshold — the advisor's cue to pre-assess the host before the
 	// operator ever sees the suggestion. Nil until wired.
 	onUninspected func(agent, host string)
+	// folded[pattern] is the flag a read-then-connect pattern raised in the
+	// current window; repeats queue in repeats until Observe unlocks and
+	// hands them to onRepeat.
+	folded        map[string]foldedFlag
+	repeats       []flagRepeat
+	onRepeat      func(flagID string, at time.Time)
+	ownerUseCount int
 }
 
 func New(tagger *agents.Tagger, classifier sensitive.Classifier, cfg config.Config) *Correlator {
@@ -294,9 +303,16 @@ func (c *Correlator) shouldFlag(rule string, pid int32, subject string, ts time.
 
 func (c *Correlator) Observe(e event.Event) []model.Flag {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	flags := c.observeLocked(e)
 	c.stampProcessLocked(flags)
+	repeats, onRepeat := c.repeats, c.onRepeat
+	c.repeats = nil
+	c.mu.Unlock()
+	if onRepeat != nil {
+		for _, r := range repeats {
+			onRepeat(r.id, r.at)
+		}
+	}
 	return flags
 }
 
@@ -399,61 +415,12 @@ func (c *Correlator) observeLocked(e event.Event) []model.Flag {
 				flags = append(flags, c.keychainAccessLocked(e, info.Name)...)
 			}
 			if seedsReadThenConnect(m.Category, e.Kind, e.ExePath) {
-				c.rememberReadLocked(rootPID, e.PID, readMark{at: e.TS, path: e.Path, cat: cat, rule: m.Rule, pid: e.PID, exe: e.ExePath})
-				// Check if there's already an unconsumed recent foreign connection for this agent
-				recentConns := c.recentConnsLocked(rootPID, e.PID, e.TS, window)
-				// Operator disposition applies only when EVERY connection the
-				// flag would cite is muted — a fresh unmuted host must still flag.
-				mutedAll := c.isMuted != nil && len(recentConns) > 0
-				if mutedAll {
-					for _, cm := range recentConns {
-						h := cm.host
-						if isLocalhost(h) {
-							h = "localhost" // canonical alias: one mute covers the family
-						}
-						if !c.isMuted("sensitive-read-then-connect", h, info.Name) {
-							mutedAll = false
-							break
-						}
-					}
-				}
-				if mutedAll {
-					c.mutedCount++
-					c.markReadConsumedLocked(rootPID, e.PID)
-					c.markConnConsumedLocked(rootPID, e.PID)
-				} else if len(recentConns) > 0 {
-					flagID := hashFlagID("sensitive-read-then-connect", rootPID, recentConns[0].at)
-					evidence := []model.EvidenceItem{{
-						Kind:  "read",
-						Label: e.Path,
-						Sub:   "sensitive read",
-						Rule:  m.Rule,
-						TS:    e.TS.Format(time.RFC3339),
-						Text:  fmt.Sprintf("%s (pid %d) read %s at %s", info.Name, e.PID, e.Path, e.TS.Format(time.RFC3339)),
-						PID:   e.PID,
-						Exe:   e.ExePath,
-					}}
-					for _, cm := range recentConns {
-						evidence = append(evidence, model.EvidenceItem{
-							Kind:  "connect",
-							Label: fmt.Sprintf("%s:%d", cm.host, cm.port),
-							Sub:   "egress",
-							TS:    cm.at.Format(time.RFC3339),
-							Text:  fmt.Sprintf("then connected to %s:%d at %s", cm.host, cm.port, cm.at.Format(time.RFC3339)),
-						})
-					}
-					flags = append(flags, model.Flag{
-						ID:        flagID,
-						Rule:      "sensitive-read-then-connect",
-						Severity:  3,
-						TS:        e.TS,
-						PID:       e.PID,
-						Agent:     info.Name,
-						SessionID: e.SessionID,
-						Evidence:  evidence,
-					})
-					c.markReadConsumedLocked(rootPID, e.PID)
-					c.markConnConsumedLocked(rootPID, e.PID)
+				rm := readMark{at: e.TS, path: e.Path, cat: cat, rule: m.Rule, pid: e.PID, exe: e.ExePath, kind: e.Kind}
+				c.rememberReadLocked(rootPID, e.PID, rm)
+				// A connection the family made before this read counts too:
+				// the bytes may leave on a socket that was already open.
+				if conns := c.recentConnsLocked(rootPID, e.PID, e.TS, window); len(conns) > 0 {
+					flags = append(flags, c.readThenConnectLocked(e, info.Name, rootPID, []readMark{rm}, conns)...)
 				}
 			}
 		}
@@ -547,57 +514,12 @@ func (c *Correlator) observeLocked(e event.Event) []model.Flag {
 			}
 		}
 
-		c.rememberConnLocked(rootPID, e.PID, connMark{at: e.TS, host: e.RemoteHost, port: e.RemotePort})
+		c.rememberConnLocked(rootPID, e.PID, connMark{at: e.TS, host: e.RemoteHost, port: e.RemotePort, pid: e.PID})
 
-		recent := c.recentReadsLocked(rootPID, e.PID, e.TS, window)
-		if len(recent) == 0 {
-			return nil
+		if reads := c.recentReadsLocked(rootPID, e.PID, e.TS, window); len(reads) > 0 {
+			conn := connMark{at: e.TS, host: e.RemoteHost, port: e.RemotePort, pid: e.PID}
+			flags = append(flags, c.readThenConnectLocked(e, info.Name, rootPID, reads, []connMark{conn})...)
 		}
-
-		// Operator disposition: a muted (rule, host) pair is counted, not
-		// flagged — the read-then-connect evidence would only repeat it.
-		if c.isMuted != nil && c.isMuted("sensitive-read-then-connect", e.RemoteHost, info.Name) {
-			c.mutedCount++
-			c.markReadConsumedLocked(rootPID, e.PID)
-			c.markConnConsumedLocked(rootPID, e.PID)
-			return nil
-		}
-
-		// Rule 1: sensitive-read-then-connect
-		flagID := hashFlagID("sensitive-read-then-connect", rootPID, recent[0].at)
-		var evidence []model.EvidenceItem
-		for _, m := range recent {
-			evidence = append(evidence, model.EvidenceItem{
-				Kind:  "read",
-				Label: m.path,
-				Sub:   "sensitive read",
-				Rule:  m.rule,
-				TS:    m.at.Format(time.RFC3339),
-				Text:  fmt.Sprintf("%s (pid %d) read %s at %s", info.Name, m.pid, m.path, m.at.Format(time.RFC3339)),
-				PID:   m.pid,
-				Exe:   m.exe,
-			})
-		}
-		evidence = append(evidence, model.EvidenceItem{
-			Kind:  "connect",
-			Label: fmt.Sprintf("%s:%d", e.RemoteHost, e.RemotePort),
-			Sub:   "egress",
-			TS:    e.TS.Format(time.RFC3339),
-			Text:  fmt.Sprintf("then connected to %s:%d at %s", e.RemoteHost, e.RemotePort, e.TS.Format(time.RFC3339)),
-		})
-
-		flags = append(flags, model.Flag{
-			ID:        flagID,
-			Rule:      "sensitive-read-then-connect",
-			Severity:  3,
-			TS:        e.TS,
-			PID:       e.PID,
-			Agent:     info.Name,
-			SessionID: e.SessionID,
-			Evidence:  evidence,
-		})
-		c.markReadConsumedLocked(rootPID, e.PID)
-		c.markConnConsumedLocked(rootPID, e.PID)
 	}
 
 	return flags

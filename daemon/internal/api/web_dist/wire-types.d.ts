@@ -148,6 +148,8 @@ export interface Flag {
   acknowledged?: boolean;
   ack_reason?: string;
   process?: FlagProcess;
+  repeats?: number;
+  last_seen?: string;
   explain?: FlagExplain;
 }
 
@@ -430,6 +432,7 @@ export interface Status {
   advisor_health?: HealthSnapshot;
   tracked_processes: number;
   muted_flags: number;
+  credential_owner_uses: number;
   fleet_configured?: boolean;
   unacted_flags_24h: number;
   bus_drops?: number;

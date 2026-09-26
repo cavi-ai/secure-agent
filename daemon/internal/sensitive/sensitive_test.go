@@ -22,6 +22,9 @@ func TestClassify(t *testing.T) {
 	}{
 		{"/Users/x/project/.env", true},
 		{"/Users/x/project/.env.local", true},
+		{"/Users/x/project/.env.example", false},
+		{"/Users/x/project/.env.sample", false},
+		{"/Users/x/project/.env.template", false},
 		{"/Users/x/.ssh/id_ed25519", true},
 		{"/Users/x/.aws/credentials", true},
 		{"/Users/x/Library/Keychains/login.keychain-db", true},

@@ -51,8 +51,9 @@ func (a *API) computePatterns(since time.Time, min int) []model.Pattern {
 
 func (a *API) patternsOf(flags []model.Flag, since, now time.Time, minCount int) []model.Pattern {
 	type group struct {
-		p     model.Pattern
-		flags []model.Flag
+		p           model.Pattern
+		flags       []model.Flag
+		occurrences int // flags plus the repeats folded into them
 	}
 	byKey := map[string]*group{}
 	var keys []string
@@ -67,12 +68,13 @@ func (a *API) patternsOf(flags []model.Flag, since, now time.Time, minCount int)
 			keys = append(keys, key)
 		}
 		g.flags = append(g.flags, f)
+		g.occurrences += 1 + f.Repeats
 	}
 	out := []model.Pattern{}
 	var env *explainEnv
 	for _, key := range keys {
 		g := byKey[key]
-		if len(g.flags) < minCount {
+		if g.occurrences < minCount {
 			continue
 		}
 		if env == nil {
@@ -114,8 +116,15 @@ func patternSubject(f model.Flag, home string) (model.EvidenceItem, string) {
 func (a *API) fillPattern(p model.Pattern, flags []model.Flag, since, now time.Time, env *explainEnv) model.Pattern {
 	sorted := append([]model.Flag(nil), flags...)
 	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].TS.Before(sorted[j].TS) })
-	p.Count = len(sorted)
 	p.First, p.Last = sorted[0].TS, sorted[len(sorted)-1].TS
+	repeats := 0
+	for _, f := range sorted {
+		repeats += f.Repeats
+		if f.LastSeen != nil && f.LastSeen.After(p.Last) {
+			p.Last = *f.LastSeen
+		}
+	}
+	p.Count = len(sorted) + repeats
 
 	gaps := make([]float64, 0, len(sorted))
 	for i := 1; i < len(sorted); i++ {
@@ -126,7 +135,12 @@ func (a *API) fillPattern(p model.Pattern, flags []model.Flag, since, now time.T
 		}
 	}
 	p.MedianGapS = median(gaps)
-	p.Cadence = cadencePhrase(p.MedianGapS, len(gaps))
+	if repeats > 0 {
+		// Folded repeats carry no times of their own: the cadence is the
+		// span over the occurrences.
+		p.MedianGapS = p.Last.Sub(p.First).Seconds() / float64(p.Count-1)
+	}
+	p.Cadence = cadencePhrase(p.MedianGapS, p.Count-1)
 
 	width := now.Sub(since) / 24
 	for _, f := range sorted {
@@ -134,7 +148,7 @@ func (a *API) fillPattern(p model.Pattern, flags []model.Flag, since, now time.T
 		if width > 0 {
 			i = int(f.TS.Sub(since) / width)
 		}
-		p.Hourly[max(0, min(23, i))]++
+		p.Hourly[max(0, min(23, i))] += 1 + f.Repeats
 	}
 
 	pidN := map[int32]int{}

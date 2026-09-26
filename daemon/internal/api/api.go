@@ -116,6 +116,10 @@ type Status struct {
 	// MutedFlags counts flags suppressed by operator dispositions (mute
 	// rule+host) — proof the quiet is deliberate, not a hidden silence.
 	MutedFlags int `json:"muted_flags"`
+	// CredentialOwnerUses counts connections judged a credential used with
+	// its owner (the reading process reached an org credential_owners names
+	// for that file) — recorded, not flagged.
+	CredentialOwnerUses int `json:"credential_owner_uses"`
 	// FleetConfigured is true when at least one HMAC fleet webhook is set —
 	// the console hides the fleet panel until then.
 	FleetConfigured bool `json:"fleet_configured,omitempty"`

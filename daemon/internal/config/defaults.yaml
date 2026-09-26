@@ -9,6 +9,11 @@ sensitive_globs:
 sensitive_paths:
   - "~/.aws"
   - "~/.ssh"
+# Directories under a sensitive path that hold no secret; checked before
+# sensitive_paths and sensitive_globs. zsh reads ~/.docker/completions (on
+# fpath) at every shell start.
+not_secret_paths:
+  - "~/.docker/completions"
 keychain_markers:
   - "library/keychains"
   - ".keychain-db"
@@ -54,6 +59,15 @@ vendor_allowlist:
   copilot:     ["githubcopilot.com", "copilot-proxy.githubusercontent.com"]
   ollama:      ["ollama.com", "ollama.ai"]
   lm-studio:   ["lmstudio.ai"]
+# The orgs each credential is meant for (correlate.Identify names). The
+# process that read the file connecting to one of them is counted as the
+# credential in use; any other destination, or another process, still flags.
+credential_owners:
+  - { path: "~/.config/gh/hosts.yml", orgs: ["GitHub"] }
+  - { path: "~/.aws",                 orgs: ["AWS", "AWS CloudFront"] }
+  - { path: "~/.azure",               orgs: ["Azure", "Microsoft"] }
+  - { path: "~/.config/gcloud",       orgs: ["Google", "Google Cloud"] }
+  - { path: "~/.docker",              orgs: ["Docker Hub", "Docker", "GitHub Container Registry"] }
 net_sample_interval_ms: 2000
 # Time-based event retention, per kind. Socket churn (conn open/close) ages
 # out fast so it cannot evict the security record; everything else keeps a

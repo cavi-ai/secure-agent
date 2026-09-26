@@ -97,6 +97,11 @@ type Flag struct {
 	// Process is the raising process as it was when the flag was raised, so a
 	// finding still names its process after the process exits.
 	Process *FlagProcess `json:"process,omitempty"`
+	// Repeats counts later occurrences of the same pattern the correlator
+	// folded into this flag instead of raising new ones; LastSeen is the
+	// newest of them.
+	Repeats  int        `json:"repeats,omitempty"`
+	LastSeen *time.Time `json:"last_seen,omitempty"`
 	// Explain is the plain-language reading of the flag, stamped at serve
 	// time (GET /flags/{id}/explain, and the first 25 unacknowledged flags
 	// of /flags and /snapshot). Not persisted.
