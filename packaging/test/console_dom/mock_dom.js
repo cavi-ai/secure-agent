@@ -346,6 +346,9 @@
       { rule: 'proxy-prompt-injection', host: 'blog.example.com' },
       { rule: 'keychain-security-cli', host: '*' }
     ],
+    '/expected': [
+      { key: 'claude|gh|/Users/dev/.config/gh/hosts.yml|GitHub', agent: 'claude', reader: 'gh', path: '/Users/dev/.config/gh/hosts.yml', dest: 'GitHub', hits: 4, created_at: '2026-09-25T10:00:00Z' }
+    ],
     '/egress/uninspected': [
       { agent: 'cursor', host: 'registry.npmjs.org', count: 14, first_seen: iso(86400000), last_seen: iso(300000), session_id: 'sess-cursor-2', assessment: 'benign', rationale: 'npm registry is routine for JS projects', identity: { kind: 'hostname', name: 'registry.npmjs.org' } },
       { agent: 'claude', host: 'statsig.example.com', count: 3, first_seen: iso(7200000), last_seen: iso(900000), session_id: 'sess-claude-1', identity: { kind: 'hostname', name: 'statsig.example.com' } },
@@ -590,6 +593,7 @@
     data['/guard/rules'] = [];
     data['/guard/path-allow'] = [];
     data['/mute'] = [];
+    data['/expected'] = [];
   }
   // spenddaydemo: a tab whose saved Spend view is by day over 7d (a reload).
   if (MODE.includes('spenddaydemo')) {
@@ -898,6 +902,11 @@
       }
       if ((MODE.includes('explaindemo') || MODE.includes('patterndemo') || MODE.includes('rawmute')) && opts.body) line += ' body=' + opts.body;
       if (MODE.includes('rawmute') && p === '/mute' && opts.method === 'POST') data['/mute'].push(JSON.parse(opts.body));
+      if (p === '/expected' && opts.method === 'DELETE') {
+        line = `${opts.method} ${String(path)}`;
+        const key = new URLSearchParams(String(path).split('?')[1] || '').get('key');
+        data['/expected'] = data['/expected'].filter(e => e.key !== key);
+      }
       reqLog.push(line);
       stamp('mock-requests', reqLog.join('\n'));
       if (MODE.includes('resolvedemo') && p === '/incidents/status') {
@@ -2376,6 +2385,10 @@
   // policylists: the Policy tab, opened once telemetry has landed.
   if (MODE.includes('policylists')) {
     setTimeout(() => openTab('policy'), 4000);
+  }
+  // forgetexpected (with policylists): press Forget on the expected row.
+  if (MODE.includes('forgetexpected')) {
+    setTimeout(() => document.querySelector('#policy-expected [data-action="forget-expected"]')?.click(), 7000);
   }
   // explainact: Findings open, press flag-2's first served action (the
   // recommended allow) late enough that the inline note and the toast are

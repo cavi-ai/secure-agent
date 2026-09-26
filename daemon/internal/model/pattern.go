@@ -21,10 +21,13 @@ type Pattern struct {
 	// Subject is the served subject: the file (display path) or, for egress
 	// rules, the host.
 	Subject EvidenceItem `json:"subject"`
-	Count   int          `json:"count"`
-	Unacked int          `json:"unacked"`
-	First   time.Time    `json:"first"`
-	Last    time.Time    `json:"last"`
+	// Count is every occurrence (flags plus the repeats folded into them);
+	// Flags is the number of flags.
+	Count   int       `json:"count"`
+	Flags   int       `json:"flags"`
+	Unacked int       `json:"unacked"`
+	First   time.Time `json:"first"`
+	Last    time.Time `json:"last"`
 	// MedianGapS is the median gap between consecutive flags; Bursts counts
 	// gaps under 5 s.
 	MedianGapS float64 `json:"median_gap_s"`
@@ -43,6 +46,9 @@ type Pattern struct {
 	// Processes are the distinct raising processes by name and launcher,
 	// busiest PatternListCap first; Count is the distinct pids of each.
 	Processes []PatternProcess `json:"processes"`
+	// Destinations are the distinct orgs (else hosts) the pattern's
+	// connect items reached, busiest PatternListCap first.
+	Destinations []PatternDestination `json:"destinations,omitempty"`
 	// Disposition is the worst among unacknowledged flags; acknowledged when
 	// none is open.
 	Disposition Disposition     `json:"disposition"`
@@ -51,6 +57,15 @@ type Pattern struct {
 	// FlagIDs are the covered flags, open ones first, newest first, at most
 	// PatternFlagIDCap.
 	FlagIDs []string `json:"flag_ids"`
+}
+
+// PatternDestination is one destination behind a pattern's flags: the org
+// the endpoint identity table names (empty when unknown), one host it was
+// reached at, and how many flags cite it.
+type PatternDestination struct {
+	Org   string `json:"org,omitempty"`
+	Host  string `json:"host"`
+	Count int    `json:"count"`
 }
 
 // PatternProcess is one process name and launcher behind a pattern's flags.

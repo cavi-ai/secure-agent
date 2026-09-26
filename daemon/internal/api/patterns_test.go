@@ -298,3 +298,32 @@ func TestAttentionPatternReplacesFlagItems(t *testing.T) {
 		t.Fatalf("headline pattern items = %d, want 1\nitems=%+v", headline, p.Items)
 	}
 }
+
+// Repeats folded into a flag count as occurrences: one flag with 22 repeats
+// is a 23-occurrence pattern with the span's cadence.
+func TestPatternCountsFoldedRepeats(t *testing.T) {
+	a := explainTestAPI(t)
+	first := time.Now().Add(-30 * time.Minute)
+	last := first.Add(22 * 53 * time.Second)
+	f := keychainFlag("k1", "claude", 7, first, 2)
+	f.Rule = "sensitive-read-then-connect"
+	f.Evidence = []model.EvidenceItem{{Kind: "read", Label: "/Users/x/.aws/credentials", Rule: "aws"}, {Kind: "connect", Label: "evil.example.com:443"}}
+	a.store.PutFlag(f)
+	for i := 1; i <= 22; i++ {
+		a.store.BumpFlagRepeat("k1", first.Add(time.Duration(i)*53*time.Second))
+	}
+	p := onlyPattern(t, a.computePatterns(time.Now().Add(-24*time.Hour), 3))
+	if p.Count != 23 || !p.Last.Equal(last) {
+		t.Fatalf("count/last = %d/%v, want 23/%v", p.Count, p.Last, last)
+	}
+	if p.Cadence != "about every 53 seconds" {
+		t.Fatalf("cadence = %q, want about every 53 seconds", p.Cadence)
+	}
+	sum := 0
+	for _, n := range p.Hourly {
+		sum += n
+	}
+	if sum != 23 {
+		t.Fatalf("hourly sum = %d, want 23", sum)
+	}
+}

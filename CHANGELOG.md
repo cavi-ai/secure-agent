@@ -9,6 +9,10 @@ All notable changes to `secure-agent` are documented here. The format follows
 ### Fixed
 - Findings: a macOS trust-store read, or a keychain file opened by a TLS client, no longer counts as a secret read for "read a secret, then connected out"; a keychain file opened by a byte-copy tool (`cat`, `cp`, `tar`, `curl`, …) or read by an agent tool still does. Open flags from those reads are acknowledged at start.
 - Findings: a read item names the process that opened the file (`evidence[].pid`, `evidence[].exe`), not the process that connected out.
+- Findings: a credential used with its owner (gh's token to GitHub, `~/.aws` to AWS, `~/.azure` to Azure, `~/.config/gcloud` to Google, `~/.docker` to Docker registries) from the reading process's tree (the reader, its ancestors, its descendants) is counted in `status.credential_owner_uses`, not flagged; `credential_owners` config.
+- Findings: one read-then-connect pattern (agent, reader, file, destination org) raises one flag per hour; repeats fold into it (`repeats`, `last_seen`) and patterns count them.
+- Findings: `.env` templates and `~/.docker/completions` (`not_secret_paths`) are not secret reads; open flags from them are acknowledged at start.
+- Console findings: a read-then-connect card names the reading process, the file and where it went (`gh (claude) read ~/.config/gh/hosts.yml, then reached Google (…)`), and its verdict says why: the destination does not own the file, no owner is on record, an agent tool read it, or a process outside the reader's tree connected. `/patterns` serves `flags` and `destinations`; read evidence carries `owners`.
 
 ### Changed
 - Event store: a flag's own event and file events on sensitive paths stay past their kind's row cap for the full retention, up to 20,000 rows per kind; `file-open`, `file-delete` and `exec` keep only their newest rows.
@@ -33,6 +37,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Console: shows the posture banner capped at 3 rows off Home and empty on Home, agent ids in their own case, Egress led by the uninspected endpoints with zero-hit rules folded into one row, and Processes at full width.
 
 ### Added
+- Expected secret reads: `Expected: gh → GitHub` on a read-then-connect finding stores that pattern (agent, reader, file, destination org) and reviews its open flags; later occurrences are counted in `status.expected_flags`, not flagged, and a new reader, file or destination still flags. `GET/POST/DELETE /expected` (NoAgent); the Policy tab lists them with Forget.
 - Console Resources: machine headroom `?` explains the score. It is the lowest of memory still available, CPU still idle, swap still free, and thermal headroom. Under 15 is critical. `headroom_limiter` names which input set the score.
 - System agent (opt-in, `system_agent` in config.yaml, applied live): a chat with a model on the local Ollama that proposes work for Claude Code, Codex, OpenClaw or Hermes Agent and dispatches it — headless in a folder or in a Terminal window — against the same Ollama. Harnesses keep their own sandbox and approvals; a proposal whose harness cannot run yet is saved as a plan with the reason. See `docs/SYSTEM_AGENT.md`.
 - Seven built-in skills for the system agent: `ssh`, `git`, `signing`, `claude`, `codex`, `openclaw`, `hermes`.

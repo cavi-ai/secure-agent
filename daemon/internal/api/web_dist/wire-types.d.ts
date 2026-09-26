@@ -51,6 +51,7 @@ export interface EvidenceItem {
   offset?: number;
   pid?: number;
   exe?: string;
+  owners?: string[];
 }
 
 export interface AdvisorVerdict {
@@ -148,12 +149,20 @@ export interface Flag {
   acknowledged?: boolean;
   ack_reason?: string;
   process?: FlagProcess;
+  repeats?: number;
+  last_seen?: string;
   explain?: FlagExplain;
 }
 
 export interface PatternProcess {
   name: string;
   launcher?: string;
+  count: number;
+}
+
+export interface PatternDestination {
+  org?: string;
+  host: string;
   count: number;
 }
 
@@ -164,6 +173,7 @@ export interface Pattern {
   title: string;
   subject: EvidenceItem;
   count: number;
+  flags: number;
   unacked: number;
   first: string;
   last: string;
@@ -176,6 +186,7 @@ export interface Pattern {
   sessions: string[];
   session_count: number;
   processes: PatternProcess[];
+  destinations?: PatternDestination[];
   disposition: Disposition;
   summary: string;
   actions: ExplainAction[];
@@ -430,6 +441,8 @@ export interface Status {
   advisor_health?: HealthSnapshot;
   tracked_processes: number;
   muted_flags: number;
+  credential_owner_uses: number;
+  expected_flags: number;
   fleet_configured?: boolean;
   unacted_flags_24h: number;
   bus_drops?: number;

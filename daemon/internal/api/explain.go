@@ -380,6 +380,9 @@ func explainWhat(f model.Flag, ex *model.FlagExplain, sess *model.Session) strin
 	}
 	switch f.Rule {
 	case "sensitive-read-then-connect":
+		if reader := readerName(evidenceOfKind(f, "read"), f.Agent); reader != "" {
+			agent = reader + " (" + agent + ")"
+		}
 		what := agent + " read " + subjectPhrase(ex.Subject)
 		if len(ex.Egress) == 0 {
 			return what + ", then connected out."
@@ -601,6 +604,9 @@ func allowHostLabel(name, host, org, agent string) string {
 // advisor suggested.
 func (a *API) explainActions(f model.Flag, ex *model.FlagExplain, env *explainEnv) []model.ExplainAction {
 	acts := []model.ExplainAction{}
+	if act, ok := a.expectAction(f); ok && !f.Acknowledged {
+		acts = append(acts, act)
+	}
 	agent := f.Agent
 	title := humanFlagTitle(f.Rule)
 

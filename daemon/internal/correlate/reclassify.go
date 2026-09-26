@@ -12,7 +12,7 @@ import (
 // ReclassifiedReadReason is stored on the sensitive-read-then-connect flags
 // the daemon acknowledges at start because none of their reads counts as a
 // secret read any more.
-const ReclassifiedReadReason = "reclassified at start: the file read is not a secret read (shell or harness config, the macOS trust store, or a keychain file opened for TLS)"
+const ReclassifiedReadReason = "reclassified at start: the file read is not a secret read (shell or harness config, a .env template, the macOS trust store, or a keychain file opened for TLS)"
 
 // byteCopyTools read a file only to move its bytes somewhere else. A keychain
 // file open by one of them is a copy of the keychain; by anything else it is
@@ -48,7 +48,8 @@ func seedsReadThenConnect(cat sensitive.Category, kind event.Kind, exe string) b
 // flags none of whose reads the current rules count as a secret read: a glob
 // the classifier no longer matches (guard rules that protect a file from
 // tampering but hold no secret, such as shell rc files and harness settings),
-// the macOS trust store, or a keychain file not opened by a byte-copy tool.
+// a .env template, a not_secret_paths directory, the macOS trust store, or a
+// keychain file not opened by a byte-copy tool.
 func StaleReadFlagIDs(flags []model.Flag, cl sensitive.Classifier) []string {
 	var ids []string
 	for _, f := range flags {
@@ -87,7 +88,7 @@ func storedReadSeeds(ev model.EvidenceItem, proc *model.FlagProcess, cl sensitiv
 		return false
 	case strings.HasPrefix(ev.Rule, "keychain:"):
 		return isByteCopyTool(exe)
-	case strings.HasPrefix(ev.Rule, "glob:"):
+	case strings.HasPrefix(ev.Rule, "glob:"), strings.HasPrefix(ev.Rule, "path:"), ev.Rule == "env-file":
 		m, ok := cl.Match(ev.Label)
 		return ok && seedsReadThenConnect(m.Category, event.KindFileOpen, exe)
 	default:

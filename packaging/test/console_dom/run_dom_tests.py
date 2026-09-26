@@ -184,6 +184,7 @@ def main():
         dom_hiddenrender = dump_dom(chrome, tmp, "?hiddenrenderprobe")
         dom_policylists = dump_dom(chrome, tmp, "?policylists")
         dom_policyempty = dump_dom(chrome, tmp, "?policylists&emptypolicy")
+        dom_forget = dump_dom(chrome, tmp, "?policylists&forgetexpected")
         dom_netfail = dump_dom(chrome, tmp, "?netfail")
         dom_tokenseed = dump_dom(chrome, tmp, "?requiretoken&tokenseed")
         dom_nofleet = dump_dom(chrome, tmp, "?nofleetdemo")
@@ -767,7 +768,17 @@ def main():
               f"guard={policy_rows('guard')} path={policy_rows('path')} mute={policy_rows('mute')}")
         check("Policy empty lists say what fills them",
               "No guard decisions yet." in dom_policyempty and "No file exceptions yet." in dom_policyempty
-              and "No muted flag classes." in dom_policyempty)
+              and "No muted flag classes." in dom_policyempty and "No expected secret reads." in dom_policyempty)
+        check("Policy lists expected secret reads with a Forget button",
+              policy_rows("expected") == 1 and 'id="badge-expected">1<' in dom_policylists
+              and "<b>gh</b> reads <code>/Users/dev/.config/gh/hosts.yml</code>, then reaches <b>GitHub</b>" in dom_policylists
+              and 'data-action="forget-expected"' in dom_policylists,
+              f"expected={policy_rows('expected')}")
+        forget_reqs = pre(dom_forget, "mock-requests")
+        check("Forget deletes the expected pattern and the list reloads without it",
+              "DELETE /expected?key=claude%7Cgh%7C%2FUsers%2Fdev%2F.config%2Fgh%2Fhosts.yml%7CGitHub" in forget_reqs
+              and 'id="badge-expected">0<' in dom_forget and "No expected secret reads." in dom_forget,
+              f"requests={forget_reqs!r}")
         check("notification rules live in the Policy tab; the bell links there",
               dom.index('id="tab-policy"') < dom.index('id="notify-rules-list"')
               and 'id="btn-notify" data-action="goto-tab" data-tab="policy"' in dom

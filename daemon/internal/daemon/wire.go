@@ -268,6 +268,19 @@ func isUnattributedFileEvent(e event.Event) bool {
 // advGet resolves the CURRENT advisor per event: config hot-reload swaps
 // the stack while the drain loop is mid-event, and a nil getter result
 // (advisor disabled) must drop routing without touching the loop itself.
+// foldFlagRepeat stores a repeat the correlator folded into an open flag and
+// pushes the updated flag to the console.
+func foldFlagRepeat(st *store.Store, deltas *api.DeltaHub) func(string, time.Time) {
+	return func(id string, at time.Time) {
+		if !st.BumpFlagRepeat(id, at) {
+			return
+		}
+		if fl, ok := st.GetFlagWithAdvisor(id); ok {
+			deltas.Publish(api.Delta{Type: "flag", Data: fl})
+		}
+	}
+}
+
 func startDrainLoop(sub <-chan event.Event, st *store.Store, cr *correlate.Correlator, pub *fleet.Publisher, res *session.Resolver, deltas *api.DeltaHub, otlpExp *otlp.Exporter, postureChanged func(), advGet func() *advisor.Subscriber) <-chan struct{} {
 	analyzer := intel.NewAnalyzer()
 	drainDone := make(chan struct{})
@@ -503,25 +516,27 @@ func buildStatusFn(proxyServer *proxy.ProxyServer, tagger *agents.Tagger, cr *co
 			}
 		}
 		return api.Status{
-			Running:           true,
-			Version:           api.Version,
-			Uptime:            time.Since(startTime).Truncate(time.Second).String(),
-			ActiveAgents:      len(roots),
-			InfraCount:        len(infraRoots),
-			Coverage:          computeCoverage(activeAgents, st),
-			Agents:            activeAgents,
-			TrackedProcesses:  len(activeAgents),
-			ProxyEnabled:      proxyActive,
-			ProxyPort:         proxyPort,
-			UninspectedEgress: cr.UninspectedEgressCountWindow(correlate.UninspectedWindow),
-			UninspectedInfra:  cr.UninspectedInfraCountWindow(correlate.UninspectedWindow),
-			AdvisorEnabled:    ah.Enabled,
-			AdvisorHealth:     &ah,
-			MutedFlags:        cr.MutedCount(),
-			FleetConfigured:   fleetOn,
-			FirewallStats:     firewallStats(eng),
-			Collectors:        reg.Snapshot(),
-			ESService:         esSvc,
+			Running:             true,
+			Version:             api.Version,
+			Uptime:              time.Since(startTime).Truncate(time.Second).String(),
+			ActiveAgents:        len(roots),
+			InfraCount:          len(infraRoots),
+			Coverage:            computeCoverage(activeAgents, st),
+			Agents:              activeAgents,
+			TrackedProcesses:    len(activeAgents),
+			ProxyEnabled:        proxyActive,
+			ProxyPort:           proxyPort,
+			UninspectedEgress:   cr.UninspectedEgressCountWindow(correlate.UninspectedWindow),
+			UninspectedInfra:    cr.UninspectedInfraCountWindow(correlate.UninspectedWindow),
+			AdvisorEnabled:      ah.Enabled,
+			AdvisorHealth:       &ah,
+			MutedFlags:          cr.MutedCount(),
+			CredentialOwnerUses: cr.CredentialOwnerUses(),
+			ExpectedFlags:       cr.ExpectedCount(),
+			FleetConfigured:     fleetOn,
+			FirewallStats:       firewallStats(eng),
+			Collectors:          reg.Snapshot(),
+			ESService:           esSvc,
 		}
 	}
 }

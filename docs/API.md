@@ -258,8 +258,12 @@ Host: unix
 #### Raising process and daemon acknowledgements
 
 - `process` — the raising process as it was when the flag was raised, kept after the process exits: `{exe, name, args0, ppid, launcher}`. `args0` is argv[0] with secret-shaped values scrubbed; no further argv, no environment. `launcher` is the nearest app bundle above the harness root, then the harness root (`"Claude.app › claude-code 2.1.281"`). Absent on flags raised before the field existed. Also on `GET /flags/{id}/explain`.
-- `evidence[].pid`, `evidence[].exe` — on `read` items, the process that opened the file; it may differ from the flag's `pid`, the process that connected out. Absent on flags raised before the fields existed.
-- `ack_reason` — why the daemon acknowledged the flag itself. At start the daemon acknowledges open `sensitive-read-then-connect` flags none of whose reads counts as a secret read, with reason `reclassified at start: …` and one `flag-reclassify` audit entry. Not a secret read: a glob that no longer counts (guard rules with `read_sensitive: false`: `shell-rc`, `harness-config`), the macOS trust store (`system-trust`), and a keychain file opened by anything but a byte-copy tool (`cat`, `cp`, `ditto`, `tar`, `curl`, `base64`, …). Empty when the operator acknowledged.
+- `evidence[].owners` — on `read` items, the orgs `credential_owners` names for the file; `sub` is `agent tool read` when an agent tool (hook-reported) read it, else `sensitive read`.
+- `evidence[].pid`, `evidence[].exe` — on `read` items, the process that opened the file; on `connect` items (`pid` only), the process that connected. The reader may differ from the flag's `pid`. Absent on flags raised before the fields existed.
+- `repeats`, `last_seen` — later occurrences of the same `sensitive-read-then-connect` pattern (agent, reader executable, first file read, first destination's org, else its host) within an hour of the flag, folded into it instead of raising new flags; `last_seen` is the newest. Each fold re-publishes the flag delta. Patterns count a flag as `1 + repeats` occurrences.
+- `status.expected_flags` — connections an operator-expected pattern covered (`/expected`). Counted, never flagged.
+- `status.credential_owner_uses` — connections judged a credential used with its owner (`credential_owners`, docs/CONFIGURATION.md): the process that opened the file (not an agent tool read), one of its ancestors or one of its descendants connected to an org that owns it. Counted, never flagged; any other connection in the same window is still cited.
+- `ack_reason` — why the daemon acknowledged the flag itself. At start the daemon acknowledges open `sensitive-read-then-connect` flags none of whose reads counts as a secret read, with reason `reclassified at start: …` and one `flag-reclassify` audit entry. Not a secret read: a glob that no longer counts (guard rules with `read_sensitive: false`: `shell-rc`, `harness-config`), a `.env` template, a `not_secret_paths` directory, the macOS trust store (`system-trust`), and a keychain file opened by anything but a byte-copy tool (`cat`, `cp`, `ditto`, `tar`, `curl`, `base64`, …). Empty when the operator acknowledged.
 
 #### Explanation stamping
 
@@ -289,12 +293,12 @@ Returns one flag (with `title` and `advisor`) plus `explain`, the daemon's plain
 
 | Field | Content |
 |---|---|
-| `what` | One sentence per rule; no pids; the destination's org over its address. |
+| `what` | One sentence per rule; no pids; the destination's org over its address. `sensitive-read-then-connect` names the reading process before the agent when the read item's `exe` is not the agent itself (`gh (Claude) read …`). |
 | `subject` | The file from the first `read`/`keychain`/`transcript` item (or a `violation` carrying a path). `category`: `env_file`, `ssh_key`, `aws_credentials`, `keychain`, `keychain_system_trust`, `other_sensitive`, `transcript`. `owner_label`: `Claude skills (~/.claude/skills)`, `Claude Code config (~/.claude)`, `Cursor config`, `opencode config`, `repo <name>` (under the session workspace), `temp directory`, `home directory`, `system`. `display`: `~`-abbreviated, middle-truncated to 64 runes. |
 | `egress` | Every `connect` item, deduped by host:port, in evidence order. `org`/`name`/`kind` from the endpoint identity table. `allowlisted`: the host is approved for the flag's agent (exact or dot-suffix match). `gap_seconds`: connect time − read time (negative when the connection came first; `0` without a read item). |
 | `context` | The flag's session (harness, repo, branch, workspace), the same-session tool call nearest the read time within ±60 s (`tool`, `tool_status`, `tool_at`), and the nearest model call within ±60 s (`model`). Absent when the flag has no session. |
-| `disposition` | One verdict, in precedence order: `acknowledged` ("Reviewed") → `benign-likely` (advisor `benign` with confidence ≥ 0.85; "Likely benign (advisor N %)", `why` = the rationale's first sentence) → `critical` (severity ≥ 3, "Act now") → `warning` ("Needs a look"). `why` is otherwise the rule title. |
-| `actions` | In order, only those that apply: `allow-host` (per destination host not yet allowlisted), `allow-path` (env/ssh/cloud/keychain files; guard rules `env-files`, `ssh-keys`, `cloud-creds`, `keychain`), `mute-rule-host` (first destination `POST /mute` accepts — IPv6 literals are not), `mute-class` (keychain rules, `host: "*"`; label "Mute keychain access for <agent>"), both with the flag's `agent` in `body` when it has one, `open-incident` (an incident holds the flag), `dismiss` (unacknowledged), `kill` (the pid is a live agent). Each carries the request (`method`, `path`, `body`) and a one-line `consequence`. `recommended` marks the action matching the advisor's `suggested_action` (`allow-host` → first `allow-host`; `mute-rule` → `mute-rule-host`, else `mute-class`; `kill-agent` → `kill`; `rotate-credentials` → `open-incident`). |
+| `disposition` | One verdict, in precedence order: `acknowledged` ("Reviewed") → `benign-likely` (advisor `benign` with confidence ≥ 0.85; "Likely benign (advisor N %)", `why` = the rationale's first sentence) → `critical` (severity ≥ 3, "Act now") → `warning` ("Needs a look"). `why` is otherwise the rule title, except `sensitive-read-then-connect` with a recorded reader: `<dest> does not own <file> (owner: <orgs>).`, `No owner is on record for <file>; the connection went to <dest>.`, `<org> owns <file>, but an agent tool read it into the model's context.`, or `<org> owns <file>, but a process outside the reader's process tree made the connection.` (owners from the read item's `owners`). |
+| `actions` | In order, only those that apply: `expect` (`sensitive-read-then-connect` with a recorded reader whose pattern is not expected yet, unacknowledged; label `Expected: <reader> → <destination>`, `POST /expected {"flag_id"}`; see Expected secret reads), `allow-host` (per destination host not yet allowlisted), `allow-path` (env/ssh/cloud/keychain files; guard rules `env-files`, `ssh-keys`, `cloud-creds`, `keychain`), `mute-rule-host` (first destination `POST /mute` accepts — IPv6 literals are not), `mute-class` (keychain rules, `host: "*"`; label "Mute keychain access for <agent>"), both with the flag's `agent` in `body` when it has one, `open-incident` (an incident holds the flag), `dismiss` (unacknowledged), `kill` (the pid is a live agent). Each carries the request (`method`, `path`, `body`) and a one-line `consequence`. `recommended` marks the action matching the advisor's `suggested_action` (`allow-host` → first `allow-host`; `mute-rule` → `mute-rule-host`, else `mute-class`; `kill-agent` → `kill`; `rotate-credentials` → `open-incident`). |
 
 ---
 
@@ -334,7 +338,7 @@ The plan: `summary`, `why` (≤ 4), `risk` (`low`, `medium`, `high`), `prevent` 
 
 An operator judgment on a finding's subject: `{"subject": "flag:<id>|incident:<id>|file:<path>", "label": "ok|not_ok", "reason": "…", "source": "mark|kill"}` (reason ≤ 200 characters; `source` defaults to `mark`). NoAgent route. Unknown subject 404, other values 400.
 
-Labels are also written by the daemon: `POST /allowlist` (ok, `allow-host`), `POST /mute` (ok, `mute`), `POST /guard/path-allow` (ok, `allow-path`), `POST /guard/resolve` (`guard-allow` ok / `guard-deny` not ok, from the pending prompt's agent, rule and path). Acknowledging a flag writes none. A label is keyed by rule, agent and pattern (the evidence path, else the destination host); the newest 5,000 are kept.
+Labels are also written by the daemon: `POST /allowlist` (ok, `allow-host`), `POST /mute` (ok, `mute`), `POST /expected` (ok, `expect`, pattern = the file), `POST /guard/path-allow` (ok, `allow-path`), `POST /guard/resolve` (`guard-allow` ok / `guard-deny` not ok, from the pending prompt's agent, rule and path). Acknowledging a flag writes none. A label is keyed by rule, agent and pattern (the evidence path, else the destination host); the newest 5,000 are kept.
 
 Where they show: a flag's `explain.labels` counts ok and not_ok on the same case (same agent and pattern, or same rule and agent without a pattern); `/advisor/plan` carries `labels` (`summary`, up to 5 `similar` ranked exact case → agent and pattern → rule and agent → pattern → rule, and a `suggestion` after 3 consistent labels: ok → the offered `allow-path` or `allow-host`; not ok → the offered `kill` and the playbook's guard rule); plan and triage prompts carry the similar labels.
 
@@ -354,7 +358,7 @@ Repeating findings: the flags one agent raised under one rule on one subject in 
 | `key` | `agent\|rule\|subject`; the `id` of the pattern's `/posture` item. |
 | `agent`, `rule`, `title` | Agent, rule id, served rule title. |
 | `subject` | Evidence item: the file `explain.subject` names (`label` = display path, `sub` = category), else the first destination host (`kind: "connect"`, `sub` = org), else empty. |
-| `count`, `unacked` | Flags in the window; unacknowledged ones. |
+| `count`, `flags`, `unacked` | Occurrences in the window (each flag plus its `repeats`); flags; unacknowledged flags. `min` compares against `count`. |
 | `first`, `last` | First and last flag timestamps. |
 | `median_gap_s`, `bursts` | Median seconds between consecutive flags; gaps under 5 s. |
 | `cadence` | Phrase for `median_gap_s`: `in bursts under a second apart`, `in bursts a few seconds apart`, `about every N seconds` (or minutes, hours). |
@@ -362,8 +366,9 @@ Repeating findings: the flags one agent raised under one rule on one subject in 
 | `pids`, `pid_count` | Busiest 5 pids; distinct pids. |
 | `sessions`, `session_count` | Busiest 5 session ids; distinct sessions. |
 | `processes` | Distinct raising processes `{name, launcher, count}` from the flags' `process`, `count` = distinct pids; busiest 5. `[]` when no flag carries one. |
+| `destinations` | `sensitive-read-then-connect` only: `{org, host, count}` per org (else host) the flags' `connect` items reached, `count` = flags citing it; busiest 5. |
 | `disposition` | Worst among unacknowledged flags (`critical` > `warning` > `benign-likely`); `acknowledged` when `unacked` is 0. |
-| `summary` | One sentence: agent, action, count, local time window, processes and sessions, cadence. No flag ids. |
+| `summary` | One sentence: agent, action, count, local time window, processes and sessions, cadence. No flag ids. `sensitive-read-then-connect`: `<reader> (<agent>) read <file>, then reached <org> (<host>) [and N more destinations] …`. |
 | `actions` | `explain.actions` shapes, in order, only those that apply: `allow-host` (egress subject not yet allowlisted), `mute-rule-host` (egress subject) or `mute-class` (keychain rules), both with the pattern's `agent` in `body`, `dismiss-all` (`POST /flags/acknowledge` `{"flag_ids"}`, the open ids, at most 500), `kill` (busiest live pid). `recommended`: `benign-likely` → `allow-host`, else the mute; `critical` → `kill`. |
 | `flag_ids` | Covered flag ids, open first, newest first, at most 500. |
 
@@ -1116,6 +1121,16 @@ never, `null`/absent = back to default. Rule ids must match
 `^[A-Za-z0-9_.-]+$`. Persisted at `~/.config/secure-agent/notify-rules.json`
 (0600, atomic); sets and clears are audited (`notify-rule-set` /
 `notify-rule-clear`).
+
+### Expected secret reads (`/expected`)
+
+A `sensitive-read-then-connect` pattern the operator marked expected: the agent, the reader (`reader`: the executable's base name, or `tool` for an agent tool read), the file (`path`) and the destination (`dest`: the endpoint identity org, else the host). Later occurrences of exactly that pattern are counted in `status.expected_flags` and not flagged; a new reader, file or destination still flags. Only the operator adds one: NoAgent route, `POST` a pinned-UI mutation, `DELETE` console-admitted.
+
+- `GET /expected` — `[{key, agent, reader, path, dest, created_at, hits, last_seen}]`, oldest first. `hits` and `last_seen` count matches since the daemon started.
+- `POST /expected {"flag_id"}` — stores the pattern the flag stands for (its first `read` and `connect` items), acknowledges every open flag of that pattern, writes an ok `expect` label and an `expect-add` audit entry; returns the entry. `404` unknown flag; `422` when the flag is not `sensitive-read-then-connect` or its read item records no reader.
+- `DELETE /expected?key=<key>` — forgets it (`expect-remove` audit); `404` when not stored.
+
+Stored at `~/.config/secure-agent/expected.json` (0600, atomic). The console's Policy tab lists them with Forget; findings offer `Expected: <reader> → <destination>`.
 
 ### Muting flag classes (`host: "*"`)
 

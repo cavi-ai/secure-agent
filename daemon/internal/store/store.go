@@ -408,10 +408,10 @@ func Open(dbPath, jsonlPath string) (*Store, error) {
 		}
 		log.Printf("store: migrated flags: added acknowledged column")
 	}
-	// Flags gain the daemon's own acknowledge reason and the raising
-	// process snapshot (JSON), the latter so a finding still names its
-	// process after the process exits.
-	for _, col := range []string{"ack_reason", "process"} {
+	// Flags gain the daemon's own acknowledge reason, the raising process
+	// snapshot (JSON), so a finding still names its process after the
+	// process exits, and the repeats folded into the flag.
+	for _, col := range []string{"ack_reason", "process", "repeats", "last_seen"} {
 		var n int
 		if err := db.QueryRow(
 			`SELECT COUNT(*) FROM pragma_table_info('flags') WHERE name=?`, col,
@@ -420,7 +420,11 @@ func Open(dbPath, jsonlPath string) (*Store, error) {
 			return nil, fmt.Errorf("failed to inspect flags schema: %w", err)
 		}
 		if n == 0 {
-			if _, err := db.Exec(`ALTER TABLE flags ADD COLUMN ` + col + ` TEXT`); err != nil {
+			typ := "TEXT"
+			if col == "repeats" {
+				typ = "INTEGER"
+			}
+			if _, err := db.Exec(`ALTER TABLE flags ADD COLUMN ` + col + ` ` + typ); err != nil {
 				db.Close()
 				return nil, fmt.Errorf("failed to migrate flags.%s: %w", col, err)
 			}
@@ -979,18 +983,45 @@ func decodeFlagProcess(raw string) *model.FlagProcess {
 	return &p
 }
 
+func setFlagRepeats(fl *model.Flag, repeats sql.NullInt64, lastSeen sql.NullString) {
+	fl.Repeats = int(repeats.Int64)
+	if t, err := time.Parse(time.RFC3339Nano, lastSeen.String); err == nil {
+		fl.LastSeen = &t
+	}
+}
+
+// BumpFlagRepeat folds one more occurrence into flag id: repeats + 1 and
+// last_seen = at when at is newer. False when no such flag is stored.
+func (s *Store) BumpFlagRepeat(id string, at time.Time) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	res, err := s.db.Exec(
+		`UPDATE flags SET repeats = COALESCE(repeats, 0) + 1,
+		 last_seen = CASE WHEN last_seen IS NULL OR datetime(last_seen) < datetime(?) THEN ? ELSE last_seen END
+		 WHERE id = ?`,
+		at.UTC().Format(time.RFC3339Nano), at.UTC().Format(time.RFC3339Nano), id)
+	if err != nil {
+		log.Printf("store: flag repeat %s: %v", id, err)
+		return false
+	}
+	n, _ := res.RowsAffected()
+	return n == 1
+}
+
 func (s *Store) GetFlag(id string) (model.Flag, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	row := s.db.QueryRow(
-		`SELECT id, rule, severity, ts, pid, agent, session_id, workspace, evidence, acknowledged, ack_reason, process FROM flags WHERE id = ?`, id)
+		`SELECT id, rule, severity, ts, pid, agent, session_id, workspace, evidence, acknowledged, ack_reason, process, repeats, last_seen FROM flags WHERE id = ?`, id)
 	var fl model.Flag
 	var tsStr, evStr string
 	var sessionID, workspace sql.NullString
-	var ack, ackReason, proc sql.NullString
-	if err := row.Scan(&fl.ID, &fl.Rule, &fl.Severity, &tsStr, &fl.PID, &fl.Agent, &sessionID, &workspace, &evStr, &ack, &ackReason, &proc); err != nil {
+	var ack, ackReason, proc, lastSeen sql.NullString
+	var repeats sql.NullInt64
+	if err := row.Scan(&fl.ID, &fl.Rule, &fl.Severity, &tsStr, &fl.PID, &fl.Agent, &sessionID, &workspace, &evStr, &ack, &ackReason, &proc, &repeats, &lastSeen); err != nil {
 		return model.Flag{}, false
 	}
+	setFlagRepeats(&fl, repeats, lastSeen)
 	fl.SessionID = sessionID.String
 	fl.Workspace = workspace.String
 	fl.Acknowledged = ack.String != ""
@@ -1020,7 +1051,7 @@ func (s *Store) QueryFlags(f FlagFilter) []model.Flag {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	q := `SELECT id, rule, severity, ts, pid, agent, session_id, workspace, evidence, acknowledged, ack_reason, process FROM flags WHERE 1=1`
+	q := `SELECT id, rule, severity, ts, pid, agent, session_id, workspace, evidence, acknowledged, ack_reason, process, repeats, last_seen FROM flags WHERE 1=1`
 	var args []any
 	if f.Agent != "" {
 		q += " AND agent = ?"
@@ -1063,8 +1094,10 @@ func (s *Store) QueryFlags(f FlagFilter) []model.Flag {
 		var fl model.Flag
 		var tsStr, evStr string
 		var sessionID, workspace sql.NullString
-		var ack, ackReason, proc sql.NullString
-		if err := rows.Scan(&fl.ID, &fl.Rule, &fl.Severity, &tsStr, &fl.PID, &fl.Agent, &sessionID, &workspace, &evStr, &ack, &ackReason, &proc); err == nil {
+		var ack, ackReason, proc, lastSeen sql.NullString
+		var repeats sql.NullInt64
+		if err := rows.Scan(&fl.ID, &fl.Rule, &fl.Severity, &tsStr, &fl.PID, &fl.Agent, &sessionID, &workspace, &evStr, &ack, &ackReason, &proc, &repeats, &lastSeen); err == nil {
+			setFlagRepeats(&fl, repeats, lastSeen)
 			fl.SessionID = sessionID.String
 			fl.Workspace = workspace.String
 			fl.TS, _ = time.Parse(time.RFC3339Nano, tsStr)
