@@ -558,6 +558,32 @@ def test_prompt_daemon_allows():
     assert out.get("permission") == "allow", out
 
 
+def test_guard_query_carries_session_id():
+    requests = []
+    d = tempfile.mkdtemp()
+    sock = os.path.join(d, "daemon.sock")
+    class H(socketserver.BaseRequestHandler):
+        def handle(self):
+            raw = self.request.recv(65536)
+            requests.append(json.loads(raw.split(b"\r\n\r\n", 1)[1]))
+            body = b'{"verdict":"allow","scope":"once"}'
+            self.request.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s" % (len(body), body))
+    srv = socketserver.UnixStreamServer(sock, H)
+    thread = threading.Thread(target=srv.serve_forever, daemon=True)
+    thread.start()
+    try:
+        payload = read(os.path.join(HOME, ".aws/credentials"))
+        payload["session_id"] = "session-123"
+        out = run(payload, env=_prompt_env(sock))
+    finally:
+        srv.shutdown()
+        srv.server_close()
+    assert out.get("permission") == "allow", out
+    assert requests[0]["session_id"] == "session-123", requests
+    rec = json.loads(open(os.path.join(HOME, "activity.jsonl")).read().strip().split("\n")[-1])
+    assert rec["tool"] == "secret-guard-broker:allow", rec
+
+
 def test_prompt_daemon_malformed_response_denies():
     # A daemon that returns valid JSON that is NOT an object (a bare string here,
     # not {"verdict": ...}) must never be treated as an allow. The guard fails
@@ -605,6 +631,7 @@ def test_prompt_deadline_is_configurable_and_fails_safe():
 
 
 EXTRA_TESTS += [
+    test_guard_query_carries_session_id,
     test_prompt_daemon_down_claude_asks,
     test_prompt_daemon_down_cursor_denies,
     test_prompt_daemon_allows,

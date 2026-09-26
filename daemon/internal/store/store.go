@@ -257,6 +257,7 @@ func Open(dbPath, jsonlPath string) (*Store, error) {
 			episode_json TEXT NOT NULL
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_resource_episodes_captured_at ON resource_episodes(captured_at);`,
+		guardDecisionsSchema,
 		sessionsSchema,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status, last_seen_at);`,
 		worktreeReposSchema,

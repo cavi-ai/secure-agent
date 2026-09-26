@@ -20,12 +20,13 @@ type Decision struct {
 }
 
 type Pending struct {
-	ID     string `json:"id"`
-	Agent  string `json:"agent"`
-	Tool   string `json:"tool"`
-	Path   string `json:"path"`
-	RuleID string `json:"rule_id"`
-	TS     string `json:"ts"`
+	ID        string `json:"id"`
+	SessionID string `json:"session_id,omitempty"`
+	Agent     string `json:"agent"`
+	Tool      string `json:"tool"`
+	Path      string `json:"path"`
+	RuleID    string `json:"rule_id"`
+	TS        string `json:"ts"`
 	// ScopeText tells the user what an "allow always" would cover, so the
 	// prompt discloses its blast radius instead of leaving it implied.
 	ScopeText string `json:"scope_text,omitempty"`
@@ -44,7 +45,7 @@ type waiter struct {
 // identical request shares the first one's waiter instead of stacking a
 // duplicate dialog.
 func dedupKey(p Pending) string {
-	return p.Agent + "\x00" + p.RuleID + "\x00" + p.Path + "\x00" + p.Tool
+	return p.SessionID + "\x00" + p.Agent + "\x00" + p.RuleID + "\x00" + p.Path + "\x00" + p.Tool
 }
 
 // Broker bridges a blocked hook request to an async user decision made in the
