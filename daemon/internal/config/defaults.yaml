@@ -59,9 +59,10 @@ vendor_allowlist:
   copilot:     ["githubcopilot.com", "copilot-proxy.githubusercontent.com"]
   ollama:      ["ollama.com", "ollama.ai"]
   lm-studio:   ["lmstudio.ai"]
-# The orgs each credential is meant for (correlate.Identify names). The
-# process that read the file connecting to one of them is counted as the
-# credential in use; any other destination, or another process, still flags.
+# The orgs each credential is meant for (correlate.Identify names). A
+# connection to one of them from the reader's process tree (the reader, its
+# ancestors, its descendants) is counted as the credential in use; any other
+# destination, or a process outside that tree, still flags.
 credential_owners:
   - { path: "~/.config/gh/hosts.yml", orgs: ["GitHub"] }
   - { path: "~/.aws",                 orgs: ["AWS", "AWS CloudFront"] }

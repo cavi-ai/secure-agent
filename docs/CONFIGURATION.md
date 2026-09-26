@@ -104,7 +104,7 @@ vendor_allowlist:
 ---
 
 ### `credential_owners` (List of Objects)
-The orgs each credential file, or every file under a directory, is meant for, spelled as the endpoint identity table names them (the `org` a flag explanation shows under `egress`). When the process that read the file connects to one of them, the connection is counted in `status.credential_owner_uses` and not flagged. Another process in the agent family, an agent tool read of the file, or any other destination still flags.
+The orgs each credential file, or every file under a directory, is meant for, spelled as the endpoint identity table names them (the `org` a flag explanation shows under `egress`). When the process that read the file, one of its ancestors or one of its descendants connects to one of them (git-remote-https running gh as its credential helper), the connection is counted in `status.credential_owner_uses` and not flagged. A process outside that tree, an agent tool read of the file, or any other destination still flags.
 
 ```yaml
 credential_owners:
