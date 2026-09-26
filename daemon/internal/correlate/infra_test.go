@@ -20,10 +20,17 @@ func TestInfraOrg(t *testing.T) {
 		"lb-140-82-113-4-iad.github.com":            "GitHub",
 		"140.82.113.4":                              "GitHub",
 		"e13678.dscb.akamaiedge.net":                "Akamai",
-		"evil-1e100.net.attacker.com":               "",
-		"registry.npmjs.org":                        "",
-		"logs.example.com":                          "",
-		"8.8.8.8":                                   "",
+		// Literals without a PTR, seen live as "unknown" egress.
+		"162.159.134.234":                       "Cloudflare",
+		"2606:50c0:8002::154":                   "GitHub",
+		"2600:9000:27a1:8c00:17:b174:6d00:93a1": "AWS CloudFront",
+		"185.199.108.133":                       "GitHub",
+		"151.101.1.194":                         "Fastly",
+		"2a04:4e42::485":                        "Fastly",
+		"evil-1e100.net.attacker.com":           "",
+		"registry.npmjs.org":                    "",
+		"logs.example.com":                      "",
+		"8.8.8.8":                               "",
 	}
 	for host, want := range cases {
 		if got := InfraOrg(host); got != want {
@@ -91,6 +98,24 @@ func TestIdentify(t *testing.T) {
 	// agent's own API carrier.
 	if id := Identify("registry.npmjs.org"); id.Org != "npm registry" {
 		t.Fatalf("npm = %+v", id)
+	}
+}
+
+// An address the coverage headline files under an infra org is identified as
+// that org too, so the Egress row and its identity never disagree.
+func TestIdentifyNamesEveryInfraPrefix(t *testing.T) {
+	orig := lookupAddr
+	t.Cleanup(func() { lookupAddr = orig })
+	ptrCache = sync.Map{}
+	lookupAddr = func(context.Context, string) ([]string, error) { return nil, errors.New("no ptr") }
+	for _, r := range infraCIDRs {
+		host := r.prefix.Addr().Next().String()
+		if got := InfraOrg(host); got != r.org {
+			t.Errorf("InfraOrg(%s in %s) = %q, want %q", host, r.prefix, got, r.org)
+		}
+		if id := Identify(host); id.Org != r.org {
+			t.Errorf("Identify(%s in %s).Org = %q, want %q", host, r.prefix, id.Org, r.org)
+		}
 	}
 }
 
