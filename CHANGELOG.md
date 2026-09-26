@@ -6,6 +6,10 @@ All notable changes to `secure-agent` are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- Findings: a macOS trust-store read, or a keychain file opened by a TLS client, no longer counts as a secret read for "read a secret, then connected out"; a keychain file opened by a byte-copy tool (`cat`, `cp`, `tar`, `curl`, …) or read by an agent tool still does. Open flags from those reads are acknowledged at start.
+- Findings: a read item names the process that opened the file (`evidence[].pid`, `evidence[].exe`), not the process that connected out.
+
 ### Changed
 - Event store: a flag's own event and file events on sensitive paths stay past their kind's row cap for the full retention, up to 20,000 rows per kind; `file-open`, `file-delete` and `exec` keep only their newest rows.
 - Row budgets: file writes 150,000 (was 10,000), connection opens and closes 30,000 each (was 5,000).
