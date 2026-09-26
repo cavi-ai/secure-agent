@@ -1834,6 +1834,7 @@ function policyListHTML(kind, rows, st) {
     guard: 'No guard decisions yet. Answering a guard prompt with Always allow or Always deny stores one here.',
     path: 'No file exceptions yet. Always allow this file, on a finding, adds one here.',
     mute: 'No muted flag classes. Stop flagging this, on a finding, adds one here.',
+    expected: 'No expected secret reads. Expected, on a read-then-connect finding, adds one here.',
   };
   if (!rows.length) return `<div class="empty"><span>${EMPTY[kind]}</span></div>`;
   const row = (main, sub, meta) => `<div class="policy-row"><div class="policy-row-main">${main}</div>`
@@ -1846,6 +1847,13 @@ function policyListHTML(kind, rows, st) {
     }
     if (kind === 'path') {
       return row(`<code>${escapeHTML(r.path || '')}</code>`, `${escapeHTML(r.rule_id || '')} for ${escapeHTML(r.agent || '')}`, when(r));
+    }
+    if (kind === 'expected') {
+      const reader = r.reader === 'tool' ? 'an agent tool' : (r.reader || '');
+      const hits = Number(r.hits) || 0;
+      return row(`<b>${escapeHTML(reader)}</b> reads <code>${escapeHTML(r.path || '')}</code>, then reaches <b>${escapeHTML(r.dest || '')}</b>`,
+        `${escapeHTML(r.agent || '')} · ${hits} since the daemon started`,
+        `${when(r)} <button class="source-remove" title="Forget: flag this pattern again" data-action="forget-expected" data-key="${escapeHTML(r.key || '')}"><svg class="icon"><use href="#i-close"/></svg></button>`);
     }
     const scope = (r.host === '*' ? 'all hosts' : escapeHTML(r.host || '')) + ' · ' + (r.agent ? escapeHTML(r.agent) : 'all agents');
     return row(`<b>${escapeHTML(r.title || r.rule || '')}</b>`, scope, '');

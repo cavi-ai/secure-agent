@@ -172,7 +172,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 	// inspection and surfaced as per-rule stats in status.
 	fw := setupFirewall(cfg)
 
-	allowlistStore, muteStore := wireEgressOverrides(cfg, correlator, advisorStk)
+	allowlistStore, muteStore, expectStore := wireEgressOverrides(cfg, correlator, advisorStk)
 	st.SetAllowlistSource(allowlistStore.Load)
 
 	var proxyServer *proxy.ProxyServer
@@ -243,6 +243,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 		Correlator:   correlator,
 		Allowlist:    allowlistStore,
 		Mutes:        muteStore,
+		Expected:     expectStore,
 		NotifyRules:  notifyRuleStore,
 		NotifyScopes: notifyScopeStore,
 		Retriage:     retriageFuncs,
@@ -617,18 +618,20 @@ func runResourceLoop(ctx context.Context, tagger *agents.Tagger, resolver *sessi
 // wireEgressOverrides attaches allowlist/mute stores to the correlator and
 // arms advisor pre-assessment. The hook resolves the subscriber per call:
 // hot-reload swaps the stack, and a stale capture panics on nil.
-func wireEgressOverrides(cfg config.Config, correlator *correlate.Correlator, advisorStk *advisorStackHolder) (*correlate.AllowlistStore, *correlate.MuteStore) {
+func wireEgressOverrides(cfg config.Config, correlator *correlate.Correlator, advisorStk *advisorStackHolder) (*correlate.AllowlistStore, *correlate.MuteStore, *correlate.ExpectStore) {
 	stateDir := filepath.Dir(cfg.Firewall.Registry.SaltRef)
 	allowlistStore := correlate.NewAllowlistStore(filepath.Join(stateDir, "allowlist-overrides.json"))
 	correlator.SetAllowlistOverrides(func(agent string) []string { return allowlistStore.Load()[agent] })
 	muteStore := correlate.NewMuteStore(filepath.Join(stateDir, "muted.json"))
 	correlator.SetMuteChecker(muteStore.Muted)
+	expectStore := correlate.NewExpectStore(filepath.Join(stateDir, "expected.json"))
+	correlator.SetExpected(expectStore.Match)
 	correlator.SetOnUninspected(func(agent, host string) {
 		if sub := advisorStk.Load().Sub; sub != nil {
 			sub.EnqueueHost(agent, host)
 		}
 	})
-	return allowlistStore, muteStore
+	return allowlistStore, muteStore, expectStore
 }
 
 // buildAdvisorHooks wires the advisor-facing API closures; each resolves

@@ -442,6 +442,7 @@ export interface Status {
   tracked_processes: number;
   muted_flags: number;
   credential_owner_uses: number;
+  expected_flags: number;
   fleet_configured?: boolean;
   unacted_flags_24h: number;
   bus_drops?: number;

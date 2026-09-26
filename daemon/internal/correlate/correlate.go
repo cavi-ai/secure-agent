@@ -97,6 +97,8 @@ type Correlator struct {
 	repeats       []flagRepeat
 	onRepeat      func(flagID string, at time.Time)
 	ownerUseCount int
+	isExpected    func(keys []string, at time.Time) bool
+	expectedCount int
 }
 
 func New(tagger *agents.Tagger, classifier sensitive.Classifier, cfg config.Config) *Correlator {

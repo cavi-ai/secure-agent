@@ -604,6 +604,9 @@ func allowHostLabel(name, host, org, agent string) string {
 // advisor suggested.
 func (a *API) explainActions(f model.Flag, ex *model.FlagExplain, env *explainEnv) []model.ExplainAction {
 	acts := []model.ExplainAction{}
+	if act, ok := a.expectAction(f); ok && !f.Acknowledged {
+		acts = append(acts, act)
+	}
 	agent := f.Agent
 	title := humanFlagTitle(f.Rule)
 
