@@ -780,6 +780,11 @@ def main():
         check("whole-machine headroom is visible",
               "Machine headroom" in resource_view and "25 / 100" in resource_view
               and "4.0 GB available" in resource_view)
+        check("headroom hint explains the score is the tightest limit",
+              'class="headroom-hint"' in resource_view
+              and 'aria-label="What machine headroom means"' in resource_view
+              and "tightest limit, not free RAM" in resource_view
+              and "Under 15 is critical" in resource_view)
         check("live resources exclude the flight recorder",
               "Pressure flight recorder" not in resource_view)
         check("agent and non-agent memory are separated",

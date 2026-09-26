@@ -40,7 +40,7 @@ const {
   endpointIdentityLine, endpointDetailHTML,
   sessionTitle, groupSessionsByHarness, applySessionFilters, familySize,
   sessionGroupCounts, sessionCountStrip, harnessPillsHTML, middleTruncate,
-  hbarsHTML, sessionWaterfallHTML, applyInlineMetrics, resourceHostContextHTML,
+  hbarsHTML, sessionWaterfallHTML, applyInlineMetrics, resourceHostContextHTML, headroomHintText,
   fmtUSD, topCostRows,
   familyLabel, cappedList, resourceNeedsAttention, resourceFamilyGroups,
   memoryRowsByFamily, renderChartMemory,
@@ -681,6 +681,15 @@ test('white marks keep at least 3:1 contrast on every brand tile', () => {
   }
 });
 
+test('event-rate label keeps one width as the speed changes', () => {
+  const rule = styleCSS.match(/\.spark-v\s*\{[^}]*\}/);
+  assert.ok(rule, 'missing .spark-v rule');
+  assert.match(rule[0], /width:\s*7ch/);
+  assert.match(rule[0], /max-width:\s*7ch/);
+  assert.match(rule[0], /tabular-nums/);
+  assert.doesNotMatch(rule[0], /min-width:\s*3ch/);
+});
+
 test('style.css tile colors match harnessMeta for every known harness', () => {
   for (const key of KNOWN_HARNESSES) {
     const m = harnessMeta(key);
@@ -932,6 +941,25 @@ test('sessionTitle names the work, never the harness', () => {
 // ---------- CSP: no inline style attributes ----------
 // The daemon serves the console with style-src 'self', which drops style
 // attributes parsed from markup; sizes ride in data attributes instead.
+
+test('headroom hint explains a critical score while RAM remains', () => {
+  const host = {
+    headroom_score: 10, capacity: 'critical', headroom_limiter: 'swap',
+    memory_pressure: 'critical', total_memory_bytes: 128 * 1024 ** 3,
+  };
+  const text = headroomHintText(host);
+  assert.match(text, /tightest limit, not free RAM/);
+  assert.match(text, /Under 15 is critical/);
+  assert.match(text, /swap at least 80% full/);
+  assert.match(text, /Right now the score is swap still free/);
+  assert.match(text, /plenty of RAM is still available/);
+  const html = resourceHostContextHTML(host);
+  assert.match(html, /class="headroom-hint"/);
+  assert.match(html, /aria-label="What machine headroom means"/);
+  assert.match(html, /10 \/ 100/);
+  assert.match(html, />critical</);
+  assert.equal(headroomHintText({}).includes('Right now'), false);
+});
 
 test('percentage-sized renderers emit no style attributes', () => {
   const html = {
