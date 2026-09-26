@@ -7,6 +7,9 @@ All notable changes to `secure-agent` are documented here. The format follows
 ## [Unreleased]
 
 ### Changed
+- Event store: a flag's own event and file events on sensitive paths stay past their kind's row cap for the full retention, up to 20,000 rows per kind; `file-open`, `file-delete` and `exec` keep only their newest rows.
+- Row budgets: file writes 150,000 (was 10,000), connection opens and closes 30,000 each (was 5,000).
+- `/doctor` retention fails when record rows, or a kind other than `file-open`, `file-delete` and `exec`, are evicted inside a day; it passes naming how far back those three kinds' newest rows reach.
 - File telemetry: a write burst the reader skips reads as "File monitoring is falling behind" after 60 s, not as a flooding writer; `es_service.unparsed_share` counts only lines the reader parsed; `es_service.flooding_since` added.
 - Console header event rate keeps a fixed width, so the status chip does not shift as events per second change.
 - Console switches set `-webkit-user-select` so Safari does not select the switch label.

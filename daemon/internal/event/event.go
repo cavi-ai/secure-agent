@@ -102,4 +102,9 @@ type Event struct {
 	// (store.PutEvent upserts on (session_id, call_id)), and a transcript
 	// re-read cannot duplicate a call. Empty for non-tool events.
 	CallID string `json:"call_id,omitempty"`
+	// Record marks the event as part of the security record: it raised a
+	// flag or touched a sensitive path. The store keeps record rows past
+	// their kind's row budget (time retention still applies); never
+	// serialized.
+	Record bool `json:"-"`
 }

@@ -11,13 +11,23 @@ import (
 // Read-only stats behind GET /doctor. Each answers one coverage question
 // about the stored data; none of them writes.
 
-// KindRetention is one event kind's stored row count against its row budget.
+// KindRetention is one event kind's stored row count against its row budget,
+// and its record rows (event.Record) against theirs.
 type KindRetention struct {
-	Kind     int
-	Name     string
-	Rows     int
-	Budget   int
-	OldestTS string // RFC3339 UTC of the oldest row; "" when unparseable
+	Kind   int
+	Name   string
+	Rows   int // every row of the kind, record rows included
+	Budget int
+	// HorizonTS is the RFC3339 UTC time of the Budget-th newest row: how far
+	// back the row cap keeps the kind. "" while the kind is under budget.
+	HorizonTS string
+	// Ring: the kind's newest Budget rows cover minutes under load; only its
+	// record rows are expected to keep a day.
+	Ring         bool
+	RecordRows   int
+	RecordBudget int
+	// RecordHorizonTS is HorizonTS for the record rows alone.
+	RecordHorizonTS string
 }
 
 func (s *Store) doctorCount(q string, args ...any) int {
@@ -147,30 +157,53 @@ func (s *Store) SessionsSeenByHarness(since time.Time) map[string]int {
 		GROUP BY harness`, model.ConfTranscript, model.ConfHook, at, model.SessionEnded, at)
 }
 
-// RetentionReport lists every event kind present with its row count, its row
-// budget and its oldest row's timestamp, ordered by kind. Never nil.
+// RetentionReport lists every event kind present with its row and record
+// counts, their budgets and how far back each cap keeps the kind, ordered by
+// kind. Never nil.
 func (s *Store) RetentionReport() []KindRetention {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := []KindRetention{}
-	rows, err := s.db.Query(`SELECT kind, COUNT(*), COALESCE(MIN(datetime(ts)),'') FROM events GROUP BY kind ORDER BY kind`)
+	rows, err := s.db.Query(`SELECT kind, COUNT(*), SUM(record) FROM events GROUP BY kind ORDER BY kind`)
 	if err != nil {
 		log.Printf("store: retention report error: %v", err)
 		return out
 	}
-	defer rows.Close()
 	for rows.Next() {
 		var r KindRetention
-		var oldest string
-		if rows.Scan(&r.Kind, &r.Rows, &oldest) != nil {
+		if rows.Scan(&r.Kind, &r.Rows, &r.RecordRows) != nil {
 			continue
 		}
 		r.Name = event.Kind(r.Kind).String()
 		r.Budget = kindBudget(r.Kind)
-		if t, err := time.Parse(time.DateTime, oldest); err == nil {
-			r.OldestTS = t.UTC().Format(time.RFC3339)
-		}
+		r.Ring = ringKinds[r.Kind]
+		r.RecordBudget = recordBudget
 		out = append(out, r)
 	}
+	if err := rows.Err(); err != nil {
+		log.Printf("store: retention report: %v", err)
+	}
+	rows.Close()
+	// The same seeks the prune runs: the budget-th newest row is the oldest
+	// one the cap keeps.
+	for i := range out {
+		r := &out[i]
+		r.HorizonTS = s.nthNewestTSLocked(`SELECT datetime(ts) FROM events WHERE kind = ? ORDER BY id DESC LIMIT 1 OFFSET ?`, r.Kind, r.Budget-1)
+		r.RecordHorizonTS = s.nthNewestTSLocked(`SELECT datetime(ts) FROM events WHERE kind = ? AND record = 1 ORDER BY id DESC LIMIT 1 OFFSET ?`, r.Kind, r.RecordBudget-1)
+	}
 	return out
+}
+
+// nthNewestTSLocked runs a one-row timestamp query and returns it as RFC3339
+// UTC, or "" when there is no such row. Caller holds mu.
+func (s *Store) nthNewestTSLocked(q string, kind, offset int) string {
+	var ts string
+	if err := s.db.QueryRow(q, kind, offset).Scan(&ts); err != nil {
+		return ""
+	}
+	t, err := time.Parse(time.DateTime, ts)
+	if err != nil {
+		return ""
+	}
+	return t.UTC().Format(time.RFC3339)
 }

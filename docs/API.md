@@ -652,7 +652,7 @@ Each check has a `state` of `pass`, `fail` or `skip`, a `detail`, and on `fail` 
 | `session-rate` | sessions created in the last hour exceed 2 × agents + 10 | grace, or no agents |
 | `tool-pairing` | any `(session_id, call_id)` pair is stored twice, or a tool-call row since boot has no call id | — |
 | `pricing` | under 90% of `claude-*` model calls carry a cost (detail also reports unpriced calls over all models) | no Claude model calls |
-| `retention` | an event kind is at its row budget and its oldest row is under 24h old | — |
+| `retention` | a row cap keeps under 24h: any kind's record rows (a flag's own event, a file event on a sensitive path) at their 20,000-row budget, or a kind other than `file-open`, `file-delete` and `exec` at its row budget; passes naming how far back those three kinds' newest rows reach | — |
 | `egress-routing` | the proxy is on and endpoints were reached outside it (proxy off passes as `proxy off — egress not inspected`) | — |
 | `bus` | subscribers dropped events on full buffers | — |
 
