@@ -526,6 +526,35 @@ func TestOnTaggedRunsOutsideTheLock(t *testing.T) {
 	}
 }
 
+// A dead pid (never in the table, ps.Info always fails for it) tagged
+// repeatedly costs one Info call, not one per Tag call: the miss is cached
+// negative until the next Refresh prunes it (the pid is still absent then).
+func TestTagCachesNegativeResultForDeadPID(t *testing.T) {
+	src := &countingProcSource{procs: map[int32]ProcInfo{
+		1: {PID: 1, PPID: 0, Comm: "launchd"},
+	}}
+	c, _ := config.Load("/nonexistent")
+	tg := New(c, src)
+	tg.Refresh()
+
+	for i := 0; i < 100; i++ {
+		if _, ok := tg.Tag(9999); ok {
+			t.Fatal("Tag(9999) tagged a pid absent from both table and source")
+		}
+	}
+	if src.infoCalls != 1 {
+		t.Fatalf("Info called %d times tagging a dead pid 100x, want 1 (cached after the first miss)", src.infoCalls)
+	}
+
+	tg.Refresh() // pid still absent from the source: the negative entry is pruned
+	if _, ok := tg.Tag(9999); ok {
+		t.Fatal("Tag(9999) tagged after refresh pruned the negative cache")
+	}
+	if src.infoCalls != 2 {
+		t.Fatalf("Info called %d times after refresh re-evaluated the still-dead pid, want 2", src.infoCalls)
+	}
+}
+
 func TestRefreshRetriesPreviouslyUntaggedPID(t *testing.T) {
 	fake := fakeProcs{
 		200: {PID: 200, PPID: 100, Exe: "/usr/local/bin/node"},
