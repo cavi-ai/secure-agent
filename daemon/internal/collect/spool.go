@@ -25,11 +25,13 @@ import (
 // scanned line by line.
 const spoolDrainBudget = 4 << 20 // 4 MiB
 
-// SpoolStats are the tailer's counters from its most recent drain: how many
-// lines it saw, how many parsed, how many it skipped past the per-tick
-// budget without attempting to parse, and how many bytes that was.
-// FloodSince is zero unless the tailer is currently having to skip; it is
-// set the first tick that skips and cleared the first tick that drains
+// SpoolStats are the tailer's counters from its most recent drain. Lines and
+// Parsed count only the lines the scanner actually read and attempted to
+// parse — Skipped and BytesSkipped (lines and bytes dropped in bulk past the
+// per-tick budget, never handed to the scanner) are NOT folded into Lines, so
+// a burst of valid lines the tailer had to skip never reads as unparsed
+// garbage. FloodSince is zero unless the tailer is currently having to skip;
+// it is set the first tick that skips and cleared the first tick that drains
 // fully within budget.
 type SpoolStats struct {
 	Lines        uint64
@@ -76,9 +78,13 @@ type ESServiceSnapshot struct {
 	// tailer is having to skip past its per-tick budget; UnparsedShare is
 	// the fraction of lines in the last drain that did not parse.
 	// BytesSkipped is how many tail bytes the last drain skipped in bulk.
-	Flooding      bool    `json:"flooding"`
-	UnparsedShare float64 `json:"unparsed_share"`
-	BytesSkipped  uint64  `json:"bytes_skipped"`
+	// FloodingSince is nil unless Flooding is true; it carries the tailer's
+	// SpoolStats.FloodSince so posture/doctor can tell a short burst (normal
+	// load) from a reader that has been falling behind for a while.
+	Flooding      bool       `json:"flooding"`
+	UnparsedShare float64    `json:"unparsed_share"`
+	BytesSkipped  uint64     `json:"bytes_skipped"`
+	FloodingSince *time.Time `json:"flooding_since,omitempty"`
 }
 
 // SpoolState renders the spool facts for humans ("3.2 MB, updated 12 min ago").
@@ -382,7 +388,7 @@ func (t *SpoolTailer) drainOnce(offset int64) int64 {
 		// counted by newline, never handed to the scanner or the parser.
 		skipTo, skippedLines, skippedBytes := skipTail(f, resume, st.Size())
 		t.recordDrain(SpoolStats{
-			Lines:        linesThisTick + skippedLines,
+			Lines:        linesThisTick,
 			Parsed:       parsedThisTick,
 			Skipped:      skippedLines,
 			BytesSkipped: skippedBytes,

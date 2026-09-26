@@ -308,13 +308,26 @@ func TestESServiceItemsNamesRegrantAfterHelperReplaced(t *testing.T) {
 	}
 }
 
-// A flooding writer (garbage lines drowning the tailer's per-tick budget)
-// supersedes the ordinary not-writing/crash-loop items: the operator needs
-// to see "flooding", not a generic silence report.
+// A writer producing mostly-unparseable lines (UnparsedShare over half) is
+// real garbage and supersedes the ordinary not-writing/crash-loop items.
+// Flooding (the tailer skipping past its per-tick budget) alone is a burst,
+// not garbage: a short one is invisible, a sustained one reads as "falling
+// behind", never as "flooding".
+// timeAt returns a pointer to t, for optional time fields.
+func timeAt(t time.Time) *time.Time { return &t }
+
 func TestESServiceItemsFlooding(t *testing.T) {
-	flooding := esServiceItems(collect.ESServiceSnapshot{State: "running", SpoolMtime: time.Now(), Flooding: true})
-	if len(flooding) != 1 || flooding[0].Title != "File monitoring writer is flooding" {
-		t.Fatalf("Flooding=true: items = %+v, want one flooding item", flooding)
+	shortBurst := esServiceItems(collect.ESServiceSnapshot{
+		State: "running", SpoolMtime: time.Now(), Flooding: true, UnparsedShare: 0, FloodingSince: timeAt(time.Now().Add(-5 * time.Second)),
+	})
+	if len(shortBurst) != 0 {
+		t.Fatalf("Flooding=true, FloodingSince=5s ago: items = %+v, want none — a short burst is normal load", shortBurst)
+	}
+	sustained := esServiceItems(collect.ESServiceSnapshot{
+		State: "running", SpoolMtime: time.Now(), Flooding: true, UnparsedShare: 0, FloodingSince: timeAt(time.Now().Add(-2 * time.Minute)),
+	})
+	if len(sustained) != 1 || sustained[0].Title != "File monitoring is falling behind" {
+		t.Fatalf("Flooding=true, FloodingSince=2m ago: items = %+v, want one falling-behind item", sustained)
 	}
 	unparsed := esServiceItems(collect.ESServiceSnapshot{State: "running", SpoolMtime: time.Now(), UnparsedShare: 0.9})
 	if len(unparsed) != 1 || unparsed[0].Title != "File monitoring writer is flooding" {

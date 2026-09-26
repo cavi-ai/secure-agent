@@ -7,6 +7,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 ## [Unreleased]
 
 ### Changed
+- File telemetry: a write burst the reader skips reads as "File monitoring is falling behind" after 60 s, not as a flooding writer; `es_service.unparsed_share` counts only lines the reader parsed; `es_service.flooding_since` added.
 - Findings skip shell rc and harness-settings reads as secret reads and name the raising process and its launcher.
 - File telemetry's root helper drops open events on system paths (OS libraries and frameworks, app-bundle contents, Homebrew Cellar, `/dev` nodes, user caches) that no sensitive-file rule matches before they reach the spool.
 - File events from a process that already exited cost one process lookup per tagger refresh instead of one per event.

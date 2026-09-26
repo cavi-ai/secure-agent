@@ -250,7 +250,10 @@ func silentCollectorItems(st Status) []PostureItem {
 // is best-effort: launchctl errors are already folded into the state string.
 // A flooding writer supersedes every other eslogger item: the tailer and the
 // root service can both read healthy while the writer drowns them in
-// garbage, and that is the failure the operator needs to see first.
+// garbage, and that is the failure the operator needs to see first. A
+// sustained burst of otherwise-valid lines the tailer cannot keep up with
+// (esServiceBehind) is a lesser, second-priority item: the writer is fine,
+// the reader is behind.
 func esServiceItems(s collect.ESServiceSnapshot) []PostureItem {
 	if esServiceFlooding(s) {
 		return []PostureItem{{
@@ -258,6 +261,14 @@ func esServiceItems(s collect.ESServiceSnapshot) []PostureItem {
 			Title:    "File monitoring writer is flooding",
 			Severity: 2,
 			Detail:   esFloodingDetail(s),
+		}}
+	}
+	if esServiceBehind(s) {
+		return []PostureItem{{
+			Kind: "collector_silent", ID: "eslogger",
+			Title:    "File monitoring is falling behind",
+			Severity: 1,
+			Detail:   esBehindDetail(s),
 		}}
 	}
 	// A spool exists, so file telemetry was on; the service is gone.
@@ -305,24 +316,51 @@ func esServiceFailing(state string) bool {
 	return strings.Contains(state, "spawn") || strings.Contains(state, "exit")
 }
 
-// esServiceFlooding reports a writer producing mostly-unparseable lines
-// (garbage past the tailer's per-tick drain budget, or, defensively, a share
-// over half even without an active skip) — a service that runs and writes
-// but is broken, not one that is down.
+// esServiceFlooding reports a writer producing mostly-unparseable lines —
+// garbage, not a burst the tailer merely fell behind on. Skipping alone
+// (s.Flooding) no longer counts: SpoolStats.Lines counts only lines the
+// scanner read, so UnparsedShare over half means those READ lines were
+// mostly garbage, whatever the tailer skipped in bulk notwithstanding.
 func esServiceFlooding(s collect.ESServiceSnapshot) bool {
 	// Garbage in a spool nobody writes any more is leftover, not a flood:
 	// the last drain's verdict counts only while the writer is still active.
 	if s.SpoolMtime.IsZero() || time.Since(s.SpoolMtime) > esFloodFreshWindow {
 		return false
 	}
-	return s.Flooding || s.UnparsedShare > 0.5
+	return s.UnparsedShare > 0.5
 }
 
-// esFloodingDetail is the shared wording for the flooding failure: posture
-// and doctor report the same facts.
+// esFloodingDetail is the shared wording for the flooding (garbage) failure:
+// posture and doctor report the same facts.
 func esFloodingDetail(s collect.ESServiceSnapshot) string {
-	return fmt.Sprintf("%.0f%% of lines in the last drain did not parse, %.1f MB skipped — the writer is producing garbage",
-		s.UnparsedShare*100, float64(s.BytesSkipped)/(1<<20))
+	return fmt.Sprintf("%.0f%% of lines in the last drain did not parse — the writer is producing garbage",
+		s.UnparsedShare*100)
+}
+
+// esBehindWindow: a skip shorter than this is normal load on a healthy
+// writer, not a reader that is stuck falling behind.
+const esBehindWindow = 60 * time.Second
+
+// esServiceBehind reports a healthy writer (not garbage) whose valid-line
+// bursts have made the tailer skip past its per-tick budget for longer than
+// esBehindWindow — the reader is behind, not broken. Garbage supersedes this:
+// esServiceFlooding is checked first by callers and takes priority.
+func esServiceBehind(s collect.ESServiceSnapshot) bool {
+	if s.SpoolMtime.IsZero() || time.Since(s.SpoolMtime) > esFloodFreshWindow {
+		return false
+	}
+	if esServiceFlooding(s) {
+		return false
+	}
+	return s.Flooding && s.FloodingSince != nil && time.Since(*s.FloodingSince) > esBehindWindow
+}
+
+// esBehindDetail is the shared wording for the falling-behind failure:
+// posture and doctor report the same facts. spoolDrainBudget (4 MiB per
+// 200ms tick, in collect/spool.go) is a fixed 20 MB/s reader limit.
+func esBehindDetail(s collect.ESServiceSnapshot) string {
+	return fmt.Sprintf("skipping since %s, last drain skipped %.1f MB — the reader's limit is 20 MB/s",
+		s.FloodingSince.Local().Format("15:04"), float64(s.BytesSkipped)/(1<<20))
 }
 
 func humanCollectorSilentTitle(name string) string {

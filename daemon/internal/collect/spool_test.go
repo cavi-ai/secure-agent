@@ -3,6 +3,7 @@ package collect
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"testing"
@@ -263,5 +264,50 @@ func TestSpoolTailerSkipsFloodPastBudget(t *testing.T) {
 		}
 	default:
 		t.Fatal("no parsed event published after the flood cleared")
+	}
+}
+
+// A burst of entirely VALID lines that exceeds the per-tick drain budget must
+// not read as unparsed garbage: Lines counts only what the scanner actually
+// read, never the bulk-skipped tail, so Lines == Parsed even while Skipped
+// and BytesSkipped record what the budget forced the tick to drop.
+func TestSpoolTailerBudgetHitOverValidLinesCountsOnlyReadLines(t *testing.T) {
+	path := t.TempDir() + "/spool.jsonl"
+	valid := `{"event_type":0,"process":{"audit_token":{"pid":9},"executable":{"path":"/bin/ls"}},"event":{"open":{"file":{"path":"/etc/hosts"}}},"time":"2026-09-11T12:00:00Z"}` + "\n"
+	n := (8<<20)/len(valid) + 1000 // > 8 MiB of valid lines, well past the 4 MiB budget
+	body := bytes.Repeat([]byte(valid), n)
+	if err := os.WriteFile(path, body, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	b := bus.New(64)
+	tailer := NewSpoolTailerAt(b, path)
+
+	_ = tailer.poll(spoolCursor{})
+	stats := tailer.Stats()
+	if stats.Skipped == 0 {
+		t.Fatal("Skipped = 0 after a tick well past the drain budget over valid lines, want > 0")
+	}
+	if stats.Lines != stats.Parsed {
+		t.Fatalf("Lines = %d, Parsed = %d, want equal — a budget-skipped VALID burst must not count as unparsed", stats.Lines, stats.Parsed)
+	}
+}
+
+// flooding_since is absent from the wire while the tailer is not skipping,
+// and carries the skip start once it is.
+func TestESServiceSnapshotFloodingSinceOmittedWhenUnset(t *testing.T) {
+	quiet, err := json.Marshal(ESServiceSnapshot{State: "running"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(quiet, []byte("flooding_since")) {
+		t.Fatalf("unset flooding_since serialized: %s", quiet)
+	}
+	since := time.Date(2026, 9, 25, 12, 0, 0, 0, time.UTC)
+	busy, err := json.Marshal(ESServiceSnapshot{State: "running", Flooding: true, FloodingSince: &since})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(busy, []byte(`"flooding_since":"2026-09-25T12:00:00Z"`)) {
+		t.Fatalf("flooding_since missing: %s", busy)
 	}
 }

@@ -202,6 +202,11 @@ func checkFileTelemetry(f doctorFacts) (string, string) {
 	switch {
 	case esServiceFlooding(*es):
 		return doctorFail, esFloodingDetail(*es)
+	case esServiceBehind(*es):
+		// No warning level exists (doctorPass/doctorFail/doctorSkip only):
+		// a sustained burst still fails the check, but with the behind
+		// detail, not the garbage one.
+		return doctorFail, esBehindDetail(*es)
 	case es.State == "not-loaded":
 		return doctorFail, "root service not loaded"
 	case esServiceFailing(es.State):
