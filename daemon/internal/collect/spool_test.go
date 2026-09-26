@@ -26,10 +26,14 @@ func drainSpool(t *testing.T, lines []string, want int, timeout time.Duration) [
 		t.Fatal(err)
 	}
 	b := bus.New(64)
-	tailer := NewSpoolTailerAt(b, path)
-	go func() { _ = tailer.Run(context.Background()) }()
-	var got []event.Event
+	// Subscribe before the tailer starts: the bus delivers only to current
+	// subscribers, so a tailer that drains first would publish into nothing.
 	sub := b.Subscribe()
+	tailer := NewSpoolTailerAt(b, path)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go func() { _ = tailer.Run(ctx) }()
+	var got []event.Event
 	deadline := time.After(timeout)
 	for {
 		select {
