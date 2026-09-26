@@ -29,7 +29,10 @@ type HostSnapshot struct {
 	MemoryPressure        string   `json:"memory_pressure"`
 	ThermalState          string   `json:"thermal_state"`
 	HeadroomScore         int      `json:"headroom_score"`
-	Capacity              string   `json:"capacity"`
+	// HeadroomLimiter is which input set HeadroomScore: memory, cpu, swap, or thermal.
+	// The score is the lowest of those, not free RAM by itself.
+	HeadroomLimiter string `json:"headroom_limiter,omitempty"`
+	Capacity        string `json:"capacity"`
 }
 
 type rawHostSample struct {
@@ -77,7 +80,7 @@ func deriveHostSnapshot(raw rawHostSample, agentMemory uint64) HostSnapshot {
 		host.NonAgentCPUPercent = &nonAgent
 	}
 	host.MemoryPressure = memoryPressure(host.HeadroomPercent, raw.TotalMemoryBytes, raw.AvailableMemoryKnown, raw.SwapUsedBytes, raw.SwapTotalBytes)
-	host.HeadroomScore = headroomScore(host)
+	host.HeadroomScore, host.HeadroomLimiter = headroomScore(host)
 	if !raw.AvailableMemoryKnown && raw.SystemCPUPercent == nil && raw.SwapTotalBytes == 0 && host.ThermalState == "unknown" {
 		host.Capacity = "unknown"
 	} else {
@@ -100,29 +103,37 @@ func memoryPressure(headroom float64, total uint64, availableKnown bool, swapUse
 	return "normal"
 }
 
-func headroomScore(host HostSnapshot) int {
-	scores := make([]float64, 0, 4)
+// headroomScore is the tightest limit, rounded. Order on a tie is memory, cpu, swap, thermal.
+// Capacity bands, applied by capacityLabel: under 15 critical, under 50 constrained, otherwise ample.
+func headroomScore(host HostSnapshot) (int, string) {
+	type part struct {
+		name  string
+		score float64
+	}
+	var parts []part
 	if host.TotalMemoryBytes > 0 && host.MemoryPressure != "unknown" {
-		scores = append(scores, host.HeadroomPercent)
+		parts = append(parts, part{"memory", host.HeadroomPercent})
 	}
 	if host.SystemCPUPercent != nil {
-		scores = append(scores, 100-clamp(*host.SystemCPUPercent, 0, 100))
+		parts = append(parts, part{"cpu", 100 - clamp(*host.SystemCPUPercent, 0, 100)})
 	}
 	if host.SwapTotalBytes > 0 {
-		scores = append(scores, 100-percent(host.SwapUsedBytes, host.SwapTotalBytes))
+		parts = append(parts, part{"swap", 100 - percent(host.SwapUsedBytes, host.SwapTotalBytes)})
 	}
 	thermalCap := map[string]float64{"nominal": 100, "fair": 70, "serious": 35, "critical": 10}
 	if cap, ok := thermalCap[host.ThermalState]; ok {
-		scores = append(scores, cap)
+		parts = append(parts, part{"thermal", cap})
 	}
-	if len(scores) == 0 {
-		return 0
+	if len(parts) == 0 {
+		return 0, ""
 	}
-	score := scores[0]
-	for _, candidate := range scores[1:] {
-		score = min(score, candidate)
+	tightest := parts[0]
+	for _, candidate := range parts[1:] {
+		if candidate.score < tightest.score {
+			tightest = candidate
+		}
 	}
-	return int(math.Round(clamp(score, 0, 100)))
+	return int(math.Round(clamp(tightest.score, 0, 100))), tightest.name
 }
 
 func capacityLabel(score int) string {
