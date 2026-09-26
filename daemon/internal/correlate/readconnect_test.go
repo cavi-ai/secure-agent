@@ -102,6 +102,14 @@ func TestCredentialOutsideItsOwnerFlags(t *testing.T) {
 		if c.CredentialOwnerUses() != 0 {
 			t.Fatalf("%s: counted as owner use", tc.name)
 		}
+		read := f[0].Evidence[0]
+		wantSub := "sensitive read"
+		if tc.kind == event.KindPluginAction {
+			wantSub = "agent tool read"
+		}
+		if len(read.Owners) != 1 || read.Owners[0] != "GitHub" || read.Sub != wantSub {
+			t.Fatalf("%s: read evidence owners/sub = %v/%q, want [GitHub]/%q", tc.name, read.Owners, read.Sub, wantSub)
+		}
 	}
 }
 

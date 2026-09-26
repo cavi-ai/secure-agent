@@ -176,6 +176,10 @@ func (a *API) fillPattern(p model.Pattern, flags []model.Flag, since, now time.T
 	p.PIDs, p.PIDCount = busiest(pidN), len(pidN)
 	p.Sessions, p.SessionCount = busiest(sessionN), len(sessionN)
 	p.Processes = patternProcesses(sorted)
+	p.Flags = len(sorted)
+	if p.Rule == readConnectRule {
+		p.Destinations = patternDestinations(sorted)
+	}
 	ids := make([]string, 0, len(open)+len(closed))
 	p.FlagIDs = capList(append(append(ids, open...), closed...), model.PatternFlagIDCap)
 	if p.Unacked == 0 {
@@ -183,7 +187,7 @@ func (a *API) fillPattern(p model.Pattern, flags []model.Flag, since, now time.T
 	} else {
 		p.Disposition = worst
 	}
-	p.Summary = patternSummary(p, now)
+	p.Summary = patternSummary(p, now, patternReader(sorted))
 	p.Actions = a.patternActions(p, capList(open, model.PatternFlagIDCap), env)
 	return p
 }
@@ -349,7 +353,7 @@ func patternWindow(first, last, now time.Time) string {
 
 // patternSummary is the one served sentence: who did what how many times,
 // when, from how many processes and sessions, and how often. No flag ids.
-func patternSummary(p model.Pattern, now time.Time) string {
+func patternSummary(p model.Pattern, now time.Time, reader string) string {
 	var ident []string
 	if p.PIDCount > 0 {
 		noun := "processes"
@@ -362,7 +366,15 @@ func patternSummary(p model.Pattern, now time.Time) string {
 		ident = append(ident, fmt.Sprintf("%d session%s", p.SessionCount, plural(p.SessionCount)))
 	}
 	who := firstNonEmpty([]string{p.Agent, "An agent"})
-	s := fmt.Sprintf("%s %s %d times %s", who, patternVerb(p.Rule, p.Subject), p.Count, patternWindow(p.First, p.Last, now))
+	verb := patternVerb(p.Rule, p.Subject)
+	if p.Rule == readConnectRule {
+		// "gh (claude) read ~/.config/gh/hosts.yml, then reached GitHub (…)"
+		if reader != "" {
+			who = reader + " (" + who + ")"
+		}
+		verb = "read " + firstNonEmpty([]string{p.Subject.Label, "a secret"}) + ", then reached " + destinationPhrase(p.Destinations)
+	}
+	s := fmt.Sprintf("%s %s %d times %s", who, verb, p.Count, patternWindow(p.First, p.Last, now))
 	if len(ident) > 0 {
 		s += " (" + strings.Join(ident, ", ") + ")"
 	}

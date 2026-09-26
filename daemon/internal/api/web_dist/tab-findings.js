@@ -523,7 +523,7 @@ function patternHTML(p, nowMs, opts) {
       </div>
       <p class="finding-verdict">${escapeHTML((d.text || '') + (d.why ? ': ' + d.why : ''))}</p>
       <div class="finding-actions">${patternActionsHTML(p)}</div>
-      <details class="finding-details pattern-flags"><summary>Individual flags (${count})</summary>
+      <details class="finding-details pattern-flags"><summary>Individual flags (${Number(p.flags ?? count) || 0})</summary>
         ${rows.length ? `<ul class="pattern-flag-list">${cap.shown.map(row).join('')}</ul>${cap.more}`
           : '<p class="pattern-flags-note">None of them is open in the loaded window.</p>'}
       </details>
