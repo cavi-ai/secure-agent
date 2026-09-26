@@ -41,6 +41,24 @@ func TestCredentialUsedWithItsOwnerIsCounted(t *testing.T) {
 	}
 }
 
+// Other processes reading the same file do not matter when the connecting
+// process read it too; without its own read, the connection still flags.
+func TestSiblingReadsOfTheSameFile(t *testing.T) {
+	c := newFamilyCorrelator(t)
+	base := time.Unix(1_700_000_000, 0)
+	hosts := homePath(t, ".config/gh/hosts.yml")
+	c.Observe(event.Event{Kind: event.KindFileOpen, PID: 203, TS: base, Path: hosts, ExePath: ghExe})
+	ghReads(c, t, event.KindFileOpen, base.Add(time.Second))
+	if f := connectTo(c, 201, "140.82.112.5", base.Add(2*time.Second)); len(f) != 0 {
+		t.Fatalf("gh reached GitHub after reading the file itself, flagged: %+v", f)
+	}
+	c = newFamilyCorrelator(t)
+	c.Observe(event.Event{Kind: event.KindFileOpen, PID: 203, TS: base, Path: hosts, ExePath: ghExe})
+	if f := connectTo(c, 201, "140.82.112.5", base.Add(2*time.Second)); len(f) != 1 {
+		t.Fatalf("connection without its own read: flags = %+v, want 1", f)
+	}
+}
+
 // The token may reach its owner through the reader's tree: git-remote-https
 // running gh as its credential helper, or the agent above gh.
 func TestCredentialOwnerThroughTheReadersTree(t *testing.T) {
