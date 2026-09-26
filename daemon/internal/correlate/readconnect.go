@@ -2,7 +2,6 @@ package correlate
 
 import (
 	"fmt"
-	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -71,33 +70,56 @@ func (c *Correlator) ownerUse(reads []readMark, cm connMark) bool {
 	return true
 }
 
-// readConnectKey is the pattern one flag stands for: agent, the reader's
-// executable, the first secret read, and the first destination's org (its
-// host when the org is unknown).
+// readConnectKey is the pattern one read and connection stand for
+// (ReadConnectKey).
 func readConnectKey(agent string, r readMark, cm connMark) string {
-	reader := "tool"
-	if r.kind != event.KindPluginAction {
-		reader = strings.ToLower(filepath.Base(r.exe))
+	return ReadConnectKey(agent, ReaderLabel(r.exe, r.kind == event.KindPluginAction), r.path, DestLabel(cm.host))
+}
+
+// SetExpected wires the operator's expected patterns: match reports whether
+// every key is expected (and counts the hit).
+func (c *Correlator) SetExpected(match func(keys []string, at time.Time) bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.isExpected = match
+}
+
+// ExpectedCount counts connections an expected pattern covered (recorded,
+// not flagged).
+func (c *Correlator) ExpectedCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.expectedCount
+}
+
+// expectedLocked reports whether cm with every read is a pattern the
+// operator marked expected.
+func (c *Correlator) expectedLocked(agent string, reads []readMark, cm connMark, at time.Time) bool {
+	if c.isExpected == nil {
+		return false
 	}
-	dest := IdentifyCached(cm.host).Org
-	if dest == "" {
-		dest = strings.ToLower(cm.host)
+	keys := make([]string, 0, len(reads))
+	for _, r := range reads {
+		keys = append(keys, readConnectKey(agent, r, cm))
 	}
-	return agent + "|" + reader + "|" + r.path + "|" + dest
+	return c.isExpected(keys, at)
 }
 
 // readThenConnectLocked judges secret reads against connections of one agent
-// family. A connection that is every read's credential used with its owner
-// is counted, not flagged. The rest raise one flag per pattern per
+// family. A connection that is every read's credential used with its owner,
+// or a pattern the operator marked expected, is counted, not flagged. The rest raise one flag per pattern per
 // readRepeatWindow; a repeat folds into the open flag. Callers hold c.mu.
 func (c *Correlator) readThenConnectLocked(e event.Event, agent string, rootPID int32, reads []readMark, conns []connMark) []model.Flag {
 	var cited []connMark
 	for _, cm := range conns {
-		if c.ownerUse(reads, cm) {
+		switch {
+		case c.ownerUse(reads, cm):
 			c.ownerUseCount++
-			continue
+		case c.expectedLocked(agent, reads, cm, e.TS):
+			c.expectedCount++
+		default:
+			cited = append(cited, cm)
 		}
-		cited = append(cited, cm)
 	}
 	if len(cited) == 0 {
 		return nil

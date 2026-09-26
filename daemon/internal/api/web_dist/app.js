@@ -1063,7 +1063,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Policy lists are not telemetry either: they load when the Policy tab
   // opens and on its Refresh, never on the refresh cycle.
-  const policyState = { guardRules: null, pathAllows: null, mutes: null, loading: false, error: '' };
+  const policyState = { guardRules: null, pathAllows: null, mutes: null, expected: null, loading: false, error: '' };
   async function loadPolicy() {
     if (policyState.loading) return;
     policyState.loading = true;
@@ -1076,8 +1076,8 @@ document.addEventListener('DOMContentLoaded', () => {
       return (await r.json()) || [];
     };
     try {
-      const [rules, paths, mutes] = await Promise.all([get('/guard/rules'), get('/guard/path-allow'), get('/mute')]);
-      Object.assign(policyState, { guardRules: rules, pathAllows: paths, mutes });
+      const [rules, paths, mutes, expected] = await Promise.all([get('/guard/rules'), get('/guard/path-allow'), get('/mute'), get('/expected')]);
+      Object.assign(policyState, { guardRules: rules, pathAllows: paths, mutes, expected });
     } catch (err) {
       policyState.error = "Couldn't load the policy lists: " + (err.message || err);
     } finally {
@@ -1096,6 +1096,7 @@ document.addEventListener('DOMContentLoaded', () => {
     put('policy-guard-rules', 'badge-guard-rules', st.guardRules, policyListHTML('guard', st.guardRules, st));
     put('policy-path-allows', 'badge-path-allows', st.pathAllows, policyListHTML('path', st.pathAllows, st));
     put('policy-mutes', 'badge-mutes', st.mutes, policyListHTML('mute', st.mutes, st));
+    put('policy-expected', 'badge-expected', st.expected, policyListHTML('expected', st.expected, st));
   }
 
   // Agent tab: the system agent's status, chat, plans and runs load when
@@ -3683,6 +3684,19 @@ document.addEventListener('DOMContentLoaded', () => {
       case 'policy-refresh':
         e.preventDefault();
         loadPolicy();
+        break;
+      case 'forget-expected':
+        e.preventDefault();
+        (async () => {
+          try {
+            const res = await apiFetch(`/expected?key=${encodeURIComponent(d.key || '')}`, { method: 'DELETE' });
+            if (!res.ok) throw new Error((await res.text()).trim() || String(res.status));
+            showToast('Forgot the expected pattern; it flags again', 'info');
+          } catch (err) {
+            showToast(`Failed to forget: ${err.message || err}`, 'danger');
+          }
+          loadPolicy();
+        })();
         break;
       case 'agent-refresh':
         e.preventDefault();

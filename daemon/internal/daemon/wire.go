@@ -532,6 +532,7 @@ func buildStatusFn(proxyServer *proxy.ProxyServer, tagger *agents.Tagger, cr *co
 			AdvisorHealth:       &ah,
 			MutedFlags:          cr.MutedCount(),
 			CredentialOwnerUses: cr.CredentialOwnerUses(),
+			ExpectedFlags:       cr.ExpectedCount(),
 			FleetConfigured:     fleetOn,
 			FirewallStats:       firewallStats(eng),
 			Collectors:          reg.Snapshot(),

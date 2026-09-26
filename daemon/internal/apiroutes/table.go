@@ -42,6 +42,7 @@ type Route struct {
 	// below that stay owner-level on the socket. Enumerated from every
 	// `apiFetch(path, { method: ... })` in web_dist/*.js:
 	//   DELETE /mute            app.js:2514 (mute revoke)
+	//   DELETE /expected        app.js (forget an expected pattern)
 	//   DELETE /allowlist       app.js:2602 (allow revoke)
 	//   POST   /notify/rules    app.js:3034, 3060 (notify scope/override)
 	//   POST   /advisor/assess-host  app.js:2252 (host reassess)
@@ -89,6 +90,7 @@ var Table = []Route{
 	{Path: "/notify/rules", Console: true, ConsoleMethods: []string{"POST"}},
 	{Path: "/guard/path-allow", Console: true, MutatingMethods: []string{"POST"}},
 	{Path: "/mute", Console: true, MutatingMethods: []string{"POST"}, ConsoleMethods: []string{"DELETE"}},
+	{Path: "/expected", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}, ConsoleMethods: []string{"DELETE"}},
 	{Path: "/advisor/retriage", Console: true, MutatingMethods: []string{"POST"}},
 	{Path: "/advisor/assess-host", Console: true, ConsoleMethods: []string{"POST"}},
 	{Path: "/flags/acknowledge", Console: true, MutatingMethods: []string{"POST"}},

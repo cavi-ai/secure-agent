@@ -189,6 +189,17 @@ func (a *API) fillPattern(p model.Pattern, flags []model.Flag, since, now time.T
 	}
 	p.Summary = patternSummary(p, now, patternReader(sorted))
 	p.Actions = a.patternActions(p, capList(open, model.PatternFlagIDCap), env)
+	if len(open) > 0 {
+		// open is newest first: the newest open flag names the pattern.
+		for _, f := range sorted {
+			if f.ID == open[0] {
+				if act, ok := a.expectAction(f); ok {
+					p.Actions = append([]model.ExplainAction{act}, p.Actions...)
+				}
+				break
+			}
+		}
+	}
 	return p
 }
 

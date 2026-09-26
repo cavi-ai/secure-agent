@@ -120,6 +120,9 @@ type Status struct {
 	// its owner (the reading process reached an org credential_owners names
 	// for that file) — recorded, not flagged.
 	CredentialOwnerUses int `json:"credential_owner_uses"`
+	// ExpectedFlags counts connections an operator-expected read-then-connect
+	// pattern covered (GET /expected) — recorded, not flagged.
+	ExpectedFlags int `json:"expected_flags"`
 	// FleetConfigured is true when at least one HMAC fleet webhook is set —
 	// the console hides the fleet panel until then.
 	FleetConfigured bool `json:"fleet_configured,omitempty"`
@@ -186,6 +189,7 @@ type API struct {
 	correlator   *correlate.Correlator
 	allowlist    *correlate.AllowlistStore
 	mutes        *correlate.MuteStore
+	expected     *correlate.ExpectStore
 	notifyRules  *correlate.NotifyRuleStore
 	notifyScopes *correlate.NotifyScopeStore
 	retriage     *RetriageFuncs
@@ -278,6 +282,7 @@ type Deps struct {
 	Correlator   *correlate.Correlator
 	Allowlist    *correlate.AllowlistStore
 	Mutes        *correlate.MuteStore
+	Expected     *correlate.ExpectStore
 	NotifyRules  *correlate.NotifyRuleStore
 	NotifyScopes *correlate.NotifyScopeStore
 
@@ -356,6 +361,7 @@ func New(d Deps) *API {
 		correlator:      d.Correlator,
 		allowlist:       d.Allowlist,
 		mutes:           d.Mutes,
+		expected:        d.Expected,
 		notifyRules:     d.NotifyRules,
 		notifyScopes:    d.NotifyScopes,
 		retriage:        d.Retriage,
@@ -632,6 +638,7 @@ func (a *API) routes() map[string]http.HandlerFunc {
 		"/notify/rules":                 a.handleNotifyRules,
 		"/guard/path-allow":             a.handleGuardPathAllow,
 		"/mute":                         a.handleMute,
+		"/expected":                     a.handleExpected,
 		"/advisor/retriage":             a.handleAdvisorRetriage,
 		"/advisor/assess-host":          a.handleAdvisorAssessHost,
 		"/flags/acknowledge":            a.handleFlagAcknowledge,
