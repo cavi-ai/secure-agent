@@ -7,6 +7,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 ## [Unreleased]
 
 ### Changed
+- File telemetry: a write burst the reader skips reads as "File monitoring is falling behind" after 60 s, not as a flooding writer; `es_service.unparsed_share` counts only lines the reader parsed; `es_service.flooding_since` added.
 - Console header event rate keeps a fixed width, so the status chip does not shift as events per second change.
 - Console switches set `-webkit-user-select` so Safari does not select the switch label.
 - Findings skip shell rc and harness-settings reads as secret reads and name the raising process and its launcher.

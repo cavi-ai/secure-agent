@@ -951,6 +951,9 @@ func spoolServiceProbe(t *collect.SpoolTailer) func() (collect.ESServiceSnapshot
 		}
 		stats := t.Stats()
 		snap.Flooding = !stats.FloodSince.IsZero()
+		if since := stats.FloodSince; !since.IsZero() {
+			snap.FloodingSince = &since
+		}
 		snap.UnparsedShare = unparsedShare(stats)
 		snap.BytesSkipped = stats.BytesSkipped
 		return snap, nil

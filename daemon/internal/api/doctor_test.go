@@ -325,11 +325,16 @@ func TestDoctorChecksFromFacts(t *testing.T) {
 			f.st.ESService = &collect.ESServiceSnapshot{State: "not-loaded"}
 			return f
 		}(), doctorFail, "not loaded"},
-		{"flooding writer", checkFileTelemetry, func() doctorFacts {
+		{"short flood burst is not yet behind", checkFileTelemetry, func() doctorFacts {
 			f := steady
-			f.st.ESService = &collect.ESServiceSnapshot{State: "running", SpoolMtime: time.Now(), Flooding: true}
+			f.st.ESService = &collect.ESServiceSnapshot{State: "running", SpoolMtime: time.Now(), Flooding: true, FloodingSince: timeAt(now.Add(-5 * time.Second))}
 			return f
-		}(), doctorFail, "did not parse"},
+		}(), doctorPass, "running"},
+		{"sustained flood burst reads as falling behind", checkFileTelemetry, func() doctorFacts {
+			f := steady
+			f.st.ESService = &collect.ESServiceSnapshot{State: "running", SpoolMtime: time.Now(), Flooding: true, FloodingSince: timeAt(now.Add(-2 * time.Minute))}
+			return f
+		}(), doctorFail, "skipping since"},
 		{"unparsed share alone", checkFileTelemetry, func() doctorFacts {
 			f := steady
 			f.st.ESService = &collect.ESServiceSnapshot{State: "running", SpoolMtime: time.Now(), UnparsedShare: 0.9}

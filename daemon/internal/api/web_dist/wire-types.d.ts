@@ -409,6 +409,7 @@ export interface ESServiceSnapshot {
   flooding: boolean;
   unparsed_share: number;
   bytes_skipped: number;
+  flooding_since?: string;
 }
 
 export interface Status {
