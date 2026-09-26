@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -134,6 +135,53 @@ func TestRekeySessionRepointsResourceEpisode(t *testing.T) {
 	}
 	if got.SessionID != "canonical" {
 		t.Fatalf("episode_json session_id=%q, want canonical", got.SessionID)
+	}
+}
+
+func TestConcurrentResourceCaptureAndRekey(t *testing.T) {
+	st, err := Open("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	start := time.Now().UTC().Add(-time.Minute)
+	st.UpsertSession(model.Session{ID: "provisional", RootPID: 100, RootStartedAt: start.Format(time.RFC3339Nano), StartedAt: start, LastSeenAt: start})
+	lookupDone := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	defer unblock()
+	st.resourceEpisodeAfterLookup = func() { close(lookupDone); <-release }
+	episode := resource.Episode{CapturedAt: time.Now(), Session: resource.Session{Key: fmt.Sprintf("100:%d", start.UnixNano()), RootPID: 100, RootStartedAt: start}}
+	writeDone := make(chan error, 1)
+	go func() { writeDone <- st.PutResourceEpisode(episode) }()
+	select {
+	case <-lookupDone:
+	case <-time.After(time.Second):
+		t.Fatal("capture did not reach lookup boundary")
+	}
+	// The identity lock must still be held when capture has chosen its ID.
+	if st.mu.TryLock() {
+		st.mu.Unlock()
+		t.Fatal("capture released identity lock before insert")
+	}
+	rekeyDone := make(chan struct{})
+	go func() { st.RekeySession("provisional", "canonical"); close(rekeyDone) }()
+	unblock()
+	if err := <-writeDone; err != nil {
+		t.Fatal(err)
+	}
+	<-rekeyDone
+	var id, payload string
+	if err := st.db.QueryRow(`SELECT session_id, episode_json FROM resource_episodes LIMIT 1`).Scan(&id, &payload); err != nil {
+		t.Fatal(err)
+	}
+	var got resource.Episode
+	if err := json.Unmarshal([]byte(payload), &got); err != nil {
+		t.Fatal(err)
+	}
+	if id != "canonical" || got.SessionID != "canonical" {
+		t.Fatalf("indexed=%q JSON=%q, want canonical", id, got.SessionID)
 	}
 }
 

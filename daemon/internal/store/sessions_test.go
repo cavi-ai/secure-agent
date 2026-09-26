@@ -83,6 +83,24 @@ func TestSessionIDForRootExactIdentity(t *testing.T) {
 	}
 }
 
+func TestSessionIDForRootUnreadableRowFailsClosed(t *testing.T) {
+	s, err := Open("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	start := time.Now().UTC().Add(-time.Minute)
+	// SQLite's legacy TEXT PRIMARY KEY accepts NULL. A corrupt matching row
+	// must not be skipped in favor of the readable one.
+	if _, err := s.db.Exec(`INSERT INTO sessions(id,root_pid,root_started_at) VALUES (NULL,?,?)`, 100, start.Format(time.RFC3339Nano)); err != nil {
+		t.Fatal(err)
+	}
+	s.UpsertSession(model.Session{ID: "valid", RootPID: 100, RootStartedAt: start.Format(time.RFC3339Nano), StartedAt: start, LastSeenAt: start})
+	if got := s.SessionIDForRoot(100, start); got != "" {
+		t.Fatalf("unreadable row was ignored; got %q", got)
+	}
+}
+
 func TestRekeySessionRepointsEventsAndFlags(t *testing.T) {
 	s, err := Open("", "")
 	if err != nil {

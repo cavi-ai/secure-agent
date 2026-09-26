@@ -49,6 +49,8 @@ type Store struct {
 	jsonlFile           *os.File
 	insertCount         uint64
 	guardDecisionWrites atomic.Uint64
+	// Test seam for the identity-to-insert boundary; nil in production.
+	resourceEpisodeAfterLookup func()
 	// lastPrune gates the insert-driven prune to pruneMinInterval, so a
 	// high-rate producer does not trigger it every 1000 inserts.
 	lastPrune time.Time
@@ -1717,11 +1719,18 @@ func (s *Store) PutResourceEpisode(episode resource.Episode) error {
 	episode.ActivityStatus = "settling"
 	enriched, enrichErr := s.attachResourceEpisodeActivity(ctx, episode)
 	episode = enriched
+	// RekeySession holds this same mutex through its transaction. Keep the
+	// exact identity lookup, JSON payload, and insert on one side of a rekey.
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	// The caller's optional ID is not trusted. Only a unique, exact root
 	// process identity can attach an agent episode to a durable session.
 	episode.SessionID = ""
 	if episode.Session.Kind != "infra" {
-		episode.SessionID = s.SessionIDForRoot(episode.Session.RootPID, episode.Session.RootStartedAt)
+		episode.SessionID = s.sessionIDForRootLocked(episode.Session.RootPID, episode.Session.RootStartedAt)
+	}
+	if s.resourceEpisodeAfterLookup != nil {
+		s.resourceEpisodeAfterLookup()
 	}
 	if enrichErr != nil {
 		log.Printf("store: initial resource episode activity: %v", enrichErr)

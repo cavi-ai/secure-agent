@@ -11,11 +11,17 @@ import (
 // SessionIDForRoot returns a durable ID only when one stored session has the
 // same root PID and exact root start instant. Ended sessions remain eligible.
 func (s *Store) SessionIDForRoot(rootPID int32, rootStartedAt time.Time) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.sessionIDForRootLocked(rootPID, rootStartedAt)
+}
+
+// sessionIDForRootLocked is also used by resource capture while it holds
+// s.mu through the insert. Callers must hold s.mu.
+func (s *Store) sessionIDForRootLocked(rootPID int32, rootStartedAt time.Time) string {
 	if rootPID <= 0 || rootStartedAt.IsZero() {
 		return ""
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	rows, err := s.db.QueryContext(ctx, `SELECT id, root_started_at FROM sessions WHERE root_pid = ? AND root_started_at != ''`, rootPID)
@@ -27,7 +33,7 @@ func (s *Store) SessionIDForRoot(rootPID int32, rootStartedAt time.Time) string 
 	for rows.Next() {
 		var id, storedStart string
 		if rows.Scan(&id, &storedStart) != nil {
-			continue
+			return ""
 		}
 		parsed, err := time.Parse(time.RFC3339Nano, storedStart)
 		if err != nil || !parsed.Equal(rootStartedAt) {
