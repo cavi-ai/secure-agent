@@ -16,7 +16,9 @@ EXCLUDE = {"LICENSE", "plugin/.claude-plugin/plugin.json"}
 USERS_OK = {"dev", "me", "test", "user", "example", "runner", "alice", "bob", "shared", "Shared", "a", "b", "other", "tester", "u", "x"}
 VOLUMES_OK = {"Data", "External", "Backup", "Work", "work", "workspace", "x", "M", "USB"}
 
-NAME_RE = re.compile(r"/Users/([A-Za-z0-9_.-]+)|/Volumes/([A-Za-z0-9_.-]+)")
+# /System/Volumes/<name> is macOS's own volume layout (Preboot, Data, VM),
+# not a personal mount point.
+NAME_RE = re.compile(r"/Users/([A-Za-z0-9_.-]+)|(?<!/System)/Volumes/([A-Za-z0-9_.-]+)")
 
 files = subprocess.run(
     ["git", "ls-files"], capture_output=True, text=True, check=True

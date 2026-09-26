@@ -13,6 +13,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/fleet"
 	"github.com/cavi-ai/secure-agent/daemon/internal/resource"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
+	"github.com/cavi-ai/secure-agent/daemon/internal/sysagent"
 	"github.com/cavi-ai/secure-agent/daemon/internal/worktreehunter"
 )
 
@@ -332,5 +333,35 @@ func TestWatchConfigAppliesWorktrees(t *testing.T) {
 	waitFor(t, 5*time.Second, func() bool {
 		o := hunter.Options()
 		return o.StaleDays == 30 && len(o.Roots) == 1 && o.Roots[0] == dir
+	})
+}
+
+// The watcher turns the system agent on and off live: enabling it from
+// config.yaml must not need a restart.
+func TestWatchConfigAppliesSystemAgent(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	st, err := store.Open(filepath.Join(dir, "e.db"), filepath.Join(dir, "e.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if err := os.WriteFile(cfgPath, []byte("system_agent:\n  enabled: false\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	agent := sysagent.New(st, filepath.Join(dir, "sysagent"), nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go watchConfig(ctx, cfgPath, configWatchDeps{
+		st: st, stk: &advisorStackHolder{}, pub: fleet.NewPublisher(), fleetCfg: &fleetConfigHolder{},
+		sysAgent: agent,
+	})
+	src := "system_agent:\n  enabled: true\n  endpoint: \"http://127.0.0.1:1\"\n  model: qwen3\n"
+	if err := os.WriteFile(cfgPath, []byte(src), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, 5*time.Second, func() bool {
+		s := agent.Status(context.Background())
+		return s.Enabled && s.Endpoint == "http://127.0.0.1:1"
 	})
 }

@@ -987,3 +987,36 @@ func TestAcknowledgeRuleHostScopedToAgent(t *testing.T) {
 		t.Fatal("cursor flag must stay open")
 	}
 }
+
+func TestFlagProcessAndAckReasonRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(filepath.Join(dir, "e.db"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	proc := &model.FlagProcess{Exe: "/bin/zsh", Name: "zsh", Args0: "-zsh", PPID: 200, Launcher: "Claude.app › claude-code 2.1.281"}
+	s.PutFlag(model.Flag{ID: "f1", Rule: "r", Severity: 3, TS: time.Now(), PID: 7, Agent: "claude", Process: proc})
+	s.PutFlag(model.Flag{ID: "f2", Rule: "r", Severity: 3, TS: time.Now(), PID: 8, Agent: "claude"})
+	if got, _ := s.GetFlag("f1"); got.Process == nil || *got.Process != *proc {
+		t.Fatalf("GetFlag process = %+v, want %+v", got.Process, proc)
+	}
+	if got, _ := s.GetFlag("f2"); got.Process != nil {
+		t.Fatalf("flag without a snapshot served process %+v", got.Process)
+	}
+	if n := s.AcknowledgeFlagsReason([]string{"f1"}, "why"); n != 1 {
+		t.Fatalf("acknowledged = %d", n)
+	}
+	for _, f := range s.QueryFlags(FlagFilter{Limit: 10}) {
+		switch f.ID {
+		case "f1":
+			if !f.Acknowledged || f.AckReason != "why" || f.Process == nil || f.Process.Launcher != proc.Launcher {
+				t.Fatalf("f1 = %+v", f)
+			}
+		case "f2":
+			if f.Acknowledged || f.AckReason != "" {
+				t.Fatalf("f2 = %+v", f)
+			}
+		}
+	}
+}

@@ -293,7 +293,25 @@ func (c *Correlator) shouldFlag(rule string, pid int32, subject string, ts time.
 func (c *Correlator) Observe(e event.Event) []model.Flag {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	flags := c.observeLocked(e)
+	c.stampProcessLocked(flags)
+	return flags
+}
 
+// stampProcessLocked snapshots each raising process into its flag, so the
+// finding still names the process after it exits.
+func (c *Correlator) stampProcessLocked(flags []model.Flag) {
+	for i := range flags {
+		if flags[i].Process != nil || flags[i].PID <= 0 {
+			continue
+		}
+		if p, ok := c.tagger.Snapshot(flags[i].PID); ok {
+			flags[i].Process = &p
+		}
+	}
+}
+
+func (c *Correlator) observeLocked(e event.Event) []model.Flag {
 	c.evictStaleLocked(e.TS)
 
 	if e.Kind == event.KindProxyHit {

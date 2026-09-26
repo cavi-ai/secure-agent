@@ -255,6 +255,11 @@ Host: unix
 ]
 ```
 
+#### Raising process and daemon acknowledgements
+
+- `process` — the raising process as it was when the flag was raised, kept after the process exits: `{exe, name, args0, ppid, launcher}`. `args0` is argv[0] with secret-shaped values scrubbed; no further argv, no environment. `launcher` is the nearest app bundle above the harness root, then the harness root (`"Claude.app › claude-code 2.1.281"`). Absent on flags raised before the field existed. Also on `GET /flags/{id}/explain`.
+- `ack_reason` — why the daemon acknowledged the flag itself. At start the daemon acknowledges open `sensitive-read-then-connect` flags whose read matched a glob that no longer counts as a secret read (guard rules with `read_sensitive: false`: `shell-rc`, `harness-config`), with reason `reclassified at start: …` and one `flag-reclassify` audit entry. Empty when the operator acknowledged.
+
 #### Explanation stamping
 
 `GET /flags` stamps `explain` (below) on the first **25 unacknowledged** flags of the response, without network lookups (endpoint identity comes from the CIDR/suffix tables and the reverse-DNS cache only). Acknowledged flags and rows past the cap stay raw. `/snapshot` stamps its `flags` the same way.
@@ -355,6 +360,7 @@ Repeating findings: the flags one agent raised under one rule on one subject in 
 | `hourly` | 24 equal buckets over the window, oldest first (one hour each at `hours=24`). |
 | `pids`, `pid_count` | Busiest 5 pids; distinct pids. |
 | `sessions`, `session_count` | Busiest 5 session ids; distinct sessions. |
+| `processes` | Distinct raising processes `{name, launcher, count}` from the flags' `process`, `count` = distinct pids; busiest 5. `[]` when no flag carries one. |
 | `disposition` | Worst among unacknowledged flags (`critical` > `warning` > `benign-likely`); `acknowledged` when `unacked` is 0. |
 | `summary` | One sentence: agent, action, count, local time window, processes and sessions, cadence. No flag ids. |
 | `actions` | `explain.actions` shapes, in order, only those that apply: `allow-host` (egress subject not yet allowlisted), `mute-rule-host` (egress subject) or `mute-class` (keychain rules), both with the pattern's `agent` in `body`, `dismiss-all` (`POST /flags/acknowledge` `{"flag_ids"}`, the open ids, at most 500), `kill` (busiest live pid). `recommended`: `benign-likely` → `allow-host`, else the mute; `critical` → `kill`. |
@@ -881,6 +887,23 @@ Queues one worktree for a note from the local advisor (see [ADVISOR_THREAT_MODEL
 
 `200 {"status":"ok","queued":true,"subject":"worktree:<path>@<head>"}`; `queued` is `false` when the advisor is off or its queue is full. `400` for a missing or relative path, `404` for a path that is not a linked worktree, `409` for a worktree whose directory is gone, `503` when advice is not wired. The model answers `{"recommendation":"remove|review|keep","confidence":0-1,"rationale":"..."}`; anything else is dropped. `GET /worktrees` returns stored notes in `advice`, keyed by worktree path, for notes taken at the row's current HEAD: `{"<path>": {"assessment": "review", "confidence": 0.6, "rationale": "...", "model": "...", "created_at": "..."}}`. A note never changes `state` or what `POST /worktrees/remove` accepts. Mutation (pinned UI or owner). CLI: `secure-agent worktrees advise <path>`; the list view prints the note under its row. Console: the Worktrees tab lists the report with a Remove button on `remove` rows and Prune on `prune` rows.
 
+### 20. System agent: `/agent/*`
+
+The console's Agent tab (see [SYSTEM_AGENT.md](SYSTEM_AGENT.md)). Every route is console-admitted and NoAgent; `POST` is a mutation (pinned UI or owner).
+
+| Route | Method | Body / query | Answer |
+|---|---|---|---|
+| `/agent/status` | `GET` | — | `{"enabled","endpoint","reachable","ollama_version","reason","model","harness_model","models":[...],"harnesses":[{"id","label","bin","min_ollama","path","installed","ready","reason"}],"skills":[{"id","title","summary"}],"chatting","running_run","terminal","home"}`. Probes Ollama (`/api/tags`, `/api/version`, 1.5 s). |
+| `/agent/skills` | `GET` | — | `[{"id","title","summary","keywords","body"}]` |
+| `/agent/chat` | `GET` | — | `{"messages":[{"id","ts","role":"user|assistant|note","content","harness","workdir","skills","proposal","plan_id"}],"chatting":bool}`, oldest first (last 200). |
+| `/agent/chat` | `POST` | `{"message","harness","workdir"}` | `202 {"message":{...}}`; the reply lands asynchronously — poll `GET` until `chatting` is false. `400` empty or over 8000 characters, `409` off or already answering, `422` a secret masking cannot remove. |
+| `/agent/chat` | `DELETE` | — | Clears the conversation; plans and runs stay. `409` while answering. |
+| `/agent/plans` | `GET` | — | Plans newest first, each with `ready` and `reason` computed now. |
+| `/agent/plans` | `POST` | `{"message_id"}` saves a reply's proposal; `{"id", …}` edits a plan; otherwise `{"title","harness","mode":"headless|terminal","workdir","task","steps","skills","model"}` creates one | `{"plan":{...}}`. `400` unknown harness or mode, relative folder, empty task; `404` unknown `id`; `409` the plan's run is in flight; `422` secret. |
+| `/agent/plans?id=` | `DELETE` | — | `404` unknown, `409` running. |
+| `/agent/dispatch` | `POST` | `{"plan_id","mode","workdir","model"}` (the last three optional; kept on the plan) | `202 {"run":{...}}` with `status` `running` (headless; poll `/agent/runs`), `opened` (a Terminal window opened) or `manual` (`detail` holds `sh '<script>'` to run). `400` missing folder, `404` unknown plan, `409` off, harness not ready (the plan keeps the reason in `note`) or a headless run already in flight. |
+| `/agent/runs` | `GET` | — | Runs newest first: `{"id","plan_id","ts","finished_at","title","harness","mode","model","workdir","status":"running|done|failed|timeout|opened|manual","exit_code","command","output","detail"}`. |
+
 ## 🔐 Peer authentication & endpoint roles
 
 Every connection is identified with macOS `LOCAL_PEEREPID` / `LOCAL_PEERCRED` (kernel-attested; not forgeable):
@@ -893,7 +916,7 @@ Every connection is identified with macOS `LOCAL_PEEREPID` / `LOCAL_PEERCRED` (k
 
 `POST /kill` additionally refuses any PID that is not currently a recognized agent process, so the control socket cannot be turned into an arbitrary-process killer.
 
-**NoAgent routes** (`/files/detail`, `/files/reveal`, `/files/open`) refuse every agent process. On the unix socket the Agent and Foreign roles get 403, and an Owner peer whose process belongs to an agent family (checked live, so a child spawned a moment ago counts) is refused too. On the console listener the console token is not enough: the daemon identifies the TCP client's process with `lsof` and serves it only when that process is outside every agent family; an unidentified client is refused. Off macOS the console listener refuses these routes.
+**NoAgent routes** (`/files/detail`, `/files/reveal`, `/files/open`, `/agent/*`, among others marked `NoAgent` in `apiroutes.Table`) refuse every agent process. On the unix socket the Agent and Foreign roles get 403, and an Owner peer whose process belongs to an agent family (checked live, so a child spawned a moment ago counts) is refused too. On the console listener the console token is not enough: the daemon identifies the TCP client's process with `lsof` and serves it only when that process is outside every agent family; an unidentified client is refused. Off macOS the console listener refuses these routes.
 
 `GET /debug/pprof/` (Go runtime profiles: `heap`, `goroutine`, `profile?seconds=N`, `trace`, …) is served on the unix socket only, to the Owner role (and the pinned menubar app); agents and foreign peers get 403, and the proxy listener never serves it.
 
@@ -1001,7 +1024,7 @@ Flag items take their `severity` from the flag's disposition (`critical` 3, `war
 
 Item kinds: `flag` (recent ≤24h, severity ≥2, human-titled), `pattern` (the flags one `/patterns` row covers, as one item: `id` = pattern `key`, `detail` = its `summary`; in `groups` also `count`, `rule`, `disposition`; the covered flags have no `flag` items), `guard_pending` (unresolved prompts), `collector_down` (dead/abandoned monitors), `collector_silent`, `harness_uncovered` and `guard_hook_unregistered` (coverage gaps while agents run), `uninspected_egress` (connections that bypassed the firewall, one item per group that carries them), `incident` (unresolved critical/high, or open more than 72h), `resource_pressure` (a pending resource intervention). Derived live — never a second source of truth.
 
-Invariant: every item in `items` appears in exactly one of `groups`, and the group item counts sum to `needs_you` (= `len(items)`). Groups are agent sessions (`session:<key>`), agent buckets (`agent:<name>`), and `machine` (`agent: ""`, `label: "This machine"`), which holds the agent-less items: dead or silent collectors, missing hooks, and the machine-wide uninspected item when no agent group carries egress. Group item priorities: guard 5, resource 4, incident 3 (aging below high risk 1), flag 2 (severity 2 or likely benign 1), pattern 2 (below critical 1), machine 2 (1 below severity 2), egress 1.
+Invariant: every item in `items` appears in exactly one of `groups`, and the group item counts sum to `needs_you` (= `len(items)`). Groups are agent sessions (`session:<key>`), agent buckets (`agent:<name>`; `summary` names the processes and sessions behind their findings, e.g. `"3 processes (claude-code 2.1.281 via Claude.app) across 3 sessions, all exited"`), and `machine` (`agent: ""`, `label: "This machine"`), which holds the agent-less items: dead or silent collectors, missing hooks, and the machine-wide uninspected item when no agent group carries egress. Group item priorities: guard 5, resource 4, incident 3 (aging below high risk 1), flag 2 (severity 2 or likely benign 1), pattern 2 (below critical 1), machine 2 (1 below severity 2), egress 1.
 
 ### `GET /events/stream` (SSE)
 

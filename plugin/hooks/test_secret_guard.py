@@ -759,6 +759,20 @@ def _test_guard_rules_json_ships_with_hook():
     assert [r["id"] for r in mod.DEFAULT_GUARD_RULES] == ids
 
 
+def _test_guard_rules_read_sensitive_flag_leaves_hook_matching_unchanged():
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "guard-rules.json")
+    with open(path, encoding="utf-8") as fh:
+        doc = json.load(fh)
+    flags = {r["id"]: r["read_sensitive"] for r in doc["rules"]}
+    assert flags == {"ssh-keys": True, "cloud-creds": True, "keychain": True, "env-files": True,
+                     "shell-rc": False, "harness-config": False}, flags
+    mod = _hook_module()
+    home = os.path.expanduser("~")
+    assert mod.match_rule(home + "/.zshenv")[0] == "shell-rc"
+    assert mod.match_rule(home + "/.claude/settings.json")[0] == "harness-config"
+    assert mod.match_rule(home + "/.aws/credentials")[0] == "cloud-creds"
+
+
 def _test_post_tool_use_scans_injection_and_logs():
     inj = run({
         "hook_event_name": "PostToolUse",
@@ -786,6 +800,7 @@ EXTRA_TESTS += [
     _test_cwd_overrides_non_matching_cwd_falls_back,
     _test_cwd_overrides_only_listed_rules,
     _test_guard_rules_json_ships_with_hook,
+    _test_guard_rules_read_sensitive_flag_leaves_hook_matching_unchanged,
     _test_post_tool_use_scans_injection_and_logs,
 ]
 

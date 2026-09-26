@@ -157,13 +157,51 @@ func TestSensitiveGlobsCoveredByGuardRules(t *testing.T) {
 	}
 	found := false
 	for _, g := range cfg.SensitiveGlobs {
-		if strings.Contains(g, ".zshrc") || strings.Contains(g, "login.keychain") {
+		if strings.Contains(g, "login.keychain") {
 			found = true
 			break
 		}
 	}
 	if !found {
 		t.Fatal("Load must merge guard-rules.json paths into SensitiveGlobs")
+	}
+}
+
+// Only secret-bearing guard rules seed sensitive-read matching: shell rc
+// files and harness settings are guarded against tampering, but every shell
+// or harness start reads them.
+func TestGuardRuleMergeOnlyReadSensitive(t *testing.T) {
+	doc, err := ParseGuardRules(guardRulesBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]bool{"ssh-keys": true, "cloud-creds": true, "keychain": true, "env-files": true, "shell-rc": false, "harness-config": false}
+	for _, r := range doc.Rules {
+		if w, ok := want[r.ID]; !ok || r.ReadSensitive != w {
+			t.Fatalf("rule %s read_sensitive = %v, want %v", r.ID, r.ReadSensitive, w)
+		}
+	}
+	cfg, err := Load(filepath.Join(t.TempDir(), "absent.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	has := func(suffix string) bool {
+		for _, g := range cfg.SensitiveGlobs {
+			if strings.HasSuffix(g, suffix) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, s := range []string{"/.zshrc", "/.zshenv", "/.bashrc", "/.profile", "/.claude/settings.json", "/.claude/settings.local.json", "/.cursor/hooks.json"} {
+		if has(s) {
+			t.Fatalf("SensitiveGlobs must not carry %s: %v", s, cfg.SensitiveGlobs)
+		}
+	}
+	for _, s := range []string{"/.aws/credentials", "/.netrc", "/.kube/config", "/.docker/config.json", "login.keychain*", "*.keychain-db", "/.env", "/.ssh/id_*"} {
+		if !has(s) {
+			t.Fatalf("SensitiveGlobs must keep %s: %v", s, cfg.SensitiveGlobs)
+		}
 	}
 }
 
@@ -530,5 +568,46 @@ func TestWorktreesKey(t *testing.T) {
 		if _, err := Load(p); err == nil || !strings.Contains(err.Error(), "worktrees.") {
 			t.Fatalf("overlay %q: err = %v, want a worktrees validation error", bad, err)
 		}
+	}
+}
+
+func TestSystemAgentKey(t *testing.T) {
+	c, err := Load(filepath.Join(t.TempDir(), "absent.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.SystemAgent.Enabled || c.SystemAgent.Endpoint != "http://127.0.0.1:11434" || c.SystemAgent.TimeoutMinutes != 30 {
+		t.Fatalf("default system_agent = %+v, want off, Ollama's loopback port, 30 minutes", c.SystemAgent)
+	}
+	p := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(p, []byte("system_agent:\n  enabled: true\n  endpoint: \"http://localhost:11500\"\n  model: qwen3\n  harness_model: qwen3-coder\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if c, err = Load(p); err != nil {
+		t.Fatal(err)
+	}
+	want := SystemAgentConfig{Enabled: true, Endpoint: "http://localhost:11500", Model: "qwen3", HarnessModel: "qwen3-coder", TimeoutMinutes: 30}
+	if c.SystemAgent != want {
+		t.Fatalf("system_agent = %+v, want %+v", c.SystemAgent, want)
+	}
+	for _, bad := range []string{
+		"system_agent:\n  enabled: true\n  endpoint: \"http://10.0.0.5:11434\"\n",
+		"system_agent:\n  enabled: true\n  endpoint: \"https://ollama.com\"\n",
+		"system_agent:\n  timeout_minutes: -1\n",
+		"system_agent:\n  timeout_minutes: 241\n",
+	} {
+		if err := os.WriteFile(p, []byte(bad), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Load(p); err == nil || !strings.Contains(err.Error(), "system_agent.") {
+			t.Fatalf("overlay %q: err = %v, want a system_agent validation error", bad, err)
+		}
+	}
+	// Off, a remote endpoint is inert and not an error: nothing dials it.
+	if err := os.WriteFile(p, []byte("system_agent:\n  endpoint: \"http://10.0.0.5:11434\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(p); err != nil {
+		t.Fatalf("disabled system agent with a remote endpoint: %v", err)
 	}
 }

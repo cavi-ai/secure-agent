@@ -200,6 +200,27 @@ func getProcPath(pid int32) string {
 	return ""
 }
 
+// Argv0 reads argv[0] out of the KERN_PROCARGS2 buffer; "" when unreadable.
+func (d *DarwinProcSource) Argv0(pid int32) string {
+	buf := procArgs2(pid)
+	if len(buf) <= 4 {
+		return ""
+	}
+	rest := buf[4:]
+	i := bytes.IndexByte(rest, 0) // exec path
+	if i < 0 {
+		return ""
+	}
+	rest = rest[i+1:]
+	for len(rest) > 0 && rest[0] == 0 { // alignment padding
+		rest = rest[1:]
+	}
+	if i := bytes.IndexByte(rest, 0); i >= 0 {
+		return string(rest[:i])
+	}
+	return string(rest)
+}
+
 // ProcEnvVar reads one variable from a process's start environment out of
 // the KERN_PROCARGS2 buffer (the env block follows argv) — the same
 // mechanism and the same same-user visibility limit as `ps eww`. "" when

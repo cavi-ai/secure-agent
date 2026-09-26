@@ -61,7 +61,7 @@ def build_harness(tmp):
     and app.js. Real assets are symlinked so relative paths resolve."""
     for f in ("index.html", "style.css", "lib.js", "app.js",
               "tab-overview.js", "tab-sessions.js", "tab-agents.js", "tab-egress.js", "tab-findings.js",
-              "tab-worktrees.js", "theme-init.js", "icon.svg"):
+              "tab-worktrees.js", "tab-agent.js", "theme-init.js", "icon.svg"):
         os.symlink(os.path.join(WEB_DIST, f), os.path.join(tmp, f))
     os.symlink(MOCK, os.path.join(tmp, "mock_dom.js"))
     html = open(os.path.join(WEB_DIST, "index.html")).read()
@@ -122,6 +122,7 @@ SHOTS = (
     ("sessions", "?tab=sessions&shot&raildemo", ("dark", "light")),
     ("agents", "?tab=agents&shot", ("dark", "light")),
     ("overview", "?tab=overview&shot", ("dark",)),
+    ("agent", "?tab=agent&shot", ("dark", "light")),
     ("worktrees-removing", "?tab=worktrees&shot&worktreedemo&removerunning", ("dark", "light")),
     ("worktrees-history", "?tab=worktrees&shot&historydemo", ("dark", "light")),
 )
@@ -143,7 +144,7 @@ def screenshot(chrome, origin, query, path):
 def main():
     ap = argparse.ArgumentParser(description="DOM-level console tests")
     ap.add_argument("--screenshot", metavar="DIR",
-                    help="also write {sessions,agents}-{dark,light}.png and overview-dark.png of the mock-rendered tabs to DIR")
+                    help="also write {sessions,agents,agent}-{dark,light}.png and overview-dark.png of the mock-rendered tabs to DIR")
     args = ap.parse_args()
     chrome = find_chrome()
     if not chrome:
@@ -249,6 +250,11 @@ def main():
         dom_wtadopt = dump_dom(chrome, tmp, "?tab=worktrees&adoptdemo")
         dom_wtcadence = dump_dom(chrome, tmp, "?tab=worktrees&removecadence")
         dom_clutteradvise = dump_dom(chrome, tmp, "?tab=worktrees&clutteradvise")
+        # The Agent tab is served under the daemon's CSP like the console.
+        dom_agent = dump_dom(chrome, tmp, "?tab=agent", origin)
+        dom_agentoff = dump_dom(chrome, tmp, "?tab=agent&agentoff", origin)
+        dom_agentchat = dump_dom(chrome, tmp, "?tab=agent&agentchat", origin)
+        dom_agentdispatch = dump_dom(chrome, tmp, "?tab=agent&agentdispatch", origin)
         dom_scope = dump_dom(chrome, tmp, "?scopedemo")
         dom_pattern = dump_dom(chrome, tmp, "?patterndemo")
         dom_patternact = dump_dom(chrome, tmp, "?patterndemo&patternact")
@@ -704,9 +710,9 @@ def main():
         # --- tabs (console IA) ---
         tab_ids = re.findall(r'class="tab-btn[^"]*" data-tab="(\w+)"', dom)
         tab_labels = re.findall(r'data-tab="\w+" role="tab"[^>]*>\s*<svg[^>]*>.*?</svg><span>([^<]+)</span>', dom, re.S)
-        check("tab bar renders exactly four tabs, Home first",
-              dom.count('class="tab-btn') == 4 and tab_ids == ["home", "sessions", "egress", "policy"]
-              and tab_labels == ["Home", "Sessions", "Egress", "Policy"], f"ids={tab_ids} labels={tab_labels}")
+        check("tab bar renders exactly five tabs, Home first, Agent last",
+              dom.count('class="tab-btn') == 5 and tab_ids == ["home", "sessions", "egress", "policy", "agent"]
+              and tab_labels == ["Home", "Sessions", "Egress", "Policy", "Agent"], f"ids={tab_ids} labels={tab_labels}")
         check("the attention panel lives in Home, first",
               dom.index('id="tab-home"') < dom.index('id="attention-center"') < dom.index('id="spend-card"')
               < dom.index('id="home-findings"') < dom.index('id="home-trends"') < dom.index('id="tab-sessions"'))
@@ -967,6 +973,10 @@ def main():
         check("attention center groups the whole api-service session",
               'class="attention-group' in attention and "api-service" in attention
               and "5.5 GB" in attention and "132.5%" in attention and "<b>2</b> processes" in attention)
+        codex_group = (re.search(r'<article class="attention-group[^"]*">((?:(?!</article>).)*codex activity.*?)</article>', attention, re.S) or [None, ""])[1]
+        check("attention: an agent-level group names its processes and sessions, not the generic sentence",
+              '<span class="attention-workspace">2 processes (codex 0.46.0 via Terminal.app) across 2 sessions, all exited</span>' in codex_group
+              and "safely attributed" not in dom, f"group={codex_group[:300]!r}")
         check("attention center unifies all actionable signal types",
               all(label in attention for label in ("Guard decision", "Resource pressure", "Critical incident", "Critical finding", "Uninspected egress")))
         check("attention resource actions target the full session",
@@ -1478,6 +1488,52 @@ def main():
         check("worktrees: a removal already running when the tab opens gets the progress toast without a click",
               '<p class="rt-title" role="status">Removing feat/done</p>' in ta and "checking it is still safe to remove" in ta,
               ta[:300])
+
+        # --- Agent tab: the system agent chat, plans, runs, harnesses ---
+        def agent_block(dom_text):
+            return dom_text.split('id="tab-agent"', 1)[-1].split('id="drawer"', 1)[0]
+
+        def agent_count(dom_text, cls):
+            return agent_block(dom_text).count(f'class="{cls}')
+
+        ag = agent_block(dom_agent)
+        check("agent: the tab opens with the conversation, plans, runs and the model state",
+              'class="tab-btn active" data-tab="agent"' in dom_agent
+              and agent_count(dom_agent, "agent-msg ") == 5 and ag.count('class="agent-plan" data-plan=') == 2
+              and ag.count('class="agent-run" data-run=') == 2
+              and 'qwen3:latest on Ollama 0.15.1 · stays on this machine' in ag)
+        check("agent: message text, proposal tasks, plan titles and run output render escaped",
+              "<img src=x" not in ag and "&lt;img src=x onerror=alert(1)&gt;" in ag)
+        check("agent: the route-to dropdown lists every harness; ones that cannot run are marked for later",
+              '<option value="openclaw">OpenClaw (plan for later)</option>' in ag
+              and '<option value="codex">Codex</option>' in ag and ag.count("<option ") == 4)
+        check("agent: a plan whose harness cannot run says why and its dispatch buttons are disabled",
+              'agent-plan-reason">OpenClaw is not installed where the daemon can find it (openclaw)</div>' in ag
+              and 'data-plan="2" data-mode="headless" disabled=""' in ag)
+        check("agent: a proposal offers Save plan and dispatch; a saved one names its plan",
+              'data-action="agent-save-proposal" data-message="2">Save plan</button>' in ag
+              and 'Saved as plan #2' in ag)
+        check("agent: a manual terminal dispatch offers its command to copy",
+              "data-action=\"agent-copy\" data-text=\"sh '/Users/dev/.config/secure-agent/sysagent/terminal-1-1.sh'\"" in ag)
+        check("agent: harnesses show ready or the reason; skills are listed",
+              ag.count('badge badge-ok">ready</span>') == 2 and 'data-action="agent-skill" data-skill="signing"' in ag)
+        ago = agent_block(dom_agentoff)
+        check("agent: off, the tab says how to turn it on and the composer is disabled",
+              'The system agent is off' in ago and 'system_agent:\n  enabled: true' in ago
+              and '<textarea id="agent-input"' in ago and ago.split('<textarea id="agent-input"', 1)[1].split('>', 1)[0].count('disabled') == 1)
+        agc = agent_block(dom_agentchat)
+        check("agent: a message sent from the composer shows, then the model's reply with its proposal lands",
+              "POST /agent/chat" in pre(dom_agentchat, "mock-requests")
+              and "Keep my Git token in the keychain" in agc and "Store Git credentials in the keychain" in agc
+              and "The local model is answering" not in agc and agent_count(dom_agentchat, "agent-msg ") == 7)
+        agd = agent_block(dom_agentdispatch)
+        reqs = pre(dom_agentdispatch, "mock-requests")
+        check("agent: Run headless dispatches after the dialog; the run lands under Runs and finishes",
+              "POST /agent/dispatch" in reqs and 'Credentials now live in the keychain.' in agd
+              and agd.count('class="agent-run" data-run=') == 3 and 'badge badge-ok">done</span>' in agd.split('id="agent-runs"', 1)[1])
+        check("agent: Save plan on a proposal saves it and the reply names the plan",
+              "POST /agent/plans" in reqs and agd.count('class="agent-plan" data-plan=') == 3
+              and agd.count("Saved as plan #") == 2 and 'data-action="agent-save-proposal"' not in agd)
 
         if args.screenshot:
             shot_dir = os.path.abspath(args.screenshot)

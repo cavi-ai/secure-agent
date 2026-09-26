@@ -30,6 +30,11 @@ type GuardRuleDoc struct {
 		ID    string   `json:"id"`
 		Paths []string `json:"paths"`
 		Mode  string   `json:"mode"`
+		// ReadSensitive: the files hold secrets, so reading one seeds the
+		// correlator's read-then-connect rule. False for files the guard
+		// protects from tampering but every shell or harness start reads
+		// (shell rc files, harness settings and hooks).
+		ReadSensitive bool `json:"read_sensitive"`
 	} `json:"rules"`
 	DirScan [][]string `json:"dir_scan"`
 }
@@ -64,6 +69,9 @@ func mergeGuardRulePaths(raw *rawConfig) {
 		seen[g] = true
 	}
 	for _, r := range doc.Rules {
+		if !r.ReadSensitive {
+			continue
+		}
 		for _, p := range r.Paths {
 			if p == "" || seen[p] || !globSafeForCorrelator(p) {
 				continue
@@ -253,6 +261,24 @@ type AdvisorConfig struct {
 	ManagedModel string
 }
 
+// SystemAgentConfig configures the system agent behind the console's Agent
+// tab: a chat with a model served by a LOCAL Ollama that drafts plans and
+// dispatches a harness (Claude Code, Codex, OpenClaw, Hermes Agent) run
+// against that same Ollama, so the work never reaches a vendor model. Off
+// unless enabled; the endpoint must be loopback, like the advisor's.
+type SystemAgentConfig struct {
+	Enabled bool `yaml:"enabled"`
+	// Endpoint is the Ollama base URL (no /v1).
+	Endpoint string `yaml:"endpoint"`
+	// Model is the chat model; "" = the first model the server lists.
+	Model string `yaml:"model"`
+	// HarnessModel is the model dispatched harnesses run; "" = Model. A
+	// harness needs a tool-calling model with a long context.
+	HarnessModel string `yaml:"harness_model"`
+	// TimeoutMinutes bounds one headless dispatch (0 = 30).
+	TimeoutMinutes int `yaml:"timeout_minutes"`
+}
+
 // RetentionYAML is the on-disk shape of event retention. Zero values fall
 // back to the store defaults (conn churn 24h, everything else 7d).
 type RetentionYAML struct {
@@ -315,6 +341,7 @@ type rawConfig struct {
 	Retention           RetentionYAML         `yaml:"retention"`
 	OTLP                OTLPConfig            `yaml:"otlp"`
 	Worktrees           WorktreesConfig       `yaml:"worktrees"`
+	SystemAgent         SystemAgentConfig     `yaml:"system_agent"`
 	// Pricing entries are decoded one by one (parsePricing) so a single
 	// malformed entry is dropped instead of failing the whole overlay.
 	Pricing map[string]yaml.Node `yaml:"pricing"`
@@ -345,6 +372,7 @@ type Config struct {
 	Advisor           AdvisorConfig
 	OTLP              OTLPConfig
 	Worktrees         WorktreesConfig
+	SystemAgent       SystemAgentConfig
 	// Pricing is the operator price table, model id or prefix → USD per 1M
 	// tokens [input, output]. It wins over the built-in table.
 	Pricing map[string][2]float64
@@ -487,6 +515,7 @@ func loadWithOverlayError(explicitPath string) (Config, error, error) {
 			Roots:     expandPaths(raw.Worktrees.Roots),
 			StaleDays: raw.Worktrees.StaleDays,
 		},
+		SystemAgent: raw.SystemAgent,
 		Advisor: AdvisorConfig{
 			Enabled:      raw.Advisor.Enabled,
 			Endpoint:     raw.Advisor.Endpoint,
@@ -502,6 +531,12 @@ func loadWithOverlayError(explicitPath string) (Config, error, error) {
 	}
 	if cfg.Advisor.Enabled && !cfg.Advisor.Managed && cfg.Advisor.Endpoint == "" {
 		cfg.Advisor.Endpoint = "http://127.0.0.1:8080"
+	}
+	if cfg.SystemAgent.Endpoint == "" {
+		cfg.SystemAgent.Endpoint = "http://127.0.0.1:11434"
+	}
+	if cfg.SystemAgent.TimeoutMinutes == 0 {
+		cfg.SystemAgent.TimeoutMinutes = 30
 	}
 	cfg.Firewall.Registry.SaltRef = expandPath(cfg.Firewall.Registry.SaltRef)
 	cfg.Firewall.Registry.IngestSources = expandPaths(cfg.Firewall.Registry.IngestSources)
@@ -589,15 +624,34 @@ func (c Config) Validate() error {
 			return fmt.Errorf("advisor.endpoint must not be set when advisor.managed is true (it is derived from the spawned server)")
 		}
 	} else if c.Advisor.Enabled {
-		u, err := url.Parse(c.Advisor.Endpoint)
-		if err != nil || u.Hostname() == "" {
-			return fmt.Errorf("advisor.endpoint %q is not a valid URL", c.Advisor.Endpoint)
+		if err := validateLoopback("advisor.endpoint", c.Advisor.Endpoint); err != nil {
+			return err
 		}
-		h := strings.ToLower(u.Hostname())
-		ip := net.ParseIP(h)
-		if h != "localhost" && (ip == nil || !ip.IsLoopback()) {
-			return fmt.Errorf("advisor.endpoint must be loopback (127.0.0.1/::1/localhost), got %q", c.Advisor.Endpoint)
+	}
+	// The system agent runs harnesses against this endpoint: loopback keeps
+	// every prompt, file and answer on this machine.
+	if c.SystemAgent.Enabled {
+		if err := validateLoopback("system_agent.endpoint", c.SystemAgent.Endpoint); err != nil {
+			return err
 		}
+	}
+	if c.SystemAgent.TimeoutMinutes < 0 || c.SystemAgent.TimeoutMinutes > 240 {
+		return fmt.Errorf("system_agent.timeout_minutes must be 0-240, got %d", c.SystemAgent.TimeoutMinutes)
+	}
+	return nil
+}
+
+// validateLoopback rejects an endpoint that is not a URL on 127.0.0.1, ::1
+// or localhost.
+func validateLoopback(field, endpoint string) error {
+	u, err := url.Parse(endpoint)
+	if err != nil || u.Hostname() == "" {
+		return fmt.Errorf("%s %q is not a valid URL", field, endpoint)
+	}
+	h := strings.ToLower(u.Hostname())
+	ip := net.ParseIP(h)
+	if h != "localhost" && (ip == nil || !ip.IsLoopback()) {
+		return fmt.Errorf("%s must be loopback (127.0.0.1/::1/localhost), got %q", field, endpoint)
 	}
 	return nil
 }

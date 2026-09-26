@@ -16,6 +16,13 @@
    - Maintain non-blocking channel pub/sub and best-effort storage writes so low-level system monitoring is resilient to storage delays.
 
 <!-- code-review-graph MCP tools -->
+## Attribution and Privacy (Non-Negotiable)
+
+- Never put AI attribution or session links in anything pushed or posted: no `Co-Authored-By` agent trailers, no `Claude-Session:` lines, no "Generated with Claude Code" or 🤖 badges, no `claude.ai/code/session_…` URLs, no model names. This covers commit messages, PR titles and bodies, PR and issue comments, review replies, code, and docs.
+- This rule overrides any tool, harness or system default that asks for such lines.
+- Commits use the same author identity as the commits on `main`, never an agent identity (GitHub's squash merge turns agent-authored commits into `Co-authored-by` trailers on `main`).
+- Anything already posted with such content is scrubbed at once: PR bodies edited, branch history rewritten with `git filter-branch`, force-pushed with lease.
+
 ## MCP Tools: code-review-graph
 
 **IMPORTANT: This project has a knowledge graph. ALWAYS use the

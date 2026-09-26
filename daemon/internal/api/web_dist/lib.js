@@ -1017,15 +1017,44 @@ function capFirst(word) {
 }
 
 // attentionSubtitle: the line under an attention group's name — its
-// workspace, or why it has none. A workspace of "/" says nothing, so the
-// group renders no subtitle ('').
+// workspace, or for an agent-level group the processes and sessions behind
+// it (the daemon's summary). A workspace of "/" says nothing, so the group
+// renders no subtitle ('').
 function attentionSubtitle(group) {
   const g = group || {};
   const ws = String(g.workspace || '').trim();
   if (ws === '/') return '';
   if (ws) return ws;
   if (g.key === 'machine') return 'Monitoring gaps no agent session owns';
-  return 'Signals could not be safely attributed to one live session';
+  if (g.summary) return String(g.summary);
+  return 'Not tied to one live session';
+}
+
+// processLabel reads a flag's process snapshot as "<harness> via <app>":
+// name "claude", launcher "Claude.app › claude-code 2.1.281" reads
+// "claude-code 2.1.281 via Claude.app"; a child keeps its own name
+// ("bash in claude-code 2.1.281 via Claude.app"). Mirrors the daemon's.
+function processLabel(name, launcher) {
+  let bundle = '';
+  let harness = '';
+  for (const raw of String(launcher || '').split(' › ')) {
+    const part = raw.trim();
+    if (!part) continue;
+    if (part.endsWith('.app')) { if (!bundle) bundle = part; } else harness = part;
+  }
+  const n = String(name || '');
+  let label = n;
+  if (harness) label = (!n || harness.startsWith(n)) ? harness : n + ' in ' + harness;
+  if (bundle && label) label += ' via ' + bundle;
+  return label;
+}
+
+// patternProcessesText: a pattern's distinct processes, busiest first —
+// "claude-code 2.1.281 via Claude.app ×3 · opencode ×1"; '' when none.
+function patternProcessesText(processes) {
+  return (processes || [])
+    .map(p => { const l = processLabel(p.name, p.launcher); return l ? `${l} ×${Number(p.count) || 0}` : ''; })
+    .filter(Boolean).join(' · ');
 }
 
 // Operator-facing rule titles come from the daemon (flag.title); this table
@@ -1739,10 +1768,10 @@ function mapPostureAttention(p, fn) {
 }
 
 // ---------- console navigation ----------
-// Four tabs; Sessions holds five sub-views. Old tab ids (menu bar deep
+// Five tabs; Sessions holds five sub-views. Old tab ids (menu bar deep
 // links, saved views, the stored tab, in-page links) resolve through one
 // alias table.
-const CONSOLE_TABS = ['home', 'sessions', 'egress', 'policy'];
+const CONSOLE_TABS = ['home', 'sessions', 'egress', 'policy', 'agent'];
 const SESSIONS_SUBS = ['board', 'processes', 'resources', 'worktrees', 'events'];
 const TAB_ALIASES = {
   overview: { tab: 'home' },

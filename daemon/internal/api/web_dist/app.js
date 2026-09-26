@@ -700,7 +700,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // ---------- tabs ----------
   // The console is organized by question (Home / Sessions / Egress /
-  // Policy), not by data source. State persists per tab-session; the hash
+  // Policy / Agent), not by data source. State persists per tab-session; the hash
   // carries the tab (and the Sessions sub-view) for deep links (#ct is lifted
   // and stripped BEFORE this runs, so the two never collide).
   // ---------- render scheduler ----------
@@ -718,7 +718,7 @@ document.addEventListener('DOMContentLoaded', () => {
     ['endpoints', renderEndpoints], ['firewall', renderFirewall], ['incidents', renderIncidents], ['fleet', renderFleet],
     ['audit', renderAudit], ['sources', renderSources], ['flags', renderFlags], ['attention', renderAttention],
     ['events', renderEvents], ['activity', renderActivity], ['worktrees', renderWorktrees], ['clutter', renderClutter], ['tab-badges', renderTabBadges],
-    ['notify', renderNotifyRules], ['policy', renderPolicyLists]
+    ['notify', renderNotifyRules], ['policy', renderPolicyLists], ['agent', renderAgent]
   ];
   // Panel → where it lives: tab, tab/sub-view, or tab:group (a Home
   // <details> group). A panel absent here is global (always on screen).
@@ -730,7 +730,7 @@ document.addEventListener('DOMContentLoaded', () => {
     resources: 'sessions/resources', history: 'sessions/resources',
     worktrees: 'sessions/worktrees', clutter: 'sessions/worktrees', events: 'sessions/events',
     endpoints: 'egress', firewall: 'egress', sources: 'egress',
-    notify: 'policy', policy: 'policy', audit: 'policy'
+    notify: 'policy', policy: 'policy', audit: 'policy', agent: 'agent'
   };
   // A panel is on screen when its tab is active, its sub-view is the open
   // one, and its Home group is expanded.
@@ -747,7 +747,7 @@ document.addEventListener('DOMContentLoaded', () => {
     resources: 'resource-board', history: 'history-board', sessions: 'session-rail', agents: 'agents-container',
     fleet: 'fleet-container', endpoints: 'endpoints-container', firewall: 'firewall-container', sources: 'sources-list', incidents: 'incidents-container',
     audit: 'audit-container', flags: 'flags-list', attention: 'attention-list', events: 'events-container',
-    worktrees: 'worktrees-container', clutter: 'clutter-container', notify: 'notify-pop'
+    worktrees: 'worktrees-container', clutter: 'clutter-container', notify: 'notify-pop', agent: 'agent-side'
   };
   const SLOW_ONLY = new Set(['resources', 'history', 'fleet', 'audit', 'sources', 'activity', 'spend']);
   const PANEL_MIN_MS = 250;
@@ -1098,6 +1098,223 @@ document.addEventListener('DOMContentLoaded', () => {
     put('policy-mutes', 'badge-mutes', st.mutes, policyListHTML('mute', st.mutes, st));
   }
 
+  // Agent tab: the system agent's status, chat, plans and runs load when
+  // the tab opens and after each action. While the model answers or a
+  // headless run is in flight, the busy part is re-read every
+  // AGENT_POLL_MS (tab open only); when it settles, everything once more.
+  const AGENT_POLL_MS = 1500;
+  const AGENT_POLL_LIMIT = 1200;
+  const AGENT_TIMEOUT_MS = 15000;
+  const agentState = { status: null, chat: null, plans: null, runs: null, skills: null, error: '', polls: 0, lastCount: 0 };
+  // Literal paths: the proxy's console allow-list test reads them from here.
+  const AGENT_PATHS = { status: '/agent/status', chat: '/agent/chat', plans: '/agent/plans', runs: '/agent/runs' };
+  let agentPollTimer = null;
+  const agentComposer = document.getElementById('agent-composer');
+  const agentInput = document.getElementById('agent-input');
+  const agentHarnessSelect = document.getElementById('agent-harness');
+  const agentWorkdirInput = document.getElementById('agent-workdir');
+  try { if (agentWorkdirInput) agentWorkdirInput.value = sessionStorage.getItem('sa.agent-workdir') || ''; } catch { /* private mode */ }
+  async function agentFetch(path, opts = {}) {
+    const init = { timeoutMs: AGENT_TIMEOUT_MS, method: opts.method || 'GET' };
+    if (opts.body !== undefined) {
+      init.headers = { 'Content-Type': 'application/json' };
+      init.body = JSON.stringify(opts.body);
+    }
+    const r = await apiFetch(path, init);
+    if (r.status === 403) { endSession(); throw new Error('session ended'); }
+    const text = await r.text();
+    if (!r.ok) throw new Error(text.trim() || String(r.status));
+    try { return JSON.parse(text); } catch { return null; }
+  }
+  function agentBusy() {
+    return !!((agentState.chat && agentState.chat.chatting) || (agentState.runs || []).some(r => r.status === 'running'));
+  }
+  async function loadAgent(parts) {
+    const want = parts || ['status', 'chat', 'plans', 'runs'];
+    const wasBusy = agentBusy();
+    try {
+      const got = await Promise.all(want.map(p => agentFetch(AGENT_PATHS[p])));
+      want.forEach((p, i) => { agentState[p] = got[i]; });
+      agentState.error = '';
+      if (want.includes('status')) fillAgentHarnesses();
+    } catch (err) {
+      agentState.error = "Couldn't load the system agent: " + (err.message || err);
+    }
+    markDirty('agent');
+    followAgent(wasBusy);
+  }
+  function followAgent(wasBusy) {
+    if (!agentBusy()) {
+      agentState.polls = 0;
+      if (wasBusy) loadAgent(['chat', 'plans', 'runs']);
+      return;
+    }
+    if (agentPollTimer || activeTab !== 'agent' || agentState.polls >= AGENT_POLL_LIMIT) return;
+    agentState.polls++;
+    agentPollTimer = setTimeout(() => {
+      agentPollTimer = null;
+      loadAgent(agentState.chat && agentState.chat.chatting ? ['chat'] : ['runs']);
+    }, AGENT_POLL_MS);
+  }
+  // The route-to dropdown follows /agent/status; the pick is kept per tab.
+  function fillAgentHarnesses() {
+    if (!agentHarnessSelect || !agentState.status) return;
+    let pick = agentHarnessSelect.value;
+    try { pick = pick || sessionStorage.getItem('sa.agent-harness') || ''; } catch { /* private mode */ }
+    const hs = agentState.status.harnesses || [];
+    if (!hs.some(h => h.id === pick)) pick = (hs.find(h => h.ready) || hs[0] || {}).id || '';
+    agentHarnessSelect.innerHTML = agentHarnessOptionsHTML(agentState.status, pick);
+  }
+  function renderAgent() {
+    const st = agentState.status;
+    const enabled = !!(st && st.enabled);
+    const stateEl = document.getElementById('agent-state');
+    if (stateEl) stateEl.textContent = agentState.error || agentStateText(st);
+    if (agentComposer) {
+      agentComposer.classList.toggle('off', !enabled);
+      agentComposer.querySelectorAll('textarea, select, input, button').forEach(el => { el.disabled = !enabled; });
+    }
+    const thread = document.getElementById('agent-thread');
+    if (thread && st && !enabled) {
+      if (thread._saEmpty !== 'off') { thread.innerHTML = agentOffHTML(); thread._saEmpty = 'off'; }
+    } else if (thread) {
+      const items = agentThreadItems(agentState.chat, st);
+      patchList(thread, items, { key: i => i.key, html: i => i.html, empty: agentEmptyThreadHTML(st) });
+      if (items.length !== agentState.lastCount) {
+        agentState.lastCount = items.length;
+        thread.scrollTop = thread.scrollHeight;
+      }
+    }
+    const plans = agentState.plans;
+    const plansEl = document.getElementById('agent-plans');
+    if (plansEl && plans) {
+      patchList(plansEl, plans, { key: p => p.id, html: p => agentPlanHTML(p, st),
+        empty: '<div class="empty"><span>No plans yet. A proposal whose harness cannot run now is saved here; Save as plan keeps any request for later.</span></div>' });
+    }
+    const badge = document.getElementById('badge-agent-plans');
+    if (badge) badge.textContent = plans ? plans.length : 0;
+    const runsEl = document.getElementById('agent-runs');
+    if (runsEl && agentState.runs) {
+      const now = Date.now();
+      patchList(runsEl, agentState.runs, { key: r => r.id, html: r => agentRunHTML(r, st, now),
+        empty: '<div class="empty"><span>No dispatches yet. Run a plan headless or open it in a terminal.</span></div>' });
+    }
+    const hEl = document.getElementById('agent-harnesses');
+    if (hEl) hEl.innerHTML = agentHarnessesHTML(st);
+    const sEl = document.getElementById('agent-skills');
+    if (sEl) sEl.innerHTML = agentSkillsHTML(st);
+  }
+  window.sendAgentMessage = async function() {
+    const text = agentInput ? agentInput.value.trim() : '';
+    if (!text) return;
+    try {
+      const res = await agentFetch('/agent/chat', { method: 'POST',
+        body: { message: text, harness: agentHarnessSelect.value, workdir: agentWorkdirInput.value.trim() } });
+      agentInput.value = '';
+      const chat = agentState.chat || (agentState.chat = { messages: [] });
+      if (res && res.message) chat.messages = [...(chat.messages || []), res.message];
+      chat.chatting = true;
+      renderNow(['agent']);
+      followAgent(false);
+    } catch (err) {
+      showToast('Not sent: ' + (err.message || err), 'danger');
+    }
+  };
+  window.saveAgentRequest = async function() {
+    const text = agentInput ? agentInput.value.trim() : '';
+    if (!text) { showToast("Write the request first — it becomes the plan's task", 'info'); return; }
+    const workdir = agentWorkdirInput.value.trim() || (agentState.status && agentState.status.home) || '';
+    try {
+      const res = await agentFetch('/agent/plans', { method: 'POST',
+        body: { harness: agentHarnessSelect.value, mode: 'terminal', workdir, task: text } });
+      agentInput.value = '';
+      showToast(`Saved as plan #${res.plan.id} — dispatch it from Plans`, 'success');
+      loadAgent(['plans']);
+    } catch (err) {
+      showToast('Not saved: ' + (err.message || err), 'danger');
+    }
+  };
+  window.saveAgentProposal = async function(messageId) {
+    try {
+      const res = await agentFetch('/agent/plans', { method: 'POST', body: { message_id: messageId } });
+      showToast(`Saved as plan #${res.plan.id}`, 'success');
+      loadAgent(['chat', 'plans']);
+    } catch (err) {
+      showToast('Not saved: ' + (err.message || err), 'danger');
+    }
+  };
+  // dispatchAgent confirms, then (for a reply's proposal) saves it as a
+  // plan, then dispatches it.
+  window.dispatchAgent = async function({ planId, messageId, mode }) {
+    let plan = planId ? (agentState.plans || []).find(p => p.id === planId) : null;
+    if (!plan && messageId) {
+      const m = ((agentState.chat && agentState.chat.messages) || []).find(x => x.id === messageId);
+      plan = m && m.proposal ? { ...m.proposal } : null;
+    }
+    if (!plan) return;
+    const ok = await window.saConfirm(agentDispatchMessage(plan, mode, agentState.status),
+      { title: mode === 'terminal' ? 'Open in terminal' : 'Run headless', okLabel: mode === 'terminal' ? 'Open' : 'Run', danger: false });
+    if (!ok) return;
+    try {
+      if (!planId) {
+        const saved = await agentFetch('/agent/plans', { method: 'POST', body: { message_id: messageId } });
+        planId = saved.plan.id;
+      }
+      const res = await agentFetch('/agent/dispatch', { method: 'POST', body: { plan_id: planId, mode } });
+      const run = (res && res.run) || {};
+      const label = agentHarnessLabel(agentState.status, run.harness);
+      const said = { running: `${label} is running headless — its answer shows under Runs`, opened: `${label} opened in Terminal`,
+        manual: 'Run the command under Runs in a terminal' };
+      showToast(said[run.status] || 'Dispatched', run.status === 'manual' ? 'info' : 'success');
+    } catch (err) {
+      showToast('Not dispatched: ' + (err.message || err), 'danger');
+    }
+    loadAgent(['chat', 'plans', 'runs']);
+  };
+  window.deleteAgentPlan = async function(planId) {
+    const ok = await window.saConfirm(`Delete plan #${planId}? Its runs stay listed.`, { title: 'Delete plan', okLabel: 'Delete' });
+    if (!ok) return;
+    try {
+      await agentFetch('/agent/plans?id=' + encodeURIComponent(planId), { method: 'DELETE' });
+      loadAgent(['plans']);
+    } catch (err) {
+      showToast('Not deleted: ' + (err.message || err), 'danger');
+    }
+  };
+  window.clearAgentChat = async function() {
+    const ok = await window.saConfirm('Delete the conversation? Plans and runs stay.', { title: 'Clear conversation', okLabel: 'Clear' });
+    if (!ok) return;
+    try {
+      await agentFetch('/agent/chat', { method: 'DELETE' });
+      loadAgent(['chat']);
+    } catch (err) {
+      showToast('Not cleared: ' + (err.message || err), 'danger');
+    }
+  };
+  window.showAgentSkill = async function(id) {
+    try {
+      if (!agentState.skills) agentState.skills = await agentFetch('/agent/skills');
+      const s = (agentState.skills || []).find(x => x.id === id);
+      if (!s) return;
+      openDrawer({ title: s.title, icon: 'doc',
+        body: `<div class="panel-body"><p>${escapeHTML(s.summary)}</p><pre class="agent-skill-body">${escapeHTML(s.body)}</pre></div>` });
+    } catch (err) {
+      showToast("Couldn't load the skill: " + (err.message || err), 'danger');
+    }
+  };
+  if (agentComposer) {
+    agentComposer.addEventListener('submit', (e) => { e.preventDefault(); window.sendAgentMessage(); });
+    agentInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); window.sendAgentMessage(); }
+    });
+    agentHarnessSelect.addEventListener('change', () => {
+      try { sessionStorage.setItem('sa.agent-harness', agentHarnessSelect.value); } catch { /* private mode */ }
+    });
+    agentWorkdirInput.addEventListener('change', () => {
+      try { sessionStorage.setItem('sa.agent-workdir', agentWorkdirInput.value.trim()); } catch { /* private mode */ }
+    });
+  }
+
   // dropWorktreeRows removes rows the daemon just pruned or moved to the
   // Trash, so the tab updates without a rescan.
   function dropWorktreeRows(paths) {
@@ -1185,6 +1402,7 @@ document.addEventListener('DOMContentLoaded', () => {
       loadLedger();
     }
     if (activeTab === 'policy' && from !== 'policy') loadPolicy();
+    if (activeTab === 'agent' && from !== 'agent') loadAgent();
     const focus = r.focus === 'attention' ? document.getElementById('attention-center') : group;
     if (focus && focus.scrollIntoView) focus.scrollIntoView({ behavior: 'auto', block: 'start' });
   }
@@ -3465,6 +3683,44 @@ document.addEventListener('DOMContentLoaded', () => {
       case 'policy-refresh':
         e.preventDefault();
         loadPolicy();
+        break;
+      case 'agent-refresh':
+        e.preventDefault();
+        loadAgent();
+        break;
+      case 'agent-clear':
+        e.preventDefault();
+        window.clearAgentChat();
+        break;
+      case 'agent-save-plan':
+        e.preventDefault();
+        window.saveAgentRequest();
+        break;
+      case 'agent-save-proposal':
+        e.preventDefault();
+        window.saveAgentProposal(Number(d.message));
+        break;
+      case 'agent-dispatch':
+        e.preventDefault();
+        window.dispatchAgent({ planId: Number(d.plan), mode: d.mode });
+        break;
+      case 'agent-dispatch-proposal':
+        e.preventDefault();
+        window.dispatchAgent({ messageId: Number(d.message), mode: d.mode });
+        break;
+      case 'agent-plan-delete':
+        e.preventDefault();
+        window.deleteAgentPlan(Number(d.plan));
+        break;
+      case 'agent-skill':
+        e.preventDefault();
+        window.showAgentSkill(d.skill);
+        break;
+      case 'agent-copy':
+        e.preventDefault();
+        (navigator.clipboard ? navigator.clipboard.writeText(d.text || '') : Promise.reject(new Error('no clipboard'))).then(
+          () => showToast('Copied', 'success'),
+          () => showToast('Copy failed — select the text instead', 'danger'));
         break;
       case 'unmute':
         window.unmuteFlag(d.rule, d.host, d.agent);

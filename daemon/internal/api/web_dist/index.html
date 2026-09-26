@@ -29,6 +29,7 @@
       <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></symbol>
       <symbol id="i-history" viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 1 2.3 5.6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M3.5 19v-4.5H8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M12 8v4.5l3 1.8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></symbol>
       <symbol id="i-branch" viewBox="0 0 24 24"><circle cx="7" cy="5.5" r="2.2" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="7" cy="18.5" r="2.2" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="17" cy="8" r="2.2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M7 7.7v8.6M17 10.2c0 4-4 4.3-9.3 6.4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+      <symbol id="i-chat" viewBox="0 0 24 24"><path d="M5 5h14a1.5 1.5 0 0 1 1.5 1.5v8A1.5 1.5 0 0 1 19 16h-7l-4.5 3.5V16H5a1.5 1.5 0 0 1-1.5-1.5v-8A1.5 1.5 0 0 1 5 5z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M8 10.5h.01M12 10.5h.01M16 10.5h.01" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></symbol>
       <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6 9.5a6 6 0 1 1 12 0c0 4.5 2 6 2 6H4s2-1.5 2-6z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M10 19a2.2 2.2 0 0 0 4 0" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
     </defs>
   </svg>
@@ -188,6 +189,9 @@
       </button>
       <button class="tab-btn" data-tab="policy" role="tab" aria-selected="false" aria-controls="tab-policy">
         <svg class="icon"><use href="#i-doc"/></svg><span>Policy</span>
+      </button>
+      <button class="tab-btn" data-tab="agent" role="tab" aria-selected="false" aria-controls="tab-agent">
+        <svg class="icon"><use href="#i-chat"/></svg><span>Agent</span>
       </button>
     </nav>
     <button type="button" class="tabs-posture" id="tabs-posture" data-action="goto-top" title="Back to top" data-state="all-clear" hidden><span class="dot" aria-hidden="true"></span><span id="tabs-posture-text">All clear</span></button>
@@ -594,6 +598,57 @@
           </div>
         </div>
       </div>
+
+      <!-- Agent: chat with the system agent (a model on the local Ollama),
+           its plans and dispatches, and the harnesses it routes to. The
+           composer is static; the lists re-render. -->
+      <div class="tabpanel" id="tab-agent" role="tabpanel" hidden>
+        <div class="agent-layout">
+          <section class="panel agent-chat" id="agent-chat">
+            <div class="panel-head">
+              <h2><svg class="icon"><use href="#i-chat"/></svg>System agent</h2>
+              <span class="agent-state" id="agent-state">Loading…</span>
+              <button type="button" class="btn btn-ghost btn-sm" data-action="agent-clear" title="Delete the conversation (plans and runs stay)"><span>Clear</span></button>
+            </div>
+            <div class="agent-thread" id="agent-thread" role="log" aria-live="polite" aria-label="Conversation with the system agent"></div>
+            <form class="agent-composer" id="agent-composer">
+              <label class="sr-only" for="agent-input">Message the system agent</label>
+              <textarea id="agent-input" class="input agent-input" rows="3" maxlength="8000" placeholder="Ask about keys, sign-in, signing or a harness — or describe work to hand to a harness. Never paste a secret."></textarea>
+              <div class="agent-composer-row">
+                <label class="agent-route">Route to <select id="agent-harness" class="select select-sm"></select></label>
+                <input id="agent-workdir" class="input agent-workdir" type="text" spellcheck="false" autocomplete="off" placeholder="Folder (default: your home)" aria-label="Folder the harness works in">
+                <button type="button" class="btn btn-ghost btn-sm" data-action="agent-save-plan" title="Keep this request as a plan to dispatch later">Save as plan</button>
+                <button type="submit" class="btn btn-primary btn-sm" id="agent-send">Send</button>
+              </div>
+            </form>
+          </section>
+          <div class="col" id="agent-side">
+            <section class="panel" id="agent-plans-panel">
+              <div class="panel-head">
+                <h2><svg class="icon"><use href="#i-doc"/></svg>Plans</h2>
+                <span class="badge" id="badge-agent-plans">0</span>
+              </div>
+              <div class="panel-body" id="agent-plans"><div class="loading">Loading…</div></div>
+            </section>
+            <section class="panel" id="agent-runs-panel">
+              <div class="panel-head">
+                <h2><svg class="icon"><use href="#i-activity"/></svg>Runs</h2>
+                <button type="button" class="btn btn-ghost btn-sm" data-action="agent-refresh" title="Reload the agent's state"><svg class="icon"><use href="#i-refresh"/></svg><span>Refresh</span></button>
+              </div>
+              <div class="panel-body" id="agent-runs"><div class="loading">Loading…</div></div>
+            </section>
+            <section class="panel" id="agent-harness-panel">
+              <div class="panel-head">
+                <h2><svg class="icon"><use href="#i-server"/></svg>Harnesses &amp; skills</h2>
+              </div>
+              <div class="panel-body">
+                <div id="agent-harnesses"><div class="loading">Loading…</div></div>
+                <div id="agent-skills"></div>
+              </div>
+            </section>
+          </div>
+        </div>
+      </div>
     </main>
   </div>
   <!-- Right-side docked inspector. NOT a modal: no scrim, no dimming, no
@@ -648,6 +703,7 @@
   <script src="tab-egress.js"></script>
   <script src="tab-findings.js"></script>
   <script src="tab-worktrees.js"></script>
+  <script src="tab-agent.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

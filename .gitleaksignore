@@ -11,3 +11,14 @@ f1e0eedfd2a4cfac9795177605b79ec78d248a21:daemon/internal/intel/rotator_test.go:g
 # Fake bearer fixture in a transcript-scanner test, removed from source in the
 # follow-up commit on this branch — the test now builds it from fragments.
 3a09b9babab97a2b5fe8a2f463bb7038fc8e250c:daemon/internal/collect/transcript_test.go:curl-auth-header:422
+# Fake AWS-key-shaped argv0 in the process-title sanitizer test, replaced in
+# the follow-up commit on this branch — the test now builds it from fragments.
+d3a526e61f0670e2b78396f7ce0ca668a9bccd10:daemon/internal/agents/snapshot_test.go:aws-access-token:71
+c3f7b187b80ad0b51b4c3702b4679c6ee5ce4e34:daemon/internal/agents/snapshot_test.go:aws-access-token:71
+# Key-shaped test fixtures in commits after the Sept 25 message rewrite.
+05859e64835568736c3fd5330f3db945627cae0a:daemon/internal/firewall/testdata/leak_requests.json:gitlab-pat:6
+05859e64835568736c3fd5330f3db945627cae0a:daemon/internal/firewall/detect_test.go:gitlab-pat:28
+# Fake AWS-key-shaped argv0 in the process-title sanitizer test on the
+# fix/discern-findings branch, replaced there by a fragment-built value.
+983710b4395e127cea1d3a2b4145335d5aa698fe:daemon/internal/agents/snapshot_test.go:aws-access-token:71
+36f76c5f499350da55ff0c3ff11711ff9a5dc400:daemon/internal/agents/snapshot_test.go:aws-access-token:71

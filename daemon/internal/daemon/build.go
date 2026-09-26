@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -29,11 +30,13 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/otlp"
 	"github.com/cavi-ai/secure-agent/daemon/internal/proxy"
+	"github.com/cavi-ai/secure-agent/daemon/internal/redact"
 	"github.com/cavi-ai/secure-agent/daemon/internal/resource"
 	"github.com/cavi-ai/secure-agent/daemon/internal/sensitive"
 	"github.com/cavi-ai/secure-agent/daemon/internal/session"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 	"github.com/cavi-ai/secure-agent/daemon/internal/supervise"
+	"github.com/cavi-ai/secure-agent/daemon/internal/sysagent"
 	"github.com/cavi-ai/secure-agent/daemon/internal/worktreehunter"
 )
 
@@ -107,6 +110,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 	resolver := session.NewResolver(st, tagger)
 
 	repairStoredRows(st)
+	reclassifyReadFlags(st, classifier)
 
 	// Typed deltas: SSE clients patch state from these; /snapshot is for
 	// initial load and reconciliation only.
@@ -214,6 +218,9 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 	hunter := worktreehunter.New(st, "", worktreeOptions(cfg.Worktrees))
 	cleanup := clutter.New(st, "", clutterPlaces(hunter))
 	asker := agentask.New(st, "")
+	sysAgent := sysagent.New(st, filepath.Join(filepath.Dir(cfg.Firewall.Registry.SaltRef), "sysagent"), sysAgentMask(fw.Engine))
+	sysAgent.SetConfig(cfg.SystemAgent)
+	sysAgent.Recover()
 	apiServer := api.New(api.Deps{
 		SocketPath:            cfg.SocketPath,
 		Store:                 st,
@@ -257,6 +264,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 		WorktreeAdvisor: worktreeAdvisor,
 		Clutter:         cleanup,
 		Asker:           asker,
+		SysAgent:        sysAgent,
 		ProjectAdvisor:  projectAdvisor,
 	})
 
@@ -277,7 +285,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 		go watchConfig(ctx, opts.ConfigPath, configWatchDeps{
 			st: st, stk: advisorStk, pub: fleetPub, fleetCfg: fleetCfgLive,
 			logDir: filepath.Dir(cfg.DBPath), apiServer: apiServer, resourceControl: resourceControl,
-			initialConfig: &cfg, worktrees: hunter,
+			initialConfig: &cfg, worktrees: hunter, sysAgent: sysAgent,
 			deltaHub: deltaHub, postureChanged: postureHook.run,
 		})
 	}
@@ -544,6 +552,26 @@ func repairStoredRows(st *store.Store) {
 	if n := st.SweepStaleRunningCalls(time.Now().Add(-10 * time.Minute)); n > 0 {
 		log.Printf("sessions: closed %d stale running tool-call rows", n)
 	}
+}
+
+// reclassifyReadFlags acknowledges, with a stored reason and one audit
+// entry, the open sensitive-read-then-connect flags whose read the current
+// classifier no longer counts as a secret read. Returns how many it
+// acknowledged.
+func reclassifyReadFlags(st *store.Store, cl sensitive.Classifier) int {
+	open := st.QueryFlags(store.FlagFilter{Rule: "sensitive-read-then-connect", Unacted: true, Limit: math.MaxInt32})
+	ids := correlate.StaleReadFlagIDs(open, cl)
+	if len(ids) == 0 {
+		return 0
+	}
+	n := st.AcknowledgeFlagsReason(ids, correlate.ReclassifiedReadReason)
+	st.PutAudit(store.AuditEntry{
+		Action: "flag-reclassify",
+		Rule:   "sensitive-read-then-connect",
+		Detail: fmt.Sprintf("%d flags acknowledged: %s", n, correlate.ReclassifiedReadReason),
+	})
+	log.Printf("flags: acknowledged %d sensitive-read-then-connect flags whose read is no longer a secret read", n)
+	return n
 }
 
 // buildFleetAndOTLP constructs the fleet webhook fan-out and the OTLP
@@ -965,6 +993,16 @@ func buildPlanFuncs(advisorStk *advisorStackHolder) *api.PlanFuncs {
 			return true, ""
 		},
 	}
+}
+
+// sysAgentMask masks secrets in system agent text with the firewall's typed
+// patterns and registered fingerprints; without an engine, the built-in
+// token patterns.
+func sysAgentMask(eng *firewall.Engine) func(string) (string, bool) {
+	if eng != nil {
+		return eng.Mask
+	}
+	return func(s string) (string, bool) { return redact.Scrub(s), true }
 }
 
 // clutterPlaces lists what the cleanup inventory searches: every repository

@@ -43,16 +43,19 @@ type AttentionItem struct {
 // the machine group (Key "machine") for signals no agent owns, with its
 // pending decisions, worst first.
 type AttentionGroup struct {
-	Key          string          `json:"key"`
-	Label        string          `json:"label"`
-	Agent        string          `json:"agent"`
-	Workspace    string          `json:"workspace,omitempty"`
-	RootPID      int32           `json:"rootPid,omitempty"`
-	PIDs         []int32         `json:"pids,omitempty"`
-	RSSBytes     uint64          `json:"rssBytes,omitempty"`
-	CPUPercent   float64         `json:"cpuPercent,omitempty"`
-	ProcessCount int             `json:"processCount,omitempty"`
-	Items        []AttentionItem `json:"items"`
+	Key          string  `json:"key"`
+	Label        string  `json:"label"`
+	Agent        string  `json:"agent"`
+	Workspace    string  `json:"workspace,omitempty"`
+	RootPID      int32   `json:"rootPid,omitempty"`
+	PIDs         []int32 `json:"pids,omitempty"`
+	RSSBytes     uint64  `json:"rssBytes,omitempty"`
+	CPUPercent   float64 `json:"cpuPercent,omitempty"`
+	ProcessCount int     `json:"processCount,omitempty"`
+	// Summary, on an agent-level group (Key "agent:…"), names the processes
+	// and sessions behind its findings and whether they still run.
+	Summary string          `json:"summary,omitempty"`
+	Items   []AttentionItem `json:"items"`
 }
 
 // machineGroupKey keys the group holding agent-less signals: dead or silent
@@ -220,6 +223,16 @@ func (a *API) attentionQueue(st Status) ([]PostureItem, []AttentionGroup) {
 		}
 		return g
 	}
+	facts := map[string]*agentGroupFacts{}
+	factsFor := func(g *AttentionGroup) *agentGroupFacts {
+		if !strings.HasPrefix(g.Key, "agent:") {
+			return nil
+		}
+		if facts[g.Key] == nil {
+			facts[g.Key] = newAgentGroupFacts()
+		}
+		return facts[g.Key]
+	}
 	items := []PostureItem{}
 	add := func(g *AttentionGroup, headline PostureItem, item AttentionItem) {
 		items = append(items, headline)
@@ -249,7 +262,11 @@ func (a *API) attentionQueue(st Status) ([]PostureItem, []AttentionGroup) {
 				if d.State == model.DispositionCritical {
 					priority = 2
 				}
-				add(groupFor(f.Agent, f.PID), PostureItem{
+				g := groupFor(f.Agent, f.PID)
+				if gf := factsFor(g); gf != nil {
+					gf.addPattern(p)
+				}
+				add(g, PostureItem{
 					Kind: "pattern", ID: p.Key,
 					Title:     fmt.Sprintf("%s — %d×", p.Title, p.Count),
 					Severity:  dispositionSeverity(d),
@@ -280,7 +297,11 @@ func (a *API) attentionQueue(st Status) ([]PostureItem, []AttentionGroup) {
 			item.Priority = 1
 			item.Title = humanFlagTitle(f.Rule)
 		}
-		add(groupFor(f.Agent, f.PID), PostureItem{
+		g := groupFor(f.Agent, f.PID)
+		if gf := factsFor(g); gf != nil {
+			gf.addFlag(f)
+		}
+		add(g, PostureItem{
 			Kind: "flag", ID: f.ID,
 			Title:     humanFlagTitle(f.Rule),
 			Severity:  dispositionSeverity(d),
@@ -430,6 +451,20 @@ func (a *API) attentionQueue(st Status) ([]PostureItem, []AttentionGroup) {
 			Action: firstNonEmpty([]string{string(s.control.NextAction), "intervention"}),
 			Title:  "Resource pressure", Detail: detail,
 		})
+	}
+
+	live := map[int32]bool{}
+	for pid := range byPID {
+		live[pid] = true
+	}
+	for _, t := range st.Trees {
+		live[t.Root.PID] = true
+		for _, c := range t.Children {
+			live[c.PID] = true
+		}
+	}
+	for key, gf := range facts {
+		groups[key].Summary = gf.summary(live)
 	}
 
 	out := make([]AttentionGroup, 0, len(groups))

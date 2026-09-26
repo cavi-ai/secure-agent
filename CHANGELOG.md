@@ -7,6 +7,9 @@ All notable changes to `secure-agent` are documented here. The format follows
 ## [Unreleased]
 
 ### Changed
+- Findings skip shell rc and harness-settings reads as secret reads and name the raising process and its launcher.
+- File telemetry's root helper drops open events on system paths (OS libraries and frameworks, app-bundle contents, Homebrew Cellar, `/dev` nodes, user caches) that no sensitive-file rule matches before they reach the spool.
+- File events from a process that already exited cost one process lookup per tagger refresh instead of one per event.
 - Cleanup totals no longer count an agent's answer (`ask:*` ledger rows) as a cleanup.
 - Menu bar icon and agent count are drawn in the console's brand purple, a lighter shade on a dark menu bar.
 - Console Spend opens on the last usage reports: `GET /costs?cached=1` answers at once from the daemon's usage cache (saved in the store, so it outlives a restart) while a fresh report is computed; the card reads "Updating usage cache… (cached 3h ago)" and the tile's line "updating…" until it lands. Spend no longer holds the console's first render, and `/costs/plans` keeps plan headroom across restarts (snapshots under a week old).
@@ -20,6 +23,10 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Console: shows the posture banner capped at 3 rows off Home and empty on Home, agent ids in their own case, Egress led by the uninspected endpoints with zero-hit rules folded into one row, and Processes at full width.
 
 ### Added
+- System agent (opt-in, `system_agent` in config.yaml, applied live): a chat with a model on the local Ollama that proposes work for Claude Code, Codex, OpenClaw or Hermes Agent and dispatches it — headless in a folder or in a Terminal window — against the same Ollama. Harnesses keep their own sandbox and approvals; a proposal whose harness cannot run yet is saved as a plan with the reason. See `docs/SYSTEM_AGENT.md`.
+- Seven built-in skills for the system agent: `ssh`, `git`, `signing`, `claude`, `codex`, `openclaw`, `hermes`.
+- `/agent/status`, `/agent/skills`, `/agent/chat`, `/agent/plans`, `/agent/dispatch`, `/agent/runs` (console-admitted, NoAgent). Text is masked by the firewall before it is stored or sent to the model; a secret that cannot be masked is refused.
+- Console: an Agent tab — conversation, a Route to dropdown and folder, Save as plan, proposals with Run headless / Open in terminal, plans with why a harness cannot run, runs with their output and command.
 - Console Cleanup view: a progress toast for every removal started in this tab, another tab or the CLI, with phase, size and files being deleted, time in the phase and one bar per group.
 - Console Cleanup view: a finished removal's toast names the bytes reclaimed and links the history.
 - Console Cleanup view: a failed removal's toast stays until closed.
