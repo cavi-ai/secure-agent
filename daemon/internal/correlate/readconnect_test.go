@@ -41,8 +41,24 @@ func TestCredentialUsedWithItsOwnerIsCounted(t *testing.T) {
 	}
 }
 
-// The owner check needs the same process, a file open (not an agent tool
-// read), and an org that owns the credential.
+// The token may reach its owner through the reader's tree: git-remote-https
+// running gh as its credential helper, or the agent above gh.
+func TestCredentialOwnerThroughTheReadersTree(t *testing.T) {
+	for _, pid := range []int32{202, 200} {
+		c := newFamilyCorrelator(t)
+		base := time.Unix(1_700_000_000, 0)
+		ghReads(c, t, event.KindFileOpen, base)
+		if f := connectTo(c, pid, "140.82.112.3", base.Add(time.Second)); len(f) != 0 {
+			t.Fatalf("pid %d → GitHub flagged: %+v", pid, f)
+		}
+		if c.CredentialOwnerUses() != 1 {
+			t.Fatalf("pid %d: owner uses = %d, want 1", pid, c.CredentialOwnerUses())
+		}
+	}
+}
+
+// The owner check needs the reader's own process tree, a file open (not an
+// agent tool read), and an org that owns the credential.
 func TestCredentialOutsideItsOwnerFlags(t *testing.T) {
 	cases := []struct {
 		name string
@@ -51,7 +67,7 @@ func TestCredentialOutsideItsOwnerFlags(t *testing.T) {
 		host string
 	}{
 		{"other org", event.KindFileOpen, 201, "2606:4700::6812:105d"},
-		{"other process", event.KindFileOpen, 200, "140.82.114.6"},
+		{"process outside the reader's tree", event.KindFileOpen, 203, "140.82.114.6"},
 		{"agent tool read", event.KindPluginAction, 201, "140.82.114.6"},
 	}
 	for _, tc := range cases {

@@ -79,12 +79,15 @@ func TestStaleReadFlagIDs(t *testing.T) {
 	}
 }
 
-// familyProcSource: cursor-agent (200) with a gh child (201).
+// familyProcSource: cursor-agent (200) with a gh child (201), gh's own
+// child git-remote-https (202), and gh's sibling node (203).
 type familyProcSource struct{}
 
 var familyProcs = []agents.ProcInfo{
 	{PID: 200, PPID: 1, Exe: "/usr/local/bin/cursor-agent"},
 	{PID: 201, PPID: 200, Exe: "/opt/homebrew/bin/gh"},
+	{PID: 202, PPID: 201, Exe: "/usr/libexec/git-core/git-remote-https"},
+	{PID: 203, PPID: 200, Exe: "/usr/local/bin/node"},
 }
 
 func (familyProcSource) List() []agents.ProcInfo { return familyProcs }
