@@ -50,7 +50,7 @@ func readConnectWhy(f model.Flag) string {
 	case read.Sub == "agent tool read":
 		return org + " owns " + file + ", but an agent tool read it into the model's context."
 	default:
-		return org + " owns " + file + ", but a different process from the one that read it made the connection."
+		return org + " owns " + file + ", but a process outside the reader's process tree made the connection."
 	}
 }
 

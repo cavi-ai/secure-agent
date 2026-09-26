@@ -37,7 +37,7 @@ func TestReadConnectWhy(t *testing.T) {
 		{"tool read", ghFlag("d", now, ghRead("agent tool read", 900, "GitHub"), "140.82.114.6"),
 			"GitHub owns ~/.config/gh/hosts.yml, but an agent tool read it into the model's context."},
 		{"other process", ghFlag("e", now, ghRead("sensitive read", 901, "GitHub"), "140.82.114.6"),
-			"GitHub owns ~/.config/gh/hosts.yml, but a different process from the one that read it made the connection."},
+			"GitHub owns ~/.config/gh/hosts.yml, but a process outside the reader's process tree made the connection."},
 		{"legacy evidence", ghFlag("f", now, ghRead("sensitive read", 0), "140.82.114.6"),
 			"Agent read a secret, then connected out"},
 	}
