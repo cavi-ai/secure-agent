@@ -122,15 +122,20 @@ func (c *Correlator) readThenConnectLocked(e event.Event, agent string, rootPID 
 
 	var evidence []model.EvidenceItem
 	for _, r := range reads {
+		sub := "sensitive read"
+		if r.kind == event.KindPluginAction {
+			sub = "agent tool read"
+		}
 		evidence = append(evidence, model.EvidenceItem{
-			Kind:  "read",
-			Label: r.path,
-			Sub:   "sensitive read",
-			Rule:  r.rule,
-			TS:    r.at.Format(time.RFC3339),
-			Text:  fmt.Sprintf("%s (pid %d) read %s at %s", agent, r.pid, r.path, r.at.Format(time.RFC3339)),
-			PID:   r.pid,
-			Exe:   r.exe,
+			Kind:   "read",
+			Label:  r.path,
+			Sub:    sub,
+			Rule:   r.rule,
+			TS:     r.at.Format(time.RFC3339),
+			Text:   fmt.Sprintf("%s (pid %d) read %s at %s", agent, r.pid, r.path, r.at.Format(time.RFC3339)),
+			PID:    r.pid,
+			Exe:    r.exe,
+			Owners: c.credentialOwners(r.path),
 		})
 	}
 	for _, cm := range cited {

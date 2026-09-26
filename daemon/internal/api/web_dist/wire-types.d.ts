@@ -51,6 +51,7 @@ export interface EvidenceItem {
   offset?: number;
   pid?: number;
   exe?: string;
+  owners?: string[];
 }
 
 export interface AdvisorVerdict {
@@ -159,6 +160,12 @@ export interface PatternProcess {
   count: number;
 }
 
+export interface PatternDestination {
+  org?: string;
+  host: string;
+  count: number;
+}
+
 export interface Pattern {
   key: string;
   agent: string;
@@ -166,6 +173,7 @@ export interface Pattern {
   title: string;
   subject: EvidenceItem;
   count: number;
+  flags: number;
   unacked: number;
   first: string;
   last: string;
@@ -178,6 +186,7 @@ export interface Pattern {
   sessions: string[];
   session_count: number;
   processes: PatternProcess[];
+  destinations?: PatternDestination[];
   disposition: Disposition;
   summary: string;
   actions: ExplainAction[];

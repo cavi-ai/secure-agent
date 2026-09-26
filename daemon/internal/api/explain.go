@@ -380,6 +380,9 @@ func explainWhat(f model.Flag, ex *model.FlagExplain, sess *model.Session) strin
 	}
 	switch f.Rule {
 	case "sensitive-read-then-connect":
+		if reader := readerName(evidenceOfKind(f, "read"), f.Agent); reader != "" {
+			agent = reader + " (" + agent + ")"
+		}
 		what := agent + " read " + subjectPhrase(ex.Subject)
 		if len(ex.Egress) == 0 {
 			return what + ", then connected out."

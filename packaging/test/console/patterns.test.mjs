@@ -143,3 +143,9 @@ test('patternHTML: the served agent-scoped mute label is the button text', () =>
   const html = patternHTML(pattern({ actions }), Date.parse('2026-09-23T12:00:00Z'), {});
   assert.match(html, /data-action-id="mute-class"[^>]*>Mute keychain access for codex<\/button>/);
 });
+
+test('patternHTML: the flag list counts flags, not occurrences folded into them', () => {
+  const html = patternHTML(pattern({ count: 23, flags: 1 }), Date.parse('2026-09-23T12:00:00Z'), {});
+  assert.match(html, /<span class="pattern-meta">23× · /);
+  assert.ok(html.includes('<summary>Individual flags (1)</summary>'));
+});

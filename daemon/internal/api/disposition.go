@@ -27,10 +27,21 @@ func dispositionFor(f model.Flag) model.Disposition {
 			Why:   firstSentence(f.Advisor.Rationale),
 		}
 	case f.Severity >= 3:
-		return model.Disposition{State: model.DispositionCritical, Text: "Act now", Why: humanFlagTitle(f.Rule)}
+		return model.Disposition{State: model.DispositionCritical, Text: "Act now", Why: ruleWhy(f)}
 	default:
-		return model.Disposition{State: model.DispositionWarning, Text: "Needs a look", Why: humanFlagTitle(f.Rule)}
+		return model.Disposition{State: model.DispositionWarning, Text: "Needs a look", Why: ruleWhy(f)}
 	}
+}
+
+// ruleWhy is an open flag's reason: for read-then-connect, what its evidence
+// says about the destination and the file's owner; otherwise the rule title.
+func ruleWhy(f model.Flag) string {
+	if f.Rule == readConnectRule {
+		if why := readConnectWhy(f); why != "" {
+			return why
+		}
+	}
+	return humanFlagTitle(f.Rule)
 }
 
 // dispositionSeverity is the posture severity a disposition carries.

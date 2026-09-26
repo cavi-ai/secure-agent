@@ -20,6 +20,9 @@ type EvidenceItem struct {
 	// differ from the process that connected out).
 	PID int32  `json:"pid,omitempty"`
 	Exe string `json:"exe,omitempty"`
+	// Owners: read items, the orgs credential_owners names for the file;
+	// empty when none is on record.
+	Owners []string `json:"owners,omitempty"`
 }
 
 // UnmarshalJSON accepts the legacy bare-string form too.
