@@ -45,6 +45,8 @@ type Route struct {
 	//   DELETE /allowlist       app.js:2602 (allow revoke)
 	//   POST   /notify/rules    app.js:3034, 3060 (notify scope/override)
 	//   POST   /advisor/assess-host  app.js:2252 (host reassess)
+	//   DELETE /agent/chat      tab-agent.js (clear the conversation)
+	//   DELETE /agent/plans     tab-agent.js (delete a plan)
 	// Every other (method, path) pair fetched by web_dist/*.js is GET (always
 	// admitted) or POST/PUT already covered by MutatingMethods above.
 	ConsoleMethods []string
@@ -128,6 +130,14 @@ var Table = []Route{
 	{Path: "/files/open", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
 	{Path: "/advisor/plan", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
 	{Path: "/labels", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
+	// The system agent (console Agent tab): chat, plans and dispatch. NoAgent
+	// throughout — a harness dispatch must never be reachable by an agent.
+	{Path: "/agent/status", Console: true, NoAgent: true},
+	{Path: "/agent/skills", Console: true, NoAgent: true},
+	{Path: "/agent/chat", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}, ConsoleMethods: []string{"DELETE"}},
+	{Path: "/agent/plans", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}, ConsoleMethods: []string{"DELETE"}},
+	{Path: "/agent/dispatch", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
+	{Path: "/agent/runs", Console: true, NoAgent: true},
 }
 
 // ConsoleAllowed reports whether the console token admits (method, path) on

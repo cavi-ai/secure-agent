@@ -881,6 +881,23 @@ Queues one worktree for a note from the local advisor (see [ADVISOR_THREAT_MODEL
 
 `200 {"status":"ok","queued":true,"subject":"worktree:<path>@<head>"}`; `queued` is `false` when the advisor is off or its queue is full. `400` for a missing or relative path, `404` for a path that is not a linked worktree, `409` for a worktree whose directory is gone, `503` when advice is not wired. The model answers `{"recommendation":"remove|review|keep","confidence":0-1,"rationale":"..."}`; anything else is dropped. `GET /worktrees` returns stored notes in `advice`, keyed by worktree path, for notes taken at the row's current HEAD: `{"<path>": {"assessment": "review", "confidence": 0.6, "rationale": "...", "model": "...", "created_at": "..."}}`. A note never changes `state` or what `POST /worktrees/remove` accepts. Mutation (pinned UI or owner). CLI: `secure-agent worktrees advise <path>`; the list view prints the note under its row. Console: the Worktrees tab lists the report with a Remove button on `remove` rows and Prune on `prune` rows.
 
+### 20. System agent: `/agent/*`
+
+The console's Agent tab (see [SYSTEM_AGENT.md](SYSTEM_AGENT.md)). Every route is console-admitted and NoAgent; `POST` is a mutation (pinned UI or owner).
+
+| Route | Method | Body / query | Answer |
+|---|---|---|---|
+| `/agent/status` | `GET` | — | `{"enabled","endpoint","reachable","ollama_version","reason","model","harness_model","models":[...],"harnesses":[{"id","label","bin","min_ollama","path","installed","ready","reason"}],"skills":[{"id","title","summary"}],"chatting","running_run","terminal","home"}`. Probes Ollama (`/api/tags`, `/api/version`, 1.5 s). |
+| `/agent/skills` | `GET` | — | `[{"id","title","summary","keywords","body"}]` |
+| `/agent/chat` | `GET` | — | `{"messages":[{"id","ts","role":"user|assistant|note","content","harness","workdir","skills","proposal","plan_id"}],"chatting":bool}`, oldest first (last 200). |
+| `/agent/chat` | `POST` | `{"message","harness","workdir"}` | `202 {"message":{...}}`; the reply lands asynchronously — poll `GET` until `chatting` is false. `400` empty or over 8000 characters, `409` off or already answering, `422` a secret masking cannot remove. |
+| `/agent/chat` | `DELETE` | — | Clears the conversation; plans and runs stay. `409` while answering. |
+| `/agent/plans` | `GET` | — | Plans newest first, each with `ready` and `reason` computed now. |
+| `/agent/plans` | `POST` | `{"message_id"}` saves a reply's proposal; `{"id", …}` edits a plan; otherwise `{"title","harness","mode":"headless|terminal","workdir","task","steps","skills","model"}` creates one | `{"plan":{...}}`. `400` unknown harness or mode, relative folder, empty task; `404` unknown `id`; `409` the plan's run is in flight; `422` secret. |
+| `/agent/plans?id=` | `DELETE` | — | `404` unknown, `409` running. |
+| `/agent/dispatch` | `POST` | `{"plan_id","mode","workdir","model"}` (the last three optional; kept on the plan) | `202 {"run":{...}}` with `status` `running` (headless; poll `/agent/runs`), `opened` (a Terminal window opened) or `manual` (`detail` holds `sh '<script>'` to run). `400` missing folder, `404` unknown plan, `409` off, harness not ready (the plan keeps the reason in `note`) or a headless run already in flight. |
+| `/agent/runs` | `GET` | — | Runs newest first: `{"id","plan_id","ts","finished_at","title","harness","mode","model","workdir","status":"running|done|failed|timeout|opened|manual","exit_code","command","output","detail"}`. |
+
 ## 🔐 Peer authentication & endpoint roles
 
 Every connection is identified with macOS `LOCAL_PEEREPID` / `LOCAL_PEERCRED` (kernel-attested; not forgeable):
@@ -893,7 +910,7 @@ Every connection is identified with macOS `LOCAL_PEEREPID` / `LOCAL_PEERCRED` (k
 
 `POST /kill` additionally refuses any PID that is not currently a recognized agent process, so the control socket cannot be turned into an arbitrary-process killer.
 
-**NoAgent routes** (`/files/detail`, `/files/reveal`, `/files/open`) refuse every agent process. On the unix socket the Agent and Foreign roles get 403, and an Owner peer whose process belongs to an agent family (checked live, so a child spawned a moment ago counts) is refused too. On the console listener the console token is not enough: the daemon identifies the TCP client's process with `lsof` and serves it only when that process is outside every agent family; an unidentified client is refused. Off macOS the console listener refuses these routes.
+**NoAgent routes** (`/files/detail`, `/files/reveal`, `/files/open`, `/agent/*`, among others marked `NoAgent` in `apiroutes.Table`) refuse every agent process. On the unix socket the Agent and Foreign roles get 403, and an Owner peer whose process belongs to an agent family (checked live, so a child spawned a moment ago counts) is refused too. On the console listener the console token is not enough: the daemon identifies the TCP client's process with `lsof` and serves it only when that process is outside every agent family; an unidentified client is refused. Off macOS the console listener refuses these routes.
 
 `GET /debug/pprof/` (Go runtime profiles: `heap`, `goroutine`, `profile?seconds=N`, `trace`, …) is served on the unix socket only, to the Owner role (and the pinned menubar app); agents and foreign peers get 403, and the proxy listener never serves it.
 

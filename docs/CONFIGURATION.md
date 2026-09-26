@@ -204,6 +204,21 @@ worktrees:
 
 Changes take effect live within one poll cycle.
 
+### `system_agent` (Map)
+
+The system agent behind the console's Agent tab: a chat with a model on your local Ollama that proposes work for Claude Code, Codex, OpenClaw or Hermes Agent and dispatches it against the same Ollama. Off by default. See [SYSTEM_AGENT.md](SYSTEM_AGENT.md).
+
+```yaml
+system_agent:
+  enabled: false
+  endpoint: "http://127.0.0.1:11434"   # Ollama base URL (no /v1); must be loopback when enabled
+  model: ""                            # chat model; "" = the first model Ollama lists
+  harness_model: ""                    # model dispatched harnesses run; "" = model
+  timeout_minutes: 30                  # bound on one headless dispatch (0-240; 0 = 30)
+```
+
+An enabled agent with a non-loopback endpoint is a validation error. Changes take effect live within one poll cycle.
+
 ### Proxy authentication
 
 Default `proxy_enabled` is `false` (MITM inspection and the web console are opt-in). When the proxy is enabled, the daemon generates a per-install token at

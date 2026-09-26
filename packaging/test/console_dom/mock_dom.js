@@ -595,12 +595,131 @@
     try { sessionStorage.setItem('sa.spend-view', JSON.stringify({ by: 'day', since: '7d' })); } catch { /* ignored */ }
   }
 
+  // System agent (Agent tab). agentoff: system_agent.enabled is false.
+  const AGENT_XSS = '<img src=x onerror=alert(1)>';
+  data['/agent/status'] = {
+    enabled: !MODE.includes('agentoff'), endpoint: 'http://127.0.0.1:11434', reachable: true, ollama_version: '0.15.1',
+    model: 'qwen3:latest', harness_model: 'qwen3-coder', models: ['qwen3:latest', 'qwen3-coder:latest'],
+    harnesses: [
+      { id: 'claude', label: 'Claude Code', bin: 'claude', path: '/opt/homebrew/bin/claude', installed: true, ready: true },
+      { id: 'codex', label: 'Codex', bin: 'codex', path: '/opt/homebrew/bin/codex', installed: true, ready: true },
+      { id: 'openclaw', label: 'OpenClaw', bin: 'openclaw', installed: false, ready: false, reason: 'OpenClaw is not installed where the daemon can find it (openclaw)' },
+      { id: 'hermes', label: 'Hermes Agent', bin: 'hermes', installed: false, ready: false, reason: 'Hermes Agent is not installed where the daemon can find it (hermes)' }
+    ],
+    skills: [
+      { id: 'ssh', title: 'SSH keys and the SSH agent', summary: 'Create, load and authorize an SSH key.' },
+      { id: 'git', title: 'Git identity and credentials', summary: 'Credentials in the keychain or gh.' },
+      { id: 'signing', title: 'Commit and tag signing', summary: 'Sign commits and tags.' },
+      { id: 'claude', title: 'Claude Code — sign-in, settings and local models', summary: 'Claude Code sign-in.' },
+      { id: 'codex', title: 'Codex CLI — sign-in, config and local models', summary: 'Codex sign-in.' },
+      { id: 'openclaw', title: 'OpenClaw — onboarding, provider auth and local models', summary: 'OpenClaw auth.' },
+      { id: 'hermes', title: 'Hermes Agent — providers, keys and local models', summary: 'Hermes auth.' }
+    ],
+    chatting: false, terminal: true, home: '/Users/dev'
+  };
+  data['/agent/skills'] = data['/agent/status'].skills.map(k => ({ ...k, keywords: [k.id], body: 'Rules\n- ' + k.id + ' body ' + AGENT_XSS }));
+  data['/agent/chat'] = { chatting: false, messages: [
+    { id: 1, ts: iso(600000), role: 'user', content: 'Set up SSH commit signing ' + AGENT_XSS, harness: 'codex', workdir: '/Users/dev/workspace/api-service' },
+    { id: 2, ts: iso(590000), role: 'assistant', content: 'Signing needs your passphrase, so this runs in a terminal.', skills: ['signing', 'ssh'],
+      proposal: { title: 'Sign commits with SSH', harness: 'codex', mode: 'terminal', workdir: '/Users/dev/workspace/api-service',
+        task: 'Configure SSH commit signing ' + AGENT_XSS, steps: ['git config --global gpg.format ssh', 'gh ssh-key add --type signing'], skills: ['signing'] } },
+    { id: 3, ts: iso(300000), role: 'user', content: 'Log OpenClaw into my provider', harness: 'openclaw', workdir: '' },
+    { id: 4, ts: iso(290000), role: 'assistant', content: 'OpenClaw is not installed, so I saved this for later.', skills: ['openclaw'], plan_id: 2,
+      proposal: { title: 'OpenClaw provider login', harness: 'openclaw', mode: 'terminal', workdir: '/Users/dev', task: 'openclaw models auth login --provider x', steps: [], skills: ['openclaw'] } },
+    { id: 5, ts: iso(200000), role: 'note', content: 'The local model did not answer: timeout. Your message is kept.' }
+  ] };
+  data['/agent/plans'] = [
+    { id: 2, created_at: iso(290000), source: 'agent', message_id: 4, title: 'OpenClaw provider login', harness: 'openclaw', mode: 'terminal',
+      workdir: '/Users/dev', task: 'openclaw models auth login --provider x', steps: [], skills: ['openclaw'], status: 'saved',
+      note: 'OpenClaw is not installed where the daemon can find it (openclaw)', ready: false, reason: 'OpenClaw is not installed where the daemon can find it (openclaw)' },
+    { id: 1, created_at: iso(900000), source: 'operator', title: 'Rotate the Codex login ' + AGENT_XSS, harness: 'codex', mode: 'headless',
+      workdir: '/Users/dev/workspace/api-service', task: 'codex logout, then codex login', steps: [], skills: ['codex'], status: 'saved', ready: true }
+  ];
+  data['/agent/runs'] = [
+    { id: 2, plan_id: 1, ts: iso(120000), title: 'Rotate the Codex login', harness: 'codex', mode: 'terminal', model: 'qwen3-coder',
+      workdir: '/Users/dev/workspace/api-service', status: 'manual', exit_code: 0, command: 'env CODEX_OSS_BASE_URL=http://127.0.0.1:11434/v1 codex --oss <task>',
+      detail: "Run it in a terminal: sh '/Users/dev/.config/secure-agent/sysagent/terminal-1-1.sh'" },
+    { id: 1, plan_id: 1, ts: iso(3600000), finished_at: iso(3500000), title: 'Rotate the Codex login', harness: 'codex', mode: 'headless', model: 'qwen3-coder',
+      workdir: '/Users/dev/workspace/api-service', status: 'done', exit_code: 0, command: 'env codex exec <task>', output: 'Logged out. ' + AGENT_XSS }
+  ];
+  let agentSeq = 100;
+  const agentPost = (p, opts, full, body) => {
+    const chat = data['/agent/chat'];
+    if (p === '/agent/chat' && opts.method === 'DELETE') { chat.messages = []; return { status: 'ok' }; }
+    if (p === '/agent/chat') {
+      const m = { id: ++agentSeq, ts: iso(0), role: 'user', content: body.message, harness: body.harness, workdir: body.workdir };
+      chat.messages.push(m);
+      chat.chatting = true;
+      setTimeout(() => {
+        chat.messages.push({ id: ++agentSeq, ts: iso(0), role: 'assistant', content: 'Here is the plan.', skills: ['git'],
+          proposal: { title: 'Store Git credentials in the keychain', harness: body.harness, mode: 'headless', workdir: '/Users/dev',
+            task: 'git config --global credential.helper osxkeychain', steps: ['set the helper'], skills: ['git'] } });
+        chat.chatting = false;
+      }, 1500);
+      return { message: m };
+    }
+    if (p === '/agent/plans' && opts.method === 'DELETE') {
+      const id = Number(new URLSearchParams(full.split('?')[1] || '').get('id'));
+      data['/agent/plans'] = data['/agent/plans'].filter(x => x.id !== id);
+      return { status: 'ok' };
+    }
+    if (p === '/agent/plans') {
+      const m = chat.messages.find(x => x.id === body.message_id);
+      const src = m ? m.proposal : body;
+      const plan = { id: ++agentSeq, created_at: iso(0), source: m ? 'agent' : 'operator', message_id: body.message_id || 0,
+        title: src.title || String(src.task).split('\n')[0], harness: src.harness, mode: src.mode, workdir: src.workdir, task: src.task,
+        steps: src.steps || [], skills: src.skills || [], status: 'saved', ready: true };
+      data['/agent/plans'].unshift(plan);
+      if (m) m.plan_id = plan.id;
+      return { plan };
+    }
+    if (p === '/agent/dispatch') {
+      const plan = data['/agent/plans'].find(x => x.id === body.plan_id);
+      const run = { id: ++agentSeq, plan_id: plan.id, ts: iso(0), title: plan.title, harness: plan.harness, mode: body.mode || plan.mode,
+        model: 'qwen3-coder', workdir: plan.workdir, status: (body.mode || plan.mode) === 'headless' ? 'running' : 'opened', exit_code: 0,
+        command: 'env ' + plan.harness + ' <task>', detail: (body.mode || plan.mode) === 'headless' ? '' : 'Opened in Terminal' };
+      data['/agent/runs'].unshift(run);
+      plan.status = run.status;
+      plan.run_id = run.id;
+      if (run.status === 'running') {
+        setTimeout(() => { Object.assign(run, { status: 'done', finished_at: iso(0), output: 'Credentials now live in the keychain.' }); plan.status = 'done'; }, 1500);
+      }
+      return { run };
+    }
+    return null;
+  };
+  // agentchat: the Agent tab open, a message typed and sent through the
+  // real composer; the reply (with a proposal) lands 1.5s later.
+  if (MODE.includes('agentchat')) {
+    setTimeout(() => {
+      document.getElementById('agent-workdir').value = '/Users/dev';
+      document.getElementById('agent-input').value = 'Keep my Git token in the keychain';
+      document.getElementById('agent-composer').requestSubmit();
+    }, 3000);
+  }
+  // agentdispatch: Run headless on the ready plan, confirmed; the run
+  // finishes 1.5s later. Then Save plan on the first proposal.
+  if (MODE.includes('agentdispatch')) {
+    setTimeout(() => {
+      document.querySelector('#agent-plans [data-plan="1"] [data-action="agent-dispatch"][data-mode="headless"]').click();
+      setTimeout(() => {
+        const ok = document.getElementById('confirm-ok');
+        if (ok) ok.click();
+      }, 300);
+    }, 3000);
+    setTimeout(() => document.querySelector('#agent-thread [data-action="agent-save-proposal"][data-message="2"]').click(), 5000);
+  }
+
   // Stateful POST handling: mutations change the fixture so the DOM tests
   // can assert that actions VISIBLY update the lists (the "allow does
   // nothing" / "dismiss does nothing" regressions).
-  const handlePost = (p, opts) => {
+  const handlePost = (p, opts, full) => {
     let body = {};
     try { body = JSON.parse((opts && opts.body) || '{}'); } catch { /* ignored */ }
+    if (p.startsWith('/agent/')) {
+      const out = agentPost(p, opts, full || p, body);
+      if (out) return out;
+    }
     if (p === '/cleanup/advise') {
       data['/cleanup'].advice = { ...(data['/cleanup'].advice || {}), [body.project]: { rationale: 'Caches are small; nothing urgent.', suggested_action: 'Run go clean -cache' } };
       return { status: 'ok', queued: true, subject: 'project:' + body.project };
@@ -789,7 +908,7 @@
       if (MODE.includes('postfail') && p === '/allowlist') {
         return { ok: false, status: 500, json: async () => ({}), text: async () => 'mock failure' };
       }
-      const out = handlePost(p, opts);
+      const out = handlePost(p, opts, String(path));
       return {
         ok: true, status: 200,
         json: async () => out,
