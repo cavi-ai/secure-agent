@@ -256,12 +256,14 @@ func Open(dbPath, jsonlPath string) (*Store, error) {
 			captured_at TEXT NOT NULL,
 			severity TEXT NOT NULL,
 			session_key TEXT NOT NULL,
+			session_id TEXT,
 			episode_json TEXT NOT NULL
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_resource_episodes_captured_at ON resource_episodes(captured_at);`,
 		guardDecisionsSchema,
 		sessionsSchema,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status, last_seen_at);`,
+		`CREATE INDEX IF NOT EXISTS idx_sessions_root_identity ON sessions(root_pid, root_started_at);`,
 		worktreeReposSchema,
 		cleanupLogSchema,
 		agentAsksSchema,
@@ -274,6 +276,23 @@ func Open(dbPath, jsonlPath string) (*Store, error) {
 			db.Close()
 			return nil, fmt.Errorf("failed to init db schema: %w", err)
 		}
+	}
+	// Older resource tables retain their original rows and family key. A
+	// nullable attribution column only applies to new exact-identity captures.
+	var episodeSessionN int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('resource_episodes') WHERE name='session_id'`).Scan(&episodeSessionN); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to inspect resource_episodes.session_id: %w", err)
+	}
+	if episodeSessionN == 0 {
+		if _, err := db.Exec(`ALTER TABLE resource_episodes ADD COLUMN session_id TEXT`); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("failed to migrate resource_episodes.session_id: %w", err)
+		}
+	}
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_resource_episodes_session_at ON resource_episodes(session_id, captured_at, id)`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to index resource_episodes.session_id: %w", err)
 	}
 	// Pre-session_id databases (CREATE TABLE IF NOT EXISTS is a no-op on them)
 	// get the column added in place. Checked via PRAGMA so a fresh database
@@ -1698,6 +1717,12 @@ func (s *Store) PutResourceEpisode(episode resource.Episode) error {
 	episode.ActivityStatus = "settling"
 	enriched, enrichErr := s.attachResourceEpisodeActivity(ctx, episode)
 	episode = enriched
+	// The caller's optional ID is not trusted. Only a unique, exact root
+	// process identity can attach an agent episode to a durable session.
+	episode.SessionID = ""
+	if episode.Session.Kind != "infra" {
+		episode.SessionID = s.SessionIDForRoot(episode.Session.RootPID, episode.Session.RootStartedAt)
+	}
 	if enrichErr != nil {
 		log.Printf("store: initial resource episode activity: %v", enrichErr)
 	}
@@ -1710,9 +1735,13 @@ func (s *Store) PutResourceEpisode(episode resource.Episode) error {
 		return fmt.Errorf("begin resource episode write: %w", err)
 	}
 	defer tx.Rollback()
+	var sessionID any
+	if episode.SessionID != "" {
+		sessionID = episode.SessionID
+	}
 	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO resource_episodes (captured_at, severity, session_key, episode_json) VALUES (?, ?, ?, ?)`,
-		episode.CapturedAt.UTC().Format(time.RFC3339Nano), episode.Severity, episode.Session.Key, string(payload),
+		`INSERT INTO resource_episodes (captured_at, severity, session_key, session_id, episode_json) VALUES (?, ?, ?, ?, ?)`,
+		episode.CapturedAt.UTC().Format(time.RFC3339Nano), episode.Severity, episode.Session.Key, sessionID, string(payload),
 	); err != nil {
 		return fmt.Errorf("insert resource episode: %w", err)
 	}

@@ -60,6 +60,29 @@ func TestSessionLifecycle(t *testing.T) {
 	}
 }
 
+func TestSessionIDForRootExactIdentity(t *testing.T) {
+	s, err := Open("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	start := time.Now().UTC().Add(-time.Minute)
+	s.UpsertSession(model.Session{ID: "s1", RootPID: 100, RootStartedAt: start.Format(time.RFC3339Nano), StartedAt: start, LastSeenAt: start})
+	if got := s.SessionIDForRoot(100, start); got != "s1" {
+		t.Fatalf("exact lookup=%q", got)
+	}
+	if got := s.SessionIDForRoot(100, start.Add(time.Nanosecond)); got != "" {
+		t.Fatalf("reused PID lookup=%q", got)
+	}
+	if got := s.SessionIDForRoot(100, time.Time{}); got != "" {
+		t.Fatalf("missing start lookup=%q", got)
+	}
+	s.UpsertSession(model.Session{ID: "s2", RootPID: 100, RootStartedAt: start.Format(time.RFC3339Nano), StartedAt: start, LastSeenAt: start})
+	if got := s.SessionIDForRoot(100, start); got != "" {
+		t.Fatalf("ambiguous lookup=%q", got)
+	}
+}
+
 func TestRekeySessionRepointsEventsAndFlags(t *testing.T) {
 	s, err := Open("", "")
 	if err != nil {

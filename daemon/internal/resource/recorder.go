@@ -19,6 +19,7 @@ const (
 // grew without keeping an unbounded copy of live telemetry.
 type Episode struct {
 	ID             int64                `json:"id,omitempty"`
+	SessionID      string               `json:"session_id,omitempty"`
 	CapturedAt     time.Time            `json:"captured_at"`
 	Severity       string               `json:"severity"`
 	DiagnosisCodes []string             `json:"diagnosis_codes"`

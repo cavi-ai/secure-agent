@@ -2,15 +2,140 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 	"unicode/utf8"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
+	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/resource"
 )
+
+func TestResourceEpisodeSessionIdentity(t *testing.T) {
+	start := time.Now().UTC().Add(-time.Minute).Truncate(time.Nanosecond)
+	cases := []struct {
+		name        string
+		kind        string
+		rootStart   time.Time
+		secondStart time.Time
+		want        string
+	}{
+		{name: "exact ended session", rootStart: start, want: "s1"},
+		{name: "missing start", want: ""},
+		{name: "reused PID", rootStart: start.Add(time.Second), want: ""},
+		{name: "ambiguous match", rootStart: start, secondStart: start, want: ""},
+		{name: "infrastructure", kind: "infra", rootStart: start, want: ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			st, err := Open("", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer st.Close()
+			st.UpsertSession(model.Session{ID: "s1", Harness: "claude", RootPID: 100, RootStartedAt: start.In(time.FixedZone("offset", -4*3600)).Format(time.RFC3339Nano), StartedAt: start, LastSeenAt: start})
+			st.EndSession("s1", time.Now())
+			if !tc.secondStart.IsZero() {
+				st.UpsertSession(model.Session{ID: "s2", Harness: "claude", RootPID: 100, RootStartedAt: tc.secondStart.Format(time.RFC3339Nano), StartedAt: start, LastSeenAt: start})
+			}
+			key := fmt.Sprintf("100:%d", tc.rootStart.UnixNano())
+			episode := resource.Episode{SessionID: "untrusted", CapturedAt: time.Now(), Severity: "warning", Session: resource.Session{Key: key, Kind: tc.kind, RootPID: 100, RootStartedAt: tc.rootStart}}
+			if err := st.PutResourceEpisode(episode); err != nil {
+				t.Fatal(err)
+			}
+			var id sql.NullString
+			var storedKey, payload string
+			if err := st.db.QueryRow(`SELECT session_id, session_key, episode_json FROM resource_episodes`).Scan(&id, &storedKey, &payload); err != nil {
+				t.Fatal(err)
+			}
+			if id.String != tc.want || id.Valid != (tc.want != "") {
+				t.Fatalf("session_id=%+v, want %q", id, tc.want)
+			}
+			if storedKey != key {
+				t.Fatalf("family key=%q, want %q", storedKey, key)
+			}
+			var got resource.Episode
+			if err := json.Unmarshal([]byte(payload), &got); err != nil {
+				t.Fatal(err)
+			}
+			if got.SessionID != tc.want {
+				t.Fatalf("episode session_id=%q, want %q", got.SessionID, tc.want)
+			}
+		})
+	}
+}
+
+func TestLegacyEpisodeExactFamily(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "old.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Exec(`CREATE TABLE resource_episodes (id INTEGER PRIMARY KEY AUTOINCREMENT, captured_at TEXT NOT NULL, severity TEXT NOT NULL, session_key TEXT NOT NULL, episode_json TEXT NOT NULL)`); err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now().UTC().Add(-time.Minute)
+	key := fmt.Sprintf("100:%d", start.UnixNano())
+	if _, err = db.Exec(`INSERT INTO resource_episodes(captured_at,severity,session_key,episode_json) VALUES (?,?,?,?)`, time.Now().Format(time.RFC3339Nano), "warning", key, `{}`); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	st, err := Open(path, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	st.UpsertSession(model.Session{ID: "s1", RootPID: 100, RootStartedAt: start.Format(time.RFC3339Nano), StartedAt: start, LastSeenAt: start})
+	var storedID sql.NullString
+	if err := st.db.QueryRow(`SELECT session_id FROM resource_episodes WHERE session_key=?`, key).Scan(&storedID); err != nil {
+		t.Fatal(err)
+	}
+	if storedID.Valid {
+		t.Fatalf("migration invented attribution: %+v", storedID)
+	}
+	if got := st.SessionIDForFamilyKey(key); got != "s1" {
+		t.Fatalf("exact legacy key resolved to %q", got)
+	}
+	for _, wrong := range []string{"100:0", fmt.Sprintf("100:%d", start.Add(time.Nanosecond).UnixNano()), fmt.Sprintf("101:%d", start.UnixNano()), "100:bad"} {
+		if got := st.SessionIDForFamilyKey(wrong); got != "" {
+			t.Fatalf("wrong legacy key %q resolved to %q", wrong, got)
+		}
+	}
+}
+
+func TestRekeySessionRepointsResourceEpisode(t *testing.T) {
+	st, err := Open("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	start := time.Now().UTC().Add(-time.Minute)
+	st.UpsertSession(model.Session{ID: "provisional", RootPID: 100, RootStartedAt: start.Format(time.RFC3339Nano), StartedAt: start, LastSeenAt: start})
+	episode := resource.Episode{CapturedAt: time.Now(), Session: resource.Session{Key: fmt.Sprintf("100:%d", start.UnixNano()), RootPID: 100, RootStartedAt: start}}
+	if err := st.PutResourceEpisode(episode); err != nil {
+		t.Fatal(err)
+	}
+	st.RekeySession("provisional", "canonical")
+	var id, payload string
+	if err := st.db.QueryRow(`SELECT session_id, episode_json FROM resource_episodes LIMIT 1`).Scan(&id, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if id != "canonical" {
+		t.Fatalf("session_id=%q, want canonical", id)
+	}
+	var got resource.Episode
+	if err := json.Unmarshal([]byte(payload), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.SessionID != "canonical" {
+		t.Fatalf("episode_json session_id=%q, want canonical", got.SessionID)
+	}
+}
 
 func TestResourceEpisodeRoundTrip(t *testing.T) {
 	st, err := Open("", "")
