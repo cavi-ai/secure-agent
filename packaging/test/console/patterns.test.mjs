@@ -52,6 +52,14 @@ test('patternHTML: 24 bars, count, summary, open count; actions in served order,
   assert.ok(html.includes('<summary>Individual flags (323)</summary>'));
 });
 
+test('patternHTML: the card names its processes and launchers, escaped; none when the daemon served none', () => {
+  const html = patternHTML(pattern({ processes: [
+    { name: 'claude', launcher: 'Claude.app › claude-code 2.1.281', count: 2 },
+    { name: '<b>x</b>', count: 1 }] }), Date.parse('2026-09-12T04:00:00Z'), {});
+  assert.match(html, /<p class="pattern-processes">claude-code 2\.1\.281 via Claude\.app ×2 · &lt;b&gt;x&lt;\/b&gt; ×1<\/p>/);
+  assert.ok(!patternHTML(pattern({}), Date.parse('2026-09-12T04:00:00Z'), {}).includes('pattern-processes'));
+});
+
 test('patternHTML: a pattern dismissed in place shows 0 open and disabled buttons', () => {
   const html = patternHTML(pattern({ dismissed: true, unacked: 0, disposition: { state: 'acknowledged', text: 'Reviewed', why: '' } }), Date.now(), {});
   assert.ok(html.includes('<b class="pattern-open">0 open</b>'));

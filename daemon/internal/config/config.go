@@ -30,6 +30,11 @@ type GuardRuleDoc struct {
 		ID    string   `json:"id"`
 		Paths []string `json:"paths"`
 		Mode  string   `json:"mode"`
+		// ReadSensitive: the files hold secrets, so reading one seeds the
+		// correlator's read-then-connect rule. False for files the guard
+		// protects from tampering but every shell or harness start reads
+		// (shell rc files, harness settings and hooks).
+		ReadSensitive bool `json:"read_sensitive"`
 	} `json:"rules"`
 	DirScan [][]string `json:"dir_scan"`
 }
@@ -64,6 +69,9 @@ func mergeGuardRulePaths(raw *rawConfig) {
 		seen[g] = true
 	}
 	for _, r := range doc.Rules {
+		if !r.ReadSensitive {
+			continue
+		}
 		for _, p := range r.Paths {
 			if p == "" || seen[p] || !globSafeForCorrelator(p) {
 				continue

@@ -400,6 +400,25 @@ func Open(dbPath, jsonlPath string) (*Store, error) {
 		}
 		log.Printf("store: migrated flags: added acknowledged column")
 	}
+	// Flags gain the daemon's own acknowledge reason and the raising
+	// process snapshot (JSON), the latter so a finding still names its
+	// process after the process exits.
+	for _, col := range []string{"ack_reason", "process"} {
+		var n int
+		if err := db.QueryRow(
+			`SELECT COUNT(*) FROM pragma_table_info('flags') WHERE name=?`, col,
+		).Scan(&n); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("failed to inspect flags schema: %w", err)
+		}
+		if n == 0 {
+			if _, err := db.Exec(`ALTER TABLE flags ADD COLUMN ` + col + ` TEXT`); err != nil {
+				db.Close()
+				return nil, fmt.Errorf("failed to migrate flags.%s: %w", col, err)
+			}
+			log.Printf("store: migrated flags: added %s column", col)
+		}
+	}
 	// Incidents workflow columns: the acknowledge/resolve endpoints write
 	// status/acknowledged_at/resolved_at/resolution_note. Without this
 	// migration those writes fail with "no such column" and the dashboard's
@@ -502,10 +521,16 @@ func (s *Store) PutFlag(fl model.Flag) {
 
 	evJSON, _ := json.Marshal(fl.Evidence)
 	tsStr := fl.TS.UTC().Format(time.RFC3339Nano)
+	var procJSON sql.NullString
+	if fl.Process != nil {
+		if b, err := json.Marshal(fl.Process); err == nil {
+			procJSON = sql.NullString{String: string(b), Valid: true}
+		}
+	}
 
 	_, err := s.db.Exec(
-		`INSERT OR REPLACE INTO flags (id, rule, severity, ts, pid, agent, session_id, workspace, evidence) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		fl.ID, fl.Rule, fl.Severity, tsStr, fl.PID, fl.Agent, fl.SessionID, fl.Workspace, string(evJSON),
+		`INSERT OR REPLACE INTO flags (id, rule, severity, ts, pid, agent, session_id, workspace, evidence, process) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		fl.ID, fl.Rule, fl.Severity, tsStr, fl.PID, fl.Agent, fl.SessionID, fl.Workspace, string(evJSON), procJSON,
 	)
 	if err != nil {
 		log.Printf("store: failed to insert flag %s: %v", fl.ID, err)
@@ -856,6 +881,12 @@ func (s *Store) AcknowledgeFlag(id string) bool {
 // how many rows it touched (a re-ack counts; an unknown id does not). Any
 // error rolls the batch back and returns 0.
 func (s *Store) AcknowledgeFlags(ids []string) int {
+	return s.AcknowledgeFlagsReason(ids, "")
+}
+
+// AcknowledgeFlagsReason is AcknowledgeFlags recording why: the daemon's own
+// acknowledgements carry a reason, the operator's carry none.
+func (s *Store) AcknowledgeFlagsReason(ids []string, reason string) int {
 	if len(ids) == 0 {
 		return 0
 	}
@@ -866,7 +897,7 @@ func (s *Store) AcknowledgeFlags(ids []string) int {
 		log.Printf("store: acknowledge flags begin: %v", err)
 		return 0
 	}
-	stmt, err := tx.Prepare(`UPDATE flags SET acknowledged = ? WHERE id = ?`)
+	stmt, err := tx.Prepare(`UPDATE flags SET acknowledged = ?, ack_reason = ? WHERE id = ?`)
 	if err != nil {
 		_ = tx.Rollback()
 		log.Printf("store: acknowledge flags prepare: %v", err)
@@ -876,7 +907,7 @@ func (s *Store) AcknowledgeFlags(ids []string) int {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	n := 0
 	for _, id := range ids {
-		res, err := stmt.Exec(now, id)
+		res, err := stmt.Exec(now, reason, id)
 		if err != nil {
 			_ = tx.Rollback()
 			log.Printf("store: acknowledge flags error: %v", err)
@@ -909,21 +940,36 @@ func (s *Store) ReattributeFlags(pid int32, agent string, since time.Time) int {
 	return int(n)
 }
 
+// decodeFlagProcess reads the stored process snapshot; nil when absent or
+// unreadable.
+func decodeFlagProcess(raw string) *model.FlagProcess {
+	if raw == "" {
+		return nil
+	}
+	var p model.FlagProcess
+	if json.Unmarshal([]byte(raw), &p) != nil || p.Name == "" {
+		return nil
+	}
+	return &p
+}
+
 func (s *Store) GetFlag(id string) (model.Flag, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	row := s.db.QueryRow(
-		`SELECT id, rule, severity, ts, pid, agent, session_id, workspace, evidence, acknowledged FROM flags WHERE id = ?`, id)
+		`SELECT id, rule, severity, ts, pid, agent, session_id, workspace, evidence, acknowledged, ack_reason, process FROM flags WHERE id = ?`, id)
 	var fl model.Flag
 	var tsStr, evStr string
 	var sessionID, workspace sql.NullString
-	var ack sql.NullString
-	if err := row.Scan(&fl.ID, &fl.Rule, &fl.Severity, &tsStr, &fl.PID, &fl.Agent, &sessionID, &workspace, &evStr, &ack); err != nil {
+	var ack, ackReason, proc sql.NullString
+	if err := row.Scan(&fl.ID, &fl.Rule, &fl.Severity, &tsStr, &fl.PID, &fl.Agent, &sessionID, &workspace, &evStr, &ack, &ackReason, &proc); err != nil {
 		return model.Flag{}, false
 	}
 	fl.SessionID = sessionID.String
 	fl.Workspace = workspace.String
 	fl.Acknowledged = ack.String != ""
+	fl.AckReason = ackReason.String
+	fl.Process = decodeFlagProcess(proc.String)
 	fl.TS, _ = time.Parse(time.RFC3339Nano, tsStr)
 	_ = json.Unmarshal([]byte(evStr), &fl.Evidence)
 	return fl, true
@@ -948,7 +994,7 @@ func (s *Store) QueryFlags(f FlagFilter) []model.Flag {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	q := `SELECT id, rule, severity, ts, pid, agent, session_id, workspace, evidence, acknowledged FROM flags WHERE 1=1`
+	q := `SELECT id, rule, severity, ts, pid, agent, session_id, workspace, evidence, acknowledged, ack_reason, process FROM flags WHERE 1=1`
 	var args []any
 	if f.Agent != "" {
 		q += " AND agent = ?"
@@ -991,12 +1037,14 @@ func (s *Store) QueryFlags(f FlagFilter) []model.Flag {
 		var fl model.Flag
 		var tsStr, evStr string
 		var sessionID, workspace sql.NullString
-		var ack sql.NullString
-		if err := rows.Scan(&fl.ID, &fl.Rule, &fl.Severity, &tsStr, &fl.PID, &fl.Agent, &sessionID, &workspace, &evStr, &ack); err == nil {
+		var ack, ackReason, proc sql.NullString
+		if err := rows.Scan(&fl.ID, &fl.Rule, &fl.Severity, &tsStr, &fl.PID, &fl.Agent, &sessionID, &workspace, &evStr, &ack, &ackReason, &proc); err == nil {
 			fl.SessionID = sessionID.String
 			fl.Workspace = workspace.String
 			fl.TS, _ = time.Parse(time.RFC3339Nano, tsStr)
 			fl.Acknowledged = ack.String != ""
+			fl.AckReason = ackReason.String
+			fl.Process = decodeFlagProcess(proc.String)
 			_ = json.Unmarshal([]byte(evStr), &fl.Evidence)
 			flags = append(flags, fl)
 		}

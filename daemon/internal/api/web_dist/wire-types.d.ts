@@ -60,6 +60,14 @@ export interface AdvisorVerdict {
   created_at: string;
 }
 
+export interface FlagProcess {
+  exe?: string;
+  name: string;
+  args0?: string;
+  ppid?: number;
+  launcher?: string;
+}
+
 export interface ExplainSubject {
   path: string;
   display: string;
@@ -136,7 +144,15 @@ export interface Flag {
   title?: string;
   advisor?: AdvisorVerdict;
   acknowledged?: boolean;
+  ack_reason?: string;
+  process?: FlagProcess;
   explain?: FlagExplain;
+}
+
+export interface PatternProcess {
+  name: string;
+  launcher?: string;
+  count: number;
 }
 
 export interface Pattern {
@@ -157,6 +173,7 @@ export interface Pattern {
   pid_count: number;
   sessions: string[];
   session_count: number;
+  processes: PatternProcess[];
   disposition: Disposition;
   summary: string;
   actions: ExplainAction[];
@@ -455,6 +472,7 @@ export interface AttentionGroup {
   rssBytes?: number;
   cpuPercent?: number;
   processCount?: number;
+  summary?: string;
   items: AttentionItem[];
 }
 

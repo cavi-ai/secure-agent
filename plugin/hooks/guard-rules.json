@@ -3,7 +3,8 @@
     {
       "id": "ssh-keys",
       "paths": ["~/.ssh/id_*", "~/.ssh/*_rsa", "~/.ssh/*_ed25519"],
-      "mode": "monitor"
+      "mode": "monitor",
+      "read_sensitive": true
     },
     {
       "id": "cloud-creds",
@@ -16,22 +17,26 @@
         "~/.docker/config.json",
         "~/.config/gh/hosts.yml"
       ],
-      "mode": "monitor"
+      "mode": "monitor",
+      "read_sensitive": true
     },
     {
       "id": "keychain",
       "paths": ["**/*.keychain-db", "**/login.keychain*"],
-      "mode": "monitor"
+      "mode": "monitor",
+      "read_sensitive": true
     },
     {
       "id": "env-files",
       "paths": ["**/.env", "**/.env.*"],
-      "mode": "monitor"
+      "mode": "monitor",
+      "read_sensitive": true
     },
     {
       "id": "shell-rc",
       "paths": ["~/.zshrc", "~/.zshenv", "~/.bashrc", "~/.profile"],
-      "mode": "monitor"
+      "mode": "monitor",
+      "read_sensitive": false
     },
     {
       "id": "harness-config",
@@ -43,7 +48,8 @@
         "~/.cursor/hooks.json",
         "~/.config/opencode/hooks/**"
       ],
-      "mode": "monitor"
+      "mode": "monitor",
+      "read_sensitive": false
     }
   ],
   "dir_scan": [

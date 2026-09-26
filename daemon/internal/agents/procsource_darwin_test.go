@@ -120,3 +120,13 @@ func TestSelfStartTimeAndRSS(t *testing.T) {
 		t.Fatalf("CWD is not absolute: %q", info.CWD)
 	}
 }
+
+func TestDarwinArgv0ReadsOwnArgv0(t *testing.T) {
+	got := (&DarwinProcSource{}).Argv0(int32(os.Getpid()))
+	if got != os.Args[0] {
+		t.Fatalf("Argv0(self) = %q, want %q", got, os.Args[0])
+	}
+	if (&DarwinProcSource{}).Argv0(-1) != "" {
+		t.Fatal("Argv0 of an invalid pid must be empty")
+	}
+}

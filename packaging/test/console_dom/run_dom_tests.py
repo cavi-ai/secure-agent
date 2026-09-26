@@ -973,6 +973,10 @@ def main():
         check("attention center groups the whole api-service session",
               'class="attention-group' in attention and "api-service" in attention
               and "5.5 GB" in attention and "132.5%" in attention and "<b>2</b> processes" in attention)
+        codex_group = (re.search(r'<article class="attention-group[^"]*">((?:(?!</article>).)*codex activity.*?)</article>', attention, re.S) or [None, ""])[1]
+        check("attention: an agent-level group names its processes and sessions, not the generic sentence",
+              '<span class="attention-workspace">2 processes (codex 0.46.0 via Terminal.app) across 2 sessions, all exited</span>' in codex_group
+              and "safely attributed" not in dom, f"group={codex_group[:300]!r}")
         check("attention center unifies all actionable signal types",
               all(label in attention for label in ("Guard decision", "Resource pressure", "Critical incident", "Critical finding", "Uninspected egress")))
         check("attention resource actions target the full session",

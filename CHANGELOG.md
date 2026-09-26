@@ -7,6 +7,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 ## [Unreleased]
 
 ### Changed
+- Findings skip shell rc and harness-settings reads as secret reads and name the raising process and its launcher.
 - File telemetry's root helper drops open events on system paths (OS libraries and frameworks, app-bundle contents, Homebrew Cellar, `/dev` nodes, user caches) that no sensitive-file rule matches before they reach the spool.
 - File events from a process that already exited cost one process lookup per tagger refresh instead of one per event.
 - Cleanup totals no longer count an agent's answer (`ask:*` ledger rows) as a cleanup.

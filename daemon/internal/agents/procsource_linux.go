@@ -109,6 +109,18 @@ func readRSS(pid int32) uint64 {
 	return parseProcStatm(string(b), uint64(os.Getpagesize()))
 }
 
+// Argv0 reads argv[0] from /proc/<pid>/cmdline; "" when unreadable.
+func (p *ProcProcSource) Argv0(pid int32) string {
+	b, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(int(pid)), "cmdline"))
+	if err != nil {
+		return ""
+	}
+	if i := strings.IndexByte(string(b), 0); i >= 0 {
+		return string(b[:i])
+	}
+	return string(b)
+}
+
 // ProcEnvVar reads one variable from /proc/<pid>/environ (NUL-separated).
 // "" when unreadable or unset.
 func ProcEnvVar(pid int32, key string) string {

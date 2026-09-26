@@ -1491,7 +1491,25 @@ test('attention subtitle: workspace "/" renders none; empty says why', () => {
   assert.equal(ctx.attentionSubtitle({ workspace: '/' }), '');
   assert.equal(ctx.attentionSubtitle({ workspace: '/Users/dev/api' }), '/Users/dev/api');
   assert.equal(ctx.attentionSubtitle({ key: 'machine' }), 'Monitoring gaps no agent session owns');
-  assert.equal(ctx.attentionSubtitle({ key: 'agent:x', workspace: '' }), 'Signals could not be safely attributed to one live session');
+  assert.equal(ctx.attentionSubtitle({ key: 'agent:x', workspace: '' }), 'Not tied to one live session');
+});
+
+test('attention subtitle: an agent-level group reads the served process summary', () => {
+  const group = { key: 'agent:claude', label: 'claude activity', agent: 'claude', workspace: '',
+    summary: '3 processes (claude-code 2.1.281 via Claude.app) across 3 sessions, all exited' };
+  assert.equal(ctx.attentionSubtitle(group), '3 processes (claude-code 2.1.281 via Claude.app) across 3 sessions, all exited');
+  assert.ok(!/safely attributed/.test(ctx.attentionSubtitle(group)));
+});
+
+test('processLabel and patternProcessesText read snapshots as harness via app', () => {
+  assert.equal(ctx.processLabel('claude', 'Claude.app › claude-code 2.1.281'), 'claude-code 2.1.281 via Claude.app');
+  assert.equal(ctx.processLabel('zsh', 'Claude.app › claude-code 2.1.281'), 'zsh in claude-code 2.1.281 via Claude.app');
+  assert.equal(ctx.processLabel('Cursor Helper (Plugin)', 'Cursor.app'), 'Cursor Helper (Plugin) via Cursor.app');
+  assert.equal(ctx.processLabel('node', ''), 'node');
+  assert.equal(ctx.patternProcessesText([
+    { name: 'claude', launcher: 'Claude.app › claude-code 2.1.281', count: 3 },
+    { name: 'opencode', count: 1 }]), 'claude-code 2.1.281 via Claude.app ×3 · opencode ×1');
+  assert.equal(ctx.patternProcessesText(undefined), '');
 });
 
 // ---------- Events rows (trace legibility) ----------

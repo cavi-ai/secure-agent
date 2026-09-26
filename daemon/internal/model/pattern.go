@@ -40,6 +40,9 @@ type Pattern struct {
 	PIDCount     int      `json:"pid_count"`
 	Sessions     []string `json:"sessions"`
 	SessionCount int      `json:"session_count"`
+	// Processes are the distinct raising processes by name and launcher,
+	// busiest PatternListCap first; Count is the distinct pids of each.
+	Processes []PatternProcess `json:"processes"`
 	// Disposition is the worst among unacknowledged flags; acknowledged when
 	// none is open.
 	Disposition Disposition     `json:"disposition"`
@@ -48,4 +51,11 @@ type Pattern struct {
 	// FlagIDs are the covered flags, open ones first, newest first, at most
 	// PatternFlagIDCap.
 	FlagIDs []string `json:"flag_ids"`
+}
+
+// PatternProcess is one process name and launcher behind a pattern's flags.
+type PatternProcess struct {
+	Name     string `json:"name"`
+	Launcher string `json:"launcher,omitempty"`
+	Count    int    `json:"count"`
 }
