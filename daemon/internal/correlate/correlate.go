@@ -21,6 +21,8 @@ type readMark struct {
 	path     string
 	cat      sensitive.Category
 	rule     string
+	pid      int32  // the process that opened the file
+	exe      string // its executable, when the event carried one
 	consumed bool
 }
 
@@ -379,18 +381,11 @@ func (c *Correlator) observeLocked(e event.Event) []model.Flag {
 	case event.KindFileOpen, event.KindFileWrite, event.KindPluginAction:
 		if m, ok := c.classifier.Match(e.Path); ok {
 			cat := m.Category
-			c.rememberReadLocked(rootPID, e.PID, readMark{at: e.TS, path: e.Path, cat: cat, rule: m.Rule})
-			// System trust-store reads (SystemTrustSettings, /System/Library/
-			// Keychains) are normal macOS behavior for cert-chain evaluation —
-			// any app doing TLS/code-signing touches them. They are recorded
-			// in the transcript but never CRITICAL, and they never seed the
-			// read-then-connect rule (there is no secret to exfiltrate).
-			if cat == sensitive.CatKeychainSystem {
-				return nil
-			}
 			if cat == sensitive.CatKeychain {
 				flags = append(flags, c.keychainAccessLocked(e, info.Name)...)
-			} else {
+			}
+			if seedsReadThenConnect(m.Category, e.Kind, e.ExePath) {
+				c.rememberReadLocked(rootPID, e.PID, readMark{at: e.TS, path: e.Path, cat: cat, rule: m.Rule, pid: e.PID, exe: e.ExePath})
 				// Check if there's already an unconsumed recent foreign connection for this agent
 				recentConns := c.recentConnsLocked(rootPID, e.PID, e.TS, window)
 				// Operator disposition applies only when EVERY connection the
@@ -421,6 +416,8 @@ func (c *Correlator) observeLocked(e event.Event) []model.Flag {
 						Rule:  m.Rule,
 						TS:    e.TS.Format(time.RFC3339),
 						Text:  fmt.Sprintf("%s (pid %d) read %s at %s", info.Name, e.PID, e.Path, e.TS.Format(time.RFC3339)),
+						PID:   e.PID,
+						Exe:   e.ExePath,
 					}}
 					for _, cm := range recentConns {
 						evidence = append(evidence, model.EvidenceItem{
@@ -562,7 +559,9 @@ func (c *Correlator) observeLocked(e event.Event) []model.Flag {
 				Sub:   "sensitive read",
 				Rule:  m.rule,
 				TS:    m.at.Format(time.RFC3339),
-				Text:  fmt.Sprintf("%s (pid %d) read %s at %s", info.Name, e.PID, m.path, m.at.Format(time.RFC3339)),
+				Text:  fmt.Sprintf("%s (pid %d) read %s at %s", info.Name, m.pid, m.path, m.at.Format(time.RFC3339)),
+				PID:   m.pid,
+				Exe:   m.exe,
 			})
 		}
 		evidence = append(evidence, model.EvidenceItem{

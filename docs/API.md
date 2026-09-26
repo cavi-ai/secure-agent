@@ -258,7 +258,8 @@ Host: unix
 #### Raising process and daemon acknowledgements
 
 - `process` — the raising process as it was when the flag was raised, kept after the process exits: `{exe, name, args0, ppid, launcher}`. `args0` is argv[0] with secret-shaped values scrubbed; no further argv, no environment. `launcher` is the nearest app bundle above the harness root, then the harness root (`"Claude.app › claude-code 2.1.281"`). Absent on flags raised before the field existed. Also on `GET /flags/{id}/explain`.
-- `ack_reason` — why the daemon acknowledged the flag itself. At start the daemon acknowledges open `sensitive-read-then-connect` flags whose read matched a glob that no longer counts as a secret read (guard rules with `read_sensitive: false`: `shell-rc`, `harness-config`), with reason `reclassified at start: …` and one `flag-reclassify` audit entry. Empty when the operator acknowledged.
+- `evidence[].pid`, `evidence[].exe` — on `read` items, the process that opened the file; it may differ from the flag's `pid`, the process that connected out. Absent on flags raised before the fields existed.
+- `ack_reason` — why the daemon acknowledged the flag itself. At start the daemon acknowledges open `sensitive-read-then-connect` flags none of whose reads counts as a secret read, with reason `reclassified at start: …` and one `flag-reclassify` audit entry. Not a secret read: a glob that no longer counts (guard rules with `read_sensitive: false`: `shell-rc`, `harness-config`), the macOS trust store (`system-trust`), and a keychain file opened by anything but a byte-copy tool (`cat`, `cp`, `ditto`, `tar`, `curl`, `base64`, …). Empty when the operator acknowledged.
 
 #### Explanation stamping
 

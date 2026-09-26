@@ -16,6 +16,10 @@ type EvidenceItem struct {
 	Text  string `json:"text,omitempty"`
 	// Offset: transcript items, the byte offset of the line the secret was on.
 	Offset int64 `json:"offset,omitempty"`
+	// PID and Exe: read items, the process that opened the file (it may
+	// differ from the process that connected out).
+	PID int32  `json:"pid,omitempty"`
+	Exe string `json:"exe,omitempty"`
 }
 
 // UnmarshalJSON accepts the legacy bare-string form too.

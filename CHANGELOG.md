@@ -6,6 +6,10 @@ All notable changes to `secure-agent` are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- Findings: a macOS trust-store read, or a keychain file opened by a TLS client, no longer counts as a secret read for "read a secret, then connected out"; a keychain file opened by a byte-copy tool (`cat`, `cp`, `tar`, `curl`, …) or read by an agent tool still does. Open flags from those reads are acknowledged at start.
+- Findings: a read item names the process that opened the file (`evidence[].pid`, `evidence[].exe`), not the process that connected out.
+
 ### Changed
 - File telemetry: a write burst the reader skips reads as "File monitoring is falling behind" after 60 s, not as a flooding writer; `es_service.unparsed_share` counts only lines the reader parsed; `es_service.flooding_since` added.
 - Console header event rate keeps a fixed width, so the status chip does not shift as events per second change.

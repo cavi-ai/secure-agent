@@ -49,6 +49,8 @@ export interface EvidenceItem {
   ts?: string;
   text?: string;
   offset?: number;
+  pid?: number;
+  exe?: string;
 }
 
 export interface AdvisorVerdict {
