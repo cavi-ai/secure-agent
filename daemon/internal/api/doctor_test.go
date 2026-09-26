@@ -305,16 +305,32 @@ func TestDoctorChecksFromFacts(t *testing.T) {
 		{"evicting inside a day", checkRetention, func() doctorFacts {
 			f := steady
 			f.retention = []store.KindRetention{
-				{Kind: 12, Name: "tool-call", Rows: 50000, Budget: 50000, OldestTS: now.Add(-3 * time.Hour).Format(time.RFC3339)},
-				{Kind: 0, Name: "file-open", Rows: 40000, Budget: 40000, OldestTS: now.Add(-72 * time.Hour).Format(time.RFC3339)},
+				{Kind: 12, Name: "tool-call", Rows: 50000, Budget: 50000, HorizonTS: now.Add(-3 * time.Hour).Format(time.RFC3339)},
+				{Kind: 1, Name: "file-write", Rows: 150000, Budget: 150000, HorizonTS: now.Add(-72 * time.Hour).Format(time.RFC3339)},
 			}
 			return f
 		}(), doctorFail, "tool-call 50000/50000 rows, oldest 3h0m0s"},
 		{"at budget but keeps a day", checkRetention, func() doctorFacts {
 			f := steady
-			f.retention = []store.KindRetention{{Kind: 0, Name: "file-open", Rows: 40000, Budget: 40000, OldestTS: now.Add(-72 * time.Hour).Format(time.RFC3339)}}
+			f.retention = []store.KindRetention{{Kind: 1, Name: "file-write", Rows: 150000, Budget: 150000, HorizonTS: now.Add(-72 * time.Hour).Format(time.RFC3339)}}
 			return f
 		}(), doctorPass, "1 kinds within budget"},
+		{"ring kind keeps minutes, its record keeps days", checkRetention, func() doctorFacts {
+			f := steady
+			f.retention = []store.KindRetention{
+				{Kind: 0, Name: "file-open", Rows: 40300, Budget: 40000, HorizonTS: now.Add(-2 * time.Minute).Format(time.RFC3339), Ring: true,
+					RecordRows: 300, RecordBudget: 20000},
+				{Kind: 3, Name: "exec", Rows: 10000, Budget: 10000, HorizonTS: now.Add(-5 * time.Minute).Format(time.RFC3339), Ring: true,
+					RecordRows: 20000, RecordBudget: 20000, RecordHorizonTS: now.Add(-50 * time.Hour).Format(time.RFC3339)},
+			}
+			return f
+		}(), doctorPass, "2 kinds within budget; newest rows only (record rows keep days): file-open 2m0s, exec 5m0s"},
+		{"record rows evicted inside a day", checkRetention, func() doctorFacts {
+			f := steady
+			f.retention = []store.KindRetention{{Kind: 0, Name: "file-open", Rows: 60000, Budget: 40000, HorizonTS: now.Add(-2 * time.Minute).Format(time.RFC3339), Ring: true,
+				RecordRows: 20000, RecordBudget: 20000, RecordHorizonTS: now.Add(-3 * time.Hour).Format(time.RFC3339)}}
+			return f
+		}(), doctorFail, "at budget with under 24h kept: file-open record 20000/20000 rows, oldest 3h0m0s"},
 		{"spool stale", checkFileTelemetry, func() doctorFacts {
 			f := steady
 			f.st.ESService = &collect.ESServiceSnapshot{State: "running", SpoolMtime: now.Add(-25 * time.Minute)}

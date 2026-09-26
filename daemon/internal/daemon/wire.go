@@ -286,6 +286,7 @@ func startDrainLoop(sub <-chan event.Event, st *store.Store, cr *correlate.Corre
 			if len(flags) == 0 && isUnattributedFileEvent(e) {
 				continue
 			}
+			e.Record = len(flags) > 0 || cr.SensitiveFile(e)
 			st.PutEvent(e)
 			if deltas != nil {
 				// Guard lifecycle keeps its own delta names (the menubar's

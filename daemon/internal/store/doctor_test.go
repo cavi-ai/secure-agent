@@ -107,6 +107,40 @@ func TestDoctorEventStats(t *testing.T) {
 	}
 }
 
+// A kind at its budget reports the time of its budget-th newest row, and its
+// record rows the time of their recordBudget-th newest.
+func TestRetentionReportHorizons(t *testing.T) {
+	s, err := Open("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+	setKindBudget(t, int(event.KindFileOpen), 3)
+	prev := recordBudget
+	recordBudget = 2
+	t.Cleanup(func() { recordBudget = prev })
+
+	now := time.Now().UTC().Truncate(time.Second)
+	for i, rec := range []bool{true, false, true, false, true, false, false} {
+		s.PutEvent(event.Event{Kind: event.KindFileOpen, TS: now.Add(time.Duration(i-10) * time.Minute), Record: rec})
+	}
+	rep := s.RetentionReport()
+	if len(rep) != 1 {
+		t.Fatalf("report = %+v, want file-open only", rep)
+	}
+	r := rep[0]
+	// Rows in insert order, minutes before now: 10r 9 8r 7 6r 5 4.
+	if r.Rows != 7 || r.RecordRows != 3 || !r.Ring {
+		t.Fatalf("report = %+v, want 7 rows, 3 record, ring", r)
+	}
+	if want := now.Add(-6 * time.Minute).Format(time.RFC3339); r.HorizonTS != want {
+		t.Errorf("HorizonTS = %q, want the 3rd newest row %q", r.HorizonTS, want)
+	}
+	if want := now.Add(-8 * time.Minute).Format(time.RFC3339); r.RecordHorizonTS != want {
+		t.Errorf("RecordHorizonTS = %q, want the 2nd newest record row %q", r.RecordHorizonTS, want)
+	}
+}
+
 func TestDoctorRetentionReport(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	s := seedDoctorStore(t, now)
@@ -138,10 +172,11 @@ func TestDoctorRetentionReport(t *testing.T) {
 		}
 	}
 	for _, r := range rep {
-		if r.Kind == int(event.KindPluginAction) {
-			if want := now.Add(-2 * time.Hour).Format(time.RFC3339); r.OldestTS != want {
-				t.Fatalf("plugin-action oldest = %q, want %q", r.OldestTS, want)
-			}
+		if r.HorizonTS != "" || r.RecordHorizonTS != "" || r.RecordRows != 0 || r.RecordBudget != recordBudget {
+			t.Errorf("kind %d under budget = %+v, want no horizons, no record rows", r.Kind, r)
+		}
+		if r.Ring != (r.Kind == int(event.KindFileOpen)) {
+			t.Errorf("kind %d ring = %v", r.Kind, r.Ring)
 		}
 		if r.Kind == 99 && (r.Name != "unknown" || r.Budget != defaultKindBudget) {
 			t.Fatalf("unlisted kind = %+v, want name unknown and the default budget", r)

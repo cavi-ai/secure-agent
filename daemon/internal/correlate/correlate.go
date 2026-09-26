@@ -300,6 +300,20 @@ func (c *Correlator) Observe(e event.Event) []model.Flag {
 	return flags
 }
 
+// SensitiveFile reports whether e is a file event on a path the sensitive
+// classifier matches — part of the security record the store keeps past its
+// row budget. System trust-store reads are not: every TLS client makes them
+// (see observeLocked).
+func (c *Correlator) SensitiveFile(e event.Event) bool {
+	switch e.Kind {
+	case event.KindFileOpen, event.KindFileWrite, event.KindFileDelete:
+	default:
+		return false
+	}
+	m, ok := c.classifier.Match(e.Path)
+	return ok && m.Category != sensitive.CatKeychainSystem
+}
+
 // stampProcessLocked snapshots each raising process into its flag, so the
 // finding still names the process after it exits.
 func (c *Correlator) stampProcessLocked(flags []model.Flag) {

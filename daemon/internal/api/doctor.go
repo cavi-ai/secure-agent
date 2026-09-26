@@ -50,8 +50,8 @@ const (
 	// doctorSpoolStale: a running root ES service whose spool is older than
 	// this while agents are active is not writing.
 	doctorSpoolStale = 10 * time.Minute
-	// doctorEvictWindow: a kind at its row budget whose oldest row is younger
-	// than this is being evicted inside one day.
+	// doctorEvictWindow: a row cap whose oldest kept row is younger than this
+	// is evicting inside one day.
 	doctorEvictWindow = 24 * time.Hour
 )
 
@@ -373,24 +373,41 @@ func checkPricing(f doctorFacts) (string, string) {
 	return doctorPass, detail
 }
 
+// checkRetention fails when a row cap evicts rows younger than a day: any
+// kind's record rows, or a kind outside the ring kinds. A ring kind's newest
+// rows covering minutes is its design, reported as detail.
 func checkRetention(f doctorFacts) (string, string) {
-	var evicting []string
+	var evicting, ring []string
 	for _, k := range f.retention {
-		if k.Rows < k.Budget {
-			continue
+		if age, ok := horizonAge(f.now, k.RecordHorizonTS); ok && age < doctorEvictWindow {
+			evicting = append(evicting, fmt.Sprintf("%s record %d/%d rows, oldest %s", k.Name, k.RecordRows, k.RecordBudget, age.Round(time.Minute)))
 		}
-		oldest, err := time.Parse(time.RFC3339, k.OldestTS)
-		if err != nil {
-			continue
-		}
-		if age := f.now.Sub(oldest); age < doctorEvictWindow {
+		age, ok := horizonAge(f.now, k.HorizonTS)
+		switch {
+		case !ok || age >= doctorEvictWindow:
+		case k.Ring:
+			ring = append(ring, fmt.Sprintf("%s %s", k.Name, age.Round(time.Minute)))
+		default:
 			evicting = append(evicting, fmt.Sprintf("%s %d/%d rows, oldest %s", k.Name, k.Rows, k.Budget, age.Round(time.Minute)))
 		}
 	}
 	if len(evicting) > 0 {
 		return doctorFail, "at budget with under 24h kept: " + strings.Join(evicting, "; ")
 	}
-	return doctorPass, fmt.Sprintf("%d kinds within budget", len(f.retention))
+	detail := fmt.Sprintf("%d kinds within budget", len(f.retention))
+	if len(ring) > 0 {
+		detail += "; newest rows only (record rows keep days): " + strings.Join(ring, ", ")
+	}
+	return doctorPass, detail
+}
+
+// horizonAge is how long ago an RFC3339 horizon was; false when there is none.
+func horizonAge(now time.Time, ts string) (time.Duration, bool) {
+	t, err := time.Parse(time.RFC3339, ts)
+	if err != nil {
+		return 0, false
+	}
+	return now.Sub(t), true
 }
 
 func checkEgressRouting(f doctorFacts) (string, string) {

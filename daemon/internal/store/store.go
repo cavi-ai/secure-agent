@@ -318,7 +318,7 @@ func Open(dbPath, jsonlPath string) (*Store, error) {
 		log.Printf("store: migrated sessions: added origin column")
 	}
 	// Trace columns (P2): older databases gain them in place.
-	for _, col := range []string{"tool", "tool_status", "duration_ms", "model", "tokens_in", "tokens_out", "cost_usd", "call_id", "provider"} {
+	for _, col := range []string{"tool", "tool_status", "duration_ms", "model", "tokens_in", "tokens_out", "cost_usd", "call_id", "provider", "record"} {
 		var n int
 		if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('events') WHERE name=?`, col).Scan(&n); err != nil {
 			db.Close()
@@ -331,6 +331,8 @@ func Open(dbPath, jsonlPath string) (*Store, error) {
 				typ = "INTEGER"
 			case "cost_usd":
 				typ = "REAL"
+			case "record":
+				typ = "INTEGER NOT NULL DEFAULT 0"
 			}
 			if _, err := db.Exec(`ALTER TABLE events ADD COLUMN ` + col + ` ` + typ); err != nil {
 				db.Close()
@@ -338,6 +340,12 @@ func Open(dbPath, jsonlPath string) (*Store, error) {
 			}
 			log.Printf("store: migrated events: added %s column", col)
 		}
+	}
+	// Record rows are pruned on their own budget; the partial index keeps
+	// that walk off the bulk rows.
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_events_record ON events(kind, id) WHERE record = 1;`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to create events record index: %w", err)
 	}
 	// One row per harness tool call: a completion (same session+call_id)
 	// upserts the start row instead of appending a second. A plain UNIQUE
@@ -592,8 +600,8 @@ func (s *Store) PutEvent(e event.Event) {
 	var res sql.Result
 	if e.CallID != "" {
 		res, err = s.db.Exec(
-			`INSERT INTO events (kind, ts, pid, exe_path, session_id, path, remote_host, remote_port, detail, tool, tool_status, duration_ms, model, tokens_in, tokens_out, cost_usd, call_id)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			`INSERT INTO events (kind, ts, pid, exe_path, session_id, path, remote_host, remote_port, detail, tool, tool_status, duration_ms, model, tokens_in, tokens_out, cost_usd, call_id, record)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			 ON CONFLICT(session_id, call_id) DO UPDATE SET
 			   tool_status = CASE WHEN excluded.tool_status != '' AND excluded.tool_status != 'running' THEN excluded.tool_status ELSE events.tool_status END,
 			   duration_ms = CASE WHEN excluded.duration_ms > 0 THEN excluded.duration_ms ELSE events.duration_ms END,
@@ -601,7 +609,7 @@ func (s *Store) PutEvent(e event.Event) {
 			   tokens_out  = CASE WHEN excluded.tokens_out > 0 THEN excluded.tokens_out ELSE events.tokens_out END,
 			   cost_usd    = CASE WHEN excluded.cost_usd   > 0 THEN excluded.cost_usd   ELSE events.cost_usd   END`,
 			int(e.Kind), tsStr, e.PID, e.ExePath, e.SessionID, e.Path, e.RemoteHost, e.RemotePort, e.Detail,
-			nullStr(e.ToolName), nullStr(e.ToolStatus), nullInt(e.DurationMs), nullStr(e.Model), nullInt(e.TokensIn), nullInt(e.TokensOut), nullFloat(e.CostUSD), e.CallID,
+			nullStr(e.ToolName), nullStr(e.ToolStatus), nullInt(e.DurationMs), nullStr(e.Model), nullInt(e.TokensIn), nullInt(e.TokensOut), nullFloat(e.CostUSD), e.CallID, e.Record,
 		)
 	} else {
 		// Turns and model calls dedupe on (kind, session_id, ts) — a
@@ -613,10 +621,10 @@ func (s *Store) PutEvent(e event.Event) {
 			verb = "INSERT OR IGNORE"
 		}
 		res, err = s.db.Exec(
-			verb+` INTO events (kind, ts, pid, exe_path, session_id, path, remote_host, remote_port, detail, tool, tool_status, duration_ms, model, tokens_in, tokens_out, cost_usd, provider)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			verb+` INTO events (kind, ts, pid, exe_path, session_id, path, remote_host, remote_port, detail, tool, tool_status, duration_ms, model, tokens_in, tokens_out, cost_usd, provider, record)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			int(e.Kind), tsStr, e.PID, e.ExePath, e.SessionID, e.Path, e.RemoteHost, e.RemotePort, e.Detail,
-			nullStr(e.ToolName), nullStr(e.ToolStatus), nullInt(e.DurationMs), nullStr(e.Model), nullInt(e.TokensIn), nullInt(e.TokensOut), nullFloat(e.CostUSD), nullStr(e.Provider),
+			nullStr(e.ToolName), nullStr(e.ToolStatus), nullInt(e.DurationMs), nullStr(e.Model), nullInt(e.TokensIn), nullInt(e.TokensOut), nullFloat(e.CostUSD), nullStr(e.Provider), e.Record,
 		)
 	}
 	if err != nil {
@@ -695,25 +703,43 @@ func (s *Store) pruneEventsLocked() {
 	}
 	rows.Close()
 	// Keep each kind's newest budget rows: delete below the budget-th newest
-	// id. Fewer rows than the budget yield a NULL cutoff and delete nothing.
+	// id, except record rows. Fewer rows than the budget yield a NULL cutoff
+	// and delete nothing. Record rows then keep their own newest
+	// recordBudget, so the security record outlives a build's file flood.
 	for _, k := range kinds {
-		_, _ = s.db.Exec(`DELETE FROM events WHERE kind = ? AND id <
+		_, _ = s.db.Exec(`DELETE FROM events WHERE kind = ? AND record = 0 AND id <
 			(SELECT id FROM events WHERE kind = ? ORDER BY id DESC LIMIT 1 OFFSET ?)`, k, k, kindBudget(k)-1)
+		_, _ = s.db.Exec(`DELETE FROM events WHERE kind = ? AND record = 1 AND id <
+			(SELECT id FROM events WHERE kind = ? AND record = 1 ORDER BY id DESC LIMIT 1 OFFSET ?)`, k, k, recordBudget-1)
 	}
+}
+
+// recordBudget caps a kind's record rows (event.Record) — a backstop for an
+// agent reading a sensitive path in a loop; time retention bounds them first.
+var recordBudget = 20000
+
+// ringKinds arrive at hundreds per second under build load (measured: file
+// opens 356–1,300/s, exec 35/s, file deletes 39/s), so their newest budget
+// rows cover minutes, not a day. Only their record rows keep days.
+var ringKinds = map[int]bool{
+	int(event.KindFileOpen):   true,
+	int(event.KindFileDelete): true,
+	int(event.KindExec):       true,
 }
 
 // kindBudgets: per-kind row budgets, the backstop under time retention. Each
 // kind is capped on its own, so a burst in one kind (file opens during a
 // build) can never evict another kind's rows (hook activity, connections,
-// transcript hits). Sized so a week of heavy agent work fits.
+// transcript hits). Kinds outside ringKinds are sized to hold a day at the
+// measured rate (file writes 1.6/s, connection opens and closes 0.3/s).
 var kindBudgets = map[int]int{
 	int(event.KindFileOpen):      40000,
-	int(event.KindFileWrite):     10000,
+	int(event.KindFileWrite):     150000,
 	int(event.KindFileDelete):    2000,
 	int(event.KindExec):          10000,
 	int(event.KindTCCModify):     1000,
-	int(event.KindConnOpen):      5000,
-	int(event.KindConnClose):     5000,
+	int(event.KindConnOpen):      30000,
+	int(event.KindConnClose):     30000,
 	int(event.KindTranscriptHit): 2000,
 	int(event.KindPluginAction):  10000,
 	int(event.KindProxyHit):      2000,
