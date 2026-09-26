@@ -248,7 +248,7 @@ body {
 .harness-pill.off { opacity: 0.5; background: transparent; }
 .harness-pill.off .harness-label { text-decoration: line-through; }
 .harness-filter-text { flex: 1 1 160px; max-width: 280px; margin-left: auto; padding: 6px 10px; font-size: 0.78rem; }
-.switch { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--tx-2); cursor: pointer; user-select: none; }
+.switch { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--tx-2); cursor: pointer; -webkit-user-select: none; user-select: none; }
 .switch input {
   appearance: none; flex: none; position: relative; margin: 0; cursor: pointer;
   width: 28px; height: 16px; border-radius: 999px;
@@ -515,8 +515,25 @@ body {
    the shared Show more of capped lists. */
 .machine-strip {
   display: grid; grid-template-columns: minmax(100px, .7fr) minmax(200px, 1.6fr) minmax(150px, 1.1fr) minmax(140px, .9fr) auto;
-  gap: 1px; margin: 4px 0 14px; overflow: hidden;
+  gap: 1px; margin: 4px 0 14px; overflow: visible;
   border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--line);
+}
+.machine-eyebrow-row { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.machine-headroom { position: relative; z-index: 1; }
+.machine-headroom:has(.headroom-hint[open]) { z-index: 3; }
+.headroom-hint { position: relative; }
+.headroom-hint summary {
+  display: grid; place-items: center; width: 16px; height: 16px; padding: 0;
+  border: 1px solid var(--line-2); border-radius: 999px; background: var(--bg-1);
+  color: var(--tx-3); font: 650 11px/1 var(--font); cursor: pointer; list-style: none;
+}
+.headroom-hint summary::-webkit-details-marker { display: none; }
+.headroom-hint summary::marker { content: ""; }
+.headroom-hint-box {
+  position: absolute; z-index: 4; top: 22px; right: 0; width: 280px; margin: 0;
+  padding: 10px 12px; border: 1px solid var(--line-2); border-radius: var(--r-sm);
+  background: var(--bg-1); color: var(--tx-2); font: 400 .72rem/1.45 var(--font);
+  box-shadow: none;
 }
 .machine-tile { display: flex; flex-direction: column; justify-content: center; gap: 4px; min-width: 0; padding: 9px 12px; background: var(--bg-2); }
 .machine-tile b { color: var(--tx-1); font: 700 .84rem/1.25 var(--mono); overflow-wrap: anywhere; }
@@ -1396,13 +1413,19 @@ body.is-ended .masthead-right { display: none !important; }
 /* Masthead sparkline: rolling events/sec for the last 60s. Fed by SSE pushes
    (and by poll diffs in fallback mode); drawn as a plain SVG polyline. */
 .spark {
-  display: flex; align-items: center; gap: 8px;
+  display: flex; align-items: center; gap: 8px; flex: none;
   padding: 5px 11px; border-radius: var(--r-sm);
   background: var(--bg-1); border: 1px solid var(--line);
   color: var(--brand-2);
 }
 .spark svg { width: 96px; height: 22px; display: block; opacity: 0.9; }
-.spark-v { font: 600 0.7rem/1 var(--mono); color: var(--tx-2); min-width: 3ch; text-align: right; }
+/* Fixed slot so 9/s and 1000/s occupy the same box. 7ch fits "99999/s" in the mono face. */
+.spark-v {
+  flex: none; width: 7ch; min-width: 7ch; max-width: 7ch;
+  overflow: hidden; white-space: nowrap; text-align: right;
+  font: 600 0.7rem/1 var(--mono); font-variant-numeric: tabular-nums;
+  color: var(--tx-2);
+}
 
 /* Posture banner: state changes cross-fade instead of snapping. */
 .posture { transition: background-color .5s var(--ease), border-color .5s var(--ease); }
