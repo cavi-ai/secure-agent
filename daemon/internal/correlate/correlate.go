@@ -24,6 +24,7 @@ type readMark struct {
 	pid      int32      // the process that opened the file
 	exe      string     // its executable, when the event carried one
 	kind     event.Kind // file open, or an agent tool read (plugin action)
+	chain    []int32    // pid up to its nearest agent ancestor (tagger chain)
 	consumed bool
 }
 
@@ -31,7 +32,8 @@ type connMark struct {
 	at       time.Time
 	host     string
 	port     int
-	pid      int32 // the process that connected
+	pid      int32   // the process that connected
+	chain    []int32 // pid up to its nearest agent ancestor (tagger chain)
 	consumed bool
 }
 
@@ -415,7 +417,7 @@ func (c *Correlator) observeLocked(e event.Event) []model.Flag {
 				flags = append(flags, c.keychainAccessLocked(e, info.Name)...)
 			}
 			if seedsReadThenConnect(m.Category, e.Kind, e.ExePath) {
-				rm := readMark{at: e.TS, path: e.Path, cat: cat, rule: m.Rule, pid: e.PID, exe: e.ExePath, kind: e.Kind}
+				rm := readMark{at: e.TS, path: e.Path, cat: cat, rule: m.Rule, pid: e.PID, exe: e.ExePath, kind: e.Kind, chain: info.Chain}
 				c.rememberReadLocked(rootPID, e.PID, rm)
 				// A connection the family made before this read counts too:
 				// the bytes may leave on a socket that was already open.
@@ -514,10 +516,10 @@ func (c *Correlator) observeLocked(e event.Event) []model.Flag {
 			}
 		}
 
-		c.rememberConnLocked(rootPID, e.PID, connMark{at: e.TS, host: e.RemoteHost, port: e.RemotePort, pid: e.PID})
+		conn := connMark{at: e.TS, host: e.RemoteHost, port: e.RemotePort, pid: e.PID, chain: info.Chain}
+		c.rememberConnLocked(rootPID, e.PID, conn)
 
 		if reads := c.recentReadsLocked(rootPID, e.PID, e.TS, window); len(reads) > 0 {
-			conn := connMark{at: e.TS, host: e.RemoteHost, port: e.RemotePort, pid: e.PID}
 			flags = append(flags, c.readThenConnectLocked(e, info.Name, rootPID, reads, []connMark{conn})...)
 		}
 	}

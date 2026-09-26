@@ -55,7 +55,7 @@ func (c *Correlator) credentialOwners(path string) []string {
 }
 
 // ownerUse reports whether cm is every read's credential used with its
-// owner: the process that opened each file made the connection, and an org
+// owner: the connection came from the reader's own process tree and an org
 // that owns the credential is the destination. An agent tool read never
 // qualifies: it put the file into the model's context.
 func (c *Correlator) ownerUse(reads []readMark, cm connMark) bool {
@@ -64,11 +64,18 @@ func (c *Correlator) ownerUse(reads []readMark, cm connMark) bool {
 		return false
 	}
 	for _, r := range reads {
-		if r.kind != event.KindFileOpen || r.pid != cm.pid || !slices.Contains(c.credentialOwners(r.path), org) {
+		if r.kind != event.KindFileOpen || !sameTree(r, cm) || !slices.Contains(c.credentialOwners(r.path), org) {
 			return false
 		}
 	}
 	return true
+}
+
+// sameTree reports whether the reader made the connection or one is the
+// other's ancestor: the credential stayed inside the process tree that read
+// it (git-remote-https running gh as its credential helper).
+func sameTree(r readMark, cm connMark) bool {
+	return r.pid != 0 && (r.pid == cm.pid || slices.Contains(r.chain, cm.pid) || slices.Contains(cm.chain, r.pid))
 }
 
 // readConnectKey is the pattern one flag stands for: agent, the reader's
