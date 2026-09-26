@@ -1768,10 +1768,10 @@ function mapPostureAttention(p, fn) {
 }
 
 // ---------- console navigation ----------
-// Four tabs; Sessions holds five sub-views. Old tab ids (menu bar deep
+// Five tabs; Sessions holds five sub-views. Old tab ids (menu bar deep
 // links, saved views, the stored tab, in-page links) resolve through one
 // alias table.
-const CONSOLE_TABS = ['home', 'sessions', 'egress', 'policy'];
+const CONSOLE_TABS = ['home', 'sessions', 'egress', 'policy', 'agent'];
 const SESSIONS_SUBS = ['board', 'processes', 'resources', 'worktrees', 'events'];
 const TAB_ALIASES = {
   overview: { tab: 'home' },

@@ -570,3 +570,44 @@ func TestWorktreesKey(t *testing.T) {
 		}
 	}
 }
+
+func TestSystemAgentKey(t *testing.T) {
+	c, err := Load(filepath.Join(t.TempDir(), "absent.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.SystemAgent.Enabled || c.SystemAgent.Endpoint != "http://127.0.0.1:11434" || c.SystemAgent.TimeoutMinutes != 30 {
+		t.Fatalf("default system_agent = %+v, want off, Ollama's loopback port, 30 minutes", c.SystemAgent)
+	}
+	p := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(p, []byte("system_agent:\n  enabled: true\n  endpoint: \"http://localhost:11500\"\n  model: qwen3\n  harness_model: qwen3-coder\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if c, err = Load(p); err != nil {
+		t.Fatal(err)
+	}
+	want := SystemAgentConfig{Enabled: true, Endpoint: "http://localhost:11500", Model: "qwen3", HarnessModel: "qwen3-coder", TimeoutMinutes: 30}
+	if c.SystemAgent != want {
+		t.Fatalf("system_agent = %+v, want %+v", c.SystemAgent, want)
+	}
+	for _, bad := range []string{
+		"system_agent:\n  enabled: true\n  endpoint: \"http://10.0.0.5:11434\"\n",
+		"system_agent:\n  enabled: true\n  endpoint: \"https://ollama.com\"\n",
+		"system_agent:\n  timeout_minutes: -1\n",
+		"system_agent:\n  timeout_minutes: 241\n",
+	} {
+		if err := os.WriteFile(p, []byte(bad), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Load(p); err == nil || !strings.Contains(err.Error(), "system_agent.") {
+			t.Fatalf("overlay %q: err = %v, want a system_agent validation error", bad, err)
+		}
+	}
+	// Off, a remote endpoint is inert and not an error: nothing dials it.
+	if err := os.WriteFile(p, []byte("system_agent:\n  endpoint: \"http://10.0.0.5:11434\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(p); err != nil {
+		t.Fatalf("disabled system agent with a remote endpoint: %v", err)
+	}
+}

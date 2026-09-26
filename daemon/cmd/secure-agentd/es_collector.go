@@ -247,7 +247,8 @@ func pumpToSpool(stdout interface{ Read([]byte) (int, error) }) error {
 }
 
 // pumpToSpoolAt copies newline-delimited records from stdout to the spool
-// at path, skipping empty lines.
+// at path, skipping empty lines and the lines keepESLine drops; the drop
+// count goes to the log once a minute.
 func pumpToSpoolAt(stdout interface{ Read([]byte) (int, error) }, path string) error {
 	w := &spoolWriter{path: path}
 	// Open WITHOUT rotating: the spool may hold events the tailer has not
@@ -259,6 +260,7 @@ func pumpToSpoolAt(stdout interface{ Read([]byte) (int, error) }, path string) e
 	}
 	buf := make([]byte, 0, 256*1024)
 	tmp := make([]byte, 64*1024)
+	var stats esFilterStats
 	for {
 		n, err := stdout.Read(tmp)
 		if n > 0 {
@@ -274,8 +276,16 @@ func pumpToSpoolAt(stdout interface{ Read([]byte) (int, error) }, path string) e
 				// line aliases buf, so it is written before buf is compacted.
 				line := buf[:nl]
 				if len(bytes.TrimSpace(line)) > 0 { // empty lines are skipped
-					if err := w.writeLine(line); err != nil {
-						return fmt.Errorf("spool write: %w", err)
+					if keepESLine(line) {
+						if err := w.writeLine(line); err != nil {
+							return fmt.Errorf("spool write: %w", err)
+						}
+						stats.kept++
+					} else {
+						stats.dropped++
+					}
+					if msg, ok := stats.report(time.Now()); ok {
+						log.Print(msg)
 					}
 				}
 				buf = append(buf[:0], buf[nl+1:]...)

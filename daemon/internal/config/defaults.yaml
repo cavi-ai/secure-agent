@@ -134,6 +134,18 @@ advisor:
   managed: false
   managed_model: "mlx-community/Qwen3-4B-4bit"
 
+# System agent (opt-in): the console's Agent tab. Chat with a model served by
+# a LOCAL Ollama, which drafts plans and dispatches Claude Code, Codex,
+# OpenClaw or Hermes Agent run against that same Ollama — the work never
+# reaches a vendor model. Loopback-only, enforced in code. See
+# docs/SYSTEM_AGENT.md.
+system_agent:
+  enabled: false
+  endpoint: "http://127.0.0.1:11434" # Ollama; must be loopback
+  model: ""                          # chat model ("" = first model Ollama lists)
+  harness_model: ""                  # model dispatched harnesses run ("" = model)
+  timeout_minutes: 30                # bound on one headless dispatch
+
 # OpenTelemetry trace export (opt-in). Sessions and trace events are exported
 # as OTLP/HTTP JSON spans to any backend; empty endpoint disables it. No
 # secrets cross this wire. See docs/CONFIGURATION.md.

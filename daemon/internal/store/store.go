@@ -264,6 +264,7 @@ func Open(dbPath, jsonlPath string) (*Store, error) {
 		agentAsksSchema,
 		scanCacheSchema,
 	}
+	createQueries = append(createQueries, sysAgentSchemas...)
 
 	for _, q := range createQueries {
 		if _, err := db.Exec(q); err != nil {

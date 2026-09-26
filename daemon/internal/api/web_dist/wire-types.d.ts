@@ -867,3 +867,109 @@ export interface AgentAsk {
   finished_at?: string;
 }
 
+export interface SysAgentProposal {
+  title: string;
+  harness: string;
+  mode: string;
+  workdir: string;
+  task: string;
+  steps: string[];
+  skills: string[];
+}
+
+export interface SysAgentMessage {
+  id: number;
+  ts: string;
+  role: string;
+  content: string;
+  harness?: string;
+  workdir?: string;
+  skills?: string[];
+  proposal?: SysAgentProposal;
+  plan_id?: number;
+}
+
+export interface AgentChat {
+  messages: SysAgentMessage[];
+  chatting: boolean;
+}
+
+export interface SysAgentPlan {
+  id: number;
+  created_at: string;
+  source: string;
+  message_id?: number;
+  title: string;
+  harness: string;
+  mode: string;
+  workdir: string;
+  task: string;
+  steps: string[];
+  skills: string[];
+  model?: string;
+  status: string;
+  run_id?: number;
+  note?: string;
+  ready: boolean;
+  reason?: string;
+}
+
+export interface SysAgentRun {
+  id: number;
+  plan_id: number;
+  ts: string;
+  finished_at?: string;
+  title: string;
+  harness: string;
+  mode: string;
+  model: string;
+  workdir: string;
+  status: string;
+  exit_code: number;
+  command: string;
+  output?: string;
+  detail?: string;
+}
+
+export interface HarnessStatus {
+  id: string;
+  label: string;
+  bin: string;
+  min_ollama?: string;
+  path?: string;
+  installed: boolean;
+  ready: boolean;
+  reason?: string;
+}
+
+export interface SkillInfo {
+  id: string;
+  title: string;
+  summary: string;
+}
+
+export interface AgentStatus {
+  enabled: boolean;
+  endpoint: string;
+  reachable: boolean;
+  ollama_version?: string;
+  reason?: string;
+  model?: string;
+  harness_model?: string;
+  models: string[];
+  harnesses: HarnessStatus[];
+  skills: SkillInfo[];
+  chatting: boolean;
+  running_run?: number;
+  terminal: boolean;
+  home: string;
+}
+
+export interface Skill {
+  id: string;
+  title: string;
+  summary: string;
+  keywords: string[];
+  body: string;
+}
+
