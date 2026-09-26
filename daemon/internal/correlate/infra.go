@@ -86,34 +86,80 @@ func ptrOrgName(ip string) ptrResult {
 // carriers that front the agents' OWN API backends, so classifying a random
 // VM IP here would collapse legitimate per-endpoint findings. The broader
 // "who owns this?" table used by the endpoint detail surface is providerCIDRs.
+// Each carrier's prefixes are its own published list (Cloudflare ips-v4/v6,
+// GitHub meta's GitHub-owned blocks, Fastly public-ip-list, CloudFront's ARIN
+// block AMZ-CF), so a literal without a PTR files under the same org its
+// hostname would.
 var infraCIDRs = []struct {
 	org    string
 	prefix netip.Prefix
 }{
+	{"Cloudflare", netip.MustParsePrefix("173.245.48.0/20")},
+	{"Cloudflare", netip.MustParsePrefix("103.21.244.0/22")},
+	{"Cloudflare", netip.MustParsePrefix("103.22.200.0/22")},
+	{"Cloudflare", netip.MustParsePrefix("103.31.4.0/22")},
+	{"Cloudflare", netip.MustParsePrefix("141.101.64.0/18")},
+	{"Cloudflare", netip.MustParsePrefix("108.162.192.0/18")},
+	{"Cloudflare", netip.MustParsePrefix("190.93.240.0/20")},
+	{"Cloudflare", netip.MustParsePrefix("188.114.96.0/20")},
+	{"Cloudflare", netip.MustParsePrefix("197.234.240.0/22")},
+	{"Cloudflare", netip.MustParsePrefix("198.41.128.0/17")},
+	{"Cloudflare", netip.MustParsePrefix("162.158.0.0/15")},
 	{"Cloudflare", netip.MustParsePrefix("104.16.0.0/13")},
+	{"Cloudflare", netip.MustParsePrefix("104.24.0.0/14")},
+	{"Cloudflare", netip.MustParsePrefix("172.64.0.0/13")},
+	{"Cloudflare", netip.MustParsePrefix("131.0.72.0/22")},
+	{"Cloudflare", netip.MustParsePrefix("2400:cb00::/32")},
 	{"Cloudflare", netip.MustParsePrefix("2606:4700::/32")},
+	{"Cloudflare", netip.MustParsePrefix("2803:f800::/32")},
+	{"Cloudflare", netip.MustParsePrefix("2405:b500::/32")},
+	{"Cloudflare", netip.MustParsePrefix("2405:8100::/32")},
+	{"Cloudflare", netip.MustParsePrefix("2a06:98c0::/29")},
+	{"Cloudflare", netip.MustParsePrefix("2c0f:f248::/32")},
 	{"Google", netip.MustParsePrefix("2001:4860::/32")},
 	{"Google", netip.MustParsePrefix("2607:f8b0::/32")},
 	{"GitHub", netip.MustParsePrefix("140.82.112.0/20")},
+	{"GitHub", netip.MustParsePrefix("143.55.64.0/20")},
+	{"GitHub", netip.MustParsePrefix("185.199.108.0/22")},
+	{"GitHub", netip.MustParsePrefix("192.30.252.0/22")},
+	{"GitHub", netip.MustParsePrefix("2606:50c0::/32")},
+	{"GitHub", netip.MustParsePrefix("2a0a:a440::/29")},
+	{"AWS CloudFront", netip.MustParsePrefix("2600:9000::/28")},
+	{"Fastly", netip.MustParsePrefix("23.235.32.0/20")},
+	{"Fastly", netip.MustParsePrefix("43.249.72.0/22")},
+	{"Fastly", netip.MustParsePrefix("103.244.50.0/24")},
+	{"Fastly", netip.MustParsePrefix("103.245.222.0/23")},
+	{"Fastly", netip.MustParsePrefix("103.245.224.0/24")},
+	{"Fastly", netip.MustParsePrefix("104.156.80.0/20")},
+	{"Fastly", netip.MustParsePrefix("140.248.64.0/18")},
+	{"Fastly", netip.MustParsePrefix("140.248.128.0/17")},
+	{"Fastly", netip.MustParsePrefix("146.75.0.0/17")},
+	{"Fastly", netip.MustParsePrefix("151.101.0.0/16")},
+	{"Fastly", netip.MustParsePrefix("157.52.64.0/18")},
+	{"Fastly", netip.MustParsePrefix("167.82.0.0/17")},
+	{"Fastly", netip.MustParsePrefix("167.82.128.0/20")},
+	{"Fastly", netip.MustParsePrefix("167.82.160.0/20")},
+	{"Fastly", netip.MustParsePrefix("167.82.224.0/20")},
+	{"Fastly", netip.MustParsePrefix("172.111.64.0/18")},
+	{"Fastly", netip.MustParsePrefix("185.31.16.0/22")},
+	{"Fastly", netip.MustParsePrefix("199.27.72.0/21")},
+	{"Fastly", netip.MustParsePrefix("199.232.0.0/16")},
+	{"Fastly", netip.MustParsePrefix("2a04:4e40::/32")},
+	{"Fastly", netip.MustParsePrefix("2a04:4e42::/32")},
 }
 
 // providerCIDRs is the broader "who owns this?" table used only by Identify
-// (the endpoint detail surface). Identifying an endpoint as Google Cloud / AWS
-// / Azure is what stops an operator from blocking an agent's rightful traffic;
-// it does NOT change the coverage-headline classification above.
+// (the endpoint detail surface), after infraCIDRs. Identifying an endpoint as
+// Google Cloud / AWS / Azure is what stops an operator from blocking an
+// agent's rightful traffic; it does NOT change the coverage-headline
+// classification above.
 var providerCIDRs = []struct {
 	org    string
 	prefix netip.Prefix
 }{
-	// Cloudflare.
-	{"Cloudflare", netip.MustParsePrefix("104.16.0.0/13")},
-	{"Cloudflare", netip.MustParsePrefix("172.64.0.0/13")},
-	{"Cloudflare", netip.MustParsePrefix("2606:4700::/32")},
 	// Google (search/API) + Google Cloud (GCP).
 	{"Google", netip.MustParsePrefix("142.250.0.0/15")},
 	{"Google", netip.MustParsePrefix("172.217.0.0/16")},
-	{"Google", netip.MustParsePrefix("2001:4860::/32")},
-	{"Google", netip.MustParsePrefix("2607:f8b0::/32")},
 	{"Google Cloud", netip.MustParsePrefix("34.64.0.0/10")},
 	{"Google Cloud", netip.MustParsePrefix("35.184.0.0/13")},
 	{"Google Cloud", netip.MustParsePrefix("35.192.0.0/12")},
@@ -126,10 +172,7 @@ var providerCIDRs = []struct {
 	{"AWS", netip.MustParsePrefix("54.0.0.0/8")},
 	{"AWS", netip.MustParsePrefix("2600:1f00::/24")},
 	{"AWS", netip.MustParsePrefix("2a05:d000::/24")},
-	// GitHub.
-	{"GitHub", netip.MustParsePrefix("140.82.112.0/20")},
-	{"GitHub", netip.MustParsePrefix("192.30.252.0/22")},
-	// Anthropic (Claude API frontends).
+	// Anthropic (Claude API frontends): a vendor, not a carrier.
 	{"Anthropic", netip.MustParsePrefix("160.79.104.0/23")},
 	{"Anthropic", netip.MustParsePrefix("2607:6bc0::/32")},
 	// Microsoft/Azure.
@@ -137,9 +180,6 @@ var providerCIDRs = []struct {
 	{"Azure", netip.MustParsePrefix("40.64.0.0/10")},
 	{"Azure", netip.MustParsePrefix("2603:1000::/24")},
 	{"Azure", netip.MustParsePrefix("2603:1030::/24")},
-	// Fastly.
-	{"Fastly", netip.MustParsePrefix("151.101.0.0/16")},
-	{"Fastly", netip.MustParsePrefix("2a04:4e40::/32")},
 }
 
 // infraSuffixes: PTR-style hostname suffixes → org. Matched on the dot
@@ -209,6 +249,22 @@ var providerSuffixes = []struct {
 	{".statsig.com", "Statsig"},
 	{".segment.io", "Segment"},
 	{".amplitude.com", "Amplitude"},
+}
+
+// cidrOrg names the owner of ip from infraCIDRs, then providerCIDRs; "" when
+// neither table covers it.
+func cidrOrg(ip netip.Addr) string {
+	for _, r := range infraCIDRs {
+		if r.prefix.Contains(ip) {
+			return r.org
+		}
+	}
+	for _, r := range providerCIDRs {
+		if r.prefix.Contains(ip) {
+			return r.org
+		}
+	}
+	return ""
 }
 
 func providerBySuffix(h string) string {
@@ -321,12 +377,7 @@ func identify(host string, ptrLookup func(string) ptrResult) EndpointIdentity {
 		if ip.Is6() {
 			id.Kind = "ipv6"
 		}
-		for _, r := range providerCIDRs {
-			if r.prefix.Contains(ip) {
-				id.Org = r.org
-				break
-			}
-		}
+		id.Org = cidrOrg(ip)
 		if ptr := ptrLookup(h); ptr.Name != "" {
 			id.Name = ptr.Name
 			if id.Org == "" {
