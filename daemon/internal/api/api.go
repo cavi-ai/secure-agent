@@ -211,10 +211,11 @@ type API struct {
 
 	// deltas is the typed state-change fan-out the SSE stream serves.
 	// lastPosture dedupes posture deltas (state + item count).
-	deltaHub         *DeltaHub
-	lastPostureMu    sync.Mutex
-	lastPostureState string
-	lastPostureCount int
+	deltaHub            *DeltaHub
+	lastPostureMu       sync.Mutex
+	lastPostureState    string
+	lastPostureCount    int
+	lastPostureCoverage int
 
 	// costs caches /costs reports, saved in the store; unpriced caches
 	// /costs/unpriced reports in memory (costcache.go).

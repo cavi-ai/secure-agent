@@ -495,8 +495,10 @@ export interface AttentionGroup {
 export interface Posture {
   state: string;
   needs_you: number;
+  coverage_count: number;
   summary: string;
   items: PostureItem[];
+  coverage_items: PostureItem[];
   groups?: AttentionGroup[];
   generated: string;
   connected: boolean;

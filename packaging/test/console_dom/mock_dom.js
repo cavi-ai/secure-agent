@@ -205,17 +205,19 @@
     // group items sum to needs_you (= items.length).
     '/posture': {
       state: 'critical',
-      needs_you: 10,
-      summary: '10 items need you — first: proxy-secret-leak — cursor sent an anthropic-key to logs.example.com — act now.',
+      needs_you: 7,
+      coverage_count: 2,
+      summary: '7 decisions pending — first: proxy-secret-leak — cursor sent an anthropic-key to logs.example.com — act now.',
+      coverage_items: [
+        { severity: 2, kind: 'collector_down', id: 'eslogger', title: 'File monitoring is off', detail: 'usually missing Full Disk Access — open Setup & Permissions in the menu bar' },
+        { severity: 1, kind: 'uninspected_egress', id: 'uninspected-egress', title: '2 connections bypassed inspection' }
+      ],
       items: [
         { severity: 3, kind: 'flag', id: 'flag-1', title: 'proxy-secret-leak — cursor sent an anthropic-key to logs.example.com' },
         { severity: 3, kind: 'flag', id: 'flag-2', title: 'Agent read a secret, then connected out' },
         { severity: 3, kind: 'flag', id: 'flag-4', title: 'Agent modified macOS privacy permissions (TCC)' },
         { severity: 2, kind: 'flag', id: 'flag-5', title: 'Agent touched the keychain' },
         { severity: 1, kind: 'guard_pending', id: 'guard-1', title: 'claude wants .env' },
-        { severity: 2, kind: 'collector_down', id: 'eslogger', title: 'File monitoring is off', detail: 'usually missing Full Disk Access — open Setup & Permissions in the menu bar' },
-        { severity: 1, kind: 'uninspected_egress', id: 'uninspected-egress:session:5821:1789480800000000000', title: '7 connections bypassed the egress firewall — claude' },
-        { severity: 2, kind: 'uninspected_egress', id: 'uninspected-egress:agent:codex', title: '2 endpoints reached without inspection' },
         { severity: 3, kind: 'incident', id: 'inc-20260907-6033-a1b2', title: 'sensitive-read-then-connect — cursor (PID 6033)' },
         { severity: 1, kind: 'resource_pressure', id: 'resource-1', title: 'Resource pressure: api-service' }
       ],
@@ -233,9 +235,6 @@
               scopeText: 'Allow Always approves every path under rule "cloud-creds" for agent "claude", not just this one.' },
             { kind: 'resource', priority: 4, id: 'resource-1', action: 'pause',
               title: 'Resource pressure', detail: 'Memory grew 1.4 GB in 15 minutes.' },
-            { kind: 'egress', priority: 1, id: 'uninspected-egress:session:5821:1789480800000000000', title: 'Uninspected egress', count: 7,
-              hosts: ['registry.npmjs.org'],
-              detail: '7 connections across 1 endpoint bypassed inspection.' }
           ]
         },
         {
@@ -254,22 +253,6 @@
             { kind: 'flag', priority: 1, id: 'flag-5',
               title: 'Agent touched the keychain', detail: 'keychain-access — security find-generic-password',
               disposition: { state: 'warning', text: 'Needs a look' } }
-          ]
-        },
-        {
-          key: 'machine', label: 'This machine', agent: '',
-          items: [
-            { kind: 'collector_down', priority: 2, id: 'eslogger', title: 'File monitoring is off',
-              detail: 'usually missing Full Disk Access — open Setup & Permissions in the menu bar' }
-          ]
-        },
-        {
-          key: 'agent:codex', label: 'codex activity', agent: 'codex',
-          summary: '2 processes (codex 0.46.0 via Terminal.app) across 2 sessions, all exited',
-          items: [
-            { kind: 'egress', priority: 1, id: 'uninspected-egress:agent:codex', title: 'Uninspected egress', count: 2,
-              hosts: ['example.com'],
-              detail: '2 connections across 1 endpoint bypassed inspection.' }
           ]
         }
       ]
@@ -358,6 +341,32 @@
       { agent: 'claude', host: '2600:1901:0:9e23::', count: 2, last_seen: iso(400000), identity: { kind: 'ipv6', org: 'Google Cloud', class: 'cloud', ip: '2600:1901:0:9e23::' } },
       { agent: 'openclaw', host: '2607:6bc0::10', count: 94, first_seen: iso(3600000), last_seen: iso(60000), identity: { kind: 'ipv6', org: 'Anthropic', class: 'vendor', ip: '2607:6bc0::10' } }
     ],
+    '/egress/episodes': { episodes: [
+      { id: 'episode-routine', candidate: true, expected: false,
+        observed: { id: 'episode-routine', host: 'updates.example.com', protocol: 'tcp', port: 443,
+          count: 5, first_seen: iso(7200000), last_seen: iso(60000),
+          intervals: [1800000000000, 1770000000000, 1830000000000, 1800000000000],
+          session_ids: ['sess-claude-1'], recurring: true, scope_complete: true,
+          scope: { agent: 'claude', exe_path: '/Applications/Claude.app', harness: 'claude', workspace: '/Users/dev/workspace/api-service' } },
+        advisor_inference: { possible_purpose: 'Possibly an update check', confidence: 'medium', created_at: iso(120000) } },
+      { id: 'episode-ambiguous', candidate: true, expected: false,
+        observed: { id: 'episode-ambiguous', host: '203.0.113.4', protocol: 'tcp', port: 443,
+          count: 5, first_seen: iso(7200000), last_seen: iso(60000),
+          intervals: [1800000000000, 1800000000000, 1800000000000, 1800000000000],
+          session_ids: [], recurring: true, scope_complete: false,
+          scope: { agent: 'codex', exe_path: '/usr/local/bin/codex', harness: '', workspace: '' } } },
+      { id: 'episode-expected', candidate: false, expected: true, expected_rule_id: 'expected-older',
+        observed: { id: 'episode-expected', host: 'old.example.com', protocol: 'tcp', port: 443,
+          count: 5, first_seen: iso(7200000), last_seen: iso(60000),
+          intervals: [1800000000000, 1800000000000, 1800000000000, 1800000000000],
+          session_ids: [], recurring: true, scope_complete: false,
+          scope: { agent: 'cursor', exe_path: '', harness: '', workspace: '' } } }
+    ] },
+    '/expected-egress': { rules: [
+      { id: 'expected-older', agent: 'cursor', kind: 'destination', host: 'old.example.com', port: 443,
+        protocol: 'tcp', rationale: 'Routine update', created_by: 'local-operator',
+        created_at: iso(86400000), revoked_at: null }
+    ] },
     '/advisor/plan': {
       subject: 'file:/Users/dev/.codex/sessions/2026/09/23/rollout-2026-09-23T12-53-26-demo.jsonl',
       status: 'ready', advisor_ready: true,
@@ -463,6 +472,12 @@
   //   tokenseed    — pre-seed sessionStorage (simulates a RELOADED tab: no
   //                  #ct fragment, token must come from storage).
   const MODE = location.search;
+  if (MODE.includes('coveragedemo')) {
+    Object.assign(data['/posture'], {
+      state: 'attention', needs_you: 0, items: [], groups: [],
+      summary: 'No decisions pending. Monitoring coverage needs attention.'
+    });
+  }
   const REQUIRE_TOKEN = MODE.includes('requiretoken');
 
   // explaindemo: flag-2 carries the daemon's served explanation (the S2
@@ -548,6 +563,8 @@
       flag_ids: ['flag-7', 'flag-6']
     }];
     const post = data['/posture'];
+    post.groups.push({ key: 'agent:codex', label: 'codex activity', agent: 'codex',
+      summary: '2 processes (codex 0.46.0 via Terminal.app) across 2 sessions, all exited', items: [] });
     post.items.push({ severity: 2, kind: 'pattern', id: PATTERN_KEY, title: 'Agent touched the keychain — 323×' });
     post.needs_you = post.items.length;
     post.groups.find(g => g.key === 'agent:codex').items.unshift({

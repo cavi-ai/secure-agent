@@ -19,9 +19,9 @@ import (
 
 // AttentionItem priorities (higher first): guard 5, resource 4, incident 3
 // (1 for an aging incident below high risk), flag and pattern 2 (1 when
-// likely benign or below critical), machine 2 (1 below severity 2), egress 1.
+// likely benign or below critical), recurring egress 1.
 type AttentionItem struct {
-	Kind      string                `json:"kind"` // resource | guard | incident | flag | pattern | egress | collector_down | collector_silent | harness_uncovered | guard_hook_unregistered
+	Kind      string                `json:"kind"` // resource | guard | incident | flag | pattern | recurring_egress
 	Priority  int                   `json:"priority"`
 	ID        string                `json:"id,omitempty"`
 	Action    string                `json:"action,omitempty"`
@@ -58,8 +58,7 @@ type AttentionGroup struct {
 	Items   []AttentionItem `json:"items"`
 }
 
-// machineGroupKey keys the group holding agent-less signals: dead or silent
-// monitors, missing hooks, egress no agent group carries.
+// machineGroupKey is retained for the machine-level coverage section.
 const machineGroupKey = "machine"
 
 // attentionSession: a live session a signal can be attributed to.
@@ -215,12 +214,16 @@ func (a *API) attentionQueue(st Status) ([]PostureItem, []AttentionGroup) {
 		}
 		return g
 	}
-	machine := func() *AttentionGroup {
-		g, ok := groups[machineGroupKey]
-		if !ok {
-			g = &AttentionGroup{Key: machineGroupKey, Label: "This machine", Items: []AttentionItem{}}
-			groups[machineGroupKey] = g
+	agentGroup := func(agent string) *AttentionGroup {
+		key := "agent:" + firstNonEmpty([]string{agent, "unattributed"})
+		if g := groups[key]; g != nil {
+			return g
 		}
+		g := &AttentionGroup{
+			Key: key, Label: firstNonEmpty([]string{agent, "Unattributed"}) + " activity",
+			Agent: firstNonEmpty([]string{agent, "unknown"}), Items: []AttentionItem{},
+		}
+		groups[key] = g
 		return g
 	}
 	facts := map[string]*agentGroupFacts{}
@@ -331,66 +334,28 @@ func (a *API) attentionQueue(st Status) ([]PostureItem, []AttentionGroup) {
 		}
 	}
 
-	// Monitoring gaps no agent owns.
-	for _, it := range a.machineAttentionItems(st) {
-		priority := 1
-		if it.Severity >= 2 {
-			priority = 2
+	// A repeated connection is a decision only when the episode is recurring,
+	// attributable, and not already covered by an expected-egress rule. One
+	// episode may span ended sessions; keep it at agent level rather than
+	// assigning it to whichever session happens to be live now.
+	for _, view := range a.egressEpisodeViews() {
+		if !view.Candidate {
+			continue
 		}
-		add(machine(), it, AttentionItem{Kind: it.Kind, Priority: priority, ID: it.ID, Title: it.Title, Detail: it.Detail})
-	}
-
-	// Uninspected egress: one item per group with a host rollup, and one
-	// headline item per group item. Known CDN/cloud carriers (Infra set) are
-	// excluded, as in UninspectedEgressCountWindow: only unknown endpoints
-	// count.
-	var egressGroups []*AttentionGroup
-	egressItem := func(g *AttentionGroup) *AttentionItem {
-		for i := range g.Items {
-			if g.Items[i].Kind == "egress" {
-				return &g.Items[i]
-			}
+		e := view.Observed
+		action := ""
+		scopeText := "Activity scope is incomplete; only this destination can be expected."
+		if e.ScopeComplete {
+			action = "scope"
+			scopeText = fmt.Sprintf("All destinations for %s · %s · %s", e.Scope.ExePath, e.Scope.Harness, e.Scope.Workspace)
 		}
-		return nil
-	}
-	if a.correlator != nil {
-		for _, row := range a.correlator.UninspectedEgressSummarySince(time.Now().Add(-24 * time.Hour)) {
-			if row.Infra != "" {
-				continue
-			}
-			g := groupFor(row.Agent, 0)
-			item := egressItem(g)
-			if item == nil {
-				g.Items = append(g.Items, AttentionItem{Kind: "egress", Priority: 1, ID: "uninspected-egress:" + g.Key, Title: "Uninspected egress", Hosts: []string{}})
-				item = &g.Items[len(g.Items)-1]
-				egressGroups = append(egressGroups, g)
-			}
-			item.Count += row.Count
-			if row.Host != "" && !containsString(item.Hosts, row.Host) {
-				item.Hosts = append(item.Hosts, row.Host)
-			}
-			item.Detail = fmt.Sprintf("%d connection%s across %d endpoint%s bypassed inspection.",
-				item.Count, plural(item.Count), len(item.Hosts), plural(len(item.Hosts)))
-		}
-	}
-	for _, g := range egressGroups {
-		item := egressItem(g)
-		items = append(items, PostureItem{
-			Kind: "uninspected_egress", ID: item.ID,
-			Title:    uninspectedTitle(item.Count) + " — " + g.Agent,
-			Severity: 1,
-			Detail:   item.Detail,
-		})
-	}
-	// The status total with no per-agent rollup behind it is machine-wide.
-	if len(egressGroups) == 0 && st.UninspectedEgress > 0 {
-		add(machine(), PostureItem{
-			Kind: "uninspected_egress", ID: "uninspected-egress",
-			Title:    uninspectedTitle(st.UninspectedEgress),
-			Severity: 1,
+		detail := fmt.Sprintf("%d calls to %s:%d (%s) on a recurring schedule.", e.Count, e.Host, e.Port, e.Protocol)
+		add(agentGroup(e.Scope.Agent), PostureItem{
+			Kind: "recurring_egress", ID: e.ID, Title: "Recurring connection needs review",
+			Severity: 1, Detail: detail, Timestamp: e.LastSeen.UTC().Format(time.RFC3339),
 		}, AttentionItem{
-			Kind: "egress", Priority: 1, ID: "uninspected-egress", Title: "Uninspected egress",
-			Count: st.UninspectedEgress, Detail: uninspectedTitle(st.UninspectedEgress) + ".",
+			Kind: "recurring_egress", Priority: 1, ID: e.ID, Action: action,
+			Title: "Recurring connection", Detail: detail, ScopeText: scopeText, Count: e.Count,
 		})
 	}
 
@@ -403,7 +368,7 @@ func (a *API) attentionQueue(st Status) ([]PostureItem, []AttentionGroup) {
 		critical := inc.Risk == model.RiskCritical
 		high := inc.Risk == model.RiskHigh
 		aging := !critical && !high && time.Since(inc.Timestamp) > 72*time.Hour
-		if status == "resolved" || (!critical && !high && !aging) {
+		if status != "open" || (!critical && !high && !aging) {
 			continue
 		}
 		detail := firstNonEmpty([]string{inc.Summary, inc.Rule, "A security incident needs review."})
@@ -528,13 +493,4 @@ func plural(n int) string {
 		return ""
 	}
 	return "s"
-}
-
-func containsString(list []string, s string) bool {
-	for _, v := range list {
-		if v == s {
-			return true
-		}
-	}
-	return false
 }

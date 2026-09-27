@@ -1,11 +1,32 @@
-// Attention tab: a session-grouped operator queue followed by detailed
-// findings, incidents, and the policy audit ledger.
+// Home decisions and coverage, followed by detailed findings and incidents.
+
+function renderCoverage() {
+  const p = window.SA.t.posture || {};
+  const panel = document.getElementById('coverage-center');
+  const list = document.getElementById('coverage-list');
+  const badge = document.getElementById('badge-coverage-count');
+  if (!panel || !list) return;
+  const items = p.coverage_items || [];
+  panel.hidden = items.length === 0;
+  if (badge) badge.textContent = Number(p.coverage_count) || items.length;
+  if (panel.hidden) return;
+  list.innerHTML = items.map(it => {
+    const action = it.kind === 'uninspected_egress'
+      ? '<button type="button" class="btn btn-ghost btn-sm" data-action="open-uninspected">Review endpoints</button>'
+      : it.kind === 'collector_down' && it.id === 'eslogger'
+        ? '<button type="button" class="btn btn-ghost btn-sm" data-action="open-fda">Open permissions</button>'
+        : '<span class="coverage-guidance">Check Setup &amp; Permissions in the menu bar</span>';
+    return `<div class="coverage-row"><span><strong>${escapeHTML(it.title)}</strong><span>${escapeHTML(it.detail || '')}</span></span>${action}</div>`;
+  }).join('');
+}
 
 function renderAttention() {
   const SA = window.SA;
   const container = document.getElementById('attention-list');
   const badge = document.getElementById('badge-attention-count');
+  const footer = document.getElementById('attention-footer');
   if (!container) return;
+  renderCoverage();
   // The daemon serves the grouped queue on /posture — one derivation, no
   // client-side regrouping that could disagree with the menubar. The count
   // is the hero's needs_you, which the daemon keeps equal to the groups.
@@ -14,9 +35,11 @@ function renderAttention() {
   if (badge) badge.textContent = count;
   SA.setTabBadge('home', count);
   if (!groups.length) {
-    container.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-shield"/></svg><span>No decisions waiting — monitored sessions are within policy</span></div>`;
+    container.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-shield"/></svg><span>No pending decisions</span></div>`;
+    if (footer) footer.hidden = true;
     return;
   }
+  if (footer) footer.hidden = groups.length <= 3 && groups.every(g => g.items.length <= 2);
 
   const advisorHealth = (SA.t.status && SA.t.status.advisor_health) || null;
   const advisorVisible = !!(SA.t.status && SA.t.status.advisor_enabled);
@@ -36,10 +59,11 @@ function renderAttention() {
     if (item.kind === 'flag') return `
       <button class="btn btn-ghost btn-sm" data-action="dismiss-flag" data-id="${escapeHTML(item.id)}">Dismiss</button>
       ${retriage(item)}`;
-    if (item.kind === 'collector_down' && item.id === 'eslogger') return `
-      <button class="btn btn-ghost btn-sm" data-action="open-fda">Open Full Disk Access settings</button>`;
-    if (item.kind !== 'egress') return '';
-    return `<button class="btn btn-ghost btn-sm" data-action="open-uninspected">Review endpoints</button>`;
+    if (item.kind === 'recurring_egress') return `
+      <button class="btn btn-ghost btn-sm" data-action="expect-egress" data-episode-id="${escapeHTML(item.id)}" data-kind="destination">Expect destination</button>
+      ${item.action === 'scope' ? `<button class="btn btn-ghost btn-sm" data-action="expect-egress" data-episode-id="${escapeHTML(item.id)}" data-kind="scope">Expect activity scope</button>` : ''}
+      <button class="btn btn-ghost btn-sm" data-action="goto-tab" data-tab="egress">Review evidence</button>`;
+    return '';
   };
   const retriage = item => !advisorVisible ? '' : advisorOffline
     ? `<button class="btn btn-ghost btn-sm" disabled title="Advisor offline — verdicts paused (${escapeHTML(advisorHealth.last_error || 'model server unreachable')})">Advisor offline</button>`

@@ -12,6 +12,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/resource"
 	"github.com/cavi-ai/secure-agent/daemon/internal/sensitive"
+	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 	"github.com/cavi-ai/secure-agent/daemon/internal/supervise"
 )
 
@@ -211,14 +212,10 @@ func TestAttentionGroupsCoverEveryPostureItem(t *testing.T) {
 	p := a.computePosture()
 	sum := 0
 	groupOf := map[string][]string{}
-	egressGroups := 0
 	for _, g := range p.Groups {
 		sum += len(g.Items)
 		for _, it := range g.Items {
 			groupOf[it.Kind+"|"+it.ID] = append(groupOf[it.Kind+"|"+it.ID], g.Key)
-			if it.Kind == "egress" {
-				egressGroups++
-			}
 		}
 	}
 	if sum != p.NeedsYou || len(p.Items) != p.NeedsYou {
@@ -232,19 +229,17 @@ func TestAttentionGroupsCoverEveryPostureItem(t *testing.T) {
 	if keys := groupOf["flag|high"]; len(keys) != 1 || keys[0] == machineGroupKey {
 		t.Fatalf("severity-2 flag groups = %v, want one agent group", keys)
 	}
-	if keys := groupOf["collector_silent|transcript"]; len(keys) != 1 || keys[0] != machineGroupKey {
-		t.Fatalf("silent collector groups = %v, want [machine]", keys)
+	coverage := map[string]bool{}
+	for _, it := range p.CoverageItems {
+		coverage[it.Kind] = true
 	}
-	if keys := groupOf["harness_uncovered|harness-hooks"]; len(keys) != 1 || keys[0] != machineGroupKey {
-		t.Fatalf("uncovered harness groups = %v, want [machine]", keys)
-	}
-	if egressGroups != 2 {
-		t.Fatalf("egress group items = %d, want one per agent (2)", egressGroups)
-	}
-	for _, g := range p.Groups {
-		if g.Key == machineGroupKey && (g.Agent != "" || g.Label != "This machine") {
-			t.Fatalf("machine group = %+v, want agent \"\" and label \"This machine\"", g)
+	for _, kind := range []string{"collector_silent", "harness_uncovered", "uninspected_egress"} {
+		if !coverage[kind] {
+			t.Fatalf("missing %s from coverage: %+v", kind, p.CoverageItems)
 		}
+	}
+	if p.NeedsYou != 2 {
+		t.Fatalf("needs_you=%d, want two actionable flags", p.NeedsYou)
 	}
 }
 
@@ -266,9 +261,9 @@ func TestAttentionSeverityTwoFlagPriority(t *testing.T) {
 	}
 }
 
-// Known CDN/cloud carriers never join the per-agent egress item or its
-// headline; a group whose only egress is carriers gets no egress item.
-func TestAttentionEgressSkipsCarriers(t *testing.T) {
+// Raw uninspected egress is a coverage fact, not a pending decision. The
+// status count already excludes known carriers.
+func TestAttentionEgressCoverageSkipsCarriers(t *testing.T) {
 	cfg, err := config.Load("/nonexistent")
 	if err != nil {
 		t.Fatal(err)
@@ -281,7 +276,9 @@ func TestAttentionEgressSkipsCarriers(t *testing.T) {
 		for _, h := range hosts {
 			cr.Observe(event.Event{Kind: event.KindConnOpen, PID: 42, TS: now.Add(-time.Hour), RemoteHost: h, RemotePort: 443})
 		}
-		a := newTestAPI("", testStore(t), &fakeKiller{}, func() Status { return Status{Running: true} })
+		a := newTestAPI("", testStore(t), &fakeKiller{}, func() Status {
+			return Status{Running: true, UninspectedEgress: cr.UninspectedEgressCountWindow(24 * time.Hour)}
+		})
 		a.correlator = cr
 		return a, cr
 	}
@@ -302,44 +299,45 @@ func TestAttentionEgressSkipsCarriers(t *testing.T) {
 	if unknownCount < 1 {
 		t.Fatalf("unknown row missing from summary")
 	}
-	items, groups := a.attentionQueue(Status{Running: true})
-	var egress []AttentionItem
-	for _, g := range groups {
-		for _, it := range g.Items {
-			if it.Kind == "egress" {
-				egress = append(egress, it)
-			}
-		}
-	}
-	if len(egress) != 1 {
-		t.Fatalf("egress items = %+v, want one", egress)
-	}
-	if egress[0].Count != unknownCount || len(egress[0].Hosts) != 1 || egress[0].Hosts[0] != unknown {
-		t.Fatalf("egress item = %+v, want count %d and hosts [%s]", egress[0], unknownCount, unknown)
-	}
-	headlines := 0
-	for _, it := range items {
-		if it.Kind == "uninspected_egress" {
-			headlines++
-		}
-	}
-	if headlines != 1 {
-		t.Fatalf("uninspected_egress headlines = %d, want 1\nitems=%+v", headlines, items)
+	p := a.computePosture()
+	if p.NeedsYou != 0 || p.CoverageCount != 1 || p.CoverageItems[0].Kind != "uninspected_egress" {
+		t.Fatalf("posture = %+v, want one coverage item and no decisions", p)
 	}
 
 	a, _ = build(carrier)
-	items, groups = a.attentionQueue(Status{Running: true})
-	for _, g := range groups {
-		for _, it := range g.Items {
-			if it.Kind == "egress" {
-				t.Fatalf("carrier-only group %q has egress item %+v", g.Key, it)
-			}
+	p = a.computePosture()
+	if p.NeedsYou != 0 || p.CoverageCount != 0 {
+		t.Fatalf("carrier-only posture = %+v, want no decisions or coverage gaps", p)
+	}
+}
+
+func TestAttentionRecurringEgressRequiresAnOperatorDecision(t *testing.T) {
+	a := attentionAPI(t, nil)
+	scope := store.EgressScope{Agent: "claude", ExePath: "/Applications/Claude.app", Harness: "claude", Workspace: "/work/repo"}
+	base := time.Now().Add(-2 * time.Hour)
+	for i := 0; i < 5; i++ {
+		if err := a.store.RecordEgressObservation(store.EgressObservation{
+			Scope: scope, SessionID: "ended-session", Host: "updates.example.com", Protocol: "tcp", Port: 443,
+			At: base.Add(time.Duration(i) * 30 * time.Minute),
+		}); err != nil {
+			t.Fatal(err)
 		}
 	}
-	for _, it := range items {
-		if it.Kind == "uninspected_egress" {
-			t.Fatalf("carrier-only egress produced headline %+v", it)
-		}
+	p := a.computePosture()
+	if p.NeedsYou != 1 || len(p.Groups) != 1 || p.Groups[0].Key != "agent:claude" {
+		t.Fatalf("posture = %+v, want one agent-level decision without guessed session", p)
+	}
+	it := p.Groups[0].Items[0]
+	if it.Kind != "recurring_egress" || it.Action != "scope" || it.Count != 5 || it.ID == "" {
+		t.Fatalf("recurring decision = %+v", it)
+	}
+	if _, err := a.store.CreateExpectedEgressRule(store.ExpectedEgressRule{
+		Agent: scope.Agent, Kind: "scope", ExePath: scope.ExePath, Harness: scope.Harness, Workspace: scope.Workspace,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := a.computePosture().NeedsYou; got != 0 {
+		t.Fatalf("expected activity still has %d pending decisions", got)
 	}
 }
 

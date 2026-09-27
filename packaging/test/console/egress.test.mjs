@@ -17,6 +17,66 @@ vm.runInNewContext(readFileSync(path.join(webDist, 'lib.js'), 'utf8'), ctx, { fi
 vm.runInContext(readFileSync(path.join(webDist, 'tab-egress.js'), 'utf8'), ctx, { filename: 'tab-egress.js' });
 const { groupUninspected, identityLabel } = ctx;
 
+test('recurring egress card separates observed cadence from advisor inference', () => {
+  const html = ctx.egressEpisodeHTML({ id: 'episode-1', candidate: true, observed: {
+    id: 'episode-1', host: 'api.example.com', port: 443, protocol: 'tcp', count: 5,
+    first_seen: '2026-09-25T10:00:00Z', last_seen: '2026-09-25T12:00:00Z',
+    intervals: [1800000000000, 1830000000000, 1770000000000, 1800000000000],
+    session_ids: ['session-123456'], scope_complete: true,
+    scope: { agent: 'claude', exe_path: '/Applications/Claude', harness: 'claude', workspace: '/work/repo' }
+  }, advisor_inference: { possible_purpose: 'Periodic update check', confidence: 'medium' } });
+  assert.match(html, /Observed/);
+  assert.match(html, /about every 30–31 min/);
+  assert.match(html, /Advisor inference/);
+  assert.match(html, /Periodic update check/);
+  assert.match(html, /data-action="filter-session" data-session="session-123456"/);
+  assert.match(html, /First 2026-09-25T10:00:00Z/);
+  assert.match(html, /Last 2026-09-25T12:00:00Z/);
+  assert.match(html, /data-kind="destination"/);
+  assert.match(html, /data-kind="scope"/);
+  assert.match(html, /Security checks and the connection record continue/);
+});
+
+test('ambiguous scope has an exact choice only; expected activity has no approval choices', () => {
+  const observed = { id: 'e', host: '203.0.113.1', port: 443, protocol: 'tcp', count: 5,
+    intervals: [1800000000000], scope_complete: false, scope: { agent: 'codex' } };
+  const candidate = ctx.egressEpisodeHTML({ id: 'e', candidate: true, observed });
+  assert.match(candidate, /data-kind="destination"/);
+  assert.doesNotMatch(candidate, /data-kind="scope"/);
+  assert.match(candidate, /activity scope is incomplete/);
+  const expected = ctx.egressEpisodeHTML({ id: 'e', expected: true, expected_rule_id: 'rule-1', candidate: false, observed });
+  assert.doesNotMatch(expected, /data-action="expect-egress"/);
+  assert.match(expected, /data-action="revoke-expected-egress" data-id="rule-1"/);
+});
+
+test('episode host and advisor text are escaped in the card', () => {
+  const html = ctx.egressEpisodeHTML({ id: 'e', candidate: true, observed: {
+    id: 'e', host: '<img src=x onerror=1>', port: 443, protocol: 'tcp', count: 5,
+    intervals: [1800000000000], scope_complete: false, scope: { agent: 'claude' }
+  }, advisor_inference: { possible_purpose: '<script>alert(1)</script>' } });
+  assert.doesNotMatch(html, /<img|<script>/);
+  assert.match(html, /&lt;img/);
+  assert.match(html, /&lt;script&gt;/);
+});
+
+test('episode scope escapes once and remains readable', () => {
+  const html = ctx.egressEpisodeHTML({ id: 'e', observed: {
+    host: 'api.example.com', count: 5, scope: { agent: 'claude', workspace: '/work/R&D <client>' }
+  } });
+  assert.match(html, /\/work\/R&amp;D &lt;client&gt;/);
+  assert.doesNotMatch(html, /&amp;amp;|&amp;lt;/);
+});
+
+test('expected-egress rule names the entire scope and escapes it; revoke targets rule ID', () => {
+  const html = ctx.expectedEgressRuleHTML({ id: 'rule-1', kind: 'scope', agent: 'claude',
+    exe_path: '/Applications/Claude', harness: 'claude', workspace: '<script>work</script>', rationale: 'Routine task' });
+  assert.match(html, /All destinations/);
+  assert.match(html, /\/Applications\/Claude/);
+  assert.match(html, /&lt;script&gt;work/);
+  assert.doesNotMatch(html, /<script>/);
+  assert.match(html, /data-action="revoke-expected-egress" data-id="rule-1"/);
+});
+
 const rows = [
   { agent: 'openclaw', host: '2607:6bc0::10', count: 94, first_seen: '2026-09-23T12:00:00Z', identity: { kind: 'ipv6', org: 'Anthropic', class: 'vendor' } },
   { agent: 'openclaw', host: '160.79.104.10', count: 25, first_seen: '2026-09-23T11:00:00Z', identity: { kind: 'ipv4', org: 'Anthropic', class: 'vendor' } },
