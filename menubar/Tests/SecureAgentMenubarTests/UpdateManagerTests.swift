@@ -36,4 +36,27 @@ final class UpdateManagerTests: XCTestCase {
         XCTAssertNotNil(found)
         XCTAssertTrue(FileManager.default.fileExists(atPath: "\(found ?? "")/packaging/update_nightly.sh"))
     }
+
+    func testDiscoverRepoRecognizesGitDirectoryAndWorktreeFile() throws {
+        let fm = FileManager.default
+        let fixtures = fm.temporaryDirectory.appendingPathComponent("repo-discovery-\(UUID().uuidString)")
+        try fm.createDirectory(at: fixtures, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: fixtures) }
+
+        for gitMarkerIsFile in [false, true] {
+            let root = fixtures.appendingPathComponent(gitMarkerIsFile ? "worktree" : "checkout")
+            let app = root.appendingPathComponent("dist/Secure Agent.app")
+            let script = root.appendingPathComponent("packaging/update_nightly.sh")
+            try fm.createDirectory(at: app, withIntermediateDirectories: true)
+            try fm.createDirectory(at: script.deletingLastPathComponent(), withIntermediateDirectories: true)
+            if gitMarkerIsFile {
+                try Data("gitdir: /synthetic/worktrees/test\n".utf8).write(to: root.appendingPathComponent(".git"))
+            } else {
+                try fm.createDirectory(at: root.appendingPathComponent(".git"), withIntermediateDirectories: true)
+            }
+            XCTAssertNil(UpdateManager.discoverRepo(from: app), "nightly script is required")
+            try Data("#!/bin/sh\n".utf8).write(to: script)
+            XCTAssertEqual(UpdateManager.discoverRepo(from: app), root.path)
+        }
+    }
 }

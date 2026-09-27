@@ -309,9 +309,9 @@ public final class UpdateManager: ObservableObject {
         for _ in 0..<8 {
             url = url.deletingLastPathComponent()
             let candidate = url.path
-            var isDir: ObjCBool = false
-            if FileManager.default.fileExists(atPath: "\(candidate)/.git", isDirectory: &isDir),
-               isDir.boolValue,
+            let gitAttributes = try? FileManager.default.attributesOfItem(atPath: "\(candidate)/.git")
+            let gitType = gitAttributes?[.type] as? FileAttributeType
+            if (gitType == .typeDirectory || gitType == .typeRegular),
                FileManager.default.fileExists(atPath: "\(candidate)/packaging/update_nightly.sh") {
                 return candidate
             }
