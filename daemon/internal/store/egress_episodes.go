@@ -226,8 +226,15 @@ func (s *Store) RecordEgressObservation(o EgressObservation) error {
 	if _, err := tx.ExecContext(ctx, `DELETE FROM egress_episodes WHERE last_seen_ns < ?`, cutoff); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM egress_episodes WHERE id NOT IN (SELECT id FROM egress_episodes ORDER BY last_seen_ns DESC, id DESC LIMIT ?)`, maxEgressEpisodes); err != nil {
+	var rowCount int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM egress_episodes`).Scan(&rowCount); err != nil {
 		return err
+	}
+	if rowCount > maxEgressEpisodes {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM egress_episodes WHERE id IN
+		 (SELECT id FROM egress_episodes ORDER BY last_seen_ns ASC, id ASC LIMIT ?)`, rowCount-maxEgressEpisodes); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
 }
