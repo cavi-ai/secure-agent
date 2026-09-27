@@ -981,7 +981,7 @@
     if (tlMatch) {
       const sid = decodeURIComponent(tlMatch[1]);
       const sess = (data['/sessions'] || []).find(s => s.id === sid);
-      const body = sess ? (sess._timeline || []) : null;
+      const body = sess ? (MODE.includes('tracereactivation') ? [...(sess._timeline || [])] : (sess._timeline || [])) : null;
       return {
         ok: body !== null, status: body !== null ? 200 : 404,
         json: async () => body,
@@ -1129,6 +1129,24 @@
     setTimeout(() => window.selectSession('sess-claude-1'), 4000);
     setTimeout(() => window.selectSession('sess-codex-3'), 4100);
     setTimeout(() => { document.body.dataset.memoryRace = document.querySelector('#session-detail')?.textContent.includes('B-only memory') ? 'B' : 'wrong'; }, 7000);
+  }
+  if (MODE.includes('tracereactivation')) {
+    setTimeout(() => openTab('sessions'), 1500);
+    setTimeout(() => window.selectSession('sess-claude-1'), 4000);
+    setTimeout(() => window.setSessionView('trace'), 5000);
+    setTimeout(() => {
+      document.body.dataset.traceWasCached = String(window.SA.sessionTimeline.length > 0);
+      window.setSessionView('memory');
+    }, 6000);
+    setTimeout(() => {
+      const fresh = { kind: 12, ts: new Date().toISOString(), session_id: 'sess-claude-1', tool: 'FreshTrace', tool_status: 'ok', duration_ms: 200 };
+      data['/sessions'].find(s => s.id === 'sess-claude-1')._timeline.push(fresh);
+      window.__sse.emit('event', fresh);
+    }, 7000);
+    setTimeout(() => window.setSessionView('trace'), 8000);
+    setTimeout(() => {
+      document.body.dataset.traceReactivated = String(window.SA.sessionTimeline.some(e => e.tool === 'FreshTrace'));
+    }, 10000);
   }
   // Auto-action: Export the selected session's report into a stubbed
   // clipboard; the copied text lands on body[data-clipboard]. Fires late so

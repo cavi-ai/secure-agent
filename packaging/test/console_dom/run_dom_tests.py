@@ -195,6 +195,7 @@ def main():
         dom_rail = dump_dom(chrome, tmp, "?raildemo")
         dom_memory = dump_dom(chrome, tmp, "?raildemo&memorydemo")
         dom_memory_race = dump_dom(chrome, tmp, "?memoryrace")
+        dom_trace_reactivation = dump_dom(chrome, tmp, "?tracereactivation")
         dom_pill = dump_dom(chrome, tmp, "?pilldemo")
         dom_quiet = dump_dom(chrome, tmp, "?quietdemo")
         dom_nomatch = dump_dom(chrome, tmp, "?nomatchdemo")
@@ -355,6 +356,10 @@ def main():
               and '<h3>data-pipeline@feat/etl</h3>' in dom_memory_race.split('id="session-detail"', 1)[1]
               and 'A-only memory' not in dom_memory_race.split('id="session-detail"', 1)[1],
               dom_memory_race.split('id="session-detail"', 1)[1][:700])
+        check("Trace refetches after an event arrives while Memory is active",
+              'data-trace-was-cached="true"' in dom_trace_reactivation
+              and 'data-trace-reactivated="true"' in dom_trace_reactivation,
+              (re.search(r'data-trace-(?:was-cached|reactivated)="[^"]*"', dom_trace_reactivation) or [None])[0])
         check("waterfall carries model usage row",
               "claude-sonnet-4-5" in dom_rail and "46.2k in" in dom_rail)
         check("waterfall marks tool errors", 'wf-bar error' in dom_rail)

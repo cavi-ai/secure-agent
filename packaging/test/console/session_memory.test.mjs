@@ -32,10 +32,13 @@ test('memory page preserves oldest-first order and names five sources', () => {
 
 test('memory page escapes every server string including identifiers and cursor', () => {
   const payload = '<img src=x onerror=alert(1)>';
-  const html = context.sessionMemoryHTML({ rows: [{ id: payload, at: payload, kind: payload, title: payload, detail: payload, severity: payload, status: payload }], has_earlier: true, next_cursor: payload }, {});
+  const at = '2026-09-26T10:00:00Z" data-injected="yes';
+  const html = context.sessionMemoryHTML({ rows: [{ id: payload, at, kind: payload, title: payload, detail: payload, severity: payload, status: payload }], has_earlier: true, next_cursor: payload }, {});
   assert.ok(!html.includes(payload), html);
   assert.ok(!html.includes('<img'), html);
   assert.ok(html.includes('&lt;img'), html);
+  assert.ok(!html.includes('datetime="2026-09-26T10:00:00Z" data-injected="yes"'), html);
+  assert.ok(html.includes('datetime="2026-09-26T10:00:00Z&quot; data-injected=&quot;yes"'), html);
 });
 
 test('memory page has explicit empty, loading and error states', () => {

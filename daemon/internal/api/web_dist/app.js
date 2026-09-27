@@ -2419,8 +2419,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (view !== 'memory' && view !== 'trace') return;
     sessionView = view;
     renderNow(['sessions']);
-    if (view === 'trace' && selectedSessionId && !sessionTimeline.length) {
-      try { await loadSessionTimeline(selectedSessionId, true); } catch { /* trace retries on next selection */ }
+    if (view === 'trace' && selectedSessionId) {
+      try { await loadSessionTimeline(selectedSessionId, true); } catch { /* trace retries on next activation */ }
       renderNow(['sessions']);
     }
   };
