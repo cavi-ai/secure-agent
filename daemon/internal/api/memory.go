@@ -79,15 +79,78 @@ func memoryRuleTitle(rule string) string {
 	}
 }
 
+func memoryToolLabel(tool string) string {
+	switch tool {
+	case "Bash":
+		return "Shell command"
+	case "Read":
+		return "File read"
+	case "Write":
+		return "File write"
+	case "Edit":
+		return "File edit"
+	case "Glob":
+		return "File search"
+	case "Grep":
+		return "Text search"
+	case "WebSearch":
+		return "Web search"
+	case "WebFetch":
+		return "Web fetch"
+	default:
+		return ""
+	}
+}
+
+func memoryModelLabel(model string) string {
+	switch model {
+	case "claude-sonnet-4-5":
+		return "Claude Sonnet 4.5"
+	case "claude-sonnet-5":
+		return "Claude Sonnet 5"
+	case "claude-opus-4-6":
+		return "Claude Opus 4.6"
+	case "claude-opus-5":
+		return "Claude Opus 5"
+	case "gpt-5":
+		return "GPT-5"
+	case "gpt-5.5":
+		return "GPT-5.5"
+	case "gpt-5.6-sol":
+		return "GPT-5.6 Sol"
+	default:
+		return ""
+	}
+}
+
+func memoryDiagnosisLabel(code string) string {
+	switch code {
+	case "heavy-memory":
+		return "Heavy memory"
+	case "heavy-cpu":
+		return "Heavy CPU"
+	case "rapid-growth":
+		return "Rapid memory growth"
+	case "idle-heavy":
+		return "High idle memory"
+	case "runaway-child":
+		return "Runaway child process"
+	case "orphan-drift":
+		return "Orphaned processes"
+	default:
+		return ""
+	}
+}
+
 func presentMemoryFact(f store.MemoryFact) memoryRow {
 	r := memoryRow{ID: f.ID, At: f.At, Kind: f.Kind}
 	switch f.Kind {
 	case "activity":
 		r.Title = "Activity: " + f.EventKind.String()
-		if safeMemoryID(f.Tool) {
-			r.Detail = "Tool: " + f.Tool
-		} else if safeMemoryID(f.Model) {
-			r.Detail = "Model: " + f.Model
+		if label := memoryToolLabel(f.Tool); label != "" {
+			r.Detail = "Tool: " + label
+		} else if label := memoryModelLabel(f.Model); label != "" {
+			r.Detail = "Model: " + label
 		}
 	case "guard-audit":
 		r.Title = "Secret guard activity"
@@ -130,8 +193,10 @@ func presentMemoryFact(f store.MemoryFact) memoryRow {
 		case "info", "warning", "critical":
 			r.Severity = f.SeverityText
 		}
-		if len(f.DiagnosisCodes) > 0 && safeMemoryID(f.DiagnosisCodes[0]) {
-			r.Detail = "Diagnosis: " + f.DiagnosisCodes[0]
+		if len(f.DiagnosisCodes) > 0 {
+			if label := memoryDiagnosisLabel(f.DiagnosisCodes[0]); label != "" {
+				r.Detail = "Diagnosis: " + label
+			}
 		}
 	default:
 		r.Title = "Session activity"

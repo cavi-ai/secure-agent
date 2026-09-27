@@ -111,6 +111,32 @@ func TestSessionMemoryCursor(t *testing.T) {
 	}
 }
 
+func TestSessionMemoryCursorAcrossSourceRanks(t *testing.T) {
+	s, err := Open("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	at := time.Now().UTC().Truncate(time.Second).Format(time.RFC3339Nano)
+	for _, q := range []string{
+		`INSERT INTO events(kind,ts,session_id) VALUES (8,'` + at + `','s1')`,
+		`INSERT INTO flags(id,rule,severity,ts,session_id) VALUES ('flag','keychain-access',3,'` + at + `','s1')`,
+		`INSERT INTO guard_decisions(id,session_id,rule_id,verdict,scope,at) VALUES ('guard','s1','cloud-creds','deny','once','` + at + `')`,
+	} {
+		if _, err := s.db.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var before *MemoryCursor
+	for i, want := range []int{memoryGuardRank, memoryFlagRank, memoryActivityRank} {
+		facts, earlier, err := s.QuerySessionMemory("s1", before, 1)
+		if err != nil || len(facts) != 1 || facts[0].SourceRank != want || earlier != (i < 2) {
+			t.Fatalf("page %d: facts=%+v earlier=%v err=%v", i, facts, earlier, err)
+		}
+		before = &MemoryCursor{At: facts[0].At, SourceRank: facts[0].SourceRank, SourceID: facts[0].SourceID}
+	}
+}
+
 func TestSessionMemoryGuardRetentionAtRead(t *testing.T) {
 	s, err := Open("", "")
 	if err != nil {
