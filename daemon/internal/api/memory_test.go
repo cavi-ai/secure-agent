@@ -52,6 +52,17 @@ func TestMemoryPresenterStructuredSummaries(t *testing.T) {
 	}
 }
 
+func TestMemoryRSSLabelFractionBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		bytes uint64
+		want  string
+	}{{1126, "1.0 KiB"}, {1127, "1.1 KiB"}} {
+		if got := memoryRSSLabel(tc.bytes); got != tc.want {
+			t.Errorf("memoryRSSLabel(%d) = %q, want %q", tc.bytes, got, tc.want)
+		}
+	}
+}
+
 func TestSessionMemoryRedaction(t *testing.T) {
 	st := testStore(t)
 	now := time.Now().UTC()

@@ -199,10 +199,7 @@ func memoryRSSLabel(bytes uint64) string {
 			if bytes%unit.bytes == 0 {
 				return fmt.Sprintf("%d %s", bytes/unit.bytes, unit.name)
 			}
-			fraction := (bytes % unit.bytes) / (unit.bytes / 10)
-			if fraction > 9 {
-				fraction = 9
-			}
+			fraction := (bytes % unit.bytes) * 10 / unit.bytes
 			return fmt.Sprintf("%d.%d %s", bytes/unit.bytes, fraction, unit.name)
 		}
 	}
