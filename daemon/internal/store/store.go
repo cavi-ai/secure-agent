@@ -508,6 +508,11 @@ func Open(dbPath, jsonlPath string) (*Store, error) {
 		log.Printf("store: migrated incidents: added aggregation columns (rule, session_id, subject, aggregate_count, last_flag_at, flag_ids)")
 	}
 
+	if err := createMemoryIndexes(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+
 	var jsonl *os.File
 	if jsonlPath != "" {
 		f, err := os.OpenFile(jsonlPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
