@@ -2326,20 +2326,65 @@ document.addEventListener('DOMContentLoaded', () => {
     selectedResourceKey: { get() { return selectedResourceKey; }, set(v) { selectedResourceKey = v; } },
     selectedSessionId: { get() { return selectedSessionId; }, set(v) { selectedSessionId = v; } },
     sessionTimeline: { get() { return sessionTimeline; }, set(v) { sessionTimeline = v; } },
+    sessionView: { get() { return sessionView; } },
+    sessionMemoryPage: { get() { return sessionMemoryPage; } },
+    sessionMemoryState: { get() { return sessionMemoryState; } },
   });
 
-  // Session-first tab: selection + its trace. The timeline refetches on
-  // select and when an event delta lands for the selected session.
+  // The generation invalidates late responses when selection changes; it
+  // also protects an earlier-page request from writing into another session.
   let selectedSessionId = '';
+  let sessionView = 'memory';
+  let sessionMemoryPage = { rows: [], has_earlier: false, next_cursor: '' };
+  let sessionMemoryState = { loading: false, loadingEarlier: false, error: '' };
+  let sessionMemoryGeneration = 0;
   let sessionTimeline = [];
   let sessionTimelineAt = 0;
+  function resetSessionMemory() {
+    sessionMemoryGeneration++;
+    sessionMemoryPage = { rows: [], has_earlier: false, next_cursor: '' };
+    sessionMemoryState = { loading: false, loadingEarlier: false, error: '' };
+    sessionView = 'memory';
+  }
+  async function loadSessionMemory(sessionID, before) {
+    if (!sessionID || sessionID !== selectedSessionId) return;
+    const generation = sessionMemoryGeneration;
+    if (before && sessionMemoryState.loadingEarlier) return;
+    sessionMemoryState = { ...sessionMemoryState, loading: !before, loadingEarlier: !!before, error: '' };
+    renderNow(['sessions']);
+    try {
+      const query = before ? '?before=' + encodeURIComponent(before) : '';
+      const response = await apiFetch('/sessions/' + encodeURIComponent(sessionID) + '/memory' + query);
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      const page = await response.json();
+      if (generation !== sessionMemoryGeneration || sessionID !== selectedSessionId) return;
+      const incoming = Array.isArray(page.rows) ? page.rows : [];
+      if (before) {
+        const seen = new Set((sessionMemoryPage.rows || []).map(row => row.id));
+        const older = incoming.filter(row => {
+          if (seen.has(row.id)) return false;
+          seen.add(row.id);
+          return true;
+        });
+        sessionMemoryPage = { rows: [...older, ...sessionMemoryPage.rows], has_earlier: !!page.has_earlier, next_cursor: page.next_cursor || '' };
+      } else {
+        sessionMemoryPage = { rows: incoming, has_earlier: !!page.has_earlier, next_cursor: page.next_cursor || '' };
+      }
+      sessionMemoryState = { loading: false, loadingEarlier: false, error: '' };
+    } catch {
+      if (generation !== sessionMemoryGeneration || sessionID !== selectedSessionId) return;
+      sessionMemoryState = { loading: false, loadingEarlier: false, error: 'unavailable' };
+    }
+    renderNow(['sessions']);
+  }
   async function loadSessionTimeline(id, force) {
     if (!id) { sessionTimeline = []; return; }
     // Throttle refetches: deltas for the selected session arrive per event.
     if (!force && Date.now() - sessionTimelineAt < 2000) return;
     sessionTimelineAt = Date.now();
     const r = await apiFetch('/sessions/' + encodeURIComponent(id) + '/timeline?limit=500');
-    if (r.ok) sessionTimeline = (await r.json()) || [];
+    const rows = r.ok ? (await r.json()) || [] : [];
+    if (id === selectedSessionId) sessionTimeline = rows;
   }
   // Export: copy the session's markdown report. Safari only honours a
   // clipboard write started inside the click, so where ClipboardItem exists
@@ -2365,8 +2410,24 @@ document.addEventListener('DOMContentLoaded', () => {
   };
   window.selectSession = async function(id) {
     selectedSessionId = (selectedSessionId === id) ? '' : id;
-    if (selectedSessionId) await loadSessionTimeline(selectedSessionId, true);
+    resetSessionMemory();
+    sessionTimeline = [];
     renderAll();
+    if (selectedSessionId) await loadSessionMemory(selectedSessionId);
+  };
+  window.setSessionView = async function(view) {
+    if (view !== 'memory' && view !== 'trace') return;
+    sessionView = view;
+    renderNow(['sessions']);
+    if (view === 'trace' && selectedSessionId && !sessionTimeline.length) {
+      try { await loadSessionTimeline(selectedSessionId, true); } catch { /* trace retries on next selection */ }
+      renderNow(['sessions']);
+    }
+  };
+  window.loadEarlierSessionMemory = function() {
+    if (selectedSessionId && sessionMemoryPage.has_earlier && sessionMemoryPage.next_cursor) {
+      return loadSessionMemory(selectedSessionId, sessionMemoryPage.next_cursor);
+    }
   };
 
   // The drawer is shared by two views: the incident report (markdown, with a
@@ -3317,9 +3378,9 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   };
 
-  // Session drill-down: jump from a flag to just its harness session's events.
+  // Session drill-down: jump from a finding to its durable session.
   // "View session in timeline" (finding cards, Attention): open the session
-  // in the Sessions tab — its rail card selected, its trace loaded — and keep
+  // in the Sessions tab — its rail card selected, its memory loaded — and keep
   // Events, Flags and Incidents scoped to it for the Events tab. Selects
   // outright: selectSession toggles, which would close an already-open one.
   window.filterTimelineToSession = async function(sid) {
@@ -3332,8 +3393,11 @@ document.addEventListener('DOMContentLoaded', () => {
     renderIncidents();
     paintScopeBar();
     selectedSessionId = sid;
+    resetSessionMemory();
+    sessionTimeline = [];
     switchTab('sessions');
-    try { await loadSessionTimeline(sid, true); } catch { /* the trace stays empty; the next select retries */ }
+    await loadSessionMemory(sid);
+    if (selectedSessionId !== sid) return;
     renderNow(['sessions']);
     const card = document.querySelector(`#session-rail [data-action="select-session"][data-id="${cssq(sid)}"]`);
     if (card && card.scrollIntoView) {
@@ -3618,6 +3682,15 @@ document.addEventListener('DOMContentLoaded', () => {
         break;
       case 'select-session':
         window.selectSession(d.id);
+        break;
+      case 'session-view':
+        window.setSessionView(d.view);
+        break;
+      case 'memory-earlier':
+        window.loadEarlierSessionMemory();
+        break;
+      case 'memory-retry':
+        if (selectedSessionId) loadSessionMemory(selectedSessionId);
         break;
       case 'toggle-ended-sessions':
         endedSessionsOpen[d.harness] = !endedSessionsOpen[d.harness];
@@ -3991,8 +4064,8 @@ document.addEventListener('DOMContentLoaded', () => {
         telemetryData.events = [e, ...(telemetryData.events || [])].slice(0, 200);
         if (!isEventsFiltered()) telemetryData.eventsView = telemetryData.events;
         if (e.kind === 9) flashFirewallPanel(); // proxy-hit
-        // The open session's waterfall follows its own trace live.
-        if (selectedSessionId && e.session_id === selectedSessionId) {
+        // Trace continues to follow event deltas while visible.
+        if (sessionView === 'trace' && selectedSessionId && e.session_id === selectedSessionId) {
           loadSessionTimeline(selectedSessionId).then(() => markDirty('sessions'));
         }
       } catch { sparkBump(1, 0); /* unparseable frame still counts */ }

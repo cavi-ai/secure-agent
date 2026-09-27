@@ -1,5 +1,5 @@
 // Sessions tab: session-first. A rail of durable sessions (the P1 spine)
-// grouped by harness on the left; the selected session's trace waterfall on
+// grouped by harness on the left; the selected session's memory or trace on
 // the right. renderSessionBoard (app.js's panel registry) delegates here when
 // durable sessions exist; the legacy process-tree board remains the fallback.
 
@@ -114,14 +114,42 @@ function sessionInfraGroupHTML(g, open) {
   </details>`;
 }
 
-// The selected session's head and trace: mark, repo@branch, harness name,
+// Memory rows contain only server-redacted labels, but every field is still
+// escaped at this final DOM boundary. Unknown source types use a generic name.
+function sessionMemoryHTML(page, state) {
+  const rows = Array.isArray(page && page.rows) ? page.rows : [];
+  const sourceNames = { activity: 'Activity', 'guard-audit': 'Guard', flag: 'Flag', incident: 'Incident', guard: 'Guard', resource: 'Resource' };
+  const loading = !!(state && state.loading);
+  const error = !!(state && state.error);
+  const rowHTML = rows.map(row => {
+    const source = Object.prototype.hasOwnProperty.call(sourceNames, row.kind) ? sourceNames[row.kind] : 'Activity';
+    const date = new Date(row.at);
+    const pad = n => String(n).padStart(2, '0');
+    const time = Number.isNaN(date.getTime()) ? 'Time unavailable'
+      : `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${fmtTime(date)}`;
+    const severity = row.severity ? `<span class="sm-chip">${escapeHTML(row.severity)}</span>` : '';
+    const status = row.status ? `<span class="sm-chip">${escapeHTML(row.status)}</span>` : '';
+    return `<article class="sm-row">
+      <div class="sm-marker"><span class="sm-source">${source}</span><time datetime="${escapeHTML(row.at)}">${escapeHTML(time)}</time></div>
+      <div class="sm-content"><strong>${escapeHTML(row.title)}</strong>${row.detail ? `<p>${escapeHTML(row.detail)}</p>` : ''}<div class="sm-chips">${severity}${status}</div></div>
+    </article>`;
+  }).join('');
+  const earlier = page && page.has_earlier && page.next_cursor
+    ? `<button type="button" class="btn btn-sm btn-ghost sm-earlier" data-action="memory-earlier"${state && state.loadingEarlier ? ' disabled' : ''}>${state && state.loadingEarlier ? 'Loading earlier…' : 'Load earlier'}</button>` : '';
+  const message = error && !rows.length ? '<div class="sm-state" role="alert">Memory unavailable. <button type="button" class="link-btn" data-action="memory-retry">Retry</button></div>'
+    : error ? '<div class="sm-state" role="alert">Could not load earlier. Use Load earlier to retry.</div>'
+    : loading && !rows.length ? '<div class="sm-state" role="status">Loading memory…</div>'
+    : !rows.length ? '<div class="sm-state">No retained memory for this session. Older activity may have expired.</div>' : '';
+  return `<div class="session-memory">${earlier}${message}<div class="sm-list">${rowHTML}</div></div>`;
+}
+
+// The selected session's head and detail: mark, repo@branch, harness name,
 // identity confidence, workspace path (click copies), Export (copies the
-// markdown report from GET /sessions/{id}/report), then the waterfall of
-// tool calls, model usage rows, and file/net/guard dots from
-// GET /sessions/{id}/timeline.
+// markdown report from GET /sessions/{id}/report), then Memory by default.
+// Trace keeps the existing waterfall and timeline endpoint.
 function sessionDetailHTML(sess, events, trees) {
   if (!sess) {
-    return `<div class="empty"><svg class="icon"><use href="#i-agent"/></svg><span>Select a session to see its trace</span></div>`;
+    return `<div class="empty"><svg class="icon"><use href="#i-agent"/></svg><span>Select a session to see its memory</span></div>`;
   }
   const tree = liveTreeFor(sess, trees);
   const title = sessionTitle(sess, tree && tree.root.cwd);
@@ -139,5 +167,9 @@ function sessionDetailHTML(sess, events, trees) {
       <button type="button" class="btn btn-sm btn-ghost sd-export" data-action="copy-report" data-id="${escapeHTML(sess.id)}" title="Copy this session's report as markdown"><svg class="icon"><use href="#i-copy"/></svg>Export</button>
       ${meta ? `<span class="sd-meta">${meta}</span>` : ''}
     </div>
-    ${sessionWaterfallHTML(events)}`;
+    <div class="sd-view-switch" role="group" aria-label="Session detail view">
+      <button type="button" class="sd-view${window.SA.sessionView === 'memory' ? ' active' : ''}" data-action="session-view" data-view="memory" aria-pressed="${window.SA.sessionView === 'memory'}">Memory</button>
+      <button type="button" class="sd-view${window.SA.sessionView === 'trace' ? ' active' : ''}" data-action="session-view" data-view="trace" aria-pressed="${window.SA.sessionView === 'trace'}">Trace</button>
+    </div>
+    ${window.SA.sessionView === 'trace' ? sessionWaterfallHTML(events) : sessionMemoryHTML(window.SA.sessionMemoryPage, window.SA.sessionMemoryState)}`;
 }

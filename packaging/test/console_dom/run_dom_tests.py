@@ -193,10 +193,13 @@ def main():
         dom_demote = dump_dom(chrome, tmp, "?demotedemo")
         dom_allowrm = dump_dom(chrome, tmp, "?allowlistdemo")
         dom_rail = dump_dom(chrome, tmp, "?raildemo")
+        dom_memory = dump_dom(chrome, tmp, "?raildemo&memorydemo")
+        dom_memory_race = dump_dom(chrome, tmp, "?memoryrace")
         dom_pill = dump_dom(chrome, tmp, "?pilldemo")
         dom_quiet = dump_dom(chrome, tmp, "?quietdemo")
         dom_nomatch = dump_dom(chrome, tmp, "?nomatchdemo")
         dom_phone = dump_dom(chrome, tmp, "?phonedemo")
+        dom_memory_phone = dump_dom(chrome, tmp, "?phonedemo&memorydemo")
         dom_nocosts = dump_dom(chrome, tmp, "?nocostsdemo")
         dom_memfam = dump_dom(chrome, tmp, "?memfamilydemo")
         dom_memprobe = dump_dom(chrome, tmp, "?memprobe")
@@ -317,6 +320,9 @@ def main():
         check("the page, posture banner included, fits a 375px phone on Sessions, Agents and Resources",
               'data-hscroll="sessions:0,agents:0,resources:0"' in dom_phone,
               (re.search(r'data-hscroll="[^"]*"', dom_phone) or [None])[0])
+        check("Memory detail fits a 375px phone without horizontal page overflow",
+              'data-hscroll="sessions:0,agents:0,resources:0"' in dom_memory_phone,
+              (re.search(r'data-hscroll="[^"]*"', dom_memory_phone) or [None])[0])
         detail_head = dom_rail.split('class="session-detail-head"', 1)[1].split('class="wf', 1)[0]
         check("detail head: mark, repo@branch, harness, confidence, copyable path",
               '<h3>api-service@main</h3>' in detail_head and '#logo-claude' in detail_head
@@ -336,6 +342,19 @@ def main():
         check("rail selection renders trace waterfall",
               'class="wf-bar' in dom_rail and 'Bash' in dom_rail,
               "no waterfall bars in raildemo")
+        memory_detail = dom_memory.split('id="session-detail"', 1)[1].split('id="session-board"', 1)[0]
+        check("Memory opens first and earlier rows prepend once",
+              'data-action="session-view" data-view="memory" aria-pressed="true"' in dom_memory
+              and memory_detail.count('Earlier activity') == 1
+              and memory_detail.count('Recent activity') == 1
+              and memory_detail.index('Earlier activity') < memory_detail.index('Recent activity')
+              and 'data-action="memory-earlier"' not in memory_detail,
+              memory_detail[:700])
+        check("late response from previous selection cannot replace Memory",
+              'data-memory-race="B"' in dom_memory_race
+              and '<h3>data-pipeline@feat/etl</h3>' in dom_memory_race.split('id="session-detail"', 1)[1]
+              and 'A-only memory' not in dom_memory_race.split('id="session-detail"', 1)[1],
+              dom_memory_race.split('id="session-detail"', 1)[1][:700])
         check("waterfall carries model usage row",
               "claude-sonnet-4-5" in dom_rail and "46.2k in" in dom_rail)
         check("waterfall marks tool errors", 'wf-bar error' in dom_rail)

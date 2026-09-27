@@ -943,6 +943,26 @@
         text: async () => JSON.stringify(body)
       };
     }
+    // Session memory: newest page first; the earlier cursor prepends one row.
+    const memMatch = p.match(/^\/sessions\/([^/]+)\/memory$/);
+    if (memMatch) {
+      const sid = decodeURIComponent(memMatch[1]);
+      if (MODE.includes('memoryrace') && sid === 'sess-claude-1') {
+        await new Promise(resolve => setTimeout(resolve, 1800));
+      }
+      const before = new URLSearchParams(String(path).split('?')[1] || '').get('before');
+      const body = sid === 'sess-claude-1'
+        ? before === 'older'
+          ? { rows: [
+              { id: 'activity:older', at: '2026-09-09T13:00:00Z', kind: 'activity', title: 'Earlier activity' },
+              { id: 'activity:recent', at: '2026-09-09T14:30:00Z', kind: 'activity', title: 'Recent activity' }
+            ], has_earlier: false }
+          : { rows: [{ id: 'activity:recent', at: '2026-09-09T14:30:00Z', kind: 'activity', title: MODE.includes('memoryrace') ? 'A-only memory' : 'Recent activity' }], has_earlier: true, next_cursor: 'older' }
+        : sid === 'sess-codex-3'
+          ? { rows: [{ id: 'activity:b', at: '2026-09-09T15:30:00Z', kind: 'activity', title: 'B-only memory' }], has_earlier: false }
+          : { rows: [], has_earlier: false };
+      return { ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) };
+    }
     // Session report: /sessions/<id>/report?format=md (markdown text)
     const repMatch = p.match(/^\/sessions\/([^/]+)\/report$/);
     if (repMatch) {
@@ -1087,6 +1107,7 @@
     data['/flags'].find(f => f.id === 'flag-1').session_id = 'sess-claude-1';
     setTimeout(() => openTab('findings'), 4000);
     setTimeout(() => document.querySelector('[data-action="filter-session"][data-session="sess-claude-1"]')?.click(), 5000);
+    setTimeout(() => document.querySelector('[data-action="session-view"][data-view="trace"]')?.click(), 6000);
   }
   if (location.search.includes('sessiondemo')) {
     setTimeout(() => window.filterTimelineToSession('7f3a9c21-4b2e-4a1d-9c55-2e8f0d1a3b77'), 4000);
@@ -1097,6 +1118,17 @@
   if (location.search.includes('raildemo')) {
     setTimeout(() => openTab('sessions'), 1500);
     setTimeout(() => window.selectSession('sess-claude-1'), 4000);
+    if (MODE.includes('memorydemo')) {
+      setTimeout(() => document.querySelector('[data-action="memory-earlier"]')?.click(), 6000);
+    } else {
+      setTimeout(() => document.querySelector('[data-action="session-view"][data-view="trace"]')?.click(), MODE.includes('cspdemo') ? 4500 : 5500);
+    }
+  }
+  if (MODE.includes('memoryrace')) {
+    setTimeout(() => openTab('sessions'), 1500);
+    setTimeout(() => window.selectSession('sess-claude-1'), 4000);
+    setTimeout(() => window.selectSession('sess-codex-3'), 4100);
+    setTimeout(() => { document.body.dataset.memoryRace = document.querySelector('#session-detail')?.textContent.includes('B-only memory') ? 'B' : 'wrong'; }, 7000);
   }
   // Auto-action: Export the selected session's report into a stubbed
   // clipboard; the copied text lands on body[data-clipboard]. Fires late so
@@ -1881,6 +1913,7 @@
       frame.width = '375';
       frame.height = '812';
       frame.src = 'harness.html?phoneframe&raildemo' + (MODE.includes('patterndemo') ? '&patterndemo' : '')
+        + (MODE.includes('memorydemo') ? '&memorydemo' : '')
         + (MODE.includes('spenddaydemo') ? '&spenddaydemo' : '');
       document.body.prepend(frame);
     });
