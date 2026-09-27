@@ -205,17 +205,19 @@
     // group items sum to needs_you (= items.length).
     '/posture': {
       state: 'critical',
-      needs_you: 10,
-      summary: '10 items need you — first: proxy-secret-leak — cursor sent an anthropic-key to logs.example.com — act now.',
+      needs_you: 7,
+      coverage_count: 2,
+      summary: '7 decisions pending — first: proxy-secret-leak — cursor sent an anthropic-key to logs.example.com — act now.',
+      coverage_items: [
+        { severity: 2, kind: 'collector_down', id: 'eslogger', title: 'File monitoring is off', detail: 'usually missing Full Disk Access — open Setup & Permissions in the menu bar' },
+        { severity: 1, kind: 'uninspected_egress', id: 'uninspected-egress', title: '2 connections bypassed inspection' }
+      ],
       items: [
         { severity: 3, kind: 'flag', id: 'flag-1', title: 'proxy-secret-leak — cursor sent an anthropic-key to logs.example.com' },
         { severity: 3, kind: 'flag', id: 'flag-2', title: 'Agent read a secret, then connected out' },
         { severity: 3, kind: 'flag', id: 'flag-4', title: 'Agent modified macOS privacy permissions (TCC)' },
         { severity: 2, kind: 'flag', id: 'flag-5', title: 'Agent touched the keychain' },
         { severity: 1, kind: 'guard_pending', id: 'guard-1', title: 'claude wants .env' },
-        { severity: 2, kind: 'collector_down', id: 'eslogger', title: 'File monitoring is off', detail: 'usually missing Full Disk Access — open Setup & Permissions in the menu bar' },
-        { severity: 1, kind: 'uninspected_egress', id: 'uninspected-egress:session:5821:1789480800000000000', title: '7 connections bypassed the egress firewall — claude' },
-        { severity: 2, kind: 'uninspected_egress', id: 'uninspected-egress:agent:codex', title: '2 endpoints reached without inspection' },
         { severity: 3, kind: 'incident', id: 'inc-20260907-6033-a1b2', title: 'sensitive-read-then-connect — cursor (PID 6033)' },
         { severity: 1, kind: 'resource_pressure', id: 'resource-1', title: 'Resource pressure: api-service' }
       ],
@@ -233,9 +235,6 @@
               scopeText: 'Allow Always approves every path under rule "cloud-creds" for agent "claude", not just this one.' },
             { kind: 'resource', priority: 4, id: 'resource-1', action: 'pause',
               title: 'Resource pressure', detail: 'Memory grew 1.4 GB in 15 minutes.' },
-            { kind: 'egress', priority: 1, id: 'uninspected-egress:session:5821:1789480800000000000', title: 'Uninspected egress', count: 7,
-              hosts: ['registry.npmjs.org'],
-              detail: '7 connections across 1 endpoint bypassed inspection.' }
           ]
         },
         {
@@ -254,22 +253,6 @@
             { kind: 'flag', priority: 1, id: 'flag-5',
               title: 'Agent touched the keychain', detail: 'keychain-access — security find-generic-password',
               disposition: { state: 'warning', text: 'Needs a look' } }
-          ]
-        },
-        {
-          key: 'machine', label: 'This machine', agent: '',
-          items: [
-            { kind: 'collector_down', priority: 2, id: 'eslogger', title: 'File monitoring is off',
-              detail: 'usually missing Full Disk Access — open Setup & Permissions in the menu bar' }
-          ]
-        },
-        {
-          key: 'agent:codex', label: 'codex activity', agent: 'codex',
-          summary: '2 processes (codex 0.46.0 via Terminal.app) across 2 sessions, all exited',
-          items: [
-            { kind: 'egress', priority: 1, id: 'uninspected-egress:agent:codex', title: 'Uninspected egress', count: 2,
-              hosts: ['example.com'],
-              detail: '2 connections across 1 endpoint bypassed inspection.' }
           ]
         }
       ]
@@ -358,6 +341,32 @@
       { agent: 'claude', host: '2600:1901:0:9e23::', count: 2, last_seen: iso(400000), identity: { kind: 'ipv6', org: 'Google Cloud', class: 'cloud', ip: '2600:1901:0:9e23::' } },
       { agent: 'openclaw', host: '2607:6bc0::10', count: 94, first_seen: iso(3600000), last_seen: iso(60000), identity: { kind: 'ipv6', org: 'Anthropic', class: 'vendor', ip: '2607:6bc0::10' } }
     ],
+    '/egress/episodes': { episodes: [
+      { id: 'episode-routine', candidate: true, expected: false,
+        observed: { id: 'episode-routine', host: 'updates.example.com', protocol: 'tcp', port: 443,
+          count: 5, first_seen: iso(7200000), last_seen: iso(60000),
+          intervals: [1800000000000, 1770000000000, 1830000000000, 1800000000000],
+          session_ids: ['sess-claude-1'], recurring: true, scope_complete: true,
+          scope: { agent: 'claude', exe_path: '/Applications/Claude.app', harness: 'claude', workspace: '/Users/dev/workspace/api-service' } },
+        advisor_inference: { possible_purpose: 'Possibly an update check', confidence: 'medium', created_at: iso(120000) } },
+      { id: 'episode-ambiguous', candidate: true, expected: false,
+        observed: { id: 'episode-ambiguous', host: '203.0.113.4', protocol: 'tcp', port: 443,
+          count: 5, first_seen: iso(7200000), last_seen: iso(60000),
+          intervals: [1800000000000, 1800000000000, 1800000000000, 1800000000000],
+          session_ids: [], recurring: true, scope_complete: false,
+          scope: { agent: 'codex', exe_path: '/usr/local/bin/codex', harness: '', workspace: '' } } },
+      { id: 'episode-expected', candidate: false, expected: true, expected_rule_id: 'expected-older',
+        observed: { id: 'episode-expected', host: 'old.example.com', protocol: 'tcp', port: 443,
+          count: 5, first_seen: iso(7200000), last_seen: iso(60000),
+          intervals: [1800000000000, 1800000000000, 1800000000000, 1800000000000],
+          session_ids: [], recurring: true, scope_complete: false,
+          scope: { agent: 'cursor', exe_path: '', harness: '', workspace: '' } } }
+    ] },
+    '/expected-egress': { rules: [
+      { id: 'expected-older', agent: 'cursor', kind: 'destination', host: 'old.example.com', port: 443,
+        protocol: 'tcp', rationale: 'Routine update', created_by: 'local-operator',
+        created_at: iso(86400000), revoked_at: null }
+    ] },
     '/advisor/plan': {
       subject: 'file:/Users/dev/.codex/sessions/2026/09/23/rollout-2026-09-23T12-53-26-demo.jsonl',
       status: 'ready', advisor_ready: true,
@@ -463,6 +472,12 @@
   //   tokenseed    — pre-seed sessionStorage (simulates a RELOADED tab: no
   //                  #ct fragment, token must come from storage).
   const MODE = location.search;
+  if (MODE.includes('coveragedemo')) {
+    Object.assign(data['/posture'], {
+      state: 'attention', needs_you: 0, items: [], groups: [],
+      summary: 'No decisions pending. Monitoring coverage needs attention.'
+    });
+  }
   const REQUIRE_TOKEN = MODE.includes('requiretoken');
 
   // explaindemo: flag-2 carries the daemon's served explanation (the S2
@@ -548,6 +563,8 @@
       flag_ids: ['flag-7', 'flag-6']
     }];
     const post = data['/posture'];
+    post.groups.push({ key: 'agent:codex', label: 'codex activity', agent: 'codex',
+      summary: '2 processes (codex 0.46.0 via Terminal.app) across 2 sessions, all exited', items: [] });
     post.items.push({ severity: 2, kind: 'pattern', id: PATTERN_KEY, title: 'Agent touched the keychain — 323×' });
     post.needs_you = post.items.length;
     post.groups.find(g => g.key === 'agent:codex').items.unshift({
@@ -943,6 +960,26 @@
         text: async () => JSON.stringify(body)
       };
     }
+    // Session memory: newest page first; the earlier cursor prepends one row.
+    const memMatch = p.match(/^\/sessions\/([^/]+)\/memory$/);
+    if (memMatch) {
+      const sid = decodeURIComponent(memMatch[1]);
+      if (MODE.includes('memoryrace') && sid === 'sess-claude-1') {
+        await new Promise(resolve => setTimeout(resolve, 1800));
+      }
+      const before = new URLSearchParams(String(path).split('?')[1] || '').get('before');
+      const body = sid === 'sess-claude-1'
+        ? before === 'older'
+          ? { rows: [
+              { id: 'activity:older', at: '2026-09-09T13:00:00Z', kind: 'activity', title: 'Earlier activity' },
+              { id: 'activity:recent', at: '2026-09-09T14:30:00Z', kind: 'activity', title: 'Recent activity' }
+            ], has_earlier: false }
+          : { rows: [{ id: 'activity:recent', at: '2026-09-09T14:30:00Z', kind: 'activity', title: MODE.includes('memoryrace') ? 'A-only memory' : 'Recent activity' }], has_earlier: true, next_cursor: 'older' }
+        : sid === 'sess-codex-3'
+          ? { rows: [{ id: 'activity:b', at: '2026-09-09T15:30:00Z', kind: 'activity', title: 'B-only memory' }], has_earlier: false }
+          : { rows: [], has_earlier: false };
+      return { ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) };
+    }
     // Session report: /sessions/<id>/report?format=md (markdown text)
     const repMatch = p.match(/^\/sessions\/([^/]+)\/report$/);
     if (repMatch) {
@@ -961,7 +998,7 @@
     if (tlMatch) {
       const sid = decodeURIComponent(tlMatch[1]);
       const sess = (data['/sessions'] || []).find(s => s.id === sid);
-      const body = sess ? (sess._timeline || []) : null;
+      const body = sess ? (MODE.includes('tracereactivation') ? [...(sess._timeline || [])] : (sess._timeline || [])) : null;
       return {
         ok: body !== null, status: body !== null ? 200 : 404,
         json: async () => body,
@@ -1087,6 +1124,7 @@
     data['/flags'].find(f => f.id === 'flag-1').session_id = 'sess-claude-1';
     setTimeout(() => openTab('findings'), 4000);
     setTimeout(() => document.querySelector('[data-action="filter-session"][data-session="sess-claude-1"]')?.click(), 5000);
+    setTimeout(() => document.querySelector('[data-action="session-view"][data-view="trace"]')?.click(), 6000);
   }
   if (location.search.includes('sessiondemo')) {
     setTimeout(() => window.filterTimelineToSession('7f3a9c21-4b2e-4a1d-9c55-2e8f0d1a3b77'), 4000);
@@ -1097,6 +1135,35 @@
   if (location.search.includes('raildemo')) {
     setTimeout(() => openTab('sessions'), 1500);
     setTimeout(() => window.selectSession('sess-claude-1'), 4000);
+    if (MODE.includes('memorydemo')) {
+      setTimeout(() => document.querySelector('[data-action="memory-earlier"]')?.click(), 6000);
+    } else {
+      setTimeout(() => document.querySelector('[data-action="session-view"][data-view="trace"]')?.click(), MODE.includes('cspdemo') ? 4500 : 5500);
+    }
+  }
+  if (MODE.includes('memoryrace')) {
+    setTimeout(() => openTab('sessions'), 1500);
+    setTimeout(() => window.selectSession('sess-claude-1'), 4000);
+    setTimeout(() => window.selectSession('sess-codex-3'), 4100);
+    setTimeout(() => { document.body.dataset.memoryRace = document.querySelector('#session-detail')?.textContent.includes('B-only memory') ? 'B' : 'wrong'; }, 7000);
+  }
+  if (MODE.includes('tracereactivation')) {
+    setTimeout(() => openTab('sessions'), 1500);
+    setTimeout(() => window.selectSession('sess-claude-1'), 4000);
+    setTimeout(() => window.setSessionView('trace'), 5000);
+    setTimeout(() => {
+      document.body.dataset.traceWasCached = String(window.SA.sessionTimeline.length > 0);
+      window.setSessionView('memory');
+    }, 6000);
+    setTimeout(() => {
+      const fresh = { kind: 12, ts: new Date().toISOString(), session_id: 'sess-claude-1', tool: 'FreshTrace', tool_status: 'ok', duration_ms: 200 };
+      data['/sessions'].find(s => s.id === 'sess-claude-1')._timeline.push(fresh);
+      window.__sse.emit('event', fresh);
+    }, 7000);
+    setTimeout(() => window.setSessionView('trace'), 8000);
+    setTimeout(() => {
+      document.body.dataset.traceReactivated = String(window.SA.sessionTimeline.some(e => e.tool === 'FreshTrace'));
+    }, 10000);
   }
   // Auto-action: Export the selected session's report into a stubbed
   // clipboard; the copied text lands on body[data-clipboard]. Fires late so
@@ -1881,6 +1948,7 @@
       frame.width = '375';
       frame.height = '812';
       frame.src = 'harness.html?phoneframe&raildemo' + (MODE.includes('patterndemo') ? '&patterndemo' : '')
+        + (MODE.includes('memorydemo') ? '&memorydemo' : '')
         + (MODE.includes('spenddaydemo') ? '&spenddaydemo' : '');
       document.body.prepend(frame);
     });

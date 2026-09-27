@@ -200,22 +200,33 @@
     </div>
 
     <main>
-      <!-- Home: decisions first, then spend; the evidence and the charts sit
-           in closed groups that render only when opened. -->
+      <!-- Home: decisions and coverage first; detail opens on demand. -->
       <div class="tabpanel" id="tab-home" role="tabpanel">
         <section class="panel attention-panel" id="attention-center">
           <div class="panel-head attention-head">
             <div>
-              <span class="attention-eyebrow">Operator queue</span>
-              <h2><svg class="icon"><use href="#i-alert"/></svg>Needs your attention</h2>
-              <p>Decisions grouped by the complete agent session they affect.</p>
+              <span class="attention-eyebrow">Decisions</span>
+              <h2><svg class="icon"><use href="#i-alert"/></svg>Pending decisions</h2>
+              <p>Choices grouped by the complete agent session they affect.</p>
             </div>
             <span class="badge badge-amber" id="badge-attention-count">0</span>
           </div>
           <div class="panel-body" id="attention-list">
             <div class="empty"><svg class="icon"><use href="#i-shield"/></svg><span>No decisions waiting</span></div>
           </div>
+          <div class="attention-footer" id="attention-footer" hidden>
+            <button type="button" class="btn btn-ghost btn-sm" id="attention-expand" data-action="attention-expand" aria-expanded="false" aria-controls="attention-list">View all decisions</button>
+          </div>
         </section>
+        <section class="panel coverage-panel" id="coverage-center" hidden>
+          <div class="panel-head">
+            <div><span class="attention-eyebrow">Coverage</span><h2><svg class="icon"><use href="#i-shield"/></svg>Monitoring setup</h2></div>
+            <span class="badge" id="badge-coverage-count">0</span>
+          </div>
+          <div class="panel-body" id="coverage-list"></div>
+        </section>
+        <details class="home-group" id="home-spend" data-group="spend">
+          <summary><svg class="icon"><use href="#i-activity"/></svg>Spend detail</summary>
         <section class="panel chart-panel">
           <div class="panel-head">
             <h2><svg class="icon"><use href="#i-activity"/></svg>Spend</h2>
@@ -240,6 +251,7 @@
             </div>
           </div>
         </section>
+        </details>
 
         <details class="home-group" id="home-findings" data-group="findings">
           <summary><svg class="icon"><use href="#i-alert"/></svg>Findings history</summary>
@@ -498,6 +510,15 @@
 
       <!-- Egress: "where is traffic going, and what must never leave?" -->
       <div class="tabpanel" id="tab-egress" role="tabpanel" hidden>
+        <section class="panel" id="recurring-egress-panel">
+          <div class="panel-head">
+            <div><h2><svg class="icon"><use href="#i-history"/></svg>Recurring activity</h2><p>Observed connection schedules and their possible purpose.</p></div>
+            <span class="badge" id="badge-recurring-egress">0</span>
+          </div>
+          <div class="panel-body" id="recurring-egress-container">
+            <div class="empty"><span>No recurring connection pattern observed yet</span></div>
+          </div>
+        </section>
         <section class="panel" id="endpoints-panel">
           <div class="panel-head">
             <h2><svg class="icon"><use href="#i-globe"/></svg><span id="endpoints-title">Uninspected endpoints in 24 h</span></h2>
@@ -542,6 +563,10 @@
            decisions, file exceptions, muted flag classes, and the audit of
            every change. The lists are read-only here. -->
       <div class="tabpanel" id="tab-policy" role="tabpanel" hidden>
+        <section class="panel" id="expected-egress-panel">
+          <div class="panel-head"><h2><svg class="icon"><use href="#i-globe"/></svg>Expected connections</h2><span class="badge" id="badge-expected-egress">0</span></div>
+          <div class="panel-body" id="expected-egress-container"><div class="empty"><span>No expected connections saved</span></div></div>
+        </section>
         <section class="panel" id="notify-pop">
           <div class="panel-head">
             <h2><svg class="icon"><use href="#i-bell"/></svg>Notifications</h2>

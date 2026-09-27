@@ -32,6 +32,7 @@ import (
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
+	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
 
 // Config controls the advisor. Disabled unless explicitly opted in.
@@ -118,6 +119,7 @@ type task struct {
 	worktree  model.WorktreeAdviceRequest
 	plan      PlanRequest
 	project   model.ProjectCleanupRequest
+	egress    store.EgressEpisode
 }
 
 // Subscriber consumes flags/incidents and produces advisor verdicts.
@@ -141,7 +143,8 @@ type Subscriber struct {
 
 	// planInflight: subjects whose plan is queued or being written, with
 	// the time they were queued (planPendingTTL bounds it).
-	planInflight map[string]time.Time
+	planInflight   map[string]time.Time
+	egressInflight map[string]struct{}
 }
 
 const (
@@ -203,13 +206,14 @@ func New(cfg Config, sink Sink) *Subscriber {
 		cfg.QueueSize = 64
 	}
 	return &Subscriber{
-		cfg:          cfg,
-		sink:         sink,
-		queue:        make(chan task, cfg.QueueSize),
-		client:       &http.Client{Timeout: cfg.Timeout},
-		onRequest:    &http.Client{Timeout: max(cfg.Timeout, onRequestTimeout)},
-		retriageLast: map[string]time.Time{},
-		planInflight: map[string]time.Time{},
+		cfg:            cfg,
+		sink:           sink,
+		queue:          make(chan task, cfg.QueueSize),
+		client:         &http.Client{Timeout: cfg.Timeout},
+		onRequest:      &http.Client{Timeout: max(cfg.Timeout, onRequestTimeout)},
+		retriageLast:   map[string]time.Time{},
+		planInflight:   map[string]time.Time{},
+		egressInflight: map[string]struct{}{},
 	}
 }
 
@@ -373,6 +377,9 @@ func (s *Subscriber) Run(ctx context.Context) error {
 }
 
 func (s *Subscriber) process(ctx context.Context, t task) {
+	if t.kind == "egress" {
+		defer s.clearEgressInflight(t.subjectID)
+	}
 	if t.kind == "plan" {
 		defer s.clearPlan(t.subjectID)
 	}
@@ -412,6 +419,8 @@ func (s *Subscriber) process(ctx context.Context, t task) {
 		verdict, err = s.assessWorktree(ctx, t.worktree)
 	case "project":
 		verdict, err = s.assessProject(ctx, t.project)
+	case "egress":
+		verdict, err = s.assessEgress(ctx, t.egress)
 	}
 	if err != nil {
 		s.recordFailure(err)

@@ -101,7 +101,7 @@ func TestPostureCriticalFlagDrivesState(t *testing.T) {
 	}
 }
 
-func TestPostureCountsUninspectedEgressAndDeadCollectors(t *testing.T) {
+func TestPostureSeparatesUninspectedEgressAndDeadCollectorsFromDecisions(t *testing.T) {
 	sock := fmt.Sprintf("/tmp/sa_posture3_%d.sock", time.Now().UnixNano())
 	defer os.Remove(sock)
 	a := newTestAPI(sock, testStore(t), &fakeKiller{}, func() Status {
@@ -123,18 +123,18 @@ func TestPostureCountsUninspectedEgressAndDeadCollectors(t *testing.T) {
 	}
 	var p Posture
 	decodeInto(t, resp, &p)
-	if p.State != "attention" || p.NeedsYou != 2 {
-		t.Fatalf("posture = %+v, want attention/2", p)
+	if p.State != "attention" || p.NeedsYou != 0 || p.CoverageCount != 2 {
+		t.Fatalf("posture = %+v, want attention with 0 decisions and 2 coverage gaps", p)
 	}
 	kinds := map[string]bool{}
-	for _, it := range p.Items {
+	for _, it := range p.CoverageItems {
 		kinds[it.Kind] = true
 	}
 	if !kinds["uninspected_egress"] || !kinds["collector_down"] {
-		t.Fatalf("expected egress + collector items, got %+v", p.Items)
+		t.Fatalf("expected egress + collector coverage, got %+v", p.CoverageItems)
 	}
 	var egressTitle string
-	for _, it := range p.Items {
+	for _, it := range p.CoverageItems {
 		if it.Kind == "uninspected_egress" {
 			egressTitle = it.Title
 		}
@@ -144,9 +144,9 @@ func TestPostureCountsUninspectedEgressAndDeadCollectors(t *testing.T) {
 	}
 	// Collector items read as operator language, not process jargon.
 	var collItem *PostureItem
-	for i := range p.Items {
-		if p.Items[i].Kind == "collector_down" {
-			collItem = &p.Items[i]
+	for i := range p.CoverageItems {
+		if p.CoverageItems[i].Kind == "collector_down" {
+			collItem = &p.CoverageItems[i]
 		}
 	}
 	if collItem == nil {
@@ -191,16 +191,19 @@ func TestPostureFlagsSilentCollectorsAndUncoveredHarnesses(t *testing.T) {
 	decodeInto(t, resp, &p)
 
 	kinds := map[string]string{}
-	for _, it := range p.Items {
+	for _, it := range p.CoverageItems {
 		kinds[it.Kind] = it.ID
 	}
 	if kinds["collector_silent"] != "eslogger" {
-		t.Fatalf("expected collector_silent for eslogger, got %+v", p.Items)
+		t.Fatalf("expected collector_silent for eslogger, got %+v", p.CoverageItems)
 	}
 	if kinds["harness_uncovered"] == "" {
-		t.Fatalf("expected harness_uncovered (agents active, zero hook events), got %+v", p.Items)
+		t.Fatalf("expected harness_uncovered (agents active, zero hook events), got %+v", p.CoverageItems)
 	}
-	for _, it := range p.Items {
+	if p.NeedsYou != 0 {
+		t.Fatalf("monitoring gaps are not decisions: %+v", p)
+	}
+	for _, it := range p.CoverageItems {
 		if it.Kind == "collector_silent" && it.ID == "netsampler" {
 			t.Fatal("netsampler silence is ambiguous — it must not be flagged")
 		}
@@ -237,13 +240,13 @@ func TestPostureFlagsCrashLoopingRootService(t *testing.T) {
 	var p Posture
 	decodeInto(t, resp, &p)
 	found := false
-	for _, it := range p.Items {
+	for _, it := range p.CoverageItems {
 		if it.Kind == "collector_silent" && it.ID == "eslogger" && strings.Contains(it.Detail, "spawn scheduled") {
 			found = true
 		}
 	}
 	if !found {
-		t.Fatalf("expected collector_silent for the crash-looping root service, got %+v", p.Items)
+		t.Fatalf("expected collector_silent for the crash-looping root service, got %+v", p.CoverageItems)
 	}
 }
 

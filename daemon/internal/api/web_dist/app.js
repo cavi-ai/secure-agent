@@ -257,6 +257,8 @@ document.addEventListener('DOMContentLoaded', () => {
     audit: [],
     sources: [],
     uninspected: [],  // /egress/uninspected rows — the drill-down list
+    egressEpisodes: [], // /egress/episodes observed cadence and advice
+    expectedEgress: [], // /expected-egress operator decisions
     guardPending: [], // blocked tool calls waiting for an operator decision
     notifyCfg: null,  // /notify/rules payload — notification preferences
     costs: null,      // /costs report (24h, by repo) — the spend tile
@@ -715,10 +717,10 @@ document.addEventListener('DOMContentLoaded', () => {
     ['posture', renderPosture], ['status', renderStatus], ['resources', renderResourceMissionControl], ['history', renderResourceHistory], ['sessions', renderSessionBoard],
     ['chart-flags', renderChartFlags], ['chart-memory', renderChartMemory], ['spend', renderSpend],
     ['agents', renderAgents],
-    ['endpoints', renderEndpoints], ['firewall', renderFirewall], ['incidents', renderIncidents], ['fleet', renderFleet],
+    ['endpoints', renderEndpoints], ['recurring-egress', renderEgressEpisodes], ['firewall', renderFirewall], ['incidents', renderIncidents], ['fleet', renderFleet],
     ['audit', renderAudit], ['sources', renderSources], ['flags', renderFlags], ['attention', renderAttention],
     ['events', renderEvents], ['activity', renderActivity], ['worktrees', renderWorktrees], ['clutter', renderClutter], ['tab-badges', renderTabBadges],
-    ['notify', renderNotifyRules], ['policy', renderPolicyLists], ['agent', renderAgent]
+    ['notify', renderNotifyRules], ['policy', renderPolicyLists], ['expected-egress', renderExpectedEgressRules], ['agent', renderAgent]
   ];
   // Panel → where it lives: tab, tab/sub-view, or tab:group (a Home
   // <details> group). A panel absent here is global (always on screen).
@@ -729,8 +731,8 @@ document.addEventListener('DOMContentLoaded', () => {
     sessions: 'sessions/board', agents: 'sessions/processes', fleet: 'sessions/processes',
     resources: 'sessions/resources', history: 'sessions/resources',
     worktrees: 'sessions/worktrees', clutter: 'sessions/worktrees', events: 'sessions/events',
-    endpoints: 'egress', firewall: 'egress', sources: 'egress',
-    notify: 'policy', policy: 'policy', audit: 'policy', agent: 'agent'
+    endpoints: 'egress', 'recurring-egress': 'egress', firewall: 'egress', sources: 'egress',
+    notify: 'policy', policy: 'policy', 'expected-egress': 'policy', audit: 'policy', agent: 'agent'
   };
   // A panel is on screen when its tab is active, its sub-view is the open
   // one, and its Home group is expanded.
@@ -745,11 +747,11 @@ document.addEventListener('DOMContentLoaded', () => {
   // Panel → the element whose focused control holds its render.
   const PANEL_EL = {
     resources: 'resource-board', history: 'history-board', sessions: 'session-rail', agents: 'agents-container',
-    fleet: 'fleet-container', endpoints: 'endpoints-container', firewall: 'firewall-container', sources: 'sources-list', incidents: 'incidents-container',
-    audit: 'audit-container', flags: 'flags-list', attention: 'attention-list', events: 'events-container',
+    fleet: 'fleet-container', endpoints: 'endpoints-container', 'recurring-egress': 'recurring-egress-container', firewall: 'firewall-container', sources: 'sources-list', incidents: 'incidents-container',
+    audit: 'audit-container', flags: 'flags-list', attention: 'attention-list', 'expected-egress': 'expected-egress-container', events: 'events-container',
     worktrees: 'worktrees-container', clutter: 'clutter-container', notify: 'notify-pop', agent: 'agent-side'
   };
-  const SLOW_ONLY = new Set(['resources', 'history', 'fleet', 'audit', 'sources', 'activity', 'spend']);
+  const SLOW_ONLY = new Set(['resources', 'history', 'fleet', 'audit', 'sources', 'activity', 'spend', 'recurring-egress', 'expected-egress']);
   const PANEL_MIN_MS = 250;
   const FOCUS_HOLD_MS = 3000;
   const dirtyPanels = new Set();
@@ -1485,7 +1487,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     if (slow) {
-      const [fleet, audit, sources, rollup, uninspected, notifyCfg, allowlist, episodes] = await Promise.all([
+      const [fleet, audit, sources, rollup, uninspected, notifyCfg, allowlist, episodes, egressEpisodes, expectedEgress] = await Promise.all([
         grab('fleet', '/fleet'),
         grab('audit', '/audit?limit=50'),
         grab('firewall sources', '/firewall/sources'),
@@ -1493,7 +1495,9 @@ document.addEventListener('DOMContentLoaded', () => {
         grab('uninspected egress', '/egress/uninspected?hours=24&limit=200'),
         grab('notification rules', '/notify/rules'),
         grab('allowlist', '/allowlist'),
-        grab('resource episodes', '/resources/episodes')
+        grab('resource episodes', '/resources/episodes'),
+        grab('recurring egress', '/egress/episodes'),
+        grab('expected egress', '/expected-egress')
       ]);
       if (fleet) telemetryData.fleet = fleet || [];
       if (audit) telemetryData.audit = audit || [];
@@ -1501,6 +1505,8 @@ document.addEventListener('DOMContentLoaded', () => {
       if (rollup) telemetryData.rollup = rollup || [];
       if (uninspected) telemetryData.uninspected = uninspected || [];
       if (episodes) telemetryData.episodes = episodes || [];
+      if (egressEpisodes) telemetryData.egressEpisodes = egressEpisodes.episodes || [];
+      if (expectedEgress) telemetryData.expectedEgress = expectedEgress.rules || [];
       if (notifyCfg) {
         // A reconcile while the operator is typing a workspace path must not
         // dirty (and re-render) the notify panel unless the served config
@@ -2326,20 +2332,65 @@ document.addEventListener('DOMContentLoaded', () => {
     selectedResourceKey: { get() { return selectedResourceKey; }, set(v) { selectedResourceKey = v; } },
     selectedSessionId: { get() { return selectedSessionId; }, set(v) { selectedSessionId = v; } },
     sessionTimeline: { get() { return sessionTimeline; }, set(v) { sessionTimeline = v; } },
+    sessionView: { get() { return sessionView; } },
+    sessionMemoryPage: { get() { return sessionMemoryPage; } },
+    sessionMemoryState: { get() { return sessionMemoryState; } },
   });
 
-  // Session-first tab: selection + its trace. The timeline refetches on
-  // select and when an event delta lands for the selected session.
+  // The generation invalidates late responses when selection changes; it
+  // also protects an earlier-page request from writing into another session.
   let selectedSessionId = '';
+  let sessionView = 'memory';
+  let sessionMemoryPage = { rows: [], has_earlier: false, next_cursor: '' };
+  let sessionMemoryState = { loading: false, loadingEarlier: false, error: '' };
+  let sessionMemoryGeneration = 0;
   let sessionTimeline = [];
   let sessionTimelineAt = 0;
+  function resetSessionMemory() {
+    sessionMemoryGeneration++;
+    sessionMemoryPage = { rows: [], has_earlier: false, next_cursor: '' };
+    sessionMemoryState = { loading: false, loadingEarlier: false, error: '' };
+    sessionView = 'memory';
+  }
+  async function loadSessionMemory(sessionID, before) {
+    if (!sessionID || sessionID !== selectedSessionId) return;
+    const generation = sessionMemoryGeneration;
+    if (before && sessionMemoryState.loadingEarlier) return;
+    sessionMemoryState = { ...sessionMemoryState, loading: !before, loadingEarlier: !!before, error: '' };
+    renderNow(['sessions']);
+    try {
+      const query = before ? '?before=' + encodeURIComponent(before) : '';
+      const response = await apiFetch('/sessions/' + encodeURIComponent(sessionID) + '/memory' + query);
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      const page = await response.json();
+      if (generation !== sessionMemoryGeneration || sessionID !== selectedSessionId) return;
+      const incoming = Array.isArray(page.rows) ? page.rows : [];
+      if (before) {
+        const seen = new Set((sessionMemoryPage.rows || []).map(row => row.id));
+        const older = incoming.filter(row => {
+          if (seen.has(row.id)) return false;
+          seen.add(row.id);
+          return true;
+        });
+        sessionMemoryPage = { rows: [...older, ...sessionMemoryPage.rows], has_earlier: !!page.has_earlier, next_cursor: page.next_cursor || '' };
+      } else {
+        sessionMemoryPage = { rows: incoming, has_earlier: !!page.has_earlier, next_cursor: page.next_cursor || '' };
+      }
+      sessionMemoryState = { loading: false, loadingEarlier: false, error: '' };
+    } catch {
+      if (generation !== sessionMemoryGeneration || sessionID !== selectedSessionId) return;
+      sessionMemoryState = { loading: false, loadingEarlier: false, error: 'unavailable' };
+    }
+    renderNow(['sessions']);
+  }
   async function loadSessionTimeline(id, force) {
     if (!id) { sessionTimeline = []; return; }
     // Throttle refetches: deltas for the selected session arrive per event.
     if (!force && Date.now() - sessionTimelineAt < 2000) return;
     sessionTimelineAt = Date.now();
     const r = await apiFetch('/sessions/' + encodeURIComponent(id) + '/timeline?limit=500');
-    if (r.ok) sessionTimeline = (await r.json()) || [];
+    const rows = r.ok ? (await r.json()) || [] : [];
+    if (id === selectedSessionId) sessionTimeline = rows;
   }
   // Export: copy the session's markdown report. Safari only honours a
   // clipboard write started inside the click, so where ClipboardItem exists
@@ -2365,8 +2416,24 @@ document.addEventListener('DOMContentLoaded', () => {
   };
   window.selectSession = async function(id) {
     selectedSessionId = (selectedSessionId === id) ? '' : id;
-    if (selectedSessionId) await loadSessionTimeline(selectedSessionId, true);
+    resetSessionMemory();
+    sessionTimeline = [];
     renderAll();
+    if (selectedSessionId) await loadSessionMemory(selectedSessionId);
+  };
+  window.setSessionView = async function(view) {
+    if (view !== 'memory' && view !== 'trace') return;
+    sessionView = view;
+    renderNow(['sessions']);
+    if (view === 'trace' && selectedSessionId) {
+      try { await loadSessionTimeline(selectedSessionId, true); } catch { /* trace retries on next activation */ }
+      renderNow(['sessions']);
+    }
+  };
+  window.loadEarlierSessionMemory = function() {
+    if (selectedSessionId && sessionMemoryPage.has_earlier && sessionMemoryPage.next_cursor) {
+      return loadSessionMemory(selectedSessionId, sessionMemoryPage.next_cursor);
+    }
   };
 
   // The drawer is shared by two views: the incident report (markdown, with a
@@ -2939,6 +3006,60 @@ document.addEventListener('DOMContentLoaded', () => {
     refillUninspected();
   };
 
+  async function saveExpectedEgress(episodeId, kind) {
+    if (!['destination', 'scope'].includes(kind)) return;
+    let row = (telemetryData.egressEpisodes || []).find(e => e.id === episodeId);
+    if (!row) {
+      try {
+        const res = await apiFetch('/egress/episodes');
+        if (res.ok) {
+          telemetryData.egressEpisodes = (await res.json()).episodes || [];
+          row = telemetryData.egressEpisodes.find(e => e.id === episodeId);
+        }
+      } catch { /* the message below handles a stale or unavailable episode */ }
+    }
+    if (!row) { showToast('This activity is no longer available for review.', 'warn'); return; }
+    const o = row.observed || {};
+    const s = o.scope || {};
+    if (kind === 'scope' && !o.scope_complete) return;
+    const description = kind === 'scope'
+      ? `Future destinations for ${s.agent || 'this agent'} running ${s.exe_path || 'unknown executable'} under ${s.harness || 'unknown harness'} in ${s.workspace || 'unknown workspace'} will be quieted as expected egress.`
+      : `Connections to ${o.host || 'this destination'}:${o.port || '?'} (${o.protocol || 'unknown protocol'}) from ${s.agent || 'this agent'} will be quieted as expected egress.`;
+    if (!await window.saConfirm(`${description} Security flags, guard decisions, and proxy inspection continue.`, {
+      title: kind === 'scope' ? 'Expect this activity scope' : 'Expect this destination', okLabel: 'Save expectation', danger: false
+    })) return;
+    try {
+      const res = await apiFetch('/expected-egress', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ episode_id: episodeId, kind })
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      showToast('Expected connection saved. Security detection remains active.', 'success');
+      await fetchTelemetry({ slow: true });
+    } catch (err) { showToast(`Could not save expectation: ${err}`, 'danger'); }
+  }
+
+  async function revokeExpectedEgress(id) {
+    if (!await window.saConfirm('Revoke this expected connection? Its future informational egress candidates will appear again.', {
+      title: 'Revoke expectation', okLabel: 'Revoke', danger: false
+    })) return;
+    try {
+      const res = await apiFetch(`/expected-egress?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      showToast('Expected connection revoked.', 'success');
+      await fetchTelemetry({ slow: true });
+    } catch (err) { showToast(`Could not revoke expectation: ${err}`, 'danger'); }
+  }
+
+  async function assessEgressEpisode(id) {
+    try {
+      const res = await apiFetch(`/egress/episodes/${encodeURIComponent(id)}/assess`, { method: 'POST' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      showToast('Advisor assessment requested.', 'info');
+      setTimeout(() => fetchTelemetry({ slow: true }), 5000);
+    } catch (err) { showToast(`Could not assess activity: ${err}`, 'danger'); }
+  }
+
   // Ask the advisor what an endpoint is — the functionality that turns a raw
   // IP into a decision. The daemon answers with a cached verdict immediately
   // and queues a fresh assessment; the console polls a few times for the
@@ -3317,9 +3438,9 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   };
 
-  // Session drill-down: jump from a flag to just its harness session's events.
+  // Session drill-down: jump from a finding to its durable session.
   // "View session in timeline" (finding cards, Attention): open the session
-  // in the Sessions tab — its rail card selected, its trace loaded — and keep
+  // in the Sessions tab — its rail card selected, its memory loaded — and keep
   // Events, Flags and Incidents scoped to it for the Events tab. Selects
   // outright: selectSession toggles, which would close an already-open one.
   window.filterTimelineToSession = async function(sid) {
@@ -3332,8 +3453,11 @@ document.addEventListener('DOMContentLoaded', () => {
     renderIncidents();
     paintScopeBar();
     selectedSessionId = sid;
+    resetSessionMemory();
+    sessionTimeline = [];
     switchTab('sessions');
-    try { await loadSessionTimeline(sid, true); } catch { /* the trace stays empty; the next select retries */ }
+    await loadSessionMemory(sid);
+    if (selectedSessionId !== sid) return;
     renderNow(['sessions']);
     const card = document.querySelector(`#session-rail [data-action="select-session"][data-id="${cssq(sid)}"]`);
     if (card && card.scrollIntoView) {
@@ -3385,6 +3509,26 @@ document.addEventListener('DOMContentLoaded', () => {
     // A drawer opened from inside the open drawer can go back to it.
     const back = () => (el.closest('#drawer') ? currentDrawerBack() : null);
     switch (d.action) {
+      case 'attention-expand': {
+        e.preventDefault();
+        const list = document.getElementById('attention-list');
+        const expanded = list.classList.toggle('expanded');
+        el.setAttribute('aria-expanded', String(expanded));
+        el.textContent = expanded ? 'Show fewer decisions' : 'View all decisions';
+        break;
+      }
+      case 'expect-egress':
+        e.preventDefault();
+        saveExpectedEgress(d.episodeId, d.kind);
+        break;
+      case 'revoke-expected-egress':
+        e.preventDefault();
+        revokeExpectedEgress(d.id);
+        break;
+      case 'assess-egress-episode':
+        e.preventDefault();
+        assessEgressEpisode(d.id);
+        break;
       case 'kill':
         e.preventDefault();
         e.stopPropagation();
@@ -3618,6 +3762,15 @@ document.addEventListener('DOMContentLoaded', () => {
         break;
       case 'select-session':
         window.selectSession(d.id);
+        break;
+      case 'session-view':
+        window.setSessionView(d.view);
+        break;
+      case 'memory-earlier':
+        window.loadEarlierSessionMemory();
+        break;
+      case 'memory-retry':
+        if (selectedSessionId) loadSessionMemory(selectedSessionId);
         break;
       case 'toggle-ended-sessions':
         endedSessionsOpen[d.harness] = !endedSessionsOpen[d.harness];
@@ -3991,8 +4144,8 @@ document.addEventListener('DOMContentLoaded', () => {
         telemetryData.events = [e, ...(telemetryData.events || [])].slice(0, 200);
         if (!isEventsFiltered()) telemetryData.eventsView = telemetryData.events;
         if (e.kind === 9) flashFirewallPanel(); // proxy-hit
-        // The open session's waterfall follows its own trace live.
-        if (selectedSessionId && e.session_id === selectedSessionId) {
+        // Trace continues to follow event deltas while visible.
+        if (sessionView === 'trace' && selectedSessionId && e.session_id === selectedSessionId) {
           loadSessionTimeline(selectedSessionId).then(() => markDirty('sessions'));
         }
       } catch { sparkBump(1, 0); /* unparseable frame still counts */ }

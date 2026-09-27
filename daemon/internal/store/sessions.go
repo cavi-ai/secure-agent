@@ -308,6 +308,12 @@ func (s *Store) RekeySession(oldID, newID string) {
 	_, _ = tx.Exec(`UPDATE sessions SET parent_id = ? WHERE parent_id = ? AND id != ?`, newID, oldID, newID)
 	_, _ = tx.Exec(`UPDATE events SET session_id = ? WHERE session_id = ?`, newID, oldID)
 	_, _ = tx.Exec(`UPDATE flags SET session_id = ? WHERE session_id = ?`, newID, oldID)
+	// Resource episodes may be captured under a provisional process-tree ID
+	// before the hook provides its canonical session ID. Keep both the indexed
+	// identity and the preserved episode payload consistent in this rekey.
+	if _, err := tx.Exec(`UPDATE resource_episodes SET session_id = ?, episode_json = json_set(episode_json, '$.session_id', ?) WHERE session_id = ?`, newID, newID, oldID); err != nil {
+		return
+	}
 	_ = tx.Commit()
 }
 

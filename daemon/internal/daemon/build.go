@@ -161,7 +161,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 
 	// Drain bus and correlate/persist (drainDone closes once every delivered
 	// event has been persisted — shutdown waits for it).
-	c.drainDone = startDrainLoop(b.Subscribe(), st, correlator, fleetPub, resolver, deltaHub, otlpExp,
+	c.drainDone = startDrainLoop(b.Subscribe(), st, correlator, fleetPub, resolver, tagger, deltaHub, otlpExp,
 		func() { postureHook.run() },
 		func() *advisor.Subscriber { return advisorStk.Load().Sub })
 
@@ -264,10 +264,16 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 		Hermes:          hermes.Status,
 		Worktrees:       hunter,
 		WorktreeAdvisor: worktreeAdvisor,
-		Clutter:         cleanup,
-		Asker:           asker,
-		SysAgent:        sysAgent,
-		ProjectAdvisor:  projectAdvisor,
+		EgressAdvisor: func(e store.EgressEpisode) bool {
+			if sub := advisorStk.Load().Sub; sub != nil {
+				return sub.EnqueueEgressEpisode(e)
+			}
+			return false
+		},
+		Clutter:        cleanup,
+		Asker:          asker,
+		SysAgent:       sysAgent,
+		ProjectAdvisor: projectAdvisor,
 	})
 
 	resourceControl.SetExecutor(makeResourceExecutor(apiServer, tagger, st))

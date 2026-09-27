@@ -121,6 +121,26 @@ func TestDuplicateRequestsShareOneWaiter(t *testing.T) {
 	}
 }
 
+func TestBrokerDedupKeyIncludesSession(t *testing.T) {
+	b := NewBroker(time.Second)
+	done := make(chan Decision, 2)
+	for _, sid := range []string{"one", "two"} {
+		p := Pending{ID: sid, SessionID: sid, Agent: "claude", Tool: "Read", Path: "/secret", RuleID: "rule"}
+		go func() { done <- b.Request(p) }()
+	}
+	deadline := time.Now().Add(time.Second)
+	for len(b.Pending()) != 2 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if got := len(b.Pending()); got != 2 {
+		t.Fatalf("pending = %d, want 2", got)
+	}
+	b.Resolve("one", Decision{Verdict: "deny", Scope: "once"})
+	b.Resolve("two", Decision{Verdict: "deny", Scope: "once"})
+	<-done
+	<-done
+}
+
 // Once the queue is full, further requests get an immediate explicit deny
 // instead of piling up.
 func TestRequestOverCapIsDeniedImmediately(t *testing.T) {

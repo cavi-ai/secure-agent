@@ -25,10 +25,11 @@ import (
 var guardTokenRE = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
 
 type guardDecisionRequest struct {
-	Agent  string `json:"agent"`
-	Tool   string `json:"tool"`
-	Path   string `json:"path"`
-	RuleID string `json:"rule_id"`
+	Agent     string `json:"agent"`
+	SessionID string `json:"session_id,omitempty"`
+	Tool      string `json:"tool"`
+	Path      string `json:"path"`
+	RuleID    string `json:"rule_id"`
 	// Workspace is the hook's cwd, passed to the advisor so it can judge the
 	// access in context. Optional (older hooks omit it).
 	Workspace string `json:"workspace,omitempty"`
@@ -53,19 +54,36 @@ func (a *API) handleGuardDecision(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `Invalid payload: {"agent","tool","path","rule_id"} (agent/rule_id must match ^[A-Za-z0-9_.-]+$)`, http.StatusBadRequest)
 		return
 	}
+	id := fmt.Sprintf("%d-%d", time.Now().UnixNano(), atomic.AddUint64(&a.guardSeq, 1))
+	// A supplied identity is only attributable if the durable session exists.
+	// Never guess from the agent, workspace, or request time.
+	if req.SessionID != "" {
+		if _, ok := a.store.GetSession(req.SessionID); !ok {
+			req.SessionID = ""
+		}
+	}
+	record := func(d guard.Decision) {
+		a.store.PutGuardDecision(store.GuardDecision{
+			ID: id, SessionID: req.SessionID, RuleID: req.RuleID,
+			Verdict: d.Verdict, Scope: d.Scope, At: time.Now().UTC().Format(time.RFC3339Nano),
+		})
+	}
 	// Per-path exceptions first: an operator-granted allow on THIS exact
 	// path (or an ancestor of it) answers without prompting. Cheapest and
 	// narrowest check first — one cached rule-wide allow must never widen
 	// what a per-path allow does not cover.
 	if a.store.GuardPathAllowed(req.Agent, req.RuleID, req.Path) {
-		writeJSON(w, guard.Decision{Verdict: "allow", Scope: "always", Reason: "path-allow"})
+		d := guard.Decision{Verdict: "allow", Scope: "always", Reason: "path-allow"}
+		record(d)
+		writeJSON(w, d)
 		return
 	}
 	if g, ok := a.store.LookupGuardRule(req.Agent, req.RuleID); ok {
-		writeJSON(w, guard.Decision{Verdict: g.Decision, Scope: "always", Reason: "cached"})
+		d := guard.Decision{Verdict: g.Decision, Scope: "always", Reason: "cached"}
+		record(d)
+		writeJSON(w, d)
 		return
 	}
-	id := fmt.Sprintf("%d-%d", time.Now().UnixNano(), atomic.AddUint64(&a.guardSeq, 1))
 	// Offer the prompt to the advisor for a recommendation the operator sees
 	// while deciding. Advisory only — the broker still blocks for the human.
 	if a.guardAdvisor != nil {
@@ -78,7 +96,7 @@ func (a *API) handleGuardDecision(w http.ResponseWriter, r *http.Request) {
 	// immediately instead of waiting out their poll interval.
 	a.publishGuardEvent(event.KindGuardPrompt, req.Agent+"/"+req.RuleID)
 	d := a.guardBroker.Request(guard.Pending{
-		ID: id, Agent: req.Agent, Tool: req.Tool, Path: req.Path, RuleID: req.RuleID,
+		ID: id, SessionID: req.SessionID, Agent: req.Agent, Tool: req.Tool, Path: req.Path, RuleID: req.RuleID,
 		// Disclose the blast radius of "allow always": the cached rule covers
 		// every path this rule matches for this agent, not just this file.
 		ScopeText: "Allow Always approves every path under rule \"" + req.RuleID + "\" for agent \"" + req.Agent + "\", not just this one.",
@@ -87,6 +105,7 @@ func (a *API) handleGuardDecision(w http.ResponseWriter, r *http.Request) {
 		a.store.PutGuardRule(store.GuardRule{Agent: req.Agent, RuleID: req.RuleID, Decision: d.Verdict, Source: "prompt"})
 		a.store.PutAudit(store.AuditEntry{Action: "guard-rule", Rule: req.Agent + "/" + req.RuleID, ToMode: d.Verdict})
 	}
+	record(d)
 	// Downstream fleet delivery: every resolved decision (cached, prompt, or
 	// timeout-deny) is observable. Payload carries no secret material — paths
 	// and rule ids only, mirroring what the console already shows.

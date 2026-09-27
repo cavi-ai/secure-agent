@@ -160,6 +160,7 @@ type API struct {
 	hermes           func() collect.HermesStatus
 	worktrees        *worktreehunter.Hunter
 	worktreeAdvisor  func(model.WorktreeAdviceRequest) bool
+	egressAdvisor    func(store.EgressEpisode) bool
 	clutter          *clutter.Clutter
 	asker            *agentask.Asker
 	sysAgent         *sysagent.Agent
@@ -210,10 +211,11 @@ type API struct {
 
 	// deltas is the typed state-change fan-out the SSE stream serves.
 	// lastPosture dedupes posture deltas (state + item count).
-	deltaHub         *DeltaHub
-	lastPostureMu    sync.Mutex
-	lastPostureState string
-	lastPostureCount int
+	deltaHub            *DeltaHub
+	lastPostureMu       sync.Mutex
+	lastPostureState    string
+	lastPostureCount    int
+	lastPostureCoverage int
 
 	// costs caches /costs reports, saved in the store; unpriced caches
 	// /costs/unpriced reports in memory (costcache.go).
@@ -332,6 +334,7 @@ type Deps struct {
 	// WorktreeAdvisor, when set, queues a worktree for an advisory note and
 	// reports whether it was queued (false: advisor off or queue full).
 	WorktreeAdvisor func(model.WorktreeAdviceRequest) bool
+	EgressAdvisor   func(store.EgressEpisode) bool
 }
 
 // New builds the API from its resolved dependencies.
@@ -344,6 +347,7 @@ func New(d Deps) *API {
 		hermes:          d.Hermes,
 		worktrees:       d.Worktrees,
 		worktreeAdvisor: d.WorktreeAdvisor,
+		egressAdvisor:   d.EgressAdvisor,
 		clutter:         d.Clutter,
 		asker:           d.Asker,
 		sysAgent:        d.SysAgent,
@@ -635,6 +639,9 @@ func (a *API) routes() map[string]http.HandlerFunc {
 		"/allowlist":                    a.handleAllowlistAdd,
 		"/egress/uninspected":           a.handleUninspectedEgress,
 		"/egress/endpoint":              a.handleEndpointDetail,
+		"/egress/episodes":              a.handleEgressEpisodes,
+		"/egress/episodes/":             a.handleEgressEpisodeSubpath,
+		"/expected-egress":              a.handleExpectedEgress,
 		"/notify/rules":                 a.handleNotifyRules,
 		"/guard/path-allow":             a.handleGuardPathAllow,
 		"/mute":                         a.handleMute,
@@ -809,8 +816,8 @@ func (a *API) handleSessions(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, a.store.ListSessions(f))
 }
 
-// handleSessionSubpath serves the /sessions/{id}/… family: timeline and
-// report. Any other shape is 404.
+// handleSessionSubpath serves the /sessions/{id}/… family: timeline, report,
+// and memory. Any other shape is 404.
 func (a *API) handleSessionSubpath(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -827,6 +834,8 @@ func (a *API) handleSessionSubpath(w http.ResponseWriter, r *http.Request) {
 		a.serveSessionTimeline(w, r, parts[0])
 	case "report":
 		a.serveSessionReport(w, r, parts[0])
+	case "memory":
+		a.serveSessionMemory(w, r, parts[0])
 	default:
 		http.Error(w, "not found", http.StatusNotFound)
 	}

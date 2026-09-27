@@ -135,6 +135,79 @@ function renderEndpoints() {
   for (const d of container.querySelectorAll('details[data-key]')) if (opened.has(d.dataset.key)) d.open = true;
 }
 
+function egressIntervalText(intervals) {
+  const minutes = (intervals || []).map(n => Math.round(Number(n) / 60000000000)).filter(n => n > 0);
+  if (!minutes.length) return 'interval unknown';
+  const low = Math.min(...minutes), high = Math.max(...minutes);
+  return low === high ? `about every ${low} min` : `about every ${low}–${high} min`;
+}
+
+function egressEpisodeHTML(row) {
+  const o = row.observed || {};
+  const s = o.scope || {};
+  const id = escapeHTML(row.id || o.id || '');
+  const host = escapeHTML(o.host || 'unknown destination');
+  const destination = `${host}${o.port ? ':' + Number(o.port) : ''} · ${escapeHTML(o.protocol || 'protocol unknown')}`;
+  const scope = [s.agent, s.exe_path, s.harness, s.workspace].filter(Boolean).map(escapeHTML).join(' · ');
+  const links = (o.session_ids || []).slice(0, 3).map(sid =>
+    `<button type="button" class="btn btn-ghost btn-sm" data-action="filter-session" data-session="${escapeHTML(sid)}">Session ${escapeHTML(String(sid).slice(0, 8))}</button>`).join('');
+  const times = [o.first_seen ? `First ${escapeHTML(o.first_seen)}` : '', o.last_seen ? `Last ${escapeHTML(o.last_seen)}` : ''].filter(Boolean).join(' · ');
+  const revoke = row.expected && row.expected_rule_id
+    ? `<button type="button" class="btn btn-ghost btn-sm" data-action="revoke-expected-egress" data-id="${escapeHTML(row.expected_rule_id)}">Revoke expectation</button>` : '';
+  const inference = row.advisor_inference;
+  const why = inference && inference.possible_purpose
+    ? `<div class="egress-inference"><span>Advisor inference${inference.confidence ? ' · ' + escapeHTML(String(inference.confidence)) : ''}</span><p>${escapeHTML(inference.possible_purpose)}</p></div>`
+    : `<div class="egress-inference"><span>Possible purpose</span><p>Not assessed yet. Connection timing alone does not establish intent.</p></div>`;
+  const choices = row.candidate ? `<div class="egress-episode-choices">
+      <span>Exact: ${destination}</span>
+      <button type="button" class="btn btn-ghost btn-sm" data-action="expect-egress" data-episode-id="${id}" data-kind="destination">Expect this destination</button>
+      ${o.scope_complete ? `<span>All destinations for ${scope}</span><button type="button" class="btn btn-ghost btn-sm" data-action="expect-egress" data-episode-id="${id}" data-kind="scope">Expect all destinations for this activity scope</button>` : '<span>All-destinations choice unavailable: activity scope is incomplete.</span>'}
+    </div>` : '';
+  return `<article class="egress-episode">
+    <div class="egress-episode-head"><strong>${destination}</strong><span class="badge${row.expected ? ' badge-ok' : ''}">${row.expected ? 'expected' : row.candidate ? 'review' : 'observed'}</span></div>
+    <div class="egress-observed"><span>Observed</span><p>${Number(o.count) || 0} calls · ${escapeHTML(egressIntervalText(o.intervals))} · ${scope || 'activity scope unavailable'}</p>${times ? `<p>${times}</p>` : ''}</div>
+    ${why}
+    <div class="egress-episode-actions">${links}${revoke}${!inference ? `<button type="button" class="btn btn-ghost btn-sm" data-action="assess-egress-episode" data-id="${id}">Ask advisor why</button>` : ''}</div>
+    ${choices}
+    <p class="egress-security-note">Expectations quiet informational repeats. Security checks and the connection record continue.</p>
+  </article>`;
+}
+
+function renderEgressEpisodes() {
+  const container = document.getElementById('recurring-egress-container');
+  const badge = document.getElementById('badge-recurring-egress');
+  if (!container) return;
+  const rows = (window.SA.t.egressEpisodes || []).filter(row => row.observed && row.observed.recurring);
+  const candidates = rows.filter(row => row.candidate).length;
+  if (badge) badge.textContent = candidates;
+  if (!rows.length) {
+    container.innerHTML = '<div class="empty"><span>No recurring connection pattern observed yet</span></div>';
+    return;
+  }
+  patchList(container, rows, { key: row => row.id, html: egressEpisodeHTML });
+}
+
+function renderExpectedEgressRules() {
+  const container = document.getElementById('expected-egress-container');
+  const badge = document.getElementById('badge-expected-egress');
+  if (!container) return;
+  const rules = (window.SA.t.expectedEgress || []).filter(rule => !rule.revoked_at);
+  if (badge) badge.textContent = rules.length;
+  if (!rules.length) {
+    container.innerHTML = '<div class="empty"><span>No expected connections saved</span></div>';
+    return;
+  }
+  patchList(container, rules, { key: rule => rule.id, html: expectedEgressRuleHTML });
+}
+
+function expectedEgressRuleHTML(rule) {
+  const scope = rule.kind === 'scope'
+    ? `All destinations · ${rule.agent} · ${rule.exe_path} · ${rule.harness} · ${rule.workspace}`
+    : `${rule.host}:${rule.port} · ${rule.protocol} · ${rule.agent}`;
+  return `<div class="expected-egress-row"><span><strong>${escapeHTML(scope)}</strong><span>${escapeHTML(rule.rationale || 'Marked expected by the operator')}</span></span>
+    <button type="button" class="btn btn-ghost btn-sm" data-action="revoke-expected-egress" data-id="${escapeHTML(rule.id)}">Revoke</button></div>`;
+}
+
 // The uninspected list as keyed parts, one root element each: per agent a
 // head (with its bulk-allow buttons) then one row per endpoint, the vendor
 // API rollups, and the CDN/cloud carriers. Pure but for fmtAge's clock.
@@ -375,4 +448,3 @@ function egressRowHTML(e, advisorOn) {
     </div>
   </div>`;
 }
-

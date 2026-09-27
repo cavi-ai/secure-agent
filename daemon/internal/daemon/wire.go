@@ -281,11 +281,22 @@ func foldFlagRepeat(st *store.Store, deltas *api.DeltaHub) func(string, time.Tim
 	}
 }
 
-func startDrainLoop(sub <-chan event.Event, st *store.Store, cr *correlate.Correlator, pub *fleet.Publisher, res *session.Resolver, deltas *api.DeltaHub, otlpExp *otlp.Exporter, postureChanged func(), advGet func() *advisor.Subscriber) <-chan struct{} {
+func startDrainLoop(sub <-chan event.Event, st *store.Store, cr *correlate.Correlator, pub *fleet.Publisher, res *session.Resolver, tagger *agents.Tagger, deltas *api.DeltaHub, otlpExp *otlp.Exporter, postureChanged func(), advGet func() *advisor.Subscriber) <-chan struct{} {
 	analyzer := intel.NewAnalyzer()
 	drainDone := make(chan struct{})
+	// Episode projection has its own bounded queue. SQLite contention can drop
+	// an informational observation, but cannot stall event publication or flags.
+	projection := make(chan store.EgressObservation, 128)
+	projectionDone := make(chan struct{})
+	go func() {
+		defer close(projectionDone)
+		for observation := range projection {
+			_ = st.RecordEgressObservation(observation)
+		}
+	}()
 	go func() {
 		defer close(drainDone)
+		defer func() { close(projection); <-projectionDone }()
 		for e := range sub {
 			// Attribute before anything else: the stored event, the flags it
 			// triggers, and the incident all carry the session id.
@@ -301,6 +312,25 @@ func startDrainLoop(sub <-chan event.Event, st *store.Store, cr *correlate.Corre
 			}
 			e.Record = len(flags) > 0 || cr.SensitiveFile(e)
 			st.PutEvent(e)
+			if e.Kind == event.KindConnOpen && e.RemoteHost != "" && e.RemotePort > 0 {
+				observation := store.EgressObservation{SessionID: e.SessionID, Host: e.RemoteHost, Protocol: "tcp", Port: e.RemotePort, At: e.TS}
+				if tagger != nil {
+					if info, ok := tagger.Tag(e.PID); ok {
+						observation.Scope.Agent = info.Name
+						observation.Scope.ExePath = info.ExePath
+					}
+				}
+				if e.SessionID != "" {
+					if sess, ok := st.GetSession(e.SessionID); ok {
+						observation.Scope.Harness = sess.Harness
+						observation.Scope.Workspace = sess.Workspace
+					}
+				}
+				select {
+				case projection <- observation:
+				default:
+				}
+			}
 			if deltas != nil {
 				// Guard lifecycle keeps its own delta names (the menubar's
 				// instant prompt path keys on them); everything else is a

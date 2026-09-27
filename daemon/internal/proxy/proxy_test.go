@@ -415,7 +415,10 @@ func TestConsoleAPIPathsCoverWebApp(t *testing.T) {
 	if !isConsoleAPIPath("/sessions/sess-1/report") {
 		t.Error("dynamic /sessions/{id}/report route is not console-allowed — the Export button 407s on the proxy listener")
 	}
-	fragments := map[string]bool{"/timeline": true, "/report": true, "/sessions": true}
+	if !isConsoleAPIPath("/sessions/sess-1/memory") {
+		t.Error("dynamic /sessions/{id}/memory route is not console-allowed — the Memory panel 407s on the proxy listener")
+	}
+	fragments := map[string]bool{"/timeline": true, "/report": true, "/memory": true, "/sessions": true}
 	for p := range seen {
 		if isConsoleAPIPath(p) {
 			continue
@@ -487,6 +490,32 @@ func TestConsoleAPIGate(t *testing.T) {
 	}
 	if code := get(base+"/status?ct="+ct, nil); code != http.StatusOK {
 		t.Fatalf("/status with ct query: %d, want 200 (EventSource can't set headers)", code)
+	}
+	for _, method := range []string{"GET", "POST", "DELETE"} {
+		for _, headers := range []map[string]string{nil, {"X-SecureAgent-Proxy-Token": pt}} {
+			req, _ := http.NewRequest(method, base+"/expected-egress", nil)
+			for k, v := range headers {
+				req.Header.Set(k, v)
+			}
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				t.Fatalf("%s /expected-egress accepted non-console credential", method)
+			}
+		}
+		req, _ := http.NewRequest(method, base+"/expected-egress", nil)
+		req.Header.Set("X-SecureAgent-Console-Token", ct)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("%s /expected-egress with console token: %d", method, resp.StatusCode)
+		}
 	}
 	// /guard/path-allow: the console token admits GET and POST (the Explain
 	// card's allow-path action); the proxy token agents carry does not.
@@ -629,8 +658,8 @@ func TestPprofRefusedOnProxyListener(t *testing.T) {
 	}
 }
 
-// The dynamic session routes are console-gated: the exact timeline and
-// report shapes are admitted, anything else on the prefix falls through to
+// The dynamic session routes are console-gated: the exact timeline, report,
+// and memory shapes are admitted, anything else on the prefix falls through to
 // proxy auth.
 func TestConsoleSessionTimelinePathGate(t *testing.T) {
 	if !isConsoleAPIPath("/sessions/sess-1/timeline") {
@@ -638,6 +667,9 @@ func TestConsoleSessionTimelinePathGate(t *testing.T) {
 	}
 	if !isConsoleAPIPath("/sessions/sess-1/report") {
 		t.Fatal("the session report route must be console-allowed")
+	}
+	if !isConsoleAPIPath("/sessions/sess-1/memory") {
+		t.Fatal("the session memory route must be console-allowed")
 	}
 	if isConsoleAPIPath("/sessions/sess-1/other") {
 		t.Fatal("an unknown session subpath must not be admitted")
@@ -653,5 +685,8 @@ func TestConsoleSessionTimelinePathGate(t *testing.T) {
 	}
 	if isConsoleAPIPath("/sessions//timeline") {
 		t.Fatal("empty session id must not be admitted")
+	}
+	if isConsoleAPIPath("/sessions//memory") || isConsoleAPIPath("/sessions/sess-1/memory/extra") {
+		t.Fatal("malformed session memory path must not be admitted")
 	}
 }

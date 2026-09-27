@@ -22,8 +22,8 @@ type Route struct {
 	// Prefix marks a dynamic route family matched by path prefix; only the
 	// console-admission shape Path + {id} + "/" + one of Leaves is admitted.
 	Prefix bool
-	// Leaves are the sub-resources a Prefix route serves ("timeline" and
-	// "report" for /sessions/{id}/…, "explain" for /flags/{id}/explain).
+	// Leaves are the sub-resources a Prefix route serves ("timeline", "report",
+	// and "memory" for /sessions/{id}/…, "explain" for /flags/{id}/explain).
 	Leaves []string
 	// Console is true when the console token admits this path on the proxy
 	// listener (the browser console's same-origin telemetry surface).
@@ -69,7 +69,7 @@ type Route struct {
 var Table = []Route{
 	{Path: "/status", Console: true},
 	{Path: "/sessions", Console: true},
-	{Path: "/sessions/", Prefix: true, Leaves: []string{"timeline", "report"}, Console: true},
+	{Path: "/sessions/", Prefix: true, Leaves: []string{"timeline", "report", "memory"}, Console: true},
 	{Path: "/resources", Console: true},
 	{Path: "/resources/episodes", Console: true},
 	{Path: "/resources/control", Console: true, MutatingMethods: []string{"POST"}},
@@ -87,6 +87,9 @@ var Table = []Route{
 	{Path: "/allowlist", Console: true, MutatingMethods: []string{"POST"}, ConsoleMethods: []string{"DELETE"}},
 	{Path: "/egress/uninspected", Console: true},
 	{Path: "/egress/endpoint", Console: true},
+	{Path: "/egress/episodes", Console: true, NoAgent: true},
+	{Path: "/egress/episodes/", Prefix: true, Leaves: []string{"assess"}, Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
+	{Path: "/expected-egress", Console: true, NoAgent: true, MutatingMethods: []string{"POST", "DELETE"}},
 	{Path: "/notify/rules", Console: true, ConsoleMethods: []string{"POST"}},
 	{Path: "/guard/path-allow", Console: true, MutatingMethods: []string{"POST"}},
 	{Path: "/mute", Console: true, MutatingMethods: []string{"POST"}, ConsoleMethods: []string{"DELETE"}},
@@ -144,7 +147,8 @@ var Table = []Route{
 
 // ConsoleAllowed reports whether the console token admits (method, path) on
 // the proxy listener. Exact table paths are admitted directly; a dynamic
-// family (/sessions/{id}/timeline, /sessions/{id}/report, /flags/{id}/explain)
+// family (/sessions/{id}/timeline, /sessions/{id}/report,
+// /sessions/{id}/memory, /flags/{id}/explain)
 // is admitted only in its exact shape: a non-empty id that is not "." or
 // "..", then one of the route's Leaves. GET and HEAD pass on every
 // Console: true route; any other method is admitted only when it appears in
@@ -182,7 +186,7 @@ func ConsoleAllowed(method, path string) bool {
 // UI or owner uid.
 func IsMutation(method, path string) bool {
 	for _, r := range Table {
-		if r.Path != path {
+		if !routeMatches(r, path) {
 			continue
 		}
 		for _, m := range r.MutatingMethods {
@@ -212,11 +216,23 @@ func IsOwnerOnly(path string) bool {
 // IsNoAgent reports whether path is a NoAgent route.
 func IsNoAgent(path string) bool {
 	for _, r := range Table {
-		if r.Path == path {
+		if routeMatches(r, path) {
 			return r.NoAgent
 		}
 	}
 	return false
+}
+
+func routeMatches(r Route, path string) bool {
+	if !r.Prefix {
+		return r.Path == path
+	}
+	if !strings.HasPrefix(path, r.Path) {
+		return false
+	}
+	rest := strings.TrimPrefix(path, r.Path)
+	parts := strings.SplitN(rest, "/", 2)
+	return len(parts) == 2 && parts[0] != "" && parts[0] != "." && parts[0] != ".." && slices.Contains(r.Leaves, parts[1])
 }
 
 // IsDecide reports whether (method, path) is the agent-facing guard decision.

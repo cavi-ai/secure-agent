@@ -193,10 +193,15 @@ def main():
         dom_demote = dump_dom(chrome, tmp, "?demotedemo")
         dom_allowrm = dump_dom(chrome, tmp, "?allowlistdemo")
         dom_rail = dump_dom(chrome, tmp, "?raildemo")
+        dom_memory = dump_dom(chrome, tmp, "?raildemo&memorydemo")
+        dom_memory_race = dump_dom(chrome, tmp, "?memoryrace")
+        dom_trace_reactivation = dump_dom(chrome, tmp, "?tracereactivation")
         dom_pill = dump_dom(chrome, tmp, "?pilldemo")
         dom_quiet = dump_dom(chrome, tmp, "?quietdemo")
         dom_nomatch = dump_dom(chrome, tmp, "?nomatchdemo")
+        dom_coverage = dump_dom(chrome, tmp, "?coveragedemo")
         dom_phone = dump_dom(chrome, tmp, "?phonedemo")
+        dom_memory_phone = dump_dom(chrome, tmp, "?phonedemo&memorydemo")
         dom_nocosts = dump_dom(chrome, tmp, "?nocostsdemo")
         dom_memfam = dump_dom(chrome, tmp, "?memfamilydemo")
         dom_memprobe = dump_dom(chrome, tmp, "?memprobe")
@@ -317,6 +322,9 @@ def main():
         check("the page, posture banner included, fits a 375px phone on Sessions, Agents and Resources",
               'data-hscroll="sessions:0,agents:0,resources:0"' in dom_phone,
               (re.search(r'data-hscroll="[^"]*"', dom_phone) or [None])[0])
+        check("Memory detail fits a 375px phone without horizontal page overflow",
+              'data-hscroll="sessions:0,agents:0,resources:0"' in dom_memory_phone,
+              (re.search(r'data-hscroll="[^"]*"', dom_memory_phone) or [None])[0])
         detail_head = dom_rail.split('class="session-detail-head"', 1)[1].split('class="wf', 1)[0]
         check("detail head: mark, repo@branch, harness, confidence, copyable path",
               '<h3>api-service@main</h3>' in detail_head and '#logo-claude' in detail_head
@@ -336,6 +344,23 @@ def main():
         check("rail selection renders trace waterfall",
               'class="wf-bar' in dom_rail and 'Bash' in dom_rail,
               "no waterfall bars in raildemo")
+        memory_detail = dom_memory.split('id="session-detail"', 1)[1].split('id="session-board"', 1)[0]
+        check("Memory opens first and earlier rows prepend once",
+              'data-action="session-view" data-view="memory" aria-pressed="true"' in dom_memory
+              and memory_detail.count('Earlier activity') == 1
+              and memory_detail.count('Recent activity') == 1
+              and memory_detail.index('Earlier activity') < memory_detail.index('Recent activity')
+              and 'data-action="memory-earlier"' not in memory_detail,
+              memory_detail[:700])
+        check("late response from previous selection cannot replace Memory",
+              'data-memory-race="B"' in dom_memory_race
+              and '<h3>data-pipeline@feat/etl</h3>' in dom_memory_race.split('id="session-detail"', 1)[1]
+              and 'A-only memory' not in dom_memory_race.split('id="session-detail"', 1)[1],
+              dom_memory_race.split('id="session-detail"', 1)[1][:700])
+        check("Trace refetches after an event arrives while Memory is active",
+              'data-trace-was-cached="true"' in dom_trace_reactivation
+              and 'data-trace-reactivated="true"' in dom_trace_reactivation,
+              (re.search(r'data-trace-(?:was-cached|reactivated)="[^"]*"', dom_trace_reactivation) or [None])[0])
         check("waterfall carries model usage row",
               "claude-sonnet-4-5" in dom_rail and "46.2k in" in dom_rail)
         check("waterfall marks tool errors", 'wf-bar error' in dom_rail)
@@ -543,7 +568,7 @@ def main():
         check("agent last-active rendered", "active " in dom and " ago" in dom)
         check("stale process marked", " stale" in dom)
         check("flag card kill action", 'data-action="kill" data-pid="6033"' in dom)
-        check("collector-down FDA deep link", 'data-action="open-fda"' in dom and "Full Disk Access settings" in dom)
+        check("collector-down FDA deep link", 'data-action="open-fda"' in dom and "Full Disk Access" in dom)
         check("advisor posture line (1 of 2 benign) off Home",
               "advisor: 1 of 2 triaged critical flags look benign" in dom_tab)
         check("incident narrative rendered", "advisor-narrative" in dom and "Rotate the key first" in dom)
@@ -577,8 +602,8 @@ def main():
               re.search(r'<ul class="posture-items" id="posture-items" hidden(="")?></ul>', dom) is not None
               and 'class="posture-item"' not in dom and 'data-action="guard-resolve" data-id="guard-1"' in dom)
         posture_egress = (re.search(r'<pre id="posture-egress"[^>]*>([^<]*)<', dom_posturemore) or [None, ""])[1]
-        check("Egress: the posture banner lists 3 content rows (2 items + the advisor line) and \"and 8 more\"",
-              posture_egress == "items=2 more=and 8 more hidden=0", posture_egress)
+        check("Egress: the posture banner lists 3 content rows (2 items + the advisor line) and \"and 5 more\"",
+              posture_egress == "items=2 more=and 5 more hidden=0", posture_egress)
         posture_home = (re.search(r'<pre id="posture-home"[^>]*>([^<]*)<', dom_posturemore) or [None, ""])[1]
         check("\"and N more\" lands on Home, where the banner lists nothing",
               posture_home == "tab=home items=0 more=none hidden=1", posture_home)
@@ -726,7 +751,8 @@ def main():
         check("home panel visible",
               'id="tab-home" role="tabpanel">' in dom)
         check("home groups are closed by default",
-              '<details class="home-group" id="home-findings" data-group="findings">' in dom
+              '<details class="home-group" id="home-spend" data-group="spend">' in dom
+              and '<details class="home-group" id="home-findings" data-group="findings">' in dom
               and '<details class="home-group" id="home-trends" data-group="trends">' in dom)
         check("hash #agents opens Sessions on the Processes sub-view",
               'class="tab-btn active" data-tab="sessions"' in dom_hashagents
@@ -986,22 +1012,34 @@ def main():
               and (re.search(r'id="tab-badge-sessions">(\d+)<', dom) or [None, "a"])[1]
               == (re.search(r'id="subtab-badge-board">(\d+)<', dom) or [None, "b"])[1])
         attention = dom.split('id="attention-center"', 1)[1].split('id="security-findings-grid"', 1)[0]
+        decisions = attention.split('id="coverage-center"', 1)[0]
+        coverage = attention.split('id="coverage-center"', 1)[1].split('id="home-spend"', 1)[0]
         check("attention center groups the whole api-service session",
               'class="attention-group' in attention and "api-service" in attention
               and "5.5 GB" in attention and "132.5%" in attention and "<b>2</b> processes" in attention)
-        codex_group = (re.search(r'<article class="attention-group[^"]*">((?:(?!</article>).)*codex activity.*?)</article>', attention, re.S) or [None, ""])[1]
+        codex_group = (re.search(r'<article class="attention-group[^"]*">((?:(?!</article>).)*codex activity.*?)</article>', dom_pattern, re.S) or [None, ""])[1]
         check("attention: an agent-level group names its processes and sessions, not the generic sentence",
               '<span class="attention-workspace">2 processes (codex 0.46.0 via Terminal.app) across 2 sessions, all exited</span>' in codex_group
               and "safely attributed" not in dom, f"group={codex_group[:300]!r}")
         check("attention center unifies all actionable signal types",
-              all(label in attention for label in ("Guard decision", "Resource pressure", "Critical incident", "Critical finding", "Uninspected egress")))
+              all(label in decisions for label in ("Guard decision", "Resource pressure", "Critical incident", "Critical finding")))
+        check("Home keeps coverage outside the decisions count",
+              'id="badge-coverage-count">2<' in coverage
+              and 'File monitoring is off' in coverage
+              and '2 connections bypassed inspection' in coverage
+              and 'Uninspected egress' not in decisions)
+        check("Home with only coverage gaps has an honest zero-decision state",
+              'id="badge-attention-count">0<' in dom_coverage
+              and 'No pending decisions' in dom_coverage
+              and 'id="posture-state">Coverage needs setup<' in dom_coverage
+              and 'id="badge-coverage-count">2<' in dom_coverage)
         check("attention resource actions target the full session",
               'data-action="resource-control" data-id="resource-1" data-decision="apply"' in attention)
         check("attention guard actions expose bounded choices",
               'data-action="guard-resolve" data-id="guard-1" data-verdict="allow" data-scope="once"' in attention
               and 'data-action="guard-resolve" data-id="guard-1" data-verdict="deny" data-scope="always"' in attention)
         check("attention shows blast-radius copy", "approves every path under rule" in attention)
-        check("attention egress opens endpoint evidence", 'data-action="open-uninspected"' in attention)
+        check("coverage egress opens endpoint evidence", 'data-action="open-uninspected"' in coverage)
         check("resolved guard request leaves the attention queue",
               f'id="tab-badge-home">{needs_you - 1}<' in dom_guard
               and 'data-action="guard-resolve" data-id="guard-1"' not in dom_guard)
@@ -1013,6 +1051,23 @@ def main():
         check("tab switch reveals the target panel",
               'id="tab-egress" role="tabpanel">' in dom_tab
               and 'id="tab-home" role="tabpanel" hidden' in dom_tab)
+        recurring = dom_tab.split('id="recurring-egress-container"', 1)[-1].split('id="endpoints-panel"', 1)[0]
+        check("Egress explains scheduled calls as observed facts and labeled advisor inference",
+              'updates.example.com:443' in recurring
+              and 'about every 30–31 min' in recurring
+              and 'Advisor inference' in recurring
+              and 'Possibly an update check' in recurring)
+        check("Egress offers broad scope only with complete attribution",
+              'data-episode-id="episode-routine" data-kind="scope"' in recurring
+              and 'data-episode-id="episode-ambiguous" data-kind="destination"' in recurring
+              and 'data-episode-id="episode-ambiguous" data-kind="scope"' not in recurring)
+        check("Egress opens linked session and can revoke an expected episode",
+              'data-action="filter-session" data-session="sess-claude-1"' in recurring
+              and 'data-action="revoke-expected-egress" data-id="expected-older"' in recurring
+              and 'First ' in recurring and 'Last ' in recurring)
+        check("Policy lists reversible expected connections",
+              'old.example.com:443' in dom_policylists
+              and 'data-action="revoke-expected-egress" data-id="expected-older"' in dom_policylists)
         # Sessions holds one sub-view at a time.
         check("resources and events are separate sub-views",
               'id="sub-resources" role="tabpanel" hidden' in dom
@@ -1278,9 +1333,9 @@ def main():
               and m.group(8) == "hidden", f"probe={scope!r}")
         attention_badge = (re.search(r'id="badge-attention-count"[^>]*>(\d+)<', dom) or [None, ""])[1]
         tab_badge = (re.search(r'id="tab-badge-home"[^>]*>(\d+)<', dom) or [None, ""])[1]
-        check("attention badge and tab badge equal posture.needs_you; the machine group renders",
+        check("attention badge and tab badge equal posture.needs_you; coverage stays separate",
               attention_badge == str(needs_you) and tab_badge == str(needs_you)
-              and '<strong>This machine</strong>' in dom and 'data-action="open-fda"' in attention
+              and '<strong>File monitoring is off</strong>' in coverage and 'data-action="open-fda"' in coverage
               and 'data-action="dismiss-flag" data-id="flag-5"' in attention,
               f"badge={attention_badge!r} tab={tab_badge!r} needs_you={needs_you}")
 

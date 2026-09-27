@@ -357,11 +357,21 @@ func TestStartDrainLoopPersistsAndCloses(t *testing.T) {
 	cfg, _ := config.Load("/nonexistent")
 	tagger := agents.New(cfg, fakeProcSource{})
 	tagger.Refresh()
+	info, ok := tagger.Tag(500)
+	if !ok {
+		t.Fatal("test process was not tagged")
+	}
+	if _, err := st.CreateExpectedEgressRule(store.ExpectedEgressRule{Agent: info.Name, Kind: "destination", Host: "evil.example.com", Protocol: "tcp", Port: 443}); err != nil {
+		t.Fatal(err)
+	}
+	if !st.ExpectedEgressMatch(store.EgressObservation{Scope: store.EgressScope{Agent: info.Name}, Host: "evil.example.com", Protocol: "tcp", Port: 443}) {
+		t.Fatal("expected-egress rule not active")
+	}
 	cr := correlate.New(tagger, sensitive.New(cfg), cfg)
 
 	b := bus.New(64)
 	res := session.NewResolver(st, tagger)
-	done := startDrainLoop(b.Subscribe(), st, cr, fleet.NewPublisher(), res, nil, nil, nil, nil)
+	done := startDrainLoop(b.Subscribe(), st, cr, fleet.NewPublisher(), res, tagger, nil, nil, nil, nil)
 
 	now := time.Now()
 	b.Publish(event.Event{Kind: event.KindPluginAction, TS: now, PID: 500, Path: "/Users/x/project/.env"})
@@ -383,6 +393,10 @@ func TestStartDrainLoopPersistsAndCloses(t *testing.T) {
 	if len(incidents) == 0 {
 		t.Fatal("drain loop must turn the flag into an incident report")
 	}
+	episodes := st.ListEgressEpisodes(10)
+	if len(episodes) != 1 || episodes[0].Host != "evil.example.com" || episodes[0].Count != 1 {
+		t.Fatalf("connection episode projection = %+v", episodes)
+	}
 }
 
 // The drain loop stores a flag's own event and an agent's sensitive file
@@ -401,7 +415,7 @@ func TestDrainLoopMarksRecordRows(t *testing.T) {
 
 	b := bus.New(64)
 	res := session.NewResolver(st, tagger)
-	done := startDrainLoop(b.Subscribe(), st, cr, fleet.NewPublisher(), res, nil, nil, nil, nil)
+	done := startDrainLoop(b.Subscribe(), st, cr, fleet.NewPublisher(), res, tagger, nil, nil, nil, nil)
 
 	now := time.Now()
 	b.Publish(event.Event{Kind: event.KindFileOpen, TS: now, PID: 500, Path: "/Users/x/project/main.go"})
@@ -450,7 +464,7 @@ func TestDrainLoopDropsUnattributedFileEvents(t *testing.T) {
 
 	b := bus.New(64)
 	res := session.NewResolver(st, tagger)
-	done := startDrainLoop(b.Subscribe(), st, cr, fleet.NewPublisher(), res, nil, nil, nil, nil)
+	done := startDrainLoop(b.Subscribe(), st, cr, fleet.NewPublisher(), res, tagger, nil, nil, nil, nil)
 
 	now := time.Now()
 	b.Publish(event.Event{Kind: event.KindFileOpen, TS: now, PID: 500, Path: "/Users/x/project/main.go"})

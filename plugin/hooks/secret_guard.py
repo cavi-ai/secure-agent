@@ -243,7 +243,7 @@ def _secure_append(path: str, line: str) -> None:
         pass
 
 
-def audit(verdict: str, rule: str, command: str, event: str) -> None:
+def audit(verdict: str, rule: str, command: str, event: str, broker: bool = False) -> None:
     """Never allowed to fail the hook."""
     safe_command = redact_secrets(command)
     rec = {
@@ -264,7 +264,7 @@ def audit(verdict: str, rule: str, command: str, event: str) -> None:
     try:
         _secure_append(ACTIVITY_LOG, json.dumps({
             "ts": rec["ts"],
-            "tool": f"secret-guard:{verdict}",
+            "tool": f"secret-guard-broker:{verdict}" if broker else f"secret-guard:{verdict}",
             "pid": os.getppid() or os.getpid(),
             "session_id": session_id(),
             "file_path": rule,
@@ -274,15 +274,15 @@ def audit(verdict: str, rule: str, command: str, event: str) -> None:
         pass
 
 
-def allow(rule: str = "", command: str = "", event: str = "") -> None:
+def allow(rule: str = "", command: str = "", event: str = "", broker: bool = False) -> None:
     if rule:
-        audit("allow", rule, command, event)
+        audit("allow", rule, command, event, broker)
     emit({"permission": "allow"})
     sys.exit(0)
 
 
-def deny(rule: str, user_msg: str, agent_msg: str, command: str, event: str) -> None:
-    audit("deny", rule, command, event)
+def deny(rule: str, user_msg: str, agent_msg: str, command: str, event: str, broker: bool = False) -> None:
+    audit("deny", rule, command, event, broker)
     emit({
         "permission": "deny",
         "user_message": user_msg,
@@ -565,7 +565,7 @@ def _guard_query(agent, tool, path, rule_id, deadline_s, workspace=""):
     workspace rides along so the advisor can judge whether the access is
     routine for this project rather than in the abstract."""
     body = json.dumps({"agent": agent, "tool": tool, "path": path, "rule_id": rule_id,
-                       "workspace": workspace})
+                       "workspace": workspace, "session_id": session_id()})
     req = ("POST /guard/decision HTTP/1.1\r\nHost: localhost\r\n"
            "Content-Type: application/json\r\nConnection: close\r\n"
            f"Content-Length: {len(body)}\r\n\r\n{body}")
@@ -620,8 +620,8 @@ def resolve_prompt(agent, tool, path, rule_id, command, event):
         deny("guard-deny:" + rule_id, f"Blocked: access to {path} needs approval (monitor offline).",
              deny_msg, command, event)
     if isinstance(d, dict) and d.get("verdict") == "allow":
-        allow("guard-allow:" + rule_id, command, event)
-    deny("guard-deny:" + rule_id, f"Blocked: access to {path} was denied.", deny_msg, command, event)
+        allow("guard-allow:" + rule_id, command, event, broker=True)
+    deny("guard-deny:" + rule_id, f"Blocked: access to {path} was denied.", deny_msg, command, event, broker=True)
 
 
 def emit_ask(reason, command, event):

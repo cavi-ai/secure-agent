@@ -926,6 +926,8 @@ function renderPosture() {
     summaryEl.textContent = 'Agents monitored, no action needed';
   } else if (p.state === 'critical') {
     stateEl.textContent = 'Critical';
+  } else if (!Number(p.needs_you) && Number(p.coverage_count)) {
+    stateEl.textContent = 'Coverage needs setup';
   } else {
     stateEl.textContent = 'Needs attention';
   }

@@ -16,7 +16,7 @@ import (
 
 // PostureItem is one thing the operator may need to act on.
 type PostureItem struct {
-	Kind      string `json:"kind"` // flag | incident | guard_pending | collector_down | collector_silent | harness_uncovered | guard_hook_unregistered | uninspected_egress | resource_pressure
+	Kind      string `json:"kind"` // flag | incident | guard_pending | recurring_egress | resource_pressure | coverage kinds
 	ID        string `json:"id"`
 	Title     string `json:"title"`
 	Severity  int    `json:"severity"` // 3 critical, 2 high, 1 medium, 0 info
@@ -28,15 +28,16 @@ type PostureItem struct {
 // and what is the one thing to look at first?" Every UI (console, menubar,
 // fleet collector) renders from this instead of re-deriving it from raw lists.
 //
-// Invariant: every item in Items appears in exactly one of Groups, and the
-// group item counts sum to NeedsYou (= len(Items)). Items and Groups come
-// from one pass (attentionQueue); uninspected egress is one item per group
-// that carries it, or one machine-wide item when no group does.
+// Invariant: every pending decision in Items appears in exactly one Group,
+// and group item counts sum to NeedsYou (= len(Items)). CoverageItems are
+// monitoring gaps and informational uninspected egress, counted separately.
 type Posture struct {
-	State    string        `json:"state"` // all-clear | attention | critical
-	NeedsYou int           `json:"needs_you"`
-	Summary  string        `json:"summary"`
-	Items    []PostureItem `json:"items"`
+	State         string        `json:"state"` // all-clear | attention | critical
+	NeedsYou      int           `json:"needs_you"`
+	CoverageCount int           `json:"coverage_count"`
+	Summary       string        `json:"summary"`
+	Items         []PostureItem `json:"items"`
+	CoverageItems []PostureItem `json:"coverage_items"`
 	// Groups is the session-grouped attention queue every surface renders;
 	// agent-less items sit in the "machine" group.
 	Groups    []AttentionGroup `json:"groups,omitempty"`
@@ -70,10 +71,11 @@ func (a *API) PublishPostureIfChanged() {
 	}
 	p := a.computePosture()
 	a.lastPostureMu.Lock()
-	changed := p.State != a.lastPostureState || p.NeedsYou != a.lastPostureCount
+	changed := p.State != a.lastPostureState || p.NeedsYou != a.lastPostureCount || p.CoverageCount != a.lastPostureCoverage
 	if changed {
 		a.lastPostureState = p.State
 		a.lastPostureCount = p.NeedsYou
+		a.lastPostureCoverage = p.CoverageCount
 	}
 	a.lastPostureMu.Unlock()
 	if changed {
@@ -92,10 +94,15 @@ func (a *API) computePosture() Posture {
 	}
 	posture.Items, posture.Groups = a.attentionQueue(st)
 	posture.NeedsYou = len(posture.Items)
+	posture.CoverageItems = a.coverageItems(st)
+	posture.CoverageCount = len(posture.CoverageItems)
 	switch {
-	case posture.NeedsYou == 0:
+	case posture.NeedsYou == 0 && posture.CoverageCount == 0:
 		posture.State = "all-clear"
 		posture.Summary = "All clear — agents monitored, no action needed."
+	case posture.NeedsYou == 0:
+		posture.State = "attention"
+		posture.Summary = "No decisions pending. Monitoring coverage needs attention."
 	case hasCritical(posture.Items):
 		posture.State = "critical"
 		posture.Summary = criticalSummary(posture.Items)
@@ -105,6 +112,19 @@ func (a *API) computePosture() Posture {
 	}
 
 	return posture
+}
+
+func (a *API) coverageItems(st Status) []PostureItem {
+	items := a.machineAttentionItems(st)
+	if st.UninspectedEgress > 0 {
+		items = append(items, PostureItem{
+			Kind: "uninspected_egress", ID: "uninspected-egress",
+			Title:    uninspectedTitle(st.UninspectedEgress),
+			Severity: 1,
+			Detail:   "Review endpoints that bypassed inspection in Egress.",
+		})
+	}
+	return items
 }
 
 func hasCritical(items []PostureItem) bool {
