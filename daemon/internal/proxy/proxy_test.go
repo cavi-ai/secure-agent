@@ -415,7 +415,10 @@ func TestConsoleAPIPathsCoverWebApp(t *testing.T) {
 	if !isConsoleAPIPath("/sessions/sess-1/report") {
 		t.Error("dynamic /sessions/{id}/report route is not console-allowed — the Export button 407s on the proxy listener")
 	}
-	fragments := map[string]bool{"/timeline": true, "/report": true, "/sessions": true}
+	if !isConsoleAPIPath("/sessions/sess-1/memory") {
+		t.Error("dynamic /sessions/{id}/memory route is not console-allowed — the Memory panel 407s on the proxy listener")
+	}
+	fragments := map[string]bool{"/timeline": true, "/report": true, "/memory": true, "/sessions": true}
 	for p := range seen {
 		if isConsoleAPIPath(p) {
 			continue
@@ -629,8 +632,8 @@ func TestPprofRefusedOnProxyListener(t *testing.T) {
 	}
 }
 
-// The dynamic session routes are console-gated: the exact timeline and
-// report shapes are admitted, anything else on the prefix falls through to
+// The dynamic session routes are console-gated: the exact timeline, report,
+// and memory shapes are admitted, anything else on the prefix falls through to
 // proxy auth.
 func TestConsoleSessionTimelinePathGate(t *testing.T) {
 	if !isConsoleAPIPath("/sessions/sess-1/timeline") {
@@ -638,6 +641,9 @@ func TestConsoleSessionTimelinePathGate(t *testing.T) {
 	}
 	if !isConsoleAPIPath("/sessions/sess-1/report") {
 		t.Fatal("the session report route must be console-allowed")
+	}
+	if !isConsoleAPIPath("/sessions/sess-1/memory") {
+		t.Fatal("the session memory route must be console-allowed")
 	}
 	if isConsoleAPIPath("/sessions/sess-1/other") {
 		t.Fatal("an unknown session subpath must not be admitted")
@@ -653,5 +659,8 @@ func TestConsoleSessionTimelinePathGate(t *testing.T) {
 	}
 	if isConsoleAPIPath("/sessions//timeline") {
 		t.Fatal("empty session id must not be admitted")
+	}
+	if isConsoleAPIPath("/sessions//memory") || isConsoleAPIPath("/sessions/sess-1/memory/extra") {
+		t.Fatal("malformed session memory path must not be admitted")
 	}
 }

@@ -809,8 +809,8 @@ func (a *API) handleSessions(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, a.store.ListSessions(f))
 }
 
-// handleSessionSubpath serves the /sessions/{id}/… family: timeline and
-// report. Any other shape is 404.
+// handleSessionSubpath serves the /sessions/{id}/… family: timeline, report,
+// and memory. Any other shape is 404.
 func (a *API) handleSessionSubpath(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)

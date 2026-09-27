@@ -22,8 +22,8 @@ type Route struct {
 	// Prefix marks a dynamic route family matched by path prefix; only the
 	// console-admission shape Path + {id} + "/" + one of Leaves is admitted.
 	Prefix bool
-	// Leaves are the sub-resources a Prefix route serves ("timeline" and
-	// "report" for /sessions/{id}/…, "explain" for /flags/{id}/explain).
+	// Leaves are the sub-resources a Prefix route serves ("timeline", "report",
+	// and "memory" for /sessions/{id}/…, "explain" for /flags/{id}/explain).
 	Leaves []string
 	// Console is true when the console token admits this path on the proxy
 	// listener (the browser console's same-origin telemetry surface).
@@ -69,7 +69,7 @@ type Route struct {
 var Table = []Route{
 	{Path: "/status", Console: true},
 	{Path: "/sessions", Console: true},
-	{Path: "/sessions/", Prefix: true, Leaves: []string{"timeline", "report"}, Console: true},
+	{Path: "/sessions/", Prefix: true, Leaves: []string{"timeline", "report", "memory"}, Console: true},
 	{Path: "/resources", Console: true},
 	{Path: "/resources/episodes", Console: true},
 	{Path: "/resources/control", Console: true, MutatingMethods: []string{"POST"}},
@@ -144,7 +144,8 @@ var Table = []Route{
 
 // ConsoleAllowed reports whether the console token admits (method, path) on
 // the proxy listener. Exact table paths are admitted directly; a dynamic
-// family (/sessions/{id}/timeline, /sessions/{id}/report, /flags/{id}/explain)
+// family (/sessions/{id}/timeline, /sessions/{id}/report,
+// /sessions/{id}/memory, /flags/{id}/explain)
 // is admitted only in its exact shape: a non-empty id that is not "." or
 // "..", then one of the route's Leaves. GET and HEAD pass on every
 // Console: true route; any other method is admitted only when it appears in
