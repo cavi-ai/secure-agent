@@ -19,6 +19,7 @@ type egressEpisodeView struct {
 	ID               string              `json:"id"`
 	Observed         store.EgressEpisode `json:"observed"`
 	Expected         bool                `json:"expected"`
+	ExpectedRuleID   string              `json:"expected_rule_id,omitempty"`
 	Candidate        bool                `json:"candidate"`
 	AdvisorInference *egressInference    `json:"advisor_inference,omitempty"`
 }
@@ -32,24 +33,32 @@ func (a *API) handleEgressEpisodes(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "store unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	writeJSON(w, map[string]any{"episodes": a.egressEpisodeViews()})
+	writeJSON(w, map[string]any{"episodes": a.egressEpisodeViews(), "non_candidate_limit": 100})
 }
 
 // egressEpisodeViews is shared by the read API and Home's decision projection.
 func (a *API) egressEpisodeViews() []egressEpisodeView {
-	rows := make([]egressEpisodeView, 0)
+	candidates := make([]egressEpisodeView, 0)
+	other := make([]egressEpisodeView, 0, 100)
 	if a.store == nil {
-		return rows
+		return other
 	}
-	for _, e := range a.store.ListEgressEpisodes(100) {
-		expected := a.store.ExpectedEgressMatch(store.EgressObservation{Scope: e.Scope, Host: e.Host, Protocol: e.Protocol, Port: e.Port})
-		view := egressEpisodeView{ID: e.ID, Observed: e, Expected: expected, Candidate: e.Recurring && e.Scope.Agent != "" && e.Scope.Agent != "unknown" && !expected}
+	for _, e := range a.store.ListEgressEpisodesForReview() {
+		if !e.Recurring && len(other) >= 100 {
+			continue
+		}
+		ruleID := a.store.ExpectedEgressMatchingRuleID(store.EgressObservation{Scope: e.Scope, Host: e.Host, Protocol: e.Protocol, Port: e.Port})
+		view := egressEpisodeView{ID: e.ID, Observed: e, Expected: ruleID != "", ExpectedRuleID: ruleID, Candidate: e.Recurring && e.Scope.Agent != "" && e.Scope.Agent != "unknown" && ruleID == ""}
 		if v, ok := a.store.AdvisorVerdictFor(advisor.EgressSubjectID(e.ID), "egress"); ok && v.Assessment == advisor.EgressEvidenceKey(e) {
 			view.AdvisorInference = &egressInference{PossiblePurpose: v.Rationale, Confidence: v.Confidence, CreatedAt: v.CreatedAt}
 		}
-		rows = append(rows, view)
+		if view.Candidate {
+			candidates = append(candidates, view)
+		} else if len(other) < 100 {
+			other = append(other, view)
+		}
 	}
-	return rows
+	return append(candidates, other...)
 }
 
 func (a *API) handleEgressEpisodeSubpath(w http.ResponseWriter, r *http.Request) {

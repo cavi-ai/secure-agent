@@ -141,18 +141,28 @@ func (s *Store) RevokeExpectedEgressRule(id string) error {
 }
 
 func (s *Store) ListExpectedEgressRules() []ExpectedEgressRule {
-	rows, err := s.db.Query(`SELECT id,agent,kind,host,protocol,port,exe_path,harness,workspace,rationale,created_by,created_at,revoked_at FROM expected_egress_rules ORDER BY created_at DESC,id DESC LIMIT 500`)
-	if err != nil {
+	out := make([]ExpectedEgressRule, 0)
+	read := func(query string) bool {
+		rows, err := s.db.Query(query)
+		if err != nil {
+			return false
+		}
+		defer rows.Close()
+		for rows.Next() {
+			r, err := scanExpectedRule(rows)
+			if err != nil {
+				return false
+			}
+			out = append(out, r)
+		}
+		return rows.Err() == nil
+	}
+	columns := `SELECT id,agent,kind,host,protocol,port,exe_path,harness,workspace,rationale,created_by,created_at,revoked_at FROM expected_egress_rules`
+	if !read(columns + ` WHERE revoked_at IS NULL ORDER BY created_at DESC,id DESC`) {
 		return nil
 	}
-	defer rows.Close()
-	out := make([]ExpectedEgressRule, 0)
-	for rows.Next() {
-		r, err := scanExpectedRule(rows)
-		if err != nil {
-			return out
-		}
-		out = append(out, r)
+	if !read(columns + ` WHERE revoked_at IS NOT NULL ORDER BY created_at DESC,id DESC LIMIT 500`) {
+		return nil
 	}
 	return out
 }
@@ -160,20 +170,30 @@ func (s *Store) ListExpectedEgressRules() []ExpectedEgressRule {
 // ExpectedEgressMatch only classifies informational candidates. It is never
 // consulted by the proxy, guard, correlator, incident, or flag paths.
 func (s *Store) ExpectedEgressMatch(o EgressObservation) bool {
+	return s.ExpectedEgressMatchingRuleID(o) != ""
+}
+
+// ExpectedEgressMatchingRuleID returns the active rule that explains an
+// episode, preferring the exact destination over a broader activity scope.
+func (s *Store) ExpectedEgressMatchingRuleID(o EgressObservation) string {
 	var err error
 	o.Host, err = normalizeEgressHost(o.Host)
 	if err != nil {
-		return false
+		return ""
 	}
 	o.Protocol = strings.ToLower(strings.TrimSpace(o.Protocol))
 	o.Scope = normalizeEgressScope(o.Scope)
 	if o.Scope.Agent == "" {
-		return false
+		return ""
 	}
-	var found int
-	err = s.db.QueryRow(`SELECT 1 FROM expected_egress_rules WHERE agent=? AND revoked_at IS NULL AND
+	var id string
+	err = s.db.QueryRow(`SELECT id FROM expected_egress_rules WHERE agent=? AND revoked_at IS NULL AND
 	 ((kind='destination' AND host=? AND protocol=? AND port=?) OR
-	 (kind='scope' AND ? AND exe_path=? AND harness=? AND workspace=?)) LIMIT 1`,
-		o.Scope.Agent, o.Host, o.Protocol, o.Port, o.Scope.Complete(), o.Scope.ExePath, o.Scope.Harness, o.Scope.Workspace).Scan(&found)
-	return err == nil && found == 1
+	 (kind='scope' AND ? AND exe_path=? AND harness=? AND workspace=?))
+	 ORDER BY CASE WHEN kind='destination' THEN 0 ELSE 1 END, created_at DESC, id DESC LIMIT 1`,
+		o.Scope.Agent, o.Host, o.Protocol, o.Port, o.Scope.Complete(), o.Scope.ExePath, o.Scope.Harness, o.Scope.Workspace).Scan(&id)
+	if err != nil {
+		return ""
+	}
+	return id
 }

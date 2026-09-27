@@ -90,12 +90,45 @@ func TestEgressEpisodesCandidateAndAssessment(t *testing.T) {
 	if wCached.Code != 200 || queued != 1 {
 		t.Fatalf("cached assessment requeued: %d, %d", wCached.Code, queued)
 	}
-	if _, err := st.CreateExpectedEgressRule(store.ExpectedEgressRule{Agent: "claude", Kind: "destination", Host: recurring.Host, Protocol: recurring.Protocol, Port: recurring.Port}); err != nil {
+	exact, err := st.CreateExpectedEgressRule(store.ExpectedEgressRule{Agent: "claude", Kind: "destination", Host: recurring.Host, Protocol: recurring.Protocol, Port: recurring.Port})
+	if err != nil {
+		t.Fatal(err)
+	}
+	broad, err := st.CreateExpectedEgressRule(store.ExpectedEgressRule{Agent: "claude", Kind: "scope", ExePath: scope.ExePath, Harness: scope.Harness, Workspace: scope.Workspace})
+	if err != nil {
 		t.Fatal(err)
 	}
 	for _, e := range read() {
-		if e.Observed.ID == recurring.ID && (!e.Expected || e.Candidate) {
+		if e.Observed.ID == recurring.ID && (!e.Expected || e.Candidate || e.ExpectedRuleID != exact.ID) {
 			t.Fatalf("expected episode hidden or candidate: %+v", e)
 		}
+	}
+	if err := st.RevokeExpectedEgressRule(exact.ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range read() {
+		if e.Observed.ID == recurring.ID && e.ExpectedRuleID != broad.ID {
+			t.Fatalf("scope fallback=%+v", e)
+		}
+	}
+}
+
+func TestEgressEpisodesPrioritizesOlderCandidate(t *testing.T) {
+	st := testStore(t)
+	now := time.Now().UTC()
+	scope := store.EgressScope{Agent: "claude", ExePath: "/usr/bin/claude", Harness: "claude", Workspace: "/work/a"}
+	for i := 0; i < 5; i++ {
+		if err := st.RecordEgressObservation(store.EgressObservation{Scope: scope, Host: "203.0.113.1", Protocol: "tcp", Port: 443, At: now.Add(time.Duration(i-5) * time.Hour)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 0; i < 101; i++ {
+		if err := st.RecordEgressObservation(store.EgressObservation{Scope: scope, Host: "198.51.100.1", Protocol: "tcp", Port: i + 1, At: now}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	views := newTestAPI("", st, nil, nil).egressEpisodeViews()
+	if len(views) != 101 || !views[0].Candidate || views[0].Observed.Host != "203.0.113.1" {
+		t.Fatalf("older candidate not prioritized: count=%d first=%+v", len(views), views[0])
 	}
 }
