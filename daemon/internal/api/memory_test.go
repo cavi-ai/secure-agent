@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -16,6 +17,41 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
 
+func TestMemoryPresenterStructuredSummaries(t *testing.T) {
+	known := presentMemoryFact(store.MemoryFact{Kind: "guard", RuleID: "cloud-creds", Verdict: "allow", Scope: "always"})
+	for _, want := range []string{"Cloud credentials", "Allow", "Always"} {
+		if !strings.Contains(known.Title+" "+known.Detail, want) {
+			t.Fatalf("known guard summary missing %q: %+v", want, known)
+		}
+	}
+	unknown := presentMemoryFact(store.MemoryFact{Kind: "guard", RuleID: "PRIVATE_PROMPT_TEXT123", Verdict: "allow", Scope: "PRIVATE_SCOPE123"})
+	if strings.Contains(fmt.Sprintf("%+v", unknown), "PRIVATE_") || !strings.Contains(unknown.Detail, "Guard rule") || strings.Contains(unknown.Detail, "Scope:") {
+		t.Fatalf("unknown guard fields leaked or lost generic label: %+v", unknown)
+	}
+	once := presentMemoryFact(store.MemoryFact{Kind: "guard", RuleID: "cloud-creds", Verdict: "allow", Scope: "once"})
+	if !strings.Contains(once.Detail, "Scope: Once") || once.Detail == known.Detail {
+		t.Fatalf("allow-once and allow-always summaries are indistinguishable: once=%+v always=%+v", once, known)
+	}
+	resource := presentMemoryFact(store.MemoryFact{Kind: "resource", DiagnosisCodes: []string{"heavy-memory"}, RSSBytes: 4 << 30})
+	if !strings.Contains(resource.Detail, "Heavy memory") || !strings.Contains(resource.Detail, "4 GiB") {
+		t.Fatalf("resource summary lost measured pressure: %+v", resource)
+	}
+	usage := presentMemoryFact(store.MemoryFact{Kind: "activity", EventKind: event.KindModelCall, Model: "claude-sonnet-4-5", TokensIn: 1200, TokensOut: 300})
+	for _, want := range []string{"1200 input", "300 output"} {
+		if !strings.Contains(usage.Detail, want) {
+			t.Fatalf("usage summary missing %q: %+v", want, usage)
+		}
+	}
+	big := presentMemoryFact(store.MemoryFact{Kind: "resource", RSSBytes: math.MaxUint64})
+	if !strings.Contains(big.Detail, "15.9 EiB") || strings.Contains(big.Detail, "-") {
+		t.Fatalf("large RSS overflowed or disappeared: %+v", big)
+	}
+	bigUsage := presentMemoryFact(store.MemoryFact{Kind: "activity", EventKind: event.KindModelCall, TokensIn: math.MaxInt64, TokensOut: -1})
+	if !strings.Contains(bigUsage.Detail, "9223372036854775807 input") || strings.Contains(bigUsage.Detail, "-1") {
+		t.Fatalf("usage counts overflowed or exposed negative value: %+v", bigUsage)
+	}
+}
+
 func TestSessionMemoryRedaction(t *testing.T) {
 	st := testStore(t)
 	now := time.Now().UTC()
@@ -27,14 +63,15 @@ func TestSessionMemoryRedaction(t *testing.T) {
 	st.PutEvent(event.Event{Kind: event.KindToolCall, TS: now, SessionID: "s1", ToolName: identifierSecret})
 	st.PutEvent(event.Event{Kind: event.KindModelCall, TS: now, SessionID: "s1", Model: identifierSecret})
 	st.PutEvent(event.Event{Kind: event.KindToolCall, TS: now, SessionID: "s1", ToolName: "Bash"})
-	st.PutEvent(event.Event{Kind: event.KindModelCall, TS: now.Add(3 * time.Nanosecond), SessionID: "s1", Model: "claude-sonnet-4-5"})
+	st.PutEvent(event.Event{Kind: event.KindModelCall, TS: now.Add(3 * time.Nanosecond), SessionID: "s1", Model: "claude-sonnet-4-5", TokensIn: 1200, TokensOut: 300})
 	st.PutEvent(event.Event{Kind: event.KindPluginAction, TS: now.Add(time.Nanosecond), SessionID: "s1", Path: "guard-deny:cloud-creds", Detail: "secret-guard:deny"})
 	st.PutEvent(event.Event{Kind: event.KindPluginAction, TS: now.Add(2 * time.Nanosecond), SessionID: "s1", Path: "guard-deny:cloud-creds", Detail: "secret-guard-broker:deny"})
 	st.PutFlag(model.Flag{ID: "f1", Rule: hostile, Severity: 3, TS: now, SessionID: "s1", Evidence: []model.EvidenceItem{{Kind: "text", Text: hostile}}})
 	st.PutIncident(model.IncidentReport{ID: "i1", Rule: hostile, SessionID: "s1", Timestamp: now, Summary: hostile})
 	st.PutGuardDecision(store.GuardDecision{ID: "g1", SessionID: "s1", RuleID: hostile, Verdict: "deny", Scope: "once", At: now.Format(time.RFC3339Nano)})
+	st.PutGuardDecision(store.GuardDecision{ID: "g2", SessionID: "s1", RuleID: "cloud-creds", Verdict: "allow", Scope: "always", At: now.Add(4 * time.Nanosecond).Format(time.RFC3339Nano)})
 	st.PutResourceEpisode(resource.Episode{CapturedAt: now, Severity: "warning", DiagnosisCodes: []string{identifierSecret}, Session: resource.Session{Key: "100:" + strconv.FormatInt(started.UnixNano(), 10), RootPID: 100, RootStartedAt: started, Workspace: hostile, Kind: "agent"}})
-	st.PutResourceEpisode(resource.Episode{CapturedAt: now.Add(time.Nanosecond), Severity: "warning", DiagnosisCodes: []string{"heavy-memory"}, Session: resource.Session{Key: "100:" + strconv.FormatInt(started.UnixNano(), 10), RootPID: 100, RootStartedAt: started, Kind: "agent"}})
+	st.PutResourceEpisode(resource.Episode{CapturedAt: now.Add(time.Nanosecond), Severity: "warning", DiagnosisCodes: []string{"heavy-memory"}, Session: resource.Session{Key: "100:" + strconv.FormatInt(started.UnixNano(), 10), RootPID: 100, RootStartedAt: started, RSSBytes: 4 << 30, Kind: "agent"}})
 	a := newTestAPI("", st, &fakeKiller{}, func() Status { return Status{Running: true} })
 	w := httptest.NewRecorder()
 	a.handleSessionSubpath(w, httptest.NewRequest(http.MethodGet, "/sessions/s1/memory", nil))
@@ -51,7 +88,7 @@ func TestSessionMemoryRedaction(t *testing.T) {
 			t.Fatalf("raw payload %q leaked in decoded response: %s", secret, decoded)
 		}
 	}
-	for _, label := range []string{"Tool: Shell command", "Model: Claude Sonnet 4.5", "Diagnosis: Heavy memory"} {
+	for _, label := range []string{"Tool: Shell command", "Model: Claude Sonnet 4.5", "1200 input", "300 output", "Diagnosis: Heavy memory", "4 GiB", "Cloud credentials", "Scope: Always"} {
 		if !strings.Contains(decoded, label) {
 			t.Fatalf("known label %q missing: %s", label, decoded)
 		}
