@@ -87,6 +87,8 @@ var Table = []Route{
 	{Path: "/allowlist", Console: true, MutatingMethods: []string{"POST"}, ConsoleMethods: []string{"DELETE"}},
 	{Path: "/egress/uninspected", Console: true},
 	{Path: "/egress/endpoint", Console: true},
+	{Path: "/egress/episodes", Console: true, NoAgent: true},
+	{Path: "/egress/episodes/", Prefix: true, Leaves: []string{"assess"}, Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
 	{Path: "/expected-egress", Console: true, NoAgent: true, MutatingMethods: []string{"POST", "DELETE"}},
 	{Path: "/notify/rules", Console: true, ConsoleMethods: []string{"POST"}},
 	{Path: "/guard/path-allow", Console: true, MutatingMethods: []string{"POST"}},
@@ -184,7 +186,7 @@ func ConsoleAllowed(method, path string) bool {
 // UI or owner uid.
 func IsMutation(method, path string) bool {
 	for _, r := range Table {
-		if r.Path != path {
+		if !routeMatches(r, path) {
 			continue
 		}
 		for _, m := range r.MutatingMethods {
@@ -214,11 +216,23 @@ func IsOwnerOnly(path string) bool {
 // IsNoAgent reports whether path is a NoAgent route.
 func IsNoAgent(path string) bool {
 	for _, r := range Table {
-		if r.Path == path {
+		if routeMatches(r, path) {
 			return r.NoAgent
 		}
 	}
 	return false
+}
+
+func routeMatches(r Route, path string) bool {
+	if !r.Prefix {
+		return r.Path == path
+	}
+	if !strings.HasPrefix(path, r.Path) {
+		return false
+	}
+	rest := strings.TrimPrefix(path, r.Path)
+	parts := strings.SplitN(rest, "/", 2)
+	return len(parts) == 2 && parts[0] != "" && parts[0] != "." && parts[0] != ".." && slices.Contains(r.Leaves, parts[1])
 }
 
 // IsDecide reports whether (method, path) is the agent-facing guard decision.
