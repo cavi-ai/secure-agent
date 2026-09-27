@@ -44,6 +44,7 @@ var jsonlRotateBytes int64 = 8 << 20
 
 type Store struct {
 	mu                  sync.Mutex
+	egressMu            sync.Mutex // serializes episode read-modify-write without blocking event state
 	db                  *sql.DB
 	jsonlPath           string
 	jsonlFile           *os.File
@@ -262,6 +263,7 @@ func Open(dbPath, jsonlPath string) (*Store, error) {
 			episode_json TEXT NOT NULL
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_resource_episodes_captured_at ON resource_episodes(captured_at);`,
+		egressEpisodesSchema,
 		guardDecisionsSchema,
 		sessionsSchema,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status, last_seen_at);`,
