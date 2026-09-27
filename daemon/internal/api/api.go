@@ -635,6 +635,7 @@ func (a *API) routes() map[string]http.HandlerFunc {
 		"/allowlist":                    a.handleAllowlistAdd,
 		"/egress/uninspected":           a.handleUninspectedEgress,
 		"/egress/endpoint":              a.handleEndpointDetail,
+		"/expected-egress":              a.handleExpectedEgress,
 		"/notify/rules":                 a.handleNotifyRules,
 		"/guard/path-allow":             a.handleGuardPathAllow,
 		"/mute":                         a.handleMute,

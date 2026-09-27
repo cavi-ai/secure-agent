@@ -491,6 +491,32 @@ func TestConsoleAPIGate(t *testing.T) {
 	if code := get(base+"/status?ct="+ct, nil); code != http.StatusOK {
 		t.Fatalf("/status with ct query: %d, want 200 (EventSource can't set headers)", code)
 	}
+	for _, method := range []string{"GET", "POST", "DELETE"} {
+		for _, headers := range []map[string]string{nil, {"X-SecureAgent-Proxy-Token": pt}} {
+			req, _ := http.NewRequest(method, base+"/expected-egress", nil)
+			for k, v := range headers {
+				req.Header.Set(k, v)
+			}
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				t.Fatalf("%s /expected-egress accepted non-console credential", method)
+			}
+		}
+		req, _ := http.NewRequest(method, base+"/expected-egress", nil)
+		req.Header.Set("X-SecureAgent-Console-Token", ct)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("%s /expected-egress with console token: %d", method, resp.StatusCode)
+		}
+	}
 	// /guard/path-allow: the console token admits GET and POST (the Explain
 	// card's allow-path action); the proxy token agents carry does not.
 	post := func(path string, headers map[string]string) int {

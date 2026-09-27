@@ -87,6 +87,7 @@ var Table = []Route{
 	{Path: "/allowlist", Console: true, MutatingMethods: []string{"POST"}, ConsoleMethods: []string{"DELETE"}},
 	{Path: "/egress/uninspected", Console: true},
 	{Path: "/egress/endpoint", Console: true},
+	{Path: "/expected-egress", Console: true, NoAgent: true, MutatingMethods: []string{"POST", "DELETE"}},
 	{Path: "/notify/rules", Console: true, ConsoleMethods: []string{"POST"}},
 	{Path: "/guard/path-allow", Console: true, MutatingMethods: []string{"POST"}},
 	{Path: "/mute", Console: true, MutatingMethods: []string{"POST"}, ConsoleMethods: []string{"DELETE"}},

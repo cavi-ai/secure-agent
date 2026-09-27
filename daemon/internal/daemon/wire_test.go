@@ -357,6 +357,16 @@ func TestStartDrainLoopPersistsAndCloses(t *testing.T) {
 	cfg, _ := config.Load("/nonexistent")
 	tagger := agents.New(cfg, fakeProcSource{})
 	tagger.Refresh()
+	info, ok := tagger.Tag(500)
+	if !ok {
+		t.Fatal("test process was not tagged")
+	}
+	if _, err := st.CreateExpectedEgressRule(store.ExpectedEgressRule{Agent: info.Name, Kind: "destination", Host: "evil.example.com", Protocol: "tcp", Port: 443}); err != nil {
+		t.Fatal(err)
+	}
+	if !st.ExpectedEgressMatch(store.EgressObservation{Scope: store.EgressScope{Agent: info.Name}, Host: "evil.example.com", Protocol: "tcp", Port: 443}) {
+		t.Fatal("expected-egress rule not active")
+	}
 	cr := correlate.New(tagger, sensitive.New(cfg), cfg)
 
 	b := bus.New(64)
