@@ -70,6 +70,16 @@ func GitInfoFor(workspace string) (repo, branch string) {
 	return repo, branch
 }
 
+// IsGitWorkspace checks eligibility for repo-attribution diagnostics without
+// touching the resolver's cache, which is protected by its own mutex.
+func IsGitWorkspace(workspace string) bool {
+	if !filepath.IsAbs(workspace) {
+		return false
+	}
+	repo, _ := resolveGitInfo(workspace)
+	return repo != ""
+}
+
 // resolveGitInfo walks up from workspace looking for a .git entry (directory
 // or worktree link file), the same rule git itself applies.
 func resolveGitInfo(workspace string) (repo, branch string) {

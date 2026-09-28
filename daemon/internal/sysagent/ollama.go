@@ -15,10 +15,11 @@ import (
 
 // ollamaInfo is what one probe of the endpoint found.
 type ollamaInfo struct {
-	Reachable bool
-	Version   string
-	Models    []string
-	Err       string
+	Reachable    bool
+	Version      string
+	Models       []string
+	Capabilities map[string][]string
+	Err          string
 }
 
 // probeTimeout bounds one probe: the console waits on it.
@@ -30,16 +31,18 @@ func probe(ctx context.Context, client *http.Client, endpoint string) ollamaInfo
 	defer cancel()
 	var tags struct {
 		Models []struct {
-			Name string `json:"name"`
+			Name         string   `json:"name"`
+			Capabilities []string `json:"capabilities"`
 		} `json:"models"`
 	}
 	if err := getJSON(ctx, client, endpoint+"/api/tags", &tags); err != nil {
 		return ollamaInfo{Err: err.Error()}
 	}
-	info := ollamaInfo{Reachable: true, Models: []string{}}
+	info := ollamaInfo{Reachable: true, Models: []string{}, Capabilities: map[string][]string{}}
 	for _, m := range tags.Models {
 		if m.Name != "" {
 			info.Models = append(info.Models, m.Name)
+			info.Capabilities[m.Name] = m.Capabilities
 		}
 	}
 	sort.Strings(info.Models)
@@ -72,6 +75,24 @@ func getJSON(ctx context.Context, client *http.Client, url string, v any) error 
 func (o ollamaInfo) hasModel(name string) bool {
 	for _, m := range o.Models {
 		if m == name || m == name+":latest" {
+			return true
+		}
+	}
+	return false
+}
+
+// Older Ollama versions omit capabilities. Preserve compatibility there,
+// but never auto-select (or dispatch) a model explicitly marked embedding-only.
+func (o ollamaInfo) supportsChat(name string) bool {
+	capabilities, ok := o.Capabilities[name]
+	if !ok {
+		capabilities, ok = o.Capabilities[name+":latest"]
+	}
+	if !ok || len(capabilities) == 0 {
+		return true
+	}
+	for _, capability := range capabilities {
+		if capability == "completion" {
 			return true
 		}
 	}

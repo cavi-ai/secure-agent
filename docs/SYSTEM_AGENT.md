@@ -20,13 +20,13 @@ dispatch.
    OLLAMA_CONTEXT_LENGTH=64000 ollama serve   # agents need a long context; Hermes refuses less than 64k
    ```
 
-2. Enable it in `~/.config/secure-agent/config.yaml` (applied live, no restart):
+2. In the menu bar app, open **Settings → App → System Agent** and turn on **Enable local Agent chat**. Use **Ask Agent** in the menu bar popover to open the chat. The daemon applies the setting live. For a headless install or to select specific models, set `~/.config/secure-agent/config.yaml`:
 
    ```yaml
    system_agent:
      enabled: true
      endpoint: "http://127.0.0.1:11434"   # Ollama; must be loopback
-     model: qwen3                         # chat model ("" = the first model Ollama lists)
+     model: qwen3                         # chat model ("" = the first chat-capable model Ollama lists)
      harness_model: qwen3-coder           # model dispatched harnesses run ("" = model)
      timeout_minutes: 30                  # bound on one headless run (up to 240; 0 = 30)
    ```

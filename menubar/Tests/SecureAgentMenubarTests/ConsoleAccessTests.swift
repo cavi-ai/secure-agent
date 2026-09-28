@@ -48,6 +48,23 @@ final class ConsoleAccessTests: XCTestCase {
         XCTAssertEqual(out, "proxy_enabled: false\n")
     }
 
+    func testSystemAgentTogglePreservesExistingModelAndOtherConfig() {
+        let yaml = "proxy_enabled: true\nsystem_agent:\n  enabled: false\n  model: qwen3\n  endpoint: \"http://127.0.0.1:11434\"\nadvisor:\n  enabled: true\n"
+        let on = SetupManager.systemAgentConfigUpdating(yaml, enabled: true)
+        XCTAssertTrue(SetupManager.systemAgentConfigIsEnabled(on))
+        XCTAssertTrue(on.contains("model: qwen3\n"))
+        XCTAssertTrue(on.contains("endpoint: \"http://127.0.0.1:11434\"\n"))
+        XCTAssertTrue(on.contains("advisor:\n  enabled: true\n"))
+        let off = SetupManager.systemAgentConfigUpdating(on, enabled: false)
+        XCTAssertEqual(off, yaml)
+    }
+
+    func testSystemAgentToggleAddsMissingBlock() {
+        let out = SetupManager.systemAgentConfigUpdating("proxy_enabled: true\n", enabled: true)
+        XCTAssertEqual(out, "proxy_enabled: true\nsystem_agent:\n  enabled: true\n")
+        XCTAssertTrue(SetupManager.systemAgentConfigIsEnabled(out))
+    }
+
     // MARK: focus-or-open scripts
 
     func testTabMatchIdentifiesConsoleTabs() {

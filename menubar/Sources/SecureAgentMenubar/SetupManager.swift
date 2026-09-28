@@ -35,6 +35,7 @@ public final class SetupManager: ObservableObject {
     /// Local advisor: whether a model server answers on the loopback endpoint
     /// and whether the daemon config has the advisor enabled.
     @Published public private(set) var advisorEnabled = false
+    @Published public private(set) var systemAgentEnabled = false
     /// Last-persisted advisor config (mode/endpoint/model) — the Settings
     /// tab's restore source so the advisor persists across restarts.
     @Published public private(set) var advisorPersisted: (mode: String?, endpoint: String?, model: String?) = (nil, nil, nil)
@@ -180,6 +181,7 @@ public final class SetupManager: ObservableObject {
             fm.fileExists(atPath: "\(target)/secret_guard.py")
         } && claudeHooksRegistered()
         advisorEnabled = Self.advisorConfigIsEnabled(configYAML())
+        systemAgentEnabled = Self.systemAgentConfigIsEnabled(configYAML())
         advisorPersisted = Self.advisorConfig(configYAML())
         disabledAgents = Self.disabledAgents(configYAML())
         advisorDiscovery = (try? await DaemonClient().fetchAdvisorDiscover())
@@ -199,6 +201,56 @@ public final class SetupManager: ObservableObject {
 
     private func configYAML() -> String {
         (try? String(contentsOfFile: configPath, encoding: .utf8)) ?? ""
+    }
+
+    /// The chat agent is opt-in. Keep its existing endpoint and model choices
+    /// intact when toggling it from Settings; the daemon reloads this live.
+    public func setSystemAgentEnabled(_ enabled: Bool) {
+        do {
+            let updated = Self.systemAgentConfigUpdating(configYAML(), enabled: enabled)
+            let dir = (configPath as NSString).deletingLastPathComponent
+            try fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
+            try updated.write(toFile: configPath, atomically: true, encoding: .utf8)
+            systemAgentEnabled = enabled
+        } catch {
+            report(error)
+        }
+    }
+
+    public nonisolated static func systemAgentConfigIsEnabled(_ yaml: String) -> Bool {
+        var inBlock = false
+        for line in yaml.split(separator: "\n", omittingEmptySubsequences: false) {
+            let s = String(line)
+            if s.hasPrefix("system_agent:") { inBlock = true; continue }
+            if inBlock && !s.hasPrefix(" ") && !s.hasPrefix("#") && !s.isEmpty { inBlock = false }
+            if inBlock && s.trimmingCharacters(in: .whitespaces).hasPrefix("enabled:") {
+                let value = s.trimmingCharacters(in: .whitespaces).dropFirst("enabled:".count)
+                    .split(separator: "#", maxSplits: 1).first.map(String.init) ?? ""
+                return value.trimmingCharacters(in: .whitespaces) == "true"
+            }
+        }
+        return false
+    }
+
+    public nonisolated static func systemAgentConfigUpdating(_ yaml: String, enabled: Bool) -> String {
+        let value = enabled ? "true" : "false"
+        var lines = yaml.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        guard let start = lines.firstIndex(where: { $0.hasPrefix("system_agent:") }) else {
+            var base = yaml
+            if !base.isEmpty && !base.hasSuffix("\n") { base += "\n" }
+            return base + "system_agent:\n  enabled: \(value)\n"
+        }
+        let end = (start + 1..<lines.count).first {
+            let line = lines[$0]
+            return !line.isEmpty && !line.hasPrefix(" ") && !line.hasPrefix("#")
+        } ?? lines.count
+        for i in start + 1..<end where lines[i].trimmingCharacters(in: .whitespaces).hasPrefix("enabled:") {
+            let indent = String(lines[i].prefix(while: { $0 == " " }))
+            lines[i] = "\(indent)enabled: \(value)"
+            return lines.joined(separator: "\n")
+        }
+        lines.insert("  enabled: \(value)", at: start + 1)
+        return lines.joined(separator: "\n")
     }
 
     /// Flip advisor.enabled in config.yaml. Line-based and deliberately

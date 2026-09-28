@@ -32,8 +32,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cavi-ai/secure-agent/daemon/internal/advisor"
 	"github.com/cavi-ai/secure-agent/daemon/internal/config"
+	"github.com/cavi-ai/secure-agent/daemon/internal/loopback"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 	"github.com/cavi-ai/secure-agent/daemon/internal/toolpath"
@@ -109,7 +109,7 @@ func New(st Store, stateDir string, mask func(string) (string, bool)) *Agent {
 	a := &Agent{
 		st: st, mask: mask, stateDir: stateDir, home: home, binDirs: toolpath.Dirs(home),
 		openTerminal: openTerminal, now: time.Now,
-		client: &http.Client{Timeout: chatTimeout},
+		client: loopback.Client(chatTimeout),
 	}
 	a.look = func(name string) string { return toolpath.Look(name, a.binDirs) }
 	if a.mask == nil {
@@ -132,7 +132,7 @@ func (a *Agent) config() config.SystemAgentConfig {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	c := a.cfg
-	c.Enabled = c.Enabled && advisor.IsLoopbackEndpoint(c.Endpoint)
+	c.Enabled = c.Enabled && loopback.ValidEndpoint(c.Endpoint)
 	return c
 }
 
@@ -233,22 +233,32 @@ func (a *Agent) harnessReason(cfg config.SystemAgentConfig, info ollamaInfo, h H
 		return "Ollama has no model pulled: ollama pull <model>"
 	case !info.hasModel(modelName):
 		return fmt.Sprintf("model %s is not pulled: ollama pull %s", modelName, modelName)
+	case !info.supportsChat(modelName):
+		return fmt.Sprintf("model %s does not support chat; choose a completion model", modelName)
 	}
 	return ""
 }
 
-// chatModel is the configured chat model, else the first one pulled.
+// chatModel is the configured chat model, else the first chat-capable one.
 func chatModel(cfg config.SystemAgentConfig, info ollamaInfo) (string, error) {
 	if cfg.Model != "" {
 		if info.Reachable && !info.hasModel(cfg.Model) {
 			return cfg.Model, fmt.Errorf("model %s is not pulled: ollama pull %s", cfg.Model, cfg.Model)
+		}
+		if info.Reachable && !info.supportsChat(cfg.Model) {
+			return cfg.Model, fmt.Errorf("model %s does not support chat; choose a completion model", cfg.Model)
 		}
 		return cfg.Model, nil
 	}
 	if len(info.Models) == 0 {
 		return "", errors.New("Ollama has no model pulled: ollama pull <model>")
 	}
-	return info.Models[0], nil
+	for _, model := range info.Models {
+		if info.supportsChat(model) {
+			return model, nil
+		}
+	}
+	return "", errors.New("Ollama has no chat-capable model pulled: ollama pull <model>")
 }
 
 // harnessModel is the plan's model, else harness_model, else the chat

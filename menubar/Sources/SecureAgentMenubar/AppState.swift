@@ -880,7 +880,7 @@ public final class AppState: ObservableObject {
     /// proxy_enabled, bounce the daemon (the proxy starts at boot only), wait
     /// for the port, then open. The greyed-out button with a tooltip used to
     /// strand users — the disabled state is now the action.
-    public func enableConsoleAndOpen() {
+    public func enableConsoleAndOpen(tab: String? = nil) {
         guard !isEnablingConsole else { return }
         isEnablingConsole = true
         onChange?()
@@ -905,7 +905,7 @@ public final class AppState: ObservableObject {
             }
             await performFetch()
             if up {
-                openDashboard()
+                openDashboard(tab: tab)
             } else {
                 self.lastError = "The console did not come up — see ~/Library/Logs/secure-agent/daemon-err.log"
                 self.onChange?()

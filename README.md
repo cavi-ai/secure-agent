@@ -60,7 +60,7 @@ As AI coding agents (Claude Code, Cursor, Codex, Gemini, opencode, Copilot, etc.
 
 - 🛠️ **Native `secure-agent` CLI Tool**  
   Pure-Go terminal utility (`secure-agent status`, `flags`, `incidents`, `kill`, `fleet`, `service`) for inspecting security posture directly from terminal prompts. `secure-agent service install` runs the daemon headless under launchd for fleet/CI nodes with no GUI login.
-  - `secure-agent doctor` — hooks, file telemetry, collectors, trace coverage, sessions, pairing, pricing, retention, egress; exit 1 on any failure, for CI.
+  - `secure-agent doctor` — hooks, file telemetry, collectors, trace coverage, sessions, pairing, pricing, retention, egress; repo attribution is measured only for sessions inside Git workspaces. Exits 1 on any failure.
   - `secure-agent worktrees` — every git worktree from agent sessions, agent worktree directories and a saved repo list, each marked remove, review, keep or prune with the reasons; `worktrees remove` and `worktrees prune` act only on those verdicts. The console's Sessions › Cleanup view shows the same report with disk usage per project and what cleanups have reclaimed (`secure-agent cleanup log`).
 
 - 🔌 **Local Control & Query API**  
@@ -70,7 +70,7 @@ As AI coding agents (Claude Code, Cursor, Codex, Gemini, opencode, Copilot, etc.
   Easily customize sensitive path patterns, agent binary matchers, vendor network allowlists (`anthropic.com`, `cursor.sh`, `openai.com`), and proxy settings.
 
 - 🤖 **System Agent: Sensitive Work on a Local Model (opt-in)**
-  The console's **Agent** tab chats with a model on your own Ollama. Ask it about SSH keys, Git credentials, commit signing, or a harness's sign-in and config; when you want something done, it proposes a task for Claude Code, Codex, OpenClaw or Hermes Agent (a **Route to** dropdown picks which) and you dispatch it headless in a folder or in a terminal you drive — the harness runs against the same local Ollama, so keys and config never reach a vendor model. A harness that cannot run yet gets the work saved as a plan for later. Seven built-in skills (`ssh`, `git`, `signing`, `claude`, `codex`, `openclaw`, `hermes`) guide the model and the dispatched harness. Messages are masked by the firewall before they are stored or sent; `/agent/*` routes refuse agent processes. See [`docs/SYSTEM_AGENT.md`](docs/SYSTEM_AGENT.md).
+  Turn on **Settings → App → System Agent**, then click **Ask Agent** in the menu bar popover to open the console's **Agent** tab. It chats with a chat-capable model on your own Ollama. Ask it about SSH keys, Git credentials, commit signing, or a harness's sign-in and config; when you want something done, it proposes a task for Claude Code, Codex, OpenClaw or Hermes Agent (a **Route to** dropdown picks which) and you dispatch it headless in a folder or in a terminal you drive — the harness runs against the same local Ollama, so keys and config never reach a vendor model. A harness that cannot run yet gets the work saved as a plan for later. Seven built-in skills (`ssh`, `git`, `signing`, `claude`, `codex`, `openclaw`, `hermes`) guide the model and the dispatched harness. Messages are masked by the firewall before they are stored or sent; `/agent/*` routes refuse agent processes. See [`docs/SYSTEM_AGENT.md`](docs/SYSTEM_AGENT.md).
 
 - 🔔 **Noise-Controlled Alerts, With Real Recourse**  
   Only **severity-3 criticals page you** by default (secret leaks, read-then-connect, TCC tampering, keychain CLI execs); warnings queue silently in the popover and console. Routine keychain-DB file opens are informational (severity 1) — legitimate tooling touches them constantly, so they never page unless you opt in. Every noisy class has a working **"Dismiss this flag class"** (rule-level mute, reversible from Settings → Muted flag classes), and Settings → Notifications / the console bell menu offer per-rule **Default / Always / Never** overrides (`/notify/rules`) shared by both UIs.
@@ -140,7 +140,7 @@ The first-run setup wizard walks you through:
 3. **Harness hooks** — copies `secret_guard.py`, `injection_scan.py`, `activity_log.py` into `~/.claude/hooks`, `~/.cursor/hooks`, and `~/.config/opencode/hooks`.
 4. **Extras** — Open at Login (`SMAppService`) and the `secure-agent` CLI symlink in `~/.local/bin`.
 
-Everything is also manageable later from the menu bar icon (**Setup & Permissions…**, **Settings…**, **Uninstall…**, **Open Security Console**).
+Everything is also manageable later from the menu bar icon (**Setup & Permissions…**, **Settings…**, **Uninstall…**, **Open console**, **Ask Agent**).
 
 ### In-app updates
 
@@ -341,14 +341,14 @@ advisor:
 ### 🤖 System agent
 
 ```yaml
-# Opt-in: the console's Agent tab. Chat with a model on your local Ollama and
+# Opt-in: Settings → App → System Agent, or the console's Agent tab. Chat with a model on your local Ollama and
 # dispatch Claude Code, Codex, OpenClaw or Hermes Agent against the same
 # Ollama. Loopback-only, enforced in code. See docs/SYSTEM_AGENT.md.
 system_agent:
   enabled: false
   endpoint: "http://127.0.0.1:11434"
-  model: qwen3                 # chat model
-  harness_model: qwen3-coder   # a tool-calling model for dispatched harnesses
+  model: ""                   # first chat-capable installed model, or pin a model name
+  harness_model: ""           # defaults to the chat model; pin a tool-calling model for dispatches
 ```
 
 Each reply that proposes work shows the exact task, the harness and the

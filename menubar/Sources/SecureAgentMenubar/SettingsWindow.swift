@@ -317,6 +317,16 @@ struct SettingsView: View {
                         .disabled(!setup.isAgentRoutingConfigured)
                 }
             }
+            Section("System Agent") {
+                Toggle("Enable local Agent chat", isOn: Binding(
+                    get: { setup.systemAgentEnabled },
+                    set: { setup.setSystemAgentEnabled($0) }
+                ))
+                Text("Uses a model already installed in Ollama on this Mac. The Agent tab shows model and harness readiness before work runs.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Button("Open Agent chat") { state.openDashboard(tab: "agent") }
+                    .disabled(state.dashboardUnavailableReason != nil)
+            }
             Section {
                 HStack {
                     Button("Setup & Permissions…") { OnboardingWindowController.shared.show() }

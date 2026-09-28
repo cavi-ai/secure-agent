@@ -22,15 +22,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"regexp"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/cavi-ai/secure-agent/daemon/internal/loopback"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
@@ -64,16 +63,7 @@ type Sink interface {
 // The privacy guarantee is enforced, not promised: anything else is a
 // config error, surfaced loudly rather than honored.
 func IsLoopbackEndpoint(endpoint string) bool {
-	u, err := url.Parse(endpoint)
-	if err != nil || u.Hostname() == "" {
-		return false
-	}
-	h := strings.ToLower(u.Hostname())
-	if h == "localhost" {
-		return true
-	}
-	ip := net.ParseIP(h)
-	return ip != nil && ip.IsLoopback()
+	return loopback.ValidEndpoint(endpoint)
 }
 
 // chatRequest is the OpenAI-compatible chat-completions payload.
@@ -209,8 +199,8 @@ func New(cfg Config, sink Sink) *Subscriber {
 		cfg:            cfg,
 		sink:           sink,
 		queue:          make(chan task, cfg.QueueSize),
-		client:         &http.Client{Timeout: cfg.Timeout},
-		onRequest:      &http.Client{Timeout: max(cfg.Timeout, onRequestTimeout)},
+		client:         loopback.Client(cfg.Timeout),
+		onRequest:      loopback.Client(max(cfg.Timeout, onRequestTimeout)),
 		retriageLast:   map[string]time.Time{},
 		planInflight:   map[string]time.Time{},
 		egressInflight: map[string]struct{}{},

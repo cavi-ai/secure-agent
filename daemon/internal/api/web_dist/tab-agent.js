@@ -7,7 +7,7 @@ const AGENT_RUN_BADGE = { running: 'badge-amber', done: 'badge-ok', failed: 'bad
 const AGENT_PLAN_BADGE = { saved: '', running: 'badge-amber', opened: 'badge-ok', manual: 'badge-amber', done: 'badge-ok', failed: 'badge-rose' };
 
 // The config the off state offers to copy.
-const AGENT_CONFIG_SNIPPET = 'system_agent:\n  enabled: true\n  model: qwen3                # chat model: ollama pull qwen3\n  harness_model: qwen3-coder  # what dispatched harnesses run';
+const AGENT_CONFIG_SNIPPET = 'system_agent:\n  enabled: true';
 
 // agentHarnessLabel: the harness's display name from /agent/status, else
 // the console's harness table.
@@ -30,7 +30,8 @@ function agentOffHTML() {
   return `<div class="agent-off">
     <h3>The system agent is off</h3>
     <p>It chats with a model on your own Ollama, drafts work for Claude Code, Codex, OpenClaw or Hermes Agent, and runs that work against the same local model — keys, sign-ins and harness config never reach a vendor model.</p>
-    <p>Turn it on in <code>~/.config/secure-agent/config.yaml</code>; the daemon applies it within seconds:</p>
+    <p>Open the Secure Agent menu bar app, then Settings → App → System Agent and turn on local Agent chat. Return here to start a conversation.</p>
+    <p>For a headless install, add this to <code>~/.config/secure-agent/config.yaml</code>; the daemon applies it within seconds:</p>
     <pre class="agent-snippet">${escapeHTML(AGENT_CONFIG_SNIPPET)}</pre>
     <div><button type="button" class="btn btn-ghost btn-sm" data-action="agent-copy" data-text="${escapeHTML(AGENT_CONFIG_SNIPPET)}"><svg class="icon"><use href="#i-copy"/></svg><span>Copy</span></button></div>
   </div>`;

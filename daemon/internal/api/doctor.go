@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/collect"
+	"github.com/cavi-ai/secure-agent/daemon/internal/session"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
 
@@ -67,11 +68,13 @@ type doctorFacts struct {
 	hookUncovered  bool
 	hookEvents24h  int
 
-	sessionsTotal, sessionsNamed         int
-	sessionsWithWorkspace, sessionsWRepo int
-	sessionsLastHour                     int
-	sessionsByHarness, traceByHarness    map[string]int
-	seenByHarness                        map[string]int // transcript/hook sessions seen since boot
+	sessionsTotal, sessionsNamed               int
+	sessionsWithWorkspace, sessionsWRepo       int
+	sessionsWithGitWorkspace, sessionsGitWRepo int
+	repoQueryError                             bool
+	sessionsLastHour                           int
+	sessionsByHarness, traceByHarness          map[string]int
+	seenByHarness                              map[string]int // transcript/hook sessions seen since boot
 
 	dupePairs, idless int
 
@@ -158,6 +161,22 @@ func (a *API) doctorFacts(now time.Time) doctorFacts {
 	f.hookUncovered = harnessUncoveredItem(a.store, st) != nil
 	f.hookEvents24h = a.store.HookEventsSince(now.Add(-hookActivityWindow))
 	f.sessionsTotal, f.sessionsNamed, f.sessionsWithWorkspace, f.sessionsWRepo = a.store.SessionIdentityStats(f.boot)
+	gitWorkspaces := map[string]bool{}
+	workspaceRows, err := a.store.DoctorWorkspaceRepos(f.boot)
+	f.repoQueryError = err != nil
+	for _, row := range workspaceRows {
+		eligible, ok := gitWorkspaces[row[0]]
+		if !ok {
+			eligible = session.IsGitWorkspace(row[0])
+			gitWorkspaces[row[0]] = eligible
+		}
+		if eligible {
+			f.sessionsWithGitWorkspace++
+			if row[1] != "" {
+				f.sessionsGitWRepo++
+			}
+		}
+	}
 	f.sessionsLastHour = a.store.SessionsCreatedSince(now.Add(-time.Hour))
 	f.sessionsByHarness = a.store.SessionsByHarness(f.boot)
 	f.seenByHarness = a.store.SessionsSeenByHarness(f.boot)
@@ -321,6 +340,9 @@ func checkSessionRepo(f doctorFacts) (string, string) {
 	if f.grace {
 		return doctorSkip, doctorGraceDetail
 	}
+	if f.repoQueryError {
+		return doctorFail, "could not inspect workspace attribution"
+	}
 	if f.sessionsWithWorkspace == 0 {
 		named := 0
 		for _, n := range f.sessionsByHarness {
@@ -331,9 +353,12 @@ func checkSessionRepo(f doctorFacts) (string, string) {
 		}
 		return doctorFail, fmt.Sprintf("0 of %d named sessions since boot carry a workspace — attribution drop", named)
 	}
-	detail := fmt.Sprintf("%d of %d sessions with a workspace since boot carry a repo (%d%%)",
-		f.sessionsWRepo, f.sessionsWithWorkspace, pct(f.sessionsWRepo, f.sessionsWithWorkspace))
-	if f.sessionsWRepo*100 < f.sessionsWithWorkspace*50 {
+	if f.sessionsWithGitWorkspace == 0 {
+		return doctorSkip, fmt.Sprintf("%d workspace sessions since boot, none inside Git checkouts", f.sessionsWithWorkspace)
+	}
+	detail := fmt.Sprintf("%d of %d sessions in Git workspaces since boot carry a repo (%d%%)",
+		f.sessionsGitWRepo, f.sessionsWithGitWorkspace, pct(f.sessionsGitWRepo, f.sessionsWithGitWorkspace))
+	if f.sessionsGitWRepo*100 < f.sessionsWithGitWorkspace*50 {
 		return doctorFail, detail + ", want ≥ 50%"
 	}
 	return doctorPass, detail

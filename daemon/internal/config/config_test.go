@@ -593,6 +593,8 @@ func TestSystemAgentKey(t *testing.T) {
 	for _, bad := range []string{
 		"system_agent:\n  enabled: true\n  endpoint: \"http://10.0.0.5:11434\"\n",
 		"system_agent:\n  enabled: true\n  endpoint: \"https://ollama.com\"\n",
+		"system_agent:\n  enabled: true\n  endpoint: \"ftp://localhost\"\n",
+		"system_agent:\n  enabled: true\n  endpoint: \"http://localhost#remote\"\n",
 		"system_agent:\n  timeout_minutes: -1\n",
 		"system_agent:\n  timeout_minutes: 241\n",
 	} {

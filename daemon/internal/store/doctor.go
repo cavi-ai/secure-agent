@@ -82,6 +82,29 @@ func (s *Store) SessionIdentityStats(since time.Time) (total, named, withWorkspa
 	return total, named, withWorkspace, withRepo
 }
 
+// DoctorWorkspaceRepos returns named sessions with a workspace since boot so
+// Doctor can measure repo coverage only where a Git checkout actually exists.
+func (s *Store) DoctorWorkspaceRepos(since time.Time) ([][2]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rows, err := s.db.Query(`SELECT workspace, COALESCE(repo,'') FROM sessions
+		WHERE COALESCE(harness,'') != '' AND COALESCE(workspace,'') != ''
+		AND datetime(started_at) >= datetime(?) ORDER BY datetime(started_at), id`, sinceArg(since))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out [][2]string
+	for rows.Next() {
+		var workspace, repo string
+		if err := rows.Scan(&workspace, &repo); err != nil {
+			return nil, err
+		}
+		out = append(out, [2]string{workspace, repo})
+	}
+	return out, rows.Err()
+}
+
 // SessionsCreatedSince counts sessions started at or after since.
 func (s *Store) SessionsCreatedSince(since time.Time) int {
 	return s.doctorCount(`SELECT COUNT(*) FROM sessions WHERE datetime(started_at) >= datetime(?)`, sinceArg(since))
