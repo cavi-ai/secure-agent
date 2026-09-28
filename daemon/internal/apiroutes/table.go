@@ -111,6 +111,7 @@ var Table = []Route{
 	{Path: "/worktrees/reveal", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
 	{Path: "/worktrees/reconnect", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
 	{Path: "/worktrees/trash", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
+	{Path: "/worktrees/review-trash", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
 	{Path: "/cleanup/ledger", Console: true, NoAgent: true},
 	{Path: "/worktrees/ask", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
 	{Path: "/worktrees/asks", Console: true, NoAgent: true},

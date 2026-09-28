@@ -411,7 +411,7 @@ func TestWorktreeAskEndpoint(t *testing.T) {
 		{`{"path":"relative"}`, http.StatusBadRequest},
 		{`{"path":"` + repo + `"}`, http.StatusNotFound},  // main worktree
 		{`{"path":"` + clean + `"}`, http.StatusConflict}, // state remove: nothing to sort out
-		{`{"path":"` + dirty + `"}`, http.StatusNotFound}, // no resumable session recorded
+		{`{"path":"` + dirty + `"}`, http.StatusConflict}, // no agent is working here
 	} {
 		if rec := do(http.MethodPost, "/worktrees/ask", c.body); rec.Code != c.want {
 			t.Fatalf("ask %s: %d %s, want %d", c.body, rec.Code, rec.Body.String(), c.want)
@@ -435,8 +435,8 @@ func TestWorktreeAskEndpoint(t *testing.T) {
 		t.Fatalf("add repo: %d", rec.Code)
 	}
 	var rep worktreehunter.ScanReport
-	if err := json.Unmarshal(do(http.MethodGet, "/worktrees?refresh=1", "").Body.Bytes(), &rep); err != nil || rep.Asks[dirty].Verdict != "removable" {
-		t.Fatalf("report asks = %+v (%v)", rep.Asks, err)
+	if err := json.Unmarshal(do(http.MethodGet, "/worktrees?refresh=1", "").Body.Bytes(), &rep); err != nil || rep.Asks[dirty].Verdict != "removable" || rep.Askable[dirty] != "claude" {
+		t.Fatalf("report asks = %+v, askable = %+v (%v)", rep.Asks, rep.Askable, err)
 	}
 	for _, p := range []string{"/worktrees/ask", "/worktrees/asks"} {
 		for _, r := range apiroutes.Table {
@@ -447,6 +447,46 @@ func TestWorktreeAskEndpoint(t *testing.T) {
 	}
 	if !apiroutes.IsMutation(http.MethodPost, "/worktrees/ask") {
 		t.Fatal("/worktrees/ask must be a mutation")
+	}
+}
+
+func TestWorktreeReviewTrashEndpoint(t *testing.T) {
+	home, root, repo, clean, _, _ := worktreeFixture(t)
+	excludes := filepath.Join(root, "excludes")
+	if err := os.WriteFile(excludes, []byte(".env\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("git", "-C", repo, "config", "core.excludesfile", excludes).CombinedOutput(); err != nil {
+		t.Fatalf("set excludes: %v %s", err, out)
+	}
+	if err := os.WriteFile(filepath.Join(clean, ".env"), []byte("TOKEN=[REDACTED]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	st := testStore(t)
+	t.Cleanup(func() { st.Close() })
+	hunter := worktreehunter.New(st, home, worktreehunter.Options{})
+	row, _, err := hunter.Inspect(t.Context(), clean)
+	if err != nil || row.State != worktreehunter.StateReview {
+		t.Fatalf("review row: %+v, %v", row, err)
+	}
+	mux := New(Deps{Store: st, Status: func() Status { return Status{Running: true} }, Worktrees: hunter}).buildMux()
+	post := func(head string) *httptest.ResponseRecorder {
+		body, _ := json.Marshal(map[string]any{"path": clean, "head": head, "reasons": row.Reasons})
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/worktrees/review-trash", strings.NewReader(string(body))))
+		return rec
+	}
+	if rec := post("stale"); rec.Code != http.StatusConflict {
+		t.Fatalf("stale review: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := post(row.Head); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"trash_path"`) {
+		t.Fatalf("reviewed Trash: %d %s", rec.Code, rec.Body.String())
+	}
+	if _, err := os.Stat(clean); !os.IsNotExist(err) {
+		t.Fatalf("worktree still present: %v", err)
+	}
+	if !apiroutes.IsMutation(http.MethodPost, "/worktrees/review-trash") || !apiroutes.ConsoleAllowed(http.MethodPost, "/worktrees/review-trash") {
+		t.Fatal("review-trash must be a console-admitted mutation")
 	}
 }
 

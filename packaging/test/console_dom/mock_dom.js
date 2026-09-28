@@ -775,6 +775,13 @@
       rep.errors = (rep.errors || []).filter(e => rep.repos.some(r => e.startsWith(r.path + ': ')));
       return { status: 'ok', result: { path: body.path, bytes: 52428800, trash_path: '/Users/dev/.Trash/ctnj' } };
     }
+    if (p === '/worktrees/review-trash') {
+      const rep = data['/worktrees'];
+      for (const r of rep.repos) r.worktrees = r.worktrees.filter(w => w.path !== body.path);
+      rep.summary.worktrees--;
+      rep.summary.review--;
+      return { status: 'ok', result: { path: body.path, bytes: 1258291, trash_path: '/Users/dev/.Trash/evidence' } };
+    }
     if (p === '/worktrees/remove') {
       if (MODE.includes('removecadence')) window.__removePostedAt = Date.now();
       // The daemon removes in the background: running now, the outcome
@@ -1637,7 +1644,7 @@
       path: WT_REPO, source: 'session', default_branch: 'origin/main', size_bytes: 1612709888, worktrees: [
         { path: WT_REPO, branch: 'main', state: 'main', reasons: ['main worktree of the repository'], idle_days: 0 },
         { path: WT_REPO + '/.worktrees/done', branch: 'feat/done', state: 'remove', stale: true, last_activity: iso(21 * 86400000), idle_days: 21, size_bytes: 1610612736, reasons: ['merged into origin/main (squash)'] },
-        { path: WT_REPO + '/.worktrees/evidence', branch: 'feat/evidence', state: 'review', last_activity: iso(3600000), idle_days: 0, reasons: ['ignored files that only live here: .tmp/ (3 files, 1.2 MB)', '<b>not bold</b>'] },
+        { path: WT_REPO + '/.worktrees/evidence', branch: 'feat/evidence', head: '123abc', state: 'review', last_activity: iso(3600000), idle_days: 0, reasons: ['ignored files that only live here: .tmp/ (3 files, 1.2 MB)', '<b>not bold</b>'] },
         { path: '/Users/dev/.codex/worktrees/ab12/api-service', branch: '', detached: true, state: 'keep', last_activity: iso(60000), idle_days: 0, reasons: ['2 uncommitted changes', 'an agent session is live here'] },
         { path: WT_REPO + '/.worktrees/gone', branch: 'feat/gone', state: 'prune', stale: true, idle_days: 0, reasons: ['directory is gone; git still lists it'] }
       ]
@@ -1646,6 +1653,7 @@
     advice: {
       [WT_REPO + '/.worktrees/evidence']: { assessment: 'review', confidence: 0.6, rationale: '<i>look</i> at .tmp before removing' }
     },
+    askable: { ['/Users/dev/.codex/worktrees/ab12/api-service']: 'codex' },
     asks: {
       [WT_REPO + '/.worktrees/evidence']: { harness: 'claude', status: 'answered', verdict: 'pr', detail: 'https://github.com/o/r/pull/9', cost_usd: 0.21 }
     }
@@ -1792,6 +1800,26 @@
   }
   // worktreedemo: Remove the removable worktree and accept the dialog; the
   // row must leave the tab without a rescan.
+  if (MODE.includes('reviewdemo')) {
+    setTimeout(() => {
+      const btn = document.querySelector('#worktrees-container [data-action="worktree-review"]');
+      if (btn) btn.click();
+      if (MODE.includes('reviewtrash')) {
+        setTimeout(() => {
+          const move = document.querySelector('#drawer-foot [data-action="worktree-review-trash"]');
+          if (move) move.click();
+          const iv = setInterval(() => {
+            const ok = document.getElementById('confirm-ok');
+            if (ok && !ok.closest('#confirm-layer').hidden) {
+              ok.click();
+              clearInterval(iv);
+            }
+          }, 100);
+          setTimeout(() => clearInterval(iv), 3000);
+        }, 400);
+      }
+    }, 3000);
+  }
   if (MODE.includes('worktreedemo')) {
     setTimeout(() => {
       const btn = document.querySelector('#worktrees-container [data-action="worktree-remove"]');

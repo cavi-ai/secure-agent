@@ -663,6 +663,7 @@ func (a *API) routes() map[string]http.HandlerFunc {
 		"/worktrees/reveal":             a.handleWorktreeReveal,
 		"/worktrees/reconnect":          a.handleWorktreeReconnect,
 		"/worktrees/trash":              a.handleWorktreeTrash,
+		"/worktrees/review-trash":       a.handleWorktreeReviewTrash,
 		"/cleanup/ledger":               a.handleCleanupLedger,
 		"/cleanup":                      a.handleCleanup,
 		"/worktrees/ask":                a.handleWorktreeAsk,

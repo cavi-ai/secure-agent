@@ -68,7 +68,7 @@ func setup(t *testing.T, harness string) (*Asker, *memStore, string, string) {
 	}
 	t.Setenv("PATH", "/usr/bin:/bin")
 	st := &memStore{asks: map[int64]model.AgentAsk{}, sessions: []model.Session{
-		{ID: "sess-1234", Harness: harness, Workspace: wt, Confidence: model.ConfHook},
+		{ID: "sess-1234", Harness: harness, Workspace: wt, Status: model.SessionActive, Confidence: model.ConfHook},
 	}}
 	a := New(st, root)
 	a.binDirs = []string{bin}
@@ -154,7 +154,11 @@ func TestAskTimeoutBusyAndNoSession(t *testing.T) {
 	if _, err := a.Ask(Request{Path: wt}); !errors.Is(err, ErrNoSession) {
 		t.Fatalf("no session: %v", err)
 	}
-	st.sessions = []model.Session{{ID: "y", Harness: "codex", Workspace: wt}}
+	st.sessions = []model.Session{{ID: "idle", Harness: "codex", Workspace: wt, Status: model.SessionIdle, Confidence: model.ConfHook}}
+	if _, err := a.Ask(Request{Path: wt}); !errors.Is(err, ErrNoSession) {
+		t.Fatalf("idle session: %v", err)
+	}
+	st.sessions = []model.Session{{ID: "y", Harness: "codex", Workspace: wt, Status: model.SessionActive, Confidence: model.ConfHook}}
 	if _, err := a.Ask(Request{Path: wt}); err == nil || !strings.Contains(err.Error(), "codex CLI is not installed") {
 		t.Fatalf("missing CLI: %v", err)
 	}

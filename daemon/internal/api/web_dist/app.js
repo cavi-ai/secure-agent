@@ -1957,6 +1957,55 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   };
 
+  function reviewedWorktree(path) {
+    for (const repo of (worktreesState.report && worktreesState.report.repos) || []) {
+      const row = (repo.worktrees || []).find(w => w.path === path && w.state === 'review' && !w.orphan);
+      if (row) return row;
+    }
+    return null;
+  }
+
+  window.reviewWorktree = function(path) {
+    const row = reviewedWorktree(path);
+    if (!row) return;
+    const reasons = (row.reasons || []).map(reason => `<li>${escapeHTML(reason)}</li>`).join('');
+    const canTrash = row.head && reasons && !row.error && !row.submodules;
+    openDrawer({
+      title: 'Review worktree', icon: 'folder',
+      body: `<p><b>Branch:</b> ${escapeHTML(row.branch || '(detached)')}</p>
+        <p><b>Folder:</b> ${escapeHTML(row.path)}</p>
+        <p><b>HEAD:</b> ${escapeHTML(row.head || 'unknown')}</p>
+        <p>Review these local-only items before clearing this worktree:</p><ul>${reasons}</ul>
+        <p>Moving this folder to Trash preserves its files there. The branch, commits, and stashes stay in Git. You can restore the folder from Trash until it is emptied.</p>
+        ${canTrash ? '' : '<p>This worktree needs further inspection before it can be moved to Trash.</p>'}`,
+      foot: `<button type="button" class="btn btn-sm" data-action="worktree-reveal" data-path="${escapeHTML(path)}">Open folder</button>`
+        + (canTrash ? `<button type="button" class="btn btn-danger btn-sm" data-action="worktree-review-trash" data-path="${escapeHTML(path)}">Move to Trash</button>` : '')
+    });
+  };
+
+  window.trashReviewedWorktree = async function(path) {
+    const row = reviewedWorktree(path);
+    if (!row) return;
+    const ok = await window.saConfirm(`Move ${path} to Trash and unregister the worktree? Its files remain recoverable in Trash; its branch, commits, and stashes remain in Git.`,
+      { title: 'Move reviewed worktree to Trash', okLabel: 'Move to Trash' });
+    if (!ok) return;
+    try {
+      const { r, text, json } = await postWorktree('/worktrees/review-trash',
+        { path, head: row.head, reasons: row.reasons });
+      if (!r.ok) throw new Error(text.trim() || String(r.status));
+      const dest = json && json.result && json.result.trash_path;
+      closeDrawer();
+      dropWorktreeRows([path]);
+      renderNow(['worktrees']);
+      showToast(`Moved to Trash${dest ? ': ' + dest : ''}`, 'success');
+      loadWorktrees(false);
+      loadLedger();
+    } catch (err) {
+      showToast('Could not move reviewed worktree: ' + (err.message || err), 'danger');
+      loadWorktrees(true);
+    }
+  };
+
   // Ask the local advisor for a note. The note is looked up on every GET, so
   // a few cheap re-reads of the cached report pick it up when the model
   // answers; no rescan.
@@ -3584,6 +3633,14 @@ document.addEventListener('DOMContentLoaded', () => {
       case 'worktree-trash-orphan':
         e.preventDefault();
         window.trashOrphanWorktree(d.path);
+        break;
+      case 'worktree-review':
+        e.preventDefault();
+        window.reviewWorktree(d.path);
+        break;
+      case 'worktree-review-trash':
+        e.preventDefault();
+        window.trashReviewedWorktree(d.path);
         break;
       case 'worktree-advise':
         e.preventDefault();

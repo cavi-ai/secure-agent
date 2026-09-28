@@ -61,7 +61,7 @@ As AI coding agents (Claude Code, Cursor, Codex, Gemini, opencode, Copilot, etc.
 - 🛠️ **Native `secure-agent` CLI Tool**  
   Pure-Go terminal utility (`secure-agent status`, `flags`, `incidents`, `kill`, `fleet`, `service`) for inspecting security posture directly from terminal prompts. `secure-agent service install` runs the daemon headless under launchd for fleet/CI nodes with no GUI login.
   - `secure-agent doctor` — hooks, file telemetry, collectors, trace coverage, sessions, pairing, pricing, retention, egress; repo attribution is measured only for sessions inside Git workspaces. Exits 1 on any failure.
-  - `secure-agent worktrees` — every git worktree from agent sessions, agent worktree directories and a saved repo list, each marked remove, review, keep or prune with the reasons; `worktrees remove` and `worktrees prune` act only on those verdicts. The console's Sessions › Cleanup view shows the same report with disk usage per project and what cleanups have reclaimed (`secure-agent cleanup log`).
+  - `secure-agent worktrees` — every git worktree from agent sessions, agent worktree directories and a saved repo list, each marked remove, review, keep or prune with the reasons; `worktrees remove` and `worktrees prune` act only on those verdicts. The console's Sessions › Cleanup view lets you inspect review items and move a reviewed folder to Trash while retaining its Git branch, commits, and stashes. “Ask the agent” appears only for a live, resumable agent session; “Ask advisor” requests an advisory note. The view also shows disk usage per project and what cleanups have reclaimed (`secure-agent cleanup log`).
 
 - 🔌 **Local Control & Query API**  
   Exposes a secure HTTP API over a Unix domain socket (`~/.config/secure-agent/daemon.sock`) for querying status, events, flags, incidents, and initiating process termination.
@@ -387,13 +387,14 @@ The Go daemon listens on a local Unix domain socket (`~/.config/secure-agent/dae
 | `/worktrees` | `GET` | Every git worktree found, with a remove/review/keep/prune verdict and its reasons (`?refresh=1` rescans). |
 | `/worktrees/repos` | `POST` | Add a repository to the worktree hunter's saved list, or hide it (`{"path": "...", "hidden": true}`). |
 | `/worktrees/remove` | `POST` | Remove a worktree whose fresh verdict is `remove` (`{"path": "..."}`), or prune missing ones (`{"repo": "...", "prune": true}`). |
+| `/worktrees/review-trash` | `POST` | After inspecting a `review` row, move its folder to Trash and unregister it; fresh facts must still match. |
 | `/worktrees/advise` | `POST` | Ask the local advisor for a note on one worktree (`{"path": "..."}`); advisory only. |
 | `/worktrees/reveal`, `/worktrees/reconnect`, `/worktrees/trash` | `POST` | For a folder whose repository moved or was deleted: open it in Finder, link it again with `git worktree repair`, or move it to the Trash. |
 | `/cleanup/ledger` | `GET` | What cleanups removed and the bytes each gave back, with all-time and 30-day totals. |
 | `/cleanup` | `GET` | `.tmp` and `.quarantine` folders, build output, tool and app caches: size, last touched, project, how to clear. |
 | `/cleanup/trash`, `/cleanup/clean` | `POST` | Move one item to the Trash, or run a tool cache's own clean command. |
 | `/cleanup/advise` | `POST` | Ask the local advisor for a cleanup plan for one project (`{"project": "<repo path or machine>"}`); advisory only. |
-| `/worktrees/ask` | `POST` | Resume the agent that worked in a keep/review worktree: it opens a PR for its work or says the worktree can go (`GET /worktrees/asks` lists answers). |
+| `/worktrees/ask` | `POST` | Ask a currently active, identified agent in a keep/review worktree to open a PR for its work or say the worktree can go (`GET /worktrees/asks` lists answers). |
 | `/agent/status`, `/agent/skills`, `/agent/runs` | `GET` | The system agent's model and harness readiness, its skills, and its dispatches. |
 | `/agent/chat` | `GET`, `POST`, `DELETE` | Direct Ollama conversation; `POST {"message","workdir"}` sends one (the reply lands asynchronously). A harness field is rejected. |
 | `/agent/actions` | `POST` | Start the exact local command stored on an assistant message: `{"message_id":123}`. The caller cannot supply command text. |
