@@ -633,9 +633,7 @@
         </div>
       </div>
 
-      <!-- Agent: chat with the system agent (a model on the local Ollama),
-           its plans and dispatches, and the harnesses it routes to. The
-           composer is static; the lists re-render. -->
+      <!-- Agent: local Ollama chat and commands; harness handoff is separate. -->
       <div class="tabpanel" id="tab-agent" role="tabpanel" hidden>
         <div class="agent-layout">
           <section class="panel agent-chat" id="agent-chat">
@@ -647,16 +645,28 @@
             <div class="agent-thread" id="agent-thread" role="log" aria-live="polite" aria-label="Conversation with the system agent"></div>
             <form class="agent-composer" id="agent-composer">
               <label class="sr-only" for="agent-input">Message the system agent</label>
-              <textarea id="agent-input" class="input agent-input" rows="3" maxlength="8000" placeholder="Ask about keys, sign-in, signing or a harness — or describe work to hand to a harness. Never paste a secret."></textarea>
+              <textarea id="agent-input" class="input agent-input" rows="3" maxlength="8000" placeholder="Talk directly with your local Ollama agent. Ask it to propose a local command, or ask a question. Never paste a secret."></textarea>
               <div class="agent-composer-row">
-                <label class="agent-route">Route to <select id="agent-harness" class="select select-sm"></select></label>
-                <input id="agent-workdir" class="input agent-workdir" type="text" spellcheck="false" autocomplete="off" placeholder="Folder (default: your home)" aria-label="Folder the harness works in">
-                <button type="button" class="btn btn-ghost btn-sm" data-action="agent-save-plan" title="Keep this request as a plan to dispatch later">Save as plan</button>
+                <span class="agent-local-label">Local Ollama · no harness</span>
+                <input id="agent-workdir" class="input agent-workdir" type="text" spellcheck="false" autocomplete="off" placeholder="Command folder (default: your home)" aria-label="Folder for a proposed local command">
                 <button type="submit" class="btn btn-primary btn-sm" id="agent-send">Send</button>
               </div>
             </form>
           </section>
           <div class="col" id="agent-side">
+            <section class="panel" id="agent-handoff-panel">
+              <div class="panel-head"><h2><svg class="icon"><use href="#i-server"/></svg>Harness handoff</h2></div>
+              <div class="panel-body agent-handoff">
+                <p>Optional. Saving a handoff does not route this chat or run a harness. Review and confirm a plan separately.</p>
+                <label for="agent-handoff-input">Task for a harness</label>
+                <textarea id="agent-handoff-input" class="input agent-input" rows="3" maxlength="8000" placeholder="Describe a harness update or coding task"></textarea>
+                <div class="agent-composer-row">
+                  <label class="agent-route">Harness <select id="agent-harness" class="select select-sm"></select></label>
+                  <input id="agent-handoff-workdir" class="input agent-workdir" type="text" spellcheck="false" autocomplete="off" placeholder="Folder" aria-label="Folder for harness handoff">
+                  <button type="button" class="btn btn-ghost btn-sm" data-action="agent-save-plan">Save handoff plan</button>
+                </div>
+              </div>
+            </section>
             <section class="panel" id="agent-plans-panel">
               <div class="panel-head">
                 <h2><svg class="icon"><use href="#i-doc"/></svg>Plans</h2>

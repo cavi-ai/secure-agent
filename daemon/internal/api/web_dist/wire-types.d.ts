@@ -784,6 +784,7 @@ export interface ScanReport {
   volumes?: Volume[];
   reclaimed?: CleanupTotals;
   asks?: Record<string, AgentAsk>;
+  askable?: Record<string, string>;
   advice?: Record<string, AdvisorVerdict>;
 }
 
@@ -895,6 +896,12 @@ export interface SysAgentProposal {
   skills: string[];
 }
 
+export interface SysAgentLocalCommand {
+  command: string;
+  workdir: string;
+  mode: string;
+}
+
 export interface SysAgentMessage {
   id: number;
   ts: string;
@@ -904,6 +911,8 @@ export interface SysAgentMessage {
   workdir?: string;
   skills?: string[];
   proposal?: SysAgentProposal;
+  local_command?: SysAgentLocalCommand;
+  local_run_id?: number;
   plan_id?: number;
 }
 

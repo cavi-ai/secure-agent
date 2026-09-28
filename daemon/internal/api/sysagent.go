@@ -173,3 +173,31 @@ func (a *API) handleAgentRuns(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, a.sysAgent.Runs(50))
 }
+
+// handleAgentActions starts the exact local command in an assistant message.
+// The caller cannot provide command text or a replacement folder.
+func (a *API) handleAgentActions(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !a.sysAgentReady(w) {
+		return
+	}
+	limitBody(w, r)
+	var in struct {
+		MessageID int64 `json:"message_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.MessageID <= 0 {
+		http.Error(w, `Invalid payload: {"message_id"}`, http.StatusBadRequest)
+		return
+	}
+	run, err := a.sysAgent.RunLocal(in.MessageID)
+	if err != nil {
+		writeSysAgentError(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
+	_ = json.NewEncoder(w).Encode(map[string]any{"run": run})
+}

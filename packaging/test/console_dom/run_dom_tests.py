@@ -240,6 +240,8 @@ def main():
         dom_sticky = dump_dom(chrome, tmp, "?stickydemo")
         dom_drawerback = dump_dom(chrome, tmp, "?drawerbackdemo")
         dom_wt = dump_dom(chrome, tmp, "?tab=worktrees")
+        dom_wtreview = dump_dom(chrome, tmp, "?tab=worktrees&reviewdemo")
+        dom_wtreviewtrash = dump_dom(chrome, tmp, "?tab=worktrees&reviewdemo&reviewtrash")
         dom_wtremove = dump_dom(chrome, tmp, "?tab=worktrees&worktreedemo")
         dom_wtorphan = dump_dom(chrome, tmp, "?tab=worktrees&orphandemo")
         dom_wtbatch = dump_dom(chrome, tmp, "?tab=worktrees&batchdemo")
@@ -260,7 +262,10 @@ def main():
         dom_agent = dump_dom(chrome, tmp, "?tab=agent", origin)
         dom_agentoff = dump_dom(chrome, tmp, "?tab=agent&agentoff", origin)
         dom_agentchat = dump_dom(chrome, tmp, "?tab=agent&agentchat", origin)
+        dom_agentlocal = dump_dom(chrome, tmp, "?tab=agent&agentlocal", origin)
         dom_agentdispatch = dump_dom(chrome, tmp, "?tab=agent&agentdispatch", origin)
+        dom_headroomwide = dump_dom(chrome, tmp, "?tab=sessions&headroomhint", origin, window_size=(1280, 800))
+        dom_headroomphone = dump_dom(chrome, tmp, "?phonedemo&headroomhint")
         dom_scope = dump_dom(chrome, tmp, "?scopedemo")
         dom_pattern = dump_dom(chrome, tmp, "?patterndemo")
         dom_patternact = dump_dom(chrome, tmp, "?patterndemo&patternact")
@@ -822,6 +827,11 @@ def main():
               and 'aria-label="What machine headroom means"' in resource_view
               and "tightest limit, not free RAM" in resource_view
               and "Under 15 is critical" in resource_view)
+        phone_headroom = re.search(r'data-headroom="(\d+):true"', dom_headroomphone)
+        check("headroom hint fits its panel at desktop and phone widths",
+              'data-inside="true"' in dom_headroomwide and 'data-width="380"' in dom_headroomwide
+              and phone_headroom is not None and 250 <= int(phone_headroom.group(1)) <= 320
+              and 'data-hscroll="sessions:0,agents:0,resources:0"' in dom_headroomphone)
         check("live resources exclude the flight recorder",
               "Pressure flight recorder" not in resource_view)
         check("agent and non-agent memory are separated",
@@ -1402,9 +1412,18 @@ def main():
         check("worktrees: the advisor note renders escaped under its row; Ask advisor sits on review and keep rows only",
               '<p class="wt-advice"><b>Advisor: review</b> 60% · &lt;i&gt;look&lt;/i&gt; at .tmp before removing</p>' in wt
               and wt.count('data-action="worktree-advise"') == 2)
-        check("worktrees: Ask the agent sits on review and keep rows; the latest answer shows under its row",
-              wt.count('data-action="worktree-ask"') == 2
+        check("worktrees: Ask the agent appears only for the active agent; review has an inspection action",
+              wt.count('data-action="worktree-ask"') == 1
+              and 'class="btn btn-primary btn-sm" data-action="worktree-ask"' in wt
+              and wt.count('data-action="worktree-review"') == 1
               and '<p class="wt-ask wt-ask-answered"><b>Asked claude:</b> pr — https://github.com/o/r/pull/9 ($0.21)</p>' in wt)
+        check("worktrees: Review opens local-only reasons and a recoverable Trash action",
+              'Review worktree' in dom_wtreview
+              and 'ignored files that only live here: .tmp/' in dom_wtreview
+              and 'data-action="worktree-review-trash"' in dom_wtreview)
+        check("worktrees: reviewed folder leaves the list after explicit Trash confirmation",
+              'POST /worktrees/review-trash' in pre(dom_wtreviewtrash, 'mock-requests')
+              and '.worktrees/evidence' not in wt_block(dom_wtreviewtrash))
         check("worktrees: the disk card shows the volume and what worktrees occupy",
               "512.0 GB free of 2.0 TB" in dom_wt and 'data-w="75"' in dom_wt
               and "<b>Worktrees</b> 1.5 GB" in dom_wt
@@ -1575,9 +1594,12 @@ def main():
               and 'qwen3:latest on Ollama 0.15.1 · stays on this machine' in ag)
         check("agent: message text, proposal tasks, plan titles and run output render escaped",
               "<img src=x" not in ag and "&lt;img src=x onerror=alert(1)&gt;" in ag)
-        check("agent: the route-to dropdown lists every harness; ones that cannot run are marked for later",
-              '<option value="openclaw">OpenClaw (plan for later)</option>' in ag
-              and '<option value="codex">Codex</option>' in ag and ag.count("<option ") == 4)
+        check("agent: local chat and optional harness handoff are separate; unavailable harnesses are marked for later",
+              'Local Ollama · no harness' in ag and 'id="agent-handoff-panel"' in ag
+              and 'id="agent-harness"' not in ag.split('id="agent-composer"', 1)[1].split('</form>', 1)[0]
+              and '<option value="openclaw">OpenClaw (plan for later)</option>' in ag
+              and '<option value="codex">Codex</option>' in ag and '<option value="pi">Pi runner (plan for later)</option>' in ag
+              and ag.count("<option ") == 5)
         check("agent: a plan whose harness cannot run says why and its dispatch buttons are disabled",
               'agent-plan-reason">OpenClaw is not installed where the daemon can find it (openclaw)</div>' in ag
               and 'data-plan="2" data-mode="headless" disabled=""' in ag)
@@ -1593,10 +1615,16 @@ def main():
               'The system agent is off' in ago and 'system_agent:\n  enabled: true' in ago
               and '<textarea id="agent-input"' in ago and ago.split('<textarea id="agent-input"', 1)[1].split('>', 1)[0].count('disabled') == 1)
         agc = agent_block(dom_agentchat)
-        check("agent: a message sent from the composer shows, then the model's reply with its proposal lands",
+        check("agent: a message sent from the composer gets a direct local command proposal",
               "POST /agent/chat" in pre(dom_agentchat, "mock-requests")
-              and "Keep my Git token in the keychain" in agc and "Store Git credentials in the keychain" in agc
+              and "Keep my Git token in the keychain" in agc and "git config --global credential.helper osxkeychain" in agc
+              and 'data-action="agent-run-local"' in agc
               and "The local model is answering" not in agc and agent_count(dom_agentchat, "agent-msg ") == 7)
+        agl = agent_block(dom_agentlocal)
+        check("agent: confirmed local command runs once and its result appears under Runs",
+              "POST /agent/actions" in pre(dom_agentlocal, "mock-requests")
+              and 'Git credential helper configured.' in agl and 'data-action="agent-run-local"' not in agl
+              and agl.count('class="agent-run" data-run=') == 3)
         agd = agent_block(dom_agentdispatch)
         reqs = pre(dom_agentdispatch, "mock-requests")
         check("agent: Run headless dispatches after the dialog; the run lands under Runs and finishes",

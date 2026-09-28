@@ -62,12 +62,14 @@ test('worktreeRowHTML: Remove only on remove, Prune only on prune, Ask advisor o
   const goneHTML = worktreeRowHTML(gone, rep.repos[0]);
   assert.match(goneHTML, /data-action="worktree-prune" data-repo="\/Users\/x\/code\/app"/);
   assert.match(goneHTML, /<span class="wt-idle">—<\/span>/);
-  const keepHTML = worktreeRowHTML(keep, rep.repos[1]);
+  const keepHTML = worktreeRowHTML(keep, rep.repos[1], null, null, null, 'codex');
   assert.deepEqual([...keepHTML.matchAll(/data-action="([a-z-]+)"/g)].map(m => m[1]), ['copy-path', 'worktree-reveal', 'worktree-ask', 'worktree-advise']);
+  assert.match(keepHTML, /class="btn btn-primary btn-sm" data-action="worktree-ask"/);
   assert.ok(keepHTML.includes('&lt;img src=x onerror=alert(1)&gt;') && !keepHTML.includes('<img'));
   assert.match(keepHTML, /<span class="wt-branch">\(detached\)<\/span>/);
   const reviewHTML = worktreeRowHTML(review, rep.repos[1]);
-  assert.deepEqual([...reviewHTML.matchAll(/data-action="([a-z-]+)"/g)].map(m => m[1]), ['copy-path', 'worktree-reveal', 'worktree-ask', 'worktree-advise']);
+  assert.deepEqual([...reviewHTML.matchAll(/data-action="([a-z-]+)"/g)].map(m => m[1]), ['copy-path', 'worktree-reveal', 'worktree-review', 'worktree-advise']);
+  assert.ok(!reviewHTML.includes('worktree-ask'), 'no active agent means no Ask button');
   // The path copies the full path; Show in Finder on every folder still on
   // disk (a prune row's folder is gone).
   assert.match(doneHTML, /<button type="button" class="wt-path" data-action="copy-path" data-path="\/Users\/x\/code\/app\/\.worktrees\/done" title="\/Users\/x\/code\/app\/\.worktrees\/done — click to copy">\.worktrees\/done<\/button>/);
@@ -267,9 +269,9 @@ test('agent asks: status line under the row, escaped; Ask the agent disabled whi
   const answered = worktreeRowHTML(keep, rep.repos[1], null,
     { harness: 'claude', status: 'answered', verdict: 'pr', detail: 'https://x/pull/<9>', cost_usd: 0.21 });
   assert.ok(answered.includes('<p class="wt-ask wt-ask-answered"><b>Asked claude:</b> pr — https://x/pull/&lt;9&gt; ($0.21)</p>'));
-  const running = worktreeRowHTML(keep, rep.repos[1], null, { harness: 'codex', status: 'running' });
+  const running = worktreeRowHTML(keep, rep.repos[1], null, { harness: 'codex', status: 'running' }, null, 'codex');
   assert.ok(running.includes("waiting for codex&#39;s answer…") || running.includes("waiting for codex's answer…"));
-  assert.match(running, /data-action="worktree-ask" data-path="[^"]+" disabled>Ask the agent<\/button>/);
+  assert.match(running, /data-action="worktree-ask" data-path="[^"]+" title="Ask active codex agent" disabled>Ask the agent<\/button>/);
   const failed = worktreeRowHTML(keep, rep.repos[1], null, { harness: 'codex', status: 'timeout', verdict: 'none', detail: 'no answer within 15m0s' });
   assert.ok(failed.includes('wt-ask-timeout') && failed.includes('timeout — no answer within 15m0s'));
 });

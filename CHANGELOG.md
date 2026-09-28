@@ -6,6 +6,11 @@ All notable changes to `secure-agent` are documented here. The format follows
 
 ## [Unreleased]
 
+### System Agent
+- Chat stays on local Ollama. It proposes exact local shell commands for explicit review and confirmation, with Terminal mode for passphrases; commands run with the operator account's file and network access.
+- Harness selection and plan creation moved to a separate handoff section, so sending chat cannot silently route to another agent. The API rejects legacy chat requests with a harness field.
+- Pi runner joins optional harness handoff in terminal mode only. Its model is pinned to the local Ollama in an isolated configuration; extensions, shell tool, context files, and online startup checks are disabled. Pi has no built-in sandbox, so its file tools still have the operator account's file access.
+
 ### Fixed
 - Menu bar: the status icon uses a colored bitmap shield with a white check, so the status bar cannot render it as a monochrome template; attention uses a yellow shield with a black mark.
 - System Agent: the menu bar has an Ask Agent entry, Settings can enable local Agent chat without editing YAML, and the console's off state points to that control.

@@ -421,9 +421,9 @@ function worktreeRemovalHTML(rm) {
 
 // worktreeRowHTML: one worktree. Remove only on state remove, Prune only on
 // state prune; the daemon enforces the same rule again on the request. Ask
-// the agent and Ask advisor on review and keep rows, where work may remain.
+// the agent only for live eligible sessions; Ask advisor on review and keep.
 // A running removal disables Remove and shows its step.
-function worktreeRowHTML(w, repo, note, ask, removal) {
+function worktreeRowHTML(w, repo, note, ask, removal, askable) {
   const branch = w.branch || (w.detached ? '(detached)' : '');
   const reasons = (w.reasons || []).map(r => `<li>${escapeHTML(r)}</li>`).join('');
   let action = '';
@@ -441,8 +441,9 @@ function worktreeRowHTML(w, repo, note, ask, removal) {
     action = `<button type="button" class="btn btn-sm" data-action="worktree-prune" data-repo="${escapeHTML(repo.path)}">Prune</button>`;
   } else if (w.state === 'review' || w.state === 'keep') {
     const busy = ask && ask.status === 'running' ? ' disabled' : '';
-    action = `<button type="button" class="btn btn-sm" data-action="worktree-ask" data-path="${escapeHTML(w.path)}"${busy}>Ask the agent</button>`
-      + `<button type="button" class="btn btn-sm" data-action="worktree-advise" data-path="${escapeHTML(w.path)}">Ask advisor</button>`;
+    action = (w.state === 'review' ? `<button type="button" class="btn btn-sm" data-action="worktree-review" data-path="${escapeHTML(w.path)}">Review</button>` : '')
+      + (askable ? `<button type="button" class="btn btn-primary btn-sm" data-action="worktree-ask" data-path="${escapeHTML(w.path)}" title="Ask active ${escapeHTML(askable)} agent"${busy}>Ask the agent</button>` : '')
+      + `<button type="button" class="btn btn-sm" data-action="worktree-advise" data-path="${escapeHTML(w.path)}" title="Get a local advisory note; no agent is resumed">Ask advisor</button>`;
   }
   // Every folder still on disk opens in Finder; orphans carry Open folder
   // in their actions already.
@@ -475,7 +476,7 @@ function removableRows(repo, removals) {
 // Two or more removable rows add Remove all with their count and size.
 // advice, asks and removals map a worktree path to its advisor note, latest
 // ask and latest removal.
-function worktreeGroupHTML(g, advice, asks, removals) {
+function worktreeGroupHTML(g, advice, asks, removals, askable) {
   const meta = [g.repo.default_branch, g.repo.source].filter(Boolean).join(' · ');
   return `<section class="wt-repo">
     <div class="wt-repo-head">
@@ -487,7 +488,7 @@ function worktreeGroupHTML(g, advice, asks, removals) {
         : worktreeRemoveAllHTML(g.repo, removals)
           + `<button type="button" class="link-btn wt-hide" data-action="worktree-hide" data-repo="${escapeHTML(g.repo.path)}">Hide repo</button>`}
     </div>
-    ${g.rows.map(w => worktreeRowHTML(w, g.repo, (advice || {})[w.path], (asks || {})[w.path], (removals || {})[w.path])).join('')}
+    ${g.rows.map(w => worktreeRowHTML(w, g.repo, (advice || {})[w.path], (asks || {})[w.path], (removals || {})[w.path], (askable || {})[w.path])).join('')}
   </section>`;
 }
 
@@ -563,7 +564,7 @@ function renderWorktrees() {
   }
   const groups = worktreeGroups(rep, state.filter);
   container.innerHTML = groups.length
-    ? groups.map(g => worktreeGroupHTML(g, rep.advice, rep.asks, rep.removals)).join('')
+    ? groups.map(g => worktreeGroupHTML(g, rep.advice, rep.asks, rep.removals, rep.askable)).join('')
     : `<div class="empty"><svg class="icon"><use href="#i-branch"/></svg><span>${counts.all ? 'No worktree matches this filter.' : 'No linked worktrees found. Add a repository above if one is missing.'}</span></div>`;
 }
 

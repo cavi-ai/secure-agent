@@ -29,7 +29,7 @@ function agentStateText(status) {
 function agentOffHTML() {
   return `<div class="agent-off">
     <h3>The system agent is off</h3>
-    <p>It chats with a model on your own Ollama, drafts work for Claude Code, Codex, OpenClaw or Hermes Agent, and runs that work against the same local model — keys, sign-ins and harness config never reach a vendor model.</p>
+    <p>Chat directly with your local Ollama agent. It can propose an exact local command for your review; nothing runs until you confirm it. Harness handoff is a separate, optional section.</p>
     <p>Open the Secure Agent menu bar app, then Settings → App → System Agent and turn on local Agent chat. Return here to start a conversation.</p>
     <p>For a headless install, add this to <code>~/.config/secure-agent/config.yaml</code>; the daemon applies it within seconds:</p>
     <pre class="agent-snippet">${escapeHTML(AGENT_CONFIG_SNIPPET)}</pre>
@@ -40,6 +40,22 @@ function agentOffHTML() {
 // agentTextHTML: message text, escaped; line breaks survive through CSS.
 function agentTextHTML(text) {
   return `<div class="agent-bubble">${escapeHTML(text || '')}</div>`;
+}
+
+// A model reply can propose one exact local command. The server accepts only
+// this message id for execution; the command is never taken from the click.
+function agentLocalCommandHTML(m) {
+  const a = m.local_command;
+  if (!a) return '';
+  const mode = a.mode === 'terminal' ? 'Terminal' : 'Headless';
+  return `<div class="agent-proposal agent-local-action">
+    <div class="agent-proposal-head"><b>Local command · ${mode}</b></div>
+    <div class="agent-plan-meta">Runs on this machine in <code>${escapeHTML(a.workdir)}</code>. No harness receives this chat.</div>
+    <pre class="agent-run-output">${escapeHTML(a.command)}</pre>
+    <div class="agent-actions">${m.local_run_id
+      ? `<span class="agent-saved">Started as run #${Number(m.local_run_id)}</span>`
+      : `<button type="button" class="btn btn-primary btn-sm" data-action="agent-run-local" data-message="${Number(m.id)}">Review and run</button>`}</div>
+  </div>`;
 }
 
 // agentHarnessBlock: why a harness cannot be dispatched now ('' when it
@@ -81,19 +97,18 @@ function agentProposalHTML(m, status) {
   </div>`;
 }
 
-// agentMessageHTML: one chat turn. The operator's turns show where they
-// were routed; notes come from the daemon, not the model.
+// agentMessageHTML: one chat turn. A chat turn is always local Ollama.
 function agentMessageHTML(m, status) {
   if (m.role === 'note') {
     return `<div class="agent-msg note"><span>${escapeHTML(m.content)}</span></div>`;
   }
   if (m.role === 'user') {
-    const route = [m.harness ? '→ ' + agentHarnessLabel(status, m.harness) : '', m.workdir || ''].filter(Boolean).join(' · ');
+    const route = [m.harness ? 'legacy harness selection (chat stayed on Ollama)' : '', m.workdir || ''].filter(Boolean).join(' · ');
     return `<div class="agent-msg user">${agentTextHTML(m.content)}${route ? `<div class="agent-msg-meta">${escapeHTML(route)}</div>` : ''}</div>`;
   }
   const skills = (m.skills || []).length
     ? `<div class="agent-msg-meta">skills: ${m.skills.map(s => `<button type="button" class="link-btn" data-action="agent-skill" data-skill="${escapeHTML(s)}">${escapeHTML(s)}</button>`).join(', ')}</div>` : '';
-  return `<div class="agent-msg assistant">${agentTextHTML(m.content)}${skills}${agentProposalHTML(m, status)}</div>`;
+  return `<div class="agent-msg assistant">${agentTextHTML(m.content)}${skills}${agentLocalCommandHTML(m)}${agentProposalHTML(m, status)}</div>`;
 }
 
 // agentThreadItems: the chat as patchList items, with a pending line while
@@ -111,7 +126,7 @@ function agentEmptyThreadHTML(status) {
   const ready = status && status.enabled && !status.reason;
   return `<div class="empty"><svg class="icon"><use href="#i-chat"/></svg>
     <span>${ready
-      ? 'Ask about SSH keys, Git credentials, commit signing or a harness’s sign-in and config — or describe work to hand to a harness. Never paste a secret: commands that need one prompt for it.'
+      ? 'Talk directly with Ollama. Ask about SSH keys, signing, or a local task. Review every proposed command before it runs; use Terminal for passphrases. Never paste a secret.'
       : escapeHTML((status && status.reason) || 'Loading…')}</span></div>`;
 }
 
@@ -131,7 +146,7 @@ function agentPlanHTML(p, status) {
     ${reason}
     <details class="agent-task"><summary>Task</summary><pre>${escapeHTML(p.task)}</pre></details>
     <div class="agent-actions">
-      <button type="button" class="btn btn-ghost btn-sm" data-action="agent-dispatch" data-plan="${Number(p.id)}" data-mode="headless"${dis}>Run headless</button>
+      <button type="button" class="btn btn-ghost btn-sm" data-action="agent-dispatch" data-plan="${Number(p.id)}" data-mode="headless"${p.harness === 'pi' ? ' disabled title="Pi has no built-in sandbox; use Terminal"' : dis}>Run headless</button>
       <button type="button" class="btn btn-ghost btn-sm" data-action="agent-dispatch" data-plan="${Number(p.id)}" data-mode="terminal"${dis}>Open in terminal</button>
       <button type="button" class="btn btn-ghost btn-sm" data-action="agent-plan-delete" data-plan="${Number(p.id)}"${running ? ' disabled' : ''}>Delete</button>
     </div>
@@ -156,7 +171,7 @@ function agentRunHTML(r, status, nowMs) {
   return `<div class="agent-run" data-run="${Number(r.id)}">
     <div class="agent-plan-head">${harnessChipHTML(r.harness, { label: false })}<b>${escapeHTML(r.title)}</b>
       <span class="badge ${AGENT_RUN_BADGE[r.status] || ''}">${escapeHTML(r.status)}</span>${age ? `<span class="agent-age">${escapeHTML(age)} ago</span>` : ''}</div>
-    <div class="agent-plan-meta">plan #${Number(r.plan_id)} · ${escapeHTML(agentHarnessLabel(status, r.harness))} · ${escapeHTML(r.mode)} · ${escapeHTML(r.model)} · <code>${escapeHTML(r.workdir)}</code>${exit}</div>
+    <div class="agent-plan-meta">${r.harness === 'local' ? 'Direct Ollama action' : 'plan #' + Number(r.plan_id) + ' · ' + escapeHTML(agentHarnessLabel(status, r.harness))} · ${escapeHTML(r.mode)} · ${escapeHTML(r.model)} · <code>${escapeHTML(r.workdir)}</code>${exit}</div>
     ${detail}
     ${r.output ? `<pre class="agent-run-output">${escapeHTML(r.output)}</pre>` : ''}
     <details class="agent-task"><summary>Command</summary><pre>${escapeHTML(r.command)}</pre>
@@ -198,6 +213,7 @@ function agentDispatchMessage(plan, mode, status) {
   const label = agentHarnessLabel(status, plan.harness);
   const model = plan.model || (status && status.harness_model) || 'the harness model';
   if (mode === 'terminal') {
+    if (plan.harness === 'pi') return `Open Pi runner in a terminal in ${plan.workdir}, on ${model} from local Ollama? Pi has no built-in sandbox. Its shell tool and extensions are disabled, but its file tools can edit anywhere your account can. Review this plan before opening.`;
     return `Open ${label} in a terminal in ${plan.workdir}, on ${model} from your local Ollama, with this plan's task as its first message? You approve each step there.`;
   }
   return `Run ${label} headless in ${plan.workdir}, on ${model} from your local Ollama? It works with its own sandbox and approvals on and your secure-agent hooks active; it can edit files in that folder. The answer shows under Runs.`;

@@ -15,12 +15,12 @@ import (
 )
 
 func TestAgentRoutesAreNoAgentAndConsoleAdmitted(t *testing.T) {
-	for _, p := range []string{"/agent/status", "/agent/skills", "/agent/chat", "/agent/plans", "/agent/dispatch", "/agent/runs"} {
+	for _, p := range []string{"/agent/status", "/agent/skills", "/agent/chat", "/agent/actions", "/agent/plans", "/agent/dispatch", "/agent/runs"} {
 		if !apiroutes.IsNoAgent(p) || !apiroutes.ConsoleAllowed("GET", p) {
 			t.Errorf("%s: NoAgent=%v console=%v", p, apiroutes.IsNoAgent(p), apiroutes.ConsoleAllowed("GET", p))
 		}
 	}
-	for _, p := range []string{"/agent/chat", "/agent/plans", "/agent/dispatch"} {
+	for _, p := range []string{"/agent/chat", "/agent/actions", "/agent/plans", "/agent/dispatch"} {
 		if !apiroutes.IsMutation("POST", p) {
 			t.Errorf("POST %s must be a pinned-UI mutation", p)
 		}
@@ -76,12 +76,18 @@ func TestAgentChatPlansDispatch(t *testing.T) {
 		return w
 	}
 
-	if w := do(http.MethodPost, "/agent/chat", `{"message":"where do my ssh keys live?","harness":"claude"}`); w.Code != http.StatusAccepted {
+	if w := do(http.MethodPost, "/agent/chat", `{"message":"where do my ssh keys live?"}`); w.Code != http.StatusAccepted {
 		t.Fatalf("send: %d %s", w.Code, w.Body.String())
 	}
 	agent.Wait()
 	if w := do(http.MethodPost, "/agent/chat", `{"message":"UNMASKABLE"}`); w.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("secret: %d, want 422", w.Code)
+	}
+	if w := do(http.MethodPost, "/agent/chat", `{"message":"hi","harness":"claude"}`); w.Code != http.StatusBadRequest {
+		t.Fatalf("chat must reject a harness route: %d", w.Code)
+	}
+	if w := do(http.MethodPost, "/agent/actions", `{"message_id":999}`); w.Code != http.StatusNotFound {
+		t.Fatalf("unknown local command: %d", w.Code)
 	}
 	var chat struct {
 		Messages []model.SysAgentMessage
@@ -127,7 +133,7 @@ func TestAgentChatPlansDispatch(t *testing.T) {
 		t.Fatalf("disabled: %d %s", w.Code, w.Body.String())
 	}
 	var status sysagent.AgentStatus
-	if w := do(http.MethodGet, "/agent/status", ""); json.Unmarshal(w.Body.Bytes(), &status) != nil || status.Enabled || len(status.Harnesses) != 4 {
+	if w := do(http.MethodGet, "/agent/status", ""); json.Unmarshal(w.Body.Bytes(), &status) != nil || status.Enabled || len(status.Harnesses) != 5 {
 		t.Fatalf("status: %s", w.Body.String())
 	}
 }

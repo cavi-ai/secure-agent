@@ -1,22 +1,19 @@
 // Package sysagent is the system agent behind the console's Agent tab: a
-// chat with a model served by a LOCAL Ollama that answers questions, drafts
-// work for a coding agent ("harness": Claude Code, Codex, OpenClaw, Hermes
-// Agent) and saves it as a plan the operator dispatches — headless in a
-// folder, or in a terminal the operator drives. Dispatched harnesses run
-// against the same Ollama, so sensitive work (keys, sign-in, signing,
-// harness config) never reaches a vendor model.
+// chat with a model served by a LOCAL Ollama that answers questions and
+// proposes exact local commands for operator confirmation. Optional harness
+// handoff is a separate plan and dispatch flow; dispatched harnesses use the
+// same Ollama.
 //
 // Invariants (docs/SYSTEM_AGENT.md):
 //   - Loopback only: the endpoint is validated in config and again here;
 //     every harness recipe points the harness at it.
-//   - The model proposes, the operator disposes: a reply can only carry a
-//     proposal. Nothing runs until the operator dispatches a plan, and a
-//     plan never dispatches itself.
+//   - The model proposes, the operator disposes: a local command is claimed
+//     only after a separate confirmation request and can start once.
 //   - Secrets never persist or reach the model: each message is masked by
 //     the firewall's detectors and fingerprints first, and a message whose
 //     secret survives masking is refused.
-//   - Harnesses keep their own permission model: no recipe bypasses
-//     approvals or the sandbox, and the operator's hooks stay on.
+//   - A confirmed local command has the operator's account permissions;
+//     optional harnesses keep their own permission model. Pi is terminal-only.
 //   - One headless run at a time, bounded by a timeout, in its own process
 //     group.
 package sysagent
@@ -57,6 +54,7 @@ var (
 // Store is what the agent reads and records. *store.Store satisfies it.
 type Store interface {
 	PutSysAgentMessage(model.SysAgentMessage) int64
+	ClaimSysAgentAction(id int64) bool
 	GetSysAgentMessage(id int64) (model.SysAgentMessage, bool)
 	SysAgentMessages(limit int) []model.SysAgentMessage
 	ClearSysAgentMessages()
@@ -413,10 +411,13 @@ func (a *Agent) SavePlan(in PlanInput) (model.SysAgentPlan, error) {
 // normalizePlan validates and bounds a plan in place, masking its text.
 func (a *Agent) normalizePlan(p *model.SysAgentPlan) error {
 	if _, ok := harnessByID(p.Harness); !ok {
-		return fmt.Errorf("%w: harness must be one of claude, codex, openclaw, hermes", ErrInvalid)
+		return fmt.Errorf("%w: harness must be one of claude, codex, openclaw, hermes, pi", ErrInvalid)
 	}
 	if p.Mode != ModeHeadless && p.Mode != ModeTerminal {
 		return fmt.Errorf("%w: mode must be headless or terminal", ErrInvalid)
+	}
+	if p.Harness == "pi" && p.Mode != ModeTerminal {
+		return fmt.Errorf("%w: Pi has no built-in sandbox; use terminal mode", ErrInvalid)
 	}
 	p.Workdir = cleanWorkdir(p.Workdir, "")
 	if p.Workdir == "" {
@@ -464,6 +465,9 @@ func (a *Agent) Plans(ctx context.Context, limit int) []model.SysAgentPlan {
 	for i := range plans {
 		h, _ := harnessByID(plans[i].Harness)
 		plans[i].Reason = a.harnessReason(cfg, info, h, harnessModel(cfg, info, plans[i].Model))
+		if plans[i].Harness == "pi" && plans[i].Mode != ModeTerminal {
+			plans[i].Reason = "Pi has no built-in sandbox; use terminal mode"
+		}
 		plans[i].Ready = plans[i].Reason == ""
 	}
 	return plans

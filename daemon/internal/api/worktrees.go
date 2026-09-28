@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/advisor"
@@ -30,11 +31,38 @@ func (a *API) handleWorktrees(w http.ResponseWriter, r *http.Request) {
 	rep := a.worktrees.Report(r.Context(), refresh)
 	rep.Advice = a.worktreeNotes(rep)
 	rep.Asks = a.latestAsks()
+	rep.Askable = a.askableWorktrees(rep)
 	if a.store != nil {
 		t := a.store.CleanupTotals(time.Now())
 		rep.Reclaimed = &t
 	}
 	writeJSON(w, rep)
+}
+
+func (a *API) askableWorktrees(rep worktreehunter.ScanReport) map[string]string {
+	if a.store == nil || a.asker == nil {
+		return nil
+	}
+	sessions := a.store.ListSessions(store.SessionFilter{Status: model.SessionActive, Limit: 10000})
+	out := map[string]string{}
+	for _, repo := range rep.Repos {
+		for _, wt := range repo.Worktrees {
+			if !wt.InUse || (wt.State != worktreehunter.StateKeep && wt.State != worktreehunter.StateReview) || wt.Orphan {
+				continue
+			}
+			for _, sess := range sessions {
+				if !agentask.EligibleSession(sess) {
+					continue
+				}
+				rel, err := filepath.Rel(wt.Path, sess.Workspace)
+				if err == nil && rel != ".." && !filepath.IsAbs(rel) && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+					out[wt.Path] = sess.Harness
+					break
+				}
+			}
+		}
+	}
+	return out
 }
 
 // latestAsks maps each worktree path to its newest agent ask.
@@ -85,6 +113,9 @@ func (a *API) handleWorktreeAsk(w http.ResponseWriter, r *http.Request) {
 		return
 	case row.State != worktreehunter.StateKeep && row.State != worktreehunter.StateReview:
 		http.Error(w, "only a keep or review worktree has work to sort out; this one is "+row.State, http.StatusConflict)
+		return
+	case !row.InUse:
+		http.Error(w, "no agent is currently working in this worktree", http.StatusConflict)
 		return
 	}
 	ask, err := a.asker.Ask(agentask.Request{Path: row.Path, Repo: repo, Branch: row.Branch, State: row.State, Reasons: row.Reasons})
@@ -393,6 +424,41 @@ func (a *API) handleWorktreeTrash(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case errors.Is(err, worktreehunter.ErrNotOrphan):
 		http.Error(w, err.Error(), http.StatusNotFound)
+	case err != nil:
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	default:
+		writeJSON(w, map[string]any{"status": "ok", "result": res})
+	}
+}
+
+// handleWorktreeReviewTrash is an explicit, recoverable cleanup after the
+// operator has inspected a review row. The hunter rechecks the fresh facts.
+func (a *API) handleWorktreeReviewTrash(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if a.worktrees == nil {
+		http.Error(w, "worktree hunter not enabled", http.StatusServiceUnavailable)
+		return
+	}
+	limitBody(w, r)
+	var req struct {
+		Path    string   `json:"path"`
+		Head    string   `json:"head"`
+		Reasons []string `json:"reasons"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || !filepath.IsAbs(req.Path) || req.Head == "" || len(req.Reasons) == 0 {
+		http.Error(w, "absolute path, reviewed head and reasons are required", http.StatusBadRequest)
+		return
+	}
+	res, err := a.worktrees.TrashReviewed(r.Context(), req.Path, req.Head, req.Reasons)
+	var notReviewable *worktreehunter.NotReviewableError
+	switch {
+	case errors.Is(err, worktreehunter.ErrNotWorktree):
+		http.Error(w, err.Error(), http.StatusNotFound)
+	case errors.Is(err, worktreehunter.ErrReviewChanged), errors.As(err, &notReviewable):
+		http.Error(w, err.Error(), http.StatusConflict)
 	case err != nil:
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	default:

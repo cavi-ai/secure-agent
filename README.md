@@ -61,7 +61,7 @@ As AI coding agents (Claude Code, Cursor, Codex, Gemini, opencode, Copilot, etc.
 - 🛠️ **Native `secure-agent` CLI Tool**  
   Pure-Go terminal utility (`secure-agent status`, `flags`, `incidents`, `kill`, `fleet`, `service`) for inspecting security posture directly from terminal prompts. `secure-agent service install` runs the daemon headless under launchd for fleet/CI nodes with no GUI login.
   - `secure-agent doctor` — hooks, file telemetry, collectors, trace coverage, sessions, pairing, pricing, retention, egress; repo attribution is measured only for sessions inside Git workspaces. Exits 1 on any failure.
-  - `secure-agent worktrees` — every git worktree from agent sessions, agent worktree directories and a saved repo list, each marked remove, review, keep or prune with the reasons; `worktrees remove` and `worktrees prune` act only on those verdicts. The console's Sessions › Cleanup view shows the same report with disk usage per project and what cleanups have reclaimed (`secure-agent cleanup log`).
+  - `secure-agent worktrees` — every git worktree from agent sessions, agent worktree directories and a saved repo list, each marked remove, review, keep or prune with the reasons; `worktrees remove` and `worktrees prune` act only on those verdicts. The console's Sessions › Cleanup view lets you inspect review items and move a reviewed folder to Trash while retaining its Git branch, commits, and stashes. “Ask the agent” appears only for a live, resumable agent session; “Ask advisor” requests an advisory note. The view also shows disk usage per project and what cleanups have reclaimed (`secure-agent cleanup log`).
 
 - 🔌 **Local Control & Query API**  
   Exposes a secure HTTP API over a Unix domain socket (`~/.config/secure-agent/daemon.sock`) for querying status, events, flags, incidents, and initiating process termination.
@@ -70,7 +70,7 @@ As AI coding agents (Claude Code, Cursor, Codex, Gemini, opencode, Copilot, etc.
   Easily customize sensitive path patterns, agent binary matchers, vendor network allowlists (`anthropic.com`, `cursor.sh`, `openai.com`), and proxy settings.
 
 - 🤖 **System Agent: Sensitive Work on a Local Model (opt-in)**
-  Turn on **Settings → App → System Agent**, then click **Ask Agent** in the menu bar popover to open the console's **Agent** tab. It chats with a chat-capable model on your own Ollama. Ask it about SSH keys, Git credentials, commit signing, or a harness's sign-in and config; when you want something done, it proposes a task for Claude Code, Codex, OpenClaw or Hermes Agent (a **Route to** dropdown picks which) and you dispatch it headless in a folder or in a terminal you drive — the harness runs against the same local Ollama, so keys and config never reach a vendor model. A harness that cannot run yet gets the work saved as a plan for later. Seven built-in skills (`ssh`, `git`, `signing`, `claude`, `codex`, `openclaw`, `hermes`) guide the model and the dispatched harness. Messages are masked by the firewall before they are stored or sent; `/agent/*` routes refuse agent processes. See [`docs/SYSTEM_AGENT.md`](docs/SYSTEM_AGENT.md).
+  Turn on **Settings → App → System Agent**, then click **Ask Agent** in the menu bar popover. Chat goes directly to your own Ollama. For local work, the model proposes an exact shell command and folder; you review and confirm it before it runs, either headless or in Terminal for passphrases. Commands run with your account's file and network access. An optional **Harness handoff** section saves separate plans for Claude Code, Codex, OpenClaw, Hermes Agent, or Pi runner; it never changes where chat goes. Pi is terminal-only because it has no built-in sandbox. Messages and output are masked by the firewall; `/agent/*` routes refuse agent processes. See [`docs/SYSTEM_AGENT.md`](docs/SYSTEM_AGENT.md).
 
 - 🔔 **Noise-Controlled Alerts, With Real Recourse**  
   Only **severity-3 criticals page you** by default (secret leaks, read-then-connect, TCC tampering, keychain CLI execs); warnings queue silently in the popover and console. Routine keychain-DB file opens are informational (severity 1) — legitimate tooling touches them constantly, so they never page unless you opt in. Every noisy class has a working **"Dismiss this flag class"** (rule-level mute, reversible from Settings → Muted flag classes), and Settings → Notifications / the console bell menu offer per-rule **Default / Always / Never** overrides (`/notify/rules`) shared by both UIs.
@@ -341,9 +341,8 @@ advisor:
 ### 🤖 System agent
 
 ```yaml
-# Opt-in: Settings → App → System Agent, or the console's Agent tab. Chat with a model on your local Ollama and
-# dispatch Claude Code, Codex, OpenClaw or Hermes Agent against the same
-# Ollama. Loopback-only, enforced in code. See docs/SYSTEM_AGENT.md.
+# Opt-in: Settings → App → System Agent. Chat and confirmed local commands use
+# Ollama directly; optional harness handoff is separate. See docs/SYSTEM_AGENT.md.
 system_agent:
   enabled: false
   endpoint: "http://127.0.0.1:11434"
@@ -351,11 +350,10 @@ system_agent:
   harness_model: ""           # defaults to the chat model; pin a tool-calling model for dispatches
 ```
 
-Each reply that proposes work shows the exact task, the harness and the
-folder; **Run headless** runs the harness non-interactively with its own
-sandbox on (edits in the folder, one run at a time, bounded), **Open in
-terminal** opens it interactively for anything that needs a passphrase or a
-browser login. Nothing runs until you click.
+Each local command proposal shows its exact shell text, folder and mode before
+you confirm it. Terminal mode lets `ssh-keygen` prompt for a passphrase without
+putting it in chat. Harness handoff has its own form, plans and dispatch
+confirmation. Pi runner is terminal-only with its shell tool disabled.
 
 ### 🧠 Local advisor
 
@@ -389,15 +387,17 @@ The Go daemon listens on a local Unix domain socket (`~/.config/secure-agent/dae
 | `/worktrees` | `GET` | Every git worktree found, with a remove/review/keep/prune verdict and its reasons (`?refresh=1` rescans). |
 | `/worktrees/repos` | `POST` | Add a repository to the worktree hunter's saved list, or hide it (`{"path": "...", "hidden": true}`). |
 | `/worktrees/remove` | `POST` | Remove a worktree whose fresh verdict is `remove` (`{"path": "..."}`), or prune missing ones (`{"repo": "...", "prune": true}`). |
+| `/worktrees/review-trash` | `POST` | After inspecting a `review` row, move its folder to Trash and unregister it; fresh facts must still match. |
 | `/worktrees/advise` | `POST` | Ask the local advisor for a note on one worktree (`{"path": "..."}`); advisory only. |
 | `/worktrees/reveal`, `/worktrees/reconnect`, `/worktrees/trash` | `POST` | For a folder whose repository moved or was deleted: open it in Finder, link it again with `git worktree repair`, or move it to the Trash. |
 | `/cleanup/ledger` | `GET` | What cleanups removed and the bytes each gave back, with all-time and 30-day totals. |
 | `/cleanup` | `GET` | `.tmp` and `.quarantine` folders, build output, tool and app caches: size, last touched, project, how to clear. |
 | `/cleanup/trash`, `/cleanup/clean` | `POST` | Move one item to the Trash, or run a tool cache's own clean command. |
 | `/cleanup/advise` | `POST` | Ask the local advisor for a cleanup plan for one project (`{"project": "<repo path or machine>"}`); advisory only. |
-| `/worktrees/ask` | `POST` | Resume the agent that worked in a keep/review worktree: it opens a PR for its work or says the worktree can go (`GET /worktrees/asks` lists answers). |
+| `/worktrees/ask` | `POST` | Ask a currently active, identified agent in a keep/review worktree to open a PR for its work or say the worktree can go (`GET /worktrees/asks` lists answers). |
 | `/agent/status`, `/agent/skills`, `/agent/runs` | `GET` | The system agent's model and harness readiness, its skills, and its dispatches. |
-| `/agent/chat` | `GET`, `POST`, `DELETE` | The conversation with the system agent; `POST {"message","harness","workdir"}` sends one (the reply lands asynchronously). |
+| `/agent/chat` | `GET`, `POST`, `DELETE` | Direct Ollama conversation; `POST {"message","workdir"}` sends one (the reply lands asynchronously). A harness field is rejected. |
+| `/agent/actions` | `POST` | Start the exact local command stored on an assistant message: `{"message_id":123}`. The caller cannot supply command text. |
 | `/agent/plans` | `GET`, `POST`, `DELETE` | Plans with whether each can run now; save a reply's proposal (`{"message_id"}`) or write one. |
 | `/agent/dispatch` | `POST` | Run a plan's harness on the local Ollama: `{"plan_id","mode":"headless|terminal"}`. |
 

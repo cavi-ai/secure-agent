@@ -626,7 +626,8 @@
       { id: 'claude', label: 'Claude Code', bin: 'claude', path: '/opt/homebrew/bin/claude', installed: true, ready: true },
       { id: 'codex', label: 'Codex', bin: 'codex', path: '/opt/homebrew/bin/codex', installed: true, ready: true },
       { id: 'openclaw', label: 'OpenClaw', bin: 'openclaw', installed: false, ready: false, reason: 'OpenClaw is not installed where the daemon can find it (openclaw)' },
-      { id: 'hermes', label: 'Hermes Agent', bin: 'hermes', installed: false, ready: false, reason: 'Hermes Agent is not installed where the daemon can find it (hermes)' }
+      { id: 'hermes', label: 'Hermes Agent', bin: 'hermes', installed: false, ready: false, reason: 'Hermes Agent is not installed where the daemon can find it (hermes)' },
+      { id: 'pi', label: 'Pi runner', bin: 'pi', installed: false, ready: false, reason: 'Pi runner is not installed where the daemon can find it (pi)' }
     ],
     skills: [
       { id: 'ssh', title: 'SSH keys and the SSH agent', summary: 'Create, load and authorize an SSH key.' },
@@ -669,16 +670,24 @@
     const chat = data['/agent/chat'];
     if (p === '/agent/chat' && opts.method === 'DELETE') { chat.messages = []; return { status: 'ok' }; }
     if (p === '/agent/chat') {
-      const m = { id: ++agentSeq, ts: iso(0), role: 'user', content: body.message, harness: body.harness, workdir: body.workdir };
+      const m = { id: ++agentSeq, ts: iso(0), role: 'user', content: body.message, workdir: body.workdir };
       chat.messages.push(m);
       chat.chatting = true;
       setTimeout(() => {
-        chat.messages.push({ id: ++agentSeq, ts: iso(0), role: 'assistant', content: 'Here is the plan.', skills: ['git'],
-          proposal: { title: 'Store Git credentials in the keychain', harness: body.harness, mode: 'headless', workdir: '/Users/dev',
-            task: 'git config --global credential.helper osxkeychain', steps: ['set the helper'], skills: ['git'] } });
+        chat.messages.push({ id: ++agentSeq, ts: iso(0), role: 'assistant', content: 'Review this local command.', skills: ['git'],
+          local_command: { command: 'git config --global credential.helper osxkeychain', mode: 'headless', workdir: '/Users/dev' } });
         chat.chatting = false;
       }, 1500);
       return { message: m };
+    }
+    if (p === '/agent/actions') {
+      const m = chat.messages.find(x => x.id === body.message_id);
+      const run = { id: ++agentSeq, ts: iso(0), title: 'Local command', harness: 'local', mode: m.local_command.mode,
+        workdir: m.local_command.workdir, status: 'running', command: m.local_command.command };
+      m.local_run_id = run.id;
+      data['/agent/runs'].unshift(run);
+      setTimeout(() => Object.assign(run, { status: 'done', finished_at: iso(0), output: 'Git credential helper configured.' }), 1500);
+      return { run };
     }
     if (p === '/agent/plans' && opts.method === 'DELETE') {
       const id = Number(new URLSearchParams(full.split('?')[1] || '').get('id'));
@@ -711,13 +720,23 @@
     return null;
   };
   // agentchat: the Agent tab open, a message typed and sent through the
-  // real composer; the reply (with a proposal) lands 1.5s later.
-  if (MODE.includes('agentchat')) {
+  // real composer; the direct Ollama reply lands 1.5s later.
+  if (MODE.includes('agentchat') || MODE.includes('agentlocal')) {
     setTimeout(() => {
       document.getElementById('agent-workdir').value = '/Users/dev';
       document.getElementById('agent-input').value = 'Keep my Git token in the keychain';
       document.getElementById('agent-composer').requestSubmit();
     }, 3000);
+  }
+  if (MODE.includes('agentlocal')) {
+    setTimeout(() => {
+      const run = document.querySelector('#agent-thread [data-action="agent-run-local"]');
+      if (run) run.click();
+      setTimeout(() => {
+        const ok = document.getElementById('confirm-ok');
+        if (ok) ok.click();
+      }, 300);
+    }, 5500);
   }
   // agentdispatch: Run headless on the ready plan, confirmed; the run
   // finishes 1.5s later. Then Save plan on the first proposal.
@@ -755,6 +774,13 @@
       rep.repos = rep.repos.filter(r => !r.error || r.worktrees.length);
       rep.errors = (rep.errors || []).filter(e => rep.repos.some(r => e.startsWith(r.path + ': ')));
       return { status: 'ok', result: { path: body.path, bytes: 52428800, trash_path: '/Users/dev/.Trash/ctnj' } };
+    }
+    if (p === '/worktrees/review-trash') {
+      const rep = data['/worktrees'];
+      for (const r of rep.repos) r.worktrees = r.worktrees.filter(w => w.path !== body.path);
+      rep.summary.worktrees--;
+      rep.summary.review--;
+      return { status: 'ok', result: { path: body.path, bytes: 1258291, trash_path: '/Users/dev/.Trash/evidence' } };
     }
     if (p === '/worktrees/remove') {
       if (MODE.includes('removecadence')) window.__removePostedAt = Date.now();
@@ -1479,6 +1505,21 @@
     // The resource board and its flight recorder live on Sessions/Resources.
     setTimeout(() => openTab('sessions/resources'), 1500);
   }
+  if (MODE.includes('headroomhint') && !MODE.includes('phoneframe') && !MODE.includes('phonedemo')) {
+    setTimeout(() => openTab('resources'), 5000);
+    setTimeout(() => {
+      const hint = document.querySelector('.headroom-hint');
+      if (!hint) return;
+      hint.open = true;
+      const box = hint.querySelector('.headroom-hint-box').getBoundingClientRect();
+      const panel = hint.closest('.panel').getBoundingClientRect();
+      const out = document.createElement('output');
+      out.id = 'headroom-hint-geometry';
+      out.dataset.width = String(Math.round(box.width));
+      out.dataset.inside = String(box.left >= panel.left && box.right <= panel.right && box.top >= panel.top && box.bottom <= panel.bottom);
+      document.body.appendChild(out);
+    }, 7000);
+  }
   // familiesdemo: the Resources board at scale — twelve families: nine agent
   // families (claude 5821 and cursor 6033 need attention; two codex runs are
   // orchestrated by an OpenClaw session) and three infra, joined to /sessions
@@ -1603,7 +1644,7 @@
       path: WT_REPO, source: 'session', default_branch: 'origin/main', size_bytes: 1612709888, worktrees: [
         { path: WT_REPO, branch: 'main', state: 'main', reasons: ['main worktree of the repository'], idle_days: 0 },
         { path: WT_REPO + '/.worktrees/done', branch: 'feat/done', state: 'remove', stale: true, last_activity: iso(21 * 86400000), idle_days: 21, size_bytes: 1610612736, reasons: ['merged into origin/main (squash)'] },
-        { path: WT_REPO + '/.worktrees/evidence', branch: 'feat/evidence', state: 'review', last_activity: iso(3600000), idle_days: 0, reasons: ['ignored files that only live here: .tmp/ (3 files, 1.2 MB)', '<b>not bold</b>'] },
+        { path: WT_REPO + '/.worktrees/evidence', branch: 'feat/evidence', head: '123abc', state: 'review', last_activity: iso(3600000), idle_days: 0, reasons: ['ignored files that only live here: .tmp/ (3 files, 1.2 MB)', '<b>not bold</b>'] },
         { path: '/Users/dev/.codex/worktrees/ab12/api-service', branch: '', detached: true, state: 'keep', last_activity: iso(60000), idle_days: 0, reasons: ['2 uncommitted changes', 'an agent session is live here'] },
         { path: WT_REPO + '/.worktrees/gone', branch: 'feat/gone', state: 'prune', stale: true, idle_days: 0, reasons: ['directory is gone; git still lists it'] }
       ]
@@ -1612,6 +1653,7 @@
     advice: {
       [WT_REPO + '/.worktrees/evidence']: { assessment: 'review', confidence: 0.6, rationale: '<i>look</i> at .tmp before removing' }
     },
+    askable: { ['/Users/dev/.codex/worktrees/ab12/api-service']: 'codex' },
     asks: {
       [WT_REPO + '/.worktrees/evidence']: { harness: 'claude', status: 'answered', verdict: 'pr', detail: 'https://github.com/o/r/pull/9', cost_usd: 0.21 }
     }
@@ -1758,6 +1800,26 @@
   }
   // worktreedemo: Remove the removable worktree and accept the dialog; the
   // row must leave the tab without a rescan.
+  if (MODE.includes('reviewdemo')) {
+    setTimeout(() => {
+      const btn = document.querySelector('#worktrees-container [data-action="worktree-review"]');
+      if (btn) btn.click();
+      if (MODE.includes('reviewtrash')) {
+        setTimeout(() => {
+          const move = document.querySelector('#drawer-foot [data-action="worktree-review-trash"]');
+          if (move) move.click();
+          const iv = setInterval(() => {
+            const ok = document.getElementById('confirm-ok');
+            if (ok && !ok.closest('#confirm-layer').hidden) {
+              ok.click();
+              clearInterval(iv);
+            }
+          }, 100);
+          setTimeout(() => clearInterval(iv), 3000);
+        }, 400);
+      }
+    }, 3000);
+  }
   if (MODE.includes('worktreedemo')) {
     setTimeout(() => {
       const btn = document.querySelector('#worktrees-container [data-action="worktree-remove"]');
@@ -1931,6 +1993,15 @@
         const agents = measure('agents');
         setTimeout(() => {
           const resources = measure('resources');
+          if (MODE.includes('headroomhint')) {
+            const hint = document.querySelector('.headroom-hint');
+            hint.open = true;
+            setTimeout(() => {
+              const box = hint.querySelector('.headroom-hint-box').getBoundingClientRect();
+              const panel = hint.closest('.panel').getBoundingClientRect();
+              parent.postMessage({ headroom: `${Math.round(box.width)}:${box.left >= panel.left && box.right <= panel.right && box.top >= panel.top && box.bottom <= panel.bottom}` }, '*');
+            }, 200);
+          }
           // patterndemo: the Attention/Flags tab holding the pattern card.
           const done = findings => parent.postMessage({ hscroll: `${sessions},${agents},${resources}${findings}` }, '*');
           if (MODE.includes('patterndemo')) setTimeout(() => done(',' + measure('findings')), 300);
@@ -1942,6 +2013,7 @@
   } else if (MODE.includes('phonedemo')) {
     addEventListener('message', (e) => {
       if (e.data && e.data.hscroll) document.body.dataset.hscroll = e.data.hscroll;
+      if (e.data && e.data.headroom) document.body.dataset.headroom = e.data.headroom;
     });
     document.addEventListener('DOMContentLoaded', () => {
       const frame = document.createElement('iframe');
@@ -1949,7 +2021,8 @@
       frame.height = '812';
       frame.src = 'harness.html?phoneframe&raildemo' + (MODE.includes('patterndemo') ? '&patterndemo' : '')
         + (MODE.includes('memorydemo') ? '&memorydemo' : '')
-        + (MODE.includes('spenddaydemo') ? '&spenddaydemo' : '');
+        + (MODE.includes('spenddaydemo') ? '&spenddaydemo' : '')
+        + (MODE.includes('headroomhint') ? '&headroomhint' : '');
       document.body.prepend(frame);
     });
   }

@@ -10,20 +10,32 @@ type SysAgentMessage struct {
 	TS      time.Time `json:"ts"`
 	Role    string    `json:"role"` // user | assistant | note
 	Content string    `json:"content"`
-	// Harness and Workdir: what the composer had picked when the operator
-	// wrote a user message.
+	// Harness is retained for older stored messages; new chat never routes to
+	// one. Workdir is the folder for a possible local command.
 	Harness string `json:"harness,omitempty"`
 	Workdir string `json:"workdir,omitempty"`
 	// Skills the reply was written with (assistant).
 	Skills []string `json:"skills,omitempty"`
 	// Proposal is work the reply hands to a harness (assistant).
 	Proposal *SysAgentProposal `json:"proposal,omitempty"`
+	// LocalCommand is an exact shell command proposed by the local model.
+	// It cannot run until the operator confirms this message's id.
+	LocalCommand *SysAgentLocalCommand `json:"local_command,omitempty"`
+	LocalRunID   int64                 `json:"local_run_id,omitempty"`
 	// PlanID is the plan saved from Proposal, 0 until one is.
 	PlanID int64 `json:"plan_id,omitempty"`
 }
 
-// SysAgentProposal is work the system agent proposes for a harness. Nothing
-// runs until the operator dispatches it.
+// SysAgentLocalCommand is a proposed local action, never a harness route.
+// Mode is headless or terminal; terminal is required for interactive input.
+type SysAgentLocalCommand struct {
+	Command string `json:"command"`
+	Workdir string `json:"workdir"`
+	Mode    string `json:"mode"`
+}
+
+// SysAgentProposal is a legacy stored harness proposal. New chat replies
+// propose local commands; existing proposals remain dispatchable.
 type SysAgentProposal struct {
 	Title   string `json:"title"`
 	Harness string `json:"harness"` // claude | codex | openclaw | hermes

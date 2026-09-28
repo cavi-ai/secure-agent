@@ -41,9 +41,9 @@ const (
 )
 
 var (
-	// ErrNoSession: no Claude Code or Codex session with a recorded id
-	// worked in the worktree.
-	ErrNoSession = errors.New("no resumable agent session recorded in this worktree (Claude Code or Codex, identified by its hook or transcript)")
+	// ErrNoSession: no active, identified Claude Code or Codex session
+	// is working in the worktree.
+	ErrNoSession = errors.New("no active resumable agent session in this worktree (Claude Code or Codex)")
 	// ErrBusy: another ask is running.
 	ErrBusy = errors.New("an ask is already running; one at a time")
 )
@@ -98,7 +98,7 @@ func (a *Asker) WithBinDirs(dirs []string) *Asker {
 func (a *Asker) Ask(req Request) (model.AgentAsk, error) {
 	var sess model.Session
 	for _, s := range a.st.SessionsInWorkspace(req.Path) {
-		if s.Harness == "claude" || s.Harness == "codex" {
+		if EligibleSession(s) {
 			sess = s
 			break
 		}
@@ -124,6 +124,14 @@ func (a *Asker) Ask(req Request) (model.AgentAsk, error) {
 	a.st.PutAudit(store.AuditEntry{Action: "worktree-ask", Detail: fmt.Sprintf("path=%s harness=%s session=%s", req.Path, sess.Harness, sess.ID)})
 	go a.run(ask, bin, req)
 	return ask, nil
+}
+
+// EligibleSession is the same gate used by the UI and by Ask. A stored
+// conversation alone does not imply an agent is currently working.
+func EligibleSession(s model.Session) bool {
+	return s.Status == model.SessionActive && s.EndedAt == nil &&
+		(s.Harness == "claude" || s.Harness == "codex") &&
+		(s.Confidence == model.ConfHook || s.Confidence == model.ConfTranscript)
 }
 
 func (a *Asker) run(ask model.AgentAsk, bin string, req Request) {

@@ -94,6 +94,24 @@ func (s *Store) PutSysAgentMessage(m model.SysAgentMessage) int64 {
 	return s.putSysAgentRow("sysagent_messages", m.ID, m.TS, m, maxSysAgentMessages)
 }
 
+// ClaimSysAgentAction atomically consumes one assistant command proposal.
+// -1 is a durable fail-closed marker until its run id is stored; a crash or
+// storage failure cannot make the same command executable again.
+func (s *Store) ClaimSysAgentAction(id int64) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	res, err := s.db.Exec(`UPDATE sysagent_messages SET body = json_set(body, '$.local_run_id', -1)
+		WHERE id = ? AND json_extract(body, '$.role') = 'assistant'
+		AND json_type(body, '$.local_command') = 'object'
+		AND COALESCE(json_extract(body, '$.local_run_id'), 0) = 0`, id)
+	if err != nil {
+		log.Printf("store: claim sysagent action %d: %v", id, err)
+		return false
+	}
+	n, _ := res.RowsAffected()
+	return n == 1
+}
+
 // GetSysAgentMessage returns one chat message.
 func (s *Store) GetSysAgentMessage(id int64) (model.SysAgentMessage, bool) {
 	var m model.SysAgentMessage

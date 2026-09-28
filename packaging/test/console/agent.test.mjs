@@ -56,13 +56,24 @@ test('agentMessageHTML: every role escapes its text; the operator turn shows its
   const user = agentMessageHTML({ id: 1, role: 'user', content: XSS, harness: 'codex', workdir: '/w/<b>' }, status());
   assert.ok(!user.includes('<img'), user);
   assert.match(user, /agent-msg user/);
-  assert.match(user, /→ Codex · \/w\/&lt;b&gt;/);
+  assert.match(user, /legacy harness selection \(chat stayed on Ollama\) · \/w\/&lt;b&gt;/);
   const note = agentMessageHTML({ id: 2, role: 'note', content: XSS }, status());
   assert.ok(!note.includes('<img') && note.includes('agent-msg note'));
   const reply = agentMessageHTML({ id: 3, role: 'assistant', content: XSS, skills: ['ssh', '"x'] }, status());
   assert.ok(!reply.includes('<img'));
   assert.match(reply, /data-action="agent-skill" data-skill="ssh"/);
   assert.match(reply, /data-skill="&quot;x"/);
+});
+
+test('local command is displayed exactly and cannot be changed by a click', () => {
+  const m = { id: 21, role: 'assistant', content: 'Review this',
+    local_command: { command: 'echo ' + XSS, mode: 'headless', workdir: '/tmp' } };
+  const html = agentMessageHTML(m, status());
+  assert.ok(!html.includes('<img'), html);
+  assert.match(html, /data-action="agent-run-local" data-message="21"/);
+  assert.match(html, /echo &lt;img/);
+  assert.match(agentMessageHTML({ ...m, local_run_id: 9 }, status()), /Started as run #9/);
+  assert.ok(!agentMessageHTML({ ...m, local_run_id: 9 }, status()).includes('agent-run-local'));
 });
 
 test('agentMessageHTML: a proposal offers Save plan and a dispatch; once saved, the plan dispatch', () => {
