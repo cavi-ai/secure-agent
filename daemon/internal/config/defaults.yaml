@@ -149,11 +149,10 @@ advisor:
   managed: false
   managed_model: "mlx-community/Qwen3-4B-4bit"
 
-# System agent (opt-in): the console's Agent tab. Chat with a model served by
-# a LOCAL Ollama, which drafts plans and dispatches Claude Code, Codex,
-# OpenClaw or Hermes Agent run against that same Ollama — the work never
-# reaches a vendor model. Loopback-only, enforced in code. See
-# docs/SYSTEM_AGENT.md.
+# System agent (opt-in): the console's Agent tab chats directly with a model
+# served by a LOCAL Ollama. Local commands require confirmation; optional
+# harness handoffs are saved and dispatched separately. Both use loopback-only
+# Ollama endpoints, enforced in code. See docs/SYSTEM_AGENT.md.
 system_agent:
   enabled: false
   endpoint: "http://127.0.0.1:11434" # Ollama; must be loopback
