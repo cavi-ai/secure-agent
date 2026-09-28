@@ -38,8 +38,9 @@ public final class SettingsWindowController: NSObject, NSWindowDelegate {
         let hosting = NSHostingController(rootView: view)
         let window = NSWindow(contentViewController: hosting)
         window.title = "Secure Agent Settings"
-        window.styleMask = [.titled, .closable, .miniaturizable]
-        window.setContentSize(NSSize(width: 560, height: 480))
+        window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+        window.setContentSize(NSSize(width: 860, height: 640))
+        window.minSize = NSSize(width: 760, height: 520)
         window.center()
         window.isReleasedWhenClosed = false
         window.delegate = self
@@ -57,7 +58,46 @@ public final class SettingsWindowController: NSObject, NSWindowDelegate {
 }
 
 enum SettingsTab: Hashable {
-    case protection, providers, telemetry, decisions, app, advisor, updates
+    case protection, decisions, providers, telemetry, agent, advisor, app, updates
+
+    var title: String {
+        switch self {
+        case .protection: "Protection"
+        case .decisions: "Decisions"
+        case .providers: "Providers"
+        case .telemetry: "Telemetry"
+        case .agent: "Local Agent"
+        case .advisor: "Advisor"
+        case .app: "App"
+        case .updates: "Updates"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .protection: "shield.lefthalf.filled"
+        case .decisions: "checklist"
+        case .providers: "app.connected"
+        case .telemetry: "waveform.path.ecg"
+        case .agent: "bubble.left.and.text.bubble.right"
+        case .advisor: "brain"
+        case .app: "gearshape"
+        case .updates: "arrow.triangle.2.circlepath"
+        }
+    }
+
+    var summary: String {
+        switch self {
+        case .protection: "Guarded paths and outbound leak prevention"
+        case .decisions: "Review notification choices and exceptions"
+        case .providers: "Choose which harnesses are monitored"
+        case .telemetry: "Check file coverage and collector health"
+        case .agent: "Direct Ollama chat and traffic inspection"
+        case .advisor: "Choose a local model for incident analysis"
+        case .app: "Startup, setup, and removal"
+        case .updates: "Build version and update channel"
+        }
+    }
 }
 
 /// The Settings window's selected tab, so the menu bar can open it on one.
@@ -74,28 +114,66 @@ struct SettingsView: View {
     @ObservedObject private var nav = SettingsNavigation.shared
 
     var body: some View {
-        TabView(selection: $nav.tab) {
-            protectionTab.tabItem { Label("Protection", systemImage: "shield.lefthalf.filled") }
-                .tag(SettingsTab.protection)
-            providersTab.tabItem { Label("Providers", systemImage: "app.connected") }
-                .tag(SettingsTab.providers)
-            visibilityTab.tabItem { Label("Telemetry", systemImage: "waveform.path.ecg") }
-                .tag(SettingsTab.telemetry)
-            policyTab.tabItem { Label("Decisions", systemImage: "checklist") }
-                .tag(SettingsTab.decisions)
-            generalTab.tabItem { Label("App", systemImage: "gearshape") }
-                .tag(SettingsTab.app)
-            advisorTab.tabItem { Label("Advisor", systemImage: "brain") }
-                .tag(SettingsTab.advisor)
-            updatesTab.tabItem { Label("Updates", systemImage: "arrow.triangle.2.circlepath") }
-                .tag(SettingsTab.updates)
+        HStack(spacing: 0) {
+            List(selection: $nav.tab) {
+                Section("SECURITY") {
+                    navigationRow(.protection)
+                    navigationRow(.decisions)
+                }
+                Section("MONITORING") {
+                    navigationRow(.providers)
+                    navigationRow(.telemetry)
+                }
+                Section("LOCAL AI") {
+                    navigationRow(.agent)
+                    navigationRow(.advisor)
+                }
+                Section("GENERAL") {
+                    navigationRow(.app)
+                    navigationRow(.updates)
+                }
+            }
+            .listStyle(.sidebar)
+            .frame(width: 196)
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 0) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(nav.tab.title).font(.title2.weight(.semibold))
+                    Text(nav.tab.summary).font(.subheadline).foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 24)
+                .padding(.top, 22)
+                .padding(.bottom, 16)
+
+                selectedPane
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
         }
-        .padding(20)
-        .frame(width: 560, height: 480)
+        .frame(minWidth: 760, minHeight: 520)
         .task {
             await setup.refreshState()
             loadPathAllows()
             loadMutes()
+        }
+    }
+
+    private func navigationRow(_ tab: SettingsTab) -> some View {
+        Label(tab.title, systemImage: tab.symbol).tag(tab)
+    }
+
+    @ViewBuilder
+    private var selectedPane: some View {
+        switch nav.tab {
+        case .protection: protectionTab
+        case .decisions: policyTab
+        case .providers: providersTab
+        case .telemetry: visibilityTab
+        case .agent: agentTab
+        case .advisor: advisorTab
+        case .app: generalTab
+        case .updates: updatesTab
         }
     }
 
@@ -308,30 +386,39 @@ struct SettingsView: View {
                     Button("Install secure-agent CLI") { run { try setup.installCLI() } }
                 }
             }
-            Section("Agent routing") {
+            Section {
+                HStack {
+                    Button("Setup & Permissions…") { OnboardingWindowController.shared.show() }
+                    Spacer()
+                    Button("Uninstall…", role: .destructive) { confirmUninstall() }
+                }
+            }
+            if let err = setup.lastError {
+                Text(err).foregroundStyle(.red).font(.caption)
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    private var agentTab: some View {
+        Form {
+            Section("Direct local Agent") {
+                Toggle("Enable local Agent chat", isOn: Binding(
+                    get: { setup.systemAgentEnabled },
+                    set: { setup.setSystemAgentEnabled($0) }
+                ))
+                Text("Chat with Ollama on this Mac. Shell commands require your confirmation before they run.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Button("Open Agent chat") { state.openDashboard(tab: "agent") }
+                    .disabled(state.dashboardUnavailableReason != nil)
+            }
+            Section("Agent traffic inspection") {
                 Text("Route agents through the inspection proxy (opt-in, shell-scoped).")
                     .font(.caption).foregroundStyle(.secondary)
                 HStack {
                     Button("Copy Command") { setup.copyAgentRoutingCommand() }
                     Button("Show File") { setup.revealAgentRoutingSnippet() }
                         .disabled(!setup.isAgentRoutingConfigured)
-                }
-            }
-            Section("System Agent") {
-                Toggle("Enable local Agent chat", isOn: Binding(
-                    get: { setup.systemAgentEnabled },
-                    set: { setup.setSystemAgentEnabled($0) }
-                ))
-                Text("Uses a model already installed in Ollama on this Mac. The Agent tab shows model and harness readiness before work runs.")
-                    .font(.caption).foregroundStyle(.secondary)
-                Button("Open Agent chat") { state.openDashboard(tab: "agent") }
-                    .disabled(state.dashboardUnavailableReason != nil)
-            }
-            Section {
-                HStack {
-                    Button("Setup & Permissions…") { OnboardingWindowController.shared.show() }
-                    Spacer()
-                    Button("Uninstall…", role: .destructive) { confirmUninstall() }
                 }
             }
             if let err = setup.lastError {

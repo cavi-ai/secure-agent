@@ -12,6 +12,8 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Pi runner joins optional harness handoff in terminal mode only. Its model is pinned to the local Ollama in an isolated configuration; extensions, shell tool, context files, and online startup checks are disabled. Pi has no built-in sandbox, so its file tools still have the operator account's file access.
 
 ### Fixed
+- Menu bar: startup creates the status item before setup work. When another app copy is running, the new build offers a clear replacement choice instead of starting a competing daemon on the same socket and console port.
+- Settings: a resizable sidebar groups security, monitoring, local AI, and general controls; direct Ollama chat and optional routing have their own pane rather than crowding App settings.
 - Menu bar: the status icon uses a colored bitmap shield with a white check, so the status bar cannot render it as a monochrome template; attention uses a yellow shield with a black mark.
 - Console Resources: the machine headroom explanation stays inside the available panel instead of being clipped.
 - System Agent: the menu bar has an Ask Agent entry, Settings can enable local Agent chat without editing YAML, and the console's off state points to that control.
