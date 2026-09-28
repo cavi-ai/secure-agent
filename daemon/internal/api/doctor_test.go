@@ -289,9 +289,14 @@ func TestDoctorChecksFromFacts(t *testing.T) {
 		}(), doctorFail, "0 of 3 named sessions since boot carry a workspace"},
 		{"repo coverage", checkSessionRepo, func() doctorFacts {
 			f := steady
-			f.sessionsWithWorkspace, f.sessionsWRepo = 4, 1
+			f.sessionsWithWorkspace, f.sessionsWithGitWorkspace, f.sessionsGitWRepo = 4, 4, 1
 			return f
 		}(), doctorFail, "1 of 4"},
+		{"non-git workspaces do not count against repo coverage", checkSessionRepo, func() doctorFacts {
+			f := steady
+			f.sessionsWithWorkspace, f.sessionsWithGitWorkspace, f.sessionsGitWRepo = 10, 2, 2
+			return f
+		}(), doctorPass, "2 of 2"},
 		{"session flood", checkSessionRate, func() doctorFacts {
 			f := steady
 			f.sessionsLastHour = 15

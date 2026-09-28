@@ -91,7 +91,7 @@ func TestLoopbackEnforcement(t *testing.T) {
 	}
 	for _, bad := range []string{
 		"https://api.openai.com", "http://192.168.1.5:8080", "http://0.0.0.0:80",
-		"not-a-url", "",
+		"not-a-url", "", "ftp://localhost:8080", "http://localhost#fragment",
 	} {
 		if IsLoopbackEndpoint(bad) {
 			t.Errorf("expected non-loopback rejected: %s", bad)

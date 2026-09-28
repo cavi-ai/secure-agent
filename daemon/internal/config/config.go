@@ -6,14 +6,13 @@ import (
 	"fmt"
 	"log"
 	"math"
-	"net"
-	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/cavi-ai/secure-agent/daemon/internal/loopback"
 	"gopkg.in/yaml.v3"
 )
 
@@ -650,14 +649,8 @@ func (c Config) Validate() error {
 // validateLoopback rejects an endpoint that is not a URL on 127.0.0.1, ::1
 // or localhost.
 func validateLoopback(field, endpoint string) error {
-	u, err := url.Parse(endpoint)
-	if err != nil || u.Hostname() == "" {
-		return fmt.Errorf("%s %q is not a valid URL", field, endpoint)
-	}
-	h := strings.ToLower(u.Hostname())
-	ip := net.ParseIP(h)
-	if h != "localhost" && (ip == nil || !ip.IsLoopback()) {
-		return fmt.Errorf("%s must be loopback (127.0.0.1/::1/localhost), got %q", field, endpoint)
+	if !loopback.ValidEndpoint(endpoint) {
+		return fmt.Errorf("%s must be an HTTP(S) loopback URL (127.0.0.1/::1/localhost), got %q", field, endpoint)
 	}
 	return nil
 }

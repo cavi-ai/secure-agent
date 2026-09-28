@@ -73,6 +73,10 @@ func TestDoctorSessionStats(t *testing.T) {
 	if total != 5 || named != 4 || withWS != 2 || withRepo != 1 {
 		t.Fatalf("SessionIdentityStats = total %d named %d withWorkspace %d withRepo %d, want 5 4 2 1", total, named, withWS, withRepo)
 	}
+	rows, err := s.DoctorWorkspaceRepos(since)
+	if err != nil || len(rows) != 2 || rows[0] != [2]string{"/w/a", "A"} || rows[1] != [2]string{"/w/b", ""} {
+		t.Fatalf("DoctorWorkspaceRepos = %v, %v; want the two named recent workspace rows", rows, err)
+	}
 	if n := s.SessionsCreatedSince(since); n != 4 {
 		t.Fatalf("SessionsCreatedSince = %d, want 4 (e started before since)", n)
 	}

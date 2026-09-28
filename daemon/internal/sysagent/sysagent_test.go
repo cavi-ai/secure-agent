@@ -55,6 +55,31 @@ func newFakeOllama(t *testing.T, version string, models ...string) *fakeOllama {
 	return f
 }
 
+func TestAutoChatModelSkipsEmbeddingOnlyModel(t *testing.T) {
+	ol := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/tags":
+			_ = json.NewEncoder(w).Encode(map[string]any{"models": []any{
+				map[string]any{"name": "embeddinggemma:latest", "capabilities": []string{"embedding"}},
+				map[string]any{"name": "qwen3:latest", "capabilities": []string{"completion", "tools"}},
+			}})
+		case "/api/version":
+			_ = json.NewEncoder(w).Encode(map[string]string{"version": "0.15.1"})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ol.Close()
+	info := probe(context.Background(), ol.Client(), ol.URL)
+	got, err := chatModel(config.SystemAgentConfig{}, info)
+	if err != nil || got != "qwen3:latest" {
+		t.Fatalf("auto-selected %q, %v; want chat-capable model", got, err)
+	}
+	if _, err := chatModel(config.SystemAgentConfig{Model: "embeddinggemma:latest"}, info); err == nil || !strings.Contains(err.Error(), "does not support chat") {
+		t.Fatalf("embedding-only explicit model should be rejected: %v", err)
+	}
+}
+
 func (f *fakeOllama) setReply(s string) {
 	f.mu.Lock()
 	f.reply = s

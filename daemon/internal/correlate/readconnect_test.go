@@ -173,6 +173,27 @@ func TestReadThenConnectRepeatsFold(t *testing.T) {
 	}
 }
 
+func TestReadThenConnectNewFileDoesNotFoldIntoOldPattern(t *testing.T) {
+	c := newFamilyCorrelator(t)
+	base := time.Unix(1_700_000_000, 0)
+	aws := homePath(t, ".aws/credentials")
+	gh := homePath(t, ".config/gh/hosts.yml")
+	read := func(path string, at time.Time) {
+		c.Observe(event.Event{Kind: event.KindFileOpen, PID: 201, TS: at, Path: path, ExePath: ghExe})
+	}
+	read(aws, base)
+	first := connectTo(c, 201, "evil.example.com", base.Add(time.Second))
+	if len(first) != 1 {
+		t.Fatalf("first connection: flags = %+v, want 1", first)
+	}
+	read(aws, base.Add(2*time.Minute))
+	read(gh, base.Add(2*time.Minute+time.Second))
+	second := connectTo(c, 201, "evil.example.com", base.Add(2*time.Minute+2*time.Second))
+	if len(second) != 1 || second[0].ID == first[0].ID {
+		t.Fatalf("newly read credential must raise a new flag, got %+v", second)
+	}
+}
+
 func TestEnvTemplateIsNotAStaleSecret(t *testing.T) {
 	c := newTestCorrelator(t)
 	base := time.Unix(1_700_000_000, 0)

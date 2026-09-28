@@ -46,8 +46,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificat
     }
 
     /// The console's `--brand` purple (style.css): hsl(248 92% 70%) on a dark
-    /// menu bar, hsl(248 62% 52%) on a light one. Tints the template symbol
-    /// and the agent count, so every icon state stays readable in both.
+    /// menu bar, hsl(248 62% 52%) on a light one.
     static let statusTint = NSColor(name: "SecureAgentBrand") { appearance in
         appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
             ? NSColor(srgbRed: 0.498, green: 0.424, blue: 0.976, alpha: 1)
@@ -57,10 +56,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificat
     private func setupStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = statusItem.button {
-            let img = NSImage(systemSymbolName: "shield", accessibilityDescription: "Secure Agent")
-            img?.isTemplate = true
-            button.image = img
-            button.contentTintColor = Self.statusTint
+            button.image = Self.statusIcon("checkmark.shield.fill")
             button.title = ""
             button.target = self
             button.action = #selector(statusItemClicked)
@@ -120,25 +116,93 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificat
     private func updateStatusIcon() {
         guard let button = statusItem.button else { return }
         let name: String
+        let foreground: NSColor
+        let detail: NSColor
         var count = ""
         if state.isPaused {
-            name = "pause.shield"
+            name = "pause.shield.fill"
+            foreground = .systemGray
+            detail = .white
         } else if state.needsAttention {
             // /posture state: the same verdict the hero and console use.
             // Previously this counted raw flags and
             // incidents, so an acknowledged flag or resolved incident kept the
             // warning lit forever — the "always there no matter what" report.
             name = "exclamationmark.shield.fill"
+            foreground = .systemYellow
+            detail = .black
         } else if let s = state.status, s.activeAgents > 0 {
-            name = "bolt.shield.fill"
+            name = "checkmark.shield.fill"
+            foreground = Self.statusTint
+            detail = .white
             count = " \(s.activeAgents)"
         } else {
-            name = "shield"
+            name = "checkmark.shield.fill"
+            foreground = Self.statusTint
+            detail = .white
         }
-        let img = NSImage(systemSymbolName: name, accessibilityDescription: "Secure Agent")
-        img?.isTemplate = true
-        button.image = img
-        button.title = count
+        button.image = Self.statusIcon(name, foreground: foreground, detail: detail)
+        button.attributedTitle = NSAttributedString(string: count, attributes: [.foregroundColor: Self.statusTint])
+    }
+
+    static func statusIcon(
+        _ name: String,
+        foreground: NSColor = statusTint,
+        detail: NSColor = .white
+    ) -> NSImage? {
+        // A status bar may render an SF Symbol as a monochrome template even
+        // after isTemplate is cleared. Supply actual RGBA pixels instead.
+        guard let bitmap = NSBitmapImageRep(
+            bitmapDataPlanes: nil, pixelsWide: 36, pixelsHigh: 36,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
+            isPlanar: false, colorSpaceName: .deviceRGB,
+            bytesPerRow: 0, bitsPerPixel: 0
+        ), let context = NSGraphicsContext(bitmapImageRep: bitmap) else { return nil }
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = context
+        let scale = NSAffineTransform()
+        scale.scale(by: 2)
+        scale.concat()
+        foreground.setFill()
+        let shield = NSBezierPath()
+        shield.move(to: NSPoint(x: 9, y: 16.6))
+        shield.curve(to: NSPoint(x: 16.2, y: 13.8), controlPoint1: NSPoint(x: 11.2, y: 16.6), controlPoint2: NSPoint(x: 14.4, y: 15.7))
+        shield.line(to: NSPoint(x: 16.2, y: 8.5))
+        shield.curve(to: NSPoint(x: 9, y: 1.2), controlPoint1: NSPoint(x: 16.2, y: 5.3), controlPoint2: NSPoint(x: 12.6, y: 2.4))
+        shield.curve(to: NSPoint(x: 1.8, y: 8.5), controlPoint1: NSPoint(x: 5.4, y: 2.4), controlPoint2: NSPoint(x: 1.8, y: 5.3))
+        shield.line(to: NSPoint(x: 1.8, y: 13.8))
+        shield.curve(to: NSPoint(x: 9, y: 16.6), controlPoint1: NSPoint(x: 3.6, y: 15.7), controlPoint2: NSPoint(x: 6.8, y: 16.6))
+        shield.close()
+        shield.fill()
+        detail.setStroke()
+        let mark = NSBezierPath()
+        mark.lineWidth = 2.1
+        mark.lineCapStyle = .round
+        mark.lineJoinStyle = .round
+        if name == "pause.shield.fill" {
+            for x in [7.0, 11.0] {
+                mark.move(to: NSPoint(x: x, y: 6.8))
+                mark.line(to: NSPoint(x: x, y: 11.4))
+            }
+        } else if name == "exclamationmark.shield.fill" {
+            mark.move(to: NSPoint(x: 9, y: 7.9))
+            mark.line(to: NSPoint(x: 9, y: 11.9))
+        } else {
+            mark.move(to: NSPoint(x: 5.4, y: 8.8))
+            mark.line(to: NSPoint(x: 7.8, y: 6.4))
+            mark.line(to: NSPoint(x: 12.7, y: 11.2))
+        }
+        mark.stroke()
+        if name == "exclamationmark.shield.fill" {
+            detail.setFill()
+            NSBezierPath(ovalIn: NSRect(x: 8, y: 5.1, width: 2, height: 2)).fill()
+        }
+        context.flushGraphics()
+        NSGraphicsContext.restoreGraphicsState()
+        let image = NSImage(size: NSSize(width: 18, height: 18))
+        image.addRepresentation(bitmap)
+        image.isTemplate = false
+        return image
     }
 
     // MARK: - Critical-flag badge pulse

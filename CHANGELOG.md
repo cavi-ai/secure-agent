@@ -7,6 +7,12 @@ All notable changes to `secure-agent` are documented here. The format follows
 ## [Unreleased]
 
 ### Fixed
+- Menu bar: the status icon uses a colored bitmap shield with a white check, so the status bar cannot render it as a monochrome template; attention uses a yellow shield with a black mark.
+- System Agent: the menu bar has an Ask Agent entry, Settings can enable local Agent chat without editing YAML, and the console's off state points to that control.
+- System Agent: automatic model selection skips Ollama models marked embedding-only, and an explicitly selected non-chat model reports why it cannot run.
+- Doctor: repo-attribution coverage counts sessions inside Git workspaces, so desktop and home-directory sessions no longer produce a false failure.
+- Local model traffic: the system agent and advisor reject redirects so a local server cannot forward a chat prompt to another host.
+- Findings: a newly read secret or destination raises a new read-then-connect flag even when another read in the same event repeats an earlier pattern.
 - Findings: a macOS trust-store read, or a keychain file opened by a TLS client, no longer counts as a secret read for "read a secret, then connected out"; a keychain file opened by a byte-copy tool (`cat`, `cp`, `tar`, `curl`, …) or read by an agent tool still does. Open flags from those reads are acknowledged at start.
 - Findings: a read item names the process that opened the file (`evidence[].pid`, `evidence[].exe`), not the process that connected out.
 - Findings: a credential used with its owner (gh's token to GitHub, `~/.aws` to AWS, `~/.azure` to Azure, `~/.config/gcloud` to Google, `~/.docker` to Docker registries) from the reading process's tree (the reader, its ancestors, its descendants) is counted in `status.credential_owner_uses`, not flagged; `credential_owners` config.

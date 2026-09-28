@@ -495,6 +495,23 @@ struct ConsoleView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 8))
             }
             HStack(spacing: 8) {
+                Button { openAgentTapped() } label: {
+                    Label("Ask Agent", systemImage: "bubble.left.and.text.bubble.right")
+                        .font(.system(size: 12, weight: .semibold))
+                }
+                .buttonStyle(.bordered).controlSize(.regular)
+                .disabled(!state.connected || state.isEnablingConsole)
+                .help("Open the local Agent chat in the console")
+                .confirmationDialog(
+                    "Turn on the local console for Agent chat?",
+                    isPresented: $confirmEnableAgentConsole,
+                    titleVisibility: .visible
+                ) {
+                    Button("Turn on & open Agent") { state.enableConsoleAndOpen(tab: "agent") }
+                    Button("Cancel", role: .cancel) {}
+                } message: {
+                    Text("The console runs on loopback and enables monitor-mode inspection of agent traffic.")
+                }
                 Button { openConsoleTapped() } label: {
                     if state.isEnablingConsole {
                         Label("Enabling…", systemImage: "hourglass").font(.system(size: 12, weight: .semibold))
@@ -551,6 +568,18 @@ struct ConsoleView: View {
             confirmEnableConsole = true
         }
     }
+
+    private func openAgentTapped() {
+        if state.dashboardUnavailableReason == nil {
+            state.openDashboard(tab: "agent")
+        } else if state.connected {
+            // Reuse the console's explicit opt-in rather than silently
+            // enabling the inspection proxy behind the user's back.
+            confirmEnableAgentConsole = true
+        }
+    }
+
+    @State private var confirmEnableAgentConsole = false
 
     private var consoleButtonHelp: String {
         if !state.connected { return "The daemon is not running" }

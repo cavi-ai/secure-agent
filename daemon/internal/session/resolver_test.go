@@ -227,6 +227,9 @@ func TestGitInfoReadFromWorkspace(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(ws, ".git", "HEAD"), []byte("ref: refs/heads/feat/session-spine\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	if !IsGitWorkspace(ws) || IsGitWorkspace(t.TempDir()) {
+		t.Fatal("Git workspace eligibility did not match the filesystem")
+	}
 	r, st := testResolver(t, fakeProcs{
 		100: {PID: 100, PPID: 1, Exe: "/usr/local/bin/claude", CWD: ws, StartTime: time.Now().Add(-2 * time.Minute)},
 	})

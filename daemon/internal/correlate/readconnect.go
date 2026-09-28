@@ -147,11 +147,33 @@ func (c *Correlator) readThenConnectLocked(e event.Event, agent string, rootPID 
 		return nil
 	}
 
-	key := readConnectKey(agent, reads[0], cited[0])
-	if prev, ok := c.folded[key]; ok && e.TS.Sub(prev.at) >= 0 && e.TS.Sub(prev.at) < readRepeatWindow {
+	// One event can cite several reads or destinations. It is a repeat only
+	// when every read/destination pair has already raised a recent flag; a
+	// new secret or destination must never disappear behind reads[0].
+	keys := make([]string, 0, len(reads)*len(cited))
+	seen := make(map[string]bool, len(reads)*len(cited))
+	allRepeated := true
+	repeatID := ""
+	for _, r := range reads {
+		for _, cm := range cited {
+			key := readConnectKey(agent, r, cm)
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			keys = append(keys, key)
+			prev, ok := c.folded[key]
+			if !ok || e.TS.Sub(prev.at) < 0 || e.TS.Sub(prev.at) >= readRepeatWindow {
+				allRepeated = false
+			} else if repeatID == "" {
+				repeatID = prev.id
+			}
+		}
+	}
+	if allRepeated {
 		c.markReadConsumedLocked(rootPID, e.PID)
 		c.markConnConsumedLocked(rootPID, e.PID)
-		c.repeats = append(c.repeats, flagRepeat{id: prev.id, at: e.TS})
+		c.repeats = append(c.repeats, flagRepeat{id: repeatID, at: e.TS})
 		return nil
 	}
 
@@ -184,7 +206,9 @@ func (c *Correlator) readThenConnectLocked(e event.Event, agent string, rootPID 
 		})
 	}
 	id := hashFlagID(readConnectRule, rootPID, reads[0].at)
-	c.foldLocked(key, id, e.TS)
+	for _, key := range keys {
+		c.foldLocked(key, id, e.TS)
+	}
 	c.markReadConsumedLocked(rootPID, e.PID)
 	c.markConnConsumedLocked(rootPID, e.PID)
 	return []model.Flag{{
