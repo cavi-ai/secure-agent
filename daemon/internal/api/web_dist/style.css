@@ -521,7 +521,7 @@ body {
 .machine-eyebrow-row { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
 .machine-headroom { position: relative; z-index: 1; }
 .machine-headroom:has(.headroom-hint[open]) { z-index: 3; }
-.headroom-hint { position: relative; }
+.headroom-hint { position: static; }
 .headroom-hint summary {
   display: grid; place-items: center; width: 16px; height: 16px; padding: 0;
   border: 1px solid var(--line-2); border-radius: 999px; background: var(--bg-1);
@@ -530,11 +530,12 @@ body {
 .headroom-hint summary::-webkit-details-marker { display: none; }
 .headroom-hint summary::marker { content: ""; }
 .headroom-hint-box {
-  position: absolute; z-index: 4; top: 22px; right: 0; width: 280px; margin: 0;
+  position: absolute; z-index: 4; top: 34px; left: 0; width: min(380px, calc(100vw - 80px)); margin: 0;
   padding: 10px 12px; border: 1px solid var(--line-2); border-radius: var(--r-sm);
   background: var(--bg-1); color: var(--tx-2); font: 400 .72rem/1.45 var(--font);
   box-shadow: none;
 }
+.headroom-hint:not([open]) .headroom-hint-box { display: none; }
 .machine-tile { display: flex; flex-direction: column; justify-content: center; gap: 4px; min-width: 0; padding: 9px 12px; background: var(--bg-2); }
 .machine-tile b { color: var(--tx-1); font: 700 .84rem/1.25 var(--mono); overflow-wrap: anywhere; }
 .machine-tile small { color: var(--tx-3); font: .62rem/1.3 var(--mono); overflow-wrap: anywhere; }

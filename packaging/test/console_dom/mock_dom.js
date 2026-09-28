@@ -1498,6 +1498,21 @@
     // The resource board and its flight recorder live on Sessions/Resources.
     setTimeout(() => openTab('sessions/resources'), 1500);
   }
+  if (MODE.includes('headroomhint') && !MODE.includes('phoneframe') && !MODE.includes('phonedemo')) {
+    setTimeout(() => openTab('resources'), 5000);
+    setTimeout(() => {
+      const hint = document.querySelector('.headroom-hint');
+      if (!hint) return;
+      hint.open = true;
+      const box = hint.querySelector('.headroom-hint-box').getBoundingClientRect();
+      const panel = hint.closest('.panel').getBoundingClientRect();
+      const out = document.createElement('output');
+      out.id = 'headroom-hint-geometry';
+      out.dataset.width = String(Math.round(box.width));
+      out.dataset.inside = String(box.left >= panel.left && box.right <= panel.right && box.top >= panel.top && box.bottom <= panel.bottom);
+      document.body.appendChild(out);
+    }, 7000);
+  }
   // familiesdemo: the Resources board at scale — twelve families: nine agent
   // families (claude 5821 and cursor 6033 need attention; two codex runs are
   // orchestrated by an OpenClaw session) and three infra, joined to /sessions
@@ -1950,6 +1965,15 @@
         const agents = measure('agents');
         setTimeout(() => {
           const resources = measure('resources');
+          if (MODE.includes('headroomhint')) {
+            const hint = document.querySelector('.headroom-hint');
+            hint.open = true;
+            setTimeout(() => {
+              const box = hint.querySelector('.headroom-hint-box').getBoundingClientRect();
+              const panel = hint.closest('.panel').getBoundingClientRect();
+              parent.postMessage({ headroom: `${Math.round(box.width)}:${box.left >= panel.left && box.right <= panel.right && box.top >= panel.top && box.bottom <= panel.bottom}` }, '*');
+            }, 200);
+          }
           // patterndemo: the Attention/Flags tab holding the pattern card.
           const done = findings => parent.postMessage({ hscroll: `${sessions},${agents},${resources}${findings}` }, '*');
           if (MODE.includes('patterndemo')) setTimeout(() => done(',' + measure('findings')), 300);
@@ -1961,6 +1985,7 @@
   } else if (MODE.includes('phonedemo')) {
     addEventListener('message', (e) => {
       if (e.data && e.data.hscroll) document.body.dataset.hscroll = e.data.hscroll;
+      if (e.data && e.data.headroom) document.body.dataset.headroom = e.data.headroom;
     });
     document.addEventListener('DOMContentLoaded', () => {
       const frame = document.createElement('iframe');
@@ -1968,7 +1993,8 @@
       frame.height = '812';
       frame.src = 'harness.html?phoneframe&raildemo' + (MODE.includes('patterndemo') ? '&patterndemo' : '')
         + (MODE.includes('memorydemo') ? '&memorydemo' : '')
-        + (MODE.includes('spenddaydemo') ? '&spenddaydemo' : '');
+        + (MODE.includes('spenddaydemo') ? '&spenddaydemo' : '')
+        + (MODE.includes('headroomhint') ? '&headroomhint' : '');
       document.body.prepend(frame);
     });
   }

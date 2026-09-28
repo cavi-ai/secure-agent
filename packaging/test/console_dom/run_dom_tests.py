@@ -262,6 +262,8 @@ def main():
         dom_agentchat = dump_dom(chrome, tmp, "?tab=agent&agentchat", origin)
         dom_agentlocal = dump_dom(chrome, tmp, "?tab=agent&agentlocal", origin)
         dom_agentdispatch = dump_dom(chrome, tmp, "?tab=agent&agentdispatch", origin)
+        dom_headroomwide = dump_dom(chrome, tmp, "?tab=sessions&headroomhint", origin, window_size=(1280, 800))
+        dom_headroomphone = dump_dom(chrome, tmp, "?phonedemo&headroomhint")
         dom_scope = dump_dom(chrome, tmp, "?scopedemo")
         dom_pattern = dump_dom(chrome, tmp, "?patterndemo")
         dom_patternact = dump_dom(chrome, tmp, "?patterndemo&patternact")
@@ -823,6 +825,11 @@ def main():
               and 'aria-label="What machine headroom means"' in resource_view
               and "tightest limit, not free RAM" in resource_view
               and "Under 15 is critical" in resource_view)
+        phone_headroom = re.search(r'data-headroom="(\d+):true"', dom_headroomphone)
+        check("headroom hint fits its panel at desktop and phone widths",
+              'data-inside="true"' in dom_headroomwide and 'data-width="380"' in dom_headroomwide
+              and phone_headroom is not None and 250 <= int(phone_headroom.group(1)) <= 320
+              and 'data-hscroll="sessions:0,agents:0,resources:0"' in dom_headroomphone)
         check("live resources exclude the flight recorder",
               "Pressure flight recorder" not in resource_view)
         check("agent and non-agent memory are separated",
