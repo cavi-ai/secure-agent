@@ -784,6 +784,7 @@ export interface ScanReport {
   volumes?: Volume[];
   reclaimed?: CleanupTotals;
   asks?: Record<string, AgentAsk>;
+  askable?: Record<string, string>;
   advice?: Record<string, AdvisorVerdict>;
 }
 
