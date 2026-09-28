@@ -140,6 +140,7 @@ var Table = []Route{
 	{Path: "/agent/status", Console: true, NoAgent: true},
 	{Path: "/agent/skills", Console: true, NoAgent: true},
 	{Path: "/agent/chat", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}, ConsoleMethods: []string{"DELETE"}},
+	{Path: "/agent/actions", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
 	{Path: "/agent/plans", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}, ConsoleMethods: []string{"DELETE"}},
 	{Path: "/agent/dispatch", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
 	{Path: "/agent/runs", Console: true, NoAgent: true},

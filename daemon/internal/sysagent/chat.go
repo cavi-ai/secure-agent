@@ -11,7 +11,8 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 )
 
-// ChatInput is one operator message and what the composer had picked.
+// ChatInput is one operator message and the folder for a possible local action.
+// Harness is retained only to reject older clients that ambiguously routed chat.
 type ChatInput struct {
 	Message string `json:"message"`
 	Harness string `json:"harness"`
@@ -29,6 +30,9 @@ func (a *Agent) Send(in ChatInput) (model.SysAgentMessage, error) {
 	if text == "" || len(text) > maxMessageLen {
 		return model.SysAgentMessage{}, fmt.Errorf("%w: the message must be 1-%d characters", ErrInvalid, maxMessageLen)
 	}
+	if in.Harness != "" {
+		return model.SysAgentMessage{}, fmt.Errorf("%w: chat stays on local Ollama; save a harness plan in the Harness handoff section", ErrInvalid)
+	}
 	if !a.maskAll(&text) {
 		return model.SysAgentMessage{}, ErrSecret
 	}
@@ -41,7 +45,7 @@ func (a *Agent) Send(in ChatInput) (model.SysAgentMessage, error) {
 	a.wg.Add(1)
 	a.mu.Unlock()
 	m := model.SysAgentMessage{TS: a.now(), Role: "user", Content: text,
-		Harness: knownHarness(in.Harness), Workdir: cleanWorkdir(in.Workdir, "")}
+		Workdir: cleanWorkdir(in.Workdir, "")}
 	m.ID = a.st.PutSysAgentMessage(m)
 	go a.reply(cfg, m)
 	return m, nil
@@ -52,10 +56,10 @@ func (a *Agent) note(text string) {
 	a.st.PutSysAgentMessage(model.SysAgentMessage{TS: a.now(), Role: "note", Content: text})
 }
 
-const keptHint = " Your message is kept: Save as plan hands it to a harness to run later."
+const keptHint = " Your message is kept. Harness handoff is available separately."
 
-// reply asks the model and records its answer. A proposal whose harness
-// cannot run now is saved as a plan with the reason.
+// reply asks the local model and records its answer and optional command
+// proposal. A reply never starts a command or creates a harness plan.
 func (a *Agent) reply(cfg config.SystemAgentConfig, user model.SysAgentMessage) {
 	defer func() {
 		a.mu.Lock()
@@ -72,14 +76,14 @@ func (a *Agent) reply(cfg config.SystemAgentConfig, user model.SysAgentMessage) 
 	}
 	modelName, _ := chatModel(cfg, info)
 	history := a.st.SysAgentMessages(historyLen)
-	picked := selectSkills(recentUserText(history, 3)+" "+user.Harness, promptSkills)
-	msgs := []chatMessage{{Role: "system", Content: a.systemPrompt(cfg, info, user, picked)}}
+	picked := selectSkills(recentUserText(history, 3), promptSkills)
+	msgs := []chatMessage{{Role: "system", Content: a.systemPrompt(user, picked)}}
 	for _, h := range history {
 		switch h.Role {
 		case "user":
 			msgs = append(msgs, chatMessage{Role: "user", Content: h.Content})
 		case "assistant":
-			msgs = append(msgs, chatMessage{Role: "assistant", Content: withProposalBlock(h)})
+			msgs = append(msgs, chatMessage{Role: "assistant", Content: h.Content})
 		}
 	}
 	answer, err := chat(ctx, a.client, cfg.Endpoint, modelName, msgs)
@@ -91,35 +95,18 @@ func (a *Agent) reply(cfg config.SystemAgentConfig, user model.SysAgentMessage) 
 	for _, s := range picked {
 		ids = append(ids, s.ID)
 	}
-	text, pr := parseReply(answer, user, a.home)
+	text, local := parseLocalCommand(answer, user, a.home)
 	if !a.maskAll(&text) {
-		text, pr = "[reply withheld: it held a secret that could not be masked]", nil
+		text, local = "[reply withheld: it held a secret that could not be masked]", nil
 	}
-	if pr != nil {
-		pr.Skills = knownSkills(append(pr.Skills, ids...))
-		ptrs := []*string{&pr.Title, &pr.Task}
-		for i := range pr.Steps {
-			ptrs = append(ptrs, &pr.Steps[i])
-		}
-		if !a.maskAll(ptrs...) {
-			pr = nil
-		}
+	if local != nil && !a.maskAll(&local.Command) {
+		local = nil
 	}
-	if text == "" && pr != nil {
-		text = "Proposed: " + pr.Title
+	if text == "" && local != nil {
+		text = "I can run this local command after you review and confirm it."
 	}
-	m := model.SysAgentMessage{TS: a.now(), Role: "assistant", Content: text, Skills: ids, Proposal: pr}
+	m := model.SysAgentMessage{TS: a.now(), Role: "assistant", Content: text, Skills: ids, LocalCommand: local}
 	m.ID = a.st.PutSysAgentMessage(m)
-	if pr == nil {
-		return
-	}
-	h, _ := harnessByID(pr.Harness)
-	if reason := a.harnessReason(cfg, info, h, harnessModel(cfg, info, "")); reason != "" {
-		if p, err := a.SavePlan(PlanInput{MessageID: m.ID}); err == nil {
-			p.Note = reason
-			a.st.PutSysAgentPlan(p)
-		}
-	}
 }
 
 // recentUserText joins the newest n user messages (skill selection looks
@@ -134,52 +121,29 @@ func recentUserText(history []model.SysAgentMessage, n int) string {
 	return strings.Join(parts, "\n")
 }
 
-// withProposalBlock renders an assistant message as the model wrote it,
-// its proposal back in a dispatch block, so the history teaches the format.
-func withProposalBlock(m model.SysAgentMessage) string {
-	if m.Proposal == nil {
-		return m.Content
-	}
-	b, _ := json.Marshal(m.Proposal)
-	return m.Content + "\n```dispatch\n" + string(b) + "\n```"
-}
+const systemPreamble = `You are the system agent of secure-agent on the operator's own machine. You answer through local Ollama. You do not call other coding agents during chat.
 
-const systemPreamble = `You are the system agent of secure-agent on the operator's own machine. You run on a local model, so harness changes and sensitive work (SSH keys, Git credentials, commit signing, coding-agent sign-in and config) stay on this machine.
+When the operator asks you to do local work, propose one exact shell command for review. The daemon runs it only after the operator separately confirms it. Prefer a short, inspectable command. Use terminal mode for passphrases, hardware keys, login, or any interactive command. Do not include secret values in commands. When creating an SSH key, let ssh-keygen prompt for its passphrase in terminal mode.
 
-You never run anything yourself. You answer questions, and when the operator wants something done you write a task for a coding agent (a "harness") that also runs on this machine's local model. The operator reviews the task and dispatches it.
-
-To hand work to a harness, end your reply with exactly one block:
-` + "```dispatch" + `
-{"title":"short title","harness":"<id>","mode":"headless|terminal","workdir":"/absolute/folder","task":"complete instructions for the harness","steps":["step","step"],"skills":["ids of the skills used"]}
+To propose a local command, end your reply with exactly one block:
+` + "```local-command" + `
+{"command":"exact shell command","mode":"headless|terminal","workdir":"/absolute/folder"}
 ` + "```" + `
-- mode "terminal" when the work needs the operator at the keyboard: passphrases, browser or device-code logins, hardware keys, or approving each command. Otherwise "headless": the harness edits files inside the folder and cannot run other commands.
-- task must stand alone: the harness does not see this chat. Name the files, commands and checks.
-- No block for questions and explanations, or when you are unsure: ask instead of guessing.
+- Use mode "terminal" for interactive work. A headless command has no terminal and a timeout.
+- No block for questions, explanations, or uncertain instructions: ask instead of guessing.
+- Harness handoff is a separate operator-controlled section. Never emit a dispatch block or claim this chat routed to a harness.
 
 Rules:
 - Never ask for, repeat or write secret values (passwords, tokens, private keys, passphrases). They appear masked as [REDACTED:<rule>]. A command that needs a secret must prompt for it in the terminal.
-- Never propose disabling secure-agent, its hooks, guard or firewall, bypassing a harness's approvals or sandbox, or sending keys off this machine.
+- Never propose disabling secure-agent, its hooks, guard or firewall, or sending keys off this machine.
 - Follow the skills below; they are this machine's procedures.
 `
 
-// systemPrompt tells the model what it is, the reply format, the state of
-// each harness, and the skills this request touches.
-func (a *Agent) systemPrompt(cfg config.SystemAgentConfig, info ollamaInfo, user model.SysAgentMessage, picked []Skill) string {
+// systemPrompt tells the model the local command format and relevant skills.
+func (a *Agent) systemPrompt(user model.SysAgentMessage, picked []Skill) string {
 	var b strings.Builder
 	b.WriteString(systemPreamble)
-	hm := harnessModel(cfg, info, "")
-	b.WriteString("\nHarnesses (id: state):\n")
-	for _, h := range Harnesses {
-		state := "ready"
-		if reason := a.harnessReason(cfg, info, h, hm); reason != "" {
-			state = "not available now (" + reason + "); a proposal is saved as a plan to dispatch later"
-		}
-		fmt.Fprintf(&b, "- %s (%s): %s\n", h.ID, h.Label, state)
-	}
-	if user.Harness != "" {
-		fmt.Fprintf(&b, "The operator routes this request to harness %q.\n", user.Harness)
-	}
-	fmt.Fprintf(&b, "Folder: %s\n", cleanWorkdir(user.Workdir, a.home))
+	fmt.Fprintf(&b, "Local command folder: %s\n", cleanWorkdir(user.Workdir, a.home))
 	b.WriteString("\nSkills (id: what it covers):\n")
 	for _, s := range skills {
 		fmt.Fprintf(&b, "- %s: %s\n", s.ID, s.Summary)
@@ -190,53 +154,27 @@ func (a *Agent) systemPrompt(cfg config.SystemAgentConfig, info ollamaInfo, user
 	return b.String()
 }
 
-var dispatchRE = regexp.MustCompile("(?s)```[ \\t]*dispatch[ \\t]*\\n(.*?)```")
+var localCommandRE = regexp.MustCompile("(?s)```[ \\t]*local-command[ \\t]*\\n(.*?)```")
 
-// parseReply splits the model's answer into prose and the last dispatch
-// block's proposal. A block that is not a JSON object with a task leaves
-// the answer as prose. The operator's harness pick wins over the model's;
-// the model's folder is kept only when absolute.
-func parseReply(answer string, user model.SysAgentMessage, home string) (string, *model.SysAgentProposal) {
-	matches := dispatchRE.FindAllStringSubmatch(answer, -1)
-	if len(matches) == 0 {
+// parseLocalCommand accepts one bounded, typed command proposal. The model
+// cannot execute it; the UI must show the exact command before a separate
+// API call by message id. Invalid blocks remain visible as ordinary text.
+func parseLocalCommand(answer string, user model.SysAgentMessage, home string) (string, *model.SysAgentLocalCommand) {
+	matches := localCommandRE.FindAllStringSubmatch(answer, -1)
+	if len(matches) != 1 {
 		return strings.TrimSpace(answer), nil
 	}
-	raw := strings.TrimSpace(matches[len(matches)-1][1])
-	if i, j := strings.IndexByte(raw, '{'), strings.LastIndexByte(raw, '}'); i >= 0 && j > i {
-		raw = raw[i : j+1]
-	}
-	var in struct {
-		Title, Harness, Mode, Workdir, Task string
-		Steps, Skills                       []string
-	}
-	if json.Unmarshal([]byte(raw), &in) != nil || strings.TrimSpace(in.Task) == "" {
+	var in model.SysAgentLocalCommand
+	if json.Unmarshal([]byte(strings.TrimSpace(matches[0][1])), &in) != nil {
 		return strings.TrimSpace(answer), nil
 	}
-	pr := &model.SysAgentProposal{
-		Title:   clip(in.Title, maxTitleLen),
-		Harness: user.Harness,
-		Mode:    in.Mode,
-		Workdir: cleanWorkdir(in.Workdir, cleanWorkdir(user.Workdir, home)),
-		Task:    clip(in.Task, maxTaskLen),
-		Steps:   []string{},
-		Skills:  knownSkills(in.Skills),
+	in.Command = strings.TrimSpace(in.Command)
+	if in.Command == "" || len(in.Command) > 2048 || strings.ContainsRune(in.Command, 0) {
+		return strings.TrimSpace(answer), nil
 	}
-	if pr.Harness == "" {
-		pr.Harness = knownHarness(in.Harness)
+	if in.Mode != ModeHeadless && in.Mode != ModeTerminal {
+		in.Mode = ModeTerminal
 	}
-	if pr.Harness == "" {
-		pr.Harness = Harnesses[0].ID
-	}
-	if pr.Mode != ModeHeadless {
-		pr.Mode = ModeTerminal // the operator at the keyboard is the safe default
-	}
-	if pr.Title == "" {
-		pr.Title = clip(strings.SplitN(pr.Task, "\n", 2)[0], 80)
-	}
-	for _, s := range in.Steps {
-		if s = clip(s, maxStepLen); s != "" && len(pr.Steps) < maxSteps {
-			pr.Steps = append(pr.Steps, s)
-		}
-	}
-	return strings.TrimSpace(dispatchRE.ReplaceAllString(answer, "")), pr
+	in.Workdir = cleanWorkdir(in.Workdir, cleanWorkdir(user.Workdir, home))
+	return strings.TrimSpace(localCommandRE.ReplaceAllString(answer, "")), &in
 }

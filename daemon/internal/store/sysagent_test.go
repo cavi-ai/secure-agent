@@ -7,6 +7,23 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 )
 
+func TestClaimSysAgentActionIsDurableAndOneTime(t *testing.T) {
+	s, err := Open("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	user := s.PutSysAgentMessage(model.SysAgentMessage{TS: time.Now(), Role: "user", Content: "do it"})
+	action := s.PutSysAgentMessage(model.SysAgentMessage{TS: time.Now(), Role: "assistant",
+		LocalCommand: &model.SysAgentLocalCommand{Command: "true", Mode: "headless", Workdir: "/tmp"}})
+	if s.ClaimSysAgentAction(user) || !s.ClaimSysAgentAction(action) || s.ClaimSysAgentAction(action) {
+		t.Fatal("only an unclaimed assistant command can be claimed once")
+	}
+	if got, ok := s.GetSysAgentMessage(action); !ok || got.LocalRunID != -1 {
+		t.Fatalf("claim marker was not durable: %+v", got)
+	}
+}
+
 func TestSysAgentMessagesPlansRuns(t *testing.T) {
 	s, err := Open("", "")
 	if err != nil {

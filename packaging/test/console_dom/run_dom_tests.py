@@ -260,6 +260,7 @@ def main():
         dom_agent = dump_dom(chrome, tmp, "?tab=agent", origin)
         dom_agentoff = dump_dom(chrome, tmp, "?tab=agent&agentoff", origin)
         dom_agentchat = dump_dom(chrome, tmp, "?tab=agent&agentchat", origin)
+        dom_agentlocal = dump_dom(chrome, tmp, "?tab=agent&agentlocal", origin)
         dom_agentdispatch = dump_dom(chrome, tmp, "?tab=agent&agentdispatch", origin)
         dom_scope = dump_dom(chrome, tmp, "?scopedemo")
         dom_pattern = dump_dom(chrome, tmp, "?patterndemo")
@@ -1575,9 +1576,12 @@ def main():
               and 'qwen3:latest on Ollama 0.15.1 · stays on this machine' in ag)
         check("agent: message text, proposal tasks, plan titles and run output render escaped",
               "<img src=x" not in ag and "&lt;img src=x onerror=alert(1)&gt;" in ag)
-        check("agent: the route-to dropdown lists every harness; ones that cannot run are marked for later",
-              '<option value="openclaw">OpenClaw (plan for later)</option>' in ag
-              and '<option value="codex">Codex</option>' in ag and ag.count("<option ") == 4)
+        check("agent: local chat and optional harness handoff are separate; unavailable harnesses are marked for later",
+              'Local Ollama · no harness' in ag and 'id="agent-handoff-panel"' in ag
+              and 'id="agent-harness"' not in ag.split('id="agent-composer"', 1)[1].split('</form>', 1)[0]
+              and '<option value="openclaw">OpenClaw (plan for later)</option>' in ag
+              and '<option value="codex">Codex</option>' in ag and '<option value="pi">Pi runner (plan for later)</option>' in ag
+              and ag.count("<option ") == 5)
         check("agent: a plan whose harness cannot run says why and its dispatch buttons are disabled",
               'agent-plan-reason">OpenClaw is not installed where the daemon can find it (openclaw)</div>' in ag
               and 'data-plan="2" data-mode="headless" disabled=""' in ag)
@@ -1593,10 +1597,16 @@ def main():
               'The system agent is off' in ago and 'system_agent:\n  enabled: true' in ago
               and '<textarea id="agent-input"' in ago and ago.split('<textarea id="agent-input"', 1)[1].split('>', 1)[0].count('disabled') == 1)
         agc = agent_block(dom_agentchat)
-        check("agent: a message sent from the composer shows, then the model's reply with its proposal lands",
+        check("agent: a message sent from the composer gets a direct local command proposal",
               "POST /agent/chat" in pre(dom_agentchat, "mock-requests")
-              and "Keep my Git token in the keychain" in agc and "Store Git credentials in the keychain" in agc
+              and "Keep my Git token in the keychain" in agc and "git config --global credential.helper osxkeychain" in agc
+              and 'data-action="agent-run-local"' in agc
               and "The local model is answering" not in agc and agent_count(dom_agentchat, "agent-msg ") == 7)
+        agl = agent_block(dom_agentlocal)
+        check("agent: confirmed local command runs once and its result appears under Runs",
+              "POST /agent/actions" in pre(dom_agentlocal, "mock-requests")
+              and 'Git credential helper configured.' in agl and 'data-action="agent-run-local"' not in agl
+              and agl.count('class="agent-run" data-run=') == 3)
         agd = agent_block(dom_agentdispatch)
         reqs = pre(dom_agentdispatch, "mock-requests")
         check("agent: Run headless dispatches after the dialog; the run lands under Runs and finishes",

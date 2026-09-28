@@ -626,7 +626,8 @@
       { id: 'claude', label: 'Claude Code', bin: 'claude', path: '/opt/homebrew/bin/claude', installed: true, ready: true },
       { id: 'codex', label: 'Codex', bin: 'codex', path: '/opt/homebrew/bin/codex', installed: true, ready: true },
       { id: 'openclaw', label: 'OpenClaw', bin: 'openclaw', installed: false, ready: false, reason: 'OpenClaw is not installed where the daemon can find it (openclaw)' },
-      { id: 'hermes', label: 'Hermes Agent', bin: 'hermes', installed: false, ready: false, reason: 'Hermes Agent is not installed where the daemon can find it (hermes)' }
+      { id: 'hermes', label: 'Hermes Agent', bin: 'hermes', installed: false, ready: false, reason: 'Hermes Agent is not installed where the daemon can find it (hermes)' },
+      { id: 'pi', label: 'Pi runner', bin: 'pi', installed: false, ready: false, reason: 'Pi runner is not installed where the daemon can find it (pi)' }
     ],
     skills: [
       { id: 'ssh', title: 'SSH keys and the SSH agent', summary: 'Create, load and authorize an SSH key.' },
@@ -669,16 +670,24 @@
     const chat = data['/agent/chat'];
     if (p === '/agent/chat' && opts.method === 'DELETE') { chat.messages = []; return { status: 'ok' }; }
     if (p === '/agent/chat') {
-      const m = { id: ++agentSeq, ts: iso(0), role: 'user', content: body.message, harness: body.harness, workdir: body.workdir };
+      const m = { id: ++agentSeq, ts: iso(0), role: 'user', content: body.message, workdir: body.workdir };
       chat.messages.push(m);
       chat.chatting = true;
       setTimeout(() => {
-        chat.messages.push({ id: ++agentSeq, ts: iso(0), role: 'assistant', content: 'Here is the plan.', skills: ['git'],
-          proposal: { title: 'Store Git credentials in the keychain', harness: body.harness, mode: 'headless', workdir: '/Users/dev',
-            task: 'git config --global credential.helper osxkeychain', steps: ['set the helper'], skills: ['git'] } });
+        chat.messages.push({ id: ++agentSeq, ts: iso(0), role: 'assistant', content: 'Review this local command.', skills: ['git'],
+          local_command: { command: 'git config --global credential.helper osxkeychain', mode: 'headless', workdir: '/Users/dev' } });
         chat.chatting = false;
       }, 1500);
       return { message: m };
+    }
+    if (p === '/agent/actions') {
+      const m = chat.messages.find(x => x.id === body.message_id);
+      const run = { id: ++agentSeq, ts: iso(0), title: 'Local command', harness: 'local', mode: m.local_command.mode,
+        workdir: m.local_command.workdir, status: 'running', command: m.local_command.command };
+      m.local_run_id = run.id;
+      data['/agent/runs'].unshift(run);
+      setTimeout(() => Object.assign(run, { status: 'done', finished_at: iso(0), output: 'Git credential helper configured.' }), 1500);
+      return { run };
     }
     if (p === '/agent/plans' && opts.method === 'DELETE') {
       const id = Number(new URLSearchParams(full.split('?')[1] || '').get('id'));
@@ -711,13 +720,23 @@
     return null;
   };
   // agentchat: the Agent tab open, a message typed and sent through the
-  // real composer; the reply (with a proposal) lands 1.5s later.
-  if (MODE.includes('agentchat')) {
+  // real composer; the direct Ollama reply lands 1.5s later.
+  if (MODE.includes('agentchat') || MODE.includes('agentlocal')) {
     setTimeout(() => {
       document.getElementById('agent-workdir').value = '/Users/dev';
       document.getElementById('agent-input').value = 'Keep my Git token in the keychain';
       document.getElementById('agent-composer').requestSubmit();
     }, 3000);
+  }
+  if (MODE.includes('agentlocal')) {
+    setTimeout(() => {
+      const run = document.querySelector('#agent-thread [data-action="agent-run-local"]');
+      if (run) run.click();
+      setTimeout(() => {
+        const ok = document.getElementById('confirm-ok');
+        if (ok) ok.click();
+      }, 300);
+    }, 5500);
   }
   // agentdispatch: Run headless on the ready plan, confirmed; the run
   // finishes 1.5s later. Then Save plan on the first proposal.

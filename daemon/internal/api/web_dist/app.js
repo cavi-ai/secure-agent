@@ -1116,6 +1116,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const agentInput = document.getElementById('agent-input');
   const agentHarnessSelect = document.getElementById('agent-harness');
   const agentWorkdirInput = document.getElementById('agent-workdir');
+  const agentHandoffInput = document.getElementById('agent-handoff-input');
+  const agentHandoffWorkdir = document.getElementById('agent-handoff-workdir');
   try { if (agentWorkdirInput) agentWorkdirInput.value = sessionStorage.getItem('sa.agent-workdir') || ''; } catch { /* private mode */ }
   async function agentFetch(path, opts = {}) {
     const init = { timeoutMs: AGENT_TIMEOUT_MS, method: opts.method || 'GET' };
@@ -1159,7 +1161,7 @@ document.addEventListener('DOMContentLoaded', () => {
       loadAgent(agentState.chat && agentState.chat.chatting ? ['chat'] : ['runs']);
     }, AGENT_POLL_MS);
   }
-  // The route-to dropdown follows /agent/status; the pick is kept per tab.
+  // The harness picker belongs only to the separate handoff form.
   function fillAgentHarnesses() {
     if (!agentHarnessSelect || !agentState.status) return;
     let pick = agentHarnessSelect.value;
@@ -1212,7 +1214,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!text) return;
     try {
       const res = await agentFetch('/agent/chat', { method: 'POST',
-        body: { message: text, harness: agentHarnessSelect.value, workdir: agentWorkdirInput.value.trim() } });
+        body: { message: text, workdir: agentWorkdirInput.value.trim() } });
       agentInput.value = '';
       const chat = agentState.chat || (agentState.chat = { messages: [] });
       if (res && res.message) chat.messages = [...(chat.messages || []), res.message];
@@ -1224,17 +1226,33 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   };
   window.saveAgentRequest = async function() {
-    const text = agentInput ? agentInput.value.trim() : '';
+    const text = agentHandoffInput ? agentHandoffInput.value.trim() : '';
     if (!text) { showToast("Write the request first — it becomes the plan's task", 'info'); return; }
-    const workdir = agentWorkdirInput.value.trim() || (agentState.status && agentState.status.home) || '';
+    const workdir = agentHandoffWorkdir.value.trim() || (agentState.status && agentState.status.home) || '';
     try {
       const res = await agentFetch('/agent/plans', { method: 'POST',
         body: { harness: agentHarnessSelect.value, mode: 'terminal', workdir, task: text } });
-      agentInput.value = '';
+      agentHandoffInput.value = '';
       showToast(`Saved as plan #${res.plan.id} — dispatch it from Plans`, 'success');
       loadAgent(['plans']);
     } catch (err) {
       showToast('Not saved: ' + (err.message || err), 'danger');
+    }
+  };
+  window.runLocalAgentAction = async function(messageId) {
+    const m = ((agentState.chat && agentState.chat.messages) || []).find(x => x.id === messageId);
+    if (!m || !m.local_command || m.local_run_id) return;
+    const action = m.local_command;
+    const mode = action.mode === 'terminal' ? 'in Terminal' : 'headless';
+    const ok = await window.saConfirm(`Run this exact local command ${mode} in ${action.workdir}?\n\n${action.command}\n\nIt runs with your account's file and network access. No harness receives this chat or command.`,
+      { title: 'Confirm local command', okLabel: 'Run command', danger: true });
+    if (!ok) return;
+    try {
+      const res = await agentFetch('/agent/actions', { method: 'POST', body: { message_id: messageId } });
+      showToast(res.run.status === 'running' ? 'Local command is running; result appears under Runs' : 'Local command opened in Terminal', 'success');
+      loadAgent(['chat', 'runs']);
+    } catch (err) {
+      showToast('Local command not run: ' + (err.message || err), 'danger');
     }
   };
   window.saveAgentProposal = async function(messageId) {
@@ -3862,6 +3880,10 @@ document.addEventListener('DOMContentLoaded', () => {
       case 'agent-save-plan':
         e.preventDefault();
         window.saveAgentRequest();
+        break;
+      case 'agent-run-local':
+        e.preventDefault();
+        window.runLocalAgentAction(Number(d.message));
         break;
       case 'agent-save-proposal':
         e.preventDefault();

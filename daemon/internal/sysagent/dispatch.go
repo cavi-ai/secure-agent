@@ -144,6 +144,9 @@ func composeTask(p model.SysAgentPlan) string {
 // writeFiles writes a launch's files, owner-only.
 func writeFiles(files map[string][]byte) error {
 	for path, data := range files {
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			return fmt.Errorf("create %s: %w", filepath.Base(path), err)
+		}
 		if err := os.WriteFile(path, data, 0o600); err != nil {
 			return fmt.Errorf("write %s: %w", filepath.Base(path), err)
 		}
@@ -161,7 +164,11 @@ func removeFiles(l launch) {
 }
 
 func (a *Agent) audit(run model.SysAgentRun) {
-	a.st.PutAudit(store.AuditEntry{Action: "sysagent-dispatch", Detail: fmt.Sprintf("plan=%d run=%d harness=%s mode=%s model=%s folder=%s status=%s",
+	action := "sysagent-dispatch"
+	if run.Harness == "local" {
+		action = "sysagent-local-command"
+	}
+	a.st.PutAudit(store.AuditEntry{Action: action, Detail: fmt.Sprintf("plan=%d run=%d harness=%s mode=%s model=%s folder=%s status=%s",
 		run.PlanID, run.ID, run.Harness, run.Mode, run.Model, run.Workdir, run.Status)})
 }
 
@@ -276,19 +283,27 @@ func terminalScript(planID int64, run model.SysAgentRun, bin string, l launch) s
 	fmt.Fprintf(&b, "# secure-agent system agent: plan %d, %s on local Ollama (model %s).\n", planID, run.Harness, oneLine(run.Model))
 	b.WriteString("rm -f -- \"$0\"\n")
 	fmt.Fprintf(&b, "cd -- %s || exit 1\n", shellQuote(run.Workdir))
-	if len(l.Unset) > 0 {
+	if !l.CleanEnv && len(l.Unset) > 0 {
 		fmt.Fprintf(&b, "unset %s\n", strings.Join(l.Unset, " "))
 	}
-	for _, kv := range l.Env {
-		k, v, _ := strings.Cut(kv, "=")
-		if k == "NO_PROXY" { // keep the operator's own entries after the loopback hosts
-			fmt.Fprintf(&b, "export NO_PROXY=%s\"${NO_PROXY:+,$NO_PROXY}\"\n", shellQuote(v))
-			continue
+	if !l.CleanEnv {
+		for _, kv := range l.Env {
+			k, v, _ := strings.Cut(kv, "=")
+			if k == "NO_PROXY" { // keep the operator's own entries after the loopback hosts
+				fmt.Fprintf(&b, "export NO_PROXY=%s\"${NO_PROXY:+,$NO_PROXY}\"\n", shellQuote(v))
+				continue
+			}
+			fmt.Fprintf(&b, "export %s=%s\n", k, shellQuote(v))
 		}
-		fmt.Fprintf(&b, "export %s=%s\n", k, shellQuote(v))
 	}
 	fmt.Fprintf(&b, "printf '%%s\\n' %s\n", shellQuote(fmt.Sprintf("secure-agent: %s on local Ollama (%s) in %s — plan %d", run.Harness, run.Model, run.Workdir, planID)))
 	args := make([]string, 0, len(l.Args)+1)
+	if l.CleanEnv {
+		args = append(args, "env", "-i")
+		for _, kv := range l.Env {
+			args = append(args, shellQuote(kv))
+		}
+	}
 	args = append(args, shellQuote(bin))
 	for _, arg := range l.Args {
 		args = append(args, shellQuote(arg))

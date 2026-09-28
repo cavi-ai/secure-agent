@@ -3,6 +3,7 @@ package sysagent
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -27,6 +28,7 @@ var Harnesses = []Harness{
 	{ID: "codex", Label: "Codex", Bin: "codex", MinOllama: "0.13.4"},
 	{ID: "openclaw", Label: "OpenClaw", Bin: "openclaw"},
 	{ID: "hermes", Label: "Hermes Agent", Bin: "hermes"},
+	{ID: "pi", Label: "Pi runner", Bin: "pi"},
 }
 
 // Dispatch modes.
@@ -62,10 +64,11 @@ type launchSpec struct {
 // top of the daemon's environment and the ones removed, and files written
 // (mode 0600) before it runs.
 type launch struct {
-	Args  []string
-	Env   []string // KEY=VALUE
-	Unset []string
-	Files map[string][]byte
+	Args     []string
+	Env      []string // KEY=VALUE
+	Unset    []string
+	CleanEnv bool // start with only Env; Pi must not inherit provider credentials
+	Files    map[string][]byte
 	// AnswerFile is where Codex writes its last message (headless).
 	AnswerFile string
 }
@@ -168,6 +171,25 @@ func buildLaunch(id, mode string, sp launchSpec) (launch, error) {
 			l.Args = []string{"chat", "--provider", "custom", "-m", sp.Model, "-q", sp.Task}
 		}
 		return l, nil
+	case "pi":
+		if headless {
+			return launch{}, fmt.Errorf("Pi has no built-in sandbox; use an explicit terminal handoff")
+		}
+		piDir := filepath.Join(sp.StateDir, "pi-"+sp.Tag)
+		cfg, _ := json.Marshal(map[string]any{"providers": map[string]any{"ollama": map[string]any{
+			"baseUrl": base + "/v1", "api": "openai-completions", "apiKey": "ollama",
+			"compat": map[string]bool{"supportsDeveloperRole": false, "supportsReasoningEffort": false},
+			"models": []map[string]string{{"id": sp.Model}},
+		}}})
+		return launch{
+			Args: []string{"--provider", "ollama", "--model", sp.Model, "--no-session", "--no-extensions", "--no-skills",
+				"--no-prompt-templates", "--no-context-files", "--no-approve", "--tools", "read,grep,find,ls,edit,write", "--", sp.Task},
+			Env: []string{"HOME=" + os.Getenv("HOME"), "USER=" + os.Getenv("USER"), "PATH=" + os.Getenv("PATH"),
+				"TERM=" + os.Getenv("TERM"), "LANG=" + os.Getenv("LANG"), "PI_CODING_AGENT_DIR=" + piDir,
+				"PI_OFFLINE=1", "PI_TELEMETRY=0", "PI_SKIP_VERSION_CHECK=1", noProxy},
+			CleanEnv: true,
+			Files:    map[string][]byte{filepath.Join(piDir, "models.json"): cfg},
+		}, nil
 	}
 	return launch{}, fmt.Errorf("unknown harness %q", id)
 }
@@ -230,6 +252,9 @@ func shellQuote(s string) string {
 // arguments. The task argument is shown as <task> when task is not "".
 func commandLine(bin string, l launch, task string) string {
 	var parts []string
+	if l.CleanEnv {
+		parts = append(parts, "-i")
+	}
 	for _, k := range l.Unset {
 		parts = append(parts, "-u", k)
 	}

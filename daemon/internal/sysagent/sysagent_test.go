@@ -148,6 +148,12 @@ func TestBuildLaunchRecipes(t *testing.T) {
 	for _, h := range Harnesses {
 		for _, mode := range []string{ModeHeadless, ModeTerminal} {
 			l, err := buildLaunch(h.ID, mode, sp)
+			if h.ID == "pi" && mode == ModeHeadless {
+				if err == nil {
+					t.Fatal("Pi must refuse headless without a sandbox")
+				}
+				continue
+			}
 			if err != nil {
 				t.Fatalf("%s %s: %v", h.ID, mode, err)
 			}
@@ -197,6 +203,14 @@ func TestBuildLaunchRecipes(t *testing.T) {
 		!slices.Contains(l.Unset, "HERMES_YOLO_MODE") {
 		t.Errorf("hermes headless: %q %q %q", l.Args, l.Env, l.Unset)
 	}
+	l, _ = buildLaunch("pi", ModeTerminal, sp)
+	if !l.CleanEnv || !strings.Contains(commandLine("pi", l, sp.Task), "env -i ") ||
+		!strings.Contains(terminalScript(1, model.SysAgentRun{Workdir: sp.Workdir}, "pi", l), "env -i ") ||
+		!slices.Contains(l.Env, "PI_OFFLINE=1") || !slices.Contains(l.Args, "read,grep,find,ls,edit,write") ||
+		!slices.Contains(l.Args, "--no-extensions") || strings.Contains(strings.Join(l.Args, " "), "bash") ||
+		!strings.Contains(string(l.Files["/state/pi-7-1/models.json"]), `"baseUrl":"http://127.0.0.1:11434/v1"`) {
+		t.Fatalf("Pi must be isolated and pinned to Ollama: %+v", l)
+	}
 	if _, err := buildLaunch("cursor", ModeHeadless, sp); err == nil {
 		t.Error("an unknown harness must be refused")
 	}
@@ -217,33 +231,56 @@ func TestMergeEnvAndShellQuote(t *testing.T) {
 	}
 }
 
-func TestParseReply(t *testing.T) {
-	user := model.SysAgentMessage{Harness: "codex", Workdir: "/repo"}
-	text, pr := parseReply("Here is the plan.\n```dispatch\n{\"title\":\"Sign commits\",\"harness\":\"hermes\",\"mode\":\"sideways\",\"workdir\":\"relative\",\"task\":\"Configure SSH signing\",\"steps\":[\"a\",\"\",\"b\"],\"skills\":[\"signing\",\"nope\"]}\n```", user, "/home")
-	if text != "Here is the plan." || pr == nil {
-		t.Fatalf("text %q proposal %+v", text, pr)
+func TestParseLocalCommand(t *testing.T) {
+	user := model.SysAgentMessage{Workdir: "/tmp"}
+	text, action := parseLocalCommand("Use Terminal.\n```local-command\n"+
+		`{"command":"ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519_work","mode":"terminal","workdir":"relative"}`+"\n```", user, "/home")
+	if text != "Use Terminal." || action == nil || action.Mode != ModeTerminal || action.Workdir != "/tmp" {
+		t.Fatalf("text=%q action=%+v", text, action)
 	}
-	if pr.Harness != "codex" || pr.Mode != ModeTerminal || pr.Workdir != "/repo" || !slices.Equal(pr.Steps, []string{"a", "b"}) ||
-		!slices.Equal(pr.Skills, []string{"signing"}) {
-		t.Fatalf("proposal = %+v: the operator's harness wins, an unknown mode is terminal, a relative folder falls back", pr)
-	}
-	_, pr = parseReply("```dispatch\n{\"task\":\"x\",\"mode\":\"headless\",\"workdir\":\"/etc/../tmp\"}\n```", model.SysAgentMessage{}, "/home")
-	if pr == nil || pr.Harness != "claude" || pr.Mode != ModeHeadless || pr.Workdir != "/tmp" || pr.Title != "x" {
-		t.Fatalf("defaults: %+v", pr)
-	}
-	for _, bad := range []string{"no block", "```dispatch\nnot json\n```", "```dispatch\n{\"title\":\"no task\"}\n```"} {
-		if _, pr := parseReply(bad, user, "/home"); pr != nil {
-			t.Errorf("%q must not propose: %+v", bad, pr)
+	for _, bad := range []string{"```dispatch\n{\"task\":\"run\"}\n```", "```local-command\n{\"command\":\"\"}\n```",
+		"```local-command\n{\"command\":\"echo x\"}\n```\n```local-command\n{\"command\":\"echo y\"}\n```"} {
+		if _, got := parseLocalCommand(bad, user, "/home"); got != nil {
+			t.Fatalf("invalid or ambiguous command accepted: %q %+v", bad, got)
 		}
 	}
 }
 
-func TestSendRepliesAndSavesAPlanWhenTheHarnessIsMissing(t *testing.T) {
+func TestLocalCommandRequiresSeparateOneTimeExecution(t *testing.T) {
 	ol := newFakeOllama(t, "0.15.1", "qwen3:latest")
-	ol.setReply("Signing needs your passphrase, so this runs in a terminal.\n```dispatch\n" +
-		`{"title":"Sign commits with SSH","mode":"terminal","workdir":"/tmp","task":"Configure SSH commit signing","steps":["git config --global gpg.format ssh"]}` + "\n```")
+	ol.setReply("I can check locally.\n```local-command\n" +
+		`{"command":"printf '%s' \"${OPENAI_API_KEY:-unset}\"","mode":"headless"}` + "\n```")
+	a, st := testAgent(t, ol.URL, nil)
+	t.Setenv("OPENAI_API_KEY", "SHOULD_NOT_INHERIT")
+	work := t.TempDir()
+	if _, err := a.Send(ChatInput{Message: "check my local environment", Workdir: work}); err != nil {
+		t.Fatal(err)
+	}
+	a.Wait()
+	msgs := st.SysAgentMessages(10)
+	if len(msgs) != 2 || msgs[1].LocalCommand == nil || len(st.SysAgentRuns(10)) != 0 {
+		t.Fatalf("chat executed without confirmation: %+v", msgs)
+	}
+	run, err := a.RunLocal(msgs[1].ID)
+	if err != nil || run.Status != "running" {
+		t.Fatalf("run=%+v err=%v", run, err)
+	}
+	if _, err := a.RunLocal(msgs[1].ID); !errors.Is(err, ErrBusy) {
+		t.Fatalf("command ran twice: %v", err)
+	}
+	a.Wait()
+	runs := st.SysAgentRuns(10)
+	if len(runs) != 1 || runs[0].Status != "done" || runs[0].Output != "unset" {
+		t.Fatalf("local command result or environment: %+v", runs)
+	}
+}
+
+func TestSendProposesLocalCommandWithoutRoutingToHarness(t *testing.T) {
+	ol := newFakeOllama(t, "0.15.1", "qwen3:latest")
+	ol.setReply("The key passphrase stays in Terminal.\n```local-command\n" +
+		`{"command":"ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519_work","mode":"terminal","workdir":"/tmp"}` + "\n```")
 	a, st := testAgent(t, ol.URL, map[string]string{})
-	m, err := a.Send(ChatInput{Message: "set up commit signing with ghp_TESTTOKEN", Harness: "codex", Workdir: "/tmp"})
+	m, err := a.Send(ChatInput{Message: "set up commit signing with ghp_TESTTOKEN", Workdir: "/tmp"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -252,32 +289,31 @@ func TestSendRepliesAndSavesAPlanWhenTheHarnessIsMissing(t *testing.T) {
 		t.Fatalf("user message stored unmasked: %q", m.Content)
 	}
 	msgs := st.SysAgentMessages(10)
-	if len(msgs) != 2 || msgs[1].Role != "assistant" || msgs[1].Proposal == nil {
+	if len(msgs) != 2 || msgs[1].Role != "assistant" || msgs[1].LocalCommand == nil {
 		t.Fatalf("messages = %+v", msgs)
 	}
 	reply := msgs[1]
-	if reply.Proposal.Harness != "codex" || !slices.Contains(reply.Skills, "signing") || !slices.Contains(reply.Proposal.Skills, "signing") {
+	if reply.Proposal != nil || reply.LocalCommand.Mode != ModeTerminal || reply.LocalCommand.Workdir != "/tmp" || !slices.Contains(reply.Skills, "signing") {
 		t.Fatalf("reply = %+v", reply)
 	}
-	if reply.PlanID == 0 {
-		t.Fatal("codex is not installed: the proposal must be saved as a plan")
+	if len(st.SysAgentPlans(10)) != 0 || len(st.SysAgentRuns(10)) != 0 {
+		t.Fatal("a chat reply must never run a command or create a harness plan")
 	}
-	p, _ := st.GetSysAgentPlan(reply.PlanID)
-	if p.Source != "agent" || p.Status != "saved" || !strings.Contains(p.Note, "Codex is not installed") {
-		t.Fatalf("plan = %+v", p)
-	}
-	// The model saw the masked text, the signing skill and codex's state.
+	// The model saw the masked text and signing skill, never a harness route.
 	var seen strings.Builder
 	for _, m := range ol.requests[0]["messages"].([]any) {
 		seen.WriteString(m.(map[string]any)["content"].(string) + "\n")
 	}
-	for _, want := range []string{`[REDACTED:github-pat]`, `<skill id="signing">`, `codex (Codex): not available now`, `harness "codex"`} {
+	for _, want := range []string{`[REDACTED:github-pat]`, `<skill id="signing">`, `You do not call other coding agents during chat`} {
 		if !strings.Contains(seen.String(), want) {
 			t.Errorf("chat request lacks %s", want)
 		}
 	}
 	if strings.Contains(seen.String(), "ghp_TESTTOKEN") || ol.requests[0]["model"] != "qwen3:latest" || ol.requests[0]["think"] != false {
 		t.Errorf("chat request = %v", ol.requests[0])
+	}
+	if _, err := a.Send(ChatInput{Message: "route me", Harness: "codex"}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("chat must reject an ambiguous harness selector: %v", err)
 	}
 }
 
@@ -300,7 +336,7 @@ func TestSendRefusesAndNotes(t *testing.T) {
 	}
 	a.Wait()
 	msgs := st.SysAgentMessages(10)
-	if len(msgs) != 2 || msgs[1].Role != "note" || !strings.Contains(msgs[1].Content, "Save as plan") {
+	if len(msgs) != 2 || msgs[1].Role != "note" || !strings.Contains(msgs[1].Content, "Harness handoff") {
 		t.Fatalf("messages = %+v", msgs)
 	}
 	a.SetConfig(config.SystemAgentConfig{Enabled: true, Endpoint: "http://10.1.2.3:11434"})

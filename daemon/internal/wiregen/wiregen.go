@@ -97,6 +97,7 @@ func WireTypes() []any {
 		model.AgentAsk{},
 		api.AgentChat{},
 		model.SysAgentMessage{},
+		model.SysAgentLocalCommand{},
 		model.SysAgentProposal{},
 		model.SysAgentPlan{},
 		model.SysAgentRun{},
