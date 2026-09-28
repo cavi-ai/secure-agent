@@ -57,4 +57,32 @@ final class StatusTintTests: XCTestCase {
         XCTAssertTrue(hasPurple, "The shield must retain its brand color")
         XCTAssertTrue(hasWhite, "The check must remain white")
     }
+
+    func testLaunchIconHasVisiblePixelsInBothAppearances() throws {
+        for name: NSAppearance.Name in [.aqua, .darkAqua] {
+            let appearance = try XCTUnwrap(NSAppearance(named: name))
+            var image: NSImage?
+            appearance.performAsCurrentDrawingAppearance {
+                image = AppDelegate.statusIcon("checkmark.shield.fill")
+            }
+            let bitmap = try XCTUnwrap(image?.representations.compactMap { $0 as? NSBitmapImageRep }.first)
+            var opaquePixels = 0
+            for y in 0..<bitmap.pixelsHigh {
+                for x in 0..<bitmap.pixelsWide where (bitmap.colorAt(x: x, y: y)?.alphaComponent ?? 0) > 0.9 {
+                    opaquePixels += 1
+                }
+            }
+            XCTAssertGreaterThan(opaquePixels, 100, "The launch icon must be visible in \(name.rawValue)")
+        }
+    }
+
+    func testStatusItemIsPresentBeforeDaemonStartup() throws {
+        let delegate = AppDelegate()
+        let item = try XCTUnwrap(delegate.makeStatusItem())
+        defer { NSStatusBar.system.removeStatusItem(item) }
+        let button = try XCTUnwrap(item.button)
+        XCTAssertNotNil(button.image)
+        XCTAssertFalse(try XCTUnwrap(button.image).isTemplate)
+        XCTAssertNotNil(button.action)
+    }
 }

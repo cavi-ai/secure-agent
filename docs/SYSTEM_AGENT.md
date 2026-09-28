@@ -16,7 +16,7 @@ model and dispatched harness models use the configured loopback Ollama.
 1. Start Ollama and pull a chat-capable model, for example `ollama pull qwen3`.
    A tool-calling model such as `qwen3-coder` can be selected separately for
    optional harness handoffs.
-2. In the menu bar app, choose **Settings → App → System Agent** and enable
+2. In the menu bar app, choose **Settings → Local Agent** and enable
    local Agent chat. **Ask Agent** opens the console. For a headless install or
    specific models, use `~/.config/secure-agent/config.yaml`:
 

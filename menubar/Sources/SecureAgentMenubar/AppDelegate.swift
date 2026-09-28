@@ -8,10 +8,35 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificat
     private var statusItem: NSStatusItem!
     private let state = AppState()
     private let popover = NSPopover()
+    private var launchTask: Task<Void, Never>?
 
     public func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
 
+        // Put a usable menu bar control on screen before setup or daemon work.
+        guard setupStatusItem() else {
+            let alert = NSAlert()
+            alert.messageText = "Secure Agent could not appear in the menu bar"
+            alert.informativeText = "Monitoring was not started. Quit another copy or free menu bar space, then reopen Secure Agent."
+            alert.addButton(withTitle: "OK")
+            NSApp.activate(ignoringOtherApps: true)
+            alert.runModal()
+            NSApp.terminate(nil)
+            return
+        }
+        setupPopover()
+        launchTask = Task { [weak self] in
+            guard let self else { return }
+            guard await AppInstanceGuard.shared.claimOrExplain() else {
+                if !Task.isCancelled { NSApp.terminate(nil) }
+                return
+            }
+            guard !Task.isCancelled else { return }
+            finishLaunching()
+        }
+    }
+
+    private func finishLaunching() {
         // Self-heal any legacy KeepAlive LaunchAgent, then run the daemon as a
         // child of this app so it lives and dies with the visible menu bar icon.
         SetupManager.shared.migrateLegacyLaunchAgent()
@@ -23,8 +48,6 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificat
         // the pane for each switch the user has to flip.
         SetupManager.shared.refreshESState()
 
-        setupStatusItem()
-        setupPopover()
         SettingsWindowController.shared.appState = state
         state.onChange = { [weak self] in self?.updateStatusIcon() }
         state.onNewCriticalFlag = { [weak self] in self?.flashStatusBadge() }
@@ -41,8 +64,10 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificat
     public func applicationWillTerminate(_ notification: Notification) {
         // Quitting the app must take the daemon with it — no hidden survivor.
         // Stop the event stream/polling first so no in-flight fetch outlives us.
+        launchTask?.cancel()
         state.stop()
         DaemonSupervisor.shared.stop()
+        AppInstanceGuard.shared.release()
     }
 
     /// The console's `--brand` purple (style.css): hsl(248 92% 70%) on a dark
@@ -53,15 +78,26 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificat
             : NSColor(srgbRed: 0.302, green: 0.222, blue: 0.818, alpha: 1)
     }
 
-    private func setupStatusItem() {
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        if let button = statusItem.button {
-            button.image = Self.statusIcon("checkmark.shield.fill")
-            button.title = ""
-            button.target = self
-            button.action = #selector(statusItemClicked)
-            button.sendAction(on: [.leftMouseUp, .rightMouseUp])
+    private func setupStatusItem() -> Bool {
+        guard let item = makeStatusItem() else { return false }
+        statusItem = item
+        return true
+    }
+
+    /// Kept separate from daemon startup so launch visibility can be tested.
+    func makeStatusItem() -> NSStatusItem? {
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        guard let button = item.button,
+              let icon = Self.statusIcon("checkmark.shield.fill") else {
+            NSStatusBar.system.removeStatusItem(item)
+            return nil
         }
+        button.image = icon
+        button.title = ""
+        button.target = self
+        button.action = #selector(statusItemClicked)
+        button.sendAction(on: [.leftMouseUp, .rightMouseUp])
+        return item
     }
 
     private func setupPopover() {
