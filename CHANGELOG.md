@@ -13,6 +13,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 
 ### Fixed
 - Menu bar: the status icon uses a colored bitmap shield with a white check, so the status bar cannot render it as a monochrome template; attention uses a yellow shield with a black mark.
+- Console Resources: the machine headroom explanation stays inside the available panel instead of being clipped.
 - System Agent: the menu bar has an Ask Agent entry, Settings can enable local Agent chat without editing YAML, and the console's off state points to that control.
 - System Agent: automatic model selection skips Ollama models marked embedding-only, and an explicitly selected non-chat model reports why it cannot run.
 - Doctor: repo-attribution coverage counts sessions inside Git workspaces, so desktop and home-directory sessions no longer produce a false failure.
@@ -50,10 +51,10 @@ All notable changes to `secure-agent` are documented here. The format follows
 ### Added
 - Expected secret reads: `Expected: gh → GitHub` on a read-then-connect finding stores that pattern (agent, reader, file, destination org) and reviews its open flags; later occurrences are counted in `status.expected_flags`, not flagged, and a new reader, file or destination still flags. `GET/POST/DELETE /expected` (NoAgent); the Policy tab lists them with Forget.
 - Console Resources: machine headroom `?` explains the score. It is the lowest of memory still available, CPU still idle, swap still free, and thermal headroom. Under 15 is critical. `headroom_limiter` names which input set the score.
-- System agent (opt-in, `system_agent` in config.yaml, applied live): a chat with a model on the local Ollama that proposes work for Claude Code, Codex, OpenClaw or Hermes Agent and dispatches it — headless in a folder or in a Terminal window — against the same Ollama. Harnesses keep their own sandbox and approvals; a proposal whose harness cannot run yet is saved as a plan with the reason. See `docs/SYSTEM_AGENT.md`.
+- System agent (opt-in, `system_agent` in config.yaml, applied live): chat directly with a model on local Ollama. It can propose an exact shell command and folder, then run the command only after confirmation. Optional harness handoff is a separate action that saves a plan and requires another confirmation to dispatch. See `docs/SYSTEM_AGENT.md`.
 - Seven built-in skills for the system agent: `ssh`, `git`, `signing`, `claude`, `codex`, `openclaw`, `hermes`.
 - `/agent/status`, `/agent/skills`, `/agent/chat`, `/agent/plans`, `/agent/dispatch`, `/agent/runs` (console-admitted, NoAgent). Text is masked by the firewall before it is stored or sent to the model; a secret that cannot be masked is refused.
-- Console: an Agent tab — conversation, a Route to dropdown and folder, Save as plan, proposals with Run headless / Open in terminal, plans with why a harness cannot run, runs with their output and command.
+- Console: an Agent tab with direct Ollama conversation, confirmed local commands, and a separate Harness handoff section for saved plans and explicit dispatches.
 - Console Cleanup view: a progress toast for every removal started in this tab, another tab or the CLI, with phase, size and files being deleted, time in the phase and one bar per group.
 - Console Cleanup view: a finished removal's toast names the bytes reclaimed and links the history.
 - Console Cleanup view: a failed removal's toast stays until closed.
@@ -75,7 +76,8 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Sessions carry `origin`, the openclaw agent behind a Codex session, named in console titles and "×N" folded rows.
 - `GET /costs/plans` serves each Codex home's plan headroom, shown as a line and bar per plan on the console Spend card.
 - Console Clutter panel: Ask advisor on every project header; the plan shows under the header.
-- `secure-agent worktrees ask <path>`; console Ask the agent on keep and review rows, with the answer under the row.
+- `secure-agent worktrees ask <path>`; console Ask the agent is highlighted only when an active resumable agent is working in the worktree, with its answer under the row. Ask advisor remains a separate advisory action.
+- Console Cleanup view: Review opens the local-only reasons for a linked worktree and offers an explicit Move to Trash action. The daemon rechecks the verdict, HEAD and reasons, preserves the folder in Trash, and leaves the branch, commits and stashes in Git (`POST /worktrees/review-trash`).
 - Console Sessions › Cleanup sub-view (was Worktrees): a Clutter panel grouped by project (8 rows until Show more) with kind filters, Move to Trash and Run <clean command>.
 - Console Muted list shows the agent of a scoped mute.
 - Console Policy: muted flag classes show the mute's agent, or "all agents".
