@@ -269,6 +269,50 @@ type filePathRequest struct {
 	Path string `json:"path"`
 }
 
+// handleOpenConfig opens only the configured overlay, never a browser-supplied path.
+func (a *API) handleOpenConfig(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if a.configPath == "" {
+		http.Error(w, "config path unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	info, err := os.Stat(a.configPath)
+	if os.IsNotExist(err) {
+		if err := os.MkdirAll(filepath.Dir(a.configPath), 0o700); err != nil {
+			http.Error(w, "could not create config directory", http.StatusInternalServerError)
+			return
+		}
+		file, createErr := os.OpenFile(a.configPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		if createErr == nil {
+			_, createErr = file.WriteString("# Secure Agent configuration overrides\n")
+			if closeErr := file.Close(); createErr == nil {
+				createErr = closeErr
+			}
+		}
+		if createErr != nil && !os.IsExist(createErr) {
+			http.Error(w, "could not create config file", http.StatusInternalServerError)
+			return
+		}
+		info, err = os.Stat(a.configPath)
+	}
+	if err != nil || !info.Mode().IsRegular() {
+		http.Error(w, "config file is unavailable", http.StatusBadRequest)
+		return
+	}
+	if err := a.openPath("-t", a.configPath); err != nil {
+		if errors.Is(err, errors.ErrUnsupported) {
+			http.Error(w, "opening config is supported on macOS only", http.StatusNotImplemented)
+			return
+		}
+		http.Error(w, "could not open config", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]bool{"ok": true})
+}
+
 // handleFileReveal serves POST /files/reveal: Finder selects the file.
 func (a *API) handleFileReveal(w http.ResponseWriter, r *http.Request) {
 	a.fileAction(w, r, "file-reveal", "-R")

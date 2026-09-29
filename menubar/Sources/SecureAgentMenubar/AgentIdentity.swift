@@ -20,6 +20,8 @@ enum AgentIdentity {
         "codex": (0x10A37F, "⬡"),  // OpenAI teal-green, knot/hex
         "opencode": (0x7C5CFF, "〈"),
         "antigravity": (0x5B6CFF, "▲"),
+        "pi": (0x6B6BB4, "π"),
+        "qwen-code": (0x5B68D6, "Q"),
         "windsurf": (0x0EA5A0, "≋"),
         "aider": (0xFF6B35, "◉"),
         "gemini": (0x4E8DF5, "✦"),
@@ -31,7 +33,7 @@ enum AgentIdentity {
 
     static func forAgent(_ name: String) -> Identity {
         let key = name.lowercased()
-        for (needle, spec) in brandColors where key.contains(needle) {
+        for (needle, spec) in brandColors where (needle == "pi" ? key == "pi" : key.contains(needle)) {
             return Identity(
                 monogram: spec.mono,
                 color: Color(.sRGB,

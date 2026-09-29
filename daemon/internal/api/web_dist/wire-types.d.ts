@@ -886,6 +886,16 @@ export interface AgentAsk {
   finished_at?: string;
 }
 
+export interface SysAgentUsage {
+  model: string;
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  elapsed_ms: number;
+  prompt_tokens_per_second?: number;
+  output_tokens_per_second?: number;
+  tool_calls: number;
+}
+
 export interface SysAgentProposal {
   title: string;
   harness: string;
@@ -910,6 +920,7 @@ export interface SysAgentMessage {
   harness?: string;
   workdir?: string;
   skills?: string[];
+  usage?: SysAgentUsage;
   proposal?: SysAgentProposal;
   local_command?: SysAgentLocalCommand;
   local_run_id?: number;
