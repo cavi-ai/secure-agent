@@ -32,7 +32,40 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificat
                 return
             }
             guard !Task.isCancelled else { return }
+            guard await waitForStatusItemPlacement() else {
+                if !Task.isCancelled {
+                    let alert = NSAlert()
+                    alert.messageText = "Secure Agent could not appear in the menu bar"
+                    alert.informativeText = "Monitoring was not started because macOS did not place the menu bar icon. Free menu bar space, then reopen Secure Agent."
+                    alert.addButton(withTitle: "OK")
+                    NSApp.activate(ignoringOtherApps: true)
+                    alert.runModal()
+                    NSApp.terminate(nil)
+                }
+                return
+            }
             finishLaunching()
+        }
+    }
+
+    private func waitForStatusItemPlacement() async -> Bool {
+        for _ in 0..<100 {
+            if Self.statusItemIsOnMenuBar(statusItem.button?.window?.frame,
+                                          screens: NSScreen.screens.map(\.frame)) {
+                return true
+            }
+            if Task.isCancelled { return false }
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        return false
+    }
+
+    static func statusItemIsOnMenuBar(_ frame: NSRect?, screens: [NSRect]) -> Bool {
+        guard let frame, frame.height > 0 else { return false }
+        return screens.contains { screen in
+            frame.minX >= screen.minX && frame.maxX <= screen.maxX
+                && frame.minY >= screen.maxY - 80
+                && frame.maxY <= screen.maxY
         }
     }
 
