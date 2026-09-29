@@ -26,6 +26,13 @@ func TestLoadDefaultsWhenNoOverlay(t *testing.T) {
 	if c.ProxyEnabled {
 		t.Fatal("default proxy_enabled must be false (inspection is opt-in)")
 	}
+	names := map[string]bool{}
+	for _, a := range c.Agents {
+		names[a.Name] = true
+	}
+	if !names["antigravity"] || !names["pi"] || !names["qwen-code"] || names["gemini"] {
+		t.Fatalf("unexpected default harnesses: %+v", names)
+	}
 }
 
 func TestOverlayMergesOverDefaults(t *testing.T) {

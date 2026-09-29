@@ -102,6 +102,7 @@
           <button type="button" id="theme-light" aria-pressed="false" title="Light theme">L</button>
           <button type="button" id="theme-dark" aria-pressed="false" title="Dark theme">D</button>
         </div>
+        <button type="button" class="btn btn-ghost btn-sm" data-action="open-config" title="Open the active config file in a text editor">Config</button>
         <button class="btn btn-ghost btn-icon" id="btn-refresh" title="Refresh telemetry">
           <svg class="icon"><use href="#i-refresh"/></svg>
         </button>
@@ -645,7 +646,7 @@
             <div class="agent-thread" id="agent-thread" role="log" aria-live="polite" aria-label="Conversation with the system agent"></div>
             <form class="agent-composer" id="agent-composer">
               <label class="sr-only" for="agent-input">Message the system agent</label>
-              <textarea id="agent-input" class="input agent-input" rows="3" maxlength="8000" placeholder="Talk directly with your local Ollama agent. Ask it to propose a local command, or ask a question. Never paste a secret."></textarea>
+              <textarea id="agent-input" class="input agent-input" rows="3" maxlength="8000" placeholder="Message the local agent · Enter to send · Shift+Enter for a new line. Never paste a secret."></textarea>
               <div class="agent-composer-row">
                 <span class="agent-local-label">Local Ollama · no harness</span>
                 <input id="agent-workdir" class="input agent-workdir" type="text" spellcheck="false" autocomplete="off" placeholder="Command folder (default: your home)" aria-label="Folder for a proposed local command">

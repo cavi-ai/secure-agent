@@ -1326,7 +1326,7 @@ document.addEventListener('DOMContentLoaded', () => {
   if (agentComposer) {
     agentComposer.addEventListener('submit', (e) => { e.preventDefault(); window.sendAgentMessage(); });
     agentInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); window.sendAgentMessage(); }
+      if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); window.sendAgentMessage(); }
     });
     agentHarnessSelect.addEventListener('change', () => {
       try { sessionStorage.setItem('sa.agent-harness', agentHarnessSelect.value); } catch { /* private mode */ }
@@ -3912,6 +3912,18 @@ document.addEventListener('DOMContentLoaded', () => {
       case 'policy-refresh':
         e.preventDefault();
         loadPolicy();
+        break;
+      case 'open-config':
+        e.preventDefault();
+        (async () => {
+          try {
+            const res = await apiFetch('/ui/open-config', { method: 'POST' });
+            if (!res.ok) throw new Error((await res.text()).trim() || String(res.status));
+            showToast('Opening the active config file', 'info');
+          } catch (err) {
+            showToast(`Could not open config: ${err.message || err}`, 'danger');
+          }
+        })();
         break;
       case 'forget-expected':
         e.preventDefault();

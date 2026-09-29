@@ -197,7 +197,14 @@ function renderExpectedEgressRules() {
     container.innerHTML = '<div class="empty"><span>No expected connections saved</span></div>';
     return;
   }
-  patchList(container, rules, { key: rule => rule.id, html: expectedEgressRuleHTML });
+  const groups = new Map();
+  for (const rule of rules) {
+    const harness = rule.harness || rule.agent || 'all';
+    if (!groups.has(harness)) groups.set(harness, []);
+    groups.get(harness).push(rule);
+  }
+  container.innerHTML = `<div class="policy-list">${[...groups.entries()].sort(([a], [b]) => a.localeCompare(b))
+    .map(([harness, entries]) => `<section class="policy-harness-group"><div class="policy-harness-title">${harness === 'all' ? 'All harnesses' : harnessChipHTML(harness, { label: true })}</div>${entries.map(expectedEgressRuleHTML).join('')}</section>`).join('')}</div>`;
 }
 
 function expectedEgressRuleHTML(rule) {

@@ -24,6 +24,32 @@ import (
 // literal sits in source.
 var fileSecret = "synthetic-" + "known-secret-" + "0123456789"
 
+func TestOpenConfigUsesConfiguredPath(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "nested", "config.yaml")
+	a := New(Deps{ConfigPath: p})
+	var args []string
+	a.openPath = func(v ...string) error { args = append([]string(nil), v...); return nil }
+	w := httptest.NewRecorder()
+	a.handleOpenConfig(w, httptest.NewRequest(http.MethodPost, "/ui/open-config", nil))
+	if w.Code != http.StatusOK || len(args) != 2 || args[0] != "-t" || args[1] != p {
+		t.Fatalf("open config: status=%d args=%q", w.Code, args)
+	}
+	if data, err := os.ReadFile(p); err != nil || !strings.Contains(string(data), "configuration overrides") {
+		t.Fatalf("new config was not created: %q %v", data, err)
+	}
+	if err := os.WriteFile(p, []byte("system_agent:\n  enabled: true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	w = httptest.NewRecorder()
+	a.handleOpenConfig(w, httptest.NewRequest(http.MethodPost, "/ui/open-config", nil))
+	if data, err := os.ReadFile(p); w.Code != http.StatusOK || err != nil || !strings.Contains(string(data), "enabled: true") {
+		t.Fatalf("existing config changed: status=%d data=%q err=%v", w.Code, data, err)
+	}
+	if !apiroutes.IsNoAgent("/ui/open-config") || !apiroutes.IsMutation("POST", "/ui/open-config") {
+		t.Fatal("open config must be an owner-only console mutation")
+	}
+}
+
 func fileTestAPI(t *testing.T) *API {
 	t.Helper()
 	a := newTestAPI("", testStore(t), &fakeKiller{}, func() Status { return Status{Running: true} })

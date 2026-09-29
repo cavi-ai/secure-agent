@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -17,6 +18,22 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
+
+type chatRoundTrip func(*http.Request) (*http.Response, error)
+
+func (f chatRoundTrip) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestChatReportsServerUsageAndMeasuredReplyTime(t *testing.T) {
+	client := &http.Client{Transport: chatRoundTrip(func(r *http.Request) (*http.Response, error) {
+		body := `{"choices":[{"message":{"content":"Answer"}}],"usage":{"prompt_tokens":80,"completion_tokens":20},"prompt_eval_duration":2000000000,"eval_duration":1000000000}`
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
+	})}
+	answer, usage, err := chat(context.Background(), client, "http://localhost", "qwen3", []chatMessage{{Role: "user", Content: "Hi"}})
+	if err != nil || answer != "Answer" || usage == nil || usage.PromptTokens != 80 || usage.CompletionTokens != 20 ||
+		usage.PromptTokensPerSecond != 40 || usage.OutputTokensPerSecond != 20 || usage.ElapsedMS < 0 || usage.ToolCalls != 0 {
+		t.Fatalf("answer=%q usage=%+v err=%v", answer, usage, err)
+	}
+}
 
 // fakeOllama serves the three endpoints the agent uses; reply is the chat
 // answer, and every chat request body is kept.

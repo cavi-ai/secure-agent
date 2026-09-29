@@ -33,9 +33,10 @@ agents:
   - { name: codex,       match: ["codex"] }
   - { name: opencode,    match: ["opencode", "OpenCode Helper"] }
   - { name: antigravity, match: ["antigravity", "Antigravity Helper"] }
+  - { name: pi,          match: ["/bin/pi", "/pi-coding-agent/"] }
+  - { name: qwen-code,   match: ["/bin/qwen", "/qwen-code/"] }
   - { name: windsurf,    match: ["windsurf"] }
   - { name: aider,       match: ["aider"] }
-  - { name: gemini,      match: ["gemini-cli", "gemini"] }
   - { name: codeium,     match: ["codeium"] }
   - { name: copilot,     match: ["copilot"] }
   - { name: openclaw,    match: ["/.openclaw/"] }
@@ -54,7 +55,6 @@ vendor_allowlist:
   antigravity: ["anthropic.com"]
   windsurf:    ["codeium.com"]
   aider:       ["aider.chat"]
-  gemini:      ["googleapis.com", "generativelanguage.googleapis.com"]
   codeium:     ["codeium.com"]
   copilot:     ["githubcopilot.com", "copilot-proxy.githubusercontent.com"]
   ollama:      ["ollama.com", "ollama.ai"]

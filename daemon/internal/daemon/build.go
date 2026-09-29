@@ -224,6 +224,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 	sysAgent.Recover()
 	apiServer := api.New(api.Deps{
 		SocketPath:            cfg.SocketPath,
+		ConfigPath:            opts.ConfigPath,
 		Store:                 st,
 		Killer:                &realKiller{},
 		Status:                statusFn,

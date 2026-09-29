@@ -86,7 +86,7 @@ func (a *Agent) reply(cfg config.SystemAgentConfig, user model.SysAgentMessage) 
 			msgs = append(msgs, chatMessage{Role: "assistant", Content: h.Content})
 		}
 	}
-	answer, err := chat(ctx, a.client, cfg.Endpoint, modelName, msgs)
+	answer, usage, err := chat(ctx, a.client, cfg.Endpoint, modelName, msgs)
 	if err != nil {
 		a.note("The local model did not answer: " + err.Error() + "." + keptHint)
 		return
@@ -105,7 +105,7 @@ func (a *Agent) reply(cfg config.SystemAgentConfig, user model.SysAgentMessage) 
 	if text == "" && local != nil {
 		text = "I can run this local command after you review and confirm it."
 	}
-	m := model.SysAgentMessage{TS: a.now(), Role: "assistant", Content: text, Skills: ids, LocalCommand: local}
+	m := model.SysAgentMessage{TS: a.now(), Role: "assistant", Content: text, Skills: ids, LocalCommand: local, Usage: usage}
 	m.ID = a.st.PutSysAgentMessage(m)
 }
 

@@ -16,6 +16,9 @@ type SysAgentMessage struct {
 	Workdir string `json:"workdir,omitempty"`
 	// Skills the reply was written with (assistant).
 	Skills []string `json:"skills,omitempty"`
+	// Usage comes from the local model response. Rates are present only when
+	// the server supplies separate prompt and generation durations.
+	Usage *SysAgentUsage `json:"usage,omitempty"`
 	// Proposal is work the reply hands to a harness (assistant).
 	Proposal *SysAgentProposal `json:"proposal,omitempty"`
 	// LocalCommand is an exact shell command proposed by the local model.
@@ -24,6 +27,16 @@ type SysAgentMessage struct {
 	LocalRunID   int64                 `json:"local_run_id,omitempty"`
 	// PlanID is the plan saved from Proposal, 0 until one is.
 	PlanID int64 `json:"plan_id,omitempty"`
+}
+
+type SysAgentUsage struct {
+	Model                 string  `json:"model"`
+	PromptTokens          int     `json:"prompt_tokens,omitempty"`
+	CompletionTokens      int     `json:"completion_tokens,omitempty"`
+	ElapsedMS             int64   `json:"elapsed_ms"`
+	PromptTokensPerSecond float64 `json:"prompt_tokens_per_second,omitempty"`
+	OutputTokensPerSecond float64 `json:"output_tokens_per_second,omitempty"`
+	ToolCalls             int     `json:"tool_calls"`
 }
 
 // SysAgentLocalCommand is a proposed local action, never a harness route.
