@@ -57,6 +57,9 @@ type Store interface {
 	ClaimSysAgentAction(id int64) bool
 	GetSysAgentMessage(id int64) (model.SysAgentMessage, bool)
 	SysAgentMessages(limit int) []model.SysAgentMessage
+	SysAgentRecommendations(limit int) []model.SysAgentMessage
+	PendingSysAgentRecommendations() int
+	SetSysAgentRecommendationState(id int64, state string) bool
 	ClearSysAgentMessages()
 	PutSysAgentPlan(model.SysAgentPlan) int64
 	GetSysAgentPlan(id int64) (model.SysAgentPlan, bool)
@@ -279,6 +282,18 @@ func (a *Agent) Wait() { a.wg.Wait() }
 // Messages returns the newest limit chat messages, oldest first.
 func (a *Agent) Messages(limit int) []model.SysAgentMessage { return a.st.SysAgentMessages(limit) }
 
+func (a *Agent) Recommendations(limit int) []model.SysAgentMessage {
+	return a.st.SysAgentRecommendations(limit)
+}
+
+func (a *Agent) SetRecommendationState(id int64, state string) error {
+	if !a.st.SetSysAgentRecommendationState(id, state) {
+		return ErrNotFound
+	}
+	a.st.PutAudit(store.AuditEntry{Action: "sysagent-recommendation", Detail: fmt.Sprintf("message=%d state=%s", id, state)})
+	return nil
+}
+
 // Runs returns dispatches newest first.
 func (a *Agent) Runs(limit int) []model.SysAgentRun { return a.st.SysAgentRuns(limit) }
 
@@ -357,8 +372,11 @@ func (a *Agent) SavePlan(in PlanInput) (model.SysAgentPlan, error) {
 		p = old
 	case in.MessageID != 0:
 		m, ok := a.st.GetSysAgentMessage(in.MessageID)
-		if !ok || m.Proposal == nil {
+		if !ok || m.Role != "assistant" || (m.Proposal == nil && m.Origin != "analysis") {
 			return p, fmt.Errorf("%w: message %d carries no proposal", ErrInvalid, in.MessageID)
+		}
+		if m.Origin == "analysis" && m.ReviewState != "pending" && m.PlanID == 0 {
+			return p, fmt.Errorf("%w: this recommendation is no longer pending", ErrInvalid)
 		}
 		if m.PlanID != 0 {
 			if old, ok := a.st.GetSysAgentPlan(m.PlanID); ok {
@@ -366,10 +384,16 @@ func (a *Agent) SavePlan(in PlanInput) (model.SysAgentPlan, error) {
 				break
 			}
 		}
-		pr := m.Proposal
 		p.Source, p.MessageID = "agent", m.ID
-		p.Title, p.Harness, p.Mode, p.Workdir, p.Task = pr.Title, pr.Harness, pr.Mode, pr.Workdir, pr.Task
-		p.Steps, p.Skills = pr.Steps, pr.Skills
+		if m.Origin == "analysis" {
+			p.Title, p.Mode, p.Workdir = "Security finding review", ModeTerminal, a.home
+			p.Task = clip("Review the cited security findings with your normal safeguards. Flag IDs: "+strings.Join(m.FlagIDs, ", ")+"\n\n"+m.Content, maxTaskLen-4)
+			p.Skills = m.Skills
+		} else {
+			pr := m.Proposal
+			p.Title, p.Harness, p.Mode, p.Workdir, p.Task = pr.Title, pr.Harness, pr.Mode, pr.Workdir, pr.Task
+			p.Steps, p.Skills = pr.Steps, pr.Skills
+		}
 	}
 	if in.Title != "" {
 		p.Title = in.Title
@@ -399,10 +423,16 @@ func (a *Agent) SavePlan(in PlanInput) (model.SysAgentPlan, error) {
 		return p, err
 	}
 	p.ID = a.st.PutSysAgentPlan(p)
+	if p.ID == 0 {
+		return p, fmt.Errorf("%w: the plan could not be stored", ErrUnavailable)
+	}
 	if p.MessageID != 0 {
 		if m, ok := a.st.GetSysAgentMessage(p.MessageID); ok && m.PlanID != p.ID {
 			m.PlanID = p.ID
 			a.st.PutSysAgentMessage(m)
+		}
+		if m, ok := a.st.GetSysAgentMessage(p.MessageID); ok && m.Origin == "analysis" {
+			_ = a.st.SetSysAgentRecommendationState(p.MessageID, "saved")
 		}
 	}
 	return p, nil

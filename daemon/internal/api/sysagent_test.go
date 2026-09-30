@@ -7,20 +7,22 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/apiroutes"
 	"github.com/cavi-ai/secure-agent/daemon/internal/config"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
+	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 	"github.com/cavi-ai/secure-agent/daemon/internal/sysagent"
 )
 
 func TestAgentRoutesAreNoAgentAndConsoleAdmitted(t *testing.T) {
-	for _, p := range []string{"/agent/status", "/agent/skills", "/agent/chat", "/agent/actions", "/agent/plans", "/agent/dispatch", "/agent/runs"} {
+	for _, p := range []string{"/agent/status", "/agent/skills", "/agent/chat", "/agent/analyze", "/agent/recommendations", "/agent/actions", "/agent/plans", "/agent/dispatch", "/agent/runs"} {
 		if !apiroutes.IsNoAgent(p) || !apiroutes.ConsoleAllowed("GET", p) {
 			t.Errorf("%s: NoAgent=%v console=%v", p, apiroutes.IsNoAgent(p), apiroutes.ConsoleAllowed("GET", p))
 		}
 	}
-	for _, p := range []string{"/agent/chat", "/agent/actions", "/agent/plans", "/agent/dispatch"} {
+	for _, p := range []string{"/agent/chat", "/agent/analyze", "/agent/recommendations", "/agent/actions", "/agent/plans", "/agent/dispatch"} {
 		if !apiroutes.IsMutation("POST", p) {
 			t.Errorf("POST %s must be a pinned-UI mutation", p)
 		}
@@ -135,5 +137,59 @@ func TestAgentChatPlansDispatch(t *testing.T) {
 	var status sysagent.AgentStatus
 	if w := do(http.MethodGet, "/agent/status", ""); json.Unmarshal(w.Body.Bytes(), &status) != nil || status.Enabled || len(status.Harnesses) != 5 {
 		t.Fatalf("status: %s", w.Body.String())
+	}
+}
+
+func TestAnalyzeFlagsCreatesReviewOnlyRecommendation(t *testing.T) {
+	ollama := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/tags":
+			fmt.Fprint(w, `{"models":[{"name":"qwen3:latest"}]}`)
+		case "/api/version":
+			fmt.Fprint(w, `{"version":"0.15.0"}`)
+		default:
+			_ = json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": map[string]string{"content": "Review flag-a and verify local configuration.\n```local-command\n{\"command\":\"true\",\"mode\":\"headless\",\"workdir\":\"/tmp\"}\n```"}}}})
+		}
+	}))
+	defer ollama.Close()
+	st := testStore(t)
+	st.PutFlag(model.Flag{ID: "flag-a", Rule: "read-then-connect", Agent: "codex", Severity: 3, TS: time.Now(), Evidence: model.EvidenceFromStrings("read .env")})
+	st.PutAudit(store.AuditEntry{Action: "flag-ack", Detail: "reviewed older finding"})
+	agent := sysagent.New(st, t.TempDir(), func(s string) (string, bool) { return s, true })
+	agent.SetConfig(config.SystemAgentConfig{Enabled: true, Endpoint: ollama.URL, TimeoutMinutes: 1})
+	a := New(Deps{Store: st, SysAgent: agent})
+	mux := a.buildMux()
+	do := func(method, path, body string) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, httptest.NewRequest(method, path, strings.NewReader(body)))
+		return w
+	}
+	if w := do(http.MethodPost, "/agent/analyze", `{}`); w.Code != http.StatusAccepted {
+		t.Fatalf("analyze: %d %s", w.Code, w.Body.String())
+	}
+	agent.Wait()
+	var recommendations []model.SysAgentMessage
+	w := do(http.MethodGet, "/agent/recommendations", "")
+	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &recommendations) != nil || len(recommendations) != 1 {
+		t.Fatalf("recommendations: %d %s", w.Code, w.Body.String())
+	}
+	m := recommendations[0]
+	if m.ReviewState != "pending" || len(m.FlagIDs) != 1 || m.FlagIDs[0] != "flag-a" || m.LocalCommand == nil || len(agent.Runs(10)) != 0 {
+		t.Fatalf("analysis must queue, not run: %+v", m)
+	}
+	if user := agent.Messages(10)[0]; !strings.Contains(user.Content, "flag-a") || !strings.Contains(user.Content, "flag-ack") {
+		t.Fatalf("analysis omitted stored flag or action: %s", user.Content)
+	}
+	if w := do(http.MethodPost, "/agent/plans", fmt.Sprintf(`{"message_id":%d,"harness":"codex","mode":"terminal","workdir":"/tmp"}`, m.ID)); w.Code != http.StatusOK {
+		t.Fatalf("save for delegation: %d %s", w.Code, w.Body.String())
+	}
+	if got := agent.Recommendations(10)[0]; got.ReviewState != "saved" || got.PlanID == 0 {
+		t.Fatalf("saved queue item: %+v", got)
+	}
+	if w := do(http.MethodPost, "/agent/actions", fmt.Sprintf(`{"message_id":%d}`, m.ID)); w.Code != http.StatusBadRequest {
+		t.Fatalf("saved recommendation must not remain executable: %d %s", w.Code, w.Body.String())
+	}
+	if w := do(http.MethodDelete, "/agent/chat", ""); w.Code != http.StatusOK || len(agent.Recommendations(10)) != 1 {
+		t.Fatalf("chat clear must preserve review history: %d %s", w.Code, w.Body.String())
 	}
 }

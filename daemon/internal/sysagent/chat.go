@@ -22,6 +22,19 @@ type ChatInput struct {
 // Send stores the operator's message (masked) and starts the reply; the
 // reply lands in the store. One reply at a time.
 func (a *Agent) Send(in ChatInput) (model.SysAgentMessage, error) {
+	return a.send(in, "", nil)
+}
+
+// SendAnalysis uses the same local, masked Ollama path as ordinary chat.
+// The caller supplies a daemon-built evidence summary, never browser text.
+func (a *Agent) SendAnalysis(prompt string, flagIDs []string) (model.SysAgentMessage, error) {
+	if a.st.PendingSysAgentRecommendations() >= 100 {
+		return model.SysAgentMessage{}, fmt.Errorf("%w: review pending recommendations before starting another analysis", ErrBusy)
+	}
+	return a.send(ChatInput{Message: prompt, Workdir: a.home}, "analysis", flagIDs)
+}
+
+func (a *Agent) send(in ChatInput, origin string, flagIDs []string) (model.SysAgentMessage, error) {
 	cfg := a.config()
 	if !cfg.Enabled {
 		return model.SysAgentMessage{}, ErrDisabled
@@ -45,7 +58,7 @@ func (a *Agent) Send(in ChatInput) (model.SysAgentMessage, error) {
 	a.wg.Add(1)
 	a.mu.Unlock()
 	m := model.SysAgentMessage{TS: a.now(), Role: "user", Content: text,
-		Workdir: cleanWorkdir(in.Workdir, "")}
+		Workdir: cleanWorkdir(in.Workdir, ""), Origin: origin, FlagIDs: flagIDs}
 	m.ID = a.st.PutSysAgentMessage(m)
 	go a.reply(cfg, m)
 	return m, nil
@@ -76,6 +89,19 @@ func (a *Agent) reply(cfg config.SystemAgentConfig, user model.SysAgentMessage) 
 	}
 	modelName, _ := chatModel(cfg, info)
 	history := a.st.SysAgentMessages(historyLen)
+	if user.Origin == "analysis" {
+		// Each scan is grounded only in its daemon-built snapshot; an earlier
+		// recommendation must not steer a fresh security assessment.
+		history = []model.SysAgentMessage{user}
+	} else {
+		plain := history[:0]
+		for _, h := range history {
+			if h.Origin != "analysis" {
+				plain = append(plain, h)
+			}
+		}
+		history = plain
+	}
 	picked := selectSkills(recentUserText(history, 3), promptSkills)
 	msgs := []chatMessage{{Role: "system", Content: a.systemPrompt(user, picked)}}
 	for _, h := range history {
@@ -105,7 +131,11 @@ func (a *Agent) reply(cfg config.SystemAgentConfig, user model.SysAgentMessage) 
 	if text == "" && local != nil {
 		text = "I can run this local command after you review and confirm it."
 	}
-	m := model.SysAgentMessage{TS: a.now(), Role: "assistant", Content: text, Skills: ids, LocalCommand: local, Usage: usage}
+	m := model.SysAgentMessage{TS: a.now(), Role: "assistant", Content: text, Skills: ids, LocalCommand: local, Usage: usage,
+		Origin: user.Origin, FlagIDs: user.FlagIDs}
+	if user.Origin == "analysis" {
+		m.ReviewState = "pending"
+	}
 	m.ID = a.st.PutSysAgentMessage(m)
 }
 

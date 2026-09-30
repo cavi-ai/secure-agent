@@ -46,7 +46,7 @@ As AI coding agents (Claude Code, Cursor, Codex, Antigravity, Pi, Qwen Code, ope
   Features an inline HTTP/HTTPS proxy server with dynamic TLS certificate generation (`CAManager`) that inspects request streams for outbound credential leaks (`redact.Detect`) and response streams for prompt injection attacks (`injection.Detect`).
 
 - 🖥️ **Live Web Security Console (`http://localhost:8443/dashboard/`)**  
-  Embedded dark-mode visual web console for real-time monitoring of active AI agent process trees, secret-exposure incident reports, sliding-window security flags, and proxy payload inspection streams. Its **Attention** view groups resource approvals, blocked guard requests, critical findings and incidents, and uninspected egress by complete session, with workspace, memory, CPU, process count, and scoped actions in one queue. Updates are pushed over SSE (`/events/stream`) with a polling fallback. The console's telemetry endpoints on the proxy port are gated by a per-install **console token** (0600, `~/.config/secure-agent/console-token`) — a credential agents never receive, so a routed agent can't turn its proxy token into telemetry reads or guard self-approval. The menubar's **Open console** passes the token automatically.
+  Embedded dark-mode visual web console for real-time monitoring of active AI agent process trees, secret-exposure incident reports, sliding-window security flags, and proxy payload inspection streams. Its **Attention** view groups resource approvals, blocked guard requests, critical findings and incidents, and uninspected egress by complete session, with workspace, memory, CPU, process count, and scoped actions in one queue. Individual security flags open an evidence drawer with the local advisor's plan and actions. On the **Agent** page, **Analyze activity** asks local Ollama to review stored flags and operator actions; its recommendation waits in a review queue for an explicit local-command confirmation or a saved harness plan. Updates are pushed over SSE (`/events/stream`) with a polling fallback. The console's telemetry endpoints on the proxy port are gated by a per-install **console token** (0600, `~/.config/secure-agent/console-token`) — a credential agents never receive, so a routed agent can't turn its proxy token into telemetry reads or guard self-approval. The menubar's **Open console** passes the token automatically.
 
 - 📊 **Resource Mission Control**
   Attributes live resident memory and CPU to complete agent sessions—root process plus helpers—so one runaway child cannot hide behind a harmless-looking parent. Whole-machine context shows available and free memory, compression, swap, CPU split between agents and everything else, memory pressure, thermal state, and a conservative headroom score. The console ranks sessions by pressure, charts one hour of history, explains heavy memory, full-core CPU, rapid growth, idle retention, runaway children, and orphan drift, and opens the entire process family before any terminate action. The native menu bar shows machine headroom and family totals and adds an **Impact** sort for quick daily triage. A bounded local flight recorder keeps pressure episodes, their captured host conditions, process attribution, and the ten-minute lead-up available for post-mortem review after a session exits. Each episode correlates redacted process, tool, file, network, guard, and security activity with the steepest observed memory rise while clearly distinguishing temporal correlation from proven causation.
@@ -73,7 +73,7 @@ As AI coding agents (Claude Code, Cursor, Codex, Antigravity, Pi, Qwen Code, ope
   Turn on **Settings → Local Agent**, then click **Ask Agent** in the menu bar popover. Chat goes directly to your own Ollama. For local work, the model proposes an exact shell command and folder; you review and confirm it before it runs, either headless or in Terminal for passphrases. Commands run with your account's file and network access. An optional **Harness handoff** section saves separate plans for Claude Code, Codex, OpenClaw, Hermes Agent, or Pi runner; it never changes where chat goes. Pi is terminal-only because it has no built-in sandbox. Messages and output are masked by the firewall; `/agent/*` routes refuse agent processes. See [`docs/SYSTEM_AGENT.md`](docs/SYSTEM_AGENT.md).
 
 - 🔔 **Noise-Controlled Alerts, With Real Recourse**  
-  Only **severity-3 criticals page you** by default (secret leaks, read-then-connect, TCC tampering, keychain CLI execs); warnings queue silently in the popover and console. Routine keychain-DB file opens are informational (severity 1) — legitimate tooling touches them constantly, so they never page unless you opt in. Every noisy class has a working **"Dismiss this flag class"** (rule-level mute, reversible from Settings → Decisions), and Settings → Decisions / the console bell menu offer per-rule **Default / Always / Never** overrides (`/notify/rules`) shared by both UIs.
+  Only **severity-3 criticals page you** by default (confirmed secret leaks, direct read-then-connect activity, TCC tampering, keychain CLI execs); warnings queue silently in the popover and console. A secret file read and later connection by unrelated sibling processes in one agent family remains a severity-2 finding for review, because timing alone does not show that the reader sent the bytes. Model-visible tool reads remain critical. Routine keychain-DB file opens are informational (severity 1) — legitimate tooling touches them constantly, so they never page unless you opt in. Every noisy class has a working **"Dismiss this flag class"** (rule-level mute, reversible from Settings → Decisions), and Settings → Decisions / the console bell menu offer per-rule **Default / Always / Never** overrides (`/notify/rules`) shared by both UIs.
 
 ---
 
@@ -140,7 +140,9 @@ The first-run setup wizard walks you through:
 3. **Harness hooks** — copies `secret_guard.py`, `injection_scan.py`, `activity_log.py` into `~/.claude/hooks`, `~/.cursor/hooks`, and `~/.config/opencode/hooks`.
 4. **Extras** — Open at Login (`SMAppService`) and the `secure-agent` CLI symlink in `~/.local/bin`.
 
-Everything is also manageable later from the menu bar icon (**Setup & Permissions…**, **Settings…**, **Uninstall…**, **Open console**, **Ask Agent**).
+Everything is also manageable later from the menu bar icon (**Setup & Permissions…**, **Settings…**, **Uninstall…**, **Open console**, **Ask Agent**). Secure Agent also appears in the Dock and opens Settings at launch, so it remains visible and accessible when macOS hides the menu bar item. Click the Dock icon to reopen Settings after closing its window; quit the app to stop its child daemon.
+
+The UI has a separate menu bar identity in this update. Saved Secure Agent preferences and monitoring data remain in their existing locations. Allow **Secure Agent** in System Settings → Menu Bar; another application's menu bar setting should not be required. Review any macOS notification, Login Items or Full Disk Access prompt through the native Setup flow.
 
 ### In-app updates
 
@@ -171,7 +173,7 @@ make dmg   # signs, notarizes, and staples both the app and the DMG
 
 ### Developer Installation (from source)
 
-Prerequisites: macOS 14+, Go 1.22+, Swift 6.0 / Xcode CLT, Python 3.10+.
+Prerequisites: macOS 14+, Go 1.22+, Python 3.10+, and Xcode with the macOS 27.0 SDK and a Swift 6 toolchain. App packaging and local Swift builds/tests use `packaging/swift_macos.sh` to select `macosx27.0` for both compilation and linking; an unavailable SDK fails the build. Packaging also checks that both executable architectures record SDK 27.0 and minimum macOS 14.0.
 
 ```bash
 git clone https://github.com/cavi-ai/secure-agent.git
@@ -397,6 +399,8 @@ The Go daemon listens on a local Unix domain socket (`~/.config/secure-agent/dae
 | `/worktrees/ask` | `POST` | Ask a currently active, identified agent in a keep/review worktree to open a PR for its work or say the worktree can go (`GET /worktrees/asks` lists answers). |
 | `/agent/status`, `/agent/skills`, `/agent/runs` | `GET` | The system agent's model and harness readiness, its skills, and its dispatches. |
 | `/agent/chat` | `GET`, `POST`, `DELETE` | Direct Ollama conversation; `POST {"message","workdir"}` sends one (the reply lands asynchronously). A harness field is rejected. |
+| `/agent/analyze` | `POST` | Build a bounded, masked local summary from stored flags, evidence, and operator actions and ask Ollama for an advisory recommendation. No command runs. |
+| `/agent/recommendations` | `GET`, `POST` | Review queued analysis replies; `POST {"message_id","state":"dismissed"}` dismisses a pending item. |
 | `/agent/actions` | `POST` | Start the exact local command stored on an assistant message: `{"message_id":123}`. The caller cannot supply command text. |
 | `/agent/plans` | `GET`, `POST`, `DELETE` | Plans with whether each can run now; save a reply's proposal (`{"message_id"}`) or write one. |
 | `/agent/dispatch` | `POST` | Run a plan's harness on the local Ollama: `{"plan_id","mode":"headless|terminal"}`. |
@@ -492,7 +496,7 @@ python3 plugin/hooks/test_injection_scan.py
 python3 plugin/hooks/test_activity_log.py
 
 # 3. Run Swift menu bar package tests
-swift test --package-path menubar
+bash packaging/swift_macos.sh test --package-path menubar
 
 # 4. Run console JS unit tests + DOM tests + asset lint
 node --test 'packaging/test/console/*.test.mjs'

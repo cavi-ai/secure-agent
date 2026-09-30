@@ -35,7 +35,7 @@
     {
       "id": "allow-host",
       "label": "Allow this AWS address for claude",
-      "consequence": "Future connections from claude to 2600:1f10:4fa9:a02:3441:aad6:bb1a:fd73 are trusted and stop being flagged.",
+      "consequence": "Future connections from claude to 2600:1f10:4fa9:a02:3441:aad6:bb1a:fd73 are trusted and stop being flagged. This finding is marked reviewed.",
       "method": "POST",
       "path": "/allowlist",
       "body": {
@@ -47,7 +47,7 @@
     {
       "id": "allow-host",
       "label": "Allow this Cloudflare address for claude",
-      "consequence": "Future connections from claude to 2606:4700:20::681a:4a4 are trusted and stop being flagged.",
+      "consequence": "Future connections from claude to 2606:4700:20::681a:4a4 are trusted and stop being flagged. This finding is marked reviewed.",
       "method": "POST",
       "path": "/allowlist",
       "body": {

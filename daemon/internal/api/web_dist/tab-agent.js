@@ -9,6 +9,20 @@ const AGENT_PLAN_BADGE = { saved: '', running: 'badge-amber', opened: 'badge-ok'
 // The config the off state offers to copy.
 const AGENT_CONFIG_SNIPPET = 'system_agent:\n  enabled: true';
 
+// Shortcuts only prepare a draft. They never send chat or execute a command.
+function agentQuickPrompt(id) {
+  const prompts = {
+    ssh: 'Check my SSH setup. Explain what needs attention and propose a read-only local command for my review. Do not display private keys or secrets.',
+    signing: 'Check my Git identity and commit signing setup. Explain any gaps and propose a read-only local command for my review. Do not display credentials.',
+    security: 'Help me review the security of this machine. Start with a read-only check and explain any proposed changes before I approve them.'
+  };
+  return Object.hasOwn(prompts, id) ? prompts[id] : '';
+}
+
+function agentPendingRecommendations(rows) {
+  return (rows || []).filter(m => (m.review_state || 'pending') === 'pending' && !m.local_run_id && !m.plan_id);
+}
+
 // agentHarnessLabel: the harness's display name from /agent/status, else
 // the console's harness table.
 function agentHarnessLabel(status, id) {
@@ -30,16 +44,18 @@ function agentOffHTML() {
   return `<div class="agent-off">
     <h3>The system agent is off</h3>
     <p>Chat directly with your local Ollama agent. It can propose an exact local command for your review; nothing runs until you confirm it. Harness handoff is a separate, optional section.</p>
-    <p>Open the Secure Agent menu bar app, then Settings → App → System Agent and turn on local Agent chat. Return here to start a conversation.</p>
+    <p>Open the Secure Agent menu bar app, then Settings → Local Agent and turn on local Agent chat. Return here to start a conversation.</p>
     <p>For a headless install, add this to <code>~/.config/secure-agent/config.yaml</code>; the daemon applies it within seconds:</p>
     <pre class="agent-snippet">${escapeHTML(AGENT_CONFIG_SNIPPET)}</pre>
     <div><button type="button" class="btn btn-ghost btn-sm" data-action="agent-copy" data-text="${escapeHTML(AGENT_CONFIG_SNIPPET)}"><svg class="icon"><use href="#i-copy"/></svg><span>Copy</span></button></div>
   </div>`;
 }
 
-// agentTextHTML: message text, escaped; line breaks survive through CSS.
-function agentTextHTML(text) {
-  return `<div class="agent-bubble">${escapeHTML(text || '')}</div>`;
+// User input stays literal. Model replies use the same escaped Markdown
+// renderer as incident reports; it never treats model-supplied HTML as DOM.
+function agentTextHTML(text, markdown = false) {
+  return `<div class="agent-bubble${markdown ? ' agent-bubble-markdown' : ''}">${markdown
+    ? parseMarkdownToHTML(text || '') : escapeHTML(text || '')}</div>`;
 }
 
 // A model reply can propose one exact local command. The server accepts only
@@ -56,6 +72,28 @@ function agentLocalCommandHTML(m) {
       ? `<span class="agent-saved">Started as run #${Number(m.local_run_id)}</span>`
       : `<button type="button" class="btn btn-primary btn-sm" data-action="agent-run-local" data-message="${Number(m.id)}">Review and run</button>`}</div>
   </div>`;
+}
+
+function agentRecommendationHTML(m, status) {
+  const state = m.review_state || 'pending';
+  const command = m.local_command;
+  const flags = (m.flag_ids || []).slice(0, 8).map(id => `<button type="button" class="link-btn" data-action="open-flag" data-id="${escapeHTML(id)}">${escapeHTML(id.slice(0, 12))}</button>`).join(', ');
+  const harnessOptions = agentHarnessOptionsHTML(status, '');
+  return `<article class="agent-recommendation" data-message="${Number(m.id)}">
+    <div class="agent-plan-head"><b>Activity analysis</b><span class="badge ${state === 'saved' ? 'badge-ok' : ''}">${escapeHTML(state)}</span></div>
+    <div class="agent-plan-meta">${escapeHTML(new Date(m.ts).toLocaleString())}${flags ? ` · Flags: ${flags}` : ''}</div>
+    ${agentTextHTML(m.content, true)}
+    ${command ? `<div class="agent-proposal agent-local-action"><b>Proposed local command · ${escapeHTML(command.mode)}</b><pre class="agent-run-output">${escapeHTML(command.command)}</pre><div class="agent-plan-meta">${escapeHTML(command.workdir)}</div></div>` : '<p class="agent-plan-reason">No executable command proposed. Review the suggested steps or save them for later delegation.</p>'}
+    <div class="agent-actions">
+      ${command && !m.local_run_id && state === 'pending' ? `<button type="button" class="btn btn-primary btn-sm" data-action="agent-run-local" data-message="${Number(m.id)}">Review and run locally</button>` : ''}
+      ${m.local_run_id ? `<span class="agent-saved">Started as run #${Number(m.local_run_id)}</span>` : ''}
+      ${m.plan_id ? `<span class="agent-saved">Saved as plan #${Number(m.plan_id)}</span>` : ''}
+      ${state === 'pending' ? `<label>Save for later delegation <select class="select select-sm agent-recommendation-harness">${harnessOptions}</select></label>
+        <input class="input agent-workdir agent-recommendation-workdir" type="text" aria-label="Folder for a future harness plan" placeholder="Folder (default: home)">
+        <button type="button" class="btn btn-ghost btn-sm" data-action="agent-save-recommendation" data-message="${Number(m.id)}">Save plan</button>
+        <button type="button" class="btn btn-ghost btn-sm" data-action="agent-dismiss-recommendation" data-message="${Number(m.id)}">Dismiss</button>` : ''}
+    </div>
+  </article>`;
 }
 
 // agentHarnessBlock: why a harness cannot be dispatched now ('' when it
@@ -118,13 +156,14 @@ function agentMessageHTML(m, status) {
     u.elapsed_ms ? `${(Number(u.elapsed_ms) / 1000).toFixed(1)}s reply` : '',
     u.tool_calls ? `${Number(u.tool_calls)} tool requests (not executed)` : 'no model tool calls',
   ].filter(Boolean).join(' · ') : '';
-  return `<div class="agent-msg assistant">${agentTextHTML(m.content)}${stats ? `<div class="agent-msg-meta">${stats}</div>` : ''}${skills}${agentLocalCommandHTML(m)}${agentProposalHTML(m, status)}</div>`;
+  return `<div class="agent-msg assistant">${agentTextHTML(m.content, true)}${stats ? `<div class="agent-msg-meta">${stats}</div>` : ''}${skills}${agentLocalCommandHTML(m)}${agentProposalHTML(m, status)}</div>`;
 }
 
 // agentThreadItems: the chat as patchList items, with a pending line while
 // the model answers.
 function agentThreadItems(chat, status) {
-  const items = ((chat && chat.messages) || []).map(m => ({ key: 'm' + m.id, html: agentMessageHTML(m, status) }));
+  const items = ((chat && chat.messages) || []).filter(m => m.origin !== 'analysis')
+    .map(m => ({ key: 'm' + m.id, html: agentMessageHTML(m, status) }));
   if (chat && chat.chatting) {
     items.push({ key: 'pending', html: `<div class="agent-msg note agent-pending"><span>The local model is answering…</span></div>` });
   }
@@ -134,10 +173,11 @@ function agentThreadItems(chat, status) {
 // agentEmptyThreadHTML: an enabled agent before the first message.
 function agentEmptyThreadHTML(status) {
   const ready = status && status.enabled && !status.reason;
-  return `<div class="empty"><svg class="icon"><use href="#i-chat"/></svg>
-    <span>${ready
-      ? 'Talk directly with Ollama. Ask about SSH keys, signing, or a local task. Review every proposed command before it runs; use Terminal for passphrases. Never paste a secret.'
-      : escapeHTML((status && status.reason) || 'Loading…')}</span></div>`;
+  return `<div class="agent-welcome"><svg class="icon"><use href="#i-chat"/></svg>
+    <h3>${ready ? 'What would you like to take care of?' : 'Your local agent'}</h3>
+    <p>${ready ? 'Ask about your machine, check your setup, or choose a quick command below.'
+      : escapeHTML((status && status.reason) || 'Connecting to local Ollama…')}</p>
+    <span>Private chat on this machine. Never paste a secret.</span></div>`;
 }
 
 // agentPlanHTML: one saved plan, whether its harness can run now, and
@@ -183,7 +223,7 @@ function agentRunHTML(r, status, nowMs) {
       <span class="badge ${AGENT_RUN_BADGE[r.status] || ''}">${escapeHTML(r.status)}</span>${age ? `<span class="agent-age">${escapeHTML(age)} ago</span>` : ''}</div>
     <div class="agent-plan-meta">${r.harness === 'local' ? 'Direct Ollama action' : 'plan #' + Number(r.plan_id) + ' · ' + escapeHTML(agentHarnessLabel(status, r.harness))} · ${escapeHTML(r.mode)} · ${escapeHTML(r.model)} · <code>${escapeHTML(r.workdir)}</code>${exit}</div>
     ${detail}
-    ${r.output ? `<pre class="agent-run-output">${escapeHTML(r.output)}</pre>` : ''}
+    ${r.output ? `<details class="agent-task"><summary>Output</summary><pre class="agent-run-output">${escapeHTML(r.output)}</pre></details>` : ''}
     <details class="agent-task"><summary>Command</summary><pre>${escapeHTML(r.command)}</pre>
       <button type="button" class="btn btn-ghost btn-sm" data-action="agent-copy" data-text="${escapeHTML(r.command)}"><svg class="icon"><use href="#i-copy"/></svg><span>Copy</span></button></details>
   </div>`;

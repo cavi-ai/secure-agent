@@ -28,7 +28,7 @@ public final class UpdateManager: ObservableObject {
     }
 
     @Published public var channel: Channel {
-        didSet { UserDefaults.standard.set(channel.rawValue, forKey: "updateChannel") }
+        didSet { AppPreferences.shared.set(channel.rawValue, forKey: "updateChannel") }
     }
     @Published public private(set) var state: State = .idle
     /// Latest successfully-checked remote version (for the Apply button).
@@ -37,7 +37,7 @@ public final class UpdateManager: ObservableObject {
     private static let releasesURL = URL(string: "https://api.github.com/repos/cavi-ai/secure-agent/releases/latest")!
 
     private init() {
-        let saved = UserDefaults.standard.string(forKey: "updateChannel")
+        let saved = AppPreferences.shared.string(forKey: "updateChannel")
         channel = Channel(rawValue: saved ?? "") ?? .stable
     }
 

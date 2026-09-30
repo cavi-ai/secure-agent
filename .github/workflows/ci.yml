@@ -54,18 +54,15 @@ jobs:
         run: python3 plugin/hooks/test_activity_log.py
 
   menubar:
-    name: Swift package tests
-    runs-on: macos-14
+    name: Swift package tests (macOS 27 SDK)
+    runs-on: xcode-27
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4 (SHA-pinned)
         with:
           persist-credentials: false
-      - uses: swift-actions/setup-swift@7ca6abe6b3b0e8b5421b88be48feee39cbf52c6a # v2 (SHA-pinned)
-        with:
-          swift-version: "6.0"
       - name: swift test
-        run: swift test --package-path menubar
+        run: bash packaging/swift_macos.sh test --package-path menubar
 
   e2e:
     name: E2E smoke

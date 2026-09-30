@@ -132,6 +132,7 @@
         </div>
       </div>
       <ul class="posture-items" id="posture-items"></ul>
+      <a class="btn btn-ghost btn-sm agent-posture-link" href="#home" data-action="goto-tab" data-tab="home">Review alerts</a>
     </section>
 
     <!-- Thin one-line metrics strip. The old four-tile KPI block ate a third
@@ -636,61 +637,87 @@
 
       <!-- Agent: local Ollama chat and commands; harness handoff is separate. -->
       <div class="tabpanel" id="tab-agent" role="tabpanel" hidden>
-        <div class="agent-layout">
-          <section class="panel agent-chat" id="agent-chat">
-            <div class="panel-head">
-              <h2><svg class="icon"><use href="#i-chat"/></svg>System agent</h2>
+        <div class="agent-workspace" id="agent-workspace">
+          <header class="agent-workspace-head">
+            <div class="agent-heading">
+              <h2>System agent</h2>
               <span class="agent-state" id="agent-state">Loading…</span>
-              <button type="button" class="btn btn-ghost btn-sm" data-action="agent-clear" title="Delete the conversation (plans and runs stay)"><span>Clear</span></button>
             </div>
-            <div class="agent-thread" id="agent-thread" role="log" aria-live="polite" aria-label="Conversation with the system agent"></div>
-            <form class="agent-composer" id="agent-composer">
-              <label class="sr-only" for="agent-input">Message the system agent</label>
-              <textarea id="agent-input" class="input agent-input" rows="3" maxlength="8000" placeholder="Message the local agent · Enter to send · Shift+Enter for a new line. Never paste a secret."></textarea>
-              <div class="agent-composer-row">
-                <span class="agent-local-label">Local Ollama · no harness</span>
-                <input id="agent-workdir" class="input agent-workdir" type="text" spellcheck="false" autocomplete="off" placeholder="Command folder (default: your home)" aria-label="Folder for a proposed local command">
-                <button type="submit" class="btn btn-primary btn-sm" id="agent-send">Send</button>
-              </div>
-            </form>
-          </section>
-          <div class="col" id="agent-side">
-            <section class="panel" id="agent-handoff-panel">
-              <div class="panel-head"><h2><svg class="icon"><use href="#i-server"/></svg>Harness handoff</h2></div>
-              <div class="panel-body agent-handoff">
-                <p>Optional. Saving a handoff does not route this chat or run a harness. Review and confirm a plan separately.</p>
-                <label for="agent-handoff-input">Task for a harness</label>
-                <textarea id="agent-handoff-input" class="input agent-input" rows="3" maxlength="8000" placeholder="Describe a harness update or coding task"></textarea>
-                <div class="agent-composer-row">
-                  <label class="agent-route">Harness <select id="agent-harness" class="select select-sm"></select></label>
-                  <input id="agent-handoff-workdir" class="input agent-workdir" type="text" spellcheck="false" autocomplete="off" placeholder="Folder" aria-label="Folder for harness handoff">
-                  <button type="button" class="btn btn-ghost btn-sm" data-action="agent-save-plan">Save handoff plan</button>
+            <nav class="agent-workspace-tools" aria-label="Agent tools">
+              <button type="button" class="btn btn-ghost btn-sm" data-action="agent-panel" data-panel="queue" aria-controls="agent-side" aria-expanded="false">Review queue <span class="badge" id="badge-agent-recommendations">0</span></button>
+              <button type="button" class="btn btn-ghost btn-sm" data-action="agent-panel" data-panel="history" aria-controls="agent-side" aria-expanded="false">History</button>
+              <button type="button" class="btn btn-ghost btn-sm" data-action="agent-panel" data-panel="tools" aria-controls="agent-side" aria-expanded="false">Tools</button>
+            </nav>
+          </header>
+          <div class="agent-layout">
+            <section class="agent-chat" id="agent-chat" aria-label="Local agent chat">
+              <div class="agent-thread" id="agent-thread" role="log" aria-live="polite" aria-label="Conversation with the system agent"></div>
+              <div class="agent-chat-foot">
+                <div class="agent-quick-commands" aria-label="Quick commands">
+                  <button type="button" class="agent-quick" id="agent-analyze" data-action="agent-analyze"><svg class="icon"><use href="#i-shield"/></svg>Analyze activity</button>
+                  <button type="button" class="agent-quick" data-action="agent-quick" data-command="ssh">Check SSH</button>
+                  <button type="button" class="agent-quick" data-action="agent-quick" data-command="signing">Check Git signing</button>
+                  <button type="button" class="agent-quick" data-action="agent-quick" data-command="security">Review security</button>
                 </div>
+                <form class="agent-composer" id="agent-composer">
+                  <label class="sr-only" for="agent-input">Message the system agent</label>
+                  <textarea id="agent-input" class="input agent-input" rows="2" maxlength="8000" placeholder="Ask a question or describe a local task…"></textarea>
+                  <div class="agent-composer-row">
+                    <span class="agent-local-label"><span class="agent-local-dot" aria-hidden="true"></span>Local Ollama · no harness</span>
+                    <details class="agent-folder">
+                      <summary>Working folder</summary>
+                      <label class="sr-only" for="agent-workdir">Folder for a proposed local command</label>
+                      <input id="agent-workdir" class="input agent-workdir" type="text" spellcheck="false" autocomplete="off" placeholder="Default: your home">
+                    </details>
+                    <button type="submit" class="btn btn-primary btn-sm" id="agent-send">Send <span class="agent-send-key" aria-hidden="true">↵</span></button>
+                  </div>
+                </form>
+                <div class="agent-composer-note"><span>Commands wait for your confirmation. <span class="agent-key-hint">Enter to send · Shift+Enter for a new line.</span></span><button type="button" class="link-btn" data-action="agent-clear" title="Delete the conversation (plans and runs stay)">Clear chat</button></div>
               </div>
             </section>
-            <section class="panel" id="agent-plans-panel">
-              <div class="panel-head">
-                <h2><svg class="icon"><use href="#i-doc"/></svg>Plans</h2>
-                <span class="badge" id="badge-agent-plans">0</span>
+            <aside class="agent-inspector" id="agent-side" aria-label="Agent tools" hidden>
+              <header class="agent-inspector-head">
+                <h3 id="agent-panel-title" tabindex="-1">Review queue</h3>
+                <button type="button" class="btn btn-icon" data-action="agent-close-panel" aria-label="Close agent tools"><svg class="icon"><use href="#i-close"/></svg></button>
+              </header>
+              <div class="agent-inspector-body">
+                <section id="agent-review-panel" data-agent-pane="queue">
+                  <p class="agent-review-intro">Review recommendations from local Ollama. Approve an exact command, save a plan, or dismiss it.</p>
+                  <div id="agent-recommendations"><div class="loading">Loading…</div></div>
+                </section>
+                <section data-agent-pane="history" hidden>
+                  <div id="agent-runs-panel">
+                    <div class="agent-section-head"><h4>Recent runs</h4><button type="button" class="btn btn-ghost btn-sm" data-action="agent-refresh" title="Reload the agent's state">Refresh</button></div>
+                    <div id="agent-runs"><div class="loading">Loading…</div></div>
+                  </div>
+                  <details class="agent-tool-section" id="agent-plans-panel">
+                    <summary>Saved plans <span class="badge" id="badge-agent-plans">0</span></summary>
+                    <div id="agent-plans"><div class="loading">Loading…</div></div>
+                  </details>
+                </section>
+                <section data-agent-pane="tools" hidden>
+                  <details class="agent-tool-section" id="agent-handoff-panel">
+                    <summary>Harness handoff</summary>
+                    <div class="agent-handoff">
+                      <p>Separate from this local chat. Saving a plan sends nothing to a harness; dispatch requires confirmation.</p>
+                      <label for="agent-handoff-input">Task for a harness</label>
+                      <textarea id="agent-handoff-input" class="input agent-input" rows="3" maxlength="8000" placeholder="Describe a harness update or coding task"></textarea>
+                      <label class="agent-route">Harness <select id="agent-harness" class="select select-sm"></select></label>
+                      <input id="agent-handoff-workdir" class="input agent-workdir" type="text" spellcheck="false" autocomplete="off" placeholder="Folder" aria-label="Folder for harness handoff">
+                      <button type="button" class="btn btn-ghost btn-sm" data-action="agent-save-plan">Save handoff plan</button>
+                    </div>
+                  </details>
+                  <details class="agent-tool-section" id="agent-harness-panel">
+                    <summary>Models &amp; harness availability</summary>
+                    <div id="agent-harnesses"><div class="loading">Loading…</div></div>
+                  </details>
+                  <details class="agent-tool-section" open>
+                    <summary>Agent skills</summary>
+                    <div id="agent-skills"></div>
+                  </details>
+                </section>
               </div>
-              <div class="panel-body" id="agent-plans"><div class="loading">Loading…</div></div>
-            </section>
-            <section class="panel" id="agent-runs-panel">
-              <div class="panel-head">
-                <h2><svg class="icon"><use href="#i-activity"/></svg>Runs</h2>
-                <button type="button" class="btn btn-ghost btn-sm" data-action="agent-refresh" title="Reload the agent's state"><svg class="icon"><use href="#i-refresh"/></svg><span>Refresh</span></button>
-              </div>
-              <div class="panel-body" id="agent-runs"><div class="loading">Loading…</div></div>
-            </section>
-            <section class="panel" id="agent-harness-panel">
-              <div class="panel-head">
-                <h2><svg class="icon"><use href="#i-server"/></svg>Harnesses &amp; skills</h2>
-              </div>
-              <div class="panel-body">
-                <div id="agent-harnesses"><div class="loading">Loading…</div></div>
-                <div id="agent-skills"></div>
-              </div>
-            </section>
+            </aside>
           </div>
         </div>
       </div>

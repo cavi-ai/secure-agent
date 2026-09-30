@@ -200,7 +200,19 @@ test('markdown: headers, bold, inline code, code block', () => {
   assert.match(html, /<h1>Title<\/h1>/);
   assert.match(html, /<strong>bold<\/strong>/);
   assert.match(html, /<code class="md-inline-code">code<\/code>/);
-  assert.match(html, /<pre class="md-codeblock"><code>\nblock\n<\/code><\/pre>/);
+  assert.match(html, /<pre class="md-codeblock"><code>block<\/code><\/pre>/);
+});
+
+test('markdown: assistant-style paragraphs and lists stay separate, wrapped bullets stay inside items', () => {
+  const html = parseMarkdownToHTML('Hello.\n\n- **SSH** — keys\n  and config\n- **Git** — identity\n\nNext step.');
+  assert.match(html, /<p>Hello\.<\/p><ul><li><strong>SSH<\/strong> — keys and config<\/li><li><strong>Git<\/strong> — identity<\/li><\/ul><p>Next step\.<\/p>/);
+  assert.ok(!html.includes('**SSH**'));
+});
+
+test('markdown: fenced code never interprets model-supplied markup or inline Markdown', () => {
+  const html = parseMarkdownToHTML('```sh\n<img src=x onerror=alert(1)> **literal**\n```');
+  assert.match(html, /<pre class="md-codeblock"><code>&lt;img src=x onerror=alert\(1\)&gt; \*\*literal\*\*<\/code><\/pre>/);
+  assert.ok(!html.includes('<img'));
 });
 
 test('markdown escapes HTML before formatting (no injection)', () => {

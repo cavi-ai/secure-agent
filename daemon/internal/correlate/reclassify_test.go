@@ -112,6 +112,33 @@ func newFamilyCorrelator(t *testing.T) *Correlator {
 	return New(tg, sensitive.New(cfg), cfg)
 }
 
+func TestReadConnectSeverityTracksCausalStrength(t *testing.T) {
+	base := time.Unix(1_700_000_000, 0)
+	secret := homePath(t, ".aws/credentials")
+	for _, tc := range []struct {
+		name              string
+		kind              event.Kind
+		reader, connector int32
+		severity          int
+	}{
+		{"same process", event.KindFileOpen, 201, 201, 3},
+		{"descendant process", event.KindFileOpen, 201, 202, 3},
+		{"sibling temporal correlation", event.KindFileOpen, 201, 203, 2},
+		{"model-visible tool read across siblings", event.KindPluginAction, 201, 203, 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := newFamilyCorrelator(t)
+			if f := c.Observe(event.Event{Kind: tc.kind, PID: tc.reader, TS: base, Path: secret}); len(f) != 0 {
+				t.Fatalf("read alone raised %+v", f)
+			}
+			f := connect(c, tc.connector, base.Add(time.Second))
+			if len(f) != 1 || f[0].Severity != tc.severity {
+				t.Fatalf("flags = %+v, want one severity %d", f, tc.severity)
+			}
+		})
+	}
+}
+
 func connect(c *Correlator, pid int32, at time.Time) []model.Flag {
 	return c.Observe(event.Event{Kind: event.KindConnOpen, PID: pid, TS: at, RemoteHost: "evil.example.com", RemotePort: 443})
 }

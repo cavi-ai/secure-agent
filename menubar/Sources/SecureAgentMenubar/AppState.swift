@@ -620,7 +620,7 @@ public final class AppState: ObservableObject {
     /// Called from performFetch after a successful status update: if it's
     /// Monday 09:00 and the digest hasn't gone out this ISO week, send it.
     func maybeSendWeeklyDigest(now: Date = Date()) async {
-        let defaults = UserDefaults.standard
+        let defaults = AppPreferences.shared
         let lastKey = defaults.string(forKey: "weeklyDigestLastWeek")
         guard Self.shouldSendWeeklyDigest(now: now, lastSentWeek: lastKey), !digestCheckedThisWeek else { return }
         digestCheckedThisWeek = true

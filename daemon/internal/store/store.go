@@ -2087,7 +2087,7 @@ type GuardPathAllow struct {
 }
 
 // PutGuardPathAllow records one per-path allow (idempotent upsert).
-func (s *Store) PutGuardPathAllow(g GuardPathAllow) {
+func (s *Store) PutGuardPathAllow(g GuardPathAllow) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	ts := time.Now().UTC().Format(time.RFC3339Nano)
@@ -2099,6 +2099,7 @@ func (s *Store) PutGuardPathAllow(g GuardPathAllow) {
 	if err != nil {
 		log.Printf("store: put guard_path_allows error: %v", err)
 	}
+	return err
 }
 
 // guardPathAllowed answers whether path is allowed for agent/ruleID:

@@ -10,6 +10,11 @@ type SysAgentMessage struct {
 	TS      time.Time `json:"ts"`
 	Role    string    `json:"role"` // user | assistant | note
 	Content string    `json:"content"`
+	// Analysis replies are review-queue items. They remain available after
+	// clearing chat; approval still uses the exact stored command by ID.
+	Origin      string   `json:"origin,omitempty"` // analysis | ordinary chat
+	FlagIDs     []string `json:"flag_ids,omitempty"`
+	ReviewState string   `json:"review_state,omitempty"` // pending | saved | dismissed
 	// Harness is retained for older stored messages; new chat never routes to
 	// one. Workdir is the folder for a possible local command.
 	Harness string `json:"harness,omitempty"`

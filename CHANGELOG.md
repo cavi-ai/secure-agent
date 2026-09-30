@@ -7,11 +7,16 @@ All notable changes to `secure-agent` are documented here. The format follows
 ## [Unreleased]
 
 ### System Agent
+- Agent workspace centers the conversation, with editable quick-command drafts and an on-demand sidebar for the review queue, history, and tools. Narrow layouts preserve the draft and keep the composer visible.
+- Analyze activity turns findings and recent behavior into recommendations that can be reviewed, explicitly approved for local execution, or saved for later delegation.
 - Chat stays on local Ollama. It proposes exact local shell commands for explicit review and confirmation, with Terminal mode for passphrases; commands run with the operator account's file and network access.
 - Harness selection and plan creation moved to a separate handoff section, so sending chat cannot silently route to another agent. The API rejects legacy chat requests with a harness field.
 - Pi runner joins optional harness handoff in terminal mode only. Its model is pinned to the local Ollama in an isolated configuration; extensions, shell tool, context files, and online startup checks are disabled. Pi has no built-in sandbox, so its file tools still have the operator account's file access.
 
 ### Fixed
+- Menu bar: the UI has its own application identity, independent of the launcher, while preserving existing preferences and helper identities.
+- Console chat renders escaped Markdown with readable lists and code blocks; finding details open from individual flags, and dismissal stays stable during refreshes.
+- Guard approvals: Always allow resolves matching queued requests and removes them from the console queue.
 - Menu bar: startup creates the status item before setup work. When another app copy is running, the new build offers a clear replacement choice instead of starting a competing daemon on the same socket and console port.
 - Settings: a resizable sidebar groups security, monitoring, local AI, and general controls; direct Ollama chat and optional routing have their own pane rather than crowding App settings.
 - Menu bar: the status icon uses a colored bitmap shield with a white check, so the status bar cannot render it as a monochrome template; attention uses a yellow shield with a black mark.
@@ -29,6 +34,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Console findings: a read-then-connect card names the reading process, the file and where it went (`gh (claude) read ~/.config/gh/hosts.yml, then reached Google (…)`), and its verdict says why: the destination does not own the file, no owner is on record, an agent tool read it, or a process outside the reader's tree connected. `/patterns` serves `flags` and `destinations`; read evidence carries `owners`.
 
 ### Changed
+- macOS builds use SDK 27 with an explicit macOS deployment target.
 - Event store: a flag's own event and file events on sensitive paths stay past their kind's row cap for the full retention, up to 20,000 rows per kind; `file-open`, `file-delete` and `exec` keep only their newest rows.
 - Row budgets: file writes 150,000 (was 10,000), connection opens and closes 30,000 each (was 5,000).
 - `/doctor` retention fails when record rows, or a kind other than `file-open`, `file-delete` and `exec`, are evicted inside a day; it passes naming how far back those three kinds' newest rows reach.

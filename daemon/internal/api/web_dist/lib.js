@@ -833,25 +833,68 @@ function sparkPoints(buckets, width, baseY, span, maxFloor) {
 
 function parseMarkdownToHTML(md) {
   if (!md) return '';
-  let html = escapeHTML(md);
-
-  // Code blocks
-  html = html.replace(/```([\s\S]*?)```/g, (_, code) => `<pre class="md-codeblock"><code>${code}</code></pre>`);
-  // Inline code
-  html = html.replace(/`([^`]+)`/g, '<code class="md-inline-code">$1</code>');
-  // Headers
-  html = html.replace(/^### (.*$)/gim, '<h3>$1</h3>');
-  html = html.replace(/^## (.*$)/gim, '<h2>$1</h2>');
-  html = html.replace(/^# (.*$)/gim, '<h1>$1</h1>');
-  // Bold
-  html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-  // Bullet lists
-  html = html.replace(/^\- (.*$)/gim, '<li>$1</li>');
-  html = html.replace(/(<li>.*<\/li>)/s, '<ul>$1</ul>');
-  // Paragraphs
-  html = html.replace(/\n\n/g, '<br/><br/>');
-
-  return `<div class="markdown-view">${html}</div>`;
+  // Keep this renderer deliberately small and HTML-free. Markdown is data
+  // from local models and incident evidence; escaping happens per text token
+  // before any tags are added. No raw HTML, image, or URL rendering.
+  const inline = s => String(s).split(/(`[^`\n]+`|\*\*[^*\n]+\*\*|\*[^*\n]+\*)/g).map(part => {
+    if (part.startsWith('`') && part.endsWith('`') && part.length > 2)
+      return `<code class="md-inline-code">${escapeHTML(part.slice(1, -1))}</code>`;
+    if (part.startsWith('**') && part.endsWith('**') && part.length > 4)
+      return `<strong>${escapeHTML(part.slice(2, -2))}</strong>`;
+    if (part.startsWith('*') && part.endsWith('*') && part.length > 2)
+      return `<em>${escapeHTML(part.slice(1, -1))}</em>`;
+    return escapeHTML(part);
+  }).join('');
+  const lines = String(md).replace(/\r\n?/g, '\n').split('\n');
+  const out = [];
+  let paragraph = [];
+  let list = null;
+  let code = null;
+  const flushParagraph = () => {
+    if (paragraph.length) out.push(`<p>${paragraph.map(inline).join('<br>')}</p>`);
+    paragraph = [];
+  };
+  const flushList = () => {
+    if (list) out.push(`<${list.kind}>${list.items.map(item => `<li>${inline(item)}</li>`).join('')}</${list.kind}>`);
+    list = null;
+  };
+  for (const line of lines) {
+    if (code) {
+      if (/^\s*```\s*$/.test(line)) {
+        out.push(`<pre class="md-codeblock"><code>${escapeHTML(code.join('\n'))}</code></pre>`);
+        code = null;
+      } else code.push(line);
+      continue;
+    }
+    if (/^\s*```[^`]*$/.test(line)) { flushParagraph(); flushList(); code = []; continue; }
+    if (!line.trim()) { flushParagraph(); flushList(); continue; }
+    const heading = /^(#{1,3})\s+(.+)$/.exec(line);
+    if (heading) {
+      flushParagraph(); flushList();
+      const level = heading[1].length;
+      out.push(`<h${level}>${inline(heading[2])}</h${level}>`);
+      continue;
+    }
+    const bullet = /^\s{0,3}[-*]\s+(.+)$/.exec(line);
+    const numbered = /^\s{0,3}\d+[.)]\s+(.+)$/.exec(line);
+    if (bullet || numbered) {
+      flushParagraph();
+      const kind = bullet ? 'ul' : 'ol';
+      if (list && list.kind !== kind) flushList();
+      if (!list) list = { kind, items: [] };
+      list.items.push((bullet || numbered)[1]);
+      continue;
+    }
+    if (list && /^\s{2,}\S/.test(line)) {
+      list.items[list.items.length - 1] += ' ' + line.trim();
+      continue;
+    }
+    flushList();
+    paragraph.push(line);
+  }
+  if (code) out.push(`<pre class="md-codeblock"><code>${escapeHTML(code.join('\n'))}</code></pre>`);
+  flushParagraph(); flushList();
+  return `<div class="markdown-view">${out.join('')}</div>`;
 }
 
 // ---------- rollup chart ----------

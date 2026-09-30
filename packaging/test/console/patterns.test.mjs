@@ -14,7 +14,7 @@ vm.createContext(ctx);
 for (const f of ['lib.js', 'tab-findings.js']) {
   vm.runInContext(readFileSync(path.join(webDist, f), 'utf8'), ctx, { filename: f });
 }
-const { patternHTML, uncoveredFlags, patternsInView, patternAfterDismiss } = ctx;
+const { patternHTML, uncoveredFlags, patternsInView, patternAfterDismiss, patternAfterOptimisticDismiss } = ctx;
 
 const KEY = 'codex|keychain-access|/Users/x/Library/Keychains/login.keychain-db';
 const hourly = Array.from({ length: 24 }, (_, i) => (i === 3 ? 323 : 0));
@@ -77,6 +77,7 @@ test('patternHTML: the covered flags behind Details, first 10 then Show more', (
   assert.match(html, /data-action="show-more" data-key="pattern:codex\|keychain-access\|[^"]+">Show 2 more</);
   const open = patternHTML(pattern(), Date.now(), { flags, expanded: new Set(['pattern:' + KEY]) });
   assert.equal((open.match(/<li>/g) || []).length, 12);
+  assert.match(html, /<button type="button" class="pattern-flag-link" data-action="open-flag" data-id="k0"/);
 });
 
 test('uncoveredFlags: a flag a pattern covers is not its own row', () => {
@@ -124,6 +125,23 @@ test('patternAfterDismiss: a capped dismiss-all of 500 ids leaves 2 of 502 open 
   const rest = patternAfterDismiss(after, 2);
   assert.equal(rest.dismissed, true);
   assert.ok(patternHTML(rest, Date.now(), {}).includes('<b class="pattern-open">0 open</b>'));
+});
+
+test('pattern dismissal updates findings and attention together without changing the saved snapshot', () => {
+  const p = pattern({ unacked: 2, flag_ids: ['k1', 'k2'] });
+  const item = { kind: 'pattern', id: KEY };
+  const t = { patterns: [p], flags: [flag('k1'), flag('k2')], flagsView: [flag('k1'), flag('k2')],
+    posture: { groups: [{ key: 'agent:codex', items: [item] }], items: [item], needs_you: 1 } };
+  const partial = patternAfterOptimisticDismiss(t, KEY, ['k1']);
+  assert.equal(partial.patterns[0].unacked, 1);
+  assert.equal(partial.posture.needs_you, 1);
+  assert.deepEqual([...partial.flags.map(f => f.id)], ['k2']);
+  const done = patternAfterOptimisticDismiss(partial, KEY, ['k2']);
+  assert.equal(done.patterns[0].dismissed, true);
+  assert.equal(done.posture.needs_you, 0);
+  assert.equal(done.posture.groups.length, 0);
+  assert.equal(done.flags.length, 0);
+  assert.equal(t.posture.needs_you, 1, 'rollback source remains intact');
 });
 
 test('muteRowHTML: an agent-scoped mute names its agent and carries it on the unmute button', () => {

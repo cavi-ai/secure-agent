@@ -22,10 +22,13 @@ VERSION="${VERSION:-$(git describe --tags --always --dirty 2>/dev/null || echo 0
 VERSION="$(printf '%s' "$VERSION" | tr -d '<>&"'"'"'')"
 BUILD_NUMBER="${BUILD_NUMBER:-$(git rev-parse --short HEAD 2>/dev/null || echo 1)}"
 BUILD_NUMBER="$(printf '%s' "$BUILD_NUMBER" | tr -cd 'a-zA-Z0-9.-')"
-BUNDLE_ID="com.cavi-ai.secure-agent"
+# Give the UI its own stable menu-bar/Launch Services identity. The established
+# daemon, CLI and collector identities below must retain their privacy grants.
+BUNDLE_ID="com.cavi-ai.secure-agent.ui"
 DAEMON_ID="com.cavi-ai.secure-agent.daemon"
 CLI_ID="com.cavi-ai.secure-agent.cli"
 ESD_LABEL="com.cavi-ai.secure-agent-esd"
+SWIFT_BUILD_ARGS=(-c release --arch arm64 --arch x86_64 --package-path menubar)
 
 source "${REPO_ROOT}/packaging/lib/sign_identity.sh"
 CODESIGN_IDENTITY="$(resolve_sign_identity)"
@@ -43,18 +46,27 @@ lipo -create -output bin/secure-agentd bin/secure-agentd-arm64 bin/secure-agentd
 lipo -create -output bin/secure-agent  bin/secure-agent-arm64  bin/secure-agent-amd64
 rm -f bin/secure-agentd-arm64 bin/secure-agentd-amd64 bin/secure-agent-arm64 bin/secure-agent-amd64
 
-echo "==> Building universal menubar app..."
+echo "==> Building universal menubar app (macOS 27.0 SDK)..."
 # Locate the product via SwiftPM itself: hardcoded .build/apple/... paths go
 # silently stale when the scratch dir differs (custom SWIFTPM build dir,
 # Xcode/SwiftPM layout changes) — the build then "succeeds" while shipping a
 # days-old binary. --show-bin-path always tells the truth.
-MENUBAR_BIN="$(cd menubar && swift build -c release --arch arm64 --arch x86_64 --show-bin-path)/secure-agent-menubar"
+MENUBAR_BIN="$(bash packaging/swift_macos.sh build "${SWIFT_BUILD_ARGS[@]}" --show-bin-path)/secure-agent-menubar"
 # A source edit that compiles to identical objects (comments, whitespace)
 # skips the relink and leaves the product older than the source. Deleting it
 # makes this build write it again from its current objects.
 rm -f "${MENUBAR_BIN}"
-(cd menubar && swift build -c release --arch arm64 --arch x86_64)
+bash packaging/swift_macos.sh build "${SWIFT_BUILD_ARGS[@]}"
 [[ -x "${MENUBAR_BIN}" ]] || { echo "error: menubar binary not found at ${MENUBAR_BIN}" >&2; exit 1; }
+# Check both linked architectures before signing or assembling the bundle.
+if ! xcrun vtool -show-build "${MENUBAR_BIN}" | awk '
+  $1 == "sdk" { count++; if ($2 != "27.0") mismatch = 1 }
+  $1 == "minos" { minimum++; if ($2 != "14.0") mismatch = 1 }
+  END { exit(count != 2 || minimum != 2 || mismatch) }
+'; then
+  echo "error: menubar must link both architectures with SDK 27.0 and minimum macOS 14.0" >&2
+  exit 1
+fi
 # Freshness assertion: a source newer than the product just written was
 # edited during the build — fail instead of assembling a stale menubar.
 NEWEST_SRC="$(find menubar/Sources menubar/Package.swift -name '*.swift' -newer "${MENUBAR_BIN}" | head -1)"
@@ -96,7 +108,8 @@ cat > "${APP_DIR}/Contents/Info.plist" <<EOF
     <key>CFBundleShortVersionString</key><string>${VERSION}</string>
     <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>LSMinimumSystemVersion</key><string>14.0</string>
-    <key>LSUIElement</key><true/>
+    <!-- Keep a Dock control if macOS hides the menu bar status item. -->
+    <key>LSUIElement</key><false/>
     <key>NSUserNotificationAlertUsageDescription</key><string>Secure Agent sends alerts when AI agents trigger security flags.</string>
 </dict>
 </plist>

@@ -53,13 +53,13 @@ collector:
 
 menubar:
 	@echo "==> Building secure-agent-menubar..."
-	cd menubar && swift build -c release
+	bash packaging/swift_macos.sh build --package-path menubar -c release
 
 test:
 	@echo "==> Running Go unit tests..."
 	go test ./... -count=1
 	@echo "==> Running Swift package tests..."
-	swift test --package-path menubar
+	bash packaging/swift_macos.sh test --package-path menubar
 	@echo "==> Running Python hook tests..."
 	python3 plugin/hooks/test_secret_guard.py
 	python3 plugin/hooks/test_injection_scan.py

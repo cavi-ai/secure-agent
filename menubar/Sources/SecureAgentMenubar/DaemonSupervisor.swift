@@ -9,8 +9,8 @@ import Foundation
 ///     to launchd and notices it has been orphaned, then exits on its own.
 ///
 /// There is no LaunchAgent and no other mechanism by which the daemon can
-/// outlive its visible owner. This is the whole point: the user sees the menu
-/// bar icon and can quit it, and nothing keeps running behind their back.
+/// outlive its visible owner. The app keeps a Dock control and Settings window
+/// available even if macOS hides its menu bar status item.
 @MainActor
 public final class DaemonSupervisor: ObservableObject {
     public static let shared = DaemonSupervisor()

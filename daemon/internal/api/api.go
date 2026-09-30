@@ -695,6 +695,8 @@ func (a *API) routes() map[string]http.HandlerFunc {
 		"/agent/status":                 a.handleAgentStatus,
 		"/agent/skills":                 a.handleAgentSkills,
 		"/agent/chat":                   a.handleAgentChat,
+		"/agent/analyze":                a.handleAgentAnalyze,
+		"/agent/recommendations":        a.handleAgentRecommendations,
 		"/agent/actions":                a.handleAgentActions,
 		"/agent/plans":                  a.handleAgentPlans,
 		"/agent/dispatch":               a.handleAgentDispatch,

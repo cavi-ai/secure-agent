@@ -32,6 +32,9 @@ func (a *Agent) RunLocal(messageID int64) (model.SysAgentRun, error) {
 	if m.LocalRunID != 0 {
 		return model.SysAgentRun{}, fmt.Errorf("%w: this command has already been started", ErrBusy)
 	}
+	if m.Origin == "analysis" && m.ReviewState != "pending" {
+		return model.SysAgentRun{}, fmt.Errorf("%w: this recommendation is no longer pending", ErrInvalid)
+	}
 	if a.running != 0 {
 		return model.SysAgentRun{}, fmt.Errorf("%w: another local run is in progress", ErrBusy)
 	}
@@ -78,6 +81,9 @@ func (a *Agent) RunLocal(messageID int64) (model.SysAgentRun, error) {
 	}
 	m.LocalRunID = run.ID
 	a.st.PutSysAgentMessage(m)
+	if m.Origin == "analysis" {
+		_ = a.st.SetSysAgentRecommendationState(messageID, "approved")
+	}
 	a.st.PutAudit(store.AuditEntry{Action: "sysagent-local-command", Detail: fmt.Sprintf("message=%d run=%d mode=%s folder=%s status=%s", messageID, run.ID, run.Mode, run.Workdir, run.Status)})
 	if action.Mode == ModeTerminal && a.openTerminal != nil {
 		if err := a.openTerminal(script); err != nil {

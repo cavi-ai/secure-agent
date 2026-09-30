@@ -20,6 +20,8 @@ fail() {
 }
 
 [ -d "$app" ] || fail "no app bundle at ${app} (build it with packaging/make_app.sh)"
+ui_id="$(plutil -extract CFBundleIdentifier raw -o - "${app}/Contents/Info.plist")" || fail "missing UI identity"
+[ "$ui_id" = "com.cavi-ai.secure-agent.ui" ] || fail "UI identity '${ui_id}' has not been separated from the legacy app identity"
 [ -f "$plist" ] || fail "missing ${plist}"
 plutil -lint "$plist" >/dev/null || fail "plutil -lint rejects ${plist}"
 
@@ -33,5 +35,14 @@ fi
 program="$(plutil -extract BundleProgram raw -o - "$plist")" || fail "no BundleProgram in ${plist}"
 [ -f "${app}/${program}" ] && [ -x "${app}/${program}" ] ||
     fail "BundleProgram ${program} is not an executable file in ${app}"
+
+check_signing_identity() {
+    signed_id="$(codesign -d --verbose=2 "$1" 2>&1 | sed -n 's/^Identifier=//p')" || fail "cannot inspect signature for $1"
+    [ "$signed_id" = "$2" ] || fail "signing identity '${signed_id}' for $1, want '$2'"
+}
+check_signing_identity "$app" "$ui_id"
+check_signing_identity "${app}/${program}" "$label"
+check_signing_identity "${app}/Contents/Helpers/secure-agentd" "com.cavi-ai.secure-agent.daemon"
+check_signing_identity "${app}/Contents/Helpers/secure-agent" "com.cavi-ai.secure-agent.cli"
 
 echo "bundle layout: ${label} plist valid, BundleProgram ${program} executable"

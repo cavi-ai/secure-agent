@@ -917,6 +917,9 @@ export interface SysAgentMessage {
   ts: string;
   role: string;
   content: string;
+  origin?: string;
+  flag_ids?: string[];
+  review_state?: string;
   harness?: string;
   workdir?: string;
   skills?: string[];

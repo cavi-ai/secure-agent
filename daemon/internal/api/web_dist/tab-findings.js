@@ -468,6 +468,22 @@ function patternAfterDismiss(p, n) {
   return { ...p, unacked: 0, dismissed: true, disposition: { state: 'acknowledged', text: 'Reviewed', why: p.title || '' } };
 }
 
+// The attention queue and finding cards are different snapshots. A local
+// dismissal must update both atomically until the daemon's next snapshot.
+function patternAfterOptimisticDismiss(t, key, submitted) {
+  const p = (t.patterns || []).find(x => x.key === key);
+  if (!p) return t;
+  const ids = new Set(submitted || p.flag_ids || []);
+  const updated = patternAfterDismiss(p, submitted ? submitted.length : p.unacked);
+  return {
+    patterns: (t.patterns || []).map(x => x.key === key ? updated : x),
+    flags: (t.flags || []).filter(f => !ids.has(f.id)),
+    flagsView: (t.flagsView || []).filter(f => !ids.has(f.id)),
+    posture: mapPostureAttention(t.posture, it => ((it.kind === 'flag' && ids.has(it.id))
+      || (it.kind === 'pattern' && it.id === key && updated.dismissed)) ? null : it),
+  };
+}
+
 // patternWindowText: "03:00→03:08" in local time; a day other than today
 // leads with its date.
 function patternWindowText(p, nowMs) {
@@ -529,8 +545,9 @@ function patternHTML(p, nowMs, opts) {
   const row = f => {
     const t = new Date(f.ts);
     const at = isNaN(t) ? String(f.ts || '') : t.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' });
-    return `<li><span>${escapeHTML(at)}</span><span>pid ${Number(f.pid) || 0}</span>`
-      + `${f.session_id ? `<span>session ${escapeHTML(sessionShort(f.session_id))}</span>` : ''}<code>${escapeHTML(f.id)}</code></li>`;
+    return `<li><button type="button" class="pattern-flag-link" data-action="open-flag" data-id="${escapeHTML(f.id)}" aria-label="View security flag ${escapeHTML(f.id)}">
+      <span>${escapeHTML(at)}</span><span>pid ${Number(f.pid) || 0}</span>`
+      + `${f.session_id ? `<span>session ${escapeHTML(sessionShort(f.session_id))}</span>` : ''}<code>${escapeHTML(f.id)}</code><span aria-hidden="true">↗</span></button></li>`;
   };
   return `
     <article class="finding pattern-card ${DISPOSITION_CLASS[d.state] || 'disp-warning'}" data-pattern-key="${escapeHTML(p.key)}">

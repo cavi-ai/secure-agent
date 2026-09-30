@@ -30,8 +30,44 @@ model and dispatched harness models use the configured loopback Ollama.
    ```
 
 The Agent header names the active chat model and Ollama version. The chat
-composer says **Local Ollama · no harness**. The separate **Harness handoff**
-panel has its own task, harness and folder fields.
+composer says **Local Ollama · no harness**. Chat occupies the main surface;
+**Review queue**, **History**, and **Tools** open a single side panel. On narrow
+screens the panel replaces the conversation until closed, preserving your draft.
+Quick commands such as **Check SSH** and **Check Git signing** prepare editable
+prompts without sending them or running a command. **Working folder** expands
+the optional folder field. **History** holds recent runs and saved plans; run
+output expands on demand. **Tools → Harness handoff** has its own task, harness
+and folder fields. Security alerts remain visible in a compact banner with a
+**Review alerts** link back to Home.
+
+## Security action queue
+
+In **Security flags**, open **Individual flags** and select a row to inspect
+its recorded evidence, session, process, advisor verdict, and rule playbook in
+the sidebar. **Ask the advisor for a plan** uses that flag's stored context;
+the resulting advice and supported actions appear in the same sidebar.
+
+On the **Agent** page, **Analyze activity** sends a bounded, masked
+summary of recent stored flags, evidence, and operator/control actions to the
+same local Ollama chat model. The daemon builds the summary; the browser does
+not provide findings or commands. The model returns an advisory response and
+may propose one exact local command. Each response is kept in the **Security
+action queue** with links back to its source flags. Analysis alone never runs
+the command and never dispatches a harness. The operator may:
+
+- **Review and run locally:** see the exact command and folder in a separate
+  confirmation, then execute it once through `/agent/actions`.
+- **Save plan:** choose a harness and folder and save the recommendation as a
+  Terminal handoff plan. Saving does not dispatch it; a later dispatch needs
+  its own confirmation.
+- **Dismiss:** remove a pending recommendation from the queue. A saved or
+  dismissed recommendation cannot later be run as a local command.
+
+Clearing the conversation leaves analysis recommendations and saved plans in
+place. Pending recommendations survive the rolling chat history, with at most
+100 pending items; saved plans have their own storage. The analysis uses
+existing evidence, event, and audit records, so no new background collection
+or alert stream is required.
 
 ## Local chat and commands
 

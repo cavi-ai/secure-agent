@@ -85,4 +85,5 @@ final class StatusTintTests: XCTestCase {
         XCTAssertFalse(try XCTUnwrap(button.image).isTemplate)
         XCTAssertNotNil(button.action)
     }
+
 }

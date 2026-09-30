@@ -83,6 +83,24 @@ func sameTree(r readMark, cm connMark) bool {
 	return r.pid != 0 && (r.pid == cm.pid || slices.Contains(r.chain, cm.pid) || slices.Contains(cm.chain, r.pid))
 }
 
+// A file read and connection in unrelated sibling processes are a useful
+// temporal lead, but not evidence that the reader sent the bytes. Keep the
+// finding for review without a critical OS alarm. A model-visible agent tool
+// read remains critical: the model can pass its contents to any child.
+func readConnectSeverity(reads []readMark, conns []connMark) int {
+	for _, r := range reads {
+		if r.kind == event.KindPluginAction {
+			return 3
+		}
+		for _, cm := range conns {
+			if sameTree(r, cm) {
+				return 3
+			}
+		}
+	}
+	return 2
+}
+
 // readConnectKey is the pattern one read and connection stand for
 // (ReadConnectKey).
 func readConnectKey(agent string, r readMark, cm connMark) string {
@@ -214,7 +232,7 @@ func (c *Correlator) readThenConnectLocked(e event.Event, agent string, rootPID 
 	return []model.Flag{{
 		ID:        id,
 		Rule:      readConnectRule,
-		Severity:  3,
+		Severity:  readConnectSeverity(reads, cited),
 		TS:        e.TS,
 		PID:       e.PID,
 		Agent:     agent,
