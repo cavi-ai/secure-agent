@@ -146,7 +146,17 @@ function agentMessageHTML(m, status) {
   }
   const skills = (m.skills || []).length
     ? `<div class="agent-msg-meta">skills: ${m.skills.map(s => `<button type="button" class="link-btn" data-action="agent-skill" data-skill="${escapeHTML(s)}">${escapeHTML(s)}</button>`).join(', ')}</div>` : '';
-  return `<div class="agent-msg assistant">${agentTextHTML(m.content, true)}${skills}${agentLocalCommandHTML(m)}${agentProposalHTML(m, status)}</div>`;
+  const u = m.usage;
+  const stats = u ? [
+    escapeHTML(u.model || ''),
+    u.prompt_tokens ? `${Number(u.prompt_tokens)} input tokens` : '',
+    u.completion_tokens ? `${Number(u.completion_tokens)} output tokens` : '',
+    u.prompt_tokens_per_second ? `${Number(u.prompt_tokens_per_second).toFixed(1)} input tokens/s` : '',
+    u.output_tokens_per_second ? `${Number(u.output_tokens_per_second).toFixed(1)} output tokens/s` : '',
+    u.elapsed_ms ? `${(Number(u.elapsed_ms) / 1000).toFixed(1)}s reply` : '',
+    u.tool_calls ? `${Number(u.tool_calls)} tool requests (not executed)` : 'no model tool calls',
+  ].filter(Boolean).join(' · ') : '';
+  return `<div class="agent-msg assistant">${agentTextHTML(m.content, true)}${stats ? `<div class="agent-msg-meta">${stats}</div>` : ''}${skills}${agentLocalCommandHTML(m)}${agentProposalHTML(m, status)}</div>`;
 }
 
 // agentThreadItems: the chat as patchList items, with a pending line while

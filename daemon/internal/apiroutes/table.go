@@ -99,6 +99,7 @@ var Table = []Route{
 	{Path: "/flags/acknowledge", Console: true, MutatingMethods: []string{"POST"}},
 	{Path: "/patterns", Console: true},
 	{Path: "/ui/open-fda", Console: true, MutatingMethods: []string{"POST"}},
+	{Path: "/ui/open-config", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
 	{Path: "/stats/rollup", Console: true},
 	{Path: "/costs", Console: true},
 	{Path: "/costs/unpriced", Console: true},

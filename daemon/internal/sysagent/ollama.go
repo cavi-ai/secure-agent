@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 )
 
 // ollamaInfo is what one probe of the endpoint found.
@@ -141,7 +143,7 @@ var thinkRE = regexp.MustCompile(`(?s)<think>.*?</think>`)
 
 // chat sends msgs to Ollama's OpenAI-compatible endpoint and returns the
 // answer with any reasoning trace removed.
-func chat(ctx context.Context, client *http.Client, endpoint, modelName string, msgs []chatMessage) (string, error) {
+func chat(ctx context.Context, client *http.Client, endpoint, modelName string, msgs []chatMessage) (string, *model.SysAgentUsage, error) {
 	body, _ := json.Marshal(map[string]any{
 		"model":       modelName,
 		"messages":    msgs,
@@ -154,33 +156,58 @@ func chat(ctx context.Context, client *http.Client, endpoint, modelName string, 
 	})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint+"/v1/chat/completions", bytes.NewReader(body))
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	started := time.Now()
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("the model server answered %s", resp.Status)
+		return "", nil, fmt.Errorf("the model server answered %s", resp.Status)
 	}
 	var out struct {
 		Choices []struct {
 			Message struct {
-				Content string `json:"content"`
+				Content   string            `json:"content"`
+				ToolCalls []json.RawMessage `json:"tool_calls"`
 			} `json:"message"`
 		} `json:"choices"`
+		Usage struct {
+			PromptTokens     int `json:"prompt_tokens"`
+			CompletionTokens int `json:"completion_tokens"`
+		} `json:"usage"`
+		PromptEvalCount    int   `json:"prompt_eval_count"`
+		EvalCount          int   `json:"eval_count"`
+		PromptEvalDuration int64 `json:"prompt_eval_duration"`
+		EvalDuration       int64 `json:"eval_duration"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return "", fmt.Errorf("the model server's answer is not JSON: %w", err)
+		return "", nil, fmt.Errorf("the model server's answer is not JSON: %w", err)
 	}
 	if len(out.Choices) == 0 {
-		return "", fmt.Errorf("the model returned no answer")
+		return "", nil, fmt.Errorf("the model returned no answer")
 	}
 	text := strings.TrimSpace(thinkRE.ReplaceAllString(out.Choices[0].Message.Content, ""))
 	if text == "" {
-		return "", fmt.Errorf("the model returned an empty answer")
+		return "", nil, fmt.Errorf("the model returned an empty answer")
 	}
-	return text, nil
+	usage := &model.SysAgentUsage{Model: modelName, PromptTokens: out.Usage.PromptTokens,
+		CompletionTokens: out.Usage.CompletionTokens, ElapsedMS: time.Since(started).Milliseconds(),
+		ToolCalls: len(out.Choices[0].Message.ToolCalls)}
+	if usage.PromptTokens == 0 {
+		usage.PromptTokens = out.PromptEvalCount
+	}
+	if usage.CompletionTokens == 0 {
+		usage.CompletionTokens = out.EvalCount
+	}
+	if out.PromptEvalDuration > 0 {
+		usage.PromptTokensPerSecond = float64(usage.PromptTokens) * 1e9 / float64(out.PromptEvalDuration)
+	}
+	if out.EvalDuration > 0 {
+		usage.OutputTokensPerSecond = float64(usage.CompletionTokens) * 1e9 / float64(out.EvalDuration)
+	}
+	return text, usage, nil
 }

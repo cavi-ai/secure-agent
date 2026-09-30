@@ -20,6 +20,7 @@ import http.server
 import json
 import os
 import html
+from html.parser import HTMLParser
 import re
 import shutil
 import subprocess
@@ -790,9 +791,30 @@ def main():
         check("hidden panels (Trends charts, Sessions/Resources) render 0 times across boot, Refresh and search, then render once shown",
               hrp_zero('boot') and hrp_zero('refresh') and hrp_zero('search') and hrp_shown(),
               f"probe={hrp!r}")
+        class PolicyRowCounter(HTMLParser):
+            def __init__(self):
+                super().__init__()
+                self.scopes = []
+                self.counts = {}
+
+            def handle_starttag(self, tag, attrs):
+                if tag != "div":
+                    return
+                attributes = dict(attrs)
+                scope = attributes.get("data-policy") or (self.scopes[-1] if self.scopes else None)
+                self.scopes.append(scope)
+                if scope and "policy-row" in attributes.get("class", "").split():
+                    self.counts[scope] = self.counts.get(scope, 0) + 1
+
+            def handle_endtag(self, tag):
+                if tag == "div" and self.scopes:
+                    self.scopes.pop()
+
+        policy_counter = PolicyRowCounter()
+        policy_counter.feed(dom_policylists)
+
         def policy_rows(kind):
-            block = dom_policylists.split(f'data-policy="{kind}"', 1)
-            return block[1].split('</div></div></div>', 1)[0].count('class="policy-row"') if len(block) == 2 else -1
+            return policy_counter.counts.get(kind, -1)
         check("Policy lists guard decisions, file exceptions and muted classes from their endpoints",
               'class="tab-btn active" data-tab="policy"' in dom_policylists
               and policy_rows("guard") == 2 and policy_rows("path") == 1 and policy_rows("mute") == 2

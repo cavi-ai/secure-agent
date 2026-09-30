@@ -154,6 +154,7 @@ type StatusFunc func() Status
 
 type API struct {
 	socketPath       string
+	configPath       string
 	store            *store.Store
 	killer           Killer
 	statusFn         StatusFunc
@@ -265,6 +266,7 @@ type HostAssessFuncs struct {
 // "not enabled" response.
 type Deps struct {
 	SocketPath string
+	ConfigPath string
 	Store      *store.Store
 	Killer     Killer
 	Status     StatusFunc
@@ -341,6 +343,7 @@ type Deps struct {
 func New(d Deps) *API {
 	a := &API{
 		socketPath:      d.SocketPath,
+		configPath:      d.ConfigPath,
 		store:           d.Store,
 		killer:          d.Killer,
 		statusFn:        d.Status,
@@ -651,6 +654,7 @@ func (a *API) routes() map[string]http.HandlerFunc {
 		"/flags/acknowledge":            a.handleFlagAcknowledge,
 		"/patterns":                     a.handlePatterns,
 		"/ui/open-fda":                  a.handleOpenFDA,
+		"/ui/open-config":               a.handleOpenConfig,
 		"/stats/rollup":                 a.handleRollup,
 		"/costs":                        a.handleCosts,
 		"/costs/unpriced":               a.handleCostsUnpriced,

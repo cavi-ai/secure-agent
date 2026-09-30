@@ -102,6 +102,7 @@
           <button type="button" id="theme-light" aria-pressed="false" title="Light theme">L</button>
           <button type="button" id="theme-dark" aria-pressed="false" title="Dark theme">D</button>
         </div>
+        <button type="button" class="btn btn-ghost btn-sm" data-action="open-config" title="Open the active config file in a text editor">Config</button>
         <button class="btn btn-ghost btn-icon" id="btn-refresh" title="Refresh telemetry">
           <svg class="icon"><use href="#i-refresh"/></svg>
         </button>
@@ -671,7 +672,7 @@
                     <button type="submit" class="btn btn-primary btn-sm" id="agent-send">Send <span class="agent-send-key" aria-hidden="true">↵</span></button>
                   </div>
                 </form>
-                <div class="agent-composer-note"><span>Commands wait for your confirmation. <span class="agent-key-hint">⌘ / Ctrl + Enter to send.</span></span><button type="button" class="link-btn" data-action="agent-clear" title="Delete the conversation (plans and runs stay)">Clear chat</button></div>
+                <div class="agent-composer-note"><span>Commands wait for your confirmation. <span class="agent-key-hint">Enter to send · Shift+Enter for a new line.</span></span><button type="button" class="link-btn" data-action="agent-clear" title="Delete the conversation (plans and runs stay)">Clear chat</button></div>
               </div>
             </section>
             <aside class="agent-inspector" id="agent-side" aria-label="Agent tools" hidden>

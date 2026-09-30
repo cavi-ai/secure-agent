@@ -469,6 +469,8 @@ const HARNESS_TABLE = [
   { needle: 'openclaw', key: 'openclaw', label: 'OpenClaw', color: 'hsl(342 62% 62%)', glyph: 'O' },
   { needle: 'antigravity', key: 'agy', label: 'Antigravity', color: '#8E75B2', logo: 'logo-gemini' },
   { needle: 'agy', key: 'agy', label: 'Antigravity', color: '#8E75B2', logo: 'logo-gemini' },
+  { needle: 'qwen-code', key: 'qwen-code', label: 'Qwen Code', color: '#5B68D6', glyph: 'Q' },
+  { needle: 'pi', key: 'pi', label: 'Pi', color: '#6B6BB4', glyph: 'π' },
   { needle: 'gemini', key: 'gemini', label: 'Gemini', color: '#8E75B2', logo: 'logo-gemini' },
   { needle: 'windsurf', key: 'windsurf', label: 'Windsurf', color: '#0B100F', logo: 'logo-windsurf' },
   { needle: 'aider', key: 'aider', label: 'Aider', color: 'hsl(20 90% 58%)', glyph: '◉' },
@@ -482,6 +484,7 @@ const HARNESS_TABLE = [
 function harnessMeta(name) {
   const key = String(name || '').toLowerCase();
   for (const h of HARNESS_TABLE) {
+    if (h.key === 'pi' && key !== 'pi') continue;
     if (!key.includes(h.needle)) continue;
     return {
       key: h.key, label: h.label, color: h.color, logo: h.logo || '',
@@ -1901,5 +1904,14 @@ function policyListHTML(kind, rows, st) {
     const scope = (r.host === '*' ? 'all hosts' : escapeHTML(r.host || '')) + ' · ' + (r.agent ? escapeHTML(r.agent) : 'all agents');
     return row(`<b>${escapeHTML(r.title || r.rule || '')}</b>`, scope, '');
   });
-  return `<div class="policy-list" data-policy="${kind}">${items.join('')}</div>`;
+  const groups = new Map();
+  rows.forEach((r, i) => {
+    const harness = String(r.agent || '').trim();
+    const key = harness || 'all';
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(items[i]);
+  });
+  const grouped = [...groups.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([harness, entries]) =>
+    `<section class="policy-harness-group"><div class="policy-harness-title">${harness === 'all' ? 'All harnesses' : harnessChipHTML(harness, { label: true })}</div>${entries.join('')}</section>`).join('');
+  return `<div class="policy-list" data-policy="${kind}">${grouped}</div>`;
 }

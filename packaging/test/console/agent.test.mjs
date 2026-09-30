@@ -91,6 +91,19 @@ test('agentMessageHTML: Ollama replies render readable Markdown while user text 
   assert.ok(!user.includes('<ul>'));
 });
 
+test('agentMessageHTML shows reported tokens and timing without inventing rates', () => {
+  const html = agentMessageHTML({ role: 'assistant', content: 'Done', usage: {
+    model: 'qwen3:latest', prompt_tokens: 80, completion_tokens: 20,
+    elapsed_ms: 2400, output_tokens_per_second: 25, tool_calls: 0,
+  } }, status());
+  assert.match(html, /80 input tokens/);
+  assert.match(html, /20 output tokens/);
+  assert.match(html, /25\.0 output tokens\/s/);
+  assert.match(html, /2\.4s reply/);
+  assert.ok(!html.includes('input tokens/s'));
+  assert.match(html, /no model tool calls/);
+});
+
 test('local command is displayed exactly and cannot be changed by a click', () => {
   const m = { id: 21, role: 'assistant', content: 'Review this',
     local_command: { command: 'echo ' + XSS, mode: 'headless', workdir: '/tmp' } };

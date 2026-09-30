@@ -36,7 +36,7 @@ const {
   monitorVendorKeyIDs, inspectionVisible, vendorKeyPromoteHTML,
   scopedBySession, unactedLast24h, filterSessionRows, sseNeedsSnapshot,
   sessionStripRows, sessionNeedsYou, sessionStripHTML,
-  harnessMeta, harnessChipHTML, advisorAdviceHTML,
+  harnessMeta, harnessChipHTML, advisorAdviceHTML, policyListHTML,
   endpointIdentityLine, endpointDetailHTML,
   sessionTitle, groupSessionsByHarness, applySessionFilters, familySize,
   sessionGroupCounts, sessionCountStrip, harnessPillsHTML, middleTruncate,
@@ -656,6 +656,9 @@ test('harnessMeta resolves every live harness key to its display name and a spri
 });
 
 test('harnessMeta maps variants onto one harness and flags infra', () => {
+  assert.equal(harnessMeta('pi').label, 'Pi');
+  assert.equal(harnessMeta('qwen-code').label, 'Qwen Code');
+  assert.equal(harnessMeta('copilot').key, 'copilot');
   assert.equal(harnessMeta('antigravity').key, 'agy');
   assert.equal(harnessMeta('agy').logo, 'logo-gemini');
   assert.equal(harnessMeta('gemini').logo, 'logo-gemini');
@@ -670,6 +673,18 @@ test('harnessMeta maps variants onto one harness and flags infra', () => {
   assert.equal(harnessMeta('claude-desktop').infra, true);
   for (const k of ['ollama', 'lm-studio']) assert.equal(harnessMeta(k).infra, true, k);
   for (const k of ['claude', 'codex', 'opencode', 'agy', 'openclaw']) assert.equal(harnessMeta(k).infra, false, k);
+});
+
+test('Policy lists group entries by harness and keep unscoped entries separate', () => {
+  const html = policyListHTML('mute', [
+    { rule: 'first', agent: 'codex', host: '*' },
+    { rule: 'global', agent: '', host: '*' },
+    { rule: 'second', agent: 'codex', host: '*' },
+  ], {});
+  assert.equal((html.match(/policy-harness-group/g) || []).length, 2);
+  assert.match(html, /All harnesses/);
+  assert.match(html, /Codex/);
+  assert.ok(html.indexOf('first') < html.indexOf('second'));
 });
 
 test('harnessMeta falls back to a stable hue and initial for unknown harnesses', () => {
