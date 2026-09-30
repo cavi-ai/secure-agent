@@ -64,6 +64,7 @@ type launchSpec struct {
 // top of the daemon's environment and the ones removed, and files written
 // (mode 0600) before it runs.
 type launch struct {
+	TaskDir  string // private per-dispatch workspace, removed on every exit
 	Args     []string
 	Env      []string // KEY=VALUE
 	Unset    []string

@@ -267,3 +267,19 @@ func TestMaskRedactsHitsAndReportsWhatRemains(t *testing.T) {
 		t.Fatalf("plain text: masked=%q clean=%v", masked, clean)
 	}
 }
+
+func TestMaskWithholdsEntirePrivateKeyBody(t *testing.T) {
+	e, err := NewEngine(config.FirewallConfig{Patterns: []config.PatternConfig{
+		{ID: "private-key", Type: TypePrivateKey, Re: `-----BEGIN [A-Z ]*PRIVATE KEY-----`},
+	}}, []byte("test-salt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, end := range []string{"\n-----END PRIVATE KEY-----", ""} {
+		input := "before\n-----BEGIN PRIVATE KEY-----\nsynthetic-key-body" + end
+		masked, clean := e.Mask(input)
+		if !clean || strings.Contains(masked, "synthetic-key-body") || !strings.Contains(masked, "[REDACTED") {
+			t.Fatalf("private key body survived masking (terminated=%t)", end != "")
+		}
+	}
+}

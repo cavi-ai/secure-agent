@@ -96,6 +96,40 @@ procedures selected by keyword. Click a skill in the console to read it.
 Commands and answers are masked by the firewall before storage or display;
 unmaskable secrets are refused.
 
+Private-key envelopes are masked in full, including their contents. Headless
+stdout, stderr, and answer files are bounded to 1 MiB each. Oversized captures
+are withheld because truncation can remove the context needed for safe masking;
+the retained tail is selected only after masking the complete bounded output.
+Chat fails if its message cannot be stored. Harness dispatch records its run
+and plan before starting a process or opening Terminal; a failed write stops
+execution. A durable local-command claim cannot be reopened by a concurrent
+chat or saved-plan update.
+
+## Temporary task files
+
+Every local command and harness dispatch gets a private, owner-only task
+workspace. Launch scripts, per-run harness configurations, and answer files
+live there. `TMPDIR` points to the same workspace, so tools that honor it
+keep their temporary files there too.
+
+Headless runs remove the workspace on completion, failure, or timeout.
+Terminal scripts install cleanup before changing folders or launching the
+command: success, failure, and handled HUP/INT/TERM signals all remove the
+workspace, including files the harness created inside it. The launch script
+also removes itself as soon as it starts.
+
+After a crash or forced kill, startup removes orphaned task workspaces. A
+live Terminal shell keeps its workspace even if the daemon restarts. A
+pending, unopened script expires once its creator has exited and startup
+reclaims it; dispatch again rather than reusing an old manual command.
+
+Cleanup preserves generated SSH keys, requested outputs in the working
+folder, saved plans, and redacted chat/run history. Files a command or harness
+writes outside its task workspace are outside this cleanup. This is ordinary
+filesystem deletion, not encryption or guaranteed forensic erasure; a forced
+kill can leave temporary data until the next startup. Stored chat and run
+history are redacted, but are not encrypted by this feature.
+
 ## Optional harness handoff
 
 Write a separate task, choose a harness and folder, then **Save handoff plan**.

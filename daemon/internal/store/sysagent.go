@@ -35,8 +35,28 @@ func (s *Store) putSysAgentRow(table string, id int64, ts time.Time, v any, max 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if id != 0 {
-		if _, err := s.db.Exec(`UPDATE `+table+` SET body = ? WHERE id = ?`, string(body), id); err != nil {
+		query := `UPDATE ` + table + ` SET body = ? WHERE id = ?`
+		args := []any{string(body), id}
+		if table == "sysagent_messages" {
+			// A stale chat/plan update cannot undo a durable action claim or
+			// reopen a reviewed recommendation. Only the claim marker may be
+			// advanced to the run id after the run has been recorded.
+			query = `UPDATE sysagent_messages SET body = json_set(?,
+				'$.local_run_id', CASE WHEN COALESCE(json_extract(body, '$.local_run_id'), 0) != 0
+				AND COALESCE(json_extract(?, '$.local_run_id'), 0) = 0
+				THEN json_extract(body, '$.local_run_id') ELSE COALESCE(json_extract(?, '$.local_run_id'), 0) END,
+				'$.review_state', CASE WHEN json_extract(body, '$.review_state') IN ('saved', 'dismissed', 'approved')
+				THEN json_extract(body, '$.review_state') ELSE COALESCE(json_extract(?, '$.review_state'), '') END)
+				WHERE id = ?`
+			args = []any{string(body), string(body), string(body), string(body), id}
+		}
+		res, err := s.db.Exec(query, args...)
+		if err != nil {
 			log.Printf("store: update %s %d: %v", table, id, err)
+			return 0
+		}
+		if n, err := res.RowsAffected(); err != nil || n != 1 {
+			return 0
 		}
 		return id
 	}
@@ -50,7 +70,8 @@ func (s *Store) putSysAgentRow(table string, id int64, ts time.Time, v any, max 
 		// rolling history. SendAnalysis caps pending items at 100.
 		_, _ = s.db.Exec(`DELETE FROM sysagent_messages WHERE id NOT IN
 			(SELECT id FROM sysagent_messages ORDER BY id DESC LIMIT ?)
-			AND NOT (json_extract(body, '$.origin') = 'analysis'
+			AND NOT (COALESCE(json_extract(body, '$.origin'), '') = 'analysis'
+			AND COALESCE(json_extract(body, '$.role'), '') = 'assistant'
 			AND COALESCE(json_extract(body, '$.review_state'), 'pending') = 'pending')`, max)
 	} else {
 		_, _ = s.db.Exec(`DELETE FROM `+table+` WHERE id NOT IN (SELECT id FROM `+table+` ORDER BY id DESC LIMIT ?)`, max)
@@ -112,7 +133,9 @@ func (s *Store) ClaimSysAgentAction(id int64) bool {
 	res, err := s.db.Exec(`UPDATE sysagent_messages SET body = json_set(body, '$.local_run_id', -1)
 		WHERE id = ? AND json_extract(body, '$.role') = 'assistant'
 		AND json_type(body, '$.local_command') = 'object'
-		AND COALESCE(json_extract(body, '$.local_run_id'), 0) = 0`, id)
+		AND COALESCE(json_extract(body, '$.local_run_id'), 0) = 0
+		AND (COALESCE(json_extract(body, '$.origin'), '') != 'analysis'
+		OR COALESCE(json_extract(body, '$.review_state'), 'pending') = 'pending')`, id)
 	if err != nil {
 		log.Printf("store: claim sysagent action %d: %v", id, err)
 		return false

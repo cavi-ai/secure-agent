@@ -12,8 +12,12 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Chat stays on local Ollama. It proposes exact local shell commands for explicit review and confirmation, with Terminal mode for passphrases; commands run with the operator account's file and network access.
 - Harness selection and plan creation moved to a separate handoff section, so sending chat cannot silently route to another agent. The API rejects legacy chat requests with a harness field.
 - Pi runner joins optional harness handoff in terminal mode only. Its model is pinned to the local Ollama in an isolated configuration; extensions, shell tool, context files, and online startup checks are disabled. Pi has no built-in sandbox, so its file tools still have the operator account's file access.
+- Local commands and harness handoffs use private task workspaces and task-scoped `TMPDIR`. Temporary scripts, configurations, answers, and files created inside the workspace are deleted on exit; startup reclaims crash leftovers while preserving live Terminal tasks. Requested outputs and redacted stored history remain intact.
 
 ### Fixed
+- Local agent persistence: failed message, run, or plan writes stop dispatch before execution; aborted dispatches close their recorded runs. Stale message updates cannot reopen claimed commands or reviewed recommendations.
+- Secret masking removes complete private-key envelopes, including unterminated keys. Headless output is masked before selecting its tail; oversized captures and answer files are withheld instead of exposing fragments.
+- Agent chat retention now bounds ordinary messages while preserving pending recommendations.
 - Menu bar: the UI has its own application identity, independent of the launcher, while preserving existing preferences and helper identities.
 - Console chat renders escaped Markdown with readable lists and code blocks; finding details open from individual flags, and dismissal stays stable during refreshes.
 - Guard approvals: Always allow resolves matching queued requests and removes them from the console queue.
