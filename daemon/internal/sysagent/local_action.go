@@ -51,14 +51,21 @@ func (a *Agent) RunLocal(messageID int64) (model.SysAgentRun, error) {
 	run := model.SysAgentRun{TS: a.now(), Title: "Local command", Harness: "local", Mode: action.Mode,
 		Workdir: action.Workdir, Command: action.Command, Model: cfg.Model}
 	var script string
-	if action.Mode == ModeTerminal {
-		if err := os.MkdirAll(a.stateDir, 0o700); err != nil {
-			return model.SysAgentRun{}, err
+	taskDir, err := a.newTaskDir()
+	if err != nil {
+		return model.SysAgentRun{}, err
+	}
+	handedOff := false
+	defer func() {
+		if taskDir != "" && !handedOff {
+			_ = os.RemoveAll(taskDir)
 		}
-		script = filepath.Join(a.stateDir, fmt.Sprintf("local-%d-%d%s", messageID, run.TS.UnixNano(), scriptExt))
-		body := "#!/bin/sh\nrm -f -- \"$0\"\ncd -- " + shellQuote(action.Workdir) + " || exit 1\n" +
-			"exec env -i PATH=" + localCommandPath + " HOME=" + shellQuote(a.home) +
-			" USER=" + shellQuote(os.Getenv("USER")) + " /bin/sh -c " + shellQuote(action.Command) + "\n"
+	}()
+	if action.Mode == ModeTerminal {
+		script = filepath.Join(taskDir, "run"+scriptExt)
+		body := terminalPrelude(launch{TaskDir: taskDir}) + "cd -- " + shellQuote(action.Workdir) + " || exit 1\n" +
+			"env -i PATH=" + localCommandPath + " HOME=" + shellQuote(a.home) +
+			" USER=" + shellQuote(os.Getenv("USER")) + " TMPDIR=" + shellQuote(taskDir) + " /bin/sh -c " + shellQuote(action.Command) + "\n"
 		if err := os.WriteFile(script, []byte(body), 0o700); err != nil {
 			return model.SysAgentRun{}, fmt.Errorf("write local command script: %w", err)
 		}
@@ -97,11 +104,13 @@ func (a *Agent) RunLocal(messageID int64) (model.SysAgentRun, error) {
 		a.running = run.ID
 		a.wg.Add(1)
 		go a.runHeadless(0, run, "/bin/sh", launch{
-			Args:  []string{"-c", action.Command},
-			Unset: inheritedEnvKeys(),
-			Env:   []string{"PATH=" + localCommandPath, "HOME=" + a.home, "USER=" + os.Getenv("USER")},
+			TaskDir: taskDir,
+			Args:    []string{"-c", action.Command},
+			Unset:   inheritedEnvKeys(),
+			Env:     []string{"PATH=" + localCommandPath, "HOME=" + a.home, "USER=" + os.Getenv("USER"), "TMPDIR=" + taskDir},
 		}, time.Duration(cfg.TimeoutMinutes)*time.Minute)
 	}
+	handedOff = true
 	return run, nil
 }
 

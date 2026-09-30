@@ -442,7 +442,7 @@ func TestDispatchTerminalOpensOrHandsOver(t *testing.T) {
 	s := string(script)
 	for _, want := range []string{"rm -f -- \"$0\"", "cd -- " + shellQuote(p.Workdir), "export OPENCLAW_CONFIG_PATH=",
 		"export NO_PROXY=127.0.0.1,localhost,::1\"${NO_PROXY:+,$NO_PROXY}\"", "/opt/bin/openclaw chat --message 'You are running on a local model",
-		"rm -f -- " + a.stateDir + "/openclaw-"} {
+		"rm -rf -- " + shellQuote(filepath.Dir(opened))} {
 		if !strings.Contains(s, want) {
 			t.Errorf("script lacks %q:\n%s", want, s)
 		}

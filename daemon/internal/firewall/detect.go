@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/config"
+	"github.com/cavi-ai/secure-agent/daemon/internal/redact"
 )
 
 type compiledPattern struct {
@@ -52,6 +53,7 @@ func (d *Detector) Scan(text string) []Hit {
 // MaskPatterns replaces every typed-pattern match in text with
 // [REDACTED:<pattern id>].
 func (d *Detector) MaskPatterns(text string) string {
+	text = redact.PrivateKeys(text)
 	for _, p := range d.patterns {
 		text = p.re.ReplaceAllLiteralString(text, "[REDACTED:"+p.id+"]")
 	}

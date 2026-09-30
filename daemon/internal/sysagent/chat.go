@@ -60,6 +60,13 @@ func (a *Agent) send(in ChatInput, origin string, flagIDs []string) (model.SysAg
 	m := model.SysAgentMessage{TS: a.now(), Role: "user", Content: text,
 		Workdir: cleanWorkdir(in.Workdir, ""), Origin: origin, FlagIDs: flagIDs}
 	m.ID = a.st.PutSysAgentMessage(m)
+	if m.ID == 0 {
+		a.mu.Lock()
+		a.chatting = false
+		a.mu.Unlock()
+		a.wg.Done()
+		return model.SysAgentMessage{}, fmt.Errorf("%w: the message could not be stored", ErrUnavailable)
+	}
 	go a.reply(cfg, m)
 	return m, nil
 }

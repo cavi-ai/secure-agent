@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -78,20 +79,31 @@ func (a *Agent) Dispatch(ctx context.Context, in DispatchInput) (model.SysAgentR
 		return model.SysAgentRun{}, fmt.Errorf("%w: %s; the plan stays saved", ErrUnavailable, reason)
 	}
 	bin := a.look(h.Bin)
-	if err := os.MkdirAll(a.stateDir, 0o700); err != nil {
+	taskDir, err := a.newTaskDir()
+	if err != nil {
 		return model.SysAgentRun{}, fmt.Errorf("state folder: %w", err)
 	}
+	handedOff := false
+	defer func() {
+		if !handedOff {
+			_ = os.RemoveAll(taskDir)
+		}
+	}()
 	now := a.now()
 	task := composeTask(p)
 	l, err := buildLaunch(h.ID, p.Mode, launchSpec{Endpoint: cfg.Endpoint, Model: modelName, Workdir: p.Workdir, Task: task,
-		StateDir: a.stateDir, Tag: fmt.Sprintf("%d-%d", p.ID, now.UnixNano()), TimeoutSec: cfg.TimeoutMinutes * 60})
+		StateDir: taskDir, Tag: fmt.Sprintf("%d-%d", p.ID, now.UnixNano()), TimeoutSec: cfg.TimeoutMinutes * 60})
 	if err != nil {
 		return model.SysAgentRun{}, err
 	}
+	l.TaskDir = taskDir
+	l.Env = append(l.Env, "TMPDIR="+taskDir)
 	run := model.SysAgentRun{PlanID: p.ID, TS: now, Title: p.Title, Harness: h.ID, Mode: p.Mode, Model: modelName,
 		Workdir: p.Workdir, Command: commandLine(bin, l, task)}
 	if p.Mode == ModeTerminal {
-		return a.dispatchTerminal(p, run, bin, l)
+		run, err := a.dispatchTerminal(p, run, bin, l)
+		handedOff = err == nil
+		return run, err
 	}
 	a.mu.Lock()
 	if a.running != 0 {
@@ -105,13 +117,24 @@ func (a *Agent) Dispatch(ctx context.Context, in DispatchInput) (model.SysAgentR
 	}
 	run.Status = "running"
 	run.ID = a.st.PutSysAgentRun(run)
+	if run.ID == 0 {
+		removeFiles(l)
+		a.mu.Unlock()
+		return model.SysAgentRun{}, fmt.Errorf("%w: the run could not be recorded", ErrUnavailable)
+	}
+	p.Status, p.RunID, p.Note = "running", run.ID, ""
+	if a.st.PutSysAgentPlan(p) == 0 {
+		removeFiles(l)
+		a.failUnstartedRun(run)
+		a.mu.Unlock()
+		return model.SysAgentRun{}, fmt.Errorf("%w: the plan could not be updated", ErrUnavailable)
+	}
 	a.running = run.ID
 	a.wg.Add(1)
 	a.mu.Unlock()
-	p.Status, p.RunID, p.Note = "running", run.ID, ""
-	a.st.PutSysAgentPlan(p)
 	a.audit(run)
 	go a.runHeadless(p.ID, run, bin, l, time.Duration(cfg.TimeoutMinutes)*time.Minute)
+	handedOff = true
 	return run, nil
 }
 
@@ -155,6 +178,10 @@ func writeFiles(files map[string][]byte) error {
 }
 
 func removeFiles(l launch) {
+	if l.TaskDir != "" {
+		_ = os.RemoveAll(l.TaskDir)
+		return
+	}
 	for path := range l.Files {
 		_ = os.Remove(path)
 	}
@@ -192,6 +219,21 @@ func (a *Agent) runHeadless(planID int64, run model.SysAgentRun, bin string, l l
 	runErr := cmd.Run()
 
 	text := answerText(run.Harness, out.String(), l.AnswerFile)
+	if out.truncated {
+		text = "[output withheld: capture exceeded its size limit]"
+	}
+	stderr := errOut.String()
+	if errOut.truncated {
+		stderr = "[output withheld: capture exceeded its size limit]"
+	}
+	// Redact the full bounded capture before selecting a tail: truncating
+	// first can remove a private-key header while retaining its body.
+	if !a.maskAll(&text) {
+		text = "[output withheld: it held a secret that could not be masked]"
+	}
+	if !a.maskAll(&stderr) {
+		stderr = "[output withheld: it held a secret that could not be masked]"
+	}
 	fin := a.now()
 	run.FinishedAt = &fin
 	var exitErr *exec.ExitError
@@ -199,7 +241,7 @@ func (a *Agent) runHeadless(planID int64, run model.SysAgentRun, bin string, l l
 	case ctx.Err() == context.DeadlineExceeded:
 		run.Status, run.Detail = "timeout", fmt.Sprintf("stopped after %v", timeout)
 	case runErr != nil:
-		run.Status, run.Detail = "failed", strings.TrimSpace(runErr.Error()+": "+tail(errOut.String(), 6))
+		run.Status, run.Detail = "failed", strings.TrimSpace(runErr.Error()+": "+tail(stderr, 6))
 		if errors.As(runErr, &exitErr) {
 			run.ExitCode = exitErr.ExitCode()
 		}
@@ -207,7 +249,7 @@ func (a *Agent) runHeadless(planID int64, run model.SysAgentRun, bin string, l l
 		run.Status = "done"
 	}
 	if strings.TrimSpace(text) == "" {
-		text = errOut.String()
+		text = stderr
 	}
 	run.Output = tail(text, outputLines)
 	if !a.maskAll(&run.Output) {
@@ -240,8 +282,15 @@ func answerText(harness, stdout, answerFile string) string {
 		}
 	case "codex":
 		if answerFile != "" {
-			if b, err := os.ReadFile(answerFile); err == nil && len(bytes.TrimSpace(b)) > 0 {
-				return string(b)
+			if f, err := os.Open(answerFile); err == nil {
+				defer f.Close()
+				b, err := io.ReadAll(io.LimitReader(f, maxOutput+1))
+				if len(b) > maxOutput {
+					return "[output withheld: answer exceeded its size limit]"
+				}
+				if err == nil && len(bytes.TrimSpace(b)) > 0 {
+					return string(b)
+				}
 			}
 		}
 	}
@@ -254,12 +303,25 @@ func (a *Agent) dispatchTerminal(p model.SysAgentPlan, run model.SysAgentRun, bi
 	if err := writeFiles(l.Files); err != nil {
 		return run, err
 	}
-	script := filepath.Join(a.stateDir, fmt.Sprintf("terminal-%d-%d%s", p.ID, run.TS.UnixNano(), scriptExt))
+	script := filepath.Join(l.TaskDir, "run"+scriptExt)
 	if err := os.WriteFile(script, []byte(terminalScript(p.ID, run, bin, l)), 0o700); err != nil {
 		removeFiles(l)
 		return run, fmt.Errorf("write the terminal script: %w", err)
 	}
 	run.Status, run.Detail = "manual", "Run it in a terminal: sh "+shellQuote(script)
+	run.ID = a.st.PutSysAgentRun(run)
+	if run.ID == 0 {
+		_ = os.Remove(script)
+		removeFiles(l)
+		return model.SysAgentRun{}, fmt.Errorf("%w: the run could not be recorded", ErrUnavailable)
+	}
+	p.Status, p.RunID, p.Note = run.Status, run.ID, ""
+	if a.st.PutSysAgentPlan(p) == 0 {
+		_ = os.Remove(script)
+		removeFiles(l)
+		a.failUnstartedRun(run)
+		return model.SysAgentRun{}, fmt.Errorf("%w: the plan could not be updated", ErrUnavailable)
+	}
 	if a.openTerminal != nil {
 		if err := a.openTerminal(script); err != nil {
 			run.Detail = "The terminal did not open (" + err.Error() + "). Run it yourself: sh " + shellQuote(script)
@@ -267,11 +329,19 @@ func (a *Agent) dispatchTerminal(p model.SysAgentPlan, run model.SysAgentRun, bi
 			run.Status, run.Detail = "opened", "Opened in Terminal"
 		}
 	}
-	run.ID = a.st.PutSysAgentRun(run)
+	a.st.PutSysAgentRun(run)
 	p.Status, p.RunID, p.Note = run.Status, run.ID, ""
 	a.st.PutSysAgentPlan(p)
 	a.audit(run)
 	return run, nil
+}
+
+// If the plan update failed, no process was launched. Close the already
+// recorded run so the console does not claim work is running or ready.
+func (a *Agent) failUnstartedRun(run model.SysAgentRun) {
+	fin := a.now()
+	run.Status, run.FinishedAt, run.Detail = "failed", &fin, "execution did not start: the plan could not be updated"
+	a.st.PutSysAgentRun(run)
 }
 
 // terminalScript runs the harness in the plan's folder with the launch's
@@ -279,9 +349,8 @@ func (a *Agent) dispatchTerminal(p model.SysAgentPlan, run model.SysAgentRun, bi
 // the task it carries is not left behind.
 func terminalScript(planID int64, run model.SysAgentRun, bin string, l launch) string {
 	var b strings.Builder
-	b.WriteString("#!/bin/sh\n")
+	b.WriteString(terminalPrelude(l))
 	fmt.Fprintf(&b, "# secure-agent system agent: plan %d, %s on local Ollama (model %s).\n", planID, run.Harness, oneLine(run.Model))
-	b.WriteString("rm -f -- \"$0\"\n")
 	fmt.Fprintf(&b, "cd -- %s || exit 1\n", shellQuote(run.Workdir))
 	if !l.CleanEnv && len(l.Unset) > 0 {
 		fmt.Fprintf(&b, "unset %s\n", strings.Join(l.Unset, " "))
@@ -310,13 +379,6 @@ func terminalScript(planID int64, run model.SysAgentRun, bin string, l launch) s
 	}
 	b.WriteString(strings.Join(args, " ") + "\n")
 	b.WriteString("status=$?\n")
-	var files []string
-	for path := range l.Files {
-		files = append(files, shellQuote(path))
-	}
-	if len(files) > 0 {
-		fmt.Fprintf(&b, "rm -f -- %s\n", strings.Join(files, " "))
-	}
 	b.WriteString("exit $status\n")
 	return b.String()
 }
@@ -332,9 +394,15 @@ func tail(s string, n int) string {
 }
 
 // limitedBuffer keeps the first maxOutput bytes written to it.
-type limitedBuffer struct{ b bytes.Buffer }
+type limitedBuffer struct {
+	b         bytes.Buffer
+	truncated bool
+}
 
 func (l *limitedBuffer) Write(p []byte) (int, error) {
+	if len(p) > maxOutput-l.b.Len() {
+		l.truncated = true
+	}
 	if room := maxOutput - l.b.Len(); room > 0 {
 		if len(p) > room {
 			l.b.Write(p[:room])

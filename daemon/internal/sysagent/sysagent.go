@@ -536,6 +536,7 @@ func (a *Agent) planRunning(p model.SysAgentPlan) bool {
 // Recover closes runs and plans a stopped daemon left "running": their
 // outcome was never recorded. Call once at start, before serving.
 func (a *Agent) Recover() {
+	a.recoverTaskFiles()
 	fin := a.now()
 	for _, r := range a.st.SysAgentRuns(1000) {
 		if r.Status == "running" {

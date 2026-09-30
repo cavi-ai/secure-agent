@@ -24,6 +24,26 @@ func TestClaimSysAgentActionIsDurableAndOneTime(t *testing.T) {
 	}
 }
 
+func TestMessageUpdateCannotUndoActionClaim(t *testing.T) {
+	s, err := Open("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	id := s.PutSysAgentMessage(model.SysAgentMessage{TS: time.Now(), Role: "assistant", Origin: "analysis", ReviewState: "pending",
+		LocalCommand: &model.SysAgentLocalCommand{Command: "true", Mode: "headless", Workdir: "/tmp"}})
+	stale, _ := s.GetSysAgentMessage(id)
+	if !s.ClaimSysAgentAction(id) || !s.SetSysAgentRecommendationState(id, "approved") {
+		t.Fatal("claim failed")
+	}
+	stale.PlanID = 7
+	s.PutSysAgentMessage(stale)
+	got, _ := s.GetSysAgentMessage(id)
+	if got.LocalRunID != -1 || got.ReviewState != "approved" || s.ClaimSysAgentAction(id) {
+		t.Fatal("stale plan linkage reopened a consumed action")
+	}
+}
+
 func TestAnalysisRecommendationQueueSurvivesChatClear(t *testing.T) {
 	s, err := Open("", "")
 	if err != nil {
@@ -61,6 +81,13 @@ func TestPendingRecommendationSurvivesChatRetention(t *testing.T) {
 	old := s.PutSysAgentMessage(model.SysAgentMessage{TS: time.Now(), Role: "assistant", Origin: "analysis", ReviewState: "pending", Content: "review me"})
 	for i := 0; i < maxSysAgentMessages+10; i++ {
 		s.PutSysAgentMessage(model.SysAgentMessage{TS: time.Now(), Role: "user", Content: "ordinary chat"})
+	}
+	var retained int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM sysagent_messages`).Scan(&retained); err != nil {
+		t.Fatal(err)
+	}
+	if retained != maxSysAgentMessages+1 {
+		t.Fatalf("retained %d messages, want bounded chat plus pending recommendation", retained)
 	}
 	if s.PendingSysAgentRecommendations() != 1 {
 		t.Fatal("pending recommendation was lost")
@@ -124,5 +151,35 @@ func TestSysAgentMessagesPlansRuns(t *testing.T) {
 	}
 	if !s.DeleteSysAgentPlan(pid) || s.DeleteSysAgentPlan(pid) {
 		t.Fatal("delete must report whether a plan was there")
+	}
+}
+
+func TestClaimSysAgentActionRejectsReviewedRecommendation(t *testing.T) {
+	s, err := Open("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	for _, state := range []string{"saved", "dismissed", "approved"} {
+		id := s.PutSysAgentMessage(model.SysAgentMessage{TS: time.Now(), Role: "assistant", Origin: "analysis", ReviewState: state,
+			LocalCommand: &model.SysAgentLocalCommand{Command: "true", Mode: "headless", Workdir: "/tmp"}})
+		if s.ClaimSysAgentAction(id) {
+			t.Errorf("claimed %s recommendation", state)
+		}
+	}
+}
+
+func TestSysAgentUpdateReportsStorageFailure(t *testing.T) {
+	s, err := Open("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	id := s.PutSysAgentPlan(model.SysAgentPlan{CreatedAt: time.Now(), Task: "before"})
+	if err := s.db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.PutSysAgentPlan(model.SysAgentPlan{ID: id, Task: "after"}); got != 0 {
+		t.Fatalf("failed update reported id %d", got)
 	}
 }
