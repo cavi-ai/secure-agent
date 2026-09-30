@@ -315,3 +315,29 @@ func TestESServiceSnapshotFloodingSinceOmittedWhenUnset(t *testing.T) {
 		t.Fatalf("flooding_since missing: %s", busy)
 	}
 }
+
+// Rotation renames the spool to .1 before creating the new one. A probe in
+// that gap must see the rotated file, not a missing collector.
+func TestSpoolProbesSeeTheRotatedFileMidRotation(t *testing.T) {
+	path := t.TempDir() + "/es-spool.jsonl"
+	if size, mod := spoolFacts(path); size != 0 || !mod.IsZero() || spoolAvailableAt(path) {
+		t.Fatalf("no spool: facts = %d %v, available = %v; want zero and false", size, mod, spoolAvailableAt(path))
+	}
+
+	if err := os.WriteFile(path+".1", []byte("rotated\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if size, mod := spoolFacts(path); size != 8 || mod.IsZero() {
+		t.Fatalf("mid-rotation facts = %d %v, want the .1 file's 8 bytes and mtime", size, mod)
+	}
+	if !spoolAvailableAt(path) {
+		t.Fatal("mid-rotation: spool reported unavailable")
+	}
+
+	if err := os.WriteFile(path, []byte("new\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if size, _ := spoolFacts(path); size != 4 {
+		t.Fatalf("after rotation facts size = %d, want the new spool's 4 bytes", size)
+	}
+}
