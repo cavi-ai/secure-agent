@@ -1299,10 +1299,11 @@ document.addEventListener('DOMContentLoaded', () => {
       showToast('Local command not run: ' + (err.message || err), 'danger');
     }
   };
-  window.analyzeAgentActivity = async function() {
+  window.analyzeAgentActivity = async function(flagIds) {
+    if (flagIds && flagIds.length) window.location.hash = 'agent';
     setAgentPanel('queue');
     try {
-      await agentFetch('/agent/analyze', { method: 'POST' });
+      await agentFetch('/agent/analyze', { method: 'POST', body: flagIds && flagIds.length ? { flag_ids: flagIds } : {} });
       showToast('Local Ollama is reviewing recorded activity; the result will appear in the queue', 'info');
       loadAgent(['chat']);
     } catch (err) { showToast('Analysis not started: ' + (err.message || err), 'danger'); }
@@ -3366,6 +3367,22 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     const body = a.body || {};
     switch (a.id) {
+      case 'inspect-file':
+        return window.openFileDetail(body.path);
+
+      case 'review-local':
+        return window.analyzeAgentActivity(body.flag_ids);
+      case 'expect':
+      case 'expect-file':
+        if (!await window.saConfirm(a.consequence, { title: 'Confirm security exception', confirmLabel: 'Save exception' })) return;
+        try {
+          const res = await apiFetch(a.path, {method: a.method, headers: {'Content-Type':'application/json'}, body: JSON.stringify(body)});
+          if (!res.ok) throw new Error(await res.text());
+          showToast('Exception saved; unmatched evidence stays open. Revoke under Policy.', 'success');
+          fetchTelemetry(); loadPolicy();
+        } catch (err) {showToast('Exception not saved: ' + (err.message || err), 'danger');}
+        return;
+
       case 'dismiss':
         return window.dismissFlag(f.id);
       case 'kill':
@@ -3471,6 +3488,18 @@ document.addEventListener('DOMContentLoaded', () => {
     const dismiss = (p.actions || []).find(x => x.id === 'dismiss-all');
     const openIds = (dismiss && dismiss.body && dismiss.body.flag_ids) || [];
     switch (a.id) {
+      case 'inspect-file':
+        return window.openFileDetail(body.path);
+      case 'review-local':
+        return window.analyzeAgentActivity(body.flag_ids);
+      case 'expect':
+      case 'expect-file': {
+        const f = (telemetryData.flags || []).find(x => x.id === body.flag_id) || planFlagCache.get(body.flag_id);
+        if (f) return window.explainAct(body.flag_id, a.id);
+        await window.openFlagDetail(body.flag_id);
+        return window.explainAct(body.flag_id, a.id);
+      }
+
       case 'kill':
         return window.killProcess(Number(body.pid), body.started_at, p.agent);
       case 'mute-rule-host':
@@ -4207,7 +4236,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // same store, so one choice silences both surfaces.
   const NOTIFY_RULES = [
     ['proxy-secret-leak', 'Secret leaving in agent traffic'],
-    ['sensitive-read-then-connect', 'Secret read, then connected out'],
+    ['sensitive-read-then-connect', 'Sensitive read near a connection'],
     ['keychain-access', 'Keychain file access'],
     ['keychain-security-cli', 'Keychain CLI (security tool)'],
     ['tcc-tamper', 'Privacy permissions (TCC) tamper'],

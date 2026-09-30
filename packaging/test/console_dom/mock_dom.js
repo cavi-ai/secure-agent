@@ -214,7 +214,7 @@
       ],
       items: [
         { severity: 3, kind: 'flag', id: 'flag-1', title: 'proxy-secret-leak — cursor sent an anthropic-key to logs.example.com' },
-        { severity: 3, kind: 'flag', id: 'flag-2', title: 'Agent read a secret, then connected out' },
+        { severity: 3, kind: 'flag', id: 'flag-2', title: 'Sensitive file read near an outside connection' },
         { severity: 3, kind: 'flag', id: 'flag-4', title: 'Agent modified macOS privacy permissions (TCC)' },
         { severity: 2, kind: 'flag', id: 'flag-5', title: 'Agent touched the keychain' },
         { severity: 1, kind: 'guard_pending', id: 'guard-1', title: 'claude wants .env' },
@@ -491,7 +491,7 @@
     const cfHost = '2606:4700::6810:84e5';
     const f2 = data['/flags'].find(f => f.id === 'flag-2');
     Object.assign(f2, {
-      title: 'Agent read a secret, then connected out',
+      title: 'Sensitive file read near an outside connection',
       ts: '2026-09-22T16:05:01Z',
       evidence: [
         { kind: 'read', label: '/Users/dev/.aws/credentials', sub: 'sensitive read', ts: '2026-09-22T16:04:58Z' },

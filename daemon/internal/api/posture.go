@@ -537,7 +537,7 @@ func humanFlagTitle(rule string) string {
 	case "proxy-secret-leak":
 		return "Secret leaving in agent traffic"
 	case "sensitive-read-then-connect":
-		return "Agent read a secret, then connected out"
+		return "Sensitive file read near an outside connection"
 	case "keychain-access":
 		return "Agent touched the keychain"
 	case "keychain-security-cli":

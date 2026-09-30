@@ -17,8 +17,9 @@ const readConnectRule = "sensitive-read-then-connect"
 const readRepeatWindow = 60 * time.Minute
 
 type foldedFlag struct {
-	id string
-	at time.Time
+	id       string
+	at       time.Time
+	severity int
 }
 
 type flagRepeat struct {
@@ -93,7 +94,7 @@ func readConnectSeverity(reads []readMark, conns []connMark) int {
 			return 3
 		}
 		for _, cm := range conns {
-			if sameTree(r, cm) {
+			if !cm.at.Before(r.at) && (r.pid == cm.pid || slices.Contains(cm.chain, r.pid)) {
 				return 3
 			}
 		}
@@ -170,7 +171,10 @@ func (c *Correlator) readThenConnectLocked(e event.Event, agent string, rootPID 
 	// new secret or destination must never disappear behind reads[0].
 	keys := make([]string, 0, len(reads)*len(cited))
 	seen := make(map[string]bool, len(reads)*len(cited))
+	severity := readConnectSeverity(reads, cited)
 	allRepeated := true
+	openChecks := map[string]bool{}
+	checked := map[string]bool{}
 	repeatID := ""
 	for _, r := range reads {
 		for _, cm := range cited {
@@ -181,7 +185,15 @@ func (c *Correlator) readThenConnectLocked(e event.Event, agent string, rootPID 
 			seen[key] = true
 			keys = append(keys, key)
 			prev, ok := c.folded[key]
-			if !ok || e.TS.Sub(prev.at) < 0 || e.TS.Sub(prev.at) >= readRepeatWindow {
+			active := ok && e.TS.Sub(prev.at) >= 0 && e.TS.Sub(prev.at) < readRepeatWindow
+			if ok && c.isOpenFlag != nil {
+				if !checked[prev.id] {
+					openChecks[prev.id] = c.isOpenFlag(prev.id)
+					checked[prev.id] = true
+				}
+				active = openChecks[prev.id]
+			}
+			if !active || severity > prev.severity {
 				allRepeated = false
 			} else if repeatID == "" {
 				repeatID = prev.id
@@ -209,6 +221,7 @@ func (c *Correlator) readThenConnectLocked(e event.Event, agent string, rootPID 
 			TS:     r.at.Format(time.RFC3339),
 			Text:   fmt.Sprintf("%s (pid %d) read %s at %s", agent, r.pid, r.path, r.at.Format(time.RFC3339)),
 			PID:    r.pid,
+			Chain:  append([]int32(nil), r.chain...),
 			Exe:    r.exe,
 			Owners: c.credentialOwners(r.path),
 		})
@@ -219,20 +232,21 @@ func (c *Correlator) readThenConnectLocked(e event.Event, agent string, rootPID 
 			Label: fmt.Sprintf("%s:%d", cm.host, cm.port),
 			Sub:   "egress",
 			TS:    cm.at.Format(time.RFC3339),
-			Text:  fmt.Sprintf("then connected to %s:%d at %s", cm.host, cm.port, cm.at.Format(time.RFC3339)),
+			Text:  fmt.Sprintf("connection observed to %s:%d at %s", cm.host, cm.port, cm.at.Format(time.RFC3339)),
 			PID:   cm.pid,
+			Chain: append([]int32(nil), cm.chain...),
 		})
 	}
 	id := hashFlagID(readConnectRule, rootPID, reads[0].at)
 	for _, key := range keys {
-		c.foldLocked(key, id, e.TS)
+		c.foldLocked(key, id, e.TS, severity)
 	}
 	c.markReadConsumedLocked(rootPID, e.PID)
 	c.markConnConsumedLocked(rootPID, e.PID)
 	return []model.Flag{{
 		ID:        id,
 		Rule:      readConnectRule,
-		Severity:  readConnectSeverity(reads, cited),
+		Severity:  severity,
 		TS:        e.TS,
 		PID:       e.PID,
 		Agent:     agent,
@@ -256,15 +270,84 @@ func (c *Correlator) allMutedLocked(agent string, conns []connMark) bool {
 
 // foldLocked records the flag a pattern raised; entries past the window are
 // pruned once the map passes 1,024 keys.
-func (c *Correlator) foldLocked(key, id string, at time.Time) {
+func (c *Correlator) foldLocked(key, id string, at time.Time, severity int) {
 	if c.folded == nil {
 		c.folded = map[string]foldedFlag{}
 	}
-	c.folded[key] = foldedFlag{id: id, at: at}
+	c.folded[key] = foldedFlag{id: id, at: at, severity: severity}
 	if len(c.folded) > 1024 {
 		for k, f := range c.folded {
 			if at.Sub(f.at) >= readRepeatWindow {
 				delete(c.folded, k)
+			}
+		}
+	}
+}
+
+// SetOpenFlagChecker keeps an unresolved finding folded across hourly windows.
+// When unwired, the bounded in-memory window remains the fallback.
+func (c *Correlator) SetOpenFlagChecker(check func(string) bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.isOpenFlag = check
+}
+
+// StoredReadConnectSeverity re-evaluates causal strength from recorded
+// evidence only. Missing legacy process IDs retain their original severity.
+func StoredReadConnectSeverity(f model.Flag) int {
+	var reads []readMark
+	var conns []connMark
+	for _, ev := range f.Evidence {
+		at, _ := time.Parse(time.RFC3339, ev.TS)
+		switch ev.Kind {
+		case "read":
+			if ev.Sub == "agent tool read" {
+				return 3
+			}
+			if ev.PID == 0 {
+				return f.Severity
+			}
+			reads = append(reads, readMark{pid: ev.PID, at: at, chain: ev.Chain})
+		case "connect":
+			if ev.PID == 0 {
+				return f.Severity
+			}
+			conns = append(conns, connMark{pid: ev.PID, at: at, chain: ev.Chain})
+		}
+	}
+	if len(reads) == 0 || len(conns) == 0 {
+		return f.Severity
+	}
+	return readConnectSeverity(reads, conns)
+}
+
+// RestoreOpenReadFlags seeds folding from persisted unresolved findings.
+// Input is newest first; stronger prior evidence must not be overwritten.
+func (c *Correlator) RestoreOpenReadFlags(flags []model.Flag) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, f := range flags {
+		if f.Acknowledged || f.Rule != readConnectRule {
+			continue
+		}
+		for _, r := range f.Evidence {
+			if r.Kind != "read" {
+				continue
+			}
+			for _, cm := range f.Evidence {
+				if cm.Kind != "connect" {
+					continue
+				}
+				host := cm.Label
+				// Evidence includes a port, including legacy unbracketed IPv6.
+				if i := strings.LastIndex(host, ":"); i >= 0 {
+					host = strings.Trim(host[:i], "[]")
+				}
+				key := ReadConnectKey(f.Agent, ReaderLabel(r.Exe, r.Sub == "agent tool read"), r.Label, DestLabel(host))
+				prev, ok := c.folded[key]
+				if !ok || f.Severity > prev.severity {
+					c.foldLocked(key, f.ID, f.TS, f.Severity)
+				}
 			}
 		}
 	}

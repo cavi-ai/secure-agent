@@ -79,3 +79,17 @@ test('failed file exception keeps the finding in the queue', async () => {
   await ctx.window.explainAct(flag.id, 'allow-path');
   assert.equal(dropped, 0);
 });
+
+test('selected finding enters local review without dismissal or shell execution', async () => {
+ const calls=[];const flag={id:'selected',explain:{actions:[{id:'review-local',body:{flag_ids:['selected']}}]}};
+ const ctx={window:{analyzeAgentActivity:async ids=>calls.push(Array.from(ids))},telemetryData:{flags:[flag]},planFlagCache:new Map(),showToast:()=>{}};
+ vm.runInNewContext(actionHandler,ctx);
+ await ctx.window.explainAct('selected','review-local');
+ assert.deepEqual(calls,[['selected']]);assert.equal(ctx.telemetryData.flags.length,1);
+});
+test('file exception confirmation does not optimistically dismiss mixed evidence', async () => {
+ const requests=[];const flag={id:'mixed',explain:{actions:[{id:'expect-file',path:'/expected',method:'POST',consequence:'Exact file only',body:{flag_id:'mixed',scope:'file'}}]}};
+ const ctx={window:{saConfirm:async()=>true},telemetryData:{flags:[flag]},planFlagCache:new Map(),showToast:()=>{},loadPolicy:()=>{},fetchTelemetry:()=>{},apiFetch:async(route,opts)=>{requests.push([route,JSON.parse(opts.body)]);return {ok:true,json:async()=>({})}}};
+ vm.runInNewContext(actionHandler,ctx);await ctx.window.explainAct('mixed','expect-file');
+ assert.equal(requests.length,1);assert.deepEqual(requests[0],['/expected',{flag_id:'mixed',scope:'file'}]);assert.equal(ctx.telemetryData.flags.length,1);
+});

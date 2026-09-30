@@ -54,3 +54,9 @@ test('linkEvidencePaths links absolute paths in inline code only', () => {
   assert.ok(html.includes('<code class="md-inline-code">api.openai.com:443</code>'));
   assert.equal(linkEvidencePaths(''), '');
 });
+
+test('env inspector renders an escaped names-only section, not markup inside file facts', () => {
+ const html=fileDetailHTML({...detail,path:'/test/.env',env_variables:['BOBBY_BROWSER_TOKEN','<unsafe>']},now);
+ assert.match(html,/<h4>Environment variable names<\/h4>/);assert.match(html,/<code>BOBBY_BROWSER_TOKEN<\/code>/);
+ assert.ok(!html.includes('<unsafe>'));assert.ok(html.includes('&lt;unsafe&gt;'));
+});

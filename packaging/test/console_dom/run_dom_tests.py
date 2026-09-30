@@ -1284,7 +1284,7 @@ def main():
         head = (re.search(r"<header[^>]*>(.*?)</header>", card, re.S) or [None, ""])[1]
         outside = re.sub(r"<details.*?</details>", "", card, flags=re.S)
         check("finding card: header shows the title, never the rule id; no pid or IPv6 outside Details",
-              card != "" and "Agent read a secret, then connected out" in head
+              card != "" and "Sensitive file read near an outside connection" in head
               and "sensitive-read-then-connect" not in visible(head)
               and not re.search(r"\bpid\b", visible(outside), re.I) and "6033" not in visible(outside)
               and "2606:" not in visible(outside), f"card={card[:240]!r}")

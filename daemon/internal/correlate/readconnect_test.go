@@ -229,3 +229,56 @@ func TestNotSecretPathUnderSensitiveDir(t *testing.T) {
 		t.Fatalf("stale = %v, want [completion]", got)
 	}
 }
+
+func TestReadConnectOpenFindingDoesNotRealertHourly(t *testing.T) {
+	c := newFamilyCorrelator(t)
+	base := time.Unix(1700000000, 0)
+	var first string
+	open := true
+	c.SetOpenFlagChecker(func(id string) bool { return id == first && open })
+	for _, minutes := range []int{0, 61, 125} {
+		at := base.Add(time.Duration(minutes) * time.Minute)
+		ghReads(c, t, event.KindFileOpen, at)
+		flags := connectTo(c, 201, "evil.example.com", at.Add(time.Second))
+		if minutes == 0 {
+			if len(flags) != 1 {
+				t.Fatal(flags)
+			}
+			first = flags[0].ID
+		} else if len(flags) != 0 {
+			t.Fatalf("unresolved finding re-alerted at %d minutes", minutes)
+		}
+	}
+	open = false
+	at := base.Add(130 * time.Minute)
+	ghReads(c, t, event.KindFileOpen, at)
+	if f := connectTo(c, 201, "evil.example.com", at.Add(time.Second)); len(f) != 1 {
+		t.Fatal("new occurrence after dismissal must still flag")
+	}
+}
+func TestReadConnectRepeatEscalatesStrongerEvidence(t *testing.T) {
+	c := newFamilyCorrelator(t)
+	at := time.Unix(1700000000, 0)
+	ghReads(c, t, event.KindFileOpen, at)
+	f := connectTo(c, 200, "evil.example.com", at.Add(time.Second))
+	if len(f) != 1 || f[0].Severity != 2 {
+		t.Fatal(f)
+	}
+	ghReads(c, t, event.KindFileOpen, at.Add(2*time.Minute))
+	f = connectTo(c, 201, "evil.example.com", at.Add(2*time.Minute+time.Second))
+	if len(f) != 1 || f[0].Severity != 3 {
+		t.Fatal("stronger direct evidence was folded into weak correlation", f)
+	}
+}
+
+func TestOpenReadFindingFoldingSurvivesRestart(t *testing.T) {
+	c := newFamilyCorrelator(t)
+	at := time.Unix(1700000000, 0)
+	path := homePath(t, ".config/gh/hosts.yml")
+	c.RestoreOpenReadFlags([]model.Flag{{ID: "retained", Rule: readConnectRule, Severity: 3, TS: at, Agent: "cursor", Evidence: []model.EvidenceItem{{Kind: "read", Label: path, Exe: ghExe}, {Kind: "connect", Label: "evil.example.com:443"}}}})
+	c.SetOpenFlagChecker(func(id string) bool { return id == "retained" })
+	ghReads(c, t, event.KindFileOpen, at.Add(2*time.Hour))
+	if f := connectTo(c, 201, "evil.example.com", at.Add(2*time.Hour+time.Second)); len(f) != 0 {
+		t.Fatal("restart duplicated unresolved finding", f)
+	}
+}

@@ -6,6 +6,14 @@ All notable changes to `secure-agent` are documented here. The format follows
 
 ## [Unreleased]
 
+### Security findings
+- Distinguish temporal and parent-process read/connect correlations from direct or descendant activity; cloud/CDN identity no longer claims to identify the receiving service.
+- Retain weak historical findings at review severity, fold unresolved repetitions across hours and restarts, and alert when stronger evidence appears.
+- Scope expected reads to exact destination hosts, preserve unmatched evidence, and make served exception actions functional in the console.
+- Add reversible, agent-scoped test/non-secret `.env` exceptions and fix `not_secret_paths` precedence for `.env` fixtures.
+- Inspect small evidence `.env` files by variable name without displaying values; symlinks and ambiguous multiline files are withheld.
+- Send selected findings directly to the local agent review queue with daemon-built evidence; local commands still require explicit confirmation.
+
 ## [1.2.0] - 2026-09-30
 
 ### System Agent

@@ -173,3 +173,9 @@ Inspect the plan's task and folder before dispatching it.
 - Pi's project-trust feature is not a sandbox. Terminal-only handoff and its
   disabled shell tool reduce risk but do not confine its read/write tools to
   the chosen folder. Use the direct local command path for sensitive work.
+
+### Review a selected security finding
+
+**Send to local agent review** on a finding or pattern submits the selected flag IDs to local Ollama. The daemon builds a bounded, masked summary of recorded file, process, timestamp, destination, and credential-owner metadata. It does not read the `.env` contents into the chat. **Inspect file details** shows variable names only for supported small `.env` files; values and ambiguous multiline content are withheld. The recommendation appears in the Agent review queue and links back to the finding. Review and run locally requires a separate command confirmation; save a plan for later delegation to a harness when needed.
+
+For a suspected stale `.env`, inspect variable names and consumer references without printing values before approving removal. Ordinary startup reads and cloud/CDN traffic are correlations, not proof that secret bytes left the machine.

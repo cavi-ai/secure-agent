@@ -121,6 +121,8 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 	c.deltaHub = deltaHub
 	tagger.SetOnTagged(reattributeUntaggedFlags(st, deltaHub, time.Now))
 	correlator.SetOnRepeat(foldFlagRepeat(st, deltaHub))
+	correlator.SetOpenFlagChecker(func(id string) bool { f, ok := st.GetFlag(id); return ok && !f.Acknowledged })
+	correlator.RestoreOpenReadFlags(st.QueryFlags(store.FlagFilter{Rule: "sensitive-read-then-connect", Unacted: true, Limit: 1024}))
 	// postureHook is armed once the API server exists (it owns posture).
 	postureHook := &postureHookHolder{}
 
@@ -572,6 +574,16 @@ func repairStoredRows(st *store.Store) {
 // acknowledged.
 func reclassifyReadFlags(st *store.Store, cl sensitive.Classifier) int {
 	open := st.QueryFlags(store.FlagFilter{Rule: "sensitive-read-then-connect", Unacted: true, Limit: math.MaxInt32})
+	var weak []string
+	for _, f := range open {
+		if f.Severity == 3 && correlate.StoredReadConnectSeverity(f) == 2 {
+			weak = append(weak, f.ID)
+		}
+	}
+	if n := st.ReclassifyReadConnectSeverity(weak); n > 0 {
+		st.PutAudit(store.AuditEntry{Action: "flag-severity-reclassify", Rule: "sensitive-read-then-connect", Detail: fmt.Sprintf("%d retained findings changed to review severity: recorded evidence does not establish a read followed by a direct or descendant connection", n)})
+	}
+
 	ids := correlate.StaleReadFlagIDs(open, cl)
 	if len(ids) == 0 {
 		return 0

@@ -84,7 +84,7 @@ func TestDispositionPrecedence(t *testing.T) {
 	}{
 		{"acknowledged beats benign", model.Flag{Rule: "tcc-tamper", Severity: 3, Acknowledged: true, Advisor: benign(0.93)}, "acknowledged", "Reviewed", "Agent modified macOS privacy permissions (TCC)"},
 		{"benign 0.93 sev 3", model.Flag{Severity: 3, Advisor: benign(0.93)}, "benign-likely", "Likely benign (advisor 93 %)", "It read its own config."},
-		{"benign 0.60 sev 3", model.Flag{Rule: "sensitive-read-then-connect", Severity: 3, Advisor: benign(0.60)}, "critical", "Act now", "Agent read a secret, then connected out"},
+		{"benign 0.60 sev 3", model.Flag{Rule: "sensitive-read-then-connect", Severity: 3, Advisor: benign(0.60)}, "critical", "Act now", "Sensitive file read near an outside connection"},
 		{"suspicious sev 2", model.Flag{Rule: "keychain-access", Severity: 2, Advisor: &model.AdvisorVerdict{Assessment: "suspicious", Confidence: 0.9}}, "warning", "Needs a look", "Agent touched the keychain"},
 		{"nil advisor sev 3", model.Flag{Rule: "proxy-secret-leak", Severity: 3}, "critical", "Act now", "Secret leaving in agent traffic"},
 	}
@@ -361,11 +361,11 @@ func TestExplainActions(t *testing.T) {
 		{"read-then-connect, live pid, incident, advisor allow-host",
 			model.Flag{ID: "with-incident", Rule: "sensitive-read-then-connect", Severity: 3, PID: 4242, Agent: "claude", SessionID: "s1",
 				Evidence: []model.EvidenceItem{envRead, conn("api.example.com:443"), conn("cdn.example.net:443")}, Advisor: adv("allow-host")},
-			[]string{"allow-host", "allow-host", "allow-path", "mute-rule-host", "open-incident", "dismiss", "kill"}, "allow-host"},
+			[]string{"inspect-file", "allow-host", "allow-host", "allow-path", "mute-rule-host", "open-incident", "dismiss", "kill"}, "allow-host"},
 		{"read-then-connect, IPv6 host cannot be muted, dead pid, advisor rotate",
 			model.Flag{ID: "r2", Rule: "sensitive-read-then-connect", Severity: 3, PID: 999, Agent: "claude",
 				Evidence: []model.EvidenceItem{envRead, conn("2606:4700:20::681a:4a4:443")}, Advisor: adv("rotate-credentials")},
-			[]string{"allow-host", "allow-path", "dismiss"}, ""},
+			[]string{"inspect-file", "allow-host", "allow-path", "dismiss"}, ""},
 		{"keychain-access, advisor mute",
 			model.Flag{ID: "k1", Rule: "keychain-access", Severity: 1, PID: 999, Agent: "claude",
 				Evidence: []model.EvidenceItem{{Kind: "keychain", Label: home + "/Library/Keychains/login.keychain-db"}}, Advisor: adv("mute-rule")},
@@ -413,12 +413,12 @@ func TestExplainActions(t *testing.T) {
 		t.Fatal(err)
 	}
 	ex := a.explainFlag(cases[0].f, false)
-	want := []string{"allow-host", "allow-path", "mute-rule-host", "open-incident", "dismiss", "kill"}
+	want := []string{"inspect-file", "allow-host", "allow-path", "mute-rule-host", "open-incident", "dismiss", "kill"}
 	if got := actionIDs(ex); !reflect.DeepEqual(got, want) {
 		t.Fatalf("after allowlisting api.example.com: actions = %v, want %v", got, want)
 	}
-	if ex.Actions[0].Body["host"] != "cdn.example.net" {
-		t.Fatalf("remaining allow-host targets %v, want cdn.example.net", ex.Actions[0].Body)
+	if actionByID(ex.Actions, "allow-host").Body["host"] != "cdn.example.net" {
+		t.Fatalf("remaining allow-host targets %v, want cdn.example.net", actionByID(ex.Actions, "allow-host").Body)
 	}
 	pathAction := actionByID(ex.Actions, "allow-path")
 	if pathAction == nil {

@@ -93,7 +93,7 @@ func TestPostureCriticalFlagDrivesState(t *testing.T) {
 	if p.State != "critical" || p.NeedsYou != 1 {
 		t.Fatalf("posture = %+v, want critical/1", p)
 	}
-	if p.Items[0].Title != "Agent read a secret, then connected out" {
+	if p.Items[0].Title != "Sensitive file read near an outside connection" {
 		t.Fatalf("title = %q, want human phrasing", p.Items[0].Title)
 	}
 	if p.Summary == "" {

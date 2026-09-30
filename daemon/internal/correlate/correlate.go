@@ -96,6 +96,7 @@ type Correlator struct {
 	folded        map[string]foldedFlag
 	repeats       []flagRepeat
 	onRepeat      func(flagID string, at time.Time)
+	isOpenFlag    func(string) bool
 	ownerUseCount int
 	isExpected    func(keys []string, at time.Time) bool
 	expectedCount int

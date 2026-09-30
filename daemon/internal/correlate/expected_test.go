@@ -12,11 +12,11 @@ import (
 func TestExpectStorePersistsAndMatchesEveryKey(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "expected.json")
 	s := NewExpectStore(path)
-	p, err := s.Add(ExpectedPattern{Agent: "claude", Reader: "gh", Path: "/u/.config/gh/hosts.yml", Dest: "Cloudflare", CreatedAt: time.Unix(1, 0).UTC()})
-	if err != nil || p.Key != "claude|gh|/u/.config/gh/hosts.yml|Cloudflare" {
+	p, err := s.Add(ExpectedPattern{Agent: "claude", Reader: "gh", Path: "/u/.config/gh/hosts.yml", Dest: "2606:4700::6812:105d", CreatedAt: time.Unix(1, 0).UTC()})
+	if err != nil || p.Key != "claude|gh|/u/.config/gh/hosts.yml|2606:4700::6812:105d" {
 		t.Fatalf("add = %+v, %v", p, err)
 	}
-	if again, _ := s.Add(ExpectedPattern{Agent: "claude", Reader: "gh", Path: "/u/.config/gh/hosts.yml", Dest: "Cloudflare"}); !again.CreatedAt.Equal(p.CreatedAt) {
+	if again, _ := s.Add(ExpectedPattern{Agent: "claude", Reader: "gh", Path: "/u/.config/gh/hosts.yml", Dest: "2606:4700::6812:105d"}); !again.CreatedAt.Equal(p.CreatedAt) {
 		t.Fatal("adding a stored pattern replaced it")
 	}
 	at := time.Unix(100, 0)
@@ -58,7 +58,7 @@ func TestExpectedPatternIsCountedNotFlagged(t *testing.T) {
 	store := NewExpectStore(filepath.Join(t.TempDir(), "expected.json"))
 	c.SetExpected(store.Match)
 	hosts := homePath(t, ".config/gh/hosts.yml")
-	if _, err := store.Add(ExpectedPattern{Agent: "cursor", Reader: "gh", Path: hosts, Dest: "Cloudflare"}); err != nil {
+	if _, err := store.Add(ExpectedPattern{Agent: "cursor", Reader: "gh", Path: hosts, Dest: "2606:4700::6812:105d"}); err != nil {
 		t.Fatal(err)
 	}
 	// The tagger names the family after cursor-agent (pid 200).
