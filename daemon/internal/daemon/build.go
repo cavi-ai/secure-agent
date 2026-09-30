@@ -111,6 +111,9 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 
 	repairStoredRows(st)
 	reclassifyReadFlags(st, classifier)
+	if n := st.RejudgeRecords(correlator.SensitiveFile); n > 0 {
+		log.Printf("store: cleared the record mark on %d file rows that are not secret reads", n)
+	}
 
 	// Typed deltas: SSE clients patch state from these; /snapshot is for
 	// initial load and reconciliation only.

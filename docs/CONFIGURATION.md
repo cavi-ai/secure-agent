@@ -129,7 +129,7 @@ net_sample_interval_ms: 2000
 ### `retention` (Object)
 Time-based event retention, per kind. Socket churn (`conn-open`/`conn-close`) ages out in hours so it cannot evict the security record; all other kinds keep days. A row-count cap remains as a backstop.
 
-Each kind also has a row cap. `file-open`, `file-delete` and `exec` arrive at hundreds per second under build load, so their cap keeps only minutes of rows. The security record (an event that raised a flag, or a file event on a sensitive path) stays past the cap for the full retention, up to 20,000 rows per kind.
+Each kind also has a row cap. `file-open`, `file-write`, `file-delete` and `exec` arrive faster than any fixed cap holds for a day under build load, so their cap keeps minutes to hours of rows. The security record (an event that raised a flag, or a file event that counts as a secret read) stays past the cap for the full retention, up to 20,000 rows per kind. A keychain file counts only when a byte-copy tool (`cp`, `cat`, `dd`, `tar`, `curl`, …) opened it; the system trust store never counts. At start, rows marked under an older rule lose the mark unless they are a stored flag's own event.
 
 ```yaml
 retention:

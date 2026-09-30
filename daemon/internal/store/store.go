@@ -754,20 +754,88 @@ func (s *Store) pruneEventsLocked() {
 // agent reading a sensitive path in a loop; time retention bounds them first.
 var recordBudget = 20000
 
-// ringKinds arrive at hundreds per second under build load (measured: file
-// opens 356–1,300/s, exec 35/s, file deletes 39/s), so their newest budget
-// rows cover minutes, not a day. Only their record rows keep days.
+// ringKinds arrive faster than any fixed budget holds for a day under build
+// load (measured: file opens 356–1,300/s, exec 35/s, file deletes 39/s, file
+// writes 150,000 rows in under 16 h), so their newest budget rows cover
+// minutes to hours. Only their record rows keep days.
 var ringKinds = map[int]bool{
 	int(event.KindFileOpen):   true,
+	int(event.KindFileWrite):  true,
 	int(event.KindFileDelete): true,
 	int(event.KindExec):       true,
+}
+
+// RejudgeRecords clears the record mark on stored file rows that keep no
+// longer counts, so rows marked under an older rule stop holding the record
+// budget. A row that shares its pid and second with a stored flag is the
+// flag's own event and stays marked. Returns how many rows it cleared.
+func (s *Store) RejudgeRecords(keep func(event.Event) bool) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	flagged := map[string]bool{}
+	frows, err := s.db.Query(`SELECT pid, COALESCE(ts,''), COALESCE(last_seen,'') FROM flags`)
+	if err != nil {
+		return 0
+	}
+	for frows.Next() {
+		var pid int32
+		var ts, last string
+		if frows.Scan(&pid, &ts, &last) == nil {
+			flagged[recordKey(pid, ts)] = true
+			flagged[recordKey(pid, last)] = true
+		}
+	}
+	frows.Close()
+	rows, err := s.db.Query(`SELECT id, kind, pid, COALESCE(exe_path,''), COALESCE(path,''), ts FROM events
+		WHERE record = 1 AND kind IN (?, ?, ?)`,
+		int(event.KindFileOpen), int(event.KindFileWrite), int(event.KindFileDelete))
+	if err != nil {
+		return 0
+	}
+	var clear []int64
+	for rows.Next() {
+		var id int64
+		var kind int
+		var e event.Event
+		var ts string
+		if rows.Scan(&id, &kind, &e.PID, &e.ExePath, &e.Path, &ts) != nil {
+			continue
+		}
+		e.Kind = event.Kind(kind)
+		if !keep(e) && !flagged[recordKey(e.PID, ts)] {
+			clear = append(clear, id)
+		}
+	}
+	rows.Close()
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0
+	}
+	n := 0
+	for _, id := range clear {
+		if _, err := tx.Exec(`UPDATE events SET record = 0 WHERE id = ?`, id); err == nil {
+			n++
+		}
+	}
+	if tx.Commit() != nil {
+		return 0
+	}
+	return n
+}
+
+// recordKey is a pid and a UTC timestamp truncated to the second.
+func recordKey(pid int32, ts string) string {
+	if len(ts) > 19 {
+		ts = ts[:19]
+	}
+	return fmt.Sprintf("%d|%s", pid, ts)
 }
 
 // kindBudgets: per-kind row budgets, the backstop under time retention. Each
 // kind is capped on its own, so a burst in one kind (file opens during a
 // build) can never evict another kind's rows (hook activity, connections,
 // transcript hits). Kinds outside ringKinds are sized to hold a day at the
-// measured rate (file writes 1.6/s, connection opens and closes 0.3/s).
+// measured rate (connection opens and closes 0.3/s).
 var kindBudgets = map[int]int{
 	int(event.KindFileOpen):      40000,
 	int(event.KindFileWrite):     150000,
