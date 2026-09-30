@@ -116,10 +116,10 @@ func TestReadConnectSeverityTracksCausalStrength(t *testing.T) {
 	base := time.Unix(1_700_000_000, 0)
 	secret := homePath(t, ".aws/credentials")
 	for _, tc := range []struct {
-		name string
-		kind event.Kind
+		name              string
+		kind              event.Kind
 		reader, connector int32
-		severity int
+		severity          int
 	}{
 		{"same process", event.KindFileOpen, 201, 201, 3},
 		{"descendant process", event.KindFileOpen, 201, 202, 3},
