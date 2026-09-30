@@ -81,6 +81,8 @@ jobs:
         run: bash packaging/test/test_sign_identity.sh
       - name: install status unit tests
         run: bash packaging/test/test_install_status.sh
+      - name: live acceptance unit tests
+        run: python3 packaging/test/test_live_acceptance.py
 
   linux:
     name: Linux CGO=0 build + vet + test

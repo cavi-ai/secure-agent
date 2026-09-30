@@ -119,7 +119,9 @@ fi
 
 # ---- 3. Turn ratio vs human prompts ----
 # v1 passed on "turns > 0". v2 compares turns against the floor count of
-# human prompts in Claude transcripts touched in the same window. Both sides
+# human prompts in Claude transcripts touched in the same window. Only Claude
+# sessions contribute turns; Cursor and other harnesses have separate prompts.
+# Both sides
 # are scoped to the CURRENT daemon's uptime (capped at 16h): files already
 # known to the tailer are seeded to EOF at boot, so their pre-boot prompts
 # can never produce turns — a wider prompt window only measures the previous
@@ -129,16 +131,17 @@ win_s="$uptime_s"
 [ "$win_s" -gt 57600 ] && win_s=57600
 prompt_minutes=$(( (win_s + 59) / 60 ))
 boot_epoch=$(( $(date +%s) - uptime_s ))
-turns="$(q "select count(*) from events where kind = 13 and datetime(ts) > datetime('now', '-' || $win_s || ' seconds');")"
+prompt_epoch=$(( $(date +%s) - win_s ))
+turns="$(q "select count(*) from events e join sessions s on s.id = e.session_id where e.kind = 13 and s.harness = 'claude' and datetime(e.ts) > datetime('now', '-' || $win_s || ' seconds');")"
 prompts=0
 claude_dir="$HOME/.claude/projects"
 if [ -d "$claude_dir" ]; then
   # File mtime is only a pre-filter: a transcript touched after boot still
   # holds pre-boot prompt lines, and the daemon seeds files to EOF at boot —
   # those records can never produce turns. The floor counts only prompt
-  # records timestamped at/after the daemon's boot.
+  # records timestamped inside the same capped window as the turn query.
   prompts=$(find "$claude_dir" -name '*.jsonl' -mmin -"$prompt_minutes" -print0 2>/dev/null |
-    xargs -0 -n 32 env BOOT_EPOCH="$boot_epoch" python3 -c '
+    xargs -0 -n 32 env BOOT_EPOCH="$prompt_epoch" python3 -c '
 import json,sys,fileinput,datetime,os
 boot=datetime.datetime.fromtimestamp(int(os.environ["BOOT_EPOCH"]), datetime.timezone.utc)
 seen=0
