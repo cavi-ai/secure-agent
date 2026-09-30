@@ -260,6 +260,8 @@ def main():
         dom_clutteradvise = dump_dom(chrome, tmp, "?tab=worktrees&clutteradvise")
         # The Agent tab is served under the daemon's CSP like the console.
         dom_agent = dump_dom(chrome, tmp, "?tab=agent", origin)
+        dom_agentworkspace = dump_dom(chrome, tmp, "?tab=agent&agentworkspace", origin, window_size=(1280, 900))
+        dom_agentworkspace_mobile = dump_dom(chrome, tmp, "?tab=agent&agentworkspace", origin, window_size=(390, 844))
         dom_agentoff = dump_dom(chrome, tmp, "?tab=agent&agentoff", origin)
         dom_agentchat = dump_dom(chrome, tmp, "?tab=agent&agentchat", origin)
         dom_agentlocal = dump_dom(chrome, tmp, "?tab=agent&agentlocal", origin)
@@ -1352,18 +1354,23 @@ def main():
         # --- patterns: a repeating finding is one card ---
         pat_attn = dom_pattern.split('id="attention-center"', 1)[-1].split('id="security-findings-grid"', 1)[0]
         pat_cards = re.findall(r'<article class="finding pattern-card [^"]*" data-pattern-key="([^"]+)">(.*?)</article>', pat_attn, re.S)
+        # Covered flags are intentionally clickable inside the disclosure;
+        # only a separate top-level flag card would be a duplicate.
+        pat_attn_standalone = re.sub(r'<article class="finding pattern-card [^"]*"[^>]*>.*?</article>', '', pat_attn, flags=re.S)
         check("patterns: Attention shows the storm as one pattern card with its count, summary, 24 bars and open count",
               len(pat_cards) == 1 and "323×" in pat_cards[0][1]
               and "codex touched the login keychain 323 times" in pat_cards[0][1]
               and len(re.findall(r'<i class="h\d"></i>', pat_cards[0][1])) == 24
               and '<b class="pattern-open">323 open</b>' in pat_cards[0][1]
-              and 'data-id="flag-6"' not in pat_attn and 'data-id="flag-7"' not in pat_attn,
+              and 'data-id="flag-6"' not in pat_attn_standalone and 'data-id="flag-7"' not in pat_attn_standalone
+              and all(f'data-action="open-flag" data-id="{fid}"' in pat_cards[0][1] for fid in ("flag-6", "flag-7")),
               f"cards={len(pat_cards)}")
         pat_flags = dom_pattern.split('id="flags-list"', 1)[-1].split('id="incidents-container"', 1)[0]
+        pat_standalone = re.sub(r'<article class="finding pattern-card [^"]*"[^>]*>.*?</article>', '', pat_flags, flags=re.S)
         check("patterns: the Flags list leads with the pattern and has no card for a covered flag",
               'data-pattern-key="codex|keychain-access|' in pat_flags
               and pat_flags.index('data-pattern-key=') < pat_flags.index('class="flag-card')
-              and not any(f'data-id="{fid}"' in pat_flags or f'data-flag-id="{fid}"' in pat_flags for fid in ("flag-6", "flag-7"))
+              and not any(f'data-id="{fid}"' in pat_standalone or f'data-flag-id="{fid}"' in pat_standalone for fid in ("flag-6", "flag-7"))
               and "(PID 40844)" not in pat_flags and "(PID 51364)" not in pat_flags
               and 'data-id="flag-3"' in pat_flags)
         pat_reqs = pre(dom_patternact, "mock-requests")
@@ -1587,6 +1594,12 @@ def main():
             return agent_block(dom_text).count(f'class="{cls}')
 
         ag = agent_block(dom_agent)
+        for viewport, workspace_dom in [("desktop", dom_agentworkspace), ("mobile", dom_agentworkspace_mobile)]:
+            receipt = re.search(r'data-agent-workspace="([^"]+)"', workspace_dom)
+            checks = json.loads(html.unescape(receipt.group(1))) if receipt else {}
+            check(f"agent workspace ({viewport}): interaction receipt was produced", bool(checks))
+            for name, result in checks.items():
+                check(f"agent workspace ({viewport}): {name}", result is True)
         check("agent: the tab opens with the conversation, plans, runs and the model state",
               'class="tab-btn active" data-tab="agent"' in dom_agent
               and agent_count(dom_agent, "agent-msg ") == 5 and ag.count('class="agent-plan" data-plan=') == 2

@@ -1118,6 +1118,31 @@ document.addEventListener('DOMContentLoaded', () => {
   const agentWorkdirInput = document.getElementById('agent-workdir');
   const agentHandoffInput = document.getElementById('agent-handoff-input');
   const agentHandoffWorkdir = document.getElementById('agent-handoff-workdir');
+  let agentActivePane = '';
+  function setAgentPanel(pane, toggle = false) {
+    if (pane && !['queue', 'history', 'tools'].includes(pane)) return;
+    if (toggle && pane === agentActivePane) pane = '';
+    const previous = agentActivePane;
+    agentActivePane = pane;
+    const side = document.getElementById('agent-side');
+    if (!side) return;
+    side.hidden = !pane;
+    document.getElementById('agent-workspace').classList.toggle('has-inspector', !!pane);
+    side.querySelectorAll('[data-agent-pane]').forEach(el => { el.hidden = el.dataset.agentPane !== pane; });
+    document.querySelectorAll('[data-action="agent-panel"]').forEach(el => {
+      el.setAttribute('aria-expanded', String(el.dataset.panel === pane));
+    });
+    const title = document.getElementById('agent-panel-title');
+    if (pane) {
+      title.textContent = ({ queue: 'Review queue', history: 'History', tools: 'Tools' })[pane];
+      title.focus({ preventScroll: true });
+    } else if (previous) {
+      document.querySelector(`[data-action="agent-panel"][data-panel="${previous}"]`)?.focus({ preventScroll: true });
+    }
+  }
+  document.getElementById('agent-side')?.addEventListener('keydown', e => {
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setAgentPanel(''); }
+  });
   try { if (agentWorkdirInput) agentWorkdirInput.value = sessionStorage.getItem('sa.agent-workdir') || ''; } catch { /* private mode */ }
   async function agentFetch(path, opts = {}) {
     const init = { timeoutMs: AGENT_TIMEOUT_MS, method: opts.method || 'GET' };
@@ -1175,39 +1200,41 @@ document.addEventListener('DOMContentLoaded', () => {
     const enabled = !!(st && st.enabled);
     const stateEl = document.getElementById('agent-state');
     if (stateEl) stateEl.textContent = agentState.error || agentStateText(st);
-    const analyzeBtn = document.getElementById('agent-analyze');
-    if (analyzeBtn) {
-      analyzeBtn.disabled = !enabled || !!(st && st.reason) || agentBusy();
-      analyzeBtn.title = !enabled ? 'Enable the local system agent in Settings' : (st && st.reason) || (agentBusy() ? 'The agent is already answering' : '');
-    }
+    const unavailable = !enabled || !!(st && st.reason) || agentBusy();
+    document.getElementById('agent-workspace').dataset.agentReady = String(enabled && st.reachable && !st.reason);
     if (agentComposer) {
       agentComposer.classList.toggle('off', !enabled);
       agentComposer.querySelectorAll('textarea, select, input, button').forEach(el => { el.disabled = !enabled; });
+      document.getElementById('agent-send').disabled = unavailable;
     }
+    document.querySelectorAll('.agent-quick').forEach(el => { el.disabled = unavailable; });
+    const analyzeBtn = document.getElementById('agent-analyze');
+    if (analyzeBtn) analyzeBtn.title = !enabled ? 'Enable the local system agent in Settings' : (st && st.reason) || (agentBusy() ? 'The agent is already working' : 'Review recorded flags and actions with local Ollama');
     const thread = document.getElementById('agent-thread');
     if (thread && st && !enabled) {
       if (thread._saEmpty !== 'off') { thread.innerHTML = agentOffHTML(); thread._saEmpty = 'off'; }
     } else if (thread) {
       const items = agentThreadItems(agentState.chat, st);
+      const follow = agentState.lastCount === 0 || thread.scrollHeight - thread.scrollTop - thread.clientHeight < 80;
       patchList(thread, items, { key: i => i.key, html: i => i.html, empty: agentEmptyThreadHTML(st) });
       if (items.length !== agentState.lastCount) {
         agentState.lastCount = items.length;
-        thread.scrollTop = thread.scrollHeight;
+        if (follow) thread.scrollTop = thread.scrollHeight;
       }
     }
     const plans = agentState.plans;
-    const recommendations = (agentState.recommendations || []).filter(m => m.review_state !== 'dismissed');
+    const recommendations = agentPendingRecommendations(agentState.recommendations);
     const recommendationsEl = document.getElementById('agent-recommendations');
     if (recommendationsEl && agentState.recommendations) {
       patchList(recommendationsEl, recommendations, { key: m => m.id, html: m => agentRecommendationHTML(m, st),
-        empty: '<div class="empty"><span>No recommendations queued. Analyze recent activity to review recorded flags and actions with local Ollama.</span></div>' });
+        empty: '<div class="agent-queue-empty"><svg class="icon"><use href="#i-shield"/></svg><h4>No actions waiting</h4><p>Choose Analyze activity below the conversation to turn recorded flags and actions into recommendations.</p></div>' });
     }
     const recommendationsBadge = document.getElementById('badge-agent-recommendations');
     if (recommendationsBadge) recommendationsBadge.textContent = recommendations.filter(m => (m.review_state || 'pending') === 'pending').length;
     const plansEl = document.getElementById('agent-plans');
     if (plansEl && plans) {
       patchList(plansEl, plans, { key: p => p.id, html: p => agentPlanHTML(p, st),
-        empty: '<div class="empty"><span>No plans yet. A proposal whose harness cannot run now is saved here; Save as plan keeps any request for later.</span></div>' });
+        empty: '<p class="agent-history-empty">Saved handoff plans will appear here.</p>' });
     }
     const badge = document.getElementById('badge-agent-plans');
     if (badge) badge.textContent = plans ? plans.length : 0;
@@ -1215,7 +1242,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (runsEl && agentState.runs) {
       const now = Date.now();
       patchList(runsEl, agentState.runs, { key: r => r.id, html: r => agentRunHTML(r, st, now),
-        empty: '<div class="empty"><span>No dispatches yet. Run a plan headless or open it in a terminal.</span></div>' });
+        empty: '<p class="agent-history-empty">Completed and running commands will appear here.</p>' });
     }
     const hEl = document.getElementById('agent-harnesses');
     if (hEl) hEl.innerHTML = agentHarnessesHTML(st);
@@ -1223,6 +1250,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (sEl) sEl.innerHTML = agentSkillsHTML(st);
   }
   window.sendAgentMessage = async function() {
+    if (agentBusy() || !agentState.status?.enabled || agentState.status.reason) return;
     const text = agentInput ? agentInput.value.trim() : '';
     if (!text) return;
     try {
@@ -1247,6 +1275,8 @@ document.addEventListener('DOMContentLoaded', () => {
         body: { harness: agentHarnessSelect.value, mode: 'terminal', workdir, task: text } });
       agentHandoffInput.value = '';
       showToast(`Saved as plan #${res.plan.id} — dispatch it from Plans`, 'success');
+      setAgentPanel('history');
+      document.getElementById('agent-plans-panel').open = true;
       loadAgent(['plans']);
     } catch (err) {
       showToast('Not saved: ' + (err.message || err), 'danger');
@@ -1263,12 +1293,14 @@ document.addEventListener('DOMContentLoaded', () => {
     try {
       const res = await agentFetch('/agent/actions', { method: 'POST', body: { message_id: messageId } });
       showToast(res.run.status === 'running' ? 'Local command is running; result appears under Runs' : 'Local command opened in Terminal', 'success');
+      setAgentPanel('history');
       loadAgent(['chat', 'runs', 'recommendations']);
     } catch (err) {
       showToast('Local command not run: ' + (err.message || err), 'danger');
     }
   };
   window.analyzeAgentActivity = async function() {
+    setAgentPanel('queue');
     try {
       await agentFetch('/agent/analyze', { method: 'POST' });
       showToast('Local Ollama is reviewing recorded activity; the result will appear in the queue', 'info');
@@ -1283,6 +1315,8 @@ document.addEventListener('DOMContentLoaded', () => {
     try {
       const res = await agentFetch('/agent/plans', { method: 'POST', body: { message_id: messageId, harness, workdir, mode: 'terminal' } });
       showToast(`Saved as plan #${res.plan.id}; no harness was started`, 'success');
+      setAgentPanel('history');
+      document.getElementById('agent-plans-panel').open = true;
       loadAgent(['recommendations', 'plans']);
     } catch (err) { showToast('Plan not saved: ' + (err.message || err), 'danger'); }
   };
@@ -1324,6 +1358,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const said = { running: `${label} is running headless — its answer shows under Runs`, opened: `${label} opened in Terminal`,
         manual: 'Run the command under Runs in a terminal' };
       showToast(said[run.status] || 'Dispatched', run.status === 'manual' ? 'info' : 'success');
+      setAgentPanel('history');
     } catch (err) {
       showToast('Not dispatched: ' + (err.message || err), 'danger');
     }
@@ -1425,6 +1460,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const r = resolveConsoleRoute(id);
     const from = activeTab;
     activeTab = r.tab;
+    document.body.classList.toggle('agent-page', activeTab === 'agent');
     if (r.tab === 'sessions') activeSub = r.sub;
     document.querySelectorAll('.tab-btn').forEach(b => {
       const on = b.dataset.tab === activeTab;
@@ -4024,6 +4060,22 @@ document.addEventListener('DOMContentLoaded', () => {
         e.preventDefault();
         loadAgent();
         break;
+      case 'agent-panel':
+        e.preventDefault();
+        setAgentPanel(d.panel, true);
+        break;
+      case 'agent-close-panel':
+        e.preventDefault();
+        setAgentPanel('');
+        break;
+      case 'agent-quick': {
+        e.preventDefault();
+        const prompt = agentQuickPrompt(d.command);
+        if (!prompt || !agentInput || !agentState.status?.enabled || agentState.status.reason || agentBusy()) break;
+        agentInput.value = [agentInput.value.trim(), prompt].filter(Boolean).join('\n\n').slice(0, 8000);
+        agentInput.focus();
+        break;
+      }
       case 'agent-analyze':
         e.preventDefault();
         window.analyzeAgentActivity();

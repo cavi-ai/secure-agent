@@ -18,6 +18,22 @@ const { agentStateText, agentOffHTML, agentMessageHTML, agentThreadItems, agentP
   agentHarnessesHTML, agentSkillsHTML, agentHarnessOptionsHTML, agentDispatchMessage, agentEmptyThreadHTML, agentRecommendationHTML, resolveConsoleRoute, routeKey } = ctx;
 
 const XSS = '<img src=x onerror=alert(1)>';
+
+test('quick commands prepare a reviewable prompt and reject unknown command ids', () => {
+  assert.match(ctx.agentQuickPrompt('ssh'), /SSH/);
+  assert.match(ctx.agentQuickPrompt('signing'), /signing/);
+  assert.equal(ctx.agentQuickPrompt('<script>'), '');
+  assert.equal(ctx.agentQuickPrompt('shell'), '');
+  assert.equal(ctx.agentQuickPrompt('toString'), '');
+  assert.equal(ctx.agentQuickPrompt('__proto__'), '');
+});
+
+test('the review queue contains only pending recommendations, never executed or saved work', () => {
+  const rows = [{ id: 1 }, { id: 2, review_state: 'pending' },
+    { id: 3, review_state: 'saved' }, { id: 4, review_state: 'dismissed' },
+    { id: 5, review_state: 'executed' }, { id: 6, local_run_id: 8 }, { id: 7, plan_id: 9 }];
+  assert.deepEqual(Array.from(ctx.agentPendingRecommendations(rows), x => x.id), [1, 2]);
+});
 const status = () => ({
   enabled: true, endpoint: 'http://127.0.0.1:11434', reachable: true, ollama_version: '0.15.1',
   model: 'qwen3:latest', harness_model: 'qwen3-coder', models: ['qwen3:latest', 'qwen3-coder:latest'],

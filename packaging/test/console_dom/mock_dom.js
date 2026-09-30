@@ -641,6 +641,7 @@
     chatting: false, terminal: true, home: '/Users/dev'
   };
   data['/agent/skills'] = data['/agent/status'].skills.map(k => ({ ...k, keywords: [k.id], body: 'Rules\n- ' + k.id + ' body ' + AGENT_XSS }));
+  data['/agent/recommendations'] = [];
   data['/agent/chat'] = { chatting: false, messages: [
     { id: 1, ts: iso(600000), role: 'user', content: 'Set up SSH commit signing ' + AGENT_XSS, harness: 'codex', workdir: '/Users/dev/workspace/api-service' },
     { id: 2, ts: iso(590000), role: 'assistant', content: 'Signing needs your passphrase, so this runs in a terminal.', skills: ['signing', 'ssh'],
@@ -2442,7 +2443,7 @@
         const list = document.getElementById('flags-list');
         const cards = list ? list.querySelectorAll('.pattern-card') : [];
         const covered = cards.length === 1 && [...cards[0].querySelectorAll('.pattern-flag-list code')].some(c => c.textContent === 'flag-8');
-        const row = list && list.querySelector('[data-id="flag-8"], [data-flag-id="flag-8"]');
+        const row = list && list.querySelector('.flag-card [data-id="flag-8"], .finding:not(.pattern-card)[data-flag-id="flag-8"]');
         return `cards=${cards.length} covered=${covered ? 1 : 0} row=${row ? 1 : 0}`;
       };
       let mid = '';
@@ -2544,5 +2545,48 @@
   if (MODE.includes('allowpathact')) {
     setTimeout(() => openTab('findings'), 4000);
     setTimeout(() => document.querySelector('#flags-list .finding[data-flag-id="flag-2"] [data-action-id="allow-path"]')?.click(), 9000);
+  }
+  // Exercise the actual workspace controls without sending chat or commands.
+  if (MODE.includes('agentworkspace')) {
+    data['/agent/recommendations'] = [
+      { id: 901, ts: iso(60000), role: 'assistant', origin: 'analysis', review_state: 'pending', content: 'Review **SSH** configuration.', local_command: { command: 'ssh-add -l', workdir: '/Users/dev', mode: 'headless' } },
+      { id: 902, ts: iso(60000), role: 'assistant', origin: 'analysis', review_state: 'saved', plan_id: 2, content: 'Already saved.' }
+    ];
+    setTimeout(() => {
+      openTab('agent');
+      setTimeout(() => {
+        const checks = {};
+        const side = document.getElementById('agent-side');
+        const input = document.getElementById('agent-input');
+        const chat = document.getElementById('agent-chat');
+        const button = pane => document.querySelector(`[data-action="agent-panel"][data-panel="${pane}"]`);
+        checks.defaultChat = side.hidden && getComputedStyle(side).display === 'none' && getComputedStyle(chat).display !== 'none';
+        input.value = 'Keep this draft.';
+        const before = reqLog.join('\n');
+        document.querySelector('[data-action="agent-quick"][data-command="ssh"]').click();
+        checks.quickDraft = input.value.startsWith('Keep this draft.\n\nCheck my SSH setup.');
+        checks.noSend = reqLog.join('\n') === before;
+        button('tools').click();
+        checks.toolsOnly = !side.hidden && button('tools').getAttribute('aria-expanded') === 'true'
+          && !document.querySelector('[data-agent-pane="tools"]').hidden && document.querySelector('[data-agent-pane="queue"]').hidden;
+        checks.focus = document.activeElement.id === 'agent-panel-title';
+        document.getElementById('agent-panel-title').dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+        checks.escape = side.hidden && document.activeElement === button('tools');
+        button('queue').click();
+        checks.pendingOnly = document.querySelectorAll('#agent-recommendations .agent-recommendation').length === 1
+          && document.getElementById('badge-agent-recommendations').textContent === '1'
+          && !!document.querySelector('#agent-recommendations [data-action="agent-run-local"]');
+        button('history').click();
+        checks.history = !document.querySelector('[data-agent-pane="history"]').hidden && document.querySelector('[data-agent-pane="queue"]').hidden;
+        document.querySelector('[data-action="agent-close-panel"]').click();
+        checks.draftPreserved = input.value.startsWith('Keep this draft.') && input.value.includes('SSH');
+        checks.noOverflow = document.documentElement.scrollWidth <= innerWidth + 1;
+        checks.composerVisible = document.getElementById('agent-send').getBoundingClientRect().bottom <= innerHeight + 1;
+        document.querySelector('[data-action="goto-tab"][data-tab="home"].agent-posture-link').click();
+        checks.alertsReachable = document.querySelector('.tab-btn[data-tab="home"]').getAttribute('aria-selected') === 'true'
+          && getComputedStyle(document.querySelector('.statstrip')).display !== 'none';
+        document.body.dataset.agentWorkspace = JSON.stringify(checks);
+      }, 500);
+    }, 4000);
   }
 })();
