@@ -6,6 +6,9 @@ All notable changes to `secure-agent` are documented here. The format follows
 
 ## [Unreleased]
 
+### Settings
+- Combine local chat and analysis model controls under Secure Agent, retain separate enable controls, and restore the Providers sidebar icon.
+
 ### Security findings
 - Distinguish temporal and parent-process read/connect correlations from direct or descendant activity; cloud/CDN identity no longer claims to identify the receiving service.
 - Retain weak historical findings at review severity, fold unresolved repetitions across hours and restarts, and alert when stronger evidence appears.

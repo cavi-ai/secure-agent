@@ -69,8 +69,8 @@ As AI coding agents (Claude Code, Cursor, Codex, Antigravity, Pi, Qwen Code, ope
 - ⚙️ **Extensible YAML Rules & Allowlists**  
   Easily customize sensitive path patterns, agent binary matchers, vendor network allowlists (`anthropic.com`, `cursor.sh`, `openai.com`), and proxy settings.
 
-- 🤖 **System Agent: Sensitive Work on a Local Model (opt-in)**
-  Turn on **Settings → Local Agent**, then click **Ask Agent** in the menu bar popover. Chat goes directly to your own Ollama. For local work, the model proposes an exact shell command and folder; you review and confirm it before it runs, either headless or in Terminal for passphrases. Commands run with your account's file and network access. An optional **Harness handoff** section saves separate plans for Claude Code, Codex, OpenClaw, Hermes Agent, or Pi runner; it never changes where chat goes. Pi is terminal-only because it has no built-in sandbox. Messages and output are masked by the firewall; `/agent/*` routes refuse agent processes. See [`docs/SYSTEM_AGENT.md`](docs/SYSTEM_AGENT.md).
+- 🤖 **Secure Agent: Local Chat and Confirmed Actions (opt-in)**
+  Turn on **Settings → Secure Agent → Chat → Enable chat**, then click **Ask Agent** in the menu bar popover. Chat goes directly to your own Ollama. For local work, the model proposes an exact shell command and folder; you review and confirm it before it runs, either headless or in Terminal for passphrases. Commands run with your account's file and network access. An optional **Harness handoff** section saves separate plans for Claude Code, Codex, OpenClaw, Hermes Agent, or Pi runner; it never changes where chat goes. Pi is terminal-only because it has no built-in sandbox. Messages and output are masked by the firewall; `/agent/*` routes refuse agent processes. See [`docs/SYSTEM_AGENT.md`](docs/SYSTEM_AGENT.md).
 
 - 🔔 **Noise-Controlled Alerts, With Real Recourse**  
   Only **severity-3 criticals page you** by default (confirmed secret leaks, direct read-then-connect activity, TCC tampering, keychain CLI execs); warnings queue silently in the popover and console. A secret file read and later connection by unrelated sibling processes in one agent family remains a severity-2 finding for review, because timing alone does not show that the reader sent the bytes. Model-visible tool reads remain critical. Routine keychain-DB file opens are informational (severity 1) — legitimate tooling touches them constantly, so they never page unless you opt in. Every noisy class has a working **"Dismiss this flag class"** (rule-level mute, reversible from Settings → Decisions), and Settings → Decisions / the console bell menu offer per-rule **Default / Always / Never** overrides (`/notify/rules`) shared by both UIs.
@@ -233,7 +233,7 @@ firewall:
     - { id: aws-key, type: cloud-key, re: 'AKIA[0-9A-Z]{16}', mode: block }  # this rule now blocks
 ```
 
-**Route agents through the proxy** (opt-in, scoped to your shell — no keychain or system-trust changes). The daemon writes a snippet to `~/.config/secure-agent/agent-env.sh`; source it where you launch agents (or use **Settings → Local Agent → Agent traffic inspection**):
+**Route agents through the proxy** (opt-in, scoped to your shell — no keychain or system-trust changes). The daemon writes a snippet to `~/.config/secure-agent/agent-env.sh`; source it where you launch agents (or use **Settings → Secure Agent → Agent traffic inspection**):
 
 ```bash
 source ~/.config/secure-agent/agent-env.sh
@@ -340,10 +340,10 @@ advisor:
   timeout_ms: 8000                   # per triage call; plans and notes you ask for get at least 5 minutes
 ```
 
-### 🤖 System agent
+### 🤖 Secure Agent chat
 
 ```yaml
-# Opt-in: Settings → Local Agent. Chat and confirmed local commands use
+# Opt-in: Settings → Secure Agent. Chat and confirmed local commands use
 # Ollama directly; optional harness handoff is separate. See docs/SYSTEM_AGENT.md.
 system_agent:
   enabled: false

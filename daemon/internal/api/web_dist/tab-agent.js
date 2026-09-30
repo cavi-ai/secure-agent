@@ -42,9 +42,9 @@ function agentStateText(status) {
 // agentOffHTML: what the tab shows while system_agent.enabled is false.
 function agentOffHTML() {
   return `<div class="agent-off">
-    <h3>The system agent is off</h3>
+    <h3>Secure Agent chat is off</h3>
     <p>Chat directly with your local Ollama agent. It can propose an exact local command for your review; nothing runs until you confirm it. Harness handoff is a separate, optional section.</p>
-    <p>Open the Secure Agent menu bar app, then Settings → Local Agent and turn on local Agent chat. Return here to start a conversation.</p>
+    <p>Open the Secure Agent menu bar app, then Settings → Secure Agent → Chat and turn on Enable chat. Return here to start a conversation.</p>
     <p>For a headless install, add this to <code>~/.config/secure-agent/config.yaml</code>; the daemon applies it within seconds:</p>
     <pre class="agent-snippet">${escapeHTML(AGENT_CONFIG_SNIPPET)}</pre>
     <div><button type="button" class="btn btn-ghost btn-sm" data-action="agent-copy" data-text="${escapeHTML(AGENT_CONFIG_SNIPPET)}"><svg class="icon"><use href="#i-copy"/></svg><span>Copy</span></button></div>

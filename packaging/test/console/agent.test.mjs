@@ -63,6 +63,8 @@ test('agentStateText: loading, off, Ollama down, a reason, ready', () => {
 
 test('agentOffHTML: says how to turn it on and offers the snippet to copy', () => {
   const html = agentOffHTML();
+  assert.match(html, /Secure Agent chat is off/);
+  assert.match(html, /Settings → Secure Agent → Chat/);
   assert.match(html, /system_agent:\n  enabled: true/);
   assert.match(html, /data-action="agent-copy" data-text="system_agent:/);
   assert.match(html, /~\/\.config\/secure-agent\/config\.yaml/);

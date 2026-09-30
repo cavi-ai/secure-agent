@@ -1647,7 +1647,7 @@ def main():
               ag.count('badge badge-ok">ready</span>') == 2 and 'data-action="agent-skill" data-skill="signing"' in ag)
         ago = agent_block(dom_agentoff)
         check("agent: off, the tab says how to turn it on and the composer is disabled",
-              'The system agent is off' in ago and 'system_agent:\n  enabled: true' in ago
+              'Secure Agent chat is off' in ago and 'system_agent:\n  enabled: true' in ago
               and '<textarea id="agent-input"' in ago and ago.split('<textarea id="agent-input"', 1)[1].split('>', 1)[0].count('disabled') == 1)
         agc = agent_block(dom_agentchat)
         check("agent: a message sent from the composer gets a direct local command proposal",

@@ -265,7 +265,7 @@ public final class SetupManager: ObservableObject {
             try fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
             try updated.write(toFile: configPath, atomically: true, encoding: .utf8)
             advisorEnabled = enabled
-            advisorNote = "Advisor " + (enabled ? "enabled" : "disabled") + " — applied live (daemon hot-reloads config)."
+            advisorNote = "Automatic analysis " + (enabled ? "enabled" : "disabled") + " — applied live (daemon hot-reloads config)."
         } catch {
             report(error)
         }
@@ -330,7 +330,7 @@ public final class SetupManager: ObservableObject {
             try fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
             try updated.write(toFile: configPath, atomically: true, encoding: .utf8)
             advisorEnabled = true
-            advisorNote = "Advisor configured (\(mode.rawValue)) — applied live (daemon hot-reloads config)."
+            advisorNote = "Analysis model configured (\(mode.rawValue)) — applied live (daemon hot-reloads config)."
         } catch {
             report(error)
         }
