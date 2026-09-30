@@ -6,6 +6,8 @@ All notable changes to `secure-agent` are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-09-30
+
 ### System Agent
 - Agent workspace centers the conversation, with editable quick-command drafts and an on-demand sidebar for the review queue, history, and tools. Narrow layouts preserve the draft and keep the composer visible.
 - Analyze activity turns findings and recent behavior into recommendations that can be reviewed, explicitly approved for local execution, or saved for later delegation.
@@ -15,6 +17,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Local commands and harness handoffs use private task workspaces and task-scoped `TMPDIR`. Temporary scripts, configurations, answers, and files created inside the workspace are deleted on exit; startup reclaims crash leftovers while preserving live Terminal tasks. Requested outputs and redacted stored history remain intact.
 
 ### Fixed
+- Live acceptance compares Claude turns with Claude prompts in the same capped time window; other harnesses no longer cause false turn-ratio failures.
 - Local agent persistence: failed message, run, or plan writes stop dispatch before execution; aborted dispatches close their recorded runs. Stale message updates cannot reopen claimed commands or reviewed recommendations.
 - Secret masking removes complete private-key envelopes, including unterminated keys. Headless output is masked before selecting its tail; oversized captures and answer files are withheld instead of exposing fragments.
 - Agent chat retention now bounds ordinary messages while preserving pending recommendations.
