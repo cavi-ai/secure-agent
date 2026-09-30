@@ -6,6 +6,8 @@ All notable changes to `secure-agent` are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-09-30
+
 ### System Agent
 - Agent workspace centers the conversation, with editable quick-command drafts and an on-demand sidebar for the review queue, history, and tools. Narrow layouts preserve the draft and keep the composer visible.
 - Analyze activity turns findings and recent behavior into recommendations that can be reviewed, explicitly approved for local execution, or saved for later delegation.
