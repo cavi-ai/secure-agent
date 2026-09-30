@@ -59,7 +59,9 @@ This document provides a detailed overview of the internal architecture of `secu
 
 ## 1. Go Telemetry Daemon (`daemon/`)
 
-By default the daemon (`secure-agentd`) runs as a child process of the menu bar app: it starts when Secure Agent launches and stops when the app quits (the daemon also self-terminates if it is orphaned). The app creates its status item before setup work and claims a per-user instance lock before starting the daemon. If another app copy is running, the new copy offers an explicit replacement choice instead of starting a second daemon against the same socket and console port. For a headless node — a fleet or CI machine with no GUI login — `secure-agent service install` writes a plain launchd LaunchAgent (`RunAtLoad`, **no** `KeepAlive`; the daemon's own supervisor restarts collectors, and launchd respawning the whole process would fight the menubar over the socket), giving it a GUI-independent lifetime. Run either the app or the service, not both. It collects OS system telemetry without kernel extensions using modern macOS APIs.
+By default the daemon (`secure-agentd`) runs as a child process of the macOS app: it starts when Secure Agent launches and stops when the app quits (the daemon also self-terminates if it is orphaned). The app creates its status item before setup work and claims a per-user instance lock before starting the daemon. It also keeps a Dock icon and opens Settings on launch, so the user has a visible way to access and quit the app if macOS hides its menu bar item; a status item's accessibility coordinates alone cannot prove it is visible. If another app copy is running, the new copy offers an explicit replacement choice instead of starting a second daemon against the same socket and console port. For a headless node — a fleet or CI machine with no GUI login — `secure-agent service install` writes a plain launchd LaunchAgent (`RunAtLoad`, **no** `KeepAlive`; the daemon's own supervisor restarts collectors, and launchd respawning the whole process would fight the app over the socket), giving it a GUI-independent lifetime. Run either the app or the service, not both. It collects OS system telemetry without kernel extensions using modern macOS APIs.
+
+The UI bundle uses `com.cavi-ai.secure-agent.ui` for Launch Services and menu bar registration. Its application preferences continue to use the established `com.cavi-ai.secure-agent` suite; config, database, sockets and the instance lock keep their existing paths. The instance guard checks both UI identities during upgrades. The collector, daemon and CLI retain their existing signing identities. This separates the UI from stale menu bar associations without resetting its application preferences or changing service identities. macOS privacy and Login Items approvals remain managed through the native Setup flow.
 
 ### Collectors
 
@@ -110,7 +112,7 @@ By default the daemon (`secure-agentd`) runs as a child process of the menu bar 
 
 The correlator evaluates incoming event streams against a sliding time window (default 30 seconds):
 
-- **Rule: `sensitive-read-then-connect`**: When a tagged agent process reads a file matching sensitive path criteria, and within the time window opens a network connection to a host outside that agent's `vendor_allowlist`, a high-severity security flag is raised.
+- **Rule: `sensitive-read-then-connect`**: A secret read and connection in the same process tree, or a model-visible agent tool read followed by a family connection, raises a severity-3 flag. A file read and later connection in unrelated sibling processes of the same agent family remains a severity-2 finding: useful for review, but weaker evidence of transfer. The owner-use and operator-expected-pattern checks still apply before a flag is raised.
 - **Rule: `keychain-access`**: Detects direct access attempts targeting macOS Keychain files or `security` CLI invocations.
 
 ---

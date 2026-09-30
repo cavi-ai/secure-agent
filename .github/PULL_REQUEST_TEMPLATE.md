@@ -14,6 +14,6 @@
 
 - [ ] `go test ./...` passes cleanly
 - [ ] `python3 plugin/hooks/test_secret_guard.py` and other python hook tests pass
-- [ ] `swift test --package-path menubar` passes
+- [ ] `bash packaging/swift_macos.sh test --package-path menubar` passes
 - [ ] `./packaging/test/e2e_smoke.sh` passes
 - [ ] No secrets, tokens, or private keys are exposed or committed

@@ -45,7 +45,16 @@ func (s *Store) putSysAgentRow(table string, id int64, ts time.Time, v any, max 
 		log.Printf("store: insert %s: %v", table, err)
 		return 0
 	}
-	_, _ = s.db.Exec(`DELETE FROM `+table+` WHERE id NOT IN (SELECT id FROM `+table+` ORDER BY id DESC LIMIT ?)`, max)
+	if table == "sysagent_messages" {
+		// Keep pending recommendations even when ordinary chat exceeds its
+		// rolling history. SendAnalysis caps pending items at 100.
+		_, _ = s.db.Exec(`DELETE FROM sysagent_messages WHERE id NOT IN
+			(SELECT id FROM sysagent_messages ORDER BY id DESC LIMIT ?)
+			AND NOT (json_extract(body, '$.origin') = 'analysis'
+			AND COALESCE(json_extract(body, '$.review_state'), 'pending') = 'pending')`, max)
+	} else {
+		_, _ = s.db.Exec(`DELETE FROM `+table+` WHERE id NOT IN (SELECT id FROM `+table+` ORDER BY id DESC LIMIT ?)`, max)
+	}
 	id, _ = res.LastInsertId()
 	return id
 }
@@ -141,9 +150,68 @@ func (s *Store) SysAgentMessages(limit int) []model.SysAgentMessage {
 func (s *Store) ClearSysAgentMessages() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, err := s.db.Exec(`DELETE FROM sysagent_messages`); err != nil {
+	if _, err := s.db.Exec(`DELETE FROM sysagent_messages WHERE COALESCE(json_extract(body, '$.origin'), '') != 'analysis'
+		OR COALESCE(json_extract(body, '$.role'), '') != 'assistant'`); err != nil {
 		log.Printf("store: clear sysagent_messages: %v", err)
 	}
+}
+
+// SysAgentRecommendations is the durable review queue backed by analysis
+// replies. The command stays on its assistant message for one-time claiming.
+func (s *Store) SysAgentRecommendations(limit int) []model.SysAgentMessage {
+	out := []model.SysAgentMessage{}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rows, err := s.db.Query(`SELECT id, body FROM sysagent_messages
+		WHERE json_extract(body, '$.origin') = 'analysis' AND json_extract(body, '$.role') = 'assistant'
+		ORDER BY CASE WHEN COALESCE(json_extract(body, '$.review_state'), 'pending') = 'pending' THEN 0 ELSE 1 END, id DESC LIMIT ?`, normalizeLimit(limit))
+	if err != nil {
+		log.Printf("store: recommendations: %v", err)
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int64
+		var body string
+		if rows.Scan(&id, &body) == nil {
+			var m model.SysAgentMessage
+			if json.Unmarshal([]byte(body), &m) == nil {
+				m.ID = id
+				out = append(out, m)
+			}
+		}
+	}
+	return out
+}
+
+func (s *Store) PendingSysAgentRecommendations() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var n int
+	_ = s.db.QueryRow(`SELECT COUNT(*) FROM sysagent_messages WHERE json_extract(body, '$.origin') = 'analysis'
+		AND json_extract(body, '$.role') = 'assistant'
+		AND COALESCE(json_extract(body, '$.review_state'), 'pending') = 'pending'`).Scan(&n)
+	return n
+}
+
+// SetSysAgentRecommendationState accepts only queue transitions, never
+// arbitrary message edits from the browser.
+func (s *Store) SetSysAgentRecommendationState(id int64, state string) bool {
+	if state != "saved" && state != "dismissed" && state != "approved" {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	res, err := s.db.Exec(`UPDATE sysagent_messages SET body = json_set(body, '$.review_state', ?)
+		WHERE id = ? AND json_extract(body, '$.origin') = 'analysis'
+		AND json_extract(body, '$.role') = 'assistant'
+		AND COALESCE(json_extract(body, '$.review_state'), 'pending') = 'pending'`, state, id)
+	if err != nil {
+		log.Printf("store: recommendation %d: %v", id, err)
+		return false
+	}
+	n, _ := res.RowsAffected()
+	return n == 1
 }
 
 // PutSysAgentPlan inserts a plan (ID 0) or rewrites it, and returns its id.

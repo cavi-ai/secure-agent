@@ -654,6 +654,17 @@
             </form>
           </section>
           <div class="col" id="agent-side">
+            <section class="panel" id="agent-review-panel">
+              <div class="panel-head">
+                <h2><svg class="icon"><use href="#i-shield"/></svg>Security action queue</h2>
+                <span class="badge" id="badge-agent-recommendations">0</span>
+                <button type="button" class="btn btn-primary btn-sm" id="agent-analyze" data-action="agent-analyze">Analyze recent activity</button>
+              </div>
+              <div class="panel-body">
+                <p class="agent-review-intro">Local Ollama reviews recorded flags, evidence, and operator actions. Recommendations wait here for your review. Nothing runs or reaches a harness until you approve that step.</p>
+                <div id="agent-recommendations"><div class="loading">Loading…</div></div>
+              </div>
+            </section>
             <section class="panel" id="agent-handoff-panel">
               <div class="panel-head"><h2><svg class="icon"><use href="#i-server"/></svg>Harness handoff</h2></div>
               <div class="panel-body agent-handoff">

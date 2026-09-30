@@ -1108,9 +1108,9 @@ document.addEventListener('DOMContentLoaded', () => {
   const AGENT_POLL_MS = 1500;
   const AGENT_POLL_LIMIT = 1200;
   const AGENT_TIMEOUT_MS = 15000;
-  const agentState = { status: null, chat: null, plans: null, runs: null, skills: null, error: '', polls: 0, lastCount: 0 };
+  const agentState = { status: null, chat: null, plans: null, runs: null, recommendations: null, skills: null, error: '', polls: 0, lastCount: 0 };
   // Literal paths: the proxy's console allow-list test reads them from here.
-  const AGENT_PATHS = { status: '/agent/status', chat: '/agent/chat', plans: '/agent/plans', runs: '/agent/runs' };
+  const AGENT_PATHS = { status: '/agent/status', chat: '/agent/chat', plans: '/agent/plans', runs: '/agent/runs', recommendations: '/agent/recommendations' };
   let agentPollTimer = null;
   const agentComposer = document.getElementById('agent-composer');
   const agentInput = document.getElementById('agent-input');
@@ -1135,7 +1135,7 @@ document.addEventListener('DOMContentLoaded', () => {
     return !!((agentState.chat && agentState.chat.chatting) || (agentState.runs || []).some(r => r.status === 'running'));
   }
   async function loadAgent(parts) {
-    const want = parts || ['status', 'chat', 'plans', 'runs'];
+    const want = parts || ['status', 'chat', 'plans', 'runs', 'recommendations'];
     const wasBusy = agentBusy();
     try {
       const got = await Promise.all(want.map(p => agentFetch(AGENT_PATHS[p])));
@@ -1151,7 +1151,7 @@ document.addEventListener('DOMContentLoaded', () => {
   function followAgent(wasBusy) {
     if (!agentBusy()) {
       agentState.polls = 0;
-      if (wasBusy) loadAgent(['chat', 'plans', 'runs']);
+      if (wasBusy) loadAgent(['chat', 'plans', 'runs', 'recommendations']);
       return;
     }
     if (agentPollTimer || activeTab !== 'agent' || agentState.polls >= AGENT_POLL_LIMIT) return;
@@ -1175,6 +1175,11 @@ document.addEventListener('DOMContentLoaded', () => {
     const enabled = !!(st && st.enabled);
     const stateEl = document.getElementById('agent-state');
     if (stateEl) stateEl.textContent = agentState.error || agentStateText(st);
+    const analyzeBtn = document.getElementById('agent-analyze');
+    if (analyzeBtn) {
+      analyzeBtn.disabled = !enabled || !!(st && st.reason) || agentBusy();
+      analyzeBtn.title = !enabled ? 'Enable the local system agent in Settings' : (st && st.reason) || (agentBusy() ? 'The agent is already answering' : '');
+    }
     if (agentComposer) {
       agentComposer.classList.toggle('off', !enabled);
       agentComposer.querySelectorAll('textarea, select, input, button').forEach(el => { el.disabled = !enabled; });
@@ -1191,6 +1196,14 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     }
     const plans = agentState.plans;
+    const recommendations = (agentState.recommendations || []).filter(m => m.review_state !== 'dismissed');
+    const recommendationsEl = document.getElementById('agent-recommendations');
+    if (recommendationsEl && agentState.recommendations) {
+      patchList(recommendationsEl, recommendations, { key: m => m.id, html: m => agentRecommendationHTML(m, st),
+        empty: '<div class="empty"><span>No recommendations queued. Analyze recent activity to review recorded flags and actions with local Ollama.</span></div>' });
+    }
+    const recommendationsBadge = document.getElementById('badge-agent-recommendations');
+    if (recommendationsBadge) recommendationsBadge.textContent = recommendations.filter(m => (m.review_state || 'pending') === 'pending').length;
     const plansEl = document.getElementById('agent-plans');
     if (plansEl && plans) {
       patchList(plansEl, plans, { key: p => p.id, html: p => agentPlanHTML(p, st),
@@ -1240,7 +1253,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   };
   window.runLocalAgentAction = async function(messageId) {
-    const m = ((agentState.chat && agentState.chat.messages) || []).find(x => x.id === messageId);
+    const m = [...((agentState.chat && agentState.chat.messages) || []), ...(agentState.recommendations || [])].find(x => x.id === messageId);
     if (!m || !m.local_command || m.local_run_id) return;
     const action = m.local_command;
     const mode = action.mode === 'terminal' ? 'in Terminal' : 'headless';
@@ -1250,10 +1263,34 @@ document.addEventListener('DOMContentLoaded', () => {
     try {
       const res = await agentFetch('/agent/actions', { method: 'POST', body: { message_id: messageId } });
       showToast(res.run.status === 'running' ? 'Local command is running; result appears under Runs' : 'Local command opened in Terminal', 'success');
-      loadAgent(['chat', 'runs']);
+      loadAgent(['chat', 'runs', 'recommendations']);
     } catch (err) {
       showToast('Local command not run: ' + (err.message || err), 'danger');
     }
+  };
+  window.analyzeAgentActivity = async function() {
+    try {
+      await agentFetch('/agent/analyze', { method: 'POST' });
+      showToast('Local Ollama is reviewing recorded activity; the result will appear in the queue', 'info');
+      loadAgent(['chat']);
+    } catch (err) { showToast('Analysis not started: ' + (err.message || err), 'danger'); }
+  };
+  window.saveAgentRecommendation = async function(messageId) {
+    const card = document.querySelector(`#agent-recommendations [data-message="${Number(messageId)}"]`);
+    const harness = card && card.querySelector('.agent-recommendation-harness')?.value;
+    const workdir = card && card.querySelector('.agent-recommendation-workdir')?.value.trim() || (agentState.status && agentState.status.home);
+    if (!harness || !workdir) { showToast('Choose a harness and folder for the saved plan', 'info'); return; }
+    try {
+      const res = await agentFetch('/agent/plans', { method: 'POST', body: { message_id: messageId, harness, workdir, mode: 'terminal' } });
+      showToast(`Saved as plan #${res.plan.id}; no harness was started`, 'success');
+      loadAgent(['recommendations', 'plans']);
+    } catch (err) { showToast('Plan not saved: ' + (err.message || err), 'danger'); }
+  };
+  window.dismissAgentRecommendation = async function(messageId) {
+    try {
+      await agentFetch('/agent/recommendations', { method: 'POST', body: { message_id: messageId, state: 'dismissed' } });
+      loadAgent(['recommendations']);
+    } catch (err) { showToast('Recommendation not dismissed: ' + (err.message || err), 'danger'); }
   };
   window.saveAgentProposal = async function(messageId) {
     try {
@@ -2283,6 +2320,9 @@ document.addEventListener('DOMContentLoaded', () => {
       if (f && advisorSig(f.advisor) !== p.baseline) {
         pendingRetriage.delete(id);
         showToast(`Advisor verdict updated for ${f.rule}`, 'success');
+        if (drawerMode === 'flag' && drawerFlag === id && drawer && !drawer.hidden) {
+          window.openFlagDetail(id, { back: drawerBack });
+        }
       } else if (Date.now() - p.at > RETRIAGE_TIMEOUT_MS) {
         pendingRetriage.delete(id);
         showToast(health && health.circuit_open
@@ -2330,6 +2370,7 @@ document.addEventListener('DOMContentLoaded', () => {
       });
       if (!res.ok) throw new Error(await res.text());
       showToast('Flag dismissed — the rule keeps watching', 'info');
+      if (drawerMode === 'flag' && drawerFlag === id) closeDrawer();
       cardNote('', '', 'flags-list', 'dismissed');
       fetchTelemetry();
     } catch (err) {
@@ -2507,9 +2548,10 @@ document.addEventListener('DOMContentLoaded', () => {
   // Copy button) and the uninspected-egress drill-down (row actions, no
   // Copy). drawerMode tracks which one is open so action handlers can
   // re-render the right content after a mutation.
-  let drawerMode = null; // 'incident' | 'endpoint' | 'file' | 'plan' | 'uninspected' | 'family' | 'policy' | null
+  let drawerMode = null; // 'incident' | 'endpoint' | 'file' | 'flag' | 'plan' | 'uninspected' | 'family' | 'policy' | null
   let drawerFile = '';
   let drawerPlan = '';
+  let drawerFlag = '';
 
   let drawerIncident = '';
   let drawerEndpoint = null;
@@ -2696,6 +2738,43 @@ document.addEventListener('DOMContentLoaded', () => {
     openDrawer({ title: 'What to do', icon: 'doc', onClose: () => { drawerMode = null; }, back });
     drawerBody.innerHTML = `<div class="plan-slot" data-plan-subject="${escapeHTML(subject)}"><div class="loading-spinner">Loading the playbook…</div></div>`;
     loadPlanSlot(subject);
+  };
+
+  window.openFlagDetail = async function(id, { back } = {}) {
+    if (!drawer) return;
+    drawerMode = 'flag';
+    drawerFlag = id;
+    if (btnDrawerCopy) btnDrawerCopy.hidden = true;
+    openDrawer({ title: 'Security flag', icon: 'alert', body: '<div class="loading-spinner">Loading flag evidence…</div>',
+      onClose: () => { if (drawerMode === 'flag') drawerMode = null; drawerFlag = ''; }, back });
+    const seq = drawerSeq;
+    try {
+      const res = await apiFetch(`/flags/${encodeURIComponent(id)}/explain`);
+      if (!res.ok) throw new Error((await res.text()).trim() || 'flag unavailable');
+      const f = await res.json();
+      if (seq !== drawerSeq) return;
+      // The drawer can open a flag outside the current telemetry window. Its
+      // served actions must still be available to the click handler now.
+      planFlagCache.set(f.id, f);
+      const subject = 'flag:' + f.id;
+      const evidence = (f.evidence || []).map(ev => `<li>${escapeHTML(typeof ev === 'string' ? ev : ev.text || (ev.sub ? `${ev.label || ''} (${ev.sub})` : ev.label || ''))}</li>`).join('');
+      const advisor = f.advisor ? `<p><b>Advisor:</b> ${escapeHTML(f.advisor.assessment || 'unrated')} · ${escapeHTML(f.advisor.rationale || '')}</p>` : '';
+      const reading = explainLines(f);
+      drawerTitle.textContent = f.title || ruleTitle(f.rule);
+      drawerBody.innerHTML = `<div class="panel-body flag-inspector">
+      <p>${escapeHTML(f.title || ruleTitle(f.rule))} · severity ${Number(f.severity) || 0} · ${escapeHTML(f.agent || 'unknown agent')}</p>
+      <dl class="finding-facts"><dt>Raised</dt><dd>${escapeHTML(new Date(f.ts).toLocaleString())}</dd><dt>Process</dt><dd>PID ${Number(f.pid) || 0}</dd>
+        <dt>Session</dt><dd>${escapeHTML(f.session_id || 'unknown')}</dd><dt>Workspace</dt><dd>${escapeHTML(f.workspace || 'unknown')}</dd><dt>Flag ID</dt><dd>${escapeHTML(f.id)}</dd></dl>
+      ${reading ? `<p class="finding-what">${escapeHTML(reading.what || '')}</p><p class="finding-verdict">${escapeHTML(reading.verdict || '')}</p>` : ''}
+      ${advisor}<h4>Recorded evidence</h4>${evidence ? `<ul class="plan-list">${evidence}</ul>` : '<p>No evidence rows were recorded for this flag.</p>'}
+      <div class="flag-actions-row">${explainActionsHTML(f)}${telemetryData.status && telemetryData.status.advisor_enabled ? `<button type="button" class="btn btn-ghost btn-sm" data-action="retriage" data-id="${escapeHTML(f.id)}">Re-run advisor</button>` : ''}
+        <button type="button" class="btn btn-ghost btn-sm" data-action="dismiss-flag" data-id="${escapeHTML(f.id)}">Dismiss flag</button></div>
+      <h4>What to do</h4><div class="plan-slot" data-plan-subject="${escapeHTML(subject)}"><div class="loading-spinner">Loading the playbook…</div></div>
+    </div>`;
+      loadPlanSlot(subject);
+    } catch (err) {
+      if (seq === drawerSeq) drawerBody.innerHTML = `<div class="empty"><span>Could not load this flag: ${escapeHTML(err.message || err)}</span></div>`;
+    }
   };
 
   // Deep link from the menubar: #ct=…&file=<path> opens that file's drawer.
@@ -3289,21 +3368,37 @@ document.addEventListener('DOMContentLoaded', () => {
           fetchTelemetry();
           return;
         }
+        if (drawerMode === 'flag' && drawerFlag === f.id) closeDrawer();
         showToast(`Allowlisted ${body.host} for ${body.agent}`, 'success');
         cardNote('', '', 'flags-list', 'allowlisted');
         fetchTelemetry();
         return;
       }
       case 'allow-path': {
+        const revertDrop = stageDropFlag(f.id);
         try {
           const res = await apiFetch(a.path, {
             method: a.method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
           });
           if (!res.ok) throw new Error(await res.text());
         } catch (err) {
+          revertDrop();
           showToast(`Failed to allow ${body.path}: ${err.message || err}`, 'danger');
           return;
         }
+        try {
+          const res = await apiFetch('/flags/acknowledge', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ flag_id: f.id })
+          });
+          if (!res.ok) throw new Error(await res.text());
+        } catch (err) {
+          revertDrop();
+          showToast(`Allowed ${body.path}, but the flag was not marked reviewed: ${err.message || err}`, 'danger');
+          fetchTelemetry();
+          return;
+        }
+        if (drawerMode === 'flag' && drawerFlag === f.id) closeDrawer();
         showToast(`Allowed ${body.path} for ${body.agent}`, 'success');
         fetchTelemetry();
         return;
@@ -3317,13 +3412,8 @@ document.addEventListener('DOMContentLoaded', () => {
   // and reads 0 open with its buttons disabled once none is left; those
   // flags leave the lists; the next snapshot reconciles the pattern.
   function stagePatternDone(key, submitted) {
-    return stage(['patterns', 'flags', 'flagsView'], ['flags', 'attention', 'chart-flags', 'status', 'tab-badges'], () => {
-      const p = (telemetryData.patterns || []).find(x => x.key === key);
-      const ids = new Set(submitted || (p && p.flag_ids) || []);
-      telemetryData.patterns = (telemetryData.patterns || []).map(x => x.key !== key ? x
-        : patternAfterDismiss(x, submitted ? submitted.length : x.unacked));
-      telemetryData.flags = (telemetryData.flags || []).filter(f => !ids.has(f.id));
-      telemetryData.flagsView = (telemetryData.flagsView || []).filter(f => !ids.has(f.id));
+    return stage(['patterns', 'flags', 'flagsView', 'posture'], ['flags', 'attention', 'chart-flags', 'status', 'tab-badges'], () => {
+      Object.assign(telemetryData, patternAfterOptimisticDismiss(telemetryData, key, submitted));
     });
   }
   window.patternAct = async function(key, actionId, host) {
@@ -3893,6 +3983,10 @@ document.addEventListener('DOMContentLoaded', () => {
       case 'retriage':
         window.retriageFlag(d.id);
         break;
+      case 'open-flag':
+        e.preventDefault();
+        window.openFlagDetail(d.id, { back: back() });
+        break;
       case 'open-uninspected':
         e.preventDefault();
         window.openUninspected({ back: back() });
@@ -3929,6 +4023,18 @@ document.addEventListener('DOMContentLoaded', () => {
       case 'agent-refresh':
         e.preventDefault();
         loadAgent();
+        break;
+      case 'agent-analyze':
+        e.preventDefault();
+        window.analyzeAgentActivity();
+        break;
+      case 'agent-save-recommendation':
+        e.preventDefault();
+        window.saveAgentRecommendation(Number(d.message));
+        break;
+      case 'agent-dismiss-recommendation':
+        e.preventDefault();
+        window.dismissAgentRecommendation(Number(d.message));
         break;
       case 'agent-clear':
         e.preventDefault();

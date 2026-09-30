@@ -147,7 +147,7 @@ public final class SetupManager: ObservableObject {
     /// Tests inject the service, defaults, plist check and pane opener;
     /// the app uses the defaults.
     init(esService: any ESServiceControl = SMAppService.daemon(plistName: SetupManager.esCollectorPlistName),
-         defaults: UserDefaults = .standard,
+         defaults: UserDefaults = AppPreferences.shared,
          plistPresent: (() -> Bool)? = nil,
          openPane: ((ESSettingsPane) -> Void)? = nil) {
         self.esService = esService

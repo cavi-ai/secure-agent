@@ -31,18 +31,18 @@ public final class OnboardingWindowController: NSObject, NSWindowDelegate {
     /// Auto-show the wizard at most once; afterwards it's only reachable
     /// via the "Setup & Permissions…" menu item.
     public func showOnceIfNeeded() {
-        guard !UserDefaults.standard.bool(forKey: "setupWizardDismissed") else { return }
+        guard !AppPreferences.shared.bool(forKey: "setupWizardDismissed") else { return }
         show()
     }
 
     public func close() {
-        UserDefaults.standard.set(true, forKey: "setupWizardDismissed")
+        AppPreferences.shared.set(true, forKey: "setupWizardDismissed")
         window?.close()
         window = nil
     }
 
     public func windowWillClose(_ notification: Notification) {
-        UserDefaults.standard.set(true, forKey: "setupWizardDismissed")
+        AppPreferences.shared.set(true, forKey: "setupWizardDismissed")
         window = nil
     }
 }

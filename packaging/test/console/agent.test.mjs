@@ -15,7 +15,7 @@ for (const f of ['lib.js', 'tab-agent.js']) {
   vm.runInContext(readFileSync(path.join(webDist, f), 'utf8'), ctx, { filename: f });
 }
 const { agentStateText, agentOffHTML, agentMessageHTML, agentThreadItems, agentPlanHTML, agentRunHTML, agentRunCommand,
-  agentHarnessesHTML, agentSkillsHTML, agentHarnessOptionsHTML, agentDispatchMessage, agentEmptyThreadHTML, resolveConsoleRoute, routeKey } = ctx;
+  agentHarnessesHTML, agentSkillsHTML, agentHarnessOptionsHTML, agentDispatchMessage, agentEmptyThreadHTML, agentRecommendationHTML, resolveConsoleRoute, routeKey } = ctx;
 
 const XSS = '<img src=x onerror=alert(1)>';
 const status = () => ({
@@ -65,6 +65,16 @@ test('agentMessageHTML: every role escapes its text; the operator turn shows its
   assert.match(reply, /data-skill="&quot;x"/);
 });
 
+test('agentMessageHTML: Ollama replies render readable Markdown while user text stays literal', () => {
+  const text = 'Hello.\n\n- **SSH** — set up `~/.ssh/config`\n- **Git** — verify identity';
+  const reply = agentMessageHTML({ id: 4, role: 'assistant', content: text }, status());
+  assert.match(reply, /<ul><li><strong>SSH<\/strong> — set up <code class="md-inline-code">~\/\.ssh\/config<\/code><\/li>/);
+  assert.ok(!reply.includes('**SSH**'));
+  const user = agentMessageHTML({ id: 5, role: 'user', content: text }, status());
+  assert.ok(user.includes('**SSH**'));
+  assert.ok(!user.includes('<ul>'));
+});
+
 test('local command is displayed exactly and cannot be changed by a click', () => {
   const m = { id: 21, role: 'assistant', content: 'Review this',
     local_command: { command: 'echo ' + XSS, mode: 'headless', workdir: '/tmp' } };
@@ -106,6 +116,22 @@ test('agentThreadItems: keyed by message id, a pending line while the model answ
   assert.equal(agentThreadItems({ messages: [], chatting: false }, status()).length, 0);
   assert.match(agentEmptyThreadHTML(status()), /Never paste a secret/);
   assert.match(agentEmptyThreadHTML({ enabled: true, reason: 'Ollama is not answering <x>' }), /Ollama is not answering &lt;x&gt;/);
+});
+
+test('analysis recommendations stay in the review queue and escape evidence and commands', () => {
+  const m = { id: 77, role: 'assistant', origin: 'analysis', review_state: 'pending',
+    ts: '2026-09-29T12:00:00Z', content: 'Check **this** ' + XSS, flag_ids: ['flag-1'],
+    local_command: { command: 'echo ' + XSS, mode: 'headless', workdir: '/tmp' } };
+  const html = agentRecommendationHTML(m, status());
+  assert.ok(!html.includes('<img'));
+  assert.match(html, /data-action="open-flag" data-id="flag-1"/);
+  assert.match(html, /data-action="agent-run-local" data-message="77"/);
+  assert.match(html, /data-action="agent-save-recommendation" data-message="77"/);
+  assert.match(html, /echo &lt;img/);
+  assert.deepEqual([...agentThreadItems({ messages: [m], chatting: false }, status()).map(x => x.key)], []);
+  const saved = agentRecommendationHTML({ ...m, review_state: 'saved', plan_id: 4 }, status());
+  assert.ok(!saved.includes('agent-run-local'));
+  assert.match(saved, /Saved as plan #4/);
 });
 
 test('agentPlanHTML: a plan that cannot run says why and its dispatch buttons are disabled', () => {

@@ -216,7 +216,10 @@ func (a *API) handleGuardPathAllow(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "path must be an absolute filesystem path", http.StatusBadRequest)
 			return
 		}
-		a.store.PutGuardPathAllow(store.GuardPathAllow{Agent: req.Agent, RuleID: req.RuleID, Path: req.Path})
+		if err := a.store.PutGuardPathAllow(store.GuardPathAllow{Agent: req.Agent, RuleID: req.RuleID, Path: req.Path}); err != nil {
+			http.Error(w, "could not save the file exception", http.StatusInternalServerError)
+			return
+		}
 		a.recordLabel(model.OperatorLabel{Kind: "file", Rule: req.RuleID, Agent: req.Agent, Pattern: req.Path, Label: "ok", Source: "allow-path"})
 		a.store.PutAudit(store.AuditEntry{
 			Action: "guard-path-allow", Rule: req.Agent + "/" + req.RuleID,

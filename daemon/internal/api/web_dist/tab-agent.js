@@ -37,9 +37,11 @@ function agentOffHTML() {
   </div>`;
 }
 
-// agentTextHTML: message text, escaped; line breaks survive through CSS.
-function agentTextHTML(text) {
-  return `<div class="agent-bubble">${escapeHTML(text || '')}</div>`;
+// User input stays literal. Model replies use the same escaped Markdown
+// renderer as incident reports; it never treats model-supplied HTML as DOM.
+function agentTextHTML(text, markdown = false) {
+  return `<div class="agent-bubble${markdown ? ' agent-bubble-markdown' : ''}">${markdown
+    ? parseMarkdownToHTML(text || '') : escapeHTML(text || '')}</div>`;
 }
 
 // A model reply can propose one exact local command. The server accepts only
@@ -56,6 +58,28 @@ function agentLocalCommandHTML(m) {
       ? `<span class="agent-saved">Started as run #${Number(m.local_run_id)}</span>`
       : `<button type="button" class="btn btn-primary btn-sm" data-action="agent-run-local" data-message="${Number(m.id)}">Review and run</button>`}</div>
   </div>`;
+}
+
+function agentRecommendationHTML(m, status) {
+  const state = m.review_state || 'pending';
+  const command = m.local_command;
+  const flags = (m.flag_ids || []).slice(0, 8).map(id => `<button type="button" class="link-btn" data-action="open-flag" data-id="${escapeHTML(id)}">${escapeHTML(id.slice(0, 12))}</button>`).join(', ');
+  const harnessOptions = agentHarnessOptionsHTML(status, '');
+  return `<article class="agent-recommendation" data-message="${Number(m.id)}">
+    <div class="agent-plan-head"><b>Activity analysis</b><span class="badge ${state === 'saved' ? 'badge-ok' : ''}">${escapeHTML(state)}</span></div>
+    <div class="agent-plan-meta">${escapeHTML(new Date(m.ts).toLocaleString())}${flags ? ` · Flags: ${flags}` : ''}</div>
+    ${agentTextHTML(m.content, true)}
+    ${command ? `<div class="agent-proposal agent-local-action"><b>Proposed local command · ${escapeHTML(command.mode)}</b><pre class="agent-run-output">${escapeHTML(command.command)}</pre><div class="agent-plan-meta">${escapeHTML(command.workdir)}</div></div>` : '<p class="agent-plan-reason">No executable command proposed. Review the suggested steps or save them for later delegation.</p>'}
+    <div class="agent-actions">
+      ${command && !m.local_run_id && state === 'pending' ? `<button type="button" class="btn btn-primary btn-sm" data-action="agent-run-local" data-message="${Number(m.id)}">Review and run locally</button>` : ''}
+      ${m.local_run_id ? `<span class="agent-saved">Started as run #${Number(m.local_run_id)}</span>` : ''}
+      ${m.plan_id ? `<span class="agent-saved">Saved as plan #${Number(m.plan_id)}</span>` : ''}
+      ${state === 'pending' ? `<label>Save for later delegation <select class="select select-sm agent-recommendation-harness">${harnessOptions}</select></label>
+        <input class="input agent-workdir agent-recommendation-workdir" type="text" aria-label="Folder for a future harness plan" placeholder="Folder (default: home)">
+        <button type="button" class="btn btn-ghost btn-sm" data-action="agent-save-recommendation" data-message="${Number(m.id)}">Save plan</button>
+        <button type="button" class="btn btn-ghost btn-sm" data-action="agent-dismiss-recommendation" data-message="${Number(m.id)}">Dismiss</button>` : ''}
+    </div>
+  </article>`;
 }
 
 // agentHarnessBlock: why a harness cannot be dispatched now ('' when it
@@ -108,13 +132,14 @@ function agentMessageHTML(m, status) {
   }
   const skills = (m.skills || []).length
     ? `<div class="agent-msg-meta">skills: ${m.skills.map(s => `<button type="button" class="link-btn" data-action="agent-skill" data-skill="${escapeHTML(s)}">${escapeHTML(s)}</button>`).join(', ')}</div>` : '';
-  return `<div class="agent-msg assistant">${agentTextHTML(m.content)}${skills}${agentLocalCommandHTML(m)}${agentProposalHTML(m, status)}</div>`;
+  return `<div class="agent-msg assistant">${agentTextHTML(m.content, true)}${skills}${agentLocalCommandHTML(m)}${agentProposalHTML(m, status)}</div>`;
 }
 
 // agentThreadItems: the chat as patchList items, with a pending line while
 // the model answers.
 function agentThreadItems(chat, status) {
-  const items = ((chat && chat.messages) || []).map(m => ({ key: 'm' + m.id, html: agentMessageHTML(m, status) }));
+  const items = ((chat && chat.messages) || []).filter(m => m.origin !== 'analysis')
+    .map(m => ({ key: 'm' + m.id, html: agentMessageHTML(m, status) }));
   if (chat && chat.chatting) {
     items.push({ key: 'pending', html: `<div class="agent-msg note agent-pending"><span>The local model is answering…</span></div>` });
   }

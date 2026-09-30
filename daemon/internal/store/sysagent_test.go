@@ -24,6 +24,52 @@ func TestClaimSysAgentActionIsDurableAndOneTime(t *testing.T) {
 	}
 }
 
+func TestAnalysisRecommendationQueueSurvivesChatClear(t *testing.T) {
+	s, err := Open("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	now := time.Now()
+	s.PutSysAgentMessage(model.SysAgentMessage{TS: now, Role: "user", Content: "ordinary"})
+	s.PutSysAgentMessage(model.SysAgentMessage{TS: now, Role: "user", Origin: "analysis", Content: "telemetry"})
+	id := s.PutSysAgentMessage(model.SysAgentMessage{TS: now, Role: "assistant", Origin: "analysis", ReviewState: "pending", FlagIDs: []string{"flag-a"}, Content: "Inspect flag-a"})
+	if got := s.SysAgentRecommendations(10); len(got) != 1 || got[0].ID != id || got[0].FlagIDs[0] != "flag-a" {
+		t.Fatalf("queue = %+v", got)
+	}
+	if s.SetSysAgentRecommendationState(id, "bogus") || s.SetSysAgentRecommendationState(id-1, "dismissed") {
+		t.Fatal("only a pending analysis reply can be reviewed")
+	}
+	s.ClearSysAgentMessages()
+	if got := s.SysAgentMessages(10); len(got) != 1 || got[0].ID != id {
+		t.Fatalf("chat clear lost queue or kept chat: %+v", got)
+	}
+	if !s.SetSysAgentRecommendationState(id, "saved") || s.SetSysAgentRecommendationState(id, "dismissed") {
+		t.Fatal("review must be one-time")
+	}
+	if got, ok := s.GetSysAgentMessage(id); !ok || got.ReviewState != "saved" {
+		t.Fatalf("review state = %+v", got)
+	}
+}
+
+func TestPendingRecommendationSurvivesChatRetention(t *testing.T) {
+	s, err := Open("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	old := s.PutSysAgentMessage(model.SysAgentMessage{TS: time.Now(), Role: "assistant", Origin: "analysis", ReviewState: "pending", Content: "review me"})
+	for i := 0; i < maxSysAgentMessages+10; i++ {
+		s.PutSysAgentMessage(model.SysAgentMessage{TS: time.Now(), Role: "user", Content: "ordinary chat"})
+	}
+	if s.PendingSysAgentRecommendations() != 1 {
+		t.Fatal("pending recommendation was lost")
+	}
+	if got := s.SysAgentRecommendations(1); len(got) != 1 || got[0].ID != old {
+		t.Fatalf("queue = %+v", got)
+	}
+}
+
 func TestSysAgentMessagesPlansRuns(t *testing.T) {
 	s, err := Open("", "")
 	if err != nil {

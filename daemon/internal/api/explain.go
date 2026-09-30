@@ -629,17 +629,17 @@ func (a *API) explainActions(f model.Flag, ex *model.FlagExplain, env *explainEn
 			}
 			acts = append(acts, model.ExplainAction{
 				ID: "allow-host", Label: allowHostLabel(name, eg.Host, eg.Org, agent),
-				Consequence: "Future connections from " + agent + " to " + eg.Host + " are trusted and stop being flagged.",
+				Consequence: "Future connections from " + agent + " to " + eg.Host + " are trusted and stop being flagged. This finding is marked reviewed.",
 				Method:      http.MethodPost, Path: "/allowlist",
 				Body: map[string]any{"agent": agent, "host": eg.Host},
 			})
 		}
 	}
 	if s := ex.Subject; s != nil && a.guardBroker != nil && guardTokenRE.MatchString(agent) && strings.HasPrefix(s.Path, "/") {
-		if rid := guardRuleForCategory[s.Category]; rid != "" {
+		if rid := guardRuleForCategory[s.Category]; rid != "" && !a.store.GuardPathAllowed(agent, rid, s.Path) {
 			acts = append(acts, model.ExplainAction{
 				ID: "allow-path", Label: "Always allow this file for " + agent,
-				Consequence: agent + " may open " + s.Display + " without a guard prompt; other files under the " + rid + " rule still ask.",
+				Consequence: agent + " may open " + s.Display + " without a guard prompt; other files under the " + rid + " rule still ask. This finding is marked reviewed; new suspicious behavior is still monitored.",
 				Method:      http.MethodPost, Path: "/guard/path-allow",
 				Body: map[string]any{"agent": agent, "rule_id": rid, "path": s.Path},
 			})

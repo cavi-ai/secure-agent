@@ -11,7 +11,9 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificat
     private var launchTask: Task<Void, Never>?
 
     public func applicationDidFinishLaunching(_ notification: Notification) {
-        NSApp.setActivationPolicy(.accessory)
+        // The Dock is the durable fallback control when macOS hides a status
+        // item. Monitoring must never depend on an unobservable AX frame.
+        NSApp.setActivationPolicy(.regular)
 
         // Put a usable menu bar control on screen before setup or daemon work.
         guard setupStatusItem() else {
@@ -25,6 +27,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificat
             return
         }
         setupPopover()
+        SettingsWindowController.shared.appState = state
         launchTask = Task { [weak self] in
             guard let self else { return }
             guard await AppInstanceGuard.shared.claimOrExplain() else {
@@ -32,41 +35,16 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificat
                 return
             }
             guard !Task.isCancelled else { return }
-            guard await waitForStatusItemPlacement() else {
-                if !Task.isCancelled {
-                    let alert = NSAlert()
-                    alert.messageText = "Secure Agent could not appear in the menu bar"
-                    alert.informativeText = "Monitoring was not started because macOS did not place the menu bar icon. Free menu bar space, then reopen Secure Agent."
-                    alert.addButton(withTitle: "OK")
-                    NSApp.activate(ignoringOtherApps: true)
-                    alert.runModal()
-                    NSApp.terminate(nil)
-                }
-                return
-            }
+            SettingsWindowController.shared.show()
             finishLaunching()
         }
     }
 
-    private func waitForStatusItemPlacement() async -> Bool {
-        for _ in 0..<100 {
-            if Self.statusItemIsOnMenuBar(statusItem.button?.window?.frame,
-                                          screens: NSScreen.screens.map(\.frame)) {
-                return true
-            }
-            if Task.isCancelled { return false }
-            try? await Task.sleep(for: .milliseconds(50))
-        }
-        return false
-    }
-
-    static func statusItemIsOnMenuBar(_ frame: NSRect?, screens: [NSRect]) -> Bool {
-        guard let frame, frame.height > 0 else { return false }
-        return screens.contains { screen in
-            frame.minX >= screen.minX && frame.maxX <= screen.maxX
-                && frame.minY >= screen.maxY - 80
-                && frame.maxY <= screen.maxY
-        }
+    public func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
+        // A status bar button may count as a visible window here; Dock clicks
+        // should still restore the Settings control surface after it closes.
+        SettingsWindowController.shared.show()
+        return true
     }
 
     private func finishLaunching() {
@@ -81,7 +59,6 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificat
         // the pane for each switch the user has to flip.
         SetupManager.shared.refreshESState()
 
-        SettingsWindowController.shared.appState = state
         state.onChange = { [weak self] in self?.updateStatusIcon() }
         state.onNewCriticalFlag = { [weak self] in self?.flashStatusBadge() }
         state.start()

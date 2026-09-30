@@ -17,6 +17,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 	"github.com/cavi-ai/secure-agent/daemon/internal/guard"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
+	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
 
 var updateGolden = flag.Bool("update-golden", false, "rewrite testdata golden files")
@@ -418,6 +419,18 @@ func TestExplainActions(t *testing.T) {
 	}
 	if ex.Actions[0].Body["host"] != "cdn.example.net" {
 		t.Fatalf("remaining allow-host targets %v, want cdn.example.net", ex.Actions[0].Body)
+	}
+	pathAction := actionByID(ex.Actions, "allow-path")
+	if pathAction == nil {
+		t.Fatal("expected a file exception action before approval")
+	}
+	if err := a.store.PutGuardPathAllow(store.GuardPathAllow{
+		Agent: pathAction.Body["agent"].(string), RuleID: pathAction.Body["rule_id"].(string), Path: pathAction.Body["path"].(string),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := actionByID(a.explainFlag(cases[0].f, false).Actions, "allow-path"); got != nil {
+		t.Fatalf("already approved file offered again: %+v", got)
 	}
 }
 

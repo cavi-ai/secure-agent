@@ -86,12 +86,4 @@ final class StatusTintTests: XCTestCase {
         XCTAssertNotNil(button.action)
     }
 
-    func testOffscreenStatusItemCannotAuthorizeDaemonStartup() {
-        let screen = NSRect(x: 0, y: 0, width: 2056, height: 1329)
-        XCTAssertFalse(AppDelegate.statusItemIsOnMenuBar(nil, screens: [screen]))
-        XCTAssertFalse(AppDelegate.statusItemIsOnMenuBar(
-            NSRect(x: 0, y: -20, width: 34, height: 22), screens: [screen]))
-        XCTAssertTrue(AppDelegate.statusItemIsOnMenuBar(
-            NSRect(x: 2022, y: 1307, width: 34, height: 22), screens: [screen]))
-    }
 }
