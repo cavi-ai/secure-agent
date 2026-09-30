@@ -736,6 +736,64 @@ func TestPruneCapsRecordRows(t *testing.T) {
 	}
 }
 
+// Rows marked under an older rule stop holding the record budget; a stored
+// flag's own event and rows of other kinds keep their mark.
+func TestRejudgeRecordsClearsRowsTheRuleNoLongerCounts(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "e.db"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	now := time.Now().UTC().Truncate(time.Second)
+	keychain := "/Users/x/Library/Keychains/login.keychain-db"
+	s.PutEvent(event.Event{Kind: event.KindFileOpen, PID: 1, TS: now, ExePath: "/usr/local/bin/node", Path: keychain, Record: true})
+	s.PutEvent(event.Event{Kind: event.KindFileOpen, PID: 2, TS: now, Path: "/Users/x/.ssh/id_rsa", Record: true})
+	s.PutEvent(event.Event{Kind: event.KindFileOpen, PID: 3, TS: now, ExePath: "/usr/local/bin/node", Path: keychain, Record: true})
+	s.PutFlag(model.Flag{ID: "f1", Rule: "keychain-access", PID: 3, TS: now.Add(200 * time.Millisecond)})
+	s.PutEvent(event.Event{Kind: event.KindFileWrite, PID: 4, TS: now, Path: keychain, Record: true})
+	s.PutEvent(event.Event{Kind: event.KindConnOpen, PID: 5, TS: now, RemoteHost: "evil.example.com", RemotePort: 443, Record: true})
+
+	keep := func(e event.Event) bool { return strings.Contains(e.Path, "/.ssh/") }
+	if n := s.RejudgeRecords(keep); n != 2 {
+		t.Fatalf("cleared = %d, want 2 (pid 1 open, pid 4 write)", n)
+	}
+	var pids []int
+	rows, err := s.db.Query(`SELECT pid FROM events WHERE record = 1 ORDER BY pid`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var p int
+		if err := rows.Scan(&p); err != nil {
+			t.Fatal(err)
+		}
+		pids = append(pids, p)
+	}
+	if !slices.Equal(pids, []int{2, 3, 5}) {
+		t.Fatalf("record rows = %v, want [2 3 5]: the ssh key read, the flag's own event, the connection", pids)
+	}
+	if n := s.RejudgeRecords(keep); n != 0 {
+		t.Fatalf("second pass cleared %d, want 0", n)
+	}
+}
+
+// File writes are a ring kind: their record rows keep days, their bulk rows
+// only the newest budget.
+func TestFileWriteIsARingKind(t *testing.T) {
+	s, err := Open("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+	s.PutEvent(event.Event{Kind: event.KindFileWrite, PID: 1, TS: time.Now(), Path: "/tmp/build/out.o"})
+	rep := s.RetentionReport()
+	if len(rep) != 1 || rep[0].Name != "file-write" || !rep[0].Ring {
+		t.Fatalf("report = %+v, want file-write as a ring kind", rep)
+	}
+}
+
 func countRecord(t *testing.T, s *Store, kind int) int {
 	t.Helper()
 	var n int

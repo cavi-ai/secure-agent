@@ -50,8 +50,13 @@ func TestSensitiveFile(t *testing.T) {
 		{event.Event{Kind: event.KindFileOpen, Path: "/Users/x/.ssh/id_ed25519"}, true},
 		{event.Event{Kind: event.KindFileWrite, Path: "/Users/x/project/.env"}, true},
 		{event.Event{Kind: event.KindFileDelete, Path: "/Users/x/.aws/credentials"}, true},
-		{event.Event{Kind: event.KindFileOpen, Path: "/Users/x/Library/Keychains/login.keychain-db"}, true},
-		{event.Event{Kind: event.KindFileOpen, Path: "/System/Library/Keychains/SystemTrustSettings.plist"}, false},
+		// A keychain file is a secret read only when a byte-copy tool opened
+		// it; any other open is a TLS client evaluating a certificate chain.
+		{event.Event{Kind: event.KindFileOpen, Path: "/Users/x/Library/Keychains/login.keychain-db", ExePath: "/bin/cp"}, true},
+		{event.Event{Kind: event.KindFileOpen, Path: "/Users/x/Library/Keychains/login.keychain-db", ExePath: "/usr/local/bin/node"}, false},
+		{event.Event{Kind: event.KindFileOpen, Path: "/Library/Keychains/System.keychain", ExePath: "/usr/local/bin/docker"}, false},
+		{event.Event{Kind: event.KindFileOpen, Path: "/Users/x/Library/Keychains/login.keychain-db"}, false},
+		{event.Event{Kind: event.KindFileOpen, Path: "/System/Library/Keychains/SystemTrustSettings.plist", ExePath: "/bin/cp"}, false},
 		{event.Event{Kind: event.KindFileOpen, Path: "/Users/x/project/node_modules/a/index.js"}, false},
 		{event.Event{Kind: event.KindPluginAction, Path: "/Users/x/project/.env"}, false},
 		{event.Event{Kind: event.KindExec, Path: "/Users/x/.ssh/id_rsa"}, false},

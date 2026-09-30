@@ -421,6 +421,11 @@ func TestDrainLoopMarksRecordRows(t *testing.T) {
 	b.Publish(event.Event{Kind: event.KindFileOpen, TS: now, PID: 500, Path: "/Users/x/project/main.go"})
 	b.Publish(event.Event{Kind: event.KindFileOpen, TS: now, PID: 500, Path: "/System/Library/Keychains/SystemTrustSettings.plist"})
 	b.Publish(event.Event{Kind: event.KindFileOpen, TS: now, PID: 500, Path: "/Users/x/.ssh/id_rsa"})
+	// A keychain open by a TLS client: the first raises keychain-access and
+	// is that flag's own event; the repeat inside the window raises nothing
+	// and is not a secret read, so it is not part of the record.
+	b.Publish(event.Event{Kind: event.KindFileOpen, TS: now, PID: 500, ExePath: "/usr/local/bin/node", Path: "/Users/x/Library/Keychains/login.keychain-db"})
+	b.Publish(event.Event{Kind: event.KindFileOpen, TS: now.Add(10 * time.Millisecond), PID: 500, ExePath: "/usr/local/bin/node", Path: "/Users/x/Library/Keychains/login.keychain-db"})
 	time.Sleep(50 * time.Millisecond)
 	b.Publish(event.Event{Kind: event.KindConnOpen, TS: now.Add(100 * time.Millisecond), PID: 500, RemoteHost: "evil.example.com", RemotePort: 443})
 	b.Publish(event.Event{Kind: event.KindConnOpen, TS: now.Add(200 * time.Millisecond), PID: 500, RemoteHost: "other.example.com", RemotePort: 443})
@@ -432,15 +437,19 @@ func TestDrainLoopMarksRecordRows(t *testing.T) {
 		t.Fatal("drain loop did not finish after bus close")
 	}
 
-	if flags := st.RecentFlags(10); len(flags) != 1 || flags[0].Rule != "sensitive-read-then-connect" {
-		t.Fatalf("flags = %v, want the one read-then-connect", flags)
+	rules := map[string]int{}
+	for _, f := range st.RecentFlags(10) {
+		rules[f.Rule]++
+	}
+	if rules["sensitive-read-then-connect"] != 1 || rules["keychain-access"] != 1 || len(rules) != 2 {
+		t.Fatalf("flag rules = %v, want one read-then-connect and one keychain-access", rules)
 	}
 	got := map[string][2]int{}
 	for _, r := range st.RetentionReport() {
 		got[r.Name] = [2]int{r.Rows, r.RecordRows}
 	}
-	if want := [2]int{3, 1}; got["file-open"] != want {
-		t.Errorf("file-open rows/record = %v, want %v (the ssh key read only)", got["file-open"], want)
+	if want := [2]int{5, 2}; got["file-open"] != want {
+		t.Errorf("file-open rows/record = %v, want %v (the ssh key read and the flagged keychain open)", got["file-open"], want)
 	}
 	if want := [2]int{2, 1}; got["conn-open"] != want {
 		t.Errorf("conn-open rows/record = %v, want %v (the flagged connect only)", got["conn-open"], want)
