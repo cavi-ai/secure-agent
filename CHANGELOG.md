@@ -16,53 +16,6 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Pi runner joins optional harness handoff in terminal mode only. Its model is pinned to the local Ollama in an isolated configuration; extensions, shell tool, context files, and online startup checks are disabled. Pi has no built-in sandbox, so its file tools still have the operator account's file access.
 - Local commands and harness handoffs use private task workspaces and task-scoped `TMPDIR`. Temporary scripts, configurations, answers, and files created inside the workspace are deleted on exit; startup reclaims crash leftovers while preserving live Terminal tasks. Requested outputs and redacted stored history remain intact.
 
-### Fixed
-- Live acceptance compares Claude turns with Claude prompts in the same capped time window; other harnesses no longer cause false turn-ratio failures.
-- Local agent persistence: failed message, run, or plan writes stop dispatch before execution; aborted dispatches close their recorded runs. Stale message updates cannot reopen claimed commands or reviewed recommendations.
-- Secret masking removes complete private-key envelopes, including unterminated keys. Headless output is masked before selecting its tail; oversized captures and answer files are withheld instead of exposing fragments.
-- Agent chat retention now bounds ordinary messages while preserving pending recommendations.
-- Menu bar: the UI has its own application identity, independent of the launcher, while preserving existing preferences and helper identities.
-- Console chat renders escaped Markdown with readable lists and code blocks; finding details open from individual flags, and dismissal stays stable during refreshes.
-- Guard approvals: Always allow resolves matching queued requests and removes them from the console queue.
-- Menu bar: startup creates the status item before setup work. When another app copy is running, the new build offers a clear replacement choice instead of starting a competing daemon on the same socket and console port.
-- Settings: a resizable sidebar groups security, monitoring, local AI, and general controls; direct Ollama chat and optional routing have their own pane rather than crowding App settings.
-- Menu bar: the status icon uses a colored bitmap shield with a white check, so the status bar cannot render it as a monochrome template; attention uses a yellow shield with a black mark.
-- Console Resources: the machine headroom explanation stays inside the available panel instead of being clipped.
-- System Agent: the menu bar has an Ask Agent entry, Settings can enable local Agent chat without editing YAML, and the console's off state points to that control.
-- System Agent: automatic model selection skips Ollama models marked embedding-only, and an explicitly selected non-chat model reports why it cannot run.
-- Doctor: repo-attribution coverage counts sessions inside Git workspaces, so desktop and home-directory sessions no longer produce a false failure.
-- Local model traffic: the system agent and advisor reject redirects so a local server cannot forward a chat prompt to another host.
-- Findings: a newly read secret or destination raises a new read-then-connect flag even when another read in the same event repeats an earlier pattern.
-- Findings: a macOS trust-store read, or a keychain file opened by a TLS client, no longer counts as a secret read for "read a secret, then connected out"; a keychain file opened by a byte-copy tool (`cat`, `cp`, `tar`, `curl`, …) or read by an agent tool still does. Open flags from those reads are acknowledged at start.
-- Findings: a read item names the process that opened the file (`evidence[].pid`, `evidence[].exe`), not the process that connected out.
-- Findings: a credential used with its owner (gh's token to GitHub, `~/.aws` to AWS, `~/.azure` to Azure, `~/.config/gcloud` to Google, `~/.docker` to Docker registries) from the reading process's tree (the reader, its ancestors, its descendants) is counted in `status.credential_owner_uses`, not flagged; `credential_owners` config.
-- Findings: one read-then-connect pattern (agent, reader, file, destination org) raises one flag per hour; repeats fold into it (`repeats`, `last_seen`) and patterns count them.
-- Findings: `.env` templates and `~/.docker/completions` (`not_secret_paths`) are not secret reads; open flags from them are acknowledged at start.
-- Console findings: a read-then-connect card names the reading process, the file and where it went (`gh (claude) read ~/.config/gh/hosts.yml, then reached Google (…)`), and its verdict says why: the destination does not own the file, no owner is on record, an agent tool read it, or a process outside the reader's tree connected. `/patterns` serves `flags` and `destinations`; read evidence carries `owners`.
-
-### Changed
-- macOS builds use SDK 27 with an explicit macOS deployment target.
-- Event store: a flag's own event and file events on sensitive paths stay past their kind's row cap for the full retention, up to 20,000 rows per kind; `file-open`, `file-delete` and `exec` keep only their newest rows.
-- Row budgets: file writes 150,000 (was 10,000), connection opens and closes 30,000 each (was 5,000).
-- `/doctor` retention fails when record rows, or a kind other than `file-open`, `file-delete` and `exec`, are evicted inside a day; it passes naming how far back those three kinds' newest rows reach.
-- File telemetry: a write burst the reader skips reads as "File monitoring is falling behind" after 60 s, not as a flooding writer; `es_service.unparsed_share` counts only lines the reader parsed; `es_service.flooding_since` added.
-- Console header event rate keeps a fixed width, so the status chip does not shift as events per second change.
-- Console switches set `-webkit-user-select` so Safari does not select the switch label.
-- Findings skip shell rc and harness-settings reads as secret reads and name the raising process and its launcher.
-- File telemetry's root helper drops open events on system paths (OS libraries and frameworks, app-bundle contents, Homebrew Cellar, `/dev` nodes, user caches) that no sensitive-file rule matches before they reach the spool.
-- File events from a process that already exited cost one process lookup per tagger refresh instead of one per event.
-- Cleanup totals no longer count an agent's answer (`ask:*` ledger rows) as a cleanup.
-- Menu bar icon and agent count are drawn in the console's brand purple, a lighter shade on a dark menu bar.
-- Console Spend opens on the last usage reports: `GET /costs?cached=1` answers at once from the daemon's usage cache (saved in the store, so it outlives a restart) while a fresh report is computed; the card reads "Updating usage cache… (cached 3h ago)" and the tile's line "updating…" until it lands. Spend no longer holds the console's first render, and `/costs/plans` keeps plan headroom across restarts (snapshots under a week old).
-- `.gitleaksignore` fingerprints name the rewritten commits of the six known test fixtures.
-- Idle daemon: opencode, openclaw and Hermes polls skip an unchanged database, `/costs` and `/costs/unpriced` reuse a report for 30 s, and transcript discovery re-lists only directories whose mtime moved.
-- `make install` waits up to 90 s for the restarted daemon to answer `/status` before reporting file telemetry, and says "unknown" instead of asking for approvals when it gets no answer.
-- `make install`/`make app`/`make dmg` sign with the first Apple Development identity when one exists (else Developer ID Application, else ad-hoc) and give every bundled binary a stable `--identifier`, so file telemetry's Full Disk Access grant survives rebuilds instead of resetting on every install.
-- Console Cleanup view: each worktree row has a state stripe (green remove, amber review, violet keep, grey prune); the keep chip is violet instead of red.
-- CI fails when a tracked file holds a `/Users/<name>` or `/Volumes/<name>` path outside the placeholder names fixtures use.
-- `live_acceptance.sh` reads the workspace root from `SECURE_AGENT_WORKSPACE_ROOT`, defaulting to two levels above the main checkout.
-- Console: shows the posture banner capped at 3 rows off Home and empty on Home, agent ids in their own case, Egress led by the uninspected endpoints with zero-hit rules folded into one row, and Processes at full width.
-
 ### Added
 - Expected secret reads: `Expected: gh → GitHub` on a read-then-connect finding stores that pattern (agent, reader, file, destination org) and reviews its open flags; later occurrences are counted in `status.expected_flags`, not flagged, and a new reader, file or destination still flags. `GET/POST/DELETE /expected` (NoAgent); the Policy tab lists them with Forget.
 - Console Resources: machine headroom `?` explains the score. It is the lowest of memory still available, CPU still idle, swap still free, and thermal headroom. Under 15 is critical. `headroom_limiter` names which input set the score.
@@ -308,8 +261,110 @@ All notable changes to `secure-agent` are documented here. The format follows
   the rule id, transcript path, and session id (never the matched text), is
   severity 3 for a registered secret and 2 for a typed pattern, and repeats
   per (path, rule) are collapsed.
+- **Codex model attribution.** Codex model calls carry the model id from the
+  rollout's thread settings and are priced from the price tables; a model the
+  tables do not know costs 0 and counts as unpriced — never a fabricated price.
+- **User price table.** `pricing` in `config.yaml` sets USD per 1M input and
+  output tokens by exact model id or prefix, wins over the built-in table, and
+  applies live on change. Built-in prices now cover OpenAI and Google model
+  families alongside Anthropic.
+- **Sequence numbers + gap detection (`boot`/`seq` on every envelope).** The
+  Publisher stamps each envelope with a per-boot monotonic sequence; the
+  collector tracks holes with a 90s grace for retries/reordering and surfaces
+  confirmed loss per node (`gaps` in `/fleet`, "N deliveries lost" warnings
+  in the overview). Delivery stays best-effort — but backlog-cap drops and
+  collector downtime are now *visible* instead of silent. A new boot (daemon
+  restart) resets the expectation; legacy unsequenced envelopes skip
+  tracking.
+- **Cross-node rule aggregation (`GET /fleet/rules`).** Rolling-24h per-rule
+  fleet footprint: which rules are firing, on how many of the fleet's nodes,
+  with how much critical mass — "one node is an incident; five is a bad
+  release." Rendered as a "Rules across the fleet" table in the collector
+  overview, sorted by node spread.
+- **Posture-aware collector rollup.** The reference collector now harvests
+  what it used to discard: flag `severity` and incident `risk` feed rolling
+  **24h counts** (`flags_24h`, `critical_flags_24h`, `incidents_24h`,
+  recomputed at snapshot time so they decay on quiet nodes); guard decisions
+  break down into allow/deny; `last_event` (security activity) is tracked
+  separately from `last_seen` (liveness). The overview page leads with a
+  fleet headline ("2 critical · 1 stale · 12 all-clear") over cards titled
+  by hostname with posture chips and label chips, sorted critical-first.
+  Heartbeat nodes are stale after 3 min and "gone quiet" after 10 (was:
+  indistinguishable from idle after 10 min); legacy event-only nodes keep
+  the lenient 10/20-min thresholds.
+- **Node identity config.** `fleet.hostname` (display-name override) and
+  `fleet.labels` in `config.yaml`, carried in every status envelope.
+- **Rolling 24h blind-spot counter.** `status.uninspected_egress` now counts
+  distinct endpoints seen in the last 24 hours instead of growing
+  monotonically for the daemon's lifetime (it had inflated to ~1000); pairs
+  silent for 7+ days are swept from the tracker.
+- **Rule-level mutes (`host: "*"`).** `POST /mute` with `host: "*"`
+  suppresses an entire flag class (counted in `status.muted_flags`, all open
+  flags of the rule acknowledged). Exposed as "Dismiss this flag class" in
+  both UIs — including, finally, keychain flags.
+- **Per-flag dismiss in both UIs.** Every flag card/sheet now has "Dismiss"
+  (reviewed-and-done) alongside "Dismiss this flag class" and "Kill" —
+  the missing middle recourse. Posture excludes acknowledged flags, so a
+  reviewed flag stops demanding attention everywhere.
+- Notification scopes can be set per workspace.
+- Sessions and traces export as OTLP/HTTP JSON spans.
+- Codex sessions are traced from their rollout files.
+- Stream deltas are typed per kind.
+- `GET /sessions`: durable sessions with lifecycle state, attributed from a session-start hook handshake as work begins.
+- `secure-agent cleanup advise <repo|machine>`; `secure-agent cleanup` prints each project's plan under it.
+- `secure-agent cleanup [--kind] [--project] [--refresh] [--json]`, `cleanup trash <path>`, `cleanup clean <tool>`.
+- Cleanup ledger: every worktree removal books the bytes it gave back, every prune a row; `GET /cleanup/ledger` and `secure-agent cleanup log`.
+- `secure-agent worktrees` lists the biggest projects first with sizes, disk free per volume, worktree and removable totals and reclaimed so far.
+- `secure-agent worktrees advise <path>`; the list view prints the note under its row.
+- `secure-agent cost --by provider|day` and `--tz <minutes>` (default: this machine's offset).
+- `secure-agent worktrees [--state] [--repo] [--stale] [--refresh] [--json]` and `secure-agent worktrees add|hide <path>`.
+- `secure-agent worktrees remove <path>` and `secure-agent worktrees prune <repo>`.
+- `secure-agent cost` prints the class breakdown and one pricing hint per unpriced model id.
+- **Self-check.** `GET /doctor` and `secure-agent doctor` report pass, fail
+  or skip for guard-hook registration and activity, file telemetry,
+  collectors, per-harness trace coverage, session identity, repo attribution
+  and creation rate, tool-call pairing, Claude model-call pricing, per-kind
+  retention, egress routing and bus drops, each failure with a one-line fix;
+  the CLI exits 1 on any failure.
+- **One-command fleet enrollment (`secure-agent fleet enroll <collector-url>`).**
+  Reads the node id from the running daemon, generates the webhook secret,
+  merges `fleet.webhooks` into `config.yaml` (comment-preserving, backup
+  written first; re-enrolling the same URL rotates the secret in place), and
+  prints the single line the collector's secrets file needs. The old flow —
+  hunt the node id, invent a secret, edit two files, restart the daemon — is
+  gone.
+- `secure-agent`: a headless service install command registers the daemon with launchd.
+- `secure-agent worktrees remove` waits up to 14 minutes.
+- CI: cancel stale runs, job timeouts, credential-free checkout, cgo-free Linux gate, go mod tidy, govulncheck, Dependabot, Go test shuffle. Proxy token and CA permission contracts now have unit tests (the old 0600 check was asserting a different temp path). Go toolchain 1.26.6.
+- `POST /worktrees/remove` `"async": true` removes in the background; `GET /worktrees` `removals` reports each removal's step and outcome for 30 minutes.
+- Session memory: `GET /sessions/{id}/memory` and the Sessions tab list one session's redacted activity, findings, incidents, guard decisions and resource episodes in time order, paged with `before`.
+- Egress episodes: `GET /egress/episodes` groups each agent's outbound connections by destination; one seen 5+ times at steady intervals is recurring and becomes a Home decision.
+- Expected egress: `POST /expected-egress` marks an observed destination, or a complete activity scope (executable, harness, workspace), expected; `DELETE` revokes it; both are audited.
+- Expected egress only clears the Home decision; the proxy, guard, correlator, incidents and flags never consult it.
+- `POST /egress/episodes/{id}/assess` asks the local advisor for a recurring episode's possible purpose; the console labels it as an inference.
 
 ### Changed
+- macOS builds use SDK 27 with an explicit macOS deployment target.
+- Event store: a flag's own event and file events on sensitive paths stay past their kind's row cap for the full retention, up to 20,000 rows per kind; `file-open`, `file-delete` and `exec` keep only their newest rows.
+- Row budgets: file writes 150,000 (was 10,000), connection opens and closes 30,000 each (was 5,000).
+- `/doctor` retention fails when record rows, or a kind other than `file-open`, `file-delete` and `exec`, are evicted inside a day; it passes naming how far back those three kinds' newest rows reach.
+- File telemetry: a write burst the reader skips reads as "File monitoring is falling behind" after 60 s, not as a flooding writer; `es_service.unparsed_share` counts only lines the reader parsed; `es_service.flooding_since` added.
+- Console header event rate keeps a fixed width, so the status chip does not shift as events per second change.
+- Console switches set `-webkit-user-select` so Safari does not select the switch label.
+- Findings skip shell rc and harness-settings reads as secret reads and name the raising process and its launcher.
+- File telemetry's root helper drops open events on system paths (OS libraries and frameworks, app-bundle contents, Homebrew Cellar, `/dev` nodes, user caches) that no sensitive-file rule matches before they reach the spool.
+- File events from a process that already exited cost one process lookup per tagger refresh instead of one per event.
+- Cleanup totals no longer count an agent's answer (`ask:*` ledger rows) as a cleanup.
+- Menu bar icon and agent count are drawn in the console's brand purple, a lighter shade on a dark menu bar.
+- Console Spend opens on the last usage reports: `GET /costs?cached=1` answers at once from the daemon's usage cache (saved in the store, so it outlives a restart) while a fresh report is computed; the card reads "Updating usage cache… (cached 3h ago)" and the tile's line "updating…" until it lands. Spend no longer holds the console's first render, and `/costs/plans` keeps plan headroom across restarts (snapshots under a week old).
+- `.gitleaksignore` fingerprints name the rewritten commits of the six known test fixtures.
+- Idle daemon: opencode, openclaw and Hermes polls skip an unchanged database, `/costs` and `/costs/unpriced` reuse a report for 30 s, and transcript discovery re-lists only directories whose mtime moved.
+- `make install` waits up to 90 s for the restarted daemon to answer `/status` before reporting file telemetry, and says "unknown" instead of asking for approvals when it gets no answer.
+- `make install`/`make app`/`make dmg` sign with the first Apple Development identity when one exists (else Developer ID Application, else ad-hoc) and give every bundled binary a stable `--identifier`, so file telemetry's Full Disk Access grant survives rebuilds instead of resetting on every install.
+- Console Cleanup view: each worktree row has a state stripe (green remove, amber review, violet keep, grey prune); the keep chip is violet instead of red.
+- CI fails when a tracked file holds a `/Users/<name>` or `/Volumes/<name>` path outside the placeholder names fixtures use.
+- `live_acceptance.sh` reads the workspace root from `SECURE_AGENT_WORKSPACE_ROOT`, defaulting to two levels above the main checkout.
+- Console: shows the posture banner capped at 3 rows off Home and empty on Home, agent ids in their own case, Egress led by the uninspected endpoints with zero-hit rules folded into one row, and Processes at full width.
 - `GET /worktrees` and `GET /cleanup` answer from the last scan at once; one older than 10 minutes answers while a background rescan replaces it (`refreshing: true`).
 - Worktree and clutter sizes older than an hour keep answering while measured again, instead of dropping to "measuring…".
 - The last worktree scan, cleanup inventory and their sizes are saved in the store (`scan_cache`) and answer after a daemon restart.
@@ -364,11 +419,154 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Console: the drawer's Copy button stays hidden outside incident reports.
 - Advisor host pre-assessment skips vendor-class hosts as well as CDN carriers.
 - Advisor host pre-assessment still covers cloud, telemetry and unknown hosts.
+- Transcript discovery by harness shape: Claude, Cursor, Codex and
+  Antigravity transcripts are found by per-harness globs re-resolved every
+  15 s instead of recursive walks of their trees; files modified in the last
+  two minutes are tailed every second; tail offsets are saved at most every
+  30 s and on shutdown; the ES spool tail skips a spool whose size and mtime
+  are unchanged.
+- The Endpoint Security collector ships inside the app bundle
+  (`Contents/MacOS/secure-agent-esd` plus
+  `Contents/Library/LaunchDaemons/com.cavi-ai.secure-agent-esd.plist`) and is
+  registered with `SMAppService.daemon`: the user approves Secure Agent in
+  Login Items and Full Disk Access, with no admin password. The collector
+  verifies its code signature instead of an install-time hash, the setup card
+  names Secure Agent instead of the launchd label, and a collector installed
+  by an earlier version under `/Library` is removed from the card (one admin
+  prompt) or by `packaging/uninstall.sh`.
+- API HTTP handlers for resources, kill, firewall, and guard live in their own files (`api.go` 1662→940). Same package, no behavior change.
+- The daemon composition root is split into named stages (`buildResourceStack`,
+  `buildFleetAndOTLP`, `runResourceLoop`, `wireEgressOverrides`,
+  `buildAdvisorHooks`, `buildResourcePolicyUpdater`, `makeResourceExecutor`,
+  `startCollectors`) — `Build` 477→197 lines of sequencing. Same wiring, no
+  behavior change.
+- Console: shows the posture banner capped at 3 rows off Home and empty on Home, agent ids in their own case, Egress led by the uninspected endpoints with zero-hit rules folded into one row, and Processes at full width.
+- Console Cleanup view: re-reads while a report is refreshing; the scan line names the cached scan's age.
+- The console token admits a method other than GET or HEAD only when the route lists it in `MutatingMethods` or `ConsoleMethods`.
+- `/guard/path-allow` is console-admitted on the proxy listener.
+- Console finding cards offer the served allow-path action.
+- Console notification preferences moved from the header to the Policy tab.
+- Console Overview: Memory by session is Memory by family — one bar per live process family, its RSS counted once, `N sessions` in the label.
+- Console Overview: the Memory by family badge counts agent families, not infra.
+- Console Flags list hides flags a pattern covers.
+- Console Attention badge shows `posture.needs_you`.
+- Console: an explained flag's card and Attention item show who, what and the one verdict with the served actions as buttons; raw evidence, pid and timestamps sit behind Details.
+- Console Resources: a one-row machine strip (headroom, memory, CPU, swap; pressure and thermal chips) replaces the host block.
+- Console Resources: families with a diagnosis lead as at most five needs-attention cards.
+- Console Resources: families group by harness, sorted by memory, with orchestrated children nested under their parent and infrastructure in one trailing, uncounted group.
+- Console Resources: families are named harness · repo@branch or harness · folder, never by pid; the Overview memory chart uses the same names.
+- Console Resources: View family opens a drawer with usage, processes, recent activity, findings and terminate actions instead of switching tabs.
+- Console Resources: the board fits a 375px phone at any font metrics; family rows and long labels wrap instead of overflowing.
+- Console: the Events tab lists the newest 50 rows, the family process table 12 and an Agents group 8 instances, each with Show more.
+- Console: pid-scoped event filtering opens the Events tab.
+- Console: "View session in timeline" opens the session in the Sessions tab with its trace, keeping Events scoped to it.
+- Console: the drawer's Copy button stays hidden outside incident reports.
+- Every hero count is clickable: "N flags to review" opens the top unacted flag's action sheet; uninspected/would-block opens the console egress drill-down (tab deep-links now survive the token handoff).
+- The session board is its own console tab (Overview / Sessions / Agents / Egress / Findings) instead of filling the main dashboard. Overview keeps the activity trend and event timeline.
+- Console SSE only refetches `/snapshot` on exec, guard, and proxy-hit; file/conn events update the sparkline only.
+- **Console layout is now tabbed** (Overview / Agents / Egress / Findings)
+  instead of one endless page — organized by the question each view answers,
+  with per-tab badges ("2" on Egress = uninspected endpoints waiting),
+  deep-linkable tabs (`#findings`), and posture items that jump to the right
+  tab. Posture banner + KPIs stay always-visible on top.
+- Menu bar hero: state, color and subtitle come from `/posture`.
+- Menu bar: flags refetch only on `flag`, `posture`, `guard-prompt` and `guard-resolved` stream frames.
+- Menu bar: an identical flags refetch leaves the popover unchanged.
+- Menu bar: notification and mute-list titles come from the daemon.
+- Menu bar Open console loads the fresh console link into the existing console tab before focusing it.
+- Menubar sessions are grouped by harness family again (collapsed headers with session/memory/activity aggregates, small families expanded), capped at 6 groups with a "+N more — open the console" link. The flat 50-row list is gone.
+- Menu bar popover: a glance-and-act view.
+- `GET /worktrees` and `GET /cleanup` answer from the last scan at once; one older than 10 minutes answers while a background rescan replaces it (`refreshing: true`).
+- Worktree and clutter sizes older than an hour keep answering while measured again, instead of dropping to "measuring…".
+- The last worktree scan, cleanup inventory and their sizes are saved in the store (`scan_cache`) and answer after a daemon restart.
+- A stored advisor verdict publishes its flag as a stream delta.
+- The served allow-host label for an IPv6 address names the address owner instead of the literal.
+- `POST /guard/path-allow` is a pinned-UI mutation.
+- Events carry a `(session_id, kind, id)` index; the event store writes planner statistics (`PRAGMA optimize`, `analysis_limit` 1000) at open and after each prune.
+- Untagged keychain flags name the agent the match strings give the exe.
+- Untagged keychain flags with a version-number exe name carry the directory that names it (`untagged:claude 2.1.280`).
+- `/posture` `items` and `groups` come from one pass.
+- `/posture` puts every item in exactly one group.
+- `/posture` group items sum to `needs_you`.
+- `/posture` `groups` include unacknowledged severity-2 flags with priority 1, rule title and disposition.
+- `/posture` `groups` include pending resource decisions as `resource` items.
+- `/posture` `items` include pending resource decisions as `resource_pressure` items.
+- `/posture` `items` carry one `uninspected_egress` item per group with uninspected egress to unknown endpoints.
+- `/posture` egress items and their counts exclude known CDN/cloud carriers.
+- `/posture` `items` carry open critical incidents at severity 3.
+- `/posture` `state` is `critical` while a critical incident is open.
+- `/posture` `items` carry open high incidents at severity 2.
+- `/posture` `items` carry other incidents open more than 72h at severity 1.
+- File opens, writes and deletes from processes outside every agent family are not stored unless they raise a flag.
+- Event pruning seeks a `(kind, id)` index: kinds by index skip-scan, each kind's budget cut at its budget-th newest id.
+- Insert-driven pruning runs at most once per 30 s.
+- The event store opens WAL with `synchronous=NORMAL`.
+- Posture and attention: a flag the advisor judged benign at confidence ≥ 0.85 is severity 1 (`attention`, "Finding, likely benign"), never `critical`.
+- Advisor host pre-assessment skips vendor-class hosts as well as CDN carriers.
+- Advisor host pre-assessment still covers cloud, telemetry and unknown hosts.
+- Transcript discovery by harness shape: Claude, Cursor, Codex and
+  Antigravity transcripts are found by per-harness globs re-resolved every
+  15 s instead of recursive walks of their trees; files modified in the last
+  two minutes are tailed every second; tail offsets are saved at most every
+  30 s and on shutdown; the ES spool tail skips a spool whose size and mtime
+  are unchanged.
+- API HTTP handlers for resources, kill, firewall, and guard live in their own files (`api.go` 1662→940). Same package, no behavior change.
+- The daemon composition root is split into named stages (`buildResourceStack`,
+  `buildFleetAndOTLP`, `runResourceLoop`, `wireEgressOverrides`,
+  `buildAdvisorHooks`, `buildResourcePolicyUpdater`, `makeResourceExecutor`,
+  `startCollectors`) — `Build` 477→197 lines of sequencing. Same wiring, no
+  behavior change.
+- Overview shows a 3-row session strip (project folder, RSS, last seen, needs-you) that opens the Sessions tab. The full board stays on Sessions.
+- Uninspected-egress headline now counts only unknown endpoints. Known CDN/cloud infrastructure (Cloudflare, Google, AWS, GitHub, Akamai, Fastly, Azure — by suffix, CIDR, and cached PTR for bare IPs) is collapsed into a separate `uninspected_infra` figure and one collapsible group in the drill-down, excluded from the hero, posture, allowlist suggestions, and advisor pre-assessment.
+- Process tagger walks every 3s while agents are tagged (idle stays 5s).
+- `PostToolUse` is one `secret_guard.py` spawn (injection scan + activity log); `injection_scan.py` is no longer a second process.
+- **Collector storage sits behind a seam.** Persistence is now a small
+  `envelopeLog` interface (append/replay/query) with the JSONL backend as the
+  reference implementation — the swap point for a production-grade SQLite
+  store (retention, TLS, alerting on the roadmap).
+- **`keychain-access` demoted to severity 1 (informational).** Legitimate
+  tooling opens keychain DBs for TLS trust evaluation and credential helpers
+  — it never justifies a page. The `security(1)` CLI exec rule
+  (`keychain-security-cli`) stays severity 3.
+- Repeat suppression applies to every immediate-fire rule, not only keychain flags.
+- The Endpoint Security collector ships inside the app bundle
+  (`Contents/MacOS/secure-agent-esd` plus
+  `Contents/Library/LaunchDaemons/com.cavi-ai.secure-agent-esd.plist`) and is
+  registered with `SMAppService.daemon`: the user approves Secure Agent in
+  Login Items and Full Disk Access, with no admin password. The collector
+  verifies its code signature instead of an install-time hash, the setup card
+  names Secure Agent instead of the launchd label, and a collector installed
+  by an earlier version under `/Library` is removed from the card (one admin
+  prompt) or by `packaging/uninstall.sh`.
+- `live_acceptance.sh` reads the workspace root from `SECURE_AGENT_WORKSPACE_ROOT`, defaulting to two levels above the main checkout.
 
 ### Removed
 - Menu bar: the unused flag action, incident detail and process detail sheets.
+- Menu bar: the unused flag action, incident detail and process detail sheets.
 
 ### Fixed
+- Live acceptance compares Claude turns with Claude prompts in the same capped time window; other harnesses no longer cause false turn-ratio failures.
+- Local agent persistence: failed message, run, or plan writes stop dispatch before execution; aborted dispatches close their recorded runs. Stale message updates cannot reopen claimed commands or reviewed recommendations.
+- Secret masking removes complete private-key envelopes, including unterminated keys. Headless output is masked before selecting its tail; oversized captures and answer files are withheld instead of exposing fragments.
+- Agent chat retention now bounds ordinary messages while preserving pending recommendations.
+- Menu bar: the UI has its own application identity, independent of the launcher, while preserving existing preferences and helper identities.
+- Console chat renders escaped Markdown with readable lists and code blocks; finding details open from individual flags, and dismissal stays stable during refreshes.
+- Guard approvals: Always allow resolves matching queued requests and removes them from the console queue.
+- Menu bar: startup creates the status item before setup work. When another app copy is running, the new build offers a clear replacement choice instead of starting a competing daemon on the same socket and console port.
+- Settings: a resizable sidebar groups security, monitoring, local AI, and general controls; direct Ollama chat and optional routing have their own pane rather than crowding App settings.
+- Menu bar: the status icon uses a colored bitmap shield with a white check, so the status bar cannot render it as a monochrome template; attention uses a yellow shield with a black mark.
+- Console Resources: the machine headroom explanation stays inside the available panel instead of being clipped.
+- System Agent: the menu bar has an Ask Agent entry, Settings can enable local Agent chat without editing YAML, and the console's off state points to that control.
+- System Agent: automatic model selection skips Ollama models marked embedding-only, and an explicitly selected non-chat model reports why it cannot run.
+- Doctor: repo-attribution coverage counts sessions inside Git workspaces, so desktop and home-directory sessions no longer produce a false failure.
+- Local model traffic: the system agent and advisor reject redirects so a local server cannot forward a chat prompt to another host.
+- Findings: a newly read secret or destination raises a new read-then-connect flag even when another read in the same event repeats an earlier pattern.
+- Findings: a macOS trust-store read, or a keychain file opened by a TLS client, no longer counts as a secret read for "read a secret, then connected out"; a keychain file opened by a byte-copy tool (`cat`, `cp`, `tar`, `curl`, …) or read by an agent tool still does. Open flags from those reads are acknowledged at start.
+- Findings: a read item names the process that opened the file (`evidence[].pid`, `evidence[].exe`), not the process that connected out.
+- Findings: a credential used with its owner (gh's token to GitHub, `~/.aws` to AWS, `~/.azure` to Azure, `~/.config/gcloud` to Google, `~/.docker` to Docker registries) from the reading process's tree (the reader, its ancestors, its descendants) is counted in `status.credential_owner_uses`, not flagged; `credential_owners` config.
+- Findings: one read-then-connect pattern (agent, reader, file, destination org) raises one flag per hour; repeats fold into it (`repeats`, `last_seen`) and patterns count them.
+- Findings: `.env` templates and `~/.docker/completions` (`not_secret_paths`) are not secret reads; open flags from them are acknowledged at start.
+- Console findings: a read-then-connect card names the reading process, the file and where it went (`gh (claude) read ~/.config/gh/hosts.yml, then reached Google (…)`), and its verdict says why: the destination does not own the file, no owner is on record, an agent tool read it, or a process outside the reader's tree connected. `/patterns` serves `flags` and `destinations`; read evidence carries `owners`.
 - Uninspected egress: a bare IP in Cloudflare's, GitHub's or Fastly's published ranges, or in CloudFront's IPv6 block, counts as a known carrier, not an unknown endpoint, and its identity names the same org.
 - Worktree removal: a worktree with populated submodules failed with git's "working trees containing submodules cannot be moved or removed"; it is removed with `--force` once each submodule is clean and every submodule commit (branches, HEAD, stash) is on a remote.
 - A submodule commit or stash that lives only in the worktree's own git dir keeps the worktree, with the submodule named in the reasons.
@@ -504,213 +702,6 @@ All notable changes to `secure-agent` are documented here. The format follows
   copied into the console's `RULE_TITLES`, the menubar notification switch,
   and the posture copy — one table, every surface agrees; the client tables
   remain only as fallbacks for older daemons.
-
-### Changed
-- Transcript discovery by harness shape: Claude, Cursor, Codex and
-  Antigravity transcripts are found by per-harness globs re-resolved every
-  15 s instead of recursive walks of their trees; files modified in the last
-  two minutes are tailed every second; tail offsets are saved at most every
-  30 s and on shutdown; the ES spool tail skips a spool whose size and mtime
-  are unchanged.
-- The Endpoint Security collector ships inside the app bundle
-  (`Contents/MacOS/secure-agent-esd` plus
-  `Contents/Library/LaunchDaemons/com.cavi-ai.secure-agent-esd.plist`) and is
-  registered with `SMAppService.daemon`: the user approves Secure Agent in
-  Login Items and Full Disk Access, with no admin password. The collector
-  verifies its code signature instead of an install-time hash, the setup card
-  names Secure Agent instead of the launchd label, and a collector installed
-  by an earlier version under `/Library` is removed from the card (one admin
-  prompt) or by `packaging/uninstall.sh`.
-- API HTTP handlers for resources, kill, firewall, and guard live in their own files (`api.go` 1662→940). Same package, no behavior change.
-- The daemon composition root is split into named stages (`buildResourceStack`,
-  `buildFleetAndOTLP`, `runResourceLoop`, `wireEgressOverrides`,
-  `buildAdvisorHooks`, `buildResourcePolicyUpdater`, `makeResourceExecutor`,
-  `startCollectors`) — `Build` 477→197 lines of sequencing. Same wiring, no
-  behavior change.
-
-### Added
-- **Codex model attribution.** Codex model calls carry the model id from the
-  rollout's thread settings and are priced from the price tables; a model the
-  tables do not know costs 0 and counts as unpriced — never a fabricated price.
-- **User price table.** `pricing` in `config.yaml` sets USD per 1M input and
-  output tokens by exact model id or prefix, wins over the built-in table, and
-  applies live on change. Built-in prices now cover OpenAI and Google model
-  families alongside Anthropic.
-- **Sequence numbers + gap detection (`boot`/`seq` on every envelope).** The
-  Publisher stamps each envelope with a per-boot monotonic sequence; the
-  collector tracks holes with a 90s grace for retries/reordering and surfaces
-  confirmed loss per node (`gaps` in `/fleet`, "N deliveries lost" warnings
-  in the overview). Delivery stays best-effort — but backlog-cap drops and
-  collector downtime are now *visible* instead of silent. A new boot (daemon
-  restart) resets the expectation; legacy unsequenced envelopes skip
-  tracking.
-- **Cross-node rule aggregation (`GET /fleet/rules`).** Rolling-24h per-rule
-  fleet footprint: which rules are firing, on how many of the fleet's nodes,
-  with how much critical mass — "one node is an incident; five is a bad
-  release." Rendered as a "Rules across the fleet" table in the collector
-  overview, sorted by node spread.
-- **Posture-aware collector rollup.** The reference collector now harvests
-  what it used to discard: flag `severity` and incident `risk` feed rolling
-  **24h counts** (`flags_24h`, `critical_flags_24h`, `incidents_24h`,
-  recomputed at snapshot time so they decay on quiet nodes); guard decisions
-  break down into allow/deny; `last_event` (security activity) is tracked
-  separately from `last_seen` (liveness). The overview page leads with a
-  fleet headline ("2 critical · 1 stale · 12 all-clear") over cards titled
-  by hostname with posture chips and label chips, sorted critical-first.
-  Heartbeat nodes are stale after 3 min and "gone quiet" after 10 (was:
-  indistinguishable from idle after 10 min); legacy event-only nodes keep
-  the lenient 10/20-min thresholds.
-- **Node identity config.** `fleet.hostname` (display-name override) and
-  `fleet.labels` in `config.yaml`, carried in every status envelope.
-- **Rolling 24h blind-spot counter.** `status.uninspected_egress` now counts
-  distinct endpoints seen in the last 24 hours instead of growing
-  monotonically for the daemon's lifetime (it had inflated to ~1000); pairs
-  silent for 7+ days are swept from the tracker.
-- **Rule-level mutes (`host: "*"`).** `POST /mute` with `host: "*"`
-  suppresses an entire flag class (counted in `status.muted_flags`, all open
-  flags of the rule acknowledged). Exposed as "Dismiss this flag class" in
-  both UIs — including, finally, keychain flags.
-- **Per-flag dismiss in both UIs.** Every flag card/sheet now has "Dismiss"
-  (reviewed-and-done) alongside "Dismiss this flag class" and "Kill" —
-  the missing middle recourse. Posture excludes acknowledged flags, so a
-  reviewed flag stops demanding attention everywhere.
-- Notification scopes can be set per workspace.
-- Sessions and traces export as OTLP/HTTP JSON spans.
-- Codex sessions are traced from their rollout files.
-- Stream deltas are typed per kind.
-- `GET /sessions`: durable sessions with lifecycle state, attributed from a session-start hook handshake as work begins.
-- `secure-agent cleanup advise <repo|machine>`; `secure-agent cleanup` prints each project's plan under it.
-- `secure-agent cleanup [--kind] [--project] [--refresh] [--json]`, `cleanup trash <path>`, `cleanup clean <tool>`.
-- Cleanup ledger: every worktree removal books the bytes it gave back, every prune a row; `GET /cleanup/ledger` and `secure-agent cleanup log`.
-- `secure-agent worktrees` lists the biggest projects first with sizes, disk free per volume, worktree and removable totals and reclaimed so far.
-- `secure-agent worktrees advise <path>`; the list view prints the note under its row.
-- `secure-agent cost --by provider|day` and `--tz <minutes>` (default: this machine's offset).
-- `secure-agent worktrees [--state] [--repo] [--stale] [--refresh] [--json]` and `secure-agent worktrees add|hide <path>`.
-- `secure-agent worktrees remove <path>` and `secure-agent worktrees prune <repo>`.
-- `secure-agent cost` prints the class breakdown and one pricing hint per unpriced model id.
-- **Self-check.** `GET /doctor` and `secure-agent doctor` report pass, fail
-  or skip for guard-hook registration and activity, file telemetry,
-  collectors, per-harness trace coverage, session identity, repo attribution
-  and creation rate, tool-call pairing, Claude model-call pricing, per-kind
-  retention, egress routing and bus drops, each failure with a one-line fix;
-  the CLI exits 1 on any failure.
-- **One-command fleet enrollment (`secure-agent fleet enroll <collector-url>`).**
-  Reads the node id from the running daemon, generates the webhook secret,
-  merges `fleet.webhooks` into `config.yaml` (comment-preserving, backup
-  written first; re-enrolling the same URL rotates the secret in place), and
-  prints the single line the collector's secrets file needs. The old flow —
-  hunt the node id, invent a secret, edit two files, restart the daemon — is
-  gone.
-- `secure-agent`: a headless service install command registers the daemon with launchd.
-- `secure-agent worktrees remove` waits up to 14 minutes.
-- CI: cancel stale runs, job timeouts, credential-free checkout, cgo-free Linux gate, go mod tidy, govulncheck, Dependabot, Go test shuffle. Proxy token and CA permission contracts now have unit tests (the old 0600 check was asserting a different temp path). Go toolchain 1.26.6.
-- `POST /worktrees/remove` `"async": true` removes in the background; `GET /worktrees` `removals` reports each removal's step and outcome for 30 minutes.
-
-### Changed
-- Console: shows the posture banner capped at 3 rows off Home and empty on Home, agent ids in their own case, Egress led by the uninspected endpoints with zero-hit rules folded into one row, and Processes at full width.
-- Console Cleanup view: re-reads while a report is refreshing; the scan line names the cached scan's age.
-- The console token admits a method other than GET or HEAD only when the route lists it in `MutatingMethods` or `ConsoleMethods`.
-- `/guard/path-allow` is console-admitted on the proxy listener.
-- Console finding cards offer the served allow-path action.
-- Console notification preferences moved from the header to the Policy tab.
-- Console Overview: Memory by session is Memory by family — one bar per live process family, its RSS counted once, `N sessions` in the label.
-- Console Overview: the Memory by family badge counts agent families, not infra.
-- Console Flags list hides flags a pattern covers.
-- Console Attention badge shows `posture.needs_you`.
-- Console: an explained flag's card and Attention item show who, what and the one verdict with the served actions as buttons; raw evidence, pid and timestamps sit behind Details.
-- Console Resources: a one-row machine strip (headroom, memory, CPU, swap; pressure and thermal chips) replaces the host block.
-- Console Resources: families with a diagnosis lead as at most five needs-attention cards.
-- Console Resources: families group by harness, sorted by memory, with orchestrated children nested under their parent and infrastructure in one trailing, uncounted group.
-- Console Resources: families are named harness · repo@branch or harness · folder, never by pid; the Overview memory chart uses the same names.
-- Console Resources: View family opens a drawer with usage, processes, recent activity, findings and terminate actions instead of switching tabs.
-- Console Resources: the board fits a 375px phone at any font metrics; family rows and long labels wrap instead of overflowing.
-- Console: the Events tab lists the newest 50 rows, the family process table 12 and an Agents group 8 instances, each with Show more.
-- Console: pid-scoped event filtering opens the Events tab.
-- Console: "View session in timeline" opens the session in the Sessions tab with its trace, keeping Events scoped to it.
-- Console: the drawer's Copy button stays hidden outside incident reports.
-- Every hero count is clickable: "N flags to review" opens the top unacted flag's action sheet; uninspected/would-block opens the console egress drill-down (tab deep-links now survive the token handoff).
-- The session board is its own console tab (Overview / Sessions / Agents / Egress / Findings) instead of filling the main dashboard. Overview keeps the activity trend and event timeline.
-- Console SSE only refetches `/snapshot` on exec, guard, and proxy-hit; file/conn events update the sparkline only.
-- **Console layout is now tabbed** (Overview / Agents / Egress / Findings)
-  instead of one endless page — organized by the question each view answers,
-  with per-tab badges ("2" on Egress = uninspected endpoints waiting),
-  deep-linkable tabs (`#findings`), and posture items that jump to the right
-  tab. Posture banner + KPIs stay always-visible on top.
-- Menu bar hero: state, color and subtitle come from `/posture`.
-- Menu bar: flags refetch only on `flag`, `posture`, `guard-prompt` and `guard-resolved` stream frames.
-- Menu bar: an identical flags refetch leaves the popover unchanged.
-- Menu bar: notification and mute-list titles come from the daemon.
-- Menu bar Open console loads the fresh console link into the existing console tab before focusing it.
-- Menubar sessions are grouped by harness family again (collapsed headers with session/memory/activity aggregates, small families expanded), capped at 6 groups with a "+N more — open the console" link. The flat 50-row list is gone.
-- Menu bar popover: a glance-and-act view.
-- `GET /worktrees` and `GET /cleanup` answer from the last scan at once; one older than 10 minutes answers while a background rescan replaces it (`refreshing: true`).
-- Worktree and clutter sizes older than an hour keep answering while measured again, instead of dropping to "measuring…".
-- The last worktree scan, cleanup inventory and their sizes are saved in the store (`scan_cache`) and answer after a daemon restart.
-- A stored advisor verdict publishes its flag as a stream delta.
-- The served allow-host label for an IPv6 address names the address owner instead of the literal.
-- `POST /guard/path-allow` is a pinned-UI mutation.
-- Events carry a `(session_id, kind, id)` index; the event store writes planner statistics (`PRAGMA optimize`, `analysis_limit` 1000) at open and after each prune.
-- Untagged keychain flags name the agent the match strings give the exe.
-- Untagged keychain flags with a version-number exe name carry the directory that names it (`untagged:claude 2.1.280`).
-- `/posture` `items` and `groups` come from one pass.
-- `/posture` puts every item in exactly one group.
-- `/posture` group items sum to `needs_you`.
-- `/posture` `groups` include unacknowledged severity-2 flags with priority 1, rule title and disposition.
-- `/posture` `groups` include pending resource decisions as `resource` items.
-- `/posture` `items` include pending resource decisions as `resource_pressure` items.
-- `/posture` `items` carry one `uninspected_egress` item per group with uninspected egress to unknown endpoints.
-- `/posture` egress items and their counts exclude known CDN/cloud carriers.
-- `/posture` `items` carry open critical incidents at severity 3.
-- `/posture` `state` is `critical` while a critical incident is open.
-- `/posture` `items` carry open high incidents at severity 2.
-- `/posture` `items` carry other incidents open more than 72h at severity 1.
-- File opens, writes and deletes from processes outside every agent family are not stored unless they raise a flag.
-- Event pruning seeks a `(kind, id)` index: kinds by index skip-scan, each kind's budget cut at its budget-th newest id.
-- Insert-driven pruning runs at most once per 30 s.
-- The event store opens WAL with `synchronous=NORMAL`.
-- Posture and attention: a flag the advisor judged benign at confidence ≥ 0.85 is severity 1 (`attention`, "Finding, likely benign"), never `critical`.
-- Advisor host pre-assessment skips vendor-class hosts as well as CDN carriers.
-- Advisor host pre-assessment still covers cloud, telemetry and unknown hosts.
-- Transcript discovery by harness shape: Claude, Cursor, Codex and
-  Antigravity transcripts are found by per-harness globs re-resolved every
-  15 s instead of recursive walks of their trees; files modified in the last
-  two minutes are tailed every second; tail offsets are saved at most every
-  30 s and on shutdown; the ES spool tail skips a spool whose size and mtime
-  are unchanged.
-- API HTTP handlers for resources, kill, firewall, and guard live in their own files (`api.go` 1662→940). Same package, no behavior change.
-- The daemon composition root is split into named stages (`buildResourceStack`,
-  `buildFleetAndOTLP`, `runResourceLoop`, `wireEgressOverrides`,
-  `buildAdvisorHooks`, `buildResourcePolicyUpdater`, `makeResourceExecutor`,
-  `startCollectors`) — `Build` 477→197 lines of sequencing. Same wiring, no
-  behavior change.
-- Overview shows a 3-row session strip (project folder, RSS, last seen, needs-you) that opens the Sessions tab. The full board stays on Sessions.
-- Uninspected-egress headline now counts only unknown endpoints. Known CDN/cloud infrastructure (Cloudflare, Google, AWS, GitHub, Akamai, Fastly, Azure — by suffix, CIDR, and cached PTR for bare IPs) is collapsed into a separate `uninspected_infra` figure and one collapsible group in the drill-down, excluded from the hero, posture, allowlist suggestions, and advisor pre-assessment.
-- Process tagger walks every 3s while agents are tagged (idle stays 5s).
-- `PostToolUse` is one `secret_guard.py` spawn (injection scan + activity log); `injection_scan.py` is no longer a second process.
-- **Collector storage sits behind a seam.** Persistence is now a small
-  `envelopeLog` interface (append/replay/query) with the JSONL backend as the
-  reference implementation — the swap point for a production-grade SQLite
-  store (retention, TLS, alerting on the roadmap).
-- **`keychain-access` demoted to severity 1 (informational).** Legitimate
-  tooling opens keychain DBs for TLS trust evaluation and credential helpers
-  — it never justifies a page. The `security(1)` CLI exec rule
-  (`keychain-security-cli`) stays severity 3.
-- Repeat suppression applies to every immediate-fire rule, not only keychain flags.
-- The Endpoint Security collector ships inside the app bundle
-  (`Contents/MacOS/secure-agent-esd` plus
-  `Contents/Library/LaunchDaemons/com.cavi-ai.secure-agent-esd.plist`) and is
-  registered with `SMAppService.daemon`: the user approves Secure Agent in
-  Login Items and Full Disk Access, with no admin password. The collector
-  verifies its code signature instead of an install-time hash, the setup card
-  names Secure Agent instead of the launchd label, and a collector installed
-  by an earlier version under `/Library` is removed from the card (one admin
-  prompt) or by `packaging/uninstall.sh`.
-
-- `live_acceptance.sh` reads the workspace root from `SECURE_AGENT_WORKSPACE_ROOT`, defaulting to two levels above the main checkout.
-### Removed
-- Menu bar: the unused flag action, incident detail and process detail sheets.
-
-### Fixed
 - Console: `claude-desktop` shows as Claude, counted as infra.
 - The console receives each relabeled keychain flag as a flag delta.
 - Console: live-stream frames mark only the panels that read the changed data.
@@ -1059,7 +1050,6 @@ below is the delta that earns the "stable" label.
   cdhash every build, silently invalidating every Full Disk Access grant
   on each update. Noted for the release pipeline.
 
-## [v1.0.0] — 2026-09-10
 ## [v1.0.0] — 2026-09-10
 
 The first stable release. rc.3 was folded into 1.0 rather than published

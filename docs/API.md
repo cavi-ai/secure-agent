@@ -690,7 +690,7 @@ What one session did — tools, models, spend, files, hosts, guard decisions, fi
 GET /sessions/{id}/report?format=json|md
 ```
 
-`format` defaults to `json`; `md` returns `Content-Type: text/markdown; charset=utf-8`. An unknown session id, or any `/sessions/{id}/…` leaf other than `timeline` and `report`, returns `404`; another `format` returns `400`.
+`format` defaults to `json`; `md` returns `Content-Type: text/markdown; charset=utf-8`. An unknown session id, or any `/sessions/{id}/…` leaf other than `timeline`, `report` and `memory`, returns `404`; another `format` returns `400`.
 
 ```json
 {
@@ -745,6 +745,27 @@ Empty sections read `none`. Costs use the console's rule: two decimals, `<$0.01`
 A session row carries `origin` when an agent spawned it: `"<agent> (openclaw)"` for a Codex session whose rollout is under an openclaw agent's Codex home (`…/.openclaw/agents/<agent>/agent/codex-home`). It is omitted for the user's own `~/.codex` and every other harness, set on first sight, and kept by later updates that carry none. The same field is on `/snapshot` `sessions` and the `/sessions/{id}/report` `session`.
 
 ---
+
+### 18b. `GET /sessions/{id}/memory`
+
+One session's retained history in time order: activity, findings, incidents, guard decisions and resource episodes. Rows carry allowlisted summaries only; raw paths, event detail, evidence and incident narratives stay in their source tables.
+
+```
+GET /sessions/{id}/memory?limit=200&before=<cursor>
+```
+
+```json
+{"rows": [{"id": "…", "at": "2026-09-27T14:02:11Z", "kind": "incident", "title": "Incident: …", "detail": "3 related findings", "severity": "high", "status": "open"}],
+ "has_earlier": true, "next_cursor": "…"}
+```
+
+- `kind` — `activity`, `guard-audit`, `flag`, `incident`, `guard` or `resource`.
+- `limit` — 1–500, default 200; a larger value is capped at 500.
+- `before` — the `next_cursor` of the previous page; the next page is older.
+- `rows` are oldest first within a page; `next_cursor` is set only when `has_earlier` is true.
+- An unknown session returns `404`; a bad `limit` or cursor returns `400`.
+
+Read-level; console-allowed. The Sessions tab shows it for the selected session.
 
 ### `GET /advisor/discover`
 
@@ -1033,7 +1054,7 @@ The headline answer — *"do I need to look at this machine, and what first?"*:
 
 Flag items take their `severity` from the flag's disposition (`critical` 3, `warning` 2, `benign-likely` 1) and their `detail` starts with the disposition text (`"Likely benign (advisor 93 %) — …"`), so an advisor-confirmed benign flag yields `attention`, never `critical`. In `groups`, flag items carry `disposition`; a `benign-likely` flag has priority 1 and title "Finding, likely benign".
 
-Item kinds: `flag` (recent ≤24h, severity ≥2, human-titled), `pattern` (the flags one `/patterns` row covers, as one item: `id` = pattern `key`, `detail` = its `summary`; in `groups` also `count`, `rule`, `disposition`; the covered flags have no `flag` items), `guard_pending` (unresolved prompts), `collector_down` (dead/abandoned monitors), `collector_silent`, `harness_uncovered` and `guard_hook_unregistered` (coverage gaps while agents run), `uninspected_egress` (connections that bypassed the firewall, one item per group that carries them), `incident` (unresolved critical/high, or open more than 72h), `resource_pressure` (a pending resource intervention). Derived live — never a second source of truth.
+Item kinds: `flag` (recent ≤24h, severity ≥2, human-titled), `pattern` (the flags one `/patterns` row covers, as one item: `id` = pattern `key`, `detail` = its `summary`; in `groups` also `count`, `rule`, `disposition`; the covered flags have no `flag` items), `guard_pending` (unresolved prompts), `collector_down` (dead/abandoned monitors), `collector_silent`, `harness_uncovered` and `guard_hook_unregistered` (coverage gaps while agents run), `uninspected_egress` (connections that bypassed the firewall, one item per group that carries them), `recurring_egress` (a recurring, attributable egress episode no expected-egress rule covers; `action` is `scope` when its activity scope is complete, `scopeText` says what saving it covers), `incident` (unresolved critical/high, or open more than 72h), `resource_pressure` (a pending resource intervention). Derived live — never a second source of truth.
 
 Invariant: every item in `items` appears in exactly one of `groups`, and the group item counts sum to `needs_you` (= `len(items)`). Groups are agent sessions (`session:<key>`), agent buckets (`agent:<name>`; `summary` names the processes and sessions behind their findings, e.g. `"3 processes (claude-code 2.1.281 via Claude.app) across 3 sessions, all exited"`), and `machine` (`agent: ""`, `label: "This machine"`), which holds the agent-less items: dead or silent collectors, missing hooks, and the machine-wide uninspected item when no agent group carries egress. Group item priorities: guard 5, resource 4, incident 3 (aging below high risk 1), flag 2 (severity 2 or likely benign 1), pattern 2 (below critical 1), machine 2 (1 below severity 2), egress 1.
 
@@ -1103,6 +1124,39 @@ with `POST /allowlist` to close that blind spot.
 Related: `status.uninspected_egress` is a **rolling 24h** distinct-endpoint
 count ("what is bypassing inspection now"), not a lifetime figure — pairs
 silent for 7+ days are swept from the tracker entirely.
+
+### `GET /egress/episodes`
+
+Each agent's outbound connections grouped by activity scope and destination (`host`, `protocol`, `port`), from connection-open events. Metadata only: no URL, payload, command or credential.
+
+```json
+{"episodes": [{"id": "<32 hex>", "expected": false, "candidate": true,
+  "observed": {"scope": {"agent": "codex", "exe_path": "…", "harness": "codex", "workspace": "…"},
+               "session_ids": ["…"], "host": "api.example.com", "protocol": "tcp", "port": 443,
+               "count": 12, "first_seen": "…", "last_seen": "…", "recurring": true, "scope_complete": true},
+  "advisor_inference": {"possible_purpose": "…", "confidence": 0.7, "created_at": "…"}}],
+ "non_candidate_limit": 100}
+```
+
+- `recurring` — at least 5 connections, and the last 4 gaps are each 1 minute or more and within 2× of each other.
+- `candidate` — recurring, attributed to a known agent, and not covered by an expected-egress rule; candidates come first and are Home's `recurring_egress` decisions.
+- At most 100 non-candidate episodes are listed; episodes idle for 7 days are dropped.
+- `advisor_inference` is present only when the advisor assessed the episode's current evidence; the console labels it as an inference.
+
+`POST /egress/episodes/{id}/assess` queues an advisor assessment for a candidate: `{"status": "queued"}`, or `{"status": "cached"}` when the current evidence is already assessed. Non-candidates return `409`; no advisor returns `503`.
+
+Both are console-allowed and NoAgent; the POST is a mutation (pinned UI or owner).
+
+### Expected egress (`/expected-egress`)
+
+Operator decisions taken from an observed episode. The request names only the episode and the rule kind; destination and scope always come from the daemon's observation.
+
+- `GET /expected-egress` — `{"rules": [...]}` (`id`, `agent`, `kind`, `host`/`protocol`/`port` or `exe_path`/`harness`/`workspace`, `created_at`, `revoked_at`).
+- `POST /expected-egress {"episode_id", "kind": "destination"}` — expects that agent's exact host, protocol and port. Loopback destinations are refused.
+- `POST /expected-egress {"episode_id", "kind": "scope"}` — expects every destination of that agent's executable, harness and workspace; only for an episode with `scope_complete`.
+- `DELETE /expected-egress?id=<32 hex>` — revokes a rule.
+
+Creates and revokes are audited (`expected-egress-create`, `expected-egress-revoke`). A rule only clears the Home decision: the proxy, guard, correlator, incidents and flags never consult it. NoAgent; POST and DELETE are mutations (pinned UI or owner).
 
 ### `GET|POST /notify/rules`
 
