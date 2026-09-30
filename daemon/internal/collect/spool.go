@@ -50,17 +50,35 @@ const ESPoolPath = "/var/db/secure-agent/es-spool.jsonl"
 // nothing about the writer.
 const ESServiceLabel = "com.cavi-ai.secure-agent-esd"
 
-// SpoolAvailable reports whether the privileged ES collector's spool exists
-// and is readable by this (unprivileged) daemon — the signal that file
-// telemetry should come from the spool tail instead of a direct eslogger
-// child (which macOS only permits as root).
+// SpoolAvailable reports whether the privileged ES collector's spool (or,
+// mid-rotation, its .1) exists and is readable by this (unprivileged)
+// daemon — the signal that file telemetry should come from the spool tail
+// instead of a direct eslogger child (which macOS only permits as root).
 func SpoolAvailable() bool {
-	f, err := os.Open(ESPoolPath)
-	if err != nil {
-		return false
+	return spoolAvailableAt(ESPoolPath)
+}
+
+func spoolAvailableAt(path string) bool {
+	for _, p := range []string{path, path + ".1"} {
+		if f, err := os.Open(p); err == nil {
+			_ = f.Close()
+			return true
+		}
 	}
-	_ = f.Close()
-	return true
+	return false
+}
+
+// spoolFacts is the spool's size and mtime. Rotation renames the spool to
+// <path>.1 before it creates the new one; in that gap <path>.1 is the newest
+// spool, so a probe landing there does not read as a missing collector.
+// Zero values when neither file exists.
+func spoolFacts(path string) (int64, time.Time) {
+	for _, p := range []string{path, path + ".1"} {
+		if st, err := os.Stat(p); err == nil {
+			return st.Size(), st.ModTime()
+		}
+	}
+	return 0, time.Time{}
 }
 
 // ESServiceSnapshot is one probe of the privileged collector's real state:
@@ -106,9 +124,7 @@ var ESServiceProbe = ESServiceState
 // crash-loop signature (rapid respawns while the tailer reports running).
 func ESServiceState() (ESServiceSnapshot, error) {
 	var s ESServiceSnapshot
-	if st, serr := os.Stat(ESPoolPath); serr == nil {
-		s.SpoolSize, s.SpoolMtime = st.Size(), st.ModTime()
-	}
+	s.SpoolSize, s.SpoolMtime = spoolFacts(ESPoolPath)
 	out, cerr := exec.Command("/bin/launchctl", "print", "system/"+ESServiceLabel).Output()
 	if cerr != nil {
 		// Not loaded / not running as root: report the file facts anyway.

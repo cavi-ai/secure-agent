@@ -545,6 +545,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Menu bar: the unused flag action, incident detail and process detail sheets.
 
 ### Fixed
+- Doctor and posture no longer report the file-telemetry spool missing while the collector rotates it; a daemon starting mid-rotation keeps the spool tail.
 - Live acceptance compares Claude turns with Claude prompts in the same capped time window; other harnesses no longer cause false turn-ratio failures.
 - Local agent persistence: failed message, run, or plan writes stop dispatch before execution; aborted dispatches close their recorded runs. Stale message updates cannot reopen claimed commands or reviewed recommendations.
 - Secret masking removes complete private-key envelopes, including unterminated keys. Headless output is masked before selecting its tail; oversized captures and answer files are withheld instead of exposing fragments.
