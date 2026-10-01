@@ -3408,7 +3408,7 @@ document.addEventListener('DOMContentLoaded', () => {
         return window.analyzeAgentActivity(body.flag_ids);
       case 'expect':
       case 'expect-file':
-        if (!await window.saConfirm(a.consequence, { title: 'Confirm security exception', confirmLabel: 'Save exception' })) return;
+        if (!await window.saConfirm(a.consequence, { title: 'Confirm security exception', okLabel: 'Save exception' })) return;
         try {
           const res = await apiFetch(a.path, {method: a.method, headers: {'Content-Type':'application/json'}, body: JSON.stringify(body)});
           if (!res.ok) throw new Error(await res.text());
@@ -3528,10 +3528,13 @@ document.addEventListener('DOMContentLoaded', () => {
         return window.analyzeAgentActivity(body.flag_ids);
       case 'expect':
       case 'expect-file': {
-        const f = (telemetryData.flags || []).find(x => x.id === body.flag_id) || planFlagCache.get(body.flag_id);
-        if (f) return window.explainAct(body.flag_id, a.id);
-        await window.openFlagDetail(body.flag_id);
-        return window.explainAct(body.flag_id, a.id);
+        if (!await window.saConfirm(a.consequence, { title: 'Confirm security exception', okLabel: 'Save exception' })) return;
+        try {
+          await send(a.method, a.path, body);
+          showToast('Exception saved; unmatched evidence stays open. Revoke under Policy.', 'success');
+          fetchTelemetry(); loadPolicy();
+        } catch (err) { showToast('Exception not saved: ' + (err.message || err), 'danger'); }
+        return;
       }
 
       case 'kill':

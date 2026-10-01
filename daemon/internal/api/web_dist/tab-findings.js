@@ -260,7 +260,7 @@ function renderFlags() {
   SA.syncSelect('flags-agent', SA.seenAgents);
   SA.syncSelect('flags-rule', SA.seenRules);
 
-  // Patterns lead; a flag a pattern covers is shown by its card, not as a row.
+  // A covered flag appears only in its pattern; urgency orders both forms.
   const selected = id => {
     const v = (document.getElementById(id) || {}).value || 'all';
     return v === 'all' ? '' : v;
@@ -339,7 +339,7 @@ function renderFlags() {
     </div>`;
   };
   const parts = patterns.map(p => ({
-    key: 'pattern:' + p.key, html: patternHTML(p, now, { flags: SA.t.flags, expanded: SA.expanded }),
+    key: 'pattern:' + p.key, priority: findingPriority(p), html: patternHTML(p, now, { flags: SA.t.flags, expanded: SA.expanded }),
   })).concat(flags.map((f, i) => {
     const html = cardHTML(f, i);
     // The age in a finding's meta ticks without rebuilding the card (so an
@@ -347,8 +347,8 @@ function renderFlags() {
     // the text is set in place below. Verdict and actions stay in the hash.
     const l = explainLines(f, now);
     const hash = l ? html.replace(metaHTML(l.meta), metaHTML('')) : html;
-    return { key: 'flag:' + f.id, html, hash, meta: l ? l.meta : null };
-  }));
+    return { key: 'flag:' + f.id, priority: findingPriority(f), html, hash, meta: l ? l.meta : null };
+  })).sort((a, b) => b.priority - a.priority);
 
   // Dispositions: muted (rule, host, agent) rows, visible so the quiet is
   // deliberate and reversible. The list node persists; its rows patch one by
@@ -368,6 +368,14 @@ function renderFlags() {
     const span = m !== undefined && el.querySelector('.finding-meta');
     if (span && span.textContent !== m) span.textContent = m;
   }
+}
+
+function findingPriority(f) {
+  const state = (f.disposition || (f.explain || {}).disposition || {}).state;
+  if (f.acknowledged || state === 'acknowledged') return 0;
+  if (state === 'benign-likely') return 1;
+  if (state === 'critical' || (!state && f.severity >= 3)) return 3;
+  return 2;
 }
 
 // muteRowHTML: one disposition in the Muted list — rule, host, and the agent
@@ -427,7 +435,7 @@ function findingHTML(f, l, chainHTML, toolsHTML) {
 // ---------- patterns: a repeating finding as one card ----------
 
 // Served pattern action ids the console performs.
-const PATTERN_CONSOLE_ACTIONS = ['allow-host', 'mute-rule-host', 'mute-class', 'dismiss-all', 'kill'];
+const PATTERN_CONSOLE_ACTIONS = ['expect', 'expect-file', 'review-local', 'inspect-file', 'allow-host', 'mute-rule-host', 'mute-class', 'dismiss-all', 'kill'];
 const PATTERN_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 // uncoveredFlags: the flags no pattern covers (flag_ids). Handed the

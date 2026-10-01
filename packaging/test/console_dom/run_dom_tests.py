@@ -275,6 +275,8 @@ def main():
         dom_headroomphone = dump_dom(chrome, tmp, "?phonedemo&headroomhint")
         dom_scope = dump_dom(chrome, tmp, "?scopedemo")
         dom_pattern = dump_dom(chrome, tmp, "?patterndemo")
+        dom_gh = dump_dom(chrome, tmp, "?ghdemo")
+        dom_ghapprove = dump_dom(chrome, tmp, "?ghdemo&ghapprove")
         dom_patternact = dump_dom(chrome, tmp, "?patterndemo&patternact")
         dom_patternphone = dump_dom(chrome, tmp, "?phonedemo&patterndemo")
         dom_patternstream = dump_dom(chrome, tmp, "?patterndemo&patternstream")
@@ -1378,6 +1380,12 @@ def main():
               f"badge={attention_badge!r} tab={tab_badge!r} needs_you={needs_you}")
 
         # --- patterns: a repeating finding is one card ---
+        gh_cards = dom_gh.split('id="flags-list"', 1)[-1].split('id="incidents-container"', 1)[0]
+        check("GitHub grouped finding exposes approval, local review and inspection",
+              all(f'data-action-id="{action}"' in gh_cards for action in ('expect', 'review-local', 'inspect-file')))
+        check("GitHub approval posts the served exact scope and reconciles to reviewed",
+              'POST /expected body={"flag_id":"gh-flag","path":"/Users/dev/.config/gh/hosts.yml","host":"140.82.114.6"}' in pre(dom_ghapprove, "mock-requests")
+              and '<b class="pattern-open">0 open</b>' in dom_ghapprove)
         pat_attn = dom_pattern.split('id="attention-center"', 1)[-1].split('id="security-findings-grid"', 1)[0]
         pat_cards = re.findall(r'<article class="finding pattern-card [^"]*" data-pattern-key="([^"]+)">(.*?)</article>', pat_attn, re.S)
         # Covered flags are intentionally clickable inside the disclosure;
@@ -1393,9 +1401,9 @@ def main():
               f"cards={len(pat_cards)}")
         pat_flags = dom_pattern.split('id="flags-list"', 1)[-1].split('id="incidents-container"', 1)[0]
         pat_standalone = re.sub(r'<article class="finding pattern-card [^"]*"[^>]*>.*?</article>', '', pat_flags, flags=re.S)
-        check("patterns: the Flags list leads with the pattern and has no card for a covered flag",
+        check("patterns: critical individual flags lead warnings without duplicating covered flags",
               'data-pattern-key="codex|keychain-access|' in pat_flags
-              and pat_flags.index('data-pattern-key=') < pat_flags.index('class="flag-card')
+              and pat_flags.index('data-id="flag-1"') < pat_flags.index('data-pattern-key=') < pat_flags.index('data-id="flag-3"')
               and not any(f'data-id="{fid}"' in pat_standalone or f'data-flag-id="{fid}"' in pat_standalone for fid in ("flag-6", "flag-7"))
               and "(PID 40844)" not in pat_flags and "(PID 51364)" not in pat_flags
               and 'data-id="flag-3"' in pat_flags)

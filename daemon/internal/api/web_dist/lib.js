@@ -1013,7 +1013,7 @@ function explainLines(flag, nowMs) {
 
 // Served action ids the console performs; each posts the served
 // method/path/body on the proxy listener.
-const EXPLAIN_CONSOLE_ACTIONS = ['allow-host', 'allow-path', 'mute-rule-host', 'mute-class', 'open-incident', 'dismiss', 'kill'];
+const EXPLAIN_CONSOLE_ACTIONS = ['expect', 'expect-file', 'review-local', 'inspect-file', 'allow-host', 'allow-path', 'mute-rule-host', 'mute-class', 'open-incident', 'dismiss', 'kill'];
 
 // explainActionLabel: the served label, except where it carries a pid (kill)
 // or an IPv6 literal (allow-host) — those stay in Details and the tooltip.

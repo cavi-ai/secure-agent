@@ -15,6 +15,9 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Combine local chat and analysis model controls under Secure Agent, retain separate enable controls, and restore the Providers sidebar icon.
 
 ### Security findings
+- Restore approval, local review, and file inspection buttons on grouped and individual findings; grouped approvals use their served endpoint directly.
+- Count tightly matched `gh` credential-helper/Git client activity as routine GitHub use, while retaining findings for model-visible reads, unrelated processes, other secrets, and shared cloud destinations.
+- Prioritize critical findings ahead of repeated warnings in the findings list.
 - Distinguish temporal and parent-process read/connect correlations from direct or descendant activity; cloud/CDN identity no longer claims to identify the receiving service.
 - Retain weak historical findings at review severity, fold unresolved repetitions across hours and restarts, and alert when stronger evidence appears.
 - Scope expected reads to exact destination hosts, preserve unmatched evidence, and make served exception actions functional in the console.

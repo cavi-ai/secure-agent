@@ -12,6 +12,24 @@ const end = app.indexOf('  // A pattern card\'s served action', start);
 assert.ok(start >= 0 && end > start, 'finding action handler is present');
 const actionHandler = app.slice(start, end);
 
+test('group approval sends the selected served endpoint without a stale flag lookup', async () => {
+  const begin = app.indexOf('  window.patternAct = async function(');
+  const finish = app.indexOf('  window.unmuteFlag = async function(', begin);
+  const requests = [];
+  const body = { flag_id: 'older', path: '/home/.config/gh/hosts.yml', host: '140.82.114.6' };
+  const ctx = { window: { saConfirm: async () => true },
+    telemetryData: { patterns: [{ key: 'group', actions: [{id: 'expect', method: 'POST', path: '/expected', body, consequence: 'This endpoint only'}] }] },
+    apiFetch: async (url, req) => { requests.push([url, JSON.parse(req.body)]); return {ok: true}; },
+    showToast: () => {}, fetchTelemetry: () => {}, loadPolicy: () => {},
+  };
+  vm.runInNewContext(app.slice(begin, finish), ctx);
+  await ctx.window.patternAct('group', 'expect', body.host);
+  assert.deepEqual(requests, [['/expected', body]]);
+  ctx.window.saConfirm = async () => false;
+  await ctx.window.patternAct('group', 'expect', body.host);
+  assert.equal(requests.length, 1);
+});
+
 test('opening an older finding makes its served actions immediately clickable', async () => {
   const begin = app.indexOf('  window.openFlagDetail = async function(');
   const finish = app.indexOf('  // Deep link from the menubar', begin);

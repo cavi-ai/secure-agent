@@ -36,6 +36,25 @@ const pattern = (over) => ({
 });
 const flag = (id) => ({ id, agent: 'codex', rule: 'keychain-access', pid: 40844, ts: '2026-09-12T03:00:08Z', session_id: 's1' });
 
+test('grouped findings expose approval, local review and file inspection', () => {
+  const ids = ['expect', 'expect-file', 'review-local', 'inspect-file', 'dismiss-all'];
+  const html = patternHTML(pattern({ actions: ids.map(id => ({ id, label: id, consequence: 'Review scope', body: { flag_id: 'f1', host: 'api.github.com' } })) }), Date.now(), {});
+  assert.deepEqual([...html.matchAll(/data-action-id="([a-z-]+)"/g)].map(m => m[1]), ids);
+});
+
+test('a critical individual finding leads a repeated warning card', () => {
+  let keys;
+  const list = {children: []};
+  ctx.document = {getElementById: id => id === 'flags-list' ? list : {value: 'all'}};
+  ctx.SA = {t: {flags: [], flagsView: [{...flag('urgent'), severity: 3}], patterns: [pattern()], status: {}, audit: []},
+    seenAgents: new Set(), seenRules: new Set(), syncSelect: () => {}, globalSearchTerm: () => '',
+    paintSessionChip: () => {}, pendingRetriage: new Set(), expanded: new Set()};
+  ctx.window.SA = ctx.SA;
+  ctx.patchList = (_node, rows) => {keys = rows.map(r => r.key)};
+  ctx.renderFlags();
+  assert.equal(keys[0], 'flag:urgent');
+});
+
 test('patternHTML: 24 bars, count, summary, open count; actions in served order, recommended first', () => {
   const html = patternHTML(pattern(), Date.parse('2026-09-23T12:00:00Z'), {});
   assert.equal((html.match(/<i class="h\d"><\/i>/g) || []).length, 24);

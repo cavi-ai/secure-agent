@@ -2,6 +2,8 @@ package correlate
 
 import (
 	"fmt"
+	"net/netip"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -56,7 +58,8 @@ func (c *Correlator) credentialOwners(path string) []string {
 
 // ownerUse reports whether cm is the credential in every file read used
 // with its owner: for each file, a read of it came from the connection's own
-// process tree, and an org that owns the file is the destination. Other
+// process tree (or the narrowly matched GitHub helper), and an org that owns
+// the file is the destination. Other
 // processes reading the same file do not change that. An agent tool read
 // never qualifies: it put the file into the model's context.
 func (c *Correlator) ownerUse(reads []readMark, cm connMark) bool {
@@ -66,7 +69,10 @@ func (c *Correlator) ownerUse(reads []readMark, cm connMark) bool {
 	}
 	explained := map[string]bool{}
 	for _, r := range reads {
-		ok := r.kind == event.KindFileOpen && sameTree(r, cm) && slices.Contains(c.credentialOwners(r.path), org)
+		if r.kind == event.KindPluginAction {
+			return false // A native read of the same path cannot undo model exposure.
+		}
+		ok := r.kind == event.KindFileOpen && (sameTree(r, cm) || githubCredentialSibling(r, cm)) && slices.Contains(c.credentialOwners(r.path), org)
 		explained[r.path] = explained[r.path] || ok
 	}
 	for _, ok := range explained {
@@ -75,6 +81,34 @@ func (c *Correlator) ownerUse(reads []readMark, cm connMark) bool {
 		}
 	}
 	return true
+}
+
+// githubCredentialSibling covers gh's credential helper beside a Git client
+// under the same immediate parent. A broad agent-family or cloud-provider
+// match is insufficient. Unknown executables retain the review finding.
+func githubCredentialSibling(r readMark, cm connMark) bool {
+	if r.kind != event.KindFileOpen || filepath.Base(r.exe) != "gh" || !strings.HasSuffix(r.path, "/.config/gh/hosts.yml") ||
+		cm.port != 443 || len(r.chain) < 3 || len(cm.chain) < 3 || r.pid == cm.pid ||
+		r.chain[0] != r.pid || cm.chain[0] != cm.pid || r.chain[1] <= 1 || r.chain[1] != cm.chain[1] {
+		return false
+	}
+	gap := cm.at.Sub(r.at)
+	if gap < -5*time.Second || gap > 5*time.Second {
+		return false
+	}
+	switch filepath.Base(cm.exe) {
+	case "git", "git-remote-https", "gh":
+	default:
+		return false
+	}
+	host := DestLabel(cm.host)
+	if host == "github.com" || host == "api.github.com" || (strings.HasPrefix(host, "lb-") && strings.HasSuffix(host, ".github.com")) {
+		return true
+	}
+	// Restrict bare addresses to the existing GitHub API/Git ranges, excluding
+	// Pages/user-content ranges and shared CDN infrastructure.
+	ip, err := netip.ParseAddr(host)
+	return err == nil && (netip.MustParsePrefix("140.82.112.0/20").Contains(ip) || netip.MustParsePrefix("192.30.252.0/22").Contains(ip))
 }
 
 // sameTree reports whether the reader made the connection or one is the
@@ -234,6 +268,7 @@ func (c *Correlator) readThenConnectLocked(e event.Event, agent string, rootPID 
 			TS:    cm.at.Format(time.RFC3339),
 			Text:  fmt.Sprintf("connection observed to %s:%d at %s", cm.host, cm.port, cm.at.Format(time.RFC3339)),
 			PID:   cm.pid,
+			Exe:   cm.exe,
 			Chain: append([]int32(nil), cm.chain...),
 		})
 	}

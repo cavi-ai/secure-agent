@@ -4,11 +4,82 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cavi-ai/secure-agent/daemon/internal/agents"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 )
 
 const ghExe = "/opt/homebrew/bin/gh"
+
+func TestModelReadCannotHideBehindNativeCredentialUse(t *testing.T) {
+	c := newFamilyCorrelator(t)
+	at := time.Unix(1_700_000_000, 0)
+	path := homePath(t, ".config/gh/hosts.yml")
+	reads := []readMark{
+		{path: path, pid: 201, exe: ghExe, kind: event.KindFileOpen, at: at},
+		{path: path, pid: 203, kind: event.KindPluginAction, at: at},
+	}
+	if c.ownerUse(reads, connMark{pid: 201, host: "140.82.114.6", port: 443, at: at.Add(time.Second)}) {
+		t.Fatal("model-visible credentials hidden by another process's native read")
+	}
+}
+
+type githubHelperSource struct{ familyProcSource }
+
+func (githubHelperSource) List() []agents.ProcInfo {
+	return append(append([]agents.ProcInfo(nil), familyProcs...),
+		agents.ProcInfo{PID: 300, PPID: 200, Exe: "/bin/zsh"},
+		agents.ProcInfo{PID: 301, PPID: 300, Exe: ghExe},
+		agents.ProcInfo{PID: 302, PPID: 300, Exe: "/usr/bin/git"})
+}
+func (s githubHelperSource) Info(pid int32) (agents.ProcInfo, bool) {
+	for _, p := range s.List() {
+		if p.PID == pid {
+			return p, true
+		}
+	}
+	return agents.ProcInfo{}, false
+}
+
+func TestGitHubSiblingCredentialHelper(t *testing.T) {
+	base := time.Unix(1_700_000_000, 0)
+	for _, tc := range []struct {
+		name, exe, host, path string
+		kind                  event.Kind
+		gap                   time.Duration
+		want                  int
+	}{
+		{"git helper", "/usr/bin/git", "140.82.114.6", ".config/gh/hosts.yml", event.KindFileOpen, time.Second, 0},
+		{"connection first", "/usr/bin/git", "lb-140-82-114-5-iad.github.com", ".config/gh/hosts.yml", event.KindFileOpen, -time.Second, 0},
+		{"other executable", "/usr/local/bin/node", "140.82.114.6", ".config/gh/hosts.yml", event.KindFileOpen, time.Second, 1},
+		{"shared CDN", "/usr/bin/git", "2606:4700::6812:105d", ".config/gh/hosts.yml", event.KindFileOpen, time.Second, 1},
+		{"model visible", "/usr/bin/git", "140.82.114.6", ".config/gh/hosts.yml", event.KindPluginAction, time.Second, 1},
+		{"other secret", "/usr/bin/git", "140.82.114.6", ".aws/credentials", event.KindFileOpen, time.Second, 1},
+		{"distant connection", "/usr/bin/git", "140.82.114.6", ".config/gh/hosts.yml", event.KindFileOpen, 30 * time.Second, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := newFamilyCorrelator(t)
+			c.tagger = agents.New(c.cfg, githubHelperSource{})
+			c.tagger.Refresh()
+			read := event.Event{Kind: tc.kind, PID: 301, TS: base, Path: homePath(t, tc.path), ExePath: ghExe}
+			conn := event.Event{Kind: event.KindConnOpen, PID: 302, TS: base.Add(tc.gap), RemoteHost: tc.host, RemotePort: 443, ExePath: tc.exe}
+			var flags []model.Flag
+			if tc.gap < 0 {
+				c.Observe(conn)
+				flags = c.Observe(read)
+			} else {
+				c.Observe(read)
+				flags = c.Observe(conn)
+			}
+			if len(flags) != tc.want {
+				t.Fatalf("flags=%d want %d", len(flags), tc.want)
+			}
+			if tc.want == 0 && c.CredentialOwnerUses() != 1 {
+				t.Fatal("routine activity was not counted")
+			}
+		})
+	}
+}
 
 func ghReads(c *Correlator, t *testing.T, kind event.Kind, at time.Time) []model.Flag {
 	return c.Observe(event.Event{Kind: kind, PID: 201, TS: at, Path: homePath(t, ".config/gh/hosts.yml"), ExePath: ghExe})

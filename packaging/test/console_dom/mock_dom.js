@@ -576,6 +576,26 @@
   // ?theme=dark|light pins the console theme (screenshots); app.js reads it
   // from the same storage key the masthead toggle writes.
   const theme = new URLSearchParams(MODE).get('theme');
+  if (MODE.includes('ghdemo')) {
+    setTimeout(() => openTab('findings'), 1500);
+    const key = 'claude|sensitive-read-then-connect|/Users/dev/.config/gh/hosts.yml';
+    data['/flags'].push({id: 'gh-flag', rule: 'sensitive-read-then-connect', severity: 2, agent: 'claude', pid: 301,
+      evidence: [{kind: 'read', label: '/Users/dev/.config/gh/hosts.yml', exe: '/opt/homebrew/bin/gh'}]});
+    data['/patterns'] = [{key, agent: 'claude', rule: 'sensitive-read-then-connect', title: 'Sensitive file read near an outside connection',
+      count: 81, flags: 30, unacked: 1, first: iso(600000), last: iso(1000), hourly: [], flag_ids: ['gh-flag'],
+      disposition: {state: 'warning', text: 'Needs a look', why: 'Recorded evidence does not establish credential use.'},
+      summary: 'gh read ~/.config/gh/hosts.yml near a GitHub connection.', actions: [
+        {id: 'expect', label: 'Expected: gh → 140.82.114.6', consequence: 'Approve only this reader, file, and endpoint. Other evidence stays open.',
+          method: 'POST', path: '/expected', body: {flag_id: 'gh-flag', path: '/Users/dev/.config/gh/hosts.yml', host: '140.82.114.6'}},
+        {id: 'review-local', label: 'Send to local agent review', body: {flag_ids: ['gh-flag']}},
+        {id: 'inspect-file', label: 'Inspect file details', body: {path: '/Users/dev/.config/gh/hosts.yml'}},
+        {id: 'dismiss-all', label: 'Dismiss all 1 open', method: 'POST', path: '/flags/acknowledge', body: {flag_ids: ['gh-flag']}}
+      ]}];
+    if (MODE.includes('ghapprove')) {
+      setTimeout(() => document.querySelector('#flags-list [data-action-id="expect"]')?.click(), 9000);
+      setTimeout(() => document.getElementById('confirm-ok')?.click(), 9500);
+    }
+  }
   if (theme === 'dark' || theme === 'light') {
     try { localStorage.setItem('sa-theme', theme); } catch { /* ignored */ }
   }
@@ -865,6 +885,9 @@
       }
       return { status: 'ok', acknowledged: true, count: ids.size };
     }
+    if (p === '/expected' && body.flag_id === 'gh-flag') {
+      return handlePost('/flags/acknowledge', {body: JSON.stringify({flag_ids: ['gh-flag']})});
+    }
     if (p === '/guard/resolve') {
       data['/guard/pending'] = data['/guard/pending'].filter(prompt => prompt.id !== body.id);
       // The served attention queue reflects the resolution too — the console
@@ -961,7 +984,7 @@
         try { host = JSON.parse(opts.body).host; } catch { /* ignored */ }
         line += ' row=' + (document.querySelector(`#firewall-container [data-action="allowlist-remove"][data-host="${host}"]`) ? 1 : 0);
       }
-      if ((MODE.includes('explaindemo') || MODE.includes('patterndemo') || MODE.includes('rawmute')) && opts.body) line += ' body=' + opts.body;
+      if ((MODE.includes('explaindemo') || MODE.includes('patterndemo') || MODE.includes('ghdemo') || MODE.includes('rawmute')) && opts.body) line += ' body=' + opts.body;
       if (MODE.includes('rawmute') && p === '/mute' && opts.method === 'POST') data['/mute'].push(JSON.parse(opts.body));
       if (p === '/expected' && opts.method === 'DELETE') {
         line = `${opts.method} ${String(path)}`;

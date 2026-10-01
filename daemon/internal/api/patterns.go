@@ -83,6 +83,9 @@ func (a *API) patternsOf(flags []model.Flag, since, now time.Time, minCount int)
 		out = append(out, a.fillPattern(g.p, g.flags, since, now, env))
 	}
 	sort.SliceStable(out, func(i, j int) bool {
+		if x, y := dispositionRank(out[i].Disposition.State), dispositionRank(out[j].Disposition.State); x != y {
+			return x > y
+		}
 		if out[i].Unacked != out[j].Unacked {
 			return out[i].Unacked > out[j].Unacked
 		}
