@@ -190,6 +190,8 @@ final class SettingsLayoutTests: XCTestCase {
 
     private func keyboardMove(_ control: NSSegmentedControl, keyCode: UInt16,
                               character: String, window: NSWindow) throws {
+        NSApp.deactivate()
+        XCTAssertFalse(NSApp.isActive, "Keyboard checks must work without desktop activation")
         XCTAssertTrue(window.makeFirstResponder(control))
         try sendKey(character, keyCode: keyCode, window: window)
         try sendKey(" ", keyCode: 49, window: window)
@@ -200,7 +202,11 @@ final class SettingsLayoutTests: XCTestCase {
             modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
             windowNumber: window.windowNumber, context: nil, characters: character,
             charactersIgnoringModifiers: character, isARepeat: false, keyCode: keyCode))
-        window.sendEvent(event)
+        // A test runner need not own the desktop's key window. Deliver to
+        // the window's focused native responder so AppKit still handles the
+        // keys, without relying on global window activation in CI.
+        let responder = try XCTUnwrap(window.firstResponder)
+        responder.keyDown(with: event)
     }
 
     private func snapshot(_ view: NSView, name: String) throws {
