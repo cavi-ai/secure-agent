@@ -190,35 +190,28 @@ final class SettingsLayoutTests: XCTestCase {
 
     private func keyboardMove(_ control: NSSegmentedControl, keyCode: UInt16,
                               character: String, window: NSWindow) throws {
-        NSApp.deactivate()
-        XCTAssertFalse(NSApp.isActive, "Keyboard checks must work without desktop activation")
         XCTAssertTrue(window.makeFirstResponder(control))
-        // Selection and keyboard focus are separate in a segmented cell.
-        // On a fresh runner, the first arrow can enter the current segment
-        // instead of advancing it. Cycle native keys back to the selected
-        // segment to establish focus before testing a single move.
-        let initialSelection = control.selectedSegment
-        for _ in 0..<control.segmentCount {
-            try sendKey(character, keyCode: keyCode, window: window)
-            try sendKey(" ", keyCode: 49, window: window)
-            if control.selectedSegment == initialSelection { break }
-        }
-        XCTAssertEqual(control.selectedSegment, initialSelection,
-                       "Native keyboard focus must return to the selected segment")
+        XCTAssertTrue(window.firstResponder === control)
+        let expected = (control.selectedSegment + (keyCode == 124 ? 1 : control.segmentCount - 1)) % control.segmentCount
         try sendKey(character, keyCode: keyCode, window: window)
         try sendKey(" ", keyCode: 49, window: window)
+        XCTAssertEqual(control.selectedSegment, expected,
+                       "Native key press must select the adjacent segment; keyWindow=\(window.isKeyWindow), fullKeyboardAccess=\(NSApp.isFullKeyboardAccessEnabled)")
     }
 
     private func sendKey(_ character: String, keyCode: UInt16, window: NSWindow) throws {
-        let event = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero,
-            modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
-            windowNumber: window.windowNumber, context: nil, characters: character,
-            charactersIgnoringModifiers: character, isARepeat: false, keyCode: keyCode))
-        // A test runner need not own the desktop's key window. Deliver to
-        // the window's focused native responder so AppKit still handles the
-        // keys, without relying on global window activation in CI.
-        let responder = try XCTUnwrap(window.firstResponder)
-        responder.keyDown(with: event)
+        // Match a complete physical key press. Arrow keys carry the function
+        // and numeric-pad flags; activation may occur when Space is released.
+        let flags: NSEvent.ModifierFlags = [123, 124].contains(keyCode) ? [.function, .numericPad] : []
+        for type: NSEvent.EventType in [.keyDown, .keyUp] {
+            let event = try XCTUnwrap(NSEvent.keyEvent(with: type, location: .zero,
+                modifierFlags: flags, timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: window.windowNumber, context: nil, characters: character,
+                charactersIgnoringModifiers: character, isARepeat: false, keyCode: keyCode))
+            let responder = try XCTUnwrap(window.firstResponder)
+            if type == .keyDown { responder.keyDown(with: event) }
+            else { responder.keyUp(with: event) }
+        }
     }
 
     private func snapshot(_ view: NSView, name: String) throws {
