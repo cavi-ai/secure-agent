@@ -15,6 +15,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Combine local chat and analysis model controls under Secure Agent, retain separate enable controls, and restore the Providers sidebar icon.
 
 ### Security findings
+- Match destination mutes against structured connection evidence so existing flags clear regardless of their display wording.
 - Push posture changes after API decisions so dismissing the last pending finding restores the menu bar's purple state without waiting for new telemetry.
 - Restore approval, local review, and file inspection buttons on grouped and individual findings; grouped approvals use their served endpoint directly.
 - Count tightly matched `gh` credential-helper/Git client activity as routine GitHub use, while retaining findings for model-visible reads, unrelated processes, other secrets, and shared cloud destinations.

@@ -953,19 +953,20 @@ func evidenceCitesHost(evidenceJSON, host string) bool {
 	want := strings.ToLower(host)
 	isLocal := want == "localhost" || want == "127.0.0.1" || want == "::1" || strings.HasPrefix(want, "127.")
 	for _, item := range items {
-		line := item.Text
-		if line == "" {
-			line = item.String()
+		// Structured connection targets are authoritative; display wording
+		// must not determine whether an operator's destination mute applies.
+		h := item.Label
+		if item.Kind != "connect" || h == "" {
+			line := item.String()
+			idx := strings.Index(line, "connected to ")
+			if idx < 0 {
+				continue
+			}
+			h = line[idx+len("connected to "):]
+			if at := strings.Index(h, " at "); at >= 0 {
+				h = h[:at]
+			}
 		}
-		idx := strings.Index(line, "connected to ")
-		if idx < 0 {
-			continue
-		}
-		rest := line[idx+len("connected to "):]
-		if at := strings.Index(rest, " at "); at >= 0 {
-			rest = rest[:at]
-		}
-		h := strings.TrimSuffix(rest, "") // host:port
 		if h == "" {
 			continue
 		}

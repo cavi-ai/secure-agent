@@ -469,6 +469,33 @@ func TestGuardPathAllows(t *testing.T) {
 	}
 }
 
+func TestEvidenceCitesStructuredConnectionHost(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		item model.EvidenceItem
+		host string
+		want bool
+	}{
+		{"observed", model.EvidenceItem{Kind: "connect", Label: "api.github.com:443", Text: "connection observed to api.github.com:443 at T"}, "api.github.com", true},
+		{"display-independent", model.EvidenceItem{Kind: "connect", Label: "api.github.com:443", Text: "outside connection"}, "api.github.com", true},
+		{"other-host", model.EvidenceItem{Kind: "connect", Label: "api.github.com:443"}, "github.com", false},
+		{"ipv6", model.EvidenceItem{Kind: "connect", Label: "[2606:4700::1]:443"}, "2606:4700::1", true},
+		{"loopback", model.EvidenceItem{Kind: "connect", Label: "[::1]:443"}, "localhost", true},
+		{"read-label", model.EvidenceItem{Kind: "read", Label: "api.github.com:443"}, "api.github.com", false},
+		{"label-authoritative", model.EvidenceItem{Kind: "connect", Label: "other.example:443", Text: "connected to api.github.com:443 at T"}, "api.github.com", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			data, err := json.Marshal([]model.EvidenceItem{tc.item})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := evidenceCitesHost(string(data), tc.host); got != tc.want {
+				t.Fatalf("matched=%v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestAcknowledgeRuleHost(t *testing.T) {
 	dir := t.TempDir()
 	s, err := Open(filepath.Join(dir, "e.db"), filepath.Join(dir, "e.jsonl"))
