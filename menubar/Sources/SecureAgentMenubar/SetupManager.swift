@@ -458,6 +458,7 @@ public final class SetupManager: ObservableObject {
         var endpoint: String?
         var model: String?
         var managed: Bool?
+        var hasExistingConfig = false
         for line in yaml.split(separator: "\n", omittingEmptySubsequences: false) {
             let s = String(line)
             if s.hasPrefix("advisor:") { inAdvisor = true; continue }
@@ -478,13 +479,18 @@ public final class SetupManager: ObservableObject {
                 endpoint = t.replacingOccurrences(of: "endpoint:", with: "")
                     .trimmingCharacters(in: .whitespaces)
                     .replacingOccurrences(of: "\"", with: "")
+                hasExistingConfig = hasExistingConfig || endpoint?.isEmpty == false
             } else if t.hasPrefix("model:") {
                 model = t.replacingOccurrences(of: "model:", with: "")
                     .trimmingCharacters(in: .whitespaces)
                     .replacingOccurrences(of: "\"", with: "")
+                hasExistingConfig = hasExistingConfig || model?.isEmpty == false
             }
         }
+        // The canonical existing-server writer omits managed; the daemon
+        // treats that absence as unmanaged rather than unconfigured.
         let m = managed.map { $0 ? "managed" : "existing" }
+            ?? (hasExistingConfig ? "existing" : nil)
         return (m, endpoint, model)
     }
 

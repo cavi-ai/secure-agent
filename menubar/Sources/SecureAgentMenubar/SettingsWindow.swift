@@ -40,7 +40,7 @@ public final class SettingsWindowController: NSObject, NSWindowDelegate {
         window.title = "Secure Agent Settings"
         window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
         window.setContentSize(NSSize(width: 860, height: 640))
-        window.minSize = NSSize(width: 760, height: 520)
+        window.contentMinSize = NSSize(width: 760, height: 520)
         window.center()
         window.isReleasedWhenClosed = false
         window.delegate = self
@@ -104,11 +104,23 @@ final class SettingsNavigation: ObservableObject {
     @Published var tab: SettingsTab = .protection
 }
 
+private enum ProtectionPane: String, CaseIterable {
+    case files = "Files", network = "Network"
+}
+
+private enum SecureAgentPane: String, CaseIterable {
+    case chat = "Chat", analysis = "Analysis", traffic = "Traffic"
+}
+
 @MainActor
 struct SettingsView: View {
     @ObservedObject var state: AppState
     @ObservedObject private var setup = SetupManager.shared
     @ObservedObject private var nav = SettingsNavigation.shared
+    @State private var protectionPane: ProtectionPane = .files
+    @State private var secureAgentPane: SecureAgentPane = .chat
+    @State private var recommendationsExpanded = false
+    @State private var advisorSelectionInitialized = false
 
     var body: some View {
         HStack(spacing: 0) {
@@ -150,8 +162,20 @@ struct SettingsView: View {
         .frame(minWidth: 760, minHeight: 520)
         .task {
             await setup.refreshState()
+            initializeAdvisorSelection()
             loadPathAllows()
             loadMutes()
+        }
+        .onChange(of: selectedServerID) { _, _ in
+            let server = setup.advisorDiscovery.servers.first { $0.id == selectedServerID }
+            // Hydration and recommendations set both fields together. Keep
+            // that model when it belongs to the newly selected server.
+            if let server, !server.models.contains(selectedModel) {
+                selectedModel = server.models.first ?? ""
+            }
+        }
+        .onChange(of: setup.advisorDiscovery.servers.count) { _, _ in
+            fillEmptyAdvisorSelections()
         }
     }
 
@@ -178,7 +202,30 @@ struct SettingsView: View {
 
     /// Guard policy + firewall enforcement: the enforcement surface.
     private var protectionTab: some View {
-        Form {
+        VStack(spacing: 0) {
+            Picker("Protection area", selection: $protectionPane) {
+                ForEach(ProtectionPane.allCases, id: \.self) { pane in
+                    Text(pane.rawValue).tag(pane)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .accessibilityLabel("Protection area")
+            .padding(.horizontal, 24)
+            .padding(.bottom, 12)
+
+            Form {
+                switch protectionPane {
+                case .files: guardSections
+                case .network: firewallSection
+                }
+            }
+            .formStyle(.grouped)
+        }
+    }
+
+    private var guardSections: some View {
+        Group {
             Section {
                 Text("When an agent tool call touches a guarded path, the rule's mode decides: monitor logs, prompt asks you (Allow Once / Always / Deny), deny blocks outright.")
                     .font(.caption).foregroundStyle(.secondary)
@@ -211,12 +258,11 @@ struct SettingsView: View {
                         .pickerStyle(.segmented)
                         .frame(width: 200)
                         .labelsHidden()
+                        .accessibilityLabel("\(rule.label) guard mode")
                     }
                 }
             }
-            firewallSection
         }
-        .formStyle(.grouped)
     }
 
     // MARK: Telemetry — what watches agents
@@ -396,69 +442,99 @@ struct SettingsView: View {
     }
 
     private var secureAgentTab: some View {
+        VStack(spacing: 0) {
+            Picker("Secure Agent area", selection: $secureAgentPane) {
+                ForEach(SecureAgentPane.allCases, id: \.self) { pane in
+                    Text(pane.rawValue).tag(pane)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .accessibilityLabel("Secure Agent area")
+            .padding(.horizontal, 24)
+            .padding(.bottom, 12)
+
+            Form {
+                switch secureAgentPane {
+                case .chat: chatSection
+                case .analysis:
+                    analysisSections
+                        .disabled(!advisorSelectionInitialized)
+                case .traffic: trafficSection
+                }
+                if let err = setup.lastError {
+                    Text(err).foregroundStyle(.red).font(.caption)
+                }
+            }
+            .formStyle(.grouped)
+        }
+    }
+
+    private var chatSection: some View {
+        Section("Chat") {
+            Toggle("Enable chat", isOn: Binding(
+                get: { setup.systemAgentEnabled },
+                set: { setup.setSystemAgentEnabled($0) }
+            ))
+            Text("Chat with Ollama on this Mac. Shell commands require your confirmation before they run.")
+                .font(.caption).foregroundStyle(.secondary)
+            Button("Open Secure Agent chat") { state.openDashboard(tab: "agent") }
+                .disabled(state.dashboardUnavailableReason != nil)
+        }
+    }
+
+    private var trafficSection: some View {
+        Section("Agent traffic inspection") {
+            Text("Route agents through the inspection proxy (opt-in, shell-scoped).")
+                .font(.caption).foregroundStyle(.secondary)
+            HStack {
+                Button("Copy Command") { setup.copyAgentRoutingCommand() }
+                Button("Show File") { setup.revealAgentRoutingSnippet() }
+                    .disabled(!setup.isAgentRoutingConfigured)
+            }
+        }
+    }
+
+    // SettingsView owns this draft so navigating away never restores over
+    // unapplied edits. A fresh window hydrates once from persisted config.
+    private func initializeAdvisorSelection() {
+        guard !advisorSelectionInitialized else {
+            fillEmptyAdvisorSelections()
+            return
+        }
+        advisorSelectionInitialized = true
+        let persisted = setup.advisorPersisted
+        if let mode = persisted.mode {
+            advisorMode = mode == "managed" ? .managed : .existing
+        }
+        if let endpoint = persisted.endpoint { selectedServerID = endpoint }
+        if let model = persisted.model, !model.isEmpty {
+            if persisted.mode == "managed" {
+                selectedManagedModel = model
+            } else {
+                selectedModel = model
+            }
+        }
+        if persisted.mode == nil, let recommendation = setup.advisorDiscovery.recommended {
+            let choice = SetupManager.advisorChoice(for: recommendation)
+            advisorMode = choice.mode
+            if choice.mode == .managed {
+                selectedManagedModel = choice.model
+            } else {
+                selectedServerID = choice.endpoint ?? ""
+                selectedModel = choice.model
+            }
+        }
+        fillEmptyAdvisorSelections()
+    }
+
+    private func fillEmptyAdvisorSelections() {
         let discovery = setup.advisorDiscovery
-        let selectedServer = discovery.servers.first { $0.id == selectedServerID } ?? discovery.servers.first
-        return Form {
-            Section("Chat") {
-                Toggle("Enable chat", isOn: Binding(
-                    get: { setup.systemAgentEnabled },
-                    set: { setup.setSystemAgentEnabled($0) }
-                ))
-                Text("Chat with Ollama on this Mac. Shell commands require your confirmation before they run.")
-                    .font(.caption).foregroundStyle(.secondary)
-                Button("Open Secure Agent chat") { state.openDashboard(tab: "agent") }
-                    .disabled(state.dashboardUnavailableReason != nil)
-            }
-            analysisSections
-            Section("Agent traffic inspection") {
-                Text("Route agents through the inspection proxy (opt-in, shell-scoped).")
-                    .font(.caption).foregroundStyle(.secondary)
-                HStack {
-                    Button("Copy Command") { setup.copyAgentRoutingCommand() }
-                    Button("Show File") { setup.revealAgentRoutingSnippet() }
-                        .disabled(!setup.isAgentRoutingConfigured)
-                }
-            }
-            if let err = setup.lastError {
-                Text(err).foregroundStyle(.red).font(.caption)
-            }
-        }
-        .formStyle(.grouped)
-        .onAppear {
-            // Restore the persisted advisor config FIRST — the tab must not
-            // reset to "managed local model" every time Settings opens when
-            // the user configured an existing server last time.
-            if let m = setup.advisorPersisted.mode {
-                advisorMode = m == "managed" ? .managed : .existing
-            }
-            if let model = setup.advisorPersisted.model, !model.isEmpty {
-                if setup.advisorPersisted.mode == "managed" {
-                    selectedManagedModel = model
-                } else {
-                    selectedModel = model
-                }
-            }
-            // Nothing configured yet: the pickers start on the recommendation.
-            if setup.advisorPersisted.mode == nil, let r = discovery.recommended {
-                let c = SetupManager.advisorChoice(for: r)
-                advisorMode = c.mode
-                if c.mode == .managed {
-                    selectedManagedModel = c.model
-                } else {
-                    selectedServerID = c.endpoint ?? ""
-                    selectedModel = c.model
-                }
-            }
-            if selectedManagedModel.isEmpty { selectedManagedModel = discovery.managedModels.first ?? "" }
-            if selectedServerID.isEmpty { selectedServerID = discovery.servers.first?.id ?? "" }
-            if selectedModel.isEmpty { selectedModel = selectedServer?.models.first ?? "" }
-        }
-        .onChange(of: selectedServerID) { _, _ in
-            selectedModel = selectedServer?.models.first ?? ""
-        }
-        .onChange(of: discovery.servers.count) { _, _ in
-            if selectedServerID.isEmpty { selectedServerID = discovery.servers.first?.id ?? "" }
-            if selectedManagedModel.isEmpty { selectedManagedModel = discovery.managedModels.first ?? "" }
+        if selectedManagedModel.isEmpty { selectedManagedModel = discovery.managedModels.first ?? "" }
+        if selectedServerID.isEmpty { selectedServerID = discovery.servers.first?.id ?? "" }
+        if selectedModel.isEmpty {
+            let server = discovery.servers.first { $0.id == selectedServerID } ?? discovery.servers.first
+            selectedModel = server?.models.first ?? ""
         }
     }
 
@@ -550,7 +626,7 @@ struct SettingsView: View {
 
     // MARK: Firewall
 
-    /// Reusable: also embedded in the Protection tab (enforcement lives together).
+    /// Outbound enforcement lives in Protection’s Network pane.
     private var firewallSection: some View {
         Section("Egress firewall") {
             Text("Monitor reports leaks without blocking; block stops the request. Promote a rule once you trust its precision.")
@@ -580,6 +656,7 @@ struct SettingsView: View {
                     .pickerStyle(.segmented)
                     .frame(width: 160)
                     .labelsHidden()
+                    .accessibilityLabel("\(rule.id) firewall mode")
                 }
             }
         }
@@ -619,34 +696,6 @@ struct SettingsView: View {
                 .pickerStyle(.radioGroup)
             }
 
-            if let recs = discovery.recommendations, !recs.isEmpty {
-                Section("Recommended for this Mac") {
-                    if let m = discovery.machine {
-                        Text(m.summary).font(.caption).foregroundStyle(.secondary)
-                    }
-                    ForEach(Array(recs.prefix(4))) { r in
-                        HStack(alignment: .firstTextBaseline) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                HStack(spacing: 6) {
-                                    Text(r.label).font(.callout.weight(r.recommended == true ? .semibold : .regular))
-                                    if r.recommended == true {
-                                        Text("Recommended").font(.caption2.weight(.semibold))
-                                            .padding(.horizontal, 5).padding(.vertical, 1)
-                                            .background(Capsule().fill(Color.accentColor.opacity(0.18)))
-                                    }
-                                }
-                                Text((r.source == "installed" ? "On your server · " : "Managed · ") + r.note)
-                                    .font(.caption).foregroundStyle(.secondary)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
-                            Spacer()
-                            Button("Use") { useRecommendation(r) }
-                                .disabled(r.fit == "too-big")
-                        }
-                    }
-                }
-            }
-
             if advisorMode == .managed {
                 Section("Managed model") {
                     if discovery.managedModels.isEmpty {
@@ -668,7 +717,13 @@ struct SettingsView: View {
                             .font(.caption).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     } else {
-                        Picker("Server", selection: $selectedServerID) {
+                        Picker("Server", selection: Binding(
+                            get: { selectedServerID },
+                            set: { newID in
+                                selectedServerID = newID
+                                selectedModel = discovery.servers.first { $0.id == newID }?.models.first ?? ""
+                            }
+                        )) {
                             ForEach(discovery.servers) { srv in
                                 Text("\(srv.kind == "ollama" ? "Ollama" : "OpenAI-compatible") · \(srv.endpoint.replacingOccurrences(of: "http://", with: "")) · \(srv.models.count) model\(srv.models.count == 1 ? "" : "s")")
                                     .tag(srv.id)
@@ -707,6 +762,37 @@ struct SettingsView: View {
                 }
                 HStack {
                     Button("Recheck servers") { Task { await setup.refreshState() } }
+                }
+            }
+
+            if let recs = discovery.recommendations, !recs.isEmpty {
+                Section {
+                    DisclosureGroup("Recommended for this Mac", isExpanded: $recommendationsExpanded) {
+                        if let m = discovery.machine {
+                            Text(m.summary).font(.caption).foregroundStyle(.secondary)
+                        }
+                        ForEach(Array(recs.prefix(4))) { r in
+                            HStack(alignment: .firstTextBaseline) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    HStack(spacing: 6) {
+                                        Text(r.label).font(.callout.weight(r.recommended == true ? .semibold : .regular))
+                                        if r.recommended == true {
+                                            Text("Recommended").font(.caption2.weight(.semibold))
+                                                .padding(.horizontal, 5).padding(.vertical, 1)
+                                                .background(Capsule().fill(Color.accentColor.opacity(0.18)))
+                                        }
+                                    }
+                                    Text((r.source == "installed" ? "On your server · " : "Managed · ") + r.note)
+                                        .font(.caption).foregroundStyle(.secondary)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+                                Spacer()
+                                Button("Use") { useRecommendation(r) }
+                                    .disabled(r.fit == "too-big")
+                                    .accessibilityLabel("Use \(r.label) for analysis")
+                            }
+                        }
+                    }
                 }
             }
         }

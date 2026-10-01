@@ -128,6 +128,45 @@ test('groupUninspected tolerates no rows', () => {
   assert.equal(g.unknown.length + g.vendors.length + g.carriers.length, 0);
 });
 
+test('Egress warning counts pending egress decisions, never raw coverage observations', () => {
+  const badge = {};
+  const container = { querySelector: () => null };
+  ctx.document = { getElementById: id => id === 'firewall-container' ? container : badge };
+  ctx.patchList = () => {};
+  let count;
+  ctx.window = { SA: {
+    t: { status: { uninspected_egress: 11 }, posture: {
+      needs_you: 0, items: [], coverage_items: [{ kind: 'uninspected_egress' }]
+    } },
+    setTabBadge: (id, n) => { assert.equal(id, 'egress'); count = n; },
+    prevFwStats: null, reducedMotion: true,
+  } };
+  ctx.renderFirewall();
+  assert.equal(count, 0, 'coverage alone must not paint a warning');
+  ctx.window.SA.t.posture.items = [{ kind: 'recurring_egress' }, { kind: 'guard_pending' }];
+  ctx.renderFirewall();
+  assert.equal(count, 1, 'an actual egress decision must remain discoverable');
+});
+
+test('infrastructure-only endpoint list presents coverage without implying findings', () => {
+  const container = { querySelectorAll: () => [] };
+  const title = {}, summary = {};
+  ctx.document = { getElementById: id => ({
+    'endpoints-container': container, 'endpoints-title': title, 'endpoints-summary': summary,
+  })[id] };
+  ctx.window = { SA: { t: { status: {}, uninspected: Array.from({ length: 200 }, (_, i) => ({
+    agent: 'claude', host: `104.16.0.${i}`, count: 1, infra: 'Cloudflare',
+  })) } } };
+  let rendered;
+  ctx.patchList = (_container, parts) => { rendered = parts; };
+  ctx.renderEndpoints();
+  assert.equal(title.textContent, 'Connection coverage · last 24 h');
+  assert.match(summary.textContent, /200 endpoints shown · 200 known infrastructure/);
+  assert.match(summary.textContent, /not a security finding/);
+  assert.equal(rendered.length, 1);
+  assert.equal(rendered[0].key, 'carriers', 'infrastructure evidence stays available');
+});
+
 test('foldRules: rules with any hit stay listed, all-zero rules fold', () => {
   const stats = {
     'b-key': { would_block: 0, blocked: 0, legit: 3 },

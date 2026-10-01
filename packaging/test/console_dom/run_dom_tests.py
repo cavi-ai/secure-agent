@@ -496,11 +496,11 @@ def main():
         check("terminate not labelled Kill", "Terminate" in dom and "Kill</span>" not in dom)
         check("firewall enforcing badge",
               'class="badge badge-ok" id="badge-firewall-mode">enforcing<' in dom)
-        # status.uninspected_egress is 2 (it excludes the 2 infrastructure
-        # endpoints); the title must count what the panel renders instead: 4
-        # unknown + 1 vendor rollup (covering 1 endpoint) + 2 infrastructure = 7.
-        check("uninspected-egress title counts rendered endpoints, not the status counter",
-              "7 endpoints reached without inspection" in dom)
+        # Coverage is informational; the displayed sample includes carriers.
+        check("Egress coverage names the displayed sample without implying findings",
+              "Connection coverage · last 24 h" in dom
+              and "7 endpoints shown · 2 known infrastructure" in dom
+              and "Connection coverage alone is not a security finding." in dom)
 
         # --- reversible enforcement (block is not a ratchet) ---
         check("blocking rule shows demote button",
@@ -636,7 +636,7 @@ def main():
               dom_fold.index('id="endpoints-panel"') < dom_fold.index('id="firewall-panel"')
               and 'class="egress-vendor"' in endpoints and 'data-action="bulk-allow" data-agent="openclaw"' in endpoints
               and 'data-action="allow-host"' in endpoints and 'data-action="endpoint-detail"' in endpoints
-              and re.search(r'id="endpoints-title">\d+ endpoints? reached without inspection in 24 h<', dom_fold) is not None)
+              and 'id="endpoints-title">Connection coverage · last 24 h<' in dom_fold)
         firewall = dom_fold.split('id="firewall-container"', 1)[-1].split('id="sources-container"', 1)[0]
         check("Egress: the firewall panel has no view-endpoints link",
               'data-action="open-uninspected"' not in firewall and "fw-uninspected" not in dom_fold
@@ -1041,8 +1041,8 @@ def main():
               "api-service@main" in sessions and "data-pipeline@feat/etl" in sessions and ">auth<" in sessions)
         check("session card selects the session trace",
               'data-action="select-session" data-id="sess-claude-1"' in sessions)
-        check("egress tab badge shows uninspected count",
-              'id="tab-badge-egress">2<' in dom)
+        check("egress tab warning stays hidden when posture has no egress decisions",
+              re.search(r'id="tab-badge-egress"[^>]*hidden', dom) is not None)
         needs_you = int(re.search(r"needs_you: (\d+),", open(MOCK).read()).group(1))
         check("home tab badge shows needs-you count",
               f'id="tab-badge-home">{needs_you}<' in dom)
