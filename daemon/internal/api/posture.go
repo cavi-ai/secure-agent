@@ -62,8 +62,8 @@ func (a *API) handlePosture(w http.ResponseWriter, r *http.Request) {
 func (a *API) CurrentPosture() Posture { return a.computePosture() }
 
 // PublishPostureIfChanged recomputes the headline and pushes a posture delta
-// only when it actually changed — the drain loop calls this after
-// flag/incident/guard changes; per-event calls would recompute on socket
+// only when it actually changed — HTTP mutations and the drain loop call
+// this after flag/incident/guard changes; per-event calls would recompute on socket
 // churn, so dedupe happens here, not there.
 func (a *API) PublishPostureIfChanged() {
 	if a.deltaHub == nil {
@@ -537,7 +537,7 @@ func humanFlagTitle(rule string) string {
 	case "proxy-secret-leak":
 		return "Secret leaving in agent traffic"
 	case "sensitive-read-then-connect":
-		return "Agent read a secret, then connected out"
+		return "Sensitive file read near an outside connection"
 	case "keychain-access":
 		return "Agent touched the keychain"
 	case "keychain-security-cli":

@@ -46,7 +46,7 @@ As AI coding agents (Claude Code, Cursor, Codex, Antigravity, Pi, Qwen Code, ope
   Features an inline HTTP/HTTPS proxy server with dynamic TLS certificate generation (`CAManager`) that inspects request streams for outbound credential leaks (`redact.Detect`) and response streams for prompt injection attacks (`injection.Detect`).
 
 - 🖥️ **Live Web Security Console (`http://localhost:8443/dashboard/`)**  
-  Embedded dark-mode visual web console for real-time monitoring of active AI agent process trees, secret-exposure incident reports, sliding-window security flags, and proxy payload inspection streams. Its **Attention** view groups resource approvals, blocked guard requests, critical findings and incidents, and uninspected egress by complete session, with workspace, memory, CPU, process count, and scoped actions in one queue. Individual security flags open an evidence drawer with the local advisor's plan and actions. On the **Agent** page, **Analyze activity** asks local Ollama to review stored flags and operator actions; its recommendation waits in a review queue for an explicit local-command confirmation or a saved harness plan. Updates are pushed over SSE (`/events/stream`) with a polling fallback. The console's telemetry endpoints on the proxy port are gated by a per-install **console token** (0600, `~/.config/secure-agent/console-token`) — a credential agents never receive, so a routed agent can't turn its proxy token into telemetry reads or guard self-approval. The menubar's **Open console** passes the token automatically.
+  Embedded dark-mode visual web console for real-time monitoring of active AI agent process trees, secret-exposure incident reports, sliding-window security flags, and proxy payload inspection streams. Its **Attention** view groups resource approvals, blocked guard requests, critical findings and incidents, and uninspected egress by complete session, with workspace, memory, CPU, process count, and scoped actions in one queue. Individual security flags open an evidence drawer with the local advisor's plan and actions. **Inspect file details** shows supported `.env` variable names without values. **Send to local agent review** routes the selected finding into the Agent recommendation queue. Expected-read exceptions cover an exact host; test/non-secret `.env` exceptions cover one exact file for the named agent and are reversible under Policy. Cloud/CDN identity is infrastructure context, not proof of secret transmission. On the **Agent** page, **Analyze activity** asks local Ollama to review stored flags and operator actions; its recommendation waits in a review queue for an explicit local-command confirmation or a saved harness plan. Updates are pushed over SSE (`/events/stream`) with a polling fallback. The console's telemetry endpoints on the proxy port are gated by a per-install **console token** (0600, `~/.config/secure-agent/console-token`) — a credential agents never receive, so a routed agent can't turn its proxy token into telemetry reads or guard self-approval. The menubar's **Open console** passes the token automatically.
 
 - 📊 **Resource Mission Control**
   Attributes live resident memory and CPU to complete agent sessions—root process plus helpers—so one runaway child cannot hide behind a harmless-looking parent. Whole-machine context shows available and free memory, compression, swap, CPU split between agents and everything else, memory pressure, thermal state, and a conservative headroom score. The console ranks sessions by pressure, charts one hour of history, explains heavy memory, full-core CPU, rapid growth, idle retention, runaway children, and orphan drift, and opens the entire process family before any terminate action. The native menu bar shows machine headroom and family totals and adds an **Impact** sort for quick daily triage. A bounded local flight recorder keeps pressure episodes, their captured host conditions, process attribution, and the ten-minute lead-up available for post-mortem review after a session exits. Each episode correlates redacted process, tool, file, network, guard, and security activity with the steepest observed memory rise while clearly distinguishing temporal correlation from proven causation.
@@ -69,8 +69,8 @@ As AI coding agents (Claude Code, Cursor, Codex, Antigravity, Pi, Qwen Code, ope
 - ⚙️ **Extensible YAML Rules & Allowlists**  
   Easily customize sensitive path patterns, agent binary matchers, vendor network allowlists (`anthropic.com`, `cursor.sh`, `openai.com`), and proxy settings.
 
-- 🤖 **System Agent: Sensitive Work on a Local Model (opt-in)**
-  Turn on **Settings → Local Agent**, then click **Ask Agent** in the menu bar popover. Chat goes directly to your own Ollama. For local work, the model proposes an exact shell command and folder; you review and confirm it before it runs, either headless or in Terminal for passphrases. Commands run with your account's file and network access. An optional **Harness handoff** section saves separate plans for Claude Code, Codex, OpenClaw, Hermes Agent, or Pi runner; it never changes where chat goes. Pi is terminal-only because it has no built-in sandbox. Messages and output are masked by the firewall; `/agent/*` routes refuse agent processes. See [`docs/SYSTEM_AGENT.md`](docs/SYSTEM_AGENT.md).
+- 🤖 **Secure Agent: Local Chat and Confirmed Actions (opt-in)**
+  Turn on **Settings → Secure Agent → Chat → Enable chat**, then click **Ask Agent** in the menu bar popover. Chat goes directly to your own Ollama. For local work, the model proposes an exact shell command and folder; you review and confirm it before it runs, either headless or in Terminal for passphrases. Commands run with your account's file and network access. An optional **Harness handoff** section saves separate plans for Claude Code, Codex, OpenClaw, Hermes Agent, or Pi runner; it never changes where chat goes. Pi is terminal-only because it has no built-in sandbox. Messages and output are masked by the firewall; `/agent/*` routes refuse agent processes. See [`docs/SYSTEM_AGENT.md`](docs/SYSTEM_AGENT.md).
 
 - 🔔 **Noise-Controlled Alerts, With Real Recourse**  
   Only **severity-3 criticals page you** by default (confirmed secret leaks, direct read-then-connect activity, TCC tampering, keychain CLI execs); warnings queue silently in the popover and console. A secret file read and later connection by unrelated sibling processes in one agent family remains a severity-2 finding for review, because timing alone does not show that the reader sent the bytes. Model-visible tool reads remain critical. Routine keychain-DB file opens are informational (severity 1) — legitimate tooling touches them constantly, so they never page unless you opt in. Every noisy class has a working **"Dismiss this flag class"** (rule-level mute, reversible from Settings → Decisions), and Settings → Decisions / the console bell menu offer per-rule **Default / Always / Never** overrides (`/notify/rules`) shared by both UIs.
@@ -233,7 +233,7 @@ firewall:
     - { id: aws-key, type: cloud-key, re: 'AKIA[0-9A-Z]{16}', mode: block }  # this rule now blocks
 ```
 
-**Route agents through the proxy** (opt-in, scoped to your shell — no keychain or system-trust changes). The daemon writes a snippet to `~/.config/secure-agent/agent-env.sh`; source it where you launch agents (or use **Settings → Local Agent → Agent traffic inspection**):
+**Route agents through the proxy** (opt-in, scoped to your shell — no keychain or system-trust changes). The daemon writes a snippet to `~/.config/secure-agent/agent-env.sh`; source it where you launch agents (or use **Settings → Secure Agent → Agent traffic inspection**):
 
 ```bash
 source ~/.config/secure-agent/agent-env.sh
@@ -340,10 +340,10 @@ advisor:
   timeout_ms: 8000                   # per triage call; plans and notes you ask for get at least 5 minutes
 ```
 
-### 🤖 System agent
+### 🤖 Secure Agent chat
 
 ```yaml
-# Opt-in: Settings → Local Agent. Chat and confirmed local commands use
+# Opt-in: Settings → Secure Agent. Chat and confirmed local commands use
 # Ollama directly; optional harness handoff is separate. See docs/SYSTEM_AGENT.md.
 system_agent:
   enabled: false

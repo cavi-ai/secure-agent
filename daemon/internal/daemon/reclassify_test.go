@@ -55,3 +55,32 @@ func TestReclassifyReadFlagsAcknowledgesOnlyStaleOnes(t *testing.T) {
 		t.Fatalf("second start acknowledged %d, want 0", n)
 	}
 }
+
+func TestReclassifyCausalSeverityPreservesFindingsAndDirectEvidence(t *testing.T) {
+	dir := t.TempDir()
+	st, err := store.Open(filepath.Join(dir, "events.db"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	cfg, _ := config.Load("/nonexistent")
+	at := time.Now()
+	for _, id := range []string{"ancestor", "direct", "tool"} {
+		read := model.EvidenceItem{Kind: "read", Label: "/project/.env", Rule: "env-file", PID: 201, TS: at.Format(time.RFC3339)}
+		conn := model.EvidenceItem{Kind: "connect", Label: "example.com:443", PID: 200, TS: at.Add(time.Second).Format(time.RFC3339)}
+		if id == "direct" {
+			conn.PID = 201
+		}
+		if id == "tool" {
+			read.Sub = "agent tool read"
+		}
+		st.PutFlag(model.Flag{ID: id, Rule: "sensitive-read-then-connect", Severity: 3, TS: at, Evidence: []model.EvidenceItem{read, conn}})
+	}
+	reclassifyReadFlags(st, sensitive.New(cfg))
+	for id, want := range map[string]int{"ancestor": 2, "direct": 3, "tool": 3} {
+		f, _ := st.GetFlag(id)
+		if f.Severity != want || f.Acknowledged {
+			t.Errorf("%s severity=%d acknowledged=%v", id, f.Severity, f.Acknowledged)
+		}
+	}
+}

@@ -385,7 +385,7 @@ func explainWhat(f model.Flag, ex *model.FlagExplain, sess *model.Session) strin
 		}
 		what := agent + " read " + subjectPhrase(ex.Subject)
 		if len(ex.Egress) == 0 {
-			return what + ", then connected out."
+			return what + " near an observed outside connection."
 		}
 		gap := ex.Egress[0].GapSeconds
 		if gap < 0 {
@@ -604,8 +604,18 @@ func allowHostLabel(name, host, org, agent string) string {
 // advisor suggested.
 func (a *API) explainActions(f model.Flag, ex *model.FlagExplain, env *explainEnv) []model.ExplainAction {
 	acts := []model.ExplainAction{}
+	if a.sysAgent != nil {
+		acts = append(acts, model.ExplainAction{ID: "review-local", Label: "Send to local agent review", Consequence: "The selected finding and recent local behavior metadata are reviewed by local Ollama. Its recommendation appears in the Agent review queue. No command or harness starts; execution requires your separate confirmation.", Method: http.MethodPost, Path: "/agent/analyze", Body: map[string]any{"flag_ids": []string{f.ID}}})
+	}
+
+	if act, ok := a.nonSecretFileAction(f); ok && !f.Acknowledged {
+		acts = append(acts, act)
+	}
 	if act, ok := a.expectAction(f); ok && !f.Acknowledged {
 		acts = append(acts, act)
+	}
+	if read := evidenceOfKind(f, "read"); read != nil && filepath.IsAbs(read.Label) {
+		acts = append(acts, model.ExplainAction{ID: "inspect-file", Label: "Inspect file details", Consequence: "Shows file metadata, recorded accesses, and supported .env variable names without values; changes nothing.", Method: http.MethodGet, Path: "/files/detail", Body: map[string]any{"path": read.Label}})
 	}
 	agent := f.Agent
 	title := humanFlagTitle(f.Rule)

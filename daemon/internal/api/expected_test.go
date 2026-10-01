@@ -51,10 +51,10 @@ func TestExpectedFlow(t *testing.T) {
 		t.Fatalf("POST status %d: %s", w.Code, w.Body)
 	}
 	var p correlate.ExpectedPattern
-	if err := json.Unmarshal(w.Body.Bytes(), &p); err != nil || p.Key != "claude|gh|"+ghHosts+"|Cloudflare" {
+	if err := json.Unmarshal(w.Body.Bytes(), &p); err != nil || p.Key != "claude|gh|"+ghHosts+"|2606:4700::6812:105d" {
 		t.Fatalf("stored = %+v (%v)", p, err)
 	}
-	for id, acked := range map[string]bool{"same1": true, "same2": true, "other-dest": false} {
+	for id, acked := range map[string]bool{"same1": true, "same2": false, "other-dest": false} {
 		if f, _ := a.store.GetFlag(id); f.Acknowledged != acked {
 			t.Errorf("%s acknowledged = %v, want %v", id, f.Acknowledged, acked)
 		}
@@ -86,10 +86,10 @@ func TestExpectActionOffered(t *testing.T) {
 	f := ghFlag("x", time.Now(), ghRead("agent tool read", 900, "GitHub"), "140.82.114.6")
 	a.store.PutFlag(f)
 	ex := a.explainFlag(f, false)
-	if len(ex.Actions) == 0 || ex.Actions[0].ID != "expect" || ex.Actions[0].Label != "Expected: tool → GitHub" || ex.Actions[0].Path != "/expected" {
+	if len(ex.Actions) == 0 || ex.Actions[0].ID != "expect" || ex.Actions[0].Label != "Expected: tool → 140.82.114.6" || ex.Actions[0].Path != "/expected" {
 		t.Fatalf("actions = %+v, want expect first", ex.Actions)
 	}
-	if _, err := a.expected.Add(correlate.ExpectedPattern{Agent: "claude", Reader: "tool", Path: ghHosts, Dest: "GitHub"}); err != nil {
+	if _, err := a.expected.Add(correlate.ExpectedPattern{Agent: "claude", Reader: "tool", Path: ghHosts, Dest: "140.82.114.6"}); err != nil {
 		t.Fatal(err)
 	}
 	for _, act := range a.explainFlag(f, false).Actions {
@@ -114,5 +114,88 @@ func TestPatternOffersExpect(t *testing.T) {
 	p := onlyPattern(t, a.computePatterns(time.Now().Add(-24*time.Hour), 3))
 	if len(p.Actions) == 0 || p.Actions[0].ID != "expect" || p.Actions[0].Body["flag_id"] != "c" {
 		t.Fatalf("pattern actions = %+v, want expect for the newest open flag first", p.Actions)
+	}
+}
+
+// Expected destinations are exact endpoints, not every tenant on a CDN.
+func TestExpectedEndpointScopeAndMixedEvidence(t *testing.T) {
+	a := expectedTestAPI(t)
+	now := time.Now()
+	f := ghFlag("selected", now, ghRead("sensitive read", 900, "GitHub"), "2606:4700::6812:105d")
+	a.store.PutFlag(f)
+	a.store.PutFlag(ghFlag("other-address", now, ghRead("sensitive read", 900, "GitHub"), "2606:4700::6812:1111"))
+	mixed := f
+	mixed.ID = "mixed"
+	mixed.Evidence = append(append([]model.EvidenceItem(nil), f.Evidence...), model.EvidenceItem{Kind: "connect", Label: "evil.example.com:443", PID: 900})
+	a.store.PutFlag(mixed)
+	w := call(t, a, "POST", "/expected", `{"flag_id":"selected"}`)
+	if w.Code != 200 {
+		t.Fatalf("POST: %d %s", w.Code, w.Body)
+	}
+	for id, want := range map[string]bool{"selected": true, "other-address": false, "mixed": false} {
+		f, _ := a.store.GetFlag(id)
+		if f.Acknowledged != want {
+			t.Errorf("%s acknowledged=%v want %v", id, f.Acknowledged, want)
+		}
+	}
+}
+
+func TestNonSecretFileExceptionIsExactAndReversible(t *testing.T) {
+	a := expectedTestAPI(t)
+	now := time.Now()
+	f := ghFlag("fixture", now, model.EvidenceItem{Kind: "read", Label: "/project/test/.env", Sub: "sensitive read", PID: 900, Exe: "/bin/cat"}, "api.example.com")
+	a.store.PutFlag(f)
+	mixed := f
+	mixed.ID = "mixed-file"
+	mixed.Evidence = append(append([]model.EvidenceItem(nil), f.Evidence...), model.EvidenceItem{Kind: "read", Label: "/project/prod/.env", PID: 900, Exe: "/bin/cat"})
+	a.store.PutFlag(mixed)
+	w := call(t, a, "POST", "/expected", `{"flag_id":"fixture","scope":"file"}`)
+	if w.Code != 200 {
+		t.Fatalf("POST %d %s", w.Code, w.Body)
+	}
+	var entry correlate.ExpectedPattern
+	json.Unmarshal(w.Body.Bytes(), &entry)
+	if !a.expected.Match([]string{"claude|node|/project/test/.env|other.example.com"}, now) {
+		t.Fatal("marked non-secret fixture still flags")
+	}
+	if a.expected.Match([]string{"codex|node|/project/test/.env|other.example.com"}, now) {
+		t.Fatal("exception escaped agent scope")
+	}
+	if a.expected.Match([]string{"claude|node|/project/test/.env.local|other.example.com"}, now) {
+		t.Fatal("exception escaped exact file")
+	}
+	if f, _ := a.store.GetFlag("mixed-file"); f.Acknowledged {
+		t.Fatal("mixed sensitive file was hidden")
+	}
+	if w := call(t, a, "DELETE", "/expected?key="+entry.Key, ""); w.Code != 200 {
+		t.Fatal(w.Code)
+	}
+	if a.expected.Match([]string{"claude|node|/project/test/.env|other.example.com"}, now) {
+		t.Fatal("revoked exception still matches")
+	}
+}
+
+func TestMixedFindingOffersNextUncoveredPair(t *testing.T) {
+	a := expectedTestAPI(t)
+	f := ghFlag("mixed", time.Now(), ghRead("sensitive read", 900, "GitHub"), "one.example.com")
+	f.Evidence = append(f.Evidence, model.EvidenceItem{Kind: "connect", Label: "two.example.com:443", PID: 900})
+	a.store.PutFlag(f)
+	w := call(t, a, "POST", "/expected", `{"flag_id":"mixed"}`)
+	if w.Code != 200 {
+		t.Fatal(w.Code)
+	}
+	act, ok := a.expectAction(f)
+	if !ok || act.Body["host"] != "two.example.com" {
+		t.Fatalf("next action=%+v", act)
+	}
+	w = call(t, a, "POST", "/expected", `{"flag_id":"mixed","path":"/Users/dev/.config/gh/hosts.yml","host":"two.example.com"}`)
+	if w.Code != 200 {
+		t.Fatal(w.Code, w.Body)
+	}
+	if f, _ := a.store.GetFlag(f.ID); !f.Acknowledged {
+		t.Fatal("fully covered finding should be reviewed")
+	}
+	if w := call(t, a, "POST", "/expected", `{"flag_id":"mixed","path":"/arbitrary/.env","host":"two.example.com"}`); w.Code != 422 {
+		t.Fatal("injected path accepted", w.Code)
 	}
 }

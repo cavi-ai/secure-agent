@@ -15,6 +15,22 @@ import (
 
 const loginKeychain = "/Users/x/Library/Keychains/login.keychain-db"
 
+func TestCriticalPatternLeadsRepeatedWarnings(t *testing.T) {
+	a := explainTestAPI(t)
+	now := time.Now()
+	var flags []model.Flag
+	for i := 0; i < 8; i++ {
+		flags = append(flags, keychainFlag(fmt.Sprint("noise", i), "claude", 100, now, 2))
+	}
+	for i := 0; i < 2; i++ {
+		flags = append(flags, keychainFlag(fmt.Sprint("urgent", i), "codex", 101, now, 3))
+	}
+	ps := a.patternsOf(flags, now.Add(-time.Hour), now, 2)
+	if len(ps) != 2 || ps[0].Agent != "codex" {
+		t.Fatalf("critical pattern must lead: %+v", ps)
+	}
+}
+
 func keychainFlag(id, agent string, pid int32, ts time.Time, sev int) model.Flag {
 	return model.Flag{ID: id, Rule: "keychain-access", Severity: sev, TS: ts, PID: pid, Agent: agent, SessionID: "s1",
 		Evidence: []model.EvidenceItem{{Kind: "keychain", Label: loginKeychain, Sub: "keychain access"}}}

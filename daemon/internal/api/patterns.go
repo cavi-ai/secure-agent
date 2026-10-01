@@ -83,6 +83,9 @@ func (a *API) patternsOf(flags []model.Flag, since, now time.Time, minCount int)
 		out = append(out, a.fillPattern(g.p, g.flags, since, now, env))
 	}
 	sort.SliceStable(out, func(i, j int) bool {
+		if x, y := dispositionRank(out[i].Disposition.State), dispositionRank(out[j].Disposition.State); x != y {
+			return x > y
+		}
 		if out[i].Unacked != out[j].Unacked {
 			return out[i].Unacked > out[j].Unacked
 		}
@@ -193,6 +196,15 @@ func (a *API) fillPattern(p model.Pattern, flags []model.Flag, since, now time.T
 		// open is newest first: the newest open flag names the pattern.
 		for _, f := range sorted {
 			if f.ID == open[0] {
+				if a.sysAgent != nil {
+					p.Actions = append(p.Actions, model.ExplainAction{ID: "review-local", Label: "Send to local agent review", Consequence: "Review the selected finding through local Ollama; no command or harness starts.", Method: http.MethodPost, Path: "/agent/analyze", Body: map[string]any{"flag_ids": []string{f.ID}}})
+				}
+				if read := evidenceOfKind(f, "read"); read != nil {
+					p.Actions = append(p.Actions, model.ExplainAction{ID: "inspect-file", Label: "Inspect file details", Consequence: "Shows file metadata and supported .env variable names without values; changes nothing.", Method: http.MethodGet, Path: "/files/detail", Body: map[string]any{"path": read.Label}})
+				}
+				if act, ok := a.nonSecretFileAction(f); ok {
+					p.Actions = append(p.Actions, act)
+				}
 				if act, ok := a.expectAction(f); ok {
 					p.Actions = append([]model.ExplainAction{act}, p.Actions...)
 				}
@@ -383,7 +395,7 @@ func patternSummary(p model.Pattern, now time.Time, reader string) string {
 		if reader != "" {
 			who = reader + " (" + who + ")"
 		}
-		verb = "read " + firstNonEmpty([]string{p.Subject.Label, "a secret"}) + ", then reached " + destinationPhrase(p.Destinations)
+		verb = "read " + firstNonEmpty([]string{p.Subject.Label, "a secret"}) + " near connections to " + destinationPhrase(p.Destinations)
 	}
 	s := fmt.Sprintf("%s %s %d times %s", who, verb, p.Count, patternWindow(p.First, p.Last, now))
 	if len(ident) > 0 {

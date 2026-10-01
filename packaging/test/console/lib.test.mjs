@@ -1129,6 +1129,12 @@ test('explainActionsHTML: recommended first, kill danger, others ghost; no pid, 
   assert.equal(ctx.explainActionsHTML({ id: 'x' }), '');
 });
 
+test('individual findings expose approval, local review and inspection', () => {
+  const ids = ['expect', 'expect-file', 'review-local', 'inspect-file'];
+  const html = ctx.explainActionsHTML(explainFlag({actions: ids.map(id => ({id, label: id, consequence: 'Exact scope', body: {}}))}));
+  assert.deepEqual([...html.matchAll(/data-action-id="([^"]+)"/g)].map(m => m[1]), ids);
+});
+
 // ---------- resources v2: names, capped lists, attention, harness groups ----------
 
 const famSessions = [

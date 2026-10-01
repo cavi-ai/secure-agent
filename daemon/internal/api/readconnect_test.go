@@ -29,17 +29,17 @@ func TestReadConnectWhy(t *testing.T) {
 		want string
 	}{
 		{"other org", ghFlag("a", now, ghRead("sensitive read", 900, "GitHub"), "2606:4700::6812:105d"),
-			"Cloudflare does not own ~/.config/gh/hosts.yml (owner: GitHub)."},
+			"A connection was observed to Cloudflare infrastructure near the read of ~/.config/gh/hosts.yml. The receiving service and whether secret bytes were sent are not established."},
 		{"unknown host", ghFlag("b", now, ghRead("sensitive read", 900, "GitHub"), "evil.example.com"),
-			"evil.example.com does not own ~/.config/gh/hosts.yml (owner: GitHub)."},
+			"A connection to evil.example.com was observed near the read of ~/.config/gh/hosts.yml; configured credential destinations: GitHub. Secret transmission is not established."},
 		{"no owner on record", ghFlag("c", now, ghRead("sensitive read", 900), "140.82.114.6"),
 			"No owner is on record for ~/.config/gh/hosts.yml; the connection went to GitHub."},
 		{"tool read", ghFlag("d", now, ghRead("agent tool read", 900, "GitHub"), "140.82.114.6"),
 			"GitHub owns ~/.config/gh/hosts.yml, but an agent tool read it into the model's context."},
 		{"other process", ghFlag("e", now, ghRead("sensitive read", 901, "GitHub"), "140.82.114.6"),
-			"GitHub owns ~/.config/gh/hosts.yml, but a process outside the reader's process tree made the connection."},
+			"GitHub owns ~/.config/gh/hosts.yml, but a different process made the observed connection. The recorded evidence does not establish credential use."},
 		{"legacy evidence", ghFlag("f", now, ghRead("sensitive read", 0), "140.82.114.6"),
-			"Agent read a secret, then connected out"},
+			"Sensitive file read near an outside connection"},
 	}
 	for _, tc := range cases {
 		d := dispositionFor(tc.f)
@@ -66,12 +66,12 @@ func TestReadConnectPatternSummary(t *testing.T) {
 	if len(p.Destinations) != 2 || p.Destinations[0].Org != "Google" || p.Destinations[0].Count != 2 || p.Destinations[1].Org != "GitHub" {
 		t.Fatalf("destinations = %+v, want Google ×2 then GitHub", p.Destinations)
 	}
-	want := "gh (claude) read ~/.config/gh/hosts.yml, then reached Google (lcmiaa-al-in-x0e.1e100.net) and 1 more destination 4 times "
+	want := "gh (claude) read ~/.config/gh/hosts.yml near connections to Google (lcmiaa-al-in-x0e.1e100.net) and 1 more destination 4 times "
 	if !strings.HasPrefix(p.Summary, want) {
 		t.Fatalf("summary = %q, want prefix %q", p.Summary, want)
 	}
 	// The newest open flag (Google) carries the pattern's verdict.
-	if want := "Google does not own ~/.config/gh/hosts.yml (owner: GitHub)."; p.Disposition.Why != want {
+	if want := "A connection was observed to Google infrastructure near the read of ~/.config/gh/hosts.yml. The receiving service and whether secret bytes were sent are not established."; p.Disposition.Why != want {
 		t.Fatalf("pattern why = %q, want %q", p.Disposition.Why, want)
 	}
 }

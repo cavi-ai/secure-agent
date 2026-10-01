@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"syscall"
@@ -115,6 +116,9 @@ func (a *API) fileDetail(p string, findings []model.FileFinding, accesses []mode
 	d.Subject = explainSubject(ev, workspace, repo, home)
 	if d.Exists && !fi.IsDir() && len(d.Hits) > 0 {
 		d.Excerpt, d.ExcerptWithheld = a.fileExcerpt(p, d.Hits)
+	}
+	if base := filepath.Base(p); d.Exists && (base == ".env" || strings.HasPrefix(base, ".env.")) {
+		d.EnvVariables, d.EnvWithheld = envVariableNames(p)
 	}
 	return d
 }
@@ -389,4 +393,66 @@ func (a *API) consoleNoAgent(h http.HandlerFunc) http.HandlerFunc {
 		}
 		h(w, r)
 	}
+}
+
+var envAssignment = regexp.MustCompile(`^(?:export[ \t]+)?([A-Za-z_][A-Za-z0-9_]{0,127})[ \t]*=`)
+
+// envVariableNames returns names only for a small, regular, operator-owned
+// single-line dotenv file. Ambiguous/multiline syntax withholds the list.
+// O_NONBLOCK and O_NOFOLLOW reject symlink/FIFO substitution without hanging.
+func envVariableNames(path string) ([]string, string) {
+	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, "Variable names unavailable: file cannot be opened safely."
+	}
+	f := os.NewFile(uintptr(fd), path)
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil || !fi.Mode().IsRegular() || !ownedByUser(fi) || fi.Size() > 64<<10 {
+		return nil, "Variable names withheld: file must be regular, operator-owned, and under 64 KiB."
+	}
+	data, err := io.ReadAll(io.LimitReader(f, (64<<10)+1))
+	if err != nil || len(data) > 64<<10 || !utf8.Valid(data) {
+		return nil, "Variable names withheld: file is unreadable, oversized, or non-text."
+	}
+	var names []string
+	seen := map[string]bool{}
+	for _, raw := range strings.Split(string(data), "\n") {
+		line := strings.TrimSpace(raw)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		m := envAssignment.FindStringSubmatchIndex(line)
+		if m == nil {
+			return nil, "Variable names withheld: unsupported dotenv syntax; inspect locally without exposing values."
+		}
+		value := strings.TrimSpace(line[m[1]:])
+		if strings.Contains(value, "-----BEGIN ") {
+			return nil, "Variable names withheld: multiline secret material; inspect locally."
+		}
+		if len(value) > 0 && (value[0] == 34 || value[0] == 39) {
+			quote := value[0]
+			closed := false
+			for i := 1; i < len(value); i++ {
+				if quote == 34 && value[i] == '\\' {
+					i++
+					continue
+				}
+				if value[i] == quote {
+					rest := strings.TrimSpace(value[i+1:])
+					closed = rest == "" || strings.HasPrefix(rest, "#")
+					break
+				}
+			}
+			if !closed {
+				return nil, "Variable names withheld: multiline or ambiguous quoted value; inspect locally."
+			}
+		}
+		name := line[m[2]:m[3]]
+		if !seen[name] {
+			names = append(names, name)
+			seen[name] = true
+		}
+	}
+	return names, ""
 }

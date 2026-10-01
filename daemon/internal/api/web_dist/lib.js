@@ -311,6 +311,7 @@ function fileDetailHTML(d, nowMs) {
     ${s.owner_label ? `<p class="endpoint-identity">${escapeHTML(s.owner_label)}</p>` : ''}
     <p class="endpoint-facts">${escapeHTML(facts)}</p>
     <div class="endpoint-actions">${actions}</div>
+    ${d.env_variables && d.env_variables.length ? `<section class="endpoint-section"><h4>Environment variable names</h4><p>Values are never shown.</p><ul>${d.env_variables.map(name => `<li><code>${escapeHTML(name)}</code></li>`).join('')}</ul></section>` : ''}${d.env_withheld ? `<p>${escapeHTML(d.env_withheld)}</p>` : ''}
     ${sess ? `<section class="endpoint-section"><h4>Session</h4>${sess}</section>` : ''}
     ${excerpt ? `<section class="endpoint-section"><h4>Around the secret</h4>${excerpt}</section>` : ''}
     ${findings ? `<section class="endpoint-section"><h4>Findings</h4>${findings}</section>` : ''}
@@ -1012,7 +1013,7 @@ function explainLines(flag, nowMs) {
 
 // Served action ids the console performs; each posts the served
 // method/path/body on the proxy listener.
-const EXPLAIN_CONSOLE_ACTIONS = ['allow-host', 'allow-path', 'mute-rule-host', 'mute-class', 'open-incident', 'dismiss', 'kill'];
+const EXPLAIN_CONSOLE_ACTIONS = ['expect', 'expect-file', 'review-local', 'inspect-file', 'allow-host', 'allow-path', 'mute-rule-host', 'mute-class', 'open-incident', 'dismiss', 'kill'];
 
 // explainActionLabel: the served label, except where it carries a pid (kill)
 // or an IPv6 literal (allow-host) — those stay in Details and the tooltip.
@@ -1107,7 +1108,7 @@ function patternProcessesText(processes) {
 // is only the fallback for rows from older daemons.
 var RULE_TITLES = {
   'proxy-secret-leak': 'Secret leaving in agent traffic',
-  'sensitive-read-then-connect': 'Secret read, then connected out',
+  'sensitive-read-then-connect': 'Sensitive read near a connection',
   'keychain-access': 'Keychain file access',
   'keychain-security-cli': 'Keychain CLI (security tool)',
   'tcc-tamper': 'Privacy permissions (TCC) tamper',
@@ -1895,10 +1896,14 @@ function policyListHTML(kind, rows, st) {
       return row(`<code>${escapeHTML(r.path || '')}</code>`, `${escapeHTML(r.rule_id || '')} for ${escapeHTML(r.agent || '')}`, when(r));
     }
     if (kind === 'expected') {
-      const reader = r.reader === 'tool' ? 'an agent tool' : (r.reader || '');
+      if (r.scope === 'file') return row(`<b>Non-secret file</b> <code>${escapeHTML(r.path || '')}</code>`,
+        `${escapeHTML(r.agent || '')} only · all readers and destinations · ${Number(r.hits) || 0} matches`,
+        `${when(r)} <button class="source-remove" title="Revoke this file exception" data-action="forget-expected" data-key="${escapeHTML(r.key || '')}"><svg class="icon"><use href="#i-close"/></svg></button>`);
+      const legacy = r.dest && r.dest !== String(r.dest).toLowerCase();
+      const reader = r.reader === 'tool'  ? 'an agent tool' : (r.reader || '');
       const hits = Number(r.hits) || 0;
       return row(`<b>${escapeHTML(reader)}</b> reads <code>${escapeHTML(r.path || '')}</code>, then reaches <b>${escapeHTML(r.dest || '')}</b>`,
-        `${escapeHTML(r.agent || '')} · ${hits} since the daemon started`,
+        `${escapeHTML(r.agent || '')} · ${legacy ? 'Legacy provider exception is inactive; review an exact host' : hits + ' since the daemon started'}`,
         `${when(r)} <button class="source-remove" title="Forget: flag this pattern again" data-action="forget-expected" data-key="${escapeHTML(r.key || '')}"><svg class="icon"><use href="#i-close"/></svg></button>`);
     }
     const scope = (r.host === '*' ? 'all hosts' : escapeHTML(r.host || '')) + ' · ' + (r.agent ? escapeHTML(r.agent) : 'all agents');

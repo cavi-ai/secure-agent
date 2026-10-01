@@ -121,6 +121,14 @@ func (c *classifierImpl) Match(path string) (Match, bool) {
 		return Match{CatAWS, "aws"}, true
 	}
 
+	// 5. Configured non-secret directories, then sensitive paths (prefix)
+	for _, np := range c.cfg.NotSecretPaths {
+		npClean := filepath.Clean(np)
+		if clean == npClean || strings.HasPrefix(clean, npClean+"/") {
+			return Match{Category: CatOther}, false
+		}
+	}
+
 	// 4. .env files. A template (.env.example, .env.sample, .env.template,
 	// .env.dist) is a committed placeholder, not a secret, under any rule.
 	base := filepath.Base(clean)
@@ -131,13 +139,6 @@ func (c *classifierImpl) Match(path string) (Match, bool) {
 		return Match{CatEnvFile, "env-file"}, true
 	}
 
-	// 5. Configured non-secret directories, then sensitive paths (prefix)
-	for _, np := range c.cfg.NotSecretPaths {
-		npClean := filepath.Clean(np)
-		if clean == npClean || strings.HasPrefix(clean, npClean+"/") {
-			return Match{Category: CatOther}, false
-		}
-	}
 	for _, sp := range c.cfg.SensitivePaths {
 		spClean := filepath.Clean(sp)
 		if strings.HasPrefix(clean, spClean) {

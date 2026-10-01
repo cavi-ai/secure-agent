@@ -18,8 +18,9 @@ type EvidenceItem struct {
 	Offset int64 `json:"offset,omitempty"`
 	// PID and Exe: read items, the process that opened the file (it may
 	// differ from the process that connected out).
-	PID int32  `json:"pid,omitempty"`
-	Exe string `json:"exe,omitempty"`
+	Chain []int32 `json:"chain,omitempty"` // process ancestors recorded at observation
+	PID   int32   `json:"pid,omitempty"`
+	Exe   string  `json:"exe,omitempty"`
 	// Owners: read items, the orgs credential_owners names for the file;
 	// empty when none is on record.
 	Owners []string `json:"owners,omitempty"`

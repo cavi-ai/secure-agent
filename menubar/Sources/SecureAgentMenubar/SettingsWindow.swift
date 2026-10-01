@@ -57,8 +57,8 @@ public final class SettingsWindowController: NSObject, NSWindowDelegate {
     }
 }
 
-enum SettingsTab: Hashable {
-    case protection, decisions, providers, telemetry, agent, advisor, app, updates
+enum SettingsTab: Hashable, CaseIterable {
+    case protection, decisions, providers, telemetry, secureAgent, app, updates
 
     var title: String {
         switch self {
@@ -66,8 +66,7 @@ enum SettingsTab: Hashable {
         case .decisions: "Decisions"
         case .providers: "Providers"
         case .telemetry: "Telemetry"
-        case .agent: "Local Agent"
-        case .advisor: "Advisor"
+        case .secureAgent: "Secure Agent"
         case .app: "App"
         case .updates: "Updates"
         }
@@ -77,10 +76,9 @@ enum SettingsTab: Hashable {
         switch self {
         case .protection: "shield.lefthalf.filled"
         case .decisions: "checklist"
-        case .providers: "app.connected"
+        case .providers: "square.stack.3d.up"
         case .telemetry: "waveform.path.ecg"
-        case .agent: "bubble.left.and.text.bubble.right"
-        case .advisor: "brain"
+        case .secureAgent: "bubble.left.and.text.bubble.right"
         case .app: "gearshape"
         case .updates: "arrow.triangle.2.circlepath"
         }
@@ -92,8 +90,7 @@ enum SettingsTab: Hashable {
         case .decisions: "Review notification choices and exceptions"
         case .providers: "Choose which harnesses are monitored"
         case .telemetry: "Check file coverage and collector health"
-        case .agent: "Direct Ollama chat and traffic inspection"
-        case .advisor: "Choose a local model for incident analysis"
+        case .secureAgent: "Local chat, analysis models, and traffic inspection"
         case .app: "Startup, setup, and removal"
         case .updates: "Build version and update channel"
         }
@@ -125,8 +122,7 @@ struct SettingsView: View {
                     navigationRow(.telemetry)
                 }
                 Section("LOCAL AI") {
-                    navigationRow(.agent)
-                    navigationRow(.advisor)
+                    navigationRow(.secureAgent)
                 }
                 Section("GENERAL") {
                     navigationRow(.app)
@@ -170,8 +166,7 @@ struct SettingsView: View {
         case .decisions: policyTab
         case .providers: providersTab
         case .telemetry: visibilityTab
-        case .agent: agentTab
-        case .advisor: advisorTab
+        case .secureAgent: secureAgentTab
         case .app: generalTab
         case .updates: updatesTab
         }
@@ -400,18 +395,21 @@ struct SettingsView: View {
         .formStyle(.grouped)
     }
 
-    private var agentTab: some View {
-        Form {
-            Section("Direct local Agent") {
-                Toggle("Enable local Agent chat", isOn: Binding(
+    private var secureAgentTab: some View {
+        let discovery = setup.advisorDiscovery
+        let selectedServer = discovery.servers.first { $0.id == selectedServerID } ?? discovery.servers.first
+        return Form {
+            Section("Chat") {
+                Toggle("Enable chat", isOn: Binding(
                     get: { setup.systemAgentEnabled },
                     set: { setup.setSystemAgentEnabled($0) }
                 ))
                 Text("Chat with Ollama on this Mac. Shell commands require your confirmation before they run.")
                     .font(.caption).foregroundStyle(.secondary)
-                Button("Open Agent chat") { state.openDashboard(tab: "agent") }
+                Button("Open Secure Agent chat") { state.openDashboard(tab: "agent") }
                     .disabled(state.dashboardUnavailableReason != nil)
             }
+            analysisSections
             Section("Agent traffic inspection") {
                 Text("Route agents through the inspection proxy (opt-in, shell-scoped).")
                     .font(.caption).foregroundStyle(.secondary)
@@ -426,6 +424,42 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
+        .onAppear {
+            // Restore the persisted advisor config FIRST — the tab must not
+            // reset to "managed local model" every time Settings opens when
+            // the user configured an existing server last time.
+            if let m = setup.advisorPersisted.mode {
+                advisorMode = m == "managed" ? .managed : .existing
+            }
+            if let model = setup.advisorPersisted.model, !model.isEmpty {
+                if setup.advisorPersisted.mode == "managed" {
+                    selectedManagedModel = model
+                } else {
+                    selectedModel = model
+                }
+            }
+            // Nothing configured yet: the pickers start on the recommendation.
+            if setup.advisorPersisted.mode == nil, let r = discovery.recommended {
+                let c = SetupManager.advisorChoice(for: r)
+                advisorMode = c.mode
+                if c.mode == .managed {
+                    selectedManagedModel = c.model
+                } else {
+                    selectedServerID = c.endpoint ?? ""
+                    selectedModel = c.model
+                }
+            }
+            if selectedManagedModel.isEmpty { selectedManagedModel = discovery.managedModels.first ?? "" }
+            if selectedServerID.isEmpty { selectedServerID = discovery.servers.first?.id ?? "" }
+            if selectedModel.isEmpty { selectedModel = selectedServer?.models.first ?? "" }
+        }
+        .onChange(of: selectedServerID) { _, _ in
+            selectedModel = selectedServer?.models.first ?? ""
+        }
+        .onChange(of: discovery.servers.count) { _, _ in
+            if selectedServerID.isEmpty { selectedServerID = discovery.servers.first?.id ?? "" }
+            if selectedManagedModel.isEmpty { selectedManagedModel = discovery.managedModels.first ?? "" }
+        }
     }
 
     private func confirmUninstall() {
@@ -571,12 +605,12 @@ struct SettingsView: View {
         setup.applyRecommendation(r)
     }
 
-    private var advisorTab: some View {
+    private var analysisSections: some View {
         let discovery = setup.advisorDiscovery
         let selectedServer = discovery.servers.first { $0.id == selectedServerID } ?? discovery.servers.first
-        return Form {
-            Section {
-                Text("A locally served model triages flags and writes incident narratives — on this machine only. Verdicts never change enforcement.")
+        return Group {
+            Section("Analysis model") {
+                Text("Secure Agent uses a local model to analyze flags and write incident reports. Choose its model separately from chat. Analysis never changes enforcement.")
                     .font(.caption).foregroundStyle(.secondary)
                 Picker("Model source", selection: $advisorMode) {
                     Text("Managed local model").tag(SetupManager.AdvisorMode.managed)
@@ -649,11 +683,11 @@ struct SettingsView: View {
                 }
             }
 
-            Section("Advisor") {
+            Section("Automatic analysis") {
                 let canEnable = advisorMode == .managed
                     ? !discovery.managedModels.isEmpty
                     : selectedServer != nil && !selectedModel.isEmpty
-                Button(setup.advisorEnabled ? "Apply configuration" : "Enable advisor") {
+                Button(setup.advisorEnabled ? "Apply configuration" : "Enable automatic analysis") {
                     switch advisorMode {
                     case .managed:
                         setup.setAdvisorConfig(mode: .managed, endpoint: nil,
@@ -666,7 +700,7 @@ struct SettingsView: View {
                 }
                 .disabled(!canEnable)
                 if setup.advisorEnabled {
-                    Button("Disable advisor") { setup.setAdvisorEnabled(false) }
+                    Button("Disable automatic analysis") { setup.setAdvisorEnabled(false) }
                 }
                 if let note = setup.advisorNote {
                     Text(note).font(.caption).foregroundStyle(.secondary)
@@ -675,43 +709,6 @@ struct SettingsView: View {
                     Button("Recheck servers") { Task { await setup.refreshState() } }
                 }
             }
-        }
-        .formStyle(.grouped)
-        .onAppear {
-            // Restore the persisted advisor config FIRST — the tab must not
-            // reset to "managed local model" every time Settings opens when
-            // the user configured an existing server last time.
-            if let m = setup.advisorPersisted.mode {
-                advisorMode = m == "managed" ? .managed : .existing
-            }
-            if let model = setup.advisorPersisted.model, !model.isEmpty {
-                if setup.advisorPersisted.mode == "managed" {
-                    selectedManagedModel = model
-                } else {
-                    selectedModel = model
-                }
-            }
-            // Nothing configured yet: the pickers start on the recommendation.
-            if setup.advisorPersisted.mode == nil, let r = discovery.recommended {
-                let c = SetupManager.advisorChoice(for: r)
-                advisorMode = c.mode
-                if c.mode == .managed {
-                    selectedManagedModel = c.model
-                } else {
-                    selectedServerID = c.endpoint ?? ""
-                    selectedModel = c.model
-                }
-            }
-            if selectedManagedModel.isEmpty { selectedManagedModel = discovery.managedModels.first ?? "" }
-            if selectedServerID.isEmpty { selectedServerID = discovery.servers.first?.id ?? "" }
-            if selectedModel.isEmpty { selectedModel = selectedServer?.models.first ?? "" }
-        }
-        .onChange(of: selectedServerID) { _, _ in
-            selectedModel = selectedServer?.models.first ?? ""
-        }
-        .onChange(of: discovery.servers.count) { _, _ in
-            if selectedServerID.isEmpty { selectedServerID = discovery.servers.first?.id ?? "" }
-            if selectedManagedModel.isEmpty { selectedManagedModel = discovery.managedModels.first ?? "" }
         }
     }
 

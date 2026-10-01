@@ -33,6 +33,16 @@
   },
   "actions": [
     {
+      "id": "inspect-file",
+      "label": "Inspect file details",
+      "consequence": "Shows file metadata, recorded accesses, and supported .env variable names without values; changes nothing.",
+      "method": "GET",
+      "path": "/files/detail",
+      "body": {
+        "path": "/Users/dev/.claude/skills/synced/00000000-0000-4000-8000-000000000001_00000000-0000-4000-8000-000000000002/example-skill/config"
+      }
+    },
+    {
       "id": "allow-host",
       "label": "Allow this AWS address for claude",
       "consequence": "Future connections from claude to 2600:1f10:4fa9:a02:3441:aad6:bb1a:fd73 are trusted and stop being flagged. This finding is marked reviewed.",
