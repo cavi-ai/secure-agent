@@ -9,6 +9,10 @@ import XCTest
 final class SettingsLayoutTests: XCTestCase {
     func testNativeSettingsAtMinimumAndDefaultSizes() async throws {
         _ = NSApplication.shared
+        if ProcessInfo.processInfo.environment["CI"] == "true" {
+            XCTAssertTrue(NSApp.isFullKeyboardAccessEnabled,
+                          "CI must enable AppKit keyboard navigation before launching the tests")
+        }
         NSApp.finishLaunching()
         let priorTab = SettingsNavigation.shared.tab
         SettingsNavigation.shared.tab = .protection
