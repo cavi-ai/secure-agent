@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,6 +16,35 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/supervise"
 )
+
+func TestDismissPushesAllClearPosture(t *testing.T) {
+	for _, body := range []string{`{"flag_id":"last"}`, `{"flag_ids":["last"]}`} {
+		t.Run(body, func(t *testing.T) {
+			st := testStore(t)
+			st.PutFlag(model.Flag{ID: "last", Rule: "transcript-secret-leak", Severity: 2, TS: time.Now()})
+			a := newTestAPI("", st, &fakeKiller{}, func() Status { return Status{Running: true} })
+			a.deltaHub = NewDeltaHub()
+			ch := a.deltaHub.Subscribe()
+			defer a.deltaHub.Unsubscribe(ch)
+			a.PublishPostureIfChanged()
+			<-ch
+			w := httptest.NewRecorder()
+			a.buildMux().ServeHTTP(w, httptest.NewRequest("POST", "/flags/acknowledge", strings.NewReader(body)))
+			if w.Code != 200 {
+				t.Fatalf("dismiss: %d", w.Code)
+			}
+			select {
+			case d := <-ch:
+				p, ok := d.Data.(Posture)
+				if d.Type != "posture" || !ok || p.State != "all-clear" || p.NeedsYou != 0 {
+					t.Fatalf("delta=%+v", d)
+				}
+			default:
+				t.Fatal("dismiss left the menu bar waiting for a poll; no all-clear push")
+			}
+		})
+	}
+}
 
 func TestPostureAllClearWhenNothingPending(t *testing.T) {
 	sock := fmt.Sprintf("/tmp/sa_posture_%d.sock", time.Now().UnixNano())

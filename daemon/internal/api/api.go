@@ -724,7 +724,14 @@ func (a *API) mux(socket bool) *http.ServeMux {
 			if r.NoAgent && !socket {
 				h = a.consoleNoAgent(h)
 			}
-			mux.HandleFunc(r.Path, h)
+			mux.HandleFunc(r.Path, func(w http.ResponseWriter, req *http.Request) {
+				h(w, req)
+				// Decisions made in either UI must reach every posture consumer
+				// immediately, even when no subsequent telemetry event arrives.
+				if apiroutes.IsMutation(req.Method, req.URL.Path) {
+					a.PublishPostureIfChanged()
+				}
+			})
 		}
 	}
 	a.setupWebDashboard(mux)
