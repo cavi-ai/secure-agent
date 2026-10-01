@@ -193,6 +193,18 @@ final class SettingsLayoutTests: XCTestCase {
         NSApp.deactivate()
         XCTAssertFalse(NSApp.isActive, "Keyboard checks must work without desktop activation")
         XCTAssertTrue(window.makeFirstResponder(control))
+        // Selection and keyboard focus are separate in a segmented cell.
+        // On a fresh runner, the first arrow can enter the current segment
+        // instead of advancing it. Cycle native keys back to the selected
+        // segment to establish focus before testing a single move.
+        let initialSelection = control.selectedSegment
+        for _ in 0..<control.segmentCount {
+            try sendKey(character, keyCode: keyCode, window: window)
+            try sendKey(" ", keyCode: 49, window: window)
+            if control.selectedSegment == initialSelection { break }
+        }
+        XCTAssertEqual(control.selectedSegment, initialSelection,
+                       "Native keyboard focus must return to the selected segment")
         try sendKey(character, keyCode: keyCode, window: window)
         try sendKey(" ", keyCode: 49, window: window)
     }
