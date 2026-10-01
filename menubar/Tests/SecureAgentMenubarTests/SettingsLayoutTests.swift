@@ -9,6 +9,9 @@ import XCTest
 final class SettingsLayoutTests: XCTestCase {
     func testNativeSettingsAtMinimumAndDefaultSizes() async throws {
         _ = NSApplication.shared
+        let priorPolicy = NSApp.activationPolicy()
+        XCTAssertTrue(NSApp.setActivationPolicy(.regular))
+        defer { NSApp.setActivationPolicy(priorPolicy) }
         if ProcessInfo.processInfo.environment["CI"] == "true" {
             XCTAssertTrue(NSApp.isFullKeyboardAccessEnabled,
                           "CI must enable AppKit keyboard navigation before launching the tests")
@@ -39,8 +42,8 @@ final class SettingsLayoutTests: XCTestCase {
             SettingsNavigation.shared.tab = priorTab
         }
         await settle(hosting)
+        drainApplicationEvents()
         print("SETTINGS_NATIVE_FRAME outer=\(window.frame) content=\(hosting.frame) bounds=\(hosting.bounds)")
-        print("SETTINGS_NATIVE_CONTEXT policy=\(NSApp.activationPolicy().rawValue) active=\(NSApp.isActive) visible=\(window.isVisible) canBecomeKey=\(window.canBecomeKey) key=\(window.isKeyWindow)")
         XCTAssertEqual(hosting.bounds.size, NSSize(width: 760, height: 520))
         try assertControl("Files", in: hosting)
         try assertControl("Network", in: hosting)
@@ -197,44 +200,12 @@ final class SettingsLayoutTests: XCTestCase {
                               character: String, window: NSWindow) throws {
         XCTAssertTrue(window.makeFirstResponder(control))
         XCTAssertTrue(window.firstResponder === control)
-        print("SETTINGS_NATIVE_CONTROL class=\(type(of: control)) cell=\(String(describing: control.cell.map { type(of: $0) })) enabled=\(control.isEnabled) acceptsFirstResponder=\(control.acceptsFirstResponder) selected=\(control.selectedSegment)")
         let expected = (control.selectedSegment + (keyCode == 124 ? 1 : control.segmentCount - 1)) % control.segmentCount
         try sendKey(character, keyCode: keyCode, window: window)
         try sendKey(" ", keyCode: 49, window: window)
+        drainApplicationEvents()
         XCTAssertEqual(control.selectedSegment, expected,
                        "Native key press must select the adjacent segment; keyWindow=\(window.isKeyWindow), fullKeyboardAccess=\(NSApp.isFullKeyboardAccessEnabled)")
-        if control.selectedSegment != expected {
-            try diagnoseApplicationEvents(control, keyCode: keyCode, character: character,
-                                          window: window, expected: expected)
-        }
-    }
-
-    private func diagnoseApplicationEvents(_ control: NSSegmentedControl, keyCode: UInt16,
-                                          character: String, window: NSWindow, expected: Int) throws {
-        // Keep the failed assertion above. These probes record whether the
-        // production application's activation and event loop change delivery.
-        let priorPolicy = NSApp.activationPolicy()
-        let priorSelection = control.selectedSegment
-        defer {
-            control.selectedSegment = priorSelection
-            _ = control.sendAction(control.action, to: control.target)
-            NSApp.setActivationPolicy(priorPolicy)
-        }
-        let activated = NSApp.setActivationPolicy(.regular)
-        window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
-        drainApplicationEvents()
-        print("SETTINGS_NATIVE_PROBE regularPolicy=\(activated) active=\(NSApp.isActive) key=\(window.isKeyWindow)")
-        XCTAssertTrue(window.makeFirstResponder(control))
-        try sendKey(character, keyCode: keyCode, window: window)
-        try sendKey(" ", keyCode: 49, window: window)
-        print("SETTINGS_NATIVE_PROBE directResponder selected=\(control.selectedSegment) expected=\(expected)")
-        if control.selectedSegment != expected {
-            try sendKey(character, keyCode: keyCode, window: window, throughApplication: true)
-            try sendKey(" ", keyCode: 49, window: window, throughApplication: true)
-            drainApplicationEvents()
-            print("SETTINGS_NATIVE_PROBE applicationQueue selected=\(control.selectedSegment) expected=\(expected)")
-        }
     }
 
     private func drainApplicationEvents() {
@@ -245,8 +216,7 @@ final class SettingsLayoutTests: XCTestCase {
         }
     }
 
-    private func sendKey(_ character: String, keyCode: UInt16, window: NSWindow,
-                         throughApplication: Bool = false) throws {
+    private func sendKey(_ character: String, keyCode: UInt16, window: NSWindow) throws {
         // Match a complete physical key press. Arrow keys carry the function
         // and numeric-pad flags; activation may occur when Space is released.
         let flags: NSEvent.ModifierFlags = [123, 124].contains(keyCode) ? [.function, .numericPad] : []
@@ -255,16 +225,8 @@ final class SettingsLayoutTests: XCTestCase {
                 modifierFlags: flags, timestamp: ProcessInfo.processInfo.systemUptime,
                 windowNumber: window.windowNumber, context: nil, characters: character,
                 charactersIgnoringModifiers: character, isARepeat: false, keyCode: keyCode))
-            if throughApplication {
-                NSApp.postEvent(event, atStart: false)
-                continue
-            }
-            let responder = try XCTUnwrap(window.firstResponder)
-            if type == .keyDown { responder.keyDown(with: event) }
-            else { responder.keyUp(with: event) }
-            if let control = responder as? NSSegmentedControl {
-                print("SETTINGS_NATIVE_KEY code=\(keyCode) type=\(type.rawValue) selected=\(control.selectedSegment)")
-            }
+            // Exercise NSApplication's event context, as the running app does.
+            NSApp.postEvent(event, atStart: false)
         }
     }
 
