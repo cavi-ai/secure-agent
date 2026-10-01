@@ -104,11 +104,11 @@ def serve_with_csp(tmp):
     return srv, f"http://127.0.0.1:{srv.server_address[1]}"
 
 
-def dump_dom(chrome, tmp, query="", origin=None, window_size=None):
+def dump_dom(chrome, tmp, query="", origin=None, window_size=None, reduced_motion=False):
     url = f"{origin or 'file://' + tmp}/harness.html{query}"
     size = [f"--window-size={window_size[0]},{window_size[1]}"] if window_size else []
     out = subprocess.run(
-        [chrome, "--headless=new", "--disable-gpu", "--no-sandbox", *size,
+        [chrome, "--headless=new", "--disable-gpu", "--no-sandbox", *size, *(["--force-prefers-reduced-motion"] if reduced_motion else []),
          "--virtual-time-budget=" + str(VIRTUAL_TIME_MS), "--dump-dom", url],
         capture_output=True, text=True, timeout=120,
     )
@@ -266,6 +266,10 @@ def main():
         dom_agentoff = dump_dom(chrome, tmp, "?tab=agent&agentoff", origin)
         dom_agentchat = dump_dom(chrome, tmp, "?tab=agent&agentchat", origin)
         dom_agentlocal = dump_dom(chrome, tmp, "?tab=agent&agentlocal", origin)
+        dom_agentlatency = dump_dom(chrome, tmp, "?tab=agent&agentlatency", origin)
+        dom_agentthinking = dump_dom(chrome, tmp, "?tab=agent&agentthinking", origin)
+        dom_agentreduced = dump_dom(chrome, tmp, "?tab=agent&agentthinking", origin, reduced_motion=True)
+        dom_agentreject = dump_dom(chrome, tmp, "?tab=agent&agentreject", origin)
         dom_agentdispatch = dump_dom(chrome, tmp, "?tab=agent&agentdispatch", origin)
         dom_headroomwide = dump_dom(chrome, tmp, "?tab=sessions&headroomhint", origin, window_size=(1280, 800))
         dom_headroomphone = dump_dom(chrome, tmp, "?phonedemo&headroomhint")
@@ -1649,6 +1653,22 @@ def main():
         check("agent: off, the tab says how to turn it on and the composer is disabled",
               'Secure Agent chat is off' in ago and 'system_agent:\n  enabled: true' in ago
               and '<textarea id="agent-input"' in ago and ago.split('<textarea id="agent-input"', 1)[1].split('>', 1)[0].count('disabled') == 1)
+        for label, progress_dom, expected, animation in [
+            ("delivery", dom_agentlatency, "Sending your message", "spin"),
+            ("Ollama wait", dom_agentthinking, "Waiting for local Ollama", "spin"),
+            ("reduced motion", dom_agentreduced, "Waiting for local Ollama", "none"),
+        ]:
+            receipt = re.search(r'data-agent-feedback-state="([^"]+)"', progress_dom)
+            state = json.loads(html.unescape(receipt.group(1))) if receipt else {}
+            check(f"agent: {label} is visible immediately, disables Send, and handles repeated Enter once",
+                  expected in state.get("pending", "") and state.get("animation") == animation
+                  and state.get("sendDisabled") and pre(progress_dom, "mock-requests").count("POST /agent/chat") == 1,
+                  str(state))
+        receipt = re.search(r'data-agent-feedback-state="([^"]+)"', dom_agentreject)
+        rejected = json.loads(html.unescape(receipt.group(1))) if receipt else {}
+        check("agent: failed send keeps the draft and renders a persistent error",
+              rejected.get("errorVisible") and "Model unavailable" in rejected.get("error", "")
+              and rejected.get("draft") == "Keep my Git token in the keychain" and not rejected.get("sendDisabled"), str(rejected))
         agc = agent_block(dom_agentchat)
         check("agent: a message sent from the composer gets a direct local command proposal",
               "POST /agent/chat" in pre(dom_agentchat, "mock-requests")
@@ -1656,10 +1676,13 @@ def main():
               and 'data-action="agent-run-local"' in agc
               and "The local model is answering" not in agc and agent_count(dom_agentchat, "agent-msg ") == 7)
         agl = agent_block(dom_agentlocal)
-        check("agent: confirmed local command runs once and its result appears under Runs",
+        check("agent: confirmed local command runs once and its output stays expanded in chat",
               "POST /agent/actions" in pre(dom_agentlocal, "mock-requests")
               and 'Git credential helper configured.' in agl and 'data-action="agent-run-local"' not in agl
-              and agl.count('class="agent-run" data-run=') == 3)
+              and agl.count('class="agent-run" data-run=') == 3
+              and 'agent-inline-output' in agl.split('class="agent-chat-foot"', 1)[0]
+              and 'Completed · exit 0' in agl.split('class="agent-chat-foot"', 1)[0]
+              and '<aside class="agent-inspector" id="agent-side" aria-label="Agent tools" hidden=' in agl)
         agd = agent_block(dom_agentdispatch)
         reqs = pre(dom_agentdispatch, "mock-requests")
         check("agent: Run headless dispatches after the dialog; the run lands under Runs and finishes",

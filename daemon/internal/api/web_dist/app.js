@@ -1108,7 +1108,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const AGENT_POLL_MS = 1500;
   const AGENT_POLL_LIMIT = 1200;
   const AGENT_TIMEOUT_MS = 15000;
-  const agentState = { status: null, chat: null, plans: null, runs: null, recommendations: null, skills: null, error: '', polls: 0, lastCount: 0 };
+  const agentState = { status: null, chat: null, plans: null, runs: null, recommendations: null, skills: null, error: '', sendError: '', sending: false, actionRequests: new Set(), readVersion: {}, polls: 0, lastCount: 0 };
   // Literal paths: the proxy's console allow-list test reads them from here.
   const AGENT_PATHS = { status: '/agent/status', chat: '/agent/chat', plans: '/agent/plans', runs: '/agent/runs', recommendations: '/agent/recommendations' };
   let agentPollTimer = null;
@@ -1157,14 +1157,15 @@ document.addEventListener('DOMContentLoaded', () => {
     try { return JSON.parse(text); } catch { return null; }
   }
   function agentBusy() {
-    return !!((agentState.chat && agentState.chat.chatting) || (agentState.runs || []).some(r => r.status === 'running'));
+    return !!(agentState.sending || agentState.actionRequests.size || (agentState.chat && agentState.chat.chatting) || (agentState.runs || []).some(r => r.status === 'running'));
   }
   async function loadAgent(parts) {
     const want = parts || ['status', 'chat', 'plans', 'runs', 'recommendations'];
     const wasBusy = agentBusy();
+    const versions = want.map(p => agentState.readVersion[p] = (agentState.readVersion[p] || 0) + 1);
     try {
       const got = await Promise.all(want.map(p => agentFetch(AGENT_PATHS[p])));
-      want.forEach((p, i) => { agentState[p] = got[i]; });
+      want.forEach((p, i) => { if (agentState.readVersion[p] === versions[i]) agentState[p] = got[i]; });
       agentState.error = '';
       if (want.includes('status')) fillAgentHarnesses();
     } catch (err) {
@@ -1201,11 +1202,17 @@ document.addEventListener('DOMContentLoaded', () => {
     const stateEl = document.getElementById('agent-state');
     if (stateEl) stateEl.textContent = agentState.error || agentStateText(st);
     const unavailable = !enabled || !!(st && st.reason) || agentBusy();
+    const feedback = document.getElementById('agent-feedback');
+    if (feedback) { feedback.hidden = !agentState.sendError; feedback.textContent = agentState.sendError; }
     document.getElementById('agent-workspace').dataset.agentReady = String(enabled && st.reachable && !st.reason);
     if (agentComposer) {
       agentComposer.classList.toggle('off', !enabled);
       agentComposer.querySelectorAll('textarea, select, input, button').forEach(el => { el.disabled = !enabled; });
-      document.getElementById('agent-send').disabled = unavailable;
+      const send = document.getElementById('agent-send');
+      send.disabled = unavailable;
+      const sendHTML = agentState.sending ? agentSpinnerHTML() + ' Sending…' : (agentBusy() ? agentSpinnerHTML() + ' Working…' : 'Send <span class="agent-send-key" aria-hidden="true">↵</span>');
+      if (send.innerHTML !== sendHTML) send.innerHTML = sendHTML;
+      agentComposer.setAttribute('aria-busy', String(agentBusy()));
     }
     document.querySelectorAll('.agent-quick').forEach(el => { el.disabled = unavailable; });
     const analyzeBtn = document.getElementById('agent-analyze');
@@ -1214,13 +1221,12 @@ document.addEventListener('DOMContentLoaded', () => {
     if (thread && st && !enabled) {
       if (thread._saEmpty !== 'off') { thread.innerHTML = agentOffHTML(); thread._saEmpty = 'off'; }
     } else if (thread) {
-      const items = agentThreadItems(agentState.chat, st);
-      const follow = agentState.lastCount === 0 || thread.scrollHeight - thread.scrollTop - thread.clientHeight < 80;
+      const items = agentThreadItems(agentState.chat, st, agentState.runs, agentState);
+      const beforeHeight = thread.scrollHeight;
+      const follow = agentState.lastCount === 0 || beforeHeight - thread.scrollTop - thread.clientHeight < 80;
       patchList(thread, items, { key: i => i.key, html: i => i.html, empty: agentEmptyThreadHTML(st) });
-      if (items.length !== agentState.lastCount) {
-        agentState.lastCount = items.length;
-        if (follow) thread.scrollTop = thread.scrollHeight;
-      }
+      if (follow && (items.length !== agentState.lastCount || thread.scrollHeight !== beforeHeight)) thread.scrollTop = thread.scrollHeight;
+      agentState.lastCount = items.length;
     }
     const plans = agentState.plans;
     const recommendations = agentPendingRecommendations(agentState.recommendations);
@@ -1250,20 +1256,38 @@ document.addEventListener('DOMContentLoaded', () => {
     if (sEl) sEl.innerHTML = agentSkillsHTML(st);
   }
   window.sendAgentMessage = async function() {
-    if (agentBusy() || !agentState.status?.enabled || agentState.status.reason) return;
-    const text = agentInput ? agentInput.value.trim() : '';
+    if (agentBusy()) return;
+    if (!agentState.status?.enabled || agentState.status.reason) {
+      agentState.sendError = agentState.status?.reason || (agentState.status
+        ? 'Enable chat in Settings → Secure Agent before sending.' : 'Still connecting to Secure Agent. Please wait.');
+      renderNow(['agent']);
+      return;
+    }
+    const draft = agentInput ? agentInput.value : '';
+    const text = draft.trim();
     if (!text) return;
+    // Paint before the network request. The server alone masks and accepts
+    // message text; never create an optimistic copy of an unmasked draft.
+    agentState.sending = true;
+    agentState.sendError = '';
+    renderNow(['agent']);
     try {
       const res = await agentFetch('/agent/chat', { method: 'POST',
         body: { message: text, workdir: agentWorkdirInput.value.trim() } });
-      agentInput.value = '';
+      if (!res?.message?.id) throw new Error('The daemon did not acknowledge the message');
+      if (agentInput.value === draft) agentInput.value = '';
       const chat = agentState.chat || (agentState.chat = { messages: [] });
-      if (res && res.message) chat.messages = [...(chat.messages || []), res.message];
+      // An older GET cannot erase a message accepted after that GET started.
+      agentState.readVersion.chat = (agentState.readVersion.chat || 0) + 1;
+      if (!(chat.messages || []).some(m => m.id === res.message.id)) chat.messages = [...(chat.messages || []), res.message];
       chat.chatting = true;
+    } catch (err) {
+      agentState.sendError = 'Delivery could not be confirmed: ' + (err.message || err) + '. Your draft is kept; check the conversation before retrying.';
+      await loadAgent(['chat']);
+    } finally {
+      agentState.sending = false;
       renderNow(['agent']);
       followAgent(false);
-    } catch (err) {
-      showToast('Not sent: ' + (err.message || err), 'danger');
     }
   };
   window.saveAgentRequest = async function() {
@@ -1284,19 +1308,29 @@ document.addEventListener('DOMContentLoaded', () => {
   };
   window.runLocalAgentAction = async function(messageId) {
     const m = [...((agentState.chat && agentState.chat.messages) || []), ...(agentState.recommendations || [])].find(x => x.id === messageId);
-    if (!m || !m.local_command || m.local_run_id) return;
+    if (!m || !m.local_command || m.local_run_id || agentState.actionRequests.has(messageId)) return;
     const action = m.local_command;
     const mode = action.mode === 'terminal' ? 'in Terminal' : 'headless';
-    const ok = await window.saConfirm(`Run this exact local command ${mode} in ${action.workdir}?\n\n${action.command}\n\nIt runs with your account's file and network access. No harness receives this chat or command.`,
-      { title: 'Confirm local command', okLabel: 'Run command', danger: true });
-    if (!ok) return;
+    agentState.actionRequests.add(messageId);
+    renderNow(['agent']);
     try {
+      const ok = await window.saConfirm(`Run this exact local command ${mode} in ${action.workdir}?\n\n${action.command}\n\nIt runs with your account's file and network access. No harness receives this chat or command.`,
+        { title: 'Confirm local command', okLabel: 'Run command', danger: true });
+      if (!ok) return;
       const res = await agentFetch('/agent/actions', { method: 'POST', body: { message_id: messageId } });
-      showToast(res.run.status === 'running' ? 'Local command is running; result appears under Runs' : 'Local command opened in Terminal', 'success');
-      setAgentPanel('history');
+      m.local_run_id = res.run.id;
+      agentState.readVersion.chat = (agentState.readVersion.chat || 0) + 1;
+      agentState.readVersion.runs = (agentState.readVersion.runs || 0) + 1;
+      agentState.runs = [res.run, ...(agentState.runs || []).filter(r => r.id !== res.run.id)];
+      // Keep the conversation and focus in place; execution is visible on
+      // the command proposal as well as in History.
       loadAgent(['chat', 'runs', 'recommendations']);
     } catch (err) {
       showToast('Local command not run: ' + (err.message || err), 'danger');
+    } finally {
+      agentState.actionRequests.delete(messageId);
+      renderNow(['agent']);
+      followAgent(false);
     }
   };
   window.analyzeAgentActivity = async function(flagIds) {

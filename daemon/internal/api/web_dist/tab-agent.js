@@ -60,17 +60,29 @@ function agentTextHTML(text, markdown = false) {
 
 // A model reply can propose one exact local command. The server accepts only
 // this message id for execution; the command is never taken from the click.
-function agentLocalCommandHTML(m) {
+function agentSpinnerHTML() {
+  return '<svg class="agent-spinner" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7"/></svg>';
+}
+
+function agentLocalCommandHTML(m, run, activity = {}) {
   const a = m.local_command;
   if (!a) return '';
   const mode = a.mode === 'terminal' ? 'Terminal' : 'Headless';
-  return `<div class="agent-proposal agent-local-action">
-    <div class="agent-proposal-head"><b>Local command · ${mode}</b></div>
-    <div class="agent-plan-meta">Runs on this machine in <code>${escapeHTML(a.workdir)}</code>. No harness receives this chat.</div>
+  const reviewing = activity.actionRequests?.has(m.id);
+  const running = run?.status === 'running';
+  const labels = { running: 'Running locally', done: 'Completed', failed: 'Failed', timeout: 'Timed out', opened: 'Opened in Terminal', manual: 'Terminal required' };
+  const label = run ? (labels[run.status] || 'Run recorded') : m.local_run_id ? 'Run recorded' : reviewing ? 'Confirming command' : 'Awaiting approval';
+  const badge = run ? (AGENT_RUN_BADGE[run.status] || '') : '';
+  const exit = run && ['done', 'failed', 'timeout'].includes(run.status) ? ` · exit ${Number(run.exit_code)}` : '';
+  return `<div class="agent-proposal agent-local-action"${m.local_run_id ? ` data-local-run="${Number(m.local_run_id)}"` : ''}>
+    <div class="agent-proposal-head"><svg class="icon"><use href="#i-terminal"/></svg><b>Shell command · ${mode}</b><span class="badge ${badge}">${running || reviewing ? agentSpinnerHTML() : ''}${escapeHTML(label)}${exit}</span></div>
+    <div class="agent-plan-meta">${escapeHTML(a.workdir)} · runs on this machine</div>
     <pre class="agent-run-output">${escapeHTML(a.command)}</pre>
+    ${run?.detail ? `<div class="agent-run-detail">${escapeHTML(run.detail)}</div>` : ''}
+    ${run?.output ? `<details class="agent-task agent-inline-output" open><summary>Output</summary><pre class="agent-run-output">${escapeHTML(run.output)}</pre></details>` : ''}
     <div class="agent-actions">${m.local_run_id
       ? `<span class="agent-saved">Started as run #${Number(m.local_run_id)}</span>`
-      : `<button type="button" class="btn btn-primary btn-sm" data-action="agent-run-local" data-message="${Number(m.id)}">Review and run</button>`}</div>
+      : `<button type="button" class="btn btn-primary btn-sm" data-action="agent-run-local" data-message="${Number(m.id)}"${reviewing ? ' disabled' : ''}>Review and run</button><span class="agent-approval-note">Nothing runs until you confirm.</span>`}</div>
   </div>`;
 }
 
@@ -136,7 +148,7 @@ function agentProposalHTML(m, status) {
 }
 
 // agentMessageHTML: one chat turn. A chat turn is always local Ollama.
-function agentMessageHTML(m, status) {
+function agentMessageHTML(m, status, runs, activity) {
   if (m.role === 'note') {
     return `<div class="agent-msg note"><span>${escapeHTML(m.content)}</span></div>`;
   }
@@ -156,16 +168,17 @@ function agentMessageHTML(m, status) {
     u.elapsed_ms ? `${(Number(u.elapsed_ms) / 1000).toFixed(1)}s reply` : '',
     u.tool_calls ? `${Number(u.tool_calls)} tool requests (not executed)` : 'no model tool calls',
   ].filter(Boolean).join(' · ') : '';
-  return `<div class="agent-msg assistant">${agentTextHTML(m.content, true)}${stats ? `<div class="agent-msg-meta">${stats}</div>` : ''}${skills}${agentLocalCommandHTML(m)}${agentProposalHTML(m, status)}</div>`;
+  return `<div class="agent-msg assistant">${agentTextHTML(m.content, true)}${stats ? `<div class="agent-msg-meta">${stats}</div>` : ''}${skills}${agentLocalCommandHTML(m, (runs || []).find(r => r.id === m.local_run_id), activity)}${agentProposalHTML(m, status)}</div>`;
 }
 
 // agentThreadItems: the chat as patchList items, with a pending line while
 // the model answers.
-function agentThreadItems(chat, status) {
+function agentThreadItems(chat, status, runs, activity = {}) {
   const items = ((chat && chat.messages) || []).filter(m => m.origin !== 'analysis')
-    .map(m => ({ key: 'm' + m.id, html: agentMessageHTML(m, status) }));
-  if (chat && chat.chatting) {
-    items.push({ key: 'pending', html: `<div class="agent-msg note agent-pending"><span>The local model is answering…</span></div>` });
+    .map(m => ({ key: 'm' + m.id, html: agentMessageHTML(m, status, runs, activity) }));
+  if (activity.sending || (chat && chat.chatting)) {
+    const label = activity.sending ? 'Sending your message…' : 'Waiting for local Ollama…';
+    items.push({ key: 'pending', html: `<div class="agent-msg agent-pending" role="status" aria-live="polite">${agentSpinnerHTML()}<span>${label}</span></div>` });
   }
   return items;
 }

@@ -33,6 +33,8 @@ The Agent header names the active chat model and Ollama version. The chat
 composer says **Local Ollama · no harness**. Chat occupies the main surface;
 **Review queue**, **History**, and **Tools** open a single side panel. On narrow
 screens the panel replaces the conversation until closed, preserving your draft.
+Sending shows immediate progress, followed by a local Ollama wait indicator. A failed send keeps your draft and shows a persistent error. Confirmed commands show their actual status, exit code, and masked output beside the proposal in chat; Terminal handoffs are labeled as opened, without claiming the command finished. The wait indicator stays static when reduced motion is enabled.
+
 Quick commands such as **Check SSH** and **Check Git signing** prepare editable
 prompts without sending them or running a command. **Working folder** expands
 the optional folder field. **History** holds recent runs and saved plans; run

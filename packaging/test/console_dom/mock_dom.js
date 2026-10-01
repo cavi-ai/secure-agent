@@ -678,13 +678,13 @@
         chat.messages.push({ id: ++agentSeq, ts: iso(0), role: 'assistant', content: 'Review this local command.', skills: ['git'],
           local_command: { command: 'git config --global credential.helper osxkeychain', mode: 'headless', workdir: '/Users/dev' } });
         chat.chatting = false;
-      }, 1500);
+      }, MODE.includes('agentthinking') ? 30000 : 1500);
       return { message: m };
     }
     if (p === '/agent/actions') {
       const m = chat.messages.find(x => x.id === body.message_id);
       const run = { id: ++agentSeq, ts: iso(0), title: 'Local command', harness: 'local', mode: m.local_command.mode,
-        workdir: m.local_command.workdir, status: 'running', command: m.local_command.command };
+        workdir: m.local_command.workdir, status: 'running', exit_code: 0, command: m.local_command.command };
       m.local_run_id = run.id;
       data['/agent/runs'].unshift(run);
       setTimeout(() => Object.assign(run, { status: 'done', finished_at: iso(0), output: 'Git credential helper configured.' }), 1500);
@@ -722,12 +722,29 @@
   };
   // agentchat: the Agent tab open, a message typed and sent through the
   // real composer; the direct Ollama reply lands 1.5s later.
-  if (MODE.includes('agentchat') || MODE.includes('agentlocal')) {
+  if (['agentchat', 'agentlocal', 'agentlatency', 'agentthinking', 'agentreject'].some(m => MODE.includes(m))) {
     setTimeout(() => {
       document.getElementById('agent-workdir').value = '/Users/dev';
       document.getElementById('agent-input').value = 'Keep my Git token in the keychain';
-      document.getElementById('agent-composer').requestSubmit();
+      if (['agentlatency', 'agentthinking', 'agentreject'].some(m => MODE.includes(m))) {
+        const input = document.getElementById('agent-input');
+        input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+        input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+      } else document.getElementById('agent-composer').requestSubmit();
     }, 3000);
+  }
+  if (['agentlatency', 'agentthinking', 'agentreject'].some(m => MODE.includes(m))) {
+    setTimeout(() => {
+      const spinner = document.querySelector('#agent-thread .agent-spinner');
+      document.body.dataset.agentFeedbackState = JSON.stringify({
+        pending: document.querySelector('#agent-thread .agent-pending')?.textContent.trim() || '',
+        animation: spinner ? getComputedStyle(spinner).animationName : '',
+        sendDisabled: document.getElementById('agent-send').disabled,
+        error: document.getElementById('agent-feedback').textContent,
+        errorVisible: !document.getElementById('agent-feedback').hidden,
+        draft: document.getElementById('agent-input').value,
+      });
+    }, 6000);
   }
   if (MODE.includes('agentlocal')) {
     setTimeout(() => {
@@ -961,6 +978,12 @@
       // postfail: POST /allowlist answers 500 (the act-in-place revert path).
       if (MODE.includes('postfail') && p === '/allowlist') {
         return { ok: false, status: 500, json: async () => ({}), text: async () => 'mock failure' };
+      }
+      if (p === '/agent/chat' && MODE.includes('agentreject')) {
+        return { ok: false, status: 503, text: async () => 'Model unavailable' };
+      }
+      if (p === '/agent/chat' && MODE.includes('agentlatency')) {
+        await new Promise(resolve => setTimeout(resolve, 30000));
       }
       const out = handlePost(p, opts, String(path));
       return {

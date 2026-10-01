@@ -6,6 +6,11 @@ All notable changes to `secure-agent` are documented here. The format follows
 
 ## [Unreleased]
 
+### Chat
+- Show immediate sending feedback and animated local-model wait states, with a static reduced-motion alternative. Repeated Enter cannot submit a message twice.
+- Preserve drafts during delivery failures and concurrent editing; show persistent errors and reject stale refreshes that would hide accepted messages.
+- Keep confirmed command status, exit codes, and escaped output beside their proposal in the conversation, while retaining explicit approval before execution.
+
 ### Settings
 - Combine local chat and analysis model controls under Secure Agent, retain separate enable controls, and restore the Providers sidebar icon.
 

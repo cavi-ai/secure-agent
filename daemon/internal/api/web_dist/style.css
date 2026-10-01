@@ -1935,7 +1935,14 @@ body.is-ended .masthead-right { display: none !important; }
 .agent-msg.user { align-self: flex-end; align-items: flex-end; }
 .agent-msg.assistant { align-self: stretch; }
 .agent-msg.note { align-self: center; max-width: 94%; font-size: 0.74rem; color: var(--tx-3); text-align: center; }
-.agent-pending span::after { content: ' ●'; color: var(--brand); }
+.agent-pending { flex-direction: row; align-items: center; gap: 10px; align-self: flex-start; color: var(--tx-2); font-size: 0.82rem; padding: 8px 0; }
+.agent-spinner { width: 16px; height: 16px; flex: none; color: var(--brand-2); animation: spin 1s linear infinite; }
+.btn-primary .agent-spinner { color: currentColor; }
+.agent-spinner circle { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-dasharray: 30 14; }
+.agent-proposal-head .badge { display: inline-flex; align-items: center; gap: 6px; }
+.agent-approval-note { font-size: 0.72rem; color: var(--tx-3); }
+.agent-feedback { margin-top: 8px; font-size: 0.78rem; line-height: 1.5; color: var(--bad); overflow-wrap: anywhere; }
+@media (prefers-reduced-motion: reduce) { .agent-spinner { animation: none; } }
 .agent-bubble {
   padding: 0; border: 0; background: transparent; color: var(--tx-1); font-size: 0.92rem; line-height: 1.65;
   white-space: pre-wrap; overflow-wrap: anywhere;
