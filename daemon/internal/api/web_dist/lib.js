@@ -564,6 +564,12 @@ function attentionCount(posture) {
   return (posture && Number(posture.needs_you)) || 0;
 }
 
+// Coverage observations are informational. Only the daemon's pending
+// egress decisions belong in the Egress tab's attention badge.
+function egressAttentionCount(posture) {
+  return ((posture && posture.items) || []).filter(item => item.kind === 'recurring_egress').length;
+}
+
 // Drawer back-stack: a drawer opened from inside another carries back
 // ({ label, reopen }); the head shows "‹ label" before the title and the
 // click re-runs the previous opener, so that drawer re-renders from live

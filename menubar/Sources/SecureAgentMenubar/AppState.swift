@@ -510,7 +510,7 @@ public final class AppState: ObservableObject {
                 retriageBaseline.removeValue(forKey: id)
                 let offline = advisorHealth?.circuitOpen == true
                 advisorNotice = offline
-                    ? "Advisor is offline (circuit open) — check the local model server in Settings → Advisor"
+                    ? "Advisor is offline (circuit open) — check the local model server in Settings → Secure Agent"
                     : "Advisor didn't answer within 90s — the model server may be busy or down"
                 changed = true
             }

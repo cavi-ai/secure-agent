@@ -14,7 +14,7 @@ function renderFirewall() {
   const anyBlock = rules.some(r => stats[r].mode === 'block');
   badge.textContent = anyBlock ? 'enforcing' : 'monitor';
   badge.className = 'badge' + (anyBlock ? ' badge-ok' : '');
-  SA.setTabBadge('egress', uninspected);
+  SA.setTabBadge('egress', egressAttentionCount(SA.t.posture));
 
   if (rules.length === 0 && uninspected === 0) {
     container.innerHTML = `<div class="empty"><svg class="icon"><use href="#i-shield"/></svg><span>No egress inspected yet — traffic is scanned as your agents run</span></div>`;
@@ -119,14 +119,16 @@ function renderEndpoints() {
   const SA = window.SA;
   const container = document.getElementById('endpoints-container');
   const title = document.getElementById('endpoints-title');
+  const summary = document.getElementById('endpoints-summary');
   if (!container) return;
   const rows = SA.t.uninspected || [];
   const parts = uninspectedParts(rows, inspectionVisible(SA.t.status, SA.t.audit).advisor);
-  // The title counts what this panel actually renders (every part's share of
-  // distinct endpoints), never the status counters — those exclude
-  // infrastructure endpoints that the list still renders.
+  // Describe the displayed coverage sample, including infrastructure. These
+  // observations do not establish a security finding or a pending decision.
   const n = parts.reduce((sum, part) => sum + (part.count || 0), 0);
-  if (title) title.textContent = `${n} endpoint${n === 1 ? '' : 's'} reached without inspection in 24 h`;
+  const infra = groupUninspected(rows).carriers.length;
+  if (title) title.textContent = 'Connection coverage · last 24 h';
+  if (summary) summary.textContent = `${n} endpoint${n === 1 ? '' : 's'} shown${infra ? ` · ${infra} known infrastructure` : ''}. Connection coverage alone is not a security finding.`;
   const opened = new Set([...container.querySelectorAll('details[data-key][open]')].map(d => d.dataset.key));
   patchList(container, parts, {
     key: p => p.key, html: p => p.html,

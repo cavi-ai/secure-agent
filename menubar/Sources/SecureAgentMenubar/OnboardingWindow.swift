@@ -260,7 +260,7 @@ struct OnboardingView: View {
                         Button("Disable Advisor") { setup.setAdvisorEnabled(false) }
                     } else if let r = discovery.recommended {
                         Button("Use recommended") { setup.applyRecommendation(r) }
-                        Text("More models in Settings → Advisor.").font(.caption).foregroundStyle(.secondary)
+                        Text("More models in Settings → Secure Agent.").font(.caption).foregroundStyle(.secondary)
                     }
                     if let note = setup.advisorNote {
                         Text(note).font(.caption).foregroundStyle(.secondary)

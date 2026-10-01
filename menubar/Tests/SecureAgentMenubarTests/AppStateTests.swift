@@ -801,6 +801,24 @@ final class SSEDechunkerTests: XCTestCase {
 // MARK: - Advisor persistence (mode/endpoint/model must survive restarts)
 
 final class AdvisorConfigReaderTests: XCTestCase {
+    func testCanonicalExistingSettingRoundTripsWithoutManagedKey() {
+        let saved = SetupManager.advisorConfigSetting(
+            "proxy_enabled: true\n", mode: .existing,
+            endpoint: "http://127.0.0.1:11434", model: "qwen3.8:27b-mlx")
+        XCTAssertFalse(saved.contains("managed:"))
+        let restored = SetupManager.advisorConfig(saved)
+        XCTAssertEqual(restored.mode, "existing")
+        XCTAssertEqual(restored.endpoint, "http://127.0.0.1:11434")
+        XCTAssertEqual(restored.model, "qwen3.8:27b-mlx")
+    }
+
+    func testEnabledOnlyAdvisorBlockIsStillUnconfigured() {
+        let restored = SetupManager.advisorConfig("advisor:\n  enabled: true\n")
+        XCTAssertNil(restored.mode)
+        XCTAssertNil(restored.endpoint)
+        XCTAssertNil(restored.model)
+    }
+
     func testReadsManagedModel() {
         let yaml = """
         advisor:

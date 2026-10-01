@@ -831,7 +831,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const agents = (t.status && t.status.agents) || [];
     const trees = t.status && t.status.trees;
     setTabBadge('home', attentionCount(t.posture));
-    setTabBadge('egress', (t.status && t.status.uninspected_egress) || 0);
+    setTabBadge('egress', egressAttentionCount(t.posture));
     setTabBadge('processes', groupAgentsByHarness(agents).filter(g => !g.infra).length);
     setTabBadge('sessions', t.sessions && t.sessions.length
       ? groupSessionsByHarness(t.sessions, trees, agents).reduce((n, g) => n + (g.infra ? 0 : familySize(g.live)), 0)
