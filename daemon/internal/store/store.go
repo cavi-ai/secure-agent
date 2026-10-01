@@ -953,19 +953,20 @@ func evidenceCitesHost(evidenceJSON, host string) bool {
 	want := strings.ToLower(host)
 	isLocal := want == "localhost" || want == "127.0.0.1" || want == "::1" || strings.HasPrefix(want, "127.")
 	for _, item := range items {
-		line := item.Text
-		if line == "" {
-			line = item.String()
+		// Structured connection targets are authoritative; display wording
+		// must not determine whether an operator's destination mute applies.
+		h := item.Label
+		if item.Kind != "connect" || h == "" {
+			line := item.String()
+			idx := strings.Index(line, "connected to ")
+			if idx < 0 {
+				continue
+			}
+			h = line[idx+len("connected to "):]
+			if at := strings.Index(h, " at "); at >= 0 {
+				h = h[:at]
+			}
 		}
-		idx := strings.Index(line, "connected to ")
-		if idx < 0 {
-			continue
-		}
-		rest := line[idx+len("connected to "):]
-		if at := strings.Index(rest, " at "); at >= 0 {
-			rest = rest[:at]
-		}
-		h := strings.TrimSuffix(rest, "") // host:port
 		if h == "" {
 			continue
 		}
@@ -2376,4 +2377,22 @@ func (s *Store) IncidentStatus(id string) (IncidentWorkflow, bool) {
 	wf.ResolvedAt = res.String
 	wf.ResolutionNote = note.String
 	return wf, wf.Status != ""
+}
+
+// ReclassifyReadConnectSeverity changes only unresolved weak correlations.
+// It retains every finding, evidence row and operator disposition.
+func (s *Store) ReclassifyReadConnectSeverity(ids []string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for _, id := range ids {
+		res, err := s.db.Exec(`UPDATE flags SET severity=2 WHERE id=? AND rule='sensitive-read-then-connect' AND severity=3 AND acknowledged IS NULL`, id)
+		if err != nil {
+			log.Printf("store: reclassify severity: %v", err)
+			continue
+		}
+		count, _ := res.RowsAffected()
+		n += int(count)
+	}
+	return n
 }

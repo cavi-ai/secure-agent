@@ -49,6 +49,7 @@ export interface EvidenceItem {
   ts?: string;
   text?: string;
   offset?: number;
+  chain?: number[];
   pid?: number;
   exe?: string;
   owners?: string[];
@@ -237,6 +238,8 @@ export interface FileDetail {
   accesses: FileAccess[];
   hits: FileHit[];
   excerpt?: string;
+  env_variables?: string[];
+  env_withheld?: string;
   excerpt_withheld?: string;
 }
 

@@ -1,4 +1,4 @@
-# System Agent — Local Ollama Chat and Confirmed Actions
+# Secure Agent — Local Ollama Chat and Confirmed Actions
 
 The console's **Agent** tab chats directly with a model on your own Ollama.
 For local work, the model may propose one exact shell command, folder and mode.
@@ -16,8 +16,8 @@ model and dispatched harness models use the configured loopback Ollama.
 1. Start Ollama and pull a chat-capable model, for example `ollama pull qwen3`.
    A tool-calling model such as `qwen3-coder` can be selected separately for
    optional harness handoffs.
-2. In the menu bar app, choose **Settings → Local Agent** and enable
-   local Agent chat. **Ask Agent** opens the console. For a headless install or
+2. In the menu bar app, choose **Settings → Secure Agent** and enable
+   **Chat → Enable chat**. **Ask Agent** opens the console. For a headless install or
    specific models, use `~/.config/secure-agent/config.yaml`:
 
    ```yaml
@@ -33,6 +33,8 @@ The Agent header names the active chat model and Ollama version. The chat
 composer says **Local Ollama · no harness**. Chat occupies the main surface;
 **Review queue**, **History**, and **Tools** open a single side panel. On narrow
 screens the panel replaces the conversation until closed, preserving your draft.
+Sending shows immediate progress, followed by a local Ollama wait indicator. A failed send keeps your draft and shows a persistent error. Confirmed commands show their actual status, exit code, and masked output beside the proposal in chat; Terminal handoffs are labeled as opened, without claiming the command finished. The wait indicator stays static when reduced motion is enabled.
+
 Quick commands such as **Check SSH** and **Check Git signing** prepare editable
 prompts without sending them or running a command. **Working folder** expands
 the optional folder field. **History** holds recent runs and saved plans; run
@@ -173,3 +175,9 @@ Inspect the plan's task and folder before dispatching it.
 - Pi's project-trust feature is not a sandbox. Terminal-only handoff and its
   disabled shell tool reduce risk but do not confine its read/write tools to
   the chosen folder. Use the direct local command path for sensitive work.
+
+### Review a selected security finding
+
+**Send to local agent review** on a finding or pattern submits the selected flag IDs to local Ollama. The daemon builds a bounded, masked summary of recorded file, process, timestamp, destination, and credential-owner metadata. It does not read the `.env` contents into the chat. **Inspect file details** shows variable names only for supported small `.env` files; values and ambiguous multiline content are withheld. The recommendation appears in the Agent review queue and links back to the finding. Review and run locally requires a separate command confirmation; save a plan for later delegation to a harness when needed.
+
+For a suspected stale `.env`, inspect variable names and consumer references without printing values before approving removal. Ordinary startup reads and cloud/CDN traffic are correlations, not proof that secret bytes left the machine.

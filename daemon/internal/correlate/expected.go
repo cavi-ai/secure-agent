@@ -28,19 +28,17 @@ func ReaderLabel(exe string, toolRead bool) string {
 	return strings.ToLower(filepath.Base(exe))
 }
 
-// DestLabel names a destination: its org from the endpoint identity table,
-// else the lower-cased host.
+// DestLabel is an exact endpoint. Shared infrastructure must never widen
+// an operator exception to every tenant of a cloud or CDN.
 func DestLabel(host string) string {
-	if org := IdentifyCached(host).Org; org != "" {
-		return org
-	}
-	return strings.ToLower(host)
+	return strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
 }
 
 // ExpectedPattern is one read-then-connect pattern the operator marked
 // expected. Its occurrences are counted, not flagged; a new reader, file or
 // destination still flags.
 type ExpectedPattern struct {
+	Scope     string    `json:"scope,omitempty"` // "file": exact non-secret path for this agent
 	Key       string    `json:"key"`
 	Agent     string    `json:"agent"`
 	Reader    string    `json:"reader"`
@@ -63,6 +61,7 @@ type ExpectStore struct {
 }
 
 type expectedOnDisk struct {
+	Scope     string    `json:"scope,omitempty"`
 	Agent     string    `json:"agent"`
 	Reader    string    `json:"reader"`
 	Path      string    `json:"path"`
@@ -91,14 +90,14 @@ func (s *ExpectStore) loadLocked() {
 	}
 	for _, d := range disk {
 		key := ReadConnectKey(d.Agent, d.Reader, d.Path, d.Dest)
-		s.entries[key] = &ExpectedPattern{Key: key, Agent: d.Agent, Reader: d.Reader, Path: d.Path, Dest: d.Dest, CreatedAt: d.CreatedAt}
+		s.entries[key] = &ExpectedPattern{Scope: d.Scope, Key: key, Agent: d.Agent, Reader: d.Reader, Path: d.Path, Dest: d.Dest, CreatedAt: d.CreatedAt}
 	}
 }
 
 func (s *ExpectStore) saveLocked() error {
 	disk := make([]expectedOnDisk, 0, len(s.entries))
 	for _, e := range s.sortedLocked() {
-		disk = append(disk, expectedOnDisk{Agent: e.Agent, Reader: e.Reader, Path: e.Path, Dest: e.Dest, CreatedAt: e.CreatedAt})
+		disk = append(disk, expectedOnDisk{Scope: e.Scope, Agent: e.Agent, Reader: e.Reader, Path: e.Path, Dest: e.Dest, CreatedAt: e.CreatedAt})
 	}
 	return safefile.WriteFileAtomic(s.path, mustJSON(disk), 0o600)
 }
@@ -166,8 +165,7 @@ func (s *ExpectStore) Has(key string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.loadLocked()
-	_, ok := s.entries[key]
-	return ok
+	return s.matchLocked(key) != nil
 }
 
 // Match reports whether every key is expected and, when so, counts one hit
@@ -180,12 +178,12 @@ func (s *ExpectStore) Match(keys []string, at time.Time) bool {
 		return false
 	}
 	for _, k := range keys {
-		if s.entries[k] == nil {
+		if s.matchLocked(k) == nil {
 			return false
 		}
 	}
 	for _, k := range keys {
-		e := s.entries[k]
+		e := s.matchLocked(k)
 		e.Hits++
 		if e.LastSeen == nil || at.After(*e.LastSeen) {
 			t := at
@@ -193,4 +191,29 @@ func (s *ExpectStore) Match(keys []string, at time.Time) bool {
 		}
 	}
 	return true
+}
+
+// A file exception is exact-path and agent-scoped. Delimit from the ends so
+// a pipe in a file name cannot broaden the exception to a neighboring path.
+func (s *ExpectStore) matchLocked(key string) *ExpectedPattern {
+	if e := s.entries[key]; e != nil {
+		return e
+	}
+	agent, rest, ok := strings.Cut(key, "|")
+	if !ok {
+		return nil
+	}
+	_, rest, ok = strings.Cut(rest, "|")
+	if !ok {
+		return nil
+	}
+	i := strings.LastIndex(rest, "|")
+	if i < 0 {
+		return nil
+	}
+	e := s.entries[ReadConnectKey(agent, "*", rest[:i], "*")]
+	if e != nil && e.Scope == "file" {
+		return e
+	}
+	return nil
 }

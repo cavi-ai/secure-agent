@@ -12,6 +12,24 @@ const end = app.indexOf('  // A pattern card\'s served action', start);
 assert.ok(start >= 0 && end > start, 'finding action handler is present');
 const actionHandler = app.slice(start, end);
 
+test('group approval sends the selected served endpoint without a stale flag lookup', async () => {
+  const begin = app.indexOf('  window.patternAct = async function(');
+  const finish = app.indexOf('  window.unmuteFlag = async function(', begin);
+  const requests = [];
+  const body = { flag_id: 'older', path: '/home/.config/gh/hosts.yml', host: '140.82.114.6' };
+  const ctx = { window: { saConfirm: async () => true },
+    telemetryData: { patterns: [{ key: 'group', actions: [{id: 'expect', method: 'POST', path: '/expected', body, consequence: 'This endpoint only'}] }] },
+    apiFetch: async (url, req) => { requests.push([url, JSON.parse(req.body)]); return {ok: true}; },
+    showToast: () => {}, fetchTelemetry: () => {}, loadPolicy: () => {},
+  };
+  vm.runInNewContext(app.slice(begin, finish), ctx);
+  await ctx.window.patternAct('group', 'expect', body.host);
+  assert.deepEqual(requests, [['/expected', body]]);
+  ctx.window.saConfirm = async () => false;
+  await ctx.window.patternAct('group', 'expect', body.host);
+  assert.equal(requests.length, 1);
+});
+
 test('opening an older finding makes its served actions immediately clickable', async () => {
   const begin = app.indexOf('  window.openFlagDetail = async function(');
   const finish = app.indexOf('  // Deep link from the menubar', begin);
@@ -78,4 +96,18 @@ test('failed file exception keeps the finding in the queue', async () => {
   vm.runInNewContext(actionHandler, ctx, { filename: 'app.js:explainAct' });
   await ctx.window.explainAct(flag.id, 'allow-path');
   assert.equal(dropped, 0);
+});
+
+test('selected finding enters local review without dismissal or shell execution', async () => {
+ const calls=[];const flag={id:'selected',explain:{actions:[{id:'review-local',body:{flag_ids:['selected']}}]}};
+ const ctx={window:{analyzeAgentActivity:async ids=>calls.push(Array.from(ids))},telemetryData:{flags:[flag]},planFlagCache:new Map(),showToast:()=>{}};
+ vm.runInNewContext(actionHandler,ctx);
+ await ctx.window.explainAct('selected','review-local');
+ assert.deepEqual(calls,[['selected']]);assert.equal(ctx.telemetryData.flags.length,1);
+});
+test('file exception confirmation does not optimistically dismiss mixed evidence', async () => {
+ const requests=[];const flag={id:'mixed',explain:{actions:[{id:'expect-file',path:'/expected',method:'POST',consequence:'Exact file only',body:{flag_id:'mixed',scope:'file'}}]}};
+ const ctx={window:{saConfirm:async()=>true},telemetryData:{flags:[flag]},planFlagCache:new Map(),showToast:()=>{},loadPolicy:()=>{},fetchTelemetry:()=>{},apiFetch:async(route,opts)=>{requests.push([route,JSON.parse(opts.body)]);return {ok:true,json:async()=>({})}}};
+ vm.runInNewContext(actionHandler,ctx);await ctx.window.explainAct('mixed','expect-file');
+ assert.equal(requests.length,1);assert.deepEqual(requests[0],['/expected',{flag_id:'mixed',scope:'file'}]);assert.equal(ctx.telemetryData.flags.length,1);
 });

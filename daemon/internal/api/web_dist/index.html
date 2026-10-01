@@ -30,6 +30,7 @@
       <symbol id="i-history" viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 1 2.3 5.6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M3.5 19v-4.5H8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M12 8v4.5l3 1.8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></symbol>
       <symbol id="i-branch" viewBox="0 0 24 24"><circle cx="7" cy="5.5" r="2.2" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="7" cy="18.5" r="2.2" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="17" cy="8" r="2.2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M7 7.7v8.6M17 10.2c0 4-4 4.3-9.3 6.4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
       <symbol id="i-chat" viewBox="0 0 24 24"><path d="M5 5h14a1.5 1.5 0 0 1 1.5 1.5v8A1.5 1.5 0 0 1 19 16h-7l-4.5 3.5V16H5a1.5 1.5 0 0 1-1.5-1.5v-8A1.5 1.5 0 0 1 5 5z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M8 10.5h.01M12 10.5h.01M16 10.5h.01" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></symbol>
+      <symbol id="i-terminal" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M7 8l3 3-3 3m6 0h4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></symbol>
       <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6 9.5a6 6 0 1 1 12 0c0 4.5 2 6 2 6H4s2-1.5 2-6z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M10 19a2.2 2.2 0 0 0 4 0" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
     </defs>
   </svg>
@@ -640,7 +641,7 @@
         <div class="agent-workspace" id="agent-workspace">
           <header class="agent-workspace-head">
             <div class="agent-heading">
-              <h2>System agent</h2>
+              <h2>Secure Agent</h2>
               <span class="agent-state" id="agent-state">Loading…</span>
             </div>
             <nav class="agent-workspace-tools" aria-label="Agent tools">
@@ -651,7 +652,7 @@
           </header>
           <div class="agent-layout">
             <section class="agent-chat" id="agent-chat" aria-label="Local agent chat">
-              <div class="agent-thread" id="agent-thread" role="log" aria-live="polite" aria-label="Conversation with the system agent"></div>
+              <div class="agent-thread" id="agent-thread" role="log" aria-live="polite" aria-label="Conversation with Secure Agent"></div>
               <div class="agent-chat-foot">
                 <div class="agent-quick-commands" aria-label="Quick commands">
                   <button type="button" class="agent-quick" id="agent-analyze" data-action="agent-analyze"><svg class="icon"><use href="#i-shield"/></svg>Analyze activity</button>
@@ -672,6 +673,7 @@
                     <button type="submit" class="btn btn-primary btn-sm" id="agent-send">Send <span class="agent-send-key" aria-hidden="true">↵</span></button>
                   </div>
                 </form>
+                <p id="agent-feedback" class="agent-feedback" role="alert" hidden></p>
                 <div class="agent-composer-note"><span>Commands wait for your confirmation. <span class="agent-key-hint">Enter to send · Shift+Enter for a new line.</span></span><button type="button" class="link-btn" data-action="agent-clear" title="Delete the conversation (plans and runs stay)">Clear chat</button></div>
               </div>
             </section>

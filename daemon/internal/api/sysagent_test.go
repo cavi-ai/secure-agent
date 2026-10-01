@@ -153,7 +153,7 @@ func TestAnalyzeFlagsCreatesReviewOnlyRecommendation(t *testing.T) {
 	}))
 	defer ollama.Close()
 	st := testStore(t)
-	st.PutFlag(model.Flag{ID: "flag-a", Rule: "read-then-connect", Agent: "codex", Severity: 3, TS: time.Now(), Evidence: model.EvidenceFromStrings("read .env")})
+	st.PutFlag(model.Flag{ID: "flag-a", Rule: "read-then-connect", Agent: "codex", Severity: 3, TS: time.Now(), Evidence: model.EvidenceFromStrings("legacy-unstructured-secret-sentinel")})
 	st.PutAudit(store.AuditEntry{Action: "flag-ack", Detail: "reviewed older finding"})
 	agent := sysagent.New(st, t.TempDir(), func(s string) (string, bool) { return s, true })
 	agent.SetConfig(config.SystemAgentConfig{Enabled: true, Endpoint: ollama.URL, TimeoutMinutes: 1})
@@ -164,7 +164,11 @@ func TestAnalyzeFlagsCreatesReviewOnlyRecommendation(t *testing.T) {
 		mux.ServeHTTP(w, httptest.NewRequest(method, path, strings.NewReader(body)))
 		return w
 	}
-	if w := do(http.MethodPost, "/agent/analyze", `{}`); w.Code != http.StatusAccepted {
+	st.PutFlag(model.Flag{ID: "unselected", Rule: "another-rule", Agent: "claude", Severity: 2, TS: time.Now()})
+	if w := do(http.MethodPost, "/agent/analyze", `{"flag_ids":["missing"]}`); w.Code != http.StatusNotFound {
+		t.Fatalf("unknown selected flag: %d", w.Code)
+	}
+	if w := do(http.MethodPost, "/agent/analyze", `{"flag_ids":["flag-a"]}`); w.Code != http.StatusAccepted {
 		t.Fatalf("analyze: %d %s", w.Code, w.Body.String())
 	}
 	agent.Wait()
@@ -177,7 +181,7 @@ func TestAnalyzeFlagsCreatesReviewOnlyRecommendation(t *testing.T) {
 	if m.ReviewState != "pending" || len(m.FlagIDs) != 1 || m.FlagIDs[0] != "flag-a" || m.LocalCommand == nil || len(agent.Runs(10)) != 0 {
 		t.Fatalf("analysis must queue, not run: %+v", m)
 	}
-	if user := agent.Messages(10)[0]; !strings.Contains(user.Content, "flag-a") || !strings.Contains(user.Content, "flag-ack") {
+	if user := agent.Messages(10)[0]; !strings.Contains(user.Content, "flag-a") || !strings.Contains(user.Content, "flag-ack") || strings.Contains(user.Content, "unselected") || strings.Contains(user.Content, "legacy-unstructured-secret-sentinel") {
 		t.Fatalf("analysis omitted stored flag or action: %s", user.Content)
 	}
 	if w := do(http.MethodPost, "/agent/plans", fmt.Sprintf(`{"message_id":%d,"harness":"codex","mode":"terminal","workdir":"/tmp"}`, m.ID)); w.Code != http.StatusOK {

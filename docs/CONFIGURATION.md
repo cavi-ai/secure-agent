@@ -44,7 +44,7 @@ sensitive_paths:
 ---
 
 ### `not_secret_paths` (List of Strings)
-Directory prefixes that hold no secret, checked before `sensitive_paths` and `sensitive_globs`. A read under one is never a sensitive read.
+Exact paths or directory prefixes that hold no secret, checked before the automatic `.env` rule, `sensitive_paths`, and `sensitive_globs`. SSH private keys, AWS credentials, and keychains retain their dedicated classification. Changes to this configuration require a daemon restart. For a live, reversible agent-scoped `.env` exception, use **Mark this .env as a test / non-secret file** on a finding and revoke it under Policy.
 
 ```yaml
 not_secret_paths:

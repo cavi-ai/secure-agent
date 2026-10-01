@@ -33,6 +33,7 @@ type connMark struct {
 	host     string
 	port     int
 	pid      int32   // the process that connected
+	exe      string  // executable at observation, never inferred from the reader
 	chain    []int32 // pid up to its nearest agent ancestor (tagger chain)
 	consumed bool
 }
@@ -96,6 +97,7 @@ type Correlator struct {
 	folded        map[string]foldedFlag
 	repeats       []flagRepeat
 	onRepeat      func(flagID string, at time.Time)
+	isOpenFlag    func(string) bool
 	ownerUseCount int
 	isExpected    func(keys []string, at time.Time) bool
 	expectedCount int
@@ -518,7 +520,11 @@ func (c *Correlator) observeLocked(e event.Event) []model.Flag {
 			}
 		}
 
-		conn := connMark{at: e.TS, host: e.RemoteHost, port: e.RemotePort, pid: e.PID, chain: info.Chain}
+		exe := e.ExePath
+		if exe == "" {
+			exe = info.ExePath
+		}
+		conn := connMark{at: e.TS, host: e.RemoteHost, port: e.RemotePort, pid: e.PID, exe: exe, chain: info.Chain}
 		c.rememberConnLocked(rootPID, e.PID, conn)
 
 		if reads := c.recentReadsLocked(rootPID, e.PID, e.TS, window); len(reads) > 0 {

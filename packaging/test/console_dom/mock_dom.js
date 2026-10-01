@@ -214,7 +214,7 @@
       ],
       items: [
         { severity: 3, kind: 'flag', id: 'flag-1', title: 'proxy-secret-leak — cursor sent an anthropic-key to logs.example.com' },
-        { severity: 3, kind: 'flag', id: 'flag-2', title: 'Agent read a secret, then connected out' },
+        { severity: 3, kind: 'flag', id: 'flag-2', title: 'Sensitive file read near an outside connection' },
         { severity: 3, kind: 'flag', id: 'flag-4', title: 'Agent modified macOS privacy permissions (TCC)' },
         { severity: 2, kind: 'flag', id: 'flag-5', title: 'Agent touched the keychain' },
         { severity: 1, kind: 'guard_pending', id: 'guard-1', title: 'claude wants .env' },
@@ -491,7 +491,7 @@
     const cfHost = '2606:4700::6810:84e5';
     const f2 = data['/flags'].find(f => f.id === 'flag-2');
     Object.assign(f2, {
-      title: 'Agent read a secret, then connected out',
+      title: 'Sensitive file read near an outside connection',
       ts: '2026-09-22T16:05:01Z',
       evidence: [
         { kind: 'read', label: '/Users/dev/.aws/credentials', sub: 'sensitive read', ts: '2026-09-22T16:04:58Z' },
@@ -576,6 +576,26 @@
   // ?theme=dark|light pins the console theme (screenshots); app.js reads it
   // from the same storage key the masthead toggle writes.
   const theme = new URLSearchParams(MODE).get('theme');
+  if (MODE.includes('ghdemo')) {
+    setTimeout(() => openTab('findings'), 1500);
+    const key = 'claude|sensitive-read-then-connect|/Users/dev/.config/gh/hosts.yml';
+    data['/flags'].push({id: 'gh-flag', rule: 'sensitive-read-then-connect', severity: 2, agent: 'claude', pid: 301,
+      evidence: [{kind: 'read', label: '/Users/dev/.config/gh/hosts.yml', exe: '/opt/homebrew/bin/gh'}]});
+    data['/patterns'] = [{key, agent: 'claude', rule: 'sensitive-read-then-connect', title: 'Sensitive file read near an outside connection',
+      count: 81, flags: 30, unacked: 1, first: iso(600000), last: iso(1000), hourly: [], flag_ids: ['gh-flag'],
+      disposition: {state: 'warning', text: 'Needs a look', why: 'Recorded evidence does not establish credential use.'},
+      summary: 'gh read ~/.config/gh/hosts.yml near a GitHub connection.', actions: [
+        {id: 'expect', label: 'Expected: gh → 140.82.114.6', consequence: 'Approve only this reader, file, and endpoint. Other evidence stays open.',
+          method: 'POST', path: '/expected', body: {flag_id: 'gh-flag', path: '/Users/dev/.config/gh/hosts.yml', host: '140.82.114.6'}},
+        {id: 'review-local', label: 'Send to local agent review', body: {flag_ids: ['gh-flag']}},
+        {id: 'inspect-file', label: 'Inspect file details', body: {path: '/Users/dev/.config/gh/hosts.yml'}},
+        {id: 'dismiss-all', label: 'Dismiss all 1 open', method: 'POST', path: '/flags/acknowledge', body: {flag_ids: ['gh-flag']}}
+      ]}];
+    if (MODE.includes('ghapprove')) {
+      setTimeout(() => document.querySelector('#flags-list [data-action-id="expect"]')?.click(), 9000);
+      setTimeout(() => document.getElementById('confirm-ok')?.click(), 9500);
+    }
+  }
   if (theme === 'dark' || theme === 'light') {
     try { localStorage.setItem('sa-theme', theme); } catch { /* ignored */ }
   }
@@ -678,13 +698,13 @@
         chat.messages.push({ id: ++agentSeq, ts: iso(0), role: 'assistant', content: 'Review this local command.', skills: ['git'],
           local_command: { command: 'git config --global credential.helper osxkeychain', mode: 'headless', workdir: '/Users/dev' } });
         chat.chatting = false;
-      }, 1500);
+      }, MODE.includes('agentthinking') ? 30000 : 1500);
       return { message: m };
     }
     if (p === '/agent/actions') {
       const m = chat.messages.find(x => x.id === body.message_id);
       const run = { id: ++agentSeq, ts: iso(0), title: 'Local command', harness: 'local', mode: m.local_command.mode,
-        workdir: m.local_command.workdir, status: 'running', command: m.local_command.command };
+        workdir: m.local_command.workdir, status: 'running', exit_code: 0, command: m.local_command.command };
       m.local_run_id = run.id;
       data['/agent/runs'].unshift(run);
       setTimeout(() => Object.assign(run, { status: 'done', finished_at: iso(0), output: 'Git credential helper configured.' }), 1500);
@@ -722,12 +742,29 @@
   };
   // agentchat: the Agent tab open, a message typed and sent through the
   // real composer; the direct Ollama reply lands 1.5s later.
-  if (MODE.includes('agentchat') || MODE.includes('agentlocal')) {
+  if (['agentchat', 'agentlocal', 'agentlatency', 'agentthinking', 'agentreject'].some(m => MODE.includes(m))) {
     setTimeout(() => {
       document.getElementById('agent-workdir').value = '/Users/dev';
       document.getElementById('agent-input').value = 'Keep my Git token in the keychain';
-      document.getElementById('agent-composer').requestSubmit();
+      if (['agentlatency', 'agentthinking', 'agentreject'].some(m => MODE.includes(m))) {
+        const input = document.getElementById('agent-input');
+        input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+        input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+      } else document.getElementById('agent-composer').requestSubmit();
     }, 3000);
+  }
+  if (['agentlatency', 'agentthinking', 'agentreject'].some(m => MODE.includes(m))) {
+    setTimeout(() => {
+      const spinner = document.querySelector('#agent-thread .agent-spinner');
+      document.body.dataset.agentFeedbackState = JSON.stringify({
+        pending: document.querySelector('#agent-thread .agent-pending')?.textContent.trim() || '',
+        animation: spinner ? getComputedStyle(spinner).animationName : '',
+        sendDisabled: document.getElementById('agent-send').disabled,
+        error: document.getElementById('agent-feedback').textContent,
+        errorVisible: !document.getElementById('agent-feedback').hidden,
+        draft: document.getElementById('agent-input').value,
+      });
+    }, 6000);
   }
   if (MODE.includes('agentlocal')) {
     setTimeout(() => {
@@ -848,6 +885,9 @@
       }
       return { status: 'ok', acknowledged: true, count: ids.size };
     }
+    if (p === '/expected' && body.flag_id === 'gh-flag') {
+      return handlePost('/flags/acknowledge', {body: JSON.stringify({flag_ids: ['gh-flag']})});
+    }
     if (p === '/guard/resolve') {
       data['/guard/pending'] = data['/guard/pending'].filter(prompt => prompt.id !== body.id);
       // The served attention queue reflects the resolution too — the console
@@ -944,7 +984,7 @@
         try { host = JSON.parse(opts.body).host; } catch { /* ignored */ }
         line += ' row=' + (document.querySelector(`#firewall-container [data-action="allowlist-remove"][data-host="${host}"]`) ? 1 : 0);
       }
-      if ((MODE.includes('explaindemo') || MODE.includes('patterndemo') || MODE.includes('rawmute')) && opts.body) line += ' body=' + opts.body;
+      if ((MODE.includes('explaindemo') || MODE.includes('patterndemo') || MODE.includes('ghdemo') || MODE.includes('rawmute')) && opts.body) line += ' body=' + opts.body;
       if (MODE.includes('rawmute') && p === '/mute' && opts.method === 'POST') data['/mute'].push(JSON.parse(opts.body));
       if (p === '/expected' && opts.method === 'DELETE') {
         line = `${opts.method} ${String(path)}`;
@@ -961,6 +1001,12 @@
       // postfail: POST /allowlist answers 500 (the act-in-place revert path).
       if (MODE.includes('postfail') && p === '/allowlist') {
         return { ok: false, status: 500, json: async () => ({}), text: async () => 'mock failure' };
+      }
+      if (p === '/agent/chat' && MODE.includes('agentreject')) {
+        return { ok: false, status: 503, text: async () => 'Model unavailable' };
+      }
+      if (p === '/agent/chat' && MODE.includes('agentlatency')) {
+        await new Promise(resolve => setTimeout(resolve, 30000));
       }
       const out = handlePost(p, opts, String(path));
       return {

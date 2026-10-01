@@ -104,11 +104,11 @@ def serve_with_csp(tmp):
     return srv, f"http://127.0.0.1:{srv.server_address[1]}"
 
 
-def dump_dom(chrome, tmp, query="", origin=None, window_size=None):
+def dump_dom(chrome, tmp, query="", origin=None, window_size=None, reduced_motion=False):
     url = f"{origin or 'file://' + tmp}/harness.html{query}"
     size = [f"--window-size={window_size[0]},{window_size[1]}"] if window_size else []
     out = subprocess.run(
-        [chrome, "--headless=new", "--disable-gpu", "--no-sandbox", *size,
+        [chrome, "--headless=new", "--disable-gpu", "--no-sandbox", *size, *(["--force-prefers-reduced-motion"] if reduced_motion else []),
          "--virtual-time-budget=" + str(VIRTUAL_TIME_MS), "--dump-dom", url],
         capture_output=True, text=True, timeout=120,
     )
@@ -266,11 +266,17 @@ def main():
         dom_agentoff = dump_dom(chrome, tmp, "?tab=agent&agentoff", origin)
         dom_agentchat = dump_dom(chrome, tmp, "?tab=agent&agentchat", origin)
         dom_agentlocal = dump_dom(chrome, tmp, "?tab=agent&agentlocal", origin)
+        dom_agentlatency = dump_dom(chrome, tmp, "?tab=agent&agentlatency", origin)
+        dom_agentthinking = dump_dom(chrome, tmp, "?tab=agent&agentthinking", origin)
+        dom_agentreduced = dump_dom(chrome, tmp, "?tab=agent&agentthinking", origin, reduced_motion=True)
+        dom_agentreject = dump_dom(chrome, tmp, "?tab=agent&agentreject", origin)
         dom_agentdispatch = dump_dom(chrome, tmp, "?tab=agent&agentdispatch", origin)
         dom_headroomwide = dump_dom(chrome, tmp, "?tab=sessions&headroomhint", origin, window_size=(1280, 800))
         dom_headroomphone = dump_dom(chrome, tmp, "?phonedemo&headroomhint")
         dom_scope = dump_dom(chrome, tmp, "?scopedemo")
         dom_pattern = dump_dom(chrome, tmp, "?patterndemo")
+        dom_gh = dump_dom(chrome, tmp, "?ghdemo")
+        dom_ghapprove = dump_dom(chrome, tmp, "?ghdemo&ghapprove")
         dom_patternact = dump_dom(chrome, tmp, "?patterndemo&patternact")
         dom_patternphone = dump_dom(chrome, tmp, "?phonedemo&patterndemo")
         dom_patternstream = dump_dom(chrome, tmp, "?patterndemo&patternstream")
@@ -1284,7 +1290,7 @@ def main():
         head = (re.search(r"<header[^>]*>(.*?)</header>", card, re.S) or [None, ""])[1]
         outside = re.sub(r"<details.*?</details>", "", card, flags=re.S)
         check("finding card: header shows the title, never the rule id; no pid or IPv6 outside Details",
-              card != "" and "Agent read a secret, then connected out" in head
+              card != "" and "Sensitive file read near an outside connection" in head
               and "sensitive-read-then-connect" not in visible(head)
               and not re.search(r"\bpid\b", visible(outside), re.I) and "6033" not in visible(outside)
               and "2606:" not in visible(outside), f"card={card[:240]!r}")
@@ -1374,6 +1380,12 @@ def main():
               f"badge={attention_badge!r} tab={tab_badge!r} needs_you={needs_you}")
 
         # --- patterns: a repeating finding is one card ---
+        gh_cards = dom_gh.split('id="flags-list"', 1)[-1].split('id="incidents-container"', 1)[0]
+        check("GitHub grouped finding exposes approval, local review and inspection",
+              all(f'data-action-id="{action}"' in gh_cards for action in ('expect', 'review-local', 'inspect-file')))
+        check("GitHub approval posts the served exact scope and reconciles to reviewed",
+              'POST /expected body={"flag_id":"gh-flag","path":"/Users/dev/.config/gh/hosts.yml","host":"140.82.114.6"}' in pre(dom_ghapprove, "mock-requests")
+              and '<b class="pattern-open">0 open</b>' in dom_ghapprove)
         pat_attn = dom_pattern.split('id="attention-center"', 1)[-1].split('id="security-findings-grid"', 1)[0]
         pat_cards = re.findall(r'<article class="finding pattern-card [^"]*" data-pattern-key="([^"]+)">(.*?)</article>', pat_attn, re.S)
         # Covered flags are intentionally clickable inside the disclosure;
@@ -1389,9 +1401,9 @@ def main():
               f"cards={len(pat_cards)}")
         pat_flags = dom_pattern.split('id="flags-list"', 1)[-1].split('id="incidents-container"', 1)[0]
         pat_standalone = re.sub(r'<article class="finding pattern-card [^"]*"[^>]*>.*?</article>', '', pat_flags, flags=re.S)
-        check("patterns: the Flags list leads with the pattern and has no card for a covered flag",
+        check("patterns: critical individual flags lead warnings without duplicating covered flags",
               'data-pattern-key="codex|keychain-access|' in pat_flags
-              and pat_flags.index('data-pattern-key=') < pat_flags.index('class="flag-card')
+              and pat_flags.index('data-id="flag-1"') < pat_flags.index('data-pattern-key=') < pat_flags.index('data-id="flag-3"')
               and not any(f'data-id="{fid}"' in pat_standalone or f'data-flag-id="{fid}"' in pat_standalone for fid in ("flag-6", "flag-7"))
               and "(PID 40844)" not in pat_flags and "(PID 51364)" not in pat_flags
               and 'data-id="flag-3"' in pat_flags)
@@ -1647,8 +1659,24 @@ def main():
               ag.count('badge badge-ok">ready</span>') == 2 and 'data-action="agent-skill" data-skill="signing"' in ag)
         ago = agent_block(dom_agentoff)
         check("agent: off, the tab says how to turn it on and the composer is disabled",
-              'The system agent is off' in ago and 'system_agent:\n  enabled: true' in ago
+              'Secure Agent chat is off' in ago and 'system_agent:\n  enabled: true' in ago
               and '<textarea id="agent-input"' in ago and ago.split('<textarea id="agent-input"', 1)[1].split('>', 1)[0].count('disabled') == 1)
+        for label, progress_dom, expected, animation in [
+            ("delivery", dom_agentlatency, "Sending your message", "spin"),
+            ("Ollama wait", dom_agentthinking, "Waiting for local Ollama", "spin"),
+            ("reduced motion", dom_agentreduced, "Waiting for local Ollama", "none"),
+        ]:
+            receipt = re.search(r'data-agent-feedback-state="([^"]+)"', progress_dom)
+            state = json.loads(html.unescape(receipt.group(1))) if receipt else {}
+            check(f"agent: {label} is visible immediately, disables Send, and handles repeated Enter once",
+                  expected in state.get("pending", "") and state.get("animation") == animation
+                  and state.get("sendDisabled") and pre(progress_dom, "mock-requests").count("POST /agent/chat") == 1,
+                  str(state))
+        receipt = re.search(r'data-agent-feedback-state="([^"]+)"', dom_agentreject)
+        rejected = json.loads(html.unescape(receipt.group(1))) if receipt else {}
+        check("agent: failed send keeps the draft and renders a persistent error",
+              rejected.get("errorVisible") and "Model unavailable" in rejected.get("error", "")
+              and rejected.get("draft") == "Keep my Git token in the keychain" and not rejected.get("sendDisabled"), str(rejected))
         agc = agent_block(dom_agentchat)
         check("agent: a message sent from the composer gets a direct local command proposal",
               "POST /agent/chat" in pre(dom_agentchat, "mock-requests")
@@ -1656,10 +1684,13 @@ def main():
               and 'data-action="agent-run-local"' in agc
               and "The local model is answering" not in agc and agent_count(dom_agentchat, "agent-msg ") == 7)
         agl = agent_block(dom_agentlocal)
-        check("agent: confirmed local command runs once and its result appears under Runs",
+        check("agent: confirmed local command runs once and its output stays expanded in chat",
               "POST /agent/actions" in pre(dom_agentlocal, "mock-requests")
               and 'Git credential helper configured.' in agl and 'data-action="agent-run-local"' not in agl
-              and agl.count('class="agent-run" data-run=') == 3)
+              and agl.count('class="agent-run" data-run=') == 3
+              and 'agent-inline-output' in agl.split('class="agent-chat-foot"', 1)[0]
+              and 'Completed · exit 0' in agl.split('class="agent-chat-foot"', 1)[0]
+              and '<aside class="agent-inspector" id="agent-side" aria-label="Agent tools" hidden=' in agl)
         agd = agent_block(dom_agentdispatch)
         reqs = pre(dom_agentdispatch, "mock-requests")
         check("agent: Run headless dispatches after the dialog; the run lands under Runs and finishes",

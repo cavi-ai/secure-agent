@@ -44,6 +44,8 @@ type FileDetail struct {
 	Accesses        []FileAccess    `json:"accesses"`
 	Hits            []FileHit       `json:"hits"`
 	Excerpt         string          `json:"excerpt,omitempty"`
+	EnvVariables    []string        `json:"env_variables,omitempty"`
+	EnvWithheld     string          `json:"env_withheld,omitempty"`
 	ExcerptWithheld string          `json:"excerpt_withheld,omitempty"`
 }
 

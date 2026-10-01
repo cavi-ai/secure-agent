@@ -40,17 +40,19 @@ func readConnectWhy(f model.Flag) string {
 	if read == nil || conn == nil || read.PID == 0 {
 		return ""
 	}
-	dest, org, _ := destinationOf(*conn)
+	dest, org, host := destinationOf(*conn)
 	file := displayPath(read.Label, strings.TrimRight(explainHome(), "/"))
 	switch {
+	case correlate.IdentifyCached(host).Class == "cloud":
+		return "A connection was observed to " + dest + " infrastructure near the read of " + file + ". The receiving service and whether secret bytes were sent are not established."
 	case len(read.Owners) == 0:
 		return "No owner is on record for " + file + "; the connection went to " + dest + "."
 	case org == "" || !slices.Contains(read.Owners, org):
-		return dest + " does not own " + file + " (owner: " + strings.Join(read.Owners, ", ") + ")."
+		return "A connection to " + dest + " was observed near the read of " + file + "; configured credential destinations: " + strings.Join(read.Owners, ", ") + ". Secret transmission is not established."
 	case read.Sub == "agent tool read":
 		return org + " owns " + file + ", but an agent tool read it into the model's context."
 	default:
-		return org + " owns " + file + ", but a process outside the reader's process tree made the connection."
+		return org + " owns " + file + ", but a different process made the observed connection. The recorded evidence does not establish credential use."
 	}
 }
 

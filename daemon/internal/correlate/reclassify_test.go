@@ -123,6 +123,7 @@ func TestReadConnectSeverityTracksCausalStrength(t *testing.T) {
 	}{
 		{"same process", event.KindFileOpen, 201, 201, 3},
 		{"descendant process", event.KindFileOpen, 201, 202, 3},
+		{"ancestor temporal correlation", event.KindFileOpen, 201, 200, 2},
 		{"sibling temporal correlation", event.KindFileOpen, 201, 203, 2},
 		{"model-visible tool read across siblings", event.KindPluginAction, 201, 203, 3},
 	} {

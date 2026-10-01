@@ -88,6 +88,19 @@ final class PopoverGlanceTests: XCTestCase {
         XCTAssertEqual(AppState.streamRefresh(for: "guard-resolved"), [.flags, .guardPending])
     }
 
+    func testAllClearPushClearsMenuBarAttention() async {
+        let stub = StubDaemonClient()
+        let state = connectedState(stub)
+        state.seedPostureForTesting(PostureModel(state: "attention", needsYou: 1, summary: "Needs a look", connected: true))
+        XCTAssertTrue(state.needsAttention)
+        var repaints = 0
+        state.onChange = { repaints += 1 }
+        state.handleStreamEvent(SSEFrame(event: "posture", data: "{}"))
+        await settle()
+        XCTAssertFalse(state.needsAttention)
+        XCTAssertEqual(repaints, 1, "The status icon must be repainted when the queue clears")
+    }
+
     func testIdenticalRefetchDoesNotCallOnChange() async {
         let stub = StubDaemonClient()
         let f = FlagModel(id: "f1", rule: "keychain-access", severity: 2, ts: "", pid: 1, agent: "codex", evidence: [])

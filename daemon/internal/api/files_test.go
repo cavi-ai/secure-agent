@@ -379,3 +379,50 @@ func TestParseLsofPIDs(t *testing.T) {
 }
 
 func base64StdForTest(s string) string { return base64.StdEncoding.EncodeToString([]byte(s)) }
+
+func TestEnvInspectorShowsNamesWithoutValues(t *testing.T) {
+	a := explainTestAPI(t)
+	p := filepath.Join(t.TempDir(), ".env")
+	if err := os.WriteFile(p, []byte("# fixture\nexport BOBBY_BROWSER_TOKEN=never-display-this-value\nTEST_MODE=true\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	a.store.PutFlag(model.Flag{ID: "env-inspect", Rule: readConnectRule, TS: time.Now(), Evidence: []model.EvidenceItem{{Kind: "read", Label: p, Rule: "env-file"}}})
+	w := call(t, a, "GET", "/files/detail?path="+url.QueryEscape(p), "")
+	if w.Code != 200 {
+		t.Fatal(w.Code, w.Body)
+	}
+	if strings.Contains(w.Body.String(), "never-display-this-value") {
+		t.Fatal("environment value escaped inspector")
+	}
+	var d map[string]any
+	json.Unmarshal(w.Body.Bytes(), &d)
+	names, ok := d["env_variables"].([]any)
+	if !ok || len(names) != 2 || names[0] != "BOBBY_BROWSER_TOKEN" || names[1] != "TEST_MODE" {
+		t.Fatalf("variable names=%v", d["env_variables"])
+	}
+}
+
+func TestEnvNamesWithholdUnsafeOrAmbiguousFiles(t *testing.T) {
+	for name, data := range map[string]string{
+		"multiline": "TOKEN=\"first\nsecret-line=value\nlast\"\n",
+		"pem":       "KEY=-----BEGIN PRIVATE KEY-----\nnever-reveal=this-body\n",
+		"oversize":  strings.Repeat("X", (64<<10)+1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			p := filepath.Join(t.TempDir(), ".env")
+			os.WriteFile(p, []byte(data), 0600)
+			names, reason := envVariableNames(p)
+			if len(names) != 0 || reason == "" {
+				t.Fatal("unsafe file returned names")
+			}
+		})
+	}
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target")
+	os.WriteFile(target, []byte("TOKEN=value\n"), 0600)
+	link := filepath.Join(dir, ".env")
+	os.Symlink(target, link)
+	if names, reason := envVariableNames(link); len(names) != 0 || reason == "" {
+		t.Fatal("symlink was followed")
+	}
+}

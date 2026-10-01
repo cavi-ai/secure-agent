@@ -133,3 +133,19 @@ func TestCategoryForRule(t *testing.T) {
 		}
 	}
 }
+
+// An explicit test fixture exclusion must override the automatic .env rule,
+// without excluding similarly named neighboring directories or real keys.
+func TestNotSecretEnvFixture(t *testing.T) {
+	c := New(config.Config{NotSecretPaths: []string{"/project/test/.env", "/project/fixtures"}})
+	for path, want := range map[string]bool{
+		"/project/test/.env": false, "/project/test/.env.local": true,
+		"/project/fixtures/.env": false, "/project/fixtures-prod/.env": true,
+		"/Users/x/.ssh/id_ed25519": true,
+	} {
+		_, got := c.Match(path)
+		if got != want {
+			t.Errorf("Match(%q) sensitive=%v, want %v", path, got, want)
+		}
+	}
+}
