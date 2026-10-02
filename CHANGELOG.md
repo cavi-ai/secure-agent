@@ -29,6 +29,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 
 ### Fixed
 - `make app`, `make install` and `make release` stop when a Go binary is stamped with a commit other than HEAD: Go before 1.27 stamps the enclosing checkout's commit when it builds in a git worktree.
+- Egress episodes keep a connection seen while another store write is in progress; the episode write takes SQLite's write lock at BEGIN instead of failing its read-to-write upgrade.
 
 ## [1.2.0] - 2026-09-30
 
