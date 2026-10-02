@@ -810,13 +810,14 @@ func startCollectors(ctx context.Context, sup *supervise.Supervisor, supReg *sup
 	case collect.SpoolAvailable():
 		tailer := collect.NewSpoolTailer(b)
 		collect.ESServiceProbe = spoolServiceProbe(tailer)
-		st.SetFileFeedClock(func() time.Time { return tailer.Stats().NewestEvent })
+		st.TrackFileFeed()
 		go sup.Run(ctx, "eslogger", func(c context.Context) error {
 			tailer.OnProduce = func() { supReg.MarkProduced("eslogger") }
 			return tailer.Run(c)
 		})
 		log.Printf("file telemetry: tailing privileged ES collector spool")
 	case os.Geteuid() == 0 && collect.ESLoggerAvailable():
+		st.TrackFileFeed()
 		go sup.Run(ctx, "eslogger", func(c context.Context) error {
 			es := collect.NewESLogger(b)
 			es.OnProduce = func() { supReg.MarkProduced("eslogger") }

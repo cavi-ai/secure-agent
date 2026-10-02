@@ -393,7 +393,7 @@ func esFloodingDetail(s collect.ESServiceSnapshot) string {
 
 // esLagWindow: file events delivered later than this after they happened
 // are too late for a flag or a resource episode to use. The root collector
-// restarts eslogger past 60 s, so a lag this long means it has not.
+// restarts eslogger after 30 s past 60 s, so a lag this long means it has not.
 const esLagWindow = 2 * time.Minute
 
 // esServiceLagging reports file events reaching the daemon esLagWindow or

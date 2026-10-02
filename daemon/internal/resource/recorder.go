@@ -35,9 +35,9 @@ type Episode struct {
 // never contain payloads or secret values.
 type EpisodeActivity struct {
 	At time.Time `json:"at"`
-	// EndedAt is set when the activity has a known duration (a tool call that
-	// returned): it matches a growth interval it overlaps, not only one it
-	// started in.
+	// EndedAt is set when the activity spans time (a tool call that returned,
+	// or one still running at capture): it matches a growth interval it
+	// overlaps, not only one it started in.
 	EndedAt time.Time `json:"ended_at,omitzero"`
 	Kind    string    `json:"kind"`
 	PID     int32     `json:"pid"`

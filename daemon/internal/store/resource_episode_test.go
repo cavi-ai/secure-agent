@@ -367,12 +367,13 @@ func TestResourceEpisodeJoinsSessionTraceRows(t *testing.T) {
 	st.PutEvent(event.Event{Kind: event.KindToolCall, TS: now.Add(-4 * time.Second), SessionID: "s1", ToolName: "Bash", ToolStatus: "running", CallID: "toolu_1"})
 	st.PutEvent(event.Event{Kind: event.KindModelCall, TS: now.Add(-3 * time.Second), SessionID: "s1", Model: "claude-opus-5-5", TokensIn: 593, TokensOut: 557})
 	st.PutEvent(event.Event{Kind: event.KindToolCall, TS: now.Add(-3 * time.Second), SessionID: "other", ToolName: "Read", ToolStatus: "ok", CallID: "toolu_2"})
-	st.PutEvent(event.Event{Kind: event.KindModelCall, TS: now.Add(-20 * time.Second), SessionID: "s1", Model: "before-the-window"})
+	st.PutEvent(event.Event{Kind: event.KindModelCall, TS: now.Add(-40 * time.Second), SessionID: "s1", Model: "before-the-window"})
+	st.PutEvent(event.Event{Kind: event.KindToolCall, TS: now.Add(-20 * time.Second), SessionID: "s1", ToolName: "Read", ToolStatus: "running", CallID: "toolu_3"})
 
 	episode := resource.Episode{CapturedAt: now, Session: resource.Session{
 		Key: fmt.Sprintf("100:%d", rootStart.UnixNano()), Name: "claude", RootPID: 100, RootStartedAt: rootStart,
 		Processes: []resource.Process{{PID: 100, Name: "claude", StartedAt: rootStart}},
-		Samples:   []resource.Sample{{At: now.Add(-6 * time.Second), RSSBytes: 1 << 30}, {At: now, RSSBytes: 4 << 30}},
+		Samples:   []resource.Sample{{At: now.Add(-30 * time.Second), RSSBytes: 1 << 30}, {At: now.Add(-6 * time.Second), RSSBytes: 1 << 30}, {At: now, RSSBytes: 4 << 30}},
 	}}
 	if err := st.PutResourceEpisode(episode); err != nil {
 		t.Fatal(err)
@@ -382,20 +383,21 @@ func TestResourceEpisodeJoinsSessionTraceRows(t *testing.T) {
 		t.Fatal(err)
 	}
 	var stored resource.Episode
-	if err := json.Unmarshal([]byte(payload), &stored); err != nil || len(stored.Activities) != 2 {
+	if err := json.Unmarshal([]byte(payload), &stored); err != nil || len(stored.Activities) != 3 {
 		t.Fatalf("capture-time payload activities=%+v (%v), want the session rows before any read", stored.Activities, err)
 	}
 	got := st.RecentResourceEpisodes(1)[0]
-	if got.SessionID != "s1" || len(got.Activities) != 2 {
-		t.Fatalf("session=%q activities=%+v want the two s1 rows inside the window", got.SessionID, got.Activities)
+	if got.SessionID != "s1" || len(got.Activities) != 3 {
+		t.Fatalf("session=%q activities=%+v want the three s1 rows inside the window", got.SessionID, got.Activities)
 	}
 	for _, activity := range got.Activities {
 		if activity.Process != "claude" || activity.PID != 0 {
 			t.Fatalf("session row not named for the session: %+v", activity)
 		}
 	}
-	if c := got.Correlations; len(c) != 1 || c[0].ActivityCount != 2 ||
-		c[0].Summary != "Memory rose 3.0 GiB in 6s while Bash started (and 1 other recorded activity)." {
+	// Read started before the rise and was still running at capture.
+	if c := got.Correlations; len(c) != 1 || c[0].ActivityCount != 3 ||
+		c[0].Summary != "Memory rose 3.0 GiB in 6s while Read was running (and 2 other recorded activities)." {
 		t.Fatalf("correlations=%+v", c)
 	}
 
@@ -407,8 +409,8 @@ func TestResourceEpisodeJoinsSessionTraceRows(t *testing.T) {
 			tools = append(tools, activity)
 		}
 	}
-	if len(tools) != 1 || tools[0].Summary != "Bash returned after 2.5s" || !tools[0].EndedAt.Equal(now.Add(-1500*time.Millisecond)) {
-		t.Fatalf("completed tool call=%+v want one row, returned, with its end", tools)
+	if len(tools) != 2 || tools[1].Summary != "Bash returned after 2.5s" || !tools[1].EndedAt.Equal(now.Add(-1500*time.Millisecond)) {
+		t.Fatalf("completed tool call=%+v want one Bash row, returned, with its end", tools)
 	}
 }
 
@@ -422,9 +424,8 @@ func TestResourceEpisodeSettlesOnFileFeedClock(t *testing.T) {
 	defer st.Close()
 
 	captured := time.Now().UTC().Add(-time.Minute)
-	var feed time.Time
-	st.SetFileFeedClock(func() time.Time { return feed })
-	feed = captured.Add(-2 * time.Hour)
+	st.TrackFileFeed()
+	st.NoteFileFeed(captured.Add(-2 * time.Hour))
 	episode := resource.Episode{CapturedAt: captured, Session: resource.Session{
 		Key: "100:1", RootPID: 100, RootStartedAt: captured.Add(-time.Hour),
 		Processes: []resource.Process{{PID: 100, Name: "claude", StartedAt: captured.Add(-time.Hour)}},
@@ -438,7 +439,8 @@ func TestResourceEpisodeSettlesOnFileFeedClock(t *testing.T) {
 	}
 
 	st.PutEvent(event.Event{Kind: event.KindExec, TS: captured.Add(-2 * time.Second), PID: 100, ExePath: "/bin/zsh"})
-	feed = captured.Add(time.Second)
+	st.NoteFileFeed(captured.Add(time.Second))
+	st.NoteFileFeed(captured.Add(-time.Hour)) // an older event does not move the clock back
 	got := st.RecentResourceEpisodes(1)[0]
 	if got.ActivityStatus != "complete" || len(got.Activities) != 1 || got.Correlations[0].ActivityCount != 1 {
 		t.Fatalf("episode=%+v want the late exec row and a final status", got)
@@ -457,9 +459,25 @@ func TestResourceEpisodeSettlesOnFileFeedClock(t *testing.T) {
 		{"feed behind past the cap", time.Now().Add(-episodeSettleMax), time.Now().Add(-time.Hour), true},
 	}
 	for _, tc := range cases {
-		feed = tc.feed
-		if got := st.episodeSettled(tc.captured); got != tc.want {
+		fresh, err := Open("", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		fresh.TrackFileFeed()
+		if !tc.feed.IsZero() {
+			fresh.NoteFileFeed(tc.feed)
+		}
+		if got := fresh.episodeSettled(tc.captured); got != tc.want {
 			t.Fatalf("%s: settled=%v want %v", tc.name, got, tc.want)
 		}
+		fresh.Close()
+	}
+	untracked, err := Open("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer untracked.Close()
+	if !untracked.episodeSettled(time.Now().Add(-time.Minute)) {
+		t.Fatal("without an ES feed an episode settles after the settle window")
 	}
 }

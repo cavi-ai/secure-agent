@@ -45,6 +45,9 @@ const (
 	// never catches up. Restarting drops that queue; its events are already
 	// too late for a flag or a resource episode.
 	esMaxLag = 60 * time.Second
+	// esLagConfirm is how long the lag must stay over esMaxLag: records held
+	// in the pipe across a sleep read stale once on wake, then fresh.
+	esLagConfirm = 30 * time.Second
 	// esLagCheckInterval spaces the lag checks: one timestamp read per
 	// interval, not per line.
 	esLagCheckInterval = time.Second
@@ -246,6 +249,15 @@ func (w *spoolWriter) writeLine(line []byte) error {
 	return nil
 }
 
+func (w *spoolWriter) close() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.f != nil {
+		_ = w.f.Close()
+		w.f = nil
+	}
+}
+
 func (w *spoolWriter) rotateLocked() error {
 	if w.f != nil {
 		_ = w.f.Close()
@@ -271,8 +283,8 @@ func pumpToSpool(stdout interface{ Read([]byte) (int, error) }) error {
 
 // pumpToSpoolAt copies newline-delimited records from stdout to the spool
 // at path, skipping empty lines and the lines keepESLine drops; the drop
-// count goes to the log once a minute. It returns errESBehind once a record
-// trails the clock by more than esMaxLag.
+// count goes to the log once a minute. It returns errESBehind once records
+// have trailed the clock by more than esMaxLag for esLagConfirm.
 func pumpToSpoolAt(stdout interface{ Read([]byte) (int, error) }, path string) error {
 	w := &spoolWriter{path: path}
 	// Open WITHOUT rotating: the spool may hold events the tailer has not
@@ -282,10 +294,11 @@ func pumpToSpoolAt(stdout interface{ Read([]byte) (int, error) }, path string) e
 	if err := w.open(); err != nil {
 		return err
 	}
+	defer w.close()
 	buf := make([]byte, 0, 256*1024)
 	tmp := make([]byte, 64*1024)
 	var stats esFilterStats
-	var nextLagCheck time.Time
+	var lag esLagWatch
 	for {
 		n, err := stdout.Read(tmp)
 		if n > 0 {
@@ -301,7 +314,7 @@ func pumpToSpoolAt(stdout interface{ Read([]byte) (int, error) }, path string) e
 				// line aliases buf, so it is written before buf is compacted.
 				line := buf[:nl]
 				if len(bytes.TrimSpace(line)) > 0 { // empty lines are skipped
-					if err := checkESLag(line, &nextLagCheck); err != nil {
+					if err := lag.check(line); err != nil {
 						return err
 					}
 					if keepESLine(line) {
@@ -328,22 +341,36 @@ func pumpToSpoolAt(stdout interface{ Read([]byte) (int, error) }, path string) e
 	}
 }
 
-// checkESLag samples line once per esLagCheckInterval and returns
-// errESBehind when its event happened more than esMaxLag ago.
-func checkESLag(line []byte, next *time.Time) error {
+// esLagWatch samples records once per esLagCheckInterval and reports
+// eslogger behind once every sample for esLagConfirm trailed the clock by
+// more than esMaxLag.
+type esLagWatch struct {
+	next        time.Time
+	behindSince time.Time
+}
+
+func (w *esLagWatch) check(line []byte) error {
 	now := esNow()
-	if now.Before(*next) {
+	if now.Before(w.next) {
 		return nil
 	}
-	*next = now.Add(esLagCheckInterval)
+	w.next = now.Add(esLagCheckInterval)
 	at, ok := esLineTime(line)
 	if !ok {
 		return nil
 	}
-	if lag := now.Sub(at); lag > esMaxLag {
-		return fmt.Errorf("%w: its newest event happened at %s, %s ago", errESBehind, at.UTC().Format(time.RFC3339), lag.Round(time.Second))
+	lag := now.Sub(at)
+	if lag <= esMaxLag {
+		w.behindSince = time.Time{}
+		return nil
 	}
-	return nil
+	if w.behindSince.IsZero() {
+		w.behindSince = now
+	}
+	if now.Sub(w.behindSince) < esLagConfirm {
+		return nil
+	}
+	return fmt.Errorf("%w: its newest event happened at %s, %s ago", errESBehind, at.UTC().Format(time.RFC3339), lag.Round(time.Second))
 }
 
 var esTimeMarker = []byte(`"time":"`)

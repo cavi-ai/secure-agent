@@ -189,7 +189,8 @@ exact nanosecond window or before the captured process instance started. It
 converts the survivors into short references such as process starts, tool
 names and outcomes, model call token counts, file basenames, and network
 destinations; payloads and secret values are never copied. A tool call that
-returned carries `ended_at` and a `ref` that a later read replaces in place.
+returned carries `ended_at` (one still running at capture ends at the
+capture) and a `ref` that a later read replaces in place.
 At most 80 references are retained: those the growth interval matched, then
 the newest. `correlations` identifies the largest positive sample-to-sample RSS
 change and any recorded activity overlapping that interval, naming a tool or
@@ -211,8 +212,9 @@ so beside every explanation and preserves the underlying activity rows for
 operator review. New episodes report `activity_status: "settling"` for at
 least 30 seconds. Reads re-enrich and persist that evidence so events which
 reached SQLite after the pressure capture are included; a successful refresh
-after the settling window, once the ES feed has delivered events from the
-capture time on (or ten minutes after capture), marks the episode `complete`.
+after the settling window, once the daemon has stored or skipped ES events
+from the capture time on (or ten minutes after capture), marks the episode
+`complete`.
 
 `observe` only annotates sessions. With a configured ladder, `prompt` applies
 `notify` automatically and adds an approval to `control.pending` for each

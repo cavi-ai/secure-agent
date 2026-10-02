@@ -75,9 +75,10 @@ type Store struct {
 	// allowlist returns the operator's approved hosts per agent (nil until
 	// wired); TrendFor reads it for the advisor's host prompt.
 	allowlist func() map[string][]string
-	// fileFeedClock returns the event time of the newest file event the ES
-	// feed has delivered (zero before the first); nil without a spool feed.
-	fileFeedClock atomic.Pointer[func() time.Time]
+	// fileFeed is on when an ES feed runs; fileFeedNewest is the event time
+	// (Unix ns) of the newest ES event the drain loop has finished with.
+	fileFeed       atomic.Bool
+	fileFeedNewest atomic.Int64
 }
 
 // SetAllowlistSource wires the operator allowlist (agent -> hosts) that
@@ -88,16 +89,29 @@ func (s *Store) SetAllowlistSource(fn func() map[string][]string) {
 	s.allowlist = fn
 }
 
-// SetFileFeedClock wires the ES feed's event clock. ES rows are stored with
-// their event time and can arrive minutes after it, so a resource episode
-// keeps re-reading its activity until the feed has reached its capture.
-func (s *Store) SetFileFeedClock(clock func() time.Time) {
-	s.fileFeedClock.Store(&clock)
+// TrackFileFeed marks an ES feed as running. ES rows are stored with their
+// event time and can arrive minutes after it, so a resource episode keeps
+// re-reading its activity until the feed has reached its capture.
+func (s *Store) TrackFileFeed() {
+	s.fileFeed.Store(true)
+}
+
+// NoteFileFeed advances the feed clock past an ES event the drain loop has
+// stored or deliberately skipped.
+func (s *Store) NoteFileFeed(at time.Time) {
+	ns := at.UnixNano()
+	for {
+		cur := s.fileFeedNewest.Load()
+		if ns <= cur || s.fileFeedNewest.CompareAndSwap(cur, ns) {
+			return
+		}
+	}
 }
 
 // episodeSettled reports whether an episode's activity is final: the settle
-// window has passed and the file feed has delivered events from the capture
-// on (or there is no feed, or it is still behind episodeSettleMax later).
+// window has passed and the file feed has handled events from the capture
+// on (or there is no feed or no event yet, or it is still behind
+// episodeSettleMax later).
 func (s *Store) episodeSettled(captured time.Time) bool {
 	if captured.IsZero() {
 		return false
@@ -106,12 +120,11 @@ func (s *Store) episodeSettled(captured time.Time) bool {
 	if age < episodeSettleWindow {
 		return false
 	}
-	clock := s.fileFeedClock.Load()
-	if clock == nil || age >= episodeSettleMax {
+	if !s.fileFeed.Load() || age >= episodeSettleMax {
 		return true
 	}
-	newest := (*clock)()
-	return newest.IsZero() || !newest.Before(captured)
+	newest := s.fileFeedNewest.Load()
+	return newest == 0 || newest >= captured.UnixNano()
 }
 
 // Retention defaults; both overrideable via config (retention.conn_event_hours,
@@ -1960,7 +1973,7 @@ func (s *Store) attachResourceEpisodeActivity(ctx context.Context, episode resou
 			if e.TS.Before(start) || e.TS.After(end) || (!process.StartedAt.IsZero() && e.TS.Before(process.StartedAt)) {
 				return
 			}
-			appendActivity(resourceActivity(e, process.Name))
+			appendActivity(resourceActivity(e, process.Name, end))
 		})
 		if err != nil {
 			return resource.AttachEpisodeActivity(episode, activities), err
@@ -1977,7 +1990,7 @@ func (s *Store) attachResourceEpisodeActivity(ctx context.Context, episode resou
 				if process, ok := processes[e.PID]; ok {
 					name = process.Name
 				}
-				appendActivity(resourceActivity(e, name))
+				appendActivity(resourceActivity(e, name, end))
 			})
 		if err != nil {
 			return resource.AttachEpisodeActivity(episode, activities), err
@@ -2018,14 +2031,20 @@ func (s *Store) scanResourceActivity(ctx context.Context, query string, args []a
 	return nil
 }
 
-func resourceActivity(e event.Event, process string) resource.EpisodeActivity {
+// resourceActivity converts one stored row. A tool call that returned ends
+// after its duration; one still running when the episode was captured spans
+// to the capture, until a later read finds it completed.
+func resourceActivity(e event.Event, process string, captured time.Time) resource.EpisodeActivity {
 	activity := resource.EpisodeActivity{
 		At: e.TS, Kind: resourceActivityKind(e.Kind), PID: e.PID, Process: process,
 		Summary: resourceActivitySummary(e),
 	}
 	if e.Kind == event.KindToolCall {
-		if e.DurationMs > 0 {
+		switch {
+		case e.DurationMs > 0:
 			activity.EndedAt = e.TS.Add(time.Duration(e.DurationMs) * time.Millisecond)
+		case e.ToolStatus == "running" && captured.After(e.TS):
+			activity.EndedAt = captured
 		}
 		if e.CallID != "" {
 			activity.Ref = "call:" + e.CallID
@@ -2126,7 +2145,7 @@ func resourceToolCallSummary(e event.Event) string {
 	}
 	switch e.ToolStatus {
 	case "running", "":
-		return tool + " started"
+		return tool + " was running"
 	case "ok":
 		return tool + " returned" + took
 	case "error":
