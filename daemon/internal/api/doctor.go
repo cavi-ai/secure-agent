@@ -232,7 +232,7 @@ func checkFileTelemetry(f doctorFacts) (string, string) {
 		return doctorFail, "root service not loaded"
 	case esServiceFailing(es.State):
 		return doctorFail, "root service state: " + es.State
-	case es.State == "running" && f.st.ActiveAgents > 0 && !f.grace && f.now.Sub(es.SpoolMtime) > doctorSpoolStale:
+	case esServiceRunning(es.State) && f.st.ActiveAgents > 0 && !f.grace && f.now.Sub(es.SpoolMtime) > doctorSpoolStale:
 		if es.SpoolMtime.IsZero() {
 			return doctorFail, "service running but spool absent"
 		}

@@ -313,7 +313,7 @@ func esServiceItems(s collect.ESServiceSnapshot) []PostureItem {
 		detail := "root ES collector reports " + s.State + " but the spool " + s.SpoolState() + " — file telemetry may be blind"
 		// An ad-hoc signed build's privacy grant is bound to that build: a
 		// collector binary installed after the last spool write lost it.
-		if s.State == "running" && !s.SpoolMtime.IsZero() && s.HelperMtime.After(s.SpoolMtime) {
+		if esServiceRunning(s.State) && !s.SpoolMtime.IsZero() && s.HelperMtime.After(s.SpoolMtime) {
 			detail = "root ES collector reports running but the spool " + s.SpoolState() +
 				" — the helper binary was replaced after the last write; grant Full Disk Access again for Secure Agent"
 		}
@@ -331,9 +331,20 @@ func esServiceItems(s collect.ESServiceSnapshot) []PostureItem {
 const esFloodFreshWindow = 2 * time.Minute
 
 // esServiceFailing reports a root ES service state that means the writer is
-// crash-looping (spawn scheduled) or has exited.
+// crash-looping (spawn scheduled) or has exited. A running service whose
+// state carries an earlier non-zero exit ("running (last exit 1)") was
+// restarted and is up; the spool's age judges whether it writes.
 func esServiceFailing(state string) bool {
+	if esServiceRunning(state) {
+		return false
+	}
 	return strings.Contains(state, "spawn") || strings.Contains(state, "exit")
+}
+
+// esServiceRunning reports a running root ES service, with or without an
+// earlier exit noted after the state.
+func esServiceRunning(state string) bool {
+	return state == "running" || strings.HasPrefix(state, "running (")
 }
 
 // esServiceFlooding reports a writer producing mostly-unparseable lines —

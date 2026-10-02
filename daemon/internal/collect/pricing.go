@@ -32,6 +32,7 @@ var anthropicPrices = map[string][2]float64{
 	"claude-opus-4-1":   {15, 75},
 	"claude-opus-4-0":   {15, 75},
 	"claude-opus-4":     {15, 75},
+	"claude-sonnet-5-5": {2, 10},
 	"claude-sonnet-5":   {2, 10},
 	"claude-sonnet-4-6": {3, 15},
 	"claude-sonnet-4-5": {3, 15},
