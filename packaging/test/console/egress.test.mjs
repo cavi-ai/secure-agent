@@ -189,6 +189,7 @@ test('uninspectedParts: one keyed part per endpoint, vendor rollups, carriers', 
   assert.ok(keys.includes('carriers'));
   assert.ok(!keys.includes('ep:cursor-ide|52.21.130.202'), 'an infra app is not an agent row');
   const apps = parts.find(p => p.key === 'infra-apps');
+  assert.ok(apps, 'infra apps get their own part');
   assert.equal(apps.count, 1);
   assert.match(apps.html, /^<details class="infra-group" data-key="infra-apps">/);
   assert.match(apps.html, /from cursor-ide\)/);
