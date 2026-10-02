@@ -71,6 +71,24 @@ final class TelemetryDoctorTests: XCTestCase {
     }
     """
 
+    /// launchd refusing every spawn of a job registered by an older build.
+    static let launchctlSpawnScheduledExConfig = """
+    system/com.cavi-ai.secure-agent-esd = {
+    \tactive count = 0
+    \tpath = /Applications/Secure Agent.app/Contents/Library/LaunchDaemons/com.cavi-ai.secure-agent-esd.plist
+    \ttype = LaunchDaemon
+    \tstate = spawn scheduled
+
+    \tprogram identifier = Contents/MacOS/secure-agent-esd (mode: 2)
+    \tparent bundle identifier = com.cavi-ai.secure-agent
+    \tparent bundle version = e7600dd
+
+    \tdomain = system
+    \truns = 11
+    \tlast exit code = 78: EX_CONFIG
+    }
+    """
+
     static let launchctlNotFound = """
     Bad request.
     Could not find service "com.cavi-ai.secure-agent-esd" in domain for system
@@ -102,6 +120,19 @@ final class TelemetryDoctorTests: XCTestCase {
     func testLaunchctlLoadedWithoutPid() {
         XCTAssertEqual(LaunchdProbe.parse(Self.launchctlNotRunning),
                        .loaded(state: "not running", pid: nil, lastExitCode: "78: EX_CONFIG"))
+    }
+
+    func testLaunchctlSpawnScheduledWithExConfig() {
+        XCTAssertEqual(LaunchdProbe.parse(Self.launchctlSpawnScheduledExConfig),
+                       .loaded(state: "spawn scheduled", pid: nil, lastExitCode: "78: EX_CONFIG"))
+    }
+
+    func testExitCodeReadsTheNumber() {
+        XCTAssertEqual(TelemetryDoctor.exitCode("78: EX_CONFIG"), 78)
+        XCTAssertEqual(TelemetryDoctor.exitCode("1"), 1)
+        XCTAssertEqual(TelemetryDoctor.exitCode("0"), 0)
+        XCTAssertNil(TelemetryDoctor.exitCode("(never exited)"))
+        XCTAssertNil(TelemetryDoctor.exitCode(nil))
     }
 
     func testLaunchctlCouldNotFindService() {
@@ -211,6 +242,48 @@ final class TelemetryDoctorTests: XCTestCase {
         assertCheck(checks, "login-items", .pass, nil)
         assertCheck(checks, "launchd", .fail, .reregister)
         assertCheck(checks, "full-disk-access", .warn, nil)
+    }
+
+    func testEnabledJobLaunchdRefusesToSpawnOffersReregister() {
+        let checks = TelemetryDoctor.evaluate(facts {
+            $0.launchd = LaunchdProbe.parse(Self.launchctlSpawnScheduledExConfig)
+        })
+        assertCheck(checks, "launchd", .fail, .reregister)
+        XCTAssertEqual(check(checks, "launchd")?.cause,
+                       "spawn scheduled, no pid, last exit code 78: EX_CONFIG; launchd refuses to start the job")
+        assertCheck(checks, "full-disk-access", .warn, nil)
+
+        let notRunning = TelemetryDoctor.evaluate(facts { $0.launchd = LaunchdProbe.parse(Self.launchctlNotRunning) })
+        assertCheck(notRunning, "launchd", .fail, .reregister)
+        XCTAssertTrue(check(notRunning, "launchd")?.cause.contains("last exit code 78: EX_CONFIG") == true)
+    }
+
+    func testEnabledJobSpawnScheduledAfterNonzeroExitOffersReregister() {
+        let checks = TelemetryDoctor.evaluate(facts {
+            $0.launchd = .loaded(state: "spawn scheduled", pid: nil, lastExitCode: "1")
+        })
+        assertCheck(checks, "launchd", .fail, .reregister)
+        XCTAssertEqual(check(checks, "launchd")?.cause, "spawn scheduled, no pid, last exit code 1; the job keeps exiting")
+    }
+
+    func testJobWithoutPidAndCleanExitOnlyWarns() {
+        for lastExit in ["0", "(never exited)", nil] {
+            let checks = TelemetryDoctor.evaluate(facts {
+                $0.launchd = .loaded(state: "spawn scheduled", pid: nil, lastExitCode: lastExit)
+            })
+            assertCheck(checks, "launchd", .warn, nil)
+        }
+        let exited = TelemetryDoctor.evaluate(facts { $0.launchd = .loaded(state: "not running", pid: nil, lastExitCode: "1") })
+        assertCheck(exited, "launchd", .warn, nil)
+    }
+
+    func testRefusedSpawnAwaitingApprovalLeavesTheFixToLoginItems() {
+        let checks = TelemetryDoctor.evaluate(facts {
+            $0.serviceStatus = .requiresApproval
+            $0.launchd = LaunchdProbe.parse(Self.launchctlSpawnScheduledExConfig)
+        })
+        assertCheck(checks, "login-items", .fail, .openLoginItems)
+        assertCheck(checks, "launchd", .warn, nil)
     }
 
     func testRunningWithoutGrant() {

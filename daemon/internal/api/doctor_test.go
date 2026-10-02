@@ -169,6 +169,17 @@ func TestDoctorFileTelemetryFailsOnCrashLoop(t *testing.T) {
 	}
 }
 
+func TestDoctorFileTelemetryRefusedSpawnNamesReregister(t *testing.T) {
+	st := testStore(t)
+	t.Cleanup(func() { st.Close() })
+	rep, _ := getDoctor(t, st, Status{Running: true, Uptime: "1h0m0s",
+		ESService: &collect.ESServiceSnapshot{State: "spawn scheduled (last exit 78: EX_CONFIG)", SpoolMtime: time.Now().Add(-8 * time.Minute)}})
+	c := doctorCheckByID(t, rep, "file-telemetry")
+	if c.State != doctorFail || !strings.Contains(c.Detail, "78: EX_CONFIG") || !strings.Contains(c.Detail, "Re-register") {
+		t.Fatalf("file-telemetry = %+v, want fail naming the exit code and Re-register", c)
+	}
+}
+
 func TestDoctorFileTelemetryFailsOnFlood(t *testing.T) {
 	st := testStore(t)
 	t.Cleanup(func() { st.Close() })
