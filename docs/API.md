@@ -1075,6 +1075,8 @@ Flag items take their `severity` from the flag's disposition (`critical` 3, `war
 
 Item kinds: `flag` (recent ≤24h, severity ≥2, human-titled), `pattern` (the flags one `/patterns` row covers, as one item: `id` = pattern `key`, `detail` = its `summary`; in `groups` also `count`, `rule`, `disposition`; the covered flags have no `flag` items), `guard_pending` (unresolved prompts), `collector_down` (dead/abandoned monitors), `collector_silent`, `harness_uncovered` and `guard_hook_unregistered` (coverage gaps while agents run), `uninspected_egress` (connections that bypassed the firewall, one item per group that carries them), `recurring_egress` (a recurring, attributable egress episode no expected-egress rule covers; `action` is `scope` when its activity scope is complete, `scopeText` says what saving it covers), `incident` (unresolved critical/high, or open more than 72h), `resource_pressure` (a pending resource intervention). Derived live — never a second source of truth.
 
+`coverage_items` (counted in `coverage_count`) hold monitoring gaps (`collector_down`, `collector_silent`, `harness_uncovered`, `guard_hook_unregistered`) and the `uninspected_egress` note. With `needs_you` 0, a gap makes `state` `attention`; the egress note alone leaves it `all-clear`.
+
 Invariant: every item in `items` appears in exactly one of `groups`, and the group item counts sum to `needs_you` (= `len(items)`). Groups are agent sessions (`session:<key>`), agent buckets (`agent:<name>`; `summary` names the processes and sessions behind their findings, e.g. `"3 processes (claude-code 2.1.281 via Claude.app) across 3 sessions, all exited"`), and `machine` (`agent: ""`, `label: "This machine"`), which holds the agent-less items: dead or silent collectors, missing hooks, and the machine-wide uninspected item when no agent group carries egress. Group item priorities: guard 5, resource 4, incident 3 (aging below high risk 1), flag 2 (severity 2 or likely benign 1), pattern 2 (below critical 1), machine 2 (1 below severity 2), egress 1.
 
 ### `GET /events/stream` (SSE)
@@ -1134,6 +1136,7 @@ GET /egress/uninspected?hours=24&limit=200
 - `session_id` — most recent session that reached the host, omitted when none.
 - `infra` — set only for CDN/cloud carriers (Cloudflare, Google, GitHub, PTR-classified).
 - `identity.org` can be set without `infra`.
+- `agent_kind` — `"infra"` when `agent` is an infra family (`cursor-ide`, `claude-desktop`, `ollama`, `lm-studio`, or any `kind: infra` entry in `agents:`); omitted for agents. Infra rows are never `/snapshot` suggestions.
 
 `hours` (1–168, default 24) windows the list by last-seen; out-of-range
 values fall back to 24. Sorted most-frequent first; `assessment`/`rationale`
@@ -1142,7 +1145,9 @@ with `POST /allowlist` to close that blind spot.
 
 Related: `status.uninspected_egress` is a **rolling 24h** distinct-endpoint
 count ("what is bypassing inspection now"), not a lifetime figure — pairs
-silent for 7+ days are swept from the tracker entirely.
+silent for 7+ days are swept from the tracker entirely. It counts agents'
+endpoints only; CDN/cloud carriers and every infra family's endpoints count
+in `status.uninspected_infra`.
 
 ### `GET /egress/episodes`
 

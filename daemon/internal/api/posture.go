@@ -30,7 +30,8 @@ type PostureItem struct {
 //
 // Invariant: every pending decision in Items appears in exactly one Group,
 // and group item counts sum to NeedsYou (= len(Items)). CoverageItems are
-// monitoring gaps and informational uninspected egress, counted separately.
+// monitoring gaps and informational uninspected egress, counted separately;
+// only a gap moves State off all-clear.
 type Posture struct {
 	State         string        `json:"state"` // all-clear | attention | critical
 	NeedsYou      int           `json:"needs_you"`
@@ -97,7 +98,7 @@ func (a *API) computePosture() Posture {
 	posture.CoverageItems = a.coverageItems(st)
 	posture.CoverageCount = len(posture.CoverageItems)
 	switch {
-	case posture.NeedsYou == 0 && posture.CoverageCount == 0:
+	case posture.NeedsYou == 0 && !hasMonitoringGap(posture.CoverageItems):
 		posture.State = "all-clear"
 		posture.Summary = "All clear — agents monitored, no action needed."
 	case posture.NeedsYou == 0:
@@ -125,6 +126,18 @@ func (a *API) coverageItems(st Status) []PostureItem {
 		})
 	}
 	return items
+}
+
+// hasMonitoringGap reports whether coverage holds a gap the operator must fix
+// (a collector down or silent, a hook missing, a harness unseen). Uninspected
+// egress is a coverage note, not a gap: alone it leaves posture all-clear.
+func hasMonitoringGap(items []PostureItem) bool {
+	for _, it := range items {
+		if it.Kind != "uninspected_egress" {
+			return true
+		}
+	}
+	return false
 }
 
 func hasCritical(items []PostureItem) bool {

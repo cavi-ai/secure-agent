@@ -126,7 +126,8 @@ function renderEndpoints() {
   // Describe the displayed coverage sample, including infrastructure. These
   // observations do not establish a security finding or a pending decision.
   const n = parts.reduce((sum, part) => sum + (part.count || 0), 0);
-  const infra = groupUninspected(rows).carriers.length;
+  const grouped = groupUninspected(rows);
+  const infra = grouped.carriers.length + grouped.apps.length;
   if (title) title.textContent = 'Connection coverage · last 24 h';
   if (summary) summary.textContent = `${n} endpoint${n === 1 ? '' : 's'} shown${infra ? ` · ${infra} known infrastructure` : ''}. Connection coverage alone is not a security finding.`;
   const opened = new Set([...container.querySelectorAll('details[data-key][open]')].map(d => d.dataset.key));
@@ -219,9 +220,10 @@ function expectedEgressRuleHTML(rule) {
 
 // The uninspected list as keyed parts, one root element each: per agent a
 // head (with its bulk-allow buttons) then one row per endpoint, the vendor
-// API rollups, and the CDN/cloud carriers. Pure but for fmtAge's clock.
+// API rollups, the CDN/cloud carriers and the infra apps. Pure but for
+// fmtAge's clock.
 function uninspectedParts(rows, advisorOn) {
-  const { unknown, vendors, carriers } = groupUninspected(rows);
+  const { unknown, vendors, carriers, apps } = groupUninspected(rows);
   const parts = [];
   for (const [agent, list] of unknownByAgent(unknown)) {
     parts.push({ key: 'agent:' + agent, html: `<div class="egress-agent-lead"><div class="egress-agent-head">${agentHeadInnerHTML(agent, list)}</div>${bulkAllowHTML(agent, list)}</div>` });
@@ -232,6 +234,7 @@ function uninspectedParts(rows, advisorOn) {
     for (const g of vendors) parts.push({ key: `vendor:${g.agent}|${g.org}`, html: `<div class="egress-vendor">${vendorRollupHTML(g, advisorOn)}</div>`, count: g.rows.length });
   }
   if (carriers.length > 0) parts.push({ key: 'carriers', html: carriersHTML(carriers), count: carriers.length });
+  if (apps.length > 0) parts.push({ key: 'infra-apps', html: infraAppsHTML(apps, advisorOn), count: apps.length });
   return parts;
 }
 
@@ -279,6 +282,13 @@ function carriersHTML(infra) {
   return `<details class="infra-group" data-key="carriers"><summary>Known cloud/CDN infrastructure (${infra.length} endpoint${infra.length === 1 ? '' : 's'}) — these are the agents' own API carriers (Anthropic, OpenAI, GitHub, AWS…); nothing to decide, shown for completeness</summary>${orgRows}</details>`;
 }
 
+// Infra apps (IDEs, the Claude app, model servers): their endpoints,
+// collapsed and not counted in the egress warning — they are not agents.
+function infraAppsHTML(apps, advisorOn) {
+  const names = [...new Set(apps.map(e => e.agent))].sort().join(', ');
+  return `<details class="infra-group" data-key="infra-apps"><summary>Infrastructure apps (${apps.length} endpoint${apps.length === 1 ? '' : 's'} from ${escapeHTML(names)}) — IDEs, the Claude app and model servers are not agents and are not counted in the egress warning</summary>${apps.map(e => egressRowHTML(e, advisorOn)).join('')}</details>`;
+}
+
 function renderSources() {
   const SA = window.SA;
 
@@ -319,16 +329,19 @@ function identityLabel(e) {
   return parts.join(' · ');
 }
 
-// Split uninspected rows three ways: CDN/cloud carriers (infra set), the
-// agents' own vendor APIs (identity.class vendor, no infra) rolled up per
-// (agent, org), and the rest — cloud and telemetry hosts included, since
-// those can front anyone. Pure — unit-tested in packaging/test/console.
+// Split uninspected rows four ways: CDN/cloud carriers (infra set), infra
+// apps (agent_kind infra: IDEs, the Claude app, model servers), the agents'
+// own vendor APIs (identity.class vendor, no infra) rolled up per (agent,
+// org), and the rest — cloud and telemetry hosts included, since those can
+// front anyone. Pure — unit-tested in packaging/test/console.
 function groupUninspected(rows) {
   const unknown = [];
   const carriers = [];
+  const apps = [];
   const byKey = new Map();
   for (const e of rows || []) {
     if (e.infra) { carriers.push(e); continue; }
+    if (e.agent_kind === 'infra') { apps.push(e); continue; }
     const org = e.identity && e.identity.class === 'vendor' && e.identity.org;
     if (!org) { unknown.push(e); continue; }
     const key = e.agent + '|' + org;
@@ -344,7 +357,8 @@ function groupUninspected(rows) {
   const vendors = [...byKey.values()];
   for (const g of vendors) g.rows.sort((a, b) => (b.count || 0) - (a.count || 0));
   vendors.sort((a, b) => b.count - a.count);
-  return { unknown, vendors, carriers };
+  apps.sort((a, b) => (b.count || 0) - (a.count || 0));
+  return { unknown, vendors, carriers, apps };
 }
 
 // One (agent, vendor) rollup: a single decision row, the endpoints behind a
@@ -387,7 +401,7 @@ function fillUninspected(bodyEl) {
   const advisorOn = vis.advisor;
   // Split actionable unknowns from the agents' own vendor APIs and CDN/cloud
   // carriers: 130 Cloudflare IPs is one routing note, not 130 rows to review.
-  const { unknown, vendors, carriers: infra } = groupUninspected(rows);
+  const { unknown, vendors, carriers: infra, apps } = groupUninspected(rows);
 
   // Frame the job: these are connections the agents made that bypassed the
   // inspection proxy, so the operator's decision is "is this expected for
@@ -398,7 +412,7 @@ function fillUninspected(bodyEl) {
   </div>`;
 
   if (unknown.length === 0) {
-    html += `<div class="empty"><svg class="icon"><use href="#i-globe"/></svg><span>No unknown endpoints — everything unrouted is a known vendor API or cloud/CDN carrier (below)</span></div>`;
+    html += `<div class="empty"><svg class="icon"><use href="#i-globe"/></svg><span>No unknown endpoints — everything unrouted is a known vendor API, a cloud/CDN carrier or an infrastructure app (below)</span></div>`;
   }
 
   // Group by agent so the operator reads "cursor is reaching 12 hosts"
@@ -417,6 +431,7 @@ function fillUninspected(bodyEl) {
   }
 
   if (infra.length > 0) html += carriersHTML(infra);
+  if (apps.length > 0) html += infraAppsHTML(apps, advisorOn);
   bodyEl.innerHTML = html;
   for (const d of bodyEl.querySelectorAll('details[data-key]')) if (opened.has(d.dataset.key)) d.open = true;
   bodyEl.scrollTop = scroll;

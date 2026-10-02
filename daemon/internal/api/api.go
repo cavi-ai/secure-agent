@@ -1301,6 +1301,9 @@ type UninspectedEndpoint struct {
 	Identity   correlate.EndpointIdentity `json:"identity"`
 	Assessment string                     `json:"assessment,omitempty"`
 	Rationale  string                     `json:"rationale,omitempty"`
+	// AgentKind is "infra" for an infra family's row (not counted in
+	// uninspected_egress); empty for agents.
+	AgentKind string `json:"agent_kind,omitempty"`
 }
 
 // uninspectedRows builds the blind-spot rows last seen at or after since,
@@ -1312,7 +1315,7 @@ func (a *API) uninspectedRows(since time.Time, limit int) []UninspectedEndpoint 
 	}
 	for _, e := range a.correlator.UninspectedEgressSummarySince(since) {
 		ep := UninspectedEndpoint{Agent: e.Agent, Host: e.Host, Count: e.Count, LastSeen: e.LastSeen,
-			SessionID: e.SessionID, Infra: e.Infra, Identity: e.Identity}
+			SessionID: e.SessionID, Infra: e.Infra, Identity: e.Identity, AgentKind: e.AgentKind}
 		if !e.FirstSeen.IsZero() {
 			t := e.FirstSeen
 			ep.FirstSeen = &t

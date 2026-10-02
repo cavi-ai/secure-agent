@@ -667,6 +667,7 @@ export interface UninspectedEndpoint {
   identity: EndpointIdentity;
   assessment?: string;
   rationale?: string;
+  agent_kind?: string;
 }
 
 export interface EndpointAllowance {

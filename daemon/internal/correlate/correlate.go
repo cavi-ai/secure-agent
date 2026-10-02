@@ -65,6 +65,9 @@ type uninspectedEntry struct {
 	// sessionID is the most recent session that reached this host — the
 	// "which run dialed it" context the operator needs before allowing.
 	sessionID string
+	// infraApp is set when the connecting family is infra (an IDE, the
+	// Claude app, a model server): not agent egress.
+	infraApp bool
 }
 
 type Correlator struct {
@@ -130,6 +133,10 @@ type UninspectedSummary struct {
 	// Identity is IdentifyCached(host): the owning org (vendor API, cloud)
 	// and cached reverse name. Never a network lookup.
 	Identity EndpointIdentity `json:"identity"`
+	// AgentKind is "infra" when Agent is an infra family (an IDE, the Claude
+	// app, a model server); empty for agents. Infra rows never join the
+	// headline count.
+	AgentKind string `json:"agent_kind,omitempty"`
 }
 
 // UninspectedEgressSummary lists the observed blind-spot endpoints, most
@@ -151,9 +158,13 @@ func (c *Correlator) UninspectedEgressSummarySince(since time.Time) []Uninspecte
 			continue
 		}
 		agent, host, _ := strings.Cut(key, "|")
-		out = append(out, UninspectedSummary{Agent: agent, Host: host, Count: e.count,
+		s := UninspectedSummary{Agent: agent, Host: host, Count: e.count,
 			FirstSeen: e.firstSeen, LastSeen: e.lastSeen, SessionID: e.sessionID, Infra: InfraOrg(host),
-			Identity: IdentifyCached(host)})
+			Identity: IdentifyCached(host)}
+		if e.infraApp {
+			s.AgentKind = config.AgentKindInfra
+		}
+		out = append(out, s)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Count > out[j].Count })
 	return out
@@ -225,16 +236,18 @@ func (c *Correlator) UninspectedEgressCount() int {
 // UninspectedEgressCountWindow counts only pairs seen within d — the rolling
 // headline number the UIs show, so the metric answers "what is bypassing
 // inspection NOW" instead of growing monotonically for the daemon's lifetime.
-// Known CDN/cloud infrastructure (InfraOrg) is reported separately via
-// UninspectedInfraCountWindow and never joins the headline: 130 Cloudflare
-// IPs is one routing note, not 130 findings.
+// Known CDN/cloud infrastructure (InfraOrg) and the egress of infra families
+// (IDEs, the Claude app, model servers) are reported separately via
+// UninspectedInfraCountWindow and never join the headline: 130 Cloudflare
+// IPs is one routing note, not 130 findings, and an IDE is not an agent.
 func (c *Correlator) UninspectedEgressCountWindow(d time.Duration) int {
 	unknown, _ := c.uninspectedCountSplit(d)
 	return unknown
 }
 
-// UninspectedInfraCountWindow counts in-window pairs classified as known
-// CDN/cloud infrastructure — the dimmed "routing coverage" figure.
+// UninspectedInfraCountWindow counts in-window pairs to known CDN/cloud
+// infrastructure or from infra families — the dimmed "routing coverage"
+// figure.
 func (c *Correlator) UninspectedInfraCountWindow(d time.Duration) int {
 	_, infra := c.uninspectedCountSplit(d)
 	return infra
@@ -250,7 +263,7 @@ func (c *Correlator) uninspectedCountSplit(d time.Duration) (unknown, infra int)
 			continue
 		}
 		_, host, _ := strings.Cut(key, "|")
-		if InfraOrg(host) != "" {
+		if e.infraApp || InfraOrg(host) != "" {
 			infra++
 		} else {
 			unknown++
@@ -516,7 +529,8 @@ func (c *Correlator) observeLocked(e event.Event) []model.Flag {
 					c.onUninspected(info.Name, e.RemoteHost)
 				}
 			} else if len(c.uninspected) < maxUninspectedTracked {
-				c.uninspected[key] = &uninspectedEntry{count: 1, firstSeen: e.TS, lastSeen: e.TS, sessionID: e.SessionID}
+				c.uninspected[key] = &uninspectedEntry{count: 1, firstSeen: e.TS, lastSeen: e.TS, sessionID: e.SessionID,
+					infraApp: info.Kind == config.AgentKindInfra}
 			}
 		}
 
