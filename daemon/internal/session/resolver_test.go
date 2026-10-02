@@ -216,6 +216,42 @@ func TestSweepEndsSessionOnlyWhenRootConfirmedGone(t *testing.T) {
 	}
 }
 
+// A session stored on a root that now belongs to an infra family (a Claude
+// desktop conversation rooted at the app before the app was infra) ends after
+// an hour of silence. A recent one, the app's own session, and a session on
+// another agent family's root stay open.
+func TestSilentSessionOnAnInfraRootEnds(t *testing.T) {
+	started := time.Now().Add(-48 * time.Hour)
+	r, st := testResolver(t, fakeProcs{
+		100: {PID: 100, PPID: 1, Exe: "/Applications/Claude.app/Contents/MacOS/Claude", StartTime: started},
+		200: {PID: 200, PPID: 1, Exe: "/usr/local/bin/claude", CWD: "/repo", StartTime: started},
+	})
+	now := time.Now()
+	for _, s := range []model.Session{
+		{ID: "conv-old", Harness: "claude", RootPID: 100, LastSeenAt: now.Add(-2 * time.Hour)},
+		{ID: "conv-recent", Harness: "claude", RootPID: 100, LastSeenAt: now.Add(-30 * time.Minute)},
+		{ID: "app", Harness: "claude-desktop", RootPID: 100, LastSeenAt: now.Add(-2 * time.Hour)},
+		{ID: "agent-root", Harness: "codex", RootPID: 200, LastSeenAt: now.Add(-2 * time.Hour)},
+	} {
+		s.StartedAt, s.Status, s.Confidence = started, model.SessionActive, model.ConfHook
+		st.UpsertSession(s)
+	}
+	r.byRoot[100] = "conv-old"
+
+	r.Sweep()
+	for id, want := range map[string]string{
+		"conv-old": model.SessionEnded, "conv-recent": model.SessionIdle,
+		"app": model.SessionIdle, "agent-root": model.SessionIdle,
+	} {
+		if got, _ := st.GetSession(id); got.Status != want {
+			t.Errorf("%s: status %q, want %q", id, got.Status, want)
+		}
+	}
+	if _, held := r.byRoot[100]; held {
+		t.Error("byRoot still holds the ended session's root")
+	}
+}
+
 // Repo and branch are read from the workspace's .git at resolve time — not
 // only when a hook handshake carries them (the audit: repo on 1 of 1,667
 // sessions).
