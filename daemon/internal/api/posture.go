@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -283,10 +284,12 @@ func silentCollectorItems(st Status) []PostureItem {
 // is best-effort: launchctl errors are already folded into the state string.
 // A flooding writer supersedes every other eslogger item: the tailer and the
 // root service can both read healthy while the writer drowns them in
-// garbage, and that is the failure the operator needs to see first. A
-// sustained burst of otherwise-valid lines the tailer cannot keep up with
-// (esServiceBehind) is a lesser, second-priority item: the writer is fine,
-// the reader is behind.
+// garbage, and that is the failure the operator needs to see first. Events
+// arriving long after they happened (esServiceLagging) come next: the spool
+// is written and the tailer keeps up, yet every file flag and resource
+// episode sees the activity that late. A sustained burst of otherwise-valid
+// lines the tailer cannot keep up with (esServiceBehind) is a lesser item:
+// the writer is fine, the reader is behind.
 func esServiceItems(s collect.ESServiceSnapshot) []PostureItem {
 	if esServiceFlooding(s) {
 		return []PostureItem{{
@@ -294,6 +297,14 @@ func esServiceItems(s collect.ESServiceSnapshot) []PostureItem {
 			Title:    "File monitoring writer is flooding",
 			Severity: 2,
 			Detail:   esFloodingDetail(s),
+		}}
+	}
+	if esServiceLagging(s) {
+		return []PostureItem{{
+			Kind: "collector_silent", ID: "eslogger",
+			Title:    "File monitoring is running late",
+			Severity: 2,
+			Detail:   esLaggingDetail(s),
 		}}
 	}
 	if esServiceBehind(s) {
@@ -316,11 +327,15 @@ func esServiceItems(s collect.ESServiceSnapshot) []PostureItem {
 	}
 	var items []PostureItem
 	if esServiceFailing(s.State) {
+		next := "check /var/log/secure-agent-esd.log"
+		if esServiceRefused(s.State) {
+			next = esReregisterHint + ", then " + next
+		}
 		items = append(items, PostureItem{
 			Kind: "collector_silent", ID: "eslogger",
 			Title:    "File monitoring service is failing",
 			Severity: 2,
-			Detail:   "root ES collector service state: " + s.State + " — spool " + s.SpoolState() + " — check /var/log/secure-agent-esd.log",
+			Detail:   "root ES collector service state: " + s.State + " — spool " + s.SpoolState() + " — " + next,
 		})
 	} else if time.Since(s.SpoolMtime) > 30*time.Minute {
 		detail := "root ES collector reports " + s.State + " but the spool " + s.SpoolState() + " — file telemetry may be blind"
@@ -354,6 +369,34 @@ func esServiceFailing(state string) bool {
 	return strings.Contains(state, "spawn") || strings.Contains(state, "exit")
 }
 
+// esServiceRefused reports a root ES service launchd will not bring up: last
+// exit 78 (EX_CONFIG, launchd refusing the spawn; the helper never exits 78)
+// while not running, or spawn scheduled after a nonzero exit. The menu bar
+// Doctor's Re-register binds the job to the installed build again.
+func esServiceRefused(state string) bool {
+	if esServiceRunning(state) {
+		return false
+	}
+	// parseLaunchctlState notes only nonzero exits: " (last exit 78: EX_CONFIG)".
+	_, note, ok := strings.Cut(state, " (last exit ")
+	if !ok {
+		return false
+	}
+	head, _, _ := strings.Cut(strings.TrimSuffix(note, ")"), ":")
+	code, err := strconv.Atoi(head)
+	if err != nil || code == 0 {
+		return false
+	}
+	return code == esExConfig || strings.HasPrefix(state, "spawn scheduled")
+}
+
+// esExConfig is sysexits' EX_CONFIG, launchd's code for a job it could not spawn.
+const esExConfig = 78
+
+// esReregisterHint is the action both the posture and doctor details name
+// for a refused service.
+const esReregisterHint = "Re-register it from Run Doctor… in the menu bar"
+
 // esServiceRunning reports a running root ES service, with or without an
 // earlier exit noted after the state.
 func esServiceRunning(state string) bool {
@@ -379,6 +422,27 @@ func esServiceFlooding(s collect.ESServiceSnapshot) bool {
 func esFloodingDetail(s collect.ESServiceSnapshot) string {
 	return fmt.Sprintf("%.0f%% of lines in the last drain did not parse — the writer is producing garbage",
 		s.UnparsedShare*100)
+}
+
+// esLagWindow: file events delivered later than this after they happened
+// are too late for a flag or a resource episode to use. The root collector
+// restarts eslogger after 30 s past 60 s, so a lag this long means it has not.
+const esLagWindow = 2 * time.Minute
+
+// esServiceLagging reports file events reaching the daemon esLagWindow or
+// more after they happened, while the writer is still writing.
+func esServiceLagging(s collect.ESServiceSnapshot) bool {
+	if s.SpoolMtime.IsZero() || time.Since(s.SpoolMtime) > esFloodFreshWindow || s.NewestEventAt == nil {
+		return false
+	}
+	return time.Duration(s.LagSeconds)*time.Second >= esLagWindow
+}
+
+// esLaggingDetail is the shared wording for the late-delivery failure:
+// posture and doctor report the same facts.
+func esLaggingDetail(s collect.ESServiceSnapshot) string {
+	return fmt.Sprintf("the newest file event delivered happened at %s, %s before it arrived — file flags and resource episodes see file activity that late",
+		s.NewestEventAt.Local().Format("15:04:05"), time.Duration(s.LagSeconds)*time.Second)
 }
 
 // esBehindWindow: a skip shorter than this is normal load on a healthy

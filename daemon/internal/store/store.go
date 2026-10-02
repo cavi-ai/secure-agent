@@ -33,6 +33,9 @@ const (
 	maxAdvisorPlans     = 2000  // one plan per subject
 	maxOperatorLabels   = 5000  // operator judgments kept for recall
 	episodeSettleWindow = 30 * time.Second
+	// episodeSettleMax ends settling for a file feed that is still behind
+	// the capture this long after it.
+	episodeSettleMax = 10 * time.Minute
 )
 
 // pruneMinInterval is the shortest gap between two insert-driven prunes.
@@ -72,6 +75,10 @@ type Store struct {
 	// allowlist returns the operator's approved hosts per agent (nil until
 	// wired); TrendFor reads it for the advisor's host prompt.
 	allowlist func() map[string][]string
+	// fileFeed is on when an ES feed runs; fileFeedNewest is the event time
+	// (Unix ns) of the newest ES event the drain loop has finished with.
+	fileFeed       atomic.Bool
+	fileFeedNewest atomic.Int64
 }
 
 // SetAllowlistSource wires the operator allowlist (agent -> hosts) that
@@ -80,6 +87,44 @@ func (s *Store) SetAllowlistSource(fn func() map[string][]string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.allowlist = fn
+}
+
+// TrackFileFeed marks an ES feed as running. ES rows are stored with their
+// event time and can arrive minutes after it, so a resource episode keeps
+// re-reading its activity until the feed has reached its capture.
+func (s *Store) TrackFileFeed() {
+	s.fileFeed.Store(true)
+}
+
+// NoteFileFeed advances the feed clock past an ES event the drain loop has
+// stored or deliberately skipped.
+func (s *Store) NoteFileFeed(at time.Time) {
+	ns := at.UnixNano()
+	for {
+		cur := s.fileFeedNewest.Load()
+		if ns <= cur || s.fileFeedNewest.CompareAndSwap(cur, ns) {
+			return
+		}
+	}
+}
+
+// episodeSettled reports whether an episode's activity is final: the settle
+// window has passed and the file feed has handled events from the capture
+// on (or there is no feed or no event yet, or it is still behind
+// episodeSettleMax later).
+func (s *Store) episodeSettled(captured time.Time) bool {
+	if captured.IsZero() {
+		return false
+	}
+	age := time.Since(captured)
+	if age < episodeSettleWindow {
+		return false
+	}
+	if !s.fileFeed.Load() || age >= episodeSettleMax {
+		return true
+	}
+	newest := s.fileFeedNewest.Load()
+	return newest == 0 || newest >= captured.UnixNano()
 }
 
 // Retention defaults; both overrideable via config (retention.conn_event_hours,
@@ -420,6 +465,12 @@ func Open(dbPath, jsonlPath string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("failed to create turn dedupe index: %w", err)
 	}
+	if n, err := dedupeClaudeModelCalls(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to dedupe Claude model calls: %w", err)
+	} else if n > 0 {
+		log.Printf("store: removed %d duplicate Claude model-call rows (one per content block of one API call)", n)
+	}
 	// Flags gain an acknowledged marker: when the operator acts on a flag
 	// (applies any disposition), the flag stops counting as critical and
 	// dims in the UI — "acted upon" is a first-class state, not an endless
@@ -555,6 +606,32 @@ func Open(dbPath, jsonlPath string) (*Store, error) {
 	}, nil
 }
 
+// dedupeClaudeModelCalls deletes the model-call rows Claude ingest wrote
+// before model calls carried their API message id (call_id). Claude Code
+// writes one transcript record per content block, each repeating the message
+// id and usage, and each was stored as a model call of its own — two to three
+// rows, each with the full tokens and cost. Those rows were written
+// milliseconds apart with identical counts: a row is a repeat when the
+// previous row of its session with the same model and token counts is at most
+// a second older. Claude rows are those of a claude session, or of a pruned
+// session with provider anthropic. Idempotent: rows with a call id never
+// match. Returns the rows deleted.
+func dedupeClaudeModelCalls(db *sql.DB) (int64, error) {
+	res, err := db.Exec(`DELETE FROM events WHERE id IN (
+		SELECT id FROM (
+			SELECT e.id, julianday(e.ts) AS at, LAG(julianday(e.ts)) OVER (
+				PARTITION BY e.session_id, e.model, e.tokens_in, e.tokens_out
+				ORDER BY julianday(e.ts), e.id) AS prev_at
+			FROM events e LEFT JOIN sessions s ON s.id = e.session_id
+			WHERE e.kind = 14 AND e.call_id IS NULL AND COALESCE(e.session_id, '') != ''
+			AND COALESCE(NULLIF(s.harness, ''), CASE WHEN e.provider = 'anthropic' THEN 'claude' END) = 'claude')
+		WHERE prev_at IS NOT NULL AND (at - prev_at) * 86400.0 <= 1.0)`)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
 // refreshPlannerStats keeps sqlite_stat1 current so the planner knows kind
 // has a handful of values and pid or session_id a great many; without it a
 // kind=? AND pid=? lookup walks every row of the kind through
@@ -633,15 +710,38 @@ func (s *Store) PutEvent(e event.Event) {
 	defer s.mu.Unlock()
 
 	tsStr := e.TS.UTC().Format(time.RFC3339Nano)
-	// Tool calls are keyed by (session_id, call_id): the harness emits a start
-	// (status "running") and later a completion for the SAME call, and a
-	// transcript re-read can replay both. The upsert folds them into one row —
-	// the start inserts, the completion updates status/duration in place.
-	// Non-tool events (call_id NULL) never match the partial unique index and
-	// always insert.
 	var err error
 	var res sql.Result
-	if e.CallID != "" {
+	switch {
+	case e.CallID != "" && e.Kind == event.KindModelCall:
+		// One row per API call, keyed by its message id: Claude Code writes a
+		// transcript record per content block, each repeating the id and
+		// usage, and a restart mid-message or a re-read replays them. A repeat
+		// keeps the row's first timestamp and raises its counts to the largest
+		// seen; one that adds nothing changes nothing. A different call at the
+		// same (kind, session_id, ts) trips the turn dedupe index and is
+		// dropped, as before calls carried ids.
+		res, err = s.db.Exec(
+			`INSERT INTO events (kind, ts, pid, exe_path, session_id, path, remote_host, remote_port, detail, tool, tool_status, duration_ms, model, tokens_in, tokens_out, cost_usd, provider, call_id, record)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			 ON CONFLICT(session_id, call_id) DO UPDATE SET
+			   tokens_in  = MAX(COALESCE(events.tokens_in, 0),  COALESCE(excluded.tokens_in, 0)),
+			   tokens_out = MAX(COALESCE(events.tokens_out, 0), COALESCE(excluded.tokens_out, 0)),
+			   cost_usd   = MAX(COALESCE(events.cost_usd, 0),   COALESCE(excluded.cost_usd, 0))
+			 WHERE COALESCE(excluded.tokens_in, 0)  > COALESCE(events.tokens_in, 0)
+			    OR COALESCE(excluded.tokens_out, 0) > COALESCE(events.tokens_out, 0)
+			    OR COALESCE(excluded.cost_usd, 0)   > COALESCE(events.cost_usd, 0)
+			 ON CONFLICT DO NOTHING`,
+			int(e.Kind), tsStr, e.PID, e.ExePath, e.SessionID, e.Path, e.RemoteHost, e.RemotePort, e.Detail,
+			nullStr(e.ToolName), nullStr(e.ToolStatus), nullInt(e.DurationMs), nullStr(e.Model), nullInt(e.TokensIn), nullInt(e.TokensOut), nullFloat(e.CostUSD), nullStr(e.Provider), e.CallID, e.Record,
+		)
+	case e.CallID != "":
+		// Tool calls are keyed by (session_id, call_id): the harness emits a
+		// start (status "running") and later a completion for the SAME call,
+		// and a transcript re-read can replay both. The upsert folds them into
+		// one row — the start inserts, the completion updates status/duration
+		// in place. Events with no call id (NULL) never match the unique index
+		// and take the default branch.
 		res, err = s.db.Exec(
 			`INSERT INTO events (kind, ts, pid, exe_path, session_id, path, remote_host, remote_port, detail, tool, tool_status, duration_ms, model, tokens_in, tokens_out, cost_usd, call_id, record)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -654,8 +754,8 @@ func (s *Store) PutEvent(e event.Event) {
 			int(e.Kind), tsStr, e.PID, e.ExePath, e.SessionID, e.Path, e.RemoteHost, e.RemotePort, e.Detail,
 			nullStr(e.ToolName), nullStr(e.ToolStatus), nullInt(e.DurationMs), nullStr(e.Model), nullInt(e.TokensIn), nullInt(e.TokensOut), nullFloat(e.CostUSD), e.CallID, e.Record,
 		)
-	} else {
-		// Turns and model calls dedupe on (kind, session_id, ts) — a
+	default:
+		// Turns and id-less model calls dedupe on (kind, session_id, ts) — a
 		// transcript re-read replays the same record and must not
 		// double-count. INSERT OR IGNORE relies on the partial unique index
 		// created at open; other kinds always insert.
@@ -1801,7 +1901,17 @@ func (s *Store) PutResourceEpisode(episode resource.Episode) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	episode.ActivityStatus = "settling"
-	enriched, enrichErr := s.attachResourceEpisodeActivity(ctx, episode)
+	// The session id only scopes the activity read here (its harness trace
+	// rows carry no pid); the id stored below is looked up again with the
+	// insert, on one side of a rekey.
+	probe := episode
+	probe.SessionID = ""
+	if episode.Session.Kind != "infra" {
+		s.mu.Lock()
+		probe.SessionID = s.sessionIDForRootLocked(episode.Session.RootPID, episode.Session.RootStartedAt)
+		s.mu.Unlock()
+	}
+	enriched, enrichErr := s.attachResourceEpisodeActivity(ctx, probe)
 	episode = enriched
 	// RekeySession holds this same mutex through its transaction. Keep the
 	// exact identity lookup, JSON payload, and insert on one side of a rekey.
@@ -1866,16 +1976,21 @@ func (s *Store) attachResourceEpisodeActivity(ctx context.Context, episode resou
 	processes := make(map[int32]resource.Process, len(episode.Session.Processes))
 	pids := make([]int32, 0, len(episode.Session.Processes))
 	activities := append([]resource.EpisodeActivity(nil), episode.Activities...)
-	activityKeys := make(map[string]struct{}, len(activities))
-	for _, activity := range activities {
-		activityKeys[resourceActivityKey(activity)] = struct{}{}
+	activityKeys := make(map[string]int, len(activities))
+	for i, activity := range activities {
+		activityKeys[resourceActivityKey(activity)] = i
 	}
+	// A record read again replaces its earlier copy only when it carries a
+	// Ref (completed in place); any other repeat is the same fact.
 	appendActivity := func(activity resource.EpisodeActivity) {
 		key := resourceActivityKey(activity)
-		if _, exists := activityKeys[key]; exists {
+		if i, exists := activityKeys[key]; exists {
+			if activity.Ref != "" {
+				activities[i] = activity
+			}
 			return
 		}
-		activityKeys[key] = struct{}{}
+		activityKeys[key] = len(activities)
 		activities = append(activities, activity)
 	}
 	for _, process := range episode.Session.Processes {
@@ -1891,50 +2006,117 @@ func (s *Store) attachResourceEpisodeActivity(ctx context.Context, episode resou
 			})
 		}
 	}
-	if len(pids) == 0 || end.IsZero() {
+	if end.IsZero() || (len(pids) == 0 && episode.SessionID == "") {
 		return resource.AttachEpisodeActivity(episode, activities), nil
 	}
 
-	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(pids)), ",")
-	query := `SELECT kind, ts, pid, exe_path, path, remote_host, remote_port, detail
-		FROM events WHERE pid IN (` + placeholders + `)
-		AND datetime(ts) >= datetime(?) AND datetime(ts) <= datetime(?)
-		ORDER BY datetime(ts) DESC, id DESC`
-	args := make([]any, 0, len(pids)+2)
-	for _, pid := range pids {
-		args = append(args, pid)
+	// Two reads: the family's OS telemetry by pid, and the session's own rows
+	// by id. Tool calls, model calls and turns carry no pid, and a child that
+	// exited before capture is in the session but not in the family list.
+	if len(pids) > 0 {
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(pids)), ",")
+		args := make([]any, 0, len(pids)+2)
+		for _, pid := range pids {
+			args = append(args, pid)
+		}
+		args = append(args, start.UTC().Format(time.RFC3339Nano), end.UTC().Format(time.RFC3339Nano))
+		err := s.scanResourceActivity(ctx, `SELECT `+resourceActivityColumns+`
+			FROM events WHERE pid IN (`+placeholders+`)
+			AND datetime(ts) >= datetime(?) AND datetime(ts) <= datetime(?)
+			ORDER BY datetime(ts) DESC, id DESC`, args, func(e event.Event) {
+			process := processes[e.PID]
+			if e.TS.Before(start) || e.TS.After(end) || (!process.StartedAt.IsZero() && e.TS.Before(process.StartedAt)) {
+				return
+			}
+			appendActivity(resourceActivity(e, process.Name, end))
+		})
+		if err != nil {
+			return resource.AttachEpisodeActivity(episode, activities), err
+		}
 	}
-	args = append(args, start.UTC().Format(time.RFC3339Nano), end.UTC().Format(time.RFC3339Nano))
+	if episode.SessionID != "" {
+		at := memoryTimestampExpr("ts")
+		err := s.scanResourceActivity(ctx, `SELECT `+resourceActivityColumns+`
+			FROM events WHERE session_id = ? AND strftime('%s', ts) IS NOT NULL
+			AND `+at+` >= ? AND `+at+` <= ?
+			ORDER BY `+at+` DESC, id DESC`,
+			[]any{episode.SessionID, start.UnixNano(), end.UnixNano()}, func(e event.Event) {
+				name := episode.Session.Name
+				if process, ok := processes[e.PID]; ok {
+					name = process.Name
+				}
+				appendActivity(resourceActivity(e, name, end))
+			})
+		if err != nil {
+			return resource.AttachEpisodeActivity(episode, activities), err
+		}
+	}
+	return resource.AttachEpisodeActivity(episode, activities), nil
+}
+
+const resourceActivityColumns = `kind, ts, pid, COALESCE(exe_path,''), COALESCE(path,''), COALESCE(remote_host,''),
+	COALESCE(remote_port,0), COALESCE(detail,''), COALESCE(tool,''), COALESCE(tool_status,''),
+	COALESCE(duration_ms,0), COALESCE(model,''), COALESCE(tokens_in,0), COALESCE(tokens_out,0), COALESCE(call_id,'')`
+
+// scanResourceActivity runs one activity read and hands each decoded row to
+// visit.
+func (s *Store) scanResourceActivity(ctx context.Context, query string, args []any, visit func(event.Event)) error {
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
-		return resource.AttachEpisodeActivity(episode, activities), fmt.Errorf("query resource episode activity: %w", err)
+		return fmt.Errorf("query resource episode activity: %w", err)
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var e event.Event
 		var kind int
 		var ts string
-		if err := rows.Scan(&kind, &ts, &e.PID, &e.ExePath, &e.Path, &e.RemoteHost, &e.RemotePort, &e.Detail); err != nil {
+		if err := rows.Scan(&kind, &ts, &e.PID, &e.ExePath, &e.Path, &e.RemoteHost, &e.RemotePort, &e.Detail,
+			&e.ToolName, &e.ToolStatus, &e.DurationMs, &e.Model, &e.TokensIn, &e.TokensOut, &e.CallID); err != nil {
 			continue
 		}
 		e.Kind = event.Kind(kind)
-		e.TS, _ = time.Parse(time.RFC3339Nano, ts)
-		process := processes[e.PID]
-		if e.TS.Before(start) || e.TS.After(end) || (!process.StartedAt.IsZero() && e.TS.Before(process.StartedAt)) {
+		if e.TS, err = time.Parse(time.RFC3339Nano, ts); err != nil {
 			continue
 		}
-		appendActivity(resource.EpisodeActivity{
-			At: e.TS, Kind: resourceActivityKind(e.Kind), PID: e.PID, Process: process.Name,
-			Summary: resourceActivitySummary(e),
-		})
+		visit(e)
 	}
 	if err := rows.Err(); err != nil {
-		return resource.AttachEpisodeActivity(episode, activities), fmt.Errorf("read resource episode activity: %w", err)
+		return fmt.Errorf("read resource episode activity: %w", err)
 	}
-	return resource.AttachEpisodeActivity(episode, activities), nil
+	return nil
 }
 
+// resourceActivity converts one stored row. A tool call that returned ends
+// after its duration; one still running when the episode was captured spans
+// to the capture, until a later read finds it completed.
+func resourceActivity(e event.Event, process string, captured time.Time) resource.EpisodeActivity {
+	activity := resource.EpisodeActivity{
+		At: e.TS, Kind: resourceActivityKind(e.Kind), PID: e.PID, Process: process,
+		Summary: resourceActivitySummary(e),
+	}
+	if e.Kind == event.KindToolCall {
+		switch {
+		case e.DurationMs > 0:
+			activity.EndedAt = e.TS.Add(time.Duration(e.DurationMs) * time.Millisecond)
+		case e.ToolStatus == "running" && captured.After(e.TS):
+			activity.EndedAt = captured
+		}
+	}
+	// Both rows are updated in place under their call id: a tool call gains
+	// its status and duration, a model call its final token counts.
+	if e.CallID != "" && (e.Kind == event.KindToolCall || e.Kind == event.KindModelCall) {
+		activity.Ref = "call:" + e.CallID
+	}
+	return activity
+}
+
+// resourceActivityKey identifies one activity across re-enrichments: a Ref'd
+// record by its ref (its summary and end change when it completes), anything
+// else by its content.
 func resourceActivityKey(activity resource.EpisodeActivity) string {
+	if activity.Ref != "" {
+		return activity.Kind + "|" + activity.Ref
+	}
 	return fmt.Sprintf("%d|%s|%d|%s", activity.At.UnixNano(), activity.Kind, activity.PID, activity.Summary)
 }
 
@@ -1942,8 +2124,12 @@ func resourceActivityKind(kind event.Kind) string {
 	switch kind {
 	case event.KindExec:
 		return "process"
-	case event.KindPluginAction:
+	case event.KindPluginAction, event.KindToolCall:
 		return "tool"
+	case event.KindModelCall:
+		return "model"
+	case event.KindTurn:
+		return "turn"
 	case event.KindFileOpen, event.KindFileWrite, event.KindFileDelete:
 		return "file"
 	case event.KindConnOpen, event.KindConnClose:
@@ -1982,6 +2168,18 @@ func resourceActivitySummary(e event.Event) string {
 		summary = "transcript rule matched: " + e.Detail
 	case event.KindTCCModify:
 		summary = "privacy controls changed"
+	case event.KindToolCall:
+		summary = resourceToolCallSummary(e)
+	case event.KindModelCall:
+		summary = "model call"
+		if e.Model != "" {
+			summary = e.Model + " call"
+		}
+		if e.TokensIn > 0 || e.TokensOut > 0 {
+			summary += fmt.Sprintf(": %d tokens in, %d out", e.TokensIn, e.TokensOut)
+		}
+	case event.KindTurn:
+		summary = "new turn"
 	default:
 		summary = e.Kind.String()
 	}
@@ -1989,6 +2187,29 @@ func resourceActivitySummary(e event.Event) string {
 		summary = e.Kind.String()
 	}
 	return truncateResourceActivity(summary, 160)
+}
+
+// resourceToolCallSummary names the tool and how its call ended; never its
+// input or output.
+func resourceToolCallSummary(e event.Event) string {
+	tool := e.ToolName
+	if tool == "" {
+		tool = "tool"
+	}
+	took := ""
+	if e.DurationMs > 0 {
+		took = " after " + (time.Duration(e.DurationMs) * time.Millisecond).Round(time.Millisecond).String()
+	}
+	switch e.ToolStatus {
+	case "running", "":
+		return tool + " was running"
+	case "ok":
+		return tool + " returned" + took
+	case "error":
+		return tool + " failed" + took
+	default: // a trace without result pairing ("unknown")
+		return tool + " called"
+	}
 }
 
 func truncateResourceActivity(value string, limit int) string {
@@ -2055,7 +2276,7 @@ func (s *Store) refreshResourceEpisode(ctx context.Context, id int64, expectedPa
 			return persistedFallback
 		}
 		accumulated = append(accumulated[:0], enriched.Activities...)
-		if !enriched.CapturedAt.IsZero() && time.Since(enriched.CapturedAt) >= episodeSettleWindow {
+		if s.episodeSettled(enriched.CapturedAt) {
 			enriched.ActivityStatus = "complete"
 		}
 		persisted := enriched
@@ -2109,18 +2330,23 @@ func (s *Store) refreshResourceEpisode(ctx context.Context, id int64, expectedPa
 	return persistedFallback
 }
 
+// mergeResourceActivities adds additional to existing; a Ref'd record in
+// additional is the fresher read and replaces its existing copy.
 func mergeResourceActivities(existing, additional []resource.EpisodeActivity) []resource.EpisodeActivity {
 	merged := append([]resource.EpisodeActivity(nil), existing...)
-	seen := make(map[string]struct{}, len(merged))
-	for _, activity := range merged {
-		seen[resourceActivityKey(activity)] = struct{}{}
+	seen := make(map[string]int, len(merged))
+	for i, activity := range merged {
+		seen[resourceActivityKey(activity)] = i
 	}
 	for _, activity := range additional {
 		key := resourceActivityKey(activity)
-		if _, ok := seen[key]; ok {
+		if i, ok := seen[key]; ok {
+			if activity.Ref != "" {
+				merged[i] = activity
+			}
 			continue
 		}
-		seen[key] = struct{}{}
+		seen[key] = len(merged)
 		merged = append(merged, activity)
 	}
 	return merged

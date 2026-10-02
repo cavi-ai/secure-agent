@@ -39,7 +39,19 @@ type SpoolStats struct {
 	Skipped      uint64
 	BytesSkipped uint64
 	FloodSince   time.Time
+	// NewestEvent is the event time of the newest event the tailer has
+	// published (zero before the first), kept across drains. Lag is how far
+	// it trailed the clock when it was published; zero once that is older
+	// than spoolLagFresh. ES rows are stored with their event time, so a
+	// writer whose source queues events delivers them that late to every
+	// flag and resource episode.
+	NewestEvent time.Time
+	Lag         time.Duration
 }
+
+// spoolLagFresh is how long a measured lag stays reportable without a newer
+// published event.
+const spoolLagFresh = 2 * time.Minute
 
 // The privileged ES collector's spool (the collector daemon writes it as root).
 const ESPoolPath = "/var/db/secure-agent/es-spool.jsonl"
@@ -103,6 +115,10 @@ type ESServiceSnapshot struct {
 	UnparsedShare float64    `json:"unparsed_share"`
 	BytesSkipped  uint64     `json:"bytes_skipped"`
 	FloodingSince *time.Time `json:"flooding_since,omitempty"`
+	// NewestEventAt and LagSeconds carry SpoolStats.NewestEvent and Lag: how
+	// late file events reach the daemon, whatever the spool's own mtime says.
+	NewestEventAt *time.Time `json:"newest_event_at,omitempty"`
+	LagSeconds    int64      `json:"lag_seconds"`
 }
 
 // SpoolState renders the spool facts for humans ("3.2 MB, updated 12 min ago").
@@ -216,14 +232,48 @@ type SpoolTailer struct {
 
 	statsMu sync.Mutex
 	stats   SpoolStats
+	newest  time.Time
+	lag     time.Duration
+	lagAt   time.Time
+
+	// now is the clock; nil means time.Now (test seam).
+	now func() time.Time
 }
 
-// Stats returns the counters from the tailer's most recent drain. Safe to
-// call from another goroutine (the status probe) while the tailer polls.
+func (t *SpoolTailer) clock() time.Time {
+	if t.now != nil {
+		return t.now()
+	}
+	return time.Now()
+}
+
+// Stats returns the counters from the tailer's most recent drain and the
+// feed clock. Safe to call from another goroutine (the status probe) while
+// the tailer polls.
 func (t *SpoolTailer) Stats() SpoolStats {
 	t.statsMu.Lock()
 	defer t.statsMu.Unlock()
-	return t.stats
+	s := t.stats
+	s.NewestEvent = t.newest
+	if !t.lagAt.IsZero() && t.clock().Sub(t.lagAt) <= spoolLagFresh {
+		s.Lag = t.lag
+	}
+	return s
+}
+
+// recordFeedClock advances the feed clock to a drain's newest published
+// event and measures how far the clock now trails the wall clock.
+func (t *SpoolTailer) recordFeedClock(newest time.Time) {
+	if newest.IsZero() {
+		return
+	}
+	t.statsMu.Lock()
+	defer t.statsMu.Unlock()
+	if newest.After(t.newest) {
+		t.newest = newest
+	}
+	t.lagAt = t.clock()
+	t.lag = max(0, t.lagAt.Sub(t.newest))
 }
 
 // recordDrain publishes one tick's counters. FloodSince starts on the first
@@ -353,6 +403,7 @@ func (t *SpoolTailer) drainOnce(path string, offset int64) (int64, os.FileInfo) 
 	scanner.Split(scanCompleteLines)
 	var lastGood int64
 	var linesThisTick, parsedThisTick uint64
+	var newest time.Time
 	published := false
 	budgetHit := false
 	for scanner.Scan() {
@@ -363,6 +414,9 @@ func (t *SpoolTailer) drainOnce(path string, offset int64) (int64, os.FileInfo) 
 			t.bus.Publish(e)
 			published = true
 			parsedThisTick++
+			if e.TS.After(newest) {
+				newest = e.TS
+			}
 		case esOwn:
 			parsedThisTick++ // the daemon's own file activity: valid, not an event
 		}
@@ -372,6 +426,7 @@ func (t *SpoolTailer) drainOnce(path string, offset int64) (int64, os.FileInfo) 
 			break
 		}
 	}
+	t.recordFeedClock(newest)
 	if published && t.OnProduce != nil {
 		t.OnProduce()
 	}

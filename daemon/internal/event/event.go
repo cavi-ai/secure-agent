@@ -100,15 +100,21 @@ type Event struct {
 	// unknown-model, unpriced-model), stamped on the rows the API serves;
 	// never stored.
 	PriceClass string `json:"price_class,omitempty"`
-	// CallID is the harness's own tool-call id (Claude tool_use id, Codex
-	// call_id, opencode callID). For a tool_call it makes the row keyed and
-	// idempotent: the start inserts, the completion updates the SAME row
-	// (store.PutEvent upserts on (session_id, call_id)), and a transcript
-	// re-read cannot duplicate a call. Empty for non-tool events.
+	// CallID is the harness's own id for the call: the tool-call id for a
+	// tool_call (Claude tool_use id, Codex call_id, opencode callID), the API
+	// message id for a Claude model_call. It makes the row keyed and
+	// idempotent (store.PutEvent upserts on (session_id, call_id)): a tool
+	// call's completion updates its start row, the per-content-block records
+	// of one Claude API call are one model call, and a transcript re-read
+	// cannot duplicate either. Empty for other events.
 	CallID string `json:"call_id,omitempty"`
 	// Record marks the event as part of the security record: it raised a
 	// flag or touched a sensitive path. The store keeps record rows past
 	// their kind's row budget (time retention still applies); never
 	// serialized.
 	Record bool `json:"-"`
+	// PPID is the parent pid Endpoint Security recorded at event time (ES
+	// events only). Session attribution falls back to it for a process that
+	// exited before its event was resolved; never stored or serialized.
+	PPID int32 `json:"-"`
 }

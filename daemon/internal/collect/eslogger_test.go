@@ -21,6 +21,14 @@ func TestParseOpenLine(t *testing.T) {
 	}
 }
 
+func TestParseESLineCarriesTheParentPid(t *testing.T) {
+	line := []byte(`{"process":{"audit_token":{"pid":4242},"ppid":100,"executable":{"path":"/usr/bin/git"}},"event":{"exec":{"target":{"executable":{"path":"/usr/bin/git"}}}}}`)
+	e, ok := ParseESLine(line)
+	if !ok || e.PID != 4242 || e.PPID != 100 {
+		t.Fatalf("ParseESLine = %+v, %v; want pid 4242 ppid 100", e, ok)
+	}
+}
+
 func TestParseESLineDropsOwnPid(t *testing.T) {
 	line := func(pid int) []byte {
 		return []byte(fmt.Sprintf(`{"process":{"audit_token":{"pid":%d}},"event":{"open":{"file":{"path":"/Users/x/proj/.env"}}}}`, pid))

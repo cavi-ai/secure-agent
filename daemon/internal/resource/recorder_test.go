@@ -144,6 +144,59 @@ func TestAttachEpisodeActivityBoundsNewestEvidence(t *testing.T) {
 	}
 }
 
+// A tool call that started before the growth interval and returned inside
+// it matches; the headline names the agent's action over a connection.
+func TestAttachEpisodeActivityMatchesOverlapAndRanksHeadline(t *testing.T) {
+	now := time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
+	episode := Episode{CapturedAt: now.Add(10 * time.Second), Session: Session{Samples: []Sample{
+		{At: now, RSSBytes: gib},
+		{At: now.Add(5 * time.Second), RSSBytes: gib},
+		{At: now.Add(10 * time.Second), RSSBytes: 4 * gib},
+	}}}
+	got := AttachEpisodeActivity(episode, []EpisodeActivity{
+		{At: now.Add(time.Second), EndedAt: now.Add(7 * time.Second), Kind: "tool", Summary: "Bash returned after 6s"},
+		{At: now.Add(6 * time.Second), Kind: "network", PID: 100, Summary: "connected to api.example.com:443"},
+		{At: now.Add(2 * time.Second), EndedAt: now.Add(3 * time.Second), Kind: "tool", Summary: "Read returned after 1s"},
+	})
+	c := got.Correlations[0]
+	if c.ActivityCount != 2 || c.Summary != "Memory rose 3.0 GiB in 5s while Bash returned after 6s (and 1 other recorded activity)." {
+		t.Fatalf("correlation=%+v", c)
+	}
+
+	got = AttachEpisodeActivity(episode, []EpisodeActivity{
+		{At: now.Add(5 * time.Second), Kind: "network", PID: 100, Summary: "connected to api.example.com:443"},
+		{At: now.Add(8 * time.Second), Kind: "model", Summary: "claude-opus-5-5 call: 593 tokens in, 557 out"},
+	})
+	if c := got.Correlations[0]; c.Summary != "Memory rose 3.0 GiB in 5s while claude-opus-5-5 call: 593 tokens in, 557 out (and 1 other recorded activity)." {
+		t.Fatalf("headline named the earlier connection over the model call: %+v", c)
+	}
+}
+
+// Bounding keeps the activities the growth interval matched even when newer
+// ones would otherwise push them out.
+func TestAttachEpisodeActivityKeepsMatchedEvidenceWhenBounding(t *testing.T) {
+	now := time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
+	episode := Episode{Session: Session{Samples: []Sample{
+		{At: now, RSSBytes: gib},
+		{At: now.Add(5 * time.Second), RSSBytes: 4 * gib},
+		{At: now.Add(10 * time.Minute), RSSBytes: 4 * gib},
+	}}}
+	activities := []EpisodeActivity{{At: now.Add(2 * time.Second), Kind: "model", Summary: "model call"}}
+	for i := 0; i < episodeActivityLimit+20; i++ {
+		activities = append(activities, EpisodeActivity{At: now.Add(time.Minute + time.Duration(i)*time.Second), Kind: "network", PID: int32(i + 1), Summary: "connected"})
+	}
+	got := AttachEpisodeActivity(episode, activities)
+	if len(got.Activities) != episodeActivityLimit || got.Activities[0].Kind != "model" {
+		t.Fatalf("activities=%d first=%+v want the matched model call kept", len(got.Activities), got.Activities[0])
+	}
+	if last := got.Activities[len(got.Activities)-1]; last.PID != int32(episodeActivityLimit+20) {
+		t.Fatalf("newest activity dropped: %+v", last)
+	}
+	if got.Correlations[0].ActivityCount != 1 {
+		t.Fatalf("correlation=%+v", got.Correlations[0])
+	}
+}
+
 func episodeHasPID(episode Episode, pid int32) bool {
 	for _, process := range episode.Session.Processes {
 		if process.PID == pid {

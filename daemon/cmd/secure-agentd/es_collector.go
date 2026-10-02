@@ -38,7 +38,26 @@ const (
 	// permission yet). Internal retry keeps the service state "running"
 	// instead of crash-looping through launchd on every denied attempt.
 	esRetryInterval = 60 * time.Second
+	// esMaxLag is how far eslogger's newest event may trail the clock before
+	// the collector restarts it. eslogger holds every event it has not yet
+	// written in its own memory: under a flood of opens it falls behind, the
+	// queue grows by gigabytes, memory pressure slows it further, and it
+	// never catches up. Restarting drops that queue; its events are already
+	// too late for a flag or a resource episode.
+	esMaxLag = 60 * time.Second
+	// esLagConfirm is how long the lag must stay over esMaxLag: records held
+	// in the pipe across a sleep read stale once on wake, then fresh.
+	esLagConfirm = 30 * time.Second
+	// esLagCheckInterval spaces the lag checks: one timestamp read per
+	// interval, not per line.
+	esLagCheckInterval = time.Second
 )
+
+// errESBehind marks an eslogger the collector stopped for falling behind.
+var errESBehind = errors.New("eslogger fell behind")
+
+// esNow is the collector's clock; tests replace it.
+var esNow = time.Now
 
 // errESPermanent marks failures that cannot clear on their own (wrong user,
 // integrity refusal, eslogger missing): the process must exit 0 so launchd
@@ -129,6 +148,10 @@ func runESCollector() error {
 		if err == nil {
 			return nil
 		}
+		if errors.Is(err, errESBehind) {
+			log.Printf("es-collector: %v — restarting eslogger and dropping the events it still held", err)
+			continue
+		}
 		if !isESPermissionFailure(err) {
 			return err
 		}
@@ -163,6 +186,9 @@ func runESLoggerOnce(ctx context.Context) error {
 	writeErr := pumpToSpool(stdout)
 	_ = cmd.Process.Kill()
 	waitErr := cmd.Wait()
+	if errors.Is(writeErr, errESBehind) {
+		return writeErr
+	}
 	if writeErr != nil {
 		return fmt.Errorf("spool write: %w", writeErr)
 	}
@@ -223,6 +249,15 @@ func (w *spoolWriter) writeLine(line []byte) error {
 	return nil
 }
 
+func (w *spoolWriter) close() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.f != nil {
+		_ = w.f.Close()
+		w.f = nil
+	}
+}
+
 func (w *spoolWriter) rotateLocked() error {
 	if w.f != nil {
 		_ = w.f.Close()
@@ -248,7 +283,8 @@ func pumpToSpool(stdout interface{ Read([]byte) (int, error) }) error {
 
 // pumpToSpoolAt copies newline-delimited records from stdout to the spool
 // at path, skipping empty lines and the lines keepESLine drops; the drop
-// count goes to the log once a minute.
+// count goes to the log once a minute. It returns errESBehind once records
+// have trailed the clock by more than esMaxLag for esLagConfirm.
 func pumpToSpoolAt(stdout interface{ Read([]byte) (int, error) }, path string) error {
 	w := &spoolWriter{path: path}
 	// Open WITHOUT rotating: the spool may hold events the tailer has not
@@ -258,9 +294,11 @@ func pumpToSpoolAt(stdout interface{ Read([]byte) (int, error) }, path string) e
 	if err := w.open(); err != nil {
 		return err
 	}
+	defer w.close()
 	buf := make([]byte, 0, 256*1024)
 	tmp := make([]byte, 64*1024)
 	var stats esFilterStats
+	var lag esLagWatch
 	for {
 		n, err := stdout.Read(tmp)
 		if n > 0 {
@@ -276,6 +314,9 @@ func pumpToSpoolAt(stdout interface{ Read([]byte) (int, error) }, path string) e
 				// line aliases buf, so it is written before buf is compacted.
 				line := buf[:nl]
 				if len(bytes.TrimSpace(line)) > 0 { // empty lines are skipped
+					if err := lag.check(line); err != nil {
+						return err
+					}
 					if keepESLine(line) {
 						if err := w.writeLine(line); err != nil {
 							return fmt.Errorf("spool write: %w", err)
@@ -298,6 +339,58 @@ func pumpToSpoolAt(stdout interface{ Read([]byte) (int, error) }, path string) e
 			return fmt.Errorf("eslogger read: %w", err)
 		}
 	}
+}
+
+// esLagWatch samples records once per esLagCheckInterval and reports
+// eslogger behind once every sample for esLagConfirm trailed the clock by
+// more than esMaxLag.
+type esLagWatch struct {
+	next        time.Time
+	behindSince time.Time
+}
+
+func (w *esLagWatch) check(line []byte) error {
+	now := esNow()
+	if now.Before(w.next) {
+		return nil
+	}
+	w.next = now.Add(esLagCheckInterval)
+	at, ok := esLineTime(line)
+	if !ok {
+		return nil
+	}
+	lag := now.Sub(at)
+	if lag <= esMaxLag {
+		w.behindSince = time.Time{}
+		return nil
+	}
+	if w.behindSince.IsZero() {
+		w.behindSince = now
+	}
+	if now.Sub(w.behindSince) < esLagConfirm {
+		return nil
+	}
+	return fmt.Errorf("%w: its newest event happened at %s, %s ago", errESBehind, at.UTC().Format(time.RFC3339), lag.Round(time.Second))
+}
+
+var esTimeMarker = []byte(`"time":"`)
+
+// esLineTime reads an eslogger record's event time without decoding it. The
+// envelope's "time" key occurs once, after the process object (whose own
+// times are keyed start_time); a quote inside a string value is escaped, so
+// the marker cannot match inside one.
+func esLineTime(line []byte) (time.Time, bool) {
+	i := bytes.Index(line, esTimeMarker)
+	if i < 0 {
+		return time.Time{}, false
+	}
+	rest := line[i+len(esTimeMarker):]
+	j := bytes.IndexByte(rest, '"')
+	if j < 0 {
+		return time.Time{}, false
+	}
+	at, err := time.Parse(time.RFC3339Nano, string(rest[:j]))
+	return at, err == nil
 }
 
 func indexOfByte(b []byte, c byte) int {

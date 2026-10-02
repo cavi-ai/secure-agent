@@ -40,6 +40,7 @@ type esEnvelope struct {
 			PID int32 `json:"pid"`
 		} `json:"audit_token"`
 		PID        int32 `json:"pid"`
+		PPID       int32 `json:"ppid"`
 		Executable struct {
 			Path string `json:"path"`
 		} `json:"executable"`
@@ -170,6 +171,7 @@ func parseESLine(line []byte) (event.Event, esLineVerdict) {
 		Kind:    kind,
 		TS:      ts,
 		PID:     pid,
+		PPID:    env.Process.PPID,
 		ExePath: exe,
 		Path:    filePath,
 		Detail:  detail,

@@ -308,8 +308,13 @@ func harnessForPath(p string) string {
 	return "unknown"
 }
 
-// knownSession returns the session id a tracer already holds for path.
+// knownSession returns the session id a tracer already holds for path. A
+// Claude record that emits nothing (a repeat of a call already emitted) falls
+// through to the plain scan and keeps its session this way.
 func (ts *TranscriptScanner) knownSession(p string) string {
+	if t := ts.tracers[p]; t != nil {
+		return t.Session()
+	}
 	if t := ts.codexTracers[p]; t != nil {
 		id, _ := t.Session()
 		return id

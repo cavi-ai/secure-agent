@@ -182,14 +182,20 @@ one that exhausted machine headroom. The database retains the newest 500
 episodes, and each `/resources` response returns the newest 20.
 
 Episodes may also contain `activities` and `correlations`. The daemon selects
-events only from PIDs in the captured process family and only between the
-retained prelude and capture time, then rejects any event outside that exact
-nanosecond window or before the captured process instance started. It converts
-the survivors into short references such
-as process starts, tool labels, file basenames, and network destinations;
-payloads and secret values are never copied. At most 80 of the newest
-references are retained. `correlations` identifies the largest positive
-sample-to-sample RSS change and any recorded activity in that same interval:
+events from PIDs in the captured process family, and the episode session's own
+rows (tool calls, model calls and turns carry no PID), only between the
+retained prelude and capture time, then rejects any family event outside that
+exact nanosecond window or before the captured process instance started. It
+converts the survivors into short references such as process starts, tool
+names and outcomes, model call token counts, file basenames, and network
+destinations; payloads and secret values are never copied. A tool call that
+returned carries `ended_at` (one still running at capture ends at the
+capture); tool and model calls carry a `ref`, so a later read replaces the
+earlier copy once the stored row is completed or its counts rise.
+At most 80 references are retained: those the growth interval matched, then
+the newest. `correlations` identifies the largest positive sample-to-sample RSS
+change and any recorded activity overlapping that interval, naming a tool or
+model call ahead of a process, file or network reference:
 
 ```json
 {
@@ -204,10 +210,12 @@ sample-to-sample RSS change and any recorded activity in that same interval:
 
 `observed-correlation` is deliberately not a causal verdict. The console says
 so beside every explanation and preserves the underlying activity rows for
-operator review. New episodes report `activity_status: "settling"` for 30
-seconds. Reads re-enrich and persist that evidence so events which reached
-SQLite slightly after the pressure capture are included; a successful refresh
-after the settling window marks the episode `complete`.
+operator review. New episodes report `activity_status: "settling"` for at
+least 30 seconds. Reads re-enrich and persist that evidence so events which
+reached SQLite after the pressure capture are included; a successful refresh
+after the settling window, once the daemon has stored or skipped ES events
+from the capture time on (or ten minutes after capture), marks the episode
+`complete`.
 
 `observe` only annotates sessions. With a configured ladder, `prompt` applies
 `notify` automatically and adds an approval to `control.pending` for each
@@ -430,7 +438,7 @@ Host: unix
 | `path`, `exe_path` | File or executable path, for file and exec kinds. |
 | `remote_host`, `remote_port` | Destination, for connect kinds. |
 | `tool`, `tool_status`, `duration_ms`, `call_id` | Tool call fields (kind `12`): name, `ok`\|`error`\|`running`, start→result duration, the harness's own call id. |
-| `model`, `provider`, `tokens_in`, `tokens_out`, `cost_usd` | Model call fields (kind `14`). |
+| `model`, `provider`, `tokens_in`, `tokens_out`, `cost_usd` | Model call fields (kind `14`). A Claude model call also carries `call_id`: the API message id, one row per call. |
 | `price_class` | `priced`, `plan`, `local`, `unknown-model` or `unpriced-model`; computed when served, never stored. |
 
 ---
@@ -650,7 +658,7 @@ Each check has a `state` of `pass`, `fail` or `skip`, a `detail`, and on `fail` 
 |---|---|---|
 | `hook-registered` | `~/.claude/settings.json` does not register the guard hook for `PreToolUse` and `PostToolUse` | home directory unknown |
 | `hook-active` | agents are running and no hook event landed in 24h | no agents |
-| `file-telemetry` | root ES service `not-loaded`, in a `spawn`/`exit` state, or `running` with agents active and the spool unwritten for over 10 min (past grace) | file telemetry is not spool-based |
+| `file-telemetry` | root ES service `not-loaded`, in a `spawn`/`exit` state, or `running` with agents active and the spool unwritten for over 10 min (past grace); a service launchd will not start (last exit 78, `EX_CONFIG`, or `spawn scheduled` after a nonzero exit) names Re-register in its detail | file telemetry is not spool-based |
 | `collectors` | a collector is stopped or abandoned, or (with agents active) silent; passes with each polling collector's database, watermark and last poll | grace |
 | `trace-coverage` | a harness had sessions with a transcript line read or a hook event since boot, but no tool-call, turn or model-call rows were written since boot (whatever their own timestamps); a session whose process only stayed alive is not counted; passes listing each traced harness with its session count | grace, or no such sessions since boot |
 | `hermes` | a Hermes `state.db` could not be read (detail names the database and error); passes with each database's message watermark and the last poll time | no `state.db` under the Hermes root (`not installed`) |

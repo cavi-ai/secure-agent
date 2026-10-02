@@ -1,8 +1,10 @@
 package collect
 
 import (
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 )
@@ -223,5 +225,79 @@ func TestClaudeModelCallCarriesProvider(t *testing.T) {
 		if n != 1 {
 			t.Fatalf("want one model_call, got %d", n)
 		}
+	}
+}
+
+// claudeBlockRecord is one Claude Code assistant record: one content block of
+// the API call with message id, carrying that call's usage.
+func claudeBlockRecord(id, ts, block string, out int) string {
+	return `{"type":"assistant","sessionId":"sess-1","cwd":"/repo","timestamp":"` + ts + `","requestId":"req_1",` +
+		`"message":{"id":"` + id + `","type":"message","role":"assistant","model":"claude-sonnet-4-5",` +
+		`"content":[` + block + `],` +
+		`"usage":{"input_tokens":6,"cache_creation_input_tokens":994,"cache_read_input_tokens":40000,"output_tokens":` + strconv.Itoa(out) + `}}}`
+}
+
+// Claude Code writes one record per content block of an API call, each
+// repeating the message id and usage: the records fold into one model call
+// keyed by the message id, at the first record's timestamp. A later record
+// with more usage re-emits the call with the larger counts; a new id is a new
+// call.
+func TestClaudeTraceFoldsContentBlockRecordsByMessageID(t *testing.T) {
+	const id = "msg_011CfeBErVrQAEqLwcEDk6CU"
+	lines := []string{
+		claudeBlockRecord(id, "2026-10-02T22:11:59.088Z", `{"type":"thinking","thinking":"plan"}`, 1819),
+		claudeBlockRecord(id, "2026-10-02T22:11:59.099Z", `{"type":"text","text":"Running the tests."}`, 1819),
+		claudeBlockRecord(id, "2026-10-02T22:11:59.101Z", `{"type":"tool_use","id":"toolu_9","name":"Bash","input":{"command":"go test"}}`, 1819),
+	}
+	tr := NewClaudeTracer()
+	var calls, tools []event.Event
+	for _, line := range lines {
+		evs, _, _ := tr.ParseLine(line)
+		for _, e := range evs {
+			switch e.Kind {
+			case event.KindModelCall:
+				calls = append(calls, e)
+			case event.KindToolCall:
+				tools = append(tools, e)
+			}
+		}
+	}
+	if len(calls) != 1 {
+		t.Fatalf("three records of one message emitted %d model calls, want 1: %+v", len(calls), calls)
+	}
+	first := time.Date(2026, 10, 2, 22, 11, 59, 88e6, time.UTC)
+	mc := calls[0]
+	if mc.CallID != id || !mc.TS.Equal(first) || mc.TokensIn != 1000 || mc.TokensOut != 1819 {
+		t.Fatalf("model call = %+v, want call id %s at %v with 1000/1819 tokens", mc, id, first)
+	}
+	if len(tools) != 1 || tools[0].CallID != "toolu_9" {
+		t.Fatalf("tool calls = %+v, want the one tool_use block", tools)
+	}
+	if tr.Session() != "sess-1" {
+		t.Fatalf("Session() = %q, want sess-1", tr.Session())
+	}
+
+	grown, _, _ := tr.ParseLine(claudeBlockRecord(id, "2026-10-02T22:11:59.200Z", `{"type":"text","text":"done"}`, 1900))
+	if len(grown) != 1 || grown[0].CallID != id || !grown[0].TS.Equal(first) || grown[0].TokensOut != 1900 || grown[0].CostUSD <= mc.CostUSD {
+		t.Fatalf("record with more usage = %+v, want the call re-emitted at %v with 1900 out", grown, first)
+	}
+	next, _, _ := tr.ParseLine(claudeBlockRecord("msg_2", "2026-10-02T22:12:30Z", `{"type":"text","text":"ok"}`, 12))
+	if len(next) != 1 || next[0].CallID != "msg_2" || next[0].TokensOut != 12 {
+		t.Fatalf("new message id = %+v, want its own model call", next)
+	}
+}
+
+// Ids past claudeMsgMemory are forgotten oldest first; the store's upsert on
+// (session_id, call_id) still folds a repeat that arrives after eviction.
+func TestClaudeTraceMessageMemoryIsBounded(t *testing.T) {
+	tr := NewClaudeTracer()
+	for i := range claudeMsgMemory + 1 {
+		tr.ParseLine(claudeBlockRecord("msg_"+strconv.Itoa(i), "2026-10-02T22:00:00Z", `{"type":"text","text":"x"}`, 5))
+	}
+	if len(tr.msgs) != claudeMsgMemory {
+		t.Fatalf("tracer holds %d message ids, want %d", len(tr.msgs), claudeMsgMemory)
+	}
+	if _, held := tr.msgs["msg_0"]; held {
+		t.Fatal("the oldest message id was not evicted")
 	}
 }

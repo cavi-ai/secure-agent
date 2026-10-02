@@ -29,6 +29,7 @@ type claudeRecord struct {
 	IsMeta      *bool `json:"isMeta"`
 	IsSidechain *bool `json:"isSidechain"`
 	Message     struct {
+		ID      string          `json:"id"` // API message id; repeated on every record of one call
 		Model   string          `json:"model"`
 		Usage   *claudeUsage    `json:"usage"`
 		Content json.RawMessage `json:"content"`
@@ -82,14 +83,38 @@ type pendingTool struct {
 	ts   time.Time
 }
 
+// claudeMsgMemory bounds how many recent message ids a tracer remembers. The
+// records of one API call are written together, so a handful suffices; a
+// repeat that arrives after eviction (or after a restart) is still folded by
+// the store's upsert on (session_id, call_id).
+const claudeMsgMemory = 64
+
+// claudeMsg is a model call already emitted for a message id.
+type claudeMsg struct {
+	ts      time.Time
+	in, out int64
+}
+
 // ClaudeTracer turns transcript lines into trace events. It is stateful per
-// file: tool_use ids pair with tool_results across lines.
+// file: tool_use ids pair with tool_results across lines, and the records of
+// one API call fold into one model call.
 type ClaudeTracer struct {
 	pending map[string]pendingTool // tool_use id → open call
+	// msgs maps a recent message id to the model call emitted for it;
+	// msgRing evicts the oldest past claudeMsgMemory.
+	msgs      map[string]claudeMsg
+	msgRing   [claudeMsgMemory]string
+	msgNext   int
+	sessionID string // the last record's session id
 }
 
 func NewClaudeTracer() *ClaudeTracer {
-	return &ClaudeTracer{pending: map[string]pendingTool{}}
+	return &ClaudeTracer{pending: map[string]pendingTool{}, msgs: map[string]claudeMsg{}}
+}
+
+// Session returns the session id of the last transcript record parsed.
+func (t *ClaudeTracer) Session() string {
+	return t.sessionID
 }
 
 // IsClaudeTranscriptPath reports whether a tailed file is a Claude Code
@@ -113,6 +138,7 @@ func (t *ClaudeTracer) ParseLine(line string) (events []event.Event, cwd string,
 	if rec.Type != "assistant" && rec.Type != "user" {
 		return nil, "", false
 	}
+	t.sessionID = rec.SessionID
 	ts := time.Now()
 	if rec.Timestamp != "" {
 		if parsed, err := time.Parse(time.RFC3339Nano, rec.Timestamp); err == nil {
@@ -124,20 +150,8 @@ func (t *ClaudeTracer) ParseLine(line string) (events []event.Event, cwd string,
 
 	switch rec.Type {
 	case "assistant":
-		// "<synthetic>" is Claude Code's own zero-usage turn, not a model call.
-		if rec.Message.Usage != nil && rec.Message.Model != "" && rec.Message.Model != "<synthetic>" {
-			u := rec.Message.Usage
-			in := u.InputTokens + u.CacheCreationTokens
-			events = append(events, event.Event{
-				Kind:      event.KindModelCall,
-				TS:        ts,
-				SessionID: rec.SessionID,
-				Model:     rec.Message.Model,
-				Provider:  "anthropic",
-				TokensIn:  in,
-				TokensOut: u.OutputTokens,
-				CostUSD:   ModelCostUSD(rec.Message.Model, in, u.OutputTokens),
-			})
+		if mc, ok := t.modelCall(&rec, ts); ok {
+			events = append(events, mc)
 		}
 		for _, c := range contents {
 			if c.Type == "tool_use" && c.ID != "" && c.Name != "" {
@@ -190,6 +204,55 @@ func (t *ClaudeTracer) ParseLine(line string) (events []event.Event, cwd string,
 		}
 	}
 	return events, rec.CWD, len(events) > 0
+}
+
+// modelCall returns the model call an assistant record bills, or false when it
+// bills none. Claude Code writes one record per content block (thinking, text,
+// tool_use), each repeating the message id and usage: the call is emitted on
+// the message's first record, and again only when a later record carries more
+// usage — at the first record's timestamp, so the store's upsert on
+// (session_id, call_id) raises the one row to the final counts.
+func (t *ClaudeTracer) modelCall(rec *claudeRecord, ts time.Time) (event.Event, bool) {
+	m := &rec.Message
+	// "<synthetic>" is Claude Code's own zero-usage turn, not a model call.
+	if m.Usage == nil || m.Model == "" || m.Model == "<synthetic>" {
+		return event.Event{}, false
+	}
+	in := m.Usage.InputTokens + m.Usage.CacheCreationTokens
+	out := m.Usage.OutputTokens
+	if m.ID != "" {
+		if prev, seen := t.msgs[m.ID]; seen {
+			if in <= prev.in && out <= prev.out {
+				return event.Event{}, false
+			}
+			ts, in, out = prev.ts, max(in, prev.in), max(out, prev.out)
+		}
+		t.rememberMsg(m.ID, claudeMsg{ts: ts, in: in, out: out})
+	}
+	return event.Event{
+		Kind:      event.KindModelCall,
+		TS:        ts,
+		SessionID: rec.SessionID,
+		Model:     m.Model,
+		Provider:  "anthropic",
+		TokensIn:  in,
+		TokensOut: out,
+		CostUSD:   ModelCostUSD(m.Model, in, out),
+		CallID:    m.ID,
+	}, true
+}
+
+// rememberMsg records the model call emitted for a message id, evicting the
+// oldest id once claudeMsgMemory are held.
+func (t *ClaudeTracer) rememberMsg(id string, m claudeMsg) {
+	if _, held := t.msgs[id]; !held {
+		if old := t.msgRing[t.msgNext]; old != "" {
+			delete(t.msgs, old)
+		}
+		t.msgRing[t.msgNext] = id
+		t.msgNext = (t.msgNext + 1) % claudeMsgMemory
+	}
+	t.msgs[id] = m
 }
 
 // isPromptText filters out the harness's own wrapper content so only genuine

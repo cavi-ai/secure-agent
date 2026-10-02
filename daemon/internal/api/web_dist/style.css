@@ -492,7 +492,7 @@ body {
 .resource-activity-marker line { stroke: var(--tx-3); stroke-width: .8; stroke-dasharray: 2 2; opacity: .7; }
 .resource-activity-marker circle { fill: var(--tx-2); stroke: var(--bg-2); stroke-width: 1; }
 .resource-activity-marker.kind-process-start circle,.resource-activity-marker.kind-process circle { fill: var(--brand-2); }
-.resource-activity-marker.kind-tool circle { fill: var(--warn); }
+.resource-activity-marker.kind-tool circle,.resource-activity-marker.kind-model circle { fill: var(--warn); }
 .resource-activity-marker.kind-network circle,.resource-activity-marker.kind-security circle { fill: var(--bad); }
 .resource-episode-context { grid-column: 1 / -1; padding-top: 10px; border-top: 1px solid var(--line); }
 .resource-context-head,.resource-context-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
@@ -505,7 +505,7 @@ body {
 .resource-activity-row > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .resource-activity-kind { color: var(--tx-3); font-size: .58rem; letter-spacing: .04em; }
 .resource-activity-kind.kind-process-start,.resource-activity-kind.kind-process { color: var(--brand-2); }
-.resource-activity-kind.kind-tool { color: var(--warn); }
+.resource-activity-kind.kind-tool,.resource-activity-kind.kind-model { color: var(--warn); }
 .resource-activity-kind.kind-network,.resource-activity-kind.kind-security { color: var(--bad); }
 .resource-context-actions { margin-top: 8px; }
 .resource-context-actions small { color: var(--tx-3); font-size: .62rem; }

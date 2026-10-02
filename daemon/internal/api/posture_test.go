@@ -367,6 +367,36 @@ func TestESServiceItemsNamesRegrantAfterHelperReplaced(t *testing.T) {
 	}
 }
 
+// launchd refusing every spawn (78: EX_CONFIG, e.g. a registration bound to
+// a replaced build) or a spawn-scheduled service that last exited nonzero
+// needs Re-register; the posture detail names it.
+func TestESServiceRefusedNamesReregister(t *testing.T) {
+	for state, want := range map[string]bool{
+		"spawn scheduled (last exit 78: EX_CONFIG)": true,
+		"not running (last exit 78: EX_CONFIG)":     true,
+		"spawn scheduled (last exit 1)":             true,
+		"spawn scheduled":                           false,
+		"not running (last exit 1)":                 false,
+		"running (last exit 78: EX_CONFIG)":         false,
+		"not-loaded":                                false,
+	} {
+		if got := esServiceRefused(state); got != want {
+			t.Errorf("esServiceRefused(%q) = %v, want %v", state, got, want)
+		}
+	}
+
+	stale := time.Now().Add(-8 * time.Minute)
+	items := esServiceItems(collect.ESServiceSnapshot{State: "spawn scheduled (last exit 78: EX_CONFIG)", SpoolSize: 10, SpoolMtime: stale})
+	if len(items) != 1 || !strings.Contains(items[0].Detail, "78: EX_CONFIG") || !strings.Contains(items[0].Detail, "Re-register") ||
+		!strings.Contains(items[0].Detail, "/var/log/secure-agent-esd.log") {
+		t.Fatalf("refused service: items = %+v, want one failing item naming the exit code, Re-register and the log", items)
+	}
+	plain := esServiceItems(collect.ESServiceSnapshot{State: "spawn scheduled", SpoolSize: 10, SpoolMtime: stale})
+	if len(plain) != 1 || strings.Contains(plain[0].Detail, "Re-register") {
+		t.Fatalf("spawn scheduled without an exit: items = %+v, want one failing item without Re-register", plain)
+	}
+}
+
 // A writer producing mostly-unparseable lines (UnparsedShare over half) is
 // real garbage and supersedes the ordinary not-writing/crash-loop items.
 // Flooding (the tailer skipping past its per-tick budget) alone is a burst,
@@ -395,6 +425,23 @@ func TestESServiceItemsFlooding(t *testing.T) {
 	ok := esServiceItems(collect.ESServiceSnapshot{State: "running", SpoolMtime: time.Now(), UnparsedShare: 0.1})
 	if len(ok) != 0 {
 		t.Fatalf("UnparsedShare=0.1: items = %+v, want none", ok)
+	}
+}
+
+// File events stored with their event time but delivered hours later read as
+// a late monitor, not a healthy one; a stale spool's last lag does not.
+func TestESServiceItemsLagging(t *testing.T) {
+	late := esServiceItems(collect.ESServiceSnapshot{State: "running", SpoolMtime: time.Now(), NewestEventAt: timeAt(time.Now().Add(-2 * time.Hour)), LagSeconds: 7200})
+	if len(late) != 1 || late[0].Title != "File monitoring is running late" || late[0].Severity != 2 || !strings.Contains(late[0].Detail, "2h0m0s before it arrived") {
+		t.Fatalf("lag 2h: items = %+v, want one running-late item", late)
+	}
+	onTime := esServiceItems(collect.ESServiceSnapshot{State: "running", SpoolMtime: time.Now(), NewestEventAt: timeAt(time.Now()), LagSeconds: 119})
+	if len(onTime) != 0 {
+		t.Fatalf("lag 119s: items = %+v, want none", onTime)
+	}
+	idle := esServiceItems(collect.ESServiceSnapshot{State: "running", SpoolMtime: time.Now().Add(-10 * time.Minute), NewestEventAt: timeAt(time.Now().Add(-2 * time.Hour)), LagSeconds: 7200})
+	if len(idle) != 0 {
+		t.Fatalf("spool idle 10 min: items = %+v, want none", idle)
 	}
 }
 

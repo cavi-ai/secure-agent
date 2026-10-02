@@ -1194,3 +1194,36 @@ func TestSightedByHarness(t *testing.T) {
 		t.Fatalf("SightedByHarness = %v, want %v (no sighting before boot, from a trace row, or from a process touching files)", got, want)
 	}
 }
+
+// A child that exited before its ES event was resolved is not in the process
+// table: the event joins the family of the parent ES recorded, and the dead
+// child's pid is not cached for whatever process reuses it.
+func TestResolveExitedChildByESParent(t *testing.T) {
+	started := time.Now().Add(-time.Hour)
+	r, _ := testResolver(t, fakeProcs{
+		100: {PID: 100, PPID: 1, Exe: "/usr/local/bin/claude", CWD: "/repo", StartTime: started},
+	})
+	want := ProcSessionID(100, started)
+
+	e := event.Event{Kind: event.KindFileOpen, PID: 4242, PPID: 100, TS: time.Now(), Path: "/repo/.git/index"}
+	if id := r.Resolve(&e); id != want || e.SessionID != want {
+		t.Fatalf("exited child: id=%q session=%q, want %q", id, e.SessionID, want)
+	}
+	again := event.Event{Kind: event.KindExec, PID: 4243, PPID: 100, TS: time.Now()}
+	if id := r.Resolve(&again); id != want {
+		t.Fatalf("second exited child via the cached parent: id=%q, want %q", id, want)
+	}
+	if _, cached := r.byPID[4242]; cached {
+		t.Fatal("the exited child's pid was cached")
+	}
+	for _, orphan := range []event.Event{
+		{Kind: event.KindFileOpen, PID: 4244, PPID: 1, TS: time.Now()},
+		{Kind: event.KindFileOpen, PID: 4245, TS: time.Now()},
+		{Kind: event.KindFileOpen, PID: 4246, PPID: 4246, TS: time.Now()},
+		{Kind: event.KindFileOpen, PID: 4247, PPID: 999, TS: time.Now()},
+	} {
+		if id := r.Resolve(&orphan); id != "" {
+			t.Fatalf("event %+v attributed to %q, want unattributed", orphan, id)
+		}
+	}
+}

@@ -169,6 +169,17 @@ func TestDoctorFileTelemetryFailsOnCrashLoop(t *testing.T) {
 	}
 }
 
+func TestDoctorFileTelemetryRefusedSpawnNamesReregister(t *testing.T) {
+	st := testStore(t)
+	t.Cleanup(func() { st.Close() })
+	rep, _ := getDoctor(t, st, Status{Running: true, Uptime: "1h0m0s",
+		ESService: &collect.ESServiceSnapshot{State: "spawn scheduled (last exit 78: EX_CONFIG)", SpoolMtime: time.Now().Add(-8 * time.Minute)}})
+	c := doctorCheckByID(t, rep, "file-telemetry")
+	if c.State != doctorFail || !strings.Contains(c.Detail, "78: EX_CONFIG") || !strings.Contains(c.Detail, "Re-register") {
+		t.Fatalf("file-telemetry = %+v, want fail naming the exit code and Re-register", c)
+	}
+}
+
 func TestDoctorFileTelemetryFailsOnFlood(t *testing.T) {
 	st := testStore(t)
 	t.Cleanup(func() { st.Close() })
@@ -361,6 +372,16 @@ func TestDoctorChecksFromFacts(t *testing.T) {
 			f.st.ESService = &collect.ESServiceSnapshot{State: "running", SpoolMtime: time.Now(), UnparsedShare: 0.9}
 			return f
 		}(), doctorFail, "did not parse"},
+		{"file events delivered two hours late", checkFileTelemetry, func() doctorFacts {
+			f := steady
+			f.st.ESService = &collect.ESServiceSnapshot{State: "running", SpoolMtime: now, NewestEventAt: timeAt(now.Add(-2 * time.Hour)), LagSeconds: 7200}
+			return f
+		}(), doctorFail, "2h0m0s before it arrived"},
+		{"file events delivered on time", checkFileTelemetry, func() doctorFacts {
+			f := steady
+			f.st.ESService = &collect.ESServiceSnapshot{State: "running", SpoolMtime: now, NewestEventAt: timeAt(now), LagSeconds: 1}
+			return f
+		}(), doctorPass, "running"},
 		{"low unparsed share is not flooding", checkFileTelemetry, func() doctorFacts {
 			f := steady
 			f.st.ESService = &collect.ESServiceSnapshot{State: "running", SpoolMtime: now, UnparsedShare: 0.1}

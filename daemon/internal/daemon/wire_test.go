@@ -678,3 +678,45 @@ func TestCodexSessionTargetsFromLiveProcesses(t *testing.T) {
 		t.Fatalf("default CODEX_HOME must not duplicate the built-in target: %v", got)
 	}
 }
+
+// The drain loop advances the store's ES feed clock past events it skipped
+// (unattributed file opens) as well as events it stored: a resource episode
+// settles once the file events around its capture are in the store.
+func TestDrainLoopAdvancesTheFileFeedClock(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "t.db"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	st.TrackFileFeed()
+
+	captured := time.Now().UTC().Add(-time.Minute)
+	if err := st.PutResourceEpisode(resource.Episode{CapturedAt: captured, Session: resource.Session{
+		Key: "100:1", RootPID: 100, Processes: []resource.Process{{PID: 100, Name: "codex"}},
+		Samples: []resource.Sample{{At: captured.Add(-5 * time.Second), RSSBytes: 1 << 30}, {At: captured, RSSBytes: 2 << 30}},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, _ := config.Load("/nonexistent")
+	tagger := agents.New(cfg, fakeProcSource{})
+	tagger.Refresh()
+	cr := correlate.New(tagger, sensitive.New(cfg), cfg)
+	b := bus.New(64)
+	done := startDrainLoop(b.Subscribe(), st, cr, fleet.NewPublisher(), session.NewResolver(st, tagger), tagger, nil, nil, nil, nil)
+	b.Publish(event.Event{Kind: event.KindFileOpen, TS: captured.Add(-time.Hour), PID: 9999, Path: "/tmp/unrelated"})
+	b.Close()
+	<-done
+	if got := st.RecentResourceEpisodes(1)[0].ActivityStatus; got != "settling" {
+		t.Fatalf("status=%q while the feed is an hour behind the capture", got)
+	}
+
+	b = bus.New(64)
+	done = startDrainLoop(b.Subscribe(), st, cr, fleet.NewPublisher(), session.NewResolver(st, tagger), tagger, nil, nil, nil, nil)
+	b.Publish(event.Event{Kind: event.KindFileOpen, TS: captured.Add(time.Second), PID: 9999, Path: "/tmp/unrelated"})
+	b.Close()
+	<-done
+	if got := st.RecentResourceEpisodes(1)[0].ActivityStatus; got != "complete" {
+		t.Fatalf("status=%q after a skipped file event past the capture", got)
+	}
+}

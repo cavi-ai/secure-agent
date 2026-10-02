@@ -595,3 +595,85 @@ func TestTranscriptHitCarriesTestSignals(t *testing.T) {
 		})
 	}
 }
+
+// tailAll writes lines to path in one append, as Claude Code writes the
+// records of one API call, runs one tail pass and returns every event
+// published.
+func tailAll(t *testing.T, ts *TranscriptScanner, sub <-chan event.Event, path string, lines ...string) []event.Event {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ts.tailFile(path, map[string]int64{}, nil)
+	var evs []event.Event
+	for {
+		select {
+		case e := <-sub:
+			evs = append(evs, e)
+		default:
+			return evs
+		}
+	}
+}
+
+// Three transcript records sharing one message id (thinking, text, tool_use
+// blocks of one API call, each repeating the usage) publish one model call,
+// keyed by the message id and carrying the usage once.
+func TestTailerPublishesOneModelCallPerMessageID(t *testing.T) {
+	const id = "msg_011CfeBErVrQAEqLwcEDk6CU"
+	path := filepath.Join(t.TempDir(), ".claude", "projects", "ws", "sess-1.jsonl")
+	b := bus.New(64)
+	sub := b.Subscribe()
+	evs := tailAll(t, NewTranscriptScanner(b, nil), sub, path,
+		claudeBlockRecord(id, "2026-10-02T22:11:59.088Z", `{"type":"thinking","thinking":"plan"}`, 1819),
+		claudeBlockRecord(id, "2026-10-02T22:11:59.099Z", `{"type":"text","text":"Running the tests."}`, 1819),
+		claudeBlockRecord(id, "2026-10-02T22:11:59.101Z", `{"type":"tool_use","id":"toolu_9","name":"Bash","input":{"command":"go test"}}`, 1819),
+	)
+	var calls, tools []event.Event
+	for _, e := range evs {
+		switch e.Kind {
+		case event.KindModelCall:
+			calls = append(calls, e)
+		case event.KindToolCall:
+			tools = append(tools, e)
+		}
+	}
+	if len(calls) != 1 {
+		t.Fatalf("published %d model calls for one message id, want 1: %+v", len(calls), calls)
+	}
+	mc := calls[0]
+	want := ModelCostUSD("claude-sonnet-4-5", 1000, 1819)
+	if mc.CallID != id || mc.SessionID != "sess-1" || mc.TokensIn != 1000 || mc.TokensOut != 1819 || mc.CostUSD != want {
+		t.Fatalf("model call = %+v, want %s in sess-1 with 1000/1819 tokens costing %v", mc, id, want)
+	}
+	if len(tools) != 1 || tools[0].CallID != "toolu_9" {
+		t.Fatalf("tool calls = %+v, want the tool_use block's call", tools)
+	}
+}
+
+// A repeat record that publishes no model call still has its text scanned,
+// and the hit keeps the transcript's session.
+func TestRepeatRecordSecretHitKeepsSession(t *testing.T) {
+	secret := "synthetic-known-secret-0123456789"
+	path := filepath.Join(t.TempDir(), ".claude", "projects", "ws", "sess-1.jsonl")
+	b := bus.New(64)
+	sub := b.Subscribe()
+	ts := NewTranscriptScanner(b, nil)
+	ts.TextScanner = stubTextScanner{secret: secret}
+	evs := tailAll(t, ts, sub, path,
+		claudeBlockRecord("msg_1", "2026-10-02T22:11:59.088Z", `{"type":"thinking","thinking":"plan"}`, 10),
+		claudeBlockRecord("msg_1", "2026-10-02T22:11:59.099Z", `{"type":"text","text":"use `+secret+`"}`, 10),
+	)
+	var hits []event.Event
+	for _, e := range evs {
+		if e.Kind == event.KindTranscriptHit {
+			hits = append(hits, e)
+		}
+	}
+	if len(hits) != 1 || hits[0].SessionID != "sess-1" || hits[0].Detail != "claude:fingerprint:fp-1" {
+		t.Fatalf("hits = %+v, want one claude:fingerprint:fp-1 hit in sess-1", hits)
+	}
+}
