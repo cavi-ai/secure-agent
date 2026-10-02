@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -158,7 +159,7 @@ func (s *Store) RecordEgressObservation(o EgressObservation) error {
 	defer cancel()
 	s.egressMu.Lock()
 	defer s.egressMu.Unlock()
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginImmediate(ctx)
 	if err != nil {
 		return err
 	}
@@ -237,6 +238,58 @@ func (s *Store) RecordEgressObservation(o EgressObservation) error {
 		}
 	}
 	return tx.Commit()
+}
+
+// immediateTx is a write transaction that took SQLite's write lock at BEGIN.
+// The episode projection reads, then writes, beside writers that hold s.mu
+// instead of egressMu. A deferred transaction cannot upgrade its read to a
+// write while another connection writes: SQLite fails it at once with
+// SQLITE_BUSY or SQLITE_BUSY_SNAPSHOT, without waiting. BEGIN IMMEDIATE waits
+// under the busy timeout, bounded by ctx.
+type immediateTx struct {
+	ctx  context.Context
+	conn *sql.Conn
+	done bool
+}
+
+func (s *Store) beginImmediate(ctx context.Context) (*immediateTx, error) {
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := conn.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	return &immediateTx{ctx: ctx, conn: conn}, nil
+}
+
+func (t *immediateTx) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
+	return t.conn.QueryRowContext(ctx, query, args...)
+}
+
+func (t *immediateTx) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	return t.conn.ExecContext(ctx, query, args...)
+}
+
+func (t *immediateTx) Commit() error {
+	if _, err := t.conn.ExecContext(t.ctx, "COMMIT"); err != nil {
+		return err
+	}
+	t.done = true
+	return nil
+}
+
+// Rollback ends an uncommitted transaction and returns the connection to the
+// pool. A connection that cannot roll back is discarded, never handed to the
+// next caller mid-transaction.
+func (t *immediateTx) Rollback() {
+	if !t.done {
+		if _, err := t.conn.ExecContext(context.Background(), "ROLLBACK"); err != nil {
+			_ = t.conn.Raw(func(any) error { return driver.ErrBadConn })
+		}
+	}
+	_ = t.conn.Close()
 }
 
 func scanEgressEpisode(scanner interface{ Scan(...any) error }) (EgressEpisode, error) {
