@@ -7,6 +7,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 )
 
 // CostRow is one group of model calls in a CostReport.
@@ -292,4 +294,56 @@ func (s *Store) dominantLocked(keyExpr, col string, args []any) map[string]strin
 		log.Printf("store: cost dominant %s cursor error: %v", col, err)
 	}
 	return dominant
+}
+
+// RepriceZeroCostCalls prices stored model calls that were written without a
+// price, so a price added later (built in, or the operator's pricing table)
+// covers earlier calls too. Only Claude and Codex calls: their cost is
+// computed from tokens at ingest, so the result is what ingest would write
+// today; other collectors take the harness's own cost. Returns how many rows
+// it priced.
+func (s *Store) RepriceZeroCostCalls(price func(model string, in, out int64) float64) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rows, err := s.db.Query(`SELECT e.id, e.model, COALESCE(e.tokens_in, 0), COALESCE(e.tokens_out, 0)
+		FROM events e JOIN sessions s ON s.id = e.session_id
+		WHERE e.kind = ? AND (e.cost_usd IS NULL OR e.cost_usd = 0) AND COALESCE(e.model, '') != ''
+		AND s.harness IN ('claude', 'codex')`, int(event.KindModelCall))
+	if err != nil {
+		log.Printf("store: reprice query: %v", err)
+		return 0
+	}
+	type priced struct {
+		id   int64
+		cost float64
+	}
+	var todo []priced
+	for rows.Next() {
+		var id, in, out int64
+		var model string
+		if rows.Scan(&id, &model, &in, &out) != nil {
+			continue
+		}
+		if c := price(model, in, out); c > 0 {
+			todo = append(todo, priced{id, c})
+		}
+	}
+	rows.Close()
+	if len(todo) == 0 {
+		return 0
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0
+	}
+	n := 0
+	for _, p := range todo {
+		if _, err := tx.Exec(`UPDATE events SET cost_usd = ? WHERE id = ?`, p.cost, p.id); err == nil {
+			n++
+		}
+	}
+	if tx.Commit() != nil {
+		return 0
+	}
+	return n
 }

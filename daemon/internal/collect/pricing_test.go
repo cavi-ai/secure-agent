@@ -112,6 +112,7 @@ func TestVersionBoundaryPrefixRule(t *testing.T) {
 		{"claude-opus-4-20250514", [2]float64{15, 75}, true},
 		{"claude-opus-4-1-20250805", [2]float64{15, 75}, true},
 		{"claude-fable-5-1", [2]float64{10, 50}, true},
+		{"claude-sonnet-5-5", [2]float64{2, 10}, true},
 		{"claude-sonnet-5", [2]float64{2, 10}, true},
 		{"claude-sonnet-4-5-20250929", [2]float64{3, 15}, true},
 		{"claude-haiku-4-5-20251001", [2]float64{1, 5}, true},

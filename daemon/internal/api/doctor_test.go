@@ -404,3 +404,26 @@ func TestDoctorHermes(t *testing.T) {
 		t.Fatalf("hermes check = %+v, want fail with a fix", c)
 	}
 }
+
+// launchd keeps the last exit code of a service it restarted. A running
+// service with an earlier exit is up and writing, not failing; one that stops
+// writing still fails on the spool's age.
+func TestDoctorFileTelemetryRunningAfterAnEarlierExit(t *testing.T) {
+	st := testStore(t)
+	t.Cleanup(func() { st.Close() })
+	rep, _ := getDoctor(t, st, Status{Running: true, Uptime: "1h0m0s", ActiveAgents: 2,
+		ESService: &collect.ESServiceSnapshot{State: "running (last exit 1)", SpoolMtime: time.Now(), SpoolSize: 1 << 20}})
+	if c := doctorCheckByID(t, rep, "file-telemetry"); c.State != doctorPass {
+		t.Fatalf("file-telemetry = %+v, want pass: the service is running and the spool is fresh", c)
+	}
+	rep, _ = getDoctor(t, st, Status{Running: true, Uptime: "1h0m0s", ActiveAgents: 2,
+		ESService: &collect.ESServiceSnapshot{State: "running (last exit 1)", SpoolMtime: time.Now().Add(-time.Hour), SpoolSize: 1 << 20}})
+	if c := doctorCheckByID(t, rep, "file-telemetry"); c.State != doctorFail || !strings.Contains(c.Detail, "spool not written") {
+		t.Fatalf("file-telemetry = %+v, want fail: running but the spool is an hour old", c)
+	}
+	rep, _ = getDoctor(t, st, Status{Running: true, Uptime: "1h0m0s",
+		ESService: &collect.ESServiceSnapshot{State: "spawn scheduled (last exit 1)"}})
+	if c := doctorCheckByID(t, rep, "file-telemetry"); c.State != doctorFail || !strings.Contains(c.Detail, "spawn scheduled") {
+		t.Fatalf("file-telemetry = %+v, want fail: crash loop", c)
+	}
+}
