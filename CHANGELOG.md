@@ -32,6 +32,8 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Egress episodes keep a connection seen while another store write is in progress; the episode write takes SQLite's write lock at BEGIN instead of failing its read-to-write upgrade.
 - File telemetry: after the spool rotates, the tailer reads the rest of the rotated file before the new spool from its start; a line still being written waits for its end; the daemon's own file events no longer count as lines that did not parse.
 - Doctor trace coverage counts a session as seen only when one of its transcript lines was read or a hook fired since boot, and counts trace rows written since boot: a conversation whose process stays alive with no new turns, or a transcript read for the first time, no longer reads as a blind collector.
+- Pricing: Claude Sonnet 5.5 (`claude-sonnet-5-5`) at $2 / $10 per million input / output tokens. A price added later, built in or in `pricing:`, also prices the Claude and Codex calls already stored without one.
+- Doctor and posture: a file telemetry service that launchd restarted after an exit and is running again (`running (last exit 1)`) is not reported as failing; it still fails when its spool stops being written.
 
 ## [1.2.0] - 2026-09-30
 
