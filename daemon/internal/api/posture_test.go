@@ -131,6 +131,21 @@ func TestPostureCriticalFlagDrivesState(t *testing.T) {
 	}
 }
 
+// Uninspected egress alone is a coverage note: posture stays all-clear (the
+// menu bar purple, no hero) and the note stays listed for the console.
+func TestPostureEgressNoteAloneIsAllClear(t *testing.T) {
+	a := newTestAPI("", testStore(t), nil, func() Status {
+		return Status{Running: true, UninspectedEgress: 9}
+	})
+	p := a.computePosture()
+	if p.State != "all-clear" || p.NeedsYou != 0 || p.CoverageCount != 1 || p.CoverageItems[0].Kind != "uninspected_egress" {
+		t.Fatalf("posture = %+v, want all-clear with the egress note listed", p)
+	}
+	if p.Summary != "All clear — agents monitored, no action needed." {
+		t.Fatalf("summary = %q", p.Summary)
+	}
+}
+
 func TestPostureSeparatesUninspectedEgressAndDeadCollectorsFromDecisions(t *testing.T) {
 	sock := fmt.Sprintf("/tmp/sa_posture3_%d.sock", time.Now().UnixNano())
 	defer os.Remove(sock)

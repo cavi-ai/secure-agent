@@ -76,6 +76,28 @@ final class HeroModelTests: XCTestCase {
         XCTAssertEqual(hero.buttonLabel, "Open in console")
     }
 
+    /// Nothing to look at: no hero card, only the purple status icon.
+    func testAllClearHidesHero() {
+        let s = state(flags: [])
+        s.seedPostureForTesting(posture("all-clear", "All clear — agents monitored, no action needed."))
+        XCTAssertFalse(ConsoleView(state: s, scrollable: false).showsHero)
+        XCTAssertFalse(s.needsAttention)
+
+        s.isPaused = true
+        XCTAssertTrue(ConsoleView(state: s, scrollable: false).showsHero, "paused still says so")
+    }
+
+    func testAttentionOrTopFlagShowsHero() {
+        let attention = state(flags: [])
+        attention.seedPostureForTesting(posture("attention", "No decisions pending. Monitoring coverage needs attention."))
+        XCTAssertTrue(ConsoleView(state: attention, scrollable: false).showsHero)
+
+        let flagged = state(flags: [flag(id: "f1", sev: 2, acked: false)])
+        flagged.seedPostureForTesting(posture("all-clear", "All clear — agents monitored, no action needed."))
+        XCTAssertNotNil(flagged.heroFlag)
+        XCTAssertTrue(ConsoleView(state: flagged, scrollable: false).showsHero)
+    }
+
     func testPostureAllClearIsProtected() {
         let s = state(flags: [])
         s.seedPostureForTesting(posture("all-clear", "All clear — agents monitored, no action needed."))
