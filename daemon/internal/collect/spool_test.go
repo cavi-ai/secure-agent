@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"slices"
 	"testing"
 	"time"
 
@@ -339,5 +340,100 @@ func TestSpoolProbesSeeTheRotatedFileMidRotation(t *testing.T) {
 	}
 	if size, _ := spoolFacts(path); size != 4 {
 		t.Fatalf("after rotation facts size = %d, want the new spool's 4 bytes", size)
+	}
+}
+
+func esOpenLine(pid int) string {
+	return fmt.Sprintf(`{"event_type":0,"process":{"audit_token":{"pid":%d},"executable":{"path":"/bin/ls"}},"event":{"open":{"file":{"path":"/etc/hosts"}}},"time":"2026-09-11T12:00:00Z"}`, pid)
+}
+
+func appendSpool(t *testing.T, path, s string) {
+	t.Helper()
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o640)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if _, err := f.WriteString(s); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func drainedPIDs(sub <-chan event.Event) []int32 {
+	var pids []int32
+	for {
+		select {
+		case e := <-sub:
+			pids = append(pids, e.PID)
+		default:
+			return pids
+		}
+	}
+}
+
+// Rotation renames the spool to .1 and starts a new file. Lines appended to
+// the old file after the last drain are read from .1, and the new spool is
+// read from its start even when it has already grown past the old offset.
+func TestSpoolTailerFinishesTheRotatedFile(t *testing.T) {
+	path := t.TempDir() + "/spool.jsonl"
+	appendSpool(t, path, esOpenLine(1)+"\n")
+	b := bus.New(64)
+	sub := b.Subscribe()
+	tailer := NewSpoolTailerAt(b, path)
+
+	c := tailer.poll(spoolCursor{})
+	appendSpool(t, path, esOpenLine(2)+"\n")
+	if err := os.Rename(path, path+".1"); err != nil {
+		t.Fatal(err)
+	}
+	c = tailer.poll(c) // the rotation window: no spool yet
+	appendSpool(t, path, esOpenLine(3)+"\n"+esOpenLine(4)+"\n"+esOpenLine(5)+"\n")
+	tailer.poll(c)
+
+	if got := drainedPIDs(sub); !slices.Equal(got, []int32{1, 2, 3, 4, 5}) {
+		t.Fatalf("drained pids = %v, want [1 2 3 4 5]: the old file's tail, then the new spool from its start", got)
+	}
+}
+
+// A line the writer has not finished is left for the next drain, not taken
+// as a line (garbage) with its rest read as garbage after it.
+func TestSpoolTailerWaitsForTheRestOfALine(t *testing.T) {
+	path := t.TempDir() + "/spool.jsonl"
+	whole := esOpenLine(2)
+	appendSpool(t, path, esOpenLine(1)+"\n"+whole[:40])
+	b := bus.New(64)
+	sub := b.Subscribe()
+	tailer := NewSpoolTailerAt(b, path)
+
+	c := tailer.poll(spoolCursor{})
+	if want := int64(len(esOpenLine(1)) + 1); c.offset != want {
+		t.Fatalf("offset = %d, want %d (the end of the complete line)", c.offset, want)
+	}
+	if s := tailer.Stats(); s.Lines != 1 || s.Parsed != 1 {
+		t.Fatalf("stats = %+v, want 1 line read and parsed", s)
+	}
+	appendSpool(t, path, whole[40:]+"\n")
+	tailer.poll(c)
+	if got := drainedPIDs(sub); !slices.Equal(got, []int32{1, 2}) {
+		t.Fatalf("drained pids = %v, want [1 2]", got)
+	}
+}
+
+// The daemon's own file activity is a valid line it drops on purpose, not
+// garbage: a drain made of it must not read as a writer producing garbage.
+func TestSpoolStatsCountTheDaemonsOwnEventsAsParsed(t *testing.T) {
+	path := t.TempDir() + "/spool.jsonl"
+	own := os.Getpid()
+	appendSpool(t, path, esOpenLine(own)+"\n"+esOpenLine(own)+"\n"+esOpenLine(7)+"\n"+"not json\n")
+	b := bus.New(64)
+	sub := b.Subscribe()
+	tailer := NewSpoolTailerAt(b, path)
+	tailer.poll(spoolCursor{})
+
+	if got := drainedPIDs(sub); !slices.Equal(got, []int32{7}) {
+		t.Fatalf("published pids = %v, want [7]", got)
+	}
+	if s := tailer.Stats(); s.Lines != 4 || s.Parsed != 3 {
+		t.Fatalf("stats = %+v, want 4 lines, 3 parsed (only the non-JSON line is garbage)", s)
 	}
 }

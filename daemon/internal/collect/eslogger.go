@@ -86,16 +86,34 @@ type esEnvelope struct {
 // without ever reaching json.Unmarshal.
 const minESLineLen = 16
 
+// esLineVerdict is what parseESLine made of one line: an event, a valid
+// envelope that is deliberately not an event (the daemon's own file
+// activity), or a line that is not an ES envelope it handles.
+type esLineVerdict int
+
+const (
+	esEvent esLineVerdict = iota
+	esOwn
+	esGarbage
+)
+
+// ParseESLine decodes one eslogger line into an event; false for anything
+// that is not an agent-relevant event.
 func ParseESLine(line []byte) (event.Event, bool) {
+	e, v := parseESLine(line)
+	return e, v == esEvent
+}
+
+func parseESLine(line []byte) (event.Event, esLineVerdict) {
 	if len(line) < minESLineLen {
-		return event.Event{}, false
+		return event.Event{}, esGarbage
 	}
 	if b := bytes.TrimLeft(line, " \t"); len(b) == 0 || b[0] != '{' {
-		return event.Event{}, false
+		return event.Event{}, esGarbage
 	}
 	var env esEnvelope
 	if err := unmarshalES(line, &env); err != nil {
-		return event.Event{}, false
+		return event.Event{}, esGarbage
 	}
 
 	pid := env.Process.AuditToken.PID
@@ -104,7 +122,7 @@ func ParseESLine(line []byte) (event.Event, bool) {
 	}
 	// The daemon's own reads (transcript tailing) are not agent activity.
 	if pid == int32(os.Getpid()) {
-		return event.Event{}, false
+		return event.Event{}, esOwn
 	}
 	exe := env.Process.Executable.Path
 
@@ -145,7 +163,7 @@ func ParseESLine(line []byte) (event.Event, bool) {
 		kind = event.KindTCCModify
 		detail = env.Event.TCCModify.Service
 	} else {
-		return event.Event{}, false
+		return event.Event{}, esGarbage
 	}
 
 	return event.Event{
@@ -155,7 +173,7 @@ func ParseESLine(line []byte) (event.Event, bool) {
 		ExePath: exe,
 		Path:    filePath,
 		Detail:  detail,
-	}, true
+	}, esEvent
 }
 
 func (es *ESLogger) Run(ctx context.Context) error {
