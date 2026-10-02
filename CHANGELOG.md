@@ -29,6 +29,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 
 ### Fixed
 - `make app`, `make install` and `make release` stop when a Go binary is stamped with a commit other than HEAD: Go before 1.27 stamps the enclosing checkout's commit when it builds in a git worktree.
+- File telemetry: after the spool rotates, the tailer reads the rest of the rotated file before the new spool from its start; a line still being written waits for its end; the daemon's own file events no longer count as lines that did not parse.
 
 ## [1.2.0] - 2026-09-30
 
