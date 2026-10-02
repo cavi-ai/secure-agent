@@ -42,6 +42,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Doctor and posture: a file telemetry service that launchd restarted after an exit and is running again (`running (last exit 1)`) is not reported as failing; it still fails when its spool stops being written.
 - The routing snippet's token reached no client: `PROXY_AUTHORIZATION` is not read by HTTP clients, and the proxy accepted only an unencoded token. The proxy URL now carries the token as the basic-auth password, which the proxy accepts base64-encoded; the snippet adds `NO_PROXY` for loopback and no longer sets `SSL_CERT_FILE` or `REQUESTS_CA_BUNDLE`.
 - Sessions: a session whose root process now belongs to an infra family other than its own harness (a Claude desktop conversation rooted at the app before the app was infra) ends after an hour of silence instead of staying open until that process exits.
+- Posture and menu bar: uninspected egress alone is a coverage note, not attention. With no decisions and no monitoring gap, posture is `all-clear`, the menu bar icon is purple and the popover shows no hero card; the note stays in the console's coverage list.
 - Egress: endpoints reached outside the proxy by infra apps (`cursor-ide`, `claude-desktop`, `ollama`, `lm-studio`) no longer count in `uninspected_egress`, the egress posture warning or doctor's egress-routing check; they count in `uninspected_infra`, carry `agent_kind: "infra"` on `/egress/uninspected`, are never allowlist suggestions, and the console lists them under Infrastructure apps.
 
 ## [1.2.0] - 2026-09-30

@@ -46,7 +46,7 @@ struct ConsoleView: View {
             if let abandoned = state.abandonedCollectors, !abandoned.isEmpty {
                 collectorBanner(abandoned)
             }
-            hero
+            if showsHero { hero }
             if let pending = state.pendingGuard, state.connected { guardDecisionCard(pending) }
             if !state.agentRoots.isEmpty { sessionCards }
         }
@@ -284,6 +284,14 @@ struct ConsoleView: View {
             return HeroModel(icon: "checkmark.shield.fill", color: .ok, title: "Protected",
                              subtitle: subtitle, flag: top, action: action)
         }
+    }
+
+    /// The hero shows only when there is something to say: paused,
+    /// disconnected, a posture other than all-clear, or a top flag. All clear
+    /// has nothing to look at; the purple status icon says it.
+    var showsHero: Bool {
+        if state.isPaused || !state.connected { return true }
+        return (state.posture?.state ?? fallbackPostureState) != "all-clear" || state.heroFlag != nil
     }
 
     /// Posture state before the first /posture answer arrives.
