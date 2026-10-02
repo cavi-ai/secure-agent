@@ -33,6 +33,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Send selected findings directly to the local agent review queue with daemon-built evidence; local commands still require explicit confirmation.
 
 ### Fixed
+- The app's bundle identifier is `com.cavi-ai.secure-agent` again: the `.ui` identity could not manage the file-telemetry helper registered under `com.cavi-ai.secure-agent`.
 - `make app`, `make install` and `make release` stop when a Go binary is stamped with a commit other than HEAD: Go before 1.27 stamps the enclosing checkout's commit when it builds in a git worktree.
 - Egress episodes keep a connection seen while another store write is in progress; the episode write takes SQLite's write lock at BEGIN instead of failing its read-to-write upgrade.
 - File telemetry: after the spool rotates, the tailer reads the rest of the rotated file before the new spool from its start; a line still being written waits for its end; the daemon's own file events no longer count as lines that did not parse.
