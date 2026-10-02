@@ -35,6 +35,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Worktrees: a removal, prune, reconnect or Move to Trash cancels the background rescan the previous removal started instead of waiting for it; the next report rescans after the action.
 - Pricing: Claude Sonnet 5.5 (`claude-sonnet-5-5`) at $2 / $10 per million input / output tokens. A price added later, built in or in `pricing:`, also prices the Claude and Codex calls already stored without one.
 - Doctor and posture: a file telemetry service that launchd restarted after an exit and is running again (`running (last exit 1)`) is not reported as failing; it still fails when its spool stops being written.
+- Sessions: a session whose root process now belongs to an infra family other than its own harness (a Claude desktop conversation rooted at the app before the app was infra) ends after an hour of silence instead of staying open until that process exits.
 
 ## [1.2.0] - 2026-09-30
 
