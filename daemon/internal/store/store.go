@@ -33,6 +33,9 @@ const (
 	maxAdvisorPlans     = 2000  // one plan per subject
 	maxOperatorLabels   = 5000  // operator judgments kept for recall
 	episodeSettleWindow = 30 * time.Second
+	// episodeSettleMax ends settling for a file feed that is still behind
+	// the capture this long after it.
+	episodeSettleMax = 10 * time.Minute
 )
 
 // pruneMinInterval is the shortest gap between two insert-driven prunes.
@@ -72,6 +75,9 @@ type Store struct {
 	// allowlist returns the operator's approved hosts per agent (nil until
 	// wired); TrendFor reads it for the advisor's host prompt.
 	allowlist func() map[string][]string
+	// fileFeedClock returns the event time of the newest file event the ES
+	// feed has delivered (zero before the first); nil without a spool feed.
+	fileFeedClock atomic.Pointer[func() time.Time]
 }
 
 // SetAllowlistSource wires the operator allowlist (agent -> hosts) that
@@ -80,6 +86,32 @@ func (s *Store) SetAllowlistSource(fn func() map[string][]string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.allowlist = fn
+}
+
+// SetFileFeedClock wires the ES feed's event clock. ES rows are stored with
+// their event time and can arrive minutes after it, so a resource episode
+// keeps re-reading its activity until the feed has reached its capture.
+func (s *Store) SetFileFeedClock(clock func() time.Time) {
+	s.fileFeedClock.Store(&clock)
+}
+
+// episodeSettled reports whether an episode's activity is final: the settle
+// window has passed and the file feed has delivered events from the capture
+// on (or there is no feed, or it is still behind episodeSettleMax later).
+func (s *Store) episodeSettled(captured time.Time) bool {
+	if captured.IsZero() {
+		return false
+	}
+	age := time.Since(captured)
+	if age < episodeSettleWindow {
+		return false
+	}
+	clock := s.fileFeedClock.Load()
+	if clock == nil || age >= episodeSettleMax {
+		return true
+	}
+	newest := (*clock)()
+	return newest.IsZero() || !newest.Before(captured)
 }
 
 // Retention defaults; both overrideable via config (retention.conn_event_hours,
@@ -1801,7 +1833,17 @@ func (s *Store) PutResourceEpisode(episode resource.Episode) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	episode.ActivityStatus = "settling"
-	enriched, enrichErr := s.attachResourceEpisodeActivity(ctx, episode)
+	// The session id only scopes the activity read here (its harness trace
+	// rows carry no pid); the id stored below is looked up again with the
+	// insert, on one side of a rekey.
+	probe := episode
+	probe.SessionID = ""
+	if episode.Session.Kind != "infra" {
+		s.mu.Lock()
+		probe.SessionID = s.sessionIDForRootLocked(episode.Session.RootPID, episode.Session.RootStartedAt)
+		s.mu.Unlock()
+	}
+	enriched, enrichErr := s.attachResourceEpisodeActivity(ctx, probe)
 	episode = enriched
 	// RekeySession holds this same mutex through its transaction. Keep the
 	// exact identity lookup, JSON payload, and insert on one side of a rekey.
@@ -1866,16 +1908,21 @@ func (s *Store) attachResourceEpisodeActivity(ctx context.Context, episode resou
 	processes := make(map[int32]resource.Process, len(episode.Session.Processes))
 	pids := make([]int32, 0, len(episode.Session.Processes))
 	activities := append([]resource.EpisodeActivity(nil), episode.Activities...)
-	activityKeys := make(map[string]struct{}, len(activities))
-	for _, activity := range activities {
-		activityKeys[resourceActivityKey(activity)] = struct{}{}
+	activityKeys := make(map[string]int, len(activities))
+	for i, activity := range activities {
+		activityKeys[resourceActivityKey(activity)] = i
 	}
+	// A record read again replaces its earlier copy only when it carries a
+	// Ref (completed in place); any other repeat is the same fact.
 	appendActivity := func(activity resource.EpisodeActivity) {
 		key := resourceActivityKey(activity)
-		if _, exists := activityKeys[key]; exists {
+		if i, exists := activityKeys[key]; exists {
+			if activity.Ref != "" {
+				activities[i] = activity
+			}
 			return
 		}
-		activityKeys[key] = struct{}{}
+		activityKeys[key] = len(activities)
 		activities = append(activities, activity)
 	}
 	for _, process := range episode.Session.Processes {
@@ -1891,50 +1938,109 @@ func (s *Store) attachResourceEpisodeActivity(ctx context.Context, episode resou
 			})
 		}
 	}
-	if len(pids) == 0 || end.IsZero() {
+	if end.IsZero() || (len(pids) == 0 && episode.SessionID == "") {
 		return resource.AttachEpisodeActivity(episode, activities), nil
 	}
 
-	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(pids)), ",")
-	query := `SELECT kind, ts, pid, exe_path, path, remote_host, remote_port, detail
-		FROM events WHERE pid IN (` + placeholders + `)
-		AND datetime(ts) >= datetime(?) AND datetime(ts) <= datetime(?)
-		ORDER BY datetime(ts) DESC, id DESC`
-	args := make([]any, 0, len(pids)+2)
-	for _, pid := range pids {
-		args = append(args, pid)
+	// Two reads: the family's OS telemetry by pid, and the session's own rows
+	// by id. Tool calls, model calls and turns carry no pid, and a child that
+	// exited before capture is in the session but not in the family list.
+	if len(pids) > 0 {
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(pids)), ",")
+		args := make([]any, 0, len(pids)+2)
+		for _, pid := range pids {
+			args = append(args, pid)
+		}
+		args = append(args, start.UTC().Format(time.RFC3339Nano), end.UTC().Format(time.RFC3339Nano))
+		err := s.scanResourceActivity(ctx, `SELECT `+resourceActivityColumns+`
+			FROM events WHERE pid IN (`+placeholders+`)
+			AND datetime(ts) >= datetime(?) AND datetime(ts) <= datetime(?)
+			ORDER BY datetime(ts) DESC, id DESC`, args, func(e event.Event) {
+			process := processes[e.PID]
+			if e.TS.Before(start) || e.TS.After(end) || (!process.StartedAt.IsZero() && e.TS.Before(process.StartedAt)) {
+				return
+			}
+			appendActivity(resourceActivity(e, process.Name))
+		})
+		if err != nil {
+			return resource.AttachEpisodeActivity(episode, activities), err
+		}
 	}
-	args = append(args, start.UTC().Format(time.RFC3339Nano), end.UTC().Format(time.RFC3339Nano))
+	if episode.SessionID != "" {
+		at := memoryTimestampExpr("ts")
+		err := s.scanResourceActivity(ctx, `SELECT `+resourceActivityColumns+`
+			FROM events WHERE session_id = ? AND strftime('%s', ts) IS NOT NULL
+			AND `+at+` >= ? AND `+at+` <= ?
+			ORDER BY `+at+` DESC, id DESC`,
+			[]any{episode.SessionID, start.UnixNano(), end.UnixNano()}, func(e event.Event) {
+				name := episode.Session.Name
+				if process, ok := processes[e.PID]; ok {
+					name = process.Name
+				}
+				appendActivity(resourceActivity(e, name))
+			})
+		if err != nil {
+			return resource.AttachEpisodeActivity(episode, activities), err
+		}
+	}
+	return resource.AttachEpisodeActivity(episode, activities), nil
+}
+
+const resourceActivityColumns = `kind, ts, pid, COALESCE(exe_path,''), COALESCE(path,''), COALESCE(remote_host,''),
+	COALESCE(remote_port,0), COALESCE(detail,''), COALESCE(tool,''), COALESCE(tool_status,''),
+	COALESCE(duration_ms,0), COALESCE(model,''), COALESCE(tokens_in,0), COALESCE(tokens_out,0), COALESCE(call_id,'')`
+
+// scanResourceActivity runs one activity read and hands each decoded row to
+// visit.
+func (s *Store) scanResourceActivity(ctx context.Context, query string, args []any, visit func(event.Event)) error {
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
-		return resource.AttachEpisodeActivity(episode, activities), fmt.Errorf("query resource episode activity: %w", err)
+		return fmt.Errorf("query resource episode activity: %w", err)
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var e event.Event
 		var kind int
 		var ts string
-		if err := rows.Scan(&kind, &ts, &e.PID, &e.ExePath, &e.Path, &e.RemoteHost, &e.RemotePort, &e.Detail); err != nil {
+		if err := rows.Scan(&kind, &ts, &e.PID, &e.ExePath, &e.Path, &e.RemoteHost, &e.RemotePort, &e.Detail,
+			&e.ToolName, &e.ToolStatus, &e.DurationMs, &e.Model, &e.TokensIn, &e.TokensOut, &e.CallID); err != nil {
 			continue
 		}
 		e.Kind = event.Kind(kind)
-		e.TS, _ = time.Parse(time.RFC3339Nano, ts)
-		process := processes[e.PID]
-		if e.TS.Before(start) || e.TS.After(end) || (!process.StartedAt.IsZero() && e.TS.Before(process.StartedAt)) {
+		if e.TS, err = time.Parse(time.RFC3339Nano, ts); err != nil {
 			continue
 		}
-		appendActivity(resource.EpisodeActivity{
-			At: e.TS, Kind: resourceActivityKind(e.Kind), PID: e.PID, Process: process.Name,
-			Summary: resourceActivitySummary(e),
-		})
+		visit(e)
 	}
 	if err := rows.Err(); err != nil {
-		return resource.AttachEpisodeActivity(episode, activities), fmt.Errorf("read resource episode activity: %w", err)
+		return fmt.Errorf("read resource episode activity: %w", err)
 	}
-	return resource.AttachEpisodeActivity(episode, activities), nil
+	return nil
 }
 
+func resourceActivity(e event.Event, process string) resource.EpisodeActivity {
+	activity := resource.EpisodeActivity{
+		At: e.TS, Kind: resourceActivityKind(e.Kind), PID: e.PID, Process: process,
+		Summary: resourceActivitySummary(e),
+	}
+	if e.Kind == event.KindToolCall {
+		if e.DurationMs > 0 {
+			activity.EndedAt = e.TS.Add(time.Duration(e.DurationMs) * time.Millisecond)
+		}
+		if e.CallID != "" {
+			activity.Ref = "call:" + e.CallID
+		}
+	}
+	return activity
+}
+
+// resourceActivityKey identifies one activity across re-enrichments: a Ref'd
+// record by its ref (its summary and end change when it completes), anything
+// else by its content.
 func resourceActivityKey(activity resource.EpisodeActivity) string {
+	if activity.Ref != "" {
+		return activity.Kind + "|" + activity.Ref
+	}
 	return fmt.Sprintf("%d|%s|%d|%s", activity.At.UnixNano(), activity.Kind, activity.PID, activity.Summary)
 }
 
@@ -1942,8 +2048,12 @@ func resourceActivityKind(kind event.Kind) string {
 	switch kind {
 	case event.KindExec:
 		return "process"
-	case event.KindPluginAction:
+	case event.KindPluginAction, event.KindToolCall:
 		return "tool"
+	case event.KindModelCall:
+		return "model"
+	case event.KindTurn:
+		return "turn"
 	case event.KindFileOpen, event.KindFileWrite, event.KindFileDelete:
 		return "file"
 	case event.KindConnOpen, event.KindConnClose:
@@ -1982,6 +2092,18 @@ func resourceActivitySummary(e event.Event) string {
 		summary = "transcript rule matched: " + e.Detail
 	case event.KindTCCModify:
 		summary = "privacy controls changed"
+	case event.KindToolCall:
+		summary = resourceToolCallSummary(e)
+	case event.KindModelCall:
+		summary = "model call"
+		if e.Model != "" {
+			summary = e.Model + " call"
+		}
+		if e.TokensIn > 0 || e.TokensOut > 0 {
+			summary += fmt.Sprintf(": %d tokens in, %d out", e.TokensIn, e.TokensOut)
+		}
+	case event.KindTurn:
+		summary = "new turn"
 	default:
 		summary = e.Kind.String()
 	}
@@ -1989,6 +2111,29 @@ func resourceActivitySummary(e event.Event) string {
 		summary = e.Kind.String()
 	}
 	return truncateResourceActivity(summary, 160)
+}
+
+// resourceToolCallSummary names the tool and how its call ended; never its
+// input or output.
+func resourceToolCallSummary(e event.Event) string {
+	tool := e.ToolName
+	if tool == "" {
+		tool = "tool"
+	}
+	took := ""
+	if e.DurationMs > 0 {
+		took = " after " + (time.Duration(e.DurationMs) * time.Millisecond).Round(time.Millisecond).String()
+	}
+	switch e.ToolStatus {
+	case "running", "":
+		return tool + " started"
+	case "ok":
+		return tool + " returned" + took
+	case "error":
+		return tool + " failed" + took
+	default: // a trace without result pairing ("unknown")
+		return tool + " called"
+	}
 }
 
 func truncateResourceActivity(value string, limit int) string {
@@ -2055,7 +2200,7 @@ func (s *Store) refreshResourceEpisode(ctx context.Context, id int64, expectedPa
 			return persistedFallback
 		}
 		accumulated = append(accumulated[:0], enriched.Activities...)
-		if !enriched.CapturedAt.IsZero() && time.Since(enriched.CapturedAt) >= episodeSettleWindow {
+		if s.episodeSettled(enriched.CapturedAt) {
 			enriched.ActivityStatus = "complete"
 		}
 		persisted := enriched
@@ -2109,18 +2254,23 @@ func (s *Store) refreshResourceEpisode(ctx context.Context, id int64, expectedPa
 	return persistedFallback
 }
 
+// mergeResourceActivities adds additional to existing; a Ref'd record in
+// additional is the fresher read and replaces its existing copy.
 func mergeResourceActivities(existing, additional []resource.EpisodeActivity) []resource.EpisodeActivity {
 	merged := append([]resource.EpisodeActivity(nil), existing...)
-	seen := make(map[string]struct{}, len(merged))
-	for _, activity := range merged {
-		seen[resourceActivityKey(activity)] = struct{}{}
+	seen := make(map[string]int, len(merged))
+	for i, activity := range merged {
+		seen[resourceActivityKey(activity)] = i
 	}
 	for _, activity := range additional {
 		key := resourceActivityKey(activity)
-		if _, ok := seen[key]; ok {
+		if i, ok := seen[key]; ok {
+			if activity.Ref != "" {
+				merged[i] = activity
+			}
 			continue
 		}
-		seen[key] = struct{}{}
+		seen[key] = len(merged)
 		merged = append(merged, activity)
 	}
 	return merged

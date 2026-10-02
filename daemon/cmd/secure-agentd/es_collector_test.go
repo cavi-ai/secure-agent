@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // chunkReader returns one chunk per Read call, then io.EOF.
@@ -143,5 +144,65 @@ func TestCodesignVerifyRealSignatures(t *testing.T) {
 	}
 	if err := codesignVerify(f); err == nil {
 		t.Fatal("codesign --verify accepted an unsigned file")
+	}
+}
+
+// esRecord is an eslogger exec record (kept by the filter) with its process
+// start_time ahead of the envelope's own time, as eslogger orders them.
+func esRecord(at time.Time) string {
+	return `{"process":{"start_time":"2026-10-01T00:00:00Z","audit_token":{"pid":7}},"time":"` + at.Format(time.RFC3339Nano) + `","event":{"exec":{}}}`
+}
+
+// An eslogger that has fallen behind is stopped, not followed: the pump
+// returns errESBehind at the first sampled record older than esMaxLag.
+func TestPumpToSpoolStopsAnESLoggerThatFellBehind(t *testing.T) {
+	now := time.Date(2026, 10, 2, 21, 43, 0, 0, time.UTC)
+	esNow = func() time.Time { return now }
+	t.Cleanup(func() { esNow = time.Now })
+
+	path := filepath.Join(t.TempDir(), "spool.jsonl")
+	fresh := &chunkReader{chunks: []string{esRecord(now.Add(-esMaxLag)) + "\n" + esRecord(now) + "\n"}}
+	if err := pumpToSpoolAt(fresh, path); err != nil {
+		t.Fatalf("records within esMaxLag: %v", err)
+	}
+	behind := &chunkReader{chunks: []string{esRecord(now.Add(-2*time.Hour-13*time.Minute)) + "\n" + esRecord(now) + "\n"}}
+	err := pumpToSpoolAt(behind, path)
+	if !errors.Is(err, errESBehind) || !strings.Contains(err.Error(), "2h13m0s ago") || !strings.Contains(err.Error(), "19:30:00Z") {
+		t.Fatalf("records 2h13m behind: err = %v, want errESBehind naming the lag", err)
+	}
+	got, _ := os.ReadFile(path)
+	if n := strings.Count(string(got), "\n"); n != 2 {
+		t.Fatalf("spool has %d records, want only the two fresh ones", n)
+	}
+}
+
+func TestESLineTimeReadsTheEnvelopeTime(t *testing.T) {
+	at := time.Date(2026, 10, 2, 19, 30, 41, 256436034, time.UTC)
+	if got, ok := esLineTime([]byte(esRecord(at))); !ok || !got.Equal(at) {
+		t.Fatalf("esLineTime = %s, %v; want %s", got, ok, at)
+	}
+	for _, line := range []string{`{"a":1}`, `{"time":"not a time"}`, `{"time":"2026-10-02T19:30:41Z`} {
+		if _, ok := esLineTime([]byte(line)); ok {
+			t.Fatalf("esLineTime(%q) ok, want false", line)
+		}
+	}
+}
+
+// One timestamp read per esLagCheckInterval: an old record between checks
+// is not sampled.
+func TestCheckESLagSamplesOncePerInterval(t *testing.T) {
+	now := time.Date(2026, 10, 2, 21, 43, 0, 0, time.UTC)
+	esNow = func() time.Time { return now }
+	t.Cleanup(func() { esNow = time.Now })
+	var next time.Time
+	if err := checkESLag([]byte(esRecord(now)), &next); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkESLag([]byte(esRecord(now.Add(-time.Hour))), &next); err != nil {
+		t.Fatalf("checked again inside the interval: %v", err)
+	}
+	now = now.Add(esLagCheckInterval)
+	if err := checkESLag([]byte(esRecord(now.Add(-time.Hour))), &next); !errors.Is(err, errESBehind) {
+		t.Fatalf("after the interval: err = %v, want errESBehind", err)
 	}
 }

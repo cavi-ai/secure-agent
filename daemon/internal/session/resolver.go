@@ -229,9 +229,26 @@ func (r *Resolver) Resolve(e *event.Event) string {
 		e.SessionID = id
 		return id
 	}
-	info, ok := r.tagger.Tag(e.PID)
+	pid := e.PID
+	info, ok := r.tagger.Tag(pid)
 	if !ok {
-		return ""
+		// A short-lived child (git, a shell) has often exited before its ES
+		// event is resolved, so the process table no longer holds it. ES
+		// recorded its parent at event time: the event is the parent's
+		// family's. The child's pid is not cached; it is gone and its number
+		// will be reused.
+		if e.PPID <= 1 || e.PPID == e.PID {
+			return ""
+		}
+		pid = e.PPID
+		if id, ok := r.byPID[pid]; ok {
+			r.touchLocked(id, e.TS)
+			e.SessionID = id
+			return id
+		}
+		if info, ok = r.tagger.Tag(pid); !ok {
+			return ""
+		}
 	}
 	root := info.RootPID
 	if root == 0 {
@@ -303,7 +320,7 @@ func (r *Resolver) Resolve(e *event.Event) string {
 			r.byScope[scopeKey(sess.Harness, sess.Workspace)] = id
 		}
 	}
-	r.byPID[e.PID] = id
+	r.byPID[pid] = id
 	r.touchLocked(id, e.TS)
 	e.SessionID = id
 	return id

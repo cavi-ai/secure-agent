@@ -42,6 +42,11 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Doctor and posture: a file telemetry service that launchd restarted after an exit and is running again (`running (last exit 1)`) is not reported as failing; it still fails when its spool stops being written.
 - The routing snippet's token reached no client: `PROXY_AUTHORIZATION` is not read by HTTP clients, and the proxy accepted only an unencoded token. The proxy URL now carries the token as the basic-auth password, which the proxy accepts base64-encoded; the snippet adds `NO_PROXY` for loopback and no longer sets `SSL_CERT_FILE` or `REQUESTS_CA_BUNDLE`.
 - Sessions: a session whose root process now belongs to an infra family other than its own harness (a Claude desktop conversation rooted at the app before the app was infra) ends after an hour of silence instead of staying open until that process exits.
+- Resource episodes read the session's own tool calls, model calls and turns (stored without a pid) as well as the process family's events; a tool call matches a memory rise it overlaps, not only one it started in; the headline names a tool or model call ahead of a connection and counts the rest; the activities the rise matched are kept when the list is bounded.
+- Resource episodes stay `settling` until the file feed has delivered events from their capture (at most ten minutes): file rows are stored with their event time and can arrive late.
+- The root ES collector restarts eslogger when its newest event is more than 60 s old, dropping the backlog eslogger held in memory; under a flood of opens it had fallen hours behind and never caught up.
+- Posture and doctor report file monitoring as running late when file events reach the daemon two minutes or more after they happened; `es_service` gains `newest_event_at` and `lag_seconds`.
+- An ES event from a process that exited before it was resolved joins the session of the parent Endpoint Security recorded, instead of going unattributed (file events from unattributed processes are not stored).
 
 ## [1.2.0] - 2026-09-30
 

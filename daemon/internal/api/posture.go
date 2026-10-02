@@ -270,10 +270,12 @@ func silentCollectorItems(st Status) []PostureItem {
 // is best-effort: launchctl errors are already folded into the state string.
 // A flooding writer supersedes every other eslogger item: the tailer and the
 // root service can both read healthy while the writer drowns them in
-// garbage, and that is the failure the operator needs to see first. A
-// sustained burst of otherwise-valid lines the tailer cannot keep up with
-// (esServiceBehind) is a lesser, second-priority item: the writer is fine,
-// the reader is behind.
+// garbage, and that is the failure the operator needs to see first. Events
+// arriving long after they happened (esServiceLagging) come next: the spool
+// is written and the tailer keeps up, yet every file flag and resource
+// episode sees the activity that late. A sustained burst of otherwise-valid
+// lines the tailer cannot keep up with (esServiceBehind) is a lesser item:
+// the writer is fine, the reader is behind.
 func esServiceItems(s collect.ESServiceSnapshot) []PostureItem {
 	if esServiceFlooding(s) {
 		return []PostureItem{{
@@ -281,6 +283,14 @@ func esServiceItems(s collect.ESServiceSnapshot) []PostureItem {
 			Title:    "File monitoring writer is flooding",
 			Severity: 2,
 			Detail:   esFloodingDetail(s),
+		}}
+	}
+	if esServiceLagging(s) {
+		return []PostureItem{{
+			Kind: "collector_silent", ID: "eslogger",
+			Title:    "File monitoring is running late",
+			Severity: 2,
+			Detail:   esLaggingDetail(s),
 		}}
 	}
 	if esServiceBehind(s) {
@@ -366,6 +376,27 @@ func esServiceFlooding(s collect.ESServiceSnapshot) bool {
 func esFloodingDetail(s collect.ESServiceSnapshot) string {
 	return fmt.Sprintf("%.0f%% of lines in the last drain did not parse — the writer is producing garbage",
 		s.UnparsedShare*100)
+}
+
+// esLagWindow: file events delivered later than this after they happened
+// are too late for a flag or a resource episode to use. The root collector
+// restarts eslogger past 60 s, so a lag this long means it has not.
+const esLagWindow = 2 * time.Minute
+
+// esServiceLagging reports file events reaching the daemon esLagWindow or
+// more after they happened, while the writer is still writing.
+func esServiceLagging(s collect.ESServiceSnapshot) bool {
+	if s.SpoolMtime.IsZero() || time.Since(s.SpoolMtime) > esFloodFreshWindow || s.NewestEventAt == nil {
+		return false
+	}
+	return time.Duration(s.LagSeconds)*time.Second >= esLagWindow
+}
+
+// esLaggingDetail is the shared wording for the late-delivery failure:
+// posture and doctor report the same facts.
+func esLaggingDetail(s collect.ESServiceSnapshot) string {
+	return fmt.Sprintf("the newest file event delivered happened at %s, %s before it arrived — file flags and resource episodes see file activity that late",
+		s.NewestEventAt.Local().Format("15:04:05"), time.Duration(s.LagSeconds)*time.Second)
 }
 
 // esBehindWindow: a skip shorter than this is normal load on a healthy

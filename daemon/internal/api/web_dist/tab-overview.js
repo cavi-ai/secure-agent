@@ -44,7 +44,7 @@ function resourceActivityMarkers(activities, samples, width, height) {
 }
 
 function resourceActivityLabel(kind) {
-  const labels = { 'process-start': 'START', process: 'PROCESS', tool: 'TOOL', file: 'FILE', network: 'NETWORK', guard: 'GUARD', security: 'SECURITY' };
+  const labels = { 'process-start': 'START', process: 'PROCESS', tool: 'TOOL', model: 'MODEL', turn: 'TURN', file: 'FILE', network: 'NETWORK', guard: 'GUARD', security: 'SECURITY' };
   return labels[kind] || 'ACTIVITY';
 }
 

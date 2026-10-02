@@ -325,7 +325,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 		}
 	}()
 
-	startCollectors(ctx, sup, supReg, cfg, b, tagger, resolver, advisorStk, proxyServer, fw.Engine, hermes)
+	startCollectors(ctx, sup, supReg, cfg, b, st, tagger, resolver, advisorStk, proxyServer, fw.Engine, hermes)
 
 	log.Printf("secure-agentd running on unix socket %s", cfg.SocketPath)
 	return c, nil
@@ -799,7 +799,7 @@ func makeResourceExecutor(apiServer *api.API, tagger *agents.Tagger, st *store.S
 //  1. Spool tail from the root ES LaunchDaemon (sanctioned path).
 //  2. Direct eslogger child (root dev runs only).
 //  3. Neither: degraded, not crash-looped; the transcript scanner remains.
-func startCollectors(ctx context.Context, sup *supervise.Supervisor, supReg *supervise.Registry, cfg config.Config, b *bus.Bus, tagger *agents.Tagger, resolver *session.Resolver, advisorStk *advisorStackHolder, proxyServer *proxy.ProxyServer, fwEngine *firewall.Engine, hermes *collect.HermesCollector) {
+func startCollectors(ctx context.Context, sup *supervise.Supervisor, supReg *supervise.Registry, cfg config.Config, b *bus.Bus, st *store.Store, tagger *agents.Tagger, resolver *session.Resolver, advisorStk *advisorStackHolder, proxyServer *proxy.ProxyServer, fwEngine *firewall.Engine, hermes *collect.HermesCollector) {
 	if proxyServer != nil {
 		go sup.Run(ctx, "proxyserver", func(c context.Context) error {
 			return proxyServer.Serve(c)
@@ -810,6 +810,7 @@ func startCollectors(ctx context.Context, sup *supervise.Supervisor, supReg *sup
 	case collect.SpoolAvailable():
 		tailer := collect.NewSpoolTailer(b)
 		collect.ESServiceProbe = spoolServiceProbe(tailer)
+		st.SetFileFeedClock(func() time.Time { return tailer.Stats().NewestEvent })
 		go sup.Run(ctx, "eslogger", func(c context.Context) error {
 			tailer.OnProduce = func() { supReg.MarkProduced("eslogger") }
 			return tailer.Run(c)
@@ -984,6 +985,10 @@ func spoolServiceProbe(t *collect.SpoolTailer) func() (collect.ESServiceSnapshot
 		}
 		snap.UnparsedShare = unparsedShare(stats)
 		snap.BytesSkipped = stats.BytesSkipped
+		if newest := stats.NewestEvent; !newest.IsZero() {
+			snap.NewestEventAt = &newest
+		}
+		snap.LagSeconds = int64(stats.Lag / time.Second)
 		return snap, nil
 	}
 }

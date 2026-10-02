@@ -38,7 +38,23 @@ const (
 	// permission yet). Internal retry keeps the service state "running"
 	// instead of crash-looping through launchd on every denied attempt.
 	esRetryInterval = 60 * time.Second
+	// esMaxLag is how far eslogger's newest event may trail the clock before
+	// the collector restarts it. eslogger holds every event it has not yet
+	// written in its own memory: under a flood of opens it falls behind, the
+	// queue grows by gigabytes, memory pressure slows it further, and it
+	// never catches up. Restarting drops that queue; its events are already
+	// too late for a flag or a resource episode.
+	esMaxLag = 60 * time.Second
+	// esLagCheckInterval spaces the lag checks: one timestamp read per
+	// interval, not per line.
+	esLagCheckInterval = time.Second
 )
+
+// errESBehind marks an eslogger the collector stopped for falling behind.
+var errESBehind = errors.New("eslogger fell behind")
+
+// esNow is the collector's clock; tests replace it.
+var esNow = time.Now
 
 // errESPermanent marks failures that cannot clear on their own (wrong user,
 // integrity refusal, eslogger missing): the process must exit 0 so launchd
@@ -129,6 +145,10 @@ func runESCollector() error {
 		if err == nil {
 			return nil
 		}
+		if errors.Is(err, errESBehind) {
+			log.Printf("es-collector: %v — restarting eslogger and dropping the events it still held", err)
+			continue
+		}
 		if !isESPermissionFailure(err) {
 			return err
 		}
@@ -163,6 +183,9 @@ func runESLoggerOnce(ctx context.Context) error {
 	writeErr := pumpToSpool(stdout)
 	_ = cmd.Process.Kill()
 	waitErr := cmd.Wait()
+	if errors.Is(writeErr, errESBehind) {
+		return writeErr
+	}
 	if writeErr != nil {
 		return fmt.Errorf("spool write: %w", writeErr)
 	}
@@ -248,7 +271,8 @@ func pumpToSpool(stdout interface{ Read([]byte) (int, error) }) error {
 
 // pumpToSpoolAt copies newline-delimited records from stdout to the spool
 // at path, skipping empty lines and the lines keepESLine drops; the drop
-// count goes to the log once a minute.
+// count goes to the log once a minute. It returns errESBehind once a record
+// trails the clock by more than esMaxLag.
 func pumpToSpoolAt(stdout interface{ Read([]byte) (int, error) }, path string) error {
 	w := &spoolWriter{path: path}
 	// Open WITHOUT rotating: the spool may hold events the tailer has not
@@ -261,6 +285,7 @@ func pumpToSpoolAt(stdout interface{ Read([]byte) (int, error) }, path string) e
 	buf := make([]byte, 0, 256*1024)
 	tmp := make([]byte, 64*1024)
 	var stats esFilterStats
+	var nextLagCheck time.Time
 	for {
 		n, err := stdout.Read(tmp)
 		if n > 0 {
@@ -276,6 +301,9 @@ func pumpToSpoolAt(stdout interface{ Read([]byte) (int, error) }, path string) e
 				// line aliases buf, so it is written before buf is compacted.
 				line := buf[:nl]
 				if len(bytes.TrimSpace(line)) > 0 { // empty lines are skipped
+					if err := checkESLag(line, &nextLagCheck); err != nil {
+						return err
+					}
 					if keepESLine(line) {
 						if err := w.writeLine(line); err != nil {
 							return fmt.Errorf("spool write: %w", err)
@@ -298,6 +326,44 @@ func pumpToSpoolAt(stdout interface{ Read([]byte) (int, error) }, path string) e
 			return fmt.Errorf("eslogger read: %w", err)
 		}
 	}
+}
+
+// checkESLag samples line once per esLagCheckInterval and returns
+// errESBehind when its event happened more than esMaxLag ago.
+func checkESLag(line []byte, next *time.Time) error {
+	now := esNow()
+	if now.Before(*next) {
+		return nil
+	}
+	*next = now.Add(esLagCheckInterval)
+	at, ok := esLineTime(line)
+	if !ok {
+		return nil
+	}
+	if lag := now.Sub(at); lag > esMaxLag {
+		return fmt.Errorf("%w: its newest event happened at %s, %s ago", errESBehind, at.UTC().Format(time.RFC3339), lag.Round(time.Second))
+	}
+	return nil
+}
+
+var esTimeMarker = []byte(`"time":"`)
+
+// esLineTime reads an eslogger record's event time without decoding it. The
+// envelope's "time" key occurs once, after the process object (whose own
+// times are keyed start_time); a quote inside a string value is escaped, so
+// the marker cannot match inside one.
+func esLineTime(line []byte) (time.Time, bool) {
+	i := bytes.Index(line, esTimeMarker)
+	if i < 0 {
+		return time.Time{}, false
+	}
+	rest := line[i+len(esTimeMarker):]
+	j := bytes.IndexByte(rest, '"')
+	if j < 0 {
+		return time.Time{}, false
+	}
+	at, err := time.Parse(time.RFC3339Nano, string(rest[:j]))
+	return at, err == nil
 }
 
 func indexOfByte(b []byte, c byte) int {

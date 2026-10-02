@@ -383,6 +383,23 @@ func TestESServiceItemsFlooding(t *testing.T) {
 	}
 }
 
+// File events stored with their event time but delivered hours later read as
+// a late monitor, not a healthy one; a stale spool's last lag does not.
+func TestESServiceItemsLagging(t *testing.T) {
+	late := esServiceItems(collect.ESServiceSnapshot{State: "running", SpoolMtime: time.Now(), NewestEventAt: timeAt(time.Now().Add(-2 * time.Hour)), LagSeconds: 7200})
+	if len(late) != 1 || late[0].Title != "File monitoring is running late" || late[0].Severity != 2 || !strings.Contains(late[0].Detail, "2h0m0s before it arrived") {
+		t.Fatalf("lag 2h: items = %+v, want one running-late item", late)
+	}
+	onTime := esServiceItems(collect.ESServiceSnapshot{State: "running", SpoolMtime: time.Now(), NewestEventAt: timeAt(time.Now()), LagSeconds: 119})
+	if len(onTime) != 0 {
+		t.Fatalf("lag 119s: items = %+v, want none", onTime)
+	}
+	idle := esServiceItems(collect.ESServiceSnapshot{State: "running", SpoolMtime: time.Now().Add(-10 * time.Minute), NewestEventAt: timeAt(time.Now().Add(-2 * time.Hour)), LagSeconds: 7200})
+	if len(idle) != 0 {
+		t.Fatalf("spool idle 10 min: items = %+v, want none", idle)
+	}
+}
+
 // Garbage left in a spool nobody writes is not a flood: once the writer
 // stops, the verdict yields to the service's real state.
 func TestESServiceItemsStaleFloodYieldsToServiceState(t *testing.T) {

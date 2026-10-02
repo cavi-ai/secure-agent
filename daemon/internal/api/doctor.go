@@ -223,6 +223,8 @@ func checkFileTelemetry(f doctorFacts) (string, string) {
 	switch {
 	case esServiceFlooding(*es):
 		return doctorFail, esFloodingDetail(*es)
+	case esServiceLagging(*es):
+		return doctorFail, esLaggingDetail(*es)
 	case esServiceBehind(*es):
 		// No warning level exists (doctorPass/doctorFail/doctorSkip only):
 		// a sustained burst still fails the check, but with the behind
