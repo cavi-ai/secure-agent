@@ -44,8 +44,9 @@ type EpisodeActivity struct {
 	Process string    `json:"process,omitempty"`
 	Summary string    `json:"summary"`
 	// Ref names a stored record that is completed in place after capture (a
-	// tool call's start row gains its status and duration), so re-enrichment
-	// replaces the earlier copy instead of keeping both.
+	// tool call's start row gains its status and duration, a model call its
+	// final token counts), so re-enrichment replaces the earlier copy instead
+	// of keeping both.
 	Ref string `json:"ref,omitempty"`
 }
 

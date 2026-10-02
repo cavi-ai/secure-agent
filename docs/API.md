@@ -190,7 +190,8 @@ converts the survivors into short references such as process starts, tool
 names and outcomes, model call token counts, file basenames, and network
 destinations; payloads and secret values are never copied. A tool call that
 returned carries `ended_at` (one still running at capture ends at the
-capture) and a `ref` that a later read replaces in place.
+capture); tool and model calls carry a `ref`, so a later read replaces the
+earlier copy once the stored row is completed or its counts rise.
 At most 80 references are retained: those the growth interval matched, then
 the newest. `correlations` identifies the largest positive sample-to-sample RSS
 change and any recorded activity overlapping that interval, naming a tool or

@@ -2101,9 +2101,11 @@ func resourceActivity(e event.Event, process string, captured time.Time) resourc
 		case e.ToolStatus == "running" && captured.After(e.TS):
 			activity.EndedAt = captured
 		}
-		if e.CallID != "" {
-			activity.Ref = "call:" + e.CallID
-		}
+	}
+	// Both rows are updated in place under their call id: a tool call gains
+	// its status and duration, a model call its final token counts.
+	if e.CallID != "" && (e.Kind == event.KindToolCall || e.Kind == event.KindModelCall) {
+		activity.Ref = "call:" + e.CallID
 	}
 	return activity
 }

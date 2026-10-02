@@ -365,7 +365,7 @@ func TestResourceEpisodeJoinsSessionTraceRows(t *testing.T) {
 	rootStart := now.Add(-time.Hour)
 	st.UpsertSession(model.Session{ID: "s1", Harness: "claude", RootPID: 100, RootStartedAt: rootStart.Format(time.RFC3339Nano), StartedAt: rootStart, LastSeenAt: now})
 	st.PutEvent(event.Event{Kind: event.KindToolCall, TS: now.Add(-4 * time.Second), SessionID: "s1", ToolName: "Bash", ToolStatus: "running", CallID: "toolu_1"})
-	st.PutEvent(event.Event{Kind: event.KindModelCall, TS: now.Add(-3 * time.Second), SessionID: "s1", Model: "claude-opus-5-5", TokensIn: 593, TokensOut: 557})
+	st.PutEvent(event.Event{Kind: event.KindModelCall, TS: now.Add(-3 * time.Second), SessionID: "s1", Model: "claude-opus-5-5", TokensIn: 593, TokensOut: 557, CallID: "msg_1"})
 	st.PutEvent(event.Event{Kind: event.KindToolCall, TS: now.Add(-3 * time.Second), SessionID: "other", ToolName: "Read", ToolStatus: "ok", CallID: "toolu_2"})
 	st.PutEvent(event.Event{Kind: event.KindModelCall, TS: now.Add(-40 * time.Second), SessionID: "s1", Model: "before-the-window"})
 	st.PutEvent(event.Event{Kind: event.KindToolCall, TS: now.Add(-20 * time.Second), SessionID: "s1", ToolName: "Read", ToolStatus: "running", CallID: "toolu_3"})
@@ -402,6 +402,7 @@ func TestResourceEpisodeJoinsSessionTraceRows(t *testing.T) {
 	}
 
 	st.PutEvent(event.Event{Kind: event.KindToolCall, TS: now.Add(-4 * time.Second), SessionID: "s1", ToolName: "Bash", ToolStatus: "ok", DurationMs: 2500, CallID: "toolu_1"})
+	st.PutEvent(event.Event{Kind: event.KindModelCall, TS: now.Add(-3 * time.Second), SessionID: "s1", Model: "claude-opus-5-5", TokensIn: 593, TokensOut: 1819, CallID: "msg_1"})
 	got = st.RecentResourceEpisodes(1)[0]
 	var tools []resource.EpisodeActivity
 	for _, activity := range got.Activities {
@@ -411,6 +412,15 @@ func TestResourceEpisodeJoinsSessionTraceRows(t *testing.T) {
 	}
 	if len(tools) != 2 || tools[1].Summary != "Bash returned after 2.5s" || !tools[1].EndedAt.Equal(now.Add(-1500*time.Millisecond)) {
 		t.Fatalf("completed tool call=%+v want one Bash row, returned, with its end", tools)
+	}
+	var models []string
+	for _, activity := range got.Activities {
+		if activity.Kind == "model" {
+			models = append(models, activity.Summary)
+		}
+	}
+	if len(models) != 1 || models[0] != "claude-opus-5-5 call: 593 tokens in, 1819 out" {
+		t.Fatalf("model call raised in place=%v want one row with its final counts", models)
 	}
 }
 
