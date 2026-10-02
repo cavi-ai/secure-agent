@@ -330,3 +330,63 @@ func TestCostReportProviderResolverMayReenterStore(t *testing.T) {
 		t.Fatal("CostReport did not return within 5s: resolver ran under the store mutex")
 	}
 }
+
+// A price added after calls were written prices those calls: Claude and Codex
+// calls with no cost and a model the table now knows. Other harnesses keep the
+// cost their collector wrote, and a model still without a price stays at 0.
+func TestRepriceZeroCostCalls(t *testing.T) {
+	s, err := Open("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	now := time.Now().UTC()
+	for _, sess := range []model.Session{
+		{ID: "c", Harness: "claude", Confidence: model.ConfTranscript, StartedAt: now, LastSeenAt: now},
+		{ID: "x", Harness: "codex", Confidence: model.ConfTranscript, StartedAt: now, LastSeenAt: now},
+		{ID: "o", Harness: "openclaw", Confidence: model.ConfTranscript, StartedAt: now, LastSeenAt: now},
+	} {
+		s.UpsertSession(sess)
+	}
+	call := func(sid, mdl string, cost float64, at time.Duration) {
+		s.PutEvent(event.Event{Kind: event.KindModelCall, SessionID: sid, Model: mdl, TokensIn: 1_000_000, TokensOut: 1_000_000, CostUSD: cost, TS: now.Add(at)})
+	}
+	call("c", "claude-new", 0, 0)
+	call("x", "gpt-new", 0, time.Second)
+	call("o", "claude-new", 0, 2*time.Second)
+	call("c", "claude-unknown", 0, 3*time.Second)
+	call("c", "claude-old", 7, 4*time.Second)
+	price := func(m string, in, out int64) float64 {
+		switch m {
+		case "claude-new", "gpt-new", "claude-old":
+			return float64(in)*2/1e6 + float64(out)*10/1e6
+		}
+		return 0
+	}
+	if n := s.RepriceZeroCostCalls(price); n != 2 {
+		t.Fatalf("priced %d calls, want 2 (claude-new on claude, gpt-new on codex)", n)
+	}
+	got := map[string]float64{}
+	rows, err := s.db.Query(`SELECT session_id || '/' || model, COALESCE(cost_usd, 0) FROM events WHERE kind = ?`, int(event.KindModelCall))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var k string
+		var c float64
+		if err := rows.Scan(&k, &c); err != nil {
+			t.Fatal(err)
+		}
+		got[k] = c
+	}
+	want := map[string]float64{"c/claude-new": 12, "x/gpt-new": 12, "o/claude-new": 0, "c/claude-unknown": 0, "c/claude-old": 7}
+	for k, w := range want {
+		if got[k] != w {
+			t.Errorf("%s cost = %v, want %v", k, got[k], w)
+		}
+	}
+	if n := s.RepriceZeroCostCalls(price); n != 0 {
+		t.Fatalf("second pass priced %d, want 0", n)
+	}
+}
