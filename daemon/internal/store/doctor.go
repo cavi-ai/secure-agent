@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
-	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 )
 
 // Read-only stats behind GET /doctor. Each answers one coverage question
@@ -148,14 +147,16 @@ func (s *Store) HookEventsSince(since time.Time) int {
 		int(event.KindPluginAction), sinceArg(since))
 }
 
-// TraceRowsByHarness counts trace rows (tool calls, turns, model calls) at or
-// after since, keyed by their session's harness. Rows without a named session
+// TraceRowsWrittenByHarness counts trace rows (tool calls, turns, model
+// calls) written since the store opened, keyed by their session's harness. A
+// row's own timestamp does not matter: a transcript read for the first time
+// writes rows from before the daemon started. Rows without a named session
 // are not counted.
-func (s *Store) TraceRowsByHarness(since time.Time) map[string]int {
+func (s *Store) TraceRowsWrittenByHarness() map[string]int {
 	return s.doctorCountByKey(`SELECT s.harness, COUNT(*) FROM events e JOIN sessions s ON s.id = e.session_id
-		WHERE e.kind IN (?, ?, ?) AND datetime(e.ts) >= datetime(?) AND COALESCE(s.harness,'') != ''
+		WHERE e.kind IN (?, ?, ?) AND e.id > ? AND COALESCE(s.harness,'') != ''
 		GROUP BY s.harness`,
-		int(event.KindToolCall), int(event.KindTurn), int(event.KindModelCall), sinceArg(since))
+		int(event.KindToolCall), int(event.KindTurn), int(event.KindModelCall), s.openID)
 }
 
 // SessionsByHarness counts named sessions started at or after since, keyed by
@@ -164,20 +165,6 @@ func (s *Store) SessionsByHarness(since time.Time) map[string]int {
 	return s.doctorCountByKey(`SELECT harness, COUNT(*) FROM sessions
 		WHERE COALESCE(harness,'') != '' AND datetime(started_at) >= datetime(?)
 		GROUP BY harness`, sinceArg(since))
-}
-
-// SessionsSeenByHarness counts named sessions seen at or after since at
-// transcript or hook confidence, keyed by harness — whatever their start, so
-// a conversation that began before since and is active now counts. An ended
-// session counts only with an event since then: ending a session moves its
-// last_seen_at to the end time, and a harness closing old conversations is no
-// activity.
-func (s *Store) SessionsSeenByHarness(since time.Time) map[string]int {
-	at := sinceArg(since)
-	return s.doctorCountByKey(`SELECT harness, COUNT(*) FROM sessions
-		WHERE COALESCE(harness,'') != '' AND confidence IN (?, ?) AND datetime(last_seen_at) >= datetime(?)
-		AND (status != ? OR EXISTS (SELECT 1 FROM events e WHERE e.session_id = sessions.id AND datetime(e.ts) >= datetime(?)))
-		GROUP BY harness`, model.ConfTranscript, model.ConfHook, at, model.SessionEnded, at)
 }
 
 // RetentionReport lists every event kind present with its row and record

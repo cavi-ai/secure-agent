@@ -74,7 +74,7 @@ type doctorFacts struct {
 	repoQueryError                             bool
 	sessionsLastHour                           int
 	sessionsByHarness, traceByHarness          map[string]int
-	seenByHarness                              map[string]int // transcript/hook sessions seen since boot
+	seenByHarness                              map[string]int // sessions with a transcript line read or a hook event since boot
 
 	dupePairs, idless int
 
@@ -179,8 +179,10 @@ func (a *API) doctorFacts(now time.Time) doctorFacts {
 	}
 	f.sessionsLastHour = a.store.SessionsCreatedSince(now.Add(-time.Hour))
 	f.sessionsByHarness = a.store.SessionsByHarness(f.boot)
-	f.seenByHarness = a.store.SessionsSeenByHarness(f.boot)
-	f.traceByHarness = a.store.TraceRowsByHarness(f.boot)
+	if a.sightings != nil {
+		f.seenByHarness = a.sightings(f.boot)
+	}
+	f.traceByHarness = a.store.TraceRowsWrittenByHarness()
 	f.dupePairs, f.idless = a.store.ToolCallStats(f.boot)
 	f.claudePriced, f.claudeUnpriced, f.allUnpriced, f.allCalls = a.store.PricingStats()
 	f.retention = a.store.RetentionReport()
@@ -299,9 +301,10 @@ func checkHermes(f doctorFacts) (string, string) {
 	return doctorPass, strings.Join(dbs, ", ") + " · polled " + h.LastPoll.UTC().Format(time.RFC3339)
 }
 
-// checkTraceCoverage counts the sessions SEEN since boot at transcript or hook
-// confidence per harness (a conversation that started before boot and is
-// active now counts) and fails for a harness with none of its trace rows.
+// checkTraceCoverage fails for a harness whose sessions had a transcript line
+// read or a hook event since boot (a conversation that started before boot
+// counts) while none of its trace rows were written since boot. A session
+// whose process only stayed alive is idle, not seen.
 func checkTraceCoverage(f doctorFacts) (string, string) {
 	if f.grace {
 		return doctorSkip, doctorGraceDetail
