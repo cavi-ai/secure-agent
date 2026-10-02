@@ -32,6 +32,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Egress episodes keep a connection seen while another store write is in progress; the episode write takes SQLite's write lock at BEGIN instead of failing its read-to-write upgrade.
 - File telemetry: after the spool rotates, the tailer reads the rest of the rotated file before the new spool from its start; a line still being written waits for its end; the daemon's own file events no longer count as lines that did not parse.
 - Doctor trace coverage counts a session as seen only when one of its transcript lines was read or a hook fired since boot, and counts trace rows written since boot: a conversation whose process stays alive with no new turns, or a transcript read for the first time, no longer reads as a blind collector.
+- Worktrees: a removal, prune, reconnect or Move to Trash cancels the background rescan the previous removal started instead of waiting for it; the next report rescans after the action.
 
 ## [1.2.0] - 2026-09-30
 

@@ -29,8 +29,7 @@ func (h *Hunter) TrashReviewed(ctx context.Context, path, head string, reasons [
 	if !filepath.IsAbs(path) || head == "" || len(reasons) == 0 {
 		return TrashedOrphan{}, errors.New("absolute path, reviewed head and reasons are required")
 	}
-	h.scanMu.Lock()
-	defer h.scanMu.Unlock()
+	defer h.lockForAction(nil)()
 	ctx = context.WithoutCancel(ctx)
 	rs, l, err := h.locate(ctx, path)
 	if err != nil {

@@ -56,11 +56,7 @@ func (h *Hunter) Remove(ctx context.Context, path string) (Worktree, error) {
 }
 
 func (h *Hunter) remove(ctx context.Context, path string, p removalProgress) (Worktree, error) {
-	if !h.scanMu.TryLock() {
-		p.phase(PhaseWaiting)
-		h.scanMu.Lock()
-	}
-	defer h.scanMu.Unlock()
+	defer h.lockForAction(func() { p.phase(PhaseWaiting) })()
 
 	p.phase(PhaseChecking)
 	rs, l, err := h.locate(ctx, path)
@@ -154,8 +150,7 @@ func (h *Hunter) Prune(ctx context.Context, repo string) ([]string, error) {
 	if !filepath.IsAbs(repo) {
 		return nil, errors.New("path must be absolute")
 	}
-	h.scanMu.Lock()
-	defer h.scanMu.Unlock()
+	defer h.lockForAction(nil)()
 
 	ref, _, ok := resolveRepo(repo)
 	if !ok {
