@@ -390,3 +390,34 @@ func TestRepriceZeroCostCalls(t *testing.T) {
 		t.Fatalf("second pass priced %d, want 0", n)
 	}
 }
+
+// Claude Code writes one transcript record per content block of an API call,
+// each repeating the message id and usage. Keyed by the message id, the
+// records are one model call: the report counts its tokens and cost once.
+func TestCostReportCountsOneCallPerMessageID(t *testing.T) {
+	s, err := Open("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+	now := time.Now().UTC()
+	s.UpsertSession(model.Session{ID: "s1", Harness: "claude", StartedAt: now, LastSeenAt: now, Status: model.SessionActive})
+	first := now.Add(-time.Minute)
+	for _, ms := range []int{0, 11, 13} { // thinking, text, tool_use records
+		s.PutEvent(event.Event{
+			Kind: event.KindModelCall, TS: first.Add(time.Duration(ms) * time.Millisecond), SessionID: "s1",
+			Model: "claude-opus-4-5", Provider: "anthropic", TokensIn: 1000, TokensOut: 1819, CostUSD: 0.047692,
+			CallID: "msg_011CfeBErVrQAEqLwcEDk6CU",
+		})
+	}
+	s.PutEvent(event.Event{
+		Kind: event.KindModelCall, TS: first.Add(30 * time.Second), SessionID: "s1",
+		Model: "claude-opus-4-5", Provider: "anthropic", TokensIn: 500, TokensOut: 20, CostUSD: 0.003,
+		CallID: "msg_2",
+	})
+
+	tot := s.CostReport(now.Add(-time.Hour), now, "session", CostOptions{}).Total
+	if tot.Calls != 2 || tot.TokensIn != 1500 || tot.TokensOut != 1839 || !near(tot.CostUSD, 0.050692) {
+		t.Fatalf("total = %+v, want 2 calls / 1500 in / 1839 out / $0.050692", tot)
+	}
+}

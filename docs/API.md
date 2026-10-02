@@ -430,7 +430,7 @@ Host: unix
 | `path`, `exe_path` | File or executable path, for file and exec kinds. |
 | `remote_host`, `remote_port` | Destination, for connect kinds. |
 | `tool`, `tool_status`, `duration_ms`, `call_id` | Tool call fields (kind `12`): name, `ok`\|`error`\|`running`, start→result duration, the harness's own call id. |
-| `model`, `provider`, `tokens_in`, `tokens_out`, `cost_usd` | Model call fields (kind `14`). |
+| `model`, `provider`, `tokens_in`, `tokens_out`, `cost_usd` | Model call fields (kind `14`). A Claude model call also carries `call_id`: the API message id, one row per call. |
 | `price_class` | `priced`, `plan`, `local`, `unknown-model` or `unpriced-model`; computed when served, never stored. |
 
 ---
