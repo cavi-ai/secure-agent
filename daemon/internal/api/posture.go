@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -326,11 +327,15 @@ func esServiceItems(s collect.ESServiceSnapshot) []PostureItem {
 	}
 	var items []PostureItem
 	if esServiceFailing(s.State) {
+		next := "check /var/log/secure-agent-esd.log"
+		if esServiceRefused(s.State) {
+			next = esReregisterHint + ", then " + next
+		}
 		items = append(items, PostureItem{
 			Kind: "collector_silent", ID: "eslogger",
 			Title:    "File monitoring service is failing",
 			Severity: 2,
-			Detail:   "root ES collector service state: " + s.State + " — spool " + s.SpoolState() + " — check /var/log/secure-agent-esd.log",
+			Detail:   "root ES collector service state: " + s.State + " — spool " + s.SpoolState() + " — " + next,
 		})
 	} else if time.Since(s.SpoolMtime) > 30*time.Minute {
 		detail := "root ES collector reports " + s.State + " but the spool " + s.SpoolState() + " — file telemetry may be blind"
@@ -363,6 +368,34 @@ func esServiceFailing(state string) bool {
 	}
 	return strings.Contains(state, "spawn") || strings.Contains(state, "exit")
 }
+
+// esServiceRefused reports a root ES service launchd will not bring up: last
+// exit 78 (EX_CONFIG, launchd refusing the spawn; the helper never exits 78)
+// while not running, or spawn scheduled after a nonzero exit. The menu bar
+// Doctor's Re-register binds the job to the installed build again.
+func esServiceRefused(state string) bool {
+	if esServiceRunning(state) {
+		return false
+	}
+	// parseLaunchctlState notes only nonzero exits: " (last exit 78: EX_CONFIG)".
+	_, note, ok := strings.Cut(state, " (last exit ")
+	if !ok {
+		return false
+	}
+	head, _, _ := strings.Cut(strings.TrimSuffix(note, ")"), ":")
+	code, err := strconv.Atoi(head)
+	if err != nil || code == 0 {
+		return false
+	}
+	return code == esExConfig || strings.HasPrefix(state, "spawn scheduled")
+}
+
+// esExConfig is sysexits' EX_CONFIG, launchd's code for a job it could not spawn.
+const esExConfig = 78
+
+// esReregisterHint is the action both the posture and doctor details name
+// for a refused service.
+const esReregisterHint = "Re-register it from Run Doctor… in the menu bar"
 
 // esServiceRunning reports a running root ES service, with or without an
 // earlier exit noted after the state.

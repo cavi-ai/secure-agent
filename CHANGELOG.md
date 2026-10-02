@@ -50,6 +50,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - The root ES collector restarts eslogger when its records have stayed more than 60 s old for 30 s, dropping the backlog eslogger held in memory; under a flood of opens it had fallen hours behind and never caught up. Each restart closes the spool file it had open.
 - Posture and doctor report file monitoring as running late when file events reach the daemon two minutes or more after they happened; `es_service` gains `newest_event_at` and `lag_seconds`.
 - An ES event from a process that exited before it was resolved joins the session of the parent Endpoint Security recorded, instead of going unattributed (file events from unattributed processes are not stored).
+- Doctor: a file telemetry job launchd will not start while the service is enabled — no pid and last exit 78 (`EX_CONFIG`), or `spawn scheduled` after a nonzero exit — fails the menu bar Doctor's launchd check with Re-register and the exit code; it was a warning with no fix. The daemon's `/doctor` `file-telemetry` detail and the posture item name Re-register for that state.
 
 ## [1.2.0] - 2026-09-30
 

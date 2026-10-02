@@ -271,12 +271,31 @@ enum TelemetryDoctor {
                 return DoctorCheck(id: "launchd", title: title, state: .pass,
                                    cause: "\(state), pid \(pid)\(exitNote)", fix: nil)
             }
+            // The helper never exits 78: EX_CONFIG is launchd refusing to
+            // spawn the job, e.g. a registration bound to a replaced build.
+            // A spawn-scheduled job that last exited nonzero never comes up.
+            if enabled, let code = exitCode(lastExit),
+               code == exConfig || (state == "spawn scheduled" && code != 0) {
+                let why = code == exConfig ? "launchd refuses to start the job" : "the job keeps exiting"
+                return DoctorCheck(id: "launchd", title: title, state: .fail,
+                                   cause: "\(state), no pid\(exitNote); \(why)", fix: .reregister)
+            }
             return DoctorCheck(id: "launchd", title: title, state: .warn,
                                cause: "\(state), no pid\(exitNote)", fix: nil)
         case .unreadable:
             return DoctorCheck(id: "launchd", title: title, state: .warn,
                                cause: "launchctl print gave no job state", fix: nil)
         }
+    }
+
+    /// sysexits' EX_CONFIG, launchd's code for a job it could not spawn.
+    static let exConfig = 78
+
+    /// The number in launchctl's `last exit code` ("78: EX_CONFIG" → 78);
+    /// nil for "(never exited)" or no line.
+    static func exitCode(_ lastExit: String?) -> Int? {
+        guard let head = lastExit?.split(separator: ":").first else { return nil }
+        return Int(head.trimmingCharacters(in: .whitespaces))
     }
 
     /// Whether the helper's last log line is its wait for the grant.

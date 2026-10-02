@@ -367,6 +367,36 @@ func TestESServiceItemsNamesRegrantAfterHelperReplaced(t *testing.T) {
 	}
 }
 
+// launchd refusing every spawn (78: EX_CONFIG, e.g. a registration bound to
+// a replaced build) or a spawn-scheduled service that last exited nonzero
+// needs Re-register; the posture detail names it.
+func TestESServiceRefusedNamesReregister(t *testing.T) {
+	for state, want := range map[string]bool{
+		"spawn scheduled (last exit 78: EX_CONFIG)": true,
+		"not running (last exit 78: EX_CONFIG)":     true,
+		"spawn scheduled (last exit 1)":             true,
+		"spawn scheduled":                           false,
+		"not running (last exit 1)":                 false,
+		"running (last exit 78: EX_CONFIG)":         false,
+		"not-loaded":                                false,
+	} {
+		if got := esServiceRefused(state); got != want {
+			t.Errorf("esServiceRefused(%q) = %v, want %v", state, got, want)
+		}
+	}
+
+	stale := time.Now().Add(-8 * time.Minute)
+	items := esServiceItems(collect.ESServiceSnapshot{State: "spawn scheduled (last exit 78: EX_CONFIG)", SpoolSize: 10, SpoolMtime: stale})
+	if len(items) != 1 || !strings.Contains(items[0].Detail, "78: EX_CONFIG") || !strings.Contains(items[0].Detail, "Re-register") ||
+		!strings.Contains(items[0].Detail, "/var/log/secure-agent-esd.log") {
+		t.Fatalf("refused service: items = %+v, want one failing item naming the exit code, Re-register and the log", items)
+	}
+	plain := esServiceItems(collect.ESServiceSnapshot{State: "spawn scheduled", SpoolSize: 10, SpoolMtime: stale})
+	if len(plain) != 1 || strings.Contains(plain[0].Detail, "Re-register") {
+		t.Fatalf("spawn scheduled without an exit: items = %+v, want one failing item without Re-register", plain)
+	}
+}
+
 // A writer producing mostly-unparseable lines (UnparsedShare over half) is
 // real garbage and supersedes the ordinary not-writing/crash-loop items.
 // Flooding (the tailer skipping past its per-tick budget) alone is a burst,

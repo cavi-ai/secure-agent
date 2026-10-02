@@ -658,7 +658,7 @@ Each check has a `state` of `pass`, `fail` or `skip`, a `detail`, and on `fail` 
 |---|---|---|
 | `hook-registered` | `~/.claude/settings.json` does not register the guard hook for `PreToolUse` and `PostToolUse` | home directory unknown |
 | `hook-active` | agents are running and no hook event landed in 24h | no agents |
-| `file-telemetry` | root ES service `not-loaded`, in a `spawn`/`exit` state, or `running` with agents active and the spool unwritten for over 10 min (past grace) | file telemetry is not spool-based |
+| `file-telemetry` | root ES service `not-loaded`, in a `spawn`/`exit` state, or `running` with agents active and the spool unwritten for over 10 min (past grace); a service launchd will not start (last exit 78, `EX_CONFIG`, or `spawn scheduled` after a nonzero exit) names Re-register in its detail | file telemetry is not spool-based |
 | `collectors` | a collector is stopped or abandoned, or (with agents active) silent; passes with each polling collector's database, watermark and last poll | grace |
 | `trace-coverage` | a harness had sessions with a transcript line read or a hook event since boot, but no tool-call, turn or model-call rows were written since boot (whatever their own timestamps); a session whose process only stayed alive is not counted; passes listing each traced harness with its session count | grace, or no such sessions since boot |
 | `hermes` | a Hermes `state.db` could not be read (detail names the database and error); passes with each database's message watermark and the last poll time | no `state.db` under the Hermes root (`not installed`) |
