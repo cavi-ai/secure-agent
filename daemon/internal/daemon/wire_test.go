@@ -703,7 +703,7 @@ func TestDrainLoopAdvancesTheFileFeedClock(t *testing.T) {
 	tagger.Refresh()
 	cr := correlate.New(tagger, sensitive.New(cfg), cfg)
 	b := bus.New(64)
-	done := startDrainLoop(b.Subscribe(), st, cr, fleet.NewPublisher(), session.NewResolver(st, tagger), tagger, nil, nil, nil, nil)
+	done := startDrainLoop(b.Subscribe(), st, cr, fleet.NewPublisher(), session.NewResolver(st, tagger), tagger, nil, nil, nil, nil, nil)
 	b.Publish(event.Event{Kind: event.KindFileOpen, TS: captured.Add(-time.Hour), PID: 9999, Path: "/tmp/unrelated"})
 	b.Close()
 	<-done
@@ -712,7 +712,7 @@ func TestDrainLoopAdvancesTheFileFeedClock(t *testing.T) {
 	}
 
 	b = bus.New(64)
-	done = startDrainLoop(b.Subscribe(), st, cr, fleet.NewPublisher(), session.NewResolver(st, tagger), tagger, nil, nil, nil, nil)
+	done = startDrainLoop(b.Subscribe(), st, cr, fleet.NewPublisher(), session.NewResolver(st, tagger), tagger, nil, nil, nil, nil, nil)
 	b.Publish(event.Event{Kind: event.KindFileOpen, TS: captured.Add(time.Second), PID: 9999, Path: "/tmp/unrelated"})
 	b.Close()
 	<-done
