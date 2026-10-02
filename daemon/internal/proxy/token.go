@@ -3,6 +3,7 @@ package proxy
 import (
 	"crypto/rand"
 	"crypto/subtle"
+	"encoding/base64"
 	"encoding/hex"
 	"log"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"github.com/cavi-ai/secure-agent/daemon/internal/agentenv"
 	"github.com/cavi-ai/secure-agent/daemon/internal/safefile"
 )
 
@@ -73,27 +75,57 @@ func isHexToken(t string) bool {
 	return true
 }
 
-// authorized reports whether the request carries the valid proxy token, in
-// either the standard Proxy-Authorization header ("Basic <hex>", base64-free
-// by convention here) or the X-SecureAgent-Proxy-Token header (some HTTP
-// client stacks strip Proxy-Authorization on CONNECT). Comparison is
-// constant-time — even on loopback, a timing oracle on the auth gate of a
-// security tool is not a class of bug to ship.
-func authorized(r *http.Request) bool {
+// Mode is what a routed client asked the proxy for, by the user name in its
+// proxy URL (http://<mode>:<token>@127.0.0.1:<port>).
+type Mode int
+
+const (
+	// ModeInspect decrypts and scans connections to the inspect hosts and
+	// tunnels the rest; the client must trust the proxy CA for those hosts.
+	ModeInspect Mode = iota
+	// ModeTunnel passes every connection through unopened: the destination
+	// is recorded, the bytes are not, and no client needs the proxy CA.
+	ModeTunnel
+)
+
+// authorize reports whether the request carries the valid proxy token and
+// which mode it asked for. Accepted: Proxy-Authorization "Basic
+// base64(<user>:<token>)", which clients send for credentials in the proxy
+// URL (user agentenv.TunnelUser selects ModeTunnel); the raw "Basic <token>"
+// form; and the X-SecureAgent-Proxy-Token header (some HTTP client stacks
+// strip Proxy-Authorization on CONNECT). The raw forms carry no user name and
+// inspect. Comparison is constant-time — even on loopback, a timing oracle on
+// the auth gate of a security tool is not a class of bug to ship.
+func authorize(r *http.Request) (Mode, bool) {
 	want := Token()
 	if want == "" {
 		// Fail closed: a missing token means the random source failed at
 		// startup. An open relay on a security product's egress proxy is
 		// worse than a broken one — matches consoleAuthorized.
-		return false
+		return ModeInspect, false
 	}
 	if subtle.ConstantTimeCompare([]byte(r.Header.Get("X-SecureAgent-Proxy-Token")), []byte(want)) == 1 {
-		return true
+		return ModeInspect, true
 	}
-	if pa := r.Header.Get("Proxy-Authorization"); strings.HasPrefix(pa, "Basic ") {
-		return subtle.ConstantTimeCompare([]byte(strings.TrimPrefix(pa, "Basic ")), []byte(want)) == 1
+	pa, ok := strings.CutPrefix(r.Header.Get("Proxy-Authorization"), "Basic ")
+	if !ok {
+		return ModeInspect, false
 	}
-	return false
+	if subtle.ConstantTimeCompare([]byte(pa), []byte(want)) == 1 {
+		return ModeInspect, true
+	}
+	decoded, err := base64.StdEncoding.DecodeString(pa)
+	if err != nil {
+		return ModeInspect, false
+	}
+	user, pass, found := strings.Cut(string(decoded), ":")
+	if !found || subtle.ConstantTimeCompare([]byte(pass), []byte(want)) != 1 {
+		return ModeInspect, false
+	}
+	if user == agentenv.TunnelUser {
+		return ModeTunnel, true
+	}
+	return ModeInspect, true
 }
 
 // rejectToken answers 407 with the standard proxy-auth challenge.

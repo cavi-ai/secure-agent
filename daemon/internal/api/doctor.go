@@ -104,7 +104,7 @@ var doctorProbes = []doctorProbe{
 	{"tool-pairing", "Tool-call pairing", "Update Secure Agent so every harness adapter sends a call id; rows already stored stay unpaired", checkToolPairing},
 	{"pricing", "Model-call pricing", "Update Secure Agent so its price table covers the Claude models in use", checkPricing},
 	{"retention", "Event retention", "Find the process flooding these kinds in the Events tab; their rows are evicted inside a day", checkRetention},
-	{"egress-routing", "Egress routing", "source agent-env.sh where agents launch, or Allow the endpoints in the Egress tab", checkEgressRouting},
+	{"egress-routing", "Egress routing", "turn on Settings → Secure Agent → Traffic → Route Claude Code through Secure Agent, source agent-env.sh where other agents launch, or Allow the endpoints in the Egress tab", checkEgressRouting},
 	{"bus", "Event bus", "", checkBus},
 }
 
@@ -444,6 +444,9 @@ func checkEgressRouting(f doctorFacts) (string, string) {
 		return doctorPass, "proxy off — egress not inspected"
 	case f.st.UninspectedEgress > 0:
 		return doctorFail, fmt.Sprintf("%d endpoints reached outside the proxy", f.st.UninspectedEgress)
+	case f.st.ProxyTunneled+f.st.ProxyDecrypted > 0:
+		return doctorPass, fmt.Sprintf("all agent egress routed through the proxy · %d connections since start (%d decrypted)",
+			f.st.ProxyTunneled+f.st.ProxyDecrypted, f.st.ProxyDecrypted)
 	}
 	return doctorPass, "all agent egress routed through the proxy"
 }

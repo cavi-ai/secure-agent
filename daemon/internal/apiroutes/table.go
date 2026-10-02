@@ -105,6 +105,7 @@ var Table = []Route{
 	{Path: "/costs/unpriced", Console: true},
 	{Path: "/costs/plans", Console: true},
 	{Path: "/doctor", Console: true},
+	{Path: "/routing/claude", NoAgent: true},
 	{Path: "/worktrees", Console: true, NoAgent: true},
 	{Path: "/worktrees/repos", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
 	{Path: "/worktrees/remove", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},

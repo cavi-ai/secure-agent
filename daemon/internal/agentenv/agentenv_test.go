@@ -2,102 +2,90 @@ package agentenv
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 )
 
-func TestVarsPointAtProxyAndCA(t *testing.T) {
-	v := Vars(8443, "/home/u/.config/secure-agent/ca.crt", "")
-	if v["HTTPS_PROXY"] != "http://127.0.0.1:8443" {
-		t.Fatalf("HTTPS_PROXY = %q", v["HTTPS_PROXY"])
-	}
-	if v["NODE_EXTRA_CA_CERTS"] != "/home/u/.config/secure-agent/ca.crt" {
-		t.Fatalf("NODE_EXTRA_CA_CERTS = %q", v["NODE_EXTRA_CA_CERTS"])
-	}
-	// Lowercase variants matter for many CLIs.
-	if v["https_proxy"] != v["HTTPS_PROXY"] {
-		t.Fatal("lowercase https_proxy must match uppercase")
-	}
-}
+const tok = "abcdef0123456789abcdef0123456789"
 
-func TestSnippetIsSourceableAndScoped(t *testing.T) {
-	s := Snippet(8443, "/home/u/.config/secure-agent/ca.crt", "")
-	for _, want := range []string{
-		"export HTTPS_PROXY='http://127.0.0.1:8443'",
-		"export NODE_EXTRA_CA_CERTS='/home/u/.config/secure-agent/ca.crt'",
-	} {
-		if !strings.Contains(s, want) {
-			t.Fatalf("snippet missing %q\n---\n%s", want, s)
+// Tunnel mode: credentials in the proxy URL (the form clients turn into
+// Proxy-Authorization), loopback kept off the proxy, and no CA variable — a
+// tunneled client verifies the real upstream itself.
+func TestVarsTunnelEveryClient(t *testing.T) {
+	v := Vars(8443, tok)
+	want := "http://tunnel:" + tok + "@127.0.0.1:8443"
+	for _, k := range []string{"HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"} {
+		if v[k] != want {
+			t.Errorf("%s = %q, want %q", k, v[k], want)
+		}
+	}
+	if v["NO_PROXY"] != NoProxy || v["no_proxy"] != NoProxy {
+		t.Errorf("NO_PROXY = %q / %q, want %q", v["NO_PROXY"], v["no_proxy"], NoProxy)
+	}
+	for _, k := range []string{"NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "PROXY_AUTHORIZATION"} {
+		if _, ok := v[k]; ok {
+			t.Errorf("tunnel mode sets %s; it must not replace or extend any client's trust", k)
 		}
 	}
 }
 
+// Inspect mode is for a client that trusts the proxy CA: the inspect user and
+// NODE_EXTRA_CA_CERTS, which adds to Node's roots instead of replacing them.
+func TestInspectVarsAddTheCA(t *testing.T) {
+	v := InspectVars(8443, "/Users/x/.config/secure-agent/ca.crt", tok)
+	if want := "http://inspect:" + tok + "@127.0.0.1:8443"; v["HTTPS_PROXY"] != want || v["https_proxy"] != want {
+		t.Fatalf("HTTPS_PROXY = %q, want %q", v["HTTPS_PROXY"], want)
+	}
+	if v["NODE_EXTRA_CA_CERTS"] != "/Users/x/.config/secure-agent/ca.crt" || v["NO_PROXY"] != NoProxy {
+		t.Fatalf("vars = %v", v)
+	}
+	if _, ok := v["SSL_CERT_FILE"]; ok {
+		t.Fatal("SSL_CERT_FILE replaces a client's whole trust store; inspect mode must not set it")
+	}
+}
+
+func TestSnippetIsSourceableAndScoped(t *testing.T) {
+	s := Snippet(8443, tok)
+	if !strings.Contains(s, "export HTTPS_PROXY='http://tunnel:"+tok+"@127.0.0.1:8443'") {
+		t.Fatalf("snippet missing tunnel HTTPS_PROXY:\n%s", s)
+	}
+	if strings.Contains(s, ".zshrc") || strings.Contains(s, ".bashrc") {
+		t.Fatal("snippet must not reference or modify shell rc files")
+	}
+	out, err := exec.Command("sh", "-c", s+"\nprintf %s \"$HTTPS_PROXY|$NO_PROXY\"").Output()
+	if err != nil {
+		t.Fatalf("snippet is not sourceable: %v", err)
+	}
+	if got, want := string(out), "http://tunnel:"+tok+"@127.0.0.1:8443|"+NoProxy; got != want {
+		t.Fatalf("sourced HTTPS_PROXY|NO_PROXY = %q, want %q", got, want)
+	}
+}
+
+// A config-controlled value is never interpreted by the shell that sources
+// the snippet.
 func TestSnippetQuotesValues(t *testing.T) {
-	// A CA path with spaces (Application Support) or shell metacharacters must
-	// survive `source` intact — unquoted, it breaks the export or worse.
-	s := Snippet(8443, "/Users/x/Library/Application Support/secure-agent/ca.crt", "")
-	if !strings.Contains(s, "export SSL_CERT_FILE='/Users/x/Library/Application Support/secure-agent/ca.crt'") {
-		t.Fatalf("space-containing path not quoted:\n%s", s)
-	}
-	evil := Snippet(8443, "/tmp/$(touch /tmp/pwned).crt", "")
-	if strings.Contains(evil, "$(touch") && !strings.Contains(evil, "'/tmp/$(touch /tmp/pwned).crt'") {
-		t.Fatalf("metacharacters not neutralized:\n%s", evil)
-	}
-	sq := shellQuote("it's")
-	if sq != `'it'\''s'` {
-		t.Fatalf("shellQuote = %q", sq)
+	evil := Snippet(8443, "$(touch /tmp/pwned)")
+	if !strings.Contains(evil, "'http://tunnel:$(touch /tmp/pwned)@127.0.0.1:8443'") {
+		t.Fatalf("value not single-quoted:\n%s", evil)
 	}
 }
 
-func TestWriteSnippetCreatesFile(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), "cfg")
-	path, err := WriteSnippet(dir, 8443, "/ca.crt", "")
+func TestWriteSnippetPerms(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "secure-agent")
+	path, err := WriteSnippet(dir, 8443, tok)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if filepath.Base(path) != SnippetName {
-		t.Fatalf("path base = %q, want %q", filepath.Base(path), SnippetName)
+	if path != filepath.Join(dir, SnippetName) {
+		t.Fatalf("path = %q", path)
 	}
-	data, err := os.ReadFile(path)
+	st, err := os.Stat(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(data), "export HTTPS_PROXY='http://127.0.0.1:8443'") {
-		t.Fatalf("written snippet missing proxy export:\n%s", data)
-	}
-}
-
-func TestVarsCarryProxyToken(t *testing.T) {
-	v := Vars(8443, "/ca.crt", "abcdef0123456789abcdef0123456789")
-	if v["PROXY_AUTHORIZATION"] != "Basic abcdef0123456789abcdef0123456789" {
-		t.Fatalf("PROXY_AUTHORIZATION = %q", v["PROXY_AUTHORIZATION"])
-	}
-	if v["X_SECURE_AGENT_PROXY_TOKEN"] != "abcdef0123456789abcdef0123456789" {
-		t.Fatalf("X_SECURE_AGENT_PROXY_TOKEN = %q", v["X_SECURE_AGENT_PROXY_TOKEN"])
-	}
-	// No token: the vars must stay clean of auth lines.
-	if v2 := Vars(8443, "/ca.crt", ""); v2["PROXY_AUTHORIZATION"] != "" {
-		t.Fatalf("empty token leaked: %q", v2["PROXY_AUTHORIZATION"])
-	}
-}
-
-func TestWriteSnippetPermsWithToken(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), "cfg")
-	path, err := WriteSnippet(dir, 8443, "/ca.crt", "abcdef0123456789abcdef0123456789")
-	if err != nil {
-		t.Fatal(err)
-	}
-	// The snippet carries the proxy token now: 0600, not 0644.
-	fi, err := os.Stat(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if fi.Mode().Perm() != 0o600 {
-		t.Fatalf("snippet perms = %v, want 0600", fi.Mode().Perm())
-	}
-	data, _ := os.ReadFile(path)
-	if !strings.Contains(string(data), "PROXY_AUTHORIZATION='Basic abcdef0123456789abcdef0123456789'") {
-		t.Fatalf("snippet missing token auth line:\n%s", data)
+	if st.Mode().Perm() != 0o600 {
+		t.Fatalf("snippet carries the proxy token; mode = %v, want 0600", st.Mode().Perm())
 	}
 }

@@ -438,6 +438,8 @@ export interface Status {
   trees: AgentTree[];
   proxy_enabled: boolean;
   proxy_port: number;
+  proxy_tunneled?: number;
+  proxy_decrypted?: number;
   uninspected_egress: number;
   uninspected_infra: number;
   advisor_enabled: boolean;

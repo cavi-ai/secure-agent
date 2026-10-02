@@ -83,6 +83,10 @@ proxy_enabled: false
 proxy_port: 8443
 proxy_ca_cert_path: "~/.config/secure-agent/ca.crt"
 proxy_ca_key_path: "~/.config/secure-agent/ca.key"
+# Hosts a routed client in inspect mode (Claude Code's own traffic) has
+# decrypted and scanned; every other routed connection is tunneled unopened.
+proxy_inspect_hosts:
+  - api.anthropic.com
 firewall:
   mode: monitor
   registry:

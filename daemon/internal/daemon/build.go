@@ -268,6 +268,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 		PublishEvent:    b.Publish,
 		DeltaHub:        deltaHub,
 		Hermes:          hermes.Status,
+		Routing:         claudeRouting(proxyServer, cfg.ProxyCACertPath),
 		Sightings:       resolver.SightedByHarness,
 		Worktrees:       hunter,
 		WorktreeAdvisor: worktreeAdvisor,

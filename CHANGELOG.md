@@ -6,6 +6,11 @@ All notable changes to `secure-agent` are documented here. The format follows
 
 ## [Unreleased]
 
+### Routing
+- Settings → Secure Agent → Traffic → Route Claude Code through Secure Agent: the app writes the proxy and Secure Agent's CA into the `env` block of `~/.claude/settings.json`, and a SessionStart hook that gives each session's Bash commands the tunnel-mode snippet; it removes them at quit and writes them again at launch.
+- The proxy URL's user name selects the mode: `inspect` decrypts and scans hosts in `proxy_inspect_hosts` (default `api.anthropic.com`) and tunnels the rest; `tunnel` passes every connection through unopened, so clients that do not trust Secure Agent's CA keep working.
+- `GET /routing/claude` (NoAgent) serves the routing environment; `/status` counts `proxy_tunneled` and `proxy_decrypted`; doctor `egress-routing` names them.
+
 ### Chat
 - Show immediate sending feedback and animated local-model wait states, with a static reduced-motion alternative. Repeated Enter cannot submit a message twice.
 - Preserve drafts during delivery failures and concurrent editing; show persistent errors and reject stale refreshes that would hide accepted messages.
@@ -35,6 +40,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Worktrees: a removal, prune, reconnect or Move to Trash cancels the background rescan the previous removal started instead of waiting for it; the next report rescans after the action.
 - Pricing: Claude Sonnet 5.5 (`claude-sonnet-5-5`) at $2 / $10 per million input / output tokens. A price added later, built in or in `pricing:`, also prices the Claude and Codex calls already stored without one.
 - Doctor and posture: a file telemetry service that launchd restarted after an exit and is running again (`running (last exit 1)`) is not reported as failing; it still fails when its spool stops being written.
+- The routing snippet's token reached no client: `PROXY_AUTHORIZATION` is not read by HTTP clients, and the proxy accepted only an unencoded token. The proxy URL now carries the token as the basic-auth password, which the proxy accepts base64-encoded; the snippet adds `NO_PROXY` for loopback and no longer sets `SSL_CERT_FILE` or `REQUESTS_CA_BUNDLE`.
 
 ## [1.2.0] - 2026-09-30
 

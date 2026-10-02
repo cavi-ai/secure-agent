@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"encoding/base64"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -45,7 +46,7 @@ func TestProxyAuthFailClosedWithoutToken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if authorized(req) {
+	if authorizeOK(req) {
 		t.Fatal("empty proxy token must fail closed — a security product never becomes an open relay")
 	}
 }
@@ -57,15 +58,15 @@ func TestProxyAuthRejectsWrongToken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if authorized(req) {
+	if authorizeOK(req) {
 		t.Fatal("missing token must be rejected")
 	}
 	req.Header.Set("X-SecureAgent-Proxy-Token", "00000000000000000000000000000000")
-	if authorized(req) {
+	if authorizeOK(req) {
 		t.Fatal("wrong token must be rejected")
 	}
 	req.Header.Set("X-SecureAgent-Proxy-Token", tok)
-	if !authorized(req) {
+	if !authorizeOK(req) {
 		t.Fatal("correct custom header must pass")
 	}
 	req2, err := http.NewRequest("GET", "http://127.0.0.1/", nil)
@@ -73,7 +74,7 @@ func TestProxyAuthRejectsWrongToken(t *testing.T) {
 		t.Fatal(err)
 	}
 	req2.Header.Set("Proxy-Authorization", "Basic "+tok)
-	if !authorized(req2) {
+	if !authorizeOK(req2) {
 		t.Fatal("Proxy-Authorization Basic must pass")
 	}
 }
@@ -132,5 +133,40 @@ func TestLoadConsoleTokenPersists0600(t *testing.T) {
 	}
 	if fi.Mode().Perm() != 0o600 {
 		t.Fatalf("perms = %o, want 0600", fi.Mode().Perm())
+	}
+}
+
+func authorizeOK(r *http.Request) bool {
+	_, ok := authorize(r)
+	return ok
+}
+
+// Credentials in the proxy URL arrive base64-encoded; the user name picks the
+// mode, the password must be the token.
+func TestProxyAuthModesFromProxyURLCredentials(t *testing.T) {
+	t.Cleanup(clearProxyToken)
+	tok := LoadToken(filepath.Join(t.TempDir(), "proxy-token"))
+	basic := func(userpass string) string {
+		return "Basic " + base64.StdEncoding.EncodeToString([]byte(userpass))
+	}
+	for _, tc := range []struct {
+		header string
+		mode   Mode
+		ok     bool
+	}{
+		{basic("tunnel:" + tok), ModeTunnel, true},
+		{basic("inspect:" + tok), ModeInspect, true},
+		{basic("anyone:" + tok), ModeInspect, true},
+		{basic("tunnel:00000000000000000000000000000000"), ModeInspect, false},
+		{basic("tunnel"), ModeInspect, false},
+		{"Basic " + tok, ModeInspect, true},
+		{"Basic not-base64!", ModeInspect, false},
+	} {
+		req, _ := http.NewRequest("CONNECT", "http://api.example.com:443", nil)
+		req.Header.Set("Proxy-Authorization", tc.header)
+		mode, ok := authorize(req)
+		if ok != tc.ok || (ok && mode != tc.mode) {
+			t.Errorf("%q: mode %v ok %v, want mode %v ok %v", tc.header, mode, ok, tc.mode, tc.ok)
+		}
 	}
 }

@@ -334,6 +334,7 @@ type rawConfig struct {
 	ProxyPort           int                   `yaml:"proxy_port"`
 	ProxyCACertPath     string                `yaml:"proxy_ca_cert_path"`
 	ProxyCAKeyPath      string                `yaml:"proxy_ca_key_path"`
+	ProxyInspectHosts   []string              `yaml:"proxy_inspect_hosts"`
 	Firewall            FirewallConfig        `yaml:"firewall"`
 	DirectoryGuard      DirectoryGuardConfig  `yaml:"directory_guard"`
 	ResourceControl     ResourceControlConfig `yaml:"resource_control"`
@@ -367,6 +368,9 @@ type Config struct {
 	ProxyPort         int
 	ProxyCACertPath   string
 	ProxyCAKeyPath    string
+	// ProxyInspectHosts are the hosts an inspect-mode client's CONNECTs are
+	// decrypted and scanned for; every other routed connection is tunneled.
+	ProxyInspectHosts []string
 	Firewall          FirewallConfig
 	DirectoryGuard    DirectoryGuardConfig
 	ResourceControl   ResourceControlConfig
@@ -507,6 +511,7 @@ func loadWithOverlayError(explicitPath string) (Config, error, error) {
 		ProxyPort:         raw.ProxyPort,
 		ProxyCACertPath:   expandPath(raw.ProxyCACertPath),
 		ProxyCAKeyPath:    expandPath(raw.ProxyCAKeyPath),
+		ProxyInspectHosts: raw.ProxyInspectHosts,
 		Firewall:          raw.Firewall,
 		DirectoryGuard:    raw.DirectoryGuard,
 		ResourceControl:   raw.ResourceControl,

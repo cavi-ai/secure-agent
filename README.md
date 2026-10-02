@@ -233,7 +233,9 @@ firewall:
     - { id: aws-key, type: cloud-key, re: 'AKIA[0-9A-Z]{16}', mode: block }  # this rule now blocks
 ```
 
-**Route agents through the proxy** (opt-in, scoped to your shell — no keychain or system-trust changes). The daemon writes a snippet to `~/.config/secure-agent/agent-env.sh`; source it where you launch agents (or use **Settings → Secure Agent → Agent traffic inspection**):
+**Route Claude Code through the proxy** with **Settings → Secure Agent → Traffic → Route Claude Code through Secure Agent** (opt-in; no keychain or system-trust changes). The app writes the proxy and Secure Agent's CA (`NODE_EXTRA_CA_CERTS`) into the `env` block of `~/.claude/settings.json`, plus a SessionStart hook that gives each session's Bash commands the tunnel-mode snippet. API requests to the hosts in `proxy_inspect_hosts` (default `api.anthropic.com`) are decrypted and scanned; every other connection passes through unopened, so tools that do not trust Secure Agent's CA (gh, git, curl) keep working. Quitting the app takes the routing back out; while routing is on, start Secure Agent before Claude Code.
+
+**Route other agents** by sourcing the tunnel-mode snippet the daemon writes to `~/.config/secure-agent/agent-env.sh` where you launch them (scoped to that shell; every connection passes through unopened):
 
 ```bash
 source ~/.config/secure-agent/agent-env.sh
@@ -328,6 +330,8 @@ proxy_enabled: false
 proxy_port: 8443
 proxy_ca_cert_path: "~/.config/secure-agent/ca.crt"
 proxy_ca_key_path: "~/.config/secure-agent/ca.key"
+proxy_inspect_hosts:          # decrypted for inspect-mode clients; every other routed connection is tunneled
+  - api.anthropic.com
 
 # Opt-in local advisor: a locally served model (MLX, llama.cpp, Ollama —
 # any OpenAI-compatible chat endpoint) triages flags and writes incident

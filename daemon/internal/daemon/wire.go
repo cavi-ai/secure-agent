@@ -138,6 +138,7 @@ func setupProxy(cfg config.Config, b *bus.Bus, eng *firewall.Engine) *proxy.Prox
 		return nil
 	}
 	proxyServer := proxy.NewProxyServer(cfg.ProxyPort, b, caMgr, eng)
+	proxyServer.SetInspectHosts(cfg.ProxyInspectHosts)
 	// The documented console URL lives on the proxy's loopback HTTP
 	// port; serve the same embedded assets the unix API serves.
 	if h := api.DashboardHandler(); h != nil {
@@ -149,10 +150,35 @@ func setupProxy(cfg config.Config, b *bus.Bus, eng *firewall.Engine) *proxy.Prox
 	proxyToken := proxy.LoadToken(filepath.Join(filepath.Dir(cfg.Firewall.Registry.SaltRef), "proxy-token"))
 	// Write the opt-in routing snippet into our own config dir. It does
 	// nothing until the user sources it; we never edit their shell rc.
-	if snippetPath, werr := agentenv.WriteSnippet(filepath.Dir(cfg.ProxyCACertPath), cfg.ProxyPort, cfg.ProxyCACertPath, proxyToken); werr == nil {
+	if snippetPath, werr := agentenv.WriteSnippet(filepath.Dir(cfg.ProxyCACertPath), cfg.ProxyPort, proxyToken); werr == nil {
 		log.Printf("agent routing snippet: %s (source it to route agents through the proxy)", snippetPath)
 	}
 	return proxyServer
+}
+
+// claudeRouting answers GET /routing/claude from the live proxy: Claude
+// Code's own environment (inspect mode, with the proxy CA) and the
+// tunnel-mode snippet setupProxy wrote for its Bash commands. Not ready while
+// the proxy is off, unbound, or without a token or snippet.
+func claudeRouting(ps *proxy.ProxyServer, caCertPath string) func() api.RoutingInfo {
+	return func() api.RoutingInfo {
+		if ps == nil {
+			return api.RoutingInfo{Reason: "the proxy is off — set proxy_enabled: true in config.yaml"}
+		}
+		token := proxy.Token()
+		if token == "" || ps.Port() == 0 {
+			return api.RoutingInfo{Reason: "the proxy is not ready"}
+		}
+		snippet := filepath.Join(filepath.Dir(caCertPath), agentenv.SnippetName)
+		if _, err := os.Stat(snippet); err != nil {
+			return api.RoutingInfo{Reason: "the routing snippet is missing: " + snippet}
+		}
+		return api.RoutingInfo{
+			Ready:       true,
+			Env:         agentenv.InspectVars(ps.Port(), caCertPath, token),
+			BashEnvPath: snippet,
+		}
+	}
 }
 
 // guardBrokerMS derives the broker's resolve deadline from the hook's own
@@ -513,8 +539,10 @@ func buildStatusFn(proxyServer *proxy.ProxyServer, tagger *agents.Tagger, cr *co
 	return func() api.Status {
 		proxyActive := proxyServer != nil
 		proxyPort := 0
+		var tunneled, decrypted uint64
 		if proxyServer != nil {
 			proxyPort = proxyServer.Port()
+			tunneled, decrypted = proxyServer.RouteStats()
 		}
 		activeAgents := listActiveAgents(tagger)
 		// Count tree ROOTS, not processes: a CLI agent with 40 helpers is one
@@ -556,6 +584,8 @@ func buildStatusFn(proxyServer *proxy.ProxyServer, tagger *agents.Tagger, cr *co
 			TrackedProcesses:    len(activeAgents),
 			ProxyEnabled:        proxyActive,
 			ProxyPort:           proxyPort,
+			ProxyTunneled:       tunneled,
+			ProxyDecrypted:      decrypted,
 			UninspectedEgress:   cr.UninspectedEgressCountWindow(correlate.UninspectedWindow),
 			UninspectedInfra:    cr.UninspectedInfraCountWindow(correlate.UninspectedWindow),
 			AdvisorEnabled:      ah.Enabled,
