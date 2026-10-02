@@ -1,10 +1,14 @@
 package store
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 )
 
 func TestEgressEpisodeRecurrenceAndScope(t *testing.T) {
@@ -131,5 +135,60 @@ func TestEgressEpisodeRetentionAndStorageCap(t *testing.T) {
 	}
 	if got := s.ListEgressEpisodes(10); len(got) != 0 {
 		t.Fatalf("expired rows visible: %+v", got)
+	}
+}
+
+// The projection reads, then writes, while the drain loop writes events on
+// other connections. A deferred transaction failed that upgrade at once with
+// SQLITE_BUSY or SQLITE_BUSY_SNAPSHOT and the observation was dropped. The
+// 75 ms bound may still drop one on a starved machine; a lock failure may not.
+func TestEgressObservationSurvivesConcurrentWriters(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "e.db"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	stop := make(chan struct{})
+	writers := make(chan struct{})
+	for w := 0; w < 4; w++ {
+		go func() {
+			defer func() { writers <- struct{}{} }()
+			for i := 0; ; i++ {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				s.PutEvent(event.Event{Kind: event.KindConnOpen, PID: int32(w), TS: time.Now(), RemoteHost: "x.example.com", RemotePort: 443})
+			}
+		}()
+	}
+	base := time.Now()
+	const n = 200
+	recorded := 0
+	var locked []error
+	for i := 0; i < n; i++ {
+		o := EgressObservation{Scope: EgressScope{Agent: "codex"}, Host: "api.example.com", Protocol: "tcp", Port: 443, At: base.Add(time.Duration(i) * time.Second)}
+		switch err := s.RecordEgressObservation(o); {
+		case err == nil:
+			recorded++
+		case !errors.Is(err, context.DeadlineExceeded):
+			locked = append(locked, err)
+		}
+	}
+	close(stop)
+	for w := 0; w < 4; w++ {
+		<-writers
+	}
+	if len(locked) > 0 {
+		t.Fatalf("%d of %d observations failed on a lock beside concurrent writers; first: %v", len(locked), n, locked[0])
+	}
+	if recorded < n/2 {
+		t.Fatalf("only %d of %d observations recorded", recorded, n)
+	}
+	eps := s.ListEgressEpisodes(10)
+	if len(eps) != 1 || eps[0].Count != recorded {
+		t.Fatalf("episodes = %+v, want one with count %d", eps, recorded)
 	}
 }
