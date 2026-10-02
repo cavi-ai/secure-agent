@@ -1129,6 +1129,7 @@ GET /egress/uninspected?hours=24&limit=200
 - `session_id` — most recent session that reached the host, omitted when none.
 - `infra` — set only for CDN/cloud carriers (Cloudflare, Google, GitHub, PTR-classified).
 - `identity.org` can be set without `infra`.
+- `agent_kind` — `"infra"` when `agent` is an infra family (`cursor-ide`, `claude-desktop`, `ollama`, `lm-studio`, or any `kind: infra` entry in `agents:`); omitted for agents. Infra rows are never `/snapshot` suggestions.
 
 `hours` (1–168, default 24) windows the list by last-seen; out-of-range
 values fall back to 24. Sorted most-frequent first; `assessment`/`rationale`
@@ -1137,7 +1138,9 @@ with `POST /allowlist` to close that blind spot.
 
 Related: `status.uninspected_egress` is a **rolling 24h** distinct-endpoint
 count ("what is bypassing inspection now"), not a lifetime figure — pairs
-silent for 7+ days are swept from the tracker entirely.
+silent for 7+ days are swept from the tracker entirely. It counts agents'
+endpoints only; CDN/cloud carriers and every infra family's endpoints count
+in `status.uninspected_infra`.
 
 ### `GET /egress/episodes`
 

@@ -106,3 +106,58 @@ func TestSuggestionListSkipsVendor(t *testing.T) {
 		t.Fatalf("suggestions = %+v, want only the Google Cloud host", got)
 	}
 }
+
+// infraAppProcSource adds the Cursor IDE (77, infra) beside cursor-agent (42).
+type infraAppProcSource struct{}
+
+var infraAppProcs = []agents.ProcInfo{
+	{PID: 42, PPID: 1, Exe: "/usr/local/bin/cursor-agent"},
+	{PID: 77, PPID: 1, Exe: "/Applications/Cursor.app/Contents/MacOS/Cursor"},
+}
+
+func (infraAppProcSource) List() []agents.ProcInfo { return infraAppProcs }
+
+func (infraAppProcSource) Info(pid int32) (agents.ProcInfo, bool) {
+	for _, p := range infraAppProcs {
+		if p.PID == pid {
+			return p, true
+		}
+	}
+	return agents.ProcInfo{}, false
+}
+
+// An infra app's endpoint is served with agent_kind infra and is never an
+// approve-this-endpoint suggestion; the agent's own row is both.
+func TestInfraAppRowsCarryKindAndAreNotSuggested(t *testing.T) {
+	cfg, err := config.Load("/nonexistent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tg := agents.New(cfg, infraAppProcSource{})
+	tg.Refresh()
+	cr := correlate.New(tg, sensitive.New(cfg), cfg)
+	for i := 0; i < minSuggestionCount; i++ {
+		for _, pid := range []int32{42, 77} {
+			cr.Observe(event.Event{Kind: event.KindConnOpen, PID: pid, TS: time.Now(), RemoteHost: "34.120.1.1", RemotePort: 443})
+		}
+	}
+	a := newTestAPI("", testStore(t), nil, func() Status { return Status{Running: true} })
+	a.correlator = cr
+
+	rec := httptest.NewRecorder()
+	a.handleUninspectedEgress(rec, httptest.NewRequest(http.MethodGet, "/egress/uninspected", nil))
+	var rows []UninspectedEndpoint
+	if err := json.Unmarshal(rec.Body.Bytes(), &rows); err != nil {
+		t.Fatal(err)
+	}
+	kinds := map[string]string{}
+	for _, r := range rows {
+		kinds[r.Agent] = r.AgentKind
+	}
+	if len(kinds) != 2 || kinds["cursor-ide"] != config.AgentKindInfra || kinds["cursor"] != "" {
+		t.Fatalf("agent kinds = %v, want cursor-ide infra and cursor empty", kinds)
+	}
+	if got := a.suggestionList(); len(got) != 1 || got[0].Agent != "cursor" {
+		t.Fatalf("suggestions = %+v, want only cursor's", got)
+	}
+}
