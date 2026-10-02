@@ -149,7 +149,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 
 	// Operator price table from config.yaml, applied before any collector
 	// emits a model call; the config watcher re-applies it on change.
-	applyPricing(cfg)
+	applyPricing(cfg, st)
 	// Plan headroom saved by the previous run answers /costs/plans until the
 	// next token_count line; the resource loop saves each change.
 	plans := restorePlans(st, time.Now())

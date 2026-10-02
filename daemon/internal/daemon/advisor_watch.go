@@ -119,7 +119,7 @@ func watchConfig(ctx context.Context, path string, deps configWatchDeps) {
 		}
 		if key := pricingConfigKey(data); key != lastPricingKey {
 			lastPricingKey = key
-			applyPricing(data)
+			applyPricing(data, deps.st)
 			log.Printf("pricing config applied live (%d model(s))", len(data.Pricing))
 		}
 		if key := worktreesConfigKey(data.Worktrees); key != lastWorktreesKey && deps.worktrees != nil {
@@ -165,14 +165,21 @@ func watchConfig(ctx context.Context, path string, deps configWatchDeps) {
 	}
 }
 
-// applyPricing installs the operator price table and logs each entry the
-// loader dropped. Called at boot and by the watcher only on a change, so a
-// malformed entry is logged once per load, not once per poll.
-func applyPricing(cfg config.Config) {
+// applyPricing installs the operator price table, logs each entry the loader
+// dropped, and prices stored calls the table now covers. Called at boot and
+// by the watcher only on a change, so a malformed entry is logged once per
+// load, not once per poll.
+func applyPricing(cfg config.Config, st *store.Store) {
 	for _, s := range cfg.PricingSkipped {
 		log.Printf("config: pricing entry ignored (%s)", s)
 	}
 	collect.SetUserPrices(cfg.Pricing)
+	if st == nil {
+		return
+	}
+	if n := st.RepriceZeroCostCalls(collect.ModelCostUSD); n > 0 {
+		log.Printf("pricing: priced %d stored model calls written without a price", n)
+	}
 }
 
 // pricingConfigKey fingerprints the price table and its dropped entries.

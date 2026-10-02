@@ -339,6 +339,17 @@ func TestESServiceItemsNamesRegrantAfterHelperReplaced(t *testing.T) {
 	if strings.Contains(unchanged[0].Detail, "replaced") || !strings.Contains(unchanged[0].Detail, "file telemetry may be blind") {
 		t.Fatalf("unchanged helper must keep the generic detail, got %q", unchanged[0].Detail)
 	}
+
+	// launchd keeps an earlier exit code after a restart: still running.
+	restarted := esServiceItems(collect.ESServiceSnapshot{
+		State: "running (last exit 1)", SpoolSize: 10, SpoolMtime: now.Add(-2 * time.Hour), HelperMtime: now.Add(-time.Hour),
+	})
+	if len(restarted) != 1 || !strings.Contains(restarted[0].Detail, "helper binary was replaced after the last write") {
+		t.Fatalf("restarted helper: items = %+v, want the re-grant item, not a failing service", restarted)
+	}
+	if fresh := esServiceItems(collect.ESServiceSnapshot{State: "running (last exit 1)", SpoolSize: 10, SpoolMtime: now}); len(fresh) != 0 {
+		t.Fatalf("restarted helper writing now: items = %+v, want none", fresh)
+	}
 }
 
 // A writer producing mostly-unparseable lines (UnparsedShare over half) is
