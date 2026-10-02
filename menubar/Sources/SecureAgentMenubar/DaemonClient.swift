@@ -112,6 +112,12 @@ public final class DaemonClient: Sendable {
         try await getDecodable("/doctor")
     }
 
+    /// GET /routing/claude — the environment that routes Claude Code through
+    /// the proxy (carries the proxy token; NoAgent).
+    public func fetchRouting() async throws -> RoutingInfo {
+        try await getDecodable("/routing/claude")
+    }
+
     public func fetchFlags(limit: Int = 20) async throws -> [FlagModel] {
         try await getDecodable("/flags?limit=\(limit)")
     }

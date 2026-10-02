@@ -50,6 +50,40 @@ type ProxyServer struct {
 	// plainHTTPClient is shared across plain-HTTP proxy requests so connections
 	// are reused; a per-request Transport would defeat keep-alive pooling.
 	plainHTTPClient *http.Client
+	// inspectHosts are the hosts an inspect-mode CONNECT is decrypted for;
+	// every other CONNECT is tunneled. Set once before Serve.
+	inspectHosts map[string]bool
+	// tunneled and decrypted count CONNECTs by how they were served.
+	tunneled  atomic.Uint64
+	decrypted atomic.Uint64
+}
+
+// SetInspectHosts sets the hosts an inspect-mode client's CONNECTs are
+// decrypted and scanned for. Call before Serve.
+func (ps *ProxyServer) SetInspectHosts(hosts []string) {
+	m := make(map[string]bool, len(hosts))
+	for _, h := range hosts {
+		if h = strings.ToLower(strings.TrimSpace(h)); h != "" {
+			m[h] = true
+		}
+	}
+	ps.inspectHosts = m
+}
+
+// inspects reports whether a CONNECT target (host:port) is decrypted for an
+// inspect-mode client.
+func (ps *ProxyServer) inspects(hostPort string) bool {
+	host, _, err := net.SplitHostPort(hostPort)
+	if err != nil {
+		host = hostPort
+	}
+	return ps.inspectHosts[strings.ToLower(host)]
+}
+
+// RouteStats counts the CONNECTs the proxy served since start: tunneled
+// unopened, and decrypted for inspection.
+func (ps *ProxyServer) RouteStats() (tunneled, decrypted uint64) {
+	return ps.tunneled.Load(), ps.decrypted.Load()
 }
 
 // SetConsoleAPI wires the (ungated-by-peer-creds — this is a TCP listener, so
@@ -161,11 +195,16 @@ func (ps *ProxyServer) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		ps.consoleAPI.ServeHTTP(w, r)
 		return
 	}
-	if !authorized(r) {
+	mode, ok := authorize(r)
+	if !ok {
 		rejectToken(w)
 		return
 	}
 	if r.Method == http.MethodConnect {
+		if mode == ModeTunnel || !ps.inspects(r.Host) {
+			ps.tunnel(w, r)
+			return
+		}
 		ps.handleConnect(w, r)
 		return
 	}
@@ -229,6 +268,7 @@ func (ps *ProxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tlsClientConn.Close()
+	ps.decrypted.Add(1)
 	_ = clientConn.SetDeadline(time.Time{})
 
 	// Serve every request on the tunnel, not just the first: real agent clients
@@ -267,6 +307,53 @@ func (ps *ProxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+}
+
+// tunnel relays a CONNECT unopened: the client's TLS runs end to end with the
+// upstream, so no client needs the proxy CA. The connection is counted; its
+// bytes are not read.
+func (ps *ProxyServer) tunnel(w http.ResponseWriter, r *http.Request) {
+	hj, ok := w.(http.Hijacker)
+	if !ok {
+		http.Error(w, "Hijacking not supported", http.StatusInternalServerError)
+		return
+	}
+	upstream, err := net.DialTimeout("tcp", r.Host, dialTimeout)
+	if err != nil {
+		http.Error(w, "upstream unreachable", http.StatusBadGateway)
+		return
+	}
+	clientConn, buffered, err := hj.Hijack()
+	if err != nil {
+		_ = upstream.Close()
+		return
+	}
+	defer clientConn.Close()
+	defer upstream.Close()
+	ps.tunneled.Add(1)
+	if _, err := clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n")); err != nil {
+		return
+	}
+	// Bytes the client sent right behind the CONNECT head are already in the
+	// server's reader.
+	if n := buffered.Reader.Buffered(); n > 0 {
+		head, _ := buffered.Reader.Peek(n)
+		if _, err := upstream.Write(head); err != nil {
+			return
+		}
+	}
+	done := make(chan struct{}, 2)
+	relay := func(dst, src net.Conn) {
+		_, _ = io.Copy(dst, src)
+		if c, ok := dst.(interface{ CloseWrite() error }); ok {
+			_ = c.CloseWrite()
+		}
+		done <- struct{}{}
+	}
+	go relay(upstream, clientConn)
+	go relay(clientConn, upstream)
+	<-done
+	<-done
 }
 
 // forwardConnectRequest dials the real upstream (verifying its certificate

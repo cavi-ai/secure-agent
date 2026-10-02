@@ -64,6 +64,9 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificat
         state.start()
 
         Task {
+            await SetupManager.shared.reapplyClaudeRouting()
+        }
+        Task {
             await SetupManager.shared.refreshState()
             if SetupManager.shared.needsSetup {
                 OnboardingWindowController.shared.showOnceIfNeeded()
@@ -76,6 +79,9 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificat
         // Stop the event stream/polling first so no in-flight fetch outlives us.
         launchTask?.cancel()
         state.stop()
+        // Routing points Claude Code at this app's proxy; take it back before
+        // the proxy goes away.
+        SetupManager.shared.withdrawClaudeRouting()
         DaemonSupervisor.shared.stop()
         AppInstanceGuard.shared.release()
     }

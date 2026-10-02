@@ -250,9 +250,32 @@ An enabled agent with a non-loopback endpoint is a validation error. Changes tak
 ### Proxy authentication
 
 Default `proxy_enabled` is `false` (MITM inspection and the web console are opt-in). When the proxy is enabled, the daemon generates a per-install token at
-`~/.config/secure-agent/proxy-token` (0600). The routing snippet
-(`agent-env.sh`) carries it; the proxy rejects unauthenticated proxying with
-`407`. The dashboard remains unauthenticated (loopback only).
+`~/.config/secure-agent/proxy-token` (0600). Routed clients carry it as the
+password in the proxy URL, `http://<mode>:<token>@127.0.0.1:<proxy_port>`; the
+proxy rejects unauthenticated proxying with `407`. The dashboard remains
+unauthenticated (loopback only).
+
+### Routing modes
+
+The user name in the proxy URL selects the mode for each connection:
+
+- `inspect` — a CONNECT to a host in `proxy_inspect_hosts` (default
+  `api.anthropic.com`) is decrypted with Secure Agent's CA and scanned; any
+  other CONNECT is tunneled. For clients that trust the CA: Claude Code reads
+  `NODE_EXTRA_CA_CERTS`.
+- `tunnel` — every CONNECT passes through unopened: the destination is
+  counted, the bytes are not read, and the client needs no CA.
+
+The daemon writes the tunnel-mode snippet to `agent-env.sh` next to the CA
+(`HTTP(S)_PROXY` in both cases, `NO_PROXY=localhost,127.0.0.1,::1`).
+**Settings → Secure Agent → Traffic → Route Claude Code through Secure Agent**
+writes the inspect-mode environment and the CA into the `env` block of
+`~/.claude/settings.json`, and a SessionStart hook that appends the
+tunnel-mode snippet to each session's Bash environment (`CLAUDE_ENV_FILE`). It
+refuses when the file already sets one of those keys itself, records the keys
+it added (`SECURE_AGENT_ROUTED_KEYS`), and removes only those when turned off
+or when the app quits; the next launch writes them again. `/status` counts
+`proxy_tunneled` and `proxy_decrypted` connections since start.
 
 ### Runtime overrides (not in this file)
 

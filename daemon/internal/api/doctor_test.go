@@ -427,3 +427,14 @@ func TestDoctorFileTelemetryRunningAfterAnEarlierExit(t *testing.T) {
 		t.Fatalf("file-telemetry = %+v, want fail: crash loop", c)
 	}
 }
+
+// Routed traffic is the proof the proxy is in the path: the pass names how
+// many connections it served and how many it decrypted.
+func TestDoctorEgressRoutedCounts(t *testing.T) {
+	st := testStore(t)
+	t.Cleanup(func() { st.Close() })
+	rep, _ := getDoctor(t, st, Status{Running: true, Uptime: "1h0m0s", ProxyEnabled: true, ProxyTunneled: 12, ProxyDecrypted: 3})
+	if c := doctorCheckByID(t, rep, "egress-routing"); c.State != doctorPass || !strings.Contains(c.Detail, "15 connections since start (3 decrypted)") {
+		t.Fatalf("egress-routing = %+v, want pass naming 15 connections, 3 decrypted", c)
+	}
+}

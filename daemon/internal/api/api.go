@@ -88,12 +88,16 @@ type Status struct {
 	// InfraCount counts distinct tree ROOTS of kind=infra families (IDEs,
 	// local model servers) — shared infrastructure, shown beside but never
 	// inside ActiveAgents ("Agents 4 · Sessions 9 · Infra 3").
-	InfraCount        int            `json:"infra_count,omitempty"`
-	Agents            []AgentSummary `json:"agents"`
-	Trees             []AgentTree    `json:"trees"`
-	ProxyEnabled      bool           `json:"proxy_enabled"`
-	ProxyPort         int            `json:"proxy_port"`
-	UninspectedEgress int            `json:"uninspected_egress"`
+	InfraCount   int            `json:"infra_count,omitempty"`
+	Agents       []AgentSummary `json:"agents"`
+	Trees        []AgentTree    `json:"trees"`
+	ProxyEnabled bool           `json:"proxy_enabled"`
+	ProxyPort    int            `json:"proxy_port"`
+	// ProxyTunneled and ProxyDecrypted count the routed CONNECTs the proxy
+	// served since start: passed through unopened, and decrypted.
+	ProxyTunneled     uint64 `json:"proxy_tunneled,omitempty"`
+	ProxyDecrypted    uint64 `json:"proxy_decrypted,omitempty"`
+	UninspectedEgress int    `json:"uninspected_egress"`
 	// UninspectedInfra counts unrouted endpoints classified as known
 	// CDN/cloud infrastructure (the agents' own API carriers). Reported for
 	// honesty but excluded from the headline above — infra is a routing
@@ -160,6 +164,7 @@ type API struct {
 	statusFn         StatusFunc
 	hermes           func() collect.HermesStatus
 	sightings        func(since time.Time) map[string]int
+	routing          func() RoutingInfo
 	worktrees        *worktreehunter.Hunter
 	worktreeAdvisor  func(model.WorktreeAdviceRequest) bool
 	egressAdvisor    func(store.EgressEpisode) bool
@@ -323,6 +328,9 @@ type Deps struct {
 	// time, by harness, for /doctor trace coverage (optional; unwired skips
 	// the check).
 	Sightings func(since time.Time) map[string]int
+	// Routing answers GET /routing/claude (optional; unwired reports not
+	// ready).
+	Routing func() RoutingInfo
 
 	// Worktrees is the worktree hunter behind /worktrees (optional; unwired
 	// answers 503).
@@ -354,6 +362,7 @@ func New(d Deps) *API {
 		statusFn:        d.Status,
 		hermes:          d.Hermes,
 		sightings:       d.Sightings,
+		routing:         d.Routing,
 		worktrees:       d.Worktrees,
 		worktreeAdvisor: d.WorktreeAdvisor,
 		egressAdvisor:   d.EgressAdvisor,
@@ -666,6 +675,7 @@ func (a *API) routes() map[string]http.HandlerFunc {
 		"/costs/unpriced":               a.handleCostsUnpriced,
 		"/costs/plans":                  a.handleCostsPlans,
 		"/doctor":                       a.handleDoctor,
+		"/routing/claude":               a.handleRoutingClaude,
 		"/worktrees":                    a.handleWorktrees,
 		"/worktrees/repos":              a.handleWorktreeRepos,
 		"/worktrees/remove":             a.handleWorktreeRemove,

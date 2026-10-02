@@ -652,7 +652,7 @@ Each check has a `state` of `pass`, `fail` or `skip`, a `detail`, and on `fail` 
 | `hook-active` | agents are running and no hook event landed in 24h | no agents |
 | `file-telemetry` | root ES service `not-loaded`, in a `spawn`/`exit` state, or `running` with agents active and the spool unwritten for over 10 min (past grace) | file telemetry is not spool-based |
 | `collectors` | a collector is stopped or abandoned, or (with agents active) silent; passes with each polling collector's database, watermark and last poll | grace |
-| `trace-coverage` | a harness has transcript- or hook-confidence sessions seen since boot (an ended one only with an event since boot) but no tool-call, turn or model-call rows; passes listing each traced harness with its session count | grace, or no such sessions since boot |
+| `trace-coverage` | a harness had sessions with a transcript line read or a hook event since boot, but no tool-call, turn or model-call rows were written since boot (whatever their own timestamps); a session whose process only stayed alive is not counted; passes listing each traced harness with its session count | grace, or no such sessions since boot |
 | `hermes` | a Hermes `state.db` could not be read (detail names the database and error); passes with each database's message watermark and the last poll time | no `state.db` under the Hermes root (`not installed`) |
 | `session-identity` | under 80% of sessions carry a harness | no sessions |
 | `session-repo` | under 50% of named sessions with a workspace since boot carry a repo, or named sessions since boot carry no workspace at all | grace, or no named sessions since boot |
@@ -660,7 +660,7 @@ Each check has a `state` of `pass`, `fail` or `skip`, a `detail`, and on `fail` 
 | `tool-pairing` | any `(session_id, call_id)` pair is stored twice, or a tool-call row since boot has no call id | — |
 | `pricing` | under 90% of `claude-*` model calls carry a cost (detail also reports unpriced calls over all models) | no Claude model calls |
 | `retention` | a row cap keeps under 24h: any kind's record rows (a flag's own event, a file event that counts as a secret read) at their 20,000-row budget, or a kind other than `file-open`, `file-write`, `file-delete` and `exec` at its row budget; passes naming how far back those four kinds' newest rows reach | — |
-| `egress-routing` | the proxy is on and endpoints were reached outside it (proxy off passes as `proxy off — egress not inspected`) | — |
+| `egress-routing` | the proxy is on and endpoints were reached outside it (proxy off passes as `proxy off — egress not inspected`); a pass names the connections routed since start and how many were decrypted | — |
 | `bus` | subscribers dropped events on full buffers | — |
 
 ```json
@@ -767,6 +767,19 @@ GET /sessions/{id}/memory?limit=200&before=<cursor>
 - An unknown session returns `404`; a bad `limit` or cursor returns `400`.
 
 Read-level; console-allowed. The Sessions tab shows it for the selected session.
+
+### 18c. `GET /routing/claude`
+
+The environment that routes Claude Code through the proxy, for the menu bar app to write into `~/.claude/settings.json`. NoAgent: the answer carries the proxy token.
+
+```json
+{"ready": true,
+ "env": {"HTTPS_PROXY": "http://inspect:<token>@127.0.0.1:8443", "HTTP_PROXY": "…", "https_proxy": "…", "http_proxy": "…",
+         "NO_PROXY": "localhost,127.0.0.1,::1", "no_proxy": "…", "NODE_EXTRA_CA_CERTS": "/Users/dev/.config/secure-agent/ca.crt"},
+ "bash_env_path": "/Users/dev/.config/secure-agent/agent-env.sh"}
+```
+
+`ready` is false, with a `reason`, while the proxy is off, not yet bound, or without its token or snippet. `/status` carries `proxy_tunneled` and `proxy_decrypted`: routed CONNECTs since start, tunneled unopened and decrypted. See CONFIGURATION.md, Routing modes.
 
 ### `GET /advisor/discover`
 

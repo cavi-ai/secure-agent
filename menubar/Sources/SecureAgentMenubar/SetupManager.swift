@@ -94,6 +94,7 @@ public final class SetupManager: ObservableObject {
     /// write proves the registered daemon holds its privacy grant.
     private var esRegisterSpoolMtime: Date?
     private let esService: any ESServiceControl
+    private let prefs: UserDefaults
     private let esMemory: ESAutopilotMemory
     private let esPlistCheck: () -> Bool
     private let esOpenPane: (ESSettingsPane) -> Void
@@ -152,6 +153,7 @@ public final class SetupManager: ObservableObject {
          plistPresent: (() -> Bool)? = nil,
          openPane: ((ESSettingsPane) -> Void)? = nil) {
         self.esService = esService
+        prefs = defaults
         esMemory = ESAutopilotMemory(
             defaults: defaults,
             build: Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "")
@@ -173,6 +175,7 @@ public final class SetupManager: ObservableObject {
         let status = try? await DaemonClient().fetchStatus()
         isDaemonRunning = DaemonSupervisor.shared.isRunning || (status?.running ?? false)
         refreshESState()
+        claudeRoutingApplied = ClaudeRouting.isApplied(at: Self.claudeSettingsPath)
         // ALL harnesses must carry the hook — `contains` used to announce
         // "Hooks installed" when only one of three targets had it, leaving the
         // other two unprotected while the wizard claimed otherwise. Claude Code
@@ -1378,7 +1381,63 @@ public final class SetupManager: ObservableObject {
             }
         }
         unregisterClaudeHooks()
+        withdrawClaudeRouting()
+        prefs.removeObject(forKey: Self.routeClaudeCodeKey)
         try? fm.removeItem(atPath: "\(home)/.local/bin/secure-agent")
+    }
+
+    // MARK: - Claude Code routing
+
+    /// The operator's choice to route Claude Code through the proxy. The app
+    /// re-applies it at launch and withdraws it at quit, so new Claude Code
+    /// sessions never point at a proxy that is not running.
+    static let routeClaudeCodeKey = "routeClaudeCode"
+
+    /// Whether ~/.claude/settings.json carries Secure Agent's routing now.
+    @Published public private(set) var claudeRoutingApplied = false
+
+    /// Turns routing on (fetches the running daemon's environment and writes
+    /// it) or off, and records the choice.
+    public func setClaudeRouting(_ on: Bool) async {
+        lastError = nil
+        do {
+            if on {
+                let info = try await DaemonClient().fetchRouting()
+                try ClaudeRouting.apply(at: Self.claudeSettingsPath, info: info)
+            } else {
+                try ClaudeRouting.remove(at: Self.claudeSettingsPath)
+            }
+            prefs.set(on, forKey: Self.routeClaudeCodeKey)
+        } catch {
+            report(error)
+        }
+        claudeRoutingApplied = ClaudeRouting.isApplied(at: Self.claudeSettingsPath)
+    }
+
+    /// At launch: when routing is on, write the running daemon's port and
+    /// token again. The child daemon may still be starting, so this waits up
+    /// to 10 s for it; until then Claude Code stays unrouted.
+    public func reapplyClaudeRouting() async {
+        defer { claudeRoutingApplied = ClaudeRouting.isApplied(at: Self.claudeSettingsPath) }
+        guard prefs.bool(forKey: Self.routeClaudeCodeKey) else { return }
+        for _ in 0..<20 {
+            if let info = try? await DaemonClient().fetchRouting(), info.ready {
+                do {
+                    try ClaudeRouting.apply(at: Self.claudeSettingsPath, info: info)
+                } catch {
+                    report(error)
+                }
+                return
+            }
+            try? await Task.sleep(nanoseconds: 500_000_000)
+        }
+    }
+
+    /// At quit: take routing back out of Claude Code's settings so new
+    /// sessions reach the network directly while Secure Agent is not running.
+    /// The choice is kept for the next launch.
+    public func withdrawClaudeRouting() {
+        try? ClaudeRouting.remove(at: Self.claudeSettingsPath)
     }
 
     // MARK: - Helpers

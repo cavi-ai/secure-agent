@@ -485,7 +485,13 @@ struct SettingsView: View {
 
     private var trafficSection: some View {
         Section("Agent traffic inspection") {
-            Text("Route agents through the inspection proxy (opt-in, shell-scoped).")
+            Toggle("Route Claude Code through Secure Agent", isOn: Binding(
+                get: { setup.claudeRoutingApplied },
+                set: { on in Task { await setup.setClaudeRouting(on) } }
+            ))
+            Text("New Claude Code sessions send their traffic through Secure Agent's proxy: API requests to Anthropic are decrypted and scanned; every other connection, including Bash commands, passes through unopened. Quitting Secure Agent turns routing off until the next launch; if it stops unexpectedly, reopen it before starting Claude Code.")
+                .font(.caption).foregroundStyle(.secondary)
+            Text("Other agents: source the snippet in the shell where you launch them; their connections pass through unopened.")
                 .font(.caption).foregroundStyle(.secondary)
             HStack {
                 Button("Copy Command") { setup.copyAgentRoutingCommand() }

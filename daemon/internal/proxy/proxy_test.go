@@ -2,6 +2,8 @@ package proxy
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/base64"
 	"fmt"
 	"io"
@@ -688,5 +690,106 @@ func TestConsoleSessionTimelinePathGate(t *testing.T) {
 	}
 	if isConsoleAPIPath("/sessions//memory") || isConsoleAPIPath("/sessions/sess-1/memory/extra") {
 		t.Fatal("malformed session memory path must not be admitted")
+	}
+}
+
+// startRouteProxy serves a token-gated proxy over a fresh CA and returns it
+// with the CA's certificate path.
+func startRouteProxy(t *testing.T) (*ProxyServer, string, string) {
+	t.Helper()
+	tok := loadTestToken(t)
+	dir := t.TempDir()
+	caCert := filepath.Join(dir, "ca.crt")
+	caMgr, err := NewCAManager(caCert, filepath.Join(dir, "ca.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ps := NewProxyServer(0, bus.New(16), caMgr, testProxyEngine(t, "monitor"))
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go func() { _ = ps.Serve(ctx) }()
+	for i := 0; i < 50 && ps.Port() == 0; i++ {
+		time.Sleep(10 * time.Millisecond)
+	}
+	time.Sleep(50 * time.Millisecond)
+	return ps, tok, caCert
+}
+
+// routedGet fetches target through the proxy as user, trusting only roots.
+func routedGet(t *testing.T, ps *ProxyServer, user, tok, target string, roots *x509.CertPool) (*http.Response, error) {
+	t.Helper()
+	proxyURL, _ := url.Parse(fmt.Sprintf("http://%s:%s@127.0.0.1:%d", user, tok, ps.Port()))
+	client := &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{
+		Proxy:           http.ProxyURL(proxyURL),
+		TLSClientConfig: &tls.Config{RootCAs: roots},
+	}}
+	return client.Get(target)
+}
+
+// A tunnel-mode client, and an inspect-mode client on a host outside the
+// inspect list, speak TLS with the real upstream: no proxy CA, bytes unopened.
+func TestRoutedConnectTunnelsUnopened(t *testing.T) {
+	backend := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("upstream says hi"))
+	}))
+	defer backend.Close()
+	upstreamOnly := x509.NewCertPool()
+	upstreamOnly.AddCert(backend.Certificate())
+
+	ps, tok, _ := startRouteProxy(t)
+	ps.SetInspectHosts([]string{"api.anthropic.com"})
+	for _, user := range []string{"tunnel", "inspect"} {
+		resp, err := routedGet(t, ps, user, tok, backend.URL, upstreamOnly)
+		if err != nil {
+			t.Fatalf("%s: %v", user, err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if string(body) != "upstream says hi" {
+			t.Fatalf("%s: body %q", user, body)
+		}
+	}
+	if tunneled, decrypted := ps.RouteStats(); tunneled != 2 || decrypted != 0 {
+		t.Fatalf("RouteStats = %d tunneled, %d decrypted; want 2, 0", tunneled, decrypted)
+	}
+}
+
+// An inspect-mode client on an inspect host completes TLS with the proxy's
+// certificate: the connection is decrypted. A tunnel-mode client on the same
+// host still gets the upstream's own certificate.
+func TestRoutedConnectDecryptsInspectHostsForInspectMode(t *testing.T) {
+	backend := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("upstream says hi"))
+	}))
+	defer backend.Close()
+	ps, tok, caCert := startRouteProxy(t)
+	ps.SetInspectHosts([]string{"127.0.0.1"})
+
+	pem, err := os.ReadFile(caCert)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxyOnly := x509.NewCertPool()
+	proxyOnly.AppendCertsFromPEM(pem)
+	resp, err := routedGet(t, ps, "inspect", tok, backend.URL, proxyOnly)
+	if err != nil {
+		t.Fatalf("inspect client trusting only the proxy CA: %v", err)
+	}
+	resp.Body.Close()
+	// The upstream's test certificate is not in the system roots the proxy
+	// verifies against, so the decrypted request ends at a 502 from the proxy.
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502 from the proxy's verified upstream dial", resp.StatusCode)
+	}
+
+	upstreamOnly := x509.NewCertPool()
+	upstreamOnly.AddCert(backend.Certificate())
+	resp, err = routedGet(t, ps, "tunnel", tok, backend.URL, upstreamOnly)
+	if err != nil {
+		t.Fatalf("tunnel client on an inspect host: %v", err)
+	}
+	resp.Body.Close()
+	if tunneled, decrypted := ps.RouteStats(); tunneled != 1 || decrypted != 1 {
+		t.Fatalf("RouteStats = %d tunneled, %d decrypted; want 1, 1", tunneled, decrypted)
 	}
 }
