@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -133,6 +134,126 @@ func TestStartRemoveManyInOneRepository(t *testing.T) {
 	}
 	if list := run(t, f.main, "worktree", "list", "--porcelain"); strings.Count(list, "worktree ") != 1 {
 		t.Fatalf("git still lists linked worktrees:\n%s", list)
+	}
+}
+
+// slowGit puts a git first on PATH whose first call after arm hangs until
+// it is killed, leaving started behind; every other call runs the real git.
+func slowGit(t *testing.T) (arm func(), started string) {
+	t.Helper()
+	real, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git not installed")
+	}
+	dir := t.TempDir()
+	armed, started := filepath.Join(dir, "armed"), filepath.Join(dir, "started")
+	bin := filepath.Join(dir, "bin")
+	write(t, filepath.Join(bin, "git"), fmt.Sprintf("#!/bin/sh\nif mv %q %q 2>/dev/null; then exec sleep 30; fi\nexec %q \"$@\"\n", armed, started, real))
+	if err := os.Chmod(filepath.Join(bin, "git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return func() { write(t, armed, "") }, started
+}
+
+func waitForFile(t *testing.T, p string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for !exists(p) {
+		if time.Now().After(deadline) {
+			t.Fatalf("%s never appeared", p)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// A row action does not wait behind the background rescan the previous
+// removal started: it cancels the rescan, and the rescan's partial report
+// is neither cached nor saved.
+func TestRowActionCancelsTheBackgroundRescan(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		gone   bool // the target's directory is deleted before the first scan
+		action func(h *Hunter, f fixture, target string) error
+	}{
+		{"remove", false, func(h *Hunter, _ fixture, target string) error {
+			_, err := h.Remove(context.Background(), target)
+			return err
+		}},
+		{"prune", true, func(h *Hunter, f fixture, _ string) error {
+			_, err := h.Prune(context.Background(), f.main)
+			return err
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, f := removalFixture(t)
+			first, target := f.worktree(t, "first"), f.worktree(t, "target")
+			if tc.gone {
+				if err := os.RemoveAll(target); err != nil {
+					t.Fatal(err)
+				}
+			}
+			ctx := context.Background()
+			h.Report(ctx, false)
+			_, savedAt, _ := h.st.ScanCache(cacheReportKey)
+			if _, err := h.Remove(ctx, first); err != nil {
+				t.Fatal(err)
+			}
+			arm, started := slowGit(t)
+			arm()
+			if !h.Report(ctx, false).Refreshing {
+				t.Fatal("the report after a removal does not refresh")
+			}
+			waitForFile(t, started)
+
+			begin := time.Now()
+			if err := tc.action(h, f, target); err != nil {
+				t.Fatal(err)
+			}
+			// Waiting would last until gitTimeout (10 s) kills the hung git.
+			if d := time.Since(begin); d > 5*time.Second {
+				t.Fatalf("%s waited %s behind the background rescan", tc.name, d.Round(time.Second))
+			}
+			h.bgWG.Wait()
+			if _, at, _ := h.st.ScanCache(cacheReportKey); !at.Equal(savedAt) {
+				t.Fatal("the canceled rescan's report was saved")
+			}
+			if r, _, ok := h.cachedCopy(); ok && strings.Contains(strings.Join(r.Errors, "\n"), "stopped early") {
+				t.Fatalf("the canceled rescan's report was cached: %v", r.Errors)
+			}
+		})
+	}
+}
+
+// While a row action waits for the scan lock, a report on an old scan does
+// not start a background rescan that would take the lock first; the next
+// report after the action does.
+func TestNoBackgroundRescanWhileAnActionWaits(t *testing.T) {
+	h, f := removalFixture(t)
+	f.worktree(t, "a")
+	ctx := context.Background()
+	h.Report(ctx, false)
+	_, savedAt, _ := h.st.ScanCache(cacheReportKey)
+
+	h.mu.Lock()
+	h.actions++
+	h.mu.Unlock()
+	h.markStale()
+	if !h.Report(ctx, false).Refreshing {
+		t.Fatal("an old scan does not say refreshing")
+	}
+	h.bgWG.Wait()
+	if _, at, _ := h.st.ScanCache(cacheReportKey); !at.Equal(savedAt) {
+		t.Fatal("a background rescan ran while an action waited")
+	}
+
+	h.mu.Lock()
+	h.actions--
+	h.mu.Unlock()
+	h.Report(ctx, false)
+	h.bgWG.Wait()
+	if _, at, _ := h.st.ScanCache(cacheReportKey); at.Equal(savedAt) {
+		t.Fatal("no background rescan after the action")
 	}
 }
 

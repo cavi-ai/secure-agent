@@ -70,8 +70,7 @@ func orphanAt(path string) (orphanDir, bool) {
 // Reconnect runs `git worktree repair` in the repository that still
 // records the orphan at path and returns that repository.
 func (h *Hunter) Reconnect(ctx context.Context, path string) (string, error) {
-	h.scanMu.Lock()
-	defer h.scanMu.Unlock()
+	defer h.lockForAction(nil)()
 	o, ok := orphanAt(path)
 	if !ok {
 		return "", ErrNotOrphan
@@ -107,8 +106,7 @@ type TrashedOrphan struct {
 // TrashOrphan moves the orphan folder at path to the Trash on its volume
 // and books its size as trashed.
 func (h *Hunter) TrashOrphan(ctx context.Context, path string) (TrashedOrphan, error) {
-	h.scanMu.Lock()
-	defer h.scanMu.Unlock()
+	defer h.lockForAction(nil)()
 	o, ok := orphanAt(path)
 	if !ok {
 		return TrashedOrphan{}, ErrNotOrphan

@@ -137,6 +137,10 @@ type Hunter struct {
 	opts     Options
 	cached   *ScanReport
 	cachedAt time.Time
+	// bgCancel cancels the running background rescan; actions counts the
+	// row actions waiting for or holding scanMu. Both under mu.
+	bgCancel context.CancelCauseFunc
+	actions  int
 
 	// scanMu serializes scans; a request that waited on it reuses the scan
 	// that finished meanwhile.
@@ -256,6 +260,12 @@ func (h *Hunter) scanLocked(ctx context.Context) ScanReport {
 	opts := h.opts
 	h.mu.Unlock()
 	rep := h.scan(ctx, opts)
+	h.keep(rep, opts)
+	return rep
+}
+
+// keep caches and saves a finished scan.
+func (h *Hunter) keep(rep ScanReport, opts Options) {
 	at := h.now()
 	h.mu.Lock()
 	h.cached, h.cachedAt = &rep, at
@@ -263,22 +273,68 @@ func (h *Hunter) scanLocked(ctx context.Context) ScanReport {
 	if body, err := json.Marshal(savedReport{Options: opts, Report: rep}); err == nil {
 		h.st.PutScanCache(cacheReportKey, body, at)
 	}
-	return rep
 }
 
-// rescanInBackground starts a rescan unless one is running.
+// errPreempted is the cause a row action cancels a background rescan with.
+var errPreempted = errors.New("a row action needs the scan lock")
+
+// rescanInBackground starts a rescan unless one is running or a row action
+// waits for the scan lock. A row action cancels it (lockForAction) and its
+// partial report is dropped.
 func (h *Hunter) rescanInBackground() {
-	if !h.scanMu.TryLock() {
+	h.mu.Lock()
+	if h.actions > 0 || !h.scanMu.TryLock() {
+		h.mu.Unlock()
 		return
 	}
+	ctx, cancel := context.WithCancelCause(context.Background())
+	h.bgCancel = cancel
+	opts := h.opts
+	h.mu.Unlock()
 	h.bgWG.Add(1)
 	go func() {
 		defer h.bgWG.Done()
 		defer h.scanMu.Unlock()
-		ctx, cancel := context.WithTimeout(context.Background(), scanTimeout)
-		defer cancel()
-		h.scanLocked(ctx)
+		defer cancel(nil)
+		sctx, stop := context.WithTimeout(ctx, scanTimeout)
+		defer stop()
+		rep := h.scan(sctx, opts)
+		h.mu.Lock()
+		h.bgCancel = nil
+		preempted := errors.Is(context.Cause(ctx), errPreempted)
+		h.mu.Unlock()
+		if !preempted {
+			h.keep(rep, opts)
+		}
 	}()
+}
+
+// lockForAction takes the scan lock for a row action (remove, prune, Trash,
+// reconnect) and returns its unlock. A background rescan holding the lock
+// is canceled rather than waited for: no request waits on it, and the
+// cached scan it was replacing stays old, so the next report rescans. No
+// background rescan starts while an action waits. waiting runs when the
+// lock is not free at once.
+func (h *Hunter) lockForAction(waiting func()) func() {
+	h.mu.Lock()
+	h.actions++
+	locked := h.scanMu.TryLock()
+	if !locked && h.bgCancel != nil {
+		h.bgCancel(errPreempted)
+	}
+	h.mu.Unlock()
+	if !locked {
+		if waiting != nil {
+			waiting()
+		}
+		h.scanMu.Lock()
+	}
+	return func() {
+		h.mu.Lock()
+		h.actions--
+		h.mu.Unlock()
+		h.scanMu.Unlock()
+	}
 }
 
 // cachedCopy returns the cached scan at any age, and whether it is older
