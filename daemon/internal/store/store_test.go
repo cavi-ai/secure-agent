@@ -1165,3 +1165,109 @@ func TestFlagProcessAndAckReasonRoundTrip(t *testing.T) {
 		}
 	}
 }
+
+// A model call keyed by its message id is one row: a repeat with no more usage
+// changes nothing, one with more raises the counts and keeps the first
+// timestamp (also when it repeats that timestamp), and a different call at
+// an existing (kind, session, ts) is dropped without an error.
+func TestModelCallUpsertsOnMessageID(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "e.db"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ts := time.Date(2026, 10, 2, 22, 11, 59, 88e6, time.UTC)
+	mc := func(id string, at time.Time, in, out int64, cost float64) event.Event {
+		return event.Event{Kind: event.KindModelCall, TS: at, SessionID: "s1", Model: "claude-opus-4-5",
+			Provider: "anthropic", TokensIn: in, TokensOut: out, CostUSD: cost, CallID: id}
+	}
+	type row struct {
+		n        int
+		ts       string
+		in, out  int64
+		cost     float64
+		provider string
+	}
+	read := func(id string) row {
+		t.Helper()
+		var r row
+		if err := s.db.QueryRow(`SELECT COUNT(*), COALESCE(MIN(ts),''), COALESCE(MAX(tokens_in),0), COALESCE(MAX(tokens_out),0),
+			COALESCE(MAX(cost_usd),0), COALESCE(MAX(provider),'') FROM events WHERE kind = 14 AND call_id = ?`, id).
+			Scan(&r.n, &r.ts, &r.in, &r.out, &r.cost, &r.provider); err != nil {
+			t.Fatal(err)
+		}
+		return r
+	}
+	firstTS := ts.Format(time.RFC3339Nano)
+
+	s.PutEvent(mc("msg_1", ts, 1000, 1819, 0.047692))
+	s.PutEvent(mc("msg_1", ts.Add(11*time.Millisecond), 1000, 1819, 0.047692))
+	s.PutEvent(mc("msg_1", ts.Add(13*time.Millisecond), 1000, 1000, 0.03))
+	if r := read("msg_1"); r != (row{1, firstTS, 1000, 1819, 0.047692, "anthropic"}) {
+		t.Fatalf("after repeats: %+v, want one row at %s with 1000/1819/$0.047692 from anthropic", r, firstTS)
+	}
+	s.PutEvent(mc("msg_1", ts, 1000, 1900, 0.05))
+	if r := read("msg_1"); r != (row{1, firstTS, 1000, 1900, 0.05, "anthropic"}) {
+		t.Fatalf("after a larger repeat: %+v, want the row raised to 1900/$0.05 at %s", r, firstTS)
+	}
+	s.PutEvent(mc("msg_other", ts, 7, 7, 0.001))
+	if r := read("msg_other"); r.n != 0 {
+		t.Fatalf("a different call at an existing (kind, session, ts) was stored: %+v", r)
+	}
+	var total int
+	s.db.QueryRow(`SELECT COUNT(*) FROM events WHERE kind = 14`).Scan(&total)
+	if total != 1 {
+		t.Fatalf("model-call rows = %d, want 1", total)
+	}
+}
+
+// Before model calls carried their message id, each Claude transcript record
+// of one API call was stored as its own model call. Open deletes those
+// repeats — same session, model and token counts within a second — from
+// Claude sessions (or pruned ones with provider anthropic) only, and is
+// idempotent.
+func TestOpenDedupesLegacyClaudeModelCalls(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "e.db")
+	s, err := Open(path, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	for id, harness := range map[string]string{"c1": "claude", "x1": "codex"} {
+		s.UpsertSession(model.Session{ID: id, Harness: harness, StartedAt: now, LastSeenAt: now, Status: model.SessionActive})
+	}
+	t0 := now.Add(-time.Hour)
+	put := func(sid, provider, callID string, ms int, out int64) {
+		s.PutEvent(event.Event{Kind: event.KindModelCall, TS: t0.Add(time.Duration(ms) * time.Millisecond), SessionID: sid,
+			Model: "claude-opus-4-5", Provider: provider, TokensIn: 1000, TokensOut: out, CostUSD: 0.04, CallID: callID})
+	}
+	put("c1", "anthropic", "", 0, 1819) // one API call: three records
+	put("c1", "anthropic", "", 11, 1819)
+	put("c1", "anthropic", "", 13, 1819)
+	put("c1", "anthropic", "", 20, 50)     // different counts: another call
+	put("c1", "anthropic", "", 5000, 1819) // same counts 5s later: another call
+	put("c1", "anthropic", "msg_9", 5013, 1819)
+	put("x1", "openai", "", 0, 1819) // not a Claude session
+	put("x1", "openai", "", 5, 1819)
+	put("gone", "anthropic", "", 0, 1819) // pruned session, Claude provider
+	put("gone", "anthropic", "", 5, 1819)
+	put("gone2", "", "", 0, 1819) // pruned session, no provider
+	put("gone2", "", "", 5, 1819)
+	s.Close()
+
+	want := map[string]int{"c1": 4, "x1": 2, "gone": 1, "gone2": 2}
+	for range 2 { // the second open finds nothing left to delete
+		s, err = Open(path, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		for sid, n := range want {
+			var got int
+			s.db.QueryRow(`SELECT COUNT(*) FROM events WHERE kind = 14 AND session_id = ?`, sid).Scan(&got)
+			if got != n {
+				t.Fatalf("session %s keeps %d model calls, want %d", sid, got, n)
+			}
+		}
+		s.Close()
+	}
+}

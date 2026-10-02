@@ -420,6 +420,12 @@ func Open(dbPath, jsonlPath string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("failed to create turn dedupe index: %w", err)
 	}
+	if n, err := dedupeClaudeModelCalls(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to dedupe Claude model calls: %w", err)
+	} else if n > 0 {
+		log.Printf("store: removed %d duplicate Claude model-call rows (one per content block of one API call)", n)
+	}
 	// Flags gain an acknowledged marker: when the operator acts on a flag
 	// (applies any disposition), the flag stops counting as critical and
 	// dims in the UI — "acted upon" is a first-class state, not an endless
@@ -555,6 +561,32 @@ func Open(dbPath, jsonlPath string) (*Store, error) {
 	}, nil
 }
 
+// dedupeClaudeModelCalls deletes the model-call rows Claude ingest wrote
+// before model calls carried their API message id (call_id). Claude Code
+// writes one transcript record per content block, each repeating the message
+// id and usage, and each was stored as a model call of its own — two to three
+// rows, each with the full tokens and cost. Those rows were written
+// milliseconds apart with identical counts: a row is a repeat when the
+// previous row of its session with the same model and token counts is at most
+// a second older. Claude rows are those of a claude session, or of a pruned
+// session with provider anthropic. Idempotent: rows with a call id never
+// match. Returns the rows deleted.
+func dedupeClaudeModelCalls(db *sql.DB) (int64, error) {
+	res, err := db.Exec(`DELETE FROM events WHERE id IN (
+		SELECT id FROM (
+			SELECT e.id, julianday(e.ts) AS at, LAG(julianday(e.ts)) OVER (
+				PARTITION BY e.session_id, e.model, e.tokens_in, e.tokens_out
+				ORDER BY julianday(e.ts), e.id) AS prev_at
+			FROM events e LEFT JOIN sessions s ON s.id = e.session_id
+			WHERE e.kind = 14 AND e.call_id IS NULL AND COALESCE(e.session_id, '') != ''
+			AND COALESCE(NULLIF(s.harness, ''), CASE WHEN e.provider = 'anthropic' THEN 'claude' END) = 'claude')
+		WHERE prev_at IS NOT NULL AND (at - prev_at) * 86400.0 <= 1.0)`)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
 // refreshPlannerStats keeps sqlite_stat1 current so the planner knows kind
 // has a handful of values and pid or session_id a great many; without it a
 // kind=? AND pid=? lookup walks every row of the kind through
@@ -633,15 +665,38 @@ func (s *Store) PutEvent(e event.Event) {
 	defer s.mu.Unlock()
 
 	tsStr := e.TS.UTC().Format(time.RFC3339Nano)
-	// Tool calls are keyed by (session_id, call_id): the harness emits a start
-	// (status "running") and later a completion for the SAME call, and a
-	// transcript re-read can replay both. The upsert folds them into one row —
-	// the start inserts, the completion updates status/duration in place.
-	// Non-tool events (call_id NULL) never match the partial unique index and
-	// always insert.
 	var err error
 	var res sql.Result
-	if e.CallID != "" {
+	switch {
+	case e.CallID != "" && e.Kind == event.KindModelCall:
+		// One row per API call, keyed by its message id: Claude Code writes a
+		// transcript record per content block, each repeating the id and
+		// usage, and a restart mid-message or a re-read replays them. A repeat
+		// keeps the row's first timestamp and raises its counts to the largest
+		// seen; one that adds nothing changes nothing. A different call at the
+		// same (kind, session_id, ts) trips the turn dedupe index and is
+		// dropped, as before calls carried ids.
+		res, err = s.db.Exec(
+			`INSERT INTO events (kind, ts, pid, exe_path, session_id, path, remote_host, remote_port, detail, tool, tool_status, duration_ms, model, tokens_in, tokens_out, cost_usd, provider, call_id, record)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			 ON CONFLICT(session_id, call_id) DO UPDATE SET
+			   tokens_in  = MAX(COALESCE(events.tokens_in, 0),  COALESCE(excluded.tokens_in, 0)),
+			   tokens_out = MAX(COALESCE(events.tokens_out, 0), COALESCE(excluded.tokens_out, 0)),
+			   cost_usd   = MAX(COALESCE(events.cost_usd, 0),   COALESCE(excluded.cost_usd, 0))
+			 WHERE COALESCE(excluded.tokens_in, 0)  > COALESCE(events.tokens_in, 0)
+			    OR COALESCE(excluded.tokens_out, 0) > COALESCE(events.tokens_out, 0)
+			    OR COALESCE(excluded.cost_usd, 0)   > COALESCE(events.cost_usd, 0)
+			 ON CONFLICT DO NOTHING`,
+			int(e.Kind), tsStr, e.PID, e.ExePath, e.SessionID, e.Path, e.RemoteHost, e.RemotePort, e.Detail,
+			nullStr(e.ToolName), nullStr(e.ToolStatus), nullInt(e.DurationMs), nullStr(e.Model), nullInt(e.TokensIn), nullInt(e.TokensOut), nullFloat(e.CostUSD), nullStr(e.Provider), e.CallID, e.Record,
+		)
+	case e.CallID != "":
+		// Tool calls are keyed by (session_id, call_id): the harness emits a
+		// start (status "running") and later a completion for the SAME call,
+		// and a transcript re-read can replay both. The upsert folds them into
+		// one row — the start inserts, the completion updates status/duration
+		// in place. Events with no call id (NULL) never match the unique index
+		// and take the default branch.
 		res, err = s.db.Exec(
 			`INSERT INTO events (kind, ts, pid, exe_path, session_id, path, remote_host, remote_port, detail, tool, tool_status, duration_ms, model, tokens_in, tokens_out, cost_usd, call_id, record)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -654,8 +709,8 @@ func (s *Store) PutEvent(e event.Event) {
 			int(e.Kind), tsStr, e.PID, e.ExePath, e.SessionID, e.Path, e.RemoteHost, e.RemotePort, e.Detail,
 			nullStr(e.ToolName), nullStr(e.ToolStatus), nullInt(e.DurationMs), nullStr(e.Model), nullInt(e.TokensIn), nullInt(e.TokensOut), nullFloat(e.CostUSD), e.CallID, e.Record,
 		)
-	} else {
-		// Turns and model calls dedupe on (kind, session_id, ts) — a
+	default:
+		// Turns and id-less model calls dedupe on (kind, session_id, ts) — a
 		// transcript re-read replays the same record and must not
 		// double-count. INSERT OR IGNORE relies on the partial unique index
 		// created at open; other kinds always insert.
