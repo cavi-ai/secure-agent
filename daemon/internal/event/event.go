@@ -109,4 +109,8 @@ type Event struct {
 	// their kind's row budget (time retention still applies); never
 	// serialized.
 	Record bool `json:"-"`
+	// PPID is the parent pid Endpoint Security recorded at event time (ES
+	// events only). Session attribution falls back to it for a process that
+	// exited before its event was resolved; never stored or serialized.
+	PPID int32 `json:"-"`
 }

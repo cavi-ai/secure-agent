@@ -125,6 +125,8 @@ func TestKeepESLineNeverDropsConfiguredSensitivePaths(t *testing.T) {
 }
 
 func TestPumpToSpoolDropsSystemOpensOnly(t *testing.T) {
+	esNow = func() time.Time { return time.Date(2026, 9, 25, 12, 0, 1, 0, time.UTC) } // the fixture records' own time
+	t.Cleanup(func() { esNow = time.Now })
 	path := filepath.Join(t.TempDir(), "spool.jsonl")
 	kept := []string{
 		esOpenTestLine("/Users/dev/.aws/credentials"),

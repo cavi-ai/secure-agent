@@ -426,6 +426,8 @@ export interface ESServiceSnapshot {
   unparsed_share: number;
   bytes_skipped: number;
   flooding_since?: string;
+  newest_event_at?: string;
+  lag_seconds: number;
 }
 
 export interface Status {

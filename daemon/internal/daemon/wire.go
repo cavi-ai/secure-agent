@@ -285,6 +285,16 @@ func isUnattributedFileEvent(e event.Event) bool {
 	return false
 }
 
+// noteFileFeed advances the store's ES feed clock once the drain loop has
+// stored or skipped an ES event: a resource episode settles only after the
+// file events around its capture are in the store, not merely published.
+func noteFileFeed(st *store.Store, e event.Event) {
+	switch e.Kind {
+	case event.KindFileOpen, event.KindFileWrite, event.KindFileDelete, event.KindExec, event.KindTCCModify:
+		st.NoteFileFeed(e.TS)
+	}
+}
+
 // startDrainLoop consumes the bus, persisting events and correlating flags →
 // incidents → fleet webhooks. The returned channel closes once every delivered
 // event has been persisted, so shutdown can wait for it instead of dropping
@@ -334,10 +344,12 @@ func startDrainLoop(sub <-chan event.Event, st *store.Store, cr *correlate.Corre
 			// orders of magnitude and would push it out of the per-kind
 			// row budget.
 			if len(flags) == 0 && isUnattributedFileEvent(e) {
+				noteFileFeed(st, e)
 				continue
 			}
 			e.Record = len(flags) > 0 || cr.SensitiveFile(e)
 			st.PutEvent(e)
+			noteFileFeed(st, e)
 			if e.Kind == event.KindConnOpen && e.RemoteHost != "" && e.RemotePort > 0 {
 				observation := store.EgressObservation{SessionID: e.SessionID, Host: e.RemoteHost, Protocol: "tcp", Port: e.RemotePort, At: e.TS}
 				if tagger != nil {

@@ -437,3 +437,40 @@ func TestSpoolStatsCountTheDaemonsOwnEventsAsParsed(t *testing.T) {
 		t.Fatalf("stats = %+v, want 4 lines, 3 parsed (only the non-JSON line is garbage)", s)
 	}
 }
+
+// The feed clock is the newest published event's own time, kept across
+// drains; its lag is how far that trails the wall clock, reported only
+// while fresh.
+func TestSpoolTailerTracksFeedClockAndLag(t *testing.T) {
+	path := t.TempDir() + "/spool.jsonl"
+	wall := time.Date(2026, 10, 2, 21, 43, 0, 0, time.UTC)
+	esLine := func(pid int, at time.Time) string {
+		return fmt.Sprintf(`{"event_type":0,"process":{"audit_token":{"pid":%d},"pid":%d,"executable":{"path":"/usr/bin/cat"}},"event":{"open":{"file":{"path":"/tmp/x"}}},"time":%q}`, pid, pid, at.Format(time.RFC3339Nano))
+	}
+	behind := wall.Add(-2*time.Hour - 13*time.Minute)
+	appendSpool(t, path, esLine(7, behind.Add(-time.Second))+"\n"+esLine(8, behind)+"\n")
+	b := bus.New(64)
+	_ = b.Subscribe()
+	tailer := NewSpoolTailerAt(b, path)
+	tailer.now = func() time.Time { return wall }
+	c := tailer.poll(spoolCursor{})
+
+	s := tailer.Stats()
+	if !s.NewestEvent.Equal(behind) || s.Lag != 2*time.Hour+13*time.Minute {
+		t.Fatalf("stats = %+v, want newest %s lagging 2h13m", s, behind)
+	}
+	appendSpool(t, path, "not json\n")
+	c = tailer.poll(c)
+	if s := tailer.Stats(); !s.NewestEvent.Equal(behind) || s.Lag != 2*time.Hour+13*time.Minute {
+		t.Fatalf("a drain with no event reset the feed clock: %+v", s)
+	}
+	appendSpool(t, path, esLine(9, wall.Add(-time.Second))+"\n")
+	tailer.poll(c)
+	if s := tailer.Stats(); !s.NewestEvent.Equal(wall.Add(-time.Second)) || s.Lag != time.Second {
+		t.Fatalf("caught-up stats = %+v", s)
+	}
+	tailer.now = func() time.Time { return wall.Add(spoolLagFresh + time.Second) }
+	if s := tailer.Stats(); s.Lag != 0 || s.NewestEvent.IsZero() {
+		t.Fatalf("stale lag still reported: %+v", s)
+	}
+}

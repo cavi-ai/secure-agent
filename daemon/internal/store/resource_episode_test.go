@@ -351,3 +351,143 @@ func TestRecentResourceEpisodesAddsLatePersistedActivityBeforeFinalizing(t *test
 		t.Fatalf("episode was not re-enriched from late event: %+v", second)
 	}
 }
+
+// Harness trace rows carry no pid: an episode reads them by its session id,
+// and a tool call completed after capture replaces its started copy.
+func TestResourceEpisodeJoinsSessionTraceRows(t *testing.T) {
+	st, err := Open("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	now := time.Now().UTC()
+	rootStart := now.Add(-time.Hour)
+	st.UpsertSession(model.Session{ID: "s1", Harness: "claude", RootPID: 100, RootStartedAt: rootStart.Format(time.RFC3339Nano), StartedAt: rootStart, LastSeenAt: now})
+	st.PutEvent(event.Event{Kind: event.KindToolCall, TS: now.Add(-4 * time.Second), SessionID: "s1", ToolName: "Bash", ToolStatus: "running", CallID: "toolu_1"})
+	st.PutEvent(event.Event{Kind: event.KindModelCall, TS: now.Add(-3 * time.Second), SessionID: "s1", Model: "claude-opus-5-5", TokensIn: 593, TokensOut: 557, CallID: "msg_1"})
+	st.PutEvent(event.Event{Kind: event.KindToolCall, TS: now.Add(-3 * time.Second), SessionID: "other", ToolName: "Read", ToolStatus: "ok", CallID: "toolu_2"})
+	st.PutEvent(event.Event{Kind: event.KindModelCall, TS: now.Add(-40 * time.Second), SessionID: "s1", Model: "before-the-window"})
+	st.PutEvent(event.Event{Kind: event.KindToolCall, TS: now.Add(-20 * time.Second), SessionID: "s1", ToolName: "Read", ToolStatus: "running", CallID: "toolu_3"})
+
+	episode := resource.Episode{CapturedAt: now, Session: resource.Session{
+		Key: fmt.Sprintf("100:%d", rootStart.UnixNano()), Name: "claude", RootPID: 100, RootStartedAt: rootStart,
+		Processes: []resource.Process{{PID: 100, Name: "claude", StartedAt: rootStart}},
+		Samples:   []resource.Sample{{At: now.Add(-30 * time.Second), RSSBytes: 1 << 30}, {At: now.Add(-6 * time.Second), RSSBytes: 1 << 30}, {At: now, RSSBytes: 4 << 30}},
+	}}
+	if err := st.PutResourceEpisode(episode); err != nil {
+		t.Fatal(err)
+	}
+	var payload string
+	if err := st.db.QueryRow(`SELECT episode_json FROM resource_episodes`).Scan(&payload); err != nil {
+		t.Fatal(err)
+	}
+	var stored resource.Episode
+	if err := json.Unmarshal([]byte(payload), &stored); err != nil || len(stored.Activities) != 3 {
+		t.Fatalf("capture-time payload activities=%+v (%v), want the session rows before any read", stored.Activities, err)
+	}
+	got := st.RecentResourceEpisodes(1)[0]
+	if got.SessionID != "s1" || len(got.Activities) != 3 {
+		t.Fatalf("session=%q activities=%+v want the three s1 rows inside the window", got.SessionID, got.Activities)
+	}
+	for _, activity := range got.Activities {
+		if activity.Process != "claude" || activity.PID != 0 {
+			t.Fatalf("session row not named for the session: %+v", activity)
+		}
+	}
+	// Read started before the rise and was still running at capture.
+	if c := got.Correlations; len(c) != 1 || c[0].ActivityCount != 3 ||
+		c[0].Summary != "Memory rose 3.0 GiB in 6s while Read was running (and 2 other recorded activities)." {
+		t.Fatalf("correlations=%+v", c)
+	}
+
+	st.PutEvent(event.Event{Kind: event.KindToolCall, TS: now.Add(-4 * time.Second), SessionID: "s1", ToolName: "Bash", ToolStatus: "ok", DurationMs: 2500, CallID: "toolu_1"})
+	st.PutEvent(event.Event{Kind: event.KindModelCall, TS: now.Add(-3 * time.Second), SessionID: "s1", Model: "claude-opus-5-5", TokensIn: 593, TokensOut: 1819, CallID: "msg_1"})
+	got = st.RecentResourceEpisodes(1)[0]
+	var tools []resource.EpisodeActivity
+	for _, activity := range got.Activities {
+		if activity.Kind == "tool" {
+			tools = append(tools, activity)
+		}
+	}
+	if len(tools) != 2 || tools[1].Summary != "Bash returned after 2.5s" || !tools[1].EndedAt.Equal(now.Add(-1500*time.Millisecond)) {
+		t.Fatalf("completed tool call=%+v want one Bash row, returned, with its end", tools)
+	}
+	var models []string
+	for _, activity := range got.Activities {
+		if activity.Kind == "model" {
+			models = append(models, activity.Summary)
+		}
+	}
+	if len(models) != 1 || models[0] != "claude-opus-5-5 call: 593 tokens in, 1819 out" {
+		t.Fatalf("model call raised in place=%v want one row with its final counts", models)
+	}
+}
+
+// ES rows are stored with their event time and can arrive late: an episode
+// keeps settling until the file feed has reached its capture.
+func TestResourceEpisodeSettlesOnFileFeedClock(t *testing.T) {
+	st, err := Open("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	captured := time.Now().UTC().Add(-time.Minute)
+	st.TrackFileFeed()
+	st.NoteFileFeed(captured.Add(-2 * time.Hour))
+	episode := resource.Episode{CapturedAt: captured, Session: resource.Session{
+		Key: "100:1", RootPID: 100, RootStartedAt: captured.Add(-time.Hour),
+		Processes: []resource.Process{{PID: 100, Name: "claude", StartedAt: captured.Add(-time.Hour)}},
+		Samples:   []resource.Sample{{At: captured.Add(-6 * time.Second), RSSBytes: 1 << 30}, {At: captured, RSSBytes: 4 << 30}},
+	}}
+	if err := st.PutResourceEpisode(episode); err != nil {
+		t.Fatal(err)
+	}
+	if got := st.RecentResourceEpisodes(1)[0]; got.ActivityStatus != "settling" {
+		t.Fatalf("status=%q while the file feed is two hours behind", got.ActivityStatus)
+	}
+
+	st.PutEvent(event.Event{Kind: event.KindExec, TS: captured.Add(-2 * time.Second), PID: 100, ExePath: "/bin/zsh"})
+	st.NoteFileFeed(captured.Add(time.Second))
+	st.NoteFileFeed(captured.Add(-time.Hour)) // an older event does not move the clock back
+	got := st.RecentResourceEpisodes(1)[0]
+	if got.ActivityStatus != "complete" || len(got.Activities) != 1 || got.Correlations[0].ActivityCount != 1 {
+		t.Fatalf("episode=%+v want the late exec row and a final status", got)
+	}
+
+	cases := []struct {
+		name     string
+		captured time.Time
+		feed     time.Time
+		want     bool
+	}{
+		{"inside the settle window", time.Now().Add(-10 * time.Second), time.Now(), false},
+		{"feed behind", time.Now().Add(-time.Minute), time.Now().Add(-time.Hour), false},
+		{"feed caught up", time.Now().Add(-time.Minute), time.Now(), true},
+		{"feed never delivered", time.Now().Add(-time.Minute), time.Time{}, true},
+		{"feed behind past the cap", time.Now().Add(-episodeSettleMax), time.Now().Add(-time.Hour), true},
+	}
+	for _, tc := range cases {
+		fresh, err := Open("", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		fresh.TrackFileFeed()
+		if !tc.feed.IsZero() {
+			fresh.NoteFileFeed(tc.feed)
+		}
+		if got := fresh.episodeSettled(tc.captured); got != tc.want {
+			t.Fatalf("%s: settled=%v want %v", tc.name, got, tc.want)
+		}
+		fresh.Close()
+	}
+	untracked, err := Open("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer untracked.Close()
+	if !untracked.episodeSettled(time.Now().Add(-time.Minute)) {
+		t.Fatal("without an ES feed an episode settles after the settle window")
+	}
+}
