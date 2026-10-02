@@ -210,7 +210,8 @@ func TestRowActionCancelsTheBackgroundRescan(t *testing.T) {
 			if err := tc.action(h, f, target); err != nil {
 				t.Fatal(err)
 			}
-			if d := time.Since(begin); d > 10*time.Second {
+			// Waiting would last until gitTimeout (10 s) kills the hung git.
+			if d := time.Since(begin); d > 5*time.Second {
 				t.Fatalf("%s waited %s behind the background rescan", tc.name, d.Round(time.Second))
 			}
 			h.bgWG.Wait()
