@@ -19,6 +19,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/correlate"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 	"github.com/cavi-ai/secure-agent/daemon/internal/fleet"
+	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/resource"
 	"github.com/cavi-ai/secure-agent/daemon/internal/sensitive"
 	"github.com/cavi-ai/secure-agent/daemon/internal/session"
@@ -371,7 +372,9 @@ func TestStartDrainLoopPersistsAndCloses(t *testing.T) {
 
 	b := bus.New(64)
 	res := session.NewResolver(st, tagger)
-	done := startDrainLoop(b.Subscribe(), st, cr, fleet.NewPublisher(), res, tagger, nil, nil, nil, nil)
+	var offered []model.Flag // the local agent's automatic review hook
+	done := startDrainLoop(b.Subscribe(), st, cr, fleet.NewPublisher(), res, tagger, nil, nil, nil, nil,
+		func(fl model.Flag) { offered = append(offered, fl) })
 
 	now := time.Now()
 	b.Publish(event.Event{Kind: event.KindPluginAction, TS: now, PID: 500, Path: "/Users/x/project/.env"})
@@ -388,6 +391,9 @@ func TestStartDrainLoopPersistsAndCloses(t *testing.T) {
 	flags := st.RecentFlags(10)
 	if len(flags) != 1 || flags[0].Rule != "sensitive-read-then-connect" {
 		t.Fatalf("expected the correlated flag persisted, got %v", flags)
+	}
+	if len(offered) != 1 || offered[0].ID != flags[0].ID {
+		t.Fatalf("new-flag hook got %v, want the stored flag", offered)
 	}
 	incidents := st.RecentIncidents(10)
 	if len(incidents) == 0 {
@@ -415,7 +421,7 @@ func TestDrainLoopMarksRecordRows(t *testing.T) {
 
 	b := bus.New(64)
 	res := session.NewResolver(st, tagger)
-	done := startDrainLoop(b.Subscribe(), st, cr, fleet.NewPublisher(), res, tagger, nil, nil, nil, nil)
+	done := startDrainLoop(b.Subscribe(), st, cr, fleet.NewPublisher(), res, tagger, nil, nil, nil, nil, nil)
 
 	now := time.Now()
 	b.Publish(event.Event{Kind: event.KindFileOpen, TS: now, PID: 500, Path: "/Users/x/project/main.go"})
@@ -473,7 +479,7 @@ func TestDrainLoopDropsUnattributedFileEvents(t *testing.T) {
 
 	b := bus.New(64)
 	res := session.NewResolver(st, tagger)
-	done := startDrainLoop(b.Subscribe(), st, cr, fleet.NewPublisher(), res, tagger, nil, nil, nil, nil)
+	done := startDrainLoop(b.Subscribe(), st, cr, fleet.NewPublisher(), res, tagger, nil, nil, nil, nil, nil)
 
 	now := time.Now()
 	b.Publish(event.Event{Kind: event.KindFileOpen, TS: now, PID: 500, Path: "/Users/x/project/main.go"})

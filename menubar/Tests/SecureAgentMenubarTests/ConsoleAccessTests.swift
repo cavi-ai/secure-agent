@@ -59,6 +59,20 @@ final class ConsoleAccessTests: XCTestCase {
         XCTAssertEqual(off, yaml)
     }
 
+    /// auto_review is its own line in the system_agent block: added beside
+    /// enabled, flipped in place, read without touching enabled.
+    func testSystemAgentAutoReviewToggle() {
+        let yaml = "system_agent:\n  enabled: true\n  model: qwen3\nadvisor:\n  enabled: false\n"
+        let on = SetupManager.systemAgentConfigUpdating(yaml, key: "auto_review", enabled: true)
+        XCTAssertEqual(on, "system_agent:\n  auto_review: true\n  enabled: true\n  model: qwen3\nadvisor:\n  enabled: false\n")
+        XCTAssertTrue(SetupManager.systemAgentConfigIsEnabled(on, key: "auto_review"))
+        XCTAssertTrue(SetupManager.systemAgentConfigIsEnabled(on))
+        let off = SetupManager.systemAgentConfigUpdating(on, key: "auto_review", enabled: false)
+        XCTAssertFalse(SetupManager.systemAgentConfigIsEnabled(off, key: "auto_review"))
+        XCTAssertTrue(off.contains("  enabled: true\n"))
+        XCTAssertFalse(SetupManager.systemAgentConfigIsEnabled(yaml, key: "auto_review"))
+    }
+
     func testSystemAgentToggleAddsMissingBlock() {
         let out = SetupManager.systemAgentConfigUpdating("proxy_enabled: true\n", enabled: true)
         XCTAssertEqual(out, "proxy_enabled: true\nsystem_agent:\n  enabled: true\n")

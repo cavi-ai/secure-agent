@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 	"github.com/cavi-ai/secure-agent/daemon/internal/firewall"
 	"github.com/cavi-ai/secure-agent/daemon/internal/redact"
+	"github.com/cavi-ai/secure-agent/daemon/internal/testvalue"
 )
 
 const (
@@ -197,12 +199,13 @@ func (ts *TranscriptScanner) scanLine(line, path, harness, sessionID string, lin
 				continue
 			}
 			evs = append(evs, event.Event{
-				Kind:      event.KindTranscriptHit,
-				TS:        now,
-				Path:      path,
-				SessionID: sessionID,
-				Detail:    harness + ":" + h.layer + ":" + h.rule,
-				Offset:    lineStart,
+				Kind:        event.KindTranscriptHit,
+				TS:          now,
+				Path:        path,
+				SessionID:   sessionID,
+				Detail:      harness + ":" + h.layer + ":" + h.rule,
+				Offset:      lineStart,
+				TestSignals: strings.Join(h.signals, "; "),
 			})
 		}
 		return evs
@@ -213,10 +216,15 @@ func (ts *TranscriptScanner) scanLine(line, path, harness, sessionID string, lin
 	return nil
 }
 
-type secretHit struct{ layer, rule string }
+type secretHit struct {
+	layer, rule string
+	// signals are why a pattern hit's value looks like a test value.
+	signals []string
+}
 
-// secretHits returns the layer and rule id of each secret in line. Entropy
-// hits are dropped: transcripts are dense with ids, hashes and encoded blobs.
+// secretHits returns the layer and rule id of each secret in line, and for a
+// pattern hit the test-value signals of its matches. Entropy hits are
+// dropped: transcripts are dense with ids, hashes and encoded blobs.
 func (ts *TranscriptScanner) secretHits(line string) []secretHit {
 	if ts.TextScanner == nil {
 		if rule, found := redact.Detect(line); found {
@@ -230,7 +238,26 @@ func (ts *TranscriptScanner) secretHits(line string) []secretHit {
 		case firewall.LayerFingerprint:
 			out = append(out, secretHit{layer: "fingerprint", rule: h.RuleID})
 		case firewall.LayerPattern:
-			out = append(out, secretHit{layer: "pattern", rule: h.RuleID})
+			out = append(out, secretHit{layer: "pattern", rule: h.RuleID, signals: testSignals(line, h.Spans)})
+		}
+	}
+	return out
+}
+
+// testSignals unions the test-value signals of a hit's matches, or returns
+// nil when any match has none: one live-looking value outweighs fixtures
+// beside it.
+func testSignals(line string, spans [][2]int) []string {
+	var out []string
+	for _, sp := range spans {
+		reasons := testvalue.Signals(line, sp[0], sp[1])
+		if len(reasons) == 0 {
+			return nil
+		}
+		for _, r := range reasons {
+			if !slices.Contains(out, r) {
+				out = append(out, r)
+			}
 		}
 	}
 	return out

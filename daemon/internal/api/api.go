@@ -171,6 +171,7 @@ type API struct {
 	clutter          *clutter.Clutter
 	asker            *agentask.Asker
 	sysAgent         *sysagent.Agent
+	autoReview       *autoReviewer
 	projectAdvisor   func(model.ProjectCleanupRequest) bool
 	resources        func() resource.Snapshot
 	resourceControl  *resource.Controller
@@ -369,6 +370,7 @@ func New(d Deps) *API {
 		clutter:         d.Clutter,
 		asker:           d.Asker,
 		sysAgent:        d.SysAgent,
+		autoReview:      newAutoReviewer(),
 		projectAdvisor:  d.ProjectAdvisor,
 		resources:       d.Resources,
 		resourceControl: d.ResourceControl,

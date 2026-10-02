@@ -83,6 +83,10 @@ type Event struct {
 	// Offset is the byte offset of the transcript line a transcript hit was
 	// found on.
 	Offset int64 `json:"offset,omitempty"`
+	// TestSignals are a transcript hit's reasons its value looks like a test,
+	// dummy or sentinel value (testvalue.Signals), joined by "; "; never the
+	// value. Not in the events table: the flag's evidence keeps them.
+	TestSignals string `json:"test_signals,omitempty"`
 	// Trace events (KindToolCall/KindTurn/KindModelCall):
 	ToolName   string  `json:"tool,omitempty"`        // tool_call: tool name
 	ToolStatus string  `json:"tool_status,omitempty"` // tool_call: ok | error | running

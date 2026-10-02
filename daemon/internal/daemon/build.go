@@ -125,6 +125,8 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 	correlator.RestoreOpenReadFlags(st.QueryFlags(store.FlagFilter{Rule: "sensitive-read-then-connect", Unacted: true, Limit: 1024}))
 	// postureHook is armed once the API server exists (it owns posture).
 	postureHook := &postureHookHolder{}
+	// newFlagHook is armed with the API's automatic review once it exists.
+	newFlagHook := &flagHookHolder{}
 
 	// Stable per-install fleet identity (used by /fleet and webhook payloads).
 	// Must run before the sinks are built: they capture api.NodeID.
@@ -168,7 +170,8 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 	// event has been persisted — shutdown waits for it).
 	c.drainDone = startDrainLoop(b.Subscribe(), st, correlator, fleetPub, resolver, tagger, deltaHub, otlpExp,
 		func() { postureHook.run() },
-		func() *advisor.Subscriber { return advisorStk.Load().Sub })
+		func() *advisor.Subscriber { return advisorStk.Load().Sub },
+		newFlagHook.run)
 
 	// Periodic process tagger refresh: 5s while idle, 1s while agents live.
 	go runResourceLoop(ctx, tagger, resolver, resourceTracker, resourceControl, resourceEpisodes, st, cfg.DBPath, supReg, plans)
@@ -306,6 +309,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 		})
 	}
 	postureHook.fn = apiServer.PublishPostureIfChanged
+	newFlagHook.fn = apiServer.NoteNewFlag
 
 	// The browser console's telemetry fetches are same-origin with the
 	// dashboard, i.e. they land on the proxy's loopback HTTP port. Serve the
@@ -438,6 +442,17 @@ type postureHookHolder struct {
 func (h *postureHookHolder) run() {
 	if h.fn != nil {
 		h.fn()
+	}
+}
+
+// flagHookHolder defers arming the new-flag hook until the API server exists.
+type flagHookHolder struct {
+	fn func(model.Flag)
+}
+
+func (h *flagHookHolder) run(fl model.Flag) {
+	if h.fn != nil {
+		h.fn(fl)
 	}
 }
 

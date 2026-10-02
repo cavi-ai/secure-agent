@@ -243,7 +243,10 @@ system_agent:
   model: ""                            # chat model; "" = the first model Ollama lists
   harness_model: ""                    # model dispatched harnesses run; "" = model
   timeout_minutes: 30                  # bound on one headless dispatch (0-240; 0 = 30)
+  auto_review: false                   # send new findings to the review queue on their own
 ```
+
+`auto_review` (Settings → Secure Agent → Chat → Review new findings automatically) sends each new finding of severity 2 or more to the review queue without a click: a burst is one review two minutes after its first finding, reviews go out at least ten minutes apart with at most ten findings each, and a finding acknowledged meanwhile is left out.
 
 An enabled agent with a non-loopback endpoint is a validation error. Changes take effect live within one poll cycle.
 

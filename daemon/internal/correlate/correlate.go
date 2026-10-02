@@ -14,6 +14,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/sensitive"
+	"github.com/cavi-ai/secure-agent/daemon/internal/testvalue"
 )
 
 type readMark struct {
@@ -571,6 +572,22 @@ func (c *Correlator) secretInTranscriptLocked(e event.Event) []model.Flag {
 	if layer == "fingerprint" {
 		severity = 3
 	}
+	evidence := []model.EvidenceItem{{
+		Kind:   "transcript",
+		Label:  e.Path,
+		Sub:    layer + " match",
+		Rule:   ruleID,
+		TS:     e.TS.Format(time.RFC3339),
+		Text:   fmt.Sprintf("%s transcript %s matched %s rule %s at %s", harness, e.Path, layer, ruleID, e.TS.Format(time.RFC3339)),
+		Offset: e.Offset,
+	}}
+	if layer == "pattern" {
+		var signals []string
+		if e.TestSignals != "" {
+			signals = strings.Split(e.TestSignals, "; ")
+		}
+		evidence = append(evidence, testValueEvidence(signals, e.TS))
+	}
 	return []model.Flag{{
 		ID:        hashFlagID(rule+"|"+e.Path+"|"+ruleID, 0, e.TS),
 		Rule:      rule,
@@ -578,16 +595,29 @@ func (c *Correlator) secretInTranscriptLocked(e event.Event) []model.Flag {
 		TS:        e.TS,
 		Agent:     harness,
 		SessionID: e.SessionID,
-		Evidence: []model.EvidenceItem{{
-			Kind:   "transcript",
-			Label:  e.Path,
-			Sub:    layer + " match",
-			Rule:   ruleID,
-			TS:     e.TS.Format(time.RFC3339),
-			Text:   fmt.Sprintf("%s transcript %s matched %s rule %s at %s", harness, e.Path, layer, ruleID, e.TS.Format(time.RFC3339)),
-			Offset: e.Offset,
-		}},
+		Evidence:  evidence,
 	}}
+}
+
+// testValueEvidence states whether a pattern hit's value looks like a test,
+// dummy or sentinel value, for the reviewers (local advisor, local agent).
+// Signals about the value itself outrank signals about its surroundings: a
+// real key pasted into a test is still a leak.
+func testValueEvidence(signals []string, ts time.Time) model.EvidenceItem {
+	ev := model.EvidenceItem{Kind: "test-value", TS: ts.Format(time.RFC3339)}
+	switch {
+	case len(signals) == 0:
+		ev.Label = "No test-value signals"
+		ev.Sub = "nothing marks the value as a test, dummy or sample"
+	case testvalue.Strong(signals):
+		ev.Label = "Looks like a test value"
+		ev.Sub = strings.Join(signals, "; ")
+	default:
+		ev.Label = "Test context only"
+		ev.Sub = strings.Join(signals, "; ") + "; the value itself looks live"
+	}
+	ev.Text = ev.Label + ": " + ev.Sub
+	return ev
 }
 
 // keychainAccessLocked applies the keychain-access rule to one login-keychain
