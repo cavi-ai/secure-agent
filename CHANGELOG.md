@@ -30,6 +30,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 ### Fixed
 - `make app`, `make install` and `make release` stop when a Go binary is stamped with a commit other than HEAD: Go before 1.27 stamps the enclosing checkout's commit when it builds in a git worktree.
 - Egress episodes keep a connection seen while another store write is in progress; the episode write takes SQLite's write lock at BEGIN instead of failing its read-to-write upgrade.
+- File telemetry: after the spool rotates, the tailer reads the rest of the rotated file before the new spool from its start; a line still being written waits for its end; the daemon's own file events no longer count as lines that did not parse.
 - Doctor trace coverage counts a session as seen only when one of its transcript lines was read or a hook fired since boot, and counts trace rows written since boot: a conversation whose process stays alive with no new turns, or a transcript read for the first time, no longer reads as a blind collector.
 
 ## [1.2.0] - 2026-09-30

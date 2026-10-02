@@ -285,51 +285,64 @@ func (t *SpoolTailer) follow(ctx context.Context) error {
 }
 
 // spoolCursor is the tail offset plus the spool's size and mtime as stat'ed
-// before the drain that produced it.
+// before the drain that produced it, and the identity of the file the offset
+// belongs to.
 type spoolCursor struct {
 	offset int64
 	size   int64
 	mod    time.Time
+	file   os.FileInfo
 }
 
 // poll stats the spool and drains it only when its size or mtime changed
 // since the last drain, or unread bytes remain (a rotation reset, a skipped
-// line): an idle spool costs one stat per tick.
+// line): an idle spool costs one stat per tick. A spool that is a different
+// file than the cursor's was rotated: the rotated file (<path>.1) is read to
+// its end from the cursor's offset first, then the new spool from its start.
 func (t *SpoolTailer) poll(c spoolCursor) spoolCursor {
 	st, err := os.Stat(t.path)
 	if err != nil {
-		return spoolCursor{} // rotation window: restart from 0 next tick
+		return c // rotation window: the next tick finds both files
+	}
+	if c.file != nil && !os.SameFile(c.file, st) {
+		if old, err := os.Stat(t.path + ".1"); err == nil && os.SameFile(old, c.file) {
+			t.drainOnce(t.path+".1", c.offset)
+		}
+		c = spoolCursor{}
 	}
 	if st.Size() == c.size && st.ModTime().Equal(c.mod) && c.offset >= c.size {
 		return c
 	}
-	return spoolCursor{offset: t.drainOnce(c.offset), size: st.Size(), mod: st.ModTime()}
+	offset, file := t.drainOnce(t.path, c.offset)
+	return spoolCursor{offset: offset, size: st.Size(), mod: st.ModTime(), file: file}
 }
 
-// drainOnce reads complete lines past `offset`, publishing each as an event.
-// Returns the offset to resume from. File smaller than offset (rotation) or
-// unreadable → reset/wait, never error the supervisor: the spool is a
-// best-effort handoff and the collector rewrites it within seconds.
-func (t *SpoolTailer) drainOnce(offset int64) int64 {
+// drainOnce reads complete lines of path past `offset`, publishing each as
+// an event. Returns the offset to resume from and the identity of the file
+// it read (nil when it could not open it). A file smaller than offset
+// (truncated in place) or unreadable → reset/wait, never error the
+// supervisor: the spool is a best-effort handoff and the collector rewrites
+// it within seconds.
+func (t *SpoolTailer) drainOnce(path string, offset int64) (int64, os.FileInfo) {
 	open := t.open
 	if open == nil {
 		open = os.Open
 	}
-	f, err := open(t.path)
+	f, err := open(path)
 	if err != nil {
-		return 0 // rotation window: restart from 0 next tick
+		return 0, nil // rotation window: restart from 0 next tick
 	}
 	defer func() { _ = f.Close() }()
 
 	st, err := f.Stat()
 	if err != nil {
-		return offset
+		return offset, nil
 	}
 	if st.Size() < offset {
-		return 0 // rotated/truncated: read the new file from its start
+		return 0, st // truncated: read the file from its start
 	}
 	if _, err := f.Seek(offset, 0); err != nil {
-		return offset
+		return offset, st
 	}
 
 	unread := st.Size() - offset
@@ -337,6 +350,7 @@ func (t *SpoolTailer) drainOnce(offset int64) int64 {
 
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+	scanner.Split(scanCompleteLines)
 	var lastGood int64
 	var linesThisTick, parsedThisTick uint64
 	published := false
@@ -344,10 +358,13 @@ func (t *SpoolTailer) drainOnce(offset int64) int64 {
 	for scanner.Scan() {
 		line := scanner.Bytes()
 		linesThisTick++
-		if e, ok := ParseESLine(line); ok {
+		switch e, v := parseESLine(line); v {
+		case esEvent:
 			t.bus.Publish(e)
 			published = true
 			parsedThisTick++
+		case esOwn:
+			parsedThisTick++ // the daemon's own file activity: valid, not an event
 		}
 		lastGood += int64(len(line)) + 1
 		if overBudget && lastGood >= spoolDrainBudget {
@@ -370,7 +387,7 @@ func (t *SpoolTailer) drainOnce(offset int64) int64 {
 				if skip := rest; skip > 8<<20 {
 					resume := offset + lastGood + skip // giant garbage: drop it all
 					t.recordDrain(SpoolStats{Lines: linesThisTick, Parsed: parsedThisTick, Skipped: 1, BytesSkipped: uint64(skip)}, false)
-					return resume
+					return resume, st
 				}
 				skipBuf := make([]byte, 64*1024)
 				for rest := info.Size() - offset - lastGood; rest > 0; {
@@ -385,13 +402,13 @@ func (t *SpoolTailer) drainOnce(offset int64) int64 {
 					if i := indexByte(skipBuf[:read], '\n'); i >= 0 {
 						resume := offset + lastGood + int64(i) + 1
 						t.recordDrain(SpoolStats{Lines: linesThisTick, Parsed: parsedThisTick}, false)
-						return resume
+						return resume, st
 					}
 					rest -= int64(read)
 					lastGood += int64(read)
 				}
 				t.recordDrain(SpoolStats{Lines: linesThisTick, Parsed: parsedThisTick}, false)
-				return offset + lastGood
+				return offset + lastGood, st
 			}
 		}
 		log.Printf("collect: spool scanner error at offset %d: %v", offset+lastGood, err)
@@ -409,10 +426,20 @@ func (t *SpoolTailer) drainOnce(offset int64) int64 {
 			Skipped:      skippedLines,
 			BytesSkipped: skippedBytes,
 		}, true)
-		return skipTo
+		return skipTo, st
 	}
 	t.recordDrain(SpoolStats{Lines: linesThisTick, Parsed: parsedThisTick}, false)
-	return resume
+	return resume, st
+}
+
+// scanCompleteLines is bufio.ScanLines without its last-line rule: a line
+// the writer has not finished (no newline yet) is left unread until it is,
+// instead of being taken as a complete line and its rest as garbage.
+func scanCompleteLines(data []byte, atEOF bool) (int, []byte, error) {
+	if i := bytes.IndexByte(data, '\n'); i >= 0 {
+		return i + 1, data[:i], nil
+	}
+	return 0, nil, nil
 }
 
 // skipTail counts complete lines and bytes from `from` to `to` without
