@@ -159,8 +159,21 @@ type Resolver struct {
 	// promotes them to the store when the floor is passed; Sweep drops the
 	// dead ones so a bounded-turn flood never touches the disk.
 	deferred map[string]model.Session
-	now      func() time.Time
+	// sighted is each session's last transcript or hook sighting by wall
+	// clock: a conversation read or a hook fired, not a process touching
+	// files. Doctor's trace coverage counts these (SightedByHarness).
+	sighted map[string]sighting
+	now     func() time.Time
 }
+
+type sighting struct {
+	harness string
+	at      time.Time
+}
+
+// maxSightings bounds the sighting map; past it, sightings older than a day
+// are dropped.
+const maxSightings = 10000
 
 func NewResolver(st *store.Store, tg *agents.Tagger) *Resolver {
 	return &Resolver{
@@ -171,6 +184,7 @@ func NewResolver(st *store.Store, tg *agents.Tagger) *Resolver {
 		byScope:  map[string]string{},
 		touch:    map[string]time.Time{},
 		deferred: map[string]model.Session{},
+		sighted:  map[string]sighting{},
 		now:      time.Now,
 	}
 }
@@ -197,6 +211,9 @@ func (r *Resolver) Resolve(e *event.Event) string {
 	if e.SessionID != "" {
 		r.ensureHookSession(e)
 		r.touchLocked(e.SessionID, e.TS)
+		if !isTraceKind(e.Kind) {
+			r.noteSightingLocked(e.SessionID, "") // hook activity
+		}
 		return e.SessionID
 	}
 
@@ -396,6 +413,7 @@ func (r *Resolver) HandleHandshake(h Handshake) {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.noteSightingLocked(h.SessionID, h.Harness)
 
 	ts := h.TS
 	if ts.IsZero() {
@@ -469,6 +487,7 @@ func (r *Resolver) NoteTranscriptSighting(s TranscriptSighting) {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.noteSightingLocked(id, harness)
 
 	// Join: rekey only a process-tree session — the harness's own transcript
 	// id is authoritative over a provisional one. A second transcript id in
@@ -725,6 +744,53 @@ func (r *Resolver) JoinTranscriptPID(id string, pid int32) {
 }
 
 // isTraceKind reports the agent-semantic kinds only trace collectors emit.
+// noteSightingLocked records a transcript or hook sighting of session id now.
+// An empty harness keeps the one already recorded (SightedByHarness falls
+// back to the stored session's).
+func (r *Resolver) noteSightingLocked(id, harness string) {
+	if id == "" {
+		return
+	}
+	if harness == "" {
+		harness = r.sighted[id].harness
+	}
+	now := r.now()
+	r.sighted[id] = sighting{harness: harness, at: now}
+	if len(r.sighted) > maxSightings {
+		for k, v := range r.sighted {
+			if now.Sub(v.at) > 24*time.Hour {
+				delete(r.sighted, k)
+			}
+		}
+	}
+}
+
+// SightedByHarness counts the sessions with a transcript or hook sighting at
+// or after since, keyed by harness. A session whose process stayed alive
+// without a new transcript line or hook event is not counted.
+func (r *Resolver) SightedByHarness(since time.Time) map[string]int {
+	r.mu.Lock()
+	ids := map[string]string{}
+	for id, v := range r.sighted {
+		if !v.at.Before(since) {
+			ids[id] = v.harness
+		}
+	}
+	r.mu.Unlock()
+	out := map[string]int{}
+	for id, harness := range ids {
+		if harness == "" {
+			if sess, ok := r.st.GetSession(id); ok {
+				harness = sess.Harness
+			}
+		}
+		if harness != "" {
+			out[harness]++
+		}
+	}
+	return out
+}
+
 func isTraceKind(k event.Kind) bool {
 	switch k {
 	case event.KindToolCall, event.KindTurn, event.KindModelCall:

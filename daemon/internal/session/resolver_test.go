@@ -1126,3 +1126,35 @@ func TestNoteTranscriptSightingCarriesOrigin(t *testing.T) {
 		t.Fatalf("session = %+v (ok=%v)", s, ok)
 	}
 }
+
+// Trace coverage counts a session as seen only on conversation activity: a
+// transcript sighting, a hook handshake or a hook event. Its harness process
+// touching files, or the trace rows themselves, are not a sighting.
+func TestSightedByHarness(t *testing.T) {
+	r, st := testResolver(t, fakeProcs{
+		100: {PID: 100, PPID: 1, Exe: "/usr/local/bin/codex", CWD: "/repo", StartTime: time.Now().Add(-time.Hour)},
+	})
+	boot := time.Now()
+
+	// Before boot: a sighting that no longer counts.
+	r.now = func() time.Time { return boot.Add(-time.Minute) }
+	r.NoteTranscriptSighting(TranscriptSighting{ID: "old", Harness: "hermes", Workspace: "/w", TS: boot.Add(-time.Minute)})
+	r.now = func() time.Time { return boot.Add(time.Minute) }
+
+	r.NoteTranscriptSighting(TranscriptSighting{ID: "rollout-1", Harness: "codex", Workspace: "/repo", TS: boot})
+	r.HandleHandshake(Handshake{SessionID: "hook-1", Harness: "claude", Workspace: "/w", TS: boot})
+	st.UpsertSession(model.Session{ID: "cursor-1", Harness: "cursor", Confidence: model.ConfHook, StartedAt: boot, LastSeenAt: boot})
+	hook := event.Event{Kind: event.KindPluginAction, SessionID: "cursor-1", TS: boot}
+	r.Resolve(&hook)
+	st.UpsertSession(model.Session{ID: "opencode-1", Harness: "opencode", Confidence: model.ConfTranscript, StartedAt: boot, LastSeenAt: boot})
+	trace := event.Event{Kind: event.KindModelCall, SessionID: "opencode-1", TS: boot}
+	r.Resolve(&trace)
+	touch := event.Event{Kind: event.KindFileOpen, PID: 100, TS: boot}
+	r.Resolve(&touch)
+
+	got := r.SightedByHarness(boot)
+	want := map[string]int{"codex": 1, "claude": 1, "cursor": 1}
+	if len(got) != len(want) || got["codex"] != 1 || got["claude"] != 1 || got["cursor"] != 1 {
+		t.Fatalf("SightedByHarness = %v, want %v (no sighting before boot, from a trace row, or from a process touching files)", got, want)
+	}
+}

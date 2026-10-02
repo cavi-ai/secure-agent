@@ -159,6 +159,7 @@ type API struct {
 	killer           Killer
 	statusFn         StatusFunc
 	hermes           func() collect.HermesStatus
+	sightings        func(since time.Time) map[string]int
 	worktrees        *worktreehunter.Hunter
 	worktreeAdvisor  func(model.WorktreeAdviceRequest) bool
 	egressAdvisor    func(store.EgressEpisode) bool
@@ -318,6 +319,10 @@ type Deps struct {
 	// Hermes reports the Hermes Agent collector's state for /doctor
 	// (optional; unwired reads "not wired").
 	Hermes func() collect.HermesStatus
+	// Sightings counts sessions with a transcript or hook sighting since a
+	// time, by harness, for /doctor trace coverage (optional; unwired skips
+	// the check).
+	Sightings func(since time.Time) map[string]int
 
 	// Worktrees is the worktree hunter behind /worktrees (optional; unwired
 	// answers 503).
@@ -348,6 +353,7 @@ func New(d Deps) *API {
 		killer:          d.Killer,
 		statusFn:        d.Status,
 		hermes:          d.Hermes,
+		sightings:       d.Sightings,
 		worktrees:       d.Worktrees,
 		worktreeAdvisor: d.WorktreeAdvisor,
 		egressAdvisor:   d.EgressAdvisor,

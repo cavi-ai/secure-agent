@@ -1,6 +1,7 @@
 package store
 
 import (
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -103,11 +104,35 @@ func TestDoctorEventStats(t *testing.T) {
 	if n := s.HookEventsSince(now.Add(-3 * time.Hour)); n != 2 {
 		t.Fatalf("HookEventsSince(3h) = %d, want 2", n)
 	}
-	// claude: a's paired call, a's id-less call, a's two model calls, c's
-	// turn; codex: b's two model calls. Pre-since and session-less rows drop.
-	trace := s.TraceRowsByHarness(since)
-	if len(trace) != 2 || trace["claude"] != 5 || trace["codex"] != 2 {
-		t.Fatalf("TraceRowsByHarness = %v, want claude 5, codex 2", trace)
+}
+
+// Trace rows count by when they were written, not by their own timestamp: a
+// transcript read for the first time after a restart writes rows from before
+// it, and rows written before the store opened are not counted.
+func TestTraceRowsWrittenByHarness(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "t.db")
+	s, err := Open(path, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	s.UpsertSession(model.Session{ID: "a", Harness: "claude", Confidence: model.ConfTranscript, StartedAt: now, LastSeenAt: now})
+	s.UpsertSession(model.Session{ID: "b", Harness: "codex", Confidence: model.ConfTranscript, StartedAt: now, LastSeenAt: now})
+	s.PutEvent(event.Event{Kind: event.KindModelCall, SessionID: "a", TS: now})
+	s.Close()
+
+	s, err = Open(path, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	s.PutEvent(event.Event{Kind: event.KindTurn, SessionID: "a", TS: now})
+	s.PutEvent(event.Event{Kind: event.KindModelCall, SessionID: "b", TS: now.Add(-72 * time.Hour)})
+	s.PutEvent(event.Event{Kind: event.KindFileOpen, SessionID: "b", TS: now})
+	s.PutEvent(event.Event{Kind: event.KindModelCall, TS: now})
+	got := s.TraceRowsWrittenByHarness()
+	if len(got) != 2 || got["claude"] != 1 || got["codex"] != 1 {
+		t.Fatalf("TraceRowsWrittenByHarness = %v, want claude 1 (not the row before open), codex 1 (the backfilled row)", got)
 	}
 }
 
@@ -194,39 +219,5 @@ func TestDoctorRetentionReport(t *testing.T) {
 	defer empty.Close()
 	if r := empty.RetentionReport(); r == nil || len(r) != 0 {
 		t.Fatalf("empty store RetentionReport = %#v, want non-nil empty", r)
-	}
-}
-
-// Trace coverage counts sessions SEEN since boot at transcript or hook
-// confidence, whatever their start: a backfilled conversation started days ago
-// and active now counts; a process-tree guess and a stale row do not.
-func TestSessionsSeenByHarness(t *testing.T) {
-	s, err := Open("", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
-	now := time.Now().UTC().Truncate(time.Second)
-	since := now.Add(-time.Hour)
-	for _, sess := range []model.Session{
-		{ID: "a", Harness: "codex", Confidence: model.ConfTranscript, StartedAt: now, LastSeenAt: now},
-		{ID: "b", Harness: "openclaw", Confidence: model.ConfTranscript, StartedAt: now.Add(-48 * time.Hour), LastSeenAt: now},
-		{ID: "c", Harness: "claude", Confidence: model.ConfHook, StartedAt: now.Add(-3 * time.Hour), LastSeenAt: now.Add(-time.Minute)},
-		{ID: "d", Harness: "codex", Confidence: model.ConfProcessTree, StartedAt: now, LastSeenAt: now},
-		{ID: "e", Harness: "codex", Confidence: model.ConfTranscript, StartedAt: now.Add(-3 * time.Hour), LastSeenAt: now.Add(-2 * time.Hour)},
-		{ID: "f", Confidence: model.ConfTranscript, StartedAt: now, LastSeenAt: now},
-		{ID: "g", Harness: "hermes", Confidence: model.ConfTranscript, StartedAt: now.Add(-48 * time.Hour), LastSeenAt: now.Add(-47 * time.Hour)},
-		{ID: "h", Harness: "hermes", Confidence: model.ConfTranscript, StartedAt: now.Add(-48 * time.Hour), LastSeenAt: now.Add(-47 * time.Hour)},
-	} {
-		s.UpsertSession(sess)
-	}
-	// g is only closed since: ending moves last_seen_at, but it is no activity.
-	s.EndSession("g", now)
-	// h ran since and then ended.
-	s.PutEvent(event.Event{Kind: event.KindModelCall, SessionID: "h", TS: now.Add(-time.Minute)})
-	s.EndSession("h", now)
-	got := s.SessionsSeenByHarness(since)
-	if len(got) != 4 || got["codex"] != 1 || got["openclaw"] != 1 || got["claude"] != 1 || got["hermes"] != 1 {
-		t.Fatalf("SessionsSeenByHarness = %v, want codex 1, openclaw 1, claude 1, hermes 1 (h, not g)", got)
 	}
 }

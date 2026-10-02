@@ -52,6 +52,9 @@ type Store struct {
 	guardDecisionWrites atomic.Uint64
 	// Test seam for the identity-to-insert boundary; nil in production.
 	resourceEpisodeAfterLookup func()
+	// openID is the newest event id when the store opened: rows above it
+	// were written since this daemon started, whatever their own timestamp.
+	openID int64
 	// lastPrune gates the insert-driven prune to pruneMinInterval, so a
 	// high-rate producer does not trigger it every 1000 inserts.
 	lastPrune time.Time
@@ -541,10 +544,14 @@ func Open(dbPath, jsonlPath string) (*Store, error) {
 
 	refreshPlannerStats(db)
 
+	var openID int64
+	_ = db.QueryRow(`SELECT COALESCE(MAX(id), 0) FROM events`).Scan(&openID)
+
 	return &Store{
 		db:        db,
 		jsonlPath: jsonlPath,
 		jsonlFile: jsonl,
+		openID:    openID,
 	}, nil
 }
 
