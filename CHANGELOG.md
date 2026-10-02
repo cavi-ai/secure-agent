@@ -27,6 +27,9 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Inspect small evidence `.env` files by variable name without displaying values; symlinks and ambiguous multiline files are withheld.
 - Send selected findings directly to the local agent review queue with daemon-built evidence; local commands still require explicit confirmation.
 
+### Fixed
+- `make app`, `make install` and `make release` stop when a Go binary is stamped with a commit other than HEAD: Go before 1.27 stamps the enclosing checkout's commit when it builds in a git worktree.
+
 ## [1.2.0] - 2026-09-30
 
 ### System Agent

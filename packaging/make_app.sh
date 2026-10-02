@@ -45,6 +45,9 @@ done
 lipo -create -output bin/secure-agentd bin/secure-agentd-arm64 bin/secure-agentd-amd64
 lipo -create -output bin/secure-agent  bin/secure-agent-arm64  bin/secure-agent-amd64
 rm -f bin/secure-agentd-arm64 bin/secure-agentd-amd64 bin/secure-agent-arm64 bin/secure-agent-amd64
+source "${REPO_ROOT}/packaging/lib/vcs_stamp.sh"
+check_vcs_stamp bin/secure-agentd "${REPO_ROOT}"
+check_vcs_stamp bin/secure-agent "${REPO_ROOT}"
 
 echo "==> Building universal menubar app (macOS 27.0 SDK)..."
 # Locate the product via SwiftPM itself: hardcoded .build/apple/... paths go
