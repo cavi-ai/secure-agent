@@ -2,12 +2,16 @@ package correlate
 
 import (
 	"context"
+	"maps"
 	"slices"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/cavi-ai/secure-agent/daemon/internal/agents"
+	"github.com/cavi-ai/secure-agent/daemon/internal/config"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
+	"github.com/cavi-ai/secure-agent/daemon/internal/sensitive"
 )
 
 // noPTR stubs the resolver so identity comes from the CIDR tables alone.
@@ -78,5 +82,56 @@ func TestIdentityClass(t *testing.T) {
 	}
 	if id := IdentifyCached("2607:6bc0::10"); id.Class != "vendor" {
 		t.Errorf("ip path: %+v, want class vendor", id)
+	}
+}
+
+// infraAppSource: an agent (cursor-agent, 200) and an infra app (the Cursor
+// IDE, 300) in one process table.
+type infraAppSource struct{}
+
+var infraAppProcs = []agents.ProcInfo{
+	{PID: 200, PPID: 1, Exe: "/usr/local/bin/cursor-agent"},
+	{PID: 300, PPID: 1, Exe: "/Applications/Cursor.app/Contents/MacOS/Cursor"},
+}
+
+func (infraAppSource) List() []agents.ProcInfo { return infraAppProcs }
+
+func (infraAppSource) Info(pid int32) (agents.ProcInfo, bool) {
+	for _, p := range infraAppProcs {
+		if p.PID == pid {
+			return p, true
+		}
+	}
+	return agents.ProcInfo{}, false
+}
+
+// An infra family's endpoint (an IDE, the Claude app) is listed with
+// AgentKind infra and counted in the infrastructure figure, never in the
+// agent headline.
+func TestInfraAppEgressLeavesTheHeadline(t *testing.T) {
+	noPTR(t)
+	cfg, err := config.Load("/nonexistent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tg := agents.New(cfg, infraAppSource{})
+	tg.Refresh()
+	c := New(tg, sensitive.New(cfg), cfg)
+	now := time.Now()
+	c.Observe(event.Event{Kind: event.KindConnOpen, PID: 300, TS: now, RemoteHost: "203.0.113.9", RemotePort: 443})
+	c.Observe(event.Event{Kind: event.KindConnOpen, PID: 200, TS: now, RemoteHost: "203.0.113.5", RemotePort: 443})
+
+	if got := c.UninspectedEgressCountWindow(UninspectedWindow); got != 1 {
+		t.Errorf("headline = %d, want 1 (the agent's endpoint)", got)
+	}
+	if got := c.UninspectedInfraCountWindow(UninspectedWindow); got != 1 {
+		t.Errorf("infrastructure = %d, want 1 (the IDE's endpoint)", got)
+	}
+	kinds := map[string]string{}
+	for _, s := range c.UninspectedEgressSummary() {
+		kinds[s.Agent+"|"+s.Host] = s.AgentKind
+	}
+	if want := map[string]string{"cursor-ide|203.0.113.9": config.AgentKindInfra, "cursor|203.0.113.5": ""}; !maps.Equal(kinds, want) {
+		t.Errorf("agent kinds = %v, want %v", kinds, want)
 	}
 }

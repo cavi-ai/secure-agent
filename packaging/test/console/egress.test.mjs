@@ -86,11 +86,13 @@ const rows = [
   { agent: 'claude', host: 'api.statsig.com', count: 6, identity: { kind: 'hostname', name: 'api.statsig.com', org: 'Statsig', class: 'telemetry' } },
   { agent: 'claude', host: 'telemetry.example.com', count: 5, identity: { kind: 'hostname', name: 'telemetry.example.com' } },
   { agent: 'claude', host: '203.0.113.7', count: 2 },
+  { agent: 'cursor-ide', host: '52.21.130.202', count: 1, agent_kind: 'infra', identity: { kind: 'ipv4', org: 'AWS', class: 'cloud' } },
 ];
 
-test('groupUninspected splits carriers, vendors and unknowns', () => {
-  const { unknown, vendors, carriers } = groupUninspected(rows);
+test('groupUninspected splits carriers, infra apps, vendors and unknowns', () => {
+  const { unknown, vendors, carriers, apps } = groupUninspected(rows);
   assert.deepEqual(Array.from(carriers, e => e.host), ['2606:4700::1']);
+  assert.deepEqual(Array.from(apps, e => e.host), ['52.21.130.202']);
   assert.deepEqual(Array.from(unknown, e => e.host), ['34.120.1.1', 'api.statsig.com', 'telemetry.example.com', '203.0.113.7']);
   assert.deepEqual(Array.from(vendors, g => `${g.agent}|${g.org}`), ['openclaw|Anthropic', 'claude|Anthropic']);
 });
@@ -125,7 +127,7 @@ test('vendor rollup sums counts per (agent, org), busiest first, earliest first_
 
 test('groupUninspected tolerates no rows', () => {
   const g = groupUninspected(undefined);
-  assert.equal(g.unknown.length + g.vendors.length + g.carriers.length, 0);
+  assert.equal(g.unknown.length + g.vendors.length + g.carriers.length + g.apps.length, 0);
 });
 
 test('Egress warning counts pending egress decisions, never raw coverage observations', () => {
@@ -185,6 +187,11 @@ test('uninspectedParts: one keyed part per endpoint, vendor rollups, carriers', 
   assert.ok(keys.includes('vendor:openclaw|Anthropic'));
   assert.ok(keys.includes('ep:claude|34.120.1.1'));
   assert.ok(keys.includes('carriers'));
+  assert.ok(!keys.includes('ep:cursor-ide|52.21.130.202'), 'an infra app is not an agent row');
+  const apps = parts.find(p => p.key === 'infra-apps');
+  assert.equal(apps.count, 1);
+  assert.match(apps.html, /^<details class="infra-group" data-key="infra-apps">/);
+  assert.match(apps.html, /from cursor-ide\)/);
   for (const p of parts) {
     const html = p.html.trim();
     assert.ok(html.startsWith('<div') || html.startsWith('<details'), p.key);
