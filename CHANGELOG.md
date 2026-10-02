@@ -41,6 +41,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Pricing: Claude Sonnet 5.5 (`claude-sonnet-5-5`) at $2 / $10 per million input / output tokens. A price added later, built in or in `pricing:`, also prices the Claude and Codex calls already stored without one.
 - Doctor and posture: a file telemetry service that launchd restarted after an exit and is running again (`running (last exit 1)`) is not reported as failing; it still fails when its spool stops being written.
 - The routing snippet's token reached no client: `PROXY_AUTHORIZATION` is not read by HTTP clients, and the proxy accepted only an unencoded token. The proxy URL now carries the token as the basic-auth password, which the proxy accepts base64-encoded; the snippet adds `NO_PROXY` for loopback and no longer sets `SSL_CERT_FILE` or `REQUESTS_CA_BUNDLE`.
+- Sessions: a session whose root process now belongs to an infra family other than its own harness (a Claude desktop conversation rooted at the app before the app was infra) ends after an hour of silence instead of staying open until that process exits.
 
 ## [1.2.0] - 2026-09-30
 

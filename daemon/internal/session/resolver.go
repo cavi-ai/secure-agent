@@ -26,6 +26,9 @@ const (
 	// endSilentAfter: hook sessions whose root pid never resolved end after
 	// a day of silence (no process tree to watch for an exit).
 	endSilentAfter = 24 * time.Hour
+	// endInfraRootAfter: a session whose root pid now belongs to an infra
+	// family other than its own harness ends after this much silence.
+	endInfraRootAfter = time.Hour
 	// touchThrottle bounds last_seen writes per session.
 	touchThrottle = 30 * time.Second
 	// minSessionLifetime is how long a process-tree session must stay live
@@ -870,7 +873,9 @@ func (r *Resolver) WorkspaceFor(sessionID string) string {
 
 // Sweep advances the lifecycle: active → idle after silence, idle → ended
 // when the root process is gone (or after a day of silence for pid-less
-// hook sessions). Call on the tagger refresh cadence.
+// hook sessions, or an hour of silence on a root that now belongs to an
+// infra family other than the session's harness). Call on the tagger
+// refresh cadence.
 func (r *Resolver) Sweep() {
 	now := r.now()
 	idled := r.st.MarkSessionsIdle(now.Add(-idleAfter))
@@ -886,22 +891,7 @@ func (r *Resolver) Sweep() {
 		// A root missing from one process-table sample is ended only when the
 		// process source confirms it is gone.
 		if !live[root] && !r.tagger.Alive(root) {
-			r.st.EndSession(id, now)
-			if sess, ok := r.st.GetSession(id); ok {
-				r.emitLocked(sess)
-			}
-			delete(r.deferred, id)
-			delete(r.byRoot, root)
-			for pid, sid := range r.byPID {
-				if sid == id {
-					delete(r.byPID, pid)
-				}
-			}
-			for scope, sid := range r.byScope {
-				if sid == id {
-					delete(r.byScope, scope)
-				}
-			}
+			r.endLocked(id, now)
 		}
 	}
 	// Sessions known to the store but not to the in-memory maps (daemon
@@ -922,12 +912,46 @@ func (r *Resolver) Sweep() {
 				r.emitLocked(stored)
 			}
 		}
+		// A root taken before the agents config named that process infra (a
+		// Claude desktop conversation rooted at the app) outlives the
+		// conversation; a stamped event re-roots a live one (joinTreeLocked),
+		// so only a silent one is still on it.
+		if sess.RootPID != 0 && now.Sub(sess.LastSeenAt) > endInfraRootAfter {
+			if info, ok := r.tagger.Tag(sess.RootPID); ok && info.Kind == config.AgentKindInfra && info.Name != sess.Harness {
+				r.endLocked(sess.ID, now)
+			}
+		}
 	}
 	// Idle transitions ride the delta stream too (the console's status chip
 	// must move without a poll).
 	for _, id := range idled {
 		if sess, ok := r.st.GetSession(id); ok {
 			r.emitLocked(sess)
+		}
+	}
+}
+
+// endLocked ends session id and drops it from the in-memory maps. Caller
+// holds mu.
+func (r *Resolver) endLocked(id string, now time.Time) {
+	r.st.EndSession(id, now)
+	if sess, ok := r.st.GetSession(id); ok {
+		r.emitLocked(sess)
+	}
+	delete(r.deferred, id)
+	for root, sid := range r.byRoot {
+		if sid == id {
+			delete(r.byRoot, root)
+		}
+	}
+	for pid, sid := range r.byPID {
+		if sid == id {
+			delete(r.byPID, pid)
+		}
+	}
+	for scope, sid := range r.byScope {
+		if sid == id {
+			delete(r.byScope, scope)
 		}
 	}
 }
