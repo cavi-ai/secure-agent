@@ -7,9 +7,11 @@ enum AppIdentity {
     static let bundleIdentifier = "com.cavi-ai.secure-agent"
 }
 
-/// Preferences live in the app's own suite, so telemetry opt-outs,
-/// onboarding, update channel and digest state persist across upgrades.
+/// Preferences live in the standard domain, which for the app is its bundle
+/// identifier, com.cavi-ai.secure-agent: the established preferences domain,
+/// so telemetry opt-outs, onboarding, update channel and digest state persist
+/// across upgrades. A suite named after the app's own bundle identifier is nil.
 @MainActor
 enum AppPreferences {
-    static let shared = UserDefaults(suiteName: AppIdentity.bundleIdentifier)!
+    static let shared = UserDefaults.standard
 }
