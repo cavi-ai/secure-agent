@@ -60,6 +60,7 @@ As AI coding agents (Claude Code, Cursor, Codex, Antigravity, Pi, Qwen Code, ope
 
 - 🛠️ **Native `secure-agent` CLI Tool**  
   Pure-Go terminal utility (`secure-agent status`, `flags`, `incidents`, `kill`, `fleet`, `service`) for inspecting security posture directly from terminal prompts. `secure-agent service install` runs the daemon headless under launchd for fleet/CI nodes with no GUI login.
+  - `secure-agent telemetry repair` — asks the menu bar app to re-register its file-telemetry helper when launchd will not start it; exits 1 unless the helper runs within 60 s.
   - `secure-agent doctor` — hooks, file telemetry, collectors, trace coverage, sessions, pairing, pricing, retention, egress; repo attribution is measured only for sessions inside Git workspaces. Exits 1 on any failure.
   - `secure-agent worktrees` — every git worktree from agent sessions, agent worktree directories and a saved repo list, each marked remove, review, keep or prune with the reasons; `worktrees remove` and `worktrees prune` act only on those verdicts. The console's Sessions › Cleanup view lets you inspect review items and move a reviewed folder to Trash while retaining its Git branch, commits, and stashes. “Ask the agent” appears only for a live, resumable agent session; “Ask advisor” requests an advisory note. The view also shows disk usage per project and what cleanups have reclaimed (`secure-agent cleanup log`).
 

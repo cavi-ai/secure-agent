@@ -115,6 +115,14 @@ cat > "${APP_DIR}/Contents/Info.plist" <<EOF
     <!-- Keep a Dock control if macOS hides the menu bar status item. -->
     <key>LSUIElement</key><false/>
     <key>NSUserNotificationAlertUsageDescription</key><string>Secure Agent sends alerts when AI agents trigger security flags.</string>
+    <!-- secure-agent://telemetry/repair: the CLI's telemetry repair asks the app to re-register its file-telemetry helper. -->
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key><string>${BUNDLE_ID}</string>
+            <key>CFBundleURLSchemes</key><array><string>secure-agent</string></array>
+        </dict>
+    </array>
 </dict>
 </plist>
 EOF
