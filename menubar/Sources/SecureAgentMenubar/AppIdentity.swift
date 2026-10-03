@@ -14,8 +14,9 @@ enum AppIdentity {
     static let wrongLocationMessage = "Secure Agent must run from /Applications to manage file telemetry"
 
     /// Whether `bundleURL`, symlinks resolved, is the installed copy.
-    static func isInstalledCopy(_ bundleURL: URL) -> Bool {
-        bundleURL.resolvingSymlinksInPath().standardizedFileURL.path == installedAppPath
+    /// `installedPath` is compared as given, never resolved.
+    static func isInstalledCopy(_ bundleURL: URL, installedPath: String = installedAppPath) -> Bool {
+        bundleURL.resolvingSymlinksInPath().standardizedFileURL.path == installedPath
     }
 }
 
