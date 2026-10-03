@@ -493,3 +493,26 @@ func TestAssessHostPromptCarriesIdentity(t *testing.T) {
 		t.Fatalf("unknown host prompt = %q", unknown)
 	}
 }
+
+// Triage of a secret finding carries the test-value guidance and the flag's
+// test-value evidence, so the local model can tell fixtures from live keys.
+func TestTriageCarriesTestValueGuidanceAndEvidence(t *testing.T) {
+	stub := &chatStub{content: `{"assessment":"benign","confidence":0.9,"rationale":"sample key","suggested_action":"mute-rule"}`}
+	srv := newStubServer(t, stub)
+	sub := New(Config{Enabled: true, Endpoint: srv.URL, Model: "test", Timeout: 5 * time.Second}, &memSink{rows: map[string]model.AdvisorVerdict{}})
+	fl := model.Flag{ID: "tv1", Rule: "secret-in-transcript", Severity: 2, Agent: "claude", Evidence: []model.EvidenceItem{
+		{Kind: "transcript", Label: "/t/s.jsonl", Sub: "pattern match", Text: "claude transcript /t/s.jsonl matched pattern rule aws-key"},
+		{Kind: "test-value", Label: "Looks like a test value", Sub: "a published sample value", Text: "Looks like a test value: a published sample value"},
+	}}
+	if _, err := sub.TriageForTest(fl); err != nil {
+		t.Fatal(err)
+	}
+	stub.mu.Lock()
+	body := stub.lastBody
+	stub.mu.Unlock()
+	for _, want := range []string{"Kubernetes Secret data", "Docker config auth", "registered real secret", "Looks like a test value: a published sample value"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("triage request lacks %q", want)
+		}
+	}
+}

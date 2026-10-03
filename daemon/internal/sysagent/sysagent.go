@@ -137,6 +137,13 @@ func (a *Agent) config() config.SystemAgentConfig {
 	return c
 }
 
+// AutoReview reports whether new findings go to the review queue on their
+// own: the agent is enabled and system_agent.auto_review is on.
+func (a *Agent) AutoReview() bool {
+	c := a.config()
+	return c.Enabled && c.AutoReview
+}
+
 // HarnessStatus is one harness as the console shows it.
 type HarnessStatus struct {
 	ID        string `json:"id"`

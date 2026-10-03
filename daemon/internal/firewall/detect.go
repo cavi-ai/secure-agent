@@ -65,21 +65,22 @@ func (d *Detector) MaskPatterns(text string) string {
 func (d *Detector) ScanPatterns(text string) []Hit {
 	var hits []Hit
 	for _, p := range d.patterns {
-		if matchesAtTokenStart(p.re, text) {
-			hits = append(hits, Hit{RuleID: p.id, SecretType: p.secretType, Layer: LayerPattern, Confidence: 0.9})
+		if spans := tokenStartSpans(p.re, text); len(spans) > 0 {
+			hits = append(hits, Hit{RuleID: p.id, SecretType: p.secretType, Layer: LayerPattern, Confidence: 0.9, Spans: spans})
 		}
 	}
 	return hits
 }
 
-// matchesAtTokenStart reports whether re matches text at a token start.
-func matchesAtTokenStart(re *regexp.Regexp, text string) bool {
+// tokenStartSpans returns the matches of re in text that start a token.
+func tokenStartSpans(re *regexp.Regexp, text string) [][2]int {
+	var spans [][2]int
 	for _, m := range re.FindAllStringIndex(text, -1) {
 		if startsToken(text, m[0]) {
-			return true
+			spans = append(spans, [2]int{m[0], m[1]})
 		}
 	}
-	return false
+	return spans
 }
 
 // startsToken reports whether position i begins a token: the byte before it

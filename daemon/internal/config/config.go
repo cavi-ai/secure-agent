@@ -276,6 +276,9 @@ type SystemAgentConfig struct {
 	HarnessModel string `yaml:"harness_model"`
 	// TimeoutMinutes bounds one headless dispatch (0 = 30).
 	TimeoutMinutes int `yaml:"timeout_minutes"`
+	// AutoReview sends new findings to the agent's review queue without a
+	// click (batched and spaced; see api.NoteNewFlag).
+	AutoReview bool `yaml:"auto_review"`
 }
 
 // RetentionYAML is the on-disk shape of event retention. Zero values fall

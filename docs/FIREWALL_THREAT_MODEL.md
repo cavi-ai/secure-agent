@@ -36,6 +36,14 @@ dense with ids and encoded blobs.
   never the matched text. Repeats of the same (path, rule) collapse: one event
   per 10 minutes, one flag per 15 minutes.
 - Severity: a registered secret (fingerprint layer) is 3; a typed pattern is 2.
+- A typed-pattern flag carries a `test-value` evidence item: the value-free
+  reasons its value looks like a test, dummy or sentinel value (a published
+  sample, a placeholder word, a test-mode prefix, a low-entropy value, a value
+  that decodes to a placeholder credential, a sample JWT; or only context: a
+  test or example file in the same record, test code or dummy wording within
+  240 bytes). A line where any match has no reason yields none. The local
+  advisor and the local agent's review weigh it; value reasons mark a test
+  value, context alone does not.
 - Limit: only files the daemon tails are scanned. Lines appended to a tracked
   transcript while the daemon is stopped are scanned on the next start (tail
   offsets persist); a transcript first created while it is stopped is picked

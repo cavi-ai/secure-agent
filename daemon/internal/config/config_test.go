@@ -587,13 +587,13 @@ func TestSystemAgentKey(t *testing.T) {
 		t.Fatalf("default system_agent = %+v, want off, Ollama's loopback port, 30 minutes", c.SystemAgent)
 	}
 	p := filepath.Join(t.TempDir(), "config.yaml")
-	if err := os.WriteFile(p, []byte("system_agent:\n  enabled: true\n  endpoint: \"http://localhost:11500\"\n  model: qwen3\n  harness_model: qwen3-coder\n"), 0o644); err != nil {
+	if err := os.WriteFile(p, []byte("system_agent:\n  enabled: true\n  endpoint: \"http://localhost:11500\"\n  model: qwen3\n  harness_model: qwen3-coder\n  auto_review: true\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if c, err = Load(p); err != nil {
 		t.Fatal(err)
 	}
-	want := SystemAgentConfig{Enabled: true, Endpoint: "http://localhost:11500", Model: "qwen3", HarnessModel: "qwen3-coder", TimeoutMinutes: 30}
+	want := SystemAgentConfig{Enabled: true, Endpoint: "http://localhost:11500", Model: "qwen3", HarnessModel: "qwen3-coder", TimeoutMinutes: 30, AutoReview: true}
 	if c.SystemAgent != want {
 		t.Fatalf("system_agent = %+v, want %+v", c.SystemAgent, want)
 	}

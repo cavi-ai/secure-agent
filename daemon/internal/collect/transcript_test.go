@@ -555,6 +555,47 @@ func TestCodexOrigin(t *testing.T) {
 	}
 }
 
+// patternScanner is the firewall's typed-pattern layer alone.
+type patternScanner struct{ d *firewall.Detector }
+
+func (p patternScanner) ScanText(text string) []firewall.Hit { return p.d.ScanPatterns(text) }
+
+// A pattern hit carries the value-free reasons its value looks like a test
+// value; a live-looking value beside the fixture, or alone, carries none.
+func TestTranscriptHitCarriesTestSignals(t *testing.T) {
+	d, err := firewall.NewDetector([]config.PatternConfig{{ID: "anthropic-key", Type: "vendor-key", Re: `sk-ant-[A-Za-z0-9_-]{24,}`}}, config.EntropyConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := "sk-ant-" + "api03-" + "Qz7Lk2Vb9Rt4Wm1Xc8Np5Hj3Gd6Fs0Ae"
+	other := "sk-ant-" + "api03-" + "Pl4Kj7Mn2Bv5Cx8Zq1Wr6Ty9Ui3Op0As"
+	placeholder := "sk-ant-" + "api03-" + "your_key_here_placeholder_value"
+	fixture := `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"cat > test/memory/record.test.ts <<'EOF'\n  it(\"scrubs secrets\", () => {\n    expect(scrub(\"Key is ` + key + ` ok\")).not.toContain(\"sk-ant-\");\n"}}]}}`
+	for _, tc := range []struct {
+		name, line string
+		want       []string
+	}{
+		{"fixture in a test being written", fixture, []string{"a test or example file named in the same record (record.test.ts)", "test code around it", "dummy, sample or redaction wording around it"}},
+		{"a placeholder, then a live-looking key in prose", `{"type":"user","message":{"content":"template ` + placeholder + ` ` + strings.Repeat("lorem ipsum ", 30) + ` prod uses ` + other + `"}}`, nil},
+		{"a live-looking key alone", `{"type":"user","message":{"content":"my key is ` + other + `"}}`, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ts := NewTranscriptScanner(bus.New(8), nil)
+			ts.TextScanner = patternScanner{d}
+			evs := ts.scanLine(tc.line, "/t/s.jsonl", "claude", "s-1", 0)
+			if len(evs) != 1 || evs[0].Detail != "claude:pattern:anthropic-key" {
+				t.Fatalf("events = %+v", evs)
+			}
+			if evs[0].TestSignals != strings.Join(tc.want, "; ") {
+				t.Fatalf("signals = %q, want %q", evs[0].TestSignals, tc.want)
+			}
+			if strings.Contains(evs[0].TestSignals, "sk-ant-") {
+				t.Fatalf("signals %q carry the value", evs[0].TestSignals)
+			}
+		})
+	}
+}
+
 // tailAll writes lines to path in one append, as Claude Code writes the
 // records of one API call, runs one tail pass and returns every event
 // published.

@@ -12,6 +12,7 @@ export interface Event {
   remote_port?: number;
   detail?: string;
   offset?: number;
+  test_signals?: string;
   tool?: string;
   tool_status?: string;
   duration_ms?: number;

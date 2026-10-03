@@ -1,6 +1,7 @@
 package correlate
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -508,5 +509,43 @@ func TestSecretInTranscriptFlags(t *testing.T) {
 	}
 	if got := muted.MutedCount(); got != 1 {
 		t.Fatalf("muted fire must be counted, got %d", got)
+	}
+}
+
+// A pattern hit's flag says whether its value looks like a test value:
+// value signals, context only, or none; a fingerprint hit (a registered
+// secret) carries no such item.
+func TestSecretInTranscriptTestValueEvidence(t *testing.T) {
+	base := time.Now()
+	for i, tc := range []struct {
+		detail  string
+		signals []string
+		label   string
+	}{
+		{"claude:pattern:anthropic-key", []string{"a published sample value", "test code around it"}, "Looks like a test value"},
+		{"claude:pattern:anthropic-key", []string{"a test or example file named in the same record (record.test.ts)", "test code around it"}, "Test context only"},
+		{"claude:pattern:anthropic-key", nil, "No test-value signals"},
+		{"claude:fingerprint:fp-1", []string{"test code around it"}, ""},
+	} {
+		c := newTestCorrelator(t)
+		f := c.Observe(event.Event{Kind: event.KindTranscriptHit, TS: base, Path: fmt.Sprintf("/t/%d.jsonl", i), SessionID: "s-1", Detail: tc.detail, TestSignals: strings.Join(tc.signals, "; ")})
+		if len(f) != 1 {
+			t.Fatalf("%d: flags = %d", i, len(f))
+		}
+		var tv *model.EvidenceItem
+		for j := range f[0].Evidence {
+			if f[0].Evidence[j].Kind == "test-value" {
+				tv = &f[0].Evidence[j]
+			}
+		}
+		if tc.label == "" {
+			if tv != nil {
+				t.Fatalf("%d: fingerprint flag carries %+v", i, *tv)
+			}
+			continue
+		}
+		if tv == nil || tv.Label != tc.label || (len(tc.signals) > 0 && !strings.Contains(tv.Sub, tc.signals[0])) {
+			t.Fatalf("%d: test-value evidence = %+v, want label %q", i, tv, tc.label)
+		}
 	}
 }
