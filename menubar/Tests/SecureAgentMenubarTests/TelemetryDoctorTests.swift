@@ -195,10 +195,34 @@ final class TelemetryDoctorTests: XCTestCase {
     func testActiveInstallPassesEveryCheckInOrder() {
         let checks = TelemetryDoctor.evaluate(facts())
         XCTAssertEqual(checks.map(\.id),
-                       ["signature", "plist", "registration", "login-items", "launchd", "full-disk-access", "spool", "legacy"])
+                       ["location", "signature", "plist", "registration", "login-items", "launchd", "full-disk-access", "spool", "legacy"])
         XCTAssertEqual(checks.filter { $0.state != .pass }.map(\.id), [])
         XCTAssertTrue(check(checks, "launchd")?.cause.contains("pid 812") == true)
         XCTAssertTrue(check(checks, "launchd")?.cause.contains("last exit code (never exited)") == true)
+    }
+
+    func testACopyOutsideApplicationsFailsLocationAndOffersNoRegistration() {
+        let checks = TelemetryDoctor.evaluate(facts {
+            $0.locationAllowed = false
+            $0.serviceStatus = .notFound
+            $0.launchd = .notFound
+        })
+        assertCheck(checks, "location", .fail, nil)
+        XCTAssertEqual(check(checks, "location")?.cause, "Secure Agent must run from /Applications to manage file telemetry")
+        assertCheck(checks, "registration", .fail, nil)
+        XCTAssertEqual(checks.compactMap(\.fix).filter { $0 == .register || $0 == .reregister }, [])
+
+        let stuck = TelemetryDoctor.evaluate(facts {
+            $0.locationAllowed = false
+            $0.launchd = .loaded(state: "spawn scheduled", pid: nil, lastExitCode: "78: EX_CONFIG")
+        })
+        assertCheck(stuck, "launchd", .fail, nil)
+    }
+
+    func testAnotherRegisteredCopyWarns() {
+        let checks = TelemetryDoctor.evaluate(facts { $0.otherCopies = ["/Users/dev/secure-agent/dist/Secure Agent.app"] })
+        assertCheck(checks, "location", .warn, nil)
+        XCTAssertTrue(check(checks, "location")?.cause.contains("dist/Secure Agent.app") == true)
     }
 
     func testNeverRegistered() {

@@ -104,6 +104,9 @@ public final class SetupManager: ObservableObject {
     private var esRegisterAttemptedThisLaunch = false
     /// Reads the collector's launchd job; called off the main actor.
     private let esLaunchdProbe: @Sendable () -> LaunchdProbe
+    /// This copy's bundle; only the copy in /Applications manages the helper.
+    private let appURL: URL
+    private let esLocationAllowed: Bool
     /// The launchd probe behind the autopilot's re-register while it runs,
     /// and when the last one started.
     private(set) var esRepairProbe: Task<Void, Never>?
@@ -160,8 +163,11 @@ public final class SetupManager: ObservableObject {
          defaults: UserDefaults = AppPreferences.shared,
          plistPresent: (() -> Bool)? = nil,
          openPane: ((ESSettingsPane) -> Void)? = nil,
-         launchdProbe: (@Sendable () -> LaunchdProbe)? = nil) {
+         launchdProbe: (@Sendable () -> LaunchdProbe)? = nil,
+         appURL: URL = Bundle.main.bundleURL) {
         self.esService = esService
+        self.appURL = appURL
+        esLocationAllowed = AppIdentity.isInstalledCopy(appURL)
         esLaunchdProbe = launchdProbe ?? { SetupManager.esLaunchdJob() }
         prefs = defaults
         esMemory = ESAutopilotMemory(
@@ -916,6 +922,7 @@ public final class SetupManager: ObservableObject {
     /// A first registration leaves the daemon awaiting the user's approval in
     /// Login Items; that is the expected outcome, not an error.
     private func registerESService() throws {
+        guard esLocationAllowed else { throw SetupError.notInstalledCopy }
         esRegisterSpoolMtime = esSpoolMtime()
         do {
             try esService.register()
@@ -930,6 +937,7 @@ public final class SetupManager: ObservableObject {
     var esPlistPresent: Bool { esPlistCheck() }
 
     private func currentESStage() -> ESStage {
+        if !esLocationAllowed { return .wrongLocation }
         if esLegacyHelperInstalled { return .legacyInstalled }
         return esCardState(status: esServiceStatus, plistPresent: esPlistPresent,
                            tccGranted: esSpoolFlowing, helperReplaced: esHelperReplaced)
@@ -981,7 +989,7 @@ public final class SetupManager: ObservableObject {
     /// will not start its job. The launchd probe runs off the main actor, one
     /// at a time, at most every 30 s.
     private func repairStuckESJob() {
-        guard esRepairProbe == nil, !esRegisterAttemptedThisLaunch, !esMemory.userDisabled,
+        guard esLocationAllowed, esRepairProbe == nil, !esRegisterAttemptedThisLaunch, !esMemory.userDisabled,
               esServiceStatus == .enabled,
               esRepairProbeStarted.map({ Date().timeIntervalSince($0) >= 30 }) ?? true else { return }
         esRepairProbeStarted = Date()
@@ -1003,6 +1011,10 @@ public final class SetupManager: ObservableObject {
     /// Re-register, the autopilot's repair and `secure-agent://telemetry/repair`.
     /// Counts as this launch's registration attempt.
     public func reregisterESService() {
+        guard esLocationAllowed else {
+            report(SetupError.notInstalledCopy)
+            return
+        }
         esRegisterAttemptedThisLaunch = true
         do {
             try? esService.unregister()
@@ -1281,8 +1293,12 @@ public final class SetupManager: ObservableObject {
     /// log tail and the spool on disk (off the main actor), then the daemon's
     /// `/status` and `/doctor`.
     func collectTelemetryFacts() async -> TelemetryFacts {
-        let appPath = Bundle.main.bundleURL.path
-        let helperPath = Bundle.main.bundleURL.appendingPathComponent(Self.esCollectorExecutable).path
+        let appPath = appURL.path
+        let helperPath = appURL.appendingPathComponent(Self.esCollectorExecutable).path
+        let thisCopy = appURL.resolvingSymlinksInPath().path
+        let otherCopies = NSWorkspace.shared.urlsForApplications(withBundleIdentifier: AppIdentity.bundleIdentifier)
+            .map { $0.resolvingSymlinksInPath().path }
+            .filter { $0 != thisCopy }
         let probe = await Task.detached { () -> (CodeSignature?, CodeSignature?, LaunchdProbe, String?, Date?) in
             let app = CodeSignature.parse(Self.capture(["/usr/bin/codesign", "-dv", appPath]))
             let helper = CodeSignature.parse(Self.capture(["/usr/bin/codesign", "-dv", helperPath]))
@@ -1298,7 +1314,8 @@ public final class SetupManager: ObservableObject {
             now: Date(), appSignature: probe.0, helperSignature: probe.1,
             plistPresent: esPlistPresent, serviceStatus: esService.status, launchd: probe.2,
             helperLogLastLine: probe.3, spoolMtime: probe.4, esService: status?.esService,
-            legacyInstalled: fm.fileExists(atPath: Self.legacyESPlistPath), daemonChecks: doctor?.checks)
+            legacyInstalled: fm.fileExists(atPath: Self.legacyESPlistPath), daemonChecks: doctor?.checks,
+            locationAllowed: esLocationAllowed, otherCopies: otherCopies)
     }
 
     /// Runs the Doctor once and publishes its checks.
@@ -1524,11 +1541,14 @@ public final class SetupManager: ObservableObject {
 
     public enum SetupError: LocalizedError {
         case notBundled
+        case notInstalledCopy
 
         public var errorDescription: String? {
             switch self {
             case .notBundled:
                 return "This copy of Secure Agent is not running from its app bundle. Drag Secure Agent.app to /Applications and relaunch it."
+            case .notInstalledCopy:
+                return AppIdentity.wrongLocationMessage
             }
         }
     }

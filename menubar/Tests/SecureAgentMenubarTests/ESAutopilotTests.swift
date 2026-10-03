@@ -21,6 +21,7 @@ final class ESAutopilotTests: XCTestCase {
             (.needsRegrant, false, false, [], .open(.fullDiskAccess)),
             (.needsRegrant, false, false, [.loginItems, .fullDiskAccess], .none),
             (.legacyInstalled, false, false, [], .none),
+            (.wrongLocation, false, false, [], .none),
             (.notFound, false, false, [], .none),
             (.active, false, false, [], .none),
         ]
@@ -61,7 +62,8 @@ final class ESAutopilotTests: XCTestCase {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: "ESAutopilotTests.\(UUID().uuidString)"))
         var opened: [ESSettingsPane] = []
         let setup = SetupManager(esService: service, defaults: defaults,
-                                 plistPresent: { true }, openPane: { opened.append($0) })
+                                 plistPresent: { true }, openPane: { opened.append($0) },
+                                 appURL: installedCopy)
 
         setup.refreshESState()
         XCTAssertEqual(service.registerCount, 1, "launch registers a never-registered service")
@@ -75,7 +77,8 @@ final class ESAutopilotTests: XCTestCase {
         XCTAssertEqual(service.unregisterCount, 1)
 
         let relaunch = SetupManager(esService: service, defaults: defaults,
-                                    plistPresent: { true }, openPane: { opened.append($0) })
+                                    plistPresent: { true }, openPane: { opened.append($0) },
+                                 appURL: installedCopy)
         relaunch.refreshESState()
         XCTAssertEqual(service.registerCount, 1, "after Remove, a new launch does not register")
 
@@ -93,7 +96,7 @@ final class ESAutopilotTests: XCTestCase {
                                         userInfo: [NSLocalizedDescriptionKey: "Operation not permitted"])
         let defaults = try XCTUnwrap(UserDefaults(suiteName: "ESAutopilotTests.\(UUID().uuidString)"))
         let setup = SetupManager(esService: service, defaults: defaults,
-                                 plistPresent: { true }, openPane: { _ in })
+                                 plistPresent: { true }, openPane: { _ in }, appURL: installedCopy)
         setup.refreshESState()
         setup.refreshESState()
         XCTAssertEqual(service.registerCount, 1)
@@ -138,7 +141,8 @@ final class ESAutopilotTests: XCTestCase {
         service.status = .enabled
         let defaults = try XCTUnwrap(UserDefaults(suiteName: "ESAutopilotTests.\(UUID().uuidString)"))
         let setup = SetupManager(esService: service, defaults: defaults, plistPresent: { true }, openPane: { _ in },
-                                 launchdProbe: { .loaded(state: "spawn scheduled", pid: nil, lastExitCode: "78: EX_CONFIG") })
+                                 launchdProbe: { .loaded(state: "spawn scheduled", pid: nil, lastExitCode: "78: EX_CONFIG") },
+                                 appURL: installedCopy)
 
         setup.refreshESState()
         let probe = try XCTUnwrap(setup.esRepairProbe, "an enabled service's job is probed")
@@ -155,6 +159,27 @@ final class ESAutopilotTests: XCTestCase {
         XCTAssertEqual(service.registerCount, 2)
     }
 
+    @MainActor func testACopyOutsideApplicationsNeverRegistersOrRepairsTheHelper() throws {
+        let service = FakeESService()
+        service.status = .enabled
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "ESAutopilotTests.\(UUID().uuidString)"))
+        var opened: [ESSettingsPane] = []
+        let setup = SetupManager(esService: service, defaults: defaults, plistPresent: { true },
+                                 openPane: { opened.append($0) },
+                                 launchdProbe: { .loaded(state: "spawn scheduled", pid: nil, lastExitCode: "78: EX_CONFIG") },
+                                 appURL: URL(fileURLWithPath: "/Users/dev/secure-agent/dist/Secure Agent.app"))
+
+        setup.refreshESState()
+        XCTAssertEqual(setup.esStage, .wrongLocation)
+        XCTAssertNil(setup.esRepairProbe, "no launchd probe, no repair")
+        setup.reregisterESService()
+        XCTAssertEqual(setup.lastError, AppIdentity.wrongLocationMessage)
+        XCTAssertThrowsError(try setup.installESCollector())
+        XCTAssertEqual(service.registerCount, 0)
+        XCTAssertEqual(service.unregisterCount, 0)
+        XCTAssertEqual(opened, [])
+    }
+
     @MainActor func testRefreshLeavesARunningJobAlone() async throws {
         try XCTSkipIf(FileManager.default.fileExists(atPath: SetupManager.legacyESPlistPath),
                       "an old helper on this Mac makes the stage legacyInstalled")
@@ -162,7 +187,8 @@ final class ESAutopilotTests: XCTestCase {
         service.status = .enabled
         let defaults = try XCTUnwrap(UserDefaults(suiteName: "ESAutopilotTests.\(UUID().uuidString)"))
         let setup = SetupManager(esService: service, defaults: defaults, plistPresent: { true }, openPane: { _ in },
-                                 launchdProbe: { .loaded(state: "running", pid: 412, lastExitCode: nil) })
+                                 launchdProbe: { .loaded(state: "running", pid: 412, lastExitCode: nil) },
+                                 appURL: installedCopy)
 
         setup.refreshESState()
         let probe = try XCTUnwrap(setup.esRepairProbe)
@@ -171,6 +197,8 @@ final class ESAutopilotTests: XCTestCase {
         XCTAssertEqual(service.registerCount, 0)
     }
 }
+
+private let installedCopy = URL(fileURLWithPath: AppIdentity.installedAppPath)
 
 /// Stands in for SMAppService: register moves to requiresApproval, as a
 /// first registration does on macOS.

@@ -30,7 +30,7 @@ enum ESAutopilot {
             return panesOpenedForBuild.contains(.loginItems) ? .none : .open(.loginItems)
         case .needsGrant, .needsRegrant:
             return panesOpenedForBuild.contains(.fullDiskAccess) ? .none : .open(.fullDiskAccess)
-        case .legacyInstalled, .notFound, .active:
+        case .wrongLocation, .legacyInstalled, .notFound, .active:
             return .none
         }
     }
@@ -203,6 +203,10 @@ struct TelemetryFacts: Sendable {
     var legacyInstalled: Bool
     /// The daemon's `/doctor` checks; nil when the daemon did not answer.
     var daemonChecks: [DaemonDoctorCheckModel]?
+    /// Whether this copy is the one in /Applications.
+    var locationAllowed = true
+    /// Other copies LaunchServices has registered under the app's identifier.
+    var otherCopies: [String] = []
 }
 
 // MARK: - Doctor
@@ -215,8 +219,30 @@ enum TelemetryDoctor {
     static let adhocCause = "grants reset on every rebuild; build with make install on a Mac with an Apple Development identity"
 
     static func evaluate(_ f: TelemetryFacts) -> [DoctorCheck] {
-        [signature(f), plist(f), registration(f), loginItems(f), launchdJob(f),
-         fullDiskAccess(f), spoolHealth(f), legacyHelper(f)] + daemonChecks(f)
+        let checks = [signature(f), plist(f), registration(f), loginItems(f), launchdJob(f),
+                      fullDiskAccess(f), spoolHealth(f), legacyHelper(f)] + daemonChecks(f)
+        guard !f.locationAllowed else { return [location(f)] + checks }
+        // Only the copy in /Applications registers the helper.
+        return [location(f)] + checks.map { check in
+            check.fix == .register || check.fix == .reregister
+                ? DoctorCheck(id: check.id, title: check.title, state: check.state, cause: check.cause, fix: nil)
+                : check
+        }
+    }
+
+    static func location(_ f: TelemetryFacts) -> DoctorCheck {
+        let title = "Install location"
+        if !f.locationAllowed {
+            return DoctorCheck(id: "location", title: title, state: .fail,
+                               cause: AppIdentity.wrongLocationMessage, fix: nil)
+        }
+        if !f.otherCopies.isEmpty {
+            return DoctorCheck(id: "location", title: title, state: .warn,
+                               cause: "another copy is registered with macOS: \(f.otherCopies.joined(separator: ", "))",
+                               fix: nil)
+        }
+        return DoctorCheck(id: "location", title: title, state: .pass,
+                           cause: "runs from \(AppIdentity.installedAppPath)", fix: nil)
     }
 
     static func signature(_ f: TelemetryFacts) -> DoctorCheck {
