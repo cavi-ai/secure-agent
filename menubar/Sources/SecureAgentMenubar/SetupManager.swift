@@ -36,6 +36,8 @@ public final class SetupManager: ObservableObject {
     /// and whether the daemon config has the advisor enabled.
     @Published public private(set) var advisorEnabled = false
     @Published public private(set) var systemAgentEnabled = false
+    /// system_agent.auto_review: new findings go to the agent's review queue.
+    @Published public private(set) var systemAgentAutoReview = false
     /// Last-persisted advisor config (mode/endpoint/model) — the Settings
     /// tab's restore source so the advisor persists across restarts.
     @Published public private(set) var advisorPersisted: (mode: String?, endpoint: String?, model: String?) = (nil, nil, nil)
@@ -186,6 +188,7 @@ public final class SetupManager: ObservableObject {
         } && claudeHooksRegistered()
         advisorEnabled = Self.advisorConfigIsEnabled(configYAML())
         systemAgentEnabled = Self.systemAgentConfigIsEnabled(configYAML())
+        systemAgentAutoReview = Self.systemAgentConfigIsEnabled(configYAML(), key: "auto_review")
         advisorPersisted = Self.advisorConfig(configYAML())
         disabledAgents = Self.disabledAgents(configYAML())
         advisorDiscovery = (try? await DaemonClient().fetchAdvisorDiscover())
@@ -221,14 +224,27 @@ public final class SetupManager: ObservableObject {
         }
     }
 
-    public nonisolated static func systemAgentConfigIsEnabled(_ yaml: String) -> Bool {
+    /// Automatic review of new findings by the chat agent; applied live.
+    public func setSystemAgentAutoReview(_ on: Bool) {
+        do {
+            let updated = Self.systemAgentConfigUpdating(configYAML(), key: "auto_review", enabled: on)
+            let dir = (configPath as NSString).deletingLastPathComponent
+            try fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
+            try updated.write(toFile: configPath, atomically: true, encoding: .utf8)
+            systemAgentAutoReview = on
+        } catch {
+            report(error)
+        }
+    }
+
+    public nonisolated static func systemAgentConfigIsEnabled(_ yaml: String, key: String = "enabled") -> Bool {
         var inBlock = false
         for line in yaml.split(separator: "\n", omittingEmptySubsequences: false) {
             let s = String(line)
             if s.hasPrefix("system_agent:") { inBlock = true; continue }
             if inBlock && !s.hasPrefix(" ") && !s.hasPrefix("#") && !s.isEmpty { inBlock = false }
-            if inBlock && s.trimmingCharacters(in: .whitespaces).hasPrefix("enabled:") {
-                let value = s.trimmingCharacters(in: .whitespaces).dropFirst("enabled:".count)
+            if inBlock && s.trimmingCharacters(in: .whitespaces).hasPrefix("\(key):") {
+                let value = s.trimmingCharacters(in: .whitespaces).dropFirst(key.count + 1)
                     .split(separator: "#", maxSplits: 1).first.map(String.init) ?? ""
                 return value.trimmingCharacters(in: .whitespaces) == "true"
             }
@@ -236,24 +252,24 @@ public final class SetupManager: ObservableObject {
         return false
     }
 
-    public nonisolated static func systemAgentConfigUpdating(_ yaml: String, enabled: Bool) -> String {
+    public nonisolated static func systemAgentConfigUpdating(_ yaml: String, key: String = "enabled", enabled: Bool) -> String {
         let value = enabled ? "true" : "false"
         var lines = yaml.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
         guard let start = lines.firstIndex(where: { $0.hasPrefix("system_agent:") }) else {
             var base = yaml
             if !base.isEmpty && !base.hasSuffix("\n") { base += "\n" }
-            return base + "system_agent:\n  enabled: \(value)\n"
+            return base + "system_agent:\n  \(key): \(value)\n"
         }
         let end = (start + 1..<lines.count).first {
             let line = lines[$0]
             return !line.isEmpty && !line.hasPrefix(" ") && !line.hasPrefix("#")
         } ?? lines.count
-        for i in start + 1..<end where lines[i].trimmingCharacters(in: .whitespaces).hasPrefix("enabled:") {
+        for i in start + 1..<end where lines[i].trimmingCharacters(in: .whitespaces).hasPrefix("\(key):") {
             let indent = String(lines[i].prefix(while: { $0 == " " }))
-            lines[i] = "\(indent)enabled: \(value)"
+            lines[i] = "\(indent)\(key): \(value)"
             return lines.joined(separator: "\n")
         }
-        lines.insert("  enabled: \(value)", at: start + 1)
+        lines.insert("  \(key): \(value)", at: start + 1)
         return lines.joined(separator: "\n")
     }
 

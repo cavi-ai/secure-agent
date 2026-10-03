@@ -478,6 +478,13 @@ struct SettingsView: View {
             ))
             Text("Chat with Ollama on this Mac. Shell commands require your confirmation before they run.")
                 .font(.caption).foregroundStyle(.secondary)
+            Toggle("Review new findings automatically", isOn: Binding(
+                get: { setup.systemAgentAutoReview },
+                set: { setup.setSystemAgentAutoReview($0) }
+            ))
+            .disabled(!setup.systemAgentEnabled)
+            Text("New findings go to the review queue on their own, batched and at most one review every 10 minutes. Reviews flag test, dummy and sample values such as published example keys, placeholders and Kubernetes or Docker defaults.")
+                .font(.caption).foregroundStyle(.secondary)
             Button("Open Secure Agent chat") { state.openDashboard(tab: "agent") }
                 .disabled(state.dashboardUnavailableReason != nil)
         }

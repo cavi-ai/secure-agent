@@ -32,6 +32,9 @@ type Hit struct {
 	SecretType string // one of the Type* consts
 	Layer      Layer
 	Confidence float64 // 0..1
+	// Spans are the [start, end) byte offsets of a pattern hit's matches
+	// that start a token; nil for the other layers.
+	Spans [][2]int
 }
 
 type VerdictKind int

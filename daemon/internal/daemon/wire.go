@@ -301,6 +301,8 @@ func noteFileFeed(st *store.Store, e event.Event) {
 // the final, most-relevant events/flags/incident around a kill or quit.
 // adv may be nil (advisor disabled); when set, new flags/incidents are also
 // offered for advisory triage — enqueueing is non-blocking and drop-safe.
+// newFlag, when set, is offered each new flag after it is stored (the
+// local agent's automatic review).
 // advGet resolves the CURRENT advisor per event: config hot-reload swaps
 // the stack while the drain loop is mid-event, and a nil getter result
 // (advisor disabled) must drop routing without touching the loop itself.
@@ -317,7 +319,7 @@ func foldFlagRepeat(st *store.Store, deltas *api.DeltaHub) func(string, time.Tim
 	}
 }
 
-func startDrainLoop(sub <-chan event.Event, st *store.Store, cr *correlate.Correlator, pub *fleet.Publisher, res *session.Resolver, tagger *agents.Tagger, deltas *api.DeltaHub, otlpExp *otlp.Exporter, postureChanged func(), advGet func() *advisor.Subscriber) <-chan struct{} {
+func startDrainLoop(sub <-chan event.Event, st *store.Store, cr *correlate.Correlator, pub *fleet.Publisher, res *session.Resolver, tagger *agents.Tagger, deltas *api.DeltaHub, otlpExp *otlp.Exporter, postureChanged func(), advGet func() *advisor.Subscriber, newFlag func(model.Flag)) <-chan struct{} {
 	analyzer := intel.NewAnalyzer()
 	drainDone := make(chan struct{})
 	// Episode projection has its own bounded queue. SQLite contention can drop
@@ -412,6 +414,9 @@ func startDrainLoop(sub <-chan event.Event, st *store.Store, cr *correlate.Corre
 					if adv := advGet(); adv != nil {
 						adv.EnqueueFlag(fl)
 					}
+				}
+				if newFlag != nil {
+					newFlag(fl)
 				}
 
 				// Incidents aggregate: one per rule+session+subject, flags

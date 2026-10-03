@@ -197,3 +197,40 @@ func TestAnalyzeFlagsCreatesReviewOnlyRecommendation(t *testing.T) {
 		t.Fatalf("chat clear must preserve review history: %d %s", w.Code, w.Body.String())
 	}
 }
+
+// The local agent's review carries the test-value guidance and the finding's
+// whole test-value line, past the usual evidence detail limit.
+func TestAnalyzeCarriesTestValueEvidence(t *testing.T) {
+	ollama := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/tags":
+			fmt.Fprint(w, `{"models":[{"name":"qwen3:latest"}]}`)
+		case "/api/version":
+			fmt.Fprint(w, `{"version":"0.15.0"}`)
+		default:
+			_ = json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": map[string]string{"content": "flag-tv looks like a test fixture."}}}})
+		}
+	}))
+	defer ollama.Close()
+	st := testStore(t)
+	detail := "a test or example file named in the same record (record.test.ts); test code around it; dummy, sample or redaction wording around it; the value itself looks live"
+	st.PutFlag(model.Flag{ID: "flag-tv", Rule: "secret-in-transcript", Agent: "claude", Severity: 2, TS: time.Now(), Evidence: []model.EvidenceItem{
+		{Kind: "transcript", Label: "/t/s.jsonl", Sub: "pattern match"},
+		{Kind: "test-value", Label: "Test context only", Sub: detail},
+	}})
+	agent := sysagent.New(st, t.TempDir(), func(s string) (string, bool) { return s, true })
+	agent.SetConfig(config.SystemAgentConfig{Enabled: true, Endpoint: ollama.URL, TimeoutMinutes: 1})
+	a := New(Deps{Store: st, SysAgent: agent})
+	w := httptest.NewRecorder()
+	a.buildMux().ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/agent/analyze", strings.NewReader(`{"flag_ids":["flag-tv"]}`)))
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("analyze: %d %s", w.Code, w.Body.String())
+	}
+	agent.Wait()
+	user := agent.Messages(10)[0].Content
+	for _, want := range []string{detail, "Kubernetes Secret data", "test, dummy and sentinel values", "registered real secret"} {
+		if !strings.Contains(user, want) {
+			t.Fatalf("review prompt lacks %q:\n%s", want, user)
+		}
+	}
+}
