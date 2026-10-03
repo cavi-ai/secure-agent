@@ -1,15 +1,15 @@
 import Foundation
 
 enum AppIdentity {
-    static let bundleIdentifier = "com.cavi-ai.secure-agent.ui"
-    static let legacyBundleIdentifier = "com.cavi-ai.secure-agent"
-    static let uiBundleIdentifiers = [bundleIdentifier, legacyBundleIdentifier]
+    /// The app's one identity. Background Task Management records the
+    /// file-telemetry helper under it, so only an app with this identifier
+    /// can register or unregister that helper.
+    static let bundleIdentifier = "com.cavi-ai.secure-agent"
 }
 
-/// Preferences belong to Secure Agent, independently of the UI's Launch
-/// Services identity. Keep the established suite so an upgrade preserves
-/// telemetry opt-outs, onboarding, update channel and digest state.
+/// Preferences live in the app's own suite, so telemetry opt-outs,
+/// onboarding, update channel and digest state persist across upgrades.
 @MainActor
 enum AppPreferences {
-    static let shared = UserDefaults(suiteName: AppIdentity.legacyBundleIdentifier)!
+    static let shared = UserDefaults(suiteName: AppIdentity.bundleIdentifier)!
 }

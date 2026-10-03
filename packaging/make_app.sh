@@ -22,9 +22,10 @@ VERSION="${VERSION:-$(git describe --tags --always --dirty 2>/dev/null || echo 0
 VERSION="$(printf '%s' "$VERSION" | tr -d '<>&"'"'"'')"
 BUILD_NUMBER="${BUILD_NUMBER:-$(git rev-parse --short HEAD 2>/dev/null || echo 1)}"
 BUILD_NUMBER="$(printf '%s' "$BUILD_NUMBER" | tr -cd 'a-zA-Z0-9.-')"
-# Give the UI its own stable menu-bar/Launch Services identity. The established
-# daemon, CLI and collector identities below must retain their privacy grants.
-BUNDLE_ID="com.cavi-ai.secure-agent.ui"
+# The app's one identity: Background Task Management records the file-telemetry
+# helper under it, and packaging/test/check_bundle_layout.sh pins it. The daemon,
+# CLI and collector identities below must retain their privacy grants.
+BUNDLE_ID="com.cavi-ai.secure-agent"
 DAEMON_ID="com.cavi-ai.secure-agent.daemon"
 CLI_ID="com.cavi-ai.secure-agent.cli"
 ESD_LABEL="com.cavi-ai.secure-agent-esd"
