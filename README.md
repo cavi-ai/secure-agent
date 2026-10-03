@@ -181,8 +181,10 @@ git clone https://github.com/cavi-ai/secure-agent.git
 cd secure-agent
 make build      # daemon, menubar, CLI into bin/
 make test       # full Go + Swift + Python + E2E suites
-make install    # build "Secure Agent.app" and launch it (no LaunchAgents)
+make install    # build "Secure Agent.app", install it to /Applications and launch it (no LaunchAgents)
 ```
+
+`make install` replaces `/Applications/Secure Agent.app` (the previous copy goes to the Trash) and opens only that copy. The build output in `dist/` is never registered or opened: macOS binds the file-telemetry helper to the copy that registered it, so only the copy in `/Applications` registers, re-registers or repairs it. Any other copy shows "Secure Agent must run from /Applications to manage file telemetry".
 
 ### File telemetry
 

@@ -5,6 +5,19 @@ enum AppIdentity {
     /// file-telemetry helper under it, so only an app with this identifier
     /// can register or unregister that helper.
     static let bundleIdentifier = "com.cavi-ai.secure-agent"
+
+    /// The one install location. Background Task Management binds the
+    /// file-telemetry helper to the copy that registers it, so only this copy
+    /// registers, re-registers or repairs the helper.
+    static let installedAppPath = "/Applications/Secure Agent.app"
+
+    static let wrongLocationMessage = "Secure Agent must run from /Applications to manage file telemetry"
+
+    /// Whether `bundleURL`, symlinks resolved, is the installed copy.
+    /// `installedPath` is compared as given, never resolved.
+    static func isInstalledCopy(_ bundleURL: URL, installedPath: String = installedAppPath) -> Bool {
+        bundleURL.resolvingSymlinksInPath().standardizedFileURL.path == installedPath
+    }
 }
 
 /// Preferences live in the standard domain, which for the app is its bundle

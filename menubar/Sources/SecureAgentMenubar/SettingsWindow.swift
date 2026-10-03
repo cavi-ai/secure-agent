@@ -956,7 +956,7 @@ struct ESFileTelemetryCard: View {
         case .needsGrant, .needsRegrant:
             Button("Open Permissions") { setup.openESPermissions() }
                 .buttonStyle(.borderedProminent).tint(.brand).controlSize(.small)
-        case .notFound:
+        case .wrongLocation, .notFound:
             EmptyView()
         case .active:
             Button("Remove", role: .destructive) {
@@ -1051,7 +1051,7 @@ func esCardState(status: SMAppService.Status, plistPresent: Bool, tccGranted: Bo
 }
 
 enum ESStage: CaseIterable {
-    case legacyInstalled, notRegistered, requiresApproval, needsGrant, needsRegrant, notFound, active
+    case wrongLocation, legacyInstalled, notRegistered, requiresApproval, needsGrant, needsRegrant, notFound, active
 
     /// The Full Disk Access step, shown under C and D.
     static let grantInstruction = "In the pane that just opened: turn on Secure Agent. This card turns green automatically — nothing else to do."
@@ -1063,6 +1063,7 @@ enum ESStage: CaseIterable {
 
     var title: String {
         switch self {
+        case .wrongLocation: return "Run Secure Agent from Applications"
         case .legacyInstalled: return "Remove the old file-telemetry helper"
         case .notRegistered: return "File telemetry is off"
         case .requiresApproval: return "Allow Secure Agent in Login Items"
@@ -1075,6 +1076,8 @@ enum ESStage: CaseIterable {
 
     var detail: String {
         switch self {
+        case .wrongLocation:
+            return "\(AppIdentity.wrongLocationMessage). Quit this copy and open \(AppIdentity.installedAppPath)."
         case .legacyInstalled:
             return "An earlier version installed file telemetry outside the app. Remove it (one admin prompt), then enable file telemetry here."
         case .notRegistered:
@@ -1094,6 +1097,7 @@ enum ESStage: CaseIterable {
 
     var icon: String {
         switch self {
+        case .wrongLocation: return "folder"
         case .legacyInstalled: return "trash"
         case .notRegistered: return "waveform.path.ecg"
         case .requiresApproval: return "switch.2"
@@ -1106,7 +1110,7 @@ enum ESStage: CaseIterable {
 
     var tint: Color {
         switch self {
-        case .legacyInstalled, .notFound: return .warn
+        case .wrongLocation, .legacyInstalled, .notFound: return .warn
         case .notRegistered: return .secondary
         case .requiresApproval, .needsGrant, .needsRegrant: return .orange
         case .active: return .ok

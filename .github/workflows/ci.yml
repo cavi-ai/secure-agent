@@ -87,6 +87,8 @@ jobs:
         run: bash packaging/test/test_vcs_stamp.sh
       - name: install status unit tests
         run: bash packaging/test/test_install_status.sh
+      - name: replaced bundle unit tests
+        run: bash packaging/test/test_replaced_bundle.sh
       - name: live acceptance unit tests
         run: python3 packaging/test/test_live_acceptance.py
 

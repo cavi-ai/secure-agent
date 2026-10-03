@@ -33,6 +33,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Send selected findings directly to the local agent review queue with daemon-built evidence; local commands still require explicit confirmation.
 
 ### Fixed
+- `make install` installs into `/Applications/Secure Agent.app` (the previous copy goes to the Trash) and opens only that copy; the build in `dist/` is never registered or opened. The app registers, re-registers or repairs the file-telemetry helper only when it runs from `/Applications`; any other copy shows "Secure Agent must run from /Applications to manage file telemetry", and the Doctor warns when another copy is registered with macOS.
 - The app re-registers a file-telemetry helper that launchd refuses to start (last exit 78, EX_CONFIG), once per launch; `secure-agent telemetry repair` asks it to.
 - The app's bundle identifier is `com.cavi-ai.secure-agent` again: the `.ui` identity could not manage the file-telemetry helper registered under `com.cavi-ai.secure-agent`.
 - `make app`, `make install` and `make release` stop when a Go binary is stamped with a commit other than HEAD: Go before 1.27 stamps the enclosing checkout's commit when it builds in a git worktree.
