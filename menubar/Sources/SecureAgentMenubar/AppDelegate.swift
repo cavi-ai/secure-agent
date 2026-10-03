@@ -9,6 +9,9 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificat
     private let state = AppState()
     private let popover = NSPopover()
     private var launchTask: Task<Void, Never>?
+    /// A repair URL that arrives before launch finishes waits for it.
+    private var launched = false
+    private var telemetryRepairRequested = false
 
     public func applicationDidFinishLaunching(_ notification: Notification) {
         // The Dock is the durable fallback control when macOS hides a status
@@ -58,6 +61,11 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificat
         // File telemetry turns itself on: register once per launch, then open
         // the pane for each switch the user has to flip.
         SetupManager.shared.refreshESState()
+        launched = true
+        if telemetryRepairRequested {
+            telemetryRepairRequested = false
+            SetupManager.shared.reregisterESService()
+        }
 
         state.onChange = { [weak self] in self?.updateStatusIcon() }
         state.onNewCriticalFlag = { [weak self] in self?.flashStatusBadge() }
@@ -71,6 +79,17 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificat
             if SetupManager.shared.needsSetup {
                 OnboardingWindowController.shared.showOnceIfNeeded()
             }
+        }
+    }
+
+    /// `secure-agent://telemetry/repair`, from `secure-agent telemetry repair`:
+    /// re-register the file-telemetry helper now.
+    public func application(_ application: NSApplication, open urls: [URL]) {
+        guard urls.contains(where: ESAutopilot.isRepairURL) else { return }
+        if launched {
+            SetupManager.shared.reregisterESService()
+        } else {
+            telemetryRepairRequested = true
         }
     }
 

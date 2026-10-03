@@ -99,6 +99,77 @@ final class ESAutopilotTests: XCTestCase {
         XCTAssertEqual(service.registerCount, 1)
         XCTAssertEqual(setup.lastError, "file telemetry: Operation not permitted")
     }
+
+    func testReregisterOnlyAnEnabledJobLaunchdRefusesToSpawn() {
+        let refused = LaunchdProbe.loaded(state: "spawn scheduled", pid: nil, lastExitCode: "78: EX_CONFIG")
+        let rows: [(SMAppService.Status, Bool, Bool, LaunchdProbe, Bool, String)] = [
+            // status, userDisabled, attemptedThisLaunch, launchd job -> re-register
+            (.enabled, false, false, refused, true, "enabled, not removed, launchd refuses the job"),
+            (.enabled, false, true, refused, false, "already attempted this launch"),
+            (.enabled, true, false, refused, false, "removed by the user"),
+            (.enabled, false, false, .loaded(state: "running", pid: 412, lastExitCode: "78: EX_CONFIG"), false, "running job"),
+            (.enabled, false, false, .loaded(state: "spawn scheduled", pid: nil, lastExitCode: "1"), false, "other exit code"),
+            (.enabled, false, false, .loaded(state: "waiting", pid: nil, lastExitCode: "(never exited)"), false, "never exited"),
+            (.requiresApproval, false, false, refused, false, "not enabled"),
+            (.enabled, false, false, .notFound, false, "no job"),
+            (.enabled, false, false, .unreadable, false, "unreadable job"),
+        ]
+        for (status, disabled, attempted, job, want, why) in rows {
+            XCTAssertEqual(ESAutopilot.needsReregister(serviceStatus: status, userDisabled: disabled,
+                                                       attemptedThisLaunch: attempted, launchd: job), want, why)
+        }
+    }
+
+    func testOnlyTheExactRepairURLTriggers() throws {
+        XCTAssertTrue(ESAutopilot.isRepairURL(try XCTUnwrap(URL(string: "secure-agent://telemetry/repair"))))
+        let others = ["secure-agent://telemetry/repair/", "secure-agent://telemetry/repair?now=1",
+                      "secure-agent://telemetry/repair#x", "secure-agent://telemetry", "secure-agent://telemetry/repairs",
+                      "secure-agent://other/repair", "secure-agent://user@telemetry/repair",
+                      "https://telemetry/repair", "secure-agent:telemetry/repair"]
+        for other in others {
+            XCTAssertFalse(ESAutopilot.isRepairURL(try XCTUnwrap(URL(string: other))), other)
+        }
+    }
+
+    @MainActor func testRefreshReregistersAJobLaunchdRefusesOncePerLaunch() async throws {
+        try XCTSkipIf(FileManager.default.fileExists(atPath: SetupManager.legacyESPlistPath),
+                      "an old helper on this Mac makes the stage legacyInstalled")
+        let service = FakeESService()
+        service.status = .enabled
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "ESAutopilotTests.\(UUID().uuidString)"))
+        let setup = SetupManager(esService: service, defaults: defaults, plistPresent: { true }, openPane: { _ in },
+                                 launchdProbe: { .loaded(state: "spawn scheduled", pid: nil, lastExitCode: "78: EX_CONFIG") })
+
+        setup.refreshESState()
+        let probe = try XCTUnwrap(setup.esRepairProbe, "an enabled service's job is probed")
+        await probe.value
+        XCTAssertEqual(service.unregisterCount, 1, "unregisters the stuck registration")
+        XCTAssertEqual(service.registerCount, 1, "and registers again")
+
+        setup.refreshESState()
+        XCTAssertNil(setup.esRepairProbe, "no second probe this launch")
+        XCTAssertEqual(service.registerCount, 1)
+
+        setup.reregisterESService()
+        XCTAssertEqual(service.unregisterCount, 2, "the repair URL's path ignores this launch's attempt")
+        XCTAssertEqual(service.registerCount, 2)
+    }
+
+    @MainActor func testRefreshLeavesARunningJobAlone() async throws {
+        try XCTSkipIf(FileManager.default.fileExists(atPath: SetupManager.legacyESPlistPath),
+                      "an old helper on this Mac makes the stage legacyInstalled")
+        let service = FakeESService()
+        service.status = .enabled
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "ESAutopilotTests.\(UUID().uuidString)"))
+        let setup = SetupManager(esService: service, defaults: defaults, plistPresent: { true }, openPane: { _ in },
+                                 launchdProbe: { .loaded(state: "running", pid: 412, lastExitCode: nil) })
+
+        setup.refreshESState()
+        let probe = try XCTUnwrap(setup.esRepairProbe)
+        await probe.value
+        XCTAssertEqual(service.unregisterCount, 0)
+        XCTAssertEqual(service.registerCount, 0)
+    }
 }
 
 /// Stands in for SMAppService: register moves to requiresApproval, as a

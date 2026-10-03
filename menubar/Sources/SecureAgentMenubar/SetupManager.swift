@@ -102,6 +102,12 @@ public final class SetupManager: ObservableObject {
     private let esOpenPane: (ESSettingsPane) -> Void
     /// The autopilot registers at most once per launch.
     private var esRegisterAttemptedThisLaunch = false
+    /// Reads the collector's launchd job; called off the main actor.
+    private let esLaunchdProbe: @Sendable () -> LaunchdProbe
+    /// The launchd probe behind the autopilot's re-register while it runs,
+    /// and when the last one started.
+    private(set) var esRepairProbe: Task<Void, Never>?
+    private var esRepairProbeStarted: Date?
     /// The 1 s poll while a System Settings switch is pending.
     private var esPollTask: Task<Void, Never>?
     /// Telemetry Doctor results, in check order.
@@ -153,8 +159,10 @@ public final class SetupManager: ObservableObject {
     init(esService: any ESServiceControl = SMAppService.daemon(plistName: SetupManager.esCollectorPlistName),
          defaults: UserDefaults = AppPreferences.shared,
          plistPresent: (() -> Bool)? = nil,
-         openPane: ((ESSettingsPane) -> Void)? = nil) {
+         openPane: ((ESSettingsPane) -> Void)? = nil,
+         launchdProbe: (@Sendable () -> LaunchdProbe)? = nil) {
         self.esService = esService
+        esLaunchdProbe = launchdProbe ?? { SetupManager.esLaunchdJob() }
         prefs = defaults
         esMemory = ESAutopilotMemory(
             defaults: defaults,
@@ -940,6 +948,7 @@ public final class SetupManager: ObservableObject {
         let stage = currentESStage()
         if stage != esStage { esStage = stage }
         runESAutopilot()
+        repairStuckESJob()
         manageESPoll()
     }
 
@@ -966,6 +975,39 @@ public final class SetupManager: ObservableObject {
             esMemory.markOpened(pane)
             esOpenPane(pane)
         }
+    }
+
+    /// Re-registers once per launch when the service is enabled but launchd
+    /// will not start its job. The launchd probe runs off the main actor, one
+    /// at a time, at most every 30 s.
+    private func repairStuckESJob() {
+        guard esRepairProbe == nil, !esRegisterAttemptedThisLaunch, !esMemory.userDisabled,
+              esServiceStatus == .enabled,
+              esRepairProbeStarted.map({ Date().timeIntervalSince($0) >= 30 }) ?? true else { return }
+        esRepairProbeStarted = Date()
+        let probe = esLaunchdProbe
+        esRepairProbe = Task { [weak self] in
+            let job = await Task.detached { probe() }.value
+            guard let self else { return }
+            self.esRepairProbe = nil
+            if ESAutopilot.needsReregister(serviceStatus: self.esService.status,
+                                           userDisabled: self.esMemory.userDisabled,
+                                           attemptedThisLaunch: self.esRegisterAttemptedThisLaunch,
+                                           launchd: job) {
+                self.reregisterESService()
+            }
+        }
+    }
+
+    /// Unregisters and registers the collector again: the Doctor's
+    /// Re-register, the autopilot's repair and `secure-agent://telemetry/repair`.
+    /// Counts as this launch's registration attempt.
+    public func reregisterESService() {
+        esRegisterAttemptedThisLaunch = true
+        do {
+            try? esService.unregister()
+            try installESCollector()
+        } catch { report(error) }
     }
 
     /// Polls once a second while the stage waits on a System Settings switch
@@ -1244,7 +1286,7 @@ public final class SetupManager: ObservableObject {
         let probe = await Task.detached { () -> (CodeSignature?, CodeSignature?, LaunchdProbe, String?, Date?) in
             let app = CodeSignature.parse(Self.capture(["/usr/bin/codesign", "-dv", appPath]))
             let helper = CodeSignature.parse(Self.capture(["/usr/bin/codesign", "-dv", helperPath]))
-            let job = LaunchdProbe.parse(Self.capture(["/bin/launchctl", "print", "system/\(Self.esCollectorLabel)"]))
+            let job = Self.esLaunchdJob()
             let logLine = TelemetryDoctor.lastLine(ofFileAt: Self.esHelperLogPath)
             let mtime = (try? FileManager.default.attributesOfItem(atPath: Self.esSpoolPath))?[.modificationDate] as? Date
             return (app, helper, job, logLine, mtime)
@@ -1302,10 +1344,7 @@ public final class SetupManager: ObservableObject {
         case .register:
             do { try installESCollector() } catch { report(error) }
         case .reregister:
-            do {
-                try? esService.unregister()
-                try installESCollector()
-            } catch { report(error) }
+            reregisterESService()
         case .openLoginItems:
             openESLoginItems()
         case .openFullDiskAccess:
@@ -1317,6 +1356,11 @@ public final class SetupManager: ObservableObject {
             removeLegacyESHelper()
         }
         refreshESState()
+    }
+
+    /// `launchctl print` for the collector's job.
+    nonisolated static func esLaunchdJob() -> LaunchdProbe {
+        LaunchdProbe.parse(capture(["/bin/launchctl", "print", "system/\(esCollectorLabel)"]))
     }
 
     /// Runs a read-only tool and returns stdout and stderr together.

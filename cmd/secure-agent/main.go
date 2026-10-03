@@ -85,6 +85,8 @@ func main() {
 		handleFirewall(client, os.Args[2:])
 	case "service":
 		handleService(os.Args[2:])
+	case "telemetry":
+		handleTelemetry(client, os.Args[2:])
 	case "help", "-h", "--help":
 		printUsage()
 	default:
@@ -131,6 +133,7 @@ func printUsage() {
 	fmt.Println("  secure-agent service install [daemon]    Install a headless launchd service (no menu bar app required)")
 	fmt.Println("  secure-agent service uninstall           Remove the headless service")
 	fmt.Println("  secure-agent service status              Show the headless service state")
+	fmt.Println("  secure-agent telemetry repair            Ask the menu bar app to re-register its file-telemetry helper; exit 1 unless it runs within 60 s")
 }
 
 // queryFlag parses a "--name value" pair from args; returns def when absent.

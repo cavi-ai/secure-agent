@@ -34,6 +34,25 @@ enum ESAutopilot {
             return .none
         }
     }
+
+    /// Whether to unregister and register the service again: it is enabled
+    /// and not removed by the user, but launchd holds its job with no pid and
+    /// last refused to spawn it (EX_CONFIG, e.g. a registration bound to a
+    /// bundle path that no longer exists). Once per launch.
+    static func needsReregister(serviceStatus: SMAppService.Status, userDisabled: Bool,
+                                attemptedThisLaunch: Bool, launchd: LaunchdProbe) -> Bool {
+        guard !userDisabled, !attemptedThisLaunch, serviceStatus == .enabled,
+              case let .loaded(_, pid, lastExit) = launchd, pid == nil else { return false }
+        return TelemetryDoctor.exitCode(lastExit) == TelemetryDoctor.exConfig
+    }
+
+    /// Opened by `secure-agent telemetry repair`: re-register the service now,
+    /// whatever this launch already tried.
+    static let repairURL = "secure-agent://telemetry/repair"
+
+    static func isRepairURL(_ url: URL) -> Bool {
+        url.absoluteString == repairURL
+    }
 }
 
 /// The autopilot's persisted flags: `userDisabled` (set by the card's Remove,

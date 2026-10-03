@@ -4,7 +4,8 @@
 # the LaunchDaemon plist lints, its Label is the collector label, it has no
 # ProgramArguments, and its BundleProgram resolves to an executable inside
 # the bundle. Before that, fail unless packaging/make_app.sh assigns BUNDLE_ID
-# exactly once, to the app's one identity.
+# exactly once, to the app's one identity. The app's Info.plist registers the
+# secure-agent URL scheme that `secure-agent telemetry repair` opens.
 #
 # Usage: check_bundle_layout.sh [path/to/Secure Agent.app]
 # (default: dist/Secure Agent.app, as written by packaging/make_app.sh)
@@ -28,6 +29,9 @@ bundle_ids="$(grep -E '^[[:space:]]*BUNDLE_ID=' "$make_app")" || fail "no BUNDLE
 [ -d "$app" ] || fail "no app bundle at ${app} (build it with packaging/make_app.sh)"
 bundle_id="$(plutil -extract CFBundleIdentifier raw -o - "${app}/Contents/Info.plist")" || fail "missing CFBundleIdentifier"
 [ "$bundle_id" = "$app_id" ] || fail "CFBundleIdentifier is '${bundle_id}', want '${app_id}'"
+url_scheme="$(plutil -extract CFBundleURLTypes.0.CFBundleURLSchemes.0 raw -o - "${app}/Contents/Info.plist")" ||
+    fail "Info.plist registers no URL scheme"
+[ "$url_scheme" = "secure-agent" ] || fail "URL scheme is '${url_scheme}', want 'secure-agent'"
 [ -f "$plist" ] || fail "missing ${plist}"
 plutil -lint "$plist" >/dev/null || fail "plutil -lint rejects ${plist}"
 
