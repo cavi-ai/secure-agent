@@ -23,6 +23,7 @@ LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchS
 
 source "${REPO_ROOT}/packaging/lib/sign_identity.sh"
 source "${REPO_ROOT}/packaging/lib/telemetry_status.sh"
+source "${REPO_ROOT}/packaging/lib/replaced_bundle.sh"
 
 # Resolve once and export, so make_app.sh signs with the exact identity this
 # script reports below.
@@ -52,10 +53,13 @@ if app_running; then
   fi
 fi
 
+# The replaced copy goes to the Trash without an .app suffix, and is
+# unregistered after the move: LaunchServices follows a moved bundle.
 if [[ -e "${INSTALL_DIR}" ]]; then
   "${LSREGISTER}" -u "${INSTALL_DIR}" >/dev/null 2>&1 || true
-  TRASHED="${HOME}/.Trash/${APP_NAME} $(date +%Y%m%d-%H%M%S)-$$.app"
+  TRASHED="$(replaced_bundle_path "${HOME}/.Trash" "${APP_NAME}" "$(date +%Y%m%d-%H%M%S)-$$")"
   mv "${INSTALL_DIR}" "${TRASHED}"
+  "${LSREGISTER}" -u "${TRASHED}" >/dev/null 2>&1 || true
   echo "Moved the previous copy to the Trash: ${TRASHED}"
 fi
 
@@ -75,7 +79,7 @@ echo "Setup and install the harness hooks, and to Quit (which stops"
 echo "the background monitor completely). The build in dist/ is"
 echo "never opened: only the /Applications copy manages file telemetry."
 echo ""
-echo "To install for real, build and open the DMG:  make dmg"
+echo "This is the real install. To build a DMG for distribution:  make dmg"
 echo "============================================================"
 
 open "${INSTALL_DIR}"
