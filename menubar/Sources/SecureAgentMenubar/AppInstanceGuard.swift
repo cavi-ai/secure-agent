@@ -42,9 +42,7 @@ final class AppInstanceGuard {
 
     /// Older builds did not hold the lease, so also check Launch Services.
     private func otherCopies() -> [NSRunningApplication] {
-        return AppIdentity.uiBundleIdentifiers.flatMap {
-            NSRunningApplication.runningApplications(withBundleIdentifier: $0)
-        }
+        return NSRunningApplication.runningApplications(withBundleIdentifier: AppIdentity.bundleIdentifier)
             .filter { $0.processIdentifier != getpid() && !$0.isTerminated }
     }
 
