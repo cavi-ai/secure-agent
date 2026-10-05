@@ -2,13 +2,56 @@ package api
 
 import (
 	"encoding/json"
+	"math"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
+	"github.com/cavi-ai/secure-agent/daemon/internal/resource"
 )
+
+func TestResourceEpisodeFailureVisibleThroughRecovery(t *testing.T) {
+	st := testStore(t)
+	defer st.Close()
+	a := newTestAPI("", st, nil, func() Status { return Status{Running: true} })
+	episode := resource.Episode{CapturedAt: time.Now(), Session: resource.Session{CPUPercent: math.Inf(1)}}
+	if err := st.PutResourceEpisode(episode); err == nil {
+		t.Fatal("invalid episode unexpectedly persisted")
+	}
+	for _, recovering := range []bool{false, true} {
+		if recovering {
+			episode.Session.CPUPercent = 0
+			if err := st.PutResourceEpisode(episode); err != nil {
+				t.Fatal(err)
+			}
+		}
+		w := httptest.NewRecorder()
+		a.buildMux().ServeHTTP(w, httptest.NewRequest("GET", "/status", nil))
+		var status Status
+		if err := json.Unmarshal(w.Body.Bytes(), &status); err != nil {
+			t.Fatal(err)
+		}
+		if w.Code != 200 || status.StorageHealth == nil || status.StorageHealth.Failures != 1 {
+			t.Fatalf("status hides the resource evidence gap: %s", w.Body.String())
+		}
+		active := status.StorageHealth.Active
+		if (!recovering && (len(active) != 1 || active[0] != "resource episodes")) || (recovering && len(active) != 0) {
+			t.Fatalf("status reports incorrect recovery state: %+v", status.StorageHealth)
+		}
+		p := a.computePosture()
+		if p.State != "attention" || p.CoverageCount != 1 || p.CoverageItems[0].Kind != "storage_loss" {
+			t.Fatalf("posture hides resource evidence loss: %+v", p)
+		}
+		if !recovering && !strings.Contains(p.CoverageItems[0].Detail, "resource episodes") {
+			t.Fatalf("posture omits the failed operation: %+v", p.CoverageItems)
+		}
+		if state, _ := checkStorage(a.doctorFacts(time.Now())); state != doctorFail {
+			t.Fatal("Doctor hides resource evidence loss")
+		}
+	}
+}
 
 func TestPostureSurfacesBusLoss(t *testing.T) {
 	a := newTestAPI("", testStore(t), nil, func() Status { return Status{Running: true} })

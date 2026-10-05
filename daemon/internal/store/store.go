@@ -1873,7 +1873,8 @@ func (s *Store) RecentAudit(limit int) []AuditEntry {
 	return out
 }
 
-func (s *Store) PutResourceEpisode(episode resource.Episode) error {
+func (s *Store) PutResourceEpisode(episode resource.Episode) (writeErr error) {
+	defer func() { s.noteWrite("resource episodes", writeErr) }()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	episode.ActivityStatus = "settling"
@@ -2259,6 +2260,7 @@ func (s *Store) refreshResourceEpisode(ctx context.Context, id int64, expectedPa
 		persisted.ID = 0
 		payload, err := json.Marshal(persisted)
 		if err != nil {
+			s.noteWrite("resource episode enrichment", err)
 			return persistedFallback
 		}
 		if string(payload) == expectedPayload {
@@ -2270,10 +2272,12 @@ func (s *Store) refreshResourceEpisode(ctx context.Context, id int64, expectedPa
 			string(payload), id, expectedPayload,
 		)
 		if err != nil {
+			s.noteWrite("resource episode enrichment", err)
 			log.Printf("store: refresh resource episode %d: %v", id, err)
 			return persistedFallback
 		}
 		if updated, _ := result.RowsAffected(); updated == 1 {
+			s.noteWrite("resource episode enrichment", nil)
 			enriched.ID = id
 			return enriched
 		}

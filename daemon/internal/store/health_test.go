@@ -2,6 +2,7 @@ package store
 
 import (
 	"bytes"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -10,7 +11,113 @@ import (
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
+	"github.com/cavi-ai/secure-agent/daemon/internal/resource"
 )
+
+func TestResourceEpisodeWriteFailureRecoversIndependently(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "e.db"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if _, err := s.db.Exec("PRAGMA query_only = ON"); err != nil {
+		t.Fatal(err)
+	}
+	s.PutEvent(event.Event{Kind: event.KindPluginAction, TS: time.Now()})
+	episode := resource.Episode{CapturedAt: time.Now(), Session: resource.Session{Key: "saved"}}
+	if err := s.PutResourceEpisode(episode); err == nil {
+		t.Fatal("read-only database accepted an episode")
+	}
+	h := s.WriteHealth()
+	if h.Failures != 2 || !slices.Equal(h.Active, []string{"events", "resource episodes"}) {
+		t.Fatalf("resource write failure hidden: %+v", h)
+	}
+	if _, err := s.db.Exec("PRAGMA query_only = OFF"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutResourceEpisode(episode); err != nil {
+		t.Fatal(err)
+	}
+	h = s.WriteHealth()
+	if h.Failures != 2 || !slices.Equal(h.Active, []string{"events"}) {
+		t.Fatalf("episode recovery changed unrelated evidence faults: %+v", h)
+	}
+	if got := s.RecentResourceEpisodes(1); len(got) != 1 || got[0].Session.Key != "saved" {
+		t.Fatalf("recovered episode was not persisted: %+v", got)
+	}
+}
+
+func TestResourceEpisodeMarshalFailureIsTracked(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "e.db"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	episode := resource.Episode{CapturedAt: time.Now(), Session: resource.Session{CPUPercent: math.Inf(1)}}
+	if err := s.PutResourceEpisode(episode); err == nil {
+		t.Fatal("invalid episode unexpectedly persisted")
+	}
+	h := s.WriteHealth()
+	if h.Failures != 1 || !slices.Equal(h.Active, []string{"resource episodes"}) {
+		t.Fatalf("pre-transaction persistence failure hidden: %+v", h)
+	}
+	if got := s.RecentResourceEpisodes(1); len(got) != 0 {
+		t.Fatalf("invalid episode was stored: %+v", got)
+	}
+}
+
+func TestResourceEpisodeEnrichmentWriteFailureRecoversIndependently(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "e.db"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	episode := resource.Episode{CapturedAt: time.Now().Add(-time.Hour), Session: resource.Session{Key: "saved"}}
+	if err := s.PutResourceEpisode(episode); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec("PRAGMA query_only = ON"); err != nil {
+		t.Fatal(err)
+	}
+	got := s.RecentResourceEpisodes(1)
+	if len(got) != 1 || got[0].ActivityStatus != "settling" {
+		t.Fatalf("failed enrichment did not return the persisted fallback: %+v", got)
+	}
+	if err := s.PutResourceEpisode(episode); err == nil {
+		t.Fatal("read-only database accepted an episode")
+	}
+	h := s.WriteHealth()
+	if h.Failures != 2 || !slices.Equal(h.Active, []string{"resource episode enrichment", "resource episodes"}) {
+		t.Fatalf("independent episode faults hidden: %+v", h)
+	}
+	if _, err := s.db.Exec("PRAGMA query_only = OFF"); err != nil {
+		t.Fatal(err)
+	}
+	episode.CapturedAt = time.Now()
+	if err := s.PutResourceEpisode(episode); err != nil {
+		t.Fatal(err)
+	}
+	h = s.WriteHealth()
+	if h.Failures != 2 || !slices.Equal(h.Active, []string{"resource episode enrichment"}) {
+		t.Fatalf("new episode write cleared the failed enrichment: %+v", h)
+	}
+	got = s.RecentResourceEpisodes(1)
+	if len(got) != 1 || got[0].ActivityStatus != "settling" {
+		t.Fatalf("new episode unexpectedly settled: %+v", got)
+	}
+	h = s.WriteHealth()
+	if h.Failures != 2 || !slices.Equal(h.Active, []string{"resource episode enrichment"}) {
+		t.Fatalf("unchanged enrichment cleared the write fault: %+v", h)
+	}
+	got = s.RecentResourceEpisodes(2)
+	if len(got) != 2 || got[0].ActivityStatus != "settling" || got[1].ActivityStatus != "complete" {
+		t.Fatalf("enrichment did not recover: %+v", got)
+	}
+	h = s.WriteHealth()
+	if h.Failures != 2 || len(h.Active) != 0 {
+		t.Fatalf("enrichment recovery lost failure history or retained the fault: %+v", h)
+	}
+}
 
 func TestEvidenceWriteHealthTracksIndependentFaultsAndRecovery(t *testing.T) {
 	s, err := Open(filepath.Join(t.TempDir(), "e.db"), "")
