@@ -43,15 +43,12 @@ func TestPutFlagAlsoAppendsJSONL(t *testing.T) {
 func TestPutFlagRotatesJSONLWhenOverCap(t *testing.T) {
 	dir := t.TempDir()
 	jl := filepath.Join(dir, "e.jsonl")
-	prev := jsonlRotateBytes
-	jsonlRotateBytes = 80
-	t.Cleanup(func() { jsonlRotateBytes = prev })
-
 	s, err := Open(filepath.Join(dir, "e.db"), jl)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer s.Close()
+	s.flagMirror.rotateBytes = 80
 	for i := 0; i < 8; i++ {
 		s.PutFlag(model.Flag{ID: fmt.Sprintf("flag-%d", i), Rule: "proxy-secret-leak", Severity: 3, Agent: "claude"})
 	}

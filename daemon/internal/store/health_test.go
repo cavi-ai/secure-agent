@@ -1,6 +1,7 @@
 package store
 
 import (
+	"os"
 	"path/filepath"
 	"slices"
 	"testing"
@@ -57,7 +58,7 @@ func TestFlagMirrorFailureRecoversOnNextWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	if err := s.jsonlFile.Close(); err != nil {
+	if err := s.flagMirror.file.Close(); err != nil {
 		t.Fatal(err)
 	}
 	s.PutFlag(model.Flag{ID: "f1", TS: time.Now()})
@@ -85,5 +86,46 @@ func TestConfiguredFlagMirrorUnavailableAtStartup(t *testing.T) {
 	h := s.WriteHealth()
 	if h.Failures != 1 || !slices.Equal(h.Active, []string{"flag mirror"}) {
 		t.Fatalf("missing configured mirror reported healthy: %+v", h)
+	}
+}
+
+func TestFlagMirrorRotationFailureKeepsDatabaseAndRecovers(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "e.jsonl")
+	s, err := Open(filepath.Join(dir, "e.db"), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	s.flagMirror.rotateBytes = 1
+	s.PutFlag(model.Flag{ID: "before", TS: time.Now()})
+	// A nonempty directory prevents replacing the retained mirror file.
+	if err := os.Mkdir(path+".1", 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(path+".1", "obstruction"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s.PutFlag(model.Flag{ID: "during", TS: time.Now()})
+	h := s.WriteHealth()
+	if h.Failures != 1 || !slices.Equal(h.Active, []string{"flag mirror"}) {
+		t.Fatalf("rotation failure hidden: %+v", h)
+	}
+	if got := s.RecentFlags(10); len(got) != 2 {
+		t.Fatalf("rotation failure stopped database writes: %+v", got)
+	}
+	assertMirrorIDs(t, path, "before")
+	if err := os.RemoveAll(path + ".1"); err != nil {
+		t.Fatal(err)
+	}
+	s.PutFlag(model.Flag{ID: "after", TS: time.Now()})
+	h = s.WriteHealth()
+	if h.Failures != 1 || len(h.Active) != 0 {
+		t.Fatalf("rotation recovery erased evidence loss or retained the active fault: %+v", h)
+	}
+	assertMirrorIDs(t, path, "after")
+	assertMirrorIDs(t, path+".1", "before")
+	if got := s.RecentFlags(10); len(got) != 3 {
+		t.Fatalf("database lost flags across mirror recovery: %+v", got)
 	}
 }
