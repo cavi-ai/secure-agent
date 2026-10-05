@@ -1687,7 +1687,8 @@ func (s *Store) FindOpenIncident(rule, sessionID, subject string) (string, bool)
 // AggregateIntoIncident folds another flag into an existing incident: bumps
 // the count, records the flag id as evidence, refreshes last_flag_at, and
 // patches the served report_json so the UI reads current numbers. Returns
-// the updated report (for the incident delta) — false when the row is gone.
+// the persisted report (for the incident delta) — false when the row is gone,
+// its evidence cannot be decoded, or the update does not persist.
 func (s *Store) AggregateIntoIncident(id, flagID string, ts time.Time) (model.IncidentReport, bool) {
 	if id == "" || flagID == "" {
 		return model.IncidentReport{}, false
@@ -1700,27 +1701,55 @@ func (s *Store) AggregateIntoIncident(id, flagID string, ts time.Time) (model.In
 	err := s.db.QueryRow(`SELECT report_json, COALESCE(flag_ids,'[]'), COALESCE(aggregate_count,1) FROM incidents WHERE id = ?`, id).
 		Scan(&reportJSON, &flagIDsRaw, &count)
 	if err != nil {
+		if err != sql.ErrNoRows {
+			s.noteWrite("incident aggregation", err)
+		}
 		return model.IncidentReport{}, false
 	}
 	var flagIDs []string
-	_ = json.Unmarshal([]byte(flagIDsRaw), &flagIDs)
+	if err := json.Unmarshal([]byte(flagIDsRaw), &flagIDs); err != nil {
+		s.noteWrite("incident aggregation", err)
+		return model.IncidentReport{}, false
+	}
 	flagIDs = append(flagIDs, flagID)
 	count++
 	tsStr := ts.UTC().Format(time.RFC3339Nano)
 
-	var inc model.IncidentReport
-	if err := json.Unmarshal([]byte(reportJSON), &inc); err == nil {
-		inc.AggregateCount = count
-		t := ts.UTC()
-		inc.LastFlagAt = &t
-		if data, err := json.Marshal(inc); err == nil {
-			reportJSON = string(data)
-		}
+	var inc *model.IncidentReport
+	if err := json.Unmarshal([]byte(reportJSON), &inc); err != nil {
+		s.noteWrite("incident aggregation", err)
+		return model.IncidentReport{}, false
 	}
+	if inc == nil {
+		s.noteWrite("incident aggregation", fmt.Errorf("null incident report"))
+		return model.IncidentReport{}, false
+	}
+	inc.AggregateCount = count
+	t := ts.UTC()
+	inc.LastFlagAt = &t
+	data, err := json.Marshal(inc)
+	if err != nil {
+		s.noteWrite("incident aggregation", err)
+		return model.IncidentReport{}, false
+	}
+	reportJSON = string(data)
 	idsJSON, _ := json.Marshal(flagIDs)
-	_, _ = s.db.Exec(`UPDATE incidents SET aggregate_count = ?, last_flag_at = ?, flag_ids = ?, report_json = ? WHERE id = ?`,
+	result, err := s.db.Exec(`UPDATE incidents SET aggregate_count = ?, last_flag_at = ?, flag_ids = ?, report_json = ? WHERE id = ?`,
 		count, tsStr, string(idsJSON), reportJSON, id)
-	return inc, true
+	if err != nil {
+		s.noteWrite("incident aggregation", err)
+		return model.IncidentReport{}, false
+	}
+	updated, err := result.RowsAffected()
+	if err != nil {
+		s.noteWrite("incident aggregation", err)
+		return model.IncidentReport{}, false
+	}
+	if updated != 1 {
+		return model.IncidentReport{}, false
+	}
+	s.noteWrite("incident aggregation", nil)
+	return *inc, true
 }
 
 func (s *Store) RecentIncidents(limit int) []model.IncidentReport {

@@ -120,6 +120,9 @@ a failure, without a retry loop or blocking collectors.
 Rotation keeps the previous archive if renaming the active file fails.
 Resource episode inserts and enrichment updates recover independently; an
 unchanged enrichment payload or a concurrent update does not clear a write fault.
+Incident aggregation reports a separate write fault and emits an updated report
+only after persistence succeeds. Malformed saved evidence is left unchanged;
+missing rows and updates that change no row do not clear an active fault.
 
 Per-harness coverage joins recent hook and trace events to their persisted
 session IDs. It lists only active, non-infrastructure harnesses and separates
