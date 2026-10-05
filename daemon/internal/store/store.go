@@ -1418,10 +1418,11 @@ func (s *Store) trendCounts(rule, host string) (model.TrendContext, func() map[s
 // PutAdvisorVerdict stores (or replaces) the local advisor's verdict for a
 // flag or incident. Advisory metadata only — nothing reads it back into an
 // enforcement decision.
-func (s *Store) PutAdvisorVerdict(subjectID, kind string, v model.AdvisorVerdict) {
+func (s *Store) PutAdvisorVerdict(subjectID, kind string, v model.AdvisorVerdict) (writeErr error) {
+	defer func() { s.noteWrite("advisor verdicts", writeErr) }()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	_, err := s.db.Exec(
+	result, err := s.db.Exec(
 		`INSERT OR REPLACE INTO advisor_verdicts
 		 (subject_id, kind, assessment, confidence, rationale, suggested_action, model, created_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -1429,8 +1430,16 @@ func (s *Store) PutAdvisorVerdict(subjectID, kind string, v model.AdvisorVerdict
 		v.CreatedAt.UTC().Format(time.RFC3339Nano),
 	)
 	if err != nil {
-		log.Printf("store: failed to insert advisor verdict %s: %v", subjectID, err)
+		return fmt.Errorf("insert advisor verdict: %w", err)
 	}
+	inserted, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("advisor verdict rows affected: %w", err)
+	}
+	if inserted != 1 {
+		return fmt.Errorf("advisor verdict insert affected %d rows", inserted)
+	}
+	return nil
 }
 
 // attachAdvisorLocked joins stored verdicts onto flags (caller holds mu).

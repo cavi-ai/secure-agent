@@ -486,19 +486,24 @@ type verdictPublishingSink struct {
 	postureChanged func()
 }
 
-func (v *verdictPublishingSink) PutAdvisorVerdict(subjectID, kind string, verdict model.AdvisorVerdict) {
-	v.Store.PutAdvisorVerdict(subjectID, kind, verdict)
+func (v *verdictPublishingSink) PutAdvisorVerdict(subjectID, kind string, verdict model.AdvisorVerdict) error {
+	// Every attempted write can change evidence health, including non-flag
+	// verdicts and failures that must not publish a flag delta.
+	if v.postureChanged != nil {
+		defer v.postureChanged()
+	}
+	if err := v.Store.PutAdvisorVerdict(subjectID, kind, verdict); err != nil {
+		return err
+	}
 	if kind != "flag" {
-		return
+		return nil
 	}
 	fl, ok := v.Store.GetFlagWithAdvisor(subjectID)
 	if !ok {
-		return
+		return nil
 	}
 	v.deltaHub.Publish(api.Delta{Type: "flag", Data: fl})
-	if v.postureChanged != nil {
-		v.postureChanged()
-	}
+	return nil
 }
 
 // setupAdvisor builds the local triage advisor: nil unless explicitly

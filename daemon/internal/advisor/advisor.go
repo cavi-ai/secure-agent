@@ -45,7 +45,7 @@ type Config struct {
 
 // Sink persists verdicts and answers trend lookups. *store.Store satisfies it.
 type Sink interface {
-	PutAdvisorVerdict(subjectID, kind string, v model.AdvisorVerdict)
+	PutAdvisorVerdict(subjectID, kind string, v model.AdvisorVerdict) error
 	// TrendFor supplies the week-over-week context that makes triage more
 	// than a one-shot guess: is this rule/host routine on this machine?
 	TrendFor(rule, host string) model.TrendContext
@@ -422,7 +422,11 @@ func (s *Subscriber) process(ctx context.Context, t task) {
 	s.mu.Unlock()
 	verdict.Model = s.cfg.Model
 	verdict.CreatedAt = time.Now().UTC()
-	s.sink.PutAdvisorVerdict(t.subjectID, t.kind, verdict)
+	if err := s.sink.PutAdvisorVerdict(t.subjectID, t.kind, verdict); err != nil {
+		// Storage health owns this fault; a successful model response must not
+		// trip the provider's circuit breaker because persistence failed.
+		log.Printf("advisor: persist verdict: %v", err)
+	}
 }
 
 func (s *Subscriber) circuitIsOpen() bool {
