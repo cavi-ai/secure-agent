@@ -216,6 +216,7 @@ func TestPostureFlagsSilentCollectorsAndUncoveredHarnesses(t *testing.T) {
 	a := newTestAPI(sock, testStore(t), &fakeKiller{}, func() Status {
 		return Status{
 			Running: true, Uptime: "1h0m0s", ActiveAgents: 2,
+			Agents: []AgentSummary{{PID: 42, Name: "cursor"}},
 			Collectors: []supervise.Health{
 				{Name: "eslogger", Running: true},   // never produced → silent
 				{Name: "netsampler", Running: true}, // not watched (idle agents open no sockets)
@@ -528,15 +529,17 @@ func decodeInto(t *testing.T, resp *http.Response, v any) {
 // exists to report.
 func TestHarnessUncoveredIgnoresTranscriptHits(t *testing.T) {
 	st := testStore(t)
+	status := Status{ActiveAgents: 2, Agents: []AgentSummary{{PID: 42, Name: "cursor"}}}
+	st.UpsertSession(model.Session{ID: "cursor-session", Harness: "cursor", StartedAt: time.Now(), LastSeenAt: time.Now()})
 	st.PutEvent(event.Event{Kind: event.KindTranscriptHit, TS: time.Now(), Detail: "aws-key"})
-	item := harnessUncoveredItem(st, Status{ActiveAgents: 2})
-	if item == nil {
+	items := harnessUncoveredItems(harnessCoverage(st, status))
+	if len(items) == 0 {
 		t.Fatal("transcript hit must not clear harness_uncovered")
 	}
 	// A real hook action DOES clear it.
-	st.PutEvent(event.Event{Kind: event.KindPluginAction, TS: time.Now(), Detail: "Read"})
-	if item := harnessUncoveredItem(st, Status{ActiveAgents: 2}); item != nil {
-		t.Fatalf("plugin action should clear harness_uncovered, got %+v", item)
+	st.PutEvent(event.Event{Kind: event.KindPluginAction, TS: time.Now(), SessionID: "cursor-session", Detail: "Read"})
+	if items := harnessUncoveredItems(harnessCoverage(st, status)); len(items) != 0 {
+		t.Fatalf("plugin action should clear harness_uncovered, got %+v", items)
 	}
 }
 
@@ -551,7 +554,7 @@ func TestGuardHookUnregisteredItem(t *testing.T) {
 		t.Fatalf("no agents must not raise the item: %+v", item)
 	}
 	// With agents active and no (or unregistered) settings.json, it fires.
-	item := guardHookUnregisteredItem(Status{ActiveAgents: 3})
+	item := guardHookUnregisteredItem(Status{ActiveAgents: 3, Agents: []AgentSummary{{PID: 42, Name: "claude"}}})
 	if item == nil {
 		t.Fatal("expected guard_hook_unregistered when no hook is registered")
 	}

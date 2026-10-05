@@ -202,6 +202,7 @@ func TestAttentionGroupsCoverEveryPostureItem(t *testing.T) {
 
 	status := Status{
 		Running: true, ActiveAgents: 2, Uptime: "1h", UninspectedEgress: 2,
+		Agents:     []AgentSummary{{PID: 42, Name: "cursor"}, {PID: 43, Name: "cursor"}},
 		Collectors: []supervise.Health{{Name: "transcript", Running: true}},
 	}
 	a := newTestAPI("", testStore(t), &fakeKiller{}, func() Status { return status })

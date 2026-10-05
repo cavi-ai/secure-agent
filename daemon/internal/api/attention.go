@@ -92,6 +92,21 @@ func (a *API) attentionFlags() []model.Flag {
 // while agents are active, silent collectors and missing hooks.
 func (a *API) machineAttentionItems(st Status) []PostureItem {
 	var items []PostureItem
+	if st.BusDrops > 0 {
+		items = append(items, PostureItem{Kind: "event_loss", ID: "event-bus", Severity: 2,
+			Title:  "Telemetry was dropped",
+			Detail: fmt.Sprintf("%d subscriber deliveries dropped since daemon start. Monitoring history may be incomplete.", st.BusDrops)})
+	}
+	if h := st.StorageHealth; h != nil && h.Failures > 0 {
+		detail := fmt.Sprintf("%d evidence persistence attempts failed since daemon start. Monitoring history may be incomplete.", h.Failures)
+		if len(h.Active) > 0 {
+			detail += " Writes still failing: " + strings.Join(h.Active, ", ") + "."
+		} else {
+			detail += " New writes have recovered; earlier evidence may remain incomplete."
+		}
+		items = append(items, PostureItem{Kind: "storage_loss", ID: "storage", Severity: 2,
+			Title: "Evidence could not be saved", Detail: detail})
+	}
 	// A monitor that stopped is a blind spot, not a detail.
 	for _, c := range st.Collectors {
 		if !c.Running || c.Abandoned {
@@ -108,8 +123,8 @@ func (a *API) machineAttentionItems(st Status) []PostureItem {
 	// untouched for days, zero hook events for 17h, all "healthy").
 	if st.ActiveAgents > 0 {
 		items = append(items, silentCollectorItems(st)...)
-		if item := harnessUncoveredItem(a.store, st); item != nil {
-			items = append(items, *item)
+		if st.Coverage != nil {
+			items = append(items, harnessUncoveredItems(st.Coverage.Harnesses)...)
 		}
 		if item := guardHookUnregisteredItem(st); item != nil {
 			items = append(items, *item)

@@ -49,6 +49,7 @@ func (s *Store) PutGuardDecision(d GuardDecision) {
 	defer cancel()
 	result, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO guard_decisions (id, session_id, rule_id, verdict, scope, at) VALUES (?, ?, ?, ?, ?, ?)`,
 		d.ID, d.SessionID, d.RuleID, d.Verdict, d.Scope, d.At)
+	s.noteWrite("guard decisions", err)
 	if err != nil {
 		return
 	}

@@ -271,6 +271,10 @@ struct ConsoleView: View {
         }
         let top = state.heroFlag
         let action = top.map(AppState.heroAction(for:))
+		if let warning = state.staleDataWarning, state.posture?.state != "critical" {
+			return HeroModel(icon: "exclamationmark.triangle.fill", color: .warn, title: "Monitoring data is stale",
+						 subtitle: warning, flag: top, action: action)
+		}
         let summary = state.posture?.summary ?? ""
         let subtitle = summary.isEmpty ? monitoredLine : summary
         switch state.posture?.state ?? fallbackPostureState {
@@ -291,6 +295,7 @@ struct ConsoleView: View {
     /// has nothing to look at; the purple status icon says it.
     var showsHero: Bool {
         if state.isPaused || !state.connected { return true }
+		if !state.staleSections.isEmpty { return true }
         return (state.posture?.state ?? fallbackPostureState) != "all-clear" || state.heroFlag != nil
     }
 

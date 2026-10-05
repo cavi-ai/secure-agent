@@ -401,9 +401,23 @@ export interface HealthSnapshot {
   model?: string;
 }
 
+export interface WriteHealth {
+  failures: number;
+  active: string[];
+}
+
+export interface HarnessCoverage {
+  name: string;
+  guard_supported: boolean;
+  trace_supported: boolean;
+  hook_last_seen?: string;
+  trace_last_seen?: string;
+}
+
 export interface CoverageStatus {
   harnesses_active: number;
   harnesses_seen: number;
+  harnesses?: HarnessCoverage[];
 }
 
 export interface Health {
@@ -454,6 +468,7 @@ export interface Status {
   fleet_configured?: boolean;
   unacted_flags_24h: number;
   bus_drops?: number;
+  storage_health?: WriteHealth;
   coverage?: CoverageStatus;
   firewall_stats?: Record<string, RuleStat>;
   collectors?: Health[];

@@ -147,6 +147,35 @@ func (s *Store) HookEventsSince(since time.Time) int {
 		int(event.KindPluginAction), sinceArg(since))
 }
 
+// HarnessActivity contains timestamps only. Attribution uses the persisted
+// session ID, never a guessed join by PID, workspace, or time.
+type HarnessActivity struct{ HookLastSeen, TraceLastSeen string }
+
+func (s *Store) HarnessActivitySince(since time.Time) map[string]HarnessActivity {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := map[string]HarnessActivity{}
+	rows, err := s.db.Query(`SELECT s.harness,
+		MAX(CASE WHEN e.kind = ? THEN e.ts ELSE '' END),
+		MAX(CASE WHEN e.kind IN (?, ?, ?) THEN e.ts ELSE '' END)
+		FROM events e JOIN sessions s ON s.id = e.session_id
+		WHERE e.kind IN (?, ?, ?, ?) AND e.ts >= ? AND s.harness != ''
+		GROUP BY s.harness`, int(event.KindPluginAction), int(event.KindToolCall), int(event.KindTurn), int(event.KindModelCall),
+		int(event.KindPluginAction), int(event.KindToolCall), int(event.KindTurn), int(event.KindModelCall), sinceArg(since))
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var name string
+		var activity HarnessActivity
+		if err := rows.Scan(&name, &activity.HookLastSeen, &activity.TraceLastSeen); err == nil {
+			out[name] = activity
+		}
+	}
+	return out
+}
+
 // TraceRowsWrittenByHarness counts trace rows (tool calls, turns, model
 // calls) written since the store opened, keyed by their session's harness. A
 // row's own timestamp does not matter: a transcript read for the first time

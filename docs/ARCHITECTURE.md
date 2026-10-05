@@ -108,6 +108,28 @@ The app bundle has one identity, `com.cavi-ai.secure-agent`, for Launch Services
 - **Pub/Sub Channel Bus (`daemon/internal/bus/bus.go`)**: Centralized Go channel event bus with non-blocking fan-out subscribers. Guarantees that slow database disk IO never blocks real-time file or process event capture.
 - **Store Engine (`daemon/internal/store/store.go`)**: Dual-persists events and correlation flags to SQLite (`events.db`) and structured JSONL logs (`events.jsonl`). Implements automatic retention pruning.
 
+Core evidence writes (events, flags, incidents, guard decisions, sessions,
+operator audit, and the flag JSONL mirror) report fixed operation labels to
+an in-memory health tracker with a mutex independent of database IO. Status,
+posture, and Doctor consume the same snapshot. Active faults clear on a
+successful write of the same operation; cumulative failures and bus delivery
+loss remain coverage gaps for that daemon run because the missing evidence
+cannot be reconstructed. The mirror retries opening on the next flag after
+a failure, without a retry loop or blocking collectors.
+
+Per-harness coverage joins recent hook and trace events to their persisted
+session IDs. It lists only active, non-infrastructure harnesses and separates
+adapter support from observed activity in the last 24 hours; activity from
+one harness cannot clear another's missing-hook signal. Supported guard hooks
+are Claude Code and Cursor; Claude registration checks apply only while Claude
+is active. These observations do not establish coverage of every current
+session, or payload inspection, which depends on proxy routing.
+
+Native endpoint refresh failures retain last-known values and mark the failed
+section stale. Polling and SSE refreshes clear a section only on success.
+Stale sections keep the icon in attention and surface a warning; a stale
+all-clear posture cannot produce a reassuring hero.
+
 ### Correlation Engine (`daemon/internal/correlate/correlate.go`)
 
 The correlator evaluates incoming event streams against a sliding time window (default 30 seconds):

@@ -9,22 +9,40 @@ final class StubDaemonClient: DaemonClientProtocol, @unchecked Sendable {
     var flags: [FlagModel] = []
     var pending: [GuardPending] = []
     var statusError: Error?
+    var flagsError: Error?
     var guardError: Error?
+	var incidents: [IncidentReportModel] = []
+	var incidentsError: Error?
+	var postureError: Error?
+	var resourcesError: Error?
+	var rules: [GuardRuleModel] = []
+	var rulesError: Error?
+	var notifyRulesError: Error?
     var resources = ResourceSnapshotModel(host: nil)
 
     func fetchStatus() async throws -> StatusResponse {
         if let statusError { throw statusError }
         return status
     }
-    func fetchResources() async throws -> ResourceSnapshotModel { resources }
+    func fetchResources() async throws -> ResourceSnapshotModel {
+		if let resourcesError { throw resourcesError }
+		return resources
+	}
     var fetchFlagsCalls = 0
     func fetchFlags(limit: Int) async throws -> [FlagModel] {
         fetchFlagsCalls += 1
+        if let flagsError { throw flagsError }
         return flags
     }
-    func fetchIncidents(limit: Int) async throws -> [IncidentReportModel] { [] }
+    func fetchIncidents(limit: Int) async throws -> [IncidentReportModel] {
+		if let incidentsError { throw incidentsError }
+		return incidents
+	}
     var posture = PostureModel(state: "all-clear", needsYou: 0, summary: "", connected: true)
-    func fetchPosture() async throws -> PostureModel { posture }
+    func fetchPosture() async throws -> PostureModel {
+		if let postureError { throw postureError }
+		return posture
+	}
     func retriageFlag(id: String) async throws { }
     var acknowledgedFlagIDs: [String] = []
     var acknowledgeError: Error?
@@ -41,12 +59,20 @@ final class StubDaemonClient: DaemonClientProtocol, @unchecked Sendable {
     func muteRemove(rule: String, host: String, agent: String?) async throws { }
     var notifyRules = NotifyRulesResponse.fallback
     var setNotifyRuleCalls: [(rule: String, notify: Bool?)] = []
-    func fetchNotifyRules() async throws -> NotifyRulesResponse { notifyRules }
+    func fetchNotifyRules() async throws -> NotifyRulesResponse {
+		if let notifyRulesError { throw notifyRulesError }
+		return notifyRules
+	}
     func setNotifyRule(rule: String, notify: Bool?) async throws {
         setNotifyRuleCalls.append((rule, notify))
     }
-    func fetchGuardRules() async throws -> [GuardRuleModel] { [] }
+    func fetchGuardRules() async throws -> [GuardRuleModel] {
+		if let rulesError { throw rulesError }
+		return rules
+	}
+    var fetchGuardPendingCalls = 0
     func fetchGuardPending() async throws -> [GuardPending] {
+        fetchGuardPendingCalls += 1
         if let guardError { throw guardError }
         return pending
     }
@@ -73,6 +99,67 @@ final class StubDaemonClient: DaemonClientProtocol, @unchecked Sendable {
 
 @MainActor
 final class AppStateTests: XCTestCase {
+    func testFailedStreamRefreshStillFetchesGuardDecisions() async {
+        let stub = StubDaemonClient()
+        let state = AppState(client: stub)
+        await state.performFetch()
+        let calls = stub.fetchGuardPendingCalls
+        stub.postureError = DaemonClientError.transport("fixture unavailable")
+        await state.lightRefresh([.posture, .guardPending])
+        XCTAssertEqual(stub.fetchGuardPendingCalls, calls + 1)
+        XCTAssertEqual(state.posture?.state, "all-clear")
+        XCTAssertTrue(state.staleSections.contains("Posture"))
+        XCTAssertTrue(state.needsAttention)
+        stub.postureError = nil
+        stub.flagsError = DaemonClientError.transport("fixture unavailable")
+        await state.lightRefresh([.flags, .guardPending])
+        XCTAssertEqual(stub.fetchGuardPendingCalls, calls + 2)
+        XCTAssertTrue(state.staleSections.contains("Findings"))
+    }
+
+	func testPartialRefreshKeepsLastKnownDataAndShowsFailure() async {
+		let stub = StubDaemonClient()
+		stub.incidents = [IncidentReportModel(id: "i1", flagId: "f1", pid: 10, agent: "claude", timestamp: "", rule: "r", summary: "Review required", risk: "HIGH", touchedFiles: [], connections: [], rotateList: [])]
+		stub.notifyRules = NotifyRulesResponse(defaultMinSeverity: 2, overrides: ["r": false])
+		stub.rules = [GuardRuleModel(agent: "claude", ruleID: "r", decision: "deny", source: "operator", createdAt: "")]
+		let state = AppState(client: stub)
+		await state.performFetch()
+		stub.incidentsError = DaemonClientError.transport("fixture unavailable")
+		stub.resourcesError = DaemonClientError.transport("fixture unavailable")
+		stub.rulesError = DaemonClientError.transport("fixture unavailable")
+		stub.notifyRulesError = DaemonClientError.transport("fixture unavailable")
+		await state.performFetch()
+		XCTAssertEqual(state.incidents.map(\.id), ["i1"], "failure must not erase incidents")
+		XCTAssertNotNil(state.resources, "failure must not erase the prior resource snapshot")
+		XCTAssertEqual(state.guardRules.map(\.ruleID), ["r"])
+		XCTAssertEqual(state.notifyDefaultMinSeverity, 2)
+		XCTAssertEqual(state.notifyOverrides, ["r": false])
+		XCTAssertTrue(state.connected, "partial failure is not disconnection")
+		XCTAssertTrue(state.needsAttention)
+		XCTAssertTrue(state.lastError?.contains("Incidents") == true)
+		XCTAssertTrue(state.lastError?.contains("Guard rules") == true)
+		stub.incidentsError = nil; stub.resourcesError = nil; stub.rulesError = nil; stub.notifyRulesError = nil
+		await state.performFetch()
+		XCTAssertNil(state.lastError, "successful refresh must clear the stale-data warning")
+	}
+
+	func testFailedPostureRefreshCannotShowProtected() async {
+		let stub = StubDaemonClient()
+		let state = AppState(client: stub)
+		await state.performFetch()
+		stub.postureError = DaemonClientError.transport("fixture unavailable")
+		await state.performFetch()
+		XCTAssertEqual(state.posture?.state, "all-clear", "retain last-known posture, marked stale")
+		XCTAssertTrue(state.needsAttention, "stale all-clear must not keep the icon reassuring")
+		let view = ConsoleView(state: state, scrollable: false)
+		XCTAssertTrue(view.showsHero)
+		XCTAssertNotEqual(view.heroModel.title, "Protected")
+		XCTAssertTrue(state.lastError?.contains("Posture") == true)
+		stub.postureError = nil
+		await state.performFetch()
+		XCTAssertFalse(state.needsAttention)
+		XCTAssertNil(state.lastError)
+	}
 
     private func makeState(_ stub: StubDaemonClient) -> (AppState, NSMutableArray) {
         let state = AppState(client: stub)

@@ -49,6 +49,23 @@ public final class AppState: ObservableObject {
     /// with garbage is NOT "Disconnected" — it is up and misbehaving, which the
     /// user must be able to tell apart from a dead daemon.
     @Published public private(set) var lastError: String?
+	/// Failed sections retain last-known values, but never count as fresh.
+	@Published public private(set) var staleSections: Set<String> = []
+	public var staleDataWarning: String? {
+		guard !staleSections.isEmpty else { return nil }
+		return "Could not refresh: \(staleSections.sorted().joined(separator: ", ")). Showing last available data; freshness is unknown."
+	}
+
+	private func refreshSection<T>(_ section: String, _ operation: @MainActor () async throws -> T) async throws -> T {
+		do {
+			let value = try await operation()
+			staleSections.remove(section)
+			return value
+		} catch {
+			staleSections.insert(section)
+			throw error
+		}
+	}
 
     /// Called after every state change so the AppDelegate can refresh the icon.
     public var onChange: (() -> Void)?
@@ -233,29 +250,38 @@ public final class AppState: ObservableObject {
         }
     }
 
-    private func lightRefresh(_ need: StreamRefresh) async {
+    func lightRefresh(_ need: StreamRefresh) async {
         var changed = false
+		let previouslyStale = staleSections
+		defer {
+			if previouslyStale != staleSections {
+				lastError = staleDataWarning
+				onChange?()
+			}
+		}
         do {
-            if need.contains(.flags) {
-                let fetched = try await client.fetchFlags(limit: 20)
+            if need.contains(.flags),
+               let fetched = try? await refreshSection("Findings", { try await client.fetchFlags(limit: 20) }) {
                 if Self.flagsSignature(fetched) != Self.flagsSignature(flags) {
                     flags = fetched
                     processNewFlags(fetched)
                     changed = true
                 }
             }
-            if need.contains(.posture), let p = try? await client.fetchPosture(), p != posture {
+            if need.contains(.posture),
+               let p = try? await refreshSection("Posture", { try await client.fetchPosture() }), p != posture {
                 posture = p
                 changed = true
             }
             if changed { onChange?() }
             if need.contains(.guardPending) {
-                let pending = try await client.fetchGuardPending()
+                let pending = try await refreshSection("Guard decisions") { try await client.fetchGuardPending() }
                 presentGuardPromptIfNeeded(pending)
             }
         } catch {
             if changed { onChange?() }
-            // The next stream event or poll tick retries; no state flip here.
+            // Retain data; the failed section stays visibly stale until its
+			// next successful stream refresh or poll.
         }
     }
 
@@ -312,30 +338,34 @@ public final class AppState: ObservableObject {
     func performFetch() async {
         defer { self.isFetching = false }
         do {
-            let status = try await client.fetchStatus()
-            let flags = try await client.fetchFlags(limit: 20)
-            let incidents = (try? await client.fetchIncidents(limit: 10)) ?? []
-            let posture = try? await client.fetchPosture()
-            let guardRules = (try? await client.fetchGuardRules()) ?? []
-            let notifyCfg = (try? await client.fetchNotifyRules()) ?? .fallback
-            let resources = try? await client.fetchResources()
+            let status = try await refreshSection("Status") { try await client.fetchStatus() }
+            let flags = try await refreshSection("Findings") { try await client.fetchFlags(limit: 20) }
+            let incidents = try? await refreshSection("Incidents") { try await client.fetchIncidents(limit: 10) }
+            let posture = try? await refreshSection("Posture") { try await client.fetchPosture() }
+            let guardRules = try? await refreshSection("Guard rules") { try await client.fetchGuardRules() }
+            let notifyCfg = try? await refreshSection("Notifications") { try await client.fetchNotifyRules() }
+            let resources = try? await refreshSection("Resources") { try await client.fetchResources() }
             // A pause requested mid-flight must not be overwritten by
             // results that were already in transit.
             guard !self.isPaused else { return }
             let wasDisconnected = !self.connected
             self.status = status
-            self.posture = posture
-			self.processResourceTransitions(resources)
-            self.resources = resources
+            if let posture { self.posture = posture }
+			if let resources {
+				self.processResourceTransitions(resources)
+				self.resources = resources
+			}
             self.flags = flags
-            self.incidents = incidents
-            self.guardRules = guardRules
-            self.notifyOverrides = notifyCfg.overrides
-            self.notifyScopes = notifyCfg.scopes ?? []
-            self.notifyDefaultMinSeverity = notifyCfg.defaultMinSeverity
+            if let incidents { self.incidents = incidents }
+            if let guardRules { self.guardRules = guardRules }
+            if let notifyCfg {
+				self.notifyOverrides = notifyCfg.overrides
+				self.notifyScopes = notifyCfg.scopes ?? []
+				self.notifyDefaultMinSeverity = notifyCfg.defaultMinSeverity
+			}
             self.reconcilePendingRetriage(flags: flags)
             self.connected = true
-            self.lastError = nil
+            self.lastError = staleDataWarning
             self.transportFailureStreak = 0
             if wasDisconnected { self.scheduleTimer(1.0) }
             self.eventsRefreshTick += 1
@@ -353,8 +383,10 @@ public final class AppState: ObservableObject {
             // silently became [] would suppress the Allow/Deny prompt — a
             // fail-open on the security-critical path.
             do {
-                let pending = try await client.fetchGuardPending()
+                let pending = try await refreshSection("Guard decisions") { try await client.fetchGuardPending() }
                 guard !self.isPaused else { return }
+				self.lastError = staleDataWarning
+				self.onChange?()
                 // Presented last: runModal() blocks this Task until the user
                 // responds, so the icon/console refresh above isn't held up.
                 self.presentGuardPromptIfNeeded(pending)
@@ -1377,6 +1409,7 @@ public final class AppState: ObservableObject {
     /// The one predicate the icon, hero and badge read: the daemon's /posture
     /// state. Flag/incident fallback covers pre-posture daemons.
     public var needsAttention: Bool {
+		if connected && !staleSections.isEmpty { return true }
         if let posture { return posture.state != "all-clear" }
         return !unresolvedIncidents.isEmpty || !unactedCriticals.isEmpty
     }
