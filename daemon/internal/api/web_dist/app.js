@@ -306,6 +306,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // (endSession).
   let connState = 'ok';
   let sessionEnded = false;
+  let liveUpdates = null;
   let prevUptimeSec = 0;
   // Endpoints that failed in the last cycle — each failure surfaces ONCE as a
   // toast so a dying endpoint can't silently blank its panel.
@@ -344,10 +345,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (sessionEnded) return;
     sessionEnded = true;
     try { sessionStorage.removeItem(SS_TOKEN_KEY); } catch { /* private mode */ }
-    clearInterval(slowTimer);
     clearInterval(sparkTimer);
-    stopPolling();
-    if (es) es.close();
+    if (liveUpdates) liveUpdates.stop();
     showSessionEnded();
   }
 
@@ -4413,95 +4412,64 @@ document.addEventListener('DOMContentLoaded', () => {
   // carries the guard lifecycle (guard-prompt/guard-resolved), so pending
   // prompts surface immediately instead of up to 2s late. A slow 30s refresh
   // always runs for status/uptime, which change without any bus event.
-  fetchTelemetry();
-  const slowTimer = setInterval(fetchTelemetry, 30000);
-
-  let pollTimer = null;
-  let es = null;
-  const startPolling = () => {
-    if (sessionEnded) return;
-    if (!pollTimer) pollTimer = setInterval(fetchTelemetry, 2000);
-  };
-  const stopPolling = () => { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } };
-
   // Testability hook: ?nosse skips the push stream (headless E2E can then
   // use virtual time — a pending SSE response stalls the virtual clock).
   const noSSE = new URLSearchParams(location.search).has('nosse');
 
-  if (window.EventSource && !noSSE) {
-    const streamURL = '/events/stream' + (consoleToken ? '?ct=' + encodeURIComponent(consoleToken) : '');
-    let esFailures = 0;
-    let refreshPending = false;
-    const scheduleRefresh = () => {
-      if (refreshPending) return;
-      refreshPending = true;
-      setTimeout(() => { refreshPending = false; fetchTelemetry({ slow: false }); }, 400);
-    };
-    es = new EventSource(streamURL);
-    es.onopen = () => { esFailures = 0; stopPolling(); };
-
+  const upsertById = (list, item) => {
+    list = list || [];
+    const i = list.findIndex(x => x && x.id === item.id);
+    if (i >= 0) list[i] = item; else list.unshift(item);
+    return list;
+  };
+  liveUpdates = createConsoleLiveUpdates({
+    refresh: fetchTelemetry,
+    streamURL: '/events/stream' + (consoleToken ? '?ct=' + encodeURIComponent(consoleToken) : ''),
+    EventSourceImpl: noSSE ? null : window.EventSource,
     // Typed deltas: patch local state and mark only the panels that read the
     // changed slice; the scheduler renders the visible ones.
-    const upsertById = (list, item) => {
-      list = list || [];
-      const i = list.findIndex(x => x && x.id === item.id);
-      if (i >= 0) list[i] = item; else list.unshift(item);
-      return list;
-    };
-    es.addEventListener('event', (msg) => {
-      // Push path: count the event immediately so the sparkline reflects
-      // bursts between fetches. Record its key so sparkIngestEvents won't
-      // double-count it when the reconcile fetch lands.
-      try {
-        const e = JSON.parse(msg.data);
-        countedEventKeys.add(eventKey(e));
-        sparkBump(1, Date.parse(e.ts) || 0);
-        telemetryData.events = [e, ...(telemetryData.events || [])].slice(0, 200);
-        if (!isEventsFiltered()) telemetryData.eventsView = telemetryData.events;
-        if (e.kind === 9) flashFirewallPanel(); // proxy-hit
-        // Trace continues to follow event deltas while visible.
-        if (sessionView === 'trace' && selectedSessionId && e.session_id === selectedSessionId) {
-          loadSessionTimeline(selectedSessionId).then(() => markDirty('sessions'));
-        }
-      } catch { sparkBump(1, 0); /* unparseable frame still counts */ }
-      markDirty('events');
-    });
-    // Patterns and posture come only from /snapshot: a flag frame schedules
-    // one reconcile 2 s after the last frame of a burst, so a storm folds
-    // into its pattern card instead of standing as rows until the poll.
-    let flagReconcile = 0;
-    es.addEventListener('flag', (msg) => {
-      try { telemetryData.flags = upsertById(telemetryData.flags, JSON.parse(msg.data)); } catch { /* next reconcile repairs */ }
-      markDirty('flags', 'attention', 'chart-flags', 'status', 'tab-badges');
-      clearTimeout(flagReconcile);
-      flagReconcile = setTimeout(() => fetchTelemetry({ slow: false }), 2000);
-    });
-    es.addEventListener('incident', (msg) => {
-      // Delta incidents are the bare report (no workflow join); the 30s
-      // reconcile supplies workflow state.
-      try { telemetryData.incidents = upsertById(telemetryData.incidents, JSON.parse(msg.data)); } catch { /* next reconcile repairs */ }
-      markDirty('incidents', 'attention', 'status');
-    });
-    es.addEventListener('session', (msg) => {
-      try { telemetryData.sessions = upsertById(telemetryData.sessions, JSON.parse(msg.data)); } catch { /* next reconcile repairs */ }
-      markDirty('sessions', 'chart-memory', 'tab-badges');
-    });
-    es.addEventListener('posture', (msg) => {
-      // posture.groups is the attention queue.
-      try { telemetryData.posture = JSON.parse(msg.data); } catch { /* next reconcile repairs */ }
-      markDirty('posture', 'attention', 'tab-badges');
-    });
-    // Guard lifecycle: a waiting operator decision must not wait for a
-    // reconcile — keep the instant refetch for these two.
-    ['guard-prompt', 'guard-resolved']
-      .forEach(kind => es.addEventListener(kind, scheduleRefresh));
-    es.onerror = () => {
-      // EventSource auto-reconnects while CONNECTING; only fall back to
-      // polling when the stream is hard-closed or keeps failing.
-      esFailures++;
-      if (es.readyState === EventSource.CLOSED || esFailures > 5) startPolling();
-    };
-  } else {
-    startPolling();
-  }
+    handlers: {
+      event: (msg) => {
+        // Push path: count the event immediately so the sparkline reflects
+        // bursts between fetches. Record its key so sparkIngestEvents won't
+        // double-count it when the reconcile fetch lands.
+        try {
+          const e = JSON.parse(msg.data);
+          countedEventKeys.add(eventKey(e));
+          sparkBump(1, Date.parse(e.ts) || 0);
+          telemetryData.events = [e, ...(telemetryData.events || [])].slice(0, 200);
+          if (!isEventsFiltered()) telemetryData.eventsView = telemetryData.events;
+          if (e.kind === 9) flashFirewallPanel(); // proxy-hit
+          // Trace continues to follow event deltas while visible.
+          if (sessionView === 'trace' && selectedSessionId && e.session_id === selectedSessionId) {
+            loadSessionTimeline(selectedSessionId).then(() => markDirty('sessions'));
+          }
+        } catch { sparkBump(1, 0); /* unparseable frame still counts */ }
+        markDirty('events');
+      },
+      // Patterns and posture come only from /snapshot: a flag frame schedules
+      // one reconcile 2 s after the last frame of a burst, so a storm folds
+      // into its pattern card instead of standing as rows until the poll.
+      flag: (msg) => {
+        try { telemetryData.flags = upsertById(telemetryData.flags, JSON.parse(msg.data)); } catch { /* next reconcile repairs */ }
+        markDirty('flags', 'attention', 'chart-flags', 'status', 'tab-badges');
+      },
+      incident: (msg) => {
+        // Delta incidents are the bare report (no workflow join); the 30s
+        // reconcile supplies workflow state.
+        try { telemetryData.incidents = upsertById(telemetryData.incidents, JSON.parse(msg.data)); } catch { /* next reconcile repairs */ }
+        markDirty('incidents', 'attention', 'status');
+      },
+      session: (msg) => {
+        try { telemetryData.sessions = upsertById(telemetryData.sessions, JSON.parse(msg.data)); } catch { /* next reconcile repairs */ }
+        markDirty('sessions', 'chart-memory', 'tab-badges');
+      },
+      posture: (msg) => {
+        // posture.groups is the attention queue.
+        try { telemetryData.posture = JSON.parse(msg.data); } catch { /* next reconcile repairs */ }
+        markDirty('posture', 'attention', 'tab-badges');
+      }
+    }
+  });
+  liveUpdates.start();
 });
