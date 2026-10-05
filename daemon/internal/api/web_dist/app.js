@@ -393,6 +393,9 @@ document.addEventListener('DOMContentLoaded', () => {
     events: { kind: 'all', since: 'all' },
     flags: { agent: 'all', rule: 'all', minsev: 'all', since: 'all' }
   };
+  // One active selection per history view; relative-window cutoffs change
+  // on each request, so scope is the selected filters rather than the URL.
+  const historyScopes = { flags: null, events: null };
   const seenAgents = new Set();
   const seenRules = new Set();
 
@@ -578,6 +581,25 @@ document.addEventListener('DOMContentLoaded', () => {
     const f = filters.events;
     return f.kind !== 'all' || f.since !== 'all';
   }
+  function syncHistoryViews() {
+    const changed = [];
+    for (const [name, filtered] of [['flags', isFlagsFiltered()], ['events', isEventsFiltered()]]) {
+      const scope = filtered ? JSON.stringify(filters[name]) : null;
+      const view = name + 'View';
+      if (scope !== historyScopes[name]) {
+        historyScopes[name] = scope;
+        telemetryData[view] = filtered ? null : telemetryData[name];
+        reportHealth.reset(name);
+        failedEndpoints.delete(name);
+        changed.push(name);
+      } else if (!filtered) telemetryData[view] = telemetryData[name];
+    }
+    if (changed.length) {
+      renderReportHealth();
+      markDirty(...changed, 'tab-badges');
+    }
+  }
+
   function flagsQuery() {
     const f = filters.flags, p = new URLSearchParams();
     if (f.agent !== 'all') p.set('agent', f.agent);
@@ -643,8 +665,8 @@ document.addEventListener('DOMContentLoaded', () => {
   window.applyView = function(name) {
     const view = loadViews().find(v => v.name === name);
     if (!view) return;
-    filters.flags = { ...filters.flags, ...(view.flags || {}) };
-    filters.events = { ...filters.events, ...(view.events || {}) };
+    Object.assign(filters.flags, view.flags || {});
+    Object.assign(filters.events, view.events || {});
     const search = document.getElementById('global-search');
     if (search) search.value = view.search || '';
     syncFilterControls();
@@ -1605,6 +1627,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const slow = !opts || opts.slow !== false;
     const gen = ++telemetryFetchGen;
     const slowGen = slow ? ++telemetrySlowGen : 0;
+    syncHistoryViews();
     const current = () => !sessionEnded && gen === telemetryFetchGen;
     const currentSlow = () => !sessionEnded && slow && slowGen === telemetrySlowGen;
     let changedSlow = false;
@@ -1707,8 +1730,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     if (obsolete()) return;
-    telemetryData.flagsView = telemetryData.flags;
-    telemetryData.eventsView = telemetryData.events;
+    syncHistoryViews();
     sparkIngestEvents(telemetryData.events);
     if (isFlagsFiltered()) {
       const v = await grab('flags', flagsQuery());
@@ -2508,7 +2530,7 @@ document.addEventListener('DOMContentLoaded', () => {
   function stageDropFlag(id) {
     return stage(['flags', 'flagsView', 'posture'], ['flags', 'attention', 'chart-flags', 'status', 'tab-badges'], () => {
       telemetryData.flags = (telemetryData.flags || []).filter(x => x.id !== id);
-      telemetryData.flagsView = (telemetryData.flagsView || []).filter(x => x.id !== id);
+      if (telemetryData.flagsView !== null) telemetryData.flagsView = (telemetryData.flagsView || []).filter(x => x.id !== id);
       mapAttentionItems(it => (it.kind === 'flag' && it.id === id ? null : it));
     });
   }

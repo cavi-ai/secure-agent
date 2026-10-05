@@ -23,6 +23,8 @@ function fixture(fetch) {
   const ctx = {
     sessionEnded: false, SS_TOKEN_KEY: 'fixture',
     telemetryFetchGen: 0, telemetrySlowGen: 0,
+    historyScopes: { flags: null, events: null },
+    filters: { flags: { agent: 'all', rule: 'all', minsev: 'all', since: 'all' }, events: { kind: 'all', since: 'all' } },
     sessionStorage: { removeItem() {} },
     liveUpdates: { stop: () => stops++ }, sparkTimer: 1,
     clearInterval() {}, clearTimeout() {},
@@ -48,6 +50,7 @@ function fixture(fetch) {
   ctx.reportHealth = ctx.createConsoleReportHealth();
   vm.runInContext(source('  function endSession()', '  function setConnState(') +
     source('  function reportSucceeded(', '  // parseUptimeSec reads') +
+    source('  function syncHistoryViews()', '  function flagsQuery()') +
     source('  async function fetchTelemetry(', '  // Every panel is a candidate:'), ctx);
   return { ctx, requests, renders, connections, failures, retries, stops: () => stops, ended: () => ended };
 }
@@ -399,13 +402,14 @@ test('malformed guard decisions preserve the pending decisions and warn independ
   assert.equal(f.ctx.telemetryData.connected, true);
 });
 
-test('malformed filtered findings do not replace valid snapshot findings', async () => {
+test('malformed filtered findings leave the selected view unavailable without discarding core findings', async () => {
   const f = fixture(async path => path === '/snapshot'
     ? response({ status: { uptime: 'good' }, flags: [{ id: 'saved' }], events: [] })
     : path.startsWith('/flags?') ? response([null]) : response([]));
   f.ctx.isFlagsFiltered = () => true;
   await assert.doesNotReject(f.ctx.fetchTelemetry({ slow: false }));
-  assert.equal(f.ctx.telemetryData.flagsView[0].id, 'saved');
+  assert.equal(f.ctx.telemetryData.flagsView, null);
+  assert.equal(f.ctx.telemetryData.flags[0].id, 'saved');
   assert.equal(f.ctx.reportHealth.failures(['flags'])[0].state, 'unavailable');
 });
 
@@ -432,13 +436,113 @@ test('guard rows without usable decision IDs cannot replace actionable pending d
   }
 });
 
-test('malformed filtered events keep snapshot events and mark just their report unavailable', async () => {
+test('malformed filtered events leave the selected view unavailable and retain core events', async () => {
   const f = fixture(async path => path === '/snapshot'
     ? response({ status: { uptime: 'good' }, flags: [], events: [{ kind: 8, ts: '2026-10-05T00:00:00Z', pid: 1 }] })
     : path.startsWith('/events?') ? response({ error: 'not a list' }) : response([]));
   f.ctx.isEventsFiltered = () => true;
   await f.ctx.fetchTelemetry({ slow: false });
-  assert.equal(f.ctx.telemetryData.eventsView[0].kind, 8);
+  assert.equal(f.ctx.telemetryData.eventsView, null);
+  assert.equal(f.ctx.telemetryData.events[0].kind, 8);
   assert.equal(f.ctx.reportHealth.failures(['events'])[0].state, 'unavailable');
   assert.equal(f.ctx.telemetryData.connected, true);
+});
+
+
+for (const kind of ['flags', 'events']) {
+  test(`failed ${kind} refresh preserves last-good results for the active filter`, async () => {
+    let fail = false;
+    const f = fixture(async path => path === '/snapshot'
+      ? response({ status: { uptime: 'good' }, flags: [{ id: 'broad' }], events: [{ kind: 5, pid: 2 }] })
+      : path.startsWith('/' + kind + '?') ? fail ? response(null, 503) : response([{ id: 'filtered', kind: 8, pid: 1 }]) : response([]));
+    f.ctx[kind === 'flags' ? 'isFlagsFiltered' : 'isEventsFiltered'] = () => true;
+    await f.ctx.fetchTelemetry({ slow: false });
+    fail = true;
+    await f.ctx.fetchTelemetry({ slow: false });
+    assert.equal(f.ctx.telemetryData[kind + 'View'][0].id, 'filtered');
+    assert.equal(f.ctx.reportHealth.failures([kind])[0].state, 'stale');
+    assert.equal(f.ctx.telemetryData.connected, true);
+  });
+
+  test(`changing ${kind} filters clears foreign results before the new request completes`, async () => {
+    const pending = deferred();
+    let changed = false;
+    const f = fixture(async path => path === '/snapshot' ? snapshot()
+      : path.startsWith('/' + kind + '?') ? changed ? pending.promise : response([{ id: 'old-query', kind: 8, pid: 1 }]) : response([]));
+    f.ctx[kind === 'flags' ? 'isFlagsFiltered' : 'isEventsFiltered'] = () => true;
+    await f.ctx.fetchTelemetry({ slow: false });
+    changed = true;
+    f.ctx.filters[kind][kind === 'flags' ? 'agent' : 'kind'] = kind === 'flags' ? 'codex' : '5';
+    const next = f.ctx.fetchTelemetry({ slow: false });
+    const clearedImmediately = f.ctx.telemetryData[kind + 'View'] === null;
+    pending.resolve(response(null, 503));
+    await next;
+    assert.equal(clearedImmediately, true);
+    assert.equal(f.ctx.telemetryData[kind + 'View'], null);
+    assert.equal(f.ctx.reportHealth.failures([kind])[0].state, 'unavailable');
+  });
+}
+
+test('relative-window URL timestamps do not invalidate last-good results for the same selected window', async () => {
+  let reads = 0, queryClock = 0;
+  const f = fixture(async path => path === '/snapshot' ? snapshot()
+    : path.startsWith('/flags?') ? ++reads === 1 ? response([{ id: 'window-result' }]) : response(null, 503) : response([]));
+  f.ctx.isFlagsFiltered = () => true;
+  f.ctx.filters.flags.since = '1h';
+  f.ctx.flagsQuery = () => '/flags?since=' + ++queryClock;
+  await f.ctx.fetchTelemetry({ slow: false });
+  await f.ctx.fetchTelemetry({ slow: false });
+  assert.equal(queryClock, 2);
+  assert.equal(f.ctx.telemetryData.flagsView[0].id, 'window-result');
+  assert.equal(f.ctx.reportHealth.failures(['flags'])[0].state, 'stale');
+});
+
+test('a successful empty filtered result recovers from an unavailable first load', async () => {
+  let fail = true;
+  const f = fixture(async path => path === '/snapshot' ? snapshot()
+    : path.startsWith('/flags?') ? fail ? response(null, 503) : response([]) : response([]));
+  f.ctx.isFlagsFiltered = () => true;
+  await f.ctx.fetchTelemetry({ slow: false });
+  assert.equal(f.ctx.telemetryData.flagsView, null);
+  fail = false;
+  await f.ctx.fetchTelemetry({ slow: false });
+  assert.equal(f.ctx.telemetryData.flagsView.length, 0);
+  assert.equal(f.ctx.reportHealth.failures(['flags']).length, 0);
+});
+
+test('clearing a filter restores live results and rejects a late filtered result', async () => {
+  const pending = deferred();
+  const f = fixture(async path => path === '/snapshot'
+    ? response({ status: { uptime: 'good' }, flags: [{ id: 'live' }], events: [] })
+    : path.startsWith('/flags?') ? pending.promise : response([]));
+  let filtered = true;
+  f.ctx.isFlagsFiltered = () => filtered;
+  const old = f.ctx.fetchTelemetry({ slow: false });
+  await new Promise(setImmediate);
+  filtered = false;
+  await f.ctx.fetchTelemetry({ slow: false });
+  pending.resolve(response([{ id: 'filtered' }]));
+  await old;
+  assert.equal(f.ctx.telemetryData.flagsView[0].id, 'live');
+  assert.equal(f.ctx.reportHealth.failures(['flags']).length, 0);
+});
+
+
+test('changing a filter after applying a saved view updates the active query', () => {
+  const f = fixture(async () => response([]));
+  let change;
+  const select = { value: 'all', addEventListener: (_event, fn) => { change = fn; } };
+  const queries = [];
+  Object.assign(f.ctx, { window: {}, URLSearchParams, sinceParam: () => '',
+    document: { getElementById: id => id === 'flags-agent' ? select : null },
+    loadViews: () => [{ name: 'saved', flags: { agent: 'claude' } }],
+    syncFilterControls() { select.value = f.ctx.filters.flags.agent; },
+    fetchTelemetry: () => queries.push(f.ctx.flagsQuery()) });
+  vm.runInContext(source('  function flagsQuery()', '  // ---------- saved views ----------') +
+    source('  window.applyView = function(name)', '  window.removeView'), f.ctx);
+  f.ctx.window.applyView('saved');
+  select.value = 'codex';
+  change();
+  assert.match(queries.at(-1), /agent=codex/);
+  assert.equal(f.ctx.filters.flags.agent, 'codex');
 });
