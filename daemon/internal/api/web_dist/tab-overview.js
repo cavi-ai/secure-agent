@@ -964,7 +964,9 @@ function renderEvents() {
   if (chip) SA.paintSessionChip('session-filter', 'session-filter-id', events.length);
 
   if (events.length === 0) {
-    const msg = SA.timelineSession
+    const msg = SA.isEventsFiltered() && SA.t.eventsView === null
+      ? 'Filtered events have not loaded yet.'
+      : SA.timelineSession
       ? `No events for session ${sessionShort(SA.timelineSession)} in the loaded window`
       : (SA.timelinePids && SA.timelinePids.length)
         ? `No events for ${SA.timelinePidLabel || 'this session'} in the loaded window`

@@ -48,7 +48,7 @@ test('a critical individual finding leads a repeated warning card', () => {
   ctx.document = {getElementById: id => id === 'flags-list' ? list : {value: 'all'}};
   ctx.SA = {t: {flags: [], flagsView: [{...flag('urgent'), severity: 3}], patterns: [pattern()], status: {}, audit: []},
     seenAgents: new Set(), seenRules: new Set(), syncSelect: () => {}, globalSearchTerm: () => '',
-    paintSessionChip: () => {}, pendingRetriage: new Set(), expanded: new Set()};
+    paintSessionChip: () => {}, isFlagsFiltered: () => false, pendingRetriage: new Set(), expanded: new Set()};
   ctx.window.SA = ctx.SA;
   ctx.patchList = (_node, rows) => {keys = rows.map(r => r.key)};
   ctx.renderFlags();
@@ -185,4 +185,30 @@ test('patternHTML: the flag list counts flags, not occurrences folded into them'
   const html = patternHTML(pattern({ count: 23, flags: 1 }), Date.parse('2026-09-23T12:00:00Z'), {});
   assert.match(html, /<span class="pattern-meta">23× · /);
   assert.ok(html.includes('<summary>Individual flags (1)</summary>'));
+});
+
+
+test('filtered pattern cards require their whole group to belong to the loaded filtered results', () => {
+  const p = pattern({ flag_ids: ['k1', 'k2'] });
+  assert.equal(patternsInView([p], { filtered: true, flags: [flag('k1')] }).length, 0);
+  assert.equal(patternsInView([p], { filtered: true, flags: [] }).length, 0);
+  assert.equal(patternsInView([p], { filtered: true, flags: [flag('k1'), flag('k2')] }).length, 1);
+});
+
+
+test('a filtered findings view that has not loaded does not claim zero matches or show live patterns', () => {
+  const list = { innerHTML: '' }, badge = { textContent: '' };
+  ctx.document = { getElementById: id => id === 'flags-list' ? list : id === 'badge-flags-count' ? badge : { value: 'all' } };
+  ctx.window.SA = { t: { flags: [flag('k1')], flagsView: null, patterns: [pattern()] },
+    seenAgents: new Set(), seenRules: new Set(), syncSelect() {}, isFlagsFiltered: () => true };
+  ctx.renderFlags();
+  assert.equal(badge.textContent, '—');
+  assert.match(list.innerHTML, /have not loaded yet/);
+  assert.doesNotMatch(list.innerHTML, /No flags|pattern-card/);
+});
+
+test('an optimistic pattern dismissal preserves an unloaded filtered view', () => {
+  const p = pattern({ flag_ids: ['k1'] });
+  const updated = patternAfterOptimisticDismiss({ patterns: [p], flags: [flag('k1')], flagsView: null }, p.key, ['k1']);
+  assert.equal(updated.flagsView, null);
 });

@@ -475,6 +475,10 @@
   //   tokenseed    — pre-seed sessionStorage (simulates a RELOADED tab: no
   //                  #ct fragment, token must come from storage).
   const MODE = location.search;
+  if (MODE.includes('filteredscope')) {
+    data['/flags'].push({ ...data['/flags'][0], id: 'history-broad-only', ts: iso(2 * 3600000) });
+    data['/events'].push({ ...data['/events'][0], ts: iso(2 * 3600000), detail: 'Broad-only history row' });
+  }
   if (MODE.includes('coveragedemo')) {
     Object.assign(data['/posture'], {
       state: 'attention', needs_you: 0, items: [], groups: [],
@@ -967,6 +971,7 @@
   const healthReads = {};
   let healthRecovered = false;
   let malformedRecovered = false;
+  let historyReads = 0, historyRecovered = false;
   let malformedSnapshotReads = 0;
   stamp('fetch-count', '0');
   window.fetch = async (path, opts) => {
@@ -985,6 +990,14 @@
         json: async () => ({ error: 'console token required' }),
         text: async () => '{"error":"console token required"}'
       };
+    }
+    if (MODE.includes('filteredscope') && p === (MODE.includes('historyflags') ? '/flags' : '/events')) {
+      if (historyRecovered) return { ok: true, status: 200, json: async () => [] };
+      if (++historyReads > 1) return { ok: false, status: 503, json: async () => ({}) };
+      const rows = p === '/flags'
+        ? [{ ...data['/flags'][0], id: 'history-filtered-match' }]
+        : [{ ...data['/events'][0], kind: 8, detail: 'Filtered-history match' }];
+      return { ok: true, status: 200, json: async () => rows };
     }
     if (MODE.includes('malformeddemo') && !malformedRecovered && p === '/guard/pending') {
       return { ok: true, status: 200, json: async () => ({ error: 'not a list' }) };
@@ -1177,6 +1190,31 @@
     emit(kind, obj) { (this._listeners[kind] || []).forEach(fn => fn({ data: JSON.stringify(obj) })); }
     close() { clearInterval(this._timer); this.readyState = 2; stamp('sse-state', 'closed'); }
   };
+
+  if (MODE.includes('filteredscope')) {
+    const flags = MODE.includes('historyflags');
+    const select = () => document.getElementById(flags ? 'flags-window' : 'event-window');
+    setTimeout(() => {
+      openTab(flags ? 'findings' : 'events');
+      select().value = '1h';
+      select().dispatchEvent(new Event('change', { bubbles: true }));
+    }, 1000);
+    setTimeout(() => document.getElementById('btn-refresh').click(), 3000);
+    if (MODE.includes('changed')) {
+      setTimeout(() => {
+        select().value = '7d';
+        select().dispatchEvent(new Event('change', { bubbles: true }));
+      }, 6000);
+    }
+    if (MODE.includes('recover')) {
+      setTimeout(() => {
+        stamp('history-before-recovery', document.getElementById(flags ? 'flags-list' : 'events-container').textContent + ' ' +
+          Array.from(document.querySelectorAll('.report-health:not([hidden])')).map(el => el.textContent).join(' '));
+        historyRecovered = true;
+        document.getElementById('btn-refresh').click();
+      }, 6000);
+    }
+  }
 
   if (MODE.includes('malformeddemo')) {
     setTimeout(() => document.getElementById('btn-refresh').click(), 3000);

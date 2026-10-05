@@ -185,6 +185,11 @@ def main():
         dom_refreshrace = dump_dom(chrome, tmp, "?refreshrace")
         dom_health = dump_dom(chrome, tmp, "?healthdemo")
         dom_healthrecover = dump_dom(chrome, tmp, "?healthdemo&recover")
+        dom_historyflags = dump_dom(chrome, tmp, "?filteredscope&historyflags")
+        dom_historyevents = dump_dom(chrome, tmp, "?filteredscope&historyevents")
+        dom_historyflagschanged = dump_dom(chrome, tmp, "?filteredscope&historyflags&changed")
+        dom_historyeventschanged = dump_dom(chrome, tmp, "?filteredscope&historyevents&changed")
+        dom_historyrecover = dump_dom(chrome, tmp, "?filteredscope&historyflags&recover")
         dom_malformed = dump_dom(chrome, tmp, "?malformeddemo")
         dom_malformedrecover = dump_dom(chrome, tmp, "?malformeddemo&recover")
         dom_notoken = dump_dom(chrome, tmp, "?notoken")
@@ -735,6 +740,30 @@ def main():
               and "hidden" in health_notice(dom_healthrecover, "resources")
               and "hidden" in health_notice(dom_healthrecover, "audit")
               and "Stale" not in health_notice(dom_healthrecover, "resources"))
+
+        def history_content(dom, flags):
+            anchor = 'id="flags-list"' if flags else 'id="events-container"'
+            return dom.split(anchor, 1)[1].split('</section>', 1)[0]
+        for flags, retained, changed in ((True, dom_historyflags, dom_historyflagschanged),
+                                          (False, dom_historyevents, dom_historyeventschanged)):
+            name = 'findings' if flags else 'events'
+            marker = 'history-filtered-match' if flags else 'Filtered-history match'
+            keys = 'snapshot|flags' if flags else 'snapshot|events'
+            check(f"failed filtered {name} refresh preserves matching rows and warns stale",
+                  marker in history_content(retained, flags)
+                  and 'history-broad-only' not in history_content(retained, flags)
+                  and 'Broad-only history row' not in history_content(retained, flags)
+                  and 'Stale' in health_notice(retained, keys))
+            check(f"changed {name} filters show unavailable results without leaking old or live rows",
+                  marker not in history_content(changed, flags)
+                  and 'history-broad-only' not in history_content(changed, flags)
+                  and 'Broad-only history row' not in history_content(changed, flags)
+                  and 'have not loaded yet' in history_content(changed, flags)
+                  and 'Unavailable' in health_notice(changed, keys))
+        check("empty filtered findings recover successfully and clear the stale warning",
+              'Stale' in pre(dom_historyrecover, 'history-before-recovery')
+              and 'No flags match the current filter' in history_content(dom_historyrecover, True)
+              and 'hidden' in health_notice(dom_historyrecover, 'snapshot|flags'))
 
         hot_health = health_notice(dom_malformed, "snapshot|guard decisions")
         check("malformed snapshot and guard containers retain last-good metrics with persistent warnings",

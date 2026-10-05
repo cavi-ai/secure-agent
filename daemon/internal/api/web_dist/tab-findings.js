@@ -272,6 +272,12 @@ function renderFlags() {
   SA.syncSelect('flags-agent', SA.seenAgents);
   SA.syncSelect('flags-rule', SA.seenRules);
 
+  if (SA.isFlagsFiltered() && SA.t.flagsView === null) {
+    badge.textContent = '—';
+    container.innerHTML = '<div class="loading">Filtered findings have not loaded yet.</div>';
+    return;
+  }
+
   // A covered flag appears only in its pattern; urgency orders both forms.
   const selected = id => {
     const v = (document.getElementById(id) || {}).value || 'all';
@@ -280,7 +286,7 @@ function renderFlags() {
   const scopedFlags = scopedBySession(SA.t.flagsView || [], SA.timelineSession, SA.timelinePids);
   const patterns = patternsInView(allPatterns, {
     term: SA.globalSearchTerm(), agent: selected('flags-agent'), rule: selected('flags-rule'),
-    session: SA.timelineSession, pids: SA.timelinePids, flags: scopedFlags,
+    session: SA.timelineSession, pids: SA.timelinePids, flags: scopedFlags, filtered: SA.isFlagsFiltered(),
   });
   const flags = uncoveredFlags(scopedFlags
     .filter(f => matchesSearch(SA.globalSearchTerm(), f.agent, f.rule, f.evidence, f.sessionId, f.workspace)), patterns);
@@ -467,6 +473,7 @@ function patternsInView(patterns, opts) {
   const scoped = new Set((o.flags || []).map(f => f.id));
   const coversScoped = p => (p.flag_ids || []).some(id => scoped.has(id));
   return (patterns || []).filter(p => {
+    if (o.filtered && (!(p.flag_ids || []).length || !(p.flag_ids || []).every(id => scoped.has(id)))) return false;
     if (o.agent && p.agent !== o.agent) return false;
     if (o.rule && p.rule !== o.rule) return false;
     if (o.session) {
@@ -498,7 +505,7 @@ function patternAfterOptimisticDismiss(t, key, submitted) {
   return {
     patterns: (t.patterns || []).map(x => x.key === key ? updated : x),
     flags: (t.flags || []).filter(f => !ids.has(f.id)),
-    flagsView: (t.flagsView || []).filter(f => !ids.has(f.id)),
+    flagsView: t.flagsView === null ? null : (t.flagsView || []).filter(f => !ids.has(f.id)),
     posture: mapPostureAttention(t.posture, it => ((it.kind === 'flag' && ids.has(it.id))
       || (it.kind === 'pattern' && it.id === key && updated.dismissed)) ? null : it),
   };
