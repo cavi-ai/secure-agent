@@ -307,6 +307,9 @@ document.addEventListener('DOMContentLoaded', () => {
   let connState = 'ok';
   let sessionEnded = false;
   let liveUpdates = null;
+  // Fast refreshes supersede fast state without starving slower reports.
+  let telemetryFetchGen = 0;
+  let telemetrySlowGen = 0;
   let prevUptimeSec = 0;
   // Endpoints that failed in the last cycle — each failure surfaces ONCE as a
   // toast so a dying endpoint can't silently blank its panel.
@@ -1575,90 +1578,116 @@ document.addEventListener('DOMContentLoaded', () => {
     // endpoint NEVER overwrites the panel's last good data.
     if (sessionEnded) return;
     const slow = !opts || opts.slow !== false;
-    const grab = async (key, path) => {
+    const gen = ++telemetryFetchGen;
+    const slowGen = slow ? ++telemetrySlowGen : 0;
+    const current = () => !sessionEnded && gen === telemetryFetchGen;
+    const currentSlow = () => !sessionEnded && slow && slowGen === telemetrySlowGen;
+    let changedSlow = false;
+    let changedResources = false;
+    const obsolete = () => {
+      if (current()) return false;
+      if (!sessionEnded && changedSlow) {
+        markDirty(...PANELS.map(p => p[0]).filter(n => SLOW_ONLY.has(n)));
+        if (changedResources) fillFamilyDrawer();
+      }
+      return true;
+    };
+    const grab = async (key, path, ownsResult = current) => {
       if (sessionEnded) return null;
       try {
         const r = await apiFetch(path);
         if (sessionEnded) return null;
         if (r.status === 403) { endSession(); return null; }
+        if (!ownsResult()) return null;
         if (!r.ok) { noteEndpointFailure(key); return null; }
         failedEndpoints.delete(key);
-        return await r.json();
+        const value = await r.json();
+        return ownsResult() ? value : null;
       } catch { return null; } // network error, timeout, or corrupt JSON
     };
 
     if (slow) loadSpend(); // beside this cycle: its reports never hold the first render
     const requests = [grab('snapshot', '/snapshot'), grab('guard decisions', '/guard/pending')];
-    if (slow) requests.push(grab('resources', '/resources'));
+    if (slow) requests.push(grab('resources', '/resources', currentSlow));
     const [snap, guardPending, resources] = await Promise.all(requests);
     if (sessionEnded) return;
-    if (guardPending) telemetryData.guardPending = guardPending || [];
-    if (resources) telemetryData.resources = resources;
-    if (snap) {
-      const status = snap.status;
-      if (status) {
-        const up = parseUptimeSec(status.uptime);
-        if (prevUptimeSec > 0 && up < prevUptimeSec - 5) {
-          showToast('Daemon restarted — reconnected to the new instance', 'info');
-          prevEventKeys = new Set();
-          firstEventRender = true;
+    if (resources && currentSlow()) {
+      telemetryData.resources = resources;
+      changedResources = changedSlow = true;
+    }
+    if (current()) {
+      if (guardPending) telemetryData.guardPending = guardPending || [];
+      if (snap) {
+        const status = snap.status;
+        if (status) {
+          const up = parseUptimeSec(status.uptime);
+          if (prevUptimeSec > 0 && up < prevUptimeSec - 5) {
+            showToast('Daemon restarted — reconnected to the new instance', 'info');
+            prevEventKeys = new Set();
+            firstEventRender = true;
+          }
+          prevUptimeSec = up;
+          telemetryData.status = status;
         }
-        prevUptimeSec = up;
-        telemetryData.status = status;
+        if (snap.flags) telemetryData.flags = (snap.flags || []).filter(f => !f.acknowledged);
+        if (snap.patterns) telemetryData.patterns = snap.patterns || [];
+        if (snap.incidents) telemetryData.incidents = snap.incidents || [];
+        if (snap.events) telemetryData.events = snap.events || [];
+        if (snap.posture) telemetryData.posture = snap.posture;
+        if (snap.suggestions) telemetryData.suggestions = snap.suggestions || [];
+        if (snap.mutes) telemetryData.mutes = snap.mutes || [];
+        if (snap.sessions) telemetryData.sessions = snap.sessions || [];
       }
-      if (snap.flags) telemetryData.flags = (snap.flags || []).filter(f => !f.acknowledged);
-      if (snap.patterns) telemetryData.patterns = snap.patterns || [];
-      if (snap.incidents) telemetryData.incidents = snap.incidents || [];
-      if (snap.events) telemetryData.events = snap.events || [];
-      if (snap.posture) telemetryData.posture = snap.posture;
-      if (snap.suggestions) telemetryData.suggestions = snap.suggestions || [];
-      if (snap.mutes) telemetryData.mutes = snap.mutes || [];
-      if (snap.sessions) telemetryData.sessions = snap.sessions || [];
     }
 
-    if (slow) {
+    if (currentSlow()) {
+      const grabSlow = (key, path) => grab(key, path, currentSlow);
       const [fleet, audit, sources, rollup, uninspected, notifyCfg, allowlist, episodes, egressEpisodes, expectedEgress] = await Promise.all([
-        grab('fleet', '/fleet'),
-        grab('audit', '/audit?limit=50'),
-        grab('firewall sources', '/firewall/sources'),
-        grab('activity rollup', '/stats/rollup?hours=168'),
-        grab('uninspected egress', '/egress/uninspected?hours=24&limit=200'),
-        grab('notification rules', '/notify/rules'),
-        grab('allowlist', '/allowlist'),
-        grab('resource episodes', '/resources/episodes'),
-        grab('recurring egress', '/egress/episodes'),
-        grab('expected egress', '/expected-egress')
+        grabSlow('fleet', '/fleet'),
+        grabSlow('audit', '/audit?limit=50'),
+        grabSlow('firewall sources', '/firewall/sources'),
+        grabSlow('activity rollup', '/stats/rollup?hours=168'),
+        grabSlow('uninspected egress', '/egress/uninspected?hours=24&limit=200'),
+        grabSlow('notification rules', '/notify/rules'),
+        grabSlow('allowlist', '/allowlist'),
+        grabSlow('resource episodes', '/resources/episodes'),
+        grabSlow('recurring egress', '/egress/episodes'),
+        grabSlow('expected egress', '/expected-egress')
       ]);
       if (sessionEnded) return;
-      if (fleet) telemetryData.fleet = fleet || [];
-      if (audit) telemetryData.audit = audit || [];
-      if (sources) telemetryData.sources = sources || [];
-      if (rollup) telemetryData.rollup = rollup || [];
-      if (uninspected) telemetryData.uninspected = uninspected || [];
-      if (episodes) telemetryData.episodes = episodes || [];
-      if (egressEpisodes) telemetryData.egressEpisodes = egressEpisodes.episodes || [];
-      if (expectedEgress) telemetryData.expectedEgress = expectedEgress.rules || [];
-      if (notifyCfg) {
-        // A reconcile while the operator is typing a workspace path must not
-        // dirty (and re-render) the notify panel unless the served config
-        // actually changed — a stable hash, not the poll cadence, decides.
-        const h = JSON.stringify(notifyCfg);
-        if (h !== notifyCfgHash) { notifyCfgHash = h; telemetryData.notifyCfg = notifyCfg; markDirty('notify'); }
+      if (currentSlow()) {
+        changedSlow = true;
+        if (fleet) telemetryData.fleet = fleet || [];
+        if (audit) telemetryData.audit = audit || [];
+        if (sources) telemetryData.sources = sources || [];
+        if (rollup) telemetryData.rollup = rollup || [];
+        if (uninspected) telemetryData.uninspected = uninspected || [];
+        if (episodes) telemetryData.episodes = episodes || [];
+        if (egressEpisodes) telemetryData.egressEpisodes = egressEpisodes.episodes || [];
+        if (expectedEgress) telemetryData.expectedEgress = expectedEgress.rules || [];
+        if (notifyCfg) {
+          // A reconcile while the operator is typing a workspace path must not
+          // dirty (and re-render) the notify panel unless the served config
+          // actually changed — a stable hash, not the poll cadence, decides.
+          const h = JSON.stringify(notifyCfg);
+          if (h !== notifyCfgHash) { notifyCfgHash = h; telemetryData.notifyCfg = notifyCfg; markDirty('notify'); }
+        }
+        if (allowlist) telemetryData.allowlist = allowlist || [];
       }
-      if (allowlist) telemetryData.allowlist = allowlist || [];
     }
 
+    if (obsolete()) return;
     telemetryData.flagsView = telemetryData.flags;
     telemetryData.eventsView = telemetryData.events;
     sparkIngestEvents(telemetryData.events);
     if (isFlagsFiltered()) {
       const v = await grab('flags', flagsQuery());
-      if (sessionEnded) return;
+      if (obsolete()) return;
       if (v) telemetryData.flagsView = (v || []).filter(f => !f.acknowledged);
     }
     if (isEventsFiltered()) {
       const v = await grab('events', eventsQuery());
-      if (sessionEnded) return;
+      if (obsolete()) return;
       if (v) telemetryData.eventsView = v || [];
     }
 

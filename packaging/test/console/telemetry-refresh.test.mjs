@@ -22,6 +22,7 @@ function fixture(fetch) {
   let stops = 0, ended = 0;
   const ctx = {
     sessionEnded: false, SS_TOKEN_KEY: 'fixture',
+    telemetryFetchGen: 0, telemetrySlowGen: 0,
     sessionStorage: { removeItem() {} },
     liveUpdates: { stop: () => stops++ }, sparkTimer: 1,
     clearInterval() {}, clearTimeout() {},
@@ -35,7 +36,7 @@ function fixture(fetch) {
     isFlagsFiltered: () => false, isEventsFiltered: () => false,
     flagsQuery: () => '/flags?fixture', eventsQuery: () => '/events?fixture',
     setConnState: state => connections.push(state),
-    booted: true, PANELS: [['flags'], ['notify']], SLOW_ONLY: new Set(), notifyCfgHash: '',
+    booted: true, PANELS: [['flags'], ['notify'], ['resources'], ['audit']], SLOW_ONLY: new Set(['resources', 'audit']), notifyCfgHash: '',
     markDirty: (...panels) => renders.push(panels), renderAll: () => renders.push('all'),
     fillFamilyDrawer() {}, renderNow: panels => renders.push(panels),
     spendGen: 0, spendPollTimer: 2, spendPolls: 0, SPEND_POLLS: 30, SPEND_POLL_MS: 2000,
@@ -149,4 +150,96 @@ test('ordinary endpoint failure retains prior data without ending the session', 
   assert.equal(f.ctx.telemetryData.guardPending[0].id, 'prior');
   assert.deepEqual(f.failures, ['guard decisions']);
   assert.deepEqual(f.connections, ['ok']);
+});
+
+test('an older full refresh cannot replace fast state but still supplies its slow reports', async () => {
+  const oldSnapshot = deferred(), oldResources = deferred();
+  let snapshotReads = 0, guardReads = 0;
+  const f = fixture(path => {
+    if (path === '/snapshot') return ++snapshotReads === 1 ? oldSnapshot.promise : Promise.resolve(snapshot());
+    if (path === '/guard/pending') return Promise.resolve(response([{ id: ++guardReads === 1 ? 'old' : 'new' }]));
+    if (path === '/resources') return oldResources.promise;
+    return Promise.resolve(response(path.startsWith('/audit?') ? [{ id: 'slow-report' }] : []));
+  });
+  const old = f.ctx.fetchTelemetry();
+  await f.ctx.fetchTelemetry({ slow: false });
+  assert.equal(f.ctx.telemetryData.status.uptime, 'new', 'fast guard refresh cannot wait for resources');
+  oldSnapshot.resolve(response({ status: { uptime: 'old' }, flags: [{ id: 'old' }], events: [] }));
+  oldResources.resolve(response({ host: { state: 'fresh-slow' } }));
+  await old;
+  assert.equal(f.ctx.telemetryData.status.uptime, 'new');
+  assert.equal(f.ctx.telemetryData.guardPending[0].id, 'new');
+  assert.equal(f.ctx.telemetryData.flags.length, 0);
+  assert.equal(f.ctx.telemetryData.resources.host.state, 'fresh-slow');
+  assert.equal(f.ctx.telemetryData.audit[0].id, 'slow-report');
+  assert.deepEqual(f.connections, ['ok']);
+  assert.ok(f.renders.some(panels => panels.includes('resources') && panels.includes('audit')));
+});
+
+test('a newer full refresh owns slow reports even when an old report arrives last', async () => {
+  const oldAudit = deferred(), auditStarted = deferred();
+  let auditReads = 0;
+  const f = fixture(path => {
+    if (path === '/snapshot') return Promise.resolve(snapshot());
+    if (path.startsWith('/audit?')) {
+      if (++auditReads === 1) { auditStarted.resolve(); return oldAudit.promise; }
+      return Promise.resolve(response([{ id: 'new' }]));
+    }
+    return Promise.resolve(response([]));
+  });
+  const old = f.ctx.fetchTelemetry();
+  await auditStarted.promise;
+  await f.ctx.fetchTelemetry();
+  oldAudit.resolve(response([{ id: 'old' }]));
+  await old;
+  assert.equal(f.ctx.telemetryData.audit[0].id, 'new');
+});
+
+test('filtered results from an older refresh cannot replace the current history', async () => {
+  const oldFlags = deferred(), flagsStarted = deferred();
+  let flagReads = 0;
+  const f = fixture(path => {
+    if (path === '/snapshot') return Promise.resolve(snapshot());
+    if (path.startsWith('/flags?')) {
+      if (++flagReads === 1) { flagsStarted.resolve(); return oldFlags.promise; }
+      return Promise.resolve(response([{ id: 'new' }]));
+    }
+    return Promise.resolve(response([]));
+  });
+  f.ctx.isFlagsFiltered = () => true;
+  const old = f.ctx.fetchTelemetry({ slow: false });
+  await flagsStarted.promise;
+  await f.ctx.fetchTelemetry({ slow: false });
+  oldFlags.resolve(response([{ id: 'old' }]));
+  await old;
+  assert.equal(f.ctx.telemetryData.flagsView[0].id, 'new');
+});
+
+test('an obsolete endpoint error cannot replace a newer successful connection', async () => {
+  const oldSnapshot = deferred();
+  let snapshots = 0;
+  const f = fixture(path => path === '/snapshot'
+    ? (++snapshots === 1 ? oldSnapshot.promise : Promise.resolve(snapshot()))
+    : Promise.resolve(response([])));
+  const old = f.ctx.fetchTelemetry({ slow: false });
+  await f.ctx.fetchTelemetry({ slow: false });
+  oldSnapshot.resolve(response(null, 503));
+  await old;
+  assert.equal(f.ctx.telemetryData.connected, true);
+  assert.deepEqual(f.connections, ['ok']);
+  assert.deepEqual(f.failures, []);
+});
+
+test('authentication rejection from an obsolete refresh remains terminal', async () => {
+  const oldSnapshot = deferred();
+  let snapshots = 0;
+  const f = fixture(path => path === '/snapshot'
+    ? (++snapshots === 1 ? oldSnapshot.promise : Promise.resolve(snapshot()))
+    : Promise.resolve(response([])));
+  const old = f.ctx.fetchTelemetry({ slow: false });
+  await f.ctx.fetchTelemetry({ slow: false });
+  oldSnapshot.resolve(response(null, 403));
+  await old;
+  assert.equal(f.ctx.sessionEnded, true);
+  assert.equal(f.stops(), 1);
 });
