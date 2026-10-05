@@ -123,6 +123,9 @@ unchanged enrichment payload or a concurrent update does not clear a write fault
 Incident aggregation reports a separate write fault and emits an updated report
 only after persistence succeeds. Malformed saved evidence is left unchanged;
 missing rows and updates that change no row do not clear an active fault.
+New incidents enter the live feed, fleet delivery, and advisor queue only after
+their insertion succeeds. Insertion and serialization failures still refresh
+posture through the evidence-health tracker while flag collection continues.
 
 Per-harness coverage joins recent hook and trace events to their persisted
 session IDs. It lists only active, non-infrastructure harnesses and separates

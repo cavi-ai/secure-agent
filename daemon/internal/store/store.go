@@ -1590,14 +1590,21 @@ func nullFloat(f float64) any {
 	return f
 }
 
-func (s *Store) PutIncident(inc model.IncidentReport) {
+// PutIncident returns nil only after the report is persisted. Retention pruning
+// remains best-effort and does not invalidate a successful insertion.
+func (s *Store) PutIncident(inc model.IncidentReport) (writeErr error) {
+	defer func() {
+		s.noteWrite("incidents", writeErr)
+		if writeErr != nil {
+			log.Printf("store: failed to persist incident %s: %v", inc.ID, writeErr)
+		}
+	}()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	data, err := json.Marshal(inc)
 	if err != nil {
-		log.Printf("store: failed to marshal incident %s: %v", inc.ID, err)
-		return
+		return fmt.Errorf("marshal incident: %w", err)
 	}
 
 	tsStr := inc.Timestamp.UTC().Format(time.RFC3339Nano)
@@ -1606,14 +1613,20 @@ func (s *Store) PutIncident(inc model.IncidentReport) {
 		count = 1
 	}
 	flagIDs, _ := json.Marshal([]string{inc.FlagID})
-	_, err = s.db.Exec(
+	result, err := s.db.Exec(
 		`INSERT OR REPLACE INTO incidents (id, flag_id, pid, risk, report_json, created_at, rule, session_id, subject, aggregate_count, last_flag_at, flag_ids) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		inc.ID, inc.FlagID, inc.PID, string(inc.Risk), string(data), tsStr,
 		inc.Rule, inc.SessionID, inc.Subject, count, tsStr, string(flagIDs),
 	)
-	s.noteWrite("incidents", err)
 	if err != nil {
-		log.Printf("store: failed to insert incident %s: %v", inc.ID, err)
+		return fmt.Errorf("insert incident: %w", err)
+	}
+	inserted, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("incident rows affected: %w", err)
+	}
+	if inserted != 1 {
+		return fmt.Errorf("incident insert affected %d rows", inserted)
 	}
 
 	// Retention: a flag storm inserts a full report_json per incident; cap the
@@ -1621,6 +1634,7 @@ func (s *Store) PutIncident(inc model.IncidentReport) {
 	// Order by the normalized instant, not raw text: local-offset stamps sort
 	// wrong lexicographically across a DST change.
 	_, _ = s.db.Exec(`DELETE FROM incidents WHERE id NOT IN (SELECT id FROM incidents ORDER BY datetime(created_at) DESC, created_at DESC LIMIT ?)`, maxIncidents)
+	return nil
 }
 
 func (s *Store) GetIncident(id string) (*model.IncidentReport, error) {

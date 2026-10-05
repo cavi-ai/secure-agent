@@ -9,6 +9,56 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 )
 
+func TestIncidentCreationMarshalFailureIsTracked(t *testing.T) {
+	s, err := Open("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if err := s.PutIncident(model.IncidentReport{ID: "invalid", Timestamp: time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC)}); err == nil {
+		t.Fatal("invalid incident reported persistence success")
+	}
+	h := s.WriteHealth()
+	if h.Failures != 1 || !slices.Equal(h.Active, []string{"incidents"}) {
+		t.Fatalf("incident serialization failure hidden: %+v", h)
+	}
+	if got := s.RecentIncidents(10); len(got) != 0 {
+		t.Fatalf("invalid incident was persisted: %+v", got)
+	}
+}
+
+func TestIncidentCreationRejectsZeroRowInsert(t *testing.T) {
+	s, err := Open("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if _, err := s.db.Exec(`CREATE TRIGGER skip_incident BEFORE INSERT ON incidents BEGIN SELECT RAISE(IGNORE); END`); err != nil {
+		t.Fatal(err)
+	}
+	incident := model.IncidentReport{ID: "incident", Timestamp: time.Now()}
+	if err := s.PutIncident(incident); err == nil {
+		t.Fatal("zero-row insert reported persistence success")
+	}
+	h := s.WriteHealth()
+	if h.Failures != 1 || !slices.Equal(h.Active, []string{"incidents"}) {
+		t.Fatalf("zero-row incident failure hidden: %+v", h)
+	}
+	if got := s.RecentIncidents(10); len(got) != 0 {
+		t.Fatalf("rejected incident was persisted: %+v", got)
+	}
+	if _, err := s.db.Exec("DROP TRIGGER skip_incident"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutIncident(incident); err != nil {
+		t.Fatal(err)
+	}
+	h = s.WriteHealth()
+	if h.Failures != 1 || len(h.Active) != 0 {
+		t.Fatalf("recovery lost failure history or retained fault: %+v", h)
+	}
+}
+
 func TestIncidentAggregationFailureAndRecovery(t *testing.T) {
 	s, err := Open(filepath.Join(t.TempDir(), "events.db"), "")
 	if err != nil {
