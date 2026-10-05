@@ -116,6 +116,7 @@ successful write of the same operation; cumulative failures and bus delivery
 loss remain coverage gaps for that daemon run because the missing evidence
 cannot be reconstructed. The mirror retries opening on the next flag after
 a failure, without a retry loop or blocking collectors.
+Rotation keeps the previous archive if renaming the active file fails.
 
 Per-harness coverage joins recent hook and trace events to their persisted
 session IDs. It lists only active, non-infrastructure harnesses and separates

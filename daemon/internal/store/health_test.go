@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"slices"
@@ -127,5 +128,53 @@ func TestFlagMirrorRotationFailureKeepsDatabaseAndRecovers(t *testing.T) {
 	assertMirrorIDs(t, path+".1", "before")
 	if got := s.RecentFlags(10); len(got) != 3 {
 		t.Fatalf("database lost flags across mirror recovery: %+v", got)
+	}
+}
+
+func TestFlagMirrorRotationFailurePreservesPreviousArchive(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "e.jsonl")
+	s, err := Open(filepath.Join(dir, "e.db"), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	s.flagMirror.rotateBytes = 1
+	s.PutFlag(model.Flag{ID: "archived", TS: time.Now()})
+	s.PutFlag(model.Flag{ID: "active", TS: time.Now()})
+	prior, err := os.ReadFile(path + ".1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Another process moves the active path while the mirror still holds its
+	// descriptor. The next rotation must fail without deleting the archive.
+	if err := os.Rename(path, path+".external"); err != nil {
+		t.Fatal(err)
+	}
+	s.PutFlag(model.Flag{ID: "during", TS: time.Now()})
+	h := s.WriteHealth()
+	if h.Failures != 1 || !slices.Equal(h.Active, []string{"flag mirror"}) {
+		t.Fatalf("rotation failure hidden: %+v", h)
+	}
+	retained, err := os.ReadFile(path + ".1")
+	if err != nil {
+		t.Fatalf("failed rotation lost the previous archive: %v", err)
+	}
+	if !bytes.Equal(retained, prior) {
+		t.Fatal("failed rotation changed the previous archive")
+	}
+	assertMirrorIDs(t, path+".external", "active")
+	if got := s.RecentFlags(10); len(got) != 3 {
+		t.Fatalf("rotation failure stopped database writes: %+v", got)
+	}
+	s.PutFlag(model.Flag{ID: "after", TS: time.Now()})
+	h = s.WriteHealth()
+	if h.Failures != 1 || len(h.Active) != 0 {
+		t.Fatalf("reopening did not clear only the active fault: %+v", h)
+	}
+	assertMirrorIDs(t, path, "after")
+	assertMirrorIDs(t, path+".1", "archived")
+	if got := s.RecentFlags(10); len(got) != 4 {
+		t.Fatalf("database lost flags across recovery: %+v", got)
 	}
 }
