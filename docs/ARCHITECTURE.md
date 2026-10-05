@@ -109,14 +109,17 @@ The app bundle has one identity, `com.cavi-ai.secure-agent`, for Launch Services
 - **Store Engine (`daemon/internal/store/store.go`)**: Dual-persists events and correlation flags to SQLite (`events.db`) and structured JSONL logs (`events.jsonl`). Implements automatic retention pruning.
 
 Core evidence writes (events, flags, incidents, guard decisions, sessions,
-operator audit, and the flag JSONL mirror) report fixed operation labels to
-an in-memory health tracker with a mutex independent of database IO. Status,
+resource episodes, episode enrichment, operator audit, and the flag JSONL mirror)
+report fixed operation labels to an in-memory health tracker with a mutex
+independent of database IO. Status,
 posture, and Doctor consume the same snapshot. Active faults clear on a
 successful write of the same operation; cumulative failures and bus delivery
 loss remain coverage gaps for that daemon run because the missing evidence
 cannot be reconstructed. The mirror retries opening on the next flag after
 a failure, without a retry loop or blocking collectors.
 Rotation keeps the previous archive if renaming the active file fails.
+Resource episode inserts and enrichment updates recover independently; an
+unchanged enrichment payload or a concurrent update does not clear a write fault.
 
 Per-harness coverage joins recent hook and trace events to their persisted
 session IDs. It lists only active, non-infrastructure harnesses and separates
