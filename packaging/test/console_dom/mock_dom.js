@@ -964,6 +964,8 @@
   // Every fetch the console issues is counted on <pre id="fetch-count">.
   let fetchCount = 0;
   let snapshotReads = 0;
+  const healthReads = {};
+  let healthRecovered = false;
   stamp('fetch-count', '0');
   window.fetch = async (path, opts) => {
     fetchCount++;
@@ -980,6 +982,14 @@
         ok: false, status: 403,
         json: async () => ({ error: 'console token required' }),
         text: async () => '{"error":"console token required"}'
+      };
+    }
+    if (MODE.includes('healthdemo') && !healthRecovered) {
+      const read = healthReads[p] = (healthReads[p] || 0) + 1;
+      if (p === '/audit') return { ok: false, status: 503, json: async () => ({}) };
+      if (read > 1 && p === '/resources') throw new TypeError('Failed to fetch');
+      if (read > 1 && p === '/guard/pending') return {
+        ok: true, status: 200, json: async () => { throw new SyntaxError('Invalid JSON'); }
       };
     }
     if (opts && opts.method && opts.method !== 'GET') {
@@ -1156,6 +1166,18 @@
     emit(kind, obj) { (this._listeners[kind] || []).forEach(fn => fn({ data: JSON.stringify(obj) })); }
     close() { clearInterval(this._timer); this.readyState = 2; stamp('sse-state', 'closed'); }
   };
+
+  if (MODE.includes('healthdemo')) {
+    setTimeout(() => document.getElementById('btn-refresh').click(), 3000);
+    if (MODE.includes('recover')) {
+      setTimeout(() => {
+        stamp('health-before-recovery', Array.from(document.querySelectorAll('.report-health:not([hidden])')).map(el => el.textContent).join(' '));
+        healthRecovered = true;
+        document.getElementById('btn-refresh').click();
+      }, 6000);
+    }
+    setTimeout(() => openTab('resources'), 7000);
+  }
 
   if (MODE.includes('refreshrace')) {
     setTimeout(() => document.getElementById('btn-refresh').click(), 1000);

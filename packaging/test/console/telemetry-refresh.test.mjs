@@ -32,7 +32,7 @@ function fixture(fetch) {
     telemetryData: { status: { uptime: 'prior' }, flags: [], events: [], guardPending: [{ id: 'prior' }], costs: { refreshing: true } },
     failedEndpoints: new Set(), noteEndpointFailure: key => failures.push(key),
     prevUptimeSec: 0, parseUptimeSec: () => 1, showToast() {},
-    loadSpend() {}, sparkIngestEvents() {}, reconcileRetriage() {},
+    renderReportHealth() {}, loadSpend() {}, sparkIngestEvents() {}, reconcileRetriage() {},
     isFlagsFiltered: () => false, isEventsFiltered: () => false,
     flagsQuery: () => '/flags?fixture', eventsQuery: () => '/events?fixture',
     setConnState: state => connections.push(state),
@@ -43,7 +43,10 @@ function fixture(fetch) {
     spendCardPath: () => '/costs?card'
   };
   vm.createContext(ctx);
+  vm.runInContext(readFileSync(new URL('../../../daemon/internal/api/web_dist/report-health.js', import.meta.url), 'utf8'), ctx);
+  ctx.reportHealth = ctx.createConsoleReportHealth();
   vm.runInContext(source('  function endSession()', '  function setConnState(') +
+    source('  function reportSucceeded(', '  // parseUptimeSec reads') +
     source('  async function fetchTelemetry(', '  // Every panel is a candidate:'), ctx);
   return { ctx, requests, renders, connections, failures, retries, stops: () => stops, ended: () => ended };
 }
@@ -242,4 +245,119 @@ test('authentication rejection from an obsolete refresh remains terminal', async
   await old;
   assert.equal(f.ctx.sessionEnded, true);
   assert.equal(f.stops(), 1);
+});
+
+
+test('guard request failure is visible without discarding last-good decisions', async () => {
+  let fail = false;
+  const f = fixture(async path => {
+    if (path === '/snapshot') return snapshot();
+    if (fail) throw new Error('timeout');
+    return response([{ id: 'saved' }]);
+  });
+  await f.ctx.fetchTelemetry({ slow: false });
+  fail = true;
+  await f.ctx.fetchTelemetry({ slow: false });
+  assert.equal(f.ctx.telemetryData.guardPending[0].id, 'saved');
+  assert.equal(f.ctx.reportHealth.failures(['guard decisions'])[0].state, 'stale');
+  assert.equal(f.ctx.telemetryData.connected, true);
+});
+
+test('first-load failure is unavailable and only valid JSON clears it', async () => {
+  let mode = 'http';
+  const f = fixture(async path => {
+    if (path === '/snapshot') return snapshot();
+    if (mode === 'http') return response(null, 503);
+    if (mode === 'invalid') return { status: 200, ok: true, json: async () => { throw new SyntaxError('bad JSON'); } };
+    if (mode === 'null') return response(null);
+    return response([]);
+  });
+  await f.ctx.fetchTelemetry({ slow: false });
+  assert.equal(f.ctx.reportHealth.failures(['guard decisions'])[0].state, 'unavailable');
+  mode = 'invalid';
+  await f.ctx.fetchTelemetry({ slow: false });
+  assert.equal(f.ctx.reportHealth.failures(['guard decisions'])[0].state, 'unavailable');
+  mode = 'null';
+  await f.ctx.fetchTelemetry({ slow: false });
+  assert.equal(f.ctx.reportHealth.failures(['guard decisions']).length, 1);
+  mode = 'good';
+  await f.ctx.fetchTelemetry({ slow: false });
+  assert.equal(f.ctx.reportHealth.failures(['guard decisions']).length, 0);
+  assert.equal(f.ctx.telemetryData.guardPending.length, 0);
+});
+
+test('late obsolete failures cannot make a newer successful report stale', async () => {
+  const oldGuard = deferred();
+  let guards = 0;
+  const f = fixture(async path => path === '/snapshot' ? snapshot()
+    : (++guards === 1 ? oldGuard.promise : response([])));
+  const old = f.ctx.fetchTelemetry({ slow: false });
+  await f.ctx.fetchTelemetry({ slow: false });
+  oldGuard.resolve(response(null, 503));
+  await old;
+  assert.equal(f.ctx.reportHealth.failures(['guard decisions']).length, 0);
+});
+
+test('obsolete success cannot clear the current failure', async () => {
+  const oldGuard = deferred();
+  let guards = 0;
+  const f = fixture(async path => path === '/snapshot' ? snapshot()
+    : (++guards === 1 ? oldGuard.promise : response(null, 503)));
+  const old = f.ctx.fetchTelemetry({ slow: false });
+  await f.ctx.fetchTelemetry({ slow: false });
+  oldGuard.resolve(response([]));
+  await old;
+  assert.equal(f.ctx.reportHealth.failures(['guard decisions'])[0].state, 'unavailable');
+});
+
+test('slow report failure remains visible through a healthy fast refresh', async () => {
+  const f = fixture(async path => path === '/snapshot' ? snapshot()
+    : path.startsWith('/audit?') ? response(null, 503) : response([]));
+  await f.ctx.fetchTelemetry();
+  await f.ctx.fetchTelemetry({ slow: false });
+  assert.equal(f.ctx.reportHealth.failures(['audit'])[0].state, 'unavailable');
+  assert.equal(f.ctx.telemetryData.connected, true);
+});
+
+
+test('a failed refresh preserves the last-success timestamp in its notice', async () => {
+  let clock = 100, fail = false;
+  const f = fixture(async path => path === '/snapshot' ? snapshot()
+    : fail ? response(null, 503) : response([]));
+  f.ctx.reportHealth = f.ctx.createConsoleReportHealth({ now: () => clock });
+  await f.ctx.fetchTelemetry({ slow: false });
+  fail = true;
+  clock = 200;
+  await f.ctx.fetchTelemetry({ slow: false });
+  const failures = f.ctx.reportHealth.failures(['guard decisions']);
+  assert.equal(failures[0].lastSuccessAt, 100);
+  assert.match(f.ctx.consoleReportHealthText(failures, ms => `time-${ms}`), /Stale.*time-100.*HTTP 503/);
+});
+
+test('an obsolete spend response cannot clear a newer spend failure', async () => {
+  const old = deferred();
+  let cardReads = 0;
+  const f = fixture(async path => path === '/costs?card'
+    ? (++cardReads === 1 ? old.promise : response(null, 503)) : response({}));
+  enableSpend(f);
+  const first = f.ctx.loadSpend(false);
+  await f.ctx.loadSpend(false);
+  old.resolve(response({ total: { cost_usd: 100 } }));
+  await first;
+  assert.equal(f.ctx.reportHealth.failures(['spend card'])[0].state, 'unavailable');
+  assert.equal(f.ctx.telemetryData.costsCard, undefined);
+});
+
+
+test('a failed new spend view is unavailable instead of claiming old-view data is retained', async () => {
+  const f = fixture(async () => response(null, 503));
+  f.ctx.reportHealth.success('spend card');
+  f.ctx.telemetryData.costsCard = { total: { cost_usd: 100 } };
+  Object.assign(f.ctx, { spendBySel: { value: 'provider' }, spendSinceSel: { value: '7d' },
+    SPEND_BY: ['repo', 'provider'], SPEND_SINCE: ['24h', '7d'] });
+  vm.runInContext(source('  const onSpendView = () => {', '  spendBySel?.addEventListener') + '\nonSpendView();', f.ctx);
+  enableSpend(f);
+  await f.ctx.loadSpend(false);
+  assert.equal(f.ctx.telemetryData.costsCard, null);
+  assert.equal(f.ctx.reportHealth.failures(['spend card'])[0].state, 'unavailable');
 });

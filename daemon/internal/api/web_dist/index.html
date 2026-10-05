@@ -214,6 +214,7 @@
             </div>
             <span class="badge badge-amber" id="badge-attention-count">0</span>
           </div>
+          <p class="report-health" data-reports="snapshot|guard decisions" role="status" hidden></p>
           <div class="panel-body" id="attention-list">
             <div class="empty"><svg class="icon"><use href="#i-shield"/></svg><span>No decisions waiting</span></div>
           </div>
@@ -226,6 +227,7 @@
             <div><span class="attention-eyebrow">Coverage</span><h2><svg class="icon"><use href="#i-shield"/></svg>Monitoring setup</h2></div>
             <span class="badge" id="badge-coverage-count">0</span>
           </div>
+          <p class="report-health" data-reports="snapshot" role="status" hidden></p>
           <div class="panel-body" id="coverage-list"></div>
         </section>
         <details class="home-group" id="home-spend" data-group="spend">
@@ -249,6 +251,7 @@
             </div>
           </div>
           <div class="panel-body">
+            <p class="report-health" data-reports="spend|spend card|spend plans" role="status" hidden></p>
             <div id="spend-card" class="spend-card">
               <div class="empty"><span>Loading spend…</span></div>
             </div>
@@ -286,6 +289,7 @@
                         <option value="7d">Last 7 days</option>
                       </select>
                     </div>
+                    <p class="report-health" data-reports="snapshot|flags" role="status" hidden></p>
                     <div id="flags-list">
                       <div class="empty"><svg class="icon"><use href="#i-alert"/></svg><span>No security correlation flags active</span></div>
                     </div>
@@ -299,6 +303,7 @@
                     <span class="badge badge-rose" id="badge-incidents-count">0</span>
                     <button class="btn btn-ghost btn-sm" data-action="export" data-what="incidents" title="Download the current incidents as JSON"><svg class="icon"><use href="#i-doc"/></svg><span>Export</span></button>
                   </div>
+                  <p class="report-health" data-reports="snapshot" role="status" hidden></p>
                   <div class="panel-body" id="incidents-container">
                     <div class="empty"><svg class="icon"><use href="#i-incident"/></svg><span>No containment incidents recorded</span></div>
                   </div>
@@ -318,6 +323,7 @@
               </select>
             </div>
             <div class="panel-body act-body">
+              <p class="report-health" data-reports="snapshot|activity rollup" role="status" hidden></p>
               <svg id="activity-chart" viewBox="0 0 1200 120" preserveAspectRatio="none" role="img" aria-label="Hourly agent activity"></svg>
               <div class="act-legend">
                 <span class="act-key"><span class="act-swatch act-sw-events"></span>events</span>
@@ -332,6 +338,7 @@
                 <span class="badge" id="chart-flags-total">0</span>
               </div>
               <div class="panel-body">
+                <p class="report-health" data-reports="snapshot" role="status" hidden></p>
                 <div id="chart-flags" class="hbars">
                   <div class="empty"><svg class="icon"><use href="#i-alert"/></svg><span>No findings in the window</span></div>
                 </div>
@@ -343,6 +350,7 @@
                 <span class="badge" id="chart-mem-total">0</span>
               </div>
               <div class="panel-body">
+                <p class="report-health" data-reports="snapshot" role="status" hidden></p>
                 <div id="chart-memory" class="hbars">
                   <div class="empty"><svg class="icon"><use href="#i-agent"/></svg><span>No attributed sessions yet</span></div>
                 </div>
@@ -382,6 +390,7 @@
           </div>
           <!-- Legacy fallback: daemons without the sessions spine render the
                process-tree board here. -->
+          <p class="report-health" data-reports="snapshot" role="status" hidden></p>
           <div class="panel-body" id="session-board" hidden></div>
         </section>
         </div>
@@ -397,6 +406,7 @@
                 <div class="harness-pills" id="agent-harness-pills"></div>
                 <input type="search" id="agent-filter-text" class="input harness-filter-text" placeholder="Filter by repo, branch, or folder…" aria-label="Filter agents by repo, branch, or folder" autocomplete="off" spellcheck="false">
               </div>
+              <p class="report-health" data-reports="snapshot" role="status" hidden></p>
               <div class="panel-body" id="agents-container">
                 <div class="empty"><svg class="icon"><use href="#i-agent"/></svg><span>No active AI agent processes detected</span></div>
               </div>
@@ -408,6 +418,7 @@
                 <h2><svg class="icon"><use href="#i-server"/></svg>Fleet nodes</h2>
                 <span class="badge" id="badge-fleet-count">0</span>
               </div>
+              <p class="report-health" data-reports="fleet" role="status" hidden></p>
               <div class="panel-body" id="fleet-container">
                 <div class="empty"><svg class="icon"><use href="#i-server"/></svg><span>No remote fleet nodes registered</span></div>
               </div>
@@ -421,6 +432,7 @@
             <h2><svg class="icon"><use href="#i-activity"/></svg>Resources now</h2>
             <span class="badge" id="resource-observed">Live</span>
           </div>
+          <p class="report-health" data-reports="resources" role="status" hidden></p>
           <div class="panel-body" id="resource-board">
             <div class="empty"><svg class="icon"><use href="#i-activity"/></svg><span>Waiting for attributed CPU and memory samples…</span></div>
           </div>
@@ -430,6 +442,7 @@
             <h2><svg class="icon"><use href="#i-history"/></svg>Pressure history</h2>
             <span class="badge" id="history-observed">—</span>
           </div>
+          <p class="report-health" data-reports="resource episodes" role="status" hidden></p>
           <div class="panel-body" id="history-board">
             <div class="empty"><svg class="icon"><use href="#i-history"/></svg><span>The recorder is armed. Episodes appear here when a session becomes heavy, grows rapidly, or leaves resource-holding processes behind.</span></div>
           </div>
@@ -504,6 +517,7 @@
               </select>
             </div>
           </div>
+          <p class="report-health" data-reports="snapshot|events" role="status" hidden></p>
           <div class="panel-body timeline" id="events-container">
             <div class="empty"><svg class="icon"><use href="#i-activity"/></svg><span>No system events logged</span></div>
           </div>
@@ -518,6 +532,7 @@
             <div><h2><svg class="icon"><use href="#i-history"/></svg>Recurring activity</h2><p>Observed connection schedules and their possible purpose.</p></div>
             <span class="badge" id="badge-recurring-egress">0</span>
           </div>
+          <p class="report-health" data-reports="recurring egress" role="status" hidden></p>
           <div class="panel-body" id="recurring-egress-container">
             <div class="empty"><span>No recurring connection pattern observed yet</span></div>
           </div>
@@ -526,6 +541,7 @@
           <div class="panel-head">
             <div><h2><svg class="icon"><use href="#i-globe"/></svg><span id="endpoints-title">Connection coverage · last 24 h</span></h2><p id="endpoints-summary"></p></div>
           </div>
+          <p class="report-health" data-reports="uninspected egress" role="status" hidden></p>
           <div class="panel-body" id="endpoints-container">
             <div class="empty"><svg class="icon"><use href="#i-globe"/></svg><span>No uninspected endpoints in the last 24h — the blind spot is closed</span></div>
           </div>
@@ -537,6 +553,7 @@
                 <h2><svg class="icon"><use href="#i-shield"/></svg>Egress firewall</h2>
                 <span class="badge" id="badge-firewall-mode">monitor</span>
               </div>
+              <p class="report-health" data-reports="snapshot|allowlist" role="status" hidden></p>
               <div class="panel-body" id="firewall-container">
                 <div class="empty"><svg class="icon"><use href="#i-shield"/></svg><span>No egress inspected yet — traffic is scanned as your agents run</span></div>
               </div>
@@ -553,6 +570,7 @@
                   <input type="text" id="source-input" class="input" placeholder="~/.aws/credentials, ~/.config/gh/hosts.yml…" autocomplete="off" spellcheck="false">
                   <button class="btn btn-primary" id="btn-add-source"><svg class="icon"><use href="#i-arrow"/></svg><span>Add</span></button>
                 </div>
+                <p class="report-health" data-reports="firewall sources" role="status" hidden></p>
                 <div id="sources-list">
                   <div class="empty"><svg class="icon"><use href="#i-key"/></svg><span>No secret files watched yet — add the credential files whose keys must never leave</span></div>
                 </div>
@@ -568,6 +586,7 @@
       <div class="tabpanel" id="tab-policy" role="tabpanel" hidden>
         <section class="panel" id="expected-egress-panel">
           <div class="panel-head"><h2><svg class="icon"><use href="#i-globe"/></svg>Expected connections</h2><span class="badge" id="badge-expected-egress">0</span></div>
+          <p class="report-health" data-reports="expected egress" role="status" hidden></p>
           <div class="panel-body" id="expected-egress-container"><div class="empty"><span>No expected connections saved</span></div></div>
         </section>
         <section class="panel" id="notify-pop">
@@ -576,6 +595,7 @@
           </div>
           <div class="panel-body">
             <div class="notify-pop-sub">Default: only critical flags notify. Strongest rule first: a workspace scope beats a per-rule override, which beats the default. Applies to the menu bar app and this console.</div>
+            <p class="report-health" data-reports="notification rules" role="status" hidden></p>
             <div id="notify-rules-list"></div>
             <div class="notify-pop-head notify-scope-head">Per-workspace scopes</div>
             <div class="notify-pop-sub">Page me for a rule only in one repo (or silence it there), matched by path prefix. Example: always notify for <code>proxy-secret-leak</code> under <code>/Users/me/work/prod</code>.</div>
@@ -628,6 +648,7 @@
                 <h2><svg class="icon"><use href="#i-history"/></svg>Policy audit</h2>
                 <span class="badge" id="badge-audit-count">0</span>
               </div>
+              <p class="report-health" data-reports="audit" role="status" hidden></p>
               <div class="panel-body timeline" id="audit-container">
                 <div class="empty"><svg class="icon"><use href="#i-history"/></svg><span>No policy changes yet — promotions and secret registrations are logged here</span></div>
               </div>
@@ -779,6 +800,7 @@
   <script src="tab-worktrees.js"></script>
   <script src="tab-agent.js"></script>
   <script src="live-updates.js"></script>
+  <script src="report-health.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
