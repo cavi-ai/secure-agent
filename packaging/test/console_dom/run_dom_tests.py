@@ -185,6 +185,9 @@ def main():
         dom_refreshrace = dump_dom(chrome, tmp, "?refreshrace")
         dom_health = dump_dom(chrome, tmp, "?healthdemo")
         dom_healthrecover = dump_dom(chrome, tmp, "?healthdemo&recover")
+        dom_slowshape = dump_dom(chrome, tmp, "?slowshape")
+        dom_slowshapefirst = dump_dom(chrome, tmp, "?slowshape&firstload")
+        dom_slowshaperecover = dump_dom(chrome, tmp, "?slowshape&recover")
         dom_historyflags = dump_dom(chrome, tmp, "?filteredscope&historyflags")
         dom_historyevents = dump_dom(chrome, tmp, "?filteredscope&historyevents")
         dom_historyflagschanged = dump_dom(chrome, tmp, "?filteredscope&historyflags&changed")
@@ -724,6 +727,22 @@ def main():
             match = re.search(r'<p class="report-health" data-reports="' + re.escape(report) + r'"[^>]*>[^<]*</p>', dom)
             return match.group(0) if match else ""
         resource_health = health_notice(dom_health, "resources")
+        for report in ("resources", "audit", "notification rules", "recurring egress"):
+            check(f"malformed {report} containers retain prior results with a stale warning",
+                  "Stale" in health_notice(dom_slowshape, report)
+                  and "Invalid response" in health_notice(dom_slowshape, report)
+                  and "hidden" not in health_notice(dom_slowshape, report))
+            check(f"first-load malformed {report} containers show unavailable",
+                  "Unavailable" in health_notice(dom_slowshapefirst, report)
+                  and "Invalid response" in health_notice(dom_slowshapefirst, report))
+            check(f"valid {report} recovery clears malformed-response warning",
+                  "Stale" in pre(dom_slowshaperecover, "slow-shape-before-recovery")
+                  and "hidden" in health_notice(dom_slowshaperecover, report))
+        slow_board = dom_slowshape.split('id="resource-board"', 1)[1].split('id="history-panel"', 1)[0]
+        check("malformed slow reports preserve resource rendering and healthy live telemetry",
+              'id="count-agents">3<' in dom_slowshape
+              and "Families by harness" in slow_board and "api-service" in slow_board
+              and "Disconnected" not in dom_slowshape)
         check("resource request failure preserves data with a persistent stale notice",
               "Stale" in resource_health and "last refreshed at" in resource_health
               and "hidden" not in resource_health and 'id="count-agents">3<' in dom_health
