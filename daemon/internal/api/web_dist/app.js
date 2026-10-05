@@ -346,6 +346,9 @@ document.addEventListener('DOMContentLoaded', () => {
     sessionEnded = true;
     try { sessionStorage.removeItem(SS_TOKEN_KEY); } catch { /* private mode */ }
     clearInterval(sparkTimer);
+    clearTimeout(spendPollTimer);
+    spendPollTimer = null;
+    spendGen++; // invalidate spend responses already in flight
     if (liveUpdates) liveUpdates.stop();
     showSessionEnded();
   }
@@ -1572,11 +1575,12 @@ document.addEventListener('DOMContentLoaded', () => {
     // endpoint NEVER overwrites the panel's last good data.
     if (sessionEnded) return;
     const slow = !opts || opts.slow !== false;
-    let sawAuth = false;
     const grab = async (key, path) => {
+      if (sessionEnded) return null;
       try {
         const r = await apiFetch(path);
-        if (r.status === 403) { sawAuth = true; return null; }
+        if (sessionEnded) return null;
+        if (r.status === 403) { endSession(); return null; }
         if (!r.ok) { noteEndpointFailure(key); return null; }
         failedEndpoints.delete(key);
         return await r.json();
@@ -1587,6 +1591,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const requests = [grab('snapshot', '/snapshot'), grab('guard decisions', '/guard/pending')];
     if (slow) requests.push(grab('resources', '/resources'));
     const [snap, guardPending, resources] = await Promise.all(requests);
+    if (sessionEnded) return;
     if (guardPending) telemetryData.guardPending = guardPending || [];
     if (resources) telemetryData.resources = resources;
     if (snap) {
@@ -1624,6 +1629,7 @@ document.addEventListener('DOMContentLoaded', () => {
         grab('recurring egress', '/egress/episodes'),
         grab('expected egress', '/expected-egress')
       ]);
+      if (sessionEnded) return;
       if (fleet) telemetryData.fleet = fleet || [];
       if (audit) telemetryData.audit = audit || [];
       if (sources) telemetryData.sources = sources || [];
@@ -1647,17 +1653,18 @@ document.addEventListener('DOMContentLoaded', () => {
     sparkIngestEvents(telemetryData.events);
     if (isFlagsFiltered()) {
       const v = await grab('flags', flagsQuery());
+      if (sessionEnded) return;
       if (v) telemetryData.flagsView = (v || []).filter(f => !f.acknowledged);
     }
     if (isEventsFiltered()) {
       const v = await grab('events', eventsQuery());
+      if (sessionEnded) return;
       if (v) telemetryData.eventsView = v || [];
     }
 
     reconcileRetriage();
 
     telemetryData.connected = !!(snap && snap.status);
-    if (!telemetryData.connected && sawAuth) { endSession(); return; }
     setConnState(telemetryData.connected ? 'ok' : 'unreachable');
 
     if (!booted || (opts && opts.full)) renderAll();
@@ -1698,9 +1705,12 @@ document.addEventListener('DOMContentLoaded', () => {
     spendPollTimer = null;
     const cardPath = spendCardPath();
     const grab = async (key, path) => {
+      if (sessionEnded) return null;
       try {
         const r = await apiFetch(path);
-        if (!r.ok) { if (r.status !== 403) noteEndpointFailure(key); return null; } // 403: the snapshot ends the session
+        if (sessionEnded) return null;
+        if (r.status === 403) { endSession(); return null; }
+        if (!r.ok) { noteEndpointFailure(key); return null; }
         failedEndpoints.delete(key);
         return await r.json();
       } catch { return null; } // network error: the next load retries
@@ -1710,7 +1720,7 @@ document.addEventListener('DOMContentLoaded', () => {
       grab('spend card', cardPath),
       grab('spend plans', '/costs/plans')
     ]);
-    if (gen !== spendGen) return;
+    if (sessionEnded || gen !== spendGen) return;
     if (costs) telemetryData.costs = costs;
     if (costPlans) telemetryData.costPlans = costPlans;
     if (costsCard && cardPath === spendCardPath()) telemetryData.costsCard = costsCard;

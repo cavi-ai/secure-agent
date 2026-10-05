@@ -465,6 +465,8 @@
   // These modes reproduce the exact "trouble connecting" regressions:
   //   authfail     — every API call answers 403 (dead/rotated token): the
   //                  console must say "Session expired", NOT "daemon down".
+  //   authmixed    — guard read rejects the token while snapshot succeeds.
+  //   spendauth    — spend read rejects the token while snapshot succeeds.
   //   netfail      — every API call throws (daemon/proxy gone): the console
   //                  must say "can't reach the daemon" and keep last state.
   //   requiretoken — the mock validates the console-token header, so the
@@ -970,7 +972,8 @@
       throw new TypeError('Failed to fetch');
     }
     const token = (opts && opts.headers && opts.headers['X-SecureAgent-Console-Token']) || '';
-    if (MODE.includes('authfail') || (REQUIRE_TOKEN && token !== 'test-token')) {
+    if (MODE.includes('authfail') || (MODE.includes('authmixed') && p === '/guard/pending')
+        || (MODE.includes('spendauth') && p === '/costs') || (REQUIRE_TOKEN && token !== 'test-token')) {
       return {
         ok: false, status: 403,
         json: async () => ({ error: 'console token required' }),
