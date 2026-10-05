@@ -1,11 +1,37 @@
-// Validate the containers consumed by hot renderers before publishing state.
+// Validate the containers consumed by console renderers before publishing state.
 // Optional fields may be absent (older daemons) or null (Go nil slices), and
 // unknown fields remain compatible. This is not a full wire-schema validator.
-function isConsoleHotReport(key, value) {
+function isConsoleReport(key, value) {
   const record = v => v !== null && typeof v === 'object' && !Array.isArray(v);
   const rows = v => Array.isArray(v) && v.every(record);
   const optionalRows = (v, name) => v[name] == null || rows(v[name]);
+  const optionalArray = (v, name) => v[name] == null || Array.isArray(v[name]);
   const optionalRecord = (v, name) => v[name] == null || record(v[name]);
+  const session = v => record(v) && ['processes', 'samples', 'diagnoses'].every(name => optionalRows(v, name))
+    && optionalRecord(v, 'control');
+
+  if (['audit', 'firewall sources', 'activity rollup', 'uninspected egress', 'allowlist'].includes(key)) return rows(value);
+  if (key === 'fleet') {
+    const node = v => record(v) && optionalRows(v, 'agents');
+    return Array.isArray(value) ? value.every(node) : node(value);
+  }
+  if (key === 'resources') {
+    return record(value) && optionalRecord(value, 'host') && optionalRecord(value, 'control')
+      && optionalRows(value, 'sessions') && (value.sessions || []).every(session)
+      && (!value.control || ['pending', 'workspace_overrides', 'interventions'].every(name => optionalRows(value.control, name)));
+  }
+  if (key === 'resource episodes') {
+    return rows(value) && value.every(v => optionalRecord(v, 'host') && optionalRecord(v, 'session')
+      && (!v.session || session(v.session)) && optionalRows(v, 'activities') && optionalRows(v, 'correlations')
+      && optionalArray(v, 'diagnosis_codes'));
+  }
+  if (key === 'notification rules') return record(value) && optionalRecord(value, 'overrides') && optionalRows(value, 'scopes');
+  if (key === 'recurring egress') {
+    return record(value) && optionalRows(value, 'episodes') && (value.episodes || []).every(v =>
+      optionalRecord(v, 'observed') && (!v.observed || (optionalRecord(v.observed, 'scope')
+        && optionalArray(v.observed, 'intervals') && optionalArray(v.observed, 'session_ids'))));
+  }
+  if (key === 'expected egress') return record(value) && optionalRows(value, 'rules');
 
   if (key === 'guard decisions') {
     return rows(value) && value.every(row => typeof row.id === 'string' && row.id.length > 0);

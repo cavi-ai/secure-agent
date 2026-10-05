@@ -973,6 +973,8 @@
   let malformedRecovered = false;
   let historyReads = 0, historyRecovered = false;
   let malformedSnapshotReads = 0;
+  const slowShapeReads = {};
+  let slowShapeRecovered = false;
   stamp('fetch-count', '0');
   window.fetch = async (path, opts) => {
     fetchCount++;
@@ -1001,6 +1003,17 @@
     }
     if (MODE.includes('malformeddemo') && !malformedRecovered && p === '/guard/pending') {
       return { ok: true, status: 200, json: async () => ({ error: 'not a list' }) };
+    }
+    if (MODE.includes('slowshape') && !slowShapeRecovered) {
+      const malformed = {
+        '/resources': { sessions: [{ samples: {} }] },
+        '/audit': { error: 'not a list' },
+        '/notify/rules': { scopes: {} },
+        '/egress/episodes': { episodes: {} }
+      };
+      if (p in malformed && ((slowShapeReads[p] = (slowShapeReads[p] || 0) + 1) > 1 || MODE.includes('firstload'))) {
+        return { ok: true, status: 200, json: async () => malformed[p] };
+      }
     }
     if (MODE.includes('healthdemo') && !healthRecovered) {
       const read = healthReads[p] = (healthReads[p] || 0) + 1;
@@ -1234,6 +1247,18 @@
       setTimeout(() => {
         stamp('health-before-recovery', Array.from(document.querySelectorAll('.report-health:not([hidden])')).map(el => el.textContent).join(' '));
         healthRecovered = true;
+        document.getElementById('btn-refresh').click();
+      }, 6000);
+    }
+    setTimeout(() => openTab('resources'), 7000);
+  }
+
+  if (MODE.includes('slowshape')) {
+    setTimeout(() => document.getElementById('btn-refresh').click(), 3000);
+    if (MODE.includes('recover')) {
+      setTimeout(() => {
+        stamp('slow-shape-before-recovery', Array.from(document.querySelectorAll('.report-health:not([hidden])')).map(el => el.textContent).join(' '));
+        slowShapeRecovered = true;
         document.getElementById('btn-refresh').click();
       }, 6000);
     }
