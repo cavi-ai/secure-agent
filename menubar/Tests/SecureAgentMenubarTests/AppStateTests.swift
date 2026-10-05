@@ -114,7 +114,17 @@ final class AppStateTests: XCTestCase {
         stub.flagsError = DaemonClientError.transport("fixture unavailable")
         await state.lightRefresh([.flags, .guardPending])
         XCTAssertEqual(stub.fetchGuardPendingCalls, calls + 2)
-        XCTAssertTrue(state.staleSections.contains("Findings"))
+        XCTAssertEqual(state.staleSections, ["Findings", "Posture"])
+        stub.postureError = nil
+        await state.lightRefresh([.posture])
+        XCTAssertEqual(state.staleSections, ["Findings"])
+        XCTAssertTrue(state.needsAttention, "posture recovery cannot clear a findings failure")
+        stub.flagsError = nil
+        await state.lightRefresh([.flags])
+        XCTAssertTrue(state.staleSections.isEmpty)
+        XCTAssertNil(state.staleDataWarning)
+        XCTAssertNil(state.lastError)
+        XCTAssertFalse(state.needsAttention)
     }
 
 	func testPartialRefreshKeepsLastKnownDataAndShowsFailure() async {
