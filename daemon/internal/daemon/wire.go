@@ -438,7 +438,9 @@ func startDrainLoop(sub <-chan event.Event, st *store.Store, cr *correlate.Corre
 				report.SessionID = fl.SessionID
 				report.Subject = subject
 				report.AggregateCount = 1
-				st.PutIncident(report)
+				if err := st.PutIncident(report); err != nil {
+					continue
+				}
 				if deltas != nil {
 					deltas.Publish(api.Delta{Type: "incident", Data: report})
 				}
