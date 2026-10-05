@@ -7,6 +7,25 @@ const ctx = vm.createContext({});
 vm.runInContext(readFileSync(new URL('../../../daemon/internal/api/web_dist/telemetry-validation.js', import.meta.url), 'utf8'), ctx);
 const valid = (key, body) => ctx.isConsoleReport(key, body);
 
+test('spend reports accept zero totals, optional nil lists, cached flags and unknown fields', () => {
+  assert.equal(valid('spend', { total: { calls: 0, cost_usd: 0 }, rows: null, refreshing: true, future: 1 }), true);
+  assert.equal(valid('spend card', { total: { cost_usd: -1 }, rows: [], refreshing: false }), true);
+  assert.equal(valid('spend plans', { plans: [{ windows: null, future: true }] }), true);
+  assert.equal(valid('spend plans', { plans: null }), true);
+});
+for (const [key, body] of [
+  ['spend', []], ['spend', {}], ['spend', { total: null }], ['spend', { total: [] }],
+  ['spend', { total: { cost_usd: 'bad' } }], ['spend', { total: { calls: {} } }],
+  ['spend card', { total: {}, rows: {} }], ['spend card', { total: {}, rows: [null] }],
+  ['spend card', { total: {}, rows: [{ cost_usd: 'bad' }] }],
+  ['spend', { total: {}, refreshing: 'yes' }],
+  ['spend plans', []], ['spend plans', { plans: {} }], ['spend plans', { plans: [null] }],
+  ['spend plans', { plans: [{ windows: {} }] }], ['spend plans', { plans: [{ windows: [null] }] }],
+  ['spend plans', { plans: [{ windows: [{ used_percent: 'bad' }] }] }],
+]) {
+  test(`rejects malformed ${key}: ${JSON.stringify(body)}`, () => assert.equal(valid(key, body), false));
+}
+
 test('slow reports accept optional nil collections and unknown fields for daemon compatibility', () => {
   assert.equal(valid('resources', { sessions: null, host: null, control: { pending: null }, future: true }), true);
   assert.equal(valid('resources', { sessions: [{ samples: null, processes: null, diagnoses: null, control: null }] }), true);
