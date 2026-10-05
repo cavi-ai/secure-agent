@@ -41,17 +41,12 @@ const (
 // pruneMinInterval is the shortest gap between two insert-driven prunes.
 var pruneMinInterval = 30 * time.Second
 
-// jsonlRotateBytes caps the forensic flag mirror. SQLite is the source of
-// truth and already prunes; JSONL is append-only unless rotated.
-var jsonlRotateBytes int64 = 8 << 20
-
 type Store struct {
 	writeHealth         writeHealth
 	mu                  sync.Mutex
 	egressMu            sync.Mutex // serializes episode read-modify-write without blocking event state
 	db                  *sql.DB
-	jsonlPath           string
-	jsonlFile           *os.File
+	flagMirror          *flagMirror
 	insertCount         uint64
 	guardDecisionWrites atomic.Uint64
 	// Test seam for the identity-to-insert boundary; nil in production.
@@ -571,13 +566,12 @@ func Open(dbPath, jsonlPath string) (*Store, error) {
 		return nil, err
 	}
 
-	var jsonl *os.File
+	var mirror *flagMirror
 	if jsonlPath != "" {
-		f, err := os.OpenFile(jsonlPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+		var err error
+		mirror, err = openFlagMirror(jsonlPath)
 		if err != nil {
 			log.Printf("store: warning: failed to open jsonl path %s: %v", jsonlPath, err)
-		} else {
-			jsonl = f
 		}
 	}
 
@@ -600,12 +594,11 @@ func Open(dbPath, jsonlPath string) (*Store, error) {
 	_ = db.QueryRow(`SELECT COALESCE(MAX(id), 0) FROM events`).Scan(&openID)
 
 	s := &Store{
-		db:        db,
-		jsonlPath: jsonlPath,
-		jsonlFile: jsonl,
-		openID:    openID,
+		db:         db,
+		flagMirror: mirror,
+		openID:     openID,
 	}
-	if jsonlPath != "" && jsonl == nil {
+	if mirror != nil && mirror.file == nil {
 		s.noteWrite("flag mirror", fmt.Errorf("mirror unavailable"))
 	}
 	return s, nil
@@ -676,66 +669,13 @@ func (s *Store) PutFlag(fl model.Flag) {
 	// an always-on daemon on a noisy host grows the DB without limit.
 	_, _ = s.db.Exec(`DELETE FROM flags WHERE rowid NOT IN (SELECT rowid FROM flags ORDER BY datetime(ts) DESC, ts DESC LIMIT ?)`, maxFlags)
 
-	if s.jsonlPath != "" {
-		err := s.appendFlagMirrorLocked(fl)
+	if s.flagMirror != nil {
+		err := s.flagMirror.append(fl)
 		s.noteWrite("flag mirror", err)
 		if err != nil {
 			log.Printf("store: flag mirror write failed: %v", err)
 		}
 	}
-}
-
-func (s *Store) appendFlagMirrorLocked(fl model.Flag) error {
-	if s.jsonlFile == nil {
-		f, err := os.OpenFile(s.jsonlPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
-		if err != nil {
-			return err
-		}
-		s.jsonlFile = f
-	}
-	if err := s.maybeRotateJSONLLocked(); err != nil {
-		if s.jsonlFile != nil {
-			_ = s.jsonlFile.Close()
-			s.jsonlFile = nil
-		}
-		return err
-	}
-	data, err := json.Marshal(fl)
-	if err != nil {
-		return err
-	}
-	_, err = s.jsonlFile.Write(append(data, '\n'))
-	if err != nil {
-		_ = s.jsonlFile.Close()
-		s.jsonlFile = nil // retry opening on the next flag, never in a loop
-	}
-	return err
-}
-
-func (s *Store) maybeRotateJSONLLocked() error {
-	if s.jsonlFile == nil || s.jsonlPath == "" || jsonlRotateBytes <= 0 {
-		return nil
-	}
-	st, err := s.jsonlFile.Stat()
-	if err != nil {
-		return err
-	}
-	if st.Size() < jsonlRotateBytes {
-		return nil
-	}
-	_ = s.jsonlFile.Close()
-	s.jsonlFile = nil
-	rotated := s.jsonlPath + ".1"
-	_ = os.Remove(rotated)
-	if err := os.Rename(s.jsonlPath, rotated); err != nil {
-		return err
-	}
-	f, err := os.OpenFile(s.jsonlPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
-	if err != nil {
-		return err
-	}
-	s.jsonlFile = f
-	return nil
 }
 
 func (s *Store) PutEvent(e event.Event) {
@@ -2392,9 +2332,8 @@ func (s *Store) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.jsonlFile != nil {
-		s.jsonlFile.Close()
-		s.jsonlFile = nil
+	if s.flagMirror != nil {
+		s.flagMirror.close()
 	}
 	if s.db != nil {
 		return s.db.Close()
