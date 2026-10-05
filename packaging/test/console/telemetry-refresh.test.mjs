@@ -44,6 +44,7 @@ function fixture(fetch) {
   };
   vm.createContext(ctx);
   vm.runInContext(readFileSync(new URL('../../../daemon/internal/api/web_dist/report-health.js', import.meta.url), 'utf8'), ctx);
+  vm.runInContext(readFileSync(new URL('../../../daemon/internal/api/web_dist/telemetry-validation.js', import.meta.url), 'utf8'), ctx);
   ctx.reportHealth = ctx.createConsoleReportHealth();
   vm.runInContext(source('  function endSession()', '  function setConnState(') +
     source('  function reportSucceeded(', '  // parseUptimeSec reads') +
@@ -360,4 +361,84 @@ test('a failed new spend view is unavailable instead of claiming old-view data i
   await f.ctx.loadSpend(false);
   assert.equal(f.ctx.telemetryData.costsCard, null);
   assert.equal(f.ctx.reportHealth.failures(['spend card'])[0].state, 'unavailable');
+});
+
+
+test('a malformed snapshot cannot partially replace the last-good status and findings', async () => {
+  let bad = false;
+  const f = fixture(async path => path === '/snapshot'
+    ? response(bad ? { status: { uptime: 'corrupt' }, flags: { error: 'wrong shape' } }
+      : { status: { uptime: 'good' }, flags: [{ id: 'saved' }], events: [] }) : response([]));
+  await f.ctx.fetchTelemetry({ slow: false });
+  bad = true;
+  await assert.doesNotReject(f.ctx.fetchTelemetry({ slow: false }));
+  assert.equal(f.ctx.telemetryData.status.uptime, 'good');
+  assert.equal(f.ctx.telemetryData.flags[0].id, 'saved');
+  assert.equal(f.ctx.reportHealth.failures(['snapshot'])[0].state, 'stale');
+  assert.equal(f.ctx.telemetryData.connected, false);
+  assert.equal(f.connections.at(-1), 'invalid-response');
+});
+
+for (const body of [{}, [], { status: [] }, { status: { uptime: 7 } },
+  { status: { uptime: 'bad', agents: {} } }, { status: { uptime: 'bad', trees: [null] } },
+  { status: { uptime: 'bad' }, events: [null] }, { status: { uptime: 'bad' }, sessions: {} },
+  { status: { uptime: 'bad' }, posture: { items: {} } }]) {
+  test(`invalid hot snapshot is unavailable and retains prior state: ${JSON.stringify(body)}`, async () => {
+    const f = fixture(async path => path === '/snapshot' ? response(body) : response([]));
+    await assert.doesNotReject(f.ctx.fetchTelemetry({ slow: false }));
+    assert.equal(f.ctx.telemetryData.status.uptime, 'prior');
+    assert.equal(f.ctx.reportHealth.failures(['snapshot'])[0].state, 'unavailable');
+  });
+}
+
+test('malformed guard decisions preserve the pending decisions and warn independently', async () => {
+  const f = fixture(async path => path === '/snapshot' ? snapshot() : response({ error: 'not a list' }));
+  await f.ctx.fetchTelemetry({ slow: false });
+  assert.equal(f.ctx.telemetryData.guardPending[0].id, 'prior');
+  assert.equal(f.ctx.reportHealth.failures(['guard decisions'])[0].state, 'unavailable');
+  assert.equal(f.ctx.telemetryData.connected, true);
+});
+
+test('malformed filtered findings do not replace valid snapshot findings', async () => {
+  const f = fixture(async path => path === '/snapshot'
+    ? response({ status: { uptime: 'good' }, flags: [{ id: 'saved' }], events: [] })
+    : path.startsWith('/flags?') ? response([null]) : response([]));
+  f.ctx.isFlagsFiltered = () => true;
+  await assert.doesNotReject(f.ctx.fetchTelemetry({ slow: false }));
+  assert.equal(f.ctx.telemetryData.flagsView[0].id, 'saved');
+  assert.equal(f.ctx.reportHealth.failures(['flags'])[0].state, 'unavailable');
+});
+
+test('a valid snapshot recovers after rejection and accepts absent or null optional fields', async () => {
+  let bad = true;
+  const f = fixture(async path => path === '/snapshot'
+    ? response(bad ? { status: { uptime: 'bad' }, flags: {} }
+      : { status: { uptime: 'good', agents: null, future_field: { enabled: true } }, flags: [], events: null }) : response([]));
+  await assert.doesNotReject(f.ctx.fetchTelemetry({ slow: false }));
+  bad = false;
+  await f.ctx.fetchTelemetry({ slow: false });
+  assert.equal(f.ctx.telemetryData.status.uptime, 'good');
+  assert.equal(f.ctx.reportHealth.failures(['snapshot']).length, 0);
+  assert.equal(f.ctx.telemetryData.connected, true);
+});
+
+
+test('guard rows without usable decision IDs cannot replace actionable pending decisions', async () => {
+  for (const rows of [[null], [{}], [{ id: '' }], [{ id: 5 }]]) {
+    const f = fixture(async path => path === '/snapshot' ? snapshot() : response(rows));
+    await f.ctx.fetchTelemetry({ slow: false });
+    assert.equal(f.ctx.telemetryData.guardPending[0].id, 'prior');
+    assert.equal(f.ctx.reportHealth.failures(['guard decisions'])[0].state, 'unavailable');
+  }
+});
+
+test('malformed filtered events keep snapshot events and mark just their report unavailable', async () => {
+  const f = fixture(async path => path === '/snapshot'
+    ? response({ status: { uptime: 'good' }, flags: [], events: [{ kind: 8, ts: '2026-10-05T00:00:00Z', pid: 1 }] })
+    : path.startsWith('/events?') ? response({ error: 'not a list' }) : response([]));
+  f.ctx.isEventsFiltered = () => true;
+  await f.ctx.fetchTelemetry({ slow: false });
+  assert.equal(f.ctx.telemetryData.eventsView[0].kind, 8);
+  assert.equal(f.ctx.reportHealth.failures(['events'])[0].state, 'unavailable');
+  assert.equal(f.ctx.telemetryData.connected, true);
 });

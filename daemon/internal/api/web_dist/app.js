@@ -297,11 +297,12 @@ document.addEventListener('DOMContentLoaded', () => {
   let spendPolls = 0;
 
   // ---------- connectivity ----------
-  // Two honest live states, never conflated:
+  // Live response states:
   //  - 'ok':           fetches succeed.
   //  - 'unreachable':  network-level failure — the daemon or its proxy
   //                    listener is gone; the last known state stays visible.
-  // A 403 is neither: the token is missing or rotated, only the menu bar can
+  //  - 'invalid-response': the daemon replied with malformed telemetry.
+  // A 403 ends the session: the token is missing or rotated, only the menu bar can
   // mint a fresh session, and the page switches to the ended state
   // (endSession).
   let connState = 'ok';
@@ -361,7 +362,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const text = banner.querySelector('span');
     if (connState === 'ok') { banner.hidden = true; return; }
     banner.hidden = false;
-    if (text) text.textContent = "Can't reach the Secure Agent daemon — showing the last known state and retrying…";
+    if (text) text.textContent = connState === 'invalid-response'
+      ? "The daemon returned invalid telemetry — showing the last known state and retrying…"
+      : "Can't reach the Secure Agent daemon — showing the last known state and retrying…";
   }
 
   // endSession: a 403 means the token is dead. Drop it, stop every timer and
@@ -1596,7 +1599,7 @@ document.addEventListener('DOMContentLoaded', () => {
   async function fetchTelemetry(opts) {
     // grab(): one fetch with honest failure semantics. 403 = the session is
     // dead (drives the ended state). Other failures mark that report stale
-    // or unavailable; snapshot failure also drives the unreachable state.
+    // or unavailable; snapshot failure also changes the connection status.
     // A failed endpoint NEVER overwrites the panel's last good data.
     if (sessionEnded) return;
     const slow = !opts || opts.slow !== false;
@@ -1624,7 +1627,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!r.ok) { noteEndpointFailure(key); reportFailed(key, `HTTP ${r.status}`); return null; }
         const value = await r.json();
         if (!ownsResult()) return null;
-        if (value === null || typeof value !== 'object') { reportFailed(key, 'Invalid response'); return null; }
+        if (!isConsoleHotReport(key, value)) { reportFailed(key, 'Invalid response'); return null; }
         reportSucceeded(key);
         return value;
       } catch {
@@ -1722,7 +1725,8 @@ document.addEventListener('DOMContentLoaded', () => {
     reconcileRetriage();
 
     telemetryData.connected = !!(snap && snap.status);
-    setConnState(telemetryData.connected ? 'ok' : 'unreachable');
+    const invalidSnapshot = reportHealth.failures(['snapshot']).some(report => report.error === 'Invalid response');
+    setConnState(telemetryData.connected ? 'ok' : invalidSnapshot ? 'invalid-response' : 'unreachable');
 
     if (!booted || (opts && opts.full)) renderAll();
     // 'notify' is excluded here: it dirties itself above, only when its
@@ -1820,7 +1824,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const chip = document.getElementById('system-status');
     if (!telemetryData.connected) {
       if (chip) chip.className = 'status-chip down';
-      document.getElementById('status-text').textContent = 'Disconnected';
+      document.getElementById('status-text').textContent = connState === 'invalid-response' ? 'Telemetry unavailable' : 'Disconnected';
       return; // keep last-known metrics visible
     }
 

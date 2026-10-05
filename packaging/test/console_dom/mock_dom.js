@@ -966,6 +966,8 @@
   let snapshotReads = 0;
   const healthReads = {};
   let healthRecovered = false;
+  let malformedRecovered = false;
+  let malformedSnapshotReads = 0;
   stamp('fetch-count', '0');
   window.fetch = async (path, opts) => {
     fetchCount++;
@@ -983,6 +985,9 @@
         json: async () => ({ error: 'console token required' }),
         text: async () => '{"error":"console token required"}'
       };
+    }
+    if (MODE.includes('malformeddemo') && !malformedRecovered && p === '/guard/pending') {
+      return { ok: true, status: 200, json: async () => ({ error: 'not a list' }) };
     }
     if (MODE.includes('healthdemo') && !healthRecovered) {
       const read = healthReads[p] = (healthReads[p] || 0) + 1;
@@ -1031,6 +1036,12 @@
       };
     }
     if (p === '/snapshot') {
+      if (MODE.includes('malformeddemo') && !malformedRecovered && ++malformedSnapshotReads > 1) {
+        stamp('malformed-returned', 'yes');
+        return { ok: true, status: 200, json: async () => ({
+          status: { ...data['/status'], active_agents: 99 }, flags: { error: 'not a list' }
+        }) };
+      }
       let body = {
         status: data['/status'],
         flags: data['/flags'],
@@ -1166,6 +1177,18 @@
     emit(kind, obj) { (this._listeners[kind] || []).forEach(fn => fn({ data: JSON.stringify(obj) })); }
     close() { clearInterval(this._timer); this.readyState = 2; stamp('sse-state', 'closed'); }
   };
+
+  if (MODE.includes('malformeddemo')) {
+    setTimeout(() => document.getElementById('btn-refresh').click(), 3000);
+    if (MODE.includes('recover')) {
+      setTimeout(() => {
+        stamp('malformed-before-recovery', document.getElementById('count-agents').textContent + ' ' +
+          Array.from(document.querySelectorAll('.report-health:not([hidden])')).map(el => el.textContent).join(' '));
+        malformedRecovered = true;
+        document.getElementById('btn-refresh').click();
+      }, 6000);
+    }
+  }
 
   if (MODE.includes('healthdemo')) {
     setTimeout(() => document.getElementById('btn-refresh').click(), 3000);
