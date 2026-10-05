@@ -69,7 +69,8 @@ func (m *flagMirror) rotate() error {
 	}
 	m.close()
 	rotated := m.path + ".1"
-	_ = os.Remove(rotated)
+	// Rename replaces the archive on success. Deleting it first would lose
+	// preserved evidence even when the active path cannot be renamed.
 	if err := os.Rename(m.path, rotated); err != nil {
 		return err
 	}
