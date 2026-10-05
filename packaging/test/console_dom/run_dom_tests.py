@@ -182,6 +182,7 @@ def main():
         dom_authfail = dump_dom(chrome, tmp, "?authfail")
         dom_authmixed = dump_dom(chrome, tmp, "?authmixed")
         dom_spendauth = dump_dom(chrome, tmp, "?spendauth")
+        dom_refreshrace = dump_dom(chrome, tmp, "?refreshrace")
         dom_notoken = dump_dom(chrome, tmp, "?notoken")
         dom_hashagents = dump_dom(chrome, tmp, "#agents")
         dom_hashfindings = dump_dom(chrome, tmp, "#findings")
@@ -710,6 +711,9 @@ def main():
               nfp == "same=true value=in-progress-edit focused=true probe=1", f"probe={nfp!r}")
 
         # --- connection states (the "trouble connecting" regressions) ---
+        check("a delayed older snapshot cannot replace a newer manual refresh",
+              '<pre id="race-old-returned" hidden="">yes</pre>' in dom_refreshrace
+              and 'id="count-agents">3<' in dom_refreshrace)
         check("auth-expired shows the ended state, not 'daemon down'",
               'id="session-ended" role="alert">' in dom_authfail
               and "Console session ended." in dom_authfail

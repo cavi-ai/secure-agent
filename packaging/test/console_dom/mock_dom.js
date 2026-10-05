@@ -467,6 +467,7 @@
   //                  console must say "Session expired", NOT "daemon down".
   //   authmixed    — guard read rejects the token while snapshot succeeds.
   //   spendauth    — spend read rejects the token while snapshot succeeds.
+  //   refreshrace  — first snapshot returns after a newer manual refresh.
   //   netfail      — every API call throws (daemon/proxy gone): the console
   //                  must say "can't reach the daemon" and keep last state.
   //   requiretoken — the mock validates the console-token header, so the
@@ -962,6 +963,7 @@
 
   // Every fetch the console issues is counted on <pre id="fetch-count">.
   let fetchCount = 0;
+  let snapshotReads = 0;
   stamp('fetch-count', '0');
   window.fetch = async (path, opts) => {
     fetchCount++;
@@ -1019,7 +1021,7 @@
       };
     }
     if (p === '/snapshot') {
-      const body = {
+      let body = {
         status: data['/status'],
         flags: data['/flags'],
         incidents: data['/incidents'],
@@ -1030,6 +1032,13 @@
         mutes: data['/mute'],
         sessions: data['/sessions']
       };
+      if (MODE.includes('refreshrace') && ++snapshotReads === 1) {
+        body = JSON.parse(JSON.stringify(body));
+        body.status.active_agents = 1;
+        body.status.agents = body.status.agents.slice(0, 1);
+        await new Promise(resolve => setTimeout(resolve, 4000));
+        stamp('race-old-returned', 'yes');
+      }
       return {
         ok: true, status: 200,
         json: async () => body,
@@ -1147,6 +1156,10 @@
     emit(kind, obj) { (this._listeners[kind] || []).forEach(fn => fn({ data: JSON.stringify(obj) })); }
     close() { clearInterval(this._timer); this.readyState = 2; stamp('sse-state', 'closed'); }
   };
+
+  if (MODE.includes('refreshrace')) {
+    setTimeout(() => document.getElementById('btn-refresh').click(), 1000);
+  }
 
   // openTab: open a view by its old or new id through the console's alias
   // table (resolveConsoleRoute), clicking the tab and sub-view buttons a
