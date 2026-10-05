@@ -180,6 +180,65 @@ function enableSpend(f) {
   vm.runInContext(source('  async function loadSpend(', '  // Spend card controls:'), f.ctx);
 }
 
+const spendReports = [
+  { key: 'spend', path: '/costs?since=24h&by=repo&cached=1', field: 'costs',
+    good: { total: { calls: 2, cost_usd: 12 }, rows: [{ key: 'saved', calls: 2, cost_usd: 12 }] },
+    bad: { total: [] }, empty: { total: { calls: 0, cost_usd: 0 }, rows: [] } },
+  { key: 'spend card', path: '/costs?card', field: 'costsCard',
+    good: { total: { calls: 2, cost_usd: 12 }, rows: [{ key: 'saved', calls: 2, cost_usd: 12 }] },
+    bad: { total: { calls: 0, cost_usd: 0 }, rows: [null] }, empty: { total: { calls: 0, cost_usd: 0 }, rows: [] } },
+  { key: 'spend plans', path: '/costs/plans', field: 'costPlans',
+    good: { plans: [{ home: 'saved', windows: [{ used_percent: 25, window_minutes: 300 }] }] },
+    bad: { plans: [{ windows: [null] }] }, empty: { plans: [] } },
+];
+for (const report of spendReports) {
+  test(`malformed ${report.key} retains last-good results until valid empty recovery`, async () => {
+    let mode = 'good';
+    const f = fixture(async path => {
+      const selected = spendReports.find(row => row.path === path);
+      return response(selected === report ? report[mode] : selected.empty);
+    });
+    enableSpend(f);
+    await f.ctx.loadSpend(false);
+    const saved = f.ctx.telemetryData[report.field];
+    mode = 'bad';
+    await assert.doesNotReject(f.ctx.loadSpend(false));
+    assert.equal(f.ctx.telemetryData[report.field], saved);
+    const failed = f.ctx.reportHealth.failures([report.key])[0];
+    assert.equal(failed?.state, 'stale');
+    assert.equal(failed?.error, 'Invalid response');
+    assert.equal(f.ctx.reportHealth.failures(spendReports.filter(row => row !== report).map(row => row.key)).length, 0);
+    mode = 'empty';
+    await f.ctx.loadSpend(false);
+    assert.deepEqual(f.ctx.telemetryData[report.field], report.empty);
+    assert.equal(f.ctx.reportHealth.failures([report.key]).length, 0);
+    assert.equal(f.retries.length, 0);
+  });
+}
+
+test('first-load malformed spend reports are unavailable and cannot arm cache polling', async () => {
+  const f = fixture(async path => response(path === '/costs/plans' ? [] : { total: 'bad', refreshing: true }));
+  enableSpend(f);
+  f.ctx.telemetryData.costs = null;
+  await f.ctx.loadSpend(false);
+  for (const report of spendReports) {
+    assert.equal(f.ctx.reportHealth.failures([report.key])[0]?.state, 'unavailable');
+    assert.ok(f.ctx.telemetryData[report.field] == null);
+  }
+  assert.equal(f.retries.length, 0);
+});
+
+test('valid refreshing spend cache retains its bounded retry cadence', async () => {
+  const f = fixture(async path => response(path === '/costs/plans' ? { plans: [] }
+    : { total: { calls: 1, cost_usd: 1 }, rows: null, refreshing: true }));
+  enableSpend(f);
+  await f.ctx.loadSpend(false);
+  assert.equal(f.ctx.telemetryData.costs.total.cost_usd, 1);
+  assert.equal(f.ctx.spendPolls, 1);
+  assert.equal(f.retries.length, 1);
+  assert.equal(f.ctx.reportHealth.failures(['spend', 'spend card', 'spend plans']).length, 0);
+});
+
 test('spend responses arriving after shutdown cannot render or arm another retry', async () => {
   const waiting = deferred();
   const f = fixture(() => waiting.promise);

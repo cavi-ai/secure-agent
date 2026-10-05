@@ -229,6 +229,9 @@ def main():
         dom_spendphone = dump_dom(chrome, tmp, "?phonedemo&spenddaydemo")
         dom_spendkeep = dump_dom(chrome, tmp, "?tab=overview&spenddaydemo&spendkeepdemo")
         dom_spendcache = dump_dom(chrome, tmp, "?spendcachedemo")
+        dom_spendshape = dump_dom(chrome, tmp, "?spendshape")
+        dom_spendshapefirst = dump_dom(chrome, tmp, "?spendshape&firstload")
+        dom_spendshaperecover = dump_dom(chrome, tmp, "?spendshape&recover")
         dom_spendslow = dump_dom(chrome, tmp, "?spendslowdemo")
         dom_events = dump_dom(chrome, tmp, "?tab=events")
         dom_burst = dump_dom(chrome, tmp, "?burstdemo")
@@ -727,6 +730,22 @@ def main():
             match = re.search(r'<p class="report-health" data-reports="' + re.escape(report) + r'"[^>]*>[^<]*</p>', dom)
             return match.group(0) if match else ""
         resource_health = health_notice(dom_health, "resources")
+        spend_health = health_notice(dom_spendshape, "spend|spend card|spend plans")
+        check("malformed spend reports retain totals, rows and plan headroom with independent stale warnings",
+              all(label + ": Stale" in spend_health for label in ("Spend", "Spend detail", "Spend plans"))
+              and "Invalid response" in spend_health and "hidden" not in spend_health
+              and 'id="count-spend">$36.67<' in dom_spendshape
+              and "api-service" in spend_card_of(dom_spendshape) and "shape-plan" in spend_card_of(dom_spendshape))
+        first_spend = health_notice(dom_spendshapefirst, "spend|spend card|spend plans")
+        check("first-load malformed spend reports show unavailable without inventing empty results",
+              all(label + ": Unavailable" in first_spend for label in ("Spend", "Spend detail", "Spend plans"))
+              and "Loading spend…" in spend_card_of(dom_spendshapefirst)
+              and "No priced model calls" not in spend_card_of(dom_spendshapefirst)
+              and 'id="count-agents">3<' in dom_spendshapefirst)
+        check("valid spend recovery clears malformed-response warnings",
+              "Stale" in pre(dom_spendshaperecover, "spend-shape-before-recovery")
+              and "hidden" in health_notice(dom_spendshaperecover, "spend|spend card|spend plans")
+              and 'id="count-spend">$36.67<' in dom_spendshaperecover)
         for report in ("resources", "audit", "notification rules", "recurring egress"):
             check(f"malformed {report} containers retain prior results with a stale warning",
                   "Stale" in health_notice(dom_slowshape, report)

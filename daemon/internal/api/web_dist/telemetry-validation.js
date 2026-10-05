@@ -9,6 +9,19 @@ function isConsoleReport(key, value) {
   const optionalRecord = (v, name) => v[name] == null || record(v[name]);
   const session = v => record(v) && ['processes', 'samples', 'diagnoses'].every(name => optionalRows(v, name))
     && optionalRecord(v, 'control');
+  const numericFields = (v, names) => names.every(name => v[name] === undefined
+    || (typeof v[name] === 'number' && Number.isFinite(v[name])));
+
+  if (key === 'spend' || key === 'spend card') {
+    const costRow = v => record(v) && numericFields(v, ['calls', 'sessions', 'tokens_in', 'tokens_out',
+      'cost_usd', 'unpriced_calls', 'unknown_model_calls', 'unpriced_model_calls', 'plan_calls', 'local_calls']);
+    return record(value) && costRow(value.total) && optionalRows(value, 'rows')
+      && (value.rows || []).every(costRow) && (value.refreshing == null || typeof value.refreshing === 'boolean');
+  }
+  if (key === 'spend plans') {
+    return record(value) && optionalRows(value, 'plans') && (value.plans || []).every(plan =>
+      optionalRows(plan, 'windows') && (plan.windows || []).every(window => numericFields(window, ['used_percent', 'window_minutes'])));
+  }
 
   if (['audit', 'firewall sources', 'activity rollup', 'uninspected egress', 'allowlist'].includes(key)) return rows(value);
   if (key === 'fleet') {

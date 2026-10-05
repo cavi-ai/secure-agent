@@ -975,6 +975,12 @@
   let malformedSnapshotReads = 0;
   const slowShapeReads = {};
   let slowShapeRecovered = false;
+  let spendShapeBad = MODE.includes('firstload');
+  if (MODE.includes('spendshape')) {
+    data['/costs/plans'] = { plans: [{ harness: 'codex', home: 'shape-plan', home_path: '/workspace/shape-plan',
+      plan_type: 'pro', limit_id: 'codex', unlimited: false, seen_at: iso(0),
+      windows: [{ used_percent: 25, window_minutes: 300, resets_at: '' }] }] };
+  }
   stamp('fetch-count', '0');
   window.fetch = async (path, opts) => {
     fetchCount++;
@@ -1003,6 +1009,10 @@
     }
     if (MODE.includes('malformeddemo') && !malformedRecovered && p === '/guard/pending') {
       return { ok: true, status: 200, json: async () => ({ error: 'not a list' }) };
+    }
+    if (MODE.includes('spendshape') && spendShapeBad && (p === '/costs' || p === '/costs/plans')) {
+      return { ok: true, status: 200, json: async () => p === '/costs'
+        ? { total: [], rows: [null], refreshing: true } : { plans: [{ windows: [null] }] } };
     }
     if (MODE.includes('slowshape') && !slowShapeRecovered) {
       const malformed = {
@@ -1634,6 +1644,20 @@
       const n = document.getElementById('spend-cache');
       stamp('spend-cache-probe', `notice=${n.hidden ? '' : n.textContent} hint=${document.getElementById('hint-spend').textContent}`);
     }, 1000);
+  }
+  if (MODE.includes('spendshape')) {
+    setTimeout(() => document.querySelector('#spend-card').closest('details').open = true, 1000);
+    setTimeout(() => {
+      spendShapeBad = true;
+      document.getElementById('btn-refresh').click();
+    }, 3000);
+    if (MODE.includes('recover')) {
+      setTimeout(() => {
+        stamp('spend-shape-before-recovery', Array.from(document.querySelectorAll('.report-health:not([hidden])')).map(el => el.textContent).join(' '));
+        spendShapeBad = false;
+        document.getElementById('btn-refresh').click();
+      }, 6000);
+    }
   }
   if (MODE.includes('spendslowdemo')) {
     setTimeout(() => {

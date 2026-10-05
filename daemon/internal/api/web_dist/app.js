@@ -1798,7 +1798,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!r.ok) { noteEndpointFailure(key); reportFailed(key, `HTTP ${r.status}`); return null; }
         const value = await r.json();
         if (!ownsResult(key)) return null;
-        if (value === null || typeof value !== 'object') { reportFailed(key, 'Invalid response'); return null; }
+        if (!isConsoleReport(key, value)) { reportFailed(key, 'Invalid response'); return null; }
         reportSucceeded(key);
         return value;
       } catch {
