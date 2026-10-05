@@ -1,13 +1,15 @@
 // Home decisions and coverage, followed by detailed findings and incidents.
 
 function renderCoverage() {
+  const status = window.SA.t.status || {};
   const p = window.SA.t.posture || {};
   const panel = document.getElementById('coverage-center');
   const list = document.getElementById('coverage-list');
   const badge = document.getElementById('badge-coverage-count');
   if (!panel || !list) return;
   const items = p.coverage_items || [];
-  panel.hidden = items.length === 0;
+  const harnesses = (status.coverage && status.coverage.harnesses) || [];
+  panel.hidden = items.length === 0 && harnesses.length === 0;
   if (badge) badge.textContent = Number(p.coverage_count) || items.length;
   if (panel.hidden) return;
   list.innerHTML = items.map(it => {
@@ -15,9 +17,19 @@ function renderCoverage() {
       ? '<button type="button" class="btn btn-ghost btn-sm" data-action="open-uninspected">Review endpoints</button>'
       : it.kind === 'collector_down' && it.id === 'eslogger'
         ? '<button type="button" class="btn btn-ghost btn-sm" data-action="open-fda">Open permissions</button>'
+        : it.kind === 'storage_loss'
+          ? '<span class="coverage-guidance">Check disk space and state-directory permissions. Run Doctor for details.</span>'
+          : it.kind === 'event_loss'
+            ? '<span class="coverage-guidance">Run Doctor to review lost telemetry. Restarting cannot restore missing evidence.</span>'
         : '<span class="coverage-guidance">Check Setup &amp; Permissions in the menu bar</span>';
     return `<div class="coverage-row"><span><strong>${escapeHTML(it.title)}</strong><span>${escapeHTML(it.detail || '')}</span></span>${action}</div>`;
-  }).join('');
+  }).join('') + harnesses.map(h => {
+    const trace = !h.trace_supported ? 'not supported' : h.trace_last_seen ? 'activity observed in 24h' : 'supported; no activity observed in 24h';
+    const guard = !h.guard_supported ? 'not supported' : h.hook_last_seen ? 'hook activity observed in 24h' : 'supported; no hook activity observed in 24h';
+    return `<div class="coverage-row"><span><strong>${escapeHTML(h.name)}</strong><span>Trace: ${escapeHTML(trace)} · Guard: ${escapeHTML(guard)}</span></span></div>`;
+  }).join('') + (harnesses.length ? `<p class="coverage-guidance">${status.proxy_enabled
+    ? 'Payload inspection covers connections routed through the proxy; review Egress for coverage.'
+    : 'Payload inspection is off (proxy disabled).'} Recent harness activity does not prove every current session is guarded.</p>` : '');
 }
 
 function renderAttention() {

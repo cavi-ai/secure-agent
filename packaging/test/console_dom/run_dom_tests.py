@@ -107,14 +107,16 @@ def serve_with_csp(tmp):
 def dump_dom(chrome, tmp, query="", origin=None, window_size=None, reduced_motion=False):
     url = f"{origin or 'file://' + tmp}/harness.html{query}"
     size = [f"--window-size={window_size[0]},{window_size[1]}"] if window_size else []
+    # Exercise both motion modes explicitly, independent of host accessibility settings.
+    motion = "--force-prefers-reduced-motion" if reduced_motion else "--force-prefers-no-reduced-motion"
     out = subprocess.run(
-        [chrome, "--headless=new", "--disable-gpu", "--no-sandbox", *size, *(["--force-prefers-reduced-motion"] if reduced_motion else []),
+        [chrome, "--headless=new", "--disable-gpu", "--no-sandbox", *size, motion,
          "--virtual-time-budget=" + str(VIRTUAL_TIME_MS), "--dump-dom", url],
         capture_output=True, text=True, timeout=120,
     )
     if out.returncode != 0:
         print(out.stderr[-2000:], file=sys.stderr)
-        raise SystemExit("chrome --dump-dom failed")
+        raise SystemExit(f"chrome --dump-dom failed ({out.returncode}): {url}")
     return out.stdout
 
 
@@ -1071,7 +1073,7 @@ def main():
         check("Home with only coverage gaps has an honest zero-decision state",
               'id="badge-attention-count">0<' in dom_coverage
               and 'No pending decisions' in dom_coverage
-              and 'id="posture-state">Coverage needs setup<' in dom_coverage
+              and 'id="posture-state">Monitoring needs attention<' in dom_coverage
               and 'id="badge-coverage-count">2<' in dom_coverage)
         check("attention resource actions target the full session",
               'data-action="resource-control" data-id="resource-1" data-decision="apply"' in attention)

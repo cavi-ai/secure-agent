@@ -39,6 +39,9 @@ As AI coding agents (Claude Code, Cursor, Codex, Antigravity, Pi, Qwen Code, ope
 - 🔗 **Sliding-Window Event Correlation Engine**  
   Correlates process file activity with network egress. Automatically raises security flags when an agent process reads a sensitive file (e.g. `~/.aws/credentials` or `.env`) followed by an outbound socket connection to a domain outside its pre-approved vendor allowlist.
 
+- **Monitoring coverage and evidence health**
+  Home separates each active harness's supported trace and guard capabilities from recent, session-attributed activity. Payload inspection remains dependent on proxy routing. Dropped event deliveries and failed core evidence writes appear in posture and Doctor. Successful writes clear the active storage fault for that operation, while the failure count remains for the daemon run: recovery cannot restore missing evidence. The native app keeps last-known data when an endpoint fails, marks it stale, and requires a successful refresh of that endpoint to clear the warning.
+
 - 🚨 **Rotation Advisory & Incident Containment (Read-Only)**  
   Analyzes compromised secret exposures, categorizes risk severity (`CRITICAL`, `HIGH`, `MEDIUM`, `LOW`), assesses blast radius, and generates ordered step-by-step remediation checklists with copy-paste shell commands via `/incidents` and a native Swift UI remediation modal — advisory only, no rotation is performed automatically.
 

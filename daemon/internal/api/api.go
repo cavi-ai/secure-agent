@@ -46,8 +46,9 @@ type Killer interface {
 // counts harnesses (agent kinds, infra excluded) with attributed activity in
 // the recent window; HarnessesActive counts those with live processes.
 type CoverageStatus struct {
-	HarnessesActive int `json:"harnesses_active"`
-	HarnessesSeen   int `json:"harnesses_seen"`
+	HarnessesActive int               `json:"harnesses_active"`
+	HarnessesSeen   int               `json:"harnesses_seen"`
+	Harnesses       []HarnessCoverage `json:"harnesses,omitempty"`
 }
 
 type AgentSummary struct {
@@ -136,7 +137,8 @@ type Status struct {
 	// BusDrops counts in-process events a subscriber missed because its
 	// buffer was full. Zero is healthy; growth under N-agent bursts is the
 	// hot-path signal to surface.
-	BusDrops uint64 `json:"bus_drops,omitempty"`
+	BusDrops      uint64             `json:"bus_drops,omitempty"`
+	StorageHealth *store.WriteHealth `json:"storage_health,omitempty"`
 
 	// Coverage reports how many running harnesses the daemon is actually
 	// seeing ("seeing 2 of 3 harnesses") — liveness is not coverage.
@@ -938,8 +940,26 @@ func (a *API) currentStatus() Status {
 		Since:       time.Now().Add(-24 * time.Hour).UTC().Format(time.RFC3339),
 		Limit:       500,
 	}))
+	return a.evidenceStatus(st)
+}
+
+// Shared monitoring facts for status, posture, and Doctor.
+func (a *API) evidenceStatus(st Status) Status {
 	if a.busDrops != nil {
 		st.BusDrops = a.busDrops()
+	}
+	if a.store != nil {
+		h := a.store.WriteHealth()
+		st.StorageHealth = &h
+	}
+	rows := harnessCoverage(a.store, st)
+	if len(rows) > 0 {
+		cov := CoverageStatus{HarnessesActive: len(rows)}
+		if st.Coverage != nil {
+			cov = *st.Coverage
+		}
+		cov.Harnesses = rows
+		st.Coverage = &cov
 	}
 	return st
 }

@@ -46,6 +46,7 @@ var pruneMinInterval = 30 * time.Second
 var jsonlRotateBytes int64 = 8 << 20
 
 type Store struct {
+	writeHealth         writeHealth
 	mu                  sync.Mutex
 	egressMu            sync.Mutex // serializes episode read-modify-write without blocking event state
 	db                  *sql.DB
@@ -598,12 +599,16 @@ func Open(dbPath, jsonlPath string) (*Store, error) {
 	var openID int64
 	_ = db.QueryRow(`SELECT COALESCE(MAX(id), 0) FROM events`).Scan(&openID)
 
-	return &Store{
+	s := &Store{
 		db:        db,
 		jsonlPath: jsonlPath,
 		jsonlFile: jsonl,
 		openID:    openID,
-	}, nil
+	}
+	if jsonlPath != "" && jsonl == nil {
+		s.noteWrite("flag mirror", fmt.Errorf("mirror unavailable"))
+	}
+	return s, nil
 }
 
 // dedupeClaudeModelCalls deletes the model-call rows Claude ingest wrote
@@ -660,6 +665,7 @@ func (s *Store) PutFlag(fl model.Flag) {
 		`INSERT OR REPLACE INTO flags (id, rule, severity, ts, pid, agent, session_id, workspace, evidence, process) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		fl.ID, fl.Rule, fl.Severity, tsStr, fl.PID, fl.Agent, fl.SessionID, fl.Workspace, string(evJSON), procJSON,
 	)
+	s.noteWrite("flags", err)
 	if err != nil {
 		log.Printf("store: failed to insert flag %s: %v", fl.ID, err)
 	} else {
@@ -670,39 +676,66 @@ func (s *Store) PutFlag(fl model.Flag) {
 	// an always-on daemon on a noisy host grows the DB without limit.
 	_, _ = s.db.Exec(`DELETE FROM flags WHERE rowid NOT IN (SELECT rowid FROM flags ORDER BY datetime(ts) DESC, ts DESC LIMIT ?)`, maxFlags)
 
-	if s.jsonlFile != nil {
-		s.maybeRotateJSONLLocked()
-		if s.jsonlFile != nil {
-			data, err := json.Marshal(fl)
-			if err == nil {
-				s.jsonlFile.Write(append(data, '\n'))
-			}
+	if s.jsonlPath != "" {
+		err := s.appendFlagMirrorLocked(fl)
+		s.noteWrite("flag mirror", err)
+		if err != nil {
+			log.Printf("store: flag mirror write failed: %v", err)
 		}
 	}
 }
 
-func (s *Store) maybeRotateJSONLLocked() {
+func (s *Store) appendFlagMirrorLocked(fl model.Flag) error {
+	if s.jsonlFile == nil {
+		f, err := os.OpenFile(s.jsonlPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+		if err != nil {
+			return err
+		}
+		s.jsonlFile = f
+	}
+	if err := s.maybeRotateJSONLLocked(); err != nil {
+		if s.jsonlFile != nil {
+			_ = s.jsonlFile.Close()
+			s.jsonlFile = nil
+		}
+		return err
+	}
+	data, err := json.Marshal(fl)
+	if err != nil {
+		return err
+	}
+	_, err = s.jsonlFile.Write(append(data, '\n'))
+	if err != nil {
+		_ = s.jsonlFile.Close()
+		s.jsonlFile = nil // retry opening on the next flag, never in a loop
+	}
+	return err
+}
+
+func (s *Store) maybeRotateJSONLLocked() error {
 	if s.jsonlFile == nil || s.jsonlPath == "" || jsonlRotateBytes <= 0 {
-		return
+		return nil
 	}
 	st, err := s.jsonlFile.Stat()
-	if err != nil || st.Size() < jsonlRotateBytes {
-		return
+	if err != nil {
+		return err
+	}
+	if st.Size() < jsonlRotateBytes {
+		return nil
 	}
 	_ = s.jsonlFile.Close()
 	s.jsonlFile = nil
 	rotated := s.jsonlPath + ".1"
 	_ = os.Remove(rotated)
 	if err := os.Rename(s.jsonlPath, rotated); err != nil {
-		log.Printf("store: warning: jsonl rotate rename failed: %v", err)
-		return
+		return err
 	}
 	f, err := os.OpenFile(s.jsonlPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
-		log.Printf("store: warning: jsonl rotate reopen failed: %v", err)
-		return
+		return err
 	}
 	s.jsonlFile = f
+	return nil
 }
 
 func (s *Store) PutEvent(e event.Event) {
@@ -770,6 +803,7 @@ func (s *Store) PutEvent(e event.Event) {
 			nullStr(e.ToolName), nullStr(e.ToolStatus), nullInt(e.DurationMs), nullStr(e.Model), nullInt(e.TokensIn), nullInt(e.TokensOut), nullFloat(e.CostUSD), nullStr(e.Provider), e.Record,
 		)
 	}
+	s.noteWrite("events", err)
 	if err != nil {
 		log.Printf("store: failed to insert event: %v", err)
 	} else if n, _ := res.RowsAffected(); n > 0 {
@@ -1637,6 +1671,7 @@ func (s *Store) PutIncident(inc model.IncidentReport) {
 		inc.ID, inc.FlagID, inc.PID, string(inc.Risk), string(data), tsStr,
 		inc.Rule, inc.SessionID, inc.Subject, count, tsStr, string(flagIDs),
 	)
+	s.noteWrite("incidents", err)
 	if err != nil {
 		log.Printf("store: failed to insert incident %s: %v", inc.ID, err)
 	}
@@ -1867,6 +1902,7 @@ func (s *Store) PutAudit(a AuditEntry) {
 		`INSERT INTO audit (ts, action, rule, from_mode, to_mode, detail) VALUES (?, ?, ?, ?, ?, ?)`,
 		ts, a.Action, a.Rule, a.FromMode, a.ToMode, a.Detail,
 	)
+	s.noteWrite("operator audit", err)
 	if err != nil {
 		log.Printf("store: failed to insert audit %s: %v", a.Action, err)
 	}

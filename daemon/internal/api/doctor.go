@@ -63,10 +63,10 @@ type doctorFacts struct {
 	grace     bool
 	st        Status
 
-	settingsKnown  bool
-	hookRegistered bool
-	hookUncovered  bool
-	hookEvents24h  int
+	settingsKnown        bool
+	hookRegistered       bool
+	hookHarnesses        []string
+	missingHookHarnesses []string
 
 	sessionsTotal, sessionsNamed               int
 	sessionsWithWorkspace, sessionsWRepo       int
@@ -106,6 +106,7 @@ var doctorProbes = []doctorProbe{
 	{"retention", "Event retention", "Find the process flooding these kinds in the Events tab; their rows are evicted inside a day", checkRetention},
 	{"egress-routing", "Egress routing", "turn on Settings → Secure Agent → Traffic → Route Claude Code through Secure Agent, source agent-env.sh where other agents launch, or Allow the endpoints in the Egress tab", checkEgressRouting},
 	{"bus", "Event bus", "", checkBus},
+	{"storage", "Evidence storage", "Check free disk space and state-directory permissions; earlier failed writes cannot be recovered by restarting", checkStorage},
 }
 
 // handleDoctor serves the daemon's self-check. Read-level.
@@ -146,7 +147,7 @@ func (a *API) doctorReport(now time.Time) DoctorReport {
 }
 
 func (a *API) doctorFacts(now time.Time) doctorFacts {
-	st := a.statusFn()
+	st := a.evidenceStatus(a.statusFn())
 	uptime, _ := time.ParseDuration(st.Uptime)
 	f := doctorFacts{
 		now:   now,
@@ -158,8 +159,16 @@ func (a *API) doctorFacts(now time.Time) doctorFacts {
 		f.settingsKnown = true
 		f.hookRegistered = claudeHookRegistered(path)
 	}
-	f.hookUncovered = harnessUncoveredItem(a.store, st) != nil
-	f.hookEvents24h = a.store.HookEventsSince(now.Add(-hookActivityWindow))
+	if st.Coverage != nil {
+		for _, row := range st.Coverage.Harnesses {
+			if row.GuardSupported {
+				f.hookHarnesses = append(f.hookHarnesses, row.Name)
+				if row.HookLastSeen == "" {
+					f.missingHookHarnesses = append(f.missingHookHarnesses, row.Name)
+				}
+			}
+		}
+	}
 	f.sessionsTotal, f.sessionsNamed, f.sessionsWithWorkspace, f.sessionsWRepo = a.store.SessionIdentityStats(f.boot)
 	gitWorkspaces := map[string]bool{}
 	workspaceRows, err := a.store.DoctorWorkspaceRepos(f.boot)
@@ -197,6 +206,8 @@ func pct(n, total int) int { return 100 * n / total }
 
 func checkHookRegistered(f doctorFacts) (string, string) {
 	switch {
+	case !activeHarness(f.st, "claude"):
+		return doctorSkip, "Claude Code is not running; registration check does not apply to other harnesses"
 	case !f.settingsKnown:
 		return doctorSkip, "home directory unknown"
 	case !f.hookRegistered:
@@ -206,13 +217,13 @@ func checkHookRegistered(f doctorFacts) (string, string) {
 }
 
 func checkHookActive(f doctorFacts) (string, string) {
-	if f.st.ActiveAgents == 0 {
-		return doctorSkip, "no agents running"
+	if len(f.hookHarnesses) == 0 {
+		return doctorSkip, "no active harness with a supported guard hook"
 	}
-	if f.hookUncovered {
-		return doctorFail, fmt.Sprintf("%d agent(s) running, no hook event in 24h", f.st.ActiveAgents)
+	if len(f.missingHookHarnesses) > 0 {
+		return doctorFail, "no attributed hook activity in 24h: " + strings.Join(f.missingHookHarnesses, ", ")
 	}
-	return doctorPass, fmt.Sprintf("%d hook events in 24h", f.hookEvents24h)
+	return doctorPass, "recent attributed hook activity: " + strings.Join(f.hookHarnesses, ", ")
 }
 
 func checkFileTelemetry(f doctorFacts) (string, string) {
@@ -460,4 +471,18 @@ func checkBus(f doctorFacts) (string, string) {
 		return doctorFail, fmt.Sprintf("%d events dropped by full subscriber buffers", f.st.BusDrops)
 	}
 	return doctorPass, "no dropped events"
+}
+
+func checkStorage(f doctorFacts) (string, string) {
+	h := f.st.StorageHealth
+	if h == nil {
+		return doctorSkip, "storage health unavailable"
+	}
+	if h.Failures == 0 {
+		return doctorPass, "no failed evidence writes"
+	}
+	if len(h.Active) > 0 {
+		return doctorFail, fmt.Sprintf("%d failed persistence attempts since start; still failing: %s", h.Failures, strings.Join(h.Active, ", "))
+	}
+	return doctorFail, fmt.Sprintf("new writes recovered; %d earlier failures may have left evidence gaps", h.Failures)
 }

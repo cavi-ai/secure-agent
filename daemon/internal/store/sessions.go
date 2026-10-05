@@ -51,6 +51,7 @@ func (s *Store) upsertSessionLocked(sess model.Session) {
 		Scan(&cur.harness, &cur.workspace, &cur.repo, &cur.branch, &cur.status, &cur.confidence)
 	exists := err == nil
 	if err != nil && err != sql.ErrNoRows {
+		s.noteWrite("sessions", err)
 		return
 	}
 
@@ -89,7 +90,7 @@ func (s *Store) upsertSessionLocked(sess model.Session) {
 		sess.Status = model.SessionActive
 	}
 
-	_, _ = s.db.Exec(`INSERT INTO sessions
+	_, err = s.db.Exec(`INSERT INTO sessions
 		(id, harness, workspace, repo, branch, root_pid, root_started_at, parent_id, started_at, ended_at, last_seen_at, status, confidence, origin)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
@@ -108,6 +109,7 @@ func (s *Store) upsertSessionLocked(sess model.Session) {
 		sess.RootPID, sess.RootStartedAt, sess.ParentID,
 		sess.StartedAt.UTC().Format(time.RFC3339Nano), nil,
 		sess.LastSeenAt.UTC().Format(time.RFC3339Nano), sess.Status, sess.Confidence, sess.Origin)
+	s.noteWrite("sessions", err)
 }
 
 // TouchSession bumps last_seen_at and reactivates an idle session. Ended

@@ -6,6 +6,11 @@ All notable changes to `secure-agent` are documented here. The format follows
 
 ## [Unreleased]
 
+### Monitoring
+- Surface dropped telemetry and failed evidence persistence in status, posture, and Doctor; retain the warning about possible history gaps after writes recover.
+- Separate each active harness's trace and guard support from recent session-attributed activity.
+- Retain last-known native data on refresh failures, mark it stale, and keep guard-decision refreshes independent of findings and posture failures.
+
 ### Routing
 - Settings → Secure Agent → Traffic → Route Claude Code through Secure Agent: the app writes the proxy and Secure Agent's CA into the `env` block of `~/.claude/settings.json`, and a SessionStart hook that gives each session's Bash commands the tunnel-mode snippet; it removes them at quit and writes them again at launch.
 - The proxy URL's user name selects the mode: `inspect` decrypts and scans hosts in `proxy_inspect_hosts` (default `api.anthropic.com`) and tunnels the rest; `tunnel` passes every connection through unopened, so clients that do not trust Secure Agent's CA keep working.

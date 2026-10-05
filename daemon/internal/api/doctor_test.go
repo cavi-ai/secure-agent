@@ -12,6 +12,7 @@ import (
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/collect"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
+	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 	"github.com/cavi-ai/secure-agent/daemon/internal/supervise"
 )
@@ -85,7 +86,7 @@ func TestDoctorEmptyStore(t *testing.T) {
 		"hook-active":      doctorSkip,
 		"tool-pairing":     doctorPass,
 		"session-identity": doctorSkip,
-		"hook-registered":  doctorFail, // hermetic HOME has no settings.json
+		"hook-registered":  doctorSkip, // no Claude process; its registration is irrelevant
 		"file-telemetry":   doctorSkip,
 		"egress-routing":   doctorPass,
 		"bus":              doctorPass,
@@ -94,7 +95,7 @@ func TestDoctorEmptyStore(t *testing.T) {
 			t.Errorf("%s = %s (%s), want %s", id, c.State, c.Detail, want)
 		}
 	}
-	if c := doctorCheckByID(t, rep, "hook-registered"); c.Fix != "Run Setup → Harness hooks" {
+	if c := doctorCheckByID(t, rep, "hook-registered"); c.Fix != "" {
 		t.Errorf("hook-registered fix = %q", c.Fix)
 	}
 
@@ -207,15 +208,17 @@ func TestDoctorFileTelemetryStaleFloodReportsNotLoaded(t *testing.T) {
 func TestDoctorHookActiveFailsWithAgentsAndNoHookEvents(t *testing.T) {
 	st := testStore(t)
 	t.Cleanup(func() { st.Close() })
-	rep, _ := getDoctor(t, st, Status{Running: true, Uptime: "1h0m0s", ActiveAgents: 3})
+	status := Status{Running: true, Uptime: "1h0m0s", ActiveAgents: 3, Agents: []AgentSummary{{PID: 42, Name: "claude"}}}
+	rep, _ := getDoctor(t, st, status)
 	c := doctorCheckByID(t, rep, "hook-active")
 	if c.State != doctorFail || !strings.Contains(c.Fix, "Setup") || !strings.Contains(c.Fix, "Bash") {
 		t.Fatalf("hook-active = %+v, want fail naming the Setup step and Bash tool calls", c)
 	}
 
-	st.PutEvent(event.Event{Kind: event.KindPluginAction, TS: time.Now(), Detail: "Bash"})
-	rep, _ = getDoctor(t, st, Status{Running: true, Uptime: "1h0m0s", ActiveAgents: 3})
-	if c := doctorCheckByID(t, rep, "hook-active"); c.State != doctorPass || c.Detail != "1 hook events in 24h" {
+	st.UpsertSession(model.Session{ID: "claude-session", Harness: "claude", StartedAt: time.Now(), LastSeenAt: time.Now()})
+	st.PutEvent(event.Event{Kind: event.KindPluginAction, TS: time.Now(), SessionID: "claude-session", Detail: "Bash"})
+	rep, _ = getDoctor(t, st, status)
+	if c := doctorCheckByID(t, rep, "hook-active"); c.State != doctorPass || c.Detail != "recent attributed hook activity: claude" {
 		t.Fatalf("hook-active after a hook event = %+v, want pass", c)
 	}
 }

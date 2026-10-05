@@ -927,7 +927,7 @@ function renderPosture() {
   } else if (p.state === 'critical') {
     stateEl.textContent = 'Critical';
   } else if (!Number(p.needs_you) && Number(p.coverage_count)) {
-    stateEl.textContent = 'Coverage needs setup';
+    stateEl.textContent = 'Monitoring needs attention';
   } else {
     stateEl.textContent = 'Needs attention';
   }

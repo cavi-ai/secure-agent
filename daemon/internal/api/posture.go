@@ -12,7 +12,6 @@ import (
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/collect"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
-	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
 
 // PostureItem is one thing the operator may need to act on.
@@ -89,7 +88,7 @@ func (a *API) PublishPostureIfChanged() {
 // Deliberately derived, not persisted: posture is a view over state, never a
 // second source of truth.
 func (a *API) computePosture() Posture {
-	st := a.statusFn()
+	st := a.evidenceStatus(a.statusFn())
 	posture := Posture{
 		Generated: time.Now().UTC().Format(time.RFC3339Nano),
 		Connected: st.Running,
@@ -484,30 +483,6 @@ func humanCollectorSilentTitle(name string) string {
 // hookActivityWindow is how far back hook evidence counts as activity.
 const hookActivityWindow = 24 * time.Hour
 
-// harnessUncoveredItem flags the audited failure mode: agent processes are
-// running but no harness hook or transcript event has landed in 24h — the
-// hooks are not registered (or every harness is uncovered).
-// harnessUncoveredItem flags agent processes running with no HOOK activity.
-// It keys on hook-produced evidence only (plugin actions and handshakes) —
-// NOT transcript hits, which are secret-pattern matches in any tailed log and
-// say nothing about whether the guard hook is registered. Clearing on
-// transcript hits (the previous behaviour) hid exactly the failure this item
-// exists to report.
-func harnessUncoveredItem(st *store.Store, status Status) *PostureItem {
-	if st == nil {
-		return nil
-	}
-	if st.HookEventsSince(time.Now().Add(-hookActivityWindow)) > 0 {
-		return nil
-	}
-	return &PostureItem{
-		Kind: "harness_uncovered", ID: "harness-hooks",
-		Title:    "No harness hook activity in 24h",
-		Severity: 2,
-		Detail:   fmt.Sprintf("%d agent(s) running but no hook ever fired — hooks may not be registered (run Setup)", status.ActiveAgents),
-	}
-}
-
 // guardHookUnregisteredItem reports that the Claude Code guard hook is not
 // registered in ~/.claude/settings.json, so the PreToolUse/PostToolUse guard
 // never runs for that harness. This is a distinct failure from "the
@@ -515,7 +490,7 @@ func harnessUncoveredItem(st *store.Store, status Status) *PostureItem {
 // guard is unregistered. Registered-but-broken is caught by the hook
 // self-test; this catches never-registered.
 func guardHookUnregisteredItem(status Status) *PostureItem {
-	if status.ActiveAgents == 0 {
+	if !activeHarness(status, "claude") {
 		return nil
 	}
 	settings, err := claudeSettingsPath()
