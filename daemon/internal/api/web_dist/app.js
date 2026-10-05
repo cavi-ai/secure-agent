@@ -314,11 +314,33 @@ document.addEventListener('DOMContentLoaded', () => {
   // Endpoints that failed in the last cycle — each failure surfaces ONCE as a
   // toast so a dying endpoint can't silently blank its panel.
   const failedEndpoints = new Set();
+  const reportHealth = createConsoleReportHealth();
 
   function noteEndpointFailure(key) {
     if (failedEndpoints.has(key)) return;
     failedEndpoints.add(key);
     showToast(`Couldn't load ${key} — will keep retrying`, 'danger');
+  }
+
+  function renderReportHealth() {
+    if (sessionEnded) return;
+    document.querySelectorAll('[data-reports]').forEach(el => {
+      const keys = el.dataset.reports.split('|').filter(key =>
+        (key !== 'flags' || isFlagsFiltered()) && (key !== 'events' || isEventsFiltered()));
+      const failures = reportHealth.failures(keys);
+      const text = consoleReportHealthText(failures);
+      if (el.textContent !== text) el.textContent = text;
+      el.hidden = failures.length === 0;
+    });
+  }
+  function reportSucceeded(key) {
+    reportHealth.success(key);
+    failedEndpoints.delete(key);
+    renderReportHealth();
+  }
+  function reportFailed(key, reason) {
+    reportHealth.failure(key, reason);
+    renderReportHealth();
   }
 
   // parseUptimeSec reads Go duration strings ("20h3m44s", "2s", "1m5s").
@@ -1573,9 +1595,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
   async function fetchTelemetry(opts) {
     // grab(): one fetch with honest failure semantics. 403 = the session is
-    // dead (drives the ended state); other HTTP errors mark just that
-    // endpoint failed; network errors drive the unreachable state. A failed
-    // endpoint NEVER overwrites the panel's last good data.
+    // dead (drives the ended state). Other failures mark that report stale
+    // or unavailable; snapshot failure also drives the unreachable state.
+    // A failed endpoint NEVER overwrites the panel's last good data.
     if (sessionEnded) return;
     const slow = !opts || opts.slow !== false;
     const gen = ++telemetryFetchGen;
@@ -1599,11 +1621,16 @@ document.addEventListener('DOMContentLoaded', () => {
         if (sessionEnded) return null;
         if (r.status === 403) { endSession(); return null; }
         if (!ownsResult()) return null;
-        if (!r.ok) { noteEndpointFailure(key); return null; }
-        failedEndpoints.delete(key);
+        if (!r.ok) { noteEndpointFailure(key); reportFailed(key, `HTTP ${r.status}`); return null; }
         const value = await r.json();
-        return ownsResult() ? value : null;
-      } catch { return null; } // network error, timeout, or corrupt JSON
+        if (!ownsResult()) return null;
+        if (value === null || typeof value !== 'object') { reportFailed(key, 'Invalid response'); return null; }
+        reportSucceeded(key);
+        return value;
+      } catch {
+        if (ownsResult()) reportFailed(key, 'Request failed or response unreadable');
+        return null;
+      }
     };
 
     if (slow) loadSpend(); // beside this cycle: its reports never hold the first render
@@ -1691,6 +1718,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (v) telemetryData.eventsView = v || [];
     }
 
+    renderReportHealth(); // Filter changes can hide a failed filtered report.
     reconcileRetriage();
 
     telemetryData.connected = !!(snap && snap.status);
@@ -1733,16 +1761,24 @@ document.addEventListener('DOMContentLoaded', () => {
     clearTimeout(spendPollTimer);
     spendPollTimer = null;
     const cardPath = spendCardPath();
+    const ownsResult = key => !sessionEnded && gen === spendGen && (key !== 'spend card' || cardPath === spendCardPath());
     const grab = async (key, path) => {
       if (sessionEnded) return null;
       try {
         const r = await apiFetch(path);
         if (sessionEnded) return null;
         if (r.status === 403) { endSession(); return null; }
-        if (!r.ok) { noteEndpointFailure(key); return null; }
-        failedEndpoints.delete(key);
-        return await r.json();
-      } catch { return null; } // network error: the next load retries
+        if (!ownsResult(key)) return null;
+        if (!r.ok) { noteEndpointFailure(key); reportFailed(key, `HTTP ${r.status}`); return null; }
+        const value = await r.json();
+        if (!ownsResult(key)) return null;
+        if (value === null || typeof value !== 'object') { reportFailed(key, 'Invalid response'); return null; }
+        reportSucceeded(key);
+        return value;
+      } catch {
+        if (ownsResult(key)) reportFailed(key, 'Request failed or response unreadable');
+        return null;
+      }
     };
     const [costs, costsCard, costPlans] = await Promise.all([
       grab('spend', '/costs?since=24h&by=repo&cached=1'),
@@ -1771,6 +1807,8 @@ document.addEventListener('DOMContentLoaded', () => {
     spendView = { by: SPEND_BY.includes(by) ? by : 'repo', since: SPEND_SINCE.includes(since) ? since : '24h' };
     try { sessionStorage.setItem(SPEND_VIEW_KEY, JSON.stringify(spendView)); } catch { /* private mode */ }
     telemetryData.costsCard = null;
+    reportHealth.reset('spend card'); // The new query has no retained card yet.
+    renderReportHealth();
     spendPolls = 0;
     renderNow(['spend']);
     loadSpend(true);

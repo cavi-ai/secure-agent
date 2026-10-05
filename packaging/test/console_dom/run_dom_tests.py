@@ -60,7 +60,7 @@ def find_chrome():
 def build_harness(tmp):
     """Harness page = real index.html with mock_dom.js injected between lib.js
     and app.js. Real assets are symlinked so relative paths resolve."""
-    for f in ("index.html", "style.css", "lib.js", "live-updates.js", "app.js",
+    for f in ("index.html", "style.css", "lib.js", "live-updates.js", "report-health.js", "app.js",
               "tab-overview.js", "tab-sessions.js", "tab-agents.js", "tab-egress.js", "tab-findings.js",
               "tab-worktrees.js", "tab-agent.js", "theme-init.js", "icon.svg"):
         os.symlink(os.path.join(WEB_DIST, f), os.path.join(tmp, f))
@@ -183,6 +183,8 @@ def main():
         dom_authmixed = dump_dom(chrome, tmp, "?authmixed")
         dom_spendauth = dump_dom(chrome, tmp, "?spendauth")
         dom_refreshrace = dump_dom(chrome, tmp, "?refreshrace")
+        dom_health = dump_dom(chrome, tmp, "?healthdemo")
+        dom_healthrecover = dump_dom(chrome, tmp, "?healthdemo&recover")
         dom_notoken = dump_dom(chrome, tmp, "?notoken")
         dom_hashagents = dump_dom(chrome, tmp, "#agents")
         dom_hashfindings = dump_dom(chrome, tmp, "#findings")
@@ -709,6 +711,28 @@ def main():
         nfp = pre(dom_notifyfocus, "notify-focus-probe")
         check("notify add-scope input survives a reconcile that changes notifyCfg: same node, value and focus",
               nfp == "same=true value=in-progress-edit focused=true probe=1", f"probe={nfp!r}")
+
+        # Report health is separate from the daemon connection and retained rows.
+        def health_notice(dom, report):
+            match = re.search(r'<p class="report-health" data-reports="' + re.escape(report) + r'"[^>]*>[^<]*</p>', dom)
+            return match.group(0) if match else ""
+        resource_health = health_notice(dom_health, "resources")
+        check("resource request failure preserves data with a persistent stale notice",
+              "Stale" in resource_health and "last refreshed at" in resource_health
+              and "hidden" not in resource_health and 'id="count-agents">3<' in dom_health
+              and "4.0 GB available of 16.0 GB" in dom_health)
+        audit_health = health_notice(dom_health, "audit")
+        check("first-load audit failure is explicitly unavailable",
+              "Unavailable" in audit_health and "HTTP 503" in audit_health and "hidden" not in audit_health)
+        check("unreadable guard response shows stale decisions despite a healthy snapshot",
+              "Guard decisions: Stale" in dom_health and "response unreadable" in dom_health
+              and "Disconnected" not in dom_health)
+        check("successful recovery clears stale and unavailable notices",
+              "Stale" in pre(dom_healthrecover, "health-before-recovery")
+              and "Unavailable" in pre(dom_healthrecover, "health-before-recovery")
+              and "hidden" in health_notice(dom_healthrecover, "resources")
+              and "hidden" in health_notice(dom_healthrecover, "audit")
+              and "Stale" not in health_notice(dom_healthrecover, "resources"))
 
         # --- connection states (the "trouble connecting" regressions) ---
         check("a delayed older snapshot cannot replace a newer manual refresh",
