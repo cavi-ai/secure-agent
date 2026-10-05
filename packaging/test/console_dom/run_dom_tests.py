@@ -60,7 +60,7 @@ def find_chrome():
 def build_harness(tmp):
     """Harness page = real index.html with mock_dom.js injected between lib.js
     and app.js. Real assets are symlinked so relative paths resolve."""
-    for f in ("index.html", "style.css", "lib.js", "live-updates.js", "report-health.js", "app.js",
+    for f in ("index.html", "style.css", "lib.js", "live-updates.js", "report-health.js", "telemetry-validation.js", "app.js",
               "tab-overview.js", "tab-sessions.js", "tab-agents.js", "tab-egress.js", "tab-findings.js",
               "tab-worktrees.js", "tab-agent.js", "theme-init.js", "icon.svg"):
         os.symlink(os.path.join(WEB_DIST, f), os.path.join(tmp, f))
@@ -185,6 +185,8 @@ def main():
         dom_refreshrace = dump_dom(chrome, tmp, "?refreshrace")
         dom_health = dump_dom(chrome, tmp, "?healthdemo")
         dom_healthrecover = dump_dom(chrome, tmp, "?healthdemo&recover")
+        dom_malformed = dump_dom(chrome, tmp, "?malformeddemo")
+        dom_malformedrecover = dump_dom(chrome, tmp, "?malformeddemo&recover")
         dom_notoken = dump_dom(chrome, tmp, "?notoken")
         dom_hashagents = dump_dom(chrome, tmp, "#agents")
         dom_hashfindings = dump_dom(chrome, tmp, "#findings")
@@ -733,6 +735,22 @@ def main():
               and "hidden" in health_notice(dom_healthrecover, "resources")
               and "hidden" in health_notice(dom_healthrecover, "audit")
               and "Stale" not in health_notice(dom_healthrecover, "resources"))
+
+        hot_health = health_notice(dom_malformed, "snapshot|guard decisions")
+        check("malformed snapshot and guard containers retain last-good metrics with persistent warnings",
+              pre(dom_malformed, "malformed-returned") == "yes"
+              and 'id="count-agents">3<' in dom_malformed
+              and "Live telemetry: Stale" in hot_health
+              and "Guard decisions: Unavailable" in hot_health and "Invalid response" in hot_health
+              and "hidden" not in hot_health
+              and "The daemon returned invalid telemetry" in dom_malformed
+              and 'id="status-text">Telemetry unavailable<' in dom_malformed)
+        hot_recovered = health_notice(dom_malformedrecover, "snapshot|guard decisions")
+        check("valid hot responses recover from malformed containers",
+              pre(dom_malformedrecover, "malformed-before-recovery").startswith("3 ")
+              and "Stale" in pre(dom_malformedrecover, "malformed-before-recovery")
+              and 'id="count-agents">3<' in dom_malformedrecover
+              and "hidden" in hot_recovered and "Invalid response" not in hot_recovered)
 
         # --- connection states (the "trouble connecting" regressions) ---
         check("a delayed older snapshot cannot replace a newer manual refresh",
