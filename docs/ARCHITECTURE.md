@@ -126,6 +126,9 @@ missing rows and updates that change no row do not clear an active fault.
 New incidents enter the live feed, fleet delivery, and advisor queue only after
 their insertion succeeds. Insertion and serialization failures still refresh
 posture through the evidence-health tracker while flag collection continues.
+Advisor verdicts track persistence failures independently and publish a flag
+refresh only after the verdict is saved. Every verdict write refreshes posture;
+storage failures do not count as provider failures or trip its circuit breaker.
 
 Per-harness coverage joins recent hook and trace events to their persisted
 session IDs. It lists only active, non-infrastructure harnesses and separates

@@ -3,6 +3,7 @@ package advisor
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -54,6 +55,7 @@ func (s *chatStub) handler(t *testing.T) http.HandlerFunc {
 }
 
 type memSink struct {
+	writeErr   error
 	mu         sync.Mutex
 	rows       map[string]model.AdvisorVerdict
 	trend      model.TrendContext
@@ -63,10 +65,14 @@ type memSink struct {
 	labelQuery string
 }
 
-func (m *memSink) PutAdvisorVerdict(subjectID, kind string, v model.AdvisorVerdict) {
+func (m *memSink) PutAdvisorVerdict(subjectID, kind string, v model.AdvisorVerdict) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.writeErr != nil {
+		return m.writeErr
+	}
 	m.rows[subjectID] = v
+	return nil
 }
 
 func (m *memSink) TrendFor(rule, host string) model.TrendContext { return m.trend }
@@ -133,6 +139,24 @@ func TestParseVerdict(t *testing.T) {
 		if _, err := parseVerdict(bad); err == nil {
 			t.Errorf("malformed verdict must drop, got nil error for %q", bad)
 		}
+	}
+}
+
+func TestVerdictStorageFailureDoesNotTripProviderBreaker(t *testing.T) {
+	stub := &chatStub{content: `{"assessment":"benign","confidence":0.9,"rationale":"routine"}`}
+	srv := newStubServer(t, stub)
+	sink := &memSink{rows: map[string]model.AdvisorVerdict{}, writeErr: errors.New("storage unavailable")}
+	sub := New(Config{Enabled: true, Endpoint: srv.URL, Model: "test", Timeout: 2 * time.Second}, sink)
+	for i := 0; i < breakerThreshold+1; i++ {
+		sub.process(context.Background(), task{kind: "flag", subjectID: "flag", flag: model.Flag{ID: "flag"}})
+	}
+	if len(sink.rows) != 0 || sub.failures != 0 || sub.lastErr != "" || sub.circuitIsOpen() {
+		t.Fatalf("storage failure was saved or blamed on provider: rows=%v failures=%d error=%q", sink.rows, sub.failures, sub.lastErr)
+	}
+	sink.writeErr = nil
+	sub.process(context.Background(), task{kind: "flag", subjectID: "flag", flag: model.Flag{ID: "flag"}})
+	if got, ok := sink.rows["flag"]; !ok || got.Assessment != "benign" {
+		t.Fatalf("verdict did not recover after storage became available: %+v, %v", got, ok)
 	}
 }
 
