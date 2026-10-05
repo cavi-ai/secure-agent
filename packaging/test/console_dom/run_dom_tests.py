@@ -180,6 +180,8 @@ def main():
         dom_view = dump_dom(chrome, tmp, "?viewdemo")
         dom_advdown = dump_dom(chrome, tmp, "?advisordown")
         dom_authfail = dump_dom(chrome, tmp, "?authfail")
+        dom_authmixed = dump_dom(chrome, tmp, "?authmixed")
+        dom_spendauth = dump_dom(chrome, tmp, "?spendauth")
         dom_notoken = dump_dom(chrome, tmp, "?notoken")
         dom_hashagents = dump_dom(chrome, tmp, "#agents")
         dom_hashfindings = dump_dom(chrome, tmp, "#findings")
@@ -720,6 +722,11 @@ def main():
               and '<pre id="sse-state" hidden="">closed</pre>' in dom_authfail,
               (re.search(r'<pre id="sse-state"[^>]*>[^<]*</pre>', dom_authfail) or [None])[0])
         nt_fetches = (re.search(r'<pre id="fetch-count"[^>]*>(\d+)</pre>', dom_notoken) or [None, "missing"])[1]
+        for label, expired in (("guard", dom_authmixed), ("spend", dom_spendauth)):
+            check(f"{label} endpoint 403 ends the console even when snapshot succeeds",
+                  'class="is-ended"' in expired
+                  and re.search(r'<main[^>]*\bhidden\b', expired) is not None
+                  and '<pre id="sse-state" hidden="">closed</pre>' in expired)
         check("no token at load: only the ended state, no posture, zero fetches, no stream",
               'id="session-ended" role="alert">' in dom_notoken
               and re.search(r'<section class="posture" id="posture-banner"[^>]*\bhidden\b', dom_notoken) is not None
