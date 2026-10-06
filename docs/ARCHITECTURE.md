@@ -137,6 +137,10 @@ Session ending commits the lifecycle transition and closure of running tool
 calls in one transaction. Failed endings have a separate write-health label;
 the resolver retains tracking and emits no ending transition until persistence
 succeeds. Missing-session no-ops and unrelated upserts do not clear that fault.
+Idle transitions commit as a complete batch before returning changed session
+IDs. Idling and activity writes report independent faults, and failed activity
+writes do not advance the resolver's throttle clock. No-op transitions leave
+existing faults active; successful writes retain cumulative failure history.
 
 Per-harness coverage joins recent hook and trace events to their persisted
 session IDs. It lists only active, non-infrastructure harnesses and separates

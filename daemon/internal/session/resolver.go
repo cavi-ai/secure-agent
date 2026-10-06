@@ -838,8 +838,8 @@ func (r *Resolver) touchLocked(id string, ts time.Time) {
 	if last, ok := r.touch[id]; ok && ts.Sub(last) < touchThrottle {
 		return
 	}
-	r.touch[id] = ts
 	if sess, ok := r.deferred[id]; ok {
+		r.touch[id] = ts
 		if info, tagged := r.tagger.Tag(sess.RootPID); tagged && !info.StartedAt.IsZero() {
 			if ts.Sub(info.StartedAt) < minSessionLifetime {
 				return // still under the floor
@@ -862,7 +862,11 @@ func (r *Resolver) touchLocked(id string, ts time.Time) {
 		r.emitLocked(sess)
 		return
 	}
-	r.st.TouchSession(id, ts)
+	if err := r.st.TouchSession(id, ts); err != nil {
+		log.Printf("session: persist activity: %v", err)
+		return
+	}
+	r.touch[id] = ts
 }
 
 // rootStarted parses the root start time recorded at session creation
@@ -898,7 +902,10 @@ func (r *Resolver) WorkspaceFor(sessionID string) string {
 // refresh cadence.
 func (r *Resolver) Sweep() {
 	now := r.now()
-	idled := r.st.MarkSessionsIdle(now.Add(-idleAfter))
+	idled, err := r.st.MarkSessionsIdle(now.Add(-idleAfter))
+	if err != nil {
+		log.Printf("session: persist idle transitions: %v", err)
+	}
 
 	live := map[int32]bool{}
 	for pid := range r.tagger.TaggedPIDs() {
