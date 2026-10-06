@@ -149,6 +149,10 @@ unsaved session. A recent transcript touch does not delay root attachment.
 Promotion records the current activity time. Session upserts return read/write
 errors and reject writes that save no row; an empty-ID no-op does
 not clear an active session write fault.
+Hook handshakes, transcript sightings, stamped events, and transcript root
+attachments publish only after their metadata upsert succeeds. Failed metadata
+saves skip follow-up activity writes; the next input retries the upsert.
+Observed hook and transcript sightings remain recorded even when storage fails.
 
 Per-harness coverage joins recent hook and trace events to their persisted
 session IDs. It lists only active, non-infrastructure harnesses and separates

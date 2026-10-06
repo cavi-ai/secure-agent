@@ -212,8 +212,9 @@ func (r *Resolver) Resolve(e *event.Event) string {
 
 	// Tier 1: hook/transcript-stamped id on the event itself.
 	if e.SessionID != "" {
-		r.ensureHookSession(e)
-		r.touchLocked(e.SessionID, e.TS)
+		if r.ensureHookSession(e) {
+			r.touchLocked(e.SessionID, e.TS)
+		}
 		if !isTraceKind(e.Kind) {
 			r.noteSightingLocked(e.SessionID, "") // hook activity
 		}
@@ -432,7 +433,7 @@ func (r *Resolver) HandleHandshake(h Handshake) {
 		r.byPID[h.PID] = h.SessionID
 	}
 
-	r.st.UpsertSession(model.Session{
+	if !r.upsertAndEmitLocked(model.Session{
 		ID:         h.SessionID,
 		Harness:    h.Harness,
 		Workspace:  h.Workspace,
@@ -443,9 +444,8 @@ func (r *Resolver) HandleHandshake(h Handshake) {
 		LastSeenAt: ts,
 		Status:     model.SessionActive,
 		Confidence: model.ConfHook,
-	})
-	if sess, ok := r.st.GetSession(h.SessionID); ok {
-		r.emitLocked(sess)
+	}) {
+		return
 	}
 	r.touchLocked(h.SessionID, ts)
 }
@@ -508,14 +508,13 @@ func (r *Resolver) NoteTranscriptSighting(s TranscriptSighting) {
 	if repo == "" {
 		repo, branch = GitInfoFor(workspace)
 	}
-	r.st.UpsertSession(model.Session{
+	if !r.upsertAndEmitLocked(model.Session{
 		ID: id, Harness: harness, Workspace: workspace,
 		Repo: repo, Branch: branch, ParentID: s.ParentID, Origin: s.Origin,
 		StartedAt: ts, LastSeenAt: ts,
 		Status: model.SessionActive, Confidence: model.ConfTranscript,
-	})
-	if stored, ok := r.st.GetSession(id); ok {
-		r.emitLocked(stored)
+	}) {
+		return
 	}
 	r.touchLocked(id, ts)
 }
@@ -622,7 +621,7 @@ func (r *Resolver) confidenceLocked(id string) string {
 // (tool, turn or model call) comes from the harness's own transcript or
 // state database, so it names a transcript session; hook-origin events name
 // a hook session. A stamped event from a tagged pid joins its process tree.
-func (r *Resolver) ensureHookSession(e *event.Event) {
+func (r *Resolver) ensureHookSession(e *event.Event) bool {
 	ts := e.TS
 	if ts.IsZero() {
 		ts = r.now()
@@ -650,10 +649,7 @@ func (r *Resolver) ensureHookSession(e *event.Event) {
 	if sess.Repo == "" {
 		sess.Repo, sess.Branch = GitInfoFor(sess.Workspace)
 	}
-	r.st.UpsertSession(sess)
-	if stored, ok := r.st.GetSession(e.SessionID); ok {
-		r.emitLocked(stored)
-	}
+	return r.upsertAndEmitLocked(sess)
 }
 
 // joinTreeLocked ties a stamped session to the process tree its event came
@@ -737,16 +733,12 @@ func (r *Resolver) JoinTranscriptPID(id string, pid int32) {
 			if ri, ok := r.tagger.Tag(root); ok && !ri.StartedAt.IsZero() {
 				sess.RootStartedAt = ri.StartedAt.UTC().Format(time.RFC3339Nano)
 			}
-			r.st.UpsertSession(sess)
-			r.emitLocked(sess)
+			r.upsertAndEmitLocked(sess)
 			return
 		}
 	}
 	r.joinTreeLocked(&sess, pid, info)
-	r.st.UpsertSession(sess)
-	if stored, ok := r.st.GetSession(id); ok {
-		r.emitLocked(stored)
-	}
+	r.upsertAndEmitLocked(sess)
 }
 
 // isTraceKind reports the agent-semantic kinds only trace collectors emit.
@@ -810,6 +802,19 @@ func (r *Resolver) emitLocked(sess model.Session) {
 	if r.OnSessionChange != nil {
 		r.OnSessionChange(sess)
 	}
+}
+
+// upsertAndEmitLocked publishes stored metadata only after its write succeeds.
+// A failed save must not trigger a follow-up activity write. Caller holds mu.
+func (r *Resolver) upsertAndEmitLocked(sess model.Session) bool {
+	if err := r.st.UpsertSession(sess); err != nil {
+		log.Printf("session: persist metadata: %v", err)
+		return false
+	}
+	if saved, ok := r.st.GetSession(sess.ID); ok {
+		r.emitLocked(saved)
+	}
+	return true
 }
 
 // touchLocked bumps last_seen at most once per touchThrottle per session,
