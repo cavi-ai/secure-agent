@@ -115,17 +115,32 @@ func (s *Store) upsertSessionLocked(sess model.Session) {
 
 // TouchSession bumps last_seen_at and reactivates an idle session. Ended
 // sessions stay ended.
-func (s *Store) TouchSession(id string, ts time.Time) {
+func (s *Store) TouchSession(id string, ts time.Time) (writeErr error) {
 	if id == "" {
-		return
+		return nil
 	}
+	changed := false
+	defer func() {
+		if writeErr != nil || changed {
+			s.noteWrite("session activity", writeErr)
+		}
+	}()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	_, _ = s.db.Exec(`UPDATE sessions SET last_seen_at = ?,
+	result, err := s.db.Exec(`UPDATE sessions SET last_seen_at = ?,
 		status = CASE WHEN status = ? THEN ? ELSE status END
 		WHERE id = ? AND status != ?`,
 		ts.UTC().Format(time.RFC3339Nano),
 		model.SessionIdle, model.SessionActive, id, model.SessionEnded)
+	if err != nil {
+		return fmt.Errorf("touch session: %w", err)
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("session activity rows affected: %w", err)
+	}
+	changed = n > 0
+	return nil
 }
 
 // EndSession marks a session ended (root process gone, or explicit end).
@@ -236,28 +251,63 @@ func (s *Store) RepairSessionGitIdentity(resolve func(workspace string) (repo, b
 }
 
 // MarkSessionsIdle flips active sessions with no activity since cutoff to
-// idle. Returns the ids flipped (the resolver ends their pid-less cousins).
-func (s *Store) MarkSessionsIdle(cutoff time.Time) []string {
+// idle. Returns only the ids committed by a complete transition batch.
+func (s *Store) MarkSessionsIdle(cutoff time.Time) (_ []string, writeErr error) {
+	changed := false
+	defer func() {
+		if writeErr != nil || changed {
+			s.noteWrite("session idling", writeErr)
+		}
+	}()
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("begin session idling: %w", err)
+	}
+	defer tx.Rollback()
 
 	c := cutoff.UTC().Format(time.RFC3339Nano)
-	rows, err := s.db.Query(`SELECT id FROM sessions WHERE status = ? AND last_seen_at < ?`, model.SessionActive, c)
+	rows, err := tx.Query(`SELECT id FROM sessions WHERE status = ? AND last_seen_at < ?`, model.SessionActive, c)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("select idle sessions: %w", err)
 	}
 	var ids []string
 	for rows.Next() {
 		var id string
-		if rows.Scan(&id) == nil {
-			ids = append(ids, id)
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("scan idle session: %w", err)
 		}
+		ids = append(ids, id)
 	}
-	rows.Close()
-	if len(ids) > 0 {
-		_, _ = s.db.Exec(`UPDATE sessions SET status = ? WHERE status = ? AND last_seen_at < ?`, model.SessionIdle, model.SessionActive, c)
+	cursorErr := rows.Err()
+	closeErr := rows.Close()
+	if cursorErr != nil {
+		return nil, fmt.Errorf("read idle sessions: %w", cursorErr)
 	}
-	return ids
+	if closeErr != nil {
+		return nil, fmt.Errorf("close idle sessions cursor: %w", closeErr)
+	}
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	result, err := tx.Exec(`UPDATE sessions SET status = ? WHERE status = ? AND last_seen_at < ?`, model.SessionIdle, model.SessionActive, c)
+	if err != nil {
+		return nil, fmt.Errorf("mark sessions idle: %w", err)
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return nil, fmt.Errorf("idle session rows affected: %w", err)
+	}
+	if n != int64(len(ids)) {
+		return nil, fmt.Errorf("idle transition affected %d of %d sessions", n, len(ids))
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit session idling: %w", err)
+	}
+	changed = true
+	return ids, nil
 }
 
 // SessionRoots returns root pids of non-ended sessions so the resolver can
