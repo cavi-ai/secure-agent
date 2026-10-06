@@ -53,7 +53,7 @@ type Sink interface {
 	// fired while the advisor was off and have no verdict yet.
 	CriticalFlagsMissingAdvisor(since time.Time, limit int) []model.Flag
 	// PutAdvisorPlan stores a plan keyed by its subject.
-	PutAdvisorPlan(subject string, p model.AdvisorPlan)
+	PutAdvisorPlan(subject string, p model.AdvisorPlan) error
 	// SimilarLabels returns the operator's judgments on cases like this
 	// one (rule, agent, and the file path or host involved).
 	SimilarLabels(rule, agent, pattern string, limit int) []model.OperatorLabel
@@ -389,7 +389,9 @@ func (s *Subscriber) process(ctx context.Context, t task) {
 		p.Model = s.cfg.Model
 		p.CreatedAt = time.Now().UTC()
 		p.EvidenceKey = t.plan.EvidenceKey
-		s.sink.PutAdvisorPlan(t.subjectID, p)
+		if err := s.sink.PutAdvisorPlan(t.subjectID, p); err != nil {
+			log.Printf("advisor: persist plan: %v", err)
+		}
 		return
 	}
 	var (

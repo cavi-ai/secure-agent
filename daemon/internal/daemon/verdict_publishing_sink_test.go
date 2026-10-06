@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"database/sql"
+	"math"
 	"path/filepath"
 	"testing"
 	"time"
@@ -10,6 +11,48 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
+
+func TestAdvisorPlanPersistenceRefreshesPosture(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "e.db"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	p := model.AdvisorPlan{Summary: "saved", CreatedAt: time.Now()}
+	if err := st.PutAdvisorPlan("subject", p); err != nil {
+		t.Fatal(err)
+	}
+	hub := api.NewDeltaHub()
+	sub := hub.Subscribe()
+	defer hub.Close()
+	var observed []store.WriteHealth
+	sink := &verdictPublishingSink{Store: st, deltaHub: hub, postureChanged: func() { observed = append(observed, st.WriteHealth()) }}
+	p.Summary, p.Confidence = "new", math.Inf(1)
+	if err := sink.PutAdvisorPlan("subject", p); err == nil {
+		t.Fatal("invalid plan reported persistence success")
+	}
+	if len(observed) != 1 || observed[0].Failures != 1 || len(observed[0].Active) != 1 || observed[0].Active[0] != "advisor plans" {
+		t.Fatalf("posture callback did not observe plan failure: %+v", observed)
+	}
+	if saved, ok := st.AdvisorPlanFor("subject"); !ok || saved.Summary != "saved" {
+		t.Fatalf("failed save changed the previous plan: %+v, %v", saved, ok)
+	}
+	p.Confidence = 0.8
+	if err := sink.PutAdvisorPlan("subject", p); err != nil {
+		t.Fatal(err)
+	}
+	if len(observed) != 2 || observed[1].Failures != 1 || len(observed[1].Active) != 0 {
+		t.Fatalf("posture callback did not observe recovery and retained history: %+v", observed)
+	}
+	if saved, ok := st.AdvisorPlanFor("subject"); !ok || saved.Summary != "new" {
+		t.Fatalf("recovered plan was not saved: %+v, %v", saved, ok)
+	}
+	select {
+	case delta := <-sub:
+		t.Fatalf("plan save published an unrelated flag delta: %+v", delta)
+	default:
+	}
+}
 
 func TestVerdictPublishingSinkFailureAndRecovery(t *testing.T) {
 	for _, kind := range []string{"flag", "incident"} {

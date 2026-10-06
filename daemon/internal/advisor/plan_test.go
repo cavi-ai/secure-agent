@@ -3,6 +3,7 @@ package advisor
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -18,13 +19,17 @@ func (m *memSink) SimilarLabels(rule, agent, pattern string, limit int) []model.
 	return m.labels
 }
 
-func (m *memSink) PutAdvisorPlan(subject string, p model.AdvisorPlan) {
+func (m *memSink) PutAdvisorPlan(subject string, p model.AdvisorPlan) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.writeErr != nil {
+		return m.writeErr
+	}
 	if m.plans == nil {
 		m.plans = map[string]model.AdvisorPlan{}
 	}
 	m.plans[subject] = p
+	return nil
 }
 
 const goodPlan = `{"summary":"The codex session printed an API key from a tool result.",
@@ -45,6 +50,41 @@ func planReq() PlanRequest {
 
 // A plan from the model is validated and stored with the model, time and
 // evidence key; actions keep only offered ids; unknown step kinds drop.
+func TestPlanStorageFailureAllowsRetryWithoutProviderFailure(t *testing.T) {
+	stub := &chatStub{content: goodPlan}
+	srv := newStubServer(t, stub)
+	sink := &memSink{writeErr: errors.New("storage unavailable")}
+	sub := New(Config{Enabled: true, Endpoint: srv.URL, Model: "test", Timeout: 2 * time.Second}, sink)
+	req := planReq()
+	for i := 0; i < breakerThreshold+1; i++ {
+		if !sub.EnqueuePlan(req) {
+			t.Fatal("storage failure prevented retry")
+		}
+		select {
+		case work := <-sub.queue:
+			sub.process(context.Background(), work)
+		default:
+			t.Fatal("retry was accepted without queuing work")
+		}
+		if len(sink.plans) != 0 || sub.PlanPending(req.SubjectID) || sub.failures != 0 || sub.lastErr != "" || sub.circuitIsOpen() {
+			t.Fatalf("storage failure left a saved/pending plan or blamed the provider: plans=%v failures=%d error=%q", sink.plans, sub.failures, sub.lastErr)
+		}
+	}
+	sink.writeErr = nil
+	if !sub.EnqueuePlan(req) {
+		t.Fatal("recovered plan was not queued")
+	}
+	select {
+	case work := <-sub.queue:
+		sub.process(context.Background(), work)
+	default:
+		t.Fatal("recovered plan work was not queued")
+	}
+	if saved, ok := sink.plans[req.SubjectID]; !ok || saved.EvidenceKey != req.EvidenceKey || sub.PlanPending(req.SubjectID) {
+		t.Fatalf("plan did not recover: %+v, %v", saved, ok)
+	}
+}
+
 func TestPlanStoredFromModel(t *testing.T) {
 	stub := &chatStub{content: goodPlan}
 	srv := newStubServer(t, stub)
