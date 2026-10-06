@@ -52,6 +52,8 @@ jobs:
         run: python3 plugin/hooks/test_injection_scan.py
       - name: activity_log
         run: python3 plugin/hooks/test_activity_log.py
+      - name: Cursor hook protocol tests
+        run: python3 plugin/hooks/test_cursor_hooks.py
 
   menubar:
     name: Swift package tests (macOS 27 SDK)

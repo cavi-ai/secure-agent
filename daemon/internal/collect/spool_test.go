@@ -221,7 +221,7 @@ func TestSpoolTailerSkipsFloodPastBudget(t *testing.T) {
 	if err := os.WriteFile(path, body, 0o640); err != nil {
 		t.Fatal(err)
 	}
-	b := bus.New(64)
+	b := bus.New(128) // capacity for the 100 valid recovery events
 	sub := b.Subscribe()
 	tailer := NewSpoolTailerAt(b, path)
 
@@ -272,10 +272,8 @@ func TestSpoolTailerSkipsFloodPastBudget(t *testing.T) {
 	}
 }
 
-// A burst of entirely VALID lines that exceeds the per-tick drain budget must
-// not read as unparsed garbage: Lines counts only what the scanner actually
-// read, never the bulk-skipped tail, so Lines == Parsed even while Skipped
-// and BytesSkipped record what the budget forced the tick to drop.
+// A burst of valid lines exceeding the byte budget must stay on disk for
+// later polls, rather than being skipped or mistaken for garbage.
 func TestSpoolTailerBudgetHitOverValidLinesCountsOnlyReadLines(t *testing.T) {
 	path := t.TempDir() + "/spool.jsonl"
 	valid := `{"event_type":0,"process":{"audit_token":{"pid":9},"executable":{"path":"/bin/ls"}},"event":{"open":{"file":{"path":"/etc/hosts"}}},"time":"2026-09-11T12:00:00Z"}` + "\n"
@@ -287,13 +285,38 @@ func TestSpoolTailerBudgetHitOverValidLinesCountsOnlyReadLines(t *testing.T) {
 	b := bus.New(64)
 	tailer := NewSpoolTailerAt(b, path)
 
-	_ = tailer.poll(spoolCursor{})
+	c := tailer.poll(spoolCursor{})
 	stats := tailer.Stats()
-	if stats.Skipped == 0 {
-		t.Fatal("Skipped = 0 after a tick well past the drain budget over valid lines, want > 0")
+	if c.offset <= 0 || c.offset >= int64(len(body)) || stats.Skipped != 0 || stats.BytesLost != 0 {
+		t.Fatalf("valid backlog was skipped: offset=%d size=%d stats=%+v", c.offset, len(body), stats)
 	}
 	if stats.Lines != stats.Parsed {
-		t.Fatalf("Lines = %d, Parsed = %d, want equal — a budget-skipped VALID burst must not count as unparsed", stats.Lines, stats.Parsed)
+		t.Fatalf("Lines = %d, Parsed = %d, want equal", stats.Lines, stats.Parsed)
+	}
+	if err := os.Rename(path, path+".1"); err != nil {
+		t.Fatal(err)
+	}
+	appendSpool(t, path, esOpenLine(10)+"\n")
+	current, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for tick := 0; !os.SameFile(c.file, current); tick++ {
+		if tick > 10 {
+			t.Fatal("rotated backlog did not finish")
+		}
+		previous := c.offset
+		previousFile := c.file
+		c = tailer.poll(c)
+		if os.SameFile(previousFile, c.file) && c.offset <= previous {
+			t.Fatal("valid backlog did not resume")
+		}
+	}
+	if c.offset != current.Size() {
+		t.Fatal("new spool was not drained after retained backlog")
+	}
+	if tailer.Stats().BytesLost != 0 {
+		t.Fatal("valid burst lost evidence")
 	}
 }
 
@@ -472,5 +495,131 @@ func TestSpoolTailerTracksFeedClockAndLag(t *testing.T) {
 	tailer.now = func() time.Time { return wall.Add(spoolLagFresh + time.Second) }
 	if s := tailer.Stats(); s.Lag != 0 || s.NewestEvent.IsZero() {
 		t.Fatalf("stale lag still reported: %+v", s)
+	}
+}
+
+func TestSpoolRetainsRejectedLineAcrossPollsAndRotation(t *testing.T) {
+	path := t.TempDir() + "/spool.jsonl"
+	appendSpool(t, path, esOpenLine(1)+"\n"+esOpenLine(2)+"\n"+esOpenLine(3)+"\n")
+	b := bus.New(1)
+	defer b.Close()
+	sub := b.Subscribe()
+	tailer := NewSpoolTailerAt(b, path)
+	c := tailer.poll(spoolCursor{})
+	first := int64(len(esOpenLine(1)) + 1)
+	if c.offset != first || b.Dropped() != 0 {
+		t.Fatalf("offset=%d drops=%d; rejected line must stay unread", c.offset, b.Dropped())
+	}
+	// A second poll with no available slot must preserve that exact cursor.
+	c = tailer.poll(c)
+	if c.offset != first {
+		t.Fatal("advanced past rejected event")
+	}
+	if err := os.Rename(path, path+".1"); err != nil {
+		t.Fatal(err)
+	}
+	appendSpool(t, path, esOpenLine(4)+"\n")
+	for _, want := range []int32{1, 2, 3, 4} {
+		select {
+		case got := <-sub:
+			if got.PID != want {
+				t.Fatalf("PID=%d want=%d", got.PID, want)
+			}
+		default:
+			t.Fatalf("missing PID %d", want)
+		}
+		c = tailer.poll(c)
+	}
+	if len(sub) != 0 || b.Dropped() != 0 {
+		t.Fatal("duplicates or delivery loss")
+	}
+}
+
+func TestSpoolLossSurvivesHealthyPollAfterOverwrittenRotation(t *testing.T) {
+	path := t.TempDir() + "/spool.jsonl"
+	appendSpool(t, path, esOpenLine(1)+"\n"+esOpenLine(2)+"\n")
+	b := bus.New(1)
+	defer b.Close()
+	sub := b.Subscribe()
+	tailer := NewSpoolTailerAt(b, path)
+	c := tailer.poll(spoolCursor{})
+	want := uint64(c.size - c.offset)
+	if err := os.Rename(path, path+".1"); err != nil {
+		t.Fatal(err)
+	}
+	appendSpool(t, path, esOpenLine(3)+"\n")
+	// A second rotation overwrites the retained tail before it can be read.
+	if err := os.Rename(path, path+".1"); err != nil {
+		t.Fatal(err)
+	}
+	appendSpool(t, path, esOpenLine(4)+"\n")
+	<-sub
+	c = tailer.poll(c)
+	if got := tailer.Stats().BytesLost; got != want || got == 0 {
+		t.Fatalf("lost=%d want=%d", got, want)
+	}
+	<-sub
+	tailer.poll(c)
+	if tailer.Stats().BytesLost != want {
+		t.Fatal("healthy tick erased historical loss")
+	}
+}
+
+func TestSpoolPendingEventReportsLagWithoutAdvancingFeed(t *testing.T) {
+	path := t.TempDir() + "/spool.jsonl"
+	appendSpool(t, path, esOpenLine(1)+"\n")
+	b := bus.New(1)
+	defer b.Close()
+	b.Subscribe()
+	b.Publish(event.Event{})
+	tailer := NewSpoolTailerAt(b, path)
+	tailer.now = func() time.Time { return time.Date(2026, 9, 11, 12, 1, 0, 0, time.UTC) }
+	tailer.poll(spoolCursor{})
+	stats := tailer.Stats()
+	if stats.Lag <= 0 || !stats.NewestEvent.IsZero() {
+		t.Fatalf("stats=%+v", stats)
+	}
+}
+
+func TestSpoolRotatedPartialLineDoesNotStallNewFile(t *testing.T) {
+	path := t.TempDir() + "/spool.jsonl"
+	appendSpool(t, path, esOpenLine(1)+"\n"+"unfinished")
+	b := bus.New(8)
+	defer b.Close()
+	sub := b.Subscribe()
+	tailer := NewSpoolTailerAt(b, path)
+	c := tailer.poll(spoolCursor{})
+	if err := os.Rename(path, path+".1"); err != nil {
+		t.Fatal(err)
+	}
+	appendSpool(t, path, esOpenLine(2)+"\n")
+	tailer.poll(c)
+	if got := drainedPIDs(sub); !slices.Equal(got, []int32{1, 2}) {
+		t.Fatalf("PIDs=%v", got)
+	}
+	if got := tailer.Stats().BytesLost; got != uint64(len("unfinished")) {
+		t.Fatalf("lost=%d", got)
+	}
+}
+
+func TestSpoolTruncationRetainsNewContentAndReportsUnreadLoss(t *testing.T) {
+	path := t.TempDir() + "/spool.jsonl"
+	appendSpool(t, path, esOpenLine(1)+"\n"+esOpenLine(2)+"\n")
+	b := bus.New(1)
+	defer b.Close()
+	sub := b.Subscribe()
+	tailer := NewSpoolTailerAt(b, path)
+	c := tailer.poll(spoolCursor{})
+	want := uint64(c.size - c.offset)
+	if err := os.WriteFile(path, []byte(esOpenLine(3)+"\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	<-sub
+	tailer.poll(c)
+	if got := <-sub; got.PID != 3 {
+		t.Fatalf("PID=%d", got.PID)
+	}
+	if got := tailer.Stats().BytesLost; got != want {
+		t.Fatalf("lost=%d want=%d", got, want)
 	}
 }

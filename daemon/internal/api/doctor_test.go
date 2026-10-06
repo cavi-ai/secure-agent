@@ -379,7 +379,7 @@ func TestDoctorChecksFromFacts(t *testing.T) {
 			f := steady
 			f.st.ESService = &collect.ESServiceSnapshot{State: "running", SpoolMtime: now, NewestEventAt: timeAt(now.Add(-2 * time.Hour)), LagSeconds: 7200}
 			return f
-		}(), doctorFail, "2h0m0s before it arrived"},
+		}(), doctorFail, "delivery is 2h0m0s behind"},
 		{"file events delivered on time", checkFileTelemetry, func() doctorFacts {
 			f := steady
 			f.st.ESService = &collect.ESServiceSnapshot{State: "running", SpoolMtime: now, NewestEventAt: timeAt(now), LagSeconds: 1}
@@ -460,5 +460,24 @@ func TestDoctorEgressRoutedCounts(t *testing.T) {
 	rep, _ := getDoctor(t, st, Status{Running: true, Uptime: "1h0m0s", ProxyEnabled: true, ProxyTunneled: 12, ProxyDecrypted: 3})
 	if c := doctorCheckByID(t, rep, "egress-routing"); c.State != doctorPass || !strings.Contains(c.Detail, "15 connections since start (3 decrypted)") {
 		t.Fatalf("egress-routing = %+v, want pass naming 15 connections, 3 decrypted", c)
+	}
+}
+
+func TestDoctorSpoolLossIsNotClearedByHealthyDelivery(t *testing.T) {
+	es := collect.ESServiceSnapshot{State: "running", SpoolMtime: time.Now(), BytesLost: 123}
+	state, detail := checkFileTelemetry(doctorFacts{st: Status{ESService: &es}, now: time.Now()})
+	if state != doctorFail || !strings.Contains(detail, "123 unread spool bytes") {
+		t.Fatalf("state=%s detail=%s", state, detail)
+	}
+	items := esServiceItems(es)
+	if len(items) != 1 || items[0].Severity != 2 || !strings.Contains(items[0].Detail, "123 unread spool bytes") {
+		t.Fatalf("items=%+v", items)
+	}
+	st := testStore(t)
+	t.Cleanup(func() { st.Close() })
+	rep, _ := getDoctor(t, st, Status{Running: true, Uptime: "1h", ESService: &es})
+	check := doctorCheckByID(t, rep, "file-telemetry")
+	if !strings.Contains(check.Fix, "cannot recover overwritten evidence") {
+		t.Fatalf("incorrect loss recovery guidance: %+v", check)
 	}
 }

@@ -200,6 +200,7 @@ public final class SetupManager: ObservableObject {
         areHooksInstalled = Self.hookTargets.allSatisfy { target in
             fm.fileExists(atPath: "\(target)/secret_guard.py")
         } && claudeHooksRegistered()
+          && Self.cursorHooksRegistered(at: Self.cursorHooksPath, command: Self.cursorHookCommand)
         advisorEnabled = Self.advisorConfigIsEnabled(configYAML())
         systemAgentEnabled = Self.systemAgentConfigIsEnabled(configYAML())
         systemAgentAutoReview = Self.systemAgentConfigIsEnabled(configYAML(), key: "auto_review")
@@ -635,6 +636,7 @@ public final class SetupManager: ObservableObject {
         // settings.json registers them. The audited gap was exactly this —
         // files copied, nothing registered, guard never ran.
         try registerClaudeHooks()
+        try Self.registerCursorHooks(at: Self.cursorHooksPath, command: Self.cursorHookCommand)
     }
 
     /// Brings already-installed hook copies up to the bundled versions so an
@@ -776,6 +778,82 @@ public final class SetupManager: ObservableObject {
             }
         }
         return false
+    }
+
+    // MARK: - Cursor native tool hooks
+
+    public static var cursorHooksPath: String { NSHomeDirectory() + "/.cursor/hooks.json" }
+    public static var cursorHookCommand: String {
+        let path = NSHomeDirectory() + "/.cursor/hooks/secret_guard.py"
+        return "python3 '" + path.replacingOccurrences(of: "'", with: "'\"'\"'") + "'"
+    }
+
+    /// Cursor's native pre/post hooks cover all tool types. Keep user hooks
+    /// and settings, reject unsupported schemas, and back up before mutation.
+    nonisolated static func cursorHookConfig(at path: String) throws -> ([String: Any], Data?) {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: path) else { return (["version": 1, "hooks": [:]], nil) }
+        let data = try Data(contentsOf: URL(fileURLWithPath: path))
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let version = root["version"] as? NSNumber, version == 1,
+              CFGetTypeID(version) != CFBooleanGetTypeID(),
+              let hooks = root["hooks"] as? [String: Any],
+              ["preToolUse", "postToolUse"].allSatisfy({ hooks[$0] == nil || hooks[$0] is [[String: Any]] }) else {
+            throw NSError(domain: "SetupManager", code: 4,
+                          userInfo: [NSLocalizedDescriptionKey: "Cursor hooks.json has an invalid or unsupported schema; it was left unchanged."])
+        }
+        return (root, data)
+    }
+
+    nonisolated static func registerCursorHooks(at path: String, command: String) throws {
+        var (root, original) = try cursorHookConfig(at: path)
+        var hooks = root["hooks"] as! [String: Any]
+        var changed = false
+        for event in ["preToolUse", "postToolUse"] {
+            var entries = hooks[event] as? [[String: Any]] ?? []
+            if !entries.contains(where: { ($0["command"] as? String) == command && $0["matcher"] == nil
+                    && ($0["type"] == nil || ($0["type"] as? String) == "command") }) {
+                entries.append(["command": command])
+                hooks[event] = entries
+                changed = true
+            }
+        }
+        guard changed else { return }
+        let fm = FileManager.default
+        try fm.createDirectory(atPath: (path as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+        // Preserve the first pre-install snapshot; a repeated install must not
+        // replace it with a snapshot containing our own registrations.
+        if let original, !fm.fileExists(atPath: path + ".bak-secure-agent") {
+            try original.write(to: URL(fileURLWithPath: path + ".bak-secure-agent"), options: .atomic)
+        }
+        root["hooks"] = hooks
+        let data = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
+        try data.write(to: URL(fileURLWithPath: path), options: .atomic)
+    }
+
+    nonisolated static func cursorHooksRegistered(at path: String, command: String) -> Bool {
+        guard let (root, _) = try? cursorHookConfig(at: path),
+              let hooks = root["hooks"] as? [String: Any] else { return false }
+        return ["preToolUse", "postToolUse"].allSatisfy { event in
+            (hooks[event] as? [[String: Any]] ?? []).contains {
+                ($0["command"] as? String) == command && $0["matcher"] == nil
+                    && ($0["type"] == nil || ($0["type"] as? String) == "command")
+            }
+        }
+    }
+
+    nonisolated static func unregisterCursorHooks(at path: String, command: String) throws {
+        guard FileManager.default.fileExists(atPath: path) else { return }
+        var (root, _) = try cursorHookConfig(at: path)
+        var hooks = root["hooks"] as! [String: Any]
+        for event in ["preToolUse", "postToolUse"] {
+            if let entries = hooks[event] as? [[String: Any]] {
+                hooks[event] = entries.filter { ($0["command"] as? String) != command }
+            }
+        }
+        root["hooks"] = hooks
+        let data = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
+        try data.write(to: URL(fileURLWithPath: path), options: .atomic)
     }
 
     /// Run the self-test and publish the outcome to the wizard UI.
@@ -1454,6 +1532,7 @@ public final class SetupManager: ObservableObject {
         if SMAppService.mainApp.status == .enabled {
             try? SMAppService.mainApp.unregister()
         }
+        try Self.unregisterCursorHooks(at: Self.cursorHooksPath, command: Self.cursorHookCommand)
         for target in Self.hookTargets {
             for hook in ["secret_guard.py", "injection_scan.py", "activity_log.py"] {
                 try? fm.removeItem(atPath: "\(target)/\(hook)")

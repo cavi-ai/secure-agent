@@ -433,7 +433,7 @@ func TestESServiceItemsFlooding(t *testing.T) {
 // a late monitor, not a healthy one; a stale spool's last lag does not.
 func TestESServiceItemsLagging(t *testing.T) {
 	late := esServiceItems(collect.ESServiceSnapshot{State: "running", SpoolMtime: time.Now(), NewestEventAt: timeAt(time.Now().Add(-2 * time.Hour)), LagSeconds: 7200})
-	if len(late) != 1 || late[0].Title != "File monitoring is running late" || late[0].Severity != 2 || !strings.Contains(late[0].Detail, "2h0m0s before it arrived") {
+	if len(late) != 1 || late[0].Title != "File monitoring is running late" || late[0].Severity != 2 || !strings.Contains(late[0].Detail, "delivery is 2h0m0s behind") {
 		t.Fatalf("lag 2h: items = %+v, want one running-late item", late)
 	}
 	onTime := esServiceItems(collect.ESServiceSnapshot{State: "running", SpoolMtime: time.Now(), NewestEventAt: timeAt(time.Now()), LagSeconds: 119})

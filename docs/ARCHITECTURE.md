@@ -120,6 +120,17 @@ a failure, without a retry loop or blocking collectors.
 The native Telemetry Doctor displays the daemon's recovery guidance and opens
 hook setup for failed registration or activity checks. Lost bus deliveries
 remain an evidence gap for that run; restarting cannot recover them.
+The ES spool reader offers events without blocking and retains rejected lines
+for the next poll, including the tail of the retained rotated spool. Valid
+bursts past the parse budget remain on disk for later polls. If rotation
+overwrites unread bytes, or the garbage budget skips a tail, status reports a
+cumulative lower bound in `es_service.bytes_lost`; Doctor and posture keep that
+gap visible for the run. Spool retention is bounded, so sustained overload can
+still lose evidence. Other collectors retain their best-effort bus delivery.
+Hook setup merges Cursor native `preToolUse` and `postToolUse` registrations
+into `~/.cursor/hooks.json`, preserving existing entries and a backup. Copied
+scripts alone do not satisfy setup. Cursor payloads retain their conversation
+id and harness identity; only observed activity proves that a hook ran.
 Rotation keeps the previous archive if renaming the active file fails.
 Resource episode inserts and enrichment updates recover independently; an
 unchanged enrichment payload or a concurrent update does not clear a write fault.
