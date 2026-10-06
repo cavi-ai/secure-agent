@@ -35,16 +35,18 @@ const sessionsSchema = `CREATE TABLE IF NOT EXISTS sessions (
 // UpsertSession inserts or refreshes a session. Metadata fields are filled
 // only when the incoming value is non-empty (a process-tree re-resolve never
 // erases hook-provided repo/branch), and confidence never downgrades.
-func (s *Store) UpsertSession(sess model.Session) {
+// It returns an error if the write fails or saves no row.
+func (s *Store) UpsertSession(sess model.Session) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.upsertSessionLocked(sess)
+	return s.upsertSessionLocked(sess)
 }
 
-func (s *Store) upsertSessionLocked(sess model.Session) {
+func (s *Store) upsertSessionLocked(sess model.Session) (writeErr error) {
 	if sess.ID == "" {
-		return
+		return nil
 	}
+	defer func() { s.noteWrite("sessions", writeErr) }()
 	var cur struct {
 		harness, workspace, repo, branch, status, confidence string
 	}
@@ -52,8 +54,7 @@ func (s *Store) upsertSessionLocked(sess model.Session) {
 		Scan(&cur.harness, &cur.workspace, &cur.repo, &cur.branch, &cur.status, &cur.confidence)
 	exists := err == nil
 	if err != nil && err != sql.ErrNoRows {
-		s.noteWrite("sessions", err)
-		return
+		return fmt.Errorf("read session before upsert: %w", err)
 	}
 
 	if exists {
@@ -91,7 +92,7 @@ func (s *Store) upsertSessionLocked(sess model.Session) {
 		sess.Status = model.SessionActive
 	}
 
-	_, err = s.db.Exec(`INSERT INTO sessions
+	result, err := s.db.Exec(`INSERT INTO sessions
 		(id, harness, workspace, repo, branch, root_pid, root_started_at, parent_id, started_at, ended_at, last_seen_at, status, confidence, origin)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
@@ -110,7 +111,17 @@ func (s *Store) upsertSessionLocked(sess model.Session) {
 		sess.RootPID, sess.RootStartedAt, sess.ParentID,
 		sess.StartedAt.UTC().Format(time.RFC3339Nano), nil,
 		sess.LastSeenAt.UTC().Format(time.RFC3339Nano), sess.Status, sess.Confidence, sess.Origin)
-	s.noteWrite("sessions", err)
+	if err != nil {
+		return fmt.Errorf("upsert session: %w", err)
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("count upserted sessions: %w", err)
+	}
+	if n != 1 {
+		return fmt.Errorf("upsert session: saved %d rows, want 1", n)
+	}
+	return nil
 }
 
 // TouchSession bumps last_seen_at and reactivates an idle session. Ended

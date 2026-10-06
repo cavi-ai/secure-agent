@@ -839,27 +839,27 @@ func (r *Resolver) touchLocked(id string, ts time.Time) {
 		return
 	}
 	if sess, ok := r.deferred[id]; ok {
-		r.touch[id] = ts
 		if info, tagged := r.tagger.Tag(sess.RootPID); tagged && !info.StartedAt.IsZero() {
 			if ts.Sub(info.StartedAt) < minSessionLifetime {
+				r.touch[id] = ts
 				return // still under the floor
 			}
+		} else if rootStart := rootStarted(sess); !rootStart.IsZero() && ts.Sub(rootStart) < minSessionLifetime {
+			// An exited root that died young must not become a row.
 			delete(r.deferred, id)
-			r.st.UpsertSession(sess)
-			r.emitLocked(sess)
-			return
-		}
-		// Root no longer tagged (exited). A root that died young is still
-		// not a row: judge by the root's start recorded at session creation
-		// (Tag failure otherwise reads as "aged"; the touch throttle
-		// guarantees it fires first for dead stubs).
-		if rootStart := rootStarted(sess); !rootStart.IsZero() && ts.Sub(rootStart) < minSessionLifetime {
-			delete(r.deferred, id)
+			r.touch[id] = ts
 			return // root died before the floor
 		}
+		sess.LastSeenAt = ts
+		if err := r.st.UpsertSession(sess); err != nil {
+			log.Printf("session: persist deferred promotion: %v", err)
+			return
+		}
 		delete(r.deferred, id)
-		r.st.UpsertSession(sess)
-		r.emitLocked(sess)
+		r.touch[id] = ts
+		if saved, ok := r.st.GetSession(id); ok {
+			r.emitLocked(saved)
+		}
 		return
 	}
 	if err := r.st.TouchSession(id, ts); err != nil {
