@@ -677,3 +677,140 @@ func TestRepeatRecordSecretHitKeepsSession(t *testing.T) {
 		t.Fatalf("hits = %+v, want one claude:fingerprint:fp-1 hit in sess-1", hits)
 	}
 }
+
+func TestTranscriptHookRetainsCheckpointUntilDelivery(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "activity.jsonl")
+	line := `{"type":"session_start","session_id":"hook-session","harness":"cursor","workspace":"/repo","pid":42,"ts":"2026-10-06T18:00:00Z"}` + "\n"
+	if err := os.WriteFile(path, []byte(line), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	b := bus.New(1)
+	defer b.Close()
+	sub := b.Subscribe()
+	b.Publish(event.Event{PID: 99})
+	ts := NewTranscriptScanner(b, nil)
+	ts.OffsetStatePath = filepath.Join(t.TempDir(), "offsets.json")
+	handshakes, produced := 0, 0
+	ts.OnHandshake = func(Handshake) { handshakes++ }
+	ts.OnProduce = func() { produced++ }
+	offsets := map[string]int64{}
+	dirty := false
+	ts.tailFile(path, offsets, &dirty)
+	if off, ok := offsets[path]; !ok || off != 0 || !dirty || b.Dropped() != 0 || produced != 0 {
+		t.Fatalf("offsets=%v dirty=%v drops=%d produced=%d", offsets, dirty, b.Dropped(), produced)
+	}
+	ts.saveOffsets(offsets)
+	if off, ok := ts.loadOffsets()[path]; !ok || off != 0 {
+		t.Fatal("restart checkpoint skipped rejected hook")
+	}
+	ts.tailFile(path, offsets, &dirty)
+	if handshakes != 1 {
+		t.Fatal("rejected line was parsed twice")
+	}
+	<-sub
+	dirty = false
+	ts.tailFile(path, offsets, &dirty)
+	got := <-sub
+	if got.SessionID != "hook-session" || got.Detail != "session-start" || got.PID != 42 {
+		t.Fatalf("event=%+v", got)
+	}
+	if offsets[path] != int64(len(line)) || !dirty || produced != 1 || handshakes != 1 {
+		t.Fatal("delivery did not commit exactly once")
+	}
+	ts.tailFile(path, offsets, &dirty)
+	if len(sub) != 0 || b.Dropped() != 0 {
+		t.Fatal("duplicate or dropped hook")
+	}
+}
+
+func TestTranscriptPartialDeliveryPreservesTracePairingAndSecretHit(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".claude", "projects", "ws", "sess-1.jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	secret := "synthetic-known-secret-0123456789"
+	line := strings.Replace(claudeAssistantLine, "go test ./...", secret, 1) + "\n"
+	if err := os.WriteFile(path, []byte(line), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	b := bus.New(1)
+	defer b.Close()
+	sub := b.Subscribe()
+	ts := NewTranscriptScanner(b, nil)
+	ts.TextScanner = stubTextScanner{secret: secret}
+	seen := 0
+	ts.OnSessionSeen = func(string, string, string, time.Time) { seen++ }
+	offsets := map[string]int64{}
+	ts.tailFile(path, offsets, nil)
+	if offsets[path] != 0 || b.Dropped() != 0 {
+		t.Fatal("partially delivered line checkpointed or dropped")
+	}
+	for _, kind := range []event.Kind{event.KindModelCall, event.KindToolCall, event.KindTranscriptHit} {
+		select {
+		case got := <-sub:
+			if got.Kind != kind || got.SessionID != "sess-1" {
+				t.Fatalf("event=%+v want kind=%v", got, kind)
+			}
+			if kind == event.KindModelCall && (got.TokensIn != 1000 || got.TokensOut != 50) {
+				t.Fatalf("usage lost: %+v", got)
+			}
+		default:
+			t.Fatalf("missing %v", kind)
+		}
+		ts.tailFile(path, offsets, nil)
+	}
+	if offsets[path] != int64(len(line)) || seen != 1 || len(sub) != 0 || b.Dropped() != 0 {
+		t.Fatalf("offset=%d seen=%d queued=%d drops=%d", offsets[path], seen, len(sub), b.Dropped())
+	}
+	result := `{"type":"user","sessionId":"sess-1","timestamp":"2026-09-17T12:00:31.500Z","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_1","is_error":false}]}}`
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = f.WriteString(result + "\n"); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	ts.tailFile(path, offsets, nil)
+	got := <-sub
+	if got.ToolStatus != "ok" || got.DurationMs != 31500 || got.CallID != "toolu_1" {
+		t.Fatalf("trace state replayed: %+v", got)
+	}
+}
+
+func TestTranscriptPendingDeliverySurvivesSourceRemoval(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "activity.jsonl")
+	if err := os.WriteFile(path, []byte(`{"tool":"Bash","pid":42,"session_id":"hook-session","ts":"2026-10-06T18:00:00Z"}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	b := bus.New(1)
+	defer b.Close()
+	sub := b.Subscribe()
+	b.Publish(event.Event{PID: 99})
+	ts := NewTranscriptScanner(b, []string{filepath.Join(filepath.Dir(path), "*.jsonl")})
+	ts.tailEvery = time.Millisecond
+	ts.resolveEvery = time.Hour
+	ts.tailFile(path, map[string]int64{}, nil)
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	<-sub
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- ts.Run(ctx) }()
+	select {
+	case got := <-sub:
+		if got.SessionID != "hook-session" || got.PID != 42 {
+			t.Fatalf("event=%+v", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("pending delivery was abandoned when the file disappeared")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("tailer did not stop")
+	}
+}

@@ -49,6 +49,11 @@ type TranscriptScanner struct {
 	bus   *bus.Bus
 	paths []string
 
+	// One parsed line per blocked file, owned by the single tail loop. Parser
+	// state and hit dedupe advance only once; the source checkpoint advances
+	// only after the line's events have all been accepted by the bus.
+	pending map[string]*pendingTranscriptLine
+
 	// OffsetStatePath, when set, persists tail offsets across daemon
 	// restarts. Without it a restart re-seeds every transcript at EOF and
 	// lines appended while the daemon was down are never read.
@@ -282,14 +287,16 @@ func (ts *TranscriptScanner) firstHit(path, rule string, now time.Time) bool {
 	return true
 }
 
-// publishHits publishes the transcript-hit events in a trace line; the
-// tracer has already published the line's trace events.
-func (ts *TranscriptScanner) publishHits(line, path, harness, sessionID string, lineStart int64) {
+// transcriptHits returns only the security findings from a trace line.
+// Delivery shares the trace line's checkpoint and retry state.
+func (ts *TranscriptScanner) transcriptHits(line, path, harness, sessionID string, lineStart int64) []event.Event {
+	var hits []event.Event
 	for _, e := range ts.scanLine(line, path, harness, sessionID, lineStart) {
 		if e.Kind == event.KindTranscriptHit {
-			ts.bus.Publish(e)
+			hits = append(hits, e)
 		}
 	}
+	return hits
 }
 
 // harnessForPath names the harness whose transcript layout the path matches;
@@ -476,7 +483,7 @@ func (ts *TranscriptScanner) Run(ctx context.Context) error {
 		// re-read the moment they were appended to again — the duplicate
 		// replay bug.
 		for p := range offsets {
-			if _, ok := live[p]; ok {
+			if _, ok := live[p]; ok || ts.pending[p] != nil {
 				continue
 			}
 			if _, err := os.Stat(p); err != nil {
@@ -501,11 +508,24 @@ func (ts *TranscriptScanner) Run(ctx context.Context) error {
 			resolve()
 			save(time.Now(), false)
 		case <-tailTicker.C:
-			for _, p := range explicit {
+			tailed := make(map[string]bool, len(explicit)+len(active)+len(ts.pending))
+			tail := func(p string) {
+				if tailed[p] {
+					return
+				}
+				tailed[p] = true
 				ts.tailFile(p, offsets, &dirty)
 			}
+			for _, p := range explicit {
+				tail(p)
+			}
 			for _, p := range active {
-				ts.tailFile(p, offsets, &dirty)
+				tail(p)
+			}
+			// A staged line remains deliverable if its source becomes idle,
+			// disappears, or no longer matches a dynamic discovery target.
+			for p := range ts.pending {
+				tail(p)
 			}
 			save(time.Now(), false)
 		}
@@ -562,44 +582,76 @@ func (ts *TranscriptScanner) saveOffsets(offsets map[string]int64) {
 	_ = os.Rename(tmp, ts.OffsetStatePath)
 }
 
+type pendingTranscriptLine struct {
+	nextOffset int64
+	events     []event.Event
+}
+
+func setTranscriptOffset(p string, offsets map[string]int64, next int64, dirty *bool) {
+	previous, tracked := offsets[p]
+	offsets[p] = next
+	if (!tracked || previous != next) && dirty != nil {
+		*dirty = true
+	}
+}
+
+// deliverPending never waits for the consumer. Accepted prefixes are removed
+// from the staged line, so a retry cannot duplicate them in this daemon run.
+func (ts *TranscriptScanner) deliverPending(p string, offsets map[string]int64, dirty *bool) bool {
+	pending := ts.pending[p]
+	if pending == nil {
+		return true
+	}
+	produced := false
+	defer func() {
+		if produced && ts.OnProduce != nil {
+			ts.OnProduce()
+		}
+	}()
+	for len(pending.events) > 0 {
+		if !ts.bus.TryPublish(pending.events[0]) {
+			return false
+		}
+		pending.events[0] = event.Event{}
+		pending.events = pending.events[1:]
+		produced = true
+	}
+	setTranscriptOffset(p, offsets, pending.nextOffset, dirty)
+	delete(ts.pending, p)
+	return true
+}
+
 func (ts *TranscriptScanner) tailFile(p string, offsets map[string]int64, dirty *bool) {
+	if !ts.deliverPending(p, offsets, dirty) {
+		return
+	}
 	fi, err := os.Stat(p)
 	if err != nil || fi.IsDir() {
 		return
 	}
-
-	offset, tracked := offsets[p]
-	if !tracked {
-		// New file discovered after startup: tail from byte 0
+	offset := offsets[p]
+	if fi.Size() < offset {
 		offset = 0
 	}
-
-	if fi.Size() < offset {
-		offset = 0 // file truncated
-	}
 	if fi.Size() == offset {
-		return // no new data
+		return
 	}
-
 	f, err := os.Open(p)
 	if err != nil {
 		return
 	}
 	defer f.Close()
-
 	if _, err := f.Seek(offset, io.SeekStart); err != nil {
 		return
 	}
-
+	// Persist byte zero for a new file even when its first event is rejected.
+	// Without this entry, restart discovery would seed past it at EOF.
+	setTranscriptOffset(p, offsets, offset, dirty)
 	r := bufio.NewReaderSize(f, 1024*1024)
-	newOffset := offset
-
+	nextOffset := offset
 	for {
-		// ReadSlice with fragments assembled into one line: transcript lines
-		// exceed the reader's buffer (real prompts run 10 KB+), and dropping
-		// overlong lines silently skipped exactly the long human-prompt
-		// records — turn detection never saw them. A newline-less multi-MB
-		// line is still capped and skipped.
+		// Assemble fragments up to the line cap. Skip only complete oversized
+		// lines; a partial line keeps its checkpoint for the next poll.
 		var lineLen int64
 		var frag []byte
 		var err error
@@ -614,165 +666,123 @@ func (ts *TranscriptScanner) tailFile(p string, offsets map[string]int64, dirty 
 			break
 		}
 		if overlong {
-			if err == nil { // complete line (ended with \n): advance past it
-				newOffset += lineLen
+			if err == nil {
+				nextOffset += lineLen
+				setTranscriptOffset(p, offsets, nextOffset, dirty)
 			}
 		} else if len(frag) > 0 {
-			if bytes.HasSuffix(frag, []byte("\n")) {
-				newOffset += lineLen
-				lineStart := newOffset - lineLen
-				line := strings.TrimRight(string(frag), "\r\n")
-				if h, ok := ParseHandshake(line); ok {
-					if ts.OnHandshake != nil {
-						ts.OnHandshake(h)
-					}
-					// Also publish as a plugin action: the handshake is hook
-					// activity (coverage signal) and belongs on the timeline.
-					evt := event.Event{Kind: event.KindPluginAction, PID: h.PID, SessionID: h.SessionID, Detail: "session-start"}
-					if t, err := time.Parse(time.RFC3339Nano, h.TS); err == nil {
-						evt.TS = t
-					} else {
-						evt.TS = time.Now()
-					}
-					ts.bus.Publish(evt)
-					if ts.OnProduce != nil {
-						ts.OnProduce()
-					}
-					continue
-				}
-				// Claude Code transcripts carry the trace: model calls with
-				// usage, tool calls with durations, turn boundaries.
-				if IsClaudeTranscriptPath(p) {
-					tracer := ts.tracers[p]
-					if tracer == nil {
-						tracer = NewClaudeTracer()
-						if ts.tracers == nil {
-							ts.tracers = map[string]*ClaudeTracer{}
-						}
-						ts.tracers[p] = tracer
-					}
-					if evs, cwd, ok := tracer.ParseLine(line); ok {
-						for _, e := range evs {
-							ts.bus.Publish(e)
-						}
-						if ts.OnProduce != nil {
-							ts.OnProduce()
-						}
-						if ts.OnSessionSeen != nil {
-							ts.OnSessionSeen(evs[0].SessionID, "claude", cwd, evs[0].TS)
-						}
-						// Trace lines still get the secret scan — an
-						// assistant message can carry a secret in its text.
-						ts.publishHits(line, p, "claude", evs[0].SessionID, lineStart)
-						continue
-					}
-					// Not a trace record: still run the redaction scan.
-				}
-				// Codex rollouts carry the same trace shape through their own
-				// envelope (token_count deltas, function_call pairing).
-				if IsCodexRolloutPath(p) {
-					tracer := ts.codexTracers[p]
-					if tracer == nil {
-						tracer = NewCodexTracer(p)
-						if offset > 0 {
-							// Resumed mid-file: the head holds the session
-							// and model this run has not read.
-							tracer.Prime(io.NewSectionReader(f, 0, offset))
-						}
-						if ts.codexTracers == nil {
-							ts.codexTracers = map[string]*CodexTracer{}
-						}
-						ts.codexTracers[p] = tracer
-					}
-					if evs, ok := tracer.ParseLine(line); ok {
-						sid, cwd := tracer.Session()
-						if sid != "" {
-							ts.noteRolloutSession(p, sid)
-						}
-						if sid != "" && ts.OnCodexSessionSeen != nil {
-							ts.OnCodexSessionSeen(sid, cwd, CodexOrigin(p), time.Now())
-						}
-						for _, e := range evs {
-							ts.bus.Publish(e)
-						}
-						if len(evs) > 0 && ts.OnProduce != nil {
-							ts.OnProduce()
-						}
-						ts.publishHits(line, p, "codex", sid, lineStart)
-						continue
-					}
-				}
-				// Cursor agent transcripts: tool calls + turns (no
-				// timestamps, no result pairing, no token usage).
-				if IsCursorTranscriptPath(p) {
-					tracer := ts.cursorTracers[p]
-					if tracer == nil {
-						tracer = NewCursorTracer(p)
-						if ts.cursorTracers == nil {
-							ts.cursorTracers = map[string]*CursorTracer{}
-						}
-						ts.cursorTracers[p] = tracer
-					}
-					if evs, ok := tracer.ParseLine(line); ok {
-						sid, ws := tracer.Session()
-						if sid != "" && ts.OnSessionSeen != nil {
-							ts.OnSessionSeen(sid, "cursor", ws, evs[0].TS)
-						}
-						for _, e := range evs {
-							ts.bus.Publish(e)
-						}
-						if ts.OnProduce != nil {
-							ts.OnProduce()
-						}
-						ts.publishHits(line, p, "cursor", sid, lineStart)
-						continue
-					}
-				}
-				// Antigravity (agy) transcripts: tool calls + turns.
-				if IsAGYTranscriptPath(p) {
-					tracer := ts.agyTracers[p]
-					if tracer == nil {
-						tracer = NewAGYTracer(p)
-						if ts.agyTracers == nil {
-							ts.agyTracers = map[string]*AGYTracer{}
-						}
-						ts.agyTracers[p] = tracer
-					}
-					if evs, ok := tracer.ParseLine(line); ok {
-						sid, ws := tracer.Session()
-						if sid != "" && ts.OnSessionSeen != nil {
-							ts.OnSessionSeen(sid, "agy", ws, evs[0].TS)
-						}
-						for _, e := range evs {
-							ts.bus.Publish(e)
-						}
-						if ts.OnProduce != nil {
-							ts.OnProduce()
-						}
-						ts.publishHits(line, p, "agy", sid, lineStart)
-						continue
-					}
-				}
-				if evs := ts.scanLine(line, p, harnessForPath(p), ts.knownSession(p), lineStart); len(evs) > 0 {
-					for _, e := range evs {
-						ts.bus.Publish(e)
-					}
-					if ts.OnProduce != nil {
-						ts.OnProduce()
-					}
-				}
-			} else {
-				// Partial line at EOF; do not advance past partial line, retry on next poll
+			if !bytes.HasSuffix(frag, []byte("\n")) {
 				break
+			}
+			lineStart := nextOffset
+			nextOffset += lineLen
+			line := strings.TrimRight(string(frag), "\r\n")
+			events := ts.eventsForLine(p, line, lineStart, offset, f)
+			if len(events) == 0 {
+				setTranscriptOffset(p, offsets, nextOffset, dirty)
+			} else {
+				if ts.pending == nil {
+					ts.pending = make(map[string]*pendingTranscriptLine)
+				}
+				ts.pending[p] = &pendingTranscriptLine{nextOffset: nextOffset, events: events}
+				if !ts.deliverPending(p, offsets, dirty) {
+					return
+				}
 			}
 		}
 		if err != nil {
 			break
 		}
 	}
+}
 
-	offsets[p] = newOffset
-	if newOffset != offset && dirty != nil {
-		*dirty = true
+// eventsForLine parses a complete bounded line once. Session sightings still
+// describe observed source activity; OnProduce describes accepted delivery.
+func (ts *TranscriptScanner) eventsForLine(p, line string, lineStart, offset int64, source io.ReaderAt) []event.Event {
+	if h, ok := ParseHandshake(line); ok {
+		if ts.OnHandshake != nil {
+			ts.OnHandshake(h)
+		}
+		e := event.Event{Kind: event.KindPluginAction, PID: h.PID, SessionID: h.SessionID, Detail: "session-start"}
+		if at, err := time.Parse(time.RFC3339Nano, h.TS); err == nil {
+			e.TS = at
+		} else {
+			e.TS = time.Now()
+		}
+		return []event.Event{e}
 	}
+	if IsClaudeTranscriptPath(p) {
+		tracer := ts.tracers[p]
+		if tracer == nil {
+			tracer = NewClaudeTracer()
+			if ts.tracers == nil {
+				ts.tracers = map[string]*ClaudeTracer{}
+			}
+			ts.tracers[p] = tracer
+		}
+		if evs, cwd, ok := tracer.ParseLine(line); ok {
+			if ts.OnSessionSeen != nil {
+				ts.OnSessionSeen(evs[0].SessionID, "claude", cwd, evs[0].TS)
+			}
+			return append(evs, ts.transcriptHits(line, p, "claude", evs[0].SessionID, lineStart)...)
+		}
+	}
+	if IsCodexRolloutPath(p) {
+		tracer := ts.codexTracers[p]
+		if tracer == nil {
+			tracer = NewCodexTracer(p)
+			if offset > 0 {
+				tracer.Prime(io.NewSectionReader(source, 0, offset))
+			}
+			if ts.codexTracers == nil {
+				ts.codexTracers = map[string]*CodexTracer{}
+			}
+			ts.codexTracers[p] = tracer
+		}
+		if evs, ok := tracer.ParseLine(line); ok {
+			sid, cwd := tracer.Session()
+			if sid != "" {
+				ts.noteRolloutSession(p, sid)
+			}
+			if sid != "" && ts.OnCodexSessionSeen != nil {
+				ts.OnCodexSessionSeen(sid, cwd, CodexOrigin(p), time.Now())
+			}
+			return append(evs, ts.transcriptHits(line, p, "codex", sid, lineStart)...)
+		}
+	}
+	if IsCursorTranscriptPath(p) {
+		tracer := ts.cursorTracers[p]
+		if tracer == nil {
+			tracer = NewCursorTracer(p)
+			if ts.cursorTracers == nil {
+				ts.cursorTracers = map[string]*CursorTracer{}
+			}
+			ts.cursorTracers[p] = tracer
+		}
+		if evs, ok := tracer.ParseLine(line); ok {
+			sid, ws := tracer.Session()
+			if sid != "" && ts.OnSessionSeen != nil {
+				ts.OnSessionSeen(sid, "cursor", ws, evs[0].TS)
+			}
+			return append(evs, ts.transcriptHits(line, p, "cursor", sid, lineStart)...)
+		}
+	}
+	if IsAGYTranscriptPath(p) {
+		tracer := ts.agyTracers[p]
+		if tracer == nil {
+			tracer = NewAGYTracer(p)
+			if ts.agyTracers == nil {
+				ts.agyTracers = map[string]*AGYTracer{}
+			}
+			ts.agyTracers[p] = tracer
+		}
+		if evs, ok := tracer.ParseLine(line); ok {
+			sid, ws := tracer.Session()
+			if sid != "" && ts.OnSessionSeen != nil {
+				ts.OnSessionSeen(sid, "agy", ws, evs[0].TS)
+			}
+			return append(evs, ts.transcriptHits(line, p, "agy", sid, lineStart)...)
+		}
+	}
+	return ts.scanLine(line, p, harnessForPath(p), ts.knownSession(p), lineStart)
 }
