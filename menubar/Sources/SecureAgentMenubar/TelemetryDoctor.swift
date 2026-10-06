@@ -103,7 +103,7 @@ enum DoctorState: String, Sendable {
 }
 
 enum DoctorFix: String, CaseIterable, Sendable {
-    case register, reregister, openLoginItems, openFullDiskAccess, setAsideSpool, removeLegacy
+    case register, reregister, openLoginItems, openFullDiskAccess, setAsideSpool, removeLegacy, openHarnessSetup
 
     var title: String {
         switch self {
@@ -113,6 +113,7 @@ enum DoctorFix: String, CaseIterable, Sendable {
         case .openFullDiskAccess: return "Open Full Disk Access"
         case .setAsideSpool: return "Set spool aside"
         case .removeLegacy: return "Remove old helper"
+        case .openHarnessSetup: return "Open hook setup"
         }
     }
 
@@ -407,8 +408,13 @@ enum TelemetryDoctor {
                                 cause: "the daemon did not answer /doctor", fix: nil)]
         }
         return checks.filter { $0.state != "pass" }.map { c in
-            DoctorCheck(id: "daemon.\(c.id)", title: c.title, state: c.state == "fail" ? .fail : .warn,
-                        cause: c.detail.flatMap { $0.isEmpty ? nil : $0 } ?? c.state, fix: nil)
+            let detail = c.detail.flatMap { $0.isEmpty ? nil : $0 } ?? c.state
+            let guidance = c.fix?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let cause = guidance.flatMap { $0.isEmpty ? nil : "\(detail)\n\($0)" } ?? detail
+            let fix: DoctorFix? = c.state == "fail" && ["hook-registered", "hook-active"].contains(c.id)
+                ? .openHarnessSetup : nil
+            return DoctorCheck(id: "daemon.\(c.id)", title: c.title, state: c.state == "fail" ? .fail : .warn,
+                               cause: cause, fix: fix)
         }
     }
 

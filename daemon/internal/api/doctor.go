@@ -93,7 +93,7 @@ type doctorProbe struct {
 // doctorProbes run in this order; the report lists them in it.
 var doctorProbes = []doctorProbe{
 	{"hook-registered", "Guard hook registered", "Run Setup → Harness hooks", checkHookRegistered},
-	{"hook-active", "Guard hook active", "Run Setup → Harness hooks; the hook fires on every agent Bash tool call", checkHookActive},
+	{"hook-active", "Guard hook active", "Open Setup → Harness Hooks to check registration, then start a new harness session and run a guarded tool such as Bash. Installing hooks alone does not prove activity in existing sessions.", checkHookActive},
 	{"file-telemetry", "File telemetry", "System Settings → Privacy & Security → Full Disk Access → Secure Agent, or the Setup card — a flooding writer: Reinstall the file telemetry helper from the Setup card", checkFileTelemetry},
 	{"collectors", "Collectors", "Restart Secure Agent from the menu bar; file monitoring that keeps stopping needs Full Disk Access (Setup)", checkCollectors},
 	{"trace-coverage", "Trace coverage", "Restart Secure Agent; a harness that stays untraced has no transcript reader running", checkTraceCoverage},
@@ -105,7 +105,7 @@ var doctorProbes = []doctorProbe{
 	{"pricing", "Model-call pricing", "Update Secure Agent so its price table covers the Claude models in use", checkPricing},
 	{"retention", "Event retention", "Find the process flooding these kinds in the Events tab; their rows are evicted inside a day", checkRetention},
 	{"egress-routing", "Egress routing", "turn on Settings → Secure Agent → Traffic → Route Claude Code through Secure Agent, source agent-env.sh where other agents launch, or Allow the endpoints in the Egress tab", checkEgressRouting},
-	{"bus", "Event bus", "", checkBus},
+	{"bus", "Event bus", "Monitoring history for this run is incomplete. If the count keeps increasing, update Secure Agent and check for a collector flooding Events. Restarting cannot recover lost deliveries.", checkBus},
 	{"storage", "Evidence storage", "Check free disk space and state-directory permissions; earlier failed writes cannot be recovered by restarting", checkStorage},
 }
 
@@ -468,7 +468,7 @@ func checkEgressRouting(f doctorFacts) (string, string) {
 
 func checkBus(f doctorFacts) (string, string) {
 	if f.st.BusDrops > 0 {
-		return doctorFail, fmt.Sprintf("%d events dropped by full subscriber buffers", f.st.BusDrops)
+		return doctorFail, fmt.Sprintf("%d subscriber deliveries dropped since daemon start", f.st.BusDrops)
 	}
 	return doctorPass, "no dropped events"
 }

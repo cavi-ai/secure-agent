@@ -1371,6 +1371,8 @@ public final class SetupManager: ObservableObject {
             catch { report(error) }
         case .removeLegacy:
             removeLegacyESHelper()
+        case .openHarnessSetup:
+            OnboardingWindowController.shared.show()
         }
         refreshESState()
     }

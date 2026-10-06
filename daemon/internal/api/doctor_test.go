@@ -230,8 +230,8 @@ func TestDoctorEgressAndBusFail(t *testing.T) {
 	if c := doctorCheckByID(t, rep, "egress-routing"); c.State != doctorFail || !strings.Contains(c.Detail, "5") || !strings.Contains(c.Fix, "agent-env.sh") {
 		t.Fatalf("egress-routing = %+v, want fail with the count and the routing fix", c)
 	}
-	if c := doctorCheckByID(t, rep, "bus"); c.State != doctorFail || !strings.Contains(c.Detail, "7") || c.Fix != "" {
-		t.Fatalf("bus = %+v, want fail with the count and no fix", c)
+	if c := doctorCheckByID(t, rep, "bus"); c.State != doctorFail || !strings.Contains(c.Detail, "7") || !strings.Contains(c.Fix, "cannot recover") {
+		t.Fatalf("bus = %+v, want fail with the count and honest recovery guidance", c)
 	}
 }
 
