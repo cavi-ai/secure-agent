@@ -143,8 +143,11 @@ writes do not advance the resolver's throttle clock. No-op transitions leave
 existing faults active; successful writes retain cumulative failure history.
 Deferred session promotion retains its retry state and throttle clock when
 an upsert fails, and publishes the stored identity only after a successful
-write. Promotion records the current activity time. Session upserts return
-read/write errors and reject writes that save no row; an empty-ID no-op does
+write. Initial process-tree creation uses this same path: failed writes retain
+attribution in memory and retry on later activity instead of publishing an
+unsaved session. A recent transcript touch does not delay root attachment.
+Promotion records the current activity time. Session upserts return read/write
+errors and reject writes that save no row; an empty-ID no-op does
 not clear an active session write fault.
 
 Per-harness coverage joins recent hook and trace events to their persisted
