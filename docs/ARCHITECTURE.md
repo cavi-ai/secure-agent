@@ -141,6 +141,11 @@ Idle transitions commit as a complete batch before returning changed session
 IDs. Idling and activity writes report independent faults, and failed activity
 writes do not advance the resolver's throttle clock. No-op transitions leave
 existing faults active; successful writes retain cumulative failure history.
+Deferred session promotion retains its retry state and throttle clock when
+an upsert fails, and publishes the stored identity only after a successful
+write. Promotion records the current activity time. Session upserts return
+read/write errors and reject writes that save no row; an empty-ID no-op does
+not clear an active session write fault.
 
 Per-harness coverage joins recent hook and trace events to their persisted
 session IDs. It lists only active, non-infrastructure harnesses and separates
