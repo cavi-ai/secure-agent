@@ -135,6 +135,11 @@ discovery no longer lists the source. A restart can replay an accepted prefix
 from an uncommitted line; the source must remain available for that recovery.
 Bus acceptance does not guarantee a successful storage write. Other collectors
 retain their best-effort bus delivery.
+Failed transcript checkpoint writes retain their retry state, including while
+sources are idle, and retry on the existing save cadence. Storage health reports
+the fixed `transcript checkpoints` operation for write or rename failures;
+successful replacement clears that active fault while the cumulative failure
+count remains visible in Doctor and posture for the daemon run.
 Hook setup merges Cursor native `preToolUse` and `postToolUse` registrations
 into `~/.cursor/hooks.json`, preserving existing entries and a backup. Copied
 scripts alone do not satisfy setup. Cursor payloads retain their conversation
