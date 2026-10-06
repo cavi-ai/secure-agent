@@ -157,10 +157,10 @@ type Resolver struct {
 	// working directory never share a session.
 	byScope map[string]string
 	touch   map[string]time.Time // session id → last TouchSession (throttle)
-	// deferred holds process-tree sessions that have not yet outlived
-	// minSessionLifetime: attributed in memory, not persisted. touchLocked
-	// promotes them to the store when the floor is passed; Sweep drops the
-	// dead ones so a bounded-turn flood never touches the disk.
+	// deferred holds process-tree sessions awaiting the lifetime floor or a
+	// successful write: attributed in memory, not yet persisted. touchLocked
+	// saves eligible sessions and retains them on failure; Sweep drops dead
+	// roots so a bounded-turn flood never touches the disk.
 	deferred map[string]model.Session
 	// sighted is each session's last transcript or hook sighting by wall
 	// clock: a conversation read or a hook fired, not a process touching
@@ -306,15 +306,12 @@ func (r *Resolver) Resolve(e *event.Event) string {
 		// this session under that family's session as a child so one run
 		// reads as one parent, not hundreds of stubs.
 		sess.ParentID = r.orchestratorForLocked(root, info.Name)
-		if r.shouldPersistLocked(sess, ts) {
-			r.st.UpsertSession(sess)
-			r.emitLocked(sess)
-		} else {
-			// Held in memory; persisted only if the session outlives the
-			// floor (touchLocked promotes it). Dropped silently if it dies
-			// young — a sub-minute scratch run is not a session row.
-			r.deferred[id] = sess
-		}
+		// Use the same persistence path for initial creation and promotion.
+		// touchLocked applies the lifetime floor, publishes saved identity,
+		// and retains this record for the next activity if the write fails.
+		r.deferred[id] = sess
+		// A recent transcript touch must not throttle this root attachment.
+		delete(r.touch, id)
 		r.byRoot[root] = id
 		if sess.Workspace != "" {
 			r.byScope[scopeKey(sess.Harness, sess.Workspace)] = id
@@ -408,20 +405,6 @@ func (r *Resolver) orchestratorForLocked(root int32, harness string) string {
 		}
 	}
 	return ""
-}
-
-// shouldPersistLocked applies the session floor: process-tree sessions are
-// held in memory until they outlived minSessionLifetime. Hook/transcript
-// sessions always persist.
-func (r *Resolver) shouldPersistLocked(sess model.Session, ts time.Time) bool {
-	if sess.RootPID == 0 {
-		return true
-	}
-	info, ok := r.tagger.Tag(sess.RootPID)
-	if ok && !info.StartedAt.IsZero() {
-		return ts.Sub(info.StartedAt) >= minSessionLifetime
-	}
-	return true
 }
 
 // HandleHandshake registers a hook-announced session. When a process-tree
@@ -830,7 +813,7 @@ func (r *Resolver) emitLocked(sess model.Session) {
 }
 
 // touchLocked bumps last_seen at most once per touchThrottle per session,
-// promoting deferred sessions past the floor.
+// persisting deferred sessions past the floor and retaining failed writes.
 func (r *Resolver) touchLocked(id string, ts time.Time) {
 	if ts.IsZero() {
 		ts = r.now()
