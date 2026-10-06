@@ -995,6 +995,7 @@ func spoolServiceProbe(t *collect.SpoolTailer) func() (collect.ESServiceSnapshot
 			return snap, err
 		}
 		stats := t.Stats()
+		snap.BytesLost = stats.BytesLost
 		snap.Flooding = !stats.FloodSince.IsZero()
 		if since := stats.FloodSince; !since.IsZero() {
 			snap.FloodingSince = &since

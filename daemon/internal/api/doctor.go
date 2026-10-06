@@ -138,6 +138,9 @@ func (a *API) doctorReport(now time.Time) DoctorReport {
 		case doctorFail:
 			rep.Summary.Fail++
 			c.Fix = p.fix
+			if p.id == "file-telemetry" && f.st.ESService != nil && f.st.ESService.BytesLost > 0 {
+				c.Fix = "Reduce sustained event load and check delivery lag. The gap remains for this run; reinstalling the helper or restarting cannot recover overwritten evidence."
+			}
 		default:
 			rep.Summary.Skip++
 		}
@@ -232,6 +235,8 @@ func checkFileTelemetry(f doctorFacts) (string, string) {
 		return doctorSkip, "not spool-based"
 	}
 	switch {
+	case es.BytesLost > 0:
+		return doctorFail, esLossDetail(*es)
 	case esServiceFlooding(*es):
 		return doctorFail, esFloodingDetail(*es)
 	case esServiceLagging(*es):

@@ -462,6 +462,7 @@ public struct ESServiceSnapshotModel: Codable, Sendable, Equatable {
     public let spoolMtime: String?
     public let flooding: Bool?
     public let unparsedShare: Double?
+    public let bytesLost: UInt64?
 
     enum CodingKeys: String, CodingKey {
         case state
@@ -469,15 +470,17 @@ public struct ESServiceSnapshotModel: Codable, Sendable, Equatable {
         case spoolMtime = "spool_mtime"
         case flooding
         case unparsedShare = "unparsed_share"
+        case bytesLost = "bytes_lost"
     }
 
     public init(state: String, spoolSize: Int64? = nil, spoolMtime: String? = nil,
-                flooding: Bool? = nil, unparsedShare: Double? = nil) {
+                flooding: Bool? = nil, unparsedShare: Double? = nil, bytesLost: UInt64? = nil) {
         self.state = state
         self.spoolSize = spoolSize
         self.spoolMtime = spoolMtime
         self.flooding = flooding
         self.unparsedShare = unparsedShare
+        self.bytesLost = bytesLost
     }
 
     /// The spool mtime; nil when absent, unparseable, or Go's zero time.

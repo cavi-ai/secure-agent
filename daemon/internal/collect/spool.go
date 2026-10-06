@@ -34,6 +34,10 @@ const spoolDrainBudget = 4 << 20 // 4 MiB
 // it is set the first tick that skips and cleared the first tick that drains
 // fully within budget.
 type SpoolStats struct {
+	// BytesLost is a cumulative lower bound for unread bytes overwritten by
+	// rotation or truncation during this run. A later healthy tick cannot
+	// reconstruct that evidence or clear the gap.
+	BytesLost    uint64
 	Lines        uint64
 	Parsed       uint64
 	Skipped      uint64
@@ -98,6 +102,7 @@ func spoolFacts(path string) (int64, time.Time) {
 // mtime of the program launchd runs for it (zero when absent). The probe is injectable
 // (ESServiceProbe) so tests never shell out.
 type ESServiceSnapshot struct {
+	BytesLost   uint64    `json:"bytes_lost"`
 	State       string    `json:"state"`
 	SpoolSize   int64     `json:"spool_size"`
 	SpoolMtime  time.Time `json:"spool_mtime"`
@@ -224,6 +229,9 @@ type SpoolTailer struct {
 
 	// open is the file opener; nil means os.Open (test seam).
 	open func(string) (*os.File, error)
+	// retained belongs to the single poll loop; it distinguishes valid
+	// backlog from a partial line in a file the writer has rotated.
+	retained bool
 
 	// OnProduce, when set, is called after any spool event is published —
 	// the supervisor's coverage heartbeat: a tailer whose spool stopped
@@ -232,6 +240,7 @@ type SpoolTailer struct {
 
 	statsMu sync.Mutex
 	stats   SpoolStats
+	lost    uint64
 	newest  time.Time
 	lag     time.Duration
 	lagAt   time.Time
@@ -254,6 +263,7 @@ func (t *SpoolTailer) Stats() SpoolStats {
 	t.statsMu.Lock()
 	defer t.statsMu.Unlock()
 	s := t.stats
+	s.BytesLost = t.lost
 	s.NewestEvent = t.newest
 	if !t.lagAt.IsZero() && t.clock().Sub(t.lagAt) <= spoolLagFresh {
 		s.Lag = t.lag
@@ -274,6 +284,21 @@ func (t *SpoolTailer) recordFeedClock(newest time.Time) {
 	}
 	t.lagAt = t.clock()
 	t.lag = max(0, t.lagAt.Sub(t.newest))
+}
+
+// A full bus retains the next event on disk. Report its delivery delay even
+// if no newer event was accepted; do not advance the published feed clock.
+func (t *SpoolTailer) recordPendingLag(at time.Time) {
+	t.statsMu.Lock()
+	defer t.statsMu.Unlock()
+	t.lagAt = t.clock()
+	t.lag = max(0, t.lagAt.Sub(at))
+}
+
+func (t *SpoolTailer) recordLost(bytes uint64) {
+	t.statsMu.Lock()
+	defer t.statsMu.Unlock()
+	t.lost += bytes
 }
 
 // recordDrain publishes one tick's counters. FloodSince starts on the first
@@ -356,9 +381,25 @@ func (t *SpoolTailer) poll(c spoolCursor) spoolCursor {
 	}
 	if c.file != nil && !os.SameFile(c.file, st) {
 		if old, err := os.Stat(t.path + ".1"); err == nil && os.SameFile(old, c.file) {
-			t.drainOnce(t.path+".1", c.offset)
+			offset, file := t.drainOnce(t.path+".1", c.offset)
+			if file == nil {
+				return c // an unavailable retained file may be readable next tick
+			}
+			if offset < old.Size() && t.retained {
+				// Finish retained events before starting the new file, including
+				// when the consumer is still full on the next poll.
+				return spoolCursor{offset: offset, size: old.Size(), mod: old.ModTime(), file: file}
+			}
+			if offset < old.Size() {
+				t.recordLost(uint64(old.Size() - offset))
+			}
+		} else if c.offset < c.size {
+			t.recordLost(uint64(c.size - c.offset))
 		}
 		c = spoolCursor{}
+	} else if st.Size() < c.size && c.offset < c.size {
+		t.recordLost(uint64(c.size - c.offset))
+		c = spoolCursor{} // the replacement content starts at byte zero
 	}
 	if st.Size() == c.size && st.ModTime().Equal(c.mod) && c.offset >= c.size {
 		return c
@@ -374,6 +415,7 @@ func (t *SpoolTailer) poll(c spoolCursor) spoolCursor {
 // supervisor: the spool is a best-effort handoff and the collector rewrites
 // it within seconds.
 func (t *SpoolTailer) drainOnce(path string, offset int64) (int64, os.FileInfo) {
+	t.retained = false
 	open := t.open
 	if open == nil {
 		open = os.Open
@@ -411,9 +453,20 @@ func (t *SpoolTailer) drainOnce(path string, offset int64) (int64, os.FileInfo) 
 		linesThisTick++
 		switch e, v := parseESLine(line); v {
 		case esEvent:
-			t.bus.Publish(e)
-			published = true
 			parsedThisTick++
+			if !t.bus.TryPublish(e) {
+				t.retained = true
+				// Leave this complete line in the spool for the next poll. The
+				// privileged writer and other collectors remain non-blocking.
+				t.recordFeedClock(newest)
+				t.recordDrain(SpoolStats{Lines: linesThisTick, Parsed: parsedThisTick}, false)
+				t.recordPendingLag(e.TS)
+				if published && t.OnProduce != nil {
+					t.OnProduce()
+				}
+				return offset + lastGood, st
+			}
+			published = true
 			if e.TS.After(newest) {
 				newest = e.TS
 			}
@@ -471,10 +524,18 @@ func (t *SpoolTailer) drainOnce(path string, offset int64) (int64, os.FileInfo) 
 
 	resume := offset + lastGood
 	if budgetHit {
+		if parsedThisTick > 0 {
+			t.retained = true
+			// A valid burst is durable backlog, not malformed input. Bound
+			// parsing work per poll without skipping the remaining evidence.
+			t.recordDrain(SpoolStats{Lines: linesThisTick, Parsed: parsedThisTick}, false)
+			return resume, st
+		}
 		// The unread tail exceeded the budget and the scan loop cut off
 		// mid-tail (not on a parse error): the rest is skipped in bulk —
 		// counted by newline, never handed to the scanner or the parser.
 		skipTo, skippedLines, skippedBytes := skipTail(f, resume, st.Size())
+		t.recordLost(skippedBytes)
 		t.recordDrain(SpoolStats{
 			Lines:        linesThisTick,
 			Parsed:       parsedThisTick,

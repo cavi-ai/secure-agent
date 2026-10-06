@@ -158,3 +158,43 @@ final class ESRegrantTests: XCTestCase {
         XCTAssertTrue(SetupManager.regrantResolved(installSpoolMtime: nil, currentSpoolMtime: installed))
     }
 }
+
+final class CursorHookRegistrationTests: XCTestCase {
+    func testMergePreservesExistingHooksAndIsIdempotent() throws {
+        let dir = NSTemporaryDirectory() + "/cursor-reg-\(UUID().uuidString)"
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let path = dir + "/hooks.json"
+        let original = Data(#"{"version":1,"extra":"keep","hooks":{"preToolUse":[{"command":"user-hook","matcher":"Shell"}],"sessionStart":[{"command":"user-start"}]}}"#.utf8)
+        try original.write(to: URL(fileURLWithPath: path))
+        let command = "python3 '/tmp/home with spaces/.cursor/hooks/secret_guard.py'"
+        try SetupManager.registerCursorHooks(at: path, command: command)
+        let first = try Data(contentsOf: URL(fileURLWithPath: path))
+        try SetupManager.registerCursorHooks(at: path, command: command)
+        XCTAssertEqual(first, try Data(contentsOf: URL(fileURLWithPath: path)))
+        XCTAssertEqual(original, try Data(contentsOf: URL(fileURLWithPath: path + ".bak-secure-agent")))
+        XCTAssertTrue(SetupManager.cursorHooksRegistered(at: path, command: command))
+        let root = try JSONSerialization.jsonObject(with: first) as! [String: Any]
+        XCTAssertEqual(root["extra"] as? String, "keep")
+        let hooks = root["hooks"] as! [String: Any]
+        XCTAssertEqual((hooks["preToolUse"] as! [[String: Any]]).count, 2)
+        XCTAssertEqual((hooks["sessionStart"] as! [[String: Any]]).first?["command"] as? String, "user-start")
+        try SetupManager.unregisterCursorHooks(at: path, command: command)
+        XCTAssertFalse(SetupManager.cursorHooksRegistered(at: path, command: command))
+        let after = try JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: path))) as! [String: Any]
+        XCTAssertEqual(((after["hooks"] as! [String: Any])["preToolUse"] as! [[String: Any]]).count, 1)
+    }
+
+    func testRejectsInvalidSchemaWithoutChangingFile() throws {
+        let dir = NSTemporaryDirectory() + "/cursor-invalid-\(UUID().uuidString)"
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let path = dir + "/hooks.json"
+        for text in ["bad json", #"{"version":true,"hooks":{}}"#, #"{"version":2,"hooks":{}}"#, #"{"version":1,"hooks":[]}"#, #"{"version":1,"hooks":{"preToolUse":{}}}"#] {
+            let data = Data(text.utf8)
+            try data.write(to: URL(fileURLWithPath: path))
+            XCTAssertThrowsError(try SetupManager.registerCursorHooks(at: path, command: "guard"))
+            XCTAssertEqual(data, try Data(contentsOf: URL(fileURLWithPath: path)))
+        }
+    }
+}

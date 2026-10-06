@@ -65,6 +65,27 @@ func (b *Bus) Publish(e event.Event) {
 	}
 }
 
+// TryPublish offers an event to every subscriber without waiting for capacity.
+// On rejection nothing is delivered: a durable source can retry without
+// duplicating deliveries or counting retained evidence as lost. The exclusive
+// lock excludes other publishers between the capacity check and fan-out.
+func (b *Bus) TryPublish(e event.Event) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.done {
+		return false
+	}
+	for _, ch := range b.subs {
+		if len(ch) == cap(ch) {
+			return false
+		}
+	}
+	for _, ch := range b.subs {
+		ch <- e // consumers can only free capacity while publishers are excluded
+	}
+	return true
+}
+
 // Dropped is the number of per-subscriber publishes that found a full buffer.
 func (b *Bus) Dropped() uint64 { return b.dropped.Load() }
 

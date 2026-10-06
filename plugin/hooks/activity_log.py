@@ -50,7 +50,7 @@ def session_id(payload: dict | None = None) -> str:
     id the fallback is a fresh per-invocation uuid, which cannot group a run.
     """
     if payload:
-        v = payload.get("session_id") or payload.get("sessionId")
+        v = payload.get("conversation_id") or payload.get("session_id") or payload.get("sessionId")
         if v:
             return str(v)[:64]
     for var in ("CLAUDE_SESSION_ID", "SECURE_AGENT_SESSION_ID"):
@@ -75,6 +75,8 @@ def detect_harness(payload: dict | None = None) -> str:
     if env_harness:
         return env_harness
     if payload:
+        if payload.get("cursor_version") or payload.get("conversation_id"):
+            return "cursor"
         tp = payload.get("transcript_path") or ""
         if ".claude/projects" in tp or payload.get("session_id"):
             return "claude"

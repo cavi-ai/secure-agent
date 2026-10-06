@@ -379,6 +379,10 @@ enum TelemetryDoctor {
             return DoctorCheck(id: "spool", title: title, state: .warn,
                                cause: "the daemon did not report the spool", fix: nil)
         }
+        if let lost = es.bytesLost, lost > 0 {
+            return DoctorCheck(id: "spool", title: title, state: .fail,
+                               cause: "at least \(lost) unread spool bytes were lost during this run; later healthy delivery cannot recover them", fix: nil)
+        }
         let share = es.unparsedShare ?? 0
         let percent = Int((share * 100).rounded())
         let mtime = es.spoolMtimeDate ?? f.spoolMtime

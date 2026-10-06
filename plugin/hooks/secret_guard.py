@@ -598,6 +598,10 @@ def _guard_query(agent, tool, path, rule_id, deadline_s, workspace=""):
 
 
 def runtime() -> str:
+    from activity_log import detect_harness
+    harness = detect_harness(_PAYLOAD)
+    if harness:
+        return harness
     if os.environ.get("CLAUDE_CODE_ENTRYPOINT"):
         return "claude"
     if os.environ.get("CURSOR_TRACE_ID"):
@@ -1046,16 +1050,17 @@ def main() -> int:
     _PAYLOAD = data if isinstance(data, dict) else {}
 
     event = str(data.get("hook_event_name") or data.get("event") or "")
-    if event == "PostToolUse":
+    if event in {"PostToolUse", "postToolUse"}:
         try:
             log_payload(data)
         except Exception:
             pass
-        result = data.get("tool_result") or data.get("content") or data
+        result = data.get("tool_output") or data.get("tool_result") or data.get("content") or data
         hits = scan_text(result)
         if hits:
             msg = "[secure-agent] Warning: Prompt injection pattern detected in tool result"
-            print(json.dumps({"systemMessage": msg, "user_message": msg}))
+            print(json.dumps({"additional_context": msg} if event == "postToolUse"
+                             else {"systemMessage": msg, "user_message": msg}))
         else:
             print("{}")
         return 0

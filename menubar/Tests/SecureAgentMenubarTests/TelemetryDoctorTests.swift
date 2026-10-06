@@ -353,6 +353,18 @@ final class TelemetryDoctorTests: XCTestCase {
         assertCheck(checks, "legacy", .fail, .removeLegacy)
     }
 
+    func testSpoolLossStaysFailedWithFreshHealthyWriter() throws {
+        let decoded = try JSONDecoder().decode(ESServiceSnapshotModel.self,
+            from: Data(#"{"state":"running","bytes_lost":123,"unparsed_share":0}"#.utf8))
+        XCTAssertEqual(decoded.bytesLost, 123)
+        let checks = TelemetryDoctor.evaluate(facts {
+            $0.esService = ESServiceSnapshotModel(state: "running", spoolMtime: self.iso(self.now),
+                                                  flooding: false, unparsedShare: 0, bytesLost: 123)
+        })
+        assertCheck(checks, "spool", .fail, nil)
+        XCTAssertTrue(check(checks, "spool")?.cause.contains("123 unread spool bytes") == true)
+    }
+
     func testCorruptStaleSpool() {
         let corrupt = TelemetryDoctor.evaluate(facts {
             $0.esService = ESServiceSnapshotModel(state: "not-loaded", spoolSize: 11_534_336,

@@ -290,6 +290,9 @@ func silentCollectorItems(st Status) []PostureItem {
 // lines the tailer cannot keep up with (esServiceBehind) is a lesser item:
 // the writer is fine, the reader is behind.
 func esServiceItems(s collect.ESServiceSnapshot) []PostureItem {
+	if s.BytesLost > 0 {
+		return []PostureItem{{Kind: "collector_silent", ID: "eslogger", Title: "File monitoring evidence was lost", Severity: 2, Detail: esLossDetail(s)}}
+	}
 	if esServiceFlooding(s) {
 		return []PostureItem{{
 			Kind: "collector_silent", ID: "eslogger",
@@ -352,6 +355,10 @@ func esServiceItems(s collect.ESServiceSnapshot) []PostureItem {
 		})
 	}
 	return items
+}
+
+func esLossDetail(s collect.ESServiceSnapshot) string {
+	return fmt.Sprintf("at least %d unread spool bytes were skipped or overwritten during this daemon run; later healthy delivery cannot recover that evidence", s.BytesLost)
 }
 
 // esFloodFreshWindow: a flood verdict needs a spool written this recently.
@@ -440,8 +447,8 @@ func esServiceLagging(s collect.ESServiceSnapshot) bool {
 // esLaggingDetail is the shared wording for the late-delivery failure:
 // posture and doctor report the same facts.
 func esLaggingDetail(s collect.ESServiceSnapshot) string {
-	return fmt.Sprintf("the newest file event delivered happened at %s, %s before it arrived — file flags and resource episodes see file activity that late",
-		s.NewestEventAt.Local().Format("15:04:05"), time.Duration(s.LagSeconds)*time.Second)
+	return fmt.Sprintf("file monitoring delivery is %s behind; the newest accepted event happened at %s — file flags and resource episodes see delayed activity",
+		time.Duration(s.LagSeconds)*time.Second, s.NewestEventAt.Local().Format("15:04:05"))
 }
 
 // esBehindWindow: a skip shorter than this is normal load on a healthy

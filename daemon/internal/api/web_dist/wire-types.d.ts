@@ -433,6 +433,7 @@ export interface Health {
 }
 
 export interface ESServiceSnapshot {
+  bytes_lost: number;
   state: string;
   spool_size: number;
   spool_mtime: string;

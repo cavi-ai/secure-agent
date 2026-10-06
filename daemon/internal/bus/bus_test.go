@@ -47,3 +47,30 @@ func TestPublishDropsWhenSubscriberFull(t *testing.T) {
 		t.Fatalf("Dropped = %d, want 1 (second publish on a full buffer-1 sub)", got)
 	}
 }
+
+func TestTryPublishIsAtomicAndRetryable(t *testing.T) {
+	b := New(1)
+	defer b.Close()
+	a, c := b.Subscribe(), b.Subscribe()
+	b.Publish(event.Event{PID: 1})
+	<-a
+	if b.TryPublish(event.Event{PID: 2}) {
+		t.Fatal("accepted with one subscriber full")
+	}
+	if len(a) != 0 || b.Dropped() != 0 {
+		t.Fatal("retryable offer partially delivered or counted as lost")
+	}
+	<-c
+	if !b.TryPublish(event.Event{PID: 2}) {
+		t.Fatal("rejected after capacity recovered")
+	}
+	for _, ch := range []<-chan event.Event{a, c} {
+		if e := <-ch; e.PID != 2 {
+			t.Fatalf("got %+v", e)
+		}
+	}
+	b.Close()
+	if b.TryPublish(event.Event{}) {
+		t.Fatal("accepted after close")
+	}
+}
