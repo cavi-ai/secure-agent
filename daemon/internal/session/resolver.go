@@ -549,7 +549,10 @@ func (r *Resolver) EndTranscriptSession(id string, ts time.Time) {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.st.EndSession(id, ts)
+	if err := r.st.EndSession(id, ts); err != nil {
+		log.Printf("session: end transcript session: %v", err)
+		return
+	}
 	if sess, ok := r.st.GetSession(id); ok {
 		r.emitLocked(sess)
 	}
@@ -916,7 +919,10 @@ func (r *Resolver) Sweep() {
 	// pid-less hook sessions after a day of silence.
 	for root, id := range r.st.SessionRoots() {
 		if _, tracked := r.byRoot[root]; !tracked && !live[root] && !r.tagger.Alive(root) {
-			r.st.EndSession(id, now)
+			if err := r.st.EndSession(id, now); err != nil {
+				log.Printf("session: end restarted session: %v", err)
+				continue
+			}
 			if sess, ok := r.st.GetSession(id); ok {
 				r.emitLocked(sess)
 			}
@@ -924,7 +930,10 @@ func (r *Resolver) Sweep() {
 	}
 	for _, sess := range r.st.ListSessions(store.SessionFilter{Status: model.SessionIdle, Limit: 500}) {
 		if sess.RootPID == 0 && now.Sub(sess.LastSeenAt) > endSilentAfter {
-			r.st.EndSession(sess.ID, now)
+			if err := r.st.EndSession(sess.ID, now); err != nil {
+				log.Printf("session: end silent session: %v", err)
+				continue
+			}
 			if stored, ok := r.st.GetSession(sess.ID); ok {
 				r.emitLocked(stored)
 			}
@@ -951,7 +960,10 @@ func (r *Resolver) Sweep() {
 // endLocked ends session id and drops it from the in-memory maps. Caller
 // holds mu.
 func (r *Resolver) endLocked(id string, now time.Time) {
-	r.st.EndSession(id, now)
+	if err := r.st.EndSession(id, now); err != nil {
+		log.Printf("session: end tracked session: %v", err)
+		return
+	}
 	if sess, ok := r.st.GetSession(id); ok {
 		r.emitLocked(sess)
 	}
