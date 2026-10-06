@@ -117,6 +117,9 @@ successful write of the same operation; cumulative failures and bus delivery
 loss remain coverage gaps for that daemon run because the missing evidence
 cannot be reconstructed. The mirror retries opening on the next flag after
 a failure, without a retry loop or blocking collectors.
+The native Telemetry Doctor displays the daemon's recovery guidance and opens
+hook setup for failed registration or activity checks. Lost bus deliveries
+remain an evidence gap for that run; restarting cannot recover them.
 Rotation keeps the previous archive if renaming the active file fails.
 Resource episode inserts and enrichment updates recover independently; an
 unchanged enrichment payload or a concurrent update does not clear a write fault.

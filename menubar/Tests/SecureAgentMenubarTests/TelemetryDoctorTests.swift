@@ -384,7 +384,7 @@ final class TelemetryDoctorTests: XCTestCase {
         })
         XCTAssertNil(checks.first { $0.id == "daemon.hooks" })
         assertCheck(checks, "daemon.file_telemetry", .fail, nil)
-        XCTAssertEqual(check(checks, "daemon.file_telemetry")?.cause, "collector not loaded")
+        XCTAssertEqual(check(checks, "daemon.file_telemetry")?.cause, "collector not loaded\nenable it in Settings")
         assertCheck(checks, "daemon.pairing", .warn, nil)
         XCTAssertEqual(check(checks, "daemon.pairing")?.cause, "skip")
 
@@ -394,6 +394,27 @@ final class TelemetryDoctorTests: XCTestCase {
 
     func testOnlyPaneFixesWaitForTheUser() {
         XCTAssertEqual(DoctorFix.allCases.filter(\.needsUser), [.openLoginItems, .openFullDiskAccess])
+    }
+
+    func testDaemonRecoveryInstructionsAndHookSetupAreVisible() {
+        let checks = TelemetryDoctor.evaluate(facts {
+            $0.daemonChecks = [
+                DaemonDoctorCheckModel(id: "hook-active", title: "Guard hook active", state: "fail",
+                                      detail: "no attributed hook activity", fix: "Start a new harness session and run a guarded tool"),
+                DaemonDoctorCheckModel(id: "hook-registered", title: "Guard hook registered", state: "fail",
+                                      fix: "Register the hook in Setup"),
+                DaemonDoctorCheckModel(id: "bus", title: "Event bus", state: "fail",
+                                      detail: "828 deliveries dropped", fix: "Lost deliveries cannot be recovered"),
+                DaemonDoctorCheckModel(id: "pricing", title: "Pricing", state: "fail", fix: "Update Secure Agent"),
+            ]
+        })
+        XCTAssertEqual(check(checks, "daemon.hook-active")?.fix?.title, "Open hook setup")
+        XCTAssertEqual(check(checks, "daemon.hook-registered")?.fix?.title, "Open hook setup")
+        XCTAssertTrue(check(checks, "daemon.hook-active")?.cause.contains("Start a new harness session") == true)
+        XCTAssertTrue(check(checks, "daemon.bus")?.cause.contains("cannot be recovered") == true)
+        XCTAssertNil(check(checks, "daemon.bus")?.fix)
+        XCTAssertTrue(check(checks, "daemon.pricing")?.cause.contains("Update Secure Agent") == true)
+        XCTAssertNil(check(checks, "daemon.pricing")?.fix)
     }
 
     // MARK: Set aside
