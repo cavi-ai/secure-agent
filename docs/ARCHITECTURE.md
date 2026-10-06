@@ -133,6 +133,10 @@ Advisor plan saves have a separate write-health label and refresh posture on
 failure and recovery. Failed saves retain the previous plan and release the
 pending subject so it can be retried; storage faults do not trip the provider
 circuit breaker.
+Session ending commits the lifecycle transition and closure of running tool
+calls in one transaction. Failed endings have a separate write-health label;
+the resolver retains tracking and emits no ending transition until persistence
+succeeds. Missing-session no-ops and unrelated upserts do not clear that fault.
 
 Per-harness coverage joins recent hook and trace events to their persisted
 session IDs. It lists only active, non-infrastructure harnesses and separates

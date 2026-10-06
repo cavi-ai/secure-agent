@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"time"
@@ -130,19 +131,49 @@ func (s *Store) TouchSession(id string, ts time.Time) {
 // EndSession marks a session ended (root process gone, or explicit end).
 // Tool calls still marked "running" in that session are closed as "error":
 // a session cannot finish while a call is in flight, and rows stuck at
-// running poison pairing stats.
-func (s *Store) EndSession(id string, ts time.Time) {
+// running poison pairing stats. Both updates commit together.
+func (s *Store) EndSession(id string, ts time.Time) (writeErr error) {
 	if id == "" {
-		return
+		return nil
 	}
+	changed := false
+	defer func() {
+		if writeErr != nil || changed {
+			s.noteWrite("session endings", writeErr)
+		}
+	}()
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin session ending: %w", err)
+	}
+	defer tx.Rollback()
 	t := ts.UTC().Format(time.RFC3339Nano)
-	_, _ = s.db.Exec(`UPDATE sessions SET status = ?, ended_at = ?, last_seen_at = MAX(last_seen_at, ?) WHERE id = ? AND status != ?`,
+	sessionResult, err := tx.Exec(`UPDATE sessions SET status = ?, ended_at = ?, last_seen_at = MAX(last_seen_at, ?) WHERE id = ? AND status != ?`,
 		model.SessionEnded, t, t, id, model.SessionEnded)
-	_, _ = s.db.Exec(`UPDATE events SET tool_status = 'error'
+	if err != nil {
+		return fmt.Errorf("end session: %w", err)
+	}
+	callResult, err := tx.Exec(`UPDATE events SET tool_status = 'error'
 		WHERE session_id = ? AND kind = ? AND tool_status = 'running'`,
 		id, int(event.KindToolCall))
+	if err != nil {
+		return fmt.Errorf("close session tool calls: %w", err)
+	}
+	sessionRows, err := sessionResult.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("ended session rows affected: %w", err)
+	}
+	callRows, err := callResult.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("closed tool-call rows affected: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit session ending: %w", err)
+	}
+	changed = sessionRows > 0 || callRows > 0
+	return nil
 }
 
 // SweepStaleRunningCalls closes tool-call rows stuck at "running" past the
