@@ -486,6 +486,13 @@ type verdictPublishingSink struct {
 	postureChanged func()
 }
 
+func (v *verdictPublishingSink) PutAdvisorPlan(subject string, plan model.AdvisorPlan) error {
+	if v.postureChanged != nil {
+		defer v.postureChanged()
+	}
+	return v.Store.PutAdvisorPlan(subject, plan)
+}
+
 func (v *verdictPublishingSink) PutAdvisorVerdict(subjectID, kind string, verdict model.AdvisorVerdict) error {
 	// Every attempted write can change evidence health, including non-flag
 	// verdicts and failures that must not publish a flag delta.

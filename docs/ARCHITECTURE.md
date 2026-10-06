@@ -129,6 +129,10 @@ posture through the evidence-health tracker while flag collection continues.
 Advisor verdicts track persistence failures independently and publish a flag
 refresh only after the verdict is saved. Every verdict write refreshes posture;
 storage failures do not count as provider failures or trip its circuit breaker.
+Advisor plan saves have a separate write-health label and refresh posture on
+failure and recovery. Failed saves retain the previous plan and release the
+pending subject so it can be retried; storage faults do not trip the provider
+circuit breaker.
 
 Per-harness coverage joins recent hook and trace events to their persisted
 session IDs. It lists only active, non-infrastructure harnesses and separates

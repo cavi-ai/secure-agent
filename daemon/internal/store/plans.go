@@ -2,6 +2,7 @@ package store
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"time"
 
@@ -9,22 +10,31 @@ import (
 )
 
 // PutAdvisorPlan stores (or replaces) the plan for subject, keeping the
-// newest maxAdvisorPlans.
-func (s *Store) PutAdvisorPlan(subject string, p model.AdvisorPlan) {
+// newest maxAdvisorPlans with best-effort retention pruning. A nil error means
+// the new plan was inserted successfully.
+func (s *Store) PutAdvisorPlan(subject string, p model.AdvisorPlan) (writeErr error) {
+	defer func() { s.noteWrite("advisor plans", writeErr) }()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	data, err := json.Marshal(p)
 	if err != nil {
-		log.Printf("store: advisor plan %s: %v", subject, err)
-		return
+		return fmt.Errorf("marshal advisor plan: %w", err)
 	}
-	if _, err := s.db.Exec(`INSERT OR REPLACE INTO advisor_plans (subject_id, plan_json, created_at) VALUES (?, ?, ?)`,
-		subject, string(data), p.CreatedAt.UTC().Format(time.RFC3339Nano)); err != nil {
-		log.Printf("store: advisor plan %s: %v", subject, err)
-		return
+	result, err := s.db.Exec(`INSERT OR REPLACE INTO advisor_plans (subject_id, plan_json, created_at) VALUES (?, ?, ?)`,
+		subject, string(data), p.CreatedAt.UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		return fmt.Errorf("insert advisor plan: %w", err)
+	}
+	inserted, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("advisor plan rows affected: %w", err)
+	}
+	if inserted != 1 {
+		return fmt.Errorf("advisor plan insert affected %d rows", inserted)
 	}
 	_, _ = s.db.Exec(`DELETE FROM advisor_plans WHERE subject_id NOT IN
 		(SELECT subject_id FROM advisor_plans ORDER BY created_at DESC LIMIT ?)`, maxAdvisorPlans)
+	return nil
 }
 
 // AdvisorPlanFor returns the stored plan for subject.
