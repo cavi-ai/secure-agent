@@ -59,6 +59,11 @@ type TranscriptScanner struct {
 	// lines appended while the daemon was down are never read.
 	OffsetStatePath string
 
+	// OnCheckpointWrite reports each configured checkpoint save attempt.
+	// Nil errors mean the atomic replacement succeeded; failed saves remain
+	// dirty and retry on the existing save cadence without stopping collection.
+	OnCheckpointWrite func(error)
+
 	// ExtraTargets, when set, is consulted on every resolve pass for
 	// dynamically discovered targets (e.g. CODEX_HOME read off live codex
 	// processes — a launcher that relocates the rollout store must not
@@ -396,8 +401,10 @@ func (ts *TranscriptScanner) Run(ctx context.Context) error {
 		if !dirty || (!force && now.Sub(lastSave) < saveEvery) {
 			return
 		}
-		ts.saveOffsets(offsets)
-		dirty, lastSave = false, now
+		lastSave = now // Bound failed attempts as well as successful saves.
+		if err := ts.saveOffsets(offsets); err == nil {
+			dirty = false
+		}
 	}
 
 	// seedFile sets an unseen file's offset to its current EOF. It must NEVER
@@ -565,21 +572,26 @@ func (ts *TranscriptScanner) loadOffsets() map[string]int64 {
 	return offsets
 }
 
-// saveOffsets persists the tail offsets. Best-effort: a failed write loses
-// at most one restart's worth of appended lines.
-func (ts *TranscriptScanner) saveOffsets(offsets map[string]int64) {
+// saveOffsets atomically replaces the checkpoint. Failure leaves the previous
+// checkpoint intact; Run retains dirty state until a later attempt succeeds.
+func (ts *TranscriptScanner) saveOffsets(offsets map[string]int64) (err error) {
 	if ts.OffsetStatePath == "" {
-		return
+		return nil
 	}
+	defer func() {
+		if ts.OnCheckpointWrite != nil {
+			ts.OnCheckpointWrite(err)
+		}
+	}()
 	data, err := json.Marshal(offsets)
 	if err != nil {
-		return
+		return err
 	}
 	tmp := ts.OffsetStatePath + ".tmp"
 	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		return
+		return err
 	}
-	_ = os.Rename(tmp, ts.OffsetStatePath)
+	return os.Rename(tmp, ts.OffsetStatePath)
 }
 
 type pendingTranscriptLine struct {

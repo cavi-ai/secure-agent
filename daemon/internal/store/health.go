@@ -36,6 +36,12 @@ func (s *Store) noteWrite(operation string, err error) {
 	h.active[operation] = true
 }
 
+// NoteTranscriptCheckpointWrite includes the collector's checkpoint file in
+// evidence health. Only a fixed operation label enters the status snapshot.
+func (s *Store) NoteTranscriptCheckpointWrite(err error) {
+	s.noteWrite("transcript checkpoints", err)
+}
+
 // WriteHealth takes no database lock, so a stuck writer cannot hide its
 // already-observed failures from the operator.
 func (s *Store) WriteHealth() WriteHealth {

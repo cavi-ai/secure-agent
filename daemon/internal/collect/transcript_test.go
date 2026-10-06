@@ -2,6 +2,7 @@ package collect
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -812,5 +813,100 @@ func TestTranscriptPendingDeliverySurvivesSourceRemoval(t *testing.T) {
 	case <-done:
 	case <-time.After(time.Second):
 		t.Fatal("tailer did not stop")
+	}
+}
+
+// A failed save must remain dirty even if the transcript stays idle afterward.
+// Otherwise a transient checkpoint fault lasts until another source changes.
+func TestTranscriptCheckpointRetriesWithoutNewActivity(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "activity.jsonl")
+	state := filepath.Join(dir, "offsets.json")
+	line := `{"tool":"Bash","session_id":"retry-session","pid":42}` + "\n"
+	if err := os.Mkdir(state+".tmp", 0o700); err != nil {
+		t.Fatal(err)
+	}
+	b := bus.New(16)
+	defer b.Close()
+	sub := b.Subscribe()
+	ts := NewTranscriptScanner(b, []string{path})
+	ts.OffsetStatePath = state
+	ts.tailEvery = time.Millisecond
+	ts.resolveEvery = 5 * time.Millisecond
+	ts.saveEvery = 10 * time.Millisecond
+	writes := make(chan error, 1)
+	ts.OnCheckpointWrite = func(err error) {
+		select {
+		case writes <- err:
+		default:
+		}
+	}
+	resolved := make(chan struct{}, 1)
+	resolves := 0
+	ts.ExtraTargets = func() []string {
+		resolves++
+		if resolves == 2 {
+			resolved <- struct{}{}
+		}
+		return nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- ts.Run(ctx) }()
+	defer func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatal("scanner did not stop")
+		}
+	}()
+	select {
+	case <-resolved:
+	case <-time.After(time.Second):
+		t.Fatal("scanner did not start")
+	}
+	if err := os.WriteFile(path, []byte(line), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case got := <-sub:
+		if got.SessionID != "retry-session" {
+			t.Fatalf("event=%+v", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("checkpoint fault blocked collection")
+	}
+	select {
+	case err := <-writes:
+		if err == nil {
+			t.Fatal("blocked checkpoint reported success")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("checkpoint write failure was not reported")
+	}
+	if _, err := os.Stat(state); !os.IsNotExist(err) {
+		t.Fatalf("blocked checkpoint unexpectedly exists: %v", err)
+	}
+	if err := os.Remove(state + ".tmp"); err != nil {
+		t.Fatal(err)
+	}
+	// Restore the destination without any further source activity.
+	deadline := time.After(time.Second)
+	for {
+		select {
+		case err := <-writes:
+			if err != nil {
+				continue
+			}
+			data, err := os.ReadFile(state)
+			var offsets map[string]int64
+			if err != nil || json.Unmarshal(data, &offsets) != nil || offsets[path] != int64(len(line)) {
+				t.Fatalf("recovery did not persist delivered offset: %s, %v", data, err)
+			}
+			return
+		case <-deadline:
+			t.Fatal("checkpoint was not retried after recovery without new activity")
+		}
 	}
 }

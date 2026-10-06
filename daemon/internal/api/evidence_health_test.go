@@ -1,16 +1,86 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"math"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/cavi-ai/secure-agent/daemon/internal/bus"
+	"github.com/cavi-ai/secure-agent/daemon/internal/collect"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 	"github.com/cavi-ai/secure-agent/daemon/internal/resource"
 )
+
+func TestTranscriptCheckpointFailureVisibleThroughRecovery(t *testing.T) {
+	for _, phase := range []string{"write", "rename"} {
+		t.Run(phase, func(t *testing.T) {
+			st := testStore(t)
+			defer st.Close()
+			a := newTestAPI("", st, nil, func() Status { return Status{Running: true} })
+			dir := t.TempDir()
+			source := filepath.Join(dir, "activity.jsonl")
+			state := filepath.Join(dir, "offsets.json")
+			if err := os.WriteFile(source, []byte("seed\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			blocker := state + ".tmp"
+			if phase == "rename" {
+				blocker = state
+			}
+			if err := os.Mkdir(blocker, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			b := bus.New(16)
+			defer b.Close()
+			for _, recovering := range []bool{false, true} {
+				if recovering {
+					if err := os.Remove(blocker); err != nil {
+						t.Fatal(err)
+					}
+				}
+				ts := collect.NewTranscriptScanner(b, []string{source})
+				ts.OffsetStatePath = state
+				ts.OnCheckpointWrite = st.NoteTranscriptCheckpointWrite
+				ctx, cancel := context.WithCancel(context.Background())
+				cancel()
+				_ = ts.Run(ctx) // Shutdown flush attempts the seeded checkpoint.
+				w := httptest.NewRecorder()
+				a.buildMux().ServeHTTP(w, httptest.NewRequest("GET", "/status", nil))
+				var status Status
+				if err := json.Unmarshal(w.Body.Bytes(), &status); err != nil {
+					t.Fatal(err)
+				}
+				if w.Code != 200 || status.StorageHealth == nil || status.StorageHealth.Failures != 1 {
+					t.Fatalf("checkpoint failure hidden: %s", w.Body.String())
+				}
+				active := status.StorageHealth.Active
+				if (!recovering && (len(active) != 1 || active[0] != "transcript checkpoints")) || (recovering && len(active) != 0) {
+					t.Fatalf("incorrect checkpoint recovery state: %+v", status.StorageHealth)
+				}
+				if state, _ := checkStorage(a.doctorFacts(time.Now())); state != doctorFail {
+					t.Fatal("Doctor hides earlier checkpoint failures")
+				}
+				p := a.computePosture()
+				if p.State != "attention" || p.CoverageCount != 1 || p.CoverageItems[0].Kind != "storage_loss" {
+					t.Fatalf("posture hides checkpoint fault: %+v", p)
+				}
+				if recovering {
+					data, err := os.ReadFile(state)
+					var offsets map[string]int64
+					if err != nil || json.Unmarshal(data, &offsets) != nil || offsets[source] != 5 {
+						t.Fatalf("recovered checkpoint not persisted: %s, %v", data, err)
+					}
+				}
+			}
+		})
+	}
+}
 
 func TestResourceEpisodeFailureVisibleThroughRecovery(t *testing.T) {
 	st := testStore(t)
