@@ -1,6 +1,31 @@
 package config
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"slices"
+	"testing"
+)
+
+// The loaded config carries the disabled list it filtered agents by.
+func TestLoadKeepsDisabledAgents(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("disabled_agents:\n  - claude\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadStrict(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(cfg.DisabledAgents, []string{"claude"}) {
+		t.Fatalf("DisabledAgents = %v, want [claude]", cfg.DisabledAgents)
+	}
+	for _, d := range cfg.Agents {
+		if d.Name == "claude" {
+			t.Fatal("claude still defined")
+		}
+	}
+}
 
 func TestFilterDisabledAgents(t *testing.T) {
 	all := []AgentDef{

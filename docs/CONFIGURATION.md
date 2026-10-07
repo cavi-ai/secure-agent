@@ -83,6 +83,13 @@ agents:
 - `name`: Identifier for the agent harness.
 - `match`: List of process name substrings or binary name patterns to match against system processes.
 
+`disabled_agents` (list of agent names, case-insensitive) removes definitions from the tagger; Settings → Providers writes it. Changes to `agents` and `disabled_agents` apply within seconds, without a restart: processes of a disabled agent lose their tag, and processes of a re-enabled agent are tagged again.
+
+```yaml
+disabled_agents:
+  - windsurf
+```
+
 ---
 
 ### `vendor_allowlist` (Map of Agent Name to List of Domains)

@@ -314,7 +314,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 		go watchConfig(ctx, opts.ConfigPath, configWatchDeps{
 			st: st, stk: advisorStk, pub: fleetPub, fleetCfg: fleetCfgLive,
 			logDir: filepath.Dir(cfg.DBPath), apiServer: apiServer, resourceControl: resourceControl,
-			initialConfig: &cfg, worktrees: hunter, sysAgent: sysAgent, fleetOn: fleetOn,
+			initialConfig: &cfg, worktrees: hunter, sysAgent: sysAgent, tagger: tagger, fleetOn: fleetOn,
 			deltaHub: deltaHub, postureChanged: postureHook.run,
 		})
 	}
