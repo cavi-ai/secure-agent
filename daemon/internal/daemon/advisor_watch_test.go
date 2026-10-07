@@ -147,19 +147,21 @@ func TestWatchConfigReportsSkippedReloadInDoctor(t *testing.T) {
 		return ""
 	}
 
-	os.WriteFile(cfgPath, []byte("advisor:\n  enabled: false\n"), 0o600)
+	// Start broken: the check passes until the watcher reports, so a fail
+	// proves the watcher ran.
+	os.WriteFile(cfgPath, []byte("advisor:\n  enabled: [broken\n  man"), 0o600)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go watchConfig(ctx, cfgPath, configWatchDeps{
 		st: st, stk: &advisorStackHolder{}, pub: fleet.NewPublisher(), fleetCfg: &fleetConfigHolder{}, apiServer: apiServer,
 	})
-	waitFor(t, 5*time.Second, func() bool { return configState() == "pass" })
-
-	os.WriteFile(cfgPath, []byte("advisor:\n  enabled: [broken\n  man"), 0o600)
 	waitFor(t, 5*time.Second, func() bool { return configState() == "fail" })
 
 	os.WriteFile(cfgPath, []byte("advisor:\n  enabled: false\n"), 0o600)
 	waitFor(t, 5*time.Second, func() bool { return configState() == "pass" })
+
+	os.WriteFile(cfgPath, []byte("advisor:\n  enabled: [broken\n  man"), 0o600)
+	waitFor(t, 5*time.Second, func() bool { return configState() == "fail" })
 }
 
 // The fingerprint key must distinguish all advisor-relevant fields — a key

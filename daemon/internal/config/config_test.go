@@ -318,6 +318,36 @@ func TestLoadWithOverlayReportsTheProblem(t *testing.T) {
 	}
 }
 
+// SafeError never echoes a value the overlay holds: yaml.v3 backtick values
+// (including ones that contain backticks), %q values, and credentials.
+func TestSafeErrorMasksOverlayValues(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	for name, overlay := range map[string]string{
+		"type error":        "proxy_port: hunter2hunter2\n",
+		"backtick in value": "proxy_port: \"ab`hunter2hunter2\"\n",
+		"loopback endpoint": "advisor:\n  enabled: true\n  managed: false\n  endpoint: \"https://user:hunter2hunter2@api.example.com/v1\"\n  model: \"m\"\n",
+		"worktree root":     "worktrees:\n  roots: [\"relative/hunter2hunter2\"]\n",
+	} {
+		if err := os.WriteFile(path, []byte(overlay), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		_, err := LoadStrict(path)
+		if err == nil {
+			t.Fatalf("%s: LoadStrict accepted the overlay", name)
+		}
+		got := SafeError(err)
+		if got == "" || strings.Contains(got, "hunter2") || strings.Contains(got, "\n") {
+			t.Errorf("%s: SafeError = %q (from %q)", name, got, err.Error())
+		}
+	}
+	if got := SafeError(errors.New("open /x/config.yaml: permission denied")); got != "open /x/config.yaml: permission denied" {
+		t.Errorf("plain error = %q", got)
+	}
+	if SafeError(nil) != "" {
+		t.Error("nil error must render empty")
+	}
+}
+
 // LoadStrict surfaces overlay corruption instead of masking it with
 // defaults — the hot-reload contract (a half-written config must never
 // silently reconfigure the advisor).

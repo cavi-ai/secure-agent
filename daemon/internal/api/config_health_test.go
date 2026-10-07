@@ -5,8 +5,12 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/cavi-ai/secure-agent/daemon/internal/config"
 )
 
 func configCheck(t *testing.T, a *API) DoctorCheck {
@@ -21,7 +25,7 @@ func configCheck(t *testing.T, a *API) DoctorCheck {
 }
 
 // A config.yaml the daemon could not apply fails Doctor until a restart (at
-// start) or a successful reload; YAML errors never echo the file's values.
+// start) or a successful reload.
 func TestDoctorReportsConfigProblems(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	st := testStore(t)
@@ -32,14 +36,22 @@ func TestDoctorReportsConfigProblems(t *testing.T) {
 		t.Fatalf("no problem: %+v", c)
 	}
 
-	a.SetConfigBootProblem(errors.New("yaml: unmarshal errors:\n  line 3: cannot unmarshal !!str `hunter2hunter2` into int"))
+	boot := errors.New("overlay is malformed YAML: yaml: line 2: mapping values are not allowed in this context")
+	a.SetConfigBootProblem(boot)
 	c := configCheck(t, a)
-	if c.State != doctorFail || c.Fix == "" || !strings.Contains(c.Detail, "at start") || strings.Contains(c.Detail, "hunter2") {
+	if c.State != doctorFail || c.Fix == "" || !strings.HasPrefix(c.Detail, "at start: ") || !strings.Contains(c.Detail, "until restart") {
 		t.Fatalf("boot problem: %+v", c)
 	}
 
-	a.SetConfigReloadProblem(errors.New("overlay is malformed YAML"))
-	if c := configCheck(t, a); c.State != doctorFail || !strings.Contains(c.Detail, "latest reload skipped") || !strings.Contains(c.Detail, "at start") {
+	// The watcher's first read of the unchanged file reports the same
+	// problem; it is shown once, as the boot problem.
+	a.SetConfigReloadProblem(boot)
+	if again := configCheck(t, a); again.Detail != c.Detail {
+		t.Fatalf("same problem on reload: %q, want %q", again.Detail, c.Detail)
+	}
+
+	a.SetConfigReloadProblem(errors.New("advisor.managed_model is required when advisor.managed is true"))
+	if c := configCheck(t, a); c.State != doctorFail || !strings.Contains(c.Detail, "latest reload skipped: advisor.managed_model") || !strings.HasPrefix(c.Detail, "at start: ") {
 		t.Fatalf("boot and reload problems: %+v", c)
 	}
 
@@ -58,5 +70,27 @@ func TestDoctorReportsConfigProblems(t *testing.T) {
 	a.SetConfigReloadProblem(nil)
 	if c := configCheck(t, a); c.State != doctorPass {
 		t.Fatalf("recovered: %+v", c)
+	}
+}
+
+// Doctor shows a real validation error without the value the overlay holds.
+func TestDoctorConfigCheckHidesOverlayValues(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	st := testStore(t)
+	t.Cleanup(func() { st.Close() })
+	a := newTestAPI("", st, nil, func() Status { return Status{Running: true, Uptime: "1h0m0s"} })
+
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	overlay := "advisor:\n  enabled: true\n  managed: false\n  endpoint: \"https://user:hunter2hunter2@api.example.com/v1\"\n  model: \"m\"\n"
+	if err := os.WriteFile(path, []byte(overlay), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := config.LoadStrict(path)
+	if err == nil {
+		t.Fatal("LoadStrict accepted a non-loopback endpoint")
+	}
+	a.SetConfigReloadProblem(err)
+	if c := configCheck(t, a); c.State != doctorFail || strings.Contains(c.Detail, "hunter2") || !strings.Contains(c.Detail, "advisor.endpoint") {
+		t.Fatalf("validation error: %+v", c)
 	}
 }

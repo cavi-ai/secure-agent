@@ -94,7 +94,7 @@ func watchConfig(ctx context.Context, path string, deps configWatchDeps) {
 			// state: keep everything, log once per state change. Doctor
 			// reports it until a reload succeeds.
 			if lastAdvisorKey != "err" {
-				log.Printf("config reload skipped (config unreadable: %v) — keeping current state", err)
+				log.Printf("config reload skipped (config unreadable: %s) — keeping current state", config.SafeError(err))
 				lastAdvisorKey = "err"
 			}
 			return

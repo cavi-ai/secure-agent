@@ -459,7 +459,7 @@ func LoadWithOverlay(explicitPath string) (cfg Config, overlayErr, err error) {
 		return Config{}, nil, validateErr
 	}
 	if overlayErr != nil {
-		log.Printf("config: WARNING: overlay problem (%v); settings it could not set use compiled-in defaults", overlayErr)
+		log.Printf("config: WARNING: overlay problem (%s); settings it could not set use compiled-in defaults", SafeError(overlayErr))
 	}
 	return cfg, overlayErr, nil
 }
