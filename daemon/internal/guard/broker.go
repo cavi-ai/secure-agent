@@ -1,6 +1,7 @@
 package guard
 
 import (
+	"context"
 	"sync"
 	"time"
 
@@ -67,11 +68,13 @@ func NewBroker(timeout time.Duration) *Broker {
 	}
 }
 
-// Request registers a pending prompt and blocks for the decision. Identical
-// in-flight requests (same agent/rule/path/tool) block on the same waiter so
-// one resolution answers all of them. When the queue is full the request is
-// denied immediately with an explicit reason.
-func (b *Broker) Request(p Pending) Decision {
+// Request registers a pending prompt and blocks for the decision, the timeout,
+// or ctx ending (the hook stopped waiting). Identical in-flight requests (same
+// agent/rule/path/tool) block on the same waiter so one resolution answers
+// all of them; the prompt stays pending while any of them still waits. When
+// the queue is full the request is denied immediately with an explicit
+// reason.
+func (b *Broker) Request(ctx context.Context, p Pending) Decision {
 	if p.TS == "" {
 		p.TS = time.Now().UTC().Format(time.RFC3339Nano)
 	}
@@ -81,44 +84,57 @@ func (b *Broker) Request(p Pending) Decision {
 		return Decision{Verdict: "deny", Scope: "once", Reason: "queue-full"}
 	}
 	key := dedupKey(p)
-	if id, ok := b.byKey[key]; ok {
-		w := b.waiters[id]
-		ch := make(chan Decision, 1)
-		w.chs = append(w.chs, ch)
-		b.mu.Unlock()
+	id, joined := b.byKey[key]
+	ch := make(chan Decision, 1)
+	if joined {
 		// Wait on the existing waiter's fan-out; this request adds no new prompt.
-		select {
-		case d := <-ch:
-			return d
-		case <-time.After(b.timeout):
-			return Decision{Verdict: "deny", Scope: "once", Reason: "timeout"}
+		b.waiters[id].chs = append(b.waiters[id].chs, ch)
+	} else {
+		id = p.ID
+		b.waiters[id] = &waiter{p: p, chs: []chan Decision{ch}}
+		b.byKey[key] = id
+		b.queue = append(b.queue, id)
+	}
+	b.mu.Unlock()
+	defer b.leave(id, ch)
+
+	timer := time.NewTimer(b.timeout)
+	defer timer.Stop()
+	select {
+	case d := <-ch:
+		return d
+	case <-timer.C:
+		return Decision{Verdict: "deny", Scope: "once", Reason: "timeout"}
+	case <-ctx.Done():
+		return Decision{Verdict: "deny", Scope: "once", Reason: "withdrawn"}
+	}
+}
+
+// leave drops one request's reply channel and withdraws the prompt once no
+// request is left waiting on it.
+func (b *Broker) leave(id string, ch chan Decision) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	w, ok := b.waiters[id]
+	if !ok {
+		return
+	}
+	for i, c := range w.chs {
+		if c == ch {
+			w.chs = append(w.chs[:i], w.chs[i+1:]...)
+			break
 		}
 	}
-	chs := []chan Decision{make(chan Decision, 1)}
-	w := &waiter{p: p, chs: chs}
-	b.waiters[p.ID] = w
-	b.byKey[key] = p.ID
-	b.queue = append(b.queue, p.ID)
-	b.mu.Unlock()
-
-	defer func() {
-		b.mu.Lock()
-		delete(b.waiters, p.ID)
-		delete(b.byKey, key)
-		for i, id := range b.queue {
-			if id == p.ID {
-				b.queue = append(b.queue[:i], b.queue[i+1:]...)
-				break
-			}
+	if len(w.chs) > 0 {
+		return
+	}
+	delete(b.waiters, id)
+	delete(b.byKey, dedupKey(w.p))
+	for i, qid := range b.queue {
+		if qid == id {
+			b.queue = append(b.queue[:i], b.queue[i+1:]...)
+			break
 		}
-		b.mu.Unlock()
-	}()
-
-	select {
-	case d := <-chs[0]:
-		return d
-	case <-time.After(b.timeout):
-		return Decision{Verdict: "deny", Scope: "once", Reason: "timeout"}
 	}
 }
 
@@ -137,7 +153,8 @@ func (b *Broker) Pending() []Pending {
 }
 
 // Resolve delivers a decision to the waiter registered under id, fanned out to
-// every duplicate request blocked on the same waiter.
+// every duplicate request blocked on the same waiter. It returns false when no
+// request is waiting on id any more.
 func (b *Broker) Resolve(id string, d Decision) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()

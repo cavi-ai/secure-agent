@@ -37,7 +37,8 @@ type guardDecisionRequest struct {
 
 // handleGuardDecision answers a hook's prompt-mode query: a cached (agent,rule)
 // decision is returned instantly; otherwise it enqueues a pending prompt and
-// blocks until the menubar resolves it or the broker times out (deny).
+// blocks until the menubar resolves it, the broker times out (deny), or the
+// hook disconnects (prompt withdrawn, deny).
 func (a *API) handleGuardDecision(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -95,12 +96,18 @@ func (a *API) handleGuardDecision(w http.ResponseWriter, r *http.Request) {
 	// Push, not just poll: SSE subscribers (menubar) refetch /guard/pending
 	// immediately instead of waiting out their poll interval.
 	a.publishGuardEvent(event.KindGuardPrompt, req.Agent+"/"+req.RuleID)
-	d := a.guardBroker.Request(guard.Pending{
+	d := a.guardBroker.Request(r.Context(), guard.Pending{
 		ID: id, SessionID: req.SessionID, Agent: req.Agent, Tool: req.Tool, Path: req.Path, RuleID: req.RuleID,
 		// Disclose the blast radius of "allow always": the cached rule covers
 		// every path this rule matches for this agent, not just this file.
 		ScopeText: "Allow Always approves every path under rule \"" + req.RuleID + "\" for agent \"" + req.Agent + "\", not just this one.",
 	})
+	if r.Context().Err() != nil {
+		// The hook stopped waiting (its own deadline, or the harness killed
+		// it) and denied the call itself: an answer that lands now never
+		// reached the agent, so it saves no rule and is recorded as a deny.
+		d = guard.Decision{Verdict: "deny", Scope: "once", Reason: "withdrawn"}
+	}
 	if d.Scope == "always" && d.Reason == "" {
 		a.store.PutGuardRule(store.GuardRule{Agent: req.Agent, RuleID: req.RuleID, Decision: d.Verdict, Source: "prompt"})
 		a.store.PutAudit(store.AuditEntry{Action: "guard-rule", Rule: req.Agent + "/" + req.RuleID, ToMode: d.Verdict})

@@ -182,19 +182,19 @@ func claudeRouting(ps *proxy.ProxyServer, caCertPath string) func() api.RoutingI
 	}
 }
 
-// hookPromptDeadlineMS is how long secret_guard.py waits for a prompt
-// decision (PROMPT_DEADLINE_S); the hook does not read the daemon config.
+// hookPromptDeadlineMS is secret_guard.py's default prompt wait
+// (PROMPT_DEADLINE_S, overridable with SECURE_AGENT_PROMPT_DEADLINE_S); the
+// hook does not read the daemon config. It is the default prompt deadline.
 const hookPromptDeadlineMS = 45000
 
 // guardBrokerMS derives the broker's resolve deadline from the configured
-// prompt deadline: 3s shorter, so the hook always receives an explicit deny
-// from the daemon rather than a dropped socket (the server must resolve
-// first). A deadline above the hook's is capped to it: a longer broker wait
-// would keep a prompt answerable after its hook had already denied. Floored
-// at 1s so a misconfigured deadline can't produce a zero/negative broker
-// deadline.
+// prompt deadline: 3s shorter, so with matching deadlines the hook receives
+// an explicit deny from the daemon rather than a dropped socket. A hook that
+// stops waiting first withdraws its prompt (Broker.Request's context).
+// Floored at 1s so a misconfigured deadline can't produce a zero/negative
+// broker deadline.
 func guardBrokerMS(hookDeadlineMS int) int {
-	if hookDeadlineMS <= 0 || hookDeadlineMS > hookPromptDeadlineMS {
+	if hookDeadlineMS <= 0 {
 		hookDeadlineMS = hookPromptDeadlineMS
 	}
 	brokerMS := hookDeadlineMS - 3000

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -84,7 +85,7 @@ func TestGuardOutcomePersistence(t *testing.T) {
 			if tc.setup == "full" {
 				for i := 0; i < guard.MaxWaiters; i++ {
 					p := guard.Pending{ID: fmt.Sprintf("fill-%d", i), Agent: "claude", RuleID: "rule", Path: fmt.Sprintf("/p-%d", i)}
-					go a.guardBroker.Request(p)
+					go a.guardBroker.Request(context.Background(), p)
 				}
 				deadline := time.Now().Add(time.Second)
 				for len(a.guardBroker.Pending()) < guard.MaxWaiters && time.Now().Before(deadline) {
@@ -182,5 +183,80 @@ func TestDeduplicatedGuardRequestsPersistSeparately(t *testing.T) {
 	rows := st.ListGuardDecisions("session-1", 10)
 	if len(rows) != 2 || rows[0].ID == rows[1].ID {
 		t.Fatalf("rows=%+v, want distinct persisted outcomes", rows)
+	}
+}
+
+// guardDecisionAsync posts a prompt-mode decision request with ctx and
+// returns once the prompt is pending.
+func guardDecisionAsync(t *testing.T, a *API, ctx context.Context) (string, chan guard.Decision) {
+	t.Helper()
+	out := make(chan guard.Decision, 1)
+	go func() {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/guard/decision", strings.NewReader(`{"agent":"claude","tool":"Read","path":"/secret","rule_id":"cloud-creds"}`)).WithContext(ctx)
+		a.handleGuardDecision(rec, req)
+		var d guard.Decision
+		_ = json.Unmarshal(rec.Body.Bytes(), &d)
+		out <- d
+	}()
+	deadline := time.Now().Add(time.Second)
+	for len(a.guardBroker.Pending()) == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("prompt never became pending")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	return a.guardBroker.Pending()[0].ID, out
+}
+
+// A hook that stops waiting withdraws its prompt: a later Allow Always
+// resolves nothing, saves no rule, and the decision is recorded as a deny.
+func TestGuardAnswerAfterTheHookLeftSavesNoRule(t *testing.T) {
+	st := testStore(t)
+	a := newTestAPI("", st, &fakeKiller{}, func() Status { return Status{Running: true} })
+	a.guardBroker = guard.NewBroker(time.Minute)
+	ctx, cancel := context.WithCancel(context.Background())
+	id, out := guardDecisionAsync(t, a, ctx)
+	cancel()
+	if d := <-out; d.Verdict != "deny" || d.Reason != "withdrawn" {
+		t.Fatalf("decision = %+v, want deny/withdrawn", d)
+	}
+	if len(a.guardBroker.Pending()) != 0 {
+		t.Fatalf("pending = %+v, want the prompt withdrawn", a.guardBroker.Pending())
+	}
+	rec := httptest.NewRecorder()
+	a.handleGuardResolve(rec, httptest.NewRequest(http.MethodPost, "/guard/resolve", strings.NewReader(`{"id":"`+id+`","verdict":"allow","scope":"always"}`)))
+	if !strings.Contains(rec.Body.String(), `"resolved":false`) {
+		t.Fatalf("late resolve = %s, want resolved:false", rec.Body.String())
+	}
+	if _, ok := st.LookupGuardRule("claude", "cloud-creds"); ok {
+		t.Fatal("late Allow Always saved a guard rule")
+	}
+	if rows := st.ListGuardDecisions("", 10); len(rows) != 1 || rows[0].Verdict != "deny" {
+		t.Fatalf("recorded = %+v, want one deny", rows)
+	}
+}
+
+// endedAtAnswer is a request context that has ended by the time the answer
+// is read, but whose Done never fires: the hook leaves at the moment the
+// answer lands.
+type endedAtAnswer struct{ context.Context }
+
+func (endedAtAnswer) Err() error { return context.Canceled }
+
+// An Allow Always that lands as the hook leaves is not applied.
+func TestGuardAnswerRacingTheHookLeavingSavesNoRule(t *testing.T) {
+	st := testStore(t)
+	a := newTestAPI("", st, &fakeKiller{}, func() Status { return Status{Running: true} })
+	a.guardBroker = guard.NewBroker(time.Minute)
+	id, out := guardDecisionAsync(t, a, endedAtAnswer{context.Background()})
+	if !a.guardBroker.Resolve(id, guard.Decision{Verdict: "allow", Scope: "always"}) {
+		t.Fatal("resolve did not reach the request")
+	}
+	if d := <-out; d.Verdict != "deny" || d.Reason != "withdrawn" {
+		t.Fatalf("decision = %+v, want deny/withdrawn", d)
+	}
+	if _, ok := st.LookupGuardRule("claude", "cloud-creds"); ok {
+		t.Fatal("Allow Always for a hook that had left saved a guard rule")
 	}
 }

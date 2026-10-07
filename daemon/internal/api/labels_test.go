@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -81,7 +82,7 @@ func TestDispositionsRecordLabels(t *testing.T) {
 	}
 	done := make(chan guard.Decision, 1)
 	go func() {
-		done <- a.guardBroker.Request(guard.Pending{ID: "g1", Agent: "codex", Tool: "Read", Path: "/w/api/secrets.json", RuleID: "cloud-creds"})
+		done <- a.guardBroker.Request(context.Background(), guard.Pending{ID: "g1", Agent: "codex", Tool: "Read", Path: "/w/api/secrets.json", RuleID: "cloud-creds"})
 	}()
 	deadline := time.Now().Add(2 * time.Second)
 	for len(a.guardBroker.Pending()) == 0 && time.Now().Before(deadline) {
