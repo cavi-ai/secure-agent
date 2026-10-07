@@ -132,12 +132,11 @@ func TestOpencodeSkipsPollOfUnchangedDB(t *testing.T) {
 	if n := c.pollOnce(); n != 1 || c.change.polls != 2 {
 		t.Fatalf("after a write: published %d, polls %d, want 1 and 2", n, c.change.polls)
 	}
-	// The poll that read rows does not record: the next one confirms nothing
-	// is left, then polls stop.
+	// A bounded scan that drains records the fingerprint immediately.
 	c.pollOnce()
 	c.pollOnce()
-	if c.change.polls != 3 {
-		t.Fatalf("polls = %d, want 3", c.change.polls)
+	if c.change.polls != 2 {
+		t.Fatalf("polls = %d, want 2", c.change.polls)
 	}
 }
 

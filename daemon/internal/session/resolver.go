@@ -427,7 +427,9 @@ func (r *Resolver) HandleHandshake(h Handshake) {
 	// Join to the process tree: the handshake's pid is the harness process.
 	if h.PID > 0 {
 		if old, ok := r.byRoot[h.PID]; ok && old != h.SessionID {
-			r.rekeyLocked(old, h.SessionID)
+			if !r.rekeyLocked(old, h.SessionID) {
+				return
+			}
 		}
 		r.byRoot[h.PID] = h.SessionID
 		r.byPID[h.PID] = h.SessionID
@@ -497,7 +499,9 @@ func (r *Resolver) NoteTranscriptSighting(s TranscriptSighting) {
 	// the same workspace is a sibling conversation, not a rename.
 	if workspace != "" && harness != "" {
 		if old, ok := r.findProvisionalLocked(id, harness, workspace); ok {
-			r.rekeyLocked(old, id)
+			if !r.rekeyLocked(old, id) {
+				return
+			}
 		}
 		// Keep the scope index pointing at the current id so a process-tree
 		// session created after this sighting adopts the conversation.
@@ -552,13 +556,18 @@ func (r *Resolver) EndTranscriptSession(id string, ts time.Time) {
 // held old points at id. A scope entry for old is dropped rather than moved,
 // so a new process in that scope mints its own session instead of adopting
 // this conversation. Caller holds mu.
-func (r *Resolver) rekeyLocked(old, id string) {
-	r.st.RekeySession(old, id)
+func (r *Resolver) rekeyLocked(old, id string) bool {
+	var err error
 	if sess, ok := r.deferred[old]; ok {
-		delete(r.deferred, old)
-		sess.ID = id
-		r.st.UpsertSession(sess)
+		err = r.st.PromoteSession(sess, id)
+	} else {
+		err = r.st.RekeySession(old, id)
 	}
+	if err != nil {
+		log.Printf("session: rekey failed: %v", err)
+		return false
+	}
+	delete(r.deferred, old)
 	for pid, sid := range r.byPID {
 		if sid == old {
 			r.byPID[pid] = id
@@ -574,6 +583,7 @@ func (r *Resolver) rekeyLocked(old, id string) {
 			delete(r.byScope, scope)
 		}
 	}
+	return true
 }
 
 // findProvisionalLocked returns the process-tree session transcript session
@@ -643,7 +653,9 @@ func (r *Resolver) ensureHookSession(e *event.Event) bool {
 			if sess.Workspace == "" {
 				sess.Workspace = info.CWD
 			}
-			r.joinTreeLocked(&sess, e.PID, info)
+			if !r.joinTreeLocked(&sess, e.PID, info) {
+				return false
+			}
 		}
 	}
 	if sess.Repo == "" {
@@ -661,7 +673,7 @@ func (r *Resolver) ensureHookSession(e *event.Event) bool {
 // newest conversation takes the root. Runs on every stamped event, so an
 // event that raced the tagger at process start joins on the next one.
 // Caller holds mu, before the session upsert.
-func (r *Resolver) joinTreeLocked(sess *model.Session, pid int32, info agents.AgentInfo) {
+func (r *Resolver) joinTreeLocked(sess *model.Session, pid int32, info agents.AgentInfo) bool {
 	root := info.RootPID
 	if root == 0 {
 		root = info.PID
@@ -676,20 +688,24 @@ func (r *Resolver) joinTreeLocked(sess *model.Session, pid int32, info agents.Ag
 	if !rootInfo.StartedAt.IsZero() {
 		sess.RootStartedAt = rootInfo.StartedAt.UTC().Format(time.RFC3339Nano)
 	}
-	r.byPID[pid] = sess.ID
 	old, held := r.byRoot[root]
 	if held && old == sess.ID {
-		return
+		r.byPID[pid] = sess.ID
+		return true
 	}
 	if held && r.confidenceLocked(old) == model.ConfProcessTree {
 		// The rekeyed row carries its orchestrator parent with it.
-		r.rekeyLocked(old, sess.ID)
+		if !r.rekeyLocked(old, sess.ID) {
+			return false
+		}
 	} else {
 		// No process-tree row to inherit from: nest under the orchestrator
 		// as the process-tree session would have.
 		sess.ParentID = r.orchestratorForLocked(root, info.Name)
 	}
 	r.byRoot[root] = sess.ID
+	r.byPID[pid] = sess.ID
+	return true
 }
 
 // JoinTranscriptPID ties a transcript session to the process that holds its
@@ -737,7 +753,9 @@ func (r *Resolver) JoinTranscriptPID(id string, pid int32) {
 			return
 		}
 	}
-	r.joinTreeLocked(&sess, pid, info)
+	if !r.joinTreeLocked(&sess, pid, info) {
+		return
+	}
 	r.upsertAndEmitLocked(sess)
 }
 

@@ -66,7 +66,7 @@ func memoryTimestampExpr(column string) string {
 
 // createMemoryIndexes runs after legacy session columns have been migrated.
 // The query expressions below match these indexes exactly.
-func createMemoryIndexes(db *sql.DB) error {
+func createMemoryIndexes(db *sql.Tx) error {
 	for _, spec := range []struct{ name, table, key, at, id string }{
 		{"idx_memory_events", "events", "session_id", "ts", "id"},
 		{"idx_memory_flags", "flags", "session_id", "ts", "id"},

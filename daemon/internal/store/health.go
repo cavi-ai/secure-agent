@@ -42,6 +42,10 @@ func (s *Store) NoteTranscriptCheckpointWrite(err error) {
 	s.noteWrite("transcript checkpoints", err)
 }
 
+func (s *Store) NoteOpencodeCheckpointWrite(err error) {
+	s.noteWrite("opencode checkpoints", err)
+}
+
 // WriteHealth takes no database lock, so a stuck writer cannot hide its
 // already-observed failures from the operator.
 func (s *Store) WriteHealth() WriteHealth {

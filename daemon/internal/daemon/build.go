@@ -900,6 +900,8 @@ func startCollectors(ctx context.Context, sup *supervise.Supervisor, supReg *sup
 	// so it is polled separately (read-only, watermarked). Absent DB → the
 	// collector simply produces nothing and the coverage signal says so.
 	oc := collect.NewOpencodeCollector(b, "", 0)
+	oc.StatePath = filepath.Join(filepath.Dir(cfg.DBPath), "opencode-watermark.json")
+	oc.OnCheckpointWrite = st.NoteOpencodeCheckpointWrite
 	oc.OnProduce = func() { supReg.MarkProduced("opencode") }
 	oc.OnPoll = func(src string, wm int64) { supReg.MarkPolled("opencode", src, wm) }
 	oc.OnSessionSeen = resolver.NoteTranscriptSession
