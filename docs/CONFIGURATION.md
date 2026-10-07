@@ -14,6 +14,12 @@
 
 ---
 
+## Reloading
+
+The daemon re-reads the overlay every 2 seconds and applies `agents`, `disabled_agents`, `advisor`, `fleet`, `pricing`, `resource_control`, `system_agent` and `worktrees` live. Every other setting loads only at start; while the file holds a start-only setting the running daemon does not, Doctor's `config` check names its key until Secure Agent restarts.
+
+---
+
 ## ⚙️ Configuration Schema
 
 ### `sensitive_globs` (List of Strings)

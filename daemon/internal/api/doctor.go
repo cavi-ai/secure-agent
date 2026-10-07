@@ -85,6 +85,7 @@ type doctorFacts struct {
 	hermes *collect.HermesStatus // nil when the collector is not wired
 
 	configBoot, configReload string
+	configRestart            []string
 }
 
 type doctorProbe struct {
@@ -205,7 +206,7 @@ func (a *API) doctorFacts(now time.Time) doctorFacts {
 		h := a.hermes()
 		f.hermes = &h
 	}
-	f.configBoot, f.configReload = a.configProblems()
+	f.configBoot, f.configReload, f.configRestart = a.configProblems()
 	return f
 }
 

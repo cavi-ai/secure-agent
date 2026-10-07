@@ -656,7 +656,7 @@ Each check has a `state` of `pass`, `fail` or `skip`, a `detail`, and on `fail` 
 
 | `id` | Fails when | Skips when |
 |---|---|---|
-| `config` | `config.yaml` could not be read or parsed in full at start (the settings it failed to set use built-in defaults until restart; firewall, guard and paths load only at start), or the latest hot reload was skipped (unreadable, unparsable or invalid); a reload that reads the same problem as start is reported once; values the error quotes are replaced with `a value`, credentials are scrubbed, and the detail is one line | — |
+| `config` | `config.yaml` could not be read or parsed in full at start (the settings it failed to set use built-in defaults until restart; firewall, guard and paths load only at start), or the latest hot reload was skipped (unreadable, unparsable or invalid), or the file changed start-only settings since start (detail `changed since start, applied after restart: <keys>`); a reload that reads the same problem as start is reported once; values the error quotes are replaced with `a value`, credentials are scrubbed, and the detail is one line | — |
 | `hook-registered` | `~/.claude/settings.json` does not register the guard hook for `PreToolUse` and `PostToolUse` | home directory unknown |
 | `hook-active` | agents are running and no hook event landed in 24h | no agents |
 | `file-telemetry` | root ES service `not-loaded`, in a `spawn`/`exit` state, or `running` with agents active and the spool unwritten for over 10 min (past grace); a service launchd will not start (last exit 78, `EX_CONFIG`, or `spawn scheduled` after a nonzero exit) names Re-register in its detail | file telemetry is not spool-based |

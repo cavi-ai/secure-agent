@@ -104,6 +104,9 @@ func watchConfig(ctx context.Context, path string, deps configWatchDeps) {
 			}
 			return
 		}
+		if deps.apiServer != nil && deps.initialConfig != nil {
+			deps.apiServer.SetConfigRestartNeeded(config.RestartSettings(*deps.initialConfig, data))
+		}
 		if key := advisorConfigKey(data.Advisor); key != lastAdvisorKey {
 			lastAdvisorKey = key
 			// Swapping is the signal: the drain loop re-loads the stack per
