@@ -106,7 +106,8 @@ The app bundle has one identity, `com.cavi-ai.secure-agent`, for Launch Services
 ### Event Bus & Storage
 
 - **Pub/Sub Channel Bus (`daemon/internal/bus/bus.go`)**: Centralized Go channel event bus with non-blocking fan-out subscribers. Guarantees that slow database disk IO never blocks real-time file or process event capture.
-- **Store Engine (`daemon/internal/store/store.go`)**: Dual-persists events and correlation flags to SQLite (`events.db`) and structured JSONL logs (`events.jsonl`). Implements automatic retention pruning.
+- **Store Engine (`daemon/internal/store/store.go`)**: Persists events and correlation flags to SQLite (`events.db`) and mirrors flags only to a forensic JSONL log (`jsonl_path`, default `events.jsonl`). Implements automatic retention pruning. The store depends on no detection engine; endpoint naming comes from `daemon/internal/hostid`.
+- **Endpoint identity (`daemon/internal/hostid`)**: Names a host or IP by owning org, class, and CDN/cloud infrastructure, and holds the one host match rule for vendor and user-approved hosts. Standard library only; shared by the correlator, store, and API.
 
 Core evidence writes (events, flags, incidents, guard decisions, sessions,
 resource episodes, episode enrichment, operator audit, and the flag JSONL mirror)

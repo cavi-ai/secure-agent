@@ -13,8 +13,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cavi-ai/secure-agent/daemon/internal/correlate"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
+	"github.com/cavi-ai/secure-agent/daemon/internal/hostid"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/sensitive"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
@@ -301,9 +301,9 @@ func (a *API) explainEgress(f model.Flag, readTS time.Time, full bool) []model.E
 			continue
 		}
 		seen[key] = true
-		id := correlate.IdentifyCached(host)
+		id := hostid.IdentifyCached(host)
 		if full {
-			id = correlate.Identify(host)
+			id = hostid.Identify(host)
 		}
 		eg := model.ExplainEgress{Host: host, Port: port, Org: id.Org, Name: id.Name, Kind: id.Kind}
 		if a.allowlist != nil && f.Agent != "" {

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
+	"github.com/cavi-ai/secure-agent/daemon/internal/hostid"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 )
 
@@ -63,7 +64,7 @@ func (c *Correlator) credentialOwners(path string) []string {
 // processes reading the same file do not change that. An agent tool read
 // never qualifies: it put the file into the model's context.
 func (c *Correlator) ownerUse(reads []readMark, cm connMark) bool {
-	org := IdentifyCached(cm.host).Org
+	org := hostid.IdentifyCached(cm.host).Org
 	if org == "" || cm.pid == 0 || len(reads) == 0 {
 		return false
 	}

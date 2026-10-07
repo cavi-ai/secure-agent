@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/agents"
-	"github.com/cavi-ai/secure-agent/daemon/internal/correlate"
+	"github.com/cavi-ai/secure-agent/daemon/internal/hostid"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 )
 
@@ -27,7 +27,7 @@ func evidenceOfKind(f model.Flag, kind string) *model.EvidenceItem {
 // its host when the org is unknown, and the host.
 func destinationOf(ev model.EvidenceItem) (dest, org, host string) {
 	host, _ = splitHostPort(ev.Label)
-	org = correlate.IdentifyCached(host).Org
+	org = hostid.IdentifyCached(host).Org
 	return firstNonEmpty([]string{org, host}), org, host
 }
 
@@ -43,7 +43,7 @@ func readConnectWhy(f model.Flag) string {
 	dest, org, host := destinationOf(*conn)
 	file := displayPath(read.Label, strings.TrimRight(explainHome(), "/"))
 	switch {
-	case correlate.IdentifyCached(host).Class == "cloud":
+	case hostid.IdentifyCached(host).Class == "cloud":
 		return "A connection was observed to " + dest + " infrastructure near the read of " + file + ". The receiving service and whether secret bytes were sent are not established."
 	case len(read.Owners) == 0:
 		return "No owner is on record for " + file + "; the connection went to " + dest + "."
