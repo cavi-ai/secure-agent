@@ -1,6 +1,8 @@
 package agents
 
 import (
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -615,5 +617,86 @@ func TestSetAgentsRetagsAtOnce(t *testing.T) {
 	tg.SetAgents(all.Agents)
 	if _, ok := tg.TaggedPIDs()[100]; !ok {
 		t.Fatal("claude re-enabled: pid 100 not tagged after SetAgents")
+	}
+}
+
+// Re-enabling an agent reports its processes to the onTagged hook even while
+// other goroutines tag them concurrently: no Tag call can slip between the
+// definition swap and the re-tag. Run with -race.
+func TestSetAgentsReportsReenabledPIDsUnderConcurrentTag(t *testing.T) {
+	fake := fakeProcs{100: {PID: 100, PPID: 1, Exe: "/usr/local/bin/claude"}}
+	all, _ := config.Load("/nonexistent")
+	var withoutClaude []config.AgentDef
+	for _, d := range all.Agents {
+		if d.Name != "claude" {
+			withoutClaude = append(withoutClaude, d)
+		}
+	}
+	tg := New(all, fake)
+	tg.Refresh()
+	var reported atomic.Int64
+	tg.SetOnTagged(func(pid int32, _ AgentInfo) {
+		if pid == 100 {
+			reported.Add(1)
+		}
+	})
+
+	var stop atomic.Bool
+	var wg sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for !stop.Load() {
+				tg.Tag(100)
+			}
+		}()
+	}
+	const rounds = 1000
+	for i := 0; i < rounds; i++ {
+		tg.SetAgents(withoutClaude)
+		tg.SetAgents(all.Agents)
+	}
+	stop.Store(true)
+	wg.Wait()
+	if got := reported.Load(); got != rounds {
+		t.Fatalf("onTagged reported pid 100 on %d of %d re-enables", got, rounds)
+	}
+}
+
+// An unchanged definition set keeps each process's CPU baseline and does not
+// report already-tagged processes as new.
+func TestSetAgentsKeepsCPUBaselineAndQuietHook(t *testing.T) {
+	start := time.Date(2026, 9, 15, 11, 0, 0, 0, time.UTC)
+	now := time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
+	src := &countingProcSource{procs: map[int32]ProcInfo{
+		100: {PID: 100, PPID: 1, Comm: "claude", Exe: "/usr/local/bin/claude", StartTime: start, CPUTime: time.Second},
+	}}
+	c, _ := config.Load("/nonexistent")
+	tg := New(c, src)
+	tg.now = func() time.Time { return now }
+	tg.Refresh()
+	src.procs[100] = ProcInfo{PID: 100, PPID: 1, Comm: "claude", Exe: "/usr/local/bin/claude", StartTime: start, CPUTime: 3 * time.Second}
+	now = now.Add(2 * time.Second)
+	tg.Refresh()
+	if got := tg.TaggedPIDs()[100].CPUPercent; got != 100 {
+		t.Fatalf("before SetAgents: CPUPercent=%v want 100", got)
+	}
+
+	hooked := 0
+	tg.SetOnTagged(func(int32, AgentInfo) { hooked++ })
+	tg.SetAgents(c.Agents)
+	if got := tg.TaggedPIDs()[100].CPUPercent; got != 100 {
+		t.Fatalf("after SetAgents(same): CPUPercent=%v want 100", got)
+	}
+	if hooked != 0 {
+		t.Fatalf("onTagged ran %d times for unchanged tags", hooked)
+	}
+
+	src.procs[100] = ProcInfo{PID: 100, PPID: 1, Comm: "claude", Exe: "/usr/local/bin/claude", StartTime: start, CPUTime: 4 * time.Second}
+	now = now.Add(2 * time.Second)
+	tg.Refresh()
+	if got := tg.TaggedPIDs()[100].CPUPercent; got != 50 {
+		t.Fatalf("next refresh: CPUPercent=%v want 50", got)
 	}
 }
