@@ -73,6 +73,26 @@ func TestClassifyUnknownAgentKnownVendorHostAuthIsLegit(t *testing.T) {
 	}
 }
 
+// Vendor hosts match by hostid.HostMatches: the host itself or a subdomain,
+// any case; a lookalike sharing a suffix without a dot boundary is foreign.
+func TestClassifyVendorHostMatchRule(t *testing.T) {
+	p := testPolicy(t)
+	for host, want := range map[string]VerdictKind{
+		"API.Anthropic.com":            VerdictLegit,
+		"eu.api.anthropic.com":         VerdictLegit,
+		"evilapi.anthropic.com":        VerdictLeak,
+		"api.anthropic.com.example.io": VerdictLeak,
+	} {
+		v := p.Classify(
+			Hit{RuleID: "aws-key", SecretType: TypeCloudKey, Layer: LayerPattern},
+			RequestCtx{Agent: "claude", Host: host, Field: FieldAuthHeader},
+		)
+		if v.Kind != want {
+			t.Errorf("%s: verdict %v, want %v", host, v.Kind, want)
+		}
+	}
+}
+
 func TestClassifyUnknownAgentForeignHostIsLeak(t *testing.T) {
 	p := testPolicy(t)
 	v := p.Classify(

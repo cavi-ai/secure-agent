@@ -1,10 +1,10 @@
 package firewall
 
 import (
-	"strings"
 	"sync"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/config"
+	"github.com/cavi-ai/secure-agent/daemon/internal/hostid"
 )
 
 type Policy struct {
@@ -98,10 +98,8 @@ func (p *Policy) isVendorHost(agent, host string) bool {
 	if !ok {
 		return false
 	}
-	host = strings.ToLower(host)
 	for _, h := range v.Hosts {
-		h = strings.ToLower(h)
-		if host == h || strings.HasSuffix(host, "."+h) {
+		if hostid.HostMatches(host, h) {
 			return true
 		}
 	}
