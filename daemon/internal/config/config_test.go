@@ -282,6 +282,42 @@ func TestWriteCwdOverridesEmptyClears(t *testing.T) {
 	}
 }
 
+// LoadWithOverlay returns the boot-time overlay problem with the lenient
+// config: a type error keeps the overlay's other settings, a syntax error
+// keeps none.
+func TestLoadWithOverlayReportsTheProblem(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+
+	if err := os.WriteFile(path, []byte("proxy_port: 9555\nnet_sample_interval_ms: soon\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, overlayErr, err := LoadWithOverlay(path)
+	if err != nil || overlayErr == nil {
+		t.Fatalf("type error: overlayErr=%v err=%v; want an overlay problem only", overlayErr, err)
+	}
+	if cfg.ProxyPort != 9555 {
+		t.Fatalf("type error: proxy_port = %d; want the overlay's 9555", cfg.ProxyPort)
+	}
+
+	if err := os.WriteFile(path, []byte("proxy_port: 9555\nfirewall: [broken\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, overlayErr, err = LoadWithOverlay(path)
+	if err != nil || !errors.Is(overlayErr, ErrOverlayMalformed) {
+		t.Fatalf("syntax error: overlayErr=%v err=%v; want ErrOverlayMalformed", overlayErr, err)
+	}
+	if cfg.ProxyPort == 9555 {
+		t.Fatal("syntax error: the overlay's proxy_port was applied")
+	}
+
+	if err := os.WriteFile(path, []byte("proxy_port: 9555\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, overlayErr, err = LoadWithOverlay(path); overlayErr != nil || err != nil {
+		t.Fatalf("valid overlay: overlayErr=%v err=%v", overlayErr, err)
+	}
+}
+
 // LoadStrict surfaces overlay corruption instead of masking it with
 // defaults — the hot-reload contract (a half-written config must never
 // silently reconfigure the advisor).

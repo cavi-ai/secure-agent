@@ -46,6 +46,9 @@ type Options struct {
 	// hot-reload watcher and the resource-policy writer (both need a path to
 	// persist to).
 	ConfigPath string
+	// ConfigOverlayErr is the overlay problem config.LoadWithOverlay found;
+	// Doctor reports it until restart.
+	ConfigOverlayErr error
 }
 
 // Components is the fully-wired daemon: every subsystem built, every collector
@@ -300,6 +303,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 	// stack / fleet sinks live within a poll cycle (guard modes read
 	// per-request already). Started after the API server exists — the watcher
 	// updates fleet_configured on it.
+	apiServer.SetConfigBootProblem(opts.ConfigOverlayErr)
 	if opts.ConfigPath != "" {
 		go watchConfig(ctx, opts.ConfigPath, configWatchDeps{
 			st: st, stk: advisorStk, pub: fleetPub, fleetCfg: fleetCfgLive,

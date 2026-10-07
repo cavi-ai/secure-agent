@@ -2,12 +2,16 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/cavi-ai/secure-agent/daemon/internal/api"
 	"github.com/cavi-ai/secure-agent/daemon/internal/collect"
 	"github.com/cavi-ai/secure-agent/daemon/internal/config"
 	"github.com/cavi-ai/secure-agent/daemon/internal/fleet"
@@ -113,6 +117,49 @@ func TestWatchAdvisorConfigSurvivesCorruptConfig(t *testing.T) {
 	// Recovery: a valid config resumes swaps.
 	os.WriteFile(cfgPath, []byte("advisor:\n  enabled: false\n"), 0o600)
 	waitFor(t, 5*time.Second, func() bool { return stk.Load().Sub == nil })
+}
+
+// A reload the watcher skips fails the Doctor config check until a valid
+// config loads again.
+func TestWatchConfigReportsSkippedReloadInDoctor(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	st, err := store.Open(filepath.Join(dir, "e.db"), filepath.Join(dir, "e.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	apiServer := api.New(api.Deps{Store: st, Status: func() api.Status { return api.Status{Running: true, Uptime: "1h0m0s"} }})
+	configState := func() string {
+		rec := httptest.NewRecorder()
+		apiServer.ConsoleHandler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/doctor", nil))
+		var rep api.DoctorReport
+		if err := json.Unmarshal(rec.Body.Bytes(), &rep); err != nil {
+			t.Fatalf("doctor: %v (%s)", err, rec.Body.String())
+		}
+		for _, c := range rep.Checks {
+			if c.ID == "config" {
+				return c.State
+			}
+		}
+		t.Fatal("no config check")
+		return ""
+	}
+
+	os.WriteFile(cfgPath, []byte("advisor:\n  enabled: false\n"), 0o600)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go watchConfig(ctx, cfgPath, configWatchDeps{
+		st: st, stk: &advisorStackHolder{}, pub: fleet.NewPublisher(), fleetCfg: &fleetConfigHolder{}, apiServer: apiServer,
+	})
+	waitFor(t, 5*time.Second, func() bool { return configState() == "pass" })
+
+	os.WriteFile(cfgPath, []byte("advisor:\n  enabled: [broken\n  man"), 0o600)
+	waitFor(t, 5*time.Second, func() bool { return configState() == "fail" })
+
+	os.WriteFile(cfgPath, []byte("advisor:\n  enabled: false\n"), 0o600)
+	waitFor(t, 5*time.Second, func() bool { return configState() == "pass" })
 }
 
 // The fingerprint key must distinguish all advisor-relevant fields — a key

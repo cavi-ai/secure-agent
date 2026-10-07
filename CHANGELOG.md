@@ -40,6 +40,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 ### Fixed
 - Redact the same credential shapes in the daemon, the activity log, and the guard audit trail: provider (`sk-`), GitHub, GitLab and Slack tokens, URL userinfo, password flags, credential assignments, and whole private-key blocks.
 - One daemon per store: a second `secure-agentd` on the same database waits for the first to exit instead of replacing its socket and ingesting every source twice.
+- Doctor `config` check: fails when `config.yaml` could not be read or parsed in full at start, or a hot reload was skipped, instead of only logging it; the boot log no longer claims every setting fell back to defaults after a type error.
 - `make install` installs into `/Applications/Secure Agent.app` (the previous copy goes to the Trash) and opens only that copy; the build in `dist/` is never registered or opened. The app registers, re-registers or repairs the file-telemetry helper only when it runs from `/Applications`; any other copy shows "Secure Agent must run from /Applications to manage file telemetry", and the Doctor warns when another copy is registered with macOS.
 - The app re-registers a file-telemetry helper that launchd refuses to start (last exit 78, EX_CONFIG), once per launch; `secure-agent telemetry repair` asks it to.
 - The app's bundle identifier is `com.cavi-ai.secure-agent` again: the `.ui` identity could not manage the file-telemetry helper registered under `com.cavi-ai.secure-agent`.

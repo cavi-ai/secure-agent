@@ -440,25 +440,34 @@ func LoadStrict(explicitPath string) (Config, error) {
 	return cfg, nil
 }
 
-// Load is the lenient variant used at boot: a malformed overlay falls back
-// to compiled-in defaults (logged ONCE here — the loader itself is silent so
-// the hot-reload watcher, which calls LoadStrict every 2s, can't spam the
-// log thousands of lines per hour), but VALIDATION errors still surface —
-// booting with a sample interval that panics the collector is worse than
-// refusing to start.
+// Load is the lenient variant used at boot: the settings a malformed or
+// unreadable overlay fails to set keep their compiled-in defaults (logged
+// ONCE here — the loader itself is silent so the hot-reload watcher, which
+// calls LoadStrict every 2s, can't spam the log thousands of lines per hour),
+// but VALIDATION errors still surface — booting with a sample interval that
+// panics the collector is worse than refusing to start.
 func Load(explicitPath string) (Config, error) {
+	cfg, _, err := LoadWithOverlay(explicitPath)
+	return cfg, err
+}
+
+// LoadWithOverlay is Load that also returns the overlay problem, so the
+// daemon can report it instead of only logging it.
+func LoadWithOverlay(explicitPath string) (cfg Config, overlayErr, err error) {
 	cfg, overlayErr, validateErr := loadWithOverlayError(explicitPath)
 	if validateErr != nil {
-		return Config{}, validateErr
+		return Config{}, nil, validateErr
 	}
 	if overlayErr != nil {
-		log.Printf("config: WARNING: overlay problem (%v); running on compiled-in defaults", overlayErr)
+		log.Printf("config: WARNING: overlay problem (%v); settings it could not set use compiled-in defaults", overlayErr)
 	}
-	return cfg, nil
+	return cfg, overlayErr, nil
 }
 
 // loadWithOverlayError returns the config AND whether the overlay was
-// malformed (defaults were substituted). The hot-reload watcher uses this to
+// malformed (the settings it failed to set keep their defaults: all of them
+// for a YAML syntax error, the mistyped fields for a type error). The
+// hot-reload watcher uses this to
 // distinguish "operator changed something" from "config was half-written".
 func loadWithOverlayError(explicitPath string) (Config, error, error) {
 	var raw rawConfig
