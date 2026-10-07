@@ -48,10 +48,10 @@ func (s *Store) upsertSessionLocked(sess model.Session) (writeErr error) {
 	}
 	defer func() { s.noteWrite("sessions", writeErr) }()
 	var cur struct {
-		harness, workspace, repo, branch, status, confidence string
+		harness, workspace, repo, branch, status, confidence, lastSeen string
 	}
-	err := s.db.QueryRow(`SELECT harness, workspace, repo, branch, status, confidence FROM sessions WHERE id = ?`, sess.ID).
-		Scan(&cur.harness, &cur.workspace, &cur.repo, &cur.branch, &cur.status, &cur.confidence)
+	err := s.db.QueryRow(`SELECT harness, workspace, repo, branch, status, confidence, COALESCE(last_seen_at,'') FROM sessions WHERE id = ?`, sess.ID).
+		Scan(&cur.harness, &cur.workspace, &cur.repo, &cur.branch, &cur.status, &cur.confidence, &cur.lastSeen)
 	exists := err == nil
 	if err != nil && err != sql.ErrNoRows {
 		return fmt.Errorf("read session before upsert: %w", err)
@@ -77,6 +77,13 @@ func (s *Store) upsertSessionLocked(sess model.Session) (writeErr error) {
 		}
 		if sess.Status == "" {
 			sess.Status = cur.status
+		}
+		if last, err := time.Parse(time.RFC3339Nano, cur.lastSeen); err == nil && !sess.LastSeenAt.After(last) {
+			sess.LastSeenAt = last
+			// A late record can enrich identity without announcing new activity.
+			if cur.status == model.SessionIdle && sess.Status == model.SessionActive {
+				sess.Status = model.SessionIdle
+			}
 		}
 		// Never reopen an ended session from a stale resolver pass; never
 		// downgrade confidence (hook > transcript > process-tree).
@@ -140,9 +147,9 @@ func (s *Store) TouchSession(id string, ts time.Time) (writeErr error) {
 	defer s.mu.Unlock()
 	result, err := s.db.Exec(`UPDATE sessions SET last_seen_at = ?,
 		status = CASE WHEN status = ? THEN ? ELSE status END
-		WHERE id = ? AND status != ?`,
+		WHERE id = ? AND status != ? AND (`+timestampOrderExpr("last_seen_at")+` IS NULL OR `+timestampOrderExpr("last_seen_at")+` < ?)`,
 		ts.UTC().Format(time.RFC3339Nano),
-		model.SessionIdle, model.SessionActive, id, model.SessionEnded)
+		model.SessionIdle, model.SessionActive, id, model.SessionEnded, ts.UTC().Format(activityTimeLayout))
 	if err != nil {
 		return fmt.Errorf("touch session: %w", err)
 	}
@@ -176,8 +183,8 @@ func (s *Store) EndSession(id string, ts time.Time) (writeErr error) {
 	}
 	defer tx.Rollback()
 	t := ts.UTC().Format(time.RFC3339Nano)
-	sessionResult, err := tx.Exec(`UPDATE sessions SET status = ?, ended_at = ?, last_seen_at = MAX(last_seen_at, ?) WHERE id = ? AND status != ?`,
-		model.SessionEnded, t, t, id, model.SessionEnded)
+	sessionResult, err := tx.Exec(`UPDATE sessions SET status = ?, ended_at = ?, last_seen_at = CASE WHEN `+timestampOrderExpr("last_seen_at")+` IS NULL OR `+timestampOrderExpr("last_seen_at")+` < ? THEN ? ELSE last_seen_at END WHERE id = ? AND status != ?`,
+		model.SessionEnded, t, ts.UTC().Format(activityTimeLayout), t, id, model.SessionEnded)
 	if err != nil {
 		return fmt.Errorf("end session: %w", err)
 	}
@@ -278,8 +285,8 @@ func (s *Store) MarkSessionsIdle(cutoff time.Time) (_ []string, writeErr error) 
 	}
 	defer tx.Rollback()
 
-	c := cutoff.UTC().Format(time.RFC3339Nano)
-	rows, err := tx.Query(`SELECT id FROM sessions WHERE status = ? AND last_seen_at < ?`, model.SessionActive, c)
+	c := cutoff.UTC().Format(activityTimeLayout)
+	rows, err := tx.Query(`SELECT id FROM sessions WHERE status = ? AND `+timestampOrderExpr("last_seen_at")+` < ?`, model.SessionActive, c)
 	if err != nil {
 		return nil, fmt.Errorf("select idle sessions: %w", err)
 	}
@@ -303,7 +310,7 @@ func (s *Store) MarkSessionsIdle(cutoff time.Time) (_ []string, writeErr error) 
 	if len(ids) == 0 {
 		return nil, nil
 	}
-	result, err := tx.Exec(`UPDATE sessions SET status = ? WHERE status = ? AND last_seen_at < ?`, model.SessionIdle, model.SessionActive, c)
+	result, err := tx.Exec(`UPDATE sessions SET status = ? WHERE status = ? AND `+timestampOrderExpr("last_seen_at")+` < ?`, model.SessionIdle, model.SessionActive, c)
 	if err != nil {
 		return nil, fmt.Errorf("mark sessions idle: %w", err)
 	}
@@ -394,8 +401,8 @@ func (f SessionFilter) where() (string, []any) {
 		}
 	}
 	if !f.Since.IsZero() {
-		since := f.Since.UTC().Format(time.RFC3339Nano)
-		clause.WriteString(" AND (datetime(started_at) >= datetime(?) OR datetime(last_seen_at) >= datetime(?))")
+		since := f.Since.UTC().Format(activityTimeLayout)
+		clause.WriteString(" AND (" + timestampOrderExpr("started_at") + " >= ? OR " + timestampOrderExpr("last_seen_at") + " >= ?)")
 		args = append(args, since, since)
 	}
 	return clause.String(), args
@@ -445,7 +452,7 @@ func (s *Store) ListSessions(f SessionFilter) []model.Session {
 	extra, extraArgs := f.where()
 	query := func(statusClause string, statusArgs []any, n int) (*sql.Rows, error) {
 		args := append(append(statusArgs, extraArgs...), n)
-		return s.db.Query(sessionSelect+` WHERE `+statusClause+extra+` ORDER BY last_seen_at DESC LIMIT ?`, args...)
+		return s.db.Query(sessionSelect+` WHERE `+statusClause+extra+` ORDER BY `+timestampOrderExpr("last_seen_at")+` DESC, id DESC LIMIT ?`, args...)
 	}
 	switch f.Status {
 	case "":
@@ -502,6 +509,6 @@ func (s *Store) GetSession(id string) (model.Session, bool) {
 // pruneSessionsLocked bounds the ended-session tail: ended rows older than
 // the event retention window are pure noise.
 func (s *Store) pruneSessionsLocked() {
-	cutoff := time.Now().Add(-30 * 24 * time.Hour).UTC().Format(time.RFC3339Nano)
-	_, _ = s.db.Exec(`DELETE FROM sessions WHERE status = ? AND ended_at < ?`, model.SessionEnded, cutoff)
+	cutoff := time.Now().Add(-30 * 24 * time.Hour).UTC().Format(activityTimeLayout)
+	_, _ = s.db.Exec(`DELETE FROM sessions WHERE status = ? AND `+timestampOrderExpr("ended_at")+` < ?`, model.SessionEnded, cutoff)
 }
