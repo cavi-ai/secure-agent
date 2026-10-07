@@ -55,7 +55,7 @@ func TestGuardBrokerMS(t *testing.T) {
 		{"default when negative", -5, 42000},
 		{"3s shorter than hook", 45000, 42000},
 		{"shorter deadline kept", 20000, 17000},
-		{"capped at the hook's deadline", 120000, 42000},
+		{"longer deadline kept", 55000, 52000},
 		{"floored at 1s", 3000, 1000},
 		{"tiny hook still floored", 100, 1000},
 	}
@@ -68,8 +68,9 @@ func TestGuardBrokerMS(t *testing.T) {
 	}
 }
 
-// The broker's cap is the hook's own prompt deadline: both of the hook's
-// defaults (env fallback and parse-error fallback) must equal it.
+// The default prompt deadline is the hook's default wait, so by default the
+// broker answers 3 s before the hook gives up: both of the hook's defaults
+// (env fallback and parse-error fallback) must equal it.
 func TestHookPromptDeadlineMatchesTheHook(t *testing.T) {
 	src, err := os.ReadFile(filepath.Join("..", "..", "..", "plugin", "hooks", "secret_guard.py"))
 	if err != nil {

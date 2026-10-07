@@ -413,9 +413,9 @@ func TestGuardPendingSortedByTSAscending(t *testing.T) {
 	// Enqueue with explicit, out-of-order timestamps. The broker keys its
 	// waiters by a map, which has no inherent order, so the handler must
 	// sort explicitly rather than relying on iteration order.
-	go broker.Request(guard.Pending{ID: "b", Agent: "claude", RuleID: "r2", TS: "2026-01-01T00:00:02Z"})
-	go broker.Request(guard.Pending{ID: "a", Agent: "claude", RuleID: "r1", TS: "2026-01-01T00:00:01Z"})
-	go broker.Request(guard.Pending{ID: "c", Agent: "claude", RuleID: "r3", TS: "2026-01-01T00:00:03Z"})
+	go broker.Request(context.Background(), guard.Pending{ID: "b", Agent: "claude", RuleID: "r2", TS: "2026-01-01T00:00:02Z"})
+	go broker.Request(context.Background(), guard.Pending{ID: "a", Agent: "claude", RuleID: "r1", TS: "2026-01-01T00:00:01Z"})
+	go broker.Request(context.Background(), guard.Pending{ID: "c", Agent: "claude", RuleID: "r3", TS: "2026-01-01T00:00:03Z"})
 
 	deadline := time.Now().Add(2 * time.Second)
 	for len(broker.Pending()) != 3 && time.Now().Before(deadline) {

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -60,7 +61,7 @@ func TestAttentionGroupsGuardPendingJoinsLiveSession(t *testing.T) {
 	a.guardBroker = guard.NewBroker(time.Minute)
 	// Request blocks until a decision lands; run it in the background and let
 	// it time out after the test — the prompt stays pending meanwhile.
-	go a.guardBroker.Request(guard.Pending{
+	go a.guardBroker.Request(context.Background(), guard.Pending{
 		ID: "g1", Agent: "codex", Tool: "Bash", Path: "/Users/x/.ssh/id_ed25519",
 	})
 	waitFor(t, func() bool { return len(a.guardBroker.Pending()) == 1 })
@@ -80,7 +81,7 @@ func TestAttentionGroupsGuardPendingJoinsLiveSession(t *testing.T) {
 func TestAttentionGroupLabelKeepsAgentIDCaseAtRootWorkspace(t *testing.T) {
 	a := attentionAPI(t, []resource.Session{mkResourceSession(43, "cursor-ide", "/")})
 	a.guardBroker = guard.NewBroker(time.Minute)
-	go a.guardBroker.Request(guard.Pending{ID: "g3", Agent: "cursor-ide", Tool: "Read", Path: "/Users/x/.aws/credentials"})
+	go a.guardBroker.Request(context.Background(), guard.Pending{ID: "g3", Agent: "cursor-ide", Tool: "Read", Path: "/Users/x/.aws/credentials"})
 	waitFor(t, func() bool { return len(a.guardBroker.Pending()) == 1 })
 	_, groups := a.attentionQueue(Status{Running: true})
 	if len(groups) != 1 || groups[0].Label != "cursor-ide" {
@@ -91,7 +92,7 @@ func TestAttentionGroupLabelKeepsAgentIDCaseAtRootWorkspace(t *testing.T) {
 func TestAttentionGroupsUnmatchedGuardGetsAgentBucket(t *testing.T) {
 	a := attentionAPI(t, nil)
 	a.guardBroker = guard.NewBroker(time.Minute)
-	go a.guardBroker.Request(guard.Pending{ID: "g2", Agent: "codex", Tool: "Write", Path: "/tmp/x"})
+	go a.guardBroker.Request(context.Background(), guard.Pending{ID: "g2", Agent: "codex", Tool: "Write", Path: "/tmp/x"})
 	waitFor(t, func() bool { return len(a.guardBroker.Pending()) == 1 })
 	_, groups := a.attentionQueue(Status{Running: true})
 	if len(groups) != 1 || groups[0].RootPID != 0 {

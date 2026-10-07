@@ -181,7 +181,7 @@ Configures the interactive filesystem guard. The shipped defaults are all `monit
 
 ```yaml
 directory_guard:
-  prompt_deadline_ms: 45000   # a guard prompt is denied 3 s before this; at most 45000 (the hook's own wait)
+  prompt_deadline_ms: 45000   # a guard prompt is denied 3 s before this (at least 1 s; 0 = 45000)
   cwd_overrides:              # per-project policies (first matching prefix wins)
     - cwd_prefix: /Users/me/work/prod-api
       rules:
@@ -190,6 +190,8 @@ directory_guard:
 ```
 
 Each entry pins a directory subtree to specific rule modes; rules not listed fall back to the global override file, then shipped defaults.
+
+The hook waits for a prompt decision for its own deadline, `SECURE_AGENT_PROMPT_DEADLINE_S` (default 45 s), and does not read this file. When the hook stops waiting first, the prompt is withdrawn: an answer given after that saves no rule.
 
 The daemon writes these entries at every start to `guard-cwd-overrides.json` in the directory of `socket_path` (default `~/.config/secure-agent/guard-cwd-overrides.json`, the path the hook reads). A daemon run with a socket elsewhere writes its own copy beside that socket and leaves the default file untouched.
 

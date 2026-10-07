@@ -1,6 +1,7 @@
 package guard
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"testing"
@@ -10,7 +11,9 @@ import (
 func TestResolveWakesRequest(t *testing.T) {
 	b := NewBroker(2 * time.Second)
 	done := make(chan Decision, 1)
-	go func() { done <- b.Request(Pending{ID: "p1", Agent: "claude", RuleID: "cloud-creds"}) }()
+	go func() {
+		done <- b.Request(context.Background(), Pending{ID: "p1", Agent: "claude", RuleID: "cloud-creds"})
+	}()
 
 	// Wait for it to register as pending, then resolve.
 	deadline := time.After(time.Second)
@@ -39,7 +42,7 @@ func TestResolveWakesRequest(t *testing.T) {
 
 func TestRequestTimesOutToDeny(t *testing.T) {
 	b := NewBroker(50 * time.Millisecond)
-	got := b.Request(Pending{ID: "p2", Agent: "claude", RuleID: "ssh-keys"})
+	got := b.Request(context.Background(), Pending{ID: "p2", Agent: "claude", RuleID: "ssh-keys"})
 	if got.Verdict != "deny" || got.Scope != "once" || got.Reason != "timeout" {
 		t.Fatalf("timeout decision = %+v, want deny/once/timeout", got)
 	}
@@ -57,8 +60,12 @@ func TestConcurrentRequestsWithDistinctIDsResolveIndependently(t *testing.T) {
 	b := NewBroker(2 * time.Second)
 	done1 := make(chan Decision, 1)
 	done2 := make(chan Decision, 1)
-	go func() { done1 <- b.Request(Pending{ID: "c1", Agent: "claude", RuleID: "cloud-creds"}) }()
-	go func() { done2 <- b.Request(Pending{ID: "c2", Agent: "cursor", RuleID: "ssh-keys"}) }()
+	go func() {
+		done1 <- b.Request(context.Background(), Pending{ID: "c1", Agent: "claude", RuleID: "cloud-creds"})
+	}()
+	go func() {
+		done2 <- b.Request(context.Background(), Pending{ID: "c2", Agent: "cursor", RuleID: "ssh-keys"})
+	}()
 
 	deadline := time.After(time.Second)
 	for {
@@ -100,14 +107,14 @@ func TestDuplicateRequestsShareOneWaiter(t *testing.T) {
 	d1 := make(chan Decision, 1)
 	d2 := make(chan Decision, 1)
 	p := Pending{ID: "a1", Agent: "claude", Tool: "Read", Path: "/Users/x/.aws/credentials", RuleID: "cloud-creds"}
-	go func() { d1 <- b.Request(p) }()
+	go func() { d1 <- b.Request(context.Background(), p) }()
 	// Wait until the first is queued so the second is guaranteed a duplicate.
 	for len(b.Pending()) == 0 {
 		time.Sleep(2 * time.Millisecond)
 	}
 	dup := p
 	dup.ID = "a2"
-	go func() { d2 <- b.Request(dup) }()
+	go func() { d2 <- b.Request(context.Background(), dup) }()
 	time.Sleep(30 * time.Millisecond)
 	if got := len(b.Pending()); got != 1 {
 		t.Fatalf("pending = %d, want 1 (duplicates share a waiter)", got)
@@ -126,7 +133,7 @@ func TestBrokerDedupKeyIncludesSession(t *testing.T) {
 	done := make(chan Decision, 2)
 	for _, sid := range []string{"one", "two"} {
 		p := Pending{ID: sid, SessionID: sid, Agent: "claude", Tool: "Read", Path: "/secret", RuleID: "rule"}
-		go func() { done <- b.Request(p) }()
+		go func() { done <- b.Request(context.Background(), p) }()
 	}
 	deadline := time.Now().Add(time.Second)
 	for len(b.Pending()) != 2 && time.Now().Before(deadline) {
@@ -151,7 +158,7 @@ func TestRequestOverCapIsDeniedImmediately(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			b.Request(Pending{ID: fmt.Sprintf("w%d", i), Agent: "claude", RuleID: "r", Path: fmt.Sprintf("/p%d", i), Tool: "Read"})
+			b.Request(context.Background(), Pending{ID: fmt.Sprintf("w%d", i), Agent: "claude", RuleID: "r", Path: fmt.Sprintf("/p%d", i), Tool: "Read"})
 			queued <- struct{}{}
 		}(i)
 	}
@@ -167,7 +174,7 @@ func TestRequestOverCapIsDeniedImmediately(t *testing.T) {
 	}
 	// This one must be refused instantly, not block for the broker timeout.
 	start := time.Now()
-	d := b.Request(Pending{ID: "overflow", Agent: "claude", RuleID: "r", Path: "/overflow", Tool: "Read"})
+	d := b.Request(context.Background(), Pending{ID: "overflow", Agent: "claude", RuleID: "r", Path: "/overflow", Tool: "Read"})
 	if d.Verdict != "deny" || d.Reason != "queue-full" {
 		t.Fatalf("overflow decision = %+v, want deny/queue-full", d)
 	}
@@ -203,7 +210,7 @@ func TestResolveConcurrentWithDuplicateRequests(t *testing.T) {
 	b := NewBroker(400 * time.Millisecond)
 	p := Pending{ID: "r1", Agent: "claude", Tool: "Read", Path: "/Users/x/.aws/credentials", RuleID: "cloud-creds"}
 	done := make(chan Decision, 1)
-	go func() { done <- b.Request(p) }()
+	go func() { done <- b.Request(context.Background(), p) }()
 	for len(b.Pending()) == 0 {
 		time.Sleep(time.Millisecond)
 	}
@@ -218,7 +225,7 @@ func TestResolveConcurrentWithDuplicateRequests(t *testing.T) {
 			defer wg.Done()
 			dup := p
 			dup.ID = fmt.Sprintf("r1-dup%d", i)
-			results <- b.Request(dup)
+			results <- b.Request(context.Background(), dup)
 		}(i)
 	}
 
@@ -316,7 +323,7 @@ func TestPendingReturnsOldestFirst(t *testing.T) {
 	for i, id := range ids {
 		path := fmt.Sprintf("/p%d", i)
 		go func(id, path string) {
-			done <- b.Request(Pending{ID: id, Agent: "a", RuleID: "r", Path: path, Tool: "Read"})
+			done <- b.Request(context.Background(), Pending{ID: id, Agent: "a", RuleID: "r", Path: path, Tool: "Read"})
 		}(id, path)
 		time.Sleep(10 * time.Millisecond) // enforce arrival order
 	}
@@ -326,5 +333,81 @@ func TestPendingReturnsOldestFirst(t *testing.T) {
 	}
 	for _, id := range ids {
 		b.Resolve(id, Decision{Verdict: "allow", Scope: "once"})
+	}
+}
+
+func waitPending(t *testing.T, b *Broker, n int) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for len(b.Pending()) != n {
+		if time.Now().After(deadline) {
+			t.Fatalf("pending = %d, want %d", len(b.Pending()), n)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// A request whose hook stops waiting withdraws its prompt: nothing is left
+// to answer.
+func TestEndedRequestWithdrawsItsPrompt(t *testing.T) {
+	b := NewBroker(time.Minute)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan Decision, 1)
+	go func() {
+		done <- b.Request(ctx, Pending{ID: "w1", Agent: "claude", RuleID: "cloud-creds", Path: "/p", Tool: "Read"})
+	}()
+	waitPending(t, b, 1)
+	cancel()
+	if d := <-done; d.Verdict != "deny" || d.Reason != "withdrawn" {
+		t.Fatalf("decision = %+v, want deny/withdrawn", d)
+	}
+	if got := b.Pending(); len(got) != 0 {
+		t.Fatalf("pending after the request ended = %+v, want none", got)
+	}
+	if b.Resolve("w1", Decision{Verdict: "allow", Scope: "always"}) {
+		t.Fatal("Resolve reached a withdrawn prompt")
+	}
+}
+
+// When the first of two identical requests leaves, the prompt stays for the
+// one still waiting, and the answer reaches it.
+func TestDuplicateKeepsThePromptAfterTheFirstLeaves(t *testing.T) {
+	b := NewBroker(time.Minute)
+	ctx, cancel := context.WithCancel(context.Background())
+	p := Pending{ID: "d1", Agent: "claude", RuleID: "cloud-creds", Path: "/p", Tool: "Read"}
+	first, second := make(chan Decision, 1), make(chan Decision, 1)
+	go func() { first <- b.Request(ctx, p) }()
+	waitPending(t, b, 1)
+	dup := p
+	dup.ID = "d2"
+	go func() { second <- b.Request(context.Background(), dup) }()
+	deadline := time.Now().Add(time.Second)
+	for {
+		b.mu.Lock()
+		n := len(b.waiters["d1"].chs)
+		b.mu.Unlock()
+		if n == 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("duplicate never joined")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	if d := <-first; d.Reason != "withdrawn" {
+		t.Fatalf("first = %+v, want withdrawn", d)
+	}
+	if got := b.Pending(); len(got) != 1 || got[0].ID != "d1" {
+		t.Fatalf("pending after the first left = %+v, want d1", got)
+	}
+	if !b.Resolve("d1", Decision{Verdict: "allow", Scope: "once"}) {
+		t.Fatal("Resolve did not reach the remaining request")
+	}
+	if d := <-second; d.Verdict != "allow" {
+		t.Fatalf("second = %+v, want allow", d)
+	}
+	if got := b.Pending(); len(got) != 0 {
+		t.Fatalf("pending after resolve = %+v, want none", got)
 	}
 }
