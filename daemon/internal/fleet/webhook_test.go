@@ -58,6 +58,26 @@ func TestSinkDisabledWithoutSecret(t *testing.T) {
 	}
 }
 
+// Usable is the one rule for a webhook that can deliver: NewSink builds a
+// sink exactly for the configs it accepts.
+func TestUsableMatchesNewSink(t *testing.T) {
+	for _, c := range []WebhookConfig{
+		{},
+		{URL: "http://x"},
+		{Secret: "s"},
+		{URL: "  ", Secret: "s"},
+		{URL: "http://x", Secret: " \t"},
+		{URL: "http://x", Secret: "s"},
+	} {
+		if got, sink := Usable(c), NewSink(c, "n", "v", "") != nil; got != sink {
+			t.Errorf("%+v: Usable=%v, NewSink built a sink=%v", c, got, sink)
+		}
+	}
+	if !Usable(WebhookConfig{URL: "http://x", Secret: "s"}) || Usable(WebhookConfig{URL: " ", Secret: "s"}) {
+		t.Fatal("Usable needs a non-blank URL and secret")
+	}
+}
+
 func TestSinkRetriesOn500ThenSucceeds(t *testing.T) {
 	var calls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
