@@ -98,6 +98,20 @@ func (t *Tagger) isCandidateLocked(pid int32) bool {
 	return false
 }
 
+// SetAgents replaces the agent definitions (the config's agents minus
+// disabled_agents) and re-tags every process at once. The tag cache is
+// cleared: a family root depends on the whole definition set, so tags made
+// under the old one are not reused. Processes tagged again are reported to
+// the SetOnTagged hook as new.
+func (t *Tagger) SetAgents(defs []config.AgentDef) {
+	t.mu.Lock()
+	t.cfg.Agents = defs
+	clear(t.cache)
+	clear(t.tagged)
+	t.mu.Unlock()
+	t.Refresh()
+}
+
 // SetOnTagged registers fn to hear about pids Refresh newly tags. fn runs
 // after Refresh releases the tagger lock, so it may call back into the tagger.
 func (t *Tagger) SetOnTagged(fn func(pid int32, info AgentInfo)) {

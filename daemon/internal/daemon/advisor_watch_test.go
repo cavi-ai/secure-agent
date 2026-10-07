@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cavi-ai/secure-agent/daemon/internal/agents"
 	"github.com/cavi-ai/secure-agent/daemon/internal/api"
 	"github.com/cavi-ai/secure-agent/daemon/internal/collect"
 	"github.com/cavi-ai/secure-agent/daemon/internal/config"
@@ -353,6 +354,42 @@ func TestFleetConfigKeyDistinguishesFields(t *testing.T) {
 	if fleetConfigKey(e) != fleetConfigKey(f) {
 		t.Fatal("key must be order-independent for labels")
 	}
+}
+
+// Settings → Providers writes disabled_agents; the watcher applies it to the
+// tagger live, both ways.
+func TestWatchConfigAppliesDisabledAgents(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte("advisor:\n  enabled: false\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.LoadStrict(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tagger := agents.New(cfg, mapProcSource{100: {PID: 100, PPID: 1, Exe: "/usr/local/bin/claude"}})
+	tagger.Refresh()
+	tagged := func() bool { _, ok := tagger.TaggedPIDs()[100]; return ok }
+	if !tagged() {
+		t.Fatal("claude not tagged at start")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go watchConfig(ctx, cfgPath, configWatchDeps{
+		stk: &advisorStackHolder{}, pub: fleet.NewPublisher(), fleetCfg: &fleetConfigHolder{},
+		tagger: tagger, initialConfig: &cfg,
+	})
+
+	if err := os.WriteFile(cfgPath, []byte("advisor:\n  enabled: false\ndisabled_agents:\n  - claude\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, 5*time.Second, func() bool { return !tagged() })
+
+	if err := os.WriteFile(cfgPath, []byte("advisor:\n  enabled: false\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, 5*time.Second, tagged)
 }
 
 // The watcher applies worktrees.roots and stale_days live.

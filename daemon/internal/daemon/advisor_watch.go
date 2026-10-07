@@ -19,6 +19,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/cavi-ai/secure-agent/daemon/internal/agents"
 	"github.com/cavi-ai/secure-agent/daemon/internal/api"
 	"github.com/cavi-ai/secure-agent/daemon/internal/collect"
 	"github.com/cavi-ai/secure-agent/daemon/internal/config"
@@ -56,6 +57,7 @@ type configWatchDeps struct {
 	resourceControl *resource.Controller
 	worktrees       *worktreehunter.Hunter
 	sysAgent        *sysagent.Agent
+	tagger          *agents.Tagger // follows agents minus disabled_agents
 	initialConfig   *config.Config
 	// deltaHub/postureChanged follow the advisor stack into setupAdvisor so
 	// a verdict landing after a config-driven advisor swap still gets the
@@ -65,13 +67,14 @@ type configWatchDeps struct {
 }
 
 // watchConfig polls config.yaml and re-configures the advisor stack, the
-// fleet sinks, resource control and the price table live on change. Poll
+// fleet sinks, resource control, the price table, worktrees, the system
+// agent and the monitored agents (disabled_agents) live on change. Poll
 // (not fsnotify): the menubar writes atomically, so a 2s check is cheap and
 // race-proof across save/rename. Paths, firewall, and guard are deliberately
 // boot-static.
 func watchConfig(ctx context.Context, path string, deps configWatchDeps) {
 
-	var lastAdvisorKey, lastFleetKey, lastResourceKey, lastPricingKey, lastWorktreesKey, lastSysAgentKey string
+	var lastAdvisorKey, lastFleetKey, lastResourceKey, lastPricingKey, lastWorktreesKey, lastSysAgentKey, lastAgentsKey string
 	if deps.initialConfig != nil {
 		lastAdvisorKey = advisorConfigKey(deps.initialConfig.Advisor)
 		lastFleetKey = fleetConfigKey(deps.initialConfig.Fleet)
@@ -79,6 +82,7 @@ func watchConfig(ctx context.Context, path string, deps configWatchDeps) {
 		lastPricingKey = pricingConfigKey(*deps.initialConfig)
 		lastWorktreesKey = worktreesConfigKey(deps.initialConfig.Worktrees)
 		lastSysAgentKey = sysAgentConfigKey(deps.initialConfig.SystemAgent)
+		lastAgentsKey = agentsConfigKey(deps.initialConfig.Agents)
 	}
 	check := func() {
 		// LoadStrict, not Load: a malformed overlay makes Load substitute
@@ -131,6 +135,11 @@ func watchConfig(ctx context.Context, path string, deps configWatchDeps) {
 			deps.worktrees.SetOptions(worktreeOptions(data.Worktrees))
 			log.Printf("worktrees config applied live (%d root(s), stale after %d days)",
 				len(data.Worktrees.Roots), worktreeOptions(data.Worktrees).StaleDays)
+		}
+		if key := agentsConfigKey(data.Agents); key != lastAgentsKey && deps.tagger != nil {
+			lastAgentsKey = key
+			deps.tagger.SetAgents(data.Agents)
+			log.Printf("monitored agents applied live (%d definition(s); disabled: %v)", len(data.Agents), data.DisabledAgents)
 		}
 		if key := sysAgentConfigKey(data.SystemAgent); key != lastSysAgentKey && deps.sysAgent != nil {
 			lastSysAgentKey = key
@@ -197,6 +206,11 @@ func pricingConfigKey(c config.Config) string {
 
 func sysAgentConfigKey(c config.SystemAgentConfig) string {
 	b, _ := json.Marshal(c)
+	return string(b)
+}
+
+func agentsConfigKey(defs []config.AgentDef) string {
+	b, _ := json.Marshal(defs)
 	return string(b)
 }
 

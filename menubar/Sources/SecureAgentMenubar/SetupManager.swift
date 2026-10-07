@@ -66,8 +66,8 @@ public final class SetupManager: ObservableObject {
         ("lm-studio", ["lm studio", "lmstudio"]),
     ]
 
-    /// Toggle one provider. Writes disabled_agents; the daemon applies it on
-    /// its next config load (restart — agents are static per lifetime).
+    /// Toggle one provider. Writes disabled_agents; the daemon's config
+    /// watcher applies it within a few seconds.
     public func setAgentDisabled(_ name: String, disabled: Bool) {
         do {
             var off = disabledAgents

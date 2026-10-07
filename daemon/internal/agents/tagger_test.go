@@ -579,3 +579,41 @@ func TestRefreshRetriesPreviouslyUntaggedPID(t *testing.T) {
 		t.Fatalf("onTagged calls for 200 = %d, want 1", calls[200])
 	}
 }
+
+// SetAgents applies a changed definition set at once: a disabled agent's
+// processes lose their tag and a re-enabled agent's processes regain it.
+func TestSetAgentsRetagsAtOnce(t *testing.T) {
+	fake := fakeProcs{
+		100: {PID: 100, PPID: 1, Exe: "/usr/local/bin/claude"},
+		200: {PID: 200, PPID: 100, Exe: "/usr/local/bin/node"},
+		300: {PID: 300, PPID: 1, Exe: "/usr/local/bin/codex"},
+	}
+	all, _ := config.Load("/nonexistent")
+	tg := New(all, fake)
+	tg.Refresh()
+	if info, ok := tg.Tag(200); !ok || info.Name != "claude" {
+		t.Fatalf("before: Tag(200) = %+v, %v", info, ok)
+	}
+
+	var withoutClaude []config.AgentDef
+	for _, d := range all.Agents {
+		if d.Name != "claude" {
+			withoutClaude = append(withoutClaude, d)
+		}
+	}
+	tg.SetAgents(withoutClaude)
+	if info, ok := tg.Tag(200); ok {
+		t.Fatalf("claude disabled: Tag(200) = %+v; want untagged", info)
+	}
+	if _, ok := tg.TaggedPIDs()[100]; ok {
+		t.Fatal("claude disabled: pid 100 still listed as tagged")
+	}
+	if info, ok := tg.Tag(300); !ok || info.Name != "codex" {
+		t.Fatalf("claude disabled: Tag(300) = %+v, %v; want codex", info, ok)
+	}
+
+	tg.SetAgents(all.Agents)
+	if _, ok := tg.TaggedPIDs()[100]; !ok {
+		t.Fatal("claude re-enabled: pid 100 not tagged after SetAgents")
+	}
+}

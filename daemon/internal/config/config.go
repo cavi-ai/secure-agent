@@ -511,6 +511,7 @@ func loadWithOverlayError(explicitPath string) (Config, error, error) {
 		NotSecretPaths:    expandPaths(raw.NotSecretPaths),
 		KeychainMarkers:   raw.KeychainMarkers,
 		Agents:            normalizeAgentKinds(filterDisabledAgents(raw.Agents, raw.DisabledAgents)),
+		DisabledAgents:    raw.DisabledAgents,
 		VendorAllowlist:   raw.VendorAllowlist,
 		CredentialOwners:  expandOwners(raw.CredentialOwners),
 		NetSampleInterval: time.Duration(raw.NetSampleIntervalMS) * time.Millisecond,
