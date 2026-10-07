@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -191,11 +192,16 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 		proxyServer = setupProxy(cfg, b, fw.Engine)
 	}
 
+	// fleetOn is the one fleet_configured fact /status and /fleet serve; the
+	// config watcher updates it.
+	fleetOn := new(atomic.Bool)
+	fleetOn.Store(fleetConfigured(cfg.Fleet.Webhooks))
+
 	// Supervisor with a shared health registry so /status reports each collector's
 	// real state (running / restarting / abandoned) instead of a blanket "running".
 	statusFn := buildStatusFn(proxyServer, tagger, correlator, fw.Engine, supReg, st, time.Now(),
 		func() advisor.HealthSnapshot { return advisorStk.Load().Sub.Health() },
-		fleetConfigured(cfg.Fleet.Webhooks), collect.SpoolAvailable())
+		fleetOn.Load, collect.SpoolAvailable())
 
 	// Start Control API. Every dependency is resolved here, once: the API no
 	// longer exposes twenty optional setters that must be called in the right
@@ -270,7 +276,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 			return isAgent
 		},
 		FleetSink:       fleetPub,
-		FleetConfigured: len(cfg.Fleet.Webhooks) > 0,
+		FleetConfigured: fleetOn.Load,
 		PublishEvent:    b.Publish,
 		DeltaHub:        deltaHub,
 		Hermes:          hermes.Status,
@@ -302,13 +308,13 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 	// NOT require a relaunch for either. Watch the file and swap the advisor
 	// stack / fleet sinks live within a poll cycle (guard modes read
 	// per-request already). Started after the API server exists — the watcher
-	// updates fleet_configured on it.
+	// reports reload problems on it.
 	apiServer.SetConfigBootProblem(opts.ConfigOverlayErr)
 	if opts.ConfigPath != "" {
 		go watchConfig(ctx, opts.ConfigPath, configWatchDeps{
 			st: st, stk: advisorStk, pub: fleetPub, fleetCfg: fleetCfgLive,
 			logDir: filepath.Dir(cfg.DBPath), apiServer: apiServer, resourceControl: resourceControl,
-			initialConfig: &cfg, worktrees: hunter, sysAgent: sysAgent,
+			initialConfig: &cfg, worktrees: hunter, sysAgent: sysAgent, fleetOn: fleetOn,
 			deltaHub: deltaHub, postureChanged: postureHook.run,
 		})
 	}

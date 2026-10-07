@@ -51,8 +51,9 @@ type configWatchDeps struct {
 	stk             *advisorStackHolder
 	pub             *fleet.Publisher
 	fleetCfg        *fleetConfigHolder
-	logDir          string   // webhook delivery log dir (filepath.Dir(cfg.DBPath))
-	apiServer       *api.API // SetFleetConfigured follows the webhook set
+	logDir          string       // webhook delivery log dir (filepath.Dir(cfg.DBPath))
+	apiServer       *api.API     // config reload problems for Doctor
+	fleetOn         *atomic.Bool // fleet_configured for /status and /fleet
 	resourceControl *resource.Controller
 	worktrees       *worktreehunter.Hunter
 	sysAgent        *sysagent.Agent
@@ -115,8 +116,8 @@ func watchConfig(ctx context.Context, path string, deps configWatchDeps) {
 			// holder per cycle, so interval/labels/hostname follow too.
 			deps.pub.ReplaceSinks(buildFleetSinks(data.Fleet, deps.logDir))
 			deps.fleetCfg.Store(data.Fleet)
-			if deps.apiServer != nil {
-				deps.apiServer.SetFleetConfigured(len(data.Fleet.Webhooks) > 0)
+			if deps.fleetOn != nil {
+				deps.fleetOn.Store(fleetConfigured(data.Fleet.Webhooks))
 			}
 			log.Printf("fleet config applied live (%d webhook(s), heartbeat %ds)",
 				len(data.Fleet.Webhooks), data.Fleet.HeartbeatIntervalSec)

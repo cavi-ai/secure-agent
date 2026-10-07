@@ -26,9 +26,6 @@ type FleetNodeStatus struct {
 	FleetConfigured bool `json:"fleet_configured"`
 }
 
-// SetFleetConfigured records whether any fleet webhook sink is configured.
-func (a *API) SetFleetConfigured(configured bool) { a.fleetConfigured = configured }
-
 func (a *API) handleFleet(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -56,7 +53,7 @@ func (a *API) handleFleet(w http.ResponseWriter, r *http.Request) {
 		RecentFlags:     len(flags),
 		ProxyEnabled:    st.ProxyEnabled,
 		ProxyPort:       st.ProxyPort,
-		FleetConfigured: a.fleetConfigured,
+		FleetConfigured: a.fleetConfigured != nil && a.fleetConfigured(),
 	}
 
 	w.Header().Set("Content-Type", "application/json")
