@@ -89,11 +89,11 @@ type Store struct {
 	// security record.
 	connRetention  time.Duration
 	eventRetention time.Duration
-	// lastSeen[pid] = RFC3339Nano ts of the most recent event for that pid,
+	// lastSeen[pid] = time of the most recent event for that pid,
 	// maintained on insert so the /status agents join is O(pids) map lookups
 	// instead of a MAX(ts) GROUP BY scan over the events table (measured
 	// 2–4s at ~400 live pids — past the UI's 3s socket timeout).
-	lastSeen map[int32]string
+	lastSeen map[int32]time.Time
 	// allowlist returns the operator's approved hosts per agent (nil until
 	// wired); TrendFor reads it for the advisor's host prompt.
 	allowlist func() map[string][]string
@@ -377,10 +377,10 @@ func (s *Store) PutEvent(e event.Event) {
 	// timeout, which flipped the whole UI to "Disconnected" every poll.
 	// One map assignment here replaces the scan entirely.
 	if s.lastSeen == nil {
-		s.lastSeen = map[int32]string{}
+		s.lastSeen = map[int32]time.Time{}
 	}
-	if cur, ok := s.lastSeen[e.PID]; !ok || tsStr > cur {
-		s.lastSeen[e.PID] = tsStr
+	if cur, ok := s.lastSeen[e.PID]; !ok || e.TS.After(cur) {
+		s.lastSeen[e.PID] = e.TS
 	}
 
 	s.insertCount++
@@ -1480,7 +1480,7 @@ func (s *Store) LastEventTimes(pids []int32) map[int32]string {
 	defer s.mu.Unlock()
 	for _, p := range pids {
 		if ts, ok := s.lastSeen[p]; ok {
-			out[p] = ts
+			out[p] = ts.UTC().Format(time.RFC3339Nano)
 		}
 	}
 	return out

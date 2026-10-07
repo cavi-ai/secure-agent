@@ -54,16 +54,6 @@ const (
 	memoryResourceRank = 5
 )
 
-// memoryTimestampExpr converts persisted RFC3339Nano strings to integer
-// nanoseconds. strftime handles UTC offsets; the padded fractional substring
-// preserves exact ordering even when Go omits trailing fractional zeros.
-func memoryTimestampExpr(column string) string {
-	suffix := "(CASE WHEN substr(" + column + ",-1)='Z' THEN 1 ELSE 6 END)"
-	zone := "substr(" + column + ",-" + suffix + ")"
-	fraction := "(CASE WHEN instr(" + column + ",'.')>0 THEN substr(" + column + ",instr(" + column + ",'.')+1,length(" + column + ")-instr(" + column + ",'.')-" + suffix + ") ELSE '' END)"
-	return "(CAST(strftime('%s',substr(" + column + ",1,19)||" + zone + ") AS INTEGER)*1000000000 + CAST(substr(" + fraction + "||'000000000',1,9) AS INTEGER))"
-}
-
 // createMemoryIndexes runs after legacy session columns have been migrated.
 // The query expressions below match these indexes exactly.
 func createMemoryIndexes(db *sql.Tx) error {
