@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cavi-ai/secure-agent/daemon/internal/correlate"
+	"github.com/cavi-ai/secure-agent/daemon/internal/hostid"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
@@ -110,7 +110,7 @@ func patternSubject(f model.Flag, home string) (model.EvidenceItem, string) {
 			continue
 		}
 		if host, _ := splitHostPort(ev.Label); host != "" {
-			return model.EvidenceItem{Kind: "connect", Label: host, Sub: correlate.IdentifyCached(host).Org}, host
+			return model.EvidenceItem{Kind: "connect", Label: host, Sub: hostid.IdentifyCached(host).Org}, host
 		}
 	}
 	return model.EvidenceItem{}, ""

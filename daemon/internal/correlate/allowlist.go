@@ -6,6 +6,7 @@ import (
 	"os"
 	"sync"
 
+	"github.com/cavi-ai/secure-agent/daemon/internal/hostid"
 	"github.com/cavi-ai/secure-agent/daemon/internal/safefile"
 )
 
@@ -48,7 +49,7 @@ func (s *AllowlistStore) loadLocked() map[string][]string {
 // case-insensitive).
 func (s *AllowlistStore) Allows(agent, host string) bool {
 	for _, allowed := range s.Load()[agent] {
-		if HostMatches(host, allowed) {
+		if hostid.HostMatches(host, allowed) {
 			return true
 		}
 	}

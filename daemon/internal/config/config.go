@@ -777,7 +777,7 @@ func expandPath(p string) string {
 }
 
 // CredentialOwner names the orgs a credential file, or every file under a
-// directory, is meant for, spelled as correlate.Identify names them. The
+// directory, is meant for, spelled as hostid.Identify names them. The
 // process that read it connecting to one of them is the credential in use,
 // not a secret leaving.
 type CredentialOwner struct {

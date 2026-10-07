@@ -1,8 +1,10 @@
-package correlate
+package hostid
 
 import (
 	"context"
 	"errors"
+	"go/build"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -166,5 +168,54 @@ func TestIdentifyCachedNeverResolves(t *testing.T) {
 	}
 	if id := IdentifyCached("203.0.113.9"); id.Name != "host-9.example.org" || calls != 1 {
 		t.Fatalf("IdentifyCached after Identify = %+v, calls %d", id, calls)
+	}
+}
+
+func TestIdentityClass(t *testing.T) {
+	cases := map[string]string{
+		"Anthropic": "vendor", "npm registry": "vendor", "Statsig": "telemetry",
+		"Azure": "cloud", "Google Cloud": "cloud", "Akamai": "cloud", "": "",
+	}
+	for org, want := range cases {
+		if got := IdentityClass(org); got != want {
+			t.Errorf("IdentityClass(%q) = %q, want %q", org, got, want)
+		}
+	}
+	if id := IdentifyCached("api.statsig.com"); id.Class != "telemetry" {
+		t.Errorf("hostname path: %+v, want class telemetry", id)
+	}
+	if id := IdentifyCached("2607:6bc0::10"); id.Class != "vendor" {
+		t.Errorf("ip path: %+v, want class vendor", id)
+	}
+}
+
+// hostid is a leaf: the standard library only.
+func TestHostidImportsStandardLibraryOnly(t *testing.T) {
+	pkg, err := build.ImportDir(".", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, imp := range pkg.Imports {
+		if first, _, _ := strings.Cut(imp, "/"); strings.Contains(first, ".") {
+			t.Errorf("hostid imports %s", imp)
+		}
+	}
+}
+
+func TestHostMatches(t *testing.T) {
+	for _, c := range []struct {
+		host, allowed string
+		want          bool
+	}{
+		{"api.anthropic.com", "anthropic.com", true},
+		{"API.Anthropic.com", "anthropic.com", true},
+		{"anthropic.com", "anthropic.com", true},
+		{"evilanthropic.com", "anthropic.com", false},
+		{"", "anthropic.com", false},
+		{"anthropic.com", "", false},
+	} {
+		if got := HostMatches(c.host, c.allowed); got != c.want {
+			t.Errorf("HostMatches(%q, %q) = %v, want %v", c.host, c.allowed, got, c.want)
+		}
 	}
 }

@@ -16,8 +16,8 @@ import (
 
 	_ "modernc.org/sqlite"
 
-	"github.com/cavi-ai/secure-agent/daemon/internal/correlate"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
+	"github.com/cavi-ai/secure-agent/daemon/internal/hostid"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/resource"
 )
@@ -1367,7 +1367,7 @@ func (s *Store) TrendFor(rule, host string) model.TrendContext {
 	if host == "" {
 		return tc
 	}
-	id := correlate.IdentifyCached(host)
+	id := hostid.IdentifyCached(host)
 	tc.HostOrg = id.Org
 	if !strings.EqualFold(id.Name, host) {
 		tc.HostName = id.Name
@@ -1375,7 +1375,7 @@ func (s *Store) TrendFor(rule, host string) model.TrendContext {
 	if allow != nil {
 		for agent, hosts := range allow() {
 			for _, h := range hosts {
-				if correlate.HostMatches(host, h) {
+				if hostid.HostMatches(host, h) {
 					tc.AllowedFor = append(tc.AllowedFor, agent)
 					break
 				}

@@ -15,9 +15,9 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/api"
 	"github.com/cavi-ai/secure-agent/daemon/internal/clutter"
 	"github.com/cavi-ai/secure-agent/daemon/internal/collect"
-	"github.com/cavi-ai/secure-agent/daemon/internal/correlate"
 	"github.com/cavi-ai/secure-agent/daemon/internal/diskusage"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
+	"github.com/cavi-ai/secure-agent/daemon/internal/hostid"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/playbook"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
@@ -76,7 +76,7 @@ func WireTypes() []any {
 		api.DoctorCheck{},
 		api.UninspectedEndpoint{},
 		api.EndpointDetail{},
-		correlate.EndpointIdentity{},
+		hostid.EndpointIdentity{},
 		api.EndpointAllowance{},
 		api.Suggestion{},
 		api.MutePair{},

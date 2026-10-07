@@ -1,10 +1,8 @@
 package correlate
 
 import (
-	"context"
 	"maps"
 	"slices"
-	"sync"
 	"testing"
 	"time"
 
@@ -14,19 +12,12 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/sensitive"
 )
 
-// noPTR stubs the resolver so identity comes from the CIDR tables alone.
-func noPTR(t *testing.T) {
-	t.Helper()
-	orig := lookupAddr
-	t.Cleanup(func() { lookupAddr = orig })
-	ptrCache = sync.Map{}
-	lookupAddr = func(context.Context, string) ([]string, error) { return nil, nil }
-}
+// The correlator names endpoints with hostid.IdentifyCached, which never
+// resolves, so identity here comes from the CIDR tables alone.
 
 // Uninspected rows name the vendor the daemon already knows (Anthropic's API
 // frontends) while Infra keeps meaning "CDN/cloud carrier" only.
 func TestUninspectedSummaryIdentity(t *testing.T) {
-	noPTR(t)
 	c := newTestCorrelator(t)
 	now := time.Now()
 	for _, h := range []string{"160.79.104.10", "2607:6bc0::10", "104.16.1.1", "203.0.113.5"} {
@@ -52,7 +43,6 @@ func TestUninspectedSummaryIdentity(t *testing.T) {
 // The count-3 advisor pre-assessment skips only the agents' own vendors;
 // cloud hosts (which can front anyone) and unknowns are still assessed.
 func TestObserveSkipsAdvisorForKnownVendor(t *testing.T) {
-	noPTR(t)
 	c := newTestCorrelator(t)
 	var fired []string
 	c.SetOnUninspected(func(_, host string) { fired = append(fired, host) })
@@ -64,24 +54,6 @@ func TestObserveSkipsAdvisorForKnownVendor(t *testing.T) {
 	}
 	if !slices.Equal(fired, []string{"34.120.1.1", "203.0.113.7"}) {
 		t.Fatalf("advisor hook fired for %v, want [34.120.1.1 203.0.113.7]", fired)
-	}
-}
-
-func TestIdentityClass(t *testing.T) {
-	cases := map[string]string{
-		"Anthropic": "vendor", "npm registry": "vendor", "Statsig": "telemetry",
-		"Azure": "cloud", "Google Cloud": "cloud", "Akamai": "cloud", "": "",
-	}
-	for org, want := range cases {
-		if got := IdentityClass(org); got != want {
-			t.Errorf("IdentityClass(%q) = %q, want %q", org, got, want)
-		}
-	}
-	if id := IdentifyCached("api.statsig.com"); id.Class != "telemetry" {
-		t.Errorf("hostname path: %+v, want class telemetry", id)
-	}
-	if id := IdentifyCached("2607:6bc0::10"); id.Class != "vendor" {
-		t.Errorf("ip path: %+v, want class vendor", id)
 	}
 }
 
@@ -109,7 +81,6 @@ func (infraAppSource) Info(pid int32) (agents.ProcInfo, bool) {
 // AgentKind infra and counted in the infrastructure figure, never in the
 // agent headline.
 func TestInfraAppEgressLeavesTheHeadline(t *testing.T) {
-	noPTR(t)
 	cfg, err := config.Load("/nonexistent")
 	if err != nil {
 		t.Fatal(err)
