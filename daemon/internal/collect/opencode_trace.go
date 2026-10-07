@@ -2,6 +2,7 @@ package collect
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -28,8 +29,8 @@ import (
 // Safety rules, because this is another application's live database:
 //   - Opened READ-ONLY (mode=ro) and with a busy timeout; the daemon never
 //     writes, never locks opencode out, and never creates WAL files.
-//   - Polled on an interval with a watermark on time_updated, so each step is
-//     read once; there is no full-table scan after the first pass.
+//   - Polled with a stable (time_updated, id) cursor and a bounded overlap
+//     window for mutable rows. The source has no time_updated index.
 //   - Bounded: a single poll reads at most maxOpencodeRows parts, ordered by
 //     time_updated, so a huge backlog is drained in chunks across polls
 //     rather than one unbounded query.
@@ -67,10 +68,17 @@ type OpencodeCollector struct {
 	// OnSessionSeen reports an opencode session (id, workspace, time).
 	OnSessionSeen func(sessionID, harness, workspace string, at time.Time)
 
-	// watermark: the highest part/session time_updated (unix millis) already
-	// read. Persisted only in memory — a daemon restart re-reads the recent
-	// tail, which is idempotent (the session spine dedupes by id).
-	watermark int64
+	// watermark advances only after a bounded scan has drained. The tuple
+	// cursor and bounded replay cache are checkpointed beside the event DB.
+	watermark         int64
+	StatePath         string
+	OnCheckpointWrite func(error)
+	initialized       bool
+	initialFloor      int64
+	scan              *opencodeScan
+	seen              map[string][sha256.Size]byte
+	seenOrder         []string
+	seenNext          int
 
 	// modelCache: session id → last-seen assistant model and provider, so
 	// the per-part lookup is one bounded query per session, not per event.
@@ -101,7 +109,9 @@ func (c *OpencodeCollector) Run(ctx context.Context) error {
 	defer ticker.Stop()
 	// Prime the watermark to "now" so the first poll does not replay the
 	// entire history of an 18 GB database; the live tail is what matters.
-	c.primeWatermark()
+	if !c.loadState() {
+		c.primeWatermark()
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -137,7 +147,11 @@ func (c *OpencodeCollector) primeWatermark() {
 		return
 	}
 	defer db.Close()
-	_ = db.QueryRow(`SELECT COALESCE(MAX(time_updated), 0) FROM part`).Scan(&c.watermark)
+	if err := db.QueryRow(`SELECT COALESCE(MAX(time_updated), 0) FROM part`).Scan(&c.watermark); err == nil {
+		// Reconcile the live boundary millisecond; it may still be changing.
+		c.initialFloor = c.watermark
+		c.initialized = true
+	}
 }
 
 // pollOnce reads new parts past the watermark and publishes their events,
@@ -156,36 +170,52 @@ func (c *OpencodeCollector) pollOnce() int {
 	}
 	defer db.Close()
 
-	// One query per poll, bounded and ordered so the watermark advances
-	// monotonically. session_id + tool/step data ride in the part JSON.
-	rows, err := db.Query(`
-		SELECT p.time_updated, p.session_id, p.data,
-		       COALESCE(s.directory, '') AS workspace
-		FROM part p
-		LEFT JOIN session s ON s.id = p.session_id
-		WHERE p.time_updated > ?
-		ORDER BY p.time_updated ASC
-		LIMIT ?`, c.watermark, maxOpencodeRows)
+	if !c.initialized {
+		c.initialFloor = c.watermark + 1
+		c.initialized = true
+	}
+	if c.scan == nil {
+		var ceiling int64
+		if err := db.QueryRow(`SELECT COALESCE(MAX(time_updated),0) FROM part`).Scan(&ceiling); err != nil {
+			log.Printf("opencode: inspect parts: %v", err)
+			return 0
+		}
+		// Two seconds of timestamp overlap catches late commits and updates
+		// behind the tuple cursor. Older backdated writes are outside this
+		// policy. Source call IDs make cache eviction/replay idempotent.
+		floor := max(c.initialFloor, c.watermark-dbSettle.Milliseconds())
+		c.scan = &opencodeScan{Floor: floor, Ceiling: ceiling, Time: floor}
+	}
+	position := *c.scan
+	rows, err := db.Query(`SELECT p.id,p.time_updated,p.session_id,p.data,COALESCE(s.directory,'')
+		FROM part p LEFT JOIN session s ON s.id=p.session_id
+		WHERE p.time_updated>=? AND p.time_updated<=?
+		AND (p.time_updated>? OR (p.time_updated=? AND p.id>?))
+		ORDER BY p.time_updated,p.id LIMIT ?`, position.Floor, position.Ceiling, position.Time, position.Time, position.ID, maxOpencodeRows)
 	if err != nil {
-		// Older/newer opencode schema: degrade quietly, the coverage signal
-		// carries the fact that we are not seeing it.
 		log.Printf("opencode: query failed (schema drift?): %v", err)
+		c.scan = nil
 		return 0
 	}
 	defer rows.Close()
-
 	published := 0
-	var maxSeen int64
+	read := 0
 	for rows.Next() {
 		var updated int64
-		var sessionID, data, workspace string
-		if err := rows.Scan(&updated, &sessionID, &data, &workspace); err != nil {
+		var partID, sessionID, data, workspace string
+		if err := rows.Scan(&partID, &updated, &sessionID, &data, &workspace); err != nil {
+			log.Printf("opencode: scan part: %v", err)
+			return published
+		}
+		read++
+		position.Time, position.ID = updated, partID
+		if !c.rememberPart(partID, data) {
 			continue
 		}
-		if updated > maxSeen {
-			maxSeen = updated
-		}
 		for _, e := range OpencodePartEvents(sessionID, data, updated) {
+			if e.CallID == "" {
+				e.CallID = "opencode-part:" + partID
+			}
 			// Stamp the model and provider: step-finish rows otherwise carry
 			// neither and land unexplained. Best-effort; empty is honest
 			// when the message row has none.
@@ -204,11 +234,20 @@ func (c *OpencodeCollector) pollOnce() int {
 	}
 	if err := rows.Err(); err != nil {
 		log.Printf("opencode: cursor error (partial poll): %v", err)
-	} else if maxSeen <= c.watermark {
-		c.change.done(fp)
+		return published
 	}
-	if maxSeen > c.watermark {
-		c.watermark = maxSeen
+	*c.scan = position
+	if read < maxOpencodeRows {
+		c.watermark = max(c.watermark, position.Ceiling)
+		c.scan = nil
+	}
+	if err := c.saveState(); err != nil {
+		log.Printf("opencode: checkpoint: %v", err)
+		c.change.recorded = false
+	} else if c.scan == nil {
+		// A drained snapshot needs no confirmation query. Recording it also
+		// stops overlap replay when the source exceeds the bounded cache.
+		c.change.done(fp)
 	}
 	return published
 }

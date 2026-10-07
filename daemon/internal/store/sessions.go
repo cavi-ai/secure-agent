@@ -370,47 +370,6 @@ func (s *Store) SessionsByRootPID() map[int32]model.Session {
 	return out
 }
 
-// RekeySession renames a session id (hook id wins over the provisional
-// process-tree id) and repoints its events, flags and child sessions; the
-// session keeps its own parent. One transaction: a
-// crash mid-rekey must not strand half the attribution.
-func (s *Store) RekeySession(oldID, newID string) {
-	if oldID == "" || newID == "" || oldID == newID {
-		return
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	tx, err := s.db.Begin()
-	if err != nil {
-		return
-	}
-	defer tx.Rollback()
-	// If the new id already exists, merge into it and drop the old row.
-	var n int
-	_ = tx.QueryRow(`SELECT COUNT(*) FROM sessions WHERE id = ?`, newID).Scan(&n)
-	if n > 0 {
-		// The merged row keeps the old row's parent and origin when it has none.
-		_, _ = tx.Exec(`UPDATE sessions SET parent_id = COALESCE((SELECT parent_id FROM sessions WHERE id = ?), '')
-			WHERE id = ? AND COALESCE(parent_id, '') = ''`, oldID, newID)
-		_, _ = tx.Exec(`UPDATE sessions SET origin = COALESCE((SELECT origin FROM sessions WHERE id = ?), '')
-			WHERE id = ? AND COALESCE(origin, '') = ''`, oldID, newID)
-		_, _ = tx.Exec(`DELETE FROM sessions WHERE id = ?`, oldID)
-	} else {
-		_, _ = tx.Exec(`UPDATE sessions SET id = ? WHERE id = ?`, newID, oldID)
-	}
-	// Children of the old id follow it to the new one.
-	_, _ = tx.Exec(`UPDATE sessions SET parent_id = ? WHERE parent_id = ? AND id != ?`, newID, oldID, newID)
-	_, _ = tx.Exec(`UPDATE events SET session_id = ? WHERE session_id = ?`, newID, oldID)
-	_, _ = tx.Exec(`UPDATE flags SET session_id = ? WHERE session_id = ?`, newID, oldID)
-	// Resource episodes may be captured under a provisional process-tree ID
-	// before the hook provides its canonical session ID. Keep both the indexed
-	// identity and the preserved episode payload consistent in this rekey.
-	if _, err := tx.Exec(`UPDATE resource_episodes SET session_id = ?, episode_json = json_set(episode_json, '$.session_id', ?) WHERE session_id = ?`, newID, newID, oldID); err != nil {
-		return
-	}
-	_ = tx.Commit()
-}
-
 // SessionFilter narrows ListSessions. Status "" returns the DEFAULT view:
 // live sessions (active+idle) first, then a bounded recent-ended tail —
 // not a wall of ended stubs. Harness, Repo, Branch and Since narrow either

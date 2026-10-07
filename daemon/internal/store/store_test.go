@@ -998,9 +998,9 @@ func TestOpenUsesWALSynchronousNormal(t *testing.T) {
 	}
 }
 
-// A transcript re-read replays the same turn/model-call record with the same
-// timestamp; the second insert must be ignored, not double-counted.
-func TestTurnAndModelCallDedupeOnSessionTS(t *testing.T) {
+// Turns retain replay deduplication. ID-less model observations cannot be
+// safely identified by timestamp alone.
+func TestTurnsDedupeButIDLessModelCallsPreserveTimestampTies(t *testing.T) {
 	dir := t.TempDir()
 	s, err := Open(filepath.Join(dir, "e.db"), "")
 	if err != nil {
@@ -1023,8 +1023,8 @@ func TestTurnAndModelCallDedupeOnSessionTS(t *testing.T) {
 	}
 	calls := 0
 	s.db.QueryRow(`SELECT COUNT(*) FROM events WHERE kind = 14 AND session_id = 's1'`).Scan(&calls)
-	if calls != 1 {
-		t.Fatalf("model calls = %d, want 1 (replay ignored)", calls)
+	if calls != 2 {
+		t.Fatalf("model calls = %d, want 2 (timestamp is not identity)", calls)
 	}
 	// Other kinds still insert duplicates (no dedupe).
 	s.PutEvent(event.Event{Kind: event.KindFileOpen, TS: ts, PID: 1})
@@ -1208,22 +1208,19 @@ func TestModelCallUpsertsOnMessageID(t *testing.T) {
 		t.Fatalf("after a larger repeat: %+v, want the row raised to 1900/$0.05 at %s", r, firstTS)
 	}
 	s.PutEvent(mc("msg_other", ts, 7, 7, 0.001))
-	if r := read("msg_other"); r.n != 0 {
-		t.Fatalf("a different call at an existing (kind, session, ts) was stored: %+v", r)
+	if r := read("msg_other"); r.n != 1 {
+		t.Fatalf("a different call at an existing timestamp was lost: %+v", r)
 	}
 	var total int
 	s.db.QueryRow(`SELECT COUNT(*) FROM events WHERE kind = 14`).Scan(&total)
-	if total != 1 {
-		t.Fatalf("model-call rows = %d, want 1", total)
+	if total != 2 {
+		t.Fatalf("model-call rows = %d, want 2", total)
 	}
 }
 
-// Before model calls carried their message id, each Claude transcript record
-// of one API call was stored as its own model call. Open deletes those
-// repeats — same session, model and token counts within a second — from
-// Claude sessions (or pruned ones with provider anthropic) only, and is
-// idempotent.
-func TestOpenDedupesLegacyClaudeModelCalls(t *testing.T) {
+// Legacy model observations lack trustworthy call identity. Nearby timestamps
+// and equal usage are insufficient evidence for destructive deduplication.
+func TestOpenPreservesLegacyClaudeModelCalls(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "e.db")
 	s, err := Open(path, "")
 	if err != nil {
@@ -1252,7 +1249,7 @@ func TestOpenDedupesLegacyClaudeModelCalls(t *testing.T) {
 	put("gone2", "", "", 5, 1819)
 	s.Close()
 
-	want := map[string]int{"c1": 4, "x1": 2, "gone": 1, "gone2": 2}
+	want := map[string]int{"c1": 6, "x1": 2, "gone": 2, "gone2": 2}
 	for range 2 { // the second open finds nothing left to delete
 		s, err = Open(path, "")
 		if err != nil {
