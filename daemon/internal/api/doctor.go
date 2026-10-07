@@ -83,6 +83,8 @@ type doctorFacts struct {
 	retention []store.KindRetention
 
 	hermes *collect.HermesStatus // nil when the collector is not wired
+
+	configBoot, configReload string
 }
 
 type doctorProbe struct {
@@ -92,6 +94,7 @@ type doctorProbe struct {
 
 // doctorProbes run in this order; the report lists them in it.
 var doctorProbes = []doctorProbe{
+	{"config", "Configuration", "Fix ~/.config/secure-agent/config.yaml, then restart Secure Agent: firewall, guard and paths load only at start", checkConfig},
 	{"hook-registered", "Guard hook registered", "Run Setup → Harness hooks", checkHookRegistered},
 	{"hook-active", "Guard hook active", "Open Setup → Harness Hooks to check registration, then start a new harness session and run a guarded tool such as Bash. Installing hooks alone does not prove activity in existing sessions.", checkHookActive},
 	{"file-telemetry", "File telemetry", "System Settings → Privacy & Security → Full Disk Access → Secure Agent, or the Setup card — a flooding writer: Reinstall the file telemetry helper from the Setup card", checkFileTelemetry},
@@ -202,6 +205,7 @@ func (a *API) doctorFacts(now time.Time) doctorFacts {
 		h := a.hermes()
 		f.hermes = &h
 	}
+	f.configBoot, f.configReload = a.configProblems()
 	return f
 }
 

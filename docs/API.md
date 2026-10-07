@@ -656,6 +656,7 @@ Each check has a `state` of `pass`, `fail` or `skip`, a `detail`, and on `fail` 
 
 | `id` | Fails when | Skips when |
 |---|---|---|
+| `config` | `config.yaml` could not be read or parsed in full at start (the settings it failed to set use built-in defaults until restart; firewall, guard and paths load only at start), or the latest hot reload was skipped (unreadable, unparsable or invalid); a reload that reads the same problem as start is reported once; values the error quotes are replaced with `a value`, credentials are scrubbed, and the detail is one line | — |
 | `hook-registered` | `~/.claude/settings.json` does not register the guard hook for `PreToolUse` and `PostToolUse` | home directory unknown |
 | `hook-active` | agents are running and no hook event landed in 24h | no agents |
 | `file-telemetry` | root ES service `not-loaded`, in a `spawn`/`exit` state, or `running` with agents active and the spool unwritten for over 10 min (past grace); a service launchd will not start (last exit 78, `EX_CONFIG`, or `spawn scheduled` after a nonzero exit) names Re-register in its detail | file telemetry is not spool-based |
@@ -670,6 +671,7 @@ Each check has a `state` of `pass`, `fail` or `skip`, a `detail`, and on `fail` 
 | `retention` | a row cap keeps under 24h: any kind's record rows (a flag's own event, a file event that counts as a secret read) at their 20,000-row budget, or a kind other than `file-open`, `file-write`, `file-delete` and `exec` at its row budget; passes naming how far back those four kinds' newest rows reach | — |
 | `egress-routing` | the proxy is on and endpoints were reached outside it (proxy off passes as `proxy off — egress not inspected`); a pass names the connections routed since start and how many were decrypted | — |
 | `bus` | subscribers dropped events on full buffers | — |
+| `storage` | an evidence write failed since start (detail names operations still failing, or says new writes recovered) | storage health unavailable |
 
 ```json
 {
@@ -689,7 +691,7 @@ Each check has a `state` of `pass`, `fail` or `skip`, a `detail`, and on `fail` 
 }
 ```
 
-(The example shows three of the thirteen checks.) Read-level. CLI: `secure-agent doctor [--json]` prints one `PASS`/`FAIL`/`SKIP` line per check, a `fix:` line under each failure and a summary line, and exits `1` when any check fails.
+(The example shows three of the sixteen checks.) Read-level. CLI: `secure-agent doctor [--json]` prints one `PASS`/`FAIL`/`SKIP` line per check, a `fix:` line under each failure and a summary line, and exits `1` when any check fails.
 
 ### 18. `GET /sessions/{id}/report`
 

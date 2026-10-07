@@ -216,6 +216,7 @@ type API struct {
 	// fleetConfigured mirrors len(cfg.Fleet.Webhooks) > 0 so /fleet can tell
 	// the console whether a collector exists at all.
 	fleetConfigured bool
+	config          configHealth
 
 	publishEvent func(event.Event)
 	busDrops     func() uint64

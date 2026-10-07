@@ -86,11 +86,15 @@ func watchConfig(ctx context.Context, path string, deps configWatchDeps) {
 		// watcher would then "apply" those defaults and silently reconfigure
 		// a working setup to wrong values. Strict keeps the current state.
 		data, err := config.LoadStrict(path)
+		if deps.apiServer != nil {
+			deps.apiServer.SetConfigReloadProblem(err)
+		}
 		if err != nil {
 			// A half-written or corrupt config must NEVER disturb live
-			// state: keep everything, log once per state change.
+			// state: keep everything, log once per state change. Doctor
+			// reports it until a reload succeeds.
 			if lastAdvisorKey != "err" {
-				log.Printf("config reload skipped (config unreadable: %v) — keeping current state", err)
+				log.Printf("config reload skipped (config unreadable: %s) — keeping current state", config.SafeError(err))
 				lastAdvisorKey = "err"
 			}
 			return

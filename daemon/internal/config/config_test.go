@@ -282,6 +282,72 @@ func TestWriteCwdOverridesEmptyClears(t *testing.T) {
 	}
 }
 
+// LoadWithOverlay returns the boot-time overlay problem with the lenient
+// config: a type error keeps the overlay's other settings, a syntax error
+// keeps none.
+func TestLoadWithOverlayReportsTheProblem(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+
+	if err := os.WriteFile(path, []byte("proxy_port: 9555\nnet_sample_interval_ms: soon\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, overlayErr, err := LoadWithOverlay(path)
+	if err != nil || overlayErr == nil {
+		t.Fatalf("type error: overlayErr=%v err=%v; want an overlay problem only", overlayErr, err)
+	}
+	if cfg.ProxyPort != 9555 {
+		t.Fatalf("type error: proxy_port = %d; want the overlay's 9555", cfg.ProxyPort)
+	}
+
+	if err := os.WriteFile(path, []byte("proxy_port: 9555\nfirewall: [broken\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, overlayErr, err = LoadWithOverlay(path)
+	if err != nil || !errors.Is(overlayErr, ErrOverlayMalformed) {
+		t.Fatalf("syntax error: overlayErr=%v err=%v; want ErrOverlayMalformed", overlayErr, err)
+	}
+	if cfg.ProxyPort == 9555 {
+		t.Fatal("syntax error: the overlay's proxy_port was applied")
+	}
+
+	if err := os.WriteFile(path, []byte("proxy_port: 9555\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, overlayErr, err = LoadWithOverlay(path); overlayErr != nil || err != nil {
+		t.Fatalf("valid overlay: overlayErr=%v err=%v", overlayErr, err)
+	}
+}
+
+// SafeError never echoes a value the overlay holds: yaml.v3 backtick values
+// (including ones that contain backticks), %q values, and credentials.
+func TestSafeErrorMasksOverlayValues(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	for name, overlay := range map[string]string{
+		"type error":        "proxy_port: hunter2hunter2\n",
+		"backtick in value": "proxy_port: \"ab`hunter2hunter2\"\n",
+		"loopback endpoint": "advisor:\n  enabled: true\n  managed: false\n  endpoint: \"https://user:hunter2hunter2@api.example.com/v1\"\n  model: \"m\"\n",
+		"worktree root":     "worktrees:\n  roots: [\"relative/hunter2hunter2\"]\n",
+	} {
+		if err := os.WriteFile(path, []byte(overlay), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		_, err := LoadStrict(path)
+		if err == nil {
+			t.Fatalf("%s: LoadStrict accepted the overlay", name)
+		}
+		got := SafeError(err)
+		if got == "" || strings.Contains(got, "hunter2") || strings.Contains(got, "\n") {
+			t.Errorf("%s: SafeError = %q (from %q)", name, got, err.Error())
+		}
+	}
+	if got := SafeError(errors.New("open /x/config.yaml: permission denied")); got != "open /x/config.yaml: permission denied" {
+		t.Errorf("plain error = %q", got)
+	}
+	if SafeError(nil) != "" {
+		t.Error("nil error must render empty")
+	}
+}
+
 // LoadStrict surfaces overlay corruption instead of masking it with
 // defaults — the hot-reload contract (a half-written config must never
 // silently reconfigure the advisor).

@@ -47,7 +47,7 @@ func main() {
 		}
 	}
 	configPathUsed = config.ExpandPath(configPathUsed)
-	cfg, err := config.Load(*configPath)
+	cfg, overlayErr, err := config.LoadWithOverlay(*configPath)
 	if err != nil {
 		log.Fatalf("failed to load config: %v", err)
 	}
@@ -68,7 +68,7 @@ func main() {
 	// Build is the composition root: it resolves every component from cfg and
 	// starts the collectors and servers. main() is CLI parsing plus process
 	// lifecycle only.
-	comps, err := daemon.Build(ctx, cfg, daemon.Options{ConfigPath: configPathUsed})
+	comps, err := daemon.Build(ctx, cfg, daemon.Options{ConfigPath: configPathUsed, ConfigOverlayErr: overlayErr})
 	if err != nil {
 		log.Fatalf("failed to start daemon: %v", err)
 	}
