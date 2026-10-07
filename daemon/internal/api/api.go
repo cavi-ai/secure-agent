@@ -27,6 +27,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 	"github.com/cavi-ai/secure-agent/daemon/internal/firewall"
 	"github.com/cavi-ai/secure-agent/daemon/internal/guard"
+	"github.com/cavi-ai/secure-agent/daemon/internal/hostid"
 	"github.com/cavi-ai/secure-agent/daemon/internal/intel"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/resource"
@@ -1285,13 +1286,13 @@ func (a *API) handleAdvisorDiscover(w http.ResponseWriter, r *http.Request) {
 // noise from nagging). Assessment carries the advisor's pre-computed host
 // legitimacy verdict when one exists.
 type Suggestion struct {
-	Agent      string                     `json:"agent"`
-	Host       string                     `json:"host"`
-	Count      int                        `json:"count"`
-	Identity   correlate.EndpointIdentity `json:"identity"`
-	Assessment string                     `json:"assessment,omitempty"`
-	Rationale  string                     `json:"rationale,omitempty"`
-	Confidence float64                    `json:"confidence,omitempty"`
+	Agent      string                  `json:"agent"`
+	Host       string                  `json:"host"`
+	Count      int                     `json:"count"`
+	Identity   hostid.EndpointIdentity `json:"identity"`
+	Assessment string                  `json:"assessment,omitempty"`
+	Rationale  string                  `json:"rationale,omitempty"`
+	Confidence float64                 `json:"confidence,omitempty"`
 }
 
 // minSuggestionCount: a host must recur before we suggest anything — a single
@@ -1313,16 +1314,16 @@ func (a *API) handleAllowlistSuggestions(w http.ResponseWriter, r *http.Request)
 // posture warning: which agent reached which host without inspection, how
 // often, and when last — with the advisor's verdict when one exists.
 type UninspectedEndpoint struct {
-	Agent      string                     `json:"agent"`
-	Host       string                     `json:"host"`
-	Count      int                        `json:"count"`
-	FirstSeen  *time.Time                 `json:"first_seen,omitempty"`
-	LastSeen   time.Time                  `json:"last_seen"`
-	SessionID  string                     `json:"session_id,omitempty"`
-	Infra      string                     `json:"infra,omitempty"`
-	Identity   correlate.EndpointIdentity `json:"identity"`
-	Assessment string                     `json:"assessment,omitempty"`
-	Rationale  string                     `json:"rationale,omitempty"`
+	Agent      string                  `json:"agent"`
+	Host       string                  `json:"host"`
+	Count      int                     `json:"count"`
+	FirstSeen  *time.Time              `json:"first_seen,omitempty"`
+	LastSeen   time.Time               `json:"last_seen"`
+	SessionID  string                  `json:"session_id,omitempty"`
+	Infra      string                  `json:"infra,omitempty"`
+	Identity   hostid.EndpointIdentity `json:"identity"`
+	Assessment string                  `json:"assessment,omitempty"`
+	Rationale  string                  `json:"rationale,omitempty"`
 	// AgentKind is "infra" for an infra family's row (not counted in
 	// uninspected_egress); empty for agents.
 	AgentKind string `json:"agent_kind,omitempty"`
@@ -1379,14 +1380,14 @@ func (a *API) handleUninspectedEgress(w http.ResponseWriter, r *http.Request) {
 // row opens this so an unknown IPv6 is explainable instead of a bare address
 // that invites blocking rightful traffic.
 type EndpointDetail struct {
-	Host      string                     `json:"host"`
-	Identity  correlate.EndpointIdentity `json:"identity"`
-	Agents    []string                   `json:"agents"`
-	Sessions  []model.Session            `json:"sessions"`
-	Count     int                        `json:"count"`
-	FirstSeen *time.Time                 `json:"first_seen,omitempty"`
-	LastSeen  *time.Time                 `json:"last_seen,omitempty"`
-	Infra     string                     `json:"infra,omitempty"`
+	Host      string                  `json:"host"`
+	Identity  hostid.EndpointIdentity `json:"identity"`
+	Agents    []string                `json:"agents"`
+	Sessions  []model.Session         `json:"sessions"`
+	Count     int                     `json:"count"`
+	FirstSeen *time.Time              `json:"first_seen,omitempty"`
+	LastSeen  *time.Time              `json:"last_seen,omitempty"`
+	Infra     string                  `json:"infra,omitempty"`
 	// Allowed is set when the operator has already approved this host for any
 	// agent — so the drawer shows "already allowed" instead of offering it.
 	Allowed []EndpointAllowance `json:"allowed,omitempty"`
@@ -1411,7 +1412,7 @@ func (a *API) handleEndpointDetail(w http.ResponseWriter, r *http.Request) {
 	}
 	detail := EndpointDetail{
 		Host:     host,
-		Identity: correlate.Identify(host),
+		Identity: hostid.Identify(host),
 		Agents:   []string{},
 		Sessions: []model.Session{},
 		Allowed:  []EndpointAllowance{},
@@ -1466,7 +1467,7 @@ func (a *API) handleEndpointDetail(w http.ResponseWriter, r *http.Request) {
 	if a.allowlist != nil {
 		for agent, hosts := range a.allowlist.Load() {
 			for _, h := range hosts {
-				if correlate.HostMatches(host, h) {
+				if hostid.HostMatches(host, h) {
 					detail.Allowed = append(detail.Allowed, EndpointAllowance{Agent: agent, Host: h})
 				}
 			}

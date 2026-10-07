@@ -1,4 +1,8 @@
-package correlate
+// Package hostid names network endpoints: the org that owns a host or IP,
+// its class, and whether it is known CDN/cloud infrastructure. It depends on
+// the standard library only, so the correlator, the store and the API share
+// it without depending on one another.
+package hostid
 
 // InfraOrg classifies a destination as known CDN/cloud infrastructure —
 // the carriers that front the agents' OWN API backends (Cloudflare, Google,
@@ -402,4 +406,14 @@ func firstNonEmpty(a, b string) string {
 		return a
 	}
 	return b
+}
+
+// HostMatches: host equals allowed or is a subdomain of it (dot boundary),
+// case-insensitive. The one match rule for vendor and user-approved hosts.
+func HostMatches(host, allowed string) bool {
+	if host == "" || allowed == "" {
+		return false
+	}
+	h, a := strings.ToLower(host), strings.ToLower(allowed)
+	return h == a || strings.HasSuffix(h, "."+a)
 }

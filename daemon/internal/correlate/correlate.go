@@ -12,6 +12,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/agents"
 	"github.com/cavi-ai/secure-agent/daemon/internal/config"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
+	"github.com/cavi-ai/secure-agent/daemon/internal/hostid"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/sensitive"
 	"github.com/cavi-ai/secure-agent/daemon/internal/testvalue"
@@ -128,12 +129,12 @@ type UninspectedSummary struct {
 	// SessionID is the most recent session that reached this host.
 	SessionID string `json:"session_id,omitempty"`
 	// Infra names the CDN/cloud org when the endpoint is known infrastructure
-	// (InfraOrg) — empty for genuinely unknown destinations. UIs escalate
-	// only the unknown kind; infra rows collapse into a coverage note.
+	// (hostid.InfraOrg) — empty for genuinely unknown destinations. UIs
+	// escalate only the unknown kind; infra rows collapse into a coverage note.
 	Infra string `json:"infra,omitempty"`
-	// Identity is IdentifyCached(host): the owning org (vendor API, cloud)
-	// and cached reverse name. Never a network lookup.
-	Identity EndpointIdentity `json:"identity"`
+	// Identity is hostid.IdentifyCached(host): the owning org (vendor API,
+	// cloud) and cached reverse name. Never a network lookup.
+	Identity hostid.EndpointIdentity `json:"identity"`
 	// AgentKind is "infra" when Agent is an infra family (an IDE, the Claude
 	// app, a model server); empty for agents. Infra rows never join the
 	// headline count.
@@ -160,8 +161,8 @@ func (c *Correlator) UninspectedEgressSummarySince(since time.Time) []Uninspecte
 		}
 		agent, host, _ := strings.Cut(key, "|")
 		s := UninspectedSummary{Agent: agent, Host: host, Count: e.count,
-			FirstSeen: e.firstSeen, LastSeen: e.lastSeen, SessionID: e.sessionID, Infra: InfraOrg(host),
-			Identity: IdentifyCached(host)}
+			FirstSeen: e.firstSeen, LastSeen: e.lastSeen, SessionID: e.sessionID, Infra: hostid.InfraOrg(host),
+			Identity: hostid.IdentifyCached(host)}
 		if e.infraApp {
 			s.AgentKind = config.AgentKindInfra
 		}
@@ -237,7 +238,7 @@ func (c *Correlator) UninspectedEgressCount() int {
 // UninspectedEgressCountWindow counts only pairs seen within d — the rolling
 // headline number the UIs show, so the metric answers "what is bypassing
 // inspection NOW" instead of growing monotonically for the daemon's lifetime.
-// Known CDN/cloud infrastructure (InfraOrg) and the egress of infra families
+// Known CDN/cloud infrastructure (hostid.InfraOrg) and the egress of infra families
 // (IDEs, the Claude app, model servers) are reported separately via
 // UninspectedInfraCountWindow and never join the headline: 130 Cloudflare
 // IPs is one routing note, not 130 findings, and an IDE is not an agent.
@@ -264,7 +265,7 @@ func (c *Correlator) uninspectedCountSplit(d time.Duration) (unknown, infra int)
 			continue
 		}
 		_, host, _ := strings.Cut(key, "|")
-		if e.infraApp || InfraOrg(host) != "" {
+		if e.infraApp || hostid.InfraOrg(host) != "" {
 			infra++
 		} else {
 			unknown++
@@ -526,7 +527,7 @@ func (c *Correlator) observeLocked(e event.Event) []model.Flag {
 				// vendors (Anthropic, OpenAI, GitHub, registries). Cloud and
 				// telemetry hosts can front anyone, so they are still assessed.
 				if e2.count == 3 && c.onUninspected != nil &&
-					IdentifyCached(e.RemoteHost).Class != "vendor" && InfraOrg(e.RemoteHost) == "" {
+					hostid.IdentifyCached(e.RemoteHost).Class != "vendor" && hostid.InfraOrg(e.RemoteHost) == "" {
 					c.onUninspected(info.Name, e.RemoteHost)
 				}
 			} else if len(c.uninspected) < maxUninspectedTracked {
@@ -875,7 +876,7 @@ func (c *Correlator) isVendorHost(agentName, host string) bool {
 		return false
 	}
 	for _, allowed := range c.cfg.VendorAllowlist[agentName] {
-		if HostMatches(host, allowed) {
+		if hostid.HostMatches(host, allowed) {
 			return true
 		}
 	}
@@ -883,22 +884,12 @@ func (c *Correlator) isVendorHost(agentName, host string) bool {
 	// traffic for this agent.
 	if c.allowlistOverrides != nil {
 		for _, allowed := range c.allowlistOverrides(agentName) {
-			if HostMatches(host, allowed) {
+			if hostid.HostMatches(host, allowed) {
 				return true
 			}
 		}
 	}
 	return false
-}
-
-// HostMatches: host equals allowed or is a subdomain of it (dot boundary),
-// case-insensitive. The one match rule for vendor and user-approved hosts.
-func HostMatches(host, allowed string) bool {
-	if host == "" || allowed == "" {
-		return false
-	}
-	h, a := strings.ToLower(host), strings.ToLower(allowed)
-	return h == a || strings.HasSuffix(h, "."+a)
 }
 
 func hashFlagID(rule string, pid int32, ts time.Time) string {
