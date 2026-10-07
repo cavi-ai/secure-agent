@@ -61,6 +61,7 @@ func initializeSchema(db *sql.DB) error {
 		`CREATE INDEX IF NOT EXISTS idx_events_pid_ts ON events(pid, ts);`,
 		`CREATE INDEX IF NOT EXISTS idx_events_kind_id ON events(kind, id);`,
 		`CREATE INDEX IF NOT EXISTS idx_events_session_kind_id ON events(session_id, kind, id);`,
+		`CREATE INDEX IF NOT EXISTS idx_events_host ON events(remote_host, ts) WHERE remote_host != '';`,
 		`CREATE TABLE IF NOT EXISTS incidents (
 			id TEXT PRIMARY KEY,
 			flag_id TEXT,

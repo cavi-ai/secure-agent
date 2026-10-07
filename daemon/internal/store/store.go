@@ -58,6 +58,10 @@ const (
 		 WHERE COALESCE(rule,'') = ? AND COALESCE(session_id,'') = ? AND COALESCE(subject,'') = ?
 		   AND COALESCE(status,'open') != 'resolved'
 		 ORDER BY datetime(created_at) DESC LIMIT 1`
+	// hostFirstSeenSQL seeks idx_events_host; the advisor runs it for each
+	// flag, host and egress episode it triages. The partial index is usable
+	// only when the statement repeats the index's empty-host exclusion.
+	hostFirstSeenSQL = `SELECT MIN(ts) FROM events WHERE remote_host = ? AND remote_host != ''`
 )
 
 // pruneMinInterval is the shortest gap between two insert-driven prunes.
@@ -1025,9 +1029,7 @@ func (s *Store) trendCounts(rule, host string) (model.TrendContext, func() map[s
 	).Scan(&tc.RuleLast7d, &tc.RulePrior7d)
 	if host != "" {
 		var first sql.NullString
-		err := s.db.QueryRow(
-			`SELECT MIN(ts) FROM events WHERE remote_host = ?`, host,
-		).Scan(&first)
+		err := s.db.QueryRow(hostFirstSeenSQL, host).Scan(&first)
 		if err == nil && first.Valid && first.String != "" {
 			tc.HostKnown = true
 			tc.HostFirstSeen = first.String
@@ -1102,10 +1104,9 @@ func (s *Store) RecentEvents(limit int) []event.Event {
 	return s.QueryEvents(EventFilter{Limit: limit})
 }
 
-func (s *Store) QueryEvents(f EventFilter) []event.Event {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
+// eventQuery builds QueryEvents' statement. A host filter repeats the index's
+// empty-host exclusion so it seeks idx_events_host.
+func eventQuery(f EventFilter) (string, []any) {
 	q := `SELECT kind, ts, pid, exe_path, session_id, path, remote_host, remote_port, detail,
 		tool, tool_status, duration_ms, model, tokens_in, tokens_out, cost_usd, call_id, provider FROM events WHERE 1=1`
 	var args []any
@@ -1122,7 +1123,7 @@ func (s *Store) QueryEvents(f EventFilter) []event.Event {
 		args = append(args, f.SessionID)
 	}
 	if f.RemoteHost != "" {
-		q += " AND remote_host = ?"
+		q += " AND remote_host = ? AND remote_host != ''"
 		args = append(args, f.RemoteHost)
 	}
 	if f.Since != "" {
@@ -1135,7 +1136,14 @@ func (s *Store) QueryEvents(f EventFilter) []event.Event {
 	}
 	q += " ORDER BY id DESC LIMIT ?"
 	args = append(args, normalizeLimit(f.Limit))
+	return q, args
+}
 
+func (s *Store) QueryEvents(f EventFilter) []event.Event {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	q, args := eventQuery(f)
 	rows, err := s.db.Query(q, args...)
 	if err != nil {
 		log.Printf("store: query events error: %v", err)
