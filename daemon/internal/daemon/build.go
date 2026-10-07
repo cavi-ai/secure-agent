@@ -206,6 +206,10 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 	// Start Control API. Every dependency is resolved here, once: the API no
 	// longer exposes twenty optional setters that must be called in the right
 	// order after New.
+	if cfg.DirectoryGuard.PromptDeadlineMS > hookPromptDeadlineMS {
+		log.Printf("config: directory_guard.prompt_deadline_ms %d is above the hook's %d; guard prompts close after %d ms",
+			cfg.DirectoryGuard.PromptDeadlineMS, hookPromptDeadlineMS, guardBrokerMS(cfg.DirectoryGuard.PromptDeadlineMS))
+	}
 	guardBroker := guard.NewBroker(time.Duration(guardBrokerMS(cfg.DirectoryGuard.PromptDeadlineMS)) * time.Millisecond)
 	notifyRuleStore := correlate.NewNotifyRuleStore(filepath.Join(filepath.Dir(cfg.Firewall.Registry.SaltRef), "notify-rules.json"))
 	notifyScopeStore := correlate.NewNotifyScopeStore(filepath.Join(filepath.Dir(cfg.Firewall.Registry.SaltRef), "notify-scopes.json"))

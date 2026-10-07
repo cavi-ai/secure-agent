@@ -197,8 +197,9 @@ type CwdOverride struct {
 // DirectoryGuardConfig configures the interactive filesystem guard (pillar 2).
 // The hook owns the rule set — it is a stdlib-only Python process and cannot
 // parse YAML — via its own embedded copy plus the user's guard-modes.json
-// override file. The daemon config carries only the hook's fail-safe prompt
-// deadline.
+// override file. The daemon config carries the prompt deadline (the broker
+// answers 3 s before it, and it is capped at the hook's own 45 s wait) and the
+// per-project overrides it writes for the hook.
 type DirectoryGuardConfig struct {
 	PromptDeadlineMS int           `yaml:"prompt_deadline_ms"`
 	CwdOverrides     []CwdOverride `yaml:"cwd_overrides"`
