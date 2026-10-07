@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -553,14 +554,9 @@ func setupAdvisor(cfg config.Config, st *store.Store, deltaHub *api.DeltaHub, po
 }
 
 // fleetConfigured is true when at least one HMAC fleet webhook can actually
-// deliver — the console hides the fleet panel until then.
+// deliver (fleet.Usable) — the console hides the fleet panel until then.
 func fleetConfigured(webhooks []config.WebhookConfig) bool {
-	for _, wh := range webhooks {
-		if strings.TrimSpace(wh.URL) != "" && strings.TrimSpace(wh.Secret) != "" {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(webhooks, fleet.Usable)
 }
 
 // buildStatusFn assembles the /status payload from live component state.

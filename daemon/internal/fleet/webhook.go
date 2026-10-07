@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -98,9 +99,16 @@ type Sink struct {
 // small — a runaway payload is a bug, not something to ship.
 const maxBody = 1 << 20
 
-// NewSink builds a sink for one webhook config. url/secret empty disables it.
+// Usable reports whether a webhook config can deliver: a non-blank URL and
+// secret. NewSink and the daemon's fleet_configured share this rule.
+func Usable(cfg WebhookConfig) bool {
+	return strings.TrimSpace(cfg.URL) != "" && strings.TrimSpace(cfg.Secret) != ""
+}
+
+// NewSink builds a sink for one webhook config; a config that is not Usable
+// disables it.
 func NewSink(cfg WebhookConfig, nodeID, version, logDir string) *Sink {
-	if cfg.URL == "" || cfg.Secret == "" {
+	if !Usable(cfg) {
 		return nil
 	}
 	kinds := map[string]bool{}
