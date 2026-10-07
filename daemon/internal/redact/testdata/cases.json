@@ -1,0 +1,18 @@
+[
+  {"name": "bearer header", "before": "curl -H 'Authorization: Bearer ", "prefix": "", "fill": "t", "n": 24, "after": "' https://api.example.com"},
+  {"name": "bearer after token key", "before": "token: Bearer ", "prefix": "", "fill": "u", "n": 24, "after": ""},
+  {"name": "jwt", "before": "jwt ", "prefix": "eyJa.eyJb.", "fill": "c", "n": 20, "after": " end"},
+  {"name": "aws access key id", "before": "key ", "prefix": "AKIA", "fill": "Q", "n": 16, "after": " end"},
+  {"name": "anthropic key", "before": "echo ", "prefix": "sk-ant-api03-", "fill": "a", "n": 30, "after": ""},
+  {"name": "openai key", "before": "echo ", "prefix": "sk-proj-", "fill": "b", "n": 24, "after": ""},
+  {"name": "github token", "before": "echo ", "prefix": "ghp_", "fill": "d", "n": 36, "after": ""},
+  {"name": "gitlab token", "before": "echo ", "prefix": "glpat-", "fill": "e", "n": 20, "after": ""},
+  {"name": "slack token", "before": "echo ", "prefix": "xoxb-", "fill": "1", "n": 24, "after": ""},
+  {"name": "url userinfo", "before": "git clone https://user:", "prefix": "", "fill": "p", "n": 16, "after": "@example.com/repo.git"},
+  {"name": "password flag", "before": "mysql -u root --password ", "prefix": "", "fill": "q", "n": 12, "after": " db"},
+  {"name": "keychain -w flag", "before": "security add-generic-password -s svc -a me -w ", "prefix": "", "fill": "h", "n": 14, "after": ""},
+  {"name": "api key assignment", "before": "export API_KEY=", "prefix": "", "fill": "z", "n": 20, "after": ""},
+  {"name": "quoted password", "before": "password: \"", "prefix": "", "fill": "y", "n": 12, "after": "\""},
+  {"name": "aws secret assignment", "before": "export AWS_SECRET_ACCESS_KEY=", "prefix": "", "fill": "w", "n": 40, "after": ""},
+  {"name": "private key body", "pem": "OPENSSH", "before": "", "prefix": "", "fill": "k", "n": 40, "after": ""}
+]

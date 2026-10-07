@@ -9,21 +9,25 @@ import os
 import re
 import sys
 
-REDACT_PATTERNS = [
-    re.compile(r"Bearer\s+[A-Za-z0-9\-._~+/]+=*", re.IGNORECASE),
-    re.compile(r"\beyJ[A-Za-z0-9\-_]+\.eyJ[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+\b"),
-    re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
-    # Bare provider tokens (no Bearer prefix required)
-    re.compile(r"\bsk-[A-Za-z0-9\-_]{16,}\b"),
-    re.compile(r"\bgh[pousr]_[A-Za-z0-9]{16,}\b"),
-    re.compile(r"\bglpat-[A-Za-z0-9\-_]{16,}\b"),
-    re.compile(r"\bxox[baprs]-[A-Za-z0-9\-]{10,}\b"),
-    # key=value / key: value assignments of credential-shaped variables
-    re.compile(r"(?i)\b(password|passwd|secret|token|api[_-]?key|aws_secret_access_key)"
-               r"\w*\s*[:=]\s*('[^']*'|\"[^\"]*\"|\S+)"),
-    # credentials embedded in URLs (https://user:ghp_xxx@github.com/...)
-    re.compile(r"://[^/\s:]+:[^@\s]+@"),
-    re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
+# The one redaction rule set for every hook log; daemon/internal/redact holds
+# the daemon's copy and daemon/internal/redact/testdata/cases.json is the
+# contract both satisfy. Order: PEM envelopes, then credential shapes, then
+# context, so "token: Bearer <value>" masks the value, not the word. A value
+# starting with "[" is an existing mask and keeps its label.
+REDACT_RULES = [
+    (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)", re.S),
+     "[REDACTED:private-key]"),
+    (re.compile(r"Bearer\s+[A-Za-z0-9\-._~+/]+=*", re.IGNORECASE), "Bearer [REDACTED]"),
+    (re.compile(r"\beyJ[A-Za-z0-9\-_]+\.eyJ[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+\b"), "[REDACTED]"),
+    (re.compile(r"\bAKIA[0-9A-Z]{16}\b"), "[REDACTED]"),
+    (re.compile(r"\bsk-[A-Za-z0-9\-_]{16,}\b"), "[REDACTED]"),
+    (re.compile(r"\bgh[pousr]_[A-Za-z0-9]{16,}\b"), "[REDACTED]"),
+    (re.compile(r"\bglpat-[A-Za-z0-9\-_]{16,}\b"), "[REDACTED]"),
+    (re.compile(r"\bxox[baprs]-[A-Za-z0-9\-]{10,}\b"), "[REDACTED]"),
+    (re.compile(r"(?i)(\s-w|\s--?password(?:-phrase)?)\s+('[^']*'|\"[^\"]*\"|[^\s\[]\S*)"), r"\1 [REDACTED]"),
+    (re.compile(r"(?i)\b((?:password|passwd|secret|token|api[_-]?key|aws_secret_access_key)"
+                r"\w*\s*[:=]\s*)('[^']*'|\"[^\"]*\"|[^\s\[]\S*)"), r"\1[REDACTED]"),
+    (re.compile(r"://[^/\s:@]+:[^@\s/\[][^@\s/]*@"), "://[REDACTED]@"),
 ]
 
 # Cap logged command length — multi-MB heredocs would grow the daemon-tailed
@@ -32,8 +36,8 @@ MAX_CMD_CHARS = 2000
 
 def redact_str(s: str) -> str:
     res = s
-    for pat in REDACT_PATTERNS:
-        res = pat.sub("[REDACTED]", res)
+    for pat, repl in REDACT_RULES:
+        res = pat.sub(repl, res)
     return res
 
 def session_id(payload: dict | None = None) -> str:

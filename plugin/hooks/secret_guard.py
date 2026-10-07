@@ -43,7 +43,7 @@ from datetime import datetime, timezone
 _HOOK_DIR = os.path.dirname(os.path.abspath(__file__))
 if _HOOK_DIR not in sys.path:
     sys.path.insert(0, _HOOK_DIR)
-from activity_log import log_payload
+from activity_log import log_payload, redact_str
 from injection_scan import scan_text
 
 HOME = os.path.expanduser("~")
@@ -204,28 +204,6 @@ def session_id(payload: dict | None = None) -> str:
 _PAYLOAD: dict = {}
 
 
-# Denied commands can themselves contain secrets (`security add-generic-password
-# -w hunter2`, `export AWS_SECRET_ACCESS_KEY=...`). Persisting them verbatim into
-# the audit trail would make the guard a secret *collector*. Redact first.
-_AUDIT_REDACT = [
-    (re.compile(r"(?i)(\s-w|\s--?password(?:-phrase)?)\s+('[^']*'|\"[^\"]*\"|\S+)"), r"\1 [REDACTED]"),
-    (re.compile(r"(?i)\b(password|passwd|secret|token|api[_-]?key|aws_secret_access_key)"
-                r"\w*\s*[:=]\s*('[^']*'|\"[^\"]*\"|\S+)"), r"\1=[REDACTED]"),
-    (re.compile(r"Bearer\s+[A-Za-z0-9\-._~+/]+=*", re.IGNORECASE), "Bearer [REDACTED]"),
-    (re.compile(r"\beyJ[A-Za-z0-9\-_]+\.eyJ[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+\b"), "[REDACTED]"),
-    (re.compile(r"\bAKIA[0-9A-Z]{16}\b"), "[REDACTED]"),
-    (re.compile(r"\bsk-[A-Za-z0-9\-_]{16,}\b"), "[REDACTED]"),
-    (re.compile(r"\bgh[pousr]_[A-Za-z0-9]{16,}\b"), "[REDACTED]"),
-    (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"), "[REDACTED-KEY]"),
-]
-
-
-def redact_secrets(s: str) -> str:
-    for pat, repl in _AUDIT_REDACT:
-        s = pat.sub(repl, s)
-    return s
-
-
 def _secure_append(path: str, line: str) -> None:
     """Append one JSONL record, keeping the log 0600 and its dir 0700. These
     files are a forensic trail; world-readable defaults would leak it."""
@@ -244,8 +222,9 @@ def _secure_append(path: str, line: str) -> None:
 
 
 def audit(verdict: str, rule: str, command: str, event: str, broker: bool = False) -> None:
-    """Never allowed to fail the hook."""
-    safe_command = redact_secrets(command)
+    """Never allowed to fail the hook. Denied commands can carry the secret
+    they were denied for; the audit trail stores them redacted."""
+    safe_command = redact_str(command)
     rec = {
         "ts": now(),
         "verdict": verdict,

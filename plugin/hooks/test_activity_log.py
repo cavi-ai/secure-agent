@@ -136,7 +136,35 @@ def main():
         if not hs.get("branch"):
             raise AssertionError(f"branch not probed for a git workspace: {hs}")
 
+    check_shared_redaction_cases()
     print("PASS (test_activity_log)")
+
+
+def check_shared_redaction_cases():
+    """The daemon's redaction contract (daemon/internal/redact/testdata/
+    cases.json) holds for the hooks too. Values are assembled at run time."""
+    sys.path.insert(0, os.path.dirname(HOOK))
+    from activity_log import redact_str
+    repo_root = os.path.dirname(os.path.dirname(os.path.dirname(HOOK)))
+    path = os.path.join(repo_root, "daemon", "internal", "redact", "testdata", "cases.json")
+    with open(path, encoding="utf-8") as f:
+        cases = json.load(f)
+    if not cases:
+        raise AssertionError("no shared redaction cases")
+    for c in cases:
+        body = c["fill"] * c["n"]
+        before, after = c["before"], c["after"]
+        if c.get("pem"):
+            before += "-----BEGIN " + c["pem"] + " PRIVATE KEY-----\n"
+            after = "\n-----END " + c["pem"] + " PRIVATE KEY-----" + after
+        got = redact_str(before + c["prefix"] + body + after)
+        if body in got or "[REDACTED" not in got:
+            raise AssertionError(f"{c['name']}: redact_str = {got!r}")
+    for kept in ("http://localhost:8080/path@v2", "TOKEN=[REDACTED:fp1] ok",
+                 "--password [REDACTED:db-conn-string]",
+                 "https://user:[REDACTED:fp1]@example.com"):
+        if redact_str(kept) != kept:
+            raise AssertionError(f"non-secret text was masked: {redact_str(kept)!r}")
 
 if __name__ == "__main__":
     main()
