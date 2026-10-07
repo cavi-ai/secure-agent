@@ -213,9 +213,9 @@ type API struct {
 	peerChk    PeerChecker
 	agentPIDs  func() map[int32]struct{}
 	fleetSinks GuardEventSink
-	// fleetConfigured mirrors len(cfg.Fleet.Webhooks) > 0 so /fleet can tell
-	// the console whether a collector exists at all.
-	fleetConfigured bool
+	// fleetConfigured tells the console whether a collector webhook can
+	// deliver at all; nil means none.
+	fleetConfigured func() bool
 	config          configHealth
 
 	publishEvent func(event.Event)
@@ -319,9 +319,10 @@ type Deps struct {
 	// listener refuses every NoAgent request.
 	IsAgentPID func(pid int32) bool
 
-	// Fleet + telemetry (optional).
+	// Fleet + telemetry (optional). FleetConfigured is the live fact /status
+	// serves too; the config watcher updates it.
 	FleetSink       GuardEventSink
-	FleetConfigured bool
+	FleetConfigured func() bool
 	BusDrops        func() uint64
 	PublishEvent    func(event.Event)
 	DeltaHub        *DeltaHub

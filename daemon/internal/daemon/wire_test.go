@@ -108,7 +108,7 @@ func TestBuildStatusFn(t *testing.T) {
 	reg := supervise.NewRegistry()
 
 	fn := buildStatusFn(nil, tagger, cr, nil, reg, nil, time.Now().Add(-2*time.Second),
-		func() advisor.HealthSnapshot { return advisor.HealthSnapshot{Enabled: true} }, false, false)
+		func() advisor.HealthSnapshot { return advisor.HealthSnapshot{Enabled: true} }, nil, false)
 	s := fn()
 
 	if !s.Running {
@@ -267,7 +267,7 @@ func TestInfraFamiliesAreCountedSeparately(t *testing.T) {
 
 	fn := buildStatusFn(nil, tagger, correlate.New(tagger, sensitive.New(cfg), cfg), nil,
 		supervise.NewRegistry(), st, time.Now(),
-		func() advisor.HealthSnapshot { return advisor.HealthSnapshot{} }, false, false)
+		func() advisor.HealthSnapshot { return advisor.HealthSnapshot{} }, nil, false)
 	status := fn()
 	if status.ActiveAgents != 1 {
 		t.Fatalf("ActiveAgents = %d, want 1 (IDE excluded)", status.ActiveAgents)

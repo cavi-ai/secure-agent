@@ -566,7 +566,7 @@ func fleetConfigured(webhooks []config.WebhookConfig) bool {
 // buildStatusFn assembles the /status payload from live component state.
 // advisorHealth is resolved per call (the advisor stack hot-swaps on config
 // reload — a captured bool/subscriber would go stale).
-func buildStatusFn(proxyServer *proxy.ProxyServer, tagger *agents.Tagger, cr *correlate.Correlator, eng *firewall.Engine, reg *supervise.Registry, st *store.Store, startTime time.Time, advisorHealth func() advisor.HealthSnapshot, fleetOn, spoolBased bool) api.StatusFunc {
+func buildStatusFn(proxyServer *proxy.ProxyServer, tagger *agents.Tagger, cr *correlate.Correlator, eng *firewall.Engine, reg *supervise.Registry, st *store.Store, startTime time.Time, advisorHealth func() advisor.HealthSnapshot, fleetOn func() bool, spoolBased bool) api.StatusFunc {
 	return func() api.Status {
 		proxyActive := proxyServer != nil
 		proxyPort := 0
@@ -624,7 +624,7 @@ func buildStatusFn(proxyServer *proxy.ProxyServer, tagger *agents.Tagger, cr *co
 			MutedFlags:          cr.MutedCount(),
 			CredentialOwnerUses: cr.CredentialOwnerUses(),
 			ExpectedFlags:       cr.ExpectedCount(),
-			FleetConfigured:     fleetOn,
+			FleetConfigured:     fleetOn != nil && fleetOn(),
 			FirewallStats:       firewallStats(eng),
 			Collectors:          reg.Snapshot(),
 			ESService:           esSvc,

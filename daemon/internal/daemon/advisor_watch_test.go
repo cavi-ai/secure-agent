@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -214,21 +215,30 @@ func TestWatchConfigHotSwapsFleet(t *testing.T) {
 	os.WriteFile(cfgPath, []byte("advisor:\n  enabled: false\n"), 0o600)
 	pub := fleet.NewPublisher()
 	holder := &fleetConfigHolder{}
+	fleetOn := new(atomic.Bool)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go watchConfig(ctx, cfgPath, configWatchDeps{
-		st: st, stk: &advisorStackHolder{}, pub: pub, fleetCfg: holder, logDir: dir,
+		st: st, stk: &advisorStackHolder{}, pub: pub, fleetCfg: holder, logDir: dir, fleetOn: fleetOn,
 	})
 
 	// Baseline: no webhooks.
 	time.Sleep(300 * time.Millisecond)
-	if pub.HasSinks() {
-		t.Fatal("no webhooks configured — publisher must have no sinks")
+	if pub.HasSinks() || fleetOn.Load() {
+		t.Fatal("no webhooks configured — publisher must have no sinks and fleet_configured must be false")
+	}
+
+	// A webhook without a secret cannot deliver: no sink, not configured.
+	os.WriteFile(cfgPath, []byte("advisor:\n  enabled: false\nfleet:\n  webhooks:\n    - { url: \"http://127.0.0.1:9999/hooks/secure-agent\" }\n"), 0o600)
+	waitFor(t, 5*time.Second, func() bool { return holder.Load().Webhooks != nil })
+	if pub.HasSinks() || fleetOn.Load() {
+		t.Fatal("secretless webhook: must not count as a configured collector")
 	}
 
 	// Enroll: a webhook appears in config → sinks live within a poll cycle.
 	os.WriteFile(cfgPath, []byte("advisor:\n  enabled: false\nfleet:\n  hostname: builder-01\n  labels: { env: test }\n  heartbeat_interval_sec: 5\n  webhooks:\n    - { url: \"http://127.0.0.1:9999/hooks/secure-agent\", secret: \"s3cret\" }\n"), 0o600)
 	waitFor(t, 5*time.Second, pub.HasSinks)
+	waitFor(t, 5*time.Second, fleetOn.Load)
 	waitFor(t, 5*time.Second, func() bool {
 		fc := holder.Load()
 		return fc.Hostname == "builder-01" && fc.Labels["env"] == "test" && fc.HeartbeatIntervalSec == 5
@@ -236,7 +246,7 @@ func TestWatchConfigHotSwapsFleet(t *testing.T) {
 
 	// Unenroll: webhooks removed → sinks gone.
 	os.WriteFile(cfgPath, []byte("advisor:\n  enabled: false\nfleet:\n  webhooks: []\n"), 0o600)
-	waitFor(t, 5*time.Second, func() bool { return !pub.HasSinks() })
+	waitFor(t, 5*time.Second, func() bool { return !pub.HasSinks() && !fleetOn.Load() })
 }
 
 func TestWatchConfigHotSwapsResourcePolicy(t *testing.T) {
