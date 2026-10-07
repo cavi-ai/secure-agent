@@ -8,47 +8,62 @@ import (
 	"testing"
 )
 
-// sharedCase is one entry of testdata/cases.json, which the Python hooks'
-// redaction must satisfy too. Values are assembled at run time so no
+// sharedCases is testdata/cases.json, which the Python hooks' redaction must
+// satisfy too. Secret values are assembled at run time so no
 // credential-shaped literal is committed; PEM names a private-key block
-// wrapped around the body.
-type sharedCase struct {
-	Name   string `json:"name"`
-	PEM    string `json:"pem"`
-	Before string `json:"before"`
-	Prefix string `json:"prefix"`
-	Fill   string `json:"fill"`
-	N      int    `json:"n"`
-	After  string `json:"after"`
+// wrapped around the body. Exact cases pin the output both must produce.
+type sharedCases struct {
+	Secrets []struct {
+		Name   string `json:"name"`
+		PEM    string `json:"pem"`
+		Before string `json:"before"`
+		Prefix string `json:"prefix"`
+		Fill   string `json:"fill"`
+		N      int    `json:"n"`
+		After  string `json:"after"`
+	} `json:"secrets"`
+	Exact []struct {
+		Name string `json:"name"`
+		In   string `json:"in"`
+		Want string `json:"want"`
+	} `json:"exact"`
 }
 
-func (c sharedCase) input() (text, body string) {
-	body = strings.Repeat(c.Fill, c.N)
-	before, after := c.Before, c.After
-	if c.PEM != "" {
-		before += "-----BEGIN " + c.PEM + " PRIVATE KEY-----\n"
-		after = "\n-----END " + c.PEM + " PRIVATE KEY-----" + after
-	}
-	return before + c.Prefix + body + after, body
-}
-
-func TestScrubSharedCases(t *testing.T) {
+func loadSharedCases(t *testing.T) sharedCases {
+	t.Helper()
 	data, err := os.ReadFile(filepath.Join("testdata", "cases.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	var cases []sharedCase
+	var cases sharedCases
 	if err := json.Unmarshal(data, &cases); err != nil {
 		t.Fatal(err)
 	}
-	if len(cases) == 0 {
+	if len(cases.Secrets) == 0 || len(cases.Exact) == 0 {
 		t.Fatal("no shared cases")
 	}
-	for _, c := range cases {
-		text, body := c.input()
-		got := Scrub(text)
+	return cases
+}
+
+func TestScrubSharedSecretCases(t *testing.T) {
+	for _, c := range loadSharedCases(t).Secrets {
+		body := strings.Repeat(c.Fill, c.N)
+		before, after := c.Before, c.After
+		if c.PEM != "" {
+			before += "-----BEGIN " + c.PEM + " PRIVATE KEY-----\n"
+			after = "\n-----END " + c.PEM + " PRIVATE KEY-----" + after
+		}
+		got := Scrub(before + c.Prefix + body + after)
 		if strings.Contains(got, body) || !strings.Contains(got, "[REDACTED") {
 			t.Errorf("%s: Scrub = %q", c.Name, got)
+		}
+	}
+}
+
+func TestScrubSharedExactCases(t *testing.T) {
+	for _, c := range loadSharedCases(t).Exact {
+		if got := Scrub(c.In); got != c.Want {
+			t.Errorf("%s: Scrub(%q) = %q, want %q", c.Name, c.In, got, c.Want)
 		}
 	}
 }
@@ -64,20 +79,9 @@ func TestDetectNamesTokenShapes(t *testing.T) {
 			t.Errorf("Detect(%.8q) = %q,%v; want %q", in, rule, found, want)
 		}
 	}
-	if rule, found := Detect("export API_KEY=placeholder"); found {
-		t.Errorf("Detect on a credential-named assignment = %q; want no hit", rule)
-	}
-}
-
-func TestScrubKeepsURLsWithoutUserinfoAndExistingMasks(t *testing.T) {
-	for _, in := range []string{
-		"http://localhost:8080/path@v2",
-		"TOKEN=[REDACTED:fp1] ok",
-		"--password [REDACTED:db-conn-string]",
-		"https://user:[REDACTED:fp1]@example.com",
-	} {
-		if got := Scrub(in); got != in {
-			t.Errorf("Scrub(%q) = %q", in, got)
+	for _, in := range []string{"export API_KEY=placeholder", "the bearer of this note"} {
+		if rule, found := Detect(in); found {
+			t.Errorf("Detect(%q) = %q; want no hit", in, rule)
 		}
 	}
 }

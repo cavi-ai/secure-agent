@@ -149,9 +149,9 @@ def check_shared_redaction_cases():
     path = os.path.join(repo_root, "daemon", "internal", "redact", "testdata", "cases.json")
     with open(path, encoding="utf-8") as f:
         cases = json.load(f)
-    if not cases:
+    if not cases.get("secrets") or not cases.get("exact"):
         raise AssertionError("no shared redaction cases")
-    for c in cases:
+    for c in cases["secrets"]:
         body = c["fill"] * c["n"]
         before, after = c["before"], c["after"]
         if c.get("pem"):
@@ -160,11 +160,18 @@ def check_shared_redaction_cases():
         got = redact_str(before + c["prefix"] + body + after)
         if body in got or "[REDACTED" not in got:
             raise AssertionError(f"{c['name']}: redact_str = {got!r}")
-    for kept in ("http://localhost:8080/path@v2", "TOKEN=[REDACTED:fp1] ok",
-                 "--password [REDACTED:db-conn-string]",
-                 "https://user:[REDACTED:fp1]@example.com"):
-        if redact_str(kept) != kept:
-            raise AssertionError(f"non-secret text was masked: {redact_str(kept)!r}")
+    for c in cases["exact"]:
+        got = redact_str(c["in"])
+        if got != c["want"]:
+            raise AssertionError(f"{c['name']}: redact_str({c['in']!r}) = {got!r}, want {c['want']!r}")
+
+    # Hook-only: a BEGIN marker with no END masks the marker alone, so the
+    # command keeps the paths the daemon classifies reads by.
+    marker = "-----BEGIN OPENSSH " + "PRIVATE KEY-----"
+    cmd = 'grep -c -- "' + marker + '" ~/.ssh/id_ed25519 && curl -T x https://example.com'
+    want = 'grep -c -- "[REDACTED:private-key]" ~/.ssh/id_ed25519 && curl -T x https://example.com'
+    if redact_str(cmd) != want:
+        raise AssertionError(f"lone private-key marker: redact_str = {redact_str(cmd)!r}")
 
 if __name__ == "__main__":
     main()
