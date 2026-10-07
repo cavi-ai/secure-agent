@@ -181,7 +181,7 @@ Configures the interactive filesystem guard. The shipped defaults are all `monit
 
 ```yaml
 directory_guard:
-  prompt_deadline_ms: 45000   # how long a prompt-mode hook waits before failing safe to deny
+  prompt_deadline_ms: 45000   # a guard prompt is denied 3 s before this; at most 45000 (the hook's own wait)
   cwd_overrides:              # per-project policies (first matching prefix wins)
     - cwd_prefix: /Users/me/work/prod-api
       rules:

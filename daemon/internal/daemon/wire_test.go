@@ -4,7 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -51,6 +54,8 @@ func TestGuardBrokerMS(t *testing.T) {
 		{"default when unset", 0, 42000},
 		{"default when negative", -5, 42000},
 		{"3s shorter than hook", 45000, 42000},
+		{"shorter deadline kept", 20000, 17000},
+		{"capped at the hook's deadline", 120000, 42000},
 		{"floored at 1s", 3000, 1000},
 		{"tiny hook still floored", 100, 1000},
 	}
@@ -60,6 +65,28 @@ func TestGuardBrokerMS(t *testing.T) {
 				t.Fatalf("guardBrokerMS(%d) = %d, want %d", c.hook, got, c.want)
 			}
 		})
+	}
+}
+
+// The broker's cap is the hook's own prompt deadline: both of the hook's
+// defaults (env fallback and parse-error fallback) must equal it.
+func TestHookPromptDeadlineMatchesTheHook(t *testing.T) {
+	src, err := os.ReadFile(filepath.Join("..", "..", "..", "plugin", "hooks", "secret_guard.py"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, re := range []*regexp.Regexp{
+		regexp.MustCompile(`"SECURE_AGENT_PROMPT_DEADLINE_S", "([0-9.]+)"`),
+		regexp.MustCompile(`(?m)^\s+PROMPT_DEADLINE_S = ([0-9.]+)$`),
+	} {
+		m := re.FindSubmatch(src)
+		if m == nil {
+			t.Fatalf("secret_guard.py: %s not found", re)
+		}
+		s, err := strconv.ParseFloat(string(m[1]), 64)
+		if err != nil || int(s*1000) != hookPromptDeadlineMS {
+			t.Errorf("secret_guard.py prompt deadline %q s, want %d ms (hookPromptDeadlineMS)", m[1], hookPromptDeadlineMS)
+		}
 	}
 }
 
