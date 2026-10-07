@@ -38,6 +38,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Send selected findings directly to the local agent review queue with daemon-built evidence; local commands still require explicit confirmation.
 
 ### Fixed
+- Index flags (pid, instant, rule and agent) and incidents (open-incident key, instant, flag id); flag and incident retention deletes only the overflow. At the 10,000-flag and 5,000-incident caps a new flag no longer sorts both tables under the store lock.
 - Redact the same credential shapes in the daemon, the activity log, and the guard audit trail: provider (`sk-`), GitHub, GitLab and Slack tokens, URL userinfo, password flags, credential assignments, and whole private-key blocks.
 - One daemon per store: a second `secure-agentd` on the same database waits for the first to exit instead of replacing its socket and ingesting every source twice.
 - Doctor `config` check names start-only settings (firewall, guard, paths, proxy, retention, …) changed in `config.yaml` since start until Secure Agent restarts.

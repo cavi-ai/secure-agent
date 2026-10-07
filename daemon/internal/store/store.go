@@ -38,6 +38,28 @@ const (
 	episodeSettleMax = 10 * time.Minute
 )
 
+// Flag statements on hot paths, each served by an index (see Open).
+const (
+	// trimFlagsSQL deletes only the oldest flags past the cap, walking
+	// idx_flags_time from the oldest end; no sort of the whole table.
+	trimFlagsSQL = `DELETE FROM flags WHERE rowid IN (
+		SELECT rowid FROM flags ORDER BY datetime(ts), ts
+		LIMIT max(0, (SELECT COUNT(*) FROM flags) - ?))`
+	// reattributeFlagsSQL seeks idx_flags_pid.
+	reattributeFlagsSQL = `UPDATE flags SET agent = ? WHERE pid = ? AND agent LIKE 'untagged:%' AND datetime(ts) >= datetime(?)`
+	// trimIncidentsSQL deletes only the oldest incidents past the cap through
+	// idx_incidents_time.
+	trimIncidentsSQL = `DELETE FROM incidents WHERE rowid IN (
+		SELECT rowid FROM incidents ORDER BY datetime(created_at), created_at
+		LIMIT max(0, (SELECT COUNT(*) FROM incidents) - ?))`
+	// findOpenIncidentSQL seeks idx_incidents_open_key; it runs for every
+	// new flag.
+	findOpenIncidentSQL = `SELECT id FROM incidents
+		 WHERE COALESCE(rule,'') = ? AND COALESCE(session_id,'') = ? AND COALESCE(subject,'') = ?
+		   AND COALESCE(status,'open') != 'resolved'
+		 ORDER BY datetime(created_at) DESC LIMIT 1`
+)
+
 // pruneMinInterval is the shortest gap between two insert-driven prunes.
 var pruneMinInterval = 30 * time.Second
 
@@ -217,6 +239,9 @@ func Open(dbPath, jsonlPath string) (*Store, error) {
 			call_id TEXT,
 			provider TEXT
 		);`,
+		`CREATE INDEX IF NOT EXISTS idx_flags_pid ON flags(pid);`,
+		`CREATE INDEX IF NOT EXISTS idx_flags_time ON flags(datetime(ts), ts);`,
+		`CREATE INDEX IF NOT EXISTS idx_flags_rule_agent ON flags(rule, agent);`,
 		`CREATE INDEX IF NOT EXISTS idx_events_pid_ts ON events(pid, ts);`,
 		`CREATE INDEX IF NOT EXISTS idx_events_kind_id ON events(kind, id);`,
 		`CREATE INDEX IF NOT EXISTS idx_events_session_kind_id ON events(session_id, kind, id);`,
@@ -560,6 +585,18 @@ func Open(dbPath, jsonlPath string) (*Store, error) {
 		}
 		log.Printf("store: migrated incidents: added aggregation columns (rule, session_id, subject, aggregate_count, last_flag_at, flag_ids)")
 	}
+	// Incident indexes follow the column migration: findOpenIncidentSQL's
+	// expressions, the retention order, and lookups by flag id.
+	for _, q := range []string{
+		`CREATE INDEX IF NOT EXISTS idx_incidents_open_key ON incidents(COALESCE(rule,''), COALESCE(session_id,''), COALESCE(subject,''));`,
+		`CREATE INDEX IF NOT EXISTS idx_incidents_time ON incidents(datetime(created_at), created_at);`,
+		`CREATE INDEX IF NOT EXISTS idx_incidents_flag ON incidents(flag_id);`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("failed to index incidents: %w", err)
+		}
+	}
 
 	if err := createMemoryIndexes(db); err != nil {
 		db.Close()
@@ -667,7 +704,7 @@ func (s *Store) PutFlag(fl model.Flag) {
 
 	// Retention: flags are insert-only like events and must be capped too, or
 	// an always-on daemon on a noisy host grows the DB without limit.
-	_, _ = s.db.Exec(`DELETE FROM flags WHERE rowid NOT IN (SELECT rowid FROM flags ORDER BY datetime(ts) DESC, ts DESC LIMIT ?)`, maxFlags)
+	_, _ = s.db.Exec(trimFlagsSQL, maxFlags)
 
 	if s.flagMirror != nil {
 		err := s.flagMirror.append(fl)
@@ -1141,9 +1178,7 @@ func (s *Store) AcknowledgeFlagsReason(ids []string, reason string) int {
 func (s *Store) ReattributeFlags(pid int32, agent string, since time.Time) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	res, err := s.db.Exec(
-		`UPDATE flags SET agent = ? WHERE pid = ? AND agent LIKE 'untagged:%' AND datetime(ts) >= datetime(?)`,
-		agent, pid, since.UTC().Format(time.RFC3339Nano))
+	res, err := s.db.Exec(reattributeFlagsSQL, agent, pid, since.UTC().Format(time.RFC3339Nano))
 	if err != nil {
 		log.Printf("store: reattribute flags error: %v", err)
 		return 0
@@ -1229,10 +1264,9 @@ func (s *Store) GetFlagWithAdvisor(id string) (model.Flag, bool) {
 	return flags[0], true
 }
 
-func (s *Store) QueryFlags(f FlagFilter) []model.Flag {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
+// flagQuery builds QueryFlags' statement. Its ORDER BY matches idx_flags_time,
+// so a LIMIT walks the index instead of sorting every row.
+func flagQuery(f FlagFilter) (string, []any) {
 	q := `SELECT id, rule, severity, ts, pid, agent, session_id, workspace, evidence, acknowledged, ack_reason, process, repeats, last_seen FROM flags WHERE 1=1`
 	var args []any
 	if f.Agent != "" {
@@ -1263,7 +1297,14 @@ func (s *Store) QueryFlags(f FlagFilter) []model.Flag {
 	// can drop the truly-newest rows.
 	q += " ORDER BY datetime(ts) DESC, ts DESC LIMIT ?"
 	args = append(args, flagLimit(f.Limit))
+	return q, args
+}
 
+func (s *Store) QueryFlags(f FlagFilter) []model.Flag {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	q, args := flagQuery(f)
 	rows, err := s.db.Query(q, args...)
 	if err != nil {
 		log.Printf("store: query flags error: %v", err)
@@ -1642,7 +1683,7 @@ func (s *Store) PutIncident(inc model.IncidentReport) (writeErr error) {
 	// table so the always-on daemon's DB stays bounded (events are already capped).
 	// Order by the normalized instant, not raw text: local-offset stamps sort
 	// wrong lexicographically across a DST change.
-	_, _ = s.db.Exec(`DELETE FROM incidents WHERE id NOT IN (SELECT id FROM incidents ORDER BY datetime(created_at) DESC, created_at DESC LIMIT ?)`, maxIncidents)
+	_, _ = s.db.Exec(trimIncidentsSQL, maxIncidents)
 	return nil
 }
 
@@ -1694,13 +1735,7 @@ func (s *Store) FindOpenIncident(rule, sessionID, subject string) (string, bool)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var id string
-	err := s.db.QueryRow(
-		`SELECT id FROM incidents
-		 WHERE COALESCE(rule,'') = ? AND COALESCE(session_id,'') = ? AND COALESCE(subject,'') = ?
-		   AND COALESCE(status,'open') != 'resolved'
-		 ORDER BY datetime(created_at) DESC LIMIT 1`,
-		rule, sessionID, subject,
-	).Scan(&id)
+	err := s.db.QueryRow(findOpenIncidentSQL, rule, sessionID, subject).Scan(&id)
 	if err != nil {
 		return "", false
 	}
