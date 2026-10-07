@@ -5,14 +5,35 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 )
 
 // liveFields are the Config fields the config watcher applies without a
-// restart.
-var liveFields = []string{
-	"Agents", "DisabledAgents", "Advisor", "Fleet", "Pricing", "PricingSkipped",
-	"ResourceControl", "SystemAgent", "Worktrees",
+// restart, each with the watcher test that proves it.
+var liveFields = map[string]string{
+	"Agents":          "TestWatchConfigAppliesDisabledAgents",
+	"DisabledAgents":  "TestWatchConfigAppliesDisabledAgents",
+	"Advisor":         "TestWatchAdvisorConfigHotSwaps",
+	"Fleet":           "TestWatchConfigHotSwapsFleet",
+	"Pricing":         "TestWatchConfigAppliesPricingLive",
+	"PricingSkipped":  "TestWatchConfigAppliesPricingLive",
+	"ResourceControl": "TestWatchConfigHotSwapsResourcePolicy",
+	"SystemAgent":     "TestWatchConfigAppliesSystemAgent",
+	"Worktrees":       "TestWatchConfigAppliesWorktrees",
+}
+
+// Every live field names a watcher test that exists.
+func TestLiveFieldsHaveWatcherTests(t *testing.T) {
+	src, err := os.ReadFile(filepath.Join("..", "daemon", "advisor_watch_test.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for field, test := range liveFields {
+		if !strings.Contains(string(src), "func "+test+"(") {
+			t.Errorf("live field %s names %s, which advisor_watch_test.go does not define", field, test)
+		}
+	}
 }
 
 // Every Config field is either applied live or listed as start-only, so a
@@ -22,7 +43,7 @@ func TestEveryConfigFieldIsClassified(t *testing.T) {
 	startOnlyFields := 0
 	for i := 0; i < ty.NumField(); i++ {
 		name := ty.Field(i).Name
-		if slices.Contains(liveFields, name) {
+		if _, live := liveFields[name]; live {
 			continue
 		}
 		var a, b Config
