@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"log"
 	"os"
@@ -53,6 +54,16 @@ func main() {
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+
+	lock, err := daemon.LockInstance(ctx, cfg.DBPath)
+	if err != nil {
+		if ctx.Err() != nil || errors.Is(err, daemon.ErrParentGone) {
+			log.Printf("secure-agentd: stopped while waiting for the instance lock: %v", err)
+			return
+		}
+		log.Fatalf("failed to start daemon: %v", err)
+	}
+	defer lock.Release()
 
 	// Build is the composition root: it resolves every component from cfg and
 	// starts the collectors and servers. main() is CLI parsing plus process
