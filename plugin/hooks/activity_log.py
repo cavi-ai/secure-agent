@@ -9,21 +9,50 @@ import os
 import re
 import sys
 
-REDACT_PATTERNS = [
-    re.compile(r"Bearer\s+[A-Za-z0-9\-._~+/]+=*", re.IGNORECASE),
-    re.compile(r"\beyJ[A-Za-z0-9\-_]+\.eyJ[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+\b"),
-    re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
-    # Bare provider tokens (no Bearer prefix required)
-    re.compile(r"\bsk-[A-Za-z0-9\-_]{16,}\b"),
-    re.compile(r"\bgh[pousr]_[A-Za-z0-9]{16,}\b"),
-    re.compile(r"\bglpat-[A-Za-z0-9\-_]{16,}\b"),
-    re.compile(r"\bxox[baprs]-[A-Za-z0-9\-]{10,}\b"),
-    # key=value / key: value assignments of credential-shaped variables
-    re.compile(r"(?i)\b(password|passwd|secret|token|api[_-]?key|aws_secret_access_key)"
-               r"\w*\s*[:=]\s*('[^']*'|\"[^\"]*\"|\S+)"),
-    # credentials embedded in URLs (https://user:ghp_xxx@github.com/...)
-    re.compile(r"://[^/\s:]+:[^@\s]+@"),
-    re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
+# The one redaction rule set for every hook log; daemon/internal/redact holds
+# the daemon's copy and daemon/internal/redact/testdata/cases.json is the
+# contract both satisfy. Patterns are ASCII-only, as in Go. Order: private-key
+# blocks, then credential shapes, then context rules, so a value the token
+# rules already masked stays masked. Unlike the daemon, a BEGIN marker with no
+# END masks the marker alone, keeping the command's paths for the daemon's
+# classifier.
+_A = re.ASCII
+
+# An existing mask, such as the firewall's [REDACTED:<pattern id>], optionally
+# quoted and followed only by punctuation ('"}' in JSON). A context rule keeps
+# it and its label.
+_MASK = re.compile(r"['\"]?\[REDACTED(?::[^\]\s]*)?\][^A-Za-z0-9]*", _A)
+_PORT_PATH = re.compile(r"[0-9]+/", _A)
+
+
+def _is_mask(v: str) -> bool:
+    return _MASK.fullmatch(v) is not None
+
+
+def _is_mask_or_port_path(v: str) -> bool:
+    return _is_mask(v) or _PORT_PATH.match(v) is not None
+
+
+# (pattern, replacement, keep): keep(value of the last group) leaves a match
+# unmasked.
+REDACT_RULES = [
+    (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----", _A | re.S),
+     "[REDACTED:private-key]", None),
+    (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----", _A), "[REDACTED:private-key]", None),
+    (re.compile(r"(?i)Bearer\s+[A-Za-z0-9\-._~+/]+=*", _A), "Bearer [REDACTED]", None),
+    (re.compile(r"\beyJ[A-Za-z0-9\-_]+\.eyJ[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+\b", _A), "[REDACTED]", None),
+    (re.compile(r"\bAKIA[0-9A-Z]{16}\b", _A), "[REDACTED]", None),
+    (re.compile(r"\bsk-[A-Za-z0-9\-_]{16,}\b", _A), "[REDACTED]", None),
+    (re.compile(r"\bgh[pousr]_[A-Za-z0-9]{16,}\b", _A), "[REDACTED]", None),
+    (re.compile(r"\bglpat-[A-Za-z0-9\-_]{16,}\b", _A), "[REDACTED]", None),
+    (re.compile(r"\bxox[baprs]-[A-Za-z0-9\-]{10,}\b", _A), "[REDACTED]", None),
+    (re.compile(r"(\bsecurity\s+[a-z-]*password\b[^|;&\n]*?\s-w)\s+('[^']*'|\"[^\"]*\"|[^\s-]\S*)", _A),
+     r"\1 [REDACTED]", _is_mask),
+    (re.compile(r"(?i)(\s--?password(?:-phrase)?)\s+('[^']*'|\"[^\"]*\"|[^\s-]\S*)", _A),
+     r"\1 [REDACTED]", _is_mask),
+    (re.compile(r"(?i)\b((?:[a-z0-9]+_)*(?:password|passwd|secret|token|api[_-]?key|aws_secret_access_key)"
+                r"\w*\s*[:=]\s*)('[^']*'|\"[^\"]*\"|\S+)", _A), r"\1[REDACTED]", _is_mask),
+    (re.compile(r"://[^/\s:@]+:([^@\s]+)@", _A), "://[REDACTED]@", _is_mask_or_port_path),
 ]
 
 # Cap logged command length — multi-MB heredocs would grow the daemon-tailed
@@ -32,8 +61,11 @@ MAX_CMD_CHARS = 2000
 
 def redact_str(s: str) -> str:
     res = s
-    for pat in REDACT_PATTERNS:
-        res = pat.sub("[REDACTED]", res)
+    for pat, repl, keep in REDACT_RULES:
+        if keep is None:
+            res = pat.sub(repl, res)
+        else:
+            res = pat.sub(lambda m: m.group(0) if keep(m.group(m.re.groups)) else m.expand(repl), res)
     return res
 
 def session_id(payload: dict | None = None) -> str:

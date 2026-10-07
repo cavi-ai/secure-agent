@@ -454,13 +454,15 @@ EXTRA_TESTS += [
 # --- audit trail must never persist the secrets it blocks --------------------
 
 def test_audit_log_redacts_denied_secrets():
-    run(bash("security add-generic-password -s mysvc -a me -w hunter2hunter2"))
+    gitlab = "glpat-" + "e" * 20
+    run(bash("security add-generic-password -s mysvc -a me -w hunter2hunter2 -j " + gitlab))
     audit_log = os.path.join(HOME, ".agents", "logs", "secret-guard.jsonl")
     activity_log = os.path.join(HOME, "activity.jsonl")
     for path in (audit_log, activity_log):
         assert os.path.exists(path), f"{path} was not written"
         content = open(path, encoding="utf-8").read()
-        assert "hunter2hunter2" not in content, f"secret persisted verbatim in {path}"
+        for secret in ("hunter2hunter2", gitlab):
+            assert secret not in content, f"secret persisted verbatim in {path}"
         assert "[REDACTED]" in content, f"expected redaction marker in {path}"
 
 

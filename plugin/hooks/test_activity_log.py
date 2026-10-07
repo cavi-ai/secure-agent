@@ -136,7 +136,42 @@ def main():
         if not hs.get("branch"):
             raise AssertionError(f"branch not probed for a git workspace: {hs}")
 
+    check_shared_redaction_cases()
     print("PASS (test_activity_log)")
+
+
+def check_shared_redaction_cases():
+    """The daemon's redaction contract (daemon/internal/redact/testdata/
+    cases.json) holds for the hooks too. Values are assembled at run time."""
+    sys.path.insert(0, os.path.dirname(HOOK))
+    from activity_log import redact_str
+    repo_root = os.path.dirname(os.path.dirname(os.path.dirname(HOOK)))
+    path = os.path.join(repo_root, "daemon", "internal", "redact", "testdata", "cases.json")
+    with open(path, encoding="utf-8") as f:
+        cases = json.load(f)
+    if not cases.get("secrets") or not cases.get("exact"):
+        raise AssertionError("no shared redaction cases")
+    for c in cases["secrets"]:
+        body = c["fill"] * c["n"]
+        before, after = c["before"], c["after"]
+        if c.get("pem"):
+            before += "-----BEGIN " + c["pem"] + " PRIVATE KEY-----\n"
+            after = "\n-----END " + c["pem"] + " PRIVATE KEY-----" + after
+        got = redact_str(before + c["prefix"] + body + after)
+        if body in got or "[REDACTED" not in got:
+            raise AssertionError(f"{c['name']}: redact_str = {got!r}")
+    for c in cases["exact"]:
+        got = redact_str(c["in"])
+        if got != c["want"]:
+            raise AssertionError(f"{c['name']}: redact_str({c['in']!r}) = {got!r}, want {c['want']!r}")
+
+    # Hook-only: a BEGIN marker with no END masks the marker alone, so the
+    # command keeps the paths the daemon classifies reads by.
+    marker = "-----BEGIN OPENSSH " + "PRIVATE KEY-----"
+    cmd = 'grep -c -- "' + marker + '" ~/.ssh/id_ed25519 && curl -T x https://example.com'
+    want = 'grep -c -- "[REDACTED:private-key]" ~/.ssh/id_ed25519 && curl -T x https://example.com'
+    if redact_str(cmd) != want:
+        raise AssertionError(f"lone private-key marker: redact_str = {redact_str(cmd)!r}")
 
 if __name__ == "__main__":
     main()

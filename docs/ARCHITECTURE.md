@@ -214,7 +214,7 @@ The plugin layer operates synchronously inside AI agent CLI/IDE harnesses (Claud
   - Blocks reads or writes targeting private key paths and credential vaults.
   - Returns dual-protocol JSON responses for Claude Code (`decision`, `reason`) and Cursor (`permission`, `user_message`).
 - **`injection_scan.py`**: Prompt-injection detector imported by `secret_guard.py` on `PostToolUse` (same python3 as the guard; not a separate hook spawn). Still appends a redacted activity record via `activity_log.log_payload`.
-- **`activity_log.py`**: Shared writer for `~/.local/state/secure-agent/activity.jsonl`; not a separate hook process.
+- **`activity_log.py`**: Shared writer for `~/.local/state/secure-agent/activity.jsonl`; not a separate hook process. Its `redact_str` is the one redaction rule set for the activity log and the guard audit trail. The daemon's `daemon/internal/redact` applies the same rules; both satisfy `daemon/internal/redact/testdata/cases.json`. One difference: after a private-key BEGIN marker with no END, the daemon withholds the rest of the text, while the hook masks the marker alone so the logged command keeps the paths the daemon classifies.
 
 ---
 
