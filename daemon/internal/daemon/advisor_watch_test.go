@@ -166,6 +166,56 @@ func TestWatchConfigReportsSkippedReloadInDoctor(t *testing.T) {
 	waitFor(t, 5*time.Second, func() bool { return configState() == "fail" })
 }
 
+// A start-only setting changed in the file fails the Doctor config check
+// until it matches the running config again; a live-only change does not.
+func TestWatchConfigReportsRestartNeededInDoctor(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	st, err := store.Open(filepath.Join(dir, "e.db"), filepath.Join(dir, "e.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	apiServer := api.New(api.Deps{Store: st, Status: func() api.Status { return api.Status{Running: true, Uptime: "1h0m0s"} }})
+	configDetail := func() string {
+		rec := httptest.NewRecorder()
+		apiServer.ConsoleHandler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/doctor", nil))
+		var rep api.DoctorReport
+		if err := json.Unmarshal(rec.Body.Bytes(), &rep); err != nil {
+			t.Fatalf("doctor: %v (%s)", err, rec.Body.String())
+		}
+		for _, c := range rep.Checks {
+			if c.ID == "config" {
+				return c.State + ": " + c.Detail
+			}
+		}
+		t.Fatal("no config check")
+		return ""
+	}
+
+	base := "advisor:\n  enabled: false\n"
+	os.WriteFile(cfgPath, []byte(base), 0o600)
+	running, err := config.LoadStrict(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go watchConfig(ctx, cfgPath, configWatchDeps{
+		st: st, stk: &advisorStackHolder{}, pub: fleet.NewPublisher(), fleetCfg: &fleetConfigHolder{},
+		apiServer: apiServer, initialConfig: &running,
+	})
+
+	os.WriteFile(cfgPath, []byte(base+"firewall:\n  mode: block\n"), 0o600)
+	waitFor(t, 5*time.Second, func() bool {
+		return configDetail() == "fail: changed since start, applied after restart: firewall"
+	})
+
+	os.WriteFile(cfgPath, []byte(base+"worktrees:\n  stale_days: 9\n"), 0o600)
+	waitFor(t, 5*time.Second, func() bool { return configDetail() == "pass: config.yaml loaded" })
+}
+
 // The fingerprint key must distinguish all advisor-relevant fields — a key
 // collision would silently skip a real change (e.g. model swap).
 func TestAdvisorConfigKeyDistinguishesFields(t *testing.T) {

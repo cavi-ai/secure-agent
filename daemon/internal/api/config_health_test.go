@@ -73,6 +73,29 @@ func TestDoctorReportsConfigProblems(t *testing.T) {
 	}
 }
 
+// Start-only settings changed in the file fail the check until a restart,
+// named by their config.yaml keys.
+func TestDoctorReportsRestartNeeded(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	st := testStore(t)
+	t.Cleanup(func() { st.Close() })
+	a := newTestAPI("", st, nil, func() Status { return Status{Running: true, Uptime: "1h0m0s"} })
+
+	a.SetConfigRestartNeeded([]string{"proxy_port", "firewall"})
+	if c := configCheck(t, a); c.State != doctorFail || c.Detail != "changed since start, applied after restart: proxy_port, firewall" {
+		t.Fatalf("restart needed: %+v", c)
+	}
+	a.SetConfigReloadProblem(errors.New("overlay is malformed YAML"))
+	if c := configCheck(t, a); !strings.Contains(c.Detail, "latest reload skipped") || !strings.Contains(c.Detail, "applied after restart: proxy_port, firewall") {
+		t.Fatalf("reload problem and restart needed: %+v", c)
+	}
+	a.SetConfigReloadProblem(nil)
+	a.SetConfigRestartNeeded(nil)
+	if c := configCheck(t, a); c.State != doctorPass {
+		t.Fatalf("reverted: %+v", c)
+	}
+}
+
 // Doctor shows a real validation error without the value the overlay holds.
 func TestDoctorConfigCheckHidesOverlayValues(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
