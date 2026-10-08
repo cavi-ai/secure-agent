@@ -31,7 +31,7 @@ func TestSessionMemorySources(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	s.PutGuardDecision(GuardDecision{ID: "g1", SessionID: "s1", RuleID: "cloud-creds", Verdict: "deny", Scope: "once", At: at})
+	s.PutGuardDecisionForTest(GuardDecision{ID: "g1", SessionID: "s1", RuleID: "cloud-creds", Verdict: "deny", Scope: "once", At: at})
 	episode := resource.Episode{CapturedAt: now, Severity: "warning", DiagnosisCodes: []string{"heavy-memory"}, Session: resource.Session{Key: fmt.Sprintf("100:%d", root.UnixNano()), RootPID: 100, RootStartedAt: root, RSSBytes: 4 << 30}}
 	if err := s.PutResourceEpisode(episode); err != nil {
 		t.Fatal(err)

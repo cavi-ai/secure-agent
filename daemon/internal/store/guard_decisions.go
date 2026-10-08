@@ -35,6 +35,22 @@ const (
 // PutGuardDecision is best effort with a short deadline, so a busy database
 // cannot hold the operator's answer behind SQLite's normal busy timeout.
 func (s *Store) PutGuardDecision(d GuardDecision) {
+	s.putGuardDecision(d, func() (context.Context, context.CancelFunc) {
+		return context.WithTimeout(context.Background(), 100*time.Millisecond)
+	})
+}
+
+// PutGuardDecisionForTest stores d with no deadline. Test-only: fixtures must
+// not drop decisions on a loaded machine.
+func (s *Store) PutGuardDecisionForTest(d GuardDecision) {
+	s.putGuardDecision(d, func() (context.Context, context.CancelFunc) {
+		return context.WithCancel(context.Background())
+	})
+}
+
+// putGuardDecision bounds the insert and the periodic prune by one bound()
+// context each.
+func (s *Store) putGuardDecision(d GuardDecision, bound func() (context.Context, context.CancelFunc)) {
 	if d.ID == "" {
 		return
 	}
@@ -45,7 +61,7 @@ func (s *Store) PutGuardDecision(d GuardDecision) {
 	// Fixed-width UTC sorts by instant in SQLite's TEXT index. RFC3339Nano's
 	// variable fractional precision does not.
 	d.At = at.UTC().Format(guardDecisionTimeLayout)
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	ctx, cancel := bound()
 	defer cancel()
 	result, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO guard_decisions (id, session_id, rule_id, verdict, scope, at) VALUES (?, ?, ?, ?, ?, ?)`,
 		d.ID, d.SessionID, d.RuleID, d.Verdict, d.Scope, d.At)
@@ -66,7 +82,7 @@ func (s *Store) PutGuardDecision(d GuardDecision) {
 	if retention <= 0 {
 		retention = DefaultEventRetention
 	}
-	pruneCtx, pruneCancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	pruneCtx, pruneCancel := bound()
 	defer pruneCancel()
 	_ = s.pruneGuardDecisions(pruneCtx, retention, maxGuardDecisions)
 }

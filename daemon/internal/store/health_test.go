@@ -134,7 +134,7 @@ func TestEvidenceWriteHealthTracksIndependentFaultsAndRecovery(t *testing.T) {
 	s.PutIncident(model.IncidentReport{ID: "i1", Timestamp: now})
 	s.PutAudit(AuditEntry{Action: "dismiss"})
 	s.UpsertSession(model.Session{ID: "s1", Harness: "claude", StartedAt: now, LastSeenAt: now})
-	s.PutGuardDecision(GuardDecision{ID: "g1", RuleID: "r1", At: now.Format(time.RFC3339Nano), Verdict: "deny"})
+	s.PutGuardDecisionForTest(GuardDecision{ID: "g1", RuleID: "r1", At: now.Format(time.RFC3339Nano), Verdict: "deny"})
 	h := s.WriteHealth()
 	want := []string{"events", "flags", "guard decisions", "incidents", "operator audit", "sessions"}
 	if h.Failures != 6 || !slices.Equal(h.Active, want) {
@@ -152,7 +152,7 @@ func TestEvidenceWriteHealthTracksIndependentFaultsAndRecovery(t *testing.T) {
 	s.PutIncident(model.IncidentReport{ID: "i1", Timestamp: now})
 	s.PutAudit(AuditEntry{Action: "dismiss"})
 	s.UpsertSession(model.Session{ID: "s1", Harness: "claude", StartedAt: now, LastSeenAt: now})
-	s.PutGuardDecision(GuardDecision{ID: "g1", RuleID: "r1", At: now.Format(time.RFC3339Nano), Verdict: "deny"})
+	s.PutGuardDecisionForTest(GuardDecision{ID: "g1", RuleID: "r1", At: now.Format(time.RFC3339Nano), Verdict: "deny"})
 	h = s.WriteHealth()
 	if h.Failures != 6 || len(h.Active) != 0 {
 		t.Fatalf("writes did not recover independently: %+v", h)
