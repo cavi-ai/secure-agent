@@ -33,7 +33,8 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Worktrees: per-branch `content_*` counts and `unrelated_history`.
 - Worktrees: advisor sees the merge verdict and what the default branch did to the branch's files.
 - Console: System tab for worktrees and clutter, after Egress.
-- Worktrees: Remove on review and keep rows moves the folder to the Trash; refused while a session is live, the worktree is locked, a detached HEAD holds commits no branch keeps, a merge has conflicts, or a staged version differs from the working file.
+- Worktrees: Remove on review and keep rows moves the folder to the Trash.
+- Worktrees: Remove refuses a live, locked or conflicted worktree, or one holding unkept work.
 - Worktrees: **Discuss** asks the Agent tab about a worktree.
 - API: `POST /agent/worktree`.
 
@@ -53,8 +54,9 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Settings → Providers: toggles apply without a restart.
 - Chat: sending and waiting states.
 - Chat: command status, exit code and output stay beside the proposal.
-- Console: the Sessions → Cleanup view is the System tab; `#sessions/worktrees` still opens it.
-- Worktrees: the review drawer is gone; Remove confirms what goes to the Trash.
+- Console: the Sessions → Cleanup view is the System tab.
+- Console: `#sessions/worktrees` opens the System tab.
+- Worktrees: Remove confirms what goes to the Trash instead of a review drawer.
 - Worktrees: the live-session button reads **Ask <harness>**.
 - API: `POST /worktrees/review-trash` accepts `keep` rows.
 - Findings: critical findings sort first.
