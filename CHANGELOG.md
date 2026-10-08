@@ -9,137 +9,107 @@ All notable changes to `secure-agent` are documented here. The format follows
 ## [1.3.0] - 2026-10-08
 
 ### Added
-- Console: the same reads across agents are one decision with Treat as routine and Dismiss all.
-- API: `POST /expected` accepts `flag_ids`.
-- Settings → Secure Agent → Traffic: route Claude Code through Secure Agent's proxy.
-- Proxy: the proxy URL user selects `inspect` or `tunnel`.
-- API: `GET /routing/claude`.
-- Status: `proxy_tunneled` and `proxy_decrypted` counts.
-- Settings → Secure Agent → Chat: **Review new findings automatically** (`system_agent.auto_review`).
-- Findings: `test-value` evidence for secrets that look like test values.
+- API: `GET /routing/claude`, `POST /agent/worktree`, and `flag_ids` on `POST /expected`.
+- CLI: `secure-agent telemetry repair`.
+- Console: the same reads across agents are one decision with **Treat as routine** and **Dismiss all**.
+- Console: a System tab for worktrees and clutter replaces Sessions → Cleanup.
+- Console: a notice on any report that failed to refresh.
+- Cursor: Secure Agent's tool hooks run beside the user's hooks.
 - Findings: send selected findings to the local agent's review queue.
 - Findings: agent-scoped `.env` exceptions for test and non-secret files.
-- Findings: `.env` evidence shows variable names only.
-- Status, posture and Doctor: dropped telemetry and failed evidence writes.
+- Findings: `test-value` evidence for secrets that look like test values.
+- Pricing: Claude Sonnet 5.5.
+- Proxy: the proxy URL's user part selects `inspect` or `tunnel`.
+- Settings → Secure Agent → Chat: **Review new findings automatically** (`system_agent.auto_review`).
+- Settings → Secure Agent → Traffic: route Claude Code through Secure Agent's proxy.
 - Status: per-harness trace and guard support.
-- Status: `es_service.newest_event_at` and `lag_seconds`.
-- Console: stale or unavailable notice on a report that failed to refresh.
+- Status: `proxy_tunneled`, `proxy_decrypted`, `es_service.newest_event_at` and `lag_seconds`.
+- Status, posture and Doctor: dropped telemetry and failed evidence writes.
 - Telemetry Doctor: recovery steps and **Open hook setup**.
 - Test Hooks: a failure shows the hook's error.
-- Cursor: Secure Agent's tool hooks beside the user's hooks.
-- CLI: `secure-agent telemetry repair`.
-- Pricing: Claude Sonnet 5.5.
-- Worktrees: `merged: content` when the default branch holds every change the branch makes.
-- Worktrees: per-branch `content_*` counts and `unrelated_history`.
-- Worktrees: advisor sees the merge verdict and what the default branch did to the branch's files.
-- Console: System tab for worktrees and clutter, after Egress.
-- Worktrees: Remove on review and keep rows moves the folder to the Trash.
-- Worktrees: Remove refuses a live, locked or conflicted worktree, or one holding unkept work.
 - Worktrees: **Discuss** asks the Agent tab about a worktree.
-- API: `POST /agent/worktree`.
+- Worktrees: **Remove** sends confirmed review and keep rows to the Trash unless work would be lost.
+- Worktrees: merges are detected by content, also after a history rewrite.
 
 ### Changed
-- Console: a decision shows at most three buttons and a More menu.
-- Console: one Allow per destination organization replaces one per address.
-- Console: findings show their file and destinations as chips.
-- Console: the page fills wide windows.
-- Console: decision groups sit two-up on wide screens.
-- Settings: one sidebar page per area, without segmented sub-tabs.
-- Settings → Egress Firewall: rules grouped by secret type, one switch each.
-- Settings → Egress Firewall: **Block all** and **Monitor all** per secret type.
-- Settings → File Guard and Notifications: mode menus instead of segmented controls.
-- Settings → Exceptions: muted flags grouped by rule, beside allowed files.
-- Settings: Protection split into Files and Network.
-- Settings: Chat, Analysis and Traffic grouped under Secure Agent.
-- Settings → Providers: toggles apply without a restart.
+- App: bundle identifier `com.cavi-ai.secure-agent`.
 - Chat: sending and waiting states.
 - Chat: command status, exit code and output stay beside the proposal.
-- Console: the Sessions → Cleanup view is the System tab.
-- Console: `#sessions/worktrees` opens the System tab.
-- Worktrees: Remove confirms what goes to the Trash instead of a review drawer.
-- Worktrees: the live-session button reads **Ask <harness>**.
-- API: `POST /worktrees/review-trash` accepts `keep` rows.
+- Console: a decision shows at most three buttons and a **More** menu.
+- Console: one **Allow** per destination organization replaces one per address.
+- Console: findings show their file and destinations as chips.
+- Console: the page fills wide windows, with decision groups two-up.
+- Dependencies: `modernc.org/sqlite` 1.60.1.
+- Egress: infra apps' endpoints count as `uninspected_infra`.
+- Egress: the warning badge counts pending decisions.
 - Findings: critical findings sort first.
 - Findings: `gh` credential-helper reads for GitHub count as routine.
 - Findings: temporal and parent-process correlations labeled apart from direct activity.
 - Findings: weak historical findings stay at review severity.
 - Findings: repeats fold across restarts.
-- Findings: expected reads scoped to exact hosts.
+- Findings: expected reads are scoped to exact hosts.
 - Findings: destination mutes match structured evidence.
-- Posture: uninspected egress alone is all-clear.
-- Egress: infra apps' endpoints count as `uninspected_infra`.
-- Egress: the warning badge counts pending decisions.
+- Findings: `.env` evidence shows variable names only.
 - Install: one copy, `/Applications/Secure Agent.app`.
-- App: bundle identifier `com.cavi-ai.secure-agent`.
-- Dependencies: `modernc.org/sqlite` 1.60.1.
-- Posture: recurring-connection decisions read only recurring episodes.
-- Posture: expected-egress rules read once per computation.
-- Console: a snapshot computes its patterns once.
+- Performance: snapshots, posture and store lookups do about half the work.
+- Posture: uninspected egress alone is all-clear.
+- Settings: a sidebar of pages under Protection, Alerts, Monitoring, Secure Agent and General.
+- Settings → Egress Firewall: rules grouped by secret type, with **Block all** and **Monitor all**.
+- Settings → Exceptions: muted flags grouped by rule, beside allowed files.
+- Settings → File Guard and Notifications: mode menus replace segmented controls.
+- Settings → Providers: every daemon harness listed with its mark, toggles applied without a restart.
+- Worktrees: the live-session button reads **Ask <harness>**.
+- Worktrees: the advisor sees the merge verdict and the default branch's side.
 
 ### Fixed
-- Daemon: startup fails when the control API cannot be served.
 - App: daemon restart retries are bounded.
-- Doctor and posture: spool loss and bus drops fail only while they grow.
-- Posture: every decision pushes the new headline.
-- Posture: an older headline never replaces a newer one.
-- Console: an expected connection leaves Egress and the banner before the daemon answers.
-- Costs: one model call per Claude API call.
-- Costs: duplicate stored Claude model calls removed at open.
-- Pricing: stored calls priced when a price is added.
-- Chat: Enter cannot send twice.
+- Build: `make` stops when a binary's commit stamp is not HEAD.
+- Chat: **Enter** cannot send twice.
 - Chat: drafts survive failed sends.
-- Findings: approval, review and file inspection buttons on grouped findings.
-- Menu bar: posture updates right after a decision.
-- Menu bar: a hidden status item is recreated once per loss.
 - Console: an authentication rejection ends the session.
-- Console: the connecting process is looked up once per connection.
-- Console: an unidentified connecting process gets 503.
-- Console: the connecting process is identified on macOS 14.
-- Console: an older refresh never replaces newer data.
+- Console: the connecting process is identified once per connection, on macOS 14 too.
+- Console: an unidentified connecting process gets 503 instead of ending the session.
+- Console: an older refresh or headline never replaces newer data.
 - Console: malformed reports keep the last good data.
 - Console: filtered results survive a failed refresh.
-- Store: incidents, verdicts, plans, episodes and sessions published only after they are stored.
-- Store: failed session writes retried.
-- Store: schema upgrades run in one transaction.
-- Store: a stored `now` timestamp no longer stops the store from opening.
-- Store: indexes for flag, incident, host and harness-activity lookups.
-- Store: flag and incident retention deletes only the overflow.
+- Console and menu bar: a decision updates the page and the headline right away.
+- Costs: one model call per Claude API call, with stored duplicates removed.
+- Daemon: startup fails when the control API cannot be served.
+- Daemon: one daemon per store.
+- Doctor and posture: spool loss and bus drops fail only while they grow.
+- Doctor: `config` reports start-only changes, unreadable overlays and skipped reloads.
+- Doctor: trace coverage counts only sessions seen since boot.
+- Doctor: a running ES service with an earlier exit passes.
+- Egress episodes: no lost connections during concurrent writes.
+- File telemetry: no events lost to full queues or spool rotation.
+- File telemetry: a lagging eslogger is restarted.
+- File telemetry: a helper launchd will not start is re-registered, also from Doctor.
+- File telemetry: events from exited processes join the parent's session.
+- Findings: approval, review and file inspection buttons on grouped findings.
+- Fleet: `/status` and `/fleet` share one live `fleet_configured`.
+- Forensic archive: kept when rotation fails.
+- Menu bar: a hidden status item is recreated once per loss.
+- OpenCode: history read in bounded pages.
+- Pricing: stored calls priced when a price is added.
+- Resource episodes: include the session's tool calls, model calls and late file events.
+- Routing: the proxy URL carries the token.
 - Sessions: activity timestamps only move forward.
 - Sessions: rekeying is atomic.
 - Sessions: a silent session rooted in another family's infra ends after an hour.
-- Sessions: Antigravity sessions recorded as `antigravity`.
-- Sessions: ended and promoted sessions release their write throttle once stored.
+- Sessions: Antigravity sessions are recorded as `antigravity`.
+- Sessions: ended sessions release their write throttle once stored.
+- Store: records are published only after they are stored.
+- Store: failed session writes are retried.
+- Store: schema upgrades run in one transaction.
+- Store: a stored `now` timestamp no longer stops the store from opening.
+- Store: flag and incident retention deletes only the overflow.
 - Transcripts: events kept until delivered.
 - Transcripts: checkpoint failures retried and reported.
-- Transcripts: a deleted transcript's parser and checkpoint are retired.
-- Transcripts: an unreadable transcript keeps its checkpoint.
-- OpenCode: history read in bounded pages.
-- File telemetry: spool bursts kept across full queues and rotation.
-- File telemetry: the tailer reads a rotated spool to its end.
-- File telemetry: a lagging eslogger is restarted.
-- File telemetry: the app re-registers a helper launchd will not start.
-- File telemetry: events from exited processes join the parent's session.
-- Forensic archive: kept when rotation fails.
-- Resource episodes: include the session's tool and model calls.
-- Resource episodes: wait for late file events.
-- Egress episodes: no lost connections during concurrent writes.
-- Doctor: `config` names start-only settings changed since start.
-- Doctor: `config` fails on an unreadable overlay or a skipped reload.
-- Doctor: trace coverage counts only sessions seen since boot.
-- Doctor: a running ES service with an earlier exit passes.
-- Doctor: a helper launchd will not start offers Re-register.
-- Fleet: `/status` and `/fleet` share one live `fleet_configured`.
-- Routing: the proxy URL carries the token.
+- Transcripts: deleted transcripts are retired and unreadable ones keep their checkpoint.
 - Worktrees: an action cancels the background rescan.
 - Worktrees: a merged branch keeps its merge reason beside keep and review reasons.
-- Worktrees: the advisor no longer calls merged commits unmerged.
 - Worktrees: git reads never lazy-fetch objects in a partial clone.
 - Worktrees: repository text cannot close the advisor's evidence block.
-- Daemon: one daemon per store.
-- Build: `make` stops when a binary's commit stamp is not HEAD.
-- Settings → Providers: OpenClaw and Hermes listed.
-- Settings → Providers: every harness tile shows a mark or monogram.
-- Settings → Providers: cursor shows the daemon's match strings.
 
 ### Security
 - Guard hooks: `guard-rules.json` bundled and installed beside `secret_guard.py`.
