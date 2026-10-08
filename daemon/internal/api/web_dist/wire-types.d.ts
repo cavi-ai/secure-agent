@@ -195,6 +195,22 @@ export interface Pattern {
   flag_ids: string[];
 }
 
+export interface RoutineGroup {
+  key: string;
+  reader: string;
+  area: string;
+  files: number;
+  count: number;
+  agents: string[];
+  destinations?: PatternDestination[];
+  destination_count: number;
+  expectable: number;
+  disposition: Disposition;
+  summary: string;
+  actions: ExplainAction[];
+  flag_ids: string[];
+}
+
 export interface FileFinding {
   kind: string;
   id: string;

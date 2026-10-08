@@ -54,7 +54,7 @@ func (a *API) expectAction(f model.Flag) (model.ExplainAction, bool) {
 
 // handleExpected lists (GET), adds from a flag (POST {"flag_id"}) and
 // forgets (DELETE ?key=) the read-then-connect patterns the operator marked
-// expected.
+// expected. POST {"flag_ids"} adds every exact pair those flags cite.
 func (a *API) handleExpected(w http.ResponseWriter, r *http.Request) {
 	if a.expected == nil {
 		http.Error(w, "expected patterns not enabled", http.StatusServiceUnavailable)
@@ -66,13 +66,18 @@ func (a *API) handleExpected(w http.ResponseWriter, r *http.Request) {
 	case http.MethodPost:
 		limitBody(w, r)
 		var req struct {
-			FlagID string `json:"flag_id"`
-			Scope  string `json:"scope"`
-			Path   string `json:"path"`
-			Host   string `json:"host"`
+			FlagID  string   `json:"flag_id"`
+			FlagIDs []string `json:"flag_ids"`
+			Scope   string   `json:"scope"`
+			Path    string   `json:"path"`
+			Host    string   `json:"host"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.FlagID == "" {
-			http.Error(w, `Invalid payload: {"flag_id":"<id>"}`, http.StatusBadRequest)
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || (req.FlagID == "") == (len(req.FlagIDs) == 0) {
+			http.Error(w, `Invalid payload: {"flag_id":"<id>"} or {"flag_ids":["<id>",...]}`, http.StatusBadRequest)
+			return
+		}
+		if len(req.FlagIDs) > 0 {
+			a.expectFlags(w, req.FlagIDs)
 			return
 		}
 		f, ok := a.store.GetFlag(req.FlagID)
@@ -142,6 +147,44 @@ func (a *API) handleExpected(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// expectFlags marks every exact read-then-connect pair the flags cite
+// expected, with one save, then reviews the flags the exceptions now fully
+// cover. A flag without a recorded reader adds nothing and stays open.
+func (a *API) expectFlags(w http.ResponseWriter, ids []string) {
+	if len(ids) > model.PatternFlagIDCap {
+		http.Error(w, fmt.Sprintf("at most %d flag ids", model.PatternFlagIDCap), http.StatusBadRequest)
+		return
+	}
+	now := time.Now().UTC()
+	var pairs []correlate.ExpectedPattern
+	for _, id := range ids {
+		if f, ok := a.store.GetFlag(id); ok {
+			for _, p := range expectedPairs(f) {
+				p.CreatedAt = now
+				pairs = append(pairs, p)
+			}
+		}
+	}
+	if len(pairs) == 0 {
+		http.Error(w, "no read-then-connect flag with a recorded reader", http.StatusUnprocessableEntity)
+		return
+	}
+	added, err := a.expected.AddAll(pairs)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("persist failed: %v", err), http.StatusInternalServerError)
+		return
+	}
+	acked := a.acknowledgeExpected()
+	for _, p := range added {
+		a.recordLabel(model.OperatorLabel{Kind: "flag", Rule: readConnectRule, Agent: p.Agent, Pattern: p.Path, Label: "ok", Source: "expect"})
+	}
+	a.store.PutAudit(store.AuditEntry{
+		Action: "expect-add", Rule: readConnectRule,
+		Detail: fmt.Sprintf("expected %d exact reader, file and destination pairs from %d flags (%d open flags acknowledged)", len(added), len(ids), acked),
+	})
+	writeJSON(w, map[string]int{"added": len(added), "acknowledged": acked})
 }
 
 // acknowledgeExpected reviews only findings fully covered by current exceptions.

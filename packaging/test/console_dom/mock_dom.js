@@ -1056,7 +1056,7 @@
         try { host = JSON.parse(opts.body).host; } catch { /* ignored */ }
         line += ' row=' + (document.querySelector(`#firewall-container [data-action="allowlist-remove"][data-host="${host}"]`) ? 1 : 0);
       }
-      if ((MODE.includes('explaindemo') || MODE.includes('patterndemo') || MODE.includes('ghdemo') || MODE.includes('rawmute') || MODE.includes('orgallowdemo')) && opts.body) line += ' body=' + opts.body;
+      if ((MODE.includes('explaindemo') || MODE.includes('patterndemo') || MODE.includes('ghdemo') || MODE.includes('rawmute') || MODE.includes('orgallowdemo') || MODE.includes('routinedemo')) && opts.body) line += ' body=' + opts.body;
       if (MODE.includes('rawmute') && p === '/mute' && opts.method === 'POST') data['/mute'].push(JSON.parse(opts.body));
       if (p === '/expected' && opts.method === 'DELETE') {
         line = `${opts.method} ${String(path)}`;
@@ -1069,6 +1069,10 @@
         const text = id => (document.getElementById(id) || {}).textContent;
         const queued = !!document.querySelector('#attention-center [data-id="inc-20260907-6033-a1b2"]');
         stamp('resolve-probe', `badge=${text('badge-attention-count')} tab=${text('tab-badge-home')} queued=${queued}`);
+      }
+      if (MODE.includes('routinedemo') && p === '/expected') {
+        const card = document.querySelector('#attention-list [data-routine-key="routine|gh|/Users/dev/.config"]');
+        stamp('routine-after', `card=${!!card} needs=${window.SA.t.posture.needs_you}`);
       }
       if (MODE.includes('expectdemo') && p === '/expected-egress') {
         const choices = !!document.querySelector('#recurring-egress-container [data-action="expect-egress"][data-episode-id="episode-routine"]');
@@ -1106,6 +1110,7 @@
         events: data['/events'],
         posture: data['/posture'],
         patterns: data['/patterns'] || [],
+        routine: data['/routine'] || [],
         suggestions: data['/allowlist/suggestions'],
         mutes: data['/mute'],
         sessions: data['/sessions']
@@ -2753,6 +2758,34 @@
   if (MODE.includes('explainact')) {
     setTimeout(() => openTab('findings'), 4000);
     setTimeout(() => document.querySelector('#flags-list .finding[data-flag-id="flag-2"] .finding-actions button')?.click(), 9000);
+  }
+  // routinedemo: gh read hosts.yml under three agents — one routine decision
+  // ahead of the agent groups; Treat as routine is confirmed and sends the
+  // served flag ids; the card leaves before the daemon answers.
+  if (MODE.includes('routinedemo')) {
+    const key = 'routine|gh|/Users/dev/.config';
+    data['/routine'] = [{
+      key, reader: 'gh', area: '~/.config/gh/hosts.yml', files: 1, count: 145, agents: ['claude', 'codex', 'openclaw'],
+      destinations: [{ org: 'GitHub', host: '140.82.114.6', count: 140 }], destination_count: 3, expectable: 143,
+      disposition: { state: 'warning', text: 'Needs a look', why: 'w' },
+      summary: 'gh read ~/.config/gh/hosts.yml, then connected to GitHub and 2 more — 145 times across 3 agents.',
+      actions: [
+        { id: 'expect-all', label: 'Treat as routine', consequence: 'Each exact reader, file and destination these 143 flags cite is marked expected.', method: 'POST', path: '/expected', body: { flag_ids: ['r1', 'r2'] } },
+        { id: 'dismiss-all', label: 'Dismiss all 145', consequence: 'c', method: 'POST', path: '/flags/acknowledge', body: { flag_ids: ['r1', 'r2', 'r3'] } },
+      ],
+      flag_ids: ['r1', 'r2', 'r3'],
+    }];
+    const post = data['/posture'];
+    post.items.unshift({ severity: 2, kind: 'routine', id: key, title: 'Recurring read — 145×' });
+    post.groups.unshift({ key: 'routine', label: 'Recurring across agents', agent: '', summary: 'The same process reading the same files under several agents',
+      items: [{ kind: 'routine', priority: 1, id: key, title: 'Recurring read', count: 145 }] });
+    post.needs_you = post.items.length;
+    setTimeout(() => {
+      const card = document.querySelector(`#attention-list [data-routine-key="${CSS.escape(key)}"]`);
+      stamp('routine-before', card ? `first=${document.querySelector('#attention-list .attention-group').contains(card)} buttons=${card.querySelectorAll('.attention-actions > button').length}` : 'missing');
+      card?.querySelector('[data-action-id="expect-all"]')?.click();
+      setTimeout(() => document.getElementById('confirm-ok')?.click(), 300);
+    }, 4000);
   }
   // orgallowdemo: flag-1 reached three Google addresses; Findings open, press
   // its one "Allow Google" choice from the More menu.

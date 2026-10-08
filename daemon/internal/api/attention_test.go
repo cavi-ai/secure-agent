@@ -24,9 +24,11 @@ func attentionAPI(t *testing.T, sessions []resource.Session) *API {
 	return a
 }
 
-// attentionGroups is the queue posture builds: over the store's 24 h patterns.
+// attentionGroups is the queue posture builds: over the store's 24 h
+// patterns and routine groups.
 func attentionGroups(a *API) []AttentionGroup {
-	_, groups := a.attentionQueue(Status{Running: true}, a.computePatterns(time.Now().Add(-24*time.Hour), patternDefaultMin))
+	since := time.Now().Add(-24 * time.Hour)
+	_, groups := a.attentionQueue(Status{Running: true}, a.computePatterns(since, patternDefaultMin), a.routineGroups(since))
 	return groups
 }
 

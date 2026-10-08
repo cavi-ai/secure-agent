@@ -249,6 +249,7 @@ document.addEventListener('DOMContentLoaded', () => {
     resources: null,
     flags: [],       // unfiltered — feeds KPIs
     patterns: [],    // /snapshot patterns: repeating findings, one card each
+    routine: [],     // /snapshot routine: the same reads across agents, one decision each
     flagsView: [],   // filtered — feeds the flags panel
     incidents: [],
     events: [],       // unfiltered — feeds KPIs
@@ -1684,6 +1685,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         if (snap.flags) telemetryData.flags = (snap.flags || []).filter(f => !f.acknowledged);
         if (snap.patterns) telemetryData.patterns = snap.patterns || [];
+        if (snap.routine) telemetryData.routine = snap.routine || [];
         if (snap.incidents) telemetryData.incidents = snap.incidents || [];
         if (snap.events) telemetryData.events = snap.events || [];
         if (snap.posture) telemetryData.posture = snap.posture;
@@ -3606,6 +3608,39 @@ document.addEventListener('DOMContentLoaded', () => {
   // One destination organization's allow-host choices at once: every served
   // allow for its hosts, in order, then one acknowledgement — the requests
   // the per-host buttons sent one at a time. Reverted when none lands.
+  // A routine group's served action: Treat as routine (confirmed; every
+  // exact pair its flags cite is expected) or Dismiss all. The group and its
+  // flags leave the page before the request; a failure puts them back.
+  window.routineAct = async function(key, actionId) {
+    const rg = (telemetryData.routine || []).find(r => r.key === key);
+    const a = rg && (rg.actions || []).find(x => x.id === actionId);
+    if (!a) {
+      showToast('That action is no longer offered — the list is refreshing.', 'info');
+      fetchTelemetry();
+      return;
+    }
+    if (a.id === 'expect-all' && !await window.saConfirm(a.consequence, { title: 'Treat as routine', okLabel: 'Treat as routine', danger: false })) return;
+    const ids = (a.body && a.body.flag_ids) || [];
+    const revert = stage(['routine', 'patterns', 'flags', 'flagsView', 'posture'], ['flags', 'attention', 'posture', 'chart-flags', 'status', 'tab-badges'], () => {
+      Object.assign(telemetryData, routineAfterOptimistic(telemetryData, key, ids));
+    });
+    let out = {};
+    try {
+      const res = await apiFetch(a.path, { method: a.method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(a.body || {}) });
+      if (!res.ok) throw new Error(await res.text());
+      out = await res.json().catch(() => ({}));
+    } catch (err) {
+      revert();
+      showToast(`${a.label} failed: ${err.message || err}`, 'danger');
+      return;
+    }
+    showToast(a.id === 'expect-all'
+      ? `${Number(out.added) || 0} exact reads marked expected; ${Number(out.acknowledged) || 0} flags reviewed`
+      : `Dismissed ${ids.length} flags — the rules keep watching`, 'success');
+    fetchTelemetry();
+    if (a.id === 'expect-all') loadPolicy();
+  };
+
   window.explainAllowOrg = async function(flagId, org) {
     const f = (telemetryData.flags || []).find(x => x.id === flagId)
       || (telemetryData.flagsView || []).find(x => x.id === flagId)
@@ -4247,6 +4282,9 @@ document.addEventListener('DOMContentLoaded', () => {
         break;
       case 'explain-allow-org':
         window.explainAllowOrg(d.flagId, d.org);
+        break;
+      case 'routine-act':
+        window.routineAct(d.routineKey, d.actionId);
         break;
       case 'retriage':
         window.retriageFlag(d.id);

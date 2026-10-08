@@ -105,18 +105,19 @@ func (a *API) publishPosture(gen uint64, p Posture, force bool) {
 // Deliberately derived, not persisted: posture is a view over state, never a
 // second source of truth.
 func (a *API) computePosture() Posture {
-	return a.postureWith(a.computePatterns(time.Now().Add(-24*time.Hour), patternDefaultMin))
+	since := time.Now().Add(-24 * time.Hour)
+	return a.postureWith(a.computePatterns(since, patternDefaultMin), a.routineGroups(since))
 }
 
-// postureWith is computePosture over the 24 h patterns the caller already
-// computed.
-func (a *API) postureWith(patterns []model.Pattern) Posture {
+// postureWith is computePosture over the 24 h patterns and routine groups
+// the caller already computed.
+func (a *API) postureWith(patterns []model.Pattern, routine []model.RoutineGroup) Posture {
 	st := a.evidenceStatus(a.statusFn())
 	posture := Posture{
 		Generated: time.Now().UTC().Format(time.RFC3339Nano),
 		Connected: st.Running,
 	}
-	posture.Items, posture.Groups = a.attentionQueue(st, patterns)
+	posture.Items, posture.Groups = a.attentionQueue(st, patterns, routine)
 	posture.NeedsYou = len(posture.Items)
 	posture.CoverageItems = a.coverageItems(st)
 	posture.CoverageCount = len(posture.CoverageItems)
