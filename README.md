@@ -148,6 +148,8 @@ Everything is also manageable later from the menu bar icon (**Setup & Permission
 
 The UI has a separate menu bar identity in this update. Saved Secure Agent preferences and monitoring data remain in their existing locations. Allow **Secure Agent** in System Settings → Menu Bar; another application's menu bar setting should not be required. Review any macOS notification, Login Items or Full Disk Access prompt through the native Setup flow.
 
+On macOS Tahoe, Control Center can incorrectly associate a status item with the application that launched it. If Secure Agent is allowed but its icon is missing, check **System Settings → Menu Bar → Allow in the Menu Bar** for the launcher as well. Enabling that launcher can restore the shield without restarting the monitor. Reinstalling the app or recreating its status item does not change the launcher's permission. Secure Agent keeps its Dock control available and limits recovery to one attempt for each observed loss of its AppKit item or window.
+
 ### In-app updates
 
 The menu bar's **Settings… → Updates** tab offers two channels:

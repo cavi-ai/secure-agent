@@ -65,6 +65,8 @@ jobs:
           persist-credentials: false
       - name: swift test
         run: bash packaging/swift_macos.sh test --package-path menubar
+      - name: Native status item lifecycle regression
+        run: bash packaging/test/test_status_item_lifecycle.sh
 
   e2e:
     name: E2E smoke

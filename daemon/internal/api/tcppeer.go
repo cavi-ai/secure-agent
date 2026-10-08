@@ -2,21 +2,35 @@ package api
 
 import (
 	"bytes"
+	"regexp"
 	"strconv"
 )
 
-// ParseLsofPIDs returns the pids in `lsof -Fp` output, without self.
-func ParseLsofPIDs(out []byte, self int) []int32 {
+// netstatPID is the process:pid column of `netstat -anv`; the process name
+// is truncated and may contain spaces, so the pid ends the first token that
+// carries one.
+var netstatPID = regexp.MustCompile(`:(\d+)$`)
+
+// ParseNetstatClientPIDs returns the pids of established TCP connections in
+// `netstat -anv -p tcp` output whose local address is local (netstat's
+// "ip.port" form), without self.
+func ParseNetstatClientPIDs(out []byte, local string, self int) []int32 {
 	var pids []int32
 	for _, line := range bytes.Split(out, []byte("\n")) {
-		if len(line) < 2 || line[0] != 'p' {
+		f := bytes.Fields(line)
+		if len(f) < 11 || string(f[3]) != local || string(f[5]) != "ESTABLISHED" {
 			continue
 		}
-		n, err := strconv.Atoi(string(line[1:]))
-		if err != nil || n <= 0 || n == self {
-			continue
+		for _, tok := range f[10:] {
+			m := netstatPID.FindSubmatch(tok)
+			if m == nil {
+				continue
+			}
+			if n, err := strconv.Atoi(string(m[1])); err == nil && n > 0 && n != self {
+				pids = append(pids, int32(n))
+			}
+			break
 		}
-		pids = append(pids, int32(n))
 	}
 	return pids
 }
