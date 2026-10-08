@@ -53,20 +53,45 @@ public final class SettingsWindowController: NSObject, NSWindowDelegate {
         window = nil
         // A reopened window starts on the first tab, as before tab selection
         // was bindable.
-        SettingsNavigation.shared.tab = .protection
+        SettingsNavigation.shared.tab = .fileGuard
     }
 }
 
+/// Sidebar groups, in display order.
+enum SettingsSection: String, CaseIterable {
+    case protection = "Protection"
+    case alerts = "Alerts"
+    case monitoring = "Monitoring"
+    case secureAgent = "Secure Agent"
+    case general = "General"
+
+    var tabs: [SettingsTab] { SettingsTab.allCases.filter { $0.section == self } }
+}
+
 enum SettingsTab: Hashable, CaseIterable {
-    case protection, decisions, providers, telemetry, secureAgent, app, updates
+    case fileGuard, firewall, notifications, exceptions, providers, telemetry, chat, analysis, traffic, app, updates
+
+    var section: SettingsSection {
+        switch self {
+        case .fileGuard, .firewall: .protection
+        case .notifications, .exceptions: .alerts
+        case .providers, .telemetry: .monitoring
+        case .chat, .analysis, .traffic: .secureAgent
+        case .app, .updates: .general
+        }
+    }
 
     var title: String {
         switch self {
-        case .protection: "Protection"
-        case .decisions: "Decisions"
+        case .fileGuard: "File Guard"
+        case .firewall: "Egress Firewall"
+        case .notifications: "Notifications"
+        case .exceptions: "Exceptions"
         case .providers: "Providers"
         case .telemetry: "Telemetry"
-        case .secureAgent: "Secure Agent"
+        case .chat: "Chat"
+        case .analysis: "Analysis"
+        case .traffic: "Traffic"
         case .app: "App"
         case .updates: "Updates"
         }
@@ -74,23 +99,46 @@ enum SettingsTab: Hashable, CaseIterable {
 
     var symbol: String {
         switch self {
-        case .protection: "shield.lefthalf.filled"
-        case .decisions: "checklist"
+        case .fileGuard: "lock.shield"
+        case .firewall: "network.badge.shield.half.filled"
+        case .notifications: "bell.badge"
+        case .exceptions: "checklist"
         case .providers: "square.stack.3d.up"
         case .telemetry: "waveform.path.ecg"
-        case .secureAgent: "bubble.left.and.text.bubble.right"
+        case .chat: "bubble.left.and.text.bubble.right"
+        case .analysis: "cpu"
+        case .traffic: "arrow.left.arrow.right"
         case .app: "gearshape"
         case .updates: "arrow.triangle.2.circlepath"
         }
     }
 
+    var tint: Color {
+        switch self {
+        case .fileGuard: .blue
+        case .firewall: .indigo
+        case .notifications: .red
+        case .exceptions: .orange
+        case .providers: .teal
+        case .telemetry: .green
+        case .chat: .brand
+        case .analysis: .purple
+        case .traffic: .cyan
+        case .app, .updates: .gray
+        }
+    }
+
     var summary: String {
         switch self {
-        case .protection: "Guarded paths and outbound leak prevention"
-        case .decisions: "Review notification choices and exceptions"
-        case .providers: "Choose which harnesses are monitored"
-        case .telemetry: "Check file coverage and collector health"
-        case .secureAgent: "Local chat, analysis models, and traffic inspection"
+        case .fileGuard: "What happens when an agent touches a guarded file"
+        case .firewall: "Secrets in outbound agent requests: report or block"
+        case .notifications: "Which flags send you a notification"
+        case .exceptions: "Muted flags and allowed files, each revocable"
+        case .providers: "Which harnesses are monitored"
+        case .telemetry: "File coverage and collector health"
+        case .chat: "Chat with a local model on this Mac"
+        case .analysis: "The local model that reviews flags"
+        case .traffic: "Route agent traffic through Secure Agent"
         case .app: "Startup, setup, and removal"
         case .updates: "Build version and update channel"
         }
@@ -101,15 +149,7 @@ enum SettingsTab: Hashable, CaseIterable {
 @MainActor
 final class SettingsNavigation: ObservableObject {
     static let shared = SettingsNavigation()
-    @Published var tab: SettingsTab = .protection
-}
-
-private enum ProtectionPane: String, CaseIterable {
-    case files = "Files", network = "Network"
-}
-
-private enum SecureAgentPane: String, CaseIterable {
-    case chat = "Chat", analysis = "Analysis", traffic = "Traffic"
+    @Published var tab: SettingsTab = .fileGuard
 }
 
 @MainActor
@@ -117,28 +157,23 @@ struct SettingsView: View {
     @ObservedObject var state: AppState
     @ObservedObject private var setup = SetupManager.shared
     @ObservedObject private var nav = SettingsNavigation.shared
-    @State private var protectionPane: ProtectionPane = .files
-    @State private var secureAgentPane: SecureAgentPane = .chat
     @State private var recommendationsExpanded = false
     @State private var advisorSelectionInitialized = false
 
     var body: some View {
         HStack(spacing: 0) {
             List(selection: $nav.tab) {
-                Section("SECURITY") {
-                    navigationRow(.protection)
-                    navigationRow(.decisions)
-                }
-                Section("MONITORING") {
-                    navigationRow(.providers)
-                    navigationRow(.telemetry)
-                }
-                Section("LOCAL AI") {
-                    navigationRow(.secureAgent)
-                }
-                Section("GENERAL") {
-                    navigationRow(.app)
-                    navigationRow(.updates)
+                ForEach(SettingsSection.allCases, id: \.self) { section in
+                    Section(section.rawValue) {
+                        ForEach(section.tabs, id: \.self) { tab in
+                            Label {
+                                Text(tab.title)
+                            } icon: {
+                                SettingsIconTile(symbol: tab.symbol, tint: tab.tint)
+                            }
+                            .tag(tab)
+                        }
+                    }
                 }
             }
             .listStyle(.sidebar)
@@ -147,13 +182,10 @@ struct SettingsView: View {
             Divider()
 
             VStack(alignment: .leading, spacing: 0) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(nav.tab.title).font(.title2.weight(.semibold))
-                    Text(nav.tab.summary).font(.subheadline).foregroundStyle(.secondary)
-                }
-                .padding(.horizontal, 24)
-                .padding(.top, 22)
-                .padding(.bottom, 16)
+                SettingsPageHeader(tab: nav.tab)
+                    .padding(.horizontal, 24)
+                    .padding(.top, 20)
+                    .padding(.bottom, 4)
 
                 selectedPane
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -179,89 +211,103 @@ struct SettingsView: View {
         }
     }
 
-    private func navigationRow(_ tab: SettingsTab) -> some View {
-        Label(tab.title, systemImage: tab.symbol).tag(tab)
-    }
-
     @ViewBuilder
     private var selectedPane: some View {
         switch nav.tab {
-        case .protection: protectionTab
-        case .decisions: policyTab
+        case .fileGuard: fileGuardPane
+        case .firewall: firewallPane
+        case .notifications: notificationsPane
+        case .exceptions: exceptionsPane
         case .providers: providersTab
         case .telemetry: visibilityTab
-        case .secureAgent: secureAgentTab
+        case .chat: chatPane
+        case .analysis: analysisPane
+        case .traffic: trafficPane
         case .app: generalTab
         case .updates: updatesTab
         }
     }
 
-    // MARK: General
+    // MARK: File Guard — what happens when an agent touches a guarded path
 
-    // MARK: Protection — what actively stops agents
-
-    /// Guard policy + firewall enforcement: the enforcement surface.
-    private var protectionTab: some View {
-        VStack(spacing: 0) {
-            Picker("Protection area", selection: $protectionPane) {
-                ForEach(ProtectionPane.allCases, id: \.self) { pane in
-                    Text(pane.rawValue).tag(pane)
-                }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .accessibilityLabel("Protection area")
-            .padding(.horizontal, 24)
-            .padding(.bottom, 12)
-
-            Form {
-                switch protectionPane {
-                case .files: guardSections
-                case .network: firewallSection
-                }
-            }
-            .formStyle(.grouped)
-        }
-    }
-
-    private var guardSections: some View {
-        Group {
+    private var fileGuardPane: some View {
+        let current = setup.currentGuardModes()
+        let modes = Self.guardRules.map { current.modes[$0.id] ?? "monitor" }
+        return Form {
             Section {
-                Text("When an agent tool call touches a guarded path, the rule's mode decides: monitor logs, prompt asks you (Allow Once / Always / Deny), deny blocks outright.")
+                if current.corrupt {
+                    Label("guard-modes.json is unreadable. The guard fails closed and denies every guarded path until the file is fixed.",
+                          systemImage: "exclamationmark.triangle.fill")
+                        .font(.callout).foregroundStyle(Color.bad)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    guardStatus(modes)
+                }
+            }
+            Section {
+                ForEach(Self.guardRules, id: \.id) { rule in
+                    guardRow(rule, mode: current.modes[rule.id] ?? "monitor")
+                }
+            } header: {
+                Text("Guarded paths")
+            } footer: {
+                Text("Applies when an agent's tool call reads or writes one of these paths. Prompt asks you to Allow Once, Always, or Deny.")
                     .font(.caption).foregroundStyle(.secondary)
             }
-            Section("Directory guard rules") {
-                let current = setup.currentGuardModes()
-                if current.corrupt {
-                    Label("guard-modes.json is unreadable — the guard is failing closed (deny) until fixed",
-                          systemImage: "exclamationmark.triangle.fill")
-                        .font(.caption).foregroundStyle(.red)
-                }
-                ForEach(Self.guardRuleLabels, id: \.id) { rule in
-                    HStack {
-                        Text(rule.label)
-                        Spacer()
-                        Picker("", selection: Binding(
-                            get: { current.modes[rule.id] ?? "monitor" },
-                            set: { newMode in
-                                do {
-                                    try setup.setGuardMode(ruleID: rule.id, mode: newMode)
-                                } catch {
-                                    setup.report(error)
-                                }
-                            }
-                        )) {
-                            Text("Monitor").tag("monitor")
-                            Text("Prompt").tag("prompt")
-                            Text("Deny").tag("deny")
-                        }
-                        .pickerStyle(.segmented)
-                        .frame(width: 200)
-                        .labelsHidden()
-                        .accessibilityLabel("\(rule.label) guard mode")
-                    }
+        }
+        .formStyle(.grouped)
+    }
+
+    private func guardStatus(_ modes: [String]) -> some View {
+        let deny = modes.filter { $0 == "deny" }.count
+        let prompt = modes.filter { $0 == "prompt" }.count
+        let monitor = modes.count - deny - prompt
+        let stopping = deny + prompt
+        let counts = [(deny, "deny"), (prompt, "prompt"), (monitor, "monitor")]
+            .filter { $0.0 > 0 }
+            .map { "\($0.0) \($0.1)" }
+            .joined(separator: " · ")
+        return SettingsStatusCard(
+            symbol: stopping == 0 ? "eye" : "lock.shield.fill",
+            tint: stopping == 0 ? .warn : (stopping == modes.count ? .ok : .brand),
+            headline: stopping == 0 ? "Monitoring only" : "Guarding \(stopping) of \(modes.count) path types",
+            detail: stopping == 0 ? "Agents that touch guarded files are logged, never stopped." : counts
+        )
+    }
+
+    private func guardRow(_ rule: (id: String, label: String, symbol: String), mode: String) -> some View {
+        Picker(selection: Binding(
+            get: { mode },
+            set: { newMode in
+                do {
+                    try setup.setGuardMode(ruleID: rule.id, mode: newMode)
+                } catch {
+                    setup.report(error)
                 }
             }
+        )) {
+            Text("Monitor").tag("monitor")
+            Text("Prompt").tag("prompt")
+            Text("Deny").tag("deny")
+        } label: {
+            HStack(spacing: 10) {
+                SettingsRowIcon(symbol: rule.symbol,
+                                tint: mode == "deny" ? .bad : mode == "prompt" ? .warn : .secondary)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(rule.label)
+                    Text(Self.guardModeEffect(mode))
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+        }
+        .pickerStyle(.menu)
+    }
+
+    static func guardModeEffect(_ mode: String) -> String {
+        switch mode {
+        case "deny": "Blocked outright"
+        case "prompt": "Asks you before the agent proceeds"
+        default: "Logged, never interrupted"
         }
     }
 
@@ -295,87 +341,131 @@ struct SettingsView: View {
         !(state.status?.collectors ?? []).contains { $0.abandoned }
     }
 
-    // MARK: Decisions — everything the operator has granted/rejected
+    // MARK: Notifications — which flags page the operator
 
-    /// Per-path allows + muted flag classes: the reviewable ledger of
-    /// dispositions, in one place, each revocable.
-    private var policyTab: some View {
+    private var notificationsPane: some View {
+        let custom = Self.notifyRules.filter { state.notifyOverrides[$0.id] != nil }.count
+        return Form {
+            Section {
+                SettingsStatusCard(
+                    symbol: "bell.badge.fill",
+                    tint: .red,
+                    headline: custom == 0 ? "Critical flags only" : "Critical flags, plus \(custom) custom choice\(custom == 1 ? "" : "s")",
+                    detail: "Every other flag waits quietly in the menu bar and the web console."
+                )
+            }
+            Section {
+                ForEach(Self.notifyRules, id: \.id) { rule in
+                    notifyRow(rule)
+                }
+            } header: {
+                Text("Flag types")
+            } footer: {
+                Text("A choice here applies to the menu bar and the web console alike.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    private func notifyRow(_ rule: (id: String, label: String, symbol: String)) -> some View {
+        let choice = notifyBinding(for: rule.id)
+        return Picker(selection: choice) {
+            Text("Critical only").tag("default")
+            Text("Always").tag("always")
+            Text("Never").tag("never")
+        } label: {
+            HStack(spacing: 10) {
+                SettingsRowIcon(symbol: rule.symbol)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(rule.label)
+                    Text(Self.notifyEffect(choice.wrappedValue))
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+        }
+        .pickerStyle(.menu)
+    }
+
+    static func notifyEffect(_ choice: String) -> String {
+        switch choice {
+        case "always": "Notifies on every flag of this type"
+        case "never": "Silent; still listed in the menu bar and console"
+        default: "Notifies when the flag is critical"
+        }
+    }
+
+    // MARK: Exceptions — everything the operator has granted, each revocable
+
+    private var exceptionsPane: some View {
         Form {
-            Section("Muted flag classes") {
-                Text("Rule + host pairs you dismissed. New flags for these pairs are counted, not shown. Remove one to start flagging again.")
-                    .font(.caption).foregroundStyle(.secondary)
-                if mutes.isEmpty {
-                    Text("None — dismissing a flag class from a critical creates one.")
-                        .font(.caption).foregroundStyle(.tertiary)
-                }
-                ForEach(Array(mutes.enumerated()), id: \.offset) { _, m in
-                    HStack(spacing: 8) {
-                        Image(systemName: "eye.slash")
-                            .font(.system(size: 10)).foregroundStyle(.secondary)
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(m.title ?? m.rule)
-                                .font(.system(.body, weight: .medium))
-                            Text(m.host == "*" ? "entire class (all hosts)" : "host: \(m.host)")
-                                .font(.system(.caption, design: .monospaced))
-                                .foregroundStyle(.secondary)
-                            Text(m.agent.map { "agent: \($0)" } ?? "all agents")
-                                .font(.system(.caption, design: .monospaced))
-                                .foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        Button("Unmute", role: .destructive) {
-                            Task {
-                                try? await state.uiClient.muteRemove(rule: m.rule, host: m.host, agent: m.agent)
-                                loadMutes()
+            Section {
+                SettingsStatusCard(
+                    symbol: "eye.slash",
+                    tint: .orange,
+                    headline: mutes.isEmpty ? "Nothing muted"
+                        : "\(mutes.count) muted rule and host pair\(mutes.count == 1 ? "" : "s")",
+                    detail: mutes.isEmpty
+                        ? "“Dismiss this flag class” on a critical alert mutes its rule and host."
+                        : "New flags for a muted pair are counted, not shown. Unmute one to see them again."
+                )
+            }
+            ForEach(Self.muteGroups(mutes), id: \.rule) { group in
+                Section {
+                    ForEach(Array(group.rows.enumerated()), id: \.offset) { _, m in
+                        HStack(spacing: 10) {
+                            SettingsRowIcon(symbol: m.host == "*" ? "globe" : "network")
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(m.host == "*" ? "All hosts" : m.host)
+                                    .font(m.host == "*" ? .body : .body.monospaced())
+                                    .lineLimit(1).truncationMode(.middle)
+                                Text(m.agent ?? "All agents")
+                                    .font(.caption).foregroundStyle(.secondary)
                             }
+                            Spacer()
+                            Button("Unmute") {
+                                Task {
+                                    try? await state.uiClient.muteRemove(rule: m.rule, host: m.host, agent: m.agent)
+                                    loadMutes()
+                                }
+                            }
+                            .controlSize(.small)
+                            .accessibilityLabel("Unmute \(group.title) for \(m.host == "*" ? "all hosts" : m.host)")
                         }
-                        .controlSize(.small)
                     }
+                } header: {
+                    Text(group.title)
                 }
             }
-            Section("Notifications") {
-                Text("Default: only critical flags page you. Overrides apply to the menu bar and the web console — one choice silences both.")
-                    .font(.caption).foregroundStyle(.secondary)
-                ForEach(Self.notifyRuleLabels, id: \.id) { r in
-                    HStack(spacing: 8) {
-                        Text(r.label)
-                            .font(.system(.body, weight: .medium))
-                        Spacer()
-                        Picker("", selection: notifyBinding(for: r.id)) {
-                            Text("Default").tag("default")
-                            Text("Always").tag("always")
-                            Text("Never").tag("never")
-                        }
-                        .pickerStyle(.segmented)
-                        .labelsHidden()
-                        .frame(width: 230)
-                    }
-                }
-            }
-            Section("Allowed paths (per-path guard exceptions)") {
-                Text("Exact files an agent may access without prompting — narrower than a rule allow. Revoking restores prompting for that file.")
-                    .font(.caption).foregroundStyle(.secondary)
+            Section {
                 if pathAllows.isEmpty {
-                    Text("None yet — use “Always allow this file” on an incident to create one.")
-                        .font(.caption).foregroundStyle(.tertiary)
+                    SettingsEmptyRow(symbol: "doc", title: "No allowed files",
+                                     detail: "“Always allow this file” on an incident adds one.")
                 }
                 ForEach(pathAllows) { g in
-                    HStack {
+                    HStack(spacing: 10) {
+                        SettingsRowIcon(symbol: "doc")
                         VStack(alignment: .leading, spacing: 2) {
                             Text((g.path as NSString).lastPathComponent)
-                                .font(.system(.body, design: .monospaced))
+                                .font(.body.monospaced())
                                 .lineLimit(1)
                                 .help(g.path)
                             Text("\(g.agent) · \(g.ruleID)")
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                         Spacer()
-                        Button("Revoke", role: .destructive) {
+                        Button("Revoke") {
                             revokeGuardPathAllow(agent: g.agent, ruleID: g.ruleID, path: g.path)
                         }
                         .controlSize(.small)
+                        .accessibilityLabel("Revoke \(g.path)")
                     }
                 }
+            } header: {
+                Text("Allowed files")
+            } footer: {
+                Text("An agent opens these exact files without a prompt. Revoking one brings the prompt back.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
@@ -388,27 +478,30 @@ struct SettingsView: View {
     /// entirely (no tree rows, no flags, no kill buttons).
     private var providersTab: some View {
         Form {
-            Section("Monitored harnesses") {
-                Text("Disable a harness to stop monitoring its processes. Takes effect on the daemon's next config reload.")
-                    .font(.caption).foregroundStyle(.secondary)
+            Section {
                 ForEach(SetupManager.knownAgents, id: \.name) { agent in
-                    HStack(spacing: 10) {
-                        AgentIdentity.tile(agent.name, size: 22)
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(agent.name).font(.system(.body, weight: .medium))
-                            Text(agent.matches.joined(separator: " · "))
-                                .font(.system(.caption, design: .monospaced))
-                                .foregroundStyle(.tertiary)
-                                .lineLimit(1)
+                    Toggle(isOn: Binding(
+                        get: { !setup.disabledAgents.contains(agent.name) },
+                        set: { on in setup.setAgentDisabled(agent.name, disabled: !on) }
+                    )) {
+                        HStack(spacing: 10) {
+                            AgentIdentity.tile(agent.name, size: 22)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(agent.name).font(.system(.body, weight: .medium))
+                                Text(agent.matches.joined(separator: " · "))
+                                    .font(.system(.caption, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
                         }
-                        Spacer()
-                        Toggle("", isOn: Binding(
-                            get: { !setup.disabledAgents.contains(agent.name) },
-                            set: { on in setup.setAgentDisabled(agent.name, disabled: !on) }
-                        ))
-                        .labelsHidden()
                     }
+                    .toggleStyle(.switch)
                 }
+            } header: {
+                Text("Monitored harnesses")
+            } footer: {
+                Text("Turn a harness off to stop monitoring its processes. Takes effect on the daemon's next config reload.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
@@ -441,32 +534,37 @@ struct SettingsView: View {
         .formStyle(.grouped)
     }
 
-    private var secureAgentTab: some View {
-        VStack(spacing: 0) {
-            Picker("Secure Agent area", selection: $secureAgentPane) {
-                ForEach(SecureAgentPane.allCases, id: \.self) { pane in
-                    Text(pane.rawValue).tag(pane)
-                }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .accessibilityLabel("Secure Agent area")
-            .padding(.horizontal, 24)
-            .padding(.bottom, 12)
+    // MARK: Secure Agent — local chat, analysis model, traffic routing
 
-            Form {
-                switch secureAgentPane {
-                case .chat: chatSection
-                case .analysis:
-                    analysisSections
-                        .disabled(!advisorSelectionInitialized)
-                case .traffic: trafficSection
-                }
-                if let err = setup.lastError {
-                    Text(err).foregroundStyle(.red).font(.caption)
-                }
-            }
-            .formStyle(.grouped)
+    private var chatPane: some View {
+        Form {
+            chatSection
+            setupError
+        }
+        .formStyle(.grouped)
+    }
+
+    private var analysisPane: some View {
+        Form {
+            analysisSections
+                .disabled(!advisorSelectionInitialized)
+            setupError
+        }
+        .formStyle(.grouped)
+    }
+
+    private var trafficPane: some View {
+        Form {
+            trafficSection
+            setupError
+        }
+        .formStyle(.grouped)
+    }
+
+    @ViewBuilder
+    private var setupError: some View {
+        if let err = setup.lastError {
+            Text(err).foregroundStyle(.red).font(.caption)
         }
     }
 
@@ -572,8 +670,23 @@ struct SettingsView: View {
 
     // MARK: Guard
 
+    typealias Mute = (rule: String, host: String, agent: String?, title: String?)
+
     @State private var pathAllows: [GuardPathAllowModel] = []
-    @State private var mutes: [(rule: String, host: String, agent: String?, title: String?)] = []
+    @State private var mutes: [Mute] = []
+
+    /// Mutes grouped by rule, in rule order, each group titled once.
+    static func muteGroups(_ mutes: [Mute]) -> [(rule: String, title: String, rows: [Mute])] {
+        var groups: [(rule: String, title: String, rows: [Mute])] = []
+        for m in mutes {
+            if let i = groups.firstIndex(where: { $0.rule == m.rule }) {
+                groups[i].rows.append(m)
+            } else {
+                groups.append((m.rule, m.title ?? m.rule, [m]))
+            }
+        }
+        return groups
+    }
 
     private func loadMutes() {
         Task {
@@ -601,25 +714,25 @@ struct SettingsView: View {
         }
     }
 
-    private static let guardRuleLabels: [(id: String, label: String)] = [
-        ("ssh-keys", "SSH private keys"),
-        ("cloud-creds", "Cloud credentials"),
-        ("keychain", "Keychain"),
-        ("env-files", ".env files"),
-        ("shell-rc", "Shell config"),
-        ("harness-config", "Harness config & hooks"),
+    static let guardRules: [(id: String, label: String, symbol: String)] = [
+        ("ssh-keys", "SSH private keys", "key"),
+        ("cloud-creds", "Cloud credentials", "cloud"),
+        ("keychain", "Keychain", "lock"),
+        ("env-files", ".env files", "doc.text"),
+        ("shell-rc", "Shell config", "terminal"),
+        ("harness-config", "Harness config & hooks", "gearshape.2"),
     ]
 
     // MARK: Notifications
 
-    private static let notifyRuleLabels: [(id: String, label: String)] = [
-        ("proxy-secret-leak", "Secret leaving in agent traffic"),
-        ("sensitive-read-then-connect", "Secret read, then connected out"),
-        ("keychain-access", "Keychain file access"),
-        ("keychain-security-cli", "Keychain CLI (security tool)"),
-        ("tcc-tamper", "Privacy permissions (TCC) tamper"),
-        ("proxy-prompt-injection", "Prompt injection in a response"),
-        ("secret-in-transcript", "Secret appeared in an agent transcript"),
+    static let notifyRules: [(id: String, label: String, symbol: String)] = [
+        ("proxy-secret-leak", "Secret leaving in agent traffic", "network"),
+        ("sensitive-read-then-connect", "Secret read, then connected out", "arrow.triangle.branch"),
+        ("keychain-access", "Keychain file access", "lock"),
+        ("keychain-security-cli", "Keychain CLI (security tool)", "terminal"),
+        ("tcc-tamper", "Privacy permissions (TCC) tamper", "hand.raised"),
+        ("proxy-prompt-injection", "Prompt injection in a response", "exclamationmark.bubble"),
+        ("secret-in-transcript", "Secret appeared in an agent transcript", "doc.text.magnifyingglass"),
     ]
 
     /// Three-state picker backed by the daemon's override store: "default" is
@@ -637,42 +750,101 @@ struct SettingsView: View {
         )
     }
 
-    // MARK: Firewall
+    // MARK: Egress Firewall
 
-    /// Outbound enforcement lives in Protection’s Network pane.
-    private var firewallSection: some View {
-        Section("Egress firewall") {
-            Text("Monitor reports leaks without blocking; block stops the request. Promote a rule once you trust its precision.")
-                .font(.caption).foregroundStyle(.secondary)
-            if !state.monitorVendorKeyIDs.isEmpty {
-                Button("Block vendor keys") { state.promoteVendorKeys() }
-            }
-            if state.firewallRules.isEmpty {
-                Text("No egress inspected yet — traffic is scanned as your agents run.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            ForEach(state.firewallRules) { rule in
-                HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(rule.id).font(.system(.body, design: .monospaced))
-                        Text("\(rule.stat.wouldBlock) would-block · \(rule.stat.blocked) blocked · \(rule.stat.legit) legit")
-                            .font(.caption).foregroundStyle(.secondary)
+    private var firewallPane: some View {
+        let rules = state.firewallRules
+        return Form {
+            if rules.isEmpty {
+                Section {
+                    SettingsEmptyRow(symbol: "network.slash", title: "No firewall rules reported",
+                                     detail: "Rules appear here once the daemon is running with the firewall on.")
+                }
+            } else {
+                Section {
+                    firewallStatus(rules)
+                } footer: {
+                    Text("On stops the request. Off reports the match and lets the request go out. Turn a rule on once its matches are real leaks.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                ForEach(FirewallRuleCatalog.groups(rules)) { group in
+                    Section {
+                        ForEach(group.rules) { rule in
+                            firewallRow(rule)
+                        }
+                    } header: {
+                        firewallGroupHeader(group)
                     }
-                    Spacer()
-                    Picker("", selection: Binding(
-                        get: { rule.stat.mode ?? "monitor" },
-                        set: { state.setFirewallMode(rule: rule.id, mode: $0) }
-                    )) {
-                        Text("Monitor").tag("monitor")
-                        Text("Block").tag("block")
-                    }
-                    .pickerStyle(.segmented)
-                    .frame(width: 160)
-                    .labelsHidden()
-                    .accessibilityLabel("\(rule.id) firewall mode")
                 }
             }
         }
+        .formStyle(.grouped)
+    }
+
+    private func firewallStatus(_ rules: [AppState.FirewallRuleRow]) -> some View {
+        let total = rules.count
+        let blocking = rules.filter { $0.stat.mode == "block" }.count
+        let blocked = state.firewallBlocked
+        let wouldBlock = state.firewallWouldBlock
+        var counts: [String] = []
+        if blocked > 0 { counts.append("\(blocked) request\(blocked == 1 ? "" : "s") blocked") }
+        if wouldBlock > 0 { counts.append("\(wouldBlock) would have been blocked") }
+        let tally = counts.isEmpty ? "No secrets matched in agent traffic yet." : counts.joined(separator: " · ")
+        return SettingsStatusCard(
+            symbol: blocking == 0 ? "eye" : (blocking == total ? "checkmark.shield.fill" : "shield.lefthalf.filled"),
+            tint: blocking == 0 ? .warn : (blocking == total ? .ok : .brand),
+            headline: blocking == 0 ? "Monitoring only"
+                : blocking == total ? "All \(total) rules block"
+                : "\(blocking) of \(total) rules block",
+            detail: blocking == 0 ? "Matches are reported and the request still goes out. \(tally)" : tally
+        )
+    }
+
+    private func firewallGroupHeader(_ group: FirewallRuleCatalog.Group) -> some View {
+        HStack {
+            Text(group.title)
+            Spacer()
+            if let action = FirewallRuleCatalog.bulkAction(for: group) {
+                Button(action.title) {
+                    Task { await state.setFirewallMode(rules: action.rules, mode: action.mode) }
+                }
+                .buttonStyle(.link)
+                .font(.callout)
+                .accessibilityLabel("\(action.title) \(group.title)")
+            }
+        }
+    }
+
+    private func firewallRow(_ rule: AppState.FirewallRuleRow) -> some View {
+        let title = FirewallRuleCatalog.title(for: rule.id)
+        let named = title != rule.id
+        let blocking = rule.stat.mode == "block"
+        return Toggle(isOn: Binding(
+            get: { blocking },
+            set: { on in state.setFirewallMode(rule: rule.id, mode: on ? "block" : "monitor") }
+        )) {
+            HStack(spacing: 10) {
+                SettingsRowIcon(symbol: blocking ? "shield.fill" : "eye", tint: blocking ? .ok : .secondary)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title).font(named ? .body : .body.monospaced())
+                    HStack(spacing: 6) {
+                        if named {
+                            Text(rule.id).font(.caption.monospaced()).foregroundStyle(.secondary)
+                        }
+                        if rule.stat.blocked > 0 {
+                            CountBadge(text: "\(rule.stat.blocked) blocked", tint: .bad)
+                        }
+                        if rule.stat.wouldBlock > 0 {
+                            CountBadge(text: "\(rule.stat.wouldBlock) would block", tint: .warn)
+                        }
+                        if rule.stat.legit > 0 {
+                            CountBadge(text: "\(rule.stat.legit) legit", tint: .secondary)
+                        }
+                    }
+                }
+            }
+        }
+        .toggleStyle(.switch)
     }
 
     // MARK: Advisor

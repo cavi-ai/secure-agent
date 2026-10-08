@@ -3,6 +3,7 @@ package store
 import (
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestExpectedEgressMatchingAndPersistence(t *testing.T) {
@@ -111,5 +112,46 @@ func TestExpectedEgressActiveRuleSurvivesRevokedHistoryLimit(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("active older rule hidden behind revoked history")
+	}
+}
+
+func TestExpectedEgressMatcherReadsRulesOnce(t *testing.T) {
+	s, err := Open("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	scope := EgressScope{Agent: "claude", ExePath: "/usr/bin/claude", Harness: "claude", Workspace: "/work/a"}
+	if err := s.RecordEgressObservation(EgressObservation{Scope: scope, Host: "API.Example.COM.", Protocol: "TCP", Port: 443, At: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	eps := s.ListEgressEpisodes(10)
+	if len(eps) != 1 {
+		t.Fatalf("episodes=%+v", eps)
+	}
+	ep := eps[0]
+	broad, err := s.CreateExpectedEgressRule(ExpectedEgressRule{Agent: "claude", Kind: "scope", ExePath: scope.ExePath, Harness: scope.Harness, Workspace: scope.Workspace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := s.ExpectedEgressMatcher()
+	exact, err := s.CreateExpectedEgressRule(ExpectedEgressRule{Agent: "claude", Kind: "destination", Host: "api.example.com", Protocol: "tcp", Port: 443})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := before(ep); got != broad.ID {
+		t.Fatalf("matcher read before the destination rule = %q, want the scope rule %q", got, broad.ID)
+	}
+	match := s.ExpectedEgressMatcher()
+	if got := match(ep); got != exact.ID {
+		t.Fatalf("matcher = %q, want the destination rule %q over the scope rule", got, exact.ID)
+	}
+	if got := s.ExpectedEgressMatchingRuleID(EgressObservation{Scope: scope, Host: ep.Host, Protocol: ep.Protocol, Port: ep.Port}); got != exact.ID {
+		t.Fatalf("ExpectedEgressMatchingRuleID = %q, want %q", got, exact.ID)
+	}
+	other := ep
+	other.Scope.Agent = "codex"
+	if got := match(other); got != "" {
+		t.Fatalf("another agent's episode matched %q", got)
 	}
 }

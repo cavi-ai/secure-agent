@@ -165,6 +165,7 @@ def main():
         dom_session = dump_dom(chrome, tmp, "?sessiondemo")
         dom_guard = dump_dom(chrome, tmp, "?guarddemo")
         dom_resolve = dump_dom(chrome, tmp, "?resolvedemo")
+        dom_expect = dump_dom(chrome, tmp, "?expectdemo")
         dom_uninsp = dump_dom(chrome, tmp, "?uninspecteddemo")
         dom_keepopen = dump_dom(chrome, tmp, "?keepopendemo")
         dom_endpoint = dump_dom(chrome, tmp, "?endpointdemo")
@@ -1209,6 +1210,12 @@ def main():
         resolve_probe = (re.search(r'<pre id="resolve-probe"[^>]*>(.*?)</pre>', dom_resolve, re.S) or [None, ""])[1]
         check("resolved incident leaves the attention count before reconciliation",
               resolve_probe == f"badge={needs_you - 1} tab={needs_you - 1} queued=false", f"probe={resolve_probe!r}")
+        expect_before = (re.search(r'<pre id="expect-before"[^>]*>(.*?)</pre>', dom_expect, re.S) or [None, ""])[1]
+        expect_probe = (re.search(r'<pre id="expect-probe"[^>]*>(.*?)</pre>', dom_expect, re.S) or [None, ""])[1]
+        check("an expected connection leaves Egress and the banner before the daemon answers",
+              expect_before == f"listed=true needs={needs_you + 1}"
+              and expect_probe == f"choices=false listed=false needs={needs_you}",
+              f"before={expect_before!r} probe={expect_probe!r}")
         check("posture flag item opens Home with Findings history",
               'data-action="goto-tab" data-tab="home" data-group="findings"' in dom_tab)
         check("tab switch reveals the target panel",

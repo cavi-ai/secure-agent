@@ -46,6 +46,51 @@ func TestDismissPushesAllClearPosture(t *testing.T) {
 	}
 }
 
+func TestDecisionPushesPostureAtUnchangedCount(t *testing.T) {
+	st := testStore(t)
+	st.PutFlag(model.Flag{ID: "a", Rule: "transcript-secret-leak", Severity: 2, TS: time.Now()})
+	a := newTestAPI("", st, &fakeKiller{}, func() Status { return Status{Running: true} })
+	a.deltaHub = NewDeltaHub()
+	ch := a.deltaHub.Subscribe()
+	defer a.deltaHub.Unsubscribe(ch)
+	a.PublishPostureIfChanged()
+	<-ch
+	// A second finding lands without a publish; dismissing the first leaves
+	// one item, the count last published.
+	st.PutFlag(model.Flag{ID: "b", Rule: "transcript-secret-leak", Severity: 2, TS: time.Now()})
+	w := httptest.NewRecorder()
+	a.buildMux().ServeHTTP(w, httptest.NewRequest("POST", "/flags/acknowledge", strings.NewReader(`{"flag_id":"a"}`)))
+	if w.Code != 200 {
+		t.Fatalf("dismiss: %d", w.Code)
+	}
+	select {
+	case d := <-ch:
+		p, ok := d.Data.(Posture)
+		if d.Type != "posture" || !ok || p.NeedsYou != 1 || p.Items[0].ID != "b" {
+			t.Fatalf("delta=%+v", d)
+		}
+	default:
+		t.Fatal("a decision at the last published count pushed no posture")
+	}
+}
+
+func TestOlderPostureNeverFollowsNewer(t *testing.T) {
+	a := newTestAPI("", testStore(t), &fakeKiller{}, func() Status { return Status{Running: true} })
+	a.deltaHub = NewDeltaHub()
+	ch := a.deltaHub.Subscribe()
+	defer a.deltaHub.Unsubscribe(ch)
+	a.publishPosture(2, Posture{State: "attention", NeedsYou: 1}, true)
+	a.publishPosture(1, Posture{State: "attention", NeedsYou: 2}, true)
+	if d := <-ch; d.Data.(Posture).NeedsYou != 1 {
+		t.Fatalf("first delta=%+v", d)
+	}
+	select {
+	case d := <-ch:
+		t.Fatalf("an older computation was published after a newer one: %+v", d)
+	default:
+	}
+}
+
 func TestPostureAllClearWhenNothingPending(t *testing.T) {
 	sock := fmt.Sprintf("/tmp/sa_posture_%d.sock", time.Now().UnixNano())
 	defer os.Remove(sock)

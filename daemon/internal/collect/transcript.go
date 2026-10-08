@@ -486,7 +486,7 @@ func (ts *TranscriptScanner) Run(ctx context.Context) error {
 		}
 		dirs.sweep()
 		active = activePaths(shaped, now, window)
-		// Prune offsets only for files that no longer EXIST (deleted or
+		// Retire checkpoints and parsers only for files that no longer EXIST (deleted or
 		// rotated out). Pruning inactive-but-present files forced a byte-0
 		// re-read the moment they were appended to again — the duplicate
 		// replay bug.
@@ -494,8 +494,15 @@ func (ts *TranscriptScanner) Run(ctx context.Context) error {
 			if _, ok := live[p]; ok || ts.pending[p] != nil {
 				continue
 			}
-			if _, err := os.Stat(p); err != nil {
+			if _, err := os.Stat(p); os.IsNotExist(err) {
 				delete(offsets, p)
+				delete(ts.tracers, p)
+				delete(ts.codexTracers, p)
+				delete(ts.cursorTracers, p)
+				delete(ts.agyTracers, p)
+				ts.rolloutMu.Lock()
+				delete(ts.rolloutIDs, p)
+				ts.rolloutMu.Unlock()
 				dirty = true
 			}
 		}
@@ -566,7 +573,10 @@ func (ts *TranscriptScanner) loadOffsets() map[string]int64 {
 		return offsets
 	}
 	for p, off := range saved {
-		if fi, err := os.Stat(p); err == nil && !fi.IsDir() && fi.Size() >= off {
+		fi, err := os.Stat(p)
+		// An inaccessible source may return later. Keep its checkpoint so
+		// restored access resumes unread bytes instead of seeding past them.
+		if (err == nil && !fi.IsDir() && fi.Size() >= off) || (err != nil && !os.IsNotExist(err)) {
 			offsets[p] = off
 		}
 	}

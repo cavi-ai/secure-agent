@@ -31,6 +31,11 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Console: one Allow per destination organization replaces one per address.
 - Console: findings show their file and destinations as chips.
 - Console: the page fills wide windows; decision groups sit two-up.
+- Settings: one sidebar page per area, without segmented sub-tabs.
+- Settings → Egress Firewall: rules grouped by secret type, one switch each.
+- Settings → Egress Firewall: **Block all** and **Monitor all** per secret type.
+- Settings → File Guard and Notifications: mode menus instead of segmented controls.
+- Settings → Exceptions: muted flags grouped by rule, beside allowed files.
 - Settings: Protection split into Files and Network.
 - Settings: Chat, Analysis and Traffic grouped under Secure Agent.
 - Settings → Providers: toggles apply without a restart.
@@ -49,9 +54,14 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Install: one copy, `/Applications/Secure Agent.app`.
 - App: bundle identifier `com.cavi-ai.secure-agent`.
 - Dependencies: `modernc.org/sqlite` 1.60.1.
+- Posture: recurring-connection decisions read only recurring episodes and the expected-egress rules once.
+- Console: a snapshot computes its patterns once.
 
 ### Fixed
 - Doctor and posture: spool loss and bus drops fail only while they grow.
+- Posture: every decision pushes the new headline.
+- Posture: an older headline never replaces a newer one.
+- Console: an expected connection leaves Egress and the banner before the daemon answers.
 - Costs: one model call per Claude API call.
 - Costs: duplicate stored Claude model calls removed at open.
 - Pricing: stored calls priced when a price is added.
@@ -96,6 +106,9 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Worktrees: an action cancels the background rescan.
 - Daemon: one daemon per store.
 - Build: `make` stops when a binary's commit stamp is not HEAD.
+- Settings → Providers: OpenClaw and Hermes listed.
+- Settings → Providers: every harness tile shows a mark or monogram.
+- Settings → Providers: cursor shows the daemon's match strings.
 
 ### Security
 - Guard hooks: `guard-rules.json` bundled and installed beside `secret_guard.py`.
