@@ -16,6 +16,19 @@ import (
 // with a counter — delivery is best-effort by design; blocking the daemon is
 // not an option.
 const maxInFlightDeliveries = 64
+const maxTraceDeliveries = 48
+
+// A slow sink cannot occupy all delivery slots. Within each sink, telemetry
+// also leaves slots reserved for security decisions and liveness.
+type sinkDeliveryState struct {
+	seq         atomic.Uint64
+	sem, traces chan struct{}
+	boot        string
+}
+
+func newSinkDeliveryState() *sinkDeliveryState {
+	return &sinkDeliveryState{sem: make(chan struct{}, 32), traces: make(chan struct{}, 24)}
+}
 
 // Publisher fans an event payload out to every subscribed sink. Delivery is
 // asynchronous and best-effort: a dead collector never blocks the daemon.
@@ -29,12 +42,14 @@ type Publisher struct {
 	sinks   []*Sink
 	wg      sync.WaitGroup
 	sem     chan struct{}
+	traces  chan struct{}
+	started bool
 	dropped atomic.Uint64
 	boot    string
 }
 
 func NewPublisher() *Publisher {
-	return &Publisher{sem: make(chan struct{}, maxInFlightDeliveries), boot: newBootID()}
+	return &Publisher{sem: make(chan struct{}, maxInFlightDeliveries), traces: make(chan struct{}, maxTraceDeliveries), boot: newBootID()}
 }
 
 // newBootID identifies one daemon run to the collector's gap detection.
@@ -59,6 +74,7 @@ func (p *Publisher) AddSink(s *Sink) {
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.bindSink(s, p.sinks)
 	p.sinks = append(p.sinks, s)
 }
 
@@ -69,7 +85,30 @@ func (p *Publisher) AddSink(s *Sink) {
 func (p *Publisher) ReplaceSinks(sinks []*Sink) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.sinks = sinks
+	old := p.sinks
+	p.sinks = nil
+	for _, s := range sinks {
+		if s == nil {
+			continue
+		}
+		p.bindSink(s, append(old, p.sinks...))
+		p.sinks = append(p.sinks, s)
+	}
+}
+
+func (p *Publisher) bindSink(s *Sink, existing []*Sink) {
+	for _, prior := range existing {
+		if prior.url == s.url && prior.nodeID == s.nodeID {
+			s.state = prior.state
+			return
+		}
+	}
+	s.state.boot = p.boot
+	// Re-enrollment is a new stream. Never reset a sequence within the old
+	// epoch; the collector must be able to distinguish its late deliveries.
+	if p.started {
+		s.state.boot = newBootID()
+	}
 }
 
 // HasSinks reports whether any sink is registered — callers use it to skip
@@ -89,6 +128,7 @@ func (p *Publisher) HasSinks() bool {
 // receives must not advance its counter and fabricate a gap.
 func (p *Publisher) Publish(kind EventKind, payload any) {
 	p.mu.Lock()
+	p.started = true
 	sinks := append([]*Sink(nil), p.sinks...)
 	p.mu.Unlock()
 	for _, s := range sinks {
@@ -96,9 +136,8 @@ func (p *Publisher) Publish(kind EventKind, payload any) {
 			continue
 		}
 		seq := s.NextSeq()
-		select {
-		case p.sem <- struct{}{}:
-		default:
+		release, ok := p.admit(s, kind)
+		if !ok {
 			if n := p.dropped.Add(1); n == 1 || n%100 == 0 {
 				log.Printf("fleet: delivery backlog full (%d in flight); dropped %d deliveries so far", maxInFlightDeliveries, n)
 			}
@@ -107,10 +146,32 @@ func (p *Publisher) Publish(kind EventKind, payload any) {
 		p.wg.Add(1)
 		go func(s *Sink, seq uint64) {
 			defer p.wg.Done()
-			defer func() { <-p.sem }()
-			s.Deliver(kind, payload, seq, p.boot)
+			defer release()
+			s.Deliver(kind, payload, seq, s.state.boot)
 		}(s, seq)
 	}
+}
+
+func (p *Publisher) admit(s *Sink, kind EventKind) (func(), bool) {
+	channels := []chan struct{}{s.state.sem, p.sem}
+	if kind == EventTrace || kind == EventSession {
+		channels = append([]chan struct{}{s.state.traces, p.traces}, channels...)
+	}
+	for i, ch := range channels {
+		select {
+		case ch <- struct{}{}:
+		default:
+			for _, acquired := range channels[:i] {
+				<-acquired
+			}
+			return nil, false
+		}
+	}
+	return func() {
+		for _, ch := range channels {
+			<-ch
+		}
+	}, true
 }
 
 // Wait blocks until all in-flight deliveries settle (used at shutdown).

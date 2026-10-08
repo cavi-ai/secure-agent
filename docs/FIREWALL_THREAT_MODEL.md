@@ -62,6 +62,12 @@ dense with ids and encoded blobs.
 - **Non-proxied egress.** An agent that ignores the proxy environment connects
   directly. Such connections are counted in the `uninspected_egress` status
   metric so the blind spot is visible, not silent.
+- **Request bodies beyond the inspection limit.** The proxy scans the first
+  1 MiB and streams the remaining bytes unchanged. An oversized body raises
+  a `proxy-inspection-incomplete:body-limit` coverage warning; a body read
+  failure raises `proxy-inspection-incomplete:body-read`. These warnings do
+  not assert a secret leak or block a request by themselves. Secrets appearing
+  only in the uninspected suffix may pass under the fail-open policy.
 - **Filesystem / directory access.** Guarding what an agent reads or writes on
   disk is handled separately by the harness hooks, not by this firewall.
 - **Secrets the user never registered and that match no pattern.** Fingerprints

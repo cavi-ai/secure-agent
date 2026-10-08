@@ -92,10 +92,16 @@ func (a *API) attentionFlags() []model.Flag {
 // while agents are active, silent collectors and missing hooks.
 func (a *API) machineAttentionItems(st Status) []PostureItem {
 	var items []PostureItem
+	if st.OTLPDropped > 0 {
+		items = append(items, PostureItem{Kind: "export_loss", ID: "otlp", Severity: 2, Title: "Trace export lost spans", Detail: fmt.Sprintf("%d spans could not be exported since daemon start. Local evidence is retained separately.", st.OTLPDropped)})
+	}
 	if st.BusDropping {
 		items = append(items, PostureItem{Kind: "event_loss", ID: "event-bus", Severity: 2,
 			Title:  "Telemetry was dropped",
 			Detail: fmt.Sprintf("%d subscriber deliveries dropped since daemon start. Monitoring history may be incomplete.", st.BusDrops)})
+	}
+	if h := st.StorageHealth; h != nil && len(h.ReadActive) > 0 {
+		items = append(items, PostureItem{Kind: "storage_read_failure", ID: "storage-reads", Severity: 2, Title: "Evidence could not be read", Detail: "Last known activity may be stale. Reads failing: " + strings.Join(h.ReadActive, ", ") + "."})
 	}
 	if h := st.StorageHealth; h != nil && h.Failures > 0 {
 		detail := fmt.Sprintf("%d evidence persistence attempts failed since daemon start. Monitoring history may be incomplete.", h.Failures)

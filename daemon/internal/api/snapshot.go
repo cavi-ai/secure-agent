@@ -43,10 +43,19 @@ func (a *API) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	writeJSON(w, a.currentSnapshot())
+	sessions, err := a.store.ListSessionsResult(store.SessionFilter{Limit: 100})
+	if err != nil {
+		http.Error(w, "session data unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	writeJSON(w, a.snapshotWithSessions(sessions))
 }
 
 func (a *API) currentSnapshot() Snapshot {
+	return a.snapshotWithSessions(a.store.ListSessions(store.SessionFilter{Limit: 100}))
+}
+
+func (a *API) snapshotWithSessions(sessions []model.Session) Snapshot {
 	incidents := a.store.RecentIncidents(10)
 	out := make([]snapshotIncident, 0, len(incidents))
 	for i := range incidents {
@@ -75,7 +84,7 @@ func (a *API) currentSnapshot() Snapshot {
 		Posture:     a.postureWith(patterns, routine),
 		Suggestions: a.suggestionList(),
 		Mutes:       a.mutePairs(),
-		Sessions:    a.store.ListSessions(store.SessionFilter{Limit: 100}),
+		Sessions:    sessions,
 	}
 }
 

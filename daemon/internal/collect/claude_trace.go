@@ -153,6 +153,7 @@ func (t *ClaudeTracer) ParseLine(line string) (events []event.Event, cwd string,
 	}
 
 	contents := claudeContents(rec.Message.Content)
+	events = append(events, t.pending.expire(ts)...)
 
 	switch rec.Type {
 	case "assistant":
@@ -161,7 +162,7 @@ func (t *ClaudeTracer) ParseLine(line string) (events []event.Event, cwd string,
 		}
 		for _, c := range contents {
 			if c.Type == "tool_use" && c.ID != "" && c.Name != "" {
-				t.pending.put(c.ID, pendingTool{name: c.Name, ts: ts})
+				events = append(events, t.pending.add(c.ID, rec.SessionID, pendingTool{name: c.Name, ts: ts})...)
 				// One row per call, keyed by the harness's tool_use id: the
 				// completion below updates THIS row (store upserts on
 				// session_id+call_id), so a call is never a stale "running"

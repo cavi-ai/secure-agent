@@ -196,6 +196,8 @@ func (t *CodexTracer) ParseLine(line string) (events []event.Event, ok bool) {
 		}
 	}
 
+	retired := t.pending.expire(ts)
+	defer func() { events = append(retired, events...) }()
 	switch rec.Type {
 	case "session_meta":
 		var meta codexMeta
@@ -257,11 +259,11 @@ func (t *CodexTracer) ParseLine(line string) (events []event.Event, ok bool) {
 			if item.CallID == "" || item.Name == "" {
 				return nil, true
 			}
-			t.pending.put(item.CallID, pendingTool{name: item.Name, ts: ts})
-			return []event.Event{{
+			retired := t.pending.add(item.CallID, t.sessionID, pendingTool{name: item.Name, ts: ts})
+			return append(retired, event.Event{
 				Kind: event.KindToolCall, TS: ts, SessionID: t.sessionID,
 				CallID: item.CallID, ToolName: item.Name, ToolStatus: "running",
-			}}, true
+			}), true
 		case "function_call_output":
 			if e, found := t.pending.completion(item.CallID, t.sessionID, "ok", ts); found {
 				return []event.Event{e}, true

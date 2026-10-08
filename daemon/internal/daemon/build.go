@@ -68,6 +68,7 @@ type Components struct {
 	apiErrors   chan error
 	fleetPub    *fleet.Publisher
 	otlp        *otlp.Exporter
+	advisor     *advisorStackHolder
 
 	deltaHub         *api.DeltaHub
 	resourceEpisodes *resourceEpisodeWriter
@@ -161,6 +162,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 	// Local triage advisor (opt-in): flags/incidents are offered to it from
 	// the drain loop; it never touches the enforcement path.
 	advisorStk := &advisorStackHolder{}
+	c.advisor = advisorStk
 	advisorStk.Store(setupAdvisor(cfg, st, deltaHub, postureHook.run))
 
 	// Operator price table from config.yaml, applied before any collector
@@ -296,6 +298,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 			return isAgent
 		},
 		FleetSink:       fleetPub,
+		OTLPDropped:     otlpExp.Dropped,
 		FleetConfigured: fleetOn.Load,
 		PublishEvent:    b.Publish,
 		DeltaHub:        deltaHub,
@@ -397,6 +400,9 @@ func (c *Components) Shutdown() {
 		log.Println("secure-agentd shutting down...")
 		if c.cancel != nil {
 			c.cancel() // stop collectors, API, and the tagger loop
+		}
+		if c.advisor != nil {
+			c.advisor.Close()
 		}
 		if c.apiListener != nil {
 			c.apiListener.Close()
@@ -960,27 +966,7 @@ func startCollectors(ctx context.Context, sup *supervise.Supervisor, supReg *sup
 		return hermes.Run(c)
 	})
 
-	if advisorStk.Load().Sub != nil {
-		go sup.Run(ctx, "advisor", func(c context.Context) error {
-			return advisorStk.Load().Sub.Run(c)
-		})
-	}
-	if advisorStk.Load().Managed != nil {
-		// The managed model server as a supervised collector: restart on
-		// crash like any other, and kill it on shutdown so it never outlives
-		// the daemon (advisor verdicts die with the app, by design).
-		go sup.Run(ctx, "advisor-model", func(c context.Context) error {
-			done := make(chan error, 1)
-			go func() { done <- advisorStk.Load().Managed.Wait() }()
-			select {
-			case <-c.Done():
-				_ = advisorStk.Load().Managed.Process.Kill()
-				return nil
-			case err := <-done:
-				return err
-			}
-		})
-	}
+	go advisorStk.Run(ctx, sup)
 }
 
 // newHermesCollector builds the Hermes Agent poller: state.db and every

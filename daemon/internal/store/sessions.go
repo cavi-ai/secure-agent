@@ -414,7 +414,7 @@ const defaultEndedTail = 25
 const sessionSelect = `SELECT id, harness, workspace, repo, branch, root_pid, root_started_at, parent_id, started_at, ended_at, last_seen_at, status, confidence, COALESCE(origin, '') FROM sessions`
 
 // scanSessions reads sessionSelect rows and closes them.
-func scanSessions(rows *sql.Rows) []model.Session {
+func scanSessionsResult(rows *sql.Rows) ([]model.Session, error) {
 	defer rows.Close()
 	out := []model.Session{}
 	for rows.Next() {
@@ -424,7 +424,7 @@ func scanSessions(rows *sql.Rows) []model.Session {
 		if err := rows.Scan(&sess.ID, &sess.Harness, &sess.Workspace, &sess.Repo, &sess.Branch,
 			&sess.RootPID, &sess.RootStartedAt, &sess.ParentID, &startedAt, &endedAt, &lastSeen,
 			&sess.Status, &sess.Confidence, &sess.Origin); err != nil {
-			continue
+			return nil, err
 		}
 		sess.StartedAt, _ = time.Parse(time.RFC3339Nano, startedAt)
 		sess.LastSeenAt, _ = time.Parse(time.RFC3339Nano, lastSeen)
@@ -435,6 +435,17 @@ func scanSessions(rows *sql.Rows) []model.Session {
 		}
 		out = append(out, sess)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func scanSessions(rows *sql.Rows) []model.Session {
+	out, _ := scanSessionsResult(rows)
 	return out
 }
 
@@ -443,6 +454,14 @@ func scanSessions(rows *sql.Rows) []model.Session {
 // whole result capped at Limit. ?status=ended still fetches the ended
 // population alone (the console's collapsible section paginates there).
 func (s *Store) ListSessions(f SessionFilter) []model.Session {
+	out, _ := s.ListSessionsResult(f)
+	return out
+}
+
+// ListSessionsResult distinguishes an empty population from an unavailable
+// query. HTTP consumers must not replace last-known data on a read failure.
+func (s *Store) ListSessionsResult(f SessionFilter) (out []model.Session, readErr error) {
+	defer func() { s.noteRead("sessions", readErr) }()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	limit := f.Limit
@@ -459,23 +478,30 @@ func (s *Store) ListSessions(f SessionFilter) []model.Session {
 		// Default view: live first, then the recent ended tail.
 		rows, err := query(`status IN (?, ?)`, []any{model.SessionActive, model.SessionIdle}, limit)
 		if err != nil {
-			return nil
+			return nil, err
 		}
-		out := scanSessions(rows)
+		out, err := scanSessionsResult(rows)
+		if err != nil {
+			return nil, err
+		}
 		if len(out) >= limit {
-			return out
+			return out, nil
 		}
 		endedRows, err := query(`status = ?`, []any{model.SessionEnded}, min(defaultEndedTail, limit-len(out)))
 		if err != nil {
-			return out
+			return nil, err
 		}
-		return append(out, scanSessions(endedRows)...)
+		ended, err := scanSessionsResult(endedRows)
+		if err != nil {
+			return nil, err
+		}
+		return append(out, ended...), nil
 	default:
 		rows, err := query(`status = ?`, []any{f.Status}, limit)
 		if err != nil {
-			return nil
+			return nil, err
 		}
-		return scanSessions(rows)
+		return scanSessionsResult(rows)
 	}
 }
 

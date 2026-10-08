@@ -408,6 +408,8 @@ func explainWhat(f model.Flag, ex *model.FlagExplain, sess *model.Session) strin
 		return agent + " sent " + secretPhrase(violationType(f.Evidence, "proxy-secret-leak")) + " to " + dest + "."
 	case "proxy-prompt-injection":
 		return "A response to " + agent + " from " + dest + " contained a prompt injection."
+	case "proxy-inspection-incomplete":
+		return "The proxy could not inspect the full request to " + dest + ". Its bounded scan or a body read failure left a coverage gap; the fail-open policy still applies."
 	case "secret-in-transcript":
 		harness := f.Agent
 		if sess != nil && sess.Harness != "" {

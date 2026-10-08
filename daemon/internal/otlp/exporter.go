@@ -213,7 +213,7 @@ func (e *Exporter) Flush() {
 	select {
 	case e.sem <- struct{}{}:
 	default:
-		e.dropped.Add(1)
+		e.dropped.Add(uint64(len(batch)))
 		return
 	}
 	e.wg.Add(1)
@@ -221,6 +221,7 @@ func (e *Exporter) Flush() {
 		defer e.wg.Done()
 		defer func() { <-e.sem }()
 		if err := e.post(batch); err != nil {
+			e.dropped.Add(uint64(len(batch)))
 			log.Printf("otlp: export failed (%d spans): %v", len(batch), err)
 		}
 	}()
@@ -235,7 +236,7 @@ func (e *Exporter) Wait() {
 	e.wg.Wait()
 }
 
-// Dropped counts spans dropped past the in-flight cap or batch size.
+// Dropped counts spans lost to capacity limits or failed exports.
 func (e *Exporter) Dropped() uint64 {
 	if e == nil {
 		return 0

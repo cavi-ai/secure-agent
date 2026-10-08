@@ -10,15 +10,35 @@ import (
 // on the next successful write of the same kind;
 // Failures never decreases because recovery cannot restore missing evidence.
 // Operation names are fixed labels, never paths, SQL, or error/payload text.
+// ReadActive independently reports unavailable reads until that query succeeds.
 type WriteHealth struct {
-	Failures uint64   `json:"failures"`
-	Active   []string `json:"active"`
+	Failures     uint64   `json:"failures"`
+	Active       []string `json:"active"`
+	ReadFailures uint64   `json:"read_failures,omitempty"`
+	ReadActive   []string `json:"read_active,omitempty"`
 }
 
 type writeHealth struct {
-	mu       sync.Mutex // independent of database IO and Store.mu
-	failures uint64
-	active   map[string]bool
+	mu           sync.Mutex // independent of database IO and Store.mu
+	failures     uint64
+	active       map[string]bool
+	readFailures uint64
+	readActive   map[string]bool
+}
+
+func (s *Store) noteRead(operation string, err error) {
+	h := &s.writeHealth
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if err == nil {
+		delete(h.readActive, operation)
+		return
+	}
+	h.readFailures++
+	if h.readActive == nil {
+		h.readActive = make(map[string]bool)
+	}
+	h.readActive[operation] = true
 }
 
 func (s *Store) noteWrite(operation string, err error) {
@@ -57,5 +77,10 @@ func (s *Store) WriteHealth() WriteHealth {
 		snapshot.Active = append(snapshot.Active, operation)
 	}
 	sort.Strings(snapshot.Active)
+	snapshot.ReadFailures = h.readFailures
+	for operation := range h.readActive {
+		snapshot.ReadActive = append(snapshot.ReadActive, operation)
+	}
+	sort.Strings(snapshot.ReadActive)
 	return snapshot
 }
