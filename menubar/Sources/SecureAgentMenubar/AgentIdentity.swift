@@ -27,6 +27,8 @@ enum AgentIdentity {
         "gemini": (0x4E8DF5, "✦"),
         "codeium": (0x0E8CD6, "◈"),
         "copilot": (0x24292F, "◍"), // GitHub dark
+        "openclaw": (0xE5484D, "🦞"),
+        "hermes": (0xB8860B, "☤"),
         "ollama": (0x0F0F0F, "🦙"),
         "lm-studio": (0x1E3A5F, "◧"),
     ]
@@ -50,30 +52,45 @@ enum AgentIdentity {
             known: false)
     }
 
+    /// What a tile draws: a brand mark, or the monogram for every other
+    /// harness.
+    enum Glyph: Equatable {
+        case claude, cursor, codex, opencode, antigravity, ollama, lmStudio, monogram
+    }
+
+    static func glyph(for name: String) -> Glyph {
+        let key = name.lowercased()
+        if key.contains("claude") { return .claude }
+        if key.contains("cursor") { return .cursor }
+        if key.contains("codex") { return .codex }
+        if key.contains("opencode") { return .opencode }
+        if key.contains("antigravity") { return .antigravity }
+        if key.contains("ollama") { return .ollama }
+        if key.contains("lm-studio") || key.contains("lmstudio") { return .lmStudio }
+        return .monogram
+    }
+
     /// The tile: tinted background + brand glyph on top (white strokes read
     /// on any brand color, matching how the vendor renders their mark on
     /// tinted chrome).
     static func tile(_ name: String, size: CGFloat = 22, fontSize: CGFloat? = nil) -> some View {
         let key = name.lowercased()
         let id = forAgent(name)
+        let monogram = Text(id.monogram)
+            .font(.system(size: (fontSize ?? size * 0.52), weight: .bold, design: .rounded))
         return ZStack {
-            if key.contains("claude") {
-                ClaudeMarkGlyph(inset: size * 0.22, color: id.color)
-            } else if key.contains("cursor") {
-                CursorMark(inset: size * 0.2, color: id.color)
-            } else if key.contains("codex") {
-                CodexMark(inset: size * 0.2, color: id.color)
-            } else if key.contains("opencode") {
-                OpenCodeGlyph(inset: size * 0.22, color: id.color)
-            } else if key.contains("antigravity") {
-                TriangleMark(inset: size * 0.22, color: id.color)
-            } else if key.contains("ollama") {
-                OllamaMark(inset: size * 0.2, color: id.color)
-            } else if key.contains("lm-studio") || key.contains("lmstudio") {
+            switch glyph(for: name) {
+            case .claude: ClaudeMarkGlyph(inset: size * 0.22, color: id.color)
+            case .cursor: CursorMark(inset: size * 0.2, color: id.color)
+            case .codex: CodexMark(inset: size * 0.2, color: id.color)
+            case .opencode: OpenCodeGlyph(inset: size * 0.22, color: id.color)
+            case .antigravity: TriangleMark(inset: size * 0.22, color: id.color)
+            case .ollama: OllamaMark(inset: size * 0.2, color: id.color)
+            case .lmStudio:
                 LmStudioMark(inset: size * 0.2, color: id.color)
-                Text(id.monogram)
-                    .font(.system(size: (fontSize ?? size * 0.52), weight: .bold, design: .rounded))
-                    .foregroundStyle(.white)
+                monogram.foregroundStyle(.white)
+            case .monogram:
+                monogram.foregroundStyle(.primary)
             }
         }
         .frame(width: size, height: size)

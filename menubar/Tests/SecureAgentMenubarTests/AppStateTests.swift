@@ -79,7 +79,12 @@ final class StubDaemonClient: DaemonClientProtocol, @unchecked Sendable {
     func resolveGuard(_ req: GuardResolveRequest) async throws {}
     func killProcess(pid: Int32) async throws -> Bool { true }
     func deleteGuardRule(agent: String, ruleID: String) async throws {}
-    func setFirewallMode(rule: String, mode: String) async throws {}
+    var setFirewallModeCalls: [(rule: String, mode: String)] = []
+    var refusedFirewallRules: Set<String> = []
+    func setFirewallMode(rule: String, mode: String) async throws {
+        setFirewallModeCalls.append((rule, mode))
+        if refusedFirewallRules.contains(rule) { throw URLError(.badServerResponse) }
+    }
     func promoteFirewallType(_ secretType: String, mode: String) async throws {}
     func fetchAdvisorDiscover() async throws -> AdvisorDiscovery {
         AdvisorDiscovery(servers: [], managedModels: [])
@@ -844,6 +849,26 @@ final class SessionBoardRowTests: XCTestCase {
         state.seedForTesting(status: stub.status)
         XCTAssertEqual(state.monitorVendorKeyIDs, ["openai-key"])
         XCTAssertFalse(state.showFleetPanel)
+    }
+
+    /// Settings' Block all / Monitor all: every listed rule is sent, and a
+    /// refused rule is named instead of the switch silently staying put.
+    func testBulkFirewallModeSendsEveryRuleAndNamesRefusals() async {
+        let stub = StubDaemonClient()
+        stub.refusedFirewallRules = ["aws-key"]
+        let state = AppState(client: stub)
+        await state.setFirewallMode(rules: ["openai-key", "aws-key", "jwt"], mode: "block")
+        XCTAssertEqual(stub.setFirewallModeCalls.map(\.rule), ["openai-key", "aws-key", "jwt"])
+        XCTAssertTrue(stub.setFirewallModeCalls.allSatisfy { $0.mode == "block" })
+        XCTAssertEqual(state.lastError, "could not set aws-key to block")
+    }
+
+    func testBulkFirewallModeLeavesNoErrorWhenAllApply() async {
+        let stub = StubDaemonClient()
+        let state = AppState(client: stub)
+        await state.setFirewallMode(rules: ["openai-key"], mode: "monitor")
+        XCTAssertEqual(stub.setFirewallModeCalls.map(\.mode), ["monitor"])
+        XCTAssertNil(state.lastError)
     }
 
     func testShowFleetPanelWhenConfigured() {
