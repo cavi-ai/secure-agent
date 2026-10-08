@@ -12,20 +12,17 @@ final class SettingsLayoutTests: XCTestCase {
         let priorPolicy = NSApp.activationPolicy()
         XCTAssertTrue(NSApp.setActivationPolicy(.regular))
         defer { NSApp.setActivationPolicy(priorPolicy) }
-        if ProcessInfo.processInfo.environment["CI"] == "true" {
-            XCTAssertTrue(NSApp.isFullKeyboardAccessEnabled,
-                          "CI must enable AppKit keyboard navigation before launching the tests")
-        }
         NSApp.finishLaunching()
         let priorTab = SettingsNavigation.shared.tab
-        SettingsNavigation.shared.tab = .protection
+        SettingsNavigation.shared.tab = .fileGuard
         let state = AppState.preview()
         #if DEBUG
         state.seedForTesting(status: StatusResponse(
             running: true, uptime: "test fixture", activeAgents: 0,
             firewallStats: Dictionary(uniqueKeysWithValues: (0..<16).map {
                 (String(format: "fixture-rule-%02d", $0), RuleStatModel(
-                    wouldBlock: $0, blocked: 0, legit: 1, mode: "monitor"))
+                    wouldBlock: $0, blocked: 0, legit: 1, mode: $0 < 4 ? "block" : "monitor",
+                    type: $0 < 10 ? "vendor-key" : "cloud-key"))
             })))
         #endif
         let priorWindows = Set(NSApp.windows.map(ObjectIdentifier.init))
@@ -45,52 +42,65 @@ final class SettingsLayoutTests: XCTestCase {
         drainApplicationEvents()
         print("SETTINGS_NATIVE_FRAME outer=\(window.frame) content=\(hosting.frame) bounds=\(hosting.bounds)")
         XCTAssertEqual(hosting.bounds.size, NSSize(width: 760, height: 520))
-        try assertControl("Files", in: hosting)
-        try assertControl("Network", in: hosting)
-        let fileControls = segmentedControls(hosting, containing: "Deny")
-        XCTAssertEqual(fileControls.count, 6)
-        try assertVisible(try XCTUnwrap(fileControls.last), in: hosting)
-        assertHorizontalFit(hosting, window: window)
-        try snapshot(hosting, name: "minimum-files")
+        XCTAssertTrue(segmentedControls(hosting).isEmpty, "Pages are sidebar entries, not segmented sub-tabs")
 
-        let protectionControl = try XCTUnwrap(segmentedControls(hosting, containing: "Files").first)
-        try keyboardMove(protectionControl, keyCode: 124, character: "\u{F703}", window: window)
-        XCTAssertEqual(protectionControl.selectedSegment, 1)
-        await settle(hosting)
+        // File Guard: one mode menu per guarded path type.
+        let guardMenus = menus(hosting)
+        XCTAssertEqual(guardMenus.count, SettingsView.guardRules.count)
+        XCTAssertTrue(guardMenus.allSatisfy { ["Monitor", "Prompt", "Deny"].contains($0.accessibilityValue() as? String) })
         assertHorizontalFit(hosting, window: window)
-        try snapshot(hosting, name: "minimum-network-top")
+        try snapshot(hosting, name: "minimum-file-guard")
         scrollDetailToEnd(hosting)
         await settle(hosting)
-        let networkControls = segmentedControls(hosting, containing: "Block")
-        XCTAssertEqual(networkControls.count, state.firewallRules.count)
-        try assertVisible(try XCTUnwrap(networkControls.last), in: hosting)
-        try snapshot(hosting, name: "minimum-network-end")
+        assertOnScreen(try XCTUnwrap(menus(hosting).last), in: hosting, window: window)
 
-        SettingsNavigation.shared.tab = .secureAgent
+        // The sidebar is keyboard-navigable: Down Arrow moves to Egress Firewall.
+        let sidebar = try XCTUnwrap(sidebarTable(hosting))
+        XCTAssertTrue(window.makeFirstResponder(sidebar))
+        try sendKey("\u{F701}", keyCode: 125, window: window)
+        drainApplicationEvents()
         await settle(hosting)
-        try press("Analysis", in: hosting)
+        XCTAssertEqual(SettingsNavigation.shared.tab, .firewall, "Down Arrow in the sidebar must select the next page")
+
+        // Egress Firewall: one switch per rule, on exactly where the rule blocks.
+        assertHorizontalFit(hosting, window: window)
+        try snapshot(hosting, name: "minimum-firewall-top")
+        scrollDetailToEnd(hosting)
+        await settle(hosting)
+        let ruleSwitches = descendants(hosting).compactMap { $0 as? NSSwitch }
+        XCTAssertEqual(ruleSwitches.count, state.firewallRules.count)
+        XCTAssertEqual(ruleSwitches.filter { $0.state == .on }.count,
+                       state.firewallRules.filter { $0.stat.mode == "block" }.count)
+        let lastSwitch = try XCTUnwrap(ruleSwitches.max { $0.convert($0.bounds, to: nil).minY > $1.convert($1.bounds, to: nil).minY })
+        try assertVisible(lastSwitch, in: hosting)
+        try snapshot(hosting, name: "minimum-firewall-end")
+
+        // Notifications: one menu per flag type, default reads "Critical only".
+        SettingsNavigation.shared.tab = .notifications
+        await settle(hosting)
+        let notifyMenus = menus(hosting)
+        XCTAssertEqual(notifyMenus.count, SettingsView.notifyRules.count)
+        XCTAssertTrue(notifyMenus.allSatisfy { $0.accessibilityValue() as? String == "Critical only" })
+        assertHorizontalFit(hosting, window: window)
+        try snapshot(hosting, name: "minimum-notifications")
+        scrollDetailToEnd(hosting)
+        await settle(hosting)
+        assertOnScreen(try XCTUnwrap(menus(hosting).last), in: hosting, window: window)
+
+        for tab: SettingsTab in [.exceptions, .providers, .chat, .traffic, .app, .updates] {
+            SettingsNavigation.shared.tab = tab
+            await settle(hosting)
+            assertHorizontalFit(hosting, window: window)
+            try snapshot(hosting, name: "minimum-\(tab)")
+        }
+
+        SettingsNavigation.shared.tab = .analysis
         await settle(hosting)
         assertHorizontalFit(hosting, window: window)
         try snapshot(hosting, name: "minimum-analysis-top")
         scrollDetailToEnd(hosting)
         await settle(hosting)
         try snapshot(hosting, name: "minimum-analysis-end")
-
-        var aiControl = try XCTUnwrap(segmentedControls(hosting, containing: "Analysis").first)
-        try keyboardMove(aiControl, keyCode: 124, character: "\u{F703}", window: window)
-        await settle(hosting)
-        XCTAssertEqual(aiControl.selectedSegment, 2, "Right arrow and Space must select Traffic")
-        try snapshot(hosting, name: "minimum-traffic-keyboard")
-        SettingsNavigation.shared.tab = .protection
-        await settle(hosting)
-        SettingsNavigation.shared.tab = .secureAgent
-        await settle(hosting)
-        aiControl = try XCTUnwrap(segmentedControls(hosting, containing: "Analysis").first)
-        XCTAssertEqual(aiControl.selectedSegment, 2,
-                       "Local destination selection must survive sidebar navigation")
-        try keyboardMove(aiControl, keyCode: 123, character: "\u{F702}", window: window)
-        await settle(hosting)
-        XCTAssertEqual(aiControl.selectedSegment, 1, "Left arrow and Space must return to Analysis")
 
         window.setContentSize(NSSize(width: 860, height: 640))
         scrollDetailToStart(hosting)
@@ -129,26 +139,6 @@ final class SettingsLayoutTests: XCTestCase {
         return result
     }
 
-    private func element(_ label: String, in view: NSView) -> (any NSAccessibilityProtocol)? {
-        nodes(view).first { $0.accessibilityLabel() == label || $0.accessibilityTitle() == label }
-    }
-
-    private func assertControl(_ label: String, in view: NSView) throws {
-        _ = try XCTUnwrap(element(label, in: view), "Missing native accessibility control: " + label)
-    }
-
-    private func press(_ label: String, in view: NSView) throws {
-        if element(label, in: view)?.accessibilityPerformPress() == true { return }
-        if let control = descendants(view).compactMap({ $0 as? NSSegmentedControl }).first(where: { control in
-            (0..<control.segmentCount).contains { control.label(forSegment: $0) == label }
-        }), let index = (0..<control.segmentCount).first(where: { control.label(forSegment: $0) == label }) {
-            control.selectedSegment = index
-            XCTAssertTrue(control.sendAction(control.action, to: control.target), label)
-            return
-        }
-        XCTFail("Native local segmented control unavailable: " + label)
-    }
-
     private func descendants(_ view: NSView) -> [NSView] {
         [view] + view.subviews.flatMap(descendants)
     }
@@ -159,10 +149,34 @@ final class SettingsLayoutTests: XCTestCase {
         }
     }
 
-    private func segmentedControls(_ view: NSView, containing label: String) -> [NSSegmentedControl] {
-        descendants(view).compactMap { $0 as? NSSegmentedControl }.filter { control in
-            (0..<control.segmentCount).contains { control.label(forSegment: $0) == label }
+    /// Segmented controls in the detail pane (the Updates channel picker is
+    /// the one deliberate segmented control and is not on the first page).
+    private func segmentedControls(_ view: NSView) -> [NSSegmentedControl] {
+        descendants(view).compactMap { $0 as? NSSegmentedControl }
+    }
+
+    /// Pop-up menus, top to bottom (SwiftUI menu pickers are pop-up button
+    /// cells, not NSPopUpButton views).
+    private func menus(_ view: NSView) -> [any NSAccessibilityProtocol] {
+        nodes(view).filter { $0.accessibilityRole() == .popUpButton }
+            .sorted { $0.accessibilityFrame().minY > $1.accessibilityFrame().minY }
+    }
+
+    private func sidebarTable(_ view: NSView) -> NSTableView? {
+        descendants(view).compactMap { $0 as? NSTableView }.first {
+            view.convert($0.bounds, from: $0).minX < 196
         }
+    }
+
+    /// An accessibility element (SwiftUI switches are not always NSViews)
+    /// lies inside the detail scroll viewport and the window content.
+    private func assertOnScreen(_ node: any NSAccessibilityProtocol, in view: NSView, window: NSWindow) {
+        let frame = node.accessibilityFrame()
+        XCTAssertGreaterThan(frame.width, 0, "Element has no on-screen frame")
+        guard let scroll = detailScroll(view) else { return XCTFail("No detail scroll view") }
+        let viewport = window.convertToScreen(scroll.convert(scroll.contentView.frame, to: nil))
+        XCTAssertTrue(viewport.insetBy(dx: -1, dy: -1).contains(frame),
+                      "Final control must be inside the visible detail scroll viewport")
     }
 
     private func assertVisible(_ control: NSView, in view: NSView) throws {
@@ -196,18 +210,6 @@ final class SettingsLayoutTests: XCTestCase {
         }
     }
 
-    private func keyboardMove(_ control: NSSegmentedControl, keyCode: UInt16,
-                              character: String, window: NSWindow) throws {
-        XCTAssertTrue(window.makeFirstResponder(control))
-        XCTAssertTrue(window.firstResponder === control)
-        let expected = (control.selectedSegment + (keyCode == 124 ? 1 : control.segmentCount - 1)) % control.segmentCount
-        try sendKey(character, keyCode: keyCode, window: window)
-        try sendKey(" ", keyCode: 49, window: window)
-        drainApplicationEvents()
-        XCTAssertEqual(control.selectedSegment, expected,
-                       "Native key press must select the adjacent segment; keyWindow=\(window.isKeyWindow), fullKeyboardAccess=\(NSApp.isFullKeyboardAccessEnabled)")
-    }
-
     private func drainApplicationEvents() {
         for _ in 0..<100 {
             guard let event = NSApp.nextEvent(matching: .any, until: Date(timeIntervalSinceNow: 0.01),
@@ -219,7 +221,7 @@ final class SettingsLayoutTests: XCTestCase {
     private func sendKey(_ character: String, keyCode: UInt16, window: NSWindow) throws {
         // Match a complete physical key press. Arrow keys carry the function
         // and numeric-pad flags; activation may occur when Space is released.
-        let flags: NSEvent.ModifierFlags = [123, 124].contains(keyCode) ? [.function, .numericPad] : []
+        let flags: NSEvent.ModifierFlags = (123...126).contains(keyCode) ? [.function, .numericPad] : []
         for type: NSEvent.EventType in [.keyDown, .keyUp] {
             let event = try XCTUnwrap(NSEvent.keyEvent(with: type, location: .zero,
                 modifierFlags: flags, timestamp: ProcessInfo.processInfo.systemUptime,

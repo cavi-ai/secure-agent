@@ -27,6 +27,11 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Pricing: Claude Sonnet 5.5.
 
 ### Changed
+- Settings: one sidebar page per area, without segmented sub-tabs.
+- Settings → Egress Firewall: rules grouped by secret type, one switch each.
+- Settings → Egress Firewall: **Block all** and **Monitor all** per secret type.
+- Settings → File Guard and Notifications: mode menus instead of segmented controls.
+- Settings → Exceptions: muted flags grouped by rule, beside allowed files.
 - Settings: Protection split into Files and Network.
 - Settings: Chat, Analysis and Traffic grouped under Secure Agent.
 - Settings → Providers: toggles apply without a restart.
@@ -91,6 +96,9 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Worktrees: an action cancels the background rescan.
 - Daemon: one daemon per store.
 - Build: `make` stops when a binary's commit stamp is not HEAD.
+- Settings → Providers: OpenClaw and Hermes listed.
+- Settings → Providers: every harness tile shows a mark or monogram.
+- Settings → Providers: cursor shows the daemon's match strings.
 
 ### Security
 - Guard hooks: `guard-rules.json` bundled and installed beside `secret_guard.py`.
