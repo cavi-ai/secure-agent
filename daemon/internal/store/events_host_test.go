@@ -10,7 +10,45 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 )
 
-// Host lookups seek idx_events_host instead of scanning every event.
+// A store whose idx_events_host an earlier build created on (remote_host, ts)
+// gets it rebuilt, so the host list stops sorting.
+func TestOpenRebuildsAnEarlierHostIndex(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "e.db")
+	s, err := Open(path, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{
+		`DROP INDEX idx_events_host`,
+		`CREATE INDEX idx_events_host ON events(remote_host, ts) WHERE remote_host != ''`,
+	} {
+		if _, err := s.db.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.Close()
+
+	s, err = Open(path, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	var ddl string
+	if err := s.db.QueryRow(`SELECT sql FROM sqlite_master WHERE name = 'idx_events_host'`).Scan(&ddl); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(ddl, "remote_host, id, ts") {
+		t.Fatalf("idx_events_host after reopen = %q, want (remote_host, id, ts)", ddl)
+	}
+	q, args := eventQuery(EventFilter{RemoteHost: "api.example.com", Limit: 50})
+	if plan := queryPlan(t, s, q, args...); strings.Contains(plan, "TEMP B-TREE") {
+		t.Fatalf("host list plan after reopen = %q, want no sort", plan)
+	}
+}
+
+// Host lookups seek idx_events_host instead of scanning every event, and the
+// host filter reads newest first from the index without sorting the host's
+// rows.
 func TestHostLookupsUseTheHostIndex(t *testing.T) {
 	s, err := Open(filepath.Join(t.TempDir(), "e.db"), "")
 	if err != nil {
@@ -26,8 +64,8 @@ func TestHostLookupsUseTheHostIndex(t *testing.T) {
 		{RemoteHost: "api.example.com", Since: "2026-10-01T00:00:00Z", Limit: 50},
 	} {
 		q, args := eventQuery(f)
-		if plan := queryPlan(t, s, q, args...); !strings.Contains(plan, "idx_events_host") {
-			t.Errorf("QueryEvents(%+v) plan = %q, want idx_events_host", f, plan)
+		if plan := queryPlan(t, s, q, args...); !strings.Contains(plan, "idx_events_host") || strings.Contains(plan, "TEMP B-TREE") {
+			t.Errorf("QueryEvents(%+v) plan = %q, want idx_events_host without a sort", f, plan)
 		}
 	}
 }
@@ -68,7 +106,8 @@ func TestHostLookupsReturnTheHostsEvents(t *testing.T) {
 }
 
 // seedEventsWithHosts fills a fresh store with 300,000 events, 7% of them
-// connections to 500 hosts: the mix of a long-running daemon's store.
+// connections: half to hot.example, the rest spread over 500 hosts. The mix
+// of a long-running daemon's store.
 func seedEventsWithHosts(b *testing.B) *Store {
 	b.Helper()
 	s, err := Open(filepath.Join(b.TempDir(), "e.db"), "")
@@ -83,8 +122,11 @@ func seedEventsWithHosts(b *testing.B) *Store {
 	base := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
 	for i := 0; i < 300000; i++ {
 		kind, host := int(event.KindFileOpen), ""
-		if i%14 == 0 {
-			kind, host = int(event.KindConnOpen), fmt.Sprintf("h%d.example", (i/14)%500)
+		switch {
+		case i%28 == 0:
+			kind, host = int(event.KindConnOpen), "hot.example"
+		case i%14 == 0:
+			kind, host = int(event.KindConnOpen), fmt.Sprintf("h%d.example", (i/28)%500)
 		}
 		if _, err := tx.Exec(`INSERT INTO events (kind, ts, pid, exe_path, session_id, path, remote_host) VALUES (?, ?, ?, '/bin/x', 's', '/tmp/f', ?)`,
 			kind, base.Add(time.Duration(i)*time.Second).Format(time.RFC3339Nano), i%400, host); err != nil {
@@ -111,6 +153,23 @@ func BenchmarkQueryEventsByHost(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		s.QueryEvents(EventFilter{RemoteHost: fmt.Sprintf("h%d.example", i%500), Since: since, Limit: 50})
+	}
+}
+
+func BenchmarkQueryEventsBusiestHost(b *testing.B) {
+	s := seedEventsWithHosts(b)
+	since := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC).Format(time.RFC3339)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		s.QueryEvents(EventFilter{RemoteHost: "hot.example", Since: since, Limit: 50})
+	}
+}
+
+func BenchmarkTrendForBusiestHost(b *testing.B) {
+	s := seedEventsWithHosts(b)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		s.TrendFor("r", "hot.example")
 	}
 }
 

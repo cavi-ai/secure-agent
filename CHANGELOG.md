@@ -39,8 +39,8 @@ All notable changes to `secure-agent` are documented here. The format follows
 
 ### Fixed
 - Withdraw a guard prompt when its hook stops waiting (its own deadline, a killed hook, a dropped connection). An "Allow Always" given after the hook had denied the tool call saved a permanent allow rule and recorded an allow; it now saves nothing and the decision is recorded as a deny. A duplicate request keeps the prompt open until it is answered or the last waiting hook leaves.
-- Index events by remote host (partial: only events with a host). The advisor's per-flag host trend and the host detail view no longer scan every stored event under the store lock.
-- Index flags (pid, instant, rule and agent) and incidents (open-incident key, instant, flag id); flag and incident retention deletes only the overflow. At the 10,000-flag and 5,000-incident caps a new flag no longer sorts both tables under the store lock.
+- Index events by remote host (partial: only events with a host). The advisor's per-flag host trend and the host detail view no longer scan every stored event under the store lock, and the host list reads newest first without sorting the host's events; an index from an earlier build is rebuilt at open.
+- Index flags (pid, instant, rule and agent) and incidents (open-incident key, instant, flag id); flag and incident retention deletes only the overflow. At the 10,000-flag and 5,000-incident caps a new flag no longer sorts both tables under the store lock. A stored `now` timestamp skips the two time indexes with a log line instead of stopping the store from opening.
 - Redact the same credential shapes in the daemon, the activity log, and the guard audit trail: provider (`sk-`), GitHub, GitLab and Slack tokens, URL userinfo, password flags, credential assignments, and whole private-key blocks.
 - One daemon per store: a second `secure-agentd` on the same database waits for the first to exit instead of replacing its socket and ingesting every source twice.
 - Doctor `config` check names start-only settings (firewall, guard, paths, proxy, retention, …) changed in `config.yaml` since start until Secure Agent restarts.

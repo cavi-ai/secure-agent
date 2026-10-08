@@ -56,12 +56,11 @@ func initializeSchema(db *sql.DB) error {
 			provider TEXT
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_flags_pid ON flags(pid);`,
-		`CREATE INDEX IF NOT EXISTS idx_flags_time ON flags(datetime(ts), ts);`,
 		`CREATE INDEX IF NOT EXISTS idx_flags_rule_agent ON flags(rule, agent);`,
 		`CREATE INDEX IF NOT EXISTS idx_events_pid_ts ON events(pid, ts);`,
 		`CREATE INDEX IF NOT EXISTS idx_events_kind_id ON events(kind, id);`,
 		`CREATE INDEX IF NOT EXISTS idx_events_session_kind_id ON events(session_id, kind, id);`,
-		`CREATE INDEX IF NOT EXISTS idx_events_host ON events(remote_host, ts) WHERE remote_host != '';`,
+		`CREATE INDEX IF NOT EXISTS idx_events_host ON events(remote_host, id, ts) WHERE remote_host != '';`,
 		`CREATE TABLE IF NOT EXISTS incidents (
 			id TEXT PRIMARY KEY,
 			flag_id TEXT,
@@ -351,14 +350,25 @@ func initializeSchema(db *sql.DB) error {
 		}
 	}
 	// Incident indexes follow the column migration: findOpenIncidentSQL's
-	// expressions, the retention order, and lookups by flag id.
+	// expressions and lookups by flag id.
 	for _, q := range []string{
 		`CREATE INDEX IF NOT EXISTS idx_incidents_open_key ON incidents(COALESCE(rule,''), COALESCE(session_id,''), COALESCE(subject,''));`,
-		`CREATE INDEX IF NOT EXISTS idx_incidents_time ON incidents(datetime(created_at), created_at);`,
 		`CREATE INDEX IF NOT EXISTS idx_incidents_flag ON incidents(flag_id);`,
 	} {
 		if _, err := tx.Exec(q); err != nil {
 			return fmt.Errorf("failed to index incidents: %w", err)
+		}
+	}
+	// The retention-order indexes evaluate datetime(), which returns NULL
+	// for a malformed stamp but fails on a stored 'now' (any case). Such a
+	// row cannot come from PutFlag or PutIncident; if one exists, the index
+	// is skipped and those statements scan instead of the store failing.
+	for _, q := range []string{
+		`CREATE INDEX IF NOT EXISTS idx_flags_time ON flags(datetime(ts), ts);`,
+		`CREATE INDEX IF NOT EXISTS idx_incidents_time ON incidents(datetime(created_at), created_at);`,
+	} {
+		if _, err := tx.Exec(q); err != nil {
+			log.Printf("store: %s skipped, retention and lists scan instead: %v", q, err)
 		}
 	}
 
@@ -366,6 +376,16 @@ func initializeSchema(db *sql.DB) error {
 		return err
 	}
 
+	// An earlier build created idx_events_host on (remote_host, ts), which
+	// sorts a host's rows for the newest-first list; rebuild it below.
+	var hostIdxSQL string
+	if err := tx.QueryRow(`SELECT COALESCE(sql,'') FROM sqlite_master WHERE type='index' AND name='idx_events_host'`).Scan(&hostIdxSQL); err == nil &&
+		!strings.Contains(hostIdxSQL, "remote_host, id, ts") {
+		if _, err := tx.Exec(`DROP INDEX idx_events_host`); err != nil {
+			return fmt.Errorf("drop stale host index: %w", err)
+		}
+		log.Printf("store: rebuilding idx_events_host on (remote_host, id, ts)")
+	}
 	for _, q := range indexes {
 		if _, err := tx.Exec(q); err != nil {
 			return fmt.Errorf("create schema index: %w", err)
