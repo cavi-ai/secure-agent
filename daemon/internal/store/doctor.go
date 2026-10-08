@@ -155,13 +155,7 @@ func (s *Store) HarnessActivitySince(since time.Time) map[string]HarnessActivity
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := map[string]HarnessActivity{}
-	rows, err := s.db.Query(`SELECT s.harness,
-		MAX(CASE WHEN e.kind = ? THEN e.ts ELSE '' END),
-		MAX(CASE WHEN e.kind IN (?, ?, ?) THEN e.ts ELSE '' END)
-		FROM events e JOIN sessions s ON s.id = e.session_id
-		WHERE e.kind IN (?, ?, ?, ?) AND e.ts >= ? AND s.harness != ''
-		GROUP BY s.harness`, int(event.KindPluginAction), int(event.KindToolCall), int(event.KindTurn), int(event.KindModelCall),
-		int(event.KindPluginAction), int(event.KindToolCall), int(event.KindTurn), int(event.KindModelCall), sinceArg(since))
+	rows, err := s.db.Query(harnessActivitySQL, sinceArg(since))
 	if err != nil {
 		return out
 	}
