@@ -192,3 +192,37 @@ func TestEgressObservationSurvivesConcurrentWriters(t *testing.T) {
 		t.Fatalf("episodes = %+v, want one with count %d", eps, recorded)
 	}
 }
+
+func TestListRecurringEgressEpisodesReturnsOnlyRecurring(t *testing.T) {
+	s, err := Open("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	base := time.Now().UTC().Add(-6 * time.Hour).Truncate(time.Second)
+	scope := EgressScope{Agent: "claude", ExePath: "/usr/bin/claude", Harness: "claude", Workspace: "/work/a"}
+	record := func(host string, n int, gap time.Duration, offset time.Duration) {
+		t.Helper()
+		for i := 0; i < n; i++ {
+			if err := s.RecordEgressObservation(EgressObservation{Scope: scope, Host: host, Protocol: "tcp", Port: 443, At: base.Add(offset + time.Duration(i)*gap)}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	record("203.0.113.1", 5, 30*time.Minute, 0)         // recurring
+	record("203.0.113.2", 5, time.Second, 0)            // a burst
+	record("203.0.113.3", 4, 30*time.Minute, 0)         // too few calls
+	record("203.0.113.4", 6, 20*time.Minute, time.Hour) // recurring, newer
+	if all := s.ListEgressEpisodesForReview(); len(all) != 4 {
+		t.Fatalf("review list = %d episodes, want 4", len(all))
+	}
+	got := s.ListRecurringEgressEpisodes()
+	if len(got) != 2 || got[0].Host != "203.0.113.4" || got[1].Host != "203.0.113.1" {
+		t.Fatalf("recurring = %+v, want 203.0.113.4 then 203.0.113.1", got)
+	}
+	for _, e := range got {
+		if !e.Recurring {
+			t.Fatalf("non-recurring episode listed: %+v", e)
+		}
+	}
+}

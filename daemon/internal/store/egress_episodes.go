@@ -21,6 +21,7 @@ const (
 	maxEgressSessions  = 8
 	egressIdleExpiry   = 7 * 24 * time.Hour
 	minRecurringGap    = time.Minute
+	minRecurringCount  = 5
 )
 
 const egressEpisodesSchema = `CREATE TABLE IF NOT EXISTS egress_episodes (
@@ -116,7 +117,7 @@ func egressEpisodeID(o EgressObservation) string {
 }
 
 func egressRecurring(e EgressEpisode) bool {
-	if e.Count < 5 || len(e.Intervals) < 4 {
+	if e.Count < minRecurringCount || len(e.Intervals) < 4 {
 		return false
 	}
 	gaps := e.Intervals[len(e.Intervals)-4:]
@@ -326,22 +327,34 @@ func (s *Store) ListEgressEpisodes(limit int) []EgressEpisode {
 	if limit > maxEgressQuery {
 		limit = maxEgressQuery
 	}
-	return s.listEgressEpisodes(limit)
+	return s.listEgressEpisodes(limit, 0)
 }
 
 // ListEgressEpisodesForReview reads the entire bounded projection so an older
 // unresolved candidate cannot be hidden by newer one-off connections.
 func (s *Store) ListEgressEpisodesForReview() []EgressEpisode {
-	return s.listEgressEpisodes(maxEgressEpisodes)
+	return s.listEgressEpisodes(maxEgressEpisodes, 0)
 }
 
-func (s *Store) listEgressEpisodes(limit int) []EgressEpisode {
-	rows, err := s.db.Query(`SELECT id,agent,exe_path,harness,workspace,host,protocol,port,count,first_seen_ns,last_seen_ns,intervals_json,session_ids_json FROM egress_episodes WHERE last_seen_ns>=? ORDER BY last_seen_ns DESC, id DESC LIMIT ?`, time.Now().Add(-egressIdleExpiry).UnixNano(), limit)
+// ListRecurringEgressEpisodes is ListEgressEpisodesForReview narrowed to the
+// recurring episodes, newest first.
+func (s *Store) ListRecurringEgressEpisodes() []EgressEpisode {
+	var out []EgressEpisode
+	for _, e := range s.listEgressEpisodes(maxEgressEpisodes, minRecurringCount) {
+		if e.Recurring {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+func (s *Store) listEgressEpisodes(limit, minCount int) []EgressEpisode {
+	rows, err := s.db.Query(`SELECT id,agent,exe_path,harness,workspace,host,protocol,port,count,first_seen_ns,last_seen_ns,intervals_json,session_ids_json FROM egress_episodes WHERE last_seen_ns>=? AND count>=? ORDER BY last_seen_ns DESC, id DESC LIMIT ?`, time.Now().Add(-egressIdleExpiry).UnixNano(), minCount, limit)
 	if err != nil {
 		return nil
 	}
 	defer rows.Close()
-	out := make([]EgressEpisode, 0, limit)
+	out := make([]EgressEpisode, 0, min(limit, 128))
 	for rows.Next() {
 		e, err := scanEgressEpisode(rows)
 		if err != nil {

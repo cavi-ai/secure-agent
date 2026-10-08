@@ -176,6 +176,31 @@ function egressEpisodeHTML(row) {
   </article>`;
 }
 
+// egressAfterExpect: the episodes and attention queue once an expectation of
+// kind 'destination' or 'scope' is saved from episodeId. The episodes it
+// covers read expected and leave the decisions; the next reload names the
+// rule.
+function egressAfterExpect(t, episodeId, kind) {
+  const rows = t.egressEpisodes || [];
+  const row = rows.find(r => r.id === episodeId);
+  if (!row) return { egressEpisodes: rows, posture: t.posture };
+  const o = row.observed || {};
+  const s = o.scope || {};
+  const covers = r => {
+    const ro = r.observed || {};
+    const rs = ro.scope || {};
+    if (rs.agent !== s.agent) return false;
+    return kind === 'scope'
+      ? !!ro.scope_complete && rs.exe_path === s.exe_path && rs.harness === s.harness && rs.workspace === s.workspace
+      : ro.host === o.host && ro.protocol === o.protocol && ro.port === o.port;
+  };
+  const ids = new Set(rows.filter(covers).map(r => r.id));
+  return {
+    egressEpisodes: rows.map(r => ids.has(r.id) ? { ...r, expected: true, candidate: false } : r),
+    posture: mapPostureAttention(t.posture, it => (it.kind === 'recurring_egress' && ids.has(it.id) ? null : it)),
+  };
+}
+
 function renderEgressEpisodes() {
   const container = document.getElementById('recurring-egress-container');
   const badge = document.getElementById('badge-recurring-egress');

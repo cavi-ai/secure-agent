@@ -50,9 +50,14 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Install: one copy, `/Applications/Secure Agent.app`.
 - App: bundle identifier `com.cavi-ai.secure-agent`.
 - Dependencies: `modernc.org/sqlite` 1.60.1.
+- Posture: recurring-connection decisions read only recurring episodes and the expected-egress rules once.
+- Console: a snapshot computes its patterns once.
 
 ### Fixed
 - Doctor and posture: spool loss and bus drops fail only while they grow.
+- Posture: every decision pushes the new headline.
+- Posture: an older headline never replaces a newer one.
+- Console: an expected connection leaves Egress and the banner before the daemon answers.
 - Costs: one model call per Claude API call.
 - Costs: duplicate stored Claude model calls removed at open.
 - Pricing: stored calls priced when a price is added.

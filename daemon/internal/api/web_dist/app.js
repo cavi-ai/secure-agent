@@ -2033,7 +2033,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (note === null) return; // cancelled
       body.note = note;
     }
-    const revert = stage(['incidents', 'posture'], ['incidents', 'attention', 'status'], () => {
+    const revert = stage(['incidents', 'posture'], ['incidents', 'attention', 'posture', 'status'], () => {
       telemetryData.incidents = (telemetryData.incidents || []).map(inc => inc.id !== id ? inc
         : { ...inc, workflow: { ...(inc.workflow || {}), status, ...(body.note ? { resolution_note: body.note } : {}) } });
       // resolved leaves the queue; acknowledged stays, marked seen.
@@ -2528,7 +2528,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // The flag leaves flags, flagsView and the attention queue; revert() puts
   // it back.
   function stageDropFlag(id) {
-    return stage(['flags', 'flagsView', 'posture'], ['flags', 'attention', 'chart-flags', 'status', 'tab-badges'], () => {
+    return stage(['flags', 'flagsView', 'posture'], ['flags', 'attention', 'posture', 'chart-flags', 'status', 'tab-badges'], () => {
       telemetryData.flags = (telemetryData.flags || []).filter(x => x.id !== id);
       if (telemetryData.flagsView !== null) telemetryData.flagsView = (telemetryData.flagsView || []).filter(x => x.id !== id);
       mapAttentionItems(it => (it.kind === 'flag' && it.id === id ? null : it));
@@ -3081,7 +3081,7 @@ document.addEventListener('DOMContentLoaded', () => {
   window.resolveResourceControl = async function(id, decision, sessionKey, actionName) {
     const verb = decision === 'dismiss' ? 'keep this session running' : decision === 'resume' ? 'resume this entire session' : `apply ${String(actionName || 'this intervention').replaceAll('_', ' ')}`;
     if (!await saConfirm(`Save this resource policy change: ${verb}?`, { title: 'Resource policy', okLabel: 'Save' })) return;
-    const revert = stage(['posture', 'resources'], ['attention', 'resources', 'tab-badges'], () => {
+    const revert = stage(['posture', 'resources'], ['attention', 'posture', 'resources', 'tab-badges'], () => {
       if (!id) return;
       mapAttentionItems(it => (it.kind === 'resource' && it.id === id ? null : it));
       const r = telemetryData.resources;
@@ -3109,7 +3109,7 @@ document.addEventListener('DOMContentLoaded', () => {
       ? (scope === 'always' ? 'allow every future path matched by this rule' : 'allow this request once')
       : 'deny this request and remember the rule';
     if (!await saConfirm(`Apply guard decision: ${action}?`, { title: 'Guard decision', okLabel: 'Apply' })) return;
-    const revert = stage(['guardPending', 'posture'], ['attention', 'tab-badges'], () => {
+    const revert = stage(['guardPending', 'posture'], ['attention', 'posture', 'tab-badges'], () => {
       telemetryData.guardPending = (telemetryData.guardPending || []).filter(x => x.id !== id);
       mapAttentionItems(it => (it.kind === 'guard' && it.id === id ? null : it));
     });
@@ -3347,15 +3347,22 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!await window.saConfirm(`${description} Security flags, guard decisions, and proxy inspection continue.`, {
       title: kind === 'scope' ? 'Expect this activity scope' : 'Expect this destination', okLabel: 'Save expectation', danger: false
     })) return;
+    const revert = stage(['egressEpisodes', 'posture'], ['recurring-egress', 'attention', 'posture', 'status', 'tab-badges'], () => {
+      Object.assign(telemetryData, egressAfterExpect(telemetryData, episodeId, kind));
+    });
     try {
       const res = await apiFetch('/expected-egress', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ episode_id: episodeId, kind })
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      showToast('Expected connection saved. Security detection remains active.', 'success');
-      await fetchTelemetry({ slow: true });
-    } catch (err) { showToast(`Could not save expectation: ${err}`, 'danger'); }
+    } catch (err) {
+      revert();
+      showToast(`Could not save expectation: ${err}`, 'danger');
+      return;
+    }
+    showToast('Expected connection saved. Security detection remains active.', 'success');
+    await fetchTelemetry({ slow: true });
   }
 
   async function revokeExpectedEgress(id) {
@@ -3601,7 +3608,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // and reads 0 open with its buttons disabled once none is left; those
   // flags leave the lists; the next snapshot reconciles the pattern.
   function stagePatternDone(key, submitted) {
-    return stage(['patterns', 'flags', 'flagsView', 'posture'], ['flags', 'attention', 'chart-flags', 'status', 'tab-badges'], () => {
+    return stage(['patterns', 'flags', 'flagsView', 'posture'], ['flags', 'attention', 'posture', 'chart-flags', 'status', 'tab-badges'], () => {
       Object.assign(telemetryData, patternAfterOptimisticDismiss(telemetryData, key, submitted));
     });
   }
