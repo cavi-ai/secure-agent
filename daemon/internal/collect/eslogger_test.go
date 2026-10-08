@@ -21,6 +21,26 @@ func TestParseOpenLine(t *testing.T) {
 	}
 }
 
+func TestParseOpenLineCarriesFlagsAndStat(t *testing.T) {
+	line := []byte(`{"process":{"audit_token":{"pid":1234}},"event":{"open":{"fflag":16777218,"file":{"path":"/work/t/001/.env","stat":{"st_mode":33188,"st_ino":392390172,"st_dev":16777241,"st_birthtimespec":"2026-09-20T13:54:55.465626215Z"}}}}}`)
+	e, ok := ParseESLine(line)
+	if !ok {
+		t.Fatal("line not parsed")
+	}
+	birth := time.Date(2026, 9, 20, 13, 54, 55, 465626215, time.UTC).UnixNano()
+	if e.OpenFlags != 16777218 || !e.OpensForWrite() || e.OpensForRead() || e.FileMode != 33188 || e.IsDirOpen() || e.FileIno != 392390172 || e.FileBirth != birth {
+		t.Fatalf("open facts = flags %d mode %o ino %d birth %d", e.OpenFlags, e.FileMode, e.FileIno, e.FileBirth)
+	}
+	dir := []byte(`{"process":{"audit_token":{"pid":1234}},"event":{"open":{"fflag":1,"file":{"path":"/work/.docker","stat":{"st_mode":16877}}}}}`)
+	if e, _ := ParseESLine(dir); !e.IsDirOpen() || !e.OpensForRead() {
+		t.Fatalf("directory open facts = %+v", e)
+	}
+	old := []byte(`{"process":{"audit_token":{"pid":1234}},"event":{"open":{"file":{"path":"/work/a"}}}}`)
+	if e, _ := ParseESLine(old); e.OpenFlags != 0 || e.FileMode != 0 || e.FileIno != 0 || e.FileBirth != 0 || !e.OpensForRead() {
+		t.Fatalf("line without stat = %+v", e)
+	}
+}
+
 func TestParseESLineCarriesTheParentPid(t *testing.T) {
 	line := []byte(`{"process":{"audit_token":{"pid":4242},"ppid":100,"executable":{"path":"/usr/bin/git"}},"event":{"exec":{"target":{"executable":{"path":"/usr/bin/git"}}}}}`)
 	e, ok := ParseESLine(line)

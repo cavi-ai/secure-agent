@@ -47,8 +47,14 @@ type esEnvelope struct {
 	} `json:"process"`
 	Event struct {
 		Open *struct {
-			File struct {
+			FFlag int32 `json:"fflag"`
+			File  struct {
 				Path string `json:"path"`
+				Stat struct {
+					Mode      uint32 `json:"st_mode"`
+					Ino       uint64 `json:"st_ino"`
+					Birthtime string `json:"st_birthtimespec"`
+				} `json:"stat"`
 			} `json:"file"`
 		} `json:"open"`
 		Exec *struct {
@@ -143,10 +149,16 @@ func parseESLine(line []byte) (event.Event, esLineVerdict) {
 	var kind event.Kind
 	var filePath string
 	var detail string
+	var open event.Event
 
 	if env.Event.Open != nil {
 		kind = event.KindFileOpen
 		filePath = env.Event.Open.File.Path
+		st := env.Event.Open.File.Stat
+		open.OpenFlags, open.FileMode, open.FileIno = env.Event.Open.FFlag, st.Mode, st.Ino
+		if t, err := time.Parse(time.RFC3339Nano, st.Birthtime); err == nil {
+			open.FileBirth = t.UnixNano()
+		}
 	} else if env.Event.Exec != nil {
 		kind = event.KindExec
 		filePath = env.Event.Exec.Target.Executable.Path
@@ -167,15 +179,9 @@ func parseESLine(line []byte) (event.Event, esLineVerdict) {
 		return event.Event{}, esGarbage
 	}
 
-	return event.Event{
-		Kind:    kind,
-		TS:      ts,
-		PID:     pid,
-		PPID:    env.Process.PPID,
-		ExePath: exe,
-		Path:    filePath,
-		Detail:  detail,
-	}, esEvent
+	open.Kind, open.TS, open.PID, open.PPID = kind, ts, pid, env.Process.PPID
+	open.ExePath, open.Path, open.Detail = exe, filePath, detail
+	return open, esEvent
 }
 
 func (es *ESLogger) Run(ctx context.Context) error {
