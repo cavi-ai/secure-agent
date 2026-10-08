@@ -5,9 +5,36 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/cavi-ai/secure-agent/daemon/internal/bus"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 )
+
+// Antigravity transcript sessions carry the agent name the config, the
+// tagger and the app use, so coverage and costs join them to the agent.
+func TestAGYSessionsCarryTheAntigravityAgentName(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".gemini", "antigravity-cli", "brain", "b285eea1-3969", ".system_generated", "logs", "transcript_full.jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(agyToolLine+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	b := bus.New(16)
+	defer b.Close()
+	b.Subscribe()
+	ts := NewTranscriptScanner(b, nil)
+	var harnesses []string
+	ts.OnSessionSeen = func(_, harness, _ string, _ time.Time) { harnesses = append(harnesses, harness) }
+	ts.tailFile(path, map[string]int64{}, nil)
+	if strings.Join(harnesses, ",") != "antigravity" {
+		t.Fatalf("session harness = %v, want [antigravity]", harnesses)
+	}
+	if got := harnessForPath(path); got != "antigravity" {
+		t.Fatalf("harnessForPath = %q, want antigravity", got)
+	}
+}
 
 const agyToolLine = `{"step_index":3,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-09-11T09:38:12Z","tool_calls":[{"name":"run_command","args":{"CommandLine":"ls"}},{"name":"view_file","args":{"AbsolutePath":"/x/y"}}]}`
 const agyRunningLine = `{"step_index":4,"source":"MODEL","type":"PLANNER_RESPONSE","status":"RUNNING","created_at":"2026-09-11T09:38:13Z","tool_calls":[{"name":"run_command","args":{"CommandLine":"sleep 10"}}]}`

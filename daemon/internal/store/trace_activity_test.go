@@ -65,6 +65,32 @@ func TestHarnessActivitySince(t *testing.T) {
 	}
 }
 
+// Sessions an earlier build stored under Antigravity's CLI name take the
+// agent name at open.
+func TestOpenRenamesAgySessions(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "e.db")
+	s, err := Open(path, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(`INSERT INTO sessions (id, harness, started_at, last_seen_at, status) VALUES ('b1', 'agy', '2026-10-07T12:00:00Z', '2026-10-07T12:00:00Z', 'ended')`); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	s, err = Open(path, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	var harness string
+	if err := s.db.QueryRow(`SELECT harness FROM sessions WHERE id = 'b1'`).Scan(&harness); err != nil {
+		t.Fatal(err)
+	}
+	if harness != "antigravity" {
+		t.Fatalf("harness after reopen = %q, want antigravity", harness)
+	}
+}
+
 // BenchmarkHarnessActivitySince: 300,000 events over ten days, 18% of them
 // hook and trace events across 2,000 sessions, read for the last 24 h (10%
 // of the trace events, as in a long-running store).

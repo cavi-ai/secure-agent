@@ -225,6 +225,13 @@ func initializeSchema(db *sql.DB) error {
 		}
 		log.Printf("store: migrated sessions: added origin column")
 	}
+	// Antigravity transcript sessions were stored as harness "agy", its CLI
+	// name; the agent (config, tagger, app) is "antigravity".
+	if res, err := tx.Exec(`UPDATE sessions SET harness = 'antigravity' WHERE harness = 'agy'`); err != nil {
+		return fmt.Errorf("rename agy sessions: %w", err)
+	} else if n, _ := res.RowsAffected(); n > 0 {
+		log.Printf("store: renamed %d agy sessions to antigravity", n)
+	}
 	// Trace columns (P2): older databases gain them in place.
 	for _, col := range []string{"tool", "tool_status", "duration_ms", "model", "tokens_in", "tokens_out", "cost_usd", "call_id", "provider", "record"} {
 		var n int

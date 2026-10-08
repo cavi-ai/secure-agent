@@ -11,6 +11,19 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 )
 
+// An Antigravity agent's coverage row reads its transcript sessions: trace
+// support and the latest trace stamp.
+func TestAntigravityCoverageReadsItsTranscriptSessions(t *testing.T) {
+	st := testStore(t)
+	now := time.Now()
+	st.UpsertSession(model.Session{ID: "b285eea1-3969", Harness: "antigravity", StartedAt: now, LastSeenAt: now})
+	st.PutEvent(event.Event{Kind: event.KindToolCall, TS: now, SessionID: "b285eea1-3969", ToolName: "run_command", CallID: "c1"})
+	rows := harnessCoverage(st, Status{Running: true, Agents: []AgentSummary{{PID: 40, Name: "antigravity"}}})
+	if len(rows) != 1 || !rows[0].TraceSupported || rows[0].TraceLastSeen == "" {
+		t.Fatalf("antigravity coverage = %+v, want trace support and a last-seen stamp", rows)
+	}
+}
+
 func TestHookActivityCannotCoverAnotherHarness(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	st := testStore(t)

@@ -304,8 +304,9 @@ func (ts *TranscriptScanner) transcriptHits(line, path, harness, sessionID strin
 	return hits
 }
 
-// harnessForPath names the harness whose transcript layout the path matches;
-// "unknown" for hook activity logs and other tailed files.
+// harnessForPath names the harness whose transcript layout the path matches,
+// by its agent name in the config (Antigravity's CLI is agy, its agent is
+// antigravity); "unknown" for hook activity logs and other tailed files.
 func harnessForPath(p string) string {
 	switch {
 	case IsClaudeTranscriptPath(p):
@@ -315,7 +316,7 @@ func harnessForPath(p string) string {
 	case IsCursorTranscriptPath(p):
 		return "cursor"
 	case IsAGYTranscriptPath(p):
-		return "agy"
+		return "antigravity"
 	}
 	return "unknown"
 }
@@ -791,9 +792,9 @@ func (ts *TranscriptScanner) eventsForLine(p, line string, lineStart, offset int
 		if evs, ok := tracer.ParseLine(line); ok {
 			sid, ws := tracer.Session()
 			if sid != "" && ts.OnSessionSeen != nil {
-				ts.OnSessionSeen(sid, "agy", ws, evs[0].TS)
+				ts.OnSessionSeen(sid, "antigravity", ws, evs[0].TS)
 			}
-			return append(evs, ts.transcriptHits(line, p, "agy", sid, lineStart)...)
+			return append(evs, ts.transcriptHits(line, p, "antigravity", sid, lineStart)...)
 		}
 	}
 	return ts.scanLine(line, p, harnessForPath(p), ts.knownSession(p), lineStart)
