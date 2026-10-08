@@ -29,15 +29,16 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Cursor: Secure Agent's tool hooks beside the user's hooks.
 - CLI: `secure-agent telemetry repair`.
 - Pricing: Claude Sonnet 5.5.
-- Worktrees: `merged: content` when the default branch has every line the branch adds and none it removes, including after a history rewrite.
-- Worktrees: `content_lines`, `content_missing`, `content_extended`, `content_other` and `unrelated_history`.
+- Worktrees: `merged: content` when the default branch holds every change the branch makes.
+- Worktrees: per-branch `content_*` counts and `unrelated_history`.
 - Worktrees: advisor sees the merge verdict and what the default branch did to the branch's files.
 
 ### Changed
-- Console: a decision shows at most three buttons; the other choices sit under More.
+- Console: a decision shows at most three buttons and a More menu.
 - Console: one Allow per destination organization replaces one per address.
 - Console: findings show their file and destinations as chips.
-- Console: the page fills wide windows; decision groups sit two-up.
+- Console: the page fills wide windows.
+- Console: decision groups sit two-up on wide screens.
 - Settings: one sidebar page per area, without segmented sub-tabs.
 - Settings → Egress Firewall: rules grouped by secret type, one switch each.
 - Settings → Egress Firewall: **Block all** and **Monitor all** per secret type.
@@ -61,7 +62,8 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Install: one copy, `/Applications/Secure Agent.app`.
 - App: bundle identifier `com.cavi-ai.secure-agent`.
 - Dependencies: `modernc.org/sqlite` 1.60.1.
-- Posture: recurring-connection decisions read only recurring episodes and the expected-egress rules once.
+- Posture: recurring-connection decisions read only recurring episodes.
+- Posture: expected-egress rules read once per computation.
 - Console: a snapshot computes its patterns once.
 
 ### Fixed
@@ -78,8 +80,11 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Chat: drafts survive failed sends.
 - Findings: approval, review and file inspection buttons on grouped findings.
 - Menu bar: posture updates right after a decision.
+- Menu bar: a hidden status item is recreated once per loss.
 - Console: an authentication rejection ends the session.
-- Console: the connecting process is looked up once per connection; an unidentified one gets 503.
+- Console: the connecting process is looked up once per connection.
+- Console: an unidentified connecting process gets 503.
+- Console: the connecting process is identified on macOS 14.
 - Console: an older refresh never replaces newer data.
 - Console: malformed reports keep the last good data.
 - Console: filtered results survive a failed refresh.
@@ -93,8 +98,11 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Sessions: rekeying is atomic.
 - Sessions: a silent session rooted in another family's infra ends after an hour.
 - Sessions: Antigravity sessions recorded as `antigravity`.
+- Sessions: ended and promoted sessions release their write throttle once stored.
 - Transcripts: events kept until delivered.
 - Transcripts: checkpoint failures retried and reported.
+- Transcripts: a deleted transcript's parser and checkpoint are retired.
+- Transcripts: an unreadable transcript keeps its checkpoint.
 - OpenCode: history read in bounded pages.
 - File telemetry: spool bursts kept across full queues and rotation.
 - File telemetry: the tailer reads a rotated spool to its end.
