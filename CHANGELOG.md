@@ -38,6 +38,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Send selected findings directly to the local agent review queue with daemon-built evidence; local commands still require explicit confirmation.
 
 ### Fixed
+- Record Antigravity transcript sessions under its agent name, `antigravity`, instead of the CLI name `agy`; sessions stored as `agy` are renamed at open. Harness coverage in status and posture reported Antigravity as untraced because its sessions never matched the agent.
 - Index hook and trace events by kind and time (partial: those kinds only). The harness coverage behind every `/status`, `/snapshot` and `/posture` read every retained trace event under the store lock; it now reads the last 24 h from the index.
 - Withdraw a guard prompt when its hook stops waiting (its own deadline, a killed hook, a dropped connection). An "Allow Always" given after the hook had denied the tool call saved a permanent allow rule and recorded an allow; it now saves nothing and the decision is recorded as a deny. A duplicate request keeps the prompt open until it is answered or the last waiting hook leaves.
 - Index events by remote host (partial: only events with a host). The advisor's per-flag host trend and the host detail view no longer scan every stored event under the store lock, and the host list reads newest first without sorting the host's events; an index from an earlier build is rebuilt at open.

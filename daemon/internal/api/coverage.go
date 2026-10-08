@@ -33,7 +33,7 @@ func harnessCoverage(st *store.Store, status Status) []HarnessCoverage {
 	for name := range names {
 		row := HarnessCoverage{Name: name, GuardSupported: name == "claude" || name == "cursor"}
 		switch name {
-		case "claude", "cursor", "codex", "agy", "opencode", "openclaw", "hermes":
+		case "claude", "cursor", "codex", "antigravity", "opencode", "openclaw", "hermes":
 			row.TraceSupported = true
 		}
 		row.HookLastSeen = activity[name].HookLastSeen
