@@ -59,13 +59,14 @@ func (a *API) currentSnapshot() Snapshot {
 		flags[i].Title = humanFlagTitle(flags[i].Rule)
 	}
 	a.stampExplains(flags)
+	patterns := a.computePatterns(time.Now().Add(-24*time.Hour), patternDefaultMin)
 	return Snapshot{
 		Status:      a.currentStatus(),
 		Flags:       flags,
-		Patterns:    a.computePatterns(time.Now().Add(-24*time.Hour), patternDefaultMin),
+		Patterns:    patterns,
 		Incidents:   out,
 		Events:      priceClassed(a.store.QueryEvents(store.EventFilter{Limit: 50})),
-		Posture:     a.computePosture(),
+		Posture:     a.postureWith(patterns),
 		Suggestions: a.suggestionList(),
 		Mutes:       a.mutePairs(),
 		Sessions:    a.store.ListSessions(store.SessionFilter{Limit: 100}),

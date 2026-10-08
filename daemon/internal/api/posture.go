@@ -63,37 +63,60 @@ func (a *API) handlePosture(w http.ResponseWriter, r *http.Request) {
 func (a *API) CurrentPosture() Posture { return a.computePosture() }
 
 // PublishPostureIfChanged recomputes the headline and pushes a posture delta
-// only when it actually changed — HTTP mutations and the drain loop call
-// this after flag/incident/guard changes; per-event calls would recompute on socket
-// churn, so dedupe happens here, not there.
-func (a *API) PublishPostureIfChanged() {
+// only when its state or counts changed: the drain loop calls this after
+// flag/incident/guard changes, so dedupe happens here, not there.
+func (a *API) PublishPostureIfChanged() { a.publishFreshPosture(false) }
+
+// PublishPosture pushes the recomputed posture after a decision even at an
+// unchanged count: the items differ, and counts also move without a publish
+// (a connection turning recurring, an incident aging, the 24 h window).
+func (a *API) PublishPosture() { a.publishFreshPosture(true) }
+
+func (a *API) publishFreshPosture(force bool) {
 	if a.deltaHub == nil {
 		return
 	}
-	p := a.computePosture()
 	a.lastPostureMu.Lock()
-	changed := p.State != a.lastPostureState || p.NeedsYou != a.lastPostureCount || p.CoverageCount != a.lastPostureCoverage
-	if changed {
-		a.lastPostureState = p.State
-		a.lastPostureCount = p.NeedsYou
-		a.lastPostureCoverage = p.CoverageCount
-	}
+	a.postureGen++
+	gen := a.postureGen
 	a.lastPostureMu.Unlock()
-	if changed {
-		a.deltaHub.Publish(Delta{Type: "posture", Data: p})
+	a.publishPosture(gen, a.computePosture(), force)
+}
+
+// publishPosture publishes p, computed as generation gen, unless a later
+// computation was already published or (without force) nothing changed.
+func (a *API) publishPosture(gen uint64, p Posture, force bool) {
+	a.lastPostureMu.Lock()
+	defer a.lastPostureMu.Unlock()
+	if gen < a.lastPostureGen {
+		return
 	}
+	if !force && p.State == a.lastPostureState && p.NeedsYou == a.lastPostureCount && p.CoverageCount == a.lastPostureCoverage {
+		return
+	}
+	a.lastPostureGen = gen
+	a.lastPostureState = p.State
+	a.lastPostureCount = p.NeedsYou
+	a.lastPostureCoverage = p.CoverageCount
+	a.deltaHub.Publish(Delta{Type: "posture", Data: p})
 }
 
 // computePosture derives the operator headline from live status + stores.
 // Deliberately derived, not persisted: posture is a view over state, never a
 // second source of truth.
 func (a *API) computePosture() Posture {
+	return a.postureWith(a.computePatterns(time.Now().Add(-24*time.Hour), patternDefaultMin))
+}
+
+// postureWith is computePosture over the 24 h patterns the caller already
+// computed.
+func (a *API) postureWith(patterns []model.Pattern) Posture {
 	st := a.evidenceStatus(a.statusFn())
 	posture := Posture{
 		Generated: time.Now().UTC().Format(time.RFC3339Nano),
 		Connected: st.Running,
 	}
-	posture.Items, posture.Groups = a.attentionQueue(st)
+	posture.Items, posture.Groups = a.attentionQueue(st, patterns)
 	posture.NeedsYou = len(posture.Items)
 	posture.CoverageItems = a.coverageItems(st)
 	posture.CoverageCount = len(posture.CoverageItems)

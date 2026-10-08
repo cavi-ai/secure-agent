@@ -136,7 +136,7 @@ func (a *API) machineAttentionItems(st Status) []PostureItem {
 // attentionQueue returns the headline items and the grouped queue from one
 // pass. Signals without a PID join a live session only when the agent name
 // identifies exactly one; ambiguous work stays in an agent-level group.
-func (a *API) attentionQueue(st Status) ([]PostureItem, []AttentionGroup) {
+func (a *API) attentionQueue(st Status, patterns []model.Pattern) ([]PostureItem, []AttentionGroup) {
 	var sessions []attentionSession
 	if a.resources != nil {
 		for _, s := range a.resources().Sessions {
@@ -262,7 +262,6 @@ func (a *API) attentionQueue(st Status) ([]PostureItem, []AttentionGroup) {
 	// follows the disposition: an advisor-confirmed benign flag is a queue
 	// item, not a "critical — act now". Flags a pattern covers are ONE
 	// pattern item (headline and group), in the group of its newest flag.
-	patterns := a.computePatterns(time.Now().Add(-24*time.Hour), patternDefaultMin)
 	patternOf := map[string]int{}
 	for i, p := range patterns {
 		for _, id := range p.FlagIDs {
@@ -353,11 +352,7 @@ func (a *API) attentionQueue(st Status) ([]PostureItem, []AttentionGroup) {
 	// attributable, and not already covered by an expected-egress rule. One
 	// episode may span ended sessions; keep it at agent level rather than
 	// assigning it to whichever session happens to be live now.
-	for _, view := range a.egressEpisodeViews() {
-		if !view.Candidate {
-			continue
-		}
-		e := view.Observed
+	for _, e := range a.egressCandidates() {
 		action := ""
 		scopeText := "Activity scope is incomplete; only this destination can be expected."
 		if e.ScopeComplete {

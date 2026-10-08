@@ -202,3 +202,35 @@ test('uninspectedParts: one keyed part per endpoint, vendor rollups, carriers', 
   assert.match(vendor, /data-action="bulk-allow" data-agent="openclaw"/);
   assert.ok(keys.indexOf('agent:claude') < keys.indexOf('ep:claude|34.120.1.1'));
 });
+
+test('an expectation clears the episodes it covers before the daemon answers', () => {
+  const scope = { agent: 'claude', exe_path: '/Applications/Claude', harness: 'claude', workspace: '/work/a' };
+  const ep = (id, host, port, s = scope) => ({ id, candidate: true, expected: false,
+    observed: { id, host, port, protocol: 'tcp', recurring: true, scope_complete: true, scope: s } });
+  const t = {
+    egressEpisodes: [
+      ep('e1', 'api.example.com', 443),
+      ep('e2', 'api.example.com', 443, { ...scope, workspace: '/work/b' }),
+      ep('e3', 'cdn.example.com', 443),
+      ep('e4', 'api.example.com', 443, { ...scope, agent: 'codex' }),
+    ],
+    posture: { state: 'attention', needs_you: 4,
+      items: ['e1', 'e2', 'e3', 'e4'].map(id => ({ kind: 'recurring_egress', id })),
+      groups: [{ key: 'agent:claude', items: ['e1', 'e2', 'e3'].map(id => ({ kind: 'recurring_egress', id })) },
+        { key: 'agent:codex', items: [{ kind: 'recurring_egress', id: 'e4' }] }] },
+  };
+  const ids = rows => rows.filter(r => r.expected && !r.candidate).map(r => r.id);
+
+  const dest = ctx.egressAfterExpect(t, 'e1', 'destination');
+  assert.deepEqual(ids(dest.egressEpisodes), ['e1', 'e2'], 'same agent, host, protocol and port');
+  assert.deepEqual(dest.posture.items.map(it => it.id), ['e3', 'e4']);
+  assert.equal(dest.posture.needs_you, 2);
+
+  const broad = ctx.egressAfterExpect(t, 'e1', 'scope');
+  assert.deepEqual(ids(broad.egressEpisodes), ['e1', 'e3'], 'same agent and complete scope');
+  assert.deepEqual(broad.posture.items.map(it => it.id), ['e2', 'e4']);
+
+  const gone = ctx.egressAfterExpect(t, 'missing', 'destination');
+  assert.equal(gone.egressEpisodes, t.egressEpisodes);
+  assert.equal(gone.posture, t.posture);
+});

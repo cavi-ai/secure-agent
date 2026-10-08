@@ -486,6 +486,22 @@
     });
   }
   const REQUIRE_TOKEN = MODE.includes('requiretoken');
+  // expectdemo: episode-routine is a pending decision; Egress → Expect this
+  // destination must clear it before POST /expected-egress answers.
+  if (MODE.includes('expectdemo')) {
+    const post = data['/posture'];
+    post.items.unshift({ severity: 1, kind: 'recurring_egress', id: 'episode-routine', title: 'Recurring connection needs review: updates.example.com' });
+    post.groups.push({ key: 'agent:claude', label: 'claude activity', agent: 'claude', items: [
+      { kind: 'recurring_egress', priority: 1, id: 'episode-routine', title: 'Recurring connection', detail: '5 calls to updates.example.com:443 (tcp) on a recurring schedule.' }] });
+    post.needs_you = post.items.length;
+    setTimeout(() => {
+      openTab('egress');
+      const listed = document.getElementById('posture-items').textContent.includes('updates.example.com');
+      stamp('expect-before', `listed=${listed} needs=${window.SA.t.posture.needs_you}`);
+      document.querySelector('[data-action="expect-egress"][data-episode-id="episode-routine"][data-kind="destination"]').click();
+      setTimeout(() => document.getElementById('confirm-ok').click(), 300);
+    }, 4000);
+  }
 
   // explaindemo: flag-2 carries the daemon's served explanation (the S2
   // shape: Cloudflare over IPv6, advisor benign at 0.93, allow-host
@@ -1053,6 +1069,11 @@
         const text = id => (document.getElementById(id) || {}).textContent;
         const queued = !!document.querySelector('#attention-center [data-id="inc-20260907-6033-a1b2"]');
         stamp('resolve-probe', `badge=${text('badge-attention-count')} tab=${text('tab-badge-home')} queued=${queued}`);
+      }
+      if (MODE.includes('expectdemo') && p === '/expected-egress') {
+        const choices = !!document.querySelector('#recurring-egress-container [data-action="expect-egress"][data-episode-id="episode-routine"]');
+        const listed = (document.getElementById('posture-items') || {}).textContent.includes('updates.example.com');
+        stamp('expect-probe', `choices=${choices} listed=${listed} needs=${window.SA.t.posture.needs_you}`);
       }
       // postfail: POST /allowlist answers 500 (the act-in-place revert path).
       if (MODE.includes('postfail') && p === '/allowlist') {
