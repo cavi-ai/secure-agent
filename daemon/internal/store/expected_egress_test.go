@@ -122,7 +122,7 @@ func TestExpectedEgressMatcherReadsRulesOnce(t *testing.T) {
 	}
 	defer s.Close()
 	scope := EgressScope{Agent: "claude", ExePath: "/usr/bin/claude", Harness: "claude", Workspace: "/work/a"}
-	if err := s.RecordEgressObservation(EgressObservation{Scope: scope, Host: "API.Example.COM.", Protocol: "TCP", Port: 443, At: time.Now()}); err != nil {
+	if err := s.RecordEgressObservationForTest(EgressObservation{Scope: scope, Host: "API.Example.COM.", Protocol: "TCP", Port: 443, At: time.Now()}); err != nil {
 		t.Fatal(err)
 	}
 	eps := s.ListEgressEpisodes(10)

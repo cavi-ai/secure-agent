@@ -145,6 +145,7 @@ var Table = []Route{
 	{Path: "/agent/chat", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}, ConsoleMethods: []string{"DELETE"}},
 	{Path: "/agent/analyze", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
 	{Path: "/agent/recommendations", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
+	{Path: "/agent/worktree", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
 	{Path: "/agent/actions", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
 	{Path: "/agent/plans", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}, ConsoleMethods: []string{"DELETE"}},
 	{Path: "/agent/dispatch", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},

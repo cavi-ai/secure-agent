@@ -223,7 +223,7 @@ func runCleanupAdvise(w io.Writer, client *http.Client, args []string) error {
 	code, resp := request(client, http.MethodPost, "http://unix/cleanup/advise", string(body))
 	switch {
 	case code == http.StatusForbidden:
-		return fmt.Errorf("cleanup advise refused (403): while the menu bar app runs, changes go through it — use the console's Cleanup tab; agent sessions cannot make changes")
+		return fmt.Errorf("cleanup advise refused (403): while the menu bar app runs, changes go through it — use the console's System tab; agent sessions cannot make changes")
 	case code != 200:
 		return fmt.Errorf("cleanup advise failed (%d): %s", code, strings.TrimSpace(resp))
 	}

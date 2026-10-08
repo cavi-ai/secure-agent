@@ -16,10 +16,10 @@ import (
 func TestExpectedEgressAPIRequiresEpisodeAndAudits(t *testing.T) {
 	st := testStore(t)
 	scope := store.EgressScope{Agent: "claude", ExePath: "/usr/bin/claude", Harness: "claude", Workspace: "/work/a"}
-	if err := st.RecordEgressObservation(store.EgressObservation{Scope: scope, SessionID: "s1", Host: "203.0.113.1", Protocol: "tcp", Port: 443, At: time.Now().UTC()}); err != nil {
+	if err := st.RecordEgressObservationForTest(store.EgressObservation{Scope: scope, SessionID: "s1", Host: "203.0.113.1", Protocol: "tcp", Port: 443, At: time.Now().UTC()}); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.RecordEgressObservation(store.EgressObservation{Scope: store.EgressScope{Agent: "claude"}, SessionID: "s2", Host: "203.0.113.9", Protocol: "tcp", Port: 443, At: time.Now().UTC()}); err != nil {
+	if err := st.RecordEgressObservationForTest(store.EgressObservation{Scope: store.EgressScope{Agent: "claude"}, SessionID: "s2", Host: "203.0.113.9", Protocol: "tcp", Port: 443, At: time.Now().UTC()}); err != nil {
 		t.Fatal(err)
 	}
 	var id, incompleteID string

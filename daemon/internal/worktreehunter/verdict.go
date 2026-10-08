@@ -47,6 +47,9 @@ type Worktree struct {
 	Untracked int      `json:"untracked,omitempty"`
 	Conflicts int      `json:"conflicts,omitempty"`
 	Paths     []string `json:"paths,omitempty"`
+	// PartlyStaged counts changed files whose staged version differs from
+	// the working file: moving the folder would lose the staged version.
+	PartlyStaged int `json:"partly_staged,omitempty"`
 
 	// Unique counts commits reachable from HEAD but from no remote ref and
 	// not from the default branch. Loose counts, for a detached HEAD, the

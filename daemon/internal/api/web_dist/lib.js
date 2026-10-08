@@ -1922,20 +1922,24 @@ function mapPostureAttention(p, fn) {
 }
 
 // ---------- console navigation ----------
-// Five tabs; Sessions holds five sub-views. Old tab ids (menu bar deep
+// Six tabs; Sessions holds four sub-views. Old tab ids (menu bar deep
 // links, saved views, the stored tab, in-page links) resolve through one
 // alias table.
-const CONSOLE_TABS = ['home', 'sessions', 'egress', 'policy', 'agent'];
-const SESSIONS_SUBS = ['board', 'processes', 'resources', 'worktrees', 'events'];
+const CONSOLE_TABS = ['home', 'sessions', 'egress', 'system', 'policy', 'agent'];
+const SESSIONS_SUBS = ['board', 'processes', 'resources', 'events'];
 const TAB_ALIASES = {
   overview: { tab: 'home' },
   findings: { tab: 'home', focus: 'attention' },
   agents: { tab: 'sessions', sub: 'processes' },
   resources: { tab: 'sessions', sub: 'resources' },
   history: { tab: 'sessions', sub: 'resources' },
-  worktrees: { tab: 'sessions', sub: 'worktrees' },
+  worktrees: { tab: 'system' },
+  cleanup: { tab: 'system' },
+  clutter: { tab: 'system' },
   events: { tab: 'sessions', sub: 'events' },
 };
+// Sessions sub-views that moved to another tab ("#sessions/worktrees").
+const SESSIONS_SUB_ALIASES = { worktrees: 'system' };
 
 // isConsoleRoute: whether id (a tab, "sessions/<sub>", an old tab id, with
 // or without "#") names a console view.
@@ -1954,6 +1958,9 @@ function resolveConsoleRoute(id) {
     return { tab: a.tab, sub: a.tab === 'sessions' ? a.sub : '', focus: a.focus || '' };
   }
   if (!CONSOLE_TABS.includes(head)) return { tab: 'home', sub: '', focus: '' };
+  if (head === 'sessions' && Object.prototype.hasOwnProperty.call(SESSIONS_SUB_ALIASES, rest)) {
+    return { tab: SESSIONS_SUB_ALIASES[rest], sub: '', focus: '' };
+  }
   if (head === 'sessions') return { tab: 'sessions', sub: SESSIONS_SUBS.includes(rest) ? rest : 'board', focus: '' };
   return { tab: head, sub: '', focus: '' };
 }

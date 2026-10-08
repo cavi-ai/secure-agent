@@ -777,6 +777,7 @@ export interface Worktree {
   untracked?: number;
   conflicts?: number;
   paths?: string[];
+  partly_staged?: number;
   unique_commits?: number;
   loose_commits?: number;
   merged?: string;

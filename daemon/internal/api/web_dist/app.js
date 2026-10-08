@@ -783,8 +783,9 @@ document.addEventListener('DOMContentLoaded', () => {
     activity: 'home:trends', 'chart-flags': 'home:trends', 'chart-memory': 'home:trends',
     sessions: 'sessions/board', agents: 'sessions/processes', fleet: 'sessions/processes',
     resources: 'sessions/resources', history: 'sessions/resources',
-    worktrees: 'sessions/worktrees', clutter: 'sessions/worktrees', events: 'sessions/events',
+    events: 'sessions/events',
     endpoints: 'egress', 'recurring-egress': 'egress', firewall: 'egress', sources: 'egress',
+    worktrees: 'system', clutter: 'system',
     notify: 'policy', policy: 'policy', 'expected-egress': 'policy', audit: 'policy', agent: 'agent'
   };
   // A panel is on screen when its tab is active, its sub-view is the open
@@ -922,7 +923,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // A running removal keeps the re-reads going on any tab: its toast
     // follows it to the end.
     if (!rep || !(rep.sizing || rep.refreshing || asking || removing)) return;
-    if (!removing && !(activeTab === 'sessions' && activeSub === 'worktrees')) return;
+    if (!removing && activeTab !== 'system') return;
     if (worktreeSizingTimer) {
       // A removal that starts while a sizing re-read waits gets its own
       // cadence at once.
@@ -1109,7 +1110,7 @@ document.addEventListener('DOMContentLoaded', () => {
       clutterState.loading = false;
       markDirty('clutter');
       const rep = clutterState.report;
-      if (rep && (rep.sizing || rep.refreshing) && activeTab === 'sessions' && activeSub === 'worktrees' && !clutterSizingTimer && clutterSizingPolls < WORKTREE_SIZING_POLLS) {
+      if (rep && (rep.sizing || rep.refreshing) && activeTab === 'system' && !clutterSizingTimer && clutterSizingPolls < WORKTREE_SIZING_POLLS) {
         clutterSizingPolls++;
         clutterSizingTimer = setTimeout(() => { clutterSizingTimer = null; loadClutter(false); }, WORKTREE_SIZING_POLL_MS);
       }
@@ -1571,15 +1572,15 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     PANELS.forEach(([name]) => { if (panelOnScreen(name)) dirtyPanels.add(name); });
     renderDirty();
-    if (activeTab === 'sessions' && activeSub === 'worktrees'
+    if (activeTab === 'system'
       && (!worktreesState.report || Date.now() - worktreesState.loadedAt > WORKTREE_STALE_MS)) {
       loadWorktrees(false);
     }
-    if (activeTab === 'sessions' && activeSub === 'worktrees'
+    if (activeTab === 'system'
       && (!clutterState.report || Date.now() - clutterState.loadedAt > WORKTREE_STALE_MS)) {
       loadClutter(false);
     }
-    if (activeTab === 'sessions' && activeSub === 'worktrees'
+    if (activeTab === 'system'
       && (!worktreesState.ledger || Date.now() - worktreesState.ledgerAt > WORKTREE_STALE_MS)) {
       loadLedger();
     }
@@ -2169,44 +2170,25 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   };
 
-  function reviewedWorktree(path) {
+  // The listed keep or review row for path that can go to the Trash.
+  function trashableWorktree(path) {
     for (const repo of (worktreesState.report && worktreesState.report.repos) || []) {
-      const row = (repo.worktrees || []).find(w => w.path === path && w.state === 'review' && !w.orphan);
+      const row = (repo.worktrees || []).find(w => w.path === path && (w.state === 'review' || w.state === 'keep') && !w.orphan);
       if (row) return row;
     }
     return null;
   }
 
-  window.reviewWorktree = function(path) {
-    const row = reviewedWorktree(path);
-    if (!row) return;
-    const reasons = (row.reasons || []).map(reason => `<li>${escapeHTML(reason)}</li>`).join('');
-    const canTrash = row.head && reasons && !row.error && !row.submodules;
-    openDrawer({
-      title: 'Review worktree', icon: 'folder',
-      body: `<p><b>Branch:</b> ${escapeHTML(row.branch || '(detached)')}</p>
-        <p><b>Folder:</b> ${escapeHTML(row.path)}</p>
-        <p><b>HEAD:</b> ${escapeHTML(row.head || 'unknown')}</p>
-        <p>Review these local-only items before clearing this worktree:</p><ul>${reasons}</ul>
-        <p>Moving this folder to Trash preserves its files there. The branch, commits, and stashes stay in Git. You can restore the folder from Trash until it is emptied.</p>
-        ${canTrash ? '' : '<p>This worktree needs further inspection before it can be moved to Trash.</p>'}`,
-      foot: `<button type="button" class="btn btn-sm" data-action="worktree-reveal" data-path="${escapeHTML(path)}">Open folder</button>`
-        + (canTrash ? `<button type="button" class="btn btn-danger btn-sm" data-action="worktree-review-trash" data-path="${escapeHTML(path)}">Move to Trash</button>` : '')
-    });
-  };
-
   window.trashReviewedWorktree = async function(path) {
-    const row = reviewedWorktree(path);
-    if (!row) return;
-    const ok = await window.saConfirm(`Move ${path} to Trash and unregister the worktree? Its files remain recoverable in Trash; its branch, commits, and stashes remain in Git.`,
-      { title: 'Move reviewed worktree to Trash', okLabel: 'Move to Trash' });
+    const row = trashableWorktree(path);
+    if (!row || worktreeTrashBlock(row)) return;
+    const ok = await window.saConfirm(worktreeTrashConfirm(row), { title: 'Remove worktree', okLabel: 'Remove' });
     if (!ok) return;
     try {
       const { r, text, json } = await postWorktree('/worktrees/review-trash',
         { path, head: row.head, reasons: row.reasons });
       if (!r.ok) throw new Error(text.trim() || String(r.status));
       const dest = json && json.result && json.result.trash_path;
-      closeDrawer();
       dropWorktreeRows([path]);
       renderNow(['worktrees']);
       showToast(`Moved to Trash${dest ? ': ' + dest : ''}`, 'success');
@@ -2216,6 +2198,24 @@ document.addEventListener('DOMContentLoaded', () => {
       showToast('Could not move reviewed worktree: ' + (err.message || err), 'danger');
       loadWorktrees(true);
     }
+  };
+
+  // Discuss: the daemon writes the question from the worktree's fresh facts
+  // and the local model answers in the Agent tab's conversation.
+  window.discussWorktree = async function(path) {
+    try {
+      const res = await agentFetch('/agent/worktree', { method: 'POST', body: { path } });
+      if (res && res.message && res.message.id) {
+        const chat = agentState.chat || (agentState.chat = { messages: [] });
+        agentState.readVersion.chat = (agentState.readVersion.chat || 0) + 1;
+        if (!(chat.messages || []).some(m => m.id === res.message.id)) chat.messages = [...(chat.messages || []), res.message];
+        chat.chatting = true;
+      }
+    } catch (err) {
+      showToast(err.message || String(err), 'danger');
+      return;
+    }
+    switchTab('agent');
   };
 
   // Ask the local advisor for a note. The note is looked up on every GET, so
@@ -4024,9 +4024,9 @@ document.addEventListener('DOMContentLoaded', () => {
         e.preventDefault();
         window.trashOrphanWorktree(d.path);
         break;
-      case 'worktree-review':
+      case 'worktree-discuss':
         e.preventDefault();
-        window.reviewWorktree(d.path);
+        window.discussWorktree(d.path);
         break;
       case 'worktree-review-trash':
         e.preventDefault();

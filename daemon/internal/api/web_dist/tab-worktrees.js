@@ -384,11 +384,48 @@ function worktreeIdleLabel(w) {
 }
 
 // worktreeNoteHTML: the local advisor's note, shown under the reasons. It
-// is advice only; the state and the buttons never depend on it.
-function worktreeNoteHTML(note) {
+// is advice only; the state and the buttons never depend on it. With a path
+// it ends in Discuss, which carries the question to the Agent tab.
+function worktreeNoteHTML(note, path) {
   if (!note) return '';
   const conf = note.confidence ? ` ${Math.round(note.confidence * 100)}%` : '';
-  return `<p class="wt-advice"><b>Advisor: ${escapeHTML(note.assessment || '')}</b>${escapeHTML(conf)} · ${escapeHTML(note.rationale || '')}</p>`;
+  const discuss = path ? ` ${worktreeDiscussHTML(path)}` : '';
+  return `<p class="wt-advice"><b>Advisor: ${escapeHTML(note.assessment || '')}</b>${escapeHTML(conf)} · ${escapeHTML(note.rationale || '')}${discuss}</p>`;
+}
+
+// worktreeDiscussHTML: the link that asks the Agent tab about one worktree.
+function worktreeDiscussHTML(path) {
+  return `<button type="button" class="link-btn" data-action="worktree-discuss" data-path="${escapeHTML(path)}">Discuss</button>`;
+}
+
+// worktreeTrashBlock: why a keep or review row cannot be moved to the Trash
+// from the console, or ''. The daemon refuses the same rows again.
+function worktreeTrashBlock(w) {
+  if (w.error) return `could not inspect: ${w.error}`;
+  if (w.submodules > 0) return 'it has populated submodules';
+  if (w.in_use) return 'an agent session is live here';
+  if (w.locked) return 'it is locked; unlock it first';
+  if (w.loose_commits > 0) return 'detached HEAD has commits on no branch; create a branch first';
+  if (w.conflicts > 0) return 'a merge or rebase has unresolved conflicts; finish or abort it first';
+  if (w.partly_staged > 0) return `${w.partly_staged === 1 ? '1 file has' : w.partly_staged + ' files have'} staged changes that differ from the working copy; commit or unstage them first`;
+  return '';
+}
+
+// Checker reasons that name files living only in the folder.
+const WORKTREE_LOCAL_REASON = /uncommitted change|untracked file|ignored files|unresolved conflict/;
+
+// worktreeTrashConfirm: the dialog before a keep or review row's folder goes
+// to the Trash, built from the row alone.
+function worktreeTrashConfirm(w) {
+  const local = (w.reasons || []).filter(r => WORKTREE_LOCAL_REASON.test(r));
+  const stays = w.branch ? `branch ${w.branch}, its commits and stashes` : 'its commits and stashes';
+  return [
+    `Move ${w.path} to the Trash and unregister the worktree?`,
+    `Goes with it: ${local.length ? local.join('; ') : 'the folder and its ignored files'}`,
+    `Stays in git: ${stays}.`,
+    ...(w.last_activity && w.idle_days === 0 ? ['It was active in the last 24 hours; an agent may still be using it.'] : []),
+    'Its files stay in the Trash until you empty it; putting them back does not register the worktree again.',
+  ].join('\n');
 }
 
 // worktreeAskHTML: the latest request to the worktree's owning agent.
@@ -419,10 +456,13 @@ function worktreeRemovalHTML(rm) {
   return `<p class="wt-removal wt-removal-failed" role="alert">${text}</p>`;
 }
 
-// worktreeRowHTML: one worktree. Remove only on state remove, Prune only on
-// state prune; the daemon enforces the same rule again on the request. Ask
-// the agent only for live eligible sessions; Ask advisor on review and keep.
-// A running removal disables Remove and shows its step.
+// worktreeRowHTML: one worktree. Remove on every row that can be removed:
+// state remove runs git worktree remove, review and keep move the folder to
+// the Trash (disabled, with the reason, when the daemon would refuse). Prune
+// only on state prune; the daemon enforces the same rules again on the
+// request. Ask <harness> only for live eligible sessions; Ask advisor on
+// review and keep. Discuss on every row the daemon can inspect. A running
+// removal disables Remove and shows its step.
 function worktreeRowHTML(w, repo, note, ask, removal, askable) {
   const branch = w.branch || (w.detached ? '(detached)' : '');
   const reasons = (w.reasons || []).map(r => `<li>${escapeHTML(r)}</li>`).join('');
@@ -441,10 +481,14 @@ function worktreeRowHTML(w, repo, note, ask, removal, askable) {
     action = `<button type="button" class="btn btn-sm" data-action="worktree-prune" data-repo="${escapeHTML(repo.path)}">Prune</button>`;
   } else if (w.state === 'review' || w.state === 'keep') {
     const busy = ask && ask.status === 'running' ? ' disabled' : '';
-    action = (w.state === 'review' ? `<button type="button" class="btn btn-sm" data-action="worktree-review" data-path="${escapeHTML(w.path)}">Review</button>` : '')
-      + (askable ? `<button type="button" class="btn btn-primary btn-sm" data-action="worktree-ask" data-path="${escapeHTML(w.path)}" title="Ask active ${escapeHTML(askable)} agent"${busy}>Ask the agent</button>` : '')
+    const block = worktreeTrashBlock(w);
+    action = (block
+      ? `<button type="button" class="btn btn-danger btn-sm" disabled title="${escapeHTML('Cannot remove: ' + block)}">Remove</button>`
+      : `<button type="button" class="btn btn-danger btn-sm" data-action="worktree-review-trash" data-path="${escapeHTML(w.path)}" title="Move the folder to the Trash; the branch stays in git">Remove</button>`)
+      + (askable ? `<button type="button" class="btn btn-primary btn-sm" data-action="worktree-ask" data-path="${escapeHTML(w.path)}" title="Ask active ${escapeHTML(askable)} agent"${busy}>Ask ${escapeHTML(askable)}</button>` : '')
       + `<button type="button" class="btn btn-sm" data-action="worktree-advise" data-path="${escapeHTML(w.path)}" title="Get a local advisory note; no agent is resumed">Ask advisor</button>`;
   }
+  const discuss = w.orphan || w.state === 'prune' || w.state === 'main' ? '' : worktreeDiscussHTML(w.path);
   // Every folder still on disk opens in Finder; orphans carry Open folder
   // in their actions already.
   const open = w.orphan || w.state === 'prune' ? ''
@@ -456,10 +500,10 @@ function worktreeRowHTML(w, repo, note, ask, removal, askable) {
       <button type="button" class="wt-path" data-action="copy-path" data-path="${escapeHTML(w.path)}" title="${escapeHTML(w.path)} — click to copy">${escapeHTML(worktreePathLabel(w.path, repo.path))}</button>
       <span class="wt-size">${escapeHTML(worktreeSizeLabel(w))}</span>
       <span class="wt-idle">${escapeHTML(worktreeIdleLabel(w))}</span>
-      ${open}${action}
+      ${open}${action}${discuss}
     </div>
     ${reasons ? `<ul class="wt-reasons">${reasons}</ul>` : ''}
-    ${worktreeNoteHTML(note)}
+    ${worktreeNoteHTML(note, discuss ? w.path : '')}
     ${worktreeAskHTML(ask)}
     ${worktreeRemovalHTML(removal)}
   </div>`;
