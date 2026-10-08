@@ -41,19 +41,23 @@ func (s *Store) noteRead(operation string, err error) {
 	h.readActive[operation] = true
 }
 
-func (s *Store) noteWrite(operation string, err error) {
+// noteWrite reports whether the visible health state changed. Repeated
+// failures count as changes; a healthy write is quiet unless it clears a fault.
+func (s *Store) noteWrite(operation string, err error) bool {
 	h := &s.writeHealth
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if err == nil {
+		changed := h.active[operation]
 		delete(h.active, operation)
-		return
+		return changed
 	}
 	h.failures++
 	if h.active == nil {
 		h.active = make(map[string]bool)
 	}
 	h.active[operation] = true
+	return true
 }
 
 // NoteTranscriptCheckpointWrite includes the collector's checkpoint file in

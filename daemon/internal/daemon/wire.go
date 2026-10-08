@@ -304,8 +304,8 @@ func noteFileFeed(st *store.Store, e event.Event) {
 
 // startDrainLoop consumes the bus, persisting events and correlating flags →
 // incidents → fleet webhooks. The returned channel closes once every delivered
-// event has been persisted, so shutdown can wait for it instead of dropping
-// the final, most-relevant events/flags/incident around a kill or quit.
+// event has had its persistence attempted. Shutdown waits for these attempts
+// rather than abandoning the final events/flags/incident around a kill or quit.
 // adv may be nil (advisor disabled); when set, new flags/incidents are also
 // offered for advisory triage — enqueueing is non-blocking and drop-safe.
 // newFlag, when set, is offered each new flag after it is stored (the
@@ -357,7 +357,9 @@ func startDrainLoop(sub <-chan event.Event, st *store.Store, cr *correlate.Corre
 				continue
 			}
 			e.Record = len(flags) > 0 || cr.SensitiveFile(e)
-			st.PutEvent(e)
+			eventWrite, eventErr := st.PutEvent(e)
+			eventSaved := eventErr == nil && eventWrite.Changed
+			healthChanged := eventWrite.HealthChanged
 			noteFileFeed(st, e)
 			if e.Kind == event.KindConnOpen && e.RemoteHost != "" && e.RemotePort > 0 {
 				observation := store.EgressObservation{SessionID: e.SessionID, Host: e.RemoteHost, Protocol: "tcp", Port: e.RemotePort, At: e.TS}
@@ -378,7 +380,8 @@ func startDrainLoop(sub <-chan event.Event, st *store.Store, cr *correlate.Corre
 				default:
 				}
 			}
-			if deltas != nil {
+			guardLifecycle := e.Kind == event.KindGuardPrompt || e.Kind == event.KindGuardResolved
+			if deltas != nil && (eventSaved || guardLifecycle) {
 				// Guard lifecycle keeps its own delta names (the menubar's
 				// instant prompt path keys on them); everything else is a
 				// generic typed event for timeline/console patching.
@@ -394,7 +397,7 @@ func startDrainLoop(sub <-chan event.Event, st *store.Store, cr *correlate.Corre
 			// showing cross-node sessions needs the tool/model calls, not just
 			// the security events. Lossy by design — the publisher's in-flight
 			// cap drops trace overflow before it can starve flags.
-			if isTraceKind(e.Kind) {
+			if eventSaved && isTraceKind(e.Kind) {
 				if pub != nil {
 					pub.Publish(fleet.EventTrace, e)
 				}
@@ -410,7 +413,12 @@ func startDrainLoop(sub <-chan event.Event, st *store.Store, cr *correlate.Corre
 					fl.Workspace = res.WorkspaceFor(fl.SessionID)
 				}
 				log.Printf("FLAG TRIGGERED [%d]: %s (pid %d agent %s)", fl.Severity, fl.Rule, fl.PID, fl.Agent)
-				st.PutFlag(fl)
+				flagWrite, flagErr := st.PutFlag(fl)
+				healthChanged = healthChanged || flagWrite.HealthChanged
+				cr.ResolvePersistence(fl.ID, flagErr == nil && flagWrite.Changed)
+				if flagErr != nil || !flagWrite.Changed {
+					continue
+				}
 				if deltas != nil {
 					deltas.Publish(api.Delta{Type: "flag", Data: fl})
 				}
@@ -461,10 +469,7 @@ func startDrainLoop(sub <-chan event.Event, st *store.Store, cr *correlate.Corre
 					}
 				}
 			}
-			if len(flags) > 0 && postureChanged != nil {
-				postureChanged()
-			}
-			if (e.Kind == event.KindGuardPrompt || e.Kind == event.KindGuardResolved) && postureChanged != nil {
+			if (healthChanged || len(flags) > 0 || guardLifecycle) && postureChanged != nil {
 				postureChanged()
 			}
 		}

@@ -13,7 +13,8 @@ import (
 // "incident" (created or re-aggregated), "session" (upsert/lifecycle),
 // "posture" (state or count changed), and the guard lifecycle pair
 // "guard-prompt" / "guard-resolved" (kept as their own names: the menubar's
-// instant path keys on them).
+// instant path keys on them). Guard lifecycle notifications are live control
+// signals and remain available when event persistence fails.
 type Delta struct {
 	Type string `json:"type"`
 	Data any    `json:"data"`
