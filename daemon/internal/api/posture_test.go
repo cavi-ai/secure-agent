@@ -577,13 +577,13 @@ func TestHarnessUncoveredIgnoresTranscriptHits(t *testing.T) {
 	status := Status{ActiveAgents: 2, Agents: []AgentSummary{{PID: 42, Name: "cursor"}}}
 	st.UpsertSession(model.Session{ID: "cursor-session", Harness: "cursor", StartedAt: time.Now(), LastSeenAt: time.Now()})
 	st.PutEvent(event.Event{Kind: event.KindTranscriptHit, TS: time.Now(), Detail: "aws-key"})
-	items := harnessUncoveredItems(harnessCoverage(st, status))
+	items := harnessUncoveredItems(harnessCoverage(status, storeActivity(st)))
 	if len(items) == 0 {
 		t.Fatal("transcript hit must not clear harness_uncovered")
 	}
 	// A real hook action DOES clear it.
 	st.PutEvent(event.Event{Kind: event.KindPluginAction, TS: time.Now(), SessionID: "cursor-session", Detail: "Read"})
-	if items := harnessUncoveredItems(harnessCoverage(st, status)); len(items) != 0 {
+	if items := harnessUncoveredItems(harnessCoverage(status, storeActivity(st))); len(items) != 0 {
 		t.Fatalf("plugin action should clear harness_uncovered, got %+v", items)
 	}
 }

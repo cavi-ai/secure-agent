@@ -241,6 +241,8 @@ type API struct {
 	// /costs/unpriced reports in memory (costcache.go).
 	costs    costCache[store.CostReport]
 	unpriced costCache[unpricedCostReport]
+
+	harnessActivity harnessActivityCache
 }
 
 // GuardEventSink receives guard decisions (allow/deny) for downstream
@@ -1009,7 +1011,7 @@ func (a *API) evidenceStatus(st Status) Status {
 		h := a.store.WriteHealth()
 		st.StorageHealth = &h
 	}
-	rows := harnessCoverage(a.store, st)
+	rows := harnessCoverage(st, a.recentHarnessActivity)
 	if len(rows) > 0 {
 		cov := CoverageStatus{HarnessesActive: len(rows)}
 		if st.Coverage != nil {

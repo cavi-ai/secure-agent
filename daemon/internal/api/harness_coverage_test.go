@@ -9,7 +9,35 @@ import (
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
+	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
+
+// storeActivity reads st's harness activity on every call, uncached.
+func storeActivity(st *store.Store) func() map[string]store.HarnessActivity {
+	return func() map[string]store.HarnessActivity {
+		return st.HarnessActivitySince(time.Now().Add(-hookActivityWindow))
+	}
+}
+
+// One read of the 24 h harness activity serves every caller for
+// harnessActivityTTL; the next read after it sees new activity.
+func TestHarnessActivityReadOncePerTTL(t *testing.T) {
+	st := testStore(t)
+	a := newTestAPI("", st, &fakeKiller{}, func() Status { return Status{Running: true} })
+	now := time.Now()
+	st.UpsertSession(model.Session{ID: "s1", Harness: "codex", StartedAt: now, LastSeenAt: now})
+	if got := a.recentHarnessActivity(); got["codex"].TraceLastSeen != "" {
+		t.Fatalf("activity before any trace = %+v", got)
+	}
+	st.PutEvent(event.Event{Kind: event.KindToolCall, TS: now, SessionID: "s1", ToolName: "exec", CallID: "c1"})
+	if got := a.recentHarnessActivity(); got["codex"].TraceLastSeen != "" {
+		t.Fatalf("activity re-read inside the TTL: %+v", got)
+	}
+	a.harnessActivity.at = time.Now().Add(-harnessActivityTTL)
+	if got := a.recentHarnessActivity(); got["codex"].TraceLastSeen == "" {
+		t.Fatalf("activity after the TTL = %+v, want the new trace", got)
+	}
+}
 
 // An Antigravity agent's coverage row reads its transcript sessions: trace
 // support and the latest trace stamp.
@@ -18,7 +46,7 @@ func TestAntigravityCoverageReadsItsTranscriptSessions(t *testing.T) {
 	now := time.Now()
 	st.UpsertSession(model.Session{ID: "b285eea1-3969", Harness: "antigravity", StartedAt: now, LastSeenAt: now})
 	st.PutEvent(event.Event{Kind: event.KindToolCall, TS: now, SessionID: "b285eea1-3969", ToolName: "run_command", CallID: "c1"})
-	rows := harnessCoverage(st, Status{Running: true, Agents: []AgentSummary{{PID: 40, Name: "antigravity"}}})
+	rows := harnessCoverage(Status{Running: true, Agents: []AgentSummary{{PID: 40, Name: "antigravity"}}}, storeActivity(st))
 	if len(rows) != 1 || !rows[0].TraceSupported || rows[0].TraceLastSeen == "" {
 		t.Fatalf("antigravity coverage = %+v, want trace support and a last-seen stamp", rows)
 	}
