@@ -659,7 +659,8 @@ func (h *Hunter) inspectOne(ctx context.Context, rs *repoScan, isMain bool, l li
 	}
 	if rs.def != "" {
 		m := h.mergeState(ctx, rs, l)
-		w.Merged, w.ContentLines, w.ContentMissing = m.state, m.lines, m.missing
+		w.Merged, w.Unrelated = m.state, m.unrelated
+		w.ContentLines, w.ContentMissing, w.ContentExtended = m.lines, m.missing, m.extended
 	}
 	return w, f
 }
@@ -681,9 +682,13 @@ func (h *Hunter) mergeState(ctx context.Context, rs *repoScan, l listed) mergeVe
 		return mergeVerdict{state: mergedAncestor}
 	}
 	base, viaMergeBase, err := forkBase(ctx, dir, l.Branch, rs.def)
-	if err != nil || base == "" {
+	if err != nil {
 		return unknown
 	}
+	if base == "" {
+		return mergeVerdict{state: mergedUnknown, unrelated: true}
+	}
+	squashSaidNo := false
 	if viaMergeBase {
 		behind, err := countCommits(ctx, dir, "--no-merges", base+".."+rs.def)
 		if err != nil {
@@ -704,9 +709,16 @@ func (h *Hunter) mergeState(ctx context.Context, rs *repoScan, l listed) mergeVe
 			if fp[id] {
 				return mergeVerdict{state: mergedSquash}
 			}
+			squashSaidNo = true
 		}
 	}
-	return h.contentCheck(ctx, rs, dir, base)
+	v := h.contentCheck(ctx, rs, dir, base)
+	v.unrelated = !viaMergeBase
+	// A diff too big to measure by content keeps the squash check's answer.
+	if v.state == mergedUnknown && squashSaidNo {
+		v.state = mergedNo
+	}
+	return v
 }
 
 // dropBare removes the bare repository's own entry: it has no working

@@ -9,6 +9,7 @@ import (
 	"io"
 	"os/exec"
 	"path"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -25,8 +26,8 @@ import (
 // its bounds is unknown, never guessed.
 
 const (
-	contentMaxFiles     = 300     // changed files
-	contentMaxLines     = 20000   // added lines
+	contentMaxFiles     = 1000    // changed files
+	contentMaxLines     = 100000  // added lines
 	contentMaxDiffBytes = 8 << 20 // the combined diff
 	contentMaxRawBytes  = 1 << 20 // the changed-file list
 	contentMaxPaths     = 200000  // default-branch paths indexed by basename
@@ -34,7 +35,15 @@ const (
 	contentMaxBlobBytes = 4 << 20 // one counterpart read as text
 	pathListTimeout     = 30 * time.Second
 	reflogCreated       = "branch: Created from"
+
+	extendedMinWords = 3   // a shorter line never matches in a longer form
+	extendedMinCap   = 3   // extended lines allowed however few lines there are
+	extendedMaxTries = 200 // missing lines searched for a longer form
 )
+
+// contentMaxReadBytes bounds the counterpart content one check reads (a
+// variable so a test can lower it).
+var contentMaxReadBytes = 32 << 20
 
 // errContentBound marks a diff, list or blob over the check's bounds.
 var errContentBound = errors.New("content check bound exceeded")
@@ -42,9 +51,11 @@ var errContentBound = errors.New("content check bound exceeded")
 // mergeVerdict is what mergeState learned: the verdict and, when the content
 // check ran to the end, what it measured.
 type mergeVerdict struct {
-	state   string
-	lines   int
-	missing int
+	state     string
+	lines     int
+	missing   int
+	extended  int  // lines the default branch has only in a longer form
+	unrelated bool // HEAD shares no commit with the default branch
 }
 
 // mergeBaseOf is `git merge-base HEAD ref`. ok is false when the histories
@@ -458,33 +469,42 @@ func measureContent(ctx context.Context, dir, def string, ix *pathIndex, changes
 	}
 	defer br.close()
 
-	// lineSets caches each counterpart's lines; a nil set is "not there".
-	lineSets := map[string]map[string]struct{}{}
-	lineSet := func(p string) (map[string]struct{}, error) {
-		if s, ok := lineSets[p]; ok {
-			return s, nil
+	// files caches each counterpart's lines; nil is "not there".
+	files := map[string]*counterpart{}
+	read := 0
+	load := func(p string) (*counterpart, error) {
+		if cp, ok := files[p]; ok {
+			return cp, nil
 		}
 		b, err := br.get(def+":"+p, true)
 		if err != nil {
 			return nil, err
 		}
-		if b.big {
+		if read += len(b.data); b.big || read > contentMaxReadBytes {
 			return nil, errContentBound
 		}
-		var set map[string]struct{}
+		var cp *counterpart
 		if b.found {
-			set = map[string]struct{}{}
+			cp = &counterpart{set: map[string]struct{}{}}
 			for _, l := range strings.Split(string(b.data), "\n") {
 				if l = normalizeLine(l); l != "" {
-					set[l] = struct{}{}
+					if _, dup := cp.set[l]; !dup {
+						cp.set[l] = struct{}{}
+						cp.lines = append(cp.lines, l)
+					}
 				}
 			}
 		}
-		lineSets[p] = set
-		return set, nil
+		files[p] = cp
+		return cp, nil
 	}
 
+	type miss struct {
+		line string
+		in   []*counterpart
+	}
 	var res mergeVerdict
+	var misses []miss
 	contained := true
 	for i, c := range changes {
 		d := diffs[i]
@@ -524,38 +544,97 @@ func measureContent(ctx context.Context, dir, def string, ix *pathIndex, changes
 			if err != nil {
 				return mergeVerdict{}, err
 			}
-			var sets []map[string]struct{}
+			var cps []*counterpart
 			for _, q := range cands {
-				s, err := lineSet(q)
+				cp, err := load(q)
 				if err != nil {
 					return mergeVerdict{}, err
 				}
-				if s != nil {
-					sets = append(sets, s)
+				if cp != nil {
+					cps = append(cps, cp)
 				}
 			}
-			if len(sets) == 0 {
+			if len(cps) == 0 {
 				contained = false
 			}
 			res.lines += len(d.added)
 			for _, l := range d.added {
 				found := false
-				for _, s := range sets {
-					if _, ok := s[l]; ok {
+				for _, cp := range cps {
+					if _, ok := cp.set[l]; ok {
 						found = true
 						break
 					}
 				}
 				if !found {
-					res.missing++
-					contained = false
+					misses = append(misses, miss{line: l, in: cps})
 				}
 			}
 		}
 	}
+	// A line the default branch has only in a longer form (a list it
+	// appended to, an import that gained names) still carries the branch's
+	// work. Many such lines is a rewrite, not an extension; a long miss list
+	// is not merged either way and is not searched.
+	if len(misses) <= extendedMaxTries {
+		for _, m := range misses {
+			if extendedIn(m.line, m.in) {
+				res.extended++
+			}
+		}
+	}
+	res.missing = len(misses) - res.extended
 	res.state = mergedNo
-	if contained {
+	if contained && res.missing == 0 && res.extended <= max(extendedMinCap, res.lines/10) {
 		res.state = mergedContent
 	}
 	return res, nil
+}
+
+// counterpart is one default-branch file's distinct non-blank lines; words
+// holds each line's word set, built the first time an extended match needs it.
+type counterpart struct {
+	set   map[string]struct{}
+	lines []string
+	words []map[string]struct{}
+}
+
+// wordRE splits a line into the words an extended match compares.
+var wordRE = regexp.MustCompile(`[A-Za-z_][A-Za-z0-9_]*|[0-9]+`)
+
+// extendedIn reports whether a counterpart has a longer line holding every
+// word of line, which needs at least extendedMinWords words.
+func extendedIn(line string, cps []*counterpart) bool {
+	want := wordRE.FindAllString(line, -1)
+	if len(want) < extendedMinWords {
+		return false
+	}
+	for _, cp := range cps {
+		if cp.words == nil {
+			cp.words = make([]map[string]struct{}, len(cp.lines))
+			for i, l := range cp.lines {
+				ws := map[string]struct{}{}
+				for _, w := range wordRE.FindAllString(l, -1) {
+					ws[w] = struct{}{}
+				}
+				cp.words[i] = ws
+			}
+		}
+		for i, l := range cp.lines {
+			if len(l) <= len(line) {
+				continue
+			}
+			all := true
+			for _, w := range want {
+				if _, ok := cp.words[i][w]; !ok {
+					all = false
+					break
+				}
+			}
+			if all {
+				return true
+			}
+		}
+	}
+	return false
 }

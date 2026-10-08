@@ -59,6 +59,13 @@ type Worktree struct {
 	// are set when the content check ran to the end.
 	ContentLines   int `json:"content_lines,omitempty"`
 	ContentMissing int `json:"content_missing,omitempty"`
+	// ContentExtended counts the added lines the default branch has only in
+	// a longer form (a list or import it extended); they are not missing.
+	ContentExtended int `json:"content_extended,omitempty"`
+	// Unrelated marks a HEAD that shares no commit with the default branch
+	// (its history was rewritten): the content check then measures from the
+	// branch's creation point, and Unique counts the old history too.
+	Unrelated bool `json:"unrelated_history,omitempty"`
 
 	// SizeBytes is the allocated size of the working directory, measured by
 	// the background sizer; SizePartial marks a walk that hit its bound.
@@ -159,13 +166,28 @@ func classify(w *Worktree, f facts, now time.Time, staleAfter time.Duration) {
 	if len(w.PreciousIgnored) > 0 {
 		review = append(review, "ignored files that only live here: "+strings.Join(w.PreciousIgnored, ", "))
 	}
+	def := orDefault(f.DefaultBranch)
+	longer := ""
+	if w.ContentExtended > 0 {
+		longer = fmt.Sprintf(" (%s only in a longer form)", plural(w.ContentExtended, "line", "lines"))
+	}
 	if w.Unique > 0 && !merged {
 		reason := fmt.Sprintf("%s on no remote and not in %s (the branch keeps them after removal)",
-			plural(w.Unique, "commit", "commits"), orDefault(f.DefaultBranch))
-		if w.ContentLines > 0 {
-			reason += fmt.Sprintf("; %d of %d lines they add are on %s", w.ContentLines-w.ContentMissing, w.ContentLines, orDefault(f.DefaultBranch))
+			plural(w.Unique, "commit", "commits"), def)
+		switch {
+		case w.Unrelated && w.ContentLines > 0:
+			reason = fmt.Sprintf("shares no history with %s (rewritten); %d of %d lines it added since it was created are on %s%s; the branch keeps its commits after removal",
+				def, w.ContentLines-w.ContentMissing, w.ContentLines, def, longer)
+		case w.Unrelated:
+			reason += "; it shares no history with " + def + " (rewritten)"
+		case w.ContentLines > 0:
+			reason += fmt.Sprintf("; %d of %d lines they add are on %s%s", w.ContentLines-w.ContentMissing, w.ContentLines, def, longer)
 		}
 		review = append(review, reason)
+	}
+	mr := mergedReason(w.Merged, f.DefaultBranch)
+	if w.Merged == mergedContent {
+		mr += longer
 	}
 	if w.Stashes > 0 {
 		review = append(review, plural(w.Stashes, "stash", "stashes")+" on this branch")
@@ -176,20 +198,20 @@ func classify(w *Worktree, f facts, now time.Time, staleAfter time.Duration) {
 		w.State = StateKeep
 		w.Reasons = append(keep, review...)
 		if merged {
-			w.Reasons = append(w.Reasons, mergedReason(w.Merged, f.DefaultBranch))
+			w.Reasons = append(w.Reasons, mr)
 		}
 	case len(review) > 0:
 		w.State = StateReview
 		w.Reasons = review
 		if merged {
-			w.Reasons = append(w.Reasons, mergedReason(w.Merged, f.DefaultBranch))
+			w.Reasons = append(w.Reasons, mr)
 		}
 	case merged && recent:
 		w.State = StateKeep
-		w.Reasons = append(w.Reasons, mergedReason(w.Merged, f.DefaultBranch)+"; active in the last 24 hours")
+		w.Reasons = append(w.Reasons, mr+"; active in the last 24 hours")
 	case merged:
 		w.State = StateRemove
-		w.Reasons = append(w.Reasons, mergedReason(w.Merged, f.DefaultBranch))
+		w.Reasons = append(w.Reasons, mr)
 	case w.Unique == 0 && idle:
 		w.State = StateRemove
 		w.Reasons = append(w.Reasons, fmt.Sprintf("every commit is on a remote; idle %d days", w.IdleDays))

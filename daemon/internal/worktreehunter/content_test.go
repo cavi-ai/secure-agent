@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -118,8 +119,8 @@ func TestContentAfterHistoryRewrite(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if row.Merged != mergedContent || row.ContentLines != 3 || row.ContentMissing != 0 {
-		t.Fatalf("merged=%q lines=%d missing=%d, want content 3 0", row.Merged, row.ContentLines, row.ContentMissing)
+	if row.Merged != mergedContent || row.ContentLines != 3 || row.ContentMissing != 0 || !row.Unrelated {
+		t.Fatalf("merged=%q lines=%d missing=%d unrelated=%v, want content 3 0 true", row.Merged, row.ContentLines, row.ContentMissing, row.Unrelated)
 	}
 
 	// A line the rewritten history lacks is a measured "no".
@@ -130,6 +131,12 @@ func TestContentAfterHistoryRewrite(t *testing.T) {
 	}
 	if row.Merged != mergedNo || row.ContentLines != 4 || row.ContentMissing != 1 {
 		t.Fatalf("merged=%q lines=%d missing=%d, want no 4 1", row.Merged, row.ContentLines, row.ContentMissing)
+	}
+	// The old history's commit count says nothing about the branch's own
+	// work; the reason measures what it added since it was created.
+	want := "shares no history with origin/main (rewritten); 3 of 4 lines it added since it was created are on origin/main; the branch keeps its commits after removal"
+	if row.State != StateReview || !slices.Contains(row.Reasons, want) {
+		t.Fatalf("state %s reasons %q, want review with %q", row.State, row.Reasons, want)
 	}
 }
 
@@ -236,18 +243,20 @@ func TestContentUnknownWithoutABase(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if row.Merged != mergedUnknown || row.ContentLines != 0 {
-			t.Errorf("%s: merged=%q lines=%d, want unknown 0", name, row.Merged, row.ContentLines)
+		if row.Merged != mergedUnknown || row.ContentLines != 0 || !row.Unrelated {
+			t.Errorf("%s: merged=%q lines=%d unrelated=%v, want unknown 0 true", name, row.Merged, row.ContentLines, row.Unrelated)
 		}
 	}
 }
 
-func TestContentUnknownOverFileBound(t *testing.T) {
+// A diff over the content check's bounds is not measured; with a merge-base
+// the squash check already answered no, and that answer stands.
+func TestContentOverFileBoundKeepsSquashAnswer(t *testing.T) {
 	home := isolateGit(t)
 	f := newFixture(t)
 	wt := f.worktree(t, "wide")
 	for i := 0; i <= contentMaxFiles; i++ {
-		write(t, filepath.Join(wt, "gen", fmt.Sprintf("f%03d.txt", i)), fmt.Sprintf("line %d\n", i))
+		write(t, filepath.Join(wt, "gen", fmt.Sprintf("f%04d.txt", i)), fmt.Sprintf("line %d\n", i))
 	}
 	run(t, wt, "add", "-A")
 	run(t, wt, "commit", "-q", "-m", "many files")
@@ -255,8 +264,78 @@ func TestContentUnknownOverFileBound(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if row.Merged != mergedUnknown {
-		t.Fatalf("%d files: merged=%q, want unknown", contentMaxFiles+1, row.Merged)
+	if row.Merged != mergedNo || row.ContentLines != 0 {
+		t.Fatalf("%d files: merged=%q lines=%d, want no, unmeasured", contentMaxFiles+1, row.Merged, row.ContentLines)
+	}
+}
+
+// Reading more counterpart content than the bound allows is unknown, never
+// a partial answer.
+func TestContentUnknownOverReadBound(t *testing.T) {
+	home := isolateGit(t)
+	f := newFixture(t)
+	wt := f.worktree(t, "big")
+	commit(t, wt, "big.txt", "the branch line\n", "big")
+	rewriteDefault(t, f, map[string]string{"big.txt": "the branch line\n" + strings.Repeat("filler line\n", 20)})
+	old := contentMaxReadBytes
+	contentMaxReadBytes = 64
+	defer func() { contentMaxReadBytes = old }()
+	row, _, err := New(newMemStore(), home, Options{}).Inspect(context.Background(), wt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.Merged != mergedUnknown || row.ContentLines != 0 {
+		t.Fatalf("merged=%q lines=%d, want unknown, unmeasured", row.Merged, row.ContentLines)
+	}
+}
+
+// A line the default branch has only in a longer form (a list it appended
+// to) still carries the branch's work; a short line never matches that way,
+// and too many such lines are a rewrite, not an extension.
+func TestContentExtendedLines(t *testing.T) {
+	home := isolateGit(t)
+	f := newFixture(t)
+	ctx := context.Background()
+
+	ext := f.worktree(t, "ext")
+	commit(t, ext, "reg.py", "alpha_one = 1\nbeta_two = 2\nguarded = alpha_one or beta_two\n", "reg")
+	short := f.worktree(t, "short")
+	commit(t, short, "short.py", "x = y\n", "short")
+	many := f.worktree(t, "many")
+	commit(t, many, "many.py", "a1 = b1 or c1\na2 = b2 or c2\na3 = b3 or c3\na4 = b4 or c4\na5 = b5 or c5\n", "many")
+	rewriteDefault(t, f, map[string]string{
+		"reg.py":   "alpha_one = 1\nbeta_two = 2\ngamma_three = 3\nguarded = alpha_one or beta_two or gamma_three\n",
+		"short.py": "x = y + z\n",
+		"many.py":  "a1 = b1 or c1 or d1\na2 = b2 or c2 or d2\na3 = b3 or c3 or d3\na4 = b4 or c4 or d4\na5 = b5 or c5 or d5\n",
+	})
+
+	h := New(newMemStore(), home, Options{})
+	row, _, err := h.Inspect(ctx, ext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.Merged != mergedContent || row.ContentLines != 3 || row.ContentMissing != 0 || row.ContentExtended != 1 {
+		t.Fatalf("ext: merged=%q lines=%d missing=%d extended=%d, want content 3 0 1", row.Merged, row.ContentLines, row.ContentMissing, row.ContentExtended)
+	}
+	want := "its changes are on origin/main (matched by content) (1 line only in a longer form); active in the last 24 hours"
+	if !slices.Contains(row.Reasons, want) {
+		t.Fatalf("ext reasons %q, want %q", row.Reasons, want)
+	}
+
+	row, _, err = h.Inspect(ctx, short)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.Merged != mergedNo || row.ContentMissing != 1 || row.ContentExtended != 0 {
+		t.Fatalf("short: merged=%q missing=%d extended=%d, want no 1 0", row.Merged, row.ContentMissing, row.ContentExtended)
+	}
+
+	row, _, err = h.Inspect(ctx, many)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.Merged != mergedNo || row.ContentMissing != 0 || row.ContentExtended != 5 {
+		t.Fatalf("many: merged=%q missing=%d extended=%d, want no 0 5", row.Merged, row.ContentMissing, row.ContentExtended)
 	}
 }
 

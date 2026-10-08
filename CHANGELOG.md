@@ -26,7 +26,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - CLI: `secure-agent telemetry repair`.
 - Pricing: Claude Sonnet 5.5.
 - Worktrees: `merged: content` when the default branch has every line the branch adds, including after a history rewrite.
-- Worktrees: `content_lines` and `content_missing`.
+- Worktrees: `content_lines`, `content_missing`, `content_extended` and `unrelated_history`.
 - Worktrees: advisor sees the merge verdict and what the default branch did to the branch's files.
 
 ### Changed
