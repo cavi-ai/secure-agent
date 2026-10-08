@@ -29,10 +29,10 @@ func TestClassifyKeepsMergeFactBesideOtherReasons(t *testing.T) {
 		t.Errorf("merged with a precious file: state %s reasons %q", w.State, got)
 	}
 
-	w = Worktree{Merged: mergedContent, Unique: 3}
+	w = Worktree{Merged: contentSimilar, Unique: 3}
 	classify(&w, idle, now, 14*24*time.Hour)
-	if got := strings.Join(w.Reasons, " | "); w.State != StateRemove || got != "its changes are on origin/main (matched by content)" {
-		t.Errorf("content-merged and idle: state %s reasons %q", w.State, got)
+	if got := strings.Join(w.Reasons, " | "); w.State != StateReview || got != "3 commits on no remote and not in origin/main (the branch keeps them after removal)" {
+		t.Errorf("content similarity and idle: state %s reasons %q", w.State, got)
 	}
 
 	w = Worktree{Merged: mergedNo, Unique: 3, ContentLines: 5, ContentMissing: 2}
@@ -80,7 +80,7 @@ func TestContentMatchesSquashWithTouchUp(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if row.Merged != mergedContent || row.ContentLines != 1 || row.ContentMissing != 0 {
+	if row.Merged != contentSimilar || row.ContentLines != 1 || row.ContentMissing != 0 {
 		t.Fatalf("merged=%q lines=%d missing=%d, want content 1 0", row.Merged, row.ContentLines, row.ContentMissing)
 	}
 }
@@ -119,7 +119,7 @@ func TestContentAfterHistoryRewrite(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if row.Merged != mergedContent || row.ContentLines != 3 || row.ContentMissing != 0 || !row.Unrelated {
+	if row.Merged != contentSimilar || row.ContentLines != 3 || row.ContentMissing != 0 || !row.Unrelated {
 		t.Fatalf("merged=%q lines=%d missing=%d unrelated=%v, want content 3 0 true", row.Merged, row.ContentLines, row.ContentMissing, row.Unrelated)
 	}
 
@@ -196,7 +196,7 @@ func TestContentDeletedFileMustBeGoneFromMain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if row.Merged != mergedContent {
+	if row.Merged != contentSimilar {
 		t.Fatalf("main dropped base.txt: merged=%q, want content", row.Merged)
 	}
 }
@@ -314,10 +314,10 @@ func TestContentExtendedLines(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if row.Merged != mergedContent || row.ContentLines != 3 || row.ContentMissing != 0 || row.ContentExtended != 1 {
+	if row.Merged != contentSimilar || row.ContentLines != 3 || row.ContentMissing != 0 || row.ContentExtended != 1 {
 		t.Fatalf("ext: merged=%q lines=%d missing=%d extended=%d, want content 3 0 1", row.Merged, row.ContentLines, row.ContentMissing, row.ContentExtended)
 	}
-	want := "the changes it made since it was created are on origin/main (matched by content; its older history is not shared with origin/main) (1 line only in a longer form); active in the last 24 hours"
+	want := "shares no history with origin/main (rewritten); 3 of 3 lines it added since it was created are on origin/main (1 line only in a longer form); the branch keeps its commits after removal"
 	if !slices.Contains(row.Reasons, want) {
 		t.Fatalf("ext reasons %q, want %q", row.Reasons, want)
 	}
@@ -462,7 +462,7 @@ func TestContentRemovalsMustLand(t *testing.T) {
 	// Once main makes the same removal, the branch is merged by content.
 	commit(t, f.main, "base.txt", "l1\nl2\nl5\nl6\nl7\nl8\n", "drop l3 l4, add l8")
 	run(t, f.main, "push", "-q", "origin", "main")
-	if row = inspectRow(t, home, del); row.Merged != mergedContent || row.ContentOther != 0 {
+	if row = inspectRow(t, home, del); row.Merged != contentSimilar || row.ContentOther != 0 {
 		t.Fatalf("landed deletion: merged=%q other=%d, want content 0", row.Merged, row.ContentOther)
 	}
 }
@@ -489,7 +489,7 @@ func TestContentModeChangeMustMatch(t *testing.T) {
 	write(t, filepath.Join(f.main, "other.txt"), "other, edited\n")
 	run(t, f.main, "commit", "-q", "-am", "chmod and more")
 	run(t, f.main, "push", "-q", "origin", "main")
-	if row := inspectRow(t, home, wt); row.Merged != mergedContent {
+	if row := inspectRow(t, home, wt); row.Merged != contentSimilar {
 		t.Fatalf("mode on main: merged=%q, want content", row.Merged)
 	}
 }
@@ -552,8 +552,8 @@ func TestContentRewrittenHistoryNamesWhatWasMeasured(t *testing.T) {
 	commit(t, b, "b.txt", "child work\n", "B work")
 	rewriteDefault(t, f, map[string]string{"b.txt": "child work\n"})
 	row := inspectRow(t, home, b)
-	want := "the changes it made since it was created are on origin/main (matched by content; its older history is not shared with origin/main)"
-	if row.Merged != mergedContent || len(row.Reasons) == 0 || !strings.HasPrefix(row.Reasons[len(row.Reasons)-1], want) {
+	want := "shares no history with origin/main (rewritten); 1 of 1 lines it added since it was created are on origin/main; the branch keeps its commits after removal"
+	if row.Merged != contentSimilar || len(row.Reasons) == 0 || !strings.HasPrefix(row.Reasons[len(row.Reasons)-1], want) {
 		t.Fatalf("merged=%q reasons=%q, want content with %q", row.Merged, row.Reasons, want)
 	}
 

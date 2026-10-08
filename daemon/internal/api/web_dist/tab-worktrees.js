@@ -402,6 +402,7 @@ function worktreeDiscussHTML(path) {
 // from the console, or ''. The daemon refuses the same rows again.
 function worktreeTrashBlock(w) {
   if (w.error) return `could not inspect: ${w.error}`;
+  if (w.git_operation) return `a git ${w.git_operation} is in progress; finish or abort it first`;
   if (w.submodules > 0) return 'it has populated submodules';
   if (w.in_use) return 'an agent session is live here';
   if (w.locked) return 'it is locked; unlock it first';

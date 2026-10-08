@@ -47,7 +47,7 @@ type WorktreeAdviceRequest struct {
 	Precious []string `json:"precious,omitempty"`
 	Commits  []string `json:"commits,omitempty"` // subjects of commits on no remote and not in the default branch; empty when the branch is merged
 	// Merged is the checker's merge verdict (ancestor, squash, empty,
-	// content, no or unknown). Behind counts the default branch's non-merge
+	// similar, no or unknown). Behind counts the default branch's non-merge
 	// commits since the branch's base. MainStatus and MainCommits say what the
 	// default branch did to the files the branch changes since then.
 	Merged      string   `json:"merged,omitempty"`

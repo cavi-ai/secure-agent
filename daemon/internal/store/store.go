@@ -364,6 +364,10 @@ func (s *Store) PutEvent(e event.Event) {
 			 ON CONFLICT(session_id, call_id) DO UPDATE SET
 			   tool_status = CASE WHEN excluded.tool_status != '' AND excluded.tool_status != 'running' THEN excluded.tool_status ELSE events.tool_status END,
 			   duration_ms = CASE WHEN excluded.duration_ms > 0 THEN excluded.duration_ms ELSE events.duration_ms END,
+			   detail      = CASE
+			     WHEN excluded.duration_ms > 0 AND events.detail = 'tool duration unavailable: start not retained' THEN ''
+			     WHEN COALESCE(events.duration_ms, 0) > 0 AND excluded.detail = 'tool duration unavailable: start not retained' THEN events.detail
+			     WHEN excluded.detail != '' THEN excluded.detail ELSE events.detail END,
 			   tokens_in   = CASE WHEN excluded.tokens_in  > 0 THEN excluded.tokens_in  ELSE events.tokens_in  END,
 			   tokens_out  = CASE WHEN excluded.tokens_out > 0 THEN excluded.tokens_out ELSE events.tokens_out END,
 			   cost_usd    = CASE WHEN excluded.cost_usd   > 0 THEN excluded.cost_usd   ELSE events.cost_usd   END`,

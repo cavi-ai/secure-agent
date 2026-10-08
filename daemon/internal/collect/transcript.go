@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"os"
@@ -53,6 +55,8 @@ type TranscriptScanner struct {
 	// state and hit dedupe advance only once; the source checkpoint advances
 	// only after the line's events have all been accepted by the bus.
 	pending map[string]*pendingTranscriptLine
+	// sources binds checkpoints and parsers to a file generation, not a path.
+	sources map[string]transcriptSource
 
 	// OffsetStatePath, when set, persists tail offsets across daemon
 	// restarts. Without it a restart re-seeds every transcript at EOF and
@@ -417,7 +421,21 @@ func (ts *TranscriptScanner) Run(ctx context.Context) error {
 		if _, ok := offsets[f.path]; ok {
 			return
 		}
-		offsets[f.path] = f.size
+		source, err := os.Open(f.path)
+		if err != nil {
+			return
+		}
+		defer source.Close()
+		fi, err := source.Stat()
+		if err != nil || fi.IsDir() {
+			return
+		}
+		stamp, err := transcriptStamp(source, fi, min(fi.Size(), transcriptPrefixBytes))
+		if err != nil {
+			return
+		}
+		offsets[f.path] = fi.Size()
+		ts.noteSource(f.path, stamp)
 		dirty = true
 	}
 
@@ -496,13 +514,8 @@ func (ts *TranscriptScanner) Run(ctx context.Context) error {
 			}
 			if _, err := os.Stat(p); os.IsNotExist(err) {
 				delete(offsets, p)
-				delete(ts.tracers, p)
-				delete(ts.codexTracers, p)
-				delete(ts.cursorTracers, p)
-				delete(ts.agyTracers, p)
-				ts.rolloutMu.Lock()
-				delete(ts.rolloutIDs, p)
-				ts.rolloutMu.Unlock()
+				ts.resetSource(p)
+				delete(ts.sources, p)
 				dirty = true
 			}
 		}
@@ -568,16 +581,33 @@ func (ts *TranscriptScanner) loadOffsets() map[string]int64 {
 	if err != nil {
 		return offsets
 	}
+	var checkpoint transcriptCheckpoint
 	var saved map[string]int64
-	if err := json.Unmarshal(data, &saved); err != nil {
+	if json.Unmarshal(data, &checkpoint) == nil && checkpoint.Version == 1 {
+		saved = checkpoint.Offsets
+		ts.sources = checkpoint.Sources
+	} else if json.Unmarshal(data, &saved) != nil {
 		return offsets
 	}
 	for p, off := range saved {
 		fi, err := os.Stat(p)
 		// An inaccessible source may return later. Keep its checkpoint so
 		// restored access resumes unread bytes instead of seeding past them.
-		if (err == nil && !fi.IsDir() && fi.Size() >= off) || (err != nil && !os.IsNotExist(err)) {
+		if off < 0 {
+			continue
+		}
+		if err == nil && !fi.IsDir() {
+			if fi.Size() < off || (ts.sources[p].Identity != "" && ts.sources[p].Identity != sourceIdentity(fi)) {
+				off = 0
+			}
 			offsets[p] = off
+		} else if err != nil && !os.IsNotExist(err) {
+			offsets[p] = off
+		}
+	}
+	for p := range ts.sources {
+		if _, retained := offsets[p]; !retained {
+			delete(ts.sources, p)
 		}
 	}
 	return offsets
@@ -594,7 +624,7 @@ func (ts *TranscriptScanner) saveOffsets(offsets map[string]int64) (err error) {
 			ts.OnCheckpointWrite(err)
 		}
 	}()
-	data, err := json.Marshal(offsets)
+	data, err := json.Marshal(transcriptCheckpoint{Version: 1, Offsets: offsets, Sources: ts.sources})
 	if err != nil {
 		return err
 	}
@@ -603,6 +633,50 @@ func (ts *TranscriptScanner) saveOffsets(offsets map[string]int64) (err error) {
 		return err
 	}
 	return os.Rename(tmp, ts.OffsetStatePath)
+}
+
+type transcriptCheckpoint struct {
+	Version int                         `json:"version"`
+	Offsets map[string]int64            `json:"offsets"`
+	Sources map[string]transcriptSource `json:"sources,omitempty"`
+}
+
+const transcriptPrefixBytes int64 = 4096
+
+type transcriptSource struct {
+	Identity string `json:"identity,omitempty"`
+	Prefix   string `json:"prefix,omitempty"`
+	Bytes    int64  `json:"bytes,omitempty"`
+}
+
+// Append-only sources keep this prefix unchanged. It also catches in-place
+// truncate/regrow between polls, when inode and size alone are inconclusive.
+func transcriptStamp(f *os.File, fi os.FileInfo, n int64) (transcriptSource, error) {
+	if n < 0 || n > transcriptPrefixBytes {
+		return transcriptSource{}, fmt.Errorf("invalid transcript prefix length %d", n)
+	}
+	data := make([]byte, n)
+	if _, err := io.ReadFull(io.NewSectionReader(f, 0, n), data); err != nil {
+		return transcriptSource{}, err
+	}
+	return transcriptSource{Identity: sourceIdentity(fi), Prefix: fmt.Sprintf("%x", sha256.Sum256(data)), Bytes: n}, nil
+}
+
+func (ts *TranscriptScanner) noteSource(p string, stamp transcriptSource) {
+	if ts.sources == nil {
+		ts.sources = make(map[string]transcriptSource)
+	}
+	ts.sources[p] = stamp
+}
+
+func (ts *TranscriptScanner) resetSource(p string) {
+	delete(ts.tracers, p)
+	delete(ts.codexTracers, p)
+	delete(ts.cursorTracers, p)
+	delete(ts.agyTracers, p)
+	ts.rolloutMu.Lock()
+	delete(ts.rolloutIDs, p)
+	ts.rolloutMu.Unlock()
 }
 
 type pendingTranscriptLine struct {
@@ -648,22 +722,44 @@ func (ts *TranscriptScanner) tailFile(p string, offsets map[string]int64, dirty 
 	if !ts.deliverPending(p, offsets, dirty) {
 		return
 	}
-	fi, err := os.Stat(p)
-	if err != nil || fi.IsDir() {
-		return
-	}
-	offset := offsets[p]
-	if fi.Size() < offset {
-		offset = 0
-	}
-	if fi.Size() == offset {
-		return
-	}
 	f, err := os.Open(p)
 	if err != nil {
 		return
 	}
 	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil || fi.IsDir() {
+		return
+	}
+	offset := offsets[p]
+	id := sourceIdentity(fi)
+	old, known := ts.sources[p]
+	changed := fi.Size() < offset || (known && old.Identity != "" && old.Identity != id) || (known && fi.Size() < old.Bytes)
+	if known && !changed {
+		stamp, err := transcriptStamp(f, fi, old.Bytes)
+		if err != nil {
+			return
+		}
+		changed = old.Prefix != "" && old.Prefix != stamp.Prefix
+	}
+	if changed {
+		offset = 0
+		ts.resetSource(p)
+	}
+	stamp, err := transcriptStamp(f, fi, min(fi.Size(), transcriptPrefixBytes))
+	if err != nil {
+		return
+	}
+	if old != stamp {
+		ts.noteSource(p, stamp)
+		if dirty != nil {
+			*dirty = true
+		}
+	}
+	setTranscriptOffset(p, offsets, offset, dirty)
+	if fi.Size() == offset {
+		return
+	}
 	if _, err := f.Seek(offset, io.SeekStart); err != nil {
 		return
 	}

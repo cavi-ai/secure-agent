@@ -123,9 +123,29 @@ go build -o "$tmp/secure-agentd" "$SCRIPT_DIR/daemon/cmd/secure-agentd"
 
 # Launch daemon
 echo "Launching test instance of secure-agentd..."
+ACTIVITY_PATH="$tmp/.local/state/secure-agent/activity.jsonl"
+mkdir -p "$(dirname "$ACTIVITY_PATH")"
+: > "$ACTIVITY_PATH"
 "$tmp/secure-agentd" -config "$tmp/test_config.yaml" > "$tmp/daemon.log" 2>&1 &
 DAEMON_PID=$!
-sleep 1
+# Existing log history is intentionally skipped at collector startup. Prove
+# that the empty log was seeded before the fixture appends its first event.
+TRANSCRIPT_READY=false
+for _ in $(seq 1 100); do
+  if python3 -c '
+import json,sys
+with open(sys.argv[1]) as f: data=json.load(f)
+sys.exit(0 if data.get("offsets",data).get(sys.argv[2])==0 else 1)
+' "$tmp/transcript-offsets.json" "$ACTIVITY_PATH" 2>/dev/null; then
+    TRANSCRIPT_READY=true
+    break
+  fi
+  sleep 0.1
+done
+if [ "$TRANSCRIPT_READY" != true ]; then
+  echo "Transcript collector did not checkpoint the empty fixture log."
+  exit 1
+fi
 
 # Create fake-cursor Go test agent binary to guarantee process name matching in sysctl proc list
 cat > "$tmp/fake_cursor_main.go" <<EOF
@@ -230,19 +250,29 @@ go build -o "$tmp/fake-cursor" "$tmp/fake_cursor_main.go"
 # Execute fake agent
 "$tmp/fake-cursor" "$tmp" &
 AGENT_PID=$!
+FIXTURE_AGENT_PID=$AGENT_PID
 
 echo "Waiting for flag & incident report via API..."
 PASSED=false
 INCIDENT_PASSED=false
 INCIDENT_RESP=""
 FLAGS_RESP=""
+CORRELATION_FLAGS_RESP=""
 
 for _ in $(seq 1 30); do
   FLAGS_RESP=$(curl -s --unix-socket "$SOCKET_PATH" http://unix/flags 2>/dev/null || true)
   INCIDENT_RESP=$(curl -s --unix-socket "$SOCKET_PATH" http://unix/incidents 2>/dev/null || true)
 
-  if echo "$FLAGS_RESP" | grep -E -q "sensitive-read-then-connect|keychain-access"; then
+  # Other live harnesses can raise keychain flags while this fixture runs.
+  # They neither prove this fixture's correlation nor carry a mute host.
+  if printf '%s' "$FLAGS_RESP" | python3 -c '
+import json,sys
+pid=int(sys.argv[1])
+rows=json.load(sys.stdin)
+sys.exit(0 if any(f.get("pid")==pid and f.get("rule")=="sensitive-read-then-connect" for f in rows) else 1)
+' "$FIXTURE_AGENT_PID" 2>/dev/null; then
     PASSED=true
+    CORRELATION_FLAGS_RESP=$FLAGS_RESP
   fi
   if echo "$INCIDENT_RESP" | grep -E -q "rot-env|Environment File|sensitive-read-then-connect"; then
     INCIDENT_PASSED=true
@@ -252,6 +282,9 @@ for _ in $(seq 1 30); do
   fi
   sleep 0.3
 done
+if [ -n "$CORRELATION_FLAGS_RESP" ]; then
+  FLAGS_RESP=$CORRELATION_FLAGS_RESP
+fi
 
 # Resource mission control: the live fake agent must appear as one attributed
 # session with real RSS, CPU, a process row, and at least one history sample.
@@ -550,9 +583,13 @@ fi
 #   and leave the active set.
 # ---------------------------------------------------------------------------
 OPERATOR_PASSED=false
+MUTE_RESP=""
+ACK_STATE=""
+ACK2_STATE=""
+ALLOW_RESP=""
 # Select and inspect the same correlation snapshot: resource flags may arrive
 # later, changing which flag is newest.
-FLAG_ID=$(echo "$FLAGS_RESP" | python3 -c 'import json,sys; d=json.load(sys.stdin); f=next((f for f in d if f.get("rule") in ("sensitive-read-then-connect", "keychain-access")), {}); print(f.get("id", ""))' 2>/dev/null || echo "")
+FLAG_ID=$(echo "$FLAGS_RESP" | python3 -c 'import json,sys; d=json.load(sys.stdin); pid=int(sys.argv[1]); f=next((f for f in d if f.get("pid")==pid and f.get("rule")=="sensitive-read-then-connect"), {}); print(f.get("id", ""))' "$FIXTURE_AGENT_PID" 2>/dev/null || echo "")
 if [ -n "$FLAG_ID" ]; then
   # 1. Mute the flag's rule+host: must persist AND acknowledge existing flags.
   HOST=$(echo "$FLAGS_RESP" | python3 -c "

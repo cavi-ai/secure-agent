@@ -136,7 +136,7 @@ func TestTrashReviewedRefusesWhatTheFolderMoveCannotUndo(t *testing.T) {
 			// The merge stops on the conflict; its exit status is expected.
 			_ = gitCommand(context.Background(), wt, "merge", "-q", "main").Run()
 			return wt
-		}, "a merge or rebase has unresolved conflicts; finish or abort it first"},
+		}, "a git merge is in progress; finish or abort it first"},
 		{"nested registered worktree", func(t *testing.T, f fixture, st *memStore) string {
 			wt := f.worktree(t, "outer")
 			run(t, f.main, "worktree", "add", "-q", "-b", "feat/inner", filepath.Join(wt, "inner"), "main")

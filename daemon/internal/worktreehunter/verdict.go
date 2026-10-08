@@ -49,7 +49,8 @@ type Worktree struct {
 	Paths     []string `json:"paths,omitempty"`
 	// PartlyStaged counts changed files whose staged version differs from
 	// the working file: moving the folder would lose the staged version.
-	PartlyStaged int `json:"partly_staged,omitempty"`
+	PartlyStaged int    `json:"partly_staged,omitempty"`
+	Operation    string `json:"git_operation,omitempty"`
 
 	// Unique counts commits reachable from HEAD but from no remote ref and
 	// not from the default branch. Loose counts, for a detached HEAD, the
@@ -143,6 +144,9 @@ func classify(w *Worktree, f facts, now time.Time, staleAfter time.Duration) {
 	}
 
 	var keep, review []string
+	if w.Operation != "" {
+		keep = append(keep, "a git "+w.Operation+" is in progress; finish or abort it first")
+	}
 	if w.Locked {
 		keep = append(keep, lockedReason(w))
 	}
@@ -210,14 +214,6 @@ func classify(w *Worktree, f facts, now time.Time, staleAfter time.Duration) {
 		review = append(review, reason)
 	}
 	mr := mergedReason(w.Merged, f.DefaultBranch)
-	if w.Merged == mergedContent {
-		if w.Unrelated {
-			// Only the branch's own commits were measured; whatever it was
-			// created from shares no history with the default branch.
-			mr = "the changes it made since it was created are on " + def + " (matched by content; its older history is not shared with " + def + ")"
-		}
-		mr += longer
-	}
 	if w.Stashes > 0 {
 		review = append(review, plural(w.Stashes, "stash", "stashes")+" on this branch")
 	}
@@ -268,7 +264,7 @@ func lockedReason(w *Worktree) string {
 // on the default branch.
 func isMerged(how string) bool {
 	switch how {
-	case mergedAncestor, mergedSquash, mergedEmpty, mergedContent:
+	case mergedAncestor, mergedSquash, mergedEmpty:
 		return true
 	}
 	return false
@@ -278,8 +274,6 @@ func mergedReason(how, def string) string {
 	switch how {
 	case mergedSquash:
 		return "merged into " + orDefault(def) + " (squash)"
-	case mergedContent:
-		return "its changes are on " + orDefault(def) + " (matched by content)"
 	case mergedEmpty:
 		return "changes nothing against " + orDefault(def)
 	default:

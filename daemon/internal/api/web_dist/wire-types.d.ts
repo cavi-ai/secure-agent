@@ -778,6 +778,7 @@ export interface Worktree {
   conflicts?: number;
   paths?: string[];
   partly_staged?: number;
+  git_operation?: string;
   unique_commits?: number;
   loose_commits?: number;
   merged?: string;

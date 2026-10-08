@@ -96,6 +96,28 @@ func readStatus(ctx context.Context, dir string) (statusFacts, error) {
 	return parseStatus(out), nil
 }
 
+// gitOperation inspects the per-worktree administrative directory. Resolved
+// conflicts still leave operation state that unregistering would destroy.
+func gitOperation(ctx context.Context, dir string) (string, error) {
+	out, err := git(ctx, dir, "rev-parse", "--absolute-git-dir")
+	if err != nil {
+		return "", err
+	}
+	admin := strings.TrimSpace(out)
+	for _, marker := range []struct{ path, operation string }{
+		{"rebase-merge", "rebase"}, {"rebase-apply", "rebase/apply"},
+		{"MERGE_HEAD", "merge"}, {"CHERRY_PICK_HEAD", "cherry-pick"},
+		{"REVERT_HEAD", "revert"}, {"sequencer", "sequencer"}, {"BISECT_START", "bisect"},
+	} {
+		if _, err := os.Stat(filepath.Join(admin, marker.path)); err == nil {
+			return marker.operation, nil
+		} else if !os.IsNotExist(err) {
+			return "", err
+		}
+	}
+	return "", nil
+}
+
 func parseStatus(out string) statusFacts {
 	var s statusFacts
 	hasAB := false
@@ -445,7 +467,7 @@ const (
 	mergedAncestor = "ancestor" // HEAD is reachable from the default branch
 	mergedSquash   = "squash"   // the branch's combined diff landed as one commit
 	mergedEmpty    = "empty"    // the branch's tree equals its merge-base: nothing to merge
-	mergedContent  = "content"  // every line the branch adds is in the default branch, in the same or a renamed file
+	contentSimilar = "similar"  // unordered added-line similarity; not proof of a merge
 	mergedNo       = "no"
 	mergedUnknown  = "unknown" // no common base, a diff over the bounds, or a git error
 )
