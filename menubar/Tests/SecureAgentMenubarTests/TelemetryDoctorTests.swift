@@ -353,16 +353,24 @@ final class TelemetryDoctorTests: XCTestCase {
         assertCheck(checks, "legacy", .fail, .removeLegacy)
     }
 
-    func testSpoolLossStaysFailedWithFreshHealthyWriter() throws {
+    func testSpoolLossFailsOnlyWhileGrowing() throws {
         let decoded = try JSONDecoder().decode(ESServiceSnapshotModel.self,
-            from: Data(#"{"state":"running","bytes_lost":123,"unparsed_share":0}"#.utf8))
+            from: Data(#"{"state":"running","bytes_lost":123,"unparsed_share":0,"losing":true}"#.utf8))
         XCTAssertEqual(decoded.bytesLost, 123)
-        let checks = TelemetryDoctor.evaluate(facts {
+        XCTAssertEqual(decoded.losing, true)
+        let growing = TelemetryDoctor.evaluate(facts {
+            $0.esService = ESServiceSnapshotModel(state: "running", spoolMtime: self.iso(self.now),
+                                                  flooding: false, unparsedShare: 0, bytesLost: 123, losing: true)
+        })
+        assertCheck(growing, "spool", .fail, nil)
+        XCTAssertTrue(check(growing, "spool")?.cause.contains("123 unread spool bytes") == true)
+
+        let stopped = TelemetryDoctor.evaluate(facts {
             $0.esService = ESServiceSnapshotModel(state: "running", spoolMtime: self.iso(self.now),
                                                   flooding: false, unparsedShare: 0, bytesLost: 123)
         })
-        assertCheck(checks, "spool", .fail, nil)
-        XCTAssertTrue(check(checks, "spool")?.cause.contains("123 unread spool bytes") == true)
+        assertCheck(stopped, "spool", .pass, nil)
+        XCTAssertTrue(check(stopped, "spool")?.cause.contains("123 bytes lost earlier, none since") == true)
     }
 
     func testCorruptStaleSpool() {

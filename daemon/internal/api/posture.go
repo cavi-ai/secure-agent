@@ -290,7 +290,7 @@ func silentCollectorItems(st Status) []PostureItem {
 // lines the tailer cannot keep up with (esServiceBehind) is a lesser item:
 // the writer is fine, the reader is behind.
 func esServiceItems(s collect.ESServiceSnapshot) []PostureItem {
-	if s.BytesLost > 0 {
+	if s.Losing {
 		return []PostureItem{{Kind: "collector_silent", ID: "eslogger", Title: "File monitoring evidence was lost", Severity: 2, Detail: esLossDetail(s)}}
 	}
 	if esServiceFlooding(s) {

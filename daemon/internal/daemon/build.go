@@ -246,6 +246,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 		Killer:                &realKiller{},
 		Status:                statusFn,
 		BusDrops:              b.Dropped,
+		BusDropAt:             b.DroppedAt,
 		Resources:             resourceControl.Snapshot,
 		ResourceControl:       resourceControl,
 		ResourcePolicyUpdater: resourcePolicyUpdater,
@@ -1009,6 +1010,10 @@ func spoolServiceProbe(t *collect.SpoolTailer) func() (collect.ESServiceSnapshot
 		}
 		stats := t.Stats()
 		snap.BytesLost = stats.BytesLost
+		if lostAt := stats.LostAt; !lostAt.IsZero() {
+			snap.LostAt = &lostAt
+			snap.Losing = collect.LossGrowing(lostAt, time.Now())
+		}
 		snap.Flooding = !stats.FloodSince.IsZero()
 		if since := stats.FloodSince; !since.IsZero() {
 			snap.FloodingSince = &since

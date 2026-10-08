@@ -92,7 +92,7 @@ func (a *API) attentionFlags() []model.Flag {
 // while agents are active, silent collectors and missing hooks.
 func (a *API) machineAttentionItems(st Status) []PostureItem {
 	var items []PostureItem
-	if st.BusDrops > 0 {
+	if st.BusDropping {
 		items = append(items, PostureItem{Kind: "event_loss", ID: "event-bus", Severity: 2,
 			Title:  "Telemetry was dropped",
 			Detail: fmt.Sprintf("%d subscriber deliveries dropped since daemon start. Monitoring history may be incomplete.", st.BusDrops)})

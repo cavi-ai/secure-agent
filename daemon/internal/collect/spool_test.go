@@ -542,7 +542,12 @@ func TestSpoolLossSurvivesHealthyPollAfterOverwrittenRotation(t *testing.T) {
 	defer b.Close()
 	sub := b.Subscribe()
 	tailer := NewSpoolTailerAt(b, path)
+	lossTime := time.Date(2026, 10, 8, 15, 0, 0, 0, time.UTC)
+	tailer.now = func() time.Time { return lossTime }
 	c := tailer.poll(spoolCursor{})
+	if !tailer.Stats().LostAt.IsZero() {
+		t.Fatal("LostAt set before any loss")
+	}
 	want := uint64(c.size - c.offset)
 	if err := os.Rename(path, path+".1"); err != nil {
 		t.Fatal(err)
@@ -558,10 +563,31 @@ func TestSpoolLossSurvivesHealthyPollAfterOverwrittenRotation(t *testing.T) {
 	if got := tailer.Stats().BytesLost; got != want || got == 0 {
 		t.Fatalf("lost=%d want=%d", got, want)
 	}
+	if got := tailer.Stats().LostAt; !got.Equal(lossTime) {
+		t.Fatalf("LostAt = %v, want the loss time %v", got, lossTime)
+	}
 	<-sub
+	tailer.now = func() time.Time { return lossTime.Add(time.Hour) }
 	tailer.poll(c)
-	if tailer.Stats().BytesLost != want {
-		t.Fatal("healthy tick erased historical loss")
+	if tailer.Stats().BytesLost != want || !tailer.Stats().LostAt.Equal(lossTime) {
+		t.Fatal("healthy tick erased historical loss or moved its time")
+	}
+}
+
+func TestLossGrowingWithinTheWindow(t *testing.T) {
+	now := time.Date(2026, 10, 8, 15, 0, 0, 0, time.UTC)
+	for _, c := range []struct {
+		at   time.Time
+		want bool
+	}{
+		{time.Time{}, false},
+		{now.Add(-time.Minute), true},
+		{now.Add(-LossWindow + time.Second), true},
+		{now.Add(-LossWindow), false},
+	} {
+		if got := LossGrowing(c.at, now); got != c.want {
+			t.Errorf("LossGrowing(%v) = %v, want %v", c.at, got, c.want)
+		}
 	}
 }
 

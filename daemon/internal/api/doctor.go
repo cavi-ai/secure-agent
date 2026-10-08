@@ -142,7 +142,7 @@ func (a *API) doctorReport(now time.Time) DoctorReport {
 		case doctorFail:
 			rep.Summary.Fail++
 			c.Fix = p.fix
-			if p.id == "file-telemetry" && f.st.ESService != nil && f.st.ESService.BytesLost > 0 {
+			if p.id == "file-telemetry" && f.st.ESService != nil && f.st.ESService.Losing {
 				c.Fix = "Reduce sustained event load and check delivery lag. The gap remains for this run; reinstalling the helper or restarting cannot recover overwritten evidence."
 			}
 		default:
@@ -240,7 +240,7 @@ func checkFileTelemetry(f doctorFacts) (string, string) {
 		return doctorSkip, "not spool-based"
 	}
 	switch {
-	case es.BytesLost > 0:
+	case es.Losing:
 		return doctorFail, esLossDetail(*es)
 	case esServiceFlooding(*es):
 		return doctorFail, esFloodingDetail(*es)
@@ -262,6 +262,9 @@ func checkFileTelemetry(f doctorFacts) (string, string) {
 			return doctorFail, "service running but spool absent"
 		}
 		return doctorFail, fmt.Sprintf("service running but spool not written for %d min", int(f.now.Sub(es.SpoolMtime).Minutes()))
+	}
+	if es.BytesLost > 0 && es.LostAt != nil {
+		return doctorPass, fmt.Sprintf("%s · %d unread spool bytes lost at %s, none since", es.State, es.BytesLost, es.LostAt.Local().Format("15:04"))
 	}
 	return doctorPass, es.State
 }
@@ -477,8 +480,11 @@ func checkEgressRouting(f doctorFacts) (string, string) {
 }
 
 func checkBus(f doctorFacts) (string, string) {
-	if f.st.BusDrops > 0 {
+	if f.st.BusDropping {
 		return doctorFail, fmt.Sprintf("%d subscriber deliveries dropped since daemon start", f.st.BusDrops)
+	}
+	if f.st.BusDrops > 0 && f.st.BusDropAt != nil {
+		return doctorPass, fmt.Sprintf("%d subscriber deliveries dropped, the last at %s, none since", f.st.BusDrops, f.st.BusDropAt.Local().Format("15:04"))
 	}
 	return doctorPass, "no dropped events"
 }

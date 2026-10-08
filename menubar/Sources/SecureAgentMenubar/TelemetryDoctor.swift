@@ -379,10 +379,11 @@ enum TelemetryDoctor {
             return DoctorCheck(id: "spool", title: title, state: .warn,
                                cause: "the daemon did not report the spool", fix: nil)
         }
-        if let lost = es.bytesLost, lost > 0 {
+        if es.losing == true, let lost = es.bytesLost {
             return DoctorCheck(id: "spool", title: title, state: .fail,
                                cause: "at least \(lost) unread spool bytes were lost during this run; later healthy delivery cannot recover them", fix: nil)
         }
+        let earlierLoss = (es.bytesLost ?? 0) > 0 ? ", \(es.bytesLost ?? 0) bytes lost earlier, none since" : ""
         let share = es.unparsedShare ?? 0
         let percent = Int((share * 100).rounded())
         let mtime = es.spoolMtimeDate ?? f.spoolMtime
@@ -394,7 +395,7 @@ enum TelemetryDoctor {
         }
         let flooding = es.flooding == true ? ", reader skipping ahead" : ""
         return DoctorCheck(id: "spool", title: title, state: .pass,
-                           cause: "\(percent)% unparsed\(flooding)", fix: nil)
+                           cause: "\(percent)% unparsed\(flooding)\(earlierLoss)", fix: nil)
     }
 
     static func legacyHelper(_ f: TelemetryFacts) -> DoctorCheck {
