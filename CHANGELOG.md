@@ -59,6 +59,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Findings: approval, review and file inspection buttons on grouped findings.
 - Menu bar: posture updates right after a decision.
 - Console: an authentication rejection ends the session.
+- Console: the connecting process is looked up once per connection; an unidentified one gets 503.
 - Console: an older refresh never replaces newer data.
 - Console: malformed reports keep the last good data.
 - Console: filtered results survive a failed refresh.

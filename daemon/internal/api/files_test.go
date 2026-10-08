@@ -313,8 +313,8 @@ func TestConsoleNoAgentChecksTheTCPPeer(t *testing.T) {
 		t.Fatalf("browser peer: %d, want 404 from the handler", c)
 	}
 	a.tcpClientPID = func(string) (int32, error) { return 0, errors.New("no peer") }
-	if c := get(); c != http.StatusForbidden {
-		t.Fatalf("unidentified peer: %d, want 403", c)
+	if c := get(); c != http.StatusServiceUnavailable {
+		t.Fatalf("unidentified peer: %d, want 503 (refused, retryable)", c)
 	}
 	a.isAgentPID = nil
 	a.tcpClientPID = func(string) (int32, error) { return 777, nil }
@@ -366,15 +366,25 @@ func TestSocketNoAgentLiveFamilyCheck(t *testing.T) {
 	}
 }
 
-// lsof -Fp lists both ends of a loopback connection; the daemon's own pid is
-// dropped.
-func TestParseLsofPIDs(t *testing.T) {
-	out := []byte("p7725\nf26\np9142\nf40\n")
-	if got := ParseLsofPIDs(out, 9142); fmt.Sprint(got) != "[7725]" {
-		t.Fatalf("pids = %v, want [7725]", got)
+// netstat -anv lists both ends of a loopback connection; only the end whose
+// local address is the client's counts, and a process name with spaces
+// still yields its pid.
+func TestParseNetstatClientPIDs(t *testing.T) {
+	out := []byte(`Active Internet connections (including servers)
+Proto Recv-Q Send-Q  Local Address          Foreign Address        (state)          rxbytes      txbytes  rhiwat  shiwat          process:pid    state  options
+tcp4       0      0  127.0.0.1.8443         127.0.0.1.64809        ESTABLISHED         4606      3816077  406208  146988    secure-agentd:31607  00102 0000000c
+tcp4       0      0  127.0.0.1.64809        127.0.0.1.8443         ESTABLISHED      8237954         2199  513160  146988 Brave Browser He:7187   00102 00000008
+tcp4       0      0  127.0.0.1.64810        127.0.0.1.8443         TIME_WAIT              0            0  513160  146988 Brave Browser He:7187   00102 00000008
+tcp6       0      0  2600:1700:5610:3.50624 2600:1900:4110:8.80    SYN_SENT               0            0  131072  131072 Google Chrome He:35474  00104 00000008
+`)
+	if got := ParseNetstatClientPIDs(out, "127.0.0.1.64809", 31607); fmt.Sprint(got) != "[7187]" {
+		t.Fatalf("pids = %v, want [7187]", got)
 	}
-	if got := ParseLsofPIDs([]byte("garbage\n"), 1); len(got) != 0 {
-		t.Fatalf("pids = %v, want none", got)
+	if got := ParseNetstatClientPIDs(out, "127.0.0.1.64810", 31607); len(got) != 0 {
+		t.Fatalf("pids for a closed connection = %v, want none", got)
+	}
+	if got := ParseNetstatClientPIDs(out, "127.0.0.1.8443", 31607); len(got) != 0 {
+		t.Fatalf("pids for the daemon's own end = %v, want none", got)
 	}
 }
 
