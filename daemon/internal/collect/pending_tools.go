@@ -17,26 +17,13 @@ type pendingTools struct {
 }
 
 type pendingToolEntry struct {
-	id   string
-	tool pendingTool
+	id      string
+	session string
+	tool    pendingTool
 }
 
 func (p *pendingTools) put(id string, tool pendingTool) {
-	if p.byID == nil {
-		p.byID = make(map[string]*list.Element)
-	}
-	if old := p.byID[id]; old != nil {
-		old.Value = pendingToolEntry{id, tool}
-		p.order.MoveToBack(old)
-		return
-	}
-	if len(p.byID) == pendingToolLimit {
-		old := p.order.Front()
-		delete(p.byID, old.Value.(pendingToolEntry).id)
-		p.order.Remove(old)
-		p.evicted = true
-	}
-	p.byID[id] = p.order.PushBack(pendingToolEntry{id, tool})
+	p.add(id, "", tool)
 }
 
 func (p *pendingTools) completion(id, session, status string, at time.Time) (event.Event, bool) {

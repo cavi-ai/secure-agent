@@ -17,7 +17,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/config"
@@ -89,7 +88,7 @@ type Sink struct {
 	// not publisher-wide: sinks subscribe to different kind sets, and a kind
 	// one collector never receives must not advance its sequence — that would
 	// manufacture a gap at that collector out of a delivery it never wanted.
-	seq atomic.Uint64
+	state *sinkDeliveryState
 
 	logMu   sync.Mutex
 	logPath string
@@ -125,6 +124,7 @@ func NewSink(cfg WebhookConfig, nodeID, version, logDir string) *Sink {
 		kinds:   kinds,
 		nodeID:  nodeID,
 		version: version,
+		state:   newSinkDeliveryState(),
 		// A stuck collector must never pin a daemon goroutine.
 		client:  &http.Client{Timeout: 10 * time.Second},
 		logPath: lp,
@@ -149,7 +149,7 @@ func (s *Sink) Subscribed(k EventKind) bool {
 // NextSeq stamps this sink's next per-boot sequence number. Called by the
 // Publisher only when the sink actually subscribes to the kind being
 // published, so the counter tracks exactly the stream this collector sees.
-func (s *Sink) NextSeq() uint64 { return s.seq.Add(1) }
+func (s *Sink) NextSeq() uint64 { return s.state.seq.Add(1) }
 
 // Deliver marshals payload and POSTs it as an envelope. Retries: 1 initial
 // attempt + 3 retries (4 total), 500ms/2s/5s backoff, only on retryable

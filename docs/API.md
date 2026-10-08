@@ -39,6 +39,14 @@ means the model server has failed repeatedly and verdicts are paused
 (`last_error` says why) — the UIs render this so advisor actions never look
 like dead buttons. Absent on older daemons.
 
+`otlp_dropped` counts spans lost to export capacity limits or failed exports
+since daemon start. `storage_health.read_failures` counts failed session and
+harness-activity reads; `read_active` lists the operations still failing.
+Coverage retains its last known activity after a failed read and reports that
+it may be stale through posture and Doctor. `/sessions` and `/snapshot`
+return HTTP 503 when their session query fails rather than returning an empty
+population. Read-health fields are omitted when empty.
+
 Each `trees[].root` whose pid roots a recorded session carries that session's
 `session_id`, `workspace`, `repo`, `branch` and `origin` (the spawning agent,
 as on `/sessions`); each is omitted when empty.
@@ -449,7 +457,7 @@ Host: unix
 | `ts`, `pid`, `session_id` | When it happened, the process, and the agent session (trace rows carry pid `0` and `session_id`). |
 | `path`, `exe_path` | File or executable path, for file and exec kinds. |
 | `remote_host`, `remote_port` | Destination, for connect kinds. |
-| `tool`, `tool_status`, `duration_ms`, `call_id` | Tool call fields (kind `12`): name, `ok`\|`error`\|`running`, start→result duration, the harness's own call id. |
+| `tool`, `tool_status`, `duration_ms`, `call_id` | Tool call fields (kind `12`): name, `ok`\|`error`\|`running`\|`incomplete`, start→result duration, the harness's own call id. `incomplete` marks a Claude/Codex pairing retired after 24 h or beyond the 1,024 pending-call limit per transcript; it never overwrites a recorded completion. |
 | `model`, `provider`, `tokens_in`, `tokens_out`, `cost_usd` | Model call fields (kind `14`). A Claude model call also carries `call_id`: the API message id, one row per call. |
 | `price_class` | `priced`, `plan`, `local`, `unknown-model` or `unpriced-model`; computed when served, never stored. |
 

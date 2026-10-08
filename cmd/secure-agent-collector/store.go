@@ -97,11 +97,17 @@ type nodeRuntime struct {
 	// timeline can show "what is it doing now" without unbounded history.
 	lastTrace map[string]tracePayload
 	// Sequence tracking (per boot): maxSeq is the highest seq seen this boot;
-	// holes are seqs skipped so far (seq → when the hole opened), pending
+	// holes are skipped sequence ranges and when each range opened, pending
 	// either a late arrival (retry/reorder) or confirmation as a gap.
 	maxSeq        uint64
-	holes         map[uint64]time.Time
+	holes         []sequenceHole
+	retiredBoots  []string
 	confirmedGaps int
+}
+
+type sequenceHole struct {
+	first, last uint64
+	opened      time.Time
 }
 
 // statusPayload mirrors model.NodeStatus on the node side; only the fields
@@ -221,21 +227,18 @@ func (s *Store) apply(env Envelope, receivedAt string) {
 		s.nodes[env.NodeID] = rt
 	}
 	st := rt.state
-	// Version tracks the newest report (replay and live appends are both
-	// chronological, so last write wins) — a node upgrade must be visible in
-	// the rollup, not frozen at whatever version reported first.
-	if env.Version != "" {
-		st.Version = env.Version
-	}
 	ts, _ := time.Parse(time.RFC3339Nano, receivedAt)
 	if ts.IsZero() {
 		ts = time.Now()
 	}
+	currentBoot := env.Boot == "" || rt.trackSeq(env.Boot, env.Seq, ts)
+	// Delayed deliveries still carry useful evidence, but cannot reset the
+	// active stream's sequence health or roll back its reported version.
+	if currentBoot && env.Version != "" {
+		st.Version = env.Version
+	}
 	if ts.After(st.LastSeen) {
 		st.LastSeen = ts
-	}
-	if env.Boot != "" {
-		rt.trackSeq(env.Boot, env.Seq, ts)
 	}
 	switch env.Kind {
 	case "flag":
@@ -299,41 +302,85 @@ func (s *Store) apply(env Envelope, receivedAt string) {
 // seqs open holes that late arrivals can still close — deliveries complete
 // out of order (concurrent goroutines, retries), so holes only count as
 // gaps after gapGrace has passed at snapshot time.
-func (rt *nodeRuntime) trackSeq(boot string, seq uint64, ts time.Time) {
+func (rt *nodeRuntime) trackSeq(boot string, seq uint64, ts time.Time) bool {
 	if boot != rt.state.BootID {
+		for _, retired := range rt.retiredBoots {
+			if boot == retired {
+				return false
+			}
+		}
+		if rt.state.BootID != "" {
+			rt.retiredBoots = append(rt.retiredBoots, rt.state.BootID)
+			if len(rt.retiredBoots) > 64 {
+				rt.retiredBoots = rt.retiredBoots[1:]
+			}
+		}
 		rt.state.BootID = boot
 		rt.maxSeq = seq // first contact with this boot is the sync point
-		rt.holes = map[uint64]time.Time{}
-		return
+		rt.holes = nil
+		rt.confirmedGaps = 0
+		return true
 	}
 	if seq > rt.maxSeq {
-		for i := rt.maxSeq + 1; i < seq; i++ {
-			if len(rt.holes) >= maxTrackedHoles {
-				// Confirm the oldest hole as lost to make room.
-				var oldest uint64
-				var oldestTS time.Time
-				for s, t := range rt.holes {
-					if oldestTS.IsZero() || t.Before(oldestTS) {
-						oldest, oldestTS = s, t
-					}
-				}
-				delete(rt.holes, oldest)
-				rt.confirmedGaps++
-			}
-			rt.holes[i] = ts
+		if seq-rt.maxSeq > 1 {
+			rt.holes = append(rt.holes, sequenceHole{first: rt.maxSeq + 1, last: seq - 1, opened: ts})
+			rt.boundHoles()
 		}
 		rt.maxSeq = seq
+		return true
+	}
+	for i, hole := range rt.holes {
+		if seq < hole.first || seq > hole.last {
+			continue
+		}
+		switch {
+		case hole.first == hole.last:
+			rt.holes = append(rt.holes[:i], rt.holes[i+1:]...)
+		case seq == hole.first:
+			rt.holes[i].first++
+		case seq == hole.last:
+			rt.holes[i].last--
+		default:
+			rt.holes[i].last = seq - 1
+			rt.holes = append(rt.holes, sequenceHole{first: seq + 1, last: hole.last, opened: hole.opened})
+			rt.boundHoles()
+		}
+		break
+	}
+	return true
+}
+
+// Space is bounded by missing ranges, not the size of a sequence jump.
+// Only pathological fragmentation retires a range as confirmed loss.
+func (rt *nodeRuntime) boundHoles() {
+	if len(rt.holes) <= maxTrackedHoles {
 		return
 	}
-	delete(rt.holes, seq) // late arrival closed the hole
+	oldest := 0
+	for i, hole := range rt.holes {
+		if hole.opened.Before(rt.holes[oldest].opened) {
+			oldest = i
+		}
+	}
+	hole := rt.holes[oldest]
+	rt.confirmedGaps = addGapCount(rt.confirmedGaps, hole.last-hole.first+1)
+	rt.holes = append(rt.holes[:oldest], rt.holes[oldest+1:]...)
+}
+
+func addGapCount(n int, missing uint64) int {
+	maxInt := int(^uint(0) >> 1)
+	if missing > uint64(maxInt-n) {
+		return maxInt
+	}
+	return n + int(missing)
 }
 
 // gapCount totals confirmed loss plus holes older than the grace period.
 func (rt *nodeRuntime) gapCount(now time.Time) int {
 	n := rt.confirmedGaps
-	for _, opened := range rt.holes {
-		if now.Sub(opened) > gapGrace {
-			n++
+	for _, hole := range rt.holes {
+		if now.Sub(hole.opened) > gapGrace {
+			n = addGapCount(n, hole.last-hole.first+1)
 		}
 	}
 	return n

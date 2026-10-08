@@ -494,6 +494,9 @@ func checkStorage(f doctorFacts) (string, string) {
 	if h == nil {
 		return doctorSkip, "storage health unavailable"
 	}
+	if len(h.ReadActive) > 0 {
+		return doctorFail, "evidence reads unavailable: " + strings.Join(h.ReadActive, ", ")
+	}
 	if h.Failures == 0 {
 		return doctorPass, "no failed evidence writes"
 	}

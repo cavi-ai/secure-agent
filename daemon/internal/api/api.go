@@ -144,6 +144,7 @@ type Status struct {
 	BusDropAt     *time.Time         `json:"bus_drop_at,omitempty"`
 	BusDropping   bool               `json:"bus_dropping,omitempty"`
 	StorageHealth *store.WriteHealth `json:"storage_health,omitempty"`
+	OTLPDropped   uint64             `json:"otlp_dropped,omitempty"`
 
 	// Coverage reports how many running harnesses the daemon is actually
 	// seeing ("seeing 2 of 3 harnesses") — liveness is not coverage.
@@ -225,6 +226,7 @@ type API struct {
 	publishEvent func(event.Event)
 	busDrops     func() uint64
 	busDropAt    func() time.Time
+	otlpDropped  func() uint64
 
 	// deltas is the typed state-change fan-out the SSE stream serves.
 	// lastPosture dedupes posture deltas (state + item count); postureGen
@@ -335,6 +337,7 @@ type Deps struct {
 	FleetConfigured func() bool
 	BusDrops        func() uint64
 	BusDropAt       func() time.Time
+	OTLPDropped     func() uint64
 	PublishEvent    func(event.Event)
 	DeltaHub        *DeltaHub
 
@@ -412,6 +415,7 @@ func New(d Deps) *API {
 		fleetConfigured: d.FleetConfigured,
 		busDrops:        d.BusDrops,
 		busDropAt:       d.BusDropAt,
+		otlpDropped:     d.OTLPDropped,
 		publishEvent:    d.PublishEvent,
 		deltaHub:        d.DeltaHub,
 		isAgentPID:      d.IsAgentPID,
@@ -901,7 +905,12 @@ func (a *API) handleSessions(w http.ResponseWriter, r *http.Request) {
 		}
 		f.Since = t
 	}
-	writeJSON(w, a.store.ListSessions(f))
+	sessions, err := a.store.ListSessionsResult(f)
+	if err != nil {
+		http.Error(w, "session data unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	writeJSON(w, sessions)
 }
 
 // handleSessionSubpath serves the /sessions/{id}/… family: timeline, report,
@@ -998,6 +1007,9 @@ func (a *API) currentStatus() Status {
 
 // Shared monitoring facts for status, posture, and Doctor.
 func (a *API) evidenceStatus(st Status) Status {
+	if a.otlpDropped != nil {
+		st.OTLPDropped = a.otlpDropped()
+	}
 	if a.busDrops != nil {
 		st.BusDrops = a.busDrops()
 	}
@@ -1007,10 +1019,6 @@ func (a *API) evidenceStatus(st Status) Status {
 			st.BusDropping = collect.LossGrowing(at, time.Now())
 		}
 	}
-	if a.store != nil {
-		h := a.store.WriteHealth()
-		st.StorageHealth = &h
-	}
 	rows := harnessCoverage(st, a.recentHarnessActivity)
 	if len(rows) > 0 {
 		cov := CoverageStatus{HarnessesActive: len(rows)}
@@ -1019,6 +1027,10 @@ func (a *API) evidenceStatus(st Status) Status {
 		}
 		cov.Harnesses = rows
 		st.Coverage = &cov
+	}
+	if a.store != nil {
+		h := a.store.WriteHealth()
+		st.StorageHealth = &h
 	}
 	return st
 }

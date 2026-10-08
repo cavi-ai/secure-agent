@@ -18,8 +18,8 @@ func TestHarnessActivityUsesTheTraceIndex(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	if plan := queryPlan(t, s, harnessActivitySQL, "2026-10-07T00:00:00Z"); !strings.Contains(plan, "COVERING INDEX idx_events_trace_ts") {
-		t.Errorf("harness activity plan = %q, want covering idx_events_trace_ts", plan)
+	if plan := queryPlan(t, s, harnessActivitySQL, "2026-10-07T00:00:00.000000000Z"); !strings.Contains(plan, "COVERING INDEX idx_events_trace_activity") || !strings.Contains(plan, "<expr>>?") {
+		t.Errorf("harness activity plan = %q, want a covering normalized timestamp range seek", plan)
 	}
 }
 

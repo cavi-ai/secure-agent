@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -26,6 +27,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/fleet"
 	"github.com/cavi-ai/secure-agent/daemon/internal/resource"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
+	"github.com/cavi-ai/secure-agent/daemon/internal/supervise"
 	"github.com/cavi-ai/secure-agent/daemon/internal/sysagent"
 	"github.com/cavi-ai/secure-agent/daemon/internal/worktreehunter"
 )
@@ -34,7 +36,13 @@ import (
 // collector runners read per use — swapping the stack while the loop is
 // mid-event is safe because Load() hands out a consistent snapshot.
 type advisorStackHolder struct {
-	v atomic.Value // advisorStack
+	v      atomic.Value // advisorStack
+	mu     sync.Mutex
+	ctx    context.Context
+	sup    *supervise.Supervisor
+	cancel context.CancelFunc
+	done   chan struct{}
+	closed bool
 }
 
 func (h *advisorStackHolder) Load() advisorStack {
@@ -44,7 +52,112 @@ func (h *advisorStackHolder) Load() advisorStack {
 	return advisorStack{}
 }
 
-func (h *advisorStackHolder) Store(s advisorStack) { h.v.Store(s) }
+func (h *advisorStackHolder) Store(s advisorStack) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.closed {
+		disposeAdvisor(s)
+		return
+	}
+	h.stopLocked()
+	h.v.Store(s)
+	h.startLocked()
+}
+
+// Run owns each concrete generation. Reload cancels and joins the previous
+// worker and model before starting its replacement, including enable-at-runtime.
+func (h *advisorStackHolder) Run(ctx context.Context, sup *supervise.Supervisor) {
+	h.mu.Lock()
+	if h.closed {
+		h.mu.Unlock()
+		return
+	}
+	h.ctx, h.sup = ctx, sup
+	h.startLocked()
+	h.mu.Unlock()
+	<-ctx.Done()
+	h.Close()
+}
+
+func (h *advisorStackHolder) startLocked() {
+	if h.ctx == nil || h.ctx.Err() != nil {
+		return
+	}
+	s := h.Load()
+	ctx, cancel := context.WithCancel(h.ctx)
+	h.cancel, h.done = cancel, make(chan struct{})
+	done, sup := h.done, h.sup
+	go func() {
+		var workers sync.WaitGroup
+		if s.Sub != nil {
+			workers.Add(1)
+			go func() { defer workers.Done(); sup.Run(ctx, "advisor", s.Sub.Run) }()
+		}
+		if s.Managed != nil {
+			workers.Add(1)
+			go func() {
+				defer workers.Done()
+				exited := make(chan error, 1)
+				go func() { exited <- s.Managed.Wait() }()
+				waited := false
+				defer func() {
+					// Supervisor may see cancellation before entering the worker.
+					if !waited {
+						_ = s.Managed.Process.Kill()
+						<-exited
+					}
+				}()
+				sup.Run(ctx, "advisor-model", func(c context.Context) error {
+					select {
+					case <-c.Done():
+						_ = s.Managed.Process.Kill()
+						<-exited
+						waited = true
+						return nil
+					case err := <-exited:
+						waited = true
+						if err == nil {
+							err = fmt.Errorf("managed model exited")
+						}
+						// An exec.Cmd can only be waited once. A config reload
+						// launches a fresh command; retrying this one cannot recover.
+						return supervise.Permanent(err)
+					}
+				})
+			}()
+		}
+		workers.Wait()
+		close(done)
+	}()
+}
+
+func disposeAdvisor(s advisorStack) {
+	if s.Managed != nil {
+		_ = s.Managed.Process.Kill()
+		_ = s.Managed.Wait()
+	}
+}
+
+func (h *advisorStackHolder) stopLocked() {
+	if h.cancel != nil {
+		h.cancel()
+		<-h.done
+		h.cancel, h.done = nil, nil
+	} else {
+		disposeAdvisor(h.Load())
+	}
+}
+
+func (h *advisorStackHolder) Close() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.closed {
+		return
+	}
+	h.closed = true
+	h.stopLocked()
+	h.v.Store(advisorStack{})
+}
 
 // configWatchDeps bundles everything the live config watcher may swap.
 type configWatchDeps struct {
@@ -109,9 +222,7 @@ func watchConfig(ctx context.Context, path string, deps configWatchDeps) {
 		}
 		if key := advisorConfigKey(data.Advisor); key != lastAdvisorKey {
 			lastAdvisorKey = key
-			// Swapping is the signal: the drain loop re-loads the stack per
-			// event, so the old subscriber simply goes inert (its supervised
-			// Run exits cleanly at daemon shutdown). No close needed.
+			// Store transfers worker and managed-process ownership to the new stack.
 			deps.stk.Store(setupAdvisor(data, deps.st, deps.deltaHub, deps.postureChanged))
 			log.Printf("advisor config applied live (enabled=%v mode=%s model=%q)",
 				data.Advisor.Enabled, map[bool]string{true: "managed", false: "existing"}[data.Advisor.Managed], data.Advisor.Model)
