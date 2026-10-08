@@ -45,6 +45,12 @@ const (
 	trimFlagsSQL = `DELETE FROM flags WHERE rowid IN (
 		SELECT rowid FROM flags ORDER BY datetime(ts), ts
 		LIMIT max(0, (SELECT COUNT(*) FROM flags) - ?))`
+	// ruleCountsSQL counts a rule's flags for one agent in two windows; it
+	// seeks idx_flags_rule_agent.
+	ruleCountsSQL = `SELECT
+		COALESCE(SUM(CASE WHEN datetime(ts) >= datetime(?) THEN 1 ELSE 0 END), 0),
+		COALESCE(SUM(CASE WHEN datetime(ts) >= datetime(?) THEN 1 ELSE 0 END), 0)
+		FROM flags WHERE rule = ? AND agent = ?`
 	// reattributeFlagsSQL seeks idx_flags_pid.
 	reattributeFlagsSQL = `UPDATE flags SET agent = ? WHERE pid = ? AND agent LIKE 'untagged:%' AND datetime(ts) >= datetime(?)`
 	// trimIncidentsSQL deletes only the oldest incidents past the cap through
@@ -600,6 +606,19 @@ func (s *Store) RecentFlags(limit int) []model.Flag {
 
 // GetFlag fetches one flag by ID (for the re-triage endpoint). Absent ID →
 // ok=false; the caller answers 404 rather than re-enqueueing a ghost.
+
+// ackRuleHostQuery selects the open flags of rule (for agent, when set); it
+// seeks idx_flags_rule_agent.
+func ackRuleHostQuery(rule, agent string) (string, []any) {
+	q := `SELECT id, evidence FROM flags WHERE rule = ? AND (acknowledged IS NULL OR acknowledged = '')`
+	args := []any{rule}
+	if agent != "" {
+		q += ` AND agent = ?`
+		args = append(args, agent)
+	}
+	return q, args
+}
+
 // AcknowledgeRuleHost marks every UNacknowledged flag of `rule` whose
 // evidence cites `host` (of `agent` when set) as acted-upon. Called when the operator mutes a
 // rule+host pair: the mute suppresses future flags AND the existing ones
@@ -608,12 +627,7 @@ func (s *Store) RecentFlags(limit int) []model.Flag {
 func (s *Store) AcknowledgeRuleHost(rule, host, agent string) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	q := `SELECT id, evidence FROM flags WHERE rule = ? AND (acknowledged IS NULL OR acknowledged = '')`
-	args := []any{rule}
-	if agent != "" {
-		q += ` AND agent = ?`
-		args = append(args, agent)
-	}
+	q, args := ackRuleHostQuery(rule, agent)
 	rows, err := s.db.Query(q, args...)
 	if err != nil {
 		log.Printf("store: acknowledge-rule-host query error: %v", err)

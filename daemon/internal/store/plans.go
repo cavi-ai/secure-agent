@@ -60,10 +60,7 @@ func (s *Store) RuleCounts(rule, agent string, now time.Time) (last7, last30 int
 	defer s.mu.Unlock()
 	d7 := now.Add(-7 * 24 * time.Hour).UTC().Format(time.RFC3339Nano)
 	d30 := now.Add(-30 * 24 * time.Hour).UTC().Format(time.RFC3339Nano)
-	if err := s.db.QueryRow(`SELECT
-		COALESCE(SUM(CASE WHEN datetime(ts) >= datetime(?) THEN 1 ELSE 0 END), 0),
-		COALESCE(SUM(CASE WHEN datetime(ts) >= datetime(?) THEN 1 ELSE 0 END), 0)
-		FROM flags WHERE rule = ? AND agent = ?`, d7, d30, rule, agent).Scan(&last7, &last30); err != nil {
+	if err := s.db.QueryRow(ruleCountsSQL, d7, d30, rule, agent).Scan(&last7, &last30); err != nil {
 		log.Printf("store: rule counts: %v", err)
 	}
 	return last7, last30
