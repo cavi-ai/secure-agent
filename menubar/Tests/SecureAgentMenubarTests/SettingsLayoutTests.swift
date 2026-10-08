@@ -47,12 +47,12 @@ final class SettingsLayoutTests: XCTestCase {
         // File Guard: one mode menu per guarded path type.
         let guardMenus = menus(hosting)
         XCTAssertEqual(guardMenus.count, SettingsView.guardRules.count)
-        XCTAssertTrue(guardMenus.allSatisfy { ["Monitor", "Prompt", "Deny"].contains($0.accessibilityValue() as? String) })
+        XCTAssertTrue(guardMenus.allSatisfy { ["Monitor", "Prompt", "Deny"].contains($0.title) })
         assertHorizontalFit(hosting, window: window)
         try snapshot(hosting, name: "minimum-file-guard")
         scrollDetailToEnd(hosting)
         await settle(hosting)
-        assertOnScreen(try XCTUnwrap(menus(hosting).last), in: hosting, window: window)
+        try assertVisible(try XCTUnwrap(menus(hosting).last), in: hosting)
 
         // The sidebar is keyboard-navigable: Down Arrow moves to Egress Firewall.
         let sidebar = try XCTUnwrap(sidebarTable(hosting))
@@ -80,12 +80,12 @@ final class SettingsLayoutTests: XCTestCase {
         await settle(hosting)
         let notifyMenus = menus(hosting)
         XCTAssertEqual(notifyMenus.count, SettingsView.notifyRules.count)
-        XCTAssertTrue(notifyMenus.allSatisfy { $0.accessibilityValue() as? String == "Critical only" })
+        XCTAssertTrue(notifyMenus.allSatisfy { $0.title == "Critical only" })
         assertHorizontalFit(hosting, window: window)
         try snapshot(hosting, name: "minimum-notifications")
         scrollDetailToEnd(hosting)
         await settle(hosting)
-        assertOnScreen(try XCTUnwrap(menus(hosting).last), in: hosting, window: window)
+        try assertVisible(try XCTUnwrap(menus(hosting).last), in: hosting)
 
         for tab: SettingsTab in [.exceptions, .providers, .chat, .traffic, .app, .updates] {
             SettingsNavigation.shared.tab = tab
@@ -155,28 +155,19 @@ final class SettingsLayoutTests: XCTestCase {
         descendants(view).compactMap { $0 as? NSSegmentedControl }
     }
 
-    /// Pop-up menus, top to bottom (SwiftUI menu pickers are pop-up button
-    /// cells, not NSPopUpButton views).
-    private func menus(_ view: NSView) -> [any NSAccessibilityProtocol] {
-        nodes(view).filter { $0.accessibilityRole() == .popUpButton }
-            .sorted { $0.accessibilityFrame().minY > $1.accessibilityFrame().minY }
+    /// Menu pickers, top to bottom. Found as views: SwiftUI builds the
+    /// accessibility tree only while an assistive client is attached, and
+    /// fills a picker's menu items only when it opens, so `title` is the
+    /// shown choice.
+    private func menus(_ view: NSView) -> [NSPopUpButton] {
+        descendants(view).compactMap { $0 as? NSPopUpButton }
+            .sorted { $0.convert($0.bounds, to: nil).minY > $1.convert($1.bounds, to: nil).minY }
     }
 
     private func sidebarTable(_ view: NSView) -> NSTableView? {
         descendants(view).compactMap { $0 as? NSTableView }.first {
             view.convert($0.bounds, from: $0).minX < 196
         }
-    }
-
-    /// An accessibility element (SwiftUI switches are not always NSViews)
-    /// lies inside the detail scroll viewport and the window content.
-    private func assertOnScreen(_ node: any NSAccessibilityProtocol, in view: NSView, window: NSWindow) {
-        let frame = node.accessibilityFrame()
-        XCTAssertGreaterThan(frame.width, 0, "Element has no on-screen frame")
-        guard let scroll = detailScroll(view) else { return XCTFail("No detail scroll view") }
-        let viewport = window.convertToScreen(scroll.convert(scroll.contentView.frame, to: nil))
-        XCTAssertTrue(viewport.insetBy(dx: -1, dy: -1).contains(frame),
-                      "Final control must be inside the visible detail scroll viewport")
     }
 
     private func assertVisible(_ control: NSView, in view: NSView) throws {
