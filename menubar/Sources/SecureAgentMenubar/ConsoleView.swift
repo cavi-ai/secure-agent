@@ -156,7 +156,9 @@ struct ConsoleView: View {
         var flagLines: [String] {
             guard let flag else { return [] }
             let title = (flag.title?.isEmpty == false) ? flag.title! : flag.rule
-            return [title, flag.explain?.what ?? "", flag.explain?.disposition.text ?? ""]
+            let assessment = flag.explain?.assessment
+            let observation = assessment == nil ? (flag.explain?.what ?? "") : ""
+            return ([title, observation] + (assessment?.summaryLines ?? [flag.explain?.disposition.text ?? ""]))
                 .filter { !$0.isEmpty }
         }
 
@@ -237,7 +239,7 @@ struct ConsoleView: View {
                     case .running:
                         Text("Working…").foregroundStyle(.secondary)
                     case .done:
-                        Text("Done: \(run.action.label)").foregroundStyle(Color.ok)
+                        Text("Recorded: \(run.action.label)").foregroundStyle(Color.ok)
                     case .doneWithWarning(let message):
                         Text(message).foregroundStyle(Color.warn)
                     case .failed(let message):
@@ -285,7 +287,7 @@ struct ConsoleView: View {
             return HeroModel(icon: "exclamationmark.triangle.fill", color: .warn, title: "Needs a look",
                              subtitle: subtitle, flag: top, action: action)
         default:
-            return HeroModel(icon: "checkmark.shield.fill", color: .ok, title: "Protected",
+            return HeroModel(icon: "checkmark.shield.fill", color: .ok, title: "No pending decisions",
                              subtitle: subtitle, flag: top, action: action)
         }
     }

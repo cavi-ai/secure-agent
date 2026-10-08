@@ -24,10 +24,11 @@ type RoutineGroup struct {
 	DestinationCount int                  `json:"destination_count"`
 	// Expectable counts the flags whose every read names its reader: the
 	// ones Treat as routine resolves.
-	Expectable  int             `json:"expectable"`
-	Disposition Disposition     `json:"disposition"`
-	Summary     string          `json:"summary"`
-	Actions     []ExplainAction `json:"actions"`
+	Expectable  int                `json:"expectable"`
+	Disposition Disposition        `json:"disposition"`
+	Assessment  *FindingAssessment `json:"assessment,omitempty"`
+	Summary     string             `json:"summary"`
+	Actions     []ExplainAction    `json:"actions"`
 	// FlagIDs are the covered flags, newest first, at most PatternFlagIDCap.
 	FlagIDs []string `json:"flag_ids"`
 }

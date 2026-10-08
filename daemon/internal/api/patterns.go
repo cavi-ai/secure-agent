@@ -176,6 +176,7 @@ func (a *API) fillPattern(p model.Pattern, flags []model.Flag, since, now time.T
 		}
 	}
 	p.Unacked = len(open)
+	p.Assessment = assessmentForFlags(sorted)
 	p.PIDs, p.PIDCount = busiest(pidN), len(pidN)
 	p.Sessions, p.SessionCount = busiest(sessionN), len(sessionN)
 	p.Processes = patternProcesses(sorted)

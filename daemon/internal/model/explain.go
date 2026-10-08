@@ -8,12 +8,13 @@ import "time"
 // stored evidence, the session spine, the endpoint identity table and the
 // allowlist; never persisted.
 type FlagExplain struct {
-	What        string          `json:"what"`
-	Subject     *ExplainSubject `json:"subject,omitempty"`
-	Egress      []ExplainEgress `json:"egress,omitempty"`
-	Context     *ExplainContext `json:"context,omitempty"`
-	Disposition Disposition     `json:"disposition"`
-	Actions     []ExplainAction `json:"actions"`
+	What        string             `json:"what"`
+	Subject     *ExplainSubject    `json:"subject,omitempty"`
+	Egress      []ExplainEgress    `json:"egress,omitempty"`
+	Context     *ExplainContext    `json:"context,omitempty"`
+	Disposition Disposition        `json:"disposition"`
+	Assessment  *FindingAssessment `json:"assessment,omitempty"`
+	Actions     []ExplainAction    `json:"actions"`
 	// Labels counts the operator's earlier judgments on the same case, when
 	// there are any.
 	Labels *LabelSummary `json:"labels,omitempty"`

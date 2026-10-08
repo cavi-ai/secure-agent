@@ -36,7 +36,8 @@ type AttentionItem struct {
 	Advisor   *model.AdvisorVerdict `json:"advisor,omitempty"`
 	// Disposition is set on flag items (the same verdict /flags/{id}/explain
 	// serves) and pattern items (the worst open flag's).
-	Disposition *model.Disposition `json:"disposition,omitempty"`
+	Disposition *model.Disposition       `json:"disposition,omitempty"`
+	Assessment  *model.FindingAssessment `json:"assessment,omitempty"`
 }
 
 // AttentionGroup is one agent session, an explicit unattributed bucket, or
@@ -296,20 +297,24 @@ func (a *API) attentionQueue(st Status, patterns []model.Pattern, routine []mode
 					groups[routineGroupKey] = g
 				}
 				d := rg.Disposition
+				severity := f.Severity
+				if rg.Assessment != nil {
+					severity = assessmentSeverity(*rg.Assessment, 0)
+				}
 				priority := 1
-				if d.State == model.DispositionCritical {
+				if severity >= 3 {
 					priority = 2
 				}
 				add(g, PostureItem{
 					Kind: "routine", ID: rg.Key,
 					Title:     fmt.Sprintf("Recurring read — %d×", rg.Count),
-					Severity:  dispositionSeverity(d),
+					Severity:  severity,
 					Detail:    rg.Summary,
 					Timestamp: f.TS.UTC().Format(time.RFC3339),
 				}, AttentionItem{
 					Kind: "routine", Priority: priority, ID: rg.Key,
 					Count: rg.Count, Title: "Recurring read", Detail: rg.Summary,
-					Disposition: &d, Rule: readConnectRule,
+					Disposition: &d, Assessment: rg.Assessment, Rule: readConnectRule,
 				})
 			}
 			continue
@@ -319,8 +324,12 @@ func (a *API) attentionQueue(st Status, patterns []model.Pattern, routine []mode
 				patternAdded[i] = true
 				p := patterns[i]
 				d := p.Disposition
+				severity := f.Severity
+				if p.Assessment != nil {
+					severity = assessmentSeverity(*p.Assessment, 0)
+				}
 				priority := 1
-				if d.State == model.DispositionCritical {
+				if severity >= 3 {
 					priority = 2
 				}
 				g := groupFor(f.Agent, f.PID)
@@ -330,31 +339,30 @@ func (a *API) attentionQueue(st Status, patterns []model.Pattern, routine []mode
 				add(g, PostureItem{
 					Kind: "pattern", ID: p.Key,
 					Title:     fmt.Sprintf("%s — %d×", p.Title, p.Count),
-					Severity:  dispositionSeverity(d),
+					Severity:  severity,
 					Detail:    p.Summary,
 					Timestamp: p.Last.UTC().Format(time.RFC3339),
 				}, AttentionItem{
 					Kind: "pattern", Priority: priority, ID: p.Key,
 					Count: p.Count, Title: p.Title, Detail: p.Summary,
-					Disposition: &d, Rule: p.Rule,
+					Disposition: &d, Assessment: p.Assessment, Rule: p.Rule,
 				})
 			}
 			continue
 		}
 		d := dispositionFor(f)
+		assessment := assessmentForFlag(f)
+		severity := assessmentSeverity(assessment, f.Severity)
 		detail := f.Rule
 		if len(f.Evidence) > 0 {
 			detail = f.Rule + " — " + f.Evidence[0].String()
 		}
 		item := AttentionItem{
 			Kind: "flag", Priority: 2, ID: f.ID,
-			Title: "Critical finding", Detail: detail, Disposition: &d,
+			Title: "Critical finding", Detail: detail, Disposition: &d, Assessment: &assessment,
 		}
 		switch {
-		case d.State == model.DispositionBenignLikely:
-			item.Priority = 1
-			item.Title = "Finding, likely benign"
-		case f.Severity < 3:
+		case severity < 3:
 			item.Priority = 1
 			item.Title = humanFlagTitle(f.Rule)
 		}
@@ -365,8 +373,8 @@ func (a *API) attentionQueue(st Status, patterns []model.Pattern, routine []mode
 		add(g, PostureItem{
 			Kind: "flag", ID: f.ID,
 			Title:     humanFlagTitle(f.Rule),
-			Severity:  dispositionSeverity(d),
-			Detail:    d.Text + " — " + firstEvidence(f.Evidence),
+			Severity:  severity,
+			Detail:    assessment.Reason,
 			Timestamp: f.TS.UTC().Format(time.RFC3339),
 		}, item)
 	}
