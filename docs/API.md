@@ -972,7 +972,7 @@ Every connection is identified with macOS `LOCAL_PEEREPID` / `LOCAL_PEERCRED` (k
 
 `POST /kill` additionally refuses any PID that is not currently a recognized agent process, so the control socket cannot be turned into an arbitrary-process killer.
 
-**NoAgent routes** (`/files/detail`, `/files/reveal`, `/files/open`, `/agent/*`, among others marked `NoAgent` in `apiroutes.Table`) refuse every agent process. On the unix socket the Agent and Foreign roles get 403, and an Owner peer whose process belongs to an agent family (checked live, so a child spawned a moment ago counts) is refused too. On the console listener the console token is not enough: the daemon identifies the TCP client's process with `lsof` and serves it only when that process is outside every agent family; an unidentified client is refused. Off macOS the console listener refuses these routes.
+**NoAgent routes** (`/files/detail`, `/files/reveal`, `/files/open`, `/agent/*`, among others marked `NoAgent` in `apiroutes.Table`) refuse every agent process. On the unix socket the Agent and Foreign roles get 403, and an Owner peer whose process belongs to an agent family (checked live, so a child spawned a moment ago counts) is refused too. On the console listener the console token is not enough: the daemon identifies the TCP client's process with `netstat` and serves it only when that process is outside every agent family; an unidentified client is refused. Off macOS the console listener refuses these routes.
 
 `GET /debug/pprof/` (Go runtime profiles: `heap`, `goroutine`, `profile?seconds=N`, `trace`, …) is served on the unix socket only, to the Owner role (and the pinned menubar app); agents and foreign peers get 403, and the proxy listener never serves it.
 
