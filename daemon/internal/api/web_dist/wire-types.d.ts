@@ -420,6 +420,8 @@ export interface HealthSnapshot {
 export interface WriteHealth {
   failures: number;
   active: string[];
+  read_failures?: number;
+  read_active?: string[];
 }
 
 export interface HarnessCoverage {
@@ -490,6 +492,7 @@ export interface Status {
   bus_drop_at?: string;
   bus_dropping?: boolean;
   storage_health?: WriteHealth;
+  otlp_dropped?: number;
   coverage?: CoverageStatus;
   firewall_stats?: Record<string, RuleStat>;
   collectors?: Health[];

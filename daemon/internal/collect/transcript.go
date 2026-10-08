@@ -858,7 +858,7 @@ func (ts *TranscriptScanner) eventsForLine(p, line string, lineStart, offset int
 			}
 			ts.codexTracers[p] = tracer
 		}
-		if evs, ok := tracer.ParseLine(line); ok {
+		if evs, ok := tracer.ParseLine(line); ok || len(evs) > 0 {
 			sid, cwd := tracer.Session()
 			if sid != "" {
 				ts.noteRolloutSession(p, sid)

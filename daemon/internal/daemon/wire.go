@@ -554,6 +554,7 @@ func setupAdvisor(cfg config.Config, st *store.Store, deltaHub *api.DeltaHub, po
 		// Subscriber refused (shouldn't happen post-validation) — don't leave
 		// an orphan server behind.
 		_ = managed.Process.Kill()
+		_ = managed.Wait()
 		managed = nil
 	}
 	return advisorStack{Sub: sub, Managed: managed}

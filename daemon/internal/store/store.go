@@ -71,19 +71,22 @@ const (
 )
 
 // Harness activity (hook and trace events) behind every /status, /snapshot
-// and /posture: idx_events_trace_ts covers only those kinds, and the
+// and /posture: idx_events_trace_activity covers only those kinds, and the
 // statement spells out the same kind list, which the partial index needs.
 var (
 	traceActivityKinds = fmt.Sprintf("%d, %d, %d, %d",
 		event.KindPluginAction, event.KindToolCall, event.KindTurn, event.KindModelCall)
-	traceActivityIndexSQL = `CREATE INDEX IF NOT EXISTS idx_events_trace_ts ON events(kind, ts, session_id)
-		WHERE kind IN (` + traceActivityKinds + `);`
+	traceActivityIndexSQL = `CREATE INDEX IF NOT EXISTS idx_events_trace_activity ON events(kind, ` + timestampOrderExpr("ts") + `, session_id, ts)
+		WHERE kind IN (` + traceActivityKinds + `);
+		DROP INDEX IF EXISTS idx_events_trace_ts;`
+	// Prefix each candidate with a fixed-width UTC sort key. Strip that key
+	// after MAX so callers receive the original RFC3339 timestamp.
 	harnessActivitySQL = fmt.Sprintf(`SELECT s.harness,
-		MAX(CASE WHEN e.kind = %d THEN e.ts ELSE '' END),
-		MAX(CASE WHEN e.kind IN (%d, %d, %d) THEN e.ts ELSE '' END)
+		substr(MAX(CASE WHEN e.kind = %d THEN %s || e.ts ELSE '' END),31),
+		substr(MAX(CASE WHEN e.kind IN (%d, %d, %d) THEN %s || e.ts ELSE '' END),31)
 		FROM events e JOIN sessions s ON s.id = e.session_id
-		WHERE e.kind IN (%s) AND e.ts >= ? AND s.harness != ''
-		GROUP BY s.harness`, event.KindPluginAction, event.KindToolCall, event.KindTurn, event.KindModelCall, traceActivityKinds)
+		WHERE e.kind IN (%s) AND %s >= ? AND s.harness != ''
+		GROUP BY s.harness`, event.KindPluginAction, timestampOrderExpr("e.ts"), event.KindToolCall, event.KindTurn, event.KindModelCall, timestampOrderExpr("e.ts"), traceActivityKinds, timestampOrderExpr("e.ts"))
 )
 
 // pruneMinInterval is the shortest gap between two insert-driven prunes.
@@ -362,7 +365,7 @@ func (s *Store) PutEvent(e event.Event) {
 			`INSERT INTO events (kind, ts, pid, exe_path, session_id, path, remote_host, remote_port, detail, tool, tool_status, duration_ms, model, tokens_in, tokens_out, cost_usd, call_id, record)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			 ON CONFLICT(session_id, call_id) DO UPDATE SET
-			   tool_status = CASE WHEN excluded.tool_status != '' AND excluded.tool_status != 'running' THEN excluded.tool_status ELSE events.tool_status END,
+			   tool_status = CASE WHEN excluded.tool_status != '' AND excluded.tool_status != 'running' AND (excluded.tool_status != 'incomplete' OR COALESCE(events.tool_status,'') IN ('','running','incomplete')) THEN excluded.tool_status ELSE events.tool_status END,
 			   duration_ms = CASE WHEN excluded.duration_ms > 0 THEN excluded.duration_ms ELSE events.duration_ms END,
 			   detail      = CASE
 			     WHEN excluded.duration_ms > 0 AND events.detail = 'tool duration unavailable: start not retained' THEN ''

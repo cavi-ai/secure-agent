@@ -107,6 +107,7 @@ type Correlator struct {
 	ownerUseCount int
 	isExpected    func(keys []string, at time.Time) bool
 	expectedCount int
+	lastEviction  time.Time
 }
 
 func New(tagger *agents.Tagger, classifier sensitive.Classifier, cfg config.Config) *Correlator {
@@ -292,12 +293,13 @@ const keychainRepeatWindow = 15 * time.Minute
 // pattern. Tuned per rule — TCC writes are rare (long window), proxy leaks
 // recur while an agent runs (short window).
 var repeatWindows = map[string]time.Duration{
-	"keychain-access":        15 * time.Minute,
-	"keychain-security-cli":  15 * time.Minute,
-	"tcc-tamper":             60 * time.Minute,
-	"proxy-secret-leak":      5 * time.Minute,
-	"proxy-prompt-injection": 15 * time.Minute,
-	"secret-in-transcript":   15 * time.Minute,
+	"keychain-access":             15 * time.Minute,
+	"keychain-security-cli":       15 * time.Minute,
+	"tcc-tamper":                  60 * time.Minute,
+	"proxy-secret-leak":           5 * time.Minute,
+	"proxy-inspection-incomplete": 5 * time.Minute,
+	"proxy-prompt-injection":      15 * time.Minute,
+	"secret-in-transcript":        15 * time.Minute,
 }
 
 // shouldFlag reports whether this (rule, pid, subject) fire is new within
@@ -371,10 +373,14 @@ func (c *Correlator) observeLocked(e event.Event) []model.Flag {
 
 	if e.Kind == event.KindProxyHit {
 		ruleName := "proxy-payload-inspection"
+		severity := 3
 		if strings.HasPrefix(e.Detail, "proxy-secret-leak") {
 			ruleName = "proxy-secret-leak"
 		} else if strings.HasPrefix(e.Detail, "proxy-prompt-injection") {
 			ruleName = "proxy-prompt-injection"
+		} else if strings.HasPrefix(e.Detail, "proxy-inspection-incomplete:") {
+			ruleName = "proxy-inspection-incomplete"
+			severity = 2
 		}
 		flagID := hashFlagID(ruleName, e.PID, e.TS)
 		agentName := "proxy"
@@ -394,7 +400,7 @@ func (c *Correlator) observeLocked(e event.Event) []model.Flag {
 			{
 				ID:        flagID,
 				Rule:      ruleName,
-				Severity:  3,
+				Severity:  severity,
 				TS:        e.TS,
 				PID:       e.PID,
 				Agent:     agentName,
@@ -851,14 +857,21 @@ func (c *Correlator) recentConnsLocked(pid int32, directPID int32, now time.Time
 }
 
 func (c *Correlator) evictStaleLocked(now time.Time) {
+	// Correlation lookups enforce their own windows; housekeeping need not
+	// walk every retained PID on each event. Late events cannot move it back.
+	if !c.lastEviction.IsZero() && now.Sub(c.lastEviction) < 30*time.Second {
+		return
+	}
+	c.lastEviction = now
 	c.evictOwnedLocked(now)
 	for pid, list := range c.marks {
-		var valid []readMark
+		valid := list[:0]
 		for _, m := range list {
 			if now.Sub(m.at) <= 10*time.Minute {
 				valid = append(valid, m)
 			}
 		}
+		clear(list[len(valid):])
 		if len(valid) == 0 {
 			delete(c.marks, pid)
 		} else {
@@ -867,12 +880,13 @@ func (c *Correlator) evictStaleLocked(now time.Time) {
 	}
 
 	for pid, list := range c.conns {
-		var valid []connMark
+		valid := list[:0]
 		for _, cm := range list {
 			if now.Sub(cm.at) <= 10*time.Minute {
 				valid = append(valid, cm)
 			}
 		}
+		clear(list[len(valid):])
 		if len(valid) == 0 {
 			delete(c.conns, pid)
 		} else {

@@ -152,22 +152,35 @@ func (s *Store) HookEventsSince(since time.Time) int {
 type HarnessActivity struct{ HookLastSeen, TraceLastSeen string }
 
 func (s *Store) HarnessActivitySince(since time.Time) map[string]HarnessActivity {
+	out, _ := s.HarnessActivitySinceResult(since)
+	return out
+}
+
+func (s *Store) HarnessActivitySinceResult(since time.Time) (out map[string]HarnessActivity, readErr error) {
+	defer func() { s.noteRead("harness activity", readErr) }()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := map[string]HarnessActivity{}
-	rows, err := s.db.Query(harnessActivitySQL, sinceArg(since))
+	out = map[string]HarnessActivity{}
+	rows, err := s.db.Query(harnessActivitySQL, since.UTC().Format(activityTimeLayout))
 	if err != nil {
-		return out
+		return nil, err
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var name string
 		var activity HarnessActivity
-		if err := rows.Scan(&name, &activity.HookLastSeen, &activity.TraceLastSeen); err == nil {
-			out[name] = activity
+		if err := rows.Scan(&name, &activity.HookLastSeen, &activity.TraceLastSeen); err != nil {
+			return nil, err
 		}
+		out[name] = activity
 	}
-	return out
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // TraceRowsWrittenByHarness counts trace rows (tool calls, turns, model

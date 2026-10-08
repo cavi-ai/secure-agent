@@ -133,18 +133,30 @@ func (ps *ProxyServer) SetConsoleAPI(h http.Handler) { ps.consoleAPI = h }
 
 func NewProxyServer(port int, b *bus.Bus, caManager *CAManager, engine *firewall.Engine) *ProxyServer {
 	ps := &ProxyServer{
-		bus:       b,
-		caManager: caManager,
-		engine:    engine,
+		connections: make(map[net.Conn]struct{}),
+		bus:         b,
+		caManager:   caManager,
+		engine:      engine,
 	}
 	ps.port.Store(int32(port))
 
 	ps.server = &http.Server{
-		Addr:    fmt.Sprintf("127.0.0.1:%d", port),
-		Handler: http.HandlerFunc(ps.serveHTTP),
+		Addr:              fmt.Sprintf("127.0.0.1:%d", port),
+		Handler:           http.HandlerFunc(ps.serveHTTP),
+		ReadHeaderTimeout: handshakeTimeout,
+		ReadTimeout:       idleTunnelTimeout,
+		IdleTimeout:       idleTunnelTimeout,
+		ConnState: func(c net.Conn, state http.ConnState) {
+			if state == http.StateClosed {
+				ps.releaseConnection(c)
+			}
+		},
 		// The console's NoAgent routes cache a successfully identified client
 		// process per connection instead of running netstat on every request.
-		ConnContext: connpeer.WithCache,
+		ConnContext: func(ctx context.Context, c net.Conn) context.Context {
+			ps.ownConnection(ctx, c)
+			return connpeer.WithCache(ctx, c)
+		},
 	}
 
 	ps.plainHTTPClient = &http.Client{
@@ -157,8 +169,15 @@ func NewProxyServer(port int, b *bus.Bus, caManager *CAManager, engine *firewall
 		// Proxy:nil prevents honoring HTTP_PROXY (which agent-env sets to this
 		// proxy) and looping the daemon back into itself.
 		Transport: &http.Transport{
-			Proxy:                 nil,
-			DialContext:           (&net.Dialer{Timeout: dialTimeout}).DialContext,
+			Proxy: nil,
+			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+				c, err := (&net.Dialer{Timeout: dialTimeout}).DialContext(ctx, network, addr)
+				if err != nil {
+					return nil, err
+				}
+				ps.ownConnection(ctx, c)
+				return &idleConn{Conn: c, onClose: func() { ps.releaseConnection(c) }}, nil
+			},
 			ResponseHeaderTimeout: 30 * time.Second,
 			TLSHandshakeTimeout:   dialTimeout,
 		},
@@ -211,6 +230,43 @@ func (ps *ProxyServer) serveListener(ctx context.Context, listener net.Listener)
 		return err
 	}
 }
+
+// Refresh per operation so a stalled peer times out while an active stream
+// can continue indefinitely.
+type idleConn struct {
+	net.Conn
+	onClose func()
+}
+
+func (c *idleConn) Read(p []byte) (int, error) {
+	_ = c.Conn.SetReadDeadline(time.Now().Add(idleTunnelTimeout))
+	return c.Conn.Read(p)
+}
+func (c *idleConn) Write(p []byte) (int, error) {
+	_ = c.Conn.SetWriteDeadline(time.Now().Add(idleTunnelTimeout))
+	return c.Conn.Write(p)
+}
+func (c *idleConn) Close() error {
+	if c.onClose != nil {
+		c.onClose()
+	}
+	return c.Conn.Close()
+}
+
+func (c *idleConn) CloseWrite() error {
+	if tcp, ok := c.Conn.(interface{ CloseWrite() error }); ok {
+		return tcp.CloseWrite()
+	}
+	return nil
+}
+
+// Preserve bytes buffered by net/http before it handed off a CONNECT.
+type bufferedConn struct {
+	net.Conn
+	reader *bufio.Reader
+}
+
+func (c *bufferedConn) Read(p []byte) (int, error) { return c.reader.Read(p) }
 
 func (ps *ProxyServer) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	// The embedded security console is served here so the documented
@@ -294,7 +350,7 @@ func (ps *ProxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	clientConn, _, err := hj.Hijack()
+	clientConn, buffered, err := hj.Hijack()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
@@ -321,7 +377,7 @@ func (ps *ProxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	_ = clientConn.SetDeadline(time.Now().Add(handshakeTimeout))
-	tlsClientConn := tls.Server(clientConn, tlsConfig)
+	tlsClientConn := tls.Server(&bufferedConn{Conn: clientConn, reader: buffered.Reader}, tlsConfig)
 	if err := tlsClientConn.Handshake(); err != nil {
 		_ = tlsClientConn.Close()
 		return
@@ -332,14 +388,14 @@ func (ps *ProxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 
 	// Serve every request on the tunnel, not just the first: real agent clients
 	// reuse a keep-alive tunnel for many requests.
-	reader := bufio.NewReader(tlsClientConn)
+	clientIO := &idleConn{Conn: tlsClientConn}
+	reader := bufio.NewReader(clientIO)
 	for {
 		_ = clientConn.SetReadDeadline(time.Now().Add(idleTunnelTimeout))
 		req, err := http.ReadRequest(reader)
 		if err != nil {
 			return // idle timeout, EOF, or client closed the tunnel
 		}
-		_ = clientConn.SetReadDeadline(time.Time{})
 		req.URL.Scheme = "https"
 		req.URL.Host = r.Host
 		req = req.WithContext(r.Context())
@@ -351,18 +407,27 @@ func (ps *ProxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 			// loop iteration would parse the previous request's body bytes as a
 			// new request line and desync the keep-alive tunnel.
 			if req.Body != nil {
-				_, _ = io.Copy(io.Discard, io.LimitReader(req.Body, scanCap))
-				req.Body.Close()
+				_, err = io.Copy(io.Discard, io.LimitReader(req.Body, scanCap+1))
+				// Closing on oversized blocked uploads avoids interpreting
+				// an undrained suffix as the next HTTP request.
+				if err != nil || req.ContentLength > scanCap || req.ContentLength < 0 {
+					req.Close = true
+				} else {
+					req.Body.Close()
+				}
 			}
 			body := fmt.Sprintf(`{"error":"Security Violation","detail":%q}`, detail)
-			writeRawResponse(tlsClientConn, http.StatusForbidden, "Forbidden", body, !req.Close)
+			writeRawResponse(clientIO, http.StatusForbidden, "Forbidden", body, !req.Close)
 			if req.Close {
 				return
 			}
 			continue
 		}
 
-		keepAlive := ps.forwardConnectRequest(tlsClientConn, req, r.Host, host)
+		keepAlive := ps.forwardConnectRequest(clientIO, req, r.Host, host)
+		if req.Body != nil {
+			req.Body.Close()
+		}
 		if !keepAlive || req.Close {
 			return
 		}
@@ -408,17 +473,22 @@ func (ps *ProxyServer) tunnel(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	done := make(chan struct{}, 2)
+	done := make(chan error, 2)
 	relay := func(dst, src net.Conn) {
-		_, _ = io.Copy(dst, src)
+		_, err := io.Copy(dst, src)
 		if c, ok := dst.(interface{ CloseWrite() error }); ok {
 			_ = c.CloseWrite()
 		}
-		done <- struct{}{}
+		done <- err
 	}
-	go relay(upstream, clientConn)
-	go relay(clientConn, upstream)
-	<-done
+	go relay(&idleConn{Conn: upstream}, &idleConn{Conn: clientConn})
+	go relay(&idleConn{Conn: clientConn}, &idleConn{Conn: upstream})
+	firstErr := <-done
+	// An error or idle timeout on either direction ends the whole tunnel.
+	if firstErr != nil {
+		_ = clientConn.Close()
+		_ = upstream.Close()
+	}
 	<-done
 }
 
@@ -441,12 +511,13 @@ func (ps *ProxyServer) forwardConnectRequest(clientConn net.Conn, req *http.Requ
 		return false
 	}
 	defer ps.releaseConnection(targetConn)
+	targetIO := &idleConn{Conn: targetConn}
 
-	if err := req.Write(targetConn); err != nil {
+	if err := req.Write(targetIO); err != nil {
 		return false
 	}
 
-	targetReader := bufio.NewReader(targetConn)
+	targetReader := bufio.NewReader(targetIO)
 	resp, err := http.ReadResponse(targetReader, req)
 	if err != nil {
 		return false
@@ -495,7 +566,7 @@ func (ps *ProxyServer) inspectAndForwardHTTP(w http.ResponseWriter, r *http.Requ
 	w.WriteHeader(resp.StatusCode)
 
 	pc := &prefixCapture{cap: scanCap}
-	_, _ = io.Copy(w, io.TeeReader(resp.Body, pc))
+	_, _ = io.Copy(idleResponseWriter{w}, io.TeeReader(resp.Body, pc))
 	ps.scanForInjection(pc.buf, host)
 }
 
@@ -513,9 +584,17 @@ func (ps *ProxyServer) inspectRequest(r *http.Request, host string) (blocked boo
 	// streamed (prefix + remainder) so a large upload never buffers in full.
 	var bodyBytes []byte
 	if r.Body != nil {
-		head, _ := io.ReadAll(io.LimitReader(r.Body, scanCap))
-		bodyBytes = head
-		r.Body = io.NopCloser(io.MultiReader(bytes.NewReader(head), r.Body))
+		original := r.Body
+		head, err := io.ReadAll(io.LimitReader(original, scanCap+1))
+		bodyBytes = head[:min(len(head), scanCap)]
+		var tail io.Reader = original
+		if err != nil {
+			ps.publishHit(host, "proxy-inspection-incomplete:body-read")
+			tail = &readError{err: err}
+		} else if len(head) > scanCap {
+			ps.publishHit(host, "proxy-inspection-incomplete:body-limit")
+		}
+		r.Body = &replayBody{Reader: io.MultiReader(bytes.NewReader(head), tail), Closer: original}
 	}
 
 	headers := make(map[string]string, len(r.Header))
@@ -552,11 +631,27 @@ func (ps *ProxyServer) inspectRequest(r *http.Request, host string) (blocked boo
 // views so an encoded payload can't slip past.
 func (ps *ProxyServer) streamAndScanResponse(dst io.Writer, resp *http.Response, host string) error {
 	pc := &prefixCapture{cap: scanCap}
-	resp.Body = io.NopCloser(io.TeeReader(resp.Body, pc))
+	resp.Body = &replayBody{Reader: io.TeeReader(resp.Body, pc), Closer: resp.Body}
 	err := resp.Write(dst)
 	ps.scanForInjection(pc.buf, host)
 	return err
 }
+
+type replayBody struct {
+	io.Reader
+	io.Closer
+}
+
+type idleResponseWriter struct{ http.ResponseWriter }
+
+func (w idleResponseWriter) Write(p []byte) (int, error) {
+	_ = http.NewResponseController(w.ResponseWriter).SetWriteDeadline(time.Now().Add(idleTunnelTimeout))
+	return w.ResponseWriter.Write(p)
+}
+
+type readError struct{ err error }
+
+func (r *readError) Read([]byte) (int, error) { return 0, r.err }
 
 // scanForInjection runs the injection detector over every normalized view of the
 // captured prefix (raw, url-decoded, json-unescaped, base64, gzip), matching the

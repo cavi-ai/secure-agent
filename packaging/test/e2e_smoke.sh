@@ -2,6 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+python3 "$SCRIPT_DIR/packaging/test/test_e2e_sse.py"
 tmp="$(mktemp -d)"
 COLLECTOR_PID=""
 ADVISOR_STUB_PID=""
@@ -153,11 +154,14 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net"
 	"os"
 	"runtime"
 	"time"
 )
+
+const fixtureConnectTimeout = 3 * time.Second
 
 func main() {
 	// Keep a visible resource footprint long enough for the daemon's delta
@@ -195,7 +199,10 @@ func main() {
 	// no internet required. Interface lists include down links and VPN utuns
 	// that answer nothing, so each candidate is proven with a probe dial.
 	var l net.Listener
-	addrs, _ := net.InterfaceAddrs()
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		panic(fmt.Errorf("enumerate network fixture interfaces: %w", err))
+	}
 	for _, a := range addrs {
 		ipn, ok := a.(*net.IPNet)
 		if !ok || ipn.IP.IsLoopback() || ipn.IP.To4() == nil {
@@ -203,44 +210,55 @@ func main() {
 		}
 		cand, err := net.Listen("tcp", ipn.IP.String()+":0")
 		if err != nil {
+			fmt.Fprintf(os.Stderr, "network fixture listen %s: %v\n", ipn.IP, err)
 			continue
 		}
-		probe, err := net.DialTimeout("tcp", cand.Addr().String(), 500*time.Millisecond)
+		probe, err := net.DialTimeout("tcp", cand.Addr().String(), fixtureConnectTimeout)
 		if err != nil {
+			fmt.Fprintf(os.Stderr, "network fixture probe %s: %v\n", cand.Addr(), err)
 			cand.Close()
 			continue
 		}
-		if c, err := cand.Accept(); err == nil {
-			c.Close()
+		listener := cand.(*net.TCPListener)
+		if err := listener.SetDeadline(time.Now().Add(fixtureConnectTimeout)); err != nil {
+			panic(fmt.Errorf("set network fixture accept deadline: %w", err))
+		}
+		c, err := cand.Accept()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "network fixture accept %s: %v\n", cand.Addr(), err)
+			probe.Close()
+			cand.Close()
+			continue
+		}
+		c.Close()
+		if err := listener.SetDeadline(time.Time{}); err != nil {
+			panic(fmt.Errorf("clear network fixture accept deadline: %w", err))
 		}
 		probe.Close()
 		l = cand
+		fmt.Fprintf(os.Stderr, "network fixture listening on %s\n", l.Addr())
 		break
 	}
 	if l == nil {
-		l, err = net.Listen("tcp", "127.0.0.1:0")
-		if err != nil {
-			return
-		}
+		panic("network fixture requires a reachable non-loopback interface; loopback is excluded from egress collection")
 	}
-	if err == nil {
-		defer l.Close()
-		done := make(chan struct{})
-		go func() {
-			conn, err := l.Accept()
-			if err == nil {
-				<-done
-				conn.Close()
-			}
-		}()
-
-		clientConn, err := net.Dial("tcp", l.Addr().String())
+	defer l.Close()
+	done := make(chan struct{})
+	go func() {
+		conn, err := l.Accept()
 		if err == nil {
-			time.Sleep(30 * time.Second)
-			close(done)
-			clientConn.Close()
+			<-done
+			conn.Close()
 		}
+	}()
+
+	clientConn, err := net.DialTimeout("tcp", l.Addr().String(), fixtureConnectTimeout)
+	if err != nil {
+		panic(fmt.Errorf("establish network fixture: %w", err))
 	}
+	time.Sleep(30 * time.Second)
+	close(done)
+	clientConn.Close()
 	runtime.KeepAlive(memory)
 }
 EOF
@@ -248,7 +266,7 @@ EOF
 go build -o "$tmp/fake-cursor" "$tmp/fake_cursor_main.go"
 
 # Execute fake agent
-"$tmp/fake-cursor" "$tmp" &
+"$tmp/fake-cursor" "$tmp" > "$tmp/fake-agent.log" 2>&1 &
 AGENT_PID=$!
 FIXTURE_AGENT_PID=$AGENT_PID
 
@@ -524,9 +542,9 @@ SSE_PASSED=false
 kill "$SSE_CURL_PID" 2>/dev/null || true
 wait "$SSE_CURL_PID" 2>/dev/null || true
 SSE_BODY=$(cat "$SSE_OUT" 2>/dev/null || true)
-if printf '%s' "$SSE_BODY" | grep -q "secure-agent event stream" \
-  && printf '%s' "$SSE_BODY" | grep -q "event: guard-prompt" \
-  && printf '%s' "$SSE_BODY" | grep -q "event: guard-resolved"; then
+if grep -q "secure-agent event stream" "$SSE_OUT" \
+  && grep -q "event: guard-prompt" "$SSE_OUT" \
+  && grep -q "event: guard-resolved" "$SSE_OUT"; then
   echo "SSE: stream carried the guard lifecycle events."
   SSE_PASSED=true
 else
@@ -713,6 +731,7 @@ if [ "$PASSED" = true ] && [ "$INCIDENT_PASSED" = true ] && [ "$RESOURCE_PASSED"
   fi
   exit 0
 else
+  echo "DEBUG FIXTURE: $(cat "$tmp/fake-agent.log" 2>/dev/null || true)"
   echo "DEBUG DB EVENTS: $(sqlite3 "$tmp/events.db" "SELECT count(*), kind FROM events GROUP BY kind;" 2>/dev/null || true)"
   echo "DEBUG DB FLAGS: $(sqlite3 "$tmp/events.db" "SELECT * FROM flags;" 2>/dev/null || true)"
   echo "DEBUG DB INCIDENTS: $(sqlite3 "$tmp/events.db" "SELECT * FROM incidents;" 2>/dev/null || true)"
