@@ -6,7 +6,7 @@
 // Invariants:
 //   - Read-only toward the repositories: GIT_OPTIONAL_LOCKS=0, no fetch, no
 //     object writes, no network. Merge detection is local (ancestry, then a
-//     patch-id match for squash merges).
+//     patch-id match for squash merges, then a match of the added lines).
 //   - Scans run on request, one at a time, with a cached result; no
 //     background loop.
 //   - The verdict is deterministic (classify). Nothing outside the facts
@@ -161,6 +161,11 @@ type Hunter struct {
 	// the branch tip they were computed at.
 	fingerprints map[string]fingerprintCache
 
+	pathMu sync.Mutex
+	// pathIndexes caches each repository's default-branch path index by the
+	// branch tip it was read at.
+	pathIndexes map[string]pathCache
+
 	// sizes caches measured worktree sizes by path; sizing is true while
 	// the background sizer runs (one at a time); sizeWG lets tests wait.
 	sizeMu sync.Mutex
@@ -174,13 +179,18 @@ type fingerprintCache struct {
 	ids map[string]bool
 }
 
+type pathCache struct {
+	tip string
+	ix  *pathIndex
+}
+
 // New builds a hunter. home "" resolves to the user's home directory.
 func New(st Store, home string, opts Options) *Hunter {
 	if home == "" {
 		home, _ = os.UserHomeDir()
 	}
 	return &Hunter{st: st, home: home, now: time.Now, goos: runtime.GOOS, opts: normalize(opts),
-		fingerprints: map[string]fingerprintCache{}, sizes: map[string]sizeEntry{}, removals: map[string]*Removal{}}
+		fingerprints: map[string]fingerprintCache{}, pathIndexes: map[string]pathCache{}, sizes: map[string]sizeEntry{}, removals: map[string]*Removal{}}
 }
 
 func staleDuration(days int) time.Duration { return time.Duration(days) * 24 * time.Hour }
@@ -466,6 +476,10 @@ type repoScan struct {
 	fpOnce sync.Once
 	fp     map[string]bool
 	fpErr  error
+
+	pathOnce sync.Once
+	paths    *pathIndex
+	pathErr  error
 }
 
 func (h *Hunter) scan(ctx context.Context, opts Options) ScanReport {
@@ -644,45 +658,67 @@ func (h *Hunter) inspectOne(ctx context.Context, rs *repoScan, isMain bool, l li
 		return w, f
 	}
 	if rs.def != "" {
-		w.Merged = h.mergeState(ctx, rs, l.Path)
+		m := h.mergeState(ctx, rs, l)
+		w.Merged, w.Unrelated = m.state, m.unrelated
+		w.ContentLines, w.ContentMissing, w.ContentExtended, w.ContentOther = m.lines, m.missing, m.extended, m.other
 	}
 	return w, f
 }
 
 // mergeState answers whether HEAD's work is already in the default branch:
-// by ancestry, or as a squash commit carrying the branch's combined diff.
-func (h *Hunter) mergeState(ctx context.Context, rs *repoScan, dir string) string {
+// by ancestry, as a squash commit carrying the branch's combined diff, or by
+// content (the lines it adds are there, whatever commits carried them). The
+// squash check needs a merge-base at most squashDepth commits back; the
+// content check also runs from the branch's creation point when the default
+// branch was rewritten and shares no history with it.
+func (h *Hunter) mergeState(ctx context.Context, rs *repoScan, l listed) mergeVerdict {
+	unknown := mergeVerdict{state: mergedUnknown}
+	dir := l.Path
 	anc, err := gitOK(ctx, dir, "merge-base", "--is-ancestor", "HEAD", rs.def)
 	if err != nil {
-		return mergedUnknown
+		return unknown
 	}
 	if anc {
-		return mergedAncestor
+		return mergeVerdict{state: mergedAncestor}
 	}
-	mbOut, err := git(ctx, dir, "merge-base", "HEAD", rs.def)
+	base, viaMergeBase, err := forkBase(ctx, dir, l.Branch, rs.def)
 	if err != nil {
-		return mergedUnknown
+		return unknown
 	}
-	mb := strings.TrimSpace(mbOut)
-	behind, err := countCommits(ctx, dir, "--no-merges", mb+".."+rs.def)
-	if err != nil || behind > squashDepth {
-		return mergedUnknown
+	if base == "" {
+		return mergeVerdict{state: mergedUnknown, unrelated: true}
 	}
-	id, err := branchPatchID(ctx, dir, mb)
-	if err != nil {
-		return mergedUnknown
+	squashSaidNo := false
+	if viaMergeBase {
+		behind, err := countCommits(ctx, dir, "--no-merges", base+".."+rs.def)
+		if err != nil {
+			return unknown
+		}
+		if behind <= squashDepth {
+			id, err := branchPatchID(ctx, dir, base)
+			if err != nil {
+				return unknown
+			}
+			if id == "" {
+				return mergeVerdict{state: mergedEmpty}
+			}
+			fp, err := h.repoFingerprints(ctx, rs)
+			if err != nil {
+				return unknown
+			}
+			if fp[id] {
+				return mergeVerdict{state: mergedSquash}
+			}
+			squashSaidNo = true
+		}
 	}
-	if id == "" {
-		return mergedEmpty
+	v := h.contentCheck(ctx, rs, dir, base)
+	v.unrelated = !viaMergeBase
+	// A diff too big to measure by content keeps the squash check's answer.
+	if v.state == mergedUnknown && squashSaidNo {
+		v.state = mergedNo
 	}
-	fp, err := h.repoFingerprints(ctx, rs)
-	if err != nil {
-		return mergedUnknown
-	}
-	if fp[id] {
-		return mergedSquash
-	}
-	return mergedNo
+	return v
 }
 
 // dropBare removes the bare repository's own entry: it has no working

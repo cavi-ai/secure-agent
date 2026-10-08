@@ -383,6 +383,18 @@ Repeating findings: the flags one agent raised under one rule on one subject in 
 
 `/snapshot` carries `patterns` (24 h, `min` 3) next to `flags`.
 
+`/snapshot` also carries `routine`: open `sensitive-read-then-connect` flags of the last 24 h grouped by reader and area across agents, kept when a group holds at least 3 flags and spans agents or files, most flags first. The area is the home dot-directory the read sits under (`~/.docker`), else the exact file. The attention queue shows each group once, as a `routine` item in group `routine`, ahead of agent groups of equal priority; the flags it covers leave the agent groups.
+
+| Field | Meaning |
+|---|---|
+| `key` | `routine|<reader>|<area>`; the id of its attention item. |
+| `reader`, `area`, `files`, `count`, `agents` | Reader label (`""` when the reads recorded none); the one file's display path, or the area; distinct files; open flags; raising agents, most flags first. |
+| `destinations`, `destination_count` | Busiest 5 `{org, host, count}`; distinct destinations. |
+| `expectable` | Flags whose every read is the group's reader on its area. |
+| `disposition`, `summary` | Worst open flag's; one sentence: reader, file or area, destinations, count, agents. |
+| `actions` | `expect-all` (`POST /expected {"flag_ids"}`, the expectable ids, at most 500; absent when none) and `dismiss-all` (`POST /flags/acknowledge {"flag_ids"}`, at most 500). |
+| `flag_ids` | Covered flag ids, newest first, at most 500. |
+
 ### 2c. `POST /flags/acknowledge`
 
 `{"flag_id":"<id>"}` → `{"status":"ok","acknowledged":<bool>}`, or `{"flag_ids":["<id>",…]}` (1..500 ids) in one transaction → `{"status":"ok","acknowledged":<bool>,"count":<rows>}`. Ids match `^[A-Za-z0-9_.-]+$`. `400` for both fields, neither, more than 500 ids, or an invalid id.
@@ -822,7 +834,7 @@ The scan runs `git` read-only: `GIT_OPTIONAL_LOCKS=0` (no index refresh), `core.
 | `review` | nothing git-tracked is lost, but something only lives here: precious ignored files (`.env*`, `*.pem`, `*.key`, `.tmp/`, `.claude/`, `.remember/`, with file count and size), commits on no remote and not in the default branch, stashes on the branch, an orphan directory, or an inspection error |
 | `remove` | none of the above, no activity in the last 24 hours, and contained in the default branch (ancestor, squash, or no net change) or every commit on a remote and idle past `stale_days` |
 
-Merge detection is local. The default branch is `origin/HEAD`'s target, else the first of `origin/main`, `origin/master`, `main`, `master`. `merged` is `ancestor` (HEAD reachable from it), `squash` (the branch's zero-context diff from the merge-base has the patch id of one of the newest 1,000 non-merge commits on it), `empty` (no net change), `no`, or `unknown` (no merge-base, or more than 1,000 commits behind). `stale` is `true` when idle past `stale_days`, or merged or its upstream branch gone with no activity in the last 24 hours. Last activity is the newest of HEAD's commit time, the worktree index's mtime and the newest session seen under the path.
+Merge detection is local. The default branch is `origin/HEAD`'s target, else the first of `origin/main`, `origin/master`, `main`, `master`. `merged` is `ancestor` (HEAD reachable from it), `squash` (the branch's zero-context diff from the merge-base has the patch id of one of the newest 1,000 non-merge commits on it), `empty` (no net change), `content` (compared with the same file on the default branch, or the one with the same name and the longest common trailing path including a directory: every line the branch adds is there at least as many times as it adds it, every line it removes is there no more often than at the branch tip, every added binary is a blob it has, every deleted file is gone and every changed file mode matches; the branch's merge-base, or the commit its reflog says it was created at when the histories share none, is the base; an added line of three or more words also counts when the file has a longer line, one the base did not have, holding all of its words, for up to 3 lines or a tenth of the lines, whichever is more), `no`, or `unknown` (no merge-base and no creation entry, a diff over 1,000 files, 100,000 added lines or 8 MiB, over 32 MiB of default-branch content to read, a type change or submodule pointer, or a git error; with a merge-base whose squash check said no, the answer stays `no`). `content_lines` counts the non-blank lines the branch adds, `content_missing` those the default branch lacks, `content_extended` those it has only in a longer form and `content_other` the removed lines or files, binaries and file modes that still differ, set when the content check ran to the end. `unrelated_history` is `true` when HEAD shares no commit with the default branch; its review reason then measures the lines added since the branch was created instead of counting the old history's commits. A merged row that is `keep` or `review` for another reason lists the merge as its last reason. `stale` is `true` when idle past `stale_days`, or merged or its upstream branch gone with no activity in the last 24 hours. Last activity is the newest of HEAD's commit time, the worktree index's mtime and the newest session seen under the path.
 
 ```json
 {
@@ -972,7 +984,7 @@ Every connection is identified with macOS `LOCAL_PEEREPID` / `LOCAL_PEERCRED` (k
 
 `POST /kill` additionally refuses any PID that is not currently a recognized agent process, so the control socket cannot be turned into an arbitrary-process killer.
 
-**NoAgent routes** (`/files/detail`, `/files/reveal`, `/files/open`, `/agent/*`, among others marked `NoAgent` in `apiroutes.Table`) refuse every agent process. On the unix socket the Agent and Foreign roles get 403, and an Owner peer whose process belongs to an agent family (checked live, so a child spawned a moment ago counts) is refused too. On the console listener the console token is not enough: the daemon identifies the TCP client's process with `lsof` and serves it only when that process is outside every agent family; an unidentified client is refused. Off macOS the console listener refuses these routes.
+**NoAgent routes** (`/files/detail`, `/files/reveal`, `/files/open`, `/agent/*`, among others marked `NoAgent` in `apiroutes.Table`) refuse every agent process. On the unix socket the Agent and Foreign roles get 403, and an Owner peer whose process belongs to an agent family (checked live, so a child spawned a moment ago counts) is refused too. On the console listener the console token is not enough: the daemon identifies the TCP client's process with `netstat` and serves it only when that process is outside every agent family; an unidentified client is refused. Off macOS the console listener refuses these routes.
 
 `GET /debug/pprof/` (Go runtime profiles: `heap`, `goroutine`, `profile?seconds=N`, `trace`, …) is served on the unix socket only, to the Owner role (and the pinned menubar app); agents and foreign peers get 403, and the proxy listener never serves it.
 
@@ -1216,6 +1228,7 @@ Operator-only, NoAgent exceptions persisted in `~/.config/secure-agent/expected.
 
 - `GET /expected` lists entries, including optional `scope: "file"`, runtime hit counts and last match time.
 - `POST /expected {"flag_id", "path"?, "host"?}` derives an agent/reader/exact-file/exact-host pattern from stored evidence. Optional path/host selects a recorded pair; arbitrary injected pairs are rejected. It acknowledges an open finding only when **every** recorded read/destination pair is covered. Findings with remaining evidence offer the next uncovered pair.
+- `POST /expected {"flag_ids":["<id>",…]}` (1..500 ids) adds every exact pair those flags record, with one save, then acknowledges the findings now fully covered → `{"added", "acknowledged"}`. Unknown ids and flags without a recorded reader add nothing; `422` when none adds a pair, `400` with `flag_id` too or over 500 ids.
 - `POST /expected {"flag_id", "scope":"file"}` marks the recorded exact `.env` path non-secret for that agent, across readers and destinations. This explicit exception remains in effect for future contents until revoked; use only for test fixtures without real credentials. Other agents and neighboring paths remain monitored. It does not delete or inspect file contents.
 - `DELETE /expected?key=<key>` revokes an exception. Add/remove actions are audited; Policy exposes revocation.
 

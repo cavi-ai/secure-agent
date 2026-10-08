@@ -48,11 +48,13 @@ public final class SetupManager: ObservableObject {
     @Published public private(set) var disabledAgents: [String] = []
 
     /// All agent definitions shipped in the daemon's defaults (name → match
-    /// strings), for the Providers tab. Kept in sync with
-    /// daemon/internal/config/defaults.yaml manually.
+    /// strings), for the Providers tab. A test pins this list to
+    /// daemon/internal/config/defaults.yaml; the app hosts classified as
+    /// infra so their CLI stays the agent (claude-desktop, cursor-ide) are
+    /// not toggles.
     public static let knownAgents: [(name: String, matches: [String])] = [
         ("claude", ["claude"]),
-        ("cursor", ["Cursor Helper", "cursor"]),
+        ("cursor", ["cursor"]),
         ("codex", ["codex"]),
         ("opencode", ["opencode", "OpenCode Helper"]),
         ("antigravity", ["antigravity", "Antigravity Helper"]),
@@ -62,6 +64,8 @@ public final class SetupManager: ObservableObject {
         ("aider", ["aider"]),
         ("codeium", ["codeium"]),
         ("copilot", ["copilot"]),
+        ("openclaw", ["/.openclaw/"]),
+        ("hermes", ["hermes-agent", "/.hermes/"]),
         ("ollama", ["ollama", "llama-server", "llama.cpp"]),
         ("lm-studio", ["lm studio", "lmstudio"]),
     ]

@@ -21,6 +21,7 @@ import (
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/bus"
 	"github.com/cavi-ai/secure-agent/daemon/internal/config"
+	"github.com/cavi-ai/secure-agent/daemon/internal/connpeer"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 	"github.com/cavi-ai/secure-agent/daemon/internal/firewall"
 )
@@ -599,6 +600,62 @@ func TestConsoleAPIGate(t *testing.T) {
 	r.Body.Close()
 	if r.StatusCode == http.StatusOK {
 		t.Fatal("/guard/decision must not be served on the console port")
+	}
+}
+
+// Console requests on one keep-alive connection identify the client process
+// once; a new connection identifies it again.
+func TestConsolePeerLookupOncePerConnection(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	ln.Close()
+	clearConsoleToken()
+	ct := LoadConsoleToken(filepath.Join(t.TempDir(), "console-token"))
+	defer clearConsoleToken()
+
+	var lookups atomic.Int32
+	ps := NewProxyServer(port, bus.New(16), nil, nil)
+	ps.SetConsoleAPI(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, err := connpeer.PID(r.Context(), r.RemoteAddr, func(string) (int32, error) { lookups.Add(1); return 1, nil }); err != nil {
+			t.Error(err)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go ps.Serve(ctx)
+
+	base := fmt.Sprintf("http://127.0.0.1:%d/status", port)
+	get := func(c *http.Client) {
+		t.Helper()
+		var resp *http.Response
+		for i := 0; i < 50; i++ {
+			req, _ := http.NewRequest(http.MethodGet, base, nil)
+			req.Header.Set("X-SecureAgent-Console-Token", ct)
+			if resp, err = c.Do(req); err == nil {
+				break
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+	}
+	keepAlive := &http.Client{Transport: &http.Transport{MaxIdleConnsPerHost: 1}}
+	for i := 0; i < 3; i++ {
+		get(keepAlive)
+	}
+	if n := lookups.Load(); n != 1 {
+		t.Fatalf("lookups over one connection = %d, want 1", n)
+	}
+	get(&http.Client{Transport: &http.Transport{DisableKeepAlives: true}})
+	if n := lookups.Load(); n != 2 {
+		t.Fatalf("lookups after a new connection = %d, want 2", n)
 	}
 }
 

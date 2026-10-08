@@ -24,6 +24,14 @@ func attentionAPI(t *testing.T, sessions []resource.Session) *API {
 	return a
 }
 
+// attentionGroups is the queue posture builds: over the store's 24 h
+// patterns and routine groups.
+func attentionGroups(a *API) []AttentionGroup {
+	since := time.Now().Add(-24 * time.Hour)
+	_, groups := a.attentionQueue(Status{Running: true}, a.computePatterns(since, patternDefaultMin), a.routineGroups(since))
+	return groups
+}
+
 func mkResourceSession(rootPid int32, name, cwd string) resource.Session {
 	return resource.Session{
 		Key:        "key-" + name,
@@ -51,7 +59,7 @@ func waitFor(t *testing.T, cond func() bool) {
 
 func TestAttentionGroupsEmptyWhenNothingPending(t *testing.T) {
 	a := attentionAPI(t, []resource.Session{mkResourceSession(1, "codex", "/work/a")})
-	if _, groups := a.attentionQueue(Status{Running: true}); len(groups) != 0 {
+	if groups := attentionGroups(a); len(groups) != 0 {
 		t.Fatalf("groups = %+v, want none", groups)
 	}
 }
@@ -65,7 +73,7 @@ func TestAttentionGroupsGuardPendingJoinsLiveSession(t *testing.T) {
 		ID: "g1", Agent: "codex", Tool: "Bash", Path: "/Users/x/.ssh/id_ed25519",
 	})
 	waitFor(t, func() bool { return len(a.guardBroker.Pending()) == 1 })
-	_, groups := a.attentionQueue(Status{Running: true})
+	groups := attentionGroups(a)
 	if len(groups) != 1 {
 		t.Fatalf("groups = %+v, want 1", groups)
 	}
@@ -83,7 +91,7 @@ func TestAttentionGroupLabelKeepsAgentIDCaseAtRootWorkspace(t *testing.T) {
 	a.guardBroker = guard.NewBroker(time.Minute)
 	go a.guardBroker.Request(context.Background(), guard.Pending{ID: "g3", Agent: "cursor-ide", Tool: "Read", Path: "/Users/x/.aws/credentials"})
 	waitFor(t, func() bool { return len(a.guardBroker.Pending()) == 1 })
-	_, groups := a.attentionQueue(Status{Running: true})
+	groups := attentionGroups(a)
 	if len(groups) != 1 || groups[0].Label != "cursor-ide" {
 		t.Fatalf("groups = %+v, want one group labelled %q", groups, "cursor-ide")
 	}
@@ -94,7 +102,7 @@ func TestAttentionGroupsUnmatchedGuardGetsAgentBucket(t *testing.T) {
 	a.guardBroker = guard.NewBroker(time.Minute)
 	go a.guardBroker.Request(context.Background(), guard.Pending{ID: "g2", Agent: "codex", Tool: "Write", Path: "/tmp/x"})
 	waitFor(t, func() bool { return len(a.guardBroker.Pending()) == 1 })
-	_, groups := a.attentionQueue(Status{Running: true})
+	groups := attentionGroups(a)
 	if len(groups) != 1 || groups[0].RootPID != 0 {
 		t.Fatalf("groups = %+v, want one ungrouped bucket", groups)
 	}
@@ -107,7 +115,7 @@ func TestAttentionGroupsResourcePressureUsesControlAction(t *testing.T) {
 	sess.Diagnoses = []resource.Diagnosis{{Code: "memory-hog", Summary: "Claude is using 5.0 GiB"}}
 	sess.Control = &resource.SessionControl{PendingID: "d1", NextAction: resource.ActionTerminate}
 	a := attentionAPI(t, []resource.Session{sess})
-	_, groups := a.attentionQueue(Status{Running: true})
+	groups := attentionGroups(a)
 	if len(groups) != 1 {
 		t.Fatalf("groups = %+v, want 1", groups)
 	}
@@ -128,7 +136,7 @@ func TestAttentionGroupsAcknowledgedFlagsExcluded(t *testing.T) {
 	a.store.PutFlag(model.Flag{ID: "open", Rule: "tcc-tamper", Severity: 3, TS: time.Now(), PID: 1, Agent: "codex"})
 	a.store.PutFlag(model.Flag{ID: "done", Rule: "proxy-secret-leak", Severity: 3, TS: time.Now(), PID: 1, Agent: "codex"})
 	a.store.AcknowledgeFlag("done")
-	_, groups := a.attentionQueue(Status{Running: true})
+	groups := attentionGroups(a)
 	if len(groups) != 1 || len(groups[0].Items) != 1 || groups[0].Items[0].ID != "open" {
 		t.Fatalf("groups = %+v, want only the unacknowledged flag", groups)
 	}
@@ -141,7 +149,7 @@ func TestAttentionGroupsFlagDisposition(t *testing.T) {
 	a.store.PutFlag(model.Flag{ID: "fp", Rule: "sensitive-read-then-connect", Severity: 3, TS: time.Now(), PID: 1, Agent: "claude"})
 	a.store.PutAdvisorVerdict("fp", "flag", model.AdvisorVerdict{Assessment: "benign", Confidence: 0.93, Rationale: "Own config.", CreatedAt: time.Now()})
 	a.store.PutFlag(model.Flag{ID: "real", Rule: "tcc-tamper", Severity: 3, TS: time.Now(), PID: 1, Agent: "claude"})
-	_, groups := a.attentionQueue(Status{Running: true})
+	groups := attentionGroups(a)
 	if len(groups) != 1 || len(groups[0].Items) != 2 {
 		t.Fatalf("groups = %+v, want one group with two flag items", groups)
 	}
@@ -250,7 +258,7 @@ func TestAttentionGroupsCoverEveryPostureItem(t *testing.T) {
 func TestAttentionSeverityTwoFlagPriority(t *testing.T) {
 	a := attentionAPI(t, []resource.Session{mkResourceSession(1, "claude", "/w")})
 	a.store.PutFlag(model.Flag{ID: "high", Rule: "keychain-access", Severity: 2, TS: time.Now(), PID: 1, Agent: "claude"})
-	_, groups := a.attentionQueue(Status{Running: true})
+	groups := attentionGroups(a)
 	if len(groups) != 1 || len(groups[0].Items) != 1 {
 		t.Fatalf("groups = %+v, want one group with the flag", groups)
 	}

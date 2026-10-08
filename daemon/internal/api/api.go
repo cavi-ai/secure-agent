@@ -227,9 +227,12 @@ type API struct {
 	busDropAt    func() time.Time
 
 	// deltas is the typed state-change fan-out the SSE stream serves.
-	// lastPosture dedupes posture deltas (state + item count).
+	// lastPosture dedupes posture deltas (state + item count); postureGen
+	// numbers each computation so an older one never follows a newer one.
 	deltaHub            *DeltaHub
 	lastPostureMu       sync.Mutex
+	postureGen          uint64
+	lastPostureGen      uint64
 	lastPostureState    string
 	lastPostureCount    int
 	lastPostureCoverage int
@@ -759,7 +762,7 @@ func (a *API) mux(socket bool) *http.ServeMux {
 				// Decisions made in either UI must reach every posture consumer
 				// immediately, even when no subsequent telemetry event arrives.
 				if apiroutes.IsMutation(req.Method, req.URL.Path) {
-					a.PublishPostureIfChanged()
+					a.PublishPosture()
 				}
 			})
 		}

@@ -9,6 +9,8 @@ All notable changes to `secure-agent` are documented here. The format follows
 ## [1.3.0] - 2026-10-08
 
 ### Added
+- Console: the same reads across agents are one decision with Treat as routine and Dismiss all.
+- API: `POST /expected` accepts `flag_ids`.
 - Settings → Secure Agent → Traffic: route Claude Code through Secure Agent's proxy.
 - Proxy: the proxy URL user selects `inspect` or `tunnel`.
 - API: `GET /routing/claude`.
@@ -27,8 +29,20 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Cursor: Secure Agent's tool hooks beside the user's hooks.
 - CLI: `secure-agent telemetry repair`.
 - Pricing: Claude Sonnet 5.5.
+- Worktrees: `merged: content` when the default branch has every line the branch adds and none it removes, including after a history rewrite.
+- Worktrees: `content_lines`, `content_missing`, `content_extended`, `content_other` and `unrelated_history`.
+- Worktrees: advisor sees the merge verdict and what the default branch did to the branch's files.
 
 ### Changed
+- Console: a decision shows at most three buttons; the other choices sit under More.
+- Console: one Allow per destination organization replaces one per address.
+- Console: findings show their file and destinations as chips.
+- Console: the page fills wide windows; decision groups sit two-up.
+- Settings: one sidebar page per area, without segmented sub-tabs.
+- Settings → Egress Firewall: rules grouped by secret type, one switch each.
+- Settings → Egress Firewall: **Block all** and **Monitor all** per secret type.
+- Settings → File Guard and Notifications: mode menus instead of segmented controls.
+- Settings → Exceptions: muted flags grouped by rule, beside allowed files.
 - Settings: Protection split into Files and Network.
 - Settings: Chat, Analysis and Traffic grouped under Secure Agent.
 - Settings → Providers: toggles apply without a restart.
@@ -47,11 +61,16 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Install: one copy, `/Applications/Secure Agent.app`.
 - App: bundle identifier `com.cavi-ai.secure-agent`.
 - Dependencies: `modernc.org/sqlite` 1.60.1.
+- Posture: recurring-connection decisions read only recurring episodes and the expected-egress rules once.
+- Console: a snapshot computes its patterns once.
 
 ### Fixed
 - Daemon: startup fails when the control API cannot be served.
 - App: daemon restart retries are bounded.
 - Doctor and posture: spool loss and bus drops fail only while they grow.
+- Posture: every decision pushes the new headline.
+- Posture: an older headline never replaces a newer one.
+- Console: an expected connection leaves Egress and the banner before the daemon answers.
 - Costs: one model call per Claude API call.
 - Costs: duplicate stored Claude model calls removed at open.
 - Pricing: stored calls priced when a price is added.
@@ -60,6 +79,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Findings: approval, review and file inspection buttons on grouped findings.
 - Menu bar: posture updates right after a decision.
 - Console: an authentication rejection ends the session.
+- Console: the connecting process is looked up once per connection; an unidentified one gets 503.
 - Console: an older refresh never replaces newer data.
 - Console: malformed reports keep the last good data.
 - Console: filtered results survive a failed refresh.
@@ -93,8 +113,15 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Fleet: `/status` and `/fleet` share one live `fleet_configured`.
 - Routing: the proxy URL carries the token.
 - Worktrees: an action cancels the background rescan.
+- Worktrees: a merged branch keeps its merge reason beside keep and review reasons.
+- Worktrees: the advisor no longer calls merged commits unmerged.
+- Worktrees: git reads never lazy-fetch objects in a partial clone.
+- Worktrees: repository text cannot close the advisor's evidence block.
 - Daemon: one daemon per store.
 - Build: `make` stops when a binary's commit stamp is not HEAD.
+- Settings → Providers: OpenClaw and Hermes listed.
+- Settings → Providers: every harness tile shows a mark or monogram.
+- Settings → Providers: cursor shows the daemon's match strings.
 
 ### Security
 - Guard hooks: `guard-rules.json` bundled and installed beside `secret_guard.py`.

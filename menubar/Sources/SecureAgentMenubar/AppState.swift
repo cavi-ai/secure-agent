@@ -727,6 +727,24 @@ public final class AppState: ObservableObject {
         }
     }
 
+    /// Settings bulk action: one mode for every listed rule, one refresh after.
+    /// A refused rule is named so a partial switch is never silent.
+    public func setFirewallMode(rules: [String], mode: String) async {
+        var failed: [String] = []
+        for rule in rules {
+            do {
+                try await client.setFirewallMode(rule: rule, mode: mode)
+            } catch {
+                failed.append(rule)
+            }
+        }
+        if !failed.isEmpty {
+            lastError = "could not set \(failed.joined(separator: ", ")) to \(mode)"
+            onChange?()
+        }
+        fetch()
+    }
+
     public func revokeGuardRule(agent: String, ruleID: String) {
         Task {
             do {
@@ -861,7 +879,7 @@ public final class AppState: ObservableObject {
     public var dashboardUnavailableReason: String? {
         if !connected { return "The daemon is not running" }
         guard let status else { return "The daemon is not running" }
-        guard status.proxyEnabled == true else { return "The inspection proxy is off (Settings → Agent routing)" }
+        guard status.proxyEnabled == true else { return "The inspection proxy is off" }
         guard let port = status.proxyPort, port > 0 else { return "The console port is not open" }
         return nil
     }

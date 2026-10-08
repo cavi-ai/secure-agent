@@ -21,7 +21,7 @@ import (
 // (1 for an aging incident below high risk), flag and pattern 2 (1 when
 // likely benign or below critical), recurring egress 1.
 type AttentionItem struct {
-	Kind      string                `json:"kind"` // resource | guard | incident | flag | pattern | recurring_egress
+	Kind      string                `json:"kind"` // resource | guard | incident | flag | pattern | routine | recurring_egress
 	Priority  int                   `json:"priority"`
 	ID        string                `json:"id,omitempty"`
 	Action    string                `json:"action,omitempty"`
@@ -136,7 +136,7 @@ func (a *API) machineAttentionItems(st Status) []PostureItem {
 // attentionQueue returns the headline items and the grouped queue from one
 // pass. Signals without a PID join a live session only when the agent name
 // identifies exactly one; ambiguous work stays in an agent-level group.
-func (a *API) attentionQueue(st Status) ([]PostureItem, []AttentionGroup) {
+func (a *API) attentionQueue(st Status, patterns []model.Pattern, routine []model.RoutineGroup) ([]PostureItem, []AttentionGroup) {
 	var sessions []attentionSession
 	if a.resources != nil {
 		for _, s := range a.resources().Sessions {
@@ -260,9 +260,17 @@ func (a *API) attentionQueue(st Status) ([]PostureItem, []AttentionGroup) {
 	// Flags — the security signal. Unacted only: a flag the operator already
 	// reviewed/dismissed must not keep demanding attention. Headline severity
 	// follows the disposition: an advisor-confirmed benign flag is a queue
-	// item, not a "critical — act now". Flags a pattern covers are ONE
-	// pattern item (headline and group), in the group of its newest flag.
-	patterns := a.computePatterns(time.Now().Add(-24*time.Hour), patternDefaultMin)
+	// item, not a "critical — act now". Flags a routine group covers are ONE
+	// routine item in the routine group, whichever agents raised them; flags
+	// a pattern covers are ONE pattern item (headline and group), in the
+	// group of its newest flag.
+	routineOf := map[string]int{}
+	for i, rg := range routine {
+		for _, id := range rg.FlagIDs {
+			routineOf[id] = i
+		}
+	}
+	routineAdded := map[int]bool{}
 	patternOf := map[string]int{}
 	for i, p := range patterns {
 		for _, id := range p.FlagIDs {
@@ -271,6 +279,35 @@ func (a *API) attentionQueue(st Status) ([]PostureItem, []AttentionGroup) {
 	}
 	patternAdded := map[int]bool{}
 	for _, f := range a.attentionFlags() {
+		if i, ok := routineOf[f.ID]; ok {
+			if !routineAdded[i] {
+				routineAdded[i] = true
+				rg := routine[i]
+				g := groups[routineGroupKey]
+				if g == nil {
+					g = &AttentionGroup{Key: routineGroupKey, Label: "Recurring across agents", Items: []AttentionItem{},
+						Summary: "The same process reading the same files under several agents"}
+					groups[routineGroupKey] = g
+				}
+				d := rg.Disposition
+				priority := 1
+				if d.State == model.DispositionCritical {
+					priority = 2
+				}
+				add(g, PostureItem{
+					Kind: "routine", ID: rg.Key,
+					Title:     fmt.Sprintf("Recurring read — %d×", rg.Count),
+					Severity:  dispositionSeverity(d),
+					Detail:    rg.Summary,
+					Timestamp: f.TS.UTC().Format(time.RFC3339),
+				}, AttentionItem{
+					Kind: "routine", Priority: priority, ID: rg.Key,
+					Count: rg.Count, Title: "Recurring read", Detail: rg.Summary,
+					Disposition: &d, Rule: readConnectRule,
+				})
+			}
+			continue
+		}
 		if i, ok := patternOf[f.ID]; ok {
 			if !patternAdded[i] {
 				patternAdded[i] = true
@@ -353,11 +390,7 @@ func (a *API) attentionQueue(st Status) ([]PostureItem, []AttentionGroup) {
 	// attributable, and not already covered by an expected-egress rule. One
 	// episode may span ended sessions; keep it at agent level rather than
 	// assigning it to whichever session happens to be live now.
-	for _, view := range a.egressEpisodeViews() {
-		if !view.Candidate {
-			continue
-		}
-		e := view.Observed
+	for _, e := range a.egressCandidates() {
 		action := ""
 		scopeText := "Activity scope is incomplete; only this destination can be expected."
 		if e.ScopeComplete {
@@ -459,6 +492,9 @@ func (a *API) attentionQueue(st Status) ([]PostureItem, []AttentionGroup) {
 		pi, pj := out[i].Items[0].Priority, out[j].Items[0].Priority
 		if pi != pj {
 			return pi > pj
+		}
+		if ri, rj := out[i].Key == routineGroupKey, out[j].Key == routineGroupKey; ri != rj {
+			return ri
 		}
 		if len(out[i].Items) != len(out[j].Items) {
 			return len(out[i].Items) > len(out[j].Items)

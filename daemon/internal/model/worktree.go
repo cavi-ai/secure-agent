@@ -45,7 +45,15 @@ type WorktreeAdviceRequest struct {
 	Reasons  []string `json:"reasons,omitempty"`
 	Paths    []string `json:"paths,omitempty"`
 	Precious []string `json:"precious,omitempty"`
-	Commits  []string `json:"commits,omitempty"` // subjects of commits on no remote and not in the default branch
+	Commits  []string `json:"commits,omitempty"` // subjects of commits on no remote and not in the default branch; empty when the branch is merged
+	// Merged is the checker's merge verdict (ancestor, squash, empty,
+	// content, no or unknown). Behind counts the default branch's non-merge
+	// commits since the branch's base. MainStatus and MainCommits say what the
+	// default branch did to the files the branch changes since then.
+	Merged      string   `json:"merged,omitempty"`
+	Behind      int      `json:"behind,omitempty"`
+	MainStatus  []string `json:"main_status,omitempty"`
+	MainCommits []string `json:"main_commits,omitempty"`
 }
 
 // CleanupEntry is one row of the cleanup ledger: what was removed, where,

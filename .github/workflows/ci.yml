@@ -63,12 +63,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4 (SHA-pinned)
         with:
           persist-credentials: false
-      - name: Enable native keyboard navigation
-        # AppKit segmented controls need keyboard navigation enabled. Configure
-        # the disposable runner before the Swift test process reads the setting.
-        run: defaults write -g AppleKeyboardUIMode -int 3
       - name: swift test
         run: bash packaging/swift_macos.sh test --package-path menubar
+      - name: Native status item lifecycle regression
+        run: bash packaging/test/test_status_item_lifecycle.sh
 
   e2e:
     name: E2E smoke

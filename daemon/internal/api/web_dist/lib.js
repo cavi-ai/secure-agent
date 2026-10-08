@@ -1013,8 +1013,48 @@ function explainLines(flag, nowMs) {
   return {
     who, meta, what: ex.what || '',
     verdict: (d.text || '') + (d.why ? ': ' + d.why : ''),
+    state: d.text || '', why: d.why || '',
     cls: DISPOSITION_CLASS[d.state] || 'disp-warning',
   };
+}
+
+// egressByOrg: a flag's destinations grouped by organization (name, or the
+// host when neither is known), in served order.
+function egressByOrg(flag) {
+  const groups = new Map();
+  for (const e of ((flag && flag.explain && flag.explain.egress) || [])) {
+    const org = e.org || e.name || e.host;
+    if (!groups.has(org)) groups.set(org, []);
+    groups.get(org).push(e);
+  }
+  return groups;
+}
+
+// factChipsHTML: the entities a finding is about, one chip each — the repo
+// context when it says more than the agent, the file (opens its details),
+// and each destination organization with its address count. An IPv6
+// literal never shows; the full addresses sit in the chip's tooltip.
+function factChipsHTML(flag, who) {
+  const ex = (flag && flag.explain) || {};
+  const chips = [];
+  if (who && who !== (flag.agent || 'agent')) {
+    chips.push(`<span class="fact fact-repo"><svg class="icon"><use href="#i-branch"/></svg>${escapeHTML(who)}</span>`);
+  }
+  const s = ex.subject;
+  if (s && s.display) {
+    const icon = s.category === 'keychain' ? 'i-key' : 'i-doc';
+    const label = escapeHTML(s.display);
+    chips.push(String(s.path || '').startsWith('/')
+      ? `<button type="button" class="fact fact-file" data-action="open-file" data-path="${escapeHTML(s.path)}" title="${escapeHTML(s.path)}"><svg class="icon"><use href="#${icon}"/></svg>${label}</button>`
+      : `<span class="fact fact-file"><svg class="icon"><use href="#${icon}"/></svg>${label}</span>`);
+  }
+  for (const [org, list] of egressByOrg(flag)) {
+    const one = list.length === 1 ? list[0].host : '';
+    const text = list.length > 1 ? `${org} · ${list.length} addresses`
+      : one.includes(':') ? `${org === one ? 'IPv6' : org} address` : org === one ? one : `${org} · ${one}`;
+    chips.push(`<span class="fact fact-dest" title="${escapeHTML(list.map(e => e.host).join(', '))}"><svg class="icon"><use href="#i-globe"/></svg>${escapeHTML(text)}</span>`);
+  }
+  return chips.length ? `<div class="facts">${chips.join('')}</div>` : '';
 }
 
 // Served action ids the console performs; each posts the served
@@ -1035,20 +1075,81 @@ function explainActionLabel(flag, a) {
   return a.label || a.id;
 }
 
-// explainActionsHTML: one button per served action, the recommended one
-// first. The click handler reads the request from the served explanation
-// (flag id + action id + host), never from the markup.
-function explainActionsHTML(flag) {
+// ---------- decision actions: three buttons at most, the rest under More ----------
+
+const ACTION_BAR_MAX = 3;
+// Served action ids that stay on the bar: the exact expectation and the
+// dismissal. The recommended action leads it.
+const ACTION_BAR_IDS = ['expect-all', 'expect', 'expect-file', 'dismiss', 'dismiss-all'];
+// Menu order: look first, then decide, then the broad and drastic choices.
+const ACTION_ORDER = ['expect-all', 'expect', 'expect-file', 'dismiss', 'dismiss-all', 'inspect-file', 'open-incident', 'review-local',
+  'console', 'allow-path', 'allow-host', 'mute-rule-host', 'mute-class', 'kill'];
+const ACTION_BAR_LABELS = { expect: 'Mark expected', 'expect-file': 'Mark as test file', dismiss: 'Dismiss' };
+
+// actionBarHTML: a decision's choices — the bar items (at most three, in
+// order) as buttons, every other one in a More menu, danger last and set
+// apart. item: {label, attrs, title, kind: 'primary' | 'ghost' | 'danger',
+// bar, disabled}; attrs is markup the caller built from escaped values.
+function actionBarHTML(items) {
+  const list = (items || []).filter(Boolean);
+  const bar = list.filter(i => i.bar).slice(0, ACTION_BAR_MAX);
+  const rest = list.filter(i => !bar.includes(i));
+  const extra = i => (i.title ? ` title="${escapeHTML(i.title)}"` : '') + (i.disabled ? ' disabled' : '');
+  const out = bar.map(i => `<button class="btn btn-${i.kind || 'ghost'} btn-sm" ${i.attrs}${extra(i)}>${escapeHTML(i.label)}</button>`);
+  if (rest.length) {
+    const entry = i => `<button class="act-menu-item${i.kind === 'danger' ? ' danger' : ''}" ${i.attrs}${extra(i)}>${escapeHTML(i.label)}</button>`;
+    const safe = rest.filter(i => i.kind !== 'danger').map(entry).join('');
+    const danger = rest.filter(i => i.kind === 'danger').map(entry).join('');
+    out.push(`<details class="act-more"><summary class="btn btn-ghost btn-sm">More</summary>`
+      + `<div class="act-menu">${safe}${safe && danger ? '<hr>' : ''}${danger}</div></details>`);
+  }
+  return out.join('');
+}
+
+// actionItems: served actions as bar items, recommended first and the rest
+// in ACTION_ORDER; extra console items (id 'console') join the menu. attrs
+// builds an action's data attributes, label its text.
+function actionItems(acts, extra, attrs, label) {
+  const rank = id => { const i = ACTION_ORDER.indexOf(id); return i < 0 ? ACTION_ORDER.length : i; };
+  const items = acts.map(a => ({
+    id: a.id, recommended: !!a.recommended,
+    label: a.recommended ? label(a) : ACTION_BAR_LABELS[a.id] || label(a),
+    title: a.consequence || '', attrs: a.attrs || attrs(a), disabled: a.disabled,
+    kind: a.id === 'kill' ? 'danger' : a.recommended ? 'primary' : 'ghost',
+    bar: !!a.recommended || ACTION_BAR_IDS.includes(a.id),
+  })).concat((extra || []).map(e => ({ ...e, id: 'console', recommended: false, kind: e.kind || 'ghost', bar: false })));
+  return items.sort((x, y) => (Number(y.recommended) - Number(x.recommended)) || (rank(x.id) - rank(y.id)));
+}
+
+// explainActionsHTML: an explained flag's served actions on an action bar.
+// allow-host collapses to one choice per destination organization; it
+// allows each of the organization's hosts exactly, as the served actions
+// would one by one. The click handler reads every request from the served
+// explanation (flag id + action id + host or organization), never from the
+// markup. extra: console items for the menu (re-run advisor, what to do).
+function explainActionsHTML(flag, extra) {
   const ex = flag && flag.explain;
   if (!ex) return '';
+  const fid = escapeHTML(flag.id);
+  const hostOf = a => (a.body && typeof a.body.host === 'string' ? a.body.host : '');
   const acts = (ex.actions || []).filter(a => a && EXPLAIN_CONSOLE_ACTIONS.includes(a.id));
-  return acts.filter(a => a.recommended).concat(acts.filter(a => !a.recommended)).map(a => {
-    const host = a.body && typeof a.body.host === 'string' ? a.body.host : '';
-    const cls = a.id === 'kill' ? 'btn-danger' : a.recommended ? 'btn-primary' : 'btn-ghost';
-    return `<button class="btn ${cls} btn-sm" data-action="explain-act" data-flag-id="${escapeHTML(flag.id)}"`
-      + ` data-action-id="${escapeHTML(a.id)}"${host ? ` data-host="${escapeHTML(host)}"` : ''}`
-      + ` title="${escapeHTML(a.consequence)}">${escapeHTML(explainActionLabel(flag, a))}</button>`;
-  }).join('');
+  const orgs = egressByOrg(flag);
+  const orgOf = host => { for (const [org, list] of orgs) if (list.some(e => e.host === host)) return org; return host; };
+  const allows = new Map();
+  for (const a of acts.filter(x => x.id === 'allow-host')) {
+    const org = orgOf(hostOf(a));
+    if (!allows.has(org)) allows.set(org, []);
+    allows.get(org).push(a);
+  }
+  const agent = flag.agent || 'agent';
+  const merged = acts.filter(a => a.id !== 'allow-host').concat([...allows].map(([org, list]) => list.length === 1 ? list[0] : {
+    id: 'allow-host', recommended: list.some(a => a.recommended), label: `Allow ${org} for ${agent} · ${list.length} addresses`,
+    consequence: `Future connections from ${agent} to these ${list.length} ${org} addresses are trusted and stop being flagged: ${list.map(hostOf).join(', ')}. This finding is marked reviewed.`,
+    attrs: `data-action="explain-allow-org" data-flag-id="${fid}" data-org="${escapeHTML(org)}"`,
+  }));
+  const attrs = a => `data-action="explain-act" data-flag-id="${fid}" data-action-id="${escapeHTML(a.id)}"`
+    + (hostOf(a) ? ` data-host="${escapeHTML(hostOf(a))}"` : '');
+  return actionBarHTML(actionItems(merged, extra, attrs, a => (a.attrs ? a.label : explainActionLabel(flag, a))));
 }
 
 // ---------- agent families ----------

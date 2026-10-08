@@ -195,6 +195,22 @@ export interface Pattern {
   flag_ids: string[];
 }
 
+export interface RoutineGroup {
+  key: string;
+  reader: string;
+  area: string;
+  files: number;
+  count: number;
+  agents: string[];
+  destinations?: PatternDestination[];
+  destination_count: number;
+  expectable: number;
+  disposition: Disposition;
+  summary: string;
+  actions: ExplainAction[];
+  flag_ids: string[];
+}
+
 export interface FileFinding {
   kind: string;
   id: string;
@@ -764,6 +780,11 @@ export interface Worktree {
   unique_commits?: number;
   loose_commits?: number;
   merged?: string;
+  content_lines?: number;
+  content_missing?: number;
+  content_extended?: number;
+  content_other?: number;
+  unrelated_history?: boolean;
   size_bytes?: number;
   size_partial?: boolean;
   submodules?: number;

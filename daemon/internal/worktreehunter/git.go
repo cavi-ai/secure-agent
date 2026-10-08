@@ -18,10 +18,12 @@ var gitTimeout = 10 * time.Second
 
 // gitEnv makes every call read-only toward the repositories it inspects:
 // GIT_OPTIONAL_LOCKS=0 stops `git status` from refreshing and rewriting the
-// index of a tree an agent may be working in; no prompts, no pager, stable
-// English output for parsing.
+// index of a tree an agent may be working in; GIT_NO_LAZY_FETCH=1 stops a
+// partial clone from fetching a missing object over the network into the
+// repository; no prompts, no pager, stable English output for parsing.
 var gitEnv = []string{
 	"GIT_OPTIONAL_LOCKS=0",
+	"GIT_NO_LAZY_FETCH=1",
 	"GIT_TERMINAL_PROMPT=0",
 	"GIT_PAGER=cat",
 	"LC_ALL=C",

@@ -36,19 +36,42 @@ func (a *API) handleEgressEpisodes(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"episodes": a.egressEpisodeViews(), "non_candidate_limit": 100})
 }
 
-// egressEpisodeViews is shared by the read API and Home's decision projection.
+// egressCandidate: a recurring, attributable episode that no expected-egress
+// rule explains is a decision for the operator.
+func egressCandidate(e store.EgressEpisode, ruleID string) bool {
+	return e.Recurring && e.Scope.Agent != "" && e.Scope.Agent != "unknown" && ruleID == ""
+}
+
+// egressCandidates are Home's recurring-connection decisions, newest first.
+func (a *API) egressCandidates() []store.EgressEpisode {
+	if a.store == nil {
+		return nil
+	}
+	match := a.store.ExpectedEgressMatcher()
+	var out []store.EgressEpisode
+	for _, e := range a.store.ListRecurringEgressEpisodes() {
+		if egressCandidate(e, match(e)) {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// egressEpisodeViews serves the read API: candidates first, then up to 100
+// other episodes.
 func (a *API) egressEpisodeViews() []egressEpisodeView {
 	candidates := make([]egressEpisodeView, 0)
 	other := make([]egressEpisodeView, 0, 100)
 	if a.store == nil {
 		return other
 	}
+	match := a.store.ExpectedEgressMatcher()
 	for _, e := range a.store.ListEgressEpisodesForReview() {
 		if !e.Recurring && len(other) >= 100 {
 			continue
 		}
-		ruleID := a.store.ExpectedEgressMatchingRuleID(store.EgressObservation{Scope: e.Scope, Host: e.Host, Protocol: e.Protocol, Port: e.Port})
-		view := egressEpisodeView{ID: e.ID, Observed: e, Expected: ruleID != "", ExpectedRuleID: ruleID, Candidate: e.Recurring && e.Scope.Agent != "" && e.Scope.Agent != "unknown" && ruleID == ""}
+		ruleID := match(e)
+		view := egressEpisodeView{ID: e.ID, Observed: e, Expected: ruleID != "", ExpectedRuleID: ruleID, Candidate: egressCandidate(e, ruleID)}
 		if v, ok := a.store.AdvisorVerdictFor(advisor.EgressSubjectID(e.ID), "egress"); ok && v.Assessment == advisor.EgressEvidenceKey(e) {
 			view.AdvisorInference = &egressInference{PossiblePurpose: v.Rationale, Confidence: v.Confidence, CreatedAt: v.CreatedAt}
 		}

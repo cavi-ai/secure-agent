@@ -45,6 +45,7 @@ func TestResolverEndingFailureRetainsTrackingAndAllowsRecovery(t *testing.T) {
 			tagger.Refresh()
 			r := NewResolver(st, tagger)
 			r.now = func() time.Time { return now }
+			r.touch[sess.ID] = now
 			if path == "tracked root" {
 				r.byRoot[100], r.byPID[101], r.byScope["scope"] = sess.ID, sess.ID, sess.ID
 			}
@@ -61,6 +62,9 @@ func TestResolverEndingFailureRetainsTrackingAndAllowsRecovery(t *testing.T) {
 				}
 			}
 			end()
+			if !r.touch[sess.ID].Equal(now) {
+				t.Fatal("failed ending dropped activity throttle")
+			}
 			if len(emitted) != 0 {
 				t.Fatalf("failed ending emitted a lifecycle transition: %+v", emitted)
 			}
@@ -85,6 +89,9 @@ func TestResolverEndingFailureRetainsTrackingAndAllowsRecovery(t *testing.T) {
 			}
 			if (path == "tracked root" && (len(r.byRoot) != 0 || len(r.byPID) != 0)) || len(r.byScope) != 0 {
 				t.Fatal("successful ending retained tracking")
+			}
+			if len(r.touch) != 0 {
+				t.Fatal("successful ending retained activity throttle")
 			}
 			if h := st.WriteHealth(); h.Failures != 1 || len(h.Active) != 0 {
 				t.Fatalf("ending recovery lost failure history or retained a fault: %+v", h)

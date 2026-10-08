@@ -182,18 +182,49 @@ func (s *Store) ExpectedEgressMatchingRuleID(o EgressObservation) string {
 		return ""
 	}
 	o.Protocol = strings.ToLower(strings.TrimSpace(o.Protocol))
-	o.Scope = normalizeEgressScope(o.Scope)
-	if o.Scope.Agent == "" {
+	return s.ExpectedEgressMatcher()(EgressEpisode{Scope: normalizeEgressScope(o.Scope), Host: o.Host, Protocol: o.Protocol, Port: o.Port})
+}
+
+// ExpectedEgressMatcher reads the active rules once and answers
+// ExpectedEgressMatchingRuleID for any number of stored episodes, whose
+// scope, host and protocol were normalized when they were recorded.
+func (s *Store) ExpectedEgressMatcher() func(EgressEpisode) string {
+	var rules []ExpectedEgressRule
+	rows, err := s.db.Query(`SELECT id,agent,kind,host,protocol,port,exe_path,harness,workspace FROM expected_egress_rules
+	 WHERE revoked_at IS NULL ORDER BY CASE WHEN kind='destination' THEN 0 ELSE 1 END, created_at DESC, id DESC`)
+	if err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var r ExpectedEgressRule
+			if rows.Scan(&r.ID, &r.Agent, &r.Kind, &r.Host, &r.Protocol, &r.Port, &r.ExePath, &r.Harness, &r.Workspace) != nil {
+				rules = nil
+				break
+			}
+			rules = append(rules, r)
+		}
+		if rows.Err() != nil {
+			rules = nil
+		}
+	}
+	return func(e EgressEpisode) string {
+		if e.Scope.Agent == "" {
+			return ""
+		}
+		for _, r := range rules {
+			if r.Agent != e.Scope.Agent {
+				continue
+			}
+			switch r.Kind {
+			case "destination":
+				if r.Host == e.Host && r.Protocol == e.Protocol && r.Port == e.Port {
+					return r.ID
+				}
+			case "scope":
+				if e.Scope.Complete() && r.ExePath == e.Scope.ExePath && r.Harness == e.Scope.Harness && r.Workspace == e.Scope.Workspace {
+					return r.ID
+				}
+			}
+		}
 		return ""
 	}
-	var id string
-	err = s.db.QueryRow(`SELECT id FROM expected_egress_rules WHERE agent=? AND revoked_at IS NULL AND
-	 ((kind='destination' AND host=? AND protocol=? AND port=?) OR
-	 (kind='scope' AND ? AND exe_path=? AND harness=? AND workspace=?))
-	 ORDER BY CASE WHEN kind='destination' THEN 0 ELSE 1 END, created_at DESC, id DESC LIMIT 1`,
-		o.Scope.Agent, o.Host, o.Protocol, o.Port, o.Scope.Complete(), o.Scope.ExePath, o.Scope.Harness, o.Scope.Workspace).Scan(&id)
-	if err != nil {
-		return ""
-	}
-	return id
 }
