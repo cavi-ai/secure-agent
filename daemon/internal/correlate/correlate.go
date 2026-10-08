@@ -446,8 +446,8 @@ func (c *Correlator) observeLocked(e event.Event) []model.Flag {
 			own := false
 			if e.Kind == event.KindFileOpen {
 				own = c.isOwnDataLocked(rootPID, e)
-				if e.OpensForWrite() {
-					c.rememberOwnLocked(rootPID, e)
+				if e.OpensForWrite() && c.rememberOwnLocked(rootPID, e) {
+					own = true
 				}
 			}
 			if seedsReadThenConnect(m.Category, e.Kind, e.ExePath) && c.readsContents(e) && !own {

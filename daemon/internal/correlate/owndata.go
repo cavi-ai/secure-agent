@@ -36,11 +36,27 @@ func (c *Correlator) readsContents(e event.Event) bool {
 	return !e.IsDirOpen() && e.OpensForRead() && !ownerProgramRead(c.cfg.CredentialOwners, e.Path, e.ExePath)
 }
 
-// rememberOwnLocked records a write open under the same bound and expiry as
-// read marks. A credential_owners path is never own data.
-func (c *Correlator) rememberOwnLocked(rootPID int32, e event.Event) {
-	if rootPID == 0 || e.FileIno == 0 || c.underCredentialOwner(e.Path) {
-		return
+// Birth-to-open skew within which a write open counts as the file's creation.
+const (
+	createSkewBefore = time.Second
+	createSkewAfter  = 5 * time.Second
+)
+
+// createdAtOpen reports whether the file was born at this open.
+func createdAtOpen(e event.Event) bool {
+	if e.FileBirth == 0 {
+		return false
+	}
+	d := time.Duration(e.TS.UnixNano() - e.FileBirth)
+	return d >= -createSkewBefore && d <= createSkewAfter
+}
+
+// rememberOwnLocked records a write open that created the file, under the same
+// bound and expiry as read marks, and reports whether it did. A
+// credential_owners path is never own data.
+func (c *Correlator) rememberOwnLocked(rootPID int32, e event.Event) bool {
+	if rootPID == 0 || e.FileIno == 0 || !createdAtOpen(e) || c.underCredentialOwner(e.Path) {
+		return false
 	}
 	list := c.owned[rootPID]
 	for i, m := range list {
@@ -53,6 +69,7 @@ func (c *Correlator) rememberOwnLocked(rootPID int32, e event.Event) {
 		list = list[1:]
 	}
 	c.owned[rootPID] = append(list, ownMark{at: e.TS, path: e.Path, ino: e.FileIno, birth: e.FileBirth})
+	return true
 }
 
 // isOwnDataLocked reports whether the open is of a file this root's tree

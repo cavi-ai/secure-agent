@@ -140,33 +140,61 @@ func TestAgentToolReadStaysCritical(t *testing.T) {
 func TestOwnDataIsNotACredentialRead(t *testing.T) {
 	base := time.Unix(1_700_000_000, 0)
 	env := filepath.Join(t.TempDir(), "TestX", "001", ".env")
-	write := openEv(210, "/tmp/go-build/api.test", env, event.OpenWrite, modeFile, 77, 1000, base)
+	birth := base.UnixNano()
+	write := openEv(210, "/tmp/go-build/api.test", env, event.OpenWrite, modeFile, 77, birth, base)
 	read := func(pid int32, ino uint64, birth int64) event.Event {
 		return openEv(pid, "/tmp/go-build/api.test", env, event.OpenRead, modeFile, ino, birth, base.Add(time.Second))
 	}
 	conn := func(pid int32) event.Event { return connectEv(pid, "evil.example.com", base.Add(2*time.Second)) }
 
 	c := newTwoRootCorrelator(t)
-	if f := flagsFor(c, write, read(210, 77, 1000), conn(210)); len(f) != 0 {
+	if f := flagsFor(c, write, read(210, 77, birth), conn(210)); len(f) != 0 {
 		t.Fatalf("read of the tree's own file flagged: %+v", f)
 	}
 	c = newTwoRootCorrelator(t)
-	if f := flagsFor(c, write, read(310, 77, 1000), conn(310)); len(f) != 1 {
+	if f := flagsFor(c, write, read(310, 77, birth), conn(310)); len(f) != 1 {
 		t.Fatalf("other root reading the file: flags = %d, want 1", len(f))
 	}
 	c = newTwoRootCorrelator(t)
-	if f := flagsFor(c, write, read(210, 78, 1000), conn(210)); len(f) != 1 {
+	if f := flagsFor(c, write, read(210, 78, birth), conn(210)); len(f) != 1 {
 		t.Fatalf("different inode at the path: flags = %d, want 1", len(f))
 	}
 	c = newTwoRootCorrelator(t)
-	if f := flagsFor(c, write, read(210, 77, 2000), conn(210)); len(f) != 1 {
+	if f := flagsFor(c, write, read(210, 77, birth+1), conn(210)); len(f) != 1 {
 		t.Fatalf("different birth time at the path: flags = %d, want 1", len(f))
 	}
 	c = newTwoRootCorrelator(t)
-	late := read(210, 77, 1000)
+	late := read(210, 77, birth)
 	late.TS = base.Add(11 * time.Minute)
 	if f := flagsFor(c, write, late, connectEv(210, "evil.example.com", late.TS.Add(time.Second))); len(f) != 1 {
 		t.Fatalf("read after the record expired: flags = %d, want 1", len(f))
+	}
+}
+
+func TestOnlyACreatingOpenMakesOwnData(t *testing.T) {
+	base := time.Unix(1_700_000_000, 0)
+	env := filepath.Join(t.TempDir(), "proj", ".env")
+	conn := connectEv(210, "evil.example.com", base.Add(2*time.Second))
+	read := openEv(210, "/usr/bin/cat", env, event.OpenRead, modeFile, 77, 0, base.Add(time.Second))
+
+	old := base.Add(-30 * 24 * time.Hour).UnixNano()
+	c := newTwoRootCorrelator(t)
+	read.FileBirth = old
+	if f := flagsFor(c, openEv(210, "/usr/bin/tee", env, event.OpenWrite, modeFile, 77, old, base), read, conn); len(f) != 1 {
+		t.Fatalf("write-open of a 30-day-old file then read: flags = %d, want 1", len(f))
+	}
+
+	born := base.UnixNano()
+	read.FileBirth = born
+	c = newTwoRootCorrelator(t)
+	if f := flagsFor(c, openEv(210, "/usr/bin/tee", env, event.OpenWrite, modeFile, 77, born, base), read, conn); len(f) != 0 {
+		t.Fatalf("created then read: flagged %+v", f)
+	}
+
+	c = newTwoRootCorrelator(t)
+	rw := openEv(210, "/usr/bin/vim", env, event.OpenRead|event.OpenWrite, modeFile, 77, born, base)
+	if f := flagsFor(c, rw, connectEv(210, "evil.example.com", base.Add(time.Second))); len(f) != 0 {
+		t.Fatalf("creating read-write open seeded a read mark: %+v", f)
 	}
 }
 
