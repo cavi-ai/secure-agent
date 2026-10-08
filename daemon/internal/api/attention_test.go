@@ -326,7 +326,7 @@ func TestAttentionRecurringEgressRequiresAnOperatorDecision(t *testing.T) {
 	scope := store.EgressScope{Agent: "claude", ExePath: "/Applications/Claude.app", Harness: "claude", Workspace: "/work/repo"}
 	base := time.Now().Add(-2 * time.Hour)
 	for i := 0; i < 5; i++ {
-		if err := a.store.RecordEgressObservation(store.EgressObservation{
+		if err := a.store.RecordEgressObservationForTest(store.EgressObservation{
 			Scope: scope, SessionID: "ended-session", Host: "updates.example.com", Protocol: "tcp", Port: 443,
 			At: base.Add(time.Duration(i) * 30 * time.Minute),
 		}); err != nil {

@@ -139,6 +139,18 @@ func egressRecurring(e EgressEpisode) bool {
 // RecordEgressObservation is a bounded, best-effort metadata projection. It
 // intentionally accepts no URL, payload, command, or credential fields.
 func (s *Store) RecordEgressObservation(o EgressObservation) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 75*time.Millisecond)
+	defer cancel()
+	return s.recordEgressObservation(ctx, o)
+}
+
+// RecordEgressObservationForTest records o with no deadline. Test-only:
+// fixtures must not drop observations on a loaded machine.
+func (s *Store) RecordEgressObservationForTest(o EgressObservation) error {
+	return s.recordEgressObservation(context.Background(), o)
+}
+
+func (s *Store) recordEgressObservation(ctx context.Context, o EgressObservation) error {
 	if o.At.IsZero() || o.Port < 1 || o.Port > 65535 {
 		return errors.New("invalid observation")
 	}
@@ -156,8 +168,6 @@ func (s *Store) RecordEgressObservation(o EgressObservation) error {
 		o.Scope.Agent = "unknown"
 	}
 	id := egressEpisodeID(o)
-	ctx, cancel := context.WithTimeout(context.Background(), 75*time.Millisecond)
-	defer cancel()
 	s.egressMu.Lock()
 	defer s.egressMu.Unlock()
 	tx, err := s.beginImmediate(ctx)
