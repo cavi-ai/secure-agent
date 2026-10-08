@@ -119,13 +119,15 @@ vendor_allowlist:
 ### `credential_owners` (List of Objects)
 The orgs each credential file, or every file under a directory, is meant for, spelled as the endpoint identity table names them (the `org` a flag explanation shows under `egress`). When the process that read the file, one of its ancestors or one of its descendants connects to one of them (git-remote-https running gh as its credential helper), the connection is counted in `status.credential_owner_uses` and not flagged. A process outside that tree, an agent tool read of the file, or any other destination still flags.
 
+`programs` lists executable basename patterns (`filepath.Match`) of the programs that own the credential. A read of the file by a matching program is never a secret read, so it raises no finding whatever it connects to.
+
 ```yaml
 credential_owners:
-  - { path: "~/.config/gh/hosts.yml", orgs: ["GitHub"] }
-  - { path: "~/.aws",                 orgs: ["AWS", "AWS CloudFront"] }
-  - { path: "~/.azure",               orgs: ["Azure", "Microsoft"] }
-  - { path: "~/.config/gcloud",       orgs: ["Google", "Google Cloud"] }
-  - { path: "~/.docker",              orgs: ["Docker Hub", "Docker", "GitHub Container Registry"] }
+  - { path: "~/.config/gh/hosts.yml", orgs: ["GitHub"], programs: ["gh"] }
+  - { path: "~/.aws",                 orgs: ["AWS", "AWS CloudFront"], programs: ["aws"] }
+  - { path: "~/.azure",               orgs: ["Azure", "Microsoft"], programs: ["az"] }
+  - { path: "~/.config/gcloud",       orgs: ["Google", "Google Cloud"], programs: ["gcloud"] }
+  - { path: "~/.docker",              orgs: ["Docker Hub", "Docker", "GitHub Container Registry"], programs: ["docker", "docker-credential-*", "com.docker.*"] }
 ```
 
 ---

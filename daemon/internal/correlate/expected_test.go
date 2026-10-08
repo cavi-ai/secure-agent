@@ -86,7 +86,7 @@ func TestExpectedPatternIsCountedNotFlagged(t *testing.T) {
 	store := NewExpectStore(filepath.Join(t.TempDir(), "expected.json"))
 	c.SetExpected(store.Match)
 	hosts := homePath(t, ".config/gh/hosts.yml")
-	if _, err := store.Add(ExpectedPattern{Agent: "cursor", Reader: "gh", Path: hosts, Dest: "2606:4700::6812:105d"}); err != nil {
+	if _, err := store.Add(ExpectedPattern{Agent: "cursor", Reader: "gh-reader", Path: hosts, Dest: "2606:4700::6812:105d"}); err != nil {
 		t.Fatal(err)
 	}
 	// The tagger names the family after cursor-agent (pid 200).

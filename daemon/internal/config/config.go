@@ -791,9 +791,13 @@ func expandPath(p string) string {
 // directory, is meant for, spelled as hostid.Identify names them. The
 // process that read it connecting to one of them is the credential in use,
 // not a secret leaving.
+//
+// Programs are executable basename patterns (filepath.Match) of the programs
+// that own the credential: their own reads of it are never secret reads.
 type CredentialOwner struct {
-	Path string   `yaml:"path"`
-	Orgs []string `yaml:"orgs"`
+	Path     string   `yaml:"path"`
+	Orgs     []string `yaml:"orgs"`
+	Programs []string `yaml:"programs"`
 }
 
 func expandOwners(owners []CredentialOwner) []CredentialOwner {
@@ -802,7 +806,7 @@ func expandOwners(owners []CredentialOwner) []CredentialOwner {
 		if o.Path == "" || len(o.Orgs) == 0 {
 			continue
 		}
-		out = append(out, CredentialOwner{Path: filepath.Clean(expandPath(o.Path)), Orgs: o.Orgs})
+		out = append(out, CredentialOwner{Path: filepath.Clean(expandPath(o.Path)), Orgs: o.Orgs, Programs: o.Programs})
 	}
 	return out
 }

@@ -73,7 +73,7 @@ func TestStaleReadFlagIDs(t *testing.T) {
 		{ID: "other-rule", Rule: "keychain-access", Evidence: read(zshenv, "glob:"+zshenv)},
 		{ID: "legacy", Rule: "sensitive-read-then-connect", Evidence: model.EvidenceFromStrings("cursor read " + zshenv)},
 	}
-	got := StaleReadFlagIDs(flags, cl)
+	got := StaleReadFlagIDs(flags, cl, cfg.CredentialOwners)
 	if len(got) != 2 || got[0] != "stale" || got[1] != "stale-settings" {
 		t.Fatalf("stale ids = %v, want [stale stale-settings]", got)
 	}
@@ -253,7 +253,7 @@ func TestStaleReadFlagIDsJudgesEveryRead(t *testing.T) {
 		flag("trust+aws", nil, trust, aws),
 		flag("aws+trust", nil, aws, trust),
 	}
-	got := StaleReadFlagIDs(flags, cl)
+	got := StaleReadFlagIDs(flags, cl, cfg.CredentialOwners)
 	if strings.Join(got, ",") != "trust,trust+login" {
 		t.Fatalf("stale ids = %v, want [trust trust+login]", got)
 	}
