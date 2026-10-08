@@ -23,7 +23,7 @@ func TestEgressEpisodesCandidateAndAssessment(t *testing.T) {
 			if host == "203.0.113.2" {
 				at = now.Add(time.Duration(i-4) * time.Second)
 			}
-			if err := st.RecordEgressObservation(store.EgressObservation{Scope: scope, SessionID: "s1", Host: host, Protocol: "tcp", Port: 443, At: at}); err != nil {
+			if err := st.RecordEgressObservationForTest(store.EgressObservation{Scope: scope, SessionID: "s1", Host: host, Protocol: "tcp", Port: 443, At: at}); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -118,12 +118,12 @@ func TestEgressEpisodesPrioritizesOlderCandidate(t *testing.T) {
 	now := time.Now().UTC()
 	scope := store.EgressScope{Agent: "claude", ExePath: "/usr/bin/claude", Harness: "claude", Workspace: "/work/a"}
 	for i := 0; i < 5; i++ {
-		if err := st.RecordEgressObservation(store.EgressObservation{Scope: scope, Host: "203.0.113.1", Protocol: "tcp", Port: 443, At: now.Add(time.Duration(i-5) * time.Hour)}); err != nil {
+		if err := st.RecordEgressObservationForTest(store.EgressObservation{Scope: scope, Host: "203.0.113.1", Protocol: "tcp", Port: 443, At: now.Add(time.Duration(i-5) * time.Hour)}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	for i := 0; i < 101; i++ {
-		if err := st.RecordEgressObservation(store.EgressObservation{Scope: scope, Host: "198.51.100.1", Protocol: "tcp", Port: i + 1, At: now}); err != nil {
+		if err := st.RecordEgressObservationForTest(store.EgressObservation{Scope: scope, Host: "198.51.100.1", Protocol: "tcp", Port: i + 1, At: now}); err != nil {
 			t.Fatal(err)
 		}
 	}
