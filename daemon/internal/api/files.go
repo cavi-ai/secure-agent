@@ -18,6 +18,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/cavi-ai/secure-agent/daemon/internal/connpeer"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/redact"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
@@ -378,16 +379,23 @@ func openWithSystem(args ...string) error {
 }
 
 // consoleNoAgent guards a NoAgent route on the console listener: the TCP
-// client must be identified and outside every agent family.
+// client must be identified and outside every agent family. A peer that
+// could not be identified is refused with 503, which the console retries;
+// 403 is kept for an identified agent.
 func (a *API) consoleNoAgent(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if a.isAgentPID == nil || a.tcpClientPID == nil {
 			http.Error(w, "forbidden: agent processes cannot use this endpoint", http.StatusForbidden)
 			return
 		}
-		pid, err := a.tcpClientPID(r.RemoteAddr)
-		if err != nil || a.isAgentPID(pid) {
-			log.Printf("api: refused %s %s on the console listener: peer %s pid=%d err=%v", r.Method, r.URL.Path, r.RemoteAddr, pid, err)
+		pid, err := connpeer.PID(r.Context(), r.RemoteAddr, a.tcpClientPID)
+		if err != nil {
+			log.Printf("api: refused %s %s on the console listener: peer %s not identified: %v", r.Method, r.URL.Path, r.RemoteAddr, err)
+			http.Error(w, "the connecting process could not be identified; retry", http.StatusServiceUnavailable)
+			return
+		}
+		if a.isAgentPID(pid) {
+			log.Printf("api: refused %s %s on the console listener: peer %s pid=%d is an agent", r.Method, r.URL.Path, r.RemoteAddr, pid)
 			http.Error(w, "forbidden: agent processes cannot use this endpoint", http.StatusForbidden)
 			return
 		}

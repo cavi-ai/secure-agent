@@ -16,6 +16,7 @@ import (
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/apiroutes"
 	"github.com/cavi-ai/secure-agent/daemon/internal/bus"
+	"github.com/cavi-ai/secure-agent/daemon/internal/connpeer"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 	"github.com/cavi-ai/secure-agent/daemon/internal/firewall"
 	"github.com/cavi-ai/secure-agent/daemon/internal/injection"
@@ -102,6 +103,9 @@ func NewProxyServer(port int, b *bus.Bus, caManager *CAManager, engine *firewall
 	ps.server = &http.Server{
 		Addr:    fmt.Sprintf("127.0.0.1:%d", port),
 		Handler: http.HandlerFunc(ps.serveHTTP),
+		// The console's NoAgent routes cache a successfully identified client
+		// process per connection instead of running netstat on every request.
+		ConnContext: connpeer.WithCache,
 	}
 
 	ps.plainHTTPClient = &http.Client{
