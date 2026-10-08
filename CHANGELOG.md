@@ -6,6 +6,8 @@ All notable changes to `secure-agent` are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-10-08
+
 ### Added
 - Settings → Secure Agent → Traffic: route Claude Code through Secure Agent's proxy.
 - Proxy: the proxy URL user selects `inspect` or `tunnel`.
