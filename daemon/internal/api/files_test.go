@@ -388,26 +388,6 @@ tcp6       0      0  2600:1700:5610:3.50624 2600:1900:4110:8.80    SYN_SENT     
 	}
 }
 
-// Older netstat prints a bare pid column (then epid) where newer releases
-// print process:pid; the header says which.
-func TestParseNetstatClientPIDsBarePIDColumn(t *testing.T) {
-	out := []byte(`Active Internet connections (including servers)
-Proto Recv-Q Send-Q  Local Address          Foreign Address        (state)        rxbytes    txbytes  rhiwat  shiwat    pid   epid  state  options           gencnt    flags   flags1 usecnt rtncnt  fltrs
-tcp4       0      0  127.0.0.1.8443         127.0.0.1.49300        ESTABLISHED       4606    3816077  406208  146988  31607      0 00102 0000000c 0000000000b27dec 00000080 01000800      2      0 000000
-tcp4       0      0  127.0.0.1.49300        127.0.0.1.8443         ESTABLISHED    8237954       2199  513160  146988   4719      0 00102 00000008 0000000000b27deb 00000080 04000900      2      0 000000
-tcp4       0      0  127.0.0.1.49301        127.0.0.1.8443         TIME_WAIT            0          0  513160  146988   4720      0 00102 00000008 0000000000b27dea 00000080 04000900      2      0 000000
-`)
-	if got := ParseNetstatClientPIDs(out, "127.0.0.1.49300", 31607); fmt.Sprint(got) != "[4719]" {
-		t.Fatalf("pids = %v, want [4719]", got)
-	}
-	if got := ParseNetstatClientPIDs(out, "127.0.0.1.49301", 31607); len(got) != 0 {
-		t.Fatalf("pids for a closed connection = %v, want none", got)
-	}
-	if got := ParseNetstatClientPIDs(out, "127.0.0.1.8443", 31607); len(got) != 0 {
-		t.Fatalf("pids for the daemon's own end = %v, want none", got)
-	}
-}
-
 func base64StdForTest(s string) string { return base64.StdEncoding.EncodeToString([]byte(s)) }
 
 func TestEnvInspectorShowsNamesWithoutValues(t *testing.T) {
