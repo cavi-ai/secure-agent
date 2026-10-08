@@ -60,6 +60,7 @@ test:
 	go test ./... -count=1
 	@echo "==> Running Swift package tests..."
 	bash packaging/swift_macos.sh test --package-path menubar
+	bash packaging/test/test_status_item_lifecycle.sh
 	@echo "==> Running Python hook tests..."
 	python3 plugin/hooks/test_secret_guard.py
 	python3 plugin/hooks/test_injection_scan.py
