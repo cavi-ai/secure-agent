@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/cavi-ai/secure-agent/daemon/internal/config"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/sensitive"
@@ -48,9 +49,10 @@ func seedsReadThenConnect(cat sensitive.Category, kind event.Kind, exe string) b
 // flags none of whose reads the current rules count as a secret read: a glob
 // the classifier no longer matches (guard rules that protect a file from
 // tampering but hold no secret, such as shell rc files and harness settings),
-// a .env template, a not_secret_paths directory, the macOS trust store, or a
-// keychain file not opened by a byte-copy tool.
-func StaleReadFlagIDs(flags []model.Flag, cl sensitive.Classifier) []string {
+// a .env template, a not_secret_paths directory, the macOS trust store, a
+// keychain file not opened by a byte-copy tool, or a credential file read by
+// a program credential_owners names as its owner.
+func StaleReadFlagIDs(flags []model.Flag, cl sensitive.Classifier, owners []config.CredentialOwner) []string {
 	var ids []string
 	for _, f := range flags {
 		if f.Rule != "sensitive-read-then-connect" || f.Acknowledged {
@@ -62,7 +64,7 @@ func StaleReadFlagIDs(flags []model.Flag, cl sensitive.Classifier) []string {
 				continue
 			}
 			reads++
-			if storedReadSeeds(ev, f.Process, cl) {
+			if storedReadSeeds(ev, f.Process, cl, owners) {
 				secret = true
 				break
 			}
@@ -76,7 +78,7 @@ func StaleReadFlagIDs(flags []model.Flag, cl sensitive.Classifier) []string {
 
 // storedReadSeeds re-judges one stored read. Evidence from before readers
 // were recorded falls back to the flag's own process.
-func storedReadSeeds(ev model.EvidenceItem, proc *model.FlagProcess, cl sensitive.Classifier) bool {
+func storedReadSeeds(ev model.EvidenceItem, proc *model.FlagProcess, cl sensitive.Classifier, owners []config.CredentialOwner) bool {
 	exe := ev.Exe
 	if exe == "" && proc != nil {
 		exe = proc.Exe
@@ -84,6 +86,8 @@ func storedReadSeeds(ev model.EvidenceItem, proc *model.FlagProcess, cl sensitiv
 	switch {
 	case ev.Label == "":
 		return true
+	case ev.Exe != "" && ev.Sub != "agent tool read" && ownerProgramRead(owners, ev.Label, ev.Exe):
+		return false
 	case ev.Rule == "system-trust":
 		return false
 	case strings.HasPrefix(ev.Rule, "keychain:"):

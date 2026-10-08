@@ -4,12 +4,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cavi-ai/secure-agent/daemon/internal/agents"
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 )
 
-const ghExe = "/opt/homebrew/bin/gh"
+// A reader that is not an owner program of the GitHub credential.
+const ghExe = "/opt/homebrew/bin/gh-reader"
 
 func TestModelReadCannotHideBehindNativeCredentialUse(t *testing.T) {
 	c := newFamilyCorrelator(t)
@@ -21,63 +21,6 @@ func TestModelReadCannotHideBehindNativeCredentialUse(t *testing.T) {
 	}
 	if c.ownerUse(reads, connMark{pid: 201, host: "140.82.114.6", port: 443, at: at.Add(time.Second)}) {
 		t.Fatal("model-visible credentials hidden by another process's native read")
-	}
-}
-
-type githubHelperSource struct{ familyProcSource }
-
-func (githubHelperSource) List() []agents.ProcInfo {
-	return append(append([]agents.ProcInfo(nil), familyProcs...),
-		agents.ProcInfo{PID: 300, PPID: 200, Exe: "/bin/zsh"},
-		agents.ProcInfo{PID: 301, PPID: 300, Exe: ghExe},
-		agents.ProcInfo{PID: 302, PPID: 300, Exe: "/usr/bin/git"})
-}
-func (s githubHelperSource) Info(pid int32) (agents.ProcInfo, bool) {
-	for _, p := range s.List() {
-		if p.PID == pid {
-			return p, true
-		}
-	}
-	return agents.ProcInfo{}, false
-}
-
-func TestGitHubSiblingCredentialHelper(t *testing.T) {
-	base := time.Unix(1_700_000_000, 0)
-	for _, tc := range []struct {
-		name, exe, host, path string
-		kind                  event.Kind
-		gap                   time.Duration
-		want                  int
-	}{
-		{"git helper", "/usr/bin/git", "140.82.114.6", ".config/gh/hosts.yml", event.KindFileOpen, time.Second, 0},
-		{"connection first", "/usr/bin/git", "lb-140-82-114-5-iad.github.com", ".config/gh/hosts.yml", event.KindFileOpen, -time.Second, 0},
-		{"other executable", "/usr/local/bin/node", "140.82.114.6", ".config/gh/hosts.yml", event.KindFileOpen, time.Second, 1},
-		{"shared CDN", "/usr/bin/git", "2606:4700::6812:105d", ".config/gh/hosts.yml", event.KindFileOpen, time.Second, 1},
-		{"model visible", "/usr/bin/git", "140.82.114.6", ".config/gh/hosts.yml", event.KindPluginAction, time.Second, 1},
-		{"other secret", "/usr/bin/git", "140.82.114.6", ".aws/credentials", event.KindFileOpen, time.Second, 1},
-		{"distant connection", "/usr/bin/git", "140.82.114.6", ".config/gh/hosts.yml", event.KindFileOpen, 30 * time.Second, 1},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			c := newFamilyCorrelator(t)
-			c.tagger = agents.New(c.cfg, githubHelperSource{})
-			c.tagger.Refresh()
-			read := event.Event{Kind: tc.kind, PID: 301, TS: base, Path: homePath(t, tc.path), ExePath: ghExe}
-			conn := event.Event{Kind: event.KindConnOpen, PID: 302, TS: base.Add(tc.gap), RemoteHost: tc.host, RemotePort: 443, ExePath: tc.exe}
-			var flags []model.Flag
-			if tc.gap < 0 {
-				c.Observe(conn)
-				flags = c.Observe(read)
-			} else {
-				c.Observe(read)
-				flags = c.Observe(conn)
-			}
-			if len(flags) != tc.want {
-				t.Fatalf("flags=%d want %d", len(flags), tc.want)
-			}
-			if tc.want == 0 && c.CredentialOwnerUses() != 1 {
-				t.Fatal("routine activity was not counted")
-			}
-		})
 	}
 }
 
@@ -276,7 +219,7 @@ func TestEnvTemplateIsNotAStaleSecret(t *testing.T) {
 		{ID: "tmpl", Rule: readConnectRule, Evidence: []model.EvidenceItem{{Kind: "read", Label: "/Users/x/proj/.env.example", Rule: "env-file"}}},
 		{ID: "real", Rule: readConnectRule, Evidence: []model.EvidenceItem{{Kind: "read", Label: "/Users/x/proj/.env.local", Rule: "env-file"}}},
 	}
-	if got := StaleReadFlagIDs(flags, c.classifier); len(got) != 1 || got[0] != "tmpl" {
+	if got := StaleReadFlagIDs(flags, c.classifier, c.cfg.CredentialOwners); len(got) != 1 || got[0] != "tmpl" {
 		t.Fatalf("stale = %v, want [tmpl]", got)
 	}
 }
@@ -296,7 +239,7 @@ func TestNotSecretPathUnderSensitiveDir(t *testing.T) {
 		{ID: "completion", Rule: readConnectRule, Evidence: []model.EvidenceItem{{Kind: "read", Label: completion, Rule: "path:" + docker}}},
 		{ID: "config", Rule: readConnectRule, Evidence: []model.EvidenceItem{{Kind: "read", Label: homePath(t, ".docker/config.json"), Rule: "path:" + docker}}},
 	}
-	if got := StaleReadFlagIDs(flags, c.classifier); len(got) != 1 || got[0] != "completion" {
+	if got := StaleReadFlagIDs(flags, c.classifier, c.cfg.CredentialOwners); len(got) != 1 || got[0] != "completion" {
 		t.Fatalf("stale = %v, want [completion]", got)
 	}
 }

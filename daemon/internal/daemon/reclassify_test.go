@@ -36,7 +36,7 @@ func TestReclassifyReadFlagsAcknowledgesOnlyStaleOnes(t *testing.T) {
 	put("aws", "sensitive-read-then-connect", aws, "aws")
 	put("other", "keychain-access", zshenv, "glob:"+zshenv)
 
-	if n := reclassifyReadFlags(st, sensitive.New(cfg)); n != 1 {
+	if n := reclassifyReadFlags(st, sensitive.New(cfg), cfg.CredentialOwners); n != 1 {
 		t.Fatalf("acknowledged = %d, want 1", n)
 	}
 	if f, _ := st.GetFlag("zshenv"); !f.Acknowledged || f.AckReason != correlate.ReclassifiedReadReason {
@@ -51,7 +51,7 @@ func TestReclassifyReadFlagsAcknowledgesOnlyStaleOnes(t *testing.T) {
 	if len(audit) != 1 || audit[0].Action != "flag-reclassify" || audit[0].Rule != "sensitive-read-then-connect" {
 		t.Fatalf("audit = %+v", audit)
 	}
-	if n := reclassifyReadFlags(st, sensitive.New(cfg)); n != 0 {
+	if n := reclassifyReadFlags(st, sensitive.New(cfg), cfg.CredentialOwners); n != 0 {
 		t.Fatalf("second start acknowledged %d, want 0", n)
 	}
 }
@@ -76,7 +76,7 @@ func TestReclassifyCausalSeverityPreservesFindingsAndDirectEvidence(t *testing.T
 		}
 		st.PutFlag(model.Flag{ID: id, Rule: "sensitive-read-then-connect", Severity: 3, TS: at, Evidence: []model.EvidenceItem{read, conn}})
 	}
-	reclassifyReadFlags(st, sensitive.New(cfg))
+	reclassifyReadFlags(st, sensitive.New(cfg), cfg.CredentialOwners)
 	for id, want := range map[string]int{"ancestor": 2, "direct": 3, "tool": 3} {
 		f, _ := st.GetFlag(id)
 		if f.Severity != want || f.Acknowledged {

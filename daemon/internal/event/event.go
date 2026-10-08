@@ -117,4 +117,26 @@ type Event struct {
 	// events only). Session attribution falls back to it for a process that
 	// exited before its event was resolved; never stored or serialized.
 	PPID int32 `json:"-"`
+	// File-open facts Endpoint Security recorded: the open flags (FREAD,
+	// FWRITE), the file's st_mode, inode and birth time (unix ns). Zero when
+	// unknown; never stored or serialized.
+	OpenFlags int32  `json:"-"`
+	FileMode  uint32 `json:"-"`
+	FileIno   uint64 `json:"-"`
+	FileBirth int64  `json:"-"`
 }
+
+// Open flag bits (fcntl.h FREAD, FWRITE).
+const (
+	OpenRead  int32 = 0x1
+	OpenWrite int32 = 0x2
+)
+
+// IsDirOpen reports whether the open is known to be of a directory.
+func (e Event) IsDirOpen() bool { return e.FileMode&0o170000 == 0o040000 }
+
+// OpensForRead reports whether the open may read contents; unknown flags do.
+func (e Event) OpensForRead() bool { return e.OpenFlags == 0 || e.OpenFlags&OpenRead != 0 }
+
+// OpensForWrite reports whether the open is known to write.
+func (e Event) OpensForWrite() bool { return e.OpenFlags&OpenWrite != 0 }

@@ -6,6 +6,9 @@ All notable changes to `secure-agent` are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- Credential reads by the owning program, directory opens, and files an agent wrote itself no longer raise sensitive-read findings.
+
 ## [1.3.0] - 2026-10-08
 
 ### Added

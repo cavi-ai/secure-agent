@@ -124,7 +124,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 	resolver := session.NewResolver(st, tagger)
 
 	repairStoredRows(st)
-	reclassifyReadFlags(st, classifier)
+	reclassifyReadFlags(st, classifier, cfg.CredentialOwners)
 	if n := st.RejudgeRecords(correlator.SensitiveFile); n > 0 {
 		log.Printf("store: cleared the record mark on %d file rows that are not secret reads", n)
 	}
@@ -630,7 +630,7 @@ func repairStoredRows(st *store.Store) {
 // entry, the open sensitive-read-then-connect flags whose read the current
 // classifier no longer counts as a secret read. Returns how many it
 // acknowledged.
-func reclassifyReadFlags(st *store.Store, cl sensitive.Classifier) int {
+func reclassifyReadFlags(st *store.Store, cl sensitive.Classifier, owners []config.CredentialOwner) int {
 	open := st.QueryFlags(store.FlagFilter{Rule: "sensitive-read-then-connect", Unacted: true, Limit: math.MaxInt32})
 	var weak []string
 	for _, f := range open {
@@ -642,7 +642,7 @@ func reclassifyReadFlags(st *store.Store, cl sensitive.Classifier) int {
 		st.PutAudit(store.AuditEntry{Action: "flag-severity-reclassify", Rule: "sensitive-read-then-connect", Detail: fmt.Sprintf("%d retained findings changed to review severity: recorded evidence does not establish a read followed by a direct or descendant connection", n)})
 	}
 
-	ids := correlate.StaleReadFlagIDs(open, cl)
+	ids := correlate.StaleReadFlagIDs(open, cl, owners)
 	if len(ids) == 0 {
 		return 0
 	}

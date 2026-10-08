@@ -62,13 +62,15 @@ vendor_allowlist:
 # The orgs each credential is meant for (correlate.Identify names). A
 # connection to one of them from the reader's process tree (the reader, its
 # ancestors, its descendants) is counted as the credential in use; any other
-# destination, or a process outside that tree, still flags.
+# destination, or a process outside that tree, still flags. programs are
+# executable basename patterns of the programs that own the credential: their
+# own reads of it are never secret reads.
 credential_owners:
-  - { path: "~/.config/gh/hosts.yml", orgs: ["GitHub"] }
-  - { path: "~/.aws",                 orgs: ["AWS", "AWS CloudFront"] }
-  - { path: "~/.azure",               orgs: ["Azure", "Microsoft"] }
-  - { path: "~/.config/gcloud",       orgs: ["Google", "Google Cloud"] }
-  - { path: "~/.docker",              orgs: ["Docker Hub", "Docker", "GitHub Container Registry"] }
+  - { path: "~/.config/gh/hosts.yml", orgs: ["GitHub"], programs: ["gh"] }
+  - { path: "~/.aws",                 orgs: ["AWS", "AWS CloudFront"], programs: ["aws"] }
+  - { path: "~/.azure",               orgs: ["Azure", "Microsoft"], programs: ["az"] }
+  - { path: "~/.config/gcloud",       orgs: ["Google", "Google Cloud"], programs: ["gcloud"] }
+  - { path: "~/.docker",              orgs: ["Docker Hub", "Docker", "GitHub Container Registry"], programs: ["docker", "docker-credential-*", "com.docker.*"] }
 net_sample_interval_ms: 2000
 # Time-based event retention, per kind. Socket churn (conn open/close) ages
 # out fast so it cannot evict the security record; everything else keeps a

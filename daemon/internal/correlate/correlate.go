@@ -78,6 +78,7 @@ type Correlator struct {
 	classifier  sensitive.Classifier
 	cfg         config.Config
 	marks       map[int32][]readMark
+	owned       map[int32][]ownMark // files each agent root's tree wrote
 	conns       map[int32][]connMark
 	uninspected map[string]*uninspectedEntry // distinct "agent|host" egress not seen via the proxy
 	// lastFire[rule|pid|subject] — repeat suppression: identical accesses
@@ -114,6 +115,7 @@ func New(tagger *agents.Tagger, classifier sensitive.Classifier, cfg config.Conf
 		classifier:  classifier,
 		cfg:         cfg,
 		marks:       make(map[int32][]readMark),
+		owned:       make(map[int32][]ownMark),
 		conns:       make(map[int32][]connMark),
 		uninspected: make(map[string]*uninspectedEntry),
 	}
@@ -435,7 +437,14 @@ func (c *Correlator) observeLocked(e event.Event) []model.Flag {
 			if cat == sensitive.CatKeychain {
 				flags = append(flags, c.keychainAccessLocked(e, info.Name)...)
 			}
-			if seedsReadThenConnect(m.Category, e.Kind, e.ExePath) {
+			own := false
+			if e.Kind == event.KindFileOpen {
+				own = c.isOwnDataLocked(rootPID, e)
+				if e.OpensForWrite() {
+					c.rememberOwnLocked(rootPID, e)
+				}
+			}
+			if seedsReadThenConnect(m.Category, e.Kind, e.ExePath) && c.readsContents(e) && !own {
 				rm := readMark{at: e.TS, path: e.Path, cat: cat, rule: m.Rule, pid: e.PID, exe: e.ExePath, kind: e.Kind, chain: info.Chain}
 				c.rememberReadLocked(rootPID, e.PID, rm)
 				// A connection the family made before this read counts too:
@@ -842,6 +851,7 @@ func (c *Correlator) recentConnsLocked(pid int32, directPID int32, now time.Time
 }
 
 func (c *Correlator) evictStaleLocked(now time.Time) {
+	c.evictOwnedLocked(now)
 	for pid, list := range c.marks {
 		var valid []readMark
 		for _, m := range list {
