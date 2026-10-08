@@ -39,7 +39,12 @@ const flag = (id) => ({ id, agent: 'codex', rule: 'keychain-access', pid: 40844,
 test('grouped findings expose approval, local review and file inspection', () => {
   const ids = ['expect', 'expect-file', 'review-local', 'inspect-file', 'dismiss-all'];
   const html = patternHTML(pattern({ actions: ids.map(id => ({ id, label: id, consequence: 'Review scope', body: { flag_id: 'f1', host: 'api.github.com' } })) }), Date.now(), {});
-  assert.deepEqual([...html.matchAll(/data-action-id="([a-z-]+)"/g)].map(m => m[1]), ids);
+  assert.deepEqual([...html.matchAll(/data-action-id="([a-z-]+)"/g)].map(m => m[1]),
+    ['expect', 'expect-file', 'dismiss-all', 'inspect-file', 'review-local']);
+  const bar = html.split('<details class="act-more">')[0];
+  assert.deepEqual([...bar.matchAll(/data-action-id="([a-z-]+)"/g)].map(m => m[1]), ['expect', 'expect-file', 'dismiss-all']);
+  assert.match(bar, />Mark expected</);
+  assert.match(bar, />Mark as test file</);
 });
 
 test('a critical individual finding leads a repeated warning card', () => {
@@ -65,8 +70,9 @@ test('patternHTML: 24 bars, count, summary, open count; actions in served order,
   assert.ok(html.includes('in bursts a few seconds apart · <b class="pattern-open">323 open</b>'));
   assert.ok(html.includes('<p class="finding-verdict">Needs a look: Agent touched the keychain</p>'));
   const ids = [...html.matchAll(/data-action="explain-act" data-pattern-key="[^"]+" data-action-id="([a-z-]+)"/g)].map(m => m[1]);
-  assert.deepEqual(ids, ['kill', 'mute-class', 'dismiss-all']);
+  assert.deepEqual(ids, ['kill', 'dismiss-all', 'mute-class'], 'recommended and Dismiss all on the bar, the rest under More');
   assert.match(html, /<button class="btn btn-danger btn-sm" data-action="explain-act"[^>]*>Kill codex<\/button>/);
+  assert.match(html, /<details class="act-more"><summary class="btn btn-ghost btn-sm">More<\/summary><div class="act-menu"><button class="act-menu-item" data-action="explain-act"[^>]*data-action-id="mute-class"/);
   assert.ok(!/disabled/.test(html));
   assert.ok(html.includes('<summary>Individual flags (323)</summary>'));
 });
@@ -211,4 +217,53 @@ test('an optimistic pattern dismissal preserves an unloaded filtered view', () =
   const p = pattern({ flag_ids: ['k1'] });
   const updated = patternAfterOptimisticDismiss({ patterns: [p], flags: [flag('k1')], flagsView: null }, p.key, ['k1']);
   assert.equal(updated.flagsView, null);
+});
+
+const routine = (over) => ({
+  key: 'routine|gh|/Users/x/.config', reader: 'gh', area: '~/.config/gh/hosts.yml', files: 1, count: 220,
+  agents: ['claude', 'codex', 'openclaw'],
+  destinations: [{ org: 'GitHub', host: '140.82.114.6', count: 200 }, { host: 'lb-140-82-112-21-iad.github.com', count: 20 }],
+  destination_count: 5, expectable: 145,
+  disposition: { state: 'warning', text: 'Needs a look', why: 'w' },
+  summary: 'gh read ~/.config/gh/hosts.yml, then connected to GitHub, lb-140-82-112-21-iad.github.com and 3 more — 220 times across 3 agents.',
+  actions: [
+    { id: 'expect-all', label: 'Treat as routine', consequence: 'c1', method: 'POST', path: '/expected', body: { flag_ids: ['r1', 'r2'] } },
+    { id: 'dismiss-all', label: 'Dismiss all 220', consequence: 'c2', method: 'POST', path: '/flags/acknowledge', body: { flag_ids: ['r1', 'r2', 'r3'] } },
+  ],
+  flag_ids: ['r1', 'r2', 'r3'],
+  ...over,
+});
+
+test('routineHTML: one decision with the reader, file, agents and destinations as chips and two buttons', () => {
+  const html = ctx.routineHTML(routine());
+  assert.match(html, /<div class="attention-item kind-routine finding-item disp-warning" data-routine-key="routine\|gh\|\/Users\/x\/\.config">/);
+  assert.match(html, /<span class="disp-badge">Needs a look<\/span><strong class="finding-what">gh read ~\/\.config\/gh\/hosts\.yml, then connected to GitHub/);
+  for (const chip of ['>gh</span>', '>~/.config/gh/hosts.yml</span>', '>claude, codex, openclaw</span>', '>GitHub</span>', '>lb-140-82-112-21-iad.github.com</span>', '>+3 more</span>']) {
+    assert.ok(html.includes(chip), chip);
+  }
+  assert.match(html, /<button class="btn btn-ghost btn-sm" data-action="routine-act" data-routine-key="routine\|gh\|\/Users\/x\/\.config" data-action-id="expect-all" title="c1">Treat as routine<\/button>/);
+  assert.match(html, /data-action-id="dismiss-all" title="c2">Dismiss all 220<\/button>/);
+  assert.ok(!html.includes('act-more'), 'two choices need no menu');
+  const files = ctx.routineHTML(routine({ area: '~/.docker', files: 2, reader: '', actions: [routine().actions[1]] }));
+  assert.ok(files.includes('>~/.docker · 2 files</span>'));
+  assert.ok(!files.includes('i-terminal'), 'no reader chip without a recorded reader');
+  assert.ok(!files.includes('expect-all'));
+});
+
+test('routineAfterOptimistic: the group, its decision and its flags leave; patterns drop their open counts', () => {
+  const p = pattern({ flag_ids: ['r1', 'k9'], unacked: 2 });
+  const t = {
+    routine: [routine(), routine({ key: 'other' })], patterns: [p], flags: [flag('r1'), flag('r2'), flag('k9')], flagsView: null,
+    posture: { needs_you: 3, items: [{ kind: 'routine', id: routine().key }, { kind: 'flag', id: 'k9' }, { kind: 'flag', id: 'r2' }],
+      groups: [{ key: 'routine', items: [{ kind: 'routine', id: routine().key }] }, { key: 'agent:codex', items: [{ kind: 'flag', id: 'k9' }, { kind: 'flag', id: 'r2' }] }] },
+  };
+  const out = ctx.routineAfterOptimistic(t, routine().key, ['r1', 'r2']);
+  assert.deepEqual(out.routine.map(r => r.key), ['other']);
+  assert.deepEqual(out.flags.map(f => f.id), ['k9']);
+  assert.equal(out.flagsView, null);
+  assert.equal(out.patterns[0].unacked, 1);
+  assert.deepEqual(out.posture.groups.map(g => g.key), ['agent:codex']);
+  assert.deepEqual(out.posture.items.map(i => i.id), ['k9']);
+  assert.equal(out.posture.needs_you, 1);
+  assert.equal(t.routine.length, 2, 'the saved snapshot is unchanged');
 });

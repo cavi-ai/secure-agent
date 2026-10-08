@@ -7,6 +7,8 @@ All notable changes to `secure-agent` are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- Console: the same reads across agents are one decision with Treat as routine and Dismiss all.
+- API: `POST /expected` accepts `flag_ids`.
 - Settings → Secure Agent → Traffic: route Claude Code through Secure Agent's proxy.
 - Proxy: the proxy URL user selects `inspect` or `tunnel`.
 - API: `GET /routing/claude`.
@@ -30,6 +32,10 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Worktrees: advisor sees the merge verdict and what the default branch did to the branch's files.
 
 ### Changed
+- Console: a decision shows at most three buttons; the other choices sit under More.
+- Console: one Allow per destination organization replaces one per address.
+- Console: findings show their file and destinations as chips.
+- Console: the page fills wide windows; decision groups sit two-up.
 - Settings: one sidebar page per area, without segmented sub-tabs.
 - Settings → Egress Firewall: rules grouped by secret type, one switch each.
 - Settings → Egress Firewall: **Block all** and **Monitor all** per secret type.

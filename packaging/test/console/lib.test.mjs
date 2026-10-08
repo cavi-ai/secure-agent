@@ -1098,7 +1098,7 @@ test('explainLines: null without explain', () => {
   assert.equal(ctx.explainLines({ id: 'x', rule: 'r', agent: 'a', pid: 1, evidence: [] }, EXPLAIN_NOW), null);
 });
 
-test('explainActionsHTML: recommended first, kill danger, others ghost; no pid, no IPv6 label; allow-path offered', () => {
+test('explainActionsHTML: recommended and Dismiss on the bar, the rest under More; no pid, no IPv6 label; allow-path offered', () => {
   const host = '2600:1f10:4a1b::fd73';
   const f = explainFlag({ actions: [
     { id: 'allow-host', label: `Allow ${host} (AWS) for claude`, consequence: `Future connections from claude to ${host} are trusted.`,
@@ -1111,9 +1111,10 @@ test('explainActionsHTML: recommended first, kill danger, others ghost; no pid, 
   ] });
   const html = ctx.explainActionsHTML(f);
   const ids = [...html.matchAll(/data-action-id="([^"]+)"/g)].map(m => m[1]);
-  assert.deepEqual(ids, ['kill', 'allow-host', 'allow-path', 'mute-rule-host', 'dismiss']);
+  assert.deepEqual(ids, ['kill', 'dismiss', 'allow-path', 'allow-host', 'mute-rule-host']);
   assert.match(html, /<button class="btn btn-danger btn-sm" data-action="explain-act" data-flag-id="f1" data-action-id="kill"/);
-  assert.match(html, /class="btn btn-ghost btn-sm" data-action="explain-act" data-flag-id="f1" data-action-id="dismiss"/);
+  assert.match(html, /class="btn btn-ghost btn-sm" data-action="explain-act" data-flag-id="f1" data-action-id="dismiss"[^>]*>Dismiss</);
+  assert.match(html, /<details class="act-more"><summary class="btn btn-ghost btn-sm">More<\/summary><div class="act-menu"><button class="act-menu-item" data-action="explain-act" data-flag-id="f1" data-action-id="allow-path"/);
   assert.match(html, new RegExp(`data-action-id="allow-host" data-host="${host}"`));
   assert.match(html, />Allow this AWS address for claude</);
   assert.match(html, />Kill claude</);
@@ -1132,7 +1133,61 @@ test('explainActionsHTML: recommended first, kill danger, others ghost; no pid, 
 test('individual findings expose approval, local review and inspection', () => {
   const ids = ['expect', 'expect-file', 'review-local', 'inspect-file'];
   const html = ctx.explainActionsHTML(explainFlag({actions: ids.map(id => ({id, label: id, consequence: 'Exact scope', body: {}}))}));
-  assert.deepEqual([...html.matchAll(/data-action-id="([^"]+)"/g)].map(m => m[1]), ids);
+  assert.deepEqual([...html.matchAll(/data-action-id="([^"]+)"/g)].map(m => m[1]), ['expect', 'expect-file', 'inspect-file', 'review-local']);
+  assert.match(html, />Mark expected<\/button><button class="btn btn-ghost btn-sm"[^>]*>Mark as test file<\/button><details class="act-more">/);
+});
+
+test('explainActionsHTML: one allow per destination organization, at most three buttons, console items in the menu', () => {
+  const g = ['142.250.1.1', '2607:f8b0:4002:c08::54', '2607:f8b0:4002:c1b::8a'];
+  const allow = (h, extra) => ({ id: 'allow-host', label: `Allow ${h} for claude`, consequence: 'c', method: 'POST', path: '/allowlist', body: { agent: 'claude', host: h }, ...extra });
+  const f = explainFlag({
+    egress: [...g.map(h => ({ host: h, port: 443, org: 'Google', kind: 'ip', gap_seconds: 3 })), { host: 'api.example.com', port: 443, kind: 'hostname', gap_seconds: 3 }],
+    actions: [
+      { id: 'expect', label: 'Expected: node → 142.250.1.1', consequence: 'c', body: {} },
+      { id: 'inspect-file', label: 'Inspect file details', consequence: 'c', body: {} },
+      ...g.map(h => allow(h)), allow('api.example.com'),
+      { id: 'dismiss', label: 'Dismiss this flag', consequence: 'c', body: { flag_id: 'f1' } },
+      { id: 'open-incident', label: 'Open incident report', consequence: 'c' },
+    ],
+  });
+  const html = ctx.explainActionsHTML(f, [{ label: 'Re-run advisor', attrs: 'data-action="retriage" data-id="f1"' }]);
+  const [bar, menu] = html.split('<details class="act-more">');
+  assert.equal((bar.match(/<button /g) || []).length, 2);
+  assert.match(bar, />Mark expected</);
+  assert.match(bar, />Dismiss</);
+  assert.match(menu, /<button class="act-menu-item" data-action="explain-allow-org" data-flag-id="f1" data-org="Google" title="[^"]*">Allow Google for claude · 3 addresses<\/button>/);
+  assert.match(menu, /data-action-id="allow-host" data-host="api\.example\.com"[^>]*>Allow api\.example\.com for claude</);
+  assert.equal((html.match(/data-action-id="allow-host"/g) || []).length, 1, 'the Google hosts collapse to one choice');
+  assert.match(menu, /data-action="retriage" data-id="f1"[^>]*>Re-run advisor</);
+  assert.ok(!/2607:/.test(html.replace(/<[^>]*>/g, ' ')), 'no IPv6 literal in visible text');
+
+  const rec = ctx.explainActionsHTML(explainFlag({
+    egress: g.map(h => ({ host: h, port: 443, org: 'Google', kind: 'ip', gap_seconds: 3 })),
+    actions: [{ id: 'dismiss', label: 'Dismiss this flag', consequence: 'c', body: {} }, ...g.map((h, i) => allow(h, i === 1 ? { recommended: true } : {}))],
+  }));
+  assert.match(rec, /^<button class="btn btn-primary btn-sm" data-action="explain-allow-org" data-flag-id="f1" data-org="Google"/);
+
+  const many = ctx.explainActionsHTML(explainFlag({ actions: [
+    { id: 'kill', label: 'Kill', consequence: 'c', body: { pid: 1 }, recommended: true },
+    { id: 'expect', label: 'e', consequence: 'c', body: {} }, { id: 'expect-file', label: 'f', consequence: 'c', body: {} },
+    { id: 'dismiss', label: 'd', consequence: 'c', body: {} }] }));
+  assert.equal((many.split('<details')[0].match(/<button /g) || []).length, 3, 'never more than three buttons');
+  assert.match(many, /<div class="act-menu"><button class="act-menu-item" data-action="explain-act" data-flag-id="f1" data-action-id="dismiss"/);
+});
+
+test('factChipsHTML: the file opens its details, destinations by organization, IPv6 hidden, repo when it adds to the agent', () => {
+  const f = explainFlag({
+    subject: { path: '/Users/x/.docker/config.json', display: '~/.docker/config.json', category: 'docker' },
+    egress: [{ host: 'uf-in-f84.1e100.net', org: 'Google' }, { host: '2607:f8b0:4002:c08::54', org: 'Google' }, { host: '2a00::1', org: '' }],
+  });
+  const html = ctx.factChipsHTML(f, 'claude · api@main');
+  assert.match(html, /<span class="fact fact-repo">.*claude · api@main<\/span>/);
+  assert.match(html, /<button type="button" class="fact fact-file" data-action="open-file" data-path="\/Users\/x\/\.docker\/config\.json" title="[^"]+">.*~\/\.docker\/config\.json<\/button>/);
+  assert.match(html, />Google · 2 addresses<\/span>/);
+  assert.match(html, />IPv6 address<\/span>/);
+  assert.ok(!/2607:|2a00:/.test(html.replace(/<[^>]*>/g, ' ')));
+  assert.ok(!ctx.factChipsHTML(f, f.agent).includes('fact-repo'), 'no repo chip when who is the agent');
+  assert.equal(ctx.factChipsHTML({ id: 'x', explain: {} }, ''), '');
 });
 
 // ---------- resources v2: names, capped lists, attention, harness groups ----------

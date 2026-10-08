@@ -19,12 +19,15 @@ type Snapshot struct {
 	Flags  []model.Flag `json:"flags"`
 	// Patterns are the repeating findings of the same 24h (at least 3 flags
 	// each); the console renders them instead of the flags they cover.
-	Patterns    []model.Pattern `json:"patterns"`
-	Incidents   any             `json:"incidents"`
-	Events      []event.Event   `json:"events"`
-	Posture     Posture         `json:"posture"`
-	Suggestions []Suggestion    `json:"suggestions"`
-	Mutes       []MutePair      `json:"mutes"`
+	Patterns []model.Pattern `json:"patterns"`
+	// Routine are the same reads across agents (at least 3 flags spanning
+	// agents or files); the console renders one decision for each.
+	Routine     []model.RoutineGroup `json:"routine"`
+	Incidents   any                  `json:"incidents"`
+	Events      []event.Event        `json:"events"`
+	Posture     Posture              `json:"posture"`
+	Suggestions []Suggestion         `json:"suggestions"`
+	Mutes       []MutePair           `json:"mutes"`
 	// Sessions is the durable session spine (live and recently ended) — the
 	// Sessions tab renders from this, not from process-tree guesswork.
 	Sessions []model.Session `json:"sessions"`
@@ -59,14 +62,17 @@ func (a *API) currentSnapshot() Snapshot {
 		flags[i].Title = humanFlagTitle(flags[i].Rule)
 	}
 	a.stampExplains(flags)
-	patterns := a.computePatterns(time.Now().Add(-24*time.Hour), patternDefaultMin)
+	since := time.Now().Add(-24 * time.Hour)
+	patterns := a.computePatterns(since, patternDefaultMin)
+	routine := a.routineGroups(since)
 	return Snapshot{
 		Status:      a.currentStatus(),
 		Flags:       flags,
 		Patterns:    patterns,
+		Routine:     routine,
 		Incidents:   out,
 		Events:      priceClassed(a.store.QueryEvents(store.EventFilter{Limit: 50})),
-		Posture:     a.postureWith(patterns),
+		Posture:     a.postureWith(patterns, routine),
 		Suggestions: a.suggestionList(),
 		Mutes:       a.mutePairs(),
 		Sessions:    a.store.ListSessions(store.SessionFilter{Limit: 100}),
