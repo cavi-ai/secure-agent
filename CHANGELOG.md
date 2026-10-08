@@ -6,6 +6,8 @@ All notable changes to `secure-agent` are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-10-08
+
 ### Added
 - Settings → Secure Agent → Traffic: route Claude Code through Secure Agent's proxy.
 - Proxy: the proxy URL user selects `inspect` or `tunnel`.
@@ -47,6 +49,8 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Dependencies: `modernc.org/sqlite` 1.60.1.
 
 ### Fixed
+- Daemon: startup fails when the control API cannot be served.
+- App: daemon restart retries are bounded.
 - Doctor and posture: spool loss and bus drops fail only while they grow.
 - Costs: one model call per Claude API call.
 - Costs: duplicate stored Claude model calls removed at open.
