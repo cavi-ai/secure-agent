@@ -27,6 +27,10 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Pricing: Claude Sonnet 5.5.
 
 ### Changed
+- Console: a decision shows at most three buttons; the other choices sit under More.
+- Console: one Allow per destination organization replaces one per address.
+- Console: findings show their file and destinations as chips.
+- Console: the page fills wide windows; decision groups sit two-up.
 - Settings: Protection split into Files and Network.
 - Settings: Chat, Analysis and Traffic grouped under Secure Agent.
 - Settings → Providers: toggles apply without a restart.

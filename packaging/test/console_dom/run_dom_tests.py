@@ -249,6 +249,7 @@ def main():
         dom_explain = dump_dom(chrome, tmp, "?explaindemo")
         dom_explainact = dump_dom(chrome, tmp, "?explaindemo&explainact")
         dom_allowpathact = dump_dom(chrome, tmp, "?explaindemo&allowpathact")
+        dom_orgallow = dump_dom(chrome, tmp, "?orgallowdemo")
         dom_explainfail = dump_dom(chrome, tmp, "?explaindemo&explainact&postfail")
         dom_detailsprobe = dump_dom(chrome, tmp, "?explaindemo&detailsprobe")
         dom_fam = dump_dom(chrome, tmp, "?familiesdemo&tab=resources")
@@ -1420,12 +1421,15 @@ def main():
               card != "" and " onclick=" not in card and " style=" not in card)
         buttons = re.findall(r'<button class="btn ([a-z-]+) btn-sm" data-action="explain-act" '
                              r'data-flag-id="flag-2" data-action-id="([a-z-]+)"', card)
-        check("finding card: who, what and verdict lines; the recommended action is the first, primary button",
+        menu = re.findall(r'<button class="act-menu-item( danger)?" data-action="explain-act" '
+                          r'data-flag-id="flag-2" data-action-id="([a-z-]+)"', card)
+        check("finding card: who, what and verdict lines; the recommended action leads the bar, the rest sit under More",
               "cursor · web-app@main" in head and "3 s gap" in head
               and '<p class="finding-what">Cursor read AWS credentials (~/.aws/credentials), then reached Cloudflare 3 s later.</p>' in card
               and '<p class="finding-verdict">Likely benign (advisor 93 %): Cloudflare fronts the package registry this project installs from.</p>' in card
-              and buttons == [("btn-primary", "allow-host"), ("btn-ghost", "allow-path"), ("btn-ghost", "dismiss"), ("btn-danger", "kill")],
-              f"buttons={buttons}")
+              and buttons == [("btn-primary", "allow-host"), ("btn-ghost", "dismiss")]
+              and menu == [("", "allow-path"), (" danger", "kill")],
+              f"buttons={buttons} menu={menu}")
         details = (re.search(r'<details class="finding-details">(.*?)</details>', card, re.S) or [None, ""])[1]
         check("finding card: Details is closed by default and holds the chain, pid, full address and ISO timestamp",
               details != "" and 'class="chain"' in details and "2026-09-22T16:05:01Z" in details
@@ -1445,6 +1449,14 @@ def main():
               'POST /guard/path-allow body={"agent":"cursor","rule_id":"cloud-creds","path":"/Users/dev/.aws/credentials"}' in allowpath_reqs
               and 'POST /allowlist' not in allowpath_reqs,
               f"requests={allowpath_reqs!r}")
+        org_card = pre(dom_orgallow, "org-allow-card")
+        org_reqs = pre(dom_orgallow, "mock-requests")
+        check("finding card: three Google addresses are one Allow Google choice that allows each host, then marks the flag reviewed",
+              org_card == "bar=1 org=1 hosts=0"
+              and org_reqs.count("POST /allowlist") == 3
+              and 'body={"agent":"cursor","host":"2607:f8b0:4002:c08::54"}' in org_reqs
+              and org_reqs.rstrip().endswith('POST /flags/acknowledge body={"flag_id":"flag-1"}'),
+              f"card={org_card!r} requests={org_reqs!r}")
         fail_reqs = pre(dom_explainfail, "mock-requests")
         flags_fail = dom_explainfail.split('id="flags-list"', 1)[-1].split('id="incidents-container"', 1)[0]
         check("finding card: a failed allow puts the card back and toasts danger",
@@ -1460,7 +1472,8 @@ def main():
               and 'class="attention-item kind-flag finding-item disp-benign"' in flag2_groups[0][1]
               and "cursor · web-app@main" in flag2_groups[0][1]
               and "Cursor read AWS credentials (~/.aws/credentials), then reached Cloudflare 3 s later." in flag2_groups[0][1]
-              and "Likely benign (advisor 93 %): Cloudflare fronts" in flag2_groups[0][1]
+              and '<span class="disp-badge">Likely benign (advisor 93 %)</span>' in flag2_groups[0][1]
+              and '<p class="finding-why">Cloudflare fronts' in flag2_groups[0][1]
               and 'data-action="explain-act" data-flag-id="flag-2" data-action-id="allow-host"' in flag2_groups[0][1]
               and 'data-action="dismiss-flag" data-id="flag-2"' not in flag2_groups[0][1],
               f"groups={[c for c, _ in attn_groups]}")

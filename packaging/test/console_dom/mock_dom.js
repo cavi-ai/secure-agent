@@ -1040,7 +1040,7 @@
         try { host = JSON.parse(opts.body).host; } catch { /* ignored */ }
         line += ' row=' + (document.querySelector(`#firewall-container [data-action="allowlist-remove"][data-host="${host}"]`) ? 1 : 0);
       }
-      if ((MODE.includes('explaindemo') || MODE.includes('patterndemo') || MODE.includes('ghdemo') || MODE.includes('rawmute')) && opts.body) line += ' body=' + opts.body;
+      if ((MODE.includes('explaindemo') || MODE.includes('patterndemo') || MODE.includes('ghdemo') || MODE.includes('rawmute') || MODE.includes('orgallowdemo')) && opts.body) line += ' body=' + opts.body;
       if (MODE.includes('rawmute') && p === '/mute' && opts.method === 'POST') data['/mute'].push(JSON.parse(opts.body));
       if (p === '/expected' && opts.method === 'DELETE') {
         line = `${opts.method} ${String(path)}`;
@@ -2732,6 +2732,29 @@
   if (MODE.includes('explainact')) {
     setTimeout(() => openTab('findings'), 4000);
     setTimeout(() => document.querySelector('#flags-list .finding[data-flag-id="flag-2"] .finding-actions button')?.click(), 9000);
+  }
+  // orgallowdemo: flag-1 reached three Google addresses; Findings open, press
+  // its one "Allow Google" choice from the More menu.
+  if (MODE.includes('orgallowdemo')) {
+    const f1 = data['/flags'].find(f => f.id === 'flag-1');
+    const hosts = ['142.250.1.1', '2607:f8b0:4002:c08::54', 'uf-in-f84.1e100.net'];
+    f1.explain = {
+      what: 'Cursor read a sensitive file in your home directory, then reached Google 2 s later.',
+      subject: { path: '/Users/dev/.docker/config.json', display: '~/.docker/config.json', basename: 'config.json', category: 'other_sensitive', category_label: 'sensitive file', owner_label: 'home directory' },
+      egress: hosts.map(host => ({ host, port: 443, org: 'Google', kind: 'ip', allowlisted: false, gap_seconds: 2 })),
+      context: { harness: 'cursor' },
+      disposition: { state: 'warning', text: 'Needs a look', why: 'A connection was observed to Google near the read.' },
+      actions: [
+        ...hosts.map(host => ({ id: 'allow-host', label: `Allow ${host} for cursor`, consequence: 'c', method: 'POST', path: '/allowlist', body: { agent: 'cursor', host } })),
+        { id: 'dismiss', label: 'Dismiss this flag', consequence: 'c', method: 'POST', path: '/flags/acknowledge', body: { flag_id: 'flag-1' } },
+      ],
+    };
+    setTimeout(() => openTab('findings'), 4000);
+    setTimeout(() => {
+      const card = document.querySelector('#flags-list .finding[data-flag-id="flag-1"]');
+      stamp('org-allow-card', card ? `bar=${card.querySelectorAll('.finding-actions > button').length} org=${card.querySelectorAll('[data-action="explain-allow-org"][data-org="Google"]').length} hosts=${card.querySelectorAll('[data-action-id="allow-host"]').length}` : 'missing');
+      card?.querySelector('[data-action="explain-allow-org"]')?.click();
+    }, 9000);
   }
   // allowpathact (with explaindemo): Findings open, press flag-2's allow-path
   // action specifically (not the first/recommended button) — proves the

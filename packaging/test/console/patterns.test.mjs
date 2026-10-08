@@ -39,7 +39,12 @@ const flag = (id) => ({ id, agent: 'codex', rule: 'keychain-access', pid: 40844,
 test('grouped findings expose approval, local review and file inspection', () => {
   const ids = ['expect', 'expect-file', 'review-local', 'inspect-file', 'dismiss-all'];
   const html = patternHTML(pattern({ actions: ids.map(id => ({ id, label: id, consequence: 'Review scope', body: { flag_id: 'f1', host: 'api.github.com' } })) }), Date.now(), {});
-  assert.deepEqual([...html.matchAll(/data-action-id="([a-z-]+)"/g)].map(m => m[1]), ids);
+  assert.deepEqual([...html.matchAll(/data-action-id="([a-z-]+)"/g)].map(m => m[1]),
+    ['expect', 'expect-file', 'dismiss-all', 'inspect-file', 'review-local']);
+  const bar = html.split('<details class="act-more">')[0];
+  assert.deepEqual([...bar.matchAll(/data-action-id="([a-z-]+)"/g)].map(m => m[1]), ['expect', 'expect-file', 'dismiss-all']);
+  assert.match(bar, />Mark expected</);
+  assert.match(bar, />Mark as test file</);
 });
 
 test('a critical individual finding leads a repeated warning card', () => {
@@ -65,8 +70,9 @@ test('patternHTML: 24 bars, count, summary, open count; actions in served order,
   assert.ok(html.includes('in bursts a few seconds apart · <b class="pattern-open">323 open</b>'));
   assert.ok(html.includes('<p class="finding-verdict">Needs a look: Agent touched the keychain</p>'));
   const ids = [...html.matchAll(/data-action="explain-act" data-pattern-key="[^"]+" data-action-id="([a-z-]+)"/g)].map(m => m[1]);
-  assert.deepEqual(ids, ['kill', 'mute-class', 'dismiss-all']);
+  assert.deepEqual(ids, ['kill', 'dismiss-all', 'mute-class'], 'recommended and Dismiss all on the bar, the rest under More');
   assert.match(html, /<button class="btn btn-danger btn-sm" data-action="explain-act"[^>]*>Kill codex<\/button>/);
+  assert.match(html, /<details class="act-more"><summary class="btn btn-ghost btn-sm">More<\/summary><div class="act-menu"><button class="act-menu-item" data-action="explain-act"[^>]*data-action-id="mute-class"/);
   assert.ok(!/disabled/.test(html));
   assert.ok(html.includes('<summary>Individual flags (323)</summary>'));
 });

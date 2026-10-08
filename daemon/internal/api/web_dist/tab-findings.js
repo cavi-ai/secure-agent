@@ -80,6 +80,10 @@ function renderAttention() {
   const retriage = item => !advisorVisible ? '' : advisorOffline
     ? `<button class="btn btn-ghost btn-sm" disabled title="Advisor offline — verdicts paused (${escapeHTML(advisorHealth.last_error || 'model server unreachable')})">Advisor offline</button>`
     : `<button class="btn btn-ghost btn-sm" data-action="retriage" data-id="${escapeHTML(item.id)}">Re-run advisor</button>`;
+  // The same choice as a More-menu item on an explained finding.
+  const retriageItems = item => !advisorVisible ? [] : advisorOffline
+    ? [{ label: 'Advisor offline', attrs: '', disabled: true, title: `Advisor offline — verdicts paused (${advisorHealth.last_error || 'model server unreachable'})` }]
+    : [{ label: 'Re-run advisor', attrs: `data-action="retriage" data-id="${escapeHTML(item.id)}"` }];
 
   // A flag item whose flag the daemon explained renders the finding card's
   // lines — who, what, verdict — and its served actions; a pattern item
@@ -94,19 +98,18 @@ function renderAttention() {
     const l = f && explainLines(f);
     if (l) return `
         <div class="attention-item kind-flag finding-item ${l.cls}">
-          <span class="attention-kind">${harnessChipHTML(f.agent)}<span>${escapeHTML(l.who)}</span></span>
           <div class="attention-reason">
-            <strong class="finding-what">${escapeHTML(l.what)}</strong>
-            <span class="finding-verdict">${escapeHTML(l.verdict)}</span>
+            <div class="decision-head">${l.state ? `<span class="disp-badge">${escapeHTML(l.state)}</span>` : ''}<strong class="finding-what">${escapeHTML(l.what)}</strong></div>
+            ${factChipsHTML(f, l.who)}
+            ${l.why ? `<p class="finding-why">${escapeHTML(l.why)}</p>` : ''}
           </div>
-          <div class="attention-actions">${explainActionsHTML(f)}${retriage(item)}</div>
+          <div class="attention-actions">${explainActionsHTML(f, retriageItems(item))}</div>
         </div>`;
     return `
         <div class="attention-item kind-${escapeHTML(item.kind)}">
-          <span class="attention-kind">${escapeHTML(item.title)}</span>
           <div class="attention-reason">
-            <strong>${escapeHTML(item.detail)}</strong>
-            ${item.scopeText ? `<span>${escapeHTML(item.scopeText)}</span>` : ''}
+            <div class="decision-head"><span class="attention-kind">${escapeHTML(item.title)}</span><strong>${escapeHTML(item.detail)}</strong></div>
+            ${item.scopeText ? `<p class="finding-why">${escapeHTML(item.scopeText)}</p>` : ''}
             ${item.advisor ? advisorAdviceHTML(item.advisor) : ''}
           </div>
           <div class="attention-actions">${actions(item)}</div>
@@ -436,9 +439,10 @@ function findingHTML(f, l, chainHTML, toolsHTML) {
         ${metaHTML(l.meta)}
       </header>
       <p class="finding-what">${escapeHTML(l.what)}</p>
+      ${factChipsHTML(f, '')}
       <p class="finding-verdict">${escapeHTML(l.verdict)}</p>
       ${labelsLineHTML(ex.labels)}
-      <div class="finding-actions">${explainActionsHTML(f)}<button class="btn btn-ghost btn-sm" data-action="open-plan" data-subject="flag:${escapeHTML(f.id)}">What to do</button></div>
+      <div class="finding-actions">${explainActionsHTML(f, [{ label: 'What to do', attrs: `data-action="open-plan" data-subject="flag:${escapeHTML(f.id)}"` }])}</div>
       <details class="finding-details"><summary>Details</summary>
         ${chainHTML}
         <dl class="finding-facts">${facts.map(([k, v]) => `<dt>${escapeHTML(k)}</dt><dd>${k === 'File'
@@ -541,19 +545,19 @@ function patternActionLabel(p, a) {
   return a.label || a.id;
 }
 
-// patternActionsHTML: one button per served action, recommended first; the
+// patternActionsHTML: the served actions on an action bar — recommended,
+// the exact expectation and Dismiss all as buttons, the rest under More. The
 // click handler reads the request from the served pattern (key + action id
-// + host). A card dismissed in place keeps its buttons, disabled.
+// + host). A card dismissed in place keeps its choices, disabled.
 function patternActionsHTML(p) {
-  const acts = (p.actions || []).filter(a => a && PATTERN_CONSOLE_ACTIONS.includes(a.id));
-  const off = p.dismissed ? ' disabled' : '';
-  return acts.filter(a => a.recommended).concat(acts.filter(a => !a.recommended)).map(a => {
+  const acts = (p.actions || []).filter(a => a && PATTERN_CONSOLE_ACTIONS.includes(a.id))
+    .map(a => (p.dismissed ? { ...a, disabled: true } : a));
+  const attrs = a => {
     const host = a.body && typeof a.body.host === 'string' ? a.body.host : '';
-    const cls = a.id === 'kill' ? 'btn-danger' : a.recommended ? 'btn-primary' : 'btn-ghost';
-    return `<button class="btn ${cls} btn-sm" data-action="explain-act" data-pattern-key="${escapeHTML(p.key)}"`
-      + ` data-action-id="${escapeHTML(a.id)}"${host ? ` data-host="${escapeHTML(host)}"` : ''}`
-      + ` title="${escapeHTML(a.consequence)}"${off}>${escapeHTML(patternActionLabel(p, a))}</button>`;
-  }).join('');
+    return `data-action="explain-act" data-pattern-key="${escapeHTML(p.key)}" data-action-id="${escapeHTML(a.id)}"`
+      + (host ? ` data-host="${escapeHTML(host)}"` : '');
+  };
+  return actionBarHTML(actionItems(acts, [], attrs, a => patternActionLabel(p, a)));
 }
 
 // patternHTML: one repeating finding — title, count and window; the served

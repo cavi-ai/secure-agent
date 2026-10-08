@@ -2938,10 +2938,11 @@ document.addEventListener('DOMContentLoaded', () => {
       <p>${escapeHTML(f.title || ruleTitle(f.rule))} · severity ${Number(f.severity) || 0} · ${escapeHTML(f.agent || 'unknown agent')}</p>
       <dl class="finding-facts"><dt>Raised</dt><dd>${escapeHTML(new Date(f.ts).toLocaleString())}</dd><dt>Process</dt><dd>PID ${Number(f.pid) || 0}</dd>
         <dt>Session</dt><dd>${escapeHTML(f.session_id || 'unknown')}</dd><dt>Workspace</dt><dd>${escapeHTML(f.workspace || 'unknown')}</dd><dt>Flag ID</dt><dd>${escapeHTML(f.id)}</dd></dl>
-      ${reading ? `<p class="finding-what">${escapeHTML(reading.what || '')}</p><p class="finding-verdict">${escapeHTML(reading.verdict || '')}</p>` : ''}
+      ${reading ? `<p class="finding-what">${escapeHTML(reading.what || '')}</p>${factChipsHTML(f, '')}<p class="finding-verdict">${escapeHTML(reading.verdict || '')}</p>` : ''}
       ${advisor}<h4>Recorded evidence</h4>${evidence ? `<ul class="plan-list">${evidence}</ul>` : '<p>No evidence rows were recorded for this flag.</p>'}
-      <div class="flag-actions-row">${explainActionsHTML(f)}${telemetryData.status && telemetryData.status.advisor_enabled ? `<button type="button" class="btn btn-ghost btn-sm" data-action="retriage" data-id="${escapeHTML(f.id)}">Re-run advisor</button>` : ''}
-        <button type="button" class="btn btn-ghost btn-sm" data-action="dismiss-flag" data-id="${escapeHTML(f.id)}">Dismiss flag</button></div>
+      <div class="flag-actions-row">${f.explain
+        ? explainActionsHTML(f, telemetryData.status && telemetryData.status.advisor_enabled ? [{ label: 'Re-run advisor', attrs: `data-action="retriage" data-id="${escapeHTML(f.id)}"` }] : [])
+        : `<button type="button" class="btn btn-ghost btn-sm" data-action="dismiss-flag" data-id="${escapeHTML(f.id)}">Dismiss flag</button>`}</div>
       <h4>What to do</h4><div class="plan-slot" data-plan-subject="${escapeHTML(subject)}"><div class="loading-spinner">Loading the playbook…</div></div>
     </div>`;
       loadPlanSlot(subject);
@@ -3595,6 +3596,51 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   };
 
+  // One destination organization's allow-host choices at once: every served
+  // allow for its hosts, in order, then one acknowledgement — the requests
+  // the per-host buttons sent one at a time. Reverted when none lands.
+  window.explainAllowOrg = async function(flagId, org) {
+    const f = (telemetryData.flags || []).find(x => x.id === flagId)
+      || (telemetryData.flagsView || []).find(x => x.id === flagId)
+      || planFlagCache.get(flagId);
+    const hosts = new Set((egressByOrg(f).get(org) || []).map(e => e.host));
+    const acts = ((f && f.explain && f.explain.actions) || []).filter(a => a.id === 'allow-host' && a.body && hosts.has(a.body.host));
+    if (!acts.length) {
+      showToast('That action is no longer offered for this finding — the list is refreshing.', 'info');
+      fetchTelemetry();
+      return;
+    }
+    const agent = acts[0].body.agent;
+    const revertAllow = stageAllow(agent, acts.map(a => a.body.host));
+    const revertDrop = stageDropFlag(f.id);
+    const send = async (method, path, payload) => {
+      const res = await apiFetch(path, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      if (!res.ok) throw new Error(await res.text());
+    };
+    let ok = 0;
+    for (const a of acts) {
+      try { await send(a.method, a.path, a.body); ok++; } catch { /* the toast reports the tally */ }
+    }
+    if (!ok) {
+      revertDrop();
+      revertAllow();
+      showToast(`Failed to allowlist ${org} for ${agent}`, 'danger');
+      return;
+    }
+    try {
+      await send('POST', '/flags/acknowledge', { flag_id: f.id });
+    } catch (err) {
+      revertDrop();
+      showToast(`Allowlisted ${org}, but the flag was not marked reviewed: ${err.message || err}`, 'danger');
+      fetchTelemetry();
+      return;
+    }
+    if (drawerMode === 'flag' && drawerFlag === f.id) closeDrawer();
+    showToast(`Allowlisted ${ok} of ${acts.length} ${org} addresses for ${agent}`, ok === acts.length ? 'success' : 'warn');
+    cardNote('', '', 'flags-list', 'allowlisted');
+    fetchTelemetry();
+  };
+
   // A pattern card's served action (Attention, Flags), found by pattern key +
   // action id (+ host). Before the request (reverted if it fails) the card's
   // open count drops by the submitted flag ids — all of them for a mute —
@@ -3858,12 +3904,20 @@ document.addEventListener('DOMContentLoaded', () => {
   const btnFlagsSessionClear = document.getElementById('flags-session-clear');
   if (btnFlagsSessionClear) btnFlagsSessionClear.addEventListener('click', () => window.clearTimelineSession());
 
+  // A More menu closes on a choice, a click outside it, or Escape.
+  const closeMenus = keep => {
+    for (const m of document.querySelectorAll('details.act-more[open]')) if (m !== keep) m.open = false;
+  };
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') closeMenus(null); });
+
   // Event delegation: every actionable element carries data-action + data-*
   // attributes and is dispatched here. Values pass through the HTML attribute
   // context ONLY (escapeHTML suffices) — no JS-string context exists at all,
   // which removes the inline-handler injection class structurally rather than
   // by escaping discipline.
   document.addEventListener('click', (e) => {
+    const menu = e.target.closest('details.act-more');
+    closeMenus(menu && !e.target.closest('.act-menu') ? menu : null);
     const el = e.target.closest('[data-action]');
     if (!el) return;
     const d = el.dataset;
@@ -4183,6 +4237,9 @@ document.addEventListener('DOMContentLoaded', () => {
       case 'explain-act':
         if (d.patternKey) window.patternAct(d.patternKey, d.actionId, d.host);
         else window.explainAct(d.flagId, d.actionId, d.host);
+        break;
+      case 'explain-allow-org':
+        window.explainAllowOrg(d.flagId, d.org);
         break;
       case 'retriage':
         window.retriageFlag(d.id);
