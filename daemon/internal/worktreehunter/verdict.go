@@ -54,6 +54,11 @@ type Worktree struct {
 	Unique int    `json:"unique_commits,omitempty"`
 	Loose  int    `json:"loose_commits,omitempty"`
 	Merged string `json:"merged,omitempty"`
+	// ContentLines counts the non-blank lines the branch adds over its merge
+	// base, and ContentMissing those the default branch does not have. Both
+	// are set when the content check ran to the end.
+	ContentLines   int `json:"content_lines,omitempty"`
+	ContentMissing int `json:"content_missing,omitempty"`
 
 	// SizeBytes is the allocated size of the working directory, measured by
 	// the background sizer; SizePartial marks a walk that hit its bound.
@@ -102,7 +107,7 @@ func classify(w *Worktree, f facts, now time.Time, staleAfter time.Duration) {
 		w.LastActivity = &last
 		w.IdleDays = int(now.Sub(last).Hours() / 24)
 	}
-	merged := w.Merged == mergedAncestor || w.Merged == mergedSquash || w.Merged == mergedEmpty
+	merged := isMerged(w.Merged)
 	idle := !last.IsZero() && now.Sub(last) > staleAfter
 	recent := !last.IsZero() && now.Sub(last) < activeGrace
 	w.Stale = idle || ((merged || w.UpstreamGone) && !recent)
@@ -155,8 +160,12 @@ func classify(w *Worktree, f facts, now time.Time, staleAfter time.Duration) {
 		review = append(review, "ignored files that only live here: "+strings.Join(w.PreciousIgnored, ", "))
 	}
 	if w.Unique > 0 && !merged {
-		review = append(review, fmt.Sprintf("%s on no remote and not in %s (the branch keeps them after removal)",
-			plural(w.Unique, "commit", "commits"), orDefault(f.DefaultBranch)))
+		reason := fmt.Sprintf("%s on no remote and not in %s (the branch keeps them after removal)",
+			plural(w.Unique, "commit", "commits"), orDefault(f.DefaultBranch))
+		if w.ContentLines > 0 {
+			reason += fmt.Sprintf("; %d of %d lines they add are on %s", w.ContentLines-w.ContentMissing, w.ContentLines, orDefault(f.DefaultBranch))
+		}
+		review = append(review, reason)
 	}
 	if w.Stashes > 0 {
 		review = append(review, plural(w.Stashes, "stash", "stashes")+" on this branch")
@@ -166,9 +175,15 @@ func classify(w *Worktree, f facts, now time.Time, staleAfter time.Duration) {
 	case len(keep) > 0:
 		w.State = StateKeep
 		w.Reasons = append(keep, review...)
+		if merged {
+			w.Reasons = append(w.Reasons, mergedReason(w.Merged, f.DefaultBranch))
+		}
 	case len(review) > 0:
 		w.State = StateReview
 		w.Reasons = review
+		if merged {
+			w.Reasons = append(w.Reasons, mergedReason(w.Merged, f.DefaultBranch))
+		}
 	case merged && recent:
 		w.State = StateKeep
 		w.Reasons = append(w.Reasons, mergedReason(w.Merged, f.DefaultBranch)+"; active in the last 24 hours")
@@ -198,10 +213,22 @@ func lockedReason(w *Worktree) string {
 	return "locked"
 }
 
+// isMerged reports whether a merge verdict says the branch's work is already
+// on the default branch.
+func isMerged(how string) bool {
+	switch how {
+	case mergedAncestor, mergedSquash, mergedEmpty, mergedContent:
+		return true
+	}
+	return false
+}
+
 func mergedReason(how, def string) string {
 	switch how {
 	case mergedSquash:
 		return "merged into " + orDefault(def) + " (squash)"
+	case mergedContent:
+		return "its changes are on " + orDefault(def) + " (matched by content)"
 	case mergedEmpty:
 		return "changes nothing against " + orDefault(def)
 	default:

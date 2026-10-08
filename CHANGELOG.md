@@ -25,6 +25,9 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Cursor: Secure Agent's tool hooks beside the user's hooks.
 - CLI: `secure-agent telemetry repair`.
 - Pricing: Claude Sonnet 5.5.
+- Worktrees: `merged: content` when the default branch has every line the branch adds, including after a history rewrite.
+- Worktrees: `content_lines` and `content_missing`.
+- Worktrees: advisor sees the merge verdict and what the default branch did to the branch's files.
 
 ### Changed
 - Settings: Protection split into Files and Network.
@@ -89,6 +92,8 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Fleet: `/status` and `/fleet` share one live `fleet_configured`.
 - Routing: the proxy URL carries the token.
 - Worktrees: an action cancels the background rescan.
+- Worktrees: a merged branch keeps its merge reason beside keep and review reasons.
+- Worktrees: the advisor no longer calls merged commits unmerged.
 - Daemon: one daemon per store.
 - Build: `make` stops when a binary's commit stamp is not HEAD.
 
