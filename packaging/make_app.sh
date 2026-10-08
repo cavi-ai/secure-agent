@@ -92,6 +92,8 @@ for hook in plugin/hooks/*.py; do
   case "$(basename "${hook}")" in test_*) continue;; esac
   cp "${hook}" "${APP_DIR}/Contents/Resources/hooks/"
 done
+# secret_guard.py loads its rules from guard-rules.json beside it.
+cp plugin/hooks/guard-rules.json "${APP_DIR}/Contents/Resources/hooks/"
 cp plugin/hooks/hooks.json "${APP_DIR}/Contents/Resources/hooks/" 2>/dev/null || true
 
 if [[ -f "${REPO_ROOT}/packaging/AppIcon.icns" ]]; then

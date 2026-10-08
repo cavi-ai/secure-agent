@@ -144,6 +144,30 @@ final class HookRefreshTests: XCTestCase {
         try SetupManager.refreshInstalledHooks(bundledDir: bundled, installedDir: installed)
         XCTAssertEqual(read(installed + "/settings.json"), "{}")
     }
+
+    /// secret_guard.py reads its rules from guard-rules.json beside it; the
+    /// plugin manifest is not a hook file.
+    func testRefreshInstallsTheGuardRules() throws {
+        write(bundled + "/secret_guard.py", "guard")
+        write(bundled + "/guard-rules.json", #"{"rules":[]}"#)
+        write(bundled + "/hooks.json", "{}")
+        let refreshed = try SetupManager.refreshInstalledHooks(bundledDir: bundled, installedDir: installed)
+        XCTAssertEqual(refreshed, ["guard-rules.json", "secret_guard.py"])
+        XCTAssertFalse(fm.fileExists(atPath: installed + "/hooks.json"))
+    }
+
+    /// The shipped hooks, copied the way the app installs them, answer the
+    /// app's own self-test.
+    func testInstalledHooksAnswerTheSelfTest() async throws {
+        let repoHooks = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("plugin/hooks").path
+        try SetupManager.refreshInstalledHooks(bundledDir: repoHooks, installedDir: installed)
+        var env = ProcessInfo.processInfo.environment
+        env["SECURE_AGENT_ACTIVITY_LOG"] = root + "/activity.jsonl"
+        let failure = await SetupManager.selfTestHook(at: installed + "/secret_guard.py", environment: env)
+        XCTAssertNil(failure)
+    }
 }
 
 /// A collector build newer than the last spool write lost the Full Disk

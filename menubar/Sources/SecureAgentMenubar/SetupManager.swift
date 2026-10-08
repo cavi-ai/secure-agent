@@ -614,10 +614,11 @@ public final class SetupManager: ObservableObject {
         NSHomeDirectory() + "/.config/opencode/hooks",
     ]
 
-    /// Hook scripts shipped in a bundled hooks directory (tests excluded).
+    /// Hook scripts shipped in a bundled hooks directory (tests excluded), and
+    /// guard-rules.json, which secret_guard.py loads from its own directory.
     nonisolated static func hookFileNames(in dir: String) throws -> [String] {
         try FileManager.default.contentsOfDirectory(atPath: dir)
-            .filter { $0.hasSuffix(".py") && !$0.hasPrefix("test_") }
+            .filter { ($0.hasSuffix(".py") && !$0.hasPrefix("test_")) || $0 == "guard-rules.json" }
     }
 
     public func installHooks() throws {
@@ -875,12 +876,22 @@ public final class SetupManager: ObservableObject {
         guard let hook = hookPath else {
             return "secret_guard.py is not installed"
         }
+        return await Self.selfTestHook(at: hook)
+    }
+
+    /// Runs the guard at hook with a harmless Read and checks it answers allow.
+    /// environment replaces the inherited one when set (tests point the
+    /// activity log at a temporary file).
+    nonisolated static func selfTestHook(at hook: String, environment: [String: String]? = nil) async -> String? {
         let payload = #"{"hook_event_name":"PreToolUse","tool_name":"Read","tool_input":{"file_path":"/tmp/secure-agent-self-test-allow.txt"}}"#
         guard let stdinData = payload.data(using: .utf8) else { return "internal: payload encoding" }
 
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         p.arguments = ["python3", hook]
+        if let environment {
+            p.environment = environment
+        }
         let inPipe = Pipe(), outPipe = Pipe(), errPipe = Pipe()
         p.standardInput = inPipe
         p.standardOutput = outPipe
@@ -907,9 +918,12 @@ public final class SetupManager: ObservableObject {
             p.terminate()
             return "hook timed out after 10s"
         }
-        _ = await errData
+        let errText = String(data: await errData, encoding: .utf8) ?? ""
         let out = String(data: await outData, encoding: .utf8) ?? ""
         guard let json = try? JSONSerialization.jsonObject(with: Data(out.utf8)) as? [String: Any] else {
+            if let lastError = errText.split(separator: "\n").last {
+                return "hook produced no JSON: \(lastError)"
+            }
             return "hook produced no JSON (python3 missing or hook crashed)"
         }
         if json["permission"] as? String == "allow" {
