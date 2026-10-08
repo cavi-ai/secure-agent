@@ -535,18 +535,7 @@ func (r *Resolver) EndTranscriptSession(id string, ts time.Time) {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if err := r.st.EndSession(id, ts); err != nil {
-		log.Printf("session: end transcript session: %v", err)
-		return
-	}
-	if sess, ok := r.st.GetSession(id); ok {
-		r.emitLocked(sess)
-	}
-	for scope, sid := range r.byScope {
-		if sid == id {
-			delete(r.byScope, scope)
-		}
-	}
+	r.endLocked(id, ts)
 }
 
 // rekeyLocked moves session old onto the authoritative id: the stored row,
@@ -568,6 +557,7 @@ func (r *Resolver) rekeyLocked(old, id string) bool {
 		return false
 	}
 	delete(r.deferred, old)
+	delete(r.touch, old)
 	for pid, sid := range r.byPID {
 		if sid == old {
 			r.byPID[pid] = id
@@ -932,24 +922,12 @@ func (r *Resolver) Sweep() {
 	// pid-less hook sessions after a day of silence.
 	for root, id := range r.st.SessionRoots() {
 		if _, tracked := r.byRoot[root]; !tracked && !live[root] && !r.tagger.Alive(root) {
-			if err := r.st.EndSession(id, now); err != nil {
-				log.Printf("session: end restarted session: %v", err)
-				continue
-			}
-			if sess, ok := r.st.GetSession(id); ok {
-				r.emitLocked(sess)
-			}
+			r.endLocked(id, now)
 		}
 	}
 	for _, sess := range r.st.ListSessions(store.SessionFilter{Status: model.SessionIdle, Limit: 500}) {
 		if sess.RootPID == 0 && now.Sub(sess.LastSeenAt) > endSilentAfter {
-			if err := r.st.EndSession(sess.ID, now); err != nil {
-				log.Printf("session: end silent session: %v", err)
-				continue
-			}
-			if stored, ok := r.st.GetSession(sess.ID); ok {
-				r.emitLocked(stored)
-			}
+			r.endLocked(sess.ID, now)
 		}
 		// A root taken before the agents config named that process infra (a
 		// Claude desktop conversation rooted at the app) outlives the
@@ -981,6 +959,7 @@ func (r *Resolver) endLocked(id string, now time.Time) {
 		r.emitLocked(sess)
 	}
 	delete(r.deferred, id)
+	delete(r.touch, id)
 	for root, sid := range r.byRoot {
 		if sid == id {
 			delete(r.byRoot, root)

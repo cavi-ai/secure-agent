@@ -22,6 +22,7 @@ func TestDeferredRekeyFailurePreservesEvidenceAndIndices(t *testing.T) {
 	now := time.Now()
 	r.deferred["old"] = model.Session{ID: "old", Harness: "claude", Workspace: "/repo", RootPID: 100, StartedAt: now, LastSeenAt: now, Status: model.SessionActive, Confidence: model.ConfProcessTree}
 	r.byPID[100], r.byRoot[100], r.byScope[scopeKey("claude", "/repo")] = "old", "old", "old"
+	r.touch["old"] = now
 	st.PutEvent(event.Event{Kind: event.KindFileOpen, SessionID: "old", TS: now})
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
@@ -34,6 +35,9 @@ func TestDeferredRekeyFailurePreservesEvidenceAndIndices(t *testing.T) {
 	r.HandleHandshake(Handshake{SessionID: "new", Harness: "claude", Workspace: "/repo", PID: 100, TS: now})
 	if r.byPID[100] != "old" || r.byRoot[100] != "old" || r.byScope[scopeKey("claude", "/repo")] != "old" || r.deferred["old"].ID != "old" {
 		t.Fatal("failed promotion changed resolver indices")
+	}
+	if !r.touch["old"].Equal(now) {
+		t.Fatal("failed promotion dropped activity throttle")
 	}
 	events := st.RecentEvents(10)
 	if len(events) != 1 || events[0].SessionID != "old" {
@@ -51,6 +55,9 @@ func TestDeferredRekeyFailurePreservesEvidenceAndIndices(t *testing.T) {
 	}
 	if _, ok := r.deferred["old"]; ok {
 		t.Fatal("promotion retained deferred session")
+	}
+	if _, ok := r.touch["old"]; ok {
+		t.Fatal("promotion retained retired identity's activity throttle")
 	}
 	if events := st.RecentEvents(10); len(events) != 1 || events[0].SessionID != "new" {
 		t.Fatalf("promotion retry evidence: %+v", events)
