@@ -72,13 +72,18 @@ const (
 // files the branch changes: the commits it gained, the files it deleted or
 // rewrote (and still differs from the branch tip on) and the commits that
 // touched them. It leaves the request untouched when the branch has no base.
+// A base from the branch's reflog (the default branch's history was
+// rewritten) is no ancestor of the default branch: commits "since the fork"
+// would be its whole history, so only the file statuses are filled.
 func mainSide(ctx context.Context, dir, branch, def string, req *model.WorktreeAdviceRequest) {
-	base, _, err := forkBase(ctx, dir, branch, def)
+	base, viaMergeBase, err := forkBase(ctx, dir, branch, def)
 	if err != nil || base == "" {
 		return
 	}
-	if n, err := countCommits(ctx, dir, "--no-merges", base+".."+def); err == nil {
-		req.Behind = n
+	if viaMergeBase {
+		if n, err := countCommits(ctx, dir, "--no-merges", base+".."+def); err == nil {
+			req.Behind = n
+		}
 	}
 	out, err := git(ctx, dir, "diff", "--name-only", "-z", "--no-renames", base, "HEAD")
 	if err != nil {
@@ -98,6 +103,9 @@ func mainSide(ctx context.Context, dir, branch, def string, req *model.WorktreeA
 	tipOut, err2 := git(ctx, dir, spec("diff", "--name-only", "-z", "--no-renames", "HEAD", def)...)
 	if err1 == nil && err2 == nil {
 		req.MainStatus = mainStatusLines(mainOut, nulFields(tipOut))
+	}
+	if !viaMergeBase {
+		return
 	}
 	if out, err := git(ctx, dir, spec("log", "--format=%cs %s", "-n", strconv.Itoa(maxAdviceCommits), base+".."+def)...); err == nil {
 		for _, s := range strings.Split(strings.TrimSpace(out), "\n") {

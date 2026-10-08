@@ -62,6 +62,9 @@ type Worktree struct {
 	// ContentExtended counts the added lines the default branch has only in
 	// a longer form (a list or import it extended); they are not missing.
 	ContentExtended int `json:"content_extended,omitempty"`
+	// ContentOther counts the other differences: lines or files the branch
+	// removes that the default branch still has, binaries and file modes.
+	ContentOther int `json:"content_other,omitempty"`
 	// Unrelated marks a HEAD that shares no commit with the default branch
 	// (its history was rewritten): the content check then measures from the
 	// branch's creation point, and Unique counts the old history too.
@@ -171,22 +174,45 @@ func classify(w *Worktree, f facts, now time.Time, staleAfter time.Duration) {
 	if w.ContentExtended > 0 {
 		longer = fmt.Sprintf(" (%s only in a longer form)", plural(w.ContentExtended, "line", "lines"))
 	}
+	// differs names what else keeps a measured branch from matching.
+	differs := ""
+	switch {
+	case w.ContentOther == 1:
+		differs = "1 line or file it removes or changes still differs on " + def
+	case w.ContentOther > 1:
+		differs = fmt.Sprintf("%d lines or files it removes or changes still differ on %s", w.ContentOther, def)
+	}
 	if w.Unique > 0 && !merged {
 		reason := fmt.Sprintf("%s on no remote and not in %s (the branch keeps them after removal)",
 			plural(w.Unique, "commit", "commits"), def)
+		var measure []string
+		if w.ContentLines > 0 {
+			added := "they add"
+			if w.Unrelated {
+				added = "it added since it was created"
+			}
+			measure = append(measure, fmt.Sprintf("%d of %d lines %s are on %s%s", w.ContentLines-w.ContentMissing, w.ContentLines, added, def, longer))
+		}
+		if differs != "" {
+			measure = append(measure, differs)
+		}
 		switch {
-		case w.Unrelated && w.ContentLines > 0:
-			reason = fmt.Sprintf("shares no history with %s (rewritten); %d of %d lines it added since it was created are on %s%s; the branch keeps its commits after removal",
-				def, w.ContentLines-w.ContentMissing, w.ContentLines, def, longer)
+		case w.Unrelated && len(measure) > 0:
+			reason = "shares no history with " + def + " (rewritten); " + strings.Join(measure, "; ") + "; the branch keeps its commits after removal"
 		case w.Unrelated:
 			reason += "; it shares no history with " + def + " (rewritten)"
-		case w.ContentLines > 0:
-			reason += fmt.Sprintf("; %d of %d lines they add are on %s%s", w.ContentLines-w.ContentMissing, w.ContentLines, def, longer)
+		case len(measure) > 0:
+			reason += "; " + strings.Join(measure, "; ")
 		}
 		review = append(review, reason)
 	}
 	mr := mergedReason(w.Merged, f.DefaultBranch)
 	if w.Merged == mergedContent {
+		if w.Unrelated {
+			// Only the branch's own commits were measured; whatever it was
+			// created from shares no history with the default branch.
+			mr = "the changes it made since it was created are on " + def + " (matched by content; its older history is not shared with " + def + ")"
+		}
 		mr += longer
 	}
 	if w.Stashes > 0 {

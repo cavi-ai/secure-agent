@@ -19,11 +19,12 @@ import (
 // The content check answers "is this branch's work on the default branch?"
 // when neither ancestry nor a patch id says so: a squash commit that carries
 // extra edits, a repository whose history was rewritten, a directory that was
-// renamed since. The branch is merged by content when every line it adds is
-// present in the file that stands in for it on the default branch, every
-// binary it adds is a blob the default branch has, and every file it deletes
-// is gone from the default branch. Anything the check cannot measure inside
-// its bounds is unknown, never guessed.
+// renamed since. The branch is merged by content when the file that stands in
+// for each changed file on the default branch has every line the branch adds
+// and none it removes (measureContent), every binary it adds is a blob the
+// default branch has, every file it deletes is gone and every mode it changes
+// matches. Anything the check cannot measure inside its bounds is unknown,
+// never guessed.
 
 const (
 	contentMaxFiles     = 1000    // changed files
@@ -55,6 +56,7 @@ type mergeVerdict struct {
 	lines     int
 	missing   int
 	extended  int  // lines the default branch has only in a longer form
+	other     int  // removed lines or files, binaries and modes that differ
 	unrelated bool // HEAD shares no commit with the default branch
 }
 
@@ -187,14 +189,14 @@ func readChanges(ctx context.Context, dir, base string) ([]change, error) {
 	return cs, nil
 }
 
-// fileDiff is what the zero-context patch says about one changed file.
+// fileDiff is what the zero-context patch says about one changed file; the
+// lines themselves are compared from the blobs.
 type fileDiff struct {
-	added  []string // trimmed, non-blank
 	binary bool
 }
 
 // readPatch parses the branch's combined diff into one fileDiff per change,
-// in the order `diff --raw` lists them.
+// in the order `diff --raw` lists them, and enforces the added-line bound.
 func readPatch(ctx context.Context, dir, base string, files int) ([]fileDiff, error) {
 	out, err := gitLimited(ctx, dir, contentMaxDiffBytes, "diff", "-U0", "--no-color", "--no-ext-diff",
 		"--no-textconv", "--no-renames", "--submodule=short", base, "HEAD")
@@ -214,16 +216,10 @@ func readPatch(ctx context.Context, dir, base string, files int) ([]fileDiff, er
 			inHunk = true
 		case !inHunk && (strings.HasPrefix(line, "Binary files ") || line == "GIT binary patch"):
 			diffs[len(diffs)-1].binary = true
-		case inHunk && strings.HasPrefix(line, "+"):
-			l := normalizeLine(line[1:])
-			if l == "" {
-				continue
-			}
+		case inHunk && strings.HasPrefix(line, "+") && normalizeLine(line[1:]) != "":
 			if total++; total > contentMaxLines {
 				return nil, errContentBound
 			}
-			d := &diffs[len(diffs)-1]
-			d.added = append(d.added, l)
 		}
 	}
 	if len(diffs) != files {
@@ -255,7 +251,9 @@ func (ix *pathIndex) has(p string) bool {
 
 // counterparts names the default-branch files that stand in for p: p itself
 // when it exists there, else those with p's basename and the longest common
-// trailing path. More than contentMaxTies equally good ones is a bound.
+// trailing path, which must include a directory: a file name alone
+// (README.md, .gitignore) says nothing about where the work went. More than
+// contentMaxTies equally good ones is a bound.
 func (ix *pathIndex) counterparts(p string) ([]string, error) {
 	if ix.big || ix.has(p) {
 		return []string{p}, nil
@@ -275,6 +273,9 @@ func (ix *pathIndex) counterparts(p string) ([]string, error) {
 		case n == best:
 			out = append(out, q)
 		}
+	}
+	if best < 2 {
+		return nil, nil
 	}
 	if len(out) > contentMaxTies {
 		return nil, errContentBound
@@ -437,7 +438,7 @@ func (h *Hunter) contentCheck(ctx context.Context, rs *repoScan, dir, base strin
 	if err != nil {
 		return unknown
 	}
-	v, err := measureContent(ctx, dir, rs.def, ix, changes, diffs)
+	v, err := measureContent(ctx, dir, base, rs.def, ix, changes, diffs)
 	if err != nil {
 		return unknown
 	}
@@ -459,8 +460,14 @@ func branchChanges(ctx context.Context, dir, base string) ([]change, []fileDiff,
 	return changes, diffs, nil
 }
 
-// measureContent compares every change with the default branch.
-func measureContent(ctx context.Context, dir, def string, ix *pathIndex, changes []change, diffs []fileDiff) (mergeVerdict, error) {
+// measureContent compares every change with the default branch. A text file
+// is compared by line counts: every line the branch adds (net of the base)
+// must be on the default branch at least as many times, and every line it
+// removes must be there no more often than at the branch tip. A missing
+// added line still counts when the default branch has it in a longer form
+// (matchLongerForms). A deleted file must be gone, a binary must be the same
+// blob and a changed file mode must match.
+func measureContent(ctx context.Context, dir, base, def string, ix *pathIndex, changes []change, diffs []fileDiff) (mergeVerdict, error) {
 	ctx, cancel := context.WithTimeout(ctx, gitTimeout)
 	defer cancel()
 	br, err := startBlobReader(ctx, dir)
@@ -469,47 +476,44 @@ func measureContent(ctx context.Context, dir, def string, ix *pathIndex, changes
 	}
 	defer br.close()
 
-	// files caches each counterpart's lines; nil is "not there".
-	files := map[string]*counterpart{}
 	read := 0
-	load := func(p string) (*counterpart, error) {
-		if cp, ok := files[p]; ok {
-			return cp, nil
+	text := func(spec string) (lineCounts, bool, error) {
+		b, err := br.get(spec, true)
+		if err != nil {
+			return lineCounts{}, false, err
 		}
-		b, err := br.get(def+":"+p, true)
+		if read += len(b.data); b.big || read > contentMaxReadBytes {
+			return lineCounts{}, false, errContentBound
+		}
+		if !b.found {
+			return lineCounts{}, false, nil
+		}
+		return countLines(b.data), true, nil
+	}
+	// files caches each counterpart's lines; nil is "not there".
+	files := map[string]*lineCounts{}
+	load := func(p string) (*lineCounts, error) {
+		if lc, ok := files[p]; ok {
+			return lc, nil
+		}
+		lc, found, err := text(def + ":" + p)
 		if err != nil {
 			return nil, err
 		}
-		if read += len(b.data); b.big || read > contentMaxReadBytes {
-			return nil, errContentBound
+		var out *lineCounts
+		if found {
+			out = &lc
 		}
-		var cp *counterpart
-		if b.found {
-			cp = &counterpart{set: map[string]struct{}{}}
-			for _, l := range strings.Split(string(b.data), "\n") {
-				if l = normalizeLine(l); l != "" {
-					if _, dup := cp.set[l]; !dup {
-						cp.set[l] = struct{}{}
-						cp.lines = append(cp.lines, l)
-					}
-				}
-			}
-		}
-		files[p] = cp
-		return cp, nil
+		files[p] = out
+		return out, nil
 	}
 
-	type miss struct {
-		line string
-		in   []*counterpart
-	}
 	var res mergeVerdict
 	var misses []miss
+	var modes []modeChange
 	contained := true
 	for i, c := range changes {
-		d := diffs[i]
-		switch {
-		case c.status == 'D':
+		if c.status == 'D' {
 			present := false
 			if ix.big {
 				b, err := br.get(def+":"+c.path, false)
@@ -521,13 +525,18 @@ func measureContent(ctx context.Context, dir, def string, ix *pathIndex, changes
 				present = ix.has(c.path)
 			}
 			if present {
-				contained = false
+				res.other++
 			}
-		case d.binary:
-			cands, err := ix.counterparts(c.path)
-			if err != nil {
-				return mergeVerdict{}, err
-			}
+			continue
+		}
+		cands, err := ix.counterparts(c.path)
+		if err != nil {
+			return mergeVerdict{}, err
+		}
+		if c.status == 'M' && c.oldMode != c.newMode {
+			modes = append(modes, modeChange{mode: c.newMode, paths: cands})
+		}
+		if diffs[i].binary {
 			same := false
 			for _, q := range cands {
 				b, err := br.get(def+":"+q, false)
@@ -537,104 +546,218 @@ func measureContent(ctx context.Context, dir, def string, ix *pathIndex, changes
 				same = same || (b.found && b.oid == c.oid)
 			}
 			if !same {
-				contained = false
+				res.other++
 			}
-		case len(d.added) > 0 || c.status == 'A':
-			cands, err := ix.counterparts(c.path)
+			continue
+		}
+		var cps []*lineCounts
+		for _, q := range cands {
+			lc, err := load(q)
 			if err != nil {
 				return mergeVerdict{}, err
 			}
-			var cps []*counterpart
-			for _, q := range cands {
-				cp, err := load(q)
-				if err != nil {
-					return mergeVerdict{}, err
-				}
-				if cp != nil {
-					cps = append(cps, cp)
-				}
+			if lc != nil {
+				cps = append(cps, lc)
 			}
-			if len(cps) == 0 {
-				contained = false
+		}
+		if len(cps) == 0 {
+			contained = false
+		}
+		head, _, err := text(c.oid)
+		if err != nil {
+			return mergeVerdict{}, err
+		}
+		var before lineCounts
+		if c.status == 'M' {
+			if before, _, err = text(base + ":" + c.path); err != nil {
+				return mergeVerdict{}, err
 			}
-			res.lines += len(d.added)
-			for _, l := range d.added {
-				found := false
-				for _, cp := range cps {
-					if _, ok := cp.set[l]; ok {
-						found = true
-						break
-					}
-				}
-				if !found {
-					misses = append(misses, miss{line: l, in: cps})
-				}
+		}
+		onMain := func(l string) int {
+			n := 0
+			for _, lc := range cps {
+				n = max(n, lc.n[l])
+			}
+			return n
+		}
+		for _, l := range head.order {
+			added := head.n[l] - before.n[l]
+			if added <= 0 {
+				continue
+			}
+			res.lines += added
+			if have := onMain(l); have < added {
+				misses = append(misses, miss{line: l, n: added - have, in: cps, base: before})
+			}
+		}
+		// A removed line the default branch still has more often than the
+		// branch tip is a removal that never landed. Lines without a word
+		// ("}", "*/") say nothing about where they went.
+		for _, l := range before.order {
+			if head.n[l] < before.n[l] && wordRE.MatchString(l) && onMain(l) > head.n[l] {
+				res.other++
 			}
 		}
 	}
-	// A line the default branch has only in a longer form (a list it
-	// appended to, an import that gained names) still carries the branch's
-	// work. Many such lines is a rewrite, not an extension; a long miss list
-	// is not merged either way and is not searched.
-	if len(misses) <= extendedMaxTries {
-		for _, m := range misses {
-			if extendedIn(m.line, m.in) {
-				res.extended++
-			}
+	if len(modes) > 0 {
+		n, err := modesDiffering(ctx, dir, def, modes)
+		if err != nil {
+			return mergeVerdict{}, err
 		}
+		res.other += n
 	}
-	res.missing = len(misses) - res.extended
+	if err := matchLongerForms(ctx, misses, &res); err != nil {
+		return mergeVerdict{}, err
+	}
 	res.state = mergedNo
-	if contained && res.missing == 0 && res.extended <= max(extendedMinCap, res.lines/10) {
+	if contained && res.missing == 0 && res.other == 0 && res.extended <= max(extendedMinCap, res.lines/10) {
 		res.state = mergedContent
 	}
 	return res, nil
 }
 
-// counterpart is one default-branch file's distinct non-blank lines; words
-// holds each line's word set, built the first time an extended match needs it.
-type counterpart struct {
-	set   map[string]struct{}
-	lines []string
-	words []map[string]struct{}
+// lineCounts is a file's non-blank lines, trailing whitespace dropped: how
+// many times each occurs, and each distinct line in file order.
+type lineCounts struct {
+	n     map[string]int
+	order []string
 }
 
-// wordRE splits a line into the words an extended match compares.
-var wordRE = regexp.MustCompile(`[A-Za-z_][A-Za-z0-9_]*|[0-9]+`)
-
-// extendedIn reports whether a counterpart has a longer line holding every
-// word of line, which needs at least extendedMinWords words.
-func extendedIn(line string, cps []*counterpart) bool {
-	want := wordRE.FindAllString(line, -1)
-	if len(want) < extendedMinWords {
-		return false
+func countLines(data []byte) lineCounts {
+	lc := lineCounts{n: map[string]int{}}
+	for _, l := range strings.Split(string(data), "\n") {
+		if l = normalizeLine(l); l != "" {
+			if lc.n[l] == 0 {
+				lc.order = append(lc.order, l)
+			}
+			lc.n[l]++
+		}
 	}
-	for _, cp := range cps {
-		if cp.words == nil {
-			cp.words = make([]map[string]struct{}, len(cp.lines))
-			for i, l := range cp.lines {
-				ws := map[string]struct{}{}
-				for _, w := range wordRE.FindAllString(l, -1) {
-					ws[w] = struct{}{}
-				}
-				cp.words[i] = ws
+	return lc
+}
+
+// miss is an added line the default branch lacks n times, with the files
+// that stand in for it there and the branch file's base.
+type miss struct {
+	line string
+	n    int
+	in   []*lineCounts
+	base lineCounts
+}
+
+// modeChange is a file whose mode the branch changed and the default-branch
+// paths that stand in for it.
+type modeChange struct {
+	mode  string
+	paths []string
+}
+
+// modesDiffering counts the mode changes no stand-in on def carries.
+func modesDiffering(ctx context.Context, dir, def string, changes []modeChange) (int, error) {
+	var paths []string
+	for _, m := range changes {
+		paths = append(paths, m.paths...)
+	}
+	modes := map[string]string{}
+	if len(paths) > 0 {
+		args := append([]string{"--literal-pathspecs", "ls-tree", "-z", "--full-tree", def, "--"}, paths...)
+		out, err := gitLimited(ctx, dir, contentMaxRawBytes, args...)
+		if err != nil {
+			return 0, err
+		}
+		for _, rec := range strings.Split(out, "\x00") {
+			meta, p, ok := strings.Cut(rec, "\t")
+			if f := strings.Fields(meta); ok && len(f) == 3 {
+				modes[p] = f[0]
 			}
 		}
-		for i, l := range cp.lines {
-			if len(l) <= len(line) {
+	}
+	n := 0
+	for _, m := range changes {
+		same := false
+		for _, p := range m.paths {
+			same = same || modes[p] == m.mode
+		}
+		if !same {
+			n++
+		}
+	}
+	return n, nil
+}
+
+// wordRE splits a line into the words a longer-form match compares.
+var wordRE = regexp.MustCompile(`[A-Za-z_][A-Za-z0-9_]*|[0-9]+`)
+
+// extendedMaxWork bounds the line comparisons one check spends on longer
+// forms (a variable so a test can lower it); past it, the rest stay missing.
+var extendedMaxWork = 5_000_000
+
+// matchLongerForms counts each miss as extended when the default branch has
+// it in a longer form (a list it appended to, an import that gained names),
+// else as missing. More than extendedMaxTries misses are not searched: that
+// many is not merged either way.
+func matchLongerForms(ctx context.Context, misses []miss, res *mergeVerdict) error {
+	work := 0
+	for _, m := range misses {
+		found := false
+		if len(misses) <= extendedMaxTries {
+			var err error
+			if found, err = longerFormIn(ctx, m, &work); err != nil {
+				return err
+			}
+		}
+		if found {
+			res.extended += m.n
+		} else {
+			res.missing += m.n
+		}
+	}
+	return nil
+}
+
+// longerFormIn reports whether a stand-in has a longer line holding every
+// word of the missed line. The line needs extendedMinWords words, and a
+// longer line the base already had is the branch's own pre-image (the line
+// it shortened or rewrote), never an extension.
+func longerFormIn(ctx context.Context, m miss, work *int) (bool, error) {
+	want := wordRE.FindAllString(m.line, -1)
+	if len(want) < extendedMinWords {
+		return false, nil
+	}
+	key := want[0]
+	for _, w := range want[1:] {
+		if len(w) > len(key) {
+			key = w
+		}
+	}
+	for _, lc := range m.in {
+		for _, l := range lc.order {
+			if *work++; *work > extendedMaxWork {
+				return false, nil
+			}
+			if *work%4096 == 0 {
+				if err := ctx.Err(); err != nil {
+					return false, err
+				}
+			}
+			if len(l) <= len(m.line) || m.base.n[l] > 0 || !strings.Contains(l, key) {
 				continue
+			}
+			have := map[string]bool{}
+			for _, w := range wordRE.FindAllString(l, -1) {
+				have[w] = true
 			}
 			all := true
 			for _, w := range want {
-				if _, ok := cp.words[i][w]; !ok {
+				if !have[w] {
 					all = false
 					break
 				}
 			}
 			if all {
-				return true
+				return true, nil
 			}
 		}
 	}
-	return false
+	return false, nil
 }

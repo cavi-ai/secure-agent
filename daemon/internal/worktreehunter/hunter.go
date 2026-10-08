@@ -660,7 +660,7 @@ func (h *Hunter) inspectOne(ctx context.Context, rs *repoScan, isMain bool, l li
 	if rs.def != "" {
 		m := h.mergeState(ctx, rs, l)
 		w.Merged, w.Unrelated = m.state, m.unrelated
-		w.ContentLines, w.ContentMissing, w.ContentExtended = m.lines, m.missing, m.extended
+		w.ContentLines, w.ContentMissing, w.ContentExtended, w.ContentOther = m.lines, m.missing, m.extended, m.other
 	}
 	return w, f
 }

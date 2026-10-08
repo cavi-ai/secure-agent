@@ -25,8 +25,8 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Cursor: Secure Agent's tool hooks beside the user's hooks.
 - CLI: `secure-agent telemetry repair`.
 - Pricing: Claude Sonnet 5.5.
-- Worktrees: `merged: content` when the default branch has every line the branch adds, including after a history rewrite.
-- Worktrees: `content_lines`, `content_missing`, `content_extended` and `unrelated_history`.
+- Worktrees: `merged: content` when the default branch has every line the branch adds and none it removes, including after a history rewrite.
+- Worktrees: `content_lines`, `content_missing`, `content_extended`, `content_other` and `unrelated_history`.
 - Worktrees: advisor sees the merge verdict and what the default branch did to the branch's files.
 
 ### Changed
@@ -94,6 +94,8 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Worktrees: an action cancels the background rescan.
 - Worktrees: a merged branch keeps its merge reason beside keep and review reasons.
 - Worktrees: the advisor no longer calls merged commits unmerged.
+- Worktrees: git reads never lazy-fetch objects in a partial clone.
+- Worktrees: repository text cannot close the advisor's evidence block.
 - Daemon: one daemon per store.
 - Build: `make` stops when a binary's commit stamp is not HEAD.
 

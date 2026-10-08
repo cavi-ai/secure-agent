@@ -317,7 +317,7 @@ func TestContentExtendedLines(t *testing.T) {
 	if row.Merged != mergedContent || row.ContentLines != 3 || row.ContentMissing != 0 || row.ContentExtended != 1 {
 		t.Fatalf("ext: merged=%q lines=%d missing=%d extended=%d, want content 3 0 1", row.Merged, row.ContentLines, row.ContentMissing, row.ContentExtended)
 	}
-	want := "its changes are on origin/main (matched by content) (1 line only in a longer form); active in the last 24 hours"
+	want := "the changes it made since it was created are on origin/main (matched by content; its older history is not shared with origin/main) (1 line only in a longer form); active in the last 24 hours"
 	if !slices.Contains(row.Reasons, want) {
 		t.Fatalf("ext reasons %q, want %q", row.Reasons, want)
 	}
@@ -412,5 +412,200 @@ func TestMainStatusLinesAreBounded(t *testing.T) {
 	}
 	if got := mainStatusLines("D\x00gone\x00A\x00new\x00M\x00kept\x00", []string{"gone", "new"}); strings.Join(got, "|") != "deleted on main: gone|added on main: new" {
 		t.Fatalf("filtered = %q", got)
+	}
+}
+
+// inspectRow is Inspect with a fresh hunter.
+func inspectRow(t *testing.T, home, wt string) Worktree {
+	t.Helper()
+	row, _, err := New(newMemStore(), home, Options{}).Inspect(context.Background(), wt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return row
+}
+
+// moveMainOn commits an unrelated file on main and pushes, so neither
+// ancestry nor a patch id says a branch is merged.
+func moveMainOn(t *testing.T, f fixture) {
+	t.Helper()
+	commit(t, f.main, "other.txt", "other\n", "other")
+	run(t, f.main, "push", "-q", "origin", "main")
+}
+
+// What a branch removes or flips must be gone from main too: a branch that
+// only deletes lines, or flips a value to one that exists elsewhere in the
+// file, is not merged while main still has the old line.
+func TestContentRemovalsMustLand(t *testing.T) {
+	home := isolateGit(t)
+	f := newFixture(t)
+	commit(t, f.main, "cfg.yml", "a:\n  enabled: false\nb:\n  enabled: true\n", "cfg")
+	run(t, f.main, "push", "-q", "origin", "main")
+	del := f.worktree(t, "del")
+	commit(t, del, "base.txt", "l1\nl2\nl5\nl6\nl7\n", "delete l3 l4")
+	flip := f.worktree(t, "flip")
+	commit(t, flip, "cfg.yml", "a:\n  enabled: true\nb:\n  enabled: true\n", "enable a")
+	moveMainOn(t, f)
+
+	row := inspectRow(t, home, del)
+	if row.Merged != mergedNo || row.ContentLines != 0 || row.ContentOther != 2 {
+		t.Fatalf("deletion: merged=%q lines=%d other=%d, want no 0 2", row.Merged, row.ContentLines, row.ContentOther)
+	}
+	want := "1 commit on no remote and not in origin/main (the branch keeps them after removal); 2 lines or files it removes or changes still differ on origin/main"
+	if !slices.Contains(row.Reasons, want) {
+		t.Fatalf("deletion reasons %q, want %q", row.Reasons, want)
+	}
+	if row = inspectRow(t, home, flip); row.Merged != mergedNo || row.ContentOther != 1 {
+		t.Fatalf("flip: merged=%q other=%d, want no 1", row.Merged, row.ContentOther)
+	}
+
+	// Once main makes the same removal, the branch is merged by content.
+	commit(t, f.main, "base.txt", "l1\nl2\nl5\nl6\nl7\nl8\n", "drop l3 l4, add l8")
+	run(t, f.main, "push", "-q", "origin", "main")
+	if row = inspectRow(t, home, del); row.Merged != mergedContent || row.ContentOther != 0 {
+		t.Fatalf("landed deletion: merged=%q other=%d, want content 0", row.Merged, row.ContentOther)
+	}
+}
+
+// A mode change is merged only when main's file has the same mode.
+func TestContentModeChangeMustMatch(t *testing.T) {
+	home := isolateGit(t)
+	f := newFixture(t)
+	wt := f.worktree(t, "mode")
+	if err := os.Chmod(filepath.Join(wt, "base.txt"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	run(t, wt, "commit", "-q", "-am", "chmod +x")
+	moveMainOn(t, f)
+	if row := inspectRow(t, home, wt); row.Merged != mergedNo || row.ContentOther != 1 {
+		t.Fatalf("mode only: merged=%q other=%d, want no 1", row.Merged, row.ContentOther)
+	}
+
+	// Main takes the mode change inside a bigger commit: no patch id
+	// matches, the content check does.
+	if err := os.Chmod(filepath.Join(f.main, "base.txt"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(f.main, "other.txt"), "other, edited\n")
+	run(t, f.main, "commit", "-q", "-am", "chmod and more")
+	run(t, f.main, "push", "-q", "origin", "main")
+	if row := inspectRow(t, home, wt); row.Merged != mergedContent {
+		t.Fatalf("mode on main: merged=%q, want content", row.Merged)
+	}
+}
+
+// The line a branch shortened or rewrote is still on main in its original,
+// longer form; that is the branch's own pre-image, never an extension.
+func TestContentPreImageIsNotALongerForm(t *testing.T) {
+	home := isolateGit(t)
+	f := newFixture(t)
+	commit(t, f.main, "calc.txt", "total = price + tax + shipping\nprint(total)\n", "calc")
+	commit(t, f.main, "gate.go", "func ok() bool {\n\tif count > limit && enabled {\n\t\treturn true\n\t}\n\treturn false\n}\n", "gate")
+	run(t, f.main, "push", "-q", "origin", "main")
+	short := f.worktree(t, "short")
+	commit(t, short, "calc.txt", "total = price + tax\nprint(total)\n", "drop shipping")
+	flip := f.worktree(t, "flip")
+	commit(t, flip, "gate.go", "func ok() bool {\n\tif count < limit {\n\t\treturn true\n\t}\n\treturn false\n}\n", "fix comparison")
+	moveMainOn(t, f)
+	for name, wt := range map[string]string{"shortened": short, "operator flip": flip} {
+		if row := inspectRow(t, home, wt); row.Merged != mergedNo || row.ContentExtended != 0 || row.ContentMissing != 1 {
+			t.Errorf("%s: merged=%q missing=%d extended=%d, want no 1 0", name, row.Merged, row.ContentMissing, row.ContentExtended)
+		}
+	}
+}
+
+// A line added many times needs as many copies on main: one existing copy
+// does not stand in for fifty.
+func TestContentCountsCopies(t *testing.T) {
+	home := isolateGit(t)
+	f := newFixture(t)
+	wt := f.worktree(t, "dup")
+	commit(t, wt, "base.txt", "l1\nl2\nl3\nl4\nl5\nl6\nl7\n"+strings.Repeat("l7\n", 50), "dup")
+	moveMainOn(t, f)
+	if row := inspectRow(t, home, wt); row.Merged != mergedNo || row.ContentLines != 50 || row.ContentMissing != 49 {
+		t.Fatalf("merged=%q lines=%d missing=%d, want no 50 49", row.Merged, row.ContentLines, row.ContentMissing)
+	}
+}
+
+// A new file stands in for nothing on main just because some other
+// directory has a file of the same name.
+func TestContentBasenameNeedsADirectory(t *testing.T) {
+	home := isolateGit(t)
+	f := newFixture(t)
+	wt := f.worktree(t, "gi")
+	commit(t, wt, "docs/.gitignore", ".env\nnode_modules/\n", "docs gitignore")
+	moveMainOn(t, f)
+	if row := inspectRow(t, home, wt); row.Merged != mergedNo || row.ContentMissing != 2 {
+		t.Fatalf("merged=%q missing=%d, want no 2", row.Merged, row.ContentMissing)
+	}
+}
+
+// After a history rewrite only the branch's own commits are measured; a
+// branch created from another unmerged branch says exactly that.
+func TestContentRewrittenHistoryNamesWhatWasMeasured(t *testing.T) {
+	home := isolateGit(t)
+	f := newFixture(t)
+	a := f.worktree(t, "A")
+	commit(t, a, "a.txt", "parent unmerged work\n", "A work")
+	b := filepath.Join(f.main, ".worktrees", "B")
+	run(t, f.main, "worktree", "add", "-q", "-b", "feat/B", b, "feat/A")
+	commit(t, b, "b.txt", "child work\n", "B work")
+	rewriteDefault(t, f, map[string]string{"b.txt": "child work\n"})
+	row := inspectRow(t, home, b)
+	want := "the changes it made since it was created are on origin/main (matched by content; its older history is not shared with origin/main)"
+	if row.Merged != mergedContent || len(row.Reasons) == 0 || !strings.HasPrefix(row.Reasons[len(row.Reasons)-1], want) {
+		t.Fatalf("merged=%q reasons=%q, want content with %q", row.Merged, row.Reasons, want)
+	}
+
+	// The advisor gets no "commits since the fork" for a base main never had.
+	req, err := New(newMemStore(), home, Options{}).AdviceRequest(context.Background(), b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if req.Behind != 0 || len(req.MainCommits) != 0 {
+		t.Fatalf("behind=%d mainCommits=%q, want none for an unrelated base", req.Behind, req.MainCommits)
+	}
+}
+
+// The longer-form search has a work bound; past it, lines stay missing.
+func TestContentLongerFormWorkBound(t *testing.T) {
+	home := isolateGit(t)
+	f := newFixture(t)
+	wt := f.worktree(t, "ext")
+	commit(t, wt, "reg.py", "alpha_one = 1\nbeta_two = 2\nguarded = alpha_one or beta_two\n", "reg")
+	rewriteDefault(t, f, map[string]string{"reg.py": "alpha_one = 1\nbeta_two = 2\nguarded = alpha_one or beta_two or gamma\n"})
+	old := extendedMaxWork
+	extendedMaxWork = 1
+	defer func() { extendedMaxWork = old }()
+	if row := inspectRow(t, home, wt); row.Merged != mergedNo || row.ContentMissing != 1 || row.ContentExtended != 0 {
+		t.Fatalf("merged=%q missing=%d extended=%d, want no 1 0", row.Merged, row.ContentMissing, row.ContentExtended)
+	}
+}
+
+// A cancelled check stops inside the longer-form search.
+func TestLongerFormHonorsCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	lc := countLines([]byte(strings.Repeat("unrelated words here\n", 5000)))
+	work := 4095
+	if _, err := longerFormIn(ctx, miss{line: "alpha beta gamma", n: 1, in: []*lineCounts{&lc}}, &work); err == nil {
+		t.Fatal("cancelled search returned no error")
+	}
+}
+
+// A partial clone never fetches a missing object while the hunter reads it.
+func TestGitNeverLazyFetches(t *testing.T) {
+	isolateGit(t)
+	f := newFixture(t)
+	run(t, f.origin, "config", "uploadpack.allowFilter", "true")
+	clone := filepath.Join(f.root, "partial")
+	run(t, f.root, "clone", "-q", "--no-checkout", "--filter=blob:none", "file://"+f.origin, clone)
+	blob := strings.TrimSpace(run(t, f.main, "rev-parse", "main:base.txt"))
+	if err := gitCommand(context.Background(), clone, "cat-file", "-e", blob).Run(); err == nil {
+		t.Fatal("the hunter read a blob the partial clone does not have")
+	}
+	out := runEnv(t, []string{"GIT_NO_LAZY_FETCH=1"}, clone, "cat-file", "--batch-check=%(objectname)", "--batch-all-objects")
+	if strings.Contains(out, blob) {
+		t.Fatalf("the hunter's read fetched %s into the clone", blob)
 	}
 }
