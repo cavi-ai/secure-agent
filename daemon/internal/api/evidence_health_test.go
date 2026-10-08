@@ -72,8 +72,10 @@ func TestTranscriptCheckpointFailureVisibleThroughRecovery(t *testing.T) {
 				}
 				if recovering {
 					data, err := os.ReadFile(state)
-					var offsets map[string]int64
-					if err != nil || json.Unmarshal(data, &offsets) != nil || offsets[source] != 5 {
+					var checkpoint struct {
+						Offsets map[string]int64 `json:"offsets"`
+					}
+					if err != nil || json.Unmarshal(data, &checkpoint) != nil || checkpoint.Offsets[source] != 5 {
 						t.Fatalf("recovered checkpoint not persisted: %s, %v", data, err)
 					}
 				}

@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -55,8 +56,46 @@ type ProxyServer struct {
 	// every other CONNECT is tunneled. Set once before Serve.
 	inspectHosts map[string]bool
 	// tunneled and decrypted count CONNECTs by how they were served.
-	tunneled  atomic.Uint64
-	decrypted atomic.Uint64
+	tunneled    atomic.Uint64
+	decrypted   atomic.Uint64
+	connMu      sync.Mutex
+	connections map[net.Conn]struct{}
+	closing     bool
+}
+
+// Hijacked connections are no longer owned by http.Server. Registration and
+// shutdown share a lock so a concurrent CONNECT cannot escape shutdown.
+func (ps *ProxyServer) ownConnection(ctx context.Context, c net.Conn) bool {
+	ps.connMu.Lock()
+	defer ps.connMu.Unlock()
+	if ps.closing || ctx.Err() != nil {
+		_ = c.Close()
+		return false
+	}
+	if ps.connections == nil {
+		ps.connections = make(map[net.Conn]struct{})
+	}
+	ps.connections[c] = struct{}{}
+	return true
+}
+
+func (ps *ProxyServer) releaseConnection(c net.Conn) {
+	_ = c.Close()
+	ps.connMu.Lock()
+	delete(ps.connections, c)
+	ps.connMu.Unlock()
+}
+
+func (ps *ProxyServer) closeConnections() {
+	ps.connMu.Lock()
+	ps.closing = true
+	connections := ps.connections
+	ps.connections = nil
+	ps.connMu.Unlock()
+	for c := range connections {
+		_ = c.Close()
+	}
+	ps.plainHTTPClient.CloseIdleConnections()
 }
 
 // SetInspectHosts sets the hosts an inspect-mode client's CONNECTs are
@@ -138,6 +177,17 @@ func (ps *ProxyServer) Serve(ctx context.Context) error {
 		return fmt.Errorf("failed to listen on proxy port %d: %w", ps.port.Load(), err)
 	}
 	defer listener.Close()
+	return ps.serveListener(ctx, listener)
+}
+
+func (ps *ProxyServer) serveListener(ctx context.Context, listener net.Listener) error {
+	ctx, cancelRun := context.WithCancel(ctx)
+	defer cancelRun()
+	ps.connMu.Lock()
+	ps.closing = false
+	ps.connMu.Unlock()
+	defer ps.closeConnections()
+	ps.server.BaseContext = func(net.Listener) context.Context { return ctx }
 
 	if tcpAddr, ok := listener.Addr().(*net.TCPAddr); ok {
 		ps.port.Store(int32(tcpAddr.Port))
@@ -153,6 +203,7 @@ func (ps *ProxyServer) Serve(ctx context.Context) error {
 
 	select {
 	case <-ctx.Done():
+		ps.closeConnections()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 		return ps.server.Shutdown(shutdownCtx)
@@ -248,6 +299,10 @@ func (ps *ProxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
 	}
+	if !ps.ownConnection(r.Context(), clientConn) {
+		return
+	}
+	defer ps.releaseConnection(clientConn)
 
 	_, _ = clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
 
@@ -287,6 +342,7 @@ func (ps *ProxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 		_ = clientConn.SetReadDeadline(time.Time{})
 		req.URL.Scheme = "https"
 		req.URL.Host = r.Host
+		req = req.WithContext(r.Context())
 
 		blocked, detail := ps.inspectRequest(req, host)
 		if blocked {
@@ -322,18 +378,24 @@ func (ps *ProxyServer) tunnel(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Hijacking not supported", http.StatusInternalServerError)
 		return
 	}
-	upstream, err := net.DialTimeout("tcp", r.Host, dialTimeout)
+	upstream, err := (&net.Dialer{Timeout: dialTimeout}).DialContext(r.Context(), "tcp", r.Host)
 	if err != nil {
 		http.Error(w, "upstream unreachable", http.StatusBadGateway)
 		return
 	}
+	if !ps.ownConnection(r.Context(), upstream) {
+		return
+	}
+	defer ps.releaseConnection(upstream)
 	clientConn, buffered, err := hj.Hijack()
 	if err != nil {
 		_ = upstream.Close()
 		return
 	}
-	defer clientConn.Close()
-	defer upstream.Close()
+	if !ps.ownConnection(r.Context(), clientConn) {
+		return
+	}
+	defer ps.releaseConnection(clientConn)
 	ps.tunneled.Add(1)
 	if _, err := clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n")); err != nil {
 		return
@@ -367,15 +429,18 @@ func (ps *ProxyServer) tunnel(w http.ResponseWriter, r *http.Request) {
 // tunnel may be reused for another request.
 func (ps *ProxyServer) forwardConnectRequest(clientConn net.Conn, req *http.Request, hostPort, host string) bool {
 	dialer := &net.Dialer{Timeout: dialTimeout}
-	targetConn, err := tls.DialWithDialer(dialer, "tcp", hostPort, &tls.Config{
+	targetConn, err := (&tls.Dialer{NetDialer: dialer, Config: &tls.Config{
 		ServerName: host,
 		MinVersion: tls.VersionTLS12,
-	})
+	}}).DialContext(req.Context(), "tcp", hostPort)
 	if err != nil {
 		writeRawResponse(clientConn, http.StatusBadGateway, "Bad Gateway", "", false)
 		return false
 	}
-	defer targetConn.Close()
+	if !ps.ownConnection(req.Context(), targetConn) {
+		return false
+	}
+	defer ps.releaseConnection(targetConn)
 
 	if err := req.Write(targetConn); err != nil {
 		return false

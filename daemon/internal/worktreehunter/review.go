@@ -41,6 +41,8 @@ func trashBlocker(row Worktree) string {
 		return "directory is not registered with git"
 	case row.Error != "":
 		return "could not inspect: " + row.Error
+	case row.Operation != "":
+		return "a git " + row.Operation + " is in progress; finish or abort it first"
 	case row.Submodules != 0:
 		return "it has populated submodules"
 	case row.InUse:

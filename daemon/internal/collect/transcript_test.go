@@ -900,8 +900,8 @@ func TestTranscriptCheckpointRetriesWithoutNewActivity(t *testing.T) {
 				continue
 			}
 			data, err := os.ReadFile(state)
-			var offsets map[string]int64
-			if err != nil || json.Unmarshal(data, &offsets) != nil || offsets[path] != int64(len(line)) {
+			var checkpoint transcriptCheckpoint
+			if err != nil || json.Unmarshal(data, &checkpoint) != nil || checkpoint.Offsets[path] != int64(len(line)) {
 				t.Fatalf("recovery did not persist delivered offset: %s, %v", data, err)
 			}
 			return

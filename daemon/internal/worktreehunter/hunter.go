@@ -627,6 +627,10 @@ func (h *Hunter) inspectOne(ctx context.Context, rs *repoScan, isMain bool, l li
 	w.Upstream, w.Ahead, w.Behind, w.UpstreamGone = st.Upstream, st.Ahead, st.Behind, st.UpstreamGone
 	w.Changed, w.Untracked, w.Conflicts, w.Paths = st.Changed, st.Untracked, st.Conflicts, st.Paths
 	w.PartlyStaged = st.PartlyStaged
+	if w.Operation, err = gitOperation(ctx, l.Path); err != nil {
+		w.Error = err.Error()
+		return w, f
+	}
 
 	ign, err := readIgnored(ctx, l.Path)
 	if err != nil {
@@ -666,9 +670,8 @@ func (h *Hunter) inspectOne(ctx context.Context, rs *repoScan, isMain bool, l li
 	return w, f
 }
 
-// mergeState answers whether HEAD's work is already in the default branch:
-// by ancestry, as a squash commit carrying the branch's combined diff, or by
-// content (the lines it adds are there, whatever commits carried them). The
+// mergeState checks ancestry and patch equivalence against the default branch.
+// Its content fallback reports unordered line similarity for review only. The
 // squash check needs a merge-base at most squashDepth commits back; the
 // content check also runs from the branch's creation point when the default
 // branch was rewritten and shares no history with it.

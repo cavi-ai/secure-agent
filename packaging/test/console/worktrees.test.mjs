@@ -20,6 +20,12 @@ const { worktreeStateCounts, worktreeGroups, worktreeRowHTML, worktreeGroupHTML,
   localDayKey, fmtDayKey, fmtElapsed, removalToastModel, removalToastHTML, reclaimDayText } = ctx;
 
 const REPO = '/Users/x/code/app';
+test('unfinished Git operation disables reviewed Trash even without conflicts', () => {
+  const row = { path: REPO + '/.worktrees/merge', state: 'keep', reasons: [], git_operation: 'merge' };
+  const html = worktreeRowHTML(row, { path: REPO });
+  assert.match(html, /merge is in progress/);
+  assert.ok(!html.includes('data-action="worktree-remove"'));
+});
 const report = () => ({
   duration_ms: 36211, cached: false, stale_days: 14,
   summary: { repos: 2, worktrees: 4 },

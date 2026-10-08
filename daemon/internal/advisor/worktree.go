@@ -85,6 +85,9 @@ func worktreePrompt(req model.WorktreeAdviceRequest) string {
 	if knownMergeVerdicts[req.Merged] {
 		fmt.Fprintf(&facts, "merged into the default branch: %s\n", req.Merged)
 	}
+	if req.Merged == "similar" {
+		fmt.Fprintln(&facts, "added lines match the default branch without considering order; this does not prove a merge")
+	}
 	if req.Behind > 0 {
 		fmt.Fprintf(&facts, "default branch commits since this branch forked: %d\n", req.Behind)
 	}
@@ -95,7 +98,7 @@ func worktreePrompt(req model.WorktreeAdviceRequest) string {
 // knownMergeVerdicts are the checker's merge verdicts; anything else stays
 // out of the prompt's trusted part.
 var knownMergeVerdicts = map[string]bool{
-	"ancestor": true, "squash": true, "empty": true, "content": true, "no": true, "unknown": true,
+	"ancestor": true, "squash": true, "empty": true, "no": true, "unknown": true,
 }
 
 func (s *Subscriber) assessWorktree(ctx context.Context, req model.WorktreeAdviceRequest) (model.AdvisorVerdict, error) {

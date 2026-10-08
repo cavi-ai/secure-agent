@@ -98,17 +98,17 @@ type CodexTracer struct {
 	homeLabel        string // CodexHomeLabel of the rollout
 	sessionID        string
 	cwd              string
-	settingsModel    string                 // model id from the latest thread_settings_applied
-	settingsProvider string                 // model_provider_id from the same line
-	contextModel     string                 // model id from the latest turn_context
-	metaProvider     string                 // session_meta model_provider
-	pending          map[string]pendingTool // call_id → open call
+	settingsModel    string       // model id from the latest thread_settings_applied
+	settingsProvider string       // model_provider_id from the same line
+	contextModel     string       // model id from the latest turn_context
+	metaProvider     string       // session_meta model_provider
+	pending          pendingTools // bounded call_id → open call
 }
 
 // NewCodexTracer returns a tracer for the rollout at path; path names the
 // Codex home whose plan headroom the tracer records ("" records none).
 func NewCodexTracer(path string) *CodexTracer {
-	return &CodexTracer{home: codexHomeOf(path), homeLabel: CodexHomeLabel(path), pending: map[string]pendingTool{}}
+	return &CodexTracer{home: codexHomeOf(path), homeLabel: CodexHomeLabel(path)}
 }
 
 // codexPrimeMaxBytes bounds the head read that restores a resumed rollout's
@@ -200,6 +200,10 @@ func (t *CodexTracer) ParseLine(line string) (events []event.Event, ok bool) {
 	case "session_meta":
 		var meta codexMeta
 		if err := json.Unmarshal(rec.Payload, &meta); err == nil {
+			if t.sessionID != "" && t.sessionID != meta.SessionID {
+				t.pending = pendingTools{}
+				t.settingsModel, t.settingsProvider, t.contextModel = "", "", ""
+			}
 			t.sessionID = meta.SessionID
 			t.cwd = meta.CWD
 			t.metaProvider = meta.ModelProvider
@@ -253,22 +257,16 @@ func (t *CodexTracer) ParseLine(line string) (events []event.Event, ok bool) {
 			if item.CallID == "" || item.Name == "" {
 				return nil, true
 			}
-			t.pending[item.CallID] = pendingTool{name: item.Name, ts: ts}
+			t.pending.put(item.CallID, pendingTool{name: item.Name, ts: ts})
 			return []event.Event{{
 				Kind: event.KindToolCall, TS: ts, SessionID: t.sessionID,
 				CallID: item.CallID, ToolName: item.Name, ToolStatus: "running",
 			}}, true
 		case "function_call_output":
-			p, found := t.pending[item.CallID]
-			if !found {
-				return nil, true
+			if e, found := t.pending.completion(item.CallID, t.sessionID, "ok", ts); found {
+				return []event.Event{e}, true
 			}
-			delete(t.pending, item.CallID)
-			return []event.Event{{
-				Kind: event.KindToolCall, TS: p.ts, SessionID: t.sessionID,
-				CallID: item.CallID, ToolName: p.name, ToolStatus: "ok",
-				DurationMs: ts.Sub(p.ts).Milliseconds(),
-			}}, true
+			return nil, true
 		}
 		return nil, true
 	}

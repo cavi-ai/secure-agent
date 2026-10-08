@@ -201,11 +201,11 @@ func persistedOffset(t *testing.T, statePath, p string) (int64, bool) {
 	if err != nil {
 		return 0, false
 	}
-	var m map[string]int64
+	var m transcriptCheckpoint
 	if err := json.Unmarshal(data, &m); err != nil {
 		t.Fatalf("offset file: %v", err)
 	}
-	off, ok := m[p]
+	off, ok := m.Offsets[p]
 	return off, ok
 }
 

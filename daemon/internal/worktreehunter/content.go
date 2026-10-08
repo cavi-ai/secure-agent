@@ -16,15 +16,11 @@ import (
 	"unicode"
 )
 
-// The content check answers "is this branch's work on the default branch?"
-// when neither ancestry nor a patch id says so: a squash commit that carries
-// extra edits, a repository whose history was rewritten, a directory that was
-// renamed since. The branch is merged by content when the file that stands in
-// for each changed file on the default branch has every line the branch adds
-// and none it removes (measureContent), every binary it adds is a blob the
-// default branch has, every file it deletes is gone and every mode it changes
-// matches. Anything the check cannot measure inside its bounds is unknown,
-// never guessed.
+// The content check measures similarity when neither ancestry nor a patch id
+// proves a merge. It compares added/removed line counts, binary blobs, deleted
+// files and modes, including renamed files and rewritten history. Text order
+// and behavior are not established: even a full match is review evidence only.
+// Anything the check cannot measure inside its bounds is unknown.
 
 const (
 	contentMaxFiles     = 1000    // changed files
@@ -611,7 +607,7 @@ func measureContent(ctx context.Context, dir, base, def string, ix *pathIndex, c
 	}
 	res.state = mergedNo
 	if contained && res.missing == 0 && res.other == 0 && res.extended <= max(extendedMinCap, res.lines/10) {
-		res.state = mergedContent
+		res.state = contentSimilar
 	}
 	return res, nil
 }

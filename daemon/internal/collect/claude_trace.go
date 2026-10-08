@@ -99,7 +99,7 @@ type claudeMsg struct {
 // file: tool_use ids pair with tool_results across lines, and the records of
 // one API call fold into one model call.
 type ClaudeTracer struct {
-	pending map[string]pendingTool // tool_use id → open call
+	pending pendingTools // bounded tool_use id → open call
 	// msgs maps a recent message id to the model call emitted for it;
 	// msgRing evicts the oldest past claudeMsgMemory.
 	msgs      map[string]claudeMsg
@@ -109,7 +109,7 @@ type ClaudeTracer struct {
 }
 
 func NewClaudeTracer() *ClaudeTracer {
-	return &ClaudeTracer{pending: map[string]pendingTool{}, msgs: map[string]claudeMsg{}}
+	return &ClaudeTracer{msgs: map[string]claudeMsg{}}
 }
 
 // Session returns the session id of the last transcript record parsed.
@@ -138,6 +138,12 @@ func (t *ClaudeTracer) ParseLine(line string) (events []event.Event, cwd string,
 	if rec.Type != "assistant" && rec.Type != "user" {
 		return nil, "", false
 	}
+	if t.sessionID != "" && t.sessionID != rec.SessionID {
+		t.pending = pendingTools{}
+		t.msgs = map[string]claudeMsg{}
+		t.msgRing = [claudeMsgMemory]string{}
+		t.msgNext = 0
+	}
 	t.sessionID = rec.SessionID
 	ts := time.Now()
 	if rec.Timestamp != "" {
@@ -155,7 +161,7 @@ func (t *ClaudeTracer) ParseLine(line string) (events []event.Event, cwd string,
 		}
 		for _, c := range contents {
 			if c.Type == "tool_use" && c.ID != "" && c.Name != "" {
-				t.pending[c.ID] = pendingTool{name: c.Name, ts: ts}
+				t.pending.put(c.ID, pendingTool{name: c.Name, ts: ts})
 				// One row per call, keyed by the harness's tool_use id: the
 				// completion below updates THIS row (store upserts on
 				// session_id+call_id), so a call is never a stale "running"
@@ -171,20 +177,13 @@ func (t *ClaudeTracer) ParseLine(line string) (events []event.Event, cwd string,
 			if c.Type != "tool_result" || c.ToolUseID == "" {
 				continue
 			}
-			p, found := t.pending[c.ToolUseID]
-			if !found {
-				continue
-			}
-			delete(t.pending, c.ToolUseID)
 			status := "ok"
 			if c.IsError {
 				status = "error"
 			}
-			events = append(events, event.Event{
-				Kind: event.KindToolCall, TS: p.ts, SessionID: rec.SessionID,
-				CallID: c.ToolUseID, ToolName: p.name, ToolStatus: status,
-				DurationMs: ts.Sub(p.ts).Milliseconds(),
-			})
+			if e, found := t.pending.completion(c.ToolUseID, rec.SessionID, status, ts); found {
+				events = append(events, e)
+			}
 		}
 		// A user record carrying real prompt text is a turn boundary. Tool
 		// results, system wrappers, isMeta and isSidechain records are not.
