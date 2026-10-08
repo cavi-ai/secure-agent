@@ -47,6 +47,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Dependencies: `modernc.org/sqlite` 1.60.1.
 
 ### Fixed
+- Doctor and posture: spool loss and bus drops fail only while they grow.
 - Costs: one model call per Claude API call.
 - Costs: duplicate stored Claude model calls removed at open.
 - Pricing: stored calls priced when a price is added.

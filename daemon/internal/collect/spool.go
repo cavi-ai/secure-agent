@@ -37,7 +37,9 @@ type SpoolStats struct {
 	// BytesLost is a cumulative lower bound for unread bytes overwritten by
 	// rotation or truncation during this run. A later healthy tick cannot
 	// reconstruct that evidence or clear the gap.
-	BytesLost    uint64
+	BytesLost uint64
+	// LostAt is when BytesLost last grew (zero before any loss).
+	LostAt       time.Time
 	Lines        uint64
 	Parsed       uint64
 	Skipped      uint64
@@ -56,6 +58,16 @@ type SpoolStats struct {
 // spoolLagFresh is how long a measured lag stays reportable without a newer
 // published event.
 const spoolLagFresh = 2 * time.Minute
+
+// LossWindow is how long after its last increase a loss counter (spool bytes,
+// bus drops) still counts as growing; Doctor and posture fail only then.
+const LossWindow = 10 * time.Minute
+
+// LossGrowing reports whether a loss counter last grew at `at` within
+// LossWindow of now.
+func LossGrowing(at, now time.Time) bool {
+	return !at.IsZero() && now.Sub(at) < LossWindow
+}
 
 // The privileged ES collector's spool (the collector daemon writes it as root).
 const ESPoolPath = "/var/db/secure-agent/es-spool.jsonl"
@@ -123,7 +135,11 @@ type ESServiceSnapshot struct {
 	// NewestEventAt and LagSeconds carry SpoolStats.NewestEvent and Lag: how
 	// late file events reach the daemon, whatever the spool's own mtime says.
 	NewestEventAt *time.Time `json:"newest_event_at,omitempty"`
-	LagSeconds    int64      `json:"lag_seconds"`
+	// LostAt is when BytesLost last grew; Losing is true within LossWindow
+	// of it.
+	LostAt     *time.Time `json:"lost_at,omitempty"`
+	Losing     bool       `json:"losing,omitempty"`
+	LagSeconds int64      `json:"lag_seconds"`
 }
 
 // SpoolState renders the spool facts for humans ("3.2 MB, updated 12 min ago").
@@ -241,6 +257,7 @@ type SpoolTailer struct {
 	statsMu sync.Mutex
 	stats   SpoolStats
 	lost    uint64
+	lostAt  time.Time
 	newest  time.Time
 	lag     time.Duration
 	lagAt   time.Time
@@ -264,6 +281,7 @@ func (t *SpoolTailer) Stats() SpoolStats {
 	defer t.statsMu.Unlock()
 	s := t.stats
 	s.BytesLost = t.lost
+	s.LostAt = t.lostAt
 	s.NewestEvent = t.newest
 	if !t.lagAt.IsZero() && t.clock().Sub(t.lagAt) <= spoolLagFresh {
 		s.Lag = t.lag
@@ -299,6 +317,7 @@ func (t *SpoolTailer) recordLost(bytes uint64) {
 	t.statsMu.Lock()
 	defer t.statsMu.Unlock()
 	t.lost += bytes
+	t.lostAt = t.clock()
 }
 
 // recordDrain publishes one tick's counters. FloodSince starts on the first

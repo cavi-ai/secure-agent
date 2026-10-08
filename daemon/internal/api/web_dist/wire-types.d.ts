@@ -443,6 +443,8 @@ export interface ESServiceSnapshot {
   bytes_skipped: number;
   flooding_since?: string;
   newest_event_at?: string;
+  lost_at?: string;
+  losing?: boolean;
   lag_seconds: number;
 }
 
@@ -469,6 +471,8 @@ export interface Status {
   fleet_configured?: boolean;
   unacted_flags_24h: number;
   bus_drops?: number;
+  bus_drop_at?: string;
+  bus_dropping?: boolean;
   storage_health?: WriteHealth;
   coverage?: CoverageStatus;
   firewall_stats?: Record<string, RuleStat>;

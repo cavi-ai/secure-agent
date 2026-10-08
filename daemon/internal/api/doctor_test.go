@@ -226,12 +226,23 @@ func TestDoctorHookActiveFailsWithAgentsAndNoHookEvents(t *testing.T) {
 func TestDoctorEgressAndBusFail(t *testing.T) {
 	st := testStore(t)
 	t.Cleanup(func() { st.Close() })
-	rep, _ := getDoctor(t, st, Status{Running: true, Uptime: "1h0m0s", ProxyEnabled: true, UninspectedEgress: 5, BusDrops: 7})
+	rep, _ := getDoctor(t, st, Status{Running: true, Uptime: "1h0m0s", ProxyEnabled: true, UninspectedEgress: 5, BusDrops: 7, BusDropping: true})
 	if c := doctorCheckByID(t, rep, "egress-routing"); c.State != doctorFail || !strings.Contains(c.Detail, "5") || !strings.Contains(c.Fix, "agent-env.sh") {
 		t.Fatalf("egress-routing = %+v, want fail with the count and the routing fix", c)
 	}
 	if c := doctorCheckByID(t, rep, "bus"); c.State != doctorFail || !strings.Contains(c.Detail, "7") || !strings.Contains(c.Fix, "cannot recover") {
 		t.Fatalf("bus = %+v, want fail with the count and honest recovery guidance", c)
+	}
+}
+
+// Drops that stopped more than the loss window ago pass and are named.
+func TestDoctorBusPassesOnceDropsStop(t *testing.T) {
+	st := testStore(t)
+	t.Cleanup(func() { st.Close() })
+	last := time.Now().Add(-collect.LossWindow - time.Minute)
+	rep, _ := getDoctor(t, st, Status{Running: true, Uptime: "1h0m0s", BusDrops: 7, BusDropAt: &last})
+	if c := doctorCheckByID(t, rep, "bus"); c.State != doctorPass || !strings.Contains(c.Detail, "7 subscriber deliveries dropped") || !strings.Contains(c.Detail, "none since") {
+		t.Fatalf("bus = %+v, want pass naming the earlier drops", c)
 	}
 }
 
@@ -463,8 +474,20 @@ func TestDoctorEgressRoutedCounts(t *testing.T) {
 	}
 }
 
-func TestDoctorSpoolLossIsNotClearedByHealthyDelivery(t *testing.T) {
-	es := collect.ESServiceSnapshot{State: "running", SpoolMtime: time.Now(), BytesLost: 123}
+// A spool loss fails Doctor and posture while it grows; once it stops, the
+// check passes and names the earlier loss.
+func TestDoctorSpoolLossFailsOnlyWhileGrowing(t *testing.T) {
+	earlier := time.Now().Add(-collect.LossWindow - time.Minute)
+	quiet := collect.ESServiceSnapshot{State: "running", SpoolMtime: time.Now(), BytesLost: 123, LostAt: &earlier}
+	if state, detail := checkFileTelemetry(doctorFacts{st: Status{ESService: &quiet}, now: time.Now()}); state != doctorPass || !strings.Contains(detail, "123 unread spool bytes lost at") || !strings.Contains(detail, "none since") {
+		t.Fatalf("quiet loss: state=%s detail=%s, want pass naming the loss", state, detail)
+	}
+	if items := esServiceItems(quiet); len(items) != 0 {
+		t.Fatalf("quiet loss posture items = %+v, want none", items)
+	}
+
+	now := time.Now()
+	es := collect.ESServiceSnapshot{State: "running", SpoolMtime: time.Now(), BytesLost: 123, LostAt: &now, Losing: true}
 	state, detail := checkFileTelemetry(doctorFacts{st: Status{ESService: &es}, now: time.Now()})
 	if state != doctorFail || !strings.Contains(detail, "123 unread spool bytes") {
 		t.Fatalf("state=%s detail=%s", state, detail)

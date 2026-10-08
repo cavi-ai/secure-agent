@@ -46,6 +46,19 @@ func TestPublishDropsWhenSubscriberFull(t *testing.T) {
 	if got := b.Dropped(); got != 1 {
 		t.Fatalf("Dropped = %d, want 1 (second publish on a full buffer-1 sub)", got)
 	}
+	if at := b.DroppedAt(); at.IsZero() || time.Since(at) > time.Minute {
+		t.Fatalf("DroppedAt = %v, want the drop time", at)
+	}
+}
+
+func TestDroppedAtIsZeroBeforeAnyDrop(t *testing.T) {
+	b := New(1)
+	defer b.Close()
+	_ = b.Subscribe()
+	b.Publish(event.Event{Kind: event.KindExec})
+	if at := b.DroppedAt(); !at.IsZero() {
+		t.Fatalf("DroppedAt = %v before any drop", at)
+	}
 }
 
 func TestTryPublishIsAtomicAndRetryable(t *testing.T) {

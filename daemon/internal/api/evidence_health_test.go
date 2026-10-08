@@ -126,6 +126,11 @@ func TestResourceEpisodeFailureVisibleThroughRecovery(t *testing.T) {
 func TestPostureSurfacesBusLoss(t *testing.T) {
 	a := newTestAPI("", testStore(t), nil, func() Status { return Status{Running: true} })
 	a.busDrops = func() uint64 { return 7 }
+	a.busDropAt = func() time.Time { return time.Now().Add(-collect.LossWindow - time.Minute) }
+	if p := a.computePosture(); p.State != "all-clear" {
+		t.Fatalf("posture after drops stopped = %+v, want all-clear", p)
+	}
+	a.busDropAt = time.Now
 	p := a.computePosture()
 	if p.State != "attention" || p.NeedsYou != 0 || p.CoverageCount != 1 {
 		t.Fatalf("posture hides lost evidence: %+v", p)

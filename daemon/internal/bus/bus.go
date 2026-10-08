@@ -3,6 +3,7 @@ package bus
 import (
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/event"
 )
@@ -15,6 +16,8 @@ type Bus struct {
 	subs    []chan event.Event
 	done    bool
 	dropped atomic.Uint64
+	// droppedAt is the Unix-nanosecond time of the last drop, zero before any.
+	droppedAt atomic.Int64
 }
 
 func New(buffer int) *Bus { return &Bus{buf: buffer} }
@@ -61,6 +64,7 @@ func (b *Bus) Publish(e event.Event) {
 		case ch <- e:
 		default: // subscriber full: drop, never block
 			b.dropped.Add(1)
+			b.droppedAt.Store(time.Now().UnixNano())
 		}
 	}
 }
@@ -88,6 +92,14 @@ func (b *Bus) TryPublish(e event.Event) bool {
 
 // Dropped is the number of per-subscriber publishes that found a full buffer.
 func (b *Bus) Dropped() uint64 { return b.dropped.Load() }
+
+// DroppedAt is when the last drop happened; zero before any.
+func (b *Bus) DroppedAt() time.Time {
+	if ns := b.droppedAt.Load(); ns != 0 {
+		return time.Unix(0, ns)
+	}
+	return time.Time{}
+}
 
 func (b *Bus) Close() {
 	b.mu.Lock()

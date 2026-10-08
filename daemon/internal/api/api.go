@@ -138,7 +138,11 @@ type Status struct {
 	// BusDrops counts in-process events a subscriber missed because its
 	// buffer was full. Zero is healthy; growth under N-agent bursts is the
 	// hot-path signal to surface.
-	BusDrops      uint64             `json:"bus_drops,omitempty"`
+	BusDrops uint64 `json:"bus_drops,omitempty"`
+	// BusDropAt is when the last drop happened; BusDropping is true within
+	// collect.LossWindow of it.
+	BusDropAt     *time.Time         `json:"bus_drop_at,omitempty"`
+	BusDropping   bool               `json:"bus_dropping,omitempty"`
 	StorageHealth *store.WriteHealth `json:"storage_health,omitempty"`
 
 	// Coverage reports how many running harnesses the daemon is actually
@@ -220,6 +224,7 @@ type API struct {
 
 	publishEvent func(event.Event)
 	busDrops     func() uint64
+	busDropAt    func() time.Time
 
 	// deltas is the typed state-change fan-out the SSE stream serves.
 	// lastPosture dedupes posture deltas (state + item count).
@@ -324,6 +329,7 @@ type Deps struct {
 	FleetSink       GuardEventSink
 	FleetConfigured func() bool
 	BusDrops        func() uint64
+	BusDropAt       func() time.Time
 	PublishEvent    func(event.Event)
 	DeltaHub        *DeltaHub
 
@@ -400,6 +406,7 @@ func New(d Deps) *API {
 		fleetSinks:      d.FleetSink,
 		fleetConfigured: d.FleetConfigured,
 		busDrops:        d.BusDrops,
+		busDropAt:       d.BusDropAt,
 		publishEvent:    d.PublishEvent,
 		deltaHub:        d.DeltaHub,
 		isAgentPID:      d.IsAgentPID,
@@ -950,6 +957,12 @@ func (a *API) currentStatus() Status {
 func (a *API) evidenceStatus(st Status) Status {
 	if a.busDrops != nil {
 		st.BusDrops = a.busDrops()
+	}
+	if a.busDropAt != nil {
+		if at := a.busDropAt(); !at.IsZero() {
+			st.BusDropAt = &at
+			st.BusDropping = collect.LossGrowing(at, time.Now())
+		}
 	}
 	if a.store != nil {
 		h := a.store.WriteHealth()
