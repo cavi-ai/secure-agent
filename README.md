@@ -65,7 +65,7 @@ As AI coding agents (Claude Code, Cursor, Codex, Antigravity, Pi, Qwen Code, ope
   Pure-Go terminal utility (`secure-agent status`, `flags`, `incidents`, `kill`, `fleet`, `service`) for inspecting security posture directly from terminal prompts. `secure-agent service install` runs the daemon headless under launchd for fleet/CI nodes with no GUI login.
   - `secure-agent telemetry repair` — asks the menu bar app to re-register its file-telemetry helper when launchd will not start it; exits 1 unless the helper runs within 60 s.
   - `secure-agent doctor` — hooks, file telemetry, collectors, trace coverage, sessions, pairing, pricing, retention, egress; repo attribution is measured only for sessions inside Git workspaces. Exits 1 on any failure.
-  - `secure-agent worktrees` — every git worktree from agent sessions, agent worktree directories and a saved repo list, each marked remove, review, keep or prune with the reasons; `worktrees remove` and `worktrees prune` act only on those verdicts. The console's Sessions › Cleanup view lets you inspect review items and move a reviewed folder to Trash while retaining its Git branch, commits, and stashes. “Ask the agent” appears only for a live, resumable agent session; “Ask advisor” requests an advisory note. The view also shows disk usage per project and what cleanups have reclaimed (`secure-agent cleanup log`).
+  - `secure-agent worktrees` — every git worktree from agent sessions, agent worktree directories and a saved repo list, each marked remove, review, keep or prune with the reasons; `worktrees remove` and `worktrees prune` act only on those verdicts. The console's System tab shows them: Remove on a review or keep row moves the folder to the Trash while the Git branch, commits, and stashes stay (refused while an agent session is live, the worktree is locked, or a detached HEAD holds commits no branch keeps). “Ask <harness>” appears only for a live, resumable agent session; “Ask advisor” requests an advisory note; “Discuss” puts the question to the Agent tab. The tab also shows disk usage per project and what cleanups have reclaimed (`secure-agent cleanup log`).
 
 - 🔌 **Local Control & Query API**  
   Exposes a secure HTTP API over a Unix domain socket (`~/.config/secure-agent/daemon.sock`) for querying status, events, flags, incidents, and initiating process termination.
@@ -377,8 +377,8 @@ triage verdict (`advisor: benign / suspicious / malicious` chip on the flag
 card, with the rationale as its tooltip), the posture banner and menubar hero
 summarize how many critical flags look benign, and each incident card gains a
 plain-English narrative. On request, it also writes a one-line note on a
-worktree from the console's Sessions › Cleanup view or `secure-agent worktrees advise`,
-and a short cleanup plan for a project's worktrees and clutter from the same view
+worktree from the console's System tab or `secure-agent worktrees advise`,
+and a short cleanup plan for a project's worktrees and clutter from the same tab
 or `secure-agent cleanup advise`; neither changes a verdict or an action. The advisor is async and fails silent:
 if the model is down, nothing changes except the absence of verdicts.
 
@@ -402,7 +402,7 @@ The Go daemon listens on a local Unix domain socket (`~/.config/secure-agent/dae
 | `/worktrees` | `GET` | Every git worktree found, with a remove/review/keep/prune verdict and its reasons (`?refresh=1` rescans). |
 | `/worktrees/repos` | `POST` | Add a repository to the worktree hunter's saved list, or hide it (`{"path": "...", "hidden": true}`). |
 | `/worktrees/remove` | `POST` | Remove a worktree whose fresh verdict is `remove` (`{"path": "..."}`), or prune missing ones (`{"repo": "...", "prune": true}`). |
-| `/worktrees/review-trash` | `POST` | After inspecting a `review` row, move its folder to Trash and unregister it; fresh facts must still match. |
+| `/worktrees/review-trash` | `POST` | Move a `keep` or `review` row's folder to Trash and unregister it; fresh facts must still match, and a live session, lock, loose commits, conflicts or partly staged files refuse it. |
 | `/worktrees/advise` | `POST` | Ask the local advisor for a note on one worktree (`{"path": "..."}`); advisory only. |
 | `/worktrees/reveal`, `/worktrees/reconnect`, `/worktrees/trash` | `POST` | For a folder whose repository moved or was deleted: open it in Finder, link it again with `git worktree repair`, or move it to the Trash. |
 | `/cleanup/ledger` | `GET` | What cleanups removed and the bytes each gave back, with all-time and 30-day totals. |
@@ -413,6 +413,7 @@ The Go daemon listens on a local Unix domain socket (`~/.config/secure-agent/dae
 | `/agent/status`, `/agent/skills`, `/agent/runs` | `GET` | The system agent's model and harness readiness, its skills, and its dispatches. |
 | `/agent/chat` | `GET`, `POST`, `DELETE` | Direct Ollama conversation; `POST {"message","workdir"}` sends one (the reply lands asynchronously). A harness field is rejected. |
 | `/agent/analyze` | `POST` | Build a bounded, masked local summary from stored flags, evidence, and operator actions and ask Ollama for an advisory recommendation. No command runs. |
+| `/agent/worktree` | `POST` | Ask the chat about one worktree (`{"path"}`): the question carries the checker's facts and the repository data as untrusted evidence; follow-ups keep it in context. |
 | `/agent/recommendations` | `GET`, `POST` | Review queued analysis replies; `POST {"message_id","state":"dismissed"}` dismisses a pending item. |
 | `/agent/actions` | `POST` | Start the exact local command stored on an assistant message: `{"message_id":123}`. The caller cannot supply command text. |
 | `/agent/plans` | `GET`, `POST`, `DELETE` | Plans with whether each can run now; save a reply's proposal (`{"message_id"}`) or write one. |

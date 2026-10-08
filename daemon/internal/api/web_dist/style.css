@@ -1742,7 +1742,7 @@ button.fact:hover { background: var(--bg-3); border-color: var(--brand); }
 }
 /* Icon sprite sheets: out of flow, so the 0x0 <svg> adds no line box. */
 .sprite-sheet { position: absolute; }
-.confirm-message { color: var(--tx-2); margin: 6px 0 12px; }
+.confirm-message { color: var(--tx-2); margin: 6px 0 12px; white-space: pre-line; overflow-wrap: anywhere; }
 .confirm-input { width: 100%; margin-bottom: 12px; }
 .confirm-actions { display: flex; justify-content: flex-end; gap: 8px; }
 

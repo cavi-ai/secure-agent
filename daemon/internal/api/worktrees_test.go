@@ -451,7 +451,7 @@ func TestWorktreeAskEndpoint(t *testing.T) {
 }
 
 func TestWorktreeReviewTrashEndpoint(t *testing.T) {
-	home, root, repo, clean, _, _ := worktreeFixture(t)
+	home, root, repo, clean, dirty, _ := worktreeFixture(t)
 	excludes := filepath.Join(root, "excludes")
 	if err := os.WriteFile(excludes, []byte(".env\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -484,6 +484,20 @@ func TestWorktreeReviewTrashEndpoint(t *testing.T) {
 	}
 	if _, err := os.Stat(clean); !os.IsNotExist(err) {
 		t.Fatalf("worktree still present: %v", err)
+	}
+	// A keep row (an untracked file) goes to the Trash the same way.
+	keep, _, err := hunter.Inspect(t.Context(), dirty)
+	if err != nil || keep.State != worktreehunter.StateKeep {
+		t.Fatalf("keep row: %+v, %v", keep, err)
+	}
+	body, _ := json.Marshal(map[string]any{"path": dirty, "head": keep.Head, "reasons": keep.Reasons})
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/worktrees/review-trash", strings.NewReader(string(body))))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("keep row to the Trash: %d %s", rec.Code, rec.Body.String())
+	}
+	if _, err := os.Stat(dirty); !os.IsNotExist(err) {
+		t.Fatalf("keep worktree still present: %v", err)
 	}
 	if !apiroutes.IsMutation(http.MethodPost, "/worktrees/review-trash") || !apiroutes.ConsoleAllowed(http.MethodPost, "/worktrees/review-trash") {
 		t.Fatal("review-trash must be a console-admitted mutation")
