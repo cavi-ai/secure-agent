@@ -294,6 +294,9 @@ func initializeSchema(db *sql.DB) error {
 	if _, err := tx.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_events_turn_dedupe ON events(kind,session_id,ts) WHERE kind=13 AND session_id!=''`); err != nil {
 		return fmt.Errorf("create turn dedupe index: %w", err)
 	}
+	if _, err := tx.Exec(traceActivityIndexSQL); err != nil {
+		return fmt.Errorf("create trace activity index: %w", err)
+	}
 	// Flags gain an acknowledged marker: when the operator acts on a flag
 	// (applies any disposition), the flag stops counting as critical and
 	// dims in the UI — "acted upon" is a first-class state, not an endless

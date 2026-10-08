@@ -38,6 +38,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Send selected findings directly to the local agent review queue with daemon-built evidence; local commands still require explicit confirmation.
 
 ### Fixed
+- Index hook and trace events by kind and time (partial: those kinds only). The harness coverage behind every `/status`, `/snapshot` and `/posture` read every retained trace event under the store lock; it now reads the last 24 h from the index.
 - Withdraw a guard prompt when its hook stops waiting (its own deadline, a killed hook, a dropped connection). An "Allow Always" given after the hook had denied the tool call saved a permanent allow rule and recorded an allow; it now saves nothing and the decision is recorded as a deny. A duplicate request keeps the prompt open until it is answered or the last waiting hook leaves.
 - Index events by remote host (partial: only events with a host). The advisor's per-flag host trend and the host detail view no longer scan every stored event under the store lock.
 - Index flags (pid, instant, rule and agent) and incidents (open-incident key, instant, flag id); flag and incident retention deletes only the overflow. At the 10,000-flag and 5,000-incident caps a new flag no longer sorts both tables under the store lock.

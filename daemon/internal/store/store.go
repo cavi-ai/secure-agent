@@ -64,6 +64,22 @@ const (
 	hostFirstSeenSQL = `SELECT MIN(ts) FROM events WHERE remote_host = ? AND remote_host != ''`
 )
 
+// Harness activity (hook and trace events) behind every /status, /snapshot
+// and /posture: idx_events_trace_ts covers only those kinds, and the
+// statement spells out the same kind list, which the partial index needs.
+var (
+	traceActivityKinds = fmt.Sprintf("%d, %d, %d, %d",
+		event.KindPluginAction, event.KindToolCall, event.KindTurn, event.KindModelCall)
+	traceActivityIndexSQL = `CREATE INDEX IF NOT EXISTS idx_events_trace_ts ON events(kind, ts, session_id)
+		WHERE kind IN (` + traceActivityKinds + `);`
+	harnessActivitySQL = fmt.Sprintf(`SELECT s.harness,
+		MAX(CASE WHEN e.kind = %d THEN e.ts ELSE '' END),
+		MAX(CASE WHEN e.kind IN (%d, %d, %d) THEN e.ts ELSE '' END)
+		FROM events e JOIN sessions s ON s.id = e.session_id
+		WHERE e.kind IN (%s) AND e.ts >= ? AND s.harness != ''
+		GROUP BY s.harness`, event.KindPluginAction, event.KindToolCall, event.KindTurn, event.KindModelCall, traceActivityKinds)
+)
+
 // pruneMinInterval is the shortest gap between two insert-driven prunes.
 var pruneMinInterval = 30 * time.Second
 
