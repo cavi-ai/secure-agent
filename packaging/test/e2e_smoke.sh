@@ -147,7 +147,7 @@ func main() {
 		memory[i] = 1
 	}
 	go func() {
-		deadline := time.Now().Add(6 * time.Second)
+		deadline := time.Now().Add(30 * time.Second)
 		for time.Now().Before(deadline) {}
 	}()
 	time.Sleep(500 * time.Millisecond)
@@ -550,7 +550,9 @@ fi
 #   and leave the active set.
 # ---------------------------------------------------------------------------
 OPERATOR_PASSED=false
-FLAG_ID=$(curl -s --unix-socket "$SOCKET_PATH" "http://unix/flags?limit=1" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d[0]["id"] if d else "")' 2>/dev/null || echo "")
+# Select and inspect the same correlation snapshot: resource flags may arrive
+# later, changing which flag is newest.
+FLAG_ID=$(echo "$FLAGS_RESP" | python3 -c 'import json,sys; d=json.load(sys.stdin); f=next((f for f in d if f.get("rule") in ("sensitive-read-then-connect", "keychain-access")), {}); print(f.get("id", ""))' 2>/dev/null || echo "")
 if [ -n "$FLAG_ID" ]; then
   # 1. Mute the flag's rule+host: must persist AND acknowledge existing flags.
   HOST=$(echo "$FLAGS_RESP" | python3 -c "

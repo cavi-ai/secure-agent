@@ -74,6 +74,9 @@ func main() {
 	}
 
 	// Exit when the owning parent (the menubar app) goes away, or on a signal.
-	comps.WaitForShutdown(ctx)
+	runErr := comps.WaitForShutdown(ctx)
 	comps.Shutdown()
+	if runErr != nil {
+		log.Fatalf("daemon stopped: %v", runErr)
+	}
 }

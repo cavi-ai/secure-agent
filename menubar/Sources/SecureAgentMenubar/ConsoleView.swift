@@ -494,7 +494,7 @@ struct ConsoleView: View {
                 // The restart limiter gave up: without this the popover just
                 // says "Disconnected" forever with no way back.
                 HStack(spacing: 8) {
-                    Label("Daemon crashed repeatedly and was left stopped", systemImage: "exclamationmark.octagon.fill")
+                    Label("Daemon could not stay running and was left stopped", systemImage: "exclamationmark.octagon.fill")
                         .font(.system(size: 11)).foregroundStyle(Color.bad)
                         .fixedSize(horizontal: false, vertical: true)
                     Spacer()
