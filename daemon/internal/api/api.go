@@ -769,21 +769,42 @@ func (a *API) mux(socket bool) *http.ServeMux {
 func (a *API) ConsoleHandler() http.Handler { return a.mux(false) }
 
 func (a *API) Serve(ctx context.Context) error {
-	if a.socketPath == "" {
-		return errors.New("socket path cannot be empty")
+	listener, err := ListenUnixSocket(a.socketPath)
+	if err != nil {
+		return err
+	}
+	return a.ServeListener(ctx, listener)
+}
+
+// ListenUnixSocket binds the control endpoint before the daemon announces
+// startup. Only a socket may be replaced; an operator's other files survive.
+func ListenUnixSocket(path string) (net.Listener, error) {
+	if path == "" {
+		return nil, errors.New("socket path cannot be empty")
 	}
 
-	if err := os.MkdirAll(filepath.Dir(a.socketPath), 0o700); err != nil {
-		return fmt.Errorf("failed to create socket dir: %w", err)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return nil, fmt.Errorf("failed to create socket dir: %w", err)
 	}
 
-	_ = os.Remove(a.socketPath) // remove stale socket file if present
+	info, err := os.Lstat(path)
+	if err != nil && !os.IsNotExist(err) {
+		return nil, fmt.Errorf("inspect socket path: %w", err)
+	}
+	if err == nil {
+		if info.Mode()&os.ModeSocket == 0 {
+			return nil, fmt.Errorf("refusing to replace non-socket path %s", path)
+		}
+		if err := os.Remove(path); err != nil {
+			return nil, fmt.Errorf("remove stale socket: %w", err)
+		}
+	}
 
 	oldMask := unix.Umask(0077)
-	listener, err := net.Listen("unix", a.socketPath)
+	listener, err := net.Listen("unix", path)
 	unix.Umask(oldMask)
 	if err != nil {
-		return fmt.Errorf("failed to listen on unix socket: %w", err)
+		return nil, fmt.Errorf("failed to listen on unix socket: %w", err)
 	}
 	// Never unlink the socket file on exit. Go's UnixListener.Close removes
 	// the path by default, and when two daemons overlap (old instance exiting
@@ -794,14 +815,32 @@ func (a *API) Serve(ctx context.Context) error {
 	if ul, ok := listener.(*net.UnixListener); ok {
 		ul.SetUnlinkOnClose(false)
 	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		listener.Close()
+		return nil, fmt.Errorf("secure socket permissions: %w", err)
+	}
+	return listener, nil
+}
+
+// ServeListener owns the already-bound listener and closes it on every exit.
+func (a *API) ServeListener(ctx context.Context, listener net.Listener) (serveErr error) {
 	defer listener.Close()
-
-	_ = os.Chmod(a.socketPath, 0o600)
-
+	requestCtx, cancelRequests := context.WithCancel(ctx)
 	server := &http.Server{
 		Handler:     a.gate(a.peerChk, a.buildMux()),
 		ConnContext: gateConnContext,
+		BaseContext: func(net.Listener) context.Context { return requestCtx },
 	}
+	defer func() {
+		// Listener failure and context cancellation both stop accepted clients.
+		// Cancel streaming handlers first, then drain with a bounded force-close.
+		cancelRequests()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			serveErr = errors.Join(serveErr, err, server.Close())
+		}
+	}()
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -813,9 +852,7 @@ func (a *API) Serve(ctx context.Context) error {
 
 	select {
 	case <-ctx.Done():
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		return server.Shutdown(shutdownCtx)
+		return nil
 	case err := <-errCh:
 		return err
 	}

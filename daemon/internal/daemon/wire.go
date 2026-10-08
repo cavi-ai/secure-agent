@@ -568,7 +568,7 @@ func fleetConfigured(webhooks []config.WebhookConfig) bool {
 // buildStatusFn assembles the /status payload from live component state.
 // advisorHealth is resolved per call (the advisor stack hot-swaps on config
 // reload — a captured bool/subscriber would go stale).
-func buildStatusFn(proxyServer *proxy.ProxyServer, tagger *agents.Tagger, cr *correlate.Correlator, eng *firewall.Engine, reg *supervise.Registry, st *store.Store, startTime time.Time, advisorHealth func() advisor.HealthSnapshot, fleetOn func() bool, spoolBased bool) api.StatusFunc {
+func buildStatusFn(proxyServer *proxy.ProxyServer, tagger *agents.Tagger, cr *correlate.Correlator, eng *firewall.Engine, reg *supervise.Registry, st *store.Store, startTime time.Time, advisorHealth func() advisor.HealthSnapshot, fleetOn func() bool, esServiceProbe func() (collect.ESServiceSnapshot, error)) api.StatusFunc {
 	return func() api.Status {
 		proxyActive := proxyServer != nil
 		proxyPort := 0
@@ -601,8 +601,8 @@ func buildStatusFn(proxyServer *proxy.ProxyServer, tagger *agents.Tagger, cr *co
 		// freshness) so posture can report a crash-looping root service the
 		// tailer cannot see. Best-effort; nil when not spool-based.
 		var esSvc *collect.ESServiceSnapshot
-		if spoolBased {
-			if snap, err := collect.ESServiceProbe(); err == nil {
+		if esServiceProbe != nil {
+			if snap, err := esServiceProbe(); err == nil {
 				esSvc = &snap
 			}
 		}

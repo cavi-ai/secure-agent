@@ -136,8 +136,14 @@ func TestBuildStatusFn(t *testing.T) {
 	reg := supervise.NewRegistry()
 
 	fn := buildStatusFn(nil, tagger, cr, nil, reg, nil, time.Now().Add(-2*time.Second),
-		func() advisor.HealthSnapshot { return advisor.HealthSnapshot{Enabled: true} }, nil, false)
+		func() advisor.HealthSnapshot { return advisor.HealthSnapshot{Enabled: true} }, nil,
+		func() (collect.ESServiceSnapshot, error) {
+			return collect.ESServiceSnapshot{State: "running", BytesLost: 42}, nil
+		})
 	s := fn()
+	if s.ESService == nil || s.ESService.State != "running" || s.ESService.BytesLost != 42 {
+		t.Fatalf("status must use its owned file-feed probe: %+v", s.ESService)
+	}
 
 	if !s.Running {
 		t.Fatal("status should report running")
@@ -295,7 +301,7 @@ func TestInfraFamiliesAreCountedSeparately(t *testing.T) {
 
 	fn := buildStatusFn(nil, tagger, correlate.New(tagger, sensitive.New(cfg), cfg), nil,
 		supervise.NewRegistry(), st, time.Now(),
-		func() advisor.HealthSnapshot { return advisor.HealthSnapshot{} }, nil, false)
+		func() advisor.HealthSnapshot { return advisor.HealthSnapshot{} }, nil, nil)
 	status := fn()
 	if status.ActiveAgents != 1 {
 		t.Fatalf("ActiveAgents = %d, want 1 (IDE excluded)", status.ActiveAgents)

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -62,9 +63,11 @@ type Components struct {
 	bus   *bus.Bus
 
 	// started goroutines and their shutdown handles.
-	drainDone <-chan struct{}
-	fleetPub  *fleet.Publisher
-	otlp      *otlp.Exporter
+	drainDone   <-chan struct{}
+	apiListener net.Listener
+	apiErrors   chan error
+	fleetPub    *fleet.Publisher
+	otlp        *otlp.Exporter
 
 	deltaHub         *api.DeltaHub
 	resourceEpisodes *resourceEpisodeWriter
@@ -86,16 +89,23 @@ func writeCwdOverrides(cfg config.Config) {
 // down whatever it had already built before returning the error.
 func Build(parent context.Context, cfg config.Config, opts Options) (*Components, error) {
 	ctx, cancel := context.WithCancel(parent)
-	c := &Components{cfg: cfg, cancel: cancel}
+	c := &Components{cfg: cfg, cancel: cancel, apiErrors: make(chan error, 1)}
 
 	writeCwdOverrides(cfg)
 
 	st, err := store.Open(cfg.DBPath, cfg.JSONLPath)
 	if err != nil {
+		cancel()
 		return nil, fmt.Errorf("failed to open store: %w", err)
 	}
 	c.store = st
 	st.SetEventRetention(cfg.Retention.ConnEvent, cfg.Retention.Event)
+	listener, err := api.ListenUnixSocket(cfg.SocketPath)
+	if err != nil {
+		c.Shutdown()
+		return nil, fmt.Errorf("failed to bind control API: %w", err)
+	}
+	c.apiListener = listener
 
 	b := bus.New(2048)
 	c.bus = b
@@ -196,12 +206,21 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 	// config watcher updates it.
 	fleetOn := new(atomic.Bool)
 	fleetOn.Store(fleetConfigured(cfg.Fleet.Webhooks))
+	// Resolve the file-feed dependency before any status consumer starts.
+	// Each daemon owns its probe and tailer; startup must not mutate a global
+	// function while the API or fleet heartbeat reads it.
+	var spoolTailer *collect.SpoolTailer
+	var esServiceProbe func() (collect.ESServiceSnapshot, error)
+	if collect.SpoolAvailable() {
+		spoolTailer = collect.NewSpoolTailer(b)
+		esServiceProbe = spoolServiceProbe(spoolTailer)
+	}
 
 	// Supervisor with a shared health registry so /status reports each collector's
 	// real state (running / restarting / abandoned) instead of a blanket "running".
 	statusFn := buildStatusFn(proxyServer, tagger, correlator, fw.Engine, supReg, st, time.Now(),
 		func() advisor.HealthSnapshot { return advisorStk.Load().Sub.Health() },
-		fleetOn.Load, collect.SpoolAvailable())
+		fleetOn.Load, esServiceProbe)
 
 	// Start Control API. Every dependency is resolved here, once: the API no
 	// longer exposes twenty optional setters that must be called in the right
@@ -334,30 +353,38 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 		proxyServer.SetConsoleAPI(apiServer.ConsoleHandler())
 	}
 	go func() {
-		if err := apiServer.Serve(ctx); err != nil && ctx.Err() == nil {
-			log.Printf("API server error: %v", err)
+		err := apiServer.ServeListener(ctx, listener)
+		if ctx.Err() == nil {
+			if err == nil {
+				err = fmt.Errorf("control API stopped unexpectedly")
+			}
+			c.apiErrors <- err
 		}
 	}()
 
-	startCollectors(ctx, sup, supReg, cfg, b, st, tagger, resolver, advisorStk, proxyServer, fw.Engine, hermes)
+	startCollectors(ctx, sup, supReg, cfg, b, st, tagger, resolver, advisorStk, proxyServer, fw.Engine, hermes, spoolTailer)
 
 	log.Printf("secure-agentd running on unix socket %s", cfg.SocketPath)
 	return c, nil
 }
 
-// WaitForShutdown blocks until ctx is cancelled or the owning parent exits.
+// WaitForShutdown blocks until ctx is cancelled, the owning parent exits,
+// or the control API stops unexpectedly. API failure is returned to the owner.
 // The menu bar app that launches this daemon owns its lifetime and sends
 // SIGTERM on quit; if that app dies abruptly (even via SIGKILL, which cannot
 // be caught by it), this process is reparented to launchd (pid 1). Watching
 // for the parent change guarantees the daemon never lingers as a hidden
 // background process after its owner is gone. watchParentExit returns nil when
 // launched directly by pid 1 (no owning parent to outlive).
-func (c *Components) WaitForShutdown(ctx context.Context) {
+func (c *Components) WaitForShutdown(ctx context.Context) error {
 	parentGone := watchParentExit(os.Getppid())
 	select {
 	case <-ctx.Done():
 	case <-parentGone:
+	case err := <-c.apiErrors:
+		return fmt.Errorf("control API stopped: %w", err)
 	}
+	return nil
 }
 
 // Shutdown stops the daemon in the order shutdown depends on: stop the
@@ -369,6 +396,9 @@ func (c *Components) Shutdown() {
 		log.Println("secure-agentd shutting down...")
 		if c.cancel != nil {
 			c.cancel() // stop collectors, API, and the tagger loop
+		}
+		if c.apiListener != nil {
+			c.apiListener.Close()
 		}
 		if c.bus != nil {
 			c.bus.Close() // close the subscriber channel so the drain goroutine finishes buffered events
@@ -824,7 +854,7 @@ func makeResourceExecutor(apiServer *api.API, tagger *agents.Tagger, st *store.S
 //  1. Spool tail from the root ES LaunchDaemon (sanctioned path).
 //  2. Direct eslogger child (root dev runs only).
 //  3. Neither: degraded, not crash-looped; the transcript scanner remains.
-func startCollectors(ctx context.Context, sup *supervise.Supervisor, supReg *supervise.Registry, cfg config.Config, b *bus.Bus, st *store.Store, tagger *agents.Tagger, resolver *session.Resolver, advisorStk *advisorStackHolder, proxyServer *proxy.ProxyServer, fwEngine *firewall.Engine, hermes *collect.HermesCollector) {
+func startCollectors(ctx context.Context, sup *supervise.Supervisor, supReg *supervise.Registry, cfg config.Config, b *bus.Bus, st *store.Store, tagger *agents.Tagger, resolver *session.Resolver, advisorStk *advisorStackHolder, proxyServer *proxy.ProxyServer, fwEngine *firewall.Engine, hermes *collect.HermesCollector, spoolTailer *collect.SpoolTailer) {
 	if proxyServer != nil {
 		go sup.Run(ctx, "proxyserver", func(c context.Context) error {
 			return proxyServer.Serve(c)
@@ -832,13 +862,11 @@ func startCollectors(ctx context.Context, sup *supervise.Supervisor, supReg *sup
 	}
 
 	switch {
-	case collect.SpoolAvailable():
-		tailer := collect.NewSpoolTailer(b)
-		collect.ESServiceProbe = spoolServiceProbe(tailer)
+	case spoolTailer != nil:
 		st.TrackFileFeed()
 		go sup.Run(ctx, "eslogger", func(c context.Context) error {
-			tailer.OnProduce = func() { supReg.MarkProduced("eslogger") }
-			return tailer.Run(c)
+			spoolTailer.OnProduce = func() { supReg.MarkProduced("eslogger") }
+			return spoolTailer.Run(c)
 		})
 		log.Printf("file telemetry: tailing privileged ES collector spool")
 	case os.Geteuid() == 0 && collect.ESLoggerAvailable():
