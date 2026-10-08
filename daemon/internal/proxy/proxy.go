@@ -103,8 +103,8 @@ func NewProxyServer(port int, b *bus.Bus, caManager *CAManager, engine *firewall
 	ps.server = &http.Server{
 		Addr:    fmt.Sprintf("127.0.0.1:%d", port),
 		Handler: http.HandlerFunc(ps.serveHTTP),
-		// The console's NoAgent routes identify the client process once per
-		// connection instead of running lsof on every request.
+		// The console's NoAgent routes cache a successfully identified client
+		// process per connection instead of running netstat on every request.
 		ConnContext: connpeer.WithCache,
 	}
 
