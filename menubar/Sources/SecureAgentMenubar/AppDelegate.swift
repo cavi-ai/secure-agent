@@ -5,7 +5,8 @@ import UserNotifications
 
 @MainActor
 public final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
-    private var statusItem: NSStatusItem!
+    private lazy var statusItemController = StatusItemController { [weak self] in self?.makeStatusItem() }
+    private var statusItem: NSStatusItem? { statusItemController.item }
     private let state = AppState()
     private let popover = NSPopover()
     private var launchTask: Task<Void, Never>?
@@ -46,6 +47,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificat
     public func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
         // A status bar button may count as a visible window here; Dock clicks
         // should still restore the Settings control surface after it closes.
+        statusItemController.reconcile()
         SettingsWindowController.shared.show()
         return true
     }
@@ -97,6 +99,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificat
         // Quitting the app must take the daemon with it — no hidden survivor.
         // Stop the event stream/polling first so no in-flight fetch outlives us.
         launchTask?.cancel()
+        statusItemController.stop()
         state.stop()
         // Routing points Claude Code at this app's proxy; take it back before
         // the proxy goes away.
@@ -114,14 +117,13 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificat
     }
 
     private func setupStatusItem() -> Bool {
-        guard let item = makeStatusItem() else { return false }
-        statusItem = item
-        return true
+        statusItemController.start()
     }
 
     /// Kept separate from daemon startup so launch visibility can be tested.
     func makeStatusItem() -> NSStatusItem? {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        item.isVisible = true
         guard let button = item.button,
               let icon = Self.statusIcon("checkmark.shield.fill") else {
             NSStatusBar.system.removeStatusItem(item)
@@ -129,9 +131,12 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificat
         }
         button.image = icon
         button.title = ""
+        button.toolTip = "Secure Agent"
+        button.setAccessibilityLabel("Secure Agent")
         button.target = self
         button.action = #selector(statusItemClicked)
         button.sendAction(on: [.leftMouseUp, .rightMouseUp])
+        applyStatusIcon(to: button)
         return item
     }
 
@@ -142,7 +147,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificat
     }
 
     @objc private func statusItemClicked() {
-        guard let button = statusItem.button else { return }
+        guard let button = statusItem?.button else { return }
         if NSApp.currentEvent?.type == .rightMouseUp {
             showRightClickMenu(button)
         } else {
@@ -179,13 +184,17 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificat
         menu.addItem(.separator())
         menu.addItem(item("Quit Secure Agent", "power", #selector(quitClicked), "q"))
 
-        statusItem.menu = menu
+        statusItem?.menu = menu
         button.performClick(nil)
-        statusItem.menu = nil
+        statusItem?.menu = nil
     }
 
     private func updateStatusIcon() {
-        guard let button = statusItem.button else { return }
+        guard let button = statusItem?.button else { return }
+        applyStatusIcon(to: button)
+    }
+
+    private func applyStatusIcon(to button: NSStatusBarButton) {
         let name: String
         let foreground: NSColor
         let detail: NSColor
