@@ -21,6 +21,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Status: `es_service.newest_event_at` and `lag_seconds`.
 - Console: stale or unavailable notice on a report that failed to refresh.
 - Telemetry Doctor: recovery steps and **Open hook setup**.
+- Test Hooks: a failure shows the hook's error.
 - Cursor: Secure Agent's tool hooks beside the user's hooks.
 - CLI: `secure-agent telemetry repair`.
 - Pricing: Claude Sonnet 5.5.
@@ -91,6 +92,7 @@ All notable changes to `secure-agent` are documented here. The format follows
 - Build: `make` stops when a binary's commit stamp is not HEAD.
 
 ### Security
+- Guard hooks: `guard-rules.json` bundled and installed beside `secret_guard.py`.
 - Guard: a prompt is withdrawn when its hook stops waiting.
 - Redaction: one rule set for the daemon, activity log and guard audit.
 
