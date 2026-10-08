@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"regexp"
+	"regexp/syntax"
 	"strings"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/config"
@@ -13,6 +14,7 @@ import (
 type compiledPattern struct {
 	id, secretType string
 	re             *regexp.Regexp
+	anchored       bool
 }
 
 type Detector struct {
@@ -31,14 +33,19 @@ func NewDetector(pats []config.PatternConfig, ent config.EntropyConfig) (*Detect
 		if st == "" {
 			st = TypeUnknown
 		}
-		d.patterns = append(d.patterns, compiledPattern{id: p.ID, secretType: st, re: re})
+		parsed, _ := syntax.Parse(p.Re, syntax.Perl)
+		d.patterns = append(d.patterns, compiledPattern{id: p.ID, secretType: st, re: re, anchored: hasAnchor(parsed)})
 	}
 	return d, nil
 }
 
 // Scan returns the typed-pattern hits plus, when enabled, one entropy hit.
 func (d *Detector) Scan(text string) []Hit {
-	hits := d.ScanPatterns(text)
+	return d.scan(text, false)
+}
+
+func (d *Detector) scan(text string, partial bool) []Hit {
+	hits := d.scanPatterns(text, partial)
 	if d.entropy.Enabled {
 		for _, tok := range strings.FieldsFunc(text, isTokenBreak) {
 			if len(tok) >= d.entropy.MinLen && shannonBits(tok) >= d.entropy.MinBits {
@@ -63,13 +70,38 @@ func (d *Detector) MaskPatterns(text string) string {
 // ScanPatterns returns the typed-pattern hits only; the entropy layer is
 // never run. A match counts only where it starts a token (startsToken).
 func (d *Detector) ScanPatterns(text string) []Hit {
+	return d.scanPatterns(text, false)
+}
+
+func (d *Detector) scanPatterns(text string, partial bool) []Hit {
 	var hits []Hit
 	for _, p := range d.patterns {
+		if partial && p.anchored {
+			continue
+		}
 		if spans := tokenStartSpans(p.re, text); len(spans) > 0 {
 			hits = append(hits, Hit{RuleID: p.id, SecretType: p.secretType, Layer: LayerPattern, Confidence: 0.9, Spans: spans})
 		}
 	}
 	return hits
+}
+
+// Anchors require the field's real boundaries. A window must not manufacture
+// those boundaries and cause an operator's custom rule to block benign uploads.
+func hasAnchor(re *syntax.Regexp) bool {
+	if re == nil {
+		return false
+	}
+	switch re.Op {
+	case syntax.OpBeginText, syntax.OpEndText, syntax.OpBeginLine, syntax.OpEndLine:
+		return true
+	}
+	for _, child := range re.Sub {
+		if hasAnchor(child) {
+			return true
+		}
+	}
+	return false
 }
 
 // tokenStartSpans returns the matches of re in text that start a token.

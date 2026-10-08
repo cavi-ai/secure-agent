@@ -2,9 +2,10 @@ package proxy
 
 import (
 	"bufio"
-	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -24,11 +25,10 @@ import (
 )
 
 const (
-	// scanCap bounds how many body bytes are buffered for inspection. Bodies are
-	// streamed through to the peer; only this prefix is held in memory, so a
-	// large or streaming response never buffers in full. Matches the firewall's
-	// own per-view normalization cap.
+	// scanCap bounds request replay memory and response prefix capture.
 	scanCap = 1 << 20 // 1 MiB
+	// bodyInspectionCap bounds encrypted replay storage and decoded scan work.
+	bodyInspectionCap = 64 << 20 // 64 MiB
 	// dialTimeout bounds the upstream TLS connect so a hung host can't pin a
 	// goroutine/fd forever.
 	dialTimeout = 10 * time.Second
@@ -402,22 +402,22 @@ func (ps *ProxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 
 		blocked, detail := ps.inspectRequest(req, host)
 		if blocked {
-			// Drain the (unread) request body before the next ReadRequest:
-			// ReadRequest only parses headers, so without draining, the next
-			// loop iteration would parse the previous request's body bytes as a
-			// new request line and desync the keep-alive tunnel.
-			if req.Body != nil {
+			// A captured body is already drained on the wire. If capture was
+			// incomplete, close the tunnel before closing its unread source.
+			if body, ok := req.Body.(*inspectionBody); ok {
+				req.Close = !body.complete || req.Close
+			} else if req.Body != nil {
 				_, err = io.Copy(io.Discard, io.LimitReader(req.Body, scanCap+1))
-				// Closing on oversized blocked uploads avoids interpreting
-				// an undrained suffix as the next HTTP request.
-				if err != nil || req.ContentLength > scanCap || req.ContentLength < 0 {
-					req.Close = true
-				} else {
-					req.Body.Close()
-				}
+				req.Close = req.Close || err != nil || req.ContentLength > scanCap || req.ContentLength < 0
 			}
 			body := fmt.Sprintf(`{"error":"Security Violation","detail":%q}`, detail)
 			writeRawResponse(clientIO, http.StatusForbidden, "Forbidden", body, !req.Close)
+			if req.Close {
+				_ = clientIO.Close()
+			}
+			if req.Body != nil {
+				_ = req.Body.Close()
+			}
 			if req.Close {
 				return
 			}
@@ -425,6 +425,9 @@ func (ps *ProxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 		}
 
 		keepAlive := ps.forwardConnectRequest(clientIO, req, r.Host, host)
+		if !keepAlive || req.Close {
+			_ = clientIO.Close()
+		}
 		if req.Body != nil {
 			req.Body.Close()
 		}
@@ -537,6 +540,9 @@ func (ps *ProxyServer) inspectAndForwardHTTP(w http.ResponseWriter, r *http.Requ
 	}
 
 	blocked, detail := ps.inspectRequest(r, host)
+	if r.Body != nil {
+		defer r.Body.Close()
+	}
 	if blocked {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusForbidden)
@@ -580,35 +586,57 @@ func (ps *ProxyServer) inspectRequest(r *http.Request, host string) (blocked boo
 		hostOnly = h
 	}
 
-	// Read only a bounded prefix for inspection, and forward the full body
-	// streamed (prefix + remainder) so a large upload never buffers in full.
-	var bodyBytes []byte
-	if r.Body != nil {
-		original := r.Body
-		head, err := io.ReadAll(io.LimitReader(original, scanCap+1))
-		bodyBytes = head[:min(len(head), scanCap)]
-		var tail io.Reader = original
-		if err != nil {
-			ps.publishHit(host, "proxy-inspection-incomplete:body-read")
-			tail = &readError{err: err}
-		} else if len(head) > scanCap {
-			ps.publishHit(host, "proxy-inspection-incomplete:body-limit")
-		}
-		r.Body = &replayBody{Reader: io.MultiReader(bytes.NewReader(head), tail), Closer: original}
-	}
-
 	headers := make(map[string]string, len(r.Header))
 	for name, values := range r.Header {
 		headers[name] = strings.Join(values, " ")
 	}
-
-	dec := ps.engine.Inspect(firewall.Request{
-		Host:           hostOnly,
-		Query:          r.URL.RawQuery,
-		AuthHeaderName: "authorization",
-		Headers:        headers,
-		Body:           bodyBytes,
+	inspection := ps.engine.NewInspection(firewall.Request{
+		Host: hostOnly, Query: r.URL.RawQuery,
+		AuthHeaderName: "authorization", Headers: headers,
 	})
+	if r.Body != nil && r.Body != http.NoBody {
+		body := ps.captureRequestBody(r.Body, host)
+		r.Body = body
+		var scan io.Reader = body.spool.reader()
+		if body.coverageErr != nil {
+			scan = io.MultiReader(scan, &readError{err: body.coverageErr})
+		}
+		scan = &budgetReader{Reader: scan, left: bodyInspectionCap}
+		encoding := strings.ToLower(strings.TrimSpace(r.Header.Get("Content-Encoding")))
+		if encoding == "" {
+			var magic [2]byte
+			_, _ = io.ReadFull(body.spool.reader(), magic[:])
+			if magic == [2]byte{0x1f, 0x8b} {
+				encoding = "gzip"
+			}
+		}
+		if encoding == "gzip" {
+			gz, err := gzip.NewReader(scan)
+			if err != nil {
+				ps.publishHit(host, "proxy-inspection-incomplete:body-decode")
+				scan = nil
+			} else {
+				defer gz.Close()
+				scan = &budgetReader{Reader: gz, left: bodyInspectionCap}
+			}
+		} else if encoding != "" && encoding != "identity" {
+			ps.publishHit(host, "proxy-inspection-incomplete:body-decode")
+		}
+		if scan != nil {
+			windowed, err := inspection.ScanBody(scan)
+			if errors.Is(err, errInspectionLimit) {
+				if body.coverageErr != errInspectionLimit {
+					ps.publishHit(host, "proxy-inspection-incomplete:body-limit")
+				}
+			} else if err != nil && err != body.coverageErr {
+				ps.publishHit(host, "proxy-inspection-incomplete:body-decode")
+			}
+			if windowed {
+				ps.publishHit(host, "proxy-inspection-incomplete:body-window")
+			}
+		}
+	}
+	dec := inspection.Finish()
 
 	// Publish every leak (including monitor-mode would-blocks) for observability;
 	// only actually block when the resolved action says so.
