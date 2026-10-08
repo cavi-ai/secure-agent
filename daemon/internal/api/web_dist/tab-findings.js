@@ -87,11 +87,14 @@ function renderAttention() {
 
   // A flag item whose flag the daemon explained renders the finding card's
   // lines — who, what, verdict — and its served actions; a pattern item
-  // renders its pattern card.
+  // renders its pattern card, a routine item its routine group.
   const flagsById = new Map((SA.t.flags || []).map(f => [f.id, f]));
   const patternsByKey = new Map((SA.t.patterns || []).map(p => [p.key, p]));
+  const routineByKey = new Map((SA.t.routine || []).map(r => [r.key, r]));
   const now = Date.now();
   const itemHTML = item => {
+    const rg = item.kind === 'routine' ? routineByKey.get(item.id) : null;
+    if (rg) return routineHTML(rg);
     const p = item.kind === 'pattern' ? patternsByKey.get(item.id) : null;
     if (p) return patternHTML(p, now, { flags: SA.t.flags, expanded: SA.expanded });
     const f = item.kind === 'flag' ? flagsById.get(item.id) : null;
@@ -130,7 +133,7 @@ function renderAttention() {
     html: group => `<article class="attention-group">
       <header class="attention-group-head">
         <div class="attention-identity">
-          <span class="attention-agent">${escapeHTML(group.agent || 'machine')}</span>
+          <span class="attention-agent">${escapeHTML(group.key === 'routine' ? 'recurring' : group.agent || 'machine')}</span>
           <strong>${escapeHTML(group.agent && group.label === group.agent ? familyTitle(group.agent) : group.label)}</strong>
           ${attentionSubtitle(group) ? `<span class="attention-workspace">${escapeHTML(attentionSubtitle(group))}</span>` : ''}
         </div>
@@ -452,6 +455,56 @@ function findingHTML(f, l, chainHTML, toolsHTML) {
         <div class="flag-actions-row">${markButtonsHTML('flag:' + f.id)}</div>
       </details>
     </article>`;
+}
+
+// ---------- routine: the same reads across agents as one decision ----------
+
+const ROUTINE_CONSOLE_ACTIONS = ['expect-all', 'dismiss-all'];
+
+// routineHTML: one routine group — the state pill and the served summary;
+// the reader, the file area, the agents and the busiest destinations as
+// chips; Treat as routine and Dismiss all as buttons. The click handler
+// reads every request from the served group (key + action id).
+function routineHTML(rg) {
+  const d = rg.disposition || {};
+  const dests = rg.destinations || [];
+  const more = (Number(rg.destination_count) || 0) - dests.length;
+  const chips = [
+    rg.reader ? `<span class="fact"><svg class="icon"><use href="#i-terminal"/></svg>${escapeHTML(rg.reader)}</span>` : '',
+    `<span class="fact fact-file"><svg class="icon"><use href="#i-doc"/></svg>${escapeHTML(rg.area)}${rg.files > 1 ? ` · ${Number(rg.files)} files` : ''}</span>`,
+    `<span class="fact"><svg class="icon"><use href="#i-agent"/></svg>${escapeHTML((rg.agents || []).join(', '))}</span>`,
+    ...dests.map(x => `<span class="fact fact-dest" title="${escapeHTML(x.host)} · cited by ${Number(x.count)} flag${Number(x.count) === 1 ? '' : 's'}"><svg class="icon"><use href="#i-globe"/></svg>${escapeHTML(x.org || x.host)}</span>`),
+    more > 0 ? `<span class="fact">+${more} more</span>` : '',
+  ].filter(Boolean).join('');
+  const acts = (rg.actions || []).filter(a => a && ROUTINE_CONSOLE_ACTIONS.includes(a.id));
+  const attrs = a => `data-action="routine-act" data-routine-key="${escapeHTML(rg.key)}" data-action-id="${escapeHTML(a.id)}"`;
+  return `
+        <div class="attention-item kind-routine finding-item ${DISPOSITION_CLASS[d.state] || 'disp-warning'}" data-routine-key="${escapeHTML(rg.key)}">
+          <div class="attention-reason">
+            <div class="decision-head">${d.text ? `<span class="disp-badge">${escapeHTML(d.text)}</span>` : ''}<strong class="finding-what">${escapeHTML(rg.summary)}</strong></div>
+            <div class="facts">${chips}</div>
+          </div>
+          <div class="attention-actions">${actionBarHTML(actionItems(acts, [], attrs, a => a.label || a.id))}</div>
+        </div>`;
+}
+
+// routineAfterOptimistic: the state once a routine group's ids were
+// resolved — the group and its decision leave, its flags leave the lists,
+// and the patterns they sat in drop their open counts, until the next
+// snapshot reconciles.
+function routineAfterOptimistic(t, key, ids) {
+  const done = new Set(ids || []);
+  return {
+    routine: (t.routine || []).filter(r => r.key !== key),
+    patterns: (t.patterns || []).map(p => {
+      const n = (p.flag_ids || []).filter(id => done.has(id)).length;
+      return n ? patternAfterDismiss(p, n) : p;
+    }),
+    flags: (t.flags || []).filter(f => !done.has(f.id)),
+    flagsView: t.flagsView === null ? null : (t.flagsView || []).filter(f => !done.has(f.id)),
+    posture: mapPostureAttention(t.posture, it => ((it.kind === 'routine' && it.id === key)
+      || (it.kind === 'flag' && done.has(it.id))) ? null : it),
+  };
 }
 
 // ---------- patterns: a repeating finding as one card ----------

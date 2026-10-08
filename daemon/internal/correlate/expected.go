@@ -130,17 +130,46 @@ func (s *ExpectStore) Add(p ExpectedPattern) (ExpectedPattern, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.loadLocked()
-	p.Key = ReadConnectKey(p.Agent, p.Reader, p.Path, p.Dest)
-	if e, ok := s.entries[p.Key]; ok {
+	if e, ok := s.entries[ReadConnectKey(p.Agent, p.Reader, p.Path, p.Dest)]; ok {
 		return *e, nil
 	}
-	p.Hits, p.LastSeen = 0, nil
-	s.entries[p.Key] = &p
-	if err := s.saveLocked(); err != nil {
-		delete(s.entries, p.Key)
+	added, err := s.addLocked([]ExpectedPattern{p})
+	if err != nil {
 		return ExpectedPattern{}, err
 	}
-	return p, nil
+	return added[0], nil
+}
+
+// AddAll records every pattern not yet present with one save and returns the
+// ones it added; when the save fails none of them stays.
+func (s *ExpectStore) AddAll(ps []ExpectedPattern) ([]ExpectedPattern, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.loadLocked()
+	return s.addLocked(ps)
+}
+
+func (s *ExpectStore) addLocked(ps []ExpectedPattern) ([]ExpectedPattern, error) {
+	var added []ExpectedPattern
+	for _, p := range ps {
+		p.Key = ReadConnectKey(p.Agent, p.Reader, p.Path, p.Dest)
+		if _, ok := s.entries[p.Key]; ok {
+			continue
+		}
+		p.Hits, p.LastSeen = 0, nil
+		s.entries[p.Key] = &p
+		added = append(added, p)
+	}
+	if len(added) == 0 {
+		return nil, nil
+	}
+	if err := s.saveLocked(); err != nil {
+		for _, p := range added {
+			delete(s.entries, p.Key)
+		}
+		return nil, err
+	}
+	return added, nil
 }
 
 // Remove forgets one pattern; false when it was not stored.

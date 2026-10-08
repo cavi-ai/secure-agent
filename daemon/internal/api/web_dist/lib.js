@@ -1080,9 +1080,9 @@ function explainActionLabel(flag, a) {
 const ACTION_BAR_MAX = 3;
 // Served action ids that stay on the bar: the exact expectation and the
 // dismissal. The recommended action leads it.
-const ACTION_BAR_IDS = ['expect', 'expect-file', 'dismiss', 'dismiss-all'];
+const ACTION_BAR_IDS = ['expect-all', 'expect', 'expect-file', 'dismiss', 'dismiss-all'];
 // Menu order: look first, then decide, then the broad and drastic choices.
-const ACTION_ORDER = ['expect', 'expect-file', 'dismiss', 'dismiss-all', 'inspect-file', 'open-incident', 'review-local',
+const ACTION_ORDER = ['expect-all', 'expect', 'expect-file', 'dismiss', 'dismiss-all', 'inspect-file', 'open-incident', 'review-local',
   'console', 'allow-path', 'allow-host', 'mute-rule-host', 'mute-class', 'kill'];
 const ACTION_BAR_LABELS = { expect: 'Mark expected', 'expect-file': 'Mark as test file', dismiss: 'Dismiss' };
 

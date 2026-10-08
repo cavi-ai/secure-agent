@@ -53,6 +53,34 @@ func TestExpectStorePersistsAndMatchesEveryKey(t *testing.T) {
 
 // An expected pattern is counted, not flagged; another reader or another
 // destination still flags.
+// AddAll stores the new patterns in one save, skips stored and repeated
+// keys, and returns only the ones it added.
+func TestExpectStoreAddAll(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "expected.json")
+	s := NewExpectStore(path)
+	old, _ := s.Add(ExpectedPattern{Agent: "claude", Reader: "gh", Path: "/u/h.yml", Dest: "a", CreatedAt: time.Unix(1, 0).UTC()})
+	added, err := s.AddAll([]ExpectedPattern{
+		{Agent: "claude", Reader: "gh", Path: "/u/h.yml", Dest: "a", CreatedAt: time.Unix(9, 0).UTC()},
+		{Agent: "codex", Reader: "gh", Path: "/u/h.yml", Dest: "b"},
+		{Agent: "codex", Reader: "gh", Path: "/u/h.yml", Dest: "b"},
+		{Agent: "openclaw", Reader: "gh", Path: "/u/h.yml", Dest: "c"},
+	})
+	if err != nil || len(added) != 2 || added[0].Key != "codex|gh|/u/h.yml|b" || added[1].Key != "openclaw|gh|/u/h.yml|c" {
+		t.Fatalf("added = %+v, %v", added, err)
+	}
+	got := NewExpectStore(path).List()
+	kept := false
+	for _, p := range got {
+		kept = kept || (p.Key == old.Key && p.CreatedAt.Equal(old.CreatedAt))
+	}
+	if len(got) != 3 || !kept {
+		t.Fatalf("reloaded = %+v", got)
+	}
+	if again, err := s.AddAll(added); err != nil || len(again) != 0 {
+		t.Fatalf("re-adding = %+v, %v", again, err)
+	}
+}
+
 func TestExpectedPatternIsCountedNotFlagged(t *testing.T) {
 	c := newFamilyCorrelator(t)
 	store := NewExpectStore(filepath.Join(t.TempDir(), "expected.json"))

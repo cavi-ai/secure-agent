@@ -383,6 +383,18 @@ Repeating findings: the flags one agent raised under one rule on one subject in 
 
 `/snapshot` carries `patterns` (24 h, `min` 3) next to `flags`.
 
+`/snapshot` also carries `routine`: open `sensitive-read-then-connect` flags of the last 24 h grouped by reader and area across agents, kept when a group holds at least 3 flags and spans agents or files, most flags first. The area is the home dot-directory the read sits under (`~/.docker`), else the exact file. The attention queue shows each group once, as a `routine` item in group `routine`, ahead of agent groups of equal priority; the flags it covers leave the agent groups.
+
+| Field | Meaning |
+|---|---|
+| `key` | `routine|<reader>|<area>`; the id of its attention item. |
+| `reader`, `area`, `files`, `count`, `agents` | Reader label (`""` when the reads recorded none); the one file's display path, or the area; distinct files; open flags; raising agents, most flags first. |
+| `destinations`, `destination_count` | Busiest 5 `{org, host, count}`; distinct destinations. |
+| `expectable` | Flags whose every read is the group's reader on its area. |
+| `disposition`, `summary` | Worst open flag's; one sentence: reader, file or area, destinations, count, agents. |
+| `actions` | `expect-all` (`POST /expected {"flag_ids"}`, the expectable ids, at most 500; absent when none) and `dismiss-all` (`POST /flags/acknowledge {"flag_ids"}`, at most 500). |
+| `flag_ids` | Covered flag ids, newest first, at most 500. |
+
 ### 2c. `POST /flags/acknowledge`
 
 `{"flag_id":"<id>"}` → `{"status":"ok","acknowledged":<bool>}`, or `{"flag_ids":["<id>",…]}` (1..500 ids) in one transaction → `{"status":"ok","acknowledged":<bool>,"count":<rows>}`. Ids match `^[A-Za-z0-9_.-]+$`. `400` for both fields, neither, more than 500 ids, or an invalid id.
@@ -1216,6 +1228,7 @@ Operator-only, NoAgent exceptions persisted in `~/.config/secure-agent/expected.
 
 - `GET /expected` lists entries, including optional `scope: "file"`, runtime hit counts and last match time.
 - `POST /expected {"flag_id", "path"?, "host"?}` derives an agent/reader/exact-file/exact-host pattern from stored evidence. Optional path/host selects a recorded pair; arbitrary injected pairs are rejected. It acknowledges an open finding only when **every** recorded read/destination pair is covered. Findings with remaining evidence offer the next uncovered pair.
+- `POST /expected {"flag_ids":["<id>",…]}` (1..500 ids) adds every exact pair those flags record, with one save, then acknowledges the findings now fully covered → `{"added", "acknowledged"}`. Unknown ids and flags without a recorded reader add nothing; `422` when none adds a pair, `400` with `flag_id` too or over 500 ids.
 - `POST /expected {"flag_id", "scope":"file"}` marks the recorded exact `.env` path non-secret for that agent, across readers and destinations. This explicit exception remains in effect for future contents until revoked; use only for test fixtures without real credentials. Other agents and neighboring paths remain monitored. It does not delete or inspect file contents.
 - `DELETE /expected?key=<key>` revokes an exception. Add/remove actions are audited; Policy exposes revocation.
 

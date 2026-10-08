@@ -251,6 +251,7 @@ def main():
         dom_explainact = dump_dom(chrome, tmp, "?explaindemo&explainact")
         dom_allowpathact = dump_dom(chrome, tmp, "?explaindemo&allowpathact")
         dom_orgallow = dump_dom(chrome, tmp, "?orgallowdemo")
+        dom_routine = dump_dom(chrome, tmp, "?routinedemo")
         dom_explainfail = dump_dom(chrome, tmp, "?explaindemo&explainact&postfail")
         dom_detailsprobe = dump_dom(chrome, tmp, "?explaindemo&detailsprobe")
         dom_fam = dump_dom(chrome, tmp, "?familiesdemo&tab=resources")
@@ -1464,6 +1465,13 @@ def main():
               and 'body={"agent":"cursor","host":"2607:f8b0:4002:c08::54"}' in org_reqs
               and org_reqs.rstrip().endswith('POST /flags/acknowledge body={"flag_id":"flag-1"}'),
               f"card={org_card!r} requests={org_reqs!r}")
+        routine_before = pre(dom_routine, "routine-before")
+        routine_after = pre(dom_routine, "routine-after")
+        check("routine: gh across three agents is one decision first in the queue; Treat as routine sends the served ids and the card leaves before the answer",
+              routine_before == "first=true buttons=2"
+              and routine_after == f"card=false needs={needs_you}"
+              and 'POST /expected body={"flag_ids":["r1","r2"]}' in pre(dom_routine, "mock-requests"),
+              f"before={routine_before!r} after={routine_after!r} requests={pre(dom_routine, 'mock-requests')!r}")
         fail_reqs = pre(dom_explainfail, "mock-requests")
         flags_fail = dom_explainfail.split('id="flags-list"', 1)[-1].split('id="incidents-container"', 1)[0]
         check("finding card: a failed allow puts the card back and toasts danger",

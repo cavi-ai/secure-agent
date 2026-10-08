@@ -53,7 +53,7 @@ function isConsoleReport(key, value) {
   if (key !== 'snapshot') return value !== null && typeof value === 'object';
 
   if (!record(value) || !record(value.status) || typeof value.status.uptime !== 'string') return false;
-  for (const name of ['flags', 'patterns', 'incidents', 'events', 'suggestions', 'mutes', 'sessions']) {
+  for (const name of ['flags', 'patterns', 'routine', 'incidents', 'events', 'suggestions', 'mutes', 'sessions']) {
     if (!optionalRows(value, name)) return false;
   }
   for (const name of ['agents', 'trees', 'collectors']) {
