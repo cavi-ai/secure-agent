@@ -626,6 +626,7 @@ func (h *Hunter) inspectOne(ctx context.Context, rs *repoScan, isMain bool, l li
 	}
 	w.Upstream, w.Ahead, w.Behind, w.UpstreamGone = st.Upstream, st.Ahead, st.Behind, st.UpstreamGone
 	w.Changed, w.Untracked, w.Conflicts, w.Paths = st.Changed, st.Untracked, st.Conflicts, st.Paths
+	w.PartlyStaged = st.PartlyStaged
 
 	ign, err := readIgnored(ctx, l.Path)
 	if err != nil {

@@ -147,11 +147,26 @@ function agentProposalHTML(m, status) {
   </div>`;
 }
 
+// agentWorktreeCardHTML: the question Discuss sent about one worktree, as a
+// compact card: the ask, the branch, and every fact the model was given
+// under a disclosure.
+function agentWorktreeCardHTML(m) {
+  const content = String(m.content || '');
+  const ask = (/^[^?\n]*\?/.exec(content) || [content.split('\n')[0]])[0];
+  const branch = (/^branch: (.*)$/m.exec(content) || [])[1] || '';
+  return `<div class="agent-msg user"><div class="agent-proposal agent-worktree-card">
+    <div class="agent-proposal-head"><svg class="icon"><use href="#i-branch"/></svg><b>${escapeHTML(ask)}</b></div>
+    ${branch ? `<div class="agent-msg-meta">branch ${escapeHTML(branch)}</div>` : ''}
+    <details class="agent-task"><summary>Facts sent</summary><pre>${escapeHTML(content)}</pre></details>
+  </div></div>`;
+}
+
 // agentMessageHTML: one chat turn. A chat turn is always local Ollama.
 function agentMessageHTML(m, status, runs, activity) {
   if (m.role === 'note') {
     return `<div class="agent-msg note"><span>${escapeHTML(m.content)}</span></div>`;
   }
+  if (m.role === 'user' && m.origin === 'worktree') return agentWorktreeCardHTML(m);
   if (m.role === 'user') {
     const route = [m.harness ? 'legacy harness selection (chat stayed on Ollama)' : '', m.workdir || ''].filter(Boolean).join(' · ');
     return `<div class="agent-msg user">${agentTextHTML(m.content)}${route ? `<div class="agent-msg-meta">${escapeHTML(route)}</div>` : ''}</div>`;

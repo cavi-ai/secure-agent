@@ -50,7 +50,7 @@ test('worktreeGroups: filters by state and stale, drops repos left empty', () =>
   assert.deepEqual([...stale.flatMap(g => g.rows.map(r => r.state))], ['remove', 'review']);
 });
 
-test('worktreeRowHTML: Remove only on remove, Prune only on prune, Ask advisor on review and keep, everything escaped', () => {
+test('worktreeRowHTML: Remove on remove, review and keep rows, Prune only on prune, Ask advisor on review and keep, everything escaped', () => {
   const rep = report();
   const [done, gone] = rep.repos[0].worktrees.slice(1);
   const [keep, review] = rep.repos[1].worktrees;
@@ -63,12 +63,14 @@ test('worktreeRowHTML: Remove only on remove, Prune only on prune, Ask advisor o
   assert.match(goneHTML, /data-action="worktree-prune" data-repo="\/Users\/x\/code\/app"/);
   assert.match(goneHTML, /<span class="wt-idle">—<\/span>/);
   const keepHTML = worktreeRowHTML(keep, rep.repos[1], null, null, null, 'codex');
-  assert.deepEqual([...keepHTML.matchAll(/data-action="([a-z-]+)"/g)].map(m => m[1]), ['copy-path', 'worktree-reveal', 'worktree-ask', 'worktree-advise']);
+  assert.deepEqual([...keepHTML.matchAll(/data-action="([a-z-]+)"/g)].map(m => m[1]), ['copy-path', 'worktree-reveal', 'worktree-review-trash', 'worktree-ask', 'worktree-advise', 'worktree-discuss']);
   assert.match(keepHTML, /class="btn btn-primary btn-sm" data-action="worktree-ask"/);
+  assert.match(keepHTML, />Ask codex<\/button>/, 'the live-session button names the harness, not "the agent"');
   assert.ok(keepHTML.includes('&lt;img src=x onerror=alert(1)&gt;') && !keepHTML.includes('<img'));
   assert.match(keepHTML, /<span class="wt-branch">\(detached\)<\/span>/);
   const reviewHTML = worktreeRowHTML(review, rep.repos[1]);
-  assert.deepEqual([...reviewHTML.matchAll(/data-action="([a-z-]+)"/g)].map(m => m[1]), ['copy-path', 'worktree-reveal', 'worktree-review', 'worktree-advise']);
+  assert.deepEqual([...reviewHTML.matchAll(/data-action="([a-z-]+)"/g)].map(m => m[1]), ['copy-path', 'worktree-reveal', 'worktree-review-trash', 'worktree-advise', 'worktree-discuss']);
+  assert.ok(!reviewHTML.includes('worktree-review"'), 'no review drawer');
   assert.ok(!reviewHTML.includes('worktree-ask'), 'no active agent means no Ask button');
   // The path copies the full path; Show in Finder on every folder still on
   // disk (a prune row's folder is gone).
@@ -77,6 +79,57 @@ test('worktreeRowHTML: Remove only on remove, Prune only on prune, Ask advisor o
   assert.ok(!doneHTML.includes('worktree-advise') && !goneHTML.includes('worktree-advise'));
   assert.ok(!doneHTML.includes('worktree-ask') && !goneHTML.includes('worktree-ask'));
   assert.ok(reviewHTML.includes('feat/&quot;q&quot;'));
+});
+
+test('Remove on review and keep rows: enabled, opens the Trash confirmation; blocked rows are disabled with the reason', () => {
+  const repo = { path: REPO };
+  const row = extra => ({ path: REPO + '/.worktrees/x', branch: 'feat/x', state: 'keep', idle_days: 1, reasons: ['1 uncommitted change'], ...extra });
+  const enabled = worktreeRowHTML(row(), repo);
+  assert.match(enabled, /<button type="button" class="btn btn-danger btn-sm" data-action="worktree-review-trash" data-path="\/Users\/x\/code\/app\/\.worktrees\/x"[^>]*>Remove<\/button>/);
+  assert.ok(!enabled.includes('worktree-remove"'), 'not git worktree remove');
+  const blocked = {
+    'an agent session is live here': { in_use: true },
+    'it is locked; unlock it first': { locked: true },
+    'detached HEAD has commits on no branch; create a branch first': { detached: true, branch: '', loose_commits: 2 },
+    'it has populated submodules': { submodules: 1 },
+    'could not inspect: git status failed': { state: 'review', error: 'git status failed' },
+  };
+  for (const [why, extra] of Object.entries(blocked)) {
+    const html = worktreeRowHTML(row(extra), repo);
+    assert.match(html, new RegExp(`<button type="button" class="btn btn-danger btn-sm" disabled title="Cannot remove: ${why}">Remove</button>`), why);
+    assert.ok(!html.includes('worktree-review-trash'), why);
+  }
+  // A state-remove row keeps git worktree remove; prune and orphan rows are unchanged.
+  const done = worktreeRowHTML(row({ state: 'remove', in_use: true }), repo);
+  assert.ok(done.includes('data-action="worktree-remove"') && !done.includes('worktree-review-trash'));
+  const orphan = worktreeRowHTML(row({ state: 'review', orphan: true }), repo);
+  assert.ok(orphan.includes('worktree-trash-orphan') && !orphan.includes('worktree-review-trash') && !orphan.includes('worktree-discuss'));
+});
+
+test('worktreeTrashConfirm: the folder, what goes with it, what stays in git, and what the Trash keeps', () => {
+  const w = {
+    path: '/Users/x/code/app/.worktrees/x', branch: 'feat/x', state: 'keep',
+    reasons: ['2 uncommitted changes', '1 untracked file or directory', 'ignored files that only live here: .env (17 B)', '1 unresolved conflict',
+      '3 commits on no remote and not in origin/main (the branch keeps them after removal)', '1 stash on this branch', 'locked: nope'],
+  };
+  assert.equal(ctx.worktreeTrashConfirm(w), [
+    'Move /Users/x/code/app/.worktrees/x to the Trash and unregister the worktree?',
+    'Goes with it: 2 uncommitted changes; 1 untracked file or directory; ignored files that only live here: .env (17 B); 1 unresolved conflict',
+    'Stays in git: branch feat/x, its commits and stashes.',
+    'Its files stay in the Trash until you empty it; putting them back does not register the worktree again.',
+  ].join('\n'));
+  const bare = ctx.worktreeTrashConfirm({ path: '/w', state: 'keep', reasons: ['not merged; active 2 days ago'] });
+  assert.ok(bare.includes('Goes with it: the folder and its ignored files\n') && bare.includes('Stays in git: its commits and stashes.'));
+  assert.ok(!bare.includes('active in the last 24 hours'));
+  const fresh = ctx.worktreeTrashConfirm({ path: '/w', state: 'keep', idle_days: 0, last_activity: '2026-10-08T12:00:00Z', reasons: ['contained in origin/main; active in the last 24 hours'] });
+  assert.ok(fresh.includes('\nIt was active in the last 24 hours; an agent may still be using it.\n'));
+});
+
+test('worktreeTrashBlock: conflicts and partly staged files keep Remove disabled', () => {
+  assert.equal(ctx.worktreeTrashBlock({ conflicts: 1 }), 'a merge or rebase has unresolved conflicts; finish or abort it first');
+  assert.equal(ctx.worktreeTrashBlock({ partly_staged: 1 }), '1 file has staged changes that differ from the working copy; commit or unstage them first');
+  assert.equal(ctx.worktreeTrashBlock({ partly_staged: 3 }), '3 files have staged changes that differ from the working copy; commit or unstage them first');
+  assert.equal(ctx.worktreeTrashBlock({ changed: 2 }), '');
 });
 
 test('worktreePathLabel: relative inside the repo, absolute outside', () => {
@@ -102,8 +155,16 @@ test('advisor notes: shown under their row, escaped, and never change the action
   const keep = rep.repos[1].worktrees[0];
   const note = { assessment: 'remove', confidence: 0.8, rationale: '<script>alert(1)</script> looks disposable' };
   const html = worktreeRowHTML(keep, rep.repos[1], note);
-  assert.ok(html.includes('<p class="wt-advice"><b>Advisor: remove</b> 80% · &lt;script&gt;alert(1)&lt;/script&gt; looks disposable</p>'));
-  assert.ok(!html.includes('worktree-remove'), 'a remove note must not add a Remove button');
+  const discuss = `<button type="button" class="link-btn" data-action="worktree-discuss" data-path="${keep.path}">Discuss</button>`;
+  assert.ok(html.includes(`<p class="wt-advice"><b>Advisor: remove</b> 80% · &lt;script&gt;alert(1)&lt;/script&gt; looks disposable ${discuss}</p>`), 'the note ends in Discuss');
+  assert.ok(!html.includes('worktree-remove"'), 'a remove note must not add a git worktree remove button');
+  assert.equal(ctx.worktreeNoteHTML(note, ''), '<p class="wt-advice"><b>Advisor: remove</b> 80% · &lt;script&gt;alert(1)&lt;/script&gt; looks disposable</p>');
+  // Discuss sits on every row the daemon can inspect, not on prune rows.
+  const prune = worktreeRowHTML({ path: REPO + '/.worktrees/gone', state: 'prune', reasons: [] }, rep.repos[0], note);
+  assert.ok(!prune.includes('worktree-discuss'));
+  for (const w of [rep.repos[0].worktrees[1], keep, rep.repos[1].worktrees[1]]) {
+    assert.equal((worktreeRowHTML(w, rep.repos[0]).match(/data-action="worktree-discuss"/g) || []).length, 1, w.state);
+  }
   const group = worktreeGroupHTML({ repo: rep.repos[1], rows: rep.repos[1].worktrees }, { [keep.path]: note });
   assert.equal((group.match(/class="wt-advice"/g) || []).length, 1);
   assert.ok(!worktreeRowHTML(keep, rep.repos[1]).includes('wt-advice'));
@@ -263,7 +324,7 @@ test('Remove all: offered for two or more removable rows with count and size; ru
   assert.ok(running.includes('>Remove all 2 · 2.0 GB</button>'));
 });
 
-test('agent asks: status line under the row, escaped; Ask the agent disabled while one runs', () => {
+test('agent asks: status line under the row, escaped; Ask <harness> disabled while one runs', () => {
   const rep = report();
   const keep = rep.repos[1].worktrees[0];
   const answered = worktreeRowHTML(keep, rep.repos[1], null,
@@ -271,7 +332,7 @@ test('agent asks: status line under the row, escaped; Ask the agent disabled whi
   assert.ok(answered.includes('<p class="wt-ask wt-ask-answered"><b>Asked claude:</b> pr — https://x/pull/&lt;9&gt; ($0.21)</p>'));
   const running = worktreeRowHTML(keep, rep.repos[1], null, { harness: 'codex', status: 'running' }, null, 'codex');
   assert.ok(running.includes("waiting for codex&#39;s answer…") || running.includes("waiting for codex's answer…"));
-  assert.match(running, /data-action="worktree-ask" data-path="[^"]+" title="Ask active codex agent" disabled>Ask the agent<\/button>/);
+  assert.match(running, /data-action="worktree-ask" data-path="[^"]+" title="Ask active codex agent" disabled>Ask codex<\/button>/);
   const failed = worktreeRowHTML(keep, rep.repos[1], null, { harness: 'codex', status: 'timeout', verdict: 'none', detail: 'no answer within 15m0s' });
   assert.ok(failed.includes('wt-ask-timeout') && failed.includes('timeout — no answer within 15m0s'));
 });

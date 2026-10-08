@@ -79,6 +79,9 @@ type statusFacts struct {
 	Changed      int
 	Untracked    int
 	Conflicts    int
+	// PartlyStaged counts changed paths whose staged content differs from
+	// the working file: only the index holds that version.
+	PartlyStaged int
 	Paths        []string // first maxPaths changed/untracked/conflicted paths
 }
 
@@ -120,11 +123,13 @@ func parseStatus(out string) statusFacts {
 		case strings.HasPrefix(f, "1 "):
 			if p := strings.SplitN(f, " ", 9); len(p) == 9 {
 				s.Changed++
+				s.PartlyStaged += partlyStaged(p[1])
 				addPath(p[8])
 			}
 		case strings.HasPrefix(f, "2 "):
 			if p := strings.SplitN(f, " ", 10); len(p) == 10 {
 				s.Changed++
+				s.PartlyStaged += partlyStaged(p[1])
 				addPath(p[9])
 			}
 			i++ // the rename's original path is the next field
@@ -141,6 +146,16 @@ func parseStatus(out string) statusFacts {
 	// porcelain v2 omits branch.ab when the upstream ref no longer exists.
 	s.UpstreamGone = s.Upstream != "" && !hasAB
 	return s
+}
+
+// partlyStaged is 1 for a porcelain v2 XY code whose index side (X) and
+// working side (Y) both changed: the staged version is in neither HEAD nor
+// the working file.
+func partlyStaged(xy string) int {
+	if len(xy) == 2 && xy[0] != '.' && xy[1] != '.' {
+		return 1
+	}
+	return 0
 }
 
 // preciousDirs and preciousFiles mark ignored entries that are usually the

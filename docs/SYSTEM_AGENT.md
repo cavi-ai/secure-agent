@@ -71,6 +71,15 @@ place. Pending recommendations survive the rolling chat history, with at most
 existing evidence, event, and audit records, so no new background collection
 or alert stream is required.
 
+## Worktree questions
+
+**Discuss** on a worktree in the **System** tab opens the Agent tab with the
+question "Can I delete this worktree?" (`POST /agent/worktree`). The daemon
+builds it from fresh checker facts; repository text sits inside an
+`<evidence>` block the model is told to treat as data. The reply and later
+chat messages stay in the same conversation, and a reply may still propose a
+local command that needs its own confirmation.
+
 ## Local chat and commands
 
 1. Send a message to Ollama. You may name the folder for a possible command.

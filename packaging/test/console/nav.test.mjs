@@ -18,16 +18,29 @@ const key = id => routeKey(resolveConsoleRoute(id));
 test('every old tab id resolves to its new tab[/sub]', () => {
   const want = {
     overview: 'home', findings: 'home', agents: 'sessions/processes', resources: 'sessions/resources',
-    history: 'sessions/resources', worktrees: 'sessions/worktrees', events: 'sessions/events',
-    sessions: 'sessions/board', egress: 'egress',
+    history: 'sessions/resources', worktrees: 'system', cleanup: 'system', clutter: 'system', events: 'sessions/events',
+    sessions: 'sessions/board', egress: 'egress', system: 'system',
   };
   for (const [id, route] of Object.entries(want)) assert.equal(key(id), route, id);
   assert.equal(resolveConsoleRoute('findings').focus, 'attention');
   assert.equal(resolveConsoleRoute('overview').focus, '');
 });
 
+test('System is a tab after Egress; the Cleanup sub-view left Sessions and its old routes land on System', () => {
+  const tabs = vm.runInContext('CONSOLE_TABS', ctx);
+  assert.deepEqual([...tabs], ['home', 'sessions', 'egress', 'system', 'policy', 'agent']);
+  assert.deepEqual([...vm.runInContext('SESSIONS_SUBS', ctx)], ['board', 'processes', 'resources', 'events']);
+  // Saved views, the stored tab and bookmarks kept "sessions/worktrees".
+  for (const id of ['sessions/worktrees', '#sessions/worktrees', 'worktrees', 'cleanup', 'clutter', 'system']) {
+    const r = resolveConsoleRoute(id);
+    assert.deepEqual({ ...r }, { tab: 'system', sub: '', focus: '' }, id);
+  }
+  assert.equal(consoleRouteHash(resolveConsoleRoute('sessions/worktrees')), '#system');
+  assert.equal(key('sessions/nope'), 'sessions/board');
+});
+
 test('new ids, sub-view hashes and unknown ids', () => {
-  for (const id of ['home', 'egress', 'policy']) assert.equal(key(id), id);
+  for (const id of ['home', 'egress', 'system', 'policy']) assert.equal(key(id), id);
   assert.equal(key('#sessions/events'), 'sessions/events');
   assert.equal(key('sessions/processes'), 'sessions/processes');
   assert.equal(key('sessions/nope'), 'sessions/board');
@@ -35,6 +48,7 @@ test('new ids, sub-view hashes and unknown ids', () => {
   for (const id of ['', 'nope', 'file=%2Fx', 'toString', '__proto__', undefined, null]) assert.equal(key(id), 'home', String(id));
   assert.equal(isConsoleRoute('agents'), true);
   assert.equal(isConsoleRoute('#sessions/worktrees'), true);
+  assert.equal(isConsoleRoute('#system'), true);
   assert.equal(isConsoleRoute('file=%2Fx'), false);
   assert.equal(isConsoleRoute('toString'), false);
 });

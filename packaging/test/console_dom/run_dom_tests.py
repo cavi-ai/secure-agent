@@ -199,6 +199,8 @@ def main():
         dom_notoken = dump_dom(chrome, tmp, "?notoken")
         dom_hashagents = dump_dom(chrome, tmp, "#agents")
         dom_hashfindings = dump_dom(chrome, tmp, "#findings")
+        dom_hashsessionswt = dump_dom(chrome, tmp, "#sessions/worktrees")
+        dom_hashworktrees = dump_dom(chrome, tmp, "#worktrees")
         dom_trends = dump_dom(chrome, tmp, "?trendsprobe")
         dom_hiddenrender = dump_dom(chrome, tmp, "?hiddenrenderprobe")
         dom_policylists = dump_dom(chrome, tmp, "?policylists")
@@ -266,6 +268,8 @@ def main():
         dom_wt = dump_dom(chrome, tmp, "?tab=worktrees")
         dom_wtreview = dump_dom(chrome, tmp, "?tab=worktrees&reviewdemo")
         dom_wtreviewtrash = dump_dom(chrome, tmp, "?tab=worktrees&reviewdemo&reviewtrash")
+        dom_wtdiscuss = dump_dom(chrome, tmp, "?tab=worktrees&discussdemo")
+        dom_wtdiscussoff = dump_dom(chrome, tmp, "?tab=worktrees&discussdemo&discussoff")
         dom_wtremove = dump_dom(chrome, tmp, "?tab=worktrees&worktreedemo")
         dom_wtorphan = dump_dom(chrome, tmp, "?tab=worktrees&orphandemo")
         dom_wtbatch = dump_dom(chrome, tmp, "?tab=worktrees&batchdemo")
@@ -875,9 +879,13 @@ def main():
         # --- tabs (console IA) ---
         tab_ids = re.findall(r'class="tab-btn[^"]*" data-tab="(\w+)"', dom)
         tab_labels = re.findall(r'data-tab="\w+" role="tab"[^>]*>\s*<svg[^>]*>.*?</svg><span>([^<]+)</span>', dom, re.S)
-        check("tab bar renders exactly five tabs, Home first, Agent last",
-              dom.count('class="tab-btn') == 5 and tab_ids == ["home", "sessions", "egress", "policy", "agent"]
-              and tab_labels == ["Home", "Sessions", "Egress", "Policy", "Agent"], f"ids={tab_ids} labels={tab_labels}")
+        check("tab bar renders exactly six tabs, Home first, System after Egress, Agent last",
+              dom.count('class="tab-btn') == 6 and tab_ids == ["home", "sessions", "egress", "system", "policy", "agent"]
+              and tab_labels == ["Home", "Sessions", "Egress", "System", "Policy", "Agent"], f"ids={tab_ids} labels={tab_labels}")
+        check("Sessions has no Cleanup sub-view; its panels live in the System tab",
+              'data-subtab="worktrees"' not in dom and 'id="sub-worktrees"' not in dom
+              and dom.index('id="tab-system"') < dom.index('id="worktrees-container"') < dom.index('id="clutter-container"') < dom.index('id="tab-policy"')
+              and dom.index('id="tab-egress"') < dom.index('id="tab-system"'))
         check("the attention panel lives in Home, first",
               dom.index('id="tab-home"') < dom.index('id="attention-center"') < dom.index('id="spend-card"')
               < dom.index('id="home-findings"') < dom.index('id="home-trends"') < dom.index('id="tab-sessions"'))
@@ -886,6 +894,7 @@ def main():
         check("non-active panels hidden",
               'id="tab-sessions" role="tabpanel" hidden' in dom
               and 'id="tab-egress" role="tabpanel" hidden' in dom
+              and 'id="tab-system" role="tabpanel" hidden' in dom
               and 'id="tab-policy" role="tabpanel" hidden' in dom)
         check("home panel visible",
               'id="tab-home" role="tabpanel">' in dom)
@@ -899,6 +908,11 @@ def main():
               and 'id="sub-processes" role="tabpanel">' in dom_hashagents
               and 'id="sub-board" role="tabpanel" hidden' in dom_hashagents
               and 'id="tab-sessions" role="tabpanel">' in dom_hashagents)
+        for old_hash, dom_old in (("#sessions/worktrees", dom_hashsessionswt), ("#worktrees", dom_hashworktrees)):
+            check(f"hash {old_hash} opens the System tab",
+                  'class="tab-btn active" data-tab="system"' in dom_old
+                  and 'id="tab-system" role="tabpanel">' in dom_old
+                  and 'id="tab-sessions" role="tabpanel" hidden' in dom_old)
         check("hash #findings opens Home",
               'class="tab-btn active" data-tab="home"' in dom_hashfindings
               and 'id="tab-home" role="tabpanel">' in dom_hashfindings)
@@ -973,7 +987,7 @@ def main():
         # The live Resources tab ends where the History tab begins: the flight
         # recorder moved out, so it must NOT be inside the resource view.
         resource_view = dom.split('id="resource-mission-control"', 1)[1].split('id="history-panel"', 1)[0]
-        history_view = dom.split('id="history-panel"', 1)[1].split('id="sub-worktrees"', 1)[0]
+        history_view = dom.split('id="history-panel"', 1)[1].split('id="sub-events"', 1)[0]
         check("whole-machine headroom is visible",
               "Machine headroom" in resource_view and "25 / 100" in resource_view
               and "4.0 GB available" in resource_view)
@@ -1245,13 +1259,13 @@ def main():
               and 'id="sub-events" role="tabpanel" hidden' in dom
               and 'class="subtabs" role="tablist"' in dom)
         check("pressure history sits in the Resources sub-view",
-              dom.index('id="sub-resources"') < dom.index('id="history-panel"') < dom.index('id="sub-worktrees"'))
+              dom.index('id="sub-resources"') < dom.index('id="history-panel"') < dom.index('id="sub-events"'))
         check("resource panel lives in the resources sub-view",
               dom.index('id="sub-resources"') < dom.index('id="resource-board"')
               and dom.index('id="resource-board"') < dom.index('id="history-panel"'))
         check("flight recorder lives in the resources sub-view",
               dom.index('id="history-panel"') < dom.index('id="history-board"')
-              and dom.index('id="history-board"') < dom.index('id="sub-worktrees"'))
+              and dom.index('id="history-board"') < dom.index('id="sub-events"'))
         check("event timeline lives in the events sub-view",
               dom.index('id="sub-events"') < dom.index('id="events-container"')
               and dom.index('id="events-container"') < dom.index('id="tab-egress"'))
@@ -1578,17 +1592,19 @@ def main():
             return dom_text.split('id="worktrees-container"', 1)[-1].split('data-action="clutter-rescan"', 1)[0]
 
         def cl_block(dom_text):
-            return dom_text.split('id="clutter-container"', 1)[-1].split('id="sub-events"', 1)[0]
+            return dom_text.split('id="clutter-container"', 1)[-1].split('id="tab-policy"', 1)[0]
         wt = wt_block(dom_wt)
         wt_rows = wt.count('class="wt-row')
         wt_remove = wt.count('data-action="worktree-remove"')
         wt_prune = wt.count('data-action="worktree-prune"')
-        check("worktrees: tab opens and renders a row per non-main worktree with its state",
-              'class="subtab-btn active" data-subtab="worktrees"' in dom_wt and wt_rows == 4
+        check("worktrees: the System tab opens and renders a row per non-main worktree with its state",
+              'class="tab-btn active" data-tab="system"' in dom_wt and 'data-subtab="worktrees"' not in dom_wt
+              and dom_wt.index('data-tab="egress" role="tab"') < dom_wt.index('data-tab="system" role="tab"') < dom_wt.index('data-tab="policy" role="tab"')
+              and wt_rows == 4
               and all(f'class="wt-row wt-{s}"' in wt for s in ("remove", "review", "keep", "prune"))
               and "main worktree of the repository" not in wt,
               f"rows={wt_rows}")
-        check("worktrees: Remove only on the remove row, Prune only on the prune row",
+        check("worktrees: git Remove only on the remove row, Prune only on the prune row",
               wt_remove == 1 and wt_prune == 1
               and 'data-action="worktree-remove" data-path="/Users/dev/workspace/api-service/.worktrees/done"' in wt,
               f"remove={wt_remove} prune={wt_prune}")
@@ -1600,18 +1616,41 @@ def main():
               'data-state="" aria-pressed="true">All <b>4</b></button>' in dom_wt
               and 'data-state="remove" aria-pressed="false">Remove <b>1</b></button>' in dom_wt
               and "1 repo · 4 worktrees · stale after 14 idle days · scanned in 4.2s" in dom_wt)
-        check("worktrees: the advisor note renders escaped under its row; Ask advisor sits on review and keep rows only",
-              '<p class="wt-advice"><b>Advisor: review</b> 60% · &lt;i&gt;look&lt;/i&gt; at .tmp before removing</p>' in wt
+        check("worktrees: the advisor note renders escaped under its row and ends in Discuss; Ask advisor sits on review and keep rows only",
+              '<p class="wt-advice"><b>Advisor: review</b> 60% · &lt;i&gt;look&lt;/i&gt; at .tmp before removing '
+              '<button type="button" class="link-btn" data-action="worktree-discuss" data-path="/Users/dev/workspace/api-service/.worktrees/evidence">Discuss</button></p>' in wt
               and wt.count('data-action="worktree-advise"') == 2)
-        check("worktrees: Ask the agent appears only for the active agent; review has an inspection action",
+        check("worktrees: Discuss sits on the remove, review and keep rows and the note, not on the prune row",
+              wt.count('data-action="worktree-discuss"') == 4
+              and 'data-action="worktree-discuss" data-path="/Users/dev/workspace/api-service/.worktrees/gone"' not in wt)
+        check("worktrees: Ask <harness> appears only for the active agent; no review drawer button remains",
               wt.count('data-action="worktree-ask"') == 1
-              and 'class="btn btn-primary btn-sm" data-action="worktree-ask"' in wt
-              and wt.count('data-action="worktree-review"') == 1
+              and 'class="btn btn-primary btn-sm" data-action="worktree-ask"' in wt and '>Ask codex</button>' in wt
+              and 'Ask the agent' not in wt
+              and 'data-action="worktree-review"' not in wt
               and '<p class="wt-ask wt-ask-answered"><b>Asked claude:</b> pr — https://github.com/o/r/pull/9 ($0.21)</p>' in wt)
-        check("worktrees: Review opens local-only reasons and a recoverable Trash action",
-              'Review worktree' in dom_wtreview
-              and 'ignored files that only live here: .tmp/' in dom_wtreview
-              and 'data-action="worktree-review-trash"' in dom_wtreview)
+        check("worktrees: review and keep rows carry Remove; the row with a live agent session is disabled and says why",
+              wt.count('data-action="worktree-review-trash"') == 1
+              and 'data-action="worktree-review-trash" data-path="/Users/dev/workspace/api-service/.worktrees/evidence"' in wt
+              and wt.count('>Remove</button>') == 3
+              and 'disabled="" title="Cannot remove: an agent session is live here">Remove</button>' in wt)
+        check("worktrees: Remove on a review row confirms what goes to the Trash and what stays in git, with no drawer",
+              'Move /Users/dev/workspace/api-service/.worktrees/evidence to the Trash and unregister the worktree?' in dom_wtreview
+              and 'Goes with it: ignored files that only live here: .tmp/ (3 files, 1.2 MB)' in dom_wtreview
+              and 'Stays in git: branch feat/evidence, its commits and stashes.' in dom_wtreview
+              and 'Its files stay in the Trash until you empty it; putting them back does not register the worktree again.' in dom_wtreview
+              and 'id="confirm-layer" class="confirm-layer" hidden' not in dom_wtreview
+              and 'Review worktree' not in dom_wtreview)
+        dw_agent = dom_wtdiscuss.split('id="tab-agent"', 1)[-1].split('id="drawer"', 1)[0]
+        check("worktrees: Discuss posts the worktree to the agent, opens the Agent tab and shows the question as a card",
+              'POST /agent/worktree' in pre(dom_wtdiscuss, 'mock-requests')
+              and 'class="tab-btn active" data-tab="agent"' in dom_wtdiscuss
+              and dw_agent.count('agent-worktree-card') == 1
+              and '<b>Can I delete this worktree?</b>' in dw_agent
+              and 'branch feat/evidence' in dw_agent and 'Only ignored scratch files would be lost.' in dw_agent)
+        check("worktrees: Discuss with the agent off toasts the server's text and stays on System",
+              'class="toast danger">the system agent is off: set system_agent.enabled: true in the config file<' in dom_wtdiscussoff
+              and 'class="tab-btn active" data-tab="system"' in dom_wtdiscussoff)
         check("worktrees: reviewed folder leaves the list after explicit Trash confirmation",
               'POST /worktrees/review-trash' in pre(dom_wtreviewtrash, 'mock-requests')
               and '.worktrees/evidence' not in wt_block(dom_wtreviewtrash))

@@ -730,6 +730,7 @@ func (a *API) routes() map[string]http.HandlerFunc {
 		"/agent/chat":                   a.handleAgentChat,
 		"/agent/analyze":                a.handleAgentAnalyze,
 		"/agent/recommendations":        a.handleAgentRecommendations,
+		"/agent/worktree":               a.handleAgentWorktree,
 		"/agent/actions":                a.handleAgentActions,
 		"/agent/plans":                  a.handleAgentPlans,
 		"/agent/dispatch":               a.handleAgentDispatch,

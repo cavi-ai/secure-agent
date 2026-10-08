@@ -17,14 +17,52 @@ import (
 
 var ErrReviewChanged = errors.New("worktree changed since review; refresh and inspect it again")
 
-type NotReviewableError struct{ Row Worktree }
+type NotReviewableError struct {
+	Row Worktree
+	// Why names the single reason this row cannot go to the Trash.
+	Why string
+}
 
 func (e *NotReviewableError) Error() string {
+	if e.Why != "" {
+		return fmt.Sprintf("worktree is %s, not safe to move to Trash: %s", e.Row.State, e.Why)
+	}
 	return fmt.Sprintf("worktree is %s, not safe to move to Trash: %s", e.Row.State, strings.Join(e.Row.Reasons, "; "))
 }
 
-// TrashReviewed preserves local-only files in the Trash while unregistering
-// a linked worktree. It never relaxes the automatic Remove verdict.
+// trashBlocker returns why a keep or review row cannot be moved to the
+// Trash, or "". The move may lose only the folder: nothing a live session
+// holds, nothing git protects with a lock, no commit that only the detached
+// HEAD reaches, and nothing only the worktree's index or merge state holds
+// (git deletes those with the registration).
+func trashBlocker(row Worktree) string {
+	switch {
+	case row.Orphan:
+		return "directory is not registered with git"
+	case row.Error != "":
+		return "could not inspect: " + row.Error
+	case row.Submodules != 0:
+		return "it has populated submodules"
+	case row.InUse:
+		return "an agent session is live here"
+	case row.Locked:
+		return "it is locked; unlock it first"
+	case row.Loose > 0:
+		return "detached HEAD has commits on no branch; create a branch first"
+	case row.Conflicts > 0:
+		return "a merge or rebase has unresolved conflicts; finish or abort it first"
+	case row.PartlyStaged > 0:
+		return plural(row.PartlyStaged, "file has", "files have") + " staged changes that differ from the working copy; commit or unstage them first"
+	}
+	return ""
+}
+
+// TrashReviewed moves a linked worktree's folder to the Trash and
+// unregisters it from git. A keep or review row qualifies; the folder goes
+// with its uncommitted, untracked and ignored files (recoverable from the
+// Trash), while the branch, its commits and stashes stay in git. It refuses
+// what trashBlocker names and a folder holding another registered worktree.
+// It never relaxes the automatic Remove verdict.
 func (h *Hunter) TrashReviewed(ctx context.Context, path, head string, reasons []string) (TrashedOrphan, error) {
 	if !filepath.IsAbs(path) || head == "" || len(reasons) == 0 {
 		return TrashedOrphan{}, errors.New("absolute path, reviewed head and reasons are required")
@@ -36,8 +74,11 @@ func (h *Hunter) TrashReviewed(ctx context.Context, path, head string, reasons [
 		return TrashedOrphan{}, err
 	}
 	row := h.judge(ctx, rs, l)
-	if row.State != StateReview || row.Orphan || row.Error != "" || row.Submodules != 0 {
+	if row.State != StateKeep && row.State != StateReview {
 		return TrashedOrphan{}, &NotReviewableError{Row: row}
+	}
+	if why := trashBlocker(row); why != "" {
+		return TrashedOrphan{}, &NotReviewableError{Row: row, Why: why}
 	}
 	if row.Head != head || !slices.Equal(row.Reasons, reasons) {
 		return TrashedOrphan{}, ErrReviewChanged
@@ -45,7 +86,7 @@ func (h *Hunter) TrashReviewed(ctx context.Context, path, head string, reasons [
 	// Never move another registered worktree along with this folder.
 	for _, other := range rs.list {
 		if other.Path != l.Path && strings.HasPrefix(other.Path, l.Path+string(filepath.Separator)) {
-			return TrashedOrphan{}, errors.New("another registered worktree is inside this folder")
+			return TrashedOrphan{}, &NotReviewableError{Row: row, Why: "another registered worktree is inside this folder"}
 		}
 	}
 	u := diskusage.Dir(ctx, l.Path, nil)
