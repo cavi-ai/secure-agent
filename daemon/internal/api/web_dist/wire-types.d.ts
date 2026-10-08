@@ -764,6 +764,11 @@ export interface Worktree {
   unique_commits?: number;
   loose_commits?: number;
   merged?: string;
+  content_lines?: number;
+  content_missing?: number;
+  content_extended?: number;
+  content_other?: number;
+  unrelated_history?: boolean;
   size_bytes?: number;
   size_partial?: boolean;
   submodules?: number;

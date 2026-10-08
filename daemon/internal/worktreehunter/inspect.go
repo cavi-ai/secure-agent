@@ -430,8 +430,9 @@ const (
 	mergedAncestor = "ancestor" // HEAD is reachable from the default branch
 	mergedSquash   = "squash"   // the branch's combined diff landed as one commit
 	mergedEmpty    = "empty"    // the branch's tree equals its merge-base: nothing to merge
+	mergedContent  = "content"  // every line the branch adds is in the default branch, in the same or a renamed file
 	mergedNo       = "no"
-	mergedUnknown  = "unknown" // too far behind to check, or a git error
+	mergedUnknown  = "unknown" // no common base, a diff over the bounds, or a git error
 )
 
 // squashDepth is how many recent non-merge commits of the default branch
