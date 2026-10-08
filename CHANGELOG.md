@@ -6,72 +6,93 @@ All notable changes to `secure-agent` are documented here. The format follows
 
 ## [Unreleased]
 
-### Monitoring
-- Surface dropped telemetry and failed evidence persistence in status, posture, and Doctor; retain the warning about possible history gaps after writes recover.
-- Separate each active harness's trace and guard support from recent session-attributed activity.
-- Retain last-known native data on refresh failures, mark it stale, and keep guard-decision refreshes independent of findings and posture failures.
+### Added
+- Settings → Secure Agent → Traffic: route Claude Code through Secure Agent's proxy.
+- Proxy: the proxy URL user selects `inspect` or `tunnel`.
+- API: `GET /routing/claude`.
+- Status: `proxy_tunneled` and `proxy_decrypted` counts.
+- Settings → Secure Agent → Chat: **Review new findings automatically** (`system_agent.auto_review`).
+- Findings: `test-value` evidence for secrets that look like test values.
+- Findings: send selected findings to the local agent's review queue.
+- Findings: agent-scoped `.env` exceptions for test and non-secret files.
+- Findings: `.env` evidence shows variable names only.
+- Status, posture and Doctor: dropped telemetry and failed evidence writes.
+- Status: per-harness trace and guard support.
+- Status: `es_service.newest_event_at` and `lag_seconds`.
+- Console: stale or unavailable notice on a report that failed to refresh.
+- Telemetry Doctor: recovery steps and **Open hook setup**.
+- Cursor: Secure Agent's tool hooks beside the user's hooks.
+- CLI: `secure-agent telemetry repair`.
+- Pricing: Claude Sonnet 5.5.
 
-### Routing
-- Settings → Secure Agent → Traffic → Route Claude Code through Secure Agent: the app writes the proxy and Secure Agent's CA into the `env` block of `~/.claude/settings.json`, and a SessionStart hook that gives each session's Bash commands the tunnel-mode snippet; it removes them at quit and writes them again at launch.
-- The proxy URL's user name selects the mode: `inspect` decrypts and scans hosts in `proxy_inspect_hosts` (default `api.anthropic.com`) and tunnels the rest; `tunnel` passes every connection through unopened, so clients that do not trust Secure Agent's CA keep working.
-- `GET /routing/claude` (NoAgent) serves the routing environment; `/status` counts `proxy_tunneled` and `proxy_decrypted`; doctor `egress-routing` names them.
-
-### Chat
-- Show immediate sending feedback and animated local-model wait states, with a static reduced-motion alternative. Repeated Enter cannot submit a message twice.
-- Preserve drafts during delivery failures and concurrent editing; show persistent errors and reject stale refreshes that would hide accepted messages.
-- Keep confirmed command status, exit codes, and escaped output beside their proposal in the conversation, while retaining explicit approval before execution.
-
-### Settings
-- Combine local chat and analysis model controls under Secure Agent, retain separate enable controls, and restore the Providers sidebar icon.
-
-### Security findings
-- Match destination mutes against structured connection evidence so existing flags clear regardless of their display wording.
-- Push posture changes after API decisions so dismissing the last pending finding restores the menu bar's purple state without waiting for new telemetry.
-- Restore approval, local review, and file inspection buttons on grouped and individual findings; grouped approvals use their served endpoint directly.
-- Count tightly matched `gh` credential-helper/Git client activity as routine GitHub use, while retaining findings for model-visible reads, unrelated processes, other secrets, and shared cloud destinations.
-- Prioritize critical findings ahead of repeated warnings in the findings list.
-- Distinguish temporal and parent-process read/connect correlations from direct or descendant activity; cloud/CDN identity no longer claims to identify the receiving service.
-- Retain weak historical findings at review severity, fold unresolved repetitions across hours and restarts, and alert when stronger evidence appears.
-- Scope expected reads to exact destination hosts, preserve unmatched evidence, and make served exception actions functional in the console.
-- Add reversible, agent-scoped test/non-secret `.env` exceptions and fix `not_secret_paths` precedence for `.env` fixtures.
-- Inspect small evidence `.env` files by variable name without displaying values; symlinks and ambiguous multiline files are withheld.
-- Send selected findings directly to the local agent review queue with daemon-built evidence; local commands still require explicit confirmation.
+### Changed
+- Settings: Protection split into Files and Network.
+- Settings: Chat, Analysis and Traffic grouped under Secure Agent.
+- Settings → Providers: toggles apply without a restart.
+- Chat: sending and waiting states.
+- Chat: command status, exit code and output stay beside the proposal.
+- Findings: critical findings sort first.
+- Findings: `gh` credential-helper reads for GitHub count as routine.
+- Findings: temporal and parent-process correlations labeled apart from direct activity.
+- Findings: weak historical findings stay at review severity.
+- Findings: repeats fold across restarts.
+- Findings: expected reads scoped to exact hosts.
+- Findings: destination mutes match structured evidence.
+- Posture: uninspected egress alone is all-clear.
+- Egress: infra apps' endpoints count as `uninspected_infra`.
+- Egress: the warning badge counts pending decisions.
+- Install: one copy, `/Applications/Secure Agent.app`.
+- App: bundle identifier `com.cavi-ai.secure-agent`.
+- Dependencies: `modernc.org/sqlite` 1.60.1.
 
 ### Fixed
-- Record Antigravity transcript sessions under its agent name, `antigravity`, instead of the CLI name `agy`; sessions stored as `agy` are renamed at open. Harness coverage in status and posture reported Antigravity as untraced because its sessions never matched the agent.
-- Index hook and trace events by kind and time (partial: those kinds only). The harness coverage behind every `/status`, `/snapshot` and `/posture` read every retained trace event under the store lock; it now reads the last 24 h from the index.
-- Withdraw a guard prompt when its hook stops waiting (its own deadline, a killed hook, a dropped connection). An "Allow Always" given after the hook had denied the tool call saved a permanent allow rule and recorded an allow; it now saves nothing and the decision is recorded as a deny. A duplicate request keeps the prompt open until it is answered or the last waiting hook leaves.
-- Index events by remote host (partial: only events with a host). The advisor's per-flag host trend and the host detail view no longer scan every stored event under the store lock, and the host list reads newest first without sorting the host's events; an index from an earlier build is rebuilt at open.
-- Index flags (pid, instant, rule and agent) and incidents (open-incident key, instant, flag id); flag and incident retention deletes only the overflow. At the 10,000-flag and 5,000-incident caps a new flag no longer sorts both tables under the store lock. A stored `now` timestamp skips the two time indexes with a log line instead of stopping the store from opening.
-- Redact the same credential shapes in the daemon, the activity log, and the guard audit trail: provider (`sk-`), GitHub, GitLab and Slack tokens, URL userinfo, password flags, credential assignments, and whole private-key blocks.
-- One daemon per store: a second `secure-agentd` on the same database waits for the first to exit instead of replacing its socket and ingesting every source twice.
-- Doctor `config` check names start-only settings (firewall, guard, paths, proxy, retention, …) changed in `config.yaml` since start until Secure Agent restarts.
-- Settings → Providers toggles apply within seconds: the daemon reloads `agents` and `disabled_agents` live instead of only at start.
-- Doctor `config` check: fails when `config.yaml` could not be read or parsed in full at start, or a hot reload was skipped, instead of only logging it; the boot log no longer claims every setting fell back to defaults after a type error.
-- `/status` and `/fleet` report one live `fleet_configured`: enrolling or removing a collector webhook updates both without a restart, and a webhook without a secret does not count.
-- `make install` installs into `/Applications/Secure Agent.app` (the previous copy goes to the Trash) and opens only that copy; the build in `dist/` is never registered or opened. The app registers, re-registers or repairs the file-telemetry helper only when it runs from `/Applications`; any other copy shows "Secure Agent must run from /Applications to manage file telemetry", and the Doctor warns when another copy is registered with macOS.
-- The app re-registers a file-telemetry helper that launchd refuses to start (last exit 78, EX_CONFIG), once per launch; `secure-agent telemetry repair` asks it to.
-- The app's bundle identifier is `com.cavi-ai.secure-agent` again: the `.ui` identity could not manage the file-telemetry helper registered under `com.cavi-ai.secure-agent`.
-- `make app`, `make install` and `make release` stop when a Go binary is stamped with a commit other than HEAD: Go before 1.27 stamps the enclosing checkout's commit when it builds in a git worktree.
-- Egress episodes keep a connection seen while another store write is in progress; the episode write takes SQLite's write lock at BEGIN instead of failing its read-to-write upgrade.
-- File telemetry: after the spool rotates, the tailer reads the rest of the rotated file before the new spool from its start; a line still being written waits for its end; the daemon's own file events no longer count as lines that did not parse.
-- Doctor trace coverage counts a session as seen only when one of its transcript lines was read or a hook fired since boot, and counts trace rows written since boot: a conversation whose process stays alive with no new turns, or a transcript read for the first time, no longer reads as a blind collector.
-- Worktrees: a removal, prune, reconnect or Move to Trash cancels the background rescan the previous removal started instead of waiting for it; the next report rescans after the action.
-- Pricing: Claude Sonnet 5.5 (`claude-sonnet-5-5`) at $2 / $10 per million input / output tokens. A price added later, built in or in `pricing:`, also prices the Claude and Codex calls already stored without one.
-- Doctor and posture: a file telemetry service that launchd restarted after an exit and is running again (`running (last exit 1)`) is not reported as failing; it still fails when its spool stops being written.
-- The routing snippet's token reached no client: `PROXY_AUTHORIZATION` is not read by HTTP clients, and the proxy accepted only an unencoded token. The proxy URL now carries the token as the basic-auth password, which the proxy accepts base64-encoded; the snippet adds `NO_PROXY` for loopback and no longer sets `SSL_CERT_FILE` or `REQUESTS_CA_BUNDLE`.
-- Sessions: a session whose root process now belongs to an infra family other than its own harness (a Claude desktop conversation rooted at the app before the app was infra) ends after an hour of silence instead of staying open until that process exits.
-- Posture and menu bar: uninspected egress alone is a coverage note, not attention. With no decisions and no monitoring gap, posture is `all-clear`, the menu bar icon is purple and the popover shows no hero card; the note stays in the console's coverage list.
-- Egress: endpoints reached outside the proxy by infra apps (`cursor-ide`, `claude-desktop`, `ollama`, `lm-studio`) no longer count in `uninspected_egress`, the egress posture warning or doctor's egress-routing check; they count in `uninspected_infra`, carry `agent_kind: "infra"` on `/egress/uninspected`, are never allowlist suggestions, and the console lists them under Infrastructure apps.
-- Costs: one Claude API call is one model call. Claude Code writes a transcript record per content block (thinking, text, tool_use), each repeating the message id and usage, and each was stored as a model call with the full tokens and cost, so Claude token and cost totals read about twice the real figure. A Claude model call now carries its message id as `call_id`; the tailer publishes it once, and the store keeps one row per session and message id, raised to the largest usage its records carry. At start the store deletes the duplicates already written: an id-less Claude model call that repeats the previous call of its session with the same model and token counts within a second.
-- Resource episodes read the session's own tool calls, model calls and turns (stored without a pid) as well as the process family's events; a tool call matches a memory rise it overlaps, not only one it started in, and a call still running at capture spans to the capture; the headline names a tool or model call ahead of a connection and counts the rest; the activities the rise matched are kept when the list is bounded.
-- Resource episodes stay `settling` until the daemon has stored or skipped file events from their capture on (at most ten minutes): file rows are stored with their event time and can arrive late.
-- The root ES collector restarts eslogger when its records have stayed more than 60 s old for 30 s, dropping the backlog eslogger held in memory; under a flood of opens it had fallen hours behind and never caught up. Each restart closes the spool file it had open.
-- Posture and doctor report file monitoring as running late when file events reach the daemon two minutes or more after they happened; `es_service` gains `newest_event_at` and `lag_seconds`.
-- An ES event from a process that exited before it was resolved joins the session of the parent Endpoint Security recorded, instead of going unattributed (file events from unattributed processes are not stored).
-- Doctor: a file telemetry job launchd will not start while the service is enabled — no pid and last exit 78 (`EX_CONFIG`), or `spawn scheduled` after a nonzero exit — fails the menu bar Doctor's launchd check with Re-register and the exit code; it was a warning with no fix. The daemon's `/doctor` `file-telemetry` detail and the posture item name Re-register for that state.
-- Secret findings in transcripts carry a `test-value` evidence item with the value-free reasons the value looks like a test, dummy or sentinel value (published samples such as AWS `...EXAMPLE` keys and jwt.io's token, placeholder words, test-mode keys, low-entropy values, values that decode to placeholder credentials as in Kubernetes Secrets and Docker config, or only test context). The local advisor's triage and the local agent's review weigh it: a value marked by its own content reads as a test value; test context alone does not clear a live-looking value.
-- Settings → Secure Agent → Chat: **Review new findings automatically** (`system_agent.auto_review`) sends new findings of severity 2 or more to the local agent's review queue without a click; a burst is one review, reviews go out at least ten minutes apart with at most ten findings, and a busy agent keeps the batch for the next attempt.
+- Costs: one model call per Claude API call.
+- Costs: duplicate stored Claude model calls removed at open.
+- Pricing: stored calls priced when a price is added.
+- Chat: Enter cannot send twice.
+- Chat: drafts survive failed sends.
+- Findings: approval, review and file inspection buttons on grouped findings.
+- Menu bar: posture updates right after a decision.
+- Console: an authentication rejection ends the session.
+- Console: an older refresh never replaces newer data.
+- Console: malformed reports keep the last good data.
+- Console: filtered results survive a failed refresh.
+- Store: incidents, verdicts, plans, episodes and sessions published only after they are stored.
+- Store: failed session writes retried.
+- Store: schema upgrades run in one transaction.
+- Store: a stored `now` timestamp no longer stops the store from opening.
+- Store: indexes for flag, incident, host and harness-activity lookups.
+- Store: flag and incident retention deletes only the overflow.
+- Sessions: activity timestamps only move forward.
+- Sessions: rekeying is atomic.
+- Sessions: a silent session rooted in another family's infra ends after an hour.
+- Sessions: Antigravity sessions recorded as `antigravity`.
+- Transcripts: events kept until delivered.
+- Transcripts: checkpoint failures retried and reported.
+- OpenCode: history read in bounded pages.
+- File telemetry: spool bursts kept across full queues and rotation.
+- File telemetry: the tailer reads a rotated spool to its end.
+- File telemetry: a lagging eslogger is restarted.
+- File telemetry: the app re-registers a helper launchd will not start.
+- File telemetry: events from exited processes join the parent's session.
+- Forensic archive: kept when rotation fails.
+- Resource episodes: include the session's tool and model calls.
+- Resource episodes: wait for late file events.
+- Egress episodes: no lost connections during concurrent writes.
+- Doctor: `config` names start-only settings changed since start.
+- Doctor: `config` fails on an unreadable overlay or a skipped reload.
+- Doctor: trace coverage counts only sessions seen since boot.
+- Doctor: a running ES service with an earlier exit passes.
+- Doctor: a helper launchd will not start offers Re-register.
+- Fleet: `/status` and `/fleet` share one live `fleet_configured`.
+- Routing: the proxy URL carries the token.
+- Worktrees: an action cancels the background rescan.
+- Daemon: one daemon per store.
+- Build: `make` stops when a binary's commit stamp is not HEAD.
+
+### Security
+- Guard: a prompt is withdrawn when its hook stops waiting.
+- Redaction: one rule set for the daemon, activity log and guard audit.
 
 ## [1.2.0] - 2026-09-30
 
