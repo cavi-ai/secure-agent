@@ -62,12 +62,21 @@ dense with ids and encoded blobs.
 - **Non-proxied egress.** An agent that ignores the proxy environment connects
   directly. Such connections are counted in the `uninspected_egress` status
   metric so the blind spot is visible, not silent.
-- **Request bodies beyond the inspection limit.** The proxy scans the first
-  1 MiB and streams the remaining bytes unchanged. An oversized body raises
-  a `proxy-inspection-incomplete:body-limit` coverage warning; a body read
-  failure raises `proxy-inspection-incomplete:body-read`. These warnings do
-  not assert a secret leak or block a request by themselves. Secrets appearing
-  only in the uninspected suffix may pass under the fail-open policy.
+- **Bounded request inspection.** Before forwarding, the proxy captures up to
+  64 MiB of request data and scans 1 MiB windows with up to 64 KiB of overlap
+  at token boundaries. URL, JSON and base64 views expose encoded fingerprints
+  and typed patterns. Gzip request bodies are scanned after decompression,
+  with a separate 64 MiB expansion budget. Larger requests retain their full
+  original bytes for forwarding, with a `proxy-inspection-incomplete:body-limit`
+  warning for the uninspected suffix. Multi-window scans raise
+  `proxy-inspection-incomplete:body-window`: tokens larger than a window and
+  custom patterns spanning more than the overlap can be missed. Anchored custom
+  patterns are skipped in partial windows to avoid fabricated boundary matches.
+  Body read, replay-storage and decoding failures raise `body-read`,
+  `body-buffer` and `body-decode` warnings under the same prefix. Unsupported
+  content encodings also raise `body-decode`. These warnings do not assert a
+  leak or block by themselves; uncovered secrets may pass under the fail-open
+  policy. Response injection inspection remains limited to the first 1 MiB.
 - **Filesystem / directory access.** Guarding what an agent reads or writes on
   disk is handled separately by the harness hooks, not by this firewall.
 - **Secrets the user never registered and that match no pattern.** Fingerprints
@@ -90,6 +99,12 @@ dense with ids and encoded blobs.
   and length. Plaintext is discarded during ingest and never persisted.
 - Findings and events carry a secret's **type** and the matching rule/fingerprint
   **id** — never the secret value.
+- Request replay retains at most 1 MiB in memory before spilling to an
+  immediately unlinked `0600` temporary file. File records use authenticated
+  encryption with a fresh per-request key held only in memory. Closing the
+  request releases the file, including on blocked requests and forwarding errors.
+  Capture adds upload latency before any upstream request is sent; existing
+  connection read deadlines bound stalled clients.
 - On any inspection error, timeout, or un-decodable payload the firewall allows
   the request and records a finding; it never fails closed.
 
