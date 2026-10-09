@@ -107,6 +107,8 @@ The app bundle has one identity, `com.cavi-ai.secure-agent`, for Launch Services
 
 - **Pub/Sub Channel Bus (`daemon/internal/bus/bus.go`)**: Centralized Go channel event bus with non-blocking fan-out subscribers. Guarantees that slow database disk IO never blocks real-time file or process event capture.
 - **Store Engine (`daemon/internal/store/store.go`)**: Persists events and correlation flags to SQLite (`events.db`) and mirrors flags only to a forensic JSONL log (`jsonl_path`, default `events.jsonl`). Implements automatic retention pruning. The store depends on no detection engine; endpoint naming comes from `daemon/internal/hostid`.
+
+  New and legacy databases initialize at schema v2. This compatibility build also accepts additive schema-v3 databases, preserving their version and metadata outside the current read model. Versions above v3 are rejected before schema initialization. After a database reaches v3, rollback requires this v3-aware build or a later compatible build; earlier binaries reject v3. Do not lower the version, drop evidence, or replace newer data with an older backup to make an older binary start.
 - **Endpoint identity (`daemon/internal/hostid`)**: Names a host or IP by owning org, class, and CDN/cloud infrastructure, and holds the one host match rule for vendor and user-approved hosts. Standard library only; shared by the correlator, store, and API.
 
 Core evidence writes (events, flags, incidents, guard decisions, sessions,

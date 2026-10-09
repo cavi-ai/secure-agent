@@ -2241,3 +2241,9 @@ button.rc-col:hover .rc-seg-freed { background: var(--brand-2); }
   .wt-search { max-width: none; }
   .rc-chart { grid-template-rows: 96px auto; }
 }
+.finding-assessment { margin: 8px 0; font-size: 12px; line-height: 1.5; }
+.assessment-state { font-weight: 600; margin: 0 0 4px; }
+.assessment-limits { color: var(--tx-2); }
+.assessment-limits summary { cursor: pointer; }
+.assessment-limits ul { margin: 6px 0; padding-left: 18px; }
+.assessment-advice { color: var(--tx-2); margin: 6px 0 0; }

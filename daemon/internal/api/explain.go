@@ -127,13 +127,13 @@ func (a *API) handleFlagExplain(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, f)
 }
 
-// stampExplains sets Explain on the first explainListCap unacknowledged
-// flags, without network lookups.
+// stampExplains sets Explain on the first explainListCap flags, including
+// reviewed history, without network lookups.
 func (a *API) stampExplains(flags []model.Flag) {
 	var env *explainEnv
 	n := 0
 	for i := range flags {
-		if flags[i].Acknowledged || n >= explainListCap {
+		if n >= explainListCap {
 			continue
 		}
 		if env == nil {
@@ -152,7 +152,8 @@ func (a *API) explainFlag(f model.Flag, full bool) *model.FlagExplain {
 }
 
 func (a *API) explainFlagIn(f model.Flag, full bool, env *explainEnv) *model.FlagExplain {
-	ex := &model.FlagExplain{Disposition: dispositionFor(f)}
+	assessment := assessmentForFlag(f)
+	ex := &model.FlagExplain{Disposition: dispositionFor(f), Assessment: &assessment}
 	sess := a.session(env, f.SessionID)
 	workspace := f.Workspace
 	if sess != nil && sess.Workspace != "" {

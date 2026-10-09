@@ -51,9 +51,10 @@ type Pattern struct {
 	Destinations []PatternDestination `json:"destinations,omitempty"`
 	// Disposition is the worst among unacknowledged flags; acknowledged when
 	// none is open.
-	Disposition Disposition     `json:"disposition"`
-	Summary     string          `json:"summary"`
-	Actions     []ExplainAction `json:"actions"`
+	Disposition Disposition        `json:"disposition"`
+	Assessment  *FindingAssessment `json:"assessment,omitempty"`
+	Summary     string             `json:"summary"`
+	Actions     []ExplainAction    `json:"actions"`
 	// FlagIDs are the covered flags, open ones first, newest first, at most
 	// PatternFlagIDCap.
 	FlagIDs []string `json:"flag_ids"`

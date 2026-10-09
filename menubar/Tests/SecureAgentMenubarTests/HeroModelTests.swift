@@ -33,11 +33,27 @@ final class HeroModelTests: XCTestCase {
         PostureModel(state: state, needsYou: state == "all-clear" ? 0 : 1, summary: summary, connected: true)
     }
 
+    func testAssessmentOverridesLegacyBenignAndReviewDoesNotEraseRisk() throws {
+        let data = Data(#"{"id":"assessed","rule":"sensitive-read-then-connect","severity":3,"ts":"","pid":901,"agent":"cursor","evidence":[],"acknowledged":true,"explain":{"what":"Sensitive tool read.","disposition":{"state":"benign-likely","text":"Likely benign","why":""},"actions":[{"id":"allow-host","label":"Allow","consequence":"","method":"POST","path":"/allowlist","recommended":true}],"assessment":{"evidence_basis":["model-visible-read"],"risk":"critical","control":"unknown","residual_risk":"model-exposure","review_state":"reviewed","reason":"Model-visible sensitive read.","limits":["Transmission not established."],"advice":{"assessment":"benign","confidence":0.99,"rationale":"Routine traffic."}}}}"#.utf8)
+        let flag = try JSONDecoder().decode(FlagModel.self, from: data)
+        let lines = ConsoleView.HeroModel(icon: "", color: .bad, title: "", subtitle: "", flag: flag, action: nil).flagLines
+        XCTAssertTrue(lines.contains { $0.contains("Critical risk") })
+        XCTAssertTrue(lines.contains { $0.contains("Reviewed") })
+        XCTAssertTrue(lines.contains { $0.contains("Model exposure") })
+        XCTAssertTrue(lines.contains { $0.contains("Control outcome unknown") })
+        XCTAssertTrue(lines.contains { $0.contains("Advisor opinion") })
+        XCTAssertFalse(lines.contains("Likely benign"))
+        XCTAssertEqual(AppState.heroAction(for: flag), .openConsole(tab: "findings"), "conflicting advice must not recommend a permission change")
+        let s = state(flags: [flag])
+        XCTAssertFalse(s.shouldNotify(for: flag), "reviewed evidence remains in history without paging again")
+        XCTAssertEqual(AppState.flagsSignature([flag]), AppState.flagsSignature([flag]), "unchanged assessment must not cause render churn")
+    }
+
     func testReviewedFlagsDoNotDemandReview() {
         // 20 sev-2 flags, ALL acknowledged → no flag in the hero.
         let s = state(flags: (1...20).map { flag(id: "f\($0)", sev: 2, acked: true) })
         let hero = ConsoleView(state: s, scrollable: false).heroModel
-        XCTAssertEqual(hero.title, "Protected")
+        XCTAssertEqual(hero.title, "No pending decisions")
         XCTAssertNil(hero.flag)
         XCTAssertNil(hero.action)
     }
@@ -98,11 +114,11 @@ final class HeroModelTests: XCTestCase {
         XCTAssertTrue(ConsoleView(state: flagged, scrollable: false).showsHero)
     }
 
-    func testPostureAllClearIsProtected() {
+    func testNoPendingDecisionsDoesNotClaimProtection() {
         let s = state(flags: [])
         s.seedPostureForTesting(posture("all-clear", "All clear — agents monitored, no action needed."))
         let hero = ConsoleView(state: s, scrollable: false).heroModel
-        XCTAssertEqual(hero.title, "Protected")
+        XCTAssertEqual(hero.title, "No pending decisions")
         XCTAssertEqual(hero.color, .ok)
         XCTAssertEqual(hero.subtitle, "All clear — agents monitored, no action needed.")
     }
@@ -189,13 +205,13 @@ final class HeroModelTests: XCTestCase {
     func testAcknowledgedCriticalDoesNotEscalateHero() {
         let s = state(flags: [flag(id: "f1", sev: 3, acked: true)])
         let hero = ConsoleView(state: s, scrollable: false).heroModel
-        XCTAssertEqual(hero.title, "Protected", "acked critical must not say Action needed")
+        XCTAssertEqual(hero.title, "No pending decisions", "acked critical must not say Action needed")
     }
 
     func testResolvedIncidentDoesNotEscalateHero() {
         let s = AppState.previewFlagsAndIncidents([], [incident("i1", status: "resolved")])
         let hero = ConsoleView(state: s, scrollable: false).heroModel
-        XCTAssertEqual(hero.title, "Protected", "resolved incident must not say Action needed")
+        XCTAssertEqual(hero.title, "No pending decisions", "resolved incident must not say Action needed")
     }
 
     // MARK: session cards summary

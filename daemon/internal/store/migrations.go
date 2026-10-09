@@ -9,6 +9,8 @@ import (
 
 // initializeSchema upgrades legacy layouts atomically. Each column is checked
 // independently so interrupted migrations from earlier releases can resume.
+// This compatibility bridge still creates v2, but can read additive v3 layouts
+// without lowering their version or removing metadata it does not own.
 func initializeSchema(db *sql.DB) error {
 	tx, err := db.Begin()
 	if err != nil {
@@ -19,7 +21,7 @@ func initializeSchema(db *sql.DB) error {
 	if err := tx.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
 		return err
 	}
-	if version > 2 {
+	if version > 3 {
 		return fmt.Errorf("unsupported database schema version %d", version)
 	}
 	createQueries := []string{
@@ -401,8 +403,10 @@ func initializeSchema(db *sql.DB) error {
 			return fmt.Errorf("create schema index: %w", err)
 		}
 	}
-	if _, err := tx.Exec(`PRAGMA user_version=2`); err != nil {
-		return err
+	if version < 2 {
+		if _, err := tx.Exec(`PRAGMA user_version=2`); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
 }
