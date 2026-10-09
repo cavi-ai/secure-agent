@@ -1713,6 +1713,10 @@ button.fact:hover { background: var(--bg-3); border-color: var(--brand); }
 .sd-metadata-body { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 6px 0 0; }
 .session-detail-body { flex: 1; min-height: 0; min-width: 0; overflow: auto; padding: 0 12px 12px; scrollbar-gutter: stable; overflow-anchor: none; }
 .session-memory { min-width: 0; }
+.sd-outcome { padding: 12px 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.sd-outcome h5 { margin: 0; font-size: 13px; }
+.sd-outcome time { font: 11px/1.4 var(--mono); color: var(--tx-2); }
+.sd-outcome p { margin: 6px 0; font-size: 12px; }
 .sm-earlier { margin: 10px 0 4px; }
 .sm-state { color: var(--tx-3); font-size: 13px; padding: 22px 8px; line-height: 1.5; }
 .sm-list { min-width: 0; }

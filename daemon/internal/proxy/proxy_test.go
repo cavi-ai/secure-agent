@@ -424,7 +424,10 @@ func TestConsoleAPIPathsCoverWebApp(t *testing.T) {
 	if !isConsoleAPIPath("/sessions/sess-1/overview") {
 		t.Error("dynamic /sessions/{id}/overview route is not console-allowed — the session status panel 407s on the proxy listener")
 	}
-	fragments := map[string]bool{"/timeline": true, "/report": true, "/memory": true, "/overview": true, "/sessions": true}
+	if !isConsoleAPIPath("/sessions/sess-1/outcomes") {
+		t.Error("dynamic /sessions/{id}/outcomes route is not console-allowed — the results panel 407s on the proxy listener")
+	}
+	fragments := map[string]bool{"/timeline": true, "/report": true, "/memory": true, "/overview": true, "/outcomes": true, "/sessions": true}
 	for p := range seen {
 		if isConsoleAPIPath(p) {
 			continue
@@ -496,6 +499,30 @@ func TestConsoleAPIGate(t *testing.T) {
 	}
 	if code := get(base+"/status?ct="+ct, nil); code != http.StatusOK {
 		t.Fatalf("/status with ct query: %d, want 200 (EventSource can't set headers)", code)
+	}
+	for _, test := range []struct {
+		headers map[string]string
+		want    int
+	}{
+		{nil, http.StatusForbidden},
+		{map[string]string{"X-SecureAgent-Proxy-Token": pt}, http.StatusForbidden},
+		{map[string]string{"X-SecureAgent-Console-Token": ct}, http.StatusOK},
+	} {
+		if code := get(base+"/sessions/owned/outcomes", test.headers); code != test.want {
+			t.Fatalf("session results auth realm: %d, want %d", code, test.want)
+		}
+	}
+	for _, method := range []string{"POST", "DELETE"} {
+		req, _ := http.NewRequest(method, base+"/sessions/owned/outcomes", nil)
+		req.Header.Set("X-SecureAgent-Console-Token", ct)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusForbidden {
+			t.Fatalf("session results admitted %s: %d", method, resp.StatusCode)
+		}
 	}
 	for _, method := range []string{"GET", "POST", "DELETE"} {
 		for _, headers := range []map[string]string{nil, {"X-SecureAgent-Proxy-Token": pt}} {
@@ -732,6 +759,9 @@ func TestConsoleSessionTimelinePathGate(t *testing.T) {
 	}
 	if !isConsoleAPIPath("/sessions/sess-1/memory") {
 		t.Fatal("the session memory route must be console-allowed")
+	}
+	if !isConsoleAPIPath("/sessions/sess-1/outcomes") || isConsoleAPIPath("/sessions//outcomes") || isConsoleAPIPath("/sessions/sess-1/outcomes/extra") || isConsoleAPIPath("/outcomes") {
+		t.Fatal("only the exact session outcome path must be console-allowed")
 	}
 	if isConsoleAPIPath("/sessions/sess-1/other") {
 		t.Fatal("an unknown session subpath must not be admitted")

@@ -28,14 +28,17 @@ function controller(persisted = '') {
   };
   vm.createContext(context);
   vm.runInContext(readFileSync(path.join(web, 'lib.js'), 'utf8'), context);
+  vm.runInContext(readFileSync(path.join(web, 'tab-sessions.js'), 'utf8'), context);
   const logic = app.slice(app.indexOf("  const SESSION_SELECTION_KEY"), app.indexOf('  // Export: copy the session'));
   const actions = app.slice(app.indexOf('  window.selectSession ='), app.indexOf('  // The drawer is shared by two views:'));
   vm.runInContext(logic + actions + `\nwindow.testState = {
     get selected() { return selectedSessionId; }, get mode() { return sessionView; },
     get memory() { return sessionMemoryPage; }, get memoryState() { return sessionMemoryState; }, get trace() { return sessionTimeline; },
+    get results() { return sessionOutcomes; }, get resultState() { return sessionOutcomesState; },
     reconcile: reconcileSessionSelection, reveal: takeSessionReveal,
     filter() { sessionFilterTransition = true; },
     refresh: loadSessionMemory, traceRefresh: loadSessionTimeline,
+    resultRefresh: loadSessionOutcomes,
   };`, context);
   return { context, panel, state: context.window.testState, actions: context.window, requests,
     flush: () => { for (const task of tasks.splice(0)) task(); },
@@ -43,6 +46,47 @@ function controller(persisted = '') {
   };
 }
 const settle = () => new Promise(resolve => setImmediate(resolve));
+
+const outcomes = (session_id, id = 'saved') => ({ session_id, history: {
+  reviews: [], incidents: [], interventions: [{ id, requested_at: '2026-10-09T10:00:00Z', status: 'failed', verification: 'unknown' }],
+  evidence: Object.fromEntries(['reviews', 'incidents', 'interventions'].map(k => [k, { available: true, at_limit: false, limit: 100 }])),
+} });
+
+test('Results stays scoped through A to B to A and rejects late obsolete receipts', async () => {
+  const c = controller();
+  const first = c.actions.selectSession('a'); c.answer(0, { rows: [] }); await first;
+  const old = c.actions.setSessionView('results');
+  assert.match(c.requests[1].url, /\/sessions\/a\/outcomes$/);
+  const b = c.actions.selectSession('b');
+  const a = c.actions.selectSession('a');
+  c.answer(3, outcomes('a', 'new')); await a;
+  c.answer(2, outcomes('b')); await b;
+  c.answer(1, outcomes('a', 'obsolete')); await old;
+  assert.equal(c.state.mode, 'results');
+  assert.equal(c.state.results.history.interventions[0].id, 'new');
+});
+
+test('Results retains last-known receipts on failed, mismatched, or malformed reads and recovers with valid empty history', async () => {
+  const c = controller();
+  const first = c.actions.selectSession('a'); c.answer(0, { rows: [] }); await first;
+  const open = c.actions.setSessionView('results'); c.answer(1, outcomes('a')); await open;
+  for (const bad of [null, outcomes('b'), { ...outcomes('a'), history: { ...outcomes('a').history, interventions: [null] } }]) {
+    const refresh = c.state.resultRefresh('a'); c.answer(c.requests.length - 1, bad); await refresh;
+    assert.equal(c.state.results.history.interventions[0].id, 'saved');
+    assert.equal(c.state.resultState.error, 'unavailable');
+  }
+  const fail = c.state.resultRefresh('a'); c.requests.at(-1).resolve({ ok: false, status: 503 }); await fail;
+  assert.equal(c.state.results.history.interventions[0].id, 'saved');
+  const partial = c.state.resultRefresh('a');
+  const degraded = outcomes('a'); degraded.history.interventions = []; degraded.history.evidence.interventions.available = false;
+  c.answer(c.requests.length - 1, degraded); await partial;
+  assert.equal(c.state.results.history.interventions[0].id, 'saved', 'an independently failed source retains its last known receipts');
+  assert.equal(c.state.results.history.evidence.interventions.available, false);
+  const recover = c.state.resultRefresh('a');
+  c.answer(c.requests.length - 1, { ...outcomes('a'), history: { ...outcomes('a').history, interventions: [] } }); await recover;
+  assert.equal(c.state.resultState.error, '');
+  assert.equal(c.state.results.history.interventions.length, 0);
+});
 
 test('initial selection restores a matching ID; otherwise active recency and ID decide', () => {
   const c = controller('saved');

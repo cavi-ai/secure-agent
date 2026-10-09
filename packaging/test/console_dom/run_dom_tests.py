@@ -166,6 +166,7 @@ def main():
     ap.add_argument('--session-workbench-only', action='store_true', help='run bounded Sessions workbench interaction probes only')
     ap.add_argument('--auth-recovery-only', action='store_true', help='run console access recovery probes only')
     ap.add_argument('--spend-only', action='store_true', help='run bounded spend cache and refresh probes only')
+    ap.add_argument('--session-results-only', action='store_true', help='run bounded session result and stale-read probes only')
     args = ap.parse_args()
     chrome = find_chrome()
     if not chrome:
@@ -177,6 +178,23 @@ def main():
     try:
         build_harness(tmp)
         srv, origin = serve_with_csp(tmp)
+        if args.session_results_only or not (args.spend_only or args.auth_recovery_only or args.session_workbench_only):
+            for label, query, size in [('desktop', '?resultsdemo', (1280, 800)), ('narrow stale', '?resultsdemo&resultsstale', (375, 800))]:
+                dom = dump_dom(chrome, tmp, query, origin, window_size=size)
+                detail = dom.split('id="session-detail"', 1)[1].split('id="session-board"', 1)[0]
+                check(f'session results ({label}): receipts retain evidence and verification limits',
+                      all(text in detail for text in ['Reviewed', 'revision 1', 'newer evidence', 'possible-exposure',
+                                                     'Source evidence unavailable', 'Applied', 'Resource samples observed',
+                                                     'External action reported', 'unverified']))
+                check(f'session results ({label}): update preserves focused open receipt', 'data-results-focus="true"' in dom)
+                check(f'session results ({label}): layout fits viewport', 'data-results-fits="true"' in dom)
+                if 'stale' in label:
+                    check('session results: failed refresh retains receipts with a visible retry', 'Last known results' in detail and 'Retry results' in detail)
+            if args.session_results_only:
+                print(f'\n{len(passed)} passed, {len(failed)} failed')
+                if failed:
+                    sys.exit(1)
+                return
         if args.spend_only:
             cached = dump_dom(chrome, tmp, '?spendcachedemo', origin)
             check('spend: saved rows remain visible during a quiet cache refresh',

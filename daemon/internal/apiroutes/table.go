@@ -69,7 +69,7 @@ type Route struct {
 var Table = []Route{
 	{Path: "/status", Console: true},
 	{Path: "/sessions", Console: true},
-	{Path: "/sessions/", Prefix: true, Leaves: []string{"timeline", "report", "memory", "overview"}, Console: true},
+	{Path: "/sessions/", Prefix: true, Leaves: []string{"timeline", "report", "memory", "overview", "outcomes"}, Console: true},
 	{Path: "/resources", Console: true},
 	{Path: "/resources/episodes", Console: true},
 	{Path: "/resources/control", Console: true, MutatingMethods: []string{"POST"}},

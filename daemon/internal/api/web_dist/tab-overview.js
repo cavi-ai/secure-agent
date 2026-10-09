@@ -802,8 +802,11 @@ function renderSessionDetail(detail, selected, trees, emptyHTML) {
   const oldKey = detail._sessionReadingKey;
   const oldSession = detail._sessionSelectedId;
   const focused = detail.contains(document.activeElement) ? document.activeElement : null;
-  const focusKey = focused && (focused.tagName === 'SUMMARY' ? 'summary'
+  const focusedRow = focused?.closest('[data-row-id]');
+  const focusWithinRow = focusedRow ? '[data-row-id="' + CSS.escape(focusedRow.dataset.rowId) + '"] ' : '';
+  const focusTarget = focused && (focused.tagName === 'SUMMARY' ? 'summary'
     : focused.dataset.action ? '[data-action="' + focused.dataset.action + '"]' + (focused.dataset.view ? '[data-view="' + focused.dataset.view + '"]' : '') : focused.tagName === 'H3' ? 'h3' : null);
+  const focusKey = focusTarget && focusWithinRow + focusTarget;
   if (oldBody && oldKey && oldBody.getClientRects().length && detail._sessionReadingVisible !== false) {
     const bounds = oldBody.getBoundingClientRect();
     const anchor = Array.from(oldBody.querySelectorAll('[data-row-id]')).find(row => row.getBoundingClientRect().bottom > bounds.top && row.getBoundingClientRect().top < bounds.bottom);
@@ -816,8 +819,14 @@ function renderSessionDetail(detail, selected, trees, emptyHTML) {
   }
   const html = selected ? sessionDetailHTML(selected, SA.sessionTimeline || [], trees) : emptyHTML;
   if (detail._sessionMarkup !== html) {
+    const disclosures = new Map(Array.from(detail.querySelectorAll('[data-row-id]')).map(row =>
+      [row.dataset.rowId, Array.from(row.querySelectorAll('details'), d => d.open)]));
     if (selected) patchSessionDetail(detail, selected.id, html);
     else detail.innerHTML = html;
+    if (oldSession === SA.selectedSessionId) for (const row of detail.querySelectorAll('[data-row-id]')) {
+      const saved = disclosures.get(row.dataset.rowId);
+      if (saved) Array.from(row.querySelectorAll('details')).forEach((d, i) => { d.open = !!saved[i]; });
+    }
     detail._sessionMarkup = html;
     applyInlineMetrics(detail);
   }
@@ -830,7 +839,7 @@ function renderSessionDetail(detail, selected, trees, emptyHTML) {
   const metadata = detail.querySelector('details.session-metadata');
   if (metadata) metadata.open = !!state.detailsOpen;
   const rows = Array.from(body.querySelectorAll('[data-row-id]'));
-  const loaded = SA.sessionView === 'trace' ? !!SA.sessionTimeline?.length : !!SA.sessionMemoryPage?.rows.length;
+  const loaded = SA.sessionView === 'trace' ? !!SA.sessionTimeline?.length : SA.sessionView === 'results' ? !!SA.sessionOutcomes : !!SA.sessionMemoryPage?.rows.length;
   const prepended = state.first && rows.length && rows[0].dataset.rowId !== state.first && rows.some(row => row.dataset.rowId === state.first);
   if (!detail._sessionReadingVisible) return;
   if ((!state.loaded && loaded) || (state.nearLatest && !prepended)) body.scrollTop = body.scrollHeight;

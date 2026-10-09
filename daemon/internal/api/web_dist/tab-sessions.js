@@ -229,6 +229,63 @@ function patchSessionDetail(el, sessionID, html) {
   if (body) patchSessionDetail(el.querySelector('.session-detail-body'), sessionID + ':body', content);
 }
 
+// Latest durable receipts per context/operation, ordered by their recorded
+// action time. Refreshes never turn a saved receipt into current authority.
+function validSessionOutcomes(data, id) {
+  const h = data && data.history;
+  const record = r => !!r && typeof r === 'object' && typeof r.id === 'string' && !!r.id;
+  const optionalArray = value => value == null || Array.isArray(value);
+  return !!h && data.session_id === id && ['reviews', 'incidents', 'interventions'].every(key =>
+    Array.isArray(h[key]) && h[key].every(record) && h.evidence &&
+    typeof h.evidence[key]?.available === 'boolean' && typeof h.evidence[key]?.at_limit === 'boolean' && Number.isInteger(h.evidence[key]?.limit) && h.evidence[key].limit > 0) &&
+    h.reviews.every(r => !r.decision || (typeof r.decision.action === 'string' && Number.isInteger(r.decision.revision))) &&
+    h.interventions.every(r => optionalArray(r.after) && optionalArray(r.limits)) &&
+    h.incidents.every(inc => !inc.remediation || (Array.isArray(inc.remediation.steps) && inc.remediation.steps.every(step => record(step) && step.item && typeof step.item === 'object')));
+}
+
+function sessionOutcomesHTML(data, state) {
+  state = state || {};
+  const retry = '<button type="button" class="link-btn" data-action="session-outcomes-retry">Retry results</button>';
+  const notice = state.error ? `Last known results. Refresh failed; later decisions or observations may be missing. ${retry}`
+    : !data ? state.loading ? 'Loading decisions and results…' : `Results unavailable. ${retry}` : '';
+  const head = `<header data-session-part="outcomes-head"><h4>Decisions and results</h4><p>Latest saved decision per finding context and latest result per operation. These receipts do not establish task completion. Guard and payload outcomes remain in Memory.</p>${notice ? `<p role="status">${notice}</p>` : ''}</header>`;
+  if (!data) return head;
+  const h = data.history;
+  const limits = [['reviews', 'Review decisions'], ['interventions', 'Process results'], ['incidents', 'Incident reports']].map(([key, label]) => {
+    const source = h.evidence[key];
+    return !source.available ? `<p role="status">${label} unavailable.${h[key].length ? ' Showing last known receipts; later changes may be missing.' : ''}</p>`
+      : source.at_limit ? `<p>${label}: bounded to ${Number(source.limit) || 0} retained records; earlier history may be omitted.</p>` : '';
+  }).join('');
+  const rows = [];
+  for (const r of h.reviews) {
+    if (!r.decision) continue;
+    const d = r.decision;
+    const scopes = Array.isArray(d.scope_ids) ? d.scope_ids : [];
+    const label = { acknowledge: 'Reviewed', close_reported: 'Closure reported', expect: scopes.length ? 'Scoped permission recorded' : 'Expected once' }[d.action] || 'Saved decision';
+    const permission = scopes.length ? `<p>${scopes.length} permission scope${scopes.length === 1 ? '' : 's'} recorded. Current expiry or revocation is shown in Policies. <button type="button" class="link-btn" data-action="goto-tab" data-tab="policy">View Policies</button></p>` : '';
+    const changed = d.revision !== r.revision ? '<p>This decision does not cover newer evidence.</p>' : '';
+    const source = !r.evidence_available ? '<p>Source evidence unavailable; the saved receipt remains.</p>' : !r.evidence_flag_available ? '<p>Assessment source evidence unavailable; other linked evidence may remain.</p>' : '';
+    const link = r.evidence_flag_available && r.evidence_flag_id ? `<button type="button" class="link-btn" data-action="open-flag" data-id="${escapeHTML(r.evidence_flag_id)}">View finding evidence</button>` : '';
+    rows.push({ key: 'decision:' + r.id, at: d.at, title: label, html: `<p>${escapeHTML((r.context || {}).rule || 'Finding')} · decision for revision ${escapeHTML(d.revision)}</p>${changed}${permission}<p>Remaining risk: ${escapeHTML((r.assessment || {}).residual_risk || 'unknown')}</p>${source}${link}` });
+  }
+  for (const r of h.interventions) {
+    rows.push({ key: 'intervention:' + r.id, at: r.requested_at, title: 'Process control', html: resourceOutcomeHTML(r) });
+  }
+  for (const inc of h.incidents) {
+    for (const step of ((inc.remediation || {}).steps || [])) {
+      if (step.status !== 'reported') continue;
+      rows.push({ key: 'incident:' + inc.id + ':' + step.id, at: step.reported_at, title: 'External action reported', html: `<p>${escapeHTML(step.item.name)} · ${escapeHTML(step.item.action)}</p><p>Credential verification: ${escapeHTML(step.verification || 'unverified')}</p>${step.newer_evidence ? '<p>Newer evidence exists; this report does not establish its remediation.</p>' : ''}<button type="button" class="link-btn" data-action="open-incident" data-id="${escapeHTML(inc.id)}">View incident report</button>` });
+    }
+  }
+  rows.sort((a, b) => (Date.parse(a.at) || 0) - (Date.parse(b.at) || 0) || a.key.localeCompare(b.key));
+  const history = rows.map(row => {
+    const date = new Date(row.at);
+    const time = Number.isNaN(date.getTime()) ? 'Time unavailable' : date.toLocaleString();
+    return `<article class="sd-outcome" data-session-part="${escapeHTML(row.key)}" data-row-id="${escapeHTML(row.key)}"><h5>${escapeHTML(row.title)}</h5><time datetime="${escapeHTML(row.at || '')}">${escapeHTML(time)}</time>${row.html}</article>`;
+  }).join('');
+  return head + `<div data-session-part="outcomes-limits">${limits}${Object.values(h.evidence).some(source => !source.available) ? retry : ''}${!rows.length && !limits ? '<p>No saved decisions or results in the retained history. This is not a safety verdict.</p>' : ''}</div>` + history;
+}
+
 function sessionDetailHTML(sess, events, trees) {
   if (!sess) {
     return `<div class="empty"><svg class="icon"><use href="#i-agent"/></svg><span>Select a session to see its memory</span></div>`;
@@ -250,6 +307,7 @@ function sessionDetailHTML(sess, events, trees) {
     <div class="sd-detail-controls">
       <div class="sd-view-switch" role="group" aria-label="Session detail view">
         <button type="button" class="sd-view${window.SA.sessionView === 'memory' ? ' active' : ''}" data-action="session-view" data-view="memory" aria-pressed="${window.SA.sessionView === 'memory'}">Memory</button>
+        <button type="button" class="sd-view${window.SA.sessionView === 'results' ? ' active' : ''}" data-action="session-view" data-view="results" aria-pressed="${window.SA.sessionView === 'results'}">Results</button>
         <button type="button" class="sd-view${window.SA.sessionView === 'trace' ? ' active' : ''}" data-action="session-view" data-view="trace" aria-pressed="${window.SA.sessionView === 'trace'}">Trace</button>
       </div>
       <button type="button" class="btn btn-sm btn-ghost sd-latest" data-action="session-latest" hidden>Jump to latest</button>
@@ -265,5 +323,5 @@ function sessionDetailHTML(sess, events, trees) {
       </details>
     </div>
     </div>
-    <div class="session-detail-body">${sessionOverviewHTML(window.SA.sessionOverview, window.SA.sessionOverviewState)}${window.SA.sessionView === 'trace' ? sessionWaterfallHTML(events) : sessionMemoryHTML(window.SA.sessionMemoryPage, window.SA.sessionMemoryState)}</div>`;
+    <div class="session-detail-body">${window.SA.sessionView === 'results' ? sessionOutcomesHTML(window.SA.sessionOutcomes, window.SA.sessionOutcomesState) : sessionOverviewHTML(window.SA.sessionOverview, window.SA.sessionOverviewState) + (window.SA.sessionView === 'trace' ? sessionWaterfallHTML(events) : sessionMemoryHTML(window.SA.sessionMemoryPage, window.SA.sessionMemoryState))}</div>`;
 }

@@ -238,6 +238,8 @@ Inspects what your agents send to their APIs and catches secrets leaving where t
 
 **Export recorded session history.** Session reports include the latest saved review decisions, the evidence revisions they apply to, residual risk, and intervention/remediation results. Missing source history and export limits are explicit. Copying a partial report shows a warning; an export does not establish task completion or current permission.
 
+**See decisions and results in the session.** The Results view keeps saved reviews, process-control receipts, and reported incident actions together. Applied controls, later observations, and unverified external actions remain distinct. Source failures retain the last known receipts with a retry message; bounded and expired history stay visible as limits.
+
 **Monitor by default; earn enforcement.** Every rule runs in `monitor` mode: leaks are reported, nothing is blocked. Promote a rule to blocking once you trust it, in `~/.config/secure-agent/config.yaml`:
 
 ```yaml

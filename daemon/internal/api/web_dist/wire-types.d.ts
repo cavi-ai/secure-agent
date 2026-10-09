@@ -774,6 +774,31 @@ export interface SessionOverview {
   resources: SessionResources | null;
 }
 
+export interface ReportSourceEvidence {
+  available: boolean;
+  at_limit: boolean;
+  limit: number;
+}
+
+export interface SessionOutcomeEvidence {
+  reviews: ReportSourceEvidence;
+  incidents: ReportSourceEvidence;
+  interventions: ReportSourceEvidence;
+}
+
+export interface SessionOutcomeHistory {
+  reviews: ReviewRecord[];
+  incidents: IncidentReport[];
+  interventions: InterventionReceipt[];
+  evidence: SessionOutcomeEvidence;
+}
+
+export interface SessionOutcomes {
+  session_id: string;
+  observed_at: string;
+  history: SessionOutcomeHistory;
+}
+
 export interface PostureItem {
   kind: string;
   id: string;
@@ -878,12 +903,6 @@ export interface PlanSnapshot {
   seen_at: string;
   account_key?: string;
   homes?: string[];
-}
-
-export interface ReportSourceEvidence {
-  available: boolean;
-  at_limit: boolean;
-  limit: number;
 }
 
 export interface ReportEvidence {
