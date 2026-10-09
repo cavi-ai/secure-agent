@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -56,6 +57,17 @@ func (a *API) handleGuardDecision(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := fmt.Sprintf("%d-%d", time.Now().UnixNano(), atomic.AddUint64(&a.guardSeq, 1))
+	var identity model.DecisionScope
+	var peerPID int32
+	if a.peerChk != nil && a.guardIdentity != nil {
+		if cred, err := a.peerChk.PeerCred(connOf(r)); err == nil {
+			if got, ok := a.guardIdentity(cred.PID, req.SessionID); ok && got.Agent == req.Agent {
+				identity = got
+				peerPID = cred.PID
+				req.SessionID = identity.SessionID
+			}
+		}
+	}
 	// A supplied identity is only attributable if the durable session exists.
 	// Never guess from the agent, workspace, or request time.
 	if req.SessionID != "" {
@@ -68,6 +80,15 @@ func (a *API) handleGuardDecision(w http.ResponseWriter, r *http.Request) {
 			ID: id, SessionID: req.SessionID, RuleID: req.RuleID,
 			Verdict: d.Verdict, Scope: d.Scope, At: time.Now().UTC().Format(time.RFC3339Nano),
 		})
+	}
+	identity.RuleID = req.RuleID
+	identity.ResourcePath = req.Path
+	identity.Operation = "guard:" + req.Tool
+	if identity.IdentityBasis != "" && a.store.MatchDecisionScopes([]model.DecisionScope{identity}) {
+		d := guard.Decision{Verdict: "allow", Scope: "scoped", Reason: "saved-permission"}
+		record(d)
+		writeJSON(w, d)
+		return
 	}
 	// Per-path exceptions first: an operator-granted allow on THIS exact
 	// path (or an ancestor of it) answers without prompting. Cheapest and
@@ -96,11 +117,18 @@ func (a *API) handleGuardDecision(w http.ResponseWriter, r *http.Request) {
 	// Push, not just poll: SSE subscribers (menubar) refetch /guard/pending
 	// immediately instead of waiting out their poll interval.
 	a.publishGuardEvent(event.KindGuardPrompt, req.Agent+"/"+req.RuleID)
+	scopes := []model.ScopeChoice{{Kind: "once"}}
+	probe := identity
+	model.ScopeChoice{Kind: "session"}.Apply(&probe, time.Now().UTC())
+	if probe.Validate() == nil {
+		scopes = append(scopes, model.ScopeChoice{Kind: "session"}, model.ScopeChoice{Kind: "exact", Expiry: "24h"}, model.ScopeChoice{Kind: "exact", Expiry: "7d"})
+	}
 	d := a.guardBroker.Request(r.Context(), guard.Pending{
 		ID: id, SessionID: req.SessionID, Agent: req.Agent, Tool: req.Tool, Path: req.Path, RuleID: req.RuleID,
+		Workspace: identity.Workspace, ReaderExe: identity.ReaderExe, IdentityBasis: identity.IdentityBasis, PeerPID: peerPID, AvailableScopes: scopes,
 		// Disclose the blast radius of "allow always": the cached rule covers
 		// every path this rule matches for this agent, not just this file.
-		ScopeText: "Allow Always approves every path under rule \"" + req.RuleID + "\" for agent \"" + req.Agent + "\", not just this one.",
+		ScopeText: a.store.ExplainDecisionScope(identity) + " Once answers this request. Future permissions cover only this file, tool, workspace and observed executable path. Session permission ends with this session; timed permission expires after 24 hours or 7 days. Executable signatures are not verified. File approval does not authorize network access. Revoke in Policies.",
 	})
 	if r.Context().Err() != nil {
 		// The hook stopped waiting (its own deadline, or the harness killed
@@ -154,6 +182,7 @@ type guardResolveRequest struct {
 	ID      string `json:"id"`
 	Verdict string `json:"verdict"` // allow | deny
 	Scope   string `json:"scope"`   // once | always
+	Expiry  string `json:"expiry,omitempty"`
 }
 
 func (a *API) handleGuardResolve(w http.ResponseWriter, r *http.Request) {
@@ -169,7 +198,9 @@ func (a *API) handleGuardResolve(w http.ResponseWriter, r *http.Request) {
 	var req guardResolveRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID == "" ||
 		(req.Verdict != "allow" && req.Verdict != "deny") ||
-		(req.Scope != "once" && req.Scope != "always") {
+		(req.Scope != "once" && req.Scope != "always" && req.Scope != "session" && req.Scope != "exact") ||
+		(req.Scope == "exact" && (req.Expiry != "24h" && req.Expiry != "7d")) || (req.Scope != "exact" && req.Expiry != "") ||
+		((req.Scope == "session" || req.Scope == "exact") && req.Verdict != "allow") {
 		http.Error(w, `Invalid payload: {"id","verdict":"allow|deny","scope":"once|always"}`, http.StatusBadRequest)
 		return
 	}
@@ -180,7 +211,29 @@ func (a *API) handleGuardResolve(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 	}
-	ok := a.guardBroker.Resolve(req.ID, guard.Decision{Verdict: req.Verdict, Scope: req.Scope})
+	var prepare func(context.Context, guard.Pending) (func() error, func(), error)
+	if req.Scope == "session" || req.Scope == "exact" {
+		prepare = func(ctx context.Context, p guard.Pending) (func() error, func(), error) {
+			if a.guardIdentity == nil || p.PeerPID <= 0 {
+				return nil, nil, fmt.Errorf("identity unavailable; choose once")
+			}
+			g, valid := a.guardIdentity(p.PeerPID, p.SessionID)
+			if !valid || g.Agent != p.Agent || g.Workspace != p.Workspace || g.ReaderExe != p.ReaderExe {
+				return nil, nil, fmt.Errorf("identity changed; choose once")
+			}
+			g.ID = p.ID
+			g.RuleID = p.RuleID
+			g.ResourcePath = p.Path
+			g.Operation = "guard:" + p.Tool
+			model.ScopeChoice{Kind: req.Scope, Expiry: req.Expiry}.Apply(&g, time.Now().UTC())
+			return a.store.PrepareDecisionScope(ctx, g)
+		}
+	}
+	ok, err := a.guardBroker.ResolveWith(req.ID, guard.Decision{Verdict: req.Verdict, Scope: req.Scope}, prepare)
+	if err != nil {
+		http.Error(w, "Permission could not be saved. Refresh requests before trying again. "+err.Error(), 503)
+		return
+	}
 	if ok {
 		a.publishGuardEvent(event.KindGuardResolved, req.Verdict+"/"+req.Scope)
 		if pend != nil {

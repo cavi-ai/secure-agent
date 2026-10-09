@@ -187,6 +187,12 @@ export interface ReviewDecisionReceipt {
   action: string;
   at: string;
   source?: string;
+  scope_ids?: string[];
+}
+
+export interface ScopeChoice {
+  kind: string;
+  expiry?: string;
 }
 
 export interface ReviewRecord {
@@ -200,6 +206,7 @@ export interface ReviewRecord {
   review_state: string;
   reviewed_revision?: number;
   decision?: ReviewDecisionReceipt;
+  available_scopes?: ScopeChoice[];
   count: number;
   first_seen: string;
   last_seen: string;
@@ -215,6 +222,7 @@ export interface ReviewDecisionRequest {
   id: string;
   revision: number;
   action: string;
+  scope?: ScopeChoice;
 }
 
 export interface ReviewPage {
@@ -595,6 +603,8 @@ export interface AttentionItem {
   rule?: string;
   path?: string;
   scopeText?: string;
+  available_scopes?: ScopeChoice[];
+  reader_exe?: string;
   status?: string;
   count?: number;
   hosts?: string[];

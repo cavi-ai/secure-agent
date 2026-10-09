@@ -65,9 +65,10 @@ func ReviewEvidenceKey(f Flag, a FindingAssessment) string {
 }
 
 type ReviewDecisionRequest struct {
-	ID       string `json:"id"`
-	Revision int64  `json:"revision"`
-	Action   string `json:"action"` // acknowledge | close_reported
+	ID       string       `json:"id"`
+	Revision int64        `json:"revision"`
+	Action   string       `json:"action"` // acknowledge | close_reported
+	Scope    *ScopeChoice `json:"scope,omitempty"`
 }
 
 type ReviewDecisionReceipt struct {
@@ -76,6 +77,7 @@ type ReviewDecisionReceipt struct {
 	Action   string    `json:"action"`
 	At       time.Time `json:"at"`
 	Source   string    `json:"source,omitempty"`
+	ScopeIDs []string  `json:"scope_ids,omitempty"`
 }
 
 // ReviewRecord links source evidence and an operator receipt. It owns no
@@ -91,6 +93,7 @@ type ReviewRecord struct {
 	ReviewState           string                 `json:"review_state"`
 	ReviewedRevision      int64                  `json:"reviewed_revision,omitempty"`
 	Decision              *ReviewDecisionReceipt `json:"decision,omitempty"`
+	AvailableScopes       []ScopeChoice          `json:"available_scopes,omitempty"`
 	Count                 int                    `json:"count"`
 	FirstSeen             time.Time              `json:"first_seen"`
 	LastSeen              time.Time              `json:"last_seen"`

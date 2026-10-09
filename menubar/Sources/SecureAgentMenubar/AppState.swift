@@ -782,28 +782,35 @@ public final class AppState: ObservableObject {
         let alert = NSAlert()
         alert.messageText = Self.guardPromptHeadline(p)
         var informative = Self.guardPromptDetail(p)
-        // Disclose what "Allow Always" really approves, so consent is informed.
+		if let executable = p.readerExe { informative += "\nExecutable path: \(executable)" }
+		if let workspace = p.workspace { informative += "\nWorkspace: \(workspace)" }
+		if let session = p.sessionID { informative += "\nSession: \(session)" }
+        // Disclose the file, identity and lifetime before future access is approved.
         if let scope = p.scopeText, !scope.isEmpty {
             informative += "\n\n⚠️ \(scope)"
         }
         alert.informativeText = informative
         let allowOnceButton = alert.addButton(withTitle: "Allow Once")
-        let allowAlwaysButton = alert.addButton(withTitle: "Allow Always")
         let denyButton = alert.addButton(withTitle: "Deny")
+		let choices = (p.availableScopes ?? []).filter { $0.kind != "once" }
+		for choice in choices { let button = alert.addButton(withTitle: choice.label); button.keyEquivalent = "" }
         // Safe default: NSAlert binds Return to the first button unless told
         // otherwise, and NSApp.activate below can steal focus right as this
         // modal appears — an accidental Return must deny, never approve.
         allowOnceButton.keyEquivalent = ""
-        allowAlwaysButton.keyEquivalent = ""
         denyButton.keyEquivalent = "\r"
         NSApp.activate(ignoringOtherApps: true)
         let r = alert.runModal()
         let decision: GuardResolveRequest
         switch r {
         case .alertFirstButtonReturn:  decision = .init(id: p.id, verdict: "allow", scope: "once")
-        case .alertSecondButtonReturn: decision = .init(id: p.id, verdict: "allow", scope: "always")
-        case .alertThirdButtonReturn:  decision = .init(id: p.id, verdict: "deny", scope: "always")
-        default:                       decision = .init(id: p.id, verdict: "deny", scope: "once")
+		case .alertSecondButtonReturn: decision = .init(id: p.id, verdict: "deny", scope: "once")
+		default:
+			let index = r.rawValue - NSApplication.ModalResponse.alertFirstButtonReturn.rawValue - 2
+			if choices.indices.contains(index) {
+				let choice = choices[index]
+				decision = .init(id: p.id, verdict: "allow", scope: choice.kind, expiry: choice.expiry)
+			} else { decision = .init(id: p.id, verdict: "deny", scope: "once") }
         }
         // A resolve failure must be visible: the user believes they decided,
         // and a silently dropped decision re-prompts a second later with no
@@ -813,7 +820,7 @@ public final class AppState: ObservableObject {
             do {
                 try await client.resolveGuard(decision)
             } catch {
-                self.lastError = "decision not recorded (daemon unreachable): \(error.localizedDescription)"
+                self.lastError = "Decision was not saved: \(error.localizedDescription)"
             }
             self.promptingID = nil
             self.fetch()
@@ -826,14 +833,14 @@ public final class AppState: ObservableObject {
     /// Resolve a pending guard decision from the popover's inline prompt.
     /// Claims the id the same way the native alert does, so the two consent
     /// paths never race a double-prompt.
-    public func resolvePendingGuard(verdict: String, scope: String) async {
+    public func resolvePendingGuard(verdict: String, scope: String, expiry: String? = nil) async {
         guard let p = pendingGuard else { return }
         promptingID = p.id
         pendingGuard = nil // optimistic: the poll/stream re-adds it if unresolved
         do {
-            try await uiClient.resolveGuard(GuardResolveRequest(id: p.id, verdict: verdict, scope: scope))
+            try await uiClient.resolveGuard(GuardResolveRequest(id: p.id, verdict: verdict, scope: scope, expiry: expiry))
         } catch {
-            lastError = "decision not recorded (daemon unreachable): \(error.localizedDescription)"
+            lastError = "Decision was not saved: \(error.localizedDescription)"
         }
         promptingID = nil
         fetch()

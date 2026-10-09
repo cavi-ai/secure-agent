@@ -153,6 +153,7 @@ func initializeSchema(db *sql.DB) error {
 		egressEpisodesSchema,
 		expectedEgressSchema,
 		guardDecisionsSchema,
+		decisionScopesSchema,
 		sessionsSchema,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status, last_seen_at);`,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_activity ON sessions(status, ` + timestampOrderExpr("last_seen_at") + ` DESC, id DESC);`,

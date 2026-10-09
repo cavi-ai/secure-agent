@@ -19,25 +19,27 @@ import (
 )
 
 type readMark struct {
-	at       time.Time
-	path     string
-	cat      sensitive.Category
-	rule     string
-	pid      int32      // the process that opened the file
-	exe      string     // its executable, when the event carried one
-	kind     event.Kind // file open, or an agent tool read (plugin action)
-	chain    []int32    // pid up to its nearest agent ancestor (tagger chain)
-	consumed bool
+	sessionID string
+	at        time.Time
+	path      string
+	cat       sensitive.Category
+	rule      string
+	pid       int32      // the process that opened the file
+	exe       string     // its executable, when the event carried one
+	kind      event.Kind // file open, or an agent tool read (plugin action)
+	chain     []int32    // pid up to its nearest agent ancestor (tagger chain)
+	consumed  bool
 }
 
 type connMark struct {
-	at       time.Time
-	host     string
-	port     int
-	pid      int32   // the process that connected
-	exe      string  // executable at observation, never inferred from the reader
-	chain    []int32 // pid up to its nearest agent ancestor (tagger chain)
-	consumed bool
+	sessionID string
+	at        time.Time
+	host      string
+	port      int
+	pid       int32   // the process that connected
+	exe       string  // executable at observation, never inferred from the reader
+	chain     []int32 // pid up to its nearest agent ancestor (tagger chain)
+	consumed  bool
 }
 
 const window = 60 * time.Second
@@ -103,14 +105,15 @@ type Correlator struct {
 	// folded[pattern] is the flag a read-then-connect pattern raised in the
 	// current window; repeats queue in repeats until Observe unlocks and
 	// hands them to onRepeat.
-	folded        map[string]foldedFlag
-	repeats       []flagRepeat
-	onRepeat      func(flagID string, at time.Time)
-	isOpenFlag    func(string) bool
-	ownerUseCount int
-	isExpected    func(keys []string, at time.Time) bool
-	expectedCount int
-	lastEviction  time.Time
+	folded           map[string]foldedFlag
+	repeats          []flagRepeat
+	onRepeat         func(flagID string, at time.Time)
+	isOpenFlag       func(string) bool
+	ownerUseCount    int
+	isExpected       func(keys []string, at time.Time) bool
+	isScopedExpected func([]model.DecisionScope, int32) bool
+	expectedCount    int
+	lastEviction     time.Time
 }
 
 func New(tagger *agents.Tagger, classifier sensitive.Classifier, cfg config.Config) *Correlator {
@@ -463,7 +466,7 @@ func (c *Correlator) observeLocked(e event.Event) []model.Flag {
 				}
 			}
 			if seedsReadThenConnect(m.Category, e.Kind, e.ExePath) && c.readsContents(e) && !own {
-				rm := readMark{at: e.TS, path: e.Path, cat: cat, rule: m.Rule, pid: e.PID, exe: e.ExePath, kind: e.Kind, chain: info.Chain}
+				rm := readMark{sessionID: e.SessionID, at: e.TS, path: e.Path, cat: cat, rule: m.Rule, pid: e.PID, exe: e.ExePath, kind: e.Kind, chain: info.Chain}
 				c.rememberReadLocked(rootPID, e.PID, rm)
 				// A connection the family made before this read counts too:
 				// the bytes may leave on a socket that was already open.
@@ -568,7 +571,7 @@ func (c *Correlator) observeLocked(e event.Event) []model.Flag {
 		if exe == "" {
 			exe = info.ExePath
 		}
-		conn := connMark{at: e.TS, host: e.RemoteHost, port: e.RemotePort, pid: e.PID, exe: exe, chain: info.Chain}
+		conn := connMark{sessionID: e.SessionID, at: e.TS, host: e.RemoteHost, port: e.RemotePort, pid: e.PID, exe: exe, chain: info.Chain}
 		c.rememberConnLocked(rootPID, e.PID, conn)
 
 		if reads := c.recentReadsLocked(rootPID, e.PID, e.TS, window); len(reads) > 0 {

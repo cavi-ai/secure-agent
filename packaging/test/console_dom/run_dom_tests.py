@@ -216,6 +216,8 @@ def main():
         dom_policylists = dump_dom(chrome, tmp, "?policylists")
         dom_policyempty = dump_dom(chrome, tmp, "?policylists&emptypolicy")
         dom_forget = dump_dom(chrome, tmp, "?policylists&forgetexpected")
+        dom_scoped = dump_dom(chrome, tmp, "?scopedpermission")
+        dom_scoped_revoke = dump_dom(chrome, tmp, "?scopedpermission&revokescope")
         dom_netfail = dump_dom(chrome, tmp, "?netfail")
         dom_tokenseed = dump_dom(chrome, tmp, "?requiretoken&tokenseed")
         dom_nofleet = dump_dom(chrome, tmp, "?nofleetdemo")
@@ -992,6 +994,17 @@ def main():
               and 'data-action="forget-expected"' in dom_policylists,
               f"expected={policy_rows('expected')}")
         forget_reqs = pre(dom_forget, "mock-requests")
+        scoped_reqs = pre(dom_scoped, "mock-requests")
+        check("scoped expectation submits the displayed revision and explicit expiry",
+              'POST /reviews/decision' in scoped_reqs and '"revision":3' in scoped_reqs
+              and '"scope":{"kind":"exact","expiry":"24h"}' in scoped_reqs)
+        check("scoped permission shows the exact endpoint and executable with revocation",
+              'api.example.com:443' in dom_scoped and '/usr/bin/cat' in dom_scoped
+              and 'data-action="revoke-scope" data-id="scope-browser"' in dom_scoped)
+        check("scoped permission revoke uses its ID and updates the visible state",
+              'DELETE /decision-scopes?id=scope-browser' in pre(dom_scoped_revoke,"mock-requests")
+              and 'Revoked' in dom_scoped_revoke
+              and 'data-action="revoke-scope" data-id="scope-browser"' not in dom_scoped_revoke)
         check("Forget deletes the expected pattern and the list reloads without it",
               "DELETE /expected?key=claude%7Cgh%7C%2FUsers%2Fdev%2F.config%2Fgh%2Fhosts.yml%7CGitHub" in forget_reqs
               and 'id="badge-expected">0<' in dom_forget and "No expected secret reads." in dom_forget,
@@ -1236,8 +1249,10 @@ def main():
               'data-action="resource-control" data-id="resource-1" data-decision="apply"' in attention)
         check("attention guard actions expose bounded choices",
               'data-action="guard-resolve" data-id="guard-1" data-verdict="allow" data-scope="once"' in attention
-              and 'data-action="guard-resolve" data-id="guard-1" data-verdict="deny" data-scope="always"' in attention)
-        check("attention shows blast-radius copy", "approves every path under rule" in attention)
+              and 'data-action="guard-resolve" data-id="guard-1" data-verdict="deny" data-scope="once"' in attention
+              and 'data-scope="exact" data-expiry="24h"' in attention
+              and 'data-scope="always"' not in attention)
+        check("attention keeps scope disclosure compact", "Future access requires a chosen limit" in attention)
         check("coverage egress opens endpoint evidence", 'data-action="open-uninspected"' in coverage)
         check("resolved guard request leaves the attention queue",
               f'id="tab-badge-home">{needs_you - 1}<' in dom_guard

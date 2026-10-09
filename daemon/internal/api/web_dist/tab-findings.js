@@ -320,21 +320,21 @@ function needView(item, ctx) {
         items: r.evidence_available ? [
           { label: 'Mark reviewed', attrs: attrs('acknowledge'), bar: true },
           { label: 'Report closure', attrs: attrs('close_reported') },
+          ...reviewPermissionItems(r),
         ] : [], body: () => reviewHTML(r, ctx.SA.reviewDrafts && ctx.SA.reviewDrafts.get(r.id), false) };
     }
     case 'guard': {
       const workspace = String(g.workspace || '').split('/').filter(Boolean).pop() || '';
-      const a = (verdict, scope) => `data-action="guard-resolve" data-id="${id}" data-verdict="${verdict}" data-scope="${scope}"`;
+      const a = (verdict, scope, expiry) => `data-action="guard-resolve" data-id="${id}" data-verdict="${verdict}" data-scope="${scope}"${expiry ? ` data-expiry="${escapeHTML(expiry)}"` : ''}`;
       return { ...v, sev: 'sev-warn', word: 'guard',
-        why: [`${v.agent || 'The agent'} is paused until you answer`, item.scopeText, workspace].filter(Boolean).join(' · '),
+        why: [`${v.agent || 'The agent'} is paused until you answer`, (item.available_scopes || []).some(s => s.kind !== 'once') ? 'Future access requires a chosen limit' : 'Identity incomplete; once only', workspace].filter(Boolean).join(' · '),
         items: [
           { label: 'Allow once', attrs: a('allow', 'once'), bar: true },
           { label: 'Deny', attrs: a('deny', 'once'), kind: 'danger', bar: true },
-          { label: 'Allow rule', attrs: a('allow', 'always') },
-          { label: 'Deny rule', attrs: a('deny', 'always') },
+          ...(item.available_scopes || []).filter(s => s.kind !== 'once').map(s => ({label:permissionChoiceLabel(s,'Allow'),attrs:a('allow',s.kind,s.expiry)})),
         ],
         body: () => `<dl class="finding-facts"><dt>Path</dt><dd>${escapeHTML(item.path || '')}</dd><dt>Rule</dt><dd>${escapeHTML(item.rule || '')}</dd>`
-          + `<dt>Scope</dt><dd>${escapeHTML(item.scopeText || '')}</dd></dl>${item.advisor ? advisorAdviceHTML(item.advisor) : ''}` };
+          + `<dt>Executable</dt><dd>${escapeHTML(item.reader_exe || 'Unknown; once only')}</dd><dt>Scope</dt><dd>${escapeHTML(item.scopeText || '')}</dd></dl>${item.advisor ? advisorAdviceHTML(item.advisor) : ''}` };
     }
     case 'resource':
       return { ...v, sev: 'sev-warn', word: 'resource',

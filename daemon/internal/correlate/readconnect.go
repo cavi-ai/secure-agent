@@ -135,12 +135,26 @@ func readConnectKey(agent string, r readMark, cm connMark) string {
 	return ReadConnectKey(agent, ReaderLabel(r.exe, r.kind == event.KindPluginAction), r.path, DestLabel(cm.host))
 }
 
+func readConnectFoldKey(agent, sessionID string, r readMark, cm connMark) string {
+	key := readConnectKey(agent, r, cm)
+	if sessionID != "" {
+		return sessionID + "\x00" + key
+	}
+	return key
+}
+
 // SetExpected wires the operator's expected patterns: match reports whether
 // every key is expected (and counts the hit).
 func (c *Correlator) SetExpected(match func(keys []string, at time.Time) bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.isExpected = match
+}
+
+func (c *Correlator) SetScopedExpected(match func([]model.DecisionScope, int32) bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.isScopedExpected = match
 }
 
 // ExpectedCount counts connections an expected pattern covered (recorded,
@@ -154,6 +168,20 @@ func (c *Correlator) ExpectedCount() int {
 // expectedLocked reports whether cm with every read is a pattern the
 // operator marked expected.
 func (c *Correlator) expectedLocked(agent string, reads []readMark, cm connMark, at time.Time) bool {
+	if c.isScopedExpected != nil && cm.sessionID != "" && len(reads) > 0 {
+		coordinates := make([]model.DecisionScope, 0, len(reads))
+		complete := true
+		for _, r := range reads {
+			if r.sessionID != cm.sessionID || !model.ExactPath(r.exe) || !model.ExactPath(r.path) {
+				complete = false
+				break
+			}
+			coordinates = append(coordinates, model.DecisionScope{Agent: agent, SessionID: cm.sessionID, ReaderExe: r.exe, ResourcePath: r.path, RuleID: readConnectRule, Operation: "read-connect", Destination: model.Endpoint(fmt.Sprintf("%s:%d", cm.host, cm.port))})
+		}
+		if complete && c.isScopedExpected(coordinates, cm.pid) {
+			return true
+		}
+	}
 	if c.isExpected == nil {
 		return false
 	}
@@ -183,6 +211,19 @@ func (c *Correlator) readThenConnectLocked(e event.Event, agent string, rootPID 
 	if len(cited) == 0 {
 		return nil
 	}
+	// Mixed or unstamped marks remain evidence, but cannot lend the triggering
+	// event's session identity to a reusable permission on the whole chain.
+	sessionID := e.SessionID
+	for _, r := range reads {
+		if r.sessionID != e.SessionID {
+			sessionID = ""
+		}
+	}
+	for _, cm := range cited {
+		if cm.sessionID != e.SessionID {
+			sessionID = ""
+		}
+	}
 
 	// Operator disposition applies only when EVERY cited connection is
 	// muted: a fresh unmuted host must still flag.
@@ -205,7 +246,7 @@ func (c *Correlator) readThenConnectLocked(e event.Event, agent string, rootPID 
 	repeatID := ""
 	for _, r := range reads {
 		for _, cm := range cited {
-			key := readConnectKey(agent, r, cm)
+			key := readConnectFoldKey(agent, e.SessionID, r, cm)
 			if seen[key] {
 				continue
 			}
@@ -285,7 +326,7 @@ func (c *Correlator) readThenConnectLocked(e event.Event, agent string, rootPID 
 		TS:        e.TS,
 		PID:       e.PID,
 		Agent:     agent,
-		SessionID: e.SessionID,
+		SessionID: sessionID,
 		Evidence:  evidence,
 	}}
 }
@@ -379,6 +420,9 @@ func (c *Correlator) RestoreOpenReadFlags(flags []model.Flag) {
 					host = strings.Trim(host[:i], "[]")
 				}
 				key := ReadConnectKey(f.Agent, ReaderLabel(r.Exe, r.Sub == "agent tool read"), r.Label, DestLabel(host))
+				if f.SessionID != "" {
+					key = f.SessionID + "\x00" + key
+				}
 				prev, ok := c.folded[key]
 				if !ok || f.Severity > prev.severity {
 					c.foldLocked(key, f.ID, f.TS, f.Severity)

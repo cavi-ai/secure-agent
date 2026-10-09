@@ -45,13 +45,24 @@ test('a queued item shows the panel with its count', () => {
   assert.deepEqual(badges, [['home', 1]]);
 });
 
-test('a guard prompt has Allow once and Deny on the row and the rules under More', () => {
+test('a guard prompt with unknown identity offers only Allow once and Deny', () => {
   const { ctx, sa } = load({ needs_you: 1, groups: [group([guardItem])] });
   const html = needRow(ctx, sa, { ...guardItem, group: group([guardItem]) });
   const { bar, more } = bars(html);
   assert.deepEqual(bar, ['Allow once', 'Deny']);
-  assert.deepEqual(more, ['Allow rule', 'Deny rule']);
+  assert.deepEqual(more, []);
   assert.match(html, /data-verdict="deny" data-scope="once"/);
+});
+
+test('a guard prompt offers only daemon-supported bounded future choices', () => {
+  const item = {...guardItem, available_scopes:[{kind:'once'},{kind:'session'},{kind:'exact',expiry:'24h'},{kind:'exact',expiry:'7d'}]};
+  const {ctx,sa} = load({needs_you:1,groups:[group([item])]});
+  const html = needRow(ctx,sa,{...item,group:group([item])});
+  const {bar,more}=bars(html);
+  assert.deepEqual(bar,['Allow once','Deny']);
+  assert.deepEqual(more,['Allow for this session','Allow for 24 hours','Allow for 7 days']);
+  assert.match(html,/data-scope="exact" data-expiry="24h"/);
+  assert.doesNotMatch(html,/data-scope="always"/);
 });
 
 test('the queue lists higher priority first and keeps served order within a priority', () => {

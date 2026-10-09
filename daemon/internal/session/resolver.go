@@ -891,6 +891,26 @@ func (r *Resolver) WorkspaceFor(sessionID string) string {
 	return ""
 }
 
+// PermissionIdentity binds the kernel-authenticated peer to the resolver's
+// current session, not merely an existing client-supplied session ID.
+func (r *Resolver) PermissionIdentity(pid int32, claimed string) (model.DecisionScope, bool) {
+	info, ok := r.tagger.LiveFamily(pid)
+	if !ok {
+		return model.DecisionScope{}, false
+	}
+	r.mu.Lock()
+	id := r.byRoot[info.PID]
+	r.mu.Unlock()
+	if id == "" || (claimed != "" && claimed != id) {
+		return model.DecisionScope{}, false
+	}
+	sess, ok := r.st.GetSession(id)
+	if !ok || (sess.Status != model.SessionActive && sess.Status != model.SessionIdle) || sess.RootPID != info.PID || !rootStarted(sess).Equal(info.StartedAt) || sess.Harness != info.Name || sess.Workspace != info.CWD {
+		return model.DecisionScope{}, false
+	}
+	return model.DecisionScope{Agent: info.Name, SessionID: id, Workspace: info.CWD, ReaderExe: info.ExePath, IdentityBasis: "peer-process-tree"}, true
+}
+
 // Sweep advances the lifecycle: active → idle after silence, idle → ended
 // when the root process is gone (or after a day of silence for pid-less
 // hook sessions, or an hour of silence on a root that now belongs to an

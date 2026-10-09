@@ -37,7 +37,8 @@ func (a *API) handleReviewDecision(w http.ResponseWriter, r *http.Request) {
 	var req model.ReviewDecisionRequest
 	d := json.NewDecoder(r.Body)
 	d.DisallowUnknownFields()
-	if err := d.Decode(&req); err != nil || !guardTokenRE.MatchString(req.ID) || req.Revision < 1 || (req.Action != "acknowledge" && req.Action != "close_reported") {
+	if err := d.Decode(&req); err != nil || !guardTokenRE.MatchString(req.ID) || req.Revision < 1 || (req.Action != "acknowledge" && req.Action != "close_reported" && req.Action != "expect") ||
+		(req.Action == "expect" && (req.Scope == nil || req.Scope.Validate() != nil)) || (req.Action != "expect" && req.Scope != nil) {
 		http.Error(w, "Invalid review decision", 400)
 		return
 	}

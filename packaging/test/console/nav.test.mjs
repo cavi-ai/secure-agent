@@ -84,9 +84,9 @@ test('policy lists: rows escaped, empty states say what fills them, loading and 
     { key: 'claude|gh|/u/.config/gh/hosts.yml|<GitHub>', agent: 'claude', reader: 'gh', path: '/u/.config/gh/hosts.yml', dest: '<GitHub>', hits: 3, created_at: '2026-09-25T10:00:00Z' },
     { key: 'k2', agent: 'codex', reader: 'tool', path: '/u/.env', dest: 'x.com', created_at: '2026-09-25T11:00:00Z' }], {});
   assert.ok(expected.includes('<b>gh</b> reads <code>/u/.config/gh/hosts.yml</code>, then reaches <b>&lt;GitHub&gt;</b>'));
-  assert.ok(expected.includes('claude · Legacy provider exception is inactive; review an exact host') && expected.includes('2026-09-25'));
+  assert.ok(expected.includes('claude · legacy policy · no expiry · Legacy provider exception is inactive; review an exact host') && expected.includes('2026-09-25'));
   assert.ok(expected.includes('data-action="forget-expected" data-key="claude|gh|/u/.config/gh/hosts.yml|&lt;GitHub&gt;"'));
-  assert.ok(expected.includes('<b>an agent tool</b> reads') && expected.includes('codex · 0 since the daemon started'));
+  assert.ok(expected.includes('<b>an agent tool</b> reads') && expected.includes('codex · legacy policy · no expiry · 0 since the daemon started'));
   assert.ok(policyListHTML('guard', null, {}).includes('Loading'));
   assert.ok(policyListHTML('guard', null, { error: 'boom <x>' }).includes('boom &lt;x&gt;'));
 });
