@@ -81,6 +81,13 @@ var (
 	traceActivityIndexSQL = `CREATE INDEX IF NOT EXISTS idx_events_trace_activity ON events(kind, ` + timestampOrderExpr("ts") + `, session_id, ts)
 		WHERE kind IN (` + traceActivityKinds + `);
 		DROP INDEX IF EXISTS idx_events_trace_ts;`
+	// Session coverage reads each live session's newest hook, payload and
+	// trace event with one seek per kind. Its statements spell out the same
+	// kind list, which the partial index needs.
+	sessionActivityKinds = fmt.Sprintf("%d, %d, %d, %d, %d",
+		event.KindPluginAction, event.KindProxyHit, event.KindToolCall, event.KindTurn, event.KindModelCall)
+	sessionActivityIndexSQL = `CREATE INDEX IF NOT EXISTS idx_events_session_activity ON events(session_id, kind, ` + timestampOrderExpr("ts") + `, ts)
+		WHERE kind IN (` + sessionActivityKinds + `)`
 	// Prefix each candidate with a fixed-width UTC sort key. Strip that key
 	// after MAX so callers receive the original RFC3339 timestamp.
 	harnessActivitySQL = fmt.Sprintf(`SELECT s.harness,

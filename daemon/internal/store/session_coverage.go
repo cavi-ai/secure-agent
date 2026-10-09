@@ -27,24 +27,7 @@ func (s *Store) SessionCoverageSince(pids []int32, since, until time.Time) (out 
 	if len(pids) > 128 {
 		return nil, fmt.Errorf("too many coverage roots")
 	}
-	args := []any{}
-	lower := since.UTC().Format(activityTimeLayout)
-	upper := until.UTC().Format(activityTimeLayout)
-	window := timestampOrderExpr("e.ts") + " >= max(?, " + timestampOrderExpr("s.started_at") + ") AND " + timestampOrderExpr("e.ts") + " <= ?"
-	last := func(kinds string, extra string) string {
-		args = append(args, lower, upper)
-		return "COALESCE((SELECT substr(MAX(" + timestampOrderExpr("e.ts") + " || e.ts),31) FROM events e WHERE e.session_id=s.id AND e.kind IN (" + kinds + ") " + extra + " AND " + window + "),'')"
-	}
-	hook := last(fmt.Sprint(int(event.KindPluginAction)), "AND e.detail IN ('secret-guard:allow','secret-guard:deny','secret-guard-broker:allow','secret-guard-broker:deny')")
-	trace := last(fmt.Sprintf("%d,%d,%d", event.KindToolCall, event.KindTurn, event.KindModelCall), "")
-	payload := last(fmt.Sprint(int(event.KindProxyHit)), "AND (e.detail LIKE 'proxy-secret-leak:%' OR e.detail LIKE 'proxy-prompt-injection:%')")
-	args = append(args, lower, upper)
-	decision := `COALESCE((SELECT MAX(g.at) FROM guard_decisions g WHERE g.session_id=s.id AND g.at >= max(?, ` + timestampOrderExpr("s.started_at") + `) AND g.at <= ?),'')`
-	for _, pid := range pids {
-		args = append(args, pid)
-	}
-	marks := strings.TrimSuffix(strings.Repeat("?,", len(pids)), ",")
-	query := `SELECT s.id,s.harness,COALESCE(s.workspace,''),s.root_pid,COALESCE(s.root_started_at,''),COALESCE(s.confidence,''),` + hook + "," + trace + "," + payload + "," + decision + ` FROM sessions s WHERE s.root_pid IN (` + marks + `) AND s.status IN ('active','idle')`
+	query, args := sessionCoverageQuery(pids, since, until)
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	rows, err := s.db.QueryContext(ctx, query, args...)
@@ -64,4 +47,31 @@ func (s *Store) SessionCoverageSince(pids []int32, since, until time.Time) (out 
 		return nil, err
 	}
 	return out, rows.Close()
+}
+
+// sessionCoverageQuery finds each newest event with one idx_events_session_activity
+// seek per session and kind, so its cost does not grow with a session's events.
+func sessionCoverageQuery(pids []int32, since, until time.Time) (string, []any) {
+	args := []any{}
+	lower := since.UTC().Format(activityTimeLayout)
+	upper := until.UTC().Format(activityTimeLayout)
+	order := timestampOrderExpr("e.ts")
+	window := order + " >= max(?, " + timestampOrderExpr("s.started_at") + ") AND " + order + " <= ?"
+	newest := func(kind event.Kind, extra string) string {
+		args = append(args, lower, upper)
+		return fmt.Sprintf("(SELECT e.ts FROM events e WHERE e.session_id=s.id AND e.kind=%d AND e.kind IN (%s) %s AND %s ORDER BY %s DESC, e.ts DESC LIMIT 1)",
+			kind, sessionActivityKinds, extra, window, order)
+	}
+	hook := "COALESCE(" + newest(event.KindPluginAction, "AND e.detail IN ('secret-guard:allow','secret-guard:deny','secret-guard-broker:allow','secret-guard-broker:deny')") + ",'')"
+	trace := "COALESCE((SELECT substr(MAX(" + timestampOrderExpr("x.ts") + " || x.ts),31) FROM (SELECT " +
+		newest(event.KindToolCall, "") + " AS ts UNION ALL SELECT " + newest(event.KindTurn, "") + " UNION ALL SELECT " +
+		newest(event.KindModelCall, "") + ") x),'')"
+	payload := "COALESCE(" + newest(event.KindProxyHit, "AND (e.detail LIKE 'proxy-secret-leak:%' OR e.detail LIKE 'proxy-prompt-injection:%')") + ",'')"
+	args = append(args, lower, upper)
+	decision := `COALESCE((SELECT MAX(g.at) FROM guard_decisions g WHERE g.session_id=s.id AND g.at >= max(?, ` + timestampOrderExpr("s.started_at") + `) AND g.at <= ?),'')`
+	for _, pid := range pids {
+		args = append(args, pid)
+	}
+	marks := strings.TrimSuffix(strings.Repeat("?,", len(pids)), ",")
+	return `SELECT s.id,s.harness,COALESCE(s.workspace,''),s.root_pid,COALESCE(s.root_started_at,''),COALESCE(s.confidence,''),` + hook + "," + trace + "," + payload + "," + decision + ` FROM sessions s WHERE s.root_pid IN (` + marks + `) AND s.status IN ('active','idle')`, args
 }

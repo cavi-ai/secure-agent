@@ -307,6 +307,9 @@ func initializeSchema(db *sql.DB) error {
 	if _, err := tx.Exec(traceActivityIndexSQL); err != nil {
 		return fmt.Errorf("create trace activity index: %w", err)
 	}
+	if _, err := tx.Exec(sessionActivityIndexSQL); err != nil {
+		return fmt.Errorf("create session activity index: %w", err)
+	}
 	// Flags gain an acknowledged marker: when the operator acts on a flag
 	// (applies any disposition), the flag stops counting as critical and
 	// dims in the UI — "acted upon" is a first-class state, not an endless
