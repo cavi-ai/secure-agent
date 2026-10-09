@@ -6,6 +6,7 @@ import Darwin
 /// decode failure means "daemon answered but spoke something unexpected" —
 /// the daemon is up and the UI must not claim otherwise.
 public enum DaemonClientError: Error, Equatable {
+	case policyRejected(String)
     case transport(String)
     case http(Int)
     case decode(String)
@@ -19,6 +20,7 @@ public enum DaemonClientError: Error, Equatable {
 extension DaemonClientError: LocalizedError {
     public var errorDescription: String? {
         switch self {
+        case .policyRejected(let detail): return detail
         case .transport(let detail):
             return "daemon unreachable (\(detail))"
         case .http(let code):
@@ -346,7 +348,7 @@ public final class DaemonClient: Sendable {
         return s.addingPercentEncoding(withAllowedCharacters: allowed) ?? s
     }
 
-    private func getDecodable<T: Decodable>(_ path: String) async throws -> T {
+    func getDecodable<T: Decodable>(_ path: String) async throws -> T {
         let body = try await request(method: "GET", path: path)
         return try Self.decodeBody(T.self, path: path, body: body)
     }
@@ -368,7 +370,7 @@ public final class DaemonClient: Sendable {
         }
     }
 
-    private func request(method: String, path: String, body: Data? = nil) async throws -> Data {
+    func request(method: String, path: String, body: Data? = nil, includePolicyError: Bool = false) async throws -> Data {
         let socketPath = self.socketPath
         return try await Task.detached {
             let fd = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
@@ -466,7 +468,7 @@ public final class DaemonClient: Sendable {
                 }
             }
 
-            return try Self.parseHTTPResponse(responseData)
+            return try Self.parseHTTPResponse(responseData, includePolicyError: includePolicyError)
         }.value
     }
 
@@ -491,7 +493,7 @@ public final class DaemonClient: Sendable {
     /// the header terminator, with a minimal dechunker for
     /// `Transfer-Encoding: chunked` (Go's net/http chunk-encodes responses
     /// larger than its 2KB buffer even over a unix socket).
-    static func parseHTTPResponse(_ data: Data) throws -> Data {
+    static func parseHTTPResponse(_ data: Data, includePolicyError: Bool = false) throws -> Data {
         guard let headerEnd = data.range(of: Data("\r\n\r\n".utf8)) else {
             throw DaemonClientError.transport("malformed HTTP response (no header terminator)")
         }
@@ -510,6 +512,10 @@ public final class DaemonClient: Sendable {
             body = try dechunk(body)
         }
         guard (200..<300).contains(code) else {
+            if includePolicyError && (code == 400 || code == 409 || code == 500) {
+                let detail = String(decoding: body.prefix(1024), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+                throw DaemonClientError.policyRejected(detail.isEmpty ? "Rule was not saved (HTTP \(code))" : detail)
+            }
             throw DaemonClientError.http(code)
         }
         return body

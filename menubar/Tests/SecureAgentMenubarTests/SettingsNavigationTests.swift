@@ -56,8 +56,9 @@ final class SettingsNavigationTests: XCTestCase {
         let hosts: Set<String> = ["claude-desktop", "cursor-ide"]
         let expected = shipped.filter { !hosts.contains($0.name) }
         XCTAssertGreaterThanOrEqual(expected.count, 15, "defaults.yaml agents list not found")
-        XCTAssertEqual(SetupManager.knownAgents.map(\.name), expected.map(\.name))
-        for (known, daemon) in zip(SetupManager.knownAgents, expected) {
+        XCTAssertEqual(SetupManager.knownAgents.map(\.name).sorted(), expected.map(\.name).sorted())
+        for known in SetupManager.knownAgents {
+            let daemon = try XCTUnwrap(expected.first { $0.name == known.name })
             XCTAssertEqual(known.matches, daemon.matches, known.name)
         }
     }

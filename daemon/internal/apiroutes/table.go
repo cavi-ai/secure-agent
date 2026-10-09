@@ -101,6 +101,8 @@ var Table = []Route{
 	{Path: "/advisor/assess-host", Console: true, ConsoleMethods: []string{"POST"}},
 	{Path: "/flags/acknowledge", Console: true, MutatingMethods: []string{"POST"}},
 	{Path: "/patterns", Console: true},
+	{Path: "/firewall/patterns", NoAgent: true, MutatingMethods: []string{"POST"}},
+	{Path: "/guard/config", NoAgent: true, MutatingMethods: []string{"POST"}},
 	{Path: "/ui/open-fda", Console: true, MutatingMethods: []string{"POST"}},
 	{Path: "/ui/open-config", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
 	{Path: "/stats/rollup", Console: true},

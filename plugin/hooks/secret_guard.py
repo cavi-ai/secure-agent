@@ -412,7 +412,7 @@ def match_dir_scan(path: str):
     directory subtree, else None."""
     p = norm(path)
     pl = p.lower()
-    for base, rid in DIR_SCAN_RULES:
+    for base, rid in _effective_guard_doc()["dir_scan"]:
         nb = norm(base).lower()
         if pl == nb or pl.startswith(nb + os.sep):
             return rid
@@ -449,6 +449,46 @@ def _mode_overrides() -> dict:
             pass
         return {"*": "deny"}
     return {str(k): str(v) for k, v in data.items()}
+
+
+def _effective_guard_doc():
+    """Read the user policy on every invocation; corrupt policy fails closed."""
+    path = os.environ.get("SECURE_AGENT_GUARD_RULES") or os.path.join(
+        os.path.dirname(os.environ.get("SECURE_AGENT_SOCK") or os.path.join(
+            HOME, ".config", "secure-agent", "daemon.sock")), "guard-rules.json")
+    sentinel = {"rules": [{"id": "guard-config-corrupt", "paths": ["*"], "mode": "deny"}],
+                "dir_scan": [[os.sep, "guard-config-corrupt"]]}
+    data = _load_json_file(path, sentinel)
+    if data is None:
+        if not os.path.exists(path):
+            return _GUARD_DOC
+        audit("deny", "guard-config-corrupt", path, "config")
+        return sentinel
+    try:
+        if not isinstance(data, dict) or not isinstance(data["rules"], list) or not isinstance(data["dir_scan"], list):
+            raise ValueError("expected rule arrays")
+        if len(data["rules"]) > 256:
+            raise ValueError("too many rules")
+        seen = set()
+        for rule in data["rules"]:
+            rid = rule["id"]
+            if not isinstance(rid, str) or not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}", rid) or rid in seen:
+                raise ValueError("invalid rule ID")
+            seen.add(rid)
+            if rule["mode"] not in ("monitor", "prompt", "deny"):
+                raise ValueError("invalid mode")
+            paths = rule["paths"]
+            if not isinstance(paths, list) or not 1 <= len(paths) <= 64:
+                raise ValueError("invalid paths")
+            if any(not isinstance(p, str) or not p or p.strip() != p or len(p) > 4096 or any(c in p for c in "\x00\r\n") for p in paths):
+                raise ValueError("invalid path")
+        for pair in data["dir_scan"]:
+            if not isinstance(pair, list) or len(pair) != 2 or not isinstance(pair[0], str) or not pair[0] or pair[1] not in seen:
+                raise ValueError("invalid directory rule")
+        return data
+    except (KeyError, TypeError, ValueError):
+        audit("deny", "guard-config-corrupt", path, "config")
+        return sentinel
 
 
 def _cwd_overrides() -> list:
@@ -504,7 +544,7 @@ def _cwd_mode_map() -> dict:
     return {}
 
 
-def match_rule(path: str, rules=DEFAULT_GUARD_RULES):
+def match_rule(path: str, rules=None):
     """Return (rule_id, effective_mode) for the first rule whose globs match, else (None, None).
 
     Effective mode resolution order: per-cwd overlay (first entry whose
@@ -514,10 +554,14 @@ def match_rule(path: str, rules=DEFAULT_GUARD_RULES):
     p = norm(path).lower()  # case-insensitive APFS: fold before glob matching
     cwd_modes = _cwd_mode_map()
     overrides = _mode_overrides()
+    if rules is None:
+        rules = _effective_guard_doc()["rules"]
     for rule in rules:
         for g in rule["paths"]:
             gg = norm(g).lower()
             if fnmatch.fnmatch(p, gg) or fnmatch.fnmatch(p, gg + "/*"):
+                if rule["id"] == "guard-config-corrupt":
+                    return rule["id"], "deny"
                 return rule["id"], _resolve_mode(rule["id"], rule["mode"], cwd_modes, overrides)
     return None, None
 
@@ -525,7 +569,9 @@ def match_rule(path: str, rules=DEFAULT_GUARD_RULES):
 def mode_for_dir_scan(rid: str) -> str:
     """Effective mode for a directory-scan rule id (same override chain as
     match_rule; shipped mode looked up from DEFAULT_GUARD_RULES)."""
-    shipped = next((r["mode"] for r in DEFAULT_GUARD_RULES if r["id"] == rid), "monitor")
+    if rid == "guard-config-corrupt":
+        return "deny"
+    shipped = next((r["mode"] for r in _effective_guard_doc()["rules"] if r["id"] == rid), "monitor")
     return _resolve_mode(rid, shipped, _cwd_mode_map(), _mode_overrides())
 
 

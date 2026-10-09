@@ -15,6 +15,8 @@ const (
 type Inspection struct {
 	engine   *Engine
 	registry *Registry
+	det      *Detector
+	pol      *Policy
 	req      Request
 	findings []Finding
 	seen     map[inspectionKey]bool
@@ -28,10 +30,11 @@ type inspectionKey struct {
 }
 
 func (e *Engine) NewInspection(req Request) *Inspection {
-	i := &Inspection{engine: e, registry: e.reg.Load(), req: req, seen: make(map[inspectionKey]bool)}
+	det, pol := e.policySnapshot()
+	i := &Inspection{engine: e, registry: e.reg.Load(), det: det, pol: pol, req: req, seen: make(map[inspectionKey]bool)}
 	// Preserve existing header and query policy, including legitimate vendor auth.
 	req.Body = nil
-	i.add(e.inspect(req))
+	i.add(inspectWith(req, i.registry, det, pol))
 	return i
 }
 
@@ -51,11 +54,11 @@ func (i *Inspection) scanBody(data []byte, partial bool) {
 	// the same coverage as registered fingerprints.
 	for _, view := range Normalize(data) {
 		hits := i.registry.matchTokens(view)
-		hits = append(hits, i.engine.det.scan(view, partial)...)
+		hits = append(hits, i.det.scan(view, partial)...)
 		for _, h := range hits {
 			// Offsets in decoded windows are not offsets in the wire body.
 			h.Spans = nil
-			i.add(Decision{Findings: []Finding{{Hit: h, Ctx: ctx, Verdict: i.engine.pol.Classify(h, ctx)}}})
+			i.add(Decision{Findings: []Finding{{Hit: h, Ctx: ctx, Verdict: i.pol.Classify(h, ctx)}}})
 		}
 	}
 }

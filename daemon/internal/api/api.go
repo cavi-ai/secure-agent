@@ -184,17 +184,17 @@ type API struct {
 	groupAdvise     map[string]bool // repositories with a group advisor ask running
 	// life is the serving context: work a handler starts in the background
 	// (a group advisor ask) ends with the daemon, not with the request.
-	life             context.Context
-	egressAdvisor    func(store.EgressEpisode) bool
-	clutter          *clutter.Clutter
-	asker            *agentask.Asker
-	sysAgent         *sysagent.Agent
-	autoReview       *autoReviewer
-	projectAdvisor   func(model.ProjectCleanupRequest) bool
-	resources        func() resource.Snapshot
-	resourceControl  *resource.Controller
-	resourcePolicy   func(config.ResourceControlConfig) error
-	resourcePolicyMu sync.Mutex
+	life            context.Context
+	egressAdvisor   func(store.EgressEpisode) bool
+	clutter         *clutter.Clutter
+	asker           *agentask.Asker
+	sysAgent        *sysagent.Agent
+	autoReview      *autoReviewer
+	projectAdvisor  func(model.ProjectCleanupRequest) bool
+	resources       func() resource.Snapshot
+	resourceControl *resource.Controller
+	resourcePolicy  func(config.ResourceControlConfig) error
+	policyWriteMu   sync.Mutex
 
 	// plan connects /advisor/plan to the current advisor (plan.go).
 	plan *PlanFuncs
@@ -734,6 +734,8 @@ func (a *API) routes() map[string]http.HandlerFunc {
 		"/fleet":                        a.handleFleet,
 		"/kill":                         a.handleKill,
 		"/firewall/mode":                a.handleFirewallMode,
+		"/firewall/patterns":            a.handleFirewallPatterns,
+		"/guard/config":                 a.handleGuardConfig,
 		"/firewall/fingerprints/reload": a.handleFingerprintReload,
 		"/firewall/fingerprints/ingest": a.handleFingerprintIngest,
 		"/firewall/sources":             a.handleFirewallSources,
