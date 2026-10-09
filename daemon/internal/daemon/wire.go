@@ -103,6 +103,9 @@ func setupFirewall(cfg config.Config) *firewallStack {
 		if saltErr != nil {
 			return fmt.Errorf("firewall fingerprint salt unavailable: %w", saltErr)
 		}
+		if fwErr != nil {
+			return fmt.Errorf("firewall engine unavailable: %w", fwErr)
+		}
 		fingerprintMu.Lock()
 		defer fingerprintMu.Unlock()
 		fps, err := fpStore.LoadStrict()
@@ -121,6 +124,9 @@ func setupFirewall(cfg config.Config) *firewallStack {
 	ingest := func() ([]string, error) {
 		if saltErr != nil {
 			return nil, fmt.Errorf("firewall fingerprint salt unavailable: %w", saltErr)
+		}
+		if fwErr != nil {
+			return nil, fmt.Errorf("firewall engine unavailable: %w", fwErr)
 		}
 		fingerprintMu.Lock()
 		defer fingerprintMu.Unlock()
