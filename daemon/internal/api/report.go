@@ -18,7 +18,7 @@ func (a *API) serveSessionReport(w http.ResponseWriter, r *http.Request, id stri
 	}
 	rep, ok, err := a.store.SessionReportResult(id)
 	if err != nil {
-		http.Error(w, "session report unavailable", http.StatusServiceUnavailable)
+		http.Error(w, "Session report unavailable; retry", http.StatusServiceUnavailable)
 		return
 	}
 	if !ok {

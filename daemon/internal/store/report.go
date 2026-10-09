@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -89,7 +90,8 @@ func (s *Store) SessionReport(id string) (SessionReport, bool) {
 
 // SessionReportResult distinguishes unavailable identity from a missing session.
 // Source failures retain independently readable sections with explicit limits.
-func (s *Store) SessionReportResult(id string) (SessionReport, bool, error) {
+func (s *Store) SessionReportResult(id string) (_ SessionReport, _ bool, readErr error) {
+	defer func() { s.noteRead("session reports", readErr) }()
 	sess, ok, err := s.GetSessionResult(id)
 	if err != nil {
 		return SessionReport{}, false, err
@@ -148,6 +150,9 @@ func (s *Store) SessionReportResult(id string) (SessionReport, bool, error) {
 			rep.TokensIn += e.TokensIn
 			rep.TokensOut += e.TokensOut
 			rep.CostUSD += e.CostUSD
+			if math.IsInf(rep.CostUSD, 0) || math.IsNaN(rep.CostUSD) {
+				return SessionReport{}, false, errors.New("nonfinite session report cost")
+			}
 			name := orUnknown(e.Model)
 			m := models[name]
 			if m == nil {
@@ -158,6 +163,9 @@ func (s *Store) SessionReportResult(id string) (SessionReport, bool, error) {
 			m.TokensIn += e.TokensIn
 			m.TokensOut += e.TokensOut
 			m.CostUSD += e.CostUSD
+			if math.IsInf(m.CostUSD, 0) || math.IsNaN(m.CostUSD) {
+				return SessionReport{}, false, errors.New("nonfinite session model cost")
+			}
 			if e.CostUSD == 0 {
 				rep.Unpriced++
 				m.Unpriced++
@@ -266,6 +274,9 @@ func (s *Store) sessionEventsOldestFirst(id string) (out []event.Event, readErr 
 		e.TS, err = time.Parse(time.RFC3339Nano, ts)
 		if err != nil {
 			return nil, errors.New("invalid session event timestamp")
+		}
+		if math.IsInf(cost.Float64, 0) || math.IsNaN(cost.Float64) {
+			return nil, errors.New("nonfinite session report event cost")
 		}
 		e.ToolName, e.ToolStatus, e.Model = tool.String, toolStatus.String, modelName.String
 		e.DurationMs, e.TokensIn, e.TokensOut, e.CostUSD = durMs.Int64, tokIn.Int64, tokOut.Int64, cost.Float64
