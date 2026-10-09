@@ -299,6 +299,7 @@ def main():
         dom_wtadopt = dump_dom(chrome, tmp, "?tab=worktrees&adoptdemo")
         dom_wtcadence = dump_dom(chrome, tmp, "?tab=worktrees&removecadence")
         dom_clutteradvise = dump_dom(chrome, tmp, "?tab=worktrees&clutteradvise")
+        dom_wtgroup = dump_dom(chrome, tmp, "?tab=worktrees&groupdemo")
         # The Agent tab is served under the daemon's CSP like the console.
         dom_agent = dump_dom(chrome, tmp, "?tab=agent", origin)
         dom_agentworkspace = dump_dom(chrome, tmp, "?tab=agent&agentworkspace", origin, window_size=(1280, 900))
@@ -1675,8 +1676,24 @@ def main():
         check("worktrees: review and keep rows carry Remove; the row with a live agent session is disabled and says why",
               wt.count('data-action="worktree-review-trash"') == 1
               and 'data-action="worktree-review-trash" data-path="/Users/dev/workspace/api-service/.worktrees/evidence"' in wt
-              and wt.count('>Remove</button>') == 3
+              and wt.count('>Remove</button>') == 2 and wt.count('>Remove…</button>') == 1
               and 'disabled="" title="Cannot remove: an agent session is live here">Remove</button>' in wt)
+        check("worktrees: Remove has three looks: solid red when confirmed safe, amber outline when not confirmed, greyed when blocked; a legend explains them",
+              '<button type="button" class="btn btn-danger-solid btn-sm" data-action="worktree-remove" data-path="/Users/dev/workspace/api-service/.worktrees/done" data-branch="feat/done" title="Safe to remove: merged into origin/main (squash)">Remove</button>' in wt
+              and '<button type="button" class="btn btn-warn-outline btn-sm" data-action="worktree-review-trash" data-path="/Users/dev/workspace/api-service/.worktrees/evidence"' in wt
+              and 'title="Not confirmed safe: ignored files that only live here: .tmp/ (3 files, 1.2 MB); ' in wt
+              and 'not bold' in wt and '. Moves the folder to the Trash; the branch stays in git">Remove…</button>' in wt
+              and '<button type="button" class="btn btn-sm" disabled="" title="Cannot remove: an agent session is live here">Remove</button>' in wt
+              and 'btn btn-danger btn-sm" data-action="worktree-review-trash"' not in wt
+              and 'btn btn-danger btn-sm" disabled' not in wt)
+        check("worktrees: the legend under the summary names the three Remove looks and is visible with a scan",
+              '<p class="wt-legend" id="worktrees-legend">Remove: confirmed safe · Remove…: not confirmed, goes to the Trash · greyed: blocked</p>' in dom_wt
+              and '<p class="wt-legend" id="worktrees-legend" hidden' not in dom_wt)
+        check("worktrees: the repository group offers Ask advisor about all and Discuss all beside Hide repo, counted over every row",
+              wt.count('data-action="worktree-advise-all" data-repo="/Users/dev/workspace/api-service"') == 1
+              and wt.count('data-action="worktree-discuss-all" data-repo="/Users/dev/workspace/api-service"') == 1
+              and '>Ask advisor about all 3</button>' in wt and '>Discuss all 4</button>' in wt
+              and wt.index('worktree-advise-all') < wt.index('worktree-discuss-all') < wt.index('data-action="worktree-hide"'))
         check("worktrees: Remove on a review row confirms what goes to the Trash and what stays in git, with no drawer",
               'Move /Users/dev/workspace/api-service/.worktrees/evidence to the Trash and unregister the worktree?' in dom_wtreview
               and 'Goes with it: ignored files that only live here: .tmp/ (3 files, 1.2 MB)' in dom_wtreview
@@ -1845,6 +1862,38 @@ def main():
         check("worktrees: the search box keeps rows whose branch, folder or repository matches, any case",
               ws.count('class="wt-row') == 1 and ".worktrees/evidence" in ws,
               f"rows={ws.count('class=\"wt-row')}")
+        def gd(pid):
+            try:
+                return json.loads(html.unescape(pre(dom_wtgroup, pid)) or "{}")
+            except ValueError:
+                return {}
+        gd_before, gd_evidence, gd_clutter, gd_cleared = gd("gd-before"), gd("gd-evidence"), gd("gd-clutter"), gd("gd-cleared")
+        check("worktrees: the header Search… box narrows the System tab's worktree rows in any case, the summary says how many are shown, clearing it restores them",
+              gd_before.get("rows") == 4 and " shown" not in gd_before.get("summary", "")
+              and gd_evidence.get("rows") == 1 and gd_evidence.get("summary", "").endswith("· 1 shown")
+              and gd_cleared.get("rows") == 4 and " shown" not in gd_cleared.get("summary", ""),
+              f"before={gd_before} evidence={gd_evidence} cleared={gd_cleared}")
+        check("worktrees: the header search narrows the clutter list too, and each empty list says why",
+              gd_before.get("clutter") == 3 and gd_evidence.get("clutter") == 0
+              and "No clutter matches the search." in gd_evidence.get("empty", [])
+              and gd_clutter.get("clutter") == 1 and gd_clutter.get("rows") == 0
+              and gd_clutter.get("summary", "").endswith("· 0 shown")
+              and "No worktree matches this filter." in gd_clutter.get("empty", [])
+              and gd_cleared.get("clutter") == 3,
+              f"evidence={gd_evidence} clutter={gd_clutter}")
+        gd_reqs = html.unescape(pre(dom_wtgroup, "mock-requests"))
+        gd_agent = dom_wtgroup.split('id="tab-agent"', 1)[-1].split('id="drawer"', 1)[0]
+        check("worktrees: Ask advisor about all posts the repository and toasts how many worktrees it will work through",
+              'POST /worktrees/advise body={"repo":"/Users/dev/workspace/api-service"}' in gd_reqs
+              and "Asking the advisor about 3 worktrees, one at a time — notes appear under each row as it answers" in html.unescape(pre(dom_wtgroup, "gd-toast")),
+              gd_reqs)
+        check("worktrees: Discuss all posts the repository and opens the Agent tab on the group question",
+              'POST /agent/worktree body={"repo":"/Users/dev/workspace/api-service"}' in gd_reqs
+              and 'class="tab-btn active" data-tab="agent"' in dom_wtgroup
+              and gd_agent.count("agent-worktree-card") == 1
+              and "<b>Which of these worktrees in this repository can I delete?</b>" in gd_agent
+              and "feat/evidence · review · merged: no" in gd_agent,
+              gd_reqs)
         gap = pre(dom_wtcadence, "remove-cadence")
         check("worktrees: a removal started while a 5 s sizing re-read waits is re-read on its own 1.5 s cadence",
               gap.isdigit() and int(gap) < 2000, f"gap={gap!r}ms")

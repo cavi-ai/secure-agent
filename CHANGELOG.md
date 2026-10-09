@@ -6,11 +6,19 @@ All notable changes to `secure-agent` are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- API: `{"repo"}` on `POST /worktrees/advise` and `POST /agent/worktree` covers a whole repository.
+- Worktrees: **Ask advisor about all** and **Discuss all** on each repository group, counted over every row; the advisor gets one note at a time.
+- Worktrees: a legend under the summary names the three Remove looks.
+
 ### Changed
 - Console and menu bar: Home and the hero list only decisions that need you; warnings and recurring connections stay in the findings history, now a compact log.
+- Worktrees: **Remove** is solid red when confirmed safe, **Remove…** is an amber outline when not confirmed (goes to the Trash), and a blocked row is greyed.
+- Console: disabled buttons are dimmed.
 
 ### Fixed
 - Credential reads by the owning program, directory opens, and files an agent wrote itself no longer raise sensitive-read findings.
+- Console: the header search filters the System tab's worktrees and clutter.
 
 ## [1.3.0] - 2026-10-08
 

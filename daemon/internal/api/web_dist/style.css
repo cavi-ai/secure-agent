@@ -187,6 +187,15 @@ body {
 .btn-primary:hover { background: var(--brand-2); border-color: var(--brand-2); }
 .btn-danger { color: var(--bad); border-color: hsl(348 84% 63% / 0.4); background: var(--bad-bg); }
 .btn-danger:hover { background: hsl(348 84% 63% / 0.2); border-color: var(--bad); }
+/* Remove reads three ways on a worktree row: solid red when the checker
+   confirmed the removal safe, an amber outline when it did not (the folder
+   goes to the Trash), and a greyed neutral button when it is blocked. */
+.btn-danger-solid { background: var(--bad); border-color: var(--bad); color: var(--bg-0); }
+.btn-danger-solid:hover:not(:disabled) { background: var(--bad); border-color: var(--bad); opacity: 0.88; }
+.btn-warn-outline { background: transparent; border-color: var(--warn); color: var(--warn); }
+.btn-warn-outline:hover:not(:disabled) { background: var(--warn-bg); border-color: var(--warn); }
+.btn:disabled, .btn[disabled] { opacity: 0.45; cursor: not-allowed; }
+.btn:disabled:active, .btn[disabled]:active { transform: none; }
 
 /* ---------- KPI row ---------- */
 .kpis {
@@ -1828,6 +1837,7 @@ button.fact:hover { background: var(--bg-3); border-color: var(--brand); }
 .wt-pill:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
 .wt-pill.on { background: var(--brand-bg); border-color: var(--brand); color: var(--brand-2); }
 .wt-summary { margin: 0; padding: 8px 16px 0; font-size: 0.75rem; color: var(--tx-3); }
+.wt-legend { margin: 0; padding: 4px 16px 0; font-size: 0.72rem; color: var(--tx-3); }
 .wt-errors { margin: 8px 16px 0; padding: 8px 12px 8px 28px; border-radius: var(--r-sm); background: var(--warn-bg); color: var(--warn); font-size: 0.75rem; }
 .wt-errors[hidden] { display: none; }
 .wt-repo { display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: var(--r-md); overflow: hidden; }
@@ -1837,9 +1847,9 @@ button.fact:hover { background: var(--bg-3); border-color: var(--brand); }
 }
 .wt-repo-path { font: 600 0.78rem/1.3 var(--mono); color: var(--tx-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .wt-repo-meta { font-size: 0.72rem; color: var(--tx-3); white-space: nowrap; }
-.wt-hide { margin-left: auto; font-size: 0.72rem; white-space: nowrap; }
+.wt-hide, .wt-group-ask { margin-left: auto; font-size: 0.72rem; white-space: nowrap; }
 .wt-remove-all { margin-left: auto; }
-.wt-remove-all + .wt-hide { margin-left: 10px; }
+.wt-remove-all + .wt-hide, .wt-remove-all + .wt-group-ask, .wt-group-ask + .wt-group-ask, .wt-group-ask + .wt-hide { margin-left: 10px; }
 .wt-repo-error { margin-left: auto; font-size: 0.72rem; color: var(--warn); }
 .wt-row { padding: 8px 12px; border-top: 1px solid var(--line); }
 .wt-row:first-of-type { border-top: 0; }
