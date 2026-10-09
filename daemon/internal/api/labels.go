@@ -86,8 +86,11 @@ func (a *API) handleLabels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rule, agent, pattern := labelKeys(t)
-	a.recordLabel(model.OperatorLabel{Kind: t.kind, Rule: rule, Agent: agent, Pattern: pattern,
-		Label: req.Label, Reason: req.Reason, Source: req.Source})
+	if err := a.store.PutOperatorLabelResult(model.OperatorLabel{Kind: t.kind, Rule: rule, Agent: agent, Pattern: pattern,
+		Label: req.Label, Reason: req.Reason, Source: req.Source}); err != nil {
+		http.Error(w, "Operator judgment could not be saved; retry", http.StatusServiceUnavailable)
+		return
+	}
 	writeJSON(w, map[string]string{"status": "ok"})
 }
 

@@ -2,9 +2,11 @@ package api
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -17,6 +19,7 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/guard"
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/sensitive"
+	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
 
 func postJSON(h func(http.ResponseWriter, *http.Request), path string, body any) *httptest.ResponseRecorder {
@@ -29,6 +32,58 @@ func postJSON(h func(http.ResponseWriter, *http.Request), path string, body any)
 func TestLabelsRouteIsNoAgent(t *testing.T) {
 	if !apiroutes.IsNoAgent("/labels") || !apiroutes.ConsoleAllowed("GET", "/labels") || !apiroutes.IsMutation("POST", "/labels") {
 		t.Fatal("/labels must be NoAgent, console-admitted, POST mutating")
+	}
+}
+
+func TestExplicitLabelsReportFailedWriteAndAllowRetry(t *testing.T) {
+	for _, subject := range []string{"flag:f1", "incident:i1"} {
+		t.Run(subject, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "labels.db")
+			st, err := store.Open(path, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { st.Close() })
+			st.PutFlag(model.Flag{ID: "f1", Rule: "secret-in-transcript", Agent: "codex", TS: time.Now()})
+			if err := st.PutIncident(model.IncidentReport{ID: "i1", Rule: "secret-in-transcript", Agent: "codex", Timestamp: time.Now()}); err != nil {
+				t.Fatal(err)
+			}
+			a := newTestAPI("", st, nil, func() Status { return Status{Running: true} })
+			db, err := sql.Open("sqlite", path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			if _, err := db.Exec(`CREATE TRIGGER reject_label_insert BEFORE INSERT ON operator_labels BEGIN SELECT RAISE(ABORT, 'fixture insert failure'); END`); err != nil {
+				t.Fatal(err)
+			}
+			body := map[string]string{"subject": subject, "label": "ok"}
+			w := postJSON(a.handleLabels, "/labels", body)
+			if w.Code != http.StatusServiceUnavailable {
+				t.Fatalf("failed label write returned %d: %s", w.Code, w.Body.String())
+			}
+			if strings.Contains(w.Body.String(), "fixture insert failure") {
+				t.Fatal("response exposed database diagnostics")
+			}
+			if health := st.WriteHealth(); !slices.Contains(health.Active, "operator labels") {
+				t.Fatalf("failed label write hidden from health: %+v", health)
+			}
+			if got := st.LabelSummary("codex", "", "secret-in-transcript"); got.OK != 0 {
+				t.Fatalf("failed judgment persisted: %+v", got)
+			}
+			if _, err := db.Exec(`DROP TRIGGER reject_label_insert`); err != nil {
+				t.Fatal(err)
+			}
+			if w := postJSON(a.handleLabels, "/labels", body); w.Code != http.StatusOK {
+				t.Fatalf("retry: %d %s", w.Code, w.Body.String())
+			}
+			if got := st.LabelSummary("codex", "", "secret-in-transcript"); got.OK != 1 {
+				t.Fatalf("retry judgment: %+v", got)
+			}
+			if health := st.WriteHealth(); slices.Contains(health.Active, "operator labels") {
+				t.Fatalf("successful retry left an active fault: %+v", health)
+			}
+		})
 	}
 }
 
