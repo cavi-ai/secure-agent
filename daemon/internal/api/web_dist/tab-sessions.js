@@ -155,6 +155,80 @@ function sessionMemoryHTML(page, state) {
 // identity confidence, workspace path (click copies), Export (copies the
 // markdown report from GET /sessions/{id}/report), then Memory by default.
 // Trace keeps the existing waterfall and timeline endpoint.
+// Durable IDs are the entry point; live process counts and setup checks do
+// not substitute for a session's own record.
+function sessionDailyHTML(sessions, coverage) {
+  if (!Array.isArray(sessions)) return '<p role="status">Session data unavailable.</p>';
+  const live = sessions.filter(s => s.status === 'active' || s.status === 'idle');
+  if (!live.length) return '<p>No live sessions recorded. Active processes may not yet have an attributed session.</p>';
+  const rows = live.slice(0, 6).map(s => {
+    const observed = ((coverage && coverage.sessions) || []).find(c => c.session_id === s.id);
+    return `<button type="button" class="session-daily-card" data-action="session-current" data-session="${escapeHTML(s.id)}">
+      <span>${harnessChipHTML(s.harness)}<strong>${escapeHTML(sessionTitle(s))}</strong></span>
+      <span>${escapeHTML(s.status)} · ${escapeHTML(sessionShort(s.id))}</span>
+      <span>Guard: ${observed ? escapeHTML(coveragePathLabel(observed.guard)) : 'session coverage unavailable'}</span>
+    </button>`;
+  }).join('');
+  return `<div class="session-daily-grid">${rows}</div>${live.length > 6 ? `<p>${live.length - 6} more live sessions. <button type="button" class="link-btn" data-action="goto-tab" data-tab="sessions">View all sessions</button></p>` : ''}`;
+}
+
+function renderSessionDaily() {
+  const el = document.getElementById('session-daily');
+  if (!el) return;
+  const SA = window.SA;
+  const html = sessionDailyHTML(SA.t.sessions, SA.t.status && SA.t.status.coverage);
+  if (el._saHTML !== html) { el.innerHTML = html; el._saHTML = html; }
+}
+
+function sessionOverviewHTML(data, state) {
+  state = state || {};
+  const retry = '<button type="button" class="link-btn" data-action="session-overview-retry">Retry current status</button>';
+  const status = state.error ? `Last known session status. Refresh failed; requests and measurements may have changed. ${retry}`
+    : !data ? state.loading ? 'Loading current session status…' : `Current session status unavailable. ${retry}` : '';
+  const head = `<div class="sd-current-head" data-session-part="current-head"><h4 tabindex="-1">Current session status</h4>${status ? `<p class="sd-current-status" role="status">${status}</p>` : ''}</div>`;
+  if (!data) return head;
+  const disabled = state.error ? ' disabled' : '';
+  const requests = (data.requests || []).map(r => {
+    const actions = needView({ ...r, kind: 'guard' }, { SA: window.SA }).items;
+    return `<fieldset class="sd-request" data-session-part="request:${escapeHTML(r.id)}"${disabled}>
+      <legend>Access request</legend><p>${escapeHTML(r.detail || r.title || 'Waiting for a decision')}</p>
+      <p class="sd-context-limit">${escapeHTML(r.scopeText || 'This request does not grant future access.')}</p>${actionBarHTML(actions)}
+    </fieldset>`;
+  }).join('');
+  const coverage = data.coverage;
+  const paths = coverage ? [['Guard', coverage.guard], ['Trace', coverage.trace], ['Payload inspection', coverage.payload]].map(([label, p]) =>
+    `<div><b>${label}: ${escapeHTML(coveragePathLabel(p))}</b><p>${escapeHTML((p || {}).detail || '')}</p>${p && p.last_seen ? `<time>${escapeHTML(p.last_seen)}</time>` : ''}</div>`).join('') : '<p>No current coverage is attributed to this session. Ended sessions retain their evidence without claiming live protection.</p>';
+  const resources = data.resources;
+  const control = resources && resources.control;
+  const impact = resources ? `<p>${escapeHTML(fmtRSS(resources.rss_bytes) || '—')} memory · ${escapeHTML(fmtCPU(resources.cpu_percent) || '—')} CPU · ${Number(resources.process_count) || 0} processes</p>
+    ${control ? `<p>Control: ${escapeHTML(control.state || 'unknown')}${control.last_error ? ` · ${escapeHTML(control.last_error)}` : ''}</p>` : ''}
+    ${(resources.diagnoses || []).map(d => `<p>${escapeHTML(d.summary || '')}</p>`).join('')}
+    <button type="button" class="link-btn" data-action="view-family" data-key="${escapeHTML(resources.key)}">Inspect session resources</button>`
+    : '<p>No live resource family is attributed to this session.</p>';
+  const findings = (data.findings || []).map(f => `<article class="sd-finding" data-session-part="finding:${escapeHTML(f.id)}"><h5>${escapeHTML(f.title || 'Finding')}</h5><p>Risk: ${escapeHTML((f.assessment || {}).risk || 'unknown')} · ${escapeHTML((f.assessment || {}).reason || 'Evidence interpretation unavailable')}</p>${assessmentHTML(f.assessment)}
+    <button type="button" class="link-btn" data-action="open-flag" data-id="${escapeHTML(f.id)}">View evidence</button></article>`).join('');
+  return head + requests
+    + `<section class="sd-coverage" data-session-part="coverage" aria-label="Observed session coverage">${paths}</section>`
+    + `<fieldset class="sd-impact" data-session-part="impact"${disabled}><legend>Machine impact</legend>${impact}</fieldset>`
+    + `<div class="sd-findings-head" data-session-part="findings-head"><h4>Retained findings</h4><p>${data.findings_truncated ? 'More findings exist than the 20 most recent shown here.' : (data.findings || []).length ? 'Review and remaining risk are shown separately.' : 'No retained findings are attributed to this session. This is not a safety verdict.'}
+      <button type="button" class="link-btn" data-action="session-findings" data-id="${escapeHTML(data.session_id)}">View session findings history</button></p></div>` + findings;
+}
+
+// Reconcile each request/finding independently. A new finding must not replace
+// a focused approval button, an open disclosure, or the history view switch.
+function patchSessionDetail(el, sessionID, html) {
+  const template = document.createElement('template');
+  template.innerHTML = html;
+  const body = template.content.querySelector('.session-detail-body');
+  const content = body && body.innerHTML;
+  if (body) body.innerHTML = '';
+  const parts = Array.from(template.content.children).map((node, i) => ({
+    key: sessionID + ':' + (node.dataset.sessionPart || node.className || i), html: node.outerHTML,
+  }));
+  patchList(el, parts, { key: p => p.key, html: p => p.html });
+  if (body) patchSessionDetail(el.querySelector('.session-detail-body'), sessionID + ':body', content);
+}
+
 function sessionDetailHTML(sess, events, trees) {
   if (!sess) {
     return `<div class="empty"><svg class="icon"><use href="#i-agent"/></svg><span>Select a session to see its memory</span></div>`;
@@ -179,6 +253,7 @@ function sessionDetailHTML(sess, events, trees) {
         <button type="button" class="sd-view${window.SA.sessionView === 'trace' ? ' active' : ''}" data-action="session-view" data-view="trace" aria-pressed="${window.SA.sessionView === 'trace'}">Trace</button>
       </div>
       <button type="button" class="btn btn-sm btn-ghost sd-latest" data-action="session-latest" hidden>Jump to latest</button>
+      <button type="button" class="btn btn-sm btn-ghost" data-action="session-status">Current status</button>
       <details class="session-metadata" data-session-details>
         <summary>Details</summary>
         <div class="sd-metadata-body">
@@ -190,5 +265,5 @@ function sessionDetailHTML(sess, events, trees) {
       </details>
     </div>
     </div>
-    <div class="session-detail-body">${window.SA.sessionView === 'trace' ? sessionWaterfallHTML(events) : sessionMemoryHTML(window.SA.sessionMemoryPage, window.SA.sessionMemoryState)}</div>`;
+    <div class="session-detail-body">${sessionOverviewHTML(window.SA.sessionOverview, window.SA.sessionOverviewState)}${window.SA.sessionView === 'trace' ? sessionWaterfallHTML(events) : sessionMemoryHTML(window.SA.sessionMemoryPage, window.SA.sessionMemoryState)}</div>`;
 }

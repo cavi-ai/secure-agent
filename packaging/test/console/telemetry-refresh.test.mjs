@@ -21,6 +21,7 @@ function fixture(fetch) {
   const requests = [], renders = [], connections = [], failures = [], retries = [];
   let stops = 0, ended = 0;
   const ctx = {
+    window: { SA: {} },
     sessionEnded: false, SS_TOKEN_KEY: 'fixture',
     telemetryFetchGen: 0, telemetrySlowGen: 0,
     historyScopes: { flags: null, events: null },

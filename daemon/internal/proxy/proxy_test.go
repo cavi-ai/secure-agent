@@ -421,7 +421,10 @@ func TestConsoleAPIPathsCoverWebApp(t *testing.T) {
 	if !isConsoleAPIPath("/sessions/sess-1/memory") {
 		t.Error("dynamic /sessions/{id}/memory route is not console-allowed — the Memory panel 407s on the proxy listener")
 	}
-	fragments := map[string]bool{"/timeline": true, "/report": true, "/memory": true, "/sessions": true}
+	if !isConsoleAPIPath("/sessions/sess-1/overview") {
+		t.Error("dynamic /sessions/{id}/overview route is not console-allowed — the session status panel 407s on the proxy listener")
+	}
+	fragments := map[string]bool{"/timeline": true, "/report": true, "/memory": true, "/overview": true, "/sessions": true}
 	for p := range seen {
 		if isConsoleAPIPath(p) {
 			continue

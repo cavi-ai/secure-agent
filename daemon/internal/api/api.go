@@ -963,6 +963,8 @@ func (a *API) handleSessionSubpath(w http.ResponseWriter, r *http.Request) {
 		a.serveSessionReport(w, r, parts[0])
 	case "memory":
 		a.serveSessionMemory(w, r, parts[0])
+	case "overview":
+		a.serveSessionOverview(w, r, parts[0])
 	default:
 		http.Error(w, "not found", http.StatusNotFound)
 	}

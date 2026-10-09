@@ -1219,6 +1219,19 @@
       const body = { rows, has_earlier: !before, next_cursor: before ? '' : 'earlier' };
       return { ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) };
     }
+    const overviewMatch = p.match(/^\/sessions\/([^/]+)\/overview$/);
+    if (overviewMatch) {
+      const sid = decodeURIComponent(overviewMatch[1]);
+      if (MODE.includes('overviewrace') && sid === 'sess-claude-1') await new Promise(resolve => setTimeout(resolve, 1800));
+      if (MODE.includes('overviewstale') && window.__overviewFailed) return { ok: false, status: 503, json: async () => ({}) };
+      const own = sid === 'sess-claude-1';
+      const prompt = data['/guard/pending'].find(p => p.id === 'guard-1');
+      const body = { session_id: sid, observed_at: iso(0), requests: own && prompt ? [{ kind: 'guard', id: prompt.id, detail: 'Read wants access to .env', path: prompt.path, scopeText: prompt.scope_text, available_scopes: prompt.available_scopes }] : [],
+        findings: own ? [{ id: 'f1', title: 'Own session finding', assessment: { risk: 'high', review_state: 'reviewed', residual_risk: 'model-exposure', control: 'observed-only', reason: 'A tool-visible read remains observed after review.', limits: ['No captured payload proves forwarding.'] } }, ...(window.__overviewExtra ? [{ id: 'new-finding', title: 'New observation', assessment: { risk: 'review', review_state: 'unreviewed', residual_risk: 'unknown' } }] : [])] : [], findings_truncated: false,
+        coverage: { session_id: sid, guard: { state: own ? 'observed' : 'not-observed', detail: 'Only this session reports count; not every call is proven guarded.' }, trace: { state: 'observed', detail: 'Attributed tool activity.' }, payload: { state: 'unattributed', detail: 'Other traffic may be uninspected.' } },
+        resources: own ? { key: '5821:0', rss_bytes: 536870912, cpu_percent: 25, process_count: 2, diagnoses: [], control: { state: 'observing' } } : null };
+      return { ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) };
+    }
     // Session memory: newest page first; the earlier cursor prepends one row.
     const memMatch = p.match(/^\/sessions\/([^/]+)\/memory$/);
     if (memMatch) {
@@ -1498,9 +1511,10 @@
         receipt.updateHistory = Math.abs(body().scrollTop - top) < 2 && !detail().querySelector('[data-action="session-latest"]').hidden;
         detail().querySelector('[data-action="session-latest"]').click();
         receipt.latest = near();
-        body().scrollTop = 180;
+        const firstHistoryRow = body().querySelector('[data-row-id]');
+        body().scrollTop += firstHistoryRow.getBoundingClientRect().top - body().getBoundingClientRect().top + 180;
         const bounds = body().getBoundingClientRect();
-        const anchor = Array.from(body().querySelectorAll('[data-row-id]')).find(row => row.getBoundingClientRect().bottom > bounds.top);
+        const anchor = Array.from(body().querySelectorAll('[data-row-id]')).find(row => row.getBoundingClientRect().bottom > bounds.top && row.getBoundingClientRect().top < bounds.bottom);
         const offset = anchor.getBoundingClientRect().top - bounds.top;
         await window.loadEarlierSessionMemory();
         const replacement = Array.from(body().querySelectorAll('[data-row-id]')).find(row => row.dataset.rowId === anchor.dataset.rowId);
@@ -1553,6 +1567,40 @@
   // Auto-action: select a session in the session-first rail so the trace
   // waterfall renders. The Sessions tab is not the default, and the rail
   // only renders on screen, so open it before selecting.
+  if (MODE.includes('overviewdemo')) {
+    setTimeout(() => document.querySelector('#session-daily [data-session="sess-claude-1"]')?.click(), 3500);
+    setTimeout(() => {
+      const body = document.querySelector('#session-detail .session-detail-body');
+      const head = body?.querySelector('.sd-current-head h4');
+      const bounds = body?.getBoundingClientRect();
+      const title = head?.getBoundingClientRect();
+      document.body.dataset.overviewVisible = String(!!bounds && !!title && body.scrollTop < 2 && title.top >= bounds.top && title.bottom <= bounds.bottom);
+    }, 9000);
+    if (MODE.includes('overviewrace')) setTimeout(() => window.selectSession('sess-codex-3'), 3600);
+    if (MODE.includes('overviewstale')) setTimeout(() => { window.__overviewFailed = true; window.SA.refreshSessionOverview(true); }, 5500);
+    if (MODE.includes('overviewfocus')) {
+      let button;
+      setTimeout(() => {
+        button = document.querySelector('#session-detail [data-action="guard-resolve"][data-verdict="deny"]');
+        button?.focus();
+        window.__overviewExtra = true;
+        window.SA.refreshSessionOverview(true);
+      }, 5500);
+      setTimeout(() => { document.body.dataset.overviewFocus = String(!!button && button.isConnected && document.activeElement === button && document.querySelector('#session-detail')?.textContent.includes('New observation')); }, 9000);
+    }
+    if (MODE.includes('overviewdecision')) {
+      setTimeout(() => document.querySelector('#session-detail [data-action="guard-resolve"][data-verdict="deny"]')?.click(), 6000);
+      setTimeout(() => { document.body.dataset.overviewResolved = String(window.SA.sessionOverview?.requests.length === 0); }, 9000);
+    }
+    if (MODE.includes('overviewreturn')) {
+      setTimeout(() => document.querySelector('#session-detail [data-action="session-findings"]')?.click(), 5500);
+      setTimeout(() => {
+        document.body.dataset.overviewScoped = String(window.SA.activeTab === 'home' && window.SA.timelineSession === 'sess-claude-1');
+        document.querySelector('#scope-bar [data-action="filter-session"]')?.click();
+      }, 7000);
+      setTimeout(() => { document.body.dataset.overviewReturned = String(window.SA.activeTab === 'sessions' && window.SA.selectedSessionId === 'sess-claude-1'); }, 9000);
+    }
+  }
   if (location.search.includes('raildemo')) {
     setTimeout(() => openTab('sessions'), 1500);
     setTimeout(() => window.selectSession('sess-claude-1'), 4000);
@@ -2594,7 +2642,7 @@
   }
   // Auto-action: save a view, type a search, then apply the view — exercises
   // the saved-view + search paths through the real UI.
-  if (location.search.includes('viewdemo')) {
+  if (new URLSearchParams(location.search).has('viewdemo')) {
     setTimeout(() => {
       document.getElementById('btn-views').click();
       document.getElementById('view-name').value = 'Prod leaks';

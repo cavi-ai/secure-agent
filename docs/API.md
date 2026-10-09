@@ -777,7 +777,7 @@ What one session did — tools, models, spend, files, hosts, guard decisions, fi
 GET /sessions/{id}/report?format=json|md
 ```
 
-`format` defaults to `json`; `md` returns `Content-Type: text/markdown; charset=utf-8`. An unknown session id, or any `/sessions/{id}/…` leaf other than `timeline`, `report` and `memory`, returns `404`; another `format` returns `400`.
+`format` defaults to `json`; `md` returns `Content-Type: text/markdown; charset=utf-8`. An unknown session id, or any `/sessions/{id}/…` leaf other than `timeline`, `report`, `memory` and `overview`, returns `404`; another `format` returns `400`.
 
 ```json
 {
@@ -853,6 +853,18 @@ GET /sessions/{id}/memory?limit=200&before=<cursor>
 - An unknown session returns `404`; a bad `limit` or cursor returns `400`.
 
 Read-level; console-allowed. The Sessions tab shows it for the selected session.
+
+### `GET /sessions/{id}/overview`
+
+Current access requests, retained findings, observed coverage and machine impact for one durable session. Read-level; console-allowed.
+
+- `session_id`, `observed_at` identify the session and response time.
+- `requests` contains only pending guard requests carrying that exact session ID; existing approval endpoints and scopes apply.
+- `findings` contains the latest 20 session-attributed findings, including reviewed findings. Each carries `id`, `title`, `at` and the existing finding `assessment`; review does not erase risk. `findings_truncated` signals additional history.
+- `coverage` is the existing session coverage projection, or `null` without an unambiguous live process match.
+- `resources` carries `key`, `observed_at`, `rss_bytes`, `cpu_percent`, `process_count`, `diagnoses` and optional `control`. It requires the same root PID, start time and harness as the live session; otherwise it is `null`.
+- Ended sessions retain findings without claiming live coverage or resources. Workspace similarity does not confer attribution.
+- An unknown session returns `404`; a failed session or findings read returns `503`. The console retains the previous response with a stale warning and disables its controls until refreshed.
 
 ### 18c. `GET /routing/claude`
 

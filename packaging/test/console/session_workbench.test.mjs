@@ -17,11 +17,14 @@ function controller(persisted = '') {
   const panel = { dataset: {} };
   const context = { Date, URLSearchParams, AbortController, console,
     sessionStorage: { getItem: k => storage.get(k), setItem: (k, v) => storage.set(k, v), removeItem: k => storage.delete(k) },
-    window: { addEventListener() {}, matchMedia: () => ({ matches: false }) },
+    window: { SA: {}, addEventListener() {}, matchMedia: () => ({ matches: false }) },
     document: { getElementById: id => id === 'session-board-panel' ? panel : null, querySelectorAll: () => [], querySelector: () => null },
     queueMicrotask: cb => tasks.push(cb), requestAnimationFrame: () => 1,
     renderNow() {}, showToast() {}, sessionReadingHistory: () => false,
-    apiFetch: url => { const d = deferred(); requests.push({ url, ...d }); return d.promise; },
+    apiFetch: url => {
+      if (url.endsWith('/overview')) return Promise.resolve({ ok: true, json: async () => ({ session_id: decodeURIComponent(url.split('/')[2]), requests: [], findings: [] }) });
+      const d = deferred(); requests.push({ url, ...d }); return d.promise;
+    },
   };
   vm.createContext(context);
   vm.runInContext(readFileSync(path.join(web, 'lib.js'), 'utf8'), context);

@@ -376,6 +376,24 @@ body {
 .session-row.orphan { border-color: hsl(38 92% 56% / 0.45); }
 .session-row.stale { opacity: 0.62; }
 .session-strip-panel { flex: 0 0 auto; }
+.session-daily-panel { margin-bottom: 16px; }
+.session-daily-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 230px), 1fr)); gap: 8px; }
+.session-daily-card { display: flex; flex-direction: column; gap: 6px; min-width: 0; padding: 12px; text-align: left; border: 1px solid var(--line); border-radius: var(--r-sm); color: var(--tx-1); background: var(--bg-2); cursor: pointer; font: inherit; }
+.session-daily-card:hover, .session-daily-card:focus-visible { border-color: var(--brand); }
+.session-daily-card > span { display: flex; align-items: center; gap: 6px; overflow-wrap: anywhere; }
+.session-daily-card > span + span { color: var(--tx-2); font-size: .78rem; }
+.sd-current-head, .sd-findings-head { padding: 12px 0 4px; }
+.sd-current-head h4, .sd-findings-head h4, .sd-finding h5 { margin: 0; font-size: .9rem; }
+.sd-current-status { color: var(--warn); }
+.sd-request, .sd-impact, .sd-coverage, .sd-finding { min-width: 0; margin: 8px 0; padding: 12px; border: 1px solid var(--line); border-radius: var(--r-sm); overflow-wrap: anywhere; }
+.sd-request { border-color: var(--warn); }
+.sd-request legend, .sd-impact legend { font-weight: 650; padding: 0 4px; }
+.sd-request p, .sd-impact p, .sd-coverage p, .sd-finding p, .sd-findings-head p { margin: 6px 0; font-size: .8rem; line-height: 1.5; }
+.sd-request .btn { margin: 4px 6px 0 0; }
+.sd-context-limit, .sd-coverage p, .sd-findings-head p { color: var(--tx-2); }
+.sd-coverage { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 190px), 1fr)); gap: 12px; }
+.sd-coverage b, .sd-coverage time { font-size: .75rem; }
+.sd-coverage time { color: var(--tx-2); }
 .session-strip {
   display: flex; flex-direction: column; gap: 4px;
 }
@@ -1073,6 +1091,7 @@ body {
 .scope-bar[hidden] { display: none; }
 .scope-bar b { color: var(--tx-1); overflow-wrap: anywhere; }
 .scope-bar .btn { margin-left: auto; }
+.scope-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-left: auto; }
 .tabs {
   display: flex; gap: 4px;
   padding: 4px; border-radius: var(--r-md);
