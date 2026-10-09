@@ -2171,8 +2171,10 @@ button.fact:hover { background: var(--bg-3); border-color: var(--brand); }
   .agent-inspector { border-left: 0; }
 }
 @media (max-width: 560px) {
+  .agent-page .app { padding-top: 12px; padding-bottom: 12px; gap: 10px; }
+  .agent-workspace-head { padding: 12px; gap: 8px; }
   .agent-msg { max-width: 100%; }
-  .agent-thread { padding: 24px 16px; gap: 22px; }
+  .agent-thread { padding: 16px; gap: 22px; }
   .agent-chat-foot { padding: 10px 12px 16px; }
   .agent-quick { font-size: 0.7rem; padding: 7px 9px; }
   .agent-local-label { font-size: 0.65rem; }
