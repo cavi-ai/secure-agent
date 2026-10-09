@@ -290,6 +290,8 @@ See [docs/GUARD_THREAT_MODEL.md](docs/GUARD_THREAT_MODEL.md) for the full list o
 
 ## ⚙️ Configuration
 
+In **Settings → File Guard** and **Settings → Egress Firewall**, use **Add**, **Edit**, or the trash button to manage guarded paths and secret-detection patterns. Saves validate the rule and persist it locally; failed saves retain the current protection. Firewall edits apply to new requests immediately. Guard path edits apply to the next hooked tool call; restart Secure Agent to update background file correlation. The mode controls continue to choose Monitor/Prompt/Deny or Monitor/Block.
+
 `secure-agent` loads default configuration rules and applies user overlays from `~/.config/secure-agent/config.yaml`.
 
 ```yaml

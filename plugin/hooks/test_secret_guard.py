@@ -834,5 +834,28 @@ EXTRA_TESTS += [
 ]
 
 
+def _test_editable_guard_policy_applies_and_fails_closed():
+    with tempfile.TemporaryDirectory() as directory:
+        policy = os.path.join(directory, "guard-rules.json")
+        env = {"SECURE_AGENT_GUARD_RULES": policy}
+        def save(rules):
+            with open(policy, "w") as fh:
+                json.dump({"rules": rules, "dir_scan": []}, fh)
+        save([{"id": "custom", "paths": ["~/private/**"], "mode": "deny", "read_sensitive": True}])
+        assert run(read(HOME + "/private/key"), env).get("permission") == "deny"
+        save([{"id": "custom", "paths": ["~/other/**"], "mode": "deny", "read_sensitive": True}])
+        assert run(read(HOME + "/private/key"), env).get("permission") != "deny"
+        assert run(read(HOME + "/other/key"), env).get("permission") == "deny"
+        save([])
+        assert run(read(HOME + "/other/key"), env).get("permission") != "deny"
+        for bad in ["{broken", "null", '{"rules":[{"id":"x","paths":[],"mode":"deny"}],"dir_scan":[]}']:
+            with open(policy, "w") as fh:
+                fh.write(bad)
+            assert run(read(HOME + "/private/key"), env).get("permission") == "deny", bad
+
+
+EXTRA_TESTS.append(_test_editable_guard_policy_applies_and_fails_closed)
+
+
 if __name__ == "__main__":
     raise SystemExit(main())

@@ -25,17 +25,15 @@ var guardRulesBytes []byte
 // GuardRuleDoc is the JSON the directory-guard hook and the correlator both
 // read: rule ids, path globs, and directory-scan prefixes.
 type GuardRuleDoc struct {
-	Rules []struct {
-		ID    string   `json:"id"`
-		Paths []string `json:"paths"`
-		Mode  string   `json:"mode"`
-		// ReadSensitive: the files hold secrets, so reading one seeds the
-		// correlator's read-then-connect rule. False for files the guard
-		// protects from tampering but every shell or harness start reads
-		// (shell rc files, harness settings and hooks).
-		ReadSensitive bool `json:"read_sensitive"`
-	} `json:"rules"`
-	DirScan [][]string `json:"dir_scan"`
+	Rules   []GuardPathRule `json:"rules"`
+	DirScan [][]string      `json:"dir_scan"`
+}
+
+type GuardPathRule struct {
+	ID            string   `json:"id"`
+	Paths         []string `json:"paths"`
+	Mode          string   `json:"mode"`
+	ReadSensitive bool     `json:"read_sensitive"`
 }
 
 func ParseGuardRules(b []byte) (GuardRuleDoc, error) {
@@ -58,7 +56,7 @@ func globSafeForCorrelator(p string) bool {
 }
 
 func mergeGuardRulePaths(raw *rawConfig) {
-	doc, err := ParseGuardRules(guardRulesBytes)
+	doc, err := LoadGuardPolicy(filepath.Join(filepath.Dir(expandPath(raw.SocketPath)), "guard-rules.json"))
 	if err != nil {
 		log.Printf("config: guard-rules.json: %v", err)
 		return
@@ -142,10 +140,10 @@ type Fingerprint struct {
 }
 
 type PatternConfig struct {
-	ID   string `yaml:"id"`
-	Type string `yaml:"type"`
-	Re   string `yaml:"re"`
-	Mode string `yaml:"mode"`
+	ID   string `yaml:"id" json:"id"`
+	Type string `yaml:"type" json:"type"`
+	Re   string `yaml:"re" json:"re"`
+	Mode string `yaml:"mode" json:"mode"`
 }
 
 type EntropyConfig struct {

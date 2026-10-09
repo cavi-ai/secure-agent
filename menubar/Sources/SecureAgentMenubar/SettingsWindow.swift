@@ -155,10 +155,21 @@ final class SettingsNavigation: ObservableObject {
 @MainActor
 struct SettingsView: View {
     @ObservedObject var state: AppState
+    @StateObject private var protection: ProtectionSettings
     @ObservedObject private var setup = SetupManager.shared
     @ObservedObject private var nav = SettingsNavigation.shared
     @State private var recommendationsExpanded = false
     @State private var advisorSelectionInitialized = false
+    @State private var ruleEdit: ProtectionRuleEdit?
+    @State private var removal: ProtectionRuleEdit?
+    @State private var confirmRemoval = false
+    @State private var policyError: String?
+    @State private var guardModeOverrides: [String: String]?
+
+    init(state: AppState, protection: ProtectionSettings? = nil) {
+        self.state = state
+        _protection = StateObject(wrappedValue: protection ?? ProtectionSettings())
+    }
 
     var body: some View {
         HStack(spacing: 0) {
@@ -192,7 +203,25 @@ struct SettingsView: View {
             }
         }
         .frame(minWidth: 760, minHeight: 520)
+        .sheet(item: $ruleEdit) { edit in
+            ProtectionRuleEditor(edit: edit, settings: protection) { state.refresh() }
+        }
+        .confirmationDialog("Remove this protection rule?", isPresented: $confirmRemoval, titleVisibility: .visible) {
+            Button("Remove rule", role: .destructive) {
+                guard let removal else { return }
+                Task {
+                    do { try await protection.remove(removal); state.refresh() }
+                    catch { policyError = error.localizedDescription }
+                }
+            }
+        } message: {
+            Text("\(removal?.ruleID ?? "This rule") will stop protecting its matching \(removal?.kind == .firewall ? "outbound traffic" : "paths").")
+        }
+        .alert("Rule was not saved", isPresented: Binding(get: { policyError != nil }, set: { if !$0 { policyError = nil } })) {
+            Button("OK", role: .cancel) { policyError = nil }
+        } message: { Text(policyError ?? "") }
         .task {
+            await protection.load()
             await setup.refreshState()
             initializeAdvisorSelection()
             loadPathAllows()
@@ -232,30 +261,54 @@ struct SettingsView: View {
 
     private var fileGuardPane: some View {
         let current = setup.currentGuardModes()
-        let modes = Self.guardRules.map { current.modes[$0.id] ?? "monitor" }
+        let overrides = guardModeOverrides ?? current.modes
+        let rules = protection.guardPolicy?.rules ?? []
+        let modes = rules.map { overrides[$0.id] ?? $0.mode }
         return Form {
             Section {
+                if let error = protection.guardError {
+                    Text("Could not load guard rules: \(error)").foregroundStyle(Color.bad)
+                    Button("Retry") { Task { await protection.load() } }
+                } else if protection.guardPolicy == nil {
+                    ProgressView("Loading guard rules…")
+                }
                 if current.corrupt {
                     Label("guard-modes.json is unreadable. The guard fails closed and denies every guarded path until the file is fixed.",
                           systemImage: "exclamationmark.triangle.fill")
                         .font(.callout).foregroundStyle(Color.bad)
                         .fixedSize(horizontal: false, vertical: true)
-                } else {
+                } else if protection.guardPolicy != nil {
                     guardStatus(modes)
                 }
             }
             Section {
-                ForEach(Self.guardRules, id: \.id) { rule in
-                    guardRow(rule, mode: current.modes[rule.id] ?? "monitor")
+                Button("Add guarded path…", systemImage: "plus") { ruleEdit = ProtectionRuleEdit(kind: .guardPath) }
+                    .disabled(protection.guardPolicy == nil || protection.guardError != nil)
+            }
+            Section {
+                ForEach(rules) { rule in
+                    VStack(alignment: .leading, spacing: 5) {
+                        HStack {
+                            let catalog = Self.guardRules.first { $0.id == rule.id }
+                            guardRow((rule.id, catalog?.label ?? rule.id, catalog?.symbol ?? "folder.badge.gearshape"),
+                                     mode: overrides[rule.id] ?? rule.mode)
+                            ruleActions(ProtectionRuleEdit(rule: rule))
+                        }
+                        Text(rule.paths.joined(separator: " · ")).font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(2)
+                    }
                 }
             } header: {
                 Text("Guarded paths")
             } footer: {
                 Text("Applies when an agent's tool call reads or writes one of these paths. Prompt asks you to Allow Once, Always, or Deny.")
                     .font(.caption).foregroundStyle(.secondary)
+                Text("Saved path edits apply to the next hooked tool call. Restart Secure Agent to update background file correlation.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
+            setupError
         }
         .formStyle(.grouped)
+        .disabled(protection.saving)
     }
 
     private func guardStatus(_ modes: [String]) -> some View {
@@ -281,6 +334,7 @@ struct SettingsView: View {
             set: { newMode in
                 do {
                     try setup.setGuardMode(ruleID: rule.id, mode: newMode)
+                    guardModeOverrides = setup.currentGuardModes().modes
                 } catch {
                     setup.report(error)
                 }
@@ -517,13 +571,7 @@ struct SettingsView: View {
                     )) {
                         HStack(spacing: 10) {
                             AgentIdentity.tile(agent.name, size: 22)
-                            VStack(alignment: .leading, spacing: 1) {
-                                Text(agent.name).font(.system(.body, weight: .medium))
-                                Text(agent.matches.joined(separator: " · "))
-                                    .font(.system(.caption, design: .monospaced))
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
-                            }
+                            Text(agent.name).font(.system(.body, weight: .medium))
                         }
                     }
                     .toggleStyle(.switch)
@@ -784,8 +832,25 @@ struct SettingsView: View {
     // MARK: Egress Firewall
 
     private var firewallPane: some View {
-        let rules = state.firewallRules
+        let rules: [AppState.FirewallRuleRow]
+        if let patterns = protection.patterns {
+            let configured = Set(patterns.map(\.id))
+            rules = patterns.map { pattern in
+                AppState.FirewallRuleRow(id: pattern.id, stat: state.firewallRules.first { $0.id == pattern.id }?.stat
+                    ?? RuleStatModel(wouldBlock: 0, blocked: 0, legit: 0, mode: pattern.mode, type: pattern.type))
+            } + state.firewallRules.filter { !configured.contains($0.id) && !protection.removedPatternIDs.contains($0.id) }
+        } else {
+            rules = state.firewallRules
+        }
         return Form {
+            Section {
+                if let error = protection.firewallError {
+                    Text("Could not load editable firewall rules: \(error)").foregroundStyle(Color.bad)
+                    Button("Retry") { Task { await protection.load() } }
+                }
+                Button("Add firewall rule…", systemImage: "plus") { ruleEdit = ProtectionRuleEdit(kind: .firewall) }
+                    .disabled(protection.patterns == nil || protection.firewallError != nil)
+            }
             if rules.isEmpty {
                 Section {
                     SettingsEmptyRow(symbol: "network.slash", title: "No firewall rules reported",
@@ -801,7 +866,12 @@ struct SettingsView: View {
                 ForEach(FirewallRuleCatalog.groups(rules)) { group in
                     Section {
                         ForEach(group.rules) { rule in
-                            firewallRow(rule)
+                            HStack {
+                                firewallRow(rule)
+                                if let pattern = protection.patterns?.first(where: { $0.id == rule.id }) {
+                                    ruleActions(ProtectionRuleEdit(pattern: pattern))
+                                }
+                            }
                         }
                     } header: {
                         firewallGroupHeader(group)
@@ -810,6 +880,19 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
+        .disabled(protection.saving)
+    }
+
+    private func ruleActions(_ edit: ProtectionRuleEdit) -> some View {
+        HStack(spacing: 8) {
+            Button("Edit") { ruleEdit = edit }
+                .accessibilityLabel("Edit \(edit.ruleID)")
+            Button(role: .destructive) { removal = edit; confirmRemoval = true } label: {
+                Image(systemName: "trash")
+            }
+            .accessibilityLabel("Remove \(edit.ruleID)")
+        }
+        .buttonStyle(.borderless)
     }
 
     private func firewallStatus(_ rules: [AppState.FirewallRuleRow]) -> some View {

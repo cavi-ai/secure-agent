@@ -53,9 +53,11 @@ public final class SetupManager: ObservableObject {
     /// infra so their CLI stays the agent (claude-desktop, cursor-ide) are
     /// not toggles.
     public static let knownAgents: [(name: String, matches: [String])] = [
-        ("claude", ["claude"]),
-        ("cursor", ["cursor"]),
         ("codex", ["codex"]),
+        ("cursor", ["cursor"]),
+        ("openclaw", ["/.openclaw/"]),
+        ("hermes", ["hermes-agent", "/.hermes/"]),
+        ("claude", ["claude"]),
         ("opencode", ["opencode", "OpenCode Helper"]),
         ("antigravity", ["antigravity", "Antigravity Helper"]),
         ("pi", ["/bin/pi", "/pi-coding-agent/"]),
@@ -64,8 +66,6 @@ public final class SetupManager: ObservableObject {
         ("aider", ["aider"]),
         ("codeium", ["codeium"]),
         ("copilot", ["copilot"]),
-        ("openclaw", ["/.openclaw/"]),
-        ("hermes", ["hermes-agent", "/.hermes/"]),
         ("ollama", ["ollama", "llama-server", "llama.cpp"]),
         ("lm-studio", ["lm studio", "lmstudio"]),
     ]
@@ -1354,11 +1354,12 @@ public final class SetupManager: ObservableObject {
     /// it here too instead of pretending everything is monitor.
     public func currentGuardModes() -> (modes: [String: String], corrupt: Bool) {
         guard let data = try? Data(contentsOf: URL(fileURLWithPath: guardModesPath)) else {
-            return ([:], false) // missing file: everything at shipped defaults
+            return ([:], fm.fileExists(atPath: guardModesPath))
         }
         guard let decoded = try? JSONDecoder().decode([String: String].self, from: data) else {
             return ([:], true)
         }
+        guard decoded.values.allSatisfy({ ["monitor", "prompt", "deny"].contains($0) }) else { return ([:], true) }
         return (decoded, false)
     }
 
@@ -1366,7 +1367,7 @@ public final class SetupManager: ObservableObject {
     /// The hook reads this file on every guarded tool call — no daemon
     /// round-trip is needed (or possible: the hook is the enforcement point).
     public func setGuardMode(ruleID: String, mode: String) throws {
-        guard Self.guardRuleIDs.contains(ruleID) else {
+        guard ruleID.range(of: "^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$", options: .regularExpression) != nil else {
             throw NSError(domain: "SetupManager", code: 1,
                           userInfo: [NSLocalizedDescriptionKey: "unknown guard rule \(ruleID)"])
         }
@@ -1375,12 +1376,13 @@ public final class SetupManager: ObservableObject {
                           userInfo: [NSLocalizedDescriptionKey: "unknown mode \(mode)"])
         }
         try fm.createDirectory(atPath: guardModesDir, withIntermediateDirectories: true)
-        var modes = currentGuardModes().modes
-        if mode == "monitor" {
-            modes.removeValue(forKey: ruleID) // monitor is the shipped default; don't pin it
-        } else {
-            modes[ruleID] = mode
+        let current = currentGuardModes()
+        guard !current.corrupt else {
+            throw NSError(domain: "SetupManager", code: 3,
+                          userInfo: [NSLocalizedDescriptionKey: "guard-modes.json is unreadable; repair it before editing"])
         }
+        var modes = current.modes
+        modes[ruleID] = mode // custom rules may ship prompt/deny; monitor must be explicit
         // Atomic: a torn file makes the hook fail closed (deny everything
         // guarded) until fixed.
         try JSONEncoder().encode(modes).write(to: URL(fileURLWithPath: guardModesPath), options: .atomic)

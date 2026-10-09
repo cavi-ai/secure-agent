@@ -574,6 +574,14 @@ Returns the policy audit trail (rule promotions, fingerprint ingest, guard-rule 
 
 Returns this node's fleet-telemetry summary: hostname, OS/arch, build `version` (set via ldflags; `dev` on untagged builds), `node_id`, running state, active agents, recent flag count, proxy status.
 
+### Protection rule configuration
+
+`GET /firewall/patterns` returns active pattern definitions with effective modes. `POST /firewall/patterns` accepts `{"op":"add","pattern":{"id":"custom-key","type":"vendor-key","re":"example_[A-Z]{16}","mode":"monitor"}}`, `{"op":"edit","id":"custom-key","pattern":{...}}`, or `{"op":"remove","id":"custom-key"}`. IDs remain stable during edits. Mode changes use `/firewall/mode`. Validated patterns are saved to `firewall.patterns` in the config overlay and applied to new inspections immediately. In-flight streamed requests retain their detector snapshot. Invalid edits or failed persistence retain the running policy.
+
+`GET /guard/config` returns the effective `{"rules":[],"dir_scan":[]}` document. `POST /guard/config` uses add/edit/remove operations with a `rule` object: `{"id":"private-files","paths":["~/private/**"],"mode":"monitor","read_sensitive":true}`. The user policy replaces the shipped rule list and is stored as `guard-rules.json` beside the daemon socket. Added rules take precedence over existing rules; the first matching path rule applies. The hook reads it on each invocation; corrupt policy denies operations instead of reverting to defaults. Restart the daemon after path edits to update background file correlation. Existing per-rule and per-workspace mode overrides retain precedence.
+
+Both endpoints require a non-agent owner or the pinned UI on the Unix socket. They are unavailable on the browser console listener. Removing a rule removes its detection/protection; independent built-in shell safety checks still apply.
+
 ### 8. `POST /firewall/mode`
 
 Promotes or demotes a firewall rule at runtime and persists the override. Payload: `{"rule":"<id>","mode":"monitor|block"}`. Owner-role only.

@@ -7,11 +7,13 @@ All notable changes to `secure-agent` are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- Settings: add, edit, and remove File Guard paths and Egress Firewall patterns, with validation and persistent saves.
 - API: `{"repo"}` on `POST /worktrees/advise` and `POST /agent/worktree` covers a whole repository.
 - Worktrees: **Ask advisor about all** and **Discuss all** on each repository group, counted over every row; the advisor gets one note at a time.
 - Worktrees: a legend under the summary names the three Remove looks.
 
 ### Changed
+- Providers: show only harness names and prioritize Codex, Cursor, OpenClaw, and Hermes.
 - Console and menu bar: Home and the hero list only decisions that need you; warnings and recurring connections stay in the findings history, now a compact log.
 - Worktrees: **Remove** is solid red when confirmed safe, **Remove…** is an amber outline when not confirmed (goes to the Trash), and a blocked row is greyed.
 - Console: disabled buttons are dimmed.

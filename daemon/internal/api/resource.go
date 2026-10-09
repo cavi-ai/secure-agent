@@ -140,8 +140,8 @@ func (a *API) handleResourcePolicy(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	a.resourcePolicyMu.Lock()
-	defer a.resourcePolicyMu.Unlock()
+	a.policyWriteMu.Lock()
+	defer a.policyWriteMu.Unlock()
 	if err := a.resourcePolicy(next); err != nil {
 		a.store.PutAudit(store.AuditEntry{Action: "resource-policy-update-failed", ToMode: next.Mode,
 			Detail: fmt.Sprintf("workspace_overrides=%d error=%v", len(next.WorkspaceOverrides), err)})

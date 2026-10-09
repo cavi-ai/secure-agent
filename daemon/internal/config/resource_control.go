@@ -21,25 +21,7 @@ func WriteResourceControl(path string, policy ResourceControlConfig) error {
 	if err := ValidateResourceControl(policy); err != nil {
 		return err
 	}
-	var doc yaml.Node
-	existing, err := os.ReadFile(path)
-	if err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("read resource policy config: %w", err)
-	}
-	if len(bytes.TrimSpace(existing)) > 0 {
-		decoder := yaml.NewDecoder(bytes.NewReader(existing))
-		if err := decoder.Decode(&doc); err != nil && err != io.EOF {
-			return fmt.Errorf("existing config is malformed YAML: %w", err)
-		}
-		var extra yaml.Node
-		if err := decoder.Decode(&extra); err != io.EOF {
-			if err != nil {
-				return fmt.Errorf("existing config has malformed trailing YAML: %w", err)
-			}
-			return fmt.Errorf("existing config must contain a single YAML document")
-		}
-	}
-	root, err := resourceDocRoot(&doc)
+	doc, root, err := readOverlayDocument(path)
 	if err != nil {
 		return err
 	}
@@ -48,7 +30,37 @@ func WriteResourceControl(path string, policy ResourceControlConfig) error {
 		return fmt.Errorf("encode resource policy: %w", err)
 	}
 	setResourceMappingValue(root, "resource_control", &value)
-	data, err := yaml.Marshal(&doc)
+	return writeOverlayDocument(path, doc)
+}
+
+func readOverlayDocument(path string) (*yaml.Node, *yaml.Node, error) {
+	var doc yaml.Node
+	existing, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return nil, nil, fmt.Errorf("read config: %w", err)
+	}
+	if len(bytes.TrimSpace(existing)) > 0 {
+		decoder := yaml.NewDecoder(bytes.NewReader(existing))
+		if err := decoder.Decode(&doc); err != nil && err != io.EOF {
+			return nil, nil, fmt.Errorf("existing config is malformed YAML: %w", err)
+		}
+		var extra yaml.Node
+		if err := decoder.Decode(&extra); err != io.EOF {
+			if err != nil {
+				return nil, nil, fmt.Errorf("existing config has malformed trailing YAML: %w", err)
+			}
+			return nil, nil, fmt.Errorf("existing config must contain a single YAML document")
+		}
+	}
+	root, err := resourceDocRoot(&doc)
+	if err != nil {
+		return nil, nil, err
+	}
+	return &doc, root, nil
+}
+
+func writeOverlayDocument(path string, doc *yaml.Node) error {
+	data, err := yaml.Marshal(doc)
 	if err != nil {
 		return fmt.Errorf("render resource policy config: %w", err)
 	}

@@ -73,6 +73,8 @@ func (a *API) applyRuleMode(rule, mode string) error {
 // the override so it survives a restart. With {"type":"vendor-key","mode":"block"}
 // and no rule, every configured pattern of that secret type is promoted.
 func (a *API) handleFirewallMode(w http.ResponseWriter, r *http.Request) {
+	a.policyWriteMu.Lock()
+	defer a.policyWriteMu.Unlock()
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
