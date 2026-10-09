@@ -120,3 +120,16 @@ func TestIngestAllowsMissingOptionalSource(t *testing.T) {
 		t.Fatalf("missing optional source prevented healthy ingestion: %d fingerprints, %v", len(fps), err)
 	}
 }
+
+func TestIngestRejectsDeviceSources(t *testing.T) {
+	healthy := filepath.Join(t.TempDir(), "healthy.env")
+	if err := os.WriteFile(healthy, []byte("FIXTURE=fixture-value-for-ingestion\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, sources := range [][]string{{os.DevNull}, {healthy, os.DevNull}, {os.DevNull, healthy}} {
+		fps, err := Ingest(sources, []byte("salt"))
+		if err == nil || fps != nil {
+			t.Errorf("device source returned %d fingerprints and error %v", len(fps), err)
+		}
+	}
+}
