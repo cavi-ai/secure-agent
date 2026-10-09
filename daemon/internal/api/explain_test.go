@@ -517,8 +517,8 @@ func TestFlagExplainHandler(t *testing.T) {
 	}
 }
 
-// /flags stamps the explanation on the first 25 unacknowledged flags only.
-func TestFlagsListStampsExplainOnFirst25Unacked(t *testing.T) {
+// /flags retains assessment on reviewed history within the same bounded cap.
+func TestFlagsListStampsExplainOnFirst25IncludingHistory(t *testing.T) {
 	pinExplainHome(t, "/Users/tester")
 	a := explainTestAPI(t)
 	base := time.Now().Add(-time.Hour)
@@ -536,8 +536,8 @@ func TestFlagsListStampsExplainOnFirst25Unacked(t *testing.T) {
 	}
 	stamped := 0
 	for _, f := range flags {
-		if f.ID == "acked" && f.Explain != nil {
-			t.Fatal("acknowledged flag must stay raw")
+		if f.ID == "acked" && (f.Explain == nil || f.Explain.Assessment == nil || f.Explain.Assessment.ReviewState != "reviewed") {
+			t.Fatal("acknowledged history lost its assessment")
 		}
 		if f.Explain != nil {
 			stamped++

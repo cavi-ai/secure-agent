@@ -922,7 +922,7 @@ function renderPosture() {
   }
   banner.dataset.announcedState = nextState;
   if (p.state === 'all-clear') {
-    stateEl.textContent = 'All clear';
+    stateEl.textContent = 'No pending decisions';
     summaryEl.textContent = 'Agents monitored, no action needed';
   } else if (p.state === 'critical') {
     stateEl.textContent = 'Critical';
@@ -941,7 +941,7 @@ function renderPosture() {
     : [];
   const benignCount = criticals.filter(f => f.advisor.assessment === 'benign').length;
   const extra = criticals.length > 0
-    ? [`<li class="posture-advisor"><span class="sev s1">●</span><span>advisor: ${benignCount} of ${criticals.length} triaged critical flags look benign</span></li>`]
+    ? [`<li class="posture-advisor"><span class="sev s1">●</span><span>Advisor opinion: ${benignCount} of ${criticals.length} triaged critical flags may be benign. Evidence and risk are unchanged.</span></li>`]
     : [];
   const html = postureItemsHTML(p.items, SA.activeTab, extra);
   itemsEl.innerHTML = html;

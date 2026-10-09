@@ -174,6 +174,7 @@ func routineGroup(key, reader, area string, flags []model.Flag, files map[string
 	rg.Destinations = patternDestinations(flags)
 	rg.DestinationCount = len(dests)
 	rg.Disposition = worst
+	rg.Assessment = assessmentForFlags(flags)
 	rg.Expectable = len(expectable)
 	rg.FlagIDs = ids
 

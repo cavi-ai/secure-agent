@@ -12,10 +12,11 @@ import (
 // turns a flag's disposition into benign-likely.
 const benignConfidence = 0.85
 
-// dispositionFor is the one verdict every surface renders for a flag, in
+// dispositionFor preserves the legacy verdict for older consumers, in
 // precedence order: the operator's acknowledgement, then a confident benign
-// advisor assessment, then the rule severity. Advisory input only changes how
-// the flag is presented, never what the rule detects or enforces.
+// advisor assessment, then the rule severity. Advisory input only changes
+// presentation in legacy clients, never detection or enforcement. Current clients
+// use FindingAssessment to separate risk, review, and advice.
 func dispositionFor(f model.Flag) model.Disposition {
 	switch {
 	case f.Acknowledged:

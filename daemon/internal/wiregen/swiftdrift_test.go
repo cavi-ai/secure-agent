@@ -64,17 +64,19 @@ func TestSwiftWireNoInventedKeys(t *testing.T) {
 		swiftName string
 		value     any
 	}{
-		"event.Event":          {"EventModel", event.Event{}},
-		"model.Flag":           {"FlagModel", model.Flag{}},
-		"model.IncidentReport": {"IncidentReportModel", model.IncidentReport{}},
-		"model.AdvisorVerdict": {"AdvisorVerdictModel", model.AdvisorVerdict{}},
-		"api.Status":           {"StatusResponse", api.Status{}},
-		"api.AgentSummary":     {"AgentSummaryModel", api.AgentSummary{}},
-		"api.CoverageStatus":   {"CoverageModel", api.CoverageStatus{}},
-		"supervise.Health":     {"HealthModel", supervise.Health{}},
-		"advisor.Health":       {"AdvisorHealthModel", advisor.HealthSnapshot{}},
-		"firewall.RuleStat":    {"RuleStatModel", firewall.RuleStat{}},
-		"resource.Session":     {"ResourceSessionModel", resource.Session{}},
+		"event.Event":             {"EventModel", event.Event{}},
+		"model.Flag":              {"FlagModel", model.Flag{}},
+		"model.FlagExplain":       {"FlagExplain", model.FlagExplain{}},
+		"model.FindingAssessment": {"FindingAssessmentModel", model.FindingAssessment{}},
+		"model.IncidentReport":    {"IncidentReportModel", model.IncidentReport{}},
+		"model.AdvisorVerdict":    {"AdvisorVerdictModel", model.AdvisorVerdict{}},
+		"api.Status":              {"StatusResponse", api.Status{}},
+		"api.AgentSummary":        {"AgentSummaryModel", api.AgentSummary{}},
+		"api.CoverageStatus":      {"CoverageModel", api.CoverageStatus{}},
+		"supervise.Health":        {"HealthModel", supervise.Health{}},
+		"advisor.Health":          {"AdvisorHealthModel", advisor.HealthSnapshot{}},
+		"firewall.RuleStat":       {"RuleStatModel", firewall.RuleStat{}},
+		"resource.Session":        {"ResourceSessionModel", resource.Session{}},
 	}
 
 	for goName, m := range mapped {

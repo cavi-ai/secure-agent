@@ -610,8 +610,8 @@ def main():
         check("stale process marked", " stale" in dom)
         check("flag card kill action", 'data-action="kill" data-pid="6033"' in dom)
         check("collector-down FDA deep link", 'data-action="open-fda"' in dom and "Full Disk Access" in dom)
-        check("advisor posture line (1 of 2 benign) off Home",
-              "advisor: 1 of 2 triaged critical flags look benign" in dom_tab)
+        check("advisor posture line separates opinion from evidence and risk off Home",
+              "Advisor opinion: 1 of 2 triaged critical flags may be benign. Evidence and risk are unchanged." in dom_tab)
         check("incident narrative rendered", "advisor-narrative" in dom and "Rotate the key first" in dom)
 
         # --- allowlist suggestions ---
@@ -803,7 +803,7 @@ def main():
                   marker not in history_content(changed, flags)
                   and 'history-broad-only' not in history_content(changed, flags)
                   and 'Broad-only history row' not in history_content(changed, flags)
-                  and 'have not loaded yet' in history_content(changed, flags)
+                  and 'not loaded yet' in history_content(changed, flags)
                   and 'Unavailable' in health_notice(changed, keys))
         check("empty filtered findings recover successfully and clear the stale warning",
               'Stale' in pre(dom_historyrecover, 'history-before-recovery')
