@@ -183,7 +183,7 @@ func Build(parent context.Context, cfg config.Config, opts Options) (*Components
 	persistLastProduced(cfg.DBPath, supReg) // seed the file so it always exists
 
 	// Drain bus and correlate/persist (drainDone closes once every delivered
-	// event has been persisted — shutdown waits for it).
+	// event has had its persistence attempted — shutdown waits for it).
 	c.drainDone = startDrainLoop(b.Subscribe(), st, correlator, fleetPub, resolver, tagger, deltaHub, otlpExp,
 		func() { postureHook.run() },
 		func() *advisor.Subscriber { return advisorStk.Load().Sub },
