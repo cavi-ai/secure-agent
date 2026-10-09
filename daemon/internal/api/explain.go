@@ -93,14 +93,19 @@ func (a *API) session(env *explainEnv, id string) *model.Session {
 
 // lookupFlag reads one stored flag with its advisor verdict attached.
 func (a *API) lookupFlag(id string) (model.Flag, bool) {
-	f, ok := a.store.GetFlag(id)
-	if !ok {
-		return f, false
+	f, found, _ := a.lookupFlagResult(id)
+	return f, found
+}
+
+func (a *API) lookupFlagResult(id string) (model.Flag, bool, error) {
+	f, found, err := a.store.GetFlagResult(id)
+	if err != nil || !found {
+		return f, found, err
 	}
 	if v, ok := a.store.AdvisorVerdictFor(f.ID, "flag"); ok {
 		f.Advisor = &v
 	}
-	return f, true
+	return f, true, nil
 }
 
 // handleFlagExplain serves GET /flags/{id}/explain: the full flag with its
@@ -117,7 +122,11 @@ func (a *API) handleFlagExplain(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	f, ok := a.lookupFlag(parts[0])
+	f, ok, err := a.lookupFlagResult(parts[0])
+	if err != nil {
+		http.Error(w, "flag data unavailable", http.StatusServiceUnavailable)
+		return
+	}
 	if !ok {
 		http.Error(w, "flag not found", http.StatusNotFound)
 		return
