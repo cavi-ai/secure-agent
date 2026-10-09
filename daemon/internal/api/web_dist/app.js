@@ -324,7 +324,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (sessionEnded) return;
     document.querySelectorAll('[data-reports]').forEach(el => {
       const keys = el.dataset.reports.split('|').filter(key =>
-        (key !== 'flags' || isFlagsFiltered() || homeGroupOpen('findings')) && (key !== 'events' || isEventsFiltered()));
+        !['spend', 'spend card', 'spend plans'].includes(key)
+        && (key !== 'flags' || isFlagsFiltered() || homeGroupOpen('findings')) && (key !== 'events' || isEventsFiltered()));
       const failures = reportHealth.failures(keys);
       const text = consoleReportHealthText(failures);
       if (el.textContent !== text) el.textContent = text;
@@ -1879,6 +1880,8 @@ document.addEventListener('DOMContentLoaded', () => {
     clearTimeout(spendPollTimer);
     spendPollTimer = null;
     const cardPath = spendCardPath();
+    telemetryData.spendRefresh = { loading: true, delayed: false };
+    if (now) renderNow(['spend']); else markDirty('spend');
     const ownsResult = key => !sessionEnded && gen === spendGen && (key !== 'spend card' || cardPath === spendCardPath());
     const grab = async (key, path) => {
       if (sessionEnded) return null;
@@ -1886,7 +1889,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const r = await apiFetch(path);
         if (sessionEnded) return null;
         if (!ownsResult(key)) return null;
-        if (!r.ok) { noteEndpointFailure(key); reportFailed(key, `HTTP ${r.status}`); return null; }
+        if (!r.ok) { reportFailed(key, `HTTP ${r.status}`); return null; }
         const value = await r.json();
         if (!ownsResult(key)) return null;
         if (!isConsoleReport(key, value)) { reportFailed(key, 'Invalid response'); return null; }
@@ -1906,8 +1909,10 @@ document.addEventListener('DOMContentLoaded', () => {
     if (costs) telemetryData.costs = costs;
     if (costPlans) telemetryData.costPlans = costPlans;
     if (costsCard && cardPath === spendCardPath()) telemetryData.costsCard = costsCard;
+    telemetryData.spendRefresh = { loading: false,
+      delayed: reportHealth.failures(['spend', 'spend card', 'spend plans']).length > 0 };
     if (now) renderNow(['spend']); else markDirty('spend');
-    if (![telemetryData.costs, telemetryData.costsCard].some(r => r && r.refreshing)) { spendPolls = 0; return; }
+    if (!telemetryData.spendRefresh.delayed && ![telemetryData.costs, telemetryData.costsCard].some(r => r && r.refreshing)) { spendPolls = 0; return; }
     if (spendPolls >= SPEND_POLLS) return; // the slow cycle keeps asking
     spendPolls++;
     spendPollTimer = setTimeout(() => loadSpend(false), SPEND_POLL_MS);

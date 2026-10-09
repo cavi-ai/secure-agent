@@ -569,7 +569,11 @@ function renderSpend() {
   if (hint) hint.textContent = [spendHintText(total), spendUpdating(report) ? 'updating…' : ''].filter(Boolean).join(' · ');
   const notice = document.getElementById('spend-cache');
   if (notice) {
-    const text = spendCacheText([report, SA.t.costsCard]);
+    const state = SA.t.spendRefresh || {};
+    const saved = [report, SA.t.costsCard].some(r => r && (!r.refreshing || r.generated_at || Number(r.total && r.total.calls)))
+      || !!(SA.t.costPlans && SA.t.costPlans.plans && SA.t.costPlans.plans.length);
+    const text = state.delayed ? (saved ? 'Refresh delayed · showing saved usage' : 'Usage is taking longer to load · retrying…')
+      : state.loading ? 'Refreshing usage…' : spendCacheText([report, SA.t.costsCard]);
     notice.textContent = text;
     notice.hidden = !text;
   }
@@ -587,8 +591,8 @@ function renderSpend() {
   patchList(plansEl, spendPlanItems(plans), { key: i => i.key, html: i => i.html });
 
   const card = SA.t.costsCard;
-  if (!card) {
-    body.innerHTML = `<div class="empty"><span>Loading spend…</span></div>`;
+  if (!card || (card.refreshing && !card.generated_at && !Number(card.total && card.total.calls))) {
+    body.innerHTML = `<div class="empty"><span>Refreshing usage…</span></div>`;
     return;
   }
   const rows = Array.isArray(card.rows) ? card.rows : [];
@@ -612,14 +616,9 @@ function renderSpend() {
 }
 
 // spendUpdating: whether a /costs report is shown while the daemon
-// recomputes it (refreshing) and is at least a minute old: older than the
-// console's 30 s refresh keeps it, so it came from the usage cache (a
-// restart, a view not asked lately). One that does not say when it was
-// computed counts.
+// recomputes it, including a cold cache with no computed result yet.
 function spendUpdating(r, nowMs) {
-  if (!r || !r.refreshing) return false;
-  const at = Date.parse(r.generated_at);
-  return !isFinite(at) || (nowMs || Date.now()) - at >= 60000;
+  return !!(r && r.refreshing);
 }
 
 // spendCacheText: the Spend card's notice while spendUpdating holds for a
@@ -629,7 +628,7 @@ function spendCacheText(reports, nowMs) {
   const shown = (reports || []).filter(r => spendUpdating(r, nowMs));
   if (!shown.length) return '';
   const at = Math.min(...shown.map(r => Date.parse(r.generated_at)).filter(isFinite));
-  return 'Updating usage cache…' + (isFinite(at) ? ` (cached ${fmtAge(new Date(at).toISOString(), nowMs)} ago)` : '');
+  return 'Refreshing usage…' + (isFinite(at) ? ` · saved ${fmtAge(new Date(at).toISOString(), nowMs)} ago` : '');
 }
 
 // spendHintText: the stat-strip line under the 24h spend — "N calls", then
@@ -658,7 +657,8 @@ function planWindowLabel(minutes) {
 // used · resets Fri 3:10 PM" (local time), one clause per window.
 function planLineText(p) {
   const cap = s => { s = String(s || ''); return s ? s[0].toUpperCase() + s.slice(1) : ''; };
-  const parts = [[cap(p.harness), cap(p.plan_type)].filter(Boolean).join(' '), String(p.home || '')];
+  const sharing = Array.isArray(p.homes) && p.homes.length > 1 ? `shared by ${p.homes.length} homes` : String(p.home || '');
+  const parts = [[cap(p.harness), cap(p.plan_type)].filter(Boolean).join(' '), sharing];
   for (const w of Array.isArray(p.windows) ? p.windows : []) {
     const reset = Date.parse(w.resets_at);
     parts.push(`${planWindowLabel(w.window_minutes)} ${Math.round(Number(w.used_percent) || 0)}% used`
@@ -677,7 +677,7 @@ function spendPlanItems(plans) {
       const cls = pct >= 90 ? ' crit' : pct >= 75 ? ' warn' : '';
       return `<span class="hbar-track" title="${escapeHTML(planWindowLabel(w.window_minutes))}"><span class="hbar-fill${cls}" data-w="${pct.toFixed(1)}"></span></span>`;
     }).join('');
-    return { key: `plan:${p.home_path || p.home}`, html: `<div class="spend-plan">
+    return { key: `plan:${p.account_key ? p.account_key + ':' + (p.limit_id || '') : p.home_path || p.home}`, html: `<div class="spend-plan">
       <span class="spend-plan-text">${escapeHTML(planLineText(p))}</span>${bars}
     </div>` };
   });

@@ -1988,7 +1988,7 @@
     }, 3000);
     if (MODE.includes('recover')) {
       setTimeout(() => {
-        stamp('spend-shape-before-recovery', Array.from(document.querySelectorAll('.report-health:not([hidden])')).map(el => el.textContent).join(' '));
+        stamp('spend-shape-before-recovery', document.getElementById('spend-cache').textContent);
         spendShapeBad = false;
         document.getElementById('btn-refresh').click();
       }, 6000);

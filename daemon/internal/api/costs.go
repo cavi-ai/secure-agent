@@ -52,7 +52,14 @@ func (a *API) handleCosts(w http.ResponseWriter, r *http.Request) {
 		classifyCosts(&rep)
 		return rep
 	})
-	rep.GeneratedAt = at.UTC().Format(time.RFC3339)
+	if at.IsZero() {
+		// A cold cached request starts work without making the console wait.
+		// No generated_at means these zero counters are not a computed report.
+		rep.Since, rep.Until, rep.By = since.UTC().Format(time.RFC3339), until.UTC().Format(time.RFC3339), by
+		rep.Rows = []store.CostRow{}
+	} else {
+		rep.GeneratedAt = at.UTC().Format(time.RFC3339)
+	}
 	rep.Refreshing = refreshing
 	writeJSON(w, rep)
 }
@@ -115,9 +122,8 @@ func unpricedCosts(rep store.CostReport) unpricedCostReport {
 	return out
 }
 
-// handleCostsPlans serves the latest plan headroom snapshot per harness
-// home, sorted by home label. Memory only: empty after a restart until the
-// next line that reports it. Read-level.
+// handleCostsPlans serves the newest observed quota per identified account
+// and limit. Per-home snapshots remain available for durable restoration.
 //
 //	GET /costs/plans
 func (a *API) handleCostsPlans(w http.ResponseWriter, r *http.Request) {
@@ -127,7 +133,7 @@ func (a *API) handleCostsPlans(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, struct {
 		Plans []collect.PlanSnapshot `json:"plans"`
-	}{Plans: collect.Plans()})
+	}{Plans: collect.AccountPlans()})
 }
 
 // costWindow reads since (default 24h ago) and until (default now).
