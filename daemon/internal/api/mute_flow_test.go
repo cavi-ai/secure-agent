@@ -1,7 +1,10 @@
 package api
 
 import (
+	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -10,6 +13,41 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 	"github.com/cavi-ai/secure-agent/daemon/internal/store"
 )
+
+func TestMuteLoadFailureDoesNotAcknowledgeFlags(t *testing.T) {
+	for _, method := range []string{http.MethodPost, http.MethodDelete} {
+		t.Run(method, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "muted.json")
+			const original = `{"existing":["old.example.com"],`
+			if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			st := testStore(t)
+			if _, err := st.PutFlag(flagFor("open-flag", "sensitive-read-then-connect", "then connected to api.example.com:443 at T")); err != nil {
+				t.Fatal(err)
+			}
+			a := newTestAPI("", st, nil, nil)
+			a.mutes = correlate.NewMuteStore(path)
+			body := `{"rule":"sensitive-read-then-connect","host":"api.example.com"}`
+			request := httptest.NewRequest(method, "/mute?rule=sensitive-read-then-connect&host=api.example.com", strings.NewReader(body))
+			response := httptest.NewRecorder()
+			a.handleMute(response, request)
+			if response.Code != http.StatusInternalServerError {
+				t.Fatalf("status = %d, want 500; body = %s", response.Code, response.Body.String())
+			}
+			if flag, ok := st.GetFlag("open-flag"); !ok || flag.Acknowledged {
+				t.Fatalf("failed mute changed the open flag: %+v, found = %v", flag, ok)
+			}
+			if audit := st.RecentAudit(10); len(audit) != 0 {
+				t.Fatalf("failed mute recorded success: %+v", audit)
+			}
+			got, err := os.ReadFile(path)
+			if err != nil || string(got) != original {
+				t.Fatalf("policy changed: %q, error = %v", got, err)
+			}
+		})
+	}
+}
 
 // The full operator mute loop: POST /mute persists the pair AND acknowledges
 // existing flags of that rule citing that host — the exact complaint ("ignore
