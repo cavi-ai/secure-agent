@@ -231,6 +231,10 @@ func Open(dbPath, jsonlPath string) (*Store, error) {
 	} else {
 		dsn = ":memory:?_pragma=journal_mode(WAL)"
 	}
+	// Read-modify-write transactions reserve the writer before taking their
+	// snapshot. A deferred read-to-write upgrade can fail with SQLITE_BUSY
+	// immediately, bypassing busy_timeout when another connection writes.
+	dsn += "&_txlock=immediate"
 
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {

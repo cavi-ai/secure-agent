@@ -1,6 +1,7 @@
 package store
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -22,6 +23,42 @@ func TestReviewSchemaIsAtomicVersionThree(t *testing.T) {
 	}
 	if err := s.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE name IN ('finding_reviews','finding_review_members','finding_review_actions')`).Scan(&tables); err != nil || tables != 3 {
 		t.Fatalf("review tables = %d, %v; want 3", tables, err)
+	}
+}
+
+func TestReviewTransactionWaitsForConcurrentWriter(t *testing.T) {
+	s := reviewStore(t)
+	f := reviewFlag("source")
+	s.PutFlag(f)
+	var seq int
+	var name, path string
+	if err := s.db.QueryRow(`PRAGMA database_list`).Scan(&seq, &name, &path); err != nil {
+		t.Fatal(err)
+	}
+	writer, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	writer.SetMaxOpenConns(1)
+	if _, err = writer.Exec(`BEGIN IMMEDIATE`); err != nil {
+		t.Fatal(err)
+	}
+	released := make(chan error, 1)
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		_, err := writer.Exec(`COMMIT`)
+		released <- err
+	}()
+	_, reviewErr := s.ObserveFindingReview(f, model.AssessFinding(f))
+	if err = <-released; err != nil {
+		t.Fatal(err)
+	}
+	if reviewErr != nil {
+		t.Fatalf("review transaction failed to wait for the bounded writer: %v", reviewErr)
+	}
+	if h := s.WriteHealth(); len(h.Active) != 0 {
+		t.Fatalf("transient writer degraded the review projection: %+v", h)
 	}
 }
 
