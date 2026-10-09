@@ -192,6 +192,29 @@ are Claude Code and Cursor; Claude registration checks apply only while Claude
 is active. These observations do not establish coverage of every current
 session, or payload inspection, which depends on proxy routing.
 
+`/status.coverage.sessions` projects each live root separately. Both the root
+PID and process start time must match exactly one active or idle durable
+session of the same harness. A single bounded SQLite snapshot joins that
+session's guard outcomes, transcript activity and attributed inspection
+matches. Handshakes, unattributed records, pre-session/future timestamps and
+inspection gaps do not become positive evidence. Reads are cached for 30
+seconds and keyed by the live roots and start times; failed refreshes retain
+last-known timestamps with explicit stale state. The list is bounded to 128
+roots and reports truncation. Missing observations do not prove inactivity
+or lack of protection.
+
+The manual installed-hook probe is independent of these session facts. The
+pinned UI arms a one-use, 30-second inert challenge. The installed hook calls
+the normal Unix guard transport, receives only a deny response for that exact
+fixture, and returns its receipt to the UI. The UI completes the check only
+after validating the hook's output and exit status. Hook dependencies,
+registration and policy file hashes must remain unchanged across the check.
+Receipts expire after 24 hours, invalidate on configuration changes, and are
+cleared on daemon restart. Probes never touch guard policy, broker prompts,
+advisor calls, audit/activity logs or durable session records. A pass proves
+the manually invoked installed path, not automatic harness invocation or
+protection of real tool calls.
+
 Native endpoint refresh failures retain last-known values and mark the failed
 section stale. Polling and SSE refreshes clear a section only on success.
 Stale sections keep the icon in attention and surface a warning; a stale

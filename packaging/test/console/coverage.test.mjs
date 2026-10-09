@@ -18,6 +18,21 @@ const harnesses = {proxy_enabled: false, coverage: {harnesses: [
   {name: '<unknown>', trace_supported: false, guard_supported: false},
 ]}};
 
+test('session evidence remains visible without a machine gap and is not borrowed by a sibling', () => {
+  const path = (state, last_seen = '') => ({supported: true, state, last_seen, detail: 'This session only'});
+  const nodes = render({coverage: {sessions: [
+    {session_id: 'a', harness: 'claude', workspace: '/work/observed', guard: path('observed', '2026-10-09T12:00:00Z'), trace: path('observed'), payload: path('off')},
+    {session_id: 'b', harness: 'claude', workspace: '/work/<silent>', guard: path('not-observed'), trace: path('not-observed'), payload: path('off')},
+  ]}});
+  assert.equal(nodes.get('coverage-center').hidden, false);
+  const html = nodes.get('coverage-list').innerHTML;
+  assert.match(html, /\/work\/observed/);
+  assert.match(html, /\/work\/&lt;silent&gt;/);
+  assert.match(html, /Guard:.*observed/i);
+  assert.match(html, /Guard:.*not observed/i);
+  assert.doesNotMatch(html, /<silent>/);
+});
+
 test('the monitoring-gap panel stays hidden while harnesses exist but no gap does', () => {
   const nodes = render(harnesses, {coverage_count: 0, coverage_items: []});
   assert.equal(nodes.get('coverage-center').hidden, true);

@@ -48,9 +48,13 @@ type Killer interface {
 // counts harnesses (agent kinds, infra excluded) with attributed activity in
 // the recent window; HarnessesActive counts those with live processes.
 type CoverageStatus struct {
-	HarnessesActive int               `json:"harnesses_active"`
-	HarnessesSeen   int               `json:"harnesses_seen"`
-	Harnesses       []HarnessCoverage `json:"harnesses,omitempty"`
+	HarnessesActive   int                    `json:"harnesses_active"`
+	HarnessesSeen     int                    `json:"harnesses_seen"`
+	Harnesses         []HarnessCoverage      `json:"harnesses,omitempty"`
+	Sessions          []SessionCoverage      `json:"sessions,omitempty"`
+	SessionsStale     bool                   `json:"sessions_stale,omitempty"`
+	SessionsTruncated bool                   `json:"sessions_truncated,omitempty"`
+	Probes            []CoverageProbeReceipt `json:"probes,omitempty"`
 }
 
 type AgentSummary struct {
@@ -256,6 +260,8 @@ type API struct {
 	unpriced costCache[unpricedCostReport]
 
 	harnessActivity harnessActivityCache
+	sessionCoverage sessionCoverageCache
+	coverageProbes  coverageProbeState
 }
 
 // GuardEventSink receives guard decisions (allow/deny) for downstream
@@ -738,6 +744,7 @@ func (a *API) routes() map[string]http.HandlerFunc {
 		"/firewall/fingerprints/ingest": a.handleFingerprintIngest,
 		"/firewall/sources":             a.handleFirewallSources,
 		"/guard/decision":               a.handleGuardDecision,
+		"/coverage/probe":               a.handleCoverageProbe,
 		"/guard/pending":                a.handleGuardPending,
 		"/guard/resolve":                a.handleGuardResolve,
 		"/guard/rules":                  a.handleGuardRules,
@@ -1048,12 +1055,15 @@ func (a *API) evidenceStatus(st Status) Status {
 		}
 	}
 	rows := harnessCoverage(st, a.recentHarnessActivity)
-	if len(rows) > 0 {
+	probes := a.coverageProbeReceipts()
+	if len(rows) > 0 || len(probes) > 0 {
 		cov := CoverageStatus{HarnessesActive: len(rows)}
 		if st.Coverage != nil {
 			cov = *st.Coverage
 		}
 		cov.Harnesses = rows
+		cov.Probes = probes
+		a.stampSessionCoverage(st, &cov)
 		st.Coverage = &cov
 	}
 	if a.store != nil {

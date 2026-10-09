@@ -1216,6 +1216,8 @@ button.need-head:hover .need-what { text-decoration: underline; text-decoration-
 .coverage-row span span, .coverage-guidance { font-size: 0.72rem; color: var(--tx-2); }
 .coverage-harness { border-top: 1px solid var(--line); padding-top: 8px; }
 .coverage-harness > summary { width: fit-content; cursor: pointer; font-size: 0.74rem; color: var(--tx-3); }
+.coverage-session { padding: 8px 0; border-top: 1px solid var(--line); }
+.coverage-session > summary { cursor: pointer; font-size: 0.75rem; overflow-wrap: anywhere; }
 
 .home-group-fact { margin-left: auto; font: 500 0.75rem/1 var(--mono); color: var(--tx-3); }
 .home-group > summary:has(.home-group-fact)::after { margin-left: 12px; }

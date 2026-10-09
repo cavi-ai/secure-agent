@@ -122,20 +122,26 @@ struct OnboardingView: View {
                         action: { try setup.installHooks() }
                     )
                     if setup.areHooksInstalled {
-                        Button("Test Hooks") {
+                        Button("Check Installed Hook Paths") {
                             Task { await setup.runHookSelfTest() }
                         }
                         .disabled(setup.hookSelfTestRunning)
                         if setup.hookSelfTestRunning {
-                            Text("Firing a synthetic tool call through the hook…")
+                            Text("Checking the installed hook and daemon round trip…")
                                 .font(.caption).foregroundColor(.secondary)
                         } else if let failure = setup.hookSelfTestFailure {
                             Label(failure, systemImage: "exclamationmark.triangle.fill")
                                 .font(.caption).foregroundColor(.orange)
-                        } else if setup.hookSelfTestFailure != nil {
-                            EmptyView()
-                        } else {
-                            Text("Verify a tool call round-trips through the guard.")
+                        }
+                        ForEach(setup.hookProbeResults, id: \.harness) { receipt in
+                            let latest = receipt
+                            Label("\(latest.harness): last check \(latest.state) at \(latest.checkedAt)", systemImage: latest.state == "passed" ? "checkmark.circle" : "exclamationmark.triangle")
+                                .font(.caption).foregroundColor(latest.state == "passed" ? .secondary : .orange)
+                            Text(latest.hookPath).font(.caption).foregroundColor(.secondary)
+                            Text(latest.detail).font(.caption).foregroundColor(.secondary)
+                        }
+                        if !setup.hookSelfTestRunning && setup.hookProbeResults.isEmpty && setup.hookSelfTestFailure == nil {
+                            Text("Check the installed hook's daemon response. This does not prove a running agent invokes the hook or change its policy.")
                                 .font(.caption).foregroundColor(.secondary)
                         }
                     }

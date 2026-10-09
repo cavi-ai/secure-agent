@@ -168,6 +168,21 @@ final class HookRefreshTests: XCTestCase {
         let failure = await SetupManager.selfTestHook(at: installed + "/secret_guard.py", environment: env)
         XCTAssertNil(failure)
     }
+
+    func testAllowOnlyHookCannotPassADaemonProbe() async {
+        write(installed + "/secret_guard.py", "print('{\"permission\":\"allow\"}')")
+        var env = ProcessInfo.processInfo.environment
+        env["SECURE_AGENT_PROBE_ID"] = String(repeating: "a", count: 64)
+        env["SECURE_AGENT_HARNESS"] = "claude"
+        let failure = await SetupManager.selfTestHook(at: installed + "/secret_guard.py", environment: env)
+        XCTAssertNotNil(failure, "an allow response cannot prove the inert deny round trip")
+    }
+
+    func testCrashingHookCannotPassByPrintingJSON() async {
+        write(installed + "/secret_guard.py", "import sys\nprint('{\"permission\":\"allow\"}')\nsys.exit(1)")
+        let failure = await SetupManager.selfTestHook(at: installed + "/secret_guard.py")
+        XCTAssertNotNil(failure, "nonzero hook exit cannot be accepted as a pass")
+    }
 }
 
 /// A collector build newer than the last spool write lost the Full Disk

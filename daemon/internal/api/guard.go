@@ -26,6 +26,7 @@ import (
 var guardTokenRE = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
 
 type guardDecisionRequest struct {
+	ProbeID   string `json:"probe_id,omitempty"`
 	Agent     string `json:"agent"`
 	SessionID string `json:"session_id,omitempty"`
 	Tool      string `json:"tool"`
@@ -45,15 +46,19 @@ func (a *API) handleGuardDecision(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if a.guardBroker == nil {
-		http.Error(w, "guard not enabled", http.StatusServiceUnavailable)
-		return
-	}
 	limitBody(w, r)
 	var req guardDecisionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Agent == "" || req.RuleID == "" ||
 		!guardTokenRE.MatchString(req.Agent) || !guardTokenRE.MatchString(req.RuleID) {
 		http.Error(w, `Invalid payload: {"agent","tool","path","rule_id"} (agent/rule_id must match ^[A-Za-z0-9_.-]+$)`, http.StatusBadRequest)
+		return
+	}
+	if req.ProbeID != "" {
+		a.answerCoverageProbe(w, req)
+		return
+	}
+	if a.guardBroker == nil {
+		http.Error(w, "guard not enabled", http.StatusServiceUnavailable)
 		return
 	}
 	id := fmt.Sprintf("%d-%d", time.Now().UnixNano(), atomic.AddUint64(&a.guardSeq, 1))

@@ -233,6 +233,7 @@ def main():
         dom_quiet = dump_dom(chrome, tmp, "?quietdemo")
         dom_nomatch = dump_dom(chrome, tmp, "?nomatchdemo")
         dom_coverage = dump_dom(chrome, tmp, "?coveragedemo")
+        dom_session_coverage = dump_dom(chrome, tmp, "?sessionvisibility")
         dom_phone = dump_dom(chrome, tmp, "?phonedemo")
         dom_memory_phone = dump_dom(chrome, tmp, "?phonedemo&memorydemo")
         dom_nocosts = dump_dom(chrome, tmp, "?nocostsdemo")
@@ -1248,6 +1249,19 @@ def main():
               and 'id="badge-coverage-count">2<' in dom_coverage)
         check("attention resource actions target the full session",
               'data-action="resource-control" data-id="resource-1" data-decision="apply"' in attention)
+        check("session coverage remains available without a global monitoring gap",
+              'Per-session coverage · 2' in dom_session_coverage
+              and re.search(r'id="coverage-center"[^>]*\bhidden', dom_session_coverage) is None)
+        check("same-agent sessions keep independent guard evidence and closed details",
+              'data-session-id="session-observed"' in dom_session_coverage
+              and 'data-session-id="session-silent"' in dom_session_coverage
+              and '/work/observed · Guard: activity observed' in dom_session_coverage
+              and '/work/&lt;silent&gt; · Guard: not observed' in dom_session_coverage
+              and re.search(r'<details[^>]*class="coverage-session"[^>]*\bopen', dom_session_coverage) is None)
+        check("an invalidated installed-hook check stays separate from session evidence",
+              'Installed hook checks' in dom_session_coverage
+              and 'claude · changed' in dom_session_coverage
+              and 'Configuration changed. Run the check again.' in dom_session_coverage)
         check("attention guard actions expose bounded choices",
               'data-action="guard-resolve" data-id="guard-1" data-verdict="allow" data-scope="once"' in attention
               and 'data-action="guard-resolve" data-id="guard-1" data-verdict="deny" data-scope="once"' in attention
