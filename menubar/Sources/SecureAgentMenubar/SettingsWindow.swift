@@ -1413,7 +1413,7 @@ enum ESStage: CaseIterable {
     case wrongLocation, legacyInstalled, notRegistered, requiresApproval, needsGrant, needsRegrant, notFound, active
 
     /// The Full Disk Access step, shown under C and D.
-    static let grantInstruction = "In the pane that just opened: turn on Secure Agent. This card turns green automatically — nothing else to do."
+    static let grantInstruction = FileTelemetryPermissionGuidance.instruction
 
     /// States that wait on a switch in System Settings.
     var awaitsUser: Bool {

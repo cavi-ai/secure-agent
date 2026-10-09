@@ -358,16 +358,16 @@ enum TelemetryDoctor {
         }
         if logWaitsForGrant(f.helperLogLastLine) {
             return DoctorCheck(id: "full-disk-access", title: title, state: .fail,
-                               cause: "the service's log says it waits for the permission grant", fix: .openFullDiskAccess)
+                               cause: "the service's log says it waits for the permission grant. \(FileTelemetryPermissionGuidance.instruction)", fix: .openFullDiskAccess)
         }
         guard let mtime = f.spoolMtime else {
             return DoctorCheck(id: "full-disk-access", title: title, state: .fail,
-                               cause: "the service runs but has written no spool", fix: .openFullDiskAccess)
+                               cause: "the service runs but has written no spool. \(FileTelemetryPermissionGuidance.instruction)", fix: .openFullDiskAccess)
         }
         let age = f.now.timeIntervalSince(mtime)
         if age > grantStaleAfter {
             return DoctorCheck(id: "full-disk-access", title: title, state: .fail,
-                               cause: "the service runs but the spool was last written \(Int(age)) s ago", fix: .openFullDiskAccess)
+                               cause: "the service runs but the spool was last written \(Int(age)) s ago. \(FileTelemetryPermissionGuidance.instruction)", fix: .openFullDiskAccess)
         }
         return DoctorCheck(id: "full-disk-access", title: title, state: .pass,
                            cause: "the spool was written \(max(0, Int(age))) s ago", fix: nil)

@@ -40,7 +40,9 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificat
                 return
             }
             guard !Task.isCancelled else { return }
-            SettingsWindowController.shared.show()
+            if AppPreferences.shared.bool(forKey: "setupWizardDismissed") {
+                SettingsWindowController.shared.show()
+            }
             finishLaunching()
         }
     }
@@ -61,8 +63,8 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificat
         DaemonSupervisor.shared.start()
         NotificationManager.shared.requestAuthorization()
         UNUserNotificationCenter.current().delegate = self
-        // File telemetry turns itself on: register once per launch, then open
-        // the pane for each switch the user has to flip.
+        // Existing telemetry choices keep their repair path. First-use setup
+        // defers the optional service until the operator explicitly enables it.
         SetupManager.shared.refreshESState()
         launched = true
         if telemetryRepairRequested {
@@ -83,9 +85,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificat
         }
         Task {
             await SetupManager.shared.refreshState()
-            if SetupManager.shared.needsSetup {
-                OnboardingWindowController.shared.showOnceIfNeeded()
-            }
+            OnboardingWindowController.shared.showOnceIfNeeded()
         }
     }
 
