@@ -1,6 +1,7 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
 	"sort"
 	"time"
@@ -64,12 +65,29 @@ func (a *API) currentSnapshot() (Snapshot, error) {
 	return a.snapshotWithSessions(sessions, events)
 }
 
-func (a *API) snapshotWithSessions(sessions []model.Session, events []event.Event) (Snapshot, error) {
-	incidents := a.store.RecentIncidents(10)
+func (a *API) incidentListResult(limit int) ([]snapshotIncident, error) {
+	incidents, err := a.store.RecentIncidentsResult(limit)
+	if err != nil {
+		return nil, err
+	}
 	out := make([]snapshotIncident, 0, len(incidents))
 	for i := range incidents {
-		wf, _ := a.store.IncidentStatus(incidents[i].ID)
+		wf, found, err := a.store.IncidentStatusResult(incidents[i].ID)
+		if err != nil {
+			return nil, err
+		}
+		if !found {
+			return nil, fmt.Errorf("incident workflow unavailable")
+		}
 		out = append(out, snapshotIncident{IncidentReport: incidents[i], Workflow: wf})
+	}
+	return out, nil
+}
+
+func (a *API) snapshotWithSessions(sessions []model.Session, events []event.Event) (Snapshot, error) {
+	out, err := a.incidentListResult(10)
+	if err != nil {
+		return Snapshot{}, err
 	}
 	flags, err := a.store.QueryFlagsResult(store.FlagFilter{
 		Unacted: true,
