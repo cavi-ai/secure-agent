@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -118,6 +119,18 @@ func TestFullBusCorrelatorStorePipeline(t *testing.T) {
 	}
 }
 
+type smokeSocketLister struct {
+	pid       int32
+	connected atomic.Bool
+}
+
+func (f *smokeSocketLister) SocketsFor(pid int32) []collect.SocketConnection {
+	if !f.connected.Load() || (pid > 0 && pid != f.pid) {
+		return nil
+	}
+	return []collect.SocketConnection{{PID: f.pid, Host: "203.0.113.1", Port: 443}}
+}
+
 func TestEndToEndSmokeScenario(t *testing.T) {
 	dir := t.TempDir()
 	sockPath := filepath.Join(dir, "d.sock")
@@ -130,7 +143,7 @@ func TestEndToEndSmokeScenario(t *testing.T) {
 
 	cfg := config.Config{
 		Agents: []config.AgentDef{
-			{Name: "cursor", Match: []string{"test-agent", "cursor", "secure-agentd.test"}},
+			{Name: "cursor", Match: []string{filepath.Base(os.Args[0])}},
 		},
 		VendorAllowlist: map[string][]string{
 			"cursor": {"cursor.sh", "cursor.com"},
@@ -182,8 +195,9 @@ func TestEndToEndSmokeScenario(t *testing.T) {
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- apiServer.Serve(ctx) }()
 
+	fixture := &smokeSocketLister{pid: int32(os.Getpid())}
 	go supervise.Run(ctx, "netsample", func(c context.Context) error {
-		ns := collect.NewNetSampler(b, tg, cfg.NetSampleInterval, nil)
+		ns := collect.NewNetSampler(b, tg, cfg.NetSampleInterval, fixture)
 		return ns.Run(c)
 	})
 
@@ -243,38 +257,10 @@ func TestEndToEndSmokeScenario(t *testing.T) {
 		t.Fatal("transcript scanner did not publish the sensitive read")
 	}
 
-	// 2. Open foreign TCP socket. The sampler filters loopback (it is not
-	// egress), so the fixture connection must ride a real interface address —
-	// still on-box, no internet required.
-	l, err := listenNonLoopback(t)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer l.Close()
-
-	connCh := make(chan net.Conn, 1)
-	go func() {
-		c, _ := l.Accept()
-		connCh <- c
-	}()
-
-	cliConn, err := net.Dial("tcp", l.Addr().String())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cliConn.Close()
-	// Retain the accepted peer until sampling finishes. An unread channel
-	// becomes unreachable after its sender exits, allowing the connection's
-	// finalizer to close it before lsof observes an established socket.
-	select {
-	case serverConn := <-connCh:
-		if serverConn == nil {
-			t.Fatal("fixture failed to accept connection")
-		}
-		defer serverConn.Close()
-	case <-time.After(5 * time.Second):
-		t.Fatal("fixture connection was not accepted")
-	}
+	// Make the fixture egress visible only after the sensitive read was
+	// published. Platform socket discovery is exercised by the shell smoke;
+	// this integration check must not depend on a host interface or VPN.
+	fixture.connected.Store(true)
 
 	// Correlator writes asynchronously via netsample. Wait on the store
 	// first (same contract as TestFullBusCorrelatorStorePipeline), then
@@ -285,7 +271,13 @@ func TestEndToEndSmokeScenario(t *testing.T) {
 		if err != nil {
 			t.Fatalf("flag read failed: %v", err)
 		}
-		return flags
+		var fixtureFlags []model.Flag
+		for _, flag := range flags {
+			if flag.PID == currPID && flag.Rule == "sensitive-read-then-connect" {
+				fixtureFlags = append(fixtureFlags, flag)
+			}
+		}
+		return fixtureFlags
 	}
 	for len(readFlags()) == 0 && time.Now().Before(deadline) {
 		time.Sleep(20 * time.Millisecond)
@@ -293,7 +285,7 @@ func TestEndToEndSmokeScenario(t *testing.T) {
 	if len(readFlags()) == 0 {
 		events := st.RecentEvents(50)
 		evData, _ := json.MarshalIndent(events, "", "  ")
-		t.Fatalf("correlator never wrote a flag; fixture sockets: %+v\nEVENTS:\n%s", collect.NewSocketLister().SocketsFor(currPID), string(evData))
+		t.Fatalf("correlator never wrote a flag; fixture sockets: %+v\nEVENTS:\n%s", fixture.SocketsFor(currPID), string(evData))
 	}
 
 	client := &http.Client{
@@ -336,54 +328,6 @@ func TestEndToEndSmokeScenario(t *testing.T) {
 	if !flagFound {
 		t.Fatalf("flag in store but /flags did not serve it: status=%d err=%v body=%s", lastStatus, lastErr, lastBody)
 	}
-}
-
-// listenNonLoopback finds a non-loopback IPv4 that actually self-connects:
-// interface lists include down links and VPN utuns whose addresses answer
-// nothing. Each candidate is proven with a bounded probe dial; the winning
-// listener is returned ready for the fixture's real connection.
-func listenNonLoopback(t *testing.T) (net.Listener, error) {
-	t.Helper()
-	addrs, err := net.InterfaceAddrs()
-	if err != nil {
-		t.Skipf("no interface addrs: %v", err)
-	}
-	for _, a := range addrs {
-		ipNet, ok := a.(*net.IPNet)
-		if !ok || ipNet.IP.IsLoopback() || ipNet.IP.To4() == nil {
-			continue
-		}
-		ln, err := net.Listen("tcp", ipNet.IP.String()+":0")
-		if err != nil {
-			continue
-		}
-		probe, err := net.DialTimeout("tcp", ln.Addr().String(), 500*time.Millisecond)
-		if err != nil {
-			ln.Close()
-			continue
-		}
-		// Drain the probe so the fixture's own Accept sees a clean queue.
-		tcp := ln.(*net.TCPListener)
-		if err := tcp.SetDeadline(time.Now().Add(500 * time.Millisecond)); err != nil {
-			probe.Close()
-			ln.Close()
-			continue
-		}
-		c, err := ln.Accept()
-		probe.Close()
-		if err != nil {
-			ln.Close()
-			continue
-		}
-		c.Close()
-		if err := tcp.SetDeadline(time.Time{}); err != nil {
-			ln.Close()
-			continue
-		}
-		return ln, nil
-	}
-	t.Skip("no self-connectable non-loopback IPv4 interface available")
-	return nil, nil
 }
 
 func waitUnix(t *testing.T, path string, d time.Duration, serve <-chan error) {
