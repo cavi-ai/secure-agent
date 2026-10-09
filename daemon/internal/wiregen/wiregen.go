@@ -58,6 +58,7 @@ func WireTypes() []any {
 		api.Status{},
 		api.AgentSummary{},
 		api.CoverageStatus{},
+		api.SessionOverview{},
 		api.Posture{},
 		api.PostureItem{},
 		api.AttentionGroup{},
@@ -162,6 +163,9 @@ func emitTS(t reflect.Type, out *strings.Builder, emitted map[string]bool) {
 		}
 		optional := strings.Contains(opts, "omitempty")
 		tsType := tsTypeOf(f.Type)
+		if f.Type.Kind() == reflect.Pointer && !optional {
+			tsType += " | null"
+		}
 		opt := ""
 		if optional {
 			opt = "?"

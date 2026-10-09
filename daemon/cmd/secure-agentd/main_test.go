@@ -124,6 +124,9 @@ func TestEndToEndSmokeScenario(t *testing.T) {
 	dbPath := filepath.Join(dir, "t.db")
 	jsonlPath := filepath.Join(dir, "t.jsonl")
 	actPath := filepath.Join(dir, "activity.jsonl")
+	if err := os.WriteFile(actPath, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
 
 	cfg := config.Config{
 		Agents: []config.AgentDef{
@@ -184,8 +187,23 @@ func TestEndToEndSmokeScenario(t *testing.T) {
 		return ns.Run(c)
 	})
 
+	scannerReady := make(chan error, 1)
+	transcriptProduced := make(chan struct{}, 1)
 	go supervise.Run(ctx, "transcript", func(c context.Context) error {
 		ts := collect.NewTranscriptScanner(b, []string{actPath})
+		ts.OffsetStatePath = filepath.Join(dir, "transcript-offsets.json")
+		ts.OnCheckpointWrite = func(err error) {
+			select {
+			case scannerReady <- err:
+			default:
+			}
+		}
+		ts.OnProduce = func() {
+			select {
+			case transcriptProduced <- struct{}{}:
+			default:
+			}
+		}
 		return ts.Run(c)
 	})
 
@@ -193,18 +211,37 @@ func TestEndToEndSmokeScenario(t *testing.T) {
 	// Starting the transcript scanner after that write seeds its offset at EOF
 	// and the plugin line is treated as old history (empty event stream).
 	waitUnix(t, sockPath, 5*time.Second, serveErr)
-	time.Sleep(300 * time.Millisecond)
+	// The first checkpoint proves the empty fixture was seeded. A fixed
+	// delay can expire before scanner startup and silently skip the read.
+	select {
+	case err := <-scannerReady:
+		if err != nil {
+			t.Fatalf("scanner checkpoint: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("transcript scanner did not seed its fixture")
+	}
 
 	// Simulate agent activity
 	currPID := int32(os.Getpid()) // test process PID
 	info, _ := agents.NewProcSource().Info(currPID)
 	t.Logf("TEST RUNNER PID: %d, EXE: %q", currPID, info.Exe)
+	if _, ok := tg.Tag(currPID); !ok {
+		t.Fatal("test runner is not tagged as the fixture agent")
+	}
 	// 1. Write sensitive read log
 	envPath := filepath.Join(dir, ".env")
 	os.WriteFile(envPath, []byte("SECRET=123\n"), 0644)
 
 	rec := fmt.Sprintf(`{"tool":"Read","file_path":%q,"pid":%d}`, envPath, currPID)
-	os.WriteFile(actPath, []byte(rec+"\n"), 0644)
+	if err := os.WriteFile(actPath, []byte(rec+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-transcriptProduced:
+	case <-time.After(5 * time.Second):
+		t.Fatal("transcript scanner did not publish the sensitive read")
+	}
 
 	// 2. Open foreign TCP socket. The sampler filters loopback (it is not
 	// egress), so the fixture connection must ride a real interface address —
@@ -256,7 +293,7 @@ func TestEndToEndSmokeScenario(t *testing.T) {
 	if len(readFlags()) == 0 {
 		events := st.RecentEvents(50)
 		evData, _ := json.MarshalIndent(events, "", "  ")
-		t.Fatalf("correlator never wrote a flag\nEVENTS:\n%s", string(evData))
+		t.Fatalf("correlator never wrote a flag; fixture sockets: %+v\nEVENTS:\n%s", collect.NewSocketLister().SocketsFor(currPID), string(evData))
 	}
 
 	client := &http.Client{

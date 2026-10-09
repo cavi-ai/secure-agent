@@ -798,14 +798,14 @@ document.addEventListener('DOMContentLoaded', () => {
     ['chart-flags', renderChartFlags], ['chart-memory', renderChartMemory], ['spend', renderSpend],
     ['agents', renderAgents],
     ['endpoints', renderEndpoints], ['recurring-egress', renderEgressEpisodes], ['firewall', renderFirewall], ['incidents', renderIncidents], ['fleet', renderFleet],
-    ['audit', renderAudit], ['sources', renderSources], ['flags', renderFlags], ['attention', renderAttention],
+    ['audit', renderAudit], ['sources', renderSources], ['flags', renderFlags], ['attention', renderAttention], ['session-daily', renderSessionDaily],
     ['events', renderEvents], ['activity', renderActivity], ['worktrees', renderWorktrees], ['clutter', renderClutter], ['tab-badges', renderTabBadges],
     ['notify', renderNotifyRules], ['policy', renderPolicyLists], ['expected-egress', renderExpectedEgressRules], ['agent', renderAgent]
   ];
   // Panel → where it lives: tab, tab/sub-view, or tab:group (a Home
   // <details> group). A panel absent here is global (always on screen).
   const PANEL_VIEW = {
-    attention: 'home', spend: 'home',
+    attention: 'home', spend: 'home', 'session-daily': 'home',
     flags: 'home:findings', incidents: 'home:findings',
     activity: 'home:trends', 'chart-flags': 'home:trends', 'chart-memory': 'home:trends',
     sessions: 'sessions/board', agents: 'sessions/processes', fleet: 'sessions/processes',
@@ -1799,6 +1799,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // erases an in-progress workspace-scope edit.
     else markDirty(...PANELS.map(p => p[0]).filter(n => (slow || !SLOW_ONLY.has(n)) && n !== 'notify'));
     if (resources) fillFamilyDrawer();
+    if (window.SA && window.SA.refreshSessionOverview) window.SA.refreshSessionOverview(!!(opts && opts.full));
   }
 
   // Every panel is a candidate: initial load, Refresh, and actions that
@@ -2745,6 +2746,8 @@ document.addEventListener('DOMContentLoaded', () => {
     sessionView: { get() { return sessionView; } },
     sessionMemoryPage: { get() { return sessionMemoryPage; } },
     sessionMemoryState: { get() { return sessionMemoryState; } },
+    sessionOverview: { get() { return sessionOverview; } },
+    sessionOverviewState: { get() { return sessionOverviewState; } },
   });
 
   // The generation invalidates late responses when selection changes; it
@@ -2765,6 +2768,35 @@ document.addEventListener('DOMContentLoaded', () => {
   let sessionTimeline = [];
   let sessionTimelineAt = 0;
   let sessionTimelineRequest = 0;
+  let sessionOverview = null;
+  let sessionOverviewState = { loading: false, error: '' };
+  let sessionOverviewGeneration = 0;
+  let sessionOverviewAt = 0;
+  let sessionOverviewRefreshAgain = false;
+  window.SA.refreshSessionOverview = force => { if (selectedSessionId) loadSessionOverview(selectedSessionId, force); };
+  async function loadSessionOverview(id, force = true) {
+    if (!id || id !== selectedSessionId) return;
+    if (sessionOverviewState.loading) { if (force) sessionOverviewRefreshAgain = true; return; }
+    if (!force && Date.now() - sessionOverviewAt < 5000) return;
+    sessionOverviewAt = Date.now();
+    const generation = sessionOverviewGeneration;
+    sessionOverviewState = { loading: true, error: sessionOverviewState.error };
+    renderNow(['sessions']);
+    try {
+      const response = await apiFetch('/sessions/' + encodeURIComponent(id) + '/overview');
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      const overview = await response.json();
+      if (generation !== sessionOverviewGeneration || id !== selectedSessionId) return;
+      if (!overview || overview.session_id !== id || !Array.isArray(overview.requests) || !Array.isArray(overview.findings)) throw new Error('Invalid response');
+      sessionOverview = overview;
+      sessionOverviewState = { loading: false, error: '' };
+    } catch {
+      if (generation !== sessionOverviewGeneration || id !== selectedSessionId) return;
+      sessionOverviewState = { loading: false, error: 'unavailable' };
+    }
+    renderNow(['sessions']);
+    if (sessionOverviewRefreshAgain) { sessionOverviewRefreshAgain = false; loadSessionOverview(id); }
+  }
   function resetSessionMemory() {
     sessionMemoryGeneration++;
     sessionMemoryHistoryLoaded = false;
@@ -2772,6 +2804,11 @@ document.addEventListener('DOMContentLoaded', () => {
     sessionMemoryPage = { rows: [], has_earlier: false, next_cursor: '' };
     sessionMemoryState = { loading: false, loadingEarlier: false, error: '' };
     sessionTimelineAt = 0;
+    sessionOverviewGeneration++;
+    sessionOverview = null;
+    sessionOverviewState = { loading: false, error: '' };
+    sessionOverviewAt = 0;
+    sessionOverviewRefreshAgain = false;
   }
   function takeSessionReveal() {
     const reveal = sessionReveal;
@@ -2800,10 +2837,10 @@ document.addEventListener('DOMContentLoaded', () => {
     if (panel) panel.dataset.pane = sessionPane;
   }
   async function loadSelectedSession(id) {
-    if (sessionView === 'trace') {
-      try { await loadSessionTimeline(id, true); } catch { /* trace retries on activation */ }
-      renderNow(['sessions']);
-    } else await loadSessionMemory(id);
+    const history = sessionView === 'trace'
+      ? loadSessionTimeline(id, true).catch(() => {}) : loadSessionMemory(id);
+    await Promise.all([history, loadSessionOverview(id)]);
+    renderNow(['sessions']);
   }
   let sessionHeightFrame = 0;
   function scheduleSessionWorkbenchHeight() {
@@ -2937,6 +2974,11 @@ document.addEventListener('DOMContentLoaded', () => {
     if (body) body.scrollTop = body.scrollHeight;
     const latest = document.querySelector('#session-detail [data-action="session-latest"]');
     if (latest) latest.hidden = true;
+  };
+  window.showCurrentSessionStatus = function() {
+    const body = document.querySelector('#session-detail .session-detail-body');
+    if (body) body.scrollTop = 0;
+    document.querySelector('#session-detail .sd-current-head h4')?.focus({ preventScroll: true });
   };
   window.setSessionView = async function(view) {
     if (view !== 'memory' && view !== 'trace') return;
@@ -3362,6 +3404,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!receipt.resolved) throw new Error('This request is unavailable for that decision. Refresh requests and permissions.');
       showToast(`Guard decision saved: ${action}.`, 'success');
       cardNote('', '', 'attention-list', verdict === 'allow' ? 'allowed' : 'denied');
+      if (selectedSessionId) loadSessionOverview(selectedSessionId);
       fetchTelemetry({ slow: false });
     } catch (err) {
       revert();
@@ -4405,6 +4448,14 @@ document.addEventListener('DOMContentLoaded', () => {
       case 'filter-session':
         window.filterTimelineToSession(d.session);
         break;
+      case 'session-current':
+        window.filterTimelineToSession(d.session).then(() => {
+          if (selectedSessionId === d.session) window.showCurrentSessionStatus();
+        });
+        break;
+      case 'session-status':
+        window.showCurrentSessionStatus();
+        break;
       case 'filter-pids':
         e.preventDefault();
         window.filterTimelineToPids((d.pids || '').split(','), d.label);
@@ -4505,6 +4556,18 @@ document.addEventListener('DOMContentLoaded', () => {
         break;
       case 'memory-retry':
         if (selectedSessionId) loadSessionMemory(selectedSessionId);
+        break;
+      case 'session-overview-retry':
+        if (selectedSessionId) loadSessionOverview(selectedSessionId);
+        break;
+      case 'session-findings':
+        timelineSession = d.id;
+        timelinePids = null;
+        timelinePidLabel = '';
+        suppressFreshOnce = true;
+        paintScopeBar();
+        switchTab('home', { group: 'findings' });
+        fetchTelemetry();
         break;
       case 'toggle-ended-sessions':
         endedSessionsOpen[d.harness] = !endedSessionsOpen[d.harness];

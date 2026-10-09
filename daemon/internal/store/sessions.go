@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"path/filepath"
@@ -530,6 +531,26 @@ func min(a, b int) int {
 // GetSession returns one session by id, whatever its status or age.
 func (s *Store) GetSession(id string) (model.Session, bool) {
 	return s.sessionByID(id)
+}
+
+// GetSessionResult distinguishes missing identity from failed evidence reads.
+// The bounded reader does not wait on the collector's write mutex.
+func (s *Store) GetSessionResult(id string) (_ model.Session, _ bool, readErr error) {
+	defer func() { s.noteRead("session lookup", readErr) }()
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	rows, err := s.db.QueryContext(ctx, sessionSelect+` WHERE id = ?`, id)
+	if err != nil {
+		return model.Session{}, false, err
+	}
+	sessions, err := scanSessionsResult(rows)
+	if err != nil {
+		return model.Session{}, false, err
+	}
+	if len(sessions) == 0 {
+		return model.Session{}, false, nil
+	}
+	return sessions[0], true, nil
 }
 
 // pruneSessionsLocked bounds the ended-session tail: ended rows older than

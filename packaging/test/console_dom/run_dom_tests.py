@@ -240,6 +240,12 @@ def main():
         dom_allowrm = dump_dom(chrome, tmp, "?allowlistdemo")
         dom_rail = dump_dom(chrome, tmp, "?raildemo")
         dom_memory = dump_dom(chrome, tmp, "?raildemo&memorydemo")
+        dom_overview = dump_dom(chrome, tmp, "?overviewdemo", origin)
+        dom_overview_stale = dump_dom(chrome, tmp, "?overviewdemo&overviewstale", origin)
+        dom_overview_race = dump_dom(chrome, tmp, "?overviewdemo&overviewrace", origin)
+        dom_overview_focus = dump_dom(chrome, tmp, "?overviewdemo&overviewfocus", origin)
+        dom_overview_decision = dump_dom(chrome, tmp, "?overviewdemo&overviewdecision", origin)
+        dom_overview_return = dump_dom(chrome, tmp, "?overviewdemo&overviewreturn", origin)
         dom_memory_race = dump_dom(chrome, tmp, "?memoryrace")
         dom_trace_reactivation = dump_dom(chrome, tmp, "?tracereactivation")
         dom_pill = dump_dom(chrome, tmp, "?pilldemo")
@@ -427,6 +433,24 @@ def main():
               and memory_detail.index('Earlier activity') < memory_detail.index('Recent activity')
               and 'data-action="memory-earlier"' not in memory_detail,
               memory_detail[:700])
+        current = dom_overview.split('id="session-detail"', 1)[1].split('id="session-board"', 1)[0]
+        check("Home session opens its current controls, evidence, and observed coverage",
+              'Read wants access to .env' in current and 'Own session finding' in current
+              and 'Reviewed' in current and 'Model exposure' in current
+              and 'Other traffic may be uninspected.' in current
+              and current.index('Current session status') < current.index('class="session-memory"'))
+        check("Home session opens current status in the workbench viewport", 'data-overview-visible="true"' in dom_overview)
+        stale = dom_overview_stale.split('id="session-detail"', 1)[1].split('id="session-board"', 1)[0]
+        check("failed overview refresh preserves facts with disabled controls and a visible stale warning",
+              'Last known session status' in stale and 'Own session finding' in stale
+              and re.search(r'<fieldset[^>]*class="sd-request"[^>]*disabled', stale) is not None)
+        race = dom_overview_race.split('id="session-detail"', 1)[1].split('id="session-board"', 1)[0]
+        check("late session overview cannot overwrite the newly selected session",
+              re.search(r'<h3[^>]*>data-pipeline@feat/etl</h3>', race) is not None and 'Own session finding' not in race
+              and 'Read wants access to .env' not in race)
+        check("new findings preserve the focused guard control", 'data-overview-focus="true"' in dom_overview_focus)
+        check("session guard decision uses the existing handler and refreshes its result", 'data-overview-resolved="true"' in dom_overview_decision)
+        check("session findings history retains scope and returns to the same session", 'data-overview-scoped="true"' in dom_overview_return and 'data-overview-returned="true"' in dom_overview_return)
         check("late response from previous selection cannot replace Memory",
               'data-memory-race="B"' in dom_memory_race
               and re.search(r'<h3[^>]*>data-pipeline@feat/etl</h3>', dom_memory_race.split('id="session-detail"', 1)[1]) is not None
@@ -1590,7 +1614,7 @@ def main():
         m = re.match(r"tab=(\w+) bar=(\w+):(.*) \| scoped rows=(\d+) \| cleared bar=(\w+):(.*) rows=(\d+) chip=(\w+)$", scope)
         check("scope bar: View session shows the scope on Sessions; Clear hides it and Events shows every row",
               m is not None and m.group(1) == "sessions" and m.group(2) == "visible"
-              and m.group(3).startswith("Scoped to session ") and re.search(r" · \d+ events? · \d+ flags?Clear$", m.group(3))
+              and m.group(3).startswith("Scoped to session ") and re.search(r" · \d+ events? · \d+ flags?Back to sessionClear$", m.group(3))
               and m.group(5) == "hidden" and m.group(6) == "" and int(m.group(7)) > int(m.group(4))
               and m.group(8) == "hidden", f"probe={scope!r}")
         attention_badge = (re.search(r'id="badge-attention-count"[^>]*>(\d+)<', dom) or [None, ""])[1]

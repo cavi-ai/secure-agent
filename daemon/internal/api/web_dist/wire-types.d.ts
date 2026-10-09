@@ -614,15 +614,6 @@ export interface Status {
   es_service?: ESServiceSnapshot;
 }
 
-export interface PostureItem {
-  kind: string;
-  id: string;
-  title: string;
-  severity: number;
-  detail?: string;
-  ts?: string;
-}
-
 export interface AttentionItem {
   kind: string;
   priority: number;
@@ -642,6 +633,75 @@ export interface AttentionItem {
   disposition?: Disposition;
   assessment?: FindingAssessment;
   review?: ReviewRecord;
+}
+
+export interface SessionFinding {
+  id: string;
+  title: string;
+  at: string;
+  assessment: FindingAssessment;
+}
+
+export interface Diagnosis {
+  code: string;
+  severity: string;
+  summary: string;
+  evidence: string[];
+  threshold: string;
+  confidence: string;
+  estimated_reclaim_bytes?: number;
+  process_pid?: number;
+}
+
+export interface Violation {
+  metric: string;
+  actual: number;
+  limit: number;
+}
+
+export interface SessionControl {
+  mode: string;
+  state: string;
+  policy_source: string;
+  policy_scope?: string;
+  breach_since?: string;
+  pending_id?: string;
+  violations: Violation[];
+  last_action?: string;
+  last_error?: string;
+  next_action?: string;
+  next_action_at?: string;
+  applied_actions?: string[];
+  paused?: boolean;
+}
+
+export interface SessionResources {
+  key: string;
+  observed_at: string;
+  rss_bytes: number;
+  cpu_percent: number;
+  process_count: number;
+  diagnoses: Diagnosis[];
+  control?: SessionControl;
+}
+
+export interface SessionOverview {
+  session_id: string;
+  observed_at: string;
+  requests: AttentionItem[];
+  findings: SessionFinding[];
+  findings_truncated: boolean;
+  coverage: SessionCoverage | null;
+  resources: SessionResources | null;
+}
+
+export interface PostureItem {
+  kind: string;
+  id: string;
+  title: string;
+  severity: number;
+  detail?: string;
+  ts?: string;
 }
 
 export interface AttentionGroup {

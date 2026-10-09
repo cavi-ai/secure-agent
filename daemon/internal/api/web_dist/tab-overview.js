@@ -792,7 +792,7 @@ function renderSessionDetail(detail, selected, trees, emptyHTML) {
     : focused.dataset.action ? '[data-action="' + focused.dataset.action + '"]' + (focused.dataset.view ? '[data-view="' + focused.dataset.view + '"]' : '') : focused.tagName === 'H3' ? 'h3' : null);
   if (oldBody && oldKey && oldBody.getClientRects().length && detail._sessionReadingVisible !== false) {
     const bounds = oldBody.getBoundingClientRect();
-    const anchor = Array.from(oldBody.querySelectorAll('[data-row-id]')).find(row => row.getBoundingClientRect().bottom > bounds.top);
+    const anchor = Array.from(oldBody.querySelectorAll('[data-row-id]')).find(row => row.getBoundingClientRect().bottom > bounds.top && row.getBoundingClientRect().top < bounds.bottom);
     const prev = sessionReadingState.get(oldKey) || {};
     sessionReadingState.set(oldKey, { ...prev, top: oldBody.scrollTop,
       nearLatest: oldBody.scrollHeight - oldBody.clientHeight - oldBody.scrollTop < 64,
@@ -802,7 +802,8 @@ function renderSessionDetail(detail, selected, trees, emptyHTML) {
   }
   const html = selected ? sessionDetailHTML(selected, SA.sessionTimeline || [], trees) : emptyHTML;
   if (detail._sessionMarkup !== html) {
-    detail.innerHTML = html;
+    if (selected) patchSessionDetail(detail, selected.id, html);
+    else detail.innerHTML = html;
     detail._sessionMarkup = html;
     applyInlineMetrics(detail);
   }

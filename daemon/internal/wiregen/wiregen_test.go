@@ -39,3 +39,20 @@ func TestTypeScriptSkipsHiddenFieldTypes(t *testing.T) {
 		t.Fatalf("wire field missing:\n%s", ts)
 	}
 }
+
+func TestTypeScriptDistinguishesNullableFromOmittedPointers(t *testing.T) {
+	type sample struct {
+		Value string `json:"value"`
+	}
+	type wire struct {
+		Present *sample `json:"present"`
+		Count   *int    `json:"count"`
+		Omitted *sample `json:"omitted,omitempty"`
+	}
+	ts := TypeScript(wire{})
+	for _, field := range []string{"present: sample | null;", "count: number | null;", "omitted?: sample;"} {
+		if !strings.Contains(ts, field) {
+			t.Fatalf("wire nullability missing %q:\n%s", field, ts)
+		}
+	}
+}

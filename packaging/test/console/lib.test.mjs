@@ -1447,7 +1447,9 @@ test('openDrawer back: without back the button is absent', () => {
 test('scopeBarHTML: session scope names the session and counts; pid scope names the family; unscoped is empty', () => {
   const s = ctx.scopeBarHTML({ session: '7f3a9c21-4b2e-4a1d-9c55-2e8f0d1a3b77', events: 12, flags: 1 });
   assert.match(s, /^<span>Scoped to session <b>[^<]+<\/b> · 12 events · 1 flag<\/span>/);
-  assert.match(s, /data-action="clear-scope">Clear<\/button>$/);
+  assert.match(s, /data-action="filter-session" data-session="7f3a9c21-4b2e-4a1d-9c55-2e8f0d1a3b77">Back to session<\/button>/);
+  assert.match(s, /data-action="clear-scope">Clear<\/button>/);
+  assert.match(ctx.scopeBarHTML({ session: '\"><script>', events: 0, flags: 0 }), /data-session="&quot;&gt;&lt;script&gt;"/);
   const p = ctx.scopeBarHTML({ pids: [5821, 5822], pidLabel: 'api-service <main>', events: 1, flags: 0 });
   assert.match(p, /^<span>Scoped to <b>api-service &lt;main&gt;<\/b> \(2 processes\) · 1 event · 0 flags<\/span>/);
   assert.equal(ctx.scopeBarHTML({ session: null, pids: null, events: 3, flags: 3 }), '');
