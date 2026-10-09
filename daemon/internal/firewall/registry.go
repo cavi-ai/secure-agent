@@ -115,6 +115,8 @@ const maxIngestLineBytes = 1 << 20 // 1 MiB
 // an error instead of an empty set — persisting an empty set would silently
 // purge every previously registered fingerprint and turn the highest-precision
 // detection layer off while the status page says it's up.
+// A scan error rejects the entire result, even if earlier lines or other sources
+// yielded fingerprints: a partial replacement would drop unread secrets.
 func Ingest(sources []string, salt []byte) ([]config.Fingerprint, error) {
 	var out []config.Fingerprint
 	var failed []string
@@ -157,10 +159,11 @@ func Ingest(sources []string, salt []byte) ([]config.Fingerprint, error) {
 			// lives in `line`/`val` for the duration of this iteration; nothing
 			// persists it (the fingerprint carries HMAC, type, length, label).
 		}
-		if err := sc.Err(); err != nil {
-			failed = append(failed, src+" (scan error: "+err.Error()+")")
-		}
+		scanErr := sc.Err()
 		f.Close()
+		if scanErr != nil {
+			return nil, fmt.Errorf("ingest source %s: scan error: %w", src, scanErr)
+		}
 	}
 	if len(out) == 0 && len(failed) > 0 {
 		return nil, fmt.Errorf("ingest produced zero fingerprints and every source failed (%s); refusing to return an empty set that would purge the registered fingerprints", strings.Join(failed, ", "))
