@@ -2,13 +2,14 @@ package firewall
 
 import (
 	"encoding/json"
-	"github.com/cavi-ai/secure-agent/daemon/internal/safefile"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
 	"sync"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/config"
+	"github.com/cavi-ai/secure-agent/daemon/internal/safefile"
 )
 
 // FingerprintStore persists the user's registered secret fingerprints (HMAC
@@ -24,21 +25,34 @@ func NewFingerprintStore(path string) *FingerprintStore {
 	return &FingerprintStore{path: path}
 }
 
-// Load returns the persisted fingerprints; a missing or unreadable file yields
-// an empty slice, never an error.
+// Load returns persisted fingerprints, warning and yielding none on failure.
+// Live refreshes use LoadStrict to retain the active registry on failure.
 func (s *FingerprintStore) Load() []config.Fingerprint {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	data, err := os.ReadFile(s.path)
+	out, err := s.LoadStrict()
 	if err != nil {
-		return nil
-	}
-	var out []config.Fingerprint
-	if err := json.Unmarshal(data, &out); err != nil {
-		log.Printf("firewall: WARNING: fingerprint file %s is corrupt (%v); persisted secret fingerprints are NOT loaded until it is fixed", s.path, err)
+		log.Printf("firewall: WARNING: %v; persisted secret fingerprints are NOT loaded until it is fixed", err)
 		return nil
 	}
 	return out
+}
+
+// LoadStrict distinguishes missing state from a failed read or decode. JSON
+// null remains a valid empty registry because Save(nil) historically writes it.
+func (s *FingerprintStore) LoadStrict() ([]config.Fingerprint, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	data, err := os.ReadFile(s.path)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read firewall fingerprints: %w", err)
+	}
+	var out []config.Fingerprint
+	if err := json.Unmarshal(data, &out); err != nil {
+		return nil, fmt.Errorf("decode firewall fingerprints %s: %w", s.path, err)
+	}
+	return out, nil
 }
 
 // Save writes the fingerprints (0600). The values themselves are not present —

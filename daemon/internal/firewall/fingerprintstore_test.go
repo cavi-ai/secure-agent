@@ -7,6 +7,21 @@ import (
 	"github.com/cavi-ai/secure-agent/daemon/internal/config"
 )
 
+func TestFingerprintStoreStrictEmptyCompatibility(t *testing.T) {
+	s := NewFingerprintStore(filepath.Join(t.TempDir(), "fingerprints.json"))
+	if got, err := s.LoadStrict(); err != nil || len(got) != 0 {
+		t.Fatalf("missing registry: %v, %v", got, err)
+	}
+	for _, fps := range [][]config.Fingerprint{nil, {}} {
+		if err := s.Save(fps); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := s.LoadStrict(); err != nil || len(got) != 0 {
+			t.Fatalf("empty registry: %v, %v", got, err)
+		}
+	}
+}
+
 func TestFingerprintStorePersists(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "sub", "firewall-fingerprints.json")
 	s := NewFingerprintStore(path)

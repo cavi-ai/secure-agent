@@ -86,22 +86,42 @@ func setupFirewall(cfg config.Config) *firewallStack {
 	// the mode and fingerprint overrides, so a source survives a restart without
 	// editing the config overlay.
 	srcStore := firewall.NewSourceStore(filepath.Join(stateDir, "firewall-sources.json"))
-	reload := func() error {
-		combined := append(append([]config.Fingerprint{}, cfg.Firewall.Registry.Fingerprints...), fpStore.Load()...)
+	// Serialize persistence and application so reloads and ingests cannot leave
+	// the active registry behind a newer successfully persisted snapshot.
+	var fingerprintMu sync.Mutex
+	applyFingerprints := func(fps []config.Fingerprint) {
+		combined := append(append([]config.Fingerprint{}, cfg.Firewall.Registry.Fingerprints...), fps...)
 		if fwEngine != nil {
 			fwEngine.SetFingerprints(combined)
 		}
+	}
+	reload := func() error {
+		fingerprintMu.Lock()
+		defer fingerprintMu.Unlock()
+		fps, err := fpStore.LoadStrict()
+		if err != nil {
+			return err
+		}
+		applyFingerprints(fps)
 		return nil
 	}
-	_ = reload() // apply persisted fingerprints on startup
+	if err := reload(); err != nil {
+		log.Printf("WARNING: firewall fingerprint startup reload failed: %v", err)
+	}
 
 	// ingest scans the configured secret sources, registers their HMAC
 	// fingerprints, and applies them live. Triggered by `secure-agent fingerprint`.
 	ingest := func() ([]string, error) {
+		fingerprintMu.Lock()
+		defer fingerprintMu.Unlock()
 		// Effective sources are computed at call time: the config defaults plus
 		// any user-added sources (expanded here — they are stored raw).
+		userSources, err := srcStore.LoadStrict()
+		if err != nil {
+			return nil, err
+		}
 		sources := append([]string{}, cfg.Firewall.Registry.IngestSources...)
-		for _, s := range srcStore.Load() {
+		for _, s := range userSources {
 			sources = append(sources, config.ExpandPath(s))
 		}
 		fps, err := firewall.Ingest(sources, fwSalt)
@@ -111,7 +131,7 @@ func setupFirewall(cfg config.Config) *firewallStack {
 		if err := fpStore.Save(fps); err != nil {
 			return nil, err
 		}
-		_ = reload()
+		applyFingerprints(fps)
 		labels := make([]string, 0, len(fps))
 		for _, fp := range fps {
 			labels = append(labels, fp.Label)

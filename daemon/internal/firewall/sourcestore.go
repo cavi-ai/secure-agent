@@ -29,14 +29,20 @@ func NewSourceStore(path string) *SourceStore {
 // Load returns the persisted sources. Failed loads are warned and yield no
 // sources; edits must successfully read the existing policy.
 func (s *SourceStore) Load() []string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	out, err := s.readLocked()
+	out, err := s.LoadStrict()
 	if err != nil {
 		log.Printf("firewall: WARNING: %v; user-added sources are NOT loaded until it is fixed", err)
 		return nil
 	}
 	return out
+}
+
+// LoadStrict returns read and decode errors so ingestion cannot replace the
+// fingerprint registry using an incomplete source policy.
+func (s *SourceStore) LoadStrict() ([]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.readLocked()
 }
 
 func (s *SourceStore) readLocked() ([]string, error) {
