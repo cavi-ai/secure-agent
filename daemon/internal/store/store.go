@@ -912,18 +912,28 @@ func (s *Store) BumpFlagRepeat(id string, at time.Time) bool {
 }
 
 func (s *Store) GetFlag(id string) (model.Flag, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.getFlagLocked(id)
+	fl, found, _ := s.GetFlagResult(id)
+	return fl, found
 }
 
-// GetFlagResult distinguishes a missing flag from a failed or malformed
-// read, using the same validation as the flag list.
-func (s *Store) GetFlagResult(id string) (fl model.Flag, found bool, readErr error) {
-	defer func() { s.noteRead("flag detail", readErr) }()
+// GetFlagResult distinguishes a missing row from an unavailable or malformed
+// detail, using the same checked decoder as flag history.
+func (s *Store) GetFlagResult(id string) (model.Flag, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	rows, err := s.db.Query(`SELECT id, rule, severity, ts, pid, agent, session_id, workspace, evidence, acknowledged, ack_reason, process, repeats, last_seen FROM flags WHERE id = ?`, id)
+	return s.getFlagResultLocked(id)
+}
+
+func (s *Store) getFlagLocked(id string) (model.Flag, bool) {
+	fl, found, _ := s.getFlagResultLocked(id)
+	return fl, found
+}
+
+const flagSelect = `SELECT id, rule, severity, ts, pid, agent, session_id, workspace, evidence, acknowledged, ack_reason, process, repeats, last_seen FROM flags`
+
+func (s *Store) getFlagResultLocked(id string) (flag model.Flag, found bool, readErr error) {
+	defer func() { s.noteRead("flag detail", readErr) }()
+	rows, err := s.db.Query(flagSelect+" WHERE id = ?", id)
 	if err != nil {
 		return model.Flag{}, false, err
 	}
@@ -935,28 +945,6 @@ func (s *Store) GetFlagResult(id string) (fl model.Flag, found bool, readErr err
 		return model.Flag{}, false, nil
 	}
 	return flags[0], true, nil
-}
-
-func (s *Store) getFlagLocked(id string) (model.Flag, bool) {
-	row := s.db.QueryRow(
-		`SELECT id, rule, severity, ts, pid, agent, session_id, workspace, evidence, acknowledged, ack_reason, process, repeats, last_seen FROM flags WHERE id = ?`, id)
-	var fl model.Flag
-	var tsStr, evStr string
-	var sessionID, workspace sql.NullString
-	var ack, ackReason, proc, lastSeen sql.NullString
-	var repeats sql.NullInt64
-	if err := row.Scan(&fl.ID, &fl.Rule, &fl.Severity, &tsStr, &fl.PID, &fl.Agent, &sessionID, &workspace, &evStr, &ack, &ackReason, &proc, &repeats, &lastSeen); err != nil {
-		return model.Flag{}, false
-	}
-	setFlagRepeats(&fl, repeats, lastSeen)
-	fl.SessionID = sessionID.String
-	fl.Workspace = workspace.String
-	fl.Acknowledged = ack.String != ""
-	fl.AckReason = ackReason.String
-	fl.Process = decodeFlagProcess(proc.String)
-	fl.TS, _ = time.Parse(time.RFC3339Nano, tsStr)
-	_ = json.Unmarshal([]byte(evStr), &fl.Evidence)
-	return fl, true
 }
 
 // GetFlagWithAdvisor is GetFlag with its advisor verdict joined — the shape
@@ -978,7 +966,7 @@ func (s *Store) GetFlagWithAdvisor(id string) (model.Flag, bool) {
 // flagQuery builds QueryFlags' statement. Its ORDER BY matches idx_flags_time,
 // so a LIMIT walks the index instead of sorting every row.
 func flagQuery(f FlagFilter) (string, []any) {
-	q := `SELECT id, rule, severity, ts, pid, agent, session_id, workspace, evidence, acknowledged, ack_reason, process, repeats, last_seen FROM flags WHERE 1=1`
+	q := flagSelect + " WHERE 1=1"
 	var args []any
 	if f.Agent != "" {
 		q += " AND agent = ?"

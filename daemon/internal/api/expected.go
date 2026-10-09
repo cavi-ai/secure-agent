@@ -80,7 +80,11 @@ func (a *API) handleExpected(w http.ResponseWriter, r *http.Request) {
 			a.expectFlags(w, req.FlagIDs)
 			return
 		}
-		f, ok := a.store.GetFlag(req.FlagID)
+		f, ok, err := a.store.GetFlagResult(req.FlagID)
+		if err != nil {
+			http.Error(w, "flag data unavailable", http.StatusServiceUnavailable)
+			return
+		}
 		if !ok {
 			http.Error(w, "unknown flag", http.StatusNotFound)
 			return
@@ -160,7 +164,12 @@ func (a *API) expectFlags(w http.ResponseWriter, ids []string) {
 	now := time.Now().UTC()
 	var pairs []correlate.ExpectedPattern
 	for _, id := range ids {
-		if f, ok := a.store.GetFlag(id); ok {
+		f, found, err := a.store.GetFlagResult(id)
+		if err != nil {
+			http.Error(w, "flag data unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		if found {
 			for _, p := range expectedPairs(f) {
 				p.CreatedAt = now
 				pairs = append(pairs, p)

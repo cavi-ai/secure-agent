@@ -16,18 +16,14 @@ const maxFindingReviews = 10000
 // Promotion preserves source links; colliding contexts stay isolated rather
 // than inheriting decisions. Earlier receipts cannot close the new revision.
 func rekeyFindingReviewsTx(tx *sql.Tx, oldID, newID string) error {
-	rows, err := tx.Query(`SELECT record_json FROM finding_reviews WHERE session_id=?`, oldID)
+	rows, err := tx.Query(`SELECT id,state,record_json FROM finding_reviews WHERE session_id=?`, oldID)
 	if err != nil {
 		return err
 	}
 	var records []model.ReviewRecord
 	for rows.Next() {
-		var raw string
-		if err = rows.Scan(&raw); err != nil {
-			break
-		}
 		var r model.ReviewRecord
-		if err = json.Unmarshal([]byte(raw), &r); err != nil {
+		if r, err = reviewFromRow(rows); err != nil {
 			break
 		}
 		records = append(records, r)
@@ -118,14 +114,30 @@ func reliableReviewSession(tx *sql.Tx, id string) (bool, error) {
 	return id != "" && (confidence == model.ConfHook || confidence == model.ConfTranscript || (confidence == model.ConfProcessTree && started != "")), err
 }
 
-func reviewFromRow(row *sql.Row) (r model.ReviewRecord, err error) {
-	var raw string
-	if err = row.Scan(&raw); err != nil {
-		return r, err
+// Review identity and workflow state must agree with the indexed row before
+// its payload can drive coverage, a decision or a session promotion.
+func reviewFromRow(row interface{ Scan(...any) error }) (model.ReviewRecord, error) {
+	var id, state, raw string
+	if err := row.Scan(&id, &state, &raw); err != nil {
+		return model.ReviewRecord{}, err
 	}
-	err = json.Unmarshal([]byte(raw), &r)
+	var r model.ReviewRecord
+	if err := json.Unmarshal([]byte(raw), &r); err != nil {
+		return model.ReviewRecord{}, err
+	}
+	if id == "" || r.ID != id || r.Revision < 1 {
+		return model.ReviewRecord{}, fmt.Errorf("invalid finding review identity or revision")
+	}
+	switch state {
+	case "unreviewed", "reviewed", "closed_reported":
+	default:
+		return model.ReviewRecord{}, fmt.Errorf("invalid finding review state")
+	}
+	if r.ReviewState != state {
+		return model.ReviewRecord{}, fmt.Errorf("finding review state mismatch")
+	}
 	r.Assessment.DetectorSeverity = r.Severity
-	return
+	return r, nil
 }
 
 func saveReview(tx *sql.Tx, r model.ReviewRecord) error {
@@ -222,12 +234,12 @@ func observeReviewTx(tx *sql.Tx, f model.Flag, a model.FindingAssessment) (r mod
 	}
 	// An existing source must never be silently moved into a different
 	// decision context by an update. Identity promotion has its own transaction.
-	r, err = reviewFromRow(tx.QueryRow(`SELECT record_json FROM finding_reviews WHERE context_key=?`, id))
+	r, err = reviewFromRow(tx.QueryRow(`SELECT id,state,record_json FROM finding_reviews WHERE context_key=?`, id))
 	if err == nil {
 		id = r.ID
 	}
 	if priorID != "" && priorID != id {
-		prior, e := reviewFromRow(tx.QueryRow(`SELECT record_json FROM finding_reviews WHERE id=?`, priorID))
+		prior, e := reviewFromRow(tx.QueryRow(`SELECT id,state,record_json FROM finding_reviews WHERE id=?`, priorID))
 		if e != nil {
 			return r, e
 		}
@@ -319,7 +331,7 @@ func (s *Store) GetFindingReview(id string) (r model.ReviewRecord, ok bool, err 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	defer func() { s.noteRead("finding reviews", err) }()
-	r, err = reviewFromRow(s.db.QueryRow(`SELECT record_json FROM finding_reviews WHERE id=?`, id))
+	r, err = reviewFromRow(s.db.QueryRow(`SELECT id,state,record_json FROM finding_reviews WHERE id=?`, id))
 	if errors.Is(err, sql.ErrNoRows) {
 		return r, false, nil
 	}
@@ -360,7 +372,10 @@ func (s *Store) reviewLinksLocked(r *model.ReviewRecord) error {
 		r.AvailableScopes = []model.ScopeChoice{{Kind: "once"}}
 		complete := true
 		for _, id := range r.SourceIDs {
-			f, ok := s.getFlagLocked(id)
+			f, ok, readErr := s.getFlagResultLocked(id)
+			if readErr != nil {
+				return readErr
+			}
 			coordinates, e := model.ReadConnectScopes(f)
 			if !ok || e != nil {
 				complete = false
@@ -411,24 +426,24 @@ func (s *Store) ListFindingReviews(after string, limit int) (page ReviewPage, er
 func (s *Store) ListFindingReviewsState(after string, limit int, state string) (page ReviewPage, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	defer func() { s.noteRead("finding reviews", err) }()
+	defer func() {
+		s.noteRead("finding reviews", err)
+		if err != nil {
+			page = ReviewPage{Reviews: []model.ReviewRecord{}, Degraded: true}
+		}
+	}()
 	limit = min(max(limit, 1), 100)
 	page.Reviews = []model.ReviewRecord{}
-	rows, err := s.db.Query(`SELECT record_json FROM finding_reviews WHERE id>? AND (?='' OR state=?) ORDER BY id LIMIT ?`, after, state, state, limit+1)
+	rows, err := s.db.Query(`SELECT id,state,record_json FROM finding_reviews WHERE id>? AND (?='' OR state=?) ORDER BY id LIMIT ?`, after, state, state, limit+1)
 	if err != nil {
 		page.Degraded = true
 		return
 	}
 	for rows.Next() {
-		var raw string
-		if err = rows.Scan(&raw); err != nil {
-			break
-		}
 		var r model.ReviewRecord
-		if err = json.Unmarshal([]byte(raw), &r); err != nil {
+		if r, err = reviewFromRow(rows); err != nil {
 			break
 		}
-		r.Assessment.DetectorSeverity = r.Severity
 		page.Reviews = append(page.Reviews, r)
 	}
 	if err == nil {
@@ -465,7 +480,11 @@ func (s *Store) FindingReviewID(flagID string) (id string, readErr error) {
 		return "", nil
 	}
 	if err == nil {
-		if f, ok := s.getFlagLocked(flagID); !ok || model.ReviewEvidenceKey(f, model.AssessFinding(f)) != key {
+		f, found, flagErr := s.getFlagResultLocked(flagID)
+		if flagErr != nil {
+			return "", flagErr
+		}
+		if !found || model.ReviewEvidenceKey(f, model.AssessFinding(f)) != key {
 			return "", nil
 		}
 	}
@@ -489,7 +508,7 @@ func (s *Store) DecideFindingReview(req model.ReviewDecisionRequest) (receipt mo
 		return
 	}
 	defer tx.Rollback()
-	r, err := reviewFromRow(tx.QueryRow(`SELECT record_json FROM finding_reviews WHERE id=?`, req.ID))
+	r, err := reviewFromRow(tx.QueryRow(`SELECT id,state,record_json FROM finding_reviews WHERE id=?`, req.ID))
 	if errors.Is(err, sql.ErrNoRows) {
 		return receipt, ErrReviewMissing
 	}
@@ -626,7 +645,7 @@ func (s *Store) syncLegacyReviewsLocked(ids []string) {
 		if err := s.db.QueryRow(`SELECT review_id FROM finding_review_members WHERE flag_id=?`, id).Scan(&reviewID); err != nil {
 			continue
 		}
-		r, err := reviewFromRow(s.db.QueryRow(`SELECT record_json FROM finding_reviews WHERE id=?`, reviewID))
+		r, err := reviewFromRow(s.db.QueryRow(`SELECT id,state,record_json FROM finding_reviews WHERE id=?`, reviewID))
 		if err != nil || r.Decision != nil {
 			continue
 		}
