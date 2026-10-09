@@ -84,13 +84,22 @@ type attentionSession struct {
 // attentionFlags is the one flag query behind the queue: unacknowledged
 // flags of severity 3 (critical) raised in the last 24h.
 func (a *API) attentionFlags() []model.Flag {
+	flags, _ := a.attentionFlagsResult()
+	return flags
+}
+
+func (a *API) attentionFlagsResult() ([]model.Flag, error) {
+	flags, err := a.store.QueryFlagsResult(store.FlagFilter{MinSeverity: 3, Limit: 25, Unacted: true})
+	if err != nil {
+		return nil, err
+	}
 	var out []model.Flag
-	for _, f := range a.store.QueryFlags(store.FlagFilter{MinSeverity: 3, Limit: 25, Unacted: true}) {
+	for _, f := range flags {
 		if isRecent(f.TS, 24*time.Hour) {
 			out = append(out, f)
 		}
 	}
-	return out
+	return out, nil
 }
 
 // machineAttentionItems are the signals no agent owns: dead collectors, and
@@ -157,6 +166,14 @@ func (a *API) machineAttentionItems(st Status) []PostureItem {
 // pass. Signals without a PID join a live session only when the agent name
 // identifies exactly one; ambiguous work stays in an agent-level group.
 func (a *API) attentionQueue(st Status, patterns []model.Pattern, routine []model.RoutineGroup) ([]PostureItem, []AttentionGroup) {
+	items, groups, _ := a.attentionQueueWithReadHealth(st, patterns, routine)
+	return items, groups
+}
+
+// Keep failures from this calculation even if a later, narrower query succeeds.
+// Known decisions remain actionable while coverage reports incomplete reads.
+func (a *API) attentionQueueWithReadHealth(st Status, patterns []model.Pattern, routine []model.RoutineGroup) ([]PostureItem, []AttentionGroup, []string) {
+	var failedReads []string
 	var sessions []attentionSession
 	if a.resources != nil {
 		for _, s := range a.resources().Sessions {
@@ -306,7 +323,11 @@ func (a *API) attentionQueue(st Status, patterns []model.Pattern, routine []mode
 			add(g, PostureItem{Kind: "review", ID: r.ID, Title: humanFlagTitle(r.Context.Rule), Severity: severity, Detail: r.Assessment.Reason, Timestamp: r.LastSeen.UTC().Format(time.RFC3339)}, AttentionItem{Kind: "review", ID: r.ID, Priority: 1 + severity/3, Title: humanFlagTitle(r.Context.Rule), Detail: r.Assessment.Reason, Count: r.Count, Assessment: &r.Assessment, Review: &r})
 		}
 	}
-	for _, f := range a.attentionFlags() {
+	flags, flagErr := a.attentionFlagsResult()
+	if flagErr != nil {
+		failedReads = append(failedReads, "flags")
+	}
+	for _, f := range flags {
 		if f.Rule == readConnectRule && reviewErr == nil {
 			if id, err := a.store.FindingReviewID(f.ID); err == nil && id != "" {
 				if coveredReviews[id] {
@@ -430,7 +451,11 @@ func (a *API) attentionQueue(st Status, patterns []model.Pattern, routine []mode
 
 	// Open incidents of high or critical risk; lower-risk ones stay in the
 	// findings history.
-	for _, inc := range a.store.RecentIncidents(25) {
+	incidents, incidentErr := a.store.RecentIncidentsResult(25)
+	if incidentErr != nil {
+		failedReads = append(failedReads, "incidents")
+	}
+	for _, inc := range incidents {
 		if reviewErr == nil {
 			if id, err := a.store.FindingReviewID(inc.FlagID); err == nil && id != "" {
 				if r, ok, err := a.store.GetFindingReview(id); err == nil && ok && r.Context.Attribution == "stored-session" {
@@ -438,7 +463,11 @@ func (a *API) attentionQueue(st Status, patterns []model.Pattern, routine []mode
 				}
 			}
 		}
-		wf, _ := a.store.IncidentStatus(inc.ID)
+		wf, found, err := a.store.IncidentStatusResult(inc.ID)
+		if err != nil || !found {
+			failedReads = append(failedReads, "incident workflows")
+			continue
+		}
 		status := firstNonEmpty([]string{wf.Status, "open"})
 		critical := inc.Risk == model.RiskCritical
 		high := inc.Risk == model.RiskHigh
@@ -520,7 +549,7 @@ func (a *API) attentionQueue(st Status, patterns []model.Pattern, routine []mode
 		}
 		return out[i].Label < out[j].Label
 	})
-	return items, out
+	return items, out, failedReads
 }
 
 func cwdBase(cwd string) string {
