@@ -44,24 +44,26 @@ type ReportLine struct {
 // its timeline. It carries names, paths, hosts, model ids, rule ids and
 // counts — never content.
 type SessionReport struct {
-	Session    model.Session `json:"session"`
-	DurationS  int64         `json:"duration_s"` // started → ended, or → last seen
-	Events     int           `json:"events"`     // events aggregated (at most reportEventCap)
-	Turns      int           `json:"turns"`
-	ToolCalls  int           `json:"tool_calls"`
-	ModelCalls int           `json:"model_calls"`
-	TokensIn   int64         `json:"tokens_in"`
-	TokensOut  int64         `json:"tokens_out"`
-	CostUSD    float64       `json:"cost_usd"`
-	Unpriced   int           `json:"unpriced_calls"`
-	Tools      []ReportCount `json:"tools"`       // by count desc
-	Models     []ReportModel `json:"models"`      // by cost desc
-	Files      []ReportCount `json:"files"`       // file open/write/delete by path, count desc, at most ReportTopN
-	Hosts      []ReportCount `json:"hosts"`       // connections by remote host, count desc, at most ReportTopN
-	Guard      []ReportLine  `json:"guard"`       // guard prompts and resolutions
-	SecretHits []ReportLine  `json:"secret_hits"` // label = rule id, status = detection layer
-	Flags      []model.Flag  `json:"flags"`
-	Timeline   []ReportLine  `json:"timeline"` // oldest first, at most reportTimelineCap
+	Interventions          []model.InterventionReceipt `json:"interventions"`
+	InterventionsAvailable bool                        `json:"interventions_available"`
+	Session                model.Session               `json:"session"`
+	DurationS              int64                       `json:"duration_s"` // started → ended, or → last seen
+	Events                 int                         `json:"events"`     // events aggregated (at most reportEventCap)
+	Turns                  int                         `json:"turns"`
+	ToolCalls              int                         `json:"tool_calls"`
+	ModelCalls             int                         `json:"model_calls"`
+	TokensIn               int64                       `json:"tokens_in"`
+	TokensOut              int64                       `json:"tokens_out"`
+	CostUSD                float64                     `json:"cost_usd"`
+	Unpriced               int                         `json:"unpriced_calls"`
+	Tools                  []ReportCount               `json:"tools"`       // by count desc
+	Models                 []ReportModel               `json:"models"`      // by cost desc
+	Files                  []ReportCount               `json:"files"`       // file open/write/delete by path, count desc, at most ReportTopN
+	Hosts                  []ReportCount               `json:"hosts"`       // connections by remote host, count desc, at most ReportTopN
+	Guard                  []ReportLine                `json:"guard"`       // guard prompts and resolutions
+	SecretHits             []ReportLine                `json:"secret_hits"` // label = rule id, status = detection layer
+	Flags                  []model.Flag                `json:"flags"`
+	Timeline               []ReportLine                `json:"timeline"` // oldest first, at most reportTimelineCap
 }
 
 const (
@@ -186,6 +188,9 @@ func (s *Store) SessionReport(id string) (SessionReport, bool) {
 	rep.Files = topCounts(files, ReportTopN)
 	rep.Hosts = topCounts(hosts, ReportTopN)
 	rep.Flags = s.QueryFlags(FlagFilter{SessionID: id, Limit: reportFlagLimit})
+	var interventionErr error
+	rep.Interventions, interventionErr = s.RecentInterventions(id, 200)
+	rep.InterventionsAvailable = interventionErr == nil
 	if rep.Flags == nil {
 		rep.Flags = []model.Flag{}
 	}

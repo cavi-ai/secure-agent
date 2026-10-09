@@ -119,6 +119,7 @@ func (s *Store) rekeySession(oldID, newID string, provisional *model.Session) (e
 		{`UPDATE flags SET session_id=? WHERE session_id=?`, []any{newID, oldID}},
 		{`UPDATE guard_decisions SET session_id=? WHERE session_id=?`, []any{newID, oldID}},
 		{`UPDATE resource_episodes SET session_id=?,episode_json=json_set(episode_json,'$.session_id',?) WHERE session_id=?`, []any{newID, newID, oldID}},
+		{`UPDATE interventions SET session_id=?,receipt_json=json_set(receipt_json,'$.session_id',?) WHERE session_id=?`, []any{newID, newID, oldID}},
 		{`UPDATE incidents SET session_id=?,report_json=json_set(report_json,'$.session_id',?) WHERE session_id=?`, []any{newID, newID, oldID}},
 		{`UPDATE egress_episodes SET session_ids_json=(SELECT json_group_array(sid) FROM (SELECT CASE WHEN value=? THEN ? ELSE value END AS sid,MIN(CAST(key AS INTEGER)) AS pos FROM json_each(session_ids_json) GROUP BY sid ORDER BY pos)) WHERE EXISTS(SELECT 1 FROM json_each(session_ids_json) WHERE value=?)`, []any{oldID, newID, oldID}},
 	} {

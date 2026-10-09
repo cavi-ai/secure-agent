@@ -180,7 +180,19 @@ function resourceControlHTML(f) {
     </span>` : '';
   const resume = c.paused ? `<button type="button" class="btn btn-primary btn-sm" data-action="resource-control" data-session="${escapeHTML(f.key)}" data-decision="resume">Resume session</button>` : '';
   const error = c.last_error ? `<span class="resource-control-error">Intervention failed: ${escapeHTML(c.last_error)}</span>` : '';
-  return approval + resume + error;
+  return approval + resume + error + (c.result ? resourceOutcomeHTML(c.result) : '');
+}
+
+function resourceOutcomeHTML(r) {
+  const application = {requested:'Requested',applied:'Applied',partial:'Partially applied',failed:'Failed',cancelled:'Cancelled',unknown:'Application unknown'}[r.status] || 'Application unknown';
+  const verification = r.verification === 'verified' && r.verified_by === 'captured-family-absent'
+    ? 'Captured family absent' : r.verification === 'observed' ? 'Resource samples observed'
+      : r.verification === 'pending' ? 'Observing up to 3 samples / 15 seconds' : 'Verification unknown';
+  const samples = [r.before, ...(r.after || [])].filter(Boolean).map((s,i) => {
+    const metrics = [s.rss_bytes != null ? `Memory ${fmtRSS(s.rss_bytes) || '0 B'}` : 'Family memory unavailable', s.cpu_percent != null ? `CPU ${fmtCPU(s.cpu_percent) || '0%'}` : '', s.host_capacity ? `Host ${s.host_capacity}` : '', s.host_available_bytes != null ? `Available ${fmtRSS(s.host_available_bytes) || '0 B'}` : '', s.host_cpu_percent != null ? `Host CPU ${s.host_cpu_percent}%` : ''].filter(Boolean).join(' · ');
+    return `<li>${i ? `After ${i}` : 'Before'} · ${escapeHTML(metrics)}</li>`;
+  }).join('');
+  return `<details class="resource-action-result"><summary>${escapeHTML(String(r.kind || 'intervention').replaceAll('_',' '))} · ${escapeHTML(application)} · ${escapeHTML(verification)}</summary>${r.error ? `<p>${escapeHTML(r.error)}</p>` : ''}<ul>${samples}${(r.limits || []).map(l=>`<li>${escapeHTML(l)}</li>`).join('')}</ul></details>`;
 }
 
 function resourceViewFamilyHTML(f) {
@@ -346,6 +358,8 @@ function renderResourceMissionControl() {
     rowsOf = g => resourceFamilyGroupRows(g, sessions, flagged, now, SA.familyDupOpen);
   }
   parts.push({ key: 'policy', html: resourcePolicyLineHTML(snapshot.control || {}) });
+  const results = (snapshot.interventions || []).slice(-5).reverse();
+  if (results.length) parts.push({key:'results',html:`<section aria-label="Recent intervention results"><h3 class="family-section-head">Recent intervention results</h3>${results.map(resourceOutcomeHTML).join('')}</section>`});
   patchList(container, parts, { key: p => p.key, html: p => p.html, hash: p => p.shell || p.html });
   const rowOpts = { key: r => r.key, html: r => r.html };
   for (const p of parts) {

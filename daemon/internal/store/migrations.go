@@ -161,6 +161,8 @@ func initializeSchema(db *sql.DB) error {
 		worktreeReposSchema,
 		cleanupLogSchema,
 		findingReviewsSchema,
+		interventionsSchema,
+		`CREATE INDEX IF NOT EXISTS idx_interventions_session ON interventions(session_id,requested_at);`,
 		agentAsksSchema,
 		scanCacheSchema,
 	}
