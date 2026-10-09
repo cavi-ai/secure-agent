@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"regexp"
 	"sort"
@@ -101,6 +102,24 @@ func (o ollamaInfo) supportsChat(name string) bool {
 	return false
 }
 
+// Preserve ordinary chat for models explicitly lacking tool capability.
+// Older servers omit capabilities; let their compatible endpoint decide.
+func (o ollamaInfo) supportsTools(name string) bool {
+	capabilities, ok := o.Capabilities[name]
+	if !ok {
+		capabilities, ok = o.Capabilities[name+":latest"]
+	}
+	if !ok || len(capabilities) == 0 {
+		return true
+	}
+	for _, capability := range capabilities {
+		if capability == "tools" {
+			return true
+		}
+	}
+	return false
+}
+
 // versionAtLeast compares dotted release numbers; an unknown version
 // passes (the harness reports its own error).
 func versionAtLeast(have, want string) bool {
@@ -129,8 +148,10 @@ func versionParts(v string) [3]int {
 
 // chatMessage is one OpenAI-compatible chat message.
 type chatMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role       string         `json:"role"`
+	Content    string         `json:"content"`
+	ToolCalls  []chatToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string         `json:"tool_call_id,omitempty"`
 }
 
 // chatTimeout bounds one reply: a local model may load cold and think.
@@ -144,7 +165,37 @@ var thinkRE = regexp.MustCompile(`(?s)<think>.*?</think>`)
 // chat sends msgs to Ollama's OpenAI-compatible endpoint and returns the
 // answer with any reasoning trace removed.
 func chat(ctx context.Context, client *http.Client, endpoint, modelName string, msgs []chatMessage) (string, *model.SysAgentUsage, error) {
-	body, _ := json.Marshal(map[string]any{
+	text, calls, usage, err := chatRound(ctx, client, endpoint, modelName, msgs, nil)
+	if err == nil && (text == "" || len(calls) > 0) {
+		return "", nil, fmt.Errorf("the model returned no final answer")
+	}
+	return text, usage, err
+}
+
+func chatRound(ctx context.Context, client *http.Client, endpoint, modelName string, msgs []chatMessage, tools []chatTool) (string, []chatToolCall, *model.SysAgentUsage, error) {
+	body, err := marshalChatRequest(modelName, msgs, tools)
+	if err != nil {
+		return "", nil, nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint+"/v1/chat/completions", bytes.NewReader(body))
+	if err != nil {
+		return "", nil, nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	started := time.Now()
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", nil, nil, fmt.Errorf("the local model request failed or timed out")
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", nil, nil, fmt.Errorf("the model server answered HTTP %d", resp.StatusCode)
+	}
+	return decodeChatResponse(resp.Body, modelName, started)
+}
+
+func marshalChatRequest(modelName string, msgs []chatMessage, tools []chatTool) ([]byte, error) {
+	request := map[string]any{
 		"model":       modelName,
 		"messages":    msgs,
 		"temperature": 0.2,
@@ -153,26 +204,23 @@ func chat(ctx context.Context, client *http.Client, endpoint, modelName string, 
 		// Ollama's switch for reasoning models (qwen3 et al): answer, do
 		// not spend the budget on a trace.
 		"think": false,
-	})
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint+"/v1/chat/completions", bytes.NewReader(body))
-	if err != nil {
-		return "", nil, err
 	}
-	req.Header.Set("Content-Type", "application/json")
-	started := time.Now()
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", nil, err
+	if len(tools) > 0 {
+		request["tools"] = tools
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return "", nil, fmt.Errorf("the model server answered %s", resp.Status)
+	body, err := json.Marshal(request)
+	if err != nil || len(body) > chatContextBytes {
+		return nil, fmt.Errorf("the model request exceeds the context budget")
 	}
+	return body, nil
+}
+
+func decodeChatResponse(reader io.Reader, modelName string, started time.Time) (string, []chatToolCall, *model.SysAgentUsage, error) {
 	var out struct {
 		Choices []struct {
 			Message struct {
-				Content   string            `json:"content"`
-				ToolCalls []json.RawMessage `json:"tool_calls"`
+				Content   string         `json:"content"`
+				ToolCalls []chatToolCall `json:"tool_calls"`
 			} `json:"message"`
 		} `json:"choices"`
 		Usage struct {
@@ -184,15 +232,19 @@ func chat(ctx context.Context, client *http.Client, endpoint, modelName string, 
 		PromptEvalDuration int64 `json:"prompt_eval_duration"`
 		EvalDuration       int64 `json:"eval_duration"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return "", nil, fmt.Errorf("the model server's answer is not JSON: %w", err)
+	data, err := io.ReadAll(io.LimitReader(reader, maxChatResponseBytes+1))
+	if err != nil || len(data) > maxChatResponseBytes {
+		return "", nil, nil, fmt.Errorf("the model response is unavailable or exceeds the response budget")
+	}
+	if json.Unmarshal(data, &out) != nil {
+		return "", nil, nil, fmt.Errorf("the model server's answer is not valid JSON")
 	}
 	if len(out.Choices) == 0 {
-		return "", nil, fmt.Errorf("the model returned no answer")
+		return "", nil, nil, fmt.Errorf("the model returned no answer")
 	}
 	text := strings.TrimSpace(thinkRE.ReplaceAllString(out.Choices[0].Message.Content, ""))
-	if text == "" {
-		return "", nil, fmt.Errorf("the model returned an empty answer")
+	if text == "" && len(out.Choices[0].Message.ToolCalls) == 0 {
+		return "", nil, nil, fmt.Errorf("the model returned an empty answer")
 	}
 	usage := &model.SysAgentUsage{Model: modelName, PromptTokens: out.Usage.PromptTokens,
 		CompletionTokens: out.Usage.CompletionTokens, ElapsedMS: time.Since(started).Milliseconds(),
@@ -209,5 +261,5 @@ func chat(ctx context.Context, client *http.Client, endpoint, modelName string, 
 	if out.EvalDuration > 0 {
 		usage.OutputTokensPerSecond = float64(usage.CompletionTokens) * 1e9 / float64(out.EvalDuration)
 	}
-	return text, usage, nil
+	return text, out.Choices[0].Message.ToolCalls, usage, nil
 }

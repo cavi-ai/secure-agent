@@ -2,6 +2,17 @@ package model
 
 import "time"
 
+// SysAgentWork contains progress metadata only, never prompts or evidence.
+type SysAgentWork struct {
+	State          string `json:"state"`
+	ActiveTool     string `json:"active_tool,omitempty"`
+	Round          int    `json:"round,omitempty"`
+	ToolCalls      int    `json:"tool_calls"`
+	InputBytes     int    `json:"input_bytes"`
+	ElapsedMS      int64  `json:"elapsed_ms"`
+	LastDurationMS int64  `json:"last_duration_ms,omitempty"`
+}
+
 // SysAgentMessage is one turn of the system agent chat (the console's Agent
 // tab). Content is stored masked: a secret never reaches the table or the
 // model.
@@ -42,6 +53,7 @@ type SysAgentUsage struct {
 	PromptTokensPerSecond float64 `json:"prompt_tokens_per_second,omitempty"`
 	OutputTokensPerSecond float64 `json:"output_tokens_per_second,omitempty"`
 	ToolCalls             int     `json:"tool_calls"`
+	ReadToolCalls         int     `json:"read_tool_calls,omitempty"`
 }
 
 // SysAgentLocalCommand is a proposed local action, never a harness route.

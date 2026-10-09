@@ -164,6 +164,7 @@ advisor:
 # Ollama endpoints, enforced in code. See docs/SYSTEM_AGENT.md.
 system_agent:
   enabled: false
+  debug: false                       # metadata-only tool/request diagnostics
   endpoint: "http://127.0.0.1:11434" # Ollama; must be loopback
   model: ""                          # chat model ("" = first model Ollama lists)
   harness_model: ""                  # model dispatched harnesses run ("" = model)

@@ -1349,6 +1349,7 @@ export interface SysAgentUsage {
   prompt_tokens_per_second?: number;
   output_tokens_per_second?: number;
   tool_calls: number;
+  read_tool_calls?: number;
 }
 
 export interface SysAgentProposal {
@@ -1385,9 +1386,20 @@ export interface SysAgentMessage {
   plan_id?: number;
 }
 
+export interface SysAgentWork {
+  state: string;
+  active_tool?: string;
+  round?: number;
+  tool_calls: number;
+  input_bytes: number;
+  elapsed_ms: number;
+  last_duration_ms?: number;
+}
+
 export interface AgentChat {
   messages: SysAgentMessage[];
   chatting: boolean;
+  work: SysAgentWork;
 }
 
 export interface SysAgentPlan {
