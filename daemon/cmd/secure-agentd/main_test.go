@@ -289,10 +289,6 @@ func TestEndToEndSmokeScenario(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 
-	if serverConn := <-connCh; serverConn != nil {
-		serverConn.Close()
-	}
-
 	if !flagFound {
 		t.Fatalf("flag in store but /flags did not serve it: status=%d err=%v body=%s", lastStatus, lastErr, lastBody)
 	}
