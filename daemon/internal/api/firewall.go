@@ -59,12 +59,12 @@ func (a *API) applyRuleMode(rule, mode string) error {
 	if prevMode == mode {
 		return nil
 	}
-	a.fwEngine.SetRuleMode(rule, firewall.ParseMode(mode))
 	if a.fwModes != nil {
 		if err := a.fwModes.Set(rule, mode); err != nil {
 			return err
 		}
 	}
+	a.fwEngine.SetRuleMode(rule, firewall.ParseMode(mode))
 	a.store.PutAudit(store.AuditEntry{Action: "rule-mode", Rule: rule, FromMode: prevMode, ToMode: mode})
 	return nil
 }

@@ -2,11 +2,13 @@ package firewall
 
 import (
 	"encoding/json"
-	"github.com/cavi-ai/secure-agent/daemon/internal/safefile"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
 	"sync"
+
+	"github.com/cavi-ai/secure-agent/daemon/internal/safefile"
 )
 
 // ModeStore persists per-rule mode overrides (e.g. a rule promoted to block) to
@@ -21,35 +23,48 @@ func NewModeStore(path string) *ModeStore {
 	return &ModeStore{path: path}
 }
 
-// Load returns the persisted rule -> mode overrides. A missing or unreadable
-// file yields an empty map (no overrides), never an error.
+// Load returns the persisted rule -> mode overrides. Failed loads are warned
+// and yield no overrides; edits must successfully read the existing policy.
 func (m *ModeStore) Load() map[string]string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.loadLocked()
-}
-
-func (m *ModeStore) loadLocked() map[string]string {
-	out := map[string]string{}
-	data, err := os.ReadFile(m.path)
+	out, err := m.readLocked()
 	if err != nil {
-		return out
-	}
-	// A present-but-corrupt file is a security signal, not a silent "no
-	// overrides": every rule promoted to block would revert to monitor. Surface
-	// it loudly instead of quietly disabling enforcement.
-	if err := json.Unmarshal(data, &out); err != nil {
-		log.Printf("firewall: WARNING: mode-override file %s is corrupt (%v); rule block-promotions are NOT applied until it is fixed", m.path, err)
+		log.Printf("firewall: WARNING: %v; rule block-promotions are NOT applied until it is fixed", err)
 		return map[string]string{}
 	}
 	return out
 }
 
-// Set records rule -> mode and writes the file atomically-ish (0600).
+func (m *ModeStore) readLocked() (map[string]string, error) {
+	out := map[string]string{}
+	data, err := os.ReadFile(m.path)
+	if os.IsNotExist(err) {
+		return out, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read firewall mode overrides: %w", err)
+	}
+	// A present-but-corrupt file is a security signal, not a silent "no
+	// overrides": every rule promoted to block would revert to monitor. Surface
+	// it loudly instead of quietly disabling enforcement.
+	if err := json.Unmarshal(data, &out); err != nil {
+		return nil, fmt.Errorf("decode firewall mode overrides %s: %w", m.path, err)
+	}
+	if out == nil {
+		return nil, fmt.Errorf("decode firewall mode overrides %s: expected a JSON object, got null", m.path)
+	}
+	return out, nil
+}
+
+// Set records rule -> mode and writes the file atomically (0600).
 func (m *ModeStore) Set(ruleID, mode string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	cur := m.loadLocked()
+	cur, err := m.readLocked()
+	if err != nil {
+		return err
+	}
 	cur[ruleID] = mode
 	if err := os.MkdirAll(filepath.Dir(m.path), 0o700); err != nil {
 		return err

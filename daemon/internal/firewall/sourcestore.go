@@ -2,11 +2,13 @@ package firewall
 
 import (
 	"encoding/json"
-	"github.com/cavi-ai/secure-agent/daemon/internal/safefile"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
 	"sync"
+
+	"github.com/cavi-ai/secure-agent/daemon/internal/safefile"
 )
 
 // SourceStore persists the user's runtime-added ingest sources (the files whose
@@ -24,25 +26,35 @@ func NewSourceStore(path string) *SourceStore {
 	return &SourceStore{path: path}
 }
 
-// Load returns the persisted sources; a missing or unreadable file yields an
-// empty slice, never an error.
+// Load returns the persisted sources. Failed loads are warned and yield no
+// sources; edits must successfully read the existing policy.
 func (s *SourceStore) Load() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.loadLocked()
-}
-
-func (s *SourceStore) loadLocked() []string {
-	data, err := os.ReadFile(s.path)
+	out, err := s.readLocked()
 	if err != nil {
-		return nil
-	}
-	var out []string
-	if err := json.Unmarshal(data, &out); err != nil {
-		log.Printf("firewall: WARNING: ingest-source file %s is corrupt (%v); user-added sources are NOT loaded until it is fixed", s.path, err)
+		log.Printf("firewall: WARNING: %v; user-added sources are NOT loaded until it is fixed", err)
 		return nil
 	}
 	return out
+}
+
+func (s *SourceStore) readLocked() ([]string, error) {
+	data, err := os.ReadFile(s.path)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read firewall ingest sources: %w", err)
+	}
+	var out []string
+	if err := json.Unmarshal(data, &out); err != nil {
+		return nil, fmt.Errorf("decode firewall ingest sources %s: %w", s.path, err)
+	}
+	if out == nil {
+		return nil, fmt.Errorf("decode firewall ingest sources %s: expected a JSON array, got null", s.path)
+	}
+	return out, nil
 }
 
 // Add records a source. It returns false without writing when the source is
@@ -50,7 +62,10 @@ func (s *SourceStore) loadLocked() []string {
 func (s *SourceStore) Add(src string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	cur := s.loadLocked()
+	cur, err := s.readLocked()
+	if err != nil {
+		return false, err
+	}
 	for _, existing := range cur {
 		if existing == src {
 			return false, nil
@@ -64,7 +79,10 @@ func (s *SourceStore) Add(src string) (bool, error) {
 func (s *SourceStore) Remove(src string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	cur := s.loadLocked()
+	cur, err := s.readLocked()
+	if err != nil {
+		return false, err
+	}
 	out := cur[:0:0]
 	found := false
 	for _, existing := range cur {
