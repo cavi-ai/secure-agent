@@ -20,6 +20,7 @@ func TestNilExporterIsSafe(t *testing.T) {
 	var e *Exporter
 	e.SessionSpan(model.Session{ID: "s1"})
 	e.TraceEvent(event.Event{Kind: event.KindToolCall, SessionID: "s1"})
+	e.Flush()
 	e.Wait()
 	if e.Dropped() != 0 {
 		t.Fatal("nil exporter dropped count must be 0")
