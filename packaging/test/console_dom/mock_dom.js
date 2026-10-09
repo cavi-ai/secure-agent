@@ -584,6 +584,7 @@
   // patternbigdemo: sixty-one keychain flags served as one pattern that covers
   // them all.
   if (MODE.includes('patternbigdemo')) {
+    setTimeout(() => openTab('findings'), 1500);
     const ids = Array.from({ length: 61 }, (_, i) => `kc-${i + 1}`);
     for (const id of ids) {
       data['/flags'].push({ id, rule: 'keychain-access', severity: 2, ts: iso(60000), pid: 40844, agent: 'codex',
@@ -605,6 +606,7 @@
   // dismiss calls.
   if (MODE.includes('bulkdemo')) {
     let confirms = 0;
+    setTimeout(() => openTab('findings'), 1500);
     setTimeout(() => {
       const ask = window.saConfirm;
       window.saConfirm = (...args) => { confirms++; return ask(...args); };
@@ -2698,12 +2700,12 @@
     data['/flags'].find(f => f.id === 'flag-2').ts = new Date(Date.now() - 5000).toISOString();
     setTimeout(() => openTab('findings'), 4000);
     setTimeout(() => {
-      const d = document.querySelector('#flags-list .finding[data-flag-id="flag-2"] details');
+      const d = document.querySelector('#flags-list .finding[data-flag-id="flag-2"] details.finding-details');
       const meta = () => (d && d.closest('.finding') ? d.closest('.finding').querySelector('.finding-meta').textContent : '');
       const before = meta();
       if (d) { d.open = true; d.dataset.probe = '1'; }
       burst();
-      setTimeout(() => stamp('details-probe', d && d.isConnected && d.open ? `kept ${before} | ${meta()}` : 'lost'), 2600);
+      setTimeout(() => stamp('details-probe', d && d.isConnected && d.open ? `kept ${before} | ${meta()}` : `lost found=${!!d} connected=${!!(d && d.isConnected)} open=${!!(d && d.open)}`), 2600);
     }, 4300);
   }
   // patternact (with patterndemo): Findings open, press the pattern card's
@@ -2834,6 +2836,7 @@
   // served flag ids; the card leaves before the daemon answers.
   if (MODE.includes('routinedemo')) {
     const key = 'routine|gh|/Users/dev/.config';
+    setTimeout(() => openTab('findings'), 1500);
     data['/routine'] = [{
       key, reader: 'gh', area: '~/.config/gh/hosts.yml', files: 1, count: 145, agents: ['claude', 'codex', 'openclaw'],
       destinations: [{ org: 'GitHub', host: '140.82.114.6', count: 140 }], destination_count: 3, expectable: 143,

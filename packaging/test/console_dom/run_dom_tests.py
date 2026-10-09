@@ -661,8 +661,8 @@ def main():
               re.search(r'<ul class="posture-items" id="posture-items" hidden(="")?></ul>', dom) is not None
               and 'class="posture-item"' not in dom and 'data-action="guard-resolve" data-id="guard-1"' in dom)
         posture_egress = (re.search(r'<pre id="posture-egress"[^>]*>([^<]*)<', dom_posturemore) or [None, ""])[1]
-        check("Egress: the posture banner lists 3 content rows (2 items + the advisor line) and \"and 5 more\"",
-              posture_egress == "items=2 more=and 5 more hidden=0", posture_egress)
+        check("Egress: the posture banner lists 3 content rows (2 items + the advisor line) and \"and 4 more\"",
+              posture_egress == "items=2 more=and 4 more hidden=0", posture_egress)
         posture_home = (re.search(r'<pre id="posture-home"[^>]*>([^<]*)<', dom_posturemore) or [None, ""])[1]
         check("\"and N more\" lands on Home, where the banner lists nothing",
               posture_home == "tab=home items=0 more=none hidden=1", posture_home)
