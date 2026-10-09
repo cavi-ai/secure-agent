@@ -350,6 +350,32 @@ function markButtonsHTML(subject) {
     + `<button class="btn btn-ghost btn-sm" data-action="mark-label" data-subject="${s}" data-label="not_ok">Mark as not ok</button>`;
 }
 
+function incidentWorkflowHTML(id, workflow = {}) {
+  const status = workflow.status || 'open';
+  const attrs = `data-action="incident-status" data-id="${escapeHTML(id)}"`;
+  return `<p class="plan-status">${escapeHTML(status === 'acknowledged' ? 'Dismissed from Needs you' : status === 'resolved' ? 'Reported resolved' : 'Open incident')}</p>`
+    + `<div class="endpoint-actions">`
+    + (status === 'open' ? `<button class="btn btn-ghost btn-sm" ${attrs} data-status="acknowledged" title="Remove from Needs you; keep the report and monitoring">Dismiss</button>` : '')
+    + (status !== 'resolved' ? `<button class="btn btn-ghost btn-sm" ${attrs} data-status="resolved">Report resolved</button>` : '')
+    + `</div>`
+    + (workflow.resolution_note ? `<p>${escapeHTML(workflow.resolution_note)}</p>` : '');
+}
+
+// The generated report starts with identity and summary, then level-two
+// evidence sections. Keep the copied Markdown intact while placing decisions
+// and the advisor immediately after that introduction.
+function incidentReportHTML(id, workflow, markdown) {
+  const text = String(markdown || '');
+  const split = text.search(/^## /m);
+  const intro = split < 0 ? text : text.slice(0, split);
+  const evidence = split < 0 ? '' : text.slice(split);
+  return linkEvidencePaths(parseMarkdownToHTML(intro))
+    + `<section class="endpoint-section incident-workflow-actions">${incidentWorkflowHTML(id, workflow)}</section>`
+    + `<div class="endpoint-actions">${markButtonsHTML('incident:' + id)}</div>`
+    + planSlotHTML('incident:' + id)
+    + linkEvidencePaths(parseMarkdownToHTML(evidence));
+}
+
 // labelsHTML: the What to do drawer's history — summary, similar judgments,
 // the suggestion consistent labels earn (its action as the finding's served
 // button when offered), and the mark buttons.
@@ -375,7 +401,7 @@ function labelsHTML(resp, nowMs) {
       ${labelsLineHTML(l.summary) || '<p class="plan-status">No earlier judgments on cases like this.</p>'}
       ${similar ? `<ul class="plan-list">${similar}</ul>` : ''}
       ${suggestion}
-      <div class="endpoint-actions">${markButtonsHTML(resp.subject)}</div>
+      ${String(resp.subject || '').startsWith('incident:') ? '' : `<div class="endpoint-actions">${markButtonsHTML(resp.subject)}</div>`}
     </div>`;
 }
 

@@ -283,7 +283,7 @@ function incidentActionItems(inc) {
   const status = (inc.workflow || {}).status || 'open';
   return [
     { label: 'View report', attrs: `data-action="open-incident" data-id="${id}"`, bar: true },
-    status === 'open' ? { label: 'Acknowledge', attrs: `data-action="incident-status" data-id="${id}" data-status="acknowledged"`, bar: true } : null,
+    status === 'open' ? { label: 'Dismiss', attrs: `data-action="incident-status" data-id="${id}" data-status="acknowledged" title="Remove from Needs you; keep the report and monitoring"`, bar: true } : null,
     status !== 'resolved' ? { label: 'Report resolved', attrs: `data-action="incident-status" data-id="${id}" data-status="resolved"` } : null,
   ].filter(Boolean);
 }
@@ -361,7 +361,7 @@ function needView(item, ctx) {
     case 'incident': {
       const inc = ctx.incidents.get(item.id);
       return { ...v, word: 'incident', why: [item.title, item.status].filter(Boolean).join(' · '), at: inc ? inc.timestamp : '',
-        items: inc ? incidentActionItems(inc) : [{ label: 'View report', attrs: `data-action="open-incident" data-id="${id}"`, bar: true }] };
+        items: incidentActionItems(inc || {id: item.id, workflow: {status: item.status || 'open'}}) };
     }
     case 'flag': {
       const f = ctx.flags.get(item.id);

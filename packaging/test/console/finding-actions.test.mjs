@@ -12,6 +12,36 @@ const end = app.indexOf('  // A pattern card\'s served action', start);
 assert.ok(start >= 0 && end > start, 'finding action handler is present');
 const actionHandler = app.slice(start, end);
 
+for (const success of [true, false]) {
+ test(`incident dismissal ${success ? 'clears the queue and keeps history' : 'restores the queue on a failed write'}`, async () => {
+  const begin = app.indexOf('  window.setIncidentStatus = async function(');
+  const finish = app.indexOf('  // Worktree actions.', begin);
+  const original = {incidents:[{id:'inc'}], posture:{items:[{kind:'incident',id:'inc'}]}};
+  const ctx = {window:{}, telemetryData:structuredClone(original), drawerMode:null,
+   mapAttentionItems:fn=>{ctx.telemetryData.posture.items=ctx.telemetryData.posture.items.map(fn).filter(Boolean);},
+   stage:(_keys,_dirty,fn)=>{fn();return ()=>{ctx.telemetryData=structuredClone(original);};},
+   apiFetch:async()=>({ok:success,json:async()=>({workflow:{status:'acknowledged'}}),text:async()=>'write unavailable'}),
+   showToast:()=>{},cardNote:()=>{},cssq:x=>x,fetchTelemetry:()=>{}};
+  vm.runInNewContext(app.slice(begin,finish),ctx);
+  await ctx.window.setIncidentStatus('inc','acknowledged');
+  assert.equal(ctx.telemetryData.posture.items.length,success?0:1);
+  assert.equal(ctx.telemetryData.incidents.length,1);
+  assert.equal(ctx.telemetryData.incidents[0].workflow?.status,success?'acknowledged':undefined);
+ });
+}
+
+test('incident drawer loads current workflow and retains raw Markdown for copying', async () => {
+ const begin=app.indexOf('  window.openIncidentReport = async function(');
+ const finish=app.indexOf('  // Endpoint detail:',begin);
+ const ctx={window:{},drawer:{},drawerSeq:1,btnDrawerCopy:{},drawerBody:{},openDrawer:()=>{},
+  apiFetch:async url=>({ok:true,text:async()=>'# Original report',json:async()=>({workflow:{status:'acknowledged'}})}),
+  incidentReportHTML:(id,wf,text)=>[id,wf.status,text].join('|'),loadPlanSlot:()=>{}};
+ vm.runInNewContext(app.slice(begin,finish),ctx);
+ await ctx.window.openIncidentReport('inc');
+ assert.equal(ctx.currentRawMarkdown,'# Original report');
+ assert.equal(ctx.drawerBody.innerHTML,'inc|acknowledged|# Original report');
+});
+
 test('group approval sends the selected served endpoint without a stale flag lookup', async () => {
   const begin = app.indexOf('  window.patternAct = async function(');
   const finish = app.indexOf('  window.unmuteFlag = async function(', begin);
