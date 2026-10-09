@@ -97,11 +97,19 @@ func (a *API) handleLabels(w http.ResponseWriter, r *http.Request) {
 // labelContext is what the operator decided before about cases like t, and
 // the suggestion consistent labels earn: ok → the offered allow action; not
 // ok → the offered kill, and the playbook's guard rule.
-func (a *API) labelContext(t planTarget, offered []string) *model.LabelContext {
+func (a *API) labelContext(t planTarget, offered []string) (*model.LabelContext, error) {
 	rule, agent, pattern := labelKeys(t)
+	summary, err := a.store.LabelSummaryResult(agent, pattern, rule)
+	if err != nil {
+		return nil, err
+	}
+	similar, err := a.store.SimilarLabelsResult(rule, agent, pattern, labelSimilarLimit)
+	if err != nil {
+		return nil, err
+	}
 	ctx := &model.LabelContext{
-		Summary: a.store.LabelSummary(agent, pattern, rule),
-		Similar: a.store.SimilarLabels(rule, agent, pattern, labelSimilarLimit),
+		Summary: summary,
+		Similar: similar,
 	}
 	sum := ctx.Summary
 	who := agent
@@ -126,7 +134,7 @@ func (a *API) labelContext(t planTarget, offered []string) *model.LabelContext {
 		}
 		ctx.Suggestion = s
 	}
-	return ctx
+	return ctx, nil
 }
 
 // labelLines renders similar labels for the plan context.

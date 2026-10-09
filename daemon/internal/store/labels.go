@@ -1,6 +1,7 @@
 package store
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"time"
@@ -50,9 +51,21 @@ func (s *Store) PutOperatorLabelResult(l model.OperatorLabel) (err error) {
 // agent, the same pattern, the same rule; newest first within a rank. Empty
 // keys match nothing. Never nil.
 func (s *Store) SimilarLabels(rule, agent, pattern string, limit int) []model.OperatorLabel {
+	out, err := s.SimilarLabelsResult(rule, agent, pattern, limit)
+	if err != nil {
+		log.Printf("store: similar labels: %v", err)
+		return []model.OperatorLabel{}
+	}
+	return out
+}
+
+// SimilarLabelsResult rejects incomplete history rather than returning the
+// rows preceding a query, scan, cursor or timestamp failure.
+func (s *Store) SimilarLabelsResult(rule, agent, pattern string, limit int) (out []model.OperatorLabel, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := []model.OperatorLabel{}
+	defer func() { s.noteRead("similar operator labels", err) }()
+	out = []model.OperatorLabel{}
 	rows, err := s.db.Query(`SELECT id, kind, rule, agent, pattern, label, reason, source, created_at FROM operator_labels
 		WHERE (? != '' AND rule = ?) OR (? != '' AND pattern = ?)
 		ORDER BY CASE
@@ -69,34 +82,45 @@ func (s *Store) SimilarLabels(rule, agent, pattern string, limit int) []model.Op
 		pattern,
 		normalizeLimit(limit))
 	if err != nil {
-		log.Printf("store: similar labels: %v", err)
-		return out
+		return nil, fmt.Errorf("query similar operator labels: %w", err)
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var l model.OperatorLabel
 		var ts string
-		if rows.Scan(&l.ID, &l.Kind, &l.Rule, &l.Agent, &l.Pattern, &l.Label, &l.Reason, &l.Source, &ts) != nil {
-			continue
+		if err := rows.Scan(&l.ID, &l.Kind, &l.Rule, &l.Agent, &l.Pattern, &l.Label, &l.Reason, &l.Source, &ts); err != nil {
+			return nil, fmt.Errorf("scan operator label: %w", err)
 		}
-		l.CreatedAt, _ = time.Parse(time.RFC3339Nano, ts)
+		l.CreatedAt, err = time.Parse(time.RFC3339Nano, ts)
+		if err != nil {
+			return nil, errors.New("invalid operator label timestamp")
+		}
 		out = append(out, l)
 	}
 	if err := rows.Err(); err != nil {
-		log.Printf("store: similar labels cursor: %v", err)
+		return nil, fmt.Errorf("iterate operator labels: %w", err)
 	}
-	return out
+	return out, nil
 }
 
 // LabelSummary counts ok and not_ok labels on the same case: the same agent
 // and pattern, or the same rule and agent when there is no pattern.
 func (s *Store) LabelSummary(agent, pattern, rule string) model.LabelSummary {
-	var sum model.LabelSummary
+	sum, err := s.LabelSummaryResult(agent, pattern, rule)
+	if err != nil {
+		log.Printf("store: label summary: %v", err)
+	}
+	return sum
+}
+
+// LabelSummaryResult distinguishes an empty history from an unavailable read.
+func (s *Store) LabelSummaryResult(agent, pattern, rule string) (sum model.LabelSummary, err error) {
 	if pattern == "" && rule == "" {
-		return sum
+		return sum, nil
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	defer func() { s.noteRead("operator label summary", err) }()
 	q := `SELECT COALESCE(SUM(label = 'ok'), 0), COALESCE(SUM(label = 'not_ok'), 0) FROM operator_labels WHERE agent = ? AND pattern = ?`
 	args := []any{agent, pattern}
 	if pattern == "" {
@@ -104,7 +128,7 @@ func (s *Store) LabelSummary(agent, pattern, rule string) model.LabelSummary {
 		args = []any{rule, agent}
 	}
 	if err := s.db.QueryRow(q, args...).Scan(&sum.OK, &sum.NotOK); err != nil {
-		log.Printf("store: label summary: %v", err)
+		return model.LabelSummary{}, fmt.Errorf("read operator label summary: %w", err)
 	}
-	return sum
+	return sum, nil
 }
