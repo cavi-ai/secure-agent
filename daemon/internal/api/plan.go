@@ -290,7 +290,7 @@ func (a *API) requestPlan(w http.ResponseWriter, subject string) {
 	}
 	context, err := a.planContext(t, resp.Playbook, labels.Similar)
 	if err != nil {
-		http.Error(w, "Rule history unavailable; retry", http.StatusServiceUnavailable)
+		http.Error(w, "Plan context unavailable; retry", http.StatusServiceUnavailable)
 		return
 	}
 	req := advisor.PlanRequest{SubjectID: subject, EvidenceKey: planEvidenceKey(t),
@@ -378,7 +378,9 @@ func (a *API) planContext(t planTarget, pb playbook.Playbook, labels []model.Ope
 		add("incident: %s, risk %s, %d flags aggregated, %s", inc.ID, inc.Risk, max(inc.AggregateCount, 1), inc.Summary)
 	}
 	if t.sessionID != "" {
-		a.planSessionLines(t, add)
+		if err := a.planSessionLines(t, add); err != nil {
+			return nil, err
+		}
 	}
 	if t.path != "" {
 		d := a.fileDetail(t.path, t.findings, t.accesses)
@@ -434,10 +436,13 @@ func (a *API) planContext(t planTarget, pb playbook.Playbook, labels []model.Ope
 
 // planSessionLines adds the session summary and the timeline leading up to
 // the finding.
-func (a *API) planSessionLines(t planTarget, add func(string, ...any)) {
-	rep, ok := a.store.SessionReport(t.sessionID)
+func (a *API) planSessionLines(t planTarget, add func(string, ...any)) error {
+	rep, ok, err := a.store.SessionReportResult(t.sessionID)
+	if err != nil {
+		return err
+	}
 	if !ok {
-		return
+		return nil
 	}
 	s := rep.Session
 	where := s.Workspace
@@ -475,4 +480,5 @@ func (a *API) planSessionLines(t planTarget, add func(string, ...any)) {
 	for _, l := range lines {
 		add("session timeline: %s", strings.TrimSpace(l))
 	}
+	return nil
 }

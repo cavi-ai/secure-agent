@@ -2,7 +2,8 @@ package store
 
 import (
 	"database/sql"
-	"log"
+	"errors"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -80,9 +81,28 @@ const ReportTopN = 50
 // SessionReport aggregates one session's events oldest-first. ok is false
 // when no session row has this id. Every slice is non-nil.
 func (s *Store) SessionReport(id string) (SessionReport, bool) {
-	sess, ok := s.sessionByID(id)
+	rep, ok, _ := s.SessionReportResult(id)
+	return rep, ok
+}
+
+// SessionReportResult distinguishes missing sessions from unavailable or
+// malformed core evidence. Optional receipts retain their availability flags.
+func (s *Store) SessionReportResult(id string) (_ SessionReport, _ bool, readErr error) {
+	defer func() { s.noteRead("session reports", readErr) }()
+	sess, ok, err := s.GetSessionResult(id)
+	if err != nil {
+		return SessionReport{}, false, err
+	}
 	if !ok {
-		return SessionReport{}, false
+		return SessionReport{}, false, nil
+	}
+	events, err := s.sessionEventsOldestFirstResult(id)
+	if err != nil {
+		return SessionReport{}, false, err
+	}
+	flags, err := s.QueryFlagsResult(FlagFilter{SessionID: id, Limit: reportFlagLimit})
+	if err != nil {
+		return SessionReport{}, false, err
 	}
 	rep := SessionReport{
 		Session:    sess,
@@ -107,7 +127,7 @@ func (s *Store) SessionReport(id string) (SessionReport, bool) {
 	models := map[string]*ReportModel{}
 	files := map[string]int{}
 	hosts := map[string]int{}
-	for _, e := range s.sessionEventsOldestFirst(id) {
+	for _, e := range events {
 		rep.Events++
 		ts := e.TS.UTC().Format(time.RFC3339)
 		switch e.Kind {
@@ -131,6 +151,9 @@ func (s *Store) SessionReport(id string) (SessionReport, bool) {
 			rep.TokensIn += e.TokensIn
 			rep.TokensOut += e.TokensOut
 			rep.CostUSD += e.CostUSD
+			if math.IsInf(rep.CostUSD, 0) || math.IsNaN(rep.CostUSD) {
+				return SessionReport{}, false, errors.New("nonfinite session report cost")
+			}
 			name := orUnknown(e.Model)
 			m := models[name]
 			if m == nil {
@@ -141,6 +164,9 @@ func (s *Store) SessionReport(id string) (SessionReport, bool) {
 			m.TokensIn += e.TokensIn
 			m.TokensOut += e.TokensOut
 			m.CostUSD += e.CostUSD
+			if math.IsInf(m.CostUSD, 0) || math.IsNaN(m.CostUSD) {
+				return SessionReport{}, false, errors.New("nonfinite session model cost")
+			}
 			if e.CostUSD == 0 {
 				rep.Unpriced++
 				m.Unpriced++
@@ -189,7 +215,7 @@ func (s *Store) SessionReport(id string) (SessionReport, bool) {
 	})
 	rep.Files = topCounts(files, ReportTopN)
 	rep.Hosts = topCounts(hosts, ReportTopN)
-	rep.Flags = s.QueryFlags(FlagFilter{SessionID: id, Limit: reportFlagLimit})
+	rep.Flags = flags
 	var interventionErr error
 	rep.Interventions, interventionErr = s.RecentInterventions(id, 200)
 	rep.InterventionsAvailable = interventionErr == nil
@@ -199,19 +225,18 @@ func (s *Store) SessionReport(id string) (SessionReport, bool) {
 	if rep.Flags == nil {
 		rep.Flags = []model.Flag{}
 	}
-	return rep, true
+	return rep, true, nil
 }
 
 // sessionEventsOldestFirst reads up to reportEventCap of one session's events
 // in time order (insertion order breaks ties).
-func (s *Store) sessionEventsOldestFirst(id string) []event.Event {
+func (s *Store) sessionEventsOldestFirstResult(id string) ([]event.Event, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	rows, err := s.db.Query(`SELECT kind, ts, path, remote_host, detail, tool, tool_status, duration_ms, model, tokens_in, tokens_out, cost_usd
 		FROM events WHERE session_id = ? ORDER BY julianday(ts) ASC, id ASC LIMIT ?`, id, reportEventCap)
 	if err != nil {
-		log.Printf("store: session report query error: %v", err)
-		return nil
+		return nil, err
 	}
 	defer rows.Close()
 	var out []event.Event
@@ -219,23 +244,33 @@ func (s *Store) sessionEventsOldestFirst(id string) []event.Event {
 		var e event.Event
 		var kind int
 		var ts string
-		var tool, toolStatus, modelName sql.NullString
+		var path, host, detail, tool, toolStatus, modelName sql.NullString
 		var durMs, tokIn, tokOut sql.NullInt64
 		var cost sql.NullFloat64
-		if err := rows.Scan(&kind, &ts, &e.Path, &e.RemoteHost, &e.Detail,
+		if err := rows.Scan(&kind, &ts, &path, &host, &detail,
 			&tool, &toolStatus, &durMs, &modelName, &tokIn, &tokOut, &cost); err != nil {
-			continue
+			return nil, err
 		}
 		e.Kind = event.Kind(kind)
-		e.TS, _ = time.Parse(time.RFC3339Nano, ts)
+		e.TS, err = time.Parse(time.RFC3339Nano, ts)
+		if err != nil {
+			return nil, errors.New("invalid session report event timestamp")
+		}
+		if math.IsInf(cost.Float64, 0) || math.IsNaN(cost.Float64) {
+			return nil, errors.New("nonfinite session report event cost")
+		}
+		e.Path, e.RemoteHost, e.Detail = path.String, host.String, detail.String
 		e.ToolName, e.ToolStatus, e.Model = tool.String, toolStatus.String, modelName.String
 		e.DurationMs, e.TokensIn, e.TokensOut, e.CostUSD = durMs.Int64, tokIn.Int64, tokOut.Int64, cost.Float64
 		out = append(out, e)
 	}
 	if err := rows.Err(); err != nil {
-		log.Printf("store: session report cursor error (report may be truncated): %v", err)
+		return nil, err
 	}
-	return out
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // timelineLine labels an event by the first identity it carries: tool, model,

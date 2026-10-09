@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -427,12 +428,21 @@ func scanSessionsResult(rows *sql.Rows) ([]model.Session, error) {
 			&sess.Status, &sess.Confidence, &sess.Origin); err != nil {
 			return nil, err
 		}
-		sess.StartedAt, _ = time.Parse(time.RFC3339Nano, startedAt)
-		sess.LastSeenAt, _ = time.Parse(time.RFC3339Nano, lastSeen)
+		var err error
+		sess.StartedAt, err = time.Parse(time.RFC3339Nano, startedAt)
+		if err != nil {
+			return nil, errors.New("invalid session start timestamp")
+		}
+		sess.LastSeenAt, err = time.Parse(time.RFC3339Nano, lastSeen)
+		if err != nil {
+			return nil, errors.New("invalid session last-seen timestamp")
+		}
 		if endedAt.Valid && endedAt.String != "" {
-			if t, err := time.Parse(time.RFC3339Nano, endedAt.String); err == nil {
-				sess.EndedAt = &t
+			t, err := time.Parse(time.RFC3339Nano, endedAt.String)
+			if err != nil {
+				return nil, errors.New("invalid session end timestamp")
 			}
+			sess.EndedAt = &t
 		}
 		out = append(out, sess)
 	}
