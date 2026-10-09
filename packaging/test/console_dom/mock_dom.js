@@ -476,6 +476,12 @@
   //   tokenseed    — pre-seed sessionStorage (simulates a RELOADED tab: no
   //                  #ct fragment, token must come from storage).
   const MODE = location.search;
+  if (MODE.includes('resourceoutcomes')) {
+    data['/resources'].interventions = [
+      {id:'fixture-partial',kind:'pause',status:'partial',verification:'unknown',error:'One captured process could not be resumed.',before:{rss_bytes:8000000000,cpu_percent:140,host_capacity:'constrained'},after:[],limits:['Pause may stop growth without freeing memory. Resume may be needed.']},
+      {id:'fixture-termination',kind:'terminate',status:'applied',verification:'verified',verified_by:'captured-family-absent',before:{rss_bytes:8000000000,host_capacity:'constrained'},after:[{captured_family_present:false,host_capacity:'ample',host_available_bytes:12000000000}],limits:['Verification covers only the captured process family. Observations do not establish causation or task completion.']}
+    ];
+  }
   if (MODE.includes('payloadoutcomes')) {
     Object.assign(data['/incidents'][0], {
       rule: 'proxy-secret-leak',

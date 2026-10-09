@@ -3437,6 +3437,7 @@ document.addEventListener('DOMContentLoaded', () => {
     } catch (err) {
       revert();
       showToast(`Resource decision failed: ${err}`, 'danger');
+      fetchTelemetry({ slow: true });
     }
   };
 

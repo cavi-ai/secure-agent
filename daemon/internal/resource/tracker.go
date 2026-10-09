@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/cavi-ai/secure-agent/daemon/internal/agents"
+	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 )
 
 const (
@@ -28,10 +29,11 @@ type Snapshot struct {
 	SessionCount int           `json:"session_count"`
 	// InfraCount counts kind=infra sessions (IDEs, local model servers) —
 	// shared infrastructure shown beside, never inside, SessionCount.
-	InfraCount int              `json:"infra_count,omitempty"`
-	Sessions   []Session        `json:"sessions"`
-	Episodes   []Episode        `json:"episodes"`
-	Control    *ControlSnapshot `json:"control,omitempty"`
+	InfraCount    int                         `json:"infra_count,omitempty"`
+	Sessions      []Session                   `json:"sessions"`
+	Episodes      []Episode                   `json:"episodes"`
+	Control       *ControlSnapshot            `json:"control,omitempty"`
+	Interventions []model.InterventionReceipt `json:"interventions,omitempty"`
 }
 
 type Session struct {

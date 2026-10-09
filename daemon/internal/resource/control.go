@@ -7,6 +7,8 @@ import (
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/cavi-ai/secure-agent/daemon/internal/model"
 )
 
 type ControlMode string
@@ -66,19 +68,20 @@ type Violation struct {
 }
 
 type SessionControl struct {
-	Mode         ControlMode          `json:"mode"`
-	State        string               `json:"state"`
-	PolicySource string               `json:"policy_source"`
-	PolicyScope  string               `json:"policy_scope,omitempty"`
-	BreachSince  *time.Time           `json:"breach_since,omitempty"`
-	PendingID    string               `json:"pending_id,omitempty"`
-	Violations   []Violation          `json:"violations"`
-	LastAction   InterventionAction   `json:"last_action,omitempty"`
-	LastError    string               `json:"last_error,omitempty"`
-	NextAction   InterventionAction   `json:"next_action,omitempty"`
-	NextActionAt *time.Time           `json:"next_action_at,omitempty"`
-	Applied      []InterventionAction `json:"applied_actions,omitempty"`
-	Paused       bool                 `json:"paused,omitempty"`
+	Mode         ControlMode                `json:"mode"`
+	State        string                     `json:"state"`
+	PolicySource string                     `json:"policy_source"`
+	PolicyScope  string                     `json:"policy_scope,omitempty"`
+	BreachSince  *time.Time                 `json:"breach_since,omitempty"`
+	PendingID    string                     `json:"pending_id,omitempty"`
+	Violations   []Violation                `json:"violations"`
+	LastAction   InterventionAction         `json:"last_action,omitempty"`
+	LastError    string                     `json:"last_error,omitempty"`
+	NextAction   InterventionAction         `json:"next_action,omitempty"`
+	NextActionAt *time.Time                 `json:"next_action_at,omitempty"`
+	Applied      []InterventionAction       `json:"applied_actions,omitempty"`
+	Paused       bool                       `json:"paused,omitempty"`
+	Result       *model.InterventionReceipt `json:"result,omitempty"`
 }
 
 type PendingAction struct {
@@ -91,6 +94,7 @@ type PendingAction struct {
 	Violations []Violation        `json:"violations"`
 	Action     InterventionAction `json:"action"`
 	Nice       int                `json:"nice,omitempty"`
+	ContextKey string             `json:"context_key"`
 }
 
 type ControlSnapshot struct {
@@ -140,6 +144,9 @@ type WorkspacePolicySnapshot struct {
 }
 
 type ControlAction struct {
+	IntentID        string
+	PolicyRevision  uint64
+	Targets         []model.ProcessIdentity
 	Kind            string
 	SessionKey      string
 	RootPID         int32
@@ -173,13 +180,18 @@ type sessionState struct {
 }
 
 type Controller struct {
-	mu       sync.Mutex
-	policies PolicySet
-	states   map[string]*sessionState
-	pending  map[string]PendingAction
-	latest   Snapshot
-	seq      uint64
-	execute  func(ControlAction) error
+	mu                  sync.Mutex
+	policies            PolicySet
+	states              map[string]*sessionState
+	pending             map[string]PendingAction
+	latest              Snapshot
+	seq                 uint64
+	execute             func(ControlAction) error
+	receiptStore        ReceiptStore
+	receipts            []model.InterventionReceipt
+	receiptHistoryError error
+	restoreReceipts     []model.InterventionReceipt
+	policyRevision      uint64
 }
 
 func NewController(policy Policy, execute func(ControlAction) error) *Controller {
@@ -216,6 +228,7 @@ func (c *Controller) SetPolicySet(p PolicySet) bool {
 		return false
 	}
 	c.policies = p
+	c.policyRevision++
 	c.states = map[string]*sessionState{}
 	c.pending = map[string]PendingAction{}
 	for i := range c.latest.Sessions {
@@ -292,6 +305,7 @@ func (c *Controller) SetExecutor(fn func(ControlAction) error) {
 
 func (c *Controller) Observe(snapshot Snapshot, now time.Time) {
 	c.mu.Lock()
+	c.observeOutcomesLocked(snapshot, now)
 	policies := c.policies
 	live := make(map[string]bool, len(snapshot.Sessions))
 	type automaticAction struct {
@@ -313,12 +327,17 @@ func (c *Controller) Observe(snapshot Snapshot, now time.Time) {
 		state := c.states[s.Key]
 		if state == nil {
 			state = &sessionState{applied: make(map[InterventionAction]bool)}
+			c.restoreActionStateLocked(*s, state)
 			c.states[s.Key] = state
 		}
 		if state.applied == nil {
 			state.applied = make(map[InterventionAction]bool)
 		}
 		populateSessionControl(control, state)
+		if state.inFlight != "" {
+			control.State = interventionState(state.inFlight)
+			continue
+		}
 		if len(violations) == 0 {
 			delete(c.pending, state.pendingID)
 			if state.paused {
@@ -366,24 +385,32 @@ func (c *Controller) Observe(snapshot Snapshot, now time.Time) {
 			}
 			continue
 		}
-		if state.inFlight != "" || state.pendingID != "" {
-			if state.pendingID != "" {
-				control.State, control.PendingID = StateApproval, state.pendingID
+		if state.pendingID != "" {
+			if pending, ok := c.pending[state.pendingID]; ok && pending.ContextKey != actionContext(*s, string(pending.Action), pending.Nice, violations) {
+				delete(c.pending, state.pendingID)
+				state.pendingID = ""
+			} else {
+				if state.pendingID != "" {
+					control.State, control.PendingID = StateApproval, state.pendingID
+				}
+				continue
 			}
-			continue
 		}
 		targetPID, targetStartedAt := containmentTarget(*s)
 		action := ControlAction{Kind: string(step.Action), SessionKey: s.Key, RootPID: s.RootPID,
 			RootStartedAt: s.RootStartedAt, TargetPID: targetPID, TargetStartedAt: targetStartedAt,
 			Name: s.Name, Workspace: s.Workspace, Nice: step.Nice,
 			Violations: append([]Violation(nil), violations...)}
+		action.IntentID = newActionID()
+		action.PolicyRevision = c.policyRevision
 		if policy.Mode == ModePrompt && step.Action != ActionNotify {
 			if state.pendingID == "" {
 				c.seq++
-				state.pendingID = fmt.Sprintf("resource-%d", c.seq)
+				state.pendingID = action.IntentID
 				c.pending[state.pendingID] = PendingAction{ID: state.pendingID, SessionKey: s.Key,
 					RootPID: s.RootPID, Name: s.Name, Workspace: s.Workspace, CreatedAt: now,
-					Violations: append([]Violation(nil), violations...), Action: step.Action, Nice: step.Nice}
+					Violations: append([]Violation(nil), violations...), Action: step.Action, Nice: step.Nice,
+					ContextKey: actionContext(*s, action.Kind, step.Nice, violations)}
 			}
 			control.State, control.PendingID = StateApproval, state.pendingID
 			continue
@@ -400,15 +427,9 @@ func (c *Controller) Observe(snapshot Snapshot, now time.Time) {
 	}
 	snapshot.Control = c.controlSnapshotLocked(policies)
 	c.latest = cloneSnapshot(snapshot)
-	execute := c.execute
 	c.mu.Unlock()
 	for _, automatic := range automatic {
-		var err error
-		if execute == nil && automatic.action.Kind != string(ActionNotify) {
-			err = fmt.Errorf("resource intervention is unavailable")
-		} else if execute != nil {
-			err = execute(automatic.action)
-		}
+		err := c.executeRecorded(automatic.action, now)
 		c.mu.Lock()
 		c.applyActionResultLocked(automatic.action.SessionKey, InterventionAction(automatic.action.Kind), err, now, automatic.cooldown)
 		c.mu.Unlock()
@@ -469,8 +490,16 @@ func (c *Controller) applyActionResultLocked(sessionKey string, action Intervent
 	if err != nil {
 		state.lastError = err.Error()
 		state.cooldownUntil = now.Add(cooldown)
+		var consumed *ConsumedActionError
+		if errors.As(err, &consumed) {
+			state.applied[action] = true
+			if consumed.MaybePaused {
+				state.paused = true
+				state.lastAction = ActionPause
+			}
+		}
 		var partialPause *PartialPauseError
-		if errors.As(err, &partialPause) {
+		if errors.As(err, &partialPause) || state.paused {
 			state.paused = true
 			state.lastAction = ActionPause
 			c.updateLatestControlLocked(sessionKey, StatePaused, "", state)
@@ -508,8 +537,16 @@ func (c *Controller) Snapshot() Snapshot {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	s := cloneSnapshot(c.latest)
+	s.Interventions = cloneReceipts(c.receipts)
 	s.Control = c.controlSnapshotLocked(c.policies)
 	for i := range s.Sessions {
+		for j := len(c.receipts) - 1; j >= 0; j-- {
+			if c.receipts[j].SessionKey == s.Sessions[i].Key && s.Sessions[i].Control != nil {
+				r := cloneReceipt(c.receipts[j])
+				s.Sessions[i].Control.Result = &r
+				break
+			}
+		}
 		if st := c.states[s.Sessions[i].Key]; st != nil && st.pendingID != "" && s.Sessions[i].Control != nil {
 			s.Sessions[i].Control.PendingID = st.pendingID
 		}
@@ -610,19 +647,38 @@ func (c *Controller) Resolve(id, decision string, now time.Time) error {
 	var action ControlAction
 	for _, s := range c.latest.Sessions {
 		if s.Key == pending.SessionKey {
+			policy, _ := c.policies.forWorkspace(s.Workspace)
+			if pending.ContextKey != actionContext(s, string(pending.Action), pending.Nice, policyViolations(policy, s)) {
+				delete(c.pending, id)
+				state.pendingID = ""
+				c.mu.Unlock()
+				return fmt.Errorf("resource evidence changed; review the current action")
+			}
 			targetPID, targetStartedAt := containmentTarget(s)
-			action = ControlAction{Kind: string(pending.Action), SessionKey: s.Key, RootPID: s.RootPID,
+			action = ControlAction{IntentID: id, Kind: string(pending.Action), SessionKey: s.Key, RootPID: s.RootPID,
 				RootStartedAt: s.RootStartedAt, TargetPID: targetPID, TargetStartedAt: targetStartedAt,
 				Name: s.Name, Workspace: s.Workspace, Violations: pending.Violations, Nice: pending.Nice}
+			action.PolicyRevision = c.policyRevision
 			break
 		}
 	}
 	state.inFlight = pending.Action
-	execute := c.execute
 	c.mu.Unlock()
 	fail := func(err error) error {
 		c.mu.Lock()
 		if current := c.states[pending.SessionKey]; current != nil && current.pendingID == id && current.inFlight == pending.Action {
+			var consumed *ConsumedActionError
+			if errors.As(err, &consumed) {
+				delete(c.pending, id)
+				current.pendingID = ""
+			} else {
+				// A safely failed attempt can be retried with fresh evidence and
+				// a fresh intent; the original request ID cannot replay it.
+				delete(c.pending, id)
+				pending.ID = newActionID()
+				current.pendingID = pending.ID
+				c.pending[pending.ID] = pending
+			}
 			policy, _ := c.policies.forWorkspace(pending.Workspace)
 			c.applyActionResultLocked(pending.SessionKey, pending.Action, err, now, policy.Cooldown)
 		}
@@ -632,11 +688,8 @@ func (c *Controller) Resolve(id, decision string, now time.Time) error {
 	if action.TargetPID == 0 {
 		return fail(fmt.Errorf("session is no longer active"))
 	}
-	if execute == nil {
-		return fail(fmt.Errorf("resource intervention is unavailable"))
-	}
-	if err := execute(action); err != nil {
-		return fail(err) // keep the approval pending so the operator can retry
+	if err := c.executeRecorded(action, now); err != nil {
+		return fail(err)
 	}
 	c.mu.Lock()
 	delete(c.pending, id)
@@ -664,14 +717,14 @@ func (c *Controller) Resume(sessionKey string, now time.Time) error {
 	for _, s := range c.latest.Sessions {
 		if s.Key == sessionKey {
 			targetPID, targetStartedAt := containmentTarget(s)
-			action = ControlAction{Kind: string(ActionResume), SessionKey: s.Key, RootPID: s.RootPID,
+			action = ControlAction{IntentID: newActionID(), Kind: string(ActionResume), SessionKey: s.Key, RootPID: s.RootPID,
 				RootStartedAt: s.RootStartedAt, TargetPID: targetPID, TargetStartedAt: targetStartedAt,
 				Name: s.Name, Workspace: s.Workspace}
+			action.PolicyRevision = c.policyRevision
 			break
 		}
 	}
 	state.inFlight = ActionResume
-	execute := c.execute
 	c.mu.Unlock()
 	fail := func(err error) error {
 		c.mu.Lock()
@@ -685,10 +738,7 @@ func (c *Controller) Resume(sessionKey string, now time.Time) error {
 	if action.TargetPID == 0 {
 		return fail(fmt.Errorf("session is no longer active"))
 	}
-	if execute == nil {
-		return fail(fmt.Errorf("resource intervention is unavailable"))
-	}
-	if err := execute(action); err != nil {
+	if err := c.executeRecorded(action, now); err != nil {
 		return fail(err)
 	}
 	c.mu.Lock()

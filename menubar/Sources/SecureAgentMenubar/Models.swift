@@ -3,11 +3,32 @@ import Foundation
 public struct ResourceSnapshotModel: Codable, Sendable {
     public let host: HostPressureModel?
     public let sessions: [ResourceSessionModel]?
+	public let interventions: [ResourceOutcomeModel]?
 
-    public init(host: HostPressureModel?, sessions: [ResourceSessionModel]? = nil) {
+    public init(host: HostPressureModel?, sessions: [ResourceSessionModel]? = nil, interventions: [ResourceOutcomeModel]? = nil) {
         self.host = host
         self.sessions = sessions
+		self.interventions = interventions
     }
+}
+
+public struct ResourceOutcomeModel: Codable, Sendable, Identifiable {
+ public let id: String
+ public let kind: String
+ public let status: String
+ public let verification: String
+ public let verifiedBy: String?
+ public let limits: [String]?
+ public let error: String?
+ enum CodingKeys: String, CodingKey {
+  case id, kind, status, verification, limits, error
+  case verifiedBy = "verified_by"
+ }
+ public var summary: String {
+  let application = ["requested":"requested", "applied":"applied", "partial":"partially applied", "failed":"failed", "cancelled":"cancelled"][status] ?? "application unknown"
+  let observed = verification == "verified" && verifiedBy == "captured-family-absent" ? "captured family absent" : verification == "observed" ? "resource samples observed" : verification == "pending" ? "observing up to 3 samples / 15 seconds" : "verification unknown"
+  return "\(kind.replacingOccurrences(of: "_", with: " ").capitalized) · \(application) · \(observed)"
+ }
 }
 
 public struct ResourceSessionModel: Codable, Sendable {

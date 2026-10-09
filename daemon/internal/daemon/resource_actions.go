@@ -29,6 +29,12 @@ func applyResourceProcessAction(action resource.ControlAction, infos map[int32]a
 	if rootPID == 0 {
 		rootPID = normalizedActionRoot(target)
 	}
+	if normalizedActionRoot(target) != rootPID {
+		return fmt.Errorf("target is no longer in the approved process family")
+	}
+	if root, exists := infos[rootPID]; exists && !action.RootStartedAt.IsZero() && !root.StartedAt.Equal(action.RootStartedAt) {
+		return fmt.Errorf("root pid start time changed")
+	}
 	var pids []int32
 	for pid, info := range infos {
 		if normalizedActionRoot(info) == rootPID {
@@ -39,6 +45,17 @@ func applyResourceProcessAction(action resource.ControlAction, infos map[int32]a
 		return fmt.Errorf("session has no recognized live processes")
 	}
 	sort.Slice(pids, func(i, j int) bool { return pids[i] < pids[j] })
+	if len(action.Targets) > 0 {
+		if len(action.Targets) != len(pids) {
+			return fmt.Errorf("process family changed before intervention")
+		}
+		for _, expected := range action.Targets {
+			info, ok := infos[expected.PID]
+			if !ok || expected.StartedAt.IsZero() || !info.StartedAt.Equal(expected.StartedAt) || normalizedActionRoot(info) != rootPID {
+				return fmt.Errorf("captured process identity changed before intervention")
+			}
+		}
+	}
 	switch resource.InterventionAction(action.Kind) {
 	case resource.ActionTerminate:
 		if terminate == nil {
@@ -49,8 +66,11 @@ func applyResourceProcessAction(action resource.ControlAction, infos map[int32]a
 		if priority == nil {
 			return fmt.Errorf("priority control is unavailable")
 		}
-		for _, pid := range pids {
+		for i, pid := range pids {
 			if err := priority(pid, action.Nice); err != nil {
+				if i > 0 {
+					return &resource.PartialActionError{Cause: fmt.Errorf("lower priority for pid %d: %w", pid, err)}
+				}
 				return fmt.Errorf("lower priority for pid %d: %w", pid, err)
 			}
 		}
@@ -75,6 +95,9 @@ func applyResourceProcessAction(action resource.ControlAction, infos map[int32]a
 					if rollbackErr != nil {
 						return &resource.PartialPauseError{Cause: fmt.Errorf("signal pid %d: %w; rollback failed: %v", pid, err, rollbackErr)}
 					}
+				}
+				if sig == syscall.SIGCONT && len(completed) > 0 {
+					return &resource.PartialActionError{Cause: fmt.Errorf("signal pid %d: %w", pid, err)}
 				}
 				return fmt.Errorf("signal pid %d: %w", pid, err)
 			}
