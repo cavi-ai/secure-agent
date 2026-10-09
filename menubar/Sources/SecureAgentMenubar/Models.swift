@@ -761,12 +761,14 @@ public struct FlagModel: Codable, Identifiable, Sendable {
     /// True when the operator applied a disposition on this flag — it stops
     /// counting as critical and renders dimmed instead of endlessly red.
     public let acknowledged: Bool?
+    public let reviewId: String?
 
     enum CodingKeys: String, CodingKey {
         case id, rule, severity, ts, pid, agent, evidence, advisor, title, explain
         case sessionId = "session_id"
         case workspace
         case acknowledged
+        case reviewId = "review_id"
     }
 
     public init(id: String, rule: String, severity: Int, ts: String, pid: Int32, agent: String,
@@ -774,7 +776,7 @@ public struct FlagModel: Codable, Identifiable, Sendable {
                 advisor: AdvisorVerdictModel? = nil,
                 acknowledged: Bool? = nil,
                 title: String? = nil,
-                explain: FlagExplain? = nil) {
+                explain: FlagExplain? = nil, reviewId: String? = nil) {
         self.id = id
         self.rule = rule
         self.severity = severity
@@ -788,6 +790,7 @@ public struct FlagModel: Codable, Identifiable, Sendable {
         self.title = title
         self.explain = explain
         self.acknowledged = acknowledged
+        self.reviewId = reviewId
     }
 
     /// Copy with acknowledged=true — the local echo of a successful dismiss,
@@ -795,7 +798,7 @@ public struct FlagModel: Codable, Identifiable, Sendable {
     public func acknowledgedCopy() -> FlagModel {
         FlagModel(id: id, rule: rule, severity: severity, ts: ts, pid: pid, agent: agent,
                   evidence: evidence, sessionId: sessionId, advisor: advisor,
-                  acknowledged: true, title: title, explain: explain)
+                  acknowledged: true, title: title, explain: explain, reviewId: reviewId)
     }
 }
 

@@ -248,6 +248,7 @@ document.addEventListener('DOMContentLoaded', () => {
     status: null,
     resources: null,
     flags: [],       // unfiltered — feeds KPIs
+    reviews: { reviews: [], degraded: false },
     patterns: [],    // /snapshot patterns: repeating findings, one card each
     routine: [],     // /snapshot routine: the same reads across agents, one decision each
     flagsView: [],   // filtered — feeds the flags panel
@@ -397,6 +398,40 @@ document.addEventListener('DOMContentLoaded', () => {
   // One active selection per history view; relative-window cutoffs change
   // on each request, so scope is the selected filters rather than the URL.
   const historyScopes = { flags: null, events: null };
+  const reviewDrafts = new Map();
+  let reviewCursor = '';
+  let reviewPageSeq = 0;
+  window.reviewAct = async function(id, revision, action) {
+    reviewDrafts.set(id, { action, conflict: false });
+    try {
+      const res = await apiFetch('/reviews/decision', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({id,revision,action}) });
+      if (res.status === 409) {
+        reviewDrafts.set(id, { action, conflict: true });
+        await fetchTelemetry();
+        markDirty('flags', 'attention');
+        showToast('Evidence changed. Review the new facts and choose again.', 'info');
+        return;
+      }
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      reviewDrafts.delete(id);
+      await fetchTelemetry();
+      markDirty('flags', 'attention');
+    } catch (err) { showToast(`Could not save review: ${err}`, 'danger'); }
+  };
+  // Review pagination is explicit; each response is bounded to 100 records.
+  window.loadReviewPage = async function(after) {
+    const seq = ++reviewPageSeq;
+    try {
+      const res = await apiFetch('/reviews?limit=100&after=' + encodeURIComponent(after || ''));
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const page = await res.json();
+      if (seq !== reviewPageSeq) return;
+      if (!Array.isArray(page.reviews)) throw new Error('Invalid review response');
+      telemetryData.reviews = page;
+      reviewCursor = after || '';
+      markDirty('flags');
+    } catch (err) { showToast(`Could not load reviews: ${err}`, 'danger'); }
+  };
   const seenAgents = new Set();
   const seenRules = new Set();
 
@@ -1655,6 +1690,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (slow) loadSpend(); // beside this cycle: its reports never hold the first render
     const requests = [grab('snapshot', '/snapshot'), grab('guard decisions', '/guard/pending')];
     if (slow) requests.push(grab('resources', '/resources', currentSlow));
+    const reviewQueryCursor = reviewCursor;
+    if (reviewQueryCursor) requests.push(grab('reviews', '/reviews?limit=100&after=' + encodeURIComponent(reviewQueryCursor), () => current() && reviewCursor === reviewQueryCursor).then(page => { if (page) telemetryData.reviews = page; }));
     const [snap, guardPending, resources] = await Promise.all(requests);
     if (sessionEnded) return;
     if (resources && currentSlow()) {
@@ -1676,6 +1713,7 @@ document.addEventListener('DOMContentLoaded', () => {
           telemetryData.status = status;
         }
         if (snap.flags) telemetryData.flags = (snap.flags || []).filter(f => !f.acknowledged);
+        if (snap.reviews && !reviewCursor) telemetryData.reviews = snap.reviews;
         if (snap.patterns) telemetryData.patterns = snap.patterns || [];
         if (snap.routine) telemetryData.routine = snap.routine || [];
         if (snap.incidents) telemetryData.incidents = snap.incidents || [];
@@ -2547,13 +2585,14 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   };
 
-  // Marks every ticked history row reviewed behind one confirmation: the
-  // rows' flag ids in acknowledge batches of 500, one optimistic update, one
-  // toast. A failure puts every row back.
+  // Revision-bound records use their captured revisions; source-only rows
+  // keep the legacy acknowledgment batches. Refresh after a partial failure
+  // so successful earlier decisions remain visible without retrying a choice.
   window.historyBulkReview = async function() {
     const rows = Array.from(historySelected).map(k => (window.SA.historyRows || new Map()).get(k)).filter(Boolean);
     const ids = [...new Set(rows.flatMap(r => r.flagIds))];
-    if (!ids.length) return;
+    const reviews = rows.filter(r => r.review).map(r => r.review);
+    if (!ids.length && !reviews.length) return;
     const n = rows.length;
     if (!await window.saConfirm(`Mark ${n} finding${n === 1 ? '' : 's'} reviewed? They stay in history; rules keep watching.`,
       { title: 'Mark reviewed', okLabel: 'Mark reviewed', danger: false })) return;
@@ -2561,6 +2600,17 @@ document.addEventListener('DOMContentLoaded', () => {
       Object.assign(telemetryData, reviewedAfterOptimistic(telemetryData, ids));
     });
     try {
+      for (const review of reviews) {
+        const res = await apiFetch('/reviews/decision', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: review.id, revision: review.revision, action: 'acknowledge' })
+        });
+        if (res.status === 409) {
+          reviewDrafts.set(review.id, { action: 'acknowledge', conflict: true });
+          throw new Error('Evidence changed. Review the new facts and choose again.');
+        }
+        if (!res.ok) throw new Error(await res.text());
+      }
       for (let i = 0; i < ids.length; i += 500) {
         const res = await apiFetch('/flags/acknowledge', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -2571,6 +2621,8 @@ document.addEventListener('DOMContentLoaded', () => {
     } catch (err) {
       revert();
       showToast(`Mark reviewed failed: ${err.message || err}`, 'danger');
+      await fetchTelemetry();
+      markDirty(['flags', 'attention']);
       return;
     }
     historySelected.clear();
@@ -2600,6 +2652,8 @@ document.addEventListener('DOMContentLoaded', () => {
     agentGroupOpen,
     agentTreeOpen,
     expanded: expandedLists,
+    reviewDrafts,
+    get reviewCursor() { return reviewCursor; },
     historySelected,
     historyRows: new Map(),
     harnessFilter,
@@ -4323,6 +4377,12 @@ document.addEventListener('DOMContentLoaded', () => {
       case 'dismiss-flag':
         window.dismissFlag(d.id);
         break;
+      case 'review-decision':
+        window.reviewAct(d.id, Number(d.revision), d.decision);
+        break;
+      case 'review-page':
+        window.loadReviewPage(d.after);
+        break;
       case 'explain-act':
         if (d.patternKey) window.patternAct(d.patternKey, d.actionId, d.host);
         else window.explainAct(d.flagId, d.actionId, d.host);
@@ -4722,7 +4782,8 @@ document.addEventListener('DOMContentLoaded', () => {
         // posture.groups is the attention queue.
         try { telemetryData.posture = JSON.parse(msg.data); } catch { /* next reconcile repairs */ }
         markDirty('posture', 'attention', 'tab-badges');
-      }
+      },
+      review: () => { fetchTelemetry(); }
     }
   });
   liveUpdates.start();

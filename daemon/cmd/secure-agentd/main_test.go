@@ -226,6 +226,18 @@ func TestEndToEndSmokeScenario(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer cliConn.Close()
+	// Retain the accepted peer until sampling finishes. An unread channel
+	// becomes unreachable after its sender exits, allowing the connection's
+	// finalizer to close it before lsof observes an established socket.
+	select {
+	case serverConn := <-connCh:
+		if serverConn == nil {
+			t.Fatal("fixture failed to accept connection")
+		}
+		defer serverConn.Close()
+	case <-time.After(5 * time.Second):
+		t.Fatal("fixture connection was not accepted")
+	}
 
 	// Correlator writes asynchronously via netsample. Wait on the store
 	// first (same contract as TestFullBusCorrelatorStorePipeline), then
@@ -275,10 +287,6 @@ func TestEndToEndSmokeScenario(t *testing.T) {
 			}
 		}
 		time.Sleep(50 * time.Millisecond)
-	}
-
-	if serverConn := <-connCh; serverConn != nil {
-		serverConn.Close()
 	}
 
 	if !flagFound {

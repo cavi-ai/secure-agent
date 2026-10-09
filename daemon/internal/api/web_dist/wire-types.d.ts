@@ -160,6 +160,7 @@ export interface Flag {
   workspace?: string;
   evidence: EvidenceItem[];
   title?: string;
+  review_id?: string;
   advisor?: AdvisorVerdict;
   acknowledged?: boolean;
   ack_reason?: string;
@@ -167,6 +168,59 @@ export interface Flag {
   repeats?: number;
   last_seen?: string;
   explain?: FlagExplain;
+}
+
+export interface ReviewContext {
+  rule: string;
+  session_id?: string;
+  workspace?: string;
+  readers: string[];
+  resources: string[];
+  destinations: string[];
+  attribution: string;
+  source_id?: string;
+}
+
+export interface ReviewDecisionReceipt {
+  id: string;
+  revision: number;
+  action: string;
+  at: string;
+  source?: string;
+}
+
+export interface ReviewRecord {
+  id: string;
+  revision: number;
+  context: ReviewContext;
+  agent: string;
+  severity: number;
+  pid: number;
+  assessment: FindingAssessment;
+  review_state: string;
+  reviewed_revision?: number;
+  decision?: ReviewDecisionReceipt;
+  count: number;
+  first_seen: string;
+  last_seen: string;
+  latest_flag_id: string;
+  evidence_flag_id: string;
+  evidence_flag_available: boolean;
+  source_ids: string[];
+  incident_ids: string[];
+  evidence_available: boolean;
+}
+
+export interface ReviewDecisionRequest {
+  id: string;
+  revision: number;
+  action: string;
+}
+
+export interface ReviewPage {
+  reviews: ReviewRecord[];
+  next?: string;
+  degraded: boolean;
 }
 
 export interface PatternProcess {
@@ -547,6 +601,7 @@ export interface AttentionItem {
   advisor?: AdvisorVerdict;
   disposition?: Disposition;
   assessment?: FindingAssessment;
+  review?: ReviewRecord;
 }
 
 export interface AttentionGroup {

@@ -88,6 +88,8 @@ type Flag struct {
 	// Title is the operator-facing rule name, stamped at serve time from the
 	// daemon's single rule-title table. Not persisted; empty in stored rows.
 	Title string `json:"title,omitempty"`
+	// ReviewID is served only when the durable projection matches this source.
+	ReviewID string `json:"review_id,omitempty"`
 	// Advisor carries the local advisor's triage verdict when one exists.
 	// Advisory only — never an enforcement input.
 	Advisor *AdvisorVerdict `json:"advisor,omitempty"`

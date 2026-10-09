@@ -310,6 +310,18 @@ function needView(item, ctx) {
   const v = { key: `${item.kind}:${item.id}`, kind: item.kind, agent: g.agent || '', sev: 'sev-bad', word: 'critical',
     what: item.detail || item.title || '', why: '', at: '', items: [], body: null };
   switch (item.kind) {
+    case 'review': {
+      const r = item.review;
+      if (!r) return v;
+      const c = r.context || {};
+      const attrs = action => `data-action="review-decision" data-id="${id}" data-revision="${Number(r.revision)}" data-decision="${action}"`;
+      return { ...v, agent: r.agent || v.agent, what: (c.resources || []).join(', ') || item.title,
+        why: (r.assessment || {}).reason || '', at: r.last_seen,
+        items: r.evidence_available ? [
+          { label: 'Mark reviewed', attrs: attrs('acknowledge'), bar: true },
+          { label: 'Report closure', attrs: attrs('close_reported') },
+        ] : [], body: () => reviewHTML(r, ctx.SA.reviewDrafts && ctx.SA.reviewDrafts.get(r.id), false) };
+    }
     case 'guard': {
       const workspace = String(g.workspace || '').split('/').filter(Boolean).pop() || '';
       const a = (verdict, scope) => `data-action="guard-resolve" data-id="${id}" data-verdict="${verdict}" data-scope="${scope}"`;
@@ -412,6 +424,16 @@ function flagRow(f, ctx) {
     flagIds: [f.id], body: () => flagBodyHTML(f, ctx) };
 }
 
+function reviewRow(r, ctx) {
+  const c = r.context || {};
+  return { kind: 'review', key: r.id, at: r.last_seen, agent: r.agent,
+    title: (c.resources || []).join(', ') || ruleTitle(c.rule), sub: `evidence revision ${Number(r.revision)}`,
+    count: Number(r.count) || 0, hourly: null, risk: riskOf(r.assessment, null, r.severity),
+    reviewed: r.review_state !== 'unreviewed', selectable: !!r.evidence_available,
+    flagIds: [], review: { id: r.id, revision: r.revision },
+    body: () => reviewHTML(r, ctx.SA.reviewDrafts && ctx.SA.reviewDrafts.get(r.id)) };
+}
+
 function patternRow(p, ctx) {
   return { kind: 'pattern', key: p.key, at: p.last, agent: p.agent, title: p.title || ruleTitle(p.rule),
     sub: (p.subject || {}).label || '', count: Number(p.count) || 0, hourly: p.hourly,
@@ -454,7 +476,7 @@ function logRowHTML(row, open, nowMs) {
   const finding = escapeHTML(row.title) + (row.sub ? ` <span class="c-sub-text">· ${escapeHTML(row.sub)}</span>` : '');
   const bars = row.hourly ? `<span class="pattern-bars log-bars${row.risk.critical ? ' crit' : ''}" aria-hidden="true">${patternBarsHTML(row.hourly)}</span>` : '';
   return `<li class="log-row${row.risk.critical ? ' crit' : ''}${open ? ' open' : ''}" data-row-key="${escapeHTML(rk)}">`
-    + `<div class="log-line"><input type="checkbox" class="log-check" data-action="history-select" data-row-key="${escapeHTML(rk)}" aria-label="Select: ${escapeHTML(row.title)}"${row.reviewed ? ' disabled' : ''}>`
+    + `<div class="log-line"><input type="checkbox" class="log-check" data-action="history-select" data-row-key="${escapeHTML(rk)}" aria-label="Select: ${escapeHTML(row.title)}"${row.reviewed || row.selectable === false ? ' disabled' : ''}>`
     + `<button type="button" class="log-head" data-action="toggle-row" data-key="log:${escapeHTML(rk)}" aria-expanded="${open}" aria-controls="${dom}">`
     + `<span class="c-when">${escapeHTML(when)}</span>`
     + `<span class="c-agent">${harnessChipHTML(row.agent)}<span>${escapeHTML(row.agent || '')}</span></span>`
@@ -562,19 +584,28 @@ function renderFlags() {
   };
   const term = SA.globalSearchTerm();
   const scopedFlags = scopedBySession(SA.t.flagsView || [], SA.timelineSession, SA.timelinePids);
-  const patterns = patternsInView(allPatterns, {
+  const reviewPage = SA.t.reviews || { reviews: [] };
+  const reviews = (reviewPage.reviews || []).filter(r => (!SA.timelineSession || r.context.session_id === SA.timelineSession)
+    && (!selected('flags-agent') || r.agent === selected('flags-agent')) && (!selected('flags-rule') || r.context.rule === selected('flags-rule'))
+    && matchesSearch(term, r.agent, r.context.rule, r.context.resources, r.context.destinations, r.context.workspace)
+    && (selected('flags-severity') !== '3' || r.assessment.risk === 'critical' || (r.assessment.risk === 'unknown' && r.severity >= 3))
+    && (!selected('flags-window') || Date.parse(r.last_seen) >= Date.now() - ({ '1h': 3600000, '24h': 86400000, '7d': 604800000 }[selected('flags-window')] || Infinity)));
+  const representedReviews = new Set(reviewPage.degraded ? [] : reviews.map(r => r.id));
+  const represented = new Set(scopedFlags.filter(f => f.review_id && representedReviews.has(f.review_id)).map(f => f.id));
+  const patterns = patternsInView(allPatterns.filter(p => !(p.flag_ids || []).some(id => represented.has(id))), {
     term, agent: selected('flags-agent'), rule: selected('flags-rule'),
     session: SA.timelineSession, pids: SA.timelinePids, flags: scopedFlags, filtered: SA.isFlagsFiltered(),
   });
-  const flags = uncoveredFlags(scopedFlags.filter(f => matchesSearch(term, f.agent, f.rule, f.evidence, f.sessionId, f.workspace)), patterns);
+  const flags = uncoveredFlags(scopedFlags.filter(f => !represented.has(f.id) && matchesSearch(term, f.agent, f.rule, f.evidence, f.sessionId, f.workspace)), patterns);
   const agentSel = selected('flags-agent');
   const routines = (SA.sessionScopeOn() || SA.isFlagsFiltered() || selected('flags-rule')) ? [] : (SA.t.routine || []).filter(rg =>
-    (!agentSel || (rg.agents || []).includes(agentSel)) && matchesSearch(term, rg.reader, rg.area, rg.summary, (rg.agents || []).join(' ')));
-  const total = patterns.length + flags.length + routines.length;
+    !(rg.flag_ids || []).some(id => represented.has(id)) && (!agentSel || (rg.agents || []).includes(agentSel))
+    && matchesSearch(term, rg.reader, rg.area, rg.summary, (rg.agents || []).join(' ')));
+  const total = patterns.length + flags.length + routines.length + reviews.length;
   SA.paintSessionChip('flags-session-filter', 'flags-session-filter-id', total);
   badge.textContent = total;
 
-  if (total === 0) {
+  if (total === 0 && !reviewPage.next && !SA.reviewCursor) {
     SA.historyRows = new Map();
     paintHistoryBulk(SA);
     const msg = SA.sessionScopeOn()
@@ -585,11 +616,15 @@ function renderFlags() {
   }
 
   const ctx = homeContext(SA);
-  const rows = patterns.map(p => patternRow(p, ctx)).concat(flags.map(f => flagRow(f, ctx)), routines.map(routineRow)).sort(byUrgency);
+  const rows = reviews.map(r => reviewRow(r, ctx)).concat(patterns.map(p => patternRow(p, ctx)), flags.map(f => flagRow(f, ctx)), routines.map(routineRow)).sort(byUrgency);
   // Muted (rule, host, agent) pairs follow the rows, so the quiet is
   // deliberate and reversible.
   const mutes = SA.t.mutes || [];
-  const shown = patchLog(container, rows, 'history', SA, ctx.now, mutes.length ? [{ key: 'mutes', html: '<li class="mute-list"></li>' }] : []);
+  const extra = mutes.length ? [{ key: 'mutes', html: '<li class="mute-list"></li>' }] : [];
+  if (reviewPage.degraded) extra.unshift({ key: 'review-degraded', html: '<li><p role="alert">Review storage is degraded. Original findings remain available.</p></li>' });
+  if (reviewPage.next) extra.push({ key: 'review-next', html: `<li><button class="btn btn-ghost" data-action="review-page" data-after="${escapeHTML(reviewPage.next)}">Next reviews</button></li>` });
+  if (SA.reviewCursor) extra.push({ key: 'review-first', html: '<li><button class="btn btn-ghost" data-action="review-page">First reviews</button></li>' });
+  const shown = patchLog(container, rows, 'history', SA, ctx.now, extra);
   const muteList = Array.from(container.children).find(el => el._saKey === 'mutes');
   if (muteList) {
     patchList(muteList, [{ key: 'head', html: '<div class="mute-head">Muted</div>' }]
@@ -598,7 +633,7 @@ function renderFlags() {
   }
 
   // Selection lives on the visible open rows only.
-  SA.historyRows = new Map(shown.filter(r => !r.reviewed).map(r => [logKey(r), r]));
+  SA.historyRows = new Map(shown.filter(r => !r.reviewed && r.selectable !== false).map(r => [logKey(r), r]));
   for (const k of Array.from(SA.historySelected)) if (!SA.historyRows.has(k)) SA.historySelected.delete(k);
   for (const c of container.querySelectorAll('.log-check')) c.checked = SA.historySelected.has(c.dataset.rowKey);
   paintHistoryBulk(SA);

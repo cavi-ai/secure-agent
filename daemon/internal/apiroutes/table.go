@@ -77,6 +77,8 @@ var Table = []Route{
 	{Path: "/snapshot", Console: true},
 	{Path: "/posture", Console: true},
 	{Path: "/flags", Console: true},
+	{Path: "/reviews", Console: true, NoAgent: true},
+	{Path: "/reviews/decision", Console: true, NoAgent: true, MutatingMethods: []string{"POST"}},
 	{Path: "/flags/", Prefix: true, Leaves: []string{"explain"}, Console: true},
 	{Path: "/events", Console: true},
 	{Path: "/events/stream", Console: true},

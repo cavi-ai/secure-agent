@@ -50,6 +50,7 @@ function isConsoleReport(key, value) {
     return rows(value) && value.every(row => typeof row.id === 'string' && row.id.length > 0);
   }
   if (key === 'flags' || key === 'events') return rows(value);
+  if (key === 'reviews') return record(value) && rows(value.reviews);
   if (key !== 'snapshot') return value !== null && typeof value === 'object';
 
   if (!record(value) || !record(value.status) || typeof value.status.uptime !== 'string') return false;
@@ -62,6 +63,8 @@ function isConsoleReport(key, value) {
   if (!optionalRecord(value.status, 'coverage')) return false;
   if (value.status.coverage && !optionalRows(value.status.coverage, 'harnesses')) return false;
   if (!optionalRecord(value, 'posture')) return false;
+  if (!optionalRecord(value, 'reviews')) return false;
+  if (value.reviews && !optionalRows(value.reviews, 'reviews')) return false;
   if (value.posture) {
     for (const name of ['items', 'coverage_items', 'groups']) {
       if (!optionalRows(value.posture, name)) return false;

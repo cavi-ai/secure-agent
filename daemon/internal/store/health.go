@@ -1,6 +1,7 @@
 package store
 
 import (
+	"log"
 	"sort"
 	"sync"
 )
@@ -53,6 +54,9 @@ func (s *Store) noteWrite(operation string, err error) bool {
 		return changed
 	}
 	h.failures++
+	if operation == "finding reviews" && !h.active[operation] {
+		log.Printf("store: finding review write failed: %v", err)
+	}
 	if h.active == nil {
 		h.active = make(map[string]bool)
 	}

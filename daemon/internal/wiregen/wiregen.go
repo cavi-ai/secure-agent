@@ -35,6 +35,7 @@ func WireTypes() []any {
 		model.Session{},
 		model.Flag{},
 		model.FindingAssessment{},
+		model.ReviewContext{}, model.ReviewRecord{}, model.ReviewDecisionRequest{}, model.ReviewDecisionReceipt{}, store.ReviewPage{},
 		model.Pattern{},
 		model.RoutineGroup{},
 		model.FileDetail{},

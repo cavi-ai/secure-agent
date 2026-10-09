@@ -15,8 +15,9 @@ import (
 // refresh when a bus event lands. Slow panels (fleet, audit, sources,
 // rollup, uninspected, notify rules) stay on their own 30s cadence.
 type Snapshot struct {
-	Status Status       `json:"status"`
-	Flags  []model.Flag `json:"flags"`
+	Status  Status           `json:"status"`
+	Flags   []model.Flag     `json:"flags"`
+	Reviews store.ReviewPage `json:"reviews"`
 	// Patterns are the repeating findings of the same 24h (at least 3 flags
 	// each); the console renders them instead of the flags they cover.
 	Patterns []model.Pattern `json:"patterns"`
@@ -77,14 +78,20 @@ func (a *API) snapshotWithSessions(sessions []model.Session, events []event.Even
 	})
 	for i := range flags {
 		flags[i].Title = humanFlagTitle(flags[i].Rule)
+		flags[i].ReviewID, _ = a.store.FindingReviewID(flags[i].ID)
 	}
 	a.stampExplains(flags)
 	since := time.Now().Add(-24 * time.Hour)
 	patterns := a.computePatterns(since, patternDefaultMin)
 	routine := a.routineGroups(since)
+	reviews, reviewErr := a.store.ListFindingReviews("", 100)
+	if reviewErr != nil {
+		reviews.Degraded = true
+	}
 	return Snapshot{
 		Status:      a.currentStatus(),
 		Flags:       flags,
+		Reviews:     reviews,
 		Patterns:    patterns,
 		Routine:     routine,
 		Incidents:   out,

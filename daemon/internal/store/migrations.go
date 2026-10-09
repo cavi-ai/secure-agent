@@ -9,8 +9,8 @@ import (
 
 // initializeSchema upgrades legacy layouts atomically. Each column is checked
 // independently so interrupted migrations from earlier releases can resume.
-// This compatibility bridge still creates v2, but can read additive v3 layouts
-// without lowering their version or removing metadata it does not own.
+// Review metadata is additive to the v2 read model; the earlier v3-aware
+// compatibility build can still read detector evidence after rollback.
 func initializeSchema(db *sql.DB) error {
 	tx, err := db.Begin()
 	if err != nil {
@@ -159,6 +159,7 @@ func initializeSchema(db *sql.DB) error {
 		`CREATE INDEX IF NOT EXISTS idx_sessions_root_identity ON sessions(root_pid, root_started_at);`,
 		worktreeReposSchema,
 		cleanupLogSchema,
+		findingReviewsSchema,
 		agentAsksSchema,
 		scanCacheSchema,
 	}
@@ -403,8 +404,8 @@ func initializeSchema(db *sql.DB) error {
 			return fmt.Errorf("create schema index: %w", err)
 		}
 	}
-	if version < 2 {
-		if _, err := tx.Exec(`PRAGMA user_version=2`); err != nil {
+	if version < 3 {
+		if _, err := tx.Exec(`PRAGMA user_version=3`); err != nil {
 			return err
 		}
 	}

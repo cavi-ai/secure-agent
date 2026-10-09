@@ -39,6 +39,7 @@ type AttentionItem struct {
 	// serves) and pattern items (the worst open flag's).
 	Disposition *model.Disposition       `json:"disposition,omitempty"`
 	Assessment  *model.FindingAssessment `json:"assessment,omitempty"`
+	Review      *model.ReviewRecord      `json:"review,omitempty"`
 }
 
 // AttentionGroup is one agent session, an explicit unattributed bucket, or
@@ -282,7 +283,38 @@ func (a *API) attentionQueue(st Status, patterns []model.Pattern, routine []mode
 		}
 	}
 	patternAdded := map[int]bool{}
+	reviewPage, reviewErr := a.store.ListFindingReviewsState("", 100, "unreviewed")
+	coveredReviews := map[string]bool{}
+	if reviewErr == nil {
+		for _, r := range reviewPage.Reviews {
+			if !r.EvidenceAvailable || r.Context.Attribution != "stored-session" {
+				continue
+			}
+			coveredReviews[r.ID] = true
+			severity := assessmentSeverity(r.Assessment, r.Severity)
+			if severity < 3 {
+				continue
+			}
+			key := "session:" + r.Context.SessionID
+			g := groups[key]
+			if g == nil {
+				g = &AttentionGroup{Key: key, Label: firstNonEmpty([]string{cwdBase(r.Context.Workspace), r.Agent, "Session"}), Agent: r.Agent, Workspace: r.Context.Workspace, Summary: "Recorded session " + r.Context.SessionID, Items: []AttentionItem{}}
+				groups[key] = g
+			}
+			add(g, PostureItem{Kind: "review", ID: r.ID, Title: humanFlagTitle(r.Context.Rule), Severity: severity, Detail: r.Assessment.Reason, Timestamp: r.LastSeen.UTC().Format(time.RFC3339)}, AttentionItem{Kind: "review", ID: r.ID, Priority: 1 + severity/3, Title: humanFlagTitle(r.Context.Rule), Detail: r.Assessment.Reason, Count: r.Count, Assessment: &r.Assessment, Review: &r})
+		}
+	}
 	for _, f := range a.attentionFlags() {
+		if f.Rule == readConnectRule && reviewErr == nil {
+			if id, err := a.store.FindingReviewID(f.ID); err == nil && id != "" {
+				if coveredReviews[id] {
+					continue
+				}
+				if r, ok, err := a.store.GetFindingReview(id); err == nil && ok && r.Context.Attribution == "stored-session" && r.ReviewState != "unreviewed" {
+					continue
+				}
+			}
+		}
 		if i, ok := routineOf[f.ID]; ok {
 			if !routineAdded[i] {
 				routineAdded[i] = true
@@ -396,6 +428,13 @@ func (a *API) attentionQueue(st Status, patterns []model.Pattern, routine []mode
 	// Open incidents of high or critical risk; lower-risk ones stay in the
 	// findings history.
 	for _, inc := range a.store.RecentIncidents(25) {
+		if reviewErr == nil {
+			if id, err := a.store.FindingReviewID(inc.FlagID); err == nil && id != "" {
+				if r, ok, err := a.store.GetFindingReview(id); err == nil && ok && r.Context.Attribution == "stored-session" {
+					continue
+				}
+			}
+		}
 		wf, _ := a.store.IncidentStatus(inc.ID)
 		status := firstNonEmpty([]string{wf.Status, "open"})
 		critical := inc.Risk == model.RiskCritical

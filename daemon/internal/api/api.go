@@ -674,6 +674,8 @@ func (a *API) routes() map[string]http.HandlerFunc {
 		"/snapshot":                     a.handleSnapshot,
 		"/posture":                      a.handlePosture,
 		"/flags":                        a.handleFlags,
+		"/reviews":                      a.handleReviews,
+		"/reviews/decision":             a.handleReviewDecision,
 		"/flags/":                       a.handleFlagExplain,
 		"/events":                       a.handleEvents,
 		"/events/stream":                a.handleEventStream,
@@ -1070,6 +1072,7 @@ func (a *API) handleFlags(w http.ResponseWriter, r *http.Request) {
 	// keeping their own copies of the rule→title table.
 	for i := range flags {
 		flags[i].Title = humanFlagTitle(flags[i].Rule)
+		flags[i].ReviewID, _ = a.store.FindingReviewID(flags[i].ID)
 	}
 	a.stampExplains(flags)
 	json.NewEncoder(w).Encode(flags)

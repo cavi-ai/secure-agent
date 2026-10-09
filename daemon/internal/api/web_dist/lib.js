@@ -2060,3 +2060,21 @@ function policyListHTML(kind, rows, st) {
     `<section class="policy-harness-group"><div class="policy-harness-title">${harness === 'all' ? 'All harnesses' : harnessChipHTML(harness, { label: true })}</div>${entries.join('')}</section>`).join('');
   return `<div class="policy-list" data-policy="${kind}">${grouped}</div>`;
 }
+// Durable review actions are revision-bound; none creates a permission.
+function reviewHTML(r, draft, actions = true) {
+  const c = r.context || {}, a = r.assessment || {};
+  const state = r.review_state || 'unreviewed';
+  const action = decision => `data-action="review-decision" data-id="${escapeHTML(r.id)}" data-revision="${Number(r.revision)}" data-decision="${decision}"`;
+  const links = (r.source_ids || []).map((id, index) => `<button class="btn btn-ghost btn-sm" data-action="open-flag" data-id="${escapeHTML(id)}">Recorded evidence ${index + 1}</button>`).join('');
+  const incidents = (r.incident_ids || []).map(id => `<button class="btn btn-ghost btn-sm" data-action="open-incident" data-id="${escapeHTML(id)}">View report</button>`).join('');
+  return `<article class="finding-item ${a.risk === 'critical' ? 'critical' : ''}">
+    <div class="decision-head"><strong>${escapeHTML((c.resources || []).join(', ') || c.rule)}</strong><span class="disp-badge">${escapeHTML(state.replaceAll('_', ' '))}</span></div>
+    <p class="finding-why">${escapeHTML(r.agent || 'Unknown agent')} · ${Number(r.count)} occurrences · evidence revision ${Number(r.revision)}${r.reviewed_revision ? ` · reviewed revision ${Number(r.reviewed_revision)}` : ''}</p>
+    <p class="finding-why">${escapeHTML((c.destinations || []).join(', ') || 'Destination unknown')} · ${escapeHTML(c.session_id || 'Session unknown; this source only')}${c.workspace ? ` · ${escapeHTML(c.workspace)}` : ''}</p>
+    ${assessmentHTML(a)}
+    ${r.evidence_flag_available ? `<button class="btn btn-ghost btn-sm" data-action="open-flag" data-id="${escapeHTML(r.evidence_flag_id)}">View supporting evidence</button>` : '<p>The source supporting this assessment has expired. The recorded risk remains in history.</p>'}
+    ${draft && draft.conflict ? `<p role="alert">Evidence changed. Your ${escapeHTML(draft.action.replaceAll('_', ' '))} choice is retained. Review the new facts and choose again.</p>` : ''}
+    ${r.evidence_available ? (actions ? `<div class="attention-actions">${state === 'unreviewed' ? `<button class="btn btn-primary btn-sm" ${action('acknowledge')}>Mark reviewed</button>` : ''}${state !== 'closed_reported' ? `<button class="btn btn-ghost btn-sm" ${action('close_reported')}>Report closure</button>` : ''}</div>` : '') : '<p>Source evidence has expired. Risk and review history remain; closure has not been verified.</p>'}
+    <details><summary>Evidence and review history</summary><p>${r.decision ? `${escapeHTML(r.decision.action.replaceAll('_', ' '))} · revision ${Number(r.decision.revision)} · ${escapeHTML(r.decision.at)}` : 'No decision receipt recorded.'}</p>${links}${incidents}</details>
+  </article>`;
+}
