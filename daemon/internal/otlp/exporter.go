@@ -48,10 +48,10 @@ type Exporter struct {
 	nodeID  string
 	version string
 
-	mu       sync.Mutex
-	batch    []span
-	timer    *time.Timer
-	flushing bool
+	mu     sync.Mutex
+	batch  []span
+	timer  *time.Timer
+	closed bool
 
 	sem     chan struct{}
 	wg      sync.WaitGroup
@@ -177,7 +177,7 @@ func (e *Exporter) TraceEvent(ev event.Event) {
 // in-flight cap the span is dropped and counted.
 func (e *Exporter) enqueue(s span) {
 	e.mu.Lock()
-	if len(e.batch) >= e.maxBatch {
+	if e.closed || len(e.batch) >= e.maxBatch {
 		e.mu.Unlock()
 		e.dropped.Add(1)
 		return
@@ -190,16 +190,28 @@ func (e *Exporter) enqueue(s span) {
 	e.mu.Unlock()
 }
 
-// Flush ships the current batch. Safe to call concurrently and directly
-// (shutdown).
+// Flush ships the current batch while admission is open. Safe to call
+// concurrently and directly (shutdown).
 func (e *Exporter) Flush() {
+	if e == nil {
+		return
+	}
 	e.mu.Lock()
+	defer e.mu.Unlock()
+	if !e.closed {
+		e.flushLocked()
+	}
+}
+
+// flushLocked detaches and admits a batch while holding mu. Worker registration
+// must finish before shutdown can freeze admission and start waiting; otherwise
+// a timer callback can launch an export after Wait has already returned.
+func (e *Exporter) flushLocked() {
 	if len(e.batch) == 0 {
 		if e.timer != nil {
 			e.timer.Stop()
 			e.timer = nil
 		}
-		e.mu.Unlock()
 		return
 	}
 	batch := e.batch
@@ -208,7 +220,6 @@ func (e *Exporter) Flush() {
 		e.timer.Stop()
 		e.timer = nil
 	}
-	e.mu.Unlock()
 
 	select {
 	case e.sem <- struct{}{}:
@@ -227,16 +238,21 @@ func (e *Exporter) Flush() {
 	}()
 }
 
-// Wait blocks until in-flight exports settle (shutdown).
+// Wait closes admission, flushes the final batch, and joins every admitted
+// export. It is terminal and safe to call repeatedly or concurrently. Spans
+// submitted afterward are dropped and counted.
 func (e *Exporter) Wait() {
 	if e == nil {
 		return
 	}
-	e.Flush()
+	e.mu.Lock()
+	e.closed = true
+	e.flushLocked()
+	e.mu.Unlock()
 	e.wg.Wait()
 }
 
-// Dropped counts spans lost to capacity limits or failed exports.
+// Dropped counts spans lost to capacity limits, shutdown, or failed exports.
 func (e *Exporter) Dropped() uint64 {
 	if e == nil {
 		return 0
