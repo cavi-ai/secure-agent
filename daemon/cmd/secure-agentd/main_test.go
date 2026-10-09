@@ -363,10 +363,23 @@ func listenNonLoopback(t *testing.T) (net.Listener, error) {
 			continue
 		}
 		// Drain the probe so the fixture's own Accept sees a clean queue.
-		if c, err := ln.Accept(); err == nil {
-			c.Close()
+		tcp := ln.(*net.TCPListener)
+		if err := tcp.SetDeadline(time.Now().Add(500 * time.Millisecond)); err != nil {
+			probe.Close()
+			ln.Close()
+			continue
 		}
+		c, err := ln.Accept()
 		probe.Close()
+		if err != nil {
+			ln.Close()
+			continue
+		}
+		c.Close()
+		if err := tcp.SetDeadline(time.Time{}); err != nil {
+			ln.Close()
+			continue
+		}
 		return ln, nil
 	}
 	t.Skip("no self-connectable non-loopback IPv4 interface available")

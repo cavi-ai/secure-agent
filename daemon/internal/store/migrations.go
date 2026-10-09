@@ -350,7 +350,7 @@ func initializeSchema(db *sql.DB) error {
 	// Acknowledge/Resolve buttons are dead (the exact "dismiss doesn't
 	// work" dogfood complaint).
 	for _, col := range []struct{ name, typ string }{
-		{"status", "TEXT"}, {"acknowledged_at", "TEXT"}, {"resolved_at", "TEXT"}, {"resolution_note", "TEXT"},
+		{"status", "TEXT DEFAULT 'open'"}, {"acknowledged_at", "TEXT"}, {"resolved_at", "TEXT"}, {"resolution_note", "TEXT"},
 		{"rule", "TEXT"}, {"session_id", "TEXT"}, {"subject", "TEXT"}, {"aggregate_count", "INTEGER"}, {"last_flag_at", "TEXT"}, {"flag_ids", "TEXT"},
 	} {
 		var n int
@@ -361,6 +361,19 @@ func initializeSchema(db *sql.DB) error {
 			if _, err := tx.Exec(`ALTER TABLE incidents ADD COLUMN ` + col.name + ` ` + col.typ); err != nil {
 				return fmt.Errorf("migrate incidents.%s: %w", col.name, err)
 			}
+		}
+	}
+	// Earlier upgrades added status without the fresh schema's open default.
+	// Initialize only untouched legacy workflows; recorded decisions and
+	// malformed current-schema workflows must remain subject to strict reads.
+	var legacyIncidentDefault bool
+	if err := tx.QueryRow(`SELECT dflt_value IS NULL FROM pragma_table_info('incidents') WHERE name='status'`).Scan(&legacyIncidentDefault); err != nil {
+		return fmt.Errorf("inspect incident workflow default: %w", err)
+	}
+	if legacyIncidentDefault {
+		if _, err := tx.Exec(`UPDATE incidents SET status='open' WHERE status IS NULL
+			AND COALESCE(acknowledged_at,'')='' AND COALESCE(resolved_at,'')='' AND COALESCE(resolution_note,'')=''`); err != nil {
+			return fmt.Errorf("initialize legacy incident workflows: %w", err)
 		}
 	}
 	// Incident indexes follow the column migration: findOpenIncidentSQL's

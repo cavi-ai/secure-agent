@@ -1417,7 +1417,7 @@ func (s *Store) PutIncident(inc model.IncidentReport) (writeErr error) {
 	}
 	flagIDs, _ := json.Marshal([]string{inc.FlagID})
 	result, err := s.db.Exec(
-		`INSERT OR REPLACE INTO incidents (id, flag_id, pid, risk, report_json, created_at, rule, session_id, subject, aggregate_count, last_flag_at, flag_ids) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT OR REPLACE INTO incidents (id, flag_id, pid, risk, report_json, created_at, rule, session_id, subject, aggregate_count, last_flag_at, flag_ids, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open')`,
 		inc.ID, inc.FlagID, inc.PID, string(inc.Risk), string(data), tsStr,
 		inc.Rule, inc.SessionID, inc.Subject, count, tsStr, string(flagIDs),
 	)
