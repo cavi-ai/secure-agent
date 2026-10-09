@@ -439,6 +439,12 @@ export interface WriteHealth {
   read_active?: string[];
 }
 
+export interface EgressProjectionHealth {
+  queue_drops: number;
+  write_failures: number;
+  write_failing: boolean;
+}
+
 export interface HarnessCoverage {
   name: string;
   guard_supported: boolean;
@@ -508,6 +514,7 @@ export interface Status {
   bus_drop_at?: string;
   bus_dropping?: boolean;
   storage_health?: WriteHealth;
+  egress_projection_health?: EgressProjectionHealth;
   otlp_dropped?: number;
   coverage?: CoverageStatus;
   firewall_stats?: Record<string, RuleStat>;
